@@ -69,8 +69,9 @@ Aphelion shape still holds.
 
 The current done-done worklist is intentionally short:
 
-- finish the authority/status/doctor consistency audit and add focused repair or
-  warning checks where runtime truth can diverge
+- keep the authority/status/doctor consistency projection and exact
+  `authority repair --apply --finding` closures covered as new typed authority
+  records are added
 - keep sandbox network behavior truthful by either enforcing advertised policy
   or reporting unavailable enforcement before execution
 - keep external-tool execution limited to verified, sandboxed

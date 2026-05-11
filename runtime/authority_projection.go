@@ -3,9 +3,12 @@
 package runtime
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +31,7 @@ type authorityProjection struct {
 }
 
 type authorityProjectionFinding struct {
+	FindingID        string
 	Code             string
 	Severity         string
 	SourceKind       string
@@ -341,7 +345,7 @@ func authorityProjectionFromStore(store *session.SQLiteStore, now time.Time) (au
 				SourceID:         binding.BindingID,
 				Detail:           "tailnet grant binding references a surface that is not declared or observed",
 				NextRepairAction: "declare the surface, correct the binding, or revoke the network grant binding",
-				RepairAction:     "repair_tailnet_grant_binding",
+				RepairAction:     "revoke_tailnet_grant_binding",
 				Repairable:       true,
 			})
 		}
@@ -353,7 +357,7 @@ func authorityProjectionFromStore(store *session.SQLiteStore, now time.Time) (au
 				SourceID:         binding.BindingID,
 				Detail:           "applied tailnet grant binding has no matching active Aphelion capability grant",
 				NextRepairAction: "roll back the Tailnet binding or restore a fresh approved capability grant",
-				RepairAction:     "rollback_tailnet_grant_binding",
+				RepairAction:     "revoke_tailnet_grant_binding",
 				Repairable:       true,
 			})
 		}
@@ -415,6 +419,7 @@ func (p authorityProjection) snapshot() core.AuthorityStatusSnapshot {
 			out.WarningCount++
 		}
 		out.Findings = append(out.Findings, core.AuthorityFindingSnapshot{
+			FindingID:        finding.FindingID,
 			Code:             finding.Code,
 			Severity:         finding.Severity,
 			SourceKind:       finding.SourceKind,
@@ -461,6 +466,7 @@ func (r *Runtime) writeDoctorAuthorityProjection(b *strings.Builder, now time.Ti
 	}
 	for _, finding := range projection.Findings {
 		parts := []string{
+			"finding_id=" + quoteDoctorToken(finding.FindingID),
 			"code=" + quoteDoctorToken(finding.Code),
 			"severity=" + quoteDoctorToken(finding.Severity),
 			"source=" + quoteDoctorToken(firstNonEmpty(finding.SourceKind, "unknown")+":"+firstNonEmpty(finding.SourceID, "unknown")),
@@ -495,6 +501,7 @@ func (p *authorityProjection) addFinding(finding authorityProjectionFinding) {
 	if p == nil {
 		return
 	}
+	finding.FindingID = strings.TrimSpace(finding.FindingID)
 	finding.Code = strings.TrimSpace(finding.Code)
 	finding.Severity = strings.TrimSpace(finding.Severity)
 	finding.SourceKind = strings.TrimSpace(finding.SourceKind)
@@ -506,7 +513,22 @@ func (p *authorityProjection) addFinding(finding authorityProjectionFinding) {
 	if finding.Code == "" || finding.Severity == "" {
 		return
 	}
+	if finding.FindingID == "" {
+		finding.FindingID = authorityFindingID(finding)
+	}
 	p.Findings = append(p.Findings, finding)
+}
+
+func authorityFindingID(finding authorityProjectionFinding) string {
+	fields := []string{
+		strings.TrimSpace(finding.Code),
+		strings.TrimSpace(finding.SourceKind),
+		strings.TrimSpace(finding.SourceID),
+		strings.TrimSpace(finding.SessionID),
+		strconv.FormatInt(finding.ChatID, 10),
+	}
+	sum := sha256.Sum256([]byte(strings.Join(fields, "\x1f")))
+	return "af_" + hex.EncodeToString(sum[:])[:16]
 }
 
 func (p *authorityProjection) sortFindings() {
@@ -527,7 +549,10 @@ func (p *authorityProjection) sortFindings() {
 		if left.SourceID != right.SourceID {
 			return left.SourceID < right.SourceID
 		}
-		return left.SessionID < right.SessionID
+		if left.SessionID != right.SessionID {
+			return left.SessionID < right.SessionID
+		}
+		return left.FindingID < right.FindingID
 	})
 }
 
@@ -739,7 +764,6 @@ func authorityAutoApprovalUsedOutsideScopeFinding(event session.ExecutionEvent) 
 			Detail:           "auto-approval use event records work_mode outside the lease scope",
 			NextRepairAction: "revoke the lease and inspect the linked decision or proposal before continuing",
 			RepairAction:     "revoke_auto_approval_lease",
-			Repairable:       true,
 		}, true
 	}
 	return authorityProjectionFinding{}, false

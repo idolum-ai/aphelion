@@ -691,7 +691,9 @@ These are expected migration targets, not accusations against the current code.
 - Implemented in `runtime/authority_projection.go`: `/doctor`, `/status`,
   `/debug`, and CLI `authority doctor` / `authority repair` now project current
   continuation, operation plan lease, pending decision, auto-approval lease, and
-  capability grant state from existing stores.
+  capability grant state from existing stores. Each finding carries a stable
+  `finding_id` derived from typed record identity so operator repair targets a
+  current contradiction rather than free text.
 - Use that projection for `/status`, `/debug`, `/doctor`, startup recovery, and
   proposal rendering. Startup recovery and proposal rendering remain planned.
 - Mark any compatibility fallback source in the projection.
@@ -716,6 +718,17 @@ These are expected migration targets, not accusations against the current code.
     active turn lease evidence exists
   - legacy invocation counters without evidence remain visible as compatibility
     warnings
+- Implemented targeted authority repair:
+  - `authority repair --apply --finding <finding_id>` recomputes the projection,
+    rejects absent or preview-only findings, and then applies only exact local
+    closures
+  - supported closures expire stale continuation leases, expire stale operation
+    plan leases, expire or revoke contradictory capability grants, and locally
+    revoke invalid Tailnet grant bindings
+  - repair never creates new authority, re-offers approval, escalates a blocked
+    phase, mutates live Tailnet policy, or treats presentation text as evidence
+  - every applied repair writes TES evidence with the original finding id and
+    repair action
 
 ### Phase 4: Normalize States
 

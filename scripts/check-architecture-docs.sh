@@ -95,7 +95,7 @@ required_promise_rows=(
   "External tools: process/subprocess only | implemented"
   "Tailnet declarations and grant-binding projection | implemented"
   "Mission review without autonomous continuation | implemented"
-  "Authority/status/doctor consistency | planned"
+  "Authority/status/doctor consistency | implemented"
   "Done-done release criteria | planned"
 )
 

@@ -539,6 +539,9 @@ func renderAuthorityStatusLine(snapshot core.AuthorityStatusSnapshot) string {
 	if len(snapshot.Findings) > 0 {
 		first := snapshot.Findings[0]
 		line += " first_code=" + strings.TrimSpace(first.Code)
+		if findingID := strings.TrimSpace(first.FindingID); findingID != "" {
+			line += " first_finding_id=" + findingID
+		}
 		if first.ChatID != 0 {
 			line += fmt.Sprintf(" first_chat_id=%d", first.ChatID)
 		}

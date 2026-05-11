@@ -31,6 +31,7 @@ type PendingItem struct {
 }
 
 type AuthorityFindingSnapshot struct {
+	FindingID        string
 	Code             string
 	Severity         string
 	SourceKind       string

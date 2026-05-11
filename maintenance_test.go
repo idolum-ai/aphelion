@@ -1275,6 +1275,366 @@ func TestRunAuthorityCommandsReportRepairPreview(t *testing.T) {
 			t.Fatalf("repair output = %q, want %q", repairOut, needle)
 		}
 	}
+	if id := authorityFindingIDFromOutput(t, repairOut, "expired_continuation_lease"); id == "" {
+		t.Fatalf("repair output = %q, want finding_id", repairOut)
+	}
+}
+
+func TestRunAuthorityRepairApplyExpiresContinuationLeaseByFindingID(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 77711, UserID: 0, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "77711"}}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "decision-authority-apply",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:        "proposal-authority-apply",
+			Status:    session.ProposalStatusApproved,
+			ExpiresAt: now.Add(time.Hour),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-authority-apply",
+			ProposalID:     "proposal-authority-apply",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ExpiresAt:      now.Add(-time.Minute),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	store.Close()
+
+	previewOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"repair", "--config", cfgPath, "--limit", "10"})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(repair preview) err = %v", err)
+	}
+	findingID := authorityFindingIDFromOutput(t, previewOut, "expired_continuation_lease")
+
+	store, err = session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen dry-run check) err = %v", err)
+	}
+	dryRunState, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(dry-run) err = %v", err)
+	}
+	if dryRunState.ContinuationLease.Status != session.ContinuationLeaseStatusActive || dryRunState.RemainingTurns != 1 {
+		t.Fatalf("dry-run state = %#v, want unchanged active lease", dryRunState)
+	}
+	store.Close()
+
+	applyOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"repair", "--config", cfgPath, "--apply", "--finding", findingID})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(repair apply) err = %v", err)
+	}
+	for _, needle := range []string{"dry_run: false", "applied: true", "repair_action: expire_continuation_lease", "after_findings: 0"} {
+		if !strings.Contains(applyOut, needle) {
+			t.Fatalf("apply output = %q, want %q", applyOut, needle)
+		}
+	}
+
+	store, err = session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen apply check) err = %v", err)
+	}
+	defer store.Close()
+	repaired, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(repaired) err = %v", err)
+	}
+	if repaired.Status != session.ContinuationStatusIdle || repaired.RemainingTurns != 0 || repaired.ActionProposal.Status != session.ProposalStatusExpired || repaired.ContinuationLease.Status != session.ContinuationLeaseStatusExpired || repaired.ContinuationLease.RemainingTurns != 0 {
+		t.Fatalf("repaired state = %#v, want idle expired lease", repaired)
+	}
+	events, err := store.LatestExecutionEventsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("LatestExecutionEventsBySession() err = %v", err)
+	}
+	if !executionEventsContainAuthorityRepair(events, findingID, "continuation_lease_expired") {
+		t.Fatalf("events = %#v, want authority repair event for %s", events, findingID)
+	}
+	err = runAuthorityCommand([]string{"repair", "--config", cfgPath, "--apply", "--finding", findingID})
+	if err == nil || !strings.Contains(err.Error(), "is not present") {
+		t.Fatalf("second repair apply err = %v, want stale finding rejection", err)
+	}
+}
+
+func TestRunAuthorityRepairApplyExpiresOperationPlanLeaseByFindingID(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 77712, UserID: 0, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "77712"}}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:      "op-authority-plan-apply",
+		Status:  session.OperationStatusActive,
+		Summary: "Existing operation summary.",
+		PlanLease: session.OperationPlanLease{
+			ID:             "plan-lease-authority-apply",
+			Status:         session.PlanLeaseStatusActive,
+			TurnBudget:     1,
+			RemainingTurns: 1,
+			ExpiresAt:      now.Add(-time.Minute),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	store.Close()
+
+	previewOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"repair", "--config", cfgPath, "--limit", "10"})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(repair preview) err = %v", err)
+	}
+	findingID := authorityFindingIDFromOutput(t, previewOut, "expired_operation_plan_lease")
+	if _, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"repair", "--config", cfgPath, "--apply", "--finding", findingID})
+	}); err != nil {
+		t.Fatalf("runAuthorityCommand(repair operation apply) err = %v", err)
+	}
+
+	store, err = session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen operation) err = %v", err)
+	}
+	defer store.Close()
+	repaired, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if repaired.PlanLease.Status != session.PlanLeaseStatusExpired || repaired.PlanLease.RemainingTurns != 0 || !strings.Contains(repaired.Summary, "Authority repair expired") {
+		t.Fatalf("operation state = %#v, want expired plan lease with evidence summary", repaired)
+	}
+	if len(repaired.Artifacts) == 0 || !strings.Contains(repaired.Artifacts[len(repaired.Artifacts)-1].Ref, findingID) {
+		t.Fatalf("operation artifacts = %#v, want authority repair artifact", repaired.Artifacts)
+	}
+}
+
+func TestRunAuthorityRepairApplyExpiresCapabilityGrantByFindingID(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-authority-expire",
+		GrantedBy:      "telegram:1",
+		GrantedTo:      "telegram:77713",
+		Kind:           session.CapabilityKindPublicWeb,
+		TargetResource: "example.com",
+		AllowedActions: []string{"fetch"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract:       "{}",
+		Constraints:    "{}",
+		ExpiresAt:      now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	store.Close()
+
+	previewOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"repair", "--config", cfgPath, "--limit", "10"})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(repair preview) err = %v", err)
+	}
+	findingID := authorityFindingIDFromOutput(t, previewOut, "active_capability_grant_expired")
+	if _, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"repair", "--config", cfgPath, "--apply", "--finding", findingID})
+	}); err != nil {
+		t.Fatalf("runAuthorityCommand(repair capability apply) err = %v", err)
+	}
+
+	store, err = session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen grant) err = %v", err)
+	}
+	defer store.Close()
+	grant, ok, err := store.CapabilityGrant("capg-authority-expire")
+	if err != nil {
+		t.Fatalf("CapabilityGrant() err = %v", err)
+	}
+	if !ok || grant.Status != session.CapabilityGrantStatusExpired {
+		t.Fatalf("grant = %#v ok=%t, want expired grant", grant, ok)
+	}
+}
+
+func TestRunAuthorityRepairApplyRevokesTailnetBindingLocally(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-tailnet-authority",
+		GrantedBy:      "telegram:1",
+		GrantedTo:      "telegram:77714",
+		Kind:           session.CapabilityKindNetworkAccess,
+		TargetResource: "grafana.tailnet",
+		AllowedActions: []string{"connect"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract:       "{}",
+		Constraints:    "{}",
+		ExpiresAt:      now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	if _, err := store.UpsertTailnetGrantBinding(session.TailnetGrantBinding{
+		BindingID:         "tailnet-bind-authority-missing-surface",
+		GrantID:           "capg-tailnet-authority",
+		SurfaceID:         "tailnet:missing:surface-authority",
+		GrantedTo:         "telegram:77714",
+		CapabilityKind:    string(session.CapabilityKindNetworkAccess),
+		TargetResource:    "grafana.tailnet",
+		DesiredPolicyJSON: `{"grant_id":"capg-tailnet-authority"}`,
+		Status:            session.TailnetGrantBindingStatusApplied,
+		AppliedPolicyHash: "sha256:applied-authority",
+	}); err != nil {
+		t.Fatalf("UpsertTailnetGrantBinding() err = %v", err)
+	}
+	store.Close()
+
+	previewOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"repair", "--config", cfgPath, "--limit", "10"})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(repair preview) err = %v", err)
+	}
+	findingID := authorityFindingIDFromOutput(t, previewOut, "tailnet_binding_surface_missing")
+	if !strings.Contains(previewOut, "repair_action=revoke_tailnet_grant_binding") {
+		t.Fatalf("preview output = %q, want local revoke repair action", previewOut)
+	}
+	if _, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"repair", "--config", cfgPath, "--apply", "--finding", findingID})
+	}); err != nil {
+		t.Fatalf("runAuthorityCommand(repair tailnet apply) err = %v", err)
+	}
+
+	store, err = session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen tailnet) err = %v", err)
+	}
+	defer store.Close()
+	binding, ok, err := store.TailnetGrantBinding("tailnet-bind-authority-missing-surface")
+	if err != nil {
+		t.Fatalf("TailnetGrantBinding() err = %v", err)
+	}
+	if !ok || binding.Status != session.TailnetGrantBindingStatusRevoked || !strings.Contains(binding.DriftReason, "authority_repair") {
+		t.Fatalf("binding = %#v ok=%t, want locally revoked binding", binding, ok)
+	}
+}
+
+func TestRunAuthorityRepairApplyRejectsPreviewOnlyFinding(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 77715, UserID: 0, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "77715"}}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "missing-decision-authority",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:        "proposal-missing-decision-authority",
+			Status:    session.ProposalStatusPending,
+			ExpiresAt: now.Add(time.Hour),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-missing-decision-authority",
+			ProposalID:     "proposal-missing-decision-authority",
+			Status:         session.ContinuationLeaseStatusPending,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ExpiresAt:      now.Add(time.Hour),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	store.Close()
+
+	previewOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"repair", "--config", cfgPath, "--limit", "10"})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(repair preview) err = %v", err)
+	}
+	findingID := authorityFindingIDFromOutput(t, previewOut, "pending_proposal_missing_decision")
+	if !strings.Contains(previewOut, "repair_action=reoffer_or_revoke_continuation") || strings.Contains(previewOut, "repairable=true") {
+		t.Fatalf("preview output = %q, want preview-only pending decision repair", previewOut)
+	}
+	err = runAuthorityCommand([]string{"repair", "--config", cfgPath, "--apply", "--finding", findingID})
+	if err == nil || !strings.Contains(err.Error(), "preview-only") {
+		t.Fatalf("runAuthorityCommand(preview-only apply) err = %v, want preview-only rejection", err)
+	}
+}
+
+func authorityFindingIDFromOutput(t *testing.T, out string, code string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, "code="+code) {
+			continue
+		}
+		for _, field := range strings.Fields(line) {
+			if strings.HasPrefix(field, "finding_id=") {
+				return strings.TrimPrefix(field, "finding_id=")
+			}
+		}
+	}
+	t.Fatalf("output = %q, want finding_id for code %s", out, code)
+	return ""
+}
+
+func executionEventsContainAuthorityRepair(events []session.ExecutionEvent, findingID string, status string) bool {
+	for _, event := range events {
+		if event.Stage != "authority_repair" || event.Status != status {
+			continue
+		}
+		if strings.Contains(event.PayloadJSON, `"finding_id":"`+findingID+`"`) {
+			return true
+		}
+	}
+	return false
 }
 
 type fakeDurableAgentWakeRuntime struct {

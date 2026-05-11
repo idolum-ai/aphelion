@@ -192,6 +192,9 @@ func renderAuthorityDebugBlock(snapshot core.AuthorityStatusSnapshot, limit int)
 	for i := 0; i < max; i++ {
 		finding := snapshot.Findings[i]
 		line := fmt.Sprintf("- code=%s severity=%s source=%s:%s", strings.TrimSpace(finding.Code), strings.TrimSpace(finding.Severity), strings.TrimSpace(finding.SourceKind), strings.TrimSpace(finding.SourceID))
+		if findingID := strings.TrimSpace(finding.FindingID); findingID != "" {
+			line += " finding_id=" + findingID
+		}
 		if finding.ChatID != 0 {
 			line += fmt.Sprintf(" chat_id=%d", finding.ChatID)
 		}
