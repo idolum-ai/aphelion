@@ -352,11 +352,13 @@ reviewable child runtime material:
 ./bin/aphelion repair-capability-grants --config ~/.aphelion/aphelion.toml --apply
 ```
 
-Inspect authority projection health and preview typed repairs:
+Inspect authority projection health, preview typed repairs, and apply one exact
+local repair from a fresh `finding_id`:
 
 ```bash
 ./bin/aphelion authority doctor --config ~/.aphelion/aphelion.toml
 ./bin/aphelion authority repair --config ~/.aphelion/aphelion.toml
+./bin/aphelion authority repair --config ~/.aphelion/aphelion.toml --apply --finding af_...
 ```
 
 `make install-user-service`, `make update`, and `make update-release` also run

@@ -58,7 +58,7 @@ These invariants are normative for architecture and requirements alignment:
 - [mission-ledger-roadmap.md](mission-ledger-roadmap.md): research note for durable missions, self-summon as review, and possible bounded continuation; autonomous continuation is not a current release target.
 - [organic-agent-owned-tools-proposal.md](organic-agent-owned-tools-proposal.md): research note for moving domain tools out of core; current executable support stays limited to verified process/subprocess manifests.
 - [tailscale-agent-substrate-project.md](tailscale-agent-substrate-project.md): research note for private-network substrate ideas; live `tsnet` child materialization and live Tailscale policy mutation are not current release targets.
-- [agent-authority-ledger.md](agent-authority-ledger.md): research spec for a fuller authority ledger; current release work is limited to consistency and projection over existing typed records.
+- [agent-authority-ledger.md](agent-authority-ledger.md): research spec for a fuller authority ledger; current release work is limited to consistency projection plus exact local repair over existing typed records.
 
 Treat this section as design-direction input. It is not a normative
 implementation contract until explicitly promoted into the normative map above,
