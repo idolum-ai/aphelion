@@ -28,7 +28,7 @@ The open-source boundary is:
 In other words:
 
 - schema, retrieval semantics, importers, and migrations are publishable system design
-- Daniel/Host/Mada/Oliver/Idolum memory content is local private data
+- operator, household, and configured-face memory content is local private data
 
 ## Goals
 
@@ -81,7 +81,7 @@ The operator retains ownership of:
 - local source paths
 - credentials and external storage decisions
 
-The substrate should work for any operator corpus, not just Daniel's.
+The substrate should work for any operator corpus, not just the maintainer's.
 
 ## Relationship to Memory Layers
 
@@ -470,7 +470,7 @@ Safe to publish:
 
 Should remain local:
 
-- Daniel/Host memory corpus
+- operator memory corpus
 - imported private embeddings
 - family facts
 - legal archives

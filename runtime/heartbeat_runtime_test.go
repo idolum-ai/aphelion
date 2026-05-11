@@ -373,7 +373,7 @@ func TestHeartbeatReflectionProposesCuratedMemoryFromDailyNotes(t *testing.T) {
 		t.Fatalf("MkdirAll(noteDir) err = %v", err)
 	}
 	notePath := filepath.Join(noteDir, "2026-04-09.md")
-	if err := os.WriteFile(notePath, []byte("Daniel prefers concise updates and wants durable memory."), 0o600); err != nil {
+	if err := os.WriteFile(notePath, []byte("The operator prefers concise updates and wants durable memory."), 0o600); err != nil {
 		t.Fatalf("write daily note: %v", err)
 	}
 	provider.reflectionReplyText = strings.Join([]string{

@@ -37,12 +37,12 @@ func TestRenderTelegramStatusIncludesAuthorityProjection(t *testing.T) {
 		FindingCount: 1,
 		ErrorCount:   1,
 		Findings: []core.AuthorityFindingSnapshot{{
-			Code:         "expired_continuation_lease",
-			Severity:     "error",
-			SourceKind:   "continuation_lease",
-			SourceID:     "lease-1",
-			ChatID:       7,
-			RepairAction: "expire_continuation_lease",
+			Code:        "expired_continuation_lease",
+			Severity:    "error",
+			SourceKind:  "continuation_lease",
+			SourceID:    "lease-1",
+			ChatID:      7,
+			ApplyAction: "expire_continuation_lease",
 		}},
 	}
 	chat := RenderTelegramStatusChat(core.ChatStatusSnapshot{ChatID: 7, Authority: authority}, "medium", "high", false)

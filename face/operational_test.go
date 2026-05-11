@@ -15,9 +15,9 @@ func TestRenderTelegramStopUsesContinuationLabel(t *testing.T) {
 
 	got := RenderTelegramStop(core.StopResult{
 		ContinuationRevoked: true,
-		ContinuationLabel:   "Plan: Mada's Job Agent (Phase J1)",
+		ContinuationLabel:   "Plan: Resource-Owner Assistant (Phase J1)",
 	})
-	if got != "Stopped Plan: Mada's Job Agent (Phase J1)." {
+	if got != "Stopped Plan: Resource-Owner Assistant (Phase J1)." {
 		t.Fatalf("RenderTelegramStop() = %q, want labeled stop message", got)
 	}
 }
@@ -79,14 +79,14 @@ func TestRenderTelegramOperationalCopyUsesNeutralPersonaLabels(t *testing.T) {
 func TestRenderReviewDigestFormatsDurableSections(t *testing.T) {
 	out := RenderReviewDigest(ReviewDigestNotice{
 		SourceRole:  "durable_agent",
-		SourceScope: "durable_agent:idolum-email",
-		SourceAgent: "idolum-email",
+		SourceScope: "durable_agent:mail-child",
+		SourceAgent: "mail-child",
 		ParentScope: "telegram_dm:6313146",
 		Summary: strings.Join([]string{
-			"durable_agent=idolum-email channel=email parent=telegram_dm:6313146 interval=2026-04-26T22:33:00Z",
-			"summary: cannot verify live inbox access until gog_cli grants materialize.",
+			"durable_agent=mail-child channel=email parent=telegram_dm:6313146 interval=2026-04-26T22:33:00Z",
+			"summary: cannot verify live inbox access until mailbox adapter grants materialize.",
 			"local: Read profile/growth.md.; Ran connection_test.",
-			"questions: Can the parent materialize gog_cli?",
+			"questions: Can the parent materialize mailbox adapter access?",
 			"risks: parent_conversation_sync",
 		}, "\n"),
 	})
@@ -100,7 +100,7 @@ func TestRenderReviewDigestFormatsDurableSections(t *testing.T) {
 		"- Read profile/growth.md.",
 		"- Ran connection_test.",
 		"**Needs attention**",
-		"- Can the parent materialize gog_cli?",
+		"- Can the parent materialize mailbox adapter access?",
 		"**Risks**",
 		"- parent_conversation_sync",
 	} {

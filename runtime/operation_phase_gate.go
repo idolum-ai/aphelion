@@ -188,15 +188,17 @@ func operationPhaseHasThirdPartyPrivateDataGate(phase session.OperationPhase) bo
 		"mailbox_read",
 		"email_read",
 		"external_account_email_read",
-		"wife_profile",
-		"profile_scoring_rubric",
+		"resource_owner_data_intake",
+		"resource_owner_profile_intake",
+		"private_profile_intake",
+		"profile_evaluation_rubric",
 		"cv_ingestion",
-		"job_processing",
-		"job_ranking",
-		"job_scouting",
+		"private_material_processing",
+		"rank_private_material",
+		"scout_public_opportunities",
 		"read_mailbox_contents",
-		"run_gog_cli_mail_query",
-		"run_configured_gog_cli_mail_query_once",
+		"run_mailbox_adapter_query",
+		"run_configured_mailbox_adapter_query_once",
 		"read_only_mailbox_smoke",
 	)
 }
@@ -211,7 +213,7 @@ func operationPhaseStructuredGateReasonCode(phase session.OperationPhase) string
 	}
 	for _, code := range operationPhaseStructuredCodes(phase) {
 		switch code {
-		case "external_account_auth_status", "external_account_status_check", "read_only_auth_status_check", "run_gog_cli_auth_status_or_identity_check":
+		case "external_account_auth_status", "external_account_status_check", "read_only_auth_status_check", "run_external_account_auth_status_or_identity_check":
 			return "external_account_auth_status"
 		case "credential_state_check", "credential_state_inspection", "credential_access", "read_credentials_or_tokens", "token_health_check":
 			return "credential_state_check"
@@ -219,9 +221,9 @@ func operationPhaseStructuredGateReasonCode(phase session.OperationPhase) string
 			return "credential_metadata_check"
 		case "capability_grant", "capability_acquisition", "grant_capability", "grant_set", "capability_authority", "grant_or_revoke_capability", "capability_revoke", "capability_access_check":
 			return "capability_grant"
-		case "mailbox_content", "mailbox_read", "email_read", "external_account_email_read", "read_mailbox_contents", "run_gog_cli_mail_query", "run_configured_gog_cli_mail_query_once", "read_only_mailbox_smoke":
+		case "mailbox_content", "mailbox_read", "email_read", "external_account_email_read", "read_mailbox_contents", "run_mailbox_adapter_query", "run_configured_mailbox_adapter_query_once", "read_only_mailbox_smoke":
 			return "mailbox_content"
-		case "private_data_intake", "wife_profile", "profile_scoring_rubric", "cv_ingestion":
+		case "private_data_intake", "resource_owner_data_intake", "resource_owner_profile_intake", "private_profile_intake", "profile_evaluation_rubric", "cv_ingestion":
 			return "third_party_opt_in"
 		}
 	}

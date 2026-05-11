@@ -27,6 +27,7 @@ func TestGenericExternalChannelWakeAdapterRecordsBlockedWhenChildReportsMissingM
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
+	markDurableWakeExternalAdapterReady(t, store, agent.AgentID, "child_adapter")
 	rt.durableWakeAdapters = []durableWakeIngressAdapter{newGenericExternalChannelWakeAdapter()}
 	rt.durableWakeChild = nil
 
@@ -133,6 +134,7 @@ func TestGenericExternalChannelWakeAdapterRecordsSuccessOnlyWhenChildReportsComp
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
+	markDurableWakeExternalAdapterReady(t, store, agent.AgentID, "child_adapter")
 	rt.durableWakeAdapters = []durableWakeIngressAdapter{newGenericExternalChannelWakeAdapter()}
 	rt.durableWakeChild = nil
 
@@ -200,6 +202,7 @@ func TestGenericExternalChannelWakeAdapterInferenceUnavailableRecordsBlocked(t *
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
+	markDurableWakeExternalAdapterReady(t, store, agent.AgentID, "child_adapter")
 	rt.durableWakeAdapters = []durableWakeIngressAdapter{newGenericExternalChannelWakeAdapter()}
 	rt.durableWakeChild = nil
 
@@ -240,6 +243,7 @@ func TestGenericExternalChannelWakeAdapterHardTurnErrorRecordsBlocked(t *testing
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
+	markDurableWakeExternalAdapterReady(t, store, agent.AgentID, "child_adapter")
 	rt.durableWakeAdapters = []durableWakeIngressAdapter{newGenericExternalChannelWakeAdapter()}
 	rt.durableWakeChild = nil
 
@@ -296,6 +300,7 @@ func TestGenericExternalChannelWakeAdapterPollCadenceAndSupport(t *testing.T) {
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
+	markDurableWakeExternalAdapterReady(t, store, agent.AgentID, "child_adapter")
 	rt.durableWakeAdapters = []durableWakeIngressAdapter{adapter}
 	rt.durableWakeChild = nil
 	now := time.Date(2026, 4, 29, 15, 10, 0, 0, time.UTC)

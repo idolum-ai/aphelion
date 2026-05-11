@@ -545,8 +545,11 @@ func renderAuthorityStatusLine(snapshot core.AuthorityStatusSnapshot) string {
 		if first.ChatID != 0 {
 			line += fmt.Sprintf(" first_chat_id=%d", first.ChatID)
 		}
-		if repair := strings.TrimSpace(first.RepairAction); repair != "" {
-			line += " repair_action=" + repair
+		if action := strings.TrimSpace(first.ApplyAction); action != "" {
+			line += " apply_action=" + action
+		}
+		if scope := strings.TrimSpace(first.ApplyScope); scope != "" {
+			line += " apply_scope=" + scope
 		}
 	}
 	return line

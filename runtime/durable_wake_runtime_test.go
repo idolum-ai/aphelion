@@ -24,6 +24,35 @@ type testDurableWakeAdapter struct {
 	lastSummary  string
 }
 
+func markDurableWakeExternalAdapterReady(t *testing.T, store *session.SQLiteStore, agentID string, adapterName string) {
+	t.Helper()
+	now := time.Now().UTC()
+	materialRoot := t.TempDir()
+	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: adapterName, ImplementationRef: "external:" + adapterName, Registered: true}); err != nil {
+		t.Fatalf("UpsertRegisteredTool(%s) err = %v", adapterName, err)
+	}
+	if _, err := store.UpsertToolInstallRecord(session.ToolInstallRecord{ToolName: adapterName, Status: session.ToolInstallStatusVerified, InstalledAt: now, AttestedAt: now}); err != nil {
+		t.Fatalf("UpsertToolInstallRecord(%s) err = %v", adapterName, err)
+	}
+	if _, err := store.UpsertToolAuditRecord(session.ToolAuditRecord{ToolName: adapterName, Status: session.ToolAuditStatusPassed, AuditedAt: now}); err != nil {
+		t.Fatalf("UpsertToolAuditRecord(%s) err = %v", adapterName, err)
+	}
+	if _, err := store.UpsertToolProbeRecord(session.ToolProbeRecord{ToolName: adapterName, Status: session.ToolProbeStatusPassed, ProbedAt: now}); err != nil {
+		t.Fatalf("UpsertToolProbeRecord(%s) err = %v", adapterName, err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-" + agentID + "-" + adapterName,
+		Kind:           session.CapabilityKindTool,
+		TargetResource: adapterName,
+		GrantedTo:      core.DurableAgentPrincipal(agentID),
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract:       `{"child_runtime":{"readonly_paths":["` + materialRoot + `"]}}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(%s) err = %v", adapterName, err)
+	}
+}
+
 func (a *testDurableWakeAdapter) Name() string {
 	return "test_adapter"
 }
@@ -413,6 +442,7 @@ func TestPollDurableWakeAgentsDispatchesGenericExternalChannelWithoutSpecialized
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
+	markDurableWakeExternalAdapterReady(t, store, agent.AgentID, "child_adapter")
 
 	rt.durableWakeChild = nil
 	if err := rt.pollDurableWakeAgents(context.Background(), time.Now().UTC()); err != nil {
@@ -778,6 +808,7 @@ func TestPollDurableWakeAgentsBacksOffExpiredGrantChildRuntimeBlock(t *testing.T
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
+	markDurableWakeExternalAdapterReady(t, store, agent.AgentID, "codex_image_generation")
 	rt.durableWakeAdapters = []durableWakeIngressAdapter{newGenericExternalChannelWakeAdapter()}
 	childRuns := 0
 	rt.durableWakeChild = inlineDurableWakeChildExecutor{run: func(_ context.Context, _ sandbox.Scope, _ core.DurableAgent, _ time.Time) error {
@@ -820,7 +851,7 @@ func TestPollDurableWakeAgentsBacksOffExpiredGrantChildRuntimeBlock(t *testing.T
 	}
 }
 
-func TestPollDurableWakeAgentsPreflightsGogCLIMaterialBeforeChildWake(t *testing.T) {
+func TestPollDurableWakeAgentsPreflightsExternalChannelMaterialBeforeChildWake(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -830,14 +861,14 @@ func TestPollDurableWakeAgentsPreflightsGogCLIMaterialBeforeChildWake(t *testing
 		t.Fatalf("New() err = %v", err)
 	}
 	agent := core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "mail-child",
 		ParentScopeKind:    "telegram_dm",
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
 		ChannelKind:        "external_channel",
 		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
 			Address:      "local://mailbox",
-			Adapter:      gogCLIAdapterName,
+			Adapter:      "mailbox_adapter",
 			Query:        "label:inbox",
 			PollInterval: "30m",
 		}},
@@ -868,12 +899,12 @@ func TestPollDurableWakeAgentsPreflightsGogCLIMaterialBeforeChildWake(t *testing
 	if childRuns != 0 {
 		t.Fatalf("childRuns = %d, want preflight to block before child wake", childRuns)
 	}
-	cont := loadExternalChannelContinuity(t, store, "idolum-email")
+	cont := loadExternalChannelContinuity(t, store, "mail-child")
 	if cont.ExternalChannel == nil {
 		t.Fatal("ExternalChannel = nil, want preflight wake_blocked state")
 	}
-	if cont.ExternalChannel.LastStatus != "wake_blocked" || !strings.Contains(cont.ExternalChannel.LastError, "child_runtime_blocked") || !strings.Contains(cont.ExternalChannel.LastError, "gog_cli") {
-		t.Fatalf("external channel state = %#v, want gog_cli preflight blocker", cont.ExternalChannel)
+	if cont.ExternalChannel.LastStatus != "wake_blocked" || !strings.Contains(cont.ExternalChannel.LastError, "child_runtime_blocked") || !strings.Contains(cont.ExternalChannel.LastError, "mailbox_adapter") {
+		t.Fatalf("external channel state = %#v, want generic adapter preflight blocker", cont.ExternalChannel)
 	}
 	sender.mu.Lock()
 	compact := ""

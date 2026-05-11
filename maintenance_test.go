@@ -801,7 +801,7 @@ func TestRepairReviewRedactionsRestoresConceptOnlySummary(t *testing.T) {
 	}
 	defer store.Close()
 
-	workspaceRoot, memoryRoot := durableagent.DefaultLocalRoots(cfg.Sessions.DBPath, "idolum-email")
+	workspaceRoot, memoryRoot := durableagent.DefaultLocalRoots(cfg.Sessions.DBPath, "mail-child")
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(workspaceRoot) err = %v", err)
 	}
@@ -809,7 +809,7 @@ func TestRepairReviewRedactionsRestoresConceptOnlySummary(t *testing.T) {
 		t.Fatalf("MkdirAll(memoryRoot) err = %v", err)
 	}
 	agent := core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "mail-child",
 		ParentScopeKind:    "telegram_dm",
 		ParentScopeID:      "1",
 		ReviewTargetChatID: 1,
@@ -826,7 +826,7 @@ func TestRepairReviewRedactionsRestoresConceptOnlySummary(t *testing.T) {
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
-	rawSummary := "Email wake blocked because gog_cli keyring backend requires an interactive passphrase prompt; no TTY is available."
+	rawSummary := "Email wake blocked because mailbox adapter credential backend requires an interactive passphrase prompt; no TTY is available."
 	ref, err := durableagent.WriteForensicRecord(agent, durableagent.ForensicRecord{
 		AgentID:        agent.AgentID,
 		Reason:         "secret_like_material",
@@ -843,8 +843,8 @@ func TestRepairReviewRedactionsRestoresConceptOnlySummary(t *testing.T) {
 		SourceRole:        "durable_agent",
 		SourceScope:       session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: agent.AgentID, DurableAgentID: agent.AgentID},
 		TargetAdminChatID: 1,
-		Summary:           "durable_agent=idolum-email channel=email\nsummary: [REDACTED: summary]\nrisks: external_channel",
-		MetadataJSON:      `{"agent_id":"idolum-email","summary":"[REDACTED: summary]","interval_label":"2026-05-08T02:50:01Z","risk_flags":["external_channel"],"artifact_refs":["` + ref + `"],"metadata":{"channel_kind":"email","external_channel_status":"wake_blocked","forensic_ref":"` + ref + `","redacted_fields":"summary","redaction_action":"quarantined_fields","redaction_source":"deterministic","redaction_reason":"concrete_secret_value"}}`,
+		Summary:           "durable_agent=mail-child channel=email\nsummary: [REDACTED: summary]\nrisks: external_channel",
+		MetadataJSON:      `{"agent_id":"mail-child","summary":"[REDACTED: summary]","interval_label":"2026-05-08T02:50:01Z","risk_flags":["external_channel"],"artifact_refs":["` + ref + `"],"metadata":{"channel_kind":"email","external_channel_status":"wake_blocked","forensic_ref":"` + ref + `","redacted_fields":"summary","redaction_action":"quarantined_fields","redaction_source":"deterministic","redaction_reason":"concrete_secret_value"}}`,
 	})
 	if err != nil {
 		t.Fatalf("InsertReviewEvent() err = %v", err)
@@ -887,7 +887,7 @@ func TestRepairReviewRedactionsLeavesConcreteSecretSummaryRedacted(t *testing.T)
 	}
 	defer store.Close()
 
-	workspaceRoot, memoryRoot := durableagent.DefaultLocalRoots(cfg.Sessions.DBPath, "idolum-email")
+	workspaceRoot, memoryRoot := durableagent.DefaultLocalRoots(cfg.Sessions.DBPath, "mail-child")
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(workspaceRoot) err = %v", err)
 	}
@@ -895,7 +895,7 @@ func TestRepairReviewRedactionsLeavesConcreteSecretSummaryRedacted(t *testing.T)
 		t.Fatalf("MkdirAll(memoryRoot) err = %v", err)
 	}
 	agent := core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "mail-child",
 		ParentScopeKind:    "telegram_dm",
 		ParentScopeID:      "1",
 		ReviewTargetChatID: 1,
@@ -928,8 +928,8 @@ func TestRepairReviewRedactionsLeavesConcreteSecretSummaryRedacted(t *testing.T)
 		SourceRole:        "durable_agent",
 		SourceScope:       session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: agent.AgentID, DurableAgentID: agent.AgentID},
 		TargetAdminChatID: 1,
-		Summary:           "durable_agent=idolum-email channel=email\nsummary: [REDACTED: summary]",
-		MetadataJSON:      `{"agent_id":"idolum-email","summary":"[REDACTED: summary]","metadata":{"channel_kind":"email","forensic_ref":"` + ref + `","redacted_fields":"summary"}}`,
+		Summary:           "durable_agent=mail-child channel=email\nsummary: [REDACTED: summary]",
+		MetadataJSON:      `{"agent_id":"mail-child","summary":"[REDACTED: summary]","metadata":{"channel_kind":"email","forensic_ref":"` + ref + `","redacted_fields":"summary"}}`,
 	})
 	if err != nil {
 		t.Fatalf("InsertReviewEvent() err = %v", err)
@@ -1270,7 +1270,7 @@ func TestRunAuthorityCommandsReportRepairPreview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runAuthorityCommand(repair) err = %v", err)
 	}
-	for _, needle := range []string{"action: authority-repair", "dry_run: true", "repair_action=expire_continuation_lease", "repairable=true"} {
+	for _, needle := range []string{"action: authority-repair", "dry_run: true", "apply_action=expire_continuation_lease", "apply_scope=continuation_lease", "applicable=true"} {
 		if !strings.Contains(repairOut, needle) {
 			t.Fatalf("repair output = %q, want %q", repairOut, needle)
 		}
@@ -1342,7 +1342,7 @@ func TestRunAuthorityRepairApplyExpiresContinuationLeaseByFindingID(t *testing.T
 	if err != nil {
 		t.Fatalf("runAuthorityCommand(repair apply) err = %v", err)
 	}
-	for _, needle := range []string{"dry_run: false", "applied: true", "repair_action: expire_continuation_lease", "after_findings: 0"} {
+	for _, needle := range []string{"dry_run: false", "applied: true", "apply_action: expire_continuation_lease", "apply_scope: continuation_lease", "after_findings: 0"} {
 		if !strings.Contains(applyOut, needle) {
 			t.Fatalf("apply output = %q, want %q", applyOut, needle)
 		}
@@ -1535,7 +1535,7 @@ func TestRunAuthorityRepairApplyRevokesTailnetBindingLocally(t *testing.T) {
 		t.Fatalf("runAuthorityCommand(repair preview) err = %v", err)
 	}
 	findingID := authorityFindingIDFromOutput(t, previewOut, "tailnet_binding_surface_missing")
-	if !strings.Contains(previewOut, "repair_action=revoke_tailnet_grant_binding") {
+	if !strings.Contains(previewOut, "apply_action=revoke_tailnet_grant_binding") {
 		t.Fatalf("preview output = %q, want local revoke repair action", previewOut)
 	}
 	if _, err := captureStdout(t, func() error {
@@ -1600,12 +1600,12 @@ func TestRunAuthorityRepairApplyRejectsPreviewOnlyFinding(t *testing.T) {
 		t.Fatalf("runAuthorityCommand(repair preview) err = %v", err)
 	}
 	findingID := authorityFindingIDFromOutput(t, previewOut, "pending_proposal_missing_decision")
-	if !strings.Contains(previewOut, "repair_action=reoffer_or_revoke_continuation") || strings.Contains(previewOut, "repairable=true") {
-		t.Fatalf("preview output = %q, want preview-only pending decision repair", previewOut)
+	if !strings.Contains(previewOut, "suggested_repair=") || strings.Contains(previewOut, "apply_action=") || strings.Contains(previewOut, "applicable=true") {
+		t.Fatalf("preview output = %q, want suggested-only pending decision repair", previewOut)
 	}
 	err = runAuthorityCommand([]string{"repair", "--config", cfgPath, "--apply", "--finding", findingID})
-	if err == nil || !strings.Contains(err.Error(), "preview-only") {
-		t.Fatalf("runAuthorityCommand(preview-only apply) err = %v, want preview-only rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "no apply_action") {
+		t.Fatalf("runAuthorityCommand(suggested-only apply) err = %v, want no apply_action rejection", err)
 	}
 }
 

@@ -71,7 +71,8 @@ The current done-done worklist is intentionally short:
 
 - keep the authority/status/doctor consistency projection and exact
   `authority repair --apply --finding` closures covered as new typed authority
-  records are added
+  records are added, with preview-only `suggested_repair` kept distinct from
+  executable `apply_action`/`apply_scope`
 - keep sandbox network behavior truthful by either enforcing advertised policy
   or reporting unavailable enforcement before execution
 - keep external-tool execution limited to verified, sandboxed

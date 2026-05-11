@@ -24,7 +24,7 @@ func TestHandleInboundInfersOrganicProposalProposalAndMaterializesButtons(t *tes
 		"ORGANIC_PROPOSAL_PROPOSAL: yes",
 		"ORGANIC_PROPOSAL_KIND: read_only_review",
 		"ORGANIC_PROPOSAL_SUMMARY: Inspect proposal insertion points",
-		"ORGANIC_PROPOSAL_WHY_NOW: Daniel asked to finish the recurring loop organically.",
+		"ORGANIC_PROPOSAL_WHY_NOW: The operator asked to finish the recurring loop organically.",
 		"ORGANIC_PROPOSAL_BOUNDED_EFFECT: Inspect local runtime paths and report the design; no code or deploy; stop after evidence.",
 		"ORGANIC_PROPOSAL_CONFIDENCE: high",
 		"CONTINUATION_SCHEMA_VERSION: 1",

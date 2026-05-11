@@ -208,10 +208,10 @@ Required semantic fields:
 
 ```json
 {
-  "id": "aprop-mada-job-agent-j1",
+  "id": "aprop-resource-owner-assistant-j1",
   "kind": "action_proposal",
-  "summary": "Plan: Mada's Job Agent (Phase J1)",
-  "why_now": "The user asked to inspect the local job-agent plan and prepare the next bounded step.",
+  "summary": "Plan: Resource-Owner Assistant (Phase J1)",
+  "why_now": "The operator asked to inspect the local assistant plan and prepare the next bounded step.",
   "bounded_effect": "Read local non-secret repo/session state and produce a plan. Do not read mailbox contents, use credentials, edit files, commit, deploy, restart, send messages, or contact anyone.",
   "authority_scope": ["read_only_review"],
   "consent_subjects": ["operator"],
@@ -310,10 +310,10 @@ Current code anchor: [`session/types.go`](../../session/types.go)
 
 ```json
 {
-  "id": "planlease-mada-job-agent-j",
+  "id": "planlease-resource-owner-assistant-j",
   "kind": "operation_plan_lease",
-  "summary": "Plan: Mada's Job Agent",
-  "objective": "Design and validate the consent-first job-agent workflow through a local repo implementation plan.",
+  "summary": "Plan: Resource-Owner Assistant",
+  "objective": "Design and validate the consent-first resource-owner workflow through a local repo implementation plan.",
   "status": "active",
   "turn_budget": 6,
   "remaining_turns": 4,
@@ -530,7 +530,7 @@ human plan title, not the raw lease id.
 Example projection:
 
 ```text
-Stopped Plan: Mada's Job Agent (Phase J1)
+Stopped Plan: Resource-Owner Assistant (Phase J1)
 ```
 
 The ledger still stores the full lease id, proposal id, actor, timestamp, and
@@ -590,7 +590,7 @@ Recommended default shape:
 ```text
 Approval needed.
 
-Plan: Mada's Job Agent (Phase J1)
+Plan: Resource-Owner Assistant (Phase J1)
 
 Why now:
 Inspect the local plan and prepare the next bounded implementation step.
@@ -693,7 +693,9 @@ These are expected migration targets, not accusations against the current code.
   continuation, operation plan lease, pending decision, auto-approval lease, and
   capability grant state from existing stores. Each finding carries a stable
   `finding_id` derived from typed record identity so operator repair targets a
-  current contradiction rather than free text.
+  current contradiction rather than free text. Findings separate
+  `suggested_repair` from typed `apply_action`, `apply_scope`, and
+  `applicable` fields; only the typed apply fields are executable.
 - Use that projection for `/status`, `/debug`, `/doctor`, startup recovery, and
   proposal rendering. Startup recovery and proposal rendering remain planned.
 - Mark any compatibility fallback source in the projection.
@@ -720,15 +722,15 @@ These are expected migration targets, not accusations against the current code.
     warnings
 - Implemented targeted authority repair:
   - `authority repair --apply --finding <finding_id>` recomputes the projection,
-    rejects absent or preview-only findings, and then applies only exact local
-    closures
+    rejects absent, preview-only, or `applicable=false` findings, and then
+    applies only exact local closures named by `apply_action`
   - supported closures expire stale continuation leases, expire stale operation
     plan leases, expire or revoke contradictory capability grants, and locally
     revoke invalid Tailnet grant bindings
   - repair never creates new authority, re-offers approval, escalates a blocked
     phase, mutates live Tailnet policy, or treats presentation text as evidence
-  - every applied repair writes TES evidence with the original finding id and
-    repair action
+  - every applied repair writes TES evidence with the original finding id,
+    `apply_action`, and `apply_scope`
 
 ### Phase 4: Normalize States
 

@@ -201,17 +201,20 @@ func renderAuthorityDebugBlock(snapshot core.AuthorityStatusSnapshot, limit int)
 		if sessionID := strings.TrimSpace(finding.SessionID); sessionID != "" {
 			line += " session_id=" + quoteStatusField(sessionID)
 		}
-		if repair := strings.TrimSpace(finding.RepairAction); repair != "" {
-			line += " repair_action=" + repair
+		if repair := strings.TrimSpace(finding.SuggestedRepair); repair != "" {
+			line += " suggested_repair=" + quoteStatusField(truncateStatusField(repair, 160))
 		}
-		if finding.Repairable {
-			line += " repairable=true"
+		if action := strings.TrimSpace(finding.ApplyAction); action != "" {
+			line += " apply_action=" + action
+		}
+		if scope := strings.TrimSpace(finding.ApplyScope); scope != "" {
+			line += " apply_scope=" + scope
+		}
+		if finding.Applicable {
+			line += " applicable=true"
 		}
 		if detail := strings.TrimSpace(finding.Detail); detail != "" {
 			line += " detail=" + quoteStatusField(truncateStatusField(detail, 160))
-		}
-		if next := strings.TrimSpace(finding.NextRepairAction); next != "" {
-			line += " next_repair=" + quoteStatusField(truncateStatusField(next, 160))
 		}
 		lines = append(lines, line)
 	}

@@ -15,22 +15,22 @@ func TestContinuationPlanTitlePrefersExplicitTitleFields(t *testing.T) {
 
 	state := session.ContinuationState{
 		Status:       session.ContinuationStatusPending,
-		DecisionID:   "phase-wife-telegram-job-agent",
-		Objective:    "Create a wife-consented Telegram job agent.",
-		StageSummary: "Approve stages 33-36: Consent-first Mada intake.",
+		DecisionID:   "phase-resource-owner-assistant",
+		Objective:    "Create a consented Telegram resource-owner assistant.",
+		StageSummary: "Approve stages 33-36: Consent-first resource-owner intake.",
 		ActionProposal: session.ActionProposal{
-			ID:            "aprop-phase-wife-telegram-job-agent",
-			OperatorTitle: "Mada consented job assistant",
-			PlanTitle:     "Mada job agent plan",
-			Summary:       "Approve stages 33-36: Consent-first Mada intake.",
+			ID:            "aprop-phase-resource-owner-assistant",
+			OperatorTitle: "Resource-owner consented assistant",
+			PlanTitle:     "Resource-owner assistant plan",
+			Summary:       "Approve stages 33-36: Consent-first resource-owner intake.",
 		},
 		ContinuationLease: session.ContinuationLease{
-			ID:         "lease-phase-wife-telegram-job-agent",
-			ProposalID: "aprop-phase-wife-telegram-job-agent",
+			ID:         "lease-phase-resource-owner-assistant",
+			ProposalID: "aprop-phase-resource-owner-assistant",
 			Status:     session.ContinuationLeaseStatusPending,
 		},
 	}
-	if got := continuationUserFacingPlanLabel(state); got != "Plan: Mada consented job assistant" {
+	if got := continuationUserFacingPlanLabel(state); got != "Plan: Resource-owner consented assistant" {
 		t.Fatalf("continuation label = %q, want explicit operator title", got)
 	}
 }

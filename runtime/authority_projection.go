@@ -31,17 +31,18 @@ type authorityProjection struct {
 }
 
 type authorityProjectionFinding struct {
-	FindingID        string
-	Code             string
-	Severity         string
-	SourceKind       string
-	SourceID         string
-	SessionID        string
-	ChatID           int64
-	Detail           string
-	NextRepairAction string
-	RepairAction     string
-	Repairable       bool
+	FindingID       string
+	Code            string
+	Severity        string
+	SourceKind      string
+	SourceID        string
+	SessionID       string
+	ChatID          int64
+	Detail          string
+	SuggestedRepair string
+	ApplyAction     string
+	ApplyScope      string
+	Applicable      bool
 }
 
 func (r *Runtime) authorityProjection(now time.Time) (authorityProjection, error) {
@@ -139,68 +140,65 @@ func authorityProjectionFromStore(store *session.SQLiteStore, now time.Time) (au
 		}
 		if authorityContinuationLeaseOpen(state.ContinuationLease, now) && !authorityProposalOpen(state.ActionProposal, now) {
 			projection.addFinding(authorityProjectionFinding{
-				Code:             "active_continuation_lease_missing_proposal",
-				Severity:         "error",
-				SourceKind:       "continuation_lease",
-				SourceID:         firstNonEmpty(state.ContinuationLease.ID, sessionID),
-				SessionID:        sessionID,
-				ChatID:           record.Key.ChatID,
-				Detail:           "open continuation lease has no active action proposal projection",
-				NextRepairAction: "re-offer the continuation or revoke the orphaned lease before executing more work",
-				RepairAction:     "reoffer_continuation",
+				Code:            "active_continuation_lease_missing_proposal",
+				Severity:        "error",
+				SourceKind:      "continuation_lease",
+				SourceID:        firstNonEmpty(state.ContinuationLease.ID, sessionID),
+				SessionID:       sessionID,
+				ChatID:          record.Key.ChatID,
+				Detail:          "open continuation lease has no active action proposal projection",
+				SuggestedRepair: "re-offer the continuation or revoke the orphaned lease before executing more work",
 			})
 		}
 		if authorityPendingContinuationMissingDecision(state, decisionByID) {
 			projection.addFinding(authorityProjectionFinding{
-				Code:             "pending_proposal_missing_decision",
-				Severity:         "warning",
-				SourceKind:       "continuation",
-				SourceID:         firstNonEmpty(state.ActionProposal.ID, state.DecisionID, sessionID),
-				SessionID:        sessionID,
-				ChatID:           record.Key.ChatID,
-				Detail:           "pending continuation references a decision that is not in the pending decision store",
-				NextRepairAction: "re-offer or revoke the pending continuation before executing more work",
-				RepairAction:     "reoffer_or_revoke_continuation",
+				Code:            "pending_proposal_missing_decision",
+				Severity:        "warning",
+				SourceKind:      "continuation",
+				SourceID:        firstNonEmpty(state.ActionProposal.ID, state.DecisionID, sessionID),
+				SessionID:       sessionID,
+				ChatID:          record.Key.ChatID,
+				Detail:          "pending continuation references a decision that is not in the pending decision store",
+				SuggestedRepair: "re-offer or revoke the pending continuation before executing more work",
 			})
 		}
 		if authorityContinuationLeaseExpiredButConsumable(state.ContinuationLease, now) {
 			projection.addFinding(authorityProjectionFinding{
-				Code:             "expired_continuation_lease",
-				Severity:         "error",
-				SourceKind:       "continuation_lease",
-				SourceID:         firstNonEmpty(state.ContinuationLease.ID, sessionID),
-				SessionID:        sessionID,
-				ChatID:           record.Key.ChatID,
-				Detail:           "continuation lease still has turn budget after its expiry time",
-				NextRepairAction: "expire, refresh, or revoke the lease before continuing",
-				RepairAction:     "expire_continuation_lease",
-				Repairable:       true,
+				Code:            "expired_continuation_lease",
+				Severity:        "error",
+				SourceKind:      "continuation_lease",
+				SourceID:        firstNonEmpty(state.ContinuationLease.ID, sessionID),
+				SessionID:       sessionID,
+				ChatID:          record.Key.ChatID,
+				Detail:          "continuation lease still has turn budget after its expiry time",
+				SuggestedRepair: "expire, refresh, or revoke the lease before continuing",
+				ApplyAction:     "expire_continuation_lease",
+				ApplyScope:      "continuation_lease",
+				Applicable:      true,
 			})
 		}
 		if authorityContinuationLeaseProposalMismatch(state) {
 			projection.addFinding(authorityProjectionFinding{
-				Code:             "continuation_lease_proposal_mismatch",
-				Severity:         "warning",
-				SourceKind:       "continuation_lease",
-				SourceID:         firstNonEmpty(state.ContinuationLease.ID, sessionID),
-				SessionID:        sessionID,
-				ChatID:           record.Key.ChatID,
-				Detail:           "continuation lease points at a different proposal than the current action proposal",
-				NextRepairAction: "resynchronize the continuation authority record or re-offer the approval",
-				RepairAction:     "reoffer_continuation",
+				Code:            "continuation_lease_proposal_mismatch",
+				Severity:        "warning",
+				SourceKind:      "continuation_lease",
+				SourceID:        firstNonEmpty(state.ContinuationLease.ID, sessionID),
+				SessionID:       sessionID,
+				ChatID:          record.Key.ChatID,
+				Detail:          "continuation lease points at a different proposal than the current action proposal",
+				SuggestedRepair: "resynchronize the continuation authority record or re-offer the approval",
 			})
 		}
 		if authorityParkedContinuationNeedsRecoveryReview(state) {
 			projection.addFinding(authorityProjectionFinding{
-				Code:             "parked_lease_needs_recovery_review",
-				Severity:         "warning",
-				SourceKind:       "continuation_lease",
-				SourceID:         firstNonEmpty(state.ContinuationLease.ID, sessionID),
-				SessionID:        sessionID,
-				ChatID:           record.Key.ChatID,
-				Detail:           "parked continuation still has authority budget and needs explicit recovery review",
-				NextRepairAction: "recover, re-offer, or revoke the parked lease before startup recovery continues it",
-				RepairAction:     "recover_or_reoffer_parked_lease",
+				Code:            "parked_lease_needs_recovery_review",
+				Severity:        "warning",
+				SourceKind:      "continuation_lease",
+				SourceID:        firstNonEmpty(state.ContinuationLease.ID, sessionID),
+				SessionID:       sessionID,
+				ChatID:          record.Key.ChatID,
+				Detail:          "parked continuation still has authority budget and needs explicit recovery review",
+				SuggestedRepair: "recover, re-offer, or revoke the parked lease before startup recovery continues it",
 			})
 		}
 	}
@@ -214,29 +212,29 @@ func authorityProjectionFromStore(store *session.SQLiteStore, now time.Time) (au
 		}
 		if authorityPlanLeaseExpiredButConsumable(lease, now) {
 			projection.addFinding(authorityProjectionFinding{
-				Code:             "expired_operation_plan_lease",
-				Severity:         "error",
-				SourceKind:       "operation_plan_lease",
-				SourceID:         firstNonEmpty(lease.ID, state.ID, sessionID),
-				SessionID:        sessionID,
-				ChatID:           record.Key.ChatID,
-				Detail:           "operation plan lease still has turn budget after its expiry time",
-				NextRepairAction: "expire, refresh, or revoke the operation plan lease before continuing",
-				RepairAction:     "expire_operation_plan_lease",
-				Repairable:       true,
+				Code:            "expired_operation_plan_lease",
+				Severity:        "error",
+				SourceKind:      "operation_plan_lease",
+				SourceID:        firstNonEmpty(lease.ID, state.ID, sessionID),
+				SessionID:       sessionID,
+				ChatID:          record.Key.ChatID,
+				Detail:          "operation plan lease still has turn budget after its expiry time",
+				SuggestedRepair: "expire, refresh, or revoke the operation plan lease before continuing",
+				ApplyAction:     "expire_operation_plan_lease",
+				ApplyScope:      "operation_plan_lease",
+				Applicable:      true,
 			})
 		}
 		if authorityOperationBlockedWithoutEscalation(state, lease, now) {
 			projection.addFinding(authorityProjectionFinding{
-				Code:             "blocked_phase_missing_escalation",
-				Severity:         "warning",
-				SourceKind:       "operation",
-				SourceID:         firstNonEmpty(state.ID, sessionID),
-				SessionID:        sessionID,
-				ChatID:           record.Key.ChatID,
-				Detail:           "blocked operation phase has no pending proposal or active plan lease to resolve it",
-				NextRepairAction: "create a bounded escalation proposal or mark the phase stopped with evidence",
-				RepairAction:     "create_escalation_proposal",
+				Code:            "blocked_phase_missing_escalation",
+				Severity:        "warning",
+				SourceKind:      "operation",
+				SourceID:        firstNonEmpty(state.ID, sessionID),
+				SessionID:       sessionID,
+				ChatID:          record.Key.ChatID,
+				Detail:          "blocked operation phase has no pending proposal or active plan lease to resolve it",
+				SuggestedRepair: "create a bounded escalation proposal or mark the phase stopped with evidence",
 			})
 		}
 	}
@@ -249,71 +247,69 @@ func authorityProjectionFromStore(store *session.SQLiteStore, now time.Time) (au
 		}
 		if authorityCapabilityGrantExpired(grant, now) {
 			projection.addFinding(authorityProjectionFinding{
-				Code:             "active_capability_grant_expired",
-				Severity:         "error",
-				SourceKind:       "capability_grant",
-				SourceID:         grant.GrantID,
-				Detail:           "capability grant is marked active after its expiry time",
-				NextRepairAction: "expire, refresh, or revoke the capability grant before the next child/tool wake",
-				RepairAction:     "expire_capability_grant",
-				Repairable:       true,
+				Code:            "active_capability_grant_expired",
+				Severity:        "error",
+				SourceKind:      "capability_grant",
+				SourceID:        grant.GrantID,
+				Detail:          "capability grant is marked active after its expiry time",
+				SuggestedRepair: "expire, refresh, or revoke the capability grant before the next child/tool wake",
+				ApplyAction:     "expire_capability_grant",
+				ApplyScope:      "capability_grant",
+				Applicable:      true,
 			})
 		}
 		if !grant.RevokedAt.IsZero() {
 			projection.addFinding(authorityProjectionFinding{
-				Code:             "active_capability_grant_revoked",
-				Severity:         "error",
-				SourceKind:       "capability_grant",
-				SourceID:         grant.GrantID,
-				Detail:           "capability grant is marked active while also carrying revoked_at",
-				NextRepairAction: "move the grant to revoked or issue a fresh grant with a clean lifecycle",
-				RepairAction:     "revoke_capability_grant",
-				Repairable:       true,
+				Code:            "active_capability_grant_revoked",
+				Severity:        "error",
+				SourceKind:      "capability_grant",
+				SourceID:        grant.GrantID,
+				Detail:          "capability grant is marked active while also carrying revoked_at",
+				SuggestedRepair: "move the grant to revoked or issue a fresh grant with a clean lifecycle",
+				ApplyAction:     "revoke_capability_grant",
+				ApplyScope:      "capability_grant",
+				Applicable:      true,
 			})
 		}
 		if strings.TrimSpace(grant.StaleReason) != "" {
 			projection.addFinding(authorityProjectionFinding{
-				Code:             "active_capability_grant_stale",
-				Severity:         "warning",
-				SourceKind:       "capability_grant",
-				SourceID:         grant.GrantID,
-				Detail:           "capability grant is active while also carrying stale reason: " + strings.TrimSpace(grant.StaleReason),
-				NextRepairAction: "review the drift reason and refresh or revoke the grant",
-				RepairAction:     "refresh_or_revoke_capability_grant",
+				Code:            "active_capability_grant_stale",
+				Severity:        "warning",
+				SourceKind:      "capability_grant",
+				SourceID:        grant.GrantID,
+				Detail:          "capability grant is active while also carrying stale reason: " + strings.TrimSpace(grant.StaleReason),
+				SuggestedRepair: "review the drift reason and refresh or revoke the grant",
 			})
 		}
 		if authorityCapabilityGrantUsedWithoutTurnLeaseEvidence(grant, invocations) {
 			projection.addFinding(authorityProjectionFinding{
-				Code:             "capability_grant_invocation_missing_turn_lease_evidence",
-				Severity:         "warning",
-				SourceKind:       "capability_grant",
-				SourceID:         grant.GrantID,
-				Detail:           "capability grant has invocation evidence without continuation or operation plan lease reference",
-				NextRepairAction: "inspect capability invocations and ensure future grant use records the consuming turn lease",
-				RepairAction:     "inspect_capability_invocations",
+				Code:            "capability_grant_invocation_missing_turn_lease_evidence",
+				Severity:        "warning",
+				SourceKind:      "capability_grant",
+				SourceID:        grant.GrantID,
+				Detail:          "capability grant has invocation evidence without continuation or operation plan lease reference",
+				SuggestedRepair: "inspect capability invocations and ensure future grant use records the consuming turn lease",
 			})
 		}
 		if authorityGrantRequiresChildRuntime(grant) {
 			_, ok, materialErr := core.ExtractChildRuntimeContract(grant.Contract, grant.Constraints)
 			if materialErr != nil {
 				projection.addFinding(authorityProjectionFinding{
-					Code:             "child_runtime_contract_invalid",
-					Severity:         "error",
-					SourceKind:       "capability_grant",
-					SourceID:         grant.GrantID,
-					Detail:           "capability grant child_runtime contract is invalid: " + materialErr.Error(),
-					NextRepairAction: "replace the grant with validated child runtime material",
-					RepairAction:     "refresh_capability_grant",
+					Code:            "child_runtime_contract_invalid",
+					Severity:        "error",
+					SourceKind:      "capability_grant",
+					SourceID:        grant.GrantID,
+					Detail:          "capability grant child_runtime contract is invalid: " + materialErr.Error(),
+					SuggestedRepair: "replace the grant with validated child runtime material",
 				})
 			} else if !ok {
 				projection.addFinding(authorityProjectionFinding{
-					Code:             "child_runtime_contract_missing",
-					Severity:         "warning",
-					SourceKind:       "capability_grant",
-					SourceID:         grant.GrantID,
-					Detail:           "durable-agent capability grant has no child_runtime material",
-					NextRepairAction: "issue a grant with explicit child runtime material or narrow the grant so it does not require materialization",
-					RepairAction:     "refresh_capability_grant",
+					Code:            "child_runtime_contract_missing",
+					Severity:        "warning",
+					SourceKind:      "capability_grant",
+					SourceID:        grant.GrantID,
+					Detail:          "durable-agent capability grant has no child_runtime material",
+					SuggestedRepair: "issue a grant with explicit child runtime material or narrow the grant so it does not require materialization",
 				})
 			}
 		}
@@ -339,50 +335,50 @@ func authorityProjectionFromStore(store *session.SQLiteStore, now time.Time) (au
 		}
 		if _, ok := surfaceByID[strings.TrimSpace(binding.SurfaceID)]; !ok {
 			projection.addFinding(authorityProjectionFinding{
-				Code:             "tailnet_binding_surface_missing",
-				Severity:         "error",
-				SourceKind:       "tailnet_grant_binding",
-				SourceID:         binding.BindingID,
-				Detail:           "tailnet grant binding references a surface that is not declared or observed",
-				NextRepairAction: "declare the surface, correct the binding, or revoke the network grant binding",
-				RepairAction:     "revoke_tailnet_grant_binding",
-				Repairable:       true,
+				Code:            "tailnet_binding_surface_missing",
+				Severity:        "error",
+				SourceKind:      "tailnet_grant_binding",
+				SourceID:        binding.BindingID,
+				Detail:          "tailnet grant binding references a surface that is not declared or observed",
+				SuggestedRepair: "declare the surface, correct the binding, or revoke the network grant binding",
+				ApplyAction:     "revoke_tailnet_grant_binding",
+				ApplyScope:      "tailnet_grant_binding",
+				Applicable:      true,
 			})
 		}
 		if _, ok := grantByID[strings.TrimSpace(binding.GrantID)]; !ok && binding.Status == session.TailnetGrantBindingStatusApplied {
 			projection.addFinding(authorityProjectionFinding{
-				Code:             "tailnet_binding_active_grant_missing",
-				Severity:         "error",
-				SourceKind:       "tailnet_grant_binding",
-				SourceID:         binding.BindingID,
-				Detail:           "applied tailnet grant binding has no matching active Aphelion capability grant",
-				NextRepairAction: "roll back the Tailnet binding or restore a fresh approved capability grant",
-				RepairAction:     "revoke_tailnet_grant_binding",
-				Repairable:       true,
+				Code:            "tailnet_binding_active_grant_missing",
+				Severity:        "error",
+				SourceKind:      "tailnet_grant_binding",
+				SourceID:        binding.BindingID,
+				Detail:          "applied tailnet grant binding has no matching active Aphelion capability grant",
+				SuggestedRepair: "roll back the Tailnet binding or restore a fresh approved capability grant",
+				ApplyAction:     "revoke_tailnet_grant_binding",
+				ApplyScope:      "tailnet_grant_binding",
+				Applicable:      true,
 			})
 		}
 		if binding.Status == session.TailnetGrantBindingStatusDrifted {
 			projection.addFinding(authorityProjectionFinding{
-				Code:             "tailnet_binding_drifted",
-				Severity:         "warning",
-				SourceKind:       "tailnet_grant_binding",
-				SourceID:         binding.BindingID,
-				Detail:           "tailnet grant binding is drifted: " + firstNonEmpty(binding.DriftReason, "policy evidence diverged"),
-				NextRepairAction: "review the drift reason and either re-apply the approved projection or revoke the binding",
-				RepairAction:     "review_tailnet_grant_drift",
+				Code:            "tailnet_binding_drifted",
+				Severity:        "warning",
+				SourceKind:      "tailnet_grant_binding",
+				SourceID:        binding.BindingID,
+				Detail:          "tailnet grant binding is drifted: " + firstNonEmpty(binding.DriftReason, "policy evidence diverged"),
+				SuggestedRepair: "review the drift reason and either re-apply the approved projection or revoke the binding",
 			})
 		}
 		if strings.TrimSpace(binding.AppliedPolicyHash) != "" &&
 			strings.TrimSpace(binding.ObservedPolicyHash) != "" &&
 			strings.TrimSpace(binding.AppliedPolicyHash) != strings.TrimSpace(binding.ObservedPolicyHash) {
 			projection.addFinding(authorityProjectionFinding{
-				Code:             "tailnet_binding_policy_hash_mismatch",
-				Severity:         "warning",
-				SourceKind:       "tailnet_grant_binding",
-				SourceID:         binding.BindingID,
-				Detail:           "tailnet observed policy hash differs from the policy hash recorded at apply time",
-				NextRepairAction: "refresh observed policy evidence and mark the binding drifted or applied",
-				RepairAction:     "refresh_tailnet_policy_evidence",
+				Code:            "tailnet_binding_policy_hash_mismatch",
+				Severity:        "warning",
+				SourceKind:      "tailnet_grant_binding",
+				SourceID:        binding.BindingID,
+				Detail:          "tailnet observed policy hash differs from the policy hash recorded at apply time",
+				SuggestedRepair: "refresh observed policy evidence and mark the binding drifted or applied",
 			})
 		}
 	}
@@ -419,17 +415,18 @@ func (p authorityProjection) snapshot() core.AuthorityStatusSnapshot {
 			out.WarningCount++
 		}
 		out.Findings = append(out.Findings, core.AuthorityFindingSnapshot{
-			FindingID:        finding.FindingID,
-			Code:             finding.Code,
-			Severity:         finding.Severity,
-			SourceKind:       finding.SourceKind,
-			SourceID:         finding.SourceID,
-			SessionID:        finding.SessionID,
-			ChatID:           finding.ChatID,
-			Detail:           finding.Detail,
-			NextRepairAction: finding.NextRepairAction,
-			RepairAction:     finding.RepairAction,
-			Repairable:       finding.Repairable,
+			FindingID:       finding.FindingID,
+			Code:            finding.Code,
+			Severity:        finding.Severity,
+			SourceKind:      finding.SourceKind,
+			SourceID:        finding.SourceID,
+			SessionID:       finding.SessionID,
+			ChatID:          finding.ChatID,
+			Detail:          finding.Detail,
+			SuggestedRepair: finding.SuggestedRepair,
+			ApplyAction:     finding.ApplyAction,
+			ApplyScope:      finding.ApplyScope,
+			Applicable:      finding.Applicable,
 		})
 	}
 	return out
@@ -480,14 +477,17 @@ func (r *Runtime) writeDoctorAuthorityProjection(b *strings.Builder, now time.Ti
 		if finding.Detail != "" {
 			parts = append(parts, "detail="+quoteDoctorToken(finding.Detail))
 		}
-		if finding.NextRepairAction != "" {
-			parts = append(parts, "next_repair="+quoteDoctorToken(finding.NextRepairAction))
+		if finding.SuggestedRepair != "" {
+			parts = append(parts, "suggested_repair="+quoteDoctorToken(finding.SuggestedRepair))
 		}
-		if finding.RepairAction != "" {
-			parts = append(parts, "repair_action="+quoteDoctorToken(finding.RepairAction))
+		if finding.ApplyAction != "" {
+			parts = append(parts, "apply_action="+quoteDoctorToken(finding.ApplyAction))
 		}
-		if finding.Repairable {
-			parts = append(parts, "repairable=true")
+		if finding.ApplyScope != "" {
+			parts = append(parts, "apply_scope="+quoteDoctorToken(finding.ApplyScope))
+		}
+		if finding.Applicable {
+			parts = append(parts, "applicable=true")
 		}
 		writeDoctorLine(b, "- "+strings.Join(parts, " "))
 	}
@@ -508,8 +508,13 @@ func (p *authorityProjection) addFinding(finding authorityProjectionFinding) {
 	finding.SourceID = strings.TrimSpace(finding.SourceID)
 	finding.SessionID = strings.TrimSpace(finding.SessionID)
 	finding.Detail = strings.TrimSpace(finding.Detail)
-	finding.NextRepairAction = strings.TrimSpace(finding.NextRepairAction)
-	finding.RepairAction = strings.TrimSpace(finding.RepairAction)
+	finding.SuggestedRepair = strings.TrimSpace(finding.SuggestedRepair)
+	finding.ApplyAction = strings.TrimSpace(finding.ApplyAction)
+	finding.ApplyScope = strings.TrimSpace(finding.ApplyScope)
+	if !finding.Applicable {
+		finding.ApplyAction = ""
+		finding.ApplyScope = ""
+	}
 	if finding.Code == "" || finding.Severity == "" {
 		return
 	}
@@ -755,15 +760,14 @@ func authorityAutoApprovalUsedOutsideScopeFinding(event session.ExecutionEvent) 
 	}
 	if !authorityAutoApprovalScopeAllowsWorkMode(payload.Scope, payload.WorkMode) {
 		return authorityProjectionFinding{
-			Code:             "auto_approval_used_outside_scope",
-			Severity:         "error",
-			SourceKind:       "auto_approval_lease",
-			SourceID:         strings.TrimSpace(payload.LeaseID),
-			SessionID:        strings.TrimSpace(event.SessionID),
-			ChatID:           event.ChatID,
-			Detail:           "auto-approval use event records work_mode outside the lease scope",
-			NextRepairAction: "revoke the lease and inspect the linked decision or proposal before continuing",
-			RepairAction:     "revoke_auto_approval_lease",
+			Code:            "auto_approval_used_outside_scope",
+			Severity:        "error",
+			SourceKind:      "auto_approval_lease",
+			SourceID:        strings.TrimSpace(payload.LeaseID),
+			SessionID:       strings.TrimSpace(event.SessionID),
+			ChatID:          event.ChatID,
+			Detail:          "auto-approval use event records work_mode outside the lease scope",
+			SuggestedRepair: "revoke the lease and inspect the linked decision or proposal before continuing",
 		}, true
 	}
 	return authorityProjectionFinding{}, false

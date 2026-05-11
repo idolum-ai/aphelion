@@ -231,7 +231,7 @@ func TestQueueReviewArtifactDoesNotRedactCredentialConceptSummary(t *testing.T) 
 
 	rt := NewRuntime(store)
 	agent := core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "mail-child",
 		ParentScopeKind:    "telegram_dm",
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
@@ -245,14 +245,14 @@ func TestQueueReviewArtifactDoesNotRedactCredentialConceptSummary(t *testing.T) 
 
 	artifact := core.DurableReviewArtifact{
 		AgentID:       agent.AgentID,
-		Summary:       "What matters: gog_cli keyring backend requires an interactive passphrase prompt; no TTY is available, so no mailbox credential was read.",
+		Summary:       "What matters: mailbox adapter credential backend requires an interactive passphrase prompt; no TTY is available, so no mailbox credential was read.",
 		IntervalLabel: "2026-05-08T02:50:01Z",
 		LocalActions:  []string{"External-channel wake blocked; recorded explicit failure/backoff instead of success."},
 		RiskFlags:     []string{"external_channel", "adapter_dispatch"},
 		Metadata: map[string]string{
 			"channel_kind":            "email",
 			"external_channel_status": "wake_blocked",
-			"external_channel_error":  "gog_cli keyring backend requires an interactive passphrase prompt; no TTY is available.",
+			"external_channel_error":  "mailbox adapter credential backend requires an interactive passphrase prompt; no TTY is available.",
 		},
 	}
 	if _, err := rt.QueueReviewArtifact(agent, artifact); err != nil {
@@ -283,7 +283,7 @@ func TestQueueReviewArtifactRedactsConcreteSecretValueInSummary(t *testing.T) {
 	store := newTestSQLiteStore(t)
 	defer store.Close()
 
-	workspaceRoot, memoryRoot := DefaultLocalRoots(filepath.Join(t.TempDir(), "sessions.db"), "idolum-email")
+	workspaceRoot, memoryRoot := DefaultLocalRoots(filepath.Join(t.TempDir(), "sessions.db"), "mail-child")
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(workspaceRoot) err = %v", err)
 	}
@@ -293,7 +293,7 @@ func TestQueueReviewArtifactRedactsConcreteSecretValueInSummary(t *testing.T) {
 
 	rt := NewRuntime(store)
 	agent := core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "mail-child",
 		ParentScopeKind:    "telegram_dm",
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,

@@ -95,13 +95,15 @@ func authorityClassificationPriority() []authorityClassificationGroup {
 		}},
 		{Key: "private_data_intake", Tokens: []string{
 			"private_data_intake",
-			"wife_profile",
-			"profile_scoring_rubric",
+			"resource_owner_data_intake",
+			"resource_owner_profile_intake",
+			"private_profile_intake",
+			"profile_evaluation_rubric",
 			"cv_ingestion",
 			"mailbox_content",
 			"read_mailbox_contents",
-			"run_gog_cli_mail_query",
-			"run_configured_gog_cli_mail_query_once",
+			"run_mailbox_adapter_query",
+			"run_configured_mailbox_adapter_query_once",
 			"read_only_mailbox_smoke",
 			"email_read",
 			"mailbox_read",
@@ -109,11 +111,11 @@ func authorityClassificationPriority() []authorityClassificationGroup {
 			"external_account_email_read_public_web_read",
 			"external_account",
 			"public_web_read",
-			"job_processing",
-			"job_ranking",
-			"job_scouting",
+			"private_material_processing",
+			"rank_private_material",
+			"scout_public_opportunities",
 		}},
-		{Key: "data_access", Tokens: []string{"data_access", "file_access", "read_file", "read_image", "consume_attachment", "artifact_read", "network_access", "external_account_auth_status", "external_account_status_check", "read_only_auth_status_check", "credential_state_check", "credential_metadata", "credential_metadata_check", "token_health_check", "run_gog_cli_auth_status_or_identity_check"}},
+		{Key: "data_access", Tokens: []string{"data_access", "file_access", "read_file", "read_image", "consume_attachment", "artifact_read", "network_access", "external_account_auth_status", "external_account_status_check", "read_only_auth_status_check", "credential_state_check", "credential_metadata", "credential_metadata_check", "token_health_check", "run_external_account_auth_status_or_identity_check"}},
 		{Key: "commit", Tokens: []string{"commit", "git_commit", "git_commit_validated_slices", "repo_history_mutation", "workspace_commit", "workspace_commit_then_repo_write_bounded"}},
 		{Key: "workspace_write", Tokens: []string{"workspace_write", "workspace", "code", "code_change", "code_changes", "repo_edit", "edit", "edit_files", "patch", "run_tests", "test", "tests", "focused_tests", "git_diff_check"}},
 		{Key: "read_only_review", Tokens: []string{"read_only", "read_only_review", "status_check", "inspect_readonly_state", "read_only_child_adapter_environment_inspection"}},
@@ -188,7 +190,7 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 				"email_read",
 				"cv_ingestion",
 				"public_web_search",
-				"job_processing",
+				"private_material_processing",
 				"git_push",
 			},
 			ValidationPlan: []string{
@@ -199,7 +201,7 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 			AutoApprovalAllowed:    true,
 			RequiresInlineApproval: true,
 		}, true
-	case "data_access", "file_access", "read_file", "read_image", "consume_attachment", "artifact_read", "network_access", "external_account_auth_status", "external_account_status_check", "read_only_auth_status_check", "credential_state_check", "credential_metadata", "credential_metadata_check", "token_health_check":
+	case "data_access", "file_access", "read_file", "read_image", "consume_attachment", "artifact_read", "network_access", "external_account_auth_status", "external_account_status_check", "read_only_auth_status_check", "credential_state_check", "credential_metadata", "credential_metadata_check", "token_health_check", "run_external_account_auth_status_or_identity_check":
 		return AuthorityContract{
 			Key:        "data_access",
 			LeaseClass: ContinuationLeaseClassDataAccess,
@@ -224,7 +226,7 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 			AutoApprovalAllowed:    true,
 			RequiresInlineApproval: true,
 		}, true
-	case "private_data_intake", "wife_profile", "profile_scoring_rubric", "cv_ingestion", "mailbox_content", "read_mailbox_contents", "run_gog_cli_mail_query", "run_configured_gog_cli_mail_query_once", "read_only_mailbox_smoke", "email_read", "mailbox_read", "external_account_email_read", "external_account_email_read_public_web_read", "external_account", "public_web_read", "job_processing", "job_ranking", "job_scouting":
+	case "private_data_intake", "resource_owner_data_intake", "resource_owner_profile_intake", "private_profile_intake", "profile_evaluation_rubric", "cv_ingestion", "mailbox_content", "read_mailbox_contents", "run_mailbox_adapter_query", "run_configured_mailbox_adapter_query_once", "read_only_mailbox_smoke", "email_read", "mailbox_read", "external_account_email_read", "external_account_email_read_public_web_read", "external_account", "public_web_read", "private_material_processing", "rank_private_material", "scout_public_opportunities":
 		return AuthorityContract{
 			Key:        "private_data_intake",
 			LeaseClass: ContinuationLeaseClassDataAccess,

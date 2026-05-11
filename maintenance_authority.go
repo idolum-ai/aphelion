@@ -119,11 +119,11 @@ func runAuthorityRepairApplyCommand(configPathFlag string, findingID string) err
 	if !ok {
 		return fmt.Errorf("authority repair finding %q is not present; rerun authority repair and apply a current finding_id", findingID)
 	}
-	if !finding.Repairable {
-		return fmt.Errorf("authority repair finding %q is preview-only; next_repair=%q", findingID, strings.TrimSpace(finding.NextRepairAction))
+	if !finding.Applicable || strings.TrimSpace(finding.ApplyAction) == "" {
+		return fmt.Errorf("authority repair finding %q has no apply_action; suggested_repair=%q", findingID, strings.TrimSpace(finding.SuggestedRepair))
 	}
-	if !authorityRepairActionSupported(finding.RepairAction) {
-		return fmt.Errorf("authority repair action %q for finding %q is not supported for --apply", strings.TrimSpace(finding.RepairAction), findingID)
+	if !authorityRepairActionSupported(finding.ApplyAction) {
+		return fmt.Errorf("authority repair apply_action %q for finding %q is not supported for --apply", strings.TrimSpace(finding.ApplyAction), findingID)
 	}
 	now := time.Now().UTC()
 	if err := applyAuthorityRepairFinding(store, finding, now); err != nil {
@@ -134,14 +134,17 @@ func runAuthorityRepairApplyCommand(configPathFlag string, findingID string) err
 		return err
 	}
 	if _, stillPresent := authorityFindingByID(after, findingID); stillPresent {
-		return fmt.Errorf("authority repair finding %q was not closed by %s", findingID, strings.TrimSpace(finding.RepairAction))
+		return fmt.Errorf("authority repair finding %q was not closed by %s", findingID, strings.TrimSpace(finding.ApplyAction))
 	}
 	fmt.Fprintln(os.Stdout, "action: authority-repair")
 	fmt.Fprintf(os.Stdout, "config_path: %s\n", configPath)
 	fmt.Fprintln(os.Stdout, "dry_run: false")
 	fmt.Fprintln(os.Stdout, "applied: true")
 	fmt.Fprintf(os.Stdout, "finding_id: %s\n", findingID)
-	fmt.Fprintf(os.Stdout, "repair_action: %s\n", strings.TrimSpace(finding.RepairAction))
+	fmt.Fprintf(os.Stdout, "apply_action: %s\n", strings.TrimSpace(finding.ApplyAction))
+	if strings.TrimSpace(finding.ApplyScope) != "" {
+		fmt.Fprintf(os.Stdout, "apply_scope: %s\n", strings.TrimSpace(finding.ApplyScope))
+	}
 	fmt.Fprintf(os.Stdout, "before_status: %s\n", firstNonEmpty(strings.TrimSpace(before.Status), "healthy"))
 	fmt.Fprintf(os.Stdout, "after_status: %s\n", firstNonEmpty(strings.TrimSpace(after.Status), "healthy"))
 	fmt.Fprintf(os.Stdout, "before_findings: %d\n", before.FindingCount)
@@ -163,17 +166,17 @@ func writeAuthoritySnapshot(out *os.File, snapshot core.AuthorityStatusSnapshot,
 	fmt.Fprintf(out, "active_autoapproval_leases: %d\n", snapshot.AutoApprovalLeases)
 	fmt.Fprintf(out, "active_capability_grants: %d\n", snapshot.CapabilityGrants)
 	printed := 0
-	repairable := 0
+	applicable := 0
 	for _, finding := range snapshot.Findings {
-		if finding.Repairable {
-			repairable++
+		if finding.Applicable {
+			applicable++
 		}
 	}
 	if repairOnly {
-		fmt.Fprintf(out, "repairable: %d\n", repairable)
+		fmt.Fprintf(out, "applicable: %d\n", applicable)
 	}
 	for _, finding := range snapshot.Findings {
-		if repairOnly && strings.TrimSpace(finding.RepairAction) == "" {
+		if repairOnly && strings.TrimSpace(finding.SuggestedRepair) == "" && strings.TrimSpace(finding.ApplyAction) == "" {
 			continue
 		}
 		if printed >= limit {
@@ -190,14 +193,17 @@ func writeAuthoritySnapshot(out *os.File, snapshot core.AuthorityStatusSnapshot,
 		if strings.TrimSpace(finding.SessionID) != "" {
 			fmt.Fprintf(out, " session_id=%s", finding.SessionID)
 		}
-		if strings.TrimSpace(finding.RepairAction) != "" {
-			fmt.Fprintf(out, " repair_action=%s", finding.RepairAction)
+		if strings.TrimSpace(finding.SuggestedRepair) != "" {
+			fmt.Fprintf(out, " suggested_repair=%q", finding.SuggestedRepair)
 		}
-		if finding.Repairable {
-			fmt.Fprint(out, " repairable=true")
+		if strings.TrimSpace(finding.ApplyAction) != "" {
+			fmt.Fprintf(out, " apply_action=%s", finding.ApplyAction)
 		}
-		if strings.TrimSpace(finding.NextRepairAction) != "" {
-			fmt.Fprintf(out, " next_repair=%q", finding.NextRepairAction)
+		if strings.TrimSpace(finding.ApplyScope) != "" {
+			fmt.Fprintf(out, " apply_scope=%s", finding.ApplyScope)
+		}
+		if finding.Applicable {
+			fmt.Fprint(out, " applicable=true")
 		}
 		fmt.Fprintln(out)
 	}
@@ -240,7 +246,7 @@ func applyAuthorityRepairFinding(store *session.SQLiteStore, finding core.Author
 		now = time.Now().UTC()
 	}
 	now = now.UTC()
-	switch strings.TrimSpace(finding.RepairAction) {
+	switch strings.TrimSpace(finding.ApplyAction) {
 	case "expire_continuation_lease":
 		return applyAuthorityRepairExpireContinuationLease(store, finding, now)
 	case "expire_operation_plan_lease":
@@ -252,7 +258,7 @@ func applyAuthorityRepairFinding(store *session.SQLiteStore, finding core.Author
 	case "revoke_tailnet_grant_binding":
 		return applyAuthorityRepairRevokeTailnetGrantBinding(store, finding, now)
 	default:
-		return fmt.Errorf("authority repair action %q is not supported for --apply", strings.TrimSpace(finding.RepairAction))
+		return fmt.Errorf("authority repair apply_action %q is not supported for --apply", strings.TrimSpace(finding.ApplyAction))
 	}
 }
 
@@ -433,7 +439,8 @@ func appendAuthorityRepairExecutionEvent(store *session.SQLiteStore, key session
 		"source_id":      strings.TrimSpace(finding.SourceID),
 		"session_id":     strings.TrimSpace(finding.SessionID),
 		"chat_id":        finding.ChatID,
-		"repair_action":  strings.TrimSpace(finding.RepairAction),
+		"apply_action":   strings.TrimSpace(finding.ApplyAction),
+		"apply_scope":    strings.TrimSpace(finding.ApplyScope),
 		"repair_surface": "authority_repair",
 	}
 	return appendMaintenanceExecutionEvent(store, key, eventType, "authority_repair", strings.TrimSpace(status), payload, now)

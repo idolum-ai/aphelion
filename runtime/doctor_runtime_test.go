@@ -97,7 +97,10 @@ func TestDoctorAuthorityProjectionReportsConsistencyFindings(t *testing.T) {
 		`code="continuation_lease_proposal_mismatch"`,
 		`code="expired_continuation_lease"`,
 		`code="pending_proposal_missing_decision"`,
-		`next_repair="expire, refresh, or revoke the capability grant before the next child/tool wake"`,
+		`suggested_repair="expire, refresh, or revoke the capability grant before the next child/tool wake"`,
+		`apply_action="expire_capability_grant"`,
+		`apply_scope="capability_grant"`,
+		`applicable=true`,
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("authority projection report missing %q:\n%s", want, report)
@@ -913,80 +916,53 @@ type telegramChildBotNoSendOutbound struct{}
 	}
 }
 
-func TestDoctorExternalChannelAdapterReadinessProjectsGogCLIContract(t *testing.T) {
-	t.Setenv(gogCLIRequiredSecretEnvName, "test-redacted-value")
+func TestDoctorExternalChannelAdapterReadinessProjectsGenericContract(t *testing.T) {
 	cfg, store, _, _ := buildRuntimeFixtures(t)
 	workspaceRoot := filepath.Join(t.TempDir(), "child", "workspace")
 	memoryRoot := filepath.Join(t.TempDir(), "child", "memory")
-	runtimeBin := filepath.Join(filepath.Dir(workspaceRoot), "runtime-bin")
-	configRoot := filepath.Join(workspaceRoot, ".config", "gogcli")
-	if err := os.MkdirAll(filepath.Join(configRoot, "keyring"), 0o700); err != nil {
-		t.Fatalf("mkdir config: %v", err)
-	}
-	if err := os.MkdirAll(runtimeBin, 0o755); err != nil {
-		t.Fatalf("mkdir runtime bin: %v", err)
-	}
-	for path, body := range map[string]string{
-		filepath.Join(runtimeBin, "gog"):                      "#!/usr/bin/env bash\necho gog\n",
-		filepath.Join(runtimeBin, "gog_cli"):                  "#!/usr/bin/env bash\nexport XDG_CONFIG_HOME=\"${HOME}/.config\"\nexec \"$(dirname \"$0\")/gog\" \"$@\"\n",
-		filepath.Join(configRoot, "config.json"):              `{}`,
-		filepath.Join(configRoot, "credentials.json"):         `{}`,
-		filepath.Join(configRoot, "keyring", "token:example"): `{}`,
-	} {
-		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-			t.Fatalf("write %s: %v", path, err)
-		}
+	adapterRoot := filepath.Join(workspaceRoot, "adapter-config")
+	if err := os.MkdirAll(adapterRoot, 0o700); err != nil {
+		t.Fatalf("mkdir adapter config: %v", err)
 	}
 	agent := core.DurableAgent{
 		AgentID:           "child-mail",
 		ChannelKind:       "external_channel",
 		LocalStorageRoots: []string{workspaceRoot, memoryRoot},
 		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
-			Address: "mailbox@example.test", Account: "mailbox@example.test", Adapter: gogCLIAdapterName, Query: "label:inbox", PollInterval: "24h",
+			Address: "mailbox@example.test", Account: "mailbox@example.test", Adapter: "mailbox_adapter", Query: "label:inbox", PollInterval: "24h",
 		}},
 		Status: "active",
 	}
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
-	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: gogCLIAdapterName, ImplementationRef: "external:gog_cli", Registered: true}); err != nil {
+	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "mailbox_adapter", ImplementationRef: "external:mailbox_adapter", Registered: true}); err != nil {
 		t.Fatalf("UpsertRegisteredTool() err = %v", err)
 	}
 	now := time.Now().UTC()
-	if _, err := store.UpsertToolInstallRecord(session.ToolInstallRecord{ToolName: gogCLIAdapterName, Status: session.ToolInstallStatusVerified, InstalledAt: now, AttestedAt: now}); err != nil {
+	if _, err := store.UpsertToolInstallRecord(session.ToolInstallRecord{ToolName: "mailbox_adapter", Status: session.ToolInstallStatusVerified, InstalledAt: now, AttestedAt: now}); err != nil {
 		t.Fatalf("UpsertToolInstallRecord() err = %v", err)
 	}
-	if _, err := store.UpsertToolAuditRecord(session.ToolAuditRecord{ToolName: gogCLIAdapterName, Status: session.ToolAuditStatusPassed, AuditedAt: now}); err != nil {
+	if _, err := store.UpsertToolAuditRecord(session.ToolAuditRecord{ToolName: "mailbox_adapter", Status: session.ToolAuditStatusPassed, AuditedAt: now}); err != nil {
 		t.Fatalf("UpsertToolAuditRecord() err = %v", err)
 	}
-	if _, err := store.UpsertToolProbeRecord(session.ToolProbeRecord{ToolName: gogCLIAdapterName, Status: session.ToolProbeStatusPassed, ProbedAt: now}); err != nil {
+	if _, err := store.UpsertToolProbeRecord(session.ToolProbeRecord{ToolName: "mailbox_adapter", Status: session.ToolProbeStatusPassed, ProbedAt: now}); err != nil {
 		t.Fatalf("UpsertToolProbeRecord() err = %v", err)
 	}
 	principalID := core.DurableAgentPrincipal(agent.AgentID)
 	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
-		GrantID:        "capg-child-mail-gog-tool",
+		GrantID:        "capg-child-mail-adapter",
 		Kind:           session.CapabilityKindTool,
-		TargetResource: gogCLIAdapterName,
+		TargetResource: "mailbox_adapter",
 		GrantedTo:      principalID,
-		AllowedActions: []string{"invoke", "connection_test"},
+		AllowedActions: []string{"invoke"},
 		Status:         session.CapabilityGrantStatusActive,
-		Contract:       `{"child_runtime":{"readonly_binds":[{"source":"` + runtimeBin + `","target":"/usr/local/bin"}],"env_from_parent":["GOG_KEYRING_PASSWORD"]}}`,
+		Contract:       `{"child_runtime":{"readonly_paths":["` + adapterRoot + `"]}}`,
 	}); err != nil {
 		t.Fatalf("UpsertCapabilityGrant(tool) err = %v", err)
 	}
-	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
-		GrantID:        "capg-child-mail-gog-account",
-		Kind:           session.CapabilityKindExternalAccount,
-		TargetResource: "gog_cli:mailbox@example.test",
-		GrantedTo:      principalID,
-		AllowedActions: []string{"read", "search", "metadata", "connection_test"},
-		Status:         session.CapabilityGrantStatusActive,
-		Contract:       `{"child_runtime":{"readonly_paths":["` + configRoot + `"]}}`,
-	}); err != nil {
-		t.Fatalf("UpsertCapabilityGrant(account) err = %v", err)
-	}
 	continuity := core.DurableAgentContinuityState{ExternalChannel: &core.DurableAgentExternalChannelRuntimeState{
-		Adapter: gogCLIAdapterName, LastStatus: "wake_blocked", LastError: "gog_cli keyring backend requires interactive/passphrase material; no TTY is available.", FailureCount: 4, BackoffUntil: now.Add(time.Hour),
+		Adapter: "mailbox_adapter", LastStatus: "wake_blocked", LastError: "adapter reported missing credential metadata; no token value was read.", FailureCount: 4, BackoffUntil: now.Add(time.Hour),
 	}}
 	raw, err := continuity.Marshal()
 	if err != nil {
@@ -1001,22 +977,18 @@ func TestDoctorExternalChannelAdapterReadinessProjectsGogCLIContract(t *testing.
 	rt.writeDoctorExternalChannelAdapterReadiness(&b, doctorDiagnosticInput{Now: now})
 	report := b.String()
 	for _, want := range []string{
-		"classification_contract: external-channel adapter readiness is metadata-only",
-		"agent=child-mail adapter=gog_cli",
-		"executable=/usr/local/bin/gog_cli",
+		"classification_contract: external-channel adapter readiness is generic parent-owned metadata",
+		"agent=child-mail adapter=mailbox_adapter",
+		"status=residual_risk",
 		"layer=tool_lifecycle status=ready",
 		"layer=grant_tool_runtime status=ready",
-		"env_from_parent=GOG_KEYRING_PASSWORD",
-		"layer=child_config_metadata status=ready",
+		"layer=runtime_material status=ready",
 		"layer=last_wake status=wake_blocked failure_count=4",
-		"interactive/passphrase material; no TTY is available",
+		"missing credential metadata",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("doctor adapter readiness = %s, want %s", report, want)
 		}
-	}
-	if strings.Contains(report, "test-redacted-value") {
-		t.Fatalf("doctor adapter readiness leaked env value: %s", report)
 	}
 }
 

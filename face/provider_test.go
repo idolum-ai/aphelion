@@ -191,7 +191,7 @@ func TestProviderRendererUsesResolvedNamesInTransportPrompts(t *testing.T) {
 	provider := &stubProvider{reply: "Rendered reply"}
 	renderer, err := NewProviderRenderer(provider, ProviderRendererConfig{
 		GovernorName: "Host",
-		FaceName:     "Mada",
+		FaceName:     "Guide",
 		Channel:      "telegram",
 	})
 	if err != nil {
@@ -205,7 +205,7 @@ func TestProviderRendererUsesResolvedNamesInTransportPrompts(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Render() err = %v", err)
 	}
-	if !strings.Contains(provider.lastUser, "Mada") || !strings.Contains(provider.lastUser, "material authorized by Host") {
+	if !strings.Contains(provider.lastUser, "Guide") || !strings.Contains(provider.lastUser, "material authorized by Host") {
 		t.Fatalf("render transport prompt = %q, want configured names", provider.lastUser)
 	}
 

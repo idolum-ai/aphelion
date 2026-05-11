@@ -352,8 +352,9 @@ reviewable child runtime material:
 ./bin/aphelion repair-capability-grants --config ~/.aphelion/aphelion.toml --apply
 ```
 
-Inspect authority projection health, preview typed repairs, and apply one exact
-local repair from a fresh `finding_id`:
+Inspect authority projection health, preview typed findings, and apply one
+exact local repair from a fresh `finding_id` whose `applicable=true`
+`apply_action` is supported:
 
 ```bash
 ./bin/aphelion authority doctor --config ~/.aphelion/aphelion.toml

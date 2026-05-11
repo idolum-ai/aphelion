@@ -100,9 +100,9 @@ func TestMissionLedgerToolProposeCandidateQueuesReviewOnlyCard(t *testing.T) {
 		"mission_id":"mission-recurring-loops",
 		"title":"Recurring loops",
 		"objective":"Track recurring recurring loop patterns in Mission Control.",
-		"why_proposed":"Daniel asked when we can get into the Recurring loops.",
+		"why_proposed":"The operator asked when we can get into the recurring loops.",
 		"not_included":["no execution","no self-continuation"],
-		"next_allowed_action":"Ask Daniel for the first recurring loop anchor."
+		"next_allowed_action":"Ask the operator for the first recurring loop anchor."
 	}`))
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(propose_candidate) err = %v", err)

@@ -323,7 +323,7 @@ func TestRunnerPlanIncludesExtraBindPaths(t *testing.T) {
 		ExtraReadonlyPaths: []string{extraRO},
 		ExtraWritablePaths: []string{extraRW},
 		ExtraReadonlyBinds: []BindPath{{Source: extraBindSource, Target: "/usr/local/bin"}},
-		ExtraEnv:           map[string]string{"GOG_KEYRING_PASSWORD": "test-secret", "XDG_CONFIG_HOME": "/host-config"},
+		ExtraEnv:           map[string]string{"MAILBOX_ADAPTER_SECRET": "test-secret", "XDG_CONFIG_HOME": "/host-config"},
 	})
 	if err != nil {
 		t.Fatalf("Plan() err = %v", err)
@@ -339,7 +339,7 @@ func TestRunnerPlanIncludesExtraBindPaths(t *testing.T) {
 	if !strings.Contains(args, "--ro-bind "+extraBindSource+" /usr/local/bin") {
 		t.Fatalf("args missing extra readonly mapped bind %q -> /usr/local/bin: %v", extraBindSource, plan.Args)
 	}
-	if !strings.Contains(args, "--setenv GOG_KEYRING_PASSWORD test-secret") || !strings.Contains(args, "--setenv XDG_CONFIG_HOME /host-config") {
+	if !strings.Contains(args, "--setenv MAILBOX_ADAPTER_SECRET test-secret") || !strings.Contains(args, "--setenv XDG_CONFIG_HOME /host-config") {
 		t.Fatalf("args missing extra env: %v", plan.Args)
 	}
 }

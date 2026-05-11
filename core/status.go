@@ -31,17 +31,18 @@ type PendingItem struct {
 }
 
 type AuthorityFindingSnapshot struct {
-	FindingID        string
-	Code             string
-	Severity         string
-	SourceKind       string
-	SourceID         string
-	SessionID        string
-	ChatID           int64
-	Detail           string
-	NextRepairAction string
-	RepairAction     string
-	Repairable       bool
+	FindingID       string
+	Code            string
+	Severity        string
+	SourceKind      string
+	SourceID        string
+	SessionID       string
+	ChatID          int64
+	Detail          string
+	SuggestedRepair string
+	ApplyAction     string
+	ApplyScope      string
+	Applicable      bool
 }
 
 type AuthorityStatusSnapshot struct {

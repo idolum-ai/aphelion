@@ -3719,7 +3719,7 @@ func TestHandleTelegramCommandCallbackContinuationStopRendersCombinedStopResult(
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
 		continuationState:      session.ContinuationState{Status: session.ContinuationStatusPending, DecisionID: "decision-3", RemainingTurns: 1},
-		stopContinuationResult: core.StopResult{ContinuationRevoked: true, ContinuationLabel: "Plan: Mada's Job Agent (Phase J1)"},
+		stopContinuationResult: core.StopResult{ContinuationRevoked: true, ContinuationLabel: "Plan: Resource-Owner Assistant (Phase J1)"},
 	}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-stop",
@@ -3741,7 +3741,7 @@ func TestHandleTelegramCommandCallbackContinuationStopRendersCombinedStopResult(
 	if len(sender.editClear) != 1 {
 		t.Fatalf("editClear count = %d, want 1", len(sender.editClear))
 	}
-	if sender.editClear[0].text != "Stopped Plan: Mada's Job Agent (Phase J1)." {
+	if sender.editClear[0].text != "Stopped Plan: Resource-Owner Assistant (Phase J1)." {
 		t.Fatalf("edit text = %q, want continuation revoke text", sender.editClear[0].text)
 	}
 }

@@ -1336,7 +1336,7 @@ func TestMaterializeDurablePhasePlanBundlesConsecutiveSafePhases(t *testing.T) {
 		Status:    session.OperationStatusBlocked,
 		PhasePlan: session.OperationPhasePlan{
 			ID:   "phase-bundle-plan",
-			Goal: "Let Daniel approve multiple bounded stages at once.",
+			Goal: "Let the operator approve multiple bounded stages at once.",
 			Phases: []session.OperationPhase{
 				{
 					ID:             "phase-1-design",
@@ -1437,29 +1437,29 @@ func TestMaterializeBlockedConsentPhaseSendsStatusWithoutApprovalButtons(t *test
 	key := session.SessionKey{ChatID: 9023, UserID: 0, Scope: telegramDMScopeRef(9023)}
 	if err := store.UpdateOperationState(key, session.OperationState{
 		ID:        "mada-intake-op",
-		Objective: "Help Mada with a consent-first job agent.",
+		Objective: "Help a resource owner with a consent-first assistant.",
 		Status:    session.OperationStatusBlocked,
 		PhasePlan: session.OperationPhasePlan{
 			ID:   "mada-intake-plan",
-			Goal: "Consent-first Mada intake and profile scoring.",
+			Goal: "Consent-first resource-owner intake and profile scoring.",
 			Phases: []session.OperationPhase{
 				{
 					ID:                "phase-33-mada-intake",
-					Summary:           "Consent-first Mada intake and wife-owned profile/scoring rubric.",
+					Summary:           "Consent-first resource-owner intake and profile scoring rubric.",
 					Status:            session.PlanStatusPending,
 					AuthorityClass:    "private_data_intake",
-					WhyNow:            "Blocked: Daniel reported Mada is not available today, and no Mada opt-in has been observed. Wait for her explicit opt-in on a later turn.",
-					BoundedEffect:     "Ask approved preference questions and process wife-provided CV/preferences only after onboarding/opt-in.",
+					WhyNow:            "Blocked: the resource owner is not available today, and no explicit opt-in has been observed. Wait for opt-in on a later turn.",
+					BoundedEffect:     "Ask approved preference questions and process resource-owner CV/preferences only after onboarding/opt-in.",
 					ApprovalSubject:   "third_party",
 					BlockedReasonCode: "requires_opt_in",
 					RequiresOptIn:     true,
 				},
 				{
 					ID:             "phase-34-email-ranking",
-					Summary:        "Later email-forward/job-ranking and bounded public job scouting after profile approval.",
+					Summary:        "Later mailbox read, private-material ranking, and bounded public opportunity scouting after profile approval.",
 					Status:         session.PlanStatusPending,
 					AuthorityClass: "external_account_email_read_public_web_read",
-					BoundedEffect:  "Read only child@example.invalid job-forwarding mailbox after profile approval.",
+					BoundedEffect:  "Read only the approved mailbox after profile approval.",
 				},
 				{
 					ID:             "phase-36-stale-repo-finish",
@@ -1493,7 +1493,7 @@ func TestMaterializeBlockedConsentPhaseSendsStatusWithoutApprovalButtons(t *test
 	if inlineCount != 0 {
 		t.Fatalf("inline count = %d, want no approval buttons for blocked opt-in phase", inlineCount)
 	}
-	if sentCount != 1 || !strings.Contains(sentText, "Plan: Consent-first Mada intake") || !strings.Contains(sentText, "has not opted in") || !strings.Contains(sentText, "Use /status") {
+	if sentCount != 1 || !strings.Contains(sentText, "Plan: Consent-first resource-owner intake") || !strings.Contains(sentText, "has not opted in") || !strings.Contains(sentText, "Use /status") {
 		t.Fatalf("sent text = %q, want concise blocked status", sentText)
 	}
 	if strings.Contains(sentText, "Approval needed") || strings.Contains(sentText, "Use the buttons") || strings.Contains(sentText, "Details: /debug") {
@@ -1530,13 +1530,13 @@ func TestMaterializeEscalatedOperatorPhaseShowsManualApprovalDespiteAutoApproval
 			Goal: "Check bounded auth status before any private email work.",
 			Phases: []session.OperationPhase{{
 				ID:                "phase-e1b-readonly-auth-status-check",
-				Summary:           "Check whether existing gog_cli credentials/profile can authenticate without reading mailbox contents.",
+				Summary:           "Check whether existing mailbox adapter credentials/profile can authenticate without reading mailbox contents.",
 				Status:            session.PlanStatusPending,
 				AuthorityClass:    "read_only_auth_status_check",
 				WhyNow:            "The governor is concerned about external account state and needs explicit operator approval before touching auth status.",
 				BoundedEffect:     "Run one minimal status or identity check; report nonsecret exit code and auth validity only.",
-				AllowedActions:    []string{"run_gog_cli_auth_status_or_identity_check", "inspect_nonsecret_exit_code_and_error", "report_auth_validity"},
-				ForbiddenActions:  []string{"read_or_print_secret_values", "read_mailbox_contents", "run_gog_cli_mail_query", "start_oauth_flow", "copy_restore_delete_or_write_credentials", "mutate_google_account", "edit_config", "deploy", "restart"},
+				AllowedActions:    []string{"run_external_account_auth_status_or_identity_check", "inspect_nonsecret_exit_code_and_error", "report_auth_validity"},
+				ForbiddenActions:  []string{"read_or_print_secret_values", "read_mailbox_contents", "run_mailbox_adapter_query", "start_oauth_flow", "copy_restore_delete_or_write_credentials", "mutate_external_account", "edit_config", "deploy", "restart"},
 				BlockedReasonCode: "waiting_for_explicit_approval",
 				RequiresConsent:   true,
 				RequiresOptIn:     true,
@@ -1626,9 +1626,9 @@ func TestMaterializeResourceOwnerMailboxConsentShowsManualApproval(t *testing.T)
 				Summary:             "Run one read-only mailbox smoke for host@idolum.ai.",
 				Status:              session.PlanStatusPending,
 				AuthorityClass:      "read_only_mailbox_smoke",
-				WhyNow:              "The operator needs proof that configured gog_cli access can query the inbox label without exposing content.",
+				WhyNow:              "The operator needs proof that configured mailbox adapter access can query the inbox label without exposing content.",
 				BoundedEffect:       "Run one configured label:inbox query with max=1; suppress contents and report only exit code and parseability.",
-				AllowedActions:      []string{"run_configured_gog_cli_mail_query_once", "suppress_mailbox_contents", "report_exit_code_and_parseability"},
+				AllowedActions:      []string{"run_configured_mailbox_adapter_query_once", "suppress_mailbox_contents", "report_exit_code_and_parseability"},
 				ForbiddenActions:    []string{"print_mailbox_contents", "read_or_print_secret_values", "start_oauth_flow", "mutate_google_account", "deploy", "restart"},
 				GateLevel:           "escalated_operator_approval",
 				GateReasonCode:      "mailbox_content",
@@ -1724,11 +1724,11 @@ func TestOperationPhaseApprovalUsesTypedGovernanceMetadata(t *testing.T) {
 
 	escalatedPhase := session.OperationPhase{
 		ID:                "phase-e1b-readonly-auth-status-check",
-		Summary:           "Check whether existing gog_cli credentials/profile can authenticate without reading mailbox contents.",
+		Summary:           "Check whether existing mailbox adapter credentials/profile can authenticate without reading mailbox contents.",
 		Status:            session.PlanStatusPending,
 		AuthorityClass:    "read_only_auth_status_check",
-		AllowedActions:    []string{"run_gog_cli_auth_status_or_identity_check"},
-		ForbiddenActions:  []string{"read_mailbox_contents", "run_gog_cli_mail_query", "start_oauth_flow"},
+		AllowedActions:    []string{"run_external_account_auth_status_or_identity_check"},
+		ForbiddenActions:  []string{"read_mailbox_contents", "run_mailbox_adapter_query", "start_oauth_flow"},
 		BlockedReasonCode: "waiting_for_explicit_approval",
 		RequiresOptIn:     true,
 		RequiresConsent:   true,
@@ -1760,7 +1760,7 @@ func TestOperationPhaseApprovalUsesTypedGovernanceMetadata(t *testing.T) {
 	}
 
 	thirdPartyConsentPhase := resourceOwnerConsentPhase
-	thirdPartyConsentPhase.ID = "phase-wife-private-intake"
+	thirdPartyConsentPhase.ID = "phase-resource-owner-private-intake"
 	thirdPartyConsentPhase.AuthorityClass = "private_data_intake"
 	thirdPartyConsentPhase.ApprovalSubject = "third_party"
 	if got := operationPhaseApprovalBlockedReason(thirdPartyConsentPhase); got != "waiting for explicit consent" {
@@ -1813,7 +1813,7 @@ func TestMaterializeMixedAuthorityPhasePlanSplitsToSingleDataApproval(t *testing
 					Summary:        "Collect approved profile preferences",
 					Status:         session.PlanStatusPending,
 					AuthorityClass: "private_data_intake",
-					BoundedEffect:  "Process only wife-provided preferences after approval.",
+					BoundedEffect:  "Process only resource-owner preferences after approval.",
 				},
 				{
 					ID:             "phase-repo-fix",
@@ -1882,7 +1882,7 @@ func TestMaterializeRepairsInvalidPendingMixedAuthorityBundle(t *testing.T) {
 					Summary:        "Collect approved profile preferences",
 					Status:         session.PlanStatusPending,
 					AuthorityClass: "private_data_intake",
-					BoundedEffect:  "Process only wife-provided preferences after approval.",
+					BoundedEffect:  "Process only resource-owner preferences after approval.",
 				},
 				{
 					ID:             "phase-repo-fix",
@@ -1948,7 +1948,7 @@ func TestStartupRepairRevokesInvalidPendingApprovalBundles(t *testing.T) {
 					Summary:        "Collect approved profile preferences",
 					Status:         session.PlanStatusPending,
 					AuthorityClass: "private_data_intake",
-					BoundedEffect:  "Process only wife-provided preferences after approval.",
+					BoundedEffect:  "Process only resource-owner preferences after approval.",
 				},
 				{
 					ID:             "phase-repo-fix",

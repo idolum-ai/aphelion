@@ -138,8 +138,8 @@ func TestContinuationLeaseClassInferenceAndBoundaries(t *testing.T) {
 		{name: "deploy", risk: "deploy", actions: []string{"service_restart"}, effect: "restart and verify", want: ContinuationLeaseClassDeployRestart},
 		{name: "workspace", risk: "workspace_write", actions: []string{"focused_tests"}, effect: "patch locally", want: ContinuationLeaseClassLocalWorkspace},
 		{name: "local commit", risk: "workspace_commit_then_repo_write_bounded", actions: []string{"git_commit_validated_slices"}, effect: "commit validated local slices", want: ContinuationLeaseClassLocalWorkspace},
-		{name: "private data intake", risk: "private_data_intake", actions: nil, effect: "process wife-provided preferences after opt-in", want: ContinuationLeaseClassDataAccess},
-		{name: "email and public web read", risk: "external_account_email_read_public_web_read", actions: nil, effect: "read job-forwarding mailbox and public job links after profile approval", want: ContinuationLeaseClassDataAccess},
+		{name: "private data intake", risk: "private_data_intake", actions: nil, effect: "process resource-owner preferences after opt-in", want: ContinuationLeaseClassDataAccess},
+		{name: "email and public web read", risk: "external_account_email_read_public_web_read", actions: nil, effect: "read the approved mailbox and public links after profile approval", want: ContinuationLeaseClassDataAccess},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -159,7 +159,7 @@ func TestAuthorityInferenceIgnoresNegatedDeployInReadOnlyChildInspection(t *test
 		AllowedActions: []string{
 			"inspect_durable_agent_state",
 			"inspect_external_channel_adapter_state",
-			"inspect_execution_events_for_gog_cli_command",
+			"inspect_execution_events_for_mailbox_adapter_command",
 			"inspect_binary_path_metadata",
 			"inspect_nonsecret_environment_metadata",
 			"report_mismatch_and_repair_options",
@@ -167,7 +167,7 @@ func TestAuthorityInferenceIgnoresNegatedDeployInReadOnlyChildInspection(t *test
 		ForbiddenActions: []string{
 			"read_or_print_secret_values",
 			"read_mailbox_contents",
-			"run_gog_cli_mail_query",
+			"run_mailbox_adapter_query",
 			"edit_config",
 			"deploy",
 			"restart",
@@ -190,17 +190,17 @@ func TestAuthorityInferenceIgnoresNegatedDeployInCredentialRecovery(t *testing.T
 	proposal := ApplyAuthorityContractToActionProposal(ActionProposal{
 		RiskClass: "credential_recovery",
 		AllowedActions: []string{
-			"create_child_scoped_gogcli_materialization_if_approved",
-			"copy_or_bind_existing_host_gogcli_credentials_without_printing_values",
-			"adjust_child_gog_cli_wrapper_or_grant_contract_if_needed",
-			"run_child_sandbox_gog_cli_auth_status_only",
+			"create_child_scoped_mailbox_adapter_materialization_if_approved",
+			"copy_or_bind_existing_host_mailbox_credentials_without_printing_values",
+			"adjust_child_mailbox_adapter_wrapper_or_grant_contract_if_needed",
+			"run_child_sandbox_external_account_auth_status_only",
 			"report_repair_evidence",
 		},
 		ForbiddenActions: []string{
 			"read_or_print_secret_values",
-			"run_gog_cli_mail_query",
+			"run_mailbox_adapter_query",
 			"read_mailbox_contents",
-			"read_gmail_labels_or_messages",
+			"read_mailbox_labels_or_messages",
 			"start_oauth_flow",
 			"mutate_google_account",
 			"send_email",
@@ -208,7 +208,7 @@ func TestAuthorityInferenceIgnoresNegatedDeployInCredentialRecovery(t *testing.T
 			"deploy",
 			"restart",
 		},
-		BoundedEffect: "May create or adjust a child-scoped gogcli config/keyring materialization, wrapper/env, or grant contract so only intended host credentials are accessible to idolum-email. May run one non-mailbox auth/config status smoke. No mailbox content/label/inbox/message query, no OAuth, no account mutation, no public/external contact, no email actions, no deploy/restart unless separately approved.",
+		BoundedEffect: "May create or adjust child-scoped mailbox adapter credential materialization, wrapper/env, or grant contract so only intended host credentials are accessible to the child. May run one non-mailbox auth/config status smoke. No mailbox content/label/inbox/message query, no OAuth, no account mutation, no public/external contact, no email actions, no deploy/restart unless separately approved.",
 	})
 
 	if actionListMatches(proposal.AllowedActions, "deploy") || actionListMatches(proposal.AllowedActions, "restart") {

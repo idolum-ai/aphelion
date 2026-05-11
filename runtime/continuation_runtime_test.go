@@ -354,7 +354,7 @@ func TestContinuationApprovalButtonRowsAdaptToLeaseState(t *testing.T) {
 	phase.ActionProposal = session.ActionProposal{
 		ID:             "aprop-phase-4b-rebundled-email-proof",
 		OperationID:    "phase-4b-rebundled-email-proof",
-		Summary:        "Bundled Phase 4B: one bounded idolum-email read-only adapter proof",
+		Summary:        "Bundled Phase 4B: one bounded mail-child read-only adapter proof",
 		AllowedActions: []string{"execute_phase_once", "update_operation_phase_plan"},
 	}
 	phase.ContinuationLease = session.ContinuationLease{ID: "lease-phase-4b-rebundled-email-proof", ProposalID: "aprop-phase-4b-rebundled-email-proof", Status: session.ContinuationLeaseStatusPending}
@@ -397,30 +397,32 @@ func TestRevokeContinuationReturnsUserFacingPlanLabel(t *testing.T) {
 	state := session.ContinuationState{
 		Kind:           session.TurnAuthorizationKindContinuation,
 		Status:         session.ContinuationStatusPending,
-		DecisionID:     "bundle-wife-telegram-job-agent-20260505-phase-j1-wife-intake-profile-after-onboarding",
-		Objective:      "Create a wife-consented Telegram group child agent for job-search assistance that can later grow organically if she engages.",
-		StageSummary:   "Approve stages 33-36: Consent-first Mada intake and wife-owned profile/scoring rubric.",
+		DecisionID:     "bundle-resource-owner-assistant-20260505-phase-j1-intake-profile-after-onboarding",
+		Objective:      "Create a consented Telegram group child agent for private-assistant support that can later grow organically if the resource owner engages.",
+		StageSummary:   "Approve stages 33-36: Consent-first resource-owner intake and profile scoring rubric.",
 		RemainingTurns: 3,
 		ActionProposal: session.ActionProposal{
-			ID:          "aprop-bundle-wife-telegram-job-agent-20260505-phase-j1-wife-intake-profile-after-onboarding",
-			OperationID: "bundle-wife-telegram-job-agent-20260505-phase-j1-wife-intake-profile-after-onboarding",
-			Summary:     "Approve stages 33-36: Consent-first Mada intake and wife-owned profile/scoring rubric.",
-			Status:      session.ProposalStatusPending,
+			ID:            "aprop-bundle-resource-owner-assistant-20260505-phase-j1-intake-profile-after-onboarding",
+			OperationID:   "bundle-resource-owner-assistant-20260505-phase-j1-intake-profile-after-onboarding",
+			OperatorTitle: "Resource-Owner Assistant",
+			Summary:       "Approve stages 33-36: Consent-first resource-owner intake and profile scoring rubric.",
+			Status:        session.ProposalStatusPending,
 		},
 		ContinuationLease: session.ContinuationLease{
-			ID:         "lease-bundle-wife-telegram-job-agent-20260505-phase-j1-wife-intake-profile-after-onboarding",
-			ProposalID: "aprop-bundle-wife-telegram-job-agent-20260505-phase-j1-wife-intake-profile-after-onboarding",
+			ID:         "lease-bundle-resource-owner-assistant-20260505-phase-j1-intake-profile-after-onboarding",
+			ProposalID: "aprop-bundle-resource-owner-assistant-20260505-phase-j1-intake-profile-after-onboarding",
 			Status:     session.ContinuationLeaseStatusPending,
 		},
 		ApprovalBundle: session.ContinuationApprovalBundle{
-			ID:             "bundle-wife-telegram-job-agent-20260505-phase-j1-wife-intake-profile-after-onboarding",
+			ID:             "bundle-resource-owner-assistant-20260505-phase-j1-intake-profile-after-onboarding",
 			Status:         session.ContinuationLeaseStatusPending,
-			CurrentPhaseID: "phase-wife-telegram-job-agent-20260505-phase-j1-wife-intake-profile-after-onboarding",
+			CurrentPhaseID: "phase-resource-owner-assistant-20260505-phase-j1-intake-profile-after-onboarding",
 			Phases: []session.ContinuationApprovalBundlePhase{{
-				ID:               "phase-wife-telegram-job-agent-20260505-phase-j1-wife-intake-profile-after-onboarding",
-				OperationPhaseID: "phase-j1-wife-intake-profile-after-onboarding",
+				ID:               "phase-resource-owner-assistant-20260505-phase-j1-intake-profile-after-onboarding",
+				OperationPhaseID: "phase-j1-resource-owner-intake-profile-after-onboarding",
 				Index:            33,
-				Summary:          "Consent-first Mada intake and wife-owned profile/scoring rubric.",
+				OperatorTitle:    "Resource-Owner Assistant",
+				Summary:          "Consent-first resource-owner intake and profile scoring rubric.",
 				Status:           session.ContinuationLeaseStatusPending,
 			}},
 		},
@@ -436,7 +438,7 @@ func TestRevokeContinuationReturnsUserFacingPlanLabel(t *testing.T) {
 	if !result.Revoked {
 		t.Fatal("Revoked = false, want true")
 	}
-	if result.ContinuationLabel != "Plan: Mada's Job Agent (Phase J1)" {
+	if result.ContinuationLabel != "Plan: Resource-Owner Assistant (Phase J1)" {
 		t.Fatalf("ContinuationLabel = %q, want human plan label", result.ContinuationLabel)
 	}
 	if strings.Contains(result.ContinuationLabel, "lease-") || strings.Contains(result.ContinuationLabel, "aprop-") {
@@ -1509,27 +1511,27 @@ func TestRefreshContinuationProposalSanitizesLiveNegatedDeployAuthority(t *testi
 	expiredAt := time.Now().UTC().Add(-time.Minute)
 	prior := session.ContinuationState{
 		Status:         session.ContinuationStatusIdle,
-		Objective:      "Diagnose and recover the blocked idolum-email credentials without mailbox access.",
-		StageSummary:   "Repair child-scoped gog_cli credential materialization, then run only a non-mailbox auth-status smoke.",
+		Objective:      "Diagnose and recover the blocked mail-child credentials without mailbox access.",
+		StageSummary:   "Repair child-scoped mailbox adapter credential materialization, then run only a non-mailbox auth-status smoke.",
 		RemainingTurns: 0,
 		ActionProposal: session.ActionProposal{
 			ID:        "aprop-live-corrupt",
-			Summary:   "Repair child-scoped gog_cli credential materialization",
+			Summary:   "Repair child-scoped mailbox adapter credential materialization",
 			RiskClass: "credential_recovery",
-			BoundedEffect: "May create or adjust a child-scoped gogcli config/keyring materialization, wrapper/env, or grant contract. " +
+			BoundedEffect: "May create or adjust child-scoped mailbox adapter credential materialization, wrapper/env, or grant contract. " +
 				"No mailbox content/label/inbox/message query, no OAuth, no account mutation, no public/external contact, no email actions, no deploy/restart unless separately approved.",
 			AllowedActions: []string{
-				"create_child_scoped_gogcli_materialization_if_approved",
-				"copy_or_bind_existing_host_gogcli_credentials_without_printing_values",
-				"adjust_child_gog_cli_wrapper_or_grant_contract_if_needed",
-				"run_child_sandbox_gog_cli_auth_status_only",
+				"create_child_scoped_mailbox_adapter_materialization_if_approved",
+				"copy_or_bind_existing_host_mailbox_credentials_without_printing_values",
+				"adjust_child_mailbox_adapter_wrapper_or_grant_contract_if_needed",
+				"run_child_sandbox_external_account_auth_status_only",
 				"report_repair_evidence",
 				"deploy",
 				"prepare_release_handoff",
 			},
 			ForbiddenActions: []string{
 				"read_or_print_secret_values",
-				"run_gog_cli_mail_query",
+				"run_mailbox_adapter_query",
 				"read_mailbox_contents",
 				"deploy",
 				"restart",
@@ -1765,13 +1767,13 @@ func TestTriggerContinuationUsesMachineAuthoredContinuationEventText(t *testing.
 	key := session.SessionKey{ChatID: 8105, UserID: 0, Scope: telegramDMScopeRef(8105)}
 	if err := store.UpdateContinuationState(key, session.ContinuationState{
 		Status:         session.ContinuationStatusApproved,
-		StageSummary:   "Bundled Phase 4B: one bounded idolum-email read-only adapter proof",
+		StageSummary:   "Bundled Phase 4B: one bounded mail-child read-only adapter proof",
 		RemainingTurns: 1,
 		ApprovedBy:     1002,
 		ActionProposal: session.ActionProposal{
 			ID:            "aprop-phase-4b-rebundled-email-proof",
 			OperationID:   "phase-4b-rebundled-email-proof",
-			Summary:       "Bundled Phase 4B: one bounded idolum-email read-only adapter proof",
+			Summary:       "Bundled Phase 4B: one bounded mail-child read-only adapter proof",
 			BoundedEffect: "Inspect current email due/backoff state, run at most one bounded read-only proof, then report.",
 			RiskClass:     "status_check",
 		},
@@ -1802,7 +1804,7 @@ func TestTriggerContinuationUsesMachineAuthoredContinuationEventText(t *testing.
 	for _, want := range []string{
 		approvedContinuationEventText,
 		"Approved work:",
-		"Next: Bundled Phase 4B: one bounded idolum-email read-only adapter proof",
+		"Next: Bundled Phase 4B: one bounded mail-child read-only adapter proof",
 		"Scope: Inspect current email due/backoff state, run at most one bounded read-only proof, then report.",
 	} {
 		if !strings.Contains(last.Content, want) {

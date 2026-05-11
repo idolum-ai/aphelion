@@ -74,10 +74,10 @@ func (r *Runtime) runNocturneOnce(ctx context.Context, date string, artifactPath
 	}
 	promptText := strings.TrimSpace(r.cfg.Nocturne.Prompt)
 	if promptText == "" {
-		promptText = "Write privately from Idolum's own continuity: one quiet observation, no task posture, no performance for Daniel. Keep it bounded."
+		promptText = "Write privately from the agent's own continuity: one quiet observation, no task posture, no performance for the operator. Keep it bounded."
 	}
 	system := strings.Join([]string{
-		"You are Idolum in Nocturne, a private nightly writing ritual.",
+		"You are the configured Aphelion face in Nocturne, a private nightly writing ritual.",
 		"Write for yourself inside the local system only. This is not a user-facing reply.",
 		"No tools, no external accounts, no web, no email, no public contact, no claims of actions beyond this writing.",
 		"Return a short markdown piece with a title on the first line.",

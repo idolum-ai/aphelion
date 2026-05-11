@@ -25,12 +25,11 @@ func (r *Runtime) preflightDurableWakeAgent(agent core.DurableAgent, now time.Ti
 	if adapterName == "" {
 		return fmt.Errorf("external channel adapter is not configured")
 	}
-	checker, ok := r.externalChannelAdapterReadinessChecker(adapterName)
-	if !ok {
+	if strings.EqualFold(adapterName, codexAppServerAdapterName) {
 		return nil
 	}
-	readiness := checker(agent, now.UTC())
-	if readiness.Status == gogCLIReadinessStatusReady {
+	readiness := r.externalChannelReadinessForAgent(agent, now.UTC())
+	if readiness.Status != externalChannelReadinessStatusBlocked {
 		return nil
 	}
 	return fmt.Errorf(

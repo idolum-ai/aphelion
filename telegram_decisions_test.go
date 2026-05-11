@@ -1965,10 +1965,10 @@ func TestHandleReviewEventCallbackExpandAndHideIsReadOnly(t *testing.T) {
 	defer store.Close()
 	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
 		SourceRole:        "durable_agent",
-		SourceScope:       session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "idolum-email", DurableAgentID: "idolum-email"},
+		SourceScope:       session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "mail-child", DurableAgentID: "mail-child"},
 		TargetAdminChatID: 1001,
-		Summary:           "durable_agent=idolum-email channel=email interval=2026-04-30T02:38:20Z\nsummary: External-channel wake wake_blocked from child idolum-email via adapter gog_cli. EXTERNAL_CHANNEL_STATUS: blocked EXTERNAL_CHANNEL_ERROR: runtime sandbox/tool execution is unavailable.\nlocal: External-channel wake blocked; recorded explicit failure/backoff instead of success.\nrisks: external_channel; adapter_dispatch",
-		MetadataJSON:      `{"agent_id":"idolum-email","summary":"External-channel wake wake_blocked from child idolum-email via adapter gog_cli.","interval_label":"2026-04-30T02:38:20Z","local_actions":["External-channel wake blocked; recorded explicit failure/backoff instead of success."],"risk_flags":["external_channel","adapter_dispatch"],"metadata":{"channel_kind":"email","external_channel_status":"wake_blocked","external_channel_error":"runtime sandbox/tool execution is unavailable in this turn"}}`,
+		Summary:           "durable_agent=mail-child channel=email interval=2026-04-30T02:38:20Z\nsummary: External-channel wake wake_blocked from child mail-child via adapter mailbox_adapter. EXTERNAL_CHANNEL_STATUS: blocked EXTERNAL_CHANNEL_ERROR: runtime sandbox/tool execution is unavailable.\nlocal: External-channel wake blocked; recorded explicit failure/backoff instead of success.\nrisks: external_channel; adapter_dispatch",
+		MetadataJSON:      `{"agent_id":"mail-child","summary":"External-channel wake wake_blocked from child mail-child via adapter mailbox_adapter.","interval_label":"2026-04-30T02:38:20Z","local_actions":["External-channel wake blocked; recorded explicit failure/backoff instead of success."],"risk_flags":["external_channel","adapter_dispatch"],"metadata":{"channel_kind":"email","external_channel_status":"wake_blocked","external_channel_error":"runtime sandbox/tool execution is unavailable in this turn"}}`,
 		Status:            "delivered",
 	})
 	if err != nil {

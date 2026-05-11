@@ -415,7 +415,7 @@ db_path = "` + strings.ReplaceAll(dbPath, `\`, `\\`) + `"
 		ReviewTargetChatID: 123,
 		ChannelKind:        channelKind,
 		LivePolicy: core.DurableAgentLivePolicy{
-			Charter:      "Help Mada with job-search intake only inside approved gates.",
+			Charter:      "Help a resource owner with private intake only inside approved gates.",
 			OutboundMode: "reply_with_policy_authorization",
 			DriftPolicy:  "admin_review",
 		},

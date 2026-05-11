@@ -5,8 +5,6 @@ package runtime
 import (
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,27 +15,15 @@ import (
 )
 
 const (
-	gogCLIAdapterName              = "gog_cli"
-	gogCLIRequiredSecretEnvName    = "GOG_KEYRING_PASSWORD"
-	gogCLIChildConfigRelativeRoot  = ".config/gogcli"
-	gogCLIChildSandboxExecutable   = "/usr/local/bin/gog_cli"
-	gogCLIReadinessStatusReady     = "ready"
-	gogCLIReadinessStatusBlocked   = "blocked"
-	gogCLIReadinessStatusResidual  = "residual_risk"
-	gogCLIReadinessFailureNone     = "none"
-	gogCLIReadinessFailureBinary   = "binary_missing"
-	gogCLIReadinessFailureWrapper  = "wrapper_mismatch"
-	gogCLIReadinessFailureLife     = "lifecycle_unregistered"
-	gogCLIReadinessFailureGrant    = "grant_missing_or_stale"
-	gogCLIReadinessFailureSandbox  = "sandbox_backend_unavailable"
-	gogCLIReadinessFailurePath     = "sandbox_path_unbound"
-	gogCLIReadinessFailureConfig   = "config_root_missing"
-	gogCLIReadinessFailureCreds    = "credentials_metadata_missing"
-	gogCLIReadinessFailureKeyring  = "keyring_material_missing"
-	gogCLIReadinessFailureSecret   = "secret_env_unavailable"
-	gogCLIReadinessFailureLeak     = "probe_secret_leak"
-	gogCLIReadinessFailureMailbox  = "mailbox_probe_attempted"
-	gogCLIReadinessFailureLivePoll = "live_poll_blocked"
+	externalChannelReadinessStatusReady    = "ready"
+	externalChannelReadinessStatusBlocked  = "blocked"
+	externalChannelReadinessStatusResidual = "residual_risk"
+	externalChannelReadinessFailureNone    = "none"
+	externalChannelReadinessFailureAdapter = "adapter_missing"
+	externalChannelReadinessFailureLife    = "lifecycle_unregistered"
+	externalChannelReadinessFailureGrant   = "grant_missing_or_stale"
+	externalChannelReadinessFailureSandbox = "sandbox_backend_unavailable"
+	externalChannelReadinessFailureRuntime = "runtime_material_missing"
 )
 
 type externalChannelAdapterReadiness struct {
@@ -64,20 +50,8 @@ type externalChannelAdapterWakeStatus struct {
 	BackoffUntil time.Time
 }
 
-type externalChannelAdapterReadinessChecker func(core.DurableAgent, time.Time) externalChannelAdapterReadiness
-
-func (r *Runtime) externalChannelAdapterReadinessChecker(adapterName string) (externalChannelAdapterReadinessChecker, bool) {
-	adapterName = strings.ToLower(strings.TrimSpace(adapterName))
-	switch adapterName {
-	case gogCLIAdapterName:
-		return r.gogCLIReadinessForAgent, true
-	default:
-		return nil, false
-	}
-}
-
 func (r *Runtime) writeDoctorExternalChannelAdapterReadiness(b *strings.Builder, input doctorDiagnosticInput) {
-	writeDoctorLine(b, "classification_contract: external-channel adapter readiness is metadata-only; no mailbox query, OAuth flow, token/passphrase value, or live account call is performed.")
+	writeDoctorLine(b, "classification_contract: external-channel adapter readiness is generic parent-owned metadata; adapter-specific probes belong to the child and report upward as review artifacts.")
 	if r == nil || r.store == nil {
 		writeDoctorLine(b, "external_channel_adapter_readiness: unavailable")
 		return
@@ -92,12 +66,11 @@ func (r *Runtime) writeDoctorExternalChannelAdapterReadiness(b *strings.Builder,
 		return
 	}
 	for _, row := range rows {
-		writeDoctorLine(b, fmt.Sprintf("- agent=%s adapter=%s status=%s failure=%s executable=%s next_repair=%q",
+		writeDoctorLine(b, fmt.Sprintf("- agent=%s adapter=%s status=%s failure=%s next_repair=%q",
 			firstNonEmpty(row.AgentID, "-"),
 			firstNonEmpty(row.Adapter, "-"),
-			firstNonEmpty(row.Status, gogCLIReadinessStatusBlocked),
-			firstNonEmpty(row.FailureCode, gogCLIReadinessFailureNone),
-			gogCLIChildSandboxExecutable,
+			firstNonEmpty(row.Status, externalChannelReadinessStatusBlocked),
+			firstNonEmpty(row.FailureCode, externalChannelReadinessFailureNone),
 			truncatePreview(row.NextRepair, 220),
 		))
 		for _, layer := range row.Layers {
@@ -132,33 +105,30 @@ func (r *Runtime) externalChannelAdapterReadinessSnapshots(now time.Time) ([]ext
 	rows := make([]externalChannelAdapterReadiness, 0, len(agents))
 	for _, agent := range agents {
 		external := agent.ChannelConfig.ExternalConfig()
-		if external == nil {
+		if external == nil || strings.TrimSpace(external.Adapter) == "" || strings.EqualFold(strings.TrimSpace(external.Adapter), codexAppServerAdapterName) {
 			continue
 		}
-		checker, ok := r.externalChannelAdapterReadinessChecker(externalChannelAdapter(agent))
-		if !ok {
-			continue
-		}
-		rows = append(rows, checker(agent, now))
+		rows = append(rows, r.externalChannelReadinessForAgent(agent, now))
 	}
 	return rows, nil
 }
 
-func (r *Runtime) gogCLIReadinessForAgent(agent core.DurableAgent, now time.Time) externalChannelAdapterReadiness {
+func (r *Runtime) externalChannelReadinessForAgent(agent core.DurableAgent, now time.Time) externalChannelAdapterReadiness {
 	agent = normalizeDoctorReadinessAgent(agent)
+	adapterName := externalChannelAdapter(agent)
 	row := externalChannelAdapterReadiness{
 		AgentID:     strings.TrimSpace(agent.AgentID),
-		Adapter:     gogCLIAdapterName,
-		Status:      gogCLIReadinessStatusReady,
-		FailureCode: gogCLIReadinessFailureNone,
+		Adapter:     adapterName,
+		Status:      externalChannelReadinessStatusReady,
+		FailureCode: externalChannelReadinessFailureNone,
 		NextRepair:  "none",
 		GeneratedAt: now.UTC(),
 	}
 	setFailure := func(code string, next string) {
-		if row.FailureCode == gogCLIReadinessFailureNone || row.FailureCode == "" {
+		if row.FailureCode == externalChannelReadinessFailureNone || row.FailureCode == "" {
 			row.FailureCode = strings.TrimSpace(code)
 			row.NextRepair = strings.TrimSpace(next)
-			row.Status = gogCLIReadinessStatusBlocked
+			row.Status = externalChannelReadinessStatusBlocked
 		}
 	}
 	addLayer := func(name string, status string, evidence string) {
@@ -166,50 +136,43 @@ func (r *Runtime) gogCLIReadinessForAgent(agent core.DurableAgent, now time.Time
 	}
 
 	external := agent.ChannelConfig.ExternalConfig()
-	if external == nil || !strings.EqualFold(strings.TrimSpace(external.Adapter), gogCLIAdapterName) {
-		addLayer("policy_channel_adapter", gogCLIReadinessStatusBlocked, "durable child does not declare external_channel adapter gog_cli")
-		setFailure(gogCLIReadinessFailureGrant, "configure the durable child external_channel adapter before materializing runtime")
+	if external == nil || adapterName == "" {
+		addLayer("policy_channel_adapter", externalChannelReadinessStatusBlocked, "durable child does not declare channel_config.external.adapter")
+		setFailure(externalChannelReadinessFailureAdapter, "configure the durable child external_channel adapter before scheduling polls")
 		return row
 	}
-	addLayer("policy_channel_adapter", gogCLIReadinessStatusReady, "external_channel adapter=gog_cli query configured without implying mailbox access")
+	addLayer("policy_channel_adapter", externalChannelReadinessStatusReady, "external_channel adapter="+adapterName+" configured without implying adapter-local access")
 
-	registered, registeredOK, registeredErr := r.store.RegisteredTool(gogCLIAdapterName)
-	install, installOK, installErr := r.store.ToolInstallRecord(gogCLIAdapterName)
-	probe, probeOK, probeErr := r.store.ToolProbeRecord(gogCLIAdapterName)
-	audit, auditOK, auditErr := r.store.ToolAuditRecord(gogCLIAdapterName)
+	registered, registeredOK, registeredErr := r.store.RegisteredTool(adapterName)
+	install, installOK, installErr := r.store.ToolInstallRecord(adapterName)
+	probe, probeOK, probeErr := r.store.ToolProbeRecord(adapterName)
+	audit, auditOK, auditErr := r.store.ToolAuditRecord(adapterName)
 	if registeredErr != nil || installErr != nil || probeErr != nil || auditErr != nil {
-		addLayer("tool_lifecycle", gogCLIReadinessStatusBlocked, firstNonEmpty(errorText(registeredErr), errorText(installErr), errorText(probeErr), errorText(auditErr)))
-		setFailure(gogCLIReadinessFailureLife, "repair tool lifecycle records for gog_cli before polling")
+		addLayer("tool_lifecycle", externalChannelReadinessStatusBlocked, firstNonEmpty(errorText(registeredErr), errorText(installErr), errorText(probeErr), errorText(auditErr)))
+		setFailure(externalChannelReadinessFailureLife, "repair tool lifecycle records for "+adapterName+" before polling")
 	} else if !registeredOK || !registered.Registered || !installOK || !probeOK || !auditOK {
-		addLayer("tool_lifecycle", gogCLIReadinessStatusBlocked, "gog_cli lacks complete registered/install/audit/probe lifecycle records")
-		setFailure(gogCLIReadinessFailureLife, "register, install, audit, and probe gog_cli as a first-class external tool")
+		addLayer("tool_lifecycle", externalChannelReadinessStatusBlocked, adapterName+" lacks complete registered/install/audit/probe lifecycle records")
+		setFailure(externalChannelReadinessFailureLife, "register, install, audit, and probe "+adapterName+" as a first-class external tool")
 	} else if install.Status != session.ToolInstallStatusVerified || probe.Status != session.ToolProbeStatusPassed || audit.Status != session.ToolAuditStatusPassed {
-		addLayer("tool_lifecycle", gogCLIReadinessStatusBlocked, fmt.Sprintf("install=%s audit=%s probe=%s", install.Status, audit.Status, probe.Status))
-		setFailure(gogCLIReadinessFailureLife, "rerun or repair gog_cli install/audit/probe lifecycle")
+		addLayer("tool_lifecycle", externalChannelReadinessStatusBlocked, fmt.Sprintf("install=%s audit=%s probe=%s", install.Status, audit.Status, probe.Status))
+		setFailure(externalChannelReadinessFailureLife, "rerun or repair "+adapterName+" install/audit/probe lifecycle")
 	} else {
-		addLayer("tool_lifecycle", gogCLIReadinessStatusReady, fmt.Sprintf("registered=true install=%s audit=%s probe=%s", install.Status, audit.Status, probe.Status))
+		addLayer("tool_lifecycle", externalChannelReadinessStatusReady, fmt.Sprintf("registered=true install=%s audit=%s probe=%s", install.Status, audit.Status, probe.Status))
 	}
 
 	principalID := core.DurableAgentPrincipal(agent.AgentID)
 	grants, grantsErr := r.store.CapabilityGrants(200, "", "", principalID)
 	if grantsErr != nil {
-		addLayer("grant_materialization", gogCLIReadinessStatusBlocked, grantsErr.Error())
-		setFailure(gogCLIReadinessFailureGrant, "repair capability grant lookup before polling")
+		addLayer("grant_materialization", externalChannelReadinessStatusBlocked, grantsErr.Error())
+		setFailure(externalChannelReadinessFailureGrant, "repair capability grant lookup before polling")
 		return rowWithLastWake(r, row, agent)
 	}
-	toolGrant, toolMaterial, toolMaterialOK, toolEvidence := selectGogCLIToolGrant(grants, principalID)
-	accountGrant, accountMaterial, accountMaterialOK, accountEvidence := selectGogCLIAccountGrant(grants, principalID)
+	toolGrant, toolMaterial, toolMaterialOK, toolEvidence := selectExternalChannelToolGrant(grants, principalID, adapterName)
 	if strings.TrimSpace(toolGrant.GrantID) == "" || !toolMaterialOK {
-		addLayer("grant_tool_runtime", gogCLIReadinessStatusBlocked, firstNonEmpty(toolEvidence, "missing active gog_cli tool grant with child_runtime material"))
-		setFailure(gogCLIReadinessFailureGrant, "create or repair active gog_cli tool grant with child_runtime executable/bind/env_from_parent")
+		addLayer("grant_tool_runtime", externalChannelReadinessStatusBlocked, firstNonEmpty(toolEvidence, "missing active "+adapterName+" tool grant with child_runtime material"))
+		setFailure(externalChannelReadinessFailureGrant, "create or repair an active "+adapterName+" tool grant with child_runtime material")
 	} else {
-		addLayer("grant_tool_runtime", gogCLIReadinessStatusReady, toolEvidence)
-	}
-	if strings.TrimSpace(accountGrant.GrantID) == "" || !accountMaterialOK {
-		addLayer("grant_account_material", gogCLIReadinessStatusBlocked, firstNonEmpty(accountEvidence, "missing active gog_cli external-account grant with config material"))
-		setFailure(gogCLIReadinessFailureGrant, "create or repair active gog_cli external-account grant with read-only config material")
-	} else {
-		addLayer("grant_account_material", gogCLIReadinessStatusReady, accountEvidence)
+		addLayer("grant_tool_runtime", externalChannelReadinessStatusReady, toolEvidence)
 	}
 
 	workspaceRoot, memoryRoot := durableagent.LocalRoots(agent.AgentID, agent.LocalStorageRoots)
@@ -220,54 +183,25 @@ func (r *Runtime) gogCLIReadinessForAgent(agent core.DurableAgent, now time.Time
 	}
 	scope, scopeErr := sandbox.DurableAgentScope(agent.AgentID, doctorReadinessGlobalRoot(r), workspaceRoot, memoryRoot, agent.NetworkPolicy)
 	if scopeErr != nil {
-		addLayer("sandbox", gogCLIReadinessStatusBlocked, scopeErr.Error())
-		setFailure(gogCLIReadinessFailureSandbox, "repair durable child local roots before sandbox readiness can be checked")
+		addLayer("sandbox", externalChannelReadinessStatusBlocked, scopeErr.Error())
+		setFailure(externalChannelReadinessFailureSandbox, "repair durable child local roots before sandbox readiness can be checked")
 	} else {
 		stage := sandbox.NewRunner().Stage(scope)
 		if stage == sandbox.StageUnavailable {
-			addLayer("sandbox", gogCLIReadinessStatusBlocked, "isolated durable-agent sandbox backend is unavailable")
-			setFailure(gogCLIReadinessFailureSandbox, "install or enable the configured isolated sandbox backend before child wakes")
+			addLayer("sandbox", externalChannelReadinessStatusBlocked, "isolated durable-agent sandbox backend is unavailable")
+			setFailure(externalChannelReadinessFailureSandbox, "install or enable the configured isolated sandbox backend before child wakes")
 		} else {
-			addLayer("sandbox", gogCLIReadinessStatusReady, "isolated durable-agent sandbox backend="+string(stage))
+			addLayer("sandbox", externalChannelReadinessStatusReady, "isolated durable-agent sandbox backend="+string(stage))
 		}
 	}
 
 	if toolMaterialOK {
 		if missing := firstMissingChildRuntimeMaterial(toolMaterial); missing != "" {
-			addLayer("sandbox_material", gogCLIReadinessStatusBlocked, "runtime material missing: "+missing)
-			setFailure(classifyGogCLIMaterialFailure(missing), "provide or correct the named child_runtime material without printing secret values")
-		} else if !gogCLIToolMaterialBindsExecutable(toolMaterial) {
-			addLayer("sandbox_material", gogCLIReadinessStatusBlocked, "child_runtime does not bind or declare gog_cli into /usr/local/bin")
-			setFailure(gogCLIReadinessFailurePath, "bind gog_cli runtime material into the child sandbox PATH at /usr/local/bin/gog_cli")
+			addLayer("runtime_material", externalChannelReadinessStatusBlocked, "runtime material missing: "+missing)
+			setFailure(externalChannelReadinessFailureRuntime, "provide or correct the named child_runtime material without printing secret values")
 		} else {
-			addLayer("sandbox_material", gogCLIReadinessStatusReady, "child_runtime material sources exist and required env names are inherited by name")
+			addLayer("runtime_material", externalChannelReadinessStatusReady, "child_runtime material sources exist")
 		}
-	}
-	if accountMaterialOK {
-		if missing := firstMissingChildRuntimeMaterial(accountMaterial); missing != "" {
-			addLayer("account_material", gogCLIReadinessStatusBlocked, "runtime material missing: "+missing)
-			setFailure(classifyGogCLIMaterialFailure(missing), "provide or correct the read-only account config material without reading token contents")
-		} else {
-			addLayer("account_material", gogCLIReadinessStatusReady, "external-account child_runtime material sources exist")
-		}
-	}
-
-	runtimeBin := filepath.Join(filepath.Dir(strings.TrimSpace(workspaceRoot)), "runtime-bin")
-	wrapperPath := filepath.Join(runtimeBin, "gog_cli")
-	if wrapperEvidence, ok := gogCLIWrapperEvidence(wrapperPath); !ok {
-		addLayer("wrapper", gogCLIReadinessStatusBlocked, wrapperEvidence)
-		setFailure(gogCLIReadinessFailureWrapper, "materialize a deterministic gog_cli wrapper that execs a pinned gog binary and sets child-local XDG_CONFIG_HOME")
-	} else {
-		addLayer("wrapper", gogCLIReadinessStatusReady, wrapperEvidence)
-	}
-
-	configRoot := filepath.Join(workspaceRoot, filepath.FromSlash(gogCLIChildConfigRelativeRoot))
-	configEvidence, configFailure := gogCLIConfigMetadataEvidence(configRoot)
-	if configFailure != gogCLIReadinessFailureNone {
-		addLayer("child_config_metadata", gogCLIReadinessStatusBlocked, configEvidence)
-		setFailure(configFailure, "materialize read-only gogcli config/credential/keyring metadata into the child config root")
-	} else {
-		addLayer("child_config_metadata", gogCLIReadinessStatusReady, configEvidence)
 	}
 
 	return rowWithLastWake(r, row, agent)
@@ -295,19 +229,20 @@ func rowWithLastWake(r *Runtime, row externalChannelAdapterReadiness, agent core
 	}
 	row.LastWake = &externalChannelAdapterWakeStatus{
 		Status:       strings.TrimSpace(runtimeState.LastStatus),
-		Error:        classifyAndRedactGogCLIWakeError(runtimeState.LastError),
+		Error:        redactDoctorText(runtimeState.LastError),
 		FailureCount: runtimeState.FailureCount,
 		BackoffUntil: runtimeState.BackoffUntil,
 	}
-	if strings.EqualFold(strings.TrimSpace(runtimeState.LastStatus), "wake_blocked") && row.Status == gogCLIReadinessStatusReady {
-		row.Status = gogCLIReadinessStatusResidual
-		row.FailureCode = classifyGogCLIWakeFailure(runtimeState.LastError)
-		row.NextRepair = "metadata readiness passes, but last wake was blocked; require a separately approved readiness/live check before mailbox polling"
+	if strings.EqualFold(strings.TrimSpace(runtimeState.LastStatus), "wake_blocked") && row.Status == externalChannelReadinessStatusReady {
+		row.Status = externalChannelReadinessStatusResidual
+		row.FailureCode = "last_wake_blocked"
+		row.NextRepair = "generic readiness passes, but the last child wake reported blocked; inspect the child review artifact before the next live poll"
 	}
 	return row
 }
 
-func selectGogCLIToolGrant(grants []session.CapabilityGrant, principalID string) (session.CapabilityGrant, core.ChildRuntimeContract, bool, string) {
+func selectExternalChannelToolGrant(grants []session.CapabilityGrant, principalID string, toolName string) (session.CapabilityGrant, core.ChildRuntimeContract, bool, string) {
+	toolName = strings.TrimSpace(toolName)
 	var firstBlocked session.CapabilityGrant
 	firstEvidence := ""
 	rememberBlocked := func(grant session.CapabilityGrant, evidence string) {
@@ -319,7 +254,7 @@ func selectGogCLIToolGrant(grants []session.CapabilityGrant, principalID string)
 	}
 	for _, grant := range grants {
 		grant = session.NormalizeCapabilityGrant(grant)
-		if strings.TrimSpace(grant.GrantedTo) != principalID || grant.Kind != session.CapabilityKindTool || !strings.EqualFold(strings.TrimSpace(grant.TargetResource), gogCLIAdapterName) {
+		if strings.TrimSpace(grant.GrantedTo) != principalID || grant.Kind != session.CapabilityKindTool || !strings.EqualFold(strings.TrimSpace(grant.TargetResource), toolName) {
 			continue
 		}
 		if grant.Status != session.CapabilityGrantStatusActive || !grant.RevokedAt.IsZero() || (!grant.ExpiresAt.IsZero() && !grant.ExpiresAt.After(time.Now().UTC())) || strings.TrimSpace(grant.StaleReason) != "" {
@@ -335,167 +270,13 @@ func selectGogCLIToolGrant(grants []session.CapabilityGrant, principalID string)
 			rememberBlocked(grant, "active tool grant has no child_runtime material")
 			continue
 		}
-		if !containsReadinessString(grant.AllowedActions, "invoke") && !containsReadinessString(grant.AllowedActions, "connection_test") {
-			rememberBlocked(grant, "active tool grant does not allow invoke or connection_test")
+		if !containsReadinessString(grant.AllowedActions, "invoke") {
+			rememberBlocked(grant, "active tool grant does not allow invoke")
 			continue
 		}
-		if !containsReadinessString(material.EnvFromParent, gogCLIRequiredSecretEnvName) {
-			rememberBlocked(grant, "child_runtime env_from_parent does not include "+gogCLIRequiredSecretEnvName)
-			continue
-		}
-		return grant, material, true, fmt.Sprintf("grant=%s child_runtime=present env_from_parent=%s", grant.GrantID, gogCLIRequiredSecretEnvName)
+		return grant, material, true, fmt.Sprintf("grant=%s child_runtime=present", grant.GrantID)
 	}
 	return firstBlocked, core.ChildRuntimeContract{}, false, firstEvidence
-}
-
-func selectGogCLIAccountGrant(grants []session.CapabilityGrant, principalID string) (session.CapabilityGrant, core.ChildRuntimeContract, bool, string) {
-	var firstBlocked session.CapabilityGrant
-	firstEvidence := ""
-	rememberBlocked := func(grant session.CapabilityGrant, evidence string) {
-		if strings.TrimSpace(firstEvidence) != "" {
-			return
-		}
-		firstBlocked = grant
-		firstEvidence = strings.TrimSpace(evidence)
-	}
-	for _, grant := range grants {
-		grant = session.NormalizeCapabilityGrant(grant)
-		if strings.TrimSpace(grant.GrantedTo) != principalID || grant.Kind != session.CapabilityKindExternalAccount || !strings.HasPrefix(strings.TrimSpace(grant.TargetResource), gogCLIAdapterName+":") {
-			continue
-		}
-		if grant.Status != session.CapabilityGrantStatusActive || !grant.RevokedAt.IsZero() || (!grant.ExpiresAt.IsZero() && !grant.ExpiresAt.After(time.Now().UTC())) || strings.TrimSpace(grant.StaleReason) != "" {
-			rememberBlocked(grant, fmt.Sprintf("grant=%s status=%s stale=%s", grant.GrantID, grant.Status, strings.TrimSpace(grant.StaleReason)))
-			continue
-		}
-		material, ok, err := core.ExtractChildRuntimeContract(grant.Contract, grant.Constraints)
-		if err != nil {
-			rememberBlocked(grant, "invalid child_runtime contract: "+err.Error())
-			continue
-		}
-		if !ok || (len(material.ReadonlyPaths) == 0 && len(material.ReadonlyBinds) == 0 && len(material.SecretBinds) == 0) {
-			rememberBlocked(grant, "active external-account grant has no read-only config material")
-			continue
-		}
-		if !containsReadinessString(grant.AllowedActions, "read") && !containsReadinessString(grant.AllowedActions, "connection_test") {
-			rememberBlocked(grant, "active external-account grant does not allow read or connection_test")
-			continue
-		}
-		return grant, material, true, fmt.Sprintf("grant=%s child_runtime=config_material_present", grant.GrantID)
-	}
-	return firstBlocked, core.ChildRuntimeContract{}, false, firstEvidence
-}
-
-func gogCLIToolMaterialBindsExecutable(material core.ChildRuntimeContract) bool {
-	material = core.NormalizeChildRuntimeContract(material)
-	if strings.TrimSpace(material.Executable) != "" {
-		return true
-	}
-	for _, bind := range material.ReadonlyBinds {
-		if strings.TrimSpace(bind.Target) == "/usr/local/bin" || strings.TrimSpace(bind.Target) == gogCLIChildSandboxExecutable {
-			return true
-		}
-	}
-	return false
-}
-
-func gogCLIWrapperEvidence(wrapperPath string) (string, bool) {
-	info, err := os.Stat(wrapperPath)
-	if err != nil {
-		return "gog_cli wrapper missing at child runtime-bin", false
-	}
-	if info.IsDir() {
-		return "gog_cli wrapper path is a directory", false
-	}
-	sibling := filepath.Join(filepath.Dir(wrapperPath), "gog")
-	if siblingInfo, err := os.Stat(sibling); err != nil || siblingInfo.IsDir() {
-		return "pinned gog sibling binary missing beside wrapper", false
-	}
-	raw, err := os.ReadFile(wrapperPath)
-	if err != nil {
-		return "gog_cli wrapper metadata readable=false", false
-	}
-	text := string(raw)
-	if !strings.Contains(text, "XDG_CONFIG_HOME") || !strings.Contains(text, "exec") || !strings.Contains(text, "gog") {
-		return "gog_cli wrapper does not declare XDG_CONFIG_HOME and exec pinned gog", false
-	}
-	return fmt.Sprintf("wrapper_present=true mode=%#o pinned_gog_present=true", info.Mode().Perm()), true
-}
-
-func gogCLIConfigMetadataEvidence(configRoot string) (string, string) {
-	info, err := os.Stat(configRoot)
-	if err != nil {
-		return "child gogcli config root missing", gogCLIReadinessFailureConfig
-	}
-	if !info.IsDir() {
-		return "child gogcli config root is not a directory", gogCLIReadinessFailureConfig
-	}
-	configPath := filepath.Join(configRoot, "config.json")
-	credentialsPath := filepath.Join(configRoot, "credentials.json")
-	if info, err := os.Stat(configPath); err != nil || info.IsDir() {
-		return "config.json metadata missing", gogCLIReadinessFailureConfig
-	}
-	if info, err := os.Stat(credentialsPath); err != nil || info.IsDir() {
-		return "credentials.json metadata missing", gogCLIReadinessFailureCreds
-	}
-	keyringRoot := filepath.Join(configRoot, "keyring")
-	entries, err := os.ReadDir(keyringRoot)
-	if err != nil {
-		return "keyring metadata missing", gogCLIReadinessFailureKeyring
-	}
-	files := 0
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			files++
-		}
-	}
-	if files == 0 {
-		return "keyring metadata has zero files", gogCLIReadinessFailureKeyring
-	}
-	return fmt.Sprintf("config_root_present=true config_json=true credentials_json=true keyring_file_count=%d", files), gogCLIReadinessFailureNone
-}
-
-func classifyGogCLIMaterialFailure(missing string) string {
-	missing = strings.ToLower(strings.TrimSpace(missing))
-	switch {
-	case strings.Contains(missing, "env_from_parent"):
-		return gogCLIReadinessFailureSecret
-	case strings.Contains(missing, "readonly_bind") || strings.Contains(missing, "executable"):
-		return gogCLIReadinessFailurePath
-	case strings.Contains(missing, "credential"):
-		return gogCLIReadinessFailureCreds
-	case strings.Contains(missing, "keyring") || strings.Contains(missing, "token"):
-		return gogCLIReadinessFailureKeyring
-	default:
-		return gogCLIReadinessFailureGrant
-	}
-}
-
-func classifyGogCLIWakeFailure(errText string) string {
-	errText = strings.ToLower(strings.TrimSpace(errText))
-	switch {
-	case errText == "":
-		return gogCLIReadinessFailureNone
-	case strings.Contains(errText, "mail") || strings.Contains(errText, "inbox"):
-		return gogCLIReadinessFailureLivePoll
-	case strings.Contains(errText, "tty") || strings.Contains(errText, "passphrase") || strings.Contains(errText, "keyring"):
-		return gogCLIReadinessFailureKeyring
-	case strings.Contains(errText, "oauth") || strings.Contains(errText, "credential"):
-		return gogCLIReadinessFailureCreds
-	case strings.Contains(errText, "sandbox"):
-		return gogCLIReadinessFailureSandbox
-	case strings.Contains(errText, "binary") || strings.Contains(errText, "path") || strings.Contains(errText, "not found"):
-		return gogCLIReadinessFailureBinary
-	default:
-		return gogCLIReadinessFailureLivePoll
-	}
-}
-
-func classifyAndRedactGogCLIWakeError(errText string) string {
-	errText = strings.TrimSpace(errText)
-	if errText == "" {
-		return ""
-	}
-	return redactDoctorText(errText)
 }
 
 func normalizeDoctorReadinessAgent(agent core.DurableAgent) core.DurableAgent {
