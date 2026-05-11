@@ -88,6 +88,7 @@ const (
 	ExecutionEventRecoveryResume    = "recovery.resume"
 
 	ExecutionEventTailnetSurfaceChanged = "tailnet.surface.changed"
+	ExecutionEventTailnetGrantChanged   = "tailnet.grant.changed"
 
 	ExecutionEventDurableWakeStarted       = "durable.wake.started"
 	ExecutionEventDurableWakeSkipped       = "durable.wake.skipped"

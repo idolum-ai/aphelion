@@ -41,7 +41,7 @@ Current command surface:
   - Active focus is injected as bounded turn context on subsequent non-command chat messages until cleared.
 - `/tailnet`
   - Admin-only Tailnet status and private-surface controls.
-  - Shows node readiness, registered surfaces, issue evidence, and revoke confirmation.
+  - Shows node readiness, registered surfaces, grant bindings, issue evidence, and revoke confirmation.
 - `/mission`
   - Shows the current working objective and the caller-owned Mission Ledger entries.
   - Supports manual `list`, `show`, `create`, `pin`, `unpin`, `activate`, `pause`, `block`, `complete`, `archive`, `summon`, and admin `health` actions.

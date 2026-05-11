@@ -127,6 +127,24 @@ func tailnetPrivateHTTPHandler(router commandRouter, adminID int64) http.Handler
 			"surfaces": surfaces,
 		})
 	})
+	mux.HandleFunc("/tailnet/grants", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if router == nil || adminID == 0 {
+			http.Error(w, "tailnet router unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		bindings, err := router.TailnetGrantBindings(adminID)
+		if err != nil {
+			http.Error(w, "tailnet grant bindings unavailable", http.StatusInternalServerError)
+			return
+		}
+		writeTailnetPrivateJSON(w, map[string]any{
+			"grant_bindings": bindings,
+		})
+	})
 	mux.HandleFunc("/tailnet/surfaces/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.NotFound(w, r)

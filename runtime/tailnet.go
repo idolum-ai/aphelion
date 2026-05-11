@@ -207,7 +207,29 @@ func (r *Runtime) attachTailnetSurfaces(snapshot *core.TailnetStatusSnapshot) {
 		return
 	}
 	snapshot.Surfaces = surfaces
+	bindings, err := r.TailnetGrantBindingsSnapshot()
+	if err != nil {
+		snapshot.Issues = append(snapshot.Issues, core.TailnetIssue{
+			Code:     "grant_binding_registry_read_failed",
+			Severity: "warning",
+			Summary:  "Tailnet grant binding registry could not be read: " + err.Error(),
+		})
+		return
+	}
+	snapshot.GrantBindings = bindings
 	appendTailnetSurfaceRegistryIssues(snapshot)
+	appendTailnetGrantBindingIssues(snapshot)
+}
+
+func (r *Runtime) TailnetGrantBindingsSnapshot() ([]core.TailnetGrantBindingStatus, error) {
+	if r == nil || r.store == nil {
+		return nil, nil
+	}
+	bindings, err := r.store.TailnetGrantBindings(session.TailnetGrantBindingFilter{Limit: 100})
+	if err != nil {
+		return nil, err
+	}
+	return tailnetGrantBindingStatusesFromRecords(bindings), nil
 }
 
 func tailnetSurfaceRecordFromParent(parent core.TailnetParentStatus, snapshot core.TailnetStatusSnapshot) session.TailnetSurfaceRecord {
@@ -308,6 +330,33 @@ func tailnetSurfaceStatusesFromRecords(records []session.TailnetSurfaceRecord) [
 	return out
 }
 
+func tailnetGrantBindingStatusesFromRecords(records []session.TailnetGrantBinding) []core.TailnetGrantBindingStatus {
+	if len(records) == 0 {
+		return nil
+	}
+	out := make([]core.TailnetGrantBindingStatus, 0, len(records))
+	for _, record := range records {
+		out = append(out, core.TailnetGrantBindingStatus{
+			BindingID:          record.BindingID,
+			GrantID:            record.GrantID,
+			SurfaceID:          record.SurfaceID,
+			GrantedTo:          record.GrantedTo,
+			CapabilityKind:     record.CapabilityKind,
+			TargetResource:     record.TargetResource,
+			DesiredPolicyJSON:  record.DesiredPolicyJSON,
+			AppliedPolicyHash:  record.AppliedPolicyHash,
+			ObservedPolicyHash: record.ObservedPolicyHash,
+			Status:             record.Status,
+			DriftReason:        record.DriftReason,
+			CreatedAt:          record.CreatedAt,
+			UpdatedAt:          record.UpdatedAt,
+			AppliedAt:          record.AppliedAt,
+			RevokedAt:          record.RevokedAt,
+		})
+	}
+	return out
+}
+
 func appendTailnetSurfaceRegistryIssues(snapshot *core.TailnetStatusSnapshot) {
 	if snapshot == nil {
 		return
@@ -322,6 +371,55 @@ func appendTailnetSurfaceRegistryIssues(snapshot *core.TailnetStatusSnapshot) {
 					Summary:  fmt.Sprintf("Tailnet surface %s is declared but has not been observed active yet.", strings.TrimSpace(surface.SurfaceID)),
 				})
 			}
+		}
+	}
+}
+
+func appendTailnetGrantBindingIssues(snapshot *core.TailnetStatusSnapshot) {
+	if snapshot == nil {
+		return
+	}
+	surfaces := make(map[string]core.TailnetSurfaceStatus, len(snapshot.Surfaces))
+	for _, surface := range snapshot.Surfaces {
+		surfaces[strings.TrimSpace(surface.SurfaceID)] = surface
+	}
+	for _, binding := range snapshot.GrantBindings {
+		status := strings.TrimSpace(binding.Status)
+		if status == "" || status == session.TailnetGrantBindingStatusRevoked {
+			continue
+		}
+		surfaceID := strings.TrimSpace(binding.SurfaceID)
+		surface, ok := surfaces[surfaceID]
+		if !ok {
+			snapshot.Issues = append(snapshot.Issues, core.TailnetIssue{
+				Code:     "grant_binding_surface_missing",
+				Severity: "error",
+				Summary:  fmt.Sprintf("Tailnet grant binding %s references missing surface %s.", strings.TrimSpace(binding.BindingID), surfaceID),
+			})
+			continue
+		}
+		if status == session.TailnetGrantBindingStatusApplied && strings.TrimSpace(surface.Status) != session.TailnetSurfaceStatusActive {
+			snapshot.Issues = append(snapshot.Issues, core.TailnetIssue{
+				Code:     "grant_binding_surface_not_active",
+				Severity: "warning",
+				Summary:  fmt.Sprintf("Tailnet grant binding %s is applied but surface %s is %s.", strings.TrimSpace(binding.BindingID), surfaceID, firstTailnetSurfaceNonEmpty(surface.Status, "unknown")),
+			})
+		}
+		if status == session.TailnetGrantBindingStatusDrifted {
+			snapshot.Issues = append(snapshot.Issues, core.TailnetIssue{
+				Code:     "grant_binding_drifted",
+				Severity: "warning",
+				Summary:  fmt.Sprintf("Tailnet grant binding %s is drifted: %s.", strings.TrimSpace(binding.BindingID), firstTailnetSurfaceNonEmpty(binding.DriftReason, "policy evidence diverged")),
+			})
+		}
+		if strings.TrimSpace(binding.AppliedPolicyHash) != "" &&
+			strings.TrimSpace(binding.ObservedPolicyHash) != "" &&
+			strings.TrimSpace(binding.AppliedPolicyHash) != strings.TrimSpace(binding.ObservedPolicyHash) {
+			snapshot.Issues = append(snapshot.Issues, core.TailnetIssue{
+				Code:     "grant_binding_policy_hash_mismatch",
+				Severity: "warning",
+				Summary:  fmt.Sprintf("Tailnet grant binding %s observed policy hash differs from the applied hash.", strings.TrimSpace(binding.BindingID)),
+			})
 		}
 	}
 }

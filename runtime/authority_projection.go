@@ -93,6 +93,14 @@ func authorityProjectionFromStore(store *session.SQLiteStore, now time.Time) (au
 	if err != nil {
 		return authorityProjection{}, fmt.Errorf("load active capability grants: %w", err)
 	}
+	tailnetBindings, err := store.TailnetGrantBindings(session.TailnetGrantBindingFilter{Limit: capabilityProjectionLimit})
+	if err != nil {
+		return authorityProjection{}, fmt.Errorf("load tailnet grant bindings: %w", err)
+	}
+	tailnetSurfaces, err := store.TailnetSurfaces(session.TailnetSurfaceFilter{Limit: capabilityProjectionLimit})
+	if err != nil {
+		return authorityProjection{}, fmt.Errorf("load tailnet surfaces: %w", err)
+	}
 	autoApprovalEvents, err := store.ExecutionEventsByTypes([]string{core.ExecutionEventAutoApprovalUsed}, now.Add(-30*24*time.Hour), 1000)
 	if err != nil {
 		return authorityProjection{}, fmt.Errorf("load auto-approval use events: %w", err)
@@ -310,6 +318,68 @@ func authorityProjectionFromStore(store *session.SQLiteStore, now time.Time) (au
 	for _, event := range autoApprovalEvents {
 		if finding, ok := authorityAutoApprovalUsedOutsideScopeFinding(event); ok {
 			projection.addFinding(finding)
+		}
+	}
+	grantByID := make(map[string]session.CapabilityGrant, len(capabilityGrants))
+	for _, grant := range capabilityGrants {
+		grantByID[strings.TrimSpace(grant.GrantID)] = grant
+	}
+	surfaceByID := make(map[string]session.TailnetSurfaceRecord, len(tailnetSurfaces))
+	for _, surface := range tailnetSurfaces {
+		surfaceByID[strings.TrimSpace(surface.SurfaceID)] = surface
+	}
+	for _, binding := range tailnetBindings {
+		binding = session.NormalizeTailnetGrantBinding(binding)
+		if authorityTailnetBindingInactive(binding) {
+			continue
+		}
+		if _, ok := surfaceByID[strings.TrimSpace(binding.SurfaceID)]; !ok {
+			projection.addFinding(authorityProjectionFinding{
+				Code:             "tailnet_binding_surface_missing",
+				Severity:         "error",
+				SourceKind:       "tailnet_grant_binding",
+				SourceID:         binding.BindingID,
+				Detail:           "tailnet grant binding references a surface that is not declared or observed",
+				NextRepairAction: "declare the surface, correct the binding, or revoke the network grant binding",
+				RepairAction:     "repair_tailnet_grant_binding",
+				Repairable:       true,
+			})
+		}
+		if _, ok := grantByID[strings.TrimSpace(binding.GrantID)]; !ok && binding.Status == session.TailnetGrantBindingStatusApplied {
+			projection.addFinding(authorityProjectionFinding{
+				Code:             "tailnet_binding_active_grant_missing",
+				Severity:         "error",
+				SourceKind:       "tailnet_grant_binding",
+				SourceID:         binding.BindingID,
+				Detail:           "applied tailnet grant binding has no matching active Aphelion capability grant",
+				NextRepairAction: "roll back the Tailnet binding or restore a fresh approved capability grant",
+				RepairAction:     "rollback_tailnet_grant_binding",
+				Repairable:       true,
+			})
+		}
+		if binding.Status == session.TailnetGrantBindingStatusDrifted {
+			projection.addFinding(authorityProjectionFinding{
+				Code:             "tailnet_binding_drifted",
+				Severity:         "warning",
+				SourceKind:       "tailnet_grant_binding",
+				SourceID:         binding.BindingID,
+				Detail:           "tailnet grant binding is drifted: " + firstNonEmpty(binding.DriftReason, "policy evidence diverged"),
+				NextRepairAction: "review the drift reason and either re-apply the approved projection or revoke the binding",
+				RepairAction:     "review_tailnet_grant_drift",
+			})
+		}
+		if strings.TrimSpace(binding.AppliedPolicyHash) != "" &&
+			strings.TrimSpace(binding.ObservedPolicyHash) != "" &&
+			strings.TrimSpace(binding.AppliedPolicyHash) != strings.TrimSpace(binding.ObservedPolicyHash) {
+			projection.addFinding(authorityProjectionFinding{
+				Code:             "tailnet_binding_policy_hash_mismatch",
+				Severity:         "warning",
+				SourceKind:       "tailnet_grant_binding",
+				SourceID:         binding.BindingID,
+				Detail:           "tailnet observed policy hash differs from the policy hash recorded at apply time",
+				NextRepairAction: "refresh observed policy evidence and mark the binding drifted or applied",
+				RepairAction:     "refresh_tailnet_policy_evidence",
+			})
 		}
 	}
 
@@ -673,6 +743,15 @@ func authorityAutoApprovalUsedOutsideScopeFinding(event session.ExecutionEvent) 
 		}, true
 	}
 	return authorityProjectionFinding{}, false
+}
+
+func authorityTailnetBindingInactive(binding session.TailnetGrantBinding) bool {
+	switch strings.TrimSpace(binding.Status) {
+	case "", session.TailnetGrantBindingStatusRevoked:
+		return true
+	default:
+		return false
+	}
 }
 
 func authorityAutoApprovalScopeAllowsWorkMode(scope string, workMode string) bool {

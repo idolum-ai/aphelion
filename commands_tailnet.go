@@ -14,7 +14,9 @@ import (
 const tailnetCallbackPrefix = "tailnet:"
 const tailnetCallbackRefresh = "refresh"
 const tailnetCallbackSurfaces = "surfaces"
+const tailnetCallbackGrants = "grants"
 const tailnetCommandSurfaces = "surfaces"
+const tailnetCommandGrants = "grants"
 const tailnetCommandRevoke = "revoke"
 const tailnetRevokeCallbackPrefix = "tailnet_revoke:"
 const tailnetRevokeCallbackConfirm = "confirm"
@@ -47,6 +49,9 @@ func renderTailnetCommand(snapshot core.TailnetStatusSnapshot) (string, [][]tele
 	}
 	if len(snapshot.Surfaces) > 0 {
 		details = append(details, fmt.Sprintf("Surfaces: %d registered", len(snapshot.Surfaces)))
+	}
+	if len(snapshot.GrantBindings) > 0 {
+		details = append(details, fmt.Sprintf("Grant bindings: %d registered", len(snapshot.GrantBindings)))
 	}
 	privateStatusURL := ""
 	if snapshot.Parent != nil {
@@ -91,6 +96,7 @@ func renderTailnetCommand(snapshot core.TailnetStatusSnapshot) (string, [][]tele
 	}
 	row := []telegram.InlineButton{{Text: "Refresh", CallbackData: encodeTailnetCallbackData(tailnetCallbackRefresh)}}
 	row = append(row, telegram.InlineButton{Text: "Surfaces", CallbackData: encodeTailnetCallbackData(tailnetCallbackSurfaces)})
+	row = append(row, telegram.InlineButton{Text: "Grants", CallbackData: encodeTailnetCallbackData(tailnetCallbackGrants)})
 	if privateStatusURL != "" {
 		row = append(row, telegram.InlineButton{Text: "Open Status", URL: privateStatusURL})
 	}
@@ -119,6 +125,8 @@ func decodeTailnetCallbackData(data string) (string, bool) {
 	case tailnetCallbackRefresh:
 		return action, true
 	case tailnetCallbackSurfaces:
+		return action, true
+	case tailnetCallbackGrants:
 		return action, true
 	default:
 		return "", false
@@ -165,11 +173,59 @@ func renderTailnetSurfacesCommand(surfaces []core.TailnetSurfaceStatus) (string,
 	rows := [][]telegram.InlineButton{{
 		{Text: "Status", CallbackData: encodeTailnetCallbackData(tailnetCallbackRefresh)},
 		{Text: "Refresh", CallbackData: encodeTailnetCallbackData(tailnetCallbackSurfaces)},
+		{Text: "Grants", CallbackData: encodeTailnetCallbackData(tailnetCallbackGrants)},
 	}}
 	return face.RenderOperatorPanel(face.OperatorPanel{
 		Title:   "Tailnet Surfaces",
 		State:   state,
 		Why:     "Registered surfaces are private mirrors of approved child or parent grants.",
+		Next:    next,
+		Details: details,
+	}), rows
+}
+
+func renderTailnetGrantBindingsCommand(bindings []core.TailnetGrantBindingStatus) (string, [][]telegram.InlineButton) {
+	state := fmt.Sprintf("%d grant binding(s)", len(bindings))
+	next := "Apply, drift, or rollback Tailnet grant bindings from the CLI after policy evidence changes."
+	details := make([]string, 0, len(bindings)*3)
+	if len(bindings) == 0 {
+		details = append(details, "No Tailnet grant bindings.")
+	} else {
+		limit := len(bindings)
+		if limit > 10 {
+			limit = 10
+		}
+		for i := 0; i < limit; i++ {
+			binding := bindings[i]
+			line := fmt.Sprintf("%s %s", firstTailnetNonEmpty(binding.Status, "unknown"), firstTailnetNonEmpty(binding.BindingID, "binding"))
+			if grantID := strings.TrimSpace(binding.GrantID); grantID != "" {
+				line += "; grant " + grantID
+			}
+			if surfaceID := strings.TrimSpace(binding.SurfaceID); surfaceID != "" {
+				line += "; surface " + surfaceID
+			}
+			details = append(details, truncateOperatorLine(line, 220))
+			target := strings.Trim(strings.TrimSpace(binding.CapabilityKind)+"/"+strings.TrimSpace(binding.TargetResource), "/")
+			if target != "" {
+				details = append(details, "Target: "+truncateOperatorLine(target, 160))
+			}
+			if drift := strings.TrimSpace(binding.DriftReason); drift != "" {
+				details = append(details, "Reason: "+truncateOperatorLine(drift, 180))
+			}
+		}
+		if len(bindings) > limit {
+			details = append(details, fmt.Sprintf("%d more grant binding(s) omitted", len(bindings)-limit))
+		}
+	}
+	rows := [][]telegram.InlineButton{{
+		{Text: "Status", CallbackData: encodeTailnetCallbackData(tailnetCallbackRefresh)},
+		{Text: "Surfaces", CallbackData: encodeTailnetCallbackData(tailnetCallbackSurfaces)},
+		{Text: "Refresh", CallbackData: encodeTailnetCallbackData(tailnetCallbackGrants)},
+	}}
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title:   "Tailnet Grants",
+		State:   state,
+		Why:     "Grant bindings project approved Aphelion authority into private-network policy evidence.",
 		Next:    next,
 		Details: details,
 	}), rows

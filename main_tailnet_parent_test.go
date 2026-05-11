@@ -51,6 +51,12 @@ func TestTailnetPrivateHTTPHandlerServesHealthTailnetAndStatus(t *testing.T) {
 			SurfaceID: "parent:tsnet_http:status",
 			Status:    "active",
 		}},
+		tailnetGrantBindings: []core.TailnetGrantBindingStatus{{
+			BindingID: "tailnet-bind-capg-status",
+			GrantID:   "capg-status",
+			SurfaceID: "parent:tsnet_http:status",
+			Status:    "applied",
+		}},
 		latestDoctorReport: session.DoctorReportRecord{
 			SessionID:      "telegram_dm:1001",
 			ChatID:         1001,
@@ -68,7 +74,7 @@ func TestTailnetPrivateHTTPHandlerServesHealthTailnetAndStatus(t *testing.T) {
 	}
 	handler := tailnetPrivateHTTPHandler(router, 1001)
 
-	for _, path := range []string{"/healthz", "/tailnet", "/tailnet/surfaces", "/status", "/doctor/latest"} {
+	for _, path := range []string{"/healthz", "/tailnet", "/tailnet/surfaces", "/tailnet/grants", "/status", "/doctor/latest"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -85,11 +91,20 @@ func TestTailnetPrivateHTTPHandlerServesHealthTailnetAndStatus(t *testing.T) {
 	if router.tailnetSurfacesSenderID != 1001 {
 		t.Fatalf("tailnet surfaces sender = %d, want admin id", router.tailnetSurfacesSenderID)
 	}
+	if router.tailnetGrantBindingsSenderID != 1001 {
+		t.Fatalf("tailnet grant bindings sender = %d, want admin id", router.tailnetGrantBindingsSenderID)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/tailnet/grants", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), `"grant_bindings"`) || !strings.Contains(rec.Body.String(), `"tailnet-bind-capg-status"`) {
+		t.Fatalf("tailnet grants body = %q, want grant binding mirror", rec.Body.String())
+	}
 	if router.latestDoctorReportChatID != 1001 || router.latestDoctorReportSenderID != 1001 {
 		t.Fatalf("doctor latest lookup = (%d,%d), want configured admin chat/sender", router.latestDoctorReportChatID, router.latestDoctorReportSenderID)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/doctor/latest", nil)
-	rec := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/doctor/latest", nil)
+	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if !strings.Contains(rec.Body.String(), `"available":true`) || !strings.Contains(rec.Body.String(), `"full_report":"State of Things`) {
 		t.Fatalf("doctor latest body = %q, want latest report payload", rec.Body.String())

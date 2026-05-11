@@ -1650,6 +1650,14 @@ func (r *Runtime) writeDoctorTailnetDiagnostics(ctx context.Context, b *strings.
 			writeDoctorLine(b, fmt.Sprintf("- id=%s status=%s kind=%s name=%s url=%q error=%q", strings.TrimSpace(surface.SurfaceID), strings.TrimSpace(surface.Status), strings.TrimSpace(surface.SurfaceKind), strings.TrimSpace(surface.Name), truncatePreview(surface.URL, 220), truncatePreview(surface.LastError, 220)))
 		}
 	}
+	if len(snapshot.GrantBindings) == 0 {
+		writeDoctorLine(b, "tailnet_grant_bindings: none")
+	} else {
+		writeDoctorLine(b, "tailnet_grant_bindings:")
+		for _, binding := range snapshot.GrantBindings {
+			writeDoctorLine(b, fmt.Sprintf("- id=%s status=%s grant=%s surface=%s target=%s drift=%q", strings.TrimSpace(binding.BindingID), strings.TrimSpace(binding.Status), strings.TrimSpace(binding.GrantID), strings.TrimSpace(binding.SurfaceID), strings.TrimSpace(binding.TargetResource), truncatePreview(binding.DriftReason, 220)))
+		}
+	}
 	if len(snapshot.Issues) == 0 {
 		writeDoctorLine(b, "tailnet_issues: none")
 		return

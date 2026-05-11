@@ -47,6 +47,7 @@ type commandRouter interface {
 	StatusReadableSummary(ctx context.Context, view string, statusText string) string
 	TailnetStatus(ctx context.Context, senderID int64) (core.TailnetStatusSnapshot, error)
 	TailnetSurfaces(senderID int64) ([]core.TailnetSurfaceStatus, error)
+	TailnetGrantBindings(senderID int64) ([]core.TailnetGrantBindingStatus, error)
 	RevokeTailnetSurface(ctx context.Context, senderID int64, surfaceID string, reason string) (core.TailnetSurfaceStatus, bool, error)
 	ContinuationState(chatID int64) (session.ContinuationState, error)
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
@@ -278,6 +279,17 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 				return true, err
 			}
 			rendered, rows := renderTailnetSurfacesCommand(surfaces)
+			if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID)); err != nil {
+				return true, err
+			}
+			return true, nil
+		}
+		if action == tailnetCommandGrants {
+			bindings, err := router.TailnetGrantBindings(msg.SenderID)
+			if err != nil {
+				return true, err
+			}
+			rendered, rows := renderTailnetGrantBindingsCommand(bindings)
 			if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID)); err != nil {
 				return true, err
 			}
@@ -602,7 +614,7 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 		if cb.From != nil {
 			senderID = cb.From.ID
 		}
-		if (action != tailnetCallbackRefresh && action != tailnetCallbackSurfaces) || chatID == 0 || messageID == 0 {
+		if (action != tailnetCallbackRefresh && action != tailnetCallbackSurfaces && action != tailnetCallbackGrants) || chatID == 0 || messageID == 0 {
 			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleStatusCallbackText); err != nil {
 				if !telegram.IsStaleCallbackQueryError(err) {
 					return true, err
@@ -631,6 +643,12 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 				return true, err
 			}
 			rendered, rows = renderTailnetSurfacesCommand(surfaces)
+		} else if action == tailnetCallbackGrants {
+			bindings, err := router.TailnetGrantBindings(senderID)
+			if err != nil {
+				return true, err
+			}
+			rendered, rows = renderTailnetGrantBindingsCommand(bindings)
 		} else {
 			snapshot, err := router.TailnetStatus(ctx, senderID)
 			if err != nil {

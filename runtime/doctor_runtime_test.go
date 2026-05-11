@@ -289,6 +289,19 @@ func TestAuthorityProjectionReportsRemainingRoadmapChecks(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
 	}
+	if _, err := store.UpsertTailnetGrantBinding(session.TailnetGrantBinding{
+		BindingID:         "tailnet-bind-missing-active-grant",
+		GrantID:           "capg-missing",
+		SurfaceID:         "tailnet:missing:surface",
+		GrantedTo:         core.DurableAgentPrincipal("child-gamma"),
+		CapabilityKind:    string(session.CapabilityKindNetworkAccess),
+		TargetResource:    "grafana.tailnet",
+		DesiredPolicyJSON: `{"grant_id":"capg-missing"}`,
+		Status:            session.TailnetGrantBindingStatusApplied,
+		AppliedPolicyHash: "sha256:applied",
+	}); err != nil {
+		t.Fatalf("UpsertTailnetGrantBinding() err = %v", err)
+	}
 
 	snapshot, err := rt.AuthorityStatusSnapshot(now)
 	if err != nil {
@@ -300,6 +313,8 @@ func TestAuthorityProjectionReportsRemainingRoadmapChecks(t *testing.T) {
 		"blocked_phase_missing_escalation",
 		"auto_approval_used_outside_scope",
 		"capability_grant_invocation_missing_turn_lease_evidence",
+		"tailnet_binding_surface_missing",
+		"tailnet_binding_active_grant_missing",
 	} {
 		if !authoritySnapshotHasFinding(snapshot, want) {
 			t.Fatalf("authority findings = %#v, want %s", snapshot.Findings, want)

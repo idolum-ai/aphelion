@@ -358,6 +358,64 @@ func TestRevokeTailnetSurfaceRecordsAuditEvent(t *testing.T) {
 	}
 }
 
+func TestTailnetStatusSnapshotProjectsGrantBindingsAndDrift(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertTailnetSurface(session.TailnetSurfaceRecord{
+		SurfaceID:   "parent:tsnet_http:status",
+		OwnerKind:   "parent",
+		OwnerID:     "aphelion",
+		SurfaceKind: "tsnet_http",
+		Name:        "status",
+		Status:      session.TailnetSurfaceStatusDeclared,
+	}); err != nil {
+		t.Fatalf("UpsertTailnetSurface() err = %v", err)
+	}
+	if _, err := store.UpsertTailnetGrantBinding(session.TailnetGrantBinding{
+		BindingID:         "tailnet-bind-capg-status",
+		GrantID:           "capg-status",
+		SurfaceID:         "parent:tsnet_http:status",
+		GrantedTo:         "durable_agent:child-alpha",
+		CapabilityKind:    string(session.CapabilityKindNetworkAccess),
+		TargetResource:    "grafana.tailnet",
+		DesiredPolicyJSON: `{"grant_id":"capg-status"}`,
+		Status:            session.TailnetGrantBindingStatusDrifted,
+		DriftReason:       "observed policy no longer matches approved grant",
+	}); err != nil {
+		t.Fatalf("UpsertTailnetGrantBinding() err = %v", err)
+	}
+	cfg := config.Default()
+	cfg.Tailscale.Enabled = true
+	rt := &Runtime{
+		cfg:   &cfg,
+		store: store,
+		tailnetBackend: fakeTailnetBackend{
+			snapshot: core.TailnetStatusSnapshot{
+				GeneratedAt: time.Date(2026, 4, 28, 20, 0, 0, 0, time.UTC),
+				Enabled:     true,
+				Backend:     "cli",
+				Status:      "healthy",
+			},
+		},
+	}
+
+	snapshot, err := rt.TailnetStatusSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("TailnetStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.GrantBindings) != 1 || snapshot.GrantBindings[0].BindingID != "tailnet-bind-capg-status" {
+		t.Fatalf("GrantBindings = %#v, want projected binding", snapshot.GrantBindings)
+	}
+	if !tailnetIssuesContain(snapshot.Issues, "grant_binding_drifted") {
+		t.Fatalf("issues = %#v, want grant_binding_drifted", snapshot.Issues)
+	}
+}
+
 func tailnetIssuesContain(issues []core.TailnetIssue, code string) bool {
 	for _, issue := range issues {
 		if issue.Code == code {

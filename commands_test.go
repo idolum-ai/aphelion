@@ -127,6 +127,9 @@ type stubCommandRouter struct {
 	tailnetSurfaces              []core.TailnetSurfaceStatus
 	tailnetSurfacesErr           error
 	tailnetSurfacesSenderID      int64
+	tailnetGrantBindings         []core.TailnetGrantBindingStatus
+	tailnetGrantBindingsErr      error
+	tailnetGrantBindingsSenderID int64
 	latestDoctorReport           session.DoctorReportRecord
 	latestDoctorReportOK         bool
 	latestDoctorReportErr        error
@@ -385,6 +388,14 @@ func (s *stubCommandRouter) TailnetSurfaces(senderID int64) ([]core.TailnetSurfa
 		return nil, s.tailnetSurfacesErr
 	}
 	return append([]core.TailnetSurfaceStatus(nil), s.tailnetSurfaces...), nil
+}
+
+func (s *stubCommandRouter) TailnetGrantBindings(senderID int64) ([]core.TailnetGrantBindingStatus, error) {
+	s.tailnetGrantBindingsSenderID = senderID
+	if s.tailnetGrantBindingsErr != nil {
+		return nil, s.tailnetGrantBindingsErr
+	}
+	return append([]core.TailnetGrantBindingStatus(nil), s.tailnetGrantBindings...), nil
 }
 
 func (s *stubCommandRouter) RevokeTailnetSurface(ctx context.Context, senderID int64, surfaceID string, reason string) (core.TailnetSurfaceStatus, bool, error) {
@@ -2021,7 +2032,7 @@ func TestHandleTelegramCommandTailnetShowsReadOnlyStatus(t *testing.T) {
 	if got := sender.inline[0].text; !strings.Contains(got, "Tailnet") || !strings.Contains(got, "Status: healthy") || !strings.Contains(got, "aphelion.example.ts.net") || !strings.Contains(got, "Parent tsnet") || !strings.Contains(got, "http://aphelion.example.ts.net:8765") {
 		t.Fatalf("tailnet text = %q, want compact status", got)
 	}
-	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 3 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" || sender.inline[0].rows[0][1].CallbackData != "tailnet:surfaces" || sender.inline[0].rows[0][2].URL != "http://aphelion.example.ts.net:8765/status" {
+	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 4 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" || sender.inline[0].rows[0][1].CallbackData != "tailnet:surfaces" || sender.inline[0].rows[0][2].CallbackData != "tailnet:grants" || sender.inline[0].rows[0][3].URL != "http://aphelion.example.ts.net:8765/status" {
 		t.Fatalf("tailnet rows = %#v, want refresh", sender.inline[0].rows)
 	}
 }
@@ -2064,8 +2075,48 @@ func TestHandleTelegramCommandTailnetSurfacesShowsRegistry(t *testing.T) {
 	if got := sender.inline[0].text; !strings.Contains(got, "Tailnet Surfaces") || !strings.Contains(got, "active status") || !strings.Contains(got, "http://aphelion.example.ts.net:8765/status") {
 		t.Fatalf("tailnet surfaces text = %q, want registry surface", got)
 	}
-	if len(sender.inline[0].rows) != 1 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" || sender.inline[0].rows[0][1].CallbackData != "tailnet:surfaces" {
+	if len(sender.inline[0].rows) != 1 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" || sender.inline[0].rows[0][1].CallbackData != "tailnet:surfaces" || sender.inline[0].rows[0][2].CallbackData != "tailnet:grants" {
 		t.Fatalf("tailnet surfaces rows = %#v, want status/refresh", sender.inline[0].rows)
+	}
+}
+
+func TestHandleTelegramCommandTailnetGrantsShowsBindings(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		tailnetGrantBindings: []core.TailnetGrantBindingStatus{{
+			BindingID:      "tailnet-bind-capg-mail-status",
+			GrantID:        "capg-mail",
+			SurfaceID:      "durable_agent:mail-helper:tsnet_http:status",
+			CapabilityKind: "network_access",
+			TargetResource: "tailnet:mail-helper",
+			Status:         "applied",
+		}},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:   7,
+		SenderID: 1001,
+		Text:     "/tailnet grants",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.tailnetGrantBindingsSenderID != 1001 || router.tailnetStatusSenderID != 0 || router.tailnetSurfacesSenderID != 0 {
+		t.Fatalf("tailnet calls bindings=%d status=%d surfaces=%d, want bindings only", router.tailnetGrantBindingsSenderID, router.tailnetStatusSenderID, router.tailnetSurfacesSenderID)
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
+	}
+	if got := sender.inline[0].text; !strings.Contains(got, "Tailnet Grants") || !strings.Contains(got, "applied tailnet-bind-capg-mail-status") || !strings.Contains(got, "Target: network_access/tailnet:mail-helper") {
+		t.Fatalf("tailnet grants text = %q, want grant binding projection", got)
+	}
+	if len(sender.inline[0].rows) != 1 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" || sender.inline[0].rows[0][1].CallbackData != "tailnet:surfaces" || sender.inline[0].rows[0][2].CallbackData != "tailnet:grants" {
+		t.Fatalf("tailnet grants rows = %#v, want status/surfaces/refresh", sender.inline[0].rows)
 	}
 }
 
@@ -2821,6 +2872,51 @@ func TestHandleTelegramCommandCallbackTailnetSurfacesForAdmin(t *testing.T) {
 	}
 	if router.tailnetSurfacesSenderID != 1001 || router.tailnetStatusSenderID != 0 {
 		t.Fatalf("tailnet calls surfaces=%d status=%d, want surfaces only", router.tailnetSurfacesSenderID, router.tailnetStatusSenderID)
+	}
+}
+
+func TestHandleTelegramCommandCallbackTailnetGrantsForAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		tailnetGrantBindings: []core.TailnetGrantBindingStatus{{
+			BindingID:      "tailnet-bind-capg-status",
+			GrantID:        "capg-status",
+			SurfaceID:      "parent:tsnet_http:status",
+			CapabilityKind: "network_access",
+			TargetResource: "tailnet:status",
+			Status:         "drifted",
+			DriftReason:    "observed policy hash changed",
+		}},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-tailnet-grants",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "tailnet:grants",
+		Message: &telegram.Message{
+			MessageID: 97,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+	if got := sender.editInline[0].text; !strings.Contains(got, "Tailnet Grants") || !strings.Contains(got, "drifted tailnet-bind-capg-status") || !strings.Contains(got, "observed policy hash changed") {
+		t.Fatalf("tailnet grants callback text = %q, want refreshed bindings", got)
+	}
+	if router.tailnetGrantBindingsSenderID != 1001 || router.tailnetStatusSenderID != 0 || router.tailnetSurfacesSenderID != 0 {
+		t.Fatalf("tailnet calls bindings=%d status=%d surfaces=%d, want bindings only", router.tailnetGrantBindingsSenderID, router.tailnetStatusSenderID, router.tailnetSurfacesSenderID)
 	}
 }
 

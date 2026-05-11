@@ -81,7 +81,7 @@ questions:
 ## Current Checkpoint
 
 The current implemented checkpoint is **declared durable-child tailnet
-identity**, not live child materialization.
+identity plus local grant-binding projection**, not live child materialization.
 
 Implemented:
 
@@ -99,18 +99,27 @@ Implemented:
   but no live node has been observed.
 - preservation of future active/degraded/revoked child surfaces so declaration
   sync does not overwrite materialized state.
+- `tailnet_grant_bindings` registry rows that bind an approved Aphelion
+  capability grant to a private surface and desired policy JSON.
+- CLI lifecycle commands for local binding evidence:
+  `tailnet grants`, `tailnet bind-grant`, `tailnet apply-binding`,
+  `tailnet drift-binding`, and `tailnet rollback-binding`.
+- Telegram `/tailnet grants`, `/status`, `/doctor`, and Tailnet-private
+  `/tailnet/grants` JSON projection of binding status and drift.
 
 Not implemented yet:
 
 - starting a child `tsnet` node.
 - installing anything onto a remote child host.
 - issuing or consuming per-child auth keys.
-- writing Tailscale ACL/grant policy.
+- writing live Tailscale ACL/grant policy.
+- Tailscale webhook/event ingestion.
 - public Serve/Funnel exposure.
 - parent-to-child private RPC.
 
-This gives Aphelion a safe intent layer: the system can say "this child should
-have a private tailnet body" before it actually creates that body.
+This gives Aphelion a safe intent and evidence layer: the system can say "this
+child should have a private tailnet body" and "this approved grant should map
+to this private-network policy" before it actually creates live Tailscale state.
 
 ## User Flow
 
@@ -919,14 +928,18 @@ Connection between Aphelion capability grants and Tailscale policy.
 
 ```text
 id
-capability_grant_id
-source_selector
-destination_selector
-ip_permissions_json
-app_capabilities_json
-tailscale_policy_hash
-status              # proposed | applied | drifted | revoked
-last_verified_at
+grant_id
+surface_id
+granted_to
+capability_kind
+target_resource
+desired_policy_json
+applied_policy_hash
+observed_policy_hash
+status              # proposed | applied | drifted | revoked | failed
+drift_reason
+applied_at
+revoked_at
 ```
 
 ### `tailnet_events`
@@ -1876,10 +1889,12 @@ Fastest useful order:
 7. Done: add `tailnet_surfaces` table.
 8. Done: add child tailnet profile fields and declaration sync.
 9. Next: materialize one declared child `tsnet` node with private status only.
-10. Add grant binding and policy projection.
-11. Add approval-gated mutations.
+10. Done: add local grant binding and desired-policy projection.
+11. Done: add CLI-gated local binding apply/drift/rollback evidence; live
+    Tailscale policy mutation remains future work.
 12. Add Tailscale webhook ingestion.
-13. Add richer Telegram and CLI projections.
+13. Done: add richer Telegram, CLI, doctor, and Tailnet-private grant
+    projections.
 
 ## Open Questions
 

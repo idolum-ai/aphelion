@@ -349,6 +349,7 @@ type TailnetStatusSnapshot struct {
 	ExpectedTags      []string
 	Parent            *TailnetParentStatus
 	Surfaces          []TailnetSurfaceStatus
+	GrantBindings     []TailnetGrantBindingStatus
 	Issues            []TailnetIssue
 	RawStatusError    string
 	RawIPError        string
@@ -391,6 +392,24 @@ type TailnetSurfaceStatus struct {
 	LastObservedAt time.Time
 	RevokedAt      time.Time
 	UpdatedAt      time.Time
+}
+
+type TailnetGrantBindingStatus struct {
+	BindingID          string
+	GrantID            string
+	SurfaceID          string
+	GrantedTo          string
+	CapabilityKind     string
+	TargetResource     string
+	DesiredPolicyJSON  string
+	AppliedPolicyHash  string
+	ObservedPolicyHash string
+	Status             string
+	DriftReason        string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	AppliedAt          time.Time
+	RevokedAt          time.Time
 }
 
 type DurableAgentStatusSnapshot struct {

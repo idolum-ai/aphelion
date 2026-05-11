@@ -299,6 +299,16 @@ func (c telegramCommandControl) TailnetSurfaces(senderID int64) ([]core.TailnetS
 	return c.rt.TailnetSurfacesSnapshot()
 }
 
+func (c telegramCommandControl) TailnetGrantBindings(senderID int64) ([]core.TailnetGrantBindingStatus, error) {
+	if !c.CanRestart(senderID) {
+		return nil, fmt.Errorf("tailnet grant bindings denied")
+	}
+	if c.rt == nil {
+		return nil, nil
+	}
+	return c.rt.TailnetGrantBindingsSnapshot()
+}
+
 func (c telegramCommandControl) RevokeTailnetSurface(ctx context.Context, senderID int64, surfaceID string, reason string) (core.TailnetSurfaceStatus, bool, error) {
 	if !c.CanRestart(senderID) {
 		return core.TailnetSurfaceStatus{}, false, fmt.Errorf("tailnet surface revoke denied")

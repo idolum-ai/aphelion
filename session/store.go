@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	schemaVersion                       = 42
+	schemaVersion                       = 43
 	minimumSupportedLegacySchemaVersion = 11
 )
 
