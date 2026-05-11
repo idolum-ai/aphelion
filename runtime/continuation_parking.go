@@ -288,6 +288,11 @@ func (r *Runtime) reofferRestartParkedContinuation(ctx context.Context, key sess
 			return fmt.Errorf("refresh stale parked continuation: %w", err)
 		}
 	}
+	offerPayload := continuationExecutionPayload(state)
+	offerPayload["refreshed_from"] = "restart_reoffer"
+	offerPayload["resume_mode"] = "reoffer_pending"
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", offerPayload, now)
+
 	msg := core.InboundMessage{ChatID: key.ChatID, Origin: core.InboundOriginTurnAuthorization, Text: "restart parked continuation resume"}
 	text := r.renderContinuationPrompt(ctx, key, msg, state)
 	if reason := strings.TrimSpace(state.ParkedReason); reason != "" && !strings.Contains(text, reason) {

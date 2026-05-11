@@ -111,7 +111,9 @@ func TestParkActiveWorkForRestartRefreshesAndReoffersPendingContinuation(t *test
 	if err != nil {
 		t.Fatalf("ExecutionEventsBySession(reoffered) err = %v", err)
 	}
+	assertHasEventType(t, events, core.ExecutionEventContinuationOffered)
 	assertHasEventType(t, events, core.ExecutionEventContinuationResumed)
+	assertEventTypeOrder(t, events, core.ExecutionEventContinuationOffered, core.ExecutionEventContinuationResumed)
 }
 
 func TestParkActiveWorkForRestartInterruptsRunsAndReoffersApprovedContinuation(t *testing.T) {
@@ -213,6 +215,13 @@ func TestParkActiveWorkForRestartInterruptsRunsAndReoffersApprovedContinuation(t
 	if continuationStateRestartParked(reoffered) {
 		t.Fatalf("park marker still set after approved reoffer: %#v", reoffered)
 	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession(reoffered approved) err = %v", err)
+	}
+	assertHasEventType(t, events, core.ExecutionEventContinuationOffered)
+	assertHasEventType(t, events, core.ExecutionEventContinuationResumed)
+	assertEventTypeOrder(t, events, core.ExecutionEventContinuationOffered, core.ExecutionEventContinuationResumed)
 }
 
 func TestParkStoreActiveWorkForRestartWorksWithoutRuntime(t *testing.T) {
@@ -266,4 +275,28 @@ func TestParkStoreActiveWorkForRestartWorksWithoutRuntime(t *testing.T) {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
 	}
 	assertHasEventType(t, events, core.ExecutionEventContinuationParked)
+}
+
+func assertEventTypeOrder(t *testing.T, events []session.ExecutionEvent, beforeType string, afterType string) {
+	t.Helper()
+	beforeSeq := int64(0)
+	afterSeq := int64(0)
+	for _, event := range events {
+		switch event.EventType {
+		case beforeType:
+			if beforeSeq == 0 {
+				beforeSeq = event.Seq
+			}
+		case afterType:
+			if afterSeq == 0 {
+				afterSeq = event.Seq
+			}
+		}
+	}
+	if beforeSeq == 0 || afterSeq == 0 {
+		t.Fatalf("events missing ordered types before=%q seq=%d after=%q seq=%d; got %#v", beforeType, beforeSeq, afterType, afterSeq, events)
+	}
+	if beforeSeq >= afterSeq {
+		t.Fatalf("event order before=%q seq=%d after=%q seq=%d; want before < after", beforeType, beforeSeq, afterType, afterSeq)
+	}
 }
