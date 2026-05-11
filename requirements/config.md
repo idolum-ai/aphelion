@@ -7,7 +7,7 @@ Aphelion's config is a single TOML file that controls the entire runtime. Every 
 The live schema is the TOML shape accepted by `config.Config` and represented
 by `config.example.toml`; that example is load-tested with no ignored-key
 warnings. This requirements file also preserves future configuration homes so
-the design does not collapse around the first working path. Keys shown outside
+the design does not collapse around the initial working path. Keys shown outside
 the live schema are future design notes: if an operator puts them in today's
 config, startup/check-config, `/status`, and `/doctor` must surface ignored-key
 warnings rather than imply active behavior.
@@ -36,7 +36,10 @@ Telegram progress configuration is intentionally split into:
 
 The default operator experience should favor semantic, readable progress over raw command dumps.
 
-Implementation is staged. A minimal daemon only needs the small subset required to boot, authenticate, admit DM principals, route DM turns, and manage prompt context. The wider schema remains part of the contract so later hardening does not require redesigning config layout or ownership boundaries.
+Implementation is no longer documented as a broad hidden schema contract. Live
+operator keys belong in `config.Config` and `config.example.toml`; future homes
+may be described here only as design notes and must produce ignored-key
+warnings if used in today's config.
 
 Autonomy is a config-owned policy, not a prompt convention. `default_mode` and
 `ceiling` use `off`, `review_only`, `ask_first`, `leased`, or `mission`; the
@@ -302,14 +305,13 @@ external_manifest_dir = ""
 # ─── Sessions ───
 [sessions]
 db_path = "~/.aphelion/state/sessions.db"
-# v0: DM-only runtime. idle_expiry is part of the intended v0 surface, but the
-# runtime may reach it slightly after basic turn handling is stable.
+# Session expiry for admitted Telegram chats and durable child conversations.
 idle_expiry = "24h"           # Expire sessions after this much inactivity
 
-# v0 principal bootstrap:
+# Principal bootstrap:
 [principals.telegram]
 admin_user_ids = [123456789]
-# exactly one admin user is supported
+# one or more configured admins may be admitted by Telegram user id
 
 [autonomy]
 default_mode = "ask_first"
@@ -317,7 +319,6 @@ ceiling = "leased"
 allow_live_overrides = true
 max_override_duration = "4h"
 
-# Deferred after v0:
 # Context management thresholds — push close to the provider's actual limit.
 # These are in tokens. Compaction kicks in when the assembled prompt exceeds max_context_tokens.
 # These are per-provider — resolved at runtime from the active provider's context_window.
@@ -326,11 +327,11 @@ max_context_ratio = 0.75      # Trigger compaction at 75% of context_window. Mod
 compaction_ratio = 0.55       # Compact down to 55% of context_window. Gives ~20% headroom before next compaction.
 compaction_strategy = "summarize"  # "summarize" (LLM-assisted) | "truncate" (drop oldest turns)
 
-# Deferred after v0 group support:
+# Optional group session policy:
 [sessions.groups]
 scope = "per_user"            # "per_user" (one session per user per group) | "shared" (one session per group)
 
-# v0.5 review controls:
+# Review controls:
 [reviews]
 enabled = true
 digest_every = "30m"
@@ -642,18 +643,18 @@ Not supported in v1. Restart is cheap (<100ms cold start).
 
 ## Staging
 
-- **Required for a runnable daemon**: identity strings, active channel credentials, one working provider, DM-only session storage, config-assigned Telegram DM principals, workspace prompt files, and the agent execution limits that bound a turn.
+- **Required for a runnable daemon**: identity strings, active channel credentials, one working provider, session storage, config-assigned Telegram principals, workspace prompt files, and the agent execution limits that bound a turn.
 - **Required for the governor/face architecture**: a governor backend selection policy, Codex-friendly governor ownership boundaries, and an explicit face rendering slot even if the first implementation is thin.
 - **Required for DM admission and authority**: a config-owned principal model for Telegram DMs, at least one admin principal, and clear config ownership for later authority roles and isolated roots.
 - **Required for a hardened local system tool**: sandbox controls, HTTP transport tuning, failover policy, and credential sealing.
-- **Reserved architectural surface**: group-session controls, durable-agent access/governance surfaces, additional providers, embeddings, voice, cron, and deeper Linux controls. These should have stable config ownership even before they are fully wired.
+- **Reserved architectural surface**: any future group, durable-agent, provider, embedding, voice, cron, or deeper Linux controls may be described here only as future design notes until they are accepted by `config.Config` and `config.example.toml`.
 
 ## Decisions
 
 - **TOML.** Human-friendly, comment-friendly, Go ecosystem default.
 - **Single file.** No `config.d/`, no merge logic. One file, one truth.
-- **Broad schema by design.** Config breadth is intentional architectural headroom, not accidental scope creep. The system should remain adaptable instead of freezing around the first successful surface.
-- **Admission and authority are first-class config concerns.** In v0, config is the source of truth for the single Telegram admin principal and the roots/policies used by scoped child principals.
+- **Live schema before breadth.** Config breadth is not a promise. Live keys must be accepted, validated, projected, and tested; future keys must warn if used.
+- **Admission and authority are first-class config concerns.** Config is the source of truth for Telegram admin principals and the roots/policies used by scoped child principals.
 - **Governor and face are separate config concerns.** Decision-making and presentation should be independently configurable even if one implementation path is initially minimal.
 - **memfd with F_SEAL for credentials.** Immutable in-memory secrets. Defense in depth.
 - **No hot reload.** Simplicity. Single-binary restart is fast.

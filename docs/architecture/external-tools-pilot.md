@@ -3,7 +3,8 @@
 Aphelion now has a generic external-tool lane for agent-owned capabilities. Core
 loads manifest JSON, enforces the governor lifecycle, executes supported
 `process`/`subprocess` tools through the sandbox runner, and keeps browser or
-domain behavior outside core.
+domain behavior outside core. This is not a plugin marketplace or a general
+tool platform; unsupported execution modes remain non-callable.
 
 ## Bundled Pilot
 

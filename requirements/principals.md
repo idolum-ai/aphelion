@@ -1,30 +1,36 @@
-# Principals — DM Admission & Authority
+# Principals — Telegram Admission & Authority
+
+_Current status:_ Telegram admin admission is config-owned. Durable-child
+access remains governed through child policy. Older `v0` labels lower in this
+file are historical staging notes, not current release promises.
 
 ## Overview
 
-For v0, a principal is deliberately simple:
+The principal model is deliberately small:
 
 - one Telegram user
-- talking to the bot in a private chat
+- talking to the bot in an admitted private chat or through a configured
+  durable-child/group route
 - admitted explicitly through config
 - assigned a fixed role at ingress
 
-This spec intentionally avoids a generic identity system, approval workflow, or in-band role mutation. The point of the principal layer in v0 is only to answer:
+This spec intentionally avoids a generic identity system, approval workflow, or
+in-band role mutation. The point of the principal layer is only to answer:
 
-1. is this Telegram DM allowed?
+1. is this Telegram ingress allowed?
 2. if allowed, is the user the configured `admin`?
 
 ## Scope
 
-### v0 required
+### Current required
 
 - Telegram-only principals
-- DM-only admission
+- config-owned Telegram admission
 - config-owned admin principal list
 - explicit ingress role: `admin`
 - unknown users are denied at ingress
 
-### Deferred after v0
+### Deferred or research-only
 
 - pending approval workflows
 - bans/denylist as first-class persisted state
@@ -34,7 +40,7 @@ This spec intentionally avoids a generic identity system, approval workflow, or 
 
 ## Principal Key
 
-The v0 principal key is:
+The Telegram principal key is:
 
 - `transport = "telegram"`
 - `telegram_user_id`
@@ -68,11 +74,11 @@ admin_user_ids = [123456789]
 Rules:
 
 - IDs are Telegram `from.id` values
-- exactly one admin must exist
-- users not present as the admin are denied in admin DM scope
+- at least one admin must exist
+- users not present as admins are denied in admin DM scope
 - non-admin user access is granted per durable agent (allowlist), not through global principal lists
 
-For v0, changing admin admission means editing config and restarting the daemon.
+Changing admin admission means editing config and restarting the daemon.
 Durable-agent user access is changed through durable-agent governance actions.
 
 ## Resolution
@@ -141,6 +147,6 @@ Those can be added later if needed. They are not required for the first correct 
 - **TestResolveTelegramAdminPrincipal**: configured admin `user_id` resolves as `admin`
 - **TestResolveTelegramUnknownPrincipal**: unknown `user_id` resolves to nil
 - **TestConfigRejectsApprovedUserIDs**: `approved_user_ids` config is rejected
-- **TestConfigRejectsMultipleAdmins**: exactly one admin is required
+- **TestConfigRequiresAtLeastOneAdmin**: at least one admin is required
 - **TestIngressRejectsUnknownDMBeforeSessionCreation**: unknown Telegram DM does not create or resume a session
 - **TestIngressRoutesConfiguredPrincipal**: configured Telegram principal is allowed into the DM session path

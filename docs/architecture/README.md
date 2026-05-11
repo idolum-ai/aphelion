@@ -36,7 +36,7 @@ These invariants are normative for architecture and requirements alignment:
 - [design-principles.md](design-principles.md): project-level design principles for Aphelion as a minimal governed outpost.
 - [influences-and-departures.md](influences-and-departures.md): attribution ledger for nearby systems, theory, and the points where Aphelion deliberately diverges.
 - [principle-debt.md](principle-debt.md): named implementation gaps against the design principles, with exit gates.
-- [done-done-roadmap.md](done-done-roadmap.md): normative convergence plan for finishing requirements, roadmaps, release discipline, and validation without adding operator surfaces beyond Telegram and CLI.
+- [done-done-roadmap.md](done-done-roadmap.md): narrow normative release-quality target for truthful docs/status, authority consistency, sandbox honesty, bounded tools, and validation without adding operator surfaces beyond Telegram and CLI.
 - [package-ownership.md](package-ownership.md): runtime/turn/pipeline ownership boundaries.
 - [turn-lifecycle.md](turn-lifecycle.md): stage order across interactive, maintenance, and durable-child turns.
 - [action-proposal-continuation-lease.md](action-proposal-continuation-lease.md): typed bounded action proposals and consumable continuation leases.
@@ -52,16 +52,18 @@ These invariants are normative for architecture and requirements alignment:
 - [migration-appendix.md](migration-appendix.md): refactor closeout and present-vs-intended reference.
 - [diagrams/README.md](diagrams/README.md): canonical diagram assets.
 
-## Draft Roadmaps (Non-Normative)
+## Research Notes (Non-Normative)
 
-- [canonical-state-and-autonomy-roadmap.md](canonical-state-and-autonomy-roadmap.md): draft convergence map for canonical truth surfaces and safer autonomy.
-- [mission-ledger-roadmap.md](mission-ledger-roadmap.md): draft plan for durable missions, self-summon as review, and bounded self-continuation without hidden authority.
-- [organic-agent-owned-tools-proposal.md](organic-agent-owned-tools-proposal.md): draft proposal for moving from core-embedded domain tools toward agent-owned external tools with governed install and attestation.
-- [tailscale-agent-substrate-project.md](tailscale-agent-substrate-project.md): draft project plan for making Tailscale/tsnet a first-class private network substrate for Aphelion and durable children.
-- [agent-authority-ledger.md](agent-authority-ledger.md): draft architecture spec for typed proposals, leases, consent subjects, authority budgets, and evidence-backed operational authority.
+- [canonical-state-and-autonomy-roadmap.md](canonical-state-and-autonomy-roadmap.md): research map for canonical truth surfaces and safer autonomy.
+- [mission-ledger-roadmap.md](mission-ledger-roadmap.md): research note for durable missions, self-summon as review, and possible bounded continuation; autonomous continuation is not a current release target.
+- [organic-agent-owned-tools-proposal.md](organic-agent-owned-tools-proposal.md): research note for moving domain tools out of core; current executable support stays limited to verified process/subprocess manifests.
+- [tailscale-agent-substrate-project.md](tailscale-agent-substrate-project.md): research note for private-network substrate ideas; live `tsnet` child materialization and live Tailscale policy mutation are not current release targets.
+- [agent-authority-ledger.md](agent-authority-ledger.md): research spec for a fuller authority ledger; current release work is limited to consistency and projection over existing typed records.
 
-Treat this section as design-direction input. It is not a normative implementation
-contract until explicitly promoted into the normative map above.
+Treat this section as design-direction input. It is not a normative
+implementation contract until explicitly promoted into the normative map above,
+`docs/promises.md`, and runtime tests. Research notes must not be read as
+accepted release commitments.
 
 ## Canonical Diagrams
 

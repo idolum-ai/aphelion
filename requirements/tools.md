@@ -13,17 +13,23 @@ Aphelion treats tools as a **system surface**, not just an LLM convenience:
 
 The same is true for tool self-awareness: the model should be told its actual tool surface by machine-generated manifest, not by inference or stale prose. See `self-awareness.md`.
 
-This spec is **staged**.
+Current implemented tool surface:
 
-- **v0**: one real tool, `exec`, for the admin DM only
-- **v0.5**: role-aware tools and sandboxed non-admin execution
-- **later**: broader toolset (`read_file`, `write_file`, web/media helpers, OpenAI-backed storage/media helpers, sub-agents)
+- admin `exec`
+- scoped native file/search/fetch tools
+- curated memory and session recall
+- optional OpenAI storage/vector tools
+- role-aware sandbox policy for non-admin and durable execution
+- narrow external `process`/`subprocess` manifests behind install/audit/probe,
+  grant, drift, and rollback checks
 
 The security floor matters here:
 
-- v0 `exec` is a trusted-admin tool
-- it is not a real sandbox
-- `approved_user` tool execution should remain off until the v0.5 isolation floor is actually enforced
+- admin `exec` is a trusted-admin tool
+- non-admin and durable tool execution must use configured scoped roots and
+  sandbox readiness checks
+- unsupported sandbox/network policy must fail closed or be reported before
+  execution, not silently ignored
 
 Semantic retrieval belongs in the later tool surface, not in ambient prompt assembly. It should be reachable deliberately by the governor as a retrieval tool, not silently injected.
 
@@ -346,11 +352,11 @@ The current repo has a smaller interface. This spec describes the target shape.
 
 An eventual implementation may also pass explicit `RunKind` and `SessionKind` fields rather than inferring them indirectly.
 
-## v0 Tool Surface
+## Core Tool Surface
 
 ### `exec`
 
-`exec` is the only required v0 tool.
+`exec` is the trusted-admin shell tool.
 
 Input:
 
@@ -370,9 +376,12 @@ Behavior:
 - truncates output to a configured byte budget
 - returns non-zero exit as a tool error with captured output
 
-For v0, `exec` may target the configured admin workspace and remain simpler than the target sandbox architecture, but the interface and audit shape should leave room for role-aware sandboxing.
+For admin use, `exec` may target the configured admin workspace. Non-admin and
+durable execution must go through scoped roots and sandbox readiness checks.
 
-For clarity: v0 `exec` is not sufficient for non-admin use. Restricting `workdir` is useful, but it does not stop a process from referencing other host paths or using host networking.
+For clarity: root restriction alone is not sufficient for non-admin use. A
+process can still reference other host paths or host networking unless the
+sandbox layer enforces the configured profile.
 
 ### `exec` confirmation policy
 
@@ -392,7 +401,7 @@ Hermes-style global command approval patterns are a useful reference, but Apheli
 - approval is about risky execution inside current authority
 - out-of-authority actions belong to denial or escalation, not same-user approval
 
-## v0.5 Role-Aware Execution
+## Role-Aware Execution
 
 ### Admin
 
@@ -496,7 +505,7 @@ No tool may operate on an unresolved host path directly.
 
 The sandbox profile belongs to the execution layer, not the tool definition itself.
 
-Required controls for non-admin execution in v0.5:
+Required controls for non-admin execution:
 
 - user namespace support when enabled
 - dropped Linux capabilities
@@ -567,7 +576,8 @@ External tools are authority-managed runtime tools:
 
 The generic executor supports `process` and `subprocess` manifests through the
 sandbox runner. `container` and `workspace_runner` manifests are importable and
-diagnosable but are not process-executable until dedicated runtimes exist.
+diagnosable but are not process-executable until dedicated runtimes exist. They
+are not part of the current done-done release target.
 
 The bundled `browse_page` pilot lives under `external-tools/browse_page/`. It is
 owned by `child-alpha`; invocation must be granted through

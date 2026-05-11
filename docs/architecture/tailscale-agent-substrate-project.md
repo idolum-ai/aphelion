@@ -1,6 +1,13 @@
 # Tailscale Agent Substrate Project
 
-_Status: draft project plan._
+_Status: non-normative research note._
+
+Current shipped target: durable-child tailnet declarations, local surface
+registry rows, grant-binding projection, drift evidence, rollback evidence, and
+Telegram/CLI/status/doctor projections. Not current target: live child `tsnet`
+materialization, live Tailscale ACL/grant mutation, public Serve/Funnel
+exposure, parent-to-child private RPC, or a Tailnet operator UI. Aphelion stops
+short because private reachability is useful evidence, but it is not authority.
 
 This document describes what it would mean for Tailscale, especially `tsnet`,
 to become a first-class Aphelion substrate.
@@ -62,7 +69,7 @@ network layer.
 - Do not let durable children self-provision network surfaces without parent
   approval.
 
-## Product Definition
+## Research Product Definition
 
 First-class Tailscale support means Aphelion can answer and act on these
 questions:
@@ -107,7 +114,7 @@ Implemented:
 - Telegram `/tailnet grants`, `/status`, `/doctor`, and Tailnet-private
   `/tailnet/grants` JSON projection of binding status and drift.
 
-Not implemented yet:
+Research-only / not current target:
 
 - starting a child `tsnet` node.
 - installing anything onto a remote child host.
@@ -117,9 +124,10 @@ Not implemented yet:
 - public Serve/Funnel exposure.
 - parent-to-child private RPC.
 
-This gives Aphelion a safe intent and evidence layer: the system can say "this
-child should have a private tailnet body" and "this approved grant should map
-to this private-network policy" before it actually creates live Tailscale state.
+The current release target stops at the safe intent and evidence layer: the
+system can say "this child should have a private tailnet body" and "this
+approved grant should map to this private-network policy" without creating live
+Tailscale state.
 
 ## User Flow
 
@@ -150,7 +158,7 @@ to this private-network policy" before it actually creates live Tailscale state.
 7. If the surface is revoked, registry reconciliation preserves the revocation
    instead of silently redeclaring it active.
 
-### Future live child materialization flow
+### Research-only live child materialization flow
 
 1. Admin asks to materialize a declared child.
 2. Aphelion proposes:

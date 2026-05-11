@@ -1,5 +1,10 @@
 # Media — Uploads, Downloads, and Transcription
 
+_Current status:_ Telegram media normalization, deterministic download policy,
+principal-aware storage, transcription surfaces, and retention
+policy are live. Older `v0`/`v0.5` labels lower in this file are historical
+staging notes, not current release promises.
+
 ## Overview
 
 This spec covers media handling across channels plus platform services used to process media.
@@ -20,17 +25,14 @@ Media services are also separate from the face layer. The governor may invoke tr
 
 ## Scope
 
-### v0 required
+Current support:
 
 - Telegram media normalization
 - deterministic download for artifact kinds that require bytes for same-turn handling
-
-### v0.5
-
 - media routed into isolated/non-isolated workspaces according to principal role
 - admin and non-admin media processing obey the same isolation rules as text/tool sessions
 
-### Deferred after v0.5
+Deferred:
 
 - OpenAI translation path
 - diarization-aware transcription
@@ -43,7 +45,7 @@ Media services are also separate from the face layer. The governor may invoke tr
 3. store transient local copies in the session's allowed writable root
 4. hand media off to the appropriate processor
 
-In v0, that means:
+Current policy:
 
 - images, PDFs, text-like documents, and audio may download bytes during transport normalization
 - ambiguous Telegram audio/video can be button-routed before the turn; timeout defaults to agent-decide

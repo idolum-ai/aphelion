@@ -40,12 +40,12 @@ Current command surface:
   - Lets the user set an active memory focus from a candidate item (`Focus 1/2/3`).
   - Active focus is injected as bounded turn context on subsequent non-command chat messages until cleared.
 - `/tailnet`
-  - Admin-only Tailnet status and private-surface controls.
-  - Shows node readiness, registered surfaces, grant bindings, issue evidence, and revoke confirmation.
+  - Admin-only Tailnet declaration, private-surface, grant-binding, drift, and rollback evidence.
+  - Shows local registry readiness and issue evidence; live child `tsnet` materialization and live Tailscale policy mutation are not current operator actions.
 - `/mission`
   - Shows the current working objective and the caller-owned Mission Ledger entries.
   - Supports manual `list`, `show`, `create`, `pin`, `unpin`, `activate`, `pause`, `block`, `complete`, `archive`, `summon`, and admin `health` actions.
-  - Self-summon is review-only; Mission Ledger state does not grant self-continuation or new capabilities.
+  - Self-summon is review-only; Mission Ledger state does not grant self-continuation, autonomous continuation, new capabilities, or external authority.
 - `/autonomy`
   - Admin-only policy report and live override control.
   - Shows the configured default mode, ceiling, live-override setting, maximum override duration, and active override state.
@@ -138,7 +138,8 @@ Durables status (`Durables` button, admin-only):
   - policy posture (`policy_version`, `policy_hash`, `outbound`, `drift`, `capabilities`)
   - delegation posture (`capability_request` and `capability_grant` status when delegated permissions are active)
   - runtime pulse (`last_wake`, `last_review`, `dormant_at`, apply status/error)
-  - remote enrollment pulse (`enrollment status`, `last_seen`, `last_seq`, revocation state)
+  - remote/status-adapter pulse when present (`last_seen`, status, error evidence);
+    enrollment/control-plane authority is not a current operator surface
 
 ### `/debug` content signals
 

@@ -96,7 +96,7 @@ request/review/grant lane.
 
 ## Generic ActionProposal UI v1
 
-The first generic UI surface is Mission Control backed:
+The first generic UI surface is mission-review backed:
 
 - `/mission propose <mission_id>` renders an `ActionProposal` with Telegram
   `Deny`, `Ask edit`, and `Approve` buttons.
@@ -113,9 +113,9 @@ keeping actual execution authority in later, bounded ActionProposal or
 ContinuationLease requests.
 
 
-## Mission Control Proposal Card
+## Mission Review Proposal Card
 
-Mission Control proposal cards are pre-ActionProposal intake gates. They let the
+Mission proposal cards are pre-ActionProposal intake gates. They let the
 system suggest a candidate mission with inline buttons before the mission exists
 in the ledger.
 

@@ -37,7 +37,10 @@ Code anchors:
 - Child work does not directly mutate parent prompt/memory surfaces.
 - Durable child runtime reuses `turn` orchestration where lifecycle aligns.
 - Child bootstraps must not carry parent Telegram polling credentials or parent principal IDs.
-- Parent-child coordination uses bounded runtime channels (local bootstrap/stdout and remote control-plane HTTP), not child Telegram polling.
+- Parent-child coordination uses bounded runtime channels such as local
+  bootstrap/stdout. Remote control-plane HTTP remains research-only until a
+  concrete governed workflow requires it; child Telegram polling is not a
+  parent-control path.
 - Parent Aphelion must not accumulate child feature workarounds such as channel-, browser-, or site-specific readiness logic. Channel-specific probes and repairs belong in the child runtime environment or in pluggable adapters proposed through governance.
 - Adapter operations are governed commands, not ambient prompt authority. Parent runtime may schedule or manually trigger a command such as a read-only status heartbeat only when the durable child policy and grants allow it; prompts are payloads inside those commands and do not widen authority.
 - Durable children ask upward through parent conversation, review artifacts, and capability/delegation proposals when they need system changes. The parent can grant or materialize generic capabilities, but should not become specialized application code for one child.

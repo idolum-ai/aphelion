@@ -2,10 +2,17 @@
 
 ## Overview
 
-Aphelion needs a first-class model for **durable external-channel agents**.
+This document records the durable-agent design boundary. The current shipped
+target is bounded local/scheduled/channel-facing durable children with
+child-local state, scoped credentials, upward review, and parent-visible health.
+Remote child control planes, public website agents, fleet management, and
+marketplace-style durable-agent deployment are not current done-done targets.
 
-This is a forward-looking architecture spec for the next major tranche after the current DM-only principal floor.
-It does not retroactively widen the existing `v0` admission or security claims.
+Aphelion needs a first-class model for **durable external-channel agents** only
+where a concrete governed outpost workflow requires one.
+
+This remains partly forward-looking and does not retroactively widen current
+admission or security claims.
 
 These agents are not ordinary task subagents.
 They are persistent subordinate organs attached to the house through an external ingress surface such as:
@@ -49,9 +56,9 @@ They are sensory organs with local processing, not new sovereign selves.
 
 This spec defines the next durable-agent tranche, not the current platform floor.
 
-The current floor remains:
+The minimum security floor remains:
 
-- DM-only Telegram principals
+- config-admitted Telegram principals
 - trusted-admin-first execution
 - no broad public or semi-public ingress claims by default
 

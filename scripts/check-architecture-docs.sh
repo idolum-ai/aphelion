@@ -85,6 +85,27 @@ if ! rg -q "Native constrained file tools and web fetch \\| implemented" docs/pr
   exit 1
 fi
 
+if rg -q "^\\|.*\\| partial \\|" docs/promises.md; then
+  echo "promise ledger must not leave broad partial public promises in the narrowed release target" >&2
+  rg -n "^\\|.*\\| partial \\|" docs/promises.md >&2
+  exit 1
+fi
+
+required_promise_rows=(
+  "External tools: process/subprocess only | implemented"
+  "Tailnet declarations and grant-binding projection | implemented"
+  "Mission review without autonomous continuation | implemented"
+  "Authority/status/doctor consistency | planned"
+  "Done-done release criteria | planned"
+)
+
+for row in "${required_promise_rows[@]}"; do
+  if ! rg -qF "$row" docs/promises.md; then
+    echo "promise ledger missing narrowed status row: $row" >&2
+    exit 1
+  fi
+done
+
 if ! rg -qF "Operator and user surfaces are limited to:" docs/architecture/done-done-roadmap.md ||
   ! rg -qF "Telegram" docs/architecture/done-done-roadmap.md ||
   ! rg -qF "CLI commands" docs/architecture/done-done-roadmap.md; then
@@ -99,6 +120,53 @@ fi
 
 if ! rg -qF "Future channels such as WhatsApp should be ordinary compiled-in code changes" docs/architecture/done-done-roadmap.md; then
   echo "done-done roadmap must preserve future channel extensibility without plugins" >&2
+  exit 1
+fi
+
+if ! rg -qF "Not Current Targets" docs/architecture/done-done-roadmap.md ||
+  ! rg -qF "broad Mission Control" docs/architecture/done-done-roadmap.md ||
+  ! rg -qF "live Tailnet child" docs/architecture/done-done-roadmap.md ||
+  ! rg -qF "generic external-tool platforms" docs/architecture/done-done-roadmap.md; then
+  echo "done-done roadmap must explicitly remove oversized research tracks from the current release target" >&2
+  exit 1
+fi
+
+if rg -n "durable-child signed envelope|replay rejection|Tailnet mutation approval|bounded self-continuation|generic execution" docs/architecture/done-done-roadmap.md >/dev/null; then
+  echo "done-done roadmap still contains maximal-roadmap release requirements" >&2
+  rg -n "durable-child signed envelope|replay rejection|Tailnet mutation approval|bounded self-continuation|generic execution" docs/architecture/done-done-roadmap.md >&2
+  exit 1
+fi
+
+research_docs=(
+  "docs/architecture/canonical-state-and-autonomy-roadmap.md"
+  "docs/architecture/mission-ledger-roadmap.md"
+  "docs/architecture/organic-agent-owned-tools-proposal.md"
+  "docs/architecture/tailscale-agent-substrate-project.md"
+  "docs/architecture/agent-authority-ledger.md"
+)
+
+for file in "${research_docs[@]}"; do
+  if ! rg -qF "_Status: non-normative research" "$file"; then
+    echo "research roadmap must be marked non-normative: $file" >&2
+    exit 1
+  fi
+done
+
+if ! rg -qF "not part of the current done-done release target" docs/architecture/mission-ledger-roadmap.md; then
+  echo "mission roadmap must mark self-continuation outside the current target" >&2
+  exit 1
+fi
+
+if ! rg -qF 'live child `tsnet`' docs/architecture/tailscale-agent-substrate-project.md ||
+  ! rg -qF "materialization" docs/architecture/tailscale-agent-substrate-project.md ||
+  ! rg -qF "not current target" docs/architecture/tailscale-agent-substrate-project.md; then
+  echo "tailnet roadmap must mark live materialization/mutation outside the current target" >&2
+  exit 1
+fi
+
+if ! rg -qF '`process`/`subprocess` execution' docs/architecture/organic-agent-owned-tools-proposal.md ||
+  ! rg -qF "The current release target does not include container or" docs/architecture/organic-agent-owned-tools-proposal.md; then
+  echo "external tools research note must keep executable support narrowed" >&2
   exit 1
 fi
 

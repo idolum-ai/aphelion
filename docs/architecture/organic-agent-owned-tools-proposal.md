@@ -1,9 +1,17 @@
 # Organic Agent-Owned Tools Proposal
 
-_Status: draft design memo._
+_Status: non-normative research note._
 
-This document captures the next architectural move after the current
-`tool_authority` rollout.
+Current shipped target: external tool manifests may be installed, audited,
+probed, verified, registered, granted, invoked, marked stale, rolled back, and
+uninstalled when they use supported `process`/`subprocess` execution. Not
+current target: a generic agent-owned tool platform, plugin marketplace,
+container execution, workspace-runner execution, or domain-tool ecosystem.
+Aphelion stops short because tools should stay boring, granted, sandboxed, and
+operator-legible until a concrete governed workflow requires more.
+
+This document captures research context after the current `tool_authority`
+rollout.
 
 The immediate lesson from the current branch is that the lifecycle work is
 useful, but the implementation is still too core-centric. Aphelion now has a
@@ -20,12 +28,13 @@ real authority chain for tools:
 
 That chain is worth keeping.
 
-What should change is **where tool implementation lives**.
+The research question is **where tool implementation should live**.
 
 The goal is not to turn Aphelion into a growing library of domain tools.
-The goal is to let approved agents request, provision, attest, register, grant,
-and use **their own tools** while Aphelion remains the governance, diagnostics,
-and continuity substrate.
+The possible longer-term goal is to let approved agents request, provision,
+attest, register, grant, and use **their own tools** while Aphelion remains the
+governance, diagnostics, and continuity substrate. That is not the current
+done-done release target.
 
 ## Directional Thesis
 
@@ -64,7 +73,8 @@ Aphelion should continue to own:
 
 ### Move out of Aphelion core
 
-Domain implementation should move to agent-owned tools.
+If this research direction is pursued, domain implementation should move to
+agent-owned tools instead of expanding core.
 
 Examples:
 
@@ -73,7 +83,8 @@ Examples:
 - channel-specific extractors
 - small environment-specific watchers
 
-These should not require a new specialized core feature every time.
+These should not require a new specialized core feature every time, but they
+also should not become a live marketplace or generic plugin substrate.
 
 ## Current Pressure Points
 
@@ -86,8 +97,10 @@ tools instead of a general authority layer.
 ### 2. Registration is still runtime-definition-centric
 
 `tool/tool_authority.go` currently assumes trusted runtime tool definitions that
-live inside the repo. The next step is to allow registration of approved
-external tool packages / containers / manifests with attestation metadata.
+live inside the repo. The research direction is to allow registration of
+approved external tool packages, containers, or manifests with attestation
+metadata. The current release target does not include container or
+workspace-runner execution.
 
 ### 3. Dependency installation is not yet first-class
 
@@ -115,7 +128,7 @@ Examples of desired diagnostic states:
 - granted-but-probe-failing
 - contract-diverges-from-behavior
 
-## Proposed External Tool Model
+## Research External Tool Model
 
 The core abstraction should be a **registered external tool manifest**, not a
 new built-in tool for every domain.
@@ -305,7 +318,10 @@ The first external-tool lane is implemented for process-style tools:
 - `external-tools/browse_page/` is the first pilot manifest, owned by
   `child-alpha`, with a deterministic fixture implementation outside core
 
-## Concrete Migration Plan
+## Research Migration Sketch
+
+This sketch is retained for future evaluation. The current done-done target has
+already stopped at the narrow verified `process`/`subprocess` path.
 
 ### Phase 1 — stabilize current authority substrate
 
@@ -313,7 +329,7 @@ Keep the current `tool_authority` lifecycle and status projections.
 Keep domain behavior outside core unless it is genuinely native system
 infrastructure.
 
-### Phase 2 — add external-tool manifest registration
+### Phase 2 — research external-tool manifest registration
 
 Extend registration so a tool may be registered from an attested external
 manifest / package / container reference.
@@ -339,9 +355,10 @@ Minimum records:
 - attestation record
 - rollback / repair recommendation
 
-### Phase 4 — generic external tool executor
+### Phase 4 — research generic external tool executor
 
-Add one generic execution path in Aphelion for approved external tools.
+If a concrete governed workflow justifies it, add one generic execution path in
+Aphelion for approved external tools beyond the current process/subprocess path.
 
 It should be:
 

@@ -10,9 +10,9 @@ License: Apache-2.0.
 - **Outpost, not platform.** Aphelion is designed to stay small, durable, and useful at distance.
 - **Radio link, not omnichannel.** Telegram is the primary control link, not one adapter among dozens.
 - **Linux only.** No macOS/Windows compat. Single target, no conditionals.
-- **Anonymizable by design.** Provider-visible identity should be configurable or absent; current gaps are tracked in [docs/promises.md](docs/promises.md).
+- **Anonymizable by design.** Provider-visible identity is configurable or absent by default where the runtime can control it.
 - **Go.** Single Linux binary, with a static release target separate from the normal developer build. Goroutines for concurrency. Deploy = `scp` or the bundled service scripts.
-- **Anthropic-first caching.** Structured cache breakpoints exist; config-backed cache TTL policy is tracked in [docs/promises.md](docs/promises.md).
+- **Anthropic-first caching.** Structured cache breakpoints exist and cache-aware prompt shaping preserves authority/runtime blocks.
 - **File-based memory.** Workspace files are the source of truth. Vector search optional.
 - **Authority before capability.** The system should know what it is allowed to do before it tries to become more capable.
 
@@ -114,9 +114,9 @@ Execution transparency:
 
 ## Status
 
-Runnable v0:
+Current runnable build:
 
-- Telegram DM-only polling
+- Telegram polling for admitted DMs and configured durable groups
 - Anthropic inference
 - SQLite session persistence
 - Shell execution tool (`exec`)
@@ -132,7 +132,11 @@ Runnable v0:
 - Telegram slash commands: `/start`, `/help`, `/status`, `/debug`, `/doctor`, `/agents`, `/memory`, `/mission`, `/model`, `/autonomy`, `/autoapprove`, `/stop`, `/new`, `/detach`, `/restart`, `/reinstall`, `/set_persona_model`, `/set_governor_effort`
 
 Current promise gaps and accepted implementation targets are tracked in
-[docs/promises.md](docs/promises.md).
+[docs/promises.md](docs/promises.md). The current done-done target is
+intentionally narrow: truthful public claims, authority/status consistency,
+sandbox/network honesty, bounded external tools, and reproducible release
+checks. Broad mission autonomy, live Tailnet mutation, generic tool substrates,
+and dashboard/marketplace growth are not current release targets.
 
 ## Run
 

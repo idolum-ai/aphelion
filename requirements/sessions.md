@@ -1,5 +1,10 @@
 # Sessions — Conversation State, Admission, Isolation & Review Flow
 
+_Current status:_ the current scope is admitted Telegram DMs, configured
+durable-child/group sessions, SQLite session state, TES retention, review
+digests, and isolation-aware prompt assembly. Older `v0`/`v0.5` labels lower in
+this file are historical design staging notes, not current release promises.
+
 ## Overview
 
 A session is the durable conversation ledger for one agent conversation. It stores message history, token/accounting metadata, compaction markers, and enough information to continue the conversation on the next turn.
@@ -79,10 +84,10 @@ TES retention invariants:
 
 ## Scope
 
-### v0 required
+### Current required
 
-- DM-only sessions
-- Explicit principal resolution before a DM can create or resume a session
+- admitted Telegram DM sessions and configured durable-child/group sessions
+- explicit principal resolution before a chat can create or resume a session
 - At least one admin principal
 - SQLite-backed append-only message history
 - Per-turn load, run, and save
@@ -90,7 +95,7 @@ TES retention invariants:
 - Session expiry support
 - Prompt assembly from workspace files plus persisted active history
 
-### v0.5: approved multi-user DMs
+### Approved multi-user DMs
 
 - `admin` and `approved_user` principal roles
 - Hard isolation for non-admin writable state
@@ -98,11 +103,8 @@ TES retention invariants:
 - Automatic bounded digests forwarded from non-admin sessions into the admin DM
 - The admin DM acts as the review UI; no separate dashboard is required
 
-### Deferred after v0.5
+### Research or deferred
 
-- Group sessions
-- Shared vs per-user group scope
-- Mention/reply gating in groups
 - In-memory pruning policies
 - Automatic compaction triggers and summary generation
 - Cache-aware prompt fingerprinting and exact-byte prompt reuse
@@ -112,11 +114,12 @@ TES retention invariants:
 
 ### Principal model
 
-For v0, the principal is the Telegram user reached through a private chat and resolved by Telegram `from.id`.
+For Telegram DM ingress, the principal is the Telegram user resolved by
+Telegram `from.id`.
 
 Principal policy is config-owned and defined in `principals.md`.
 
-Unknown users are denied at ingress. There is no pending workflow in v0.
+Unknown users are denied at ingress. There is no pending admission workflow.
 
 ### Authority roles
 
@@ -770,7 +773,7 @@ idle_expiry = "24h"
 
 [principals.telegram]
 admin_user_ids = [123456789]
-# exactly one admin user is supported
+# at least one admin user is required
 ```
 
 ### v0.5

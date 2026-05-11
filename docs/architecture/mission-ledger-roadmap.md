@@ -1,6 +1,12 @@
 # Mission Ledger Roadmap
 
-_Status: draft design memo._
+_Status: non-normative research note._
+
+Current shipped target: mission and working-objective surfaces may preserve
+review material and help Aphelion remember why something matters. Not current
+target: broad Mission Control, autonomous mission self-continuation, or mission
+state that grants authority. Aphelion stops short because missions may shape
+attention, but only typed leases, grants, and approvals may authorize action.
 
 This document turns the conversational design principle **ledger, not hunger**
 into an implementation plan for Aphelion.
@@ -20,8 +26,9 @@ Corollaries:
 - Automatic working objectives are allowed for current-task clarity.
 - Durable missions require explicit creation, promotion, or ratification.
 - Self-summon means "this is relevant enough to review," not "I may act now."
-- Self-continuation is a separate authority grant with budget, scope, cadence,
-  and evidence requirements.
+- Self-continuation is research-only for the current release target; if it is
+  reconsidered later, it must be a separate authority grant with budget, scope,
+  cadence, and evidence requirements.
 - Mission state must be visible to `/doctor`, recovery, and review surfaces.
 - No mission may bypass proposal, capability, child-agent, file/network, account,
   local-device, purchase, or public-surface gates.
@@ -571,9 +578,10 @@ Language rule:
 - Say: "This mission is relevant again."
 - Do not say: "I need to work on this."
 
-## Self-Continuation
+## Deferred Self-Continuation Research
 
-Self-continuation comes after self-summon and must reuse existing continuation
+Self-continuation is not part of the current done-done release target. If it is
+reopened later, it must come after self-summon and reuse existing continuation
 machinery.
 
 Flow:
@@ -642,8 +650,9 @@ type MissionResult struct {
 Recovery should prefer `MissionResult`, then TES, then handoff expectations, and
 only then compatibility fallback. If evidence is missing, recovery says unknown.
 
-This is required before broad self-continuation. Otherwise the system can appear
-to remember outcomes that it only inferred from interrupted chat.
+This would be required before any future self-continuation. Otherwise the
+system can appear to remember outcomes that it only inferred from interrupted
+chat.
 
 Current implementation status:
 
@@ -677,7 +686,7 @@ capability request. Mission state can motivate the request; it cannot replace it
 
 ## `/doctor` Integration
 
-`/doctor` should report mission ledger health:
+In the research version, `/doctor` would report mission ledger health:
 
 ```text
 Mission ledger:
@@ -700,7 +709,10 @@ Risk checks:
 - restart-prone mission without handoff/result artifacts
 - projection claiming completion without evidence refs
 
-## Implementation Sequence
+## Research Sequence (Not Current Release)
+
+This sequence is retained as research context. It is not the current done-done
+implementation plan.
 
 ### PR 1 — Mission Ledger Foundation
 
@@ -760,7 +772,7 @@ No self-summon. No continuation. No autonomy.
   inference.
 - Block broad self-continuation until this is reliable.
 
-### PR 7 — Bounded Self-Continuation
+### PR 7 — Deferred Bounded Self-Continuation Research
 
 - Enable exactly one pilot recurring mission first, likely a nightly reflection.
 - Require explicit authority contract, active grants, budget, cadence, and

@@ -1,8 +1,12 @@
 # Telegram — Bot API Integration
 
+_Current status:_ Telegram is the primary radio link and the only current
+operator channel. Future channels must be compiled-in transport boundaries, not
+plugins or an omnichannel product surface.
+
 ## Overview
 
-Telegram is the sole channel for Aphelion. The telegram package handles long-polling for updates, normalizing them into `InboundMessage`, sending responses as `OutboundMessage`, and all Telegram-specific formatting.
+Telegram is the primary channel for Aphelion. The telegram package handles long-polling for updates, normalizing them into `InboundMessage`, sending responses as `OutboundMessage`, and all Telegram-specific formatting.
 
 We talk to the Telegram Bot API directly via HTTP. No SDK, no library.
 
@@ -141,10 +145,10 @@ At minimum, the transport should normalize:
 
 Normalization and capability rules:
 
-- major inbound attachment classes always normalize into artifacts in v0
+- major inbound attachment classes normalize into artifacts
 - deep handling is governed by the artifact capability envelope, not just by Telegram type
 - images, PDFs, text-like documents, and audio may download bytes for deterministic handling
-- videos, animated stickers, and structured Telegram objects may remain metadata-first in v0
+- videos, animated stickers, and structured Telegram objects may remain metadata-first
 
 Telegram file downloads still use the Bot API two-step flow:
 
@@ -166,7 +170,7 @@ Outbound delivery must treat Telegram's message size limit as a first-class cons
 
 Ordinary assistant replies may include native Telegram media delivery.
 
-The current v0.5 path is:
+The current path is:
 
 1. governor produces ordinary reply text
 2. runtime strips material outbound directives from that text
@@ -524,14 +528,15 @@ must be distinguishable operationally.
 
 ## DM Admission
 
-Telegram is the ingress path for all v0 conversations, so admission starts here.
+Telegram is the primary ingress path, so admission starts here.
 
 For private chats:
 
 - if the sender resolves to a configured principal, route the message into the DM session
 - if the sender does not resolve to a configured principal, do not create a session and optionally send a fixed denial response
 
-In v0, admission is config-owned. The Telegram layer should treat it as explicit principal policy, not as “all private chats are valid.”
+Admission is config-owned. The Telegram layer should treat it as explicit
+principal policy, not as "all private chats are valid."
 
 ```go
 type DMDecision struct {

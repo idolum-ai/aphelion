@@ -24,31 +24,23 @@ The governor contract is defined separately in `governor.md`. Native inference p
 
 ## Scope
 
-### v0 required
+Current provider support includes:
 
-- one working inference adapter
-- non-streaming completion
+- Anthropic, OpenAI, OpenRouter, Gemini, and Ollama adapters
+- structured request/response objects
+- streaming where the provider supports it
 - tool call round-tripping
 - provider-reported token usage
 - retry classification for transient provider failures
+- runtime-level failover chains
+- Anthropic cache breakpoints and cache-aware prompt shaping
 
-### v0.5
-
-- structured inference request/response objects
-- optional streaming
-- second inference provider
-- runtime-level failover chain
-
-### Deferred after v0.5
-
-- provider-specific caching optimizations
-- provider-specific thinking/reasoning controls
-- OpenRouter quirks
-- exact prompt-prefix reuse and cache-aware heuristics
+Deferred work is limited to provider-specific live probes or optimizations that
+an operator workflow actually needs.
 
 ## Inference Provider Interface
 
-### v0 minimal contract
+### Historical minimal contract
 
 ```go
 type Provider interface {
@@ -58,7 +50,7 @@ type Provider interface {
 
 This is enough for a runnable first system.
 
-### v0.5 target contract
+### Current structured contract
 
 ```go
 type InferenceProvider interface {
@@ -105,18 +97,18 @@ The important split is:
 
 ### Anthropic
 
-Anthropic is the first-class v0 inference backend.
+Anthropic is the first-class inference backend.
 
 Responsibilities:
 
 - Messages API request/response translation
 - tool-use and tool-result mapping
 - usage extraction
-- streaming support later via SSE
+- streaming support via SSE
 
 ### OpenAI (inference only)
 
-OpenAI should be supported as an inference backend, but only its **chat/reasoning inference** lives in this spec.
+OpenAI is supported as an inference backend, but only its **chat/reasoning inference** lives in this spec.
 
 OpenAI file storage, vector stores, and transcription are deliberately handled elsewhere:
 
@@ -135,20 +127,7 @@ Gemini belongs here only as an inference backend.
 
 Ollama belongs here only as a local inference backend.
 
-## Staging Per Provider
-
-### v0
-
-- Anthropic only
-
-### v0.5
-
-- Anthropic
-- OpenRouter
-- OpenAI inference
-- narrow multimodal native requests for supported image turns
-
-### Current native set
+## Current Native Set
 
 - Anthropic
 - OpenAI inference
@@ -160,9 +139,10 @@ The adapter boundary must stay small: request mapping, response mapping, streami
 
 ## Streaming
 
-Streaming is deferred after the first working inference path.
+Streaming is part of the current provider contract where the backend supports
+it.
 
-When implemented:
+Implementation notes:
 
 - Anthropic and OpenAI use SSE
 - Ollama uses newline-delimited JSON
@@ -173,7 +153,7 @@ When implemented:
 
 ### Retries
 
-Transient retry handling should exist even in v0:
+Transient retry handling is part of the current provider contract:
 
 - retry on `429`, `500`, `502`, `503`
 - exponential backoff
@@ -237,16 +217,17 @@ So the split is:
 - provider adapter: supports provider-native cache fields if the runtime asks for them
 - runtime/system-prompt/session layers: decide when and where cache boundaries belong
 
-### v0
-
-- no explicit provider cache-control support required
-
-### Deferred after v0
+Current cache support:
 
 - Anthropic explicit cache controls
-- OpenAI cached-token accounting
-- OpenRouter TTL quirks
 - cache-aware pruning and lookback safety
+
+Deferred cache work:
+
+- provider-specific live probes and optimizations when an operator workflow
+  needs them
+- OpenAI cached-token accounting if it becomes useful for status/cost surfaces
+- OpenRouter TTL quirks if they materially affect prompt assembly
 
 ## Token Counting
 
@@ -263,7 +244,7 @@ Strategy:
 
 ## Tests
 
-### v0
+### Core
 
 - **TestAnthropicComplete**: valid Anthropic response maps into internal response
 - **TestAnthropicToolCall**: tool-use content maps into internal tool calls
@@ -271,7 +252,7 @@ Strategy:
 - **TestProviderRetryTransient**: transient provider failures retry with backoff
 - **TestProviderNoRetryOnClientError**: deterministic client errors return immediately
 
-### v0.5
+### Multi-provider
 
 - **TestProviderRequestMapping**: structured inference request maps correctly into provider payloads
 - **TestAnthropicStream**: SSE stream maps into ordered `StreamChunk` values

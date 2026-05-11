@@ -1,10 +1,12 @@
 # Canonical State and Autonomy Roadmap
 
-_Status: draft design memo._
+_Status: non-normative research note._
 
 This document is not the normative spec. It is a working architecture note for
 where Aphelion should converge if the goal is a safer, more autonomous system
 with durable continuity, bounded sensory organs, and self-correcting behavior.
+The current done-done target only takes the parts needed for truthful
+status/doctor projections, bounded leases, and release-quality consistency.
 
 It is written from the perspective that recent TES work is the right direction,
 but that the system still needs a clearer answer to a deeper question:

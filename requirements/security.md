@@ -56,7 +56,7 @@ There are five layers.
 
 Unknown users must be denied before session creation.
 
-For v0, the source of truth is config-owned Telegram principals:
+The source of truth is config-owned Telegram principals:
 
 - `admin`
 - `approved_user`
@@ -112,36 +112,34 @@ Every security-relevant action should leave durable evidence:
 - exit status and truncation
 - review-event generation and delivery
 
-## v0 Security Floor
+## Trusted-Admin Security Floor
 
-The honest v0 security floor is:
+The trusted-admin floor is:
 
-- admitted DM principals only
+- admitted Telegram principals only
 - trusted admin execution only
-- no security claims beyond that trusted-admin floor
+- no non-admin security claims beyond configured sandbox readiness
 
-### Required v0 properties
+### Required properties
 
 - unknown Telegram users denied before session creation
 - `admin` role resolved in code
 - `Idolum` has no tool authority
 - prompt files cannot widen permissions
 - tool calls are persisted in the session ledger
-- `exec` is available only to the trusted admin path
+- trusted `exec` is available only to the admin path
 
-### Explicit v0 non-goals
+### Explicit non-goals
 
 - no claim that `exec` is a real sandbox
-- no non-admin tool execution
 - no claim that `workdir` restriction alone isolates the host
 
-The current `exec` implementation is a trusted local shell convenience for the service user. It is useful, but it is not sufficient isolation for approved non-admins.
+The current trusted `exec` implementation is a local shell convenience for the
+service user. It is useful, but it is not sufficient isolation for non-admins.
 
-## v0.5 Isolation Floor
+## Isolation Floor
 
-v0.5 begins when `approved_user` sessions are allowed to act with tools.
-
-That requires a stronger floor:
+Non-admin and durable execution require a stronger floor:
 
 - isolated writable roots per approved user
 - global persona and shared memory exposed read-only
@@ -196,11 +194,11 @@ Later hardening may add credential sealing, restricted environment propagation, 
 
 Network access should be specified per profile.
 
-### v0
+### Trusted admin
 
 - trusted admin execution may use host networking
 
-### v0.5
+### Isolated execution
 
 - approved-user execution should default to `deny`
 - explicit allowlist is acceptable only after a backend can enforce destinations
@@ -254,7 +252,7 @@ Config may describe the intended security shape, but runtime must not silently p
 ## Decisions
 
 - **Security is below the prompt layer.**
-- **v0 is trusted-admin only.**
+- **Trusted admin execution is not a sandbox.**
 - **`workdir` is not isolation.**
 - **Approved-user tools stay off until the isolation floor is real.**
 - **Editable identity is allowed. Editable permissions are not.**
@@ -271,8 +269,8 @@ Config may describe the intended security shape, but runtime must not silently p
 
 ### Trusted Admin Floor
 
-- **TestAdminExecAvailableInV0**: trusted admin can invoke `exec`
-- **TestApprovedUserExecDisabledUntilIsolationReady**: non-admin tool execution remains disabled before v0.5 floor is enabled
+- **TestAdminExecAvailable**: trusted admin can invoke `exec`
+- **TestApprovedUserExecDisabledUntilIsolationReady**: non-admin tool execution remains disabled before the isolation floor is enabled
 - **TestToolCallIsPersisted**: admin tool calls leave durable session evidence
 
 ### Isolation Floor

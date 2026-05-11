@@ -1,10 +1,18 @@
 # Agent Authority Ledger
 
-_Status: draft architecture spec._
+_Status: non-normative research spec._
 
-This document defines the authority contract Aphelion should converge on for
-agent action, operator consent, continuation, auto-approval, durable children,
-restart recovery, and external effects.
+Current shipped target: existing typed proposals, approval leases, capability
+grants, auto-approval leases, TES, `/status`, `/debug`, and `/doctor` should be
+consistent and should not let presentation text become authority. Not current
+target: a new broad ledger platform or a large schema replacement unless the
+existing typed records cannot support the release-quality consistency checks.
+Aphelion stops short because authority must become clearer without creating a
+second platform inside the outpost.
+
+This document defines the fuller authority contract Aphelion may converge on
+for agent action, operator consent, continuation, auto-approval, durable
+children, restart recovery, and external effects.
 
 The short rule is:
 
