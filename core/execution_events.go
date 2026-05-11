@@ -80,6 +80,8 @@ const (
 	ExecutionEventAutoApprovalUsed    = "auto_approval.used"
 	ExecutionEventAutoApprovalRevoked = "auto_approval.revoked"
 
+	ExecutionEventAuthorityFindingReviewed = "authority.finding.reviewed"
+
 	ExecutionEventRecoveryAwake     = "recovery.awake"
 	ExecutionEventRecoveryDetected  = "recovery.detected"
 	ExecutionEventRecoveryIssued    = "recovery.issued"

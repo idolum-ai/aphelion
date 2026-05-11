@@ -731,6 +731,15 @@ These are expected migration targets, not accusations against the current code.
     phase, mutates live Tailnet policy, or treats presentation text as evidence
   - every applied repair writes TES evidence with the original finding id,
     `apply_action`, and `apply_scope`
+- Implemented explicit authority maintenance:
+  - `authority revoke-grant --grant-id ... --reason ... --apply` revokes one
+    named grant and records the operator reason in TES
+  - `authority revoke-continuation --chat-id ... --reason ... --apply` revokes
+    one stale pending/approved continuation without broad live-state cleanup
+  - `authority acknowledge-legacy-invocation-gap --grant-id ... --reason ...
+    --apply` records a reviewed pre-contract capability invocation gap without
+    inventing lease evidence; later missing invocation rows still re-open the
+    warning
 
 ### Phase 4: Normalize States
 

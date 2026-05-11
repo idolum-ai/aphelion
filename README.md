@@ -362,6 +362,15 @@ exact local repair from a fresh `finding_id` whose `applicable=true`
 ./bin/aphelion authority repair --config ~/.aphelion/aphelion.toml --apply --finding af_...
 ```
 
+Explicit authority maintenance commands require `--apply`, a concrete target,
+and a reason written to TES:
+
+```bash
+./bin/aphelion authority revoke-grant --config ~/.aphelion/aphelion.toml --grant-id capg_... --reason "stale grant no longer needed" --apply
+./bin/aphelion authority revoke-continuation --config ~/.aphelion/aphelion.toml --chat-id 123456789 --reason "stale proposal references a missing decision" --apply
+./bin/aphelion authority acknowledge-legacy-invocation-gap --config ~/.aphelion/aphelion.toml --grant-id capg_... --reason "pre-contract invocations reviewed; no historical lease evidence exists" --apply
+```
+
 `make install-user-service`, `make update`, and `make update-release` also run
 `aphelion init` automatically. Missing starter files are created under
 `agent.prompt_root`, but existing files are never overwritten.

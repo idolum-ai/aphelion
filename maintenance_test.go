@@ -1609,6 +1609,273 @@ func TestRunAuthorityRepairApplyRejectsPreviewOnlyFinding(t *testing.T) {
 	}
 }
 
+func TestRunAuthorityRevokeGrantCommandRevokesExplicitGrantWithEvidence(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-authority-revoke-stale-email",
+		RequestID:      "capreq-authority-revoke-stale-email",
+		GrantedBy:      "telegram:1",
+		GrantedTo:      "durable_agent:child-mail-archiver",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "gog_cli",
+		AllowedActions: []string{"invoke_archive_approved_threads"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract:       "{}",
+		Constraints:    "{}",
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	store.Close()
+
+	doctorOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"doctor", "--config", cfgPath, "--limit", "10"})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(doctor) err = %v", err)
+	}
+	if !strings.Contains(doctorOut, "child_runtime_contract_missing") {
+		t.Fatalf("doctor output = %q, want child runtime warning before revoke", doctorOut)
+	}
+	applyOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{
+			"revoke-grant",
+			"--config", cfgPath,
+			"--grant-id", "grant-authority-revoke-stale-email",
+			"--reason", "stale parent-visible email archive grant belongs to the email child",
+			"--apply",
+		})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(revoke-grant) err = %v", err)
+	}
+	for _, needle := range []string{"action: authority-revoke-grant", "applied: true", "prior_status: active", "status: revoked", "changed: true"} {
+		if !strings.Contains(applyOut, needle) {
+			t.Fatalf("revoke output = %q, want %q", applyOut, needle)
+		}
+	}
+
+	store, err = session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen) err = %v", err)
+	}
+	defer store.Close()
+	grant, ok, err := store.CapabilityGrant("grant-authority-revoke-stale-email")
+	if err != nil {
+		t.Fatalf("CapabilityGrant() err = %v", err)
+	}
+	if !ok || grant.Status != session.CapabilityGrantStatusRevoked || grant.RevokedAt.IsZero() {
+		t.Fatalf("grant = %#v ok=%t, want revoked grant with timestamp", grant, ok)
+	}
+	events, err := store.LatestExecutionEventsBySession(maintenanceRepairKey(), 10)
+	if err != nil {
+		t.Fatalf("LatestExecutionEventsBySession() err = %v", err)
+	}
+	if !executionEventsContainStatus(events, core.ExecutionEventCapabilityGrantChanged, "authority_maintenance", "revoked", `"grant_id":"grant-authority-revoke-stale-email"`) {
+		t.Fatalf("events = %#v, want authority maintenance grant revoke evidence", events)
+	}
+}
+
+func TestRunAuthorityRevokeContinuationCommandClosesMissingDecisionFinding(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 77716, UserID: 0, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "77716"}}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "missing-decision-authority-maintenance",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:        "proposal-authority-maintenance",
+			Status:    session.ProposalStatusPending,
+			ExpiresAt: now.Add(time.Hour),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-authority-maintenance",
+			ProposalID:     "proposal-authority-maintenance",
+			Status:         session.ContinuationLeaseStatusPending,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ExpiresAt:      now.Add(time.Hour),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	store.Close()
+
+	doctorOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"doctor", "--config", cfgPath, "--limit", "10"})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(doctor before) err = %v", err)
+	}
+	if !strings.Contains(doctorOut, "pending_proposal_missing_decision") {
+		t.Fatalf("doctor output = %q, want missing decision warning", doctorOut)
+	}
+	applyOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{
+			"revoke-continuation",
+			"--config", cfgPath,
+			"--chat-id", "77716",
+			"--proposal-id", "proposal-authority-maintenance",
+			"--reason", "stale proposal references a missing pending decision",
+			"--apply",
+		})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(revoke-continuation) err = %v", err)
+	}
+	for _, needle := range []string{"action: authority-revoke-continuation", "applied: true", "prior_status: pending", "status: revoked", "changed: true"} {
+		if !strings.Contains(applyOut, needle) {
+			t.Fatalf("revoke continuation output = %q, want %q", applyOut, needle)
+		}
+	}
+
+	store, err = session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen) err = %v", err)
+	}
+	defer store.Close()
+	state, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if state.Status != session.ContinuationStatusRevoked || state.DecisionID != "" || state.ContinuationLease.Status != session.ContinuationLeaseStatusRevoked || state.ContinuationLease.RemainingTurns != 0 {
+		t.Fatalf("continuation = %#v, want revoked missing-decision continuation", state)
+	}
+	events, err := store.LatestExecutionEventsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("LatestExecutionEventsBySession() err = %v", err)
+	}
+	if !executionEventsContainStatus(events, core.ExecutionEventContinuationRevoked, "authority_maintenance", "revoked", `"proposal_id":"proposal-authority-maintenance"`) {
+		t.Fatalf("events = %#v, want continuation revoke evidence", events)
+	}
+	afterOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"doctor", "--config", cfgPath, "--limit", "10"})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(doctor after) err = %v", err)
+	}
+	if strings.Contains(afterOut, "pending_proposal_missing_decision") {
+		t.Fatalf("doctor output after revoke = %q, want missing decision warning closed", afterOut)
+	}
+}
+
+func TestRunAuthorityAcknowledgeLegacyInvocationGapReviewsCurrentRowsOnly(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-authority-legacy-gap",
+		RequestID:      "capreq-authority-legacy-gap",
+		GrantedBy:      "telegram:1",
+		GrantedTo:      "durable_agent:child-public-reader",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "public_profile_readonly",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract:       `{"child_runtime":{"readonly_paths":["` + t.TempDir() + `"]}}`,
+		Constraints:    "{}",
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	firstInvocation, err := store.RecordCapabilityInvocation(session.CapabilityInvocation{
+		GrantID:   "grant-authority-legacy-gap",
+		Principal: "child-public-reader",
+		Action:    "invoke",
+		Status:    "allowed",
+	})
+	if err != nil {
+		t.Fatalf("RecordCapabilityInvocation(first) err = %v", err)
+	}
+	store.Close()
+
+	beforeOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"doctor", "--config", cfgPath, "--limit", "10"})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(doctor before) err = %v", err)
+	}
+	if !strings.Contains(beforeOut, "capability_grant_invocation_missing_turn_lease_evidence") || strings.Contains(beforeOut, "child_runtime_contract_missing") {
+		t.Fatalf("doctor output before review = %q, want only legacy invocation warning", beforeOut)
+	}
+	applyOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{
+			"acknowledge-legacy-invocation-gap",
+			"--config", cfgPath,
+			"--grant-id", "grant-authority-legacy-gap",
+			"--reason", "pre-contract invocation row reviewed; no historical lease evidence exists",
+			"--apply",
+		})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(acknowledge legacy gap) err = %v", err)
+	}
+	for _, needle := range []string{"action: authority-acknowledge-legacy-invocation-gap", "applied: true", "reviewed_invocation_count: 1", "after_findings: 0"} {
+		if !strings.Contains(applyOut, needle) {
+			t.Fatalf("ack output = %q, want %q", applyOut, needle)
+		}
+	}
+	if !strings.Contains(applyOut, fmt.Sprintf("reviewed_through_invocation_id: %d", firstInvocation.InvocationID)) {
+		t.Fatalf("ack output = %q, want review through first invocation id %d", applyOut, firstInvocation.InvocationID)
+	}
+	afterOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"doctor", "--config", cfgPath, "--limit", "10"})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(doctor after ack) err = %v", err)
+	}
+	if strings.Contains(afterOut, "capability_grant_invocation_missing_turn_lease_evidence") {
+		t.Fatalf("doctor output after ack = %q, want reviewed legacy gap suppressed", afterOut)
+	}
+
+	store, err = session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen second invocation) err = %v", err)
+	}
+	if _, err := store.RecordCapabilityInvocation(session.CapabilityInvocation{
+		GrantID:   "grant-authority-legacy-gap",
+		Principal: "child-public-reader",
+		Action:    "invoke",
+		Status:    "allowed",
+	}); err != nil {
+		t.Fatalf("RecordCapabilityInvocation(second) err = %v", err)
+	}
+	store.Close()
+	againOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"doctor", "--config", cfgPath, "--limit", "10"})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(doctor after new gap) err = %v", err)
+	}
+	if !strings.Contains(againOut, "capability_grant_invocation_missing_turn_lease_evidence") {
+		t.Fatalf("doctor output after new missing invocation = %q, want warning to return", againOut)
+	}
+}
+
 func authorityFindingIDFromOutput(t *testing.T, out string, code string) string {
 	t.Helper()
 	for _, line := range strings.Split(out, "\n") {
@@ -1631,6 +1898,18 @@ func executionEventsContainAuthorityRepair(events []session.ExecutionEvent, find
 			continue
 		}
 		if strings.Contains(event.PayloadJSON, `"finding_id":"`+findingID+`"`) {
+			return true
+		}
+	}
+	return false
+}
+
+func executionEventsContainStatus(events []session.ExecutionEvent, eventType string, stage string, status string, payloadNeedle string) bool {
+	for _, event := range events {
+		if event.EventType != eventType || event.Stage != stage || event.Status != status {
+			continue
+		}
+		if payloadNeedle == "" || strings.Contains(event.PayloadJSON, payloadNeedle) {
 			return true
 		}
 	}

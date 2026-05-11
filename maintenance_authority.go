@@ -16,15 +16,21 @@ import (
 
 func runAuthorityCommand(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: authority <doctor|repair> [--config path]")
+		return fmt.Errorf("usage: authority <doctor|repair|revoke-grant|revoke-continuation|acknowledge-legacy-invocation-gap> [--config path]")
 	}
 	switch strings.TrimSpace(args[0]) {
 	case "doctor":
 		return runAuthorityDoctorCommand(args[1:])
 	case "repair":
 		return runAuthorityRepairCommand(args[1:])
+	case "revoke-grant":
+		return runAuthorityRevokeGrantCommand(args[1:])
+	case "revoke-continuation":
+		return runAuthorityRevokeContinuationCommand(args[1:])
+	case "acknowledge-legacy-invocation-gap":
+		return runAuthorityAcknowledgeLegacyInvocationGapCommand(args[1:])
 	default:
-		return fmt.Errorf("unknown authority command %q (known: doctor|repair)", args[0])
+		return fmt.Errorf("unknown authority command %q (known: doctor|repair|revoke-grant|revoke-continuation|acknowledge-legacy-invocation-gap)", args[0])
 	}
 }
 
@@ -65,6 +71,235 @@ func runAuthorityRepairCommand(args []string) error {
 	fmt.Fprintf(os.Stdout, "config_path: %s\n", configPath)
 	fmt.Fprintln(os.Stdout, "dry_run: true")
 	writeAuthoritySnapshot(os.Stdout, snapshot, *limitFlag, true)
+	return nil
+}
+
+func runAuthorityRevokeGrantCommand(args []string) error {
+	fs := flag.NewFlagSet("authority revoke-grant", flag.ContinueOnError)
+	configFlag := fs.String("config", "", "path to config.toml")
+	grantIDFlag := fs.String("grant-id", "", "capability grant id to revoke")
+	reasonFlag := fs.String("reason", "", "operator-visible reason recorded in authority evidence")
+	applyFlag := fs.Bool("apply", false, "apply the revocation")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !*applyFlag {
+		return fmt.Errorf("authority revoke-grant requires --apply to mutate authority state")
+	}
+	grantID := strings.TrimSpace(*grantIDFlag)
+	reason := strings.TrimSpace(*reasonFlag)
+	if grantID == "" {
+		return fmt.Errorf("authority revoke-grant requires --grant-id")
+	}
+	if reason == "" {
+		return fmt.Errorf("authority revoke-grant requires --reason")
+	}
+	store, configPath, closeStore, err := authorityStoreForCommand(*configFlag)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+	grant, ok, err := store.CapabilityGrant(grantID)
+	if err != nil {
+		return fmt.Errorf("load capability grant for revoke: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("capability grant %q not found", grantID)
+	}
+	grant = session.NormalizeCapabilityGrant(grant)
+	priorStatus := grant.Status
+	now := time.Now().UTC()
+	changed := priorStatus != session.CapabilityGrantStatusRevoked
+	if changed {
+		grant.Status = session.CapabilityGrantStatusRevoked
+		if grant.RevokedAt.IsZero() {
+			grant.RevokedAt = now
+		}
+		grant.UpdatedAt = now
+		if _, err := store.UpsertCapabilityGrant(grant); err != nil {
+			return fmt.Errorf("revoke capability grant: %w", err)
+		}
+		if err := appendMaintenanceExecutionEvent(store, maintenanceRepairKey(), core.ExecutionEventCapabilityGrantChanged, "authority_maintenance", "revoked", map[string]any{
+			"grant_id":        grant.GrantID,
+			"request_id":      grant.RequestID,
+			"granted_to":      grant.GrantedTo,
+			"kind":            string(grant.Kind),
+			"target_resource": grant.TargetResource,
+			"prior_status":    string(priorStatus),
+			"status":          string(grant.Status),
+			"reason":          reason,
+			"operator_action": "authority revoke-grant",
+		}, now); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintln(os.Stdout, "action: authority-revoke-grant")
+	fmt.Fprintf(os.Stdout, "config_path: %s\n", configPath)
+	fmt.Fprintln(os.Stdout, "applied: true")
+	fmt.Fprintf(os.Stdout, "grant_id: %s\n", grant.GrantID)
+	fmt.Fprintf(os.Stdout, "prior_status: %s\n", priorStatus)
+	fmt.Fprintf(os.Stdout, "status: %s\n", grant.Status)
+	fmt.Fprintf(os.Stdout, "changed: %t\n", changed)
+	return nil
+}
+
+func runAuthorityRevokeContinuationCommand(args []string) error {
+	fs := flag.NewFlagSet("authority revoke-continuation", flag.ContinueOnError)
+	configFlag := fs.String("config", "", "path to config.toml")
+	chatIDFlag := fs.Int64("chat-id", 0, "Telegram chat id whose continuation should be revoked")
+	proposalIDFlag := fs.String("proposal-id", "", "optional proposal id guard")
+	reasonFlag := fs.String("reason", "", "operator-visible reason recorded in authority evidence")
+	applyFlag := fs.Bool("apply", false, "apply the revocation")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !*applyFlag {
+		return fmt.Errorf("authority revoke-continuation requires --apply to mutate authority state")
+	}
+	if *chatIDFlag == 0 {
+		return fmt.Errorf("authority revoke-continuation requires --chat-id")
+	}
+	reason := strings.TrimSpace(*reasonFlag)
+	if reason == "" {
+		return fmt.Errorf("authority revoke-continuation requires --reason")
+	}
+	store, configPath, closeStore, err := authorityStoreForCommand(*configFlag)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+	key := authorityMaintenanceTelegramDMKey(*chatIDFlag)
+	state, exists, err := store.ContinuationStateIfExists(key)
+	if err != nil {
+		return fmt.Errorf("load continuation for revoke: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("continuation for chat_id %d not found", *chatIDFlag)
+	}
+	state = session.NormalizeContinuationState(state)
+	if guard := strings.TrimSpace(*proposalIDFlag); guard != "" && guard != strings.TrimSpace(state.ActionProposal.ID) {
+		return fmt.Errorf("continuation proposal guard %q does not match current proposal %q", guard, strings.TrimSpace(state.ActionProposal.ID))
+	}
+	priorStatus := state.Status
+	priorProposalStatus := state.ActionProposal.Status
+	priorLeaseStatus := state.ContinuationLease.Status
+	now := time.Now().UTC()
+	repaired, changed := authorityMaintenanceRevokeContinuationState(state, reason, now)
+	if changed {
+		if err := store.UpdateContinuationState(key, repaired); err != nil {
+			return fmt.Errorf("revoke continuation: %w", err)
+		}
+		if err := appendMaintenanceExecutionEvent(store, key, core.ExecutionEventContinuationRevoked, "authority_maintenance", "revoked", map[string]any{
+			"chat_id":               *chatIDFlag,
+			"session_id":            session.SessionIDForKey(key),
+			"decision_id":           state.DecisionID,
+			"proposal_id":           state.ActionProposal.ID,
+			"lease_id":              state.ContinuationLease.ID,
+			"prior_status":          string(priorStatus),
+			"prior_proposal_status": string(priorProposalStatus),
+			"prior_lease_status":    string(priorLeaseStatus),
+			"status":                string(repaired.Status),
+			"reason":                reason,
+			"operator_action":       "authority revoke-continuation",
+		}, now); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintln(os.Stdout, "action: authority-revoke-continuation")
+	fmt.Fprintf(os.Stdout, "config_path: %s\n", configPath)
+	fmt.Fprintln(os.Stdout, "applied: true")
+	fmt.Fprintf(os.Stdout, "chat_id: %d\n", *chatIDFlag)
+	fmt.Fprintf(os.Stdout, "session_id: %s\n", session.SessionIDForKey(key))
+	fmt.Fprintf(os.Stdout, "proposal_id: %s\n", strings.TrimSpace(state.ActionProposal.ID))
+	fmt.Fprintf(os.Stdout, "prior_status: %s\n", priorStatus)
+	fmt.Fprintf(os.Stdout, "status: %s\n", repaired.Status)
+	fmt.Fprintf(os.Stdout, "changed: %t\n", changed)
+	return nil
+}
+
+func runAuthorityAcknowledgeLegacyInvocationGapCommand(args []string) error {
+	fs := flag.NewFlagSet("authority acknowledge-legacy-invocation-gap", flag.ContinueOnError)
+	configFlag := fs.String("config", "", "path to config.toml")
+	grantIDFlag := fs.String("grant-id", "", "capability grant id whose legacy invocation gap was reviewed")
+	reasonFlag := fs.String("reason", "", "operator-visible reason recorded in authority evidence")
+	applyFlag := fs.Bool("apply", false, "record the review evidence")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !*applyFlag {
+		return fmt.Errorf("authority acknowledge-legacy-invocation-gap requires --apply to record review evidence")
+	}
+	grantID := strings.TrimSpace(*grantIDFlag)
+	reason := strings.TrimSpace(*reasonFlag)
+	if grantID == "" {
+		return fmt.Errorf("authority acknowledge-legacy-invocation-gap requires --grant-id")
+	}
+	if reason == "" {
+		return fmt.Errorf("authority acknowledge-legacy-invocation-gap requires --reason")
+	}
+	store, configPath, closeStore, err := authorityStoreForCommand(*configFlag)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+	before, err := authoritySnapshotFromStore(store)
+	if err != nil {
+		return err
+	}
+	finding, ok := authorityFindingByCodeAndSource(before, "capability_grant_invocation_missing_turn_lease_evidence", "capability_grant", grantID)
+	if !ok {
+		return fmt.Errorf("no current legacy invocation gap finding for capability grant %q", grantID)
+	}
+	grant, ok, err := store.CapabilityGrant(grantID)
+	if err != nil {
+		return fmt.Errorf("load capability grant for legacy invocation review: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("capability grant %q not found", grantID)
+	}
+	invocations, err := store.CapabilityInvocationsByGrant(grantID, 500)
+	if err != nil {
+		return fmt.Errorf("load capability invocations for legacy review: %w", err)
+	}
+	reviewedCount, reviewedThroughID, reviewedThroughAt := authorityMissingInvocationEvidenceReviewBounds(invocations)
+	if reviewedCount == 0 || reviewedThroughID <= 0 {
+		return fmt.Errorf("capability grant %q has no material invocation rows missing turn lease evidence to acknowledge", grantID)
+	}
+	now := time.Now().UTC()
+	if err := appendMaintenanceExecutionEvent(store, maintenanceRepairKey(), core.ExecutionEventAuthorityFindingReviewed, "authority_maintenance", "reviewed", map[string]any{
+		"finding_id":                     finding.FindingID,
+		"code":                           finding.Code,
+		"severity":                       finding.Severity,
+		"source_kind":                    finding.SourceKind,
+		"source_id":                      finding.SourceID,
+		"grant_id":                       grantID,
+		"granted_to":                     grant.GrantedTo,
+		"kind":                           string(grant.Kind),
+		"target_resource":                grant.TargetResource,
+		"reviewed_invocation_count":      reviewedCount,
+		"reviewed_through_invocation_id": reviewedThroughID,
+		"reviewed_through_created_at":    reviewedThroughAt.Format(time.RFC3339Nano),
+		"reason":                         reason,
+		"operator_action":                "authority acknowledge-legacy-invocation-gap",
+	}, now); err != nil {
+		return err
+	}
+	after, err := authoritySnapshotFromStore(store)
+	if err != nil {
+		return err
+	}
+	if _, stillPresent := authorityFindingByID(after, finding.FindingID); stillPresent {
+		return fmt.Errorf("authority legacy invocation review for %q did not close finding %s", grantID, finding.FindingID)
+	}
+	fmt.Fprintln(os.Stdout, "action: authority-acknowledge-legacy-invocation-gap")
+	fmt.Fprintf(os.Stdout, "config_path: %s\n", configPath)
+	fmt.Fprintln(os.Stdout, "applied: true")
+	fmt.Fprintf(os.Stdout, "grant_id: %s\n", grantID)
+	fmt.Fprintf(os.Stdout, "finding_id: %s\n", finding.FindingID)
+	fmt.Fprintf(os.Stdout, "reviewed_invocation_count: %d\n", reviewedCount)
+	fmt.Fprintf(os.Stdout, "reviewed_through_invocation_id: %d\n", reviewedThroughID)
+	fmt.Fprintf(os.Stdout, "before_findings: %d\n", before.FindingCount)
+	fmt.Fprintf(os.Stdout, "after_findings: %d\n", after.FindingCount)
 	return nil
 }
 
@@ -223,6 +458,123 @@ func authorityFindingByID(snapshot core.AuthorityStatusSnapshot, findingID strin
 		}
 	}
 	return core.AuthorityFindingSnapshot{}, false
+}
+
+func authorityFindingByCodeAndSource(snapshot core.AuthorityStatusSnapshot, code string, sourceKind string, sourceID string) (core.AuthorityFindingSnapshot, bool) {
+	code = strings.TrimSpace(code)
+	sourceKind = strings.TrimSpace(sourceKind)
+	sourceID = strings.TrimSpace(sourceID)
+	if code == "" || sourceKind == "" || sourceID == "" {
+		return core.AuthorityFindingSnapshot{}, false
+	}
+	for _, finding := range snapshot.Findings {
+		if strings.TrimSpace(finding.Code) == code &&
+			strings.TrimSpace(finding.SourceKind) == sourceKind &&
+			strings.TrimSpace(finding.SourceID) == sourceID {
+			return finding, true
+		}
+	}
+	return core.AuthorityFindingSnapshot{}, false
+}
+
+func authorityMaintenanceTelegramDMKey(chatID int64) session.SessionKey {
+	id := fmt.Sprintf("%d", chatID)
+	return session.SessionKey{
+		ChatID: chatID,
+		UserID: 0,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: id},
+	}
+}
+
+func authorityMaintenanceRevokeContinuationState(prior session.ContinuationState, reason string, now time.Time) (session.ContinuationState, bool) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "Authority maintenance revoked a stale continuation; request a fresh proposal if this work is still needed."
+	}
+	state := session.NormalizeContinuationState(prior)
+	changed := false
+	switch state.Status {
+	case session.ContinuationStatusPending, session.ContinuationStatusApproved:
+		state.Status = session.ContinuationStatusRevoked
+		changed = true
+	}
+	if state.RemainingTurns != 0 {
+		state.RemainingTurns = 0
+		changed = true
+	}
+	if state.ApprovedBy != 0 {
+		state.ApprovedBy = 0
+		changed = true
+	}
+	if strings.TrimSpace(state.DecisionID) != "" {
+		state.DecisionID = ""
+		changed = true
+	}
+	if state.ActionProposal.Active() && state.ActionProposal.Status != session.ProposalStatusApproved && state.ActionProposal.Status != session.ProposalStatusDenied {
+		state.ActionProposal.Status = session.ProposalStatusDenied
+		state.ActionProposal.WhyNow = reason
+		state.ActionProposal.UpdatedAt = now
+		changed = true
+	}
+	if strings.TrimSpace(state.ContinuationLease.ID) != "" || strings.TrimSpace(state.ContinuationLease.ProposalID) != "" {
+		if state.ContinuationLease.Status != session.ContinuationLeaseStatusRevoked {
+			state.ContinuationLease.Status = session.ContinuationLeaseStatusRevoked
+			changed = true
+		}
+		if state.ContinuationLease.RemainingTurns != 0 {
+			state.ContinuationLease.RemainingTurns = 0
+			changed = true
+		}
+		if state.ContinuationLease.RevokedAt.IsZero() {
+			state.ContinuationLease.RevokedAt = now
+			changed = true
+		}
+		state.ContinuationLease.UpdatedAt = now
+	}
+	if state.ApprovalBundle.Active() {
+		if state.ApprovalBundle.Status != session.ContinuationLeaseStatusRevoked {
+			state.ApprovalBundle.Status = session.ContinuationLeaseStatusRevoked
+			changed = true
+		}
+		if state.ApprovalBundle.RevokedAt.IsZero() {
+			state.ApprovalBundle.RevokedAt = now
+			changed = true
+		}
+		state.ApprovalBundle.UpdatedAt = now
+	}
+	if state.HandshakeBlockedReason != reason {
+		state.HandshakeBlockedReason = reason
+		changed = true
+	}
+	state.ParkedAt = now
+	state.ParkedSource = "authority_maintenance"
+	state.ParkedReason = reason
+	state.UpdatedAt = now
+	return session.NormalizeContinuationState(state), changed
+}
+
+func authorityMissingInvocationEvidenceReviewBounds(invocations []session.CapabilityInvocation) (int, int64, time.Time) {
+	count := 0
+	var maxID int64
+	var maxCreatedAt time.Time
+	for _, invocation := range invocations {
+		invocation = session.NormalizeCapabilityInvocation(invocation)
+		if strings.TrimSpace(invocation.ContinuationLeaseID) != "" || strings.TrimSpace(invocation.OperationPlanLeaseID) != "" {
+			continue
+		}
+		count++
+		if invocation.InvocationID > maxID {
+			maxID = invocation.InvocationID
+		}
+		if !invocation.CreatedAt.IsZero() && (maxCreatedAt.IsZero() || invocation.CreatedAt.After(maxCreatedAt)) {
+			maxCreatedAt = invocation.CreatedAt.UTC()
+		}
+	}
+	return count, maxID, maxCreatedAt
 }
 
 func authorityRepairActionSupported(action string) bool {
