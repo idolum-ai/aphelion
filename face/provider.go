@@ -23,6 +23,7 @@ type ProviderRendererConfig struct {
 	Style         string
 	WorkspaceRoot string
 	Reasoning     agent.ReasoningConfig
+	Verbosity     agent.Verbosity
 }
 
 type ProviderRenderer struct {
@@ -51,11 +52,12 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 	governorName := firstNonEmpty(req.GovernorName, r.cfg.GovernorName, prompt.DefaultGovernorName)
 	faceName := firstNonEmpty(req.FaceName, r.cfg.FaceName, DefaultFaceName)
 
+	mode := firstNonEmpty(req.Mode, "render")
 	facePrompt := prompt.FaceRequest{
 		GovernorName:    governorName,
 		FaceName:        faceName,
 		Channel:         firstNonEmpty(req.Channel, r.cfg.Channel, "telegram"),
-		Mode:            firstNonEmpty(req.Mode, "render"),
+		Mode:            mode,
 		Style:           firstNonEmpty(req.Style, r.cfg.Style),
 		PrincipalRole:   req.PrincipalRole,
 		FloorText:       FloorTextOrFallback(req.FloorText),
@@ -75,7 +77,7 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 	resp, err := r.complete(ctx, []agent.Message{
 		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
 		{Role: "user", Content: fmt.Sprintf("Speak to the user directly as %s, from the material authorized by %s below. Return only the reply text.", faceName, governorName)},
-	}, nil)
+	}, nil, mode)
 	if err != nil {
 		return "", err
 	}
@@ -103,11 +105,12 @@ func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, 
 	governorName := firstNonEmpty(req.GovernorName, r.cfg.GovernorName, prompt.DefaultGovernorName)
 	faceName := firstNonEmpty(req.FaceName, r.cfg.FaceName, DefaultFaceName)
 
+	mode := firstNonEmpty(req.Mode, "render")
 	facePrompt := prompt.FaceRequest{
 		GovernorName:    governorName,
 		FaceName:        faceName,
 		Channel:         firstNonEmpty(req.Channel, r.cfg.Channel, "telegram"),
-		Mode:            firstNonEmpty(req.Mode, "render"),
+		Mode:            mode,
 		Style:           firstNonEmpty(req.Style, r.cfg.Style),
 		PrincipalRole:   req.PrincipalRole,
 		FloorText:       FloorTextOrFallback(req.FloorText),
@@ -141,9 +144,7 @@ func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, 
 	}
 	var resp *agent.Response
 	if withOptions, ok := r.provider.(agent.StreamingProviderWithOptions); ok {
-		resp, err = withOptions.StreamWithOptions(ctx, messages, nil, agent.CompleteOptions{
-			Reasoning: r.cfg.Reasoning,
-		}, onStreamChunk)
+		resp, err = withOptions.StreamWithOptions(ctx, messages, nil, r.completeOptionsForMode(mode), onStreamChunk)
 	} else {
 		resp, err = streamingProvider.Stream(ctx, messages, nil, onStreamChunk)
 	}
@@ -173,6 +174,7 @@ func (r *ProviderRenderer) Propose(ctx context.Context, req ProposalRequest) (st
 	governorName := firstNonEmpty(req.GovernorName, r.cfg.GovernorName, prompt.DefaultGovernorName)
 	faceName := firstNonEmpty(req.FaceName, r.cfg.FaceName, DefaultFaceName)
 
+	mode := firstNonEmpty(req.Mode, "proposal")
 	facePrompt := prompt.FaceRequest{
 		GovernorName:      governorName,
 		FaceName:          faceName,
@@ -184,7 +186,7 @@ func (r *ProviderRenderer) Propose(ctx context.Context, req ProposalRequest) (st
 		BrokerageFeedback: strings.TrimSpace(req.BrokerageFeedback),
 		StableFiles:       stableFiles,
 		DynamicFiles:      dynamicFiles,
-		Mode:              firstNonEmpty(req.Mode, "proposal"),
+		Mode:              mode,
 		Runtime:           req.Runtime,
 	}
 	systemBlocks := prompt.BuildFacePromptBlocks(facePrompt)
@@ -193,7 +195,7 @@ func (r *ProviderRenderer) Propose(ctx context.Context, req ProposalRequest) (st
 	resp, err := r.complete(ctx, []agent.Message{
 		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
 		{Role: "user", Content: fmt.Sprintf("Speak to %s in one short bounded note about how this turn should move next. Return only that note, or nothing if you have no useful push.", governorName)},
-	}, nil)
+	}, nil, mode)
 	if err != nil {
 		return "", err
 	}
@@ -219,16 +221,56 @@ func (r *ProviderRenderer) recordUsage(usage core.TokenUsage) {
 	r.lastUsage = usage
 }
 
-func (r *ProviderRenderer) complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+func (r *ProviderRenderer) complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, mode string) (*agent.Response, error) {
 	if r == nil || r.provider == nil {
 		return nil, fmt.Errorf("provider is nil")
 	}
-	if withOptions, ok := r.provider.(agent.ProviderWithOptions); ok && r.cfg.Reasoning.Effort != "" {
-		return withOptions.CompleteWithOptions(ctx, messages, tools, agent.CompleteOptions{
-			Reasoning: r.cfg.Reasoning,
-		})
+	opts := r.completeOptionsForMode(mode)
+	if withOptions, ok := r.provider.(agent.ProviderWithOptions); ok && faceOptionsConfigured(opts) {
+		return withOptions.CompleteWithOptions(ctx, messages, tools, opts)
 	}
 	return r.provider.Complete(ctx, messages, tools)
+}
+
+func (r *ProviderRenderer) completeOptionsForMode(mode string) agent.CompleteOptions {
+	if r == nil {
+		return agent.CompleteOptions{}
+	}
+	return agent.CompleteOptions{
+		Reasoning: r.cfg.Reasoning,
+		Verbosity: r.verbosityForMode(mode),
+	}
+}
+
+func (r *ProviderRenderer) verbosityForMode(mode string) agent.Verbosity {
+	if r != nil {
+		if verbosity := normalizeFaceVerbosity(r.cfg.Verbosity); verbosity != "" {
+			return verbosity
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "proposal", "brokerage", "repair":
+		return agent.VerbosityLow
+	default:
+		return agent.VerbosityMedium
+	}
+}
+
+func normalizeFaceVerbosity(verbosity agent.Verbosity) agent.Verbosity {
+	switch agent.Verbosity(strings.ToLower(strings.TrimSpace(string(verbosity)))) {
+	case agent.VerbosityLow:
+		return agent.VerbosityLow
+	case agent.VerbosityMedium:
+		return agent.VerbosityMedium
+	case agent.VerbosityHigh:
+		return agent.VerbosityHigh
+	default:
+		return ""
+	}
+}
+
+func faceOptionsConfigured(opts agent.CompleteOptions) bool {
+	return opts.Reasoning.Effort != "" || opts.Reasoning.Summary != "" || opts.Verbosity != ""
 }
 
 func firstNonEmpty(values ...string) string {

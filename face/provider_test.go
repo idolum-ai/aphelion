@@ -74,6 +74,26 @@ type streamOptionsProvider struct {
 	seenOptions agent.CompleteOptions
 }
 
+type optionsProvider struct {
+	stubProvider
+	seenOptions agent.CompleteOptions
+}
+
+func (s *optionsProvider) CompleteWithOptions(_ context.Context, messages []agent.Message, _ []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
+	s.lastCalls++
+	s.seenOptions = opts
+	if len(messages) > 0 && messages[0].Role == "system" {
+		s.lastPrompt = messages[0].Content
+	}
+	if len(messages) > 1 {
+		s.lastUser = messages[1].Content
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &agent.Response{Content: s.reply, Usage: core.TokenUsage{InputTokens: 2, OutputTokens: 3, TotalTokens: 5}}, nil
+}
+
 func (s *streamOptionsProvider) StreamWithOptions(_ context.Context, messages []agent.Message, _ []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback) (*agent.Response, error) {
 	s.lastCalls++
 	s.seenOptions = opts
@@ -341,7 +361,77 @@ func TestProviderRendererRenderStreamUsesOptionsProvider(t *testing.T) {
 	if provider.seenOptions.Reasoning.Effort != agent.ReasoningEffortXHigh || provider.seenOptions.Reasoning.Summary != agent.ReasoningSummaryAuto {
 		t.Fatalf("stream options = %+v, want xhigh/auto", provider.seenOptions)
 	}
+	if provider.seenOptions.Verbosity != agent.VerbosityMedium {
+		t.Fatalf("stream verbosity = %q, want medium", provider.seenOptions.Verbosity)
+	}
 	if usage := renderer.ConsumeLastUsage(); usage.TotalTokens != 5 {
 		t.Fatalf("usage = %+v, want total 5", usage)
+	}
+}
+
+func TestProviderRendererUsesModeVerbosityDefaults(t *testing.T) {
+	t.Parallel()
+
+	provider := &optionsProvider{stubProvider: stubProvider{reply: "Rendered reply"}}
+	renderer, err := NewProviderRenderer(provider, ProviderRendererConfig{})
+	if err != nil {
+		t.Fatalf("NewProviderRenderer() err = %v", err)
+	}
+
+	if _, err := renderer.Render(context.Background(), RenderRequest{FloorText: "Canonical text"}); err != nil {
+		t.Fatalf("Render() err = %v", err)
+	}
+	if provider.seenOptions.Verbosity != agent.VerbosityMedium {
+		t.Fatalf("render verbosity = %q, want medium", provider.seenOptions.Verbosity)
+	}
+
+	if _, err := renderer.Render(context.Background(), RenderRequest{
+		Mode:           "repair",
+		FloorText:      "Canonical text",
+		CandidateReply: "Leaked internal mechanics.",
+	}); err != nil {
+		t.Fatalf("Render(repair) err = %v", err)
+	}
+	if provider.seenOptions.Verbosity != agent.VerbosityLow {
+		t.Fatalf("repair verbosity = %q, want low", provider.seenOptions.Verbosity)
+	}
+
+	if _, err := renderer.Propose(context.Background(), ProposalRequest{LatestUserInput: "What should this turn do?"}); err != nil {
+		t.Fatalf("Propose() err = %v", err)
+	}
+	if provider.seenOptions.Verbosity != agent.VerbosityLow {
+		t.Fatalf("proposal verbosity = %q, want low", provider.seenOptions.Verbosity)
+	}
+
+	if _, err := renderer.Propose(context.Background(), ProposalRequest{
+		Mode:            "brokerage",
+		LatestUserInput: "Negotiate the turn shape.",
+	}); err != nil {
+		t.Fatalf("Propose(brokerage) err = %v", err)
+	}
+	if provider.seenOptions.Verbosity != agent.VerbosityLow {
+		t.Fatalf("brokerage verbosity = %q, want low", provider.seenOptions.Verbosity)
+	}
+}
+
+func TestProviderRendererUsesConfiguredVerbosityOverride(t *testing.T) {
+	t.Parallel()
+
+	provider := &optionsProvider{stubProvider: stubProvider{reply: "Rendered reply"}}
+	renderer, err := NewProviderRenderer(provider, ProviderRendererConfig{
+		Verbosity: agent.VerbosityHigh,
+	})
+	if err != nil {
+		t.Fatalf("NewProviderRenderer() err = %v", err)
+	}
+
+	if _, err := renderer.Render(context.Background(), RenderRequest{
+		Mode:      "repair",
+		FloorText: "Canonical text",
+	}); err != nil {
+		t.Fatalf("Render() err = %v", err)
+	}
+	if provider.seenOptions.Verbosity != agent.VerbosityHigh {
+		t.Fatalf("configured verbosity = %q, want high", provider.seenOptions.Verbosity)
 	}
 }

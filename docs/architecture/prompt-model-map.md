@@ -39,7 +39,7 @@ selection. It reflects the current branch and the live local configuration in
 | Durable child wake | Wake a durable child for adapter work, parent conversation, or policy-handshake activity. | Internal or parent-visible depending adapter/report. | Child policy authority only; parent/admin remains escalation boundary. | Durable wake runtime builds governor prompts with durable-agent prompt context and pending parent conversation awareness. | Child bootstrap LLM if configured; otherwise parent/runtime defaults depending wake executor path. | Depends on wake path and bootstrap. | `runtime/durable_wake_runtime_test.go`, `durableagent/*`. |
 | Status-readable summary | Summarize status into operator-readable prose. | User-visible in status surfaces. | Informational; no execution authority. | Small status summary prompt, not the main governor/face prompt. | Native status-readable provider chain; OpenAI path uses configured OpenAI model first. | Low effort, compact summary. | `runtime/status_readable.go`, status tests. |
 | Tool schema descriptions | Tell models what tools exist and how to call them. | Internal prompt/tool manifest. | Advisory description; actual tool access is enforced by code. | Registry definitions and generated tool manifest. | Same model as caller prompt target. | Same as caller prompt target. | Tool tests and prompt builder tests. |
-| Agency context packet | Give governor and face a compact per-turn map of objective, authority envelope, evidence posture, open loops, and available affordances. | Internal; face packet shapes user-visible ownership without exposing machinery. | Non-authorizing. It summarizes typed state but cannot create access, leases, grants, tool claims, or commitments. | Rendered by `prompt.renderGovernorAgencyContextPacket` and `prompt.renderFaceAgencyContextPacket` inside existing prompt blocks. | Same model as the prompt target that receives it. | Same as caller prompt target. | `prompt/builder_test.go`, env-gated `TestLiveAgencyContextPacketEvals`. |
+| Agency context packet | Give governor and face a compact per-turn map of objective, authority envelope, evidence posture, open loops, and available affordances. | Internal; face packet shapes user-visible ownership without exposing machinery. | Non-authorizing. It summarizes typed state but cannot create access, leases, grants, tool claims, or commitments. | Rendered by `prompt.renderGovernorAgencyContextPacket` and `prompt.renderFaceAgencyContextPacket` inside existing prompt blocks. | Same model as the prompt target that receives it. | Same as caller prompt target. | `prompt/builder_test.go`, scrubbed prompt goldens, env-gated `TestLiveAgencyContextPacketEvals`. |
 
 ## Workspace Prompt File Map
 
@@ -89,7 +89,7 @@ turn intimacy into hidden authorization.
 | Governor and face may both use GPT 5.5. | Live governor Codex model is `gpt-5.5`; live persona recipe is `gpt-5.5`. | Keep. Prompt/context, not model name, separates behavior. |
 | Face provider uses persona recipe. | `runtime_recipes.json` sets `persona_model=gpt-5.5`; face provider chain maps this to OpenAI GPT 5.5 and compatible fallbacks. | Keep, but add clearer status projection if missing. |
 | Governor effort is separately configurable. | Live recipe sets `governor_effort=xhigh`; applies to interactive and recovery. | Keep, but evaluate whether `xhigh` should remain live default after prompt review. |
-| Face calls pass recipe-derived provider options when configured. | `face.ProviderRenderer` forwards reasoning effort/summary and verbosity to providers that support options. | Keep. Persona quality is now controlled through runtime recipe/config rather than prompt prose alone. |
+| Face calls pass invisible provider options. | `face.ProviderRenderer` forwards reasoning effort/summary and mode-derived verbosity to providers that support options. Render defaults to medium verbosity; proposal, brokerage, and repair default to low. | Keep invisible. This is not an operator-facing personality control. |
 
 ## Immediate Review Questions
 
@@ -101,12 +101,11 @@ turn intimacy into hidden authorization.
 | Prompt volume | Is `MEMORY.md` still load-bearing now that structured memory exists? | It is large and may duplicate structured stores. |
 | Face reasoning | Are persona effort and verbosity recipes calibrated for proposal/brokerage/render quality after the agency packet? | Affects cost, latency, and GPT 5.5 personality quality. |
 | Durable child defaults | Should child bootstrap inherit GPT 5.5 by default, or should child class decide cheap vs strong model? | Avoids expensive defaults for public/low-stakes children while preserving quality for sensitive children. |
-| Live agency evals | Should `APHELION_LIVE_EVAL=1` be run before prompt releases that change agency/authority behavior? | The eval is intentionally opt-in because it spends API calls; prompt packet behavior still has deterministic unit coverage. |
+| Live agency evals | Should `APHELION_LIVE_EVAL=1` be run before prompt releases that change agency/authority behavior? | The eval is intentionally opt-in because it spends API calls; packet behavior also has deterministic unit and golden coverage. |
 
 ## Suggested Next Pass
 
-1. Render representative prompt snapshots into test fixtures with secrets and volatile paths scrubbed if prompt churn continues.
-2. Run `APHELION_LIVE_EVAL=1 go test . -run TestLiveAgencyContextPacketEvals -count=1` before releases that materially change agency, authority, or face ownership prompts.
-3. Add tests that assert model/provider paths for governor, face, heartbeat, recovery, and durable child wake.
-4. Review `memory/dreams.md` and decide what should be promoted into `memory/telos.md`, `memory/relationships.md`, or `memory/projects.md`.
-5. Add a first-class desire/proposal journal if self-initiated creative time becomes frequent enough to need status tracking.
+1. Run `APHELION_LIVE_EVAL=1 go test . -run TestLiveAgencyContextPacketEvals -count=1` before releases that materially change agency, authority, or face ownership prompts.
+2. Add tests that assert model/provider paths for governor, face, heartbeat, recovery, and durable child wake.
+3. Review `memory/dreams.md` and decide what should be promoted into `memory/telos.md`, `memory/relationships.md`, or `memory/projects.md`.
+4. Add a first-class desire/proposal journal only if self-initiated creative time becomes frequent enough to need typed status tracking.
