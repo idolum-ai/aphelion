@@ -8,14 +8,12 @@ required_docs=(
   "docs/architecture/README.md"
   "docs/architecture/agency-evaluation-methodology.md"
   "docs/architecture/influences-and-departures.md"
-  "docs/architecture/done-done-roadmap.md"
   "docs/architecture/package-ownership.md"
   "docs/architecture/turn-lifecycle.md"
   "docs/architecture/constitution-and-delivery.md"
   "docs/architecture/durable-children.md"
   "docs/architecture/state-surfaces.md"
-  "docs/architecture/coordinator-boundary-audit.md"
-  "docs/architecture/migration-appendix.md"
+  "docs/architecture/structural-hygiene.md"
   "docs/architecture/diagrams/README.md"
   "docs/architecture/diagrams/src/README.md"
   "docs/architecture/diagrams/generated/README.md"
@@ -72,7 +70,7 @@ if rg -n "tmp-diagrams/" \
   --glob '!*.png' \
   --glob '!*.svg' \
   README.md requirements runtime turn pipeline docs/architecture constitution_live_test.go .gitignore Makefile >/dev/null; then
-  echo "found legacy tmp-diagrams references outside diagram archive" >&2
+  echo "found removed tmp-diagrams references outside diagram archive" >&2
   exit 1
 fi
 
@@ -97,7 +95,6 @@ required_promise_rows=(
   "Tailnet declarations and grant-binding projection | implemented"
   "Mission review without autonomous continuation | implemented"
   "Authority/status/doctor consistency | implemented"
-  "Done-done release criteria | planned"
 )
 
 for row in "${required_promise_rows[@]}"; do
@@ -107,79 +104,15 @@ for row in "${required_promise_rows[@]}"; do
   fi
 done
 
-if ! rg -qF "Operator and user surfaces are limited to:" docs/architecture/done-done-roadmap.md ||
-  ! rg -qF "Telegram" docs/architecture/done-done-roadmap.md ||
-  ! rg -qF "CLI commands" docs/architecture/done-done-roadmap.md; then
-  echo "done-done roadmap must keep operator surfaces limited to Telegram and CLI" >&2
-  exit 1
-fi
-
-if ! rg -qF "one final release and one live migration/init call" docs/architecture/done-done-roadmap.md; then
-  echo "done-done roadmap must document one-release/one-live-migration discipline" >&2
-  exit 1
-fi
-
-if ! rg -qF "Future channels such as WhatsApp should be ordinary compiled-in code changes" docs/architecture/done-done-roadmap.md; then
-  echo "done-done roadmap must preserve future channel extensibility without plugins" >&2
-  exit 1
-fi
-
-if ! rg -qF "Not Current Targets" docs/architecture/done-done-roadmap.md ||
-  ! rg -qF "broad Mission Control" docs/architecture/done-done-roadmap.md ||
-  ! rg -qF "live Tailnet child" docs/architecture/done-done-roadmap.md ||
-  ! rg -qF "generic external-tool platforms" docs/architecture/done-done-roadmap.md; then
-  echo "done-done roadmap must explicitly remove oversized research tracks from the current release target" >&2
-  exit 1
-fi
-
-if rg -n "durable-child signed envelope|replay rejection|Tailnet mutation approval|bounded self-continuation|generic execution" docs/architecture/done-done-roadmap.md >/dev/null; then
-  echo "done-done roadmap still contains maximal-roadmap release requirements" >&2
-  rg -n "durable-child signed envelope|replay rejection|Tailnet mutation approval|bounded self-continuation|generic execution" docs/architecture/done-done-roadmap.md >&2
-  exit 1
-fi
-
-research_docs=(
-  "docs/architecture/canonical-state-and-autonomy-roadmap.md"
-  "docs/architecture/mission-ledger-roadmap.md"
-  "docs/architecture/organic-agent-owned-tools-proposal.md"
-  "docs/architecture/tailscale-agent-substrate-project.md"
-  "docs/architecture/agent-authority-ledger.md"
-)
-
-for file in "${research_docs[@]}"; do
-  if ! rg -qF "_Status: non-normative research" "$file"; then
-    echo "research roadmap must be marked non-normative: $file" >&2
-    exit 1
-  fi
-done
-
-if ! rg -qF "not part of the current done-done release target" docs/architecture/mission-ledger-roadmap.md; then
-  echo "mission roadmap must mark self-continuation outside the current target" >&2
-  exit 1
-fi
-
-if ! rg -qF 'live child `tsnet`' docs/architecture/tailscale-agent-substrate-project.md ||
-  ! rg -qF "materialization" docs/architecture/tailscale-agent-substrate-project.md ||
-  ! rg -qF "not current target" docs/architecture/tailscale-agent-substrate-project.md; then
-  echo "tailnet roadmap must mark live materialization/mutation outside the current target" >&2
-  exit 1
-fi
-
-if ! rg -qF '`process`/`subprocess` execution' docs/architecture/organic-agent-owned-tools-proposal.md ||
-  ! rg -qF "The current release target does not include container or" docs/architecture/organic-agent-owned-tools-proposal.md; then
-  echo "external tools research note must keep executable support narrowed" >&2
-  exit 1
-fi
-
 if rg -n "no multi-channel support|No multi-channel\\. Telegram only" README.md requirements/core.md docs/architecture/design-principles.md >/dev/null; then
   echo "architecture docs must allow future compiled-in channel adapters without plugin/channel sprawl" >&2
   rg -n "no multi-channel support|No multi-channel\\. Telegram only" README.md requirements/core.md docs/architecture/design-principles.md >&2
   exit 1
 fi
 
-if rg -n "private UI|private web UI|Private Web UI|richer private UI|artifact browser|browser artifact explorer|separate operator console|operator dashboards|maintenance dashboards|private tailnet UI|private status UI|Private Admin UI|minimal HTML" docs/architecture/tailscale-agent-substrate-project.md requirements/reliability.md requirements/heartbeat.md >/dev/null; then
+if rg -n "private UI|private web UI|Private Web UI|richer private UI|artifact browser|browser artifact explorer|separate operator console|operator dashboards|maintenance dashboards|private tailnet UI|private status UI|Private Admin UI|minimal HTML" requirements/reliability.md requirements/heartbeat.md >/dev/null; then
   echo "architecture docs must not add web/dashboard operator surfaces" >&2
-  rg -n "private UI|private web UI|Private Web UI|richer private UI|artifact browser|browser artifact explorer|separate operator console|operator dashboards|maintenance dashboards|private tailnet UI|private status UI|Private Admin UI|minimal HTML" docs/architecture/tailscale-agent-substrate-project.md requirements/reliability.md requirements/heartbeat.md >&2
+  rg -n "private UI|private web UI|Private Web UI|richer private UI|artifact browser|browser artifact explorer|separate operator console|operator dashboards|maintenance dashboards|private tailnet UI|private status UI|Private Admin UI|minimal HTML" requirements/reliability.md requirements/heartbeat.md >&2
   exit 1
 fi
 

@@ -17,7 +17,6 @@ const staleContinuationCallbackText = "This continuation prompt is no longer act
 const continuationCallbackFailureText = "Continuation action failed. Check /doctor for details."
 
 const (
-	continuationActionApprove      = "approve"
 	continuationActionApproveLease = "approve_lease"
 	continuationActionContinueOnce = "continue_once"
 	continuationActionAskEdit      = "ask_edit"
@@ -32,7 +31,7 @@ func encodeContinuationCallbackData(decisionID string, action string) string {
 	decisionID = strings.TrimSpace(decisionID)
 	action = normalizeContinuationCallbackAction(action)
 	if action == "" {
-		action = strings.TrimSpace(action)
+		return ""
 	}
 	return core.EncodeContinuationCallbackData(decisionID, action)
 }
@@ -51,8 +50,6 @@ func decodeContinuationCallbackData(data string) (decisionID string, action stri
 
 func normalizeContinuationCallbackAction(action string) string {
 	switch strings.ToLower(strings.TrimSpace(action)) {
-	case continuationActionApprove, "continue":
-		return continuationActionApprove
 	case continuationActionApproveLease, "approve-lease":
 		return continuationActionApproveLease
 	case continuationActionContinueOnce, "continue-once":
@@ -85,7 +82,7 @@ func continuationCallbackMatchesState(state session.ContinuationState, decisionI
 		return false
 	}
 	switch action {
-	case continuationActionApprove, continuationActionApproveLease, continuationActionContinueOnce:
+	case continuationActionApproveLease, continuationActionContinueOnce:
 		return state.Status == session.ContinuationStatusPending && state.RemainingTurns > 0
 	case continuationActionAskEdit:
 		return state.Status == session.ContinuationStatusPending
@@ -132,7 +129,7 @@ func continuationCallbackIDMatchesState(state session.ContinuationState, decisio
 func renderContinuationDecision(state session.ContinuationState, action string) string {
 	state = session.NormalizeContinuationState(state)
 	switch normalizeContinuationCallbackAction(action) {
-	case continuationActionApprove, continuationActionApproveLease:
+	case continuationActionApproveLease:
 		return renderContinuationApprovedDecision(state, "Continuation lease approved.")
 	case continuationActionContinueOnce:
 		return renderContinuationApprovedDecision(state, "Continuing once under the approved lease.")

@@ -141,7 +141,6 @@ func durableAgentChildConfig(parent *config.Config, agent core.DurableAgent, sco
 	copy.Voice = config.VoiceConfig{Mode: "off"}
 	copy.Governor = config.GovernorConfig{}
 	copy.Face = config.FaceConfig{Backend: string(faceBackendForChildBootstrap(bootstrap))}
-	copy.Agent.Workspace = scope.WorkingRoot
 	copy.Agent.ExecRoot = scope.WorkingRoot
 	copy.Agent.SharedMemoryRoot = scope.SharedMemoryRoot
 	copy.Agent.UserWorkspaceRoot = firstNonEmpty(strings.TrimSpace(scope.UserWorkspace), strings.TrimSpace(scope.WorkingRoot))
@@ -155,9 +154,6 @@ func durableAgentChildConfig(parent *config.Config, agent core.DurableAgent, sco
 	}
 	if strings.TrimSpace(copy.Agent.ExecRoot) == "" {
 		copy.Agent.ExecRoot = scope.WorkingRoot
-	}
-	if strings.TrimSpace(copy.Agent.Workspace) == "" {
-		copy.Agent.Workspace = scope.WorkingRoot
 	}
 	switch bootstrap.Backend {
 	case "codex":

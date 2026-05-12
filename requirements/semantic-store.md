@@ -37,7 +37,7 @@ In other words:
 - support import from older foreign stores such as OpenClaw/Host
 - preserve provenance during import
 - distinguish live-turn retrieval from heartbeat/reflection retrieval
-- avoid permanent dependency on legacy runtimes or foreign schemas
+- avoid permanent dependency on foreign runtimes or foreign schemas
 - allow future acceleration without making acceleration the core contract
 
 The attribution and departure record for the OpenClaw/Host comparison lives in
@@ -74,7 +74,7 @@ The codebase should define:
 The operator retains ownership of:
 
 - private memory files
-- imported historical corpora
+- imported archived corpora
 - family facts and personal archives
 - legal material
 - creative work
@@ -375,7 +375,7 @@ The importer should:
 - when re-embedding is needed, create new chunks with a new model tag rather than silently overwriting; this keeps ranking behavior auditable across embedding model changes
 - avoid permanent runtime dependency on the foreign DB
 
-The first implementation may target an explicitly observed OpenClaw / Host schema contract rather than pretending to support every historical variation.
+The first implementation may target an explicitly observed OpenClaw / Host schema contract rather than pretending to support every schema variation.
 That narrow import stance is part of the departure recorded in
 [`docs/architecture/influences-and-departures.md`](../docs/architecture/influences-and-departures.md).
 
@@ -507,4 +507,4 @@ See `config.md`, but the substrate should be reflected in config as:
 - **TestSemanticFallbackWithoutVectorExtension**: semantic retrieval still works without sqlite-vec
 - **TestOpenClawImporterReadsChunkTextAndEmbeddings**: Host/OpenClaw importer maps old rows correctly
 - **TestImportedHitsLabelSourceKindAndProvenance**: retrieval results expose both kind and provenance
-- **TestForeignStoreNotRequiredAfterImport**: imported Aphelion store remains usable after removing legacy archive
+- **TestForeignStoreNotRequiredAfterImport**: imported Aphelion store remains usable after removing the source archive

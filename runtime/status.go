@@ -600,34 +600,6 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		})
 	}
 
-	latestRuns, err := r.store.LatestTurnRunsByChat(500)
-	if err != nil {
-		return core.SystemStatusSnapshot{}, err
-	}
-	for _, run := range latestRuns {
-		if _, exists := snapshot.LatestTurnRunsByChat[run.ChatID]; exists {
-			continue
-		}
-		snapshot.LatestTurnRunsByChat[run.ChatID] = turnRunSnapshot(run)
-	}
-
-	pendingRecovery, err := r.store.PendingRecoveryTurnRuns(500)
-	if err != nil {
-		return core.SystemStatusSnapshot{}, err
-	}
-	for _, run := range pendingRecovery {
-		snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
-			Kind:          core.PendingItemKindRecovery,
-			ChatID:        run.ChatID,
-			ID:            fmt.Sprintf("recovery:%d", run.ID),
-			Summary:       fmt.Sprintf("turn_run_id=%d status=%s", run.ID, run.Status),
-			Age:           statusAge(now, run.LastActivityAt, run.StartedAt),
-			CreatedAt:     run.StartedAt,
-			UpdatedAt:     run.LastActivityAt,
-			SourceClass:   "compatibility_fallback",
-			SourceSurface: "turn_runs",
-		})
-	}
 	recoveryPending, recoveryPendingOK, err := r.recoveryPendingFromEvents(now.Add(-7*24*time.Hour), 2000)
 	if err != nil {
 		return core.SystemStatusSnapshot{}, err
@@ -636,25 +608,6 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		snapshot.PendingItems = append(snapshot.PendingItems, recoveryPending)
 	}
 
-	staleRuns, err := r.staleRunningTurnRuns(now)
-	if err != nil {
-		return core.SystemStatusSnapshot{}, err
-	}
-	for _, run := range staleRuns {
-		snapshot.StaleRunningTurns = append(snapshot.StaleRunningTurns, turnRunSnapshot(run))
-		snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
-			Kind:          core.PendingItemKindStaleTurn,
-			ChatID:        run.ChatID,
-			ID:            fmt.Sprintf("stale:%d", run.ID),
-			Summary:       fmt.Sprintf("turn_run_id=%d last_activity=%s", run.ID, run.LastActivityAt.UTC().Format(time.RFC3339)),
-			Age:           statusAge(now, run.LastActivityAt, run.StartedAt),
-			CreatedAt:     run.StartedAt,
-			UpdatedAt:     run.LastActivityAt,
-			Stale:         true,
-			SourceClass:   "operational_current_state_store",
-			SourceSurface: "turn_runs",
-		})
-	}
 	for _, stale := range tesStaleRunningTurns {
 		if staleTurnSnapshotCovered(snapshot.StaleRunningTurns, stale) {
 			continue

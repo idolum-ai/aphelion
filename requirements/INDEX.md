@@ -8,7 +8,7 @@ As-built architecture docs: [`../docs/architecture/`](../docs/architecture/READM
 1. ✅ [`core.md`](core.md) — Event loop, message lifecycle, error handling, shutdown
 2. ✅ [`config.md`](config.md) — Live config schema, string anonymization, environment variables, warnings for ignored/future keys
 3. ✅ [`principals.md`](principals.md) — Config-assigned Telegram DM principals, admission, authority
-4. ✅ [`sessions.md`](sessions.md) — Conversation state and truth-class contract (canonical/projection/operational current-state/compatibility fallback)
+4. ✅ [`sessions.md`](sessions.md) — Conversation state and truth-class contract (canonical/projection/operational current-state)
 5. ✅ [`governor.md`](governor.md) — Governor backend, face pipeline, Codex-first core
 6. ✅ [`governor-auth.md`](governor-auth.md) — Codex credential sourcing, ownership, and fallback
 7. ✅ [`terminology.md`](terminology.md) — Brokerage/floor/scene/fallback language plus normative truth-class taxonomy
@@ -48,4 +48,3 @@ As-built architecture docs: [`../docs/architecture/`](../docs/architecture/READM
 29. ✅ [`deployment.md`](deployment.md) — GitHub Releases, static binary target, systemd services, updates, rollback
 30. ✅ [`security.md`](security.md) — Trusted-admin floor, isolation boundaries, config-backed sandbox profiles, credential lifecycle, and permission model
 31. 🟡 [`reliability.md`](reliability.md) — Error handling, degradation, delivery semantics, recovery, and disaster discipline
-32. ✅ [`turn-pipeline-refactor.md`](turn-pipeline-refactor.md) — Plan for aligning live package ownership with the runtime/turn/pipeline architecture

@@ -17,14 +17,14 @@ for the attribution and departure record behind these comparisons.
 
 ## Scope
 
-### v0 required
+### Required
 
 - explicit reasoning effort setting for governor-backed inference
 - stable effort levels
 - per-run defaults
 - no raw chain-of-thought exposure
 
-### Deferred after v0
+### Deferred
 
 - provider-specific reasoning adapters
 - richer reasoning summary storage

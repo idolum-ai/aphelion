@@ -11,8 +11,7 @@ func TestExtractChildRuntimeContractNormalizesAndValidates(t *testing.T) {
 			"readonly_paths": ["/srv/mail/config", "/srv/mail/config"],
 			"readonly_binds": [{"source":"/opt/mail/bin/mail-reader","target":"/usr/local/bin/mail-reader"}],
 			"secret_binds": [{"source":"/home/child/.secrets/mail.env","target":"/run/secrets/mail.env"}],
-			"env_from_parent": ["MAIL_TOKEN"],
-			"environment": ["XDG_CONFIG_HOME"]
+			"env_from_parent": ["MAIL_TOKEN"]
 		}
 	}`, `{}`)
 	if err != nil {
@@ -21,7 +20,7 @@ func TestExtractChildRuntimeContractNormalizesAndValidates(t *testing.T) {
 	if !ok {
 		t.Fatal("ExtractChildRuntimeContract() ok = false, want true")
 	}
-	if contract.Executable != "mail-reader" || len(contract.ReadonlyPaths) != 1 || len(contract.ReadonlyBinds) != 1 || len(contract.SecretBinds) != 1 || len(contract.EnvFromParent) != 2 {
+	if contract.Executable != "mail-reader" || len(contract.ReadonlyPaths) != 1 || len(contract.ReadonlyBinds) != 1 || len(contract.SecretBinds) != 1 || len(contract.EnvFromParent) != 1 {
 		t.Fatalf("contract = %#v, want normalized child runtime", contract)
 	}
 }
@@ -40,12 +39,9 @@ func TestExtractChildRuntimeContractRejectsRelativeSecretBind(t *testing.T) {
 	}
 }
 
-func TestExtractChildRuntimeContractIgnoresLegacyRuntimeMaterialization(t *testing.T) {
-	contract, ok, err := ExtractChildRuntimeContract(`{"runtime_materialization":{"readonly_paths":["/srv/mail"]}}`, `{}`)
-	if err != nil {
-		t.Fatalf("ExtractChildRuntimeContract() err = %v", err)
-	}
-	if ok || contract.Active() {
-		t.Fatalf("ExtractChildRuntimeContract() = %#v, %t; want legacy key ignored after migration", contract, ok)
+func TestExtractChildRuntimeContractRejectsRemovedRuntimeMaterialization(t *testing.T) {
+	_, _, err := ExtractChildRuntimeContract(`{"runtime_materialization":{"readonly_paths":["/srv/mail"]}}`, `{}`)
+	if err == nil {
+		t.Fatal("ExtractChildRuntimeContract() err = nil, want removed runtime_materialization rejection")
 	}
 }

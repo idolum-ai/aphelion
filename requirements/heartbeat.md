@@ -15,7 +15,7 @@ Heartbeat is one of Aphelion's mechanisms for **reflective proactivity**.
 
 ## Scope
 
-### v0 required
+### Required
 
 - dedicated heartbeat subsystem
 - configurable cadence
@@ -27,7 +27,7 @@ Heartbeat is one of Aphelion's mechanisms for **reflective proactivity**.
 - proactive eligibility driven by hidden-input convergence rather than timer expiration alone
 - explicit separation from cron
 
-### Deferred after v0
+### Deferred
 
 - provider-specific heartbeat cost optimization
 - heartbeat-triggered subagent spawning

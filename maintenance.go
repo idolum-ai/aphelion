@@ -66,8 +66,6 @@ func runMaintenanceCommand(args []string) (bool, error) {
 		return true, runImportSemanticCommand(args[1:])
 	case "import-codex-sessions":
 		return true, runImportCodexSessionsCommand(args[1:])
-	case "migrate-memory":
-		return true, runMigrateMemoryCommand(args[1:])
 	case "verify-deploy":
 		return true, runVerifyDeployCommand(args[1:])
 	case "durable-agent":

@@ -212,7 +212,6 @@ func TestTelegramCommandControlStopFlushesMemoryOnBoundaryWhenConfigured(t *test
 			CompactionStrategy: "summarize",
 		},
 		Agent: config.AgentConfig{
-			Workspace:              root,
 			PromptRoot:             root,
 			ExecRoot:               root,
 			SharedMemoryRoot:       root,

@@ -74,21 +74,17 @@ func (r *Runtime) toolsForPrincipal(p principal.Principal, key session.SessionKe
 	executor, hasExecutor := r.tools.(principalAwareToolExecutor)
 	sessioner, _ := r.tools.(sessionAwareToolExecutor)
 	support, hasSupport := r.tools.(principalAwareToolSupport)
-	principalAwareReady := hasExecutor && hasSupport && support.SupportsPrincipal(p)
+	principalAwareReady := (hasExecutor || sessioner != nil) && hasSupport && support.SupportsPrincipal(p)
 
-	if p.Role == principal.RoleApprovedUser && !principalAwareReady {
+	if !principalAwareReady {
 		return nil
 	}
 
-	if principalAwareReady {
-		return &principalScopedTools{
-			base:      r.tools,
-			executor:  executor,
-			sessioner: sessioner,
-			principal: p,
-			key:       key,
-		}
+	return &principalScopedTools{
+		base:      r.tools,
+		executor:  executor,
+		sessioner: sessioner,
+		principal: p,
+		key:       key,
 	}
-
-	return r.tools
 }

@@ -88,13 +88,13 @@ func TestContinuationOperatorTitleFieldsAreJSONCompatible(t *testing.T) {
 		t.Fatalf("decoded titles = %q/%q, want persisted titles", decoded.OperatorTitle, decoded.PlanTitle)
 	}
 
-	var legacy ActionProposal
-	if err := json.Unmarshal([]byte(`{"id":"aprop-legacy","summary":"Legacy summary"}`), &legacy); err != nil {
-		t.Fatalf("unmarshal legacy action: %v", err)
+	var summaryOnly ActionProposal
+	if err := json.Unmarshal([]byte(`{"id":"aprop-summary-only","summary":"Summary only"}`), &summaryOnly); err != nil {
+		t.Fatalf("unmarshal summary-only action: %v", err)
 	}
-	legacy = NormalizeActionProposal(legacy)
-	if legacy.OperatorTitle != "" || legacy.PlanTitle != "" || legacy.Summary != "Legacy summary" {
-		t.Fatalf("legacy action = %#v, want title fields optional", legacy)
+	summaryOnly = NormalizeActionProposal(summaryOnly)
+	if summaryOnly.OperatorTitle != "" || summaryOnly.PlanTitle != "" || summaryOnly.Summary != "Summary only" {
+		t.Fatalf("summary-only action = %#v, want title fields optional", summaryOnly)
 	}
 }
 

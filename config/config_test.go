@@ -28,7 +28,9 @@ admin_user_ids = [123]
 api_key = "sk-ant-test"
 
 [agent]
-workspace = "./workspace"
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
 
 [tools]
 external_manifest_dir = "./external-tools"
@@ -129,8 +131,8 @@ external_manifest_dir = "./external-tools"
 	if cfg.OpenAI.VectorStores.Enabled || cfg.OpenAI.VectorStores.DefaultStore != "" {
 		t.Fatalf("openai.vector_stores defaults = %#v, want disabled/empty", cfg.OpenAI.VectorStores)
 	}
-	if !strings.HasSuffix(cfg.Agent.Workspace, "/workspace") {
-		t.Fatalf("workspace = %q, want expanded relative path", cfg.Agent.Workspace)
+	if !strings.HasSuffix(cfg.Agent.ExecRoot, "/workspace") {
+		t.Fatalf("exec_root = %q, want expanded relative path", cfg.Agent.ExecRoot)
 	}
 	if !strings.HasSuffix(cfg.Tools.ExternalManifestDir, "/external-tools") {
 		t.Fatalf("tools.external_manifest_dir = %q, want expanded relative path", cfg.Tools.ExternalManifestDir)
@@ -218,7 +220,9 @@ old_cache_ttl = "1h"
 api_key = "experimental-test"
 
 [agent]
-workspace = "./workspace"
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
 `
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -305,7 +309,9 @@ admin_user_ids = [123]
 api_key = "sk-ant-test"
 
 [agent]
-workspace = "./workspace"
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
 
 [durable_agents.control_plane]
 enabled = true
@@ -355,7 +361,9 @@ admin_user_ids = [123]
 api_key = "sk-ant-test"
 
 [agent]
-workspace = "./workspace"
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
 
 [durable_agents.control_plane]
 enabled = true
@@ -389,7 +397,9 @@ admin_user_ids = [123]
 api_key = "sk-ant-test"
 
 [agent]
-workspace = "./workspace"
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
 
 [durable_agents.control_plane]
 enabled = true
@@ -425,7 +435,9 @@ admin_user_ids = [123]
 api_key = "sk-ant-test"
 
 [agent]
-workspace = "./workspace"
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
 
 [autonomy]
 default_mode = "mission"
@@ -460,7 +472,9 @@ admin_user_ids = [123]
 api_key = "sk-ant-test"
 
 [agent]
-workspace = "./workspace"
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
 
 [autonomy]
 default_mode = "ask_first"
@@ -497,7 +511,9 @@ admin_user_ids = [123]
 api_key = "sk-ant-test"
 
 [agent]
-workspace = "./workspace"
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
 bootstrap_files = [
   "AGENTS.md",
   "SOUL.md",
@@ -648,7 +664,9 @@ max_delete_per_gc = 400
 export_dir = "~/tmp/tes-exports"
 
 [agent]
-workspace = "~/workspace"
+prompt_root = "~/agent"
+exec_root = "~/workspace"
+shared_memory_root = "~/agent"
 max_iterations = 77
 tool_timeout = 9
 bootstrap_files = ["AGENTS.md"]
@@ -940,7 +958,9 @@ admin_user_ids = [123]
 api_key = "sk-ant-test"
 
 [agent]
-workspace = "./workspace"
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
 `
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -997,7 +1017,9 @@ admin_user_ids = [123]
 api_key = "sk-ant-test"
 
 [agent]
-workspace = "./workspace"
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
 `
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -1031,7 +1053,9 @@ admin_user_ids = [123]
 api_key = "sk-ant-test"
 
 [agent]
-workspace = "./workspace"
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
 `
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -1069,7 +1093,9 @@ admin_user_ids = [123]
 api_key = "sk-ant-test"
 
 [agent]
-workspace = "./workspace"
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
 `
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -1767,7 +1793,9 @@ backend = "codex"
 backend = "floor_fallback"
 
 [agent]
-workspace = "./workspace"
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
 `
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -1798,7 +1826,9 @@ enabled = true
 purpose = "assistants"
 
 [agent]
-workspace = "./workspace"
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
 `
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -1950,7 +1980,7 @@ func TestResolveConfigPathPrefersPrimaryThenEnv(t *testing.T) {
 	}
 }
 
-func TestLoadLegacyWorkspaceBackfillsSplitRoots(t *testing.T) {
+func TestLoadRejectsRemovedWorkspaceAlias(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -1975,31 +2005,12 @@ workspace = "./workspace"
 		t.Fatalf("write config: %v", err)
 	}
 
-	cfg, err := Load(configPath)
-	if err != nil {
-		t.Fatalf("Load() err = %v", err)
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want removed agent.workspace rejection")
 	}
-
-	wantWorkspace := filepath.Join(dir, "workspace")
-	if cfg.Agent.PromptRoot != wantWorkspace {
-		t.Fatalf("prompt_root = %q, want %q", cfg.Agent.PromptRoot, wantWorkspace)
-	}
-	if cfg.Agent.ExecRoot != wantWorkspace {
-		t.Fatalf("exec_root = %q, want %q", cfg.Agent.ExecRoot, wantWorkspace)
-	}
-	if cfg.Agent.SharedMemoryRoot != wantWorkspace {
-		t.Fatalf("shared_memory_root = %q, want %q", cfg.Agent.SharedMemoryRoot, wantWorkspace)
-	}
-	wantUserWorkspaceRoot := filepath.Join(dir, "state", "isolated", "workspaces")
-	if cfg.Agent.UserWorkspaceRoot != wantUserWorkspaceRoot {
-		t.Fatalf("user_workspace_root = %q, want %q", cfg.Agent.UserWorkspaceRoot, wantUserWorkspaceRoot)
-	}
-	wantUserMemoryRoot := filepath.Join(dir, "state", "isolated", "memory")
-	if cfg.Agent.UserMemoryRoot != wantUserMemoryRoot {
-		t.Fatalf("user_memory_root = %q, want %q", cfg.Agent.UserMemoryRoot, wantUserMemoryRoot)
-	}
-	if cfg.Agent.Workspace != wantWorkspace {
-		t.Fatalf("workspace = %q, want legacy root preserved", cfg.Agent.Workspace)
+	if !strings.Contains(err.Error(), "agent.workspace has been removed") {
+		t.Fatalf("Load() err = %v, want removed agent.workspace rejection", err)
 	}
 }
 

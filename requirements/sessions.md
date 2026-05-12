@@ -2,14 +2,13 @@
 
 _Current status:_ the current scope is admitted Telegram DMs, configured
 durable-child/group sessions, SQLite session state, TES retention, review
-digests, and isolation-aware prompt assembly. Older `v0`/`v0.5` labels lower in
-this file are historical design staging notes, not current release promises.
+digests, and isolation-aware prompt assembly.
 
 ## Overview
 
 A session is the durable conversation ledger for one agent conversation. It stores message history, token/accounting metadata, compaction markers, and enough information to continue the conversation on the next turn.
 
-This spec separates three concerns that were previously blurred together:
+This spec separates three concerns that should stay distinct:
 
 - **principal policy**: who is allowed to talk to the system, and at what authority level
 - **session ledger**: the durable append-only transcript for a conversation
@@ -32,17 +31,16 @@ The key rule is:
 Interrupted execution follows the same pattern:
 
 - TES execution events = canonical machine-authored source of truth
-- structured turn-run facts = compatibility fallback when TES coverage is missing
+- structured turn-run facts = operational startup recovery hints, not status truth
 - governor recovery analysis = maintenance interpretation layered on top
 
 ## Truth-Class Contract (Normative)
 
-Session-adjacent surfaces must be classified using exactly these classes:
+Session-adjacent surfaces must be classified using exactly these current classes:
 
 - `canonical`
 - `projection`
 - `operational current-state store`
-- `compatibility fallback`
 
 Session requirements align to that contract as follows:
 
@@ -61,18 +59,9 @@ Session requirements align to that contract as follows:
     `sessions.last_floor_metadata`)
   - `session.review_events` rows with `status='pending'` for governance queue
     state
+  - `turn_runs` for startup recovery parking and in-process run bookkeeping
 - projection:
   - `/status`, `/debug`, and quick-read rendering surfaces
-- compatibility fallback:
-  - `turn_runs` recovery/runtime hints
-
-Compatibility fallback invariants:
-
-- fallback is valid only when matching canonical and operational current-state
-  coverage is unavailable or incomplete;
-- fallback must not override canonical or operational answers for the same
-  question;
-- projections should expose fallback source attribution when fallback is used.
 
 TES retention invariants:
 
@@ -126,9 +115,9 @@ Unknown users are denied at ingress. There is no pending admission workflow.
 - `admin`: trusted to mutate global state
 - `approved_user`: trusted to talk to the system, but not to mutate global state directly
 
-### v0 bootstrap
+### Bootstrap
 
-The simplest correct v0 bootstraps principal policy from config:
+The simplest correct current implementation bootstraps principal policy from config:
 
 - one configured admin principal
 - optional configured `approved_user` principals
@@ -139,7 +128,7 @@ This is sufficient for the first runnable system.
 
 Sessions are keyed by a composite of `chat_id + user_id`.
 
-### v0: DMs
+### DMs
 
 - one session per Telegram DM
 - key: `chat_id`
@@ -157,11 +146,11 @@ Later group behavior should support:
 
 ## Authority & Isolation
 
-### v0
+### Current Phase
 
 If only the admin is approved, the session may operate directly on the real workspace and shared memory.
 
-### v0.5
+### Next Phase
 
 Once more than one approved user exists, authority must split from admission.
 
@@ -236,7 +225,7 @@ type Principal struct {
 ```go
 type Session struct {
     ChatID       int64
-    UserID       int64           // 0 in v0
+    UserID       int64           // 0 in current implementation
     Messages     []Message
     SystemPrompt string
     CreatedAt    time.Time
@@ -344,8 +333,8 @@ type TurnRun struct {
 }
 ```
 
-These records are compatibility fallback execution hints and answer questions the
-visible transcript cannot when TES coverage is unavailable:
+These records are restart/recovery execution hints and answer questions the
+visible transcript cannot while a turn is in flight:
 
 - what was in flight when the host restarted
 - whether real tool execution had started
@@ -381,9 +370,9 @@ CREATE TABLE schema_version (
     version    INTEGER NOT NULL,
     applied_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-INSERT INTO schema_version (version) VALUES (1);
+INSERT INTO schema_version (version) VALUES (<current schema version>);
 
--- v0 principal policy is config-owned, not persisted in SQLite.
+-- current implementation principal policy is config-owned, not persisted in SQLite.
 
 CREATE TABLE sessions (
     chat_id       INTEGER NOT NULL,
@@ -499,7 +488,7 @@ CREATE TABLE compaction_log (
 ### Why this schema
 
 - **Principal policy is separate from sessions**: principal resolution happens before session load and is defined outside the session ledger.
-- **Composite session key** `(chat_id, user_id)`: v0 only uses `user_id=0`, but the shape is already correct for later group support.
+- **Composite session key** `(chat_id, user_id)`: current implementation only uses `user_id=0`, but the shape is already correct for later group support.
 - **Messages in a separate table**: supports efficient load, append, and filtering without rewriting a giant blob.
 - **resolved_workspace_root**: records the actual execution root used for that session.
 - **outbound_messages**: keeps a durable mapping between agent turns and Telegram message IDs.
@@ -563,11 +552,11 @@ func (s *Store) ExpireIdle(maxIdle time.Duration) (int, error) {
 }
 ```
 
-Expiry is useful in v0 even before compaction exists.
+Expiry is useful in current implementation even before compaction exists.
 
 ## Review Flow
 
-### v0.5 digest membrane
+### Isolated digest membrane
 
 The admin DM is the review surface. No separate UI is required.
 
@@ -632,7 +621,7 @@ No explicit promotion workflow is required. The digest is already a reduced, bou
 
 ## Context Assembly
 
-### v0 prompt assembly
+### Prompt assembly
 
 Every turn:
 
@@ -645,7 +634,7 @@ Every turn:
 7. run the model turn
 8. persist new messages
 
-v0 does **not** require:
+current implementation does **not** require:
 
 - multi-user isolation
 - digest forwarding
@@ -655,11 +644,11 @@ v0 does **not** require:
 - exact-byte prompt reuse
 - provider cache breakpoints in the session layer
 
-The only v0 requirement is correctness: workspace files must be reflected on the next turn, and active persisted history must be replayed in order.
+The only current implementation requirement is correctness: workspace files must be reflected on the next turn, and active persisted history must be replayed in order.
 
-Governor prompt and face prompt are separate logical artifacts, even if v0 initially keeps the face thin.
+Governor prompt and face prompt are separate logical artifacts, even if current implementation initially keeps the face thin.
 
-### v0.5 isolated prompt assembly
+### Isolated prompt assembly
 
 For non-admin sessions:
 
@@ -686,7 +675,7 @@ When this lands, unchanged stable content should be reused byte-for-byte to pres
 
 ## Compaction
 
-Compaction is deferred after v0, but becomes more useful in v0.5 because digests are the mechanism for carrying bounded information from isolated non-admin sessions into the admin DM.
+Compaction is deferred after current implementation, but becomes more useful in future phase because digests are the mechanism for carrying bounded information from isolated non-admin sessions into the admin DM.
 
 The design target is:
 
@@ -702,7 +691,7 @@ Compacted messages should remain on disk for audit. They should not be deleted a
 
 ## Pruning
 
-Pruning is deferred after v0.
+Pruning is deferred after current implementation.
 
 When implemented, pruning is applied only in memory during prompt assembly:
 
@@ -714,12 +703,12 @@ SQLite remains the source of truth for the full original transcript.
 
 ## Store Interfaces
 
-### v0 session ledger
+### Session ledger
 
 ```go
 type SessionKey struct {
     ChatID int64
-    UserID int64 // always 0 in v0
+    UserID int64 // always 0 in current implementation
 }
 
 type Store interface {
@@ -730,11 +719,11 @@ type Store interface {
 }
 ```
 
-For v0, `Save(...)` should preserve the delivered assistant scene in the visible transcript. The governor floor should be stored alongside the session as audit data rather than appended as a second visible assistant message.
+For current implementation, `Save(...)` should preserve the delivered assistant scene in the visible transcript. The governor floor should be stored alongside the session as audit data rather than appended as a second visible assistant message.
 
-### v0 principal policy
+### Principal policy
 
-v0 may keep principal policy in config. If it becomes durable earlier, expose a separate principal-policy interface rather than overloading the session ledger.
+current implementation may keep principal policy in config. If it becomes durable earlier, expose a separate principal-policy interface rather than overloading the session ledger.
 
 ```go
 type PrincipalPolicy interface {
@@ -744,7 +733,7 @@ type PrincipalPolicy interface {
 }
 ```
 
-### Extended interfaces after v0
+### Extended interfaces after current implementation
 
 ```go
 type ExtendedStore interface {
@@ -760,11 +749,11 @@ type ExtendedStore interface {
 
 Implementation lives in `session/store.go` with `mattn/go-sqlite3`.
 
-Single-connection SQLite with WAL mode is sufficient for v0. A dedicated writer goroutine is an acceptable later refinement if write contention shows up, but it is not required for the first usable system.
+Single-connection SQLite with WAL mode is sufficient for current implementation. A dedicated writer goroutine is an acceptable later refinement if write contention shows up, but it is not required for the first usable system.
 
 ## Config (see `config.md`)
 
-### v0 required
+### Required
 
 ```toml
 [sessions]
@@ -776,7 +765,7 @@ admin_user_ids = [123456789]
 # at least one admin user is required
 ```
 
-### v0.5
+### Next Phase
 
 ```toml
 [reviews]
@@ -792,7 +781,7 @@ user_workspace_root = "~/.aphelion/state/isolated/workspaces"
 user_memory_root = "~/.aphelion/state/isolated/memory"
 ```
 
-### Deferred after v0.5
+### Deferred
 
 ```toml
 [sessions]
@@ -809,7 +798,7 @@ Provider-specific pruning knobs remain provider config, not session-ledger confi
 
 ## Tests
 
-### v0 admission and ledger
+### Admission and ledger
 
 - **TestAdmissionRequired**: unknown DM cannot create or resume a session
 - **TestBootstrapAdminConfigured**: configured admin principal is available on startup
@@ -825,13 +814,13 @@ Provider-specific pruning knobs remain provider config, not session-ledger confi
 - **TestVisibleLedgerStoresDeliveredScene**: visible assistant history stores the delivered Idolum scene
 - **TestFloorStoredAsSidecarAudit**: governor floor text is stored alongside the session without polluting the visible transcript
 
-### v0 context assembly
+### Context assembly
 
 - **TestAssembleBasic**: system prompt + persisted messages assemble in order
 - **TestCompactMessagesExcluded**: `compacted=1` messages are excluded from active history
 - **TestWorkspaceFilesReloadedEachTurn**: updated `MEMORY.md` / `HEARTBEAT.md` content appears on the next turn
 
-### v0.5 isolation and digests
+### Isolation and digests
 
 - **TestAdminUsesGlobalRoots**: admin session binds to the real/global roots
 - **TestApprovedUserUsesIsolatedRoots**: non-admin session binds to isolated workspace and memory roots

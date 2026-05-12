@@ -22,7 +22,7 @@ func TestRenderTelegramStopUsesContinuationLabel(t *testing.T) {
 	}
 }
 
-func TestRenderTelegramStopKeepsLegacyFallbackWithoutContinuationLabel(t *testing.T) {
+func TestRenderTelegramStopUsesGenericRevokeMessageWithoutContinuationLabel(t *testing.T) {
 	t.Parallel()
 
 	got := RenderTelegramStop(core.StopResult{ContinuationRevoked: true})
@@ -83,7 +83,7 @@ func TestRenderReviewDigestFormatsDurableSections(t *testing.T) {
 		SourceAgent: "mail-child",
 		ParentScope: "telegram_dm:6313146",
 		Summary: strings.Join([]string{
-			"durable_agent=mail-child channel=email parent=telegram_dm:6313146 interval=2026-04-26T22:33:00Z",
+			"durable_agent=mail-child channel=external_channel parent=telegram_dm:6313146 interval=2026-04-26T22:33:00Z",
 			"summary: cannot verify live inbox access until mailbox adapter grants materialize.",
 			"local: Read profile/growth.md.; Ran connection_test.",
 			"questions: Can the parent materialize mailbox adapter access?",
@@ -92,8 +92,8 @@ func TestRenderReviewDigestFormatsDurableSections(t *testing.T) {
 	})
 
 	for _, needle := range []string{
-		"**Email child review**",
-		"Email • 2026-04-26T22:33:00Z",
+		"**Review: mail-child**",
+		"external channel • 2026-04-26T22:33:00Z",
 		"**Summary**",
 		"cannot verify live inbox access",
 		"**Checked**",

@@ -71,7 +71,7 @@ func TestTailnetGrantBindingLifecycle(t *testing.T) {
 	}
 }
 
-func TestTailnetGrantBindingMigrationFromExistingSchema(t *testing.T) {
+func TestTailnetGrantBindingCurrentSchemaReopens(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "sessions.db")

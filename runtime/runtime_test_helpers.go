@@ -718,7 +718,7 @@ func (p *durableAgentToolRequestingProvider) Complete(_ context.Context, message
 					ToolCalls: []agent.ToolCall{{
 						ID:    "tool-call-1",
 						Name:  "durable_agent",
-						Input: json.RawMessage(`{"action":"policy_apply","agent_id":"family-group","outbound_mode":"read_only","reason":"ratified from conversation"}`),
+						Input: json.RawMessage(`{"action":"policy_apply","agent_id":"family-group","policy_overrides":{"outbound_mode":"read_only"},"reason":"ratified from conversation"}`),
 					}},
 				}, nil
 			}
@@ -734,18 +734,18 @@ func (p *durableAgentToolRequestingProvider) Complete(_ context.Context, message
 	return &agent.Response{Content: "Policy updated through conversation."}, nil
 }
 
-type legacyRecordingTools struct {
+type directRecordingTools struct {
 	defs         []agent.ToolDef
 	executeCalls int
 }
 
-func (t *legacyRecordingTools) Definitions() []agent.ToolDef {
+func (t *directRecordingTools) Definitions() []agent.ToolDef {
 	return append([]agent.ToolDef(nil), t.defs...)
 }
 
-func (t *legacyRecordingTools) Execute(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+func (t *directRecordingTools) Execute(_ context.Context, _ string, _ json.RawMessage) (string, error) {
 	t.executeCalls++
-	return "legacy execution", nil
+	return "direct execution", nil
 }
 
 type principalRecordingTools struct {
@@ -762,7 +762,7 @@ func (t *principalRecordingTools) Definitions() []agent.ToolDef {
 
 func (t *principalRecordingTools) Execute(_ context.Context, _ string, _ json.RawMessage) (string, error) {
 	t.executeCalls++
-	return "legacy execution", nil
+	return "direct execution", nil
 }
 
 func (t *principalRecordingTools) ExecuteForPrincipal(_ context.Context, p principal.Principal, _ string, _ json.RawMessage) (string, error) {
@@ -864,7 +864,6 @@ func buildRuntimeFixtures(t *testing.T) (*config.Config, *session.SQLiteStore, *
 			MaxOverrideDuration: "4h",
 		},
 		Agent: config.AgentConfig{
-			Workspace:              root,
 			PromptRoot:             root,
 			ExecRoot:               root,
 			SharedMemoryRoot:       root,

@@ -19,7 +19,6 @@ type ChildRuntimeContract struct {
 	ReadonlyBinds  []ChildRuntimeBind `json:"readonly_binds,omitempty"`
 	SecretBinds    []ChildRuntimeBind `json:"secret_binds,omitempty"`
 	EnvFromParent  []string           `json:"env_from_parent,omitempty"`
-	Environment    []string           `json:"environment,omitempty"` // legacy alias for env_from_parent.
 	CapabilityNote string             `json:"capability_note,omitempty"`
 }
 
@@ -35,8 +34,7 @@ func NormalizeChildRuntimeContract(contract ChildRuntimeContract) ChildRuntimeCo
 	contract.ReadonlyPaths = normalizeUniqueStrings(contract.ReadonlyPaths)
 	contract.ReadonlyBinds = normalizeChildRuntimeBinds(contract.ReadonlyBinds)
 	contract.SecretBinds = normalizeChildRuntimeBinds(contract.SecretBinds)
-	contract.EnvFromParent = normalizeUniqueStrings(append(contract.EnvFromParent, contract.Environment...))
-	contract.Environment = nil
+	contract.EnvFromParent = normalizeUniqueStrings(contract.EnvFromParent)
 	contract.CapabilityNote = strings.TrimSpace(contract.CapabilityNote)
 	return contract
 }
@@ -116,6 +114,13 @@ func ExtractChildRuntimeContract(contractJSON string, constraintsJSON string) (C
 		raw = strings.TrimSpace(raw)
 		if raw == "" || raw == "{}" {
 			continue
+		}
+		var removed map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(raw), &removed); err != nil {
+			return ChildRuntimeContract{}, false, fmt.Errorf("decode child_runtime contract: %w", err)
+		}
+		if _, ok := removed["runtime_materialization"]; ok {
+			return ChildRuntimeContract{}, false, fmt.Errorf("runtime_materialization has been removed; use child_runtime")
 		}
 		var wrapper struct {
 			ChildRuntime *ChildRuntimeContract `json:"child_runtime,omitempty"`

@@ -226,7 +226,7 @@ For `policy_apply`, the governance surface should prefer a conversational patch 
 - `policy_patch` for charter/autonomy/visibility/shared-context/capabilities/drift
 - `policy_overrides` only when low-level policy axes must be set explicitly
 
-Legacy top-level fields may remain accepted for compatibility, but they should be treated as compatibility inputs mapped into the same canonical patch application path.
+Policy changes are accepted through `policy_patch` and `policy_overrides`; removed top-level policy fields are rejected by the live schema.
 
 ## `TOOLS.md`
 
@@ -577,7 +577,7 @@ External tools are authority-managed runtime tools:
 The generic executor supports `process` and `subprocess` manifests through the
 sandbox runner. `container` and `workspace_runner` manifests are importable and
 diagnosable but are not process-executable until dedicated runtimes exist. They
-are not part of the current done-done release target.
+are not current targets.
 
 The bundled `browse_page` pilot lives under `external-tools/browse_page/`. It is
 owned by `child-alpha`; invocation must be granted through

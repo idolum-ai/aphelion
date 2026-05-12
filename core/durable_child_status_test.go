@@ -97,16 +97,17 @@ func testPayloadHash(t *testing.T, payload json.RawMessage) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func TestParseDurableAgentContinuityStateMigratesLegacyCodexAppServerState(t *testing.T) {
+func TestParseDurableAgentContinuityStateParsesExternalChannelState(t *testing.T) {
 	raw := `{
-		"codex_app_server":{
-			"thread_id":" thread-1 ",
-			"last_turn_id":" turn-1 ",
+		"external_channel":{
+			"adapter":"codex_app_server",
+			"session_ref":" thread-1 ",
+			"last_command":"codex_app_server.status_heartbeat",
 			"last_attempt_at":"2026-04-29T11:12:35Z",
-			"last_heartbeat_at":"2026-04-29T11:12:35Z",
-			"last_payload_hash":"sha256:abc",
+			"last_success_at":"2026-04-29T11:12:35Z",
 			"last_artifact":"artifacts/heartbeats/codex.json",
-			"last_status":"ok"
+			"last_status":"ok",
+			"adapter_state":{"thread_id":"thread-1","last_turn_id":"turn-1","last_payload_hash":"sha256:abc"}
 		}
 	}`
 	state, err := ParseDurableAgentContinuityState(raw)
@@ -114,7 +115,7 @@ func TestParseDurableAgentContinuityStateMigratesLegacyCodexAppServerState(t *te
 		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
 	}
 	if state.ExternalChannel == nil {
-		t.Fatal("ExternalChannel = nil, want migrated state")
+		t.Fatal("ExternalChannel = nil, want parsed state")
 	}
 	if state.ExternalChannel.Adapter != "codex_app_server" || state.ExternalChannel.SessionRef != "thread-1" {
 		t.Fatalf("ExternalChannel = %#v, want codex adapter and thread session", state.ExternalChannel)
@@ -123,14 +124,11 @@ func TestParseDurableAgentContinuityStateMigratesLegacyCodexAppServerState(t *te
 		t.Fatalf("ExternalChannel = %#v, want migrated command/artifact", state.ExternalChannel)
 	}
 	if got := string(state.ExternalChannel.AdapterState); got == "" || !strings.Contains(got, `"thread_id":"thread-1"`) || !strings.Contains(got, `"last_turn_id":"turn-1"`) {
-		t.Fatalf("AdapterState = %s, want compact codex adapter residue", got)
+		t.Fatalf("AdapterState = %s, want compact adapter residue", got)
 	}
 	marshaled, err := state.Marshal()
 	if err != nil {
 		t.Fatalf("Marshal() err = %v", err)
-	}
-	if strings.Contains(marshaled, "codex_app_server") && strings.Contains(marshaled, "last_heartbeat_at") {
-		t.Fatalf("Marshal() = %s, appears to preserve legacy codex top-level shape", marshaled)
 	}
 	if !strings.Contains(marshaled, "external_channel") {
 		t.Fatalf("Marshal() = %s, want external_channel", marshaled)

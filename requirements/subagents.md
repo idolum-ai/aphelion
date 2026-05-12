@@ -29,7 +29,7 @@ The result should be:
 
 ## Scope
 
-### v0 required
+### Required
 
 - first-class child session identity
 - governor-only spawning
@@ -38,7 +38,7 @@ The result should be:
 - light-context spawn by default
 - completion result returned to parent
 
-### Deferred after v0
+### Deferred
 
 - persistent named child agents
 - child-specific identities beyond generic subordinate sessions

@@ -36,7 +36,7 @@ func SerializeFloorFallback(packet core.MaterialPacket, floorText string, opts F
 	if packet.Empty() {
 		return FloorTextOrFallback(trimmedFloor)
 	}
-	if isLegacyFloorPacket(packet, trimmedFloor) {
+	if isPlainTextFloorPacket(packet, trimmedFloor) {
 		return FloorTextOrFallback(trimmedFloor)
 	}
 
@@ -255,7 +255,7 @@ func normalizeFallbackKey(text string) string {
 	return trimmed
 }
 
-func isLegacyFloorPacket(packet core.MaterialPacket, floorText string) bool {
+func isPlainTextFloorPacket(packet core.MaterialPacket, floorText string) bool {
 	return len(packet.Facts) == 0 &&
 		len(packet.AllowedActions) == 0 &&
 		len(packet.Commitments) == 0 &&

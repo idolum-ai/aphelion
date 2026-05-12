@@ -148,13 +148,12 @@ single ambiguous `Continue` button. Newly rendered Telegram labels are:
 - `Refresh`: show the current edge and ask for the next explicit lease after an
   expired prompt; it does not approve or trigger work.
 
-Compatibility note: legacy callback actions `continue` / `approve` still decode
-as approval, and the longer v2 callback action names still decode to the same
-semantic actions, but newly rendered prompts use the compact labels above.
+Callback note: approval buttons use the current `approve_lease` action. Removed
+callback actions such as `continue` and bare `approve` are rejected as stale.
 
 Authority rule: status and edit buttons must not grant execution authority.
-Only `Start` or legacy approval actions can activate the lease, and activation
-still uses the persisted proposal/lease identity rather than freeform text.
+Only `Start` can activate the lease, and activation still uses the persisted
+proposal/lease identity rather than freeform text.
 
 Deploy/restart remains a standalone hard gate. A deploy lease may cover commit,
 build, install, restart, and post-restart verification only when those actions

@@ -18,7 +18,7 @@ for the attribution and departure record behind that comparison.
 
 ## Scope
 
-### v0 required
+### Required
 
 - source build path
 - local executable path
@@ -26,7 +26,7 @@ for the attribution and departure record behind that comparison.
 - logs and restart behavior
 - documented update flow
 
-### Deferred after v0
+### Deferred
 
 - GitHub Releases automation
 - signed artifacts

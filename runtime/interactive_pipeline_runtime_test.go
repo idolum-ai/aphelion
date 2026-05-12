@@ -22,7 +22,7 @@ func TestHandleInboundApprovedUserDoesNotLoadGlobalDynamicMemory(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	if err := os.WriteFile(filepath.Join(cfg.Agent.Workspace, "MEMORY.md"), []byte("GLOBAL-MEMORY-SECRET"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(cfg.Agent.ExecRoot, "MEMORY.md"), []byte("GLOBAL-MEMORY-SECRET"), 0o600); err != nil {
 		t.Fatalf("write MEMORY.md: %v", err)
 	}
 

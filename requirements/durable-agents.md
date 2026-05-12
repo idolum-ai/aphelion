@@ -6,7 +6,7 @@ This document records the durable-agent design boundary. The current shipped
 target is bounded local/scheduled/channel-facing durable children with
 child-local state, scoped credentials, upward review, and parent-visible health.
 Remote child control planes, public website agents, fleet management, and
-marketplace-style durable-agent deployment are not current done-done targets.
+marketplace-style durable-agent deployment are not current targets.
 
 Aphelion needs a first-class model for **durable external-channel agents** only
 where a concrete governed outpost workflow requires one.
@@ -270,7 +270,7 @@ Durable drift includes:
 
 - changing summary shape or escalation policy long-term
 - adopting a new standing role (for example, "you are now my software developer")
-- enabling outbound replies where they were previously forbidden
+- enabling outbound replies where they were not allowed
 - installing new packages or gaining new host privileges
 - changing prompt or memory files that affect future behavior
 

@@ -48,8 +48,7 @@ Operational `/status` views combine multiple sources:
 - router in-memory state (`active_turn_ids`, `queue_depth_by_chat`)
 - `pending_decisions` durable rows
 - session continuation state rows
-- latest `turn_runs` per chat
-- stale running turn sweep + pending recovery rows
+- TES latest-turn, stale-running, and recovery-issued projections
 - runtime stale-watchdog health flag/threshold
 
 Pending totals must be deterministic from these rules:
@@ -57,7 +56,7 @@ Pending totals must be deterministic from these rules:
 1. queue depth > 0 contributes one `queue` pending item per chat
 2. each durable pending decision contributes one `decision` item
 3. continuation status `pending` or `approved` contributes one `continuation` item
-4. each interrupted unrecovered turn contributes one `recovery` item
+4. each TES recovery issuance without a later terminal recovery event contributes one `recovery` item
 5. each stale running turn contributes one `stale_turn` item
 
 Status rendering should remain summary-first and bounded, but keep stable key labels for machine parsing.

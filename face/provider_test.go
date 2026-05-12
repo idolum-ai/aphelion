@@ -271,7 +271,7 @@ func TestProviderRendererRenderPromptIncludesMaterialFloor(t *testing.T) {
 	}
 
 	if _, err := renderer.Render(context.Background(), RenderRequest{
-		FloorText: "legacy canonical",
+		FloorText: "plain canonical",
 		MaterialFloor: core.MaterialPacket{
 			Facts:            []string{"The codebase was inspected."},
 			SceneConstraints: []string{"Keep the tone direct."},

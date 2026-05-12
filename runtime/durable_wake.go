@@ -18,7 +18,6 @@ import (
 )
 
 const durableWakeInferenceUnavailableSignal = "Inference backend is unavailable."
-const durableWakeLegacyInferenceUnavailableSignal = "Inference backends are unavailable after retries and fallback."
 const durableWakeAwakeLockStaleAfter = 30 * time.Minute
 
 type durableWakeGovernorContextBuilder func(
@@ -285,8 +284,7 @@ func durableTurnInferenceUnavailable(result *turn.Result, summary string) bool {
 
 func durableWakeInferenceUnavailable(summary string) bool {
 	summary = strings.TrimSpace(summary)
-	return strings.Contains(summary, durableWakeInferenceUnavailableSignal) ||
-		strings.Contains(summary, durableWakeLegacyInferenceUnavailableSignal)
+	return strings.Contains(summary, durableWakeInferenceUnavailableSignal)
 }
 
 func finalizeDurableWakeFailure(plan durableWakeTurnPlan, turnSummary string, cause error) error {

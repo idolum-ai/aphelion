@@ -497,9 +497,6 @@ func reviewEventCompactTitle(event session.ReviewEvent, meta reviewEventArtifact
 	if agent == "" {
 		agent = formattedReviewEventAgent(event)
 	}
-	if strings.EqualFold(strings.TrimSpace(meta.Metadata["channel_kind"]), "email") {
-		return "Email child review"
-	}
 	switch strings.ToLower(agent) {
 	case "idolum-daily-review":
 		return "Daily review"
@@ -526,8 +523,6 @@ func reviewEventCompactContext(meta reviewEventArtifactMetadata) string {
 
 func reviewEventHumanChannel(channel string) string {
 	switch strings.TrimSpace(strings.ToLower(channel)) {
-	case "email":
-		return "Email"
 	case "daily_review":
 		return "Daily review"
 	case "external_channel":

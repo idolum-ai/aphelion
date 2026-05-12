@@ -339,8 +339,6 @@ type reviewDigestSections struct {
 func reviewDigestTitle(notice ReviewDigestNotice) string {
 	if agent := strings.TrimSpace(notice.SourceAgent); agent != "" {
 		switch {
-		case strings.EqualFold(strings.TrimSpace(notice.SourceRole), "durable_agent") && reviewDigestNoticeChannel(notice) == "email":
-			return "Email child review"
 		case strings.Contains(strings.ToLower(agent), "daily-review"):
 			return "Daily review"
 		}
@@ -354,15 +352,6 @@ func reviewDigestTitle(notice ReviewDigestNotice) string {
 	default:
 		return "Review: " + strings.ReplaceAll(strings.TrimSpace(notice.SourceRole), "_", " ")
 	}
-}
-
-func reviewDigestNoticeChannel(notice ReviewDigestNotice) string {
-	for _, field := range strings.Fields(notice.Summary) {
-		if channel, ok := strings.CutPrefix(field, "channel="); ok {
-			return strings.ToLower(strings.Trim(strings.TrimSpace(channel), ",.;"))
-		}
-	}
-	return ""
 }
 
 func reviewDigestContextLine(notice ReviewDigestNotice, summaryContext []string) string {
@@ -444,8 +433,6 @@ func reviewDigestContextMetadata(lines []string) map[string]string {
 
 func reviewDigestHumanChannel(channel string) string {
 	switch strings.TrimSpace(strings.ToLower(channel)) {
-	case "email":
-		return "Email"
 	case "daily_review":
 		return "Daily review"
 	default:

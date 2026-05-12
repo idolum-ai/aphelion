@@ -13,14 +13,14 @@ This spec defines how Aphelion discovers, uses, and eventually owns Codex creden
 
 ## Scope
 
-### v0 required
+### Required
 
 - detect external Codex CLI credentials
 - support `governor.backend = "auto"` choosing Codex when valid credentials exist
 - support falling back to native governor when Codex credentials are missing or unusable
 - never require Codex for the system to run
 
-### Deferred after v0
+### Deferred
 
 - Aphelion-owned Codex auth store
 - Aphelion-run OAuth login flow
@@ -199,7 +199,7 @@ transport_retries = 1
 ## Decisions
 
 - **Codex auth is not the same as OpenAI API-key auth.**
-- **External Codex CLI credentials are a valid v0 source.**
+- **External Codex CLI credentials are a valid current implementation source.**
 - **Aphelion should be Codex-compatible before it is Codex-self-hosting.**
 - **Aphelion may now own Codex auth while remaining CLI-compatible.**
 - **`auto` prefers Codex when valid credentials exist.**

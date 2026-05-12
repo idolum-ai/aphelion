@@ -16,7 +16,7 @@ import (
 
 func runAuthorityCommand(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: authority <doctor|repair|revoke-grant|revoke-continuation|acknowledge-legacy-invocation-gap> [--config path]")
+		return fmt.Errorf("usage: authority <doctor|repair|revoke-grant|revoke-continuation> [--config path]")
 	}
 	switch strings.TrimSpace(args[0]) {
 	case "doctor":
@@ -27,10 +27,8 @@ func runAuthorityCommand(args []string) error {
 		return runAuthorityRevokeGrantCommand(args[1:])
 	case "revoke-continuation":
 		return runAuthorityRevokeContinuationCommand(args[1:])
-	case "acknowledge-legacy-invocation-gap":
-		return runAuthorityAcknowledgeLegacyInvocationGapCommand(args[1:])
 	default:
-		return fmt.Errorf("unknown authority command %q (known: doctor|repair|revoke-grant|revoke-continuation|acknowledge-legacy-invocation-gap)", args[0])
+		return fmt.Errorf("unknown authority command %q (known: doctor|repair|revoke-grant|revoke-continuation)", args[0])
 	}
 }
 
@@ -214,92 +212,6 @@ func runAuthorityRevokeContinuationCommand(args []string) error {
 	fmt.Fprintf(os.Stdout, "prior_status: %s\n", priorStatus)
 	fmt.Fprintf(os.Stdout, "status: %s\n", repaired.Status)
 	fmt.Fprintf(os.Stdout, "changed: %t\n", changed)
-	return nil
-}
-
-func runAuthorityAcknowledgeLegacyInvocationGapCommand(args []string) error {
-	fs := flag.NewFlagSet("authority acknowledge-legacy-invocation-gap", flag.ContinueOnError)
-	configFlag := fs.String("config", "", "path to config.toml")
-	grantIDFlag := fs.String("grant-id", "", "capability grant id whose legacy invocation gap was reviewed")
-	reasonFlag := fs.String("reason", "", "operator-visible reason recorded in authority evidence")
-	applyFlag := fs.Bool("apply", false, "record the review evidence")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if !*applyFlag {
-		return fmt.Errorf("authority acknowledge-legacy-invocation-gap requires --apply to record review evidence")
-	}
-	grantID := strings.TrimSpace(*grantIDFlag)
-	reason := strings.TrimSpace(*reasonFlag)
-	if grantID == "" {
-		return fmt.Errorf("authority acknowledge-legacy-invocation-gap requires --grant-id")
-	}
-	if reason == "" {
-		return fmt.Errorf("authority acknowledge-legacy-invocation-gap requires --reason")
-	}
-	store, configPath, closeStore, err := authorityStoreForCommand(*configFlag)
-	if err != nil {
-		return err
-	}
-	defer closeStore()
-	before, err := authoritySnapshotFromStore(store)
-	if err != nil {
-		return err
-	}
-	finding, ok := authorityFindingByCodeAndSource(before, "capability_grant_invocation_missing_turn_lease_evidence", "capability_grant", grantID)
-	if !ok {
-		return fmt.Errorf("no current legacy invocation gap finding for capability grant %q", grantID)
-	}
-	grant, ok, err := store.CapabilityGrant(grantID)
-	if err != nil {
-		return fmt.Errorf("load capability grant for legacy invocation review: %w", err)
-	}
-	if !ok {
-		return fmt.Errorf("capability grant %q not found", grantID)
-	}
-	invocations, err := store.CapabilityInvocationsByGrant(grantID, 500)
-	if err != nil {
-		return fmt.Errorf("load capability invocations for legacy review: %w", err)
-	}
-	reviewedCount, reviewedThroughID, reviewedThroughAt := authorityMissingInvocationEvidenceReviewBounds(invocations)
-	if reviewedCount == 0 || reviewedThroughID <= 0 {
-		return fmt.Errorf("capability grant %q has no material invocation rows missing turn lease evidence to acknowledge", grantID)
-	}
-	now := time.Now().UTC()
-	if err := appendMaintenanceExecutionEvent(store, maintenanceRepairKey(), core.ExecutionEventAuthorityFindingReviewed, "authority_maintenance", "reviewed", map[string]any{
-		"finding_id":                     finding.FindingID,
-		"code":                           finding.Code,
-		"severity":                       finding.Severity,
-		"source_kind":                    finding.SourceKind,
-		"source_id":                      finding.SourceID,
-		"grant_id":                       grantID,
-		"granted_to":                     grant.GrantedTo,
-		"kind":                           string(grant.Kind),
-		"target_resource":                grant.TargetResource,
-		"reviewed_invocation_count":      reviewedCount,
-		"reviewed_through_invocation_id": reviewedThroughID,
-		"reviewed_through_created_at":    reviewedThroughAt.Format(time.RFC3339Nano),
-		"reason":                         reason,
-		"operator_action":                "authority acknowledge-legacy-invocation-gap",
-	}, now); err != nil {
-		return err
-	}
-	after, err := authoritySnapshotFromStore(store)
-	if err != nil {
-		return err
-	}
-	if _, stillPresent := authorityFindingByID(after, finding.FindingID); stillPresent {
-		return fmt.Errorf("authority legacy invocation review for %q did not close finding %s", grantID, finding.FindingID)
-	}
-	fmt.Fprintln(os.Stdout, "action: authority-acknowledge-legacy-invocation-gap")
-	fmt.Fprintf(os.Stdout, "config_path: %s\n", configPath)
-	fmt.Fprintln(os.Stdout, "applied: true")
-	fmt.Fprintf(os.Stdout, "grant_id: %s\n", grantID)
-	fmt.Fprintf(os.Stdout, "finding_id: %s\n", finding.FindingID)
-	fmt.Fprintf(os.Stdout, "reviewed_invocation_count: %d\n", reviewedCount)
-	fmt.Fprintf(os.Stdout, "reviewed_through_invocation_id: %d\n", reviewedThroughID)
-	fmt.Fprintf(os.Stdout, "before_findings: %d\n", before.FindingCount)
-	fmt.Fprintf(os.Stdout, "after_findings: %d\n", after.FindingCount)
 	return nil
 }
 
@@ -555,26 +467,6 @@ func authorityMaintenanceRevokeContinuationState(prior session.ContinuationState
 	state.ParkedReason = reason
 	state.UpdatedAt = now
 	return session.NormalizeContinuationState(state), changed
-}
-
-func authorityMissingInvocationEvidenceReviewBounds(invocations []session.CapabilityInvocation) (int, int64, time.Time) {
-	count := 0
-	var maxID int64
-	var maxCreatedAt time.Time
-	for _, invocation := range invocations {
-		invocation = session.NormalizeCapabilityInvocation(invocation)
-		if strings.TrimSpace(invocation.ContinuationLeaseID) != "" || strings.TrimSpace(invocation.OperationPlanLeaseID) != "" {
-			continue
-		}
-		count++
-		if invocation.InvocationID > maxID {
-			maxID = invocation.InvocationID
-		}
-		if !invocation.CreatedAt.IsZero() && (maxCreatedAt.IsZero() || invocation.CreatedAt.After(maxCreatedAt)) {
-			maxCreatedAt = invocation.CreatedAt.UTC()
-		}
-	}
-	return count, maxID, maxCreatedAt
 }
 
 func authorityRepairActionSupported(action string) bool {

@@ -119,7 +119,7 @@ func durableAgentManagedProfileFiles(agent core.DurableAgent, store *session.SQL
 		"- channel_kind: " + strings.TrimSpace(agent.ChannelKind),
 		"- wakeup_mode: " + strings.TrimSpace(agent.WakeupMode),
 		"- network_policy: " + strings.TrimSpace(agent.NetworkPolicy),
-		"- runtime_materialization: active capability grants with child_runtime contracts only",
+		"- child_runtime: active capability grants with child_runtime contracts only",
 	}
 	if strings.TrimSpace(policy.TailnetMode) != "" {
 		runtimeLines = append(runtimeLines,

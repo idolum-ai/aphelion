@@ -24,6 +24,17 @@ type stubExecApprover struct {
 	request  ExecApprovalRequest
 }
 
+func TestRegistryDefinitionsHaveValidJSONParameters(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(newToolTestStore(t))
+	for _, def := range registry.Definitions() {
+		if !json.Valid(def.Parameters) {
+			t.Fatalf("%s parameters are invalid JSON: %s", def.Name, string(def.Parameters))
+		}
+	}
+}
+
 func (s *stubExecApprover) ConfirmExec(_ context.Context, req ExecApprovalRequest) (ExecApprovalDecision, error) {
 	s.called++
 	s.request = req

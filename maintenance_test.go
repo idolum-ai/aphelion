@@ -813,7 +813,7 @@ func TestRepairReviewRedactionsRestoresConceptOnlySummary(t *testing.T) {
 		ParentScopeKind:    "telegram_dm",
 		ParentScopeID:      "1",
 		ReviewTargetChatID: 1,
-		ChannelKind:        "email",
+		ChannelKind:        "external_channel",
 		BootstrapLLM: core.NodeLLMBootstrap{
 			Backend:        "native",
 			NativeProvider: "openrouter",
@@ -826,7 +826,7 @@ func TestRepairReviewRedactionsRestoresConceptOnlySummary(t *testing.T) {
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
-	rawSummary := "Email wake blocked because mailbox adapter credential backend requires an interactive passphrase prompt; no TTY is available."
+	rawSummary := "External-channel wake blocked because mailbox adapter credential backend requires an interactive passphrase prompt; no TTY is available."
 	ref, err := durableagent.WriteForensicRecord(agent, durableagent.ForensicRecord{
 		AgentID:        agent.AgentID,
 		Reason:         "secret_like_material",
@@ -843,8 +843,8 @@ func TestRepairReviewRedactionsRestoresConceptOnlySummary(t *testing.T) {
 		SourceRole:        "durable_agent",
 		SourceScope:       session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: agent.AgentID, DurableAgentID: agent.AgentID},
 		TargetAdminChatID: 1,
-		Summary:           "durable_agent=mail-child channel=email\nsummary: [REDACTED: summary]\nrisks: external_channel",
-		MetadataJSON:      `{"agent_id":"mail-child","summary":"[REDACTED: summary]","interval_label":"2026-05-08T02:50:01Z","risk_flags":["external_channel"],"artifact_refs":["` + ref + `"],"metadata":{"channel_kind":"email","external_channel_status":"wake_blocked","forensic_ref":"` + ref + `","redacted_fields":"summary","redaction_action":"quarantined_fields","redaction_source":"deterministic","redaction_reason":"concrete_secret_value"}}`,
+		Summary:           "durable_agent=mail-child channel=external_channel\nsummary: [REDACTED: summary]\nrisks: external_channel",
+		MetadataJSON:      `{"agent_id":"mail-child","summary":"[REDACTED: summary]","interval_label":"2026-05-08T02:50:01Z","risk_flags":["external_channel"],"artifact_refs":["` + ref + `"],"metadata":{"channel_kind":"external_channel","external_channel_status":"wake_blocked","forensic_ref":"` + ref + `","redacted_fields":"summary","redaction_action":"quarantined_fields","redaction_source":"deterministic","redaction_reason":"concrete_secret_value"}}`,
 	})
 	if err != nil {
 		t.Fatalf("InsertReviewEvent() err = %v", err)
@@ -899,7 +899,7 @@ func TestRepairReviewRedactionsLeavesConcreteSecretSummaryRedacted(t *testing.T)
 		ParentScopeKind:    "telegram_dm",
 		ParentScopeID:      "1",
 		ReviewTargetChatID: 1,
-		ChannelKind:        "email",
+		ChannelKind:        "external_channel",
 		BootstrapLLM: core.NodeLLMBootstrap{
 			Backend:        "native",
 			NativeProvider: "openrouter",
@@ -918,7 +918,7 @@ func TestRepairReviewRedactionsLeavesConcreteSecretSummaryRedacted(t *testing.T)
 		CreatedAt:      time.Now().UTC(),
 		RedactedFields: []string{"summary"},
 		Payload: map[string]string{
-			"summary": "Email adapter printed token: sk-testSECRETabcdef123456",
+			"summary": "External adapter printed token: sk-testSECRETabcdef123456",
 		},
 	})
 	if err != nil {
@@ -928,8 +928,8 @@ func TestRepairReviewRedactionsLeavesConcreteSecretSummaryRedacted(t *testing.T)
 		SourceRole:        "durable_agent",
 		SourceScope:       session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: agent.AgentID, DurableAgentID: agent.AgentID},
 		TargetAdminChatID: 1,
-		Summary:           "durable_agent=mail-child channel=email\nsummary: [REDACTED: summary]",
-		MetadataJSON:      `{"agent_id":"mail-child","summary":"[REDACTED: summary]","metadata":{"channel_kind":"email","forensic_ref":"` + ref + `","redacted_fields":"summary"}}`,
+		Summary:           "durable_agent=mail-child channel=external_channel\nsummary: [REDACTED: summary]",
+		MetadataJSON:      `{"agent_id":"mail-child","summary":"[REDACTED: summary]","metadata":{"channel_kind":"external_channel","forensic_ref":"` + ref + `","redacted_fields":"summary"}}`,
 	})
 	if err != nil {
 		t.Fatalf("InsertReviewEvent() err = %v", err)
@@ -1774,105 +1774,6 @@ func TestRunAuthorityRevokeContinuationCommandClosesMissingDecisionFinding(t *te
 	}
 	if strings.Contains(afterOut, "pending_proposal_missing_decision") {
 		t.Fatalf("doctor output after revoke = %q, want missing decision warning closed", afterOut)
-	}
-}
-
-func TestRunAuthorityAcknowledgeLegacyInvocationGapReviewsCurrentRowsOnly(t *testing.T) {
-	root := t.TempDir()
-	cfgPath := writeMaintenanceConfig(t, root)
-	cfg, _, err := loadConfigForCommand(cfgPath)
-	if err != nil {
-		t.Fatalf("loadConfigForCommand() err = %v", err)
-	}
-	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteStore() err = %v", err)
-	}
-	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
-		GrantID:        "grant-authority-legacy-gap",
-		RequestID:      "capreq-authority-legacy-gap",
-		GrantedBy:      "telegram:1",
-		GrantedTo:      "durable_agent:child-public-reader",
-		Kind:           session.CapabilityKindTool,
-		TargetResource: "public_profile_readonly",
-		AllowedActions: []string{"invoke"},
-		Status:         session.CapabilityGrantStatusActive,
-		Contract:       `{"child_runtime":{"readonly_paths":["` + t.TempDir() + `"]}}`,
-		Constraints:    "{}",
-	}); err != nil {
-		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
-	}
-	firstInvocation, err := store.RecordCapabilityInvocation(session.CapabilityInvocation{
-		GrantID:   "grant-authority-legacy-gap",
-		Principal: "child-public-reader",
-		Action:    "invoke",
-		Status:    "allowed",
-	})
-	if err != nil {
-		t.Fatalf("RecordCapabilityInvocation(first) err = %v", err)
-	}
-	store.Close()
-
-	beforeOut, err := captureStdout(t, func() error {
-		return runAuthorityCommand([]string{"doctor", "--config", cfgPath, "--limit", "10"})
-	})
-	if err != nil {
-		t.Fatalf("runAuthorityCommand(doctor before) err = %v", err)
-	}
-	if !strings.Contains(beforeOut, "capability_grant_invocation_missing_turn_lease_evidence") || strings.Contains(beforeOut, "child_runtime_contract_missing") {
-		t.Fatalf("doctor output before review = %q, want only legacy invocation warning", beforeOut)
-	}
-	applyOut, err := captureStdout(t, func() error {
-		return runAuthorityCommand([]string{
-			"acknowledge-legacy-invocation-gap",
-			"--config", cfgPath,
-			"--grant-id", "grant-authority-legacy-gap",
-			"--reason", "pre-contract invocation row reviewed; no historical lease evidence exists",
-			"--apply",
-		})
-	})
-	if err != nil {
-		t.Fatalf("runAuthorityCommand(acknowledge legacy gap) err = %v", err)
-	}
-	for _, needle := range []string{"action: authority-acknowledge-legacy-invocation-gap", "applied: true", "reviewed_invocation_count: 1", "after_findings: 0"} {
-		if !strings.Contains(applyOut, needle) {
-			t.Fatalf("ack output = %q, want %q", applyOut, needle)
-		}
-	}
-	if !strings.Contains(applyOut, fmt.Sprintf("reviewed_through_invocation_id: %d", firstInvocation.InvocationID)) {
-		t.Fatalf("ack output = %q, want review through first invocation id %d", applyOut, firstInvocation.InvocationID)
-	}
-	afterOut, err := captureStdout(t, func() error {
-		return runAuthorityCommand([]string{"doctor", "--config", cfgPath, "--limit", "10"})
-	})
-	if err != nil {
-		t.Fatalf("runAuthorityCommand(doctor after ack) err = %v", err)
-	}
-	if strings.Contains(afterOut, "capability_grant_invocation_missing_turn_lease_evidence") {
-		t.Fatalf("doctor output after ack = %q, want reviewed legacy gap suppressed", afterOut)
-	}
-
-	store, err = session.NewSQLiteStore(cfg.Sessions.DBPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteStore(reopen second invocation) err = %v", err)
-	}
-	if _, err := store.RecordCapabilityInvocation(session.CapabilityInvocation{
-		GrantID:   "grant-authority-legacy-gap",
-		Principal: "child-public-reader",
-		Action:    "invoke",
-		Status:    "allowed",
-	}); err != nil {
-		t.Fatalf("RecordCapabilityInvocation(second) err = %v", err)
-	}
-	store.Close()
-	againOut, err := captureStdout(t, func() error {
-		return runAuthorityCommand([]string{"doctor", "--config", cfgPath, "--limit", "10"})
-	})
-	if err != nil {
-		t.Fatalf("runAuthorityCommand(doctor after new gap) err = %v", err)
-	}
-	if !strings.Contains(againOut, "capability_grant_invocation_missing_turn_lease_evidence") {
-		t.Fatalf("doctor output after new missing invocation = %q, want warning to return", againOut)
 	}
 }
 

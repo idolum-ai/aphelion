@@ -52,7 +52,7 @@ selection. It reflects the current branch and the live local configuration in
 | `TOOLS.md` | 218 B | Governor | Advisory tool policy after manifest | Human tool guidance. | Manifest remains authoritative. |
 | `BOOTSTRAP.md` | 287 B | Governor | Stable | Bootstrap posture and startup discipline. | Keep stable/cacheable. |
 | `HEARTBEAT.md` | 205 B | Governor | Dynamic | Current maintenance/watch posture. | Correctly dynamic. |
-| `MEMORY.md` | 92.7 KB | Governor | Dynamic, compacted/truncated | Legacy/summary memory. | Large; should continue shrinking as structured files become authoritative. |
+| `MEMORY.md` | 92.7 KB | Governor | Dynamic, compacted/truncated | Summary memory. | Large; should continue shrinking as structured files become authoritative. |
 | `memory/knowledge.md` | 151.7 KB | Governor | Dynamic, structured compaction | Durable facts and reusable knowledge. | Large but structured; prompt loader compacts for prompt. |
 | `memory/decisions.md` | 101.9 KB | Governor | Dynamic, structured compaction | Durable decisions and lessons. | Good fit for governor. |
 | `memory/questions.md` | 84.2 KB | Governor | Dynamic, structured compaction | Open threads. | Useful, but can bias turns if too broad; review active-vs-archival split. |

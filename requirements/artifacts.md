@@ -24,7 +24,7 @@ This is the architectural path to broad Telegram file support without turning th
 
 ## Scope
 
-### v0 required
+### Required
 
 - a first-class artifact model
 - Telegram normalization of all major inbound attachment classes into artifacts
@@ -34,7 +34,7 @@ This is the architectural path to broad Telegram file support without turning th
 - floor-sidecar storage of artifact references and handling decisions
 - honest bounded handling for unsupported or metadata-only artifact types
 
-### v0.5
+### Next Phase
 
 - outbound native artifact delivery policy (`sendPhoto`, `sendDocument`, `sendAudio`, `sendVideo`, etc.)
 - per-principal isolated artifact roots
@@ -42,7 +42,7 @@ This is the architectural path to broad Telegram file support without turning th
 - artifact references reusable across turns without replaying raw bytes into prompts
 - derived-artifact lineage tracking
 
-### Deferred after v0.5
+### Deferred
 
 - full artifact indexing/search across all artifact kinds
 - video frame extraction and richer multimodal summarization
@@ -118,7 +118,7 @@ The artifact layer should support at least these broad kinds:
 - venues
 - polls
 
-Not all of these need deep interpretation in v0. They do need honest normalization.
+Not all of these need deep interpretation in current implementation. They do need honest normalization.
 
 ## Telegram Mapping
 

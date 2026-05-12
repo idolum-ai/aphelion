@@ -15,7 +15,7 @@ From the user's perspective, cron may still feel proactive. Internally, the caus
 
 ## Scope
 
-### v0 required
+### Required
 
 - persisted cron job definitions
 - dedicated cron scheduler
@@ -24,7 +24,7 @@ From the user's perspective, cron may still feel proactive. Internally, the caus
 - isolation from heartbeat semantics
 - quiet-by-default delivery rules
 
-### Deferred after v0
+### Deferred
 
 - richer recurrence tooling
 - external triggers beyond local schedules

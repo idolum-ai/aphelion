@@ -60,7 +60,7 @@ Stable files are operator-authored and rarely changed:
 - `AGENTS.md`
 - optional operator `USER.md`
 
-`USER.md` in v0 should be treated as operator/admin profile, not as shared per-user memory.
+`USER.md` in current implementation should be treated as operator/admin profile, not as shared per-user memory.
 
 `SOUL.md` should primarily define `Idolum (System)` as the governor identity and `Aphelion` as the repo/service/harness. Face-specific tone belongs in the face prompt, not in the governor's constitutional self-model.
 
@@ -224,7 +224,7 @@ See `config.md`, but prompt-related ownership should include:
 - **Render prompts should carry floor, not first-draft scene.** The face should author the final visible reply from bounded material rather than revise a GPT-like answer by default.
 - **The governor gets floor language, not scene language.** House-language injection must preserve the floor/scene boundary.
 - **Fallback serialization is its own path.** Direct floor delivery should use a dedicated serializer overlay rather than reusing face prompting or forcing the governor to scene-author by default.
-- **`USER.md` is operator-facing in v0.** Per-user memory belongs elsewhere.
+- **`USER.md` is operator-facing in current implementation.** Per-user memory belongs elsewhere.
 - **Face files are separate from governor files.** `IDOLUM.md` and `QUESTIONS-TO-IDOLUM.md` must not leak into governor authority.
 
 ## Test Plan

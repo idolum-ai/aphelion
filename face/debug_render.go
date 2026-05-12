@@ -279,7 +279,7 @@ func renderChatSourceAttributionBlock() []string {
 	return []string{
 		"source_attribution_chat:",
 		"- field=summary_state class=projection",
-		"- field=latest_turn class=projection preferred=canonical:execution_events.turn fallback=compatibility_fallback:turn_runs",
+		"- field=latest_turn class=projection preferred=canonical:execution_events.turn",
 		"- field=operation_plan_hidden_inputs class=projection preferred=canonical:execution_events.turn_sidecars fallback=operational_current_state_store:status_state_json",
 		"- field=delivery class=projection preferred=canonical:execution_events.delivery fallback=operational_current_state_store:status_state_json note=transport_ledger_only",
 	}
@@ -289,7 +289,7 @@ func renderSystemSourceAttributionBlock() []string {
 	return []string{
 		"source_attribution_system:",
 		"- field=active_turns_queue_depth class=projection preferred=canonical:execution_events.router fallback=operational_current_state_store:router_runtime",
-		"- field=latest_turns class=projection preferred=canonical:execution_events.turn fallback=compatibility_fallback:turn_runs",
+		"- field=latest_turns class=projection preferred=canonical:execution_events.turn",
 		"- field=pending_decisions class=projection preferred=operational_current_state_store:pending_decisions fallback=canonical:execution_events.decision",
 		"- field=pending_continuations class=projection preferred=operational_current_state_store:continuation_state_json fallback=canonical:execution_events.continuation",
 		"- field=authority_projection class=projection preferred=typed_authority_records fallback=none",

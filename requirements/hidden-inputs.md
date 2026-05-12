@@ -153,7 +153,7 @@ This makes brokerage a real negotiation between two readings of the same latent 
 
 ## Scope
 
-### v0
+### Current Phase
 
 - heuristic hidden-input assembly for brokerage and heartbeat turns
 - semantic recurrence detection in heartbeat eligibility
@@ -165,7 +165,7 @@ This makes brokerage a real negotiation between two readings of the same latent 
 - floor sidecar metadata preserves hidden inputs when material
 - runtime self-awareness exposes active hidden-input categories and whether a provenance summary was assembled
 
-### v0.5
+### Next Phase
 
 - automated latent signal extraction across session history
 - cross-session semantic clustering for recurrence detection
@@ -209,7 +209,7 @@ Perhaps one thematic recurrence exists, but there is no unresolved memory state,
 
 ### Scheduled Cron Reminder
 
-A user previously created a scheduled reminder to revisit deployment rollback on Friday afternoon.
+A user created a scheduled reminder to revisit deployment rollback on Friday afternoon.
 
 When the job becomes due, cron sends the reminder because it is scheduler-originated and job-linked. It does not need hidden-input convergence. The user may still experience it as proactive, but the internal cause remains the stored obligation, not reflective heartbeat noticing.
 

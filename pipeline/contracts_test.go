@@ -37,14 +37,14 @@ func TestBrokerageArtifactPreservesBothSides(t *testing.T) {
 	}
 }
 
-func TestFloorArtifactAllowsStructuredOrLegacySurface(t *testing.T) {
+func TestFloorArtifactAllowsStructuredOrPlainSurface(t *testing.T) {
 	structured := FloorArtifact{Text: "FACTS:\n- grounded", Structured: true}
-	legacy := FloorArtifact{Text: "plain floor text", Structured: false}
+	plain := FloorArtifact{Text: "plain floor text", Structured: false}
 	if !structured.Structured {
 		t.Fatal("structured floor lost structured marker")
 	}
-	if legacy.Structured {
-		t.Fatal("legacy floor incorrectly marked structured")
+	if plain.Structured {
+		t.Fatal("plain floor incorrectly marked structured")
 	}
 }
 

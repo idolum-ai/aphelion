@@ -38,9 +38,7 @@ required_debt_terms=(
   "## Entry Contract"
   "## Active Debt"
   "None."
-  "## Retired Debt"
   "## Machine-Checked Paths"
-  "Exit gate"
 )
 
 for phrase in "${required_debt_terms[@]}"; do
@@ -58,7 +56,7 @@ for phrase in "I need to correct that" "Sending Work evidence" "Operator card:" 
   fi
 done
 
-for symbol in "positiveAuthorityEffectText" "bounded_effect_positive_clause" "operationPhaseApprovalText" "inferOperationGateReasonCode" "operationPhaseIsEscalatedOperatorApproval" "detectExecutionClaims" "textRequestsPendingAudioTranscription" "textRequestsAudioTranscription" "lexical_safety_scanner" "legacy_status_line"; do
+for symbol in "positiveAuthorityEffectText" "bounded_effect_positive_clause" "operationPhaseApprovalText" "inferOperationGateReasonCode" "operationPhaseIsEscalatedOperatorApproval" "detectExecutionClaims" "textRequestsPendingAudioTranscription" "textRequestsAudioTranscription" "lexical_safety_scanner" "status_line_fallback"; do
   if rg -nF "$symbol" runtime session --glob '!**/*_test.go' >/dev/null; then
     echo "runtime source contains retired prose-authority classifier: $symbol" >&2
     rg -nF "$symbol" runtime session --glob '!**/*_test.go' >&2

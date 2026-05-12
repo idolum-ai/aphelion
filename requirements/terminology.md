@@ -13,23 +13,14 @@ These are conceptual terms. They should be preferred in architectural writing, r
 
 ## State Truth Classes (Normative)
 
-For storage and operator-surface discussions, use only these four state-surface
+For storage and operator-surface discussions, use only these three state-surface
 classes:
 
 - `canonical`: authoritative source for a specific question.
 - `projection`: rendered or derived view with no independent authority.
 - `operational current-state store`: mutable declared "now" state used by
   runtime operations.
-- `compatibility fallback`: transitional migration/recovery store.
-
-### Compatibility Fallback Rules
-
-- Compatibility fallback can source a claim only when matching canonical and
-  operational current-state coverage is missing or incomplete.
-- Compatibility fallback must not override canonical or operational truth when
-  those are available.
-- Projections that consume compatibility fallback should mark source attribution
-  accordingly.
+- Removed surfaces are deletion/rejection concerns, not truth classes.
 
 ## Rules
 
@@ -57,7 +48,7 @@ Do not use these as primary architectural terms:
 - `rendered reply`
 - `governor passthrough`
 
-If a spec must mention them, it should do so only to describe migration compatibility or stored legacy fields.
+If a spec must mention them, it should do so only to describe removed fields or current storage serialization.
 
 ## Mapping
 

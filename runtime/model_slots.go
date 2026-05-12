@@ -135,7 +135,7 @@ func (r *Runtime) SetModelSlotOverride(cfg core.ModelSlotConfig, createdBy strin
 		return core.ModelSlotStatus{}, err
 	}
 	r.invalidateModelSlotCaches(cfg.Slot)
-	if err := r.maybePersistLegacyRecipeFromModelSlot(validation.Config); err != nil {
+	if err := r.syncRecipeStateFromModelSlot(validation.Config); err != nil {
 		return core.ModelSlotStatus{}, err
 	}
 	status, err := r.EffectiveModelSlot(cfg.Slot)
@@ -527,7 +527,7 @@ func (r *Runtime) invalidateModelSlotCaches(slot string) {
 	}
 }
 
-func (r *Runtime) maybePersistLegacyRecipeFromModelSlot(cfg core.ModelSlotConfig) error {
+func (r *Runtime) syncRecipeStateFromModelSlot(cfg core.ModelSlotConfig) error {
 	cfg = core.NormalizeModelSlotConfig(cfg)
 	switch cfg.Slot {
 	case core.ModelSlotPersona:

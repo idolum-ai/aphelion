@@ -795,7 +795,7 @@ func TestDurableAgentToolPolicyApplyUsesReviewEventProvenance(t *testing.T) {
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(fmt.Sprintf(`{"action":"policy_apply","agent_id":"family-group","review_event_id":%d,"outbound_mode":"read_only"}`, reviewID)),
+		json.RawMessage(fmt.Sprintf(`{"action":"policy_apply","agent_id":"family-group","review_event_id":%d,"policy_overrides":{"outbound_mode":"read_only"}}`, reviewID)),
 	)
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(policy_apply) err = %v", err)
@@ -1039,7 +1039,7 @@ func TestDurableAgentToolPolicyApplyAcceptsConversationDerivedPolicyFields(t *te
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"policy_apply","agent_id":"family-group","autonomy":"review_before_reply","visibility":"parent_relay_only","shared_context":"isolated","reason":"ratified conversational policy"}`),
+		json.RawMessage(`{"action":"policy_apply","agent_id":"family-group","policy_patch":{"autonomy":"review_before_reply","visibility":"parent_relay_only","shared_context":"isolated"},"reason":"ratified conversational policy"}`),
 	)
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(policy_apply conversation fields) err = %v", err)
@@ -1251,7 +1251,7 @@ func TestDurableAgentToolPolicyApplyResolvesConversationStyleAgentReference(t *t
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"policy_apply","agent_id":"Family Group durable agent","autonomy":"review_before_reply"}`),
+		json.RawMessage(`{"action":"policy_apply","agent_id":"Family Group durable agent","policy_patch":{"autonomy":"review_before_reply"}}`),
 	)
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(policy_apply conversational reference) err = %v", err)
@@ -1301,7 +1301,7 @@ func TestDurableAgentToolPolicyApplyUnknownAgentListsAvailableAgents(t *testing.
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"policy_apply","agent_id":"missing-agent","autonomy":"observe_only"}`),
+		json.RawMessage(`{"action":"policy_apply","agent_id":"missing-agent","policy_patch":{"autonomy":"observe_only"}}`),
 	)
 	if err == nil {
 		t.Fatal("ExecuteForSessionPrincipal(policy_apply missing agent) err = nil, want helpful not-found error")
@@ -1633,7 +1633,7 @@ func TestDurableAgentToolCreateSupportsExternalChannelConfig(t *testing.T) {
 		"durable_agent",
 		json.RawMessage(`{
 			"action":"create",
-			"agent_id":"child-legacy-alias",
+			"agent_id":"child-external-channel",
 			"channel_kind":"external_channel",
 			"wakeup_mode":"poll",
 			"channel_config":{
@@ -1651,9 +1651,9 @@ func TestDurableAgentToolCreateSupportsExternalChannelConfig(t *testing.T) {
 		t.Fatalf("create output = %q, want canonical external channel kind/profile", createOut)
 	}
 
-	agent, err := store.DurableAgent("child-legacy-alias")
+	agent, err := store.DurableAgent("child-external-channel")
 	if err != nil {
-		t.Fatalf("DurableAgent(child-legacy-alias) err = %v", err)
+		t.Fatalf("DurableAgent(child-external-channel) err = %v", err)
 	}
 	if agent.ChannelKind != "external_channel" {
 		t.Fatalf("ChannelKind = %q, want canonical external_channel", agent.ChannelKind)

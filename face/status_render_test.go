@@ -465,7 +465,7 @@ func TestRenderTelegramStatusChatIncludesSourceMarkers(t *testing.T) {
 		LatestTurnRun: &core.TurnRunStatusSnapshot{
 			Status: "completed",
 			Kind:   "interactive",
-			Source: "compatibility_fallback:turn_runs",
+			Source: "canonical:execution_events.turn",
 		},
 		Continuation: &core.ContinuationStatusSnapshot{
 			Status: "pending",
@@ -484,7 +484,7 @@ func TestRenderTelegramStatusChatIncludesSourceMarkers(t *testing.T) {
 
 	for _, needle := range []string{
 		"latest_turn status=completed kind=interactive",
-		"source=compatibility_fallback:turn_runs",
+		"source=canonical:execution_events.turn",
 		"continuation status=pending",
 		"source=operational_current_state_store:continuation_state_json",
 		"source_class=operational_current_state_store source_surface=pending_decisions",

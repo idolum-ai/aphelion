@@ -132,7 +132,7 @@ func TestTailnetSurfaceRevokeIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestTailnetSurfaceMigrationFromExistingSchema(t *testing.T) {
+func TestTailnetSurfaceCurrentSchemaReopens(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "sessions.db")

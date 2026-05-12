@@ -388,7 +388,7 @@ func TestCapabilityRequestCanQueueReviewEvent(t *testing.T) {
 	}
 }
 
-func TestCapabilityGrantEnablesRegisteredToolWithoutLegacyExposure(t *testing.T) {
+func TestCapabilityGrantEnablesRegisteredToolWithoutRemovedExposureTable(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
@@ -496,20 +496,20 @@ func TestCapabilityGrantRejectsInvalidChildRuntimeContract(t *testing.T) {
 	}
 }
 
-func TestCapabilityRejectsLegacyRuntimeMaterializationInput(t *testing.T) {
+func TestCapabilityRejectsRemovedRuntimeMaterializationInput(t *testing.T) {
 	t.Parallel()
 
 	registry, _ := newDurableAgentToolRegistry(t)
 	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 	_, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, adminSessionKey(), "capability_request", json.RawMessage(`{
 		"action":"request_submit",
-		"request_id":"cap-legacy-runtime",
+		"request_id":"cap-removed-runtime",
 		"kind":"tool",
 		"target_resource":"mail-reader",
-		"purpose":"legacy runtime key should be rejected",
+		"purpose":"removed runtime key should be rejected",
 		"contract":{"runtime_materialization":{"readonly_paths":["/srv/mail"]}}
 	}`))
-	if err == nil || !strings.Contains(err.Error(), "child_runtime") || !strings.Contains(err.Error(), "migration-only") {
+	if err == nil || !strings.Contains(err.Error(), "child_runtime") || !strings.Contains(err.Error(), "removed") {
 		t.Fatalf("request_submit err = %v, want child_runtime-only rejection", err)
 	}
 }

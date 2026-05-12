@@ -29,7 +29,7 @@ It should also prevent a silent collapse back into the older shape where the gov
 
 ## Scope
 
-### v0 required
+### Required
 
 - bounded pre-turn brokerage for interactive turns when the turn carries an explicit execution contract signal
 - conversational-default pre-turn proposal for ordinary interactive turns (non-empty, non-command) so brokerage activation can be decided from the proposal itself rather than keyword routing
@@ -39,7 +39,7 @@ It should also prevent a silent collapse back into the older shape where the gov
 - runtime awareness of brokerage state
 - graceful fallback to the ordinary proposal path when brokerage fails or is not warranted
 
-### Deferred after v0
+### Deferred
 
 - multi-round negotiation
 - brokerage for heartbeat/cron
@@ -151,7 +151,7 @@ Idolum (System)'s ratification remains authoritative for execution boundaries, b
 
 ### Required ratification fields
 
-These constraints apply to Idolum (System)'s ratification artifact so runtime can execute cleanly. They should not be projected backward onto Idolum's side of the brokerage, which may remain more conversational and bounded.
+These constraints apply to Idolum (System)'s ratification artifact so runtime can execute cleanly. They should not be projected onto Idolum's side of the brokerage, which may remain more conversational and bounded.
 
 The runtime should parse and carry these fields explicitly:
 

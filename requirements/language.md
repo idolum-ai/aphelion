@@ -58,7 +58,7 @@ If the governor sounds like a different institution than the face, the system ha
 
 ## Scope
 
-### v0 required
+### Required
 
 - preamble and compositional rules for the house language
 - explicit distribution rules for shared core, floor overlay, scene overlay, and fallback serializer overlay
@@ -69,7 +69,7 @@ If the governor sounds like a different institution than the face, the system ha
 - role matrix for `Aphelion` and `Idolum`
 - etiquette and decision-language rules: confirmation, pressure, warmth, refusal, and when etiquette should break
 
-### Deferred after v0
+### Deferred
 
 - exemplar bank with approved passages
 - anti-exemplar bank with annotated drift types
@@ -153,7 +153,7 @@ The fallback-floor overlay should emphasize:
 
 It should not try to impersonate ordinary scene authorship.
 
-In `v0`, this fallback serializer should remain deterministic.
+In current implementation, this fallback serializer should remain deterministic.
 
 That means:
 

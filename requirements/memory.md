@@ -24,14 +24,14 @@ Memory writes are governor-owned. Idolum may consume memory-derived context for 
 
 ## Scope
 
-### v0 required
+### Required
 
 - workspace bootstrap files
 - dynamic memory files
 - shared vs per-principal memory roots in the staged design
 - SQLite session transcript as the durable conversation ledger
 
-### v0.5
+### Next Phase
 
 - isolated per-principal writable memory
 - shared memory as read-only for non-admins
@@ -43,7 +43,7 @@ Memory writes are governor-owned. Idolum may consume memory-derived context for 
 - scheduled reflection that distills raw notes into curated memory
 - decay / archive policy for daily notes and curated memory surfaces
 
-### Deferred after v0.5
+### Deferred
 
 - embeddings-backed semantic indexing
 - `file_search`-style retrieval over approved corpora
@@ -403,8 +403,8 @@ Examples:
 
 - old conversations
 - prior debugging sessions
-- previously delivered review digests
-- historical tool output summaries
+- delivered review digests
+- archived tool output summaries
 
 The system should prefer:
 
@@ -835,14 +835,14 @@ model = "text-embedding-3-small"
 
 ## Tests
 
-### v0
+### Current Phase
 
 - **TestSharedMemoryReadOnlyForNonAdmin**
 - **TestPerUserMemoryWritable**
 - **TestWorkspacePromptFilesLoadInExpectedOrder**
 - **TestCuratedMemoryDoesNotRequireSessionRecall**
 
-### v0.5
+### Next Phase
 
 - **TestStructuredCuratedMemoryFilesRemainDistinct**
 - **TestKnowledgeEntriesPreserveSourceTags**

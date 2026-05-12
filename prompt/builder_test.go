@@ -754,7 +754,7 @@ func TestBuildFacePromptPrefersMaterialFloorWhenPresent(t *testing.T) {
 		FaceName:        "Idolum",
 		Channel:         "telegram",
 		PrincipalRole:   "admin",
-		FloorText:       "legacy canonical",
+		FloorText:       "plain canonical",
 		MaterialFloor:   core.MaterialPacket{Facts: []string{"The repo was inspected."}, SceneConstraints: []string{"Keep the tone grounded."}},
 		LatestUserInput: "What changed?",
 	})

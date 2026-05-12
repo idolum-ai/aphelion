@@ -136,7 +136,6 @@ func remoteDurableAgentChildConfig(dbPath string, bootstrap core.DurableAgentRem
 	cfg.Voice = config.VoiceConfig{Mode: "off"}
 	cfg.Face = config.FaceConfig{Backend: remoteFaceBackend(bootstrap.BootstrapLLM)}
 	cfg.Sessions.DBPath = strings.TrimSpace(dbPath)
-	cfg.Agent.Workspace = workspaceRoot
 	cfg.Agent.PromptRoot = promptRoot
 	cfg.Agent.ExecRoot = workspaceRoot
 	cfg.Agent.SharedMemoryRoot = promptRoot

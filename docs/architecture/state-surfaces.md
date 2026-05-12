@@ -49,15 +49,12 @@ Classifications below use the shared truth classes defined in
 | `/status` | projection | How should system/chat state be rendered for operators now? |
 | `/debug` | projection | How should execution evidence be rendered for diagnosis now? |
 | Quick-read and progress render blocks | projection | What compact operator narration should be surfaced now? |
-| `turn_runs` | compatibility fallback | What recovery/runtime hints are available when newer surfaces are incomplete? |
+| `turn_runs` | operational current-state store | What startup recovery/run bookkeeping hints are available to park interrupted work? |
 
-## Compatibility Fallback Invariants
+## Removed Surface Rule
 
-- `compatibility fallback` rows (currently `turn_runs`) are migration/recovery
-  support only.
-- Fallback rows may answer a question only when matching canonical and
-  operational current-state sources are missing or incomplete.
-- Fallback rows must not silently override canonical or operational answers.
+Historical rows and aliases that are no longer part of the current truth model
+must be deleted or rejected. They must not become operator projection inputs.
 - When `/status` or `/debug` uses fallback rows, that usage should be surfaced
   as source attribution.
 

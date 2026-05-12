@@ -29,7 +29,6 @@ type DurableAgentLivePolicy struct {
 
 type DurableAgentChannelConfig struct {
 	External *DurableAgentExternalChannelConfig `json:"external,omitempty"`
-	Email    *DurableAgentEmailChannelConfig    `json:"email,omitempty"`
 }
 
 type DurableAgentExternalChannelConfig struct {
@@ -43,11 +42,6 @@ type DurableAgentExternalChannelConfig struct {
 	SynthesisCadence string   `json:"synthesis_cadence,omitempty"`
 	NeverRetain      []string `json:"never_retain,omitempty"`
 }
-
-// DurableAgentEmailChannelConfig is retained as a legacy JSON/type alias while
-// Aphelion migrates parent-owned channel configuration to generic external
-// channel records. New parent code should use DurableAgentExternalChannelConfig.
-type DurableAgentEmailChannelConfig = DurableAgentExternalChannelConfig
 
 type NodeLLMBootstrap struct {
 	Backend         string `json:"backend,omitempty"`
@@ -249,23 +243,6 @@ type DurableAgentExternalChannelRuntimeState struct {
 	BackoffUntil  time.Time       `json:"backoff_until,omitempty"`
 	FailureCount  int             `json:"failure_count,omitempty"`
 	AdapterState  json.RawMessage `json:"adapter_state,omitempty"`
-}
-
-// durableAgentLegacyCodexAppServerState is retained only to migrate pre-generic
-// continuity records. New runtime code must use ExternalChannel plus
-// adapter_state.
-type durableAgentLegacyCodexAppServerState struct {
-	ThreadID        string    `json:"thread_id,omitempty"`
-	LastTurnID      string    `json:"last_turn_id,omitempty"`
-	LastAttemptAt   time.Time `json:"last_attempt_at,omitempty"`
-	LastHeartbeatAt time.Time `json:"last_heartbeat_at,omitempty"`
-	LastPayloadHash string    `json:"last_payload_hash,omitempty"`
-	LastArtifact    string    `json:"last_artifact,omitempty"`
-	LastStatus      string    `json:"last_status,omitempty"`
-	LastError       string    `json:"last_error,omitempty"`
-	LastErrorAt     time.Time `json:"last_error_at,omitempty"`
-	BackoffUntil    time.Time `json:"backoff_until,omitempty"`
-	FailureCount    int       `json:"failure_count,omitempty"`
 }
 
 type DurableAgentEmailPendingState struct {
@@ -539,18 +516,6 @@ func NormalizeDurableAgentChannelConfig(cfg DurableAgentChannelConfig) DurableAg
 		normalized := NormalizeDurableAgentExternalChannelConfig(*cfg.External)
 		cfg.External = &normalized
 	}
-	if cfg.Email != nil {
-		normalized := NormalizeDurableAgentExternalChannelConfig(*cfg.Email)
-		cfg.Email = &normalized
-		if cfg.External == nil {
-			legacy := normalized
-			cfg.External = &legacy
-		}
-	}
-	if cfg.External != nil && cfg.Email == nil {
-		legacy := *cfg.External
-		cfg.Email = &legacy
-	}
 	return cfg
 }
 
@@ -558,13 +523,8 @@ func (cfg DurableAgentChannelConfig) MarshalJSON() ([]byte, error) {
 	cfg = NormalizeDurableAgentChannelConfig(cfg)
 	type channelConfigJSON struct {
 		External *DurableAgentExternalChannelConfig `json:"external,omitempty"`
-		Email    *DurableAgentEmailChannelConfig    `json:"email,omitempty"`
 	}
-	out := channelConfigJSON{External: cfg.External}
-	if cfg.External == nil && cfg.Email != nil {
-		out.Email = cfg.Email
-	}
-	return json.Marshal(out)
+	return json.Marshal(channelConfigJSON{External: cfg.External})
 }
 
 func (cfg DurableAgentChannelConfig) ExternalConfig() *DurableAgentExternalChannelConfig {
@@ -906,7 +866,6 @@ func ParseDurableAgentContinuityState(raw string) (DurableAgentContinuityState, 
 		SetupWizard        *DurableAgentSetupWizardState            `json:"setup_wizard,omitempty"`
 		EmailPending       *DurableAgentEmailPendingState           `json:"email_pending,omitempty"`
 		ExternalChannel    *DurableAgentExternalChannelRuntimeState `json:"external_channel,omitempty"`
-		LegacyCodex        *durableAgentLegacyCodexAppServerState   `json:"codex_app_server,omitempty"`
 	}
 	var wire durableAgentContinuityWire
 	if err := json.Unmarshal([]byte(raw), &wire); err != nil {
@@ -921,9 +880,6 @@ func ParseDurableAgentContinuityState(raw string) (DurableAgentContinuityState, 
 		SetupWizard:        wire.SetupWizard,
 		EmailPending:       wire.EmailPending,
 		ExternalChannel:    wire.ExternalChannel,
-	}
-	if state.ExternalChannel == nil && wire.LegacyCodex != nil {
-		state.ExternalChannel = durableAgentExternalChannelFromLegacyCodex(*wire.LegacyCodex)
 	}
 	return NormalizeDurableAgentContinuityState(state), nil
 }
@@ -1588,41 +1544,6 @@ func normalizeDurableAgentRawJSON(raw json.RawMessage) json.RawMessage {
 		return nil
 	}
 	return json.RawMessage(compact)
-}
-
-func durableAgentExternalChannelFromLegacyCodex(legacy durableAgentLegacyCodexAppServerState) *DurableAgentExternalChannelRuntimeState {
-	legacy.ThreadID = strings.TrimSpace(legacy.ThreadID)
-	legacy.LastTurnID = strings.TrimSpace(legacy.LastTurnID)
-	legacy.LastPayloadHash = strings.TrimSpace(legacy.LastPayloadHash)
-	adapterState := map[string]string{}
-	if legacy.ThreadID != "" {
-		adapterState["thread_id"] = legacy.ThreadID
-	}
-	if legacy.LastTurnID != "" {
-		adapterState["last_turn_id"] = legacy.LastTurnID
-	}
-	if legacy.LastPayloadHash != "" {
-		adapterState["last_payload_hash"] = legacy.LastPayloadHash
-	}
-	adapterRaw, _ := json.Marshal(adapterState)
-	lastSuccess := legacy.LastHeartbeatAt
-	if lastSuccess.IsZero() && strings.EqualFold(strings.TrimSpace(legacy.LastStatus), "ok") {
-		lastSuccess = legacy.LastAttemptAt
-	}
-	return normalizeDurableAgentExternalChannelRuntimeState(&DurableAgentExternalChannelRuntimeState{
-		Adapter:       "codex_app_server",
-		SessionRef:    legacy.ThreadID,
-		LastCommand:   "codex_app_server.status_heartbeat",
-		LastAttemptAt: legacy.LastAttemptAt,
-		LastSuccessAt: lastSuccess,
-		LastArtifact:  legacy.LastArtifact,
-		LastStatus:    legacy.LastStatus,
-		LastError:     legacy.LastError,
-		LastErrorAt:   legacy.LastErrorAt,
-		BackoffUntil:  legacy.BackoffUntil,
-		FailureCount:  legacy.FailureCount,
-		AdapterState:  json.RawMessage(adapterRaw),
-	})
 }
 
 func normalizeDurableAgentEmailPendingState(state *DurableAgentEmailPendingState) *DurableAgentEmailPendingState {

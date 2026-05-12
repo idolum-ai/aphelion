@@ -49,16 +49,15 @@ Operation protocol fields participate in the shared four-class surface taxonomy:
   (`session.execution_events`), not in operation sidecars.
 - user-visible rendering of operation state (`/status`, `/debug`, quick-read) is
   a `projection`.
-- compatibility fallback (for example `turn_runs`) may be consulted only when
-  canonical and operational current-state coverage is missing or incomplete for a
-  specific claim.
+- removed surfaces must be deleted or rejected instead of being consulted by
+  operator projections.
 
 Operational implications:
 
 - operation sidecars can describe intent, stage, and pending gates;
 - operation sidecars cannot silently rewrite canonical execution history;
-- fallback evidence must be source-attributed and must not override canonical or
-  operational truth.
+- projections must source-attribute canonical and operational data and must not
+  invent execution history.
 
 ## Core Rule
 

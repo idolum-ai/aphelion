@@ -23,7 +23,7 @@ func TestHandleInboundApprovedUserDisablesToolsWithoutIsolationFloor(t *testing.
 
 	cfg, store, _, sender := buildRuntimeFixtures(t)
 	provider := &toolRequestingProvider{}
-	tools := &legacyRecordingTools{
+	tools := &directRecordingTools{
 		defs: []agent.ToolDef{testExecToolDef()},
 	}
 
@@ -95,7 +95,7 @@ func TestHandleInboundApprovedUserUsesPrincipalAwareToolsWhenSupported(t *testin
 		t.Fatalf("executeForPrincipal calls = %d, want 1", tools.executeForPrincipalCalls)
 	}
 	if tools.executeCalls != 0 {
-		t.Fatalf("legacy execute calls = %d, want 0", tools.executeCalls)
+		t.Fatalf("direct execute calls = %d, want 0", tools.executeCalls)
 	}
 	if tools.lastPrincipal.Role != principal.RoleApprovedUser {
 		t.Fatalf("last principal role = %q, want approved_user", tools.lastPrincipal.Role)
@@ -203,8 +203,9 @@ func TestHandleInboundShowsToolProgressForActualToolCalls(t *testing.T) {
 
 	cfg, store, _, sender := buildRuntimeFixtures(t)
 	provider := &multiToolRequestingProvider{}
-	tools := &legacyRecordingTools{
-		defs: []agent.ToolDef{testExecToolDef()},
+	tools := &principalRecordingTools{
+		defs:              []agent.ToolDef{testExecToolDef()},
+		supportsPrincipal: true,
 	}
 
 	rt, err := New(cfg, store, provider, tools, sender)
@@ -281,7 +282,7 @@ func TestHandleInboundShowsToolProgressForActualToolCalls(t *testing.T) {
 	}
 }
 
-func TestHandleInboundAdminFallsBackToLegacyToolsWhenPrincipalAwareNotReady(t *testing.T) {
+func TestHandleInboundAdminDisablesToolsWhenPrincipalAwareNotReady(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, _, sender := buildRuntimeFixtures(t)
@@ -308,11 +309,11 @@ func TestHandleInboundAdminFallsBackToLegacyToolsWhenPrincipalAwareNotReady(t *t
 		t.Fatalf("HandleInbound() err = %v", err)
 	}
 
-	if provider.firstToolCount != 1 {
-		t.Fatalf("first tool count = %d, want 1", provider.firstToolCount)
+	if provider.firstToolCount != 0 {
+		t.Fatalf("first tool count = %d, want 0", provider.firstToolCount)
 	}
-	if tools.executeCalls != 1 {
-		t.Fatalf("legacy execute calls = %d, want 1", tools.executeCalls)
+	if tools.executeCalls != 0 {
+		t.Fatalf("execute calls = %d, want 0", tools.executeCalls)
 	}
 	if tools.executeForPrincipalCalls != 0 {
 		t.Fatalf("executeForPrincipal calls = %d, want 0", tools.executeForPrincipalCalls)

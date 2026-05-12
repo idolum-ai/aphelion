@@ -25,25 +25,25 @@ The design split is:
 
 ## Scope
 
-### v0 required
+### Required
 
 - artifact-bearing interactive turns may surface artifact meaning through ordinary floor/scene authoring
 - Idolum may name what the artifact seems to mean in this turn when it materially shapes the scene
-- v0 runtime handling is deterministic from the capability envelope
-- v0 retention is deterministic from the policy envelope and recorded in floor metadata
+- current implementation runtime handling is deterministic from the capability envelope
+- current implementation retention is deterministic from the policy envelope and recorded in floor metadata
 - the floor sidecar must preserve artifact handling decisions
 - unsupported artifact types must still receive honest bounded treatment
 
-### v0.5
+### Next Phase
 
 - multi-artifact brokerage across batches/albums
 - bounded artifact-specific brokerage between Idolum and Idolum (System)
-- Idolum (System) ratifies handling and retention from a bounded machine vocabulary rather than only inheriting the deterministic v0 path
+- Idolum (System) ratifies handling and retention from a bounded machine vocabulary rather than only inheriting the deterministic current implementation path
 - heartbeat or maintenance review of stored session artifacts
 - outbound artifact scene planning
 - stronger principal-aware artifact storage policy
 
-### Deferred after v0.5
+### Deferred
 
 - learned retention policy
 - automatic archive promotion from repeated artifact use
@@ -91,9 +91,9 @@ The runtime owns:
 
 ### `Idolum (System)`
 
-In v0, `Idolum (System)` consumes the results of deterministic handling and may speak from them in the floor, but it does not yet emit a dedicated artifact-ratification contract.
+In current implementation, `Idolum (System)` consumes the results of deterministic handling and may speak from them in the floor, but it does not yet emit a dedicated artifact-ratification contract.
 
-In v0.5, `Idolum (System)` should ratify:
+In future phase, `Idolum (System)` should ratify:
 
 - what the deterministic handling path materially means for the turn
 - what derived outputs may be trusted
@@ -102,7 +102,7 @@ In v0.5, `Idolum (System)` should ratify:
 
 ## Artifact Handling Vocabulary
 
-The runtime must maintain a bounded handling vocabulary. In v0, the deterministic capability layer chooses the handling path before the governor turn. In v0.5, Idolum (System) may ratify among these choices directly.
+The runtime must maintain a bounded handling vocabulary. In current implementation, the deterministic capability layer chooses the handling path before the governor turn. In future phase, Idolum (System) may ratify among these choices directly.
 
 ### `attach_for_vision`
 
@@ -159,7 +159,7 @@ Examples of good `Idolum` pushes:
 
 ## Ratification Contract
 
-This contract is deferred to v0.5.
+This contract is deferred to future phase.
 
 Aphelion's side must be parseable enough for runtime execution.
 
@@ -180,13 +180,13 @@ DERIVED_OUTPUT: transcript | extracted_text | metadata_note | none
 SIGNAL_JUDGMENT: confirmed | adapted | not_material
 ```
 
-`HANDLING` is optional in v0. In practice, v0 handling remains deterministic and this full contract belongs to v0.5 when handling ratification becomes explicitly model-mediated.
+`HANDLING` is optional in current implementation. In practice, current implementation handling remains deterministic and this full contract belongs to future phase when handling ratification becomes explicitly model-mediated.
 
 `SIGNAL_JUDGMENT` is useful when the artifact is materially shaping Idolum's push in a way that overlaps with hidden-input brokerage.
 
 ## Defaults
 
-In v0, the handling path is deterministic even when no explicit artifact brokerage runs.
+In current implementation, the handling path is deterministic even when no explicit artifact brokerage runs.
 
 Default assumptions should be conservative:
 

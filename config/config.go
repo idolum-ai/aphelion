@@ -273,7 +273,7 @@ type SessionsTESRetentionConfig struct {
 }
 
 type AgentConfig struct {
-	Workspace              string   `toml:"workspace"`
+	Workspace              string   `toml:"-"`
 	PromptRoot             string   `toml:"prompt_root"`
 	ExecRoot               string   `toml:"exec_root"`
 	SharedMemoryRoot       string   `toml:"shared_memory_root"`
@@ -445,15 +445,15 @@ type DurableAgentControlPlaneConfig struct {
 }
 
 func (a AgentConfig) EffectivePromptRoot() string {
-	return firstNonEmpty(strings.TrimSpace(a.PromptRoot), strings.TrimSpace(a.Workspace))
+	return strings.TrimSpace(a.PromptRoot)
 }
 
 func (a AgentConfig) EffectiveExecRoot() string {
-	return firstNonEmpty(strings.TrimSpace(a.ExecRoot), strings.TrimSpace(a.Workspace), strings.TrimSpace(a.PromptRoot))
+	return strings.TrimSpace(a.ExecRoot)
 }
 
 func (a AgentConfig) EffectiveSharedMemoryRoot() string {
-	return firstNonEmpty(strings.TrimSpace(a.SharedMemoryRoot), strings.TrimSpace(a.PromptRoot), strings.TrimSpace(a.Workspace))
+	return strings.TrimSpace(a.SharedMemoryRoot)
 }
 
 func (a AgentConfig) EffectiveUserWorkspaceRoot() string {
@@ -765,8 +765,10 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("decode toml: %w", err)
 	}
 	cfg.warnings = configWarningsFromMetadata(md)
+	if md.IsDefined("agent", "workspace") {
+		return nil, fmt.Errorf("agent.workspace has been removed; set agent.prompt_root, agent.exec_root, and agent.shared_memory_root explicitly")
+	}
 
-	applyLegacyAgentRoots(&cfg, md)
 	cfg.Providers.Selection = normalizeProviderSelection(cfg.Providers.Selection)
 	cfg.Providers.AutoOrder = normalizeProviderNameList(cfg.Providers.AutoOrder)
 	if len(cfg.Providers.AutoOrder) == 0 {
@@ -798,10 +800,6 @@ func Load(path string) (*Config, error) {
 	cfg.Sessions.TESRetention.ExportDir, err = expandConfiguredPath(cfg.Sessions.TESRetention.ExportDir, baseDir)
 	if err != nil {
 		return nil, fmt.Errorf("expand sessions.tes_retention.export_dir: %w", err)
-	}
-	cfg.Agent.Workspace, err = expandConfiguredPath(cfg.Agent.Workspace, baseDir)
-	if err != nil {
-		return nil, fmt.Errorf("expand agent.workspace: %w", err)
 	}
 	cfg.Agent.PromptRoot, err = expandConfiguredPath(cfg.Agent.PromptRoot, baseDir)
 	if err != nil {
@@ -1846,27 +1844,6 @@ func expandConfiguredPath(path string, baseDir string) (string, error) {
 	return filepath.Abs(path)
 }
 
-func applyLegacyAgentRoots(cfg *Config, md toml.MetaData) {
-	if cfg == nil || !md.IsDefined("agent", "workspace") {
-		return
-	}
-	if !md.IsDefined("agent", "prompt_root") {
-		cfg.Agent.PromptRoot = cfg.Agent.Workspace
-	}
-	if !md.IsDefined("agent", "exec_root") {
-		cfg.Agent.ExecRoot = cfg.Agent.Workspace
-	}
-	if !md.IsDefined("agent", "shared_memory_root") {
-		cfg.Agent.SharedMemoryRoot = cfg.Agent.Workspace
-	}
-	if !md.IsDefined("agent", "user_workspace_root") {
-		cfg.Agent.UserWorkspaceRoot = filepath.Join(filepath.Dir(cfg.Sessions.DBPath), "isolated", "workspaces")
-	}
-	if !md.IsDefined("agent", "user_memory_root") {
-		cfg.Agent.UserMemoryRoot = filepath.Join(filepath.Dir(cfg.Sessions.DBPath), "isolated", "memory")
-	}
-}
-
 func normalizeAgentRoots(cfg *Config) {
 	if cfg == nil {
 		return
@@ -1876,9 +1853,6 @@ func normalizeAgentRoots(cfg *Config) {
 	cfg.Agent.SharedMemoryRoot = cfg.Agent.EffectiveSharedMemoryRoot()
 	cfg.Agent.UserWorkspaceRoot = cfg.Agent.EffectiveUserWorkspaceRoot()
 	cfg.Agent.UserMemoryRoot = cfg.Agent.EffectiveUserMemoryRoot()
-	if strings.TrimSpace(cfg.Agent.Workspace) == "" {
-		cfg.Agent.Workspace = cfg.Agent.ExecRoot
-	}
 }
 
 func normalizeTelegramDurableGroups(cfg *Config) {

@@ -26,7 +26,7 @@ This split exists because the system layer and the user-facing layer optimize fo
 
 ## Scope
 
-### v0 required
+### Required
 
 - explicit governor → face pipeline
 - face → governor proposal path before ordinary turns
@@ -37,7 +37,7 @@ This split exists because the system layer and the user-facing layer optimize fo
 - native governor fallback when Codex is unavailable
 - face may be a separate inference backend
 
-### Deferred after v0
+### Deferred
 
 - multiple face profiles by user or channel
 - separate persistent face memory

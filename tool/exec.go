@@ -380,45 +380,34 @@ type durableAgentDelegationReportInput struct {
 }
 
 type durableAgentInput struct {
-	Action                    string                              `json:"action"`
-	AgentID                   string                              `json:"agent_id,omitempty"`
-	ChannelKind               string                              `json:"channel_kind,omitempty"`
-	ReviewEventID             int64                               `json:"review_event_id,omitempty"`
-	ReviewTargetChatID        int64                               `json:"review_target_chat_id,omitempty"`
-	Archetype                 string                              `json:"archetype,omitempty"`
-	Reason                    string                              `json:"reason,omitempty"`
-	BootstrapProfile          string                              `json:"bootstrap_profile,omitempty"`
-	BootstrapLLM              *core.NodeLLMBootstrap              `json:"bootstrap_llm,omitempty"`
-	PolicyPatch               *durableAgentPolicyPatchInput       `json:"policy_patch,omitempty"`
-	PolicyOverrides           *durableAgentPolicyOverridesInput   `json:"policy_overrides,omitempty"`
-	Mode                      string                              `json:"mode,omitempty"`
-	Charter                   string                              `json:"charter,omitempty"`
-	Autonomy                  string                              `json:"autonomy,omitempty"`
-	Visibility                string                              `json:"visibility,omitempty"`
-	SharedContext             string                              `json:"shared_context,omitempty"`
-	Capabilities              []string                            `json:"capabilities,omitempty"`
-	OutboundMode              string                              `json:"outbound_mode,omitempty"`
-	DriftPolicy               string                              `json:"drift_policy,omitempty"`
-	PublicSurfaceMode         string                              `json:"public_surface_mode,omitempty"`
-	SharedInferenceReuse      string                              `json:"shared_inference_reuse,omitempty"`
-	SharedInferenceReuseScope string                              `json:"shared_inference_reuse_scope,omitempty"`
-	WakeupMode                string                              `json:"wakeup_mode,omitempty"`
-	NetworkPolicy             string                              `json:"network_policy,omitempty"`
-	SecretScopes              []string                            `json:"secret_scopes,omitempty"`
-	ChannelConfig             json.RawMessage                     `json:"channel_config,omitempty"`
-	WizardAnswers             *durableAgentWizardAnswersInput     `json:"wizard_answers,omitempty"`
-	MemoryDelegation          *durableAgentMemoryDelegationInput  `json:"memory_delegation,omitempty"`
-	Snapshot                  *durableAgentSnapshotInput          `json:"snapshot,omitempty"`
-	ProfileEdit               *durableAgentProfileEditInput       `json:"profile_edit,omitempty"`
-	Artifact                  *durableAgentArtifactInput          `json:"artifact,omitempty"`
-	DelegationRequest         *durableAgentDelegationRequestInput `json:"delegation_request,omitempty"`
-	DelegationReport          *durableAgentDelegationReportInput  `json:"delegation_report,omitempty"`
-	Operation                 string                              `json:"operation,omitempty"`
-	Secret                    string                              `json:"secret,omitempty"`
-	Message                   string                              `json:"message,omitempty"`
-	History                   int                                 `json:"history,omitempty"`
-	TelegramUserID            int64                               `json:"telegram_user_id,omitempty"`
-	TelegramUserIDs           []int64                             `json:"telegram_user_ids,omitempty"`
+	Action             string                              `json:"action"`
+	AgentID            string                              `json:"agent_id,omitempty"`
+	ChannelKind        string                              `json:"channel_kind,omitempty"`
+	ReviewEventID      int64                               `json:"review_event_id,omitempty"`
+	ReviewTargetChatID int64                               `json:"review_target_chat_id,omitempty"`
+	Archetype          string                              `json:"archetype,omitempty"`
+	Reason             string                              `json:"reason,omitempty"`
+	BootstrapProfile   string                              `json:"bootstrap_profile,omitempty"`
+	BootstrapLLM       *core.NodeLLMBootstrap              `json:"bootstrap_llm,omitempty"`
+	PolicyPatch        *durableAgentPolicyPatchInput       `json:"policy_patch,omitempty"`
+	PolicyOverrides    *durableAgentPolicyOverridesInput   `json:"policy_overrides,omitempty"`
+	WakeupMode         string                              `json:"wakeup_mode,omitempty"`
+	NetworkPolicy      string                              `json:"network_policy,omitempty"`
+	SecretScopes       []string                            `json:"secret_scopes,omitempty"`
+	ChannelConfig      json.RawMessage                     `json:"channel_config,omitempty"`
+	WizardAnswers      *durableAgentWizardAnswersInput     `json:"wizard_answers,omitempty"`
+	MemoryDelegation   *durableAgentMemoryDelegationInput  `json:"memory_delegation,omitempty"`
+	Snapshot           *durableAgentSnapshotInput          `json:"snapshot,omitempty"`
+	ProfileEdit        *durableAgentProfileEditInput       `json:"profile_edit,omitempty"`
+	Artifact           *durableAgentArtifactInput          `json:"artifact,omitempty"`
+	DelegationRequest  *durableAgentDelegationRequestInput `json:"delegation_request,omitempty"`
+	DelegationReport   *durableAgentDelegationReportInput  `json:"delegation_report,omitempty"`
+	Operation          string                              `json:"operation,omitempty"`
+	Secret             string                              `json:"secret,omitempty"`
+	Message            string                              `json:"message,omitempty"`
+	History            int                                 `json:"history,omitempty"`
+	TelegramUserID     int64                               `json:"telegram_user_id,omitempty"`
+	TelegramUserIDs    []int64                             `json:"telegram_user_ids,omitempty"`
 }
 
 func NewRegistry(workspace string, timeout time.Duration) *Registry {
@@ -1099,18 +1088,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 								"tailnet_tags": {"type": "array", "items": {"type": "string"}, "description": "Declared Tailscale tags for the child identity"},
 								"tailnet_surface_policy": {"type": "string", "description": "Declared private tailnet surface policy. Supported: private_status, private_services, none"}
 							}
-							},
-							"mode": {"type": "string", "enum": ["sketch", "local", "external", "live"], "description": "Legacy top-level child footprint (prefer policy_patch.mode)"},
-							"charter": {"type": "string", "description": "Legacy top-level charter override (prefer policy_patch.charter)"},
-						"autonomy": {"type": "string", "description": "Legacy top-level autonomy (prefer policy_patch.autonomy)"},
-						"visibility": {"type": "string", "description": "Legacy top-level visibility (prefer policy_patch.visibility)"},
-						"shared_context": {"type": "string", "description": "Legacy top-level shared_context (prefer policy_patch.shared_context)"},
-						"capabilities": {"type": "array", "items": {"type": "string"}, "description": "Legacy top-level capabilities (prefer policy_patch.capabilities)"},
-						"drift_policy": {"type": "string", "description": "Legacy top-level drift policy (prefer policy_patch.drift_policy)"},
-						"outbound_mode": {"type": "string", "description": "Legacy low-level override (prefer policy_overrides.outbound_mode)"},
-						"public_surface_mode": {"type": "string", "description": "Legacy low-level override (prefer policy_overrides.public_surface_mode)"},
-						"shared_inference_reuse": {"type": "string", "description": "Legacy low-level override (prefer policy_overrides.shared_inference_reuse)"},
-						"shared_inference_reuse_scope": {"type": "string", "description": "Legacy low-level override (prefer policy_overrides.shared_inference_reuse_scope)"},
+						},
 						"wakeup_mode": {"type": "string", "description": "Optional wakeup mode for create. Example: poll"},
 						"network_policy": {"type": "string", "description": "Optional network policy for create"},
 						"secret_scopes": {"type": "array", "items": {"type": "string"}, "description": "Optional secret scopes for create"},

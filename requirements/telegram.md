@@ -308,7 +308,7 @@ Current implementation detail:
 
 Telegram command discovery should be explicit. On startup, Aphelion should register its command list with `setMyCommands` so Telegram clients can show the available slash commands.
 
-At minimum for v0:
+At minimum for current implementation:
 
 - `/start`
 - `/help`
@@ -979,7 +979,7 @@ For the current Aphelion runtime, deep interpretive handling remains intentional
 - PDF `document`
 - `voice`
 
-For v0 of the artifact system, the transport should still normalize the broader major Telegram attachment classes into artifacts even when their handling remains metadata-first:
+For current implementation of the artifact system, the transport should still normalize the broader major Telegram attachment classes into artifacts even when their handling remains metadata-first:
 
 - `audio`
 - `video`

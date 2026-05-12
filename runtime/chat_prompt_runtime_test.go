@@ -47,7 +47,7 @@ func TestHandleInboundReloadsPromptContextEachTurn(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 
-	heartbeatPath := filepath.Join(cfg.Agent.Workspace, "HEARTBEAT.md")
+	heartbeatPath := filepath.Join(cfg.Agent.ExecRoot, "HEARTBEAT.md")
 	if err := os.WriteFile(heartbeatPath, []byte("v1"), 0o600); err != nil {
 		t.Fatalf("write heartbeat: %v", err)
 	}

@@ -330,7 +330,7 @@ func TestDurableTurnInferenceUnavailableUsesProviderFailure(t *testing.T) {
 		t.Fatal("durableTurnInferenceUnavailable() = false, want provider failure to count structurally")
 	}
 	if durableTurnInferenceUnavailable(&turn.Result{Turn: &core.TurnResult{}}, "ordinary visible text") {
-		t.Fatal("durableTurnInferenceUnavailable() = true, want false without provider failure or legacy visible signal")
+		t.Fatal("durableTurnInferenceUnavailable() = true, want false without provider failure or current visible signal")
 	}
 }
 

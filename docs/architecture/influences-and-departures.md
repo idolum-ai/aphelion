@@ -119,7 +119,7 @@ Current repo surface:
 - `requirements/tools.md`
 - `requirements/subagents.md`
 - `requirements/semantic-store.md`
-- `docs/architecture/done-done-roadmap.md`
+- `docs/promises.md`
 
 ### Ralph Loops And Ralph-Style Loop Vocabulary
 
@@ -152,7 +152,7 @@ Why Aphelion diverges:
 
 Current repo surface:
 
-- `docs/architecture/done-done-roadmap.md`
+- `docs/promises.md`
 - `docs/architecture/transparent-execution-sequence.md`
 - `requirements/operations.md`
 - `verify_deploy.go`
@@ -182,7 +182,8 @@ Why Aphelion diverges:
 
 Current repo surface:
 
-- `docs/architecture/tailscale-agent-substrate-project.md`
+- `docs/architecture/state-surfaces.md`
+- `docs/architecture/durable-children.md`
 - `tailnet`
 - `runtime/tailnet.go`
 - `maintenance_tailnet.go`

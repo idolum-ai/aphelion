@@ -60,8 +60,8 @@ TES write/read behavior currently relies on the following indexes:
 
 - All user-facing projections should request bounded windows (limit + optional
   time boundary), not unbounded full-table scans.
-- `/status` and `/debug` projections should prefer TES windows first and use
-  compatibility fallback stores only when TES coverage is missing.
+- `/status` and `/debug` projections should use TES windows for execution truth
+  and operational current-state stores for mutable pending state.
 - If projection claims conflict with TES evidence, projection text must degrade to
   deterministic, evidence-backed summaries.
 
@@ -71,19 +71,16 @@ TES write/read behavior currently relies on the following indexes:
   order, and with what runtime evidence").
 - Operational current-state stores remain authoritative for mutable declared
   "now" state where TES is not the canonical question.
-- Compatibility fallback surfaces (for example `turn_runs`) are valid only when
-  both canonical and operational coverage is unavailable or incomplete for the
-  requested claim.
-- Compatibility fallback evidence must be source-attributed and must not replace
-  canonical TES claims when TES evidence exists.
+- Removed surfaces must be deleted or rejected; they must not source execution
+  projections.
 
 ### Forward Path
 
 - Add optional rollup summaries on top of exported prune bundles for faster
-  historical browsing.
+  archival browsing.
 - Add operator tooling for listing and replaying retention export bundles.
 - Keep enough recent TES history online to preserve debuggability of current and
-  recently completed turns without relying on legacy `turn_runs`.
+  recently completed turns without relying on `turn_runs`.
 
 ## Event Families
 
@@ -168,16 +165,15 @@ Code anchors:
 `turn.stage.changed` events only.
 
 Operation/plan/hidden-input status sidecars are projected from TES
-`turn.sidecars.captured` events when present, with legacy session status reads
-as compatibility fallback only.
+`turn.sidecars.captured` events when present, with session status reads as the
+operational current-state source for mutable declared work state.
 
 `SystemStatusSnapshot` is now TES-first for detached control/recovery overlays:
 
-- Decisions: `decision.*` events define current pending decision visibility.
-  Legacy `pending_decisions` rows are used only as fallback when no TES state is
-  available for a given `decision_id`.
-- Continuations: `continuation.*` events define current continuation status per
-  chat when present; legacy continuation state remains fallback.
+- Decisions: `pending_decisions` rows are the actionable operational queue, with
+  `decision.*` events providing canonical adjudication evidence.
+- Continuations: continuation state rows are the actionable operational state,
+  with `continuation.*` events providing canonical offer/approval evidence.
 - Startup recovery: a pending startup recovery item is derived from
   `recovery.issued` until a terminal `recovery.completed|recovery.failed` event
   is observed after issuance.
@@ -186,9 +182,8 @@ as compatibility fallback only.
 chat and system views via `RecentExecution` projections sourced from
 `execution_events`.
 
-`/status` latest-turn fields now prefer TES turn projections (derived from
-`turn.*` + `tool.*` execution events) with `turn_runs` as fallback for missing
-coverage windows.
+`/status` latest-turn fields are TES turn projections derived from `turn.*` and
+`tool.*` execution events.
 
 Collapsed `/status` quick-read text is now grounded against rendered status
 tokens. If the generated summary contradicts the underlying status payload, it
@@ -209,7 +204,6 @@ Code anchor: [`runtime/status.go`](../../runtime/status.go)
 
 ## Scope
 
-TES is now the canonical append-only sequence for ingress/turn/tool/progress
-facts. Legacy read models (for example `turn_runs`) still exist as compatibility
-fallbacks for operational speed, but are expected to converge further toward
-TES-derived projections.
+TES is the canonical append-only sequence for ingress/turn/tool/progress facts.
+`turn_runs` remains an operational startup recovery/run-bookkeeping table, not a
+status/debug fallback source.

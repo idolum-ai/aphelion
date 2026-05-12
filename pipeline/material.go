@@ -18,7 +18,7 @@ func BuildFloorFromGovernor(text string, useContract bool) (core.MaterialPacket,
 	}
 	packet, err := ParseMaterialPacket(trimmed)
 	if err != nil {
-		return core.LegacyMaterialPacket(trimmed), FloorTextOrFallback(trimmed), false
+		return core.TextMaterialPacket(trimmed), FloorTextOrFallback(trimmed), false
 	}
 	sidecar := strings.TrimSpace(packet.Text())
 	if sidecar == "" {

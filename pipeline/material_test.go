@@ -35,18 +35,18 @@ func TestParseMaterialPacketParsesStructuredSections(t *testing.T) {
 	}
 }
 
-func TestBuildFloorFromGovernorFallsBackToLegacyText(t *testing.T) {
+func TestBuildFloorFromGovernorFallsBackToPlainText(t *testing.T) {
 	t.Parallel()
 
-	packet, sidecar, structured := BuildFloorFromGovernor("plain old reply text", true)
+	packet, sidecar, structured := BuildFloorFromGovernor("plain reply text", true)
 	if structured {
-		t.Fatal("structured = true, want legacy fallback")
+		t.Fatal("structured = true, want plain-text fallback")
 	}
 	if sidecar == "" {
 		t.Fatal("sidecar = empty, want fallback floor text")
 	}
-	if len(packet.Notes) == 0 || packet.Notes[0] != "plain old reply text" {
-		t.Fatalf("packet = %#v, want legacy notes packet", packet)
+	if len(packet.Notes) == 0 || packet.Notes[0] != "plain reply text" {
+		t.Fatalf("packet = %#v, want plain-text notes packet", packet)
 	}
 }
 
@@ -55,17 +55,17 @@ func TestBuildFloorFromGovernorUsesNoResponseFallback(t *testing.T) {
 
 	_, sidecarContract, structured := BuildFloorFromGovernor("", true)
 	if structured {
-		t.Fatal("structured = true, want legacy fallback on empty input")
+		t.Fatal("structured = true, want plain-text fallback on empty input")
 	}
 	if sidecarContract != "(no response)" {
 		t.Fatalf("sidecar = %q, want %q", sidecarContract, "(no response)")
 	}
 
-	_, sidecarLegacy, structured := BuildFloorFromGovernor("", false)
+	_, sidecarPlain, structured := BuildFloorFromGovernor("", false)
 	if structured {
-		t.Fatal("structured = true, want legacy floor when contract disabled")
+		t.Fatal("structured = true, want plain-text floor when contract disabled")
 	}
-	if sidecarLegacy != "(no response)" {
-		t.Fatalf("sidecar = %q, want %q", sidecarLegacy, "(no response)")
+	if sidecarPlain != "(no response)" {
+		t.Fatalf("sidecar = %q, want %q", sidecarPlain, "(no response)")
 	}
 }

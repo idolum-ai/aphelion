@@ -173,9 +173,6 @@ exec_root = "/absolute/path/to/workspace"
 shared_memory_root = "~/.aphelion/agent"
 user_workspace_root = "~/.aphelion/state/isolated/workspaces"
 user_memory_root = "~/.aphelion/state/isolated/memory"
-# Deprecated legacy alias. If present without the split roots above, it is used
-# as prompt_root + exec_root + shared_memory_root.
-# workspace = "/absolute/path/to/workspace"
 max_iterations = 50
 tool_timeout = 300
 bootstrap_files = [

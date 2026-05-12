@@ -1067,11 +1067,6 @@ const _ = "next_repair_action inspect_command"
 
 `+map[bool]string{true: "None.", false: "### DP-test"}[trackDebt]+`
 
-## Retired Debt
-
-- Exit gate: replace text inference with typed contracts.
-- Debug breadcrumbs: trace_id canonical_record projection inspect_command code_owner next_repair_action.
-
 ## Machine-Checked Paths
 `)
 }

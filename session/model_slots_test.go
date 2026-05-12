@@ -92,31 +92,3 @@ func TestExpireModelSlotOverrides(t *testing.T) {
 		t.Fatal("ActiveModelSlotOverride() ok = true, want expired override hidden")
 	}
 }
-
-func TestEnsureModelSlotOverridesTableCreatesMigrationTable(t *testing.T) {
-	t.Parallel()
-
-	store := newTestSQLiteStore(t)
-	defer store.Close()
-	if _, err := store.db.Exec(`DROP TABLE model_slot_overrides`); err != nil {
-		t.Fatalf("drop model_slot_overrides err = %v", err)
-	}
-	tx, err := store.db.Begin()
-	if err != nil {
-		t.Fatalf("Begin() err = %v", err)
-	}
-	if err := ensureModelSlotOverridesTable(tx); err != nil {
-		_ = tx.Rollback()
-		t.Fatalf("ensureModelSlotOverridesTable() err = %v", err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("Commit() err = %v", err)
-	}
-	if _, err := store.SetModelSlotOverride(ModelSlotOverrideRecord{
-		Slot:      core.ModelSlotGovernor,
-		Config:    core.ModelSlotConfig{Slot: core.ModelSlotGovernor, Provider: core.ModelProviderOpenAI, Model: "gpt-5.5", Effort: "high", Transport: "auto"},
-		CreatedBy: "telegram:1001",
-	}); err != nil {
-		t.Fatalf("SetModelSlotOverride() after ensure err = %v", err)
-	}
-}

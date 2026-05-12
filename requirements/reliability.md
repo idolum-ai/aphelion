@@ -219,7 +219,7 @@ Example shape:
 
 - "Inference backends are unavailable after retries and fallback. This turn did not complete. You can /stop to cancel current work and try again."
 
-The fallback serializer should remain deterministic in `v0`.
+The fallback serializer should remain deterministic in current implementation.
 
 It may be channel-aware and house-shaped, but it should not become a second model-authored scene path under degradation.
 
@@ -471,8 +471,8 @@ Required principles:
 - edits may be retried if idempotent
 - sends should be retried only when the delivery semantics are understood
 
-In v0, Telegram send failures may simply fail the turn after state persistence.
-In v0.5+, the system should grow explicit pending/failed outbound reconciliation.
+In current implementation, Telegram send failures may simply fail the turn after state persistence.
+In future phase, the system should grow explicit pending/failed outbound reconciliation.
 
 ### Maintenance loop retries
 
@@ -638,7 +638,7 @@ The system should log with enough structure to answer:
 - under which backend
 - whether fallback occurred
 
-The spec target is eventually structured logging, but plain logs are acceptable at v0 if the fields are consistent.
+The spec target is eventually structured logging, but plain logs are acceptable at current implementation if the fields are consistent.
 
 Recommended common fields:
 
@@ -740,14 +740,14 @@ Not all of this must be implemented immediately. But the spec should reserve the
 
 ## Staging
 
-### v0
+### Current Phase
 
 - keep current retry and fallback behaviors explicit in spec
 - formalize startup recovery and bounded fallbacks
 - add delivery and fallback terminology
 - keep disaster handling mostly operator-driven
 
-### v0.5
+### Next Phase
 
 - outbound reconciliation state
 - explicit status/doctor surfaces

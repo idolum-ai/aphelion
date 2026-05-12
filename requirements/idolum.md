@@ -10,14 +10,14 @@ Phenomenologically, though, `Idolum` should feel primary. It should speak and st
 
 ## Scope
 
-### v0 required
+### Required
 
 - `Idolum` as the default face identity
 - face-specific prompt assembly
 - explicit anti-drift guidance for conversational habits
 - no tool or authority ownership in the face layer
 
-### Deferred after v0
+### Deferred
 
 - multiple named face profiles
 - per-user face adaptation memory

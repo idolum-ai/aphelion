@@ -3536,7 +3536,7 @@ func TestHandleTelegramCommandCallbackContinuationApprove(t *testing.T) {
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-continue",
 		From:    &telegram.User{ID: 1002, Username: "approved"},
-		Data:    encodeContinuationCallbackData("decision-1", "approve"),
+		Data:    encodeContinuationCallbackData("decision-1", continuationActionApproveLease),
 		Message: &telegram.Message{MessageID: 93, Chat: &telegram.Chat{ID: 7, Type: "private"}},
 	})
 	if err != nil {
@@ -3580,7 +3580,7 @@ func TestHandleTelegramCommandCallbackContinuationApproveContinuesWhenEditFails(
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-continue-edit-fail",
 		From:    &telegram.User{ID: 1002, Username: "approved"},
-		Data:    encodeContinuationCallbackData("decision-2", "approve"),
+		Data:    encodeContinuationCallbackData("decision-2", continuationActionApproveLease),
 		Message: &telegram.Message{MessageID: 193, Chat: &telegram.Chat{ID: 7, Type: "private"}},
 	})
 	if err != nil {
@@ -3632,7 +3632,7 @@ func TestHandleTelegramCommandCallbackContinuationApproveContainsExpiredLease(t 
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-expired",
 		From:    &telegram.User{ID: 1002, Username: "approved"},
-		Data:    encodeContinuationCallbackData("decision-expired", "approve"),
+		Data:    encodeContinuationCallbackData("decision-expired", continuationActionApproveLease),
 		Message: &telegram.Message{MessageID: 194, Chat: &telegram.Chat{ID: 7, Type: "private"}},
 	})
 	if err != nil {
@@ -3679,7 +3679,7 @@ func TestHandleTelegramCommandCallbackContinuationApproveRecordsAckErrorWithoutF
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-ack-error",
 		From:    &telegram.User{ID: 1002, Username: "approved"},
-		Data:    encodeContinuationCallbackData("decision-ack-error", "approve"),
+		Data:    encodeContinuationCallbackData("decision-ack-error", continuationActionApproveLease),
 		Message: &telegram.Message{MessageID: 195, Chat: &telegram.Chat{ID: 7, Type: "private"}},
 	})
 	if err != nil {
@@ -3790,7 +3790,7 @@ func TestHandleTelegramCommandCallbackContinuationRejectsStaleDecisionID(t *test
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-stale",
 		From:    &telegram.User{ID: 1002, Username: "approved"},
-		Data:    encodeContinuationCallbackData("decision-old", "approve"),
+		Data:    encodeContinuationCallbackData("decision-old", continuationActionApproveLease),
 		Message: &telegram.Message{MessageID: 196, Chat: &telegram.Chat{ID: 7, Type: "private"}},
 	})
 	if err != nil {
@@ -4271,14 +4271,13 @@ func TestActionProposalApproveCallbackAppliesMissionDecision(t *testing.T) {
 	}
 }
 
-func TestContinuationControlsV2DecodeAliases(t *testing.T) {
+func TestContinuationControlsV2DecodeCurrentActions(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
 		raw  string
 		want string
 	}{
-		{"approve", continuationActionApprove},
 		{"approve_lease", continuationActionApproveLease},
 		{"continue_once", continuationActionContinueOnce},
 		{"ask-edit", continuationActionAskEdit},
@@ -4290,6 +4289,17 @@ func TestContinuationControlsV2DecodeAliases(t *testing.T) {
 		id, action, ok := decodeContinuationCallbackData(encodeContinuationCallbackData("decision-v2", tc.raw))
 		if !ok || id != "decision-v2" || action != tc.want {
 			t.Fatalf("decode %q = id=%q action=%q ok=%t, want decision-v2/%q/true", tc.raw, id, action, ok, tc.want)
+		}
+	}
+}
+
+func TestContinuationControlsRejectRemovedApprovalAliases(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"approve", "continue"} {
+		data := core.EncodeContinuationCallbackData("decision-v2", raw)
+		if _, _, ok := decodeContinuationCallbackData(data); ok {
+			t.Fatalf("decode %q ok=true, want removed approval alias rejected", raw)
 		}
 	}
 }

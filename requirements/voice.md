@@ -17,7 +17,7 @@ Voice is a channel behavior layered on top of the governor/face split:
 
 ## Scope
 
-### v0 required
+### Required
 
 - ingest voice messages from supported channels
 - transcribe voice into ordinary user content
@@ -25,7 +25,7 @@ Voice is a channel behavior layered on top of the governor/face split:
 - TTS generation for spoken replies
 - fallback to text when voice generation fails
 
-### Deferred after v0
+### Deferred
 
 - always-on live voice channels
 - streaming sentence-by-sentence TTS

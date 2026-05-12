@@ -30,6 +30,25 @@ func TestStatusDiagnosticsIncludesLatestTurnAndContinuation(t *testing.T) {
 	if err := store.NoteTurnRunToolStart(run.ID, "exec", `{"command":"curl https://api.github.com/zen"}`); err != nil {
 		t.Fatalf("NoteTurnRunToolStart() err = %v", err)
 	}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{"run_id":1,"run_kind":"interactive","request_text":"check status diagnostics"}`,
+			CreatedAt:   now.Add(-2 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventToolStarted,
+			Stage:       "tool",
+			Status:      "started",
+			PayloadJSON: `{"tool":"exec","preview":"{\"command\":\"curl https://api.github.com/zen\"}"}`,
+			CreatedAt:   now.Add(-time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(status diagnostics) err = %v", err)
+	}
 	if err := store.UpdateContinuationState(key, session.ContinuationState{
 		Status:         session.ContinuationStatusPending,
 		RemainingTurns: 1,
@@ -259,8 +278,36 @@ func TestChatStatusSnapshotAggregatesRouterStoreAndPendingSignals(t *testing.T) 
 	if err := store.Save(sess, nil, core.TokenUsage{}); err != nil {
 		t.Fatalf("Save(session state) err = %v", err)
 	}
+	staleAt := time.Now().UTC().Add(-5 * time.Minute)
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{"run_id":99,"run_kind":"interactive","request_text":"aggregate status"}`,
+			CreatedAt:   staleAt,
+		},
+		{
+			EventType:   core.ExecutionEventToolStarted,
+			Stage:       "tool",
+			Status:      "started",
+			PayloadJSON: `{"tool":"exec"}`,
+			CreatedAt:   staleAt.Add(time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(chat status) err = %v", err)
+	}
+	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType:   core.ExecutionEventRecoveryIssued,
+		Stage:       "recovery",
+		Status:      "issued",
+		PayloadJSON: `{"pending_count":1}`,
+		CreatedAt:   staleAt.Add(2 * time.Second),
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvent(chat recovery) err = %v", err)
+	}
 
-	rt.staleTurnThreshold = time.Second
+	rt.staleTurnThreshold = 2 * time.Minute
 	rt.staleTurnSweep = func(cutoff time.Time, limit int) ([]session.TurnRun, error) {
 		_ = cutoff
 		_ = limit
@@ -392,16 +439,33 @@ func TestSystemStatusSnapshotBuildsAdminViewAndHotChats(t *testing.T) {
 		t.Fatalf("UpsertPendingDecision(chat B) err = %v", err)
 	}
 	rt.staleTurnThreshold = time.Second
-	rt.staleTurnSweep = func(cutoff time.Time, limit int) ([]session.TurnRun, error) {
-		_ = cutoff
-		_ = limit
-		return []session.TurnRun{{
-			ID:             301,
-			ChatID:         8101,
-			Kind:           session.TurnRunKindInteractive,
-			Status:         session.TurnRunStatusRunning,
-			LastActivityAt: time.Now().UTC().Add(-4 * time.Minute),
-		}}, nil
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(session.SessionKey{ChatID: 8101, UserID: 0, Scope: telegramDMScopeRef(8101)}, []session.ExecutionEventInput{{
+		EventType:   core.ExecutionEventTurnStarted,
+		Stage:       "turn",
+		Status:      "running",
+		PayloadJSON: `{"run_id":301,"run_kind":"interactive"}`,
+		CreatedAt:   now.Add(-4 * time.Minute),
+	}}); err != nil {
+		t.Fatalf("AppendExecutionEvents(chat 8101) err = %v", err)
+	}
+	if _, err := store.AppendExecutionEvents(session.SessionKey{ChatID: 8102, UserID: 0, Scope: telegramDMScopeRef(8102)}, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{"run_id":302,"run_kind":"interactive"}`,
+			CreatedAt:   now,
+		},
+		{
+			EventType:   core.ExecutionEventTurnCompleted,
+			Stage:       "turn",
+			Status:      "completed",
+			PayloadJSON: `{"run_id":302}`,
+			CreatedAt:   now.Add(time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(chat 8102) err = %v", err)
 	}
 
 	snapshot, err := rt.SystemStatusSnapshot(core.RouterStatusSnapshot{
@@ -732,7 +796,7 @@ func TestSystemStatusSnapshotIncludesPendingReviewQueueItems(t *testing.T) {
 	}
 }
 
-func TestChatStatusSnapshotLatestTurnSourceMarkers(t *testing.T) {
+func TestChatStatusSnapshotLatestTurnSourceMarkersFromTES(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -742,7 +806,7 @@ func TestChatStatusSnapshotLatestTurnSourceMarkers(t *testing.T) {
 	}
 
 	key := session.SessionKey{ChatID: 9311, UserID: 0, Scope: telegramDMScopeRef(9311)}
-	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "fallback run")
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "operational run")
 	if err != nil {
 		t.Fatalf("BeginTurnRun() err = %v", err)
 	}
@@ -750,15 +814,12 @@ func TestChatStatusSnapshotLatestTurnSourceMarkers(t *testing.T) {
 		t.Fatalf("CompleteTurnRun() err = %v", err)
 	}
 
-	fallbackSnapshot, err := rt.ChatStatusSnapshot(9311, core.RouterStatusSnapshot{})
+	preTES, err := rt.ChatStatusSnapshot(9311, core.RouterStatusSnapshot{})
 	if err != nil {
-		t.Fatalf("ChatStatusSnapshot(fallback) err = %v", err)
+		t.Fatalf("ChatStatusSnapshot(preTES) err = %v", err)
 	}
-	if fallbackSnapshot.LatestTurnRun == nil {
-		t.Fatalf("LatestTurnRun = nil, want fallback turn run snapshot")
-	}
-	if got := strings.TrimSpace(fallbackSnapshot.LatestTurnRun.Source); got != "compatibility_fallback:turn_runs" {
-		t.Fatalf("LatestTurnRun.Source = %q, want compatibility_fallback:turn_runs", got)
+	if preTES.LatestTurnRun != nil {
+		t.Fatalf("LatestTurnRun = %#v, want no turn_runs fallback before TES events", preTES.LatestTurnRun)
 	}
 
 	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
@@ -1557,6 +1618,25 @@ func TestChatStatusSnapshotIncludesHiddenInputDeliveryAndPlanProgress(t *testing
 	}
 	if err := store.CompleteTurnRun(run.ID, session.TurnRunStatusFailed, "send outbound reply: telegram timeout"); err != nil {
 		t.Fatalf("CompleteTurnRun() err = %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{"run_id":1,"run_kind":"interactive","request_text":"status telemetry probe"}`,
+			CreatedAt:   now.Add(-2 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventTurnFailed,
+			Stage:       "turn",
+			Status:      "failed",
+			PayloadJSON: `{"error":"send outbound reply: telegram timeout"}`,
+			CreatedAt:   now.Add(-time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(delivery fallback) err = %v", err)
 	}
 
 	sess, err := store.Load(key)

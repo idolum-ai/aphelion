@@ -1,8 +1,7 @@
 # Principals — Telegram Admission & Authority
 
 _Current status:_ Telegram admin admission is config-owned. Durable-child
-access remains governed through child policy. Older `v0` labels lower in this
-file are historical staging notes, not current release promises.
+access remains governed through child policy.
 
 ## Overview
 
@@ -113,7 +112,7 @@ Principals and sessions are different things:
 - the **principal** says whether a user may talk to the bot and with what authority
 - the **session** is the DM transcript once that user is admitted
 
-In v0:
+In current implementation:
 
 - principal resolution uses Telegram `user_id`
 - session identity uses the DM `chat_id`
@@ -133,7 +132,7 @@ This must be enforced in code and config, not only described in prompt text.
 
 ## Non-Goals
 
-v0 principals do **not** provide:
+current implementation principals do **not** provide:
 
 - a pending state
 - a bot-driven approval queue

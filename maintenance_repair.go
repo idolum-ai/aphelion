@@ -155,7 +155,7 @@ func repairReviewRedactionEvent(store *session.SQLiteStore, event session.Review
 
 	meta.Summary = normalizeMaintenanceWhitespace(rawSummary)
 	meta.Metadata["redaction_source"] = "maintenance_repair"
-	meta.Metadata["redaction_reason"] = "legacy_summary_repaired_secret_concept_without_value"
+	meta.Metadata["redaction_reason"] = "summary_repaired_secret_concept_without_value"
 	meta.Metadata["summary_redaction_repaired_at"] = now.UTC().Format(time.RFC3339Nano)
 	meta.Metadata["redacted_fields"] = removeCSVValue(meta.Metadata["redacted_fields"], "summary")
 	if strings.TrimSpace(meta.Metadata["redacted_fields"]) == "" {

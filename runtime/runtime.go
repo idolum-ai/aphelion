@@ -880,7 +880,7 @@ func (r *Runtime) writeWorkResultArtifact(key session.SessionKey, req WorkReques
 	if strings.TrimSpace(body) == "" {
 		return session.OperationArtifact{}
 	}
-	root := firstRuntimeWorkNonEmpty(r.cfg.Agent.SharedMemoryRoot, r.cfg.Agent.Workspace, r.cfg.Agent.ExecRoot)
+	root := firstRuntimeWorkNonEmpty(r.cfg.Agent.SharedMemoryRoot, r.cfg.Agent.ExecRoot)
 	if strings.TrimSpace(root) == "" {
 		return session.OperationArtifact{}
 	}
@@ -1423,9 +1423,6 @@ func normalizeRuntimeConfig(cfg *config.Config) *config.Config {
 		if strings.TrimSpace(copy.Agent.UserMemoryRoot) == "" {
 			copy.Agent.UserMemoryRoot = filepath.Join(stateRoot, "memory")
 		}
-	}
-	if strings.TrimSpace(copy.Agent.Workspace) == "" {
-		copy.Agent.Workspace = copy.Agent.ExecRoot
 	}
 	return &copy
 }

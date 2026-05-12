@@ -3,7 +3,6 @@
 package runtime
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -31,28 +30,6 @@ func TestRuntimeRecipeStateRoundTrip(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("recipe state = %#v, want %#v", got, want)
-	}
-}
-
-func TestRuntimeRecipeStateIgnoresLegacyPersonaEffortField(t *testing.T) {
-	t.Parallel()
-
-	cfg := config.Default()
-	cfg.Sessions.DBPath = filepath.Join(t.TempDir(), "state", "sessions.db")
-	path := recipeStatePath(&cfg)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatalf("MkdirAll() err = %v", err)
-	}
-	raw := []byte("{\"persona_effort\":\"opus\",\"governor_effort\":\"medium\"}\n")
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		t.Fatalf("WriteFile() err = %v", err)
-	}
-	got, err := loadRuntimeRecipeState(path, &cfg)
-	if err != nil {
-		t.Fatalf("loadRuntimeRecipeState() err = %v", err)
-	}
-	if got.PersonaModel != personaModelSonnet {
-		t.Fatalf("PersonaModel = %q, want default %q when persona_model is absent", got.PersonaModel, personaModelSonnet)
 	}
 }
 

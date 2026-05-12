@@ -17,12 +17,6 @@ import (
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
-// KeepAudioArtifactsPermanently preserves the legacy audio-only entry point for
-// callers that have not moved to the generic Telegram artifact retention hook.
-func (r *Runtime) KeepAudioArtifactsPermanently(ctx context.Context, msg core.InboundMessage) error {
-	return r.keepTelegramArtifactsPermanently(ctx, msg, map[string]bool{"audio": true})
-}
-
 // KeepTelegramArtifactsPermanently materializes ordinary Telegram artifacts from
 // an already accepted inbound message into the shared artifact root without
 // re-running the conversational turn.

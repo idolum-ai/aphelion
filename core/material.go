@@ -49,7 +49,7 @@ func (m MaterialPacket) Text() string {
 	return strings.Join(out, "\n\n")
 }
 
-func LegacyMaterialPacket(text string) MaterialPacket {
+func TextMaterialPacket(text string) MaterialPacket {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return MaterialPacket{}

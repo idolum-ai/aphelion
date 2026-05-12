@@ -626,7 +626,7 @@ func TestPendingDecisionRoundTripAndReload(t *testing.T) {
 		Details:   "Install one dependency.",
 		Rationale: "Dependency install is needed before the tool can be audited and verified.",
 		ArtifactRefs: []RecordReference{
-			{Kind: "file_path", Ref: "docs/architecture/organic-agent-owned-tools-proposal.md", Label: "design doc"},
+			{Kind: "file_path", Ref: "docs/architecture/external-tools-pilot.md", Label: "design doc"},
 			{Kind: "telegram_message", Ref: "chat:7:message:1001", Label: "operator request"},
 		},
 		ChoicesJSON:       `[{"id":"approve","label":"Approve"},{"id":"deny","label":"Deny"}]`,
@@ -1991,16 +1991,16 @@ func TestApplyDurableAgentLivePolicyTracksOfferedStateAndRatifiedOutcome(t *test
 	}
 }
 
-func TestInitRejectsUnsupportedLegacySessionSchema(t *testing.T) {
+func TestInitRejectsUnsupportedExistingSessionSchema(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		t.Fatalf("open legacy db: %v", err)
+		t.Fatalf("open existing db: %v", err)
 	}
 
-	legacyDDL := []string{
+	ddl := []string{
 		`CREATE TABLE schema_version (
 			version INTEGER NOT NULL,
 			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -2032,37 +2032,66 @@ func TestInitRejectsUnsupportedLegacySessionSchema(t *testing.T) {
 			PRIMARY KEY (chat_id, user_id)
 		)`,
 	}
-	for _, ddl := range legacyDDL {
+	for _, ddl := range ddl {
 		if _, err := db.Exec(ddl); err != nil {
-			t.Fatalf("apply legacy ddl: %v", err)
+			t.Fatalf("apply ddl: %v", err)
 		}
 	}
 	if err := db.Close(); err != nil {
-		t.Fatalf("close legacy db: %v", err)
+		t.Fatalf("close existing db: %v", err)
 	}
 
 	_, err = NewSQLiteStore(dbPath)
 	if err == nil {
 		t.Fatal("NewSQLiteStore() err = nil, want unsupported legacy schema error")
 	}
-	if !strings.Contains(err.Error(), "unsupported legacy database schema version 1") {
+	if !strings.Contains(err.Error(), "unsupported database schema version 1") {
 		t.Fatalf("NewSQLiteStore() err = %v, want unsupported legacy schema version message", err)
 	}
 }
 
-func TestInitRejectsUnsupportedLegacySessionIdentitySchema(t *testing.T) {
+func TestInitRejectsUnsupportedUnversionedExistingSchema(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "legacy-plan-events.db")
+	dbPath := filepath.Join(t.TempDir(), "unversioned.db")
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		t.Fatalf("open legacy db: %v", err)
+		t.Fatalf("open existing db: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE sessions (
+		chat_id INTEGER NOT NULL,
+		user_id INTEGER NOT NULL DEFAULT 0,
+		system_prompt TEXT,
+		PRIMARY KEY (chat_id, user_id)
+	)`); err != nil {
+		t.Fatalf("create unversioned sessions table: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close existing db: %v", err)
+	}
+
+	_, err = NewSQLiteStore(dbPath)
+	if err == nil {
+		t.Fatal("NewSQLiteStore() err = nil, want unsupported unversioned schema error")
+	}
+	if !strings.Contains(err.Error(), "unsupported unversioned database schema") {
+		t.Fatalf("NewSQLiteStore() err = %v, want unsupported unversioned schema message", err)
+	}
+}
+
+func TestInitRejectsUnsupportedExistingSessionIdentitySchema(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "existing-plan-events.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open existing db: %v", err)
 	}
 
 	chatID := int64(321)
 	sessionID := SessionIDFromParts(chatID, 0, ScopeRef{})
 
-	legacyDDL := []string{
+	ddl := []string{
 		`CREATE TABLE schema_version (
 			version INTEGER NOT NULL,
 			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -2192,9 +2221,9 @@ func TestInitRejectsUnsupportedLegacySessionIdentitySchema(t *testing.T) {
 			FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 		)`,
 	}
-	for _, ddl := range legacyDDL {
+	for _, ddl := range ddl {
 		if _, err := db.Exec(ddl); err != nil {
-			t.Fatalf("apply legacy ddl: %v", err)
+			t.Fatalf("apply ddl: %v", err)
 		}
 	}
 	if _, err := db.Exec(`
@@ -2210,28 +2239,28 @@ func TestInitRejectsUnsupportedLegacySessionIdentitySchema(t *testing.T) {
 		t.Fatalf("insert legacy plan event: %v", err)
 	}
 	if err := db.Close(); err != nil {
-		t.Fatalf("close legacy db: %v", err)
+		t.Fatalf("close existing db: %v", err)
 	}
 
 	_, err = NewSQLiteStore(dbPath)
 	if err == nil {
 		t.Fatal("NewSQLiteStore() err = nil, want unsupported legacy schema error")
 	}
-	if !strings.Contains(err.Error(), "unsupported legacy database schema version 9") {
+	if !strings.Contains(err.Error(), "unsupported database schema version 9") {
 		t.Fatalf("NewSQLiteStore() err = %v, want unsupported legacy schema version message", err)
 	}
 }
 
-func TestInitRejectsUnsupportedLegacyDurableAgentSchema(t *testing.T) {
+func TestInitRejectsUnsupportedExistingDurableAgentSchema(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "legacy-durable.db")
+	dbPath := filepath.Join(t.TempDir(), "existing-durable.db")
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		t.Fatalf("open legacy db: %v", err)
+		t.Fatalf("open existing db: %v", err)
 	}
 
-	legacyDDL := []string{
+	ddl := []string{
 		`CREATE TABLE schema_version (
 			version INTEGER NOT NULL,
 			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -2276,20 +2305,20 @@ func TestInitRejectsUnsupportedLegacyDurableAgentSchema(t *testing.T) {
 			'2026-04-12T00:00:00Z', '2026-04-12T00:10:00Z'
 		)`,
 	}
-	for _, stmt := range legacyDDL {
+	for _, stmt := range ddl {
 		if _, err := db.Exec(stmt); err != nil {
 			t.Fatalf("exec legacy durable stmt %q: %v", stmt, err)
 		}
 	}
 	if err := db.Close(); err != nil {
-		t.Fatalf("close legacy db: %v", err)
+		t.Fatalf("close existing db: %v", err)
 	}
 
 	_, err = NewSQLiteStore(dbPath)
 	if err == nil {
 		t.Fatal("NewSQLiteStore() err = nil, want unsupported legacy schema error")
 	}
-	if !strings.Contains(err.Error(), "unsupported legacy database schema version 10") {
+	if !strings.Contains(err.Error(), "unsupported database schema version 10") {
 		t.Fatalf("NewSQLiteStore() err = %v, want unsupported legacy schema version message", err)
 	}
 }
@@ -2945,182 +2974,6 @@ func TestArtifactIndexRoundTripAndSearch(t *testing.T) {
 	}
 }
 
-func TestInitBackfillsArtifactIndexFromExistingSessionFloorMetadata(t *testing.T) {
-	t.Parallel()
-
-	dbPath := filepath.Join(t.TempDir(), "legacy-artifact-index.db")
-	db, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		t.Fatalf("open legacy db: %v", err)
-	}
-
-	legacyDDL := []string{
-		`CREATE TABLE schema_version (
-			version INTEGER NOT NULL,
-			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-		)`,
-		`INSERT INTO schema_version(version) VALUES (20)`,
-		`CREATE TABLE sessions (
-			session_id TEXT PRIMARY KEY,
-			chat_id INTEGER NOT NULL DEFAULT 0,
-			user_id INTEGER NOT NULL DEFAULT 0,
-			last_floor_metadata TEXT,
-			turn_count INTEGER NOT NULL DEFAULT 0
-		)`,
-		`INSERT INTO sessions(session_id, chat_id, user_id, last_floor_metadata, turn_count) VALUES (
-			'telegram_dm:777', 777, 0,
-			'{"artifacts":[{"artifact_id":"legacy-doc-1","kind":"document","source_type":"document","summary":"legacy-roadmap.pdf","handling":"extract_text","retention":"child_local","fetch_state":"fetched_local","materialized_path":"/tmp/legacy-roadmap.pdf"}]}'
-			, 12
-		)`,
-	}
-	for _, stmt := range legacyDDL {
-		if _, err := db.Exec(stmt); err != nil {
-			t.Fatalf("exec legacy artifact stmt %q: %v", stmt, err)
-		}
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close legacy db: %v", err)
-	}
-
-	store, err := NewSQLiteStore(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteStore() migration err = %v", err)
-	}
-	defer store.Close()
-
-	hits, err := store.SearchArtifacts("legacy-roadmap", 10, nil)
-	if err != nil {
-		t.Fatalf("SearchArtifacts() err = %v", err)
-	}
-	if len(hits) != 1 {
-		t.Fatalf("artifact hits len = %d, want 1", len(hits))
-	}
-	if hits[0].ArtifactID != "legacy-doc-1" {
-		t.Fatalf("ArtifactID = %q, want legacy-doc-1", hits[0].ArtifactID)
-	}
-	if hits[0].SessionID != "telegram_dm:777" {
-		t.Fatalf("SessionID = %q, want telegram_dm:777", hits[0].SessionID)
-	}
-	if hits[0].TurnIndex != 12 {
-		t.Fatalf("TurnIndex = %d, want 12", hits[0].TurnIndex)
-	}
-	if hits[0].MaterializedPath != "/tmp/legacy-roadmap.pdf" {
-		t.Fatalf("MaterializedPath = %q, want /tmp/legacy-roadmap.pdf", hits[0].MaterializedPath)
-	}
-}
-
-func TestInitBackfillsDurableAgentIdentityStateFromLegacyDurableAgentStateColumns(t *testing.T) {
-	t.Parallel()
-
-	dbPath := filepath.Join(t.TempDir(), "legacy-durable-identity-state.db")
-	store, err := NewSQLiteStore(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteStore(seed) err = %v", err)
-	}
-	agent := core.DurableAgent{
-		AgentID:            "legacy-family-group",
-		ReviewTargetChatID: 1001,
-		ChannelKind:        "telegram_group",
-		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
-			Charter:            "Observe and report.",
-			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
-			OutboundMode:       "read_only",
-			DriftPolicy:        "admin_review",
-		}),
-		BootstrapLLM: core.NodeLLMBootstrap{
-			Backend:        "native",
-			NativeProvider: "openrouter",
-			APIKey:         "sk-test",
-			Model:          "openrouter/test-model",
-		},
-		Status: "active",
-	}
-	if err := store.UpsertDurableAgent(agent); err != nil {
-		t.Fatalf("UpsertDurableAgent() err = %v", err)
-	}
-	if err := store.SaveDurableAgentRuntimeState(core.DurableAgentRuntimeState{
-		AgentID:         agent.AgentID,
-		Cursor:          "legacy-cursor",
-		Status:          "dormant",
-		LastApplyStatus: "failed",
-		LastApplyError:  "legacy runtime failure",
-	}); err != nil {
-		t.Fatalf("SaveDurableAgentRuntimeState(seed) err = %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatalf("Close(seed store) err = %v", err)
-	}
-
-	db, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		t.Fatalf("open sqlite db: %v", err)
-	}
-	legacyMutations := []string{
-		`DROP TABLE durable_agent_identity_state`,
-		`DELETE FROM schema_version`,
-		`INSERT INTO schema_version(version) VALUES (25)`,
-		`ALTER TABLE durable_agent_state ADD COLUMN last_offered_policy_version INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE durable_agent_state ADD COLUMN last_offered_policy_hash TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE durable_agent_state ADD COLUMN last_offered_policy_at TEXT`,
-		`ALTER TABLE durable_agent_state ADD COLUMN last_acknowledged_policy_version INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE durable_agent_state ADD COLUMN last_acknowledged_policy_hash TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE durable_agent_state ADD COLUMN last_acknowledged_policy_at TEXT`,
-		`ALTER TABLE durable_agent_state ADD COLUMN last_applied_policy_version INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE durable_agent_state ADD COLUMN last_applied_policy_hash TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE durable_agent_state ADD COLUMN last_applied_policy_at TEXT`,
-		`UPDATE durable_agent_state
-			SET last_offered_policy_version = 7,
-				last_offered_policy_hash = 'legacy-offered-hash',
-				last_offered_policy_at = '2026-04-21T10:00:00Z',
-				last_acknowledged_policy_version = 7,
-				last_acknowledged_policy_hash = 'legacy-ack-hash',
-				last_acknowledged_policy_at = '2026-04-21T10:01:00Z',
-				last_applied_policy_version = 6,
-				last_applied_policy_hash = 'legacy-applied-hash',
-				last_applied_policy_at = '2026-04-21T10:02:00Z'
-			WHERE agent_id = 'legacy-family-group'`,
-	}
-	for _, stmt := range legacyMutations {
-		if _, err := db.Exec(stmt); err != nil {
-			t.Fatalf("exec legacy mutation %q: %v", stmt, err)
-		}
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close sqlite db: %v", err)
-	}
-
-	migrated, err := NewSQLiteStore(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteStore(migrated) err = %v", err)
-	}
-	defer migrated.Close()
-
-	identity, err := migrated.DurableAgentIdentityState(agent.AgentID)
-	if err != nil {
-		t.Fatalf("DurableAgentIdentityState() err = %v", err)
-	}
-	if identity.LastOfferedPolicyVersion != 7 {
-		t.Fatalf("LastOfferedPolicyVersion = %d, want 7", identity.LastOfferedPolicyVersion)
-	}
-	if identity.LastAcknowledgedPolicyVersion != 7 {
-		t.Fatalf("LastAcknowledgedPolicyVersion = %d, want 7", identity.LastAcknowledgedPolicyVersion)
-	}
-	if identity.LastAppliedPolicyVersion != 6 {
-		t.Fatalf("LastAppliedPolicyVersion = %d, want 6", identity.LastAppliedPolicyVersion)
-	}
-	if identity.LastAppliedPolicyHash != "legacy-applied-hash" {
-		t.Fatalf("LastAppliedPolicyHash = %q, want legacy-applied-hash", identity.LastAppliedPolicyHash)
-	}
-
-	runtimeState, err := migrated.DurableAgentRuntimeState(agent.AgentID)
-	if err != nil {
-		t.Fatalf("DurableAgentRuntimeState() err = %v", err)
-	}
-	if runtimeState.LastApplyStatus != "failed" || runtimeState.LastApplyError != "legacy runtime failure" {
-		t.Fatalf("runtime state = %#v, want preserved runtime apply posture", runtimeState)
-	}
-}
-
 func TestArtifactIndexPreservesRepeatedArtifactIDsAcrossTurnsAndSessions(t *testing.T) {
 	t.Parallel()
 
@@ -3174,94 +3027,6 @@ func TestArtifactIndexPreservesRepeatedArtifactIDsAcrossTurnsAndSessions(t *test
 	}
 	if !seen[SessionIDForKey(keyB)+"#third location"] {
 		t.Fatalf("missing third occurrence in hits: %#v", hits)
-	}
-}
-
-func TestInitRebuildsArtifactIndexFromMessageFloorMetadata(t *testing.T) {
-	t.Parallel()
-
-	dbPath := filepath.Join(t.TempDir(), "legacy-artifact-index-occurrence.db")
-	db, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		t.Fatalf("open legacy db: %v", err)
-	}
-
-	legacyDDL := []string{
-		`CREATE TABLE schema_version (
-			version INTEGER NOT NULL,
-			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-		)`,
-		`INSERT INTO schema_version(version) VALUES (21)`,
-		`CREATE TABLE sessions (
-			session_id TEXT PRIMARY KEY,
-			chat_id INTEGER NOT NULL DEFAULT 0,
-			user_id INTEGER NOT NULL DEFAULT 0,
-			last_floor_metadata TEXT,
-			turn_count INTEGER NOT NULL DEFAULT 0
-		)`,
-		`CREATE TABLE messages (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			session_id TEXT NOT NULL,
-			chat_id INTEGER NOT NULL DEFAULT 0,
-			user_id INTEGER NOT NULL DEFAULT 0,
-			role TEXT NOT NULL,
-			content TEXT NOT NULL,
-			floor_content TEXT,
-			floor_metadata TEXT,
-			tool_calls TEXT,
-			tool_id TEXT,
-			tool_name TEXT,
-			thinking TEXT,
-			created_at TEXT NOT NULL DEFAULT (datetime('now')),
-			turn_index INTEGER NOT NULL,
-			content_chars INTEGER NOT NULL DEFAULT 0,
-			compacted INTEGER NOT NULL DEFAULT 0
-		)`,
-		`CREATE TABLE artifact_index (
-			artifact_id TEXT PRIMARY KEY,
-			session_id TEXT NOT NULL,
-			chat_id INTEGER NOT NULL DEFAULT 0,
-			user_id INTEGER NOT NULL DEFAULT 0,
-			turn_index INTEGER NOT NULL DEFAULT 0,
-			source_type TEXT NOT NULL DEFAULT '',
-			kind TEXT NOT NULL DEFAULT '',
-			summary TEXT NOT NULL DEFAULT '',
-			handling TEXT NOT NULL DEFAULT '',
-			retention TEXT NOT NULL DEFAULT '',
-			fetch_state TEXT NOT NULL DEFAULT '',
-			materialized_path TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL DEFAULT (datetime('now')),
-			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-		)`,
-		`INSERT INTO sessions(session_id, chat_id, user_id, last_floor_metadata, turn_count) VALUES ('telegram_dm:777', 777, 0, '', 2)`,
-		`INSERT INTO messages(session_id, chat_id, user_id, role, content, floor_metadata, turn_index, content_chars, compacted) VALUES
-			('telegram_dm:777', 777, 0, 'assistant', 'one', '{"artifacts":[{"artifact_id":"telegram:location","kind":"structured","source_type":"location","summary":"legacy one","handling":"inspect_metadata","retention":"session_reference"}]}', 1, 3, 0),
-			('telegram_dm:777', 777, 0, 'assistant', 'two', '{"artifacts":[{"artifact_id":"telegram:location","kind":"structured","source_type":"location","summary":"legacy two","handling":"inspect_metadata","retention":"session_reference"}]}', 2, 3, 0)`,
-	}
-	for _, stmt := range legacyDDL {
-		if _, err := db.Exec(stmt); err != nil {
-			t.Fatalf("exec legacy artifact stmt %q: %v", stmt, err)
-		}
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close legacy db: %v", err)
-	}
-
-	store, err := NewSQLiteStore(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteStore() migration err = %v", err)
-	}
-	defer store.Close()
-
-	hits, err := store.SearchArtifacts("legacy", 10, nil)
-	if err != nil {
-		t.Fatalf("SearchArtifacts() err = %v", err)
-	}
-	if len(hits) != 2 {
-		t.Fatalf("artifact hits len = %d, want 2", len(hits))
-	}
-	if hits[0].TurnIndex == hits[1].TurnIndex {
-		t.Fatalf("turn indexes = %d and %d, want distinct occurrences", hits[0].TurnIndex, hits[1].TurnIndex)
 	}
 }
 
@@ -3683,75 +3448,22 @@ func TestSQLiteStoreCapabilityRequestReviewGrantInvocationRoundTrip(t *testing.T
 	}
 }
 
-func TestMigrateCapabilityKindSystemChangeConstraint(t *testing.T) {
+func TestCurrentSchemaIncludesCapabilityAuthorityColumnsAndSystemChangeKind(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "capability-kind-system-change.db")
-	db, err := sql.Open("sqlite3", dbPath)
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "current-schema.db"))
 	if err != nil {
-		t.Fatalf("open seed db err = %v", err)
-	}
-	for _, stmt := range []string{
-		`CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')))`,
-		`INSERT INTO schema_version(version) VALUES (36)`,
-		`CREATE TABLE capability_requests (
-			request_id TEXT PRIMARY KEY,
-			requested_by TEXT NOT NULL DEFAULT '',
-			requested_for TEXT NOT NULL DEFAULT '',
-			parent_principal TEXT NOT NULL DEFAULT '',
-			admin_principal TEXT NOT NULL DEFAULT '',
-			kind TEXT NOT NULL DEFAULT 'generic_delegation' CHECK(kind IN ('tool', 'local_device', 'external_account', 'purchase', 'public_web', 'communication', 'file_access', 'network_access', 'generic_delegation')),
-			target_resource TEXT NOT NULL DEFAULT '',
-			purpose TEXT NOT NULL DEFAULT '',
-			risk_class TEXT NOT NULL DEFAULT '',
-			contract_json TEXT NOT NULL DEFAULT '{}',
-			constraints_json TEXT NOT NULL DEFAULT '{}',
-			review_status TEXT NOT NULL DEFAULT 'proposed' CHECK(review_status IN ('proposed', 'parent_approved', 'approved', 'rejected')),
-			grant_id TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL DEFAULT (datetime('now')),
-			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-		)`,
-		`CREATE TABLE capability_grants (
-			grant_id TEXT PRIMARY KEY,
-			request_id TEXT NOT NULL DEFAULT '',
-			granted_by TEXT NOT NULL DEFAULT '',
-			granted_to TEXT NOT NULL DEFAULT '',
-			kind TEXT NOT NULL DEFAULT 'generic_delegation' CHECK(kind IN ('tool', 'local_device', 'external_account', 'purchase', 'public_web', 'communication', 'file_access', 'network_access', 'generic_delegation')),
-			target_resource TEXT NOT NULL DEFAULT '',
-			allowed_actions_json TEXT NOT NULL DEFAULT '[]',
-			contract_json TEXT NOT NULL DEFAULT '{}',
-			constraints_json TEXT NOT NULL DEFAULT '{}',
-			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'active', 'stale', 'revoked', 'expired', 'failed')),
-			baseline_policy_hash TEXT NOT NULL DEFAULT '',
-			current_policy_hash TEXT NOT NULL DEFAULT '',
-			anchor_fingerprint TEXT NOT NULL DEFAULT '',
-			drift_source TEXT NOT NULL DEFAULT '',
-			stale_reason TEXT NOT NULL DEFAULT '',
-			invocation_count INTEGER NOT NULL DEFAULT 0,
-			failure_count INTEGER NOT NULL DEFAULT 0,
-			created_at TEXT NOT NULL DEFAULT (datetime('now')),
-			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-			granted_at TEXT,
-			expires_at TEXT,
-			revoked_at TEXT,
-			last_invoked_at TEXT,
-			last_failure_at TEXT
-		)`,
-	} {
-		if _, err := db.Exec(stmt); err != nil {
-			_ = db.Close()
-			t.Fatalf("seed db stmt err = %v", err)
-		}
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close seed db err = %v", err)
-	}
-
-	store, err := NewSQLiteStore(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteStore(migrated) err = %v", err)
+		t.Fatalf("NewSQLiteStore() err = %v", err)
 	}
 	defer store.Close()
+
+	var version int
+	if err := store.db.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&version); err != nil {
+		t.Fatalf("query schema version err = %v", err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, schemaVersion)
+	}
 
 	if _, err := store.UpsertCapabilityRequest(CapabilityRequest{
 		RequestID:      "cap-system-change",
@@ -3775,43 +3487,6 @@ func TestMigrateCapabilityKindSystemChangeConstraint(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertCapabilityGrant(system_change) err = %v", err)
 	}
-}
-
-func TestMigrateCapabilityInvocationsAddsAuthorityColumnsBeforeIndexes(t *testing.T) {
-	t.Parallel()
-
-	dbPath := filepath.Join(t.TempDir(), "legacy-capability-invocations.db")
-	db, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		t.Fatalf("open seed db err = %v", err)
-	}
-	for _, stmt := range []string{
-		`CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')))`,
-		`INSERT INTO schema_version(version) VALUES (41)`,
-		`CREATE TABLE capability_invocations (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			grant_id TEXT NOT NULL,
-			principal TEXT NOT NULL DEFAULT '',
-			action TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL DEFAULT '',
-			error_text TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL DEFAULT (datetime('now'))
-		)`,
-	} {
-		if _, err := db.Exec(stmt); err != nil {
-			_ = db.Close()
-			t.Fatalf("seed db stmt err = %v", err)
-		}
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close seed db err = %v", err)
-	}
-
-	store, err := NewSQLiteStore(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteStore(migrated) err = %v", err)
-	}
-	defer store.Close()
 
 	for _, column := range []string{
 		"session_id",
@@ -3822,7 +3497,7 @@ func TestMigrateCapabilityInvocationsAddsAuthorityColumnsBeforeIndexes(t *testin
 	} {
 		var count int
 		if err := store.db.QueryRow(`SELECT COUNT(1) FROM pragma_table_info('capability_invocations') WHERE name = ?`, column).Scan(&count); err != nil {
-			t.Fatalf("query migrated capability_invocations.%s err = %v", column, err)
+			t.Fatalf("query current capability_invocations.%s err = %v", column, err)
 		}
 		if count != 1 {
 			t.Fatalf("capability_invocations.%s count = %d, want 1", column, count)
@@ -3835,76 +3510,11 @@ func TestMigrateCapabilityInvocationsAddsAuthorityColumnsBeforeIndexes(t *testin
 	} {
 		var count int
 		if err := store.db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = ?`, indexName).Scan(&count); err != nil {
-			t.Fatalf("query migrated index %s err = %v", indexName, err)
+			t.Fatalf("query current index %s err = %v", indexName, err)
 		}
 		if count != 1 {
 			t.Fatalf("index %s count = %d, want 1", indexName, count)
 		}
-	}
-}
-
-func TestMigrateDurableChildAuthorityCanonicalizesPrincipalsAndChildRuntime(t *testing.T) {
-	t.Parallel()
-
-	dbPath := filepath.Join(t.TempDir(), "canonicalize-durable-child.db")
-	store, err := NewSQLiteStore(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteStore(seed) err = %v", err)
-	}
-	if err := store.UpsertDurableAgent(core.DurableAgent{AgentID: "child-alpha", ChannelKind: "external_channel", Status: "active"}); err != nil {
-		t.Fatalf("UpsertDurableAgent() err = %v", err)
-	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := store.db.Exec(`
-		INSERT INTO capability_requests(request_id, requested_by, requested_for, kind, target_resource, purpose, contract_json, constraints_json, review_status, created_at, updated_at)
-		VALUES ('cap-old', 'child-alpha', 'child-alpha', 'tool', 'mail-reader', 'legacy runtime shape', '{"runtime_materialization":{"readonly_paths":["/srv/mail"],"environment":["MAIL_TOKEN"]}}', '{}', 'approved', ?, ?)
-	`, now, now); err != nil {
-		t.Fatalf("insert legacy request err = %v", err)
-	}
-	if _, err := store.db.Exec(`
-		INSERT INTO capability_grants(grant_id, request_id, granted_by, granted_to, kind, target_resource, allowed_actions_json, contract_json, constraints_json, status, created_at, updated_at, granted_at)
-		VALUES ('capg-old', 'cap-old', 'admin', 'child-alpha', 'tool', 'mail-reader', '["invoke"]', '{"runtime_materialization":{"readonly_paths":["/srv/mail"]}}', '{}', 'active', ?, ?, ?)
-	`, now, now, now); err != nil {
-		t.Fatalf("insert legacy grant err = %v", err)
-	}
-	if _, err := store.db.Exec(`UPDATE schema_version SET version = 35`); err != nil {
-		t.Fatalf("downgrade schema version err = %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatalf("close seed store err = %v", err)
-	}
-
-	migrated, err := NewSQLiteStore(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteStore(migrated) err = %v", err)
-	}
-	defer migrated.Close()
-
-	request, ok, err := migrated.CapabilityRequest("cap-old")
-	if err != nil {
-		t.Fatalf("CapabilityRequest() err = %v", err)
-	}
-	if !ok {
-		t.Fatal("CapabilityRequest(cap-old) ok=false")
-	}
-	if request.RequestedBy != core.DurableAgentPrincipal("child-alpha") || request.RequestedFor != core.DurableAgentPrincipal("child-alpha") {
-		t.Fatalf("request principals = %q/%q, want canonical durable agent principal", request.RequestedBy, request.RequestedFor)
-	}
-	if strings.Contains(request.Contract, "runtime_materialization") || !strings.Contains(request.Contract, "child_runtime") || strings.Contains(request.Contract, "environment") || !strings.Contains(request.Contract, "env_from_parent") {
-		t.Fatalf("request contract = %s, want canonical child_runtime without legacy aliases", request.Contract)
-	}
-	grant, ok, err := migrated.CapabilityGrant("capg-old")
-	if err != nil {
-		t.Fatalf("CapabilityGrant() err = %v", err)
-	}
-	if !ok {
-		t.Fatal("CapabilityGrant(capg-old) ok=false")
-	}
-	if grant.GrantedTo != core.DurableAgentPrincipal("child-alpha") {
-		t.Fatalf("grant granted_to = %q, want canonical durable agent principal", grant.GrantedTo)
-	}
-	if strings.Contains(grant.Contract, "runtime_materialization") || !strings.Contains(grant.Contract, "child_runtime") {
-		t.Fatalf("grant contract = %s, want canonical child_runtime", grant.Contract)
 	}
 }
 

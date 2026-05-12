@@ -15,7 +15,6 @@ import (
 )
 
 const (
-	memoryFileMarkerPrefix     = "<!-- aphelion-memory-file:v1"
 	memoryEntryMarkerPrefix    = "<!-- aphelion-memory-entry:v1"
 	memoryProposalMarkerPrefix = "<!-- aphelion-memory-proposal:v1"
 	memoryMarkerEnd            = "-->"
@@ -31,8 +30,8 @@ const (
 )
 
 // MemoryEntry is the structured view of one filesystem-backed memory item.
-// Markdown remains the source of truth; this shape exists for migration,
-// indexing, and audit instrumentation.
+// Markdown remains the source of truth; this shape exists for indexing and
+// audit instrumentation.
 type MemoryEntry struct {
 	ID            string
 	Scope         string
@@ -48,33 +47,6 @@ type MemoryEntry struct {
 	Path          string
 	Ordinal       int
 	Content       string
-}
-
-type MigrationOptions struct {
-	Root        string
-	Scope       string
-	MigrationID string
-	Stores      []string
-	Apply       bool
-	Now         time.Time
-}
-
-type MigrationFileResult struct {
-	Path           string
-	Store          string
-	Entries        int
-	AlreadyTagged  bool
-	Changed        bool
-	ContentSHA256  string
-	PreviousSHA256 string
-}
-
-type MigrationResult struct {
-	Root        string
-	Scope       string
-	MigrationID string
-	Applied     bool
-	Files       []MigrationFileResult
 }
 
 type MemoryEvent struct {
@@ -170,12 +142,7 @@ func NewMemoryEntry(scope string, store string, path string, ordinal int, conten
 	}
 	sourceKind = firstNonEmpty(strings.TrimSpace(sourceKind), "direct")
 	createdAt := utcString(now)
-	migratedAt := ""
-	if sourceKind == "migration" {
-		createdAt = "unknown"
-		migratedAt = utcString(now)
-	}
-	if sourceKind == "legacy" {
+	if sourceKind == "untagged" {
 		createdAt = "unknown"
 	}
 	return MemoryEntry{
@@ -188,7 +155,6 @@ func NewMemoryEntry(scope string, store string, path string, ordinal int, conten
 		SourceRef:     strings.TrimSpace(sourceRef),
 		Confidence:    confidence,
 		CreatedAt:     createdAt,
-		MigratedAt:    migratedAt,
 		ContentSHA256: checksumText(content),
 		Path:          filepath.ToSlash(strings.TrimSpace(path)),
 		Ordinal:       ordinal,
@@ -251,149 +217,10 @@ func ParseEntries(path string, store string, scope string, raw string) []MemoryE
 			continue
 		}
 		if shouldTagMemoryBlock(block) {
-			entries = append(entries, NewMemoryEntry(scope, store, path, len(entries)+1, block, "legacy", "", "0.60", time.Time{}))
+			entries = append(entries, NewMemoryEntry(scope, store, path, len(entries)+1, block, "untagged", "", "0.60", time.Time{}))
 		}
 	}
 	return entries
-}
-
-func MigrateRoot(opts MigrationOptions) (*MigrationResult, error) {
-	root := strings.TrimSpace(opts.Root)
-	if root == "" {
-		return nil, fmt.Errorf("memory migration root is required")
-	}
-	if opts.Now.IsZero() {
-		opts.Now = time.Now().UTC()
-	}
-	scope := firstNonEmpty(strings.TrimSpace(opts.Scope), "shared")
-	migrationID := strings.TrimSpace(opts.MigrationID)
-	if migrationID == "" {
-		migrationID = "migration_" + opts.Now.UTC().Format("20060102T150405Z")
-	}
-	stores := opts.Stores
-	if len(stores) == 0 {
-		stores = KnownStoreNames()
-	}
-
-	result := &MigrationResult{Root: root, Scope: scope, MigrationID: migrationID, Applied: opts.Apply}
-	for _, store := range stores {
-		path, normalizedStore, err := ResolveStorePath(root, store)
-		if err != nil {
-			return nil, err
-		}
-		rawBytes, err := os.ReadFile(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, fmt.Errorf("read memory file %s: %w", path, err)
-		}
-		rel, _ := filepath.Rel(root, path)
-		migrated, fileResult, err := MigrateMarkdownFile(string(rawBytes), filepath.ToSlash(rel), normalizedStore, scope, migrationID, opts.Now)
-		if err != nil {
-			return nil, fmt.Errorf("migrate %s: %w", path, err)
-		}
-		fileResult.Path = path
-		if opts.Apply && fileResult.Changed {
-			if err := os.WriteFile(path, []byte(migrated), 0o600); err != nil {
-				return nil, fmt.Errorf("write migrated memory file %s: %w", path, err)
-			}
-		}
-		result.Files = append(result.Files, fileResult)
-	}
-
-	if opts.Apply {
-		if err := WriteMigrationManifest(root, result); err != nil {
-			return nil, err
-		}
-		for _, file := range result.Files {
-			if err := AppendEvent(root, MemoryEvent{
-				Type:          "memory.migration.file",
-				Scope:         scope,
-				Store:         file.Store,
-				Path:          file.Path,
-				Status:        "applied",
-				ContentSHA256: file.ContentSHA256,
-				Metadata: map[string]string{
-					"migration_id": migrationID,
-					"entries":      strconv.Itoa(file.Entries),
-				},
-				CreatedAt: opts.Now,
-			}); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return result, nil
-}
-
-func MigrateMarkdownFile(raw string, path string, store string, scope string, migrationID string, now time.Time) (string, MigrationFileResult, error) {
-	store = normalizeStore(store)
-	path = filepath.ToSlash(strings.TrimSpace(path))
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	result := MigrationFileResult{
-		Store:          store,
-		AlreadyTagged:  strings.Contains(raw, memoryEntryMarkerPrefix),
-		PreviousSHA256: checksumText(raw),
-	}
-	content := strings.ReplaceAll(raw, "\r\n", "\n")
-	if strings.TrimSpace(content) == "" {
-		return "", result, nil
-	}
-	if result.AlreadyTagged && strings.Contains(content, memoryFileMarkerPrefix) {
-		result.Entries = len(ParseEntries(path, store, scope, content))
-		result.ContentSHA256 = checksumText(content)
-		return ensureTrailingNewline(content), result, nil
-	}
-
-	blocks := splitEntryBlocks(content)
-	out := make([]string, 0, len(blocks)*2+1)
-	out = append(out, renderFileMarker(scope, store, migrationID))
-	entryCount := 0
-	for _, block := range blocks {
-		trimmed := strings.TrimSpace(block)
-		if trimmed == "" {
-			continue
-		}
-		if strings.HasPrefix(trimmed, memoryFileMarkerPrefix) {
-			continue
-		}
-		if strings.HasPrefix(trimmed, memoryEntryMarkerPrefix) {
-			out = append(out, trimmed)
-			entryCount++
-			continue
-		}
-		if shouldTagMemoryBlock(trimmed) {
-			entryCount++
-			entry := NewMemoryEntry(scope, store, path, entryCount, trimmed, "migration", "migration:"+migrationID, "0.70", now)
-			out = append(out, RenderEntry(entry))
-			continue
-		}
-		out = append(out, trimmed)
-	}
-	migrated := ensureTrailingNewline(strings.TrimSpace(strings.Join(out, "\n\n")))
-	result.Entries = entryCount
-	result.ContentSHA256 = checksumText(migrated)
-	result.Changed = result.ContentSHA256 != result.PreviousSHA256
-	return migrated, result, nil
-}
-
-func WriteMigrationManifest(root string, result *MigrationResult) error {
-	if result == nil {
-		return nil
-	}
-	dir := instrumentationDir(root)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create memory instrumentation dir: %w", err)
-	}
-	raw, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode migration manifest: %w", err)
-	}
-	path := filepath.Join(dir, "migration.json")
-	return os.WriteFile(path, append(raw, '\n'), 0o600)
 }
 
 func AppendEvent(root string, event MemoryEvent) error {
@@ -609,18 +436,6 @@ func RejectProposal(root string, proposalID string) (*MemoryProposal, error) {
 	return proposal, nil
 }
 
-func renderFileMarker(scope string, store string, migrationID string) string {
-	lines := []string{
-		memoryFileMarkerPrefix,
-		"scope: " + firstNonEmpty(scope, "shared"),
-		"store: " + normalizeStore(store),
-		"migration_id: " + strings.TrimSpace(migrationID),
-		"canonical: filesystem",
-		memoryMarkerEnd,
-	}
-	return strings.Join(lines, "\n")
-}
-
 func renderProposal(proposal MemoryProposal) string {
 	lines := []string{memoryProposalMarkerPrefix}
 	fields := []struct{ key, value string }{
@@ -750,7 +565,7 @@ func shouldTagMemoryBlock(block string) bool {
 	if strings.HasPrefix(block, "<!--") && strings.HasSuffix(block, "-->") {
 		return false
 	}
-	if strings.HasPrefix(block, memoryFileMarkerPrefix) || strings.HasPrefix(block, memoryEntryMarkerPrefix) || strings.HasPrefix(block, memoryProposalMarkerPrefix) {
+	if strings.HasPrefix(block, memoryEntryMarkerPrefix) || strings.HasPrefix(block, memoryProposalMarkerPrefix) {
 		return false
 	}
 	lines := strings.Split(block, "\n")

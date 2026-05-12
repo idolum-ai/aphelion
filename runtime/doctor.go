@@ -1261,13 +1261,6 @@ func (r *Runtime) writeDoctorIssueStatusChecks(b *strings.Builder, input doctorD
 		writeDoctorIssueCheck(b, "memory_survives_restart_and_dynamic_files_load", "active", "structured memory files are not fully configured as dynamic context")
 	}
 
-	productionEmailMatches := doctorSourceMatches(workingRoot, []string{"runtime", "tool", "core", "session"}, []string{"email", "e-mail"}, false, 8)
-	if len(productionEmailMatches) == 0 {
-		writeDoctorIssueCheck(b, "feature_specific_email_subagent_code", "likely_fixed", "no production source matches for email-specific terms under runtime/tool/core/session")
-	} else {
-		writeDoctorIssueCheck(b, "feature_specific_email_subagent_code", "residual_risk", "production source still contains email-specific matches: "+strings.Join(productionEmailMatches, ", "))
-	}
-
 	operationalAlertSourceOK := doctorSourceContainsAll(workingRoot, "runtime/operational_alerts.go", []string{"reportOperationalIssueAsync", "sendOperationalNoticeToAdmin", "system_warning"}) &&
 		doctorSourceContainsAll(workingRoot, "runtime/turn_coordinator_common.go", []string{"reportOperationalIssueAsync", "provider"})
 	adminConfigured := r != nil && r.cfg != nil && len(uniquePositiveIDs(r.cfg.Principals.Telegram.AdminUserIDs)) > 0
@@ -1316,19 +1309,17 @@ func (r *Runtime) writeDoctorDesignPrincipleHealth(b *strings.Builder, input doc
 	debtOK := doctorSourceContainsAll(workingRoot, "docs/architecture/principle-debt.md", []string{
 		"## Active Debt",
 		"None.",
-		"## Retired Debt",
 		"## Machine-Checked Paths",
-		"Exit gate",
 	})
 	if debtOK {
-		writeDoctorIssueCheck(b, "principle_debt_ledger", "likely_fixed", "principle-debt.md reports no active debt and keeps retired entries with exit gates")
+		writeDoctorIssueCheck(b, "principle_debt_ledger", "likely_fixed", "principle-debt.md reports no active debt and keeps machine-checked paths")
 	} else {
-		writeDoctorIssueCheck(b, "principle_debt_ledger", "active", "could not confirm principle-debt.md with no active debt, retired entries, and exit gates")
+		writeDoctorIssueCheck(b, "principle_debt_ledger", "active", "could not confirm principle-debt.md with no active debt and machine-checked paths")
 	}
 
 	retiredStringDebtMatches := doctorSourceMatches(workingRoot, []string{"runtime", "session", "core"}, []string{
 		"lexical_" + "safety_scanner",
-		"legacy_" + "status_line",
+		"status_" + "line_fallback",
 		"detect" + "ExecutionClaims",
 		"text" + "Requests" + "PendingAudioTranscription",
 	}, false, 1)

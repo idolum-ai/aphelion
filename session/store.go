@@ -13,10 +13,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const (
-	schemaVersion                       = 43
-	minimumSupportedLegacySchemaVersion = 11
-)
+const schemaVersion = 43
 
 type SQLiteStore struct {
 	db     *sql.DB
@@ -68,11 +65,22 @@ func (s *SQLiteStore) init() error {
 		_ = tx.Rollback()
 	}()
 
+	existingTables, err := existingUserTableCount(tx)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS schema_version (
+		version INTEGER NOT NULL,
+		applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`); err != nil {
+		return fmt.Errorf("ensure schema_version table: %w", err)
+	}
+	currentVersion, err := validateCurrentSchemaVersion(tx, existingTables)
+	if err != nil {
+		return err
+	}
+
 	statements := []string{
-		`CREATE TABLE IF NOT EXISTS schema_version (
-			version INTEGER NOT NULL,
-			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-		)`,
 		`CREATE TABLE IF NOT EXISTS sessions (
 			session_id TEXT PRIMARY KEY,
 			chat_id INTEGER NOT NULL DEFAULT 0,
@@ -278,6 +286,8 @@ func (s *SQLiteStore) init() error {
 			created_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_capability_invocations_grant ON capability_invocations(grant_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_capability_invocations_authority_session ON capability_invocations(session_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_capability_invocations_lease ON capability_invocations(continuation_lease_id, operation_plan_lease_id, created_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS tool_install_records (
 			tool_name TEXT PRIMARY KEY,
 			installer TEXT NOT NULL DEFAULT '',
@@ -615,10 +625,19 @@ func (s *SQLiteStore) init() error {
 		}
 	}
 
-	if err := applyMigrations(tx); err != nil {
+	if err := ensureTailnetSurfaceTables(tx); err != nil {
+		return err
+	}
+	if err := ensureTailnetGrantBindingTables(tx); err != nil {
+		return err
+	}
+	if err := ensureMissionLedgerTables(tx); err != nil {
 		return err
 	}
 	if err := ensureSessionIdentityIndexes(tx); err != nil {
+		return err
+	}
+	if err := recordCurrentSchemaVersion(tx, currentVersion); err != nil {
 		return err
 	}
 

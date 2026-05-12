@@ -2,8 +2,7 @@
 
 _Current status:_ Telegram media normalization, deterministic download policy,
 principal-aware storage, transcription surfaces, and retention
-policy are live. Older `v0`/`v0.5` labels lower in this file are historical
-staging notes, not current release promises.
+policy are live.
 
 ## Overview
 
@@ -128,7 +127,7 @@ model = "whisper-1"
 
 ## Tests
 
-### v0
+### Current Phase
 
 - **TestNormalizePhotoMessage**
 - **TestNormalizeCaptionFallback**

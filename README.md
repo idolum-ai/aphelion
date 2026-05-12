@@ -70,11 +70,11 @@ legible authority over live personal-agent action. The fuller attribution and
 departure record lives in
 [docs/architecture/influences-and-departures.md](docs/architecture/influences-and-departures.md).
 
-The architectural center for this direction is the
-[Agent Authority Ledger](docs/architecture/agent-authority-ledger.md): proposals,
-leases, consent subjects, authority scopes, auto-approval budgets, capability
-grants, and execution evidence. User-facing text and buttons should render that
-ledger, not become the source of authority themselves.
+The architectural center for this direction is the current authority path:
+typed proposals, leases, consent subjects, authority scopes, auto-approval
+budgets, capability grants, and execution evidence. User-facing text and
+buttons should render typed records, not become the source of authority
+themselves.
 
 ## Architecture
 
@@ -106,7 +106,7 @@ Details:
 Execution transparency:
 
 - Runtime execution truth is recorded in TES (`execution_events`) with ordered, per-session event sequencing.
-- `/status` and `/debug` are TES-first projections with compatibility fallbacks where legacy rows still exist.
+- `/status` and `/debug` project TES plus current operational state; removed rows are deleted or rejected, not consulted by live fallback reads.
 - Final reply and continuation/debug summaries use grounding guards to avoid surfacing claims that are not evidenced by TES.
 - Human-facing Telegram and CLI panels follow one operator contract: current status,
   why it matters, next action, then labeled details/evidence. Raw telemetry stays
@@ -132,11 +132,11 @@ Current runnable build:
 - Telegram slash commands: `/start`, `/help`, `/status`, `/debug`, `/doctor`, `/agents`, `/memory`, `/mission`, `/model`, `/autonomy`, `/autoapprove`, `/stop`, `/new`, `/detach`, `/restart`, `/reinstall`, `/set_persona_model`, `/set_governor_effort`
 
 Current promise gaps and accepted implementation targets are tracked in
-[docs/promises.md](docs/promises.md). The current done-done target is
-intentionally narrow: truthful public claims, authority/status consistency,
-sandbox/network honesty, bounded external tools, and reproducible release
-checks. Broad mission autonomy, live Tailnet mutation, generic tool substrates,
-and dashboard/marketplace growth are not current release targets.
+[docs/promises.md](docs/promises.md). Release discipline is intentionally
+narrow: truthful public claims, authority/status consistency, sandbox/network
+honesty, bounded external tools, reproducible checks, and current-only reinstall
+behavior. Broad mission autonomy, live Tailnet mutation, generic tool
+substrates, and dashboard/marketplace growth are not current targets.
 
 ## Run
 
@@ -368,7 +368,6 @@ and a reason written to TES:
 ```bash
 ./bin/aphelion authority revoke-grant --config ~/.aphelion/aphelion.toml --grant-id capg_... --reason "stale grant no longer needed" --apply
 ./bin/aphelion authority revoke-continuation --config ~/.aphelion/aphelion.toml --chat-id 123456789 --reason "stale proposal references a missing decision" --apply
-./bin/aphelion authority acknowledge-legacy-invocation-gap --config ~/.aphelion/aphelion.toml --grant-id capg_... --reason "pre-contract invocations reviewed; no historical lease evidence exists" --apply
 ```
 
 `make install-user-service`, `make update`, and `make update-release` also run

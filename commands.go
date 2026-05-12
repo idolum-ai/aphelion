@@ -766,7 +766,7 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 		}
 		var text string
 		switch action {
-		case continuationActionApprove, continuationActionApproveLease, continuationActionContinueOnce:
+		case continuationActionApproveLease, continuationActionContinueOnce:
 			approverID := int64(0)
 			if cb.From != nil {
 				approverID = cb.From.ID

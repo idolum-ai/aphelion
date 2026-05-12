@@ -4,44 +4,44 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+ledger="docs/architecture/structural-hygiene.md"
+threshold=800
 fail=0
 
-check_max_lines() {
-  local file="$1"
-  local max_lines="$2"
-
-  if [[ ! -f "$file" ]]; then
-    echo "missing structural taste file: $file" >&2
-    fail=1
-    return
-  fi
-
-  local lines
-  lines="$(wc -l <"$file" | tr -d ' ')"
-  if (( lines > max_lines )); then
-    echo "structural taste line cap exceeded: $file has $lines lines, max $max_lines" >&2
-    fail=1
-  fi
-}
-
-# DP-005 debt surfaces. These caps are intentionally generous enough to avoid
-# churn, but tight enough to catch growth back into pre-split broad files.
-check_max_lines "session/store.go" 850
-check_max_lines "runtime/continuation.go" 140
-check_max_lines "runtime/continuation_materialize.go" 260
-check_max_lines "runtime/status.go" 760
-check_max_lines "telegram_decisions.go" 2000
-check_max_lines "commands.go" 1150
-check_max_lines "maintenance_durable_agent.go" 1125
-check_max_lines "quickstart.go" 925
+if [[ ! -f "$ledger" ]]; then
+  echo "missing structural hygiene ledger: $ledger" >&2
+  exit 1
+fi
 
 while IFS= read -r file; do
-  check_max_lines "$file" 1800
+  lines="$(wc -l <"$file" | tr -d ' ')"
+  if (( lines <= threshold )); then
+    continue
+  fi
+  if ! rg -qF "\`$file\`" "$ledger"; then
+    echo "large file missing structural hygiene ledger entry: $file has $lines lines" >&2
+    fail=1
+  fi
 done < <(
-  {
-    find session -maxdepth 1 -name 'store_*.go' ! -name '*_test.go' -print
-    find runtime -maxdepth 1 \( -name 'continuation_*.go' -o -name 'status_*.go' \) ! -name '*_test.go' -print
-  } | sort
+  find . \
+    -path './.git' -prune -o \
+    -path './third_party' -prune -o \
+    -name '*.go' ! -name '*_test.go' -print |
+    sed 's#^\./##' |
+    sort
+)
+
+while IFS= read -r path; do
+  [[ -z "$path" ]] && continue
+  if [[ ! -f "$path" ]]; then
+    echo "structural hygiene ledger references missing file: $path" >&2
+    fail=1
+  fi
+done < <(
+  rg --no-filename -o '`[^`*]+\.go`' "$ledger" |
+    sed 's/^`//; s/`$//' |
+    grep -v '^_test\.go$' |
+    sort -u
 )
 
 if (( fail != 0 )); then

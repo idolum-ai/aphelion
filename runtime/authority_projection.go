@@ -110,12 +110,6 @@ func authorityProjectionFromStore(store *session.SQLiteStore, now time.Time) (au
 	if err != nil {
 		return authorityProjection{}, fmt.Errorf("load auto-approval use events: %w", err)
 	}
-	authorityReviewEvents, err := store.ExecutionEventsByTypes([]string{core.ExecutionEventAuthorityFindingReviewed}, time.Time{}, 5000)
-	if err != nil {
-		return authorityProjection{}, fmt.Errorf("load authority finding review events: %w", err)
-	}
-	legacyInvocationGapReviews := authorityLegacyInvocationGapReviews(authorityReviewEvents)
-
 	projection := authorityProjection{
 		GeneratedAt:            now,
 		ContinuationRecords:    len(continuations),
@@ -286,7 +280,7 @@ func authorityProjectionFromStore(store *session.SQLiteStore, now time.Time) (au
 				SuggestedRepair: "review the drift reason and refresh or revoke the grant",
 			})
 		}
-		if authorityCapabilityGrantUsedWithoutTurnLeaseEvidence(grant, invocations) && !authorityLegacyInvocationGapReviewed(grant.GrantID, invocations, legacyInvocationGapReviews) {
+		if authorityCapabilityGrantUsedWithoutTurnLeaseEvidence(grant, invocations) {
 			projection.addFinding(authorityProjectionFinding{
 				Code:            "capability_grant_invocation_missing_turn_lease_evidence",
 				Severity:        "warning",
@@ -721,73 +715,6 @@ func authorityCapabilityGrantUsedWithoutTurnLeaseEvidence(grant session.Capabili
 	}
 	_, _, ok := authorityMissingTurnLeaseEvidenceMax(invocations)
 	return ok
-}
-
-type authorityLegacyInvocationGapReview struct {
-	GrantID                     string
-	ReviewedThroughInvocationID int64
-	ReviewedThroughCreatedAt    time.Time
-}
-
-func authorityLegacyInvocationGapReviews(events []session.ExecutionEvent) map[string]authorityLegacyInvocationGapReview {
-	reviews := make(map[string]authorityLegacyInvocationGapReview)
-	for _, event := range events {
-		if event.EventType != core.ExecutionEventAuthorityFindingReviewed || strings.TrimSpace(event.Status) != "reviewed" {
-			continue
-		}
-		var payload struct {
-			Code                        string `json:"code"`
-			SourceKind                  string `json:"source_kind"`
-			SourceID                    string `json:"source_id"`
-			GrantID                     string `json:"grant_id"`
-			ReviewedThroughInvocationID int64  `json:"reviewed_through_invocation_id"`
-			ReviewedThroughCreatedAt    string `json:"reviewed_through_created_at"`
-		}
-		if err := json.Unmarshal([]byte(strings.TrimSpace(event.PayloadJSON)), &payload); err != nil {
-			continue
-		}
-		if strings.TrimSpace(payload.Code) != "capability_grant_invocation_missing_turn_lease_evidence" || strings.TrimSpace(payload.SourceKind) != "capability_grant" {
-			continue
-		}
-		grantID := firstNonEmpty(payload.GrantID, payload.SourceID)
-		if grantID == "" || payload.ReviewedThroughInvocationID <= 0 {
-			continue
-		}
-		var reviewedAt time.Time
-		if raw := strings.TrimSpace(payload.ReviewedThroughCreatedAt); raw != "" {
-			if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-				reviewedAt = parsed.UTC()
-			}
-		}
-		existing := reviews[grantID]
-		if payload.ReviewedThroughInvocationID > existing.ReviewedThroughInvocationID {
-			reviews[grantID] = authorityLegacyInvocationGapReview{
-				GrantID:                     grantID,
-				ReviewedThroughInvocationID: payload.ReviewedThroughInvocationID,
-				ReviewedThroughCreatedAt:    reviewedAt,
-			}
-		}
-	}
-	return reviews
-}
-
-func authorityLegacyInvocationGapReviewed(grantID string, invocations []session.CapabilityInvocation, reviews map[string]authorityLegacyInvocationGapReview) bool {
-	grantID = strings.TrimSpace(grantID)
-	if grantID == "" || len(invocations) == 0 || len(reviews) == 0 {
-		return false
-	}
-	maxMissingID, maxMissingAt, ok := authorityMissingTurnLeaseEvidenceMax(invocations)
-	if !ok {
-		return false
-	}
-	review, ok := reviews[grantID]
-	if !ok {
-		return false
-	}
-	if review.ReviewedThroughInvocationID > 0 && maxMissingID > 0 && review.ReviewedThroughInvocationID >= maxMissingID {
-		return true
-	}
-	return !review.ReviewedThroughCreatedAt.IsZero() && !maxMissingAt.IsZero() && !review.ReviewedThroughCreatedAt.Before(maxMissingAt)
 }
 
 func authorityMissingTurnLeaseEvidenceMax(invocations []session.CapabilityInvocation) (int64, time.Time, bool) {

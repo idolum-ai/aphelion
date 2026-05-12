@@ -1908,7 +1908,6 @@ func applyDurableWizardAnswersToAgent(agent core.DurableAgent, answers core.Dura
 		external.NeverRetain = append([]string(nil), answers.NeverRetain...)
 	}
 	channelConfig.External = external
-	channelConfig.Email = nil
 	agent.ChannelConfig = core.NormalizeDurableAgentChannelConfig(channelConfig)
 
 	bootstrap, err := durableAgentBootstrapFromWizardAnswers(agent.BootstrapLLM, answers, inheritedBootstrap)
@@ -2156,7 +2155,7 @@ func normalizeDurableAgentChannelKind(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "":
 		return ""
-	case "external", "external_channel", "channel", "inbox", "email":
+	case "external", "external_channel":
 		return "external_channel"
 	default:
 		return strings.TrimSpace(value)
@@ -2984,29 +2983,6 @@ func effectiveDurableAgentPolicyPatchFromInput(in durableAgentInput) effectiveDu
 			patch.CapabilitiesSet = true
 		}
 	}
-	if patch.Charter == "" {
-		patch.Charter = strings.TrimSpace(in.Charter)
-	}
-	if patch.Mode == "" {
-		patch.Mode = core.NormalizeDurableAgentMode(in.Mode)
-	}
-	if patch.Autonomy == "" {
-		patch.Autonomy = strings.TrimSpace(in.Autonomy)
-	}
-	if patch.Visibility == "" {
-		patch.Visibility = strings.TrimSpace(in.Visibility)
-	}
-	if patch.SharedContext == "" {
-		patch.SharedContext = strings.TrimSpace(in.SharedContext)
-	}
-	if !patch.CapabilitiesSet && in.Capabilities != nil {
-		patch.Capabilities = normalizePolicyCapabilities(in.Capabilities)
-		patch.CapabilitiesSet = true
-	}
-	if patch.DriftPolicy == "" {
-		patch.DriftPolicy = strings.TrimSpace(in.DriftPolicy)
-	}
-
 	if in.PolicyOverrides != nil {
 		patch.OutboundMode = strings.TrimSpace(in.PolicyOverrides.OutboundMode)
 		patch.PublicSurfaceMode = strings.TrimSpace(in.PolicyOverrides.PublicSurfaceMode)
@@ -3019,18 +2995,6 @@ func effectiveDurableAgentPolicyPatchFromInput(in durableAgentInput) effectiveDu
 			patch.TailnetTagsSet = true
 		}
 		patch.TailnetSurfacePolicy = strings.TrimSpace(in.PolicyOverrides.TailnetSurfacePolicy)
-	}
-	if patch.OutboundMode == "" {
-		patch.OutboundMode = strings.TrimSpace(in.OutboundMode)
-	}
-	if patch.PublicSurfaceMode == "" {
-		patch.PublicSurfaceMode = strings.TrimSpace(in.PublicSurfaceMode)
-	}
-	if patch.SharedInferenceReuse == "" {
-		patch.SharedInferenceReuse = strings.TrimSpace(in.SharedInferenceReuse)
-	}
-	if patch.SharedInferenceReuseScope == "" {
-		patch.SharedInferenceReuseScope = strings.TrimSpace(in.SharedInferenceReuseScope)
 	}
 	return patch
 }
@@ -3268,8 +3232,6 @@ func mergeDurableAgentChannelConfig(existing core.DurableAgentChannelConfig, raw
 	type channelConfigInput struct {
 		External *core.DurableAgentExternalChannelConfig `json:"external,omitempty"`
 		Channel  *core.DurableAgentExternalChannelConfig `json:"channel,omitempty"`
-		Email    *core.DurableAgentEmailChannelConfig    `json:"email,omitempty"`
-		Inbox    *core.DurableAgentEmailChannelConfig    `json:"inbox,omitempty"`
 	}
 	var updateRaw channelConfigInput
 	if err := json.Unmarshal(raw, &updateRaw); err != nil {
@@ -3283,24 +3245,16 @@ func mergeDurableAgentChannelConfig(existing core.DurableAgentChannelConfig, raw
 	case updateRaw.Channel != nil:
 		cfg := *updateRaw.Channel
 		update.External = &cfg
-	case updateRaw.Email != nil:
-		cfg := *updateRaw.Email
-		update.External = &cfg
-	case updateRaw.Inbox != nil:
-		cfg := *updateRaw.Inbox
-		update.External = &cfg
 	}
 	update = core.NormalizeDurableAgentChannelConfig(update)
 	if external := update.ExternalConfig(); external != nil {
 		if existingExternal := existing.ExternalConfig(); existingExternal == nil {
 			cfg := *external
 			existing.External = &cfg
-			existing.Email = nil
 		} else {
 			cfg := *existingExternal
 			mergeDurableAgentExternalChannelConfig(&cfg, *external)
 			existing.External = &cfg
-			existing.Email = nil
 		}
 	}
 	return core.NormalizeDurableAgentChannelConfig(existing), nil

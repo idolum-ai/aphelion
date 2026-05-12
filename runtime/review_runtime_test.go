@@ -360,12 +360,12 @@ func TestReviewEventCompactUsesSafeSummaryForRedactedChildSummary(t *testing.T) 
 		ID:           77,
 		SourceRole:   "durable_agent",
 		SourceScope:  session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "mail-child", DurableAgentID: "mail-child"},
-		Summary:      "durable_agent=mail-child channel=email interval=2026-05-08T02:50:01Z\nsummary: [REDACTED: summary]\nrisks: external_channel",
-		MetadataJSON: `{"agent_id":"mail-child","summary":"[REDACTED: summary]","interval_label":"2026-05-08T02:50:01Z","risk_flags":["external_channel"],"artifact_refs":["forensic://durable-agent/mail-child/example.json"],"metadata":{"channel_kind":"email","external_channel_status":"wake_blocked","operator_summary":"Email wake blocked: mailbox adapter credential backend requires an interactive passphrase prompt; no TTY is available.","redacted_fields":"summary","redaction_action":"quarantined_fields","redaction_source":"deterministic","redaction_reason":"concrete_secret_value"}}`,
+		Summary:      "durable_agent=mail-child channel=external_channel interval=2026-05-08T02:50:01Z\nsummary: [REDACTED: summary]\nrisks: external_channel",
+		MetadataJSON: `{"agent_id":"mail-child","summary":"[REDACTED: summary]","interval_label":"2026-05-08T02:50:01Z","risk_flags":["external_channel"],"artifact_refs":["forensic://durable-agent/mail-child/example.json"],"metadata":{"channel_kind":"external_channel","external_channel_status":"wake_blocked","operator_summary":"External-channel wake blocked: mailbox adapter credential backend requires an interactive passphrase prompt; no TTY is available.","redacted_fields":"summary","redaction_action":"quarantined_fields","redaction_source":"deterministic","redaction_reason":"concrete_secret_value"}}`,
 	}
 
 	compact := FormatReviewEventCompactMessage(event)
-	for _, want := range []string{"**Email child review**", "BLOCKED", "Email wake blocked: mailbox adapter credential backend requires an interactive passphrase prompt", "Details shows the safe review record"} {
+	for _, want := range []string{"**Review: mail-child**", "BLOCKED", "External-channel wake blocked: mailbox adapter credential backend requires an interactive passphrase prompt", "Details shows the safe review record"} {
 		if !strings.Contains(compact, want) {
 			t.Fatalf("compact text = %q, want %q", compact, want)
 		}
@@ -398,8 +398,8 @@ func TestReviewEventCompactKeepsFullUpdateFooterWithoutRedactions(t *testing.T) 
 	event := session.ReviewEvent{
 		SourceRole:   "durable_agent",
 		SourceScope:  session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "mail-child", DurableAgentID: "mail-child"},
-		Summary:      "durable_agent=mail-child channel=email interval=2026-05-08T02:50:01Z\nsummary: Email wake blocked because mailbox adapter credentials need a passphrase prompt and no TTY is available.\nrisks: external_channel",
-		MetadataJSON: `{"agent_id":"mail-child","summary":"Email wake blocked because mailbox adapter credentials need a passphrase prompt and no TTY is available.","interval_label":"2026-05-08T02:50:01Z","risk_flags":["external_channel"],"metadata":{"channel_kind":"email","external_channel_status":"wake_blocked","redaction_action":"none","redaction_reason":"secret_concept_without_value"}}`,
+		Summary:      "durable_agent=mail-child channel=external_channel interval=2026-05-08T02:50:01Z\nsummary: External-channel wake blocked because mailbox adapter credentials need a passphrase prompt and no TTY is available.\nrisks: external_channel",
+		MetadataJSON: `{"agent_id":"mail-child","summary":"External-channel wake blocked because mailbox adapter credentials need a passphrase prompt and no TTY is available.","interval_label":"2026-05-08T02:50:01Z","risk_flags":["external_channel"],"metadata":{"channel_kind":"external_channel","external_channel_status":"wake_blocked","redaction_action":"none","redaction_reason":"secret_concept_without_value"}}`,
 	}
 
 	compact := FormatReviewEventCompactMessage(event)

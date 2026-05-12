@@ -33,12 +33,12 @@ func TestSerializeFloorFallbackUsesStructuredPublicSections(t *testing.T) {
 	}
 }
 
-func TestSerializeFloorFallbackPreservesLegacyText(t *testing.T) {
+func TestSerializeFloorFallbackPreservesPlainText(t *testing.T) {
 	t.Parallel()
 
-	got := SerializeFloorFallback(core.LegacyMaterialPacket("legacy canonical"), "legacy canonical", FallbackOptions{Channel: "telegram"})
-	if got != "legacy canonical" {
-		t.Fatalf("SerializeFloorFallback() = %q, want legacy canonical", got)
+	got := SerializeFloorFallback(core.TextMaterialPacket("plain canonical"), "plain canonical", FallbackOptions{Channel: "telegram"})
+	if got != "plain canonical" {
+		t.Fatalf("SerializeFloorFallback() = %q, want plain canonical", got)
 	}
 }
 

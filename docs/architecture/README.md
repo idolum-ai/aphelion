@@ -9,14 +9,12 @@ If these diverge, fix one of them in the same change.
 
 ## Surface Truth Classes
 
-Use only these four terms when classifying architecture surfaces:
+Use only these three terms when classifying current architecture surfaces:
 
 - `canonical`: authoritative source for a specific question.
 - `projection`: rendered/derived view with no independent authority.
 - `operational current-state store`: mutable "what is currently declared now"
   surface used by runtime operations.
-- `compatibility fallback`: transitional store kept for migration/recovery until
-  canonical or operational surfaces fully cover the use case.
 
 ## Truth-Class Invariants
 
@@ -24,20 +22,16 @@ These invariants are normative for architecture and requirements alignment:
 
 - A surface claim must map to exactly one truth class for the specific question
   being answered.
-- `compatibility fallback` may be used only when the matching canonical and
-  operational current-state coverage is missing or incomplete.
-- `compatibility fallback` must never override available canonical truth or
-  operational current-state declarations for the same question.
+- Removed surfaces should be deleted or rejected, not remain as live inputs.
 - Operator projections (`/status`, `/debug`, quick-read) must preserve source
-  attribution when compatibility fallback data is used.
+  attribution for canonical and operational data they render.
 
 ## Normative Map
 
 - [design-principles.md](design-principles.md): project-level design principles for Aphelion as a minimal governed outpost.
 - [influences-and-departures.md](influences-and-departures.md): attribution ledger for nearby systems, theory, and the points where Aphelion deliberately diverges.
 - [agency-evaluation-methodology.md](agency-evaluation-methodology.md): grounded behavioral methodology for measuring agency prompt quality, drift, and hard authority failures.
-- [principle-debt.md](principle-debt.md): named implementation gaps against the design principles, with exit gates.
-- [done-done-roadmap.md](done-done-roadmap.md): narrow normative release-quality target for truthful docs/status, authority consistency, sandbox honesty, bounded tools, and validation without adding operator surfaces beyond Telegram and CLI.
+- [principle-debt.md](principle-debt.md): active implementation gaps against the design principles.
 - [package-ownership.md](package-ownership.md): runtime/turn/pipeline ownership boundaries.
 - [turn-lifecycle.md](turn-lifecycle.md): stage order across interactive, maintenance, and durable-child turns.
 - [action-proposal-continuation-lease.md](action-proposal-continuation-lease.md): typed bounded action proposals and consumable continuation leases.
@@ -46,25 +40,11 @@ These invariants are normative for architecture and requirements alignment:
 - [durable-children.md](durable-children.md): bounded child topology and adapters.
 - [state-surfaces.md](state-surfaces.md): transcript, sidecars, and operational state.
 - [transparent-execution-sequence.md](transparent-execution-sequence.md): canonical execution timeline and projection/fallback precedence.
-- [coordinator-boundary-audit.md](coordinator-boundary-audit.md): adapter-boundary readout and wrapper decisions.
 - [external-tools-pilot.md](external-tools-pilot.md): current external-tool lifecycle, execution-mode semantics, and bundled `browse_page` pilot.
 - [telegram-child-bot-runbook.md](telegram-child-bot-runbook.md): generic Telegram child-bot runner boundary and operational checks.
 - [capability-delegation-lane.md](capability-delegation-lane.md): general request/review/grant lane for tools, devices, accounts, purchases, public web, and emergent permissions.
-- [migration-appendix.md](migration-appendix.md): refactor closeout and present-vs-intended reference.
+- [structural-hygiene.md](structural-hygiene.md): large-file ledger and split discipline.
 - [diagrams/README.md](diagrams/README.md): canonical diagram assets.
-
-## Research Notes (Non-Normative)
-
-- [canonical-state-and-autonomy-roadmap.md](canonical-state-and-autonomy-roadmap.md): research map for canonical truth surfaces and safer autonomy.
-- [mission-ledger-roadmap.md](mission-ledger-roadmap.md): research note for durable missions, self-summon as review, and possible bounded continuation; autonomous continuation is not a current release target.
-- [organic-agent-owned-tools-proposal.md](organic-agent-owned-tools-proposal.md): research note for moving domain tools out of core; current executable support stays limited to verified process/subprocess manifests.
-- [tailscale-agent-substrate-project.md](tailscale-agent-substrate-project.md): research note for private-network substrate ideas; live `tsnet` child materialization and live Tailscale policy mutation are not current release targets.
-- [agent-authority-ledger.md](agent-authority-ledger.md): research spec for a fuller authority ledger; current release work is limited to consistency projection plus exact local repair over existing typed records.
-
-Treat this section as design-direction input. It is not a normative
-implementation contract until explicitly promoted into the normative map above,
-`docs/promises.md`, and runtime tests. Research notes must not be read as
-accepted release commitments.
 
 ## Canonical Diagrams
 

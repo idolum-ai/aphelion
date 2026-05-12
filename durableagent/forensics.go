@@ -326,9 +326,6 @@ func safeOperatorSummary(agent core.DurableAgent, artifact core.DurableReviewArt
 }
 
 func durableReviewAgentLabel(agent core.DurableAgent) string {
-	if strings.EqualFold(strings.TrimSpace(agent.ChannelKind), "email") {
-		return "Email wake"
-	}
 	if strings.TrimSpace(agent.AgentID) == "" {
 		return "Child review"
 	}

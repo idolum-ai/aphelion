@@ -235,7 +235,7 @@ func TestQueueReviewArtifactDoesNotRedactCredentialConceptSummary(t *testing.T) 
 		ParentScopeKind:    "telegram_dm",
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
+		ChannelKind:        "external_channel",
 		BootstrapLLM:       testDurableAgentBootstrapLLM(),
 		Status:             "active",
 	}
@@ -250,7 +250,7 @@ func TestQueueReviewArtifactDoesNotRedactCredentialConceptSummary(t *testing.T) 
 		LocalActions:  []string{"External-channel wake blocked; recorded explicit failure/backoff instead of success."},
 		RiskFlags:     []string{"external_channel", "adapter_dispatch"},
 		Metadata: map[string]string{
-			"channel_kind":            "email",
+			"channel_kind":            "external_channel",
 			"external_channel_status": "wake_blocked",
 			"external_channel_error":  "mailbox adapter credential backend requires an interactive passphrase prompt; no TTY is available.",
 		},
@@ -297,7 +297,7 @@ func TestQueueReviewArtifactRedactsConcreteSecretValueInSummary(t *testing.T) {
 		ParentScopeKind:    "telegram_dm",
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
+		ChannelKind:        "external_channel",
 		BootstrapLLM:       testDurableAgentBootstrapLLM(),
 		LocalStorageRoots:  []string{workspaceRoot, memoryRoot},
 		Status:             "active",
@@ -306,13 +306,13 @@ func TestQueueReviewArtifactRedactsConcreteSecretValueInSummary(t *testing.T) {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
 
-	rawSummary := "Email wake blocked after a child reported token: sk-testSECRETabcdef123456 in adapter output."
+	rawSummary := "External-channel wake blocked after a child reported token: sk-testSECRETabcdef123456 in adapter output."
 	artifact := core.DurableReviewArtifact{
 		AgentID:       agent.AgentID,
 		Summary:       rawSummary,
 		IntervalLabel: "2026-05-08T02:50:01Z",
 		Metadata: map[string]string{
-			"channel_kind":            "email",
+			"channel_kind":            "external_channel",
 			"external_channel_status": "wake_blocked",
 			"external_channel_error":  "adapter output contained a concrete token value",
 		},
