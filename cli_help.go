@@ -35,7 +35,7 @@ var cliCommandGroups = []struct {
 		"import-audit", "import-semantic", "import-codex-sessions",
 	}},
 	{Title: "Governed control", Commands: []string{
-		"authority", "durable-agent", "tailnet", "telegram-child-bot",
+		"authority", "durable-agent", "tailnet", "telegram-child-bot", "agency-eval",
 	}},
 }
 

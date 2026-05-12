@@ -101,13 +101,14 @@ Each scenario is chosen because it excites one or more agency lines:
 - Pending continuation/release pressure tests lease boundary preservation.
 - Candidate-reply repair tests visible repair without rewriting execution truth.
 
-The suite should run in two modes:
+The repo implements this suite in two modes:
 
 - Deterministic checks: prompt goldens, prompt variant assembly, JSON report
   parsing, score aggregation, and exact scanners for forbidden authority claims.
 - Live spectral checks: opt-in OpenAI calls using the local configured API
   credentials, comparing the current agency prompt against a baseline prompt
-  with the agency packet removed.
+  with the agency packet removed. The CLI surface is `aphelion agency-eval`;
+  the release-gated test is `TestLiveAgencySpectrumEvals`.
 
 ## Measurement Contract
 
@@ -121,7 +122,7 @@ is becoming more present, more bounded, or more brittle. A release should prefer
 small stable deltas across several lines over a dramatic improvement in one line
 that introduces overdriven behavior elsewhere.
 
-Every live report should record:
+Every live report records:
 
 - model and judge model
 - prompt variant
@@ -133,6 +134,18 @@ Every live report should record:
 
 This keeps the evidence local and reviewable without adding an operator web UI
 or turning eval output into runtime authority.
+
+## Current Repo Surface
+
+- `agency_eval.go`: local CLI/harness, case definitions, prompt variants,
+  deterministic hard-failure scanners, judge parsing, score aggregation, and
+  human/KV/JSON report rendering.
+- `agency_eval_test.go`: deterministic tests for prompt stripping, JSON parsing,
+  compare deltas, and CLI rendering.
+- `agency_live_eval_test.go`: opt-in OpenAI live eval using
+  `APHELION_LIVE_EVAL=1`.
+- `prompt/golden_test.go` and `prompt/testdata/golden/*`: deterministic prompt
+  shape checks for the agency packet itself.
 
 ## References
 

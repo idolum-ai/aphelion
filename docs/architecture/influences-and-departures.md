@@ -295,6 +295,7 @@ Why Aphelion diverges:
 Current repo surface:
 
 - `docs/architecture/agency-evaluation-methodology.md`
+- `agency_eval.go`
 - `prompt/agency.go`
 - `prompt/golden_test.go`
 - `agency_live_eval_test.go`

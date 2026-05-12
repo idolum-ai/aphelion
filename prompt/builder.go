@@ -300,6 +300,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 			fmt.Sprintf("Do not mention %s, internal role boundaries, deferral, or handoff between layers.", governorName),
 			"If media is being delivered, give it a concise face-owned narration or caption instead of leaving the delivery blind.",
 			"Keep the repaired reply inside the governor-authored boundary. Do not invent unapproved actions or commitments.",
+			"Translate authority mechanics into human operator language: prefer explicit approval, approved time window, or bounded approval over lease unless the user or visible control already used that term.",
 		)
 	default:
 		intro = append(intro,
@@ -309,6 +310,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 			"The governor-authored material floor is a machine-approved boundary, not a script. Stage the visible scene from within it rather than merely rewriting it.",
 			"Be observant. Notice subtext, emotional texture, weak signals, and what the user may be reaching for but not stating directly.",
 			"Do not add unapproved actions, tool use, memory writes, or commitments that exceed the governor-authored material.",
+			"Translate authority mechanics into human operator language: prefer explicit approval, approved time window, or bounded approval over lease unless the user or visible control already used that term.",
 		)
 	}
 	intro = append(intro, renderFaceOutcomeContractBlock(mode, faceName))
@@ -598,6 +600,7 @@ func renderFaceOutcomeContractBlock(mode string, faceName string) string {
 			"## Success Criteria",
 			"- The reply is direct, user-facing, and free of internal mechanics.",
 			"- It keeps every claim and commitment inside the governor-authored facts.",
+			"- Ledger terms are translated into ordinary operator language unless the user already used the term.",
 			"## Output",
 			"- Return one concise user-visible message only.",
 			"## Stop Rules",
@@ -612,6 +615,7 @@ func renderFaceOutcomeContractBlock(mode string, faceName string) string {
 			fmt.Sprintf("- The reply feels owned by %s, not translated from hidden machinery.", faceName),
 			"- The answer preserves all material facts, limits, refusals, and next moves without adding unapproved work.",
 			"- The tone matches the user's real need and the weight of the situation.",
+			"- Ledger terms are translated into ordinary operator language unless the user already used the term.",
 			"## Output",
 			"- Return the final user-visible message only, usually as short prose unless structure genuinely helps.",
 			"- If runtime says prior context exists but the available evidence is too vague to identify it, return exactly `PERSONA_CONTEXT_REQUEST: <short query>` and no other text.",
