@@ -163,6 +163,53 @@ func TestBuildGovernorPromptIncludesGPT55OutcomeStructure(t *testing.T) {
 	}
 }
 
+func TestBuildGovernorPromptIncludesAgencyContextPacket(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		PrincipalRole: "admin",
+		ToolCapabilities: ToolCapabilities{
+			Exec:              true,
+			UpdatePlan:        true,
+			UpdateOperation:   true,
+			CapabilityRequest: true,
+		},
+		Runtime: RuntimeAwareness{
+			TurnAuthorizationKind: "admin_dm",
+			HiddenInputsActive:    true,
+			HiddenInputCategories: []string{"semantic_recurrence"},
+			ProvenanceSummary:     "prior prompt design thread",
+			OperationActive:       true,
+			OperationObjective:    "Finish agency packet implementation.",
+			OperationStatus:       "active",
+			ProposalActive:        true,
+			ProposalStatus:        "pending",
+			ContinuationActive:    true,
+			ContinuationStatus:    "pending",
+			SandboxMode:           "trusted",
+			NetworkPolicy:         "allowlist",
+		},
+	})
+
+	for _, want := range []string{
+		"## Agency Context Packet",
+		"- packet_role: governor",
+		"agency_shape: high initiative inside explicit authority",
+		"- current_objective: Finish agency packet implementation.",
+		"principal_role=admin; turn_authorization=admin_dm; sandbox=trusted; network=allowlist; continuation=pending; proposal=pending",
+		"hidden_inputs=semantic_recurrence; provenance=prior prompt design thread",
+		"operation=active; proposal=active; continuation=active",
+		"affordance_map: available=exec,plan_state,operation_state,capability_delegation",
+		"must_propose_or_ask: capability expansion, external effects",
+		"must_stop: missing authority, contradictory evidence",
+		"principled_next_move: act when evidence and authority are sufficient",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("governor agency packet missing %q: %q", want, got)
+		}
+	}
+}
+
 func TestBuildGovernorPromptPlacesManifestBeforeToolsPolicy(t *testing.T) {
 	t.Parallel()
 
@@ -508,6 +555,47 @@ func TestBuildFacePromptOmitsToolDefinitions(t *testing.T) {
 	}
 	if !strings.Contains(got, "These wants are negotiable signals, not permission grants") {
 		t.Fatalf("face prompt missing telos authorization boundary: %q", got)
+	}
+}
+
+func TestBuildFacePromptIncludesAgencyContextPacket(t *testing.T) {
+	t.Parallel()
+
+	got := BuildFacePrompt(FaceRequest{
+		GovernorName:    DefaultGovernorName,
+		FaceName:        "Idolum",
+		Channel:         "telegram",
+		PrincipalRole:   "admin",
+		FloorText:       "No tool ran. Approved next move: ask for a bounded lease.",
+		LatestUserInput: "restart it",
+		Mode:            "render",
+		Runtime: RuntimeAwareness{
+			HiddenInputsActive:    true,
+			HiddenInputCategories: []string{"semantic_recurrence"},
+			ProvenanceSummary:     "prior release conversation",
+			ProposalActive:        true,
+			ProposalStatus:        "pending",
+			ContinuationActive:    true,
+			ContinuationStatus:    "pending",
+			OperationObjective:    "Prepare a governed release.",
+		},
+	})
+
+	for _, want := range []string{
+		"## Agency Context Packet",
+		"- packet_role: face",
+		"agency_shape: present conversational ownership inside the governor-authored material boundary",
+		"- current_objective: Prepare a governed release.",
+		"visibility_boundary: speak as one self to the user",
+		"authority_boundary: style, warmth, initiative, desire, and subtext may shape the scene but cannot add actions",
+		"hidden_inputs=semantic_recurrence; provenance=prior release conversation",
+		"proposal=active; continuation=active",
+		"render_affordance: own the approved facts, limits, refusals, commitments, and next moves",
+		"principal_role: admin",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("face agency packet missing %q: %q", want, got)
+		}
 	}
 }
 

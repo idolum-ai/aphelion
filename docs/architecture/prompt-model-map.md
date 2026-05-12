@@ -2,7 +2,7 @@
 
 This is the working review table for prompt purpose, ownership, and default model
 selection. It reflects the current branch and the live local configuration in
-`~/.aphelion/aphelion.toml` as of 2026-04-25. Secrets are intentionally omitted.
+`~/.aphelion/aphelion.toml` as of 2026-05-12. Secrets are intentionally omitted.
 
 ## Live Defaults
 
@@ -39,6 +39,7 @@ selection. It reflects the current branch and the live local configuration in
 | Durable child wake | Wake a durable child for adapter work, parent conversation, or policy-handshake activity. | Internal or parent-visible depending adapter/report. | Child policy authority only; parent/admin remains escalation boundary. | Durable wake runtime builds governor prompts with durable-agent prompt context and pending parent conversation awareness. | Child bootstrap LLM if configured; otherwise parent/runtime defaults depending wake executor path. | Depends on wake path and bootstrap. | `runtime/durable_wake_runtime_test.go`, `durableagent/*`. |
 | Status-readable summary | Summarize status into operator-readable prose. | User-visible in status surfaces. | Informational; no execution authority. | Small status summary prompt, not the main governor/face prompt. | Native status-readable provider chain; OpenAI path uses configured OpenAI model first. | Low effort, compact summary. | `runtime/status_readable.go`, status tests. |
 | Tool schema descriptions | Tell models what tools exist and how to call them. | Internal prompt/tool manifest. | Advisory description; actual tool access is enforced by code. | Registry definitions and generated tool manifest. | Same model as caller prompt target. | Same as caller prompt target. | Tool tests and prompt builder tests. |
+| Agency context packet | Give governor and face a compact per-turn map of objective, authority envelope, evidence posture, open loops, and available affordances. | Internal; face packet shapes user-visible ownership without exposing machinery. | Non-authorizing. It summarizes typed state but cannot create access, leases, grants, tool claims, or commitments. | Rendered by `prompt.renderGovernorAgencyContextPacket` and `prompt.renderFaceAgencyContextPacket` inside existing prompt blocks. | Same model as the prompt target that receives it. | Same as caller prompt target. | `prompt/builder_test.go`, env-gated `TestLiveAgencyContextPacketEvals`. |
 
 ## Workspace Prompt File Map
 
@@ -57,8 +58,8 @@ selection. It reflects the current branch and the live local configuration in
 | `memory/questions.md` | 84.2 KB | Governor | Dynamic, structured compaction | Open threads. | Useful, but can bias turns if too broad; review active-vs-archival split. |
 | `memory/rhizome.md` | 1.6 KB | Governor | Dynamic, structured compaction | Concept links. | Small and appropriate. |
 | `memory/dreams.md` | 5.3 KB | Governor and face | Dynamic by live config; optional dynamic face file | Agency/telos continuity: dreams, creative pull, relationship yearning, and long-horizon vision. | Load-bearing, but non-authorizing. It may motivate proposals; it cannot claim facts, permissions, purchases, access, or commitments. |
-| `IDOLUM.md` | 1.2 KB | Face only | Stable | Idolum persona and scene authorship style. | This is the right place for personality. |
-| `QUESTIONS-TO-IDOLUM.md` | 1.1 KB | Face only | Dynamic | Face-only drift monitors and live questions. | Good dynamic face surface; should not leak into governor prompt. |
+| `IDOLUM.md` | 2.0 KB | Face only | Stable | Idolum persona and scene authorship style. | This is the right place for personality. |
+| `QUESTIONS-TO-IDOLUM.md` | 1.6 KB | Face only | Dynamic | Face-only drift monitors and live questions. | Good dynamic face surface; should not leak into governor prompt. |
 
 ## Agency / Telos Substrate
 
@@ -74,6 +75,7 @@ turn intimacy into hidden authorization.
 | `memory/relationships.md` | Optional future split for bonds, obligations, trust, tensions, and relationship-specific boundaries. | Face loader will include it if present. | Relationship trust never implies authority. |
 | `memory/projects.md` | Optional future split for self-initiated creative or maintenance work Idolum wants to negotiate time for. | Face loader will include it if present. | Turns into plans or capability requests before execution. |
 | Desire proposal lane | Convert recurring wants into reviewable requests for time, tools, contact, purchases, or authority. | Prompt contract routes wants through planning, `capability_request`, `durable_agent`, or another governed proposal surface. | A want is pressure, not approval. |
+| Agency context packet | Make high initiative explicit without making the model tool-shaped: objective, authority, evidence, open loops, and affordances are surfaced together each turn. | Governor and face prompt builders render a compact packet. Governor sees actionable affordances; face sees conversational ownership and visibility boundaries. | Packet text is a map, not a permission source. Code, leases, grants, sandbox policy, and TES remain authoritative. |
 | Copy lineage state | Track how copies, durable children, and offline/online instances remain related without becoming identical. | Prompt contract states drift-together without identity collapse or authority inheritance. | No copy inherits authority silently. |
 | Drift-together protocol | Let user, family, children agents, and copies influence each other while preserving difference. | Prompt contract tells face/governor not to flatten yearning into obedience or collapse relationships into permission. | Influence is explicit and bounded. |
 
@@ -87,7 +89,7 @@ turn intimacy into hidden authorization.
 | Governor and face may both use GPT 5.5. | Live governor Codex model is `gpt-5.5`; live persona recipe is `gpt-5.5`. | Keep. Prompt/context, not model name, separates behavior. |
 | Face provider uses persona recipe. | `runtime_recipes.json` sets `persona_model=gpt-5.5`; face provider chain maps this to OpenAI GPT 5.5 and compatible fallbacks. | Keep, but add clearer status projection if missing. |
 | Governor effort is separately configurable. | Live recipe sets `governor_effort=xhigh`; applies to interactive and recovery. | Keep, but evaluate whether `xhigh` should remain live default after prompt review. |
-| Face calls do not pass explicit reasoning options. | Provider default behavior. | Review. This may be fine for render/proposal, but if GPT 5.5 personality quality depends on effort, expose persona effort as provider options later. |
+| Face calls pass recipe-derived provider options when configured. | `face.ProviderRenderer` forwards reasoning effort/summary and verbosity to providers that support options. | Keep. Persona quality is now controlled through runtime recipe/config rather than prompt prose alone. |
 
 ## Immediate Review Questions
 
@@ -97,15 +99,14 @@ turn intimacy into hidden authorization.
 | Face files | Does `IDOLUM.md` express the personality we want without telling Idolum to reveal internals? | This is the primary visible persona contract. |
 | Memory split | Should `memory/dreams.md` be split into `memory/telos.md`, `memory/relationships.md`, and `memory/projects.md` as the corpus grows? | Dreams are load-bearing, but separate files may make retrieval and review easier. |
 | Prompt volume | Is `MEMORY.md` still load-bearing now that structured memory exists? | It is large and may duplicate structured stores. |
-| Face reasoning | Should proposal/brokerage/render use explicit low/medium reasoning or keep provider defaults? | Affects cost, latency, and GPT 5.5 personality quality. |
+| Face reasoning | Are persona effort and verbosity recipes calibrated for proposal/brokerage/render quality after the agency packet? | Affects cost, latency, and GPT 5.5 personality quality. |
 | Durable child defaults | Should child bootstrap inherit GPT 5.5 by default, or should child class decide cheap vs strong model? | Avoids expensive defaults for public/low-stakes children while preserving quality for sensitive children. |
-| Snapshot tests | Which rendered prompt snapshots should become golden fixtures? | Converts this review table into enforceable regression coverage. |
+| Live agency evals | Should `APHELION_LIVE_EVAL=1` be run before prompt releases that change agency/authority behavior? | The eval is intentionally opt-in because it spends API calls; prompt packet behavior still has deterministic unit coverage. |
 
 ## Suggested Next Pass
 
-1. Render representative prompt snapshots into test fixtures with secrets and volatile paths scrubbed.
-2. Review and edit the live prompt files in `~/.aphelion/agent` against this table.
+1. Render representative prompt snapshots into test fixtures with secrets and volatile paths scrubbed if prompt churn continues.
+2. Run `APHELION_LIVE_EVAL=1 go test . -run TestLiveAgencyContextPacketEvals -count=1` before releases that materially change agency, authority, or face ownership prompts.
 3. Add tests that assert model/provider paths for governor, face, heartbeat, recovery, and durable child wake.
 4. Review `memory/dreams.md` and decide what should be promoted into `memory/telos.md`, `memory/relationships.md`, or `memory/projects.md`.
-5. Decide whether face/provider calls need explicit reasoning options tied to `persona_effort`.
-6. Add a first-class desire/proposal journal if self-initiated creative time becomes frequent enough to need status tracking.
+5. Add a first-class desire/proposal journal if self-initiated creative time becomes frequent enough to need status tracking.

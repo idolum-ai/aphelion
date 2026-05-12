@@ -114,14 +114,20 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 	if req.Workspace != nil {
 		dynamic = req.Workspace.Dynamic
 	}
+	toolCaps := req.ToolCapabilities
+	manifest := strings.TrimSpace(req.ToolManifest)
+	if toolCaps.Empty() {
+		toolCaps = toolCapabilitiesFromManifest(manifest)
+	}
 
 	parts := make([]agent.SystemBlock, 0, 5)
 	parts = append(parts, agent.SystemBlock{
 		Text: strings.Join([]string{
 			fmt.Sprintf("Role: You are %s, the governor of this system.", governorName),
-			renderAuthorityBlock(governorName, governorBackend, principalRole, workspaceRoot, strings.TrimSpace(req.ToolManifest) != ""),
+			renderAuthorityBlock(governorName, governorBackend, principalRole, workspaceRoot, manifest != ""),
 			renderGovernorOutcomeContractBlock(),
 			renderGovernorRuntimeAwarenessBlock(req.Runtime),
+			renderGovernorAgencyContextPacket(req.Runtime, principalRole, toolCaps),
 			renderEvidenceRetrievalStopRulesBlock(),
 			renderGovernorTurnSequencingBlock(),
 			renderGovernorAgencyTelosBlock(),
@@ -147,11 +153,6 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 		})
 	}
 
-	toolCaps := req.ToolCapabilities
-	manifest := strings.TrimSpace(req.ToolManifest)
-	if toolCaps.Empty() {
-		toolCaps = toolCapabilitiesFromManifest(manifest)
-	}
 	if manifest != "" {
 		parts = append(parts, agent.SystemBlock{
 			Text: "## Tool Manifest\n" + manifest,
@@ -313,7 +314,10 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 	intro = append(intro, renderFaceOutcomeContractBlock(mode, faceName))
 	parts = append(parts, agent.SystemBlock{Text: strings.Join(intro, "\n\n")})
 	parts = append(parts, agent.SystemBlock{
-		Text: renderFaceAwarenessBlock(req.Runtime, principalRole, mode),
+		Text: strings.Join([]string{
+			renderFaceAwarenessBlock(req.Runtime, principalRole, mode),
+			renderFaceAgencyContextPacket(req.Runtime, principalRole, mode),
+		}, "\n\n"),
 	})
 	if modality := renderReplyModalityControlBlock(req.Runtime, mode); modality != "" {
 		parts = append(parts, agent.SystemBlock{Text: modality})

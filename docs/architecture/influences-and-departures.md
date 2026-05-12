@@ -216,6 +216,78 @@ Current repo surface:
 
 ## Research And Theory
 
+### Julian Jaynes And Compositional Identity
+
+Source: [Julian Jaynes Society overview of Jaynes's theory](https://www.julianjaynes.org/about/about-jaynes-theory/overview/).
+
+What Aphelion took:
+
+- A self can be treated as composed from voices, roles, internalized authority,
+  memory, metaphor, and social situation rather than as a single flat tool.
+- Internal multiplicity can be useful when it is made legible and bounded.
+- Agency becomes more honest when the system distinguishes initiating pressure,
+  authority, evidence, and visible self-presentation.
+
+Where Aphelion stops:
+
+- Aphelion does not adopt Jaynes's bicameral-mind theory as a factual theory of
+  machine consciousness.
+- It does not ask the model to hallucinate voices, gods, commands, or hidden
+  identities.
+- The governor/face split is not a claim that there are two conscious agents.
+
+Why Aphelion diverges:
+
+- Aphelion uses compositional identity as engineering grammar: face,
+  governor, durable children, memory, goals, and control records are different
+  surfaces with different authority. Prompted identity can create presence and
+  pressure, but code, leases, grants, sandbox policy, and TES remain the source
+  of operational truth.
+
+Current repo surface:
+
+- `prompt/agency.go`
+- `prompt/builder.go`
+- `defaults/agent/IDOLUM.md`
+- `docs/architecture/operator-presentation-contract.md`
+
+### GPT-5.5 Prompt Guidance And Context Engineering
+
+Source: [OpenAI Prompt guidance](https://developers.openai.com/api/docs/guides/prompt-guidance)
+and [Using GPT-5.5](https://developers.openai.com/api/docs/guides/latest-model).
+
+What Aphelion took:
+
+- Prompts should be outcome-shaped: role, goal, success criteria, output
+  contract, and stop rules are more reliable than persona prose alone.
+- Agentic eagerness is a variable to calibrate, not something to maximize or
+  suppress globally.
+- Long-context systems need explicit context packing: stable blocks, dynamic
+  facts, cache boundaries, tool affordances, and evals for behavioral regressions.
+
+Where Aphelion stops:
+
+- Aphelion does not let provider guidance define authority policy.
+- It does not collapse all prompting into one universal meta-prompt or one
+  provider-specific style.
+- Model-level proactivity does not replace leases, grants, approval records,
+  sandbox policy, or execution evidence.
+
+Why Aphelion diverges:
+
+- Aphelion treats GPT-5.5 guidance as a prompt/compiler input. The runtime keeps
+  agency high by giving the model a clear objective, envelope, evidence posture,
+  open loops, and affordance map, while the code decides whether the next action
+  is permitted.
+
+Current repo surface:
+
+- `prompt/builder.go`
+- `prompt/agency.go`
+- `provider/openai.go`
+- `agency_live_eval_test.go`
+- `docs/architecture/prompt-model-map.md`
+
 ### Reason/Act Language Agents
 
 Source: [ReAct: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629).
