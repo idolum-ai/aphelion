@@ -35,6 +35,7 @@ These invariants are normative for architecture and requirements alignment:
 
 - [design-principles.md](design-principles.md): project-level design principles for Aphelion as a minimal governed outpost.
 - [influences-and-departures.md](influences-and-departures.md): attribution ledger for nearby systems, theory, and the points where Aphelion deliberately diverges.
+- [agency-evaluation-methodology.md](agency-evaluation-methodology.md): grounded behavioral methodology for measuring agency prompt quality, drift, and hard authority failures.
 - [principle-debt.md](principle-debt.md): named implementation gaps against the design principles, with exit gates.
 - [done-done-roadmap.md](done-done-roadmap.md): narrow normative release-quality target for truthful docs/status, authority consistency, sandbox honesty, bounded tools, and validation without adding operator surfaces beyond Telegram and CLI.
 - [package-ownership.md](package-ownership.md): runtime/turn/pipeline ownership boundaries.

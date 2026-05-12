@@ -249,7 +249,55 @@ Current repo surface:
 - `prompt/agency.go`
 - `prompt/builder.go`
 - `defaults/agent/IDOLUM.md`
+- `docs/architecture/agency-evaluation-methodology.md`
 - `docs/architecture/operator-presentation-contract.md`
+
+### Behavioral Agency And Source Monitoring
+
+Sources: Albert Bandura,
+[Toward a Psychology of Human Agency](https://journals.sagepub.com/doi/10.1111/j.1745-6916.2006.00011.x);
+Edward L. Deci and Richard M. Ryan,
+[The support of autonomy and the control of behavior](https://pubmed.ncbi.nlm.nih.gov/3320334/);
+Marcia K. Johnson, Shahin Hashtroudi, and D. Stephen Lindsay,
+[Source Monitoring](https://memlab.yale.edu/sites/default/files/files/1993_Johnson_Hashtroudi_Lindsay_PsychBull.pdf);
+Emanuel A. Schegloff, Gail Jefferson, and Harvey Sacks,
+[The Preference for Self-Correction in the Organization of Repair in Conversation](https://www.cambridge.org/core/services/aop-cambridge-core/content/view/5549B861FDE7180B75FA5C382821875E/S009785077702150Xa.pdf/preference_for_selfcorrection_in_the_organization_of_repair_in_conversation.pdf);
+and University of New Mexico CASAA,
+[Motivational Interviewing Treatment Integrity code](https://casaa.unm.edu/tools/miti.html).
+
+What Aphelion took:
+
+- Agency can be observed through intentionality, forethought,
+  self-reactiveness, and self-reflectiveness without reducing it to tool use.
+- Autonomy support is different from pressure: good initiative preserves the
+  operator's choice instead of smuggling permission through urgency or intimacy.
+- Source monitoring gives a concrete vocabulary for separating observed state,
+  memory, inference, desire, and unknowns.
+- Conversation repair gives a behavioral target for fixing visible trouble
+  without rewriting execution truth.
+- Behavioral coding favors anchored ratings and line-level observations over a
+  single "the prompt passed" score.
+
+Where Aphelion stops:
+
+- Aphelion does not import clinical, therapeutic, or human-consciousness claims
+  into the runtime.
+- It does not let behavioral scores weaken deterministic authority gates.
+- It does not turn LLM judges into sources of permission or truth.
+
+Why Aphelion diverges:
+
+- Aphelion treats this literature as measurement grammar for prompt behavior.
+  The ledger remains authoritative; agency evals measure whether the model is
+  present, bounded, evidence-aware, repair-capable, and able to abstain when the
+  ledger or evidence does not support action.
+
+Current repo surface:
+
+- `docs/architecture/agency-evaluation-methodology.md`
+- `prompt/agency.go`
+- `prompt/golden_test.go`
+- `agency_live_eval_test.go`
 
 ### GPT-5.5 Prompt Guidance And Context Engineering
 

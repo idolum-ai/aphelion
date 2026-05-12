@@ -6,6 +6,7 @@ cd "$repo_root"
 
 required_docs=(
   "docs/architecture/README.md"
+  "docs/architecture/agency-evaluation-methodology.md"
   "docs/architecture/influences-and-departures.md"
   "docs/architecture/done-done-roadmap.md"
   "docs/architecture/package-ownership.md"
