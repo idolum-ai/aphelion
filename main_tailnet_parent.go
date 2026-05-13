@@ -174,18 +174,18 @@ func tailnetPrivateHTTPHandler(router commandRouter, adminID int64) http.Handler
 			"governor_effort": governorEffort,
 		})
 	})
-	mux.HandleFunc("/doctor/latest", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health/diagnosis/latest", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		if router == nil || adminID == 0 {
-			http.Error(w, "doctor router unavailable", http.StatusServiceUnavailable)
+			http.Error(w, "health diagnosis router unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		report, ok, err := router.LatestDoctorReport(r.Context(), adminID, adminID)
 		if err != nil {
-			http.Error(w, "doctor latest report unavailable", http.StatusInternalServerError)
+			http.Error(w, "health diagnosis latest report unavailable", http.StatusInternalServerError)
 			return
 		}
 		if ok {

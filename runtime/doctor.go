@@ -116,7 +116,7 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 	}
 
 	progress := r.newDoctorProgressReporter(key, msg)
-	monitor := r.startTurnMonitor(key, session.TurnRunKindDoctor, "/doctor", progress, nil)
+	monitor := r.startTurnMonitor(key, session.TurnRunKindDoctor, "/health diagnose", progress, nil)
 	var monitorErr error
 	defer func() {
 		if monitorErr != nil {
@@ -138,8 +138,8 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 		return monitorErr
 	}
 	prepared := pipeline.TurnPrepareContract{
-		UserText:   "/doctor",
-		LedgerText: "/doctor",
+		UserText:   "/health diagnose",
+		LedgerText: "/health diagnose",
 	}
 	exec := r.executionForTurn(prepared)
 	r.applyModelSlotExecution(&exec, core.ModelSlotDoctor)
@@ -239,7 +239,7 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 		}
 	}
 	surfaceDoctorProgress(ctx, progress, "Saving the doctor report into chat history")
-	newMessages := appendSyntheticTurn(sess, "/doctor", report, telegramReport, doctorFloorMetadata(report, telegramReport, maintainer, maintainerArtifact))
+	newMessages := appendSyntheticTurn(sess, "/health diagnose", report, telegramReport, doctorFloorMetadata(report, telegramReport, maintainer, maintainerArtifact))
 	if err := r.store.Save(sess, newMessages, addTokenUsage(turnResult.TokenUsage, summaryUsage)); err != nil {
 		monitorErr = fmt.Errorf("save doctor report: %w", err)
 		return monitorErr

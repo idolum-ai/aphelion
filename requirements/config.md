@@ -9,7 +9,7 @@ by `config.example.toml`; that example is load-tested with no ignored-key
 warnings. This requirements file also preserves future configuration homes so
 the design does not collapse around the initial working path. Keys shown outside
 the live schema are future design notes: if an operator puts them in today's
-config, startup/check-config, `/status`, and `/doctor` must surface ignored-key
+config, startup/check-config, `/status`, and `/health diagnose` must surface ignored-key
 warnings rather than imply active behavior.
 
 This spec therefore distinguishes between:
@@ -44,8 +44,8 @@ warnings if used in today's config.
 Autonomy is a config-owned policy, not a prompt convention. `default_mode` and
 `ceiling` use `off`, `review_only`, `ask_first`, `leased`, or `mission`; the
 configured default must not exceed the ceiling. In the current runtime this
-policy is validated and projected through CLI, `/autonomy`, `/status`, and
-`/doctor`. `leased` live overrides are implemented through bounded
+policy is validated and projected through CLI, `/auto policy`, `/status`, and
+`/health diagnose`. `leased` live overrides are implemented through bounded
 operator-auto-approval leases and cannot exceed the configured ceiling or
 maximum duration. If config later tightens below `leased` or disables live
 overrides, existing leases become inert and doctor reports the blocked

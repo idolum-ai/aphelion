@@ -94,7 +94,7 @@ required_promise_rows=(
   "External tools: process/subprocess only | implemented"
   "Tailnet declarations and grant-binding projection | implemented"
   "Mission review without autonomous continuation | implemented"
-  "Authority/status/doctor consistency | implemented"
+  "Authority/status/diagnosis consistency | implemented"
 )
 
 for row in "${required_promise_rows[@]}"; do

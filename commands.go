@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"strings"
 	"time"
 
@@ -49,6 +48,7 @@ type commandRouter interface {
 	QueueReinstall(ctx context.Context, msg core.InboundMessage) error
 	QueueDoctor(ctx context.Context, msg core.InboundMessage) error
 	LatestDoctorReport(ctx context.Context, chatID int64, senderID int64) (session.DoctorReportRecord, bool, error)
+	AutoApprovalStatus(ctx context.Context, chatID int64, senderID int64) (string, error)
 	ConfigureAutoApproval(ctx context.Context, chatID int64, senderID int64, args string) (string, error)
 	ConfigureAutonomy(ctx context.Context, chatID int64, senderID int64, args string) (string, error)
 	CurrentEfforts() (persona string, governor string)
@@ -79,8 +79,6 @@ type commandRouter interface {
 	SetMemoryFocus(chatID int64, focus core.MemoryFocus)
 	ClearMemoryFocus(chatID int64) bool
 }
-
-const staleDebugCallbackText = "This debug action is no longer available. Run /debug again."
 
 func handleTelegramCommand(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {
 	if strings.TrimSpace(msg.DurableAgentID) != "" {
@@ -117,37 +115,8 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			return true, err
 		}
 		return true, nil
-	case "debug":
-		quickText, fullText, err := renderDebugSnapshot(ctx, router, msg.ChatID, msg.SenderID, personaEffort, governorEffort)
-		if err != nil {
-			return true, err
-		}
-		if strings.TrimSpace(fullText) == "" {
-			fullText = humanizeTelegramTelemetryText("debug_scope=chat\nsummary unavailable")
-		}
-		if strings.TrimSpace(quickText) == "" {
-			quickText = "Quick Read: unavailable. Tap Read More for the full debug snapshot."
-		}
-		rows := [][]telegram.InlineButton{{
-			{Text: "Read More", CallbackData: encodeDebugCallbackData(debugViewMore)},
-		}}
-		if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, quickText, rows, replyToMessageID(msg.MessageID)); err != nil {
-			return true, err
-		}
-		return true, nil
-	case "doctor":
-		if !isAdmin {
-			text = "Doctor diagnostics are admin only."
-			break
-		}
-		if chatType := strings.TrimSpace(msg.ChatType); chatType != "" && chatType != "private" && chatType != "dm" {
-			text = "Doctor diagnostics must be run from an admin private chat."
-			break
-		}
-		if err := router.QueueDoctor(ctx, msg); err != nil {
-			return true, err
-		}
-		text = "Doctor diagnostics started. I will post the report here when the read-only model analysis finishes."
+	case "health":
+		return handleTelegramHealthCommand(ctx, sender, router, msg, personaEffort, governorEffort, isAdmin)
 	case "tailnet":
 		if !isAdmin {
 			text = "Tailnet diagnostics are admin only."
@@ -256,38 +225,12 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			break
 		}
 		return handleTelegramModelCommand(ctx, sender, router, msg)
-	case "autonomy":
+	case "auto":
 		if !isAdmin {
-			text = "Autonomy policy is admin only."
+			text = "Auto controls are admin only."
 			break
 		}
-		args := telegramCommandArgs(msg.Text)
-		if strings.TrimSpace(args) != "" {
-			configured, err := router.ConfigureAutonomy(ctx, msg.ChatID, msg.SenderID, args)
-			if err != nil {
-				log.Printf("WARN autonomy command rejected chat_id=%d sender_id=%d err=%v", msg.ChatID, msg.SenderID, err)
-				text = renderAutonomyCommandError(err)
-				break
-			}
-			text = configured
-			break
-		}
-		return sendAutonomyPanel(ctx, sender, router, msg)
-	case "autoapprove":
-		if !isAdmin {
-			text = "Auto-approval controls are admin only."
-			break
-		}
-		if strings.TrimSpace(telegramCommandArgs(msg.Text)) == "" {
-			return sendAutoApprovalPanel(ctx, sender, router, msg)
-		}
-		configured, err := router.ConfigureAutoApproval(ctx, msg.ChatID, msg.SenderID, telegramCommandArgs(msg.Text))
-		if err != nil {
-			log.Printf("WARN auto-approval command rejected chat_id=%d sender_id=%d err=%v", msg.ChatID, msg.SenderID, err)
-			text = renderAutoApprovalCommandError(err)
-			break
-		}
-		text = configured
+		return handleTelegramAutoCommand(ctx, sender, router, msg)
 	case "stop":
 		text = face.RenderTelegramStop(router.Stop(msg.ChatID))
 	case "new":
@@ -340,14 +283,14 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 
 func renderAutoApprovalCommandError(err error) string {
 	if err == nil {
-		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Auto-approval", State: "not applied", Next: "Check the command shape and retry."})
+		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Auto approvals", State: "not applied", Next: "Check the command shape and retry."})
 	}
 	msg := strings.TrimSpace(err.Error())
 	if msg == "" {
-		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Auto-approval", State: "not applied", Next: "Check the command shape and retry."})
+		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Auto approvals", State: "not applied", Next: "Check the command shape and retry."})
 	}
 	return face.RenderOperatorPanel(face.OperatorPanel{
-		Title: "Auto-approval",
+		Title: "Auto approvals",
 		State: "not applied",
 		Why:   msg,
 		Next:  "Adjust the duration, scope, or config ceiling and retry.",
@@ -356,14 +299,14 @@ func renderAutoApprovalCommandError(err error) string {
 
 func renderAutonomyCommandError(err error) string {
 	if err == nil {
-		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Autonomy", State: "not applied", Next: "Check the command shape and retry."})
+		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Auto policy", State: "not applied", Next: "Check the command shape and retry."})
 	}
 	msg := strings.TrimSpace(err.Error())
 	if msg == "" {
-		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Autonomy", State: "not applied", Next: "Check the command shape and retry."})
+		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Auto policy", State: "not applied", Next: "Check the command shape and retry."})
 	}
 	return face.RenderOperatorPanel(face.OperatorPanel{
-		Title: "Autonomy",
+		Title: "Auto policy",
 		State: "not applied",
 		Why:   msg,
 		Next:  "Adjust the duration, mode, scope, or config ceiling and retry.",

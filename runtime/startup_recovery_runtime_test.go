@@ -62,7 +62,7 @@ func TestStartupRecoverySendsAwakeSignalWhenNoInterruptedRuns(t *testing.T) {
 		"started_at_utc",
 		"startup_recovery",
 		"pending_handoffs",
-		"next: use /status or /debug",
+		"next: use /status or /health trace",
 	} {
 		if strings.Contains(got.Text, raw) {
 			t.Fatalf("awake text = %q, want no raw field %q", got.Text, raw)

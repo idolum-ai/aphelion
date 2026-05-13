@@ -74,7 +74,7 @@ func TestTailnetPrivateHTTPHandlerServesHealthTailnetAndStatus(t *testing.T) {
 	}
 	handler := tailnetPrivateHTTPHandler(router, 1001)
 
-	for _, path := range []string{"/healthz", "/tailnet", "/tailnet/surfaces", "/tailnet/grants", "/status", "/doctor/latest"} {
+	for _, path := range []string{"/healthz", "/tailnet", "/tailnet/surfaces", "/tailnet/grants", "/status", "/health/diagnosis/latest"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -103,7 +103,7 @@ func TestTailnetPrivateHTTPHandlerServesHealthTailnetAndStatus(t *testing.T) {
 	if router.latestDoctorReportChatID != 1001 || router.latestDoctorReportSenderID != 1001 {
 		t.Fatalf("doctor latest lookup = (%d,%d), want configured admin chat/sender", router.latestDoctorReportChatID, router.latestDoctorReportSenderID)
 	}
-	req = httptest.NewRequest(http.MethodGet, "/doctor/latest", nil)
+	req = httptest.NewRequest(http.MethodGet, "/health/diagnosis/latest", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if !strings.Contains(rec.Body.String(), `"available":true`) || !strings.Contains(rec.Body.String(), `"full_report":"State of Things`) {

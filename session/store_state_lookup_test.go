@@ -213,7 +213,7 @@ func TestLatestDoctorReportReturnsMostRecentSyntheticDoctorTurn(t *testing.T) {
 	secondAt := firstAt.Add(time.Hour)
 	sess.TurnCount = 1
 	if err := store.Save(sess, []Message{
-		{Role: "user", Content: "/doctor", TurnIndex: 1, CreatedAt: firstAt},
+		{Role: "user", Content: "/health diagnose", TurnIndex: 1, CreatedAt: firstAt},
 		{Role: "assistant", Content: "old full report", FloorContent: "old telegram report", FloorMetadata: "doctor_full_report_chars=15", TurnIndex: 1, CreatedAt: firstAt},
 	}, core.TokenUsage{}); err != nil {
 		t.Fatalf("Save(first doctor) err = %v", err)
@@ -227,7 +227,7 @@ func TestLatestDoctorReportReturnsMostRecentSyntheticDoctorTurn(t *testing.T) {
 	}
 	sess.TurnCount = 3
 	if err := store.Save(sess, []Message{
-		{Role: "user", Content: "/doctor", TurnIndex: 3, CreatedAt: secondAt},
+		{Role: "user", Content: "/health diagnose", TurnIndex: 3, CreatedAt: secondAt},
 		{Role: "assistant", Content: "new full report", FloorContent: "new telegram report", FloorMetadata: "doctor_full_report_chars=15", TurnIndex: 3, CreatedAt: secondAt},
 	}, core.TokenUsage{}); err != nil {
 		t.Fatalf("Save(second doctor) err = %v", err)

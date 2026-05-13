@@ -91,7 +91,7 @@ func TestBlockedApprovalFixtureRendersHumanStatusWithoutApprovalRitual(t *testin
 			t.Fatalf("blocked status = %q, want %q", text, want)
 		}
 	}
-	for _, notWant := range []string{"Approval needed", "Approve", "Use the buttons", "Lease:", "Details: /debug", "phase-private-profile"} {
+	for _, notWant := range []string{"Approval needed", "Approve", "Use the buttons", "Lease:", "Details: /health trace", "phase-private-profile"} {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("blocked status = %q, did not want %q", text, notWant)
 		}

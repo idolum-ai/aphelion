@@ -220,6 +220,10 @@ type stubCommandRouter struct {
 	autoApproveChatID            int64
 	autoApproveSenderID          int64
 	autoApproveArgs              string
+	autoApproveStatusChatID      int64
+	autoApproveStatusSenderID    int64
+	autoApproveStatusReturn      string
+	autoApproveStatusErr         error
 	autoApproveReturn            string
 	autoApproveErr               error
 	autonomyChatID               int64
@@ -519,7 +523,19 @@ func (s *stubCommandRouter) ConfigureAutoApproval(_ context.Context, chatID int6
 	if strings.TrimSpace(s.autoApproveReturn) != "" {
 		return s.autoApproveReturn, nil
 	}
-	return "Auto-approval enabled for this chat.", nil
+	return "Auto approvals enabled for this chat.", nil
+}
+
+func (s *stubCommandRouter) AutoApprovalStatus(_ context.Context, chatID int64, senderID int64) (string, error) {
+	s.autoApproveStatusChatID = chatID
+	s.autoApproveStatusSenderID = senderID
+	if s.autoApproveStatusErr != nil {
+		return "", s.autoApproveStatusErr
+	}
+	if strings.TrimSpace(s.autoApproveStatusReturn) != "" {
+		return s.autoApproveStatusReturn, nil
+	}
+	return "Auto approvals are inactive for this chat.", nil
 }
 
 func (s *stubCommandRouter) ConfigureAutonomy(_ context.Context, chatID int64, senderID int64, args string) (string, error) {

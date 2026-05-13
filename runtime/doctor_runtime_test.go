@@ -18,7 +18,7 @@ func TestDoctorTelegramSummarySystemNoteUsesOutcomeStructure(t *testing.T) {
 
 	note := doctorTelegramSummarySystemNote()
 	for _, want := range []string{
-		"Role: You are compressing a /doctor report for Telegram.",
+		"Role: You are compressing a /health diagnose report for Telegram.",
 		"## Goal",
 		"shortest useful operator-facing health summary",
 		"## Success Criteria",
@@ -332,7 +332,7 @@ func authoritySnapshotHasFinding(snapshot core.AuthorityStatusSnapshot, code str
 
 func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	provider.replyText = "State of Things\nRuntime is diagnosable.\n\nRecommendations\nKeep /doctor read-only."
+	provider.replyText = "State of Things\nRuntime is diagnosable.\n\nRecommendations\nKeep /health diagnose read-only."
 	cfg.Agent.BootstrapFiles = []string{"SOUL.md", "IDENTITY.md", "AGENTS.md"}
 	cfg.Agent.DynamicFiles = []string{"MEMORY.md", "SKILLS.md", "memory/knowledge.md", "memory/decisions.md"}
 
@@ -361,7 +361,7 @@ func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "memory", "knowledge.md"), []byte("# knowledge\n\n- Provider timeouts must surface to Telegram."), 0o600); err != nil {
 		t.Fatalf("write knowledge: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "memory", "decisions.md"), []byte("# decisions\n\n- /doctor must not run tools."), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "memory", "decisions.md"), []byte("# decisions\n\n- /health diagnose must not run tools."), 0o600); err != nil {
 		t.Fatalf("write decisions: %v", err)
 	}
 	logPath := filepath.Join(filepath.Dir(cfg.Sessions.DBPath), "aphelion.log")
@@ -389,7 +389,7 @@ func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 		SenderID:   1001,
 		SenderName: "admin",
 		ChatType:   "private",
-		Text:       "/doctor",
+		Text:       "/health diagnose",
 		MessageID:  17,
 	}, time.Now().UTC())
 	if err != nil {
@@ -434,12 +434,12 @@ func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 		t.Fatalf("Load() err = %v", err)
 	}
 	if len(sess.Messages) < 2 {
-		t.Fatalf("messages len = %d, want synthetic /doctor turn", len(sess.Messages))
+		t.Fatalf("messages len = %d, want synthetic /health diagnose turn", len(sess.Messages))
 	}
 	userMsg := sess.Messages[len(sess.Messages)-2]
 	assistantMsg := sess.Messages[len(sess.Messages)-1]
-	if userMsg.Role != "user" || userMsg.Content != "/doctor" {
-		t.Fatalf("user doctor message = %#v, want persisted /doctor request", userMsg)
+	if userMsg.Role != "user" || userMsg.Content != "/health diagnose" {
+		t.Fatalf("user doctor message = %#v, want persisted /health diagnose request", userMsg)
 	}
 	if assistantMsg.Role != "assistant" || !strings.Contains(assistantMsg.Content, "Runtime is diagnosable") {
 		t.Fatalf("assistant doctor message = %#v, want persisted report", assistantMsg)
@@ -530,7 +530,7 @@ func TestRunDoctorOnceDelegatesToActiveMaintainerChild(t *testing.T) {
 		SenderID:   1001,
 		SenderName: "admin",
 		ChatType:   "private",
-		Text:       "/doctor",
+		Text:       "/health diagnose",
 		MessageID:  41,
 	}, time.Now().UTC())
 	if err != nil {

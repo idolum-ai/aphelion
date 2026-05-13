@@ -19,7 +19,7 @@ required_principles=(
   "Text is presentation, not authority"
   "Compile contracts; interpret ambiguity"
   "Short paths to truth"
-  "Prefer one-hop debug affordances over scattered forensic scavenging"
+  "Prefer one-hop trace affordances over scattered forensic scavenging"
 )
 
 for phrase in "${required_principles[@]}"; do
@@ -92,7 +92,7 @@ if rg -n "msg\\.Text|normalizeMediaIntentText|containsTranscriptionTerm|contains
 fi
 
 if ! rg -qF "writeDoctorDesignPrincipleHealth" runtime --glob 'doctor*.go'; then
-  echo "/doctor must surface design-principle health" >&2
+  echo "/health diagnose must surface design-principle health" >&2
   exit 1
 fi
 

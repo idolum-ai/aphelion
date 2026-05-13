@@ -18,7 +18,7 @@ var commandMenuPublicCommands = []struct {
 	Command string
 }{
 	{Label: "Status", Command: "status"},
-	{Label: "Debug", Command: "debug"},
+	{Label: "Health", Command: "health"},
 	{Label: "Memory", Command: "memory"},
 	{Label: "Mission", Command: "mission"},
 	{Label: "Stop", Command: "stop"},
@@ -33,9 +33,7 @@ var commandMenuAdminCommands = []struct {
 	{Label: "Models", Command: "model"},
 	{Label: "Agents", Command: "agents"},
 	{Label: "Tailnet", Command: "tailnet"},
-	{Label: "Autonomy", Command: "autonomy"},
-	{Label: "Auto Approve", Command: "autoapprove"},
-	{Label: "Doctor", Command: "doctor"},
+	{Label: "Auto", Command: "auto"},
 	{Label: "Reinstall", Command: "reinstall"},
 	{Label: "Restart", Command: "restart"},
 }

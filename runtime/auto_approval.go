@@ -33,10 +33,10 @@ type operatorAutoApprovalRequest struct {
 
 func (r *Runtime) ConfigureAutoApproval(ctx context.Context, chatID int64, adminUserID int64, args string) (string, error) {
 	if r == nil || r.store == nil {
-		return "Auto-approval is unavailable.", nil
+		return "Auto approvals are unavailable.", nil
 	}
 	if !r.IsTelegramAdmin(adminUserID) {
-		return "Auto-approval controls are admin only.", nil
+		return "Auto approvals are admin only.", nil
 	}
 	action, spec, err := parseOperatorAutoApprovalCommand(args)
 	if err != nil {
@@ -86,6 +86,17 @@ func (r *Runtime) ConfigureAutoApproval(ctx context.Context, chatID int64, admin
 	default:
 		return "", fmt.Errorf("unknown auto-approval action %q", action)
 	}
+}
+
+func (r *Runtime) AutoApprovalStatus(ctx context.Context, chatID int64, adminUserID int64) (string, error) {
+	_ = ctx
+	if r == nil || r.store == nil {
+		return "Auto approvals are unavailable.", nil
+	}
+	if !r.IsTelegramAdmin(adminUserID) {
+		return "Auto approvals are admin only.", nil
+	}
+	return r.renderOperatorAutoApprovalStatus(chatID, adminUserID, time.Now().UTC())
 }
 
 func (r *Runtime) AutoResolveDecision(ctx context.Context, pending decision.PendingDecision) (decision.AutoResolution, error) {
@@ -288,7 +299,7 @@ func (r *Runtime) renderOperatorAutoApprovalStatus(chatID int64, adminUserID int
 		return "", err
 	}
 	if !ok {
-		return "Auto-approval is inactive for this chat.", nil
+		return "Auto approvals are inactive for this chat.", nil
 	}
 	return renderOperatorAutoApprovalStatusInactive(latest, now), nil
 }
@@ -343,7 +354,7 @@ func parseOperatorAutoApprovalCommand(raw string) (string, operatorAutoApprovalC
 		reason = append(reason, token)
 	}
 	if !durationSet {
-		return "", spec, fmt.Errorf("usage: /autoapprove <duration> [all|workspace|deploy] [uses=N] [reason]")
+		return "", spec, fmt.Errorf("usage: /auto approvals <duration> [all|workspace|deploy] [uses=N] [reason]")
 	}
 	if spec.Duration < operatorAutoApprovalMinDuration {
 		return "", spec, fmt.Errorf("auto-approval duration must be at least %s", operatorAutoApprovalMinDuration)
@@ -393,10 +404,10 @@ func newOperatorAutoApprovalLeaseID(chatID int64, adminUserID int64, now time.Ti
 
 func renderOperatorAutoApprovalRevoked(leases []session.OperatorAutoApprovalLease, now time.Time) string {
 	state := "off"
-	next := "Use /autoapprove <duration> <scope> to create a new bounded grant."
+	next := "Use /auto approvals <duration> <scope> to create a new bounded grant."
 	if len(leases) == 0 {
 		return renderRuntimeCompactPanel(face.OperatorPanel{
-			Title: "Auto-approval",
+			Title: "Auto approvals",
 			State: state,
 			Why:   "No active approval prompts will be answered automatically.",
 			Next:  next,
@@ -421,7 +432,7 @@ func renderOperatorAutoApprovalRevoked(leases []session.OperatorAutoApprovalLeas
 		}
 	}
 	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title: "Auto-approval",
+		Title: "Auto approvals",
 		State: state,
 		Why:   "No active approval prompts will be answered automatically.",
 		Next:  next,
@@ -537,10 +548,10 @@ func renderOperatorAutoApprovalEnabled(lease session.OperatorAutoApprovalLease, 
 		details = append(details, "Reason: "+reason)
 	}
 	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title:   "Auto-approval",
+		Title:   "Auto approvals",
 		State:   "enabled",
 		Why:     "Eligible approval prompts in this chat may be answered automatically until the grant expires or is spent.",
-		Next:    "Use /autoapprove off to revoke it.",
+		Next:    "Use /auto approvals off to revoke it.",
 		Details: details,
 	})
 }
@@ -559,10 +570,10 @@ func renderOperatorAutoApprovalStatusActive(lease session.OperatorAutoApprovalLe
 		details = append(details, "Reason: "+lease.Reason)
 	}
 	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title:   "Auto-approval",
+		Title:   "Auto approvals",
 		State:   "active",
 		Why:     "Eligible approval prompts in this chat can use this bounded grant.",
-		Next:    "Use /autoapprove off to revoke it.",
+		Next:    "Use /auto approvals off to revoke it.",
 		Details: details,
 	})
 }
@@ -578,10 +589,10 @@ func renderOperatorAutoApprovalStatusInactive(lease session.OperatorAutoApproval
 		reason = "inactive"
 	}
 	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title: "Auto-approval",
+		Title: "Auto approvals",
 		State: "inactive",
 		Why:   "No current approval prompt will use this old grant.",
-		Next:  "Use /autoapprove <duration> <scope> to create a new bounded grant.",
+		Next:  "Use /auto approvals <duration> <scope> to create a new bounded grant.",
 		Details: []string{
 			"Last grant: " + reason + ".",
 		},

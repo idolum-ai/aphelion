@@ -47,7 +47,7 @@ Operation protocol fields participate in the shared four-class surface taxonomy:
   surfaces for mutable declared work state.
 - execution sequencing and tool/delivery evidence remains `canonical` in TES
   (`session.execution_events`), not in operation sidecars.
-- user-visible rendering of operation state (`/status`, `/debug`, quick-read) is
+- user-visible rendering of operation state (`/status`, `/health trace`, quick-read) is
   a `projection`.
 - removed surfaces must be deleted or rejected instead of being consulted by
   operator projections.

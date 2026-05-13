@@ -47,7 +47,7 @@ Classifications below use the shared truth classes defined in
 | `mission_ledger` candidate rows projected as pending items | projection | Which durable candidate missions should be visible for operator review now? |
 | `session.review_events (status='pending')` | operational current-state store | Which review artifacts are queued for governance delivery? |
 | `/status` | projection | How should system/chat state be rendered for operators now? |
-| `/debug` | projection | How should execution evidence be rendered for diagnosis now? |
+| `/health trace` | projection | How should execution evidence be rendered for diagnosis now? |
 | Quick-read and progress render blocks | projection | What compact operator narration should be surfaced now? |
 | `turn_runs` | operational current-state store | What startup recovery/run bookkeeping hints are available to park interrupted work? |
 
@@ -55,7 +55,7 @@ Classifications below use the shared truth classes defined in
 
 Historical rows and aliases that are no longer part of the current truth model
 must be deleted or rejected. They must not become operator projection inputs.
-- When `/status` or `/debug` uses fallback rows, that usage should be surfaced
+- When `/status` or `/health trace` uses fallback rows, that usage should be surfaced
   as source attribution.
 
 ActionProposal / ContinuationLease note:
@@ -75,7 +75,7 @@ Staged identity decision:
 - Keeps user-visible continuity and machine-audit continuity separate.
 - Preserves floor/scene split without losing recovery/review semantics.
 - Prevents architecture drift into one hidden “memory blob.”
-- Makes `/status`, `/debug`, and progress narration converge on one shared execution timeline instead of independent ad-hoc state machines.
+- Makes `/status`, `/health trace`, and progress narration converge on one shared execution timeline instead of independent ad-hoc state machines.
 
 Related requirements:
 

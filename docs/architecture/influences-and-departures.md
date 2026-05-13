@@ -47,7 +47,7 @@ Why Aphelion diverges:
 
 - Aphelion is an outpost for live personal-agent authority, not a programming
   assistant. Telegram and CLI remain the operator surfaces; leases, grants, TES,
-  and doctor/status projections carry the authority truth.
+  and diagnosis/status projections carry the authority truth.
 
 Current repo surface:
 
@@ -148,7 +148,7 @@ Why Aphelion diverges:
 
 - Aphelion treats feedback loops as one operational pattern inside a governed
   outpost. Work must remain stoppable, reviewable, scoped, and visible through
-  status, doctor, TES, and explicit release/rollback gates.
+  status, diagnosis, TES, and explicit release/rollback gates.
 
 Current repo surface:
 

@@ -122,47 +122,11 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 	if command, ok := decodeCommandMenuCallbackData(cb.Data); ok {
 		return handleCommandMenuCallback(ctx, sender, router, cb, command)
 	}
-	if action, ok := decodeAutonomyCallbackData(cb.Data); ok {
-		return handleAutonomyCallback(ctx, sender, router, cb, action)
+	if surface, action, ok := decodeAutoCallbackData(cb.Data); ok {
+		return handleAutoCallback(ctx, sender, router, cb, surface, action)
 	}
-	if action, ok := decodeAutoApprovalCallbackData(cb.Data); ok {
-		return handleAutoApprovalCallback(ctx, sender, router, cb, action)
-	}
-	if view, ok := decodeDebugCallbackData(cb.Data); ok {
-		chatID := int64(0)
-		messageID := int64(0)
-		senderID := int64(0)
-		if cb.Message != nil {
-			messageID = cb.Message.MessageID
-			if cb.Message.Chat != nil {
-				chatID = cb.Message.Chat.ID
-			}
-		}
-		if cb.From != nil {
-			senderID = cb.From.ID
-		}
-		if chatID == 0 || messageID == 0 || view != debugViewMore {
-			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleDebugCallbackText); err != nil {
-				if !telegram.IsStaleCallbackQueryError(err) {
-					return true, err
-				}
-			}
-			return true, nil
-		}
-		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil {
-			if !telegram.IsStaleCallbackQueryError(err) {
-				return true, err
-			}
-		}
-		personaEffort, governorEffort := router.CurrentEfforts()
-		_, fullText, err := renderDebugSnapshot(ctx, router, chatID, senderID, personaEffort, governorEffort)
-		if err != nil {
-			return true, err
-		}
-		if err := deliverDebugCallbackView(ctx, sender, chatID, messageID, fullText); err != nil {
-			return true, err
-		}
-		return true, nil
+	if action, ok := decodeHealthCallbackData(cb.Data); ok {
+		return handleHealthCallback(ctx, sender, router, cb, action)
 	}
 	if action, token, ok := decodeTailnetRevokeTokenCallbackData(cb.Data); ok {
 		chatID := int64(0)

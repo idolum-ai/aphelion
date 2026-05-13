@@ -136,12 +136,12 @@ not string-heavy control.
 
 ### Operational legibility
 
-`/status`, `/doctor`, `/debug`, logs, TES, work evidence, and Telegram controls
+`/status`, `/health diagnose`, `/health trace`, logs, TES, work evidence, and Telegram controls
 should make the system inspectable without burying the operator in raw IDs,
 verbose ritual text, or implementation noise.
 
 Operator-facing names should be human scale. Raw IDs can remain in details,
-debug surfaces, and canonical records.
+trace surfaces, and canonical records.
 
 ### Short paths to truth
 
@@ -182,5 +182,5 @@ When adding or changing behavior:
 - Prefer narrow tools and leases over ambient capability.
 - Prefer stable service behavior over theatrical caution.
 - Prefer emergency stop/ask/escalate paths over brittle edge-case matching.
-- Prefer one-hop debug affordances over scattered forensic scavenging.
+- Prefer one-hop trace affordances over scattered forensic scavenging.
 - Prefer testable invariants over prompt-only expectations.

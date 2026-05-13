@@ -61,7 +61,7 @@ Session requirements align to that contract as follows:
     state
   - `turn_runs` for startup recovery parking and in-process run bookkeeping
 - projection:
-  - `/status`, `/debug`, and quick-read rendering surfaces
+  - `/status`, `/health trace`, and quick-read rendering surfaces
 
 TES retention invariants:
 

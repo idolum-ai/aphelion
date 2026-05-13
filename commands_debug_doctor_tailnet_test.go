@@ -35,7 +35,7 @@ func TestHandleTelegramCommandDebugForNonAdminShowsChatDebugOnly(t *testing.T) {
 	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
 		ChatID:   7,
 		SenderID: 1002,
-		Text:     "/debug",
+		Text:     "/health trace",
 	})
 	if err != nil {
 		t.Fatalf("handleTelegramCommand() err = %v", err)
@@ -55,14 +55,14 @@ func TestHandleTelegramCommandDebugForNonAdminShowsChatDebugOnly(t *testing.T) {
 	if got := sender.inline[0].text; strings.Contains(got, "status_scope=system") {
 		t.Fatalf("debug text = %q, do not want admin system section for non-admin", got)
 	}
-	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 1 {
-		t.Fatalf("rows = %#v, want one Read More button", sender.inline[0].rows)
+	if len(sender.inline[0].rows) == 0 || len(sender.inline[0].rows[0]) != 1 {
+		t.Fatalf("rows = %#v, want Read More button", sender.inline[0].rows)
 	}
 	if got := sender.inline[0].rows[0][0].Text; got != "Read More" {
 		t.Fatalf("button text = %q, want Read More", got)
 	}
-	if got := sender.inline[0].rows[0][0].CallbackData; got != "debug:more" {
-		t.Fatalf("callback = %q, want debug:more", got)
+	if got := sender.inline[0].rows[0][0].CallbackData; got != encodeHealthCallbackData(healthActionTraceMore) {
+		t.Fatalf("callback = %q, want health trace read-more", got)
 	}
 }
 
@@ -91,12 +91,12 @@ func TestHandleTelegramCommandDebugForAdminIncludesSystemAndDurables(t *testing.
 		personaEffort:         "opus",
 		governorEffort:        "high",
 		canRestart:            true,
-		statusReadableSummary: "Admin debug snapshot ready.",
+		statusReadableSummary: "Admin trace snapshot ready.",
 	}
 	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
 		ChatID:   7,
 		SenderID: 1001,
-		Text:     "/debug",
+		Text:     "/health trace",
 	})
 	if err != nil {
 		t.Fatalf("handleTelegramCommand() err = %v", err)
@@ -107,17 +107,17 @@ func TestHandleTelegramCommandDebugForAdminIncludesSystemAndDurables(t *testing.
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "Quick Read: Admin debug snapshot ready.") {
+	if got := sender.inline[0].text; !strings.Contains(got, "Quick Read: Admin trace snapshot ready.") {
 		t.Fatalf("debug text = %q, want quick summary in collapsed view", got)
 	}
 	if got := sender.inline[0].text; strings.Contains(got, "status_scope=chat") {
 		t.Fatalf("debug text = %q, do not want full snapshot in collapsed view", got)
 	}
-	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 1 {
-		t.Fatalf("rows = %#v, want one Read More button", sender.inline[0].rows)
+	if len(sender.inline[0].rows) == 0 || len(sender.inline[0].rows[0]) != 1 {
+		t.Fatalf("rows = %#v, want Read More button", sender.inline[0].rows)
 	}
-	if got := sender.inline[0].rows[0][0].CallbackData; got != "debug:more" {
-		t.Fatalf("callback = %q, want debug:more", got)
+	if got := sender.inline[0].rows[0][0].CallbackData; got != encodeHealthCallbackData(healthActionTraceMore) {
+		t.Fatalf("callback = %q, want health trace read-more", got)
 	}
 }
 
@@ -130,7 +130,7 @@ func TestHandleTelegramCommandDoctorQueuesAdminDiagnosis(t *testing.T) {
 		ChatID:    1001,
 		SenderID:  1001,
 		MessageID: 44,
-		Text:      "/doctor",
+		Text:      "/health diagnose",
 	})
 	if err != nil {
 		t.Fatalf("handleTelegramCommand() err = %v", err)
@@ -147,7 +147,7 @@ func TestHandleTelegramCommandDoctorQueuesAdminDiagnosis(t *testing.T) {
 	if len(sender.msgs) != 1 {
 		t.Fatalf("message count = %d, want 1", len(sender.msgs))
 	}
-	if got := sender.msgs[0].Text; !strings.Contains(got, "Doctor diagnostics started") {
+	if got := sender.msgs[0].Text; !strings.Contains(got, "Health diagnosis started") {
 		t.Fatalf("doctor ack = %q, want started acknowledgement", got)
 	}
 	if sender.msgs[0].ReplyTo == nil || *sender.msgs[0].ReplyTo != 44 {
@@ -163,7 +163,7 @@ func TestHandleTelegramCommandDoctorDeniesNonAdmin(t *testing.T) {
 	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
 		ChatID:   7,
 		SenderID: 1002,
-		Text:     "/doctor",
+		Text:     "/health diagnose",
 	})
 	if err != nil {
 		t.Fatalf("handleTelegramCommand() err = %v", err)
@@ -191,7 +191,7 @@ func TestHandleTelegramCommandDoctorRequiresPrivateAdminChat(t *testing.T) {
 		ChatID:   -1007,
 		SenderID: 1001,
 		ChatType: "group",
-		Text:     "/doctor",
+		Text:     "/health diagnose",
 	})
 	if err != nil {
 		t.Fatalf("handleTelegramCommand() err = %v", err)
@@ -421,7 +421,7 @@ func TestHandleTelegramCommandDebugRewritesInconsistentQuickSummary(t *testing.T
 	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
 		ChatID:   7,
 		SenderID: 1002,
-		Text:     "/debug",
+		Text:     "/health trace",
 	})
 	if err != nil {
 		t.Fatalf("handleTelegramCommand() err = %v", err)
@@ -466,7 +466,7 @@ func TestHandleTelegramCommandCallbackDebugReadMoreExpandsFullSnapshot(t *testin
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:   "cb-debug-more",
 		From: &telegram.User{ID: 1002, Username: "approved"},
-		Data: "debug:more",
+		Data: encodeHealthCallbackData(healthActionTraceMore),
 		Message: &telegram.Message{
 			MessageID: 201,
 			Chat:      &telegram.Chat{ID: 7, Type: "private"},
@@ -494,8 +494,8 @@ func TestHandleTelegramCommandCallbackDebugReadMoreExpandsFullSnapshot(t *testin
 	if !strings.Contains(full, "Status Scope: chat") {
 		t.Fatalf("full debug text = %q, want chat section", full)
 	}
-	if !strings.Contains(full, "Debug Chat:") {
-		t.Fatalf("full debug text = %q, want debug_chat section", full)
+	if !strings.Contains(full, "Trace Chat:") {
+		t.Fatalf("full debug text = %q, want trace chat section", full)
 	}
 	if !strings.Contains(full, "Last Exec Command: \"curl -fsS https://api.github.com/zen\"") {
 		t.Fatalf("full debug text = %q, want decoded last exec command", full)

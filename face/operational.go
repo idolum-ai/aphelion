@@ -59,13 +59,13 @@ func RenderTelegramHelp(personaEffort, governorEffort string, includeAdminComman
 func renderTelegramCommandSurface(title string, state string, next string, personaEffort string, governorEffort string, includeAdminCommands bool) string {
 	details := []string{
 		"Chat control: /status - show live status and controls; /stop - stop current work; /new - start fresh; /detach - detach pending work",
-		"Diagnostics: /debug - show detailed runtime debug snapshot; /doctor - run an admin runtime diagnosis; /tailnet - show tailnet status and controls",
+		"Health: /health - show status, trace, and diagnosis controls; /tailnet - show tailnet status and controls",
 		"Memory and objectives: /memory - review memory candidates and set focus; /mission - show and manage the Mission Ledger",
 		"Models and agents: /model - show and change model slots; /agents - list durable agents and controls",
 	}
 	if includeAdminCommands {
 		details = append(details,
-			"Admin operations: /autonomy - show autonomy policy; /autoapprove - temporarily auto-approve admin approval prompts; /restart - force an immediate gateway restart",
+			"Admin operations: /auto - show automation policy and approval controls; /restart - force an immediate gateway restart",
 		)
 	}
 	details = append(details,
@@ -108,10 +108,10 @@ func RenderTelegramAutonomyStatus(snapshot core.AutonomyStatusSnapshot) string {
 		behavior = "existing proposal and approval flows"
 	}
 	return RenderCompactOperatorPanel(OperatorPanel{
-		Title: "Autonomy policy",
+		Title: "Auto policy",
 		State: "default " + autonomyModeLabel(snapshot.DefaultMode) + ", ceiling " + autonomyModeLabel(snapshot.Ceiling),
 		Why:   behavior + ". This report does not grant new authority by itself.",
-		Next:  "Use /autonomy leased <duration> <scope> for a bounded live override, or /autonomy off to revoke one.",
+		Next:  "Use /auto policy leased <duration> <scope> for a bounded live override, or /auto policy off to revoke one.",
 		Details: []string{
 			"Default: " + autonomyModeLabel(snapshot.DefaultMode),
 			"Ceiling: " + autonomyModeLabel(snapshot.Ceiling),

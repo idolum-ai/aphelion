@@ -260,7 +260,7 @@ func renderTailnetRevokeConfirmation(surfaceID string) (string, [][]telegram.Inl
 			Next:  "Cancel to leave it unchanged, or revoke to record the local registry change.",
 			Evidence: []string{
 				"Surface: " + surfaceID,
-				"If a live listener still observes it, /status and /doctor will report that drift.",
+				"If a live listener still observes it, /status and /health diagnose will report that drift.",
 			},
 		}),
 	}

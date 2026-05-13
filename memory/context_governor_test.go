@@ -54,7 +54,7 @@ func TestPlanAdaptiveRecallDoctorUsesDiagnosticBudget(t *testing.T) {
 	t.Parallel()
 
 	plan := PlanAdaptiveRecall(AdaptiveRecallRequest{
-		Query:            "/doctor diagnose latest memory footprint, prompt files, session logs, and code recommendations",
+		Query:            "/health diagnose latest memory footprint, prompt files, session logs, and code recommendations",
 		Purpose:          RecallPurposeDoctor,
 		ContextWindow:    200000,
 		MaxContextRatio:  0.80,

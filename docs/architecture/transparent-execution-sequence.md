@@ -60,7 +60,7 @@ TES write/read behavior currently relies on the following indexes:
 
 - All user-facing projections should request bounded windows (limit + optional
   time boundary), not unbounded full-table scans.
-- `/status` and `/debug` projections should use TES windows for execution truth
+- `/status` and `/health trace` projections should use TES windows for execution truth
   and operational current-state stores for mutable pending state.
 - If projection claims conflict with TES evidence, projection text must degrade to
   deterministic, evidence-backed summaries.
@@ -178,7 +178,7 @@ operational current-state source for mutable declared work state.
   `recovery.issued` until a terminal `recovery.completed|recovery.failed` event
   is observed after issuance.
 
-`/debug` now includes explicit TES timeline blocks (`execution_timeline`) for
+`/health trace` includes explicit TES timeline blocks (`execution_timeline`) for
 chat and system views via `RecentExecution` projections sourced from
 `execution_events`.
 
@@ -189,7 +189,7 @@ Collapsed `/status` quick-read text is now grounded against rendered status
 tokens. If the generated summary contradicts the underlying status payload, it
 is replaced with a deterministic snapshot-based summary.
 
-Collapsed `/debug` quick-read text is now grounded against chat execution state:
+Collapsed `/health trace` quick-read text is grounded against chat execution state:
 inconsistent readable summaries are replaced with a deterministic, snapshot-based
 summary to avoid "idle/done" drift while turns are failed, blocked, or running.
 
@@ -206,4 +206,4 @@ Code anchor: [`runtime/status.go`](../../runtime/status.go)
 
 TES is the canonical append-only sequence for ingress/turn/tool/progress facts.
 `turn_runs` remains an operational startup recovery/run-bookkeeping table, not a
-status/debug fallback source.
+status/trace fallback source.

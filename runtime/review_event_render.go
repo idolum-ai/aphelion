@@ -119,7 +119,7 @@ func reviewEventDebugBreadcrumbLines(event session.ReviewEvent, meta reviewEvent
 		inspectCommand = reviewEventInspectCommand(meta)
 	}
 	if strings.TrimSpace(inspectCommand) == "" {
-		inspectCommand = "/debug"
+		inspectCommand = "/health trace"
 	}
 	return core.DebugBreadcrumbLines(core.DebugBreadcrumb{
 		TraceID:          traceID,

@@ -289,7 +289,7 @@ This rewriting must remain:
 - machine-derived
 - truthful to actual tool starts
 - lower fidelity than the audit log
-- configurable, with a raw/debug mode available when needed
+- configurable, with a raw trace mode available when needed
 
 Raw tool payloads should remain in logs and durable records. Telegram progress should default to a human-readable phase view.
 

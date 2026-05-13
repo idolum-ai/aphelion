@@ -251,7 +251,7 @@ func scoreAdaptiveRecall(query string, purpose string) (float64, []string) {
 		score += 0.18
 		reasons = append(reasons, "recovery")
 	}
-	if purpose == RecallPurposeDoctor || strings.Contains(text, "/doctor") || strings.Contains(text, "deep diagnosis") {
+	if purpose == RecallPurposeDoctor || strings.Contains(text, "/health diagnose") || strings.Contains(text, "deep diagnosis") {
 		score = maxFloat(score, 0.95)
 		reasons = append(reasons, "doctor")
 	}

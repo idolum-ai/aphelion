@@ -186,7 +186,7 @@ func TestMaterializeBlockedConsentPhaseSendsStatusWithoutApprovalButtons(t *test
 	if sentCount != 1 || !strings.Contains(sentText, "Plan: Consent-first resource-owner intake") || !strings.Contains(sentText, "has not opted in") || !strings.Contains(sentText, "Use /status") {
 		t.Fatalf("sent text = %q, want concise blocked status", sentText)
 	}
-	if strings.Contains(sentText, "Approval needed") || strings.Contains(sentText, "Use the buttons") || strings.Contains(sentText, "Details: /debug") {
+	if strings.Contains(sentText, "Approval needed") || strings.Contains(sentText, "Use the buttons") || strings.Contains(sentText, "Details: /health trace") {
 		t.Fatalf("sent text = %q, want no approval ritual", sentText)
 	}
 

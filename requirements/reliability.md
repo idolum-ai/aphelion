@@ -750,7 +750,7 @@ Not all of this must be implemented immediately. But the spec should reserve the
 ### Next Phase
 
 - outbound reconciliation state
-- explicit status/doctor surfaces
+- explicit status/health-diagnosis surfaces
 - broader loop/degraded-mode metrics
 - stronger distinction between retryable and non-retryable transport errors
 

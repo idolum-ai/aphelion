@@ -100,7 +100,7 @@ func (r *Runtime) telegramDoctorReport(ctx context.Context, key session.SessionK
 
 func doctorTelegramSummarySystemNote() string {
 	return strings.Join([]string{
-		"Role: You are compressing a /doctor report for Telegram.",
+		"Role: You are compressing a /health diagnose report for Telegram.",
 		"## Goal",
 		"Produce the shortest useful operator-facing health summary from the provided report.",
 		"## Success Criteria",
@@ -180,7 +180,7 @@ func doctorCharCount(text string) int {
 
 func doctorReadOnlySystemNote() string {
 	return strings.Join([]string{
-		"You are running the /doctor command.",
+		"You are running /health diagnose.",
 		"This is a read-only diagnostic pass. Do not claim to have edited files, run commands, restarted services, changed memory, or committed code.",
 		"Use the diagnostic packet and the loaded prompt/memory context to produce an operator-facing report.",
 		"For every issue you report, classify it as active, likely_fixed, historical_resolved, residual_risk, or unknown by comparing old failure evidence with current-state checks.",
@@ -195,7 +195,7 @@ func doctorMaintainerSystemNote(maintainer *doctorMaintainerDelegate) string {
 		return ""
 	}
 	return strings.Join([]string{
-		"This /doctor run is delegated to the aphelion-maintainer durable child in read-only mode.",
+		"This /health diagnose run is delegated to the aphelion-maintainer durable child in read-only mode.",
 		"Durable agent: " + strings.TrimSpace(maintainer.Agent.AgentID),
 		"Use the maintainer archetype and profile as the operating boundary for diagnosis and recommendations.",
 		"Do not mutate the local Aphelion clone. If recommending implementation, specify the approved path: isolated /tmp clone, tests there, GitHub PR via a separately approved GitHub App PEM.",

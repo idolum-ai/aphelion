@@ -126,7 +126,7 @@ func renderOperationalIssueMessage(component string, detail string, suppressed i
 		Title:    "System warning",
 		State:    "needs attention",
 		Why:      "A runtime component reported an operational issue.",
-		Next:     "Run /doctor or /debug if the warning persists.",
+		Next:     "Run /health diagnose or /health trace if the warning persists.",
 		Details:  details,
 		Evidence: evidence,
 	})

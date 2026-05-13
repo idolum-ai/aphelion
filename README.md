@@ -49,7 +49,7 @@ The "distance" Aphelion is designed for can be literal or operational:
 Telegram is the radio link to the outpost. CLI commands are the maintenance and
 deployment surface. Future channels such as WhatsApp should be ordinary
 compiled-in code changes behind a small transport boundary, not plugins or a
-new operator console. `/status`, `/doctor`, leases, restart recovery, durable
+new operator console. `/status`, `/health`, leases, restart recovery, durable
 children, TES, and scoped tools are the instruments, logs, airlocks, and
 checklists.
 
@@ -106,11 +106,11 @@ Details:
 Execution transparency:
 
 - Runtime execution truth is recorded in TES (`execution_events`) with ordered, per-session event sequencing.
-- `/status` and `/debug` project TES plus current operational state; removed rows are deleted or rejected, not consulted by live fallback reads.
-- Final reply and continuation/debug summaries use grounding guards to avoid surfacing claims that are not evidenced by TES.
+- `/status` and `/health trace` project TES plus current operational state; removed rows are deleted or rejected, not consulted by live fallback reads.
+- Final reply and continuation/trace summaries use grounding guards to avoid surfacing claims that are not evidenced by TES.
 - Human-facing Telegram and CLI panels follow one operator contract: current status,
   why it matters, next action, then labeled details/evidence. Raw telemetry stays
-  in debug, logs, or machine-readable mirrors.
+  in trace, logs, or machine-readable mirrors.
 
 ## Status
 
@@ -129,7 +129,7 @@ Current runnable build:
 - Heartbeat and config-driven cron
 - Default daily-review durable child (`idolum-daily-review`) that wakes daily, stages yesterday's transcript into child-local files, and opens a scheduled child-to-parent check-in
 - Telegram voice transcription + optional TTS replies
-- Telegram slash commands: `/start`, `/help`, `/status`, `/debug`, `/doctor`, `/agents`, `/memory`, `/mission`, `/model`, `/autonomy`, `/autoapprove`, `/stop`, `/new`, `/detach`, `/restart`, `/reinstall`, `/set_persona_model`, `/set_governor_effort`
+- Telegram slash commands: `/start`, `/help`, `/status`, `/health`, `/agents`, `/memory`, `/mission`, `/model`, `/auto`, `/stop`, `/new`, `/detach`, `/restart`, `/reinstall`, `/set_persona_model`, `/set_governor_effort`
 
 Current promise gaps and accepted implementation targets are tracked in
 [docs/promises.md](docs/promises.md). Release discipline is intentionally

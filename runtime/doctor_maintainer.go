@@ -158,7 +158,7 @@ func (r *Runtime) writeDoctorMaintainerReport(maintainer doctorMaintainerDelegat
 		Path:      rel,
 		Kind:      "doctor_report",
 		Source:    "doctor_delegate",
-		Reason:    "/doctor delegated read-only diagnosis",
+		Reason:    "/health diagnose delegated read-only diagnosis",
 		SHA256:    hash,
 		UpdatedAt: now.UTC(),
 	}); err != nil {
@@ -221,7 +221,7 @@ func writeDoctorMaintainerArtifactManifest(artifactRoot string, agentID string, 
 func writeDoctorMaintainerDelegate(b *strings.Builder, maintainer *doctorMaintainerDelegate) {
 	if maintainer == nil {
 		writeDoctorKV(b, "maintainer_delegate_status", "absent")
-		writeDoctorLine(b, "maintainer_delegate_next=\"create and activate a durable_agent from archetype aphelion-maintainer to route /doctor through the maintained child profile\"")
+		writeDoctorLine(b, "maintainer_delegate_next=\"create and activate a durable_agent from archetype aphelion-maintainer to route /health diagnose through the maintained child profile\"")
 		return
 	}
 	writeDoctorKV(b, "maintainer_delegate_status", "active")

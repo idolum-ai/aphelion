@@ -13,12 +13,12 @@ Default human-facing panels use the same shape across Telegram and CLI:
 - details and labeled evidence
 
 Raw `key=value` telemetry, long IDs, hashes, and enum-heavy records belong in
-`/debug`, explicit evidence sections, logs, or machine-readable mirrors. Text and
+`/health trace`, explicit evidence sections, logs, or machine-readable mirrors. Text and
 buttons are projections only; authority still lives in typed leases, grants,
 decisions, and TES records.
 
 Telegram renders most operator panels in compact form by default: status, why,
-next action, and a bounded set of details/evidence. Full CLI output, `/debug`,
+next action, and a bounded set of details/evidence. Full CLI output, `/health trace`,
 logs, and machine-readable mirrors carry the longer diagnostic record.
 
 ## Slash Commands
@@ -31,10 +31,13 @@ Current command surface:
   - Shows grouped, role-aware command help and a no-argument command menu.
 - `/status`
   - Opens status output with inline status controls (no command arguments).
-- `/debug`
-  - Starts with a collapsed `Quick Read:` summary plus a `Read More` button.
-  - `Read More` expands in place to the full detailed debug snapshot for the current chat.
-  - Admin users get system and durable-agent sections in the expanded view.
+- `/health`
+  - Opens status, trace, and diagnosis controls without requiring arguments.
+  - `/health status` opens the live status view.
+  - `/health trace` starts with a collapsed `Quick Read:` summary plus a `Read More` button.
+  - `Read More` expands in place to the full trace snapshot for the current chat.
+  - `/health diagnose` queues a read-only admin diagnosis from a private admin chat.
+  - Admin users get system and durable-agent sections in the expanded trace view.
 - `/agents`
   - Admin-only durable-agent launcher.
   - Lists durable agents with compact health cards and inline `Chat` buttons.
@@ -52,17 +55,15 @@ Current command surface:
   - Provides buttons for home/list, show, propose, pin/unpin, activate, pause, complete, archive, refresh, and admin health.
   - Supports manual `create`, `block`, and `summon` actions when typed input is the natural carrier for the new objective or reason.
   - Self-summon is review-only; Mission Ledger state does not grant self-continuation, autonomous continuation, new capabilities, or external authority.
-- `/autonomy`
-  - Admin-only policy report and live override control.
-  - Shows the configured default mode, ceiling, live-override setting, maximum override duration, and active override state.
-  - Provides preset buttons for refresh, off, and bounded 15-minute workspace/deploy/all leases.
-  - Supports `status`, `off`, and `leased <duration> [all|workspace|deploy] [uses=N] [reason]`.
-  - `leased` uses the same bounded approval-lease substrate as `/autoapprove` and cannot exceed the configured ceiling or maximum duration.
-  - If config is tightened later, existing live overrides outside the new ceiling are ignored and `/doctor` reports the precedence block.
-- `/autoapprove`
-  - Admin-only short lease for eligible approval prompts.
-  - Provides preset buttons for refresh, off, and bounded 15-minute workspace/deploy/all approval windows.
-  - Also obeys the configured autonomy ceiling and maximum live-override duration.
+- `/auto`
+  - Admin-only automation control surface with policy and approvals panels.
+  - `/auto policy` shows the configured default mode, ceiling, live-override setting, maximum override duration, and active override state.
+  - `/auto approvals` shows the current bounded approval-prompt grant.
+  - Both panels provide preset buttons for refresh, off, and bounded 15-minute workspace/deploy/all windows.
+  - Supports `/auto policy leased <duration> [all|workspace|deploy] [uses=N] [reason]`.
+  - Supports `/auto approvals <duration> [all|workspace|deploy] [uses=N] [reason]`.
+  - Policy and approval windows use the same bounded approval-lease substrate and cannot exceed the configured ceiling or maximum duration.
+  - If config is tightened later, existing live overrides outside the new ceiling are ignored and `/health diagnose` reports the precedence block.
 - `/stop`
   - Stops active work in the current chat and drops queued follow-up work.
   - When `memory.aggressive.flush_on_session_boundary` is enabled, it also runs a bounded memory flush first.
@@ -84,7 +85,7 @@ Current command surface:
 Visibility notes:
 
 - `/start` and `/help` are role-aware.
-  - Admin users see `/autonomy`, `/autoapprove`, and `/restart`.
+  - Admin users see `/auto` and `/restart`.
   - Non-admin users do not see those admin commands.
 - All listed slash commands are usable without typing parameters. When a command
   has a safe finite option set, Telegram presents buttons. Free-form creation or
@@ -108,8 +109,8 @@ in the prompt body.
 ### Command menu
 
 `/start` and `/help` attach role-scoped command buttons. Public buttons include
-status, debug, memory, mission, stop, new, and detach. Admin buttons add models,
-agents, tailnet, autonomy, auto-approval, doctor, reinstall, and restart.
+status, health, memory, mission, stop, new, and detach. Admin buttons add models,
+agents, tailnet, auto, reinstall, and restart.
 
 Menu callbacks route through the same command dispatcher as typed slash commands;
 the button is not a new authority path.
@@ -139,8 +140,8 @@ Chat-scoped status now reports live work telemetry, not only router occupancy:
 
 - `Quick Read:` one-line human summary (Haiku-backed when a native provider key is configured), prepended ahead of the status block.
 - `Quick Read:` is grounded against the rendered status tokens; contradictory generated summaries are replaced with deterministic snapshot text.
-- Telemetry labels are rendered as human-readable labels with colons inside debug/evidence contexts. Operator `/status` panels use direct titles such as `Chat Status`, `System Status`, and `Durable Agents` instead of surfacing raw status-scope markers.
-- Bracketed machine envelopes are humanized in Telegram-facing status/debug output (for example, `[PLAN_UPDATED]` renders as `Plan Updated:` and closing tags are removed).
+- Telemetry labels are rendered as human-readable labels with colons inside trace/evidence contexts. Operator `/status` panels use direct titles such as `Chat Status`, `System Status`, and `Durable Agents` instead of surfacing raw status-scope markers.
+- Bracketed machine envelopes are humanized in Telegram-facing status/trace output (for example, `[PLAN_UPDATED]` renders as `Plan Updated:` and closing tags are removed).
 - `turn_phase` for active in-flight stage (`face_proposal`, `brokerage`, `governor`, `render`, `persist`, `deliver`) when available.
 - `operation` and `plan_step` from persisted session sidecars.
 - `plan_progress` with completed/total steps and `fully_executed=true|false`.
@@ -161,21 +162,21 @@ Durables status (`Durables` button, admin-only):
   - remote/status-adapter pulse when present (`last_seen`, status, error evidence);
     enrollment/control-plane authority is not a current operator surface
 
-### `/debug` content signals
+### `/health trace` content signals
 
-`/debug` starts as a collapsed command reply with `Quick Read:`, then expands via `Read More`.
+`/health trace` starts as a collapsed command reply with `Quick Read:`, then expands via `Read More`.
 It is intended for operational diagnosis when `/status` is too compressed.
 
 - prepends `Quick Read:` summary when the readable-summary provider is available
 - includes the full chat status block (`Status Scope: chat`)
-- adds `Debug Chat:` detail lines with latest turn internals:
+- adds `Trace Chat:` detail lines with latest turn internals:
   - `latest_request`
   - `last_tool_preview`
   - decoded `last_exec_command` when available
   - `last_tool_result`, `last_tool_error`, `turn_error`
 - admin users additionally receive:
   - full `Status Scope: system`
-  - `Debug System:` (pending-kind counters + latest turn rollups per chat)
+  - `Trace System:` (pending-kind counters + latest turn rollups per chat)
   - sandbox readiness warnings when present
   - full `Status Scope: durables`
 - output is chunked when needed to fit Telegram message size limits
@@ -212,7 +213,7 @@ Callbacks resolve short mission tokens against the current authorized mission
 view before applying any state change. Mission actions update ledger records; they
 do not create continuation authority or capability grants.
 
-### `/autonomy` and `/autoapprove` controls
+### `/auto` controls
 
 Admin policy panels attach the same preset rows:
 

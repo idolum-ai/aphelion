@@ -135,9 +135,9 @@ func ContinuationDebugBreadcrumb(chatID int64, decisionID string, projection str
 
 func continuationInspectCommand(chatID int64) string {
 	if chatID == 0 {
-		return "/debug"
+		return "/health trace"
 	}
-	return fmt.Sprintf("/debug %d", chatID)
+	return fmt.Sprintf("/health trace %d", chatID)
 }
 
 func normalizeInterpretationToken(value string) string {

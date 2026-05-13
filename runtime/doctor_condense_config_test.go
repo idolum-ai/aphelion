@@ -42,7 +42,7 @@ func TestRunDoctorOnceCondensesOversizedTelegramReport(t *testing.T) {
 		SenderID:   1001,
 		SenderName: "admin",
 		ChatType:   "private",
-		Text:       "/doctor",
+		Text:       "/health diagnose",
 		MessageID:  31,
 	}, time.Now().UTC())
 	if err != nil {
@@ -71,7 +71,7 @@ func TestRunDoctorOnceCondensesOversizedTelegramReport(t *testing.T) {
 		t.Fatalf("Load() err = %v", err)
 	}
 	if len(sess.Messages) < 2 {
-		t.Fatalf("messages len = %d, want synthetic /doctor turn", len(sess.Messages))
+		t.Fatalf("messages len = %d, want synthetic /health diagnose turn", len(sess.Messages))
 	}
 	assistantMsg := sess.Messages[len(sess.Messages)-1]
 	if assistantMsg.Content != strings.TrimSpace(fullReport) {
@@ -582,7 +582,7 @@ func TestStartDoctorRejectsNonAdmin(t *testing.T) {
 		ChatID:   1002,
 		SenderID: 1002,
 		ChatType: "private",
-		Text:     "/doctor",
+		Text:     "/health diagnose",
 	})
 	if !errors.Is(err, ErrPrincipalDenied) {
 		t.Fatalf("StartDoctor() err = %v, want ErrPrincipalDenied", err)

@@ -27,7 +27,7 @@ func TestRuntimeAutoApprovalCommandAndDecisionResolution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigureAutoApproval() err = %v", err)
 	}
-	if !strings.Contains(text, "Auto-approval") || !strings.Contains(text, "Status: enabled") || !strings.Contains(text, "Scope: all prompts") {
+	if !strings.Contains(text, "Auto approvals") || !strings.Contains(text, "Status: enabled") || !strings.Contains(text, "Scope: all prompts") {
 		t.Fatalf("ConfigureAutoApproval() text = %q, want enabled all scope", text)
 	}
 
@@ -200,7 +200,7 @@ func TestRuntimeStatusSurfacesActiveAutoApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StatusDiagnostics() err = %v", err)
 	}
-	if !strings.Contains(strings.Join(diagnostics, "\n"), "Auto-approval: active (workspace)") {
+	if !strings.Contains(strings.Join(diagnostics, "\n"), "Auto approvals: active (workspace)") {
 		t.Fatalf("diagnostics = %#v, want auto-approval visibility", diagnostics)
 	}
 }
@@ -332,7 +332,7 @@ func TestRuntimeAutonomyLeasedCommandCreatesBoundedOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigureAutonomy() err = %v", err)
 	}
-	if !strings.Contains(text, "Autonomy override enabled") || !strings.Contains(text, "Mode: Leased") || !strings.Contains(text, "Scope: workspace prompts") {
+	if !strings.Contains(text, "Auto policy override") || !strings.Contains(text, "Mode: Leased") || !strings.Contains(text, "Scope: workspace prompts") {
 		t.Fatalf("ConfigureAutonomy() text = %q, want leased workspace override", text)
 	}
 	snapshot, err := rt.ChatAutonomyStatusSnapshot(99130, 1001)
@@ -366,7 +366,7 @@ func TestRuntimeAutonomyOffRevokesBoundedOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigureAutonomy(off) err = %v", err)
 	}
-	if !strings.Contains(text, "Autonomy") || !strings.Contains(text, "Status: off") || !strings.Contains(text, "Cleared") {
+	if !strings.Contains(text, "Auto policy") || !strings.Contains(text, "Status: off") || !strings.Contains(text, "Cleared") {
 		t.Fatalf("ConfigureAutonomy(off) text = %q, want cleared override", text)
 	}
 	snapshot, err := rt.ChatAutonomyStatusSnapshot(99131, 1001)

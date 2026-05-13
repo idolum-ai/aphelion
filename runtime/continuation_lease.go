@@ -27,7 +27,7 @@ func continuationExecutionPayload(state session.ContinuationState) map[string]an
 			state.DecisionID,
 			"runtime.continuation",
 			"runtime/continuation.go",
-			"inspect /debug for continuation state and TES events",
+			"inspect /health trace for continuation state and TES events",
 		),
 	}
 	proposal := session.NormalizeActionProposal(state.ActionProposal)

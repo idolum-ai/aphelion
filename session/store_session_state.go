@@ -195,7 +195,7 @@ func (s *SQLiteStore) LatestDoctorReport(key SessionKey) (DoctorReportRecord, bo
 			ON u.session_id = a.session_id
 			AND u.turn_index = a.turn_index
 			AND u.role = 'user'
-			AND u.content = '/doctor'
+			AND u.content = '/health diagnose'
 		WHERE a.session_id = ?
 			AND a.role = 'assistant'
 			AND a.compacted = 0

@@ -27,10 +27,10 @@ func (r *Runtime) ChatAutonomyStatusSnapshot(chatID int64, adminUserID int64) (c
 
 func (r *Runtime) ConfigureAutonomy(ctx context.Context, chatID int64, adminUserID int64, args string) (string, error) {
 	if r == nil || r.store == nil {
-		return "Autonomy controls are unavailable.", nil
+		return "Auto policy is unavailable.", nil
 	}
 	if !r.IsTelegramAdmin(adminUserID) {
-		return "Autonomy controls are admin only.", nil
+		return "Auto policy is admin only.", nil
 	}
 	action, spec, err := parseOperatorAutonomyCommand(args)
 	if err != nil {
@@ -221,23 +221,23 @@ func parseOperatorAutonomyCommand(raw string) (string, operatorAutonomyCommandSp
 			return "", operatorAutonomyCommandSpec{}, err
 		}
 		if action != "enable" {
-			return "", operatorAutonomyCommandSpec{}, fmt.Errorf("usage: /autonomy leased <duration> [all|workspace|deploy] [uses=N] [reason]")
+			return "", operatorAutonomyCommandSpec{}, fmt.Errorf("usage: /auto policy leased <duration> [all|workspace|deploy] [uses=N] [reason]")
 		}
 		return "leased", operatorAutonomyCommandSpec{Mode: "leased", AutoApproval: spec}, nil
 	case "mission":
 		return "mission", operatorAutonomyCommandSpec{Mode: "mission"}, nil
 	default:
-		return "", operatorAutonomyCommandSpec{}, fmt.Errorf("usage: /autonomy [status|off|leased <duration> [all|workspace|deploy] [uses=N] [reason]]")
+		return "", operatorAutonomyCommandSpec{}, fmt.Errorf("usage: /auto policy [status|off|leased <duration> [all|workspace|deploy] [uses=N] [reason]]")
 	}
 }
 
 func renderAutonomyCommandStatus(snapshot core.AutonomyStatusSnapshot) string {
 	if strings.TrimSpace(snapshot.ActiveOverrideMode) == "" {
 		return renderRuntimeCompactPanel(face.OperatorPanel{
-			Title: "Autonomy",
+			Title: "Auto policy",
 			State: "no live override",
 			Why:   "The configured default and ceiling control whether approval cycling can be leased.",
-			Next:  "Use /autonomy leased <duration> <scope> to create a bounded override if config allows it.",
+			Next:  "Use /auto policy leased <duration> <scope> to create a bounded override if config allows it.",
 			Details: []string{
 				"Default: " + autonomyModeRuntimeLabel(snapshot.DefaultMode) + ".",
 				"Ceiling: " + autonomyModeRuntimeLabel(snapshot.Ceiling) + ".",
@@ -259,10 +259,10 @@ func renderAutonomyCommandStatus(snapshot core.AutonomyStatusSnapshot) string {
 		details = append(details, fmt.Sprintf("Used: %d.", snapshot.ActiveOverrideUsed))
 	}
 	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title:   "Autonomy override enabled",
+		Title:   "Auto policy override",
 		State:   "live override active",
 		Why:     "Eligible approval prompts may use the active leased override.",
-		Next:    "Use /autonomy off to revoke it.",
+		Next:    "Use /auto policy off to revoke it.",
 		Details: details,
 	})
 }
@@ -278,10 +278,10 @@ func renderOperatorAutonomyEnabled(lease session.OperatorAutoApprovalLease, now 
 		details = append(details, fmt.Sprintf("Use budget: %d approval(s).", lease.MaxUses))
 	}
 	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title:   "Autonomy override enabled",
+		Title:   "Auto policy override",
 		State:   "leased override enabled",
 		Why:     "Eligible approval prompts may use this bounded override until it expires or is spent.",
-		Next:    "Use /autonomy off to revoke it.",
+		Next:    "Use /auto policy off to revoke it.",
 		Details: details,
 	})
 }
@@ -289,10 +289,10 @@ func renderOperatorAutonomyEnabled(lease session.OperatorAutoApprovalLease, now 
 func renderOperatorAutonomyRevoked(leases []session.OperatorAutoApprovalLease, now time.Time) string {
 	if len(leases) == 0 {
 		return renderRuntimeCompactPanel(face.OperatorPanel{
-			Title: "Autonomy",
+			Title: "Auto policy",
 			State: "off",
 			Why:   "No live autonomy override is active for this chat.",
-			Next:  "Use /autonomy leased <duration> <scope> if a bounded override is needed.",
+			Next:  "Use /auto policy leased <duration> <scope> if a bounded override is needed.",
 			Details: []string{
 				"Already off for this chat.",
 			},
@@ -301,10 +301,10 @@ func renderOperatorAutonomyRevoked(leases []session.OperatorAutoApprovalLease, n
 	active := operatorAutoApprovalActiveLeases(leases, now)
 	if len(active) > 0 {
 		return renderRuntimeCompactPanel(face.OperatorPanel{
-			Title: "Autonomy",
+			Title: "Auto policy",
 			State: "off",
 			Why:   "No live autonomy override is active for this chat.",
-			Next:  "Use /autonomy leased <duration> <scope> if a bounded override is needed.",
+			Next:  "Use /auto policy leased <duration> <scope> if a bounded override is needed.",
 			Details: []string{
 				"Cleared active override: " + operatorAutoApprovalGrantSummary(active) + ".",
 			},
@@ -312,10 +312,10 @@ func renderOperatorAutonomyRevoked(leases []session.OperatorAutoApprovalLease, n
 		})
 	}
 	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title: "Autonomy",
+		Title: "Auto policy",
 		State: "off",
 		Why:   "No live autonomy override is active for this chat.",
-		Next:  "Use /autonomy leased <duration> <scope> if a bounded override is needed.",
+		Next:  "Use /auto policy leased <duration> <scope> if a bounded override is needed.",
 		Details: []string{
 			"Cleared old " + operatorAutoApprovalGrantNoun(leases) + operatorAutoApprovalClearedOldGrantDetail(leases) + ".",
 		},

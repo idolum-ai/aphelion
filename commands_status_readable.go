@@ -147,20 +147,20 @@ func statusViewNext(view statusView, rawText string) string {
 	switch view {
 	case statusViewSystem:
 		if pending, ok := parseStatusSummaryIntToken(rawText, "pending_items"); ok && pending > 0 {
-			return "open pending items or run /doctor for repair guidance"
+			return "open pending items or run /health diagnose for repair guidance"
 		}
-		return "use /debug for raw execution evidence or /doctor for a read-only diagnosis"
+		return "use /health trace for raw execution evidence or /health diagnose for a read-only diagnosis"
 	case statusViewHotChats:
-		return "select Find Chat to inspect one chat, or open /debug for raw evidence"
+		return "select Find Chat to inspect one chat, or open /health trace for raw evidence"
 	case statusViewFindChat:
 		return "choose a chat button to inspect that chat's status"
 	case statusViewDurables:
 		if degraded, ok := parseStatusSummaryIntToken(rawText, "degraded"); ok && degraded > 0 {
-			return "inspect the degraded child with durable-agent health or run /doctor"
+			return "inspect the degraded child with durable-agent health or run /health diagnose"
 		}
 		return "refresh after child wake, policy, grant, or Tailnet changes"
 	default:
-		return "use /debug for raw execution evidence or /doctor for a read-only diagnosis"
+		return "use /health trace for raw execution evidence or /health diagnose for a read-only diagnosis"
 	}
 }
 
@@ -279,7 +279,7 @@ func renderReadableGenericStatusLines(rawText string) []string {
 func statusDetailsHint(view statusView) string {
 	switch view {
 	case statusViewChat, statusViewPending, statusViewChatTarget, statusViewSystem, statusViewHotChats, statusViewDurables:
-		return "Use /debug for the full execution trace and source attribution."
+		return "Use /health trace for the full execution trace and source attribution."
 	default:
 		return ""
 	}

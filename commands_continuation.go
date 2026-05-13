@@ -14,7 +14,7 @@ import (
 
 const continuationCallbackPrefix = core.ContinuationCallbackPrefix
 const staleContinuationCallbackText = "This continuation prompt is no longer active. Use the newest prompt."
-const continuationCallbackFailureText = "Continuation action failed. Check /doctor for details."
+const continuationCallbackFailureText = "Continuation action failed. Check /health diagnose for details."
 
 const (
 	continuationActionApproveLease = "approve_lease"

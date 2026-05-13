@@ -65,7 +65,7 @@ func (r *Runtime) StatusDiagnostics(chatID int64) ([]string, error) {
 		}
 	}
 	if auto := chatSnapshot.AutoApproval; auto != nil && auto.Active {
-		line := "Auto-approval: active"
+		line := "Auto approvals: active"
 		if scope := strings.TrimSpace(auto.Scope); scope != "" {
 			line += " (" + scope + ")"
 		}

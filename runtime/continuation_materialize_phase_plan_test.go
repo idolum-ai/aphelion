@@ -156,7 +156,7 @@ func TestMaterializePhasePlanIgnoresStaleInProgressWhenCurrentPhaseIsPending(t *
 					Summary:        "Polish doctor and status projections",
 					Status:         session.PlanStatusPending,
 					AuthorityClass: "workspace_write",
-					BoundedEffect:  "Patch local status/doctor code and tests only.",
+					BoundedEffect:  "Patch local status/health code and tests only.",
 					AllowedActions: []string{"edit_files", "run_tests"},
 				},
 			},

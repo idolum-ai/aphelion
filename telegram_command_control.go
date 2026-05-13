@@ -328,9 +328,16 @@ func (c telegramCommandControl) RecordTelegramCallbackError(chatID int64, callba
 
 func (c telegramCommandControl) ConfigureAutoApproval(ctx context.Context, chatID int64, senderID int64, args string) (string, error) {
 	if c.rt == nil {
-		return "Auto-approval is unavailable.", nil
+		return "Auto approvals are unavailable.", nil
 	}
 	return c.rt.ConfigureAutoApproval(ctx, chatID, senderID, args)
+}
+
+func (c telegramCommandControl) AutoApprovalStatus(ctx context.Context, chatID int64, senderID int64) (string, error) {
+	if c.rt == nil {
+		return "Auto approvals are unavailable.", nil
+	}
+	return c.rt.AutoApprovalStatus(ctx, chatID, senderID)
 }
 
 func (c telegramCommandControl) RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error) {

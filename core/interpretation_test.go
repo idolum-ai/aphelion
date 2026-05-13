@@ -32,16 +32,16 @@ func TestNormalizeInterpretationClaimDefaultsSchemaAndDedupesLists(t *testing.T)
 }
 
 func TestDebugBreadcrumbLinesAreStableAndCompact(t *testing.T) {
-	crumb := ContinuationDebugBreadcrumb(6313146, "aprop-example", "runtime.renderApproval", "runtime/continuation.go", "open /debug for canonical state")
+	crumb := ContinuationDebugBreadcrumb(6313146, "aprop-example", "runtime.renderApproval", "runtime/continuation.go", "open /health trace for canonical state")
 	lines := DebugBreadcrumbLines(crumb)
 	joined := strings.Join(lines, "\n")
 	for _, want := range []string{
 		"trace_id: continuation:6313146:aprop-example",
 		"canonical_record: continuation_state chat_id=6313146 decision_id=aprop-example",
 		"projection: runtime.renderApproval",
-		"inspect_command: /debug 6313146",
+		"inspect_command: /health trace 6313146",
 		"code_owner: runtime/continuation.go",
-		"next_repair_action: open /debug for canonical state",
+		"next_repair_action: open /health trace for canonical state",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("breadcrumb lines = %#v, want %q", lines, want)

@@ -33,7 +33,7 @@ func TestHumanizeTelegramTelemetryText(t *testing.T) {
 		"Summary: State: idle Active Turns: 0 Queue Depth: 0 Pending Items: 0",
 		"Plan Updated:",
 		"Active: true",
-		"Debug Chat:",
+		"Trace Chat:",
 		"Latest Turn: ID: 744 Status: completed Kind: interactive Last Activity: 2026-04-19T22:01:16Z",
 		"Durable Agents:",
 		"Count: 1",

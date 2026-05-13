@@ -20,7 +20,7 @@ It does not prove that every possible future turn is safe.
 ## Thesis
 
 Aphelion is already protocol-heavy: leases, grants, sandbox profiles, TES,
-doctor/status projections, and operator controls are typed. The model should not
+diagnosis/status projections, and operator controls are typed. The model should not
 be reduced to a passive tool-shaped wrapper around that protocol. Its useful
 role is to interpret situation, hold continuity, notice weak signals, propose
 bounded action, and present a coherent self to the operator.

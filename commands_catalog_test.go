@@ -22,13 +22,13 @@ func TestParseTelegramCommand(t *testing.T) {
 		{text: "/status@my_bot", want: "status", ok: true},
 		{text: "/restart", want: "restart", ok: true},
 		{text: "/reinstall", want: "reinstall", ok: true},
-		{text: "/debug", want: "debug", ok: true},
-		{text: "/doctor", want: "doctor", ok: true},
+		{text: "/health", want: "health", ok: true},
 		{text: "/tailnet", want: "tailnet", ok: true},
 		{text: "/agents", want: "agents", ok: true},
 		{text: "/memory", want: "memory", ok: true},
 		{text: "/mission", want: "mission", ok: true},
 		{text: "/model status", want: "model", ok: true},
+		{text: "/auto policy", want: "auto", ok: true},
 		{text: "/set_persona_model", want: "set_persona_model", ok: true},
 		{text: "/set_governor_effort", want: "set_governor_effort", ok: true},
 		{text: "/stop\n\nReply context:\nidolum: Please confirm.", want: "stop", ok: true},
@@ -118,33 +118,34 @@ func TestDefaultTelegramCommandsIncludeAgents(t *testing.T) {
 	}
 }
 
-func TestDefaultTelegramCommandsIncludeDebug(t *testing.T) {
+func TestDefaultTelegramCommandsIncludeHealth(t *testing.T) {
 	t.Parallel()
 
 	found := false
 	for _, cmd := range defaultTelegramCommands {
-		if cmd.Command == "debug" {
+		if cmd.Command == "health" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("defaultTelegramCommands = %#v, want /debug command entry", defaultTelegramCommands)
+		t.Fatalf("defaultTelegramCommands = %#v, want /health command entry", defaultTelegramCommands)
 	}
 }
 
-func TestDefaultTelegramCommandsIncludeDoctor(t *testing.T) {
+func TestDefaultTelegramCommandsDoNotPublishRetiredCommands(t *testing.T) {
 	t.Parallel()
 
-	found := false
-	for _, cmd := range defaultTelegramCommands {
-		if cmd.Command == "doctor" {
-			found = true
-			break
-		}
+	retired := map[string]bool{
+		"debug":       true,
+		"doctor":      true,
+		"autonomy":    true,
+		"autoapprove": true,
 	}
-	if !found {
-		t.Fatalf("defaultTelegramCommands = %#v, want /doctor command entry", defaultTelegramCommands)
+	for _, cmd := range defaultTelegramCommands {
+		if retired[cmd.Command] {
+			t.Fatalf("defaultTelegramCommands = %#v, want no retired command %q", defaultTelegramCommands, cmd.Command)
+		}
 	}
 }
 
@@ -178,32 +179,17 @@ func TestDefaultTelegramCommandsIncludeTailnet(t *testing.T) {
 	}
 }
 
-func TestDefaultTelegramCommandsIncludeAutoApprove(t *testing.T) {
+func TestDefaultTelegramCommandsIncludeAuto(t *testing.T) {
 	t.Parallel()
 
 	found := false
 	for _, cmd := range defaultTelegramCommands {
-		if cmd.Command == "autoapprove" {
+		if cmd.Command == "auto" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("defaultTelegramCommands = %#v, want /autoapprove command entry", defaultTelegramCommands)
-	}
-}
-
-func TestDefaultTelegramCommandsIncludeAutonomy(t *testing.T) {
-	t.Parallel()
-
-	found := false
-	for _, cmd := range defaultTelegramCommands {
-		if cmd.Command == "autonomy" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("defaultTelegramCommands = %#v, want /autonomy command entry", defaultTelegramCommands)
+		t.Fatalf("defaultTelegramCommands = %#v, want /auto command entry", defaultTelegramCommands)
 	}
 }

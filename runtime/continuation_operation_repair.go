@@ -270,7 +270,7 @@ func (r *Runtime) recordAndSendBlockedOperationPhaseApproval(ctx context.Context
 			strings.TrimSpace(phase.ID),
 			"runtime.renderOperationPhaseApprovalBlockedStatus",
 			"runtime/continuation_materialize.go",
-			"inspect /debug for phase plan, continuation state, and TES adjudication events",
+			"inspect /health trace for phase plan, continuation state, and TES adjudication events",
 		),
 		"findings": []core.RuntimeFinding{{
 			Kind:             "approval_blocked",
@@ -291,7 +291,7 @@ func (r *Runtime) recordAndSendBlockedOperationPhaseApproval(ctx context.Context
 			strings.TrimSpace(phase.ID),
 			"runtime.renderOperationPhaseApprovalBlockedStatus",
 			"runtime/continuation_materialize.go",
-			"inspect /debug for phase plan, continuation state, and TES blocked events",
+			"inspect /health trace for phase plan, continuation state, and TES blocked events",
 		),
 	}, now)
 	if r.outbound == nil || msg.ChatID == 0 {

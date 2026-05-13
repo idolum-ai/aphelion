@@ -10,9 +10,10 @@ import (
 var telemetryLabelOverrides = map[string]string{
 	"quick_read":        "Quick Read",
 	"status_scope":      "Status Scope",
-	"debug_scope":       "Debug Scope",
-	"debug_chat":        "Debug Chat",
-	"debug_system":      "Debug System",
+	"debug_scope":       "Trace Scope",
+	"debug_chat":        "Trace Chat",
+	"debug_system":      "Trace System",
+	"trace_scope":       "Trace Scope",
 	"summary":           "Summary",
 	"current":           "Current",
 	"details":           "Details",

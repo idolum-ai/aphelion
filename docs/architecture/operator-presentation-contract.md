@@ -13,8 +13,8 @@ This is a presentation rule, not an authority rule. Text and buttons render type
 ledger state; they do not grant authority. Grants, leases, consent, continuation
 state, child policy, Tailnet registry state, and TES remain the source of truth.
 
-Dense records are still allowed when clearly labeled as debug or evidence:
-`/debug`, logs, machine-readable Tailnet/status mirrors, forensic records, and
+Dense records are still allowed when clearly labeled as trace or evidence:
+`/health trace`, logs, machine-readable Tailnet/status mirrors, forensic records, and
 explicit evidence sections may expose raw identifiers or enum-heavy state.
 
 `/status` and default CLI commands should render operator panels by default.

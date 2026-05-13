@@ -19,7 +19,7 @@ func renderModelSlotStatuses(statuses []core.ModelSlotStatus) string {
 			Title: "Models",
 			State: "unavailable",
 			Why:   "No model slot status was returned by the runtime.",
-			Next:  "Run /doctor or check config if this persists.",
+			Next:  "Run /health diagnose or check config if this persists.",
 		}, false)
 	}
 	details := make([]string, 0, len(statuses))

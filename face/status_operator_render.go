@@ -16,7 +16,7 @@ func RenderTelegramStatusChatOperatorCard(snapshot core.ChatStatusSnapshot, pers
 		lines = append(lines, renderOperatorAttentionLines(snapshot, true)...)
 		lines = append(lines, renderOperatorBacklogLines(snapshot, true)...)
 		lines = append(lines, renderOperatorRuntimeLine(personaEffort, governorEffort))
-		lines = append(lines, "details: /debug has the full execution trace and source attribution.")
+		lines = append(lines, "details: /health trace has the full execution trace and source attribution.")
 		return strings.Join(compactStatusLines(lines), "\n")
 	}
 
@@ -44,7 +44,7 @@ func RenderTelegramStatusChatOperatorCard(snapshot core.ChatStatusSnapshot, pers
 	lines = append(lines, operatorQueueLine(snapshot))
 	lines = append(lines, renderOperatorBacklogLines(snapshot, false)...)
 	lines = append(lines, renderOperatorRuntimeLine(personaEffort, governorEffort))
-	lines = append(lines, "details: /debug has the full execution trace and source attribution.")
+	lines = append(lines, "details: /health trace has the full execution trace and source attribution.")
 	return strings.Join(compactStatusLines(lines), "\n")
 }
 
@@ -361,5 +361,5 @@ func operatorAuthorityLine(snapshot core.AuthorityStatusSnapshot) string {
 	if strings.TrimSpace(snapshot.Status) == "healthy" && snapshot.FindingCount == 0 {
 		return "authority: healthy"
 	}
-	return fmt.Sprintf("authority: needs attention (%d finding(s), %d error(s)); /debug has source and repair details.", snapshot.FindingCount, snapshot.ErrorCount)
+	return fmt.Sprintf("authority: needs attention (%d finding(s), %d error(s)); /health trace has source and repair details.", snapshot.FindingCount, snapshot.ErrorCount)
 }

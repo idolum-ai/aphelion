@@ -11,14 +11,6 @@ import (
 	"github.com/idolum-ai/aphelion/face"
 )
 
-const debugCallbackPrefix = "debug:"
-
-type debugView string
-
-const (
-	debugViewMore debugView = "more"
-)
-
 func renderDebugSnapshot(ctx context.Context, router commandRouter, chatID int64, senderID int64, personaEffort string, governorEffort string) (string, string, error) {
 	chat, err := router.StatusChat(chatID)
 	if err != nil {
@@ -42,7 +34,7 @@ func renderDebugSnapshot(ctx context.Context, router commandRouter, chatID int64
 	}
 	full := face.RenderTelegramDebug(chat, system, durables, personaEffort, governorEffort)
 	full = strings.TrimSpace(full)
-	summary := strings.TrimSpace(router.StatusReadableSummary(ctx, "debug", full))
+	summary := strings.TrimSpace(router.StatusReadableSummary(ctx, "trace", full))
 	summary = groundDebugReadableSummary(summary, chat, system)
 	if summary == "" {
 		summary = composeDebugReadableSummary(chat, system)
@@ -147,36 +139,13 @@ func debugLatestTurnTool(chat core.ChatStatusSnapshot) string {
 	return strings.TrimSpace(chat.LatestTurnRun.LastToolName)
 }
 
-func encodeDebugCallbackData(view debugView) string {
-	switch view {
-	case debugViewMore:
-		return debugCallbackPrefix + "more"
-	default:
-		return debugCallbackPrefix + "more"
-	}
-}
-
-func decodeDebugCallbackData(data string) (debugView, bool) {
-	trimmed := strings.TrimSpace(data)
-	if !strings.HasPrefix(trimmed, debugCallbackPrefix) {
-		return "", false
-	}
-	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, debugCallbackPrefix))
-	switch payload {
-	case "more":
-		return debugViewMore, true
-	default:
-		return "", false
-	}
-}
-
 func deliverDebugCallbackView(ctx context.Context, sender commandCallbackSender, chatID int64, messageID int64, text string) error {
 	if sender == nil {
 		return nil
 	}
 	chunks := splitStatusTextChunks(text, statusMessageChunkLimit)
 	if len(chunks) == 0 {
-		chunks = []string{humanizeTelegramTelemetryText("debug_scope=chat\nsummary unavailable")}
+		chunks = []string{humanizeTelegramTelemetryText("trace_scope=chat\nsummary unavailable")}
 	}
 	first := chunks[0]
 	if messageID != 0 {

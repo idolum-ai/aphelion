@@ -42,7 +42,7 @@ func TestRenderTelegramAutonomyStatusUsesNaturalLabels(t *testing.T) {
 		AuthorityBehavior:   "existing proposal and approval flows",
 	})
 	for _, want := range []string{
-		"Autonomy policy",
+		"Auto policy",
 		"Default: Ask first",
 		"Ceiling: Leased",
 		"Live changes: enabled",
@@ -208,7 +208,7 @@ func TestRenderRestartAwakeFormatsOperatorCard(t *testing.T) {
 		"pending_handoffs",
 		"mission_control:",
 		"memory:",
-		"use /status or /debug",
+		"use /status or /health trace",
 	} {
 		if strings.Contains(out, raw) {
 			t.Fatalf("RenderRestartAwake() = %q, want no raw field %q", out, raw)

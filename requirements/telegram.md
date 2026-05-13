@@ -313,7 +313,8 @@ At minimum for current implementation:
 - `/start`
 - `/help`
 - `/status`
-- `/debug`
+- `/health`
+- `/auto`
 - `/stop`
 - `/detach`
 - `/restart`
@@ -386,13 +387,13 @@ At minimum, status snapshots should surface:
 - stale running turn indicators
 - stale-turn watchdog/restart health indicator
 
-### `/debug`
+### `/health trace`
 
-`/debug` should stay command-routed (not a callback-only status subview) and bypass ordinary governor turns the same way `/status` does.
+`/health trace` should stay command-routed (not a callback-only status subview) and bypass ordinary governor turns the same way `/status` does.
 
-`/debug` is a diagnostic surface for when `/status` is too compressed:
+`/health trace` is a diagnostic surface for when `/status` is too compressed:
 
-- include chat status plus `Debug Chat:` details:
+- include chat status plus `Trace Chat:` details:
   - latest turn request text
   - last tool preview/result/error
   - decoded exec command when preview includes `{"command": ...}`
@@ -402,7 +403,7 @@ At minimum, status snapshots should surface:
 Admin callers should additionally receive:
 
 - full system status block
-- `Debug System:` details (pending-kind counters + latest turn rollups by chat)
+- `Trace System:` details (pending-kind counters + latest turn rollups by chat)
 - full durables status block
 
 ### Natural language durable external-channel bootstrap
@@ -828,7 +829,7 @@ By default, the live progress message should show semantic phases such as:
 - `Updating config`
 - `Restarting service`
 
-It should not dump raw `exec` payloads or long shell commands into the chat unless the operator explicitly enables a raw/debug mode.
+It should not dump raw `exec` payloads or long shell commands into the chat unless the operator explicitly enables a raw trace mode.
 
 The intended hierarchy is:
 

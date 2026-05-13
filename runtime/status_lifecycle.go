@@ -119,9 +119,9 @@ func pendingItemDebugBreadcrumb(item core.PendingItem) core.DebugBreadcrumb {
 	if item.SourceClass != "" {
 		canonical = strings.TrimSpace(item.SourceClass) + ":" + canonical
 	}
-	inspect := "/debug"
+	inspect := "/health trace"
 	if item.ChatID != 0 {
-		inspect = "/debug " + strconv.FormatInt(item.ChatID, 10)
+		inspect = "/health trace " + strconv.FormatInt(item.ChatID, 10)
 	}
 	return core.NormalizeDebugBreadcrumb(core.DebugBreadcrumb{
 		TraceID:          traceID,

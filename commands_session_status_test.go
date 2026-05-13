@@ -582,7 +582,7 @@ func TestHandleTelegramCommandStatusUsesReadableCardInsteadOfRawDump(t *testing.
 		"Status: blocked",
 		"Why: Waiting for admin review",
 		"Now: Await admin approval",
-		"Details: /debug has the full execution trace and source attribution.",
+		"Details: /health trace has the full execution trace and source attribution.",
 	} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("status text = %q, want readable substring %q", text, needle)

@@ -23,7 +23,7 @@ These invariants are normative for architecture and requirements alignment:
 - A surface claim must map to exactly one truth class for the specific question
   being answered.
 - Removed surfaces should be deleted or rejected, not remain as live inputs.
-- Operator projections (`/status`, `/debug`, quick-read) must preserve source
+- Operator projections (`/status`, `/health trace`, quick-read) must preserve source
   attribution for canonical and operational data they render.
 
 ## Normative Map

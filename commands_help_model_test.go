@@ -70,8 +70,8 @@ func TestHandleTelegramCommandHelpShowsAdminRestartForAdmin(t *testing.T) {
 	if !strings.Contains(sender.inline[0].text, "/restart - ") {
 		t.Fatalf("help text = %q, want admin /restart command listed", sender.inline[0].text)
 	}
-	if !strings.Contains(sender.inline[0].text, "/debug - ") {
-		t.Fatalf("help text = %q, want /debug command listed", sender.inline[0].text)
+	if !strings.Contains(sender.inline[0].text, "/health - ") {
+		t.Fatalf("help text = %q, want /health command listed", sender.inline[0].text)
 	}
 	if len(sender.inline[0].rows) == 0 {
 		t.Fatalf("help rows empty, want command buttons")
@@ -104,8 +104,8 @@ func TestHandleTelegramCommandStartHidesAdminRestartForNonAdmin(t *testing.T) {
 	if strings.Contains(sender.inline[0].text, "/restart - ") {
 		t.Fatalf("start text = %q, want admin-only /restart hidden for non-admins", sender.inline[0].text)
 	}
-	if !strings.Contains(sender.inline[0].text, "/debug - ") {
-		t.Fatalf("start text = %q, want /debug command listed", sender.inline[0].text)
+	if !strings.Contains(sender.inline[0].text, "/health - ") {
+		t.Fatalf("start text = %q, want /health command listed", sender.inline[0].text)
 	}
 	if len(sender.inline[0].rows) == 0 {
 		t.Fatalf("start rows empty, want command buttons")

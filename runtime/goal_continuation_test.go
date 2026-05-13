@@ -142,7 +142,7 @@ func TestGoalContinuationDoesNotInferForNarrowCompletedTask(t *testing.T) {
 	key := session.SessionKey{ChatID: 9042, UserID: 0, Scope: telegramDMScopeRef(9042)}
 	if err := store.UpdateOperationState(key, session.OperationState{
 		ID:        "doctor-status-answer",
-		Objective: "Answer whether /doctor is broken.",
+		Objective: "Answer whether /health diagnose is broken.",
 		Status:    session.OperationStatusCompleted,
 		Stage:     "answer_complete",
 		Summary:   "Answered the narrow status question.",
