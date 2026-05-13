@@ -61,13 +61,13 @@ func renderDurableAgentsCommand(agents []core.DurableAgentStatusSnapshot) (strin
 		rows = append(rows, []telegram.InlineButton{
 			{Text: "Refresh", CallbackData: encodeDurableAgentsRefreshCallbackData()},
 		})
-		return face.RenderOperatorPanel(face.OperatorPanel{
+		return renderTelegramCompactPanel(face.OperatorPanel{
 			Title:   "Durable Agents",
 			State:   "none configured",
 			Why:     "Durable children only appear here after they are declared in governed configuration or state.",
 			Next:    "Refresh after adding a child, or use the durable wizard from a normal admin request.",
 			Details: details,
-		}), rows
+		}, false), rows
 	}
 	for _, agent := range agents {
 		agentID := strings.TrimSpace(agent.AgentID)
@@ -102,14 +102,14 @@ func renderDurableAgentsCommand(agents []core.DurableAgentStatusSnapshot) (strin
 	rows = append(rows, []telegram.InlineButton{
 		{Text: "Refresh", CallbackData: encodeDurableAgentsRefreshCallbackData()},
 	})
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderTelegramCompactPanel(face.OperatorPanel{
 		Title:    "Durable Agents",
 		State:    fmt.Sprintf("%d configured", len(agents)),
 		Why:      "Each child keeps its own bounded state and can only act through declared grants and policy.",
 		Next:     "Tap Chat for a bounded parent-child check-in, or refresh after policy changes.",
 		Details:  details,
 		Evidence: evidence,
-	}), rows
+	}, false), rows
 }
 
 func handleDurableAgentsCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, action durableAgentsCallbackAction, agentID string) (bool, error) {

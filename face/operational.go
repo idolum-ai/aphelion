@@ -107,7 +107,7 @@ func RenderTelegramAutonomyStatus(snapshot core.AutonomyStatusSnapshot) string {
 	if behavior == "" {
 		behavior = "existing proposal and approval flows"
 	}
-	return RenderOperatorPanel(OperatorPanel{
+	return RenderCompactOperatorPanel(OperatorPanel{
 		Title: "Autonomy policy",
 		State: "default " + autonomyModeLabel(snapshot.DefaultMode) + ", ceiling " + autonomyModeLabel(snapshot.Ceiling),
 		Why:   behavior + ". This report does not grant new authority by itself.",
@@ -120,7 +120,7 @@ func RenderTelegramAutonomyStatus(snapshot core.AutonomyStatusSnapshot) string {
 			"Active override: " + activeOverride,
 			"Authority behavior: " + behavior + ".",
 		},
-	})
+	}, OperatorPanelCompactOptions{DetailLimit: 6, EvidenceLimit: 0})
 }
 
 func autonomyModeLabel(mode string) string {

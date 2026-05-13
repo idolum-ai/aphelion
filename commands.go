@@ -68,6 +68,11 @@ type commandRouter interface {
 	StartDurableAgentConversation(ctx context.Context, chatID int64, senderID int64, agentID string) (string, error)
 	MemoryReviewSnapshot(ctx context.Context, chatID int64, senderID int64, source memoryReviewSource) (memoryReviewSnapshot, error)
 	MissionCommand(ctx context.Context, chatID int64, senderID int64, args string) (string, error)
+	MissionHome(ctx context.Context, chatID int64, senderID int64) ([]session.MissionState, session.WorkingObjective, bool, error)
+	MissionDetails(ctx context.Context, chatID int64, senderID int64, missionID string) (session.MissionState, []session.MissionEvent, error)
+	SetMissionPinned(ctx context.Context, chatID int64, senderID int64, missionID string, pinned bool) (session.MissionState, error)
+	UpdateMissionStatus(ctx context.Context, chatID int64, senderID int64, missionID string, status session.MissionStatus) (session.MissionState, error)
+	MissionLedgerHealth(ctx context.Context, senderID int64) (session.MissionLedgerHealth, error)
 	MissionActionProposal(ctx context.Context, chatID int64, senderID int64, missionID string) (session.ActionProposal, error)
 	ApplyMissionActionProposalDecision(ctx context.Context, chatID int64, senderID int64, missionID string, choice string) (session.MissionState, bool, error)
 	MemoryFocus(chatID int64) (core.MemoryFocus, bool)
@@ -93,8 +98,16 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 	switch command {
 	case "start":
 		text = face.RenderTelegramStart(personaEffort, governorEffort, isAdmin)
+		if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, text, commandMenuRows(isAdmin), replyToMessageID(msg.MessageID)); err != nil {
+			return true, err
+		}
+		return true, nil
 	case "help":
 		text = face.RenderTelegramHelp(personaEffort, governorEffort, isAdmin)
+		if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, text, commandMenuRows(isAdmin), replyToMessageID(msg.MessageID)); err != nil {
+			return true, err
+		}
+		return true, nil
 	case "status":
 		rendered, rows, renderErr := renderStatusView(ctx, router, msg.ChatID, msg.SenderID, statusViewChat, msg.ChatID, personaEffort, governorEffort)
 		if renderErr != nil {
@@ -221,6 +234,17 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			}
 			return true, nil
 		}
+		if strings.TrimSpace(args) == "" || strings.EqualFold(strings.TrimSpace(args), "list") {
+			missions, working, isAdmin, homeErr := router.MissionHome(ctx, msg.ChatID, msg.SenderID)
+			if homeErr != nil {
+				return true, homeErr
+			}
+			rendered, rows := renderMissionHomePanel(missions, working, isAdmin, false)
+			if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID)); err != nil {
+				return true, err
+			}
+			return true, nil
+		}
 		missionText, err := router.MissionCommand(ctx, msg.ChatID, msg.SenderID, args)
 		if err != nil {
 			return true, err
@@ -248,15 +272,14 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			text = configured
 			break
 		}
-		snapshot, err := router.AutonomyStatus(msg.ChatID, msg.SenderID)
-		if err != nil {
-			return true, err
-		}
-		text = face.RenderTelegramAutonomyStatus(snapshot)
+		return sendAutonomyPanel(ctx, sender, router, msg)
 	case "autoapprove":
 		if !isAdmin {
 			text = "Auto-approval controls are admin only."
 			break
+		}
+		if strings.TrimSpace(telegramCommandArgs(msg.Text)) == "" {
+			return sendAutoApprovalPanel(ctx, sender, router, msg)
 		}
 		configured, err := router.ConfigureAutoApproval(ctx, msg.ChatID, msg.SenderID, telegramCommandArgs(msg.Text))
 		if err != nil {

@@ -15,12 +15,12 @@ import (
 
 func renderModelSlotStatuses(statuses []core.ModelSlotStatus) string {
 	if len(statuses) == 0 {
-		return face.RenderOperatorPanel(face.OperatorPanel{
+		return renderTelegramCompactPanel(face.OperatorPanel{
 			Title: "Models",
 			State: "unavailable",
 			Why:   "No model slot status was returned by the runtime.",
 			Next:  "Run /doctor or check config if this persists.",
-		})
+		}, false)
 	}
 	details := make([]string, 0, len(statuses))
 	evidence := make([]string, 0, len(statuses)*2)
@@ -40,14 +40,14 @@ func renderModelSlotStatuses(statuses []core.ModelSlotStatus) string {
 			evidence = append(evidence, modelSlotTitle(status.Slot)+" warning: "+strings.Join(status.Validation.Warnings, "; "))
 		}
 	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderTelegramCompactPanel(face.OperatorPanel{
 		Title:    "Models",
 		State:    fmt.Sprintf("%d slot(s) configured", len(statuses)),
 		Why:      "Model slots control which backend handles each kind of runtime work.",
 		Next:     "Open a slot button, or use /model set <slot> <provider/model> effort=<low|medium|high|xhigh> ttl=2h.",
 		Details:  details,
 		Evidence: evidence,
-	})
+	}, false)
 }
 
 func renderModelSlotStatusPanel(statuses []core.ModelSlotStatus) (string, [][]telegram.InlineButton) {
@@ -95,14 +95,14 @@ func renderModelSlotDetail(status core.ModelSlotStatus) string {
 	if len(status.Validation.Warnings) > 0 {
 		evidence = append(evidence, "Warning: "+strings.Join(status.Validation.Warnings, "; "))
 	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderTelegramCompactPanel(face.OperatorPanel{
 		Title:    modelSlotTitle(status.Slot),
 		State:    state,
 		Why:      "This slot determines the backend used for its runtime role.",
 		Next:     "Choose a preset or effort, inspect history, rollback, or clear the override.",
 		Details:  details,
 		Evidence: evidence,
-	})
+	}, false)
 }
 
 func renderModelSlotRows(status core.ModelSlotStatus) [][]telegram.InlineButton {
@@ -182,14 +182,14 @@ func renderModelSlotValidation(validation core.ModelValidation) string {
 	if len(validation.Warnings) > 0 {
 		evidence = append(evidence, "Warning: "+strings.Join(validation.Warnings, "; "))
 	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderTelegramCompactPanel(face.OperatorPanel{
 		Title:    "Model validation",
 		State:    state,
 		Why:      "Validation checks whether the selected provider, model, effort, and transport can be used.",
 		Next:     "Use /model set with the same values if the config is valid.",
 		Details:  details,
 		Evidence: evidence,
-	})
+	}, false)
 }
 
 func renderModelSlotChange(prefix string, status core.ModelSlotStatus) string {
@@ -204,23 +204,23 @@ func renderModelSlotChange(prefix string, status core.ModelSlotStatus) string {
 	if status.Validation.ResolvedTransport != "" {
 		evidence = append(evidence, "Transport: "+status.Validation.ResolvedTransport)
 	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderTelegramCompactPanel(face.OperatorPanel{
 		Title:    modelSlotTitle(status.Slot),
 		State:    strings.ToLower(strings.TrimSpace(prefix)),
 		Why:      "The runtime will use this effective model slot until the override expires or changes.",
 		Next:     "Use History to inspect changes, Rollback/Clear when shown, or All Slots to return.",
 		Details:  details,
 		Evidence: evidence,
-	})
+	}, false)
 }
 
 func renderModelSlotHistory(records []session.ModelSlotOverrideRecord) string {
 	if len(records) == 0 {
-		return face.RenderOperatorPanel(face.OperatorPanel{
+		return renderTelegramCompactPanel(face.OperatorPanel{
 			Title: "Model history",
 			State: "empty",
 			Next:  "Set or change a slot to create override history.",
-		})
+		}, false)
 	}
 	details := make([]string, 0, len(records))
 	for _, record := range records {
@@ -230,13 +230,13 @@ func renderModelSlotHistory(records []session.ModelSlotOverrideRecord) string {
 		}
 		details = append(details, line)
 	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderTelegramCompactPanel(face.OperatorPanel{
 		Title:   "Model history",
 		State:   fmt.Sprintf("%d record(s)", len(records)),
 		Why:     "History shows operator changes to model-slot overrides.",
 		Next:    "Return to the slot or all slots after inspection.",
 		Details: details,
-	})
+	}, false)
 }
 
 func renderModelSlotConfig(cfg core.ModelSlotConfig) string {
@@ -260,7 +260,7 @@ func renderModelSlotConfig(cfg core.ModelSlotConfig) string {
 }
 
 func renderModelCommandHelp() string {
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderTelegramCompactPanel(face.OperatorPanel{
 		Title: "Model controls",
 		State: "ready",
 		Why:   "Model slots route runtime roles to configured providers and transports.",
@@ -277,7 +277,7 @@ func renderModelCommandHelp() string {
 			"Slots: persona, governor, doctor, child_default",
 			"Providers: openai, anthropic, openrouter, codex",
 		},
-	})
+	}, false)
 }
 
 func modelSlotTitle(slot string) string {

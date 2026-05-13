@@ -3,6 +3,8 @@
 package main
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -19,22 +21,50 @@ const tailnetCommandSurfaces = "surfaces"
 const tailnetCommandGrants = "grants"
 const tailnetCommandRevoke = "revoke"
 const tailnetRevokeCallbackPrefix = "tailnet_revoke:"
+const tailnetRevokeTokenCallbackPrefix = "tailnet_revoke_v2:"
+const tailnetRevokeCallbackAsk = "ask"
 const tailnetRevokeCallbackConfirm = "confirm"
 const tailnetRevokeCallbackCancel = "cancel"
 
 func renderTailnetCommand(snapshot core.TailnetStatusSnapshot) (string, [][]telegram.InlineButton) {
+	return renderTailnetCommandWithMode(snapshot, false)
+}
+
+func renderTailnetCommandWithMode(snapshot core.TailnetStatusSnapshot, detailed bool) (string, [][]telegram.InlineButton) {
 	status := firstTailnetNonEmpty(snapshot.Status, "unknown")
 	state := status
 	if len(snapshot.Issues) > 0 {
 		state += fmt.Sprintf("; %d issue(s)", len(snapshot.Issues))
 	}
-	details := []string{
-		"Enabled: " + operatorBoolLabel(snapshot.Enabled),
-		"Backend: " + firstTailnetNonEmpty(snapshot.Backend, "-"),
+	details := make([]string, 0, 12)
+	if summary := strings.TrimSpace(snapshot.Summary); summary != "" {
+		details = append(details, truncateOperatorLine(summary, 220))
 	}
 	if node := firstTailnetNonEmpty(snapshot.DNSName, snapshot.HostName); node != "" {
 		details = append(details, "Node: "+node)
 	}
+	privateStatusURL := ""
+	if snapshot.Parent != nil {
+		parent := snapshot.Parent
+		details = append(details, "Parent tsnet: enabled "+operatorBoolLabel(parent.Enabled)+", running "+operatorBoolLabel(parent.Running))
+		if magic := strings.TrimSpace(parent.MagicDNSURL); magic != "" {
+			details = append(details, "Private status URL: "+magic)
+			privateStatusURL = strings.TrimRight(magic, "/") + "/status"
+		}
+		if host := strings.TrimSpace(parent.Hostname); host != "" {
+			details = append(details, "Parent hostname: "+host)
+		}
+		if listen := strings.TrimSpace(parent.ListenAddr); listen != "" {
+			details = append(details, "Parent listen: "+listen)
+		}
+		if errText := strings.TrimSpace(parent.LastError); errText != "" {
+			details = append(details, "Parent error: "+truncateOperatorLine(errText, 220))
+		}
+	}
+	details = append(details,
+		"Enabled: "+operatorBoolLabel(snapshot.Enabled),
+		"Backend: "+firstTailnetNonEmpty(snapshot.Backend, "-"),
+	)
 	if tailnet := strings.TrimSpace(snapshot.TailnetName); tailnet != "" {
 		details = append(details, "Tailnet: "+tailnet)
 	}
@@ -53,30 +83,9 @@ func renderTailnetCommand(snapshot core.TailnetStatusSnapshot) (string, [][]tele
 	if len(snapshot.GrantBindings) > 0 {
 		details = append(details, fmt.Sprintf("Grant bindings: %d registered", len(snapshot.GrantBindings)))
 	}
-	privateStatusURL := ""
-	if snapshot.Parent != nil {
-		parent := snapshot.Parent
-		details = append(details, "Parent tsnet: enabled "+operatorBoolLabel(parent.Enabled)+", running "+operatorBoolLabel(parent.Running))
-		if host := strings.TrimSpace(parent.Hostname); host != "" {
-			details = append(details, "Parent hostname: "+host)
-		}
-		if listen := strings.TrimSpace(parent.ListenAddr); listen != "" {
-			details = append(details, "Parent listen: "+listen)
-		}
-		if magic := strings.TrimSpace(parent.MagicDNSURL); magic != "" {
-			details = append(details, "Private status URL: "+magic)
-			privateStatusURL = strings.TrimRight(magic, "/") + "/status"
-		}
-		if errText := strings.TrimSpace(parent.LastError); errText != "" {
-			details = append(details, "Parent error: "+truncateOperatorLine(errText, 220))
-		}
-	}
 	next := "Refresh status or open the surfaces view."
 	if snapshot.Enabled && privateStatusURL != "" {
 		next = "Open the private status URL or refresh after a Tailnet change."
-	}
-	if summary := strings.TrimSpace(snapshot.Summary); summary != "" {
-		details = append([]string{truncateOperatorLine(summary, 220)}, details...)
 	}
 	evidence := make([]string, 0, 6)
 	if len(snapshot.Issues) == 0 {
@@ -101,14 +110,14 @@ func renderTailnetCommand(snapshot core.TailnetStatusSnapshot) (string, [][]tele
 		row = append(row, telegram.InlineButton{Text: "Open Status", URL: privateStatusURL})
 	}
 	rows := [][]telegram.InlineButton{row}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderTelegramCompactPanel(face.OperatorPanel{
 		Title:    "Tailnet",
 		State:    state,
 		Why:      "Tailnet surfaces are private machine mirrors; operator control stays in Telegram and CLI.",
 		Next:     next,
 		Details:  details,
 		Evidence: evidence,
-	}), rows
+	}, detailed), rows
 }
 
 func encodeTailnetCallbackData(action string) string {
@@ -134,6 +143,10 @@ func decodeTailnetCallbackData(data string) (string, bool) {
 }
 
 func renderTailnetSurfacesCommand(surfaces []core.TailnetSurfaceStatus) (string, [][]telegram.InlineButton) {
+	return renderTailnetSurfacesCommandWithMode(surfaces, false)
+}
+
+func renderTailnetSurfacesCommandWithMode(surfaces []core.TailnetSurfaceStatus, detailed bool) (string, [][]telegram.InlineButton) {
 	state := fmt.Sprintf("%d registered surface(s)", len(surfaces))
 	next := "Refresh after child or Tailnet policy changes."
 	details := make([]string, 0, len(surfaces)*3)
@@ -175,16 +188,22 @@ func renderTailnetSurfacesCommand(surfaces []core.TailnetSurfaceStatus) (string,
 		{Text: "Refresh", CallbackData: encodeTailnetCallbackData(tailnetCallbackSurfaces)},
 		{Text: "Grants", CallbackData: encodeTailnetCallbackData(tailnetCallbackGrants)},
 	}}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	revokeRows := tailnetSurfaceRevokeRows(surfaces)
+	rows = append(rows, revokeRows...)
+	return renderTelegramCompactPanel(face.OperatorPanel{
 		Title:   "Tailnet Surfaces",
 		State:   state,
 		Why:     "Registered surfaces are private mirrors of approved child or parent grants.",
 		Next:    next,
 		Details: details,
-	}), rows
+	}, detailed), rows
 }
 
 func renderTailnetGrantBindingsCommand(bindings []core.TailnetGrantBindingStatus) (string, [][]telegram.InlineButton) {
+	return renderTailnetGrantBindingsCommandWithMode(bindings, false)
+}
+
+func renderTailnetGrantBindingsCommandWithMode(bindings []core.TailnetGrantBindingStatus, detailed bool) (string, [][]telegram.InlineButton) {
 	state := fmt.Sprintf("%d grant binding(s)", len(bindings))
 	next := "Apply, drift, or rollback Tailnet grant bindings from the CLI after policy evidence changes."
 	details := make([]string, 0, len(bindings)*3)
@@ -222,13 +241,13 @@ func renderTailnetGrantBindingsCommand(bindings []core.TailnetGrantBindingStatus
 		{Text: "Surfaces", CallbackData: encodeTailnetCallbackData(tailnetCallbackSurfaces)},
 		{Text: "Refresh", CallbackData: encodeTailnetCallbackData(tailnetCallbackGrants)},
 	}}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderTelegramCompactPanel(face.OperatorPanel{
 		Title:   "Tailnet Grants",
 		State:   state,
 		Why:     "Grant bindings project approved Aphelion authority into private-network policy evidence.",
 		Next:    next,
 		Details: details,
-	}), rows
+	}, detailed), rows
 }
 
 func renderTailnetRevokeConfirmation(surfaceID string) (string, [][]telegram.InlineButton) {
@@ -250,6 +269,16 @@ func renderTailnetRevokeConfirmation(surfaceID string) (string, [][]telegram.Inl
 		{Text: "Revoke", CallbackData: encodeTailnetRevokeCallbackData(tailnetRevokeCallbackConfirm, surfaceID)},
 	}}
 	return strings.Join(compactStatusDisplayLines(lines), "\n"), rows
+}
+
+func renderTailnetRevokeTokenConfirmation(surfaceID string) (string, [][]telegram.InlineButton) {
+	surfaceID = strings.TrimSpace(surfaceID)
+	text, _ := renderTailnetRevokeConfirmation(surfaceID)
+	rows := [][]telegram.InlineButton{{
+		{Text: "Cancel", CallbackData: encodeTailnetRevokeTokenCallbackData(tailnetRevokeCallbackCancel, surfaceID)},
+		{Text: "Revoke", CallbackData: encodeTailnetRevokeTokenCallbackData(tailnetRevokeCallbackConfirm, surfaceID)},
+	}}
+	return text, rows
 }
 
 func renderTailnetRevokeCanceled(surfaceID string) string {
@@ -290,6 +319,10 @@ func encodeTailnetRevokeCallbackData(action string, surfaceID string) string {
 	return tailnetRevokeCallbackPrefix + strings.TrimSpace(action) + ":" + strings.TrimSpace(surfaceID)
 }
 
+func encodeTailnetRevokeTokenCallbackData(action string, surfaceID string) string {
+	return tailnetRevokeTokenCallbackPrefix + strings.TrimSpace(action) + ":" + tailnetSurfaceCallbackToken(surfaceID)
+}
+
 func decodeTailnetRevokeCallbackData(data string) (string, string, bool) {
 	trimmed := strings.TrimSpace(data)
 	if !strings.HasPrefix(trimmed, tailnetRevokeCallbackPrefix) {
@@ -311,6 +344,80 @@ func decodeTailnetRevokeCallbackData(data string) (string, string, bool) {
 	default:
 		return "", "", false
 	}
+}
+
+func decodeTailnetRevokeTokenCallbackData(data string) (string, string, bool) {
+	trimmed := strings.TrimSpace(data)
+	if !strings.HasPrefix(trimmed, tailnetRevokeTokenCallbackPrefix) {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(trimmed, tailnetRevokeTokenCallbackPrefix)
+	idx := strings.Index(rest, ":")
+	if idx <= 0 {
+		return "", "", false
+	}
+	action := strings.TrimSpace(rest[:idx])
+	token := strings.TrimSpace(rest[idx+1:])
+	if token == "" {
+		return "", "", false
+	}
+	switch action {
+	case tailnetRevokeCallbackAsk, tailnetRevokeCallbackConfirm, tailnetRevokeCallbackCancel:
+		return action, token, true
+	default:
+		return "", "", false
+	}
+}
+
+func tailnetSurfaceRevokeRows(surfaces []core.TailnetSurfaceStatus) [][]telegram.InlineButton {
+	limit := len(surfaces)
+	if limit > 6 {
+		limit = 6
+	}
+	rows := make([][]telegram.InlineButton, 0, (limit+1)/2)
+	row := make([]telegram.InlineButton, 0, 2)
+	for i := 0; i < limit; i++ {
+		surfaceID := strings.TrimSpace(surfaces[i].SurfaceID)
+		if surfaceID == "" {
+			continue
+		}
+		row = append(row, telegram.InlineButton{
+			Text:         fmt.Sprintf("Revoke %d", i+1),
+			CallbackData: encodeTailnetRevokeTokenCallbackData(tailnetRevokeCallbackAsk, surfaceID),
+		})
+		if len(row) == 2 {
+			rows = append(rows, row)
+			row = make([]telegram.InlineButton, 0, 2)
+		}
+	}
+	if len(row) > 0 {
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func tailnetSurfaceCallbackToken(surfaceID string) string {
+	sum := sha1.Sum([]byte(strings.TrimSpace(surfaceID)))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+func resolveTailnetSurfaceCallbackToken(surfaces []core.TailnetSurfaceStatus, token string) (string, bool) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return "", false
+	}
+	found := ""
+	for _, surface := range surfaces {
+		surfaceID := strings.TrimSpace(surface.SurfaceID)
+		if surfaceID == "" || tailnetSurfaceCallbackToken(surfaceID) != token {
+			continue
+		}
+		if found != "" {
+			return "", false
+		}
+		found = surfaceID
+	}
+	return found, found != ""
 }
 
 func nextTailnetToken(raw string) (string, string) {

@@ -233,7 +233,7 @@ func parseOperatorAutonomyCommand(raw string) (string, operatorAutonomyCommandSp
 
 func renderAutonomyCommandStatus(snapshot core.AutonomyStatusSnapshot) string {
 	if strings.TrimSpace(snapshot.ActiveOverrideMode) == "" {
-		return face.RenderOperatorPanel(face.OperatorPanel{
+		return renderRuntimeCompactPanel(face.OperatorPanel{
 			Title: "Autonomy",
 			State: "no live override",
 			Why:   "The configured default and ceiling control whether approval cycling can be leased.",
@@ -258,7 +258,7 @@ func renderAutonomyCommandStatus(snapshot core.AutonomyStatusSnapshot) string {
 	} else {
 		details = append(details, fmt.Sprintf("Used: %d.", snapshot.ActiveOverrideUsed))
 	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title:   "Autonomy override enabled",
 		State:   "live override active",
 		Why:     "Eligible approval prompts may use the active leased override.",
@@ -277,7 +277,7 @@ func renderOperatorAutonomyEnabled(lease session.OperatorAutoApprovalLease, now 
 	if lease.MaxUses > 0 {
 		details = append(details, fmt.Sprintf("Use budget: %d approval(s).", lease.MaxUses))
 	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title:   "Autonomy override enabled",
 		State:   "leased override enabled",
 		Why:     "Eligible approval prompts may use this bounded override until it expires or is spent.",
@@ -288,7 +288,7 @@ func renderOperatorAutonomyEnabled(lease session.OperatorAutoApprovalLease, now 
 
 func renderOperatorAutonomyRevoked(leases []session.OperatorAutoApprovalLease, now time.Time) string {
 	if len(leases) == 0 {
-		return face.RenderOperatorPanel(face.OperatorPanel{
+		return renderRuntimeCompactPanel(face.OperatorPanel{
 			Title: "Autonomy",
 			State: "off",
 			Why:   "No live autonomy override is active for this chat.",
@@ -300,7 +300,7 @@ func renderOperatorAutonomyRevoked(leases []session.OperatorAutoApprovalLease, n
 	}
 	active := operatorAutoApprovalActiveLeases(leases, now)
 	if len(active) > 0 {
-		return face.RenderOperatorPanel(face.OperatorPanel{
+		return renderRuntimeCompactPanel(face.OperatorPanel{
 			Title: "Autonomy",
 			State: "off",
 			Why:   "No live autonomy override is active for this chat.",
@@ -311,7 +311,7 @@ func renderOperatorAutonomyRevoked(leases []session.OperatorAutoApprovalLease, n
 			Evidence: []string{fmt.Sprintf("Revoked records: %d", len(leases))},
 		})
 	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title: "Autonomy",
 		State: "off",
 		Why:   "No live autonomy override is active for this chat.",

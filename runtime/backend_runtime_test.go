@@ -328,7 +328,7 @@ func TestHandleInboundProviderFailureRecordsFailureAndAlertsAdmin(t *testing.T) 
 	for time.Now().Before(deadline) {
 		sender.mu.Lock()
 		for _, msg := range sender.sent {
-			if msg.ChatID == 1001 && strings.Contains(msg.Text, "System warning") && strings.Contains(msg.Text, "component: provider") {
+			if msg.ChatID == 1001 && strings.Contains(msg.Text, "System warning") && strings.Contains(msg.Text, "Component: provider") {
 				foundAlert = true
 				break
 			}

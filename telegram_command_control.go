@@ -567,6 +567,41 @@ func (c telegramCommandControl) MissionCommand(ctx context.Context, chatID int64
 	return c.rt.MissionCommand(ctx, chatID, senderID, args)
 }
 
+func (c telegramCommandControl) MissionHome(ctx context.Context, chatID int64, senderID int64) ([]session.MissionState, session.WorkingObjective, bool, error) {
+	if c.rt == nil {
+		return nil, session.WorkingObjective{}, false, fmt.Errorf("Mission Ledger is unavailable.")
+	}
+	return c.rt.MissionHome(ctx, chatID, senderID)
+}
+
+func (c telegramCommandControl) MissionDetails(ctx context.Context, chatID int64, senderID int64, missionID string) (session.MissionState, []session.MissionEvent, error) {
+	if c.rt == nil {
+		return session.MissionState{}, nil, fmt.Errorf("Mission Ledger is unavailable.")
+	}
+	return c.rt.MissionDetails(ctx, chatID, senderID, missionID)
+}
+
+func (c telegramCommandControl) SetMissionPinned(ctx context.Context, chatID int64, senderID int64, missionID string, pinned bool) (session.MissionState, error) {
+	if c.rt == nil {
+		return session.MissionState{}, fmt.Errorf("Mission Ledger is unavailable.")
+	}
+	return c.rt.SetMissionPinned(ctx, chatID, senderID, missionID, pinned)
+}
+
+func (c telegramCommandControl) UpdateMissionStatus(ctx context.Context, chatID int64, senderID int64, missionID string, status session.MissionStatus) (session.MissionState, error) {
+	if c.rt == nil {
+		return session.MissionState{}, fmt.Errorf("Mission Ledger is unavailable.")
+	}
+	return c.rt.UpdateMissionStatus(ctx, chatID, senderID, missionID, status)
+}
+
+func (c telegramCommandControl) MissionLedgerHealth(ctx context.Context, senderID int64) (session.MissionLedgerHealth, error) {
+	if c.rt == nil {
+		return session.MissionLedgerHealth{}, fmt.Errorf("Mission Ledger is unavailable.")
+	}
+	return c.rt.MissionLedgerHealth(ctx, senderID)
+}
+
 func (c telegramCommandControl) LatestDoctorReport(ctx context.Context, chatID int64, senderID int64) (session.DoctorReportRecord, bool, error) {
 	if c.rt == nil {
 		return session.DoctorReportRecord{}, false, fmt.Errorf("Doctor report storage is unavailable.")

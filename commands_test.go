@@ -247,6 +247,33 @@ type stubCommandRouter struct {
 	missionCommandChatID         int64
 	missionCommandSenderID       int64
 	missionCommandArgs           string
+	missionHomeMissions          []session.MissionState
+	missionHomeWorking           session.WorkingObjective
+	missionHomeIsAdmin           bool
+	missionHomeErr               error
+	missionHomeChatID            int64
+	missionHomeSenderID          int64
+	missionDetailsMission        session.MissionState
+	missionDetailsEvents         []session.MissionEvent
+	missionDetailsErr            error
+	missionDetailsChatID         int64
+	missionDetailsSenderID       int64
+	missionDetailsID             string
+	setMissionPinnedMission      session.MissionState
+	setMissionPinnedErr          error
+	setMissionPinnedChatID       int64
+	setMissionPinnedSenderID     int64
+	setMissionPinnedID           string
+	setMissionPinnedValue        bool
+	updateMissionStatusMission   session.MissionState
+	updateMissionStatusErr       error
+	updateMissionStatusChatID    int64
+	updateMissionStatusSenderID  int64
+	updateMissionStatusID        string
+	updateMissionStatusValue     session.MissionStatus
+	missionLedgerHealth          session.MissionLedgerHealth
+	missionLedgerHealthErr       error
+	missionLedgerHealthSenderID  int64
 	missionActionProposal        session.ActionProposal
 	missionActionProposalErr     error
 	missionActionProposalChatID  int64

@@ -300,8 +300,8 @@ func TestHandleTelegramCommandTailnetSurfacesShowsRegistry(t *testing.T) {
 	if got := sender.inline[0].text; !strings.Contains(got, "Tailnet Surfaces") || !strings.Contains(got, "active status") || !strings.Contains(got, "http://aphelion.example.ts.net:8765/status") {
 		t.Fatalf("tailnet surfaces text = %q, want registry surface", got)
 	}
-	if len(sender.inline[0].rows) != 1 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" || sender.inline[0].rows[0][1].CallbackData != "tailnet:surfaces" || sender.inline[0].rows[0][2].CallbackData != "tailnet:grants" {
-		t.Fatalf("tailnet surfaces rows = %#v, want status/refresh", sender.inline[0].rows)
+	if len(sender.inline[0].rows) != 2 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" || sender.inline[0].rows[0][1].CallbackData != "tailnet:surfaces" || sender.inline[0].rows[0][2].CallbackData != "tailnet:grants" || !strings.HasPrefix(sender.inline[0].rows[1][0].CallbackData, tailnetRevokeTokenCallbackPrefix+tailnetRevokeCallbackAsk+":") {
+		t.Fatalf("tailnet surfaces rows = %#v, want status/refresh and revoke button", sender.inline[0].rows)
 	}
 }
 

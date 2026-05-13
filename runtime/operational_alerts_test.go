@@ -38,10 +38,10 @@ func TestReportOperationalIssueDeliversAndPersistsForAdminChat(t *testing.T) {
 	if !strings.Contains(sent.Text, "System warning") {
 		t.Fatalf("sent text = %q, want warning header", sent.Text)
 	}
-	if !strings.Contains(sent.Text, "component: durable_wake") {
+	if !strings.Contains(sent.Text, "Component: durable_wake") {
 		t.Fatalf("sent text = %q, want component label", sent.Text)
 	}
-	if !strings.Contains(sent.Text, "error: durable child wake runner failed: user_workspace_root is required") {
+	if !strings.Contains(sent.Text, "Error: durable child wake runner failed: user_workspace_root is required") {
 		t.Fatalf("sent text = %q, want error detail", sent.Text)
 	}
 
@@ -84,10 +84,10 @@ func TestReportOperationalIssueThrottlesAndSummarizesSuppressedRepeats(t *testin
 	if got := len(sender.sent); got != 2 {
 		t.Fatalf("sent len = %d, want 2 (first + post-window replay)", got)
 	}
-	if strings.Contains(sender.sent[0].Text, "suppressed_repeats:") {
+	if strings.Contains(sender.sent[0].Text, "Suppressed repeats:") {
 		t.Fatalf("first alert text = %q, want no suppressed summary", sender.sent[0].Text)
 	}
-	if !strings.Contains(sender.sent[1].Text, "suppressed_repeats: 1") {
+	if !strings.Contains(sender.sent[1].Text, "Suppressed repeats: 1") {
 		t.Fatalf("second alert text = %q, want suppressed repeat count", sender.sent[1].Text)
 	}
 }

@@ -395,7 +395,7 @@ func renderOperatorAutoApprovalRevoked(leases []session.OperatorAutoApprovalLeas
 	state := "off"
 	next := "Use /autoapprove <duration> <scope> to create a new bounded grant."
 	if len(leases) == 0 {
-		return face.RenderOperatorPanel(face.OperatorPanel{
+		return renderRuntimeCompactPanel(face.OperatorPanel{
 			Title: "Auto-approval",
 			State: state,
 			Why:   "No active approval prompts will be answered automatically.",
@@ -420,7 +420,7 @@ func renderOperatorAutoApprovalRevoked(leases []session.OperatorAutoApprovalLeas
 			detail = "Cleared old " + operatorAutoApprovalGrantNoun(leases) + operatorAutoApprovalClearedOldGrantDetail(leases) + "."
 		}
 	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title: "Auto-approval",
 		State: state,
 		Why:   "No active approval prompts will be answered automatically.",
@@ -536,7 +536,7 @@ func renderOperatorAutoApprovalEnabled(lease session.OperatorAutoApprovalLease, 
 	if reason := strings.TrimSpace(lease.Reason); reason != "" {
 		details = append(details, "Reason: "+reason)
 	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title:   "Auto-approval",
 		State:   "enabled",
 		Why:     "Eligible approval prompts in this chat may be answered automatically until the grant expires or is spent.",
@@ -558,7 +558,7 @@ func renderOperatorAutoApprovalStatusActive(lease session.OperatorAutoApprovalLe
 	if lease.Reason != "" {
 		details = append(details, "Reason: "+lease.Reason)
 	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title:   "Auto-approval",
 		State:   "active",
 		Why:     "Eligible approval prompts in this chat can use this bounded grant.",
@@ -577,7 +577,7 @@ func renderOperatorAutoApprovalStatusInactive(lease session.OperatorAutoApproval
 	} else if lease.ExpiresAt.After(now) {
 		reason = "inactive"
 	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title: "Auto-approval",
 		State: "inactive",
 		Why:   "No current approval prompt will use this old grant.",

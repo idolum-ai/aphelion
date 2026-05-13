@@ -119,6 +119,15 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 	if runID, action, ok := core.DecodeDeliberationControlCallbackData(cb.Data); ok {
 		return handleDeliberationControlCallback(ctx, sender, router, cb, runID, action)
 	}
+	if command, ok := decodeCommandMenuCallbackData(cb.Data); ok {
+		return handleCommandMenuCallback(ctx, sender, router, cb, command)
+	}
+	if action, ok := decodeAutonomyCallbackData(cb.Data); ok {
+		return handleAutonomyCallback(ctx, sender, router, cb, action)
+	}
+	if action, ok := decodeAutoApprovalCallbackData(cb.Data); ok {
+		return handleAutoApprovalCallback(ctx, sender, router, cb, action)
+	}
 	if view, ok := decodeDebugCallbackData(cb.Data); ok {
 		chatID := int64(0)
 		messageID := int64(0)
@@ -151,6 +160,73 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			return true, err
 		}
 		if err := deliverDebugCallbackView(ctx, sender, chatID, messageID, fullText); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
+	if action, token, ok := decodeTailnetRevokeTokenCallbackData(cb.Data); ok {
+		chatID := int64(0)
+		messageID := int64(0)
+		senderID := int64(0)
+		if cb.Message != nil {
+			messageID = cb.Message.MessageID
+			if cb.Message.Chat != nil {
+				chatID = cb.Message.Chat.ID
+			}
+		}
+		if cb.From != nil {
+			senderID = cb.From.ID
+		}
+		if chatID == 0 || messageID == 0 {
+			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleStatusCallbackText); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+				return true, err
+			}
+			return true, nil
+		}
+		if !router.CanRestart(senderID) {
+			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Tailnet controls are admin only."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+				return true, err
+			}
+			return true, nil
+		}
+		surfaces, err := router.TailnetSurfaces(senderID)
+		if err != nil {
+			return true, err
+		}
+		surfaceID, ok := resolveTailnetSurfaceCallbackToken(surfaces, token)
+		if !ok {
+			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleStatusCallbackText); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+				return true, err
+			}
+			return true, nil
+		}
+		if action == tailnetRevokeCallbackAsk {
+			rendered, rows := renderTailnetRevokeTokenConfirmation(surfaceID)
+			if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, rendered, "", rows); err != nil {
+				return true, err
+			}
+			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+				return true, err
+			}
+			return true, nil
+		}
+		if action == tailnetRevokeCallbackCancel {
+			if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, renderTailnetRevokeCanceled(surfaceID)); err != nil {
+				return true, err
+			}
+			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+				return true, err
+			}
+			return true, nil
+		}
+		surface, found, err := router.RevokeTailnetSurface(ctx, senderID, surfaceID, "telegram tailnet revoke confirmation")
+		if err != nil {
+			return true, err
+		}
+		if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, renderTailnetRevokeResult(surfaceID, surface, found)); err != nil {
+			return true, err
+		}
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 			return true, err
 		}
 		return true, nil
@@ -307,6 +383,9 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			return true, err
 		}
 		return true, nil
+	}
+	if action, token, ok := decodeMissionCallbackData(cb.Data); ok {
+		return handleMissionCallback(ctx, sender, router, cb, action, token)
 	}
 	if proposalID, action, ok := decodeActionProposalCallbackData(cb.Data); ok {
 		chatID := int64(0)

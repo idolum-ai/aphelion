@@ -165,14 +165,14 @@ func renderMemoryReviewPanel(snapshot memoryReviewSnapshot, focus core.MemoryFoc
 		{Text: "Clear Focus", CallbackData: encodeMemoryReviewCallbackData(memoryReviewActionClear, snapshot.Source, 0)},
 		{Text: "Refresh", CallbackData: encodeMemoryReviewCallbackData(memoryReviewActionRefresh, snapshot.Source, 0)},
 	})
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderTelegramCompactPanel(face.OperatorPanel{
 		Title:    "Memory Review",
 		State:    state,
 		Why:      "A selected focus is injected into later non-command turns as bounded context.",
 		Next:     next,
 		Details:  details,
 		Evidence: evidence,
-	}), rows
+	}, false), rows
 }
 
 func memoryReviewSourceDisplay(source memoryReviewSource) string {

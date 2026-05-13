@@ -2,7 +2,23 @@
 
 package main
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/idolum-ai/aphelion/face"
+)
+
+var telegramCompactPanelOptions = face.OperatorPanelCompactOptions{
+	DetailLimit:   4,
+	EvidenceLimit: 2,
+}
+
+func renderTelegramCompactPanel(panel face.OperatorPanel, detailed bool) string {
+	if detailed {
+		return face.RenderOperatorPanel(panel)
+	}
+	return face.RenderCompactOperatorPanel(panel, telegramCompactPanelOptions)
+}
 
 func truncateOperatorLine(text string, max int) string {
 	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")

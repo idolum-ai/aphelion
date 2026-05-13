@@ -113,6 +113,128 @@ func (r *Runtime) MissionCommand(ctx context.Context, chatID int64, senderID int
 	}
 }
 
+func (r *Runtime) MissionHome(ctx context.Context, chatID int64, senderID int64) ([]session.MissionState, session.WorkingObjective, bool, error) {
+	_ = ctx
+	if r == nil || r.store == nil {
+		return nil, session.WorkingObjective{}, false, fmt.Errorf("Mission Ledger is unavailable: session store is not configured")
+	}
+	actor, owner, err := r.missionCommandActor(senderID)
+	if err != nil {
+		return nil, session.WorkingObjective{}, false, err
+	}
+	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+	missions, err := r.store.Missions(session.MissionFilter{Owner: owner, Limit: 12})
+	if err != nil {
+		return nil, session.WorkingObjective{}, false, err
+	}
+	working, err := r.store.WorkingObjective(key)
+	if err != nil {
+		return nil, session.WorkingObjective{}, false, err
+	}
+	return missions, working, actor.Role == principal.RoleAdmin, nil
+}
+
+func (r *Runtime) MissionDetails(ctx context.Context, chatID int64, senderID int64, missionID string) (session.MissionState, []session.MissionEvent, error) {
+	_ = ctx
+	if r == nil || r.store == nil {
+		return session.MissionState{}, nil, fmt.Errorf("Mission Ledger is unavailable: session store is not configured")
+	}
+	actor, owner, err := r.missionCommandActor(senderID)
+	if err != nil {
+		return session.MissionState{}, nil, err
+	}
+	mission, err := r.loadAuthorizedMission(missionID, actor, owner)
+	if err != nil {
+		return session.MissionState{}, nil, err
+	}
+	events, err := r.store.MissionEvents(mission.ID, 8)
+	if err != nil {
+		return session.MissionState{}, nil, err
+	}
+	_ = chatID
+	return mission, events, nil
+}
+
+func (r *Runtime) SetMissionPinned(ctx context.Context, chatID int64, senderID int64, missionID string, pinned bool) (session.MissionState, error) {
+	_ = ctx
+	if r == nil || r.store == nil {
+		return session.MissionState{}, fmt.Errorf("Mission Ledger is unavailable: session store is not configured")
+	}
+	actor, owner, err := r.missionCommandActor(senderID)
+	if err != nil {
+		return session.MissionState{}, err
+	}
+	if _, err := r.loadAuthorizedMission(missionID, actor, owner); err != nil {
+		return session.MissionState{}, err
+	}
+	_ = chatID
+	return r.store.SetMissionPinned(missionID, pinned, owner, "/mission button pin")
+}
+
+func (r *Runtime) UpdateMissionStatus(ctx context.Context, chatID int64, senderID int64, missionID string, status session.MissionStatus) (session.MissionState, error) {
+	_ = ctx
+	if r == nil || r.store == nil {
+		return session.MissionState{}, fmt.Errorf("Mission Ledger is unavailable: session store is not configured")
+	}
+	actor, owner, err := r.missionCommandActor(senderID)
+	if err != nil {
+		return session.MissionState{}, err
+	}
+	if _, err := r.loadAuthorizedMission(missionID, actor, owner); err != nil {
+		return session.MissionState{}, err
+	}
+	status = session.NormalizeMissionStatus(status)
+	if status == "" {
+		return session.MissionState{}, fmt.Errorf("invalid mission status")
+	}
+	_ = chatID
+	return r.store.UpdateMissionStatus(missionID, status, owner, "/mission button "+string(status))
+}
+
+func (r *Runtime) MissionLedgerHealth(ctx context.Context, senderID int64) (session.MissionLedgerHealth, error) {
+	_ = ctx
+	if r == nil || r.store == nil {
+		return session.MissionLedgerHealth{}, fmt.Errorf("Mission Ledger is unavailable: session store is not configured")
+	}
+	actor, _, err := r.missionCommandActor(senderID)
+	if err != nil {
+		return session.MissionLedgerHealth{}, err
+	}
+	if actor.Role != principal.RoleAdmin {
+		return session.MissionLedgerHealth{}, fmt.Errorf("mission health is admin only")
+	}
+	return r.store.MissionLedgerHealth(time.Now().UTC())
+}
+
+func (r *Runtime) missionCommandActor(senderID int64) (principal.Principal, string, error) {
+	if r == nil || r.resolver == nil {
+		return principal.Principal{}, "", fmt.Errorf("Mission Ledger is unavailable for this sender")
+	}
+	actor, ok := r.resolver.ResolveTelegramUser(senderID)
+	if !ok {
+		return principal.Principal{}, "", ErrPrincipalDenied
+	}
+	return actor, missionCommandOwner(actor, senderID), nil
+}
+
+func (r *Runtime) loadAuthorizedMission(missionID string, actor principal.Principal, owner string) (session.MissionState, error) {
+	missionID = strings.TrimSpace(missionID)
+	if missionID == "" {
+		return session.MissionState{}, fmt.Errorf("mission id is required")
+	}
+	mission, ok, err := r.store.Mission(missionID)
+	if err != nil {
+		return session.MissionState{}, err
+	}
+	if !ok {
+		return session.MissionState{}, fmt.Errorf("mission %q not found", missionID)
+	}
+	if actor.Role != principal.RoleAdmin && strings.TrimSpace(mission.Owner) != strings.TrimSpace(owner) {
+		return session.MissionState{}, fmt.Errorf("mission %q is not owned by this sender", missionID)
+	}
+	return mission, nil
+}
+
 func (r *Runtime) renderMissionCommandHome(key session.SessionKey, owner string) (string, error) {
 	missions, err := r.store.Missions(session.MissionFilter{Owner: owner, Limit: 12})
 	if err != nil {
@@ -130,7 +252,7 @@ func (r *Runtime) renderMissionCommandHome(key session.SessionKey, owner string)
 		details = append(details, "Working objective: none")
 	}
 	details = append(details, renderMissionCommandListLines(missions)...)
-	b.WriteString(face.RenderOperatorPanel(face.OperatorPanel{
+	b.WriteString(renderRuntimeCompactPanel(face.OperatorPanel{
 		Title:   "Mission Ledger",
 		State:   fmt.Sprintf("%d mission(s)", len(missions)),
 		Why:     "Missions organize long-running intent but do not grant self-continuation or new capability by themselves.",
@@ -177,7 +299,7 @@ func nextMissionToken(raw string) (string, string) {
 }
 
 func renderMissionCommandList(title string, missions []session.MissionState) string {
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title:   strings.TrimSpace(title),
 		State:   fmt.Sprintf("%d mission(s)", len(missions)),
 		Why:     "Mission matches are review context, not automatic authority.",
@@ -236,7 +358,7 @@ func renderMissionCommandShow(mission session.MissionState, events []session.Mis
 			evidence = append(evidence, strings.TrimSpace(event.EventType)+" by "+strings.TrimSpace(event.Actor)+": "+strings.TrimSpace(event.Summary))
 		}
 	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title:    "Mission " + strings.TrimSpace(mission.ID),
 		State:    firstNonEmptyRuntime(strings.TrimSpace(string(mission.Status)), "unknown"),
 		Why:      "Mission state is ledger context; action still needs explicit plan, lease, or grant authority.",
@@ -247,7 +369,7 @@ func renderMissionCommandShow(mission session.MissionState, events []session.Mis
 }
 
 func renderMissionCommandHealth(health session.MissionLedgerHealth) string {
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title: "Mission Ledger health",
 		State: fmt.Sprintf("%d active, %d blocked", health.ActiveCount, health.BlockedCount),
 		Why:   "Health highlights ledger state that may need review or cleanup.",

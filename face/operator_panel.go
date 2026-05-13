@@ -2,7 +2,10 @@
 
 package face
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // OperatorPanel is presentation-only. It renders typed/runtime facts for a human
 // operator, but it must not be used as authority, consent, or evidence storage.
@@ -15,7 +18,26 @@ type OperatorPanel struct {
 	Evidence []string
 }
 
+type OperatorPanelCompactOptions struct {
+	DetailLimit   int
+	EvidenceLimit int
+}
+
 func RenderOperatorPanel(panel OperatorPanel) string {
+	return renderOperatorPanel(panel, OperatorPanelCompactOptions{DetailLimit: -1, EvidenceLimit: -1})
+}
+
+func RenderCompactOperatorPanel(panel OperatorPanel, opts OperatorPanelCompactOptions) string {
+	if opts.DetailLimit < 0 {
+		opts.DetailLimit = 0
+	}
+	if opts.EvidenceLimit < 0 {
+		opts.EvidenceLimit = 0
+	}
+	return renderOperatorPanel(panel, opts)
+}
+
+func renderOperatorPanel(panel OperatorPanel, opts OperatorPanelCompactOptions) string {
 	lines := make([]string, 0, 8+len(panel.Details)+len(panel.Evidence))
 	title := strings.TrimSpace(panel.Title)
 	if title != "" {
@@ -31,7 +53,7 @@ func RenderOperatorPanel(panel OperatorPanel) string {
 		lines = append(lines, "Next: "+next)
 	}
 	appendBlock := func(label string, values []string) {
-		block := compactOperatorPanelLines(values)
+		block := limitOperatorPanelLines(compactOperatorPanelLines(values), operatorPanelLimitForLabel(label, opts), label)
 		if len(block) == 0 {
 			return
 		}
@@ -46,6 +68,46 @@ func RenderOperatorPanel(panel OperatorPanel) string {
 	appendBlock("Details", panel.Details)
 	appendBlock("Evidence", panel.Evidence)
 	return strings.Join(compactOperatorPanelLines(lines), "\n")
+}
+
+func operatorPanelLimitForLabel(label string, opts OperatorPanelCompactOptions) int {
+	switch label {
+	case "Details":
+		return opts.DetailLimit
+	case "Evidence":
+		return opts.EvidenceLimit
+	default:
+		return -1
+	}
+}
+
+func limitOperatorPanelLines(values []string, limit int, label string) []string {
+	if limit < 0 || len(values) <= limit {
+		return values
+	}
+	if limit == 0 {
+		return nil
+	}
+	out := append([]string(nil), values[:limit]...)
+	omitted := len(values) - limit
+	if omitted > 0 {
+		out = append(out, strings.TrimSpace(pluralOperatorPanelOmitted(label, omitted)))
+	}
+	return out
+}
+
+func pluralOperatorPanelOmitted(label string, count int) string {
+	item := "item"
+	if label == "Details" {
+		item = "detail"
+	}
+	if label == "Evidence" {
+		item = "evidence item"
+	}
+	if count == 1 {
+		return "1 more " + item + " available."
+	}
+	return strconv.Itoa(count) + " more " + item + "s available."
 }
 
 func compactOperatorPanelLines(values []string) []string {

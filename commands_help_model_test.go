@@ -33,11 +33,14 @@ func TestHandleTelegramCommandHelpHidesAdminRestartForNonAdmin(t *testing.T) {
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if len(sender.msgs) != 1 {
-		t.Fatalf("message count = %d, want 1", len(sender.msgs))
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if strings.Contains(sender.msgs[0].Text, "/restart - ") {
-		t.Fatalf("help text = %q, want admin-only /restart hidden for non-admins", sender.msgs[0].Text)
+	if strings.Contains(sender.inline[0].text, "/restart - ") {
+		t.Fatalf("help text = %q, want admin-only /restart hidden for non-admins", sender.inline[0].text)
+	}
+	if len(sender.inline[0].rows) == 0 {
+		t.Fatalf("help rows empty, want command buttons")
 	}
 }
 
@@ -61,14 +64,17 @@ func TestHandleTelegramCommandHelpShowsAdminRestartForAdmin(t *testing.T) {
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if len(sender.msgs) != 1 {
-		t.Fatalf("message count = %d, want 1", len(sender.msgs))
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if !strings.Contains(sender.msgs[0].Text, "/restart - ") {
-		t.Fatalf("help text = %q, want admin /restart command listed", sender.msgs[0].Text)
+	if !strings.Contains(sender.inline[0].text, "/restart - ") {
+		t.Fatalf("help text = %q, want admin /restart command listed", sender.inline[0].text)
 	}
-	if !strings.Contains(sender.msgs[0].Text, "/debug - ") {
-		t.Fatalf("help text = %q, want /debug command listed", sender.msgs[0].Text)
+	if !strings.Contains(sender.inline[0].text, "/debug - ") {
+		t.Fatalf("help text = %q, want /debug command listed", sender.inline[0].text)
+	}
+	if len(sender.inline[0].rows) == 0 {
+		t.Fatalf("help rows empty, want command buttons")
 	}
 }
 
@@ -92,14 +98,17 @@ func TestHandleTelegramCommandStartHidesAdminRestartForNonAdmin(t *testing.T) {
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if len(sender.msgs) != 1 {
-		t.Fatalf("message count = %d, want 1", len(sender.msgs))
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if strings.Contains(sender.msgs[0].Text, "/restart - ") {
-		t.Fatalf("start text = %q, want admin-only /restart hidden for non-admins", sender.msgs[0].Text)
+	if strings.Contains(sender.inline[0].text, "/restart - ") {
+		t.Fatalf("start text = %q, want admin-only /restart hidden for non-admins", sender.inline[0].text)
 	}
-	if !strings.Contains(sender.msgs[0].Text, "/debug - ") {
-		t.Fatalf("start text = %q, want /debug command listed", sender.msgs[0].Text)
+	if !strings.Contains(sender.inline[0].text, "/debug - ") {
+		t.Fatalf("start text = %q, want /debug command listed", sender.inline[0].text)
+	}
+	if len(sender.inline[0].rows) == 0 {
+		t.Fatalf("start rows empty, want command buttons")
 	}
 }
 

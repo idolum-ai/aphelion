@@ -51,6 +51,70 @@ func TestHandleTelegramCommandCallbackTailnetRevokeForAdmin(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandCallbackTailnetTokenRevokeResolvesSurface(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		tailnetSurfaces: []core.TailnetSurfaceStatus{{
+			SurfaceID: "parent:tsnet_http:status",
+			Status:    "active",
+		}},
+		revokeTailnetSurfaceReturn: core.TailnetSurfaceStatus{
+			SurfaceID: "parent:tsnet_http:status",
+			Status:    "revoked",
+		},
+		revokeTailnetSurfaceOK: true,
+	}
+	ask, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-tailnet-token-ask",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: encodeTailnetRevokeTokenCallbackData(tailnetRevokeCallbackAsk, "parent:tsnet_http:status"),
+		Message: &telegram.Message{
+			MessageID: 97,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ask callback err = %v", err)
+	}
+	if !ask {
+		t.Fatal("ask handled = false, want true")
+	}
+	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Revoke tailnet surface?") {
+		t.Fatalf("editInline = %#v, want token confirmation", sender.editInline)
+	}
+	if !strings.HasPrefix(sender.editInline[0].rows[0][1].CallbackData, tailnetRevokeTokenCallbackPrefix+tailnetRevokeCallbackConfirm+":") {
+		t.Fatalf("confirmation rows = %#v, want token confirm callback", sender.editInline[0].rows)
+	}
+
+	confirmed, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-tailnet-token-confirm",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: encodeTailnetRevokeTokenCallbackData(tailnetRevokeCallbackConfirm, "parent:tsnet_http:status"),
+		Message: &telegram.Message{
+			MessageID: 97,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("confirm callback err = %v", err)
+	}
+	if !confirmed {
+		t.Fatal("confirm handled = false, want true")
+	}
+	if router.revokeTailnetSurfaceSenderID != 1001 || router.revokeTailnetSurfaceID != "parent:tsnet_http:status" {
+		t.Fatalf("revoke call sender=%d surface=%q, want token-resolved surface", router.revokeTailnetSurfaceSenderID, router.revokeTailnetSurfaceID)
+	}
+	if len(sender.answers) != 2 {
+		t.Fatalf("answers = %#v, want ask and confirm acknowledgements", sender.answers)
+	}
+	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "Tailnet surface revoked") {
+		t.Fatalf("editClear = %#v, want revoke result", sender.editClear)
+	}
+}
+
 func TestHandleTelegramCommandCallbackTailnetRevokeDeniedForNonAdmin(t *testing.T) {
 	t.Parallel()
 

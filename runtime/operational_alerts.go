@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -112,16 +113,23 @@ func renderOperationalIssueMessage(component string, detail string, suppressed i
 	if len(detail) > 1000 {
 		detail = detail[:1000] + "..."
 	}
-	lines := []string{
-		"System warning",
-		"component: " + component,
-		"time_utc: " + now.UTC().Format(time.RFC3339),
-		"error: " + detail,
+	details := []string{
+		"Component: " + component,
+		"Time: " + now.UTC().Format(time.RFC3339),
+		"Error: " + detail,
 	}
+	evidence := []string(nil)
 	if suppressed > 0 {
-		lines = append(lines, fmt.Sprintf("suppressed_repeats: %d", suppressed))
+		evidence = append(evidence, fmt.Sprintf("Suppressed repeats: %d", suppressed))
 	}
-	return strings.Join(lines, "\n")
+	return renderRuntimeCompactPanel(face.OperatorPanel{
+		Title:    "System warning",
+		State:    "needs attention",
+		Why:      "A runtime component reported an operational issue.",
+		Next:     "Run /doctor or /debug if the warning persists.",
+		Details:  details,
+		Evidence: evidence,
+	})
 }
 
 func operationalAlertSignature(component string, detail string) string {

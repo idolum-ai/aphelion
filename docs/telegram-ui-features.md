@@ -17,14 +17,18 @@ Raw `key=value` telemetry, long IDs, hashes, and enum-heavy records belong in
 buttons are projections only; authority still lives in typed leases, grants,
 decisions, and TES records.
 
+Telegram renders most operator panels in compact form by default: status, why,
+next action, and a bounded set of details/evidence. Full CLI output, `/debug`,
+logs, and machine-readable mirrors carry the longer diagnostic record.
+
 ## Slash Commands
 
 Current command surface:
 
 - `/start`
-  - Shows a grouped, role-aware intro plus command sections.
+  - Shows a grouped, role-aware intro plus command sections and a no-argument command menu.
 - `/help`
-  - Shows grouped, role-aware command help.
+  - Shows grouped, role-aware command help and a no-argument command menu.
 - `/status`
   - Opens status output with inline status controls (no command arguments).
 - `/debug`
@@ -42,18 +46,22 @@ Current command surface:
 - `/tailnet`
   - Admin-only Tailnet declaration, private-surface, grant-binding, drift, and rollback evidence.
   - Shows local registry readiness and issue evidence; live child `tsnet` materialization and live Tailscale policy mutation are not current operator actions.
+  - Provides button navigation for status, surfaces, grants, refresh, private status URL, and per-surface local revoke confirmation.
 - `/mission`
   - Shows the current working objective and the caller-owned Mission Ledger entries.
-  - Supports manual `list`, `show`, `create`, `pin`, `unpin`, `activate`, `pause`, `block`, `complete`, `archive`, `summon`, and admin `health` actions.
+  - Provides buttons for home/list, show, propose, pin/unpin, activate, pause, complete, archive, refresh, and admin health.
+  - Supports manual `create`, `block`, and `summon` actions when typed input is the natural carrier for the new objective or reason.
   - Self-summon is review-only; Mission Ledger state does not grant self-continuation, autonomous continuation, new capabilities, or external authority.
 - `/autonomy`
   - Admin-only policy report and live override control.
   - Shows the configured default mode, ceiling, live-override setting, maximum override duration, and active override state.
+  - Provides preset buttons for refresh, off, and bounded 15-minute workspace/deploy/all leases.
   - Supports `status`, `off`, and `leased <duration> [all|workspace|deploy] [uses=N] [reason]`.
   - `leased` uses the same bounded approval-lease substrate as `/autoapprove` and cannot exceed the configured ceiling or maximum duration.
-  - If config is tightened later, old live overrides are ignored and `/doctor` reports the precedence block.
+  - If config is tightened later, existing live overrides outside the new ceiling are ignored and `/doctor` reports the precedence block.
 - `/autoapprove`
   - Admin-only short lease for eligible approval prompts.
+  - Provides preset buttons for refresh, off, and bounded 15-minute workspace/deploy/all approval windows.
   - Also obeys the configured autonomy ceiling and maximum live-override duration.
 - `/stop`
   - Stops active work in the current chat and drops queued follow-up work.
@@ -78,6 +86,9 @@ Visibility notes:
 - `/start` and `/help` are role-aware.
   - Admin users see `/autonomy`, `/autoapprove`, and `/restart`.
   - Non-admin users do not see those admin commands.
+- All listed slash commands are usable without typing parameters. When a command
+  has a safe finite option set, Telegram presents buttons. Free-form creation or
+  reason text remains typed input.
 
 ## Inline Buttons
 
@@ -93,6 +104,15 @@ Non-binary selectors (for example `/status` navigation and model/effort pickers)
 Inline button labels are delivery-validated at the Telegram client boundary:
 labels must be non-empty and use at most two words. Longer explanations belong
 in the prompt body.
+
+### Command menu
+
+`/start` and `/help` attach role-scoped command buttons. Public buttons include
+status, debug, memory, mission, stop, new, and detach. Admin buttons add models,
+agents, tailnet, autonomy, auto-approval, doctor, reinstall, and restart.
+
+Menu callbacks route through the same command dispatcher as typed slash commands;
+the button is not a new authority path.
 
 ### `/status` controls
 
@@ -161,6 +181,50 @@ It is intended for operational diagnosis when `/status` is too compressed.
 - output is chunked when needed to fit Telegram message size limits
 
 Review digest deliveries to admin chat are rendered with labeled metadata lines (`Source Chat:`, `Source User:`, `Source Role:`, optional scope/agent lines) plus a `Summary:` section.
+
+### `/tailnet` controls
+
+Tailnet buttons keep private networking as a diagnostic/control projection:
+
+- `Refresh`
+- `Surfaces`
+- `Grants`
+- `Open Status` when the private parent status URL is known
+- `Revoke <n>` on visible registered surfaces
+
+Surface revoke buttons use short callback tokens, re-resolve the live surface
+registry on click, and require a second confirmation before writing the local
+registry revoke event.
+
+### `/mission` controls
+
+Mission Ledger buttons expose the finite review actions without requiring copied
+IDs:
+
+- home/list refresh
+- show mission details
+- propose bounded action
+- pin/unpin
+- activate, pause, complete, archive
+- admin health
+
+Callbacks resolve short mission tokens against the current authorized mission
+view before applying any state change. Mission actions update ledger records; they
+do not create continuation authority or capability grants.
+
+### `/autonomy` and `/autoapprove` controls
+
+Admin policy panels attach the same preset rows:
+
+- `Refresh`
+- `Off`
+- `15m Work`
+- `15m Deploy`
+- `15m All`
+
+The buttons call the same runtime configuration functions as typed commands.
+Duration, scope, use count, live-override ceiling, and admin checks remain runtime
+policy checks, not UI convention.
 
 ### Natural-language durable setup trigger
 
@@ -345,7 +409,7 @@ When a turn enters long-running deliberation/tool execution, Telegram shows one 
 
 - Status and selector callbacks edit the same Telegram message in place when possible.
 - Status output can be chunked; extra chunks are sent as follow-up messages.
-- Stale callback actions are acknowledged with a stale-message notice instead of applying old state.
+- Stale callback actions are acknowledged with a stale-message notice instead of applying previous state.
 - Non-admin access to admin-only status views is denied via callback acknowledgement.
 - Deliberation control callbacks are run-id scoped; stale controls are ignored with a stale notice.
 - Durable-agent launcher callbacks are admin-only and run-id agnostic:
