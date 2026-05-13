@@ -260,6 +260,96 @@ func TestRemoteRuntimeSyncParentConversationPreservesParentMessageID(t *testing.
 	}
 }
 
+func TestRemoteRuntimeSyncParentConversationUpgradesStoredGeneratedID(t *testing.T) {
+	t.Parallel()
+
+	childStore, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "child.db"))
+	if err != nil {
+		t.Fatalf("child NewSQLiteStore() err = %v", err)
+	}
+	defer childStore.Close()
+
+	agent := testRemoteDurableAgent()
+	if err := childStore.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("child UpsertDurableAgent() err = %v", err)
+	}
+
+	createdAt := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	text := "Check the remote child health."
+	initialContinuity := core.DurableAgentContinuityState{}.WithConversationMessage("parent", text, createdAt)
+	if initialContinuity.Conversation == nil || len(initialContinuity.Conversation.Messages) != 1 {
+		t.Fatalf("initial conversation = %#v, want one parent message", initialContinuity.Conversation)
+	}
+	generatedID := initialContinuity.Conversation.Messages[0].MessageID
+	if generatedID == "" || !strings.HasPrefix(generatedID, "dcm_") {
+		t.Fatalf("generatedID = %q, want dcm_ id", generatedID)
+	}
+	raw, err := initialContinuity.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal() err = %v", err)
+	}
+	if err := childStore.SaveDurableAgentState(core.DurableAgentState{
+		AgentID:   agent.AgentID,
+		Status:    "active",
+		StateJSON: raw,
+	}); err != nil {
+		t.Fatalf("child SaveDurableAgentState() err = %v", err)
+	}
+
+	bootstrap := core.DurableAgentRemoteBootstrap{
+		AgentID:          agent.AgentID,
+		ParentAgentID:    "house",
+		ChannelKind:      agent.ChannelKind,
+		ParentControlURL: "https://house.example",
+		EnrollmentToken:  "enroll-token-1",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:     testDurableAgentBootstrapLLM(),
+		BootstrapCeiling: agent.BootstrapCeiling,
+	}
+	parentMessage := core.DurableAgentConversationMessage{
+		MessageID: "parent-msg-opaque-1",
+		Role:      "parent",
+		Text:      text,
+		CreatedAt: createdAt,
+	}
+	client := &remoteRuntimeParentConversationClient{
+		pollResponse: core.DurableAgentParentConversationPollResponse{
+			Messages: []core.DurableAgentConversationMessage{parentMessage},
+		},
+	}
+	rt := NewRemoteRuntime(childStore, nil)
+
+	messageIDs, err := rt.syncParentConversation(context.Background(), client, bootstrap)
+	if err != nil {
+		t.Fatalf("syncParentConversation() err = %v", err)
+	}
+	if len(messageIDs) != 1 || messageIDs[0] != parentMessage.MessageID {
+		t.Fatalf("syncParentConversation() messageIDs = %#v, want [%q]", messageIDs, parentMessage.MessageID)
+	}
+
+	state, err := childStore.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("child DurableAgentState() err = %v", err)
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if continuity.Conversation == nil || len(continuity.Conversation.Messages) != 1 {
+		t.Fatalf("Conversation = %#v, want one upgraded parent message", continuity.Conversation)
+	}
+	stored := continuity.Conversation.Messages[0]
+	if stored.MessageID != parentMessage.MessageID {
+		t.Fatalf("stored MessageID = %q, want %q", stored.MessageID, parentMessage.MessageID)
+	}
+	if stored.MessageID == generatedID {
+		t.Fatalf("stored MessageID = %q, want replacement of generated id", stored.MessageID)
+	}
+	if stored.Text != text || !stored.CreatedAt.Equal(createdAt) || stored.Role != "parent" {
+		t.Fatalf("stored message = %#v, want original parent content with canonical id", stored)
+	}
+}
+
 func TestRemoteRuntimeUploadReviewArtifactQueuesParentReviewAndUpdatesLocalContinuity(t *testing.T) {
 	t.Parallel()
 

@@ -372,11 +372,7 @@ func (r *RemoteRuntime) syncParentConversation(ctx context.Context, client Remot
 		return nil, fmt.Errorf("parse durable agent continuity state: %w", err)
 	}
 	for i := len(messages) - 1; i >= 0; i-- {
-		message := messages[i]
-		if hasDurableAgentConversationMessageID(continuity, message.MessageID) {
-			continue
-		}
-		continuity = continuity.WithConversationMessages(message)
+		continuity = upsertPolledParentConversationMessage(continuity, messages[i])
 	}
 	raw, err := continuity.Marshal()
 	if err != nil {
@@ -387,6 +383,38 @@ func (r *RemoteRuntime) syncParentConversation(ctx context.Context, client Remot
 		return nil, err
 	}
 	return messageIDs, nil
+}
+
+func upsertPolledParentConversationMessage(state core.DurableAgentContinuityState, message core.DurableAgentConversationMessage) core.DurableAgentContinuityState {
+	message, ok := normalizePolledParentConversationMessage(message)
+	if !ok {
+		return state
+	}
+	state = core.NormalizeDurableAgentContinuityState(state)
+	if hasDurableAgentConversationMessageID(state, message.MessageID) {
+		return state
+	}
+	if state.Conversation != nil {
+		for i, existing := range state.Conversation.Messages {
+			if existing.Role != "parent" || !existing.AcknowledgedAt.IsZero() {
+				continue
+			}
+			if existing.Text == message.Text && existing.CreatedAt.Equal(message.CreatedAt) {
+				state.Conversation.Messages[i].MessageID = message.MessageID
+				return core.NormalizeDurableAgentContinuityState(state)
+			}
+		}
+	}
+	return state.WithConversationMessages(message)
+}
+
+func normalizePolledParentConversationMessage(message core.DurableAgentConversationMessage) (core.DurableAgentConversationMessage, bool) {
+	state := core.DurableAgentContinuityState{}.WithConversationMessages(message)
+	if state.Conversation == nil || len(state.Conversation.Messages) != 1 {
+		return core.DurableAgentConversationMessage{}, false
+	}
+	message = state.Conversation.Messages[0]
+	return message, message.Role == "parent" && strings.TrimSpace(message.MessageID) != ""
 }
 
 func parentConversationPollMessages(messages []core.DurableAgentConversationMessage) ([]core.DurableAgentConversationMessage, []string, error) {
