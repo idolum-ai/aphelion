@@ -12,7 +12,7 @@ import (
 func TestInitRejectsUnsupportedExistingSessionSchema(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+	dbPath := filepath.Join(t.TempDir(), "unsupported-v1.db")
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		t.Fatalf("open existing db: %v", err)
@@ -61,10 +61,10 @@ func TestInitRejectsUnsupportedExistingSessionSchema(t *testing.T) {
 
 	_, err = NewSQLiteStore(dbPath)
 	if err == nil {
-		t.Fatal("NewSQLiteStore() err = nil, want unsupported legacy schema error")
+		t.Fatal("NewSQLiteStore() err = nil, want unsupported old schema error")
 	}
 	if !strings.Contains(err.Error(), "unsupported database schema version 1") {
-		t.Fatalf("NewSQLiteStore() err = %v, want unsupported legacy schema version message", err)
+		t.Fatalf("NewSQLiteStore() err = %v, want unsupported old schema version message", err)
 	}
 }
 
@@ -246,15 +246,15 @@ func TestInitRejectsUnsupportedExistingSessionIdentitySchema(t *testing.T) {
 	}
 	if _, err := db.Exec(`
 		INSERT INTO sessions(session_id, chat_id, user_id, system_prompt)
-		VALUES (?, ?, 0, 'legacy prompt')
+		VALUES (?, ?, 0, 'old prompt')
 	`, sessionID, chatID); err != nil {
-		t.Fatalf("insert legacy session: %v", err)
+		t.Fatalf("insert old session: %v", err)
 	}
 	if _, err := db.Exec(`
 		INSERT INTO plan_events(session_id, event_kind, plan_state_json)
 		VALUES (?, 'update_plan', '{"steps":[{"step":"repair startup","status":"pending"}]}')
 	`, sessionID); err != nil {
-		t.Fatalf("insert legacy plan event: %v", err)
+		t.Fatalf("insert old plan event: %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close existing db: %v", err)
@@ -262,10 +262,10 @@ func TestInitRejectsUnsupportedExistingSessionIdentitySchema(t *testing.T) {
 
 	_, err = NewSQLiteStore(dbPath)
 	if err == nil {
-		t.Fatal("NewSQLiteStore() err = nil, want unsupported legacy schema error")
+		t.Fatal("NewSQLiteStore() err = nil, want unsupported old schema error")
 	}
 	if !strings.Contains(err.Error(), "unsupported database schema version 9") {
-		t.Fatalf("NewSQLiteStore() err = %v, want unsupported legacy schema version message", err)
+		t.Fatalf("NewSQLiteStore() err = %v, want unsupported old schema version message", err)
 	}
 }
 
@@ -318,14 +318,14 @@ func TestInitRejectsUnsupportedExistingDurableAgentSchema(t *testing.T) {
 			capability_envelope_json, local_storage_roots_json, wakeup_mode, outbound_mode, drift_policy, secret_scopes_json, status,
 			created_at, updated_at
 		) VALUES (
-			'family-group', 'heartbeat', 'admin-house', 1001, 'telegram_group', 'legacy charter',
+			'family-group', 'heartbeat', 'admin-house', 1001, 'telegram_group', 'old charter',
 			'["group_reply","bounded_review_artifact"]', '["/tmp/family-group"]', 'telegram_update', 'reply_within_charter', 'admin_review', '["telegram_bot"]', 'active',
 			'2026-04-12T00:00:00Z', '2026-04-12T00:10:00Z'
 		)`,
 	}
 	for _, stmt := range ddl {
 		if _, err := db.Exec(stmt); err != nil {
-			t.Fatalf("exec legacy durable stmt %q: %v", stmt, err)
+			t.Fatalf("exec old durable stmt %q: %v", stmt, err)
 		}
 	}
 	if err := db.Close(); err != nil {
@@ -334,10 +334,10 @@ func TestInitRejectsUnsupportedExistingDurableAgentSchema(t *testing.T) {
 
 	_, err = NewSQLiteStore(dbPath)
 	if err == nil {
-		t.Fatal("NewSQLiteStore() err = nil, want unsupported legacy schema error")
+		t.Fatal("NewSQLiteStore() err = nil, want unsupported old schema error")
 	}
 	if !strings.Contains(err.Error(), "unsupported database schema version 10") {
-		t.Fatalf("NewSQLiteStore() err = %v, want unsupported legacy schema version message", err)
+		t.Fatalf("NewSQLiteStore() err = %v, want unsupported old schema version message", err)
 	}
 }
 

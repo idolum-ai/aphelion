@@ -110,7 +110,7 @@ Reasons:
 - operator-portable
 - easy to snapshot and migrate
 - good enough for small-to-medium private corpora
-- compatible with optional FTS and vector acceleration
+- works with optional FTS and vector acceleration
 
 The canonical store should remain valid even without vector extensions.
 
@@ -370,7 +370,7 @@ The importer should:
 
 - read source documents and chunks
 - preserve provenance
-- import vectors when compatible
+- import vectors when the source model and shape match
 - record the original embedding model alongside each imported chunk
 - when re-embedding is needed, create new chunks with a new model tag rather than silently overwriting; this keeps ranking behavior auditable across embedding model changes
 - avoid permanent runtime dependency on the foreign DB
@@ -381,7 +381,7 @@ That narrow import stance is part of the departure recorded in
 
 If Aphelion only supports one observed foreign layout, it should say so plainly in code, logs, and operator output, for example as an import contract label such as `openclaw_observed_v1`.
 
-Unknown or incompatible foreign layouts should fail closed with an explicit schema-contract error rather than being imported optimistically.
+Unknown or mismatched foreign layouts should fail closed with an explicit schema-contract error rather than being imported optimistically.
 
 ### Import rule
 

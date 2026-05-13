@@ -296,7 +296,7 @@ Illustrative directive surface:
 - `MEDIA: shared/output/report.pdf`
 - `[[audio_as_voice]]`
 
-The directive surface is a transitional delivery contract, not the final artifact constitution.
+The directive surface is the current delivery contract; the artifact constitution remains the authoritative target.
 
 ### Path safety
 

@@ -278,7 +278,7 @@ func TestMaterializeEscalatedOperatorPhaseShowsManualApprovalDespiteAutoApproval
 		}
 	}
 	if strings.Contains(inlineText, "Blocked:") || strings.Contains(inlineText, "Approval needed.") {
-		t.Fatalf("inline text = %q, want escalated approval card, not blocked/legacy approval text", inlineText)
+		t.Fatalf("inline text = %q, want escalated approval card, not blocked stale approval text", inlineText)
 	}
 	if got, want := labels, []string{"Start", "Details", "Change", "Pause", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("inline labels = %#v, want %#v", got, want)

@@ -145,7 +145,7 @@ Examples:
 
 - invalid TOML
 - missing admin principal
-- incompatible backend config
+- mismatched backend config
 - missing required secrets for enabled features
 - invalid filesystem roots
 

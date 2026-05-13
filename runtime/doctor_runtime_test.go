@@ -683,7 +683,7 @@ func TestRunDoctorOnceCondensesOversizedTelegramReport(t *testing.T) {
 	}
 }
 
-func TestDoctorCodexWorkMigrationReviewReportsPersistedInterfaceEvidence(t *testing.T) {
+func TestDoctorCodexWorkEvidenceReviewReportsPersistedInterfaceEvidence(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -732,7 +732,7 @@ func TestDoctorCodexWorkMigrationReviewReportsPersistedInterfaceEvidence(t *test
 	}
 
 	var b strings.Builder
-	rt.writeDoctorCodexWorkMigrationReview(context.Background(), &b, doctorDiagnosticInput{Key: key, Now: time.Now().UTC()})
+	rt.writeDoctorCodexWorkEvidenceReview(context.Background(), &b, doctorDiagnosticInput{Key: key, Now: time.Now().UTC()})
 	report := b.String()
 	for _, want := range []string{
 		`codex_work_executor="codex"`,
@@ -742,10 +742,10 @@ func TestDoctorCodexWorkMigrationReviewReportsPersistedInterfaceEvidence(t *test
 		`codex_work_command_events="1"`,
 		`codex_work_subagent_events="1"`,
 		`codex_work_commit_lane_status="commit_requires_separate_lease"`,
-		`codex_work_migration_status="evidence_present"`,
+		`codex_work_evidence_status="evidence_present"`,
 	} {
 		if !strings.Contains(report, want) {
-			t.Fatalf("migration review missing %s:\n%s", want, report)
+			t.Fatalf("evidence review missing %s:\n%s", want, report)
 		}
 	}
 }
@@ -814,7 +814,7 @@ func TestDoctorAutonomyStatusReportsActiveOverridePrecedenceAndExpiry(t *testing
 	}
 }
 
-func TestDoctorAutonomyStatusReportsLegacyLeaseBlockedByConfig(t *testing.T) {
+func TestDoctorAutonomyStatusReportsExistingLeaseBlockedByConfig(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -826,7 +826,7 @@ func TestDoctorAutonomyStatusReportsLegacyLeaseBlockedByConfig(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	if _, err := store.CreateOperatorAutoApprovalLease(session.OperatorAutoApprovalLease{
-		ID:          "doctor-blocked-legacy",
+		ID:          "doctor-blocked-existing",
 		AdminUserID: 1001,
 		ChatID:      99141,
 		Scope:       session.OperatorAutoApprovalScopeAll,

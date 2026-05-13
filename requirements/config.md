@@ -176,7 +176,7 @@ context_window = 128000
 
 [providers.openrouter]
 api_key = ""
-base_url = "https://openrouter.ai/api/v1"  # OpenAI-compatible
+base_url = "https://openrouter.ai/api/v1"  # OpenAI API-shaped
 model = "anthropic/claude-sonnet-4-6"       # provider/model format
 max_tokens = 64000
 context_window = 1000000

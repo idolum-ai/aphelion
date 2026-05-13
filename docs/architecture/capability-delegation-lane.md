@@ -73,8 +73,8 @@ contract field on a request or grant. Current durable-child plans support:
   admin does not provide `allowed_actions`.
 - `reason` and `notes`: provenance and operator context.
 
-`durable_agent delegation_request` is the compatibility bridge for durable
-children. It creates the same canonical `capability_requests` row, attributes the
+`durable_agent delegation_request` is the durable-child capability request path.
+It creates the same canonical `capability_requests` row, attributes the
 request to the child by default, derives parent/admin principals when possible,
 queues a durable review artifact for the operator, and can embed a
 `capability_update_plan` produced by the same conversation. This is the preferred

@@ -66,7 +66,7 @@ func TestContinuationLeaseActionAccessAndPersistence(t *testing.T) {
 	}
 }
 
-func TestContinuationOperatorTitleFieldsAreJSONCompatible(t *testing.T) {
+func TestContinuationOperatorTitleFieldsSurviveJSONRoundTrip(t *testing.T) {
 	action := NormalizeActionProposal(ActionProposal{
 		ID:            "aprop-title",
 		OperatorTitle: "  Human plan title  ",

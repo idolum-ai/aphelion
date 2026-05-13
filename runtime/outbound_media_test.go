@@ -104,7 +104,7 @@ func TestExtractOutboundReplyMediaIgnoresLegacyBareMediaText(t *testing.T) {
 	text, media := extractOutboundReplyMedia(sandbox.Scope{WorkingRoot: root}, "Summary\nMEDIA: chart.png", nil)
 
 	if text != "Summary\nMEDIA: chart.png" {
-		t.Fatalf("text = %q, want legacy media line preserved as ordinary text", text)
+		t.Fatalf("text = %q, want unrecognized media line preserved as ordinary text", text)
 	}
 	if len(media) != 0 {
 		t.Fatalf("media len = %d, want 0", len(media))

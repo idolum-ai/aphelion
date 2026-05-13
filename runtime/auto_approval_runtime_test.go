@@ -264,7 +264,7 @@ func TestRuntimeAutoApprovalExistingLeaseIsInertWhenAutonomyCeilingTightens(t *t
 	}
 	now := time.Now().UTC()
 	if _, err := store.CreateOperatorAutoApprovalLease(session.OperatorAutoApprovalLease{
-		ID:          "legacy-lease-blocked-by-ceiling",
+		ID:          "existing-lease-blocked-by-ceiling",
 		AdminUserID: 1001,
 		ChatID:      99132,
 		Scope:       session.OperatorAutoApprovalScopeAll,
@@ -276,7 +276,7 @@ func TestRuntimeAutoApprovalExistingLeaseIsInertWhenAutonomyCeilingTightens(t *t
 	}
 
 	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
-		ID: "dec-blocked-legacy",
+		ID: "dec-blocked-by-ceiling",
 		Request: decision.Request{
 			Kind:          decision.KindProposalApproval,
 			ChatID:        99132,
@@ -291,14 +291,14 @@ func TestRuntimeAutoApprovalExistingLeaseIsInertWhenAutonomyCeilingTightens(t *t
 		t.Fatalf("AutoResolveDecision() err = %v", err)
 	}
 	if result.Choice != "" {
-		t.Fatalf("AutoResolveDecision() = %#v, want no auto-resolution when ceiling blocks legacy lease", result)
+		t.Fatalf("AutoResolveDecision() = %#v, want no auto-resolution when ceiling blocks existing lease", result)
 	}
 	snapshot, err := rt.ChatAutonomyStatusSnapshot(99132, 1001)
 	if err != nil {
 		t.Fatalf("ChatAutonomyStatusSnapshot() err = %v", err)
 	}
 	if snapshot.ActiveOverrideMode != "" {
-		t.Fatalf("Autonomy snapshot = %#v, want legacy lease hidden by ceiling", snapshot)
+		t.Fatalf("Autonomy snapshot = %#v, want existing lease hidden by ceiling", snapshot)
 	}
 	chatStatus, err := rt.ChatStatusSnapshot(99132, core.RouterStatusSnapshot{})
 	if err != nil {
@@ -307,12 +307,12 @@ func TestRuntimeAutoApprovalExistingLeaseIsInertWhenAutonomyCeilingTightens(t *t
 	if chatStatus.AutoApproval != nil {
 		t.Fatalf("ChatStatusSnapshot.AutoApproval = %#v, want hidden inert lease", chatStatus.AutoApproval)
 	}
-	lease, ok, err := store.OperatorAutoApprovalLease("legacy-lease-blocked-by-ceiling")
+	lease, ok, err := store.OperatorAutoApprovalLease("existing-lease-blocked-by-ceiling")
 	if err != nil {
 		t.Fatalf("OperatorAutoApprovalLease() err = %v", err)
 	}
 	if !ok || lease.UsedCount != 0 {
-		t.Fatalf("legacy lease = %#v ok=%v, want unused lease", lease, ok)
+		t.Fatalf("existing lease = %#v ok=%v, want unused lease", lease, ok)
 	}
 }
 

@@ -1799,7 +1799,7 @@ func TestTriggerContinuationUsesMachineAuthoredContinuationEventText(t *testing.
 	}
 	last := provider.lastGovernorMsgs[len(provider.lastGovernorMsgs)-1]
 	if last.Role != "user" {
-		t.Fatalf("last role = %q, want user-compatible provider input", last.Role)
+		t.Fatalf("last role = %q, want provider user-role input", last.Role)
 	}
 	for _, want := range []string{
 		approvedContinuationEventText,

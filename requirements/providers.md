@@ -117,7 +117,7 @@ OpenAI file storage, vector stores, and transcription are deliberately handled e
 
 ### OpenRouter
 
-OpenRouter is an inference gateway. It belongs here because it provides inference, model routing, and streaming in an OpenAI-compatible shape.
+OpenRouter is an inference gateway. It belongs here because it provides inference, model routing, and streaming through an OpenAI API-shaped interface.
 
 ### Gemini
 
@@ -185,7 +185,7 @@ That means:
 
 1. retry Codex within its own backend logic where appropriate
 2. on bounded retry exhaustion or retryable runtime failure, fall back to the native provider chain
-3. retry Anthropic first, then OpenAI-compatible native providers in order
+3. retry Anthropic first, then OpenAI API-shaped native providers in order
 4. on bounded retry exhaustion, fail over to OpenRouter
 5. on deterministic client/request errors, stop rather than cascading through every provider
 
@@ -202,7 +202,7 @@ For the current Aphelion runtime, provider multimodality is intentionally narrow
 The provider adapter should map internal content parts into provider-native request shapes:
 
 - Anthropic: `messages[].content` blocks with text and image entries
-- OpenRouter: OpenAI-compatible multimodal content arrays with text and image entries
+- OpenRouter: OpenAI API-shaped multimodal content arrays with text and image entries
 
 Raw provider-native PDF document blocks are deferred. PDF support in the current runtime should come from bounded local extraction first.
 

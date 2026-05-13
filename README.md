@@ -9,7 +9,7 @@ License: Apache-2.0.
 - **Only what we need.** No plugin marketplace, no omnichannel product surface, no enterprise features.
 - **Outpost, not platform.** Aphelion is designed to stay small, durable, and useful at distance.
 - **Radio link, not omnichannel.** Telegram is the primary control link, not one adapter among dozens.
-- **Linux only.** No macOS/Windows compat. Single target, no conditionals.
+- **Linux only.** No macOS/Windows support. Single target, no conditionals.
 - **Anonymizable by design.** Provider-visible identity is configurable or absent by default where the runtime can control it.
 - **Go.** Single Linux binary, with a static release target separate from the normal developer build. Goroutines for concurrency. Deploy = `scp` or the bundled service scripts.
 - **Anthropic-first caching.** Structured cache breakpoints exist and cache-aware prompt shaping preserves authority/runtime blocks.

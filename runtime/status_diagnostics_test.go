@@ -153,11 +153,11 @@ func TestStatusDiagnosticsPrefersTurnProjectionFromExecutionEvents(t *testing.T)
 	}
 
 	key := session.SessionKey{ChatID: 9333, UserID: 0, Scope: telegramDMScopeRef(9333)}
-	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "legacy failed row")
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "old failed row")
 	if err != nil {
 		t.Fatalf("BeginTurnRun() err = %v", err)
 	}
-	if err := store.CompleteTurnRun(run.ID, session.TurnRunStatusFailed, "legacy failure"); err != nil {
+	if err := store.CompleteTurnRun(run.ID, session.TurnRunStatusFailed, "old failure"); err != nil {
 		t.Fatalf("CompleteTurnRun() err = %v", err)
 	}
 	now := time.Now().UTC()
@@ -186,7 +186,7 @@ func TestStatusDiagnosticsPrefersTurnProjectionFromExecutionEvents(t *testing.T)
 		t.Fatalf("StatusDiagnostics() = %q, want completed state from TES projection", text)
 	}
 	if strings.Contains(text, "failed") {
-		t.Fatalf("StatusDiagnostics() = %q, do not want stale failed state from legacy row", text)
+		t.Fatalf("StatusDiagnostics() = %q, do not want stale failed state from old row", text)
 	}
 }
 

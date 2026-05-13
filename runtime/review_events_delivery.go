@@ -24,7 +24,7 @@ func shouldGenerateReviewEvent(actor principal.Principal, key session.SessionKey
 	if actor.Role != principal.RoleAdmin {
 		return true
 	}
-	// Future-compatible hook: subordinate sessions from admin principals still produce digests.
+	// Subordinate sessions from admin principals still produce digests.
 	return key.UserID != 0
 }
 

@@ -335,20 +335,20 @@ func TestSystemStatusSnapshotPrefersOperationalPendingDecisionsOverTES(t *testin
 		t.Fatalf("UpsertPendingDecision(decision-from-events) err = %v", err)
 	}
 	if err := store.UpsertPendingDecision(session.PendingDecisionRecord{
-		ID:            "decision-legacy-only",
+		ID:            "decision-store-only",
 		Sequence:      2,
 		OwnerKey:      "chat:9002:sender:1002",
 		Kind:          "proposal_approval",
 		ChatID:        9002,
 		SenderID:      1002,
 		MessageID:     222,
-		Prompt:        "Legacy only decision?",
+		Prompt:        "Store only decision?",
 		DefaultChoice: "deny",
 		ChoicesJSON:   `[{"id":"approve","label":"Approve"},{"id":"deny","label":"Deny"}]`,
 		CreatedAt:     now.Add(-2 * time.Minute),
 		UpdatedAt:     now.Add(-90 * time.Second),
 	}); err != nil {
-		t.Fatalf("UpsertPendingDecision(decision-legacy-only) err = %v", err)
+		t.Fatalf("UpsertPendingDecision(decision-store-only) err = %v", err)
 	}
 
 	key := session.SessionKey{ChatID: 9001, UserID: 0, Scope: telegramDMScopeRef(9001)}
@@ -402,8 +402,8 @@ func TestSystemStatusSnapshotPrefersOperationalPendingDecisionsOverTES(t *testin
 	if !pendingDecisionByID(snapshot.PendingItems, "decision-from-events") {
 		t.Fatalf("PendingItems missing operational decision decision-from-events: %#v", snapshot.PendingItems)
 	}
-	if !pendingDecisionByID(snapshot.PendingItems, "decision-legacy-only") {
-		t.Fatalf("PendingItems missing legacy fallback decision decision-legacy-only: %#v", snapshot.PendingItems)
+	if !pendingDecisionByID(snapshot.PendingItems, "decision-store-only") {
+		t.Fatalf("PendingItems missing store fallback decision decision-store-only: %#v", snapshot.PendingItems)
 	}
 	if !pendingDecisionByID(snapshot.PendingItems, "decision-events-only") {
 		t.Fatalf("PendingItems missing TES fallback decision decision-events-only: %#v", snapshot.PendingItems)
@@ -423,10 +423,10 @@ func TestChatStatusSnapshotPrefersOperationalContinuationStateOverTES(t *testing
 	if err := store.UpdateContinuationState(key, session.ContinuationState{
 		Status:         session.ContinuationStatusPending,
 		RemainingTurns: 2,
-		DecisionID:     "continuation-legacy",
+		DecisionID:     "continuation-store",
 		UpdatedAt:      time.Now().UTC().Add(-2 * time.Minute),
 	}); err != nil {
-		t.Fatalf("UpdateContinuationState(legacy pending) err = %v", err)
+		t.Fatalf("UpdateContinuationState(store pending) err = %v", err)
 	}
 
 	now := time.Now().UTC()
@@ -436,7 +436,7 @@ func TestChatStatusSnapshotPrefersOperationalContinuationStateOverTES(t *testing
 			Stage:     "continuation",
 			Status:    "pending",
 			PayloadJSON: `{
-				"decision_id":"continuation-legacy",
+				"decision_id":"continuation-store",
 				"remaining_turns":2
 			}`,
 			CreatedAt: now.Add(-90 * time.Second),
@@ -446,7 +446,7 @@ func TestChatStatusSnapshotPrefersOperationalContinuationStateOverTES(t *testing
 			Stage:     "continuation",
 			Status:    "revoked",
 			PayloadJSON: `{
-				"decision_id":"continuation-legacy",
+				"decision_id":"continuation-store",
 				"remaining_turns":0
 			}`,
 			CreatedAt: now.Add(-60 * time.Second),

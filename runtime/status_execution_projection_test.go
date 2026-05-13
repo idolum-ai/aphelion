@@ -576,7 +576,7 @@ func TestSystemStatusSnapshotIncludesRecentExecutionTimeline(t *testing.T) {
 	}
 }
 
-func TestChatStatusSnapshotPrefersLatestTurnFromExecutionEventsOverLegacyTurnRun(t *testing.T) {
+func TestChatStatusSnapshotPrefersLatestTurnFromExecutionEventsOverOldTurnRun(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -586,11 +586,11 @@ func TestChatStatusSnapshotPrefersLatestTurnFromExecutionEventsOverLegacyTurnRun
 	}
 
 	key := session.SessionKey{ChatID: 9051, UserID: 0, Scope: telegramDMScopeRef(9051)}
-	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "legacy status row")
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "old status row")
 	if err != nil {
 		t.Fatalf("BeginTurnRun() err = %v", err)
 	}
-	if err := store.CompleteTurnRun(run.ID, session.TurnRunStatusFailed, "legacy failed row"); err != nil {
+	if err := store.CompleteTurnRun(run.ID, session.TurnRunStatusFailed, "old failed row"); err != nil {
 		t.Fatalf("CompleteTurnRun() err = %v", err)
 	}
 
@@ -913,20 +913,20 @@ func TestChatStatusSnapshotPrefersSidecarProjectionEventsOverStatusState(t *test
 	}
 	sess.OperationState = session.OperationState{
 		Status:  "active",
-		Stage:   "legacy-stage",
-		Summary: "legacy operation status",
+		Stage:   "old-stage",
+		Summary: "old operation status",
 	}
 	sess.PlanState = session.PlanState{
 		Steps: []session.PlanStep{
-			{Step: "Legacy plan step", Status: session.PlanStatusInProgress},
+			{Step: "Old plan step", Status: session.PlanStatusInProgress},
 		},
 	}
 	sess.LastFloorMetadata = encodeFloorMetadata(core.FloorMetadata{
-		HiddenInputs:      []core.HiddenInput{{Category: "legacy", Summary: "legacy summary"}},
-		ProvenanceSummary: "legacy hidden summary",
+		HiddenInputs:      []core.HiddenInput{{Category: "old", Summary: "old summary"}},
+		ProvenanceSummary: "old hidden summary",
 	})
 	if err := store.Save(sess, nil, core.TokenUsage{}); err != nil {
-		t.Fatalf("Save(session legacy sidecars) err = %v", err)
+		t.Fatalf("Save(session old sidecars) err = %v", err)
 	}
 
 	now := time.Now().UTC()

@@ -90,7 +90,7 @@ This split exists because the system layer and the user-facing layer optimize fo
 - `provider`
 - `floor_fallback`
 
-`codex` is the preferred governor backend when available because it aligns economically and operationally with the intended coding/operator role of the core. The native governor path remains the fallback and compatibility path.
+`codex` is the preferred governor backend when available because it aligns economically and operationally with the intended coding/operator role of the core. The native governor path remains the configured fallback path.
 
 ## Decision Model
 
@@ -160,7 +160,7 @@ For proactive turns, a second distinction matters:
 - face may suggest outreach
 - governor authorizes delivery
 
-### Transitional compatibility
+### Current target
 
 The architectural goal remains:
 
@@ -222,7 +222,7 @@ The face may:
 
 - author the visible scene from the material floor
 - choose pacing, emphasis, and arrangement
-- add validation when compatible with the floor
+- add validation when supported by the floor
 - adapt to the user's style
 - use `Idolum`-specific identity and anti-drift guidance
 - push the governor toward a warmer, sharper, or more proactive next move

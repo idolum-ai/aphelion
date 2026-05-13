@@ -178,11 +178,11 @@ func TestGenericExternalChannelWakeOutcomePrefersTypedContract(t *testing.T) {
 	outcome := genericExternalChannelWakeOutcomeFromSummary(strings.Join([]string{
 		"Adapter blocked before touching the external channel.",
 		`EXTERNAL_CHANNEL_OUTCOME: {"schema_version":"aphelion.external_channel_wake.v1","status":"blocked","reason_code":"grant_missing","adapter":"child_adapter","agent_id":"child-alpha","grant_id":"capg-child-alpha","error":"child runtime grant missing","evidence_refs":["grant://capg-child-alpha"]}`,
-		"legacy prose says completed but has no authority",
+		"ordinary prose says completed but has no authority",
 	}, "\n"))
 
 	if outcome.Completed || outcome.Status != "wake_blocked" || outcome.Source != "typed_outcome" {
-		t.Fatalf("outcome = %#v, want typed blocked outcome to override legacy line", outcome)
+		t.Fatalf("outcome = %#v, want typed blocked outcome to override prose line", outcome)
 	}
 	if outcome.ReasonCode != "grant_missing" || outcome.GrantID != "capg-child-alpha" || len(outcome.EvidenceRefs) != 1 {
 		t.Fatalf("outcome = %#v, want typed reason, grant, and evidence refs", outcome)

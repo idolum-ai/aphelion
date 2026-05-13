@@ -365,7 +365,7 @@ Examples include:
 
 - reusable shared prefixes
 - KV cache or other attention-state reuse
-- embedding or prefill cache reuse across compatible runs
+- embedding or prefill cache reuse across matching runs
 
 Inference memory should be treated as:
 
@@ -378,13 +378,13 @@ Inference memory must not be treated as durable semantic truth, policy, or ordin
 
 ### Inference-state reuse across children
 
-When multiple children process the same public prefix, the runtime may eventually support inference-state reuse across compatible models for performance.
+When multiple children process the same public prefix, the runtime may eventually support inference-state reuse across matching models for performance.
 
 This is a systems optimization, not a constitutional memory-sharing path.
 
 It should only be considered when:
 
-- the model family or architecture is compatible
+- the model family or architecture matches
 - the serving layer actually exposes such reuse control
 - the reused prefix belongs to a surface that is allowed to be shared
 
@@ -856,7 +856,7 @@ Child-initiated transport is the preferred default because it:
 
 For long-lived children on ordinary hosts, the preferred transport is:
 
-- child-initiated secure bidirectional connection over an HTTPS-compatible transport
+- child-initiated secure bidirectional connection over an HTTPS-shaped transport
 
 For ephemeral or serverless children, the preferred degraded transport is:
 
@@ -1181,6 +1181,6 @@ Durable agents must not acquire lasting changes silently.
 - **TestParentMediatedChildToChildCommunicationPreservesProvenance**: inter-child artifacts remain parent-mediated and bounded unless explicitly ratified otherwise
 - **TestSharedInferenceStateUsesOnlyPublicPrefix**: runtime prefix or KV reuse, when supported by the serving/runtime layer, may use declared public context but not private child state
 - **TestInferenceStateReuseDoesNotPromoteDurableMemory**: transient runtime cache reuse, when supported, does not create shared semantic memory or house-memory promotion
-- **TestIncompatibleModelFamiliesSkipSharedInferenceReuse**: children using incompatible architectures or opaque hosted APIs do not assume cross-child inference-state reuse even if the optimization exists elsewhere
+- **TestMismatchedModelFamiliesSkipSharedInferenceReuse**: children using mismatched architectures or opaque hosted APIs do not assume cross-child inference-state reuse even if the optimization exists elsewhere
 - **TestHostilePublicIngressIsContainedByQuarantine**: public website pressure cannot bypass the durable-agent quarantine and ratification boundary
 - **TestDurableDriftPreservesProvenance**: approved child changes record the motivating review artifact and admin ratification

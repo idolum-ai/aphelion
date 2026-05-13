@@ -47,7 +47,7 @@ If those are missing or malformed, the source is ignored.
 
 Aphelion now supports its own Codex auth store separate from Codex CLI.
 
-This gives the runtime a stable, refreshable credential home even when the operator wants Codex compatibility without treating `~/.codex/auth.json` as the only long-term source of truth.
+This gives the runtime a stable, refreshable credential home while still allowing external Codex CLI credentials when they are the active source.
 
 ## Credential Strategy
 
@@ -200,8 +200,8 @@ transport_retries = 1
 
 - **Codex auth is not the same as OpenAI API-key auth.**
 - **External Codex CLI credentials are a valid current implementation source.**
-- **Aphelion should be Codex-compatible before it is Codex-self-hosting.**
-- **Aphelion may now own Codex auth while remaining CLI-compatible.**
+- **Aphelion should interoperate with Codex before it is Codex-self-hosting.**
+- **Aphelion may now own Codex auth while still accepting the Codex CLI credential source.**
 - **`auto` prefers Codex when valid credentials exist.**
 - **Fallback to native is required for practicality.**
 - **Governor credentials must never leak into prompts or non-admin tool surfaces.**

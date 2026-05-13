@@ -88,8 +88,8 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 	writeDoctorSection(&b, "Recent Service Log Tail")
 	r.writeDoctorLogTail(&b)
 
-	writeDoctorSection(&b, "Codex Work Migration Review")
-	r.writeDoctorCodexWorkMigrationReview(ctx, &b, input)
+	writeDoctorSection(&b, "Codex Work Evidence Review")
+	r.writeDoctorCodexWorkEvidenceReview(ctx, &b, input)
 
 	writeDoctorSection(&b, "Doctor Instructions")
 	writeDoctorLine(&b, "Analyze the evidence above and the loaded prompt/memory context. Identify likely causes, residual risks, and specific follow-up work. Do not perform actions. Before reporting a failure as current, check whether the Known Issue Status Checks or newer runtime evidence indicate it has already been fixed.")
@@ -241,9 +241,9 @@ func (r *Runtime) writeDoctorSandboxReadiness(b *strings.Builder, now time.Time)
 	}
 }
 
-func (r *Runtime) writeDoctorCodexWorkMigrationReview(ctx context.Context, b *strings.Builder, input doctorDiagnosticInput) {
+func (r *Runtime) writeDoctorCodexWorkEvidenceReview(ctx context.Context, b *strings.Builder, input doctorDiagnosticInput) {
 	if r == nil || r.store == nil {
-		writeDoctorLine(b, "codex_work_migration_review: unavailable")
+		writeDoctorLine(b, "codex_work_evidence_review: unavailable")
 		return
 	}
 	opState, err := r.store.OperationState(input.Key)
@@ -324,12 +324,12 @@ func (r *Runtime) writeDoctorCodexWorkMigrationReview(ctx context.Context, b *st
 	case len(work.CodexEvents) > 0:
 		status = "evidence_present"
 	case strings.EqualFold(strings.TrimSpace(work.Executor), "codex") || strings.TrimSpace(work.CodexThreadID) != "":
-		status = "needs_event_migration_review"
+		status = "needs_event_evidence_review"
 	case r.cfg != nil && strings.TrimSpace(r.cfg.Work.Codex.AppServerAddress) == "":
 		status = "codex_app_server_unconfigured"
 	}
-	writeDoctorKV(b, "codex_work_migration_status", status)
-	writeDoctorLine(b, "codex_work_migration_next=\"Before expanding Codex runtime features, confirm live operation_state.work carries codex_events, patch_preview, commit_lane_status, thread ids, and recent work.executor execution events.\"")
+	writeDoctorKV(b, "codex_work_evidence_status", status)
+	writeDoctorLine(b, "codex_work_evidence_next=\"Before expanding Codex runtime features, confirm live operation_state.work carries codex_events, patch_preview, commit_lane_status, thread ids, and recent work.executor execution events.\"")
 	_ = ctx
 }
 

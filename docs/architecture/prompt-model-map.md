@@ -14,7 +14,7 @@ selection. It reflects the current branch and the live local configuration in
 | Governor Codex model | `gpt-5.5` | `governor.codex.model` | Used when backend resolves to Codex. |
 | Native provider chain | `openai -> anthropic -> openrouter` | `providers.selection=auto`, `providers.auto_order`, explicit fallback chain | Effective config sets `governor.native_provider=openai` and `providers.default=openai` because OpenAI is configured. |
 | Native OpenAI model chain | `gpt-5.5 -> gpt-5.4 -> gpt-5.4-mini` | `providers.openai.model`, `providers.openai.fallback_models` | Applies to native governor fallback, face provider with GPT persona recipe, and status-readable provider chains. |
-| Native Anthropic fallback | `claude-sonnet-4-6` | `providers.anthropic.model` | Used when OpenAI path is unavailable or when face recipe is Anthropic-compatible. |
+| Native Anthropic fallback | `claude-sonnet-4-6` | `providers.anthropic.model` | Used when OpenAI path is unavailable or when the face recipe selects Anthropic. |
 | Native OpenRouter fallback | `anthropic/claude-sonnet-4-6` | `providers.openrouter.model` | For generic native chain; face recipe may map GPT persona to `openai/gpt-5.5` on OpenRouter. |
 | Native Gemini/Ollama options | available but not in live default chain | `providers.gemini`, `providers.ollama`, `providers.auto_order`, `providers.fallback_chain` | Can be selected explicitly for native governor/model slots/durable child bootstrap. |
 | Face backend | `provider` | `face.backend` | Face prompts use the persona provider chain, not the Codex governor backend. |
@@ -87,7 +87,7 @@ turn intimacy into hidden authorization.
 | OpenAI has model-level fallback before provider fallback. | `gpt-5.5 -> gpt-5.4 -> gpt-5.4-mini`. | Keep. This matches the GPT 5.5 migration intent. |
 | Post-tool OpenAI/Codex request rejection is provider-specific. | If tool results are already in the history and OpenAI/Codex rejects the synthesis request, skip remaining OpenAI-family entries and try Anthropic, then OpenRouter with the same tool evidence. | Keep. This preserves final synthesis without discarding executed tool work. |
 | Governor and face may both use GPT 5.5. | Live governor Codex model is `gpt-5.5`; live persona recipe is `gpt-5.5`. | Keep. Prompt/context, not model name, separates behavior. |
-| Face provider uses persona recipe. | `runtime_recipes.json` sets `persona_model=gpt-5.5`; face provider chain maps this to OpenAI GPT 5.5 and compatible fallbacks. | Keep, but add clearer status projection if missing. |
+| Face provider uses persona recipe. | `runtime_recipes.json` sets `persona_model=gpt-5.5`; face provider chain maps this to OpenAI GPT 5.5 and configured fallbacks. | Keep, but add clearer status projection if missing. |
 | Governor effort is separately configurable. | Live recipe sets `governor_effort=xhigh`; applies to interactive and recovery. | Keep, but evaluate whether `xhigh` should remain live default after prompt review. |
 | Face calls pass invisible provider options. | `face.ProviderRenderer` forwards reasoning effort/summary and mode-derived verbosity to providers that support options. Render defaults to medium verbosity; proposal, brokerage, and repair default to low. | Keep invisible. This is not an operator-facing personality control. |
 

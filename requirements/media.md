@@ -90,7 +90,7 @@ OpenAI should be supported here for speech-to-text.
 Planned uses:
 
 - `audio/transcriptions`
-- support for classic Whisper-compatible flows
+- support for classic Whisper API-shaped flows
 - support for higher-quality transcribe models later
 
 Design rules:
