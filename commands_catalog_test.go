@@ -133,18 +133,18 @@ func TestDefaultTelegramCommandsIncludeHealth(t *testing.T) {
 	}
 }
 
-func TestDefaultTelegramCommandsDoNotPublishRetiredCommands(t *testing.T) {
+func TestDefaultTelegramCommandsExcludeRemovedCommands(t *testing.T) {
 	t.Parallel()
 
-	retired := map[string]bool{
+	removed := map[string]bool{
 		"debug":       true,
 		"doctor":      true,
 		"autonomy":    true,
 		"autoapprove": true,
 	}
 	for _, cmd := range defaultTelegramCommands {
-		if retired[cmd.Command] {
-			t.Fatalf("defaultTelegramCommands = %#v, want no retired command %q", defaultTelegramCommands, cmd.Command)
+		if removed[cmd.Command] {
+			t.Fatalf("defaultTelegramCommands = %#v, want no removed command %q", defaultTelegramCommands, cmd.Command)
 		}
 	}
 }
