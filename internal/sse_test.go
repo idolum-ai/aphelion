@@ -25,7 +25,7 @@ func TestSSEBasic(t *testing.T) {
 		{
 			name:  "single event",
 			input: "event: message\nid: 42\ndata: hello\n\n",
-			want: []Event{{Type: "message", Data: "hello", ID: "42"}},
+			want:  []Event{{Type: "message", Data: "hello", ID: "42"}},
 		},
 	}
 
@@ -48,7 +48,7 @@ func TestSSEMultilineData(t *testing.T) {
 		{
 			name:  "multiple data lines joined by newline",
 			input: "data: first\ndata: second\ndata: third\n\n",
-			want: []Event{{Data: "first\nsecond\nthird"}},
+			want:  []Event{{Data: "first\nsecond\nthird"}},
 		},
 	}
 
@@ -71,7 +71,7 @@ func TestSSEComments(t *testing.T) {
 		{
 			name:  "comment lines are ignored",
 			input: ": keep-alive\ndata: hi\n: another\n\n",
-			want: []Event{{Data: "hi"}},
+			want:  []Event{{Data: "hi"}},
 		},
 	}
 
@@ -94,7 +94,7 @@ func TestSSEEmptyLines(t *testing.T) {
 		{
 			name:  "multiple blank lines are a single boundary",
 			input: "data: one\n\n\n\n",
-			want: []Event{{Data: "one"}},
+			want:  []Event{{Data: "one"}},
 		},
 	}
 
@@ -117,7 +117,7 @@ func TestSSENoEvent(t *testing.T) {
 		{
 			name:  "missing event field keeps empty type",
 			input: "id: abc\ndata: payload\n\n",
-			want: []Event{{Type: "", Data: "payload", ID: "abc"}},
+			want:  []Event{{Type: "", Data: "payload", ID: "abc"}},
 		},
 	}
 

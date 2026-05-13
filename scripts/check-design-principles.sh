@@ -91,13 +91,13 @@ if rg -n "msg\\.Text|normalizeMediaIntentText|containsTranscriptionTerm|contains
   exit 1
 fi
 
-if ! rg -qF "writeDoctorDesignPrincipleHealth" runtime/doctor.go; then
+if ! rg -qF "writeDoctorDesignPrincipleHealth" runtime --glob 'doctor*.go'; then
   echo "/doctor must surface design-principle health" >&2
   exit 1
 fi
 
 for symbol in "OperatorTitle" "PlanTitle"; do
-  if ! rg -qF "$symbol" session/types.go; then
+  if ! rg -qF "$symbol" session --glob 'types*.go'; then
     echo "session state must carry explicit operator/plan title fields: $symbol" >&2
     exit 1
   fi
@@ -113,7 +113,7 @@ if ! rg -qF 'proposal.OperatorTitle = ""' runtime/continuation_lease.go || ! rg 
   exit 1
 fi
 
-if ! rg -qF "NextRepairAction" runtime/turn.go || ! rg -qF "DebugBreadcrumb" core/status.go || ! rg -qF "attachPendingItemDebugBreadcrumbs" runtime/status.go || ! rg -qF "next_repair_action" face/status_render.go; then
+if ! rg -qF "NextRepairAction" runtime --glob '!**/*_test.go' || ! rg -qF "DebugBreadcrumb" core/status.go || ! rg -qF "attachPendingItemDebugBreadcrumbs" runtime/status.go || ! rg -qF "next_repair_action" face --glob '!**/*_test.go'; then
   echo "operator debug breadcrumbs must cover review events and status pending items" >&2
   exit 1
 fi

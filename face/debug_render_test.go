@@ -80,7 +80,7 @@ func TestRenderTelegramDebugIncludesAdminSystemAndDurablesSections(t *testing.T)
 		"status_scope=chat",
 		"status_scope=system",
 		"debug_system:",
-			"pending_counts queue=0 decision=1 continuation=1 review=0 recovery=0 stale_turn=0",
+		"pending_counts queue=0 decision=1 continuation=1 review=0 recovery=0 stale_turn=0",
 		"latest_turns:",
 		"chat_id=7 status=running kind=interactive",
 		"status_scope=durables",

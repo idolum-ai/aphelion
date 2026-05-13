@@ -7,10 +7,74 @@ cd "$repo_root"
 ledger="docs/architecture/structural-hygiene.md"
 threshold=800
 fail=0
+required_package_docs=(
+  "agent/doc.go"
+  "config/doc.go"
+  "core/doc.go"
+  "decision/doc.go"
+  "durableagent/doc.go"
+  "face/doc.go"
+  "governorauth/doc.go"
+  "governorbackend/doc.go"
+  "internal/doc.go"
+  "media/doc.go"
+  "memory/doc.go"
+  "openai/doc.go"
+  "pipeline/doc.go"
+  "principal/doc.go"
+  "prompt/doc.go"
+  "provider/doc.go"
+  "runtime/doc.go"
+  "session/doc.go"
+  "tailnet/doc.go"
+  "telegram/doc.go"
+  "tool/doc.go"
+  "tool/sandbox/doc.go"
+  "turn/doc.go"
+  "voice/doc.go"
+  "workspace/doc.go"
+)
 
 if [[ ! -f "$ledger" ]]; then
   echo "missing structural hygiene ledger: $ledger" >&2
   exit 1
+fi
+
+for file in "${required_package_docs[@]}"; do
+  if [[ ! -f "$file" ]]; then
+    echo "missing package ownership doc: $file" >&2
+    fail=1
+  fi
+done
+
+if awk -F'|' '
+  /^\|[[:space:]]+`.*\.go`[[:space:]]+\|/ {
+    file=$2
+    owner=$3
+    direction=$4
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", file)
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", owner)
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", direction)
+    if (owner == "" || direction == "") {
+      print file
+    }
+  }
+' "$ledger" | rg -q .; then
+  echo "structural hygiene ledger has rows without owner concept or split direction" >&2
+  awk -F'|' '
+    /^\|[[:space:]]+`.*\.go`[[:space:]]+\|/ {
+      file=$2
+      owner=$3
+      direction=$4
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", file)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", owner)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", direction)
+      if (owner == "" || direction == "") {
+        print file
+      }
+    }
+  ' "$ledger" >&2
+  fail=1
 fi
 
 while IFS= read -r file; do
@@ -38,10 +102,14 @@ while IFS= read -r path; do
     fail=1
   fi
 done < <(
-  rg --no-filename -o '`[^`*]+\.go`' "$ledger" |
-    sed 's/^`//; s/`$//' |
-    grep -v '^_test\.go$' |
-    sort -u
+  awk -F'|' '
+    /^\|[[:space:]]+`.*\.go`[[:space:]]+\|/ {
+      file=$2
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", file)
+      gsub(/^`|`$/, "", file)
+      print file
+    }
+  ' "$ledger" | sort -u
 )
 
 if (( fail != 0 )); then

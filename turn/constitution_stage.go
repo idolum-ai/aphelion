@@ -60,4 +60,3 @@ func RunConstitutionStage(ctx context.Context, input ConstitutionStageInput, cal
 	}
 	return repaired
 }
-

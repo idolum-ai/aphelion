@@ -151,4 +151,3 @@ func TestRunConstitutionStageRepairFailureReturnsOriginal(t *testing.T) {
 		t.Fatalf("RunConstitutionStage() = %q, want original reply", got)
 	}
 }
-
