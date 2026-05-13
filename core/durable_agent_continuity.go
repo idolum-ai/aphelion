@@ -3,6 +3,8 @@
 package core
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -25,6 +27,7 @@ type DurableAgentConversationState struct {
 }
 
 type DurableAgentConversationMessage struct {
+	MessageID      string    `json:"message_id,omitempty"`
 	Role           string    `json:"role,omitempty"`
 	Text           string    `json:"text,omitempty"`
 	CreatedAt      time.Time `json:"created_at,omitempty"`
@@ -200,6 +203,7 @@ func (s DurableAgentContinuityState) WithConversationMessage(role string, text s
 		createdAt = time.Now().UTC()
 	}
 	next := DurableAgentConversationMessage{
+		MessageID: durableAgentConversationMessageID(role, text, createdAt.UTC()),
 		Role:      role,
 		Text:      text,
 		CreatedAt: createdAt.UTC(),
@@ -238,27 +242,61 @@ func (s DurableAgentContinuityState) PendingParentConversationMessages(limit int
 	return out
 }
 
-func (s DurableAgentContinuityState) AcknowledgeParentConversationMessages(at time.Time) DurableAgentContinuityState {
+func DurableAgentConversationMessageIDs(messages []DurableAgentConversationMessage) []string {
+	if len(messages) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(messages))
+	for _, message := range normalizeDurableAgentConversationMessages(messages) {
+		if message.MessageID == "" {
+			continue
+		}
+		ids = append(ids, message.MessageID)
+	}
+	return normalizeDurableAgentStringSet(ids)
+}
+
+func (s DurableAgentContinuityState) AcknowledgeParentConversationMessageIDs(messageIDs []string, at time.Time) (DurableAgentContinuityState, error) {
 	s = NormalizeDurableAgentContinuityState(s)
-	if s.Conversation == nil || len(s.Conversation.Messages) == 0 {
-		return s
+	messageIDs = normalizeDurableAgentStringSet(messageIDs)
+	if len(messageIDs) == 0 {
+		return s, fmt.Errorf("durable agent parent conversation acknowledgement must include message_ids")
 	}
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
+	byID := map[string]int{}
+	if s.Conversation != nil {
+		byID = make(map[string]int, len(s.Conversation.Messages))
+		for i, message := range s.Conversation.Messages {
+			if message.MessageID == "" {
+				continue
+			}
+			byID[message.MessageID] = i
+		}
+	}
+	for _, messageID := range messageIDs {
+		idx, ok := byID[messageID]
+		if !ok {
+			return s, fmt.Errorf("durable agent parent conversation acknowledgement references unknown message_id %q", messageID)
+		}
+		if s.Conversation.Messages[idx].Role != "parent" {
+			return s, fmt.Errorf("durable agent parent conversation acknowledgement references non-parent message_id %q", messageID)
+		}
+	}
 	updated := false
-	for i := range s.Conversation.Messages {
-		message := &s.Conversation.Messages[i]
-		if message.Role != "parent" || !message.AcknowledgedAt.IsZero() {
+	for _, messageID := range messageIDs {
+		message := &s.Conversation.Messages[byID[messageID]]
+		if !message.AcknowledgedAt.IsZero() {
 			continue
 		}
 		message.AcknowledgedAt = at.UTC()
 		updated = true
 	}
 	if !updated {
-		return s
+		return s, nil
 	}
-	return NormalizeDurableAgentContinuityState(s)
+	return NormalizeDurableAgentContinuityState(s), nil
 }
 
 func normalizeDurableAgentRecentInteractions(values []DurableAgentRecentInteraction) []DurableAgentRecentInteraction {
@@ -389,13 +427,11 @@ func normalizeDurableAgentConversationMessages(values []DurableAgentConversation
 		if value.Role == "" || value.Text == "" {
 			continue
 		}
+		value.MessageID = durableAgentConversationMessageID(value.Role, value.Text, value.CreatedAt)
 		if value.Role != "parent" {
 			value.AcknowledgedAt = time.Time{}
 		}
-		key := fmt.Sprintf("%s:%s:%s", value.Role, value.Text, value.CreatedAt.UTC().Format(time.RFC3339Nano))
-		if value.CreatedAt.IsZero() {
-			key = fmt.Sprintf("%s:%s", value.Role, value.Text)
-		}
+		key := value.MessageID
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -406,6 +442,20 @@ func normalizeDurableAgentConversationMessages(values []DurableAgentConversation
 		}
 	}
 	return out
+}
+
+func durableAgentConversationMessageID(role string, text string, createdAt time.Time) string {
+	role = normalizeDurableAgentConversationRole(role)
+	text = clampDurableAgentField(text, 1200)
+	if role == "" || text == "" {
+		return ""
+	}
+	created := "zero"
+	if !createdAt.IsZero() {
+		created = createdAt.UTC().Format(time.RFC3339Nano)
+	}
+	sum := sha256.Sum256([]byte(role + "\x00" + text + "\x00" + created))
+	return "dcm_" + hex.EncodeToString(sum[:16])
 }
 
 func normalizeDurableAgentConversationRole(value string) string {

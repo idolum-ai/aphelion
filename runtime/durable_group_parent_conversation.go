@@ -29,7 +29,7 @@ func (r *Runtime) pendingDurableAgentParentConversation(agentID string, limit in
 	return continuity.PendingParentConversationMessages(limit), nil
 }
 
-func (r *Runtime) acknowledgeDurableAgentParentConversation(agentID string, at time.Time) error {
+func (r *Runtime) acknowledgeDurableAgentParentConversation(agentID string, messages []core.DurableAgentConversationMessage, at time.Time) error {
 	state, err := r.store.DurableAgentState(strings.TrimSpace(agentID))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -41,7 +41,10 @@ func (r *Runtime) acknowledgeDurableAgentParentConversation(agentID string, at t
 	if err != nil {
 		return err
 	}
-	updated := continuity.AcknowledgeParentConversationMessages(at)
+	updated, err := continuity.AcknowledgeParentConversationMessageIDs(core.DurableAgentConversationMessageIDs(messages), at)
+	if err != nil {
+		return err
+	}
 	raw, err := updated.Marshal()
 	if err != nil {
 		return err

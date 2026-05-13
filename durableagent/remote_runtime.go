@@ -35,10 +35,10 @@ type RemoteRuntimeStore interface {
 }
 
 type RemoteSyncResult struct {
-	Enrolled                   bool
-	PolicyChanged              bool
-	PolicyVersion              int64
-	ParentConversationMessages int
+	Enrolled                     bool
+	PolicyChanged                bool
+	PolicyVersion                int64
+	ParentConversationMessageIDs []string
 }
 
 type RemoteUploadResult struct {
@@ -98,7 +98,7 @@ func (r *RemoteRuntime) Sync(ctx context.Context, bootstrapPath string) (*Remote
 		if err := r.persistRemoteEnrollment(*enrollment, client); err != nil {
 			return nil, err
 		}
-		parentMessages, err := r.syncParentConversation(ctx, client, bootstrap)
+		parentMessageIDs, err := r.syncParentConversation(ctx, client, bootstrap)
 		if err != nil {
 			return nil, err
 		}
@@ -106,10 +106,10 @@ func (r *RemoteRuntime) Sync(ctx context.Context, bootstrapPath string) (*Remote
 			return nil, err
 		}
 		return &RemoteSyncResult{
-			Enrolled:                   true,
-			PolicyChanged:              true,
-			PolicyVersion:              resp.Policy.PolicyVersion,
-			ParentConversationMessages: parentMessages,
+			Enrolled:                     true,
+			PolicyChanged:                true,
+			PolicyVersion:                resp.Policy.PolicyVersion,
+			ParentConversationMessageIDs: parentMessageIDs,
 		}, nil
 	}
 
@@ -145,7 +145,7 @@ func (r *RemoteRuntime) Sync(ctx context.Context, bootstrapPath string) (*Remote
 	if err := r.persistRemoteEnrollment(*enrollment, client); err != nil {
 		return nil, err
 	}
-	parentMessages, err := r.syncParentConversation(ctx, client, bootstrap)
+	parentMessageIDs, err := r.syncParentConversation(ctx, client, bootstrap)
 	if err != nil {
 		return nil, err
 	}
@@ -154,10 +154,10 @@ func (r *RemoteRuntime) Sync(ctx context.Context, bootstrapPath string) (*Remote
 	}
 	if !pollResp.Changed && localAgent != nil {
 		return &RemoteSyncResult{
-			Enrolled:                   false,
-			PolicyChanged:              false,
-			PolicyVersion:              localAgent.PolicyVersion,
-			ParentConversationMessages: parentMessages,
+			Enrolled:                     false,
+			PolicyChanged:                false,
+			PolicyVersion:                localAgent.PolicyVersion,
+			ParentConversationMessageIDs: parentMessageIDs,
 		}, nil
 	}
 	if err := r.applySnapshot(ctx, client, bootstrap, pollResp.Snapshot); err != nil {
@@ -167,14 +167,14 @@ func (r *RemoteRuntime) Sync(ctx context.Context, bootstrapPath string) (*Remote
 		return nil, err
 	}
 	return &RemoteSyncResult{
-		Enrolled:                   false,
-		PolicyChanged:              true,
-		PolicyVersion:              pollResp.Snapshot.PolicyVersion,
-		ParentConversationMessages: parentMessages,
+		Enrolled:                     false,
+		PolicyChanged:                true,
+		PolicyVersion:                pollResp.Snapshot.PolicyVersion,
+		ParentConversationMessageIDs: parentMessageIDs,
 	}, nil
 }
 
-func (r *RemoteRuntime) AcknowledgeParentConversation(ctx context.Context, bootstrapPath string) error {
+func (r *RemoteRuntime) AcknowledgeParentConversation(ctx context.Context, bootstrapPath string, messageIDs []string) error {
 	if r == nil || r.store == nil {
 		return fmt.Errorf("durable agent remote runtime store is nil")
 	}
@@ -193,8 +193,12 @@ func (r *RemoteRuntime) AcknowledgeParentConversation(ctx context.Context, boots
 	seedRemoteClientSequence(client, enrollment)
 	ack := core.NormalizeDurableAgentParentConversationAcknowledgement(core.DurableAgentParentConversationAcknowledgement{
 		AgentID:        bootstrap.AgentID,
+		MessageIDs:     messageIDs,
 		AcknowledgedAt: r.now(),
 	})
+	if len(ack.MessageIDs) == 0 {
+		return fmt.Errorf("durable agent parent conversation acknowledgement must include message ids")
+	}
 	resp, err := client.AcknowledgeParentConversation(ctx, ack)
 	if err != nil {
 		return err
@@ -347,21 +351,25 @@ func (r *RemoteRuntime) applySnapshot(ctx context.Context, client RemoteControlC
 	return nil
 }
 
-func (r *RemoteRuntime) syncParentConversation(ctx context.Context, client RemoteControlClient, bootstrap core.DurableAgentRemoteBootstrap) (int, error) {
+func (r *RemoteRuntime) syncParentConversation(ctx context.Context, client RemoteControlClient, bootstrap core.DurableAgentRemoteBootstrap) ([]string, error) {
 	resp, err := client.PollParentConversation(ctx, 5)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if len(resp.Messages) == 0 {
-		return 0, nil
+		return nil, nil
+	}
+	messageIDs := core.DurableAgentConversationMessageIDs(resp.Messages)
+	if len(messageIDs) == 0 {
+		return nil, fmt.Errorf("durable agent parent conversation poll returned messages without message ids")
 	}
 	_, state, err := r.localDurableAgentState(bootstrap)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
 	if err != nil {
-		return 0, fmt.Errorf("parse durable agent continuity state: %w", err)
+		return nil, fmt.Errorf("parse durable agent continuity state: %w", err)
 	}
 	for i := len(resp.Messages) - 1; i >= 0; i-- {
 		message := resp.Messages[i]
@@ -372,13 +380,13 @@ func (r *RemoteRuntime) syncParentConversation(ctx context.Context, client Remot
 	}
 	raw, err := continuity.Marshal()
 	if err != nil {
-		return 0, fmt.Errorf("marshal durable agent continuity state: %w", err)
+		return nil, fmt.Errorf("marshal durable agent continuity state: %w", err)
 	}
 	state.StateJSON = raw
 	if err := r.store.SaveDurableAgentState(*state); err != nil {
-		return 0, err
+		return nil, err
 	}
-	return len(resp.Messages), nil
+	return messageIDs, nil
 }
 
 func hasDurableAgentConversationMessage(state core.DurableAgentContinuityState, role string, text string, createdAt time.Time) bool {

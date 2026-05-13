@@ -313,7 +313,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 				}, nil
 			}
 		}
-		if ackErr := r.acknowledgeDurableAgentParentConversation(registered.AgentID, now); ackErr != nil {
+		if ackErr := r.acknowledgeDurableAgentParentConversation(registered.AgentID, pendingParentConversation, now); ackErr != nil {
 			log.Printf("WARN durable parent conversation acknowledge failed agent_id=%s err=%v", registered.AgentID, ackErr)
 		}
 	}

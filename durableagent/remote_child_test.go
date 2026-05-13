@@ -199,13 +199,38 @@ func TestRemoteChildRunnerProcessesAndAcknowledgesParentConversation(t *testing.
 			if pending := continuity.PendingParentConversationMessages(5); len(pending) != 1 {
 				t.Fatalf("child pending parent messages len = %d, want 1", len(pending))
 			}
-			continuity = continuity.AcknowledgeParentConversationMessages(time.Now().UTC())
+			pending := continuity.PendingParentConversationMessages(5)
+			continuity, err = continuity.AcknowledgeParentConversationMessageIDs(core.DurableAgentConversationMessageIDs(pending), time.Now().UTC())
+			if err != nil {
+				return err
+			}
 			stateJSON, err := continuity.Marshal()
 			if err != nil {
 				return err
 			}
 			state.StateJSON = stateJSON
 			if err := childStore.SaveDurableAgentState(*state); err != nil {
+				return err
+			}
+			parentState, err := parentStore.DurableAgentState(agent.AgentID)
+			if err != nil {
+				return err
+			}
+			parentContinuity, err := core.ParseDurableAgentContinuityState(parentState.StateJSON)
+			if err != nil {
+				return err
+			}
+			parentContinuity = parentContinuity.WithConversationMessage(
+				"parent",
+				"New parent instruction that arrived during the child wake.",
+				time.Date(2026, 5, 13, 12, 0, 30, 0, time.UTC),
+			)
+			parentStateJSON, err := parentContinuity.Marshal()
+			if err != nil {
+				return err
+			}
+			parentState.StateJSON = parentStateJSON
+			if err := parentStore.SaveDurableAgentState(*parentState); err != nil {
 				return err
 			}
 			_, err = NewRuntime(childStore).QueueReviewArtifact(agent, core.DurableReviewArtifact{
@@ -223,8 +248,8 @@ func TestRemoteChildRunnerProcessesAndAcknowledgesParentConversation(t *testing.
 	if err != nil {
 		t.Fatalf("RunParentConversation() err = %v", err)
 	}
-	if result.Sync.ParentConversationMessages != 1 {
-		t.Fatalf("ParentConversationMessages = %d, want 1", result.Sync.ParentConversationMessages)
+	if len(result.Sync.ParentConversationMessageIDs) != 1 {
+		t.Fatalf("ParentConversationMessageIDs len = %d, want 1", len(result.Sync.ParentConversationMessageIDs))
 	}
 	if !result.AcknowledgedParent {
 		t.Fatal("AcknowledgedParent = false, want true")
@@ -241,8 +266,8 @@ func TestRemoteChildRunnerProcessesAndAcknowledgesParentConversation(t *testing.
 	if err != nil {
 		t.Fatalf("parent ParseDurableAgentContinuityState() err = %v", err)
 	}
-	if pending := parentAfter.PendingParentConversationMessages(5); len(pending) != 0 {
-		t.Fatalf("parent pending parent messages len = %d, want 0 after remote acknowledgement", len(pending))
+	if pending := parentAfter.PendingParentConversationMessages(5); len(pending) != 1 || pending[0].Text != "New parent instruction that arrived during the child wake." {
+		t.Fatalf("parent pending parent messages = %#v, want only wake-race message after remote acknowledgement", pending)
 	}
 	parentEvents, err := parentStore.PendingReviewEvents(agent.ReviewTargetChatID, 10)
 	if err != nil {

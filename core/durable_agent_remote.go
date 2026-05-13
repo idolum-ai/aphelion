@@ -71,6 +71,7 @@ type DurableAgentParentConversationPollResponse struct {
 
 type DurableAgentParentConversationAcknowledgement struct {
 	AgentID        string    `json:"agent_id,omitempty"`
+	MessageIDs     []string  `json:"message_ids,omitempty"`
 	AcknowledgedAt time.Time `json:"acknowledged_at,omitempty"`
 }
 
@@ -205,6 +206,7 @@ func NormalizeDurableAgentPolicyAcknowledgement(ack DurableAgentPolicyAcknowledg
 
 func NormalizeDurableAgentParentConversationAcknowledgement(ack DurableAgentParentConversationAcknowledgement) DurableAgentParentConversationAcknowledgement {
 	ack.AgentID = strings.TrimSpace(ack.AgentID)
+	ack.MessageIDs = normalizeDurableAgentStringSet(ack.MessageIDs)
 	if ack.AcknowledgedAt.IsZero() {
 		ack.AcknowledgedAt = time.Now().UTC()
 	} else {

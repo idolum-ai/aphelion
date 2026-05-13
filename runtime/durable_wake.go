@@ -262,7 +262,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		}
 	}
 	if len(pendingParentConversation) > 0 {
-		if ackErr := r.acknowledgeDurableAgentParentConversation(agent.AgentID, now); ackErr == nil {
+		if ackErr := r.acknowledgeDurableAgentParentConversation(agent.AgentID, pendingParentConversation, now); ackErr == nil {
 			if count, countErr := r.store.DurableAgentReviewEventCountSince(agent.AgentID, now); countErr != nil || count == 0 {
 				_ = r.queueDurableAgentParentConversationAck(agent, pendingParentConversation, turnSummary, now)
 			}

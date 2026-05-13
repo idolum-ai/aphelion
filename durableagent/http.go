@@ -25,6 +25,8 @@ const (
 	ControlPlaneParentConversationAckPath  = "/v1/durable-agent/parent-conversation/ack"
 )
 
+var errParentConversationAckRejected = errors.New("durable agent parent conversation acknowledgement rejected")
+
 type HTTPStore interface {
 	ControlPlaneStore
 	InsertReviewEvent(event session.ReviewEvent) (int64, error)
@@ -313,6 +315,10 @@ func (h *HTTPHandler) handleParentConversationAck(w http.ResponseWriter, r *http
 		writeError(w, http.StatusBadRequest, errors.New("durable agent parent conversation ack agent_id does not match envelope"))
 		return
 	}
+	if len(req.Ack.MessageIDs) == 0 {
+		writeError(w, http.StatusBadRequest, errors.New("durable agent parent conversation ack requires message_ids"))
+		return
+	}
 	if err := h.verifyEnvelope(req.Envelope, req.Ack); err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
@@ -321,7 +327,11 @@ func (h *HTTPHandler) handleParentConversationAck(w http.ResponseWriter, r *http
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := h.acknowledgeParentConversation(req.Ack.AgentID, req.Ack.AcknowledgedAt); err != nil {
+	if err := h.acknowledgeParentConversation(req.Ack.AgentID, req.Ack.MessageIDs, req.Ack.AcknowledgedAt); err != nil {
+		if errors.Is(err, errParentConversationAckRejected) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -352,13 +362,17 @@ func (h *HTTPHandler) pendingParentConversation(agentID string, limit int) ([]co
 	return continuity.PendingParentConversationMessages(limit), nil
 }
 
-func (h *HTTPHandler) acknowledgeParentConversation(agentID string, at time.Time) error {
+func (h *HTTPHandler) acknowledgeParentConversation(agentID string, messageIDs []string, at time.Time) error {
 	if h == nil || h.store == nil {
 		return fmt.Errorf("durable agent control plane store is nil")
 	}
 	state, err := h.store.DurableAgentState(strings.TrimSpace(agentID))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			_, ackErr := (core.DurableAgentContinuityState{}).AcknowledgeParentConversationMessageIDs(messageIDs, at)
+			if ackErr != nil {
+				return fmt.Errorf("%w: %v", errParentConversationAckRejected, ackErr)
+			}
 			return nil
 		}
 		return err
@@ -367,7 +381,11 @@ func (h *HTTPHandler) acknowledgeParentConversation(agentID string, at time.Time
 	if err != nil {
 		return err
 	}
-	state.StateJSON, err = continuity.AcknowledgeParentConversationMessages(at).Marshal()
+	continuity, err = continuity.AcknowledgeParentConversationMessageIDs(messageIDs, at)
+	if err != nil {
+		return fmt.Errorf("%w: %v", errParentConversationAckRejected, err)
+	}
+	state.StateJSON, err = continuity.Marshal()
 	if err != nil {
 		return err
 	}

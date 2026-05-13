@@ -353,8 +353,38 @@ func TestHTTPClientPollsAndAcknowledgesParentConversation(t *testing.T) {
 	if len(resp.Messages) != 1 || resp.Messages[0].Text != "Check the remote child health." {
 		t.Fatalf("PollParentConversation() = %#v, want pending parent message", resp)
 	}
+	if resp.Messages[0].MessageID == "" {
+		t.Fatal("PollParentConversation() message_id is empty")
+	}
+	if _, err := client.AcknowledgeParentConversation(context.Background(), core.DurableAgentParentConversationAcknowledgement{
+		AgentID:        agent.AgentID,
+		AcknowledgedAt: time.Date(2026, 5, 13, 12, 0, 15, 0, time.UTC),
+	}); err == nil {
+		t.Fatal("AcknowledgeParentConversation() without message_ids err = nil, want rejection")
+	}
+	state, err := store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState(before race append) err = %v", err)
+	}
+	continuity, err = core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState(before race append) err = %v", err)
+	}
+	if pending := continuity.PendingParentConversationMessages(5); len(pending) != 1 || pending[0].MessageID != resp.Messages[0].MessageID {
+		t.Fatalf("pending after rejected ack = %#v, want original polled message", pending)
+	}
+	continuity = continuity.WithConversationMessage("parent", "New instruction after poll.", time.Date(2026, 5, 13, 12, 0, 30, 0, time.UTC))
+	raw, err = continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal(after race append) err = %v", err)
+	}
+	state.StateJSON = raw
+	if err := store.SaveDurableAgentState(*state); err != nil {
+		t.Fatalf("SaveDurableAgentState(after race append) err = %v", err)
+	}
 	ackResp, err := client.AcknowledgeParentConversation(context.Background(), core.DurableAgentParentConversationAcknowledgement{
 		AgentID:        agent.AgentID,
+		MessageIDs:     []string{resp.Messages[0].MessageID},
 		AcknowledgedAt: time.Date(2026, 5, 13, 12, 1, 0, 0, time.UTC),
 	})
 	if err != nil {
@@ -363,7 +393,7 @@ func TestHTTPClientPollsAndAcknowledgesParentConversation(t *testing.T) {
 	if !ackResp.Accepted {
 		t.Fatal("AcknowledgeParentConversation().Accepted = false, want true")
 	}
-	state, err := store.DurableAgentState(agent.AgentID)
+	state, err = store.DurableAgentState(agent.AgentID)
 	if err != nil {
 		t.Fatalf("DurableAgentState() err = %v", err)
 	}
@@ -371,8 +401,8 @@ func TestHTTPClientPollsAndAcknowledgesParentConversation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
 	}
-	if pending := updated.PendingParentConversationMessages(5); len(pending) != 0 {
-		t.Fatalf("pending parent messages = %d, want 0 after ack", len(pending))
+	if pending := updated.PendingParentConversationMessages(5); len(pending) != 1 || pending[0].Text != "New instruction after poll." {
+		t.Fatalf("pending parent messages = %#v, want only race-appended message after ack", pending)
 	}
 }
 

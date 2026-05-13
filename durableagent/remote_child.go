@@ -78,7 +78,7 @@ func (r *RemoteChildRunner) RunOnce(ctx context.Context, bootstrapPath string, m
 	if err != nil {
 		return nil, err
 	}
-	acked, err := r.acknowledgeParentConversationIfNeeded(ctx, bootstrapPath, syncResult.ParentConversationMessages)
+	acked, err := r.acknowledgeParentConversationIfNeeded(ctx, bootstrapPath, syncResult.ParentConversationMessageIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +104,7 @@ func (r *RemoteChildRunner) RunParentConversation(ctx context.Context, bootstrap
 		return nil, err
 	}
 	result := &RemoteChildRunResult{Sync: *syncResult}
-	if syncResult.ParentConversationMessages == 0 {
+	if len(syncResult.ParentConversationMessageIDs) == 0 {
 		return result, nil
 	}
 	bootstrap, err := ReadRemoteBootstrap(bootstrapPath)
@@ -129,7 +129,7 @@ func (r *RemoteChildRunner) RunParentConversation(ctx context.Context, bootstrap
 	if err != nil {
 		return nil, err
 	}
-	acked, err := r.acknowledgeParentConversationIfNeeded(ctx, bootstrapPath, syncResult.ParentConversationMessages)
+	acked, err := r.acknowledgeParentConversationIfNeeded(ctx, bootstrapPath, syncResult.ParentConversationMessageIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -138,11 +138,11 @@ func (r *RemoteChildRunner) RunParentConversation(ctx context.Context, bootstrap
 	return result, nil
 }
 
-func (r *RemoteChildRunner) acknowledgeParentConversationIfNeeded(ctx context.Context, bootstrapPath string, count int) (bool, error) {
-	if count <= 0 {
+func (r *RemoteChildRunner) acknowledgeParentConversationIfNeeded(ctx context.Context, bootstrapPath string, messageIDs []string) (bool, error) {
+	if len(messageIDs) == 0 {
 		return false, nil
 	}
-	if err := r.remote.AcknowledgeParentConversation(ctx, bootstrapPath); err != nil {
+	if err := r.remote.AcknowledgeParentConversation(ctx, bootstrapPath, messageIDs); err != nil {
 		return false, err
 	}
 	return true, nil
