@@ -8,6 +8,7 @@ ledger="docs/architecture/structural-hygiene.md"
 threshold=800
 fail=0
 required_package_docs=(
+  "doc.go"
   "agent/doc.go"
   "config/doc.go"
   "core/doc.go"
@@ -90,7 +91,7 @@ done < <(
   find . \
     -path './.git' -prune -o \
     -path './third_party' -prune -o \
-    -name '*.go' ! -name '*_test.go' -print |
+    -name '*.go' -print |
     sed 's#^\./##' |
     sort
 )

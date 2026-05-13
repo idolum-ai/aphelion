@@ -1,0 +1,656 @@
+//go:build linux
+
+package runtime
+
+import (
+	"context"
+	"errors"
+	"github.com/idolum-ai/aphelion/config"
+	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/session"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestContinuationCommitModeStillBlocksBroadCommitForbiddenAction(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	action := session.ActionProposal{
+		ID:               "aprop-local-commit-forbidden",
+		Summary:          "Commit validated local repo slices",
+		BoundedEffect:    "Review current dirty diff, run tests, commit coherent repo-only hardening, and report evidence.",
+		RiskClass:        "workspace_commit_then_repo_write_bounded",
+		AllowedActions:   []string{"git_commit_validated_slices", "edit_repo_code"},
+		ForbiddenActions: []string{"commit"},
+		Status:           session.ProposalStatusApproved,
+		ExpiresAt:        now.Add(time.Hour),
+	}
+	action.PlanHash = actionProposalHash(action)
+	state := session.ContinuationState{
+		Status:            session.ContinuationStatusApproved,
+		RemainingTurns:    1,
+		ActionProposal:    action,
+		ContinuationLease: buildContinuationLease(action, 1, now),
+	}
+	state.ContinuationLease.Status = session.ContinuationLeaseStatusActive
+	state.ContinuationLease.RemainingTurns = 1
+	state.ContinuationLease.ApprovedAt = now
+	state.ContinuationLease.ApprovedBy = 1001
+
+	mode := continuationWorkMode(state)
+	if mode != WorkModeCommit {
+		t.Fatalf("continuationWorkMode() = %q, want commit", mode)
+	}
+	decision := continuationWorkModeAccessCheck(state, mode, now)
+	if decision.Allowed || decision.Reason != "action_forbidden" {
+		t.Fatalf("access decision = %#v, want broad commit forbidden", decision)
+	}
+}
+
+func TestLeaseAccessDeniedResetsOperationPhaseForFreshApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	work := &fakeWorkExecutor{name: "codex", ready: true}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8189, UserID: 0, Scope: telegramDMScopeRef(8189)}
+	opState := session.OperationState{
+		ID:        "phase-denial-recovery-op",
+		Objective: "Recover from a denied phase lease.",
+		Status:    session.OperationStatusActive,
+		Stage:     "phase_approval",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "phase-denial-recovery-plan",
+			CurrentPhaseID: "phase-1",
+			Phases: []session.OperationPhase{{
+				ID:             "phase-1",
+				Summary:        "Patch the implementation",
+				Status:         session.PlanStatusInProgress,
+				AuthorityClass: "workspace_write",
+				LeaseID:        "lease-phase-denied",
+			}},
+		},
+	}
+	proposalID := operationPhaseProposalID(opState, opState.PhasePlan.Phases[0])
+	opState.Proposal = session.OperationProposal{
+		ID:      proposalID,
+		Kind:    "workspace_write",
+		Summary: "Patch the implementation",
+		Status:  session.ProposalStatusApproved,
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     proposalID,
+		Objective:      "Recover from a denied phase lease.",
+		StageSummary:   "Patch the implementation",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:          "aprop-" + proposalID,
+			OperationID: proposalID,
+			Summary:     "Patch the implementation",
+			RiskClass:   "workspace_write",
+			Status:      session.ProposalStatusApproved,
+			ExpiresAt:   expiresAt,
+			PlanHash:    "sha256:phase-denied",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:               "lease-phase-denied",
+			ProposalID:       "aprop-" + proposalID,
+			Status:           session.ContinuationLeaseStatusActive,
+			MaxTurns:         1,
+			RemainingTurns:   1,
+			AllowedActions:   []string{"read_only"},
+			ForbiddenActions: []string{"workspace_write"},
+			ApprovedBy:       1001,
+			ApprovedAt:       expiresAt.Add(-time.Hour),
+			ExpiresAt:        expiresAt,
+			PlanHash:         "sha256:phase-denied",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuation(context.Background(), 8189); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	if work.calls != 0 {
+		t.Fatalf("work calls = %d, want denial before executor", work.calls)
+	}
+	got, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if got.Status != session.OperationStatusBlocked || got.PhasePlan.Phases[0].Status != session.PlanStatusPending || got.PhasePlan.Phases[0].LeaseID != "" {
+		t.Fatalf("operation = %#v, want blocked with phase reset to pending", got)
+	}
+}
+
+func TestMetadataPreflightContinuationRunsReadOnlyDespiteWorkspaceWriteDiagnosticText(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	work := &fakeWorkExecutor{name: "codex", ready: true}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8191, UserID: 0, Scope: telegramDMScopeRef(8191)}
+	action := session.ActionProposal{
+		ID:            "aprop-metadata-preflight",
+		Summary:       "Live-adjacent metadata preflight. Prior diagnostic mentioned workspace_write mismatch.",
+		BoundedEffect: "Inspect live config route and token-file metadata only; no token contents and no Telegram network.",
+		RiskClass:     session.AuthorityClassLocalSecretMetadataReadLiveConfigRead,
+		Status:        session.ProposalStatusApproved,
+		ExpiresAt:     expiresAt,
+	}
+	action = applyContinuationLeaseClassBoundaries(action)
+	action.PlanHash = actionProposalHash(action)
+	lease := buildContinuationLease(action, 1, time.Now().UTC())
+	lease.Status = session.ContinuationLeaseStatusActive
+	lease.ApprovedAt = expiresAt.Add(-time.Hour)
+	lease.ApprovedBy = 1001
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusApproved,
+		DecisionID:        "metadata-preflight",
+		Objective:         "Run metadata-only preflight.",
+		StageSummary:      action.Summary,
+		RemainingTurns:    1,
+		ApprovedBy:        1001,
+		ActionProposal:    action,
+		ContinuationLease: lease,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{ID: "op-metadata-preflight", Objective: "Run metadata-only preflight.", Status: session.OperationStatusActive}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	mode := continuationWorkMode(session.ContinuationState{ActionProposal: action, ContinuationLease: lease, StageSummary: action.Summary})
+	if mode != WorkModeReadOnly {
+		t.Fatalf("continuationWorkMode() = %q, want read_only", mode)
+	}
+	if err := rt.TriggerContinuation(context.Background(), 8191); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	if work.calls != 1 {
+		t.Fatalf("work calls = %d, want one read-only executor call", work.calls)
+	}
+	if work.lastReq.Mode != WorkModeReadOnly {
+		t.Fatalf("work mode = %q, want read_only", work.lastReq.Mode)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.ContinuationLease.Status == session.ContinuationLeaseStatusRevoked {
+		t.Fatalf("continuation lease = %#v, want not revoked by workspace_write mismatch", got.ContinuationLease)
+	}
+}
+
+func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+		Summary:      "patched tests",
+		ChangedFiles: []string{"runtime/work_executor.go"},
+		Commands:     []string{"go test ./runtime"},
+		CodexEvents: []session.WorkCodexEvent{
+			{Kind: "file_change", Method: "item/fileChange/completed", Path: "runtime/work_executor.go", Status: "completed", Preview: "@@ patched"},
+			{Kind: "command", Method: "item/commandExecution/completed", Command: "go test ./runtime", Status: "completed"},
+		},
+		PatchPreview:     "@@ patched",
+		CommitLaneStatus: "commit_requires_separate_lease",
+	}}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex", "native"}}, []WorkExecutor{work})
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{}}
+	rt.interactiveDMAssembler = recorder
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8188, UserID: 0, Scope: telegramDMScopeRef(8188)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "work-lane",
+		Objective:      "Patch the work lane.",
+		StageSummary:   "Edit runtime work executor files and test.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:            "aprop-work-lane",
+			Summary:       "Patch work executor",
+			BoundedEffect: "Edit runtime work executor files and run focused tests.",
+			RiskClass:     "workspace_write",
+			AllowedActions: []string{
+				"execute_bounded_proposal_once",
+				"workspace_write",
+				"run_tests",
+			},
+			Status:    session.ProposalStatusApproved,
+			ExpiresAt: expiresAt,
+			PlanHash:  "sha256:work-lane",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-work-lane",
+			ProposalID:     "aprop-work-lane",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			AllowedActions: []string{
+				"execute_bounded_proposal_once",
+				"workspace_write",
+				"run_tests",
+			},
+			ExpiresAt: expiresAt,
+			PlanHash:  "sha256:work-lane",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{ID: "op-work-lane", Objective: "Patch the work lane.", Status: session.OperationStatusActive}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuation(context.Background(), 8188); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	if work.calls != 1 {
+		t.Fatalf("work calls = %d, want 1", work.calls)
+	}
+	if recorder.called {
+		t.Fatal("interactive assembler called, want coding continuation routed through work executor")
+	}
+	if work.lastReq.OperationID != "op-work-lane" || work.lastReq.LeaseID != "lease-work-lane" {
+		t.Fatalf("work request = %#v, want operation and lease ids", work.lastReq)
+	}
+	if work.lastReq.Mode != WorkModeWorkspaceWrite {
+		t.Fatalf("work mode = %q, want workspace_write", work.lastReq.Mode)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusIdle || got.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed {
+		t.Fatalf("continuation = %#v, want consumed idle", got)
+	}
+	op, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if op.Work.Executor != "codex" || op.Work.LastSummary != "patched tests" || len(op.Work.ChangedFiles) != 1 {
+		t.Fatalf("operation work metadata = %#v, want codex result persisted", op.Work)
+	}
+	if len(op.Work.CodexEvents) != 2 || op.Work.CodexEvents[0].Kind != "file_change" || op.Work.PatchPreview != "@@ patched" || op.Work.CommitLaneStatus != "commit_requires_separate_lease" {
+		t.Fatalf("operation codex work metadata = %#v, want captured Codex interface evidence", op.Work)
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 || !strings.Contains(sender.sent[0].Text, "patched tests") || !strings.Contains(sender.sent[0].Text, "runtime/work_executor.go") || !strings.Contains(sender.sent[0].Text, "commit_requires_separate_lease") {
+		t.Fatalf("sent = %#v, want visible work executor summary", sender.sent)
+	}
+}
+
+func TestNativeWorkExecutorTreatsProviderFailureTurnAsFailed(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.interactiveDMAssembler = &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{
+		Text:            "Inference backend failed before provider fallback was applicable. This turn did not complete.",
+		ProviderFailure: "codex: stream failed: request error",
+		ProviderEvents: []core.ProviderEvent{
+			{EventType: "provider.error", Provider: "codex", Error: "stream failed", PartialToolCalls: 1},
+		},
+	}}
+
+	result, err := nativeWorkExecutor{runtime: rt}.Run(context.Background(), WorkRequest{
+		ChatID: 8189,
+		Actor:  principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+	})
+	if err == nil || !strings.Contains(err.Error(), "inference backend failed") {
+		t.Fatalf("Run() err = %v, want provider failure error", err)
+	}
+	if result.CompletionKind != "native_turn_provider_failed" || result.ProviderFailure == "" || !result.SideEffects {
+		t.Fatalf("result = %#v, want failed native turn marked with provider failure and side effects", result)
+	}
+	if len(result.ProviderEvents) != 1 || result.ProviderEvents[0].PartialToolCalls != 1 {
+		t.Fatalf("provider events = %#v, want captured provider event evidence", result.ProviderEvents)
+	}
+}
+
+func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	workErr := errors.New("codex stream failed after partial response")
+	work := &fakeWorkExecutor{name: "codex", ready: true, err: workErr}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8190, UserID: 0, Scope: telegramDMScopeRef(8190)}
+	prior := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "work-failure-retry",
+		Objective:      "Patch the work failure retry.",
+		StageSummary:   "Run bounded code work and report.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-work-failure-retry",
+			Summary:        "Patch work failure retry",
+			WhyNow:         "The prior approved step should run now.",
+			BoundedEffect:  "Edit runtime work executor files and run focused tests.",
+			RiskClass:      "workspace_write",
+			AllowedActions: []string{"workspace_write", "run_tests"},
+			Status:         session.ProposalStatusApproved,
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:work-failure-retry",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-work-failure-retry",
+			ProposalID:     "aprop-work-failure-retry",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			AllowedActions: []string{"workspace_write", "run_tests"},
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:work-failure-retry",
+		},
+	}
+	if err := store.UpdateContinuationState(key, prior); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{ID: "op-work-failure-retry", Objective: "Patch the work failure retry.", Status: session.OperationStatusActive}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	err = rt.TriggerContinuation(context.Background(), 8190)
+	if err == nil || !strings.Contains(err.Error(), workErr.Error()) {
+		t.Fatalf("TriggerContinuation() err = %v, want work executor failure", err)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusPending || got.ActionProposal.Status != session.ProposalStatusPending || got.ContinuationLease.Status != session.ContinuationLeaseStatusPending {
+		t.Fatalf("continuation = %#v, want fresh pending retry proposal", got)
+	}
+	if got.ActionProposal.ID == prior.ActionProposal.ID || got.ContinuationLease.ID == prior.ContinuationLease.ID {
+		t.Fatalf("fresh ids reused old proposal/lease: proposal=%q lease=%q", got.ActionProposal.ID, got.ContinuationLease.ID)
+	}
+	if got.ActionProposal.BoundedEffect != prior.ActionProposal.BoundedEffect || !strings.Contains(got.ActionProposal.WhyNow, "failed before completion") {
+		t.Fatalf("fresh proposal = %#v, want same bounded effect with failure reason", got.ActionProposal)
+	}
+	op, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if !strings.Contains(op.Work.LastError, workErr.Error()) || !op.Work.LastCompletedAt.IsZero() {
+		t.Fatalf("operation work = %#v, want failure recorded without completion", op.Work)
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want one retry approval prompt", len(sender.inline))
+	}
+	if !strings.Contains(sender.inline[0].text, "failed before completion") || !strings.Contains(sender.inline[0].text, prior.ActionProposal.BoundedEffect) {
+		t.Fatalf("inline text = %q, want retry reason and bounded effect", sender.inline[0].text)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventWorkExecutorFailed) {
+		t.Fatalf("events = %#v, want work executor failure event", events)
+	}
+	if hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
+		t.Fatalf("events = %#v, want no work executor success event", events)
+	}
+}
+
+func TestTriggerCodingContinuationAllowsCompoundWorkspaceRiskClass(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	work := &fakeWorkExecutor{name: "codex", ready: true}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8201, UserID: 0, Scope: telegramDMScopeRef(8201)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "compound-workspace-risk",
+		Objective:      "Patch the child bot runner.",
+		StageSummary:   "Retry the bounded code/tests lease.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-compound-workspace-risk",
+			Summary:        "Retry the bounded code/tests lease.",
+			BoundedEffect:  "Inspect/edit repo code and docs, add tests, run local Go tests/build/config checks.",
+			RiskClass:      "workspace_write_code_tests_bounded_autoapprove",
+			AllowedActions: []string{"execute_bounded_proposal_once", "use_existing_authority_only", "report_evidence"},
+			Status:         session.ProposalStatusApproved,
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:compound-workspace-risk",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:               "lease-compound-workspace-risk",
+			ProposalID:       "aprop-compound-workspace-risk",
+			Status:           session.ContinuationLeaseStatusActive,
+			MaxTurns:         1,
+			RemainingTurns:   1,
+			AllowedActions:   []string{"execute_bounded_proposal_once", "use_existing_authority_only", "report_evidence"},
+			ForbiddenActions: []string{"deploy", "restart_service", "commit"},
+			ExpiresAt:        expiresAt,
+			PlanHash:         "sha256:compound-workspace-risk",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{ID: "op-compound-workspace-risk", Objective: "Patch the child bot runner.", Status: session.OperationStatusActive}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuation(context.Background(), 8201); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	if work.calls != 1 {
+		t.Fatalf("work calls = %d, want approved compound workspace risk to run", work.calls)
+	}
+	if work.lastReq.Mode != WorkModeWorkspaceWrite {
+		t.Fatalf("work mode = %q, want workspace_write", work.lastReq.Mode)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusIdle || got.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed {
+		t.Fatalf("continuation = %#v, want consumed idle", got)
+	}
+}
+
+func TestTriggerCodingContinuationWarnsWhenFallingBackToNative(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	codex := &fakeWorkExecutor{name: "codex", ready: false, reason: "app-server unreachable"}
+	native := &fakeWorkExecutor{name: "native", ready: true, result: WorkResult{Summary: "native completed"}}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex", "native"}}, []WorkExecutor{codex, native})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8198, UserID: 0, Scope: telegramDMScopeRef(8198)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "work-fallback",
+		Objective:      "Run bounded work with fallback.",
+		StageSummary:   "Patch code.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-work-fallback",
+			Summary:        "Patch code",
+			BoundedEffect:  "Patch code under workspace write authority.",
+			RiskClass:      "workspace_write",
+			AllowedActions: []string{"workspace_write"},
+			Status:         session.ProposalStatusApproved,
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:work-fallback",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-work-fallback",
+			ProposalID:     "aprop-work-fallback",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			AllowedActions: []string{"workspace_write"},
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:work-fallback",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{ID: "op-work-fallback", Objective: "Run bounded work with fallback.", Status: session.OperationStatusActive}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuation(context.Background(), 8198); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	if native.calls != 1 {
+		t.Fatalf("native calls = %d, want fallback native execution", native.calls)
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want one fallback warning", len(sender.sent))
+	}
+	if got := sender.sent[0].Text; got != "Work executor fallback: codex unavailable; using native." || strings.Contains(got, "\n") {
+		t.Fatalf("warning = %q, want one-line work fallback warning", got)
+	}
+}
+
+func TestTriggerCodingContinuationStoresFullWorkEvidenceArtifact(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	longSummary := "full tool evidence " + strings.Repeat("line-with-important-output ", 120)
+	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+		Summary:      longSummary,
+		ChangedFiles: []string{"runtime/runtime.go"},
+		Commands:     []string{"go test ./runtime"},
+		PatchPreview: strings.Repeat("+patch\n", 120),
+	}}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex", "native"}}, []WorkExecutor{work})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8199, UserID: 0, Scope: telegramDMScopeRef(8199)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "work-artifact",
+		Objective:      "Preserve work evidence.",
+		StageSummary:   "Run work and report.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-work-artifact",
+			Summary:        "Run work",
+			BoundedEffect:  "Run one bounded work turn.",
+			RiskClass:      "workspace_write",
+			AllowedActions: []string{"workspace_write"},
+			Status:         session.ProposalStatusApproved,
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:work-artifact",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-work-artifact",
+			ProposalID:     "aprop-work-artifact",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			AllowedActions: []string{"workspace_write"},
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:work-artifact",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{ID: "op-work-artifact", Objective: "Preserve work evidence.", Status: session.OperationStatusActive}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuation(context.Background(), 8199); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	op, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if len(op.Artifacts) != 1 || op.Artifacts[0].Label != "Work evidence" {
+		t.Fatalf("artifacts = %#v, want one work evidence artifact", op.Artifacts)
+	}
+	raw, err := os.ReadFile(op.Artifacts[0].Ref)
+	if err != nil {
+		t.Fatalf("ReadFile(work evidence) err = %v", err)
+	}
+	if !strings.Contains(string(raw), strings.TrimSpace(longSummary)) || !strings.Contains(string(raw), "## Patch Preview") {
+		t.Fatalf("artifact body missing full evidence: %q", string(raw))
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if strings.Contains(sender.sent[0].Text, longSummary) {
+		t.Fatalf("telegram text includes untruncated full evidence")
+	}
+	if !strings.Contains(sender.sent[0].Text, "Full evidence artifact:") || !strings.Contains(sender.sent[0].Text, op.Artifacts[0].Ref) {
+		t.Fatalf("telegram text = %q, want artifact reference", sender.sent[0].Text)
+	}
+}

@@ -6,7 +6,7 @@ an explicit split direction. New large files should be rare.
 
 ## Rules
 
-- Files over 800 lines must appear in this ledger.
+- Go files over 800 lines, including tests, must appear in this ledger.
 - A large file should have one owner concept, not a grab bag of unrelated flows.
 - Split when a file mixes durable concepts, grows a second ownership boundary, or
   blocks local reasoning. Do not split only to satisfy a line counter.
@@ -19,4 +19,4 @@ an explicit split direction. New large files should be rare.
 
 | File | Owner concept | Split direction |
 |---|---|---|
-| _None currently_ | Production files are under the active threshold. | Add a row only when a file exceeds 800 lines and has a clear owner plus next split direction. |
+| _None currently_ | First-party Go files are under the active threshold. | Add a row only when a file exceeds 800 lines and has a clear owner plus next split direction. |
