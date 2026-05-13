@@ -94,6 +94,11 @@ systemctl --user restart aphelion
 Treat a failed `verify-deploy` as a failed deploy. Check the service logs, fix
 the cause, and run the gate again.
 
+If `tailscale.parent.enabled = true`, the parent Tailnet listener is part of
+service startup. Missing auth material, invalid tsnet state, or listener startup
+failure should stop the service and make the deploy gate fail instead of leaving
+remote children without their private control plane.
+
 ## Inspect
 
 ```bash

@@ -140,9 +140,11 @@ Then verify parent-side enrollment and pulse:
 ```
 
 The child polls the parent Tailnet `/control` plane. The parent does not require
-inbound HTTP on the child. During enrollment the parent records the child's
-Tailnet stable node ID and verifies any declared `tailnet_hostname` and
-`tailnet_tags`; later control-plane calls must come from that same Tailnet node.
+inbound HTTP on the child. The parent records the child's Tailnet stable node ID
+when accepting enrollment, or on the first valid accepted control request if an
+active enrollment does not yet have a stored node identity. The parent verifies
+any declared `tailnet_hostname` and `tailnet_tags`; later control-plane calls
+must come from that same Tailnet node.
 
 ## Operate
 
