@@ -134,11 +134,12 @@ func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb te
 		}
 		return nil
 	}
+	actor := callbackDecisionActor(cb)
 	if choice == "expand" || choice == "collapse" {
-		pending, found := h.broker.Peek(id)
+		pending, found := h.broker.PeekCallback(id, actor)
 		resolved := false
 		if !found {
-			pending, found = h.broker.PeekResolved(id)
+			pending, found = h.broker.PeekResolvedCallback(id, actor)
 			resolved = found
 		}
 		if !found {
@@ -186,7 +187,7 @@ func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb te
 		return nil
 	}
 	answerText := ""
-	if !h.broker.Resolve(id, choice) {
+	if !h.broker.ResolveCallback(id, choice, actor) {
 		answerText = "This approval is no longer active. Use the newest prompt."
 	}
 	if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, answerText); err != nil && !telegram.IsStaleCallbackQueryError(err) {
@@ -205,6 +206,21 @@ func callbackChatID(cb telegram.CallbackQuery) int64 {
 func callbackSenderID(cb telegram.CallbackQuery) int64 {
 	if cb.From != nil {
 		return cb.From.ID
+	}
+	return 0
+}
+
+func callbackDecisionActor(cb telegram.CallbackQuery) decision.CallbackActor {
+	return decision.CallbackActor{
+		TelegramUserID: callbackSenderID(cb),
+		ChatID:         callbackChatID(cb),
+		MessageID:      callbackMessageID(cb),
+	}
+}
+
+func callbackMessageID(cb telegram.CallbackQuery) int64 {
+	if cb.Message != nil {
+		return cb.Message.MessageID
 	}
 	return 0
 }

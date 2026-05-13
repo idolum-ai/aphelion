@@ -41,6 +41,14 @@ func TestDefinitionsForPrincipalFiltersExternalToolByGrant(t *testing.T) {
 	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
 		t.Fatalf("UpsertRegisteredTool() err = %v", err)
 	}
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:           "child-alpha",
+		ChannelKind:       "external_channel",
+		Status:            "active",
+		LocalStorageRoots: []string{registry.workspace, filepath.Join(registry.workspace, "memory")},
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
 	grantToolInvoke(t, store, "browse_page", "child-alpha")
 
 	granted := registry.DefinitionsForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"})

@@ -135,6 +135,76 @@ cert_file = "/tmp/cert.pem"
 	}
 }
 
+func TestLoadRejectsPlaintextDurableAgentControlPlaneOnNonLoopback(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[agent]
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
+
+[durable_agents.control_plane]
+enabled = true
+listen = "0.0.0.0:8787"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want non-loopback plaintext validation error")
+	}
+	if !strings.Contains(err.Error(), "plaintext only on loopback") {
+		t.Fatalf("Load() err = %v, want plaintext loopback validation", err)
+	}
+}
+
+func TestLoadAllowsLoopbackPlaintextDurableAgentControlPlane(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[agent]
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
+
+[durable_agents.control_plane]
+enabled = true
+listen = "localhost:8787"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(configPath); err != nil {
+		t.Fatalf("Load() err = %v, want loopback plaintext allowed", err)
+	}
+}
+
 func TestLoadParsesTelegramDurableGroups(t *testing.T) {
 	t.Parallel()
 

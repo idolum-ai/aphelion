@@ -328,6 +328,88 @@ func TestTelegramExecApprovalExpandKeepsPendingDecisionButtons(t *testing.T) {
 	}
 }
 
+func TestTelegramDecisionCallbackRequiresOriginalActorAndMessage(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	broker := newTelegramDecisionBroker(sender)
+	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, broker, nil)
+	resolved := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := broker.Request(context.Background(), decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        7,
+			SenderID:      42,
+			Prompt:        "Approve this proposal?",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+			Timeout:       time.Second,
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resolved <- result.Choice
+	}()
+
+	prompt := waitForDecisionInline(t, sender)
+	approveData := callbackDataForButton(t, prompt.rows, "Approve")
+	for _, cb := range []telegram.CallbackQuery{
+		{
+			ID:   "cb-wrong-user",
+			Data: approveData,
+			From: &telegram.User{ID: 99},
+			Message: &telegram.Message{
+				MessageID: 1,
+				Chat:      &telegram.Chat{ID: 7},
+			},
+		},
+		{
+			ID:   "cb-wrong-message",
+			Data: approveData,
+			From: &telegram.User{ID: 42},
+			Message: &telegram.Message{
+				MessageID: 2,
+				Chat:      &telegram.Chat{ID: 7},
+			},
+		},
+	} {
+		if err := handler.HandleCallbackQuery(context.Background(), cb); err != nil {
+			t.Fatalf("HandleCallbackQuery(%s) err = %v", cb.ID, err)
+		}
+		select {
+		case choice := <-resolved:
+			t.Fatalf("unauthorized callback resolved choice %q", choice)
+		case err := <-errCh:
+			t.Fatalf("broker.Request() err = %v", err)
+		default:
+		}
+	}
+
+	if err := handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:   "cb-correct",
+		Data: approveData,
+		From: &telegram.User{ID: 42},
+		Message: &telegram.Message{
+			MessageID: 1,
+			Chat:      &telegram.Chat{ID: 7},
+		},
+	}); err != nil {
+		t.Fatalf("HandleCallbackQuery(correct) err = %v", err)
+	}
+	select {
+	case choice := <-resolved:
+		if choice != "approve" {
+			t.Fatalf("choice = %q, want approve", choice)
+		}
+	case err := <-errCh:
+		t.Fatalf("broker.Request() err = %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("correct callback did not resolve decision")
+	}
+}
+
 func TestTelegramExecApproverTimesOutToDeny(t *testing.T) {
 	t.Parallel()
 

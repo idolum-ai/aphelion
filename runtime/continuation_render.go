@@ -16,7 +16,7 @@ func (r *Runtime) sendContinuationApprovalPrompt(ctx context.Context, key sessio
 	if !ok {
 		return nil
 	}
-	_, err := sender.SendInlineKeyboard(
+	messageID, err := sender.SendInlineKeyboard(
 		ctx,
 		msg.ChatID,
 		text,
@@ -25,6 +25,12 @@ func (r *Runtime) sendContinuationApprovalPrompt(ctx context.Context, key sessio
 	)
 	if err != nil {
 		return fmt.Errorf("send continuation approval: %w", err)
+	}
+	if messageID > 0 && r.store != nil {
+		state.DecisionMessageID = messageID
+		if err := r.store.UpdateContinuationState(key, session.NormalizeContinuationState(state)); err != nil {
+			return fmt.Errorf("record continuation approval message: %w", err)
+		}
 	}
 	return nil
 }

@@ -25,7 +25,7 @@ func TestHandleTelegramCommandCallbackContinuationApprove(t *testing.T) {
 		DecisionID:     "decision-1",
 		RemainingTurns: 1,
 		StageSummary:   "Resume the next bounded step.",
-	}, triggerContinuationStarted: triggerStarted}
+	}, canRestart: true, triggerContinuationStarted: triggerStarted}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-continue",
 		From:    &telegram.User{ID: 1002, Username: "approved"},
@@ -69,7 +69,7 @@ func TestHandleTelegramCommandCallbackContinuationApproveContinuesWhenEditFails(
 		DecisionID:     "decision-2",
 		RemainingTurns: 1,
 		StageSummary:   "Resume the next bounded step.",
-	}, triggerContinuationStarted: triggerStarted}
+	}, canRestart: true, triggerContinuationStarted: triggerStarted}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-continue-edit-fail",
 		From:    &telegram.User{ID: 1002, Username: "approved"},
@@ -111,6 +111,7 @@ func TestHandleTelegramCommandCallbackContinuationApproveContainsExpiredLease(t 
 
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
+		canRestart:                true,
 		continuationState:         pending,
 		approveContinuationReturn: expired,
 		approveContinuationErr:    fmt.Errorf("approve continuation: %w", core.ErrContinuationExpired),
@@ -168,7 +169,7 @@ func TestHandleTelegramCommandCallbackContinuationApproveRecordsAckErrorWithoutF
 		DecisionID:     "decision-ack-error",
 		RemainingTurns: 1,
 		StageSummary:   "Resume despite callback ack failure.",
-	}, triggerContinuationStarted: triggerStarted}
+	}, canRestart: true, triggerContinuationStarted: triggerStarted}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-ack-error",
 		From:    &telegram.User{ID: 1002, Username: "approved"},
@@ -201,11 +202,13 @@ func TestHandleTelegramCommandCallbackContinuationStopRendersCombinedStopResult(
 
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
+		canRestart:             true,
 		continuationState:      session.ContinuationState{Status: session.ContinuationStatusPending, DecisionID: "decision-3", RemainingTurns: 1},
 		stopContinuationResult: core.StopResult{ContinuationRevoked: true, ContinuationLabel: "Plan: Resource-Owner Assistant (Phase J1)"},
 	}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-stop",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
 		Data:    encodeContinuationCallbackData("decision-3", "stop"),
 		Message: &telegram.Message{MessageID: 94, Chat: &telegram.Chat{ID: 7, Type: "private"}},
 	})
@@ -234,11 +237,13 @@ func TestHandleTelegramCommandCallbackContinuationStopRendersNoOpStopResult(t *t
 
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
+		canRestart:             true,
 		continuationState:      session.ContinuationState{Status: session.ContinuationStatusPending, DecisionID: "decision-4", RemainingTurns: 1},
 		stopContinuationResult: core.StopResult{},
 	}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-stop-none",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
 		Data:    encodeContinuationCallbackData("decision-4", "stop"),
 		Message: &telegram.Message{MessageID: 95, Chat: &telegram.Chat{ID: 7, Type: "private"}},
 	})
@@ -296,6 +301,70 @@ func TestHandleTelegramCommandCallbackContinuationRejectsStaleDecisionID(t *test
 	}
 	if len(sender.edits) != 0 {
 		t.Fatalf("edits count = %d, want 0 for stale callback", len(sender.edits))
+	}
+}
+
+func TestHandleTelegramCommandCallbackContinuationRejectsUnauthorizedActor(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		continuationState: session.ContinuationState{
+			Status:         session.ContinuationStatusPending,
+			DecisionID:     "decision-auth",
+			RemainingTurns: 1,
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-auth",
+		From:    &telegram.User{ID: 2002, Username: "member"},
+		Data:    encodeContinuationCallbackData("decision-auth", continuationActionApproveLease),
+		Message: &telegram.Message{MessageID: 197, Chat: &telegram.Chat{ID: 7, Type: "group"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.approveContinuationInput != 0 || router.triggerContinuationInput != 0 {
+		t.Fatalf("approve/trigger = %d/%d, want 0/0", router.approveContinuationInput, router.triggerContinuationInput)
+	}
+	if len(sender.answers) != 1 || !strings.Contains(sender.answers[0].text, "admins only") {
+		t.Fatalf("answers = %#v, want admin-only callback answer", sender.answers)
+	}
+}
+
+func TestHandleTelegramCommandCallbackContinuationRejectsWrongPromptMessage(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		continuationState: session.ContinuationState{
+			Status:            session.ContinuationStatusPending,
+			DecisionID:        "decision-message-bound",
+			DecisionMessageID: 198,
+			RemainingTurns:    1,
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-wrong-message",
+		From:    &telegram.User{ID: 1002, Username: "admin"},
+		Data:    encodeContinuationCallbackData("decision-message-bound", continuationActionApproveLease),
+		Message: &telegram.Message{MessageID: 199, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.approveContinuationInput != 0 || router.triggerContinuationInput != 0 {
+		t.Fatalf("approve/trigger = %d/%d, want 0/0", router.approveContinuationInput, router.triggerContinuationInput)
+	}
+	if len(sender.answers) != 1 || sender.answers[0].text != staleContinuationCallbackText {
+		t.Fatalf("answers = %#v, want stale callback answer", sender.answers)
 	}
 }
 
@@ -369,7 +438,7 @@ func TestHandleTelegramCommandCallbackContinuationApproveLease(t *testing.T) {
 		DecisionID:     "decision-approve-lease",
 		RemainingTurns: 1,
 		StageSummary:   "Resume the next bounded step.",
-	}, triggerContinuationStarted: triggerStarted}
+	}, canRestart: true, triggerContinuationStarted: triggerStarted}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-approve-lease",
 		From:    &telegram.User{ID: 1002, Username: "approved"},
@@ -417,9 +486,10 @@ func TestHandleTelegramCommandCallbackContinuationDetailsKeepsPendingPlanButtons
 		},
 	}
 	sender := &stubCommandSender{}
-	router := stubCommandRouter{continuationState: state}
+	router := stubCommandRouter{canRestart: true, continuationState: state}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-plan-details",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
 		Data:    encodeContinuationCallbackData("aprop-plan-details", continuationActionStatusOnly),
 		Message: &telegram.Message{MessageID: 393, Chat: &telegram.Chat{ID: 7, Type: "private"}},
 	})
@@ -463,7 +533,7 @@ func TestHandleTelegramCommandCallbackContinuationApproveDoesNotWaitForTrigger(t
 		DecisionID:     "decision-blocked-trigger",
 		RemainingTurns: 1,
 		StageSummary:   "Run a bounded continuation.",
-	}, triggerContinuationStarted: triggerStarted, triggerContinuationRelease: triggerRelease}
+	}, canRestart: true, triggerContinuationStarted: triggerStarted, triggerContinuationRelease: triggerRelease}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-blocked-trigger",
 		From:    &telegram.User{ID: 1002, Username: "approved"},
@@ -489,7 +559,7 @@ func TestHandleTelegramCommandCallbackContinuationStatusOnlyDoesNotMutateOrTrigg
 	t.Parallel()
 
 	sender := &stubCommandSender{}
-	router := stubCommandRouter{continuationState: session.ContinuationState{
+	router := stubCommandRouter{canRestart: true, continuationState: session.ContinuationState{
 		Status:         session.ContinuationStatusPending,
 		DecisionID:     "decision-status",
 		RemainingTurns: 1,
@@ -548,6 +618,7 @@ func TestHandleTelegramCommandCallbackContinuationAskNextLeaseRefreshesProposal(
 
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
+		canRestart: true,
 		continuationState: session.ContinuationState{
 			Status:         session.ContinuationStatusIdle,
 			DecisionID:     "decision-expired-refresh",
@@ -595,6 +666,7 @@ func TestHandleTelegramCommandCallbackContinuationAskEditParksWithoutTrigger(t *
 
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
+		canRestart:             true,
 		continuationState:      session.ContinuationState{Status: session.ContinuationStatusPending, DecisionID: "decision-edit", RemainingTurns: 1},
 		stopContinuationResult: core.StopResult{ContinuationRevoked: true},
 	}

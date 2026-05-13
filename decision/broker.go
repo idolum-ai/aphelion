@@ -33,6 +33,12 @@ type Delivery struct {
 	MessageID int64
 }
 
+type CallbackActor struct {
+	TelegramUserID int64
+	ChatID         int64
+	MessageID      int64
+}
+
 type Result struct {
 	DecisionID string
 	Choice     string
@@ -43,6 +49,7 @@ type Result struct {
 type PendingDecision struct {
 	ID string
 	Request
+	Delivery Delivery
 }
 
 type Notifier func(context.Context, PendingDecision) (Delivery, error)

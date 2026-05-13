@@ -188,6 +188,11 @@ func TestHandleCallbackQueryIgnoresExpiredAckAndResolvesDecision(t *testing.T) {
 	cb := telegram.CallbackQuery{
 		ID:   "cb-1",
 		Data: decision.EncodeCallbackData(pending.ID, pending.Choices[0].ID),
+		From: &telegram.User{ID: 42},
+		Message: &telegram.Message{
+			MessageID: 91,
+			Chat:      &telegram.Chat{ID: 7},
+		},
 	}
 	if err := handler.HandleCallbackQuery(context.Background(), cb); err != nil {
 		t.Fatalf("HandleCallbackQuery() err = %v, want nil for stale callback ack", err)

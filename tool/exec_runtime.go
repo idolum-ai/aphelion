@@ -108,6 +108,9 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	default:
 		if manifest, ok := r.externalManifestByName(name); ok {
 			if r.externalExecutor != nil && r.externalExecutor.Supports(manifest) {
+				if err := r.requireDurableAgentProcessSandbox(p, manifest, scope); err != nil {
+					return "", err
+				}
 				if err := r.ensureExternalToolFresh(manifest, scope); err != nil {
 					return "", err
 				}

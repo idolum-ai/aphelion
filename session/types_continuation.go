@@ -107,6 +107,7 @@ type TurnAuthorizationState struct {
 	Kind                   TurnAuthorizationKind      `json:"kind,omitempty"`
 	Status                 TurnAuthorizationStatus    `json:"status,omitempty"`
 	DecisionID             string                     `json:"decision_id,omitempty"`
+	DecisionMessageID      int64                      `json:"decision_message_id,omitempty"`
 	Objective              string                     `json:"objective,omitempty"`
 	StageSummary           string                     `json:"stage_summary,omitempty"`
 	RemainingTurns         int                        `json:"remaining_turns,omitempty"`
@@ -149,6 +150,9 @@ func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthoriza
 	state.Kind = TurnAuthorizationKind(strings.TrimSpace(string(state.Kind)))
 	state.Status = TurnAuthorizationStatus(strings.TrimSpace(string(state.Status)))
 	state.DecisionID = strings.TrimSpace(state.DecisionID)
+	if state.DecisionMessageID < 0 {
+		state.DecisionMessageID = 0
+	}
 	state.Objective = strings.TrimSpace(state.Objective)
 	state.StageSummary = strings.TrimSpace(state.StageSummary)
 	state.PersonaIntent = normalizeContinuationIntent(state.PersonaIntent)
@@ -162,7 +166,7 @@ func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthoriza
 	}
 	state.ParkedReason = strings.TrimSpace(state.ParkedReason)
 	state.ParkedSource = strings.TrimSpace(state.ParkedSource)
-	if state.Kind == "" && (state.Status != "" || state.DecisionID != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0 || state.ActionProposal.Active() || state.ContinuationLease.ID != "" || state.ContinuationLease.ProposalID != "" || state.ApprovalBundle.Active()) {
+	if state.Kind == "" && (state.Status != "" || state.DecisionID != "" || state.DecisionMessageID > 0 || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0 || state.ActionProposal.Active() || state.ContinuationLease.ID != "" || state.ContinuationLease.ProposalID != "" || state.ApprovalBundle.Active()) {
 		state.Kind = TurnAuthorizationKindContinuation
 	}
 	if state.RemainingTurns < 0 {
@@ -171,11 +175,12 @@ func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthoriza
 	if state.Status == TurnAuthorizationStatusIdle || state.Status == TurnAuthorizationStatusRevoked {
 		state.ApprovedBy = 0
 		state.DecisionID = ""
+		state.DecisionMessageID = 0
 		state.ParkedAt = time.Time{}
 		state.ParkedReason = ""
 		state.ParkedSource = ""
 	}
-	if state.UpdatedAt.IsZero() && (state.Kind != "" || state.Status != "" || state.DecisionID != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0 || state.ActionProposal.Active() || state.ContinuationLease.ID != "" || state.ContinuationLease.ProposalID != "" || state.ApprovalBundle.Active() || !state.ParkedAt.IsZero() || state.ParkedReason != "" || state.ParkedSource != "") {
+	if state.UpdatedAt.IsZero() && (state.Kind != "" || state.Status != "" || state.DecisionID != "" || state.DecisionMessageID > 0 || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0 || state.ActionProposal.Active() || state.ContinuationLease.ID != "" || state.ContinuationLease.ProposalID != "" || state.ApprovalBundle.Active() || !state.ParkedAt.IsZero() || state.ParkedReason != "" || state.ParkedSource != "") {
 		state.UpdatedAt = time.Now().UTC()
 	}
 	return state

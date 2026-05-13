@@ -489,6 +489,11 @@ func validate(cfg *Config) error {
 	if (strings.TrimSpace(cfg.DurableAgents.ControlPlane.CertFile) == "") != (strings.TrimSpace(cfg.DurableAgents.ControlPlane.KeyFile) == "") {
 		return fmt.Errorf("durable_agents.control_plane.cert_file and key_file must be set together")
 	}
+	if cfg.DurableAgents.ControlPlane.Enabled &&
+		strings.TrimSpace(cfg.DurableAgents.ControlPlane.CertFile) == "" &&
+		!durableAgentControlPlaneListenIsLoopback(cfg.DurableAgents.ControlPlane.Listen) {
+		return fmt.Errorf("durable_agents.control_plane.listen may use plaintext only on loopback; configure cert_file/key_file for non-loopback listeners")
+	}
 
 	admin := make(map[int64]struct{}, len(cfg.Principals.Telegram.AdminUserIDs))
 	for _, id := range cfg.Principals.Telegram.AdminUserIDs {

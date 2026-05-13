@@ -246,6 +246,9 @@ func ValidateDurableAgentRemoteBootstrap(bootstrap DurableAgentRemoteBootstrap) 
 	case bootstrap.EnrollmentToken == "":
 		return fmt.Errorf("durable agent remote bootstrap enrollment_token is required")
 	default:
+		if err := ValidateDurableAgentParentControlURL(bootstrap.ParentControlURL); err != nil {
+			return err
+		}
 		return ValidateNodeLLMBootstrap(bootstrap.BootstrapLLM)
 	}
 }
@@ -293,6 +296,9 @@ func ValidateDurableAgentEnrollmentPayload(payload DurableAgentEnrollmentPayload
 	case payload.EnrollmentToken == "":
 		return fmt.Errorf("durable agent enrollment payload enrollment_token is required")
 	default:
+		if err := ValidateDurableAgentParentControlURL(payload.ParentControlURL); err != nil {
+			return err
+		}
 		return ValidateNodeLLMBootstrap(payload.BootstrapLLM)
 	}
 }

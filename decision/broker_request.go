@@ -88,6 +88,7 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 			return Result{}, err
 		}
 		pending.delivery = delivery
+		pending.request.Delivery = delivery
 		if err := b.upsertPending(ctx, pending); err != nil {
 			_ = b.clearWithContext(ctx, decisionID)
 			return Result{}, err
@@ -131,6 +132,14 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 }
 
 func (b *Broker) Resolve(id string, choice string) bool {
+	return b.resolve(id, choice, CallbackActor{}, false)
+}
+
+func (b *Broker) ResolveCallback(id string, choice string, actor CallbackActor) bool {
+	return b.resolve(id, choice, actor, true)
+}
+
+func (b *Broker) resolve(id string, choice string, actor CallbackActor, requireActor bool) bool {
 	if b == nil {
 		return false
 	}
@@ -149,6 +158,9 @@ func (b *Broker) Resolve(id string, choice string) bool {
 	if pending == nil {
 		return false
 	}
+	if requireActor && !callbackActorMatchesDecision(pending.request, actor) {
+		return false
+	}
 	if !containsChoice(pending.request.Choices, choice) {
 		return false
 	}
@@ -164,6 +176,14 @@ func (b *Broker) Resolve(id string, choice string) bool {
 		b.mu.Unlock()
 		return false
 	}
+}
+
+func (b *Broker) PeekCallback(id string, actor CallbackActor) (PendingDecision, bool) {
+	pending, ok := b.Peek(id)
+	if !ok || !callbackActorMatchesDecision(pending, actor) {
+		return PendingDecision{}, false
+	}
+	return pending, true
 }
 
 func (b *Broker) Peek(id string) (PendingDecision, bool) {
@@ -186,6 +206,14 @@ func (b *Broker) Peek(id string) (PendingDecision, bool) {
 	return pending.request, true
 }
 
+func (b *Broker) PeekResolvedCallback(id string, actor CallbackActor) (PendingDecision, bool) {
+	pending, ok := b.PeekResolved(id)
+	if !ok || !callbackActorMatchesDecision(pending, actor) {
+		return PendingDecision{}, false
+	}
+	return pending, true
+}
+
 func (b *Broker) PeekResolved(id string) (PendingDecision, bool) {
 	if b == nil {
 		return PendingDecision{}, false
@@ -198,6 +226,22 @@ func (b *Broker) PeekResolved(id string) (PendingDecision, bool) {
 	defer b.mu.Unlock()
 	pending, ok := b.resolved[id]
 	return pending, ok
+}
+
+func callbackActorMatchesDecision(pending PendingDecision, actor CallbackActor) bool {
+	if actor.TelegramUserID <= 0 || actor.ChatID == 0 || actor.MessageID <= 0 {
+		return false
+	}
+	if pending.ChatID == 0 || pending.ChatID != actor.ChatID {
+		return false
+	}
+	if pending.SenderID > 0 && pending.SenderID != actor.TelegramUserID {
+		return false
+	}
+	if pending.Delivery.MessageID <= 0 || pending.Delivery.MessageID != actor.MessageID {
+		return false
+	}
+	return true
 }
 
 func (b *Broker) archiveResolvedDecisionLocked(pending PendingDecision) {

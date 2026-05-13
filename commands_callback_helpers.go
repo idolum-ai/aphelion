@@ -407,6 +407,10 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.stale", staleContinuationCallbackText)
 			return true, nil
 		}
+		if authText := continuationCallbackAuthorizationFailure(router, cb, chatID, messageID, state); authText != "" {
+			answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.unauthorized", authText)
+			return true, nil
+		}
 		var text string
 		switch action {
 		case continuationActionApproveLease, continuationActionContinueOnce:

@@ -63,13 +63,28 @@ func (r *Registry) externalManifestsForPrincipal(p principal.Principal) []Extern
 			continue
 		}
 		if r.externalExecutor != nil && r.externalExecutor.Supports(manifest) && r.store != nil {
-			scope, err := r.externalToolFreshnessScope(p)
-			if err != nil {
+			freshnessScope := sandbox.Scope{}
+			if durableAgentExternalProcessTool(p, manifest) {
+				scope, err := r.scopeForPrincipalToolExecution(p)
+				if err != nil {
+					continue
+				}
+				if err := r.requireDurableAgentProcessSandbox(p, manifest, scope); err != nil {
+					continue
+				}
+				freshnessScope = scope
+			} else {
+				var err error
+				freshnessScope, err = r.externalToolFreshnessScope(p)
+				if err != nil {
+					continue
+				}
+			}
+			if err := r.ensureExternalToolFresh(manifest, freshnessScope); err != nil {
 				continue
 			}
-			if err := r.ensureExternalToolFresh(manifest, scope); err != nil {
-				continue
-			}
+		} else if err := r.requireDurableAgentProcessSandbox(p, manifest, sandbox.Scope{}); err != nil {
+			continue
 		}
 		filtered = append(filtered, manifest)
 	}

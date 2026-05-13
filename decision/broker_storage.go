@@ -56,8 +56,9 @@ func (b *Broker) Load(ctx context.Context) error {
 		}
 		pending := &pendingDecision{
 			request: PendingDecision{
-				ID:      id,
-				Request: req,
+				ID:       id,
+				Request:  req,
+				Delivery: row.Delivery,
 			},
 			delivery:     row.Delivery,
 			resultCh:     make(chan string, 1),
