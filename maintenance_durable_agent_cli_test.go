@@ -176,7 +176,6 @@ func TestRunDurableAgentHealthShowsStateAndEnrollment(t *testing.T) {
 	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
 		AgentID:          agent.AgentID,
 		ParentControlURL: "https://house.example/control",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		Status:           "active",
 		LastSequence:     12,
@@ -271,7 +270,6 @@ func TestRunDurableAgentBootstrapWriteExportsRemoteBootstrap(t *testing.T) {
 			"--path", bootstrapPath,
 			"--parent-control-url", "https://house.example/control",
 			"--enrollment-token", "enroll-token-1",
-			"--key-fingerprint", "child-key-fp",
 			"write",
 		})
 	})
@@ -294,9 +292,6 @@ func TestRunDurableAgentBootstrapWriteExportsRemoteBootstrap(t *testing.T) {
 	}
 	if bootstrap.EnrollmentToken != "enroll-token-1" {
 		t.Fatalf("bootstrap.EnrollmentToken = %q, want enroll-token-1", bootstrap.EnrollmentToken)
-	}
-	if bootstrap.KeyFingerprint != "child-key-fp" {
-		t.Fatalf("bootstrap.KeyFingerprint = %q, want child-key-fp", bootstrap.KeyFingerprint)
 	}
 	if bootstrap.BootstrapLLM.NativeProvider != "openrouter" {
 		t.Fatalf("bootstrap.BootstrapLLM.NativeProvider = %q, want openrouter", bootstrap.BootstrapLLM.NativeProvider)
@@ -360,7 +355,6 @@ func TestRunDurableAgentEnrollmentShowRevokeAndReactivate(t *testing.T) {
 	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
 		AgentID:          agent.AgentID,
 		ParentControlURL: "https://house.example/control",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		Status:           "active",
 	}); err != nil {
@@ -459,7 +453,6 @@ func TestRunDurableAgentEnrollmentRotateSecretAndDecommission(t *testing.T) {
 	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
 		AgentID:          agent.AgentID,
 		ParentControlURL: "https://house.example/control",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		Status:           "active",
 	}); err != nil {
@@ -570,7 +563,6 @@ func TestRunDurableAgentRemoteRunOnceSyncsAndUploadsArtifacts(t *testing.T) {
 		"--path", bootstrapPath,
 		"--parent-control-url", "https://house.example",
 		"--enrollment-token", "enroll-token-1",
-		"--key-fingerprint", "child-key-fp",
 		"write",
 	}); err != nil {
 		t.Fatalf("runDurableAgentBootstrapCommand(write) err = %v", err)
@@ -711,7 +703,6 @@ func TestRunDurableAgentRemoteLoopProcessesQueuedMessages(t *testing.T) {
 		"--path", bootstrapPath,
 		"--parent-control-url", "https://house.example",
 		"--enrollment-token", "enroll-token-1",
-		"--key-fingerprint", "child-key-fp",
 		"write",
 	}); err != nil {
 		t.Fatalf("runDurableAgentBootstrapCommand(write) err = %v", err)

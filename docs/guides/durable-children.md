@@ -106,6 +106,8 @@ parent keeps governance.
 Prerequisites:
 
 - parent Tailnet service enabled in `~/.aphelion/aphelion.toml`
+- `tailscale.parent.admin_login_names` set for any operator who should use the
+  Tailnet-private JSON mirrors
 - durable agent live policy includes a Tailnet mode and `tailnet_hostname`
 - Tailscale SSH works from parent host to child host
 - the local Aphelion binary has already been built
@@ -138,7 +140,9 @@ Then verify parent-side enrollment and pulse:
 ```
 
 The child polls the parent Tailnet `/control` plane. The parent does not require
-inbound HTTP on the child.
+inbound HTTP on the child. During enrollment the parent records the child's
+Tailnet stable node ID and verifies any declared `tailnet_hostname` and
+`tailnet_tags`; later control-plane calls must come from that same Tailnet node.
 
 ## Operate
 

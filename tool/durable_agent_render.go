@@ -214,9 +214,20 @@ func renderDurableAgentEnrollment(enrollment core.DurableAgentRemoteEnrollment) 
 	fmt.Fprintf(&b, "agent_id: %s\n", enrollment.AgentID)
 	fmt.Fprintf(&b, "status: %s\n", enrollment.Status)
 	fmt.Fprintf(&b, "parent_control_url: %s\n", enrollment.ParentControlURL)
-	fmt.Fprintf(&b, "key_fingerprint: %s\n", enrollment.KeyFingerprint)
 	fmt.Fprintf(&b, "protocol_version: %s\n", enrollment.ProtocolVersion)
 	fmt.Fprintf(&b, "last_sequence: %d\n", enrollment.LastSequence)
+	if strings.TrimSpace(enrollment.TailnetIdentity.StableNodeID) != "" {
+		fmt.Fprintf(&b, "tailnet_stable_node_id: %s\n", enrollment.TailnetIdentity.StableNodeID)
+	}
+	if strings.TrimSpace(enrollment.TailnetIdentity.NodeName) != "" {
+		fmt.Fprintf(&b, "tailnet_node_name: %s\n", enrollment.TailnetIdentity.NodeName)
+	}
+	if strings.TrimSpace(enrollment.TailnetIdentity.ComputedName) != "" {
+		fmt.Fprintf(&b, "tailnet_computed_name: %s\n", enrollment.TailnetIdentity.ComputedName)
+	}
+	if strings.TrimSpace(enrollment.TailnetIdentity.LoginName) != "" {
+		fmt.Fprintf(&b, "tailnet_login_name: %s\n", enrollment.TailnetIdentity.LoginName)
+	}
 	if !enrollment.EnrolledAt.IsZero() {
 		fmt.Fprintf(&b, "enrolled_at: %s\n", enrollment.EnrolledAt.UTC().Format(time.RFC3339))
 	}

@@ -720,6 +720,7 @@ func validateTailscaleConfig(cfg *Config) error {
 	cfg.Tailscale.Parent.AuthKeyEnv = strings.TrimSpace(cfg.Tailscale.Parent.AuthKeyEnv)
 	cfg.Tailscale.Parent.AuthKeyFile = strings.TrimSpace(cfg.Tailscale.Parent.AuthKeyFile)
 	cfg.Tailscale.Parent.Tags = normalizeStringList(cfg.Tailscale.Parent.Tags)
+	cfg.Tailscale.Parent.AdminLoginNames = normalizeStringList(cfg.Tailscale.Parent.AdminLoginNames)
 	if cfg.Tailscale.Parent.Hostname == "" {
 		cfg.Tailscale.Parent.Hostname = "aphelion"
 	}

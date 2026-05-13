@@ -147,7 +147,6 @@ func provisionTestBootstrap(agent core.DurableAgent) core.DurableAgentRemoteBoot
 		ChannelKind:      agent.ChannelKind,
 		ParentControlURL: "http://aphelion.example.ts.net:8765/control",
 		EnrollmentToken:  "enroll-token",
-		KeyFingerprint:   "tailnet-ssh:family-child",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:     agent.BootstrapLLM,
 		BootstrapCeiling: agent.BootstrapCeiling,

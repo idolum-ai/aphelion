@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +19,17 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tailnet"
 )
+
+func newTailnetPrivateTestRequest(method string, target string, body io.Reader, login string) *http.Request {
+	req := httptest.NewRequest(method, target, body)
+	ctx := core.WithTailnetPeerIdentity(req.Context(), core.TailnetPeerIdentity{
+		StableNodeID: "node-stable-1",
+		NodeName:     "admin.example.ts.net",
+		ComputedName: "admin",
+		LoginName:    login,
+	})
+	return req.WithContext(ctx)
+}
 
 func TestTailnetParentAuthKeyUsesEnvBeforeFile(t *testing.T) {
 	t.Setenv("APHELION_TEST_TS_AUTHKEY", "env-key")
@@ -73,10 +85,10 @@ func TestTailnetPrivateHTTPHandlerServesHealthTailnetAndStatus(t *testing.T) {
 		personaEffort:  "gpt-5.5",
 		governorEffort: "high",
 	}
-	handler := tailnetPrivateHTTPHandler(router, 1001, nil)
+	handler := tailnetPrivateHTTPHandler(router, 1001, []string{"admin@example.com"}, nil)
 
 	for _, path := range []string{"/healthz", "/tailnet", "/tailnet/surfaces", "/tailnet/grants", "/status", "/health/diagnosis/latest"} {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req := newTailnetPrivateTestRequest(http.MethodGet, path, nil, "admin@example.com")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -95,7 +107,7 @@ func TestTailnetPrivateHTTPHandlerServesHealthTailnetAndStatus(t *testing.T) {
 	if router.tailnetGrantBindingsSenderID != 1001 {
 		t.Fatalf("tailnet grant bindings sender = %d, want admin id", router.tailnetGrantBindingsSenderID)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/tailnet/grants", nil)
+	req := newTailnetPrivateTestRequest(http.MethodGet, "/tailnet/grants", nil, "admin@example.com")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if !strings.Contains(rec.Body.String(), `"grant_bindings"`) || !strings.Contains(rec.Body.String(), `"tailnet-bind-capg-status"`) {
@@ -104,11 +116,46 @@ func TestTailnetPrivateHTTPHandlerServesHealthTailnetAndStatus(t *testing.T) {
 	if router.latestDoctorReportChatID != 1001 || router.latestDoctorReportSenderID != 1001 {
 		t.Fatalf("doctor latest lookup = (%d,%d), want configured admin chat/sender", router.latestDoctorReportChatID, router.latestDoctorReportSenderID)
 	}
-	req = httptest.NewRequest(http.MethodGet, "/health/diagnosis/latest", nil)
+	req = newTailnetPrivateTestRequest(http.MethodGet, "/health/diagnosis/latest", nil, "admin@example.com")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if !strings.Contains(rec.Body.String(), `"available":true`) || !strings.Contains(rec.Body.String(), `"full_report":"State of Things`) {
 		t.Fatalf("doctor latest body = %q, want latest report payload", rec.Body.String())
+	}
+}
+
+func TestTailnetPrivateHTTPHandlerRequiresConfiguredTailnetAdminLogin(t *testing.T) {
+	t.Parallel()
+
+	router := &stubCommandRouter{
+		canRestart: true,
+		tailnetStatus: core.TailnetStatusSnapshot{
+			Enabled: true,
+			Backend: "tsnet",
+			Status:  "healthy",
+		},
+	}
+	handler := tailnetPrivateHTTPHandler(router, 1001, []string{"admin@example.com"}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/tailnet", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("missing identity status = %d, body=%q, want 403", rec.Code, rec.Body.String())
+	}
+
+	req = newTailnetPrivateTestRequest(http.MethodGet, "/tailnet", nil, "operator@example.com")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("unauthorized identity status = %d, body=%q, want 403", rec.Code, rec.Body.String())
+	}
+
+	req = newTailnetPrivateTestRequest(http.MethodGet, "/tailnet", nil, "admin@example.com")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("authorized identity status = %d, body=%q, want 200", rec.Code, rec.Body.String())
 	}
 }
 
@@ -123,9 +170,9 @@ func TestTailnetPrivateHTTPHandlerRejectsMutationRoutes(t *testing.T) {
 		},
 		revokeTailnetSurfaceOK: true,
 	}
-	handler := tailnetPrivateHTTPHandler(router, 1001, nil)
+	handler := tailnetPrivateHTTPHandler(router, 1001, []string{"admin@example.com"}, nil)
 
-	req := httptest.NewRequest(http.MethodPost, "/tailnet/surfaces/parent:tsnet_http:status/revoke", nil)
+	req := newTailnetPrivateTestRequest(http.MethodPost, "/tailnet/surfaces/parent:tsnet_http:status/revoke", nil, "admin@example.com")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -150,6 +197,7 @@ func TestTailnetPrivateHTTPHandlerMountsDurableAgentControlPlane(t *testing.T) {
 	handler := tailnetPrivateHTTPHandler(
 		&stubCommandRouter{},
 		1001,
+		[]string{"admin@example.com"},
 		durableagent.NewHTTPHandler(store).HandlerWithBasePath("/control"),
 	)
 

@@ -33,7 +33,6 @@ func TestHTTPEnrollRegistersRemoteChildAndReturnsPolicy(t *testing.T) {
 		ChannelKind:      agent.ChannelKind,
 		ParentControlURL: "https://house.example/control",
 		EnrollmentToken:  "enroll-token-1",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:     testDurableAgentBootstrapLLM(),
 		BootstrapCeiling: agent.BootstrapCeiling,
@@ -73,8 +72,196 @@ func TestHTTPEnrollRegistersRemoteChildAndReturnsPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DurableAgentRemoteEnrollment() err = %v", err)
 	}
-	if gotEnrollment.KeyFingerprint != "child-key-fp" {
-		t.Fatalf("KeyFingerprint = %q, want child-key-fp", gotEnrollment.KeyFingerprint)
+	if gotEnrollment.AgentID != agent.AgentID {
+		t.Fatalf("stored enrollment agent_id = %q, want %q", gotEnrollment.AgentID, agent.AgentID)
+	}
+}
+
+func TestHTTPEnrollRequiresAndStoresTailnetPeerIdentity(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	agent := testRemoteDurableAgent()
+	agent.LivePolicy.TailnetMode = "tsnet"
+	agent.LivePolicy.TailnetHostname = "family-child"
+	agent.LivePolicy.TailnetTags = []string{"tag:aphelion-child", "tag:family"}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	handler := NewHTTPHandler(store)
+	handler.RequirePeerIdentity = true
+	bootstrap := core.DurableAgentRemoteBootstrap{
+		AgentID:          agent.AgentID,
+		ParentAgentID:    "house",
+		ChannelKind:      agent.ChannelKind,
+		ParentControlURL: "https://house.example/control",
+		EnrollmentToken:  "enroll-token-1",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:     testDurableAgentBootstrapLLM(),
+		BootstrapCeiling: agent.BootstrapCeiling,
+	}
+	reqBody := core.DurableAgentEnrollmentRequest{
+		Envelope: core.DurableAgentControlEnvelope{
+			ProtocolVersion: core.DefaultDurableAgentControlProtocolVersion,
+			AgentID:         agent.AgentID,
+			ParentAgentID:   "house",
+			MessageKind:     core.DurableAgentControlMessageEnrollment,
+			MessageID:       "enroll-identity-1",
+			Sequence:        1,
+			Timestamp:       time.Now().UTC(),
+		},
+		Payload: bootstrap.EnrollmentPayload(),
+	}
+	signature, err := SignEnvelopeHMAC(agent.ControlPlaneSecret, reqBody.Envelope, reqBody.Payload)
+	if err != nil {
+		t.Fatalf("SignEnvelopeHMAC(enroll) err = %v", err)
+	}
+	reqBody.Envelope.Signature = signature
+
+	rec := performJSONRequestWithIdentity(t, handler.Handler(), http.MethodPost, ControlPlaneEnrollPath, reqBody, core.TailnetPeerIdentity{
+		StableNodeID: "node-family-child",
+		NodeName:     "family-child.example.ts.net",
+		ComputedName: "family-child",
+		LoginName:    "child-admin@example.com",
+		Tags:         []string{"tag:family", "tag:aphelion-child"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	enrollment, err := store.DurableAgentRemoteEnrollment(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentRemoteEnrollment() err = %v", err)
+	}
+	if enrollment.TailnetIdentity.StableNodeID != "node-family-child" {
+		t.Fatalf("TailnetIdentity.StableNodeID = %q, want node-family-child", enrollment.TailnetIdentity.StableNodeID)
+	}
+	if enrollment.TailnetIdentity.LoginName != "child-admin@example.com" {
+		t.Fatalf("TailnetIdentity.LoginName = %q, want child-admin@example.com", enrollment.TailnetIdentity.LoginName)
+	}
+}
+
+func TestHTTPControlRequestRejectsDifferentTailnetNode(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	agent := testRemoteDurableAgent()
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
+		AgentID:          agent.AgentID,
+		ParentControlURL: "https://house.example/control",
+		Status:           "active",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		TailnetIdentity: core.TailnetPeerIdentity{
+			StableNodeID: "node-family-child",
+			NodeName:     "family-child.example.ts.net",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgentRemoteEnrollment() err = %v", err)
+	}
+
+	handler := NewHTTPHandler(store)
+	handler.RequirePeerIdentity = true
+	reqBody := core.DurableAgentPolicyPollRequest{
+		Envelope: core.DurableAgentControlEnvelope{
+			ProtocolVersion: core.DefaultDurableAgentControlProtocolVersion,
+			AgentID:         agent.AgentID,
+			ParentAgentID:   "house",
+			MessageKind:     core.DurableAgentControlMessagePolicyPoll,
+			MessageID:       "poll-wrong-node-1",
+			Sequence:        1,
+			Timestamp:       time.Now().UTC(),
+		},
+	}
+	signature, err := SignEnvelopeHMAC(agent.ControlPlaneSecret, reqBody.Envelope, struct {
+		KnownVersion int64  `json:"known_version,omitempty"`
+		KnownHash    string `json:"known_hash,omitempty"`
+	}{})
+	if err != nil {
+		t.Fatalf("SignEnvelopeHMAC(policy poll) err = %v", err)
+	}
+	reqBody.Envelope.Signature = signature
+
+	rec := performJSONRequestWithIdentity(t, handler.Handler(), http.MethodPost, ControlPlanePolicyPollPath, reqBody, core.TailnetPeerIdentity{
+		StableNodeID: "node-intruder",
+		NodeName:     "other.example.ts.net",
+	})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body = %s, want 403", rec.Code, rec.Body.String())
+	}
+	enrollment, err := store.DurableAgentRemoteEnrollment(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentRemoteEnrollment() err = %v", err)
+	}
+	if enrollment.LastSequence != 0 {
+		t.Fatalf("LastSequence = %d, want rejected request not accepted", enrollment.LastSequence)
+	}
+}
+
+func TestHTTPControlReceiptReplayDoesNotDuplicateReviewArtifact(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	agent := testRemoteDurableAgent()
+	agent.ReviewTargetChatID = 1001
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
+		AgentID:          agent.AgentID,
+		ParentControlURL: "https://house.example/control",
+		Status:           "active",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgentRemoteEnrollment() err = %v", err)
+	}
+
+	handler := NewHTTPHandler(store).Handler()
+	reqBody := core.DurableAgentReviewArtifactUploadRequest{
+		Envelope: core.DurableAgentControlEnvelope{
+			ProtocolVersion: core.DefaultDurableAgentControlProtocolVersion,
+			AgentID:         agent.AgentID,
+			ParentAgentID:   "house",
+			MessageKind:     core.DurableAgentControlMessageReviewArtifactUpload,
+			MessageID:       "artifact-retry-1",
+			Sequence:        1,
+			Timestamp:       time.Now().UTC(),
+		},
+		Artifact: core.DurableReviewArtifact{
+			AgentID:       agent.AgentID,
+			Summary:       "Retry-safe artifact.",
+			IntervalLabel: "msg-10",
+			LocalActions:  []string{"Prepared one artifact."},
+		},
+	}
+	signature, err := SignEnvelopeHMAC(agent.ControlPlaneSecret, reqBody.Envelope, reqBody.Artifact)
+	if err != nil {
+		t.Fatalf("SignEnvelopeHMAC(review artifact) err = %v", err)
+	}
+	reqBody.Envelope.Signature = signature
+
+	first := performJSONRequest(t, handler, http.MethodPost, ControlPlaneArtifactUploadPath, reqBody)
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first status = %d, body = %s", first.Code, first.Body.String())
+	}
+	second := performJSONRequest(t, handler, http.MethodPost, ControlPlaneArtifactUploadPath, reqBody)
+	if second.Code != http.StatusAccepted {
+		t.Fatalf("second status = %d, body = %s", second.Code, second.Body.String())
+	}
+	if first.Body.String() != second.Body.String() {
+		t.Fatalf("replay body = %q, want original %q", second.Body.String(), first.Body.String())
+	}
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("pending review events len = %d, want one event after replay", len(events))
 	}
 }
 
@@ -90,7 +277,6 @@ func TestHTTPPolicyPollReturnsCurrentPolicySnapshot(t *testing.T) {
 	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
 		AgentID:          agent.AgentID,
 		ParentControlURL: "https://house.example/control",
-		KeyFingerprint:   "child-key-fp",
 		Status:           "active",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 	}); err != nil {
@@ -151,7 +337,6 @@ func TestHTTPReviewArtifactUploadQueuesReviewEvent(t *testing.T) {
 	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
 		AgentID:          agent.AgentID,
 		ParentControlURL: "https://house.example/control",
-		KeyFingerprint:   "child-key-fp",
 		Status:           "active",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 	}); err != nil {
@@ -235,7 +420,6 @@ func TestHTTPHandlerVerifierRejectsInvalidSignature(t *testing.T) {
 			ChannelKind:        agent.ChannelKind,
 			ParentControlURL:   "https://house.example",
 			EnrollmentToken:    "enroll-token-1",
-			KeyFingerprint:     "child-key-fp",
 			ProtocolVersion:    core.DefaultDurableAgentControlProtocolVersion,
 			BootstrapLLM:       testDurableAgentBootstrapLLM(),
 			BootstrapCeiling:   agent.BootstrapCeiling,
@@ -272,7 +456,6 @@ func TestHTTPClientSignerSatisfiesHandlerVerifier(t *testing.T) {
 		ChannelKind:        agent.ChannelKind,
 		ParentControlURL:   "https://house.example",
 		EnrollmentToken:    "enroll-token-1",
-		KeyFingerprint:     "child-key-fp",
 		ProtocolVersion:    core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:       testDurableAgentBootstrapLLM(),
 		BootstrapCeiling:   agent.BootstrapCeiling,
@@ -312,7 +495,6 @@ func TestHTTPHandlerRejectsWrongStoreBackedSignature(t *testing.T) {
 		ChannelKind:        agent.ChannelKind,
 		ParentControlURL:   "https://house.example",
 		EnrollmentToken:    "wrong-control-secret",
-		KeyFingerprint:     "child-key-fp",
 		ProtocolVersion:    core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:       testDurableAgentBootstrapLLM(),
 		BootstrapCeiling:   agent.BootstrapCeiling,
@@ -333,11 +515,21 @@ func TestHTTPHandlerRejectsWrongStoreBackedSignature(t *testing.T) {
 
 func performJSONRequest(t *testing.T, handler http.Handler, method string, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
+	return performJSONRequestWithContext(t, handler, method, path, body, context.Background())
+}
+
+func performJSONRequestWithIdentity(t *testing.T, handler http.Handler, method string, path string, body any, identity core.TailnetPeerIdentity) *httptest.ResponseRecorder {
+	t.Helper()
+	return performJSONRequestWithContext(t, handler, method, path, body, core.WithTailnetPeerIdentity(context.Background(), identity))
+}
+
+func performJSONRequestWithContext(t *testing.T, handler http.Handler, method string, path string, body any, ctx context.Context) *httptest.ResponseRecorder {
+	t.Helper()
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("json.Marshal(body) err = %v", err)
 	}
-	req := httptest.NewRequest(method, path, bytes.NewReader(raw))
+	req := httptest.NewRequest(method, path, bytes.NewReader(raw)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)

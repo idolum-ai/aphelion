@@ -388,6 +388,7 @@ listen_addr = ":9443"
 auth_key_env = "APHELION_TAILSCALE_TEST_AUTHKEY"
 auth_key_file = "~/tailnet-auth.key"
 tags = ["tag:aphelion-admin", "tag:admin", "tag:admin"]
+admin_login_names = ["admin@example.com", "ops@example.com", "admin@example.com"]
 
 [principals.telegram]
 admin_user_ids = [123]
@@ -598,7 +599,7 @@ elevenlabs_voice_id = "voice-123"
 	if !cfg.Tailscale.Enabled || cfg.Tailscale.Backend != "cli" || cfg.Tailscale.CLIPath != "/usr/bin/tailscale" || cfg.Tailscale.CommandTimeout != "3s" || cfg.Tailscale.ExpectedTailnet != "example.ts.net" || cfg.Tailscale.ExpectedHostname != "aphelion-admin" || !reflect.DeepEqual(cfg.Tailscale.ExpectedTags, []string{"tag:admin", "tag:aphelion"}) {
 		t.Fatalf("tailscale config = %#v, want explicit normalized overrides", cfg.Tailscale)
 	}
-	if !cfg.Tailscale.Parent.Enabled || cfg.Tailscale.Parent.Hostname != "aphelion-admin" || !strings.HasSuffix(cfg.Tailscale.Parent.StateDir, "/tailnet-parent") || cfg.Tailscale.Parent.ListenAddr != ":9443" || cfg.Tailscale.Parent.AuthKeyEnv != "APHELION_TAILSCALE_TEST_AUTHKEY" || !strings.HasSuffix(cfg.Tailscale.Parent.AuthKeyFile, "/tailnet-auth.key") || !reflect.DeepEqual(cfg.Tailscale.Parent.Tags, []string{"tag:aphelion-admin", "tag:admin"}) {
+	if !cfg.Tailscale.Parent.Enabled || cfg.Tailscale.Parent.Hostname != "aphelion-admin" || !strings.HasSuffix(cfg.Tailscale.Parent.StateDir, "/tailnet-parent") || cfg.Tailscale.Parent.ListenAddr != ":9443" || cfg.Tailscale.Parent.AuthKeyEnv != "APHELION_TAILSCALE_TEST_AUTHKEY" || !strings.HasSuffix(cfg.Tailscale.Parent.AuthKeyFile, "/tailnet-auth.key") || !reflect.DeepEqual(cfg.Tailscale.Parent.Tags, []string{"tag:aphelion-admin", "tag:admin"}) || !reflect.DeepEqual(cfg.Tailscale.Parent.AdminLoginNames, []string{"admin@example.com", "ops@example.com"}) {
 		t.Fatalf("tailscale parent = %#v, want explicit normalized parent config", cfg.Tailscale.Parent)
 	}
 	if cfg.Providers.Anthropic.Model != "claude-opus-4-6" {

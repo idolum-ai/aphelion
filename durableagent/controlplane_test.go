@@ -23,7 +23,6 @@ func TestRemoteControlPlaneRejectsReplay(t *testing.T) {
 	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
 		AgentID:          agent.AgentID,
 		ParentControlURL: "https://house.example/control",
-		KeyFingerprint:   "child-key-fp",
 		Status:           "active",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 	}); err != nil {
@@ -82,7 +81,6 @@ func TestRemotePolicyAcknowledgementCarriesAppliedVersion(t *testing.T) {
 	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
 		AgentID:          agent.AgentID,
 		ParentControlURL: "https://house.example/control",
-		KeyFingerprint:   "child-key-fp",
 		Status:           "active",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 	}); err != nil {
@@ -154,7 +152,6 @@ func TestRemotePolicyAcknowledgementRejectsStalePolicyVersion(t *testing.T) {
 	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
 		AgentID:          agent.AgentID,
 		ParentControlURL: "https://house.example/control",
-		KeyFingerprint:   "child-key-fp",
 		Status:           "active",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 	}); err != nil {

@@ -30,7 +30,6 @@ func TestValidateDurableAgentRemoteBootstrapRejectsInvalidAgentID(t *testing.T) 
 		AgentID:          "../escape",
 		ParentControlURL: "https://parent.example.test",
 		EnrollmentToken:  "enrollment-token",
-		KeyFingerprint:   "key-fingerprint",
 	})
 	if err == nil {
 		t.Fatal("ValidateDurableAgentRemoteBootstrap() err = nil, want invalid agent_id error")

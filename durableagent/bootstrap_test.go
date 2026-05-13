@@ -19,7 +19,6 @@ func TestRemoteBootstrapRoundTrip(t *testing.T) {
 		ChannelKind:      "telegram_group",
 		ParentControlURL: "https://house.example/control",
 		EnrollmentToken:  "enroll-token-1",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:     testDurableAgentBootstrapLLM(),
 		BootstrapCeiling: core.DefaultDurableAgentBootstrapCeiling("telegram_group", core.DurableAgentLivePolicy{
@@ -66,7 +65,6 @@ func TestRemoteBootstrapEnrollmentPayloadUsesNormalizedIdentity(t *testing.T) {
 		ChannelKind:      " telegram_group ",
 		ParentControlURL: " https://house.example/control ",
 		EnrollmentToken:  " enroll-token-1 ",
-		KeyFingerprint:   " child-key-fp ",
 		BootstrapLLM:     testDurableAgentBootstrapLLM(),
 	}
 

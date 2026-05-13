@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"tailscale.com/client/local"
 	"tailscale.com/tsnet"
 )
 
@@ -36,7 +37,12 @@ type ParentOptions struct {
 type ParentNode interface {
 	Start() error
 	Listen(network string, addr string) (net.Listener, error)
+	LocalClient() (PeerIdentifier, error)
 	Close() error
+}
+
+type PeerIdentifier interface {
+	IdentifyPeer(ctx context.Context, remoteAddr string) (core.TailnetPeerIdentity, error)
 }
 
 type ParentService struct {
@@ -102,14 +108,22 @@ func (s *ParentService) Start(ctx context.Context) error {
 		_ = node.Close()
 		return s.failStart("start parent tsnet node: " + err.Error())
 	}
+	identifier, err := node.LocalClient()
+	if err != nil {
+		_ = node.Close()
+		return s.failStart("prepare parent tsnet identity lookup: " + err.Error())
+	}
 	ln, err := node.Listen("tcp", s.opts.ListenAddr)
 	if err != nil {
 		_ = node.Close()
 		return s.failStart("listen on parent tsnet node: " + err.Error())
 	}
 	srv := &http.Server{
-		Handler:           s.opts.Handler,
+		Handler:           attachPeerIdentity(s.opts.Handler, identifier),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	s.mu.Lock()
 	s.node = node
@@ -217,11 +231,75 @@ func (n *realParentNode) Listen(network string, addr string) (net.Listener, erro
 	return n.server.Listen(network, addr)
 }
 
+func (n *realParentNode) LocalClient() (PeerIdentifier, error) {
+	if n == nil || n.server == nil {
+		return nil, fmt.Errorf("tsnet server is nil")
+	}
+	client, err := n.server.LocalClient()
+	if err != nil {
+		return nil, err
+	}
+	return localPeerIdentifier{client: client}, nil
+}
+
 func (n *realParentNode) Close() error {
 	if n == nil || n.server == nil {
 		return nil
 	}
 	return n.server.Close()
+}
+
+type localPeerIdentifier struct {
+	client *local.Client
+}
+
+func (i localPeerIdentifier) IdentifyPeer(ctx context.Context, remoteAddr string) (core.TailnetPeerIdentity, error) {
+	if i.client == nil {
+		return core.TailnetPeerIdentity{}, fmt.Errorf("tailscale local client is nil")
+	}
+	who, err := i.client.WhoIs(ctx, remoteAddr)
+	if err != nil {
+		return core.TailnetPeerIdentity{}, err
+	}
+	identity := core.TailnetPeerIdentity{RemoteAddr: remoteAddr}
+	if who != nil {
+		if who.Node != nil {
+			identity.StableNodeID = string(who.Node.StableID)
+			identity.NodeName = who.Node.Name
+			identity.ComputedName = who.Node.ComputedName
+			identity.Tags = append([]string(nil), who.Node.Tags...)
+		}
+		if who.UserProfile != nil {
+			identity.LoginName = who.UserProfile.LoginName
+		}
+	}
+	identity = core.NormalizeTailnetPeerIdentity(identity)
+	if identity.StableNodeID == "" {
+		return core.TailnetPeerIdentity{}, fmt.Errorf("tailscale peer identity has no stable node id")
+	}
+	return identity, nil
+}
+
+func attachPeerIdentity(handler http.Handler, identifier PeerIdentifier) http.Handler {
+	if handler == nil {
+		handler = http.NotFoundHandler()
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL != nil && r.URL.Path == "/healthz" {
+			handler.ServeHTTP(w, r)
+			return
+		}
+		if identifier == nil {
+			http.Error(w, "tailnet peer identity unavailable", http.StatusForbidden)
+			return
+		}
+		identity, err := identifier.IdentifyPeer(r.Context(), r.RemoteAddr)
+		if err != nil {
+			http.Error(w, "tailnet peer identity unavailable", http.StatusForbidden)
+			return
+		}
+		handler.ServeHTTP(w, r.WithContext(core.WithTailnetPeerIdentity(r.Context(), identity)))
+	})
 }
 
 func parentStateInitialized(dir string) bool {
@@ -253,8 +331,8 @@ func ParentMagicDNSURL(hostname string, tailnetName string, listenAddr string) s
 	} else if _, rawPort, err := net.SplitHostPort(listenAddr); err == nil {
 		port = rawPort
 	}
-	if port == "" || port == "443" {
-		return "https://" + hostname + "." + tailnetName
+	if port == "" || port == "80" {
+		return "http://" + hostname + "." + tailnetName
 	}
 	return "http://" + hostname + "." + tailnetName + ":" + port
 }

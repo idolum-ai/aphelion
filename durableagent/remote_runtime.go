@@ -484,6 +484,5 @@ func remoteEnrollmentNeedsReattestation(enrollment core.DurableAgentRemoteEnroll
 	enrollment = core.NormalizeDurableAgentRemoteEnrollment(enrollment)
 	bootstrap = core.NormalizeDurableAgentRemoteBootstrap(bootstrap)
 	return strings.TrimSpace(enrollment.ParentControlURL) != strings.TrimSpace(bootstrap.ParentControlURL) ||
-		strings.TrimSpace(enrollment.KeyFingerprint) != strings.TrimSpace(bootstrap.KeyFingerprint) ||
 		strings.TrimSpace(enrollment.ProtocolVersion) != strings.TrimSpace(bootstrap.ProtocolVersion)
 }

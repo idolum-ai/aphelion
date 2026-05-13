@@ -107,13 +107,14 @@ type TailscaleConfig struct {
 }
 
 type TailscaleParentConfig struct {
-	Enabled     bool     `toml:"enabled"`
-	Hostname    string   `toml:"hostname"`
-	StateDir    string   `toml:"state_dir"`
-	ListenAddr  string   `toml:"listen_addr"`
-	AuthKeyEnv  string   `toml:"auth_key_env"`
-	AuthKeyFile string   `toml:"auth_key_file"`
-	Tags        []string `toml:"tags"`
+	Enabled         bool     `toml:"enabled"`
+	Hostname        string   `toml:"hostname"`
+	StateDir        string   `toml:"state_dir"`
+	ListenAddr      string   `toml:"listen_addr"`
+	AuthKeyEnv      string   `toml:"auth_key_env"`
+	AuthKeyFile     string   `toml:"auth_key_file"`
+	Tags            []string `toml:"tags"`
+	AdminLoginNames []string `toml:"admin_login_names"`
 }
 
 type PrincipalsConfig struct {

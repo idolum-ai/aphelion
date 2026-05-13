@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/config"
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/durableagent"
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/session"
@@ -37,7 +38,7 @@ func tailnetParentService(cfg *config.Config, router commandRouter, store *sessi
 		AuthKeyLoadError: authErr,
 		Tags:             cfg.Tailscale.Parent.Tags,
 		ExpectedTailnet:  cfg.Tailscale.ExpectedTailnet,
-		Handler:          tailnetPrivateHTTPHandler(router, adminID, tailnetDurableAgentControlHandler(store)),
+		Handler:          tailnetPrivateHTTPHandler(router, adminID, cfg.Tailscale.Parent.AdminLoginNames, tailnetDurableAgentControlHandler(store)),
 		Logf:             log.Printf,
 	}), nil
 }
@@ -91,10 +92,12 @@ func tailnetDurableAgentControlHandler(store *session.SQLiteStore) http.Handler 
 	if store == nil {
 		return nil
 	}
-	return durableagent.NewHTTPHandler(store).HandlerWithBasePath("/control")
+	handler := durableagent.NewHTTPHandler(store)
+	handler.RequirePeerIdentity = true
+	return handler.HandlerWithBasePath("/control")
 }
 
-func tailnetPrivateHTTPHandler(router commandRouter, adminID int64, control http.Handler) http.Handler {
+func tailnetPrivateHTTPHandler(router commandRouter, adminID int64, adminLoginNames []string, control http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	if control != nil {
 		mux.Handle("/control/", control)
@@ -108,6 +111,9 @@ func tailnetPrivateHTTPHandler(router commandRouter, adminID int64, control http
 	mux.HandleFunc("/tailnet", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !requireTailnetAdminLogin(w, r, adminLoginNames) {
 			return
 		}
 		if router == nil || adminID == 0 {
@@ -124,6 +130,9 @@ func tailnetPrivateHTTPHandler(router commandRouter, adminID int64, control http
 	mux.HandleFunc("/tailnet/surfaces", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !requireTailnetAdminLogin(w, r, adminLoginNames) {
 			return
 		}
 		if router == nil || adminID == 0 {
@@ -144,6 +153,9 @@ func tailnetPrivateHTTPHandler(router commandRouter, adminID int64, control http
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		if !requireTailnetAdminLogin(w, r, adminLoginNames) {
+			return
+		}
 		if router == nil || adminID == 0 {
 			http.Error(w, "tailnet router unavailable", http.StatusServiceUnavailable)
 			return
@@ -162,11 +174,17 @@ func tailnetPrivateHTTPHandler(router commandRouter, adminID int64, control http
 			http.NotFound(w, r)
 			return
 		}
+		if !requireTailnetAdminLogin(w, r, adminLoginNames) {
+			return
+		}
 		http.Error(w, "tailnet private endpoints are read-only mirrors; use Telegram /tailnet controls for mutations", http.StatusMethodNotAllowed)
 	})
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !requireTailnetAdminLogin(w, r, adminLoginNames) {
 			return
 		}
 		if router == nil || adminID == 0 {
@@ -191,6 +209,9 @@ func tailnetPrivateHTTPHandler(router commandRouter, adminID int64, control http
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		if !requireTailnetAdminLogin(w, r, adminLoginNames) {
+			return
+		}
 		if router == nil || adminID == 0 {
 			http.Error(w, "health diagnosis router unavailable", http.StatusServiceUnavailable)
 			return
@@ -213,6 +234,22 @@ func tailnetPrivateHTTPHandler(router commandRouter, adminID int64, control http
 		})
 	})
 	return mux
+}
+
+func requireTailnetAdminLogin(w http.ResponseWriter, r *http.Request, allowed []string) bool {
+	identity, ok := core.TailnetPeerIdentityFromContext(r.Context())
+	if !ok {
+		http.Error(w, "tailnet peer identity required", http.StatusForbidden)
+		return false
+	}
+	login := strings.ToLower(strings.TrimSpace(identity.LoginName))
+	for _, allowedLogin := range allowed {
+		if login != "" && login == strings.ToLower(strings.TrimSpace(allowedLogin)) {
+			return true
+		}
+	}
+	http.Error(w, "tailnet admin login is not authorized", http.StatusForbidden)
+	return false
 }
 
 func writeTailnetPrivateJSON(w http.ResponseWriter, value any) {

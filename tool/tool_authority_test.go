@@ -62,7 +62,7 @@ func TestToolAuthorityDefinitionDoesNotAdvertiseDeprecatedInlineProbeFields(t *t
 		t.Fatal("tool_authority definition not found")
 	}
 	if strings.Contains(string(raw), "probe_status") || strings.Contains(string(raw), "probe_output") {
-		t.Fatalf("tool_authority schema advertises deprecated inline probe fields: %s", string(raw))
+		t.Fatalf("tool_authority schema advertises inline probe fields: %s", string(raw))
 	}
 }
 

@@ -215,7 +215,6 @@ func TestLiveConstitution_ConversationDerivedPolicyExpression(t *testing.T) {
 		AgentID:          "family-group",
 		Status:           "active",
 		ParentControlURL: "https://example.invalid/control",
-		KeyFingerprint:   "test-key",
 		ProtocolVersion:  "v1",
 		EnrolledAt:       time.Now().UTC(),
 	}); err != nil {

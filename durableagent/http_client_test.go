@@ -30,7 +30,6 @@ func TestHTTPClientPolicyPollAndAckFlow(t *testing.T) {
 		ChannelKind:      agent.ChannelKind,
 		ParentControlURL: "https://house.example",
 		EnrollmentToken:  "enroll-token-1",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:     testDurableAgentBootstrapLLM(),
 		BootstrapCeiling: agent.BootstrapCeiling,
@@ -117,7 +116,6 @@ func TestHTTPClientUploadsReviewArtifact(t *testing.T) {
 		ChannelKind:      agent.ChannelKind,
 		ParentControlURL: "https://house.example",
 		EnrollmentToken:  "enroll-token-1",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:     testDurableAgentBootstrapLLM(),
 		BootstrapCeiling: agent.BootstrapCeiling,
@@ -170,7 +168,6 @@ func TestHTTPClientSupportsControlPlaneBasePath(t *testing.T) {
 		ChannelKind:      agent.ChannelKind,
 		ParentControlURL: "https://house.example/control",
 		EnrollmentToken:  "enroll-token-1",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:     testDurableAgentBootstrapLLM(),
 		BootstrapCeiling: agent.BootstrapCeiling,
@@ -189,7 +186,7 @@ func TestHTTPClientSupportsControlPlaneBasePath(t *testing.T) {
 	}
 }
 
-func TestHTTPClientReattestsAndUpdatesParentEnrollmentFingerprint(t *testing.T) {
+func TestHTTPClientReattestsAndUpdatesParentControlURL(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSQLiteStore(t)
@@ -206,7 +203,6 @@ func TestHTTPClientReattestsAndUpdatesParentEnrollmentFingerprint(t *testing.T) 
 		ChannelKind:      agent.ChannelKind,
 		ParentControlURL: "https://house.example",
 		EnrollmentToken:  "enroll-token-1",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:     testDurableAgentBootstrapLLM(),
 		BootstrapCeiling: agent.BootstrapCeiling,
@@ -219,21 +215,21 @@ func TestHTTPClientReattestsAndUpdatesParentEnrollmentFingerprint(t *testing.T) 
 		t.Fatalf("Enroll() err = %v", err)
 	}
 
-	client.Bootstrap.KeyFingerprint = "child-key-fp-rotated"
+	client.Bootstrap.ParentControlURL = "https://house-alt.example"
 	resp, err := client.Reattest(context.Background())
 	if err != nil {
 		t.Fatalf("Reattest() err = %v", err)
 	}
-	if resp.Enrollment.KeyFingerprint != "child-key-fp-rotated" {
-		t.Fatalf("Enrollment.KeyFingerprint = %q, want child-key-fp-rotated", resp.Enrollment.KeyFingerprint)
+	if resp.Enrollment.ParentControlURL != "https://house-alt.example" {
+		t.Fatalf("Enrollment.ParentControlURL = %q, want https://house-alt.example", resp.Enrollment.ParentControlURL)
 	}
 
 	enrollment, err := store.DurableAgentRemoteEnrollment(agent.AgentID)
 	if err != nil {
 		t.Fatalf("DurableAgentRemoteEnrollment() err = %v", err)
 	}
-	if enrollment.KeyFingerprint != "child-key-fp-rotated" {
-		t.Fatalf("stored KeyFingerprint = %q, want child-key-fp-rotated", enrollment.KeyFingerprint)
+	if enrollment.ParentControlURL != "https://house-alt.example" {
+		t.Fatalf("stored ParentControlURL = %q, want https://house-alt.example", enrollment.ParentControlURL)
 	}
 }
 
@@ -254,7 +250,6 @@ func TestHTTPClientRejectsOldControlPlaneSecretAfterRotation(t *testing.T) {
 		ChannelKind:      agent.ChannelKind,
 		ParentControlURL: "https://house.example",
 		EnrollmentToken:  "enroll-token-1",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:     testDurableAgentBootstrapLLM(),
 		BootstrapCeiling: agent.BootstrapCeiling,
@@ -284,7 +279,6 @@ func TestHTTPClientRejectsOldControlPlaneSecretAfterRotation(t *testing.T) {
 		ChannelKind:      agent.ChannelKind,
 		ParentControlURL: "https://house.example",
 		EnrollmentToken:  "enroll-token-2",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:     testDurableAgentBootstrapLLM(),
 		BootstrapCeiling: agent.BootstrapCeiling,
@@ -315,7 +309,6 @@ func TestHTTPClientPollsAndAcknowledgesParentConversation(t *testing.T) {
 	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
 		AgentID:          agent.AgentID,
 		ParentControlURL: "https://house.example",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		Status:           "active",
 	}); err != nil {
@@ -336,7 +329,6 @@ func TestHTTPClientPollsAndAcknowledgesParentConversation(t *testing.T) {
 		ChannelKind:      agent.ChannelKind,
 		ParentControlURL: "https://house.example",
 		EnrollmentToken:  "enroll-token-1",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:     testDurableAgentBootstrapLLM(),
 		BootstrapCeiling: agent.BootstrapCeiling,

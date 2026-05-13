@@ -3,6 +3,7 @@
 package durableagent
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,7 @@ const (
 	ControlPlanePolicyAckPath              = "/v1/durable-agent/policy/ack"
 	ControlPlaneParentConversationPollPath = "/v1/durable-agent/parent-conversation/poll"
 	ControlPlaneParentConversationAckPath  = "/v1/durable-agent/parent-conversation/ack"
+	maxControlPlaneRequestBytes            = 1 << 20
 )
 
 var errParentConversationAckRejected = errors.New("durable agent parent conversation acknowledgement rejected")
@@ -32,6 +34,8 @@ type HTTPStore interface {
 	InsertReviewEvent(event session.ReviewEvent) (int64, error)
 	UpsertDurableAgentRemoteEnrollment(enrollment core.DurableAgentRemoteEnrollment) error
 	DurableAgentRemoteEnrollment(agentID string) (*core.DurableAgentRemoteEnrollment, error)
+	DurableAgentControlReceipt(agentID string, messageID string) (*core.DurableAgentControlReceipt, error)
+	StoreDurableAgentControlReceiptResponse(agentID string, messageID string, status int, responseJSON string) error
 }
 
 type HTTPHandler struct {
@@ -40,6 +44,8 @@ type HTTPHandler struct {
 	review   *Runtime
 	clock    func() time.Time
 	Verifier EnvelopeVerifier
+
+	RequirePeerIdentity bool
 }
 
 type EnvelopeVerifier func(envelope core.DurableAgentControlEnvelope, payload any) error
@@ -101,6 +107,17 @@ func (h *HTTPHandler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
+	identity, err := h.enrollmentPeerIdentity(r)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	if h.RequirePeerIdentity {
+		if err := validateTailnetPeerIdentityForAgent(*agent, identity); err != nil {
+			writeError(w, http.StatusForbidden, err)
+			return
+		}
+	}
 	existing, err := h.store.DurableAgentRemoteEnrollment(req.Payload.AgentID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, err)
@@ -118,18 +135,28 @@ func (h *HTTPHandler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, fmt.Errorf("durable agent remote enrollment %s is not active", existing.AgentID))
 			return
 		}
+		if h.RequirePeerIdentity && !tailnetStableNodeMatches(existing.TailnetIdentity, identity) {
+			writeError(w, http.StatusForbidden, errors.New("durable agent reattestation came from a different tailnet node"))
+			return
+		}
+	} else if h.RequirePeerIdentity && existing != nil && !tailnetStableNodeMatches(existing.TailnetIdentity, identity) {
+		writeError(w, http.StatusForbidden, errors.New("durable agent enrollment came from a different tailnet node"))
+		return
 	} else if existing == nil {
 		enrollment := core.NormalizeDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
 			AgentID:          req.Payload.AgentID,
 			ParentControlURL: req.Payload.ParentControlURL,
-			KeyFingerprint:   req.Payload.KeyFingerprint,
 			ProtocolVersion:  req.Payload.ProtocolVersion,
 			Status:           "active",
+			TailnetIdentity:  identity,
 		})
 		if err := h.store.UpsertDurableAgentRemoteEnrollment(enrollment); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+	}
+	if h.replayControlReceipt(w, req.Envelope) {
+		return
 	}
 	if err := h.control.AcceptEnvelope(req.Envelope, h.now()); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -141,10 +168,12 @@ func (h *HTTPHandler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	registered.ParentControlURL = req.Payload.ParentControlURL
-	registered.KeyFingerprint = req.Payload.KeyFingerprint
 	registered.ProtocolVersion = req.Payload.ProtocolVersion
 	registered.Status = "active"
 	registered.RevokedAt = time.Time{}
+	if h.RequirePeerIdentity {
+		registered.TailnetIdentity = identity
+	}
 	if err := h.store.UpsertDurableAgentRemoteEnrollment(*registered); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -154,7 +183,7 @@ func (h *HTTPHandler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, core.DurableAgentEnrollmentResponse{
+	h.writeControlJSON(w, req.Envelope, http.StatusOK, core.DurableAgentEnrollmentResponse{
 		Enrollment: *registered,
 		Policy:     snapshot,
 	})
@@ -184,8 +213,7 @@ func (h *HTTPHandler) handlePolicyPoll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	if err := h.control.AcceptEnvelope(req.Envelope, h.now()); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	if !h.acceptControlEnvelope(w, r, req.Envelope) {
 		return
 	}
 	snapshot, err := h.control.PolicySnapshot(req.Envelope.AgentID)
@@ -194,7 +222,7 @@ func (h *HTTPHandler) handlePolicyPoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	changed := req.KnownVersion != snapshot.PolicyVersion || req.KnownHash != snapshot.PolicyHash
-	writeJSON(w, http.StatusOK, core.DurableAgentPolicyPollResponse{
+	h.writeControlJSON(w, req.Envelope, http.StatusOK, core.DurableAgentPolicyPollResponse{
 		Snapshot: snapshot,
 		Changed:  changed,
 	})
@@ -217,8 +245,7 @@ func (h *HTTPHandler) handleArtifactUpload(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	if err := h.control.AcceptEnvelope(req.Envelope, h.now()); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	if !h.acceptControlEnvelope(w, r, req.Envelope) {
 		return
 	}
 	agent, err := h.store.DurableAgent(req.Envelope.AgentID)
@@ -231,7 +258,7 @@ func (h *HTTPHandler) handleArtifactUpload(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, core.DurableAgentReviewArtifactUploadResponse{
+	h.writeControlJSON(w, req.Envelope, http.StatusAccepted, core.DurableAgentReviewArtifactUploadResponse{
 		Accepted:      true,
 		ReviewEventID: eventID,
 	})
@@ -255,11 +282,14 @@ func (h *HTTPHandler) handlePolicyAck(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	if err := h.control.AcceptPolicyAcknowledgement(req.Envelope, req.Ack, h.now()); err != nil {
+	if !h.acceptControlEnvelope(w, r, req.Envelope) {
+		return
+	}
+	if err := h.control.ApplyPolicyAcknowledgement(req.Envelope, req.Ack, h.now()); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, core.DurableAgentPolicyAcknowledgementResponse{Accepted: true})
+	h.writeControlJSON(w, req.Envelope, http.StatusOK, core.DurableAgentPolicyAcknowledgementResponse{Accepted: true})
 }
 
 func (h *HTTPHandler) handleParentConversationPoll(w http.ResponseWriter, r *http.Request) {
@@ -282,8 +312,7 @@ func (h *HTTPHandler) handleParentConversationPoll(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	if err := h.control.AcceptEnvelope(req.Envelope, h.now()); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	if !h.acceptControlEnvelope(w, r, req.Envelope) {
 		return
 	}
 	messages, err := h.pendingParentConversation(req.Envelope.AgentID, req.Limit)
@@ -291,7 +320,7 @@ func (h *HTTPHandler) handleParentConversationPoll(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, core.DurableAgentParentConversationPollResponse{Messages: messages})
+	h.writeControlJSON(w, req.Envelope, http.StatusOK, core.DurableAgentParentConversationPollResponse{Messages: messages})
 }
 
 func (h *HTTPHandler) handleParentConversationAck(w http.ResponseWriter, r *http.Request) {
@@ -323,8 +352,7 @@ func (h *HTTPHandler) handleParentConversationAck(w http.ResponseWriter, r *http
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	if err := h.control.AcceptEnvelope(req.Envelope, h.now()); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	if !h.acceptControlEnvelope(w, r, req.Envelope) {
 		return
 	}
 	if err := h.acknowledgeParentConversation(req.Ack.AgentID, req.Ack.MessageIDs, req.Ack.AcknowledgedAt); err != nil {
@@ -335,61 +363,7 @@ func (h *HTTPHandler) handleParentConversationAck(w http.ResponseWriter, r *http
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, core.DurableAgentParentConversationAckResponse{Accepted: true})
-}
-
-func (h *HTTPHandler) pendingParentConversation(agentID string, limit int) ([]core.DurableAgentConversationMessage, error) {
-	if h == nil || h.store == nil {
-		return nil, fmt.Errorf("durable agent control plane store is nil")
-	}
-	state, err := h.store.DurableAgentState(strings.TrimSpace(agentID))
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
-	if err != nil {
-		return nil, err
-	}
-	if limit <= 0 {
-		limit = 5
-	}
-	if limit > 20 {
-		limit = 20
-	}
-	return continuity.PendingParentConversationMessages(limit), nil
-}
-
-func (h *HTTPHandler) acknowledgeParentConversation(agentID string, messageIDs []string, at time.Time) error {
-	if h == nil || h.store == nil {
-		return fmt.Errorf("durable agent control plane store is nil")
-	}
-	state, err := h.store.DurableAgentState(strings.TrimSpace(agentID))
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			_, ackErr := (core.DurableAgentContinuityState{}).AcknowledgeParentConversationMessageIDs(messageIDs, at)
-			if ackErr != nil {
-				return fmt.Errorf("%w: %v", errParentConversationAckRejected, ackErr)
-			}
-			return nil
-		}
-		return err
-	}
-	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
-	if err != nil {
-		return err
-	}
-	continuity, err = continuity.AcknowledgeParentConversationMessageIDs(messageIDs, at)
-	if err != nil {
-		return fmt.Errorf("%w: %v", errParentConversationAckRejected, err)
-	}
-	state.StateJSON, err = continuity.Marshal()
-	if err != nil {
-		return err
-	}
-	return h.store.SaveDurableAgentState(*state)
+	h.writeControlJSON(w, req.Envelope, http.StatusOK, core.DurableAgentParentConversationAckResponse{Accepted: true})
 }
 
 func (h *HTTPHandler) now() time.Time {
@@ -441,6 +415,7 @@ func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 
 func decodeRequest(w http.ResponseWriter, r *http.Request, out any) bool {
 	defer r.Body.Close()
+	r.Body = http.MaxBytesReader(w, r.Body, maxControlPlaneRequestBytes)
 	if err := json.NewDecoder(r.Body).Decode(out); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return false
@@ -449,11 +424,28 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, out any) bool {
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
+	raw, err := encodeJSONPayload(payload)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeRawJSON(w, status, raw)
+}
+
+func encodeJSONPayload(payload any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(payload); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func writeRawJSON(w http.ResponseWriter, status int, raw []byte) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	enc := json.NewEncoder(w)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(payload)
+	_, _ = w.Write(raw)
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {

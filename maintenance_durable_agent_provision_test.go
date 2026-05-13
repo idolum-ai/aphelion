@@ -103,7 +103,6 @@ func TestRunDurableAgentProvisionApplyGeneratesSecretAndVerifiesEnrollment(t *te
 		_ = store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
 			AgentID:          "family-child",
 			ParentControlURL: parentURL,
-			KeyFingerprint:   "tailnet-ssh:family-child",
 			ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 			Status:           "active",
 			LastSequence:     5,

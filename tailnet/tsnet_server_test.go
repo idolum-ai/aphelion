@@ -7,11 +7,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/idolum-ai/aphelion/core"
 )
 
 func TestParentServiceDisabledDoesNotStartNode(t *testing.T) {
@@ -213,6 +216,28 @@ func TestRealParentNodeAdvertisesConfiguredTags(t *testing.T) {
 	}
 }
 
+func TestAttachPeerIdentityBypassesHealthAndRejectsUnknownPeers(t *testing.T) {
+	t.Parallel()
+
+	handler := attachPeerIdentity(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}), nil)
+
+	healthReq := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	healthRec := httptest.NewRecorder()
+	handler.ServeHTTP(healthRec, healthReq)
+	if healthRec.Code != http.StatusOK || healthRec.Body.String() != "ok" {
+		t.Fatalf("health = %d %q, want identity-free ok", healthRec.Code, healthRec.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/status", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body=%q, want 403 without peer identity", rec.Code, rec.Body.String())
+	}
+}
+
 type fakeParentNode struct {
 	started     bool
 	listened    bool
@@ -221,6 +246,7 @@ type fakeParentNode struct {
 	listenCount int
 	startErr    error
 	listenErr   error
+	localErr    error
 	ln          net.Listener
 }
 
@@ -248,6 +274,13 @@ func (n *fakeParentNode) Listen(network string, addr string) (net.Listener, erro
 	return ln, nil
 }
 
+func (n *fakeParentNode) LocalClient() (PeerIdentifier, error) {
+	if n.localErr != nil {
+		return nil, n.localErr
+	}
+	return fakePeerIdentifier{}, nil
+}
+
 func (n *fakeParentNode) Close() error {
 	n.closed = true
 	if n.ln != nil {
@@ -256,4 +289,15 @@ func (n *fakeParentNode) Close() error {
 		return err
 	}
 	return nil
+}
+
+type fakePeerIdentifier struct{}
+
+func (fakePeerIdentifier) IdentifyPeer(context.Context, string) (core.TailnetPeerIdentity, error) {
+	return core.TailnetPeerIdentity{
+		StableNodeID: "node-stable-1",
+		NodeName:     "child.example.ts.net",
+		ComputedName: "child",
+		LoginName:    "admin@example.com",
+	}, nil
 }

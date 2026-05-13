@@ -104,7 +104,6 @@ func runDurableAgentBootstrapCommand(args []string) error {
 	path := fs.String("path", "", "bootstrap json output path")
 	parentControlURL := fs.String("parent-control-url", "", "remote parent control-plane URL")
 	enrollmentToken := fs.String("enrollment-token", "", "child enrollment token")
-	keyFingerprint := fs.String("key-fingerprint", "", "child key fingerprint")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -127,9 +126,6 @@ func runDurableAgentBootstrapCommand(args []string) error {
 	}
 	if strings.TrimSpace(*enrollmentToken) == "" {
 		return fmt.Errorf("durable-agent bootstrap write requires --enrollment-token")
-	}
-	if strings.TrimSpace(*keyFingerprint) == "" {
-		return fmt.Errorf("durable-agent bootstrap write requires --key-fingerprint")
 	}
 
 	cfg, _, err := loadConfigForCommand(*configFlag)
@@ -157,7 +153,6 @@ func runDurableAgentBootstrapCommand(args []string) error {
 		ChannelKind:        agent.ChannelKind,
 		ParentControlURL:   strings.TrimSpace(*parentControlURL),
 		EnrollmentToken:    strings.TrimSpace(*enrollmentToken),
-		KeyFingerprint:     strings.TrimSpace(*keyFingerprint),
 		ProtocolVersion:    core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:       agent.BootstrapLLM,
 		BootstrapCeiling:   agent.BootstrapCeiling,
@@ -181,9 +176,20 @@ func printDurableAgentEnrollment(w *os.File, enrollment core.DurableAgentRemoteE
 	fmt.Fprintf(w, "agent_id: %s\n", enrollment.AgentID)
 	fmt.Fprintf(w, "status: %s\n", enrollment.Status)
 	fmt.Fprintf(w, "parent_control_url: %s\n", enrollment.ParentControlURL)
-	fmt.Fprintf(w, "key_fingerprint: %s\n", enrollment.KeyFingerprint)
 	fmt.Fprintf(w, "protocol_version: %s\n", enrollment.ProtocolVersion)
 	fmt.Fprintf(w, "last_sequence: %d\n", enrollment.LastSequence)
+	if strings.TrimSpace(enrollment.TailnetIdentity.StableNodeID) != "" {
+		fmt.Fprintf(w, "tailnet_stable_node_id: %s\n", enrollment.TailnetIdentity.StableNodeID)
+	}
+	if strings.TrimSpace(enrollment.TailnetIdentity.NodeName) != "" {
+		fmt.Fprintf(w, "tailnet_node_name: %s\n", enrollment.TailnetIdentity.NodeName)
+	}
+	if strings.TrimSpace(enrollment.TailnetIdentity.ComputedName) != "" {
+		fmt.Fprintf(w, "tailnet_computed_name: %s\n", enrollment.TailnetIdentity.ComputedName)
+	}
+	if strings.TrimSpace(enrollment.TailnetIdentity.LoginName) != "" {
+		fmt.Fprintf(w, "tailnet_login_name: %s\n", enrollment.TailnetIdentity.LoginName)
+	}
 	if !enrollment.EnrolledAt.IsZero() {
 		fmt.Fprintf(w, "enrolled_at: %s\n", enrollment.EnrolledAt.UTC().Format(time.RFC3339))
 	}

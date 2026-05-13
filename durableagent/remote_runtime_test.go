@@ -36,7 +36,6 @@ func TestRemoteRuntimeSyncEnrollsAndAppliesInitialPolicy(t *testing.T) {
 		ChannelKind:      agent.ChannelKind,
 		ParentControlURL: "https://house.example",
 		EnrollmentToken:  "enroll-token-1",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:     testDurableAgentBootstrapLLM(),
 		BootstrapCeiling: agent.BootstrapCeiling,
@@ -121,7 +120,6 @@ func TestRemoteRuntimeSyncPollsAndAppliesUpdatedPolicy(t *testing.T) {
 		ChannelKind:      agent.ChannelKind,
 		ParentControlURL: "https://house.example",
 		EnrollmentToken:  "enroll-token-1",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:     testDurableAgentBootstrapLLM(),
 		BootstrapCeiling: agent.BootstrapCeiling,
@@ -211,7 +209,6 @@ func TestRemoteRuntimeUploadReviewArtifactQueuesParentReviewAndUpdatesLocalConti
 		ChannelKind:      agent.ChannelKind,
 		ParentControlURL: "https://house.example",
 		EnrollmentToken:  "enroll-token-1",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:     testDurableAgentBootstrapLLM(),
 		BootstrapCeiling: agent.BootstrapCeiling,
@@ -309,7 +306,7 @@ func TestRemoteRuntimeUploadReviewArtifactQueuesParentReviewAndUpdatesLocalConti
 	}
 }
 
-func TestRemoteRuntimeSyncReattestsWhenBootstrapFingerprintChanges(t *testing.T) {
+func TestRemoteRuntimeSyncReattestsWhenParentControlURLChanges(t *testing.T) {
 	t.Parallel()
 
 	parentStore := newTestSQLiteStore(t)
@@ -332,7 +329,6 @@ func TestRemoteRuntimeSyncReattestsWhenBootstrapFingerprintChanges(t *testing.T)
 		ChannelKind:      agent.ChannelKind,
 		ParentControlURL: "https://house.example",
 		EnrollmentToken:  "enroll-token-1",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:     testDurableAgentBootstrapLLM(),
 		BootstrapCeiling: agent.BootstrapCeiling,
@@ -353,9 +349,9 @@ func TestRemoteRuntimeSyncReattestsWhenBootstrapFingerprintChanges(t *testing.T)
 		t.Fatalf("first Sync() err = %v", err)
 	}
 
-	bootstrap.KeyFingerprint = "child-key-fp-rotated"
+	bootstrap.ParentControlURL = "https://house-alt.example"
 	if err := WriteRemoteBootstrap(bootstrapPath, bootstrap); err != nil {
-		t.Fatalf("WriteRemoteBootstrap(rotated) err = %v", err)
+		t.Fatalf("WriteRemoteBootstrap(updated) err = %v", err)
 	}
 
 	result, err := rt.Sync(context.Background(), bootstrapPath)
@@ -370,15 +366,15 @@ func TestRemoteRuntimeSyncReattestsWhenBootstrapFingerprintChanges(t *testing.T)
 	if err != nil {
 		t.Fatalf("parent DurableAgentRemoteEnrollment() err = %v", err)
 	}
-	if parentEnrollment.KeyFingerprint != "child-key-fp-rotated" {
-		t.Fatalf("parent KeyFingerprint = %q, want child-key-fp-rotated", parentEnrollment.KeyFingerprint)
+	if parentEnrollment.ParentControlURL != "https://house-alt.example" {
+		t.Fatalf("parent ParentControlURL = %q, want https://house-alt.example", parentEnrollment.ParentControlURL)
 	}
 	childEnrollment, err := childStore.DurableAgentRemoteEnrollment(agent.AgentID)
 	if err != nil {
 		t.Fatalf("child DurableAgentRemoteEnrollment() err = %v", err)
 	}
-	if childEnrollment.KeyFingerprint != "child-key-fp-rotated" {
-		t.Fatalf("child KeyFingerprint = %q, want child-key-fp-rotated", childEnrollment.KeyFingerprint)
+	if childEnrollment.ParentControlURL != "https://house-alt.example" {
+		t.Fatalf("child ParentControlURL = %q, want https://house-alt.example", childEnrollment.ParentControlURL)
 	}
 }
 
@@ -405,7 +401,6 @@ func TestRemoteRuntimeSyncFailsWhenParentEnrollmentRevoked(t *testing.T) {
 		ChannelKind:      agent.ChannelKind,
 		ParentControlURL: "https://house.example",
 		EnrollmentToken:  "enroll-token-1",
-		KeyFingerprint:   "child-key-fp",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:     testDurableAgentBootstrapLLM(),
 		BootstrapCeiling: agent.BootstrapCeiling,

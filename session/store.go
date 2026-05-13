@@ -10,7 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 43
+const schemaVersion = 44
 
 type SQLiteStore struct {
 	db     *sql.DB
@@ -529,25 +529,32 @@ func (s *SQLiteStore) init() error {
 			FOREIGN KEY (agent_id) REFERENCES durable_agents(agent_id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS durable_agent_remote_enrollments (
-			agent_id TEXT PRIMARY KEY,
-			parent_control_url TEXT NOT NULL DEFAULT '',
-			key_fingerprint TEXT NOT NULL DEFAULT '',
-			protocol_version TEXT NOT NULL DEFAULT 'v1',
-			status TEXT NOT NULL DEFAULT 'active',
-			last_sequence INTEGER NOT NULL DEFAULT 0,
-			enrolled_at TEXT,
-			last_seen_at TEXT,
-			revoked_at TEXT,
-			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-			FOREIGN KEY (agent_id) REFERENCES durable_agents(agent_id) ON DELETE CASCADE
-		)`,
+				agent_id TEXT PRIMARY KEY,
+				parent_control_url TEXT NOT NULL DEFAULT '',
+				protocol_version TEXT NOT NULL DEFAULT 'v1',
+				status TEXT NOT NULL DEFAULT 'active',
+				last_sequence INTEGER NOT NULL DEFAULT 0,
+				enrolled_at TEXT,
+				last_seen_at TEXT,
+				revoked_at TEXT,
+				tailnet_stable_node_id TEXT NOT NULL DEFAULT '',
+				tailnet_node_name TEXT NOT NULL DEFAULT '',
+				tailnet_computed_name TEXT NOT NULL DEFAULT '',
+				tailnet_login_name TEXT NOT NULL DEFAULT '',
+				tailnet_tags_json TEXT NOT NULL DEFAULT '[]',
+				updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+				FOREIGN KEY (agent_id) REFERENCES durable_agents(agent_id) ON DELETE CASCADE
+			)`,
 		`CREATE TABLE IF NOT EXISTS durable_agent_control_receipts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			agent_id TEXT NOT NULL,
 			message_id TEXT NOT NULL,
 			message_kind TEXT NOT NULL,
 			sequence INTEGER NOT NULL,
+			signature TEXT NOT NULL DEFAULT '',
 			received_at TEXT NOT NULL DEFAULT (datetime('now')),
+			response_status INTEGER NOT NULL DEFAULT 0,
+			response_json TEXT NOT NULL DEFAULT '',
 			UNIQUE(agent_id, message_id),
 			FOREIGN KEY (agent_id) REFERENCES durable_agents(agent_id) ON DELETE CASCADE
 		)`,

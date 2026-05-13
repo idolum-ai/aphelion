@@ -114,7 +114,6 @@ func TestDurableAgentToolEnrollmentShowAndUpdate(t *testing.T) {
 	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
 		AgentID:          agent.AgentID,
 		ParentControlURL: "https://parent.example.test/control",
-		KeyFingerprint:   "keyfp-1",
 		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
 		Status:           "active",
 		EnrolledAt:       time.Unix(1710000000, 0).UTC(),

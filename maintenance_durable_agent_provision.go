@@ -43,7 +43,6 @@ func runDurableAgentProvisionCommand(args []string) error {
 	childRoot := fs.String("child-root", "", "remote child root; defaults to ~/.aphelion/children/<agent>")
 	serviceName := fs.String("service-name", "", "remote user service name")
 	parentControlURL := fs.String("parent-control-url", "", "parent Tailnet control-plane URL; defaults to configured parent tsnet /control URL")
-	keyFingerprint := fs.String("key-fingerprint", "", "child key fingerprint evidence label")
 	pollInterval := fs.String("poll-interval", durableagent.DefaultRemoteChildPollInterval, "remote child poll interval")
 	timeoutRaw := fs.String("timeout", "5m", "Tailscale SSH provisioning timeout")
 	if err := fs.Parse(args); err != nil {
@@ -105,10 +104,6 @@ func runDurableAgentProvisionCommand(args []string) error {
 		return fmt.Errorf("parent control URL is required; set tailscale.parent hostname/expected_tailnet or pass --parent-control-url")
 	}
 	resolvedHost := resolveProvisionHost(*agent, *host)
-	fingerprint := strings.TrimSpace(*keyFingerprint)
-	if fingerprint == "" {
-		fingerprint = "tailnet-ssh:" + resolvedHost
-	}
 	bootstrap := core.DurableAgentRemoteBootstrap{
 		ReviewTargetChatID: agent.ReviewTargetChatID,
 		AgentID:            agent.AgentID,
@@ -116,7 +111,6 @@ func runDurableAgentProvisionCommand(args []string) error {
 		ChannelKind:        agent.ChannelKind,
 		ParentControlURL:   parentURL,
 		EnrollmentToken:    secret,
-		KeyFingerprint:     fingerprint,
 		ProtocolVersion:    core.DefaultDurableAgentControlProtocolVersion,
 		BootstrapLLM:       agent.BootstrapLLM,
 		BootstrapCeiling:   agent.BootstrapCeiling,
