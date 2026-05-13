@@ -3,6 +3,9 @@
 Aphelion is intentionally small: a Linux-first, Telegram-controlled, governed
 outpost for personal agents. Contributions should preserve that shape.
 
+The practical contributor path is
+[docs/guides/contributor-handbook.md](docs/guides/contributor-handbook.md).
+
 ## Local Setup
 
 ```bash
