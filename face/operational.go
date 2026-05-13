@@ -70,7 +70,6 @@ func renderTelegramCommandSurface(title string, state string, next string, perso
 	}
 	details = append(details,
 		"Maintenance requests: /reinstall - queue a rebuild/reinstall/restart request",
-		"Runtime selectors: /set_persona_model - choose persona model; /set_governor_effort - choose system reasoning effort",
 	)
 	return RenderOperatorPanel(OperatorPanel{
 		Title:   title,
@@ -241,50 +240,4 @@ func RenderTelegramRestartDenied() string {
 
 func RenderTelegramQueuedReinstall() string {
 	return "Queued a reinstall request as a normal turn in this chat."
-}
-
-func RenderTelegramPersonaModelSelector(current string, options []string) string {
-	lines := []string{
-		"Select the persona model.",
-		fmt.Sprintf("Current: %s", strings.TrimSpace(current)),
-	}
-	if len(options) > 0 {
-		lines = append(lines, "", "Available:")
-		for _, option := range options {
-			option = strings.TrimSpace(option)
-			if option == "" {
-				continue
-			}
-			lines = append(lines, "- "+option)
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func RenderTelegramGovernorEffortSelector(current string, options []string) string {
-	lines := []string{
-		"Select system reasoning effort for interactive/recovery turns.",
-		fmt.Sprintf("Current: %s", strings.TrimSpace(current)),
-	}
-	if len(options) > 0 {
-		lines = append(lines, "", "Available:")
-		for _, option := range options {
-			option = strings.TrimSpace(option)
-			if option == "" {
-				continue
-			}
-			lines = append(lines, "- "+option)
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func RenderTelegramSetPersonaModel(model string) string {
-	model = strings.TrimSpace(model)
-	return fmt.Sprintf("Persona model is now %s.", model)
-}
-
-func RenderTelegramSetGovernorEffort(effort string) string {
-	effort = strings.TrimSpace(effort)
-	return fmt.Sprintf("System effort is now %s.", effort)
 }

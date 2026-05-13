@@ -60,19 +60,14 @@ func TestRenderTelegramOperationalCopyUsesNeutralPersonaLabels(t *testing.T) {
 	outputs := []string{
 		RenderTelegramStart("medium", "high", true),
 		RenderTelegramHelp("medium", "high", true),
-		RenderTelegramPersonaModelSelector("claude-sonnet", []string{"claude-opus"}),
-		RenderTelegramSetPersonaModel("claude-opus"),
 	}
 	for _, out := range outputs {
 		if strings.Contains(out, "Idolum") {
 			t.Fatalf("operational copy exposes default face name: %q", out)
 		}
 	}
-	if !strings.Contains(outputs[0], "/set_persona_model - choose persona model") {
-		t.Fatalf("start copy missing compact persona command label: %q", outputs[0])
-	}
-	if !strings.Contains(outputs[2], "Select the persona model.") {
-		t.Fatalf("selector copy missing neutral persona label: %q", outputs[2])
+	if strings.Contains(outputs[0], "/set_persona_model") || strings.Contains(outputs[0], "/set_governor_effort") {
+		t.Fatalf("start copy includes retired model selector commands: %q", outputs[0])
 	}
 }
 

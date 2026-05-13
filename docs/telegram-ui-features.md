@@ -77,10 +77,6 @@ Current command surface:
   - When `memory.aggressive.flush_on_session_boundary` is enabled, it flushes recent session context before restart.
 - `/reinstall`
   - Queues a rebuild/reinstall/restart request as normal routed work.
-- `/set_persona_model`
-  - Opens inline model selector buttons for the persona.
-- `/set_governor_effort`
-  - Opens inline effort selector buttons for system reasoning.
 
 Visibility notes:
 
@@ -100,7 +96,7 @@ Binary decision prompts follow one consistent side rule:
 - Left button: stop/deny/reject (negative or safer action)
 - Right button: continue/approve/allow (affirmative action)
 
-Non-binary selectors (for example `/status` navigation and model/effort pickers) are ordered by navigation intent or option list order, not by positive/negative polarity.
+Non-binary selectors (for example `/status` navigation and model controls) are ordered by navigation intent or option list order, not by positive/negative polarity.
 
 Inline button labels are delivery-validated at the Telegram client boundary:
 labels must be non-empty and use at most two words. Longer explanations belong
@@ -290,28 +286,6 @@ Behavior:
 - routes the turn as `durable_agent` scoped execution
 - delivers the child reply in the same chat when channel policy allows local reply
 - sender must still be authorized by the child (`allowed_telegram_user_ids` or admin role)
-
-### `/set_persona_model` selector
-
-Buttons are generated from runtime options:
-
-- `Sonnet 4.6` (`claude-sonnet-4-6`)
-- `Opus 4.6` (`claude-opus-4-6`)
-- `Opus 4.7` (`claude-opus-4-7`)
-- `GPT-5.5` (`gpt-5.5`)
-
-The currently active option is prefixed with `•`.
-
-### `/set_governor_effort` selector
-
-Buttons are generated from runtime options:
-
-- `LOW`
-- `MEDIUM`
-- `HIGH`
-- `XHIGH`
-
-The currently active option is prefixed with `•`.
 
 ### `/memory` review controls
 

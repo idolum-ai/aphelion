@@ -87,9 +87,8 @@ After either path, check `/health` and `/status`.
 
 ## Model Controls
 
-Use `/model` to inspect model routing. Use `/set_persona_model` and
-`/set_governor_effort` for admin model selectors when the configured provider
-surface allows it.
+Use `/model` to inspect and change model routing through the admin-only model
+slot controls when the configured provider surface allows it.
 
 ## Read Evidence
 

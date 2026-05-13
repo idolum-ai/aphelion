@@ -28,6 +28,11 @@ func (h *telegramDecisionHandler) handleReviewEventCallback(ctx context.Context,
 		return h.answerReviewEventCallback(ctx, cb, "This review item is no longer available.")
 	}
 	if action == core.ReviewEventActionExpand || action == core.ReviewEventActionHide {
+		if text, err := h.reviewEventDetailAuthorizationFailure(*event, cb); err != nil {
+			return err
+		} else if text != "" {
+			return h.answerReviewEventCallback(ctx, cb, text)
+		}
 		return h.handleReviewEventDetailToggle(ctx, cb, *event, action == core.ReviewEventActionExpand)
 	}
 	if proposal, ok := core.MissionControlProposalFromMetadataJSON(event.MetadataJSON); ok {
@@ -204,6 +209,47 @@ func (h *telegramDecisionHandler) handleReviewEventDetailToggle(ctx context.Cont
 		return err
 	}
 	return h.answerReviewEventCallback(ctx, cb, "")
+}
+
+func (h *telegramDecisionHandler) reviewEventDetailAuthorizationFailure(event session.ReviewEvent, cb telegram.CallbackQuery) (string, error) {
+	fromID := callbackSenderID(cb)
+	if fromID <= 0 {
+		return "Only the target reviewer can view these review details.", nil
+	}
+	if _, ok := core.MissionControlProposalFromMetadataJSON(event.MetadataJSON); ok {
+		if event.TargetAdminChatID > 0 && fromID == event.TargetAdminChatID {
+			return "", nil
+		}
+		return "Only the target admin can view this Mission Control proposal.", nil
+	}
+	requestID := reviewEventCallbackCapabilityRequestID(event)
+	if requestID != "" {
+		record, ok, err := h.store.CapabilityRequest(requestID)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return "Capability request not found.", nil
+		}
+		if reviewEventCapabilityActorCanViewDetails(record, fromID, event.TargetAdminChatID) {
+			return "", nil
+		}
+		return "Only the admin or parent can view these review details.", nil
+	}
+	if event.TargetAdminChatID > 0 && fromID == event.TargetAdminChatID {
+		return "", nil
+	}
+	return "Only the target admin can view these review details.", nil
+}
+
+func reviewEventCapabilityActorCanViewDetails(record session.CapabilityRequest, fromID int64, targetChatID int64) bool {
+	if fromID <= 0 {
+		return false
+	}
+	record = session.NormalizeCapabilityRequest(record)
+	isAdmin := telegramPrincipalMatches(record.AdminPrincipal, fromID) || (strings.TrimSpace(record.AdminPrincipal) == "" && targetChatID == fromID)
+	isParent := telegramPrincipalMatches(record.ParentPrincipal, fromID)
+	return isAdmin || isParent
 }
 
 func reviewEventConfirmationText(label string, record session.CapabilityRequest, event session.ReviewEvent) string {

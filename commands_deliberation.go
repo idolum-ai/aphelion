@@ -12,7 +12,10 @@ import (
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
-const staleDeliberationCallbackText = "This deliberation control is no longer active. Use /status for the latest state."
+const (
+	staleDeliberationCallbackText       = "This deliberation control is no longer active. Use /status for the latest state."
+	adminDeliberationDetachCallbackText = "Detach controls are available to Telegram admins only."
+)
 
 func handleDeliberationControlCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, runID int64, action core.DeliberationControlAction) (bool, error) {
 	chatID := int64(0)
@@ -52,6 +55,15 @@ func handleDeliberationControlCallback(ctx context.Context, sender commandCallba
 				text = cb.Message.Text
 			}
 			if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
+				return true, err
+			}
+		}
+		return true, nil
+	}
+
+	if action == core.DeliberationControlActionDetach && !router.CanRestart(senderID) {
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), adminDeliberationDetachCallbackText); err != nil {
+			if !telegram.IsStaleCallbackQueryError(err) {
 				return true, err
 			}
 		}

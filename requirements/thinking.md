@@ -172,7 +172,7 @@ Aphelion may also expose a narrow runtime-owned override layer for operator cont
 
 For the current system shape, that layer is intentionally small:
 
-- interactive/recovery governor effort is operator-selectable via Telegram (`/set_governor_effort`) across `low|medium|high|xhigh`
+- interactive/recovery governor effort is operator-selectable through the admin-only `/model` slot controls across `low|medium|high|xhigh`
 - heartbeat and cron should continue to use their own lower defaults
 
 This remains a hardcoded application recipe surface, not yet a configurable recipe framework.

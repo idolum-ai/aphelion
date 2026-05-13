@@ -158,3 +158,94 @@ func TestHandleReviewEventCallbackExpandAndHideIsReadOnly(t *testing.T) {
 		t.Fatalf("answers = %#v, want empty callback acknowledgements", sender.answers)
 	}
 }
+
+func TestHandleReviewEventCallbackExpandRequiresTargetReviewer(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
+		SourceRole:        "durable_agent",
+		SourceScope:       session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "mail-child", DurableAgentID: "mail-child"},
+		TargetAdminChatID: 1001,
+		Summary:           "review detail summary",
+		MetadataJSON:      `{"metadata":{"debug":"full detail"}}`,
+		Status:            "delivered",
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+	sender := &decisionTestSender{}
+	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, decision.NewBroker(nil), store)
+
+	err = handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-expand-review-denied",
+		From:    &telegram.User{ID: 2002},
+		Message: &telegram.Message{MessageID: 77, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(eventID, core.ReviewEventActionExpand),
+	})
+	if err != nil {
+		t.Fatalf("HandleCallbackQuery(expand denied) err = %v", err)
+	}
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits = %#v, want none for unauthorized detail expansion", sender.edits)
+	}
+	if len(sender.answers) != 1 || !strings.Contains(sender.answers[0].text, "target admin") {
+		t.Fatalf("answers = %#v, want target admin denial", sender.answers)
+	}
+}
+
+func TestHandleReviewEventCallbackExpandAllowsCapabilityParent(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:       "cap-parent-details",
+		RequestedBy:     "durable_agent:mail-child",
+		RequestedFor:    "durable_agent:mail-child",
+		ParentPrincipal: "telegram:2002",
+		AdminPrincipal:  "telegram:1001",
+		Kind:            session.CapabilityKindGenericDelegation,
+		TargetResource:  "mailbox",
+		Purpose:         "show review detail authorization",
+		ReviewStatus:    session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
+		SourceRole:        "durable_agent",
+		SourceScope:       session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "mail-child", DurableAgentID: "mail-child"},
+		TargetAdminChatID: 1001,
+		Summary:           "capability detail summary",
+		MetadataJSON:      `{"request_id":"cap-parent-details","review_status":"proposed","metadata":{"debug":"full detail"}}`,
+		Status:            "delivered",
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+	sender := &decisionTestSender{}
+	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, decision.NewBroker(nil), store)
+
+	err = handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-expand-parent",
+		From:    &telegram.User{ID: 2002},
+		Message: &telegram.Message{MessageID: 77, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(eventID, core.ReviewEventActionExpand),
+	})
+	if err != nil {
+		t.Fatalf("HandleCallbackQuery(expand parent) err = %v", err)
+	}
+	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "**Metadata**") {
+		t.Fatalf("edits = %#v, want authorized expanded details", sender.edits)
+	}
+	if len(sender.answers) != 1 || sender.answers[0].text != "" {
+		t.Fatalf("answers = %#v, want empty acknowledgement", sender.answers)
+	}
+}

@@ -25,6 +25,7 @@ func TestValidateDurableAgentParentControlURLTransportPolicy(t *testing.T) {
 
 	for _, raw := range []string{
 		"http://house.example/control",
+		"http://ts.net/control",
 		"ftp://house.example/control",
 		"house.example/control",
 	} {

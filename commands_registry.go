@@ -25,8 +25,6 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "detach", Description: "Detach from pending work in this chat"},
 	{Command: "restart", Description: "Force an immediate gateway restart"},
 	{Command: "reinstall", Description: "Queue a rebuild/reinstall/restart request"},
-	{Command: "set_persona_model", Description: "Choose persona model"},
-	{Command: "set_governor_effort", Description: "Choose system reasoning effort"},
 }
 
 func registerTelegramCommands(ctx context.Context, client *telegram.Client) error {

@@ -375,26 +375,6 @@ func (c telegramCommandControl) CurrentEfforts() (string, string) {
 	return c.rt.CurrentEfforts()
 }
 
-func (c telegramCommandControl) CurrentPersonaModel() string {
-	return c.rt.CurrentPersonaModel()
-}
-
-func (c telegramCommandControl) PersonaModelOptions() []string {
-	return c.rt.PersonaModelOptions()
-}
-
-func (c telegramCommandControl) SetPersonaModel(model string) (string, error) {
-	return c.rt.SetPersonaModel(model)
-}
-
-func (c telegramCommandControl) GovernorEffortOptions() []string {
-	return c.rt.GovernorEffortOptions()
-}
-
-func (c telegramCommandControl) SetGovernorEffort(effort string) (string, error) {
-	return c.rt.SetGovernorEffort(effort)
-}
-
 func (c telegramCommandControl) ModelSlotStatuses() ([]core.ModelSlotStatus, error) {
 	if c.rt == nil {
 		return nil, fmt.Errorf("runtime is not configured")

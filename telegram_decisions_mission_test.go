@@ -121,3 +121,49 @@ func TestMissionControlProposalAskEditCallbackDoesNotCreateMission(t *testing.T)
 		t.Fatalf("edits = %#v, want ask-edit confirmation", sender.edits)
 	}
 }
+
+func TestMissionControlProposalDetailCallbackRequiresTargetAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	metadata, err := core.MissionControlProposalMetadataJSON(core.MissionControlProposal{
+		MissionID: "mission-detail-denied",
+		Title:     "Mission detail denied",
+		Objective: "Keep Mission Control review details target-bound.",
+	})
+	if err != nil {
+		t.Fatalf("MissionControlProposalMetadataJSON() err = %v", err)
+	}
+	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
+		SourceChatID:      1001,
+		SourceUserID:      1001,
+		SourceRole:        string(principal.RoleAdmin),
+		TargetAdminChatID: 1001,
+		Summary:           "Mission Control proposal",
+		MetadataJSON:      metadata,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, decision.NewBroker(nil), store)
+	err = handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-mission-expand-denied",
+		Data:    core.EncodeReviewEventCallbackData(eventID, core.ReviewEventActionExpand),
+		From:    &telegram.User{ID: 2002},
+		Message: &telegram.Message{MessageID: 57, Chat: &telegram.Chat{ID: 1001}},
+	})
+	if err != nil {
+		t.Fatalf("HandleCallbackQuery(expand denied) err = %v", err)
+	}
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits = %#v, want none", sender.edits)
+	}
+	if len(sender.answers) != 1 || !strings.Contains(sender.answers[0].text, "target admin") {
+		t.Fatalf("answers = %#v, want target admin denial", sender.answers)
+	}
+}

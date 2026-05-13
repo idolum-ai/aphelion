@@ -45,5 +45,5 @@ func durableAgentControlURLHostIsLoopback(host string) bool {
 
 func durableAgentControlURLHostIsTailnet(host string) bool {
 	host = strings.ToLower(strings.Trim(strings.TrimSpace(host), "."))
-	return host == "ts.net" || strings.HasSuffix(host, ".ts.net")
+	return strings.HasSuffix(host, ".ts.net")
 }

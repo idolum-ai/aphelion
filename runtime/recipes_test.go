@@ -33,67 +33,6 @@ func TestRuntimeRecipeStateRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSetPersonaModelPersistsSelection(t *testing.T) {
-	t.Parallel()
-
-	cfg := config.Default()
-	cfg.Sessions.DBPath = filepath.Join(t.TempDir(), "state", "sessions.db")
-	path := recipeStatePath(&cfg)
-	rt := &Runtime{
-		recipePath: path,
-		recipeState: runtimeRecipeState{
-			PersonaModel:   personaModelSonnet,
-			GovernorEffort: governorEffortMedium,
-		},
-	}
-	got, err := rt.SetPersonaModel(personaModelOpus47)
-	if err != nil {
-		t.Fatalf("SetPersonaModel() err = %v", err)
-	}
-	if got != personaModelOpus47 {
-		t.Fatalf("SetPersonaModel() = %q, want %q", got, personaModelOpus47)
-	}
-	reloaded, err := loadRuntimeRecipeState(path, &cfg)
-	if err != nil {
-		t.Fatalf("loadRuntimeRecipeState() err = %v", err)
-	}
-	if reloaded.PersonaModel != personaModelOpus47 {
-		t.Fatalf("PersonaModel = %q, want %q", reloaded.PersonaModel, personaModelOpus47)
-	}
-}
-
-func TestSetGovernorEffortValidatesAndPersists(t *testing.T) {
-	t.Parallel()
-
-	cfg := config.Default()
-	cfg.Sessions.DBPath = filepath.Join(t.TempDir(), "state", "sessions.db")
-	path := recipeStatePath(&cfg)
-	rt := &Runtime{
-		recipePath: path,
-		recipeState: runtimeRecipeState{
-			PersonaModel:   personaModelSonnet,
-			GovernorEffort: governorEffortMedium,
-		},
-	}
-	if _, err := rt.SetGovernorEffort("invalid"); err == nil {
-		t.Fatal("SetGovernorEffort() err = nil, want validation error")
-	}
-	got, err := rt.SetGovernorEffort(governorEffortXHigh)
-	if err != nil {
-		t.Fatalf("SetGovernorEffort() err = %v", err)
-	}
-	if got != governorEffortXHigh {
-		t.Fatalf("SetGovernorEffort() = %q, want %q", got, governorEffortXHigh)
-	}
-	reloaded, err := loadRuntimeRecipeState(path, &cfg)
-	if err != nil {
-		t.Fatalf("loadRuntimeRecipeState() err = %v", err)
-	}
-	if reloaded.GovernorEffort != governorEffortXHigh {
-		t.Fatalf("GovernorEffort = %q, want %q", reloaded.GovernorEffort, governorEffortXHigh)
-	}
-}
-
 func TestRuntimeReasoningOverrideAppliesOnlyInteractiveAndRecovery(t *testing.T) {
 	t.Parallel()
 
@@ -127,49 +66,5 @@ func TestRuntimeReasoningOverrideAppliesOnlyInteractiveAndRecovery(t *testing.T)
 	}
 	if got := rt.reasoningOptionsForRun(session.TurnRunKindCron); got.Reasoning.Effort != agent.ReasoningEffortLow {
 		t.Fatalf("cron effort = %q, want low", got.Reasoning.Effort)
-	}
-}
-
-func TestPersonaModelOptionsIncludeOpus47(t *testing.T) {
-	t.Parallel()
-	rt := &Runtime{}
-	got := rt.PersonaModelOptions()
-	want := []string{personaModelSonnet, personaModelOpus46, personaModelOpus47, personaModelGPT55}
-	if len(got) != len(want) {
-		t.Fatalf("PersonaModelOptions len = %d, want %d (%#v)", len(got), len(want), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("PersonaModelOptions[%d] = %q, want %q", i, got[i], want[i])
-		}
-	}
-}
-
-func TestSetPersonaModelPersistsGPT55Selection(t *testing.T) {
-	t.Parallel()
-
-	cfg := config.Default()
-	cfg.Sessions.DBPath = filepath.Join(t.TempDir(), "state", "sessions.db")
-	path := recipeStatePath(&cfg)
-	rt := &Runtime{
-		recipePath: path,
-		recipeState: runtimeRecipeState{
-			PersonaModel:   personaModelSonnet,
-			GovernorEffort: governorEffortMedium,
-		},
-	}
-	got, err := rt.SetPersonaModel("openai/" + personaModelGPT55)
-	if err != nil {
-		t.Fatalf("SetPersonaModel() err = %v", err)
-	}
-	if got != personaModelGPT55 {
-		t.Fatalf("SetPersonaModel() = %q, want %q", got, personaModelGPT55)
-	}
-	reloaded, err := loadRuntimeRecipeState(path, &cfg)
-	if err != nil {
-		t.Fatalf("loadRuntimeRecipeState() err = %v", err)
-	}
-	if reloaded.PersonaModel != personaModelGPT55 {
-		t.Fatalf("PersonaModel = %q, want %q", reloaded.PersonaModel, personaModelGPT55)
 	}
 }

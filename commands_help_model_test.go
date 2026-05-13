@@ -112,65 +112,6 @@ func TestHandleTelegramCommandStartHidesAdminRestartForNonAdmin(t *testing.T) {
 	}
 }
 
-func TestHandleTelegramCommandSetPersonaModel(t *testing.T) {
-	t.Parallel()
-
-	sender := &stubCommandSender{}
-	router := stubCommandRouter{
-		personaModel:        "claude-sonnet-4-6",
-		personaModelOptions: []string{"claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7", "gpt-5.5"},
-	}
-	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
-		ChatID:    7,
-		MessageID: 19,
-		Text:      "/set_persona_model",
-	})
-	if err != nil {
-		t.Fatalf("handleTelegramCommand() err = %v", err)
-	}
-	if !handled {
-		t.Fatal("handled = false, want true")
-	}
-	if len(sender.inline) != 1 {
-		t.Fatalf("inline count = %d, want 1", len(sender.inline))
-	}
-	if sender.inline[0].replyTo == nil || *sender.inline[0].replyTo != 19 {
-		t.Fatalf("reply_to = %#v, want 19", sender.inline[0].replyTo)
-	}
-	if len(sender.inline[0].rows) == 0 || len(sender.inline[0].rows[0]) == 0 {
-		t.Fatalf("rows = %#v, want non-empty", sender.inline[0].rows)
-	}
-	if sender.inline[0].rows[0][0].CallbackData == "" {
-		t.Fatalf("callback data empty in rows %#v", sender.inline[0].rows)
-	}
-}
-
-func TestHandleTelegramCommandSetGovernorEffort(t *testing.T) {
-	t.Parallel()
-
-	sender := &stubCommandSender{}
-	router := stubCommandRouter{
-		governorEffortOptions: []string{"medium", "high"},
-	}
-	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
-		ChatID:    7,
-		MessageID: 20,
-		Text:      "/set_governor_effort",
-	})
-	if err != nil {
-		t.Fatalf("handleTelegramCommand() err = %v", err)
-	}
-	if !handled {
-		t.Fatal("handled = false, want true")
-	}
-	if len(sender.inline) != 1 {
-		t.Fatalf("inline count = %d, want 1", len(sender.inline))
-	}
-	if len(sender.inline[0].rows) == 0 {
-		t.Fatalf("rows = %#v, want non-empty", sender.inline[0].rows)
-	}
-}
-
 func TestHandleTelegramCommandModelStatus(t *testing.T) {
 	t.Parallel()
 

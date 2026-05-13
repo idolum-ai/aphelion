@@ -136,6 +136,7 @@ func TestHandleTelegramCommandCallbackDeliberationDetach(t *testing.T) {
 
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
+		canRestart: true,
 		detach: core.DetachResult{
 			ActiveCanceled:           true,
 			QueuedDropped:            true,
@@ -180,6 +181,52 @@ func TestHandleTelegramCommandCallbackDeliberationDetach(t *testing.T) {
 	}
 	if got := sender.editClear[0].text; !strings.Contains(got, "Detached this chat from pending work") {
 		t.Fatalf("edited text = %q, want detach summary", got)
+	}
+}
+
+func TestHandleTelegramCommandCallbackDeliberationDetachRequiresAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		statusChat: core.ChatStatusSnapshot{
+			ChatID: 7,
+			LatestTurnRun: &core.TurnRunStatusSnapshot{
+				ID:     778,
+				ChatID: 7,
+				Status: string(session.TurnRunStatusRunning),
+			},
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-delib-detach-denied",
+		From: &telegram.User{ID: 1002, Username: "approved"},
+		Data: core.EncodeDeliberationControlCallbackData(778, core.DeliberationControlActionDetach),
+		Message: &telegram.Message{
+			MessageID: 243,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.detachChatID != 0 {
+		t.Fatalf("detachChatID = %d, want 0", router.detachChatID)
+	}
+	if router.stopCalls != 0 {
+		t.Fatalf("stopCalls = %d, want 0", router.stopCalls)
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want admin denial", len(sender.answers))
+	}
+	if sender.answers[0].text != adminDeliberationDetachCallbackText {
+		t.Fatalf("answer text = %q, want admin denial", sender.answers[0].text)
+	}
+	if len(sender.editClear) != 0 {
+		t.Fatalf("editClear = %#v, want no message edit", sender.editClear)
 	}
 }
 

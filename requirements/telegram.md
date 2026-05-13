@@ -314,13 +314,17 @@ At minimum for current implementation:
 - `/help`
 - `/status`
 - `/health`
+- `/tailnet`
+- `/agents`
+- `/memory`
+- `/mission`
+- `/model`
 - `/auto`
 - `/stop`
+- `/new`
 - `/detach`
 - `/restart`
 - `/reinstall`
-- `/set_persona_model`
-- `/set_governor_effort`
 
 These commands should be handled directly by the Telegram/runtime boundary rather than routed through the ordinary governor turn path.
 
@@ -460,30 +464,17 @@ Before process exit, restart should detach pending approvals when `telegram.deta
 
 Default behavior should set `detach_pending_on_restart` to enabled.
 
-### `/set_persona_model`
+### `/model`
 
-Show an inline selector for the face persona model.
+Admin-only model slot surface.
 
-Current selector options:
+The command should show current model routing and provide inline controls for
+slot-scoped model and effort choices when the configured provider surface allows
+them.
 
-- `claude-sonnet-4-6`
-- `claude-opus-4-6`
-- `claude-opus-4-7`
-
-Selection should persist as runtime recipe state and affect future face proposal/render calls.
-
-### `/set_governor_effort`
-
-Show an inline selector for governor reasoning effort used by interactive and recovery turns.
-
-Current selector options:
-
-- `low`
-- `medium`
-- `high`
-- `xhigh`
-
-Selection should persist as runtime recipe state and override the interactive/recovery governor effort without changing heartbeat/cron defaults.
+Selection should persist as runtime recipe state. Face model selection should
+affect future face proposal/render calls, and governor effort selection should
+affect interactive/recovery turns without changing heartbeat/cron defaults.
 
 ## Outbound Delivery
 

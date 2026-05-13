@@ -520,43 +520,5 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 	if action, slot, value, ok := decodeModelCallbackData(cb.Data); ok {
 		return handleModelCallback(ctx, sender, router, cb, action, slot, value)
 	}
-	kind, value, ok := decodeRecipeCallbackData(cb.Data)
-	if !ok {
-		return false, nil
-	}
-	if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil {
-		if !telegram.IsStaleCallbackQueryError(err) {
-			return true, err
-		}
-	}
-
-	var (
-		text string
-		err  error
-	)
-	switch kind {
-	case "persona_model":
-		var selected string
-		selected, err = router.SetPersonaModel(value)
-		if err == nil {
-			text = face.RenderTelegramSetPersonaModel(selected)
-		}
-	case "governor_effort":
-		var selected string
-		selected, err = router.SetGovernorEffort(value)
-		if err == nil {
-			text = face.RenderTelegramSetGovernorEffort(selected)
-		}
-	default:
-		return true, nil
-	}
-	if err != nil {
-		return true, err
-	}
-	if cb.Message != nil && cb.Message.Chat != nil && cb.Message.MessageID != 0 {
-		if editErr := editCallbackMessageClearingInlineKeyboard(ctx, sender, cb.Message.Chat.ID, cb.Message.MessageID, text); editErr != nil {
-			return true, editErr
-		}
-	}
-	return true, nil
+	return false, nil
 }

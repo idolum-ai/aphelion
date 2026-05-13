@@ -159,15 +159,6 @@ type stubCommandRouter struct {
 	personaEffort                string
 	governorEffort               string
 	canRestart                   bool
-	personaModel                 string
-	personaModelOptions          []string
-	governorEffortOptions        []string
-	setPersonaModelInput         string
-	setGovernorEffortInput       string
-	setPersonaModelReturn        string
-	setGovernorEffortReturn      string
-	setPersonaModelErr           error
-	setGovernorEffortErr         error
 	modelStatuses                []core.ModelSlotStatus
 	modelStatusesErr             error
 	validateModelSlotInput       core.ModelSlotConfig
@@ -602,46 +593,6 @@ func (s *stubCommandRouter) Restart(chatID int64) error {
 func (s stubCommandRouter) CanRestart(senderID int64) bool {
 	_ = senderID
 	return s.canRestart
-}
-
-func (s stubCommandRouter) CurrentPersonaModel() string {
-	return s.personaModel
-}
-
-func (s stubCommandRouter) PersonaModelOptions() []string {
-	if len(s.personaModelOptions) == 0 {
-		return []string{"claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7", "gpt-5.5"}
-	}
-	return append([]string(nil), s.personaModelOptions...)
-}
-
-func (s *stubCommandRouter) SetPersonaModel(model string) (string, error) {
-	s.setPersonaModelInput = model
-	if s.setPersonaModelErr != nil {
-		return "", s.setPersonaModelErr
-	}
-	if s.setPersonaModelReturn != "" {
-		return s.setPersonaModelReturn, nil
-	}
-	return model, nil
-}
-
-func (s stubCommandRouter) GovernorEffortOptions() []string {
-	if len(s.governorEffortOptions) == 0 {
-		return []string{"low", "medium", "high", "xhigh"}
-	}
-	return append([]string(nil), s.governorEffortOptions...)
-}
-
-func (s *stubCommandRouter) SetGovernorEffort(effort string) (string, error) {
-	s.setGovernorEffortInput = effort
-	if s.setGovernorEffortErr != nil {
-		return "", s.setGovernorEffortErr
-	}
-	if s.setGovernorEffortReturn != "" {
-		return s.setGovernorEffortReturn, nil
-	}
-	return effort, nil
 }
 
 func (s *stubCommandRouter) ModelSlotStatuses() ([]core.ModelSlotStatus, error) {

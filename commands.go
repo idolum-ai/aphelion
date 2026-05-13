@@ -52,11 +52,6 @@ type commandRouter interface {
 	ConfigureAutoApproval(ctx context.Context, chatID int64, senderID int64, args string) (string, error)
 	ConfigureAutonomy(ctx context.Context, chatID int64, senderID int64, args string) (string, error)
 	CurrentEfforts() (persona string, governor string)
-	CurrentPersonaModel() string
-	PersonaModelOptions() []string
-	SetPersonaModel(model string) (string, error)
-	GovernorEffortOptions() []string
-	SetGovernorEffort(effort string) (string, error)
 	ModelSlotStatuses() ([]core.ModelSlotStatus, error)
 	ValidateModelSlotConfig(cfg core.ModelSlotConfig) core.ModelValidation
 	SetModelSlotConfig(cfg core.ModelSlotConfig, actor string, reason string, ttl time.Duration) (core.ModelSlotStatus, error)
@@ -257,10 +252,6 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			return true, err
 		}
 		text = face.RenderTelegramQueuedReinstall()
-	case "set_persona_model":
-		return sendPersonaModelSelector(ctx, sender, router, msg)
-	case "set_governor_effort":
-		return sendGovernorEffortSelector(ctx, sender, router, msg)
 	default:
 		return false, nil
 	}
@@ -346,7 +337,20 @@ func parseTelegramCommand(text string) (string, bool) {
 		}
 		return "", false
 	}
-	return strings.ToLower(token), true
+	token = strings.ToLower(token)
+	if !registeredTelegramCommand(token) {
+		return "", false
+	}
+	return token, true
+}
+
+func registeredTelegramCommand(command string) bool {
+	for _, registered := range defaultTelegramCommands {
+		if registered.Command == command {
+			return true
+		}
+	}
+	return false
 }
 
 func replyToMessageID(id int64) *int64 {

@@ -171,7 +171,7 @@ For the current system shape, that toggle switches between:
 - a Sonnet-class default recipe
 - an Opus-class higher-effort recipe
 
-The primary Telegram control is `/set_persona_model` (inline selector).
+The primary Telegram control is the admin-only `/model` surface.
 
 This is not yet a general face-profile system. It is still a hardcoded application recipe.
 
