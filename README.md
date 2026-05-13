@@ -30,6 +30,7 @@ The full design direction lives in
 
 - New operator: [Quick Experiment](docs/guides/quick-experiment.md)
 - Skilled operator: [Operator Setup](docs/guides/operator-setup.md)
+- Child agents: [Durable Children](docs/guides/durable-children.md)
 - Telegram workflows: [Telegram Operations](docs/guides/telegram-operations.md)
 - Contributors: [Contributor Handbook](docs/guides/contributor-handbook.md)
 - Full docs map: [docs/README.md](docs/README.md)

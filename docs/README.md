@@ -9,6 +9,7 @@ architecture and requirements docs define the deeper contracts.
 |---|---|
 | Try Aphelion safely with a real Telegram bot | [Quick Experiment](guides/quick-experiment.md) |
 | Set up a durable local service | [Operator Setup](guides/operator-setup.md) |
+| Set up durable child agents | [Durable Children](guides/durable-children.md) |
 | Learn the Telegram control surface | [Telegram Operations](guides/telegram-operations.md) |
 | Understand or contribute to the codebase | [Contributor Handbook](guides/contributor-handbook.md) |
 
