@@ -193,25 +193,26 @@ func (s DurableAgentContinuityState) WithRatifiedOutcome(summary string, policyV
 }
 
 func (s DurableAgentContinuityState) WithConversationMessage(role string, text string, createdAt time.Time) DurableAgentContinuityState {
-	s = NormalizeDurableAgentContinuityState(s)
-	role = normalizeDurableAgentConversationRole(role)
-	text = clampDurableAgentField(text, 1200)
-	if role == "" || text == "" {
-		return s
-	}
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
 	}
-	next := DurableAgentConversationMessage{
-		MessageID: durableAgentConversationMessageID(role, text, createdAt.UTC()),
+	return s.WithConversationMessages(DurableAgentConversationMessage{
 		Role:      role,
 		Text:      text,
-		CreatedAt: createdAt.UTC(),
+		CreatedAt: createdAt,
+	})
+}
+
+func (s DurableAgentContinuityState) WithConversationMessages(messages ...DurableAgentConversationMessage) DurableAgentContinuityState {
+	s = NormalizeDurableAgentContinuityState(s)
+	next := normalizeDurableAgentConversationMessages(messages)
+	if len(next) == 0 {
+		return s
 	}
 	if s.Conversation == nil {
 		s.Conversation = &DurableAgentConversationState{}
 	}
-	s.Conversation.Messages = append([]DurableAgentConversationMessage{next}, s.Conversation.Messages...)
+	s.Conversation.Messages = append(next, s.Conversation.Messages...)
 	return NormalizeDurableAgentContinuityState(s)
 }
 
@@ -427,7 +428,10 @@ func normalizeDurableAgentConversationMessages(values []DurableAgentConversation
 		if value.Role == "" || value.Text == "" {
 			continue
 		}
-		value.MessageID = durableAgentConversationMessageID(value.Role, value.Text, value.CreatedAt)
+		value.MessageID = strings.TrimSpace(value.MessageID)
+		if value.MessageID == "" {
+			value.MessageID = durableAgentConversationMessageID(value.Role, value.Text, value.CreatedAt)
+		}
 		if value.Role != "parent" {
 			value.AcknowledgedAt = time.Time{}
 		}

@@ -359,9 +359,9 @@ func (r *RemoteRuntime) syncParentConversation(ctx context.Context, client Remot
 	if len(resp.Messages) == 0 {
 		return nil, nil
 	}
-	messageIDs := core.DurableAgentConversationMessageIDs(resp.Messages)
-	if len(messageIDs) == 0 {
-		return nil, fmt.Errorf("durable agent parent conversation poll returned messages without message ids")
+	messages, messageIDs, err := parentConversationPollMessages(resp.Messages)
+	if err != nil {
+		return nil, err
 	}
 	_, state, err := r.localDurableAgentState(bootstrap)
 	if err != nil {
@@ -371,12 +371,12 @@ func (r *RemoteRuntime) syncParentConversation(ctx context.Context, client Remot
 	if err != nil {
 		return nil, fmt.Errorf("parse durable agent continuity state: %w", err)
 	}
-	for i := len(resp.Messages) - 1; i >= 0; i-- {
-		message := resp.Messages[i]
-		if hasDurableAgentConversationMessage(continuity, "parent", message.Text, message.CreatedAt) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if hasDurableAgentConversationMessageID(continuity, message.MessageID) {
 			continue
 		}
-		continuity = continuity.WithConversationMessage("parent", message.Text, message.CreatedAt)
+		continuity = continuity.WithConversationMessages(message)
 	}
 	raw, err := continuity.Marshal()
 	if err != nil {
@@ -389,16 +389,41 @@ func (r *RemoteRuntime) syncParentConversation(ctx context.Context, client Remot
 	return messageIDs, nil
 }
 
-func hasDurableAgentConversationMessage(state core.DurableAgentContinuityState, role string, text string, createdAt time.Time) bool {
+func parentConversationPollMessages(messages []core.DurableAgentConversationMessage) ([]core.DurableAgentConversationMessage, []string, error) {
+	out := make([]core.DurableAgentConversationMessage, 0, len(messages))
+	messageIDs := make([]string, 0, len(messages))
+	seen := make(map[string]struct{}, len(messages))
+	for _, message := range messages {
+		message.MessageID = strings.TrimSpace(message.MessageID)
+		if message.MessageID == "" {
+			return nil, nil, fmt.Errorf("durable agent parent conversation poll returned message without message_id")
+		}
+		normalizedIDs := core.DurableAgentConversationMessageIDs([]core.DurableAgentConversationMessage{message})
+		if len(normalizedIDs) != 1 {
+			return nil, nil, fmt.Errorf("durable agent parent conversation poll returned invalid message_id %q", message.MessageID)
+		}
+		message.MessageID = normalizedIDs[0]
+		if _, ok := seen[message.MessageID]; ok {
+			continue
+		}
+		seen[message.MessageID] = struct{}{}
+		out = append(out, message)
+		messageIDs = append(messageIDs, message.MessageID)
+	}
+	if len(messageIDs) == 0 {
+		return nil, nil, fmt.Errorf("durable agent parent conversation poll returned messages without message_ids")
+	}
+	return out, messageIDs, nil
+}
+
+func hasDurableAgentConversationMessageID(state core.DurableAgentContinuityState, messageID string) bool {
 	state = core.NormalizeDurableAgentContinuityState(state)
-	role = strings.TrimSpace(role)
-	text = strings.TrimSpace(text)
-	if state.Conversation == nil || role == "" || text == "" {
+	messageID = strings.TrimSpace(messageID)
+	if state.Conversation == nil || messageID == "" {
 		return false
 	}
-	createdAt = createdAt.UTC()
 	for _, message := range state.Conversation.Messages {
-		if message.Role == role && message.Text == text && message.CreatedAt.Equal(createdAt) {
+		if message.MessageID == messageID {
 			return true
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
@@ -183,6 +184,79 @@ func TestRemoteRuntimeSyncPollsAndAppliesUpdatedPolicy(t *testing.T) {
 	}
 	if state.LastAcknowledgedPolicyVersion != updated.PolicyVersion {
 		t.Fatalf("LastAcknowledgedPolicyVersion = %d, want %d", state.LastAcknowledgedPolicyVersion, updated.PolicyVersion)
+	}
+}
+
+func TestRemoteRuntimeSyncParentConversationPreservesParentMessageID(t *testing.T) {
+	t.Parallel()
+
+	childStore, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "child.db"))
+	if err != nil {
+		t.Fatalf("child NewSQLiteStore() err = %v", err)
+	}
+	defer childStore.Close()
+
+	agent := testRemoteDurableAgent()
+	if err := childStore.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("child UpsertDurableAgent() err = %v", err)
+	}
+
+	bootstrap := core.DurableAgentRemoteBootstrap{
+		AgentID:          agent.AgentID,
+		ParentAgentID:    "house",
+		ChannelKind:      agent.ChannelKind,
+		ParentControlURL: "https://house.example",
+		EnrollmentToken:  "enroll-token-1",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:     testDurableAgentBootstrapLLM(),
+		BootstrapCeiling: agent.BootstrapCeiling,
+	}
+	parentMessage := core.DurableAgentConversationMessage{
+		MessageID: "parent-msg-opaque-1",
+		Role:      "parent",
+		Text:      "Use the exact parent message identity.",
+		CreatedAt: time.Date(2026, 5, 13, 13, 30, 0, 0, time.UTC),
+	}
+	client := &remoteRuntimeParentConversationClient{
+		pollResponse: core.DurableAgentParentConversationPollResponse{
+			Messages: []core.DurableAgentConversationMessage{parentMessage},
+		},
+	}
+	rt := NewRemoteRuntime(childStore, nil)
+
+	messageIDs, err := rt.syncParentConversation(context.Background(), client, bootstrap)
+	if err != nil {
+		t.Fatalf("syncParentConversation() err = %v", err)
+	}
+	if len(messageIDs) != 1 || messageIDs[0] != parentMessage.MessageID {
+		t.Fatalf("syncParentConversation() messageIDs = %#v, want [%q]", messageIDs, parentMessage.MessageID)
+	}
+
+	state, err := childStore.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("child DurableAgentState() err = %v", err)
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if continuity.Conversation == nil || len(continuity.Conversation.Messages) != 1 {
+		t.Fatalf("Conversation = %#v, want one parent message", continuity.Conversation)
+	}
+	stored := continuity.Conversation.Messages[0]
+	if stored.MessageID != parentMessage.MessageID {
+		t.Fatalf("stored MessageID = %q, want %q", stored.MessageID, parentMessage.MessageID)
+	}
+	regeneratedIDs := core.DurableAgentConversationMessageIDs([]core.DurableAgentConversationMessage{{
+		Role:      parentMessage.Role,
+		Text:      parentMessage.Text,
+		CreatedAt: parentMessage.CreatedAt,
+	}})
+	if len(regeneratedIDs) != 1 {
+		t.Fatalf("regeneratedIDs len = %d, want 1", len(regeneratedIDs))
+	}
+	if stored.MessageID == regeneratedIDs[0] {
+		t.Fatalf("stored MessageID = %q, want preserved opaque id instead of regenerated id", stored.MessageID)
 	}
 }
 
@@ -440,4 +514,36 @@ func TestRemoteRuntimeSyncFailsWhenParentEnrollmentRevoked(t *testing.T) {
 
 func remoteRuntimeHTTPClient(handler http.Handler) *http.Client {
 	return &http.Client{Transport: handlerRoundTripper{handler: handler}}
+}
+
+type remoteRuntimeParentConversationClient struct {
+	pollResponse core.DurableAgentParentConversationPollResponse
+}
+
+func (c *remoteRuntimeParentConversationClient) Enroll(context.Context) (core.DurableAgentEnrollmentResponse, error) {
+	panic("unexpected Enroll call")
+}
+
+func (c *remoteRuntimeParentConversationClient) Reattest(context.Context) (core.DurableAgentEnrollmentResponse, error) {
+	panic("unexpected Reattest call")
+}
+
+func (c *remoteRuntimeParentConversationClient) PollPolicy(context.Context, int64, string) (core.DurableAgentPolicyPollResponse, error) {
+	panic("unexpected PollPolicy call")
+}
+
+func (c *remoteRuntimeParentConversationClient) UploadReviewArtifact(context.Context, core.DurableReviewArtifact) (core.DurableAgentReviewArtifactUploadResponse, error) {
+	panic("unexpected UploadReviewArtifact call")
+}
+
+func (c *remoteRuntimeParentConversationClient) AcknowledgePolicy(context.Context, core.DurableAgentPolicyAcknowledgement) (core.DurableAgentPolicyAcknowledgementResponse, error) {
+	panic("unexpected AcknowledgePolicy call")
+}
+
+func (c *remoteRuntimeParentConversationClient) PollParentConversation(context.Context, int) (core.DurableAgentParentConversationPollResponse, error) {
+	return c.pollResponse, nil
+}
+
+func (c *remoteRuntimeParentConversationClient) AcknowledgeParentConversation(context.Context, core.DurableAgentParentConversationAcknowledgement) (core.DurableAgentParentConversationAckResponse, error) {
+	panic("unexpected AcknowledgeParentConversation call")
 }

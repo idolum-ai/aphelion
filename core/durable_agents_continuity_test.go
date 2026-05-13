@@ -3,6 +3,7 @@
 package core
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -88,5 +89,66 @@ func TestDurableAgentContinuityAcknowledgesOnlyExplicitParentMessageIDs(t *testi
 		if message.Text == "B" && !message.AcknowledgedAt.IsZero() {
 			t.Fatal("message B was acknowledged without being included in ack batch")
 		}
+	}
+}
+
+func TestDurableAgentContinuityPreservesExplicitConversationMessageID(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 13, 13, 0, 0, 123, time.UTC)
+	parentMessage := DurableAgentConversationMessage{
+		MessageID: "parent-msg-opaque-1",
+		Role:      "parent",
+		Text:      "Use the parent-provided message identity.",
+		CreatedAt: now,
+	}
+	state := DurableAgentContinuityState{}.WithConversationMessages(parentMessage)
+	if state.Conversation == nil || len(state.Conversation.Messages) != 1 {
+		t.Fatalf("Conversation = %#v, want one message", state.Conversation)
+	}
+	if state.Conversation.Messages[0].MessageID != parentMessage.MessageID {
+		t.Fatalf("MessageID = %q, want %q", state.Conversation.Messages[0].MessageID, parentMessage.MessageID)
+	}
+
+	regeneratedIDs := DurableAgentConversationMessageIDs([]DurableAgentConversationMessage{{
+		Role:      parentMessage.Role,
+		Text:      parentMessage.Text,
+		CreatedAt: parentMessage.CreatedAt,
+	}})
+	if len(regeneratedIDs) != 1 {
+		t.Fatalf("regeneratedIDs len = %d, want 1", len(regeneratedIDs))
+	}
+	if state.Conversation.Messages[0].MessageID == regeneratedIDs[0] {
+		t.Fatalf("MessageID = %q, want preserved opaque id instead of regenerated id", state.Conversation.Messages[0].MessageID)
+	}
+
+	raw, err := state.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal() err = %v", err)
+	}
+	parsed, err := ParseDurableAgentContinuityState(raw)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if parsed.Conversation.Messages[0].MessageID != parentMessage.MessageID {
+		t.Fatalf("parsed MessageID = %q, want %q", parsed.Conversation.Messages[0].MessageID, parentMessage.MessageID)
+	}
+	if _, err := parsed.AcknowledgeParentConversationMessageIDs(regeneratedIDs, now.Add(time.Minute)); err == nil {
+		t.Fatal("AcknowledgeParentConversationMessageIDs() by regenerated id err = nil, want unknown message_id")
+	}
+	acknowledged, err := parsed.AcknowledgeParentConversationMessageIDs([]string{parentMessage.MessageID}, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("AcknowledgeParentConversationMessageIDs() by preserved id err = %v", err)
+	}
+	if acknowledged.Conversation.Messages[0].AcknowledgedAt.IsZero() {
+		t.Fatal("AcknowledgedAt is zero, want preserved id acknowledgement to update message")
+	}
+
+	generated := DurableAgentContinuityState{}.WithConversationMessage("parent", "Generate a deterministic local id.", now)
+	if generated.Conversation == nil || len(generated.Conversation.Messages) != 1 {
+		t.Fatalf("generated Conversation = %#v, want one message", generated.Conversation)
+	}
+	if !strings.HasPrefix(generated.Conversation.Messages[0].MessageID, "dcm_") {
+		t.Fatalf("generated MessageID = %q, want dcm_ prefix", generated.Conversation.Messages[0].MessageID)
 	}
 }
