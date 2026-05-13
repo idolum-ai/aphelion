@@ -12,11 +12,13 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/config"
+	"github.com/idolum-ai/aphelion/durableagent"
 	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tailnet"
 )
 
-func tailnetParentService(cfg *config.Config, router commandRouter) (*tailnet.ParentService, error) {
+func tailnetParentService(cfg *config.Config, router commandRouter, store *session.SQLiteStore) (*tailnet.ParentService, error) {
 	if cfg == nil || !cfg.Tailscale.Enabled || !cfg.Tailscale.Parent.Enabled {
 		return nil, nil
 	}
@@ -35,7 +37,7 @@ func tailnetParentService(cfg *config.Config, router commandRouter) (*tailnet.Pa
 		AuthKeyLoadError: authErr,
 		Tags:             cfg.Tailscale.Parent.Tags,
 		ExpectedTailnet:  cfg.Tailscale.ExpectedTailnet,
-		Handler:          tailnetPrivateHTTPHandler(router, adminID),
+		Handler:          tailnetPrivateHTTPHandler(router, adminID, tailnetDurableAgentControlHandler(store)),
 		Logf:             log.Printf,
 	}), nil
 }
@@ -85,8 +87,18 @@ func firstConfiguredAdminID(cfg *config.Config) int64 {
 	return 0
 }
 
-func tailnetPrivateHTTPHandler(router commandRouter, adminID int64) http.Handler {
+func tailnetDurableAgentControlHandler(store *session.SQLiteStore) http.Handler {
+	if store == nil {
+		return nil
+	}
+	return durableagent.NewHTTPHandler(store).HandlerWithBasePath("/control")
+}
+
+func tailnetPrivateHTTPHandler(router commandRouter, adminID int64, control http.Handler) http.Handler {
 	mux := http.NewServeMux()
+	if control != nil {
+		mux.Handle("/control/", control)
+	}
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeTailnetPrivateJSON(w, map[string]any{
 			"ok":      true,

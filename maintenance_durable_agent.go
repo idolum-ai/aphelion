@@ -9,7 +9,7 @@ import (
 
 func runDurableAgentCommand(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("durable-agent requires a subcommand: list, health, policy, enrollment, forensic, bootstrap, remote, wake, child-run, or reconcile")
+		return fmt.Errorf("durable-agent requires a subcommand: list, health, policy, enrollment, forensic, bootstrap, provision, remote, wake, child-run, or reconcile")
 	}
 	switch strings.ToLower(strings.TrimSpace(args[0])) {
 	case "reconcile":
@@ -26,6 +26,8 @@ func runDurableAgentCommand(args []string) error {
 		return runDurableAgentForensicCommand(args[1:])
 	case "bootstrap":
 		return runDurableAgentBootstrapCommand(args[1:])
+	case "provision":
+		return runDurableAgentProvisionCommand(args[1:])
 	case "remote":
 		return runDurableAgentRemoteCommand(args[1:])
 	case "wake":
@@ -33,6 +35,6 @@ func runDurableAgentCommand(args []string) error {
 	case "child-run":
 		return runDurableAgentChildCommand(args[1:])
 	default:
-		return fmt.Errorf("durable-agent subcommand must be one of list|health|policy|enrollment|forensic|bootstrap|remote|wake|child-run|reconcile")
+		return fmt.Errorf("durable-agent subcommand must be one of list|health|policy|enrollment|forensic|bootstrap|provision|remote|wake|child-run|reconcile")
 	}
 }

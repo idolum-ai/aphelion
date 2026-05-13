@@ -60,6 +60,29 @@ type DurableAgentPolicyAcknowledgement struct {
 	AcknowledgedAt      time.Time
 }
 
+type DurableAgentParentConversationPollRequest struct {
+	Envelope DurableAgentControlEnvelope `json:"envelope"`
+	Limit    int                         `json:"limit,omitempty"`
+}
+
+type DurableAgentParentConversationPollResponse struct {
+	Messages []DurableAgentConversationMessage `json:"messages,omitempty"`
+}
+
+type DurableAgentParentConversationAcknowledgement struct {
+	AgentID        string    `json:"agent_id,omitempty"`
+	AcknowledgedAt time.Time `json:"acknowledged_at,omitempty"`
+}
+
+type DurableAgentParentConversationAckRequest struct {
+	Envelope DurableAgentControlEnvelope                   `json:"envelope"`
+	Ack      DurableAgentParentConversationAcknowledgement `json:"ack"`
+}
+
+type DurableAgentParentConversationAckResponse struct {
+	Accepted bool `json:"accepted"`
+}
+
 type DurableAgentRemoteBootstrap struct {
 	ReviewTargetChatID int64
 	AgentID            string
@@ -135,13 +158,15 @@ type DurableAgentPolicyAcknowledgementResponse struct {
 const DefaultDurableAgentControlProtocolVersion = "v1"
 
 const (
-	DurableAgentControlMessageEnrollment           = "enrollment"
-	DurableAgentControlMessageReattestation        = "re_attestation"
-	DurableAgentControlMessageReviewArtifactUpload = "review_artifact_upload"
-	DurableAgentControlMessageChildStateUpdate     = "child_state_update"
-	DurableAgentControlMessagePolicyPoll           = "policy_poll"
-	DurableAgentControlMessagePolicyUpdate         = "policy_update"
-	DurableAgentControlMessagePolicyAck            = "policy_ack"
+	DurableAgentControlMessageEnrollment             = "enrollment"
+	DurableAgentControlMessageReattestation          = "re_attestation"
+	DurableAgentControlMessageReviewArtifactUpload   = "review_artifact_upload"
+	DurableAgentControlMessageChildStateUpdate       = "child_state_update"
+	DurableAgentControlMessagePolicyPoll             = "policy_poll"
+	DurableAgentControlMessagePolicyUpdate           = "policy_update"
+	DurableAgentControlMessagePolicyAck              = "policy_ack"
+	DurableAgentControlMessageParentConversationPoll = "parent_conversation_poll"
+	DurableAgentControlMessageParentConversationAck  = "parent_conversation_ack"
 )
 
 func NormalizeDurableAgentRemoteEnrollment(enrollment DurableAgentRemoteEnrollment) DurableAgentRemoteEnrollment {
@@ -175,6 +200,16 @@ func NormalizeDurableAgentPolicyAcknowledgement(ack DurableAgentPolicyAcknowledg
 	ack.AppliedHash = strings.TrimSpace(ack.AppliedHash)
 	ack.Status = normalizeDurableAgentPolicyApplyStatus(ack.Status)
 	ack.Error = strings.TrimSpace(ack.Error)
+	return ack
+}
+
+func NormalizeDurableAgentParentConversationAcknowledgement(ack DurableAgentParentConversationAcknowledgement) DurableAgentParentConversationAcknowledgement {
+	ack.AgentID = strings.TrimSpace(ack.AgentID)
+	if ack.AcknowledgedAt.IsZero() {
+		ack.AcknowledgedAt = time.Now().UTC()
+	} else {
+		ack.AcknowledgedAt = ack.AcknowledgedAt.UTC()
+	}
 	return ack
 }
 
@@ -305,7 +340,9 @@ func normalizeDurableAgentControlMessageKind(value string) string {
 		DurableAgentControlMessageChildStateUpdate,
 		DurableAgentControlMessagePolicyPoll,
 		DurableAgentControlMessagePolicyUpdate,
-		DurableAgentControlMessagePolicyAck:
+		DurableAgentControlMessagePolicyAck,
+		DurableAgentControlMessageParentConversationPoll,
+		DurableAgentControlMessageParentConversationAck:
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return ""

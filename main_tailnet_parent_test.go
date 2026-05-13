@@ -14,6 +14,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/durableagent"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tailnet"
 )
@@ -72,7 +73,7 @@ func TestTailnetPrivateHTTPHandlerServesHealthTailnetAndStatus(t *testing.T) {
 		personaEffort:  "gpt-5.5",
 		governorEffort: "high",
 	}
-	handler := tailnetPrivateHTTPHandler(router, 1001)
+	handler := tailnetPrivateHTTPHandler(router, 1001, nil)
 
 	for _, path := range []string{"/healthz", "/tailnet", "/tailnet/surfaces", "/tailnet/grants", "/status", "/health/diagnosis/latest"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -122,7 +123,7 @@ func TestTailnetPrivateHTTPHandlerRejectsMutationRoutes(t *testing.T) {
 		},
 		revokeTailnetSurfaceOK: true,
 	}
-	handler := tailnetPrivateHTTPHandler(router, 1001)
+	handler := tailnetPrivateHTTPHandler(router, 1001, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/tailnet/surfaces/parent:tsnet_http:status/revoke", nil)
 	rec := httptest.NewRecorder()
@@ -138,11 +139,36 @@ func TestTailnetPrivateHTTPHandlerRejectsMutationRoutes(t *testing.T) {
 	}
 }
 
+func TestTailnetPrivateHTTPHandlerMountsDurableAgentControlPlane(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	handler := tailnetPrivateHTTPHandler(
+		&stubCommandRouter{},
+		1001,
+		durableagent.NewHTTPHandler(store).HandlerWithBasePath("/control"),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/control/v1/durable-agent/enroll", strings.NewReader("{}"))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code == http.StatusNotFound {
+		t.Fatalf("control plane status = %d body=%q, want durable-agent control handler mounted", rec.Code, rec.Body.String())
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("control plane status = %d body=%q, want mounted handler validation failure", rec.Code, rec.Body.String())
+	}
+}
+
 func TestTailnetParentServiceDisabledByDefault(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Default()
-	service, err := tailnetParentService(&cfg, &stubCommandRouter{})
+	service, err := tailnetParentService(&cfg, &stubCommandRouter{}, nil)
 	if err != nil {
 		t.Fatalf("tailnetParentService() err = %v", err)
 	}
@@ -161,7 +187,7 @@ func TestTailnetParentServiceDefersAuthKeyFileErrorsToStatus(t *testing.T) {
 	cfg.Tailscale.Parent.StateDir = t.TempDir()
 	cfg.Tailscale.Parent.AuthKeyEnv = ""
 	cfg.Tailscale.Parent.AuthKeyFile = filepath.Join(t.TempDir(), "missing.key")
-	service, err := tailnetParentService(&cfg, &stubCommandRouter{})
+	service, err := tailnetParentService(&cfg, &stubCommandRouter{}, nil)
 	if err != nil {
 		t.Fatalf("tailnetParentService() err = %v, want nonfatal auth key read failure", err)
 	}

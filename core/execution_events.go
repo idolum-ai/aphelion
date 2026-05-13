@@ -92,15 +92,18 @@ const (
 	ExecutionEventTailnetSurfaceChanged = "tailnet.surface.changed"
 	ExecutionEventTailnetGrantChanged   = "tailnet.grant.changed"
 
-	ExecutionEventDurableWakeStarted       = "durable.wake.started"
-	ExecutionEventDurableWakeSkipped       = "durable.wake.skipped"
-	ExecutionEventDurableWakeCompleted     = "durable.wake.completed"
-	ExecutionEventDurableWakeFailed        = "durable.wake.failed"
-	ExecutionEventDurableStateAwake        = "durable.state.awake"
-	ExecutionEventDurableStateDormant      = "durable.state.dormant"
-	ExecutionEventDurablePolicyApplied     = "durable.policy.applied"
-	ExecutionEventDurablePolicyApplyFailed = "durable.policy.failed"
-	ExecutionEventDurableParentAck         = "durable.parent.acknowledged"
+	ExecutionEventDurableWakeStarted        = "durable.wake.started"
+	ExecutionEventDurableWakeSkipped        = "durable.wake.skipped"
+	ExecutionEventDurableWakeCompleted      = "durable.wake.completed"
+	ExecutionEventDurableWakeFailed         = "durable.wake.failed"
+	ExecutionEventDurableStateAwake         = "durable.state.awake"
+	ExecutionEventDurableStateDormant       = "durable.state.dormant"
+	ExecutionEventDurablePolicyApplied      = "durable.policy.applied"
+	ExecutionEventDurablePolicyApplyFailed  = "durable.policy.failed"
+	ExecutionEventDurableParentAck          = "durable.parent.acknowledged"
+	ExecutionEventDurableProvisionStarted   = "durable.provision.started"
+	ExecutionEventDurableProvisionCompleted = "durable.provision.completed"
+	ExecutionEventDurableProvisionFailed    = "durable.provision.failed"
 )
 
 type RouterEvent struct {

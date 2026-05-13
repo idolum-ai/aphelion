@@ -107,6 +107,44 @@ journalctl --user -u aphelion -f
 From Telegram, use `/health` for the compact operational panel and `/status` for
 active chat and work state.
 
+## Durable Tailnet Children
+
+Tailnet children are installed from the parent with Tailscale SSH. The parent
+keeps the governance records, the child runs its own Aphelion user service, and
+the child polls the parent Tailnet control plane.
+
+Prerequisites:
+
+- parent Tailnet service enabled in `~/.aphelion/aphelion.toml`
+- the durable agent has a live Tailnet policy and `tailnet_hostname`
+- Tailscale SSH works from parent to child
+
+Dry-run first:
+
+```bash
+./bin/aphelion durable-agent provision \
+  --config ~/.aphelion/aphelion.toml \
+  --agent <agent_id> \
+  --binary ./bin/aphelion
+```
+
+Apply when the plan points at the intended host and service:
+
+```bash
+./bin/aphelion durable-agent provision \
+  --config ~/.aphelion/aphelion.toml \
+  --agent <agent_id> \
+  --binary ./bin/aphelion \
+  --apply
+```
+
+Then check the parent ledger:
+
+```bash
+./bin/aphelion durable-agent health --config ~/.aphelion/aphelion.toml --agent <agent_id>
+./bin/aphelion durable-agent list --config ~/.aphelion/aphelion.toml
+```
+
 ## Maintain
 
 Use garbage collection for bounded maintenance:

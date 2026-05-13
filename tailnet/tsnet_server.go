@@ -119,7 +119,7 @@ func (s *ParentService) Start(ctx context.Context) error {
 	status.Enabled = true
 	status.Running = true
 	status.ListenAddr = ln.Addr().String()
-	status.MagicDNSURL = parentMagicDNSURL(s.opts.Hostname, s.opts.ExpectedTailnet, s.opts.ListenAddr)
+	status.MagicDNSURL = ParentMagicDNSURL(s.opts.Hostname, s.opts.ExpectedTailnet, s.opts.ListenAddr)
 	status.LastError = ""
 	s.status = status
 	s.mu.Unlock()
@@ -241,7 +241,7 @@ func parentStateInitialized(dir string) bool {
 	return len(entries) > 0
 }
 
-func parentMagicDNSURL(hostname string, tailnetName string, listenAddr string) string {
+func ParentMagicDNSURL(hostname string, tailnetName string, listenAddr string) string {
 	hostname = strings.Trim(strings.TrimSpace(hostname), ".")
 	tailnetName = strings.Trim(strings.TrimSpace(tailnetName), ".")
 	if hostname == "" || tailnetName == "" {

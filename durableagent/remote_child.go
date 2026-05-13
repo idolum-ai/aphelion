@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
@@ -33,6 +34,7 @@ func (fn RemoteChildExecutorFunc) Run(ctx context.Context, bootstrap core.Durabl
 type RemoteChildRunResult struct {
 	Sync                    RemoteSyncResult
 	UploadedReviewArtifacts int
+	AcknowledgedParent      bool
 }
 
 type RemoteChildRunner struct {
@@ -76,10 +78,74 @@ func (r *RemoteChildRunner) RunOnce(ctx context.Context, bootstrapPath string, m
 	if err != nil {
 		return nil, err
 	}
+	acked, err := r.acknowledgeParentConversationIfNeeded(ctx, bootstrapPath, syncResult.ParentConversationMessages)
+	if err != nil {
+		return nil, err
+	}
 	return &RemoteChildRunResult{
 		Sync:                    *syncResult,
 		UploadedReviewArtifacts: uploaded,
+		AcknowledgedParent:      acked,
 	}, nil
+}
+
+func (r *RemoteChildRunner) RunParentConversation(ctx context.Context, bootstrapPath string) (*RemoteChildRunResult, error) {
+	if r == nil || r.store == nil {
+		return nil, fmt.Errorf("durable agent remote child store is nil")
+	}
+	if r.remote == nil {
+		return nil, fmt.Errorf("durable agent remote runtime is nil")
+	}
+	if r.executor == nil {
+		return nil, fmt.Errorf("durable agent remote child executor is nil")
+	}
+	syncResult, err := r.remote.Sync(ctx, bootstrapPath)
+	if err != nil {
+		return nil, err
+	}
+	result := &RemoteChildRunResult{Sync: *syncResult}
+	if syncResult.ParentConversationMessages == 0 {
+		return result, nil
+	}
+	bootstrap, err := ReadRemoteBootstrap(bootstrapPath)
+	if err != nil {
+		return nil, err
+	}
+	agent, err := r.store.DurableAgent(bootstrap.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	msg := core.InboundMessage{
+		ChatType:       "durable_parent_conversation",
+		SenderName:     "parent",
+		Text:           "Durable parent conversation wake.",
+		DurableAgentID: agent.AgentID,
+		Timestamp:      time.Now().UTC(),
+	}
+	if err := r.executor.Run(ctx, bootstrap, *agent, msg); err != nil {
+		return nil, err
+	}
+	uploaded, err := r.uploadPendingReviewArtifacts(ctx, bootstrapPath, *agent)
+	if err != nil {
+		return nil, err
+	}
+	acked, err := r.acknowledgeParentConversationIfNeeded(ctx, bootstrapPath, syncResult.ParentConversationMessages)
+	if err != nil {
+		return nil, err
+	}
+	result.UploadedReviewArtifacts = uploaded
+	result.AcknowledgedParent = acked
+	return result, nil
+}
+
+func (r *RemoteChildRunner) acknowledgeParentConversationIfNeeded(ctx context.Context, bootstrapPath string, count int) (bool, error) {
+	if count <= 0 {
+		return false, nil
+	}
+	if err := r.remote.AcknowledgeParentConversation(ctx, bootstrapPath); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *RemoteChildRunner) uploadPendingReviewArtifacts(ctx context.Context, bootstrapPath string, agent core.DurableAgent) (int, error) {

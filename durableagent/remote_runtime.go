@@ -19,6 +19,8 @@ type RemoteControlClient interface {
 	PollPolicy(ctx context.Context, knownVersion int64, knownHash string) (core.DurableAgentPolicyPollResponse, error)
 	UploadReviewArtifact(ctx context.Context, artifact core.DurableReviewArtifact) (core.DurableAgentReviewArtifactUploadResponse, error)
 	AcknowledgePolicy(ctx context.Context, ack core.DurableAgentPolicyAcknowledgement) (core.DurableAgentPolicyAcknowledgementResponse, error)
+	PollParentConversation(ctx context.Context, limit int) (core.DurableAgentParentConversationPollResponse, error)
+	AcknowledgeParentConversation(ctx context.Context, ack core.DurableAgentParentConversationAcknowledgement) (core.DurableAgentParentConversationAckResponse, error)
 }
 
 type RemoteClientFactory func(bootstrap core.DurableAgentRemoteBootstrap) (RemoteControlClient, error)
@@ -33,9 +35,10 @@ type RemoteRuntimeStore interface {
 }
 
 type RemoteSyncResult struct {
-	Enrolled      bool
-	PolicyChanged bool
-	PolicyVersion int64
+	Enrolled                   bool
+	PolicyChanged              bool
+	PolicyVersion              int64
+	ParentConversationMessages int
 }
 
 type RemoteUploadResult struct {
@@ -95,10 +98,18 @@ func (r *RemoteRuntime) Sync(ctx context.Context, bootstrapPath string) (*Remote
 		if err := r.persistRemoteEnrollment(*enrollment, client); err != nil {
 			return nil, err
 		}
+		parentMessages, err := r.syncParentConversation(ctx, client, bootstrap)
+		if err != nil {
+			return nil, err
+		}
+		if err := r.persistRemoteEnrollment(*enrollment, client); err != nil {
+			return nil, err
+		}
 		return &RemoteSyncResult{
-			Enrolled:      true,
-			PolicyChanged: true,
-			PolicyVersion: resp.Policy.PolicyVersion,
+			Enrolled:                   true,
+			PolicyChanged:              true,
+			PolicyVersion:              resp.Policy.PolicyVersion,
+			ParentConversationMessages: parentMessages,
 		}, nil
 	}
 
@@ -134,11 +145,19 @@ func (r *RemoteRuntime) Sync(ctx context.Context, bootstrapPath string) (*Remote
 	if err := r.persistRemoteEnrollment(*enrollment, client); err != nil {
 		return nil, err
 	}
+	parentMessages, err := r.syncParentConversation(ctx, client, bootstrap)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.persistRemoteEnrollment(*enrollment, client); err != nil {
+		return nil, err
+	}
 	if !pollResp.Changed && localAgent != nil {
 		return &RemoteSyncResult{
-			Enrolled:      false,
-			PolicyChanged: false,
-			PolicyVersion: localAgent.PolicyVersion,
+			Enrolled:                   false,
+			PolicyChanged:              false,
+			PolicyVersion:              localAgent.PolicyVersion,
+			ParentConversationMessages: parentMessages,
 		}, nil
 	}
 	if err := r.applySnapshot(ctx, client, bootstrap, pollResp.Snapshot); err != nil {
@@ -148,10 +167,42 @@ func (r *RemoteRuntime) Sync(ctx context.Context, bootstrapPath string) (*Remote
 		return nil, err
 	}
 	return &RemoteSyncResult{
-		Enrolled:      false,
-		PolicyChanged: true,
-		PolicyVersion: pollResp.Snapshot.PolicyVersion,
+		Enrolled:                   false,
+		PolicyChanged:              true,
+		PolicyVersion:              pollResp.Snapshot.PolicyVersion,
+		ParentConversationMessages: parentMessages,
 	}, nil
+}
+
+func (r *RemoteRuntime) AcknowledgeParentConversation(ctx context.Context, bootstrapPath string) error {
+	if r == nil || r.store == nil {
+		return fmt.Errorf("durable agent remote runtime store is nil")
+	}
+	bootstrap, err := ReadRemoteBootstrap(bootstrapPath)
+	if err != nil {
+		return err
+	}
+	enrollment, err := r.store.DurableAgentRemoteEnrollment(bootstrap.AgentID)
+	if err != nil {
+		return err
+	}
+	client, err := r.newClient(bootstrap)
+	if err != nil {
+		return err
+	}
+	seedRemoteClientSequence(client, enrollment)
+	ack := core.NormalizeDurableAgentParentConversationAcknowledgement(core.DurableAgentParentConversationAcknowledgement{
+		AgentID:        bootstrap.AgentID,
+		AcknowledgedAt: r.now(),
+	})
+	resp, err := client.AcknowledgeParentConversation(ctx, ack)
+	if err != nil {
+		return err
+	}
+	if !resp.Accepted {
+		return fmt.Errorf("durable agent parent conversation acknowledgement was not accepted")
+	}
+	return r.persistRemoteEnrollment(*enrollment, client)
 }
 
 func (r *RemoteRuntime) UploadReviewArtifact(ctx context.Context, bootstrapPath string, artifact core.DurableReviewArtifact) (*RemoteUploadResult, error) {
@@ -294,6 +345,56 @@ func (r *RemoteRuntime) applySnapshot(ctx context.Context, client RemoteControlC
 		return err
 	}
 	return nil
+}
+
+func (r *RemoteRuntime) syncParentConversation(ctx context.Context, client RemoteControlClient, bootstrap core.DurableAgentRemoteBootstrap) (int, error) {
+	resp, err := client.PollParentConversation(ctx, 5)
+	if err != nil {
+		return 0, err
+	}
+	if len(resp.Messages) == 0 {
+		return 0, nil
+	}
+	_, state, err := r.localDurableAgentState(bootstrap)
+	if err != nil {
+		return 0, err
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		return 0, fmt.Errorf("parse durable agent continuity state: %w", err)
+	}
+	for i := len(resp.Messages) - 1; i >= 0; i-- {
+		message := resp.Messages[i]
+		if hasDurableAgentConversationMessage(continuity, "parent", message.Text, message.CreatedAt) {
+			continue
+		}
+		continuity = continuity.WithConversationMessage("parent", message.Text, message.CreatedAt)
+	}
+	raw, err := continuity.Marshal()
+	if err != nil {
+		return 0, fmt.Errorf("marshal durable agent continuity state: %w", err)
+	}
+	state.StateJSON = raw
+	if err := r.store.SaveDurableAgentState(*state); err != nil {
+		return 0, err
+	}
+	return len(resp.Messages), nil
+}
+
+func hasDurableAgentConversationMessage(state core.DurableAgentContinuityState, role string, text string, createdAt time.Time) bool {
+	state = core.NormalizeDurableAgentContinuityState(state)
+	role = strings.TrimSpace(role)
+	text = strings.TrimSpace(text)
+	if state.Conversation == nil || role == "" || text == "" {
+		return false
+	}
+	createdAt = createdAt.UTC()
+	for _, message := range state.Conversation.Messages {
+		if message.Role == role && message.Text == text && message.CreatedAt.Equal(createdAt) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *RemoteRuntime) localDurableAgentState(bootstrap core.DurableAgentRemoteBootstrap) (core.DurableAgent, *core.DurableAgentState, error) {

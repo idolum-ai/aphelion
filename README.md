@@ -45,7 +45,7 @@ The full design direction lives in
 - **Voice:** Telegram voice transcription and optional ElevenLabs TTS replies
 - **Automation:** heartbeat, cron, bounded auto-approval leases
 - **Durable agents:** configured durable children, daily review, Telegram group
-  admission, health and inventory surfaces
+  admission, Tailnet child provisioning, health and inventory surfaces
 
 Current promise tracking lives in [docs/promises.md](docs/promises.md).
 

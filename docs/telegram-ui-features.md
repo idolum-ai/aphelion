@@ -48,7 +48,7 @@ Current command surface:
   - Active focus is injected as bounded turn context on subsequent non-command chat messages until cleared.
 - `/tailnet`
   - Admin-only Tailnet declaration, private-surface, grant-binding, drift, and rollback evidence.
-  - Shows local registry readiness and issue evidence; live child `tsnet` materialization and live Tailscale policy mutation are not current operator actions.
+  - Shows local registry readiness, private parent status, durable-child control-plane evidence, and issue evidence without mutating live Tailscale policy.
   - Provides button navigation for status, surfaces, grants, refresh, private status URL, and per-surface local revoke confirmation.
 - `/mission`
   - Shows the current working objective and the caller-owned Mission Ledger entries.
@@ -159,8 +159,7 @@ Durables status (`Durables` button, admin-only):
   - policy posture (`policy_version`, `policy_hash`, `outbound`, `drift`, `capabilities`)
   - delegation posture (`capability_request` and `capability_grant` status when delegated permissions are active)
   - runtime pulse (`last_wake`, `last_review`, `dormant_at`, apply status/error)
-  - remote/status-adapter pulse when present (`last_seen`, status, error evidence);
-    enrollment/control-plane authority is not a current operator surface
+  - remote/control-plane pulse when present (`last_seen`, enrollment status, policy sequence, error evidence)
 
 ### `/health trace` content signals
 

@@ -17,10 +17,12 @@ import (
 )
 
 const (
-	ControlPlaneEnrollPath         = "/v1/durable-agent/enroll"
-	ControlPlanePolicyPollPath     = "/v1/durable-agent/policy/poll"
-	ControlPlaneArtifactUploadPath = "/v1/durable-agent/review-artifact"
-	ControlPlanePolicyAckPath      = "/v1/durable-agent/policy/ack"
+	ControlPlaneEnrollPath                 = "/v1/durable-agent/enroll"
+	ControlPlanePolicyPollPath             = "/v1/durable-agent/policy/poll"
+	ControlPlaneArtifactUploadPath         = "/v1/durable-agent/review-artifact"
+	ControlPlanePolicyAckPath              = "/v1/durable-agent/policy/ack"
+	ControlPlaneParentConversationPollPath = "/v1/durable-agent/parent-conversation/poll"
+	ControlPlaneParentConversationAckPath  = "/v1/durable-agent/parent-conversation/ack"
 )
 
 type HTTPStore interface {
@@ -61,6 +63,8 @@ func (h *HTTPHandler) HandlerWithBasePath(basePath string) http.Handler {
 	mux.HandleFunc(path.Join(basePath, ControlPlanePolicyPollPath), h.handlePolicyPoll)
 	mux.HandleFunc(path.Join(basePath, ControlPlaneArtifactUploadPath), h.handleArtifactUpload)
 	mux.HandleFunc(path.Join(basePath, ControlPlanePolicyAckPath), h.handlePolicyAck)
+	mux.HandleFunc(path.Join(basePath, ControlPlaneParentConversationPollPath), h.handleParentConversationPoll)
+	mux.HandleFunc(path.Join(basePath, ControlPlaneParentConversationAckPath), h.handleParentConversationAck)
 	return mux
 }
 
@@ -254,6 +258,120 @@ func (h *HTTPHandler) handlePolicyAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, core.DurableAgentPolicyAcknowledgementResponse{Accepted: true})
+}
+
+func (h *HTTPHandler) handleParentConversationPoll(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	var req core.DurableAgentParentConversationPollRequest
+	if !decodeRequest(w, r, &req) {
+		return
+	}
+	req.Envelope = core.NormalizeDurableAgentControlEnvelope(req.Envelope)
+	if req.Envelope.MessageKind != core.DurableAgentControlMessageParentConversationPoll {
+		writeError(w, http.StatusBadRequest, errors.New("durable agent parent conversation poll requires message_kind=parent_conversation_poll"))
+		return
+	}
+	reqPayload := struct {
+		Limit int `json:"limit,omitempty"`
+	}{Limit: req.Limit}
+	if err := h.verifyEnvelope(req.Envelope, reqPayload); err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	if err := h.control.AcceptEnvelope(req.Envelope, h.now()); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	messages, err := h.pendingParentConversation(req.Envelope.AgentID, req.Limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, core.DurableAgentParentConversationPollResponse{Messages: messages})
+}
+
+func (h *HTTPHandler) handleParentConversationAck(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	var req core.DurableAgentParentConversationAckRequest
+	if !decodeRequest(w, r, &req) {
+		return
+	}
+	req.Envelope = core.NormalizeDurableAgentControlEnvelope(req.Envelope)
+	if req.Envelope.MessageKind != core.DurableAgentControlMessageParentConversationAck {
+		writeError(w, http.StatusBadRequest, errors.New("durable agent parent conversation ack requires message_kind=parent_conversation_ack"))
+		return
+	}
+	req.Ack = core.NormalizeDurableAgentParentConversationAcknowledgement(req.Ack)
+	if req.Ack.AgentID == "" {
+		req.Ack.AgentID = req.Envelope.AgentID
+	}
+	if req.Ack.AgentID != req.Envelope.AgentID {
+		writeError(w, http.StatusBadRequest, errors.New("durable agent parent conversation ack agent_id does not match envelope"))
+		return
+	}
+	if err := h.verifyEnvelope(req.Envelope, req.Ack); err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	if err := h.control.AcceptEnvelope(req.Envelope, h.now()); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.acknowledgeParentConversation(req.Ack.AgentID, req.Ack.AcknowledgedAt); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, core.DurableAgentParentConversationAckResponse{Accepted: true})
+}
+
+func (h *HTTPHandler) pendingParentConversation(agentID string, limit int) ([]core.DurableAgentConversationMessage, error) {
+	if h == nil || h.store == nil {
+		return nil, fmt.Errorf("durable agent control plane store is nil")
+	}
+	state, err := h.store.DurableAgentState(strings.TrimSpace(agentID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > 20 {
+		limit = 20
+	}
+	return continuity.PendingParentConversationMessages(limit), nil
+}
+
+func (h *HTTPHandler) acknowledgeParentConversation(agentID string, at time.Time) error {
+	if h == nil || h.store == nil {
+		return fmt.Errorf("durable agent control plane store is nil")
+	}
+	state, err := h.store.DurableAgentState(strings.TrimSpace(agentID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		return err
+	}
+	state.StateJSON, err = continuity.AcknowledgeParentConversationMessages(at).Marshal()
+	if err != nil {
+		return err
+	}
+	return h.store.SaveDurableAgentState(*state)
 }
 
 func (h *HTTPHandler) now() time.Time {

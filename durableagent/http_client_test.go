@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 )
@@ -299,6 +300,79 @@ func TestHTTPClientRejectsOldControlPlaneSecretAfterRotation(t *testing.T) {
 	seedRemoteClientSequence(newClient, enrollment)
 	if _, err := newClient.PollPolicy(context.Background(), 0, ""); err != nil {
 		t.Fatalf("PollPolicy(new token) err = %v", err)
+	}
+}
+
+func TestHTTPClientPollsAndAcknowledgesParentConversation(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	agent := testRemoteDurableAgent()
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
+		AgentID:          agent.AgentID,
+		ParentControlURL: "https://house.example",
+		KeyFingerprint:   "child-key-fp",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		Status:           "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgentRemoteEnrollment() err = %v", err)
+	}
+	continuity := core.DurableAgentContinuityState{}.WithConversationMessage("parent", "Check the remote child health.", time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC))
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agent.AgentID, StateJSON: raw}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	client, err := NewHTTPClient(core.DurableAgentRemoteBootstrap{
+		AgentID:          agent.AgentID,
+		ParentAgentID:    "house",
+		ChannelKind:      agent.ChannelKind,
+		ParentControlURL: "https://house.example",
+		EnrollmentToken:  "enroll-token-1",
+		KeyFingerprint:   "child-key-fp",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:     testDurableAgentBootstrapLLM(),
+		BootstrapCeiling: agent.BootstrapCeiling,
+	})
+	if err != nil {
+		t.Fatalf("NewHTTPClient() err = %v", err)
+	}
+	client.Client = remoteRuntimeHTTPClient(NewHTTPHandler(store).Handler())
+
+	resp, err := client.PollParentConversation(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("PollParentConversation() err = %v", err)
+	}
+	if len(resp.Messages) != 1 || resp.Messages[0].Text != "Check the remote child health." {
+		t.Fatalf("PollParentConversation() = %#v, want pending parent message", resp)
+	}
+	ackResp, err := client.AcknowledgeParentConversation(context.Background(), core.DurableAgentParentConversationAcknowledgement{
+		AgentID:        agent.AgentID,
+		AcknowledgedAt: time.Date(2026, 5, 13, 12, 1, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("AcknowledgeParentConversation() err = %v", err)
+	}
+	if !ackResp.Accepted {
+		t.Fatal("AcknowledgeParentConversation().Accepted = false, want true")
+	}
+	state, err := store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	updated, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if pending := updated.PendingParentConversationMessages(5); len(pending) != 0 {
+		t.Fatalf("pending parent messages = %d, want 0 after ack", len(pending))
 	}
 }
 

@@ -118,6 +118,45 @@ func (c *HTTPClient) AcknowledgePolicy(ctx context.Context, ack core.DurableAgen
 	return resp, nil
 }
 
+func (c *HTTPClient) PollParentConversation(ctx context.Context, limit int) (core.DurableAgentParentConversationPollResponse, error) {
+	reqPayload := struct {
+		Limit int `json:"limit,omitempty"`
+	}{Limit: limit}
+	env, err := c.nextEnvelope(core.DurableAgentControlMessageParentConversationPoll, reqPayload)
+	if err != nil {
+		return core.DurableAgentParentConversationPollResponse{}, err
+	}
+	req := core.DurableAgentParentConversationPollRequest{
+		Envelope: env,
+		Limit:    limit,
+	}
+	var resp core.DurableAgentParentConversationPollResponse
+	if err := c.postJSON(ctx, ControlPlaneParentConversationPollPath, req, &resp); err != nil {
+		return core.DurableAgentParentConversationPollResponse{}, err
+	}
+	return resp, nil
+}
+
+func (c *HTTPClient) AcknowledgeParentConversation(ctx context.Context, ack core.DurableAgentParentConversationAcknowledgement) (core.DurableAgentParentConversationAckResponse, error) {
+	ack = core.NormalizeDurableAgentParentConversationAcknowledgement(ack)
+	if ack.AgentID == "" && c != nil {
+		ack.AgentID = c.Bootstrap.AgentID
+	}
+	env, err := c.nextEnvelope(core.DurableAgentControlMessageParentConversationAck, ack)
+	if err != nil {
+		return core.DurableAgentParentConversationAckResponse{}, err
+	}
+	req := core.DurableAgentParentConversationAckRequest{
+		Envelope: env,
+		Ack:      ack,
+	}
+	var resp core.DurableAgentParentConversationAckResponse
+	if err := c.postJSON(ctx, ControlPlaneParentConversationAckPath, req, &resp); err != nil {
+		return core.DurableAgentParentConversationAckResponse{}, err
+	}
+	return resp, nil
+}
+
 func (c *HTTPClient) postJSON(ctx context.Context, path string, body any, out any) error {
 	if c == nil {
 		return fmt.Errorf("durable agent http client is nil")

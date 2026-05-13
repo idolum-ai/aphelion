@@ -54,12 +54,16 @@ func (r *RemoteChildLoopRunner) Run(ctx context.Context, bootstrapPath string, i
 			return result, err
 		}
 		if len(paths) == 0 {
-			syncResult, err := r.runner.remote.Sync(ctx, bootstrapPath)
+			runResult, err := r.runner.RunParentConversation(ctx, bootstrapPath)
 			if err != nil {
 				return result, err
 			}
 			result.Syncs++
-			result.LastPolicyVersion = syncResult.PolicyVersion
+			result.UploadedReviewArtifacts += runResult.UploadedReviewArtifacts
+			result.LastPolicyVersion = runResult.Sync.PolicyVersion
+			if runResult.AcknowledgedParent {
+				result.MessagesProcessed++
+			}
 		} else {
 			for _, messagePath := range paths {
 				msg, err := readRemoteInboundMessage(messagePath)

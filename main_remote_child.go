@@ -23,8 +23,11 @@ var durableAgentRemoteClientFactory durableagent.RemoteClientFactory
 
 var durableAgentRemoteExecutorFactory = func(store *session.SQLiteStore, dbPath string) durableagent.RemoteChildExecutor {
 	return durableagent.RemoteChildExecutorFunc(func(ctx context.Context, bootstrap core.DurableAgentRemoteBootstrap, agent core.DurableAgent, msg core.InboundMessage) error {
+		if strings.TrimSpace(msg.ChatType) == "durable_parent_conversation" {
+			return runRemoteDurableAgentChildWake(ctx, dbPath, bootstrap, agent, time.Now().UTC())
+		}
 		if strings.TrimSpace(agent.ChannelKind) != "telegram_group" {
-			return fmt.Errorf("durable-agent remote run-once only supports telegram_group children right now")
+			return fmt.Errorf("durable-agent remote run-once supports telegram_group children")
 		}
 		_, err := runRemoteDurableTelegramGroupChild(ctx, store, dbPath, bootstrap, agent, msg)
 		return err
@@ -90,6 +93,7 @@ func runDurableAgentRemoteCommand(args []string) error {
 		fmt.Fprintf(os.Stdout, "policy_changed: %t\n", result.Sync.PolicyChanged)
 		fmt.Fprintf(os.Stdout, "policy_version: %d\n", result.Sync.PolicyVersion)
 		fmt.Fprintf(os.Stdout, "uploaded_review_artifacts: %d\n", result.UploadedReviewArtifacts)
+		fmt.Fprintf(os.Stdout, "acknowledged_parent_conversation: %t\n", result.AcknowledgedParent)
 		return nil
 	case "loop":
 		if strings.TrimSpace(*inboxDir) == "" {
@@ -118,6 +122,11 @@ func runDurableAgentRemoteCommand(args []string) error {
 func runRemoteDurableTelegramGroupChild(ctx context.Context, store *session.SQLiteStore, dbPath string, bootstrap core.DurableAgentRemoteBootstrap, agent core.DurableAgent, msg core.InboundMessage) (*runtimepkg.DurableGroupChildResult, error) {
 	cfg := remoteDurableAgentChildConfig(strings.TrimSpace(dbPath), bootstrap, agent)
 	return runDurableTelegramGroupChildBootstrap(ctx, runtimepkg.DurableAgentChildBootstrap{Config: *cfg}, msg)
+}
+
+func runRemoteDurableAgentChildWake(ctx context.Context, dbPath string, bootstrap core.DurableAgentRemoteBootstrap, agent core.DurableAgent, now time.Time) error {
+	cfg := remoteDurableAgentChildConfig(strings.TrimSpace(dbPath), bootstrap, agent)
+	return runDurableAgentChildWakeBootstrap(ctx, runtimepkg.DurableAgentChildBootstrap{Config: *cfg}, agent.AgentID, now)
 }
 
 func remoteDurableAgentChildConfig(dbPath string, bootstrap core.DurableAgentRemoteBootstrap, agent core.DurableAgent) *config.Config {

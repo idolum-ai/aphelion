@@ -253,7 +253,7 @@ func run() error {
 		detachPendingOnRestart: cfg.Telegram.DetachPendingOnRestart,
 		durableTools:           tools,
 	}
-	tailnetParent, err := tailnetParentService(cfg, commandControl)
+	tailnetParent, err := tailnetParentService(cfg, commandControl, store)
 	if err != nil {
 		return err
 	}

@@ -120,6 +120,142 @@ func TestRemoteChildRunnerRunOnceSyncsExecutesAndUploadsPendingReviewArtifacts(t
 	}
 }
 
+func TestRemoteChildRunnerProcessesAndAcknowledgesParentConversation(t *testing.T) {
+	t.Parallel()
+
+	parentStore := newTestSQLiteStore(t)
+	defer parentStore.Close()
+	agent := testRemoteDurableAgent()
+	if err := parentStore.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("parent UpsertDurableAgent() err = %v", err)
+	}
+	parentContinuity := core.DurableAgentContinuityState{}.WithConversationMessage(
+		"parent",
+		"Check the remote child health and report anything actionable.",
+		time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC),
+	)
+	parentStateJSON, err := parentContinuity.Marshal()
+	if err != nil {
+		t.Fatalf("parent continuity Marshal() err = %v", err)
+	}
+	if err := parentStore.SaveDurableAgentState(core.DurableAgentState{
+		AgentID:   agent.AgentID,
+		StateJSON: parentStateJSON,
+	}); err != nil {
+		t.Fatalf("parent SaveDurableAgentState() err = %v", err)
+	}
+
+	childStore, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "child.db"))
+	if err != nil {
+		t.Fatalf("child NewSQLiteStore() err = %v", err)
+	}
+	defer childStore.Close()
+
+	bootstrapPath := filepath.Join(t.TempDir(), "remote-bootstrap.json")
+	bootstrap := core.DurableAgentRemoteBootstrap{
+		ReviewTargetChatID: agent.ReviewTargetChatID,
+		AgentID:            agent.AgentID,
+		ParentAgentID:      "house",
+		ChannelKind:        agent.ChannelKind,
+		ParentControlURL:   "https://house.example",
+		EnrollmentToken:    "enroll-token-1",
+		KeyFingerprint:     "child-key-fp",
+		ProtocolVersion:    core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:       testDurableAgentBootstrapLLM(),
+		BootstrapCeiling:   agent.BootstrapCeiling,
+		LocalStorageRoots: []string{
+			filepath.Join(t.TempDir(), "work"),
+			filepath.Join(t.TempDir(), "memory"),
+		},
+		SecretScopes:  []string{"telegram_bot"},
+		NetworkPolicy: "restricted",
+	}
+	if err := WriteRemoteBootstrap(bootstrapPath, bootstrap); err != nil {
+		t.Fatalf("WriteRemoteBootstrap() err = %v", err)
+	}
+
+	runner := NewRemoteChildRunner(
+		childStore,
+		NewRemoteRuntime(childStore, func(b core.DurableAgentRemoteBootstrap) (RemoteControlClient, error) {
+			client, err := NewHTTPClient(b)
+			if err != nil {
+				return nil, err
+			}
+			client.Client = &http.Client{Transport: handlerRoundTripper{handler: NewHTTPHandler(parentStore).Handler()}}
+			return client, nil
+		}),
+		RemoteChildExecutorFunc(func(ctx context.Context, bootstrap core.DurableAgentRemoteBootstrap, agent core.DurableAgent, msg core.InboundMessage) error {
+			if msg.ChatType != "durable_parent_conversation" {
+				t.Fatalf("executor ChatType = %q, want durable_parent_conversation", msg.ChatType)
+			}
+			state, err := childStore.DurableAgentState(agent.AgentID)
+			if err != nil {
+				return err
+			}
+			continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+			if err != nil {
+				return err
+			}
+			if pending := continuity.PendingParentConversationMessages(5); len(pending) != 1 {
+				t.Fatalf("child pending parent messages len = %d, want 1", len(pending))
+			}
+			continuity = continuity.AcknowledgeParentConversationMessages(time.Now().UTC())
+			stateJSON, err := continuity.Marshal()
+			if err != nil {
+				return err
+			}
+			state.StateJSON = stateJSON
+			if err := childStore.SaveDurableAgentState(*state); err != nil {
+				return err
+			}
+			_, err = NewRuntime(childStore).QueueReviewArtifact(agent, core.DurableReviewArtifact{
+				Summary:       "Remote child health is stable; no operator action is required.",
+				IntervalLabel: "parent conversation wake",
+				LocalActions:  []string{"Checked local state after parent conversation wake."},
+				Questions:     []string{"Should this child keep polling at the current cadence?"},
+				RiskFlags:     []string{"none"},
+			})
+			return err
+		}),
+	)
+
+	result, err := runner.RunParentConversation(context.Background(), bootstrapPath)
+	if err != nil {
+		t.Fatalf("RunParentConversation() err = %v", err)
+	}
+	if result.Sync.ParentConversationMessages != 1 {
+		t.Fatalf("ParentConversationMessages = %d, want 1", result.Sync.ParentConversationMessages)
+	}
+	if !result.AcknowledgedParent {
+		t.Fatal("AcknowledgedParent = false, want true")
+	}
+	if result.UploadedReviewArtifacts != 1 {
+		t.Fatalf("UploadedReviewArtifacts = %d, want 1", result.UploadedReviewArtifacts)
+	}
+
+	parentState, err := parentStore.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("parent DurableAgentState() err = %v", err)
+	}
+	parentAfter, err := core.ParseDurableAgentContinuityState(parentState.StateJSON)
+	if err != nil {
+		t.Fatalf("parent ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if pending := parentAfter.PendingParentConversationMessages(5); len(pending) != 0 {
+		t.Fatalf("parent pending parent messages len = %d, want 0 after remote acknowledgement", len(pending))
+	}
+	parentEvents, err := parentStore.PendingReviewEvents(agent.ReviewTargetChatID, 10)
+	if err != nil {
+		t.Fatalf("parent PendingReviewEvents() err = %v", err)
+	}
+	if len(parentEvents) != 1 {
+		t.Fatalf("parent pending review events len = %d, want 1", len(parentEvents))
+	}
+	if !strings.Contains(parentEvents[0].Summary, "Remote child health is stable") {
+		t.Fatalf("parent Summary = %q, want uploaded wake review summary", parentEvents[0].Summary)
+	}
+}
+
 func TestRemoteChildLoopRunnerProcessesQueuedMessageFiles(t *testing.T) {
 	t.Parallel()
 
