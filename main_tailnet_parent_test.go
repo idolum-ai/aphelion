@@ -225,7 +225,7 @@ func TestTailnetParentServiceDisabledByDefault(t *testing.T) {
 	}
 }
 
-func TestTailnetParentServiceDefersAuthKeyFileErrorsToStatus(t *testing.T) {
+func TestTailnetParentServiceReportsAuthKeyFileErrorsOnStart(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Default()
@@ -242,8 +242,9 @@ func TestTailnetParentServiceDefersAuthKeyFileErrorsToStatus(t *testing.T) {
 	if service == nil {
 		t.Fatal("service = nil, want configured parent service")
 	}
-	if err := startTailnetParent(context.Background(), service); err != nil {
-		t.Fatalf("startTailnetParent() err = %v, want nonfatal parent startup failure", err)
+	err = startTailnetParent(context.Background(), service)
+	if err == nil || !strings.Contains(err.Error(), "missing.key") {
+		t.Fatalf("startTailnetParent() err = %v, want auth-key start failure", err)
 	}
 	status := service.Status()
 	if status.Running || !strings.Contains(status.LastError, "load auth key") || !strings.Contains(status.LastError, "missing.key") {
@@ -251,7 +252,7 @@ func TestTailnetParentServiceDefersAuthKeyFileErrorsToStatus(t *testing.T) {
 	}
 }
 
-func TestStartTailnetParentKeepsAphelionRunningOnStartFailure(t *testing.T) {
+func TestStartTailnetParentFailsOnStartFailure(t *testing.T) {
 	t.Parallel()
 
 	service := tailnet.NewParentService(tailnet.ParentOptions{
@@ -259,8 +260,8 @@ func TestStartTailnetParentKeepsAphelionRunningOnStartFailure(t *testing.T) {
 		Hostname: "aphelion-test",
 		StateDir: t.TempDir(),
 	})
-	if err := startTailnetParent(context.Background(), service); err != nil {
-		t.Fatalf("startTailnetParent() err = %v, want nonfatal parent startup failure", err)
+	if err := startTailnetParent(context.Background(), service); err == nil {
+		t.Fatal("startTailnetParent() err = nil, want startup failure")
 	}
 	status := service.Status()
 	if status.Running || !strings.Contains(status.LastError, "auth key") {

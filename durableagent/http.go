@@ -32,7 +32,6 @@ var errParentConversationAckRejected = errors.New("durable agent parent conversa
 type HTTPStore interface {
 	ControlPlaneStore
 	InsertReviewEvent(event session.ReviewEvent) (int64, error)
-	UpsertDurableAgentRemoteEnrollment(enrollment core.DurableAgentRemoteEnrollment) error
 	DurableAgentRemoteEnrollment(agentID string) (*core.DurableAgentRemoteEnrollment, error)
 	DurableAgentControlReceipt(agentID string, messageID string) (*core.DurableAgentControlReceipt, error)
 	StoreDurableAgentControlReceiptResponse(agentID string, messageID string, status int, responseJSON string) error
@@ -135,38 +134,22 @@ func (h *HTTPHandler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, fmt.Errorf("durable agent remote enrollment %s is not active", existing.AgentID))
 			return
 		}
-		if h.RequirePeerIdentity && !tailnetStableNodeMatches(existing.TailnetIdentity, identity) {
+		if h.RequirePeerIdentity && tailnetIdentityIsBound(existing.TailnetIdentity) && !tailnetStableNodeMatches(existing.TailnetIdentity, identity) {
 			writeError(w, http.StatusForbidden, errors.New("durable agent reattestation came from a different tailnet node"))
 			return
 		}
-	} else if h.RequirePeerIdentity && existing != nil && !tailnetStableNodeMatches(existing.TailnetIdentity, identity) {
+	} else if h.RequirePeerIdentity && existing != nil && tailnetIdentityIsBound(existing.TailnetIdentity) && !tailnetStableNodeMatches(existing.TailnetIdentity, identity) {
 		writeError(w, http.StatusForbidden, errors.New("durable agent enrollment came from a different tailnet node"))
 		return
-	} else if existing == nil {
-		enrollment := core.NormalizeDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
-			AgentID:          req.Payload.AgentID,
-			ParentControlURL: req.Payload.ParentControlURL,
-			ProtocolVersion:  req.Payload.ProtocolVersion,
-			Status:           "active",
-			TailnetIdentity:  identity,
-		})
-		if err := h.store.UpsertDurableAgentRemoteEnrollment(enrollment); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
 	}
 	if h.replayControlReceipt(w, req.Envelope) {
 		return
 	}
-	if err := h.control.AcceptEnvelope(req.Envelope, h.now()); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
+	registered := core.DurableAgentRemoteEnrollment{}
+	if existing != nil {
+		registered = *existing
 	}
-	registered, err := h.store.DurableAgentRemoteEnrollment(agent.AgentID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
+	registered.AgentID = req.Payload.AgentID
 	registered.ParentControlURL = req.Payload.ParentControlURL
 	registered.ProtocolVersion = req.Payload.ProtocolVersion
 	registered.Status = "active"
@@ -174,7 +157,15 @@ func (h *HTTPHandler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	if h.RequirePeerIdentity {
 		registered.TailnetIdentity = identity
 	}
-	if err := h.store.UpsertDurableAgentRemoteEnrollment(*registered); err != nil {
+	if err := h.control.AcceptEnrollment(req.Envelope, registered, h.now()); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "replay durable agent control envelope") && h.replayControlReceipt(w, req.Envelope) {
+			return
+		}
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	accepted, err := h.store.DurableAgentRemoteEnrollment(agent.AgentID)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -184,7 +175,7 @@ func (h *HTTPHandler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.writeControlJSON(w, req.Envelope, http.StatusOK, core.DurableAgentEnrollmentResponse{
-		Enrollment: *registered,
+		Enrollment: *accepted,
 		Policy:     snapshot,
 	})
 }

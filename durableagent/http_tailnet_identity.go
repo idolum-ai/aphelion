@@ -22,22 +22,32 @@ func (h *HTTPHandler) enrollmentPeerIdentity(r *http.Request) (core.TailnetPeerI
 	return identity, nil
 }
 
-func (h *HTTPHandler) verifyControlPeerIdentity(r *http.Request, agentID string) error {
+func (h *HTTPHandler) controlPeerIdentity(r *http.Request, agentID string) (core.TailnetPeerIdentity, error) {
 	if !h.RequirePeerIdentity {
-		return nil
+		return core.TailnetPeerIdentity{}, nil
 	}
 	identity, ok := core.TailnetPeerIdentityFromContext(r.Context())
 	if !ok || strings.TrimSpace(identity.StableNodeID) == "" {
-		return errors.New("durable agent tailnet peer identity is required")
+		return core.TailnetPeerIdentity{}, errors.New("durable agent tailnet peer identity is required")
 	}
 	enrollment, err := h.store.DurableAgentRemoteEnrollment(agentID)
 	if err != nil {
-		return err
+		return core.TailnetPeerIdentity{}, err
 	}
-	if !tailnetStableNodeMatches(enrollment.TailnetIdentity, identity) {
-		return errors.New("durable agent control request came from a different tailnet node")
+	if tailnetIdentityIsBound(enrollment.TailnetIdentity) {
+		if !tailnetStableNodeMatches(enrollment.TailnetIdentity, identity) {
+			return core.TailnetPeerIdentity{}, errors.New("durable agent control request came from a different tailnet node")
+		}
+		return identity, nil
 	}
-	return nil
+	agent, err := h.store.DurableAgent(agentID)
+	if err != nil {
+		return core.TailnetPeerIdentity{}, err
+	}
+	if err := validateTailnetPeerIdentityForAgent(*agent, identity); err != nil {
+		return core.TailnetPeerIdentity{}, err
+	}
+	return identity, nil
 }
 
 func validateTailnetPeerIdentityForAgent(agent core.DurableAgent, identity core.TailnetPeerIdentity) error {
@@ -71,6 +81,11 @@ func tailnetStableNodeMatches(a core.TailnetPeerIdentity, b core.TailnetPeerIden
 	a = core.NormalizeTailnetPeerIdentity(a)
 	b = core.NormalizeTailnetPeerIdentity(b)
 	return a.StableNodeID != "" && a.StableNodeID == b.StableNodeID
+}
+
+func tailnetIdentityIsBound(identity core.TailnetPeerIdentity) bool {
+	identity = core.NormalizeTailnetPeerIdentity(identity)
+	return identity.StableNodeID != ""
 }
 
 func tailnetHostnameMatches(identity core.TailnetPeerIdentity, want string) bool {

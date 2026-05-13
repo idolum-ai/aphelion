@@ -64,15 +64,20 @@ func (c *SSHClient) Run(ctx context.Context, target string, args []string, stdin
 	if target == "" {
 		return SSHResult{}, fmt.Errorf("tailnet ssh target is required")
 	}
-	argv := make([]string, 0, len(args)+2)
-	argv = append(argv, "ssh", target)
+	if unsafeSSHTarget(target) {
+		return SSHResult{}, fmt.Errorf("tailnet ssh target %q is not safe", target)
+	}
+	argv := make([]string, 0, len(args)+3)
+	argv = append(argv, "ssh", "--", target)
+	commandArgs := make([]string, 0, len(args))
 	for _, arg := range args {
 		if strings.TrimSpace(arg) == "" {
 			continue
 		}
 		argv = append(argv, arg)
+		commandArgs = append(commandArgs, arg)
 	}
-	if len(argv) == 2 {
+	if len(commandArgs) == 0 {
 		return SSHResult{}, fmt.Errorf("tailnet ssh command is required")
 	}
 	runCtx := ctx
@@ -84,7 +89,7 @@ func (c *SSHClient) Run(ctx context.Context, target string, args []string, stdin
 	output, code, err := c.runner.Run(runCtx, c.cliPath, argv, stdin)
 	result := SSHResult{
 		Target:   target,
-		Args:     append([]string(nil), argv[2:]...),
+		Args:     commandArgs,
 		Output:   strings.TrimSpace(string(output)),
 		ExitCode: code,
 	}
@@ -95,6 +100,16 @@ func (c *SSHClient) Run(ctx context.Context, target string, args []string, stdin
 		return result, fmt.Errorf("tailnet ssh %s failed: %w", target, err)
 	}
 	return result, nil
+}
+
+func unsafeSSHTarget(target string) bool {
+	if target == "" || strings.HasPrefix(target, "-") || strings.ContainsAny(target, " \t\r\n") {
+		return true
+	}
+	if _, host, ok := strings.Cut(target, "@"); ok && strings.HasPrefix(host, "-") {
+		return true
+	}
+	return false
 }
 
 func (ExecSSHCommandRunner) Run(ctx context.Context, name string, args []string, stdin []byte) ([]byte, int, error) {

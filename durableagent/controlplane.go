@@ -16,6 +16,8 @@ type ControlPlaneStore interface {
 	DurableAgentState(agentID string) (*core.DurableAgentState, error)
 	SaveDurableAgentState(state core.DurableAgentState) error
 	AcceptDurableAgentControlEnvelope(envelope core.DurableAgentControlEnvelope, receivedAt time.Time) error
+	AcceptDurableAgentControlEnvelopeFromTailnetPeer(envelope core.DurableAgentControlEnvelope, identity core.TailnetPeerIdentity, receivedAt time.Time) error
+	AcceptDurableAgentEnrollment(envelope core.DurableAgentControlEnvelope, enrollment core.DurableAgentRemoteEnrollment, receivedAt time.Time) error
 }
 
 type ControlPlane struct {
@@ -43,6 +45,36 @@ func (cp *ControlPlane) AcceptEnvelope(envelope core.DurableAgentControlEnvelope
 		return fmt.Errorf("durable agent control envelope is outside the allowed replay window")
 	}
 	return cp.store.AcceptDurableAgentControlEnvelope(envelope, now)
+}
+
+func (cp *ControlPlane) AcceptEnvelopeFromTailnetPeer(envelope core.DurableAgentControlEnvelope, identity core.TailnetPeerIdentity, now time.Time) error {
+	if cp == nil || cp.store == nil {
+		return fmt.Errorf("durable agent control plane store is nil")
+	}
+	envelope = core.NormalizeDurableAgentControlEnvelope(envelope)
+	if err := core.ValidateDurableAgentControlEnvelope(envelope); err != nil {
+		return err
+	}
+	now = normalizeControlPlaneTime(now)
+	if outsideReplayWindow(envelope.Timestamp, now, cp.replayWindow) {
+		return fmt.Errorf("durable agent control envelope is outside the allowed replay window")
+	}
+	return cp.store.AcceptDurableAgentControlEnvelopeFromTailnetPeer(envelope, identity, now)
+}
+
+func (cp *ControlPlane) AcceptEnrollment(envelope core.DurableAgentControlEnvelope, enrollment core.DurableAgentRemoteEnrollment, now time.Time) error {
+	if cp == nil || cp.store == nil {
+		return fmt.Errorf("durable agent control plane store is nil")
+	}
+	envelope = core.NormalizeDurableAgentControlEnvelope(envelope)
+	if err := core.ValidateDurableAgentControlEnvelope(envelope); err != nil {
+		return err
+	}
+	now = normalizeControlPlaneTime(now)
+	if outsideReplayWindow(envelope.Timestamp, now, cp.replayWindow) {
+		return fmt.Errorf("durable agent control envelope is outside the allowed replay window")
+	}
+	return cp.store.AcceptDurableAgentEnrollment(envelope, enrollment, now)
 }
 
 func (cp *ControlPlane) PolicySnapshot(agentID string) (core.DurableAgentPolicySnapshot, error) {

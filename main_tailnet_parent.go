@@ -48,8 +48,7 @@ func startTailnetParent(ctx context.Context, service *tailnet.ParentService) err
 		return nil
 	}
 	if err := service.Start(ctx); err != nil {
-		log.Printf("WARN parent tsnet start failed; continuing without private tailnet listener: %v", err)
-		return nil
+		return fmt.Errorf("start parent tsnet listener: %w", err)
 	}
 	status := service.Status()
 	if status.Running {

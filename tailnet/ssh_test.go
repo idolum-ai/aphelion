@@ -26,7 +26,7 @@ func TestSSHClientRunsTailscaleSSHWithStdin(t *testing.T) {
 	if runner.name != "tailscale-test" {
 		t.Fatalf("runner name = %q, want tailscale-test", runner.name)
 	}
-	wantArgs := []string{"ssh", "alice@child", "bash", "-c", "cat >/tmp/in"}
+	wantArgs := []string{"ssh", "--", "alice@child", "bash", "-c", "cat >/tmp/in"}
 	if !reflect.DeepEqual(runner.args, wantArgs) {
 		t.Fatalf("runner args = %#v, want %#v", runner.args, wantArgs)
 	}
@@ -44,6 +44,9 @@ func TestSSHClientRejectsEmptyTargetAndCommand(t *testing.T) {
 	client := NewSSHClient(SSHOptions{Runner: &fakeSSHCommandRunner{}})
 	if _, err := client.Run(context.Background(), "", []string{"true"}, nil); err == nil {
 		t.Fatal("Run(empty target) err = nil, want error")
+	}
+	if _, err := client.Run(context.Background(), "--bad", []string{"true"}, nil); err == nil {
+		t.Fatal("Run(option target) err = nil, want error")
 	}
 	if _, err := client.Run(context.Background(), "child", nil, nil); err == nil {
 		t.Fatal("Run(empty command) err = nil, want error")

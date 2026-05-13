@@ -12,14 +12,20 @@ import (
 )
 
 func (h *HTTPHandler) acceptControlEnvelope(w http.ResponseWriter, r *http.Request, envelope core.DurableAgentControlEnvelope) bool {
-	if err := h.verifyControlPeerIdentity(r, envelope.AgentID); err != nil {
+	identity, err := h.controlPeerIdentity(r, envelope.AgentID)
+	if err != nil {
 		writeError(w, http.StatusForbidden, err)
 		return false
 	}
 	if h.replayControlReceipt(w, envelope) {
 		return false
 	}
-	if err := h.control.AcceptEnvelope(envelope, h.now()); err != nil {
+	if h.RequirePeerIdentity {
+		err = h.control.AcceptEnvelopeFromTailnetPeer(envelope, identity, h.now())
+	} else {
+		err = h.control.AcceptEnvelope(envelope, h.now())
+	}
+	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "replay durable agent control envelope") && h.replayControlReceipt(w, envelope) {
 			return false
 		}

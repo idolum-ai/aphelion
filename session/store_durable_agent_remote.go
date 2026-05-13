@@ -87,6 +87,108 @@ func (s *SQLiteStore) AcceptDurableAgentControlEnvelope(envelope core.DurableAge
 	if receivedAt.IsZero() {
 		receivedAt = time.Now().UTC()
 	}
+	return s.acceptDurableAgentControlEnvelope(envelope, receivedAt, nil)
+}
+
+func (s *SQLiteStore) AcceptDurableAgentControlEnvelopeFromTailnetPeer(envelope core.DurableAgentControlEnvelope, identity core.TailnetPeerIdentity, receivedAt time.Time) error {
+	identity = core.NormalizeTailnetPeerIdentity(identity)
+	if strings.TrimSpace(identity.StableNodeID) == "" {
+		return fmt.Errorf("durable agent tailnet stable node id is required")
+	}
+	return s.acceptDurableAgentControlEnvelope(envelope, receivedAt, func(enrollment *core.DurableAgentRemoteEnrollment) error {
+		storedStableNodeID := strings.TrimSpace(enrollment.TailnetIdentity.StableNodeID)
+		switch {
+		case storedStableNodeID == "":
+			enrollment.TailnetIdentity = identity
+		case storedStableNodeID != strings.TrimSpace(identity.StableNodeID):
+			return fmt.Errorf("durable agent control request came from a different tailnet node")
+		}
+		return nil
+	})
+}
+
+func (s *SQLiteStore) AcceptDurableAgentEnrollment(envelope core.DurableAgentControlEnvelope, enrollment core.DurableAgentRemoteEnrollment, receivedAt time.Time) error {
+	envelope = core.NormalizeDurableAgentControlEnvelope(envelope)
+	if err := core.ValidateDurableAgentControlEnvelope(envelope); err != nil {
+		return err
+	}
+	enrollment = core.NormalizeDurableAgentRemoteEnrollment(enrollment)
+	if enrollment.AgentID == "" {
+		return fmt.Errorf("accept durable agent enrollment: agent_id is required")
+	}
+	if enrollment.AgentID != envelope.AgentID {
+		return fmt.Errorf("accept durable agent enrollment: agent_id does not match envelope")
+	}
+	if enrollment.ParentControlURL == "" {
+		return fmt.Errorf("accept durable agent enrollment: parent_control_url is required")
+	}
+	if receivedAt.IsZero() {
+		receivedAt = time.Now().UTC()
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin durable agent enrollment tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	existing, err := queryDurableAgentRemoteEnrollment(tx, envelope.AgentID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			existing = nil
+		} else {
+			return err
+		}
+	}
+
+	if existing != nil {
+		if existing.Status != "active" {
+			return fmt.Errorf("durable agent remote enrollment %s is not active", existing.AgentID)
+		}
+		if enrollment.EnrolledAt.IsZero() {
+			enrollment.EnrolledAt = existing.EnrolledAt
+		}
+		enrollment.LastSequence = existing.LastSequence
+		if enrollment.TailnetIdentity.StableNodeID == "" && existing.TailnetIdentity.StableNodeID != "" {
+			enrollment.TailnetIdentity = existing.TailnetIdentity
+		}
+		if enrollment.TailnetIdentity.StableNodeID != "" && existing.TailnetIdentity.StableNodeID != "" &&
+			enrollment.TailnetIdentity.StableNodeID != existing.TailnetIdentity.StableNodeID {
+			return fmt.Errorf("durable agent enrollment came from a different tailnet node")
+		}
+	}
+	if enrollment.Status == "" {
+		enrollment.Status = "active"
+	}
+	if enrollment.Status != "active" {
+		return fmt.Errorf("durable agent remote enrollment %s is not active", enrollment.AgentID)
+	}
+	if err := insertDurableAgentControlReceiptExec(tx, envelope, receivedAt); err != nil {
+		return err
+	}
+	if envelope.Sequence <= enrollment.LastSequence {
+		return fmt.Errorf("out-of-order durable agent control envelope for %s", enrollment.AgentID)
+	}
+	enrollment.LastSequence = envelope.Sequence
+	enrollment.LastSeenAt = receivedAt.UTC()
+	if err := upsertDurableAgentRemoteEnrollmentExec(tx, enrollment); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit durable agent enrollment tx: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) acceptDurableAgentControlEnvelope(envelope core.DurableAgentControlEnvelope, receivedAt time.Time, updateEnrollment func(*core.DurableAgentRemoteEnrollment) error) error {
+	envelope = core.NormalizeDurableAgentControlEnvelope(envelope)
+	if err := core.ValidateDurableAgentControlEnvelope(envelope); err != nil {
+		return err
+	}
+	if receivedAt.IsZero() {
+		receivedAt = time.Now().UTC()
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin durable agent control envelope tx: %w", err)
@@ -102,20 +204,16 @@ func (s *SQLiteStore) AcceptDurableAgentControlEnvelope(envelope core.DurableAge
 	if enrollment.Status != "active" {
 		return fmt.Errorf("durable agent remote enrollment %s is not active", enrollment.AgentID)
 	}
-	_, err = tx.Exec(`
-		INSERT INTO durable_agent_control_receipts(agent_id, message_id, message_kind, sequence, signature, received_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`,
-		envelope.AgentID, envelope.MessageID, envelope.MessageKind, envelope.Sequence, envelope.Signature, receivedAt.UTC().Format(time.RFC3339Nano),
-	)
-	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			return fmt.Errorf("replay durable agent control envelope for %s", envelope.AgentID)
-		}
-		return fmt.Errorf("insert durable agent control receipt: %w", err)
+	if err := insertDurableAgentControlReceiptExec(tx, envelope, receivedAt); err != nil {
+		return err
 	}
 	if envelope.Sequence <= enrollment.LastSequence {
 		return fmt.Errorf("out-of-order durable agent control envelope for %s", enrollment.AgentID)
+	}
+	if updateEnrollment != nil {
+		if err := updateEnrollment(enrollment); err != nil {
+			return err
+		}
 	}
 	enrollment.LastSequence = envelope.Sequence
 	enrollment.LastSeenAt = receivedAt.UTC()
@@ -170,6 +268,26 @@ func (s *SQLiteStore) StoreDurableAgentControlReceiptResponse(agentID string, me
 	}
 	if affected == 0 {
 		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func insertDurableAgentControlReceiptExec(exec sqlExecer, envelope core.DurableAgentControlEnvelope, receivedAt time.Time) error {
+	envelope = core.NormalizeDurableAgentControlEnvelope(envelope)
+	if receivedAt.IsZero() {
+		receivedAt = time.Now().UTC()
+	}
+	_, err := exec.Exec(`
+		INSERT INTO durable_agent_control_receipts(agent_id, message_id, message_kind, sequence, signature, received_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`,
+		envelope.AgentID, envelope.MessageID, envelope.MessageKind, envelope.Sequence, envelope.Signature, receivedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return fmt.Errorf("replay durable agent control envelope for %s", envelope.AgentID)
+		}
+		return fmt.Errorf("insert durable agent control receipt: %w", err)
 	}
 	return nil
 }

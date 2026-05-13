@@ -62,6 +62,53 @@ func TestBuildProvisionPlanRejectsMissingTailnetPolicy(t *testing.T) {
 	}
 }
 
+func TestBuildProvisionPlanRejectsUnsafeTailnetSSHInputs(t *testing.T) {
+	t.Parallel()
+
+	binary := writeProvisionBinary(t)
+	agent := provisionTestAgent()
+	for _, tc := range []struct {
+		name string
+		opts ProvisionOptions
+	}{
+		{
+			name: "option host",
+			opts: ProvisionOptions{SSHHost: "--proxy"},
+		},
+		{
+			name: "empty label",
+			opts: ProvisionOptions{SSHHost: "family..child"},
+		},
+		{
+			name: "underscore host",
+			opts: ProvisionOptions{SSHHost: "family_child"},
+		},
+		{
+			name: "option user",
+			opts: ProvisionOptions{SSHUser: "-root"},
+		},
+		{
+			name: "systemd specifier path",
+			opts: ProvisionOptions{ChildRoot: "~/.aphelion/%i"},
+		},
+		{
+			name: "relative path",
+			opts: ProvisionOptions{ChildRoot: ".aphelion/child"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			opts := tc.opts
+			opts.Agent = agent
+			opts.Bootstrap = provisionTestBootstrap(agent)
+			opts.BinaryPath = binary
+			if _, err := BuildProvisionPlan(opts); err == nil {
+				t.Fatal("BuildProvisionPlan() err = nil, want unsafe input rejection")
+			}
+		})
+	}
+}
+
 func TestProvisionRemoteChildDryRunDoesNotRequireRunner(t *testing.T) {
 	t.Parallel()
 

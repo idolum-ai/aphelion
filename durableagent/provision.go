@@ -71,12 +71,12 @@ func BuildProvisionPlan(opts ProvisionOptions) (ProvisionPlan, error) {
 	if host == "" {
 		return ProvisionPlan{}, fmt.Errorf("durable agent %s has no tailnet hostname", agent.AgentID)
 	}
-	if hasShellSpace(host) {
-		return ProvisionPlan{}, fmt.Errorf("tailnet ssh host must not contain whitespace")
+	if !safeTailnetSSHHost(host) {
+		return ProvisionPlan{}, fmt.Errorf("tailnet ssh host %q is not safe", host)
 	}
 	sshUser := strings.TrimSpace(opts.SSHUser)
-	if hasShellSpace(sshUser) {
-		return ProvisionPlan{}, fmt.Errorf("tailnet ssh user must not contain whitespace")
+	if sshUser != "" && !safeTailnetSSHUser(sshUser) {
+		return ProvisionPlan{}, fmt.Errorf("tailnet ssh user %q is not safe", sshUser)
 	}
 	target := host
 	if sshUser != "" {
@@ -97,8 +97,8 @@ func BuildProvisionPlan(opts ProvisionOptions) (ProvisionPlan, error) {
 	if childRoot == "" {
 		childRoot = "~/.aphelion/children/" + agent.AgentID
 	}
-	if hasShellSpace(childRoot) {
-		return ProvisionPlan{}, fmt.Errorf("child root must not contain whitespace")
+	if !safeChildRootPath(childRoot) {
+		return ProvisionPlan{}, fmt.Errorf("child root %q is not safe", childRoot)
 	}
 	serviceName := strings.TrimSpace(opts.ServiceName)
 	if serviceName == "" {
@@ -233,6 +233,68 @@ func safeServiceName(value string) bool {
 	return true
 }
 
+func safeTailnetSSHHost(value string) bool {
+	value = strings.ToLower(strings.Trim(strings.TrimSpace(value), "."))
+	if value == "" || strings.HasPrefix(value, "-") || len(value) > 253 {
+		return false
+	}
+	labels := strings.Split(value, ".")
+	for _, label := range labels {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+		for _, r := range label {
+			switch {
+			case r >= 'a' && r <= 'z':
+			case r >= '0' && r <= '9':
+			case r == '-':
+			default:
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func safeTailnetSSHUser(value string) bool {
+	if value == "" || len(value) > 32 || strings.HasPrefix(value, "-") {
+		return false
+	}
+	for i, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r == '_':
+		case i > 0 && r >= '0' && r <= '9':
+		case i > 0 && (r == '-' || r == '.'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func safeChildRootPath(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || hasShellSpace(value) || strings.Contains(value, "%") || strings.Contains(value, ";") {
+		return false
+	}
+	if !(strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~/")) {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '/', r == '.', r == '-', r == '_', r == '~':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 const remoteProvisionScript = `
 set -euo pipefail
 child_root="$1"
@@ -259,8 +321,8 @@ After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=${child_root}
-ExecStart=${child_root}/bin/aphelion durable-agent remote --bootstrap ${child_root}/remote-bootstrap.json --db ${child_root}/state/sessions.db --inbox-dir ${child_root}/inbox --poll-interval ${poll_interval} loop
+WorkingDirectory="${child_root}"
+ExecStart="${child_root}/bin/aphelion" durable-agent remote --bootstrap "${child_root}/remote-bootstrap.json" --db "${child_root}/state/sessions.db" --inbox-dir "${child_root}/inbox" --poll-interval "${poll_interval}" loop
 Restart=always
 RestartSec=5
 
