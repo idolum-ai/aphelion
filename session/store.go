@@ -76,6 +76,10 @@ func (s *SQLiteStore) init() error {
 	if err != nil {
 		return err
 	}
+	currentVersion, err = migrateCurrentSchemaVersion(tx, currentVersion)
+	if err != nil {
+		return err
+	}
 
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS sessions (

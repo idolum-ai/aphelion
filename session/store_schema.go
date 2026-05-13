@@ -5,7 +5,10 @@ package session
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 )
+
+const schemaVersion43 = 43
 
 func existingUserTableCount(tx *sql.Tx) (int, error) {
 	var count int
@@ -32,12 +35,118 @@ func validateCurrentSchemaVersion(tx *sql.Tx, existingTables int) (int, error) {
 		return 0, fmt.Errorf("unsupported unversioned database schema; reinstall from a clean current state")
 	}
 	if currentVersion < schemaVersion {
+		if currentVersion == schemaVersion43 {
+			return currentVersion, nil
+		}
 		return 0, fmt.Errorf("unsupported database schema version %d (current schema version is %d); reinstall from a clean current state", currentVersion, schemaVersion)
 	}
 	if currentVersion > schemaVersion {
 		return 0, fmt.Errorf("unsupported database schema version %d (binary schema version is %d); install a matching or newer binary", currentVersion, schemaVersion)
 	}
 	return currentVersion, nil
+}
+
+func migrateCurrentSchemaVersion(tx *sql.Tx, currentVersion int) (int, error) {
+	switch currentVersion {
+	case schemaVersion43:
+		if err := migrateSchemaV43ToV44(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion, err)
+		}
+		return schemaVersion, nil
+	default:
+		return currentVersion, nil
+	}
+}
+
+func migrateSchemaV43ToV44(tx *sql.Tx) error {
+	for _, column := range []schemaColumnMigration{
+		{
+			table:     "durable_agent_remote_enrollments",
+			column:    "tailnet_stable_node_id",
+			statement: `ALTER TABLE durable_agent_remote_enrollments ADD COLUMN tailnet_stable_node_id TEXT NOT NULL DEFAULT ''`,
+		},
+		{
+			table:     "durable_agent_remote_enrollments",
+			column:    "tailnet_node_name",
+			statement: `ALTER TABLE durable_agent_remote_enrollments ADD COLUMN tailnet_node_name TEXT NOT NULL DEFAULT ''`,
+		},
+		{
+			table:     "durable_agent_remote_enrollments",
+			column:    "tailnet_computed_name",
+			statement: `ALTER TABLE durable_agent_remote_enrollments ADD COLUMN tailnet_computed_name TEXT NOT NULL DEFAULT ''`,
+		},
+		{
+			table:     "durable_agent_remote_enrollments",
+			column:    "tailnet_login_name",
+			statement: `ALTER TABLE durable_agent_remote_enrollments ADD COLUMN tailnet_login_name TEXT NOT NULL DEFAULT ''`,
+		},
+		{
+			table:     "durable_agent_remote_enrollments",
+			column:    "tailnet_tags_json",
+			statement: `ALTER TABLE durable_agent_remote_enrollments ADD COLUMN tailnet_tags_json TEXT NOT NULL DEFAULT '[]'`,
+		},
+		{
+			table:     "durable_agent_control_receipts",
+			column:    "signature",
+			statement: `ALTER TABLE durable_agent_control_receipts ADD COLUMN signature TEXT NOT NULL DEFAULT ''`,
+		},
+		{
+			table:     "durable_agent_control_receipts",
+			column:    "response_status",
+			statement: `ALTER TABLE durable_agent_control_receipts ADD COLUMN response_status INTEGER NOT NULL DEFAULT 0`,
+		},
+		{
+			table:     "durable_agent_control_receipts",
+			column:    "response_json",
+			statement: `ALTER TABLE durable_agent_control_receipts ADD COLUMN response_json TEXT NOT NULL DEFAULT ''`,
+		},
+	} {
+		if err := addSchemaColumnIfMissing(tx, column); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type schemaColumnMigration struct {
+	table     string
+	column    string
+	statement string
+}
+
+func addSchemaColumnIfMissing(tx *sql.Tx, migration schemaColumnMigration) error {
+	exists, err := schemaColumnExists(tx, migration.table, migration.column)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := tx.Exec(migration.statement); err != nil {
+		return fmt.Errorf("migrate schema v43 to v44 add %s.%s: %w", migration.table, migration.column, err)
+	}
+	return nil
+}
+
+func schemaColumnExists(tx *sql.Tx, tableName string, columnName string) (bool, error) {
+	tableName = strings.TrimSpace(tableName)
+	columnName = strings.TrimSpace(columnName)
+	if tableName == "" || columnName == "" {
+		return false, fmt.Errorf("schema column lookup requires table and column")
+	}
+	var count int
+	query := fmt.Sprintf("SELECT COUNT(1) FROM pragma_table_info(%s) WHERE name = ?", sqliteStringLiteral(tableName))
+	if err := tx.QueryRow(query, columnName).Scan(&count); err != nil {
+		return false, fmt.Errorf("query schema column %s.%s: %w", tableName, columnName, err)
+	}
+	return count > 0, nil
+}
+
+func sqliteStringLiteral(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
 func recordCurrentSchemaVersion(tx *sql.Tx, currentVersion int) error {
