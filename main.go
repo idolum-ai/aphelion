@@ -113,13 +113,7 @@ func run() error {
 		return err
 	}
 	defer store.Close()
-	if err := syncConfiguredTelegramDurableGroups(cfg, store); err != nil {
-		return err
-	}
-	if err := syncDefaultDailyReviewDurableAgent(cfg, store); err != nil {
-		return err
-	}
-	if err := syncDurableAgentBootstrapInheritance(cfg, store); err != nil {
+	if err := syncRuntimeDurableAgentsAtStartup(cfg, store); err != nil {
 		return err
 	}
 

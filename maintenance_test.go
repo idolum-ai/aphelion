@@ -458,6 +458,45 @@ func TestRunInitCommandImportsCodexSessions(t *testing.T) {
 	}
 }
 
+func TestRunInitCommandInstallsDailyReviewRecipe(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	out, err := captureStdout(t, func() error {
+		return runInitCommand([]string{"--config", cfgPath})
+	})
+	if err != nil {
+		t.Fatalf("runInitCommand() err = %v", err)
+	}
+	for _, want := range []string{
+		"daily_review_recipe: installed",
+		"daily_review_agent_id: idolum-daily-review",
+		"daily_review_recipe_id: daily-review",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("init output = %q, want %q", out, want)
+		}
+	}
+
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	agent, err := store.DurableAgent("idolum-daily-review")
+	if err != nil {
+		t.Fatalf("DurableAgent(%s) err = %v", "idolum-daily-review", err)
+	}
+	if agent.ChannelKind != "scheduled_review" || agent.WakeupMode != "poll" || agent.Status != "active" {
+		t.Fatalf("daily review agent = %#v, want installed active poll recipe", agent)
+	}
+}
+
 func TestRunInitCommandMigratesChildMemorySnapshots(t *testing.T) {
 	t.Parallel()
 

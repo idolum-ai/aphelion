@@ -307,3 +307,15 @@ func TestPollDurableWakeAgentsPreflightsExternalChannelMaterialBeforeChildWake(t
 		t.Fatalf("compact review = %q, want blocked operator summary without query leak", compact)
 	}
 }
+
+func TestParentConversationWakeAdapterSkipsScheduledReviewChannel(t *testing.T) {
+	t.Parallel()
+
+	adapter := newDurableParentConversationWakeAdapter()
+	if adapter.Supports(core.DurableAgent{AgentID: "scheduled", ChannelKind: scheduledReviewChannelKind}) {
+		t.Fatal("parent conversation adapter supports scheduled_review; want skipped so the scheduled adapter owns its wake")
+	}
+	if !adapter.Supports(core.DurableAgent{AgentID: "external", ChannelKind: "external_channel"}) {
+		t.Fatal("parent conversation adapter does not support ordinary external_channel child")
+	}
+}

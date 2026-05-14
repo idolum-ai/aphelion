@@ -19,7 +19,7 @@ import (
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
-func TestDailyReviewWakeStagesTranscriptAndQueuesScheduledCheckIn(t *testing.T) {
+func TestScheduledReviewWakeStagesTranscriptAndQueuesArtifact(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "Worked: concise updates.\nDid not: delayed approvals.\nTomorrow: tighten escalation criteria."
 	rt, err := New(cfg, store, provider, nil, sender)
@@ -29,11 +29,12 @@ func TestDailyReviewWakeStagesTranscriptAndQueuesScheduledCheckIn(t *testing.T) 
 	rt.durableWakeChild = nil
 
 	agent := core.DurableAgent{
-		AgentID:            defaultDailyReviewDurableAgentID,
+		AgentID:            "scheduled-review-test",
 		ParentScopeKind:    string(session.ScopeKindHeartbeat),
 		ParentScopeID:      "admin-house",
 		ReviewTargetChatID: 1001,
-		ChannelKind:        dailyReviewDurableChannelKind,
+		ChannelKind:        scheduledReviewChannelKind,
+		ChannelConfig:      testScheduledReviewChannelConfig(),
 		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
 			Charter:            "Review yesterday's logs and propose tomorrow action items.",
 			CapabilityEnvelope: []string{"bounded_review_artifact", "session_recall"},
@@ -81,8 +82,8 @@ func TestDailyReviewWakeStagesTranscriptAndQueuesScheduledCheckIn(t *testing.T) 
 	if sender.inline[0].chatID != 1001 {
 		t.Fatalf("inline chat_id = %d, want 1001", sender.inline[0].chatID)
 	}
-	if !strings.Contains(strings.ToLower(sender.inline[0].text), "scheduled check-in") {
-		t.Fatalf("inline text = %q, want scheduled check-in framing", sender.inline[0].text)
+	if !strings.Contains(strings.ToLower(sender.inline[0].text), "daily review") {
+		t.Fatalf("inline text = %q, want daily review framing", sender.inline[0].text)
 	}
 	sender.mu.Unlock()
 
@@ -98,7 +99,7 @@ func TestDailyReviewWakeStagesTranscriptAndQueuesScheduledCheckIn(t *testing.T) 
 	if err != nil {
 		t.Fatalf("scopeForDurableAgent() err = %v", err)
 	}
-	transcriptPath := dailyReviewTranscriptPath(scope.WorkingRoot, now.AddDate(0, 0, -1))
+	transcriptPath := scheduledReviewTranscriptPath(scope.WorkingRoot, ".aphelion/daily-review", now.AddDate(0, 0, -1))
 	raw, err := os.ReadFile(transcriptPath)
 	if err != nil {
 		t.Fatalf("read staged transcript %s err = %v", transcriptPath, err)
@@ -129,7 +130,7 @@ func TestDailyReviewWakeStagesTranscriptAndQueuesScheduledCheckIn(t *testing.T) 
 	}
 }
 
-func TestDailyReviewWakeCanUseDurableAgentScopedExec(t *testing.T) {
+func TestScheduledReviewWakeCanUseDurableAgentScopedExec(t *testing.T) {
 	cfg, store, _, sender := buildRuntimeFixtures(t)
 	provider := &durableWakeExecRequestingProvider{}
 	resolver, err := sandbox.NewResolver(
@@ -154,11 +155,12 @@ func TestDailyReviewWakeCanUseDurableAgentScopedExec(t *testing.T) {
 	rt.durableWakeChild = nil
 
 	agent := core.DurableAgent{
-		AgentID:            defaultDailyReviewDurableAgentID,
+		AgentID:            "scheduled-review-test",
 		ParentScopeKind:    string(session.ScopeKindHeartbeat),
 		ParentScopeID:      "admin-house",
 		ReviewTargetChatID: 1001,
-		ChannelKind:        dailyReviewDurableChannelKind,
+		ChannelKind:        scheduledReviewChannelKind,
+		ChannelConfig:      testScheduledReviewChannelConfig(),
 		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
 			Charter:            "Review yesterday's logs and propose tomorrow action items.",
 			CapabilityEnvelope: []string{"bounded_review_artifact", "session_recall"},
@@ -210,8 +212,22 @@ func TestDailyReviewWakeCanUseDurableAgentScopedExec(t *testing.T) {
 		t.Fatalf("DurableAgentState() err = %v", err)
 	}
 	if strings.TrimSpace(state.Cursor) == "" {
-		t.Fatalf("daily review cursor empty, want finalized wake after scoped exec")
+		t.Fatalf("scheduled review cursor empty, want finalized wake after scoped exec")
 	}
+}
+
+func testScheduledReviewChannelConfig() core.DurableAgentChannelConfig {
+	return core.NormalizeDurableAgentChannelConfig(core.DurableAgentChannelConfig{ScheduledReview: &core.DurableAgentScheduledReviewChannelConfig{
+		Title:            "Daily review",
+		ScheduleKind:     "daily",
+		TimeUTC:          "00:10",
+		Window:           "previous_day",
+		MaxMessages:      1200,
+		ArtifactKind:     "scheduled_check_in",
+		TranscriptDir:    ".aphelion/daily-review",
+		GuidanceQuestion: "What guidance should I apply before the next daily check-in?",
+		PromptTemplate:   "Daily scheduled child-parent check-in for review_date={{review_date}}.\nTranscript file: {{transcript_path}}\nMessage count in staged window: {{message_count}}\nRead the transcript file, then reply as a normal child chat to the parent with:\n1) what worked yesterday\n2) what did not work\n3) concrete action items for tomorrow (max 5)\nKeep the message concise and operational.",
+	}})
 }
 
 type durableWakeExecRequestingProvider struct {

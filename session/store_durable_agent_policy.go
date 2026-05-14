@@ -397,6 +397,16 @@ func validateDurableAgentChannelConfig(channelKind string, cfg core.DurableAgent
 				return fmt.Errorf("invalid channel poll_interval %q: %w", external.PollInterval, err)
 			}
 		}
+	case "scheduled_review":
+		scheduled := cfg.ScheduledReviewConfig()
+		if scheduled == nil {
+			return nil
+		}
+		if strings.TrimSpace(scheduled.TimeUTC) != "" {
+			if _, err := time.Parse("15:04", strings.TrimSpace(scheduled.TimeUTC)); err != nil {
+				return fmt.Errorf("invalid scheduled_review time_utc %q: %w", scheduled.TimeUTC, err)
+			}
+		}
 	}
 	return nil
 }

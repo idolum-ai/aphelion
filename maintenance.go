@@ -10,6 +10,9 @@ import (
 //go:embed defaults/agent/* defaults/agent/memory/*
 var defaultAgentFilesFS embed.FS
 
+//go:embed recipes/durable-children/*.toml
+var durableChildRecipeFilesFS embed.FS
+
 var defaultPromptSeedFiles = []string{
 	"SOUL.md",
 	"IDENTITY.md",

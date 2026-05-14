@@ -1,0 +1,47 @@
+# Daily Review durable-child recipe
+#
+# This file documents the install-owned default child created by `aphelion init`.
+# The Aphelion runtime no longer recreates the child during ordinary startup;
+# target installs own whether this recipe is present, disabled, modified, or
+# removed.
+
+id = "daily-review"
+version = "1"
+agent_id = "idolum-daily-review"
+channel_kind = "scheduled_review"
+wakeup_mode = "poll"
+status = "active"
+
+[policy]
+charter = "Run one scheduled daily review of yesterday's transcript and open a plain parent-child check-in with concise action items for tomorrow."
+outbound_mode = "read_only"
+visibility = "parent_relay_only"
+capabilities = ["bounded_review_artifact", "session_recall"]
+drift_policy = "admin_review"
+
+[schedule]
+kind = "daily"
+time_utc = "00:10"
+
+[review]
+title = "Daily review"
+window = "previous_day"
+max_messages = 1200
+artifact = "scheduled_check_in"
+transcript_dir = ".aphelion/daily-review"
+guidance_question = "What guidance should I apply before the next daily check-in?"
+prompt_template = """Daily scheduled child-parent check-in for review_date={{review_date}}.
+Transcript file: {{transcript_path}}
+Message count in staged window: {{message_count}}
+Read the transcript file, then reply as a normal child chat to the parent with:
+1) what worked yesterday
+2) what did not work
+3) concrete action items for tomorrow (max 5)
+Keep the message concise and operational."""
+
+[network]
+# When the child uses a networked LLM bootstrap, configure the durable-agent
+# sandbox profile with explicit allowlist destinations and verify the sandbox
+# network helper first.
+recommended_policy = "allowlist"
+recommended_targets = ["chatgpt.com:443"]

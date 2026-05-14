@@ -26,7 +26,7 @@ func (durableParentConversationWakeAdapter) Name() string {
 
 func (durableParentConversationWakeAdapter) Supports(agent core.DurableAgent) bool {
 	channelKind := strings.TrimSpace(agent.ChannelKind)
-	return !strings.EqualFold(channelKind, dailyReviewDurableChannelKind)
+	return !strings.EqualFold(channelKind, scheduledReviewChannelKind)
 }
 
 func (durableParentConversationWakeAdapter) Prepare(_ context.Context, rt *Runtime, agent core.DurableAgent, now time.Time) (*durableWakeTurnPlan, error) {

@@ -35,6 +35,10 @@ Every child setup should leave the same trail:
 From Telegram, use `/agents`, `/status`, and `/health` to check the same parent
 ledger from the operator channel.
 
+## Daily Review Recipe
+
+`aphelion init` can install the bundled `daily-review` durable-child recipe as `idolum-daily-review` on the target host. Ordinary runtime startup does not recreate the child if it is removed or disabled; after installation, the target database owns the child row and its policy/bootstrap/local state. The recipe manifest lives at `recipes/durable-children/daily-review.toml`.
+
 ## Local Or Scheduled Child
 
 Use this path for a child that does parent-side work, scheduled checks, or daily

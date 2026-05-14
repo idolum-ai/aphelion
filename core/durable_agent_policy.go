@@ -26,7 +26,8 @@ type DurableAgentLivePolicy struct {
 }
 
 type DurableAgentChannelConfig struct {
-	External *DurableAgentExternalChannelConfig `json:"external,omitempty"`
+	External        *DurableAgentExternalChannelConfig        `json:"external,omitempty"`
+	ScheduledReview *DurableAgentScheduledReviewChannelConfig `json:"scheduled_review,omitempty"`
 }
 
 type DurableAgentExternalChannelConfig struct {
@@ -39,6 +40,18 @@ type DurableAgentExternalChannelConfig struct {
 	SummarizePDFs    bool     `json:"summarize_pdfs,omitempty"`
 	SynthesisCadence string   `json:"synthesis_cadence,omitempty"`
 	NeverRetain      []string `json:"never_retain,omitempty"`
+}
+
+type DurableAgentScheduledReviewChannelConfig struct {
+	Title            string `json:"title,omitempty"`
+	ScheduleKind     string `json:"schedule_kind,omitempty"`
+	TimeUTC          string `json:"time_utc,omitempty"`
+	Window           string `json:"window,omitempty"`
+	MaxMessages      int    `json:"max_messages,omitempty"`
+	ArtifactKind     string `json:"artifact_kind,omitempty"`
+	TranscriptDir    string `json:"transcript_dir,omitempty"`
+	PromptTemplate   string `json:"prompt_template,omitempty"`
+	GuidanceQuestion string `json:"guidance_question,omitempty"`
 }
 
 type NodeLLMBootstrap struct {
@@ -134,20 +147,30 @@ func NormalizeDurableAgentChannelConfig(cfg DurableAgentChannelConfig) DurableAg
 		normalized := NormalizeDurableAgentExternalChannelConfig(*cfg.External)
 		cfg.External = &normalized
 	}
+	if cfg.ScheduledReview != nil {
+		normalized := NormalizeDurableAgentScheduledReviewChannelConfig(*cfg.ScheduledReview)
+		cfg.ScheduledReview = &normalized
+	}
 	return cfg
 }
 
 func (cfg DurableAgentChannelConfig) MarshalJSON() ([]byte, error) {
 	cfg = NormalizeDurableAgentChannelConfig(cfg)
 	type channelConfigJSON struct {
-		External *DurableAgentExternalChannelConfig `json:"external,omitempty"`
+		External        *DurableAgentExternalChannelConfig        `json:"external,omitempty"`
+		ScheduledReview *DurableAgentScheduledReviewChannelConfig `json:"scheduled_review,omitempty"`
 	}
-	return json.Marshal(channelConfigJSON{External: cfg.External})
+	return json.Marshal(channelConfigJSON{External: cfg.External, ScheduledReview: cfg.ScheduledReview})
 }
 
 func (cfg DurableAgentChannelConfig) ExternalConfig() *DurableAgentExternalChannelConfig {
 	cfg = NormalizeDurableAgentChannelConfig(cfg)
 	return cfg.External
+}
+
+func (cfg DurableAgentChannelConfig) ScheduledReviewConfig() *DurableAgentScheduledReviewChannelConfig {
+	cfg = NormalizeDurableAgentChannelConfig(cfg)
+	return cfg.ScheduledReview
 }
 
 func NormalizeDurableAgentExternalChannelConfig(cfg DurableAgentExternalChannelConfig) DurableAgentExternalChannelConfig {
@@ -159,6 +182,21 @@ func NormalizeDurableAgentExternalChannelConfig(cfg DurableAgentExternalChannelC
 	cfg.SurfaceRules = normalizeDurableAgentStringSet(cfg.SurfaceRules)
 	cfg.SynthesisCadence = strings.TrimSpace(cfg.SynthesisCadence)
 	cfg.NeverRetain = normalizeDurableAgentStringSet(cfg.NeverRetain)
+	return cfg
+}
+
+func NormalizeDurableAgentScheduledReviewChannelConfig(cfg DurableAgentScheduledReviewChannelConfig) DurableAgentScheduledReviewChannelConfig {
+	cfg.Title = strings.TrimSpace(cfg.Title)
+	cfg.ScheduleKind = strings.ToLower(strings.TrimSpace(cfg.ScheduleKind))
+	cfg.TimeUTC = strings.TrimSpace(cfg.TimeUTC)
+	cfg.Window = strings.ToLower(strings.TrimSpace(cfg.Window))
+	cfg.ArtifactKind = strings.ToLower(strings.TrimSpace(cfg.ArtifactKind))
+	cfg.TranscriptDir = strings.Trim(strings.TrimSpace(cfg.TranscriptDir), "/")
+	cfg.PromptTemplate = strings.TrimSpace(cfg.PromptTemplate)
+	cfg.GuidanceQuestion = strings.TrimSpace(cfg.GuidanceQuestion)
+	if cfg.MaxMessages < 0 {
+		cfg.MaxMessages = 0
+	}
 	return cfg
 }
 
@@ -204,7 +242,7 @@ func NormalizeDurableAgentMode(value string) string {
 
 func (cfg DurableAgentChannelConfig) IsZero() bool {
 	cfg = NormalizeDurableAgentChannelConfig(cfg)
-	return cfg.External == nil
+	return cfg.External == nil && cfg.ScheduledReview == nil
 }
 
 func NormalizeDurableAgentBootstrapCeiling(ceiling DurableAgentBootstrapCeiling) DurableAgentBootstrapCeiling {

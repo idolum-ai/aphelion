@@ -45,7 +45,7 @@ The full design direction lives in
 - **Service:** Linux user service through bundled install/update scripts
 - **Voice:** Telegram voice transcription and optional ElevenLabs TTS replies
 - **Automation:** heartbeat, cron, bounded auto-approval leases
-- **Durable agents:** configured durable children, daily review, Telegram group
+- **Durable agents:** configured durable children, install-owned daily-review recipe, Telegram group
   admission, Tailnet child provisioning, health and inventory surfaces
 
 Current promise tracking lives in [docs/promises.md](docs/promises.md).

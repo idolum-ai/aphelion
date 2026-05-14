@@ -59,6 +59,12 @@ func runInitCommand(args []string) error {
 		return err
 	}
 	printDurableAgentReconcileResult(os.Stdout, reconcileResult)
+
+	dailyReviewResult, err := installDailyReviewRecipeForConfig(cfg, installDailyReviewRecipeOptions{})
+	if err != nil {
+		return err
+	}
+	printDailyReviewRecipeInstallResult(os.Stdout, dailyReviewResult)
 	fmt.Fprintf(os.Stdout, "status: ready\n")
 	fmt.Fprintf(os.Stdout, "next: run --check-config or start the service\n")
 	return nil

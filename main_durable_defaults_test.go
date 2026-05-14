@@ -3,6 +3,8 @@
 package main
 
 import (
+	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -67,7 +69,7 @@ func TestDefaultDurableAgentBootstrapFromConfigAutoFallsBackNativeWithoutCodexCr
 	}
 }
 
-func TestSyncDefaultDailyReviewDurableAgentCreatesDefaultAgent(t *testing.T) {
+func TestInstallDailyReviewRecipeCreatesDefaultAgent(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -97,22 +99,30 @@ func TestSyncDefaultDailyReviewDurableAgentCreatesDefaultAgent(t *testing.T) {
 		},
 	}
 
-	if err := syncDefaultDailyReviewDurableAgent(cfg, store); err != nil {
-		t.Fatalf("syncDefaultDailyReviewDurableAgent() err = %v", err)
+	result, err := installDailyReviewRecipe(cfg, store, installDailyReviewRecipeOptions{Source: "test"})
+	if err != nil {
+		t.Fatalf("installDailyReviewRecipe() err = %v", err)
+	}
+	if !result.Installed || result.Existing || result.Skipped {
+		t.Fatalf("install result = %#v, want installed", result)
 	}
 
-	agent, err := store.DurableAgent(defaultDailyReviewDurableAgentID)
+	agent, err := store.DurableAgent("idolum-daily-review")
 	if err != nil {
 		t.Fatalf("DurableAgent() err = %v", err)
 	}
-	if agent.ChannelKind != dailyReviewDurableChannelKind {
-		t.Fatalf("ChannelKind = %q, want %q", agent.ChannelKind, dailyReviewDurableChannelKind)
+	if agent.ChannelKind != "scheduled_review" {
+		t.Fatalf("ChannelKind = %q, want %q", agent.ChannelKind, "scheduled_review")
 	}
 	if agent.ReviewTargetChatID != 1001 {
 		t.Fatalf("ReviewTargetChatID = %d, want 1001", agent.ReviewTargetChatID)
 	}
 	if agent.WakeupMode != "poll" {
 		t.Fatalf("WakeupMode = %q, want poll", agent.WakeupMode)
+	}
+	scheduled := agent.ChannelConfig.ScheduledReviewConfig()
+	if scheduled == nil || scheduled.Title != "Daily review" || scheduled.TimeUTC != "00:10" || scheduled.ArtifactKind != "scheduled_check_in" {
+		t.Fatalf("ScheduledReviewConfig() = %#v, want recipe scheduled-review config", scheduled)
 	}
 	if agent.Status != "active" {
 		t.Fatalf("Status = %q, want active", agent.Status)
@@ -122,7 +132,7 @@ func TestSyncDefaultDailyReviewDurableAgentCreatesDefaultAgent(t *testing.T) {
 	}
 }
 
-func TestSyncDefaultDailyReviewDurableAgentPreservesExistingPolicy(t *testing.T) {
+func TestInstallDailyReviewRecipePreservesExistingAgent(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -134,18 +144,18 @@ func TestSyncDefaultDailyReviewDurableAgentPreservesExistingPolicy(t *testing.T)
 	defer store.Close()
 
 	existing := core.DurableAgent{
-		AgentID:            defaultDailyReviewDurableAgentID,
+		AgentID:            "idolum-daily-review",
 		ParentScopeKind:    string(session.ScopeKindHeartbeat),
 		ParentScopeID:      "admin-house",
 		ReviewTargetChatID: 1001,
-		ChannelKind:        dailyReviewDurableChannelKind,
+		ChannelKind:        "scheduled_review",
 		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
 			Charter:            "Existing charter should remain.",
 			CapabilityEnvelope: []string{"bounded_review_artifact"},
 			OutboundMode:       "read_only",
 			DriftPolicy:        "admin_review",
 		}),
-		BootstrapCeiling: core.DefaultDurableAgentBootstrapCeiling(dailyReviewDurableChannelKind, core.DurableAgentLivePolicy{
+		BootstrapCeiling: core.DefaultDurableAgentBootstrapCeiling("scheduled_review", core.DurableAgentLivePolicy{
 			Charter:            "Existing charter should remain.",
 			CapabilityEnvelope: []string{"bounded_review_artifact"},
 			OutboundMode:       "read_only",
@@ -183,11 +193,15 @@ func TestSyncDefaultDailyReviewDurableAgentPreservesExistingPolicy(t *testing.T)
 		},
 	}
 
-	if err := syncDefaultDailyReviewDurableAgent(cfg, store); err != nil {
-		t.Fatalf("syncDefaultDailyReviewDurableAgent() err = %v", err)
+	result, err := installDailyReviewRecipe(cfg, store, installDailyReviewRecipeOptions{Source: "test"})
+	if err != nil {
+		t.Fatalf("installDailyReviewRecipe() err = %v", err)
+	}
+	if !result.Existing || result.Installed || result.Skipped {
+		t.Fatalf("install result = %#v, want existing", result)
 	}
 
-	agent, err := store.DurableAgent(defaultDailyReviewDurableAgentID)
+	agent, err := store.DurableAgent("idolum-daily-review")
 	if err != nil {
 		t.Fatalf("DurableAgent() err = %v", err)
 	}
@@ -196,6 +210,45 @@ func TestSyncDefaultDailyReviewDurableAgentPreservesExistingPolicy(t *testing.T)
 	}
 	if agent.PolicyVersion != 5 {
 		t.Fatalf("PolicyVersion = %d, want preserved 5", agent.PolicyVersion)
+	}
+}
+
+func TestSyncRuntimeDurableAgentsAtStartupDoesNotInstallDailyReviewRecipe(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "sessions.db")
+	store, err := session.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	cfg := &config.Config{
+		Agent:    config.AgentConfig{PromptRoot: filepath.Join(root, "prompt")},
+		Sessions: config.SessionsConfig{DBPath: dbPath},
+		Principals: config.PrincipalsConfig{
+			Telegram: config.TelegramPrincipalsConfig{AdminUserIDs: []int64{1001}},
+		},
+		Governor: config.GovernorConfig{
+			Backend:        "native",
+			NativeProvider: "anthropic",
+		},
+		Providers: config.ProvidersConfig{
+			Anthropic: config.AnthropicConfig{
+				APIKey:    "sk-ant-main",
+				Model:     "claude-sonnet-4-6",
+				MaxTokens: 4096,
+			},
+		},
+	}
+
+	if err := syncRuntimeDurableAgentsAtStartup(cfg, store); err != nil {
+		t.Fatalf("syncRuntimeDurableAgentsAtStartup() err = %v", err)
+	}
+	_, err = store.DurableAgent("idolum-daily-review")
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("DurableAgent(%s) err = %v, want sql.ErrNoRows", "idolum-daily-review", err)
 	}
 }
 

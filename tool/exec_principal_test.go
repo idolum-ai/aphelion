@@ -138,7 +138,7 @@ func TestExecuteForDurableAgentUsesLocalRootsForExec(t *testing.T) {
 	memoryRoot := filepath.Join(tmp, "durable", "child-alpha", "memory")
 	if err := store.UpsertDurableAgent(core.DurableAgent{
 		AgentID:           "child-alpha",
-		ChannelKind:       "daily_review",
+		ChannelKind:       "scheduled_review",
 		Status:            "active",
 		LocalStorageRoots: []string{workspaceRoot, memoryRoot},
 		NetworkPolicy:     "restricted",
@@ -192,7 +192,7 @@ func TestExecuteForDurableAgentUsesDefaultLocalRootsWhenAgentHasNoConfiguredRoot
 		t.Fatalf("NewSQLiteStore() err = %v", err)
 	}
 	defer store.Close()
-	if err := store.UpsertDurableAgent(core.DurableAgent{AgentID: "child-beta", ChannelKind: "daily_review", Status: "active", BootstrapLLM: core.NodeLLMBootstrap{Backend: "codex", CodexAuthSource: "codex_cli", CodexHome: "/tmp/codex-home"}}); err != nil {
+	if err := store.UpsertDurableAgent(core.DurableAgent{AgentID: "child-beta", ChannelKind: "scheduled_review", Status: "active", BootstrapLLM: core.NodeLLMBootstrap{Backend: "codex", CodexAuthSource: "codex_cli", CodexHome: "/tmp/codex-home"}}); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
 
