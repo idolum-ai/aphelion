@@ -102,6 +102,8 @@ func (s *SQLiteStore) AcceptDurableAgentControlEnvelopeFromTailnetPeer(envelope 
 			enrollment.TailnetIdentity = identity
 		case storedStableNodeID != strings.TrimSpace(identity.StableNodeID):
 			return fmt.Errorf("durable agent control request came from a different tailnet node")
+		default:
+			enrollment.TailnetIdentity = identity
 		}
 		return nil
 	})

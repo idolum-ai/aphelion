@@ -34,15 +34,14 @@ func (h *HTTPHandler) controlPeerIdentity(r *http.Request, agentID string) (core
 	if err != nil {
 		return core.TailnetPeerIdentity{}, err
 	}
+	agent, err := h.store.DurableAgent(agentID)
+	if err != nil {
+		return core.TailnetPeerIdentity{}, err
+	}
 	if tailnetIdentityIsBound(enrollment.TailnetIdentity) {
 		if !tailnetStableNodeMatches(enrollment.TailnetIdentity, identity) {
 			return core.TailnetPeerIdentity{}, errors.New("durable agent control request came from a different tailnet node")
 		}
-		return identity, nil
-	}
-	agent, err := h.store.DurableAgent(agentID)
-	if err != nil {
-		return core.TailnetPeerIdentity{}, err
 	}
 	if err := validateTailnetPeerIdentityForAgent(*agent, identity); err != nil {
 		return core.TailnetPeerIdentity{}, err

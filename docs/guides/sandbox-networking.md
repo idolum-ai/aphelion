@@ -75,7 +75,10 @@ The helper accepts two operations:
 
 The helper requires `ip`, `nft`, `setpriv`, IPv4 forwarding, `CAP_NET_ADMIN`,
 and `CAP_SYS_ADMIN`. Those capabilities stay in the helper service. The user
-service talks over the Unix socket and keeps normal user privileges.
+service talks over the Unix socket and keeps normal user privileges. The helper
+must preserve Aphelion's configured sandbox path contract: writable and readonly
+roots are decided by the `bwrap` profile, not by making the operator home
+read-only in the helper service.
 
 Useful checks:
 
