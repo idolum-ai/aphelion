@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -26,13 +27,13 @@ var (
 	}
 )
 
-func durableAgentControlPlaneServer(cfg *config.Config, store *session.SQLiteStore) *http.Server {
+func durableAgentControlPlaneServer(cfg *config.Config, store *session.SQLiteStore) (*http.Server, error) {
 	if cfg == nil || store == nil || !cfg.DurableAgents.ControlPlane.Enabled {
-		return nil
+		return nil, nil
 	}
 	addr := strings.TrimSpace(cfg.DurableAgents.ControlPlane.Listen)
 	if addr == "" {
-		return nil
+		return nil, fmt.Errorf("durable_agents.control_plane.listen is required when durable_agents.control_plane.enabled = true")
 	}
 	handler := durableagent.NewHTTPHandler(store)
 	var tlsConfig *tls.Config
@@ -40,8 +41,7 @@ func durableAgentControlPlaneServer(cfg *config.Config, store *session.SQLiteSto
 		keyFile := strings.TrimSpace(cfg.DurableAgents.ControlPlane.KeyFile)
 		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 		if err != nil {
-			log.Printf("ERROR durable agent control plane tls load failed: %v", err)
-			return nil
+			return nil, fmt.Errorf("durable agent control plane tls load failed: %w", err)
 		}
 		tlsConfig = &tls.Config{
 			MinVersion:   tls.VersionTLS12,
@@ -53,7 +53,7 @@ func durableAgentControlPlaneServer(cfg *config.Config, store *session.SQLiteSto
 		Handler:           handler.HandlerWithBasePath(cfg.DurableAgents.ControlPlane.BasePath),
 		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: 10 * time.Second,
-	}
+	}, nil
 }
 
 func startDurableAgentControlPlane(ctx context.Context, server *http.Server) error {

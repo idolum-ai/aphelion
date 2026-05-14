@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,9 +34,40 @@ func TestDurableAgentControlPlaneServerDisabledByDefault(t *testing.T) {
 	}
 	defer store.Close()
 
-	server := durableAgentControlPlaneServer(&config.Config{}, store)
+	server, err := durableAgentControlPlaneServer(&config.Config{}, store)
+	if err != nil {
+		t.Fatalf("durableAgentControlPlaneServer() err = %v, want nil when disabled", err)
+	}
 	if server != nil {
 		t.Fatalf("durableAgentControlPlaneServer() = %#v, want nil when disabled", server)
+	}
+}
+
+func TestDurableAgentControlPlaneServerErrorsWhenEnabledWithoutListen(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	cfg := &config.Config{
+		DurableAgents: config.DurableAgentsConfig{
+			ControlPlane: config.DurableAgentControlPlaneConfig{
+				Enabled: true,
+			},
+		},
+	}
+	server, err := durableAgentControlPlaneServer(cfg, store)
+	if err == nil {
+		t.Fatal("durableAgentControlPlaneServer() err = nil, want listen validation error")
+	}
+	if server != nil {
+		t.Fatalf("durableAgentControlPlaneServer() = %#v, want nil on construction error", server)
+	}
+	if !strings.Contains(err.Error(), "durable_agents.control_plane.listen is required") {
+		t.Fatalf("durableAgentControlPlaneServer() err = %v, want listen validation error", err)
 	}
 }
 
@@ -56,7 +88,10 @@ func TestDurableAgentControlPlaneServerUsesConfiguredListenAddress(t *testing.T)
 			},
 		},
 	}
-	server := durableAgentControlPlaneServer(cfg, store)
+	server, err := durableAgentControlPlaneServer(cfg, store)
+	if err != nil {
+		t.Fatalf("durableAgentControlPlaneServer() err = %v", err)
+	}
 	if server == nil {
 		t.Fatal("durableAgentControlPlaneServer() = nil, want configured server")
 	}
@@ -86,7 +121,10 @@ func TestDurableAgentControlPlaneServerMountsConfiguredBasePath(t *testing.T) {
 			},
 		},
 	}
-	server := durableAgentControlPlaneServer(cfg, store)
+	server, err := durableAgentControlPlaneServer(cfg, store)
+	if err != nil {
+		t.Fatalf("durableAgentControlPlaneServer() err = %v", err)
+	}
 	if server == nil {
 		t.Fatal("durableAgentControlPlaneServer() = nil, want configured server")
 	}
@@ -127,12 +165,47 @@ func TestDurableAgentControlPlaneServerLoadsTLSCertificate(t *testing.T) {
 			},
 		},
 	}
-	server := durableAgentControlPlaneServer(cfg, store)
+	server, err := durableAgentControlPlaneServer(cfg, store)
+	if err != nil {
+		t.Fatalf("durableAgentControlPlaneServer() err = %v", err)
+	}
 	if server == nil {
 		t.Fatal("durableAgentControlPlaneServer() = nil, want configured tls server")
 	}
 	if server.TLSConfig == nil || len(server.TLSConfig.Certificates) != 1 {
 		t.Fatalf("server.TLSConfig = %#v, want loaded certificate", server.TLSConfig)
+	}
+}
+
+func TestDurableAgentControlPlaneServerFailsClosedOnTLSLoadError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store, err := session.NewSQLiteStore(filepath.Join(dir, "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	cfg := &config.Config{
+		DurableAgents: config.DurableAgentsConfig{
+			ControlPlane: config.DurableAgentControlPlaneConfig{
+				Enabled:  true,
+				Listen:   "127.0.0.1:8787",
+				CertFile: filepath.Join(dir, "missing-cert.pem"),
+				KeyFile:  filepath.Join(dir, "missing-key.pem"),
+			},
+		},
+	}
+	server, err := durableAgentControlPlaneServer(cfg, store)
+	if err == nil {
+		t.Fatal("durableAgentControlPlaneServer() err = nil, want tls load error")
+	}
+	if server != nil {
+		t.Fatalf("durableAgentControlPlaneServer() = %#v, want nil on tls load error", server)
+	}
+	if !strings.Contains(err.Error(), "durable agent control plane tls load failed") {
+		t.Fatalf("durableAgentControlPlaneServer() err = %v, want tls load context", err)
 	}
 }
 
@@ -157,7 +230,10 @@ func TestServeDurableAgentControlPlaneUsesTLSWhenConfigured(t *testing.T) {
 			},
 		},
 	}
-	server := durableAgentControlPlaneServer(cfg, store)
+	server, err := durableAgentControlPlaneServer(cfg, store)
+	if err != nil {
+		t.Fatalf("durableAgentControlPlaneServer() err = %v", err)
+	}
 	if server == nil {
 		t.Fatal("durableAgentControlPlaneServer() = nil, want tls server")
 	}

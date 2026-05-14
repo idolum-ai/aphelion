@@ -279,7 +279,11 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := startDurableAgentControlPlane(ctx, durableAgentControlPlaneServer(cfg, store)); err != nil {
+	controlPlaneServer, err := durableAgentControlPlaneServer(cfg, store)
+	if err != nil {
+		return err
+	}
+	if err := startDurableAgentControlPlane(ctx, controlPlaneServer); err != nil {
 		return err
 	}
 	if err := startTailnetParent(ctx, tailnetParent); err != nil {
