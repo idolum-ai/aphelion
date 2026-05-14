@@ -19,7 +19,7 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "memory", Description: "Review memory and set focus"},
 	{Command: "mission", Description: "Show and manage the Mission Ledger"},
 	{Command: "model", Description: "Show and change model slots"},
-	{Command: "auto", Description: "Show automation policy and approval controls"},
+	{Command: "auto", Description: "Show automation mode, approvals, and limits"},
 	{Command: "stop", Description: "Stop current work in this chat"},
 	{Command: "new", Description: "Start a fresh chat session context"},
 	{Command: "detach", Description: "Detach from pending work in this chat"},

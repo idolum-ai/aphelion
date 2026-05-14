@@ -129,16 +129,18 @@ type RestartHealthSnapshot struct {
 }
 
 type AutoApprovalStatusSnapshot struct {
-	Active      bool
-	LeaseID     string
-	AdminUserID int64
-	Scope       string
-	UsedCount   int
-	MaxUses     int
-	Reason      string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	ExpiresAt   time.Time
+	Active        bool
+	Usable        bool
+	BlockedReason string
+	LeaseID       string
+	AdminUserID   int64
+	Scope         string
+	UsedCount     int
+	MaxUses       int
+	Reason        string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	ExpiresAt     time.Time
 }
 
 type ToolLifecycleStatusSnapshot struct {
@@ -320,8 +322,6 @@ type AutonomyStatusSnapshot struct {
 	ActiveOverrideMode   string
 	ActiveOverrideActor  string
 	ActiveOverrideScope  string
-	ActiveOverrideUsed   int
-	ActiveOverrideMax    int
 	ActiveOverrideExpiry time.Time
 	Source               string
 	AuthorityBehavior    string

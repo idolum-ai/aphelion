@@ -190,7 +190,7 @@ func (c telegramCommandControl) StatusSystem(senderID int64) (core.SystemStatusS
 
 func (c telegramCommandControl) AutonomyStatus(chatID int64, senderID int64) (core.AutonomyStatusSnapshot, error) {
 	if !c.CanRestart(senderID) {
-		return core.AutonomyStatusSnapshot{}, fmt.Errorf("autonomy policy view denied")
+		return core.AutonomyStatusSnapshot{}, fmt.Errorf("auto mode view denied")
 	}
 	if c.rt == nil {
 		policy := config.EffectiveAutonomyPolicy(nil)
@@ -201,7 +201,7 @@ func (c telegramCommandControl) AutonomyStatus(chatID int64, senderID int64) (co
 			AllowLiveOverrides:  policy.AllowLiveOverrides,
 			MaxOverrideDuration: policy.MaxOverrideDuration,
 			Source:              "default",
-			AuthorityBehavior:   "existing proposal and approval flows",
+			AuthorityBehavior:   "approval grants require an open auto mode gate",
 		}, nil
 	}
 	return c.rt.ChatAutonomyStatusSnapshot(chatID, senderID)

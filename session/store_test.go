@@ -97,6 +97,61 @@ func TestOperatorAutoApprovalLeaseLifecycle(t *testing.T) {
 	}
 }
 
+func TestOperatorAutonomyOverrideLifecycle(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)
+	created, err := store.CreateOperatorAutonomyOverride(OperatorAutonomyOverride{
+		ID:          "mode-test",
+		AdminUserID: 1001,
+		ChatID:      7002,
+		Mode:        "leased",
+		Scope:       "deploy",
+		Reason:      "bounded release",
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(15 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("CreateOperatorAutonomyOverride() err = %v", err)
+	}
+	if created.Scope != OperatorAutoApprovalScopeDeploy || created.Mode != "leased" || !created.ActiveAt(now) {
+		t.Fatalf("created override = %#v, want active deploy leased override", created)
+	}
+
+	active, err := store.ActiveOperatorAutonomyOverrides(7002, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutonomyOverrides() err = %v", err)
+	}
+	if len(active) != 1 || active[0].ID != "mode-test" {
+		t.Fatalf("active overrides = %#v, want mode-test", active)
+	}
+	latest, ok, err := store.LatestOperatorAutonomyOverride(7002, 1001)
+	if err != nil || !ok {
+		t.Fatalf("LatestOperatorAutonomyOverride() = override:%#v ok:%v err:%v, want ok", latest, ok, err)
+	}
+	if latest.ID != "mode-test" {
+		t.Fatalf("latest override = %#v, want mode-test", latest)
+	}
+
+	revoked, err := store.RevokeOperatorAutonomyOverrides(7002, 1001, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("RevokeOperatorAutonomyOverrides() err = %v", err)
+	}
+	if len(revoked) != 1 || revoked[0].ID != "mode-test" {
+		t.Fatalf("revoked = %#v, want mode-test", revoked)
+	}
+	active, err = store.ActiveOperatorAutonomyOverrides(7002, now.Add(3*time.Minute))
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutonomyOverrides(after revoke) err = %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active overrides after revoke = %#v, want none", active)
+	}
+}
+
 func TestReviewEventsPendingOrderingAndFiltering(t *testing.T) {
 	t.Parallel()
 

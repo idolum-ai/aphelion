@@ -547,6 +547,9 @@ func TestMaterializePlanLeaseUsesAutoApprovalInsteadOfSuppressingPrompt(t *testi
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	if _, err := rt.ConfigureAutonomy(context.Background(), 9030, 1001, "leased 15m all"); err != nil {
+		t.Fatalf("ConfigureAutonomy() err = %v", err)
+	}
 	if _, err := rt.ConfigureAutoApproval(context.Background(), 9030, 1001, "15m all"); err != nil {
 		t.Fatalf("ConfigureAutoApproval() err = %v", err)
 	}

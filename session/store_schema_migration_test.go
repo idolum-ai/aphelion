@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestMigratesSchemaV43ToV44(t *testing.T) {
+func TestMigratesSchemaV43ToCurrent(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "sessions-v43.db")
@@ -89,6 +89,112 @@ func TestMigratesSchemaV43ToV44(t *testing.T) {
 	assertSchemaVersion(t, reopened.db, schemaVersion)
 	if _, err := reopened.DurableAgentRemoteEnrollment("family-group"); err != nil {
 		t.Fatalf("DurableAgentRemoteEnrollment() after migrated reopen err = %v", err)
+	}
+}
+
+func TestMigratesSchemaV44ToV45AutonomyOverrides(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v44.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v44 db: %v", err)
+	}
+	createSchemaV44AutoApprovalFixture(t, db)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v44 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v44) err = %v", err)
+	}
+	defer store.Close()
+
+	assertSchemaVersion(t, store.db, schemaVersion)
+	activeModes, err := store.ActiveOperatorAutonomyOverrides(99170, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutonomyOverrides() err = %v", err)
+	}
+	if len(activeModes) != 1 {
+		t.Fatalf("active autonomy overrides = %#v, want one migrated active grant", activeModes)
+	}
+	if activeModes[0].ID != "mode-auto-active" || activeModes[0].Mode != "leased" || activeModes[0].Scope != OperatorAutoApprovalScopeWorkspace {
+		t.Fatalf("active autonomy override = %#v, want copied active workspace gate", activeModes[0])
+	}
+	activeApprovals, err := store.ActiveOperatorAutoApprovalLeases(99170, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(activeApprovals) != 1 || activeApprovals[0].ID != "auto-active" {
+		t.Fatalf("active approvals = %#v, want original active approval preserved", activeApprovals)
+	}
+	if expired, ok, err := store.OperatorAutoApprovalLease("auto-expired"); err != nil || !ok || expired.ID != "auto-expired" {
+		t.Fatalf("expired approval = lease:%#v ok:%v err:%v, want preserved approval history", expired, ok, err)
+	}
+}
+
+func createSchemaV44AutoApprovalFixture(t *testing.T, db *sql.DB) {
+	t.Helper()
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (44)`,
+		`CREATE TABLE operator_auto_approvals (
+			lease_id TEXT PRIMARY KEY,
+			admin_user_id INTEGER NOT NULL DEFAULT 0,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			scope TEXT NOT NULL DEFAULT 'all',
+			reason TEXT NOT NULL DEFAULT '',
+			max_uses INTEGER NOT NULL DEFAULT 0,
+			used_count INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			expires_at TEXT NOT NULL,
+			revoked_at TEXT,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("exec v44 fixture stmt: %v", err)
+		}
+	}
+
+	now := time.Now().UTC()
+	rows := []OperatorAutoApprovalLease{
+		{
+			ID:          "auto-active",
+			AdminUserID: 1001,
+			ChatID:      99170,
+			Scope:       OperatorAutoApprovalScopeWorkspace,
+			Reason:      "active fixture",
+			MaxUses:     2,
+			UsedCount:   1,
+			CreatedAt:   now.Add(-time.Minute),
+			ExpiresAt:   now.Add(time.Hour),
+			UpdatedAt:   now.Add(-time.Minute),
+		},
+		{
+			ID:          "auto-expired",
+			AdminUserID: 1001,
+			ChatID:      99170,
+			Scope:       OperatorAutoApprovalScopeDeploy,
+			Reason:      "expired fixture",
+			CreatedAt:   now.Add(-2 * time.Hour),
+			ExpiresAt:   now.Add(-time.Hour),
+			UpdatedAt:   now.Add(-time.Hour),
+		},
+	}
+	for _, row := range rows {
+		if _, err := db.Exec(`
+			INSERT INTO operator_auto_approvals(
+				lease_id, admin_user_id, chat_id, scope, reason, max_uses, used_count,
+				created_at, expires_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, row.ID, row.AdminUserID, row.ChatID, row.Scope, row.Reason, row.MaxUses, row.UsedCount, row.CreatedAt.Format(time.RFC3339Nano), row.ExpiresAt.Format(time.RFC3339Nano), row.UpdatedAt.Format(time.RFC3339Nano)); err != nil {
+			t.Fatalf("insert v44 operator auto approval fixture: %v", err)
+		}
 	}
 }
 

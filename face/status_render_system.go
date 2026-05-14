@@ -87,11 +87,6 @@ func renderAutonomyStatusBlock(snapshot core.AutonomyStatusSnapshot) []string {
 		if scope := strings.TrimSpace(snapshot.ActiveOverrideScope); scope != "" {
 			overrideLine += " scope=" + scope
 		}
-		if snapshot.ActiveOverrideMax > 0 {
-			overrideLine += fmt.Sprintf(" used=%d/%d", snapshot.ActiveOverrideUsed, snapshot.ActiveOverrideMax)
-		} else {
-			overrideLine += fmt.Sprintf(" used=%d", snapshot.ActiveOverrideUsed)
-		}
 		if !snapshot.ActiveOverrideExpiry.IsZero() {
 			overrideLine += " expires_at=" + snapshot.ActiveOverrideExpiry.UTC().Format(time.RFC3339)
 		}

@@ -60,9 +60,6 @@ func (r *Runtime) ConfigureAutoApproval(ctx context.Context, chatID int64, admin
 		)
 		return renderOperatorAutoApprovalRevoked(revoked, now), nil
 	case "enable":
-		if err := r.validateAutonomyLiveOverride("leased", spec.Duration); err != nil {
-			return "", err
-		}
 		lease := session.OperatorAutoApprovalLease{
 			ID:          newOperatorAutoApprovalLeaseID(chatID, adminUserID, now),
 			AdminUserID: adminUserID,
@@ -82,7 +79,11 @@ func (r *Runtime) ConfigureAutoApproval(ctx context.Context, chatID int64, admin
 			return "", err
 		}
 		r.recordOperatorAutoApprovalEvent(chatID, core.ExecutionEventAutoApprovalGranted, "active", created, nil)
-		return renderOperatorAutoApprovalEnabled(created, now), nil
+		blocked, err := r.operatorAutoApprovalBlockedReason(chatID, adminUserID, created.Scope, now)
+		if err != nil {
+			return "", err
+		}
+		return renderOperatorAutoApprovalEnabled(created, now, blocked), nil
 	default:
 		return "", fmt.Errorf("unknown auto-approval action %q", action)
 	}
@@ -216,10 +217,14 @@ func (r *Runtime) consumeOperatorAutoApproval(ctx context.Context, req operatorA
 	if r == nil || r.store == nil || req.ChatID == 0 {
 		return session.OperatorAutoApprovalLease{}, false, nil
 	}
-	if err := r.validateAutonomyLiveOverride("leased", 0); err != nil {
+	now := time.Now().UTC()
+	gate, ok, err := r.operatorAutoModeGate(req.ChatID, 0, now)
+	if err != nil || !ok {
+		return session.OperatorAutoApprovalLease{}, false, err
+	}
+	if !operatorAutoModeScopeAllows(gate.Scope, req) {
 		return session.OperatorAutoApprovalLease{}, false, nil
 	}
-	now := time.Now().UTC()
 	leases, err := r.store.ActiveOperatorAutoApprovalLeases(req.ChatID, now)
 	if err != nil {
 		return session.OperatorAutoApprovalLease{}, false, err
@@ -236,13 +241,15 @@ func (r *Runtime) consumeOperatorAutoApproval(ctx context.Context, req operatorA
 			continue
 		}
 		r.recordOperatorAutoApprovalEvent(req.ChatID, core.ExecutionEventAutoApprovalUsed, "used", used, map[string]any{
-			"request_kind": strings.TrimSpace(req.Kind),
-			"choice":       strings.TrimSpace(req.Choice),
-			"decision_id":  strings.TrimSpace(req.DecisionID),
-			"proposal_id":  strings.TrimSpace(req.ProposalID),
-			"summary":      truncatePreview(strings.TrimSpace(req.Summary), 220),
-			"details":      truncatePreview(strings.TrimSpace(req.Details), 220),
-			"work_mode":    strings.TrimSpace(string(req.WorkMode)),
+			"auto_mode_source": strings.TrimSpace(gate.Source),
+			"auto_mode_scope":  strings.TrimSpace(gate.Scope),
+			"request_kind":     strings.TrimSpace(req.Kind),
+			"choice":           strings.TrimSpace(req.Choice),
+			"decision_id":      strings.TrimSpace(req.DecisionID),
+			"proposal_id":      strings.TrimSpace(req.ProposalID),
+			"summary":          truncatePreview(strings.TrimSpace(req.Summary), 220),
+			"details":          truncatePreview(strings.TrimSpace(req.Details), 220),
+			"work_mode":        strings.TrimSpace(string(req.WorkMode)),
 		})
 		_ = ctx
 		return used, true, nil
@@ -291,7 +298,11 @@ func (r *Runtime) renderOperatorAutoApprovalStatus(chatID int64, adminUserID int
 	}
 	for _, lease := range leases {
 		if lease.AdminUserID == adminUserID && lease.ActiveAt(now) {
-			return renderOperatorAutoApprovalStatusActive(lease, now), nil
+			blocked, err := r.operatorAutoApprovalBlockedReason(chatID, adminUserID, lease.Scope, now)
+			if err != nil {
+				return "", err
+			}
+			return renderOperatorAutoApprovalStatusActive(lease, now, blocked), nil
 		}
 	}
 	latest, ok, err := r.store.LatestOperatorAutoApprovalLease(chatID, adminUserID)
@@ -302,6 +313,20 @@ func (r *Runtime) renderOperatorAutoApprovalStatus(chatID int64, adminUserID int
 		return "Auto approvals are inactive for this chat.", nil
 	}
 	return renderOperatorAutoApprovalStatusInactive(latest, now), nil
+}
+
+func (r *Runtime) operatorAutoApprovalBlockedReason(chatID int64, adminUserID int64, approvalScope string, now time.Time) (string, error) {
+	gate, ok, err := r.operatorAutoModeGate(chatID, adminUserID, now)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "open /auto mode before this grant can answer prompts", nil
+	}
+	if !operatorAutoModeScopeIntersects(gate.Scope, approvalScope) {
+		return "current auto mode allows " + operatorAutoApprovalScopeLabel(gate.Scope), nil
+	}
+	return "", nil
 }
 
 type operatorAutoApprovalCommandSpec struct {
@@ -535,7 +560,7 @@ func operatorAutoApprovalRevokedEventPayload(leases []session.OperatorAutoApprov
 	return payload
 }
 
-func renderOperatorAutoApprovalEnabled(lease session.OperatorAutoApprovalLease, now time.Time) string {
+func renderOperatorAutoApprovalEnabled(lease session.OperatorAutoApprovalLease, now time.Time, blockedReason string) string {
 	lease = session.NormalizeOperatorAutoApprovalLease(lease)
 	details := []string{
 		"Scope: " + operatorAutoApprovalScopeLabel(lease.Scope) + ".",
@@ -547,16 +572,21 @@ func renderOperatorAutoApprovalEnabled(lease session.OperatorAutoApprovalLease, 
 	if reason := strings.TrimSpace(lease.Reason); reason != "" {
 		details = append(details, "Reason: "+reason)
 	}
+	why := "Eligible approval prompts in this chat may be answered automatically until the grant expires or is spent."
+	if blockedReason = strings.TrimSpace(blockedReason); blockedReason != "" {
+		details = append(details, "Mode: blocked - "+blockedReason+".")
+		why = "This grant is recorded, but it will not be spent until auto mode allows matching prompts."
+	}
 	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title:   "Auto approvals",
 		State:   "enabled",
-		Why:     "Eligible approval prompts in this chat may be answered automatically until the grant expires or is spent.",
+		Why:     why,
 		Next:    "Use /auto approvals off to revoke it.",
 		Details: details,
 	})
 }
 
-func renderOperatorAutoApprovalStatusActive(lease session.OperatorAutoApprovalLease, now time.Time) string {
+func renderOperatorAutoApprovalStatusActive(lease session.OperatorAutoApprovalLease, now time.Time, blockedReason string) string {
 	lease = session.NormalizeOperatorAutoApprovalLease(lease)
 	details := []string{
 		"Scope: " + operatorAutoApprovalScopeLabel(lease.Scope) + ".",
@@ -569,10 +599,15 @@ func renderOperatorAutoApprovalStatusActive(lease session.OperatorAutoApprovalLe
 	if lease.Reason != "" {
 		details = append(details, "Reason: "+lease.Reason)
 	}
+	why := "Eligible approval prompts in this chat can use this bounded grant."
+	if blockedReason = strings.TrimSpace(blockedReason); blockedReason != "" {
+		details = append(details, "Mode: blocked - "+blockedReason+".")
+		why = "This grant is active, but it will not be spent until auto mode allows matching prompts."
+	}
 	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title:   "Auto approvals",
 		State:   "active",
-		Why:     "Eligible approval prompts in this chat can use this bounded grant.",
+		Why:     why,
 		Next:    "Use /auto approvals off to revoke it.",
 		Details: details,
 	})

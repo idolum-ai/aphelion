@@ -290,14 +290,14 @@ func renderAutoApprovalCommandError(err error) string {
 
 func renderAutonomyCommandError(err error) string {
 	if err == nil {
-		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Auto policy", State: "not applied", Next: "Check the command shape and retry."})
+		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Auto mode", State: "not applied", Next: "Check the command shape and retry."})
 	}
 	msg := strings.TrimSpace(err.Error())
 	if msg == "" {
-		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Auto policy", State: "not applied", Next: "Check the command shape and retry."})
+		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Auto mode", State: "not applied", Next: "Check the command shape and retry."})
 	}
 	return face.RenderOperatorPanel(face.OperatorPanel{
-		Title: "Auto policy",
+		Title: "Auto mode",
 		State: "not applied",
 		Why:   msg,
 		Next:  "Adjust the duration, mode, scope, or config ceiling and retry.",

@@ -16,8 +16,9 @@ const (
 	autoCallbackPrefix = "auto:"
 
 	autoSurfaceHome      = "home"
-	autoSurfacePolicy    = "policy"
+	autoSurfaceMode      = "mode"
 	autoSurfaceApprovals = "approvals"
+	autoSurfaceLimits    = "limits"
 
 	autoActionShow    = "show"
 	autoActionRefresh = "refresh"
@@ -25,18 +26,18 @@ const (
 
 const staleAutoCallbackText = "This auto action is no longer available. Run /auto again."
 
-type operatorPolicyPreset struct {
+type operatorAutoPreset struct {
 	Action      string
 	Label       string
 	AutoApprove string
-	Autonomy    string
+	Mode        string
 }
 
-var operatorPolicyPresets = []operatorPolicyPreset{
-	{Action: "off", Label: "Off", AutoApprove: "off", Autonomy: "off"},
-	{Action: "work15", Label: "15m Work", AutoApprove: "15m workspace uses=2", Autonomy: "leased 15m workspace uses=2"},
-	{Action: "deploy15", Label: "15m Deploy", AutoApprove: "15m deploy uses=1", Autonomy: "leased 15m deploy uses=1"},
-	{Action: "all15", Label: "15m All", AutoApprove: "15m all uses=1", Autonomy: "leased 15m all uses=1"},
+var operatorAutoPresets = []operatorAutoPreset{
+	{Action: "off", Label: "Off", AutoApprove: "off", Mode: "off"},
+	{Action: "work15", Label: "15m Work", AutoApprove: "15m workspace uses=2", Mode: "leased 15m workspace"},
+	{Action: "deploy15", Label: "15m Deploy", AutoApprove: "15m deploy uses=1", Mode: "leased 15m deploy"},
+	{Action: "all15", Label: "15m All", AutoApprove: "15m all uses=1", Mode: "leased 15m all"},
 }
 
 func handleTelegramAutoCommand(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {
@@ -44,13 +45,13 @@ func handleTelegramAutoCommand(ctx context.Context, sender commandSender, router
 	switch target {
 	case "", "home", autoActionRefresh:
 		return sendAutoHomePanel(ctx, sender, msg)
-	case autoSurfacePolicy:
+	case autoSurfaceMode:
 		if strings.TrimSpace(rest) == "" || strings.EqualFold(strings.TrimSpace(rest), "status") {
-			return sendAutoPolicyPanel(ctx, sender, router, msg)
+			return sendAutoModePanel(ctx, sender, router, msg)
 		}
 		configured, err := router.ConfigureAutonomy(ctx, msg.ChatID, msg.SenderID, rest)
 		if err != nil {
-			log.Printf("WARN auto policy command rejected chat_id=%d sender_id=%d err=%v", msg.ChatID, msg.SenderID, err)
+			log.Printf("WARN auto mode command rejected chat_id=%d sender_id=%d err=%v", msg.ChatID, msg.SenderID, err)
 			return sendAutoCommandText(ctx, sender, msg, renderAutonomyCommandError(err))
 		}
 		return sendAutoCommandText(ctx, sender, msg, configured)
@@ -64,6 +65,8 @@ func handleTelegramAutoCommand(ctx context.Context, sender commandSender, router
 			return sendAutoCommandText(ctx, sender, msg, renderAutoApprovalCommandError(err))
 		}
 		return sendAutoCommandText(ctx, sender, msg, configured)
+	case "limit", autoSurfaceLimits:
+		return sendAutoLimitsPanel(ctx, sender, router, msg)
 	default:
 		return sendAutoCommandText(ctx, sender, msg, renderAutoCommandUsage(target))
 	}
@@ -83,13 +86,13 @@ func sendAutoHomePanel(ctx context.Context, sender commandSender, msg core.Inbou
 	return true, err
 }
 
-func sendAutoPolicyPanel(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {
+func sendAutoModePanel(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {
 	snapshot, err := router.AutonomyStatus(msg.ChatID, msg.SenderID)
 	if err != nil {
 		return true, err
 	}
 	text := face.RenderTelegramAutonomyStatus(snapshot)
-	_, err = sender.SendInlineKeyboard(ctx, msg.ChatID, text, autoPolicyRows(), replyToMessageID(msg.MessageID))
+	_, err = sender.SendInlineKeyboard(ctx, msg.ChatID, text, autoModeRows(), replyToMessageID(msg.MessageID))
 	return true, err
 }
 
@@ -103,15 +106,26 @@ func sendAutoApprovalsPanel(ctx context.Context, sender commandSender, router co
 	return true, sendErr
 }
 
+func sendAutoLimitsPanel(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {
+	snapshot, err := router.AutonomyStatus(msg.ChatID, msg.SenderID)
+	if err != nil {
+		return true, err
+	}
+	text := face.RenderTelegramAutoLimits(snapshot)
+	_, err = sender.SendInlineKeyboard(ctx, msg.ChatID, text, autoLimitsRows(), replyToMessageID(msg.MessageID))
+	return true, err
+}
+
 func renderAutoHomePanel() string {
 	return face.RenderOperatorPanel(face.OperatorPanel{
 		Title: "Auto",
 		State: "ready",
-		Why:   "Authority controls are split by policy and prompt approvals.",
-		Next:  "Open policy for autonomy leases or approvals for prompt leases.",
+		Why:   "Authority controls are split by mode gates, approval grants, and configured limits.",
+		Next:  "Open mode for the gate, approvals for spendable prompts, or limits for read-only config.",
 		Details: []string{
-			"Policy changes the current autonomy override within the configured ceiling.",
+			"Mode opens or closes the temporary automation gate.",
 			"Approvals grant bounded automatic approval for eligible admin prompts.",
+			"Limits show the configured default, ceiling, and maximum live mode duration.",
 		},
 	})
 }
@@ -126,15 +140,16 @@ func renderAutoCommandUsage(target string) string {
 		Title: "Auto",
 		State: "not applied",
 		Why:   why,
-		Next:  "Use /auto policy, /auto approvals, /auto policy leased <duration> <scope>, or /auto approvals <duration> <scope>.",
+		Next:  "Use /auto mode, /auto approvals, /auto limits, /auto mode leased <duration> <scope>, or /auto approvals <duration> <scope>.",
 	})
 }
 
 func autoHomeRows() [][]telegram.InlineButton {
 	return [][]telegram.InlineButton{
 		{
-			autoButton(autoSurfacePolicy, autoActionShow, "Policy"),
+			autoButton(autoSurfaceMode, autoActionShow, "Mode"),
 			autoButton(autoSurfaceApprovals, autoActionShow, "Approvals"),
+			autoButton(autoSurfaceLimits, autoActionShow, "Limits"),
 		},
 		{
 			autoButton(autoSurfaceHome, autoActionRefresh, "Refresh"),
@@ -142,33 +157,42 @@ func autoHomeRows() [][]telegram.InlineButton {
 	}
 }
 
-func autoPolicyRows() [][]telegram.InlineButton {
-	return operatorPolicyRows(autoSurfacePolicy)
+func autoModeRows() [][]telegram.InlineButton {
+	return operatorAutoPresetRows(autoSurfaceMode)
 }
 
 func autoApprovalsRows() [][]telegram.InlineButton {
-	return operatorPolicyRows(autoSurfaceApprovals)
+	return operatorAutoPresetRows(autoSurfaceApprovals)
 }
 
-func operatorPolicyRows(surface string) [][]telegram.InlineButton {
+func autoLimitsRows() [][]telegram.InlineButton {
+	return [][]telegram.InlineButton{
+		{
+			autoButton(autoSurfaceHome, autoActionShow, "Back"),
+			autoButton(autoSurfaceLimits, autoActionRefresh, "Refresh"),
+		},
+	}
+}
+
+func operatorAutoPresetRows(surface string) [][]telegram.InlineButton {
 	return [][]telegram.InlineButton{
 		{
 			autoButton(autoSurfaceHome, autoActionShow, "Back"),
 			autoButton(surface, autoActionRefresh, "Refresh"),
 		},
 		{
-			operatorPolicyButton(surface, "off"),
+			operatorAutoPresetButton(surface, "off"),
 		},
 		{
-			operatorPolicyButton(surface, "work15"),
-			operatorPolicyButton(surface, "deploy15"),
-			operatorPolicyButton(surface, "all15"),
+			operatorAutoPresetButton(surface, "work15"),
+			operatorAutoPresetButton(surface, "deploy15"),
+			operatorAutoPresetButton(surface, "all15"),
 		},
 	}
 }
 
-func operatorPolicyButton(surface string, action string) telegram.InlineButton {
-	preset, ok := operatorPolicyPresetForAction(action)
+func operatorAutoPresetButton(surface string, action string) telegram.InlineButton {
+	preset, ok := operatorAutoPresetForAction(action)
 	if !ok {
 		return autoButton(surface, action, strings.TrimSpace(action))
 	}
@@ -212,7 +236,7 @@ func decodeAutoCallbackData(data string) (string, string, bool) {
 
 func validAutoSurface(surface string) bool {
 	switch strings.TrimSpace(surface) {
-	case autoSurfaceHome, autoSurfacePolicy, autoSurfaceApprovals:
+	case autoSurfaceHome, autoSurfaceMode, autoSurfaceApprovals, autoSurfaceLimits:
 		return true
 	default:
 		return false
@@ -224,7 +248,7 @@ func validAutoAction(action string) bool {
 	case autoActionShow, autoActionRefresh:
 		return true
 	default:
-		_, ok := operatorPolicyPresetForAction(action)
+		_, ok := operatorAutoPresetForAction(action)
 		return ok
 	}
 }
@@ -272,18 +296,21 @@ func renderAutoCallbackResult(ctx context.Context, router commandRouter, chatID 
 	switch surface {
 	case autoSurfaceHome:
 		return renderAutoHomePanel(), autoHomeRows(), nil
-	case autoSurfacePolicy:
-		text, err := renderAutoPolicyCallbackText(ctx, router, chatID, senderID, action)
-		return text, autoPolicyRows(), err
+	case autoSurfaceMode:
+		text, err := renderAutoModeCallbackText(ctx, router, chatID, senderID, action)
+		return text, autoModeRows(), err
 	case autoSurfaceApprovals:
 		text, err := renderAutoApprovalsCallbackText(ctx, router, chatID, senderID, action)
 		return text, autoApprovalsRows(), err
+	case autoSurfaceLimits:
+		text, err := renderAutoLimitsCallbackText(router, chatID, senderID)
+		return text, autoLimitsRows(), err
 	default:
 		return renderAutoHomePanel(), autoHomeRows(), nil
 	}
 }
 
-func renderAutoPolicyCallbackText(ctx context.Context, router commandRouter, chatID int64, senderID int64, action string) (string, error) {
+func renderAutoModeCallbackText(ctx context.Context, router commandRouter, chatID int64, senderID int64, action string) (string, error) {
 	switch action {
 	case autoActionShow, autoActionRefresh:
 		snapshot, err := router.AutonomyStatus(chatID, senderID)
@@ -292,16 +319,24 @@ func renderAutoPolicyCallbackText(ctx context.Context, router commandRouter, cha
 		}
 		return face.RenderTelegramAutonomyStatus(snapshot), nil
 	default:
-		preset, ok := operatorPolicyPresetForAction(action)
+		preset, ok := operatorAutoPresetForAction(action)
 		if !ok {
 			return renderAutonomyCommandError(nil), nil
 		}
-		text, err := router.ConfigureAutonomy(ctx, chatID, senderID, preset.Autonomy)
+		text, err := router.ConfigureAutonomy(ctx, chatID, senderID, preset.Mode)
 		if err != nil {
 			return renderAutonomyCommandError(err), nil
 		}
 		return text, nil
 	}
+}
+
+func renderAutoLimitsCallbackText(router commandRouter, chatID int64, senderID int64) (string, error) {
+	snapshot, err := router.AutonomyStatus(chatID, senderID)
+	if err != nil {
+		return "", err
+	}
+	return face.RenderTelegramAutoLimits(snapshot), nil
 }
 
 func renderAutoApprovalsCallbackText(ctx context.Context, router commandRouter, chatID int64, senderID int64, action string) (string, error) {
@@ -313,7 +348,7 @@ func renderAutoApprovalsCallbackText(ctx context.Context, router commandRouter, 
 		}
 		return text, nil
 	default:
-		preset, ok := operatorPolicyPresetForAction(action)
+		preset, ok := operatorAutoPresetForAction(action)
 		if !ok {
 			return renderAutoApprovalCommandError(nil), nil
 		}
@@ -325,12 +360,12 @@ func renderAutoApprovalsCallbackText(ctx context.Context, router commandRouter, 
 	}
 }
 
-func operatorPolicyPresetForAction(action string) (operatorPolicyPreset, bool) {
+func operatorAutoPresetForAction(action string) (operatorAutoPreset, bool) {
 	action = strings.TrimSpace(action)
-	for _, preset := range operatorPolicyPresets {
+	for _, preset := range operatorAutoPresets {
 		if preset.Action == action {
 			return preset, true
 		}
 	}
-	return operatorPolicyPreset{}, false
+	return operatorAutoPreset{}, false
 }

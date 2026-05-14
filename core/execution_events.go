@@ -79,6 +79,8 @@ const (
 	ExecutionEventAutoApprovalGranted = "auto_approval.granted"
 	ExecutionEventAutoApprovalUsed    = "auto_approval.used"
 	ExecutionEventAutoApprovalRevoked = "auto_approval.revoked"
+	ExecutionEventAutoModeEnabled     = "auto_mode.enabled"
+	ExecutionEventAutoModeRevoked     = "auto_mode.revoked"
 
 	ExecutionEventAuthorityFindingReviewed = "authority.finding.reviewed"
 

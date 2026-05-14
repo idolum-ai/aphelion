@@ -207,6 +207,9 @@ func TestMaterializeEscalatedOperatorPhaseShowsManualApprovalDespiteAutoApproval
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	if _, err := rt.ConfigureAutonomy(context.Background(), 9024, 1001, "leased 15m all"); err != nil {
+		t.Fatalf("ConfigureAutonomy() err = %v", err)
+	}
 	if _, err := rt.ConfigureAutoApproval(context.Background(), 9024, 1001, "15m all live auth-status check"); err != nil {
 		t.Fatalf("ConfigureAutoApproval() err = %v", err)
 	}
@@ -298,6 +301,9 @@ func TestMaterializeResourceOwnerMailboxConsentShowsManualApproval(t *testing.T)
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutonomy(context.Background(), 9029, 1001, "leased 15m all"); err != nil {
+		t.Fatalf("ConfigureAutonomy() err = %v", err)
 	}
 	if _, err := rt.ConfigureAutoApproval(context.Background(), 9029, 1001, "15m all"); err != nil {
 		t.Fatalf("ConfigureAutoApproval() err = %v", err)

@@ -66,6 +66,9 @@ func (r *Runtime) StatusDiagnostics(chatID int64) ([]string, error) {
 	}
 	if auto := chatSnapshot.AutoApproval; auto != nil && auto.Active {
 		line := "Auto approvals: active"
+		if !auto.Usable && strings.TrimSpace(auto.BlockedReason) != "" {
+			line += " but blocked by auto mode"
+		}
 		if scope := strings.TrimSpace(auto.Scope); scope != "" {
 			line += " (" + scope + ")"
 		}
@@ -76,6 +79,9 @@ func (r *Runtime) StatusDiagnostics(chatID int64) ([]string, error) {
 			line += fmt.Sprintf(", used %d/%d", auto.UsedCount, auto.MaxUses)
 		} else {
 			line += fmt.Sprintf(", used %d", auto.UsedCount)
+		}
+		if !auto.Usable && strings.TrimSpace(auto.BlockedReason) != "" {
+			line += ", " + strings.TrimSpace(auto.BlockedReason)
 		}
 		lines = append(lines, line+".")
 	}
@@ -165,9 +171,6 @@ func (r *Runtime) autoApprovalStatusSnapshot(chatID int64, now time.Time) (*core
 		now = time.Now().UTC()
 	}
 	now = now.UTC()
-	if err := r.validateAutonomyLiveOverride("leased", 0); err != nil {
-		return nil, nil
-	}
 	leases, err := r.store.ActiveOperatorAutoApprovalLeases(chatID, now)
 	if err != nil {
 		return nil, err
@@ -186,17 +189,23 @@ func (r *Runtime) autoApprovalStatusSnapshot(chatID int64, now time.Time) (*core
 	if selected == nil {
 		return nil, nil
 	}
+	blocked, err := r.operatorAutoApprovalBlockedReason(chatID, selected.AdminUserID, selected.Scope, now)
+	if err != nil {
+		return nil, err
+	}
 	return &core.AutoApprovalStatusSnapshot{
-		Active:      true,
-		LeaseID:     strings.TrimSpace(selected.ID),
-		AdminUserID: selected.AdminUserID,
-		Scope:       strings.TrimSpace(selected.Scope),
-		UsedCount:   selected.UsedCount,
-		MaxUses:     selected.MaxUses,
-		Reason:      strings.TrimSpace(selected.Reason),
-		CreatedAt:   selected.CreatedAt,
-		UpdatedAt:   selected.UpdatedAt,
-		ExpiresAt:   selected.ExpiresAt,
+		Active:        true,
+		Usable:        strings.TrimSpace(blocked) == "",
+		BlockedReason: strings.TrimSpace(blocked),
+		LeaseID:       strings.TrimSpace(selected.ID),
+		AdminUserID:   selected.AdminUserID,
+		Scope:         strings.TrimSpace(selected.Scope),
+		UsedCount:     selected.UsedCount,
+		MaxUses:       selected.MaxUses,
+		Reason:        strings.TrimSpace(selected.Reason),
+		CreatedAt:     selected.CreatedAt,
+		UpdatedAt:     selected.UpdatedAt,
+		ExpiresAt:     selected.ExpiresAt,
 	}, nil
 }
 

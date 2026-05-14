@@ -25,14 +25,14 @@ func TestHandleTelegramCommandAutonomyAdmin(t *testing.T) {
 			AllowLiveOverrides:  true,
 			MaxOverrideDuration: 2 * time.Hour,
 			Source:              "config",
-			AuthorityBehavior:   "existing proposal and approval flows",
+			AuthorityBehavior:   "approval grants require an open auto mode gate",
 		},
 	}
 	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
 		ChatID:    7,
 		SenderID:  1001,
 		MessageID: 14,
-		Text:      "/auto policy",
+		Text:      "/auto mode",
 	})
 	if err != nil {
 		t.Fatalf("handleTelegramCommand() err = %v", err)
@@ -41,12 +41,12 @@ func TestHandleTelegramCommandAutonomyAdmin(t *testing.T) {
 		t.Fatal("handled = false, want true")
 	}
 	if len(sender.inline) != 1 {
-		t.Fatalf("inline = %#v, want one auto policy panel", sender.inline)
+		t.Fatalf("inline = %#v, want one auto mode panel", sender.inline)
 	}
 	if router.autonomyChatID != 7 || router.autonomySenderID != 1001 {
 		t.Fatalf("autonomy status inputs = chat:%d sender:%d, want 7/1001", router.autonomyChatID, router.autonomySenderID)
 	}
-	for _, want := range []string{"Auto policy", "Default: Ask first", "Ceiling: Leased", "Live changes: enabled", "Authority behavior: existing proposal and approval flows."} {
+	for _, want := range []string{"Auto mode", "Default: Ask first", "Ceiling: Leased", "Live changes: enabled", "Authority behavior: approval grants require an open auto mode gate."} {
 		if !strings.Contains(sender.inline[0].text, want) {
 			t.Fatalf("autonomy response = %q, want %q", sender.inline[0].text, want)
 		}
@@ -64,7 +64,7 @@ func TestHandleTelegramCommandAutonomyPresetCallbackAppliesLeasedOverride(t *tes
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
 		ID:   "cb-autonomy-work",
 		From: &telegram.User{ID: 1001},
-		Data: encodeAutoCallbackData(autoSurfacePolicy, "work15"),
+		Data: encodeAutoCallbackData(autoSurfaceMode, "work15"),
 		Message: &telegram.Message{
 			MessageID: 77,
 			Chat:      &telegram.Chat{ID: 7, Type: "private"},
@@ -76,7 +76,7 @@ func TestHandleTelegramCommandAutonomyPresetCallbackAppliesLeasedOverride(t *tes
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if router.autonomyChatID != 7 || router.autonomySenderID != 1001 || router.autonomyArgs != "leased 15m workspace uses=2" {
+	if router.autonomyChatID != 7 || router.autonomySenderID != 1001 || router.autonomyArgs != "leased 15m workspace" {
 		t.Fatalf("autonomy inputs chat=%d sender=%d args=%q, want workspace preset", router.autonomyChatID, router.autonomySenderID, router.autonomyArgs)
 	}
 	if len(sender.answers) != 1 {
@@ -96,7 +96,7 @@ func TestHandleTelegramCommandAutonomyLeasedAdmin(t *testing.T) {
 		ChatID:    7,
 		SenderID:  1001,
 		MessageID: 14,
-		Text:      "/auto policy leased 15m workspace uses=2 focused plan",
+		Text:      "/auto mode leased 15m workspace focused plan",
 	})
 	if err != nil {
 		t.Fatalf("handleTelegramCommand() err = %v", err)
@@ -104,7 +104,7 @@ func TestHandleTelegramCommandAutonomyLeasedAdmin(t *testing.T) {
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if router.autonomyChatID != 7 || router.autonomySenderID != 1001 || router.autonomyArgs != "leased 15m workspace uses=2 focused plan" {
+	if router.autonomyChatID != 7 || router.autonomySenderID != 1001 || router.autonomyArgs != "leased 15m workspace focused plan" {
 		t.Fatalf("autonomy inputs = chat:%d sender:%d args:%q, want leased command", router.autonomyChatID, router.autonomySenderID, router.autonomyArgs)
 	}
 	if len(sender.msgs) != 1 || !strings.Contains(sender.msgs[0].Text, "enabled") {
@@ -121,7 +121,7 @@ func TestHandleTelegramCommandAutonomyValidationErrorRepliesWithoutFatalError(t 
 		ChatID:    7,
 		SenderID:  1001,
 		MessageID: 14,
-		Text:      "/auto policy leased 8h all",
+		Text:      "/auto mode leased 8h all",
 	})
 	if err != nil {
 		t.Fatalf("handleTelegramCommand() err = %v, want nil so poller can advance the update offset", err)
@@ -180,6 +180,40 @@ func TestHandleTelegramCommandAutoApproveNoArgsShowsPresetButtons(t *testing.T) 
 	}
 	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "status") || len(sender.inline[0].rows) == 0 {
 		t.Fatalf("inline = %#v, want auto-approval panel with preset buttons", sender.inline)
+	}
+}
+
+func TestHandleTelegramCommandAutoLimitsShowsReadOnlyPanel(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		canRestart: true,
+		autonomyStatus: core.AutonomyStatusSnapshot{
+			DefaultMode:         "ask_first",
+			Ceiling:             "leased",
+			AllowLiveOverrides:  true,
+			MaxOverrideDuration: time.Hour,
+			AuthorityBehavior:   "approval grants require an open auto mode gate",
+		},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 14,
+		Text:      "/auto limits",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "Auto limits") {
+		t.Fatalf("inline = %#v, want limits panel", sender.inline)
+	}
+	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 2 {
+		t.Fatalf("limits rows = %#v, want back and refresh only", sender.inline[0].rows)
 	}
 }
 

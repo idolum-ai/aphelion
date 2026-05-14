@@ -28,7 +28,7 @@ func TestParseTelegramCommand(t *testing.T) {
 		{text: "/memory", want: "memory", ok: true},
 		{text: "/mission", want: "mission", ok: true},
 		{text: "/model status", want: "model", ok: true},
-		{text: "/auto policy", want: "auto", ok: true},
+		{text: "/auto mode", want: "auto", ok: true},
 		{text: "/stop\n\nReply context:\nidolum: Please confirm.", want: "stop", ok: true},
 		{text: "/set_persona_model", ok: false},
 		{text: "/set_governor_effort", ok: false},

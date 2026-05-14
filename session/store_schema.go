@@ -6,9 +6,11 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 )
 
 const schemaVersion43 = 43
+const schemaVersion44 = 44
 
 func existingUserTableCount(tx *sql.Tx) (int, error) {
 	var count int
@@ -35,7 +37,7 @@ func validateCurrentSchemaVersion(tx *sql.Tx, existingTables int) (int, error) {
 		return 0, fmt.Errorf("unsupported unversioned database schema; reinstall from a clean current state")
 	}
 	if currentVersion < schemaVersion {
-		if currentVersion == schemaVersion43 {
+		if currentVersion == schemaVersion43 || currentVersion == schemaVersion44 {
 			return currentVersion, nil
 		}
 		return 0, fmt.Errorf("unsupported database schema version %d (current schema version is %d); reinstall from a clean current state", currentVersion, schemaVersion)
@@ -47,18 +49,26 @@ func validateCurrentSchemaVersion(tx *sql.Tx, existingTables int) (int, error) {
 }
 
 func migrateCurrentSchemaVersion(tx *sql.Tx, currentVersion int) (int, error) {
-	switch currentVersion {
-	case schemaVersion43:
+	version := currentVersion
+	if version == schemaVersion43 {
 		if err := migrateSchemaV43ToV44(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion44); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion44, err)
+		}
+		version = schemaVersion44
+	}
+	if version == schemaVersion44 {
+		if err := migrateSchemaV44ToV45(tx); err != nil {
 			return 0, err
 		}
 		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion); err != nil {
 			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion, err)
 		}
-		return schemaVersion, nil
-	default:
-		return currentVersion, nil
+		version = schemaVersion
 	}
+	return version, nil
 }
 
 func migrateSchemaV43ToV44(tx *sql.Tx) error {
@@ -109,6 +119,68 @@ func migrateSchemaV43ToV44(tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+func migrateSchemaV44ToV45(tx *sql.Tx) error {
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS operator_autonomy_overrides (
+			override_id TEXT PRIMARY KEY,
+			admin_user_id INTEGER NOT NULL DEFAULT 0,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			mode TEXT NOT NULL DEFAULT 'leased',
+			scope TEXT NOT NULL DEFAULT 'all',
+			reason TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			expires_at TEXT NOT NULL,
+			revoked_at TEXT,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_operator_autonomy_overrides_chat_active ON operator_autonomy_overrides(chat_id, mode, expires_at DESC, revoked_at, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_operator_autonomy_overrides_admin_active ON operator_autonomy_overrides(admin_user_id, mode, expires_at DESC, revoked_at, updated_at DESC)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("migrate schema v44 to v45 ensure operator autonomy overrides: %w", err)
+		}
+	}
+	hasAutoApprovals, err := schemaTableExists(tx, "operator_auto_approvals")
+	if err != nil {
+		return err
+	}
+	if !hasAutoApprovals {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.Exec(`
+		INSERT OR IGNORE INTO operator_autonomy_overrides(
+			override_id, admin_user_id, chat_id, mode, scope, reason,
+			created_at, expires_at, revoked_at, updated_at
+		)
+		SELECT 'mode-' || lease_id, admin_user_id, chat_id, 'leased', scope, reason,
+			created_at, expires_at, NULL, updated_at
+		FROM operator_auto_approvals
+		WHERE revoked_at IS NULL
+			AND expires_at > ?
+			AND (max_uses <= 0 OR used_count < max_uses)
+	`, now); err != nil {
+		return fmt.Errorf("migrate schema v44 to v45 copy active auto mode gates: %w", err)
+	}
+	return nil
+}
+
+func schemaTableExists(tx *sql.Tx, tableName string) (bool, error) {
+	tableName = strings.TrimSpace(tableName)
+	if tableName == "" {
+		return false, fmt.Errorf("schema table lookup requires table")
+	}
+	var count int
+	if err := tx.QueryRow(`
+		SELECT COUNT(1)
+		FROM sqlite_master
+		WHERE type = 'table' AND name = ?
+	`, tableName).Scan(&count); err != nil {
+		return false, fmt.Errorf("query schema table %s: %w", tableName, err)
+	}
+	return count > 0, nil
 }
 
 type schemaColumnMigration struct {

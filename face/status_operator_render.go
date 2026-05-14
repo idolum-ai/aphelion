@@ -195,6 +195,9 @@ func operatorAutoApprovalLine(snapshot *core.AutoApprovalStatusSnapshot) string 
 		return ""
 	}
 	parts := []string{"auto_approval: active"}
+	if !snapshot.Usable && strings.TrimSpace(snapshot.BlockedReason) != "" {
+		parts = append(parts, "blocked by auto mode")
+	}
 	if !snapshot.ExpiresAt.IsZero() {
 		parts = append(parts, "until "+formatStatusTime(snapshot.ExpiresAt))
 	}
@@ -202,6 +205,9 @@ func operatorAutoApprovalLine(snapshot *core.AutoApprovalStatusSnapshot) string 
 		parts = append(parts, fmt.Sprintf("used %d/%d", snapshot.UsedCount, snapshot.MaxUses))
 	} else {
 		parts = append(parts, fmt.Sprintf("used %d", snapshot.UsedCount))
+	}
+	if !snapshot.Usable && strings.TrimSpace(snapshot.BlockedReason) != "" {
+		parts = append(parts, truncateStatusField(strings.TrimSpace(snapshot.BlockedReason), 120))
 	}
 	return strings.Join(parts, ", ")
 }

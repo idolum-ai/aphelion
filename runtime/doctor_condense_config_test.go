@@ -188,7 +188,7 @@ func TestDoctorRuntimeConfigReportsAutonomyPolicy(t *testing.T) {
 		`autonomy_ceiling="leased"`,
 		`autonomy_live_overrides="true"`,
 		`autonomy_max_override_duration="2h0m0s"`,
-		`autonomy_authority_behavior="existing proposal and approval flows"`,
+		`autonomy_authority_behavior="approval grants require an open auto mode gate"`,
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("runtime config report missing %s:\n%s", want, report)
@@ -207,7 +207,7 @@ func TestDoctorAutonomyStatusReportsActiveOverridePrecedenceAndExpiry(t *testing
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	if _, err := rt.ConfigureAutonomy(context.Background(), 99140, 1001, "leased 30m workspace uses=2 doctor evidence"); err != nil {
+	if _, err := rt.ConfigureAutonomy(context.Background(), 99140, 1001, "leased 30m workspace doctor evidence"); err != nil {
 		t.Fatalf("ConfigureAutonomy() err = %v", err)
 	}
 
@@ -217,11 +217,10 @@ func TestDoctorAutonomyStatusReportsActiveOverridePrecedenceAndExpiry(t *testing
 	for _, want := range []string{
 		`autonomy_effective_default_mode="ask_first"`,
 		`autonomy_effective_ceiling="leased"`,
-		`autonomy_raw_active_lease_count="1"`,
+		`autonomy_raw_active_mode_count="1"`,
 		`autonomy_effective_active_override="true"`,
 		`autonomy_active_override_mode="leased"`,
 		`autonomy_active_override_scope="workspace"`,
-		`autonomy_active_override_max="2"`,
 		`autonomy_precedence_status="active_within_ceiling"`,
 		`autonomy_expiry_status="active_until_expiry"`,
 	} {
@@ -231,7 +230,7 @@ func TestDoctorAutonomyStatusReportsActiveOverridePrecedenceAndExpiry(t *testing
 	}
 }
 
-func TestDoctorAutonomyStatusReportsExistingLeaseBlockedByConfig(t *testing.T) {
+func TestDoctorAutonomyStatusReportsExistingModeBlockedByConfig(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -242,16 +241,17 @@ func TestDoctorAutonomyStatusReportsExistingLeaseBlockedByConfig(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 	now := time.Now().UTC()
-	if _, err := store.CreateOperatorAutoApprovalLease(session.OperatorAutoApprovalLease{
+	if _, err := store.CreateOperatorAutonomyOverride(session.OperatorAutonomyOverride{
 		ID:          "doctor-blocked-existing",
 		AdminUserID: 1001,
 		ChatID:      99141,
+		Mode:        "leased",
 		Scope:       session.OperatorAutoApprovalScopeAll,
 		CreatedAt:   now.Add(-time.Minute),
 		ExpiresAt:   now.Add(30 * time.Minute),
 		UpdatedAt:   now.Add(-time.Minute),
 	}); err != nil {
-		t.Fatalf("CreateOperatorAutoApprovalLease() err = %v", err)
+		t.Fatalf("CreateOperatorAutonomyOverride() err = %v", err)
 	}
 
 	var b strings.Builder
@@ -259,7 +259,7 @@ func TestDoctorAutonomyStatusReportsExistingLeaseBlockedByConfig(t *testing.T) {
 	report := b.String()
 	for _, want := range []string{
 		`autonomy_effective_ceiling="ask_first"`,
-		`autonomy_raw_active_lease_count="1"`,
+		`autonomy_raw_active_mode_count="1"`,
 		`autonomy_effective_active_override="false"`,
 		`autonomy_precedence_status="blocked_by_config"`,
 		`autonomy_precedence_reason="autonomy mode leased exceeds configured ceiling ask_first"`,

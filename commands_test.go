@@ -364,7 +364,7 @@ func (s *stubCommandRouter) AutonomyStatus(chatID int64, senderID int64) (core.A
 		AllowLiveOverrides:  true,
 		MaxOverrideDuration: 4 * time.Hour,
 		Source:              "test",
-		AuthorityBehavior:   "existing proposal and approval flows",
+		AuthorityBehavior:   "approval grants require an open auto mode gate",
 	}, nil
 }
 

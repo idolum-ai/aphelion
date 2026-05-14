@@ -39,14 +39,14 @@ func TestRenderTelegramAutonomyStatusUsesNaturalLabels(t *testing.T) {
 		Ceiling:             "leased",
 		AllowLiveOverrides:  true,
 		MaxOverrideDuration: 2 * time.Hour,
-		AuthorityBehavior:   "existing proposal and approval flows",
+		AuthorityBehavior:   "approval grants require an open auto mode gate",
 	})
 	for _, want := range []string{
-		"Auto policy",
+		"Auto mode",
 		"Default: Ask first",
 		"Ceiling: Leased",
 		"Live changes: enabled",
-		"Authority behavior: existing proposal and approval flows.",
+		"Authority behavior: approval grants require an open auto mode gate.",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("RenderTelegramAutonomyStatus() = %q, want %q", out, want)

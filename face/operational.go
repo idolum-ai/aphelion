@@ -65,7 +65,7 @@ func renderTelegramCommandSurface(title string, state string, next string, perso
 	}
 	if includeAdminCommands {
 		details = append(details,
-			"Admin operations: /auto - show automation policy and approval controls; /restart - force an immediate gateway restart",
+			"Admin operations: /auto - show automation mode, approval, and limit controls; /restart - force an immediate gateway restart",
 		)
 	}
 	details = append(details,
@@ -98,19 +98,16 @@ func RenderTelegramAutonomyStatus(snapshot core.AutonomyStatusSnapshot) string {
 		if !snapshot.ActiveOverrideExpiry.IsZero() {
 			activeOverride += " until " + snapshot.ActiveOverrideExpiry.UTC().Format(time.RFC3339)
 		}
-		if snapshot.ActiveOverrideMax > 0 {
-			activeOverride += fmt.Sprintf(" (%d/%d used)", snapshot.ActiveOverrideUsed, snapshot.ActiveOverrideMax)
-		}
 	}
 	behavior := strings.TrimSpace(snapshot.AuthorityBehavior)
 	if behavior == "" {
-		behavior = "existing proposal and approval flows"
+		behavior = "approval grants require an open auto mode gate"
 	}
 	return RenderCompactOperatorPanel(OperatorPanel{
-		Title: "Auto policy",
+		Title: "Auto mode",
 		State: "default " + autonomyModeLabel(snapshot.DefaultMode) + ", ceiling " + autonomyModeLabel(snapshot.Ceiling),
 		Why:   behavior + ". This report does not grant new authority by itself.",
-		Next:  "Use /auto policy leased <duration> <scope> for a bounded live override, or /auto policy off to revoke one.",
+		Next:  "Use /auto mode leased <duration> <scope> to open a bounded gate, or /auto mode off to close one.",
 		Details: []string{
 			"Default: " + autonomyModeLabel(snapshot.DefaultMode),
 			"Ceiling: " + autonomyModeLabel(snapshot.Ceiling),
@@ -120,6 +117,30 @@ func RenderTelegramAutonomyStatus(snapshot core.AutonomyStatusSnapshot) string {
 			"Authority behavior: " + behavior + ".",
 		},
 	}, OperatorPanelCompactOptions{DetailLimit: 6, EvidenceLimit: 0})
+}
+
+func RenderTelegramAutoLimits(snapshot core.AutonomyStatusSnapshot) string {
+	liveChanges := "disabled"
+	if snapshot.AllowLiveOverrides {
+		liveChanges = "enabled"
+	}
+	behavior := strings.TrimSpace(snapshot.AuthorityBehavior)
+	if behavior == "" {
+		behavior = "approval grants require an open auto mode gate"
+	}
+	return RenderCompactOperatorPanel(OperatorPanel{
+		Title: "Auto limits",
+		State: "default " + autonomyModeLabel(snapshot.DefaultMode) + ", ceiling " + autonomyModeLabel(snapshot.Ceiling),
+		Why:   "Configured limits bound live mode changes. This panel is read-only.",
+		Next:  "Use /auto mode for the live gate or /auto approvals for spendable prompt grants.",
+		Details: []string{
+			"Default: " + autonomyModeLabel(snapshot.DefaultMode),
+			"Ceiling: " + autonomyModeLabel(snapshot.Ceiling),
+			"Live changes: " + liveChanges,
+			"Maximum live change: " + snapshot.MaxOverrideDuration.Truncate(time.Second).String(),
+			"Authority behavior: " + behavior + ".",
+		},
+	}, OperatorPanelCompactOptions{DetailLimit: 5, EvidenceLimit: 0})
 }
 
 func autonomyModeLabel(mode string) string {

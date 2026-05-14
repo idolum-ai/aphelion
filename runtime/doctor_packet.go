@@ -169,22 +169,20 @@ func (r *Runtime) writeDoctorAutonomyStatus(b *strings.Builder, key session.Sess
 
 	rawActiveCount := 0
 	if r.store != nil && key.ChatID != 0 {
-		rawLeases, rawErr := r.store.ActiveOperatorAutoApprovalLeases(key.ChatID, now)
+		rawModes, rawErr := r.store.ActiveOperatorAutonomyOverrides(key.ChatID, now)
 		if rawErr != nil {
-			writeDoctorLine(b, "autonomy_raw_active_lease_error="+strconv.Quote(rawErr.Error()))
+			writeDoctorLine(b, "autonomy_raw_active_mode_error="+strconv.Quote(rawErr.Error()))
 		} else {
-			rawActiveCount = len(rawLeases)
+			rawActiveCount = len(rawModes)
 		}
 	}
-	writeDoctorKV(b, "autonomy_raw_active_lease_count", strconv.Itoa(rawActiveCount))
+	writeDoctorKV(b, "autonomy_raw_active_mode_count", strconv.Itoa(rawActiveCount))
 	active := strings.TrimSpace(snapshot.ActiveOverrideMode) != ""
 	writeDoctorKV(b, "autonomy_effective_active_override", strconv.FormatBool(active))
 	if active {
 		writeDoctorKV(b, "autonomy_active_override_mode", strings.TrimSpace(snapshot.ActiveOverrideMode))
 		writeDoctorKV(b, "autonomy_active_override_scope", strings.TrimSpace(snapshot.ActiveOverrideScope))
 		writeDoctorKV(b, "autonomy_active_override_actor", strings.TrimSpace(snapshot.ActiveOverrideActor))
-		writeDoctorKV(b, "autonomy_active_override_used", strconv.Itoa(snapshot.ActiveOverrideUsed))
-		writeDoctorKV(b, "autonomy_active_override_max", strconv.Itoa(snapshot.ActiveOverrideMax))
 		if !snapshot.ActiveOverrideExpiry.IsZero() {
 			writeDoctorKV(b, "autonomy_active_override_expires_at", snapshot.ActiveOverrideExpiry.UTC().Format(time.RFC3339))
 			writeDoctorKV(b, "autonomy_active_override_remaining", roundDuration(snapshot.ActiveOverrideExpiry.Sub(now)))
@@ -201,7 +199,7 @@ func (r *Runtime) writeDoctorAutonomyStatus(b *strings.Builder, key session.Sess
 		precedenceReason = "leased override is within configured ceiling"
 	} else if rawActiveCount > 0 {
 		precedenceStatus = "blocked_or_filtered"
-		precedenceReason = "raw active lease exists but no effective override was selected"
+		precedenceReason = "raw active mode exists but no effective override was selected"
 	}
 	writeDoctorKV(b, "autonomy_precedence_status", precedenceStatus)
 	writeDoctorKV(b, "autonomy_precedence_reason", precedenceReason)

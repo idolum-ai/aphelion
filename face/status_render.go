@@ -277,6 +277,9 @@ func renderAutoApprovalStatusLine(snapshot *core.AutoApprovalStatusSnapshot) str
 		return ""
 	}
 	line := "auto_approval status=active"
+	if !snapshot.Usable && strings.TrimSpace(snapshot.BlockedReason) != "" {
+		line += " usable=false blocked_reason=" + quoteStatusField(truncateStatusField(snapshot.BlockedReason, 120))
+	}
 	if scope := strings.TrimSpace(snapshot.Scope); scope != "" {
 		line += " scope=" + scope
 	}

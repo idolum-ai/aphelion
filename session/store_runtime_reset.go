@@ -57,6 +57,7 @@ func (s *SQLiteStore) ResetRuntime() error {
 	}()
 
 	statements := []string{
+		`DELETE FROM operator_autonomy_overrides`,
 		`DELETE FROM operator_auto_approvals`,
 		`DELETE FROM pending_decisions`,
 		`DELETE FROM review_events`,

@@ -22,6 +22,9 @@ func TestRuntimeAutoApprovalCommandAndDecisionResolution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	if _, err := rt.ConfigureAutonomy(context.Background(), 99120, 1001, "leased 15m all"); err != nil {
+		t.Fatalf("ConfigureAutonomy() err = %v", err)
+	}
 
 	text, err := rt.ConfigureAutoApproval(context.Background(), 99120, 1001, "15m all uses=2 test window")
 	if err != nil {
@@ -66,6 +69,119 @@ func TestRuntimeAutoApprovalCommandAndDecisionResolution(t *testing.T) {
 	assertHasEventType(t, events, core.ExecutionEventAutoApprovalUsed)
 }
 
+func TestRuntimeAutoApprovalGrantAloneDoesNotResolve(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApproval(context.Background(), 99133, 1001, "15m all uses=2 grant only"); err != nil {
+		t.Fatalf("ConfigureAutoApproval() err = %v", err)
+	}
+
+	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-grant-only",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        99133,
+			SenderID:      1002,
+			Prompt:        "Approve this proposal?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if result.Choice != "" {
+		t.Fatalf("auto resolution = %#v, want no approval without auto mode", result)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(99133, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].UsedCount != 0 {
+		t.Fatalf("leases = %#v, want unspent grant", leases)
+	}
+}
+
+func TestRuntimeAutoModeAloneDoesNotResolve(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutonomy(context.Background(), 99134, 1001, "leased 15m all"); err != nil {
+		t.Fatalf("ConfigureAutonomy() err = %v", err)
+	}
+
+	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-mode-only",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        99134,
+			SenderID:      1002,
+			Prompt:        "Approve this proposal?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if result.Choice != "" {
+		t.Fatalf("auto resolution = %#v, want no approval without grant", result)
+	}
+}
+
+func TestRuntimeAutoModeScopeBlocksMismatchedGrant(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutonomy(context.Background(), 99135, 1001, "leased 15m workspace"); err != nil {
+		t.Fatalf("ConfigureAutonomy() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApproval(context.Background(), 99135, 1001, "15m deploy uses=1"); err != nil {
+		t.Fatalf("ConfigureAutoApproval() err = %v", err)
+	}
+
+	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-scope-block",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        99135,
+			SenderID:      1002,
+			Prompt:        "Approve this proposal?",
+			Details:       "Restart the local service.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if result.Choice != "" {
+		t.Fatalf("auto resolution = %#v, want no approval when mode scope blocks deploy", result)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(99135, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].UsedCount != 0 {
+		t.Fatalf("leases = %#v, want unspent deploy grant", leases)
+	}
+}
+
 func TestRuntimeAutoApprovalOffRendersClearedGrantAndAuditsLeaseID(t *testing.T) {
 	t.Parallel()
 
@@ -75,6 +191,9 @@ func TestRuntimeAutoApprovalOffRendersClearedGrantAndAuditsLeaseID(t *testing.T)
 		t.Fatalf("New() err = %v", err)
 	}
 
+	if _, err := rt.ConfigureAutonomy(context.Background(), 99125, 1001, "leased 15m all"); err != nil {
+		t.Fatalf("ConfigureAutonomy() err = %v", err)
+	}
 	if _, err := rt.ConfigureAutoApproval(context.Background(), 99125, 1001, "15m all live test window"); err != nil {
 		t.Fatalf("ConfigureAutoApproval(enable) err = %v", err)
 	}
@@ -181,6 +300,9 @@ func TestRuntimeStatusSurfacesActiveAutoApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	if _, err := rt.ConfigureAutonomy(context.Background(), 99124, 1001, "leased 30m workspace"); err != nil {
+		t.Fatalf("ConfigureAutonomy() err = %v", err)
+	}
 	if _, err := rt.ConfigureAutoApproval(context.Background(), 99124, 1001, "30m workspace uses=3 live test window"); err != nil {
 		t.Fatalf("ConfigureAutoApproval() err = %v", err)
 	}
@@ -219,7 +341,7 @@ func TestRuntimeAutoApprovalRejectsZeroUses(t *testing.T) {
 	}
 }
 
-func TestRuntimeAutoApprovalRespectsAutonomyDurationCap(t *testing.T) {
+func TestRuntimeAutoModeRespectsAutonomyDurationCap(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -230,13 +352,13 @@ func TestRuntimeAutoApprovalRespectsAutonomyDurationCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	_, err = rt.ConfigureAutoApproval(context.Background(), 99128, 1001, "30m all")
+	_, err = rt.ConfigureAutonomy(context.Background(), 99128, 1001, "leased 30m all")
 	if err == nil || !strings.Contains(err.Error(), "autonomy live override duration is capped at 20m0s") {
-		t.Fatalf("ConfigureAutoApproval() err = %v, want autonomy duration cap", err)
+		t.Fatalf("ConfigureAutonomy() err = %v, want autonomy duration cap", err)
 	}
 }
 
-func TestRuntimeAutoApprovalRespectsAutonomyCeiling(t *testing.T) {
+func TestRuntimeAutoModeRespectsAutonomyCeiling(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -246,9 +368,9 @@ func TestRuntimeAutoApprovalRespectsAutonomyCeiling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	_, err = rt.ConfigureAutoApproval(context.Background(), 99129, 1001, "15m all")
+	_, err = rt.ConfigureAutonomy(context.Background(), 99129, 1001, "leased 15m all")
 	if err == nil || !strings.Contains(err.Error(), "exceeds configured ceiling ask_first") {
-		t.Fatalf("ConfigureAutoApproval() err = %v, want autonomy ceiling rejection", err)
+		t.Fatalf("ConfigureAutonomy() err = %v, want autonomy ceiling rejection", err)
 	}
 }
 
@@ -273,6 +395,18 @@ func TestRuntimeAutoApprovalExistingLeaseIsInertWhenAutonomyCeilingTightens(t *t
 		UpdatedAt:   now.Add(-time.Minute),
 	}); err != nil {
 		t.Fatalf("CreateOperatorAutoApprovalLease() err = %v", err)
+	}
+	if _, err := store.CreateOperatorAutonomyOverride(session.OperatorAutonomyOverride{
+		ID:          "existing-mode-blocked-by-ceiling",
+		AdminUserID: 1001,
+		ChatID:      99132,
+		Mode:        "leased",
+		Scope:       session.OperatorAutoApprovalScopeAll,
+		CreatedAt:   now.Add(-time.Minute),
+		ExpiresAt:   now.Add(30 * time.Minute),
+		UpdatedAt:   now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutonomyOverride() err = %v", err)
 	}
 
 	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
@@ -305,7 +439,11 @@ func TestRuntimeAutoApprovalExistingLeaseIsInertWhenAutonomyCeilingTightens(t *t
 		t.Fatalf("ChatStatusSnapshot() err = %v", err)
 	}
 	if chatStatus.AutoApproval != nil {
-		t.Fatalf("ChatStatusSnapshot.AutoApproval = %#v, want hidden inert lease", chatStatus.AutoApproval)
+		if chatStatus.AutoApproval.Usable || !strings.Contains(chatStatus.AutoApproval.BlockedReason, "open /auto mode") {
+			t.Fatalf("ChatStatusSnapshot.AutoApproval = %#v, want blocked visible grant", chatStatus.AutoApproval)
+		}
+	} else {
+		t.Fatalf("ChatStatusSnapshot.AutoApproval = nil, want blocked visible grant")
 	}
 	lease, ok, err := store.OperatorAutoApprovalLease("existing-lease-blocked-by-ceiling")
 	if err != nil {
@@ -328,26 +466,33 @@ func TestRuntimeAutonomyLeasedCommandCreatesBoundedOverride(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 
-	text, err := rt.ConfigureAutonomy(context.Background(), 99130, 1001, "leased 30m workspace uses=2 focused plan")
+	text, err := rt.ConfigureAutonomy(context.Background(), 99130, 1001, "leased 30m workspace focused plan")
 	if err != nil {
 		t.Fatalf("ConfigureAutonomy() err = %v", err)
 	}
-	if !strings.Contains(text, "Auto policy override") || !strings.Contains(text, "Mode: Leased") || !strings.Contains(text, "Scope: workspace prompts") {
+	if !strings.Contains(text, "Auto mode") || !strings.Contains(text, "Mode: Leased") || !strings.Contains(text, "Scope: workspace prompts") {
 		t.Fatalf("ConfigureAutonomy() text = %q, want leased workspace override", text)
 	}
 	snapshot, err := rt.ChatAutonomyStatusSnapshot(99130, 1001)
 	if err != nil {
 		t.Fatalf("ChatAutonomyStatusSnapshot() err = %v", err)
 	}
-	if snapshot.ActiveOverrideMode != "leased" || snapshot.ActiveOverrideScope != session.OperatorAutoApprovalScopeWorkspace || snapshot.ActiveOverrideMax != 2 {
+	if snapshot.ActiveOverrideMode != "leased" || snapshot.ActiveOverrideScope != session.OperatorAutoApprovalScopeWorkspace {
 		t.Fatalf("Autonomy snapshot = %#v, want active leased workspace override", snapshot)
+	}
+	overrides, err := store.ActiveOperatorAutonomyOverrides(99130, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutonomyOverrides() err = %v", err)
+	}
+	if len(overrides) != 1 || overrides[0].Scope != session.OperatorAutoApprovalScopeWorkspace {
+		t.Fatalf("overrides = %#v, want one workspace auto mode override", overrides)
 	}
 	leases, err := store.ActiveOperatorAutoApprovalLeases(99130, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
 	}
-	if len(leases) != 1 || leases[0].Scope != session.OperatorAutoApprovalScopeWorkspace || leases[0].MaxUses != 2 {
-		t.Fatalf("leases = %#v, want one workspace auto-approval lease", leases)
+	if len(leases) != 0 {
+		t.Fatalf("leases = %#v, want no auto-approval grants from mode command", leases)
 	}
 }
 
@@ -366,7 +511,7 @@ func TestRuntimeAutonomyOffRevokesBoundedOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigureAutonomy(off) err = %v", err)
 	}
-	if !strings.Contains(text, "Auto policy") || !strings.Contains(text, "Status: off") || !strings.Contains(text, "Cleared") {
+	if !strings.Contains(text, "Auto mode") || !strings.Contains(text, "Status: off") || !strings.Contains(text, "Cleared") {
 		t.Fatalf("ConfigureAutonomy(off) text = %q, want cleared override", text)
 	}
 	snapshot, err := rt.ChatAutonomyStatusSnapshot(99131, 1001)
@@ -375,6 +520,47 @@ func TestRuntimeAutonomyOffRevokesBoundedOverride(t *testing.T) {
 	}
 	if snapshot.ActiveOverrideMode != "" {
 		t.Fatalf("Autonomy snapshot = %#v, want no active override", snapshot)
+	}
+}
+
+func TestRuntimeAutoModeAndApprovalsOffAreIndependent(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutonomy(context.Background(), 99136, 1001, "leased 15m all"); err != nil {
+		t.Fatalf("ConfigureAutonomy() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApproval(context.Background(), 99136, 1001, "15m all uses=2"); err != nil {
+		t.Fatalf("ConfigureAutoApproval() err = %v", err)
+	}
+
+	if _, err := rt.ConfigureAutonomy(context.Background(), 99136, 1001, "off"); err != nil {
+		t.Fatalf("ConfigureAutonomy(off) err = %v", err)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(99136, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 {
+		t.Fatalf("auto approval leases = %#v, want grant left active after mode off", leases)
+	}
+
+	if _, err := rt.ConfigureAutonomy(context.Background(), 99136, 1001, "leased 15m all"); err != nil {
+		t.Fatalf("ConfigureAutonomy(reopen) err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApproval(context.Background(), 99136, 1001, "off"); err != nil {
+		t.Fatalf("ConfigureAutoApproval(off) err = %v", err)
+	}
+	overrides, err := store.ActiveOperatorAutonomyOverrides(99136, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutonomyOverrides() err = %v", err)
+	}
+	if len(overrides) != 1 {
+		t.Fatalf("auto mode overrides = %#v, want mode left active after approvals off", overrides)
 	}
 }
 
@@ -469,6 +655,9 @@ func TestRuntimeAutoApprovesPendingPlanLeaseContinuation(t *testing.T) {
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutonomy(context.Background(), 99121, 1001, "leased 15m all"); err != nil {
+		t.Fatalf("ConfigureAutonomy() err = %v", err)
 	}
 	if _, err := rt.ConfigureAutoApproval(context.Background(), 99121, 1001, "15m all"); err != nil {
 		t.Fatalf("ConfigureAutoApproval() err = %v", err)
