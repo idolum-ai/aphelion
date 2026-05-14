@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +19,8 @@ import (
 )
 
 const durableAgentSnapshotSchemaVersion = 1
+
+var durableSnapshotIDPattern = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}\.[0-9]{9}Z-[0-9a-z]+$`)
 
 type SnapshotManifest struct {
 	SchemaVersion int                     `json:"schema_version"`
@@ -35,15 +38,24 @@ type SnapshotRecord struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+type SnapshotMigrationResult struct {
+	Scanned        int
+	Migrated       int
+	AlreadyPresent int
+	Rejected       int
+	SourceRemoved  bool
+}
+
 func SnapshotBaseDir(agent core.DurableAgent, dbPath string) (string, error) {
-	_, memoryRoot := LocalRoots(agent.AgentID, agent.LocalStorageRoots)
-	if strings.TrimSpace(memoryRoot) == "" {
-		_, memoryRoot = DefaultLocalRoots(strings.TrimSpace(dbPath), strings.TrimSpace(agent.AgentID))
+	agentID := strings.TrimSpace(agent.AgentID)
+	if err := core.ValidateDurableAgentID(agentID); err != nil {
+		return "", err
 	}
-	if strings.TrimSpace(memoryRoot) == "" {
-		return "", fmt.Errorf("durable agent %q has no memory root for snapshots", strings.TrimSpace(agent.AgentID))
+	dbPath = strings.TrimSpace(dbPath)
+	if dbPath == "" {
+		return "", fmt.Errorf("sessions db path is required for durable agent snapshots")
 	}
-	return filepath.Join(memoryRoot, ".snapshots"), nil
+	return filepath.Join(filepath.Dir(dbPath), "durable_agent_snapshots", agentID), nil
 }
 
 func CreateSnapshot(agent core.DurableAgent, state *core.DurableAgentState, dbPath string, reason string, now time.Time) (*SnapshotManifest, error) {
@@ -74,7 +86,7 @@ func CreateSnapshot(agent core.DurableAgent, state *core.DurableAgentState, dbPa
 	if err := copyTree(workspaceRoot, filepath.Join(snapshotDir, "workspace"), nil); err != nil {
 		return nil, fmt.Errorf("snapshot workspace root: %w", err)
 	}
-	if err := copyTree(memoryRoot, filepath.Join(snapshotDir, "memory"), map[string]struct{}{".snapshots": {}}); err != nil {
+	if err := copyTree(memoryRoot, filepath.Join(snapshotDir, "memory"), snapshotMemorySkipRel(memoryRoot, baseDir)); err != nil {
 		return nil, fmt.Errorf("snapshot memory root: %w", err)
 	}
 	manifest := &SnapshotManifest{
@@ -136,30 +148,15 @@ func ListSnapshots(agent core.DurableAgent, dbPath string, limit int) ([]Snapsho
 }
 
 func LoadSnapshot(agent core.DurableAgent, dbPath string, snapshotID string) (*SnapshotManifest, string, error) {
-	snapshotID = strings.TrimSpace(snapshotID)
-	if snapshotID == "" {
-		return nil, "", fmt.Errorf("snapshot_id is required")
+	normalizedID, err := NormalizeSnapshotID(snapshotID)
+	if err != nil {
+		return nil, "", err
 	}
 	baseDir, err := SnapshotBaseDir(agent, dbPath)
 	if err != nil {
 		return nil, "", err
 	}
-	snapshotDir := filepath.Join(baseDir, snapshotID)
-	raw, err := os.ReadFile(filepath.Join(snapshotDir, "manifest.json"))
-	if err != nil {
-		return nil, "", fmt.Errorf("read snapshot manifest %q: %w", snapshotID, err)
-	}
-	var manifest SnapshotManifest
-	if err := json.Unmarshal(raw, &manifest); err != nil {
-		return nil, "", fmt.Errorf("parse snapshot manifest %q: %w", snapshotID, err)
-	}
-	if manifest.SchemaVersion == 0 {
-		manifest.SchemaVersion = durableAgentSnapshotSchemaVersion
-	}
-	if strings.TrimSpace(manifest.AgentID) != strings.TrimSpace(agent.AgentID) {
-		return nil, "", fmt.Errorf("snapshot %q belongs to agent %q, not %q", snapshotID, strings.TrimSpace(manifest.AgentID), strings.TrimSpace(agent.AgentID))
-	}
-	return &manifest, snapshotDir, nil
+	return loadSnapshotFromBaseDir(agent, baseDir, normalizedID)
 }
 
 func RestoreSnapshot(agent core.DurableAgent, dbPath string, snapshotID string, now time.Time) (*SnapshotManifest, error) {
@@ -186,8 +183,186 @@ func RestoreSnapshot(agent core.DurableAgent, dbPath string, snapshotID string, 
 	return manifest, nil
 }
 
+func NormalizeSnapshotID(snapshotID string) (string, error) {
+	snapshotID = strings.TrimSpace(snapshotID)
+	switch {
+	case snapshotID == "":
+		return "", fmt.Errorf("snapshot_id is required")
+	case filepath.IsAbs(snapshotID):
+		return "", fmt.Errorf("snapshot_id %q must not be an absolute path", snapshotID)
+	case strings.Contains(snapshotID, "/") || strings.Contains(snapshotID, `\`):
+		return "", fmt.Errorf("snapshot_id %q must not contain path separators", snapshotID)
+	case snapshotID == "." || snapshotID == ".." || strings.Contains(snapshotID, ".."):
+		return "", fmt.Errorf("snapshot_id %q is invalid", snapshotID)
+	case !durableSnapshotIDPattern.MatchString(snapshotID):
+		return "", fmt.Errorf("snapshot_id %q is not a generated durable snapshot id", snapshotID)
+	}
+	prefix, _, _ := strings.Cut(snapshotID, "-")
+	if _, err := time.Parse("20060102T150405.000000000Z", prefix); err != nil {
+		return "", fmt.Errorf("snapshot_id %q timestamp is invalid", snapshotID)
+	}
+	return snapshotID, nil
+}
+
+func MigrateChildMemorySnapshots(agent core.DurableAgent, dbPath string) (SnapshotMigrationResult, error) {
+	var result SnapshotMigrationResult
+	sourceBase, err := childMemorySnapshotBaseDir(agent, dbPath)
+	if err != nil {
+		return result, err
+	}
+	targetBase, err := SnapshotBaseDir(agent, dbPath)
+	if err != nil {
+		return result, err
+	}
+	if sameFilesystemPath(sourceBase, targetBase) {
+		return result, nil
+	}
+	entries, err := os.ReadDir(sourceBase)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return result, nil
+		}
+		return result, fmt.Errorf("read child memory snapshots: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		result.Scanned++
+		snapshotID, err := NormalizeSnapshotID(entry.Name())
+		if err != nil {
+			result.Rejected++
+			continue
+		}
+		if _, _, err := loadSnapshotFromBaseDir(agent, sourceBase, snapshotID); err != nil {
+			result.Rejected++
+			continue
+		}
+		targetDir := filepath.Join(targetBase, snapshotID)
+		if _, _, err := loadSnapshotFromBaseDir(agent, targetBase, snapshotID); err == nil {
+			result.AlreadyPresent++
+			continue
+		} else if _, statErr := os.Stat(targetDir); statErr == nil {
+			return result, fmt.Errorf("target snapshot %q exists but is not valid: %w", snapshotID, err)
+		} else if !os.IsNotExist(statErr) {
+			return result, fmt.Errorf("inspect target snapshot %q: %w", snapshotID, statErr)
+		}
+		if err := os.MkdirAll(targetBase, 0o700); err != nil {
+			return result, fmt.Errorf("create snapshot migration target: %w", err)
+		}
+		tempDir := filepath.Join(targetBase, "."+snapshotID+".tmp")
+		_ = os.RemoveAll(tempDir)
+		if err := copyTree(filepath.Join(sourceBase, snapshotID), tempDir, nil); err != nil {
+			_ = os.RemoveAll(tempDir)
+			return result, fmt.Errorf("copy snapshot %q: %w", snapshotID, err)
+		}
+		if err := os.Chmod(tempDir, 0o700); err != nil {
+			_ = os.RemoveAll(tempDir)
+			return result, fmt.Errorf("chmod migrated snapshot %q: %w", snapshotID, err)
+		}
+		if err := os.Rename(tempDir, targetDir); err != nil {
+			_ = os.RemoveAll(tempDir)
+			return result, fmt.Errorf("install migrated snapshot %q: %w", snapshotID, err)
+		}
+		if _, _, err := loadSnapshotFromBaseDir(agent, targetBase, snapshotID); err != nil {
+			return result, fmt.Errorf("validate migrated snapshot %q: %w", snapshotID, err)
+		}
+		result.Migrated++
+	}
+	if err := os.RemoveAll(sourceBase); err != nil {
+		return result, fmt.Errorf("remove child memory snapshots: %w", err)
+	}
+	result.SourceRemoved = true
+	return result, nil
+}
+
+func loadSnapshotFromBaseDir(agent core.DurableAgent, baseDir string, snapshotID string) (*SnapshotManifest, string, error) {
+	snapshotID, err := NormalizeSnapshotID(snapshotID)
+	if err != nil {
+		return nil, "", err
+	}
+	snapshotDir := filepath.Join(baseDir, snapshotID)
+	if !pathWithinRoot(baseDir, snapshotDir) {
+		return nil, "", fmt.Errorf("snapshot_id %q escapes snapshot base", snapshotID)
+	}
+	raw, err := os.ReadFile(filepath.Join(snapshotDir, "manifest.json"))
+	if err != nil {
+		return nil, "", fmt.Errorf("read snapshot manifest %q: %w", snapshotID, err)
+	}
+	var manifest SnapshotManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return nil, "", fmt.Errorf("parse snapshot manifest %q: %w", snapshotID, err)
+	}
+	if manifest.SchemaVersion == 0 {
+		manifest.SchemaVersion = durableAgentSnapshotSchemaVersion
+	}
+	if manifest.SchemaVersion != durableAgentSnapshotSchemaVersion {
+		return nil, "", fmt.Errorf("snapshot %q schema_version=%d is unsupported", snapshotID, manifest.SchemaVersion)
+	}
+	if strings.TrimSpace(manifest.SnapshotID) != snapshotID {
+		return nil, "", fmt.Errorf("snapshot %q manifest snapshot_id=%q does not match", snapshotID, strings.TrimSpace(manifest.SnapshotID))
+	}
+	if strings.TrimSpace(manifest.AgentID) != strings.TrimSpace(agent.AgentID) {
+		return nil, "", fmt.Errorf("snapshot %q belongs to agent %q, not %q", snapshotID, strings.TrimSpace(manifest.AgentID), strings.TrimSpace(agent.AgentID))
+	}
+	return &manifest, snapshotDir, nil
+}
+
 func durableSnapshotID(now time.Time) string {
 	return now.UTC().Format("20060102T150405.000000000Z") + "-" + strings.ToLower(strconv.FormatInt(now.UTC().UnixNano(), 36))
+}
+
+func childMemorySnapshotBaseDir(agent core.DurableAgent, dbPath string) (string, error) {
+	_, memoryRoot := LocalRoots(agent.AgentID, agent.LocalStorageRoots)
+	if strings.TrimSpace(memoryRoot) == "" {
+		_, memoryRoot = DefaultLocalRoots(strings.TrimSpace(dbPath), strings.TrimSpace(agent.AgentID))
+	}
+	if strings.TrimSpace(memoryRoot) == "" {
+		return "", fmt.Errorf("durable agent %q has no memory root for child memory snapshots", strings.TrimSpace(agent.AgentID))
+	}
+	return filepath.Join(memoryRoot, ".snapshots"), nil
+}
+
+func snapshotMemorySkipRel(memoryRoot string, snapshotBaseDir string) map[string]struct{} {
+	out := map[string]struct{}{".snapshots": {}}
+	rel, err := filepath.Rel(strings.TrimSpace(memoryRoot), strings.TrimSpace(snapshotBaseDir))
+	if err != nil {
+		return out
+	}
+	rel = filepath.Clean(rel)
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return out
+	}
+	out[filepath.ToSlash(rel)] = struct{}{}
+	return out
+}
+
+func sameFilesystemPath(left string, right string) bool {
+	leftAbs, leftErr := filepath.Abs(filepath.Clean(strings.TrimSpace(left)))
+	rightAbs, rightErr := filepath.Abs(filepath.Clean(strings.TrimSpace(right)))
+	if leftErr != nil || rightErr != nil {
+		return filepath.Clean(strings.TrimSpace(left)) == filepath.Clean(strings.TrimSpace(right))
+	}
+	return leftAbs == rightAbs
+}
+
+func pathWithinRoot(root string, path string) bool {
+	rootAbs, err := filepath.Abs(filepath.Clean(strings.TrimSpace(root)))
+	if err != nil {
+		return false
+	}
+	pathAbs, err := filepath.Abs(filepath.Clean(strings.TrimSpace(path)))
+	if err != nil {
+		return false
+	}
+	if rootAbs == pathAbs {
+		return true
+	}
+	rel, err := filepath.Rel(rootAbs, pathAbs)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 func copyTree(srcRoot string, dstRoot string, skipRel map[string]struct{}) error {

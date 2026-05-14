@@ -245,6 +245,51 @@ func TestDurableAgentToolSnapshotRestoreDeniedDoesNotChange(t *testing.T) {
 	}
 }
 
+func TestDurableAgentToolSnapshotRestoreRejectsInvalidIDBeforeApproval(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	childWorkspace := filepath.Join(t.TempDir(), "child", "workspace")
+	childMemory := filepath.Join(t.TempDir(), "child", "memory")
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "idolum-child",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy:         core.DefaultTelegramGroupLivePolicy("Help locally and escalate important work."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("telegram_group", core.DefaultTelegramGroupLivePolicy("Help locally and escalate important work.")),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "child-key",
+			Model:          "openrouter/test-model",
+		},
+		PolicyVersion:     1,
+		LocalStorageRoots: []string{childWorkspace, childMemory},
+		WakeupMode:        "telegram_update",
+		Status:            "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	approver := &stubDurableSnapshotRestoreApprover{approved: true}
+	registry.WithDurableSnapshotRestoreApprover(approver)
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"snapshot_restore","agent_id":"idolum-child","snapshot":{"snapshot_id":"../crafted"}}`),
+	)
+	if err == nil {
+		t.Fatal("ExecuteForSessionPrincipal(snapshot_restore invalid id) err = nil, want validation error")
+	}
+	if len(approver.requests) != 0 {
+		t.Fatalf("approver requests = %#v, want no approval before snapshot validation", approver.requests)
+	}
+}
+
 func extractSnapshotID(output string) string {
 	re := regexp.MustCompile(`(?m)^snapshot_id:\s*([^\s]+)\s*$`)
 	matches := re.FindStringSubmatch(output)

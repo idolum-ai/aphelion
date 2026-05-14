@@ -366,7 +366,7 @@ func (h *HTTPHandler) now() time.Time {
 
 func (h *HTTPHandler) verifyEnvelope(envelope core.DurableAgentControlEnvelope, payload any) error {
 	if h == nil || h.Verifier == nil {
-		return nil
+		return fmt.Errorf("durable agent control plane verifier is unavailable")
 	}
 	return h.Verifier(envelope, payload)
 }

@@ -60,6 +60,48 @@ func TestHTTPHandlerVerifierRejectsInvalidSignature(t *testing.T) {
 	}
 }
 
+func TestHTTPHandlerRejectsNilVerifier(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	agent := testRemoteDurableAgent()
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	handler := NewHTTPHandler(store)
+	handler.Verifier = nil
+
+	reqBody := core.DurableAgentEnrollmentRequest{
+		Envelope: core.DurableAgentControlEnvelope{
+			ProtocolVersion: core.DefaultDurableAgentControlProtocolVersion,
+			AgentID:         agent.AgentID,
+			ParentAgentID:   "house",
+			MessageKind:     core.DurableAgentControlMessageEnrollment,
+			MessageID:       "enroll-1",
+			Sequence:        1,
+			Timestamp:       time.Now().UTC(),
+			Signature:       "signature",
+		},
+		Payload: core.DurableAgentRemoteBootstrap{
+			ReviewTargetChatID: agent.ReviewTargetChatID,
+			AgentID:            agent.AgentID,
+			ParentAgentID:      "house",
+			ChannelKind:        agent.ChannelKind,
+			ParentControlURL:   "https://house.example",
+			EnrollmentToken:    "enroll-token-1",
+			ProtocolVersion:    core.DefaultDurableAgentControlProtocolVersion,
+			BootstrapLLM:       testDurableAgentBootstrapLLM(),
+			BootstrapCeiling:   agent.BootstrapCeiling,
+		}.EnrollmentPayload(),
+	}
+	rec := performJSONRequest(t, handler.Handler(), http.MethodPost, ControlPlaneEnrollPath, reqBody)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHTTPClientSignerSatisfiesHandlerVerifier(t *testing.T) {
 	t.Parallel()
 

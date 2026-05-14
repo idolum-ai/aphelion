@@ -458,6 +458,93 @@ func TestRunInitCommandImportsCodexSessions(t *testing.T) {
 	}
 }
 
+func TestRunInitCommandMigratesChildMemorySnapshots(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	workspaceRoot := filepath.Join(root, "child", "workspace")
+	memoryRoot := filepath.Join(root, "child", "memory")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspaceRoot) err = %v", err)
+	}
+	if err := os.MkdirAll(memoryRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(memoryRoot) err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:           "paper-scout",
+		ChannelKind:       "external_channel",
+		Status:            "active",
+		LocalStorageRoots: []string{workspaceRoot, memoryRoot},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Review incoming reports and negotiate useful surfaces.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+		}),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	manifest, err := durableagent.CreateSnapshot(agent, &core.DurableAgentState{
+		AgentID:   agent.AgentID,
+		StateJSON: `{"conversation":{"messages":[{"role":"child","text":"saved"}]}}`,
+	}, cfg.Sessions.DBPath, "saved", time.Date(2026, time.April, 21, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("CreateSnapshot() err = %v", err)
+	}
+	targetBase, err := durableagent.SnapshotBaseDir(agent, cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("SnapshotBaseDir() err = %v", err)
+	}
+	childSnapshotBase := filepath.Join(memoryRoot, ".snapshots")
+	if err := os.MkdirAll(childSnapshotBase, 0o755); err != nil {
+		t.Fatalf("MkdirAll(childSnapshotBase) err = %v", err)
+	}
+	if err := os.Rename(filepath.Join(targetBase, manifest.SnapshotID), filepath.Join(childSnapshotBase, manifest.SnapshotID)); err != nil {
+		t.Fatalf("Rename(snapshot to child memory source) err = %v", err)
+	}
+	if err := os.RemoveAll(targetBase); err != nil {
+		t.Fatalf("RemoveAll(targetBase) err = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() err = %v", err)
+	}
+
+	out, err := captureStdout(t, func() error {
+		return runInitCommand([]string{"--config", cfgPath})
+	})
+	if err != nil {
+		t.Fatalf("runInitCommand() err = %v", err)
+	}
+	for _, needle := range []string{
+		"snapshots_scanned: 1",
+		"snapshots_migrated: 1",
+		"snapshot_roots_removed: 1",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("init output = %q, want substring %q", out, needle)
+		}
+	}
+	if _, err := os.Stat(childSnapshotBase); !os.IsNotExist(err) {
+		t.Fatalf("child snapshot base stat err = %v, want removed source", err)
+	}
+	loaded, _, err := durableagent.LoadSnapshot(agent, cfg.Sessions.DBPath, manifest.SnapshotID)
+	if err != nil {
+		t.Fatalf("LoadSnapshot(migrated) err = %v", err)
+	}
+	if loaded.SnapshotID != manifest.SnapshotID || loaded.State == nil || !strings.Contains(loaded.State.StateJSON, "saved") {
+		t.Fatalf("loaded migrated snapshot = %#v, want saved state", loaded)
+	}
+}
+
 func TestRunPathsCommandPrintsAutonomyPolicy(t *testing.T) {
 	t.Parallel()
 

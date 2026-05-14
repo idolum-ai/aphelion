@@ -28,16 +28,21 @@ type durableAgentReconcileOptions struct {
 }
 
 type durableAgentReconcileResult struct {
-	Count               int
-	Active              int
-	ProfilesSynced      int
-	RootsRepaired       int
-	BootstrapRepaired   int
-	GrowthPromptsQueued int
-	StatesReset         int
-	GrantIssues         int
-	RepairErrors        int
-	Rows                []durableAgentReconcileRow
+	Count                int
+	Active               int
+	ProfilesSynced       int
+	RootsRepaired        int
+	BootstrapRepaired    int
+	SnapshotsScanned     int
+	SnapshotsMigrated    int
+	SnapshotsPresent     int
+	SnapshotsRejected    int
+	SnapshotRootsRemoved int
+	GrowthPromptsQueued  int
+	StatesReset          int
+	GrantIssues          int
+	RepairErrors         int
+	Rows                 []durableAgentReconcileRow
 }
 
 type durableAgentReconcileRow struct {
@@ -47,6 +52,11 @@ type durableAgentReconcileRow struct {
 	ProfileSynced        bool
 	RootsRepaired        bool
 	BootstrapRepaired    bool
+	SnapshotsScanned     int
+	SnapshotsMigrated    int
+	SnapshotsPresent     int
+	SnapshotsRejected    int
+	SnapshotRootRemoved  bool
 	GrowthPromptQueued   bool
 	StateReset           bool
 	GrantIssues          []string
@@ -113,6 +123,13 @@ func reconcileDurableAgentsForConfig(cfg *config.Config, opts durableAgentReconc
 		if row.BootstrapRepaired {
 			result.BootstrapRepaired++
 		}
+		result.SnapshotsScanned += row.SnapshotsScanned
+		result.SnapshotsMigrated += row.SnapshotsMigrated
+		result.SnapshotsPresent += row.SnapshotsPresent
+		result.SnapshotsRejected += row.SnapshotsRejected
+		if row.SnapshotRootRemoved {
+			result.SnapshotRootsRemoved++
+		}
 		if row.GrowthPromptQueued {
 			result.GrowthPromptsQueued++
 		}
@@ -133,6 +150,16 @@ func reconcileDurableAgentRecord(store *session.SQLiteStore, cfg *config.Config,
 	row := durableAgentReconcileRow{
 		AgentID: strings.TrimSpace(agent.AgentID),
 		Status:  status,
+	}
+	migration, err := durableagent.MigrateChildMemorySnapshots(agent, cfg.Sessions.DBPath)
+	if err != nil {
+		row.RepairErrorSummaries = append(row.RepairErrorSummaries, "migrate snapshots: "+err.Error())
+	} else {
+		row.SnapshotsScanned = migration.Scanned
+		row.SnapshotsMigrated = migration.Migrated
+		row.SnapshotsPresent = migration.AlreadyPresent
+		row.SnapshotsRejected = migration.Rejected
+		row.SnapshotRootRemoved = migration.SourceRemoved
 	}
 	if !strings.EqualFold(status, "active") {
 		return row
@@ -302,6 +329,11 @@ func printDurableAgentReconcileResult(w io.Writer, result *durableAgentReconcile
 	fmt.Fprintf(w, "profiles_synced: %d\n", result.ProfilesSynced)
 	fmt.Fprintf(w, "roots_repaired: %d\n", result.RootsRepaired)
 	fmt.Fprintf(w, "bootstrap_repaired: %d\n", result.BootstrapRepaired)
+	fmt.Fprintf(w, "snapshots_scanned: %d\n", result.SnapshotsScanned)
+	fmt.Fprintf(w, "snapshots_migrated: %d\n", result.SnapshotsMigrated)
+	fmt.Fprintf(w, "snapshots_present: %d\n", result.SnapshotsPresent)
+	fmt.Fprintf(w, "snapshots_rejected: %d\n", result.SnapshotsRejected)
+	fmt.Fprintf(w, "snapshot_roots_removed: %d\n", result.SnapshotRootsRemoved)
 	fmt.Fprintf(w, "growth_prompts_queued: %d\n", result.GrowthPromptsQueued)
 	fmt.Fprintf(w, "states_reset: %d\n", result.StatesReset)
 	fmt.Fprintf(w, "grant_issues: %d\n", result.GrantIssues)
@@ -309,12 +341,15 @@ func printDurableAgentReconcileResult(w io.Writer, result *durableAgentReconcile
 	for _, row := range result.Rows {
 		fmt.Fprintf(
 			w,
-			"- agent_id=%s status=%s profile_synced=%t roots_repaired=%t bootstrap_repaired=%t growth_prompt_queued=%t state_reset=%t grant_issues=%d repair_errors=%d",
+			"- agent_id=%s status=%s profile_synced=%t roots_repaired=%t bootstrap_repaired=%t snapshots_scanned=%d snapshots_migrated=%d snapshots_rejected=%d growth_prompt_queued=%t state_reset=%t grant_issues=%d repair_errors=%d",
 			row.AgentID,
 			row.Status,
 			row.ProfileSynced,
 			row.RootsRepaired,
 			row.BootstrapRepaired,
+			row.SnapshotsScanned,
+			row.SnapshotsMigrated,
+			row.SnapshotsRejected,
 			row.GrowthPromptQueued,
 			row.StateReset,
 			len(row.GrantIssues),
