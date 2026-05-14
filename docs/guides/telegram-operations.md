@@ -53,13 +53,15 @@ grounded in current state.
 /auto
 ```
 
-Use `/auto` for automation policy and approval controls. The panels are
+Use `/auto` for automation mode, approval, and limit controls. The panels are
 button-driven, so command parameters are optional. Keep automation bounded by
 duration, scope, use count, and reason.
 
-`/auto policy` shows the configured default, ceiling, live override setting, and
-active override state. `/auto approvals` shows the current bounded
-approval-prompt grant.
+`/auto mode` opens or closes the current bounded automation gate. `/auto
+approvals` grants bounded approval-prompt budget. `/auto limits` shows the
+configured default, ceiling, live override setting, and maximum live mode
+duration. Automatic approval requires both an open mode gate and a matching
+approval grant.
 
 ## Manage Work Surfaces
 

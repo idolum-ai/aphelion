@@ -79,8 +79,9 @@ session without clearing memory.
 ## Temporary Automation
 
 Use `/auto` when you want less approval friction for a bounded task. The button
-panels expose policy and approval controls without requiring command
-parameters. Keep grants short, scoped, and tied to the task you are doing now.
+panels expose mode, approval, and limit controls without requiring command
+parameters. Open mode for the task scope, then grant a short approval budget
+tied to the task you are doing now.
 
 Use `/health` again after changing automation so the service state is visible.
 

@@ -72,8 +72,8 @@ and refuses to replace an existing config unless `--force` is passed. With
 `--install-service`, it also runs the service install path and verifies the
 deploy.
 
-Normal turns stay at `ask_first` by default. Admins can grant bounded automation
-from Telegram through `/auto`.
+Normal turns stay at `ask_first` by default. Admins can open a bounded
+automation mode and grant bounded approval budget from Telegram through `/auto`.
 
 ## Operate
 

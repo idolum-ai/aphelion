@@ -56,14 +56,15 @@ Current command surface:
   - Supports manual `create`, `block`, and `summon` actions when typed input is the natural carrier for the new objective or reason.
   - Self-summon is review-only; Mission Ledger state does not grant self-continuation, autonomous continuation, new capabilities, or external authority.
 - `/auto`
-  - Admin-only automation control surface with policy and approvals panels.
-  - `/auto policy` shows the configured default mode, ceiling, live-override setting, maximum override duration, and active override state.
-  - `/auto approvals` shows the current bounded approval-prompt grant.
-  - Both panels provide preset buttons for refresh, off, and bounded 15-minute workspace/deploy/all windows.
-  - Supports `/auto policy leased <duration> [all|workspace|deploy] [uses=N] [reason]`.
+  - Admin-only automation control surface with mode, approvals, and limits panels.
+  - `/auto mode` shows and changes the current bounded automation gate.
+  - `/auto approvals` shows and changes the current bounded approval-prompt grant.
+  - `/auto limits` shows the configured default mode, ceiling, live-override setting, and maximum live mode duration.
+  - Mode and approvals provide preset buttons for refresh, off, and bounded 15-minute workspace/deploy/all windows. Limits is read-only.
+  - Supports `/auto mode leased <duration> [all|workspace|deploy] [reason]`.
   - Supports `/auto approvals <duration> [all|workspace|deploy] [uses=N] [reason]`.
-  - Policy and approval windows use the same bounded approval-lease substrate and cannot exceed the configured ceiling or maximum duration.
-  - If config is tightened later, existing live overrides outside the new ceiling are ignored and `/health diagnose` reports the precedence block.
+  - Mode opens the automation gate. Approvals provide spendable prompt budget. Automatic approval requires both.
+  - If config is tightened later, live mode overrides outside the new ceiling are ignored and `/health diagnose` reports the precedence block.
 - `/stop`
   - Stops active work in the current chat and drops queued follow-up work.
   - When `memory.aggressive.flush_on_session_boundary` is enabled, it also runs a bounded memory flush first.
@@ -210,17 +211,15 @@ do not create continuation authority or capability grants.
 
 ### `/auto` controls
 
-Admin policy panels attach the same preset rows:
+Admin automation panels keep button-driven operation:
 
-- `Refresh`
-- `Off`
-- `15m Work`
-- `15m Deploy`
-- `15m All`
+- `Mode` opens or closes the temporary automation gate.
+- `Approvals` grants bounded prompt approval budget.
+- `Limits` reports configured defaults and ceilings without mutation.
 
 The buttons call the same runtime configuration functions as typed commands.
-Duration, scope, use count, live-override ceiling, and admin checks remain runtime
-policy checks, not UI convention.
+Duration, scope, use count, live-override ceiling, and admin checks remain typed
+runtime checks, not UI convention.
 
 ### Natural-language durable setup trigger
 
