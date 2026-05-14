@@ -494,6 +494,12 @@ func (s *SQLiteStore) init() error {
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
+		`CREATE TABLE IF NOT EXISTS durable_agent_tombstones (
+			agent_id TEXT PRIMARY KEY,
+			reason TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
 		`CREATE TABLE IF NOT EXISTS durable_agent_state (
 				agent_id TEXT PRIMARY KEY,
 				cursor TEXT,

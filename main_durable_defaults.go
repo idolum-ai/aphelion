@@ -27,6 +27,9 @@ func syncRuntimeDurableAgentsAtStartup(cfg *config.Config, store *session.SQLite
 	if err := syncConfiguredTelegramDurableGroups(cfg, store); err != nil {
 		return err
 	}
+	if err := migrateDailyReviewRecipeLegacyRow(cfg, store); err != nil {
+		return err
+	}
 	if err := syncDurableAgentBootstrapInheritance(cfg, store); err != nil {
 		return err
 	}
@@ -136,6 +139,17 @@ func installDailyReviewRecipe(cfg *config.Config, store *session.SQLiteStore, op
 		result.SkipReason = "missing_admin_review_target"
 		return result, nil
 	}
+	if tombstoned, err := store.DurableAgentTombstoned(recipe.AgentID); err != nil {
+		return result, err
+	} else if tombstoned {
+		if existing, existingErr := store.DurableAgent(recipe.AgentID); errors.Is(existingErr, sql.ErrNoRows) || existing == nil {
+			result.Skipped = true
+			result.SkipReason = "removed_by_operator"
+			return result, nil
+		} else if existingErr != nil {
+			return result, fmt.Errorf("load tombstoned daily review recipe durable agent: %w", existingErr)
+		}
+	}
 
 	install, err := durableChildRecipeInstallConfigForHost(recipe, cfg)
 	if err != nil {
@@ -149,6 +163,13 @@ func installDailyReviewRecipe(cfg *config.Config, store *session.SQLiteStore, op
 		return result, fmt.Errorf("load daily review recipe durable agent: %w", err)
 	}
 	if existing != nil {
+		if migrated, err := migrateDailyReviewRecipeExistingRow(store, *existing, recipe, channelConfig); err != nil {
+			return result, err
+		} else if migrated {
+			result.Existing = true
+			result.SkipReason = "migrated_legacy_daily_review"
+			return result, nil
+		}
 		result.Existing = true
 		result.SkipReason = "preserved_existing"
 		result.DriftReasons = dailyReviewRecipeDriftReasons(*existing, recipe, install, livePolicy, channelConfig)
@@ -403,6 +424,51 @@ func dailyReviewRecipeDriftReasons(agent core.DurableAgent, recipe durableChildR
 		}
 	}
 	return normalizeStringSet(reasons)
+}
+
+func migrateDailyReviewRecipeLegacyRow(cfg *config.Config, store *session.SQLiteStore) error {
+	if cfg == nil || store == nil {
+		return nil
+	}
+	recipe, err := loadBundledDailyReviewRecipe()
+	if err != nil {
+		return err
+	}
+	existing, err := store.DurableAgent(recipe.AgentID)
+	if errors.Is(err, sql.ErrNoRows) || existing == nil {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load daily review legacy recipe durable agent: %w", err)
+	}
+	_, err = migrateDailyReviewRecipeExistingRow(store, *existing, recipe, durableChildRecipeChannelConfig(recipe))
+	return err
+}
+
+func migrateDailyReviewRecipeExistingRow(store *session.SQLiteStore, existing core.DurableAgent, recipe durableChildRecipe, channelConfig core.DurableAgentChannelConfig) (bool, error) {
+	if store == nil {
+		return false, nil
+	}
+	if strings.TrimSpace(existing.AgentID) != strings.TrimSpace(recipe.AgentID) || strings.TrimSpace(existing.ChannelKind) != "daily_review" {
+		return false, nil
+	}
+	existing.ChannelKind = strings.TrimSpace(recipe.ChannelKind)
+	if existing.ChannelConfig.ScheduledReviewConfig() == nil {
+		existing.ChannelConfig = channelConfig
+	}
+	if existing.WakeupMode == "" {
+		existing.WakeupMode = firstNonEmpty(strings.TrimSpace(recipe.WakeupMode), "poll")
+	}
+	if existing.Status == "" {
+		existing.Status = firstNonEmpty(strings.TrimSpace(recipe.Status), "active")
+	}
+	if existing.BootstrapCeiling.IsZero() {
+		existing.BootstrapCeiling = core.DefaultDurableAgentBootstrapCeiling(existing.ChannelKind, existing.LivePolicy)
+	}
+	if err := store.UpsertDurableAgent(existing); err != nil {
+		return false, fmt.Errorf("migrate legacy daily review durable agent: %w", err)
+	}
+	return true, nil
 }
 
 func dailyReviewRecipeResult(opts installDailyReviewRecipeOptions, recipe durableChildRecipe) dailyReviewRecipeInstallResult {

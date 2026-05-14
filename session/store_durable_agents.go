@@ -123,6 +123,9 @@ func upsertDurableAgentExec(exec sqlExecer, agent core.DurableAgent) (core.Durab
 	if err != nil {
 		return core.DurableAgent{}, fmt.Errorf("upsert durable agent: %w", err)
 	}
+	if _, err := exec.Exec(`DELETE FROM durable_agent_tombstones WHERE agent_id = ?`, agent.AgentID); err != nil {
+		return core.DurableAgent{}, fmt.Errorf("clear durable agent tombstone: %w", err)
+	}
 	agent.LivePolicy = core.NormalizeDurableAgentLivePolicy(agent.LivePolicy)
 	agent.ChannelConfig = core.NormalizeDurableAgentChannelConfig(agent.ChannelConfig)
 	agent.BootstrapCeiling = core.NormalizeDurableAgentBootstrapCeiling(agent.BootstrapCeiling)
@@ -171,10 +174,41 @@ func (s *SQLiteStore) DeleteDurableAgent(agentID string) error {
 	if agentID == "" {
 		return fmt.Errorf("delete durable agent: agent_id is required")
 	}
-	if _, err := s.db.Exec(`DELETE FROM durable_agents WHERE agent_id = ?`, agentID); err != nil {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("delete durable agent: begin tombstone transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM durable_agents WHERE agent_id = ?`, agentID); err != nil {
 		return fmt.Errorf("delete durable agent: %w", err)
 	}
+	if _, err := tx.Exec(`
+		INSERT INTO durable_agent_tombstones(agent_id, reason, created_at, updated_at)
+		VALUES (?, 'deleted', datetime('now'), datetime('now'))
+		ON CONFLICT(agent_id) DO UPDATE SET reason = excluded.reason, updated_at = excluded.updated_at
+	`, agentID); err != nil {
+		return fmt.Errorf("delete durable agent tombstone: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete durable agent: commit tombstone transaction: %w", err)
+	}
 	return nil
+}
+
+func (s *SQLiteStore) DurableAgentTombstoned(agentID string) (bool, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return false, nil
+	}
+	var existing string
+	err := s.db.QueryRow(`SELECT agent_id FROM durable_agent_tombstones WHERE agent_id = ?`, agentID).Scan(&existing)
+	if err == nil {
+		return true, nil
+	}
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return false, fmt.Errorf("query durable agent tombstone: %w", err)
 }
 
 func queryDurableAgent(q interface {

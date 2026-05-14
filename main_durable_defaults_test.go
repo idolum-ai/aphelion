@@ -385,3 +385,103 @@ func TestSyncDurableAgentBootstrapInheritanceNoopWithoutParentBootstrap(t *testi
 		t.Fatalf("BootstrapLLM = %#v, want no inherited bootstrap when parent has none", agent.BootstrapLLM)
 	}
 }
+
+func TestInstallDailyReviewRecipeMigratesLegacyDailyReviewRow(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "sessions.db")
+	store, err := session.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	legacyPolicy := core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+		Charter:            "Existing daily review charter remains user-owned.",
+		CapabilityEnvelope: []string{"bounded_review_artifact"},
+		OutboundMode:       "read_only",
+		DriftPolicy:        "admin_review",
+	})
+	legacy := core.DurableAgent{
+		AgentID:            "idolum-daily-review",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "daily_review",
+		LivePolicy:         legacyPolicy,
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("daily_review", legacyPolicy),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "anthropic",
+			APIKey:         "sk-ant-existing",
+			Model:          "claude-opus-4-6",
+		},
+		PolicyVersion: 7,
+		Status:        "active",
+	}
+	if err := store.UpsertDurableAgent(legacy); err != nil {
+		t.Fatalf("UpsertDurableAgent(legacy) err = %v", err)
+	}
+
+	cfg := &config.Config{
+		Agent:      config.AgentConfig{PromptRoot: filepath.Join(root, "prompt")},
+		Sessions:   config.SessionsConfig{DBPath: dbPath},
+		Principals: config.PrincipalsConfig{Telegram: config.TelegramPrincipalsConfig{AdminUserIDs: []int64{1001}}},
+		Governor:   config.GovernorConfig{Backend: "native", NativeProvider: "anthropic"},
+		Providers:  config.ProvidersConfig{Anthropic: config.AnthropicConfig{APIKey: "sk-ant-main", Model: "claude-sonnet-4-6"}},
+	}
+	result, err := installDailyReviewRecipe(cfg, store, installDailyReviewRecipeOptions{Source: "test"})
+	if err != nil {
+		t.Fatalf("installDailyReviewRecipe() err = %v", err)
+	}
+	if !result.Existing || result.SkipReason != "migrated_legacy_daily_review" {
+		t.Fatalf("install result = %#v, want migrated existing", result)
+	}
+	agent, err := store.DurableAgent("idolum-daily-review")
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	if agent.ChannelKind != "scheduled_review" || agent.ChannelConfig.ScheduledReviewConfig() == nil {
+		t.Fatalf("agent after migration = %#v, want scheduled_review with config", agent)
+	}
+	if agent.LivePolicy.Charter != legacy.LivePolicy.Charter || agent.PolicyVersion != 7 {
+		t.Fatalf("agent after migration clobbered user-owned fields: %#v", agent)
+	}
+}
+
+func TestInstallDailyReviewRecipeHonorsDeleteTombstone(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "sessions.db")
+	store, err := session.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	cfg := &config.Config{
+		Agent:      config.AgentConfig{PromptRoot: filepath.Join(root, "prompt")},
+		Sessions:   config.SessionsConfig{DBPath: dbPath},
+		Principals: config.PrincipalsConfig{Telegram: config.TelegramPrincipalsConfig{AdminUserIDs: []int64{1001}}},
+		Governor:   config.GovernorConfig{Backend: "native", NativeProvider: "anthropic"},
+		Providers:  config.ProvidersConfig{Anthropic: config.AnthropicConfig{APIKey: "sk-ant-main", Model: "claude-sonnet-4-6"}},
+	}
+	first, err := installDailyReviewRecipe(cfg, store, installDailyReviewRecipeOptions{Source: "test"})
+	if err != nil || !first.Installed {
+		t.Fatalf("first install = %#v err=%v, want installed", first, err)
+	}
+	if err := store.DeleteDurableAgent("idolum-daily-review"); err != nil {
+		t.Fatalf("DeleteDurableAgent() err = %v", err)
+	}
+	second, err := installDailyReviewRecipe(cfg, store, installDailyReviewRecipeOptions{Source: "test"})
+	if err != nil {
+		t.Fatalf("second install err = %v", err)
+	}
+	if !second.Skipped || second.SkipReason != "removed_by_operator" {
+		t.Fatalf("second install = %#v, want sticky removal skip", second)
+	}
+	if _, err := store.DurableAgent("idolum-daily-review"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("DurableAgent after tombstoned install err = %v, want sql.ErrNoRows", err)
+	}
+}

@@ -168,7 +168,11 @@ func (r *Runtime) runDurableAgentChildWakeLoaded(ctx context.Context, agent core
 func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgent, plan durableWakeTurnPlan, now time.Time) error {
 	scope, err := r.scopeForDurableAgent(agent)
 	if err != nil {
-		return err
+		wrappedErr := fmt.Errorf("resolve durable wake scope: %w", err)
+		if finalizeErr := finalizeDurableWakeFailure(plan, "", wrappedErr); finalizeErr != nil {
+			return fmt.Errorf("%w (and failed to record wake failure: %v)", wrappedErr, finalizeErr)
+		}
+		return wrappedErr
 	}
 	if len(agent.LocalStorageRoots) == 0 {
 		agent.LocalStorageRoots = []string{scope.WorkingRoot, scope.SharedMemoryRoot}
@@ -193,17 +197,29 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 
 	acquired, err := r.tryMarkDurableAgentWakeAwake(agent.AgentID, plan.Inbound.MessageID)
 	if err != nil {
-		return fmt.Errorf("mark durable wake agent awake: %w", err)
+		wrappedErr := fmt.Errorf("mark durable wake agent awake: %w", err)
+		if finalizeErr := finalizeDurableWakeFailure(plan, "", wrappedErr); finalizeErr != nil {
+			return fmt.Errorf("%w (and failed to record wake failure: %v)", wrappedErr, finalizeErr)
+		}
+		return wrappedErr
 	}
 	if !acquired {
 		r.recordExecutionEvent(key, core.ExecutionEventDurableWakeSkipped, "durable", "skipped", map[string]any{
 			"agent_id": strings.TrimSpace(agent.AgentID),
 			"reason":   "already_awake",
 		}, time.Now().UTC())
+		alreadyAwakeErr := fmt.Errorf("durable wake agent already awake")
+		if finalizeErr := finalizeDurableWakeFailure(plan, "", alreadyAwakeErr); finalizeErr != nil {
+			return fmt.Errorf("%w (and failed to record wake failure: %v)", alreadyAwakeErr, finalizeErr)
+		}
 		return nil
 	}
 	if err := r.ensureDurableAgentPolicyOffered(agent); err != nil {
-		return fmt.Errorf("record durable wake offered policy: %w", err)
+		wrappedErr := fmt.Errorf("record durable wake offered policy: %w", err)
+		if finalizeErr := finalizeDurableWakeFailure(plan, "", wrappedErr); finalizeErr != nil {
+			return fmt.Errorf("%w (and failed to record wake failure: %v)", wrappedErr, finalizeErr)
+		}
+		return wrappedErr
 	}
 	defer func() {
 		if dormantErr := r.markDurableAgentDormant(agent.AgentID); dormantErr != nil {

@@ -403,3 +403,76 @@ func seedScheduledReviewMessage(t *testing.T, store *session.SQLiteStore, conten
 	now := time.Date(seedAt.Year(), seedAt.Month(), seedAt.Day(), 0, 15, 0, 0, time.UTC).AddDate(0, 0, 1)
 	return reviewDate, now
 }
+
+func TestScheduledReviewAlreadyAwakeAfterPrepareRecordsBackoff(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "should not run"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableWakeChild = nil
+
+	agent := core.DurableAgent{
+		AgentID:            "scheduled-review-already-awake-test",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        scheduledReviewChannelKind,
+		ChannelConfig:      testScheduledReviewChannelConfig(),
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Review yesterday's logs and propose tomorrow action items.",
+			CapabilityEnvelope: []string{"bounded_review_artifact", "session_recall"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	reviewDate, now := seedScheduledReviewMessage(t, store, "scheduled-review-already-awake-entry")
+	adapter := newScheduledReviewDurableWakeAdapter()
+	plan, err := adapter.Prepare(context.Background(), rt, agent, now)
+	if err != nil {
+		t.Fatalf("Prepare() err = %v", err)
+	}
+	if plan == nil {
+		t.Fatal("Prepare() plan = nil, want scheduled wake plan")
+	}
+	state, err := store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState(after prepare) err = %v", err)
+	}
+	state.Status = "awake"
+	state.LastWakeAt = now.UTC()
+	if err := store.SaveDurableAgentState(*state); err != nil {
+		t.Fatalf("SaveDurableAgentState(awake) err = %v", err)
+	}
+
+	if err := rt.runDurableWakeTurn(context.Background(), agent, *plan, now); err != nil {
+		t.Fatalf("runDurableWakeTurn() err = %v", err)
+	}
+	provider.mu.Lock()
+	calls := provider.callCount
+	provider.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("provider calls = %d, want skipped before conversation", calls)
+	}
+	state, err = store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState(after run) err = %v", err)
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if continuity.ScheduledReview == nil || continuity.ScheduledReview.ReviewDate != reviewDate || continuity.ScheduledReview.FailureCount != 1 || continuity.ScheduledReview.BackoffUntil.IsZero() {
+		t.Fatalf("ScheduledReview state = %#v, want backoff after already-awake skip", continuity.ScheduledReview)
+	}
+	if continuity.ScheduledReview.LastStatus != "wake_failed" {
+		t.Fatalf("LastStatus = %q, want wake_failed", continuity.ScheduledReview.LastStatus)
+	}
+}
