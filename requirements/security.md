@@ -201,13 +201,16 @@ Network access should be specified per profile.
 ### Isolated execution
 
 - approved-user execution should default to `deny`
-- explicit allowlist is acceptable only after a backend can enforce destinations
+- explicit allowlist requires a host-enforced backend and explicit destinations
 - firewall and namespace policies should be machine-enforced, not prompt-described
 
-Until per-destination allowlists are implemented, isolated `allowlist` must be
-surfaced as a readiness warning and refused by process/fetch execution rather
-than silently implied as enforced isolation. `network=deny` is the currently
-enforced isolated-network policy.
+For isolated `allowlist`, each destination must include an explicit port.
+Process execution compiles hostname entries to IP/port rules at run start and
+uses the Linux netns+nftables backend when available. The current backend
+enforces IPv4 egress and must fail closed for IPv6-only destinations. If the
+backend is not available, execution must fail closed. Native `fetch_url` applies
+the same destination ceiling in-process. Hostname entries are IP/port
+enforcement, not HTTP Host or TLS SNI policy.
 
 ## Sandbox Backends
 

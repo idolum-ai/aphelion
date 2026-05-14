@@ -489,7 +489,11 @@ func newTelegramChildBotRuntime(cfg *config.Config, store *session.SQLiteStore, 
 		UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
 		UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
 	}
-	sandboxResolver, err := sandbox.NewResolver(sandboxRoots, aphruntime.SandboxProfilesFromConfig(cfg.Sandbox))
+	sandboxProfiles, err := aphruntime.SandboxProfilesFromConfig(cfg.Sandbox)
+	if err != nil {
+		return nil, err
+	}
+	sandboxResolver, err := sandbox.NewResolver(sandboxRoots, sandboxProfiles)
 	if err != nil {
 		return nil, err
 	}

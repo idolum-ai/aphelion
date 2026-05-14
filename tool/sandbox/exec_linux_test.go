@@ -4,6 +4,8 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,36 @@ import (
 
 	"github.com/idolum-ai/aphelion/principal"
 )
+
+type fakeNetworkBackend struct {
+	status      NetworkBackendStatus
+	prepareFunc func(context.Context, CompiledNetworkPolicy) (*NetworkLease, error)
+}
+
+func (b fakeNetworkBackend) Status(context.Context) NetworkBackendStatus {
+	if strings.TrimSpace(b.status.Name) == "" {
+		return NetworkBackendStatus{Name: "fake", Available: true}
+	}
+	return b.status
+}
+
+func (b fakeNetworkBackend) Prepare(ctx context.Context, policy CompiledNetworkPolicy) (*NetworkLease, error) {
+	if b.prepareFunc != nil {
+		return b.prepareFunc(ctx, policy)
+	}
+	status := b.Status(ctx)
+	if !status.Available {
+		return nil, fmt.Errorf("sandbox network allowlist backend unavailable: %s", status.Reason)
+	}
+	return &NetworkLease{
+		Evidence: NetworkExecutionEvidence{
+			Policy:       string(NetworkAllowlist),
+			Backend:      status.Name,
+			Destinations: policy.DestinationStrings(),
+			Rules:        policy.RuleStrings(),
+		},
+	}, nil
+}
 
 func buildScope(t *testing.T, role principal.Role) Scope {
 	t.Helper()
@@ -186,10 +218,11 @@ func TestRunnerPlanRejectsIsolatedNetworkAllowlistWithoutBackend(t *testing.T) {
 
 	scope := buildScope(t, principal.RoleApprovedUser)
 	scope.Profile.Network = NetworkAllowlist
+	scope.Profile.NetworkAllow = MustParseNetworkDestinations([]string{"example.com:443"})
 
 	runner := NewRunnerWithLookPath(func(string) (string, error) {
 		return "/usr/bin/bwrap", nil
-	})
+	}).WithNetworkBackend(fakeNetworkBackend{status: NetworkBackendStatus{Name: "fake", Reason: "not configured"}})
 
 	_, err := runner.Plan(ExecRequest{
 		Scope:   scope,
@@ -199,8 +232,42 @@ func TestRunnerPlanRejectsIsolatedNetworkAllowlistWithoutBackend(t *testing.T) {
 	if err == nil {
 		t.Fatal("Plan() err = nil, want unavailable network allowlist rejection")
 	}
-	if !strings.Contains(err.Error(), "network allowlist enforcement is unavailable") {
+	if !strings.Contains(err.Error(), "network allowlist backend unavailable") {
 		t.Fatalf("err = %v, want network allowlist enforcement rejection", err)
+	}
+}
+
+func TestRunnerPlanForIsolatedNetworkAllowlistUsesBackendContract(t *testing.T) {
+	t.Parallel()
+
+	scope := buildScope(t, principal.RoleApprovedUser)
+	scope.Profile.Network = NetworkAllowlist
+	scope.Profile.NetworkAllow = MustParseNetworkDestinations([]string{"example.com:443"})
+
+	runner := NewRunnerWithLookPath(func(string) (string, error) {
+		return "/usr/bin/bwrap", nil
+	}).WithNetworkBackend(fakeNetworkBackend{status: NetworkBackendStatus{Name: "fake", Available: true}}).
+		WithNetworkResolver(func(context.Context, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+		})
+
+	plan, err := runner.Plan(ExecRequest{
+		Scope:   scope,
+		Command: "curl https://example.com",
+		Workdir: scope.WorkingRoot,
+	})
+	if err != nil {
+		t.Fatalf("Plan() err = %v", err)
+	}
+	if plan.Network == nil || plan.Network.Backend != "fake" {
+		t.Fatalf("plan network = %#v, want fake backend evidence", plan.Network)
+	}
+	args := strings.Join(plan.Args, " ")
+	if strings.Contains(args, "--unshare-net") {
+		t.Fatalf("allowlist plan args include network denial instead of backend-managed network: %v", plan.Args)
+	}
+	if got, want := strings.Join(plan.Network.Rules, ","), "93.184.216.34/32:443"; got != want {
+		t.Fatalf("network rules = %q, want %q", got, want)
 	}
 }
 

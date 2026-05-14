@@ -13,7 +13,7 @@ import (
 func TestSandboxProfilesFromConfig(t *testing.T) {
 	t.Parallel()
 
-	profiles := SandboxProfilesFromConfig(config.SandboxConfig{
+	profiles, err := SandboxProfilesFromConfig(config.SandboxConfig{
 		Profiles: config.SandboxProfilesConfig{
 			Admin: config.SandboxProfileConfig{
 				Mode:    "trusted",
@@ -31,9 +31,13 @@ func TestSandboxProfilesFromConfig(t *testing.T) {
 				Mode:          "isolated",
 				WritablePaths: []string{"{working_root}"},
 				Network:       "allowlist",
+				NetworkAllow:  []string{"api.openai.com:443"},
 			},
 		},
 	})
+	if err != nil {
+		t.Fatalf("SandboxProfilesFromConfig() err = %v", err)
+	}
 
 	approved, err := profiles.ForRole(principal.RoleApprovedUser)
 	if err != nil {
@@ -52,5 +56,8 @@ func TestSandboxProfilesFromConfig(t *testing.T) {
 	}
 	if durable.Network != sandbox.NetworkAllowlist {
 		t.Fatalf("durable network = %q, want allowlist", durable.Network)
+	}
+	if len(durable.NetworkAllow) != 1 || durable.NetworkAllow[0].Canonical() != "api.openai.com:443" {
+		t.Fatalf("durable network allow = %#v, want api.openai.com:443", durable.NetworkAllow)
 	}
 }

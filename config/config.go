@@ -303,6 +303,7 @@ type SandboxProfileConfig struct {
 	ReadonlyPaths []string `toml:"readonly_paths"`
 	HiddenPaths   []string `toml:"hidden_paths"`
 	Network       string   `toml:"network"`
+	NetworkAllow  []string `toml:"network_allow"`
 }
 
 type MemoryConfig struct {

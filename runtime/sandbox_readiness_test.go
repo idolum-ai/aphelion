@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 type fakeSandboxStageResolver struct {
 	isolatedStage sandbox.Stage
+	networkStatus sandbox.NetworkBackendStatus
 }
 
 func (r fakeSandboxStageResolver) Stage(scope sandbox.Scope) sandbox.Stage {
@@ -23,6 +25,13 @@ func (r fakeSandboxStageResolver) Stage(scope sandbox.Scope) sandbox.Stage {
 		return r.isolatedStage
 	}
 	return sandbox.StageIsolatedBwrap
+}
+
+func (r fakeSandboxStageResolver) NetworkBackendStatus(context.Context) sandbox.NetworkBackendStatus {
+	if r.networkStatus.Name != "" || r.networkStatus.Available || r.networkStatus.Reason != "" {
+		return r.networkStatus
+	}
+	return sandbox.NetworkBackendStatus{Name: "fake", Available: true}
 }
 
 func TestSandboxReadinessReportsUnavailableIsolatedBackend(t *testing.T) {
@@ -58,10 +67,17 @@ func TestSandboxReadinessReportsUnenforcedNetworkAllowlist(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Sandbox.Profiles.ApprovedUser.Network = "allowlist"
+	cfg.Sandbox.Profiles.ApprovedUser.NetworkAllow = []string{"api.openai.com:443"}
 	activeRoles := map[string]bool{"approved_user": true}
-	snapshot := sandboxReadinessSnapshotFromConfig(&cfg, time.Now().UTC(), fakeSandboxStageResolver{isolatedStage: sandbox.StageIsolatedBwrap}, activeRoles)
+	snapshot := sandboxReadinessSnapshotFromConfig(&cfg, time.Now().UTC(), fakeSandboxStageResolver{
+		isolatedStage: sandbox.StageIsolatedBwrap,
+		networkStatus: sandbox.NetworkBackendStatus{
+			Name:   "fake",
+			Reason: "missing capability",
+		},
+	}, activeRoles)
 
-	if !sandboxReadinessHasIssue(snapshot, "approved_user", "sandbox_network_allowlist_unenforced") {
+	if !sandboxReadinessHasIssue(snapshot, "approved_user", "sandbox_network_allowlist_backend_unavailable") {
 		t.Fatalf("SandboxReadinessSnapshot issues = %#v, want approved_user network allowlist warning", snapshot.Issues)
 	}
 	if sandboxReadinessHasIssue(snapshot, "approved_user", "sandbox_backend_unavailable") {

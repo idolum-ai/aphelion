@@ -358,11 +358,11 @@ hidden_paths = [
     "~/.gnupg",
 ]
 network = "deny"               # "deny" | "allowlist"
+network_allow = []             # host:port, ip:port, or cidr:port when network="allowlist"
 
-# `allowlist` is reserved for future per-destination controls. The live runner
-# enforces `deny`; isolated `allowlist` profiles are reported as readiness
-# warnings and refused for process/fetch execution until that policy is
-# machine-enforced.
+# Isolated `allowlist` requires explicit destinations and a working host
+# network backend. Run `aphelion sandbox-net check --config <path>` before
+# switching a live non-admin or durable profile from `deny`.
 
 # ─── Automation ───
 [heartbeat]
@@ -384,7 +384,9 @@ api_key = ""
 voice_id = ""
 model = "eleven_turbo_v2_5"
 
-# ─── Exec Sandbox ───
+# ─── Potential future resource-limit sandbox keys ───
+# These keys are not part of the live config schema. The live network allowlist
+# surface is the per-profile `network_allow` list above.
 [sandbox]
 enabled = true
 timeout = 300
@@ -406,7 +408,7 @@ hidden_paths = [             # Paths invisible to exec processes
 
 # Network isolation
 [sandbox.network]
-isolation = "firewall"       # "none" | "full" (blank namespace) | "firewall" (allow-list)
+isolation = "firewall"       # "none" | "full" (blank namespace) | "firewall" (allowlist)
 # When isolation = "firewall", only these destinations are reachable.
 # Uses nftables rules inside a network namespace with a veth pair.
 allow = [

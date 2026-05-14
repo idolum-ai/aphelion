@@ -414,7 +414,7 @@ func TestToolAuthorityProcessPolicyCeilingsBlockInstallProbeAndInvoke(t *testing
 		t.Fatalf("install_set pending err = %v", err)
 	}
 	_, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "tool_authority", json.RawMessage(`{"action":"install_execute","tool_name":"browse_page"}`))
-	if err == nil || !strings.Contains(err.Error(), "policy_violation: process-mode network=\"allowlist\"") {
+	if err == nil || !strings.Contains(err.Error(), "policy_violation: process-mode network=\"allowlist\" requires constraints.network_targets") {
 		t.Fatalf("install_execute err = %v, want policy violation", err)
 	}
 	showOut, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "tool_authority", json.RawMessage(`{"action":"install_show","tool_name":"browse_page"}`))
@@ -429,7 +429,7 @@ func TestToolAuthorityProcessPolicyCeilingsBlockInstallProbeAndInvoke(t *testing
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 	_, err = registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
-	if err == nil || !strings.Contains(err.Error(), "policy_violation: process-mode network=\"allowlist\"") {
+	if err == nil || !strings.Contains(err.Error(), "policy_violation: process-mode network=\"allowlist\" requires constraints.network_targets") {
 		t.Fatalf("browse_page invoke err = %v, want governed policy violation", err)
 	}
 }

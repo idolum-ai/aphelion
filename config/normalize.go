@@ -10,6 +10,7 @@ func normalizeSandboxProfileConfig(profile SandboxProfileConfig) SandboxProfileC
 	profile.WritablePaths = normalizeStringList(profile.WritablePaths)
 	profile.ReadonlyPaths = normalizeStringList(profile.ReadonlyPaths)
 	profile.HiddenPaths = normalizeStringList(profile.HiddenPaths)
+	profile.NetworkAllow = normalizeStringList(profile.NetworkAllow)
 	return profile
 }
 

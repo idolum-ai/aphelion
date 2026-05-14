@@ -39,21 +39,25 @@ type BindPath struct {
 }
 
 type ExecResult struct {
-	Stage  Stage
-	Stdout string
-	Stderr string
+	Stage   Stage
+	Stdout  string
+	Stderr  string
+	Network *NetworkExecutionEvidence
 }
 
 type ExecutionPlan struct {
-	Stage  Stage
-	Binary string
-	Args   []string
-	Dir    string
-	Env    []string
+	Stage   Stage
+	Binary  string
+	Args    []string
+	Dir     string
+	Env     []string
+	Network *NetworkExecutionEvidence
 }
 
 type Runner struct {
-	lookPath func(string) (string, error)
+	lookPath        func(string) (string, error)
+	networkBackend  NetworkBackend
+	networkResolver NetworkResolver
 
 	once      sync.Once
 	bwrapPath string
@@ -68,6 +72,26 @@ func NewRunnerWithLookPath(lookPath func(string) (string, error)) *Runner {
 		lookPath = exec.LookPath
 	}
 	return &Runner{lookPath: lookPath}
+}
+
+func (r *Runner) WithNetworkBackend(backend NetworkBackend) *Runner {
+	if r == nil {
+		return r
+	}
+	r.networkBackend = backend
+	return r
+}
+
+func (r *Runner) WithNetworkResolver(resolver NetworkResolver) *Runner {
+	if r == nil {
+		return r
+	}
+	r.networkResolver = resolver
+	return r
+}
+
+func (r *Runner) NetworkBackendStatus(ctx context.Context) NetworkBackendStatus {
+	return r.networkBackendOrDefault().Status(ctx)
 }
 
 func (r *Runner) Supports(scope Scope) bool {
@@ -89,6 +113,9 @@ func (r *Runner) Stage(scope Scope) Stage {
 }
 
 func (r *Runner) Run(ctx context.Context, req ExecRequest) (ExecResult, error) {
+	if req.Scope.Profile.Mode == ModeIsolated && req.Scope.Profile.Network == NetworkAllowlist {
+		return r.runIsolatedAllowlist(ctx, req)
+	}
 	plan, err := r.Plan(req)
 	if err != nil {
 		return ExecResult{}, err
@@ -108,9 +135,10 @@ func (r *Runner) Run(ctx context.Context, req ExecRequest) (ExecResult, error) {
 
 	err = cmd.Run()
 	return ExecResult{
-		Stage:  plan.Stage,
-		Stdout: stdout.String(),
-		Stderr: stderr.String(),
+		Stage:   plan.Stage,
+		Stdout:  stdout.String(),
+		Stderr:  stderr.String(),
+		Network: plan.Network,
 	}, err
 }
 
@@ -141,7 +169,32 @@ func (r *Runner) Plan(req ExecRequest) (ExecutionPlan, error) {
 			return ExecutionPlan{}, fmt.Errorf("bubblewrap is required for isolated execution")
 		}
 		if req.Scope.Profile.Network == NetworkAllowlist {
-			return ExecutionPlan{}, fmt.Errorf("sandbox network allowlist enforcement is unavailable for isolated execution; use network=deny or a trusted admin profile until per-destination enforcement exists")
+			status := r.NetworkBackendStatus(context.Background())
+			if !status.Available {
+				return ExecutionPlan{}, fmt.Errorf("sandbox network allowlist backend unavailable: %s", status.Reason)
+			}
+			policy, err := r.compileNetworkPolicy(context.Background(), req.Scope.Profile.NetworkAllow)
+			if err != nil {
+				return ExecutionPlan{}, err
+			}
+			args, err := buildBwrapArgs(req.Scope, workdir, command, req.ExtraWritablePaths, req.ExtraReadonlyPaths, req.ExtraReadonlyBinds, req.ExtraEnv)
+			if err != nil {
+				return ExecutionPlan{}, err
+			}
+			network := NetworkExecutionEvidence{
+				Policy:       string(NetworkAllowlist),
+				Backend:      status.Name,
+				Destinations: policy.DestinationStrings(),
+				Rules:        policy.RuleStrings(),
+			}
+			return ExecutionPlan{
+				Stage:   stage,
+				Binary:  bwrapPath,
+				Args:    args,
+				Dir:     "/",
+				Env:     nil,
+				Network: &network,
+			}, nil
 		}
 		args, err := buildBwrapArgs(req.Scope, workdir, command, req.ExtraWritablePaths, req.ExtraReadonlyPaths, req.ExtraReadonlyBinds, req.ExtraEnv)
 		if err != nil {
@@ -157,6 +210,81 @@ func (r *Runner) Plan(req ExecRequest) (ExecutionPlan, error) {
 	default:
 		return ExecutionPlan{}, fmt.Errorf("no supported execution backend for sandbox mode %q", req.Scope.Profile.Mode)
 	}
+}
+
+func (r *Runner) runIsolatedAllowlist(ctx context.Context, req ExecRequest) (ExecResult, error) {
+	command := strings.TrimSpace(req.Command)
+	if command == "" {
+		return ExecResult{}, fmt.Errorf("command is required")
+	}
+	workdir := strings.TrimSpace(req.Workdir)
+	if workdir == "" {
+		return ExecResult{}, fmt.Errorf("workdir is required")
+	}
+	bwrapPath := r.bwrapBinary()
+	if bwrapPath == "" {
+		return ExecResult{}, fmt.Errorf("bubblewrap is required for isolated execution")
+	}
+	policy, err := r.compileNetworkPolicy(ctx, req.Scope.Profile.NetworkAllow)
+	if err != nil {
+		return ExecResult{}, err
+	}
+	lease, err := r.networkBackendOrDefault().Prepare(ctx, policy)
+	if err != nil {
+		return ExecResult{}, err
+	}
+
+	extraReadonlyBinds := append([]BindPath(nil), req.ExtraReadonlyBinds...)
+	extraReadonlyBinds = append(extraReadonlyBinds, lease.ExtraReadonlyBinds...)
+	args, err := buildBwrapArgs(req.Scope, workdir, command, req.ExtraWritablePaths, req.ExtraReadonlyPaths, extraReadonlyBinds, req.ExtraEnv)
+	if err != nil {
+		cleanupErr := lease.Cleanup(context.Background())
+		if cleanupErr != nil {
+			return ExecResult{}, fmt.Errorf("%w; cleanup failed: %v", err, cleanupErr)
+		}
+		return ExecResult{}, err
+	}
+
+	binary := bwrapPath
+	if len(lease.CommandPrefix) > 0 {
+		binary = lease.CommandPrefix[0]
+		args = append(append([]string(nil), lease.CommandPrefix[1:]...), append([]string{bwrapPath}, args...)...)
+	}
+
+	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Dir = "/"
+	cmd.Env = nil
+	if len(req.Stdin) > 0 {
+		cmd.Stdin = bytes.NewReader(req.Stdin)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+	cleanupErr := lease.Cleanup(context.Background())
+	evidence := lease.Evidence
+	result := ExecResult{
+		Stage:   StageIsolatedBwrap,
+		Stdout:  stdout.String(),
+		Stderr:  stderr.String(),
+		Network: &evidence,
+	}
+	if runErr != nil && cleanupErr != nil {
+		return result, fmt.Errorf("%w; cleanup failed: %v", runErr, cleanupErr)
+	}
+	if runErr != nil {
+		return result, runErr
+	}
+	if cleanupErr != nil {
+		return result, cleanupErr
+	}
+	return result, nil
+}
+
+func (r *Runner) compileNetworkPolicy(ctx context.Context, destinations []NetworkDestination) (CompiledNetworkPolicy, error) {
+	return CompileNetworkPolicy(ctx, destinations, r.networkResolver)
 }
 
 func buildBwrapArgs(scope Scope, workdir, command string, extraWritablePaths []string, extraReadonlyPaths []string, extraReadonlyBinds []BindPath, extraEnv map[string]string) ([]string, error) {
@@ -489,4 +617,14 @@ func (r *Runner) bwrapBinary() string {
 		}
 	})
 	return r.bwrapPath
+}
+
+func (r *Runner) networkBackendOrDefault() NetworkBackend {
+	if r != nil && r.networkBackend != nil {
+		return r.networkBackend
+	}
+	if r == nil {
+		return NewLinuxNetworkBackend(exec.LookPath)
+	}
+	return NewLinuxNetworkBackend(r.lookPath)
 }

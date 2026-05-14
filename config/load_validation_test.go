@@ -467,6 +467,8 @@ func TestLoadRejectsInvalidSandboxProfile(t *testing.T) {
 	}{
 		{name: "mode", setting: `mode = "container"`, wantErr: "sandbox.profiles.approved_user.mode"},
 		{name: "network", setting: `network = "full"`, wantErr: "sandbox.profiles.approved_user.network"},
+		{name: "allowlist without destinations", setting: `network = "allowlist"`, wantErr: "sandbox.profiles.approved_user.network_allow"},
+		{name: "allowlist destination without port", setting: "network = \"allowlist\"\nnetwork_allow = [\"example.com\"]", wantErr: "sandbox.profiles.approved_user.network_allow[0]"},
 	}
 	for _, tt := range tests {
 		tt := tt

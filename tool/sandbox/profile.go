@@ -29,6 +29,7 @@ type Profile struct {
 	ReadonlyPaths []string
 	HiddenPaths   []string
 	Network       NetworkPolicy
+	NetworkAllow  []NetworkDestination
 }
 
 type Profiles struct {

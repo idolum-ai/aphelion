@@ -99,7 +99,12 @@ func newDurableAgentWakeRuntimeForCommand(cfg *config.Config) (durableAgentWakeR
 		UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
 		UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
 	}
-	sandboxResolver, err := sandbox.NewResolver(sandboxRoots, aphruntime.SandboxProfilesFromConfig(cfg.Sandbox))
+	sandboxProfiles, err := aphruntime.SandboxProfilesFromConfig(cfg.Sandbox)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	sandboxResolver, err := sandbox.NewResolver(sandboxRoots, sandboxProfiles)
 	if err != nil {
 		cleanup()
 		return nil, nil, err

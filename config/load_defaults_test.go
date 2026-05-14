@@ -493,6 +493,7 @@ writable_paths = ["{working_root}", "{shared_memory_root}", "/tmp/aphelion-durab
 readonly_paths = ["{global_root}"]
 hidden_paths = ["~/.ssh"]
 network = "allowlist"
+network_allow = ["api.openai.com:443"]
 
 [memory.reflection]
 enabled = false
@@ -686,6 +687,9 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if cfg.Sandbox.Profiles.DurableAgent.Network != "allowlist" {
 		t.Fatalf("sandbox durable_agent network = %q, want allowlist", cfg.Sandbox.Profiles.DurableAgent.Network)
+	}
+	if got, want := cfg.Sandbox.Profiles.DurableAgent.NetworkAllow, []string{"api.openai.com:443"}; !equalStrings(got, want) {
+		t.Fatalf("sandbox durable_agent network_allow = %#v, want %#v", got, want)
 	}
 	if cfg.Memory.Reflection.Enabled || cfg.Memory.Reflection.Every != "12h" {
 		t.Fatalf("memory.reflection = %#v, want disabled/12h", cfg.Memory.Reflection)

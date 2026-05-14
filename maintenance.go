@@ -72,6 +72,8 @@ func runMaintenanceCommand(args []string) (bool, error) {
 		return true, runDurableAgentCommand(args[1:])
 	case "tailnet":
 		return true, runTailnetCommand(args[1:])
+	case "sandbox-net":
+		return true, runSandboxNetCommand(args[1:])
 	case "telegram-child-bot":
 		return true, runTelegramChildBotCommand(args[1:])
 	case "agency-eval":

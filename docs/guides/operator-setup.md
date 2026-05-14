@@ -86,6 +86,7 @@ Manual gate:
 
 ```bash
 ./bin/aphelion --config ~/.aphelion/aphelion.toml --check-config
+./bin/aphelion sandbox-net check --config ~/.aphelion/aphelion.toml --format=kv
 ./bin/aphelion init --config ~/.aphelion/aphelion.toml
 systemctl --user restart aphelion
 ./bin/aphelion verify-deploy --config ~/.aphelion/aphelion.toml
@@ -98,6 +99,42 @@ If `tailscale.parent.enabled = true`, the parent Tailnet listener is part of
 service startup. Missing auth material, invalid tsnet state, or listener startup
 failure should stop the service and make the deploy gate fail instead of leaving
 remote children without their private control plane.
+
+Keep non-admin and durable sandbox profiles on `network = "deny"` unless
+`sandbox-net check` reports the allowlist backend available. For isolated
+allowlists, destinations are explicit `host:port`, `ip:port`, or `cidr:port`
+entries; hostnames compile to IP/port firewall rules when the process starts.
+
+## Sandbox Network Allowlists
+
+The safe default is no isolated egress:
+
+```toml
+[sandbox.profiles.approved_user]
+mode = "isolated"
+network = "deny"
+```
+
+Only switch a profile to allowlist after the host check passes:
+
+```bash
+./bin/aphelion sandbox-net check --config ~/.aphelion/aphelion.toml --format=kv
+```
+
+Then use explicit destinations:
+
+```toml
+[sandbox.profiles.approved_user]
+mode = "isolated"
+network = "allowlist"
+network_allow = ["api.openai.com:443", "github.com:443"]
+```
+
+The process backend needs Linux network namespaces, nftables, IPv4 forwarding,
+and `CAP_NET_ADMIN`. If any prerequisite is absent, Aphelion refuses the
+allowlisted process instead of falling back to host networking. This is IP/port
+enforcement; it does not inspect HTTP Host headers or TLS SNI. The current
+backend enforces IPv4 egress; IPv6-only destinations fail closed.
 
 ## Inspect
 

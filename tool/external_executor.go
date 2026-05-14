@@ -49,6 +49,10 @@ func (defaultExternalToolExecutor) Execute(ctx context.Context, manifest Externa
 	if err := validateExternalToolSchema(manifest.IO.InputSchema, input, "input"); err != nil {
 		return "", err
 	}
+	scope, err := scopeForExternalProcessNetwork(manifest, scope)
+	if err != nil {
+		return "", err
+	}
 	workdir, err := resolveWorkdir(scope.WorkingRoot, manifest.Execution.Workdir)
 	if err != nil {
 		return "", err
@@ -84,6 +88,24 @@ func (defaultExternalToolExecutor) Execute(ctx context.Context, manifest Externa
 		return "", err
 	}
 	return string(output), nil
+}
+
+func scopeForExternalProcessNetwork(manifest ExternalToolManifest, scope sandbox.Scope) (sandbox.Scope, error) {
+	if manifest.Constraints.Network != "allowlist" {
+		return scope, nil
+	}
+	if scope.Profile.Mode != sandbox.ModeIsolated || scope.Profile.Network != sandbox.NetworkAllowlist {
+		return sandbox.Scope{}, externalPolicyViolationError{Reason: "process-mode network=\"allowlist\" requires an isolated sandbox profile configured with network=allowlist"}
+	}
+	requested, err := sandbox.ParseNetworkDestinations(manifest.Constraints.NetworkTargets)
+	if err != nil {
+		return sandbox.Scope{}, externalPolicyViolationError{Reason: fmt.Sprintf("process-mode network target is invalid: %v", err)}
+	}
+	if !sandbox.NetworkDestinationsContainAll(scope.Profile.NetworkAllow, requested) {
+		return sandbox.Scope{}, externalPolicyViolationError{Reason: "process-mode network targets exceed the sandbox profile network_allow ceiling"}
+	}
+	scope.Profile.NetworkAllow = requested
+	return scope, nil
 }
 
 func runExternalProcessCommand(ctx context.Context, scope sandbox.Scope, runner *sandbox.Runner, command string, workdir string, stdin []byte, access ExternalToolExecutionAccess) (string, string, error) {

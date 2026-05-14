@@ -263,7 +263,11 @@ func New(
 		UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
 		UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
 	}
-	scopeResolver, err := sandbox.NewResolver(sandboxRoots, SandboxProfilesFromConfig(cfg.Sandbox))
+	sandboxProfiles, err := SandboxProfilesFromConfig(cfg.Sandbox)
+	if err != nil {
+		return nil, fmt.Errorf("init sandbox profiles: %w", err)
+	}
+	scopeResolver, err := sandbox.NewResolver(sandboxRoots, sandboxProfiles)
 	if err != nil {
 		return nil, fmt.Errorf("init sandbox scope resolver: %w", err)
 	}

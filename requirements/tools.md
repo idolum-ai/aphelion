@@ -527,7 +527,7 @@ Later hardening may use native Linux primitives directly or swap to a stronger b
 - `search`
 - `fetch_url`
 
-The native file/search/fetch tools are more constrained and auditable than a shell. They resolve paths through the current sandbox profile, reject hidden/out-of-scope file paths, and deny fetches when the profile network policy is `deny`.
+The native file/search/fetch tools are more constrained and auditable than a shell. They resolve paths through the current sandbox profile, reject hidden/out-of-scope file paths, deny fetches when the profile network policy is `deny`, and enforce isolated `allowlist` fetches against explicit destination records.
 
 ### Later
 
@@ -620,6 +620,7 @@ Tool-related config lives primarily in `config.md` under:
 - output/time limits
 - hidden paths
 - network policy
+- `network_allow` destinations for isolated allowlists
 
 `TOOLS.md` is workspace data, not config.
 

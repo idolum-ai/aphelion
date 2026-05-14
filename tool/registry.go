@@ -239,9 +239,11 @@ func (r *Registry) durableAgentScopeForPrincipalToolExecution(p principal.Princi
 	}
 
 	globalRoot := strings.TrimSpace(r.workspace)
+	durableProfile := sandbox.Profile{}
 	if r.sandbox != nil {
 		roots := r.sandbox.Roots()
 		globalRoot = firstNonEmpty(roots.GlobalRoot, globalRoot)
+		durableProfile = r.sandbox.Profiles().DurableAgent
 	}
 
 	var workingRoot, memoryRoot, networkPolicy string
@@ -271,7 +273,7 @@ func (r *Registry) durableAgentScopeForPrincipalToolExecution(p principal.Princi
 		}
 	}
 
-	scope, err := sandbox.DurableAgentScope(agentID, globalRoot, workingRoot, memoryRoot, networkPolicy)
+	scope, err := sandbox.DurableAgentScopeWithProfile(agentID, globalRoot, workingRoot, memoryRoot, durableProfile, networkPolicy)
 	if err != nil {
 		return sandbox.Scope{}, true, err
 	}

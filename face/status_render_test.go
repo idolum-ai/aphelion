@@ -425,19 +425,19 @@ func TestRenderTelegramStatusSystemIncludesSandboxReadiness(t *testing.T) {
 				Role:             "approved_user",
 				Mode:             "isolated",
 				Network:          "allowlist",
-				Code:             "sandbox_network_allowlist_unenforced",
+				Code:             "sandbox_network_allowlist_backend_unavailable",
 				Severity:         "warning",
-				Summary:          "approved_user requests a sandbox network allowlist, but isolated per-destination enforcement is unavailable and execution will be refused.",
-				NextRepairAction: "Use network=deny for isolated execution.",
+				Summary:          "approved_user requests a sandbox network allowlist, but the linux_netns_nftables backend is unavailable.",
+				NextRepairAction: "Install the host networking prerequisites or use network=deny for isolated execution.",
 			}},
 		},
 	}, "opus", "high")
 	for _, needle := range []string{
 		"sandbox_readiness:",
 		"role=approved_user",
-		"code=sandbox_network_allowlist_unenforced",
+		"code=sandbox_network_allowlist_backend_unavailable",
 		"severity=warning",
-		"next=\"Use network=deny",
+		"next=\"Install the host networking prerequisites",
 	} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("RenderTelegramStatusSystem() = %q, want substring %q", out, needle)

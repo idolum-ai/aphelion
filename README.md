@@ -85,6 +85,7 @@ Aphelion has two operator surfaces:
 Useful gates:
 
 ```bash
+~/.local/bin/aphelion sandbox-net check --config ~/.aphelion/aphelion.toml
 ~/.local/bin/aphelion verify-deploy --config ~/.aphelion/aphelion.toml
 systemctl --user status aphelion
 journalctl --user -u aphelion -f

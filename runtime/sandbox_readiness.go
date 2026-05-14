@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 type sandboxStageResolver interface {
 	Stage(sandbox.Scope) sandbox.Stage
+	NetworkBackendStatus(context.Context) sandbox.NetworkBackendStatus
 }
 
 type sandboxReadinessProfile struct {
@@ -52,7 +54,18 @@ func sandboxReadinessSnapshotFromConfig(cfg *config.Config, now time.Time, runne
 	if activeRoles == nil {
 		activeRoles = sandboxStaticActiveRoles(cfg)
 	}
-	for _, entry := range sandboxReadinessProfiles(SandboxProfilesFromConfig(cfg.Sandbox)) {
+	profiles, err := SandboxProfilesFromConfig(cfg.Sandbox)
+	if err != nil {
+		snapshot.Issues = append(snapshot.Issues, core.SandboxReadinessIssue{
+			Code:             "sandbox_profile_invalid",
+			Severity:         "error",
+			Summary:          fmt.Sprintf("sandbox profiles are invalid: %v", err),
+			NextRepairAction: "Fix the sandbox profile config and run --check-config again.",
+		})
+		return snapshot
+	}
+	networkStatus := runner.NetworkBackendStatus(context.Background())
+	for _, entry := range sandboxReadinessProfiles(profiles) {
 		profile := entry.profile
 		role := strings.TrimSpace(entry.role)
 		if !activeRoles[role] {
@@ -73,15 +86,28 @@ func sandboxReadinessSnapshotFromConfig(cfg *config.Config, now time.Time, runne
 			})
 		}
 		if profile.Mode == sandbox.ModeIsolated && profile.Network == sandbox.NetworkAllowlist {
-			snapshot.Issues = append(snapshot.Issues, core.SandboxReadinessIssue{
-				Role:             role,
-				Mode:             mode,
-				Network:          network,
-				Code:             "sandbox_network_allowlist_unenforced",
-				Severity:         "warning",
-				Summary:          fmt.Sprintf("%s requests a sandbox network allowlist, but isolated per-destination enforcement is unavailable and execution will be refused.", role),
-				NextRepairAction: "Use network=deny for isolated execution, or run as a trusted admin profile only when host networking is intended.",
-			})
+			if len(profile.NetworkAllow) == 0 {
+				snapshot.Issues = append(snapshot.Issues, core.SandboxReadinessIssue{
+					Role:             role,
+					Mode:             mode,
+					Network:          network,
+					Code:             "sandbox_network_allowlist_empty",
+					Severity:         "error",
+					Summary:          fmt.Sprintf("%s requests a sandbox network allowlist without destinations.", role),
+					NextRepairAction: "Set sandbox profile network_allow to explicit host:port, ip:port, or cidr:port destinations.",
+				})
+			}
+			if !networkStatus.Available {
+				snapshot.Issues = append(snapshot.Issues, core.SandboxReadinessIssue{
+					Role:             role,
+					Mode:             mode,
+					Network:          network,
+					Code:             "sandbox_network_allowlist_backend_unavailable",
+					Severity:         "warning",
+					Summary:          fmt.Sprintf("%s requests a sandbox network allowlist, but the %s backend is unavailable: %s.", role, networkStatus.Name, networkStatus.Reason),
+					NextRepairAction: "Install the host networking prerequisites or use network=deny for isolated execution.",
+				})
+			}
 		}
 		if profile.Mode == sandbox.ModeTrusted && role != "admin" {
 			snapshot.Issues = append(snapshot.Issues, core.SandboxReadinessIssue{

@@ -52,6 +52,13 @@ func (r *Resolver) Roots() Roots {
 	return r.roots
 }
 
+func (r *Resolver) Profiles() Profiles {
+	if r == nil {
+		return Profiles{}
+	}
+	return r.profiles
+}
+
 func (r *Resolver) Resolve(p principal.Principal) (Scope, error) {
 	if r == nil {
 		return Scope{}, fmt.Errorf("sandbox resolver is nil")

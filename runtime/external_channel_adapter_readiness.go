@@ -181,7 +181,13 @@ func (r *Runtime) externalChannelReadinessForAgent(agent core.DurableAgent, now 
 			workspaceRoot, memoryRoot = durableagent.DefaultLocalRoots(r.store.DBPath(), agent.AgentID)
 		}
 	}
-	scope, scopeErr := sandbox.DurableAgentScope(agent.AgentID, doctorReadinessGlobalRoot(r), workspaceRoot, memoryRoot, agent.NetworkPolicy)
+	durableProfile := sandbox.Profile{}
+	if r != nil && r.cfg != nil {
+		if profiles, err := SandboxProfilesFromConfig(r.cfg.Sandbox); err == nil {
+			durableProfile = profiles.DurableAgent
+		}
+	}
+	scope, scopeErr := sandbox.DurableAgentScopeWithProfile(agent.AgentID, doctorReadinessGlobalRoot(r), workspaceRoot, memoryRoot, durableProfile, agent.NetworkPolicy)
 	if scopeErr != nil {
 		addLayer("sandbox", externalChannelReadinessStatusBlocked, scopeErr.Error())
 		setFailure(externalChannelReadinessFailureSandbox, "repair durable child local roots before sandbox readiness can be checked")

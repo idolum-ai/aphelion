@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 type externalPolicyViolationError struct {
@@ -30,7 +32,16 @@ func validateExternalProcessPolicy(manifest ExternalToolManifest) error {
 	if manifest.Execution.Mode != "process" && manifest.Execution.Mode != "subprocess" {
 		return nil
 	}
-	if network := strings.TrimSpace(manifest.Constraints.Network); network != "" && network != "none" {
+	switch network := strings.TrimSpace(manifest.Constraints.Network); network {
+	case "", "none":
+	case "allowlist":
+		if len(manifest.Constraints.NetworkTargets) == 0 {
+			return externalPolicyViolationError{Reason: "process-mode network=\"allowlist\" requires constraints.network_targets"}
+		}
+		if _, err := sandbox.ParseNetworkDestinations(manifest.Constraints.NetworkTargets); err != nil {
+			return externalPolicyViolationError{Reason: fmt.Sprintf("process-mode network target is invalid: %v", err)}
+		}
+	default:
 		return externalPolicyViolationError{Reason: fmt.Sprintf("process-mode network=%q is not enforceable by the process executor", network)}
 	}
 	if filesystem := strings.TrimSpace(manifest.Constraints.Filesystem); filesystem != "" && filesystem != "none" {

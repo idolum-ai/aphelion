@@ -336,7 +336,11 @@ func (r *Runtime) scopeForDurableAgent(agent core.DurableAgent) (sandbox.Scope, 
 			return sandbox.Scope{}, fmt.Errorf("create durable agent root %s: %w", root, err)
 		}
 	}
-	return sandbox.DurableAgentScope(agent.AgentID, r.cfg.Agent.PromptRoot, workspaceRoot, memoryRoot, agent.NetworkPolicy)
+	profiles, err := SandboxProfilesFromConfig(r.cfg.Sandbox)
+	if err != nil {
+		return sandbox.Scope{}, err
+	}
+	return sandbox.DurableAgentScopeWithProfile(agent.AgentID, r.cfg.Agent.PromptRoot, workspaceRoot, memoryRoot, profiles.DurableAgent, agent.NetworkPolicy)
 }
 
 func durableAgentScopeRef(agent core.DurableAgent) session.ScopeRef {

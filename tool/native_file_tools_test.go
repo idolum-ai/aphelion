@@ -200,9 +200,9 @@ func TestFetchURLHonorsNetworkPolicy(t *testing.T) {
 	allowlistProfile.Network = sandbox.NetworkAllowlist
 	allowlistScope := deniedScope
 	allowlistScope.Profile = allowlistProfile
-	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"`+server.URL+`"}`), allowlistScope, approved, session.SessionKey{})
-	if err == nil || !strings.Contains(err.Error(), "allowlist enforcement is unavailable") {
-		t.Fatalf("fetch_url allowlist err = %v, want unavailable-enforcement rejection", err)
+	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"https://example.com"}`), allowlistScope, approved, session.SessionKey{})
+	if err == nil || !strings.Contains(err.Error(), "allowlist has no destinations") {
+		t.Fatalf("fetch_url allowlist err = %v, want empty-allowlist rejection", err)
 	}
 }
 
