@@ -95,6 +95,10 @@ From Telegram, start with `/health`, `/status`, and `/help`. The reference for
 current commands and buttons is
 [docs/telegram-ui-features.md](docs/telegram-ui-features.md).
 
+Isolated work defaults to no network. When a non-admin or durable profile needs
+narrow internet access, use the helper-backed path in
+[docs/guides/sandbox-networking.md](docs/guides/sandbox-networking.md).
+
 For source checkout work:
 
 ```bash

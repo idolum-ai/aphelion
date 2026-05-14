@@ -85,6 +85,13 @@ tied to the task you are doing now.
 
 Use `/health` again after changing automation so the service state is visible.
 
+## Internet From Isolated Work
+
+The quick path keeps isolated work on `network = "deny"`. That is expected.
+Only install the sandbox network helper if a profile needs direct internet
+access to a small list of destinations. Use
+[Sandbox Networking](sandbox-networking.md) for that path.
+
 ## Next
 
 - [Telegram Operations](telegram-operations.md) explains daily control from

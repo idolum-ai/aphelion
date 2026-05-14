@@ -104,6 +104,8 @@ Keep non-admin and durable sandbox profiles on `network = "deny"` unless
 `sandbox-net check` reports the allowlist backend available. For isolated
 allowlists, destinations are explicit `host:port`, `ip:port`, or `cidr:port`
 entries; hostnames compile to IP/port firewall rules when the process starts.
+Use [Sandbox Networking](sandbox-networking.md) when a profile needs this
+bounded egress path.
 
 ## Sandbox Network Allowlists
 
@@ -130,11 +132,20 @@ network = "allowlist"
 network_allow = ["api.openai.com:443", "github.com:443"]
 ```
 
-The process backend needs Linux network namespaces, nftables, IPv4 forwarding,
-and `CAP_NET_ADMIN`. If any prerequisite is absent, Aphelion refuses the
-allowlisted process instead of falling back to host networking. This is IP/port
-enforcement; it does not inspect HTTP Host headers or TLS SNI. The current
-backend enforces IPv4 egress; IPv6-only destinations fail closed.
+The allowlist backend is a root-owned helper service. The main user service
+talks to `/run/aphelion/sandbox-net.sock`; it does not receive network namespace
+or firewall capabilities. Install the helper from a checkout with:
+
+```bash
+make install-sandbox-net-helper
+```
+
+The helper needs Linux network namespaces, nftables, `setpriv`, IPv4
+forwarding, `CAP_NET_ADMIN`, and `CAP_SYS_ADMIN`. If any prerequisite is
+absent, Aphelion refuses the allowlisted process instead of falling back to host
+networking. This is IP/port enforcement; it does not inspect HTTP Host headers
+or TLS SNI. The current backend enforces IPv4 egress; IPv6-only destinations
+fail closed.
 
 ## Inspect
 

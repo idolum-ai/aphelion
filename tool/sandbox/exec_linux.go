@@ -229,14 +229,27 @@ func (r *Runner) runIsolatedAllowlist(ctx context.Context, req ExecRequest) (Exe
 	if err != nil {
 		return ExecResult{}, err
 	}
-	lease, err := r.networkBackendOrDefault().Prepare(ctx, policy)
+	backend := r.networkBackendOrDefault()
+	args, err := buildBwrapArgs(req.Scope, workdir, command, req.ExtraWritablePaths, req.ExtraReadonlyPaths, req.ExtraReadonlyBinds, req.ExtraEnv)
 	if err != nil {
 		return ExecResult{}, err
 	}
+	if commandBackend, ok := backend.(NetworkCommandBackend); ok {
+		return commandBackend.RunNetworkCommand(ctx, NetworkCommandRequest{
+			Policy:    policy,
+			BwrapPath: bwrapPath,
+			BwrapArgs: args,
+			Stdin:     req.Stdin,
+		})
+	}
 
+	lease, err := backend.Prepare(ctx, policy)
+	if err != nil {
+		return ExecResult{}, err
+	}
 	extraReadonlyBinds := append([]BindPath(nil), req.ExtraReadonlyBinds...)
 	extraReadonlyBinds = append(extraReadonlyBinds, lease.ExtraReadonlyBinds...)
-	args, err := buildBwrapArgs(req.Scope, workdir, command, req.ExtraWritablePaths, req.ExtraReadonlyPaths, extraReadonlyBinds, req.ExtraEnv)
+	args, err = buildBwrapArgs(req.Scope, workdir, command, req.ExtraWritablePaths, req.ExtraReadonlyPaths, extraReadonlyBinds, req.ExtraEnv)
 	if err != nil {
 		cleanupErr := lease.Cleanup(context.Background())
 		if cleanupErr != nil {
@@ -244,7 +257,6 @@ func (r *Runner) runIsolatedAllowlist(ctx context.Context, req ExecRequest) (Exe
 		}
 		return ExecResult{}, err
 	}
-
 	binary := bwrapPath
 	if len(lease.CommandPrefix) > 0 {
 		binary = lease.CommandPrefix[0]
@@ -624,7 +636,8 @@ func (r *Runner) networkBackendOrDefault() NetworkBackend {
 		return r.networkBackend
 	}
 	if r == nil {
-		return NewLinuxNetworkBackend(exec.LookPath)
+		return NewNetworkHelperBackend("")
 	}
-	return NewLinuxNetworkBackend(r.lookPath)
+	socketPath := strings.TrimSpace(os.Getenv("APHELION_SANDBOX_NET_SOCKET"))
+	return NewNetworkHelperBackend(socketPath)
 }

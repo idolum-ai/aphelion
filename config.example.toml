@@ -133,7 +133,8 @@ readonly_paths = ["{global_root}", "{shared_memory_root}"]
 hidden_paths = ["~/.aphelion/aphelion.toml", "~/.config/aphelion/config.toml", "~/.ssh", "~/.gnupg"]
 network = "deny"
 # To permit isolated IPv4 egress, set network = "allowlist" and list explicit
-# host:port, ip:port, or cidr:port destinations. Run:
+# host:port, ip:port, or cidr:port destinations. Install the sandbox network
+# helper, then run:
 # aphelion sandbox-net check --config ~/.aphelion/aphelion.toml
 # network_allow = ["api.openai.com:443"]
 

@@ -19,6 +19,17 @@ func TestRunnerLiveNetworkAllowlistBackend(t *testing.T) {
 	scope := buildScope(t, principal.RoleApprovedUser)
 	scope.Profile.Network = NetworkAllowlist
 	scope.Profile.NetworkAllow = MustParseNetworkDestinations([]string{"example.com:443"})
+	for _, path := range []string{
+		scope.GlobalRoot,
+		scope.SharedMemoryRoot,
+		scope.UserWorkspace,
+		scope.UserMemory,
+		scope.WorkingRoot,
+	} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) err = %v", path, err)
+		}
+	}
 	runner := NewRunner()
 	if status := runner.NetworkBackendStatus(context.Background()); !status.Available {
 		t.Skipf("network backend unavailable: %s", status.Reason)

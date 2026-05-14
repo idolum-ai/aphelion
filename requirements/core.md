@@ -166,7 +166,7 @@ Credentials are loaded from environment variables or a single encrypted config a
 Tool exec processes run inside a multi-layer sandbox. The primitives are Linux-native:
 
 - **cgroups v2**: Memory, CPU, PID, IO limits. Transient cgroup per exec, cleaned up on exit.
-- **Network namespaces**: `unshare(CLONE_NEWNET)` + veth pair + nftables allow-list firewall. Three modes: `none` / `full` (blank) / `firewall`.
+- **Network namespaces**: deny-by-default isolated networking, plus helper-owned veth and nftables allowlist enforcement when a profile explicitly uses `network = "allowlist"`.
 - **seccomp-bpf**: Restrict available syscalls. `moderate` blocks ptrace/mount/bpf/etc.
 - **Capabilities**: Drop CAP_SYS_ADMIN, CAP_NET_ADMIN, etc.
 - **User namespaces**: Map exec to nobody:nogroup.

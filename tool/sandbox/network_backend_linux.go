@@ -51,6 +51,17 @@ type NetworkBackend interface {
 	Prepare(context.Context, CompiledNetworkPolicy) (*NetworkLease, error)
 }
 
+type NetworkCommandRequest struct {
+	Policy    CompiledNetworkPolicy
+	BwrapPath string
+	BwrapArgs []string
+	Stdin     []byte
+}
+
+type NetworkCommandBackend interface {
+	RunNetworkCommand(context.Context, NetworkCommandRequest) (ExecResult, error)
+}
+
 type LinuxNetworkBackend struct {
 	lookPath func(string) (string, error)
 }
@@ -69,6 +80,7 @@ func (b *LinuxNetworkBackend) Status(_ context.Context) NetworkBackendStatus {
 			"iproute2 ip",
 			"nftables nft",
 			"CAP_NET_ADMIN",
+			"CAP_SYS_ADMIN",
 			"IPv4 forwarding",
 		},
 	}
@@ -86,6 +98,10 @@ func (b *LinuxNetworkBackend) Status(_ context.Context) NetworkBackendStatus {
 	}
 	if !processHasCapNetAdmin() {
 		status.Reason = "CAP_NET_ADMIN is not available to this process"
+		return status
+	}
+	if !processHasCapSysAdmin() {
+		status.Reason = "CAP_SYS_ADMIN is not available to this process"
 		return status
 	}
 	if !ipv4ForwardingEnabled() {
@@ -129,6 +145,9 @@ func (b *LinuxNetworkBackend) Prepare(ctx context.Context, policy CompiledNetwor
 	tempDir, err := os.MkdirTemp("", "aphelion-sandbox-net-*")
 	if err != nil {
 		return nil, fmt.Errorf("create sandbox network temp dir: %w", err)
+	}
+	if err := os.Chmod(tempDir, 0o711); err != nil {
+		return nil, fmt.Errorf("chmod sandbox network temp dir: %w", err)
 	}
 
 	cleanup := &networkCleanup{
@@ -318,6 +337,14 @@ func runCommand(ctx context.Context, binary string, args ...string) error {
 }
 
 func processHasCapNetAdmin() bool {
+	return processHasCapability(12)
+}
+
+func processHasCapSysAdmin() bool {
+	return processHasCapability(21)
+}
+
+func processHasCapability(bit uint) bool {
 	data, err := os.ReadFile("/proc/self/status")
 	if err != nil {
 		return os.Geteuid() == 0
@@ -331,7 +358,7 @@ func processHasCapNetAdmin() bool {
 		if err != nil {
 			return os.Geteuid() == 0
 		}
-		return value&(1<<12) != 0
+		return value&(uint64(1)<<bit) != 0
 	}
 	return os.Geteuid() == 0
 }

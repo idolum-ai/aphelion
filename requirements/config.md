@@ -360,8 +360,8 @@ hidden_paths = [
 network = "deny"               # "deny" | "allowlist"
 network_allow = []             # host:port, ip:port, or cidr:port when network="allowlist"
 
-# Isolated `allowlist` requires explicit destinations and a working host
-# network backend. Run `aphelion sandbox-net check --config <path>` before
+# Isolated `allowlist` requires explicit destinations and a working helper-backed
+# host network backend. Run `aphelion sandbox-net check --config <path>` before
 # switching a live non-admin or durable profile from `deny`.
 
 # ─── Automation ───
@@ -410,7 +410,7 @@ hidden_paths = [             # Paths invisible to exec processes
 [sandbox.network]
 isolation = "firewall"       # "none" | "full" (blank namespace) | "firewall" (allowlist)
 # When isolation = "firewall", only these destinations are reachable.
-# Uses nftables rules inside a network namespace with a veth pair.
+# Uses helper-owned nftables rules inside a network namespace with a veth pair.
 allow = [
     # LLM providers (for sub-agents that need API access)
     "api.anthropic.com:443",

@@ -19,4 +19,5 @@ an explicit split direction. New large files should be rare.
 
 | File | Owner concept | Split direction |
 |---|---|---|
-| _None currently_ | First-party Go files are under the active threshold. | Add a row only when a file exceeds 800 lines and has a clear owner plus next split direction. |
+| `config/validate.go` | Config schema validation and operator-safe config error shaping. | Split durable sub-schema validators into focused files when validation logic starts crossing config-domain boundaries. |
+| `tool/native_file_tools.go` | Native file, fetch, and extraction tool implementations under sandbox and authority ceilings. | Split fetch/network policy and document extraction into focused files while keeping native tool registration local. |

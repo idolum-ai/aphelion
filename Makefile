@@ -6,7 +6,7 @@ STATIC_BIN ?= $(BIN_DIR)/$(APP)-static
 STATIC_TAGS ?= netgo osusergo sqlite_omit_load_extension
 STATIC_LDFLAGS ?= -linkmode external -extldflags "-static"
 
-.PHONY: build build-static run test check-config init install-user-service restart-user-service logs-user-service update install-release update-release paths gc docs-architecture architecture public-readiness design-principles deadcode check-live-fixtures taste
+.PHONY: build build-static run test check-config init install-user-service install-sandbox-net-helper restart-user-service logs-user-service update install-release update-release paths gc docs-architecture architecture public-readiness design-principles deadcode check-live-fixtures taste
 
 build:
 	mkdir -p $(BIN_DIR)
@@ -60,6 +60,9 @@ taste:
 
 install-user-service: build
 	./scripts/install-user-service.sh
+
+install-sandbox-net-helper: build
+	./scripts/install-sandbox-net-helper.sh
 
 restart-user-service:
 	./$(BIN) park-restart --config $(CONFIG) --source make_restart

@@ -206,11 +206,13 @@ Network access should be specified per profile.
 
 For isolated `allowlist`, each destination must include an explicit port.
 Process execution compiles hostname entries to IP/port rules at run start and
-uses the Linux netns+nftables backend when available. The current backend
-enforces IPv4 egress and must fail closed for IPv6-only destinations. If the
-backend is not available, execution must fail closed. Native `fetch_url` applies
-the same destination ceiling in-process. Hostname entries are IP/port
-enforcement, not HTTP Host or TLS SNI policy.
+uses the helper-backed Linux netns+nftables backend when available. The user
+service must not need host network namespace or firewall capabilities for this
+path; those live behind the narrow `sandbox-net helper serve` socket. The
+current backend enforces IPv4 egress and must fail closed for IPv6-only
+destinations. If the backend is not available, execution must fail closed.
+Native `fetch_url` applies the same destination ceiling in-process. Hostname
+entries are IP/port enforcement, not HTTP Host or TLS SNI policy.
 
 ## Sandbox Backends
 

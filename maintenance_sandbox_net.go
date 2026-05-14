@@ -8,7 +8,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/face"
@@ -39,7 +42,44 @@ func runSandboxNetCommand(args []string) error {
 		}
 		return runSandboxNetCheckCommand(args)
 	}
+	if strings.TrimSpace(args[0]) == "helper" {
+		return runSandboxNetHelperCommand(args[1:])
+	}
 	return fmt.Errorf("unknown sandbox-net command %q", args[0])
+}
+
+func runSandboxNetHelperCommand(args []string) error {
+	if len(args) == 0 || strings.TrimSpace(args[0]) != "serve" {
+		return fmt.Errorf("unknown sandbox-net helper command %q", firstArgOrEmpty(args))
+	}
+	return runSandboxNetHelperServeCommand(args[1:])
+}
+
+func runSandboxNetHelperServeCommand(args []string) error {
+	fs := flag.NewFlagSet("sandbox-net helper serve", flag.ContinueOnError)
+	socketPathFlag := fs.String("socket", sandbox.DefaultNetworkHelperSocketPath, "Unix socket path")
+	socketGroupFlag := fs.String("socket-group", "", "Unix socket group name")
+	socketModeFlag := fs.String("socket-mode", "0660", "Unix socket mode")
+	allowedUIDFlag := fs.Int("allowed-uid", -1, "only accept run requests from this peer UID")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if extra, ok := firstPositionalArg(fs.Args()); ok {
+		return fmt.Errorf("unknown argument %q for sandbox-net helper serve", extra)
+	}
+	socketMode, err := parseOctalFileMode(*socketModeFlag)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return sandbox.ServeNetworkHelper(ctx, sandbox.NetworkHelperServeOptions{
+		SocketPath:        *socketPathFlag,
+		SocketGroup:       *socketGroupFlag,
+		SocketMode:        socketMode,
+		AllowedUID:        *allowedUIDFlag,
+		EnforceAllowedUID: *allowedUIDFlag >= 0,
+	})
 }
 
 func runSandboxNetCheckCommand(args []string) error {
@@ -183,4 +223,23 @@ func networkDestinationStrings(destinations []sandbox.NetworkDestination) []stri
 		out = append(out, destination.Canonical())
 	}
 	return out
+}
+
+func parseOctalFileMode(raw string) (os.FileMode, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, fmt.Errorf("file mode is required")
+	}
+	parsed, err := strconv.ParseUint(value, 8, 32)
+	if err != nil {
+		return 0, fmt.Errorf("file mode %q must be octal: %w", raw, err)
+	}
+	return os.FileMode(parsed), nil
+}
+
+func firstArgOrEmpty(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return args[0]
 }

@@ -58,6 +58,18 @@ network_allow = ["example.com"]
 	}
 }
 
+func TestRunSandboxNetHelperServeRejectsInvalidMode(t *testing.T) {
+	t.Parallel()
+
+	err := runSandboxNetCommand([]string{"helper", "serve", "--socket-mode", "not-octal"})
+	if err == nil {
+		t.Fatal("runSandboxNetCommand(helper serve) err = nil, want invalid mode rejection")
+	}
+	if !strings.Contains(err.Error(), "must be octal") {
+		t.Fatalf("err = %v, want octal mode rejection", err)
+	}
+}
+
 func writeSandboxNetTestConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
