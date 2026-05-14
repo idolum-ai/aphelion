@@ -59,25 +59,31 @@ func (scheduledReviewDurableWakeAdapter) Prepare(_ context.Context, rt *Runtime,
 		return nil, nil
 	}
 
-	state, err := rt.store.DurableAgentState(strings.TrimSpace(agent.AgentID))
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	state, continuity, err := loadDurableAgentContinuityFromStore(rt.store, agent.AgentID)
+	if err != nil {
 		return nil, fmt.Errorf("load scheduled review state: %w", err)
 	}
 	if state != nil && strings.TrimSpace(state.Cursor) == reviewDate {
 		return nil, nil
 	}
+	if scheduledReviewBackoffActive(continuity, reviewDate, now) {
+		return nil, nil
+	}
 
 	scope, err := rt.scopeForDurableAgent(agent)
 	if err != nil {
-		return nil, fmt.Errorf("resolve scheduled review scope: %w", err)
+		return nil, rt.wrapScheduledReviewPrepareFailure(agent, cfg, reviewDate, "prepare_scope_failed", "resolve scheduled review scope", err, now)
 	}
 	hits, err := rt.store.MessagesInWindow(reviewStart, reviewEnd, cfg.MaxMessages)
 	if err != nil {
-		return nil, fmt.Errorf("load scheduled review message window: %w", err)
+		return nil, rt.wrapScheduledReviewPrepareFailure(agent, cfg, reviewDate, "message_window_failed", "load scheduled review message window", err, now)
 	}
 	transcriptPath, err := stageScheduledReviewTranscript(scope.WorkingRoot, cfg.TranscriptDir, reviewStart, reviewEnd, hits)
 	if err != nil {
-		return nil, fmt.Errorf("stage scheduled review transcript: %w", err)
+		return nil, rt.wrapScheduledReviewPrepareFailure(agent, cfg, reviewDate, "transcript_staging_failed", "stage scheduled review transcript", err, now)
+	}
+	if err := rt.recordScheduledReviewAttempt(state, continuity, reviewDate, now); err != nil {
+		return nil, fmt.Errorf("record scheduled review attempt: %w", err)
 	}
 
 	key := session.SessionKey{ChatID: durableWakeSyntheticChatID(agent.AgentID), Scope: durableAgentScopeRef(agent)}
@@ -136,7 +142,7 @@ func (scheduledReviewDurableWakeAdapter) Prepare(_ context.Context, rt *Runtime,
 				},
 				Questions: []string{cfg.GuidanceQuestion},
 				RiskFlags: []string{cfg.ArtifactKind},
-				Metadata: map[string]string{
+				Metadata: scheduledReviewArtifactMetadata(cfg, map[string]string{
 					"channel_kind":        scheduledReviewChannelKind,
 					"trigger_kinds":       cfg.ArtifactKind + ",scheduled_review",
 					"review_date":         reviewDate,
@@ -145,7 +151,7 @@ func (scheduledReviewDurableWakeAdapter) Prepare(_ context.Context, rt *Runtime,
 					"message_count":       strconv.Itoa(len(hits)),
 					"transcript_path":     transcriptPath,
 					"child_local_subject": "false",
-				},
+				}),
 			}
 			if title := strings.TrimSpace(cfg.Title); title != "" {
 				artifact.Metadata["operator_title"] = title
@@ -154,10 +160,16 @@ func (scheduledReviewDurableWakeAdapter) Prepare(_ context.Context, rt *Runtime,
 			if _, err := durableagent.NewRuntime(rt.store).QueueReviewArtifact(agent, artifact); err != nil {
 				return fmt.Errorf("queue scheduled review artifact: %w", err)
 			}
+			if err := rt.recordScheduledReviewSuccess(agent.AgentID, reviewDate, now); err != nil {
+				return fmt.Errorf("record scheduled review success: %w", err)
+			}
 			if err := rt.markDurableScheduledReviewCursor(agent.AgentID, reviewDate); err != nil {
 				return fmt.Errorf("mark scheduled review cursor: %w", err)
 			}
 			return nil
+		},
+		FinalizeFailure: func(turnSummary string, cause error) error {
+			return rt.recordScheduledReviewFailure(agent, cfg, reviewDate, turnSummary, cause, now, "wake_failed")
 		},
 	}, nil
 }
@@ -172,6 +184,9 @@ type scheduledReviewConfig struct {
 	TranscriptDir    string
 	PromptTemplate   string
 	GuidanceQuestion string
+	RecipeID         string
+	RecipeVersion    string
+	RecipeSource     string
 }
 
 func scheduledReviewConfigForAgent(agent core.DurableAgent) scheduledReviewConfig {
@@ -213,6 +228,9 @@ func scheduledReviewConfigForAgent(agent core.DurableAgent) scheduledReviewConfi
 		if strings.TrimSpace(raw.GuidanceQuestion) != "" {
 			cfg.GuidanceQuestion = strings.TrimSpace(raw.GuidanceQuestion)
 		}
+		cfg.RecipeID = strings.TrimSpace(raw.RecipeID)
+		cfg.RecipeVersion = strings.TrimSpace(raw.RecipeVersion)
+		cfg.RecipeSource = strings.TrimSpace(raw.RecipeSource)
 	}
 	cfg.ScheduleKind = strings.ToLower(strings.TrimSpace(cfg.ScheduleKind))
 	cfg.Window = strings.ToLower(strings.TrimSpace(cfg.Window))
@@ -348,4 +366,190 @@ func scheduledReviewChatTitle(cfg scheduledReviewConfig) string {
 		return "scheduled-review"
 	}
 	return title
+}
+
+func scheduledReviewBackoffActive(continuity core.DurableAgentContinuityState, reviewDate string, now time.Time) bool {
+	state := continuity.ScheduledReview
+	if state == nil {
+		return false
+	}
+	if strings.TrimSpace(state.ReviewDate) != strings.TrimSpace(reviewDate) {
+		return false
+	}
+	return !state.BackoffUntil.IsZero() && now.UTC().Before(state.BackoffUntil.UTC())
+}
+
+func scheduledReviewRecordAttempt(state core.DurableAgentScheduledReviewRuntimeState, reviewDate string, now time.Time) core.DurableAgentScheduledReviewRuntimeState {
+	if strings.TrimSpace(state.ReviewDate) != strings.TrimSpace(reviewDate) {
+		state = core.DurableAgentScheduledReviewRuntimeState{ReviewDate: strings.TrimSpace(reviewDate)}
+	}
+	state.ReviewDate = strings.TrimSpace(reviewDate)
+	state.LastAttemptAt = now.UTC()
+	state.LastStatus = "wake_started"
+	state.LastError = ""
+	state.LastErrorAt = time.Time{}
+	return state
+}
+
+func scheduledReviewRecordSuccess(state core.DurableAgentScheduledReviewRuntimeState, reviewDate string, now time.Time) core.DurableAgentScheduledReviewRuntimeState {
+	state = scheduledReviewRecordAttempt(state, reviewDate, now)
+	state.LastSuccessAt = now.UTC()
+	state.LastStatus = "wake_completed"
+	state.LastError = ""
+	state.LastErrorAt = time.Time{}
+	state.BackoffUntil = time.Time{}
+	state.FailureCount = 0
+	return state
+}
+
+func scheduledReviewRecordFailure(state core.DurableAgentScheduledReviewRuntimeState, reviewDate string, cause error, now time.Time, status string) core.DurableAgentScheduledReviewRuntimeState {
+	state = scheduledReviewRecordAttempt(state, reviewDate, now)
+	state.LastStatus = firstNonEmpty(strings.TrimSpace(status), "wake_failed")
+	if cause != nil {
+		state.LastError = truncateRunes(cause.Error(), 900)
+	}
+	state.LastErrorAt = now.UTC()
+	state.FailureCount++
+	state.BackoffUntil = scheduledReviewBackoffUntil(now, state.FailureCount)
+	return state
+}
+
+func scheduledReviewBackoffUntil(now time.Time, failures int) time.Time {
+	return durableWakeBackoffUntil(now, failures)
+}
+
+func (r *Runtime) recordScheduledReviewAttempt(state *core.DurableAgentState, continuity core.DurableAgentContinuityState, reviewDate string, now time.Time) error {
+	if r == nil || r.store == nil || state == nil {
+		return nil
+	}
+	current := core.DurableAgentScheduledReviewRuntimeState{}
+	if continuity.ScheduledReview != nil {
+		current = *continuity.ScheduledReview
+	}
+	updated := scheduledReviewRecordAttempt(current, reviewDate, now)
+	continuity.ScheduledReview = &updated
+	raw, err := continuity.Marshal()
+	if err != nil {
+		return err
+	}
+	state.StateJSON = raw
+	return r.store.SaveDurableAgentState(*state)
+}
+
+func (r *Runtime) recordScheduledReviewSuccess(agentID string, reviewDate string, now time.Time) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	state, continuity, err := loadDurableAgentContinuityFromStore(r.store, agentID)
+	if err != nil {
+		return err
+	}
+	current := core.DurableAgentScheduledReviewRuntimeState{}
+	if continuity.ScheduledReview != nil {
+		current = *continuity.ScheduledReview
+	}
+	updated := scheduledReviewRecordSuccess(current, reviewDate, now)
+	continuity.ScheduledReview = &updated
+	raw, err := continuity.Marshal()
+	if err != nil {
+		return err
+	}
+	state.StateJSON = raw
+	return r.store.SaveDurableAgentState(*state)
+}
+
+func (r *Runtime) recordScheduledReviewFailure(agent core.DurableAgent, cfg scheduledReviewConfig, reviewDate string, turnSummary string, cause error, now time.Time, status string) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	if cause == nil {
+		cause = fmt.Errorf("scheduled review wake failed")
+	}
+	state, continuity, err := loadDurableAgentContinuityFromStore(r.store, agent.AgentID)
+	if err != nil {
+		return err
+	}
+	current := core.DurableAgentScheduledReviewRuntimeState{}
+	if continuity.ScheduledReview != nil {
+		current = *continuity.ScheduledReview
+	}
+	updated := scheduledReviewRecordFailure(current, reviewDate, cause, now, status)
+	continuity.ScheduledReview = &updated
+	raw, err := continuity.Marshal()
+	if err != nil {
+		return err
+	}
+	state.StateJSON = raw
+	if err := r.store.SaveDurableAgentState(*state); err != nil {
+		return err
+	}
+	artifact := scheduledReviewFailureArtifact(agent, cfg, reviewDate, turnSummary, cause, updated, status)
+	if _, err := durableagent.NewRuntime(r.store).QueueReviewArtifact(agent, artifact); err != nil {
+		return fmt.Errorf("queue scheduled review failure artifact: %w", err)
+	}
+	return nil
+}
+
+func scheduledReviewFailureArtifact(agent core.DurableAgent, cfg scheduledReviewConfig, reviewDate string, turnSummary string, cause error, state core.DurableAgentScheduledReviewRuntimeState, status string) core.DurableReviewArtifact {
+	title := strings.TrimSpace(cfg.Title)
+	if title == "" {
+		title = "Scheduled review"
+	}
+	errorText := "scheduled review wake failed"
+	if cause != nil {
+		errorText = truncateRunes(cause.Error(), 900)
+	}
+	status = firstNonEmpty(strings.TrimSpace(status), "wake_failed")
+	summary := fmt.Sprintf("%s %s for %s; backoff recorded until %s.", title, strings.ReplaceAll(status, "_", " "), strings.TrimSpace(reviewDate), state.BackoffUntil.UTC().Format(time.RFC3339))
+	if trimmed := strings.TrimSpace(turnSummary); trimmed != "" {
+		summary += " " + truncateRunes(trimmed, 600)
+	}
+	metadata := scheduledReviewArtifactMetadata(cfg, map[string]string{
+		"channel_kind":        scheduledReviewChannelKind,
+		"trigger_kinds":       cfg.ArtifactKind + ",scheduled_review," + status,
+		"review_date":         strings.TrimSpace(reviewDate),
+		"failure_count":       strconv.Itoa(state.FailureCount),
+		"backoff_until":       state.BackoffUntil.UTC().Format(time.RFC3339),
+		"last_error":          errorText,
+		"failure_status":      status,
+		"operator_status":     "blocked",
+		"child_local_subject": "false",
+	})
+	if title != "" {
+		metadata["operator_title"] = title + " wake blocked"
+		metadata["channel_label"] = title
+	}
+	return core.DurableReviewArtifact{
+		AgentID:       strings.TrimSpace(agent.AgentID),
+		Summary:       summary,
+		IntervalLabel: strings.TrimSpace(reviewDate),
+		LocalActions:  []string{"Scheduled-review wake failed; recorded failure lifecycle state and backoff instead of retry-spamming."},
+		Questions:     []string{"Inspect the failure only if this scheduled review is currently needed; otherwise let backoff suppress retries."},
+		RiskFlags:     []string{cfg.ArtifactKind, "wake_failed", "backoff_recorded"},
+		Metadata:      metadata,
+	}
+}
+
+func (r *Runtime) wrapScheduledReviewPrepareFailure(agent core.DurableAgent, cfg scheduledReviewConfig, reviewDate string, status string, contextLabel string, cause error, now time.Time) error {
+	wrapped := fmt.Errorf("%s: %w", strings.TrimSpace(contextLabel), cause)
+	if err := r.recordScheduledReviewFailure(agent, cfg, reviewDate, "", wrapped, now, status); err != nil {
+		return fmt.Errorf("%w (and failed to record scheduled review failure: %v)", wrapped, err)
+	}
+	return wrapped
+}
+
+func scheduledReviewArtifactMetadata(cfg scheduledReviewConfig, metadata map[string]string) map[string]string {
+	if metadata == nil {
+		metadata = map[string]string{}
+	}
+	if recipeID := strings.TrimSpace(cfg.RecipeID); recipeID != "" {
+		metadata["recipe_id"] = recipeID
+	}
+	if recipeVersion := strings.TrimSpace(cfg.RecipeVersion); recipeVersion != "" {
+		metadata["recipe_version"] = recipeVersion
+	}
+	if recipeSource := strings.TrimSpace(cfg.RecipeSource); recipeSource != "" {
+		metadata["recipe_source"] = recipeSource
+	}
+	return metadata
 }

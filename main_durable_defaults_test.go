@@ -120,9 +120,18 @@ func TestInstallDailyReviewRecipeCreatesDefaultAgent(t *testing.T) {
 	if agent.WakeupMode != "poll" {
 		t.Fatalf("WakeupMode = %q, want poll", agent.WakeupMode)
 	}
+	if agent.ParentScopeKind != string(session.ScopeKindHeartbeat) || agent.ParentScopeID != "admin-house" || agent.NetworkPolicy != "default" || agent.PolicyVersion != 1 {
+		t.Fatalf("install-owned fields = scope %q/%q network=%q policy_version=%d, want recipe defaults", agent.ParentScopeKind, agent.ParentScopeID, agent.NetworkPolicy, agent.PolicyVersion)
+	}
+	if agent.LivePolicy.PublicSurfaceMode != "explicit_parent_relay_only" {
+		t.Fatalf("PublicSurfaceMode = %q, want canonical parent relay", agent.LivePolicy.PublicSurfaceMode)
+	}
 	scheduled := agent.ChannelConfig.ScheduledReviewConfig()
 	if scheduled == nil || scheduled.Title != "Daily review" || scheduled.TimeUTC != "00:10" || scheduled.ArtifactKind != "scheduled_check_in" {
 		t.Fatalf("ScheduledReviewConfig() = %#v, want recipe scheduled-review config", scheduled)
+	}
+	if scheduled.RecipeID != "daily-review" || scheduled.RecipeVersion != "1" || scheduled.RecipeSource != "bundled" {
+		t.Fatalf("ScheduledReview recipe metadata = %#v, want bundled daily-review v1", scheduled)
 	}
 	if agent.Status != "active" {
 		t.Fatalf("Status = %q, want active", agent.Status)
@@ -199,6 +208,9 @@ func TestInstallDailyReviewRecipePreservesExistingAgent(t *testing.T) {
 	}
 	if !result.Existing || result.Installed || result.Skipped {
 		t.Fatalf("install result = %#v, want existing", result)
+	}
+	if result.SkipReason != "preserved_existing" || len(result.DriftReasons) == 0 {
+		t.Fatalf("install result = %#v, want explicit preserved existing drift evidence", result)
 	}
 
 	agent, err := store.DurableAgent("idolum-daily-review")

@@ -112,6 +112,20 @@ type DurableAgentExternalChannelRuntimeState struct {
 	AdapterState  json.RawMessage `json:"adapter_state,omitempty"`
 }
 
+// DurableAgentScheduledReviewRuntimeState stores generic scheduled-review wake
+// lifecycle state. ReviewDate scopes backoff to one scheduled interval so a new
+// review date can still attempt even when the prior date is backed off.
+type DurableAgentScheduledReviewRuntimeState struct {
+	ReviewDate    string    `json:"review_date,omitempty"`
+	LastAttemptAt time.Time `json:"last_attempt_at,omitempty"`
+	LastSuccessAt time.Time `json:"last_success_at,omitempty"`
+	LastStatus    string    `json:"last_status,omitempty"`
+	LastError     string    `json:"last_error,omitempty"`
+	LastErrorAt   time.Time `json:"last_error_at,omitempty"`
+	BackoffUntil  time.Time `json:"backoff_until,omitempty"`
+	FailureCount  int       `json:"failure_count,omitempty"`
+}
+
 type DurableAgentEmailPendingState struct {
 	Threads []DurableAgentEmailPendingThread `json:"threads,omitempty"`
 }
@@ -150,6 +164,25 @@ func normalizeDurableAgentExternalChannelRuntimeState(state *DurableAgentExterna
 		normalized.LastAttemptAt.IsZero() && normalized.LastSuccessAt.IsZero() && normalized.LastArtifact == "" &&
 		normalized.LastStatus == "" && normalized.LastError == "" && normalized.LastErrorAt.IsZero() &&
 		normalized.BackoffUntil.IsZero() && normalized.FailureCount == 0 && len(normalized.AdapterState) == 0 {
+		return nil
+	}
+	return &normalized
+}
+
+func normalizeDurableAgentScheduledReviewRuntimeState(state *DurableAgentScheduledReviewRuntimeState) *DurableAgentScheduledReviewRuntimeState {
+	if state == nil {
+		return nil
+	}
+	normalized := *state
+	normalized.ReviewDate = strings.TrimSpace(normalized.ReviewDate)
+	normalized.LastStatus = strings.TrimSpace(normalized.LastStatus)
+	normalized.LastError = strings.TrimSpace(normalized.LastError)
+	if normalized.FailureCount < 0 {
+		normalized.FailureCount = 0
+	}
+	if normalized.ReviewDate == "" && normalized.LastAttemptAt.IsZero() && normalized.LastSuccessAt.IsZero() &&
+		normalized.LastStatus == "" && normalized.LastError == "" && normalized.LastErrorAt.IsZero() &&
+		normalized.BackoffUntil.IsZero() && normalized.FailureCount == 0 {
 		return nil
 	}
 	return &normalized

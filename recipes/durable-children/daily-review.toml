@@ -12,6 +12,16 @@ channel_kind = "scheduled_review"
 wakeup_mode = "poll"
 status = "active"
 
+[install]
+parent_scope_kind = "heartbeat"
+parent_scope_id = "admin-house"
+review_target = "first_admin"
+bootstrap = "inherit_parent"
+storage_roots = "default"
+network_policy = "default"
+policy_version = 1
+recipe_source = "bundled"
+
 [policy]
 charter = "Run one scheduled daily review of yesterday's transcript and open a plain parent-child check-in with concise action items for tomorrow."
 outbound_mode = "read_only"

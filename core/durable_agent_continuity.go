@@ -20,6 +20,7 @@ type DurableAgentContinuityState struct {
 	SetupWizard        *DurableAgentSetupWizardState            `json:"setup_wizard,omitempty"`
 	EmailPending       *DurableAgentEmailPendingState           `json:"email_pending,omitempty"`
 	ExternalChannel    *DurableAgentExternalChannelRuntimeState `json:"external_channel,omitempty"`
+	ScheduledReview    *DurableAgentScheduledReviewRuntimeState `json:"scheduled_review,omitempty"`
 }
 
 type DurableAgentConversationState struct {
@@ -95,6 +96,7 @@ func ParseDurableAgentContinuityState(raw string) (DurableAgentContinuityState, 
 		SetupWizard        *DurableAgentSetupWizardState            `json:"setup_wizard,omitempty"`
 		EmailPending       *DurableAgentEmailPendingState           `json:"email_pending,omitempty"`
 		ExternalChannel    *DurableAgentExternalChannelRuntimeState `json:"external_channel,omitempty"`
+		ScheduledReview    *DurableAgentScheduledReviewRuntimeState `json:"scheduled_review,omitempty"`
 	}
 	var wire durableAgentContinuityWire
 	if err := json.Unmarshal([]byte(raw), &wire); err != nil {
@@ -109,6 +111,7 @@ func ParseDurableAgentContinuityState(raw string) (DurableAgentContinuityState, 
 		SetupWizard:        wire.SetupWizard,
 		EmailPending:       wire.EmailPending,
 		ExternalChannel:    wire.ExternalChannel,
+		ScheduledReview:    wire.ScheduledReview,
 	}
 	return NormalizeDurableAgentContinuityState(state), nil
 }
@@ -122,6 +125,7 @@ func NormalizeDurableAgentContinuityState(state DurableAgentContinuityState) Dur
 	state.SetupWizard = normalizeDurableAgentSetupWizardState(state.SetupWizard)
 	state.EmailPending = normalizeDurableAgentEmailPendingState(state.EmailPending)
 	state.ExternalChannel = normalizeDurableAgentExternalChannelRuntimeState(state.ExternalChannel)
+	state.ScheduledReview = normalizeDurableAgentScheduledReviewRuntimeState(state.ScheduledReview)
 	return state
 }
 

@@ -52,6 +52,9 @@ type DurableAgentScheduledReviewChannelConfig struct {
 	TranscriptDir    string `json:"transcript_dir,omitempty"`
 	PromptTemplate   string `json:"prompt_template,omitempty"`
 	GuidanceQuestion string `json:"guidance_question,omitempty"`
+	RecipeID         string `json:"recipe_id,omitempty"`
+	RecipeVersion    string `json:"recipe_version,omitempty"`
+	RecipeSource     string `json:"recipe_source,omitempty"`
 }
 
 type NodeLLMBootstrap struct {
@@ -194,6 +197,9 @@ func NormalizeDurableAgentScheduledReviewChannelConfig(cfg DurableAgentScheduled
 	cfg.TranscriptDir = strings.Trim(strings.TrimSpace(cfg.TranscriptDir), "/")
 	cfg.PromptTemplate = strings.TrimSpace(cfg.PromptTemplate)
 	cfg.GuidanceQuestion = strings.TrimSpace(cfg.GuidanceQuestion)
+	cfg.RecipeID = strings.TrimSpace(cfg.RecipeID)
+	cfg.RecipeVersion = strings.TrimSpace(cfg.RecipeVersion)
+	cfg.RecipeSource = strings.TrimSpace(cfg.RecipeSource)
 	if cfg.MaxMessages < 0 {
 		cfg.MaxMessages = 0
 	}
@@ -368,7 +374,8 @@ func (s DurableAgentContinuityState) IsZero() bool {
 		s.Conversation == nil &&
 		s.SetupWizard == nil &&
 		s.EmailPending == nil &&
-		s.ExternalChannel == nil
+		s.ExternalChannel == nil &&
+		s.ScheduledReview == nil
 }
 
 func normalizeDurableAgentPolicyMode(mode string) string {
@@ -386,6 +393,8 @@ func normalizeDurableAgentPublicSurfaceMode(mode string) string {
 	switch strings.TrimSpace(mode) {
 	case "channel_transcript", "explicit_parent_relay_only":
 		return strings.TrimSpace(mode)
+	case "parent_relay_only":
+		return "explicit_parent_relay_only"
 	default:
 		return "none"
 	}

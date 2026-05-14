@@ -256,3 +256,150 @@ func (p *durableWakeExecRequestingProvider) Complete(_ context.Context, messages
 func (p *durableWakeExecRequestingProvider) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, _ agent.CompleteOptions) (*agent.Response, error) {
 	return p.Complete(ctx, messages, tools)
 }
+
+func TestScheduledReviewWakeFailureRecordsBackoffAndSuppressesRetry(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.err = context.DeadlineExceeded
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableWakeChild = nil
+
+	agent := core.DurableAgent{
+		AgentID:            "scheduled-review-failure-test",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        scheduledReviewChannelKind,
+		ChannelConfig:      testScheduledReviewChannelConfig(),
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Review yesterday's logs and propose tomorrow action items.",
+			CapabilityEnvelope: []string{"bounded_review_artifact", "session_recall"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	reviewDate, now := seedScheduledReviewMessage(t, store, "scheduled-review-failure-entry")
+	if err := rt.pollDurableWakeAgents(context.Background(), now); err == nil {
+		t.Fatal("first pollDurableWakeAgents() err = nil, want provider failure")
+	}
+	provider.mu.Lock()
+	firstCalls := provider.callCount
+	provider.mu.Unlock()
+	if firstCalls == 0 {
+		t.Fatal("provider calls = 0, want attempted scheduled review wake")
+	}
+
+	state, err := store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	if got := strings.TrimSpace(state.Cursor); got == reviewDate {
+		t.Fatalf("durable state cursor = %q, want not advanced to failed review date", got)
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if continuity.ScheduledReview == nil {
+		t.Fatal("ScheduledReview state = nil, want failure lifecycle state")
+	}
+	if continuity.ScheduledReview.ReviewDate != reviewDate || continuity.ScheduledReview.FailureCount != 1 || continuity.ScheduledReview.BackoffUntil.IsZero() {
+		t.Fatalf("ScheduledReview state = %#v, want failed review date with backoff", continuity.ScheduledReview)
+	}
+	if !now.Before(continuity.ScheduledReview.BackoffUntil) {
+		t.Fatalf("backoff_until = %s, want after now %s", continuity.ScheduledReview.BackoffUntil, now)
+	}
+
+	if err := rt.pollDurableWakeAgents(context.Background(), now.Add(5*time.Minute)); err != nil {
+		t.Fatalf("suppressed pollDurableWakeAgents() err = %v", err)
+	}
+	provider.mu.Lock()
+	afterSuppressed := provider.callCount
+	provider.mu.Unlock()
+	if afterSuppressed != firstCalls {
+		t.Fatalf("provider calls after suppressed retry = %d, want unchanged %d", afterSuppressed, firstCalls)
+	}
+}
+
+func TestScheduledReviewNewReviewDateAttemptsDespitePriorBackoff(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.err = context.DeadlineExceeded
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableWakeChild = nil
+
+	agent := core.DurableAgent{
+		AgentID:            "scheduled-review-new-date-test",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        scheduledReviewChannelKind,
+		ChannelConfig:      testScheduledReviewChannelConfig(),
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Review yesterday's logs and propose tomorrow action items.",
+			CapabilityEnvelope: []string{"bounded_review_artifact", "session_recall"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	_, now := seedScheduledReviewMessage(t, store, "scheduled-review-new-date-entry")
+	if err := rt.pollDurableWakeAgents(context.Background(), now); err == nil {
+		t.Fatal("first pollDurableWakeAgents() err = nil, want provider failure")
+	}
+	provider.mu.Lock()
+	firstCalls := provider.callCount
+	provider.mu.Unlock()
+
+	later := now.AddDate(0, 0, 1)
+	if err := rt.pollDurableWakeAgents(context.Background(), later); err == nil {
+		t.Fatal("new-date pollDurableWakeAgents() err = nil, want provider failure after fresh attempt")
+	}
+	provider.mu.Lock()
+	afterNewDate := provider.callCount
+	provider.mu.Unlock()
+	if afterNewDate <= firstCalls {
+		t.Fatalf("provider calls after new review date = %d, want > %d", afterNewDate, firstCalls)
+	}
+}
+
+func seedScheduledReviewMessage(t *testing.T, store *session.SQLiteStore, content string) (string, time.Time) {
+	t.Helper()
+	key := session.SessionKey{ChatID: time.Now().UnixNano(), UserID: 0}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.TurnCount = 1
+	if err := store.Save(sess, []session.Message{{Role: "user", Content: content, TurnIndex: 1}}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+	hits, err := store.SearchMessages(content, 1, nil)
+	if err != nil {
+		t.Fatalf("SearchMessages(seed) err = %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("SearchMessages(seed) len = %d, want 1", len(hits))
+	}
+	seedAt := hits[0].CreatedAt.UTC()
+	reviewDate := seedAt.Format("2006-01-02")
+	now := time.Date(seedAt.Year(), seedAt.Month(), seedAt.Day(), 0, 15, 0, 0, time.UTC).AddDate(0, 0, 1)
+	return reviewDate, now
+}

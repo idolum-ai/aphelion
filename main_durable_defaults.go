@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -41,11 +42,13 @@ type dailyReviewRecipeInstallResult struct {
 	AgentID       string
 	RecipeID      string
 	RecipeVersion string
+	RecipeSource  string
 	Installed     bool
 	Existing      bool
 	Skipped       bool
 	SkipReason    string
 	InstallSource string
+	DriftReasons  []string
 }
 
 type durableChildRecipe struct {
@@ -55,7 +58,17 @@ type durableChildRecipe struct {
 	ChannelKind string `toml:"channel_kind"`
 	WakeupMode  string `toml:"wakeup_mode"`
 	Status      string `toml:"status"`
-	Policy      struct {
+	Install     struct {
+		ParentScopeKind string `toml:"parent_scope_kind"`
+		ParentScopeID   string `toml:"parent_scope_id"`
+		ReviewTarget    string `toml:"review_target"`
+		Bootstrap       string `toml:"bootstrap"`
+		StorageRoots    string `toml:"storage_roots"`
+		NetworkPolicy   string `toml:"network_policy"`
+		PolicyVersion   int64  `toml:"policy_version"`
+		RecipeSource    string `toml:"recipe_source"`
+	} `toml:"install"`
+	Policy struct {
 		Charter      string   `toml:"charter"`
 		OutboundMode string   `toml:"outbound_mode"`
 		Visibility   string   `toml:"visibility"`
@@ -124,44 +137,55 @@ func installDailyReviewRecipe(cfg *config.Config, store *session.SQLiteStore, op
 		return result, nil
 	}
 
+	install, err := durableChildRecipeInstallConfigForHost(recipe, cfg)
+	if err != nil {
+		return result, err
+	}
+	livePolicy := durableChildRecipeLivePolicy(recipe)
+	channelConfig := durableChildRecipeChannelConfig(recipe)
+
 	existing, err := store.DurableAgent(recipe.AgentID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return result, fmt.Errorf("load daily review recipe durable agent: %w", err)
 	}
 	if existing != nil {
 		result.Existing = true
+		result.SkipReason = "preserved_existing"
+		result.DriftReasons = dailyReviewRecipeDriftReasons(*existing, recipe, install, livePolicy, channelConfig)
 		return result, nil
 	}
 
-	workspaceRoot, memoryRoot := durableagent.DefaultLocalRoots(cfg.Sessions.DBPath, recipe.AgentID)
+	workspaceRoot, memoryRoot, err := durableChildRecipeLocalRoots(recipe, cfg)
+	if err != nil {
+		return result, err
+	}
 	for _, root := range []string{workspaceRoot, memoryRoot} {
 		if err := os.MkdirAll(root, 0o755); err != nil {
 			return result, fmt.Errorf("create daily review recipe root %s: %w", root, err)
 		}
 	}
-	if _, err := sandbox.DurableAgentScope(recipe.AgentID, cfg.Agent.PromptRoot, workspaceRoot, memoryRoot, "default"); err != nil {
+	if _, err := sandbox.DurableAgentScope(recipe.AgentID, cfg.Agent.PromptRoot, workspaceRoot, memoryRoot, install.NetworkPolicy); err != nil {
 		return result, fmt.Errorf("validate daily review recipe scope: %w", err)
 	}
 
-	livePolicy := durableChildRecipeLivePolicy(recipe)
-	bootstrapLLM := defaultDurableAgentBootstrapFromConfig(cfg)
-	if !core.NormalizeNodeLLMBootstrap(bootstrapLLM).Configured() {
-		return result, fmt.Errorf("daily review recipe requires a configured llm bootstrap")
+	bootstrapLLM, err := durableChildRecipeBootstrap(recipe, cfg)
+	if err != nil {
+		return result, err
 	}
 
 	if err := store.UpsertDurableAgent(core.DurableAgent{
 		AgentID:            recipe.AgentID,
-		ParentScopeKind:    string(session.ScopeKindHeartbeat),
-		ParentScopeID:      "admin-house",
-		ReviewTargetChatID: cfg.Principals.Telegram.AdminUserIDs[0],
+		ParentScopeKind:    install.ParentScopeKind,
+		ParentScopeID:      install.ParentScopeID,
+		ReviewTargetChatID: install.ReviewTargetChatID,
 		ChannelKind:        recipe.ChannelKind,
-		ChannelConfig:      durableChildRecipeChannelConfig(recipe),
+		ChannelConfig:      channelConfig,
 		LivePolicy:         livePolicy,
 		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling(recipe.ChannelKind, livePolicy),
 		BootstrapLLM:       bootstrapLLM,
-		PolicyVersion:      1,
+		PolicyVersion:      install.PolicyVersion,
 		LocalStorageRoots:  []string{workspaceRoot, memoryRoot},
-		NetworkPolicy:      "default",
+		NetworkPolicy:      install.NetworkPolicy,
 		WakeupMode:         firstNonEmpty(strings.TrimSpace(recipe.WakeupMode), "poll"),
 		Status:             firstNonEmpty(strings.TrimSpace(recipe.Status), "active"),
 	}); err != nil {
@@ -194,6 +218,13 @@ func normalizeDurableChildRecipe(recipe durableChildRecipe) durableChildRecipe {
 	recipe.ChannelKind = strings.TrimSpace(recipe.ChannelKind)
 	recipe.WakeupMode = strings.TrimSpace(recipe.WakeupMode)
 	recipe.Status = strings.TrimSpace(recipe.Status)
+	recipe.Install.ParentScopeKind = strings.TrimSpace(recipe.Install.ParentScopeKind)
+	recipe.Install.ParentScopeID = strings.TrimSpace(recipe.Install.ParentScopeID)
+	recipe.Install.ReviewTarget = strings.TrimSpace(recipe.Install.ReviewTarget)
+	recipe.Install.Bootstrap = strings.TrimSpace(recipe.Install.Bootstrap)
+	recipe.Install.StorageRoots = strings.TrimSpace(recipe.Install.StorageRoots)
+	recipe.Install.NetworkPolicy = strings.TrimSpace(recipe.Install.NetworkPolicy)
+	recipe.Install.RecipeSource = strings.TrimSpace(recipe.Install.RecipeSource)
 	recipe.Policy.Charter = strings.TrimSpace(recipe.Policy.Charter)
 	recipe.Policy.OutboundMode = strings.TrimSpace(recipe.Policy.OutboundMode)
 	recipe.Policy.Visibility = strings.TrimSpace(recipe.Policy.Visibility)
@@ -253,7 +284,125 @@ func durableChildRecipeChannelConfig(recipe durableChildRecipe) core.DurableAgen
 		TranscriptDir:    recipe.Review.TranscriptDir,
 		PromptTemplate:   recipe.Review.PromptTemplate,
 		GuidanceQuestion: recipe.Review.GuidanceQuestion,
+		RecipeID:         recipe.ID,
+		RecipeVersion:    recipe.Version,
+		RecipeSource:     durableChildRecipeSource(recipe),
 	}})
+}
+
+type durableChildRecipeInstallConfig struct {
+	ParentScopeKind    string
+	ParentScopeID      string
+	ReviewTargetChatID int64
+	NetworkPolicy      string
+	PolicyVersion      int64
+}
+
+func durableChildRecipeInstallConfigForHost(recipe durableChildRecipe, cfg *config.Config) (durableChildRecipeInstallConfig, error) {
+	if cfg == nil {
+		return durableChildRecipeInstallConfig{}, fmt.Errorf("config is nil")
+	}
+	reviewTarget, err := durableChildRecipeReviewTargetChatID(recipe, cfg)
+	if err != nil {
+		return durableChildRecipeInstallConfig{}, err
+	}
+	return durableChildRecipeInstallConfig{
+		ParentScopeKind:    firstNonEmpty(strings.TrimSpace(recipe.Install.ParentScopeKind), string(session.ScopeKindHeartbeat)),
+		ParentScopeID:      firstNonEmpty(strings.TrimSpace(recipe.Install.ParentScopeID), "admin-house"),
+		ReviewTargetChatID: reviewTarget,
+		NetworkPolicy:      firstNonEmpty(strings.TrimSpace(recipe.Install.NetworkPolicy), "default"),
+		PolicyVersion:      durableChildRecipePolicyVersion(recipe),
+	}, nil
+}
+
+func durableChildRecipeReviewTargetChatID(recipe durableChildRecipe, cfg *config.Config) (int64, error) {
+	target := firstNonEmpty(strings.TrimSpace(recipe.Install.ReviewTarget), "first_admin")
+	if strings.EqualFold(target, "first_admin") {
+		if cfg == nil || len(cfg.Principals.Telegram.AdminUserIDs) == 0 {
+			return 0, fmt.Errorf("daily review recipe requires at least one admin review target")
+		}
+		return cfg.Principals.Telegram.AdminUserIDs[0], nil
+	}
+	chatID, err := strconv.ParseInt(target, 10, 64)
+	if err != nil || chatID == 0 {
+		return 0, fmt.Errorf("daily review recipe install.review_target %q is unsupported", target)
+	}
+	return chatID, nil
+}
+
+func durableChildRecipeLocalRoots(recipe durableChildRecipe, cfg *config.Config) (string, string, error) {
+	mode := firstNonEmpty(strings.TrimSpace(recipe.Install.StorageRoots), "default")
+	switch strings.ToLower(mode) {
+	case "default":
+		workspaceRoot, memoryRoot := durableagent.DefaultLocalRoots(cfg.Sessions.DBPath, recipe.AgentID)
+		return workspaceRoot, memoryRoot, nil
+	default:
+		return "", "", fmt.Errorf("daily review recipe install.storage_roots %q is unsupported", mode)
+	}
+}
+
+func durableChildRecipeBootstrap(recipe durableChildRecipe, cfg *config.Config) (core.NodeLLMBootstrap, error) {
+	mode := firstNonEmpty(strings.TrimSpace(recipe.Install.Bootstrap), "inherit_parent")
+	if !strings.EqualFold(mode, "inherit_parent") {
+		return core.NodeLLMBootstrap{}, fmt.Errorf("daily review recipe install.bootstrap %q is unsupported", mode)
+	}
+	bootstrap := defaultDurableAgentBootstrapFromConfig(cfg)
+	if !core.NormalizeNodeLLMBootstrap(bootstrap).Configured() {
+		return core.NodeLLMBootstrap{}, fmt.Errorf("daily review recipe requires a configured llm bootstrap")
+	}
+	return bootstrap, nil
+}
+
+func durableChildRecipePolicyVersion(recipe durableChildRecipe) int64 {
+	if recipe.Install.PolicyVersion > 0 {
+		return recipe.Install.PolicyVersion
+	}
+	return 1
+}
+
+func durableChildRecipeSource(recipe durableChildRecipe) string {
+	return firstNonEmpty(strings.TrimSpace(recipe.Install.RecipeSource), "bundled")
+}
+
+func dailyReviewRecipeDriftReasons(agent core.DurableAgent, recipe durableChildRecipe, install durableChildRecipeInstallConfig, livePolicy core.DurableAgentLivePolicy, channelConfig core.DurableAgentChannelConfig) []string {
+	var reasons []string
+	if strings.TrimSpace(agent.ChannelKind) != strings.TrimSpace(recipe.ChannelKind) {
+		reasons = append(reasons, "channel_kind")
+	}
+	if strings.TrimSpace(agent.ParentScopeKind) != strings.TrimSpace(install.ParentScopeKind) || strings.TrimSpace(agent.ParentScopeID) != strings.TrimSpace(install.ParentScopeID) {
+		reasons = append(reasons, "parent_scope")
+	}
+	if agent.ReviewTargetChatID != install.ReviewTargetChatID {
+		reasons = append(reasons, "review_target")
+	}
+	if strings.TrimSpace(agent.NetworkPolicy) != strings.TrimSpace(install.NetworkPolicy) {
+		reasons = append(reasons, "network_policy")
+	}
+	if agent.PolicyVersion != install.PolicyVersion {
+		reasons = append(reasons, "policy_version")
+	}
+	if strings.TrimSpace(agent.WakeupMode) != firstNonEmpty(strings.TrimSpace(recipe.WakeupMode), "poll") {
+		reasons = append(reasons, "wakeup_mode")
+	}
+	if strings.TrimSpace(agent.Status) != firstNonEmpty(strings.TrimSpace(recipe.Status), "active") {
+		reasons = append(reasons, "status")
+	}
+	if core.NormalizeDurableAgentLivePolicy(agent.LivePolicy).PublicSurfaceMode != livePolicy.PublicSurfaceMode {
+		reasons = append(reasons, "policy.visibility")
+	}
+	installedScheduled := agent.ChannelConfig.ScheduledReviewConfig()
+	expectedScheduled := channelConfig.ScheduledReviewConfig()
+	if installedScheduled == nil || expectedScheduled == nil {
+		reasons = append(reasons, "scheduled_review_config")
+	} else {
+		if installedScheduled.RecipeID != expectedScheduled.RecipeID || installedScheduled.RecipeVersion != expectedScheduled.RecipeVersion || installedScheduled.RecipeSource != expectedScheduled.RecipeSource {
+			reasons = append(reasons, "recipe_metadata")
+		}
+		if installedScheduled.TimeUTC != expectedScheduled.TimeUTC || installedScheduled.Window != expectedScheduled.Window || installedScheduled.ArtifactKind != expectedScheduled.ArtifactKind {
+			reasons = append(reasons, "scheduled_review_contract")
+		}
+	}
+	return normalizeStringSet(reasons)
 }
 
 func dailyReviewRecipeResult(opts installDailyReviewRecipeOptions, recipe durableChildRecipe) dailyReviewRecipeInstallResult {
@@ -265,6 +414,7 @@ func dailyReviewRecipeResult(opts installDailyReviewRecipeOptions, recipe durabl
 		AgentID:       strings.TrimSpace(recipe.AgentID),
 		RecipeID:      strings.TrimSpace(recipe.ID),
 		RecipeVersion: strings.TrimSpace(recipe.Version),
+		RecipeSource:  durableChildRecipeSource(recipe),
 		InstallSource: source,
 	}
 }
@@ -286,8 +436,22 @@ func printDailyReviewRecipeInstallResult(w io.Writer, result dailyReviewRecipeIn
 	fmt.Fprintf(w, "daily_review_agent_id: %s\n", strings.TrimSpace(result.AgentID))
 	fmt.Fprintf(w, "daily_review_recipe_id: %s\n", strings.TrimSpace(result.RecipeID))
 	fmt.Fprintf(w, "daily_review_recipe_version: %s\n", strings.TrimSpace(result.RecipeVersion))
-	if source := strings.TrimSpace(result.InstallSource); source != "" {
+	if source := strings.TrimSpace(result.RecipeSource); source != "" {
 		fmt.Fprintf(w, "daily_review_recipe_source: %s\n", source)
+	}
+	if source := strings.TrimSpace(result.InstallSource); source != "" {
+		fmt.Fprintf(w, "daily_review_recipe_install_source: %s\n", source)
+	}
+	if result.Existing {
+		fmt.Fprintf(w, "daily_review_recipe_preserved: true\n")
+	}
+	if len(result.DriftReasons) == 0 {
+		fmt.Fprintf(w, "daily_review_recipe_drift: none\n")
+	} else {
+		fmt.Fprintf(w, "daily_review_recipe_drift:\n")
+		for _, reason := range result.DriftReasons {
+			fmt.Fprintf(w, "  - %s\n", reason)
+		}
 	}
 	if reason := strings.TrimSpace(result.SkipReason); reason != "" {
 		fmt.Fprintf(w, "daily_review_recipe_reason: %s\n", reason)
