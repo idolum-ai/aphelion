@@ -427,6 +427,33 @@ func TestDurableTurnInferenceUnavailableUsesProviderFailure(t *testing.T) {
 	}
 }
 
+func TestDurableTurnInferenceUnavailableRecognizesCurrentFallbackOnly(t *testing.T) {
+	result := &turn.Result{Turn: &core.TurnResult{}}
+
+	for _, summary := range []string{
+		durableWakeInferenceUnavailableSignal,
+		durableWakeInferenceUnavailableSignal + " This turn did not complete. You can /stop to cancel current work and try again.",
+	} {
+		if !durableTurnInferenceUnavailable(result, summary) {
+			t.Fatalf("durableTurnInferenceUnavailable(%q) = false, want current fallback body to count", summary)
+		}
+	}
+}
+
+func TestDurableTurnInferenceUnavailableIgnoresQuotedHistoricalSentinel(t *testing.T) {
+	result := &turn.Result{Turn: &core.TurnResult{}}
+	summary := strings.Join([]string{
+		"Daily review succeeded.",
+		"",
+		"Prior failure evidence:",
+		`"` + durableWakeInferenceUnavailableSignal + ` This turn did not complete."`,
+	}, "\n")
+
+	if durableTurnInferenceUnavailable(result, summary) {
+		t.Fatalf("durableTurnInferenceUnavailable() = true for quoted historical sentinel; visible evidence must not become control state")
+	}
+}
+
 func TestPollDurableWakeAgentsKeepsParentConversationPendingOnInferenceFailure(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "Inference backend is unavailable. This turn did not complete. You can /stop to cancel current work and try again."
