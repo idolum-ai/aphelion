@@ -312,3 +312,15 @@ func buildRuntimeFixtures(t *testing.T) (*config.Config, *session.SQLiteStore, *
 	sender := &fakeSender{}
 	return cfg, store, provider, sender
 }
+
+func useTrustedDurableAgentSandboxForWakeTest(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	if cfg == nil {
+		t.Fatal("test config is nil")
+	}
+	// These wake tests exercise parent/generic adapter behavior, not the host's
+	// isolated sandbox installation. CI may not have bubblewrap, so keep the
+	// durable-agent sandbox trusted for these in-process fixtures.
+	cfg.Sandbox.Profiles.DurableAgent.Mode = "trusted"
+	cfg.Sandbox.Profiles.DurableAgent.Network = "allowlist"
+}

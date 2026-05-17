@@ -169,6 +169,7 @@ func TestRunDurableAgentChildWakeSkipsWithoutPendingParentConversation(t *testin
 
 func TestPollDurableWakeAgentsBacksOffExpiredGrantChildRuntimeBlock(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	useTrustedDurableAgentSandboxForWakeTest(t, cfg)
 	provider.replyText = "unused because child runtime blocks before inference"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
