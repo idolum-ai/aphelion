@@ -162,7 +162,8 @@ func TestVerifyDeploymentFailsRequiredDurableChildWake(t *testing.T) {
 	)
 
 	report, err := verifyDeployment(context.Background(), cfg, deployVerificationOptions{
-		ConfigPath: "/tmp/aphelion.toml",
+		ConfigPath:      "/tmp/aphelion.toml",
+		DurableChildren: "required",
 	})
 	if err == nil {
 		t.Fatal("verifyDeployment() err = nil, want durable child failure")
@@ -209,6 +210,43 @@ func TestVerifyDeploymentWarnsDurableChildWake(t *testing.T) {
 	last := report.Probes[len(report.Probes)-1]
 	if last.Name != "durable_children" || last.Status != deployProbeStatusPass || !strings.Contains(last.Detail, "warning:") {
 		t.Fatalf("last probe = %#v, want warning durable_children pass", last)
+	}
+}
+
+func TestVerifyDeploymentDefaultDurableChildrenStatusDoesNotWakeChildren(t *testing.T) {
+	cfg := newVerifyDeployTestConfig(t)
+	wakeCalls := 0
+	installSuccessfulDeployVerificationBuilder(t,
+		"DEPLOYMENT VERIFIED: the service is ready.",
+		func(store *session.SQLiteStore) error {
+			return store.UpsertDurableAgent(core.DurableAgent{
+				AgentID:     "paper-scout",
+				ChannelKind: "external_channel",
+				Status:      "active",
+				LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+					Charter:      "Review reports.",
+					OutboundMode: "read_only",
+				}),
+			})
+		},
+		func(context.Context, string, time.Time) error {
+			wakeCalls++
+			return fmt.Errorf("child wake should not run in default status mode")
+		},
+	)
+
+	report, err := verifyDeployment(context.Background(), cfg, deployVerificationOptions{
+		ConfigPath: "/tmp/aphelion.toml",
+	})
+	if err != nil {
+		t.Fatalf("verifyDeployment() err = %v, want non-invasive status pass", err)
+	}
+	if wakeCalls != 0 {
+		t.Fatalf("wakeCalls = %d, want 0 for default durable-child status mode", wakeCalls)
+	}
+	last := report.Probes[len(report.Probes)-1]
+	if last.Name != "durable_children" || last.Status != deployProbeStatusPass || !strings.Contains(last.Detail, "wake probe skipped by default") {
+		t.Fatalf("last probe = %#v, want non-invasive durable_children status detail", last)
 	}
 }
 

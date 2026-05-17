@@ -28,6 +28,7 @@ const (
 	verifyDeployBlessingPrefix = "DEPLOYMENT VERIFIED:"
 	verifyDeployProbePrompt    = "This is a deployment verification probe. If the system is functioning, reply in one short sentence that starts exactly with \"DEPLOYMENT VERIFIED:\" and confirms you are ready. Do not mention internal layers or hidden mechanics unless something is broken."
 
+	verifyDeployDurableChildrenStatus   = "status"
 	verifyDeployDurableChildrenRequired = "required"
 	verifyDeployDurableChildrenWarn     = "warn"
 	verifyDeployDurableChildrenOff      = "off"
@@ -105,7 +106,7 @@ func runVerifyDeployCommand(args []string) error {
 	probeSenderID := fs.Int64("probe-sender", 0, "principal id to use for deployment verification (defaults to first admin)")
 	keepSession := fs.Bool("keep-session", false, "retain the synthetic verification session even on success")
 	keepFailedSession := fs.Bool("keep-failed-session", true, "retain the synthetic verification session on failure")
-	durableChildren := fs.String("durable-children", verifyDeployDurableChildrenRequired, "durable child wake probe mode: required, warn, or off")
+	durableChildren := fs.String("durable-children", verifyDeployDurableChildrenStatus, "durable child probe mode: status, required, warn, or off; status does not wake children")
 	formatFlag := fs.String("format", commandOutputHuman, "output format: human, kv, json")
 	jsonOut := fs.Bool("json", false, "emit a JSON report")
 	if err := fs.Parse(args); err != nil {
@@ -335,6 +336,9 @@ func verifyDeployment(ctx context.Context, cfg *config.Config, opts deployVerifi
 
 	if durableChildrenMode != verifyDeployDurableChildrenOff {
 		if err := runProbe("durable_children", func() (string, error) {
+			if durableChildrenMode == verifyDeployDurableChildrenStatus {
+				return verifyDeployDurableChildrenStatusSummary(store)
+			}
 			probeCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			detail, err := verifyDeployDurableChildren(probeCtx, store, built.DurableChildWake)
@@ -448,30 +452,34 @@ func defaultDeployVerificationRuntimeBuilder(cfg *config.Config, store *session.
 
 func normalizeVerifyDeployDurableChildrenMode(mode string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "", verifyDeployDurableChildrenRequired:
+	case "", verifyDeployDurableChildrenStatus:
+		return verifyDeployDurableChildrenStatus, nil
+	case verifyDeployDurableChildrenRequired:
 		return verifyDeployDurableChildrenRequired, nil
 	case verifyDeployDurableChildrenWarn:
 		return verifyDeployDurableChildrenWarn, nil
 	case verifyDeployDurableChildrenOff:
 		return verifyDeployDurableChildrenOff, nil
 	default:
-		return "", fmt.Errorf("durable-children must be one of required|warn|off")
+		return "", fmt.Errorf("durable-children must be one of status|required|warn|off")
 	}
 }
 
-func verifyDeployDurableChildren(ctx context.Context, store *session.SQLiteStore, wake func(context.Context, string, time.Time) error) (string, error) {
-	if store == nil {
-		return "", fmt.Errorf("durable child probe has no session store")
-	}
-	agents, err := store.ListDurableAgents()
+func verifyDeployDurableChildrenStatusSummary(store *session.SQLiteStore) (string, error) {
+	active, err := verifyDeployActiveDurableChildren(store)
 	if err != nil {
 		return "", err
 	}
-	active := make([]core.DurableAgent, 0, len(agents))
-	for _, agent := range agents {
-		if strings.EqualFold(firstNonEmpty(strings.TrimSpace(agent.Status), "active"), "active") {
-			active = append(active, agent)
-		}
+	if len(active) == 0 {
+		return "active durable children: 0; non-invasive status check", nil
+	}
+	return fmt.Sprintf("active durable children: %d; wake probe skipped by default to avoid child wake side effects", len(active)), nil
+}
+
+func verifyDeployDurableChildren(ctx context.Context, store *session.SQLiteStore, wake func(context.Context, string, time.Time) error) (string, error) {
+	active, err := verifyDeployActiveDurableChildren(store)
+	if err != nil {
+		return "", err
 	}
 	if len(active) == 0 {
 		return "active durable children: 0", nil
@@ -494,6 +502,23 @@ func verifyDeployDurableChildren(ctx context.Context, store *session.SQLiteStore
 		return "", fmt.Errorf("durable child wake failed for %d/%d active child(ren): %s", len(failures), len(active), strings.Join(failures, "; "))
 	}
 	return fmt.Sprintf("active durable children: %d; wake probe ok", len(active)), nil
+}
+
+func verifyDeployActiveDurableChildren(store *session.SQLiteStore) ([]core.DurableAgent, error) {
+	if store == nil {
+		return nil, fmt.Errorf("durable child probe has no session store")
+	}
+	agents, err := store.ListDurableAgents()
+	if err != nil {
+		return nil, err
+	}
+	active := make([]core.DurableAgent, 0, len(agents))
+	for _, agent := range agents {
+		if strings.EqualFold(firstNonEmpty(strings.TrimSpace(agent.Status), "active"), "active") {
+			active = append(active, agent)
+		}
+	}
+	return active, nil
 }
 
 func renderDeployVerificationReport(w io.Writer, report deployVerificationReport, format string) error {
@@ -545,7 +570,7 @@ func renderDeployVerificationReportKV(w io.Writer, report deployVerificationRepo
 
 func renderDeployVerificationReportHuman(report deployVerificationReport) string {
 	status := firstNonEmpty(strings.TrimSpace(report.Status), "unknown")
-	why := "The release probes check runtime boot, governed reply, persistence, rollback evidence, and durable-child wake readiness."
+	why := "The release probes check runtime boot, governed reply, persistence, rollback evidence, and durable-child status without waking children by default."
 	next := "Keep the service running and retain this commit as the rollback point."
 	if status != "passed" {
 		next = "Inspect the failed probe, repair or roll back, then rerun verify-deploy."
