@@ -18,6 +18,9 @@ Use this document to answer three questions:
 - Public URLs are included only when a stable public anchor was checked.
 - Adjacent projects without a stable public source are named as lineage context,
   not as formal public citations.
+- Project names are referenced only for attribution, comparison, and
+  interoperability context. Aphelion is not affiliated with, sponsored by, or
+  endorsed by those projects or maintainers.
 - Influence is not implementation authority. Aphelion's authority comes from its
   own typed records, config, code, and execution evidence.
 - If a new requirement says "closer to X" or "unlike Y", update this file in the
