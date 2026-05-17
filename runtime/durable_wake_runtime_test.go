@@ -504,6 +504,7 @@ func TestPollDurableWakeAgentsKeepsParentConversationPendingOnInferenceFailure(t
 
 func TestPollDurableWakeAgentsDispatchesGenericExternalChannelWithoutSpecializedParentSemantics(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	useTrustedDurableAgentSandboxForWakeTest(t, cfg)
 	provider.replyText = "The configured adapter runtime material is unavailable; I need a child_runtime grant."
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {

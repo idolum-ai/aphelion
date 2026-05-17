@@ -15,6 +15,7 @@ func TestGenericExternalChannelWakeAdapterRecordsBlockedWhenChildReportsMissingM
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	useTrustedDurableAgentSandboxForWakeTest(t, cfg)
 	provider.replyText = strings.Join([]string{
 		"Adapter runtime material is missing; I need a child_runtime grant before reading the external channel.",
 		`EXTERNAL_CHANNEL_OUTCOME: {"schema_version":"aphelion.external_channel_wake.v1","status":"blocked","reason_code":"grant_missing","adapter":"child_adapter","agent_id":"child-alpha","error":"child_runtime grant missing","evidence_refs":["grant://child-alpha"]}`,
@@ -122,6 +123,7 @@ func TestGenericExternalChannelWakeAdapterRecordsSuccessOnlyWhenChildReportsComp
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	useTrustedDurableAgentSandboxForWakeTest(t, cfg)
 	provider.replyText = strings.Join([]string{
 		"Adapter-local read-only poll completed; no relevant items found.",
 		`EXTERNAL_CHANNEL_OUTCOME: {"schema_version":"aphelion.external_channel_wake.v1","status":"completed","reason_code":"poll_completed","adapter":"child_adapter","agent_id":"child-success","evidence_refs":["conversation://durable-agent/child-success"]}`,
@@ -193,6 +195,7 @@ func TestGenericExternalChannelWakeAdapterInferenceUnavailableRecordsBlocked(t *
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	useTrustedDurableAgentSandboxForWakeTest(t, cfg)
 	provider.replyText = durableWakeInferenceUnavailableSignal + " This turn did not complete."
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -234,6 +237,7 @@ func TestGenericExternalChannelWakeAdapterHardTurnErrorRecordsBlocked(t *testing
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	useTrustedDurableAgentSandboxForWakeTest(t, cfg)
 	provider.replyText = "this should not complete"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -288,6 +292,7 @@ func TestGenericExternalChannelWakeAdapterPollCadenceAndSupport(t *testing.T) {
 	}
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	useTrustedDurableAgentSandboxForWakeTest(t, cfg)
 	provider.replyText = strings.Join([]string{
 		"No channel work performed; runtime material missing.",
 		`EXTERNAL_CHANNEL_OUTCOME: {"schema_version":"aphelion.external_channel_wake.v1","status":"blocked","reason_code":"missing_grant","adapter":"child_adapter","agent_id":"child-beta","error":"runtime material missing","evidence_refs":[]}`,
