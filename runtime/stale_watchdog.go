@@ -8,13 +8,25 @@ import (
 	"log"
 	"time"
 
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
 
 const (
-	defaultStaleTurnThreshold = 3 * time.Minute
-	defaultStaleTurnLimit     = 8
-	defaultUnmatchedToolGrace = 30 * time.Second
+	defaultStaleTurnThreshold          = 3 * time.Minute
+	defaultStaleTurnLimit              = 8
+	defaultStaleTurnRestartCooldown    = 30 * time.Minute
+	defaultStaleTurnMaxRestartAttempts = 1
+	defaultUnmatchedToolGrace          = 30 * time.Second
+)
+
+type StaleTurnReason string
+
+const (
+	StaleTurnReasonLastActivity             StaleTurnReason = "last_activity_stale"
+	StaleTurnReasonUnmatchedToolStart       StaleTurnReason = "unmatched_tool_start"
+	StaleTurnReasonLastActivityAndToolStart StaleTurnReason = "last_activity_and_unmatched_tool_start"
+	StaleTurnReasonUnknown                  StaleTurnReason = "unknown_stale_turn"
 )
 
 func (r *Runtime) SetStaleTurnWatchdogHook(hook func(runs []session.TurnRun)) {
@@ -43,10 +55,17 @@ func (r *Runtime) startStaleTurnWatchdogLoop(ctx context.Context, cadence time.D
 		default:
 		}
 
-		if r.staleTurnThreshold <= 0 || r.staleTurnSweep == nil {
+		if !r.staleTurnWatchdogEnabled || r.staleTurnThreshold <= 0 || r.staleTurnSweep == nil {
 			return
 		}
-		cutoff := time.Now().UTC().Add(-r.staleTurnThreshold)
+		now := time.Now().UTC()
+		if nextAttempt := r.staleWatchdogNextAttemptAt(); !nextAttempt.IsZero() {
+			if now.Before(nextAttempt) {
+				return
+			}
+			r.releaseStaleWatchdogLatch()
+		}
+		cutoff := now.Add(-r.staleTurnThreshold)
 		stale, err := r.staleTurnSweep(cutoff, r.staleTurnLimit)
 		if err != nil {
 			logger("WARN stale turn watchdog sweep failed: %v", err)
@@ -60,17 +79,114 @@ func (r *Runtime) startStaleTurnWatchdogLoop(ctx context.Context, cadence time.D
 			return
 		}
 
+		observations := r.staleTurnObservations(stale, now)
+		if err := r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogObserved, "observed", observations, map[string]any{
+			"stale_count": len(stale),
+		}, now); err != nil {
+			logger("WARN stale turn watchdog failed to record observation: %v", err)
+			r.reportOperationalIssue(runCtx, "stale_watchdog", err)
+			r.releaseStaleWatchdogLatch()
+			return
+		}
 		logger("WARN stale turn watchdog detected %d stale running turn(s); threshold=%s", len(stale), r.staleTurnThreshold)
 		r.reportOperationalIssue(runCtx, "stale_watchdog", fmt.Errorf("detected %d stale running turn(s); threshold=%s", len(stale), r.staleTurnThreshold))
-		interrupted := stale
-		if r.interruptRunningTurnRuns != nil {
-			runs, interruptErr := r.interruptRunningTurnRuns()
-			if interruptErr != nil {
-				logger("WARN stale turn watchdog failed to interrupt running turns: %v", interruptErr)
-				r.reportOperationalIssue(runCtx, "stale_watchdog", interruptErr)
-			} else if len(runs) > 0 {
-				interrupted = runs
+		allowed, reason, attempts, lastRestartAt, nextAttemptAt, decisionErr := r.staleTurnWatchdogRestartDecision(now)
+		if decisionErr != nil {
+			logger("WARN stale turn watchdog restart decision failed: %v", decisionErr)
+			r.reportOperationalIssue(runCtx, "stale_watchdog", decisionErr)
+			nextRetryAt := r.defaultStaleWatchdogRetryAt(time.Now().UTC())
+			_ = r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogFailed, "failed", observations, map[string]any{
+				"error":           trimError(decisionErr.Error()),
+				"phase":           "restart_decision",
+				"next_attempt_at": nextRetryAt.Format(time.RFC3339Nano),
+			}, time.Now().UTC())
+			r.scheduleStaleWatchdogRetry(nextRetryAt)
+			return
+		}
+		if !allowed {
+			logger("WARN stale turn watchdog restart suppressed reason=%s attempts=%d", reason, attempts)
+			payload := map[string]any{
+				"reason":           reason,
+				"restart_attempts": attempts,
 			}
+			if !lastRestartAt.IsZero() {
+				payload["last_restart_requested_at"] = lastRestartAt.UTC().Format(time.RFC3339Nano)
+			}
+			if !nextAttemptAt.IsZero() {
+				payload["next_attempt_at"] = nextAttemptAt.UTC().Format(time.RFC3339Nano)
+			}
+			if err := r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogRestartSuppressed, "suppressed", observations, payload, time.Now().UTC()); err != nil {
+				logger("WARN stale turn watchdog failed to record suppression: %v", err)
+				r.reportOperationalIssue(runCtx, "stale_watchdog", err)
+				r.scheduleStaleWatchdogRetry(nextAttemptAt)
+				return
+			}
+			r.scheduleStaleWatchdogRetry(nextAttemptAt)
+			return
+		}
+
+		if r.staleTurnWatchdogHook == nil {
+			nextRetryAt := r.defaultStaleWatchdogRetryAt(time.Now().UTC())
+			if err := r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogRestartSuppressed, "suppressed", observations, map[string]any{
+				"reason":          "restart_hook_unavailable",
+				"next_attempt_at": nextRetryAt.Format(time.RFC3339Nano),
+			}, time.Now().UTC()); err != nil {
+				logger("WARN stale turn watchdog failed to record missing hook suppression: %v", err)
+				r.reportOperationalIssue(runCtx, "stale_watchdog", err)
+			}
+			r.scheduleStaleWatchdogRetry(nextRetryAt)
+			return
+		}
+		if r.interruptRunningTurnRuns == nil {
+			nextRetryAt := r.defaultStaleWatchdogRetryAt(time.Now().UTC())
+			if err := r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogFailed, "failed", observations, map[string]any{
+				"reason":          "interrupt_persister_unavailable",
+				"next_attempt_at": nextRetryAt.Format(time.RFC3339Nano),
+			}, time.Now().UTC()); err != nil {
+				logger("WARN stale turn watchdog failed to record missing interrupt persister: %v", err)
+				r.reportOperationalIssue(runCtx, "stale_watchdog", err)
+			}
+			r.scheduleStaleWatchdogRetry(nextRetryAt)
+			return
+		}
+		interrupted, interruptErr := r.interruptRunningTurnRuns()
+		if interruptErr != nil {
+			logger("WARN stale turn watchdog failed to interrupt running turns: %v", interruptErr)
+			r.reportOperationalIssue(runCtx, "stale_watchdog", interruptErr)
+			nextRetryAt := r.defaultStaleWatchdogRetryAt(time.Now().UTC())
+			_ = r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogFailed, "failed", observations, map[string]any{
+				"error":           trimError(interruptErr.Error()),
+				"phase":           "interrupt_running_turn_runs",
+				"next_attempt_at": nextRetryAt.Format(time.RFC3339Nano),
+			}, time.Now().UTC())
+			r.scheduleStaleWatchdogRetry(nextRetryAt)
+			return
+		}
+		if len(interrupted) == 0 {
+			if err := r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogRestartSuppressed, "suppressed", observations, map[string]any{
+				"reason": "stale_rows_already_terminal",
+			}, time.Now().UTC()); err != nil {
+				logger("WARN stale turn watchdog failed to record terminal-row suppression: %v", err)
+				r.reportOperationalIssue(runCtx, "stale_watchdog", err)
+			}
+			r.releaseStaleWatchdogLatch()
+			return
+		}
+		if err := r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogRestartRequested, "restart_requested", observations, map[string]any{
+			"interrupted_count":   len(interrupted),
+			"interrupted_run_ids": turnRunIDs(interrupted),
+		}, time.Now().UTC()); err != nil {
+			logger("WARN stale turn watchdog failed to record restart request: %v", err)
+			r.reportOperationalIssue(runCtx, "stale_watchdog", err)
+			nextRetryAt := r.defaultStaleWatchdogRetryAt(time.Now().UTC())
+			_ = r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogFailed, "failed", observations, map[string]any{
+				"error":             trimError(err.Error()),
+				"phase":             "record_restart_request",
+				"interrupted_count": len(interrupted),
+				"next_attempt_at":   nextRetryAt.Format(time.RFC3339Nano),
+			}, time.Now().UTC())
+			r.scheduleStaleWatchdogRetry(nextRetryAt)
+			return
 		}
 		if r.staleTurnWatchdogHook != nil {
 			r.staleTurnWatchdogHook(interrupted)
@@ -107,4 +223,206 @@ func (r *Runtime) unmatchedToolStaleThreshold() time.Duration {
 		}
 	}
 	return threshold
+}
+
+type StaleTurnObservation struct {
+	RunID              int64
+	ChatID             int64
+	RunKind            session.TurnRunKind
+	LastActivityAt     time.Time
+	LastToolName       string
+	UnmatchedToolStart bool
+	Age                time.Duration
+	Reason             StaleTurnReason
+}
+
+func (r *Runtime) staleTurnObservations(runs []session.TurnRun, now time.Time) []StaleTurnObservation {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	out := make([]StaleTurnObservation, 0, len(runs))
+	for _, run := range runs {
+		out = append(out, staleTurnObservation(run, r.staleTurnThreshold, now))
+	}
+	return out
+}
+
+func staleTurnObservation(run session.TurnRun, threshold time.Duration, now time.Time) StaleTurnObservation {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	lastActivity := run.LastActivityAt
+	age := time.Duration(0)
+	if !lastActivity.IsZero() {
+		age = now.UTC().Sub(lastActivity.UTC())
+	}
+	activityStale := threshold > 0 && age >= threshold
+	unmatchedTool := run.ToolCallsStarted > run.ToolCallsFinished
+	reason := StaleTurnReasonUnknown
+	if activityStale && unmatchedTool {
+		reason = StaleTurnReasonLastActivityAndToolStart
+	} else if activityStale {
+		reason = StaleTurnReasonLastActivity
+	} else if unmatchedTool {
+		reason = StaleTurnReasonUnmatchedToolStart
+	}
+	return StaleTurnObservation{
+		RunID:              run.ID,
+		ChatID:             run.ChatID,
+		RunKind:            run.Kind,
+		LastActivityAt:     lastActivity,
+		LastToolName:       run.LastToolName,
+		UnmatchedToolStart: unmatchedTool,
+		Age:                age,
+		Reason:             reason,
+	}
+}
+
+func (r *Runtime) staleTurnWatchdogRestartDecision(now time.Time) (bool, string, int, time.Time, time.Time, error) {
+	if r == nil || r.store == nil {
+		return true, "", 0, time.Time{}, time.Time{}, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if r.staleTurnRestartCooldown <= 0 {
+		return true, "", 0, time.Time{}, time.Time{}, nil
+	}
+	since := now.UTC().Add(-r.staleTurnRestartCooldown)
+	limit := r.staleTurnMaxRestarts
+	if limit <= 0 {
+		limit = defaultStaleTurnMaxRestartAttempts
+	}
+	events, err := r.store.ExecutionEventsByTypes([]string{core.ExecutionEventWatchdogRestartRequested}, since, limit)
+	if err != nil {
+		return false, "", 0, time.Time{}, time.Time{}, fmt.Errorf("load watchdog restart history: %w", err)
+	}
+	attempts := len(events)
+	latest := time.Time{}
+	if len(events) > 0 {
+		latest = events[0].CreatedAt
+	}
+	if attempts >= limit {
+		oldest := events[len(events)-1].CreatedAt
+		nextAttemptAt := oldest.UTC().Add(r.staleTurnRestartCooldown)
+		reason := "restart_attempt_budget_exhausted"
+		if limit == 1 {
+			reason = "restart_cooldown_active"
+		}
+		return false, reason, attempts, latest, nextAttemptAt, nil
+	}
+	return true, "", attempts, latest, time.Time{}, nil
+}
+
+func (r *Runtime) staleWatchdogNextAttemptAt() time.Time {
+	if r == nil {
+		return time.Time{}
+	}
+	unixNano := r.staleWatchdogNextAttempt.Load()
+	if unixNano <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, unixNano).UTC()
+}
+
+func (r *Runtime) releaseStaleWatchdogLatch() {
+	if r == nil {
+		return
+	}
+	r.staleWatchdogNextAttempt.Store(0)
+	r.staleWatchdogTriggered.Store(false)
+}
+
+func (r *Runtime) defaultStaleWatchdogRetryAt(now time.Time) time.Time {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	threshold := defaultStaleTurnThreshold
+	if r != nil {
+		threshold = r.staleTurnThreshold
+	}
+	delay := staleTurnWatchdogCadence(threshold)
+	if delay <= 0 {
+		delay = time.Minute
+	}
+	return now.UTC().Add(delay)
+}
+
+func (r *Runtime) scheduleStaleWatchdogRetry(nextAttemptAt time.Time) {
+	if r == nil {
+		return
+	}
+	if nextAttemptAt.IsZero() {
+		nextAttemptAt = r.defaultStaleWatchdogRetryAt(time.Now().UTC())
+	}
+	r.staleWatchdogTriggered.Store(true)
+	r.staleWatchdogNextAttempt.Store(nextAttemptAt.UTC().UnixNano())
+}
+
+func (r *Runtime) recordStaleTurnWatchdogEvent(eventType string, status string, observations []StaleTurnObservation, extra map[string]any, createdAt time.Time) error {
+	if r == nil {
+		return nil
+	}
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	payload := map[string]any{
+		"stale_run_ids":        staleObservationRunIDs(observations),
+		"stale_count":          len(observations),
+		"observations":         staleObservationPayloads(observations),
+		"threshold":            r.staleTurnThreshold.String(),
+		"limit":                r.staleTurnLimit,
+		"restart_cooldown":     r.staleTurnRestartCooldown.String(),
+		"max_restart_attempts": r.staleTurnMaxRestarts,
+	}
+	for key, value := range extra {
+		payload[key] = value
+	}
+	_, err := r.appendExecutionEvent(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()}, eventType, "watchdog", status, payload, createdAt.UTC())
+	if err != nil {
+		return fmt.Errorf("record stale turn watchdog event %s: %w", eventType, err)
+	}
+	return nil
+}
+
+func staleObservationRunIDs(observations []StaleTurnObservation) []int64 {
+	ids := make([]int64, 0, len(observations))
+	for _, observation := range observations {
+		if observation.RunID > 0 {
+			ids = append(ids, observation.RunID)
+		}
+	}
+	return ids
+}
+
+func staleObservationPayloads(observations []StaleTurnObservation) []map[string]any {
+	payloads := make([]map[string]any, 0, len(observations))
+	for _, observation := range observations {
+		payload := map[string]any{
+			"run_id":               observation.RunID,
+			"chat_id":              observation.ChatID,
+			"run_kind":             string(observation.RunKind),
+			"reason":               string(observation.Reason),
+			"age_ms":               observation.Age.Milliseconds(),
+			"unmatched_tool_start": observation.UnmatchedToolStart,
+		}
+		if !observation.LastActivityAt.IsZero() {
+			payload["last_activity_at"] = observation.LastActivityAt.UTC().Format(time.RFC3339Nano)
+		}
+		if observation.LastToolName != "" {
+			payload["last_tool_name"] = observation.LastToolName
+		}
+		payloads = append(payloads, payload)
+	}
+	return payloads
+}
+
+func turnRunIDs(runs []session.TurnRun) []int64 {
+	ids := make([]int64, 0, len(runs))
+	for _, run := range runs {
+		if run.ID > 0 {
+			ids = append(ids, run.ID)
+		}
+	}
+	return ids
 }

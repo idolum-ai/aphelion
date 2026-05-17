@@ -29,9 +29,13 @@ func (r *Runtime) restartHealthSnapshot() core.RestartHealthSnapshot {
 		return core.RestartHealthSnapshot{}
 	}
 	return core.RestartHealthSnapshot{
-		WatchdogTriggered:  r.staleWatchdogTriggered.Load(),
-		StaleTurnThreshold: r.staleTurnThreshold,
-		StaleTurnLimit:     r.staleTurnLimit,
+		WatchdogEnabled:            r.staleTurnWatchdogEnabled,
+		WatchdogTriggered:          r.staleWatchdogTriggered.Load(),
+		StaleTurnThreshold:         r.staleTurnThreshold,
+		StaleTurnLimit:             r.staleTurnLimit,
+		WatchdogRestartCooldown:    r.staleTurnRestartCooldown,
+		WatchdogMaxRestartAttempts: r.staleTurnMaxRestarts,
+		NextWatchdogAttemptAt:      r.staleWatchdogNextAttemptAt(),
 	}
 }
 

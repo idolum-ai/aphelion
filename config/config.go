@@ -17,6 +17,7 @@ type Config struct {
 	Work          WorkConfig          `toml:"work"`
 	Autonomy      AutonomyConfig      `toml:"autonomy"`
 	Sessions      SessionsConfig      `toml:"sessions"`
+	Recovery      RecoveryConfig      `toml:"recovery"`
 	Agent         AgentConfig         `toml:"agent"`
 	Tools         ToolsConfig         `toml:"tools"`
 	Sandbox       SandboxConfig       `toml:"sandbox"`
@@ -263,6 +264,18 @@ type SessionsTESRetentionConfig struct {
 	MinRetainedRows int    `toml:"min_retained_rows"`
 	MaxDeletePerGC  int    `toml:"max_delete_per_gc"`
 	ExportDir       string `toml:"export_dir"`
+}
+
+type RecoveryConfig struct {
+	Watchdog RecoveryWatchdogConfig `toml:"watchdog"`
+}
+
+type RecoveryWatchdogConfig struct {
+	Enabled            bool   `toml:"enabled"`
+	StaleTurnThreshold string `toml:"stale_turn_threshold"`
+	StaleTurnLimit     int    `toml:"stale_turn_limit"`
+	RestartCooldown    string `toml:"restart_cooldown"`
+	MaxRestartAttempts int    `toml:"max_restart_attempts"`
 }
 
 type AgentConfig struct {
@@ -576,6 +589,15 @@ func Default() Config {
 				MinRetainedRows: 5000,
 				MaxDeletePerGC:  1000,
 				ExportDir:       "~/.aphelion/state/tes-exports",
+			},
+		},
+		Recovery: RecoveryConfig{
+			Watchdog: RecoveryWatchdogConfig{
+				Enabled:            true,
+				StaleTurnThreshold: "3m",
+				StaleTurnLimit:     8,
+				RestartCooldown:    "30m",
+				MaxRestartAttempts: 1,
 			},
 		},
 		Agent: AgentConfig{

@@ -536,6 +536,18 @@ On startup:
 - capture machine-authored interruption facts
 - gather unrecovered interrupted runs
 
+During runtime, the stale-turn watchdog may detect running turns whose activity
+or unmatched tool-start evidence has exceeded the configured watchdog threshold.
+Detection must first become typed execution evidence. A watchdog-triggered
+restart is allowed only after the runtime has durably recorded the observation,
+checked cooldown/attempt limits, and successfully persisted interrupted turn
+state. If persistence or cooldown checks fail, the watchdog must leave the
+process running and surface the suppressed or failed recovery state. When a
+restart is suppressed by the configured rolling attempt window, status should
+preserve the latest watchdog evidence and the next retry time. Once a stale
+watchdog detection is latched, every non-restart outcome must either release the
+latch or schedule a bounded retry.
+
 ### Phase 2. Analysis
 
 Run a maintenance recovery turn that:

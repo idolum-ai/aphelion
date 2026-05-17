@@ -57,7 +57,7 @@ func RenderTelegramStatusSystem(snapshot core.SystemStatusSnapshot, personaEffor
 	lines = append(lines, renderTelegramIngressUpdateBlock(snapshot.TelegramIngressUpdates)...)
 	lines = append(lines, renderTelegramIngressFailureBlock(snapshot.TelegramIngress)...)
 	lines = append(lines, renderTailnetStatusBlock(snapshot.Tailnet)...)
-	lines = append(lines, fmt.Sprintf("watchdog triggered=%t stale_threshold=%s stale_limit=%d", snapshot.RestartHealth.WatchdogTriggered, snapshot.RestartHealth.StaleTurnThreshold, snapshot.RestartHealth.StaleTurnLimit))
+	lines = append(lines, renderWatchdogHealthLine(snapshot.RestartHealth))
 	lines = append(lines, fmt.Sprintf("effort persona=%s governor=%s", strings.TrimSpace(personaEffort), strings.TrimSpace(governorEffort)))
 	return strings.Join(lines, "\n")
 }

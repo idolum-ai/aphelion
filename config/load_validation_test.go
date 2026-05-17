@@ -164,6 +164,83 @@ idle_expiry = "definitely-not-a-duration"
 	}
 }
 
+func TestLoadRejectsInvalidRecoveryWatchdogConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{
+			name: "invalid threshold",
+			body: `stale_turn_threshold = "soon"
+stale_turn_limit = 8
+restart_cooldown = "30m"
+max_restart_attempts = 1`,
+			wantErr: "recovery.watchdog.stale_turn_threshold",
+		},
+		{
+			name: "invalid limit",
+			body: `stale_turn_threshold = "3m"
+stale_turn_limit = 0
+restart_cooldown = "30m"
+max_restart_attempts = 1`,
+			wantErr: "recovery.watchdog.stale_turn_limit",
+		},
+		{
+			name: "negative cooldown",
+			body: `stale_turn_threshold = "3m"
+stale_turn_limit = 8
+restart_cooldown = "-1s"
+max_restart_attempts = 1`,
+			wantErr: "recovery.watchdog.restart_cooldown",
+		},
+		{
+			name: "invalid attempts",
+			body: `stale_turn_threshold = "3m"
+stale_turn_limit = 8
+restart_cooldown = "30m"
+max_restart_attempts = 0`,
+			wantErr: "recovery.watchdog.max_restart_attempts",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.toml")
+			raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[recovery.watchdog]
+` + tc.body + `
+`
+			if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			_, err := Load(configPath)
+			if err == nil {
+				t.Fatal("Load() err = nil, want watchdog validation error")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Load() err = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsInvalidCompactionRatios(t *testing.T) {
 	t.Parallel()
 

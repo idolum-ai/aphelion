@@ -98,7 +98,7 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 			lines = append(lines, line)
 		}
 		lines = append(lines, "current_signal="+chatCurrentSignal(snapshot, state))
-		lines = append(lines, fmt.Sprintf("watchdog triggered=%t stale_threshold=%s stale_limit=%d", snapshot.RestartHealth.WatchdogTriggered, snapshot.RestartHealth.StaleTurnThreshold, snapshot.RestartHealth.StaleTurnLimit))
+		lines = append(lines, renderWatchdogHealthLine(snapshot.RestartHealth))
 	}
 	lines = append(lines, renderPendingItemBlock(snapshot.PendingItems, 12)...)
 	lines = append(lines,

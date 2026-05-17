@@ -135,9 +135,18 @@ type ContinuationStatusSnapshot struct {
 }
 
 type RestartHealthSnapshot struct {
-	WatchdogTriggered  bool
-	StaleTurnThreshold time.Duration
-	StaleTurnLimit     int
+	WatchdogEnabled              bool
+	WatchdogTriggered            bool
+	StaleTurnThreshold           time.Duration
+	StaleTurnLimit               int
+	WatchdogRestartCooldown      time.Duration
+	WatchdogMaxRestartAttempts   int
+	LastWatchdogStatus           string
+	LastWatchdogReason           string
+	LastWatchdogAt               time.Time
+	NextWatchdogAttemptAt        time.Time
+	LastWatchdogStaleCount       int
+	LastWatchdogInterruptedCount int
 }
 
 type AutoApprovalStatusSnapshot struct {

@@ -67,6 +67,9 @@ external_manifest_dir = "./external-tools"
 	if cfg.Telegram.Media.DownloadMaxSize != "20MB" || !cfg.Telegram.Media.AutoVisionPhotos || !cfg.Telegram.Media.AutoVisionDocs || !cfg.Telegram.Media.ExtractPDFText || cfg.Telegram.Media.MaxPDFBytes != "8MB" {
 		t.Fatalf("telegram media defaults = %#v, want 20MB + auto vision/pdf extract", cfg.Telegram.Media)
 	}
+	if !cfg.Recovery.Watchdog.Enabled || cfg.Recovery.Watchdog.StaleTurnThreshold != "3m" || cfg.Recovery.Watchdog.StaleTurnLimit != 8 || cfg.Recovery.Watchdog.RestartCooldown != "30m" || cfg.Recovery.Watchdog.MaxRestartAttempts != 1 {
+		t.Fatalf("recovery watchdog defaults = %#v, want enabled 3m/8/30m/1", cfg.Recovery.Watchdog)
+	}
 	if cfg.Tailscale.Enabled || cfg.Tailscale.Backend != "cli" || cfg.Tailscale.CLIPath != "tailscale" || cfg.Tailscale.CommandTimeout != "5s" {
 		t.Fatalf("tailscale defaults = %#v, want disabled cli backend", cfg.Tailscale)
 	}
@@ -461,6 +464,13 @@ min_retained_rows = 8000
 max_delete_per_gc = 400
 export_dir = "~/tmp/tes-exports"
 
+[recovery.watchdog]
+enabled = false
+stale_turn_threshold = "12m"
+stale_turn_limit = 3
+restart_cooldown = "2h"
+max_restart_attempts = 2
+
 [agent]
 prompt_root = "~/agent"
 exec_root = "~/workspace"
@@ -630,6 +640,9 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if cfg.Agent.MaxIterations != 77 || cfg.Agent.ToolTimeout != 9 {
 		t.Fatalf("agent limits = %d/%d, want 77/9", cfg.Agent.MaxIterations, cfg.Agent.ToolTimeout)
+	}
+	if cfg.Recovery.Watchdog.Enabled || cfg.Recovery.Watchdog.StaleTurnThreshold != "12m" || cfg.Recovery.Watchdog.StaleTurnLimit != 3 || cfg.Recovery.Watchdog.RestartCooldown != "2h" || cfg.Recovery.Watchdog.MaxRestartAttempts != 2 {
+		t.Fatalf("recovery.watchdog = %#v, want explicit overrides", cfg.Recovery.Watchdog)
 	}
 	if cfg.Governor.Backend != "native" {
 		t.Fatalf("governor.backend = %q, want native", cfg.Governor.Backend)

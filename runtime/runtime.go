@@ -78,10 +78,14 @@ type Runtime struct {
 
 	staleTurnThreshold       time.Duration
 	staleTurnLimit           int
+	staleTurnWatchdogEnabled bool
+	staleTurnRestartCooldown time.Duration
+	staleTurnMaxRestarts     int
 	staleTurnSweep           func(cutoff time.Time, limit int) ([]session.TurnRun, error)
 	interruptRunningTurnRuns func() ([]session.TurnRun, error)
 	staleTurnWatchdogHook    func(runs []session.TurnRun)
 	staleWatchdogTriggered   atomic.Bool
+	staleWatchdogNextAttempt atomic.Int64
 
 	scopeResolver          *sandbox.Resolver
 	durableGroupChild      durableGroupChildExecutor
@@ -308,6 +312,42 @@ func New(
 	if toolProgressWindow <= 0 {
 		toolProgressWindow = 4
 	}
+	watchdogConfig := cfg.Recovery.Watchdog
+	if !watchdogConfig.Enabled &&
+		strings.TrimSpace(watchdogConfig.StaleTurnThreshold) == "" &&
+		watchdogConfig.StaleTurnLimit == 0 &&
+		strings.TrimSpace(watchdogConfig.RestartCooldown) == "" &&
+		watchdogConfig.MaxRestartAttempts == 0 {
+		watchdogConfig = config.Default().Recovery.Watchdog
+	}
+	staleTurnThreshold := defaultStaleTurnThreshold
+	if raw := strings.TrimSpace(watchdogConfig.StaleTurnThreshold); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse recovery.watchdog.stale_turn_threshold: %w", err)
+		}
+		if d > 0 {
+			staleTurnThreshold = d
+		}
+	}
+	staleTurnLimit := watchdogConfig.StaleTurnLimit
+	if staleTurnLimit <= 0 {
+		staleTurnLimit = defaultStaleTurnLimit
+	}
+	staleTurnRestartCooldown := defaultStaleTurnRestartCooldown
+	if raw := strings.TrimSpace(watchdogConfig.RestartCooldown); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse recovery.watchdog.restart_cooldown: %w", err)
+		}
+		if d >= 0 {
+			staleTurnRestartCooldown = d
+		}
+	}
+	staleTurnMaxRestarts := watchdogConfig.MaxRestartAttempts
+	if staleTurnMaxRestarts <= 0 {
+		staleTurnMaxRestarts = defaultStaleTurnMaxRestartAttempts
+	}
 	recipePath := recipeStatePath(cfg)
 	recipeState, err := loadRuntimeRecipeState(recipePath, cfg)
 	if err != nil {
@@ -361,8 +401,11 @@ func New(
 		toolProgressCleanup:      cfg.Telegram.ToolProgressCleanup,
 		idleExpiry:               idleExpiry,
 		expireIdle:               store.ExpireIdle,
-		staleTurnThreshold:       defaultStaleTurnThreshold,
-		staleTurnLimit:           defaultStaleTurnLimit,
+		staleTurnThreshold:       staleTurnThreshold,
+		staleTurnLimit:           staleTurnLimit,
+		staleTurnWatchdogEnabled: watchdogConfig.Enabled,
+		staleTurnRestartCooldown: staleTurnRestartCooldown,
+		staleTurnMaxRestarts:     staleTurnMaxRestarts,
 		interruptRunningTurnRuns: store.InterruptRunningTurnRuns,
 		tailnetBackend:           tailnetBackend,
 		modelProviderCache:       make(map[string]agent.Provider),
