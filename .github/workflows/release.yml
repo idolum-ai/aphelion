@@ -53,7 +53,7 @@ jobs:
         run: |
           mkdir -p release
           find dist -name '*.tar.gz' -exec cp {} release/ \;
-          (cd release && sha256sum *.tar.gz > checksums.txt)
+          (cd release && sha256sum -- *.tar.gz > checksums.txt)
 
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
