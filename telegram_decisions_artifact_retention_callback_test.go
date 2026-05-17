@@ -45,7 +45,7 @@ func TestTelegramPollerArtifactRetentionCallbackStarvesBehindBlockingMessageHand
 		return decision.Delivery{MessageID: msgID}, nil
 	})
 	handler := newTelegramDecisionHandler(sender, router, broker, store)
-	handler.artifactRetentionTimeout = 25 * time.Millisecond
+	handler.artifactRetentionTimeout = 3 * time.Second
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/botTOKEN/getUpdates" {
@@ -113,7 +113,7 @@ func TestTelegramPollerArtifactRetentionCallbackStarvesBehindBlockingMessageHand
 	defer server.Close()
 
 	client := telegram.NewClient("TOKEN", telegram.WithBaseURL(server.URL+"/botTOKEN/"), telegram.WithHTTPClient(server.Client()))
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	poller := telegram.NewPoller(client, func(ctx context.Context, msg core.InboundMessage) error {

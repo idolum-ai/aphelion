@@ -175,6 +175,14 @@ func TestNewRejectsCodexBackendWithoutCredentials(t *testing.T) {
 	}
 }
 
+func writeTestCodexAuth(t *testing.T, authPath string) {
+	t.Helper()
+	rawAuth := `{"tokens":{"access_token":"codex-access","refresh_token":"refresh-secret","account_id":"acct"}}`
+	if err := os.WriteFile(authPath, []byte(rawAuth), 0o600); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+}
+
 func TestNewCodexProviderUsesStoreResponsesConfig(t *testing.T) {
 	cfg := config.Default()
 	cfg.Governor.Codex.StoreResponses = true
@@ -519,6 +527,9 @@ func TestNewAutoPrefersCodexWhenCredentialsExist(t *testing.T) {
 func TestCodexRuntimeFailureFallsBackToNativeProviderChain(t *testing.T) {
 	cfg, store, nativeProvider, sender := buildRuntimeFixtures(t)
 	cfg.Governor.Backend = "codex"
+	cfg.Governor.Codex.AuthSource = "codex_cli"
+	cfg.Governor.Codex.CodexHome = t.TempDir()
+	writeTestCodexAuth(t, filepath.Join(cfg.Governor.Codex.CodexHome, "auth.json"))
 	cfg.Face.Backend = "floor_fallback"
 
 	origFactory := newCodexProvider
@@ -566,6 +577,9 @@ func TestCodexRuntimeFailureFallsBackToNativeProviderChain(t *testing.T) {
 func TestImageTurnUsesNativeProviderWhenGovernorBackendIsCodex(t *testing.T) {
 	cfg, store, nativeProvider, sender := buildRuntimeFixtures(t)
 	cfg.Governor.Backend = "codex"
+	cfg.Governor.Codex.AuthSource = "codex_cli"
+	cfg.Governor.Codex.CodexHome = t.TempDir()
+	writeTestCodexAuth(t, filepath.Join(cfg.Governor.Codex.CodexHome, "auth.json"))
 	cfg.Face.Backend = "floor_fallback"
 
 	origFactory := newCodexProvider

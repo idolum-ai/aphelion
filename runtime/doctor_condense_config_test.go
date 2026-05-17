@@ -335,6 +335,10 @@ type telegramChildBotNoSendOutbound struct{}
 
 func TestDoctorExternalChannelAdapterReadinessProjectsGenericContract(t *testing.T) {
 	cfg, store, _, _ := buildRuntimeFixtures(t)
+	// This test exercises the generic external-channel readiness contract, not
+	// host bubblewrap availability. Keep the durable child sandbox trusted so the
+	// expected residual risk comes from the recorded child wake state.
+	cfg.Sandbox.Profiles.DurableAgent.Mode = string(sandbox.ModeTrusted)
 	workspaceRoot := filepath.Join(t.TempDir(), "child", "workspace")
 	memoryRoot := filepath.Join(t.TempDir(), "child", "memory")
 	adapterRoot := filepath.Join(workspaceRoot, "adapter-config")
