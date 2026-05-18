@@ -239,13 +239,14 @@ func (s *SQLiteStore) CompleteTurnRun(id int64, status TurnRunStatus, errorText 
 			completed_at = ?,
 			last_activity_at = ?,
 			error_text = ?
-		WHERE id = ?
+		WHERE id = ? AND status = ?
 	`,
 		string(status),
 		time.Now().UTC().Format(time.RFC3339Nano),
 		time.Now().UTC().Format(time.RFC3339Nano),
 		nullableString(errorText),
 		id,
+		string(TurnRunStatusRunning),
 	)
 	if err != nil {
 		return fmt.Errorf("complete turn run: %w", err)

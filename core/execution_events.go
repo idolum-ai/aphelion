@@ -91,10 +91,10 @@ const (
 	ExecutionEventRecoveryFailed    = "recovery.failed"
 	ExecutionEventRecoveryResume    = "recovery.resume"
 
-	ExecutionEventWatchdogObserved          = "watchdog.observed"
-	ExecutionEventWatchdogRestartRequested  = "watchdog.restart_requested"
-	ExecutionEventWatchdogRestartSuppressed = "watchdog.restart_suppressed"
-	ExecutionEventWatchdogFailed            = "watchdog.failed"
+	ExecutionEventWatchdogObserved           = "watchdog.observed"
+	ExecutionEventWatchdogRecovered          = "watchdog.recovered"
+	ExecutionEventWatchdogRecoverySuppressed = "watchdog.recovery_suppressed"
+	ExecutionEventWatchdogFailed             = "watchdog.failed"
 
 	ExecutionEventTailnetSurfaceChanged = "tailnet.surface.changed"
 	ExecutionEventTailnetGrantChanged   = "tailnet.grant.changed"

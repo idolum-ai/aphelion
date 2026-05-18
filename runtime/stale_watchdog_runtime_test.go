@@ -12,7 +12,7 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
-func TestStartStaleTurnWatchdogLoopTriggersInterruptAndHookOnce(t *testing.T) {
+func TestStartStaleTurnWatchdogLoopRecoversScopedStaleTurn(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -25,23 +25,22 @@ func TestStartStaleTurnWatchdogLoopTriggersInterruptAndHookOnce(t *testing.T) {
 	rt.staleTurnLimit = 5
 	var sweepCalls atomic.Int32
 	var interruptCalls atomic.Int32
-	var hookCalls atomic.Int32
 	rt.staleTurnSweep = func(cutoff time.Time, limit int) ([]session.TurnRun, error) {
 		sweepCalls.Add(1)
 		_ = cutoff
 		_ = limit
+		if interruptCalls.Load() > 0 {
+			return nil, nil
+		}
 		return []session.TurnRun{{ID: 88, ChatID: 7, Status: session.TurnRunStatusRunning}}, nil
 	}
-	rt.interruptRunningTurnRuns = func() ([]session.TurnRun, error) {
+	rt.interruptStaleTurnRuns = func(ids []int64, reason string) ([]session.TurnRun, error) {
 		interruptCalls.Add(1)
+		if len(ids) != 1 || ids[0] != 88 || reason == "" {
+			t.Fatalf("interrupt ids=%v reason=%q, want stale run 88 with reason", ids, reason)
+		}
 		return []session.TurnRun{{ID: 88, ChatID: 7, Status: session.TurnRunStatusInterrupted}}, nil
 	}
-	rt.SetStaleTurnWatchdogHook(func(runs []session.TurnRun) {
-		if len(runs) == 0 || runs[0].ID != 88 {
-			t.Fatalf("hook runs = %#v, want stale run 88", runs)
-		}
-		hookCalls.Add(1)
-	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -49,28 +48,25 @@ func TestStartStaleTurnWatchdogLoopTriggersInterruptAndHookOnce(t *testing.T) {
 
 	time.Sleep(90 * time.Millisecond)
 
-	if got := sweepCalls.Load(); got < 2 {
-		t.Fatalf("sweepCalls = %d, want >= 2", got)
+	if got := sweepCalls.Load(); got < 1 {
+		t.Fatalf("sweepCalls = %d, want >= 1", got)
 	}
 	if got := interruptCalls.Load(); got != 1 {
 		t.Fatalf("interruptCalls = %d, want 1", got)
 	}
-	if got := hookCalls.Load(); got != 1 {
-		t.Fatalf("hookCalls = %d, want 1", got)
-	}
 	events, err := store.ExecutionEventsByTypes([]string{
 		core.ExecutionEventWatchdogObserved,
-		core.ExecutionEventWatchdogRestartRequested,
+		core.ExecutionEventWatchdogRecovered,
 	}, time.Time{}, 10)
 	if err != nil {
 		t.Fatalf("ExecutionEventsByTypes() err = %v", err)
 	}
-	if !hasExecutionEvent(events, core.ExecutionEventWatchdogObserved) || !hasExecutionEvent(events, core.ExecutionEventWatchdogRestartRequested) {
-		t.Fatalf("watchdog events = %#v, want observed and restart requested", events)
+	if !hasExecutionEvent(events, core.ExecutionEventWatchdogObserved) || !hasExecutionEvent(events, core.ExecutionEventWatchdogRecovered) {
+		t.Fatalf("watchdog events = %#v, want observed and recovered", events)
 	}
 }
 
-func TestStartStaleTurnWatchdogLoopDoesNotRestartWhenInterruptFails(t *testing.T) {
+func TestStartStaleTurnWatchdogLoopRetriesWhenInterruptFails(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -81,16 +77,12 @@ func TestStartStaleTurnWatchdogLoopDoesNotRestartWhenInterruptFails(t *testing.T
 
 	rt.staleTurnThreshold = 50 * time.Millisecond
 	rt.staleTurnLimit = 5
-	var hookCalls atomic.Int32
 	rt.staleTurnSweep = func(time.Time, int) ([]session.TurnRun, error) {
 		return []session.TurnRun{{ID: 89, ChatID: 7, Status: session.TurnRunStatusRunning}}, nil
 	}
-	rt.interruptRunningTurnRuns = func() ([]session.TurnRun, error) {
+	rt.interruptStaleTurnRuns = func([]int64, string) ([]session.TurnRun, error) {
 		return nil, context.Canceled
 	}
-	rt.SetStaleTurnWatchdogHook(func([]session.TurnRun) {
-		hookCalls.Add(1)
-	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -98,12 +90,8 @@ func TestStartStaleTurnWatchdogLoopDoesNotRestartWhenInterruptFails(t *testing.T
 
 	time.Sleep(60 * time.Millisecond)
 
-	if got := hookCalls.Load(); got != 0 {
-		t.Fatalf("hookCalls = %d, want 0 when interruption persistence fails", got)
-	}
 	events, err := store.ExecutionEventsByTypes([]string{
 		core.ExecutionEventWatchdogObserved,
-		core.ExecutionEventWatchdogRestartRequested,
 		core.ExecutionEventWatchdogFailed,
 	}, time.Time{}, 10)
 	if err != nil {
@@ -112,13 +100,10 @@ func TestStartStaleTurnWatchdogLoopDoesNotRestartWhenInterruptFails(t *testing.T
 	if !hasExecutionEvent(events, core.ExecutionEventWatchdogObserved) || !hasExecutionEvent(events, core.ExecutionEventWatchdogFailed) {
 		t.Fatalf("watchdog events = %#v, want observed and failed", events)
 	}
-	if hasExecutionEvent(events, core.ExecutionEventWatchdogRestartRequested) {
-		t.Fatalf("watchdog events = %#v, did not want restart requested", events)
-	}
 	assertStaleWatchdogRetryScheduled(t, rt)
 }
 
-func TestStartStaleTurnWatchdogLoopSuppressesRestartDuringCooldown(t *testing.T) {
+func TestStartStaleTurnWatchdogLoopRecoversAfterPriorWatchdogHistory(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -129,29 +114,26 @@ func TestStartStaleTurnWatchdogLoopSuppressesRestartDuringCooldown(t *testing.T)
 
 	key := session.SessionKey{ChatID: 42, UserID: 0, Scope: heartbeatScopeRef()}
 	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
-		EventType: core.ExecutionEventWatchdogRestartRequested,
+		EventType: core.ExecutionEventWatchdogFailed,
 		Stage:     "watchdog",
-		Status:    "restart_requested",
+		Status:    "failed",
 		CreatedAt: time.Now().UTC().Add(-time.Minute),
 	}); err != nil {
 		t.Fatalf("AppendExecutionEvent() err = %v", err)
 	}
 
 	rt.staleTurnThreshold = 50 * time.Millisecond
-	rt.staleTurnRestartCooldown = time.Hour
-	rt.staleTurnMaxRestarts = 1
 	var interruptCalls atomic.Int32
-	var hookCalls atomic.Int32
 	rt.staleTurnSweep = func(time.Time, int) ([]session.TurnRun, error) {
+		if interruptCalls.Load() > 0 {
+			return nil, nil
+		}
 		return []session.TurnRun{{ID: 90, ChatID: 7, Status: session.TurnRunStatusRunning}}, nil
 	}
-	rt.interruptRunningTurnRuns = func() ([]session.TurnRun, error) {
+	rt.interruptStaleTurnRuns = func([]int64, string) ([]session.TurnRun, error) {
 		interruptCalls.Add(1)
 		return []session.TurnRun{{ID: 90, ChatID: 7, Status: session.TurnRunStatusInterrupted}}, nil
 	}
-	rt.SetStaleTurnWatchdogHook(func([]session.TurnRun) {
-		hookCalls.Add(1)
-	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -159,59 +141,17 @@ func TestStartStaleTurnWatchdogLoopSuppressesRestartDuringCooldown(t *testing.T)
 
 	time.Sleep(60 * time.Millisecond)
 
-	if got := interruptCalls.Load(); got != 0 {
-		t.Fatalf("interruptCalls = %d, want 0 when restart is suppressed", got)
+	if got := interruptCalls.Load(); got != 1 {
+		t.Fatalf("interruptCalls = %d, want scoped recovery despite prior watchdog history", got)
 	}
-	if got := hookCalls.Load(); got != 0 {
-		t.Fatalf("hookCalls = %d, want 0 during cooldown", got)
-	}
-	events, err := store.ExecutionEventsByTypes([]string{core.ExecutionEventWatchdogRestartSuppressed}, time.Time{}, 10)
+	events, err := store.ExecutionEventsByTypes([]string{core.ExecutionEventWatchdogRecovered, core.ExecutionEventWatchdogRecoverySuppressed}, time.Time{}, 10)
 	if err != nil {
-		t.Fatalf("ExecutionEventsByTypes(suppressed) err = %v", err)
+		t.Fatalf("ExecutionEventsByTypes(watchdog) err = %v", err)
 	}
-	if !hasExecutionEvent(events, core.ExecutionEventWatchdogRestartSuppressed) {
-		t.Fatalf("watchdog suppressed events = %#v, want suppression", events)
+	if !hasExecutionEvent(events, core.ExecutionEventWatchdogRecovered) {
+		t.Fatalf("watchdog events = %#v, want scoped recovery", events)
 	}
-	assertStaleWatchdogRetryScheduled(t, rt)
-}
-
-func TestStartStaleTurnWatchdogLoopRetriesWhenHookUnavailable(t *testing.T) {
-	t.Parallel()
-
-	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	rt, err := New(cfg, store, provider, nil, sender)
-	if err != nil {
-		t.Fatalf("New() err = %v", err)
-	}
-
-	rt.staleTurnThreshold = 50 * time.Millisecond
-	rt.staleTurnSweep = func(time.Time, int) ([]session.TurnRun, error) {
-		return []session.TurnRun{{ID: 92, ChatID: 7, Status: session.TurnRunStatusRunning}}, nil
-	}
-	var interruptCalls atomic.Int32
-	rt.interruptRunningTurnRuns = func() ([]session.TurnRun, error) {
-		interruptCalls.Add(1)
-		return []session.TurnRun{{ID: 92, ChatID: 7, Status: session.TurnRunStatusInterrupted}}, nil
-	}
-	rt.SetStaleTurnWatchdogHook(nil)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	rt.startStaleTurnWatchdogLoop(ctx, 15*time.Millisecond, func(string, ...any) {})
-
-	time.Sleep(60 * time.Millisecond)
-
-	if got := interruptCalls.Load(); got != 0 {
-		t.Fatalf("interruptCalls = %d, want 0 when restart hook is unavailable", got)
-	}
-	events, err := store.ExecutionEventsByTypes([]string{core.ExecutionEventWatchdogRestartSuppressed}, time.Time{}, 10)
-	if err != nil {
-		t.Fatalf("ExecutionEventsByTypes(suppressed) err = %v", err)
-	}
-	if !hasExecutionEvent(events, core.ExecutionEventWatchdogRestartSuppressed) {
-		t.Fatalf("watchdog suppressed events = %#v, want hook-unavailable suppression", events)
-	}
-	assertStaleWatchdogRetryScheduled(t, rt)
+	assertStaleWatchdogReleased(t, rt)
 }
 
 func TestStartStaleTurnWatchdogLoopRetriesWhenInterruptPersisterUnavailable(t *testing.T) {
@@ -227,11 +167,7 @@ func TestStartStaleTurnWatchdogLoopRetriesWhenInterruptPersisterUnavailable(t *t
 	rt.staleTurnSweep = func(time.Time, int) ([]session.TurnRun, error) {
 		return []session.TurnRun{{ID: 93, ChatID: 7, Status: session.TurnRunStatusRunning}}, nil
 	}
-	var hookCalls atomic.Int32
-	rt.interruptRunningTurnRuns = nil
-	rt.SetStaleTurnWatchdogHook(func([]session.TurnRun) {
-		hookCalls.Add(1)
-	})
+	rt.interruptStaleTurnRuns = nil
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -239,9 +175,6 @@ func TestStartStaleTurnWatchdogLoopRetriesWhenInterruptPersisterUnavailable(t *t
 
 	time.Sleep(60 * time.Millisecond)
 
-	if got := hookCalls.Load(); got != 0 {
-		t.Fatalf("hookCalls = %d, want 0 when interrupt persister is unavailable", got)
-	}
 	events, err := store.ExecutionEventsByTypes([]string{core.ExecutionEventWatchdogFailed}, time.Time{}, 10)
 	if err != nil {
 		t.Fatalf("ExecutionEventsByTypes(failed) err = %v", err)
@@ -269,13 +202,9 @@ func TestStartStaleTurnWatchdogLoopReleasesWhenRowsAlreadyTerminal(t *testing.T)
 		}
 		return nil, nil
 	}
-	var hookCalls atomic.Int32
-	rt.interruptRunningTurnRuns = func() ([]session.TurnRun, error) {
+	rt.interruptStaleTurnRuns = func([]int64, string) ([]session.TurnRun, error) {
 		return nil, nil
 	}
-	rt.SetStaleTurnWatchdogHook(func([]session.TurnRun) {
-		hookCalls.Add(1)
-	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -283,20 +212,17 @@ func TestStartStaleTurnWatchdogLoopReleasesWhenRowsAlreadyTerminal(t *testing.T)
 
 	time.Sleep(60 * time.Millisecond)
 
-	if got := hookCalls.Load(); got != 0 {
-		t.Fatalf("hookCalls = %d, want 0 when stale rows are already terminal", got)
-	}
-	events, err := store.ExecutionEventsByTypes([]string{core.ExecutionEventWatchdogRestartSuppressed}, time.Time{}, 10)
+	events, err := store.ExecutionEventsByTypes([]string{core.ExecutionEventWatchdogRecoverySuppressed}, time.Time{}, 10)
 	if err != nil {
 		t.Fatalf("ExecutionEventsByTypes(suppressed) err = %v", err)
 	}
-	if !hasExecutionEvent(events, core.ExecutionEventWatchdogRestartSuppressed) {
+	if !hasExecutionEvent(events, core.ExecutionEventWatchdogRecoverySuppressed) {
 		t.Fatalf("watchdog suppressed events = %#v, want terminal-row suppression", events)
 	}
 	assertStaleWatchdogReleased(t, rt)
 }
 
-func TestStartStaleTurnWatchdogLoopRetriesWhenRestartRequestEventFails(t *testing.T) {
+func TestStartStaleTurnWatchdogLoopRetriesWhenRecoveryEventFails(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -309,14 +235,10 @@ func TestStartStaleTurnWatchdogLoopRetriesWhenRestartRequestEventFails(t *testin
 	rt.staleTurnSweep = func(time.Time, int) ([]session.TurnRun, error) {
 		return []session.TurnRun{{ID: 95, ChatID: 7, Status: session.TurnRunStatusRunning}}, nil
 	}
-	rt.interruptRunningTurnRuns = func() ([]session.TurnRun, error) {
+	rt.interruptStaleTurnRuns = func([]int64, string) ([]session.TurnRun, error) {
 		_ = store.Close()
 		return []session.TurnRun{{ID: 95, ChatID: 7, Status: session.TurnRunStatusInterrupted}}, nil
 	}
-	var hookCalls atomic.Int32
-	rt.SetStaleTurnWatchdogHook(func([]session.TurnRun) {
-		hookCalls.Add(1)
-	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -324,40 +246,7 @@ func TestStartStaleTurnWatchdogLoopRetriesWhenRestartRequestEventFails(t *testin
 
 	time.Sleep(60 * time.Millisecond)
 
-	if got := hookCalls.Load(); got != 0 {
-		t.Fatalf("hookCalls = %d, want 0 when restart-request event cannot be written", got)
-	}
 	assertStaleWatchdogRetryScheduled(t, rt)
-}
-
-func TestStaleTurnWatchdogRestartDecisionHonorsConfiguredBudget(t *testing.T) {
-	t.Parallel()
-
-	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	rt, err := New(cfg, store, provider, nil, sender)
-	if err != nil {
-		t.Fatalf("New() err = %v", err)
-	}
-
-	key := session.SessionKey{ChatID: 42, UserID: 0, Scope: heartbeatScopeRef()}
-	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
-		EventType: core.ExecutionEventWatchdogRestartRequested,
-		Stage:     "watchdog",
-		Status:    "restart_requested",
-		CreatedAt: time.Now().UTC().Add(-time.Minute),
-	}); err != nil {
-		t.Fatalf("AppendExecutionEvent() err = %v", err)
-	}
-
-	rt.staleTurnRestartCooldown = time.Hour
-	rt.staleTurnMaxRestarts = 2
-	allowed, reason, attempts, _, nextAttemptAt, err := rt.staleTurnWatchdogRestartDecision(time.Now().UTC())
-	if err != nil {
-		t.Fatalf("staleTurnWatchdogRestartDecision() err = %v", err)
-	}
-	if !allowed || reason != "" || attempts != 1 || !nextAttemptAt.IsZero() {
-		t.Fatalf("decision = allowed %t reason %q attempts %d next %s, want allowed with one attempt remaining", allowed, reason, attempts, nextAttemptAt)
-	}
 }
 
 func TestStartStaleTurnWatchdogLoopSkipsWhenDisabled(t *testing.T) {

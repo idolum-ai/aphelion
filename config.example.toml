@@ -178,8 +178,6 @@ compaction_strategy = "summarize"
 enabled = true
 stale_turn_threshold = "3m"
 stale_turn_limit = 8
-restart_cooldown = "30m"
-max_restart_attempts = 1
 
 [agent]
 prompt_root = "~/.aphelion/agent"

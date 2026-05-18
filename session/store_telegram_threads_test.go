@@ -24,6 +24,14 @@ func TestTelegramThreadCreateIsPerChatAndIdempotentByUpdate(t *testing.T) {
 	if !created || first.ThreadID != 1 || first.Status != TelegramThreadStatusOpen {
 		t.Fatalf("first = %#v created=%v, want new open thread 1", first, created)
 	}
+	threadSessionID := SessionIDForKey(SessionKey{ChatID: 1001, Scope: TelegramThreadScopeRef(1001, first.ThreadID)})
+	var threadSessionCount int
+	if err := store.db.QueryRow(`SELECT COUNT(1) FROM sessions WHERE session_id = ?`, threadSessionID).Scan(&threadSessionCount); err != nil {
+		t.Fatalf("query thread session count: %v", err)
+	}
+	if threadSessionCount != 1 {
+		t.Fatalf("thread session count = %d, want durable session row at create time", threadSessionCount)
+	}
 	again, created, err := store.CreateTelegramThreadForUpdate(1001, 2002, 301, 401, "first task replay", now.Add(time.Second))
 	if err != nil {
 		t.Fatalf("CreateTelegramThreadForUpdate(replay) err = %v", err)
@@ -257,6 +265,36 @@ func TestTelegramThreadIDForReplyMessageUsesThreadLedgers(t *testing.T) {
 	}
 	if got, ok, err := store.TelegramThreadIDForReplyMessage(1002, 9001); err != nil || ok || got != 0 {
 		t.Fatalf("TelegramThreadIDForReplyMessage(other chat) = %d ok=%v err=%v, want no match", got, ok, err)
+	}
+}
+
+func TestRecordTelegramThreadMessageEnsuresSessionAndReplyLedger(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	thread, _, err := store.CreateTelegramThreadForUpdate(1001, 2002, 301, 401, "", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate() err = %v", err)
+	}
+	sessionID := SessionIDForKey(SessionKey{ChatID: 1001, Scope: TelegramThreadScopeRef(1001, thread.ThreadID)})
+	if _, err := store.db.Exec(`DELETE FROM sessions WHERE session_id = ?`, sessionID); err != nil {
+		t.Fatalf("delete thread session fixture: %v", err)
+	}
+
+	if err := store.RecordTelegramThreadMessage(1001, thread.ThreadID, 9901, "thread_guide", "thread_guide", time.Now().UTC()); err != nil {
+		t.Fatalf("RecordTelegramThreadMessage() err = %v", err)
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(1) FROM sessions WHERE session_id = ?`, sessionID).Scan(&count); err != nil {
+		t.Fatalf("query thread session count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("thread session count = %d, want repaired session", count)
+	}
+	if got, ok, err := store.TelegramThreadIDForReplyMessage(1001, 9901); err != nil || !ok || got != thread.ThreadID {
+		t.Fatalf("TelegramThreadIDForReplyMessage(guide) = %d ok=%v err=%v, want thread %d", got, ok, err, thread.ThreadID)
 	}
 }
 

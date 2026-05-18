@@ -102,6 +102,13 @@ read-only status heartbeat.
 External-channel prompts are payloads inside governed commands. They do not
 widen the child capability envelope.
 
+If an isolated external-channel wake fails before the child can process its
+turn, the parent records `wake_failed` in the child's external-channel runtime
+state, increments failure/backoff, and queues a bounded review artifact. Pending
+parent-conversation messages remain unacknowledged until a later successful
+wake actually receives and processes them. This keeps retry behavior quiet
+without pretending the child saw instructions it never received.
+
 ## Tailnet Remote Child
 
 Use this path when the child should run on its own Linux Tailnet host while the

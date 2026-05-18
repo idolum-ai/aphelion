@@ -25,7 +25,7 @@ func TestStartTurnMonitorRunActivityHeartbeatUpdatesLastActivity(t *testing.T) {
 	}()
 
 	key := session.SessionKey{ChatID: 9911, UserID: 0, Scope: telegramDMScopeRef(9911)}
-	monitor, err := rt.startTurnMonitor(key, session.TurnRunKindInteractive, "long provider request", nil, nil, core.InboundMessage{})
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "long provider request", nil, nil, core.InboundMessage{})
 	if err != nil {
 		t.Fatalf("startTurnMonitor() err = %v", err)
 	}
@@ -57,7 +57,7 @@ func TestTurnMonitorToolAndTurnDurationsAreLedgered(t *testing.T) {
 	}
 
 	key := session.SessionKey{ChatID: 9912, UserID: 0, Scope: telegramDMScopeRef(9912)}
-	monitor, err := rt.startTurnMonitor(key, session.TurnRunKindInteractive, "duration test", nil, nil, core.InboundMessage{})
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "duration test", nil, nil, core.InboundMessage{})
 	if err != nil {
 		t.Fatalf("startTurnMonitor() err = %v", err)
 	}

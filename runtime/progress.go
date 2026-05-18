@@ -74,12 +74,18 @@ type turnMonitor struct {
 	audit                    *turnAuditRecorder
 	startedAt                time.Time
 	toolStarts               map[string]time.Time
+	ctx                      context.Context
+	cancelTurn               context.CancelFunc
 	stopRunActivityHeartbeat context.CancelFunc
 	ingressSurface           string
 	ingressUpdateID          int64
 }
 
-func (r *Runtime) startTurnMonitor(key session.SessionKey, kind session.TurnRunKind, requestText string, progress *toolProgressReporter, audit *turnAuditRecorder, msg core.InboundMessage) (*turnMonitor, error) {
+func (r *Runtime) startTurnMonitor(ctx context.Context, key session.SessionKey, kind session.TurnRunKind, requestText string, progress *toolProgressReporter, audit *turnAuditRecorder, msg core.InboundMessage) (*turnMonitor, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	turnCtx, cancelTurn := context.WithCancel(ctx)
 	monitor := &turnMonitor{
 		runtime:         r,
 		key:             key,
@@ -87,6 +93,8 @@ func (r *Runtime) startTurnMonitor(key session.SessionKey, kind session.TurnRunK
 		audit:           audit,
 		startedAt:       time.Now().UTC(),
 		toolStarts:      make(map[string]time.Time),
+		ctx:             turnCtx,
+		cancelTurn:      cancelTurn,
 		ingressSurface:  strings.TrimSpace(msg.IngressSurface),
 		ingressUpdateID: msg.IngressUpdateID,
 	}
@@ -101,9 +109,11 @@ func (r *Runtime) startTurnMonitor(key session.SessionKey, kind session.TurnRunK
 		run, err = r.store.BeginTurnRun(key, kind, requestText)
 	}
 	if err != nil {
+		cancelTurn()
 		return nil, fmt.Errorf("begin turn run kind=%s chat_id=%d user_id=%d: %w", kind, key.ChatID, key.UserID, err)
 	}
 	monitor.runID = run.ID
+	r.registerActiveTurn(run.ID, cancelTurn)
 	payload := map[string]any{
 		"run_id":       run.ID,
 		"run_kind":     strings.TrimSpace(string(kind)),
@@ -124,6 +134,13 @@ func (r *Runtime) startTurnMonitor(key session.SessionKey, kind session.TurnRunK
 	}
 	monitor.startRunActivityHeartbeat()
 	return monitor, nil
+}
+
+func (m *turnMonitor) Context() context.Context {
+	if m == nil || m.ctx == nil {
+		return context.Background()
+	}
+	return m.ctx
 }
 
 func (m *turnMonitor) observeTools(base agent.ToolRegistry) agent.ToolRegistry {

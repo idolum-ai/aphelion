@@ -239,12 +239,21 @@ func rowWithLastWake(r *Runtime, row externalChannelAdapterReadiness, agent core
 		FailureCount: runtimeState.FailureCount,
 		BackoffUntil: runtimeState.BackoffUntil,
 	}
-	if strings.EqualFold(strings.TrimSpace(runtimeState.LastStatus), "wake_blocked") && row.Status == externalChannelReadinessStatusReady {
+	if externalChannelLastWakeNeedsAttention(runtimeState.LastStatus) && row.Status == externalChannelReadinessStatusReady {
 		row.Status = externalChannelReadinessStatusResidual
-		row.FailureCode = "last_wake_blocked"
-		row.NextRepair = "generic readiness passes, but the last child wake reported blocked; inspect the child review artifact before the next live poll"
+		row.FailureCode = "last_" + strings.TrimSpace(runtimeState.LastStatus)
+		row.NextRepair = "generic readiness passes, but the last child wake needs attention; inspect the child review artifact before the next live poll"
 	}
 	return row
+}
+
+func externalChannelLastWakeNeedsAttention(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "wake_blocked", "wake_failed":
+		return true
+	default:
+		return false
+	}
 }
 
 func selectExternalChannelToolGrant(grants []session.CapabilityGrant, principalID string, toolName string) (session.CapabilityGrant, core.ChildRuntimeContract, bool, string) {

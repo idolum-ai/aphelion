@@ -154,7 +154,7 @@ func TestRuntimeProgressDetailsViewRerendersWholeWindowAndSticks(t *testing.T) {
 		seenKeys:       make(map[string]struct{}),
 		validateText:   rt.filterProgressText,
 	}
-	monitor, err := rt.startTurnMonitor(key, session.TurnRunKindInteractive, "inspect progress details", progress, nil, core.InboundMessage{})
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "inspect progress details", progress, nil, core.InboundMessage{})
 	if err != nil {
 		t.Fatalf("startTurnMonitor() err = %v", err)
 	}

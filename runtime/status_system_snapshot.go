@@ -104,6 +104,7 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 	}
 	snapshot.RecentExecution = summarizeExecutionEvents(recentEvents, 20)
 	snapshot.RestartHealth = restartHealthWithLatestWatchdogEvent(snapshot.RestartHealth, recentEvents)
+	snapshot.ProviderHealth = providerHealthFromExecutionEvents(recentEvents, now)
 	snapshot.RecentAdjudications = statusAdjudicationsFromExecutionEvents(recentEvents, 12)
 	activeByChat, queueByChat := liveRouterSignalsFromExecutionEvents(recentEvents)
 	latestFromEvents := latestTurnSnapshotsByChatFromExecutionEvents(recentEvents)

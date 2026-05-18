@@ -32,6 +32,14 @@ admin chat.
 Use `/status` when the question is about active work, pending approvals,
 durable-agent state, or a specific chat.
 
+System health includes provider pressure as a typed projection. A
+`provider_health` line summarizes recent provider failures, retries, failovers,
+and successes across the last few hours, with the latest provider/model/reason
+when a failure is still the newest evidence. Treat `degraded` as an inference
+surface issue before assuming the turn logic or Telegram transport is broken;
+`residual_risk` means a later success exists but recent provider pressure is
+still worth knowing about.
+
 Aphelion advances Telegram offsets only after an update is durably accepted,
 durably handled, durably queued for a turn, terminally skipped/completed, or
 recorded as a failure. Accepted but not-yet-started updates live in
@@ -61,6 +69,12 @@ prompt's timeout default through the same synthetic Telegram ingress ledger.
 Restart-loaded approval prompts that cannot be resumed are detached as stale; the
 newest prompt is authoritative.
 
+The stale-turn watchdog is a scoped recovery mechanism. When it finds stale
+running turns, it records the observation, cancels any matching in-process turn,
+interrupts those exact turn-run rows and matching Telegram ingress rows, then
+records `watchdog.recovered`. A process restart remains an explicit operator
+action; watchdog recovery should leave unrelated chats and threads alone.
+
 ## Keep Parallel Requests Apart
 
 Use side threads when you want to keep separate requests from sharing one live
@@ -82,7 +96,8 @@ turn. Later messages that start with `(thread N)` route to that existing open
 thread. Replies and progress cards from a side thread begin with `(thread N)` so
 the visible radio traffic stays attributable. If you reply to a message that
 Aphelion can match to a side thread through its Telegram ingress or outbound
-ledger, the reply routes to that thread.
+ledger, progress-card row, thread-created row, or thread-guide row, the reply
+routes to that thread.
 
 Thread targeting is lane selection, not a shortcut around governance. A
 targeted message still passes through the busy/interrupt gate, artifact

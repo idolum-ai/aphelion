@@ -120,6 +120,43 @@ func TestTurnRunLifecycleAndRecovery(t *testing.T) {
 	}
 }
 
+func TestCompleteTurnRunDoesNotOverwriteTerminalTurn(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 1900, UserID: 0}
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	run, err := store.BeginTurnRun(key, TurnRunKindInteractive, "cancel stale work")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	interrupted, err := store.InterruptRunningTurnRunIDs([]int64{run.ID}, "watchdog interrupted scoped turn")
+	if err != nil {
+		t.Fatalf("InterruptRunningTurnRunIDs() err = %v", err)
+	}
+	if len(interrupted) != 1 {
+		t.Fatalf("interrupted len = %d, want 1", len(interrupted))
+	}
+
+	if err := store.CompleteTurnRun(run.ID, TurnRunStatusCompleted, "late success"); err != nil {
+		t.Fatalf("CompleteTurnRun(late) err = %v", err)
+	}
+	loaded, err := store.TurnRun(run.ID)
+	if err != nil {
+		t.Fatalf("TurnRun() err = %v", err)
+	}
+	if loaded.Status != TurnRunStatusInterrupted {
+		t.Fatalf("status = %q, want interrupted after late completion attempt", loaded.Status)
+	}
+	if loaded.ErrorText != "watchdog interrupted scoped turn" {
+		t.Fatalf("error_text = %q, want original interruption reason", loaded.ErrorText)
+	}
+}
+
 func TestStaleRunningTurnRuns(t *testing.T) {
 	t.Parallel()
 

@@ -178,7 +178,12 @@ Chat-scoped status now reports live work telemetry, not only router occupancy:
 - `hidden_inputs` categories plus provenance summary carried in floor metadata.
 - `delivery` state that distinguishes in-flight, delivered, persisted-without-delivery, and delivery-failure paths.
 - `detached_work` counters for pending decisions/continuations/recovery/stale-turn work.
+- `provider_health` on system health/status views, summarizing recent provider
+  failures, retries, failovers, successes, and the latest failure reason.
 - `sandbox_readiness` warnings when an execution profile cannot currently enforce its configured isolation or network policy.
+- `watchdog` recovery state. Stale-turn recovery interrupts the exact stale
+  turn rows and matching Telegram ingress rows before surfacing
+  `watchdog.recovered`; it does not restart the process as the first repair.
 - `current_signal` as a compact one-line machine signal (phase/tool/queue/blocked source).
 
 Durables status (`Durables` button, admin-only):

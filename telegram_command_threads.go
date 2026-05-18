@@ -29,8 +29,7 @@ func (c telegramCommandControl) RecordTelegramThreadGuideMessage(chatID int64, t
 	if c.store == nil || chatID == 0 || threadID <= 0 || messageID <= 0 {
 		return nil
 	}
-	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: session.TelegramThreadScopeRef(chatID, threadID)}
-	return c.store.RecordOutbound(key, 0, messageID, "thread_guide")
+	return c.store.RecordTelegramThreadMessage(chatID, threadID, messageID, "thread_guide", "thread_guide", time.Now().UTC())
 }
 
 func (c telegramCommandControl) RecordTelegramThreadCallbackMessage(chatID int64, threadID int64, messageID int64, surface string) error {

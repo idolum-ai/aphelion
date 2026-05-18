@@ -139,14 +139,29 @@ type RestartHealthSnapshot struct {
 	WatchdogTriggered            bool
 	StaleTurnThreshold           time.Duration
 	StaleTurnLimit               int
-	WatchdogRestartCooldown      time.Duration
-	WatchdogMaxRestartAttempts   int
 	LastWatchdogStatus           string
 	LastWatchdogReason           string
 	LastWatchdogAt               time.Time
 	NextWatchdogAttemptAt        time.Time
 	LastWatchdogStaleCount       int
 	LastWatchdogInterruptedCount int
+}
+
+type ProviderHealthSnapshot struct {
+	GeneratedAt         time.Time
+	Window              time.Duration
+	Status              string
+	RecentFailures      int
+	RecentRetries       int
+	RecentFailovers     int
+	RecentSuccesses     int
+	LastEventAt         time.Time
+	LastFailureAt       time.Time
+	LastFailureProvider string
+	LastFailureModel    string
+	LastFailureReason   string
+	LastFailureError    string
+	LastSuccessAt       time.Time
 }
 
 type AutoApprovalStatusSnapshot struct {
@@ -359,6 +374,7 @@ type SystemStatusSnapshot struct {
 	StaleRunningTurns      []TurnRunStatusSnapshot
 	HotChats               []ChatStatusRollup
 	RestartHealth          RestartHealthSnapshot
+	ProviderHealth         ProviderHealthSnapshot
 	Tailnet                *TailnetStatusSnapshot
 	Autonomy               AutonomyStatusSnapshot
 	Sandbox                SandboxReadinessSnapshot

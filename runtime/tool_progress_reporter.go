@@ -104,11 +104,19 @@ func (m *turnMonitor) Finish(ctx context.Context, turnErr error) {
 	if m.runID == 0 {
 		return
 	}
+	m.runtime.unregisterActiveTurn(m.runID)
+	if m.cancelTurn != nil {
+		m.cancelTurn()
+		m.cancelTurn = nil
+	}
 
 	status := session.TurnRunStatusCompleted
 	errorText := ""
 	if turnErr != nil {
 		status = session.TurnRunStatusFailed
+		if errors.Is(turnErr, context.Canceled) {
+			status = session.TurnRunStatusInterrupted
+		}
 		errorText = trimError(turnErr.Error())
 	}
 	if err := m.runtime.store.CompleteTurnRun(m.runID, status, errorText); err != nil {

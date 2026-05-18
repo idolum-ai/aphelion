@@ -15,8 +15,8 @@ func restartHealthWithLatestWatchdogEvent(health core.RestartHealthSnapshot, eve
 	for _, event := range events {
 		switch strings.TrimSpace(event.EventType) {
 		case core.ExecutionEventWatchdogObserved,
-			core.ExecutionEventWatchdogRestartRequested,
-			core.ExecutionEventWatchdogRestartSuppressed,
+			core.ExecutionEventWatchdogRecovered,
+			core.ExecutionEventWatchdogRecoverySuppressed,
 			core.ExecutionEventWatchdogFailed:
 			health.LastWatchdogStatus = strings.TrimSpace(event.Status)
 			if health.LastWatchdogStatus == "" {

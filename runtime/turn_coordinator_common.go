@@ -215,10 +215,11 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	}
 
 	progress := r.newToolProgressReporter(input.Key, input.Msg, input.Audit)
-	monitor, err := r.startTurnMonitor(input.Key, runKind, input.Prepared.LedgerText, progress, input.Audit, input.Msg)
+	monitor, err := r.startTurnMonitor(ctx, input.Key, runKind, input.Prepared.LedgerText, progress, input.Audit, input.Msg)
 	if err != nil {
 		return out, err
 	}
+	ctx = monitor.Context()
 	defer monitor.Finish(ctx, monitorErr)
 
 	baseGovernorAwareness := input.BaseGovernorAwareness

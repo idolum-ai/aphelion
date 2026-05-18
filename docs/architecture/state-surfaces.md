@@ -61,6 +61,7 @@ Classifications below use the shared truth classes defined in
 | `session.review_events (status='pending')` | operational current-state store | Which review artifacts are queued for governance delivery? |
 | `/status` | projection | How should system/chat state be rendered for operators now? |
 | `/health trace` | projection | How should execution evidence be rendered for diagnosis now? |
+| `provider_health` in `/health` | projection | Is recent inference-provider pressure the current explanation for slow, failed, or retried work? |
 | Quick-read and progress render blocks | projection | What compact operator narration should be surfaced now? |
 | `turn_runs` | operational current-state store | What startup recovery/run bookkeeping hints are available to park interrupted work? |
 

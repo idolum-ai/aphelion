@@ -22,10 +22,10 @@ func TestSystemStatusSnapshotIncludesLatestWatchdogEvent(t *testing.T) {
 	createdAt := time.Now().UTC().Add(-time.Minute)
 	nextAttemptAt := time.Now().UTC().Add(29 * time.Minute).Truncate(time.Second)
 	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
-		EventType:   core.ExecutionEventWatchdogRestartSuppressed,
+		EventType:   core.ExecutionEventWatchdogRecoverySuppressed,
 		Stage:       "watchdog",
 		Status:      "suppressed",
-		PayloadJSON: `{"reason":"restart_cooldown_active","stale_count":2,"interrupted_count":0,"next_attempt_at":"` + nextAttemptAt.Format(time.RFC3339) + `"}`,
+		PayloadJSON: `{"reason":"stale_rows_already_terminal","stale_count":2,"interrupted_count":0,"next_attempt_at":"` + nextAttemptAt.Format(time.RFC3339) + `"}`,
 		CreatedAt:   createdAt,
 	}); err != nil {
 		t.Fatalf("AppendExecutionEvent() err = %v", err)
@@ -36,7 +36,7 @@ func TestSystemStatusSnapshotIncludesLatestWatchdogEvent(t *testing.T) {
 		t.Fatalf("SystemStatusSnapshot() err = %v", err)
 	}
 	if snapshot.RestartHealth.LastWatchdogStatus != "suppressed" ||
-		snapshot.RestartHealth.LastWatchdogReason != "restart_cooldown_active" ||
+		snapshot.RestartHealth.LastWatchdogReason != "stale_rows_already_terminal" ||
 		snapshot.RestartHealth.LastWatchdogStaleCount != 2 ||
 		snapshot.RestartHealth.LastWatchdogInterruptedCount != 0 ||
 		!snapshot.RestartHealth.NextWatchdogAttemptAt.Equal(nextAttemptAt) ||

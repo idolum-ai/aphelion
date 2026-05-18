@@ -660,3 +660,120 @@ func TestMigratesSchemaV51ToV52TelegramCallbackMessages(t *testing.T) {
 		t.Fatalf("TelegramThreadIDForReplyMessage(callback) = %d ok=%v err=%v, want thread %d", got, ok, err, thread.ThreadID)
 	}
 }
+
+func TestMigratesSchemaV53ToV54BackfillsTelegramThreadSessions(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v53.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v53 db: %v", err)
+	}
+	now := time.Date(2026, 5, 18, 2, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	for _, stmt := range []string{
+		`PRAGMA foreign_keys=ON`,
+		`CREATE TABLE schema_version(version INTEGER NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+		`INSERT INTO schema_version(version) VALUES (53)`,
+		`CREATE TABLE sessions (
+			session_id TEXT PRIMARY KEY,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			system_prompt TEXT,
+			last_floor_text TEXT,
+			last_floor_metadata TEXT,
+			plan_state_json TEXT NOT NULL DEFAULT '{}',
+			operation_state_json TEXT NOT NULL DEFAULT '{}',
+			continuation_state_json TEXT NOT NULL DEFAULT '{}',
+			working_objective_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			turn_count INTEGER NOT NULL DEFAULT 0,
+			chat_type TEXT NOT NULL DEFAULT 'dm',
+			chat_title TEXT,
+			user_name TEXT,
+			cache_last_write_block INTEGER NOT NULL DEFAULT 0,
+			cache_blocks_since INTEGER NOT NULL DEFAULT 0,
+			cache_last_write_time TEXT,
+			cache_hit_rate REAL NOT NULL DEFAULT 0.0,
+			cache_consecutive_misses INTEGER NOT NULL DEFAULT 0,
+			total_input_tokens INTEGER NOT NULL DEFAULT 0,
+			total_output_tokens INTEGER NOT NULL DEFAULT 0,
+			total_cache_read INTEGER NOT NULL DEFAULT 0,
+			total_cache_write INTEGER NOT NULL DEFAULT 0,
+			last_provider TEXT,
+			last_model TEXT,
+			active_tool_calls INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT
+		)`,
+		`CREATE TABLE outbound_messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			turn_index INTEGER NOT NULL,
+			telegram_msg_id INTEGER NOT NULL,
+			msg_type TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE telegram_threads (
+			chat_id INTEGER NOT NULL,
+			thread_id INTEGER NOT NULL,
+			status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'closed')),
+			created_by_sender_id INTEGER NOT NULL DEFAULT 0,
+			created_from_update_id INTEGER NOT NULL DEFAULT 0,
+			created_message_id INTEGER NOT NULL DEFAULT 0,
+			created_text TEXT NOT NULL DEFAULT '',
+			display_slot INTEGER NOT NULL DEFAULT 0,
+			archived_display_name TEXT NOT NULL DEFAULT '',
+			last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
+			closed_at TEXT,
+			absorb_summary TEXT NOT NULL DEFAULT '',
+			absorbed_at TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			PRIMARY KEY(chat_id, thread_id)
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v53 fixture: %v", err)
+		}
+	}
+	if _, err := db.Exec(`
+		INSERT INTO telegram_threads(
+			chat_id, thread_id, display_slot, status, created_by_sender_id, created_from_update_id,
+			created_message_id, created_text, last_activity_at, created_at, updated_at
+		) VALUES (1001, 7, 7, 'open', 2002, 385535816, 9253, '', ?, ?, ?)
+	`, now, now, now); err != nil {
+		t.Fatalf("insert v53 thread fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v53 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v53) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+
+	key := SessionKey{ChatID: 1001, Scope: TelegramThreadScopeRef(1001, 7)}
+	sessionID := SessionIDForKey(key)
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(1) FROM sessions WHERE session_id = ?`, sessionID).Scan(&count); err != nil {
+		t.Fatalf("query migrated thread session: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("thread session count = %d, want migrated session row", count)
+	}
+	if err := store.RecordTelegramThreadMessage(1001, 7, 9254, "thread_guide", "thread_guide", time.Now().UTC()); err != nil {
+		t.Fatalf("RecordTelegramThreadMessage(live-style FK) err = %v", err)
+	}
+	if got, ok, err := store.TelegramThreadIDForReplyMessage(1001, 9254); err != nil || !ok || got != 7 {
+		t.Fatalf("TelegramThreadIDForReplyMessage(guide) = %d ok=%v err=%v, want thread 7", got, ok, err)
+	}
+}

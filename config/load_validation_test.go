@@ -175,34 +175,14 @@ func TestLoadRejectsInvalidRecoveryWatchdogConfig(t *testing.T) {
 		{
 			name: "invalid threshold",
 			body: `stale_turn_threshold = "soon"
-stale_turn_limit = 8
-restart_cooldown = "30m"
-max_restart_attempts = 1`,
+stale_turn_limit = 8`,
 			wantErr: "recovery.watchdog.stale_turn_threshold",
 		},
 		{
 			name: "invalid limit",
 			body: `stale_turn_threshold = "3m"
-stale_turn_limit = 0
-restart_cooldown = "30m"
-max_restart_attempts = 1`,
+stale_turn_limit = 0`,
 			wantErr: "recovery.watchdog.stale_turn_limit",
-		},
-		{
-			name: "negative cooldown",
-			body: `stale_turn_threshold = "3m"
-stale_turn_limit = 8
-restart_cooldown = "-1s"
-max_restart_attempts = 1`,
-			wantErr: "recovery.watchdog.restart_cooldown",
-		},
-		{
-			name: "invalid attempts",
-			body: `stale_turn_threshold = "3m"
-stale_turn_limit = 8
-restart_cooldown = "30m"
-max_restart_attempts = 0`,
-			wantErr: "recovery.watchdog.max_restart_attempts",
 		},
 	}
 

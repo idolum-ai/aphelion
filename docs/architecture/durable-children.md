@@ -15,6 +15,11 @@ but they remain subordinate to parent governance and policy boundaries.
 - Child wakes can be transport-triggered (`telegram_update`) or scheduler-triggered (`poll`, `push`, `poll_or_push`) depending on the child role.
 - Child wake ingress is selected through pluggable runtime adapters; each adapter contributes wake payload synthesis and review finalization semantics.
 - External-channel children use a generic runtime state slot (`external_channel`) for adapter name, cursor/session reference, last command, attempt/success timestamps, artifact pointer, status/error, failure count, backoff, and opaque adapter state. Protocol-specific residue belongs under `adapter_state`, not as a new parent-core continuity field per child or transport.
+- External-channel child wake failures are recorded under that same generic
+  runtime state as `wake_failed` or `wake_blocked` with backoff and a bounded
+  review artifact. Parent-conversation messages are acknowledged only by the
+  wake turn that received them; executor or transport failure leaves those
+  messages pending for a later wake.
 - The default install recipe can create one example scheduled child (`idolum-daily-review`) using the same durable wake substrate: it stages yesterday's transcript into child-local files and starts a plain scheduled check-in chat upward. The runtime does not recreate this child if the target install removes or disables it; the install owns whether the recipe is present. A read-only Codex app-server external-channel adapter is also available for remote child status heartbeats through the same wake substrate.
 - All wake-driven durable work runs through one child-turn substrate (prompt context + governor/face loop + principal-scoped tools), either in-process or isolated (`durable-agent child-run --agent ...`) when bootstrap/isolation is configured.
 - Durable wake polling fans out through a small bounded worker pool. Each child

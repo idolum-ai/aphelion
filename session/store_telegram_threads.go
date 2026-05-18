@@ -97,6 +97,9 @@ func (s *SQLiteStore) CreateTelegramThreadForUpdate(chatID int64, senderID int64
 	`, chatID, nextThreadID, displaySlot, string(TelegramThreadStatusOpen), senderID, updateID, messageID, clampStoreText(text, 2000), nowRaw, nowRaw, nowRaw); err != nil {
 		return TelegramThread{}, false, fmt.Errorf("insert telegram thread: %w", err)
 	}
+	if err := ensureTelegramThreadSessionTx(tx, chatID, nextThreadID, now); err != nil {
+		return TelegramThread{}, false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return TelegramThread{}, false, fmt.Errorf("commit telegram thread create: %w", err)
 	}
@@ -363,27 +366,6 @@ func (s *SQLiteStore) TelegramThreadIDForReplyMessage(chatID int64, messageID in
 		return 0, false, fmt.Errorf("lookup telegram reply created thread message: %w", err)
 	}
 	return threadID, threadID > 0, nil
-}
-
-func (s *SQLiteStore) RecordTelegramCallbackMessageThread(chatID int64, messageID int64, threadID int64, surface string, at time.Time) error {
-	if chatID == 0 || messageID <= 0 || threadID <= 0 {
-		return nil
-	}
-	if at.IsZero() {
-		at = time.Now().UTC()
-	}
-	atRaw := at.UTC().Format(time.RFC3339Nano)
-	if _, err := s.db.Exec(`
-		INSERT INTO telegram_callback_messages(chat_id, message_id, thread_id, surface, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(chat_id, message_id) DO UPDATE SET
-			thread_id = excluded.thread_id,
-			surface = excluded.surface,
-			updated_at = excluded.updated_at
-	`, chatID, messageID, threadID, clampStoreText(surface, 120), atRaw, atRaw); err != nil {
-		return fmt.Errorf("record telegram callback message thread: %w", err)
-	}
-	return nil
 }
 
 func nextTelegramThreadDisplaySlotTx(tx *sql.Tx, chatID int64) (int64, error) {

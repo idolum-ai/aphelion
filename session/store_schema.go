@@ -19,6 +19,7 @@ const schemaVersion49 = 49
 const schemaVersion50 = 50
 const schemaVersion51 = 51
 const schemaVersion52 = 52
+const schemaVersion53 = 53
 
 func existingUserTableCount(tx *sql.Tx) (int, error) {
 	var count int
@@ -45,7 +46,7 @@ func validateCurrentSchemaVersion(tx *sql.Tx, existingTables int) (int, error) {
 		return 0, fmt.Errorf("unsupported unversioned database schema; reinstall from a clean current state")
 	}
 	if currentVersion < schemaVersion {
-		if currentVersion == schemaVersion43 || currentVersion == schemaVersion44 || currentVersion == schemaVersion45 || currentVersion == schemaVersion46 || currentVersion == schemaVersion47 || currentVersion == schemaVersion48 || currentVersion == schemaVersion49 || currentVersion == schemaVersion50 || currentVersion == schemaVersion51 || currentVersion == schemaVersion52 {
+		if currentVersion == schemaVersion43 || currentVersion == schemaVersion44 || currentVersion == schemaVersion45 || currentVersion == schemaVersion46 || currentVersion == schemaVersion47 || currentVersion == schemaVersion48 || currentVersion == schemaVersion49 || currentVersion == schemaVersion50 || currentVersion == schemaVersion51 || currentVersion == schemaVersion52 || currentVersion == schemaVersion53 {
 			return currentVersion, nil
 		}
 		return 0, fmt.Errorf("unsupported database schema version %d (current schema version is %d); reinstall from a clean current state", currentVersion, schemaVersion)
@@ -141,6 +142,15 @@ func migrateCurrentSchemaVersion(tx *sql.Tx, currentVersion int) (int, error) {
 	}
 	if version == schemaVersion52 {
 		if err := migrateSchemaV52ToV53(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion53); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion53, err)
+		}
+		version = schemaVersion53
+	}
+	if version == schemaVersion53 {
+		if err := migrateSchemaV53ToV54(tx); err != nil {
 			return 0, err
 		}
 		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion); err != nil {
@@ -308,6 +318,13 @@ func migrateSchemaV52ToV53(tx *sql.Tx) error {
 	}
 	if err := ensureTelegramThreadTables(tx); err != nil {
 		return fmt.Errorf("migrate schema v52 to v53 ensure telegram thread tables: %w", err)
+	}
+	return nil
+}
+
+func migrateSchemaV53ToV54(tx *sql.Tx) error {
+	if err := ensureTelegramThreadSessions(tx); err != nil {
+		return fmt.Errorf("migrate schema v53 to v54 ensure telegram thread sessions: %w", err)
 	}
 	return nil
 }

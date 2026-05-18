@@ -293,14 +293,6 @@ func run() error {
 	}
 	rt.StartStartupRecovery(ctx, log.Printf)
 	rt.StartIdleExpiryLoop(ctx, log.Printf)
-	rt.SetStaleTurnWatchdogHook(func(runs []session.TurnRun) {
-		log.Printf("WARN stale turn watchdog requesting process restart after interrupting %d run(s)", len(runs))
-		rt.BeginShutdown()
-		go func() {
-			time.Sleep(restartExitWait)
-			processExit(exitCodeFailure)
-		}()
-	})
 	rt.StartStaleTurnWatchdogLoop(ctx, log.Printf)
 	rt.StartHeartbeatLoop(ctx, log.Printf)
 	rt.StartDurableWakeLoop(ctx, log.Printf)

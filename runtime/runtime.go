@@ -79,13 +79,13 @@ type Runtime struct {
 	staleTurnThreshold       time.Duration
 	staleTurnLimit           int
 	staleTurnWatchdogEnabled bool
-	staleTurnRestartCooldown time.Duration
-	staleTurnMaxRestarts     int
 	staleTurnSweep           func(cutoff time.Time, limit int) ([]session.TurnRun, error)
 	interruptRunningTurnRuns func() ([]session.TurnRun, error)
-	staleTurnWatchdogHook    func(runs []session.TurnRun)
+	interruptStaleTurnRuns   func(ids []int64, reason string) ([]session.TurnRun, error)
 	staleWatchdogTriggered   atomic.Bool
 	staleWatchdogNextAttempt atomic.Int64
+	activeTurnMu             sync.Mutex
+	activeTurnCancels        map[int64]context.CancelFunc
 
 	scopeResolver          *sandbox.Resolver
 	durableGroupChild      durableGroupChildExecutor
@@ -315,9 +315,7 @@ func New(
 	watchdogConfig := cfg.Recovery.Watchdog
 	if !watchdogConfig.Enabled &&
 		strings.TrimSpace(watchdogConfig.StaleTurnThreshold) == "" &&
-		watchdogConfig.StaleTurnLimit == 0 &&
-		strings.TrimSpace(watchdogConfig.RestartCooldown) == "" &&
-		watchdogConfig.MaxRestartAttempts == 0 {
+		watchdogConfig.StaleTurnLimit == 0 {
 		watchdogConfig = config.Default().Recovery.Watchdog
 	}
 	staleTurnThreshold := defaultStaleTurnThreshold
@@ -333,20 +331,6 @@ func New(
 	staleTurnLimit := watchdogConfig.StaleTurnLimit
 	if staleTurnLimit <= 0 {
 		staleTurnLimit = defaultStaleTurnLimit
-	}
-	staleTurnRestartCooldown := defaultStaleTurnRestartCooldown
-	if raw := strings.TrimSpace(watchdogConfig.RestartCooldown); raw != "" {
-		d, err := time.ParseDuration(raw)
-		if err != nil {
-			return nil, fmt.Errorf("parse recovery.watchdog.restart_cooldown: %w", err)
-		}
-		if d >= 0 {
-			staleTurnRestartCooldown = d
-		}
-	}
-	staleTurnMaxRestarts := watchdogConfig.MaxRestartAttempts
-	if staleTurnMaxRestarts <= 0 {
-		staleTurnMaxRestarts = defaultStaleTurnMaxRestartAttempts
 	}
 	recipePath := recipeStatePath(cfg)
 	recipeState, err := loadRuntimeRecipeState(recipePath, cfg)
@@ -404,9 +388,8 @@ func New(
 		staleTurnThreshold:       staleTurnThreshold,
 		staleTurnLimit:           staleTurnLimit,
 		staleTurnWatchdogEnabled: watchdogConfig.Enabled,
-		staleTurnRestartCooldown: staleTurnRestartCooldown,
-		staleTurnMaxRestarts:     staleTurnMaxRestarts,
 		interruptRunningTurnRuns: store.InterruptRunningTurnRuns,
+		interruptStaleTurnRuns:   store.InterruptRunningTurnRunIDs,
 		tailnetBackend:           tailnetBackend,
 		modelProviderCache:       make(map[string]agent.Provider),
 		recipePath:               recipePath,
@@ -425,6 +408,7 @@ func New(
 		operationalAlertClock:  time.Now,
 		operationalAlertWindow: 10 * time.Minute,
 		sessionLocks:           make(map[string]*sync.Mutex),
+		activeTurnCancels:      make(map[int64]context.CancelFunc),
 	}
 	if rt.workExecutor != nil {
 		if native, ok := rt.workExecutor.executors["native"].(nativeWorkExecutor); ok {

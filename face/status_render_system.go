@@ -21,6 +21,9 @@ func RenderTelegramStatusSystem(snapshot core.SystemStatusSnapshot, personaEffor
 	if authorityLine := renderAuthorityStatusLine(snapshot.Authority); authorityLine != "" {
 		lines = append(lines, authorityLine)
 	}
+	if providerLine := renderProviderHealthLine(snapshot.ProviderHealth); providerLine != "" {
+		lines = append(lines, providerLine)
+	}
 	if len(snapshot.QueueDepthByChat) > 0 {
 		queueKeys := make([]int64, 0, len(snapshot.QueueDepthByChat))
 		for chatID := range snapshot.QueueDepthByChat {
@@ -60,6 +63,39 @@ func RenderTelegramStatusSystem(snapshot core.SystemStatusSnapshot, personaEffor
 	lines = append(lines, renderWatchdogHealthLine(snapshot.RestartHealth))
 	lines = append(lines, fmt.Sprintf("effort persona=%s governor=%s", strings.TrimSpace(personaEffort), strings.TrimSpace(governorEffort)))
 	return strings.Join(lines, "\n")
+}
+
+func renderProviderHealthLine(health core.ProviderHealthSnapshot) string {
+	status := strings.TrimSpace(health.Status)
+	if status == "" && health.GeneratedAt.IsZero() && health.RecentFailures == 0 && health.RecentRetries == 0 && health.RecentFailovers == 0 {
+		return ""
+	}
+	if status == "" {
+		status = "healthy"
+	}
+	line := fmt.Sprintf("provider_health status=%s failures=%d retries=%d failovers=%d successes=%d", status, health.RecentFailures, health.RecentRetries, health.RecentFailovers, health.RecentSuccesses)
+	if health.Window > 0 {
+		line += " window=" + health.Window.Truncate(time.Second).String()
+	}
+	if !health.LastFailureAt.IsZero() {
+		line += " last_failure_at=" + formatStatusTime(health.LastFailureAt)
+	}
+	if provider := strings.TrimSpace(health.LastFailureProvider); provider != "" {
+		line += " provider=" + provider
+	}
+	if model := strings.TrimSpace(health.LastFailureModel); model != "" {
+		line += " model=" + quoteStatusField(truncateStatusField(model, 80))
+	}
+	if reason := strings.TrimSpace(health.LastFailureReason); reason != "" {
+		line += " reason=" + quoteStatusField(truncateStatusField(reason, 100))
+	}
+	if errText := strings.TrimSpace(health.LastFailureError); errText != "" {
+		line += " error=" + quoteStatusField(truncateStatusField(errText, 120))
+	}
+	if !health.LastSuccessAt.IsZero() {
+		line += " last_success_at=" + formatStatusTime(health.LastSuccessAt)
+	}
+	return line
 }
 
 func renderTelegramIngressUpdateBlock(updates []core.TelegramIngressUpdateSnapshot) []string {

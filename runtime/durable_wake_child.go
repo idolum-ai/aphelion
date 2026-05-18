@@ -84,10 +84,16 @@ func (r *Runtime) pollDurableAgentWakeViaChild(ctx context.Context, agent core.D
 		return r.runDurableAgentChildWakeLoaded(ctx, agent, now)
 	}
 	if err := r.durableWakeChild.Run(ctx, scope, agent, now); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if handled, handleErr := r.recordDurableWakeChildRuntimeBlock(agent, err, now); handled {
 			return handleErr
 		}
 		if handled, handleErr := r.recordOrSuppressScheduledReviewWakeFailure(agent, err, now); handled {
+			return handleErr
+		}
+		if handled, handleErr := r.recordDurableWakeExternalFailure(agent, err, now); handled {
 			return handleErr
 		}
 		return err

@@ -13,13 +13,11 @@ import (
 
 func renderWatchdogHealthLine(health core.RestartHealthSnapshot) string {
 	line := fmt.Sprintf(
-		"watchdog enabled=%t triggered=%t stale_threshold=%s stale_limit=%d restart_cooldown=%s max_restart_attempts=%d",
+		"watchdog enabled=%t triggered=%t stale_threshold=%s stale_limit=%d",
 		health.WatchdogEnabled,
 		health.WatchdogTriggered,
 		health.StaleTurnThreshold,
 		health.StaleTurnLimit,
-		health.WatchdogRestartCooldown,
-		health.WatchdogMaxRestartAttempts,
 	)
 	if status := strings.TrimSpace(health.LastWatchdogStatus); status != "" {
 		line += " last_status=" + status

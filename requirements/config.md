@@ -646,16 +646,13 @@ func Load(path string) (*Config, error) {
 enabled = true
 stale_turn_threshold = "3m"
 stale_turn_limit = 8
-restart_cooldown = "30m"
-max_restart_attempts = 1
 ```
 
-The stale-turn watchdog is a recovery controller, not a generic process supervisor.
-It may request a process restart only after it has written durable watchdog facts
-and successfully persisted interrupted turn state. `restart_cooldown` is the
-rolling window for `max_restart_attempts`; together they prevent repeated
-watchdog-triggered restart loops while still allowing a later retry when the
-window clears.
+The stale-turn watchdog is a scoped recovery controller, not a generic process
+supervisor. It records stale-turn evidence, cancels matching in-process turns
+when possible, interrupts the exact stale `turn_runs` and matching Telegram
+ingress rows, then records recovery or retry state. It does not broaden into a
+process restart policy.
 
 ### Hot Reload
 

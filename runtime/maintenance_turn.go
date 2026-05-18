@@ -128,10 +128,11 @@ func (c *maintenanceTurnCoordinator) Execute(ctx context.Context, req turn.Gover
 		return nil, fmt.Errorf("assemble %s history: %w", c.species, err)
 	}
 
-	monitor, err := c.runtime.startTurnMonitor(c.key, runKind, c.prepared.LedgerText, nil, nil, core.InboundMessage{})
+	monitor, err := c.runtime.startTurnMonitor(ctx, c.key, runKind, c.prepared.LedgerText, nil, nil, core.InboundMessage{})
 	if err != nil {
 		return nil, err
 	}
+	ctx = monitor.Context()
 	var monitorErr error
 	defer monitor.Finish(ctx, monitorErr)
 

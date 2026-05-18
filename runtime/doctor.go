@@ -116,10 +116,11 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 	}
 
 	progress := r.newDoctorProgressReporter(key, msg)
-	monitor, err := r.startTurnMonitor(key, session.TurnRunKindDoctor, "/health diagnose", progress, nil, msg)
+	monitor, err := r.startTurnMonitor(ctx, key, session.TurnRunKindDoctor, "/health diagnose", progress, nil, msg)
 	if err != nil {
 		return err
 	}
+	ctx = monitor.Context()
 	var monitorErr error
 	defer func() {
 		if monitorErr != nil {

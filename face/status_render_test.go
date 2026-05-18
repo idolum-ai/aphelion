@@ -471,6 +471,36 @@ func TestRenderTelegramStatusSystemIncludesTelegramIngressUpdates(t *testing.T) 
 	}
 }
 
+func TestRenderTelegramStatusSystemIncludesProviderHealth(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	out := RenderTelegramStatusSystem(core.SystemStatusSnapshot{
+		ProviderHealth: core.ProviderHealthSnapshot{
+			GeneratedAt:         now,
+			Window:              4 * time.Hour,
+			Status:              "degraded",
+			RecentFailures:      2,
+			RecentRetries:       1,
+			RecentFailovers:     1,
+			LastFailureAt:       now.Add(-time.Minute),
+			LastFailureProvider: "openrouter",
+			LastFailureModel:    "openrouter/sonnet",
+			LastFailureReason:   "quota exceeded",
+			LastFailureError:    "insufficient_quota",
+		},
+	}, "opus", "high")
+	for _, needle := range []string{
+		"provider_health status=degraded failures=2 retries=1 failovers=1 successes=0 window=4h0m0s",
+		"provider=openrouter",
+		"reason=\"quota exceeded\"",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderTelegramStatusSystem() = %q, want substring %q", out, needle)
+		}
+	}
+}
+
 func TestRenderTelegramStatusDurablesShowsEmptyState(t *testing.T) {
 	t.Parallel()
 

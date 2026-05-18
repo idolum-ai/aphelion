@@ -274,8 +274,6 @@ type RecoveryWatchdogConfig struct {
 	Enabled            bool   `toml:"enabled"`
 	StaleTurnThreshold string `toml:"stale_turn_threshold"`
 	StaleTurnLimit     int    `toml:"stale_turn_limit"`
-	RestartCooldown    string `toml:"restart_cooldown"`
-	MaxRestartAttempts int    `toml:"max_restart_attempts"`
 }
 
 type AgentConfig struct {
@@ -596,8 +594,6 @@ func Default() Config {
 				Enabled:            true,
 				StaleTurnThreshold: "3m",
 				StaleTurnLimit:     8,
-				RestartCooldown:    "30m",
-				MaxRestartAttempts: 1,
 			},
 		},
 		Agent: AgentConfig{

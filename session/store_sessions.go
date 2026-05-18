@@ -363,6 +363,31 @@ func (s *SQLiteStore) createEmptySession(key SessionKey) (*Session, error) {
 	return sess, nil
 }
 
+func ensureSessionRowTx(tx *sql.Tx, key SessionKey, chatType string, now time.Time) error {
+	if tx == nil {
+		return fmt.Errorf("ensure session row: transaction is required")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	scope := defaultScopeForKey(key)
+	sessionID := SessionIDFromParts(key.ChatID, key.UserID, scope)
+	_, err := tx.Exec(`
+		INSERT OR IGNORE INTO sessions(
+			session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
+			system_prompt, last_floor_text, plan_state_json, operation_state_json, continuation_state_json,
+			created_at, updated_at, turn_count, chat_type
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		sessionID, key.ChatID, key.UserID, string(scope.Kind), scope.ID, scope.DurableAgentID,
+		"", "", "{}", "{}", "{}", now.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), 0, defaultChatType(chatType),
+	)
+	if err != nil {
+		return fmt.Errorf("ensure session row %s: %w", sessionID, err)
+	}
+	return nil
+}
+
 func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
 	session.Scope = defaultScopeForKey(SessionKey{
 		ChatID: session.ChatID,

@@ -193,17 +193,6 @@ func validate(cfg *Config) error {
 	if cfg.Recovery.Watchdog.StaleTurnLimit <= 0 {
 		return fmt.Errorf("recovery.watchdog.stale_turn_limit must be > 0")
 	}
-	if strings.TrimSpace(cfg.Recovery.Watchdog.RestartCooldown) == "" {
-		return fmt.Errorf("recovery.watchdog.restart_cooldown is required")
-	}
-	if cooldown, err := time.ParseDuration(strings.TrimSpace(cfg.Recovery.Watchdog.RestartCooldown)); err != nil {
-		return fmt.Errorf("recovery.watchdog.restart_cooldown must be a valid duration: %w", err)
-	} else if cooldown < 0 {
-		return fmt.Errorf("recovery.watchdog.restart_cooldown must be >= 0")
-	}
-	if cfg.Recovery.Watchdog.MaxRestartAttempts <= 0 {
-		return fmt.Errorf("recovery.watchdog.max_restart_attempts must be > 0")
-	}
 	if strings.TrimSpace(cfg.Agent.EffectivePromptRoot()) == "" {
 		return fmt.Errorf("agent.prompt_root is required")
 	}

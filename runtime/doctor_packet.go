@@ -33,6 +33,9 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 	writeDoctorSection(&b, "Effective Runtime")
 	r.writeDoctorRuntimeConfig(&b, input.Exec, input.Scope)
 
+	writeDoctorSection(&b, "Provider Health")
+	r.writeDoctorProviderHealth(&b, now)
+
 	writeDoctorSection(&b, "Autonomy")
 	r.writeDoctorAutonomyStatus(&b, input.Key, input.Message.SenderID, now)
 
