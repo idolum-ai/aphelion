@@ -23,7 +23,7 @@ func handleTelegramPageCallback(ctx context.Context, sender commandCallbackSende
 	}
 	switch req.Surface {
 	case telegramPageSurfaceThreads:
-		return handleTelegramThreadsPageCallback(ctx, sender, router, cb, chatID, messageID, req.Page)
+		return handleTelegramThreadsPageCallback(ctx, sender, router, cb, chatID, messageID, req.View, req.Page)
 	case telegramPageSurfaceAgents:
 		return handleDurableAgentsPageCallback(ctx, sender, router, cb, chatID, messageID, senderID, req.Page)
 	case telegramPageSurfaceHealth:
@@ -36,7 +36,7 @@ func handleTelegramPageCallback(ctx context.Context, sender commandCallbackSende
 	}
 }
 
-func handleTelegramThreadsPageCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, chatID int64, messageID int64, page int) (bool, error) {
+func handleTelegramThreadsPageCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, chatID int64, messageID int64, view string, page int) (bool, error) {
 	threadRouter, ok := router.(commandThreadRouter)
 	if !ok {
 		return true, sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Thread controls are unavailable.")
@@ -48,7 +48,7 @@ func handleTelegramThreadsPageCallback(ctx context.Context, sender commandCallba
 	if err != nil {
 		return true, err
 	}
-	rendered, rows := renderTelegramThreadsPanel(threads, page)
+	rendered, rows := renderTelegramThreadsPanel(threads, view, page)
 	if len(rows) == 0 {
 		if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, rendered); err != nil {
 			return true, err

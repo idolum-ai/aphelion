@@ -79,6 +79,8 @@ func runMaintenanceCommand(args []string) (bool, error) {
 		return true, runSandboxNetCommand(args[1:])
 	case "telegram-child-bot":
 		return true, runTelegramChildBotCommand(args[1:])
+	case "telegram-threads":
+		return true, runTelegramThreadsMaintenanceCommand(args[1:])
 	case "agency-eval":
 		return true, runAgencyEvalCommand(args[1:])
 	case "version":

@@ -115,6 +115,8 @@ func (s *stubCommandRouter) TargetTelegramThreadMessage(_ context.Context, msg c
 }
 
 func (s *stubCommandRouter) TelegramThread(chatID int64, threadID int64) (session.TelegramThread, bool, error) {
+	s.threadReplyChatID = chatID
+	s.threadReplyMessageID = threadID
 	if s.threadReplyErr != nil {
 		return session.TelegramThread{}, false, s.threadReplyErr
 	}

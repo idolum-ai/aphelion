@@ -325,6 +325,35 @@ func TestThreadsCommandListsAbsorbButtons(t *testing.T) {
 	}
 }
 
+func TestThreadsCommandShowsDisplaySlotWithCanonicalAbsorbCallback(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		threadsReturn: []session.TelegramThread{
+			{ChatID: 1001, ThreadID: 42, DisplaySlot: 1, Status: session.TelegramThreadStatusOpen, CreatedText: "current side task"},
+		},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    1001,
+		SenderID:  2002,
+		MessageID: 3003,
+		Text:      "/threads",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand(/threads) err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "thread 1: open") || strings.Contains(sender.inline[0].text, "thread 42: open") {
+		t.Fatalf("inline = %#v, want visible display slot", sender.inline)
+	}
+	if !commandRowsContain(sender.inline[0].rows, "Absorb 1", "thread_absorb:42") {
+		t.Fatalf("rows = %#v, want display-slot label with canonical callback", sender.inline[0].rows)
+	}
+}
+
 func TestAbsorbCommandWithoutArgumentShowsThreadButtons(t *testing.T) {
 	t.Parallel()
 
@@ -767,5 +796,76 @@ func TestThreadSummaryCallbackWorkReplaysStoredQuest(t *testing.T) {
 	}
 	if next, err := store.TelegramIngressNextUpdateID(telegramThreadSummaryIngressSurface); err != nil || next != 910 {
 		t.Fatalf("TelegramIngressNextUpdateID() = %d err=%v, want 910", next, err)
+	}
+}
+
+func TestThreadsCommandDefaultsToOpenAndShowsNonOpenView(t *testing.T) {
+	t.Parallel()
+
+	threads := []session.TelegramThread{
+		{ChatID: 1001, ThreadID: 10, DisplaySlot: 1, Status: session.TelegramThreadStatusOpen, CreatedText: "open task"},
+		{ChatID: 1001, ThreadID: 9, ArchivedDisplayName: "1-2026-05-17", Status: session.TelegramThreadStatusClosed, CreatedText: "closed task"},
+	}
+	rendered, rows := renderTelegramThreadsPanel(threads, telegramPageViewList, 1)
+	if !strings.Contains(rendered, "thread 1: open") || strings.Contains(rendered, "1-2026-05-17") {
+		t.Fatalf("open view = %q, want only open display slot", rendered)
+	}
+	if !commandRowsContain(rows, "Show non-open", "page:threads:nonopen:1") {
+		t.Fatalf("rows = %#v, want Show non-open", rows)
+	}
+
+	rendered, rows = renderTelegramThreadsPanel(threads, telegramPageViewNonOpen, 1)
+	if !strings.Contains(rendered, "1-2026-05-17: closed") || strings.Contains(rendered, "thread 1: open") {
+		t.Fatalf("non-open view = %q, want archived row only", rendered)
+	}
+	if !commandRowsContain(rows, "Show open", "page:threads:list:1") {
+		t.Fatalf("rows = %#v, want Show open", rows)
+	}
+}
+
+func TestAbsorbCommandResolvesOpenDisplaySlotToCanonicalThreadID(t *testing.T) {
+	t.Parallel()
+
+	router := &stubCommandRouter{
+		threadsReturn: []session.TelegramThread{
+			{ChatID: 1001, ThreadID: 42, DisplaySlot: 1, Status: session.TelegramThreadStatusOpen},
+			{ChatID: 1001, ThreadID: 99, DisplaySlot: 2, Status: session.TelegramThreadStatusOpen},
+		},
+	}
+	sender := &stubCommandSender{}
+	msg := core.InboundMessage{ChatID: 1001, SenderID: 2002, MessageID: 3003, Text: "/absorb 1"}
+
+	handled, err := handleTelegramThreadCommand(context.Background(), sender, router, msg, "absorb")
+	if err != nil {
+		t.Fatalf("handleTelegramThreadCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.absorbThreadID != 42 {
+		t.Fatalf("absorbThreadID = %d, want canonical thread 42 from display slot 1", router.absorbThreadID)
+	}
+}
+
+func TestThreadPrefixResolvesOpenDisplaySlotToCanonicalThreadID(t *testing.T) {
+	t.Parallel()
+
+	router := &stubCommandRouter{
+		threadsReturn: []session.TelegramThread{
+			{ChatID: 1001, ThreadID: 42, DisplaySlot: 1, Status: session.TelegramThreadStatusOpen},
+		},
+	}
+	sender := &stubCommandSender{}
+	msg := core.InboundMessage{ChatID: 1001, SenderID: 2002, MessageID: 3003, Text: "(thread 1) continue the work"}
+
+	routed, handled, err := resolveTelegramThreadPrefix(context.Background(), sender, router, msg)
+	if err != nil {
+		t.Fatalf("resolveTelegramThreadPrefix() err = %v", err)
+	}
+	if handled {
+		t.Fatal("handled = true, want routed message to continue")
+	}
+	if routed.TelegramThreadID != 42 || router.threadRouteID != 42 {
+		t.Fatalf("routed thread=%d routeID=%d, want canonical thread 42", routed.TelegramThreadID, router.threadRouteID)
 	}
 }

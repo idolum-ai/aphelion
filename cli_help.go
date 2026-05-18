@@ -29,7 +29,7 @@ var cliCommandGroups = []struct {
 		"quickstart", "init", "paths", "park-restart", "verify-deploy", "version",
 	}},
 	{Title: "Repair and maintenance", Commands: []string{
-		"repair-live-state", "repair-capability-grants", "repair-review-redactions", "gc", "forget", "reset",
+		"repair-live-state", "repair-capability-grants", "repair-review-redactions", "telegram-threads sanitize", "gc", "forget", "reset",
 	}},
 	{Title: "Memory import", Commands: []string{
 		"import-audit", "import-semantic", "import-codex-sessions",

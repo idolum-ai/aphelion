@@ -18,8 +18,9 @@ const (
 	telegramPageSurfaceAgents  = "agents"
 	telegramPageSurfaceHealth  = "health"
 
-	telegramPageViewList  = "list"
-	telegramPageViewTrace = "trace"
+	telegramPageViewList    = "list"
+	telegramPageViewNonOpen = "nonopen"
+	telegramPageViewTrace   = "trace"
 )
 
 type telegramPageRequest struct {
@@ -74,7 +75,9 @@ func decodeTelegramPageCallbackData(data string) (telegramPageRequest, bool) {
 
 func validTelegramPageSurfaceView(surface string, view string) bool {
 	switch surface {
-	case telegramPageSurfaceThreads, telegramPageSurfaceAgents:
+	case telegramPageSurfaceThreads:
+		return view == telegramPageViewList || view == telegramPageViewNonOpen
+	case telegramPageSurfaceAgents:
 		return view == telegramPageViewList
 	case telegramPageSurfaceHealth:
 		return view == telegramPageViewTrace
