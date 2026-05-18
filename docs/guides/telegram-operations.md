@@ -149,9 +149,14 @@ duration, scope, use count, and reason.
 approvals` grants bounded approval-prompt budget. `/auto limits` shows the
 configured default, ceiling, live override setting, and maximum live mode
 duration. Automatic approval requires both an open mode gate and a matching
-approval grant.
+approval grant. By default `/auto` applies to the main/default Telegram chat
+scope. To target a side thread explicitly, use `/auto thread <id> mode ...` and
+`/auto thread <id> approvals ...`; the target thread must exist and still be
+open, and its grant/mode is consumed only by that thread.
 
 ## Manage Work Surfaces
+
+`/threads` shows open side threads by default. Use the **Show non-open** button, or `/threads nonopen`, to inspect closed/absorbed threads without mixing them into the default work view. Open side threads use reusable display slots, so when slot 2 is closed the next new side thread can become thread 2 again. Closed threads keep their durable internal thread id and receive an archived display name like `2-2026-05-17`, with `-1`, `-2`, etc. added if that archived name is already taken on the server-local date. Admins can audit or repair old rows with `telegram-threads sanitize` (`--apply` to mutate; dry-run by default).
 
 Use `/agents` to inspect durable agents and open chat controls.
 

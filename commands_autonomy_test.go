@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
@@ -386,5 +387,106 @@ func TestHandleTelegramCommandAutoApproveDeniedForNonAdmin(t *testing.T) {
 	}
 	if len(sender.msgs) != 1 || !strings.Contains(strings.ToLower(sender.msgs[0].Text), "admin only") {
 		t.Fatalf("messages = %#v, want admin-only denial", sender.msgs)
+	}
+}
+
+func TestHandleTelegramCommandAutoThreadRoutesScopedApprovals(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		canRestart:        true,
+		autoApproveReturn: "Auto approvals enabled for thread 4.",
+		threadReplyOK:     true,
+		threadReplyReturn: session.TelegramThread{ChatID: 7, ThreadID: 4, Status: session.TelegramThreadStatusOpen},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 14,
+		Text:      "/auto thread 4 approvals 15m workspace uses=1 focused thread work",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.threadReplyChatID != 7 || router.threadReplyMessageID != 4 {
+		t.Fatalf("thread lookup = chat:%d thread:%d, want 7/4", router.threadReplyChatID, router.threadReplyMessageID)
+	}
+	if router.autoApproveMessage == nil || router.autoApproveMessage.TelegramThreadID != 4 || router.autoApproveArgs != "15m workspace uses=1 focused thread work" {
+		t.Fatalf("auto approve message=%#v args=%q, want scoped thread 4 command", router.autoApproveMessage, router.autoApproveArgs)
+	}
+	if router.autoApproveChatID != 7 || router.autoApproveSenderID != 1001 {
+		t.Fatalf("auto approve inputs chat=%d sender=%d, want 7/1001", router.autoApproveChatID, router.autoApproveSenderID)
+	}
+	if len(sender.msgs) != 1 || !strings.Contains(sender.msgs[0].Text, "thread 4") {
+		t.Fatalf("messages = %#v, want thread response", sender.msgs)
+	}
+}
+
+func TestHandleTelegramCommandAutoThreadResolvesDisplaySlotToCanonicalThreadID(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		canRestart:        true,
+		autoApproveReturn: "Auto approvals enabled for thread 42.",
+		threadReplyOK:     true,
+		threadReplyReturn: session.TelegramThread{ChatID: 7, ThreadID: 42, DisplaySlot: 1, Status: session.TelegramThreadStatusOpen},
+		threadsReturn: []session.TelegramThread{
+			{ChatID: 7, ThreadID: 42, DisplaySlot: 1, Status: session.TelegramThreadStatusOpen},
+		},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 14,
+		Text:      "/auto thread 1 approvals 15m workspace uses=1",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.threadsChatID != 7 {
+		t.Fatalf("threadsChatID = %d, want display-slot lookup in chat 7", router.threadsChatID)
+	}
+	if router.threadReplyMessageID != 42 {
+		t.Fatalf("thread lookup id = %d, want canonical thread 42", router.threadReplyMessageID)
+	}
+	if router.autoApproveMessage == nil || router.autoApproveMessage.TelegramThreadID != 42 || router.autoApproveArgs != "15m workspace uses=1" {
+		t.Fatalf("auto approve message=%#v args=%q, want canonical thread 42 command", router.autoApproveMessage, router.autoApproveArgs)
+	}
+}
+
+func TestHandleTelegramCommandAutoThreadRejectsClosedThread(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		canRestart:        true,
+		threadReplyOK:     true,
+		threadReplyReturn: session.TelegramThread{ChatID: 7, ThreadID: 4, Status: session.TelegramThreadStatusClosed},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 14,
+		Text:      "/auto thread 4 approvals 15m workspace",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.autoApproveMessage != nil || router.autoApproveArgs != "" {
+		t.Fatalf("auto approve routed unexpectedly message=%#v args=%q", router.autoApproveMessage, router.autoApproveArgs)
+	}
+	if len(sender.msgs) != 1 || !strings.Contains(sender.msgs[0].Text, "Thread 4 is closed") {
+		t.Fatalf("messages = %#v, want closed-thread error", sender.msgs)
 	}
 }

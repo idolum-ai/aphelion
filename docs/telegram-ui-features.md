@@ -79,6 +79,7 @@ Current command surface:
   - Mode and approvals provide preset buttons for refresh, off, and bounded 15-minute workspace/deploy/all windows. Limits is read-only.
   - Supports `/auto mode leased <duration> [all|workspace|deploy] [reason]`.
   - Supports `/auto approvals <duration> [all|workspace|deploy] [uses=N] [reason]`.
+  - Supports explicit side-thread targeting with `/auto thread <id> mode ...` and `/auto thread <id> approvals ...`; default `/auto` remains default-chat scoped.
   - Mode opens the automation gate. Approvals provide spendable prompt budget. Automatic approval requires both.
   - If config is tightened later, live mode overrides outside the new ceiling are ignored and `/health diagnose` reports the precedence block.
 - `/stop`

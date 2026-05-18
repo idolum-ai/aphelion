@@ -33,7 +33,22 @@ func (r *Runtime) ChatAutonomyStatusSnapshot(chatID int64, adminUserID int64) (c
 	return r.autonomyStatusSnapshot(chatID, adminUserID, time.Now().UTC()), nil
 }
 
+func (r *Runtime) ChatAutonomyStatusSnapshotForKey(key session.SessionKey, adminUserID int64) (core.AutonomyStatusSnapshot, error) {
+	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
+	return r.autonomyStatusSnapshotForScope(key.ChatID, scopeKind, scopeID, adminUserID, time.Now().UTC())
+}
+
 func (r *Runtime) ConfigureAutonomy(ctx context.Context, chatID int64, adminUserID int64, args string) (string, error) {
+	scopeKind, scopeID := operatorAutoDefaultScope(chatID)
+	return r.configureAutonomyForScope(ctx, chatID, scopeKind, scopeID, adminUserID, args)
+}
+
+func (r *Runtime) ConfigureAutonomyForKey(ctx context.Context, key session.SessionKey, adminUserID int64, args string) (string, error) {
+	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
+	return r.configureAutonomyForScope(ctx, key.ChatID, scopeKind, scopeID, adminUserID, args)
+}
+
+func (r *Runtime) configureAutonomyForScope(ctx context.Context, chatID int64, scopeKind string, scopeID string, adminUserID int64, args string) (string, error) {
 	if r == nil || r.store == nil {
 		return "Auto mode is unavailable.", nil
 	}
@@ -45,22 +60,24 @@ func (r *Runtime) ConfigureAutonomy(ctx context.Context, chatID int64, adminUser
 		return "", err
 	}
 	now := time.Now().UTC()
+	scopeKind = strings.TrimSpace(scopeKind)
+	scopeID = strings.TrimSpace(scopeID)
 	switch action {
 	case "status":
-		snapshot, err := r.ChatAutonomyStatusSnapshot(chatID, adminUserID)
+		snapshot, err := r.autonomyStatusSnapshotForScope(chatID, scopeKind, scopeID, adminUserID, now)
 		if err != nil {
 			return "", err
 		}
 		return renderAutonomyCommandStatus(snapshot), nil
 	case "off":
-		revoked, err := r.store.RevokeOperatorAutonomyOverrides(chatID, adminUserID, now)
+		revoked, err := r.store.RevokeOperatorAutonomyOverridesForScope(chatID, adminUserID, scopeKind, scopeID, now)
 		if err != nil {
 			return "", err
 		}
-		r.recordOperatorAutoModeEvent(chatID, core.ExecutionEventAutoModeRevoked, "revoked", operatorAutoModePrimaryOverride(revoked, chatID, adminUserID), operatorAutoModeRevokedEventPayload(revoked, now))
+		r.recordOperatorAutoModeEvent(chatID, core.ExecutionEventAutoModeRevoked, "revoked", operatorAutoModePrimaryOverrideForScope(revoked, chatID, scopeKind, scopeID, adminUserID), operatorAutoModeRevokedEventPayload(revoked, now))
 		return renderOperatorAutonomyRevoked(revoked, now), nil
 	case "double":
-		return r.doubleOperatorAutonomyOverride(ctx, chatID, adminUserID, now)
+		return r.doubleOperatorAutonomyOverrideForScope(ctx, chatID, scopeKind, scopeID, adminUserID, now)
 	case "leased":
 		if err := r.validateAutonomyLiveOverride(spec.Mode, spec.Duration); err != nil {
 			return "", err
@@ -73,6 +90,8 @@ func (r *Runtime) ConfigureAutonomy(ctx context.Context, chatID int64, adminUser
 			ID:          newOperatorAutonomyOverrideID(chatID, adminUserID, now),
 			AdminUserID: adminUserID,
 			ChatID:      chatID,
+			ScopeKind:   scopeKind,
+			ScopeID:     scopeID,
 			Mode:        spec.Mode,
 			Scope:       spec.Scope,
 			Reason:      reason,
@@ -80,7 +99,7 @@ func (r *Runtime) ConfigureAutonomy(ctx context.Context, chatID int64, adminUser
 			ExpiresAt:   now.Add(spec.Duration),
 			UpdatedAt:   now,
 		}
-		if _, err := r.store.RevokeOperatorAutonomyOverrides(chatID, adminUserID, now); err != nil {
+		if _, err := r.store.RevokeOperatorAutonomyOverridesForScope(chatID, adminUserID, scopeKind, scopeID, now); err != nil {
 			return "", err
 		}
 		created, err := r.store.CreateOperatorAutonomyOverride(override)
@@ -101,6 +120,12 @@ func (r *Runtime) ConfigureAutonomy(ctx context.Context, chatID int64, adminUser
 }
 
 func (r *Runtime) autonomyStatusSnapshot(chatID int64, adminUserID int64, now time.Time) core.AutonomyStatusSnapshot {
+	scopeKind, scopeID := operatorAutoDefaultScope(chatID)
+	snapshot, _ := r.autonomyStatusSnapshotForScope(chatID, scopeKind, scopeID, adminUserID, now)
+	return snapshot
+}
+
+func (r *Runtime) autonomyStatusSnapshotForScope(chatID int64, scopeKind string, scopeID string, adminUserID int64, now time.Time) (core.AutonomyStatusSnapshot, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -121,28 +146,33 @@ func (r *Runtime) autonomyStatusSnapshot(chatID int64, adminUserID int64, now ti
 		AuthorityBehavior:   autonomyAuthorityBehavior,
 	}
 	if chatID == 0 || r == nil || r.store == nil {
-		return snapshot
+		return snapshot, nil
 	}
-	override, ok, err := r.activeAutonomyOverride(chatID, adminUserID, now)
+	override, ok, err := r.activeAutonomyOverrideForScope(chatID, scopeKind, scopeID, adminUserID, now)
 	if err != nil || !ok {
-		return snapshot
+		return snapshot, err
 	}
 	snapshot.ActiveOverrideMode = override.Mode
 	snapshot.ActiveOverrideActor = strconv.FormatInt(override.AdminUserID, 10)
 	snapshot.ActiveOverrideScope = strings.TrimSpace(override.Scope)
 	snapshot.ActiveOverrideExpiry = override.ExpiresAt
 	snapshot.AuthorityBehavior = "approval grants may be spent only for prompts allowed by the active auto mode"
-	return snapshot
+	return snapshot, nil
 }
 
 func (r *Runtime) activeAutonomyOverride(chatID int64, adminUserID int64, now time.Time) (session.OperatorAutonomyOverride, bool, error) {
+	scopeKind, scopeID := operatorAutoDefaultScope(chatID)
+	return r.activeAutonomyOverrideForScope(chatID, scopeKind, scopeID, adminUserID, now)
+}
+
+func (r *Runtime) activeAutonomyOverrideForScope(chatID int64, scopeKind string, scopeID string, adminUserID int64, now time.Time) (session.OperatorAutonomyOverride, bool, error) {
 	if r == nil || r.store == nil || chatID == 0 {
 		return session.OperatorAutonomyOverride{}, false, nil
 	}
 	if err := r.validateAutonomyLiveOverride("leased", 0); err != nil {
 		return session.OperatorAutonomyOverride{}, false, nil
 	}
-	overrides, err := r.store.ActiveOperatorAutonomyOverrides(chatID, now)
+	overrides, err := r.store.ActiveOperatorAutonomyOverridesForScope(chatID, scopeKind, scopeID, now)
 	if err != nil {
 		return session.OperatorAutonomyOverride{}, false, err
 	}
@@ -177,11 +207,16 @@ func (r *Runtime) activeAutonomyOverride(chatID int64, adminUserID int64, now ti
 }
 
 func (r *Runtime) operatorAutoModeGate(chatID int64, adminUserID int64, now time.Time) (operatorAutoModeGate, bool, error) {
+	scopeKind, scopeID := operatorAutoDefaultScope(chatID)
+	return r.operatorAutoModeGateForScope(chatID, scopeKind, scopeID, adminUserID, now)
+}
+
+func (r *Runtime) operatorAutoModeGateForScope(chatID int64, scopeKind string, scopeID string, adminUserID int64, now time.Time) (operatorAutoModeGate, bool, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
 	now = now.UTC()
-	if override, ok, err := r.activeAutonomyOverride(chatID, adminUserID, now); err != nil || ok {
+	if override, ok, err := r.activeAutonomyOverrideForScope(chatID, scopeKind, scopeID, adminUserID, now); err != nil || ok {
 		if err != nil {
 			return operatorAutoModeGate{}, false, err
 		}
@@ -334,8 +369,13 @@ func renderAutonomyCommandStatus(snapshot core.AutonomyStatusSnapshot) string {
 }
 
 func (r *Runtime) doubleOperatorAutonomyOverride(ctx context.Context, chatID int64, adminUserID int64, now time.Time) (string, error) {
+	scopeKind, scopeID := operatorAutoDefaultScope(chatID)
+	return r.doubleOperatorAutonomyOverrideForScope(ctx, chatID, scopeKind, scopeID, adminUserID, now)
+}
+
+func (r *Runtime) doubleOperatorAutonomyOverrideForScope(ctx context.Context, chatID int64, scopeKind string, scopeID string, adminUserID int64, now time.Time) (string, error) {
 	_ = ctx
-	override, ok, err := r.activeOperatorAutonomyOverrideForAdmin(chatID, adminUserID, now)
+	override, ok, err := r.activeOperatorAutonomyOverrideForAdminAndScope(chatID, scopeKind, scopeID, adminUserID, now)
 	if err != nil {
 		return "", err
 	}
@@ -356,13 +396,15 @@ func (r *Runtime) doubleOperatorAutonomyOverride(ctx context.Context, chatID int
 		AdminUserID: adminUserID,
 		ChatID:      chatID,
 		Mode:        override.Mode,
+		ScopeKind:   scopeKind,
+		ScopeID:     scopeID,
 		Scope:       override.Scope,
 		Reason:      override.Reason,
 		CreatedAt:   now,
 		ExpiresAt:   now.Add(doubledDuration),
 		UpdatedAt:   now,
 	}
-	if _, err := r.store.RevokeOperatorAutonomyOverrides(chatID, adminUserID, now); err != nil {
+	if _, err := r.store.RevokeOperatorAutonomyOverridesForScope(chatID, adminUserID, scopeKind, scopeID, now); err != nil {
 		return "", err
 	}
 	created, err := r.store.CreateOperatorAutonomyOverride(createdOverride)
@@ -378,13 +420,18 @@ func (r *Runtime) doubleOperatorAutonomyOverride(ctx context.Context, chatID int
 }
 
 func (r *Runtime) activeOperatorAutonomyOverrideForAdmin(chatID int64, adminUserID int64, now time.Time) (session.OperatorAutonomyOverride, bool, error) {
+	scopeKind, scopeID := operatorAutoDefaultScope(chatID)
+	return r.activeOperatorAutonomyOverrideForAdminAndScope(chatID, scopeKind, scopeID, adminUserID, now)
+}
+
+func (r *Runtime) activeOperatorAutonomyOverrideForAdminAndScope(chatID int64, scopeKind string, scopeID string, adminUserID int64, now time.Time) (session.OperatorAutonomyOverride, bool, error) {
 	if r == nil || r.store == nil || chatID == 0 || adminUserID <= 0 {
 		return session.OperatorAutonomyOverride{}, false, nil
 	}
 	if err := r.validateAutonomyLiveOverride("leased", 0); err != nil {
 		return session.OperatorAutonomyOverride{}, false, nil
 	}
-	overrides, err := r.store.ActiveOperatorAutonomyOverrides(chatID, now)
+	overrides, err := r.store.ActiveOperatorAutonomyOverridesForScope(chatID, scopeKind, scopeID, now)
 	if err != nil {
 		return session.OperatorAutonomyOverride{}, false, err
 	}
@@ -490,12 +537,19 @@ func operatorAutoModeOverrideSummary(overrides []session.OperatorAutonomyOverrid
 }
 
 func operatorAutoModePrimaryOverride(overrides []session.OperatorAutonomyOverride, chatID int64, adminUserID int64) session.OperatorAutonomyOverride {
+	scopeKind, scopeID := operatorAutoDefaultScope(chatID)
+	return operatorAutoModePrimaryOverrideForScope(overrides, chatID, scopeKind, scopeID, adminUserID)
+}
+
+func operatorAutoModePrimaryOverrideForScope(overrides []session.OperatorAutonomyOverride, chatID int64, scopeKind string, scopeID string, adminUserID int64) session.OperatorAutonomyOverride {
 	if len(overrides) > 0 {
 		return session.NormalizeOperatorAutonomyOverride(overrides[0])
 	}
 	return session.OperatorAutonomyOverride{
 		AdminUserID: adminUserID,
 		ChatID:      chatID,
+		ScopeKind:   strings.TrimSpace(scopeKind),
+		ScopeID:     strings.TrimSpace(scopeID),
 	}
 }
 
@@ -566,11 +620,13 @@ func (r *Runtime) recordOperatorAutoModeEvent(chatID int64, eventType string, st
 	}
 	override = session.NormalizeOperatorAutonomyOverride(override)
 	payload := map[string]any{
-		"override_id":   strings.TrimSpace(override.ID),
-		"admin_user_id": override.AdminUserID,
-		"mode":          strings.TrimSpace(override.Mode),
-		"scope":         strings.TrimSpace(override.Scope),
-		"reason":        strings.TrimSpace(override.Reason),
+		"override_id":       strings.TrimSpace(override.ID),
+		"admin_user_id":     override.AdminUserID,
+		"mode":              strings.TrimSpace(override.Mode),
+		"scope":             strings.TrimSpace(override.Scope),
+		"target_scope_kind": strings.TrimSpace(override.ScopeKind),
+		"target_scope_id":   strings.TrimSpace(override.ScopeID),
+		"reason":            strings.TrimSpace(override.Reason),
 	}
 	if !override.ExpiresAt.IsZero() {
 		payload["expires_at"] = override.ExpiresAt.UTC().Format(time.RFC3339)

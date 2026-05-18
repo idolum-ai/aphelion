@@ -561,3 +561,92 @@ func TestRuntimeAutoModeAndApprovalsOffAreIndependent(t *testing.T) {
 		t.Fatalf("auto mode overrides = %#v, want mode left active after approvals off", overrides)
 	}
 }
+
+func TestRuntimeAutoApprovalThreadScopeDoesNotLeakAcrossScopes(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	chatID := int64(99160)
+	threadKey := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramThreadScopeRef(chatID, 4)}
+	threadKind, threadID := operatorAutoThreadScope(chatID, 4)
+	otherThreadKind, otherThreadID := operatorAutoThreadScope(chatID, 5)
+
+	if _, err := rt.ConfigureAutonomyForKey(context.Background(), threadKey, 1001, "leased 15m all"); err != nil {
+		t.Fatalf("ConfigureAutonomyForKey(thread) err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApprovalForKey(context.Background(), threadKey, 1001, "15m all uses=2 thread window"); err != nil {
+		t.Fatalf("ConfigureAutoApprovalForKey(thread) err = %v", err)
+	}
+
+	defaultResult, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-default-scope",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        chatID,
+			SenderID:      1002,
+			Prompt:        "Approve default chat proposal?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision(default) err = %v", err)
+	}
+	if defaultResult.Choice != "" {
+		t.Fatalf("default result = %#v, want no approval from thread-scoped grant", defaultResult)
+	}
+
+	otherThreadResult, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-other-thread",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        chatID,
+			SenderID:      1002,
+			ScopeKind:     otherThreadKind,
+			ScopeID:       otherThreadID,
+			Prompt:        "Approve other thread proposal?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision(other thread) err = %v", err)
+	}
+	if otherThreadResult.Choice != "" {
+		t.Fatalf("other thread result = %#v, want no approval from thread 4 grant", otherThreadResult)
+	}
+
+	threadResult, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-thread-scope",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        chatID,
+			SenderID:      1002,
+			ScopeKind:     threadKind,
+			ScopeID:       threadID,
+			Prompt:        "Approve thread proposal?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision(thread) err = %v", err)
+	}
+	if threadResult.Choice != "approve" || !strings.Contains(threadResult.Reason, "auto_approved:") {
+		t.Fatalf("thread result = %#v, want scoped approval", threadResult)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeasesForScope(chatID, threadKind, threadID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeasesForScope(thread) err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].UsedCount != 1 {
+		t.Fatalf("thread leases = %#v, want one spent lease", leases)
+	}
+}

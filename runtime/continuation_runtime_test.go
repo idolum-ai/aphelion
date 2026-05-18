@@ -56,6 +56,12 @@ func TestSendContinuationApprovalPromptRecordsThreadCallbackMessage(t *testing.T
 	if err := rt.sendContinuationApprovalPrompt(context.Background(), key, msg, state, "Continue scoped work?"); err != nil {
 		t.Fatalf("sendContinuationApprovalPrompt() err = %v", err)
 	}
+	sender := rt.outbound.(*fakeSender)
+	sender.mu.Lock()
+	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "(thread 1)") || !strings.Contains(sender.inline[0].text, "Continue scoped work?") {
+		t.Fatalf("inline = %#v, want thread-prefixed approval card", sender.inline)
+	}
+	sender.mu.Unlock()
 	if got, ok, err := store.TelegramThreadIDForReplyMessage(1001, 1); err != nil || !ok || got != thread.ThreadID {
 		t.Fatalf("TelegramThreadIDForReplyMessage(continuation prompt) = %d ok=%v err=%v, want thread %d", got, ok, err, thread.ThreadID)
 	}

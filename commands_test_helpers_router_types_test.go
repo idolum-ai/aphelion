@@ -122,8 +122,10 @@ type stubCommandRouter struct {
 	autoApproveChatID            int64
 	autoApproveSenderID          int64
 	autoApproveArgs              string
+	autoApproveMessage           *core.InboundMessage
 	autoApproveStatusChatID      int64
 	autoApproveStatusSenderID    int64
+	autoApproveStatusMessage     *core.InboundMessage
 	autoApproveStatusReturn      string
 	autoApproveStatusErr         error
 	autoApproveReturn            string
@@ -131,6 +133,8 @@ type stubCommandRouter struct {
 	autonomyChatID               int64
 	autonomySenderID             int64
 	autonomyArgs                 string
+	autonomyMessage              *core.InboundMessage
+	autonomyStatusMessage        *core.InboundMessage
 	autonomyReturn               string
 	autonomyErr                  error
 	toggleProgressChatID         int64

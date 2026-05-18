@@ -130,11 +130,28 @@ func (c telegramCommandControl) AutonomyStatus(chatID int64, senderID int64) (co
 	return c.rt.ChatAutonomyStatusSnapshot(chatID, senderID)
 }
 
+func (c telegramCommandControl) AutonomyStatusForMessage(msg core.InboundMessage) (core.AutonomyStatusSnapshot, error) {
+	if !c.CanRestart(msg.SenderID) {
+		return core.AutonomyStatusSnapshot{}, fmt.Errorf("auto mode view denied")
+	}
+	if c.rt == nil {
+		return c.AutonomyStatus(msg.ChatID, msg.SenderID)
+	}
+	return c.rt.ChatAutonomyStatusSnapshotForKey(session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramCommandMessageScope(msg)}, msg.SenderID)
+}
+
 func (c telegramCommandControl) ConfigureAutonomy(ctx context.Context, chatID int64, senderID int64, args string) (string, error) {
 	if c.rt == nil {
 		return "Autonomy controls are unavailable.", nil
 	}
 	return c.rt.ConfigureAutonomy(ctx, chatID, senderID, args)
+}
+
+func (c telegramCommandControl) ConfigureAutonomyForMessage(ctx context.Context, msg core.InboundMessage, args string) (string, error) {
+	if c.rt == nil {
+		return "Autonomy controls are unavailable.", nil
+	}
+	return c.rt.ConfigureAutonomyForKey(ctx, session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramCommandMessageScope(msg)}, msg.SenderID, args)
 }
 
 func (c telegramCommandControl) StatusDurables(senderID int64) (core.DurableAgentsStatusSnapshot, error) {

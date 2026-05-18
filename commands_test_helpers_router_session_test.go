@@ -146,6 +146,27 @@ func (s *stubCommandRouter) AutonomyStatus(chatID int64, senderID int64) (core.A
 	}, nil
 }
 
+func (s *stubCommandRouter) AutonomyStatusForMessage(msg core.InboundMessage) (core.AutonomyStatusSnapshot, error) {
+	copied := msg
+	s.autonomyStatusMessage = &copied
+	s.autonomyChatID = msg.ChatID
+	s.autonomySenderID = msg.SenderID
+	if s.autonomyStatusErr != nil {
+		return core.AutonomyStatusSnapshot{}, s.autonomyStatusErr
+	}
+	if strings.TrimSpace(s.autonomyStatus.DefaultMode) != "" || strings.TrimSpace(s.autonomyStatus.Ceiling) != "" {
+		return s.autonomyStatus, nil
+	}
+	return core.AutonomyStatusSnapshot{
+		DefaultMode:         "ask_first",
+		Ceiling:             "leased",
+		AllowLiveOverrides:  true,
+		MaxOverrideDuration: 4 * time.Hour,
+		Source:              "test",
+		AuthorityBehavior:   "approval grants require an open auto mode gate",
+	}, nil
+}
+
 func (s stubCommandRouter) StatusDurables(senderID int64) (core.DurableAgentsStatusSnapshot, error) {
 	_ = senderID
 	if s.statusDurablesErr != nil {

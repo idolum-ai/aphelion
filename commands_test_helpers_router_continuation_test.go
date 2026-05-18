@@ -147,6 +147,35 @@ func (s *stubCommandRouter) ConfigureAutoApproval(_ context.Context, chatID int6
 	return "Auto approvals enabled for this chat.", nil
 }
 
+func (s *stubCommandRouter) ConfigureAutoApprovalForMessage(_ context.Context, msg core.InboundMessage, args string) (string, error) {
+	copied := msg
+	s.autoApproveMessage = &copied
+	s.autoApproveChatID = msg.ChatID
+	s.autoApproveSenderID = msg.SenderID
+	s.autoApproveArgs = args
+	if s.autoApproveErr != nil {
+		return "", s.autoApproveErr
+	}
+	if strings.TrimSpace(s.autoApproveReturn) != "" {
+		return s.autoApproveReturn, nil
+	}
+	return "Auto approvals enabled for this thread.", nil
+}
+
+func (s *stubCommandRouter) AutoApprovalStatusForMessage(_ context.Context, msg core.InboundMessage) (string, error) {
+	copied := msg
+	s.autoApproveStatusMessage = &copied
+	s.autoApproveStatusChatID = msg.ChatID
+	s.autoApproveStatusSenderID = msg.SenderID
+	if s.autoApproveStatusErr != nil {
+		return "", s.autoApproveStatusErr
+	}
+	if strings.TrimSpace(s.autoApproveStatusReturn) != "" {
+		return s.autoApproveStatusReturn, nil
+	}
+	return "Auto approvals are inactive for this thread.", nil
+}
+
 func (s *stubCommandRouter) AutoApprovalStatus(_ context.Context, chatID int64, senderID int64) (string, error) {
 	s.autoApproveStatusChatID = chatID
 	s.autoApproveStatusSenderID = senderID
@@ -170,6 +199,21 @@ func (s *stubCommandRouter) ConfigureAutonomy(_ context.Context, chatID int64, s
 		return s.autonomyReturn, nil
 	}
 	return "Autonomy override enabled for this chat.", nil
+}
+
+func (s *stubCommandRouter) ConfigureAutonomyForMessage(_ context.Context, msg core.InboundMessage, args string) (string, error) {
+	copied := msg
+	s.autonomyMessage = &copied
+	s.autonomyChatID = msg.ChatID
+	s.autonomySenderID = msg.SenderID
+	s.autonomyArgs = args
+	if s.autonomyErr != nil {
+		return "", s.autonomyErr
+	}
+	if strings.TrimSpace(s.autonomyReturn) != "" {
+		return s.autonomyReturn, nil
+	}
+	return "Autonomy override enabled for this thread.", nil
 }
 
 func (s *stubCommandRouter) RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error) {

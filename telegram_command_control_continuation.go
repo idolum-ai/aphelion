@@ -88,11 +88,25 @@ func (c telegramCommandControl) ConfigureAutoApproval(ctx context.Context, chatI
 	return c.rt.ConfigureAutoApproval(ctx, chatID, senderID, args)
 }
 
+func (c telegramCommandControl) ConfigureAutoApprovalForMessage(ctx context.Context, msg core.InboundMessage, args string) (string, error) {
+	if c.rt == nil {
+		return "Auto approvals are unavailable.", nil
+	}
+	return c.rt.ConfigureAutoApprovalForKey(ctx, session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramCommandMessageScope(msg)}, msg.SenderID, args)
+}
+
 func (c telegramCommandControl) AutoApprovalStatus(ctx context.Context, chatID int64, senderID int64) (string, error) {
 	if c.rt == nil {
 		return "Auto approvals are unavailable.", nil
 	}
 	return c.rt.AutoApprovalStatus(ctx, chatID, senderID)
+}
+
+func (c telegramCommandControl) AutoApprovalStatusForMessage(ctx context.Context, msg core.InboundMessage) (string, error) {
+	if c.rt == nil {
+		return "Auto approvals are unavailable.", nil
+	}
+	return c.rt.AutoApprovalStatusForKey(ctx, session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramCommandMessageScope(msg)}, msg.SenderID)
 }
 
 func (c telegramCommandControl) RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error) {

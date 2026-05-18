@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"log"
+	"strconv"
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
@@ -43,6 +44,36 @@ var operatorAutoPresets = []operatorAutoPreset{
 
 func handleTelegramAutoCommand(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {
 	target, rest := nextCommandToken(telegramCommandArgs(msg.Text))
+	if target == "thread" {
+		threadID, remaining, ok := parseAutoThreadTarget(rest)
+		if !ok {
+			return sendAutoCommandText(ctx, sender, msg, renderAutoCommandUsage("thread"))
+		}
+		threadRouter, ok := router.(commandThreadRouter)
+		if !ok {
+			return sendAutoCommandText(ctx, sender, msg, "Thread controls are unavailable.")
+		}
+		resolvedThreadID, err := resolveTelegramThreadTargetID(threadRouter, msg.ChatID, threadID)
+		if err != nil {
+			return true, err
+		}
+		threadID = resolvedThreadID
+		thread, ok, err := threadRouter.TelegramThread(msg.ChatID, threadID)
+		if err != nil {
+			return true, err
+		}
+		if !ok {
+			return sendAutoCommandText(ctx, sender, msg, "Thread "+strconv.FormatInt(threadID, 10)+" does not exist. Start a new side thread with `/thread <message>`.")
+		}
+		if !thread.Open() {
+			return sendAutoCommandText(ctx, sender, msg, "Thread "+strconv.FormatInt(threadID, 10)+" is closed. Start a new side thread with `/thread <message>`.")
+		}
+		msg.TelegramThreadID = threadID
+		if strings.TrimSpace(remaining) == "" {
+			return sendAutoHomePanel(ctx, sender, msg)
+		}
+		target, rest = nextCommandToken(remaining)
+	}
 	switch target {
 	case "", "home", autoActionRefresh:
 		return sendAutoHomePanel(ctx, sender, msg)
@@ -50,7 +81,7 @@ func handleTelegramAutoCommand(ctx context.Context, sender commandSender, router
 		if strings.TrimSpace(rest) == "" || strings.EqualFold(strings.TrimSpace(rest), "status") {
 			return sendAutoModePanel(ctx, sender, router, msg)
 		}
-		configured, err := router.ConfigureAutonomy(ctx, msg.ChatID, msg.SenderID, rest)
+		configured, err := configureAutonomyForAutoCommand(ctx, router, msg, rest)
 		if err != nil {
 			log.Printf("WARN auto mode command rejected chat_id=%d sender_id=%d err=%v", msg.ChatID, msg.SenderID, err)
 			return sendAutoCommandText(ctx, sender, msg, renderAutonomyCommandError(err))
@@ -60,7 +91,7 @@ func handleTelegramAutoCommand(ctx context.Context, sender commandSender, router
 		if strings.TrimSpace(rest) == "" || strings.EqualFold(strings.TrimSpace(rest), "status") {
 			return sendAutoApprovalsPanel(ctx, sender, router, msg)
 		}
-		configured, err := router.ConfigureAutoApproval(ctx, msg.ChatID, msg.SenderID, rest)
+		configured, err := configureAutoApprovalForAutoCommand(ctx, router, msg, rest)
 		if err != nil {
 			log.Printf("WARN auto approvals command rejected chat_id=%d sender_id=%d err=%v", msg.ChatID, msg.SenderID, err)
 			return sendAutoCommandText(ctx, sender, msg, renderAutoApprovalCommandError(err))
@@ -71,6 +102,51 @@ func handleTelegramAutoCommand(ctx context.Context, sender commandSender, router
 	default:
 		return sendAutoCommandText(ctx, sender, msg, renderAutoCommandUsage(target))
 	}
+}
+
+func parseAutoThreadTarget(raw string) (int64, string, bool) {
+	threadRaw, rest := nextCommandToken(raw)
+	threadID, err := strconv.ParseInt(strings.TrimSpace(threadRaw), 10, 64)
+	if err != nil || threadID <= 0 {
+		return 0, "", false
+	}
+	return threadID, strings.TrimSpace(rest), true
+}
+
+func autonomyStatusForAutoCommand(router commandRouter, msg core.InboundMessage) (core.AutonomyStatusSnapshot, error) {
+	if msg.TelegramThreadID > 0 {
+		if scoped, ok := router.(commandScopedAutoRouter); ok {
+			return scoped.AutonomyStatusForMessage(msg)
+		}
+	}
+	return router.AutonomyStatus(msg.ChatID, msg.SenderID)
+}
+
+func configureAutonomyForAutoCommand(ctx context.Context, router commandRouter, msg core.InboundMessage, args string) (string, error) {
+	if msg.TelegramThreadID > 0 {
+		if scoped, ok := router.(commandScopedAutoRouter); ok {
+			return scoped.ConfigureAutonomyForMessage(ctx, msg, args)
+		}
+	}
+	return router.ConfigureAutonomy(ctx, msg.ChatID, msg.SenderID, args)
+}
+
+func autoApprovalStatusForAutoCommand(ctx context.Context, router commandRouter, msg core.InboundMessage) (string, error) {
+	if msg.TelegramThreadID > 0 {
+		if scoped, ok := router.(commandScopedAutoRouter); ok {
+			return scoped.AutoApprovalStatusForMessage(ctx, msg)
+		}
+	}
+	return router.AutoApprovalStatus(ctx, msg.ChatID, msg.SenderID)
+}
+
+func configureAutoApprovalForAutoCommand(ctx context.Context, router commandRouter, msg core.InboundMessage, args string) (string, error) {
+	if msg.TelegramThreadID > 0 {
+		if scoped, ok := router.(commandScopedAutoRouter); ok {
+			return scoped.ConfigureAutoApprovalForMessage(ctx, msg, args)
+		}
+	}
+	return router.ConfigureAutoApproval(ctx, msg.ChatID, msg.SenderID, args)
 }
 
 func sendAutoCommandText(ctx context.Context, sender commandSender, msg core.InboundMessage, text string) (bool, error) {
@@ -88,7 +164,7 @@ func sendAutoHomePanel(ctx context.Context, sender commandSender, msg core.Inbou
 }
 
 func sendAutoModePanel(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {
-	snapshot, err := router.AutonomyStatus(msg.ChatID, msg.SenderID)
+	snapshot, err := autonomyStatusForAutoCommand(router, msg)
 	if err != nil {
 		return true, err
 	}
@@ -98,7 +174,7 @@ func sendAutoModePanel(ctx context.Context, sender commandSender, router command
 }
 
 func sendAutoApprovalsPanel(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {
-	text, err := router.AutoApprovalStatus(ctx, msg.ChatID, msg.SenderID)
+	text, err := autoApprovalStatusForAutoCommand(ctx, router, msg)
 	if err != nil {
 		log.Printf("WARN auto approvals status rejected chat_id=%d sender_id=%d err=%v", msg.ChatID, msg.SenderID, err)
 		text = renderAutoApprovalCommandError(err)
@@ -108,7 +184,7 @@ func sendAutoApprovalsPanel(ctx context.Context, sender commandSender, router co
 }
 
 func sendAutoLimitsPanel(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {
-	snapshot, err := router.AutonomyStatus(msg.ChatID, msg.SenderID)
+	snapshot, err := autonomyStatusForAutoCommand(router, msg)
 	if err != nil {
 		return true, err
 	}
@@ -141,7 +217,7 @@ func renderAutoCommandUsage(target string) string {
 		Title: "Auto",
 		State: "not applied",
 		Why:   why,
-		Next:  "Use /auto mode, /auto approvals, /auto limits, /auto mode leased <duration> <scope>, or /auto approvals <duration> <scope>.",
+		Next:  "Use /auto mode, /auto approvals, /auto limits, /auto thread <id> mode leased <duration> <scope>, or /auto thread <id> approvals <duration> <scope>.",
 	})
 }
 

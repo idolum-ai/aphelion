@@ -86,6 +86,13 @@ type commandScopedSessionRouter interface {
 	DetachForMessage(msg core.InboundMessage) (core.DetachResult, error)
 }
 
+type commandScopedAutoRouter interface {
+	AutonomyStatusForMessage(msg core.InboundMessage) (core.AutonomyStatusSnapshot, error)
+	ConfigureAutonomyForMessage(ctx context.Context, msg core.InboundMessage, args string) (string, error)
+	AutoApprovalStatusForMessage(ctx context.Context, msg core.InboundMessage) (string, error)
+	ConfigureAutoApprovalForMessage(ctx context.Context, msg core.InboundMessage, args string) (string, error)
+}
+
 type commandScopedMemoryRouter interface {
 	MemoryReviewSnapshotForMessage(ctx context.Context, msg core.InboundMessage, source memoryReviewSource) (memoryReviewSnapshot, error)
 	MemoryFocusForMessage(msg core.InboundMessage) (core.MemoryFocus, bool)

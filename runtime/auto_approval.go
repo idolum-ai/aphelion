@@ -21,17 +21,29 @@ const (
 )
 
 type operatorAutoApprovalRequest struct {
-	ChatID     int64
-	Kind       string
-	Choice     string
-	DecisionID string
-	ProposalID string
-	Summary    string
-	Details    string
-	WorkMode   WorkMode
+	ChatID          int64
+	TargetScopeKind string
+	TargetScopeID   string
+	Kind            string
+	Choice          string
+	DecisionID      string
+	ProposalID      string
+	Summary         string
+	Details         string
+	WorkMode        WorkMode
 }
 
 func (r *Runtime) ConfigureAutoApproval(ctx context.Context, chatID int64, adminUserID int64, args string) (string, error) {
+	scopeKind, scopeID := operatorAutoDefaultScope(chatID)
+	return r.configureAutoApprovalForScope(ctx, chatID, scopeKind, scopeID, adminUserID, args)
+}
+
+func (r *Runtime) ConfigureAutoApprovalForKey(ctx context.Context, key session.SessionKey, adminUserID int64, args string) (string, error) {
+	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
+	return r.configureAutoApprovalForScope(ctx, key.ChatID, scopeKind, scopeID, adminUserID, args)
+}
+
+func (r *Runtime) configureAutoApprovalForScope(ctx context.Context, chatID int64, scopeKind string, scopeID string, adminUserID int64, args string) (string, error) {
 	if r == nil || r.store == nil {
 		return "Auto approvals are unavailable.", nil
 	}
@@ -43,11 +55,13 @@ func (r *Runtime) ConfigureAutoApproval(ctx context.Context, chatID int64, admin
 		return "", err
 	}
 	now := time.Now().UTC()
+	scopeKind = strings.TrimSpace(scopeKind)
+	scopeID = strings.TrimSpace(scopeID)
 	switch action {
 	case "status":
-		return r.renderOperatorAutoApprovalStatus(chatID, adminUserID, now)
+		return r.renderOperatorAutoApprovalStatusForScope(chatID, scopeKind, scopeID, adminUserID, now)
 	case "off":
-		revoked, err := r.store.RevokeOperatorAutoApprovalLeases(chatID, adminUserID, now)
+		revoked, err := r.store.RevokeOperatorAutoApprovalLeasesForScope(chatID, adminUserID, scopeKind, scopeID, now)
 		if err != nil {
 			return "", err
 		}
@@ -55,17 +69,19 @@ func (r *Runtime) ConfigureAutoApproval(ctx context.Context, chatID int64, admin
 			chatID,
 			core.ExecutionEventAutoApprovalRevoked,
 			"revoked",
-			operatorAutoApprovalPrimaryLease(revoked, chatID, adminUserID),
+			operatorAutoApprovalPrimaryLeaseForScope(revoked, chatID, scopeKind, scopeID, adminUserID),
 			operatorAutoApprovalRevokedEventPayload(revoked, now),
 		)
 		return renderOperatorAutoApprovalRevoked(revoked, now), nil
 	case "double":
-		return r.doubleOperatorAutoApproval(ctx, chatID, adminUserID, now)
+		return r.doubleOperatorAutoApprovalForScope(ctx, chatID, scopeKind, scopeID, adminUserID, now)
 	case "enable":
 		lease := session.OperatorAutoApprovalLease{
 			ID:          newOperatorAutoApprovalLeaseID(chatID, adminUserID, now),
 			AdminUserID: adminUserID,
 			ChatID:      chatID,
+			ScopeKind:   scopeKind,
+			ScopeID:     scopeID,
 			Scope:       spec.Scope,
 			Reason:      spec.Reason,
 			MaxUses:     spec.MaxUses,
@@ -73,7 +89,7 @@ func (r *Runtime) ConfigureAutoApproval(ctx context.Context, chatID int64, admin
 			ExpiresAt:   now.Add(spec.Duration),
 			UpdatedAt:   now,
 		}
-		if _, err := r.store.RevokeOperatorAutoApprovalLeases(chatID, adminUserID, now); err != nil {
+		if _, err := r.store.RevokeOperatorAutoApprovalLeasesForScope(chatID, adminUserID, scopeKind, scopeID, now); err != nil {
 			return "", err
 		}
 		created, err := r.store.CreateOperatorAutoApprovalLease(lease)
@@ -81,7 +97,7 @@ func (r *Runtime) ConfigureAutoApproval(ctx context.Context, chatID int64, admin
 			return "", err
 		}
 		r.recordOperatorAutoApprovalEvent(chatID, core.ExecutionEventAutoApprovalGranted, "active", created, nil)
-		blocked, err := r.operatorAutoApprovalBlockedReason(chatID, adminUserID, created.Scope, now)
+		blocked, err := r.operatorAutoApprovalBlockedReasonForScope(chatID, scopeKind, scopeID, adminUserID, created.Scope, now)
 		if err != nil {
 			return "", err
 		}
@@ -93,13 +109,24 @@ func (r *Runtime) ConfigureAutoApproval(ctx context.Context, chatID int64, admin
 
 func (r *Runtime) AutoApprovalStatus(ctx context.Context, chatID int64, adminUserID int64) (string, error) {
 	_ = ctx
+	scopeKind, scopeID := operatorAutoDefaultScope(chatID)
+	return r.autoApprovalStatusForScope(chatID, scopeKind, scopeID, adminUserID)
+}
+
+func (r *Runtime) AutoApprovalStatusForKey(ctx context.Context, key session.SessionKey, adminUserID int64) (string, error) {
+	_ = ctx
+	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
+	return r.autoApprovalStatusForScope(key.ChatID, scopeKind, scopeID, adminUserID)
+}
+
+func (r *Runtime) autoApprovalStatusForScope(chatID int64, scopeKind string, scopeID string, adminUserID int64) (string, error) {
 	if r == nil || r.store == nil {
 		return "Auto approvals are unavailable.", nil
 	}
 	if !r.IsTelegramAdmin(adminUserID) {
 		return "Auto approvals are admin only.", nil
 	}
-	return r.renderOperatorAutoApprovalStatus(chatID, adminUserID, time.Now().UTC())
+	return r.renderOperatorAutoApprovalStatusForScope(chatID, scopeKind, scopeID, adminUserID, time.Now().UTC())
 }
 
 func (r *Runtime) AutoResolveDecision(ctx context.Context, pending decision.PendingDecision) (decision.AutoResolution, error) {
@@ -108,12 +135,14 @@ func (r *Runtime) AutoResolveDecision(ctx context.Context, pending decision.Pend
 		return decision.AutoResolution{}, nil
 	}
 	lease, ok, err := r.consumeOperatorAutoApproval(ctx, operatorAutoApprovalRequest{
-		ChatID:     pending.ChatID,
-		Kind:       "decision:" + strings.TrimSpace(string(pending.Kind)),
-		Choice:     choice,
-		DecisionID: strings.TrimSpace(pending.ID),
-		Summary:    strings.TrimSpace(pending.Prompt),
-		Details:    strings.TrimSpace(pending.Details),
+		ChatID:          pending.ChatID,
+		TargetScopeKind: firstNonEmptyContinuation(pending.ScopeKind, string(session.ScopeKindTelegramDM)),
+		TargetScopeID:   firstNonEmptyContinuation(pending.ScopeID, fmt.Sprint(pending.ChatID)),
+		Kind:            "decision:" + strings.TrimSpace(string(pending.Kind)),
+		Choice:          choice,
+		DecisionID:      strings.TrimSpace(pending.ID),
+		Summary:         strings.TrimSpace(pending.Prompt),
+		Details:         strings.TrimSpace(pending.Details),
 	})
 	if err != nil || !ok {
 		return decision.AutoResolution{}, err
@@ -132,15 +161,18 @@ func (r *Runtime) maybeAutoApproveContinuationOffer(ctx context.Context, key ses
 	if inboundRequestsVisibleApprovalButtons(msg.Text) {
 		return false, nil
 	}
+	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
 	lease, ok, err := r.consumeOperatorAutoApproval(ctx, operatorAutoApprovalRequest{
-		ChatID:     key.ChatID,
-		Kind:       "continuation:" + strings.TrimSpace(source),
-		Choice:     "approve",
-		DecisionID: strings.TrimSpace(state.DecisionID),
-		ProposalID: strings.TrimSpace(state.ActionProposal.ID),
-		Summary:    firstNonEmptyContinuation(state.StageSummary, state.ActionProposal.Summary),
-		Details:    firstNonEmptyContinuation(state.ActionProposal.BoundedEffect, state.GovernorIntent.Constraints),
-		WorkMode:   continuationWorkMode(state),
+		ChatID:          key.ChatID,
+		TargetScopeKind: scopeKind,
+		TargetScopeID:   scopeID,
+		Kind:            "continuation:" + strings.TrimSpace(source),
+		Choice:          "approve",
+		DecisionID:      strings.TrimSpace(state.DecisionID),
+		ProposalID:      strings.TrimSpace(state.ActionProposal.ID),
+		Summary:         firstNonEmptyContinuation(state.StageSummary, state.ActionProposal.Summary),
+		Details:         firstNonEmptyContinuation(state.ActionProposal.BoundedEffect, state.GovernorIntent.Constraints),
+		WorkMode:        continuationWorkMode(state),
 	})
 	if err != nil || !ok {
 		return false, err
@@ -220,14 +252,14 @@ func (r *Runtime) consumeOperatorAutoApproval(ctx context.Context, req operatorA
 		return session.OperatorAutoApprovalLease{}, false, nil
 	}
 	now := time.Now().UTC()
-	gate, ok, err := r.operatorAutoModeGate(req.ChatID, 0, now)
+	gate, ok, err := r.operatorAutoModeGateForScope(req.ChatID, req.TargetScopeKind, req.TargetScopeID, 0, now)
 	if err != nil || !ok {
 		return session.OperatorAutoApprovalLease{}, false, err
 	}
 	if !operatorAutoModeScopeAllows(gate.Scope, req) {
 		return session.OperatorAutoApprovalLease{}, false, nil
 	}
-	leases, err := r.store.ActiveOperatorAutoApprovalLeases(req.ChatID, now)
+	leases, err := r.store.ActiveOperatorAutoApprovalLeasesForScope(req.ChatID, req.TargetScopeKind, req.TargetScopeID, now)
 	if err != nil {
 		return session.OperatorAutoApprovalLease{}, false, err
 	}
@@ -260,8 +292,13 @@ func (r *Runtime) consumeOperatorAutoApproval(ctx context.Context, req operatorA
 }
 
 func (r *Runtime) doubleOperatorAutoApproval(ctx context.Context, chatID int64, adminUserID int64, now time.Time) (string, error) {
+	scopeKind, scopeID := operatorAutoDefaultScope(chatID)
+	return r.doubleOperatorAutoApprovalForScope(ctx, chatID, scopeKind, scopeID, adminUserID, now)
+}
+
+func (r *Runtime) doubleOperatorAutoApprovalForScope(ctx context.Context, chatID int64, scopeKind string, scopeID string, adminUserID int64, now time.Time) (string, error) {
 	_ = ctx
-	lease, ok, err := r.activeOperatorAutoApprovalLeaseForAdmin(chatID, adminUserID, now)
+	lease, ok, err := r.activeOperatorAutoApprovalLeaseForAdminAndScope(chatID, scopeKind, scopeID, adminUserID, now)
 	if err != nil {
 		return "", err
 	}
@@ -282,6 +319,8 @@ func (r *Runtime) doubleOperatorAutoApproval(ctx context.Context, chatID int64, 
 		ID:          newOperatorAutoApprovalLeaseID(chatID, adminUserID, now),
 		AdminUserID: adminUserID,
 		ChatID:      chatID,
+		ScopeKind:   scopeKind,
+		ScopeID:     scopeID,
 		Scope:       lease.Scope,
 		Reason:      lease.Reason,
 		MaxUses:     maxUses,
@@ -289,7 +328,7 @@ func (r *Runtime) doubleOperatorAutoApproval(ctx context.Context, chatID int64, 
 		ExpiresAt:   now.Add(doubledDuration),
 		UpdatedAt:   now,
 	}
-	if _, err := r.store.RevokeOperatorAutoApprovalLeases(chatID, adminUserID, now); err != nil {
+	if _, err := r.store.RevokeOperatorAutoApprovalLeasesForScope(chatID, adminUserID, scopeKind, scopeID, now); err != nil {
 		return "", err
 	}
 	created, err := r.store.CreateOperatorAutoApprovalLease(createdLease)
@@ -301,7 +340,7 @@ func (r *Runtime) doubleOperatorAutoApproval(ctx context.Context, chatID int64, 
 		"previous_duration_seconds": int64(previousDuration / time.Second),
 		"new_duration_seconds":      int64(doubledDuration / time.Second),
 	})
-	blocked, err := r.operatorAutoApprovalBlockedReason(chatID, adminUserID, created.Scope, now)
+	blocked, err := r.operatorAutoApprovalBlockedReasonForScope(chatID, scopeKind, scopeID, adminUserID, created.Scope, now)
 	if err != nil {
 		return "", err
 	}
@@ -309,10 +348,15 @@ func (r *Runtime) doubleOperatorAutoApproval(ctx context.Context, chatID int64, 
 }
 
 func (r *Runtime) activeOperatorAutoApprovalLeaseForAdmin(chatID int64, adminUserID int64, now time.Time) (session.OperatorAutoApprovalLease, bool, error) {
+	scopeKind, scopeID := operatorAutoDefaultScope(chatID)
+	return r.activeOperatorAutoApprovalLeaseForAdminAndScope(chatID, scopeKind, scopeID, adminUserID, now)
+}
+
+func (r *Runtime) activeOperatorAutoApprovalLeaseForAdminAndScope(chatID int64, scopeKind string, scopeID string, adminUserID int64, now time.Time) (session.OperatorAutoApprovalLease, bool, error) {
 	if r == nil || r.store == nil || chatID == 0 || adminUserID <= 0 {
 		return session.OperatorAutoApprovalLease{}, false, nil
 	}
-	leases, err := r.store.ActiveOperatorAutoApprovalLeases(chatID, now)
+	leases, err := r.store.ActiveOperatorAutoApprovalLeasesForScope(chatID, scopeKind, scopeID, now)
 	if err != nil {
 		return session.OperatorAutoApprovalLease{}, false, err
 	}
@@ -390,7 +434,12 @@ func operatorAutoApprovalRequestClass(req operatorAutoApprovalRequest) string {
 }
 
 func (r *Runtime) renderOperatorAutoApprovalStatus(chatID int64, adminUserID int64, now time.Time) (string, error) {
-	leases, err := r.store.ActiveOperatorAutoApprovalLeases(chatID, now)
+	scopeKind, scopeID := operatorAutoDefaultScope(chatID)
+	return r.renderOperatorAutoApprovalStatusForScope(chatID, scopeKind, scopeID, adminUserID, now)
+}
+
+func (r *Runtime) renderOperatorAutoApprovalStatusForScope(chatID int64, scopeKind string, scopeID string, adminUserID int64, now time.Time) (string, error) {
+	leases, err := r.store.ActiveOperatorAutoApprovalLeasesForScope(chatID, scopeKind, scopeID, now)
 	if err != nil {
 		return "", err
 	}
@@ -403,7 +452,7 @@ func (r *Runtime) renderOperatorAutoApprovalStatus(chatID int64, adminUserID int
 			return renderOperatorAutoApprovalStatusActive(lease, now, blocked), nil
 		}
 	}
-	latest, ok, err := r.store.LatestOperatorAutoApprovalLease(chatID, adminUserID)
+	latest, ok, err := r.store.LatestOperatorAutoApprovalLeaseForScope(chatID, adminUserID, scopeKind, scopeID)
 	if err != nil {
 		return "", err
 	}
@@ -414,7 +463,12 @@ func (r *Runtime) renderOperatorAutoApprovalStatus(chatID int64, adminUserID int
 }
 
 func (r *Runtime) operatorAutoApprovalBlockedReason(chatID int64, adminUserID int64, approvalScope string, now time.Time) (string, error) {
-	gate, ok, err := r.operatorAutoModeGate(chatID, adminUserID, now)
+	scopeKind, scopeID := operatorAutoDefaultScope(chatID)
+	return r.operatorAutoApprovalBlockedReasonForScope(chatID, scopeKind, scopeID, adminUserID, approvalScope, now)
+}
+
+func (r *Runtime) operatorAutoApprovalBlockedReasonForScope(chatID int64, scopeKind string, scopeID string, adminUserID int64, approvalScope string, now time.Time) (string, error) {
+	gate, ok, err := r.operatorAutoModeGateForScope(chatID, scopeKind, scopeID, adminUserID, now)
 	if err != nil {
 		return "", err
 	}
@@ -629,12 +683,19 @@ func pluralWord(count int, singular string, plural string) string {
 }
 
 func operatorAutoApprovalPrimaryLease(leases []session.OperatorAutoApprovalLease, chatID int64, adminUserID int64) session.OperatorAutoApprovalLease {
+	scopeKind, scopeID := operatorAutoDefaultScope(chatID)
+	return operatorAutoApprovalPrimaryLeaseForScope(leases, chatID, scopeKind, scopeID, adminUserID)
+}
+
+func operatorAutoApprovalPrimaryLeaseForScope(leases []session.OperatorAutoApprovalLease, chatID int64, scopeKind string, scopeID string, adminUserID int64) session.OperatorAutoApprovalLease {
 	if len(leases) > 0 {
 		return session.NormalizeOperatorAutoApprovalLease(leases[0])
 	}
 	return session.OperatorAutoApprovalLease{
 		AdminUserID: adminUserID,
 		ChatID:      chatID,
+		ScopeKind:   strings.TrimSpace(scopeKind),
+		ScopeID:     strings.TrimSpace(scopeID),
 	}
 }
 
@@ -777,12 +838,14 @@ func (r *Runtime) recordOperatorAutoApprovalEvent(chatID int64, eventType string
 	}
 	lease = session.NormalizeOperatorAutoApprovalLease(lease)
 	payload := map[string]any{
-		"lease_id":      strings.TrimSpace(lease.ID),
-		"admin_user_id": lease.AdminUserID,
-		"scope":         strings.TrimSpace(lease.Scope),
-		"reason":        strings.TrimSpace(lease.Reason),
-		"max_uses":      lease.MaxUses,
-		"used_count":    lease.UsedCount,
+		"lease_id":          strings.TrimSpace(lease.ID),
+		"admin_user_id":     lease.AdminUserID,
+		"scope":             strings.TrimSpace(lease.Scope),
+		"target_scope_kind": strings.TrimSpace(lease.ScopeKind),
+		"target_scope_id":   strings.TrimSpace(lease.ScopeID),
+		"reason":            strings.TrimSpace(lease.Reason),
+		"max_uses":          lease.MaxUses,
+		"used_count":        lease.UsedCount,
 	}
 	if !lease.ExpiresAt.IsZero() {
 		payload["expires_at"] = lease.ExpiresAt.UTC().Format(time.RFC3339)
