@@ -137,6 +137,69 @@ func TestAbsorbTelegramThreadClosesThreadAndRecordsMainNote(t *testing.T) {
 	}
 }
 
+func TestAbsorbTelegramThreadUsesDisplaySlotForVisibleAbsorbText(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "The side thread reached a stable outcome."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	first, _, err := store.CreateTelegramThreadForUpdate(9105, 1001, 801, 101, "first side thread", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate(first) err = %v", err)
+	}
+	if _, closed, err := store.CloseTelegramThread(9105, first.ThreadID, "done", time.Now().UTC()); err != nil || !closed {
+		t.Fatalf("CloseTelegramThread(first) closed=%t err=%v", closed, err)
+	}
+	thread, _, err := store.CreateTelegramThreadForUpdate(9105, 1001, 802, 102, "second canonical thread using display slot one", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate(second) err = %v", err)
+	}
+	if thread.ThreadID == thread.DisplaySlot || thread.ThreadID != 2 || thread.DisplaySlot != 1 {
+		t.Fatalf("thread ids = canonical %d display %d, want canonical 2 display 1", thread.ThreadID, thread.DisplaySlot)
+	}
+
+	threadKey := session.SessionKey{ChatID: 9105, UserID: 0, Scope: telegramThreadScopeRef(9105, thread.ThreadID)}
+	threadSession, err := store.Load(threadKey)
+	if err != nil {
+		t.Fatalf("Load(thread) err = %v", err)
+	}
+	messages := appendSyntheticTurn(threadSession, "second canonical thread using display slot one", "Stable outcome.", "Stable outcome.", "")
+	if err := store.Save(threadSession, messages, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save(thread) err = %v", err)
+	}
+
+	text, err := rt.AbsorbTelegramThread(context.Background(), 9105, 1001, thread.ThreadID)
+	if err != nil {
+		t.Fatalf("AbsorbTelegramThread() err = %v", err)
+	}
+	if !strings.Contains(text, "Absorbed thread 1.") || strings.Contains(text, "Absorbed thread 2.") {
+		t.Fatalf("absorb text = %q, want visible display slot 1 not canonical id 2", text)
+	}
+
+	mainSession, err := store.Load(session.SessionKey{ChatID: 9105, UserID: 0, Scope: telegramDMScopeRef(9105)})
+	if err != nil {
+		t.Fatalf("Load(main) err = %v", err)
+	}
+	if len(mainSession.Messages) < 2 {
+		t.Fatalf("main messages = %d, want synthetic absorb turn", len(mainSession.Messages))
+	}
+	userMsg := mainSession.Messages[len(mainSession.Messages)-2]
+	assistantMsg := mainSession.Messages[len(mainSession.Messages)-1]
+	if userMsg.Content != "/absorb 1" {
+		t.Fatalf("synthetic user content = %q, want visible absorb command", userMsg.Content)
+	}
+	if !strings.Contains(assistantMsg.Content, "Thread 1 absorbed into the main chat.") || strings.Contains(assistantMsg.Content, "Thread 2 absorbed into the main chat.") {
+		t.Fatalf("main absorb note = %q, want display slot 1 not canonical id 2", assistantMsg.Content)
+	}
+	if !strings.Contains(assistantMsg.FloorMetadata, `"thread_id":2`) || !strings.Contains(assistantMsg.FloorMetadata, `"thread_label":"1"`) {
+		t.Fatalf("floor metadata = %q, want canonical id and visible label", assistantMsg.FloorMetadata)
+	}
+}
+
 func TestAbsorbTelegramThreadWaitsForThreadSessionLane(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "The side thread can now be safely absorbed."

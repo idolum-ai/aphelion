@@ -32,8 +32,9 @@ func (r *Runtime) AbsorbTelegramThread(ctx context.Context, chatID int64, sender
 	if !ok {
 		return "", telegramThreadRuntimeUserError(fmt.Sprintf("Thread %d does not exist. Start a new side thread with `/thread <message>`.", threadID))
 	}
+	threadLabel := telegramThreadOperatorLabel(thread, threadID)
 	if !thread.Open() {
-		return "", telegramThreadRuntimeUserError(fmt.Sprintf("Thread %d is already closed.", threadID))
+		return "", telegramThreadRuntimeUserError(fmt.Sprintf("Thread %s is already closed.", threadLabel))
 	}
 
 	threadKey := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramThreadScopeRef(chatID, threadID)}
@@ -46,22 +47,23 @@ func (r *Runtime) AbsorbTelegramThread(ctx context.Context, chatID int64, sender
 	if !ok {
 		return "", telegramThreadRuntimeUserError(fmt.Sprintf("Thread %d does not exist. Start a new side thread with `/thread <message>`.", threadID))
 	}
+	threadLabel = telegramThreadOperatorLabel(thread, threadID)
 	if !thread.Open() {
-		return "", telegramThreadRuntimeUserError(fmt.Sprintf("Thread %d is already closed.", threadID))
+		return "", telegramThreadRuntimeUserError(fmt.Sprintf("Thread %s is already closed.", threadLabel))
 	}
 	threadSession, err := r.store.Load(threadKey)
 	if err != nil {
 		return "", fmt.Errorf("load thread session: %w", err)
 	}
-	summary := r.summarizeTelegramThreadAbsorb(ctx, threadID, threadSession)
+	summary := r.summarizeTelegramThreadAbsorb(ctx, threadLabel, threadSession)
 	if strings.TrimSpace(summary) == "" {
-		summary = renderTelegramThreadAbsorbFallback(threadID, threadSession)
+		summary = renderTelegramThreadAbsorbFallback(threadLabel, threadSession)
 	}
 	if strings.TrimSpace(summary) == "" {
-		summary = fmt.Sprintf("Thread %d closed without durable outcome notes.", threadID)
+		summary = fmt.Sprintf("Thread %s closed without durable outcome notes.", threadLabel)
 	}
 
-	note := renderTelegramThreadAbsorbNote(threadID, summary)
+	note := renderTelegramThreadAbsorbNote(threadLabel, summary)
 	defaultKey := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
 	unlockDefault := r.lockSession(defaultKey)
 	defer unlockDefault()
@@ -69,13 +71,13 @@ func (r *Runtime) AbsorbTelegramThread(ctx context.Context, chatID int64, sender
 	if err != nil {
 		return "", fmt.Errorf("load default session for thread absorb: %w", err)
 	}
-	newMessages := appendSyntheticTurn(defaultSession, fmt.Sprintf("/absorb %d", threadID), note, note, telegramThreadAbsorbFloorMetadata(threadID, actor))
+	newMessages := appendSyntheticTurn(defaultSession, "/absorb "+threadLabel, note, note, telegramThreadAbsorbFloorMetadata(threadID, threadLabel, actor))
 	if _, closed, err := r.store.RecordTelegramThreadAbsorb(chatID, threadID, note, defaultSession, newMessages, time.Now().UTC()); err != nil {
 		return "", err
 	} else if !closed {
-		return "", telegramThreadRuntimeUserError(fmt.Sprintf("Thread %d is already closed.", threadID))
+		return "", telegramThreadRuntimeUserError(fmt.Sprintf("Thread %s is already closed.", threadLabel))
 	}
-	return "Absorbed thread " + fmt.Sprint(threadID) + ".\n\n" + note, nil
+	return "Absorbed thread " + threadLabel + ".\n\n" + note, nil
 }
 
 type telegramThreadRuntimeUserError string
@@ -89,11 +91,11 @@ func IsTelegramThreadUserError(err error) bool {
 	return errors.As(err, &userErr)
 }
 
-func (r *Runtime) summarizeTelegramThreadAbsorb(ctx context.Context, threadID int64, sess *session.Session) string {
+func (r *Runtime) summarizeTelegramThreadAbsorb(ctx context.Context, threadLabel string, sess *session.Session) string {
 	if r == nil || r.provider == nil || sess == nil || len(sess.Messages) == 0 {
 		return ""
 	}
-	transcript := renderTelegramThreadAbsorbTranscript(threadID, sess)
+	transcript := renderTelegramThreadAbsorbTranscript(threadLabel, sess)
 	if strings.TrimSpace(transcript) == "" {
 		return ""
 	}
@@ -117,12 +119,13 @@ Do not claim memory was written. Do not mention vector stores.`),
 	return clampTelegramThreadAbsorbSummary(result.Text)
 }
 
-func renderTelegramThreadAbsorbTranscript(threadID int64, sess *session.Session) string {
+func renderTelegramThreadAbsorbTranscript(threadLabel string, sess *session.Session) string {
 	if sess == nil {
 		return ""
 	}
+	threadLabel = normalizeTelegramThreadOperatorLabel(threadLabel, "unknown")
 	var b strings.Builder
-	fmt.Fprintf(&b, "Thread %d transcript for compact absorb bookkeeping.\n", threadID)
+	fmt.Fprintf(&b, "Thread %s transcript for compact absorb bookkeeping.\n", threadLabel)
 	messages := sess.Messages
 	if len(messages) > 24 {
 		messages = messages[len(messages)-24:]
@@ -141,7 +144,7 @@ func renderTelegramThreadAbsorbTranscript(threadID int64, sess *session.Session)
 	return strings.TrimSpace(b.String())
 }
 
-func renderTelegramThreadAbsorbFallback(threadID int64, sess *session.Session) string {
+func renderTelegramThreadAbsorbFallback(threadLabel string, sess *session.Session) string {
 	if sess == nil {
 		return ""
 	}
@@ -161,8 +164,9 @@ func renderTelegramThreadAbsorbFallback(threadID int64, sess *session.Session) s
 	if len(parts) == 0 {
 		return ""
 	}
+	threadLabel = normalizeTelegramThreadOperatorLabel(threadLabel, "unknown")
 	var b strings.Builder
-	fmt.Fprintf(&b, "Thread %d closed. Recent context:\n", threadID)
+	fmt.Fprintf(&b, "Thread %s closed. Recent context:\n", threadLabel)
 	for i := len(parts) - 1; i >= 0; i-- {
 		b.WriteString("- ")
 		b.WriteString(parts[i])
@@ -171,12 +175,13 @@ func renderTelegramThreadAbsorbFallback(threadID int64, sess *session.Session) s
 	return strings.TrimSpace(b.String())
 }
 
-func renderTelegramThreadAbsorbNote(threadID int64, summary string) string {
+func renderTelegramThreadAbsorbNote(threadLabel string, summary string) string {
 	summary = clampTelegramThreadAbsorbSummary(summary)
 	if summary == "" {
 		summary = "No durable outcome was recorded."
 	}
-	return fmt.Sprintf("Thread %d absorbed into the main chat.\n\n%s", threadID, summary)
+	threadLabel = normalizeTelegramThreadOperatorLabel(threadLabel, "unknown")
+	return fmt.Sprintf("Thread %s absorbed into the main chat.\n\n%s", threadLabel, summary)
 }
 
 func clampTelegramThreadAbsorbSummary(text string) string {
@@ -187,12 +192,41 @@ func clampTelegramThreadAbsorbSummary(text string) string {
 	return truncateRunes(text, 1800)
 }
 
-func telegramThreadAbsorbFloorMetadata(threadID int64, actor principal.Principal) string {
-	return fmt.Sprintf(`{"source":"telegram_thread_absorb","thread_id":%d,"actor_role":%q,"actor_user_id":%d}`,
+func telegramThreadAbsorbFloorMetadata(threadID int64, threadLabel string, actor principal.Principal) string {
+	return fmt.Sprintf(`{"source":"telegram_thread_absorb","thread_id":%d,"thread_label":%q,"actor_role":%q,"actor_user_id":%d}`,
 		threadID,
+		normalizeTelegramThreadOperatorLabel(threadLabel, fmt.Sprint(threadID)),
 		string(actor.Role),
 		actor.TelegramUserID,
 	)
+}
+
+func telegramThreadOperatorLabel(thread session.TelegramThread, fallbackID int64) string {
+	if thread.DisplaySlot > 0 {
+		return fmt.Sprint(thread.DisplaySlot)
+	}
+	if label := strings.TrimSpace(thread.ArchivedDisplayName); label != "" {
+		return label
+	}
+	if thread.ThreadID > 0 {
+		return fmt.Sprint(thread.ThreadID)
+	}
+	if fallbackID > 0 {
+		return fmt.Sprint(fallbackID)
+	}
+	return "unknown"
+}
+
+func normalizeTelegramThreadOperatorLabel(label string, fallback string) string {
+	label = strings.TrimSpace(label)
+	if label != "" {
+		return label
+	}
+	fallback = strings.TrimSpace(fallback)
+	if fallback != "" {
+		return fallback
+	}
+	return "unknown"
 }
 
 func telegramThreadDisplayPrefix(threadID int64) string {
