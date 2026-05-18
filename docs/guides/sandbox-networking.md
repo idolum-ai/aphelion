@@ -92,3 +92,12 @@ sysctl net.ipv4.ip_forward
 This is IP/port enforcement. Hostname entries are resolved when a process starts
 and then compiled to IPv4 firewall rules. The helper does not inspect HTTP Host
 headers or TLS SNI, and IPv6-only destinations fail closed.
+
+Native `fetch_url` uses the same destination posture in-process instead of the
+helper: it resolves allowlist hostnames to IP/port destinations, resolves each
+requested URL and redirect, and dials only an authorized resolved address. It
+preserves the requested HTTP host and TLS SNI, but those names are not the
+authority boundary. For non-admin principals, native `fetch_url` also rejects
+host-private and special resolved destinations such as loopback, link-local,
+private/ULA, multicast, unspecified, and Tailnet CGNAT ranges even when an
+allowlist entry resolves there.

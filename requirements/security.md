@@ -212,7 +212,12 @@ path; those live behind the narrow `sandbox-net helper serve` socket. The
 current backend enforces IPv4 egress and must fail closed for IPv6-only
 destinations. If the backend is not available, execution must fail closed.
 Native `fetch_url` applies the same destination ceiling in-process. Hostname
-entries are IP/port enforcement, not HTTP Host or TLS SNI policy.
+entries are resolved to IP/port destinations; each request and redirect must
+resolve to an allowed destination before the tool dials that address. This is
+not HTTP Host or TLS SNI identity policy. For non-admin principals, native
+`fetch_url` also refuses host-private and special resolved destinations,
+including loopback, link-local, private/ULA, multicast, unspecified, and
+Tailnet CGNAT ranges.
 
 ## Sandbox Backends
 

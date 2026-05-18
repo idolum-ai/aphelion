@@ -34,6 +34,8 @@ type Registry struct {
 	retrievalStore                  memstore.RetrievalStore
 	defaultStore                    string
 	nativeFetchUserAgent            string
+	nativeFetchResolver             sandbox.NetworkResolver
+	nativeFetchDialContext          nativeFetchDialContext
 	semantic                        *memstore.SemanticEngine
 	durableAgentBootstrapLLM        core.NodeLLMBootstrap
 	externalManifests               []ExternalToolManifest
