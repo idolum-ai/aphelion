@@ -342,21 +342,33 @@ func (r *Registry) fetchURL(ctx context.Context, input json.RawMessage, scope sa
 		return "", fmt.Errorf("fetch_url rejects local/private hosts for non-admin principals")
 	}
 	transport := http.DefaultTransport
+	var fetchPolicy *nativeFetchNetworkPolicy
 	if scope.Profile.Mode == sandbox.ModeIsolated && scope.Profile.Network == sandbox.NetworkAllowlist {
-		allowlistTransport, err := fetchURLAllowlistTransport(ctx, scope.Profile, parsed)
+		allowlistTransport, policy, err := r.fetchURLAllowlistTransport(ctx, scope.Profile, p.Role != principal.RoleAdmin)
 		if err != nil {
 			return "", err
 		}
 		transport = allowlistTransport
+		fetchPolicy = policy
 	}
 	maxBytes := clampNativeLimit(in.MaxBytes, defaultNativeFetchMaxBytes, maxNativeFetchBytes)
 	client := &http.Client{Timeout: 20 * time.Second, Transport: transport}
+	if fetchPolicy != nil {
+		client.CheckRedirect = func(req *http.Request, _ []*http.Request) error {
+			return fetchPolicy.authorizeURL(req.Context(), req.URL)
+		}
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("fetch_url create request: %w", err)
 	}
 	if userAgent := strings.TrimSpace(r.nativeFetchUserAgent); userAgent != "" {
 		req.Header.Set("User-Agent", userAgent)
+	}
+	if fetchPolicy != nil {
+		if err := fetchPolicy.authorizeURL(ctx, parsed); err != nil {
+			return "", err
+		}
 	}
 	res, err := client.Do(req)
 	if err != nil {
@@ -382,49 +394,6 @@ func (r *Registry) fetchURL(ctx context.Context, input json.RawMessage, scope sa
 	}
 	b.WriteString("[/FETCH_URL]")
 	return b.String(), nil
-}
-
-func fetchURLAllowlistTransport(ctx context.Context, profile sandbox.Profile, parsed *url.URL) (http.RoundTripper, error) {
-	if len(profile.NetworkAllow) == 0 {
-		return nil, fmt.Errorf("fetch_url denied because sandbox network allowlist has no destinations")
-	}
-	port, err := fetchURLPort(parsed)
-	if err != nil {
-		return nil, err
-	}
-	allowed, err := sandbox.NetworkAllowsHostPort(ctx, profile.NetworkAllow, parsed.Hostname(), port, nil)
-	if err != nil {
-		return nil, fmt.Errorf("fetch_url evaluate network allowlist: %w", err)
-	}
-	if !allowed {
-		return nil, fmt.Errorf("fetch_url denied by sandbox network allowlist")
-	}
-
-	base, ok := http.DefaultTransport.(*http.Transport)
-	if !ok || base == nil {
-		return nil, fmt.Errorf("fetch_url default transport is not configurable")
-	}
-	transport := base.Clone()
-	dialer := &net.Dialer{Timeout: 20 * time.Second}
-	transport.DialContext = func(ctx context.Context, network string, address string) (net.Conn, error) {
-		host, portRaw, err := net.SplitHostPort(address)
-		if err != nil {
-			return nil, fmt.Errorf("fetch_url split dial address: %w", err)
-		}
-		dialPort, err := strconv.Atoi(portRaw)
-		if err != nil || dialPort <= 0 || dialPort > 65535 {
-			return nil, fmt.Errorf("fetch_url invalid dial port %q", portRaw)
-		}
-		allowed, err := sandbox.NetworkAllowsHostPort(ctx, profile.NetworkAllow, host, uint16(dialPort), nil)
-		if err != nil {
-			return nil, fmt.Errorf("fetch_url evaluate dial allowlist: %w", err)
-		}
-		if !allowed {
-			return nil, fmt.Errorf("fetch_url denied by sandbox network allowlist")
-		}
-		return dialer.DialContext(ctx, network, address)
-	}
-	return transport, nil
 }
 
 func fetchURLPort(parsed *url.URL) (uint16, error) {
