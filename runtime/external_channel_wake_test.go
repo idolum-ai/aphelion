@@ -196,7 +196,7 @@ func TestGenericExternalChannelWakeAdapterInferenceUnavailableRecordsBlocked(t *
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	useTrustedDurableAgentSandboxForWakeTest(t, cfg)
-	provider.replyText = durableWakeInferenceUnavailableSignal + " This turn did not complete."
+	provider.replyText = durableWakeInferenceUnavailableFallback
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)

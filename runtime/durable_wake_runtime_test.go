@@ -427,15 +427,20 @@ func TestDurableTurnInferenceUnavailableUsesProviderFailure(t *testing.T) {
 	}
 }
 
-func TestDurableTurnInferenceUnavailableRecognizesCurrentFallbackOnly(t *testing.T) {
+func TestDurableTurnInferenceUnavailableRecognizesExactCurrentFallbackBodyOnly(t *testing.T) {
 	result := &turn.Result{Turn: &core.TurnResult{}}
+
+	if !durableTurnInferenceUnavailable(result, durableWakeInferenceUnavailableFallback) {
+		t.Fatalf("durableTurnInferenceUnavailable(%q) = false, want exact current fallback body to count", durableWakeInferenceUnavailableFallback)
+	}
 
 	for _, summary := range []string{
 		durableWakeInferenceUnavailableSignal,
-		durableWakeInferenceUnavailableSignal + " This turn did not complete. You can /stop to cancel current work and try again.",
+		durableWakeInferenceUnavailableSignal + " This turn did not complete.",
+		durableWakeInferenceUnavailableSignal + " Child report begins with the sentinel but then continues successfully.",
 	} {
-		if !durableTurnInferenceUnavailable(result, summary) {
-			t.Fatalf("durableTurnInferenceUnavailable(%q) = false, want current fallback body to count", summary)
+		if durableTurnInferenceUnavailable(result, summary) {
+			t.Fatalf("durableTurnInferenceUnavailable(%q) = true, want false unless the full fallback body matches", summary)
 		}
 	}
 }
