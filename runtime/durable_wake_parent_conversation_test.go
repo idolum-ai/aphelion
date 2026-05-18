@@ -304,6 +304,87 @@ func TestPollDurableWakeAgentsBacksOffExternalChildExecutorFailureWithoutAckingP
 	if !strings.Contains(compact, "External-channel wake failed") || strings.Contains(compact, "Process the pending mailbox instruction") {
 		t.Fatalf("review text = %q, want failure review without parent instruction leak", compact)
 	}
+
+	if err := rt.pollDurableWakeAgents(context.Background(), now.Add(time.Minute)); err != nil {
+		t.Fatalf("pollDurableWakeAgents(backoff) err = %v, want quiet skip while parent message remains pending", err)
+	}
+	if childRuns != 1 {
+		t.Fatalf("childRuns after suppressed retry = %d, want original failed child wake only", childRuns)
+	}
+}
+
+func TestPollDurableWakeAgentsBacksOffUnconfiguredExternalParentConversationFailure(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	useTrustedDurableAgentSandboxForWakeTest(t, cfg)
+	provider.replyText = "unused because child executor fails before parent conversation is processed"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "legacy-external-child",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Process parent conversation guidance truthfully.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Process this parent guidance exactly once.", time.Now().UTC().Add(-time.Minute))
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agent.AgentID, StateJSON: raw}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	childRuns := 0
+	rt.durableWakeAdapters = []durableWakeIngressAdapter{newDurableParentConversationWakeAdapter()}
+	rt.durableWakeChild = inlineDurableWakeChildExecutor{run: func(_ context.Context, _ sandbox.Scope, _ core.DurableAgent, _ time.Time) error {
+		childRuns++
+		return fmt.Errorf("network is unreachable")
+	}}
+
+	now := time.Date(2026, 5, 18, 16, 30, 0, 0, time.UTC)
+	if err := rt.pollDurableWakeAgents(context.Background(), now); err != nil {
+		t.Fatalf("pollDurableWakeAgents(first) err = %v, want generic external failure recorded", err)
+	}
+	if childRuns != 1 {
+		t.Fatalf("childRuns = %d, want one failed child wake", childRuns)
+	}
+	cont := loadExternalChannelContinuity(t, store, agent.AgentID)
+	if cont.ExternalChannel == nil {
+		t.Fatal("ExternalChannel = nil, want generic wake_failed state")
+	}
+	if cont.ExternalChannel.Adapter != "external_channel" || cont.ExternalChannel.LastStatus != "wake_failed" || !strings.Contains(cont.ExternalChannel.LastError, "network_unreachable") {
+		t.Fatalf("external channel state = %#v, want generic wake_failed network backoff", cont.ExternalChannel)
+	}
+	if cont.ExternalChannel.BackoffUntil.Before(now.Add(29*time.Minute)) || cont.ExternalChannel.FailureCount != 1 {
+		t.Fatalf("backoff/failures = %v/%d, want first failure backoff", cont.ExternalChannel.BackoffUntil, cont.ExternalChannel.FailureCount)
+	}
+	if pending := cont.PendingParentConversationMessages(10); len(pending) != 1 {
+		t.Fatalf("pending parent messages = %d, want original message preserved after failed child wake", len(pending))
+	}
+
+	if err := rt.pollDurableWakeAgents(context.Background(), now.Add(time.Minute)); err != nil {
+		t.Fatalf("pollDurableWakeAgents(backoff) err = %v, want quiet skip for legacy external child", err)
+	}
+	if childRuns != 1 {
+		t.Fatalf("childRuns after suppressed retry = %d, want backoff to hold despite pending parent message", childRuns)
+	}
 }
 
 func TestPollDurableWakeAgentsPreflightsExternalChannelMaterialBeforeChildWake(t *testing.T) {

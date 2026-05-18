@@ -18,13 +18,17 @@ func (r *Runtime) shouldSuppressDurableWakeChildPoll(agent core.DurableAgent, no
 	if strings.TrimSpace(agent.ChannelKind) == scheduledReviewChannelKind && agent.ChannelConfig.ScheduledReviewConfig() != nil {
 		return r.shouldSuppressScheduledReviewChildPoll(agent, now)
 	}
-	external := agent.ChannelConfig.ExternalConfig()
-	if external == nil {
+	adapterName, pollInterval, ok := durableWakeExternalBackoffIdentity(agent)
+	if !ok {
 		return false, nil
 	}
-	adapterName := externalChannelAdapter(agent)
-	if adapterName == "" {
-		return false, nil
+	_, continuity, err := loadDurableAgentContinuityFromStore(r.store, agent.AgentID)
+	if err != nil {
+		return false, err
+	}
+	runtimeState := externalChannelStateForAdapter(continuity, adapterName)
+	if !runtimeState.BackoffUntil.IsZero() && now.UTC().Before(runtimeState.BackoffUntil.UTC()) {
+		return true, nil
 	}
 	pending, err := r.pendingDurableAgentParentConversation(agent.AgentID, 1)
 	if err != nil {
@@ -33,12 +37,10 @@ func (r *Runtime) shouldSuppressDurableWakeChildPoll(agent core.DurableAgent, no
 	if len(pending) > 0 {
 		return false, nil
 	}
-	_, continuity, err := loadDurableAgentContinuityFromStore(r.store, agent.AgentID)
-	if err != nil {
-		return false, err
+	if agent.ChannelConfig.ExternalConfig() == nil {
+		return true, nil
 	}
-	runtimeState := externalChannelStateForAdapter(continuity, adapterName)
-	return !externalChannelPollDue(runtimeState, strings.TrimSpace(external.PollInterval), now), nil
+	return !externalChannelPollDue(runtimeState, pollInterval, now), nil
 }
 
 func (r *Runtime) recordDurableWakeChildRuntimeBlock(agent core.DurableAgent, cause error, now time.Time) (bool, error) {
@@ -49,12 +51,8 @@ func (r *Runtime) recordDurableWakeChildRuntimeBlock(agent core.DurableAgent, ca
 	if !ok {
 		return false, nil
 	}
-	external := agent.ChannelConfig.ExternalConfig()
-	if external == nil {
-		return false, nil
-	}
-	adapterName := externalChannelAdapter(agent)
-	if adapterName == "" {
+	adapterName, _, ok := durableWakeExternalBackoffIdentity(agent)
+	if !ok {
 		return false, nil
 	}
 	if now.IsZero() {

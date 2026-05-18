@@ -37,6 +37,18 @@ func externalChannelAdapter(agent core.DurableAgent) string {
 	return strings.ToLower(strings.TrimSpace(external.Adapter))
 }
 
+func durableWakeExternalBackoffIdentity(agent core.DurableAgent) (adapterName string, pollInterval string, configured bool) {
+	external := agent.ChannelConfig.ExternalConfig()
+	if external != nil {
+		adapterName = externalChannelAdapter(agent)
+		pollInterval = strings.TrimSpace(external.PollInterval)
+	}
+	if adapterName == "" && strings.EqualFold(strings.TrimSpace(agent.ChannelKind), genericExternalChannelWakeChannel) {
+		adapterName = genericExternalChannelWakeAdapterName
+	}
+	return strings.ToLower(strings.TrimSpace(adapterName)), pollInterval, adapterName != ""
+}
+
 func externalChannelStateForAdapter(continuity core.DurableAgentContinuityState, adapter string) core.DurableAgentExternalChannelRuntimeState {
 	state := core.DurableAgentExternalChannelRuntimeState{}
 	if continuity.ExternalChannel != nil {

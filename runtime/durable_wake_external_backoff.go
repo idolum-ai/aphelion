@@ -15,16 +15,9 @@ func (r *Runtime) recordDurableWakeExternalFailure(agent core.DurableAgent, caus
 	if r == nil || r.store == nil || cause == nil {
 		return false, nil
 	}
-	external := agent.ChannelConfig.ExternalConfig()
-	if external == nil {
+	adapterName, _, ok := durableWakeExternalBackoffIdentity(agent)
+	if !ok {
 		return false, nil
-	}
-	adapterName := externalChannelAdapter(agent)
-	if adapterName == "" {
-		adapterName = strings.TrimSpace(external.Adapter)
-	}
-	if adapterName == "" {
-		adapterName = "external_channel"
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
