@@ -780,3 +780,29 @@ level = "debug"
 		t.Fatalf("providers.default = %q, want anthropic", cfg.Providers.Default)
 	}
 }
+
+func TestLoadRejectsRemovedRecoveryWatchdogRestartFields(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[recovery.watchdog]
+restart_cooldown = "30m"
+max_restart_attempts = 1
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil || !strings.Contains(err.Error(), "recovery.watchdog.restart_cooldown has been removed") {
+		t.Fatalf("Load() err = %v, want removed watchdog field rejection", err)
+	}
+}

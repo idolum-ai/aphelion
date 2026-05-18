@@ -49,6 +49,9 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 	writeDoctorSessionSummary(&b, input.Session)
 	writeDoctorRecentMessages(&b, input.Session, doctorMessageLimit)
 
+	writeDoctorSection(&b, "Telegram Threads")
+	r.writeDoctorTelegramThreads(&b, input.Key)
+
 	writeDoctorSection(&b, "Mission Ledger")
 	r.writeDoctorMissionLedger(&b, input.Key, now)
 

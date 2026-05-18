@@ -128,7 +128,7 @@ func TestThreadPrefixRoutesToThread(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
-	router := &stubCommandRouter{}
+	router := &stubCommandRouter{threadsReturn: []session.TelegramThread{{ChatID: 1001, ThreadID: 2, DisplaySlot: 2, Status: session.TelegramThreadStatusOpen}}}
 	routed, handled, err := resolveTelegramThreadPrefix(context.Background(), sender, router, core.InboundMessage{
 		ChatID:          1001,
 		SenderID:        2002,
@@ -158,7 +158,7 @@ func TestThreadPrefixTargetsBusyDecisionLane(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
-	threadRouter := &stubCommandRouter{}
+	threadRouter := &stubCommandRouter{threadsReturn: []session.TelegramThread{{ChatID: 7, ThreadID: 3, DisplaySlot: 3, Status: session.TelegramThreadStatusOpen}}}
 	routed, handled, err := resolveTelegramThreadPrefix(context.Background(), sender, threadRouter, core.InboundMessage{
 		ChatID:          7,
 		SenderID:        42,
@@ -205,7 +205,7 @@ func TestThreadPrefixCanTargetLaneCommand(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
-	router := &stubCommandRouter{}
+	router := &stubCommandRouter{threadsReturn: []session.TelegramThread{{ChatID: 1001, ThreadID: 2, DisplaySlot: 2, Status: session.TelegramThreadStatusOpen}}}
 	routed, handled, err := resolveTelegramThreadPrefix(context.Background(), sender, router, core.InboundMessage{
 		ChatID:    1001,
 		SenderID:  2002,
@@ -263,6 +263,7 @@ func TestThreadPrefixOverridesReplyTarget(t *testing.T) {
 	replyTo := int64(7007)
 	sender := &stubCommandSender{}
 	router := &stubCommandRouter{
+		threadsReturn:     []session.TelegramThread{{ChatID: 1001, ThreadID: 7, DisplaySlot: 7, Status: session.TelegramThreadStatusOpen}},
 		threadReplyOK:     true,
 		threadReplyReturn: session.TelegramThread{ChatID: 1001, ThreadID: 4, Status: session.TelegramThreadStatusOpen},
 	}

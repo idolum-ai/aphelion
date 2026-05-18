@@ -53,9 +53,10 @@ func handleTelegramAutoCommand(ctx context.Context, sender commandSender, router
 		if !ok {
 			return sendAutoCommandText(ctx, sender, msg, "Thread controls are unavailable.")
 		}
-		resolvedThreadID, err := resolveTelegramThreadTargetID(threadRouter, msg.ChatID, threadID)
+		visibleThreadID := threadID
+		resolvedThreadID, resolvedThread, err := resolveTelegramThreadVisibleTarget(threadRouter, msg.ChatID, visibleThreadID)
 		if err != nil {
-			return true, err
+			return sendAutoCommandText(ctx, sender, msg, err.Error())
 		}
 		threadID = resolvedThreadID
 		thread, ok, err := threadRouter.TelegramThread(msg.ChatID, threadID)
@@ -68,7 +69,9 @@ func handleTelegramAutoCommand(ctx context.Context, sender commandSender, router
 		if !thread.Open() {
 			return sendAutoCommandText(ctx, sender, msg, "Thread "+strconv.FormatInt(threadID, 10)+" is closed. Start a new side thread with `/thread <message>`.")
 		}
+		_ = resolvedThread
 		msg.TelegramThreadID = threadID
+		msg.OriginDetail = "thread_display:" + strconv.FormatInt(visibleThreadID, 10)
 		if strings.TrimSpace(remaining) == "" {
 			return sendAutoHomePanel(ctx, sender, msg)
 		}
@@ -152,15 +155,28 @@ func configureAutoApprovalForAutoCommand(ctx context.Context, router commandRout
 func sendAutoCommandText(ctx context.Context, sender commandSender, msg core.InboundMessage, text string) (bool, error) {
 	_, err := sender.SendMessage(ctx, core.OutboundMessage{
 		ChatID:  msg.ChatID,
-		Text:    strings.TrimSpace(text),
+		Text:    prefixAutoThreadPanel(msg, strings.TrimSpace(text)),
 		ReplyTo: replyToMessageID(msg.MessageID),
 	})
 	return true, err
 }
 
 func sendAutoHomePanel(ctx context.Context, sender commandSender, msg core.InboundMessage) (bool, error) {
-	_, err := sender.SendInlineKeyboard(ctx, msg.ChatID, renderAutoHomePanel(), autoHomeRows(), replyToMessageID(msg.MessageID))
+	_, err := sender.SendInlineKeyboard(ctx, msg.ChatID, prefixAutoThreadPanel(msg, renderAutoHomePanel()), autoHomeRows(), replyToMessageID(msg.MessageID))
 	return true, err
+}
+
+func prefixAutoThreadPanel(msg core.InboundMessage, text string) string {
+	if msg.TelegramThreadID <= 0 {
+		return strings.TrimSpace(text)
+	}
+	visible := msg.TelegramThreadID
+	if strings.HasPrefix(strings.TrimSpace(msg.OriginDetail), "thread_display:") {
+		if parsed, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(msg.OriginDetail), "thread_display:")), 10, 64); err == nil && parsed > 0 {
+			visible = parsed
+		}
+	}
+	return "(thread " + strconv.FormatInt(visible, 10) + ")\n\n" + strings.TrimSpace(text)
 }
 
 func sendAutoModePanel(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {
@@ -168,7 +184,7 @@ func sendAutoModePanel(ctx context.Context, sender commandSender, router command
 	if err != nil {
 		return true, err
 	}
-	text := face.RenderTelegramAutonomyStatus(snapshot)
+	text := prefixAutoThreadPanel(msg, face.RenderTelegramAutonomyStatus(snapshot))
 	_, err = sender.SendInlineKeyboard(ctx, msg.ChatID, text, autoModeRows(), replyToMessageID(msg.MessageID))
 	return true, err
 }

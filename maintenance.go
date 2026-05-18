@@ -77,6 +77,8 @@ func runMaintenanceCommand(args []string) (bool, error) {
 		return true, runTailnetCommand(args[1:])
 	case "sandbox-net":
 		return true, runSandboxNetCommand(args[1:])
+	case "schema":
+		return true, runSchemaMaintenanceCommand(args[1:])
 	case "telegram-child-bot":
 		return true, runTelegramChildBotCommand(args[1:])
 	case "telegram-threads":

@@ -209,3 +209,20 @@ machine-readable mirrors.
 
 When a panel and a trace disagree, prefer the canonical records named by the
 trace and then check `/health diagnose`.
+
+## PR #52 Manual Smoke Checklist
+
+Before merge/deploy of the scoped thread and auto-control integration:
+
+- Run `go test ./...`.
+- Run a build check for the service binary.
+- Take a sessions DB backup.
+- Run schema verification against a copied DB, for example `aphelion schema verify --db copied-sessions.db`.
+- Check `/doctor` after startup.
+- Run `/threads` and verify only visible open thread numbers are shown in normal UI.
+- Create a side thread, reply to it, then verify replies still route to that visible thread number after restart.
+- Run `/absorb <visible-thread-number>` and verify that the visible label becomes available for the next open thread.
+- Run `/auto` in the default chat and verify no thread prefix is shown.
+- Run `/auto thread <visible-thread-number>` and verify the panel starts with `(thread N)`.
+- Verify a thread-scoped auto approval cannot approve default-chat work or another thread's work.
+- Observe durable-wake/provider warnings: repeated transient failures should stay compact and actionable, while permanent child blockers may interrupt chat.

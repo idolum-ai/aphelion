@@ -61,17 +61,22 @@ func telegramThreadOperatorID(thread session.TelegramThread) int64 {
 }
 
 func resolveTelegramThreadTargetID(router commandThreadRouter, chatID int64, rawThreadID int64) (int64, error) {
-	if router == nil || chatID == 0 || rawThreadID <= 0 {
-		return rawThreadID, nil
+	threadID, _, err := resolveTelegramThreadVisibleTarget(router, chatID, rawThreadID)
+	return threadID, err
+}
+
+func resolveTelegramThreadVisibleTarget(router commandThreadRouter, chatID int64, visibleThreadID int64) (int64, session.TelegramThread, error) {
+	if router == nil || chatID == 0 || visibleThreadID <= 0 {
+		return 0, session.TelegramThread{}, fmt.Errorf("No open thread %d. Run /threads to see current thread numbers.", visibleThreadID)
 	}
 	threads, err := router.TelegramThreads(chatID)
 	if err != nil {
-		return 0, err
+		return 0, session.TelegramThread{}, err
 	}
 	for _, thread := range threads {
-		if thread.Open() && thread.DisplaySlot == rawThreadID && thread.ThreadID > 0 {
-			return thread.ThreadID, nil
+		if thread.Open() && thread.DisplaySlot == visibleThreadID && thread.ThreadID > 0 {
+			return thread.ThreadID, thread, nil
 		}
 	}
-	return rawThreadID, nil
+	return 0, session.TelegramThread{}, fmt.Errorf("No open thread %d. Run /threads to see current thread numbers.", visibleThreadID)
 }

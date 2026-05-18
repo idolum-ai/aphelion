@@ -397,8 +397,11 @@ func TestHandleTelegramCommandAutoThreadRoutesScopedApprovals(t *testing.T) {
 	router := &stubCommandRouter{
 		canRestart:        true,
 		autoApproveReturn: "Auto approvals enabled for thread 4.",
+		threadsReturn: []session.TelegramThread{
+			{ChatID: 7, ThreadID: 4, DisplaySlot: 4, Status: session.TelegramThreadStatusOpen},
+		},
 		threadReplyOK:     true,
-		threadReplyReturn: session.TelegramThread{ChatID: 7, ThreadID: 4, Status: session.TelegramThreadStatusOpen},
+		threadReplyReturn: session.TelegramThread{ChatID: 7, ThreadID: 4, DisplaySlot: 4, Status: session.TelegramThreadStatusOpen},
 	}
 	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
 		ChatID:    7,
@@ -467,9 +470,10 @@ func TestHandleTelegramCommandAutoThreadRejectsClosedThread(t *testing.T) {
 
 	sender := &stubCommandSender{}
 	router := &stubCommandRouter{
-		canRestart:        true,
-		threadReplyOK:     true,
-		threadReplyReturn: session.TelegramThread{ChatID: 7, ThreadID: 4, Status: session.TelegramThreadStatusClosed},
+		canRestart: true,
+		threadsReturn: []session.TelegramThread{
+			{ChatID: 7, ThreadID: 4, DisplaySlot: 4, Status: session.TelegramThreadStatusClosed},
+		},
 	}
 	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
 		ChatID:    7,
@@ -486,7 +490,7 @@ func TestHandleTelegramCommandAutoThreadRejectsClosedThread(t *testing.T) {
 	if router.autoApproveMessage != nil || router.autoApproveArgs != "" {
 		t.Fatalf("auto approve routed unexpectedly message=%#v args=%q", router.autoApproveMessage, router.autoApproveArgs)
 	}
-	if len(sender.msgs) != 1 || !strings.Contains(sender.msgs[0].Text, "Thread 4 is closed") {
+	if len(sender.msgs) != 1 || !strings.Contains(sender.msgs[0].Text, "No open thread 4") {
 		t.Fatalf("messages = %#v, want closed-thread error", sender.msgs)
 	}
 }

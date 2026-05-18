@@ -155,6 +155,19 @@ func TestCompleteTurnRunDoesNotOverwriteTerminalTurn(t *testing.T) {
 	if loaded.ErrorText != "watchdog interrupted scoped turn" {
 		t.Fatalf("error_text = %q, want original interruption reason", loaded.ErrorText)
 	}
+	events, err := store.ExecutionEventsBySession(key, 0, 10)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	foundLate := false
+	for _, event := range events {
+		if event.EventType == "late_completion_after_interrupt" && strings.Contains(event.PayloadJSON, "late success") {
+			foundLate = true
+		}
+	}
+	if !foundLate {
+		t.Fatalf("events = %#v, want late completion event", events)
+	}
 }
 
 func TestStaleRunningTurnRuns(t *testing.T) {

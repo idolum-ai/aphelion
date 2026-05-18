@@ -47,6 +47,11 @@ func Load(path string) (*Config, error) {
 	if md.IsDefined("agent", "workspace") {
 		return nil, fmt.Errorf("agent.workspace has been removed; set agent.prompt_root, agent.exec_root, and agent.shared_memory_root explicitly")
 	}
+	for _, removed := range [][]string{{"recovery", "watchdog", "restart_cooldown"}, {"recovery", "watchdog", "max_restart_attempts"}} {
+		if md.IsDefined(removed...) {
+			return nil, fmt.Errorf("%s has been removed; stale turn recovery now interrupts scoped turns instead of restarting the service", strings.Join(removed, "."))
+		}
+	}
 
 	cfg.Providers.Selection = normalizeProviderSelection(cfg.Providers.Selection)
 	cfg.Providers.AutoOrder = normalizeProviderNameList(cfg.Providers.AutoOrder)

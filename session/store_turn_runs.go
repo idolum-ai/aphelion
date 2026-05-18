@@ -4,6 +4,7 @@ package session
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -232,7 +233,8 @@ func (s *SQLiteStore) CompleteTurnRun(id int64, status TurnRunStatus, errorText 
 		return fmt.Errorf("invalid turn run completion status %q", status)
 	}
 
-	_, err := s.db.Exec(`
+	now := time.Now().UTC()
+	result, err := s.db.Exec(`
 		UPDATE turn_runs
 		SET
 			status = ?,
@@ -242,14 +244,48 @@ func (s *SQLiteStore) CompleteTurnRun(id int64, status TurnRunStatus, errorText 
 		WHERE id = ? AND status = ?
 	`,
 		string(status),
-		time.Now().UTC().Format(time.RFC3339Nano),
-		time.Now().UTC().Format(time.RFC3339Nano),
+		now.Format(time.RFC3339Nano),
+		now.Format(time.RFC3339Nano),
 		nullableString(errorText),
 		id,
 		string(TurnRunStatusRunning),
 	)
 	if err != nil {
 		return fmt.Errorf("complete turn run: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows > 0 {
+		return nil
+	}
+	return s.recordLateTurnCompletion(id, status, errorText, now)
+}
+
+func (s *SQLiteStore) recordLateTurnCompletion(id int64, status TurnRunStatus, errorText string, now time.Time) error {
+	var run TurnRun
+	var durableAgentID string
+	err := s.db.QueryRow(`
+		SELECT id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, status
+		FROM turn_runs
+		WHERE id = ?
+	`, id).Scan(&run.ID, &run.SessionID, &run.ChatID, &run.UserID, &run.Scope.Kind, &run.Scope.ID, &durableAgentID, &run.Status)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load late completed turn run: %w", err)
+	}
+	if run.Status == TurnRunStatusRunning {
+		return nil
+	}
+	key := SessionKey{ChatID: run.ChatID, UserID: run.UserID, Scope: ScopeRef{Kind: run.Scope.Kind, ID: run.Scope.ID}}
+	payloadRaw, _ := json.Marshal(map[string]any{
+		"run_id":          id,
+		"terminal_status": string(run.Status),
+		"late_status":     string(status),
+		"late_error":      clampStoreText(errorText, 500),
+	})
+	_, err = s.AppendExecutionEvent(key, ExecutionEventInput{EventType: "late_completion_after_interrupt", Stage: "turn_run", Status: "late_completion", PayloadJSON: string(payloadRaw), CreatedAt: now})
+	if err != nil {
+		return fmt.Errorf("record late turn completion: %w", err)
 	}
 	return nil
 }

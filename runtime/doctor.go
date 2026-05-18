@@ -20,6 +20,8 @@ import (
 )
 
 const (
+	doctorTimeFormat = time.RFC3339
+
 	doctorRequestMarker       = "DOCTOR_DIAGNOSTIC_REQUEST"
 	doctorSummaryMarker       = "DOCTOR_TELEGRAM_SUMMARY_REQUEST"
 	doctorReportFallbackText  = "Doctor diagnostics finished, but the model returned an empty report."
