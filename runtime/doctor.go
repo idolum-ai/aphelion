@@ -24,7 +24,7 @@ const (
 
 	doctorRequestMarker       = "DOCTOR_DIAGNOSTIC_REQUEST"
 	doctorSummaryMarker       = "DOCTOR_TELEGRAM_SUMMARY_REQUEST"
-	doctorReportFallbackText  = "Doctor diagnostics finished, but the model returned an empty report."
+	doctorReportFallbackText  = "Health diagnosis finished, but the model returned an empty report."
 	doctorMaintainerArchetype = "aphelion-maintainer"
 	doctorRunTimeout          = 5 * time.Minute
 	doctorPacketMaxChars      = 120000
@@ -126,7 +126,7 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 	var monitorErr error
 	defer func() {
 		if monitorErr != nil {
-			surfaceDoctorProgress(ctx, progress, "Doctor diagnostics failed: "+trimError(monitorErr.Error()))
+			surfaceDoctorProgress(ctx, progress, "Health diagnosis failed: "+trimError(monitorErr.Error()))
 		}
 		monitor.Finish(ctx, monitorErr)
 	}()
@@ -204,11 +204,11 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 			"error":    trimError(runErr.Error()),
 			"run_kind": string(session.TurnRunKindDoctor),
 		}, time.Now().UTC())
-		monitorErr = fmt.Errorf("run doctor diagnostics: %w", runErr)
+		monitorErr = fmt.Errorf("run health diagnosis: %w", runErr)
 		return monitorErr
 	}
 	if turnResult == nil {
-		monitorErr = fmt.Errorf("doctor diagnostics returned no turn result")
+		monitorErr = fmt.Errorf("health diagnosis returned no turn result")
 		return monitorErr
 	}
 	if strings.TrimSpace(turnResult.ProviderFailure) != "" {
@@ -244,20 +244,20 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 			maintainerArtifact = artifact
 		}
 	}
-	surfaceDoctorProgress(ctx, progress, "Saving the doctor report into chat history")
+	surfaceDoctorProgress(ctx, progress, "Saving the health diagnosis report into chat history")
 	newMessages := appendSyntheticTurn(sess, "/health diagnose", report, telegramReport, doctorFloorMetadata(report, telegramReport, maintainer, maintainerArtifact))
 	if err := r.store.Save(sess, newMessages, addTokenUsage(turnResult.TokenUsage, summaryUsage)); err != nil {
-		monitorErr = fmt.Errorf("save doctor report: %w", err)
+		monitorErr = fmt.Errorf("save health diagnosis report: %w", err)
 		return monitorErr
 	}
-	surfaceDoctorProgress(ctx, progress, "Sending the doctor report to Telegram")
+	surfaceDoctorProgress(ctx, progress, "Sending the health diagnosis report to Telegram")
 	msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
 		ChatID:  msg.ChatID,
 		Text:    telegramReport,
 		ReplyTo: replyToMessageID(msg.MessageID),
 	})
 	if err != nil {
-		monitorErr = fmt.Errorf("send doctor report: %w", err)
+		monitorErr = fmt.Errorf("send health diagnosis report: %w", err)
 		return monitorErr
 	}
 	if err := r.store.RecordOutbound(key, sess.TurnCount, msgID, "doctor"); err != nil {
@@ -272,7 +272,7 @@ func (r *Runtime) resolveDoctorAdmin(msg core.InboundMessage) (principal.Princip
 		return principal.Principal{}, fmt.Errorf("principal resolver is unavailable")
 	}
 	if chatType := strings.TrimSpace(msg.ChatType); chatType != "" && chatType != "private" && chatType != "dm" {
-		return principal.Principal{}, fmt.Errorf("doctor diagnostics must be run from an admin private chat")
+		return principal.Principal{}, fmt.Errorf("health diagnosis must be run from an admin private chat")
 	}
 	actor, ok := r.resolver.ResolveTelegramUser(msg.SenderID)
 	if !ok || actor.Role != principal.RoleAdmin {
@@ -291,7 +291,7 @@ func (r *Runtime) newDoctorProgressReporter(key session.SessionKey, msg core.Inb
 	}
 	progress.suppressControls = true
 	progress.controls = nil
-	progress.taskSummary = "doctor diagnostics"
+	progress.taskSummary = "health diagnosis"
 	progress.currentPlanStep = ""
 	return progress
 }

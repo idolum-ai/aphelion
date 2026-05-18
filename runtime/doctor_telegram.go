@@ -24,7 +24,7 @@ func (r *Runtime) telegramDoctorReport(ctx context.Context, key session.SessionK
 	if doctorCharCount(report) <= doctorTelegramMaxChars {
 		return report, core.TokenUsage{}
 	}
-	surfaceDoctorProgress(ctx, progress, "Condensing the doctor report for one Telegram message")
+	surfaceDoctorProgress(ctx, progress, "Condensing the health diagnosis report for one Telegram message")
 	limitText := strconv.Itoa(doctorTelegramMaxChars)
 	input := []agent.Message{
 		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
@@ -114,6 +114,8 @@ func doctorTelegramSummarySystemNote() string {
 		"- Preserve resolved/current status labels when relevant: active, likely_fixed, historical_resolved, residual_risk, unknown.",
 		"## Output",
 		"- Return one operator-facing message only.",
+		"- Use 'Health diagnosis — read-only' as the visible heading if a heading is needed.",
+		"- Public command name is /health diagnose; do not mention /doctor in operator-visible output.",
 		"## Stop Rules",
 		"- Do not include exhaustive logs, full inventories, or every recommendation.",
 	}, "\n")
@@ -182,6 +184,8 @@ func doctorReadOnlySystemNote() string {
 	return strings.Join([]string{
 		"You are running /health diagnose.",
 		"This is a read-only diagnostic pass. Do not claim to have edited files, run commands, restarted services, changed memory, or committed code.",
+		"Public command name is /health diagnose; do not mention /doctor in operator-visible output.",
+		"Use 'Health diagnosis — read-only' as the visible heading if a heading is needed.",
 		"Use the diagnostic packet and the loaded prompt/memory context to produce an operator-facing report.",
 		"For every issue you report, classify it as active, likely_fixed, historical_resolved, residual_risk, or unknown by comparing old failure evidence with current-state checks.",
 		"Do not present an old failure as active when the current-state checks indicate it is likely fixed; instead call out remaining verification gaps.",

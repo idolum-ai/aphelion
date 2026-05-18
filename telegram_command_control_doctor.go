@@ -85,7 +85,7 @@ func (c telegramCommandControl) ensureDoctorIngressQueued(msg core.InboundMessag
 
 func (c telegramCommandControl) LatestDoctorReport(ctx context.Context, chatID int64, senderID int64) (session.DoctorReportRecord, bool, error) {
 	if c.rt == nil {
-		return session.DoctorReportRecord{}, false, fmt.Errorf("Doctor report storage is unavailable.")
+		return session.DoctorReportRecord{}, false, fmt.Errorf("Health diagnosis report storage is unavailable.")
 	}
 	return c.rt.LatestDoctorReport(ctx, chatID, senderID)
 }

@@ -62,7 +62,7 @@ func TestRunDoctorOnceCondensesOversizedTelegramReport(t *testing.T) {
 	if sent[1].Text != summary {
 		t.Fatalf("telegram report = %q, want condensed summary", sent[1].Text)
 	}
-	if !doctorEditsContain(edits, "Condensing the doctor report for one Telegram message") {
+	if !doctorEditsContain(edits, "Condensing the health diagnosis report for one Telegram message") {
 		t.Fatalf("progress edits = %#v, want condensation progress", edits)
 	}
 

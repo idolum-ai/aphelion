@@ -131,7 +131,7 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, too
 		f.lastDoctorSummaryTools = append([]agent.ToolDef(nil), tools...)
 		reply := strings.TrimSpace(f.doctorSummaryReplyText)
 		if reply == "" {
-			reply = "State of Things\nMost important fix: review the full doctor report in session history.\n\nRecommendations\nStart with the highest-risk active item."
+			reply = "State of Things\nMost important fix: review the full health diagnosis report in session history.\n\nRecommendations\nStart with the highest-risk active item."
 		}
 		return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
 	}

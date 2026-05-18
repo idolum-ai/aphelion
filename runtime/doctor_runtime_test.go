@@ -25,6 +25,9 @@ func TestDoctorTelegramSummarySystemNoteUsesOutcomeStructure(t *testing.T) {
 		"## Constraints",
 		"## Output",
 		"Return one operator-facing message only.",
+		"Health diagnosis — read-only",
+		"Public command name is /health diagnose",
+		"do not mention /doctor in operator-visible output",
 		"## Stop Rules",
 		"Do not include exhaustive logs",
 	} {
@@ -413,7 +416,7 @@ func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 		t.Fatalf("progress reply_to = %#v, want 17", sent[0].ReplyTo)
 	}
 	if sent[1].ChatID != 1001 || !strings.Contains(sent[1].Text, "State of Things") {
-		t.Fatalf("report message = %#v, want doctor report to admin", sent[1])
+		t.Fatalf("report message = %#v, want health diagnosis report to admin", sent[1])
 	}
 	if sent[1].ReplyTo == nil || *sent[1].ReplyTo != 17 {
 		t.Fatalf("report reply_to = %#v, want 17", sent[1].ReplyTo)
@@ -425,7 +428,7 @@ func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 		t.Fatal("progress edits = 0, want live progress updates")
 	}
 	lastEdit := edits[len(edits)-1]
-	if lastEdit.ChatID != 1001 || lastEdit.MessageID != 1 || !strings.HasPrefix(lastEdit.Text, "Done.") || !strings.Contains(lastEdit.Text, "Sending the doctor report to Telegram") {
+	if lastEdit.ChatID != 1001 || lastEdit.MessageID != 1 || !strings.HasPrefix(lastEdit.Text, "Done.") || !strings.Contains(lastEdit.Text, "Sending the health diagnosis report to Telegram") {
 		t.Fatalf("final progress edit = %#v, want completed doctor progress", lastEdit)
 	}
 
@@ -493,7 +496,7 @@ func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 
 func TestRunDoctorOnceTerminalizesBoundTelegramIngress(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	provider.replyText = "State of Things\nDoctor ingress is bound.\n\nRecommendations\nKeep diagnosis recoverable."
+	provider.replyText = "State of Things\nHealth diagnosis ingress is bound.\n\nRecommendations\nKeep diagnosis recoverable."
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
