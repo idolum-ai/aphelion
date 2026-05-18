@@ -122,12 +122,27 @@ func TestMigratesSchemaV44ToV45AutonomyOverrides(t *testing.T) {
 	if activeModes[0].ID != "mode-auto-active" || activeModes[0].Mode != "leased" || activeModes[0].Scope != OperatorAutoApprovalScopeWorkspace {
 		t.Fatalf("active autonomy override = %#v, want copied active workspace gate", activeModes[0])
 	}
+	scopeKind, scopeID := OperatorAutoScopeForKey(SessionKey{ChatID: 99170})
+	scopedModes, err := store.ActiveOperatorAutonomyOverridesForScope(99170, scopeKind, scopeID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutonomyOverridesForScope() err = %v", err)
+	}
+	if len(scopedModes) != 1 || scopedModes[0].ID != "mode-auto-active" {
+		t.Fatalf("scoped autonomy overrides = %#v, want migrated default-chat gate", scopedModes)
+	}
 	activeApprovals, err := store.ActiveOperatorAutoApprovalLeases(99170, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
 	}
 	if len(activeApprovals) != 1 || activeApprovals[0].ID != "auto-active" {
 		t.Fatalf("active approvals = %#v, want original active approval preserved", activeApprovals)
+	}
+	scopedApprovals, err := store.ActiveOperatorAutoApprovalLeasesForScope(99170, scopeKind, scopeID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeasesForScope() err = %v", err)
+	}
+	if len(scopedApprovals) != 1 || scopedApprovals[0].ID != "auto-active" {
+		t.Fatalf("scoped approvals = %#v, want migrated default-chat approval", scopedApprovals)
 	}
 	if expired, ok, err := store.OperatorAutoApprovalLease("auto-expired"); err != nil || !ok || expired.ID != "auto-expired" {
 		t.Fatalf("expired approval = lease:%#v ok:%v err:%v, want preserved approval history", expired, ok, err)

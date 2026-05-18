@@ -22,6 +22,8 @@ const (
 type TelegramThread struct {
 	ChatID              int64
 	ThreadID            int64
+	DisplaySlot         int64
+	ArchivedDisplayName string
 	Status              TelegramThreadStatus
 	CreatedBySenderID   int64
 	CreatedFromUpdateID int64
@@ -82,13 +84,17 @@ func (s *SQLiteStore) CreateTelegramThreadForUpdate(chatID int64, senderID int64
 	if nextThreadID <= 0 {
 		nextThreadID = 1
 	}
+	displaySlot, err := nextTelegramThreadDisplaySlotTx(tx, chatID)
+	if err != nil {
+		return TelegramThread{}, false, err
+	}
 	nowRaw := now.UTC().Format(time.RFC3339Nano)
 	if _, err := tx.Exec(`
 		INSERT INTO telegram_threads(
-			chat_id, thread_id, status, created_by_sender_id, created_from_update_id,
+			chat_id, thread_id, display_slot, status, created_by_sender_id, created_from_update_id,
 			created_message_id, created_text, last_activity_at, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, chatID, nextThreadID, string(TelegramThreadStatusOpen), senderID, updateID, messageID, clampStoreText(text, 2000), nowRaw, nowRaw, nowRaw); err != nil {
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, chatID, nextThreadID, displaySlot, string(TelegramThreadStatusOpen), senderID, updateID, messageID, clampStoreText(text, 2000), nowRaw, nowRaw, nowRaw); err != nil {
 		return TelegramThread{}, false, fmt.Errorf("insert telegram thread: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -127,19 +133,34 @@ func (s *SQLiteStore) TelegramThreadByCreatedUpdate(chatID int64, updateID int64
 }
 
 func (s *SQLiteStore) ListTelegramThreads(chatID int64, limit int) ([]TelegramThread, error) {
+	return s.ListTelegramThreadsByView(chatID, "all", limit)
+}
+
+func (s *SQLiteStore) ListTelegramThreadsByView(chatID int64, view string, limit int) ([]TelegramThread, error) {
 	if chatID == 0 {
 		return nil, nil
 	}
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
-	rows, err := s.db.Query(telegramThreadSelectSQL()+`
-		WHERE chat_id = ?
+	where := "WHERE chat_id = ?"
+	switch strings.ToLower(strings.TrimSpace(view)) {
+	case "open", "":
+		where += " AND status = 'open'"
+	case "nonopen", "non-open", "closed":
+		where += " AND status != 'open'"
+	case "all":
+	default:
+		where += " AND status = 'open'"
+	}
+	query := telegramThreadSelectSQL() + "\n\t\t" + where + `
 		ORDER BY
-			CASE status WHEN 'open' THEN 0 ELSE 1 END,
+			CASE status WHEN 'open' THEN display_slot ELSE thread_id END ASC,
+			updated_at DESC,
 			thread_id DESC
 		LIMIT ?
-	`, chatID, limit)
+	`
+	rows, err := s.db.Query(query, chatID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list telegram threads: %w", err)
 	}
@@ -176,9 +197,9 @@ func (s *SQLiteStore) CloseTelegramThread(chatID int64, threadID int64, summary 
 	res, err := s.db.Exec(`
 		UPDATE telegram_threads
 		SET status = ?, closed_at = COALESCE(closed_at, ?), absorbed_at = COALESCE(absorbed_at, ?),
-			absorb_summary = ?, updated_at = ?
+			absorb_summary = ?, archived_display_name = COALESCE(NULLIF(archived_display_name, ''), ?), display_slot = 0, updated_at = ?
 		WHERE chat_id = ? AND thread_id = ? AND status = ?
-	`, string(TelegramThreadStatusClosed), atRaw, atRaw, clampStoreText(summary, 4000), atRaw, chatID, threadID, string(TelegramThreadStatusOpen))
+	`, string(TelegramThreadStatusClosed), atRaw, atRaw, clampStoreText(summary, 4000), s.telegramThreadArchivedDisplayName(chatID, threadID, at), atRaw, chatID, threadID, string(TelegramThreadStatusOpen))
 	if err != nil {
 		return TelegramThread{}, false, fmt.Errorf("close telegram thread: %w", err)
 	}
@@ -215,9 +236,9 @@ func (s *SQLiteStore) RecordTelegramThreadAbsorb(chatID int64, threadID int64, s
 	res, err := tx.Exec(`
 		UPDATE telegram_threads
 		SET status = ?, closed_at = COALESCE(closed_at, ?), absorbed_at = COALESCE(absorbed_at, ?),
-			absorb_summary = ?, updated_at = ?
+			absorb_summary = ?, archived_display_name = COALESCE(NULLIF(archived_display_name, ''), ?), display_slot = 0, updated_at = ?
 		WHERE chat_id = ? AND thread_id = ? AND status = ?
-	`, string(TelegramThreadStatusClosed), atRaw, atRaw, clampStoreText(summary, 4000), atRaw, chatID, threadID, string(TelegramThreadStatusOpen))
+	`, string(TelegramThreadStatusClosed), atRaw, atRaw, clampStoreText(summary, 4000), telegramThreadArchivedDisplayNameTx(tx, chatID, threadID, at), atRaw, chatID, threadID, string(TelegramThreadStatusOpen))
 	if err != nil {
 		return TelegramThread{}, false, fmt.Errorf("record telegram thread absorb close: %w", err)
 	}
@@ -365,6 +386,162 @@ func (s *SQLiteStore) RecordTelegramCallbackMessageThread(chatID int64, messageI
 	return nil
 }
 
+func nextTelegramThreadDisplaySlotTx(tx *sql.Tx, chatID int64) (int64, error) {
+	rows, err := tx.Query(`
+		SELECT display_slot
+		FROM telegram_threads
+		WHERE chat_id = ? AND status = 'open' AND display_slot > 0
+		ORDER BY display_slot ASC
+	`, chatID)
+	if err != nil {
+		return 0, fmt.Errorf("query telegram thread display slots: %w", err)
+	}
+	defer rows.Close()
+	used := map[int64]struct{}{}
+	for rows.Next() {
+		var slot int64
+		if err := rows.Scan(&slot); err != nil {
+			return 0, err
+		}
+		if slot > 0 {
+			used[slot] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate telegram thread display slots: %w", err)
+	}
+	for slot := int64(1); ; slot++ {
+		if _, ok := used[slot]; !ok {
+			return slot, nil
+		}
+	}
+}
+
+func telegramThreadArchivedDisplayNameForSlot(slot int64, at time.Time) string {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	date := at.Local().Format("2006-01-02")
+	if slot <= 0 {
+		return date
+	}
+	return fmt.Sprintf("%d-%s", slot, date)
+}
+
+func (s *SQLiteStore) telegramThreadArchivedDisplayName(chatID int64, threadID int64, at time.Time) string {
+	thread, ok, err := s.TelegramThread(chatID, threadID)
+	if err != nil || !ok {
+		return telegramThreadArchivedDisplayNameForSlot(threadID, at)
+	}
+	return uniqueTelegramThreadArchivedDisplayName(s.db, chatID, threadID, telegramThreadArchivedDisplayNameForSlot(firstNonZeroInt(thread.DisplaySlot, thread.ThreadID), at))
+}
+
+func telegramThreadArchivedDisplayNameTx(tx *sql.Tx, chatID int64, threadID int64, at time.Time) string {
+	thread, ok, err := telegramThreadTx(tx, chatID, threadID)
+	if err != nil || !ok {
+		return telegramThreadArchivedDisplayNameForSlot(threadID, at)
+	}
+	return uniqueTelegramThreadArchivedDisplayName(tx, chatID, threadID, telegramThreadArchivedDisplayNameForSlot(firstNonZeroInt(thread.DisplaySlot, thread.ThreadID), at))
+}
+
+type archivedNameQueryer interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func uniqueTelegramThreadArchivedDisplayName(q archivedNameQueryer, chatID int64, threadID int64, base string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		base = "closed-thread"
+	}
+	for i := 0; i < 1000; i++ {
+		candidate := base
+		if i > 0 {
+			candidate = fmt.Sprintf("%s-%d", base, i)
+		}
+		var existing int64
+		err := q.QueryRow(`SELECT thread_id FROM telegram_threads WHERE chat_id = ? AND archived_display_name = ? AND thread_id != ? LIMIT 1`, chatID, candidate, threadID).Scan(&existing)
+		if err == sql.ErrNoRows {
+			return candidate
+		}
+		if err != nil {
+			return candidate
+		}
+	}
+	return fmt.Sprintf("%s-%d", base, time.Now().UnixNano())
+}
+
+func (s *SQLiteStore) SanitizeTelegramThreadDisplaySlots(now time.Time, apply bool) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, nil
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	rows, err := s.db.Query(`SELECT DISTINCT chat_id FROM telegram_threads ORDER BY chat_id`)
+	if err != nil {
+		return 0, fmt.Errorf("query telegram thread chats: %w", err)
+	}
+	defer rows.Close()
+	changed := 0
+	for rows.Next() {
+		var chatID int64
+		if err := rows.Scan(&chatID); err != nil {
+			return changed, err
+		}
+		threads, err := s.ListTelegramThreadsByView(chatID, "all", 50)
+		if err != nil {
+			return changed, err
+		}
+		nextSlot := int64(1)
+		for _, thread := range threads {
+			if thread.Open() {
+				if thread.DisplaySlot != nextSlot {
+					changed++
+					if apply {
+						if _, err := s.db.Exec(`UPDATE telegram_threads SET display_slot = ?, updated_at = ? WHERE chat_id = ? AND thread_id = ?`, nextSlot, now.Format(time.RFC3339Nano), chatID, thread.ThreadID); err != nil {
+							return changed, fmt.Errorf("sanitize telegram thread display slot: %w", err)
+						}
+					}
+				}
+				nextSlot++
+			} else if thread.DisplaySlot != 0 || strings.TrimSpace(thread.ArchivedDisplayName) == "" {
+				changed++
+				if apply {
+					name := thread.ArchivedDisplayName
+					if strings.TrimSpace(name) == "" {
+						name = telegramThreadArchivedDisplayNameForSlot(firstNonZeroInt(thread.DisplaySlot, thread.ThreadID), firstNonZeroTime(thread.AbsorbedAt, thread.ClosedAt, now))
+					}
+					if _, err := s.db.Exec(`UPDATE telegram_threads SET display_slot = 0, archived_display_name = ?, updated_at = ? WHERE chat_id = ? AND thread_id = ?`, name, now.Format(time.RFC3339Nano), chatID, thread.ThreadID); err != nil {
+						return changed, fmt.Errorf("sanitize archived telegram thread display name: %w", err)
+					}
+				}
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return changed, err
+	}
+	return changed, nil
+}
+
+func firstNonZeroInt(values ...int64) int64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func firstNonZeroTime(values ...time.Time) time.Time {
+	for _, value := range values {
+		if !value.IsZero() {
+			return value
+		}
+	}
+	return time.Time{}
+}
+
 func telegramThreadIDFromSessionID(chatID int64, sessionID string) (int64, bool) {
 	sessionID = strings.TrimSpace(sessionID)
 	const prefix = "telegram_thread:"
@@ -454,7 +631,7 @@ func telegramThreadTx(tx *sql.Tx, chatID int64, threadID int64) (TelegramThread,
 }
 
 func telegramThreadSelectSQL() string {
-	return `SELECT chat_id, thread_id, status, created_by_sender_id, created_from_update_id,
+	return `SELECT chat_id, thread_id, display_slot, archived_display_name, status, created_by_sender_id, created_from_update_id,
 		created_message_id, created_text, last_activity_at, closed_at, absorb_summary,
 		absorbed_at, created_at, updated_at
 		FROM telegram_threads`
@@ -486,6 +663,8 @@ func scanTelegramThread(scanner interface{ Scan(dest ...any) error }) (TelegramT
 	if err := scanner.Scan(
 		&thread.ChatID,
 		&thread.ThreadID,
+		&thread.DisplaySlot,
+		&thread.ArchivedDisplayName,
 		&statusRaw,
 		&thread.CreatedBySenderID,
 		&thread.CreatedFromUpdateID,

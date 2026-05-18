@@ -3,6 +3,7 @@
 package session
 
 import (
+	"strconv"
 	"strings"
 	"time"
 )
@@ -11,6 +12,8 @@ type OperatorAutoApprovalLease struct {
 	ID          string
 	AdminUserID int64
 	ChatID      int64
+	ScopeKind   string
+	ScopeID     string
 	Scope       string
 	Reason      string
 	MaxUses     int
@@ -25,6 +28,8 @@ type OperatorAutonomyOverride struct {
 	ID          string
 	AdminUserID int64
 	ChatID      int64
+	ScopeKind   string
+	ScopeID     string
 	Mode        string
 	Scope       string
 	Reason      string
@@ -47,6 +52,11 @@ func NormalizeOperatorAutoApprovalScope(scope string) string {
 
 func NormalizeOperatorAutoApprovalLease(lease OperatorAutoApprovalLease) OperatorAutoApprovalLease {
 	lease.ID = strings.TrimSpace(lease.ID)
+	lease.ScopeKind = strings.TrimSpace(lease.ScopeKind)
+	lease.ScopeID = strings.TrimSpace(lease.ScopeID)
+	if lease.ScopeKind == "" && lease.ScopeID == "" && lease.ChatID != 0 {
+		lease.ScopeKind, lease.ScopeID = OperatorAutoScopeForRef(ScopeRef{Kind: ScopeKindTelegramDM, ID: strconv.FormatInt(lease.ChatID, 10)})
+	}
 	lease.Scope = NormalizeOperatorAutoApprovalScope(lease.Scope)
 	lease.Reason = strings.TrimSpace(lease.Reason)
 	if lease.MaxUses < 0 {
@@ -89,6 +99,11 @@ func NormalizeOperatorAutonomyMode(mode string) string {
 
 func NormalizeOperatorAutonomyOverride(override OperatorAutonomyOverride) OperatorAutonomyOverride {
 	override.ID = strings.TrimSpace(override.ID)
+	override.ScopeKind = strings.TrimSpace(override.ScopeKind)
+	override.ScopeID = strings.TrimSpace(override.ScopeID)
+	if override.ScopeKind == "" && override.ScopeID == "" && override.ChatID != 0 {
+		override.ScopeKind, override.ScopeID = OperatorAutoScopeForRef(ScopeRef{Kind: ScopeKindTelegramDM, ID: strconv.FormatInt(override.ChatID, 10)})
+	}
 	override.Mode = NormalizeOperatorAutonomyMode(override.Mode)
 	override.Scope = NormalizeOperatorAutoApprovalScope(override.Scope)
 	override.Reason = strings.TrimSpace(override.Reason)

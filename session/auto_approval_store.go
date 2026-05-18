@@ -12,6 +12,9 @@ import (
 
 func (s *SQLiteStore) CreateOperatorAutoApprovalLease(lease OperatorAutoApprovalLease) (OperatorAutoApprovalLease, error) {
 	lease = NormalizeOperatorAutoApprovalLease(lease)
+	if strings.TrimSpace(lease.ScopeKind) == "" && strings.TrimSpace(lease.ScopeID) == "" && lease.ChatID != 0 {
+		lease.ScopeKind, lease.ScopeID = OperatorAutoScopeForKey(SessionKey{ChatID: lease.ChatID})
+	}
 	if lease.ID == "" {
 		return OperatorAutoApprovalLease{}, fmt.Errorf("operator auto approval lease id is required")
 	}
@@ -37,10 +40,10 @@ func (s *SQLiteStore) CreateOperatorAutoApprovalLease(lease OperatorAutoApproval
 	}
 	if _, err := s.db.Exec(`
 		INSERT INTO operator_auto_approvals(
-			lease_id, admin_user_id, chat_id, scope, reason, max_uses, used_count,
+			lease_id, admin_user_id, chat_id, scope_kind, scope_id, scope, reason, max_uses, used_count,
 			created_at, expires_at, revoked_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, lease.ID, lease.AdminUserID, lease.ChatID, lease.Scope, lease.Reason, lease.MaxUses, lease.UsedCount, lease.CreatedAt.UTC().Format(time.RFC3339Nano), lease.ExpiresAt.UTC().Format(time.RFC3339Nano), revokedAt, lease.UpdatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, lease.ID, lease.AdminUserID, lease.ChatID, lease.ScopeKind, lease.ScopeID, lease.Scope, lease.Reason, lease.MaxUses, lease.UsedCount, lease.CreatedAt.UTC().Format(time.RFC3339Nano), lease.ExpiresAt.UTC().Format(time.RFC3339Nano), revokedAt, lease.UpdatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 		return OperatorAutoApprovalLease{}, fmt.Errorf("create operator auto approval lease: %w", err)
 	}
 	stored, ok, err := s.OperatorAutoApprovalLease(lease.ID)
@@ -59,7 +62,7 @@ func (s *SQLiteStore) OperatorAutoApprovalLease(id string) (OperatorAutoApproval
 		return OperatorAutoApprovalLease{}, false, nil
 	}
 	row := s.db.QueryRow(`
-		SELECT lease_id, admin_user_id, chat_id, scope, reason, max_uses, used_count,
+		SELECT lease_id, admin_user_id, chat_id, scope_kind, scope_id, scope, reason, max_uses, used_count,
 			created_at, expires_at, revoked_at, updated_at
 		FROM operator_auto_approvals
 		WHERE lease_id = ?
@@ -82,7 +85,7 @@ func (s *SQLiteStore) ActiveOperatorAutoApprovalLeases(chatID int64, now time.Ti
 		now = time.Now().UTC()
 	}
 	rows, err := s.db.Query(`
-		SELECT lease_id, admin_user_id, chat_id, scope, reason, max_uses, used_count,
+		SELECT lease_id, admin_user_id, chat_id, scope_kind, scope_id, scope, reason, max_uses, used_count,
 			created_at, expires_at, revoked_at, updated_at
 		FROM operator_auto_approvals
 		WHERE chat_id = ?
@@ -117,7 +120,7 @@ func (s *SQLiteStore) OperatorAutoApprovalLeases(limit int, now time.Time, activ
 		now = time.Now().UTC()
 	}
 	query := `
-		SELECT lease_id, admin_user_id, chat_id, scope, reason, max_uses, used_count,
+		SELECT lease_id, admin_user_id, chat_id, scope_kind, scope_id, scope, reason, max_uses, used_count,
 			created_at, expires_at, revoked_at, updated_at
 		FROM operator_auto_approvals
 	`
@@ -159,7 +162,7 @@ func (s *SQLiteStore) LatestOperatorAutoApprovalLease(chatID int64, adminUserID 
 		return OperatorAutoApprovalLease{}, false, nil
 	}
 	row := s.db.QueryRow(`
-		SELECT lease_id, admin_user_id, chat_id, scope, reason, max_uses, used_count,
+		SELECT lease_id, admin_user_id, chat_id, scope_kind, scope_id, scope, reason, max_uses, used_count,
 			created_at, expires_at, revoked_at, updated_at
 		FROM operator_auto_approvals
 		WHERE chat_id = ? AND admin_user_id = ?
@@ -223,7 +226,7 @@ func (s *SQLiteStore) RevokeOperatorAutoApprovalLeases(chatID int64, adminUserID
 	defer tx.Rollback()
 
 	rows, err := tx.Query(`
-		SELECT lease_id, admin_user_id, chat_id, scope, reason, max_uses, used_count,
+		SELECT lease_id, admin_user_id, chat_id, scope_kind, scope_id, scope, reason, max_uses, used_count,
 			created_at, expires_at, revoked_at, updated_at
 		FROM operator_auto_approvals
 		WHERE chat_id = ? AND admin_user_id = ? AND revoked_at IS NULL
@@ -283,6 +286,8 @@ func scanOperatorAutoApprovalLease(scanner operatorAutoApprovalLeaseScanner) (Op
 		&lease.ID,
 		&lease.AdminUserID,
 		&lease.ChatID,
+		&lease.ScopeKind,
+		&lease.ScopeID,
 		&lease.Scope,
 		&lease.Reason,
 		&lease.MaxUses,
@@ -315,4 +320,125 @@ func scanOperatorAutoApprovalLease(scanner operatorAutoApprovalLeaseScanner) (Op
 		}
 	}
 	return NormalizeOperatorAutoApprovalLease(lease), nil
+}
+
+func (s *SQLiteStore) ActiveOperatorAutoApprovalLeasesForScope(chatID int64, scopeKind string, scopeID string, now time.Time) ([]OperatorAutoApprovalLease, error) {
+	if chatID == 0 {
+		return nil, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	scopeKind = strings.TrimSpace(scopeKind)
+	scopeID = strings.TrimSpace(scopeID)
+	rows, err := s.db.Query(`
+		SELECT lease_id, admin_user_id, chat_id, scope_kind, scope_id, scope, reason, max_uses, used_count,
+			created_at, expires_at, revoked_at, updated_at
+		FROM operator_auto_approvals
+		WHERE chat_id = ?
+			AND scope_kind = ?
+			AND scope_id = ?
+			AND revoked_at IS NULL
+			AND expires_at > ?
+			AND (max_uses <= 0 OR used_count < max_uses)
+		ORDER BY updated_at DESC, created_at DESC, lease_id DESC
+	`, chatID, scopeKind, scopeID, now.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, fmt.Errorf("query active scoped operator auto approvals: %w", err)
+	}
+	defer rows.Close()
+	out := make([]OperatorAutoApprovalLease, 0)
+	for rows.Next() {
+		lease, err := scanOperatorAutoApprovalLease(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, lease)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active scoped operator auto approvals: %w", err)
+	}
+	return out, nil
+}
+
+func (s *SQLiteStore) LatestOperatorAutoApprovalLeaseForScope(chatID int64, adminUserID int64, scopeKind string, scopeID string) (OperatorAutoApprovalLease, bool, error) {
+	if chatID == 0 || adminUserID <= 0 {
+		return OperatorAutoApprovalLease{}, false, nil
+	}
+	row := s.db.QueryRow(`
+		SELECT lease_id, admin_user_id, chat_id, scope_kind, scope_id, scope, reason, max_uses, used_count,
+			created_at, expires_at, revoked_at, updated_at
+		FROM operator_auto_approvals
+		WHERE chat_id = ? AND admin_user_id = ? AND scope_kind = ? AND scope_id = ?
+		ORDER BY updated_at DESC, created_at DESC, lease_id DESC
+		LIMIT 1
+	`, chatID, adminUserID, strings.TrimSpace(scopeKind), strings.TrimSpace(scopeID))
+	lease, err := scanOperatorAutoApprovalLease(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return OperatorAutoApprovalLease{}, false, nil
+	}
+	if err != nil {
+		return OperatorAutoApprovalLease{}, false, err
+	}
+	return lease, true, nil
+}
+
+func (s *SQLiteStore) RevokeOperatorAutoApprovalLeasesForScope(chatID int64, adminUserID int64, scopeKind string, scopeID string, now time.Time) ([]OperatorAutoApprovalLease, error) {
+	if chatID == 0 || adminUserID <= 0 {
+		return nil, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	scopeKind = strings.TrimSpace(scopeKind)
+	scopeID = strings.TrimSpace(scopeID)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin revoke scoped operator auto approval leases: %w", err)
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(`
+		SELECT lease_id, admin_user_id, chat_id, scope_kind, scope_id, scope, reason, max_uses, used_count,
+			created_at, expires_at, revoked_at, updated_at
+		FROM operator_auto_approvals
+		WHERE chat_id = ? AND admin_user_id = ? AND scope_kind = ? AND scope_id = ? AND revoked_at IS NULL
+		ORDER BY updated_at DESC, created_at DESC, lease_id DESC
+	`, chatID, adminUserID, scopeKind, scopeID)
+	if err != nil {
+		return nil, fmt.Errorf("query scoped operator auto approval leases to revoke: %w", err)
+	}
+	leases := make([]OperatorAutoApprovalLease, 0)
+	for rows.Next() {
+		lease, err := scanOperatorAutoApprovalLease(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		leases = append(leases, lease)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close scoped operator auto approval revoke rows: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate scoped operator auto approval leases to revoke: %w", err)
+	}
+	if len(leases) == 0 {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit empty scoped operator auto approval revoke: %w", err)
+		}
+		return nil, nil
+	}
+
+	if _, err := tx.Exec(`
+		UPDATE operator_auto_approvals
+		SET revoked_at = ?, updated_at = ?
+		WHERE chat_id = ? AND admin_user_id = ? AND scope_kind = ? AND scope_id = ? AND revoked_at IS NULL
+	`, now.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), chatID, adminUserID, scopeKind, scopeID); err != nil {
+		return nil, fmt.Errorf("revoke scoped operator auto approval leases: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit scoped operator auto approval revoke: %w", err)
+	}
+	return leases, nil
 }

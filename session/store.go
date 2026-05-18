@@ -10,7 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 52
+const schemaVersion = 53
 
 type SQLiteStore struct {
 	db     *sql.DB
@@ -444,6 +444,8 @@ func (s *SQLiteStore) init() error {
 			lease_id TEXT PRIMARY KEY,
 			admin_user_id INTEGER NOT NULL DEFAULT 0,
 			chat_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
 			scope TEXT NOT NULL DEFAULT 'all',
 			reason TEXT NOT NULL DEFAULT '',
 			max_uses INTEGER NOT NULL DEFAULT 0,
@@ -459,6 +461,8 @@ func (s *SQLiteStore) init() error {
 			override_id TEXT PRIMARY KEY,
 			admin_user_id INTEGER NOT NULL DEFAULT 0,
 			chat_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
 			mode TEXT NOT NULL DEFAULT 'leased',
 			scope TEXT NOT NULL DEFAULT 'all',
 			reason TEXT NOT NULL DEFAULT '',

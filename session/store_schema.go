@@ -18,6 +18,7 @@ const schemaVersion48 = 48
 const schemaVersion49 = 49
 const schemaVersion50 = 50
 const schemaVersion51 = 51
+const schemaVersion52 = 52
 
 func existingUserTableCount(tx *sql.Tx) (int, error) {
 	var count int
@@ -44,7 +45,7 @@ func validateCurrentSchemaVersion(tx *sql.Tx, existingTables int) (int, error) {
 		return 0, fmt.Errorf("unsupported unversioned database schema; reinstall from a clean current state")
 	}
 	if currentVersion < schemaVersion {
-		if currentVersion == schemaVersion43 || currentVersion == schemaVersion44 || currentVersion == schemaVersion45 || currentVersion == schemaVersion46 || currentVersion == schemaVersion47 || currentVersion == schemaVersion48 || currentVersion == schemaVersion49 || currentVersion == schemaVersion50 || currentVersion == schemaVersion51 {
+		if currentVersion == schemaVersion43 || currentVersion == schemaVersion44 || currentVersion == schemaVersion45 || currentVersion == schemaVersion46 || currentVersion == schemaVersion47 || currentVersion == schemaVersion48 || currentVersion == schemaVersion49 || currentVersion == schemaVersion50 || currentVersion == schemaVersion51 || currentVersion == schemaVersion52 {
 			return currentVersion, nil
 		}
 		return 0, fmt.Errorf("unsupported database schema version %d (current schema version is %d); reinstall from a clean current state", currentVersion, schemaVersion)
@@ -133,6 +134,15 @@ func migrateCurrentSchemaVersion(tx *sql.Tx, currentVersion int) (int, error) {
 		if err := migrateSchemaV51ToV52(tx); err != nil {
 			return 0, err
 		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion52); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion52, err)
+		}
+		version = schemaVersion52
+	}
+	if version == schemaVersion52 {
+		if err := migrateSchemaV52ToV53(tx); err != nil {
+			return 0, err
+		}
 		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion); err != nil {
 			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion, err)
 		}
@@ -197,6 +207,8 @@ func migrateSchemaV44ToV45(tx *sql.Tx) error {
 			override_id TEXT PRIMARY KEY,
 			admin_user_id INTEGER NOT NULL DEFAULT 0,
 			chat_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
 			mode TEXT NOT NULL DEFAULT 'leased',
 			scope TEXT NOT NULL DEFAULT 'all',
 			reason TEXT NOT NULL DEFAULT '',
@@ -286,6 +298,71 @@ func migrateSchemaV50ToV51(tx *sql.Tx) error {
 func migrateSchemaV51ToV52(tx *sql.Tx) error {
 	if err := ensureTelegramCallbackMessageTables(tx); err != nil {
 		return fmt.Errorf("migrate schema v51 to v52 ensure telegram callback message ledger: %w", err)
+	}
+	return nil
+}
+
+func migrateSchemaV52ToV53(tx *sql.Tx) error {
+	if err := ensureOperatorAutoScopeColumns(tx); err != nil {
+		return fmt.Errorf("migrate schema v52 to v53 ensure auto scope columns: %w", err)
+	}
+	if err := ensureTelegramThreadTables(tx); err != nil {
+		return fmt.Errorf("migrate schema v52 to v53 ensure telegram thread tables: %w", err)
+	}
+	return nil
+}
+
+func ensureOperatorAutoScopeColumns(tx *sql.Tx) error {
+	for _, column := range []schemaColumnMigration{
+		{table: "operator_auto_approvals", column: "scope_kind", statement: `ALTER TABLE operator_auto_approvals ADD COLUMN scope_kind TEXT NOT NULL DEFAULT ''`},
+		{table: "operator_auto_approvals", column: "scope_id", statement: `ALTER TABLE operator_auto_approvals ADD COLUMN scope_id TEXT NOT NULL DEFAULT ''`},
+		{table: "operator_autonomy_overrides", column: "scope_kind", statement: `ALTER TABLE operator_autonomy_overrides ADD COLUMN scope_kind TEXT NOT NULL DEFAULT ''`},
+		{table: "operator_autonomy_overrides", column: "scope_id", statement: `ALTER TABLE operator_autonomy_overrides ADD COLUMN scope_id TEXT NOT NULL DEFAULT ''`},
+	} {
+		exists, err := schemaTableExists(tx, column.table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		if err := addSchemaColumnIfMissing(tx, column); err != nil {
+			return err
+		}
+	}
+	for _, backfill := range []struct{ table, stmt string }{
+		{table: "operator_auto_approvals", stmt: `UPDATE operator_auto_approvals
+		SET scope_kind = 'telegram_dm', scope_id = CAST(chat_id AS TEXT)
+		WHERE chat_id != 0 AND (TRIM(scope_kind) = '' OR TRIM(scope_id) = '')`},
+		{table: "operator_autonomy_overrides", stmt: `UPDATE operator_autonomy_overrides
+		SET scope_kind = 'telegram_dm', scope_id = CAST(chat_id AS TEXT)
+		WHERE chat_id != 0 AND (TRIM(scope_kind) = '' OR TRIM(scope_id) = '')`},
+	} {
+		exists, err := schemaTableExists(tx, backfill.table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		if _, err := tx.Exec(backfill.stmt); err != nil {
+			return fmt.Errorf("backfill operator auto scope columns: %w", err)
+		}
+	}
+	for _, index := range []struct{ table, stmt string }{
+		{table: "operator_auto_approvals", stmt: `CREATE INDEX IF NOT EXISTS idx_operator_auto_approvals_scope_active ON operator_auto_approvals(chat_id, scope_kind, scope_id, expires_at DESC, revoked_at, updated_at DESC)`},
+		{table: "operator_autonomy_overrides", stmt: `CREATE INDEX IF NOT EXISTS idx_operator_autonomy_overrides_scope_active ON operator_autonomy_overrides(chat_id, scope_kind, scope_id, mode, expires_at DESC, revoked_at, updated_at DESC)`},
+	} {
+		exists, err := schemaTableExists(tx, index.table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		if _, err := tx.Exec(index.stmt); err != nil {
+			return fmt.Errorf("ensure operator auto scope index: %w", err)
+		}
 	}
 	return nil
 }
@@ -596,6 +673,8 @@ func ensureTelegramThreadTables(tx *sql.Tx) error {
 			created_from_update_id INTEGER NOT NULL DEFAULT 0,
 			created_message_id INTEGER NOT NULL DEFAULT 0,
 			created_text TEXT NOT NULL DEFAULT '',
+			display_slot INTEGER NOT NULL DEFAULT 0,
+			archived_display_name TEXT NOT NULL DEFAULT '',
 			last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
 			closed_at TEXT,
 			absorb_summary TEXT NOT NULL DEFAULT '',
@@ -610,6 +689,50 @@ func ensureTelegramThreadTables(tx *sql.Tx) error {
 	} {
 		if _, err := tx.Exec(stmt); err != nil {
 			return fmt.Errorf("ensure telegram thread table: %w", err)
+		}
+	}
+	if err := ensureTelegramThreadDisplayColumns(tx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureTelegramThreadDisplayColumns(tx *sql.Tx) error {
+	exists, err := schemaTableExists(tx, "telegram_threads")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	for _, column := range []schemaColumnMigration{
+		{table: "telegram_threads", column: "display_slot", statement: `ALTER TABLE telegram_threads ADD COLUMN display_slot INTEGER NOT NULL DEFAULT 0`},
+		{table: "telegram_threads", column: "archived_display_name", statement: `ALTER TABLE telegram_threads ADD COLUMN archived_display_name TEXT NOT NULL DEFAULT ''`},
+	} {
+		if err := addSchemaColumnIfMissing(tx, column); err != nil {
+			return err
+		}
+	}
+	for _, stmt := range []string{
+		`UPDATE telegram_threads
+		SET display_slot = (
+			SELECT COUNT(*)
+			FROM telegram_threads AS open_threads
+			WHERE open_threads.chat_id = telegram_threads.chat_id
+				AND open_threads.status = 'open'
+				AND open_threads.thread_id <= telegram_threads.thread_id
+		)
+		WHERE status = 'open' AND display_slot <= 0`,
+		`UPDATE telegram_threads
+		SET display_slot = 0,
+			archived_display_name = CASE
+				WHEN TRIM(archived_display_name) != '' THEN archived_display_name
+				ELSE thread_id || '-' || SUBSTR(COALESCE(NULLIF(absorbed_at, ''), NULLIF(closed_at, ''), NULLIF(updated_at, ''), NULLIF(created_at, ''), datetime('now')), 1, 10)
+			END
+		WHERE status != 'open'`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("backfill telegram thread display columns: %w", err)
 		}
 	}
 	return nil

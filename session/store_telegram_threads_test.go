@@ -294,3 +294,44 @@ func TestRebindTelegramIngressSessionPreservesRecoverableThreadInbound(t *testin
 func coreTokenUsageZero() core.TokenUsage {
 	return core.TokenUsage{}
 }
+
+func TestTelegramThreadDisplaySlotReusesClosedSlotAndArchivesName(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Date(2026, 5, 17, 10, 0, 0, 0, time.Local)
+	first, _, err := store.CreateTelegramThreadForUpdate(1001, 2002, 301, 401, "first task", now)
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate(first) err = %v", err)
+	}
+	second, _, err := store.CreateTelegramThreadForUpdate(1001, 2002, 302, 402, "second task", now)
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate(second) err = %v", err)
+	}
+	if first.DisplaySlot != 1 || second.DisplaySlot != 2 {
+		t.Fatalf("display slots first=%d second=%d, want 1/2", first.DisplaySlot, second.DisplaySlot)
+	}
+	closed, changed, err := store.CloseTelegramThread(1001, second.ThreadID, "done", now)
+	if err != nil || !changed {
+		t.Fatalf("CloseTelegramThread() changed=%t err=%v", changed, err)
+	}
+	if closed.DisplaySlot != 0 || closed.ArchivedDisplayName != "2-2026-05-17" {
+		t.Fatalf("closed = %#v, want slot cleared and archived display name", closed)
+	}
+	third, _, err := store.CreateTelegramThreadForUpdate(1001, 2002, 303, 403, "third task", now)
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate(third) err = %v", err)
+	}
+	if third.DisplaySlot != 2 {
+		t.Fatalf("third display slot = %d, want reused slot 2", third.DisplaySlot)
+	}
+	closedAgain, changed, err := store.CloseTelegramThread(1001, third.ThreadID, "done again", now)
+	if err != nil || !changed {
+		t.Fatalf("CloseTelegramThread(third) changed=%t err=%v", changed, err)
+	}
+	if closedAgain.ArchivedDisplayName != "2-2026-05-17-1" {
+		t.Fatalf("archived name = %q, want collision suffix", closedAgain.ArchivedDisplayName)
+	}
+}
