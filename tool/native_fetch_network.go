@@ -76,11 +76,7 @@ func (p *nativeFetchNetworkPolicy) dialContext(dial nativeFetchDialContext) nati
 		if err != nil {
 			return nil, err
 		}
-		addr, ok := chooseNativeFetchDialAddr(addrs, network)
-		if !ok {
-			return nil, fmt.Errorf("fetch_url denied by sandbox network allowlist")
-		}
-		return dial(ctx, network, net.JoinHostPort(addr.String(), portRaw))
+		return dialNativeFetchAuthorizedAddrs(ctx, dial, network, addrs, portRaw)
 	}
 }
 
@@ -108,8 +104,8 @@ func (p *nativeFetchNetworkPolicy) authorizedAddrs(ctx context.Context, host str
 		if !addr.IsValid() {
 			continue
 		}
-		if p.rejectLocal && addrLooksLocal(addr) {
-			return nil, fmt.Errorf("fetch_url rejects local/private resolved destinations for non-admin principals")
+		if p.rejectLocal && nativeFetchRejectsNonAdminResolvedAddr(addr) {
+			return nil, fmt.Errorf("fetch_url rejects local/private/special resolved destinations for non-admin principals")
 		}
 		if nativeFetchRuleAllows(p.compiled, addr, port) {
 			allowed = append(allowed, addr)
@@ -132,9 +128,32 @@ func nativeFetchRuleAllows(policy sandbox.CompiledNetworkPolicy, addr netip.Addr
 	return false
 }
 
-func chooseNativeFetchDialAddr(addrs []netip.Addr, network string) (netip.Addr, bool) {
+func dialNativeFetchAuthorizedAddrs(ctx context.Context, dial nativeFetchDialContext, network string, addrs []netip.Addr, portRaw string) (net.Conn, error) {
+	candidates := nativeFetchDialCandidates(addrs, network)
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("fetch_url denied by sandbox network allowlist")
+	}
+	failures := make([]string, 0, len(candidates))
+	for _, addr := range candidates {
+		target := net.JoinHostPort(addr.String(), portRaw)
+		conn, err := dial(ctx, network, target)
+		if err == nil {
+			return conn, nil
+		}
+		failures = append(failures, fmt.Sprintf("%s: %v", target, err))
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("fetch_url dial authorized destination failed: %w", ctxErr)
+		}
+	}
+	return nil, fmt.Errorf("fetch_url dial authorized destinations failed: %s", strings.Join(failures, "; "))
+}
+
+func nativeFetchDialCandidates(addrs []netip.Addr, network string) []netip.Addr {
+	network = strings.TrimSpace(network)
+	out := make([]netip.Addr, 0, len(addrs))
 	for _, addr := range addrs {
-		switch strings.TrimSpace(network) {
+		switch network {
+		case "", "tcp":
 		case "tcp4":
 			if !addr.Is4() {
 				continue
@@ -143,10 +162,12 @@ func chooseNativeFetchDialAddr(addrs []netip.Addr, network string) (netip.Addr, 
 			if !addr.Is6() {
 				continue
 			}
+		default:
+			continue
 		}
-		return addr, true
+		out = append(out, addr)
 	}
-	return netip.Addr{}, false
+	return out
 }
 
 func resolveNativeFetchHost(ctx context.Context, host string, resolver sandbox.NetworkResolver) ([]netip.Addr, error) {
@@ -206,7 +227,15 @@ func parseFetchURLPortRaw(raw string) (uint16, error) {
 	return uint16(port), nil
 }
 
-func addrLooksLocal(addr netip.Addr) bool {
+func nativeFetchRejectsNonAdminResolvedAddr(addr netip.Addr) bool {
 	addr = addr.Unmap()
-	return addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast()
+	if !addr.IsValid() {
+		return true
+	}
+	if addr.IsUnspecified() || addr.IsLoopback() || addr.IsPrivate() || addr.IsMulticast() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() {
+		return true
+	}
+	return nativeFetchTailnetCGNATPrefix.Contains(addr)
 }
+
+var nativeFetchTailnetCGNATPrefix = netip.MustParsePrefix("100.64.0.0/10")

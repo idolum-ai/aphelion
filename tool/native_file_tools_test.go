@@ -258,6 +258,52 @@ func TestFetchURLAllowlistAllowsHostnameSharingApprovedResolvedDestination(t *te
 	}
 }
 
+func TestFetchURLAllowlistRetriesAuthorizedResolvedDestinations(t *testing.T) {
+	t.Parallel()
+
+	registry, scope, actor := newNativeFetchAllowlistRegistry(t, map[string][]netip.Addr{
+		"allowed.test": {netip.MustParseAddr("203.0.113.10"), netip.MustParseAddr("203.0.113.11")},
+	}, []string{"allowed.test:80"})
+	dialer := newNativeFetchScriptedDialer(map[string]string{
+		"203.0.113.11:80": "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 8\r\n\r\nfallback",
+	})
+	registry.nativeFetchDialContext = dialer.dial
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"http://allowed.test/"}`), scope, actor, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("fetch_url fallback err = %v", err)
+	}
+	if !strings.Contains(out, "fallback") {
+		t.Fatalf("fetch_url out = %q, want fallback response", out)
+	}
+	if got, want := strings.Join(dialer.dialed(), ","), "203.0.113.10:80,203.0.113.11:80"; got != want {
+		t.Fatalf("dial targets = %q, want %q", got, want)
+	}
+}
+
+func TestFetchURLAllowlistDialsOnlyAuthorizedResolvedDestinations(t *testing.T) {
+	t.Parallel()
+
+	registry, scope, actor := newNativeFetchAllowlistRegistry(t, map[string][]netip.Addr{
+		"mixed.test": {netip.MustParseAddr("203.0.113.10"), netip.MustParseAddr("203.0.113.11")},
+	}, []string{"203.0.113.10:80"})
+	dialer := newNativeFetchScriptedDialer(map[string]string{
+		"203.0.113.10:80": "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 7\r\n\r\nallowed",
+	})
+	registry.nativeFetchDialContext = dialer.dial
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"http://mixed.test/"}`), scope, actor, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("fetch_url mixed err = %v", err)
+	}
+	if !strings.Contains(out, "allowed") {
+		t.Fatalf("fetch_url out = %q, want allowed response", out)
+	}
+	if got, want := strings.Join(dialer.dialed(), ","), "203.0.113.10:80"; got != want {
+		t.Fatalf("dial targets = %q, want only authorized destination %q", got, want)
+	}
+}
+
 func TestFetchURLAllowlistRejectsOutsideResolvedDestination(t *testing.T) {
 	t.Parallel()
 
@@ -298,21 +344,67 @@ func TestFetchURLAllowlistRejectsRedirectToUnauthorizedDestination(t *testing.T)
 	}
 }
 
-func TestFetchURLAllowlistRejectsResolvedPrivateDestinationForNonAdmin(t *testing.T) {
+func TestFetchURLAllowlistRejectsResolvedSpecialDestinationsForNonAdmin(t *testing.T) {
 	t.Parallel()
 
-	registry, scope, actor := newNativeFetchAllowlistRegistry(t, map[string][]netip.Addr{
+	for _, tc := range []struct {
+		name string
+		host string
+		addr string
+	}{
+		{name: "unspecified_v4", host: "unspecified4.test", addr: "0.0.0.0"},
+		{name: "unspecified_v6", host: "unspecified6.test", addr: "::"},
+		{name: "multicast_v4", host: "multicast4.test", addr: "224.0.0.1"},
+		{name: "multicast_v6", host: "multicast6.test", addr: "ff02::1"},
+		{name: "loopback", host: "loop.test", addr: "127.0.0.1"},
+		{name: "link_local", host: "linklocal.test", addr: "169.254.1.1"},
+		{name: "rfc1918", host: "private.test", addr: "192.168.1.5"},
+		{name: "ula", host: "ula.test", addr: "fc00::1"},
+		{name: "tailnet_cgnat", host: "tailnet.test", addr: "100.64.0.1"},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			registry, scope, actor := newNativeFetchAllowlistRegistry(t, map[string][]netip.Addr{
+				tc.host: {netip.MustParseAddr(tc.addr)},
+			}, []string{tc.host + ":80"})
+			dialer := newNativeFetchScriptedDialer(nil)
+			registry.nativeFetchDialContext = dialer.dial
+
+			_, err := registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"http://`+tc.host+`/"}`), scope, actor, session.SessionKey{})
+			if err == nil || !strings.Contains(err.Error(), "local/private/special resolved destinations") {
+				t.Fatalf("fetch_url %s err = %v, want resolved special-destination rejection", tc.name, err)
+			}
+			if got := dialer.dialed(); len(got) != 0 {
+				t.Fatalf("dial targets = %#v, want no dial", got)
+			}
+		})
+	}
+}
+
+func TestFetchURLAllowlistAllowsResolvedPrivateDestinationForAdmin(t *testing.T) {
+	t.Parallel()
+
+	registry, scope, _ := newNativeFetchAllowlistRegistry(t, map[string][]netip.Addr{
 		"loop.test": {netip.MustParseAddr("127.0.0.1")},
 	}, []string{"loop.test:80"})
-	dialer := newNativeFetchScriptedDialer(nil)
+	admin := principal.Principal{Role: principal.RoleAdmin}
+	scope.Principal = admin
+	dialer := newNativeFetchScriptedDialer(map[string]string{
+		"127.0.0.1:80": "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\n\r\nadmin",
+	})
 	registry.nativeFetchDialContext = dialer.dial
 
-	_, err := registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"http://loop.test/"}`), scope, actor, session.SessionKey{})
-	if err == nil || !strings.Contains(err.Error(), "local/private resolved destinations") {
-		t.Fatalf("fetch_url loopback err = %v, want resolved local/private rejection", err)
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"http://loop.test/"}`), scope, admin, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("fetch_url admin private err = %v", err)
 	}
-	if got := dialer.dialed(); len(got) != 0 {
-		t.Fatalf("dial targets = %#v, want no dial", got)
+	if !strings.Contains(out, "admin") {
+		t.Fatalf("fetch_url out = %q, want admin response", out)
+	}
+	if got, want := strings.Join(dialer.dialed(), ","), "127.0.0.1:80"; got != want {
+		t.Fatalf("dial targets = %q, want %q", got, want)
 	}
 }
 

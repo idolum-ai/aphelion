@@ -214,7 +214,10 @@ destinations. If the backend is not available, execution must fail closed.
 Native `fetch_url` applies the same destination ceiling in-process. Hostname
 entries are resolved to IP/port destinations; each request and redirect must
 resolve to an allowed destination before the tool dials that address. This is
-not HTTP Host or TLS SNI identity policy.
+not HTTP Host or TLS SNI identity policy. For non-admin principals, native
+`fetch_url` also refuses host-private and special resolved destinations,
+including loopback, link-local, private/ULA, multicast, unspecified, and
+Tailnet CGNAT ranges.
 
 ## Sandbox Backends
 
