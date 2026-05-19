@@ -210,11 +210,12 @@ machine-readable mirrors.
 When a panel and a trace disagree, prefer the canonical records named by the
 trace and then check `/health diagnose`.
 
-## PR #52 Manual Smoke Checklist
+## Scoped Telegram Thread and Auto-Control Smoke Checklist
 
-Before merge/deploy of the scoped thread and auto-control integration:
+Before deploying changes that affect scoped Telegram threads, auto controls, recovery, or schema invariants:
 
 - Run `go test ./...`.
+- Run `aphelion --check-config --config ~/.aphelion/aphelion.toml` and remove unsupported watchdog restart keys if present (`recovery.watchdog.restart_cooldown`, `recovery.watchdog.max_restart_attempts`).
 - Run a build check for the service binary.
 - Take a sessions DB backup.
 - Run schema verification against a copied DB, for example `aphelion schema verify --db copied-sessions.db`.

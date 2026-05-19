@@ -781,7 +781,7 @@ level = "debug"
 	}
 }
 
-func TestLoadRejectsRemovedRecoveryWatchdogRestartFields(t *testing.T) {
+func TestLoadRejectsRemovedRecoveryWatchdogRestartFieldsWithoutCompatibilityAlias(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -802,7 +802,15 @@ max_restart_attempts = 1
 	}
 
 	_, err := Load(configPath)
-	if err == nil || !strings.Contains(err.Error(), "recovery.watchdog.restart_cooldown has been removed") {
-		t.Fatalf("Load() err = %v, want removed watchdog field rejection", err)
+	if err == nil {
+		t.Fatal("Load() err = nil, want hard rejection for removed watchdog restart fields")
+	}
+	for _, want := range []string{
+		"recovery.watchdog.restart_cooldown has been removed",
+		"stale turn recovery now interrupts scoped turns instead of restarting the service",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Load() err = %v, want %q", err, want)
+		}
 	}
 }
