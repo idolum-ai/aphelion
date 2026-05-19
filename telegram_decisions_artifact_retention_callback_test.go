@@ -225,16 +225,16 @@ func TestTelegramUserApprovalTimeoutDefaultsToThirtyMinutes(t *testing.T) {
 	if defaultUserApprovalTimeout != want {
 		t.Fatalf("defaultUserApprovalTimeout = %s, want %s", defaultUserApprovalTimeout, want)
 	}
-	if execApprover.timeout != want {
-		t.Fatalf("exec approval timeout = %s, want %s", execApprover.timeout, want)
+	if execApprover.Timeout() != want {
+		t.Fatalf("exec approval timeout = %s, want %s", execApprover.Timeout(), want)
 	}
 	if handler.artifactRetentionTimeout != want {
 		t.Fatalf("artifact retention timeout = %s, want %s", handler.artifactRetentionTimeout, want)
 	}
-	if memoryApprover.timeout != want {
-		t.Fatalf("memory delegation timeout = %s, want %s", memoryApprover.timeout, want)
+	if memoryApprover.Timeout() != want {
+		t.Fatalf("memory delegation timeout = %s, want %s", memoryApprover.Timeout(), want)
 	}
-	if snapshotApprover.timeout != want {
-		t.Fatalf("snapshot restore timeout = %s, want %s", snapshotApprover.timeout, want)
+	if snapshotApprover.Timeout() != want {
+		t.Fatalf("snapshot restore timeout = %s, want %s", snapshotApprover.Timeout(), want)
 	}
 }

@@ -25,15 +25,15 @@ func TestTelegramGlueFilesStayFocused(t *testing.T) {
 	t.Parallel()
 
 	limits := map[string]int{
-		"commands.go":                        420,
-		"commands_callback_helpers.go":       220,
-		"commands_continuation_callbacks.go": 320,
-		"commands_tailnet_callbacks.go":      180,
-		"commands_threads.go":                520,
-		"telegram_command_control.go":        1100,
-		"telegram_command_threads.go":        300,
-		"telegram_ingress_replay.go":         180,
-		"telegram_work_surfaces.go":          140,
+		"internal/telegramcommands/commands.go":                        420,
+		"internal/telegramcommands/commands_callback_helpers.go":       220,
+		"internal/telegramcommands/commands_continuation_callbacks.go": 320,
+		"internal/telegramcommands/commands_tailnet_callbacks.go":      180,
+		"internal/telegramcommands/commands_threads.go":                520,
+		"telegram_command_control.go":                                  1100,
+		"telegram_command_threads.go":                                  300,
+		"internal/telegramruntime/ingress_replay.go":                   180,
+		"internal/telegramruntime/work_surfaces.go":                    140,
 	}
 	for path, limit := range limits {
 		raw, err := os.ReadFile(path)

@@ -252,7 +252,7 @@ func TestTelegramExecApprovalConfirmationExpandShowsCommandAfterApproval(t *test
 	broker := newTelegramDecisionBroker(sender)
 	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, broker, nil)
 	approver := newTelegramExecApprover(sender, broker)
-	approver.timeout = time.Second
+	approver.SetTimeout(time.Second)
 
 	resultCh := make(chan toolpkg.ExecApprovalDecision, 1)
 	errCh := make(chan error, 1)
@@ -356,7 +356,7 @@ func TestTelegramExecApprovalExpandKeepsPendingDecisionButtons(t *testing.T) {
 	broker := newTelegramDecisionBroker(sender)
 	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, broker, nil)
 	approver := newTelegramExecApprover(sender, broker)
-	approver.timeout = time.Second
+	approver.SetTimeout(time.Second)
 
 	resultCh := make(chan toolpkg.ExecApprovalDecision, 1)
 	errCh := make(chan error, 1)
@@ -543,7 +543,7 @@ func TestTelegramExecApproverTimesOutToDeny(t *testing.T) {
 	sender := &decisionTestSender{}
 	broker := newTelegramDecisionBroker(sender)
 	approver := newTelegramExecApprover(sender, broker)
-	approver.timeout = 10 * time.Millisecond
+	approver.SetTimeout(10 * time.Millisecond)
 
 	decisionResult, err := approver.ConfirmExec(context.Background(), toolpkg.ExecApprovalRequest{
 		Principal:  principal.Principal{Role: principal.RoleAdmin},

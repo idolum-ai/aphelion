@@ -1,0 +1,15 @@
+[Unit]
+Description=Aphelion Telegram Assistant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKDIR@
+ExecStart=@EXEC_PATH@ --config @CONFIG_PATH@
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=78
+
+[Install]
+WantedBy=default.target

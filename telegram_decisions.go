@@ -4,291 +4,216 @@ package main
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/decision"
+	"github.com/idolum-ai/aphelion/internal/telegramdecision"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
 const (
-	defaultInterruptTimeout = 30 * time.Second
-	defaultStopWordTimeout  = 15 * time.Second
-
-	// User approval prompts should survive normal operator latency on Telegram.
-	// Keep busy/interrupt routing short, but give approval-style decisions enough
-	// time to be reviewed without silently failing closed.
-	defaultUserApprovalTimeout      = 30 * time.Minute
-	defaultExecApprovalTimeout      = defaultUserApprovalTimeout
-	defaultArtifactRetentionTimeout = defaultUserApprovalTimeout
-	defaultMemoryDelegationTimeout  = defaultUserApprovalTimeout
-	defaultSnapshotRestoreTimeout   = defaultUserApprovalTimeout
+	defaultInterruptTimeout         = telegramdecision.DefaultInterruptTimeout
+	defaultStopWordTimeout          = telegramdecision.DefaultStopWordTimeout
+	defaultUserApprovalTimeout      = telegramdecision.DefaultUserApprovalTimeout
+	defaultExecApprovalTimeout      = telegramdecision.DefaultExecApprovalTimeout
+	defaultArtifactRetentionTimeout = telegramdecision.DefaultArtifactRetentionTimeout
+	defaultMemoryDelegationTimeout  = telegramdecision.DefaultMemoryDelegationTimeout
+	defaultSnapshotRestoreTimeout   = telegramdecision.DefaultSnapshotRestoreTimeout
 )
 
-type telegramDecisionSender interface {
-	SendInlineKeyboard(ctx context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error)
-	EditMessageText(ctx context.Context, chatID int64, messageID int64, text string, parseMode string) error
-	DeleteMessage(ctx context.Context, chatID int64, messageID int64) error
-	AnswerCallbackQuery(ctx context.Context, id string, text string) error
-}
-
-type telegramDecisionKeyboardEditor interface {
-	EditMessageTextWithInlineKeyboard(ctx context.Context, chatID int64, messageID int64, text string, parseMode string, rows [][]telegram.InlineButton) error
-}
-
-type telegramDecisionKeyboardClearer interface {
-	EditMessageTextWithoutInlineKeyboard(ctx context.Context, chatID int64, messageID int64, text string, parseMode string) error
-}
-
-type telegramDecisionRouter interface {
-	Status(chatID int64) core.SessionStatus
-	Stop(chatID int64) core.StopResult
-	Route(ctx context.Context, msg core.InboundMessage)
-}
-
-type telegramDecisionMessageStatusRouter interface {
-	StatusForMessage(msg core.InboundMessage) core.SessionStatus
-}
-
-type telegramDecisionMessageStopRouter interface {
-	StopForMessage(msg core.InboundMessage) core.StopResult
-}
-
-type telegramPermanentArtifactKeeper interface {
-	KeepTelegramArtifactsPermanently(ctx context.Context, msg core.InboundMessage) error
-}
-
-func editDecisionMessageClearingInlineKeyboard(ctx context.Context, sender telegramDecisionSender, chatID int64, messageID int64, text string) error {
-	if clearer, ok := sender.(telegramDecisionKeyboardClearer); ok {
-		return clearer.EditMessageTextWithoutInlineKeyboard(ctx, chatID, messageID, text, "")
-	}
-	return sender.EditMessageText(ctx, chatID, messageID, text, "")
-}
+type telegramDecisionSender = telegramdecision.DecisionSender
+type telegramDecisionKeyboardEditor = telegramdecision.DecisionKeyboardEditor
+type telegramDecisionKeyboardClearer = telegramdecision.DecisionKeyboardClearer
+type telegramDecisionRouter = telegramdecision.Router
+type telegramDecisionMessageStatusRouter = telegramdecision.MessageStatusRouter
+type telegramDecisionMessageStopRouter = telegramdecision.MessageStopRouter
+type telegramPermanentArtifactKeeper = telegramdecision.PermanentArtifactKeeper
+type telegramDecisionSummaryFunc = telegramdecision.SummaryFunc
 
 type telegramDecisionHandler struct {
+	*telegramdecision.Handler
 	sender                   telegramDecisionSender
-	router                   telegramDecisionRouter
 	broker                   *decision.Broker
 	store                    *session.SQLiteStore
-	artifactRetentionKeeper  telegramPermanentArtifactKeeper
+	router                   telegramDecisionRouter
 	interruptTimeout         time.Duration
 	stopWordTimeout          time.Duration
 	artifactRetentionTimeout time.Duration
 }
 
+func editDecisionMessageClearingInlineKeyboard(ctx context.Context, sender telegramDecisionSender, chatID int64, messageID int64, text string) error {
+	return telegramdecision.EditDecisionMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text)
+}
+
 func newTelegramDecisionHandler(sender telegramDecisionSender, router telegramDecisionRouter, broker *decision.Broker, store *session.SQLiteStore, keepers ...telegramPermanentArtifactKeeper) *telegramDecisionHandler {
-	var keeper telegramPermanentArtifactKeeper
-	if len(keepers) > 0 {
-		keeper = keepers[0]
-	}
+	inner := telegramdecision.NewHandler(sender, router, broker, store, keepers...)
 	return &telegramDecisionHandler{
+		Handler:                  inner,
 		sender:                   sender,
-		router:                   router,
 		broker:                   broker,
 		store:                    store,
-		artifactRetentionKeeper:  keeper,
+		router:                   router,
 		interruptTimeout:         defaultInterruptTimeout,
 		stopWordTimeout:          defaultStopWordTimeout,
 		artifactRetentionTimeout: defaultArtifactRetentionTimeout,
 	}
 }
 
-type telegramDecisionSummaryFunc func(context.Context, decision.PendingDecision) string
-
 func newTelegramDecisionBroker(sender telegramDecisionSender, opts ...decision.BrokerOption) *decision.Broker {
-	return newTelegramDecisionBrokerWithSummary(sender, nil, opts...)
+	return telegramdecision.NewBroker(sender, opts...)
 }
 
 func newTelegramDecisionBrokerWithSummary(sender telegramDecisionSender, summarize telegramDecisionSummaryFunc, opts ...decision.BrokerOption) *decision.Broker {
-	return decision.NewBroker(func(ctx context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
-		text := renderPendingDecisionSummary(pending)
-		if summarize != nil {
-			if summary := strings.TrimSpace(summarize(ctx, pending)); summary != "" {
-				text = summary
-			}
-		}
-		msgID, err := sender.SendInlineKeyboard(ctx, pending.ChatID, text, inlineButtonRows(pending), replyToMessageID(pending.MessageID))
-		if err != nil {
-			return decision.Delivery{}, err
-		}
-		return decision.Delivery{MessageID: msgID}, nil
-	}, opts...)
+	return telegramdecision.NewBrokerWithSummary(sender, summarize, opts...)
 }
 
-func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb telegram.CallbackQuery) error {
-	if h == nil || h.sender == nil || h.broker == nil {
-		return nil
-	}
-	if eventID, action, ok := core.DecodeReviewEventCallbackData(cb.Data); ok {
-		return h.handleReviewEventCallback(ctx, cb, eventID, action)
-	}
-	if messageID, ok := decodePermanentArtifactKeepCallbackData(cb.Data); ok {
-		return h.handlePermanentArtifactKeepCallback(ctx, cb, messageID)
-	}
-	id, choice, ok := decision.DecodeCallbackData(cb.Data)
-	if !ok {
-		if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
-			return err
-		}
-		return nil
-	}
-	actor := callbackDecisionActor(cb)
-	if choice == "expand" || choice == "collapse" {
-		pending, found := h.broker.PeekCallback(id, actor)
-		resolved := false
-		if !found {
-			pending, found = h.broker.PeekResolvedCallback(id, actor)
-			resolved = found
-		}
-		if !found {
-			if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, "This approval is no longer active. Use the newest prompt."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
-				return err
-			}
-			return nil
-		}
-		chatID := int64(0)
-		messageID := int64(0)
-		if cb.Message != nil {
-			messageID = cb.Message.MessageID
-			if cb.Message.Chat != nil {
-				chatID = cb.Message.Chat.ID
-			}
-		}
-		if chatID == 0 {
-			chatID = pending.ChatID
-		}
-		if messageID != 0 {
-			expanded := choice == "expand"
-			text := renderPendingDecisionSummary(pending)
-			rows := inlineButtonRowsExpanded(pending, expanded)
-			if expanded {
-				text = renderPendingDecisionExpanded(pending)
-			}
-			if resolved {
-				text = approvedDecisionConfirmationText(approvedDecisionConfirmationLabel(pending.Kind), pending.ID, pending.Kind, pending.Details)
-				rows = approvedDecisionConfirmationRowsExpanded(pending.ID, pending.Details, expanded)
-				if expanded {
-					text = renderPendingDecisionExpanded(pending)
-				}
-			}
-			if editor, ok := h.sender.(telegramDecisionKeyboardEditor); ok && len(rows) > 0 {
-				if err := editor.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, text, "", rows); err != nil {
-					return err
-				}
-			} else if err := editDecisionMessageClearingInlineKeyboard(ctx, h.sender, chatID, messageID, text); err != nil {
-				return err
-			}
-		}
-		if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
-			return err
-		}
-		return nil
-	}
-	answerText := ""
-	pending, pendingFound := h.broker.PeekCallback(id, actor)
-	if pendingFound && pending.LoadedFromDurable && !h.canResumeRestartLoadedDecision(pending) {
-		if _, _, err := h.broker.DetachDecision(ctx, id, "restart_loaded_non_resumable"); err != nil {
-			return err
-		}
-		answerText = "This approval is no longer active. Use the newest prompt."
-		h.editStaleDecisionCallback(ctx, cb, answerText)
-		if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, answerText); err != nil && !telegram.IsStaleCallbackQueryError(err) {
-			return err
-		}
-		return nil
-	}
-	resolution := h.broker.ResolveCallbackDetailed(id, choice, actor)
-	if !resolution.Resolved {
-		answerText = "This approval is no longer active. Use the newest prompt."
-	}
-	if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, answerText); err != nil && !telegram.IsStaleCallbackQueryError(err) {
-		return err
-	}
-	if resolution.Resolved && resolution.LoadedFromDurable {
-		if err := h.resumeRestartLoadedDecision(ctx, resolution.Pending, resolution.Choice); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (h *telegramDecisionHandler) canResumeRestartLoadedDecision(pending decision.PendingDecision) bool {
-	if h == nil || h.store == nil {
-		return false
-	}
-	ownerKey := strings.TrimSpace(pending.OwnerKey)
-	if ownerKey == "" {
-		return false
-	}
-	switch pending.Kind {
-	case decision.KindInterrupt, decision.KindStopWord:
-		_, err := h.store.PendingBusyDecision(ownerKey)
-		return err == nil
-	case decision.KindArtifactRetention:
-		record, err := h.store.PendingArtifactRetention(ownerKey)
-		if err != nil || record == nil {
-			return false
-		}
-		msg, err := pendingArtifactRetentionMessage(*record)
-		return err == nil && hasArtifactRetentionApprovalCandidates(msg)
-	default:
-		return false
-	}
-}
-
-func (h *telegramDecisionHandler) resumeRestartLoadedDecision(ctx context.Context, pending decision.PendingDecision, choice string) error {
+func (h *telegramDecisionHandler) syncDecisionHandler() *telegramdecision.Handler {
 	if h == nil {
 		return nil
 	}
-	result := decision.Result{
-		DecisionID: pending.ID,
-		Choice:     strings.TrimSpace(choice),
-		Delivery:   pending.Delivery,
+	if h.Handler == nil {
+		h.Handler = telegramdecision.NewHandler(h.sender, h.router, h.broker, h.store)
 	}
-	switch pending.Kind {
-	case decision.KindInterrupt, decision.KindStopWord:
-		return h.resumePendingBusyDecision(ctx, pending.OwnerKey, result)
-	case decision.KindArtifactRetention:
-		return h.resumePendingArtifactRetention(ctx, pending.OwnerKey, result)
-	default:
+	if h.Handler != nil {
+		h.Handler.SetRouter(h.router)
+		h.Handler.SetInterruptTimeout(h.interruptTimeout)
+		h.Handler.SetStopWordTimeout(h.stopWordTimeout)
+		h.Handler.SetArtifactRetentionTimeout(h.artifactRetentionTimeout)
+	}
+	return h.Handler
+}
+
+func (h *telegramDecisionHandler) SetRouter(router telegramDecisionRouter) {
+	if h != nil {
+		h.router = router
+		if h.Handler != nil {
+			h.Handler.SetRouter(router)
+		}
+	}
+}
+
+func (h *telegramDecisionHandler) SetInterruptTimeout(timeout time.Duration) {
+	if h != nil {
+		h.interruptTimeout = timeout
+		if h.Handler != nil {
+			h.Handler.SetInterruptTimeout(timeout)
+		}
+	}
+}
+
+func (h *telegramDecisionHandler) SetStopWordTimeout(timeout time.Duration) {
+	if h != nil {
+		h.stopWordTimeout = timeout
+		if h.Handler != nil {
+			h.Handler.SetStopWordTimeout(timeout)
+		}
+	}
+}
+
+func (h *telegramDecisionHandler) SetArtifactRetentionTimeout(timeout time.Duration) {
+	if h != nil {
+		h.artifactRetentionTimeout = timeout
+		if h.Handler != nil {
+			h.Handler.SetArtifactRetentionTimeout(timeout)
+		}
+	}
+}
+
+func (h *telegramDecisionHandler) InterruptTimeout() time.Duration {
+	if h == nil {
+		return 0
+	}
+	return h.interruptTimeout
+}
+
+func (h *telegramDecisionHandler) StopWordTimeout() time.Duration {
+	if h == nil {
+		return 0
+	}
+	return h.stopWordTimeout
+}
+
+func (h *telegramDecisionHandler) ArtifactRetentionTimeout() time.Duration {
+	if h == nil {
+		return 0
+	}
+	return h.artifactRetentionTimeout
+}
+
+func (h *telegramDecisionHandler) HandleBusyMessage(ctx context.Context, msg core.InboundMessage) (bool, error) {
+	inner := h.syncDecisionHandler()
+	if inner == nil {
+		return false, nil
+	}
+	return inner.HandleBusyMessage(ctx, msg)
+}
+
+func (h *telegramDecisionHandler) HandleArtifactRetentionMessage(ctx context.Context, msg core.InboundMessage) (bool, error) {
+	inner := h.syncDecisionHandler()
+	if inner == nil {
+		return false, nil
+	}
+	return inner.HandleArtifactRetentionMessage(ctx, msg)
+}
+
+func (h *telegramDecisionHandler) ResumePendingBusyDecision(ctx context.Context, ownerKey string, result decision.Result) error {
+	inner := h.syncDecisionHandler()
+	if inner == nil {
 		return nil
 	}
+	return inner.ResumePendingBusyDecision(ctx, ownerKey, result)
 }
 
-func (h *telegramDecisionHandler) editStaleDecisionCallback(ctx context.Context, cb telegram.CallbackQuery, text string) {
-	if h == nil || h.sender == nil || cb.Message == nil || cb.Message.Chat == nil || cb.Message.MessageID == 0 {
-		return
+func (h *telegramDecisionHandler) resumePendingBusyDecision(ctx context.Context, ownerKey string, result decision.Result) error {
+	return h.ResumePendingBusyDecision(ctx, ownerKey, result)
+}
+
+func (h *telegramDecisionHandler) ResumePendingArtifactRetention(ctx context.Context, ownerKey string, result decision.Result) error {
+	inner := h.syncDecisionHandler()
+	if inner == nil {
+		return nil
 	}
-	_ = editDecisionMessageClearingInlineKeyboard(ctx, h.sender, cb.Message.Chat.ID, cb.Message.MessageID, text)
+	return inner.ResumePendingArtifactRetention(ctx, ownerKey, result)
 }
 
-func callbackChatID(cb telegram.CallbackQuery) int64 {
-	if cb.Message != nil && cb.Message.Chat != nil {
-		return cb.Message.Chat.ID
+func (h *telegramDecisionHandler) resumePendingArtifactRetention(ctx context.Context, ownerKey string, result decision.Result) error {
+	return h.ResumePendingArtifactRetention(ctx, ownerKey, result)
+}
+
+func (h *telegramDecisionHandler) ReconcileRestartLoadedDecisions(ctx context.Context) error {
+	inner := h.syncDecisionHandler()
+	if inner == nil {
+		return nil
 	}
-	return 0
+	return inner.ReconcileRestartLoadedDecisions(ctx)
 }
 
-func callbackSenderID(cb telegram.CallbackQuery) int64 {
-	if cb.From != nil {
-		return cb.From.ID
+func (h *telegramDecisionHandler) DecisionResumeStatus(msg core.InboundMessage, surface string) (telegramDecisionResumeStatus, error) {
+	inner := h.syncDecisionHandler()
+	if inner == nil {
+		return telegramDecisionResumeMissing, nil
 	}
-	return 0
+	return inner.DecisionResumeStatus(msg, surface)
 }
 
-func callbackDecisionActor(cb telegram.CallbackQuery) decision.CallbackActor {
-	return decision.CallbackActor{
-		TelegramUserID: callbackSenderID(cb),
-		ChatID:         callbackChatID(cb),
-		MessageID:      callbackMessageID(cb),
+func (h *telegramDecisionHandler) decisionResumeStatus(msg core.InboundMessage, surface string) (telegramDecisionResumeStatus, error) {
+	return h.DecisionResumeStatus(msg, surface)
+}
+
+func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb telegram.CallbackQuery) error {
+	if eventID, action, ok := core.DecodeReviewEventCallbackData(cb.Data); ok {
+		return h.handleReviewEventCallback(ctx, cb, eventID, action)
 	}
+	if h == nil || h.Handler == nil {
+		return nil
+	}
+	return h.Handler.HandleCallbackQuery(ctx, cb)
 }
 
+func callbackChatID(cb telegram.CallbackQuery) int64   { return telegramdecision.CallbackChatID(cb) }
+func callbackSenderID(cb telegram.CallbackQuery) int64 { return telegramdecision.CallbackSenderID(cb) }
 func callbackMessageID(cb telegram.CallbackQuery) int64 {
-	if cb.Message != nil {
-		return cb.Message.MessageID
-	}
-	return 0
+	return telegramdecision.CallbackMessageID(cb)
 }

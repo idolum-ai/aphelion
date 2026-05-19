@@ -109,5 +109,9 @@ func exitCode(err error) int {
 	if errors.As(err, &cfgErr) {
 		return exitCodeConfig
 	}
+	var configStartup interface{ IsConfigStartupError() }
+	if errors.As(err, &configStartup) {
+		return exitCodeConfig
+	}
 	return exitCodeFailure
 }
