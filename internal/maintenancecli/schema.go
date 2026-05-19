@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package maintenancecli
 
 import (
 	"database/sql"
@@ -11,7 +11,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-func runSchemaMaintenanceCommand(args []string) error {
+func RunSchemaMaintenanceCommand(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: schema verify --db <sessions.db>")
 	}

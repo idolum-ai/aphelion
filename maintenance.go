@@ -5,6 +5,8 @@ package main
 import (
 	"embed"
 	"os"
+
+	"github.com/idolum-ai/aphelion/internal/maintenancecli"
 )
 
 //go:embed defaults/agent/* defaults/agent/memory/*
@@ -78,7 +80,7 @@ func runMaintenanceCommand(args []string) (bool, error) {
 	case "sandbox-net":
 		return true, runSandboxNetCommand(args[1:])
 	case "schema":
-		return true, runSchemaMaintenanceCommand(args[1:])
+		return true, maintenancecli.RunSchemaMaintenanceCommand(args[1:])
 	case "telegram-child-bot":
 		return true, runTelegramChildBotCommand(args[1:])
 	case "telegram-threads":
