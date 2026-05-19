@@ -103,6 +103,73 @@ Promotion should be continuity-preserving, not a copy-and-forget migration:
 - raw backing principal IDs should stay in details, health trace, and
   maintenance surfaces.
 
+## Absorb Review Threads
+
+Promotion needs a symmetric return path. If `/threads` can promote a lane into
+`/agents`, `/agents` should be able to absorb a promoted agent back into an
+ordinary conversation lane.
+
+The source thread may no longer exist, may already be absorbed, or may no longer
+be the right place for review. The simpler rule is:
+
+> Absorbing a promoted agent creates a new absorb review thread using the next
+> available lowest visible thread number.
+
+That thread is not a continuation of the child's work. It is a parent-facing
+review session whose job is to decide what, if anything, should be incorporated
+into the parent.
+
+```text
+Thread 1: Absorb Inbox Triage
+
+I am reviewing Inbox Triage for possible incorporation.
+
+Available roll-up material:
+- outcome summary
+- memory candidates
+- recurring workflow candidates
+- active grants
+- artifacts
+- open questions
+- risk notes
+
+What should we keep, forget, revoke, or fold into parent memory?
+```
+
+This gives the parent persona a bounded semantic session for judgment without
+silently merging child context into parent memory, policy, or authority. The
+conversation can use natural language:
+
+```text
+Keep the receipts workflow and the lesson about sender heuristics,
+but revoke mail access and do not keep the daily wake.
+```
+
+The runtime should compile the conversation into a typed absorb plan:
+
+```text
+Absorb plan for Inbox Triage
+
+Roll up:
+- outcome summary to Thread 1
+- 2 memory candidates for review
+- artifact index with 4 reports
+- open question about receipts
+
+Teardown:
+- revoke read-only mail grant
+- cancel daily wake
+- archive child as absorbed
+
+[Apply] [Edit] [Cancel] [Details]
+```
+
+The absorb review thread can then be absorbed into the main chat like any other
+side thread after the plan is applied or canceled. The key invariant remains:
+review text is presentation and deliberation; incorporation happens only through
+typed memory candidates, capability disposition records, wake teardown records,
+artifact indexes, and child lifecycle state.
+
 ## Proposed Vocabulary
 
 - **Thread**: an operator-visible work lane with a durable session scope, queue,
@@ -122,6 +189,9 @@ Promotion should be continuity-preserving, not a copy-and-forget migration:
 - **Promoted agent**: the operator-facing `/agents` card created from a thread
   when durable controls become useful. Internally it may be backed by a durable
   thread profile, a durable-agent record, or another backing principal.
+- **Absorb review thread**: a fresh side thread created when a promoted agent is
+  being reintegrated. It gives the parent persona a bounded conversation for
+  choosing memory, policy, artifact, wake, grant, and teardown outcomes.
 
 The operator should mostly see threads. Backing principals and legacy durable
 agent IDs can remain visible in details, health traces, CLI maintenance, and
@@ -191,6 +261,19 @@ Buttons are projections of typed state. They should not be treated as command
 shortcuts that bypass parsing or authority checks. Callback payloads should carry
 canonical IDs, and every action should re-read current state before mutating it.
 
+When the work should return to parent context, `/agents` should offer `Absorb`:
+
+```text
+Inbox Triage
+
+[Continue] [Wake] [Access] [Policy] [Absorb]
+```
+
+`Absorb` creates a fresh absorb review thread. The parent can discuss the child
+context there, then apply a typed absorb plan. This is the path for semantic
+incorporation into parent-facing sessions without dumping a child transcript
+into the main chat.
+
 ## Attachment Model
 
 A durable thread can be represented as a small base lane plus optional typed
@@ -206,6 +289,7 @@ attachments:
 | Thread binding | Telegram group, adapter, isolated process, Tailnet remote | canonical for declared binding |
 | Capability records | Requests, reviews, grants, invocations | canonical |
 | Execution events | Runtime evidence for wake, delivery, tool use, failure, recovery | canonical |
+| Absorb plan | Roll-up choices, memory candidates, grant disposition, wake teardown, archive action | canonical after approval |
 
 The important constraint is that text remains presentation. A message like
 "wake every morning" proposes a durable change; it does not become authority
@@ -258,6 +342,13 @@ features not available to a plain local side thread.
   thread-backed runtime binding, not as a separate everyday object.
 - Absorbing or closing a durable thread must have explicit semantics for wakes,
   bindings, pending approvals, capability grants, and remote enrollment.
+- Absorbing a promoted agent should create an absorb review thread by default,
+  using the next available lowest visible thread number.
+- Parent-child reintegration should be conversational before it is executable:
+  discuss first, compile a typed absorb plan, then apply or cancel.
+- Absorb must not silently transfer child capabilities to the parent. Grants
+  should default toward revoke, expire, or mark-stale unless the operator
+  explicitly approves a new parent-scoped grant.
 
 ## Migration Shape
 
@@ -273,11 +364,16 @@ This should not be a flag-day deletion of durable agents. A safer sequence:
 5. Add a canonical thread-profile/policy surface for local durable threads.
 6. Let new local or scheduled durable work attach to a thread profile before it
    creates any backing durable-agent record.
-7. Introduce an internal backing-principal link for cases that need isolated
+7. Add an `Absorb` action to promoted agent cards that creates a fresh absorb
+   review thread with bounded child context and roll-up material.
+8. Add a typed absorb-plan surface for memory candidates, artifact indexes,
+   grant disposition, wake teardown, binding disposition, and child archive
+   state.
+9. Introduce an internal backing-principal link for cases that need isolated
    sandbox identity, capability grants, or Tailnet enrollment.
-8. Project legacy durable-agent records as backing principals attached to
+10. Project legacy durable-agent records as backing principals attached to
    operator-visible threads where possible.
-9. Keep durable-agent CLI commands for maintenance and migration until the new
+11. Keep durable-agent CLI commands for maintenance and migration until the new
    thread-native surfaces cover the operational need.
 
 ## Non-Goals
@@ -304,6 +400,14 @@ This should not be a flag-day deletion of durable agents. A safer sequence:
   after the promoted agent is created?
 - Should `/agents` replace `/threads` for promoted work entirely, or should
   `/threads` show promoted backlinks in a compact read-only form?
+- Should absorb review threads always use the next available lowest visible
+  thread number, or should there be a setting for main-chat review instead?
+- What is the exact schema boundary between an absorb review conversation and
+  the typed absorb plan it proposes?
+- Which roll-up candidates should be generated automatically, and which should
+  only appear after the parent asks for them?
+- What child states block absorb entirely, such as active remote execution,
+  unacknowledged control-plane enrollment, or destructive pending approvals?
 - How should group-bound threads be represented when the Telegram group itself
   has a durable transcript and independent reply policy?
 - Which legacy durable-agent fields belong directly on thread profile/policy,
@@ -320,6 +424,10 @@ The direction is working if:
   controls;
 - `/agents` becomes a state-driven durable work board rather than a setup-heavy
   registry;
+- absorbing a promoted agent starts a focused parent review thread instead of
+  silently merging child context;
+- the absorb review conversation compiles to an explicit plan for memory,
+  artifacts, grants, wakes, bindings, and archive state;
 - `/status` and `/health trace` can point from visible thread to typed authority
   and execution evidence in one hop;
 - ordinary threads do not inherit ambient capability;
