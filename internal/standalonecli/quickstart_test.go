@@ -186,6 +186,16 @@ func TestRunQuickstartDetectsTelegramAdmin(t *testing.T) {
 	}
 }
 
+func TestQuickstartServiceTemplateMatchesDeployTemplate(t *testing.T) {
+	rootTemplate, err := os.ReadFile("../../deploy/aphelion.service")
+	if err != nil {
+		t.Fatalf("read root deploy service template: %v", err)
+	}
+	if string(rootTemplate) != aphelionServiceTemplate {
+		t.Fatalf("embedded quickstart service template differs from deploy/aphelion.service; update both together")
+	}
+}
+
 func TestRunQuickstartInstallServiceUsesDeploySequence(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg"))
