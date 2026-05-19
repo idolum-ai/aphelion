@@ -73,13 +73,13 @@ func handleTelegramAutoCommand(ctx context.Context, sender commandSender, router
 		msg.TelegramThreadID = threadID
 		msg.OriginDetail = "thread_display:" + strconv.FormatInt(visibleThreadID, 10)
 		if strings.TrimSpace(remaining) == "" {
-			return sendAutoHomePanel(ctx, sender, msg)
+			return sendAutoHomePanel(ctx, sender, router, msg)
 		}
 		target, rest = nextCommandToken(remaining)
 	}
 	switch target {
 	case "", "home", autoActionRefresh:
-		return sendAutoHomePanel(ctx, sender, msg)
+		return sendAutoHomePanel(ctx, sender, router, msg)
 	case autoSurfaceMode:
 		if strings.TrimSpace(rest) == "" || strings.EqualFold(strings.TrimSpace(rest), "status") {
 			return sendAutoModePanel(ctx, sender, router, msg)
@@ -161,9 +161,24 @@ func sendAutoCommandText(ctx context.Context, sender commandSender, msg core.Inb
 	return true, err
 }
 
-func sendAutoHomePanel(ctx context.Context, sender commandSender, msg core.InboundMessage) (bool, error) {
-	_, err := sender.SendInlineKeyboard(ctx, msg.ChatID, prefixAutoThreadPanel(msg, renderAutoHomePanel()), autoHomeRows(), replyToMessageID(msg.MessageID))
+func sendAutoHomePanel(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {
+	err := sendAutoInlineKeyboard(ctx, sender, router, msg, prefixAutoThreadPanel(msg, renderAutoHomePanel()), autoHomeRows(), replyToMessageID(msg.MessageID))
 	return true, err
+}
+
+func sendAutoInlineKeyboard(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage, text string, rows [][]telegram.InlineButton, replyTo *int64) error {
+	messageID, err := sender.SendInlineKeyboard(ctx, msg.ChatID, strings.TrimSpace(text), rows, replyTo)
+	if err != nil {
+		return err
+	}
+	if msg.TelegramThreadID > 0 && messageID > 0 {
+		if recorder, ok := router.(commandThreadCallbackRecorder); ok {
+			if err := recorder.RecordTelegramThreadCallbackMessage(msg.ChatID, msg.TelegramThreadID, messageID, "auto"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func prefixAutoThreadPanel(msg core.InboundMessage, text string) string {
@@ -185,7 +200,7 @@ func sendAutoModePanel(ctx context.Context, sender commandSender, router command
 		return true, err
 	}
 	text := prefixAutoThreadPanel(msg, face.RenderTelegramAutonomyStatus(snapshot))
-	_, err = sender.SendInlineKeyboard(ctx, msg.ChatID, text, autoModeRows(), replyToMessageID(msg.MessageID))
+	err = sendAutoInlineKeyboard(ctx, sender, router, msg, text, autoModeRows(), replyToMessageID(msg.MessageID))
 	return true, err
 }
 
@@ -195,7 +210,7 @@ func sendAutoApprovalsPanel(ctx context.Context, sender commandSender, router co
 		log.Printf("WARN auto approvals status rejected chat_id=%d sender_id=%d err=%v", msg.ChatID, msg.SenderID, err)
 		text = renderAutoApprovalCommandError(err)
 	}
-	_, sendErr := sender.SendInlineKeyboard(ctx, msg.ChatID, strings.TrimSpace(text), autoApprovalsRows(), replyToMessageID(msg.MessageID))
+	sendErr := sendAutoInlineKeyboard(ctx, sender, router, msg, prefixAutoThreadPanel(msg, text), autoApprovalsRows(), replyToMessageID(msg.MessageID))
 	return true, sendErr
 }
 
@@ -204,8 +219,8 @@ func sendAutoLimitsPanel(ctx context.Context, sender commandSender, router comma
 	if err != nil {
 		return true, err
 	}
-	text := face.RenderTelegramAutoLimits(snapshot)
-	_, err = sender.SendInlineKeyboard(ctx, msg.ChatID, text, autoLimitsRows(), replyToMessageID(msg.MessageID))
+	text := prefixAutoThreadPanel(msg, face.RenderTelegramAutoLimits(snapshot))
+	err = sendAutoInlineKeyboard(ctx, sender, router, msg, text, autoLimitsRows(), replyToMessageID(msg.MessageID))
 	return true, err
 }
 
@@ -376,7 +391,14 @@ func handleAutoCallback(ctx context.Context, sender commandCallbackSender, route
 		return true, err
 	}
 
-	text, rows, err := renderAutoCallbackResult(ctx, router, chatID, senderID, surface, action)
+	msg, err := telegramCallbackTargetMessage(router, cb)
+	if err != nil {
+		return true, err
+	}
+	msg.ChatID = chatID
+	msg.MessageID = messageID
+	msg.SenderID = senderID
+	text, rows, err := renderAutoCallbackResult(ctx, router, msg, surface, action)
 	if err != nil {
 		return true, err
 	}
@@ -386,34 +408,34 @@ func handleAutoCallback(ctx context.Context, sender commandCallbackSender, route
 	return true, nil
 }
 
-func renderAutoCallbackResult(ctx context.Context, router commandRouter, chatID int64, senderID int64, surface string, action string) (string, [][]telegram.InlineButton, error) {
+func renderAutoCallbackResult(ctx context.Context, router commandRouter, msg core.InboundMessage, surface string, action string) (string, [][]telegram.InlineButton, error) {
 	switch surface {
 	case autoSurfaceHome:
-		return renderAutoHomePanel(), autoHomeRows(), nil
+		return prefixAutoThreadPanel(msg, renderAutoHomePanel()), autoHomeRows(), nil
 	case autoSurfaceMode:
-		text, err := renderAutoModeCallbackText(ctx, router, chatID, senderID, action)
-		return text, autoModeRows(), err
+		text, err := renderAutoModeCallbackText(ctx, router, msg, action)
+		return prefixAutoThreadPanel(msg, text), autoModeRows(), err
 	case autoSurfaceApprovals:
-		text, err := renderAutoApprovalsCallbackText(ctx, router, chatID, senderID, action)
-		return text, autoApprovalsRows(), err
+		text, err := renderAutoApprovalsCallbackText(ctx, router, msg, action)
+		return prefixAutoThreadPanel(msg, text), autoApprovalsRows(), err
 	case autoSurfaceLimits:
-		text, err := renderAutoLimitsCallbackText(router, chatID, senderID)
-		return text, autoLimitsRows(), err
+		text, err := renderAutoLimitsCallbackText(router, msg)
+		return prefixAutoThreadPanel(msg, text), autoLimitsRows(), err
 	default:
-		return renderAutoHomePanel(), autoHomeRows(), nil
+		return prefixAutoThreadPanel(msg, renderAutoHomePanel()), autoHomeRows(), nil
 	}
 }
 
-func renderAutoModeCallbackText(ctx context.Context, router commandRouter, chatID int64, senderID int64, action string) (string, error) {
+func renderAutoModeCallbackText(ctx context.Context, router commandRouter, msg core.InboundMessage, action string) (string, error) {
 	switch action {
 	case autoActionShow, autoActionRefresh:
-		snapshot, err := router.AutonomyStatus(chatID, senderID)
+		snapshot, err := autonomyStatusForAutoCommand(router, msg)
 		if err != nil {
 			return "", err
 		}
 		return face.RenderTelegramAutonomyStatus(snapshot), nil
 	case autoActionDouble:
-		text, err := router.ConfigureAutonomy(ctx, chatID, senderID, autoActionDouble)
+		text, err := configureAutonomyForAutoCommand(ctx, router, msg, autoActionDouble)
 		if err != nil {
 			return renderAutonomyCommandError(err), nil
 		}
@@ -423,7 +445,7 @@ func renderAutoModeCallbackText(ctx context.Context, router commandRouter, chatI
 		if !ok {
 			return renderAutonomyCommandError(nil), nil
 		}
-		text, err := router.ConfigureAutonomy(ctx, chatID, senderID, preset.Mode)
+		text, err := configureAutonomyForAutoCommand(ctx, router, msg, preset.Mode)
 		if err != nil {
 			return renderAutonomyCommandError(err), nil
 		}
@@ -431,24 +453,24 @@ func renderAutoModeCallbackText(ctx context.Context, router commandRouter, chatI
 	}
 }
 
-func renderAutoLimitsCallbackText(router commandRouter, chatID int64, senderID int64) (string, error) {
-	snapshot, err := router.AutonomyStatus(chatID, senderID)
+func renderAutoLimitsCallbackText(router commandRouter, msg core.InboundMessage) (string, error) {
+	snapshot, err := autonomyStatusForAutoCommand(router, msg)
 	if err != nil {
 		return "", err
 	}
 	return face.RenderTelegramAutoLimits(snapshot), nil
 }
 
-func renderAutoApprovalsCallbackText(ctx context.Context, router commandRouter, chatID int64, senderID int64, action string) (string, error) {
+func renderAutoApprovalsCallbackText(ctx context.Context, router commandRouter, msg core.InboundMessage, action string) (string, error) {
 	switch action {
 	case autoActionShow, autoActionRefresh:
-		text, err := router.AutoApprovalStatus(ctx, chatID, senderID)
+		text, err := autoApprovalStatusForAutoCommand(ctx, router, msg)
 		if err != nil {
 			return renderAutoApprovalCommandError(err), nil
 		}
 		return text, nil
 	case autoActionDouble:
-		text, err := router.ConfigureAutoApproval(ctx, chatID, senderID, autoActionDouble)
+		text, err := configureAutoApprovalForAutoCommand(ctx, router, msg, autoActionDouble)
 		if err != nil {
 			return renderAutoApprovalCommandError(err), nil
 		}
@@ -458,7 +480,7 @@ func renderAutoApprovalsCallbackText(ctx context.Context, router commandRouter, 
 		if !ok {
 			return renderAutoApprovalCommandError(nil), nil
 		}
-		text, err := router.ConfigureAutoApproval(ctx, chatID, senderID, preset.AutoApprove)
+		text, err := configureAutoApprovalForAutoCommand(ctx, router, msg, preset.AutoApprove)
 		if err != nil {
 			return renderAutoApprovalCommandError(err), nil
 		}

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
@@ -50,6 +51,9 @@ func telegramCallbackTargetMessage(router commandRouter, cb telegram.CallbackQue
 		return msg, err
 	}
 	msg.TelegramThreadID = thread.ThreadID
+	if thread.DisplaySlot > 0 {
+		msg.OriginDetail = "thread_display:" + strconv.FormatInt(thread.DisplaySlot, 10)
+	}
 	return msg, nil
 }
 

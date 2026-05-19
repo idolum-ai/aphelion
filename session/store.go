@@ -457,6 +457,7 @@ func (s *SQLiteStore) init() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_operator_auto_approvals_chat_active ON operator_auto_approvals(chat_id, expires_at DESC, revoked_at, updated_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_operator_auto_approvals_admin_active ON operator_auto_approvals(admin_user_id, expires_at DESC, revoked_at, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_operator_auto_approvals_scope_active ON operator_auto_approvals(chat_id, scope_kind, scope_id, expires_at DESC, revoked_at, updated_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS operator_autonomy_overrides (
 			override_id TEXT PRIMARY KEY,
 			admin_user_id INTEGER NOT NULL DEFAULT 0,
@@ -473,6 +474,7 @@ func (s *SQLiteStore) init() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_operator_autonomy_overrides_chat_active ON operator_autonomy_overrides(chat_id, mode, expires_at DESC, revoked_at, updated_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_operator_autonomy_overrides_admin_active ON operator_autonomy_overrides(admin_user_id, mode, expires_at DESC, revoked_at, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_operator_autonomy_overrides_scope_active ON operator_autonomy_overrides(chat_id, scope_kind, scope_id, mode, expires_at DESC, revoked_at, updated_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS pending_artifact_retention (
 			owner_key TEXT PRIMARY KEY,
 			chat_id INTEGER NOT NULL DEFAULT 0,

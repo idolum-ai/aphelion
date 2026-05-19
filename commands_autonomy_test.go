@@ -494,3 +494,108 @@ func TestHandleTelegramCommandAutoThreadRejectsClosedThread(t *testing.T) {
 		t.Fatalf("messages = %#v, want closed-thread error", sender.msgs)
 	}
 }
+
+func TestAutoThreadPanelRecordsCallbackThreadMapping(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		canRestart: true,
+		threadsReturn: []session.TelegramThread{
+			{ChatID: 7, ThreadID: 42, DisplaySlot: 1, Status: session.TelegramThreadStatusOpen},
+		},
+		threadReplyOK:     true,
+		threadReplyReturn: session.TelegramThread{ChatID: 7, ThreadID: 42, DisplaySlot: 1, Status: session.TelegramThreadStatusOpen},
+	}
+
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 14,
+		Text:      "/auto thread 1",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.inline) != 1 || !strings.HasPrefix(sender.inline[0].text, "(thread 1)\n\n") {
+		t.Fatalf("inline = %#v, want thread-prefixed auto panel", sender.inline)
+	}
+	if router.threadCallbackChatID != 7 || router.threadCallbackID != 42 || router.threadCallbackMessageID != 1 || router.threadCallbackSurface != "auto" {
+		t.Fatalf("callback mapping chat=%d thread=%d message=%d surface=%q, want 7/42/1/auto", router.threadCallbackChatID, router.threadCallbackID, router.threadCallbackMessageID, router.threadCallbackSurface)
+	}
+}
+
+func TestAutoCallbackUsesThreadScopeFromCallbackMessage(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		canRestart:        true,
+		autoApproveReturn: "Auto approvals enabled for thread 42.",
+		threadReplyOK:     true,
+		threadReplyReturn: session.TelegramThread{ChatID: 7, ThreadID: 42, DisplaySlot: 1, Status: session.TelegramThreadStatusOpen},
+	}
+
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:   "cb-auto-thread",
+		From: &telegram.User{ID: 1001},
+		Message: &telegram.Message{
+			MessageID: 900,
+			Chat:      &telegram.Chat{ID: 7},
+		},
+		Data: encodeAutoCallbackData(autoSurfaceApprovals, "work15"),
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.autoApproveMessage == nil || router.autoApproveMessage.TelegramThreadID != 42 || router.autoApproveMessage.OriginDetail != "thread_display:1" {
+		t.Fatalf("auto approve message = %#v, want scoped thread 42 with visible thread 1", router.autoApproveMessage)
+	}
+	if router.autoApproveArgs != "15m workspace uses=2" {
+		t.Fatalf("autoApproveArgs = %q, want work preset", router.autoApproveArgs)
+	}
+	if len(sender.editInline) != 1 || !strings.HasPrefix(sender.editInline[0].text, "(thread 1)\n\n") || !strings.Contains(sender.editInline[0].text, "thread 42") {
+		t.Fatalf("editInline = %#v, want thread-prefixed scoped callback result", sender.editInline)
+	}
+}
+
+func TestAutoCallbackWithoutThreadMappingUsesDefaultScope(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		canRestart:        true,
+		autoApproveReturn: "Auto approvals enabled for default chat.",
+	}
+
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:   "cb-auto-default",
+		From: &telegram.User{ID: 1001},
+		Message: &telegram.Message{
+			MessageID: 900,
+			Chat:      &telegram.Chat{ID: 7},
+		},
+		Data: encodeAutoCallbackData(autoSurfaceApprovals, "work15"),
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.autoApproveMessage != nil {
+		t.Fatalf("autoApproveMessage = %#v, want default chat method", router.autoApproveMessage)
+	}
+	if router.autoApproveChatID != 7 || router.autoApproveSenderID != 1001 {
+		t.Fatalf("auto approve default inputs chat=%d sender=%d, want 7/1001", router.autoApproveChatID, router.autoApproveSenderID)
+	}
+	if len(sender.editInline) != 1 || strings.HasPrefix(sender.editInline[0].text, "(thread ") {
+		t.Fatalf("editInline = %#v, want unprefixed default callback result", sender.editInline)
+	}
+}

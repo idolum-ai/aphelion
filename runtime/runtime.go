@@ -85,7 +85,7 @@ type Runtime struct {
 	staleWatchdogTriggered   atomic.Bool
 	staleWatchdogNextAttempt atomic.Int64
 	activeTurnMu             sync.Mutex
-	activeTurnCancels        map[int64]context.CancelFunc
+	activeTurnCancels        map[int64]*activeTurnRun
 
 	scopeResolver          *sandbox.Resolver
 	durableGroupChild      durableGroupChildExecutor
@@ -408,7 +408,7 @@ func New(
 		operationalAlertClock:  time.Now,
 		operationalAlertWindow: 10 * time.Minute,
 		sessionLocks:           make(map[string]*sync.Mutex),
-		activeTurnCancels:      make(map[int64]context.CancelFunc),
+		activeTurnCancels:      make(map[int64]*activeTurnRun),
 	}
 	if rt.workExecutor != nil {
 		if native, ok := rt.workExecutor.executors["native"].(nativeWorkExecutor); ok {

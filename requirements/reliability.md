@@ -538,15 +538,17 @@ On startup:
 
 During runtime, the stale-turn watchdog may detect running turns whose activity
 or unmatched tool-start evidence has exceeded the configured watchdog threshold.
-Detection must first become typed execution evidence. A watchdog-triggered
-restart is allowed only after the runtime has durably recorded the observation,
-checked cooldown/attempt limits, and successfully persisted interrupted turn
-state. If persistence or cooldown checks fail, the watchdog must leave the
-process running and surface the suppressed or failed recovery state. When a
-restart is suppressed by the configured rolling attempt window, status should
-preserve the latest watchdog evidence and the next retry time. Once a stale
-watchdog detection is latched, every non-restart outcome must either release the
-latch or schedule a bounded retry.
+Detection must first become typed execution evidence. The watchdog must not use
+process restart as its default recovery path. Instead, it should cancel only the
+matching in-process turn contexts when available, wait boundedly for those turns
+to finish, interrupt exactly the matching stale turn rows, and record whether the
+scoped recovery was recovered, failed, suppressed, or only partially observed.
+If persistence, cancellation, or row interruption fails, the watchdog must leave
+the process running, surface the failure evidence, and schedule a bounded retry
+when appropriate. Once a stale watchdog detection is latched, every outcome must
+either release the latch or preserve the latest evidence and next retry time.
+Service restart remains an explicit operator/service-management action, not a
+watchdog-triggered stale-turn recovery behavior.
 
 ### Phase 2. Analysis
 

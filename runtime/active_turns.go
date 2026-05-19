@@ -4,10 +4,17 @@ package runtime
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/idolum-ai/aphelion/session"
 )
+
+type activeTurnRun struct {
+	cancel   context.CancelFunc
+	done     chan struct{}
+	doneOnce sync.Once
+}
 
 func (r *Runtime) registerActiveTurn(runID int64, cancel context.CancelFunc) {
 	if r == nil || runID <= 0 || cancel == nil {
@@ -16,9 +23,12 @@ func (r *Runtime) registerActiveTurn(runID int64, cancel context.CancelFunc) {
 	r.activeTurnMu.Lock()
 	defer r.activeTurnMu.Unlock()
 	if r.activeTurnCancels == nil {
-		r.activeTurnCancels = make(map[int64]context.CancelFunc)
+		r.activeTurnCancels = make(map[int64]*activeTurnRun)
 	}
-	r.activeTurnCancels[runID] = cancel
+	if previous := r.activeTurnCancels[runID]; previous != nil {
+		previous.doneOnce.Do(func() { close(previous.done) })
+	}
+	r.activeTurnCancels[runID] = &activeTurnRun{cancel: cancel, done: make(chan struct{})}
 }
 
 func (r *Runtime) unregisterActiveTurn(runID int64) {
@@ -26,8 +36,12 @@ func (r *Runtime) unregisterActiveTurn(runID int64) {
 		return
 	}
 	r.activeTurnMu.Lock()
-	defer r.activeTurnMu.Unlock()
+	entry := r.activeTurnCancels[runID]
 	delete(r.activeTurnCancels, runID)
+	r.activeTurnMu.Unlock()
+	if entry != nil {
+		entry.doneOnce.Do(func() { close(entry.done) })
+	}
 }
 
 func (r *Runtime) cancelActiveTurnRuns(runs []session.TurnRun) []int64 {
@@ -41,12 +55,11 @@ func (r *Runtime) cancelActiveTurnRuns(runs []session.TurnRun) []int64 {
 		if run.ID <= 0 {
 			continue
 		}
-		cancel, ok := r.activeTurnCancels[run.ID]
-		if !ok || cancel == nil {
+		entry := r.activeTurnCancels[run.ID]
+		if entry == nil || entry.cancel == nil {
 			continue
 		}
-		delete(r.activeTurnCancels, run.ID)
-		cancels = append(cancels, cancel)
+		cancels = append(cancels, entry.cancel)
 		cancelled = append(cancelled, run.ID)
 	}
 	r.activeTurnMu.Unlock()
@@ -61,12 +74,32 @@ func (r *Runtime) waitForCancelledTurnRuns(ids []int64, wait time.Duration) {
 		return
 	}
 	deadline := time.Now().Add(wait)
-	for time.Now().Before(deadline) {
-		if !r.hasActiveTurnRuns(ids) {
+	for _, done := range r.activeTurnDoneChannels(ids) {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-done:
+		case <-time.After(remaining):
+			return
+		}
 	}
+}
+
+func (r *Runtime) activeTurnDoneChannels(ids []int64) []<-chan struct{} {
+	if r == nil || len(ids) == 0 {
+		return nil
+	}
+	r.activeTurnMu.Lock()
+	defer r.activeTurnMu.Unlock()
+	done := make([]<-chan struct{}, 0, len(ids))
+	for _, id := range ids {
+		if entry := r.activeTurnCancels[id]; entry != nil && entry.done != nil {
+			done = append(done, entry.done)
+		}
+	}
+	return done
 }
 
 func (r *Runtime) hasActiveTurnRuns(ids []int64) bool {
@@ -76,7 +109,7 @@ func (r *Runtime) hasActiveTurnRuns(ids []int64) bool {
 	r.activeTurnMu.Lock()
 	defer r.activeTurnMu.Unlock()
 	for _, id := range ids {
-		if _, ok := r.activeTurnCancels[id]; ok {
+		if entry := r.activeTurnCancels[id]; entry != nil {
 			return true
 		}
 	}
