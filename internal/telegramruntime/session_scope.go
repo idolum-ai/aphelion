@@ -93,10 +93,16 @@ func telegramSessionOwnerKey(msg core.InboundMessage) string {
 }
 
 func telegramThreadDisplayPrefixForMessage(msg core.InboundMessage) string {
-	if msg.TelegramThreadID <= 0 {
+	visibleThreadID := msg.TelegramThreadID
+	if strings.HasPrefix(strings.TrimSpace(msg.OriginDetail), "thread_display:") {
+		if parsed, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(msg.OriginDetail), "thread_display:")), 10, 64); err == nil && parsed > 0 {
+			visibleThreadID = parsed
+		}
+	}
+	if visibleThreadID <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("(thread %d)\n\n", msg.TelegramThreadID)
+	return fmt.Sprintf("(thread %d)\n\n", visibleThreadID)
 }
 
 func telegramInboundForTurnRun(run session.TurnRun, senderID int64) core.InboundMessage {

@@ -151,10 +151,16 @@ func firstNonEmpty(values ...string) string {
 }
 
 func telegramThreadDisplayPrefixForMessage(msg core.InboundMessage) string {
-	if msg.TelegramThreadID <= 0 {
+	visibleThreadID := msg.TelegramThreadID
+	if strings.HasPrefix(strings.TrimSpace(msg.OriginDetail), "thread_display:") {
+		if parsed, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(msg.OriginDetail), "thread_display:")), 10, 64); err == nil && parsed > 0 {
+			visibleThreadID = parsed
+		}
+	}
+	if visibleThreadID <= 0 {
 		return ""
 	}
-	return "(thread " + strconv.FormatInt(msg.TelegramThreadID, 10) + ")\n\n"
+	return "(thread " + strconv.FormatInt(visibleThreadID, 10) + ")\n\n"
 }
 
 func actionListContains(values []string, want string) bool {

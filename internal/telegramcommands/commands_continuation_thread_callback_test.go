@@ -21,7 +21,7 @@ func TestHandleTelegramCommandCallbackContinuationApproveTargetsThreadPrompt(t *
 		DecisionID:     "decision-thread",
 		RemainingTurns: 1,
 		StageSummary:   "Resume the thread step.",
-	}, canRestart: true, triggerContinuationStarted: triggerStarted, threadReplyOK: true, threadReplyReturn: session.TelegramThread{ChatID: 7, ThreadID: 3, Status: session.TelegramThreadStatusOpen}}
+	}, canRestart: true, triggerContinuationStarted: triggerStarted, threadReplyOK: true, threadReplyReturn: session.TelegramThread{ChatID: 7, ThreadID: 3, DisplaySlot: 1, Status: session.TelegramThreadStatusOpen}}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-thread-continue",
 		From:    &telegram.User{ID: 1002, Username: "approved"},
@@ -56,8 +56,8 @@ func TestHandleTelegramCommandCallbackContinuationApproveTargetsThreadPrompt(t *
 	if len(sender.editClear) != 1 {
 		t.Fatalf("editClear count = %d, want 1", len(sender.editClear))
 	}
-	if !strings.HasPrefix(sender.editClear[0].text, "(thread 3)\n\n") {
-		t.Fatalf("edit text = %q, want thread prefix preserved", sender.editClear[0].text)
+	if !strings.HasPrefix(sender.editClear[0].text, "(thread 1)\n\n") {
+		t.Fatalf("edit text = %q, want visible thread prefix preserved", sender.editClear[0].text)
 	}
 }
 
