@@ -176,7 +176,7 @@ func handleContinuationCallback(ctx context.Context, sender commandCallbackSende
 		}
 		answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.approve", "")
 		text = renderContinuationDecision(state, action)
-		editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", continuationCallbackDisplayText(targetMsg, text))
+		editContinuationCallbackMessageWithInlineKeyboard(ctx, sender, router, chatID, messageID, "continuation.approve", continuationCallbackDisplayText(targetMsg, text), approvalWindowOfferRows())
 		triggerContinuationAfterCallback(sender, router, targetMsg, messageID, "continuation.trigger", state)
 		return true, nil
 	case continuationActionResumeEdge:

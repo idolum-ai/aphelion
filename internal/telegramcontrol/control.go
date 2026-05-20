@@ -26,6 +26,9 @@ type Runtime interface {
 	ConfigureAutoApprovalForKey(ctx context.Context, key session.SessionKey, senderID int64, args string) (string, error)
 	AutoApprovalStatus(ctx context.Context, chatID int64, senderID int64) (string, error)
 	AutoApprovalStatusForKey(ctx context.Context, key session.SessionKey, senderID int64) (string, error)
+	EnableApprovalWindowForKey(ctx context.Context, key session.SessionKey, senderID int64, duration time.Duration) (string, error)
+	DoubleApprovalWindowForKey(ctx context.Context, key session.SessionKey, senderID int64) (string, error)
+	CancelApprovalWindowForKey(ctx context.Context, key session.SessionKey, senderID int64) (string, error)
 	RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error)
 	RefreshContinuationProposalForKey(ctx context.Context, key session.SessionKey, reason string) (session.ContinuationState, bool, error)
 

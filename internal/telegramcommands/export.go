@@ -15,7 +15,6 @@ type CallbackSender = commandCallbackSender
 type Router = commandRouter
 type ScopedStatusRouter = commandScopedStatusRouter
 type ScopedSessionRouter = commandScopedSessionRouter
-type ScopedAutoRouter = commandScopedAutoRouter
 type ScopedMemoryRouter = commandScopedMemoryRouter
 type ThreadRouter = commandThreadRouter
 type ThreadUserError = telegramThreadUserError

@@ -92,8 +92,11 @@ func TestCommandMenuRowsExposeRoleScopedButtons(t *testing.T) {
 	if commandRowsContain(publicRows, "Restart", "menu:restart") {
 		t.Fatalf("public rows = %#v, want restart hidden", publicRows)
 	}
-	if !commandRowsContain(adminRows, "Auto", "menu:auto") || !commandRowsContain(adminRows, "Restart", "menu:restart") {
-		t.Fatalf("admin rows = %#v, want admin control commands", adminRows)
+	if commandRowsContain(adminRows, "Auto", "menu:auto") {
+		t.Fatalf("admin rows = %#v, want no /auto command", adminRows)
+	}
+	if !commandRowsContain(adminRows, "Restart", "menu:restart") {
+		t.Fatalf("admin rows = %#v, want admin restart command", adminRows)
 	}
 }
 

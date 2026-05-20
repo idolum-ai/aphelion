@@ -95,8 +95,8 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 	if threadID, ok := decodeTelegramThreadAbsorbCallback(cb.Data); ok {
 		return handleTelegramThreadCallback(ctx, sender, router, cb, threadID)
 	}
-	if surface, action, ok := decodeAutoCallbackData(cb.Data); ok {
-		return handleAutoCallback(ctx, sender, router, cb, surface, action)
+	if action, ok := decodeApprovalWindowCallbackData(cb.Data); ok {
+		return handleApprovalWindowCallback(ctx, sender, router, cb, action)
 	}
 	if action, ok := decodeHealthCallbackData(cb.Data); ok {
 		return handleHealthCallback(ctx, sender, router, cb, action)
@@ -161,17 +161,18 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 		return handleMissionCallback(ctx, sender, router, cb, action, token)
 	}
 	if proposalID, action, ok := decodeActionProposalCallbackData(cb.Data); ok {
-		chatID := int64(0)
-		messageID := int64(0)
-		senderID := int64(0)
-		if cb.Message != nil {
-			messageID = cb.Message.MessageID
-			if cb.Message.Chat != nil {
-				chatID = cb.Message.Chat.ID
-			}
+		targetMsg, targetErr := telegramCallbackTargetMessage(router, cb)
+		if targetErr != nil {
+			return true, targetErr
 		}
+		chatID := targetMsg.ChatID
+		messageID := targetMsg.MessageID
+		senderID := int64(0)
 		if cb.From != nil {
 			senderID = cb.From.ID
+		}
+		if targetMsg.SenderID == 0 {
+			targetMsg.SenderID = senderID
 		}
 		missionID := missionIDFromActionProposalID(proposalID)
 		if missionID == "" || chatID == 0 {
@@ -195,8 +196,15 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			return true, err
 		}
 		if messageID != 0 {
-			if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, renderActionProposalDecision(proposal, mission, action, changed)); err != nil {
-				return true, err
+			text := continuationCallbackDisplayText(targetMsg, renderActionProposalDecision(proposal, mission, action, changed))
+			if action == "approve" {
+				if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, text, "", approvalWindowOfferRows()); err != nil {
+					return true, err
+				}
+			} else {
+				if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
+					return true, err
+				}
 			}
 		}
 		return true, nil

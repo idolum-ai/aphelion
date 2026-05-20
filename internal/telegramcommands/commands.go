@@ -48,9 +48,6 @@ type commandRouter interface {
 	QueueReinstall(ctx context.Context, msg core.InboundMessage) error
 	QueueDoctor(ctx context.Context, msg core.InboundMessage) error
 	LatestDoctorReport(ctx context.Context, chatID int64, senderID int64) (session.DoctorReportRecord, bool, error)
-	AutoApprovalStatus(ctx context.Context, chatID int64, senderID int64) (string, error)
-	ConfigureAutoApproval(ctx context.Context, chatID int64, senderID int64, args string) (string, error)
-	ConfigureAutonomy(ctx context.Context, chatID int64, senderID int64, args string) (string, error)
 	ToggleProgressView(ctx context.Context, chatID int64, senderID int64, runID int64, details bool) (bool, string, error)
 	CurrentEfforts() (persona string, governor string)
 	ModelSlotStatuses() ([]core.ModelSlotStatus, error)
@@ -86,11 +83,10 @@ type commandScopedSessionRouter interface {
 	DetachForMessage(msg core.InboundMessage) (core.DetachResult, error)
 }
 
-type commandScopedAutoRouter interface {
-	AutonomyStatusForMessage(msg core.InboundMessage) (core.AutonomyStatusSnapshot, error)
-	ConfigureAutonomyForMessage(ctx context.Context, msg core.InboundMessage, args string) (string, error)
-	AutoApprovalStatusForMessage(ctx context.Context, msg core.InboundMessage) (string, error)
-	ConfigureAutoApprovalForMessage(ctx context.Context, msg core.InboundMessage, args string) (string, error)
+type approvalWindowRouter interface {
+	EnableApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage, duration time.Duration) (string, error)
+	DoubleApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage) (string, error)
+	CancelApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage) (string, error)
 }
 
 type commandScopedMemoryRouter interface {
@@ -257,12 +253,6 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			break
 		}
 		return handleTelegramModelCommand(ctx, sender, router, msg)
-	case "auto":
-		if !isAdmin {
-			text = "Auto controls are admin only."
-			break
-		}
-		return handleTelegramAutoCommand(ctx, sender, router, msg)
 	case "stop":
 		text = face.RenderTelegramStop(stopForCommand(router, msg))
 	case "new":
@@ -307,38 +297,6 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 		return true, err
 	}
 	return true, nil
-}
-
-func renderAutoApprovalCommandError(err error) string {
-	if err == nil {
-		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Auto approvals", State: "not applied", Next: "Check the command shape and retry."})
-	}
-	msg := strings.TrimSpace(err.Error())
-	if msg == "" {
-		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Auto approvals", State: "not applied", Next: "Check the command shape and retry."})
-	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
-		Title: "Auto approvals",
-		State: "not applied",
-		Why:   msg,
-		Next:  "Adjust the duration, scope, or config ceiling and retry.",
-	})
-}
-
-func renderAutonomyCommandError(err error) string {
-	if err == nil {
-		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Auto mode", State: "not applied", Next: "Check the command shape and retry."})
-	}
-	msg := strings.TrimSpace(err.Error())
-	if msg == "" {
-		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Auto mode", State: "not applied", Next: "Check the command shape and retry."})
-	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
-		Title: "Auto mode",
-		State: "not applied",
-		Why:   msg,
-		Next:  "Adjust the duration, mode, scope, or config ceiling and retry.",
-	})
 }
 
 func parseTelegramCommand(text string) (string, bool) {

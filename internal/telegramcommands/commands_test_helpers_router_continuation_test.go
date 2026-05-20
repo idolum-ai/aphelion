@@ -188,6 +188,46 @@ func (s *stubCommandRouter) AutoApprovalStatus(_ context.Context, chatID int64, 
 	return "Auto approvals are inactive for this chat.", nil
 }
 
+func (s *stubCommandRouter) EnableApprovalWindowForMessage(_ context.Context, msg core.InboundMessage, duration time.Duration) (string, error) {
+	copied := msg
+	s.approvalWindowAction = approvalWindowActionEnable15
+	s.approvalWindowMessage = &copied
+	s.approvalWindowDuration = duration
+	if s.approvalWindowErr != nil {
+		return "", s.approvalWindowErr
+	}
+	if strings.TrimSpace(s.approvalWindowReturn) != "" {
+		return s.approvalWindowReturn, nil
+	}
+	return "Approval window active.", nil
+}
+
+func (s *stubCommandRouter) DoubleApprovalWindowForMessage(_ context.Context, msg core.InboundMessage) (string, error) {
+	copied := msg
+	s.approvalWindowAction = approvalWindowActionDouble
+	s.approvalWindowMessage = &copied
+	if s.approvalWindowErr != nil {
+		return "", s.approvalWindowErr
+	}
+	if strings.TrimSpace(s.approvalWindowReturn) != "" {
+		return s.approvalWindowReturn, nil
+	}
+	return "Approval window extended.", nil
+}
+
+func (s *stubCommandRouter) CancelApprovalWindowForMessage(_ context.Context, msg core.InboundMessage) (string, error) {
+	copied := msg
+	s.approvalWindowAction = approvalWindowActionCancel
+	s.approvalWindowMessage = &copied
+	if s.approvalWindowErr != nil {
+		return "", s.approvalWindowErr
+	}
+	if strings.TrimSpace(s.approvalWindowReturn) != "" {
+		return s.approvalWindowReturn, nil
+	}
+	return "Approval window canceled.", nil
+}
+
 func (s *stubCommandRouter) ConfigureAutonomy(_ context.Context, chatID int64, senderID int64, args string) (string, error) {
 	s.autonomyChatID = chatID
 	s.autonomySenderID = senderID

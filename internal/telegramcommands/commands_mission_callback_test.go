@@ -189,10 +189,16 @@ func TestActionProposalApproveCallbackAppliesMissionDecision(t *testing.T) {
 	if router.applyMissionProposalID != "mission-action-ui" || router.applyMissionProposalChoice != "approve" || router.applyMissionProposalSender != 1001 {
 		t.Fatalf("applied id=%q choice=%q sender=%d, want mission-action-ui approve 1001", router.applyMissionProposalID, router.applyMissionProposalChoice, router.applyMissionProposalSender)
 	}
-	if len(sender.editClear) != 1 {
-		t.Fatalf("editClear len = %d, want approval message edit", len(sender.editClear))
+	if len(sender.editClear) != 0 {
+		t.Fatalf("editClear len = %d, want approval-window offer edit", len(sender.editClear))
 	}
-	if !strings.Contains(sender.editClear[0].text, "ActionProposal approved") || !strings.Contains(sender.editClear[0].text, "No self-continuation") {
-		t.Fatalf("edit text = %q, want approval and authority boundary", sender.editClear[0].text)
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline len = %d, want approval-window offer edit", len(sender.editInline))
+	}
+	if !strings.Contains(sender.editInline[0].text, "ActionProposal approved") || !strings.Contains(sender.editInline[0].text, "No self-continuation") {
+		t.Fatalf("edit text = %q, want approval and authority boundary", sender.editInline[0].text)
+	}
+	if !commandRowsContain(sender.editInline[0].rows, "Approve next 15 min", encodeApprovalWindowCallbackData(approvalWindowActionEnable15)) {
+		t.Fatalf("edit rows = %#v, want approval-window offer", sender.editInline[0].rows)
 	}
 }

@@ -22,7 +22,6 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "absorb", Description: "Close a side thread into the main chat"},
 	{Command: "mission", Description: "Show and manage the Mission Ledger"},
 	{Command: "model", Description: "Show and change model slots"},
-	{Command: "auto", Description: "Show automation mode, approvals, and limits"},
 	{Command: "stop", Description: "Stop current work in this chat"},
 	{Command: "new", Description: "Start a fresh chat session context"},
 	{Command: "detach", Description: "Detach from pending work in this chat"},

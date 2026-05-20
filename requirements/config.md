@@ -44,10 +44,10 @@ warnings if used in today's config.
 Autonomy is a config-owned policy, not a prompt convention. `default_mode` and
 `ceiling` use `off`, `review_only`, `ask_first`, `leased`, or `mission`; the
 configured default must not exceed the ceiling. In the current runtime this
-policy is validated and projected through CLI, `/auto limits`, `/status`, and
-`/health diagnose`. `leased` live overrides are implemented as bounded auto mode
-records and cannot exceed the configured ceiling or maximum duration. Approval
-grants remain separate spendable prompt budget. If config later tightens below
+policy is validated and projected through CLI, `/status`, and `/health diagnose`.
+`leased` live overrides are implemented as bounded auto mode records and cannot
+exceed the configured ceiling or maximum duration. Approval grants remain
+separate spendable prompt budget. If config later tightens below
 `leased` or disables live overrides, existing mode records become inert and
 doctor reports the blocked precedence.
 

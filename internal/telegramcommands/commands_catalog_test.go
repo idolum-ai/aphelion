@@ -28,7 +28,7 @@ func TestParseTelegramCommand(t *testing.T) {
 		{text: "/memory", want: "memory", ok: true},
 		{text: "/mission", want: "mission", ok: true},
 		{text: "/model status", want: "model", ok: true},
-		{text: "/auto mode", want: "auto", ok: true},
+		{text: "/auto mode", ok: false},
 		{text: "/stop\n\nReply context:\nidolum: Please confirm.", want: "stop", ok: true},
 		{text: "/set_persona_model", ok: false},
 		{text: "/set_governor_effort", ok: false},
@@ -164,17 +164,12 @@ func TestDefaultTelegramCommandsIncludeTailnet(t *testing.T) {
 	}
 }
 
-func TestDefaultTelegramCommandsIncludeAuto(t *testing.T) {
+func TestDefaultTelegramCommandsExcludeAuto(t *testing.T) {
 	t.Parallel()
 
-	found := false
 	for _, cmd := range defaultTelegramCommands {
 		if cmd.Command == "auto" {
-			found = true
-			break
+			t.Fatalf("defaultTelegramCommands = %#v, want /auto removed", defaultTelegramCommands)
 		}
-	}
-	if !found {
-		t.Fatalf("defaultTelegramCommands = %#v, want /auto command entry", defaultTelegramCommands)
 	}
 }

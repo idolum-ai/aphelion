@@ -16,7 +16,6 @@ type commandCallbackSender = telegramcommands.CallbackSender
 type commandRouter = telegramcommands.Router
 type commandScopedStatusRouter = telegramcommands.ScopedStatusRouter
 type commandScopedSessionRouter = telegramcommands.ScopedSessionRouter
-type commandScopedAutoRouter = telegramcommands.ScopedAutoRouter
 type commandScopedMemoryRouter = telegramcommands.ScopedMemoryRouter
 type commandThreadRouter = telegramcommands.ThreadRouter
 type telegramThreadUserError = telegramcommands.ThreadUserError

@@ -53,11 +53,11 @@ func TestHandleTelegramCommandCallbackContinuationApproveTargetsThreadPrompt(t *
 	if router.triggerContinuationInput != 0 {
 		t.Fatalf("triggerContinuationInput = %d, want unscoped path unused", router.triggerContinuationInput)
 	}
-	if len(sender.editClear) != 1 {
-		t.Fatalf("editClear count = %d, want 1", len(sender.editClear))
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
 	}
-	if !strings.HasPrefix(sender.editClear[0].text, "(thread 3)\n\n") {
-		t.Fatalf("edit text = %q, want thread prefix preserved", sender.editClear[0].text)
+	if !strings.HasPrefix(sender.editInline[0].text, "(thread 3)\n\n") {
+		t.Fatalf("edit text = %q, want thread prefix preserved", sender.editInline[0].text)
 	}
 }
 

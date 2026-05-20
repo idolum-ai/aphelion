@@ -34,7 +34,6 @@ var commandMenuAdminCommands = []struct {
 	{Label: "Models", Command: "model"},
 	{Label: "Agents", Command: "agents"},
 	{Label: "Tailnet", Command: "tailnet"},
-	{Label: "Auto", Command: "auto"},
 	{Label: "Reinstall", Command: "reinstall"},
 	{Label: "Restart", Command: "restart"},
 }

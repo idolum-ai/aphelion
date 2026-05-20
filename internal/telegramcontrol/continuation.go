@@ -5,6 +5,8 @@ package telegramcontrol
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -105,6 +107,27 @@ func (c CommandControl) AutoApprovalStatusForMessage(ctx context.Context, msg co
 		return "Auto approvals are unavailable.", nil
 	}
 	return c.Runtime.AutoApprovalStatusForKey(ctx, SessionKeyForMessage(msg), msg.SenderID)
+}
+
+func (c CommandControl) EnableApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage, duration time.Duration) (string, error) {
+	if c.Runtime == nil {
+		return "Approval windows are unavailable.", nil
+	}
+	return c.Runtime.EnableApprovalWindowForKey(ctx, SessionKeyForMessage(msg), msg.SenderID, duration)
+}
+
+func (c CommandControl) DoubleApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage) (string, error) {
+	if c.Runtime == nil {
+		return "Approval windows are unavailable.", nil
+	}
+	return c.Runtime.DoubleApprovalWindowForKey(ctx, SessionKeyForMessage(msg), msg.SenderID)
+}
+
+func (c CommandControl) CancelApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage) (string, error) {
+	if c.Runtime == nil {
+		return "Approval windows are unavailable.", nil
+	}
+	return c.Runtime.CancelApprovalWindowForKey(ctx, SessionKeyForMessage(msg), msg.SenderID)
 }
 
 func (c CommandControl) RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error) {
