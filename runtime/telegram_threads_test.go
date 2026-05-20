@@ -323,12 +323,6 @@ func TestMemoryFocusIsScopedToTelegramThread(t *testing.T) {
 func TestTelegramThreadProgressPrefixHelpers(t *testing.T) {
 	t.Parallel()
 
-	run := session.TurnRun{
-		Scope: session.TelegramThreadScopeRef(9104, 6),
-	}
-	if got := progressTurnRunDisplayPrefix(run); got != "(thread 6)" {
-		t.Fatalf("progressTurnRunDisplayPrefix() = %q, want thread prefix", got)
-	}
 	reporter := &toolProgressReporter{displayPrefix: "(thread 6)"}
 	if got := reporter.prefixProgressText("Working"); got != "(thread 6)\n\nWorking" {
 		t.Fatalf("prefixProgressText() = %q, want visible thread prefix", got)

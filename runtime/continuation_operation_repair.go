@@ -152,9 +152,10 @@ func (r *Runtime) repairInvalidPendingPhaseApprovalState(ctx context.Context, ke
 		}},
 	}, now)
 	if notify && r.outbound != nil && chatID != 0 {
+		text := r.prefixTelegramPresentedText(r.telegramPresentationForKey(key), "Stopped stale approval.\n\nI will create a fresh narrower proposal for the next eligible action.")
 		_, _ = r.outbound.SendMessage(ctx, core.OutboundMessage{
 			ChatID: chatID,
-			Text:   "Stopped stale approval.\n\nI will create a fresh narrower proposal for the next eligible action.",
+			Text:   text,
 		})
 	}
 	return opState, true, nil
@@ -282,9 +283,10 @@ func (r *Runtime) repairStaleContinuationDerivedOrganicProposalState(
 		}},
 	}, now)
 	if notify && continuationMatches && r.outbound != nil && chatID != 0 {
+		text := r.prefixTelegramPresentedText(r.telegramPresentationForKey(key), "Stopped stale approval.\n\nThat prompt was based on older continuation state, not current remaining work.")
 		_, _ = r.outbound.SendMessage(ctx, core.OutboundMessage{
 			ChatID: chatID,
-			Text:   "Stopped stale approval.\n\nThat prompt was based on older continuation state, not current remaining work.",
+			Text:   text,
 		})
 	}
 	return session.NormalizeOperationState(opState), true, nil
@@ -451,9 +453,10 @@ func (r *Runtime) recordAndSendBlockedOperationPhaseApproval(ctx context.Context
 	if replyTo != 0 {
 		replyToPtr = &replyTo
 	}
+	text := r.prefixTelegramPresentedText(r.telegramPresentationForMessage(msg), renderOperationPhaseApprovalBlockedStatus(opState, phase, reason))
 	_, _ = r.outbound.SendMessage(ctx, core.OutboundMessage{
 		ChatID:  msg.ChatID,
-		Text:    renderOperationPhaseApprovalBlockedStatus(opState, phase, reason),
+		Text:    text,
 		ReplyTo: replyToPtr,
 	})
 }

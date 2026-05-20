@@ -286,7 +286,7 @@ func (r *Runtime) warnWorkExecutorFallback(ctx context.Context, key session.Sess
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	text = prefixTelegramThreadText(telegramThreadIDFromScope(key.ChatID, key.Scope), text)
+	text = r.prefixTelegramPresentedText(r.telegramPresentationForKey(key), text)
 	_, err := r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: key.ChatID, Text: text})
 	return err
 }

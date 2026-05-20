@@ -83,7 +83,7 @@ func (r *Runtime) preparedReplyWithVoice(prepared pipeline.TurnPrepareContract) 
 }
 
 func (r *Runtime) sendReply(ctx context.Context, msg core.InboundMessage, text string, media []core.Media, replyWithVoice bool) (int64, string, error) {
-	visibleText := prefixTelegramThreadText(msg.TelegramThreadID, text)
+	visibleText := r.prefixTelegramPresentedText(r.telegramPresentationForMessage(msg), text)
 	if len(media) > 0 {
 		msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
 			ChatID:  msg.ChatID,

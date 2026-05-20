@@ -20,7 +20,7 @@ func (r *Runtime) sendContinuationApprovalPrompt(ctx context.Context, key sessio
 	messageID, err := sender.SendInlineKeyboard(
 		ctx,
 		msg.ChatID,
-		prefixTelegramThreadText(msg.TelegramThreadID, text),
+		r.prefixTelegramPresentedText(r.telegramPresentationForMessage(msg), text),
 		continuationApprovalButtonRows(state),
 		nil,
 	)
