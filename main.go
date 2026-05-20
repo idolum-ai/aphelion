@@ -18,6 +18,7 @@ import (
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/decision"
+	"github.com/idolum-ai/aphelion/internal/telegramcontrol"
 	"github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/openai"
 	"github.com/idolum-ai/aphelion/principal"
@@ -229,7 +230,7 @@ func run() error {
 
 	router := core.NewRouter(rt.AgentFunc())
 	router.SetEventHandler(rt.RouterEventHandler())
-	ingress := newIngressSequencer(router, turnTimeout)
+	ingress := telegramcontrol.NewIngressSequencer(router, turnTimeout)
 	decisionBroker := newTelegramDecisionBrokerWithSummary(
 		tgOutbound,
 		func(ctx context.Context, pending decision.PendingDecision) string {

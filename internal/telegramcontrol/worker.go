@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package telegramcontrol
 
 import (
 	"context"
@@ -299,4 +299,12 @@ func ingressIdentityForMessage(msg core.InboundMessage) (ingressIdentity, bool) 
 		return ingressIdentity{}, false
 	}
 	return ingressIdentity{surface: surface, updateID: msg.IngressUpdateID}, true
+}
+
+func IngressIdentityForMessage(msg core.InboundMessage) (string, int64, bool) {
+	identity, ok := ingressIdentityForMessage(msg)
+	if !ok {
+		return "", 0, false
+	}
+	return identity.surface, identity.updateID, true
 }

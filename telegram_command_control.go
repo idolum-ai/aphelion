@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/internal/telegramcontrol"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/runtime"
 	"github.com/idolum-ai/aphelion/session"
@@ -13,7 +14,7 @@ import (
 
 type telegramCommandControl struct {
 	router                 *core.Router
-	ingress                *ingressSequencer
+	ingress                *telegramcontrol.IngressSequencer
 	rt                     *runtime.Runtime
 	store                  *session.SQLiteStore
 	resolver               *principal.Resolver

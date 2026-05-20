@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package telegramcontrol
 
 import (
 	"context"
@@ -18,7 +18,7 @@ const (
 
 var errIngressWorkerRetired = errors.New("ingress worker retired")
 
-type ingressSequencer struct {
+type IngressSequencer struct {
 	router      *core.Router
 	turnTimeout time.Duration
 	idleTTL     time.Duration
@@ -28,11 +28,11 @@ type ingressSequencer struct {
 	dropHandler func([]core.InboundMessage)
 }
 
-func newIngressSequencer(router *core.Router, turnTimeout time.Duration) *ingressSequencer {
+func NewIngressSequencer(router *core.Router, turnTimeout time.Duration) *IngressSequencer {
 	if router == nil {
 		return nil
 	}
-	return &ingressSequencer{
+	return &IngressSequencer{
 		router:      router,
 		turnTimeout: turnTimeout,
 		idleTTL:     ingressSequencerIdleTTL,
@@ -40,7 +40,7 @@ func newIngressSequencer(router *core.Router, turnTimeout time.Duration) *ingres
 	}
 }
 
-func (s *ingressSequencer) SetDropHandler(handler func([]core.InboundMessage)) {
+func (s *IngressSequencer) SetDropHandler(handler func([]core.InboundMessage)) {
 	if s == nil {
 		return
 	}
@@ -49,7 +49,7 @@ func (s *ingressSequencer) SetDropHandler(handler func([]core.InboundMessage)) {
 	s.dropHandler = handler
 }
 
-func (s *ingressSequencer) Enqueue(parent context.Context, msg core.InboundMessage) error {
+func (s *IngressSequencer) Enqueue(parent context.Context, msg core.InboundMessage) error {
 	if s == nil || s.router == nil {
 		return nil
 	}
@@ -70,7 +70,7 @@ func (s *ingressSequencer) Enqueue(parent context.Context, msg core.InboundMessa
 	}
 }
 
-func (s *ingressSequencer) Stop(chatID int64) core.StopResult {
+func (s *IngressSequencer) Stop(chatID int64) core.StopResult {
 	if s == nil || chatID == 0 {
 		return core.StopResult{}
 	}
@@ -79,7 +79,7 @@ func (s *ingressSequencer) Stop(chatID int64) core.StopResult {
 	})
 }
 
-func (s *ingressSequencer) StopForMessage(msg core.InboundMessage) core.StopResult {
+func (s *IngressSequencer) StopForMessage(msg core.InboundMessage) core.StopResult {
 	if s == nil {
 		return core.StopResult{}
 	}
@@ -89,7 +89,7 @@ func (s *ingressSequencer) StopForMessage(msg core.InboundMessage) core.StopResu
 	})
 }
 
-func (s *ingressSequencer) Status(chatID int64) core.SessionStatus {
+func (s *IngressSequencer) Status(chatID int64) core.SessionStatus {
 	status := core.SessionStatus{}
 	if s == nil || chatID == 0 {
 		return status
@@ -112,7 +112,7 @@ func (s *ingressSequencer) Status(chatID int64) core.SessionStatus {
 	return status
 }
 
-func (s *ingressSequencer) StatusForMessage(msg core.InboundMessage) core.SessionStatus {
+func (s *IngressSequencer) StatusForMessage(msg core.InboundMessage) core.SessionStatus {
 	if s == nil {
 		return core.SessionStatus{}
 	}
@@ -131,7 +131,7 @@ func (s *ingressSequencer) StatusForMessage(msg core.InboundMessage) core.Sessio
 	}
 }
 
-func (s *ingressSequencer) Snapshot() core.RouterStatusSnapshot {
+func (s *IngressSequencer) Snapshot() core.RouterStatusSnapshot {
 	snapshot := core.RouterStatusSnapshot{
 		QueueDepthByChat: make(map[int64]int),
 	}
@@ -153,7 +153,7 @@ func (s *ingressSequencer) Snapshot() core.RouterStatusSnapshot {
 	return snapshot
 }
 
-func (s *ingressSequencer) Close() {
+func (s *IngressSequencer) Close() {
 	if s == nil {
 		return
 	}
@@ -169,7 +169,7 @@ func (s *ingressSequencer) Close() {
 	}
 }
 
-func (s *ingressSequencer) workerFor(sessionID string) *ingressWorker {
+func (s *IngressSequencer) workerFor(sessionID string) *ingressWorker {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if worker, ok := s.workers[sessionID]; ok && worker != nil && !worker.retired() {
@@ -187,7 +187,7 @@ func (s *ingressSequencer) workerFor(sessionID string) *ingressWorker {
 	return worker
 }
 
-func (s *ingressSequencer) stopMatching(match func(worker *ingressWorker) bool) core.StopResult {
+func (s *IngressSequencer) stopMatching(match func(worker *ingressWorker) bool) core.StopResult {
 	result := core.StopResult{}
 	var droppedMessages []core.InboundMessage
 	s.mu.Lock()
@@ -209,7 +209,7 @@ func (s *ingressSequencer) stopMatching(match func(worker *ingressWorker) bool) 
 	return result
 }
 
-func (s *ingressSequencer) runWorker(worker *ingressWorker) {
+func (s *IngressSequencer) runWorker(worker *ingressWorker) {
 	for {
 		item, ok := worker.next(s.idleTTL)
 		if !ok {
@@ -218,7 +218,7 @@ func (s *ingressSequencer) runWorker(worker *ingressWorker) {
 			}
 			continue
 		}
-		turnCtx, cancel := newTurnContext(item.parent, s.turnTimeout)
+		turnCtx, cancel := newIngressTurnContext(item.parent, s.turnTimeout)
 		if !worker.activate(item, cancel) {
 			cancel()
 			continue
@@ -231,7 +231,7 @@ func (s *ingressSequencer) runWorker(worker *ingressWorker) {
 	}
 }
 
-func (s *ingressSequencer) retireWorker(worker *ingressWorker) bool {
+func (s *IngressSequencer) retireWorker(worker *ingressWorker) bool {
 	if s == nil || worker == nil {
 		return true
 	}
@@ -247,7 +247,17 @@ func (s *ingressSequencer) retireWorker(worker *ingressWorker) bool {
 	return true
 }
 
-func (s *ingressSequencer) notifyDroppedIngress(messages []core.InboundMessage) {
+func newIngressTurnContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if timeout > 0 {
+		return context.WithTimeout(parent, timeout)
+	}
+	return context.WithCancel(parent)
+}
+
+func (s *IngressSequencer) notifyDroppedIngress(messages []core.InboundMessage) {
 	if s == nil || len(messages) == 0 {
 		return
 	}

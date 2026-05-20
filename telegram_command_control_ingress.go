@@ -5,9 +5,11 @@ package main
 import (
 	"context"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/internal/telegramcontrol"
 )
 
 func (c telegramCommandControl) Stop(chatID int64) core.StopResult {
@@ -22,19 +24,20 @@ func (c telegramCommandControl) MarkDroppedIngress(messages []core.InboundMessag
 	if c.store == nil || len(messages) == 0 {
 		return
 	}
-	seen := make(map[ingressIdentity]struct{}, len(messages))
+	seen := make(map[string]struct{}, len(messages))
 	now := time.Now().UTC()
 	for _, msg := range messages {
-		identity, ok := ingressIdentityForMessage(msg)
+		surface, updateID, ok := telegramcontrol.IngressIdentityForMessage(msg)
 		if !ok {
 			continue
 		}
-		if _, ok := seen[identity]; ok {
+		key := surface + ":" + strconv.FormatInt(updateID, 10)
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[identity] = struct{}{}
-		if _, err := c.store.MarkTelegramIngressDroppedIfDispatchable(identity.surface, identity.updateID, "operator_session_stop", now); err != nil {
-			log.Printf("WARN mark dropped telegram ingress failed surface=%s update_id=%d err=%v", identity.surface, identity.updateID, err)
+		seen[key] = struct{}{}
+		if _, err := c.store.MarkTelegramIngressDroppedIfDispatchable(surface, updateID, "operator_session_stop", now); err != nil {
+			log.Printf("WARN mark dropped telegram ingress failed surface=%s update_id=%d err=%v", surface, updateID, err)
 		}
 	}
 }

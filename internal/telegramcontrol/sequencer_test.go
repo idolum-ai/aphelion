@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package telegramcontrol
 
 import (
 	"context"
@@ -28,7 +28,7 @@ func TestIngressSequencerStopDropsQueuedGenerationAndAllowsNewWork(t *testing.T)
 		mu.Unlock()
 		return nil, nil
 	})
-	ingress := newIngressSequencer(router, time.Minute)
+	ingress := NewIngressSequencer(router, time.Minute)
 	defer ingress.Close()
 	ingress.SetDropHandler(func(messages []core.InboundMessage) {
 		mu.Lock()
@@ -111,7 +111,7 @@ func TestIngressSequencerSuppressesDuplicateIngressIdentity(t *testing.T) {
 		}
 		return nil, nil
 	})
-	ingress := newIngressSequencer(router, time.Minute)
+	ingress := NewIngressSequencer(router, time.Minute)
 	defer ingress.Close()
 
 	msg := func(updateID int64, text string) core.InboundMessage {
@@ -176,7 +176,7 @@ func TestIngressSequencerSnapshotAndIdleRetirement(t *testing.T) {
 		}
 		return nil, nil
 	})
-	ingress := newIngressSequencer(router, time.Minute)
+	ingress := NewIngressSequencer(router, time.Minute)
 	ingress.idleTTL = 20 * time.Millisecond
 	defer ingress.Close()
 

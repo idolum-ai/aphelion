@@ -3,15 +3,13 @@
 package main
 
 import (
-	"context"
-	"flag"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/idolum-ai/aphelion/config"
+	"github.com/idolum-ai/aphelion/internal/maintenancecli"
 	memstore "github.com/idolum-ai/aphelion/memory"
 	aphruntime "github.com/idolum-ai/aphelion/runtime"
 	"github.com/idolum-ai/aphelion/session"
@@ -19,58 +17,15 @@ import (
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
-type durableAgentWakeRuntime interface {
-	RunDurableAgentChildWake(context.Context, string, time.Time) error
-}
-
-type durableAgentWakeRuntimeFactory func(*config.Config) (durableAgentWakeRuntime, func(), error)
+type durableAgentWakeRuntime = maintenancecli.DurableAgentWakeRuntime
+type durableAgentWakeRuntimeFactory = maintenancecli.DurableAgentWakeRuntimeFactory
 
 func runDurableAgentWakeCommand(args []string) error {
 	return runDurableAgentWakeCommandWithFactory(args, newDurableAgentWakeRuntimeForCommand)
 }
 
 func runDurableAgentWakeCommandWithFactory(args []string, factory durableAgentWakeRuntimeFactory) error {
-	fs := flag.NewFlagSet("durable-agent wake", flag.ContinueOnError)
-	configFlag := fs.String("config", "", "path to config.toml")
-	agentID := fs.String("agent", "", "durable agent id")
-	nowRaw := fs.String("now", "", "override wake timestamp (RFC3339 or RFC3339Nano)")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if strings.TrimSpace(*agentID) == "" {
-		return fmt.Errorf("durable-agent wake requires --agent")
-	}
-	now, err := parseDurableChildWakeTime(*nowRaw)
-	if err != nil {
-		return err
-	}
-	cfg, configPath, err := loadConfigForCommand(*configFlag)
-	if err != nil {
-		return err
-	}
-	if factory == nil {
-		return fmt.Errorf("durable-agent wake runtime factory is unavailable")
-	}
-	rt, cleanup, err := factory(cfg)
-	if err != nil {
-		return err
-	}
-	if cleanup != nil {
-		defer cleanup()
-	}
-	started := time.Now().UTC()
-	if err := rt.RunDurableAgentChildWake(context.Background(), strings.TrimSpace(*agentID), now); err != nil {
-		return err
-	}
-	completed := time.Now().UTC()
-	fmt.Fprintf(os.Stdout, "action: durable-agent wake\n")
-	fmt.Fprintf(os.Stdout, "agent_id: %s\n", strings.TrimSpace(*agentID))
-	fmt.Fprintf(os.Stdout, "config: %s\n", configPath)
-	fmt.Fprintf(os.Stdout, "wake_time: %s\n", now.UTC().Format(time.RFC3339Nano))
-	fmt.Fprintf(os.Stdout, "started_at: %s\n", started.Format(time.RFC3339Nano))
-	fmt.Fprintf(os.Stdout, "completed_at: %s\n", completed.Format(time.RFC3339Nano))
-	fmt.Fprintf(os.Stdout, "status: completed\n")
-	return nil
+	return maintenancecli.RunDurableAgentWakeCommand(args, factory)
 }
 
 func newDurableAgentWakeRuntimeForCommand(cfg *config.Config) (durableAgentWakeRuntime, func(), error) {
