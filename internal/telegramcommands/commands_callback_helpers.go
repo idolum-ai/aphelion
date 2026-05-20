@@ -4,10 +4,10 @@ package telegramcommands
 
 import (
 	"context"
-	"strconv"
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/internal/telegrampresentation"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
@@ -52,7 +52,7 @@ func telegramCallbackTargetMessage(router commandRouter, cb telegram.CallbackQue
 	}
 	msg.TelegramThreadID = thread.ThreadID
 	if thread.DisplaySlot > 0 {
-		msg.OriginDetail = "thread_display:" + strconv.FormatInt(thread.DisplaySlot, 10)
+		msg.OriginDetail = telegrampresentation.OriginDetailForDisplaySlot(thread.DisplaySlot)
 	}
 	return msg, nil
 }

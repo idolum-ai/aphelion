@@ -3,10 +3,8 @@
 package runtime
 
 import (
-	"fmt"
-	"strings"
-
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/internal/telegrampresentation"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -30,58 +28,30 @@ func (r *Runtime) telegramPresentationForTurnRun(run session.TurnRun) telegramOu
 }
 
 func (r *Runtime) telegramPresentationForThread(chatID int64, threadID int64) telegramOutboundPresentation {
-	presentation := telegramOutboundPresentation{ChatID: chatID, ThreadID: threadID}
 	if chatID == 0 || threadID <= 0 {
-		return presentation
+		return telegramOutboundPresentation{ChatID: chatID, ThreadID: threadID}
 	}
-	presentation.ThreadLabel = fmt.Sprint(threadID)
 	if r != nil && r.store != nil {
 		if thread, ok, err := r.store.TelegramThread(chatID, threadID); err == nil && ok {
-			presentation.ThreadLabel = telegramThreadPresentationLabel(thread, threadID)
+			return telegramOutboundPresentationFromPure(telegrampresentation.PresentationForThread(chatID, thread, threadID))
 		}
 	}
-	presentation.Prefix = telegramThreadPresentationPrefix(presentation.ThreadLabel)
-	return presentation
+	return telegramOutboundPresentationFromPure(telegrampresentation.FallbackPresentation(chatID, threadID))
 }
 
-func telegramThreadPresentationLabel(thread session.TelegramThread, fallbackID int64) string {
-	if thread.Open() && thread.DisplaySlot > 0 {
-		return fmt.Sprint(thread.DisplaySlot)
+func telegramOutboundPresentationFromPure(p telegrampresentation.ThreadPresentation) telegramOutboundPresentation {
+	return telegramOutboundPresentation{
+		ChatID:      p.ChatID,
+		ThreadID:    p.ThreadID,
+		ThreadLabel: p.Label,
+		Prefix:      p.Prefix,
 	}
-	if !thread.Open() {
-		if name := strings.TrimSpace(thread.ArchivedDisplayName); name != "" {
-			return name
-		}
-	}
-	if thread.ThreadID > 0 {
-		return fmt.Sprint(thread.ThreadID)
-	}
-	if fallbackID > 0 {
-		return fmt.Sprint(fallbackID)
-	}
-	return "unknown"
-}
-
-func telegramThreadPresentationPrefix(label string) string {
-	label = strings.TrimSpace(label)
-	if label == "" {
-		return ""
-	}
-	return "(thread " + label + ")"
 }
 
 func (r *Runtime) prefixTelegramPresentedText(presentation telegramOutboundPresentation, text string) string {
-	return prefixTelegramPresentationText(presentation.Prefix, text)
+	return telegrampresentation.PrefixText(presentation.Prefix, text)
 }
 
 func prefixTelegramPresentationText(prefix string, text string) string {
-	text = strings.TrimSpace(text)
-	prefix = strings.TrimSpace(prefix)
-	if prefix == "" || text == "" {
-		return text
-	}
-	if strings.HasPrefix(strings.ToLower(text), strings.ToLower(prefix)) {
-		return text
-	}
-	return prefix + "\n\n" + text
+	return telegrampresentation.PrefixText(prefix, text)
 }

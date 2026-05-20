@@ -32,7 +32,7 @@ func TestTelegramPresentationUsesDisplaySlotForRuntimeVisiblePrefix(t *testing.T
 	}
 }
 
-func TestTelegramPresentationFallsBackToDurableThreadIDWhenLookupMissing(t *testing.T) {
+func TestTelegramPresentationUsesUnresolvedFallbackWhenLookupMissing(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -41,8 +41,8 @@ func TestTelegramPresentationFallsBackToDurableThreadIDWhenLookupMissing(t *test
 		t.Fatalf("New() err = %v", err)
 	}
 	presentation := rt.telegramPresentationForMessage(core.InboundMessage{ChatID: 9412, TelegramThreadID: 12})
-	if presentation.ThreadLabel != "12" || presentation.Prefix != "(thread 12)" {
-		t.Fatalf("presentation = %#v, want durable-id fallback", presentation)
+	if presentation.ThreadID != 12 || presentation.ThreadLabel != "unresolved" || presentation.Prefix != "(thread unresolved)" {
+		t.Fatalf("presentation = %#v, want unresolved display-only fallback without minting or exposing durable id", presentation)
 	}
 }
 

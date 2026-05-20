@@ -10,6 +10,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/internal/telegrampresentation"
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
@@ -71,7 +72,7 @@ func handleTelegramAutoCommand(ctx context.Context, sender commandSender, router
 		}
 		_ = resolvedThread
 		msg.TelegramThreadID = threadID
-		msg.OriginDetail = "thread_display:" + strconv.FormatInt(visibleThreadID, 10)
+		msg.OriginDetail = telegrampresentation.OriginDetailForDisplaySlot(visibleThreadID)
 		if strings.TrimSpace(remaining) == "" {
 			return sendAutoHomePanel(ctx, sender, router, msg)
 		}
@@ -182,16 +183,7 @@ func sendAutoInlineKeyboard(ctx context.Context, sender commandSender, router co
 }
 
 func prefixAutoThreadPanel(msg core.InboundMessage, text string) string {
-	if msg.TelegramThreadID <= 0 {
-		return strings.TrimSpace(text)
-	}
-	visible := msg.TelegramThreadID
-	if strings.HasPrefix(strings.TrimSpace(msg.OriginDetail), "thread_display:") {
-		if parsed, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(msg.OriginDetail), "thread_display:")), 10, 64); err == nil && parsed > 0 {
-			visible = parsed
-		}
-	}
-	return "(thread " + strconv.FormatInt(visible, 10) + ")\n\n" + strings.TrimSpace(text)
+	return telegrampresentation.PrefixText(strings.TrimSpace(telegrampresentation.PrefixForMessage(msg)), text)
 }
 
 func sendAutoModePanel(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {

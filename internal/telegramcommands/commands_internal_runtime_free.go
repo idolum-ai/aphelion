@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/internal/telegrampresentation"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
@@ -151,16 +152,7 @@ func firstNonEmpty(values ...string) string {
 }
 
 func telegramThreadDisplayPrefixForMessage(msg core.InboundMessage) string {
-	visibleThreadID := msg.TelegramThreadID
-	if strings.HasPrefix(strings.TrimSpace(msg.OriginDetail), "thread_display:") {
-		if parsed, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(msg.OriginDetail), "thread_display:")), 10, 64); err == nil && parsed > 0 {
-			visibleThreadID = parsed
-		}
-	}
-	if visibleThreadID <= 0 {
-		return ""
-	}
-	return "(thread " + strconv.FormatInt(visibleThreadID, 10) + ")\n\n"
+	return telegrampresentation.PrefixForMessage(msg)
 }
 
 func actionListContains(values []string, want string) bool {
