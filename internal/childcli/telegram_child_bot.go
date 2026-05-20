@@ -384,6 +384,8 @@ func (e *ConfigStartupError) Error() string {
 
 func (e *ConfigStartupError) Unwrap() error { return e.Err }
 
+func (e *ConfigStartupError) IsConfigStartupError() {}
+
 func loadConfigForCommand(override string) (*config.Config, string, error) {
 	configPath, err := config.ResolveConfigPath(override)
 	if err != nil {
