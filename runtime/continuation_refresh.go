@@ -51,10 +51,7 @@ func (r *Runtime) refreshContinuationProposal(ctx context.Context, key session.S
 	payload["prior_lease_id"] = strings.TrimSpace(prior.ContinuationLease.ID)
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
 
-	msg := core.InboundMessage{ChatID: key.ChatID, Origin: core.InboundOriginTurnAuthorization, Text: "continuation proposal refresh"}
-	if threadID := telegramThreadIDFromScope(key.ChatID, key.Scope); threadID > 0 {
-		msg.TelegramThreadID = threadID
-	}
+	msg := continuationPromptInboundForKey(key, "continuation proposal refresh", core.InboundOriginTurnAuthorization, "")
 	text := r.renderContinuationPrompt(ctx, key, msg, state)
 	if allowAutoApproval {
 		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, text, "continuation_refresh"); err != nil {

@@ -191,17 +191,7 @@ func (r *Runtime) runApprovedContinuationNative(ctx context.Context, actor princ
 		payload["sandboxed_from_role"] = string(actor.Role)
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "consumed", payload, time.Now().UTC())
-	msg := core.InboundMessage{
-		ChatID:       key.ChatID,
-		SenderID:     executionActor.TelegramUserID,
-		SenderName:   actorLabel(executionActor),
-		Text:         continuationEventText,
-		Origin:       core.InboundOriginTurnAuthorization,
-		OriginDetail: string(session.TurnAuthorizationKindContinuation),
-	}
-	if threadID := telegramThreadIDFromScope(key.ChatID, key.Scope); threadID > 0 {
-		msg.TelegramThreadID = threadID
-	}
+	msg := continuationInboundForKey(key, executionActor, continuationEventText, core.InboundOriginTurnAuthorization, string(session.TurnAuthorizationKindContinuation))
 	_, err := r.handleInternalContinuation(ctx, executionActor, msg)
 	return err
 }

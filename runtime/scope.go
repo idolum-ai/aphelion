@@ -238,6 +238,37 @@ func telegramInboundScopeRef(msg core.InboundMessage) session.ScopeRef {
 	return telegramDMScopeRef(msg.ChatID)
 }
 
+func telegramScopedInboundForKey(key session.SessionKey, senderID int64) core.InboundMessage {
+	msg := core.InboundMessage{
+		ChatID:   key.ChatID,
+		SenderID: senderID,
+	}
+	if key.ChatID == 0 {
+		return msg
+	}
+	if threadID := telegramThreadIDFromScope(key.ChatID, key.Scope); threadID > 0 {
+		msg.TelegramThreadID = threadID
+	}
+	return msg
+}
+
+func continuationPromptInboundForKey(key session.SessionKey, text string, origin core.InboundOrigin, originDetail string) core.InboundMessage {
+	msg := telegramScopedInboundForKey(key, 0)
+	msg.Text = text
+	msg.Origin = origin
+	msg.OriginDetail = originDetail
+	return msg
+}
+
+func continuationInboundForKey(key session.SessionKey, actor principal.Principal, text string, origin core.InboundOrigin, originDetail string) core.InboundMessage {
+	msg := telegramScopedInboundForKey(key, actor.TelegramUserID)
+	msg.SenderName = actorLabel(actor)
+	msg.Text = text
+	msg.Origin = origin
+	msg.OriginDetail = originDetail
+	return msg
+}
+
 func telegramGroupScopeRef(chatID int64) session.ScopeRef {
 	if chatID == 0 {
 		return session.ScopeRef{}

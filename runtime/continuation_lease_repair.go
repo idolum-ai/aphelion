@@ -56,7 +56,7 @@ func (r *Runtime) offerLeaseActionDeniedRepair(ctx context.Context, key session.
 	payload := leaseDenialRepairPayload(repaired, marker)
 	r.recordExecutionEvent(key, core.ExecutionEventRecoveryIssued, "continuation", "lease_denial_repair_offered", payload, now)
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
-	msg := core.InboundMessage{ChatID: chatID, Origin: core.InboundOriginTurnAuthorization, Text: "lease action denied repair"}
+	msg := continuationPromptInboundForKey(key, "lease action denied repair", core.InboundOriginTurnAuthorization, "")
 	text := r.renderContinuationPrompt(ctx, key, msg, repaired)
 	if err := r.sendContinuationApprovalPrompt(ctx, key, msg, repaired, text); err != nil {
 		log.Printf("WARN send lease denial repair prompt failed chat_id=%d err=%v", chatID, err)
