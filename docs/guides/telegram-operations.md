@@ -151,13 +151,13 @@ grounded in current state.
 
 ## Grant Bounded Automation
 
-After an approval succeeds, the approved message shows `Approve next 15 min` and
-`Close`. `Approve next 15 min` opens a bounded approval window for matching
+After an approval succeeds, the approved message shows `Approve 15m` and
+`Close`. `Approve 15m` opens a bounded approval window for matching
 requests in the current chat or side thread. It creates the temporary automation
 gate and the spendable approval grant together, so the operator does not have to
 manage them as separate controls.
 
-An active window shows `2x approval time` and `Cancel approvals`. Each `2x`
+An active window shows `Double time` and `Cancel approvals`. Each `Double time`
 press doubles the current window duration within the configured live-override
 ceiling. `Cancel approvals` revokes both the approval grant and the matching
 automation gate for that scope. Side-thread approval windows are consumed only by
@@ -217,7 +217,7 @@ Before deploying changes that affect scoped Telegram threads, approval windows, 
 - Run `/threads` and verify only visible open thread numbers are shown in normal UI.
 - Create a side thread, reply to it, then verify replies still route to that visible thread number after restart.
 - Run `/absorb <visible-thread-number>` and verify that the visible label becomes available for the next open thread.
-- Approve a request and verify the approved message offers `Approve next 15 min`.
+- Approve a request and verify the approved message offers `Approve 15m`.
 - Open an approval window from a side-thread approval prompt and verify the edit starts with `(thread N)`.
 - Verify a thread-scoped approval window cannot approve default-chat work or another thread's work.
 - Observe durable-wake/provider warnings: repeated transient failures should stay compact and actionable, while permanent child blockers may interrupt chat.

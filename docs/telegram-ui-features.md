@@ -73,10 +73,10 @@ Current command surface:
   - Self-summon is review-only; Mission Ledger state does not grant self-continuation, autonomous continuation, new capabilities, or external authority.
 - Approval windows
   - Admin-only inline controls shown after an approval succeeds.
-  - The approved message offers `Approve next 15 min` and `Close`.
-  - `Approve next 15 min` opens the temporary automation gate and matching approval grant together for the current chat or side thread.
-  - Active windows offer `2x approval time` and `Cancel approvals`.
-  - Each `2x` press doubles the current window duration within the configured live-override ceiling. Cancel revokes both records.
+  - The approved message offers `Approve 15m` and `Close`.
+  - `Approve 15m` opens the temporary automation gate and matching approval grant together for the current chat or side thread.
+  - Active windows offer `Double time` and `Cancel approvals`.
+  - Each `Double time` press doubles the current window duration within the configured live-override ceiling. `Cancel approvals` revokes both records.
   - If config is tightened later, live mode overrides outside the new ceiling are ignored and `/health diagnose` reports the precedence block.
 - `/stop`
   - Stops active work in the current chat and drops queued follow-up work.
@@ -249,10 +249,10 @@ do not create continuation authority or capability grants.
 Approval-window buttons keep automation contextual to the request that was just
 approved:
 
-- `Approve next 15 min` creates a temporary automation gate and matching approval
+- `Approve 15m` creates a temporary automation gate and matching approval
   grant for the current chat or side thread.
 - `Close` removes the offer buttons without changing runtime state.
-- `2x approval time` doubles the current approval window within the configured
+- `Double time` doubles the current approval window within the configured
   live-override ceiling.
 - `Cancel approvals` revokes both the approval grant and its matching temporary
   automation gate.

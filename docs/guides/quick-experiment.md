@@ -78,12 +78,12 @@ session without clearing memory.
 
 ## Temporary Approval Windows
 
-When you approve a request, the approved Telegram message offers an `Approve next
-15 min` button. Use it when you want less approval friction for the bounded task
-already in front of you. The window opens the temporary automation gate and the
+When you approve a request, the approved Telegram message offers an
+`Approve 15m` button. Use it when you want less approval friction for the bounded
+task already in front of you. The window opens the temporary automation gate and the
 matching approval grant together, scoped to the current chat or side thread.
 
-The active window then offers `2x approval time` and `Cancel approvals`. Use
+The active window then offers `Double time` and `Cancel approvals`. Use
 `/health` after changing approval windows when you want the service state visible.
 
 ## Internet From Isolated Work
