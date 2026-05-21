@@ -30,6 +30,11 @@ const (
 	TelegramIngressUpdateSkipped     TelegramIngressUpdateStatus = "skipped"
 )
 
+const (
+	TelegramIngressDropReasonTelegramThreadClosed  = "telegram_thread_closed"
+	TelegramIngressDropReasonTelegramThreadMissing = "telegram_thread_missing"
+)
+
 type TelegramIngressUpdateRecord struct {
 	Surface     string
 	UpdateID    int64

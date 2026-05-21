@@ -373,3 +373,101 @@ func TestTelegramThreadDisplaySlotReusesClosedSlotAndArchivesName(t *testing.T) 
 		t.Fatalf("archived name = %q, want collision suffix", closedAgain.ArchivedDisplayName)
 	}
 }
+
+func TestCloseTelegramThreadDropsPendingThreadIngress(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	thread, _, err := store.CreateTelegramThreadForUpdate(1001, 2002, 301, 401, "haunted thread", now)
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate() err = %v", err)
+	}
+	threadSessionID := SessionIDForKey(SessionKey{ChatID: 1001, Scope: TelegramThreadScopeRef(1001, thread.ThreadID)})
+	rows := []TelegramIngressUpdateRecord{
+		{Surface: "telegram:primary", UpdateID: 701, UpdateKind: "message", ChatID: 1001, SenderID: 2002, MessageID: 501, SessionID: threadSessionID, Status: TelegramIngressUpdateAccepted, InboundJSON: `{"Text":"first","TelegramThreadID":1}`, AcceptedAt: now, UpdatedAt: now},
+		{Surface: "telegram:primary", UpdateID: 702, UpdateKind: "message", ChatID: 1001, SenderID: 2002, MessageID: 502, SessionID: "telegram_dm:1001", Status: TelegramIngressUpdateQueued, InboundJSON: `{"Text":"second","TelegramThreadID": 1}`, AcceptedAt: now, QueuedAt: now, UpdatedAt: now},
+		{Surface: "telegram:primary", UpdateID: 703, UpdateKind: "message", ChatID: 1001, SenderID: 2002, MessageID: 503, SessionID: "telegram_dm:1001", Status: TelegramIngressUpdateQueued, InboundJSON: `{"Text":"main"}`, AcceptedAt: now, QueuedAt: now, UpdatedAt: now},
+	}
+	for _, row := range rows {
+		if _, err := store.RecordTelegramIngressAccepted(row); err != nil {
+			t.Fatalf("RecordTelegramIngressAccepted(%d) err = %v", row.UpdateID, err)
+		}
+	}
+
+	closed, changed, err := store.CloseTelegramThread(1001, thread.ThreadID, "done", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("CloseTelegramThread() err = %v", err)
+	}
+	if !changed || !closed.ClosedAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("closed=%#v changed=%v, want changed closed thread", closed, changed)
+	}
+
+	for _, updateID := range []int64{701, 702} {
+		record, ok, err := store.TelegramIngressUpdate("telegram:primary", updateID)
+		if err != nil || !ok {
+			t.Fatalf("TelegramIngressUpdate(%d) ok=%v err=%v", updateID, ok, err)
+		}
+		if record.Status != TelegramIngressUpdateDropped || record.ErrorText != TelegramIngressDropReasonTelegramThreadClosed || record.CompletedAt.IsZero() {
+			t.Fatalf("thread update %d = %#v, want dropped closed-thread ingress", updateID, record)
+		}
+	}
+	mainRecord, ok, err := store.TelegramIngressUpdate("telegram:primary", 703)
+	if err != nil || !ok {
+		t.Fatalf("TelegramIngressUpdate(703) ok=%v err=%v", ok, err)
+	}
+	if mainRecord.Status != TelegramIngressUpdateQueued {
+		t.Fatalf("main update status = %s, want still queued", mainRecord.Status)
+	}
+}
+
+func TestRecordTelegramThreadAbsorbDropsPendingThreadIngress(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Date(2026, 5, 21, 13, 0, 0, 0, time.UTC)
+	thread, _, err := store.CreateTelegramThreadForUpdate(1001, 2002, 301, 401, "haunted thread", now)
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate() err = %v", err)
+	}
+	threadSessionID := SessionIDForKey(SessionKey{ChatID: 1001, Scope: TelegramThreadScopeRef(1001, thread.ThreadID)})
+	if _, err := store.RecordTelegramIngressAccepted(TelegramIngressUpdateRecord{
+		Surface:     "telegram:primary",
+		UpdateID:    801,
+		UpdateKind:  "message",
+		ChatID:      1001,
+		SenderID:    2002,
+		MessageID:   501,
+		SessionID:   threadSessionID,
+		Status:      TelegramIngressUpdateQueued,
+		InboundJSON: `{"Text":"first","TelegramThreadID":1}`,
+		AcceptedAt:  now,
+		QueuedAt:    now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("RecordTelegramIngressAccepted() err = %v", err)
+	}
+	mainKey := SessionKey{ChatID: 1001}
+	mainSession, err := store.Load(mainKey)
+	if err != nil {
+		t.Fatalf("Load(main) err = %v", err)
+	}
+	messages := []Message{
+		{Role: "user", Content: "/absorb 1", TurnIndex: 1},
+		{Role: "assistant", Content: "Thread 1 absorbed into the main chat.", FloorContent: "Thread 1 absorbed into the main chat.", FloorMetadata: `{"source":"telegram_thread_absorb"}`, TurnIndex: 1},
+	}
+	if _, changed, err := store.RecordTelegramThreadAbsorb(1001, thread.ThreadID, "Thread 1 absorbed into the main chat.", mainSession, messages, now.Add(time.Minute)); err != nil || !changed {
+		t.Fatalf("RecordTelegramThreadAbsorb() changed=%v err=%v", changed, err)
+	}
+	record, ok, err := store.TelegramIngressUpdate("telegram:primary", 801)
+	if err != nil || !ok {
+		t.Fatalf("TelegramIngressUpdate(801) ok=%v err=%v", ok, err)
+	}
+	if record.Status != TelegramIngressUpdateDropped || record.ErrorText != TelegramIngressDropReasonTelegramThreadClosed || record.CompletedAt.IsZero() {
+		t.Fatalf("absorbed-thread update = %#v, want dropped", record)
+	}
+}

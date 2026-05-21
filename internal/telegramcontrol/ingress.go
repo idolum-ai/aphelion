@@ -73,6 +73,9 @@ func (c CommandControl) Route(ctx context.Context, msg core.InboundMessage) {
 }
 
 func (c CommandControl) RouteAccepted(ctx context.Context, msg core.InboundMessage) error {
+	if dropped, err := c.DropClosedTelegramThreadIngress(msg); err != nil || dropped {
+		return err
+	}
 	if err := c.RebindTelegramIngressForMessage(msg); err != nil {
 		return err
 	}
@@ -100,8 +103,38 @@ func (c CommandControl) RouteAccepted(ctx context.Context, msg core.InboundMessa
 	return nil
 }
 
+func (c CommandControl) DropClosedTelegramThreadIngress(msg core.InboundMessage) (bool, error) {
+	if c.Store == nil || msg.ChatID == 0 || msg.TelegramThreadID <= 0 {
+		return false, nil
+	}
+	open, found, err := c.Store.TelegramThreadIsOpen(msg.ChatID, msg.TelegramThreadID)
+	if err != nil {
+		return false, err
+	}
+	if found && open {
+		return false, nil
+	}
+	reason := session.TelegramIngressDropReasonTelegramThreadClosed
+	if !found {
+		reason = session.TelegramIngressDropReasonTelegramThreadMissing
+	}
+	if strings.TrimSpace(msg.IngressSurface) != "" && msg.IngressUpdateID > 0 {
+		if _, err := c.Store.MarkTelegramIngressDroppedIfDispatchable(msg.IngressSurface, msg.IngressUpdateID, reason, time.Now().UTC()); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
 func (c CommandControl) RebindTelegramIngressForMessage(msg core.InboundMessage) error {
 	if c.Store == nil || msg.TelegramThreadID <= 0 || strings.TrimSpace(msg.IngressSurface) == "" || msg.IngressUpdateID <= 0 {
+		return nil
+	}
+	open, found, err := c.Store.TelegramThreadIsOpen(msg.ChatID, msg.TelegramThreadID)
+	if err != nil {
+		return err
+	}
+	if !found || !open {
 		return nil
 	}
 	encoded := ""

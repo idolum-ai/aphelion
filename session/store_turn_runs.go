@@ -64,6 +64,22 @@ func (s *SQLiteStore) BeginTurnRunForTelegramIngress(key SessionKey, kind TurnRu
 	}
 	scope := defaultScopeForKey(key)
 	sessionID := SessionIDFromParts(key.ChatID, key.UserID, scope)
+	if threadID, ok := TelegramThreadIDFromScope(key.ChatID, scope); ok {
+		open, found, err := s.TelegramThreadIsOpen(key.ChatID, threadID)
+		if err != nil {
+			return nil, err
+		}
+		if !found || !open {
+			reason := TelegramIngressDropReasonTelegramThreadClosed
+			if !found {
+				reason = TelegramIngressDropReasonTelegramThreadMissing
+			}
+			if _, err := s.MarkTelegramIngressDroppedIfDispatchable(surface, updateID, reason, now); err != nil {
+				return nil, err
+			}
+			return nil, fmt.Errorf("telegram ingress update %s/%d targets non-open telegram thread %d/%d: %s", surface, updateID, key.ChatID, threadID, reason)
+		}
+	}
 
 	tx, err := s.db.Begin()
 	if err != nil {

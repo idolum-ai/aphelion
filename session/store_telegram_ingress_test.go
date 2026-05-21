@@ -529,3 +529,47 @@ func TestTelegramIngressDropTerminalizesOnlyDispatchableRows(t *testing.T) {
 		t.Fatalf("pending = %#v, want dropped/running/terminal rows excluded from replay", pending)
 	}
 }
+
+func TestBeginTurnRunForTelegramIngressDropsClosedThreadIngress(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Date(2026, 5, 21, 14, 0, 0, 0, time.UTC)
+	thread, _, err := store.CreateTelegramThreadForUpdate(8001, 9002, 301, 401, "queued stale work", now)
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate() err = %v", err)
+	}
+	if _, _, err := store.CloseTelegramThread(8001, thread.ThreadID, "done", now.Add(time.Minute)); err != nil {
+		t.Fatalf("CloseTelegramThread() err = %v", err)
+	}
+	threadKey := SessionKey{ChatID: 8001, Scope: TelegramThreadScopeRef(8001, thread.ThreadID)}
+	if _, err := store.RecordTelegramIngressAccepted(TelegramIngressUpdateRecord{
+		Surface:     "telegram:primary",
+		UpdateID:    901,
+		UpdateKind:  "message",
+		ChatID:      8001,
+		SenderID:    9002,
+		MessageID:   501,
+		SessionID:   SessionIDForKey(threadKey),
+		Status:      TelegramIngressUpdateQueued,
+		InboundJSON: `{"Text":"stale","TelegramThreadID":1}`,
+		AcceptedAt:  now,
+		QueuedAt:    now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("RecordTelegramIngressAccepted() err = %v", err)
+	}
+
+	if _, err := store.BeginTurnRunForTelegramIngress(threadKey, TurnRunKindInteractive, "stale", "telegram:primary", 901); err == nil || !strings.Contains(err.Error(), TelegramIngressDropReasonTelegramThreadClosed) {
+		t.Fatalf("BeginTurnRunForTelegramIngress() err = %v, want closed-thread drop", err)
+	}
+	record, ok, err := store.TelegramIngressUpdate("telegram:primary", 901)
+	if err != nil || !ok {
+		t.Fatalf("TelegramIngressUpdate(901) ok=%v err=%v", ok, err)
+	}
+	if record.Status != TelegramIngressUpdateDropped || record.ErrorText != TelegramIngressDropReasonTelegramThreadClosed {
+		t.Fatalf("record = %#v, want dropped closed-thread ingress", record)
+	}
+}

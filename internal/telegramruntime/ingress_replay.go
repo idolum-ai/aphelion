@@ -57,6 +57,11 @@ func replayPendingTelegramIngress(
 			}
 			continue
 		}
+		if dropped, err := dropClosedTelegramThreadReplay(ctx, store, checkpoint, record, msg); err != nil {
+			return err
+		} else if dropped {
+			continue
+		}
 		if err := handler(ctx, msg); err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
@@ -102,6 +107,49 @@ func telegramIngressReplayMessage(record session.TelegramIngressUpdateRecord) (c
 		msg.Timestamp = record.AcceptedAt
 	}
 	return msg, nil
+}
+
+func dropClosedTelegramThreadReplay(
+	ctx context.Context,
+	store *session.SQLiteStore,
+	checkpoint telegram.PollerCheckpoint,
+	record session.TelegramIngressUpdateRecord,
+	msg core.InboundMessage,
+) (bool, error) {
+	if store == nil || checkpoint == nil {
+		return false, nil
+	}
+	threadID := msg.TelegramThreadID
+	if threadID <= 0 {
+		if parsed, ok := session.TelegramThreadIDFromSessionID(record.ChatID, record.SessionID); ok {
+			threadID = parsed
+		}
+	}
+	chatID := record.ChatID
+	if chatID == 0 {
+		chatID = msg.ChatID
+	}
+	if chatID == 0 || threadID <= 0 {
+		return false, nil
+	}
+	open, found, err := store.TelegramThreadIsOpen(chatID, threadID)
+	if err != nil {
+		return false, err
+	}
+	if found && open {
+		return false, nil
+	}
+	reason := session.TelegramIngressDropReasonTelegramThreadClosed
+	if !found {
+		reason = session.TelegramIngressDropReasonTelegramThreadMissing
+	}
+	if _, err := store.MarkTelegramIngressDroppedIfDispatchable(record.Surface, record.UpdateID, reason, time.Now().UTC()); err != nil {
+		return false, err
+	}
+	if err := checkpoint.SaveNextUpdateID(ctx, record.UpdateID+1); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func telegramIngressFailureFromUpdateRecord(record session.TelegramIngressUpdateRecord, err error) telegram.PollerFailure {
