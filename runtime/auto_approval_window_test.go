@@ -228,6 +228,47 @@ func TestRuntimeApprovalWindowCreatesModeGateAndApprovalGrant(t *testing.T) {
 	if result.Choice != "approve" {
 		t.Fatalf("auto resolution = %#v, want approve", result)
 	}
+
+	defaultResult, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-approval-window-default",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        99206,
+			SenderID:      1002,
+			Prompt:        "Approve this default chat proposal?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision(default) err = %v", err)
+	}
+	if defaultResult.Choice != "" {
+		t.Fatalf("default auto resolution = %#v, want no approval from thread window", defaultResult)
+	}
+
+	otherKind, otherID := operatorAutoThreadScope(99206, 43)
+	otherThreadResult, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-approval-window-other-thread",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        99206,
+			SenderID:      1002,
+			ScopeKind:     otherKind,
+			ScopeID:       otherID,
+			Prompt:        "Approve this other thread proposal?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision(other thread) err = %v", err)
+	}
+	if otherThreadResult.Choice != "" {
+		t.Fatalf("other thread auto resolution = %#v, want no approval from thread 42 window", otherThreadResult)
+	}
 }
 
 func TestRuntimeApprovalWindowDoubleAndCancelKeepGateAndGrantTogether(t *testing.T) {

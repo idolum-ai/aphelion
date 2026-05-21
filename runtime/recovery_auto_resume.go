@@ -90,10 +90,7 @@ func (r *Runtime) proposeStartupRecoveryResume(ctx context.Context, key session.
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return fmt.Errorf("persist startup recovery resume continuation: %w", err)
 	}
-	msg := core.InboundMessage{ChatID: key.ChatID, Origin: core.InboundOriginStartupRecovery, OriginDetail: "resume_proposal", Text: startupRecoveryResumePrefix}
-	if threadID := telegramThreadIDFromScope(key.ChatID, key.Scope); threadID > 0 {
-		msg.TelegramThreadID = threadID
-	}
+	msg := continuationPromptInboundForKey(key, startupRecoveryResumePrefix, core.InboundOriginStartupRecovery, "resume_proposal")
 	text := r.renderContinuationPrompt(ctx, key, msg, state)
 	if strings.TrimSpace(text) == "" {
 		text = renderContinuationPromptFallback(state)

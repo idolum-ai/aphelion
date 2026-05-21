@@ -27,6 +27,7 @@ func TestTelegramGlueFilesStayFocused(t *testing.T) {
 	limits := map[string]int{
 		"internal/telegramcommands/commands.go":                        420,
 		"internal/telegramcommands/commands_callback_helpers.go":       220,
+		"internal/telegramcommands/commands_callback_router.go":        220,
 		"internal/telegramcommands/commands_continuation_callbacks.go": 320,
 		"internal/telegramcommands/commands_tailnet_callbacks.go":      180,
 		"internal/telegramcommands/commands_threads.go":                520,

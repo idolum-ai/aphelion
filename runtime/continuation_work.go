@@ -69,6 +69,13 @@ func (r *Runtime) ApproveContinuationForKey(key session.SessionKey, approverID i
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), now)
 		return state, err
 	}
+	if compilation := continuationAuthorityCompilation(state); compilation.Invalid() {
+		blocked, _, blockErr := r.blockInvalidContinuationAuthorityContract(context.Background(), key, core.InboundMessage{ChatID: key.ChatID}, state, "approval", now, false)
+		if blockErr != nil {
+			return session.ContinuationState{}, blockErr
+		}
+		return blocked, fmt.Errorf("continuation authority contract invalid: %s", continuationAuthorityContractInvalidReason(compilation))
+	}
 	if continuationActionIsPlanLeaseApproval(state) && !state.ApprovalBundle.Active() {
 		state = continuationStateWithPlanLeaseApprovalConsumed(state, now)
 	}
@@ -191,17 +198,7 @@ func (r *Runtime) runApprovedContinuationNative(ctx context.Context, actor princ
 		payload["sandboxed_from_role"] = string(actor.Role)
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "consumed", payload, time.Now().UTC())
-	msg := core.InboundMessage{
-		ChatID:       key.ChatID,
-		SenderID:     executionActor.TelegramUserID,
-		SenderName:   actorLabel(executionActor),
-		Text:         continuationEventText,
-		Origin:       core.InboundOriginTurnAuthorization,
-		OriginDetail: string(session.TurnAuthorizationKindContinuation),
-	}
-	if threadID := telegramThreadIDFromScope(key.ChatID, key.Scope); threadID > 0 {
-		msg.TelegramThreadID = threadID
-	}
+	msg := continuationInboundForKey(key, executionActor, continuationEventText, core.InboundOriginTurnAuthorization, string(session.TurnAuthorizationKindContinuation))
 	_, err := r.handleInternalContinuation(ctx, executionActor, msg)
 	return err
 }
@@ -296,7 +293,7 @@ func (r *Runtime) warnWorkExecutorFallback(ctx context.Context, key session.Sess
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	text = prefixTelegramThreadText(telegramThreadIDFromScope(key.ChatID, key.Scope), text)
+	text = r.prefixTelegramPresentedText(r.telegramPresentationForKey(key), text)
 	_, err := r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: key.ChatID, Text: text})
 	return err
 }

@@ -416,12 +416,12 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 
 func ApplyAuthorityContractToActionProposal(proposal ActionProposal) ActionProposal {
 	proposal = SanitizeActionProposalAuthority(NormalizeActionProposal(proposal))
-	contract, ok := AuthorityContractFor(proposal.RiskClass, proposal.AllowedActions, proposal.BoundedEffect)
-	if !ok {
+	compilation := CompileActionProposalAuthorityContract(proposal)
+	if strings.TrimSpace(compilation.Contract.Key) == "" {
 		return proposal
 	}
-	proposal.AllowedActions = append(proposal.AllowedActions, contract.AllowedActions...)
-	proposal.ForbiddenActions = append(proposal.ForbiddenActions, contract.ForbiddenActions...)
-	proposal.ValidationPlan = append(proposal.ValidationPlan, contract.ValidationPlan...)
+	proposal.AllowedActions = append(proposal.AllowedActions, compilation.Contract.AllowedActions...)
+	proposal.ForbiddenActions = append(proposal.ForbiddenActions, compilation.Contract.ForbiddenActions...)
+	proposal.ValidationPlan = append(proposal.ValidationPlan, compilation.Contract.ValidationPlan...)
 	return SanitizeActionProposalAuthority(NormalizeActionProposal(proposal))
 }

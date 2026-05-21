@@ -229,7 +229,7 @@ func (r *Runtime) newToolProgressReporter(key session.SessionKey, msg core.Inbou
 		seenKeys:         make(map[string]struct{}),
 		audit:            audit,
 		taskSummary:      summarizeProgressTask(msg.Text),
-		displayPrefix:    telegramThreadDisplayPrefix(msg.TelegramThreadID),
+		displayPrefix:    r.telegramPresentationForMessage(msg).Prefix,
 	}
 	if target.SuppressControls {
 		reporter.reportIssue = r.reportToolProgressIssue

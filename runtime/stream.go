@@ -50,7 +50,7 @@ func (r *Runtime) newStreamEditor(msg core.InboundMessage) *streamEditor {
 		replyTo:       replyToMessageID(msg.MessageID),
 		interval:      r.streamEditInterval,
 		cursor:        r.streamCursor,
-		displayPrefix: telegramThreadDisplayPrefix(msg.TelegramThreadID),
+		displayPrefix: r.telegramPresentationForMessage(msg).Prefix,
 	}
 	if keyboardEditor, ok := r.outbound.(messageKeyboardEditor); ok {
 		stream.keyboardEditor = keyboardEditor

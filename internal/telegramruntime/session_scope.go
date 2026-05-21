@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/internal/telegrampresentation"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -93,10 +94,7 @@ func telegramSessionOwnerKey(msg core.InboundMessage) string {
 }
 
 func telegramThreadDisplayPrefixForMessage(msg core.InboundMessage) string {
-	if msg.TelegramThreadID <= 0 {
-		return ""
-	}
-	return fmt.Sprintf("(thread %d)\n\n", msg.TelegramThreadID)
+	return telegrampresentation.PrefixForMessage(msg)
 }
 
 func telegramInboundForTurnRun(run session.TurnRun, senderID int64) core.InboundMessage {

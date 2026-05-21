@@ -311,3 +311,47 @@ func TestAuthorityContractMapsExternalAccountStatusCheckAliasToReadOnlyDataAcces
 		t.Fatalf("allowed actions = %#v, want read_only", proposal.AllowedActions)
 	}
 }
+
+func TestAuthorityContractCompilerRejectsCommitAllowedButBroadCommitForbidden(t *testing.T) {
+	compilation := CompileActionProposalAuthorityContract(ActionProposal{
+		RiskClass:        "workspace_commit_then_repo_write_bounded",
+		AllowedActions:   []string{"git_commit_validated_slices", "edit_repo_code"},
+		ForbiddenActions: []string{"commit"},
+	})
+	if compilation.Valid() {
+		t.Fatalf("compilation = %#v, want invalid broad commit contradiction", compilation)
+	}
+	if len(compilation.Contradictions) == 0 || compilation.Contradictions[0].WorkAction != AuthorityWorkActionCommit {
+		t.Fatalf("contradictions = %#v, want commit contradiction", compilation.Contradictions)
+	}
+}
+
+func TestAuthorityContractCompilerAllowsWorkspaceWriteWithCommitForbidden(t *testing.T) {
+	compilation := CompileActionProposalAuthorityContract(ActionProposal{
+		RiskClass:        "workspace_write",
+		AllowedActions:   []string{"edit_repo_code", "run_go_tests"},
+		ForbiddenActions: []string{"commit"},
+	})
+	if !compilation.Valid() {
+		t.Fatalf("compilation = %#v, want workspace-write valid while commit forbidden", compilation)
+	}
+}
+
+func TestAuthorityContractCompilerAllowsSpecificCommitAndDeployGuardrails(t *testing.T) {
+	commit := CompileActionProposalAuthorityContract(ActionProposal{
+		RiskClass:        "workspace_commit_then_repo_write_bounded",
+		AllowedActions:   []string{"git_commit_validated_slices"},
+		ForbiddenActions: []string{"git_push", "deploy", "restart_service", "commit_unrelated_changes"},
+	})
+	if !commit.Valid() {
+		t.Fatalf("commit compilation = %#v, want valid with specific commit guardrail", commit)
+	}
+	deploy := CompileActionProposalAuthorityContract(ActionProposal{
+		RiskClass:        "deploy",
+		AllowedActions:   []string{"install_user_service", "restart_aphelion_service", "run_verify_deploy"},
+		ForbiddenActions: []string{"deploy_without_handoff", "restart_without_recovery_artifact", "commit_unrelated_changes"},
+	})
+	if !deploy.Valid() {
+		t.Fatalf("deploy compilation = %#v, want valid with deploy guardrails", deploy)
+	}
+}

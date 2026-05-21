@@ -244,14 +244,15 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 	if e.runtime == nil {
 		return WorkResult{}, fmt.Errorf("runtime unavailable")
 	}
-	result, err := e.runtime.handleInternalContinuation(ctx, req.Actor, core.InboundMessage{
-		ChatID:       req.ChatID,
-		SenderID:     req.Actor.TelegramUserID,
-		SenderName:   actorLabel(req.Actor),
-		Text:         approvedContinuationEventTextForState(req.State),
-		Origin:       core.InboundOriginTurnAuthorization,
-		OriginDetail: string(session.TurnAuthorizationKindContinuation),
-	})
+	key := req.Key
+	if key.ChatID == 0 {
+		key.ChatID = req.ChatID
+	}
+	if key.ChatID != 0 && strings.TrimSpace(string(key.Scope.Kind)) == "" && strings.TrimSpace(key.Scope.ID) == "" {
+		key.Scope = telegramDMScopeRef(key.ChatID)
+	}
+	msg := continuationInboundForKey(key, req.Actor, approvedContinuationEventTextForState(req.State), core.InboundOriginTurnAuthorization, string(session.TurnAuthorizationKindContinuation))
+	result, err := e.runtime.handleInternalContinuation(ctx, req.Actor, msg)
 	out := WorkResult{ExecutorName: "native", CompletionKind: "native_turn"}
 	if result != nil {
 		out.Summary = strings.TrimSpace(result.Text)

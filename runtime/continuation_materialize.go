@@ -61,6 +61,11 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		}
 
 		state := continuationStateFromOperationPlanLease(opState, opState.PlanLease, promptInput, now)
+		if updatedOpState, blocked, err := r.blockInvalidMaterializedContinuationAuthority(ctx, key, msg, opState, state, "operation_plan_lease", now); err != nil || blocked {
+			return true, err
+		} else {
+			opState = updatedOpState
+		}
 		opState = operationStateWithMaterializedPlanLease(opState, state, now)
 		if err := r.store.UpdateOperationState(key, opState); err != nil {
 			return false, fmt.Errorf("persist operation plan lease state: %w", err)
@@ -90,6 +95,11 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		}
 
 		state := continuationStateFromOperationPlanLease(opState, opState.PlanLease, promptInput, now)
+		if updatedOpState, blocked, err := r.blockInvalidMaterializedContinuationAuthority(ctx, key, msg, opState, state, "operation_plan_lease", now); err != nil || blocked {
+			return true, err
+		} else {
+			opState = updatedOpState
+		}
 		opState = operationStateWithMaterializedPlanLease(opState, state, now)
 		if err := r.store.UpdateOperationState(key, opState); err != nil {
 			return false, fmt.Errorf("persist synthesized operation plan lease state: %w", err)
@@ -119,6 +129,11 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		}
 
 		state := continuationStateFromOperationPhaseBundle(opState, bundle, promptInput, now)
+		if updatedOpState, blocked, err := r.blockInvalidMaterializedContinuationAuthority(ctx, key, msg, opState, state, "operation_phase_bundle", now); err != nil || blocked {
+			return true, err
+		} else {
+			opState = updatedOpState
+		}
 		opState = operationStateWithMaterializedPhaseBundleLease(opState, bundle, state, now)
 		if err := r.store.UpdateOperationState(key, opState); err != nil {
 			return false, fmt.Errorf("persist operation phase bundle lease state: %w", err)
@@ -156,6 +171,11 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		}
 
 		state := continuationStateFromOperationPhase(opState, phase, promptInput, now)
+		if updatedOpState, blocked, err := r.blockInvalidMaterializedContinuationAuthority(ctx, key, msg, opState, state, "operation_phase_plan", now); err != nil || blocked {
+			return true, err
+		} else {
+			opState = updatedOpState
+		}
 		opState = operationStateWithMaterializedPhaseLease(opState, phase.ID, state, now)
 		if err := r.store.UpdateOperationState(key, opState); err != nil {
 			return false, fmt.Errorf("persist operation phase lease state: %w", err)
@@ -194,6 +214,11 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 
 	now = time.Now().UTC()
 	state := continuationStateFromOperationProposal(opState, promptInput, now)
+	if updatedOpState, blocked, err := r.blockInvalidMaterializedContinuationAuthority(ctx, key, msg, opState, state, "operation_proposal", now); err != nil || blocked {
+		return true, err
+	} else {
+		opState = updatedOpState
+	}
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return false, fmt.Errorf("persist operation proposal continuation state: %w", err)
 	}

@@ -103,6 +103,9 @@ func buildContinuationActionProposal(decisionID string, consensus continuationCo
 
 func applyContinuationLeaseClassBoundaries(action session.ActionProposal) session.ActionProposal {
 	action = session.NormalizeActionProposal(action)
+	if actionListContains(action.AllowedActions, organicProposalSandboxAction) || continuationActionIsSystemChangeSandbox(action) {
+		return session.NormalizeActionProposal(action)
+	}
 	action = session.ApplyAuthorityContractToActionProposal(action)
 	class := session.InferContinuationLeaseClass(action.RiskClass, action.AllowedActions, action.BoundedEffect)
 	switch class {
@@ -185,6 +188,15 @@ func applyContinuationLeaseClassBoundaries(action session.ActionProposal) sessio
 		)
 	}
 	return session.NormalizeActionProposal(action)
+}
+
+func continuationActionIsSystemChangeSandbox(action session.ActionProposal) bool {
+	return strings.TrimSpace(action.RiskClass) == "system_change" &&
+		actionListContains(action.ForbiddenActions, "deploy") &&
+		(actionListContains(action.AllowedActions, "patch_code") ||
+			actionListContains(action.AllowedActions, "run_tests") ||
+			actionListContains(action.AllowedActions, "edit_files") ||
+			actionListContains(action.AllowedActions, "write_user_workspace_memory_tmp"))
 }
 
 func buildContinuationLease(proposal session.ActionProposal, turns int, now time.Time) session.ContinuationLease {

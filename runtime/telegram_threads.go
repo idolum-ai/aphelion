@@ -228,22 +228,3 @@ func normalizeTelegramThreadOperatorLabel(label string, fallback string) string 
 	}
 	return "unknown"
 }
-
-func telegramThreadDisplayPrefix(threadID int64) string {
-	if threadID <= 0 {
-		return ""
-	}
-	return fmt.Sprintf("(thread %d)", threadID)
-}
-
-func prefixTelegramThreadText(threadID int64, text string) string {
-	text = strings.TrimSpace(text)
-	prefix := telegramThreadDisplayPrefix(threadID)
-	if prefix == "" || text == "" {
-		return text
-	}
-	if strings.HasPrefix(strings.ToLower(text), strings.ToLower(prefix)) {
-		return text
-	}
-	return prefix + "\n\n" + text
-}

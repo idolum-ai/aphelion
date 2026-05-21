@@ -36,16 +36,28 @@ func (r *Runtime) repairContinuationAuthorityContradictions(ctx context.Context,
 		if !rawContinuationStateAuthorityNeedsSanitization(record.RawJSON, record.State) {
 			continue
 		}
+		compilation := session.CompileContinuationAuthorityContract(record.State)
 		state := session.NormalizeContinuationState(record.State)
+		status := "authority_sanitized"
+		payload := map[string]any{
+			"phase":       "continuation_authority_sanitizer",
+			"status":      string(state.Status),
+			"lease_class": string(state.ContinuationLease.LeaseClass),
+		}
+		if compilation.Invalid() {
+			state = continuationStateWithInvalidAuthorityContract(state, compilation, now)
+			status = "authority_contract_invalid_superseded"
+			payload["authority_contract_status"] = string(compilation.Status)
+			payload["authority_contract_work_action"] = strings.TrimSpace(compilation.WorkAction)
+			payload["authority_contract_suggested_repair"] = strings.TrimSpace(compilation.SuggestedRepair)
+			payload["authority_contract_contradictions"] = compilation.Contradictions
+			payload["reason"] = "invalid_authority_contract"
+		}
 		if err := r.store.UpdateContinuationState(record.Key, state); err != nil {
 			return repaired, fmt.Errorf("repair continuation authority chat_id=%d: %w", record.Key.ChatID, err)
 		}
 		repaired++
-		r.recordExecutionEvent(record.Key, core.ExecutionEventRecoveryCompleted, "recovery", "authority_sanitized", map[string]any{
-			"phase":       "continuation_authority_sanitizer",
-			"status":      string(state.Status),
-			"lease_class": string(state.ContinuationLease.LeaseClass),
-		}, now)
+		r.recordExecutionEvent(record.Key, core.ExecutionEventRecoveryCompleted, "recovery", status, payload, now)
 	}
 	return repaired, nil
 }

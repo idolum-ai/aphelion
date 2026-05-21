@@ -21,6 +21,10 @@ func TestHandleInboundTelegramThreadUsesThreadScopeAndVisiblePrefix(t *testing.T
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	thread, _, err := store.CreateTelegramThreadForUpdate(9101, 1001, 301, 41, "keep this work separate", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate() err = %v", err)
+	}
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:           9101,
@@ -28,7 +32,7 @@ func TestHandleInboundTelegramThreadUsesThreadScopeAndVisiblePrefix(t *testing.T
 		SenderName:       "operator",
 		Text:             "keep this work separate",
 		MessageID:        41,
-		TelegramThreadID: 2,
+		TelegramThreadID: thread.ThreadID,
 		Timestamp:        time.Now().UTC(),
 	})
 	if err != nil {
@@ -47,15 +51,15 @@ func TestHandleInboundTelegramThreadUsesThreadScopeAndVisiblePrefix(t *testing.T
 		finalVisible = sender.sent[len(sender.sent)-1].Text
 	}
 	sender.mu.Unlock()
-	if !strings.HasPrefix(strings.TrimSpace(finalVisible), "(thread 2)\n\n") {
+	if !strings.HasPrefix(strings.TrimSpace(finalVisible), "(thread 1)\n\n") {
 		t.Fatalf("visible reply = %q, want thread prefix", finalVisible)
 	}
 
-	threadSession, err := store.Load(session.SessionKey{ChatID: 9101, UserID: 0, Scope: telegramThreadScopeRef(9101, 2)})
+	threadSession, err := store.Load(session.SessionKey{ChatID: 9101, UserID: 0, Scope: telegramThreadScopeRef(9101, thread.ThreadID)})
 	if err != nil {
 		t.Fatalf("Load(thread) err = %v", err)
 	}
-	if got := threadSession.SessionID; got != "telegram_thread:9101:2" {
+	if got := threadSession.SessionID; got != "telegram_thread:9101:1" {
 		t.Fatalf("thread session id = %q, want typed thread scope", got)
 	}
 	if len(threadSession.Messages) == 0 {
@@ -323,12 +327,6 @@ func TestMemoryFocusIsScopedToTelegramThread(t *testing.T) {
 func TestTelegramThreadProgressPrefixHelpers(t *testing.T) {
 	t.Parallel()
 
-	run := session.TurnRun{
-		Scope: session.TelegramThreadScopeRef(9104, 6),
-	}
-	if got := progressTurnRunDisplayPrefix(run); got != "(thread 6)" {
-		t.Fatalf("progressTurnRunDisplayPrefix() = %q, want thread prefix", got)
-	}
 	reporter := &toolProgressReporter{displayPrefix: "(thread 6)"}
 	if got := reporter.prefixProgressText("Working"); got != "(thread 6)\n\nWorking" {
 		t.Fatalf("prefixProgressText() = %q, want visible thread prefix", got)
