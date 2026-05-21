@@ -12,6 +12,25 @@ import (
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
+func TestApprovalWindowRowsRespectTelegramLabelContract(t *testing.T) {
+	t.Parallel()
+
+	offer := session.ApprovalWindowOffer{ID: "offer-test"}
+	for name, rows := range map[string][][]telegram.InlineButton{
+		"offer":    ApprovalWindowOfferRows("offer-test"),
+		"embedded": ApprovalWindowEmbeddedOfferRows(offer),
+		"active":   ApprovalWindowActiveRows("offer-test"),
+	} {
+		for rowIndex, row := range rows {
+			for buttonIndex, button := range row {
+				if words := strings.Fields(button.Text); len(words) > 2 {
+					t.Fatalf("%s row %d button %d label %q has %d words, want <= 2", name, rowIndex, buttonIndex, button.Text, len(words))
+				}
+			}
+		}
+	}
+}
+
 func TestApprovalWindowEnableCallbackTargetsThreadScope(t *testing.T) {
 	t.Parallel()
 
@@ -56,7 +75,7 @@ func TestApprovalWindowEnableCallbackTargetsThreadScope(t *testing.T) {
 	if !strings.HasPrefix(sender.inline[0].text, "(thread 5)\n\n") {
 		t.Fatalf("inline text = %q, want visible thread display prefix", sender.inline[0].text)
 	}
-	if !commandRowsContain(sender.inline[0].rows, "2x approval time", encodeApprovalWindowCallbackData("offer-test", approvalWindowActionDouble)) ||
+	if !commandRowsContain(sender.inline[0].rows, "Double time", encodeApprovalWindowCallbackData("offer-test", approvalWindowActionDouble)) ||
 		!commandRowsContain(sender.inline[0].rows, "Cancel approvals", encodeApprovalWindowCallbackData("offer-test", approvalWindowActionCancel)) {
 		t.Fatalf("inline rows = %#v, want active approval-window controls", sender.inline[0].rows)
 	}
@@ -82,7 +101,7 @@ func TestApprovalWindowDoubleCallbackKeepsActiveControls(t *testing.T) {
 	if router.approvalWindowAction != approvalWindowActionDouble {
 		t.Fatalf("approval action = %q, want double", router.approvalWindowAction)
 	}
-	if len(sender.editInline) != 1 || !commandRowsContain(sender.editInline[0].rows, "2x approval time", encodeApprovalWindowCallbackData("offer-test", approvalWindowActionDouble)) {
+	if len(sender.editInline) != 1 || !commandRowsContain(sender.editInline[0].rows, "Double time", encodeApprovalWindowCallbackData("offer-test", approvalWindowActionDouble)) {
 		t.Fatalf("editInline = %#v, want active approval-window controls", sender.editInline)
 	}
 }

@@ -60,7 +60,7 @@ func TestHandleTelegramCommandCallbackContinuationApprove(t *testing.T) {
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline count = %d, want 1 approval-window offer edit", len(sender.editInline))
 	}
-	if !commandRowsContain(sender.editInline[0].rows, "Approve next 15 min", encodeApprovalWindowCallbackData("offer-test", approvalWindowActionEnable15)) {
+	if !commandRowsContain(sender.editInline[0].rows, "Approve 15m", encodeApprovalWindowCallbackData("offer-test", approvalWindowActionEnable15)) {
 		t.Fatalf("editInline rows = %#v, want approval-window offer", sender.editInline[0].rows)
 	}
 }

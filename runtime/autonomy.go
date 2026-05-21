@@ -459,7 +459,7 @@ func renderOperatorAutonomyDoubled(override session.OperatorAutonomyOverride, no
 		Title:   "Auto mode",
 		State:   "live gate open",
 		Why:     "Expanded the current auto mode gate by doubling its full time window.",
-		Next:    "Use approval-window controls to close it, or press 2x approval time again to extend within the cap.",
+		Next:    "Use approval-window controls to close it, or press Double time again to extend within the cap.",
 		Details: details,
 	})
 }

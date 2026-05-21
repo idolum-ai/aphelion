@@ -300,7 +300,7 @@ func renderApprovalWindowActivePanel(state string, why string, lease session.Ope
 		Title:   "Approval window",
 		State:   state,
 		Why:     why,
-		Next:    "Use 2x approval time to extend it, or cancel approvals to stop it.",
+		Next:    "Use Double time to extend it, or cancel approvals to stop it.",
 		Details: details,
 	})
 }

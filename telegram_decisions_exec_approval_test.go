@@ -713,7 +713,7 @@ func TestTelegramExecApproverAddsApprovalWindowOfferToApprovedProposal(t *testin
 	}
 
 	approvalEdit := waitForDecisionEdit(t, sender, 1)
-	if !hasInlineButton(approvalEdit.rows, "Approve next 15 min") || !hasInlineButton(approvalEdit.rows, "Close") {
+	if !hasInlineButton(approvalEdit.rows, "Approve 15m") || !hasInlineButton(approvalEdit.rows, "Close") {
 		t.Fatalf("approval rows = %#v, want approval-window offer controls", approvalEdit.rows)
 	}
 	if !hasInlineButton(approvalEdit.rows, "Expand details") {
@@ -733,7 +733,7 @@ func TestTelegramExecApproverAddsApprovalWindowOfferToApprovedProposal(t *testin
 		t.Fatalf("HandleCallbackQuery(expand) err = %v", err)
 	}
 	expanded := waitForDecisionEdit(t, sender, 2)
-	if !hasInlineButton(expanded.rows, "Approve next 15 min") || !hasInlineButton(expanded.rows, "Close") || !hasInlineButton(expanded.rows, "Hide details") {
+	if !hasInlineButton(expanded.rows, "Approve 15m") || !hasInlineButton(expanded.rows, "Close") || !hasInlineButton(expanded.rows, "Hide details") {
 		t.Fatalf("expanded rows = %#v, want offer controls preserved with hide details", expanded.rows)
 	}
 }
@@ -802,7 +802,7 @@ func TestTelegramExecApproverSendsApprovalWindowFallbackWhenEditFails(t *testing
 	if fallback.replyTo == nil || *fallback.replyTo != 1 {
 		t.Fatalf("fallback replyTo = %#v, want reply to original approval card 1", fallback.replyTo)
 	}
-	if !hasInlineButton(fallback.rows, "Approve next 15 min") || !hasInlineButton(fallback.rows, "Close") {
+	if !hasInlineButton(fallback.rows, "Approve 15m") || !hasInlineButton(fallback.rows, "Close") {
 		t.Fatalf("fallback rows = %#v, want approval-window offer controls", fallback.rows)
 	}
 }
@@ -863,7 +863,7 @@ func TestTelegramProposalPromptShowsApprovalWindowOfferAndThreadPrefix(t *testin
 	if !strings.HasPrefix(prompt.text, "(thread 1)\n\n") {
 		t.Fatalf("prompt text = %q, want visible thread prefix", prompt.text)
 	}
-	if !hasInlineButton(prompt.rows, "Approve next 15 min") {
+	if !hasInlineButton(prompt.rows, "Approve 15m") {
 		t.Fatalf("prompt rows = %#v, want approval-window enable control on initial approval card", prompt.rows)
 	}
 	if hasInlineButton(prompt.rows, "Close") {
@@ -889,7 +889,7 @@ func TestTelegramProposalPromptShowsApprovalWindowOfferAndThreadPrefix(t *testin
 	if !strings.HasPrefix(expanded.text, "(thread 1)\n\n") {
 		t.Fatalf("expanded text = %q, want visible thread prefix", expanded.text)
 	}
-	if !hasInlineButton(expanded.rows, "Approve next 15 min") {
+	if !hasInlineButton(expanded.rows, "Approve 15m") {
 		t.Fatalf("expanded rows = %#v, want approval-window enable control preserved", expanded.rows)
 	}
 	if hasInlineButton(expanded.rows, "Close") {

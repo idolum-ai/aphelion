@@ -160,7 +160,7 @@ func renderOperatorAutoApprovalDoubled(lease session.OperatorAutoApprovalLease, 
 		Title:   "Auto approvals",
 		State:   "enabled",
 		Why:     why,
-		Next:    "Use approval-window controls to revoke it, or press 2x approval time again to extend within the cap.",
+		Next:    "Use approval-window controls to revoke it, or press Double time again to extend within the cap.",
 		Details: details,
 	})
 }

@@ -29,7 +29,7 @@ func ApprovalWindowOfferRows(offerID string) [][]telegram.InlineButton {
 		return nil
 	}
 	return [][]telegram.InlineButton{{
-		{Text: "Approve next 15 min", CallbackData: encodeApprovalWindowCallbackData(offerID, approvalWindowActionEnable15)},
+		{Text: "Approve 15m", CallbackData: encodeApprovalWindowCallbackData(offerID, approvalWindowActionEnable15)},
 		{Text: "Close", CallbackData: encodeApprovalWindowCallbackData(offerID, approvalWindowActionClose)},
 	}}
 }
@@ -42,7 +42,7 @@ func ApprovalWindowEmbeddedOfferRows(offer session.ApprovalWindowOffer) [][]tele
 	// Embedded rows share a card with another authority surface, so they only
 	// expose actions that preserve the source card's existing controls.
 	return [][]telegram.InlineButton{{
-		{Text: "Approve next 15 min", CallbackData: encodeApprovalWindowCallbackData(offer.ID, approvalWindowActionEnable15)},
+		{Text: "Approve 15m", CallbackData: encodeApprovalWindowCallbackData(offer.ID, approvalWindowActionEnable15)},
 	}}
 }
 
@@ -52,7 +52,7 @@ func ApprovalWindowActiveRows(offerID string) [][]telegram.InlineButton {
 		return nil
 	}
 	return [][]telegram.InlineButton{{
-		{Text: "2x approval time", CallbackData: encodeApprovalWindowCallbackData(offerID, approvalWindowActionDouble)},
+		{Text: "Double time", CallbackData: encodeApprovalWindowCallbackData(offerID, approvalWindowActionDouble)},
 		{Text: "Cancel approvals", CallbackData: encodeApprovalWindowCallbackData(offerID, approvalWindowActionCancel)},
 	}}
 }
