@@ -230,6 +230,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 		})
 	}
 	if r.store != nil {
+		defs = append(defs, requestApprovalToolDefinition())
 		defs = append(defs, agent.ToolDef{
 			Name:        "update_operation",
 			Description: "Persist or inspect the current operational state for this session. Use this to track the objective, stage, proposal, durable phase plan, findings, and artifacts as work evolves across turns.",

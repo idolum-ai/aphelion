@@ -149,6 +149,22 @@ after the stop.
 If the service itself needs attention, use `/health` first so the next action is
 grounded in current state.
 
+## Request Button-Backed Approval
+
+The native `request_approval` tool is for cases where the model already has a
+bounded phase contract and needs to show the real Telegram approval card. It
+persists a pending operation phase, validates the authority contract before
+offering buttons, and then relies on the continuation materialization path to
+show `Start`, `Details`, `Change`, `Pause`, and `Stop`.
+
+Use `request_approval` instead of `update_operation` when the immediate goal is
+operator approval. Use `update_operation` for ordinary operation bookkeeping,
+findings, artifacts, or durable phase-plan state that should not by itself force
+a visible approval prompt.
+
+`request_approval` does not execute the requested work and does not create
+authority. Execution is still gated on the operator pressing the approval button.
+
 ## Grant Bounded Automation
 
 After an approval succeeds, the approved message shows `Approve 15m` and

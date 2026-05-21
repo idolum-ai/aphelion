@@ -83,6 +83,8 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.sessionSearch(ctx, input, p, key)
 	case "update_operation":
 		return r.updateOperation(ctx, input, key)
+	case "request_approval":
+		return r.requestApproval(ctx, input, key)
 	case "operation_artifact":
 		return r.operationArtifact(ctx, input, scope, key)
 	case "update_plan":

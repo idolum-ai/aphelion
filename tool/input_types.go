@@ -144,6 +144,11 @@ type updateOperationPlanLeaseInput struct {
 	ApprovedAt           string                                 `json:"approved_at,omitempty"`
 }
 
+type requestApprovalInput struct {
+	Objective string                    `json:"objective,omitempty"`
+	Phase     updateOperationPhaseInput `json:"phase"`
+}
+
 type updateOperationInput struct {
 	ID        string                         `json:"id,omitempty"`
 	Objective string                         `json:"objective,omitempty"`

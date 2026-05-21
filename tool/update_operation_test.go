@@ -453,3 +453,111 @@ func TestUpdateOperationToolRequiresPlanLeaseLaneAuthorityAndTurns(t *testing.T)
 		t.Fatalf("err = %v, want lane authority validation", err)
 	}
 }
+
+func TestDefinitionsIncludeRequestApprovalToolWhenStoreConfigured(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), time.Second)
+	names := make([]string, 0, len(registry.Definitions()))
+	for _, def := range registry.Definitions() {
+		names = append(names, def.Name)
+	}
+	if containsString(names, "request_approval") {
+		t.Fatalf("definitions without store = %#v, do not want request_approval", names)
+	}
+
+	store := newToolTestStore(t)
+	registry = NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	names = names[:0]
+	for _, def := range registry.Definitions() {
+		names = append(names, def.Name)
+	}
+	if !containsString(names, "request_approval") {
+		t.Fatalf("definitions with store = %#v, want request_approval", names)
+	}
+}
+
+func TestRequestApprovalToolPersistsPendingManualApprovalPhase(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"request_approval",
+		json.RawMessage(`{
+			"objective":"Make approval buttons first-class.",
+			"phase":{
+				"id":"phase-request-approval",
+				"summary":"Implement request approval native tool",
+				"authority_class":"workspace_write",
+				"why_now":"Text-only approval prompts are brittle.",
+				"bounded_effect":"Edit local files and run targeted tests; stop before deploy.",
+				"allowed_actions":["edit_files","run_tests"],
+				"forbidden_actions":["commit","deploy","restart_service"],
+				"validation_plan":["targeted tests pass"]
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(request_approval) err = %v", err)
+	}
+	if !strings.Contains(out, "[APPROVAL_REQUESTED]") || !strings.Contains(out, "Implement request approval native tool") {
+		t.Fatalf("output = %q, want approval request render", out)
+	}
+
+	state, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if state.Status != session.OperationStatusBlocked || state.Stage != "approval_request" {
+		t.Fatalf("operation status/stage = %q/%q, want blocked approval_request", state.Status, state.Stage)
+	}
+	if state.PhasePlan.CurrentPhaseID != "phase-request-approval" || len(state.PhasePlan.Phases) != 1 {
+		t.Fatalf("phase plan = %#v, want single current approval phase", state.PhasePlan)
+	}
+	phase := state.PhasePlan.Phases[0]
+	if !phase.RequiresApproval || phase.AutoApproveEligible == nil || *phase.AutoApproveEligible {
+		t.Fatalf("phase auto approval = requires=%v auto=%#v, want manual approval", phase.RequiresApproval, phase.AutoApproveEligible)
+	}
+	if phase.Status != session.PlanStatusPending || phase.AuthorityClass != "workspace_write" {
+		t.Fatalf("phase = %#v, want pending workspace_write", phase)
+	}
+}
+
+func TestRequestApprovalToolRejectsInvalidAuthorityContract(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"request_approval",
+		json.RawMessage(`{
+			"phase":{
+				"summary":"Contradictory deploy request",
+				"authority_class":"workspace_write",
+				"allowed_actions":["edit_files"],
+				"forbidden_actions":["workspace_write"]
+			}
+		}`),
+	)
+	if err == nil {
+		t.Fatal("ExecuteForSessionPrincipal(request_approval) err = nil, want authority contradiction")
+	}
+	if !strings.Contains(err.Error(), "request_approval authority contract invalid") || !strings.Contains(err.Error(), "allowed_action_implies_forbidden_authority") {
+		t.Fatalf("err = %v, want authority contract diagnostic", err)
+	}
+}
