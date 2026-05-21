@@ -44,15 +44,21 @@ func TestApprovalWindowEnableCallbackTargetsThreadScope(t *testing.T) {
 	if router.approvalWindowOfferID != "offer-test" {
 		t.Fatalf("approval offer id = %q, want offer-test", router.approvalWindowOfferID)
 	}
-	if len(sender.editInline) != 1 {
-		t.Fatalf("editInline = %#v, want one active approval-window edit", sender.editInline)
+	if len(sender.editInline) != 0 {
+		t.Fatalf("editInline = %#v, want no edit of the pending approval card", sender.editInline)
 	}
-	if !strings.HasPrefix(sender.editInline[0].text, "(thread 5)\n\n") {
-		t.Fatalf("edit text = %q, want visible thread display prefix", sender.editInline[0].text)
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline = %#v, want one active approval-window control card", sender.inline)
 	}
-	if !commandRowsContain(sender.editInline[0].rows, "2x approval time", encodeApprovalWindowCallbackData("offer-test", approvalWindowActionDouble)) ||
-		!commandRowsContain(sender.editInline[0].rows, "Cancel approvals", encodeApprovalWindowCallbackData("offer-test", approvalWindowActionCancel)) {
-		t.Fatalf("edit rows = %#v, want active approval-window controls", sender.editInline[0].rows)
+	if sender.inline[0].replyTo == nil || *sender.inline[0].replyTo != 77 {
+		t.Fatalf("inline replyTo = %#v, want reply to original approval card 77", sender.inline[0].replyTo)
+	}
+	if !strings.HasPrefix(sender.inline[0].text, "(thread 5)\n\n") {
+		t.Fatalf("inline text = %q, want visible thread display prefix", sender.inline[0].text)
+	}
+	if !commandRowsContain(sender.inline[0].rows, "2x approval time", encodeApprovalWindowCallbackData("offer-test", approvalWindowActionDouble)) ||
+		!commandRowsContain(sender.inline[0].rows, "Cancel approvals", encodeApprovalWindowCallbackData("offer-test", approvalWindowActionCancel)) {
+		t.Fatalf("inline rows = %#v, want active approval-window controls", sender.inline[0].rows)
 	}
 }
 

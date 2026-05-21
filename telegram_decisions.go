@@ -31,6 +31,7 @@ type telegramDecisionMessageStatusRouter = telegramdecision.MessageStatusRouter
 type telegramDecisionMessageStopRouter = telegramdecision.MessageStopRouter
 type telegramPermanentArtifactKeeper = telegramdecision.PermanentArtifactKeeper
 type telegramDecisionSummaryFunc = telegramdecision.SummaryFunc
+type telegramDecisionBrokerUIOptions = telegramdecision.BrokerUIOptions
 
 type telegramDecisionHandler struct {
 	*telegramdecision.Handler
@@ -65,8 +66,8 @@ func newTelegramDecisionBroker(sender telegramDecisionSender, opts ...decision.B
 	return telegramdecision.NewBroker(sender, opts...)
 }
 
-func newTelegramDecisionBrokerWithSummary(sender telegramDecisionSender, summarize telegramDecisionSummaryFunc, opts ...decision.BrokerOption) *decision.Broker {
-	return telegramdecision.NewBrokerWithSummary(sender, summarize, opts...)
+func newTelegramDecisionBrokerWithSummary(sender telegramDecisionSender, summarize telegramDecisionSummaryFunc, ui telegramDecisionBrokerUIOptions, opts ...decision.BrokerOption) *decision.Broker {
+	return telegramdecision.NewBrokerWithSummaryAndUI(sender, summarize, ui, opts...)
 }
 
 func (h *telegramDecisionHandler) syncDecisionHandler() *telegramdecision.Handler {

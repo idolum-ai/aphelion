@@ -15,11 +15,13 @@ import (
 )
 
 type decisionTestSender struct {
-	inline    []decisionInlineCall
-	edits     []decisionEditCall
-	deletes   []decisionDeleteCall
-	answers   []decisionAnswerCall
-	answerErr error
+	inline        []decisionInlineCall
+	edits         []decisionEditCall
+	deletes       []decisionDeleteCall
+	answers       []decisionAnswerCall
+	answerErr     error
+	sendInlineErr error
+	editInlineErr error
 }
 
 type decisionInlineCall struct {
@@ -49,6 +51,9 @@ type decisionAnswerCall struct {
 }
 
 func (s *decisionTestSender) SendInlineKeyboard(_ context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error) {
+	if s.sendInlineErr != nil {
+		return 0, s.sendInlineErr
+	}
 	s.inline = append(s.inline, decisionInlineCall{chatID: chatID, text: text, rows: rows, replyTo: replyTo})
 	return int64(len(s.inline)), nil
 }
@@ -59,6 +64,9 @@ func (s *decisionTestSender) EditMessageText(_ context.Context, chatID int64, me
 }
 
 func (s *decisionTestSender) EditMessageTextWithInlineKeyboard(_ context.Context, chatID int64, messageID int64, text string, _ string, rows [][]telegram.InlineButton) error {
+	if s.editInlineErr != nil {
+		return s.editInlineErr
+	}
 	s.edits = append(s.edits, decisionEditCall{chatID: chatID, messageID: messageID, text: text, rows: rows, at: time.Now().UTC()})
 	return nil
 }

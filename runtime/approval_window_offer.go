@@ -36,6 +36,11 @@ func (r *Runtime) CreateApprovalWindowOfferForKey(ctx context.Context, key sessi
 		return session.ApprovalWindowOffer{}, false, nil
 	}
 	now := time.Now().UTC()
+	if existing, ok, err := r.store.ActiveApprovalWindowOfferForSource(key.ChatID, sourceKind, sourceID, now); err != nil {
+		return session.ApprovalWindowOffer{}, false, err
+	} else if ok {
+		return existing, true, nil
+	}
 	offer := session.ApprovalWindowOffer{
 		ID:                 newApprovalWindowOfferID(key.ChatID, now),
 		ChatID:             key.ChatID,

@@ -239,6 +239,11 @@ func run() error {
 			}
 			return rt.StatusReadableSummary(ctx, "approval", renderPendingDecisionExpanded(pending))
 		},
+		telegramDecisionBrokerUIOptions{
+			ApprovalWindows: rt,
+			ThreadResolver:  store,
+			ThreadRecorder:  store,
+		},
 		decision.WithDurableStore(newTelegramDecisionDurableStore(store)),
 		decision.WithObserver(rt.DecisionEventObserver()),
 		decision.WithAutoResolver(rt.AutoResolveDecision),
@@ -270,9 +275,15 @@ func run() error {
 	}
 	cancelDecisionLoad()
 	decisionHandler := newTelegramDecisionHandler(tgOutbound, commandControl, decisionBroker, store, rt)
-	tools.WithExecApprover(newTelegramExecApprover(tgOutbound, decisionBroker, rt))
-	tools.WithDurableMemoryDelegationApprover(newTelegramDurableMemoryDelegationApprover(tgOutbound, decisionBroker))
-	tools.WithDurableSnapshotRestoreApprover(newTelegramDurableSnapshotRestoreApprover(tgOutbound, decisionBroker))
+	execApprover := newTelegramExecApprover(tgOutbound, decisionBroker, rt)
+	execApprover.SetPresentation(store)
+	tools.WithExecApprover(execApprover)
+	memoryApprover := newTelegramDurableMemoryDelegationApprover(tgOutbound, decisionBroker)
+	memoryApprover.SetPresentation(store)
+	tools.WithDurableMemoryDelegationApprover(memoryApprover)
+	snapshotApprover := newTelegramDurableSnapshotRestoreApprover(tgOutbound, decisionBroker)
+	snapshotApprover.SetPresentation(store)
+	tools.WithDurableSnapshotRestoreApprover(snapshotApprover)
 
 	registerCtx, cancelRegister := context.WithTimeout(context.Background(), 15*time.Second)
 	if err := registerTelegramCommands(registerCtx, tgClient); err != nil {

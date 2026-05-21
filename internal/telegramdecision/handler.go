@@ -112,6 +112,10 @@ func NewBroker(sender DecisionSender, opts ...decision.BrokerOption) *decision.B
 }
 
 func NewBrokerWithSummary(sender DecisionSender, summarize SummaryFunc, opts ...decision.BrokerOption) *decision.Broker {
+	return NewBrokerWithSummaryAndUI(sender, summarize, BrokerUIOptions{}, opts...)
+}
+
+func NewBrokerWithSummaryAndUI(sender DecisionSender, summarize SummaryFunc, ui BrokerUIOptions, opts ...decision.BrokerOption) *decision.Broker {
 	return decision.NewBroker(func(ctx context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
 		text := RenderPendingDecisionSummary(pending)
 		if summarize != nil {
@@ -119,12 +123,66 @@ func NewBrokerWithSummary(sender DecisionSender, summarize SummaryFunc, opts ...
 				text = summary
 			}
 		}
-		msgID, err := sender.SendInlineKeyboard(ctx, pending.ChatID, text, InlineButtonRows(pending), telegramcommands.ReplyToMessageID(pending.MessageID))
+		text = prefixDecisionText(pending, ui.ThreadResolver, text)
+		rows, offerID, err := initialDecisionRows(ctx, pending, InlineButtonRows(pending), ui.ApprovalWindows)
 		if err != nil {
+			return decision.Delivery{}, err
+		}
+		msgID, err := sender.SendInlineKeyboard(ctx, pending.ChatID, text, rows, telegramcommands.ReplyToMessageID(pending.MessageID))
+		if err != nil {
+			if offerID != "" {
+				_ = closeApprovalWindowOffer(ctx, ui.ApprovalWindows, offerID)
+			}
+			return decision.Delivery{}, err
+		}
+		if err := recordDecisionCallbackThread(ctx, ui.ThreadRecorder, pending, msgID); err != nil {
 			return decision.Delivery{}, err
 		}
 		return decision.Delivery{MessageID: msgID}, nil
 	}, opts...)
+}
+
+func initialDecisionRows(ctx context.Context, pending decision.PendingDecision, rows [][]telegram.InlineButton, offerer ApprovalWindowOfferer) ([][]telegram.InlineButton, string, error) {
+	if offerer == nil || pending.Kind != decision.KindProposalApproval {
+		return rows, "", nil
+	}
+	offer, ok, err := offerer.CreateApprovalWindowOfferForKey(
+		ctx,
+		pendingDecisionSessionKey(pending),
+		pending.SenderID,
+		session.ApprovalWindowOfferSourceDecision,
+		pending.ID,
+		string(pending.Kind),
+	)
+	if err != nil || !ok {
+		return rows, "", err
+	}
+	offerRows := telegramcommands.ApprovalWindowEmbeddedOfferRows(offer)
+	if len(offerRows) == 0 {
+		return rows, offer.ID, nil
+	}
+	return appendTelegramRows(rows, offerRows), offer.ID, nil
+}
+
+type approvalWindowOfferCloser interface {
+	CloseApprovalWindowOffer(ctx context.Context, offerID string) error
+}
+
+func closeApprovalWindowOffer(ctx context.Context, offerer ApprovalWindowOfferer, offerID string) error {
+	closer, ok := offerer.(approvalWindowOfferCloser)
+	if !ok {
+		return nil
+	}
+	return closer.CloseApprovalWindowOffer(ctx, offerID)
+}
+
+func recordDecisionCallbackThread(ctx context.Context, recorder DecisionCallbackThreadRecorder, pending decision.PendingDecision, messageID int64) error {
+	_ = ctx
+	threadID, ok := pendingDecisionThreadID(pending)
+	if !ok || recorder == nil || messageID <= 0 {
+		return nil
+	}
+	return recorder.RecordTelegramCallbackMessageThread(pending.ChatID, messageID, threadID, "decision", time.Now().UTC())
 }
 
 func CallbackChatID(cb telegram.CallbackQuery) int64 {
@@ -197,16 +255,16 @@ func (h *Handler) HandleCallbackQuery(ctx context.Context, cb telegram.CallbackQ
 		}
 		if messageID != 0 {
 			expanded := choice == "expand"
-			text := RenderPendingDecisionSummary(pending)
-			rows := InlineButtonRowsExpanded(pending, expanded)
+			text := prefixDecisionText(pending, h.store, RenderPendingDecisionSummary(pending))
+			rows := h.pendingDecisionRowsWithOffer(pending, expanded)
 			if expanded {
-				text = RenderPendingDecisionExpanded(pending)
+				text = prefixDecisionText(pending, h.store, RenderPendingDecisionExpanded(pending))
 			}
 			if resolved {
-				text = ApprovedConfirmationText(ApprovedConfirmationLabel(pending.Kind), pending.ID, pending.Kind, pending.Details)
+				text = prefixDecisionText(pending, h.store, ApprovedConfirmationText(ApprovedConfirmationLabel(pending.Kind), pending.ID, pending.Kind, pending.Details))
 				rows = h.approvedConfirmationRowsWithOffer(pending, expanded)
 				if expanded {
-					text = RenderPendingDecisionExpanded(pending)
+					text = prefixDecisionText(pending, h.store, RenderPendingDecisionExpanded(pending))
 				}
 			}
 			if editor, ok := h.sender.(DecisionKeyboardEditor); ok && len(rows) > 0 {
@@ -252,6 +310,15 @@ func (h *Handler) HandleCallbackQuery(ctx context.Context, cb telegram.CallbackQ
 
 func (h *Handler) approvedConfirmationRowsWithOffer(pending decision.PendingDecision, expanded bool) [][]telegram.InlineButton {
 	rows := ApprovedConfirmationRowsExpanded(pending.ID, pending.Details, expanded)
+	return h.appendApprovalWindowRows(pending, rows)
+}
+
+func (h *Handler) pendingDecisionRowsWithOffer(pending decision.PendingDecision, expanded bool) [][]telegram.InlineButton {
+	rows := InlineButtonRowsExpanded(pending, expanded)
+	return h.appendEmbeddedApprovalWindowRows(pending, rows)
+}
+
+func (h *Handler) appendApprovalWindowRows(pending decision.PendingDecision, rows [][]telegram.InlineButton) [][]telegram.InlineButton {
 	if h == nil || h.store == nil || pending.Kind != decision.KindProposalApproval {
 		return rows
 	}
@@ -260,6 +327,17 @@ func (h *Handler) approvedConfirmationRowsWithOffer(pending decision.PendingDeci
 		return rows
 	}
 	return appendTelegramRows(rows, telegramcommands.ApprovalWindowRowsForOffer(offer))
+}
+
+func (h *Handler) appendEmbeddedApprovalWindowRows(pending decision.PendingDecision, rows [][]telegram.InlineButton) [][]telegram.InlineButton {
+	if h == nil || h.store == nil || pending.Kind != decision.KindProposalApproval {
+		return rows
+	}
+	offer, ok, err := h.store.ActiveApprovalWindowOfferForSource(pending.ChatID, session.ApprovalWindowOfferSourceDecision, pending.ID, time.Now().UTC())
+	if err != nil || !ok {
+		return rows
+	}
+	return appendTelegramRows(rows, telegramcommands.ApprovalWindowEmbeddedOfferRows(offer))
 }
 
 func (h *Handler) CanResumeRestartLoadedDecision(pending decision.PendingDecision) bool {
@@ -309,5 +387,17 @@ func (h *Handler) EditStaleDecisionCallback(ctx context.Context, cb telegram.Cal
 	if h == nil || h.sender == nil || cb.Message == nil || cb.Message.Chat == nil || cb.Message.MessageID == 0 {
 		return
 	}
+	text = h.prefixCallbackMessageText(cb, text)
 	_ = EditDecisionMessageClearingInlineKeyboard(ctx, h.sender, cb.Message.Chat.ID, cb.Message.MessageID, text)
+}
+
+func (h *Handler) prefixCallbackMessageText(cb telegram.CallbackQuery, text string) string {
+	if h == nil || h.store == nil || cb.Message == nil || cb.Message.Chat == nil {
+		return strings.TrimSpace(text)
+	}
+	threadID, ok, err := h.store.TelegramThreadIDForReplyMessage(cb.Message.Chat.ID, cb.Message.MessageID)
+	if err != nil || !ok {
+		return strings.TrimSpace(text)
+	}
+	return prefixDecisionTextForThread(cb.Message.Chat.ID, threadID, h.store, text)
 }

@@ -34,6 +34,18 @@ func ApprovalWindowOfferRows(offerID string) [][]telegram.InlineButton {
 	}}
 }
 
+func ApprovalWindowEmbeddedOfferRows(offer session.ApprovalWindowOffer) [][]telegram.InlineButton {
+	offer = session.NormalizeApprovalWindowOffer(offer)
+	if offer.ID == "" || !offer.ClosedAt.IsZero() || !offer.UsedAt.IsZero() {
+		return nil
+	}
+	// Embedded rows share a card with another authority surface, so they only
+	// expose actions that preserve the source card's existing controls.
+	return [][]telegram.InlineButton{{
+		{Text: "Approve next 15 min", CallbackData: encodeApprovalWindowCallbackData(offer.ID, approvalWindowActionEnable15)},
+	}}
+}
+
 func ApprovalWindowActiveRows(offerID string) [][]telegram.InlineButton {
 	offerID = strings.TrimSpace(offerID)
 	if offerID == "" {
@@ -124,7 +136,7 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 			return true, err
 		}
-		text := approvalWindowCallbackClosedText(cb)
+		text := continuationCallbackDisplayText(targetMsg, approvalWindowCallbackClosedText(cb))
 		if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
 			return true, err
 		}
@@ -173,6 +185,13 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 		return true, err
 	}
 	text = continuationCallbackDisplayText(targetMsg, text)
+	if action == approvalWindowActionEnable15 {
+		replyTo := messageID
+		if _, err := sender.SendInlineKeyboard(ctx, chatID, text, rows, &replyTo); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
 	if len(rows) > 0 {
 		if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, text, "", rows); err != nil {
 			return true, err
