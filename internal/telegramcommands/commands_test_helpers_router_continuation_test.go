@@ -188,6 +188,20 @@ func (s *stubCommandRouter) AutoApprovalStatus(_ context.Context, chatID int64, 
 	return "Auto approvals are inactive for this chat.", nil
 }
 
+func (s *stubCommandRouter) CreateApprovalWindowOfferForMessage(_ context.Context, msg core.InboundMessage, sourceKind string, sourceID string, sourceDecisionKind string) (session.ApprovalWindowOffer, bool, error) {
+	copied := msg
+	s.approvalWindowMessage = &copied
+	s.approvalWindowOfferSource = sourceKind + ":" + sourceID + ":" + sourceDecisionKind
+	if s.approvalWindowErr != nil {
+		return session.ApprovalWindowOffer{}, false, s.approvalWindowErr
+	}
+	offerID := strings.TrimSpace(s.approvalWindowOfferID)
+	if offerID == "" {
+		offerID = "offer-test"
+	}
+	return session.ApprovalWindowOffer{ID: offerID, ChatID: msg.ChatID, SourceKind: sourceKind, SourceID: sourceID, SourceDecisionKind: sourceDecisionKind}, true, nil
+}
+
 func (s *stubCommandRouter) EnableApprovalWindowForMessage(_ context.Context, msg core.InboundMessage, duration time.Duration) (string, error) {
 	copied := msg
 	s.approvalWindowAction = approvalWindowActionEnable15
@@ -290,4 +304,47 @@ func (s *stubCommandRouter) RefreshContinuationProposalForMessage(ctx context.Co
 		RemainingTurns: 1,
 		StageSummary:   "Use the fresh approval prompt.",
 	}, true, nil
+}
+
+func (s *stubCommandRouter) EnableApprovalWindowOffer(_ context.Context, offerID string, senderID int64, duration time.Duration) (string, error) {
+	s.approvalWindowAction = approvalWindowActionEnable15
+	s.approvalWindowOfferID = offerID
+	s.approvalWindowDuration = duration
+	if s.approvalWindowErr != nil {
+		return "", s.approvalWindowErr
+	}
+	if strings.TrimSpace(s.approvalWindowReturn) != "" {
+		return s.approvalWindowReturn, nil
+	}
+	return "Approval window active.", nil
+}
+
+func (s *stubCommandRouter) DoubleApprovalWindowOffer(_ context.Context, offerID string, senderID int64) (string, error) {
+	s.approvalWindowAction = approvalWindowActionDouble
+	s.approvalWindowOfferID = offerID
+	if s.approvalWindowErr != nil {
+		return "", s.approvalWindowErr
+	}
+	if strings.TrimSpace(s.approvalWindowReturn) != "" {
+		return s.approvalWindowReturn, nil
+	}
+	return "Approval window extended.", nil
+}
+
+func (s *stubCommandRouter) CancelApprovalWindowOffer(_ context.Context, offerID string, senderID int64) (string, error) {
+	s.approvalWindowAction = approvalWindowActionCancel
+	s.approvalWindowOfferID = offerID
+	if s.approvalWindowErr != nil {
+		return "", s.approvalWindowErr
+	}
+	if strings.TrimSpace(s.approvalWindowReturn) != "" {
+		return s.approvalWindowReturn, nil
+	}
+	return "Approval window canceled.", nil
+}
+
+func (s *stubCommandRouter) CloseApprovalWindowOffer(_ context.Context, offerID string) error {
+	s.approvalWindowAction = approvalWindowActionClose
+	s.approvalWindowOfferID = offerID
+	return s.approvalWindowErr
 }

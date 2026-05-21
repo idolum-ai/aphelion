@@ -26,9 +26,14 @@ type Runtime interface {
 	ConfigureAutoApprovalForKey(ctx context.Context, key session.SessionKey, senderID int64, args string) (string, error)
 	AutoApprovalStatus(ctx context.Context, chatID int64, senderID int64) (string, error)
 	AutoApprovalStatusForKey(ctx context.Context, key session.SessionKey, senderID int64) (string, error)
+	CreateApprovalWindowOfferForKey(ctx context.Context, key session.SessionKey, senderID int64, sourceKind string, sourceID string, sourceDecisionKind string) (session.ApprovalWindowOffer, bool, error)
 	EnableApprovalWindowForKey(ctx context.Context, key session.SessionKey, senderID int64, duration time.Duration) (string, error)
 	DoubleApprovalWindowForKey(ctx context.Context, key session.SessionKey, senderID int64) (string, error)
 	CancelApprovalWindowForKey(ctx context.Context, key session.SessionKey, senderID int64) (string, error)
+	EnableApprovalWindowOffer(ctx context.Context, offerID string, senderID int64, duration time.Duration) (string, error)
+	DoubleApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error)
+	CancelApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error)
+	CloseApprovalWindowOffer(ctx context.Context, offerID string) error
 	RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error)
 	RefreshContinuationProposalForKey(ctx context.Context, key session.SessionKey, reason string) (session.ContinuationState, bool, error)
 

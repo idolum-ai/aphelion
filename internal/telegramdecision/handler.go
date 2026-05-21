@@ -204,7 +204,7 @@ func (h *Handler) HandleCallbackQuery(ctx context.Context, cb telegram.CallbackQ
 			}
 			if resolved {
 				text = ApprovedConfirmationText(ApprovedConfirmationLabel(pending.Kind), pending.ID, pending.Kind, pending.Details)
-				rows = ApprovedConfirmationRowsExpanded(pending.ID, pending.Details, expanded)
+				rows = h.approvedConfirmationRowsWithOffer(pending, expanded)
 				if expanded {
 					text = RenderPendingDecisionExpanded(pending)
 				}
@@ -248,6 +248,18 @@ func (h *Handler) HandleCallbackQuery(ctx context.Context, cb telegram.CallbackQ
 		}
 	}
 	return nil
+}
+
+func (h *Handler) approvedConfirmationRowsWithOffer(pending decision.PendingDecision, expanded bool) [][]telegram.InlineButton {
+	rows := ApprovedConfirmationRowsExpanded(pending.ID, pending.Details, expanded)
+	if h == nil || h.store == nil || pending.Kind != decision.KindProposalApproval {
+		return rows
+	}
+	offer, ok, err := h.store.ActiveApprovalWindowOfferForSource(pending.ChatID, session.ApprovalWindowOfferSourceDecision, pending.ID, time.Now().UTC())
+	if err != nil || !ok {
+		return rows
+	}
+	return appendTelegramRows(rows, telegramcommands.ApprovalWindowRowsForOffer(offer))
 }
 
 func (h *Handler) CanResumeRestartLoadedDecision(pending decision.PendingDecision) bool {

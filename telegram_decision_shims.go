@@ -15,8 +15,8 @@ type telegramExecApprover = telegramdecision.ExecApprover
 type telegramDurableMemoryDelegationApprover = telegramdecision.DurableMemoryDelegationApprover
 type telegramDurableSnapshotRestoreApprover = telegramdecision.DurableSnapshotRestoreApprover
 
-func newTelegramExecApprover(sender telegramDecisionSender, broker *decision.Broker) *telegramExecApprover {
-	return telegramdecision.NewExecApprover(sender, broker, defaultExecApprovalTimeout)
+func newTelegramExecApprover(sender telegramDecisionSender, broker *decision.Broker, offerers ...telegramdecision.ApprovalWindowOfferer) *telegramExecApprover {
+	return telegramdecision.NewExecApprover(sender, broker, defaultExecApprovalTimeout, offerers...)
 }
 
 func newTelegramDurableMemoryDelegationApprover(sender telegramDecisionSender, broker *decision.Broker) *telegramDurableMemoryDelegationApprover {

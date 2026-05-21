@@ -109,6 +109,13 @@ func (c CommandControl) AutoApprovalStatusForMessage(ctx context.Context, msg co
 	return c.Runtime.AutoApprovalStatusForKey(ctx, SessionKeyForMessage(msg), msg.SenderID)
 }
 
+func (c CommandControl) CreateApprovalWindowOfferForMessage(ctx context.Context, msg core.InboundMessage, sourceKind string, sourceID string, sourceDecisionKind string) (session.ApprovalWindowOffer, bool, error) {
+	if c.Runtime == nil {
+		return session.ApprovalWindowOffer{}, false, nil
+	}
+	return c.Runtime.CreateApprovalWindowOfferForKey(ctx, SessionKeyForMessage(msg), msg.SenderID, sourceKind, sourceID, sourceDecisionKind)
+}
+
 func (c CommandControl) EnableApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage, duration time.Duration) (string, error) {
 	if c.Runtime == nil {
 		return "Approval windows are unavailable.", nil
@@ -128,6 +135,34 @@ func (c CommandControl) CancelApprovalWindowForMessage(ctx context.Context, msg 
 		return "Approval windows are unavailable.", nil
 	}
 	return c.Runtime.CancelApprovalWindowForKey(ctx, SessionKeyForMessage(msg), msg.SenderID)
+}
+
+func (c CommandControl) EnableApprovalWindowOffer(ctx context.Context, offerID string, senderID int64, duration time.Duration) (string, error) {
+	if c.Runtime == nil {
+		return "Approval windows are unavailable.", nil
+	}
+	return c.Runtime.EnableApprovalWindowOffer(ctx, offerID, senderID, duration)
+}
+
+func (c CommandControl) DoubleApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error) {
+	if c.Runtime == nil {
+		return "Approval windows are unavailable.", nil
+	}
+	return c.Runtime.DoubleApprovalWindowOffer(ctx, offerID, senderID)
+}
+
+func (c CommandControl) CancelApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error) {
+	if c.Runtime == nil {
+		return "Approval windows are unavailable.", nil
+	}
+	return c.Runtime.CancelApprovalWindowOffer(ctx, offerID, senderID)
+}
+
+func (c CommandControl) CloseApprovalWindowOffer(ctx context.Context, offerID string) error {
+	if c.Runtime == nil {
+		return nil
+	}
+	return c.Runtime.CloseApprovalWindowOffer(ctx, offerID)
 }
 
 func (c CommandControl) RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error) {

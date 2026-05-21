@@ -349,3 +349,88 @@ func TestParseOperatorAutoApprovalDurationCapAllowsTwentyFourHours(t *testing.T)
 		t.Fatalf("parseOperatorAutoApprovalCommand(25h) err = %v, want 24h cap error", err)
 	}
 }
+
+func TestRuntimeApprovalWindowOfferUsesPersistedThreadScope(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	chatID := int64(99301)
+	threadKey := session.SessionKey{ChatID: chatID, Scope: session.TelegramThreadScopeRef(chatID, 44)}
+	offer, created, err := rt.CreateApprovalWindowOfferForKey(context.Background(), threadKey, 1001, session.ApprovalWindowOfferSourceDecision, "decision-44", string(decision.KindProposalApproval))
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOfferForKey() err = %v", err)
+	}
+	if !created || offer.ID == "" {
+		t.Fatalf("offer = %#v created=%v, want persisted offer", offer, created)
+	}
+	if _, err := rt.EnableApprovalWindowOffer(context.Background(), offer.ID, 1001, 15*time.Minute); err != nil {
+		t.Fatalf("EnableApprovalWindowOffer() err = %v", err)
+	}
+
+	defaultResult, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "offer-default-scope",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        chatID,
+			SenderID:      1002,
+			Prompt:        "Approve default?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision(default) err = %v", err)
+	}
+	if defaultResult.Choice != "" {
+		t.Fatalf("default result = %#v, want no approval from thread offer", defaultResult)
+	}
+
+	otherKind, otherID := operatorAutoThreadScope(chatID, 45)
+	otherThreadResult, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "offer-other-thread",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        chatID,
+			SenderID:      1002,
+			ScopeKind:     otherKind,
+			ScopeID:       otherID,
+			Prompt:        "Approve other?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision(other thread) err = %v", err)
+	}
+	if otherThreadResult.Choice != "" {
+		t.Fatalf("other result = %#v, want no approval from thread 44 offer", otherThreadResult)
+	}
+
+	threadKind, threadID := operatorAutoThreadScope(chatID, 44)
+	threadResult, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "offer-thread-scope",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        chatID,
+			SenderID:      1002,
+			ScopeKind:     threadKind,
+			ScopeID:       threadID,
+			Prompt:        "Approve thread?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision(thread) err = %v", err)
+	}
+	if threadResult.Choice != "approve" {
+		t.Fatalf("thread result = %#v, want approval from persisted thread offer scope", threadResult)
+	}
+}

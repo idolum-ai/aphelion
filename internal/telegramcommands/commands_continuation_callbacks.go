@@ -176,7 +176,15 @@ func handleContinuationCallback(ctx context.Context, sender commandCallbackSende
 		}
 		answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.approve", "")
 		text = renderContinuationDecision(state, action)
-		editContinuationCallbackMessageWithInlineKeyboard(ctx, sender, router, chatID, messageID, "continuation.approve", continuationCallbackDisplayText(targetMsg, text), approvalWindowOfferRows())
+		rows, offerErr := approvalWindowOfferRowsForSource(ctx, router, targetMsg, session.ApprovalWindowOfferSourceContinuation, decisionID, "continuation")
+		if offerErr != nil {
+			return true, offerErr
+		}
+		if len(rows) > 0 {
+			editContinuationCallbackMessageWithInlineKeyboard(ctx, sender, router, chatID, messageID, "continuation.approve", continuationCallbackDisplayText(targetMsg, text), rows)
+		} else {
+			editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", continuationCallbackDisplayText(targetMsg, text))
+		}
 		triggerContinuationAfterCallback(sender, router, targetMsg, messageID, "continuation.trigger", state)
 		return true, nil
 	case continuationActionResumeEdge:

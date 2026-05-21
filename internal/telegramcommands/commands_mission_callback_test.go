@@ -198,7 +198,7 @@ func TestActionProposalApproveCallbackAppliesMissionDecision(t *testing.T) {
 	if !strings.Contains(sender.editInline[0].text, "ActionProposal approved") || !strings.Contains(sender.editInline[0].text, "No self-continuation") {
 		t.Fatalf("edit text = %q, want approval and authority boundary", sender.editInline[0].text)
 	}
-	if !commandRowsContain(sender.editInline[0].rows, "Approve next 15 min", encodeApprovalWindowCallbackData(approvalWindowActionEnable15)) {
+	if !commandRowsContain(sender.editInline[0].rows, "Approve next 15 min", encodeApprovalWindowCallbackData("offer-test", approvalWindowActionEnable15)) {
 		t.Fatalf("edit rows = %#v, want approval-window offer", sender.editInline[0].rows)
 	}
 }

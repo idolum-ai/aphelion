@@ -131,6 +131,8 @@ type stubCommandRouter struct {
 	autoApproveReturn            string
 	autoApproveErr               error
 	approvalWindowAction         string
+	approvalWindowOfferID        string
+	approvalWindowOfferSource    string
 	approvalWindowMessage        *core.InboundMessage
 	approvalWindowDuration       time.Duration
 	approvalWindowReturn         string

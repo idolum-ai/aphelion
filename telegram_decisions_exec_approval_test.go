@@ -574,3 +574,122 @@ func TestTelegramExecApproverTimesOutToDeny(t *testing.T) {
 		t.Fatalf("inline text = %q, want intent-first capability proposal summary", sender.inline[0].text)
 	}
 }
+
+type execApprovalWindowOfferer struct {
+	store *session.SQLiteStore
+}
+
+func (e execApprovalWindowOfferer) CreateApprovalWindowOfferForKey(_ context.Context, key session.SessionKey, adminUserID int64, sourceKind string, sourceID string, sourceDecisionKind string) (session.ApprovalWindowOffer, bool, error) {
+	scope := session.NormalizeScopeRef(key.Scope)
+	if scope.IsZero() {
+		scope = session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "7"}
+	}
+	offer := session.ApprovalWindowOffer{
+		ID:                 "offer-" + sourceID,
+		ChatID:             key.ChatID,
+		AdminUserID:        adminUserID,
+		SessionID:          session.SessionIDForKey(session.SessionKey{ChatID: key.ChatID, Scope: scope}),
+		ScopeKind:          string(scope.Kind),
+		ScopeID:            scope.ID,
+		SourceKind:         sourceKind,
+		SourceID:           sourceID,
+		SourceDecisionKind: sourceDecisionKind,
+		CreatedAt:          time.Now().UTC(),
+		ExpiresAt:          time.Now().UTC().Add(time.Hour),
+		UpdatedAt:          time.Now().UTC(),
+	}
+	if e.store != nil {
+		stored, err := e.store.CreateApprovalWindowOffer(offer)
+		return stored, err == nil, err
+	}
+	return offer, true, nil
+}
+
+func TestTelegramExecApproverAddsApprovalWindowOfferToApprovedProposal(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	sender := &decisionTestSender{}
+	broker := newTelegramDecisionBroker(sender)
+	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, broker, store)
+	approver := newTelegramExecApprover(sender, broker, execApprovalWindowOfferer{store: store})
+	approver.SetTimeout(time.Second)
+
+	resultCh := make(chan toolpkg.ExecApprovalDecision, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		decisionResult, err := approver.ConfirmExec(context.Background(), toolpkg.ExecApprovalRequest{
+			Principal:  principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 42},
+			SessionKey: session.SessionKey{ChatID: 7, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "7"}},
+			Command:    "pwd",
+			Reason:     "outside workspace",
+			Proposal: session.OperationProposal{
+				Kind:          "possible_workspace_escape",
+				Summary:       "Run command outside the configured workspace",
+				WhyNow:        "Need to inspect live state.",
+				BoundedEffect: "Run this command once.",
+				Status:        session.ProposalStatusPending,
+			},
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- decisionResult
+	}()
+
+	prompt := waitForDecisionInline(t, sender)
+	approveData := callbackDataForButton(t, prompt.rows, "Approve")
+	if err := handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:   "cb-approve-offer",
+		Data: approveData,
+		From: &telegram.User{ID: 42},
+		Message: &telegram.Message{
+			MessageID: 1,
+			Chat:      &telegram.Chat{ID: 7},
+		},
+	}); err != nil {
+		t.Fatalf("HandleCallbackQuery(approve) err = %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("ConfirmExec() err = %v", err)
+	case decisionResult := <-resultCh:
+		if !decisionResult.Approved {
+			t.Fatal("Approved = false, want true")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConfirmExec() did not resolve after approve callback")
+	}
+
+	approvalEdit := waitForDecisionEdit(t, sender, 1)
+	if !hasInlineButton(approvalEdit.rows, "Approve next 15 min") || !hasInlineButton(approvalEdit.rows, "Close") {
+		t.Fatalf("approval rows = %#v, want approval-window offer controls", approvalEdit.rows)
+	}
+	if !hasInlineButton(approvalEdit.rows, "Expand details") {
+		t.Fatalf("approval rows = %#v, want existing expand details control preserved", approvalEdit.rows)
+	}
+
+	expandData := callbackDataForButton(t, approvalEdit.rows, "Expand details")
+	if err := handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:   "cb-expand-approved-offer",
+		Data: expandData,
+		From: &telegram.User{ID: 42},
+		Message: &telegram.Message{
+			MessageID: approvalEdit.messageID,
+			Chat:      &telegram.Chat{ID: approvalEdit.chatID},
+		},
+	}); err != nil {
+		t.Fatalf("HandleCallbackQuery(expand) err = %v", err)
+	}
+	expanded := waitForDecisionEdit(t, sender, 2)
+	if !hasInlineButton(expanded.rows, "Approve next 15 min") || !hasInlineButton(expanded.rows, "Close") || !hasInlineButton(expanded.rows, "Hide details") {
+		t.Fatalf("expanded rows = %#v, want offer controls preserved with hide details", expanded.rows)
+	}
+}

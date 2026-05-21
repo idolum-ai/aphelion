@@ -4,9 +4,12 @@ package telegramcommands
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
@@ -20,47 +23,89 @@ const (
 	approvalWindowCallbackDuration = 15 * time.Minute
 )
 
-func approvalWindowOfferRows() [][]telegram.InlineButton {
+func ApprovalWindowOfferRows(offerID string) [][]telegram.InlineButton {
+	offerID = strings.TrimSpace(offerID)
+	if offerID == "" {
+		return nil
+	}
 	return [][]telegram.InlineButton{{
-		{Text: "Approve next 15 min", CallbackData: encodeApprovalWindowCallbackData(approvalWindowActionEnable15)},
-		{Text: "Close", CallbackData: encodeApprovalWindowCallbackData(approvalWindowActionClose)},
+		{Text: "Approve next 15 min", CallbackData: encodeApprovalWindowCallbackData(offerID, approvalWindowActionEnable15)},
+		{Text: "Close", CallbackData: encodeApprovalWindowCallbackData(offerID, approvalWindowActionClose)},
 	}}
 }
 
-func approvalWindowActiveRows() [][]telegram.InlineButton {
+func ApprovalWindowActiveRows(offerID string) [][]telegram.InlineButton {
+	offerID = strings.TrimSpace(offerID)
+	if offerID == "" {
+		return nil
+	}
 	return [][]telegram.InlineButton{{
-		{Text: "2x approval time", CallbackData: encodeApprovalWindowCallbackData(approvalWindowActionDouble)},
-		{Text: "Cancel approvals", CallbackData: encodeApprovalWindowCallbackData(approvalWindowActionCancel)},
+		{Text: "2x approval time", CallbackData: encodeApprovalWindowCallbackData(offerID, approvalWindowActionDouble)},
+		{Text: "Cancel approvals", CallbackData: encodeApprovalWindowCallbackData(offerID, approvalWindowActionCancel)},
 	}}
 }
 
-func encodeApprovalWindowCallbackData(action string) string {
-	return approvalWindowCallbackPrefix + strings.TrimSpace(action)
+func ApprovalWindowRowsForOffer(offer session.ApprovalWindowOffer) [][]telegram.InlineButton {
+	offer = session.NormalizeApprovalWindowOffer(offer)
+	if offer.ID == "" || !offer.ClosedAt.IsZero() {
+		return nil
+	}
+	if !offer.UsedAt.IsZero() {
+		return ApprovalWindowActiveRows(offer.ID)
+	}
+	return ApprovalWindowOfferRows(offer.ID)
 }
 
-func decodeApprovalWindowCallbackData(data string) (string, bool) {
+func approvalWindowOfferRowsForSource(ctx context.Context, router commandRouter, msg core.InboundMessage, sourceKind string, sourceID string, sourceDecisionKind string) ([][]telegram.InlineButton, error) {
+	approvals, ok := router.(approvalWindowRouter)
+	if !ok {
+		return nil, nil
+	}
+	offer, created, err := approvals.CreateApprovalWindowOfferForMessage(ctx, msg, sourceKind, sourceID, sourceDecisionKind)
+	if err != nil || !created {
+		return nil, err
+	}
+	return ApprovalWindowRowsForOffer(offer), nil
+}
+
+func encodeApprovalWindowCallbackData(offerID string, action string) string {
+	return approvalWindowCallbackPrefix + strings.TrimSpace(offerID) + ":" + strings.TrimSpace(action)
+}
+
+func decodeApprovalWindowCallbackData(data string) (string, string, bool) {
 	trimmed := strings.TrimSpace(data)
 	if !strings.HasPrefix(trimmed, approvalWindowCallbackPrefix) {
-		return "", false
+		return "", "", false
 	}
-	action := strings.TrimSpace(strings.TrimPrefix(trimmed, approvalWindowCallbackPrefix))
+	body := strings.TrimSpace(strings.TrimPrefix(trimmed, approvalWindowCallbackPrefix))
+	offerID, action, ok := strings.Cut(body, ":")
+	if !ok {
+		// Legacy no-token callbacks fail closed for authority-bearing actions.
+		return "", strings.TrimSpace(body), true
+	}
+	offerID = strings.TrimSpace(offerID)
+	action = strings.TrimSpace(action)
 	switch action {
 	case approvalWindowActionEnable15, approvalWindowActionDouble, approvalWindowActionCancel, approvalWindowActionClose:
-		return action, true
+		return offerID, action, offerID != "" || action == approvalWindowActionClose
 	default:
-		return "", false
+		return "", "", false
 	}
 }
 
-func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, action string) (bool, error) {
+func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, offerID string, action string) (bool, error) {
 	targetMsg, err := telegramCallbackTargetMessage(router, cb)
 	if err != nil {
 		return true, err
 	}
 	chatID := targetMsg.ChatID
 	messageID := targetMsg.MessageID
-	if targetMsg.SenderID == 0 && cb.From != nil {
-		targetMsg.SenderID = cb.From.ID
+	senderID := int64(0)
+	if cb.From != nil {
+		senderID = cb.From.ID
+	}
+	if targetMsg.SenderID == 0 {
+		targetMsg.SenderID = senderID
 	}
 	if chatID == 0 || messageID == 0 {
 		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), approvalWindowCallbackStale); err != nil && !telegram.IsStaleCallbackQueryError(err) {
@@ -68,7 +113,14 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 		}
 		return true, nil
 	}
+
+	approvals, ok := router.(approvalWindowRouter)
 	if action == approvalWindowActionClose {
+		if ok && strings.TrimSpace(offerID) != "" {
+			if err := approvals.CloseApprovalWindowOffer(ctx, offerID); err != nil {
+				return true, err
+			}
+		}
 		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 			return true, err
 		}
@@ -78,8 +130,12 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 		}
 		return true, nil
 	}
-
-	approvals, ok := router.(approvalWindowRouter)
+	if strings.TrimSpace(offerID) == "" {
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), approvalWindowCallbackStale); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+			return true, err
+		}
+		return true, nil
+	}
 	if !ok {
 		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Approval windows are unavailable."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 			return true, err
@@ -91,13 +147,13 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 	var rows [][]telegram.InlineButton
 	switch action {
 	case approvalWindowActionEnable15:
-		text, err = approvals.EnableApprovalWindowForMessage(ctx, targetMsg, approvalWindowCallbackDuration)
-		rows = approvalWindowActiveRows()
+		text, err = approvals.EnableApprovalWindowOffer(ctx, offerID, senderID, approvalWindowCallbackDuration)
+		rows = ApprovalWindowActiveRows(offerID)
 	case approvalWindowActionDouble:
-		text, err = approvals.DoubleApprovalWindowForMessage(ctx, targetMsg)
-		rows = approvalWindowActiveRows()
+		text, err = approvals.DoubleApprovalWindowOffer(ctx, offerID, senderID)
+		rows = ApprovalWindowActiveRows(offerID)
 	case approvalWindowActionCancel:
-		text, err = approvals.CancelApprovalWindowForMessage(ctx, targetMsg)
+		text, err = approvals.CancelApprovalWindowOffer(ctx, offerID, senderID)
 	default:
 		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), approvalWindowCallbackStale); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 			return true, err
@@ -130,29 +186,30 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 }
 
 func approvalWindowCallbackClosedText(cb telegram.CallbackQuery) string {
-	if cb.Message != nil {
-		if text := strings.TrimSpace(cb.Message.Text); text != "" {
-			return text
-		}
+	if cb.Message != nil && strings.TrimSpace(cb.Message.Text) != "" {
+		return strings.TrimSpace(cb.Message.Text)
 	}
-	return "Approval controls closed."
+	return "Approval window offer closed."
 }
 
 func approvalWindowCallbackErrorAnswer(err error) string {
-	msg := strings.TrimSpace(err.Error())
-	if msg == "" {
-		return "Approval window action failed."
+	if err == nil {
+		return "Approval window unavailable."
 	}
-	if len(msg) > 180 {
-		msg = msg[:180]
+	text := strings.TrimSpace(err.Error())
+	if text == "" {
+		return "Approval window unavailable."
 	}
-	return msg
+	if len(text) > 180 {
+		text = text[:177] + "..."
+	}
+	return text
 }
 
 func renderApprovalWindowCallbackError(err error) string {
-	msg := strings.TrimSpace(err.Error())
-	if msg == "" {
-		msg = "Unknown error."
+	why := "Approval window unavailable."
+	if err != nil && strings.TrimSpace(err.Error()) != "" {
+		why = strings.TrimSpace(err.Error())
 	}
-	return "Approval window action failed.\n\n" + msg
+	return fmt.Sprintf("Approval window was not opened.\n\n%s", why)
 }

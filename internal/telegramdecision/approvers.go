@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/decision"
+	"github.com/idolum-ai/aphelion/internal/telegramcommands"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 	toolpkg "github.com/idolum-ai/aphelion/tool"
@@ -43,10 +44,15 @@ func EditDecisionMessageClearingInlineKeyboard(ctx context.Context, sender Decis
 	return sender.EditMessageText(ctx, chatID, messageID, text, "")
 }
 
+type ApprovalWindowOfferer interface {
+	CreateApprovalWindowOfferForKey(ctx context.Context, key session.SessionKey, adminUserID int64, sourceKind string, sourceID string, sourceDecisionKind string) (session.ApprovalWindowOffer, bool, error)
+}
+
 type ExecApprover struct {
-	sender  DecisionSender
-	broker  *decision.Broker
-	timeout time.Duration
+	sender          DecisionSender
+	broker          *decision.Broker
+	timeout         time.Duration
+	approvalWindows ApprovalWindowOfferer
 }
 
 type DurableMemoryDelegationApprover struct {
@@ -100,14 +106,19 @@ func (a *DurableSnapshotRestoreApprover) SetTimeout(timeout time.Duration) {
 	}
 }
 
-func NewExecApprover(sender DecisionSender, broker *decision.Broker, timeout time.Duration) *ExecApprover {
+func NewExecApprover(sender DecisionSender, broker *decision.Broker, timeout time.Duration, offerers ...ApprovalWindowOfferer) *ExecApprover {
 	if timeout <= 0 {
 		timeout = DefaultExecApprovalTimeout
 	}
+	var offerer ApprovalWindowOfferer
+	if len(offerers) > 0 {
+		offerer = offerers[0]
+	}
 	return &ExecApprover{
-		sender:  sender,
-		broker:  broker,
-		timeout: timeout,
+		sender:          sender,
+		broker:          broker,
+		timeout:         timeout,
+		approvalWindows: offerer,
 	}
 }
 
@@ -177,7 +188,11 @@ func (a *ExecApprover) ConfirmExec(ctx context.Context, req toolpkg.ExecApproval
 
 	if result.Choice == "approve" {
 		if result.Delivery.MessageID != 0 {
-			editApprovedDecisionConfirmation(ctx, a.sender, req.SessionKey.ChatID, result.Delivery.MessageID, "Proposal", result.DecisionID, decision.KindProposalApproval, formatExecProposalDetails(req))
+			rows, offerErr := a.approvalWindowOfferRows(ctx, req.SessionKey, req.Principal.TelegramUserID, result.DecisionID, string(decision.KindProposalApproval))
+			if offerErr != nil {
+				return toolpkg.ExecApprovalDecision{}, offerErr
+			}
+			editApprovedDecisionConfirmation(ctx, a.sender, req.SessionKey.ChatID, result.Delivery.MessageID, "Proposal", result.DecisionID, decision.KindProposalApproval, formatExecProposalDetails(req), rows)
 		}
 		return toolpkg.ExecApprovalDecision{Approved: true}, nil
 	}
@@ -220,7 +235,7 @@ func (a *DurableMemoryDelegationApprover) ConfirmDurableMemoryDelegation(ctx con
 	}
 	if result.Choice == "approve" {
 		if result.Delivery.MessageID != 0 {
-			editApprovedDecisionConfirmation(ctx, a.sender, req.SessionKey.ChatID, result.Delivery.MessageID, "Memory delegation", result.DecisionID, decision.KindMemoryDelegation, formatDurableMemoryDelegationDetails(req))
+			editApprovedDecisionConfirmation(ctx, a.sender, req.SessionKey.ChatID, result.Delivery.MessageID, "Memory delegation", result.DecisionID, decision.KindMemoryDelegation, formatDurableMemoryDelegationDetails(req), nil)
 		}
 		return toolpkg.DurableMemoryDelegationApprovalDecision{Approved: true}, nil
 	}
@@ -262,7 +277,7 @@ func (a *DurableSnapshotRestoreApprover) ConfirmDurableSnapshotRestore(ctx conte
 	}
 	if result.Choice == "approve" {
 		if result.Delivery.MessageID != 0 {
-			editApprovedDecisionConfirmation(ctx, a.sender, req.SessionKey.ChatID, result.Delivery.MessageID, "Snapshot restore", result.DecisionID, decision.KindSnapshotRestore, formatDurableSnapshotRestoreDetails(req))
+			editApprovedDecisionConfirmation(ctx, a.sender, req.SessionKey.ChatID, result.Delivery.MessageID, "Snapshot restore", result.DecisionID, decision.KindSnapshotRestore, formatDurableSnapshotRestoreDetails(req), nil)
 		}
 		return toolpkg.DurableSnapshotRestoreApprovalDecision{Approved: true}, nil
 	}
@@ -340,12 +355,13 @@ func approvedDecisionConfirmationRowsExpanded(decisionID string, details string,
 	}}
 }
 
-func editApprovedDecisionConfirmation(ctx context.Context, sender DecisionSender, chatID int64, messageID int64, label string, decisionID string, kind decision.Kind, details string) {
+func editApprovedDecisionConfirmation(ctx context.Context, sender DecisionSender, chatID int64, messageID int64, label string, decisionID string, kind decision.Kind, details string, extraRows [][]telegram.InlineButton) {
 	if sender == nil || chatID == 0 || messageID == 0 {
 		return
 	}
 	text := approvedDecisionConfirmationText(label, decisionID, kind, details)
-	if rows := approvedDecisionConfirmationRows(decisionID, details); len(rows) > 0 {
+	rows := appendTelegramRows(approvedDecisionConfirmationRows(decisionID, details), extraRows)
+	if len(rows) > 0 {
 		if editor, ok := sender.(DecisionKeyboardEditor); ok {
 			if err := editor.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, text, "", rows); err == nil {
 				return
@@ -353,6 +369,28 @@ func editApprovedDecisionConfirmation(ctx context.Context, sender DecisionSender
 		}
 	}
 	_ = EditDecisionMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text)
+}
+
+func (a *ExecApprover) approvalWindowOfferRows(ctx context.Context, key session.SessionKey, adminUserID int64, decisionID string, decisionKind string) ([][]telegram.InlineButton, error) {
+	if a == nil || a.approvalWindows == nil {
+		return nil, nil
+	}
+	offer, created, err := a.approvalWindows.CreateApprovalWindowOfferForKey(ctx, key, adminUserID, session.ApprovalWindowOfferSourceDecision, decisionID, decisionKind)
+	if err != nil || !created {
+		return nil, err
+	}
+	return telegramcommands.ApprovalWindowRowsForOffer(offer), nil
+}
+
+func appendTelegramRows(base [][]telegram.InlineButton, extra [][]telegram.InlineButton) [][]telegram.InlineButton {
+	out := append([][]telegram.InlineButton(nil), base...)
+	for _, row := range extra {
+		if len(row) == 0 {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 func formatExecProposalDetails(req toolpkg.ExecApprovalRequest) string {

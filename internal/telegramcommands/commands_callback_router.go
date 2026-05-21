@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
@@ -32,8 +33,8 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 	if threadID, ok := decodeTelegramThreadAbsorbCallback(cb.Data); ok {
 		return handleTelegramThreadCallback(ctx, sender, router, cb, threadID)
 	}
-	if action, ok := decodeApprovalWindowCallbackData(cb.Data); ok {
-		return handleApprovalWindowCallback(ctx, sender, router, cb, action)
+	if offerID, action, ok := decodeApprovalWindowCallbackData(cb.Data); ok {
+		return handleApprovalWindowCallback(ctx, sender, router, cb, offerID, action)
 	}
 	if action, ok := decodeHealthCallbackData(cb.Data); ok {
 		return handleHealthCallback(ctx, sender, router, cb, action)
@@ -154,7 +155,15 @@ func handleActionProposalCallback(ctx context.Context, sender commandCallbackSen
 	if messageID != 0 {
 		text := continuationCallbackDisplayText(targetMsg, renderActionProposalDecision(proposal, mission, action, changed))
 		if action == "approve" {
-			if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, text, "", approvalWindowOfferRows()); err != nil {
+			rows, err := approvalWindowOfferRowsForSource(ctx, router, targetMsg, session.ApprovalWindowOfferSourceMission, proposalID, "mission_action")
+			if err != nil {
+				return true, err
+			}
+			if len(rows) > 0 {
+				if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, text, "", rows); err != nil {
+					return true, err
+				}
+			} else if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
 				return true, err
 			}
 		} else if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
