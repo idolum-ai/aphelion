@@ -137,7 +137,7 @@ in the prompt body.
 
 `/start` and `/help` attach role-scoped command buttons. Public buttons include
 status, health, memory, mission, threads, stop, new, and detach. Admin buttons
-add models, agents, tailnet, auto, reinstall, and restart.
+add models, agents, tailnet, reinstall, and restart.
 
 Menu callbacks route through the same command dispatcher as typed slash commands;
 the button is not a new authority path.
