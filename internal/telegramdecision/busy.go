@@ -116,15 +116,27 @@ func (h *Handler) applyBusyDecisionResult(ctx context.Context, msg core.InboundM
 		}
 	case "queue":
 		if result.Delivery.MessageID != 0 && h.sender != nil {
-			text := "Got it — I'll process your message next. ⏳"
-			if result.TimedOut {
-				text = "Queued your message — processing after current task."
-			}
+			text := h.busyQueueAcknowledgementText(msg, result.TimedOut)
 			_ = EditDecisionMessageClearingInlineKeyboard(ctx, h.sender, msg.ChatID, result.Delivery.MessageID, text)
 		}
 		return h.routeAfterBusyDecision(ctx, msg, deferred)
 	}
 	return nil
+}
+
+func (h *Handler) busyQueueAcknowledgementText(msg core.InboundMessage, timedOut bool) string {
+	text := "Got it — I'll process your message next. ⏳"
+	if timedOut {
+		text = "Queued your message — processing after current task."
+	}
+	if msg.ChatID == 0 || msg.TelegramThreadID <= 0 {
+		return text
+	}
+	var resolver DecisionThreadResolver
+	if h != nil && h.store != nil {
+		resolver = h.store
+	}
+	return prefixDecisionTextForThread(msg.ChatID, msg.TelegramThreadID, resolver, text)
 }
 
 func (h *Handler) routeAfterBusyDecision(ctx context.Context, msg core.InboundMessage, deferred bool) error {
