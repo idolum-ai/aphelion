@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/decision"
+	"github.com/idolum-ai/aphelion/internal/decisionprojection"
 	"github.com/idolum-ai/aphelion/internal/telegramcommands"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
@@ -436,26 +437,7 @@ func appendTelegramRows(base [][]telegram.InlineButton, extra [][]telegram.Inlin
 }
 
 func formatExecProposalDetails(req toolpkg.ExecApprovalRequest) string {
-	lines := make([]string, 0, 8)
-	if summary := strings.TrimSpace(req.Proposal.Summary); summary != "" {
-		lines = append(lines, summary)
-	}
-	if kind := strings.TrimSpace(req.Proposal.Kind); kind != "" {
-		lines = append(lines, fmt.Sprintf("Kind: %s", kind))
-	}
-	if whyNow := strings.TrimSpace(req.Proposal.WhyNow); whyNow != "" {
-		lines = append(lines, "", "Why now:", whyNow)
-	}
-	if bounded := strings.TrimSpace(req.Proposal.BoundedEffect); bounded != "" {
-		lines = append(lines, "", "If approved:", bounded)
-	}
-	if reason := strings.TrimSpace(req.Reason); reason != "" {
-		lines = append(lines, "", "Trigger:", reason)
-	}
-	if command := strings.TrimSpace(req.Command); command != "" {
-		lines = append(lines, "", "Command:", command)
-	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
+	return decisionprojection.FormatExecApprovalDetails(req.Proposal, req.Reason, req.Command, req.Workdir)
 }
 
 func formatDurableMemoryDelegationDetails(req toolpkg.DurableMemoryDelegationApprovalRequest) string {

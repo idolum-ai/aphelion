@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/decision"
+	"github.com/idolum-ai/aphelion/internal/decisionprojection"
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
@@ -134,108 +135,7 @@ func summarizePendingDecision(pending decision.PendingDecision) string {
 }
 
 func summarizeProposalApprovalDetails(details string) string {
-	sections := splitDecisionSections(details)
-	summary := compactSentence(cleanProposalApprovalSummary(firstNonEmpty(sections["summary"])))
-	kind := firstNonEmpty(sections["kind"])
-	command := firstNonEmpty(sections["command"])
-	if message := commitMessageFromProposalCommand(command); message != "" {
-		return "I’d like to commit: `" + message + "`."
-	}
-	if proposalSummaryLooksHighRisk(kind, summary) {
-		return "High-risk approval: " + ensureDecisionSentence(summary)
-	}
-	if proposalSummaryLooksLikePossibleMatch(kind, summary) {
-		return "Command needs confirmation: " + lowercaseDecisionStart(ensureDecisionSentence(summary))
-	}
-	if summary != "" {
-		return "I’d like to " + lowercaseDecisionStart(ensureDecisionSentence(summary))
-	}
-	if effect := compactSentence(firstNonEmpty(sections["if approved"])); effect != "" {
-		return "I’d like to " + lowercaseDecisionStart(ensureDecisionSentence(effect))
-	}
-	return compactSentence(details)
-}
-
-func commitMessageFromProposalCommand(command string) string {
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return ""
-	}
-	needle := "git" + " commit"
-	if !strings.Contains(command, needle) {
-		return ""
-	}
-	idx := strings.Index(command, " -m ")
-	if idx < 0 {
-		return ""
-	}
-	rest := strings.TrimSpace(command[idx+4:])
-	if rest == "" {
-		return ""
-	}
-	quote := rest[0]
-	if quote == '\'' || quote == '"' {
-		for i := 1; i < len(rest); i++ {
-			if rest[i] == quote && rest[i-1] != '\\' {
-				return strings.TrimSpace(rest[1:i])
-			}
-		}
-	}
-	return compactSentence(rest)
-}
-
-func proposalSummaryLooksHighRisk(kind string, summary string) bool {
-	joined := strings.ToLower(strings.Join([]string{kind, summary}, " "))
-	return strings.Contains(joined, "remote_shell") ||
-		strings.Contains(joined, "high_impact") ||
-		strings.Contains(joined, "service_interruption") ||
-		strings.Contains(joined, "process_interruption")
-}
-
-func proposalSummaryLooksLikePossibleMatch(kind string, summary string) bool {
-	joined := strings.ToLower(strings.Join([]string{kind, summary}, " "))
-	return strings.Contains(joined, "possible") ||
-		strings.Contains(joined, "may delete") ||
-		strings.Contains(joined, "delete pattern")
-}
-
-func lowercaseDecisionStart(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return ""
-	}
-	r := []rune(s)
-	r[0] = []rune(strings.ToLower(string(r[0])))[0]
-	return string(r)
-}
-
-func ensureDecisionSentence(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return ""
-	}
-	switch s[len(s)-1] {
-	case '.', '!', '?':
-		return s
-	default:
-		return s + "."
-	}
-}
-
-func cleanProposalApprovalSummary(summary string) string {
-	lines := make([]string, 0)
-	for _, raw := range strings.Split(strings.TrimSpace(summary), "\n") {
-		line := strings.TrimSpace(raw)
-		if line == "" {
-			continue
-		}
-		lower := strings.ToLower(line)
-		if strings.HasPrefix(lower, "kind:") || strings.HasPrefix(lower, "trigger:") {
-			continue
-		}
-		lines = append(lines, line)
-	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
+	return decisionprojection.ProposalApprovalSummary(details)
 }
 
 func summarizeArtifactRetentionDetails(details string) string {

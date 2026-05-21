@@ -13,6 +13,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/decision"
+	"github.com/idolum-ai/aphelion/internal/decisionprojection"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -118,6 +119,9 @@ func (r *Runtime) handleDecisionEvent(_ context.Context, event decision.Event) {
 		"default":       strings.TrimSpace(req.DefaultChoice),
 		"prompt":        truncatePreview(strings.TrimSpace(req.Prompt), 200),
 		"details":       truncatePreview(strings.TrimSpace(req.Details), 220),
+	}
+	if summary := strings.TrimSpace(decisionprojection.DecisionSummary(string(req.Kind), req.Prompt, req.Details)); summary != "" {
+		payload["summary"] = truncatePreview(summary, 220)
 	}
 	if req.SenderID != 0 {
 		payload["sender_id"] = req.SenderID

@@ -208,6 +208,8 @@ type decisionEventProjection struct {
 	ChatID        int64
 	Kind          string
 	Prompt        string
+	Details       string
+	Summary       string
 	LastEventType string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
@@ -250,6 +252,12 @@ func (r *Runtime) decisionEventStates(since time.Time, limit int) (map[string]de
 		}
 		if state.Prompt == "" {
 			state.Prompt = payloadString(payload, "prompt")
+		}
+		if state.Details == "" {
+			state.Details = payloadString(payload, "details")
+		}
+		if state.Summary == "" {
+			state.Summary = payloadString(payload, "summary")
 		}
 		if state.CreatedAt.IsZero() {
 			state.CreatedAt = event.CreatedAt

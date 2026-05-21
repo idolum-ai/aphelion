@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/decision"
+	"github.com/idolum-ai/aphelion/internal/decisionprojection"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
@@ -53,6 +54,41 @@ func TestProposalApprovalSummaryIsOutcomeFirst(t *testing.T) {
 		if strings.Contains(text, hidden) {
 			t.Fatalf("approval text = %q, should keep %q behind Expand details", text, hidden)
 		}
+	}
+}
+
+func TestWorkspaceEscapeProposalSummaryIsDecisionOriented(t *testing.T) {
+	t.Parallel()
+
+	details := decisionprojection.FormatExecApprovalDetails(
+		session.OperationProposal{
+			Kind:          "workspace_escape",
+			Summary:       "Run command outside the configured workspace",
+			WhyNow:        "The requested command needs an explicit admin-approved working directory outside the current sandbox root.",
+			BoundedEffect: "The command will run once.",
+		},
+		"workspace escape",
+		`grep -RIn "ContinuationState(" session | sed -n '1,120p'`,
+		"/home/sadasant_gmail_com/code/github.com/idolum-ai/aphelion",
+	)
+	pending := decision.PendingDecision{Request: decision.Request{
+		Kind:    decision.KindProposalApproval,
+		Prompt:  "Approve this proposal?",
+		Details: details,
+	}}
+
+	summary := renderPendingDecisionSummary(pending)
+	for _, want := range []string{
+		"I’d like to read repository files outside the configured workspace.",
+		"Command class: repo_read",
+		"Workdir: /home/sadasant_gmail_com/code/github.com/idolum-ai/aphelion",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary = %q, want %q", summary, want)
+		}
+	}
+	if strings.Contains(summary, "I’d like to run command outside the configured workspace") {
+		t.Fatalf("summary = %q, should not use generic workspace-escape wording", summary)
 	}
 }
 
