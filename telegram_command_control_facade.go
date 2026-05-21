@@ -88,6 +88,30 @@ func (c telegramCommandControl) AutoApprovalStatus(ctx context.Context, chatID i
 func (c telegramCommandControl) AutoApprovalStatusForMessage(ctx context.Context, msg core.InboundMessage) (string, error) {
 	return c.controlFacade().AutoApprovalStatusForMessage(ctx, msg)
 }
+func (c telegramCommandControl) CreateApprovalWindowOfferForMessage(ctx context.Context, msg core.InboundMessage, sourceKind string, sourceID string, sourceDecisionKind string) (session.ApprovalWindowOffer, bool, error) {
+	return c.controlFacade().CreateApprovalWindowOfferForMessage(ctx, msg, sourceKind, sourceID, sourceDecisionKind)
+}
+func (c telegramCommandControl) EnableApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage, duration time.Duration) (string, error) {
+	return c.controlFacade().EnableApprovalWindowForMessage(ctx, msg, duration)
+}
+func (c telegramCommandControl) DoubleApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage) (string, error) {
+	return c.controlFacade().DoubleApprovalWindowForMessage(ctx, msg)
+}
+func (c telegramCommandControl) CancelApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage) (string, error) {
+	return c.controlFacade().CancelApprovalWindowForMessage(ctx, msg)
+}
+func (c telegramCommandControl) EnableApprovalWindowOffer(ctx context.Context, offerID string, senderID int64, duration time.Duration) (string, error) {
+	return c.controlFacade().EnableApprovalWindowOffer(ctx, offerID, senderID, duration)
+}
+func (c telegramCommandControl) DoubleApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error) {
+	return c.controlFacade().DoubleApprovalWindowOffer(ctx, offerID, senderID)
+}
+func (c telegramCommandControl) CancelApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error) {
+	return c.controlFacade().CancelApprovalWindowOffer(ctx, offerID, senderID)
+}
+func (c telegramCommandControl) CloseApprovalWindowOffer(ctx context.Context, offerID string) error {
+	return c.controlFacade().CloseApprovalWindowOffer(ctx, offerID)
+}
 func (c telegramCommandControl) RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error) {
 	return c.controlFacade().RefreshContinuationProposal(ctx, chatID, reason)
 }
