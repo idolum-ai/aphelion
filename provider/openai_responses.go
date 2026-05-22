@@ -30,6 +30,7 @@ func (o *OpenAI) completeResponses(ctx context.Context, messages []agent.Message
 	if defs := toOpenAIResponsesTools(tools); len(defs) > 0 {
 		reqBody.Tools = defs
 		reqBody.ToolChoice = "auto"
+		reqBody.ParallelToolCalls = true
 	}
 
 	var buf bytes.Buffer
@@ -85,6 +86,7 @@ func (o *OpenAI) streamResponses(ctx context.Context, messages []agent.Message, 
 	if defs := toOpenAIResponsesTools(tools); len(defs) > 0 {
 		reqBody.Tools = defs
 		reqBody.ToolChoice = "auto"
+		reqBody.ParallelToolCalls = true
 	}
 
 	var buf bytes.Buffer
@@ -136,16 +138,17 @@ func openAIReasoningEffort(effort agent.ReasoningEffort) string {
 }
 
 type openAIResponsesRequest struct {
-	Model           string                     `json:"model"`
-	Instructions    string                     `json:"instructions,omitempty"`
-	Input           []map[string]any           `json:"input"`
-	MaxOutputTokens int                        `json:"max_output_tokens,omitempty"`
-	Tools           []map[string]any           `json:"tools,omitempty"`
-	ToolChoice      string                     `json:"tool_choice,omitempty"`
-	Reasoning       map[string]any             `json:"reasoning,omitempty"`
-	Text            *openAIResponsesTextConfig `json:"text,omitempty"`
-	Stream          bool                       `json:"stream,omitempty"`
-	Store           *bool                      `json:"store,omitempty"`
+	Model             string                     `json:"model"`
+	Instructions      string                     `json:"instructions,omitempty"`
+	Input             []map[string]any           `json:"input"`
+	MaxOutputTokens   int                        `json:"max_output_tokens,omitempty"`
+	Tools             []map[string]any           `json:"tools,omitempty"`
+	ToolChoice        string                     `json:"tool_choice,omitempty"`
+	ParallelToolCalls bool                       `json:"parallel_tool_calls,omitempty"`
+	Reasoning         map[string]any             `json:"reasoning,omitempty"`
+	Text              *openAIResponsesTextConfig `json:"text,omitempty"`
+	Stream            bool                       `json:"stream,omitempty"`
+	Store             *bool                      `json:"store,omitempty"`
 }
 
 type openAIResponsesTextConfig struct {

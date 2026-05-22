@@ -66,6 +66,14 @@ func (p *principalScopedTools) Execute(ctx context.Context, name string, input j
 	return p.executor.ExecuteForPrincipal(ctx, p.principal, name, input)
 }
 
+func (p *principalScopedTools) SupportsParallelToolCall(name string, input json.RawMessage) bool {
+	parallelSafe, ok := p.base.(agent.ParallelSafeToolRegistry)
+	if !ok {
+		return false
+	}
+	return parallelSafe.SupportsParallelToolCall(name, input)
+}
+
 func (r *Runtime) toolsForPrincipal(p principal.Principal, key session.SessionKey) agent.ToolRegistry {
 	if r.tools == nil {
 		return nil

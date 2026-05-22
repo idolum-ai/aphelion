@@ -325,11 +325,16 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		"tool_count":    len(toolManifest(tools)),
 	}, time.Now().UTC())
 
+	runOpts := r.reasoningOptionsForRun(runKind)
+	if runOpts == nil {
+		runOpts = &agent.CompleteOptions{}
+	}
+	runOpts.Observer = monitor
 	turnResult, outHistory, runErr := agent.RunTurn(ctx, input.Exec.Provider, tools, &agent.Budget{
 		Max:     r.cfg.Agent.MaxIterations,
 		Caution: 0.7,
 		Warning: 0.9,
-	}, r.reasoningOptionsForRun(runKind), turnInput)
+	}, runOpts, turnInput)
 	if runErr != nil {
 		r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptFailed, "provider", "failed", map[string]any{
 			"backend":              strings.TrimSpace(input.Exec.Backend),

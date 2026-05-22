@@ -23,6 +23,15 @@ func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessa
 	return r.executeWithRoot(ctx, name, input, r.workspace)
 }
 
+func (r *Registry) SupportsParallelToolCall(name string, _ json.RawMessage) bool {
+	switch strings.TrimSpace(name) {
+	case "read_file", "list_dir", "search":
+		return true
+	default:
+		return false
+	}
+}
+
 func (r *Registry) ExecuteForPrincipal(ctx context.Context, p principal.Principal, name string, input json.RawMessage) (string, error) {
 	return r.ExecuteForSessionPrincipal(ctx, p, session.SessionKey{}, name, input)
 }

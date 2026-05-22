@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
@@ -66,6 +67,14 @@ func (o *observedToolRegistry) Execute(ctx context.Context, name string, input j
 	return out, err
 }
 
+func (o *observedToolRegistry) SupportsParallelToolCall(name string, input json.RawMessage) bool {
+	parallelSafe, ok := o.base.(agent.ParallelSafeToolRegistry)
+	if !ok {
+		return false
+	}
+	return parallelSafe.SupportsParallelToolCall(name, input)
+}
+
 type turnMonitor struct {
 	runtime                  *Runtime
 	key                      session.SessionKey
@@ -73,7 +82,8 @@ type turnMonitor struct {
 	progress                 *toolProgressReporter
 	audit                    *turnAuditRecorder
 	startedAt                time.Time
-	toolStarts               map[string]time.Time
+	toolStartsMu             sync.Mutex
+	toolStarts               map[string][]time.Time
 	ctx                      context.Context
 	cancelTurn               context.CancelFunc
 	stopRunActivityHeartbeat context.CancelFunc
@@ -92,7 +102,7 @@ func (r *Runtime) startTurnMonitor(ctx context.Context, key session.SessionKey, 
 		progress:        progress,
 		audit:           audit,
 		startedAt:       time.Now().UTC(),
-		toolStarts:      make(map[string]time.Time),
+		toolStarts:      make(map[string][]time.Time),
 		ctx:             turnCtx,
 		cancelTurn:      cancelTurn,
 		ingressSurface:  strings.TrimSpace(msg.IngressSurface),

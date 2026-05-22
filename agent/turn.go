@@ -41,6 +41,37 @@ type ToolRegistry interface {
 	Definitions() []ToolDef
 }
 
+type ParallelSafeToolRegistry interface {
+	SupportsParallelToolCall(name string, input json.RawMessage) bool
+}
+
+type TurnObserver interface {
+	ModelRequestStarted(ctx context.Context, event ModelRequestEvent)
+	ModelRequestFinished(ctx context.Context, event ModelRequestEvent)
+	ToolBatchStarted(ctx context.Context, event ToolBatchEvent)
+	ToolBatchFinished(ctx context.Context, event ToolBatchEvent)
+}
+
+type ModelRequestEvent struct {
+	Attempt       int
+	HistoryCount  int
+	ToolCount     int
+	Duration      time.Duration
+	Error         string
+	Retryable     bool
+	ToolCallCount int
+	OutputChars   int
+	TokenUsage    core.TokenUsage
+}
+
+type ToolBatchEvent struct {
+	Mode        string
+	BatchSize   int
+	ToolNames   []string
+	Duration    time.Duration
+	FailedCount int
+}
+
 type Message struct {
 	Role          string
 	Content       string
@@ -102,6 +133,7 @@ type CompleteOptions struct {
 	Reasoning        ReasoningConfig
 	Verbosity        Verbosity
 	ProviderFailover *ProviderFailoverState
+	Observer         TurnObserver
 }
 
 type ProviderFailoverState struct {
@@ -271,67 +303,9 @@ func RunTurn(
 			return nil, history, errors.New("tool calls requested but tool registry is nil")
 		}
 
-		for _, call := range resp.ToolCalls {
-			repairedInput, inputErr := repairToolInput(call.Input)
-			if inputErr != nil {
-				content := withBudgetWarning(fmt.Sprintf("tool_error: Invalid tool arguments for %s: %v", call.Name, inputErr), &pendingBudget)
-				toolLog = append(toolLog, fmt.Sprintf("%s:error", call.Name))
-				history = append(history, Message{
-					Role:       "tool",
-					Content:    content,
-					ToolCallID: call.ID,
-					ToolName:   call.Name,
-				})
-				continue
-			}
-			call.Input = repairedInput
-
-			requestSig, loopBlocked := toolLoopGuard.shouldBlock(call)
-			if loopBlocked {
-				content := withBudgetWarning(fmt.Sprintf("tool_error: no-progress tool loop blocked for %s", call.Name), &pendingBudget)
-				toolLog = append(toolLog, fmt.Sprintf("%s:error", call.Name))
-				history = append(history, Message{
-					Role:       "tool",
-					Content:    content,
-					ToolCallID: call.ID,
-					ToolName:   call.Name,
-				})
-				continue
-			}
-
-			out, toolErr := tools.Execute(ctx, call.Name, call.Input)
-			if toolErr != nil {
-				if errors.Is(toolErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-					log.Printf("INFO suppressing expected canceled tool execution tool=%s id=%s err=%v", call.Name, call.ID, toolErr)
-				} else {
-					log.Printf("WARN tool execution failed tool=%s id=%s err=%v", call.Name, call.ID, toolErr)
-				}
-			} else {
-				log.Printf("INFO tool execution completed tool=%s id=%s", call.Name, call.ID)
-			}
-
-			content := out
-			if toolErr != nil {
-				if content != "" {
-					content = fmt.Sprintf("tool_error: %v\n%s", toolErr, content)
-				} else {
-					content = fmt.Sprintf("tool_error: %v", toolErr)
-				}
-				toolLog = append(toolLog, fmt.Sprintf("%s:error", call.Name))
-			} else {
-				toolLog = append(toolLog, fmt.Sprintf("%s:ok", call.Name))
-			}
-
-			toolLoopGuard.recordOutcome(requestSig, content, toolErr != nil)
-			content = withBudgetWarning(content, &pendingBudget)
-
-			history = append(history, Message{
-				Role:       "tool",
-				Content:    content,
-				ToolCallID: call.ID,
-				ToolName:   call.Name,
-			})
-		}
+		batchResult := executeToolBatch(ctx, tools, resp.ToolCalls, &toolLoopGuard, &pendingBudget, turnObserver(opts))
+		toolLog = append(toolLog, batchResult.toolLog...)
+		history = append(history, batchResult.messages...)
 	}
 }
 
@@ -458,18 +432,36 @@ func completeWithRetry(
 	tools []ToolDef,
 	opts *CompleteOptions,
 ) (*Response, error) {
+	observer := turnObserver(opts)
 	if managed, ok := provider.(ManagedProvider); ok {
-		if opts == nil {
-			return managed.CompleteManaged(ctx, messages, tools, CompleteOptions{})
+		event := ModelRequestEvent{Attempt: 1, HistoryCount: len(messages), ToolCount: len(tools)}
+		if observer != nil {
+			observer.ModelRequestStarted(ctx, event)
 		}
-		return managed.CompleteManaged(ctx, messages, tools, *opts)
+		started := time.Now()
+		var resp *Response
+		var err error
+		if opts == nil {
+			resp, err = managed.CompleteManaged(ctx, messages, tools, CompleteOptions{})
+		} else {
+			resp, err = managed.CompleteManaged(ctx, messages, tools, *opts)
+		}
+		finishModelRequest(ctx, observer, event, started, resp, err)
+		return resp, err
 	}
 
 	backoff := initialRetryBackoff
-	attempt := 0
+	attempt := 1
+	retries := 0
 
 	for {
+		event := ModelRequestEvent{Attempt: attempt, HistoryCount: len(messages), ToolCount: len(tools)}
+		if observer != nil {
+			observer.ModelRequestStarted(ctx, event)
+		}
+		started := time.Now()
 		resp, err := completeOnce(ctx, provider, messages, tools, opts)
+		finishModelRequest(ctx, observer, event, started, resp, err)
 		if err == nil {
 			return resp, nil
 		}
@@ -478,18 +470,43 @@ func completeWithRetry(
 			return nil, ctxErr
 		}
 
-		if !isRetryableProviderError(err) || attempt >= maxProviderRetries {
+		if !isRetryableProviderError(err) || retries >= maxProviderRetries {
 			return nil, err
 		}
 
-		attempt++
-		log.Printf("WARN provider call failed; retrying attempt=%d max_retries=%d err=%v", attempt, maxProviderRetries, err)
+		retries++
+		log.Printf("WARN provider call failed; retrying attempt=%d max_retries=%d err=%v", retries, maxProviderRetries, err)
 		if sleepErr := sleepWithContextFn(ctx, backoff); sleepErr != nil {
 			return nil, sleepErr
 		}
 
 		backoff *= 2
+		attempt++
 	}
+}
+
+func turnObserver(opts *CompleteOptions) TurnObserver {
+	if opts == nil {
+		return nil
+	}
+	return opts.Observer
+}
+
+func finishModelRequest(ctx context.Context, observer TurnObserver, event ModelRequestEvent, started time.Time, resp *Response, err error) {
+	if observer == nil {
+		return
+	}
+	event.Duration = time.Since(started)
+	if resp != nil {
+		event.ToolCallCount = len(resp.ToolCalls)
+		event.OutputChars = len(strings.TrimSpace(resp.Content))
+		event.TokenUsage = resp.Usage
+	}
+	if err != nil {
+		event.Error = trimProviderFailure(err)
+		event.Retryable = isRetryableProviderError(err)
+	}
+	observer.ModelRequestFinished(ctx, event)
 }
 
 func completeOnce(

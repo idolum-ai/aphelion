@@ -196,6 +196,9 @@ func TestOpenAICompleteWithToolsAndReasoningUsesResponsesAPI(t *testing.T) {
 	if len(seen.Tools) != 1 || seen.Tools[0]["name"] != "exec" || seen.ToolChoice != "auto" {
 		t.Fatalf("responses tools/tool_choice = %#v/%q", seen.Tools, seen.ToolChoice)
 	}
+	if !seen.ParallelToolCalls {
+		t.Fatal("parallel_tool_calls = false, want true when Responses tools are present")
+	}
 	if seen.Reasoning["effort"] != "medium" {
 		t.Fatalf("reasoning = %#v, want medium effort", seen.Reasoning)
 	}

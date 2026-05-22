@@ -174,8 +174,8 @@ func TestRuntimeProgressDetailsViewRerendersWholeWindowAndSticks(t *testing.T) {
 	if inlineCount != 1 {
 		t.Fatalf("inline len = %d, want initial progress card", inlineCount)
 	}
-	if got := initialText; !strings.Contains(got, "Searching files") || !strings.Contains(got, "Reading file evidence") || strings.Contains(got, "rg first") {
-		t.Fatalf("summary progress = %q, want semantic whole-window summary", got)
+	if got := initialText; !strings.Contains(got, "Exploring files (2x)") || strings.Contains(got, "rg first") {
+		t.Fatalf("summary progress = %q, want compact semantic whole-window summary", got)
 	}
 
 	updated, detailsText, err := rt.ToggleProgressView(context.Background(), 9933, 1001, monitor.runID, true)
@@ -216,7 +216,7 @@ func TestRuntimeProgressDetailsViewRerendersWholeWindowAndSticks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToggleProgressView(summary) err = %v", err)
 	}
-	if !updated || !strings.Contains(summaryText, "Searching files") || !strings.Contains(summaryText, "Reading file evidence") || !strings.Contains(summaryText, "Running tests") {
+	if !updated || !strings.Contains(summaryText, "Exploring files (2x)") || !strings.Contains(summaryText, "Running tests") {
 		t.Fatalf("summary text = %q, want retained entries rerendered as semantic summary", summaryText)
 	}
 	if strings.Contains(summaryText, "rg first") || strings.Contains(summaryText, "sed -n") || strings.Contains(summaryText, "go test ./runtime") {
