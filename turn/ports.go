@@ -34,7 +34,9 @@ type GovernorRequest struct {
 // GovernorResult is the orchestration-facing governor outcome.
 //
 // It surfaces the raw turn result alongside the floor sidecar that later face
-// rendering and persistence depend on.
+// rendering and persistence depend on. Turn is required; Machine rejects a nil
+// Turn before render accounting or persistence so downstream ports never receive
+// a structurally invalid result.
 type GovernorResult struct {
 	Turn            *core.TurnResult
 	Prepared        pipeline.TurnPrepareContract
