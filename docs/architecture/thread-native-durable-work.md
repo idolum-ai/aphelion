@@ -103,6 +103,100 @@ Promotion should be continuity-preserving, not a copy-and-forget migration:
 - raw backing principal IDs should stay in details, health trace, and
   maintenance surfaces.
 
+## Promotion Wizard / Contract Solidification
+
+`Promote` should open a wizard, not silently transform a side thread into an
+agent. A normal thread may have been shaped by parent context, broad memory
+focus, active tools, operator habits, and ad hoc workspace access. Promotion is
+the point where those ambient conditions are made reviewable and compiled into a
+child-owned contract.
+
+The wizard has two jobs:
+
+1. preserve the useful continuity that made the thread worth promoting;
+2. prevent parent memory, credentials, tools, network, filesystem scope, or
+   authority from leaking into the promoted agent by resemblance.
+
+A concrete example:
+
+```text
+Thread 8: Aphelion branch review
+
+This thread inspected origin/thread-native-durable-doc in an isolated worktree,
+merged origin/main locally without committing, read the added architecture doc,
+and produced a grounded review.
+
+Promote as: Aphelion Worktree Scout
+Default posture: local drafts, ask before external effects
+
+[Review Context] [Review Access] [Create Agent] [Cancel]
+```
+
+The source thread can feel continuous to the operator, but the promoted agent
+must receive only an approved handoff:
+
+- a charter and first task;
+- a selected memory/context digest;
+- explicit filesystem, command, tool, and network grants;
+- policy and stop conditions;
+- an artifact index and source-thread backlink;
+- a promotion handoff artifact for recovery, `/status`, and health trace.
+
+That handoff artifact is important. Recovery should not infer what was promoted
+from chat prose after a restart. It should be able to read a typed record that
+says which context was transferred, which resources were granted, which
+boundaries were rejected, and what the first supervised task was.
+
+### Wizard Steps
+
+A practical wizard can be staged as follows.
+
+1. **Candidate and purpose.** Confirm the source thread, human label, charter,
+   parent scope, proposed autonomy, and first task. Nothing durable is granted
+   by this screen alone.
+2. **Context and memory exposure review.** Show the operator a summary of the
+   thread transcript, active plan/operation state, files read, commands run,
+   artifacts created, approvals used, and parent-memory snippets that materially
+   shaped the work. Offer a proposed child memory digest with include/exclude
+   controls. The default is distilled memory candidates, not raw core-memory
+   inheritance or transcript dump.
+3. **Resource, command, and network review.** Convert the thread's working
+   conditions into explicit proposed grants. The operator should see both what
+   the thread used and what the child will actually receive.
+4. **Policy compilation.** Compile the selected charter, autonomy, outbound
+   mode, visibility, drift policy, stop rules, approval gates, and capability
+   grants into typed records.
+5. **First supervised handoff.** Start the child with a narrow orientation task:
+   re-read its assigned state, report what it believes it can do, and stop for
+   parent review before expanding autonomy.
+6. **Promotion receipt.** Store a promotion handoff/result artifact containing
+   the final selected context digest, grant set, denied grants, first task,
+   source refs, and expected validation evidence.
+
+For the Aphelion worktree example, the resource screen might compile to:
+
+```text
+Filesystem
+- allow read/write: workspace/worktrees/aphelion-thread-native-durable-doc
+- allow read-only comparison: code/github.com/idolum-ai/aphelion
+- deny: secrets, unrelated home directories, active checkout mutation
+
+Commands
+- allow: git status, git diff, git log, git show, grep/search, file reads
+- allow with review: go test ./... inside assigned worktree
+- gated: file edits outside assigned doc/task scope
+- deny without new approval: commit, push, deploy, restart, install deps
+
+Network
+- allow: mediated GitHub fetch for idolum-ai/aphelion refs
+- deny by default: arbitrary public web, credential export, external contact
+```
+
+The child can carry forward the thread's habits, but only as explicit contract:
+inspect before editing, keep a current plan, cite file paths and commands,
+validate meaningful changes, report uncertainty, and escalate gated actions.
+The wizard turns those habits into policy, not ambient permission.
+
 ## Absorb Review Threads
 
 Promotion needs a symmetric return path. If `/threads` can promote a lane into
@@ -288,6 +382,7 @@ attachments:
 | Thread wake | Schedule, queue, retry/backoff, last attempt/result | operational current-state store |
 | Thread binding | Telegram group, adapter, isolated process, Tailnet remote | canonical for declared binding |
 | Capability records | Requests, reviews, grants, invocations | canonical |
+| Promotion handoff | Selected context digest, grant set, denied grants, first task, source refs, expected validation | canonical after approval |
 | Execution events | Runtime evidence for wake, delivery, tool use, failure, recovery | canonical |
 | Absorb plan | Roll-up choices, memory candidates, grant disposition, wake teardown, archive action | canonical after approval |
 
@@ -299,27 +394,161 @@ until compiled into a schedule, lease, grant, or other typed record.
 
 Current `/thread` already has most of the lane mechanics:
 
-- `session.telegram_threads` tracks open and absorbed side-thread state.
-- `session.TelegramThreadScopeRef` gives each thread its own durable session
-  scope.
-- Telegram command routing can create, target, summarize, and absorb thread
-  lanes.
-- Thread-targeted work already passes through busy decisions, artifact retention,
-  continuation approvals, progress state, replay recovery, memory focus, and
-  scoped auto-approval.
+- `session/store_telegram_threads.go` defines `TelegramThread`,
+  `CreateTelegramThreadForUpdate`, `ListTelegramThreadsByView`,
+  `TouchTelegramThread`, `CloseTelegramThread`, `RecordTelegramThreadAbsorb`,
+  and reply-message lookup. The row is already per-chat, idempotent by source
+  update, and atomic when absorb writes the main-chat note.
+- `session/store_schema.go` creates `telegram_threads`,
+  `telegram_callback_messages`, and the thread-session backfill migrations.
+- `session/scope.go` and `session/types.go` define
+  `ScopeKindTelegramThread`, `TelegramThreadScopeRef`, and
+  `SessionIDForKey`, giving each side thread a durable `telegram_thread:*`
+  session lane.
+- `internal/telegramcommands/commands_threads.go`,
+  `commands_threads_view.go`, and `commands_callback_router.go` provide
+  `/thread`, `/threads`, `(thread N)` prefix routing, reply routing, summarize
+  callbacks, absorb callbacks, visible display slots, and thread-panel buttons.
+- `internal/telegramcontrol/threads.go` owns the command-to-runtime bridge:
+  create, target, reply lookup, summary queueing, ingress rebind, callback-message
+  ledger writes, and absorb delegation.
+- `internal/telegramruntime/session_scope.go` preserves thread scope when building
+  runtime session targets; `internal/telegramruntime/ingress_replay.go` drops
+  replayed work for closed or missing thread lanes.
+- `runtime/telegram_threads.go` already implements absorb as a scoped summary
+  and synthetic main-chat turn with provenance metadata. `runtime/doctor_threads.go`
+  exposes thread count/status/session evidence to doctor output.
+- Tests cover the important invariants: `session/store_telegram_threads_test.go`,
+  `runtime/telegram_threads_test.go`,
+  `runtime/continuation_scope_invariant_test.go`,
+  `runtime/auto_approval_runtime_test.go`, and Telegram callback tests around
+  continuation, memory, stream stop, approval windows, and pagination.
 
 Current durable children already have most of the durable attachments:
 
-- `session.durable_agents` stores child identity/config.
-- `session.durable_agent_state` stores policy handshake and runtime posture.
-- Durable wake adapters synthesize scheduled, parent-conversation, Codex
-  app-server, and external-channel turns.
-- Durable children use child-scoped sandboxes, storage roots, principal-scoped
-  tools, review artifacts, and Tailnet control-plane records.
+- `core/durable_agents.go` stores canonical child identity and parent/review
+  linkage; `session/store_durable_agents.go` persists it with policy hash/version,
+  local roots, network policy, wake mode, secret scopes, and status.
+- `core/durable_agent_policy.go` defines live policy, channel config, bootstrap
+  ceiling, shared-context posture, tailnet posture, external-channel config, and
+  ceiling validation.
+- `core/durable_agent_continuity.go` holds recent interactions, pending
+  questions, review refs, ratified outcomes, parent-child conversation, and
+  setup wizard state; `session/store_durable_agent_state.go` persists runtime
+  posture and continuity JSON.
+- `core/durable_agent_wizard.go`, `tool/durable_agent_wizard.go`, and
+  `internal/telegramcommands/commands_wizard.go` implement the current setup
+  wizard and inline Telegram callbacks. The existing wizard is useful substrate,
+  but it is external-channel oriented (`wizard_start` currently only supports
+  `channel_kind=external_channel`) rather than a thread-promotion wizard.
+- `internal/telegramcommands/commands_agents.go` already renders `/agents` cards
+  with state-derived `Chat` and `Refresh` buttons, giving a projection surface
+  for promoted durable threads.
+- `tool/durable_agent_access_conversation.go`,
+  `runtime/durable_wake_parent_conversation.go`, and
+  `runtime/durable_group_context.go` provide parent-child conversation lanes and
+  wake-time governor context.
+- `runtime/durable_wake.go`, `runtime/durable_wake_scheduled_review.go`,
+  `runtime/external_channel_wake.go`, `runtime/durable_child.go`, and
+  `runtime/durable_group.go` synthesize scheduled, parent-conversation,
+  external-channel, group, and child-executor turns.
+- `durableagent/runtime.go`, `durableagent/remote_child.go`,
+  `durableagent/remote_runtime.go`, and `durableagent/http.go` provide review
+  artifact upload/queueing and remote-control plumbing.
 
 The proposed direction is to stop treating those as separate operator worlds.
 Instead, durable-agent records can become backing records for threads that need
 features not available to a plain local side thread.
+
+### Evidence-Backed Implementation Plan
+
+The first implementation should be a doc-and-projection slice, not a broad
+rewrite. The current code already supports the core lane and child substrates;
+the missing object is a canonical promotion handoff that links them and makes
+the operator choices inspectable.
+
+1. **Add a promotion handoff record.** Introduce a small canonical schema for a
+   thread promotion handoff rather than inferring promotion from chat text. It
+   should include source `chat_id`, source `thread_id`, source thread session
+   ID, created/approved actor, selected context summary, memory candidate refs,
+   requested/approved/denied resource candidates, policy patch, optional backing
+   durable-agent ID, first-task prompt, expected validation, status, and source
+   refs. Existing patterns to mirror: `session.ReviewEvent`,
+   `session.OperationState`, `session.OperationArtifact`, `session.RecordReference`,
+   durable-agent review metadata, and `execution_events`.
+2. **Project promotion state into `/threads`.** Extend the existing thread list
+   projection rather than replacing `/threads`. A thread with no handoff remains
+   cheap and local; a thread with a draft/approved/applied handoff gets compact
+   `Promote`, `Continue`, or backlink affordances. Use `telegram_callback_messages`
+   as the durability pattern for callbacks; do not trust textual `(thread N)`
+   prefixes without the ledger.
+3. **Build a thread-promotion wizard beside, not inside, the external-channel
+   wizard.** Reuse wizard state/normalization/button patterns from
+   `core.DurableAgentSetupWizardState`, `tool/durable_agent_wizard.go`, and
+   `commands_wizard.go`, but define promotion-specific steps:
+   context selection, memory candidates, resource candidates, policy defaults,
+   backing-principal decision, first supervised task, and final handoff approval.
+   The current durable-agent wizard can remain external-channel specific.
+4. **Use explicit memory delegation.** Do not copy parent or thread memory into
+   a child by default. Reuse the shape of `tool/durable_agent_memory.go`:
+   candidate generation, operator-visible candidate IDs, explicit approval, and
+   writes into the child memory root only after approval. Thread promotion can
+   generate candidates from the source thread session and recent memory-review
+   items, but the handoff should store selected refs and distilled content.
+5. **Use capability requests/grants for resource transfer.** Reuse
+   `session.CapabilityRequest`, `session.CapabilityGrant`,
+   `session.DurableChildAgreement`, `tool/capability.go`, and durable-agent
+   delegation request/report surfaces for filesystem, command, tool, network,
+   credential, and external-account resources. Do not encode grants in prose.
+6. **Keep child runtime materialization honest.** `core.ChildRuntimeContract` and
+   `runtime/durable_child_sandbox.go` currently materialize executables,
+   readonly paths/binds, secret binds, and parent environment variables from
+   active grants. They do not model writable external worktree access. If the
+   promoted child needs writable workspace resources, add that as an explicit
+   new capability/materialization design rather than overloading readonly
+   `child_runtime`.
+7. **Queue a supervised first run only after handoff approval.** After the
+   handoff is approved and a backing durable agent exists, use existing
+   parent-conversation / wake machinery to pass the first task and validation
+   expectations. Record the outcome in `execution_events` and review artifacts
+   so `/status`, `/agents`, `/threads`, and `/doctor` can explain the result.
+8. **Make doctor/status repair explicit.** Promotion should add enough typed
+   links for `/doctor` to say: source thread exists/closed/open, handoff status,
+   backing agent status, grants active/stale/failed, first-run status, and next
+   repair action. This should reuse existing drift/blocked-reason patterns rather
+   than adding opaque prose fields.
+
+### Implementation Risks And Required Tests
+
+- **Scope leakage:** thread-scoped approvals, memory focus, progress, and
+  callbacks must not leak to the default chat or another thread. Existing tests
+  around continuation scope, auto-approval scope, memory focus, and callback
+  ledgers should be extended for promotion callbacks.
+- **Authority leakage:** promotion must not turn text, thread membership, or a
+  child-like name into capability. Tests should prove promotion without approved
+  grants cannot access tools, credentials, network, writable paths, or external
+  accounts.
+- **Memory over-transfer:** generated memory candidates must remain candidates
+  until approved. Tests should cover denied memory delegation and verify no child
+  memory write occurs.
+- **Resource over-transfer:** `child_runtime` should reject unsupported writable
+  materialization until a new explicit contract exists. Tests should cover grant
+  rendering, invalid contracts, stale/expired grants, and child-runtime block
+  reporting.
+- **Callback staleness:** wizard buttons must validate current step/status and
+  target the durable callback message, matching the stale-step protections in the
+  current durable wizard callbacks.
+- **Recovery visibility:** interrupted promotion or failed first run should leave
+  an inspectable handoff status and execution/review evidence, not just a chat
+  transcript. Add tests for `/status`/doctor projection once the schema exists.
+
+Suggested initial test set:
+
+- `go test ./session -run 'Test.*TelegramThread|Test.*ReviewEvent|Test.*OperationState|Test.*Capability'`
+- `go test ./runtime -run 'Test.*TelegramThread|Test.*Continuation.*Thread|Test.*AutoApprovalThread|Test.*CapabilityGrantWake|Test.*DurableWake|Test.*Doctor'`
+- `go test ./internal/telegramcommands -run 'Test.*Thread|Test.*DurableWizard|Test.*Agents|Test.*Memory|Test.*Continuation.*Thread|Test.*ApprovalWindow'`
+- `go test ./tool -run 'TestCapability|TestDurableAgentToolMemory|TestDurableAgentToolConversation|TestDurableWizard'`
+- `go test ./durableagent -run 'Test.*ReviewArtifact|Test.*Remote.*Artifact'`
 
 ## Design Rules
 
@@ -330,6 +559,11 @@ features not available to a plain local side thread.
   belong in `/agents` after promotion.
 - Promotion must be one-tap for the default safe path and editable when policy
   details matter.
+- Promotion must include reviewable context transfer. A child receives an
+  approved memory digest and source refs, not raw parent/core memory by default.
+- Promotion must include reviewable resource transfer. Filesystem, command,
+  tool, network, credential, and external-contact boundaries should be visible
+  before the promoted agent runs.
 - Thread labels remain human-scale. Raw IDs stay in trace/detail surfaces.
 - Every durable attachment has a typed record. Prose can propose; it cannot
   authorize.
@@ -359,21 +593,26 @@ This should not be a flag-day deletion of durable agents. A safer sequence:
    durable attachments for a thread without changing authority semantics.
 3. Add a `Promote` action to the thread projection that creates a default safe
    durable profile from the thread and links the two surfaces.
-4. Make `/agents` render promoted durable work as cards with state-derived
+4. Add a promotion wizard for context/memory review, resource/command/network
+   review, policy compilation, and first supervised handoff.
+5. Store a canonical promotion handoff artifact so recovery and health surfaces
+   can report actual selected context, grants, denied grants, and first task
+   instead of inferring them from chat.
+6. Make `/agents` render promoted durable work as cards with state-derived
    buttons for continue, wake, access, policy, details, and archive.
-5. Add a canonical thread-profile/policy surface for local durable threads.
-6. Let new local or scheduled durable work attach to a thread profile before it
+7. Add a canonical thread-profile/policy surface for local durable threads.
+8. Let new local or scheduled durable work attach to a thread profile before it
    creates any backing durable-agent record.
-7. Add an `Absorb` action to promoted agent cards that creates a fresh absorb
+9. Add an `Absorb` action to promoted agent cards that creates a fresh absorb
    review thread with bounded child context and roll-up material.
-8. Add a typed absorb-plan surface for memory candidates, artifact indexes,
+10. Add a typed absorb-plan surface for memory candidates, artifact indexes,
    grant disposition, wake teardown, binding disposition, and child archive
    state.
-9. Introduce an internal backing-principal link for cases that need isolated
+11. Introduce an internal backing-principal link for cases that need isolated
    sandbox identity, capability grants, or Tailnet enrollment.
-10. Project legacy durable-agent records as backing principals attached to
+12. Project legacy durable-agent records as backing principals attached to
    operator-visible threads where possible.
-11. Keep durable-agent CLI commands for maintenance and migration until the new
+13. Keep durable-agent CLI commands for maintenance and migration until the new
    thread-native surfaces cover the operational need.
 
 ## Non-Goals
@@ -398,6 +637,12 @@ This should not be a flag-day deletion of durable agents. A safer sequence:
   ask the operator?
 - Should `Promote` close the source thread, leave it open as an alias, or ask
   after the promoted agent is created?
+- What is the exact schema for a promotion handoff artifact, and which fields
+  are required before a promoted agent may run?
+- Which core-memory/context exposures should be summarized automatically during
+  promotion, and which should require explicit operator selection?
+- How should the wizard present resources the thread happened to use versus
+  resources the child is actually allowed to keep?
 - Should `/agents` replace `/threads` for promoted work entirely, or should
   `/threads` show promoted backlinks in a compact read-only form?
 - Should absorb review threads always use the next available lowest visible
