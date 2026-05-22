@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/pipeline"
@@ -84,6 +85,7 @@ func (defaultTurnConstitutionGate) ValidateFinal(audit TurnAudit) []Constitution
 }
 
 type turnAuditRecorder struct {
+	mu    sync.Mutex
 	audit TurnAudit
 }
 
@@ -103,32 +105,47 @@ func (r *turnAuditRecorder) ToolStarted(name string, inputPreview string) {
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.audit.ToolCalls = append(r.audit.ToolCalls, TurnToolAudit{
 		Name:         strings.TrimSpace(name),
 		InputPreview: strings.TrimSpace(inputPreview),
 	})
 }
 
-func (r *turnAuditRecorder) ToolFinished(name string, outputPreview string, errText string) {
+func (r *turnAuditRecorder) ToolFinished(name string, inputPreview string, outputPreview string, errText string) {
 	if r == nil {
 		return
 	}
-	name = strings.TrimSpace(name)
+	finished := TurnToolAudit{
+		Name:          strings.TrimSpace(name),
+		InputPreview:  strings.TrimSpace(inputPreview),
+		OutputPreview: strings.TrimSpace(outputPreview),
+		Error:         strings.TrimSpace(errText),
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for i := len(r.audit.ToolCalls) - 1; i >= 0; i-- {
-		if strings.TrimSpace(r.audit.ToolCalls[i].Name) != name {
+		if !toolAuditMatchesFinish(r.audit.ToolCalls[i], finished) {
 			continue
 		}
 		if r.audit.ToolCalls[i].OutputPreview == "" {
-			r.audit.ToolCalls[i].OutputPreview = strings.TrimSpace(outputPreview)
-			r.audit.ToolCalls[i].Error = strings.TrimSpace(errText)
+			r.audit.ToolCalls[i].OutputPreview = finished.OutputPreview
+			r.audit.ToolCalls[i].Error = finished.Error
 			return
 		}
 	}
-	r.audit.ToolCalls = append(r.audit.ToolCalls, TurnToolAudit{
-		Name:          name,
-		OutputPreview: strings.TrimSpace(outputPreview),
-		Error:         strings.TrimSpace(errText),
-	})
+	r.audit.ToolCalls = append(r.audit.ToolCalls, finished)
+}
+
+func toolAuditMatchesFinish(started TurnToolAudit, finished TurnToolAudit) bool {
+	if strings.TrimSpace(started.Name) != finished.Name {
+		return false
+	}
+	if finished.InputPreview == "" {
+		return true
+	}
+	return strings.TrimSpace(started.InputPreview) == finished.InputPreview
 }
 
 func (r *turnAuditRecorder) RecordProgress(text string) {
@@ -139,6 +156,8 @@ func (r *turnAuditRecorder) RecordProgress(text string) {
 	if trimmed == "" {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.audit.ProgressMessages = append(r.audit.ProgressMessages, trimmed)
 }
 
@@ -146,6 +165,8 @@ func (r *turnAuditRecorder) RecordBrokerageRound(round BrokerageRoundAudit) {
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if round.Round <= 0 {
 		round.Round = len(r.audit.BrokerageRounds) + 1
 	}
@@ -156,6 +177,8 @@ func (r *turnAuditRecorder) MarkBrokerageConverged(converged bool) {
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.audit.BrokerageConverged = converged
 }
 
@@ -163,6 +186,8 @@ func (r *turnAuditRecorder) MarkBrokerageStopped(reason string, round int, conve
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.audit.BrokerageStopReason = strings.TrimSpace(reason)
 	r.audit.BrokerageStopRound = round
 	r.audit.BrokerageConverged = converged
@@ -172,6 +197,8 @@ func (r *turnAuditRecorder) RecordGovernorReply(text string, media []core.Media)
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.audit.GovernorReplyText = strings.TrimSpace(text)
 	r.audit.ParsedOutboundMedia = cloneAuditMedia(media)
 }
@@ -180,6 +207,8 @@ func (r *turnAuditRecorder) RecordFinalReply(text string, media []core.Media, de
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.audit.FinalReplyText = strings.TrimSpace(text)
 	r.audit.FinalReplyMedia = cloneAuditMedia(media)
 	r.audit.FinalDeliveryMode = strings.TrimSpace(deliveryMode)
@@ -189,6 +218,8 @@ func (r *turnAuditRecorder) MarkFaceRepairAttempted() {
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.audit.FaceRepairAttempted = true
 }
 
@@ -196,6 +227,8 @@ func (r *turnAuditRecorder) MarkFaceRepairApplied() {
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.audit.FaceRepairApplied = true
 }
 
@@ -203,6 +236,8 @@ func (r *turnAuditRecorder) RecordViolations(violations []ConstitutionViolation)
 	if r == nil || len(violations) == 0 {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.audit.ConstitutionViolations = append(r.audit.ConstitutionViolations, violations...)
 }
 
@@ -210,6 +245,8 @@ func (r *turnAuditRecorder) RecordExecutionClaimFindings(findings []ExecutionCla
 	if r == nil || len(findings) == 0 {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.audit.ExecutionClaimFindings = append(r.audit.ExecutionClaimFindings, findings...)
 }
 
@@ -217,6 +254,8 @@ func (r *turnAuditRecorder) Snapshot() TurnAudit {
 	if r == nil {
 		return TurnAudit{}
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	snapshot := r.audit
 	snapshot.ParsedOutboundMedia = cloneAuditMedia(snapshot.ParsedOutboundMedia)
 	snapshot.FinalReplyMedia = cloneAuditMedia(snapshot.FinalReplyMedia)

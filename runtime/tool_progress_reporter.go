@@ -55,7 +55,7 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 		errorText = trimError(err.Error())
 	}
 	if m.audit != nil {
-		m.audit.ToolFinished(name, resultPreview, errorText)
+		m.audit.ToolFinished(name, toolInputPreview(input), resultPreview, errorText)
 	}
 	if m.runID != 0 {
 		if storeErr := m.runtime.store.NoteTurnRunToolFinish(m.runID, resultPreview, errorText); storeErr != nil {
