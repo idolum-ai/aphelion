@@ -105,7 +105,11 @@ func (r *Runtime) blockInvalidContinuationAuthorityContract(ctx context.Context,
 }
 
 func (r *Runtime) blockInvalidMaterializedContinuationAuthority(ctx context.Context, key session.SessionKey, msg core.InboundMessage, opState session.OperationState, state session.ContinuationState, source string, now time.Time) (session.OperationState, bool, error) {
-	blockedState, blocked, err := r.blockInvalidContinuationAuthorityContract(ctx, key, msg, state, source, now, true)
+	compilation := continuationAuthorityCompilation(state)
+	if compilation.Valid() {
+		return session.NormalizeOperationState(opState), false, nil
+	}
+	blockedState, blocked, err := r.blockInvalidContinuationAuthorityContract(ctx, key, msg, state, source, now, false)
 	if err != nil || !blocked {
 		return session.NormalizeOperationState(opState), blocked, err
 	}
@@ -115,7 +119,29 @@ func (r *Runtime) blockInvalidMaterializedContinuationAuthority(ctx context.Cont
 			return opState, true, fmt.Errorf("clear invalid materialized operation authority chat_id=%d: %w", key.ChatID, updateErr)
 		}
 	}
+	if r != nil && r.store != nil {
+		if reconciled, ok := r.reconciledContinuationStateFromInvalidAuthority(state, compilation, now); ok {
+			reconciledOpState, reconcileErr := r.materializeReconciledAuthorityApproval(ctx, key, msg, opState, reconciled, source, now)
+			return reconciledOpState, true, reconcileErr
+		}
+	}
+	if r != nil && r.outbound != nil && msg.ChatID != 0 {
+		text := r.prefixTelegramPresentedText(r.telegramPresentationForMessage(msg), renderInvalidAuthorityNeedsNarrowerProposalStatus(blockedState))
+		_, _ = r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: msg.ChatID, Text: text})
+	}
 	return opState, true, nil
+}
+
+func renderInvalidAuthorityNeedsNarrowerProposalStatus(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
+	title := firstNonEmptyContinuation(state.ActionProposal.OperatorTitle, state.ActionProposal.PlanTitle, state.ActionProposal.Summary, state.StageSummary, "this step")
+	return strings.Join([]string{
+		"I need a narrower approval shape for this step.",
+		"",
+		"Plan: " + truncatePreview(title, 96),
+		"",
+		"The previous approval mixed an action with a stop condition that cancels it. Please approve a narrower phase naming exactly the action to permit and the boundaries to preserve.",
+	}, "\n")
 }
 
 func renderInvalidContinuationAuthorityContractStatus(state session.ContinuationState, compilation session.AuthorityContractCompilation) string {

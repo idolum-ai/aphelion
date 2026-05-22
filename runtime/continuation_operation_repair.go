@@ -13,7 +13,7 @@ import (
 )
 
 func (r *Runtime) sendMaterializedContinuationApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState, text string, source string) error {
-	if _, blocked, err := r.blockInvalidContinuationAuthorityContract(ctx, key, msg, state, source, time.Now().UTC(), true); blocked || err != nil {
+	if _, blocked, err := r.blockInvalidContinuationAuthorityContract(ctx, key, msg, state, source, time.Now().UTC(), false); blocked || err != nil {
 		return err
 	}
 	if approved, err := r.maybeAutoApproveContinuationOffer(ctx, key, msg, state, source); approved || err != nil {
