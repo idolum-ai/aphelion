@@ -22,6 +22,7 @@ func TestRunVersionCommandText(t *testing.T) {
 		"Status:",
 		"Why:",
 		"Next:",
+		"Use --json",
 		"Details:",
 		"Evidence:",
 		"VCS revision:",
@@ -29,6 +30,9 @@ func TestRunVersionCommandText(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("runVersionCommand() output missing %q in %q", want, out)
 		}
+	}
+	if strings.Contains(out, "Use --format=json") {
+		t.Fatalf("runVersionCommand() output = %q, want --json guidance", out)
 	}
 }
 

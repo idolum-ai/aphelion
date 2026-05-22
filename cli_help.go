@@ -61,12 +61,56 @@ func renderTopLevelHelp(note string) string {
 	}
 	lines = append(lines, "", "Examples:")
 	lines = append(lines, "  aphelion --config ~/.aphelion/aphelion.toml")
+	lines = append(lines, "  aphelion --version")
+	lines = append(lines, "  aphelion version --json")
 	lines = append(lines, "  aphelion quickstart --detect-admin --install-service")
 	lines = append(lines, "  aphelion durable-agent list --config ~/.aphelion/aphelion.toml")
 	lines = append(lines, "  aphelion tailnet surfaces --config ~/.aphelion/aphelion.toml")
 	lines = append(lines, "  aphelion sandbox-net check --config ~/.aphelion/aphelion.toml")
 	lines = append(lines, "  sudo aphelion sandbox-net helper serve --allowed-uid $(id -u)")
 	return strings.Join(lines, "\n")
+}
+
+func topLevelVersionRequested(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	first := strings.TrimSpace(args[0])
+	return first == "--version" || first == "-v"
+}
+
+func topLevelVersionArgs(args []string) []string {
+	if len(args) <= 1 {
+		return nil
+	}
+	return append([]string(nil), args[1:]...)
+}
+
+func unknownTopLevelFlag(args []string) (string, bool) {
+	if len(args) == 0 {
+		return "", false
+	}
+	first := strings.TrimSpace(args[0])
+	if first == "" || !strings.HasPrefix(first, "-") {
+		return "", false
+	}
+	if topLevelHelpRequested(args) || topLevelVersionRequested(args) || knownDaemonFlag(first) {
+		return "", false
+	}
+	return first, true
+}
+
+func knownDaemonFlag(flag string) bool {
+	flag = strings.TrimSpace(flag)
+	if idx := strings.Index(flag, "="); idx >= 0 {
+		flag = flag[:idx]
+	}
+	switch flag {
+	case "--config", "-config", "--check-config", "-check-config":
+		return true
+	default:
+		return false
+	}
 }
 
 func topLevelHelpRequested(args []string) bool {
@@ -82,6 +126,18 @@ func renderUnknownCommandHelp(command string) string {
 	note := "Unknown command: " + command
 	if suggestion := nearestCLICommand(command); suggestion != "" {
 		note += "\nDid you mean: " + suggestion + "?"
+	}
+	return renderTopLevelHelp(note)
+}
+
+func renderUnknownFlagHelp(flag string) string {
+	flag = strings.TrimSpace(flag)
+	note := "Unknown flag: " + flag
+	switch flag {
+	case "--versoin", "--verison", "--verson":
+		note += "\nDid you mean: aphelion --version?"
+	default:
+		note += "\nTry: aphelion --help"
 	}
 	return renderTopLevelHelp(note)
 }

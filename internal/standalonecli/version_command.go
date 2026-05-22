@@ -74,7 +74,7 @@ func renderVersionHuman(info versionInfo) string {
 		Title: "Aphelion Version",
 		State: state,
 		Why:   "This is the binary and source revision metadata used for release and rollback checks.",
-		Next:  "Use --format=json for machine reads or compare the revision before deploy/rollback.",
+		Next:  "Use --json for machine reads or compare the revision before deploy/rollback.",
 		Details: []string{
 			"Module: " + firstNonEmpty(info.Module, "unknown"),
 			"Version: " + firstNonEmpty(info.Version, "unknown"),

@@ -61,11 +61,18 @@ func main() {
 }
 
 func run() error {
-	if topLevelHelpRequested(os.Args[1:]) {
+	args := os.Args[1:]
+	if topLevelHelpRequested(args) {
 		printTopLevelHelp(os.Stdout, "")
 		return nil
 	}
-	handled, err := runMaintenanceCommand(os.Args[1:])
+	if topLevelVersionRequested(args) {
+		return runVersionCommand(topLevelVersionArgs(args))
+	}
+	if flagName, ok := unknownTopLevelFlag(args); ok {
+		return &cliUsageError{Text: renderUnknownFlagHelp(flagName)}
+	}
+	handled, err := runMaintenanceCommand(args)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -79,7 +86,7 @@ func run() error {
 	flags := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	configPathFlag := flags.String("config", "", "path to config.toml")
 	checkConfig := flags.Bool("check-config", false, "validate config and exit")
-	if err := flags.Parse(os.Args[1:]); err != nil {
+	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
