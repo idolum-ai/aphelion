@@ -191,6 +191,49 @@ func TestThreadPromotionRefreshCallbackUsesTypedResultForButtons(t *testing.T) {
 	assertThreadPromotionCallbackData(t, 1001, readyData, "ready", "thread-promotion:1001:3:123")
 }
 
+func TestThreadPromoteCallbackWithReadyResultClearsKeyboard(t *testing.T) {
+	t.Parallel()
+
+	order := []string{}
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		canRestart: true,
+		promoteThreadReturn: session.TelegramThreadPromotionResult{
+			Text:      "Promotion handoff ready for thread 3.\n\nNext gate: approve/apply may create a durable child.",
+			HandoffID: "thread-promotion:1001:3:99",
+			ThreadID:  3,
+			Status:    session.TelegramThreadPromotionStatusReady,
+		},
+		order: &order,
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:      "promote-ready-cb",
+		Data:    encodeTelegramThreadPromoteCallback(3),
+		From:    &telegram.User{ID: 2002},
+		Message: &telegram.Message{MessageID: 9004, Chat: &telegram.Chat{ID: 1001}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want promote callback handled")
+	}
+	if len(sender.editInline) != 0 {
+		t.Fatalf("editInline = %#v, want no draft controls for ready handoff", sender.editInline)
+	}
+	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "Promotion handoff ready") {
+		t.Fatalf("editClear = %#v, want ready text without controls", sender.editClear)
+	}
+	for _, forbidden := range []string{"Promotion draft already exists", "tap Ready"} {
+		if strings.Contains(sender.editClear[0].text, forbidden) {
+			t.Fatalf("ready promote callback text contains %q:\n%s", forbidden, sender.editClear[0].text)
+		}
+	}
+	if len(order) == 0 || order[0] != "promote" {
+		t.Fatalf("order = %#v, want promote", order)
+	}
+}
+
 func TestThreadPromoteCallbackIsAdminOnly(t *testing.T) {
 	t.Parallel()
 

@@ -137,6 +137,21 @@ func TestPrepareAndCancelTelegramThreadPromotionStayInsideReviewBoundary(t *test
 	if ready.Status != session.TelegramThreadPromotionStatusReady {
 		t.Fatalf("status = %s, want ready", ready.Status)
 	}
+	repromote, err := rt.PromoteTelegramThread(context.Background(), 9116, 1001, thread.ThreadID)
+	if err != nil {
+		t.Fatalf("PromoteTelegramThread(after ready) err = %v", err)
+	}
+	if repromote.HandoffID != handoff.HandoffID || repromote.ThreadID != handoff.ThreadID || repromote.Status != session.TelegramThreadPromotionStatusReady {
+		t.Fatalf("ready repromote result = %#v, want existing typed ready handoff", repromote)
+	}
+	if !strings.Contains(repromote.Text, "Promotion handoff ready") || !strings.Contains(repromote.Text, "Next gate: approve/apply") {
+		t.Fatalf("ready repromote text = %q, want ready next-gate copy", repromote.Text)
+	}
+	for _, forbidden := range []string{"Promotion draft already exists", "tap Ready"} {
+		if strings.Contains(repromote.Text, forbidden) {
+			t.Fatalf("ready repromote text contains %q:\n%s", forbidden, repromote.Text)
+		}
+	}
 	cancelResult, err := rt.CancelTelegramThreadPromotion(context.Background(), 9116, 1001, handoff.HandoffID)
 	if err != nil {
 		t.Fatalf("CancelTelegramThreadPromotion() err = %v", err)

@@ -52,7 +52,24 @@ func (r *Runtime) PromoteTelegramThread(ctx context.Context, chatID int64, sende
 		}
 		handoff = packaged
 	}
-	return telegramThreadPromotionResult(renderTelegramThreadPromotionDraft(threadLabel, handoff, created), handoff), nil
+	return telegramThreadPromotionStatusResult(threadLabel, handoff, created), nil
+}
+
+func telegramThreadPromotionStatusResult(threadLabel string, handoff session.TelegramThreadPromotionHandoff, created bool) session.TelegramThreadPromotionResult {
+	switch session.NormalizeTelegramThreadPromotionStatus(handoff.Status) {
+	case session.TelegramThreadPromotionStatusDraft:
+		return telegramThreadPromotionResult(renderTelegramThreadPromotionDraft(threadLabel, handoff, created), handoff)
+	case session.TelegramThreadPromotionStatusReady:
+		return telegramThreadPromotionResult(renderTelegramThreadPromotionReady(threadLabel, handoff), handoff)
+	case session.TelegramThreadPromotionStatusApproved:
+		return telegramThreadPromotionResult(renderTelegramThreadPromotionTerminal("Promotion handoff already approved", handoff), handoff)
+	case session.TelegramThreadPromotionStatusCancelled:
+		return telegramThreadPromotionResult(renderTelegramThreadPromotionTerminal("Promotion handoff already cancelled", handoff), handoff)
+	case session.TelegramThreadPromotionStatusSuperseded:
+		return telegramThreadPromotionResult(renderTelegramThreadPromotionTerminal("Promotion handoff superseded", handoff), handoff)
+	default:
+		return telegramThreadPromotionResult(renderTelegramThreadPromotionTerminal("Promotion handoff unavailable", handoff), handoff)
+	}
 }
 
 func (r *Runtime) PrepareTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error) {
