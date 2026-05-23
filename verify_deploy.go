@@ -81,7 +81,9 @@ func defaultDeployVerificationRuntimeBuilder(cfg *config.Config, store *session.
 	if err != nil {
 		return builtDeployVerificationRuntime{}, err
 	}
-	registry := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).WithSessionStore(store)
+	registry := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).
+		WithSessionStore(store).
+		WithRemoteHostSSH(cfg.Tailscale.SSHPath, remoteHostSSHTimeoutFromConfig(cfg))
 
 	semanticEngine, err := newSemanticEngineForConfig(cfg, false)
 	if err != nil {

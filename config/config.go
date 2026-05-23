@@ -30,6 +30,7 @@ type Config struct {
 	Voice         VoiceConfig         `toml:"voice"`
 	DurableAgents DurableAgentsConfig `toml:"durable_agents"`
 	Tailscale     TailscaleConfig     `toml:"tailscale"`
+	GitHub        GitHubConfig        `toml:"github"`
 
 	warnings []ConfigWarning
 }
@@ -97,14 +98,16 @@ type TelegramMediaConfig struct {
 }
 
 type TailscaleConfig struct {
-	Enabled          bool                  `toml:"enabled"`
-	Backend          string                `toml:"backend"`
-	CLIPath          string                `toml:"cli_path"`
-	CommandTimeout   string                `toml:"command_timeout"`
-	ExpectedTailnet  string                `toml:"expected_tailnet"`
-	ExpectedHostname string                `toml:"expected_hostname"`
-	ExpectedTags     []string              `toml:"expected_tags"`
-	Parent           TailscaleParentConfig `toml:"parent"`
+	Enabled           bool                  `toml:"enabled"`
+	Backend           string                `toml:"backend"`
+	CLIPath           string                `toml:"cli_path"`
+	SSHPath           string                `toml:"ssh_path"`
+	CommandTimeout    string                `toml:"command_timeout"`
+	SSHCommandTimeout string                `toml:"ssh_command_timeout"`
+	ExpectedTailnet   string                `toml:"expected_tailnet"`
+	ExpectedHostname  string                `toml:"expected_hostname"`
+	ExpectedTags      []string              `toml:"expected_tags"`
+	Parent            TailscaleParentConfig `toml:"parent"`
 }
 
 type TailscaleParentConfig struct {
@@ -116,6 +119,24 @@ type TailscaleParentConfig struct {
 	AuthKeyFile     string   `toml:"auth_key_file"`
 	Tags            []string `toml:"tags"`
 	AdminLoginNames []string `toml:"admin_login_names"`
+}
+
+type GitHubConfig struct {
+	Enabled    bool              `toml:"enabled"`
+	APIBaseURL string            `toml:"api_base_url"`
+	APIVersion string            `toml:"api_version"`
+	Apps       []GitHubAppConfig `toml:"apps"`
+}
+
+type GitHubAppConfig struct {
+	Name                 string   `toml:"name"`
+	AppID                int64    `toml:"app_id"`
+	InstallationID       int64    `toml:"installation_id"`
+	PrivateKeyFile       string   `toml:"private_key_file"`
+	Repositories         []string `toml:"repositories"`
+	Permissions          []string `toml:"permissions"`
+	AllowAllRepositories bool     `toml:"allow_all_repositories"`
+	AllowAllPermissions  bool     `toml:"allow_all_permissions"`
 }
 
 type PrincipalsConfig struct {
@@ -773,10 +794,12 @@ func Default() Config {
 		},
 		DurableAgents: DurableAgentsConfig{},
 		Tailscale: TailscaleConfig{
-			Enabled:        false,
-			Backend:        "cli",
-			CLIPath:        "tailscale",
-			CommandTimeout: "5s",
+			Enabled:           false,
+			Backend:           "cli",
+			CLIPath:           "tailscale",
+			SSHPath:           "ssh",
+			CommandTimeout:    "5s",
+			SSHCommandTimeout: "15m",
 			Parent: TailscaleParentConfig{
 				Enabled:    false,
 				Hostname:   "aphelion",
@@ -784,6 +807,11 @@ func Default() Config {
 				ListenAddr: ":8765",
 				AuthKeyEnv: "APHELION_TS_AUTHKEY",
 			},
+		},
+		GitHub: GitHubConfig{
+			Enabled:    false,
+			APIBaseURL: "https://api.github.com",
+			APIVersion: "2026-03-10",
 		},
 	}
 }

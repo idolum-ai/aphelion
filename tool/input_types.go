@@ -39,6 +39,20 @@ type semanticSearchInput struct {
 	Scope string `json:"scope,omitempty"`
 }
 
+type remoteHostInput struct {
+	Action     string `json:"action"`
+	Host       string `json:"host,omitempty"`
+	User       string `json:"user,omitempty"`
+	Workdir    string `json:"workdir,omitempty"`
+	Command    string `json:"command,omitempty"`
+	Prompt     string `json:"prompt,omitempty"`
+	Port       int    `json:"port,omitempty"`
+	TimeoutSec int    `json:"timeout_sec,omitempty"`
+	CodexHome  string `json:"codex_home,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Sandbox    string `json:"sandbox,omitempty"`
+}
+
 type updatePlanStepInput struct {
 	Step   string `json:"step"`
 	Status string `json:"status"`

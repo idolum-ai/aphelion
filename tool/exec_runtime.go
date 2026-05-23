@@ -118,6 +118,8 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.codexImageGeneration(ctx, input, scope, p, key)
 	case webSearchToolName:
 		return r.webSearch(ctx, input, scope, p, key)
+	case remoteHostToolName:
+		return r.remoteHost(ctx, input, p, key)
 	default:
 		if manifest, ok := r.externalManifestByName(name); ok {
 			if r.externalExecutor != nil && r.externalExecutor.Supports(manifest) {

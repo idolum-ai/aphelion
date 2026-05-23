@@ -60,6 +60,53 @@ user_memory_root = "~/.aphelion/state/isolated/memory"
 `exec_root` is the default shell scope for the `exec` tool. Do not point it at a
 broader tree than you mean to operate inside.
 
+## Optional GitHub App Credentials
+
+Aphelion can verify and mint short-lived GitHub App installation tokens from an
+explicitly configured PEM file. This is for operator-maintained repository
+workflows where a GitHub App is narrower than a personal access token.
+
+Keep the private key outside the repo and readable only by the service user:
+
+```bash
+mkdir -p ~/.aphelion/secrets/github
+chmod 700 ~/.aphelion/secrets ~/.aphelion/secrets/github
+chmod 600 ~/.aphelion/secrets/github/maintenance.pem
+```
+
+Configure the app explicitly:
+
+```toml
+[github]
+enabled = true
+
+[[github.apps]]
+name = "maintenance"
+app_id = 123456
+installation_id = 987654
+private_key_file = "~/.aphelion/secrets/github/maintenance.pem"
+repositories = ["owner/repo"]
+permissions = ["metadata:read", "contents:read", "pull_requests:read"]
+```
+
+Then check the surface:
+
+```bash
+./bin/aphelion github-app status --config ~/.aphelion/aphelion.toml
+./bin/aphelion github-app status --config ~/.aphelion/aphelion.toml --online
+```
+
+`status` is redacted. `--online` mints and discards an installation token and
+records a redacted evidence event. To intentionally print token material for a
+manual credential-helper flow, use:
+
+```bash
+./bin/aphelion github-app token --config ~/.aphelion/aphelion.toml --app maintenance --show-token --format=git-credential
+```
+
+This v1 does not inject GitHub credentials into ordinary shell or git
+execution. It makes the credential source typed, checkable, and ledgered first.
+
 ## Deploy Gate
 
 The deploy path is always:

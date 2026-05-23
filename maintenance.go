@@ -84,6 +84,8 @@ func runMaintenanceCommand(args []string) (bool, error) {
 		return true, runDurableAgentCommand(args[1:])
 	case "tailnet":
 		return true, maintenancecli.RunTailnetCommand(args[1:])
+	case "github-app":
+		return true, maintenancecli.RunGitHubAppCommand(args[1:])
 	case "sandbox-net":
 		return true, maintenancecli.RunSandboxNetCommand(args[1:])
 	case "schema":

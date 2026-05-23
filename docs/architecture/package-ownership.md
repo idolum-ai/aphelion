@@ -89,6 +89,9 @@ Code anchors:
   not import runtime, turn, or pipeline orchestration.
 - `durableagent` owns child-agent substrate, enrollment, policy, and forensics.
   It may depend on storage contracts, but not on runtime orchestration.
+- `githubapp` owns GitHub App key parsing, JWT signing, and installation-token
+  exchange. It does not decide runtime authority or inject credentials into
+  tools.
 
 Related requirements:
 

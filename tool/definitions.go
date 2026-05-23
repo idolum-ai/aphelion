@@ -41,6 +41,13 @@ func (r *Registry) nativeDefinitionsForPrincipal(p principal.Principal) []agent.
 			}
 			continue
 		}
+		if name == remoteHostToolName {
+			allowed, err := r.remoteHostAccessAllowed(p)
+			if err == nil && allowed {
+				filtered = append(filtered, def)
+			}
+			continue
+		}
 		if !r.authorityManagedTool(name) {
 			filtered = append(filtered, def)
 			continue
@@ -190,6 +197,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 	if def, ok := r.webSearchToolDefinition(); ok {
 		defs = append(defs, def)
 	}
+	defs = append(defs, remoteHostToolDefinition())
 	if r.semantic != nil && r.semantic.Enabled() {
 		defs = append(defs, agent.ToolDef{
 			Name:        "semantic_search",

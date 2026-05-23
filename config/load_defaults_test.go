@@ -70,7 +70,7 @@ external_manifest_dir = "./external-tools"
 	if !cfg.Recovery.Watchdog.Enabled || cfg.Recovery.Watchdog.StaleTurnThreshold != "3m" || cfg.Recovery.Watchdog.StaleTurnLimit != 8 {
 		t.Fatalf("recovery watchdog defaults = %#v, want enabled 3m/8", cfg.Recovery.Watchdog)
 	}
-	if cfg.Tailscale.Enabled || cfg.Tailscale.Backend != "cli" || cfg.Tailscale.CLIPath != "tailscale" || cfg.Tailscale.CommandTimeout != "5s" {
+	if cfg.Tailscale.Enabled || cfg.Tailscale.Backend != "cli" || cfg.Tailscale.CLIPath != "tailscale" || cfg.Tailscale.SSHPath != "ssh" || cfg.Tailscale.CommandTimeout != "5s" || cfg.Tailscale.SSHCommandTimeout != "15m" {
 		t.Fatalf("tailscale defaults = %#v, want disabled cli backend", cfg.Tailscale)
 	}
 	if cfg.Tailscale.Parent.Enabled || cfg.Tailscale.Parent.Hostname != "aphelion" || !strings.HasSuffix(cfg.Tailscale.Parent.StateDir, "/.aphelion/state/tailnet/parent") || cfg.Tailscale.Parent.ListenAddr != ":8765" || cfg.Tailscale.Parent.AuthKeyEnv != "APHELION_TS_AUTHKEY" {
@@ -384,7 +384,9 @@ max_pdf_bytes = "4MB"
 enabled = true
 backend = "cli"
 cli_path = "/usr/bin/tailscale"
+ssh_path = "/usr/bin/ssh"
 command_timeout = "3s"
+ssh_command_timeout = "20m"
 expected_tailnet = "example.ts.net"
 expected_hostname = "aphelion-admin"
 expected_tags = ["tag:admin", "tag:aphelion", "tag:admin"]
@@ -611,7 +613,7 @@ elevenlabs_voice_id = "voice-123"
 	if cfg.Telegram.ToolProgress != "new" || cfg.Telegram.ToolProgressStyle != "raw" || cfg.Telegram.ToolProgressWindow != 6 || !cfg.Telegram.ToolProgressCleanup {
 		t.Fatalf("telegram progress = %#v, want new/raw/6/true", cfg.Telegram)
 	}
-	if !cfg.Tailscale.Enabled || cfg.Tailscale.Backend != "cli" || cfg.Tailscale.CLIPath != "/usr/bin/tailscale" || cfg.Tailscale.CommandTimeout != "3s" || cfg.Tailscale.ExpectedTailnet != "example.ts.net" || cfg.Tailscale.ExpectedHostname != "aphelion-admin" || !reflect.DeepEqual(cfg.Tailscale.ExpectedTags, []string{"tag:admin", "tag:aphelion"}) {
+	if !cfg.Tailscale.Enabled || cfg.Tailscale.Backend != "cli" || cfg.Tailscale.CLIPath != "/usr/bin/tailscale" || cfg.Tailscale.SSHPath != "/usr/bin/ssh" || cfg.Tailscale.CommandTimeout != "3s" || cfg.Tailscale.SSHCommandTimeout != "20m" || cfg.Tailscale.ExpectedTailnet != "example.ts.net" || cfg.Tailscale.ExpectedHostname != "aphelion-admin" || !reflect.DeepEqual(cfg.Tailscale.ExpectedTags, []string{"tag:admin", "tag:aphelion"}) {
 		t.Fatalf("tailscale config = %#v, want explicit normalized overrides", cfg.Tailscale)
 	}
 	if !cfg.Tailscale.Parent.Enabled || cfg.Tailscale.Parent.Hostname != "aphelion-admin" || !strings.HasSuffix(cfg.Tailscale.Parent.StateDir, "/tailnet-parent") || cfg.Tailscale.Parent.ListenAddr != ":9443" || cfg.Tailscale.Parent.AuthKeyEnv != "APHELION_TAILSCALE_TEST_AUTHKEY" || !strings.HasSuffix(cfg.Tailscale.Parent.AuthKeyFile, "/tailnet-auth.key") || !reflect.DeepEqual(cfg.Tailscale.Parent.Tags, []string{"tag:aphelion-admin", "tag:admin"}) || !reflect.DeepEqual(cfg.Tailscale.Parent.AdminLoginNames, []string{"admin@example.com", "ops@example.com"}) {

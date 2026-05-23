@@ -57,6 +57,8 @@ policy.
 - **Service:** Linux user service through bundled install/update scripts
 - **Voice:** Telegram voice transcription and optional ElevenLabs TTS replies
 - **Automation:** heartbeat, cron, bounded auto-approval leases
+- **Credentials:** optional GitHub App installation-token checks for
+  operator-maintained repository workflows
 - **Durable agents:** configured durable children, install-owned daily-review recipe, Telegram group
   admission, Tailnet child provisioning, health and inventory surfaces
 
@@ -100,6 +102,7 @@ Useful gates:
 
 ```bash
 ~/.local/bin/aphelion sandbox-net check --config ~/.aphelion/aphelion.toml
+~/.local/bin/aphelion github-app status --config ~/.aphelion/aphelion.toml
 ~/.local/bin/aphelion verify-deploy --config ~/.aphelion/aphelion.toml
 systemctl --user status aphelion
 journalctl --user -u aphelion -f

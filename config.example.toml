@@ -27,7 +27,9 @@ max_pdf_bytes = "8MB"
 enabled = false
 backend = "cli"
 cli_path = "tailscale"
+ssh_path = "ssh"
 command_timeout = "5s"
+ssh_command_timeout = "15m"
 expected_tailnet = ""
 expected_hostname = ""
 expected_tags = []
@@ -41,6 +43,25 @@ auth_key_env = "APHELION_TS_AUTHKEY"
 auth_key_file = ""
 tags = []
 admin_login_names = []
+
+[github]
+enabled = false
+api_base_url = "https://api.github.com"
+api_version = "2026-03-10"
+# Configure explicit GitHub App installations when Aphelion should mint
+# short-lived installation tokens for operator-maintained repository workflows.
+# Private key files are treated as host secrets and hidden from non-admin
+# sandbox profiles when configured.
+#
+# [[github.apps]]
+# name = "personal-maintenance"
+# app_id = 123456
+# installation_id = 987654
+# private_key_file = "~/.aphelion/secrets/github/personal-maintenance.pem"
+# repositories = ["owner/repo"]
+# permissions = ["metadata:read", "contents:read", "pull_requests:read"]
+# allow_all_repositories = false
+# allow_all_permissions = false
 
 [principals.telegram]
 admin_user_ids = [123456789]

@@ -113,6 +113,9 @@ func (r *Registry) capabilityRequestSubmit(in capabilityInput, actor principal.P
 	if err := validateCapabilityToolInvocationScopeJSON(contract, constraints); err != nil {
 		return "", err
 	}
+	if err := validateCapabilityRemoteHostScopeJSON(contract, constraints); err != nil {
+		return "", err
+	}
 	requester := toolAuthorityPrincipalDisplay(actor)
 	requestedFor := canonicalDurableAgentPrincipalIfKnown(r.store, firstNonEmpty(strings.TrimSpace(in.RequestedFor), requester))
 	record, err := r.store.UpsertCapabilityRequest(session.CapabilityRequest{
@@ -385,6 +388,9 @@ func (r *Registry) capabilityAuthorityGrantSet(ctx context.Context, in capabilit
 		return "", err
 	}
 	if err := validateCapabilityToolInvocationScopeJSON(contract, constraints); err != nil {
+		return "", err
+	}
+	if err := validateCapabilityRemoteHostScopeJSON(contract, constraints); err != nil {
 		return "", err
 	}
 	status := session.NormalizeCapabilityGrantStatus(session.CapabilityGrantStatus(in.GrantStatus))

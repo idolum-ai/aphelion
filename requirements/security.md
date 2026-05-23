@@ -185,6 +185,7 @@ Minimum requirements:
 - config file path should be hidden from non-admin execution
 - home-secret paths such as `~/.ssh` and `~/.gnupg` should be hidden from non-admin execution
 - Codex credential files such as `CODEX_HOME/auth.json` or `~/.codex/auth.json` should be treated as secret material
+- configured GitHub App private key files and minted installation tokens should be treated as secret material
 - secret material must never be injected into prompts
 - tool output should be assumed sensitive and stored durably but carefully
 
