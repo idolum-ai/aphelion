@@ -183,6 +183,77 @@ func (s *SQLiteStore) MarkTelegramIngressCompleted(surface string, updateID int6
 	})
 }
 
+func (s *SQLiteStore) DropPendingTelegramIngressForTelegramThread(chatID int64, threadID int64, reason string, completedAt time.Time) (int, error) {
+	return dropPendingTelegramIngressForTelegramThreadExec(s.db, chatID, threadID, reason, completedAt)
+}
+
+type telegramIngressDropExecutor interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func dropPendingTelegramIngressForTelegramThreadTx(tx *sql.Tx, chatID int64, threadID int64, reason string, completedAt time.Time) (int, error) {
+	return dropPendingTelegramIngressForTelegramThreadExec(tx, chatID, threadID, reason, completedAt)
+}
+
+func dropPendingTelegramIngressForTelegramThreadExec(exec telegramIngressDropExecutor, chatID int64, threadID int64, reason string, completedAt time.Time) (int, error) {
+	if exec == nil || chatID == 0 || threadID <= 0 {
+		return 0, nil
+	}
+	if completedAt.IsZero() {
+		completedAt = time.Now().UTC()
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = TelegramIngressDropReasonTelegramThreadClosed
+	}
+	threadSessionID := SessionIDForKey(SessionKey{ChatID: chatID, Scope: TelegramThreadScopeRef(chatID, threadID)})
+	threadSessionPrefix := threadSessionID + "/"
+	threadJSONNeedle := fmt.Sprintf("%%\"TelegramThreadID\":%d%%", threadID)
+	threadJSONNeedleWithSpace := fmt.Sprintf("%%\"TelegramThreadID\": %d%%", threadID)
+	completedRaw := completedAt.UTC().Format(time.RFC3339Nano)
+	res, err := exec.Exec(`
+		UPDATE telegram_ingress_updates
+		SET
+			status = ?,
+			error_text = CASE
+				WHEN ? != '' THEN ?
+				ELSE error_text
+			END,
+			completed_at = COALESCE(completed_at, ?),
+			updated_at = ?
+		WHERE chat_id = ?
+			AND status IN (?, ?)
+			AND (
+				session_id = ?
+				OR SUBSTR(session_id, 1, ?) = ?
+				OR inbound_json LIKE ?
+				OR inbound_json LIKE ?
+			)
+	`,
+		string(TelegramIngressUpdateDropped),
+		clampStoreText(reason, 2000),
+		clampStoreText(reason, 2000),
+		completedRaw,
+		completedRaw,
+		chatID,
+		string(TelegramIngressUpdateAccepted),
+		string(TelegramIngressUpdateQueued),
+		threadSessionID,
+		len(threadSessionPrefix),
+		threadSessionPrefix,
+		threadJSONNeedle,
+		threadJSONNeedleWithSpace,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("drop pending telegram ingress for thread: %w", err)
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("drop pending telegram ingress rows affected: %w", err)
+	}
+	return int(count), nil
+}
+
 func (s *SQLiteStore) MarkTelegramIngressDroppedIfDispatchable(surface string, updateID int64, reason string, completedAt time.Time) (TelegramIngressTransitionResult, error) {
 	surface = strings.TrimSpace(surface)
 	if surface == "" || updateID <= 0 {

@@ -302,7 +302,7 @@ func (r *Runtime) doubleOperatorAutoApprovalForScope(ctx context.Context, chatID
 		return "", err
 	}
 	if !ok {
-		return "", fmt.Errorf("no active auto approval to double; use /auto approvals <duration> <scope> first")
+		return "", fmt.Errorf("no active auto approval to double")
 	}
 	lease = session.NormalizeOperatorAutoApprovalLease(lease)
 	previousDuration, doubledDuration := doubledOperatorWindowDuration(lease.CreatedAt, lease.ExpiresAt, now, operatorAutoApprovalMinDuration, operatorAutoApprovalMaxDuration)
@@ -472,7 +472,7 @@ func (r *Runtime) operatorAutoApprovalBlockedReasonForScope(chatID int64, scopeK
 		return "", err
 	}
 	if !ok {
-		return "open /auto mode before this grant can answer prompts", nil
+		return "open an approval window before this grant can answer prompts", nil
 	}
 	if !operatorAutoModeScopeIntersects(gate.Scope, approvalScope) {
 		return "current auto mode allows " + operatorAutoApprovalScopeLabel(gate.Scope), nil
@@ -532,7 +532,7 @@ func parseOperatorAutoApprovalCommand(raw string) (string, operatorAutoApprovalC
 		reason = append(reason, token)
 	}
 	if !durationSet {
-		return "", spec, fmt.Errorf("usage: /auto approvals <duration> [all|workspace|deploy] [uses=N] [reason]")
+		return "", spec, fmt.Errorf("approval duration, scope, optional use budget, and optional reason are required")
 	}
 	if spec.Duration < operatorAutoApprovalMinDuration {
 		return "", spec, fmt.Errorf("auto-approval duration must be at least %s", operatorAutoApprovalMinDuration)

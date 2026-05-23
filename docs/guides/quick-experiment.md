@@ -76,14 +76,15 @@ If something looks wrong:
 Use `/stop` to cancel current work in the chat. Use `/new` to start a fresh chat
 session without clearing memory.
 
-## Temporary Automation
+## Temporary Approval Windows
 
-Use `/auto` when you want less approval friction for a bounded task. The button
-panels expose mode, approval, and limit controls without requiring command
-parameters. Open mode for the task scope, then grant a short approval budget
-tied to the task you are doing now.
+When you approve a request, the approved Telegram message offers an
+`Approve 15m` button. Use it when you want less approval friction for the bounded
+task already in front of you. The window opens the temporary automation gate and the
+matching approval grant together, scoped to the current chat or side thread.
 
-Use `/health` again after changing automation so the service state is visible.
+The active window then offers `Double time` and `Cancel approvals`. Use
+`/health` after changing approval windows when you want the service state visible.
 
 ## Internet From Isolated Work
 

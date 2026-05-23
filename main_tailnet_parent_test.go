@@ -16,6 +16,7 @@ import (
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/durableagent"
+	"github.com/idolum-ai/aphelion/internal/tailnetparent"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tailnet"
 )
@@ -85,7 +86,7 @@ func TestTailnetPrivateHTTPHandlerServesHealthTailnetAndStatus(t *testing.T) {
 		personaEffort:  "gpt-5.5",
 		governorEffort: "high",
 	}
-	handler := tailnetPrivateHTTPHandler(router, 1001, []string{"admin@example.com"}, nil)
+	handler := tailnetparent.NewPrivateHTTPHandler(router, 1001, []string{"admin@example.com"}, nil)
 
 	for _, path := range []string{"/healthz", "/tailnet", "/tailnet/surfaces", "/tailnet/grants", "/status", "/health/diagnosis/latest"} {
 		req := newTailnetPrivateTestRequest(http.MethodGet, path, nil, "admin@example.com")
@@ -135,7 +136,7 @@ func TestTailnetPrivateHTTPHandlerRequiresConfiguredTailnetAdminLogin(t *testing
 			Status:  "healthy",
 		},
 	}
-	handler := tailnetPrivateHTTPHandler(router, 1001, []string{"admin@example.com"}, nil)
+	handler := tailnetparent.NewPrivateHTTPHandler(router, 1001, []string{"admin@example.com"}, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/tailnet", nil)
 	rec := httptest.NewRecorder()
@@ -170,7 +171,7 @@ func TestTailnetPrivateHTTPHandlerRejectsMutationRoutes(t *testing.T) {
 		},
 		revokeTailnetSurfaceOK: true,
 	}
-	handler := tailnetPrivateHTTPHandler(router, 1001, []string{"admin@example.com"}, nil)
+	handler := tailnetparent.NewPrivateHTTPHandler(router, 1001, []string{"admin@example.com"}, nil)
 
 	req := newTailnetPrivateTestRequest(http.MethodPost, "/tailnet/surfaces/parent:tsnet_http:status/revoke", nil, "admin@example.com")
 	rec := httptest.NewRecorder()
@@ -194,7 +195,7 @@ func TestTailnetPrivateHTTPHandlerMountsDurableAgentControlPlane(t *testing.T) {
 		t.Fatalf("NewSQLiteStore() err = %v", err)
 	}
 	defer store.Close()
-	handler := tailnetPrivateHTTPHandler(
+	handler := tailnetparent.NewPrivateHTTPHandler(
 		&stubCommandRouter{},
 		1001,
 		[]string{"admin@example.com"},

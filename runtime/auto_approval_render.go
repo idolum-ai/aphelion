@@ -13,7 +13,7 @@ import (
 
 func renderOperatorAutoApprovalRevoked(leases []session.OperatorAutoApprovalLease, now time.Time) string {
 	state := "off"
-	next := "Use /auto approvals <duration> <scope> to create a new bounded grant."
+	next := "Approve one request and use the inline approval-window controls to open a bounded grant."
 	if len(leases) == 0 {
 		return renderRuntimeCompactPanel(face.OperatorPanel{
 			Title: "Auto approvals",
@@ -133,7 +133,7 @@ func renderOperatorAutoApprovalEnabled(lease session.OperatorAutoApprovalLease, 
 		Title:   "Auto approvals",
 		State:   "enabled",
 		Why:     why,
-		Next:    "Use /auto approvals off to revoke it.",
+		Next:    "Use approval-window controls to revoke it.",
 		Details: details,
 	})
 }
@@ -142,7 +142,7 @@ func renderOperatorAutoApprovalDoubled(lease session.OperatorAutoApprovalLease, 
 	lease = session.NormalizeOperatorAutoApprovalLease(lease)
 	details := []string{
 		"Scope: " + operatorAutoApprovalScopeLabel(lease.Scope) + ".",
-		"Doubled: " + roundDuration(previousDuration) + " → " + roundDuration(doubledDuration) + ".",
+		"Doubled: " + roundDuration(previousDuration) + " -> " + roundDuration(doubledDuration) + ".",
 		"Expires: " + lease.ExpiresAt.UTC().Format(time.RFC3339) + " (" + roundDuration(lease.ExpiresAt.Sub(now)) + ").",
 	}
 	if lease.MaxUses > 0 {
@@ -160,7 +160,7 @@ func renderOperatorAutoApprovalDoubled(lease session.OperatorAutoApprovalLease, 
 		Title:   "Auto approvals",
 		State:   "enabled",
 		Why:     why,
-		Next:    "Use /auto approvals off to revoke it, or press 2× Time again to extend within the cap.",
+		Next:    "Use approval-window controls to revoke it, or press Double time again to extend within the cap.",
 		Details: details,
 	})
 }
@@ -187,7 +187,7 @@ func renderOperatorAutoApprovalStatusActive(lease session.OperatorAutoApprovalLe
 		Title:   "Auto approvals",
 		State:   "active",
 		Why:     why,
-		Next:    "Use /auto approvals off to revoke it.",
+		Next:    "Use approval-window controls to revoke it.",
 		Details: details,
 	})
 }
@@ -206,7 +206,7 @@ func renderOperatorAutoApprovalStatusInactive(lease session.OperatorAutoApproval
 		Title: "Auto approvals",
 		State: "inactive",
 		Why:   "No current approval prompt will use this old grant.",
-		Next:  "Use /auto approvals <duration> <scope> to create a new bounded grant.",
+		Next:  "Approve one request and use the inline approval-window controls to open a bounded grant.",
 		Details: []string{
 			"Last grant: " + reason + ".",
 		},

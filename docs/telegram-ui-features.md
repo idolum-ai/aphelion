@@ -71,16 +71,12 @@ Current command surface:
   - Provides buttons for home/list, show, propose, pin/unpin, activate, pause, complete, archive, refresh, and admin health.
   - Supports manual `create`, `block`, and `summon` actions when typed input is the natural carrier for the new objective or reason.
   - Self-summon is review-only; Mission Ledger state does not grant self-continuation, autonomous continuation, new capabilities, or external authority.
-- `/auto`
-  - Admin-only automation control surface with mode, approvals, and limits panels.
-  - `/auto mode` shows and changes the current bounded automation gate.
-  - `/auto approvals` shows and changes the current bounded approval-prompt grant.
-  - `/auto limits` shows the configured default mode, ceiling, live-override setting, and maximum live mode duration.
-  - Mode and approvals provide preset buttons for refresh, off, and bounded 15-minute workspace/deploy/all windows. Limits is read-only.
-  - Supports `/auto mode leased <duration> [all|workspace|deploy] [reason]`.
-  - Supports `/auto approvals <duration> [all|workspace|deploy] [uses=N] [reason]`.
-  - Supports explicit side-thread targeting with `/auto thread <id> mode ...` and `/auto thread <id> approvals ...`; default `/auto` remains default-chat scoped.
-  - Mode opens the automation gate. Approvals provide spendable prompt budget. Automatic approval requires both.
+- Approval windows
+  - Admin-only inline controls shown after an approval succeeds.
+  - The approved message offers `Approve 15m` and `Close`.
+  - `Approve 15m` opens the temporary automation gate and matching approval grant together for the current chat or side thread.
+  - Active windows offer `Double time` and `Cancel approvals`.
+  - Each `Double time` press doubles the current window duration within the configured live-override ceiling. `Cancel approvals` revokes both records.
   - If config is tightened later, live mode overrides outside the new ceiling are ignored and `/health diagnose` reports the precedence block.
 - `/stop`
   - Stops active work in the current chat and drops queued follow-up work.
@@ -102,7 +98,7 @@ Current command surface:
 Visibility notes:
 
 - `/start` and `/help` are role-aware.
-  - Admin users see `/auto` and `/restart`.
+  - Admin users see `/restart`.
   - Non-admin users do not see those admin commands.
 - All listed slash commands are usable without typing parameters. When a command
   has a safe finite option set, Telegram presents buttons. Free-form creation or
@@ -112,10 +108,11 @@ Visibility notes:
   evidence for that message. Unknown replies route to the main chat session.
 - A reply that begins with `(thread N)` routes to that open side thread and
   stores the stripped message text in that thread session.
-- Operator/global commands keep their global command meaning: `/auto`, `/health`,
+- Operator/global commands keep their global command meaning: `/health`,
   `/tailnet`, `/model`, `/agents`, `/thread`, `/threads`, `/absorb`,
   `/restart`, `/reinstall`, and mission/durable-agent controls are not
-  side-thread work-lane commands.
+  side-thread work-lane commands. Approval-window callbacks use the scope of the
+  approval message they are attached to.
 - Work-lane commands can be explicitly scoped to a side thread: `/status`,
   `/memory`, `/stop`, `/new`, and `/detach` target a side thread when the
   command is written after `(thread N)` or sent as a reply to a known
@@ -140,7 +137,7 @@ in the prompt body.
 
 `/start` and `/help` attach role-scoped command buttons. Public buttons include
 status, health, memory, mission, threads, stop, new, and detach. Admin buttons
-add models, agents, tailnet, auto, reinstall, and restart.
+add models, agents, tailnet, reinstall, and restart.
 
 Menu callbacks route through the same command dispatcher as typed slash commands;
 the button is not a new authority path.
@@ -247,17 +244,21 @@ Callbacks resolve short mission tokens against the current authorized mission
 view before applying any state change. Mission actions update ledger records; they
 do not create continuation authority or capability grants.
 
-### `/auto` controls
+### Approval Windows
 
-Admin automation panels keep button-driven operation:
+Approval-window buttons keep automation contextual to the request that was just
+approved:
 
-- `Mode` opens or closes the temporary automation gate.
-- `Approvals` grants bounded prompt approval budget.
-- `Limits` reports configured defaults and ceilings without mutation.
+- `Approve 15m` creates a temporary automation gate and matching approval
+  grant for the current chat or side thread.
+- `Close` removes the offer buttons without changing runtime state.
+- `Double time` doubles the current approval window within the configured
+  live-override ceiling.
+- `Cancel approvals` revokes both the approval grant and its matching temporary
+  automation gate.
 
-The buttons call the same runtime configuration functions as typed commands.
-Duration, scope, use count, live-override ceiling, and admin checks remain typed
-runtime checks, not UI convention.
+Duration, scope, live-override ceiling, admin checks, and spendability remain
+typed runtime checks, not UI convention.
 
 ### Side threads
 

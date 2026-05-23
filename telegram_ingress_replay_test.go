@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/internal/telegramcontrol"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
@@ -87,7 +88,7 @@ func TestStoppedQueuedTelegramIngressIsDroppedInsteadOfReplayed(t *testing.T) {
 		}
 		return nil, nil
 	})
-	ingress := newIngressSequencer(router, time.Minute)
+	ingress := telegramcontrol.NewIngressSequencer(router, time.Minute)
 	defer ingress.Close()
 	control := telegramCommandControl{store: store, ingress: ingress, router: router}
 	ingress.SetDropHandler(control.MarkDroppedIngress)

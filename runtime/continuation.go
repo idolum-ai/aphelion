@@ -63,6 +63,9 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		state.RemainingTurns = 1
 		state.ActionProposal = buildContinuationActionProposal(state.DecisionID, consensus, objective, nextStep, time.Now().UTC())
 		state.ContinuationLease = buildContinuationLease(state.ActionProposal, state.RemainingTurns, time.Now().UTC())
+		if _, blocked, err := r.blockInvalidContinuationAuthorityContract(ctx, key, msg, state, "organic_continuation", time.Now().UTC(), true); blocked || err != nil {
+			return err
+		}
 	}
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return fmt.Errorf("persist continuation state: %w", err)

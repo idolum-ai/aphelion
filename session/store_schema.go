@@ -20,6 +20,7 @@ const schemaVersion50 = 50
 const schemaVersion51 = 51
 const schemaVersion52 = 52
 const schemaVersion53 = 53
+const schemaVersion54 = 54
 
 func existingUserTableCount(tx *sql.Tx) (int, error) {
 	var count int
@@ -46,7 +47,7 @@ func validateCurrentSchemaVersion(tx *sql.Tx, existingTables int) (int, error) {
 		return 0, fmt.Errorf("unsupported unversioned database schema; reinstall from a clean current state")
 	}
 	if currentVersion < schemaVersion {
-		if currentVersion == schemaVersion43 || currentVersion == schemaVersion44 || currentVersion == schemaVersion45 || currentVersion == schemaVersion46 || currentVersion == schemaVersion47 || currentVersion == schemaVersion48 || currentVersion == schemaVersion49 || currentVersion == schemaVersion50 || currentVersion == schemaVersion51 || currentVersion == schemaVersion52 || currentVersion == schemaVersion53 {
+		if currentVersion == schemaVersion43 || currentVersion == schemaVersion44 || currentVersion == schemaVersion45 || currentVersion == schemaVersion46 || currentVersion == schemaVersion47 || currentVersion == schemaVersion48 || currentVersion == schemaVersion49 || currentVersion == schemaVersion50 || currentVersion == schemaVersion51 || currentVersion == schemaVersion52 || currentVersion == schemaVersion53 || currentVersion == schemaVersion54 {
 			return currentVersion, nil
 		}
 		return 0, fmt.Errorf("unsupported database schema version %d (current schema version is %d); reinstall from a clean current state", currentVersion, schemaVersion)
@@ -151,6 +152,15 @@ func migrateCurrentSchemaVersion(tx *sql.Tx, currentVersion int) (int, error) {
 	}
 	if version == schemaVersion53 {
 		if err := migrateSchemaV53ToV54(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion54); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion54, err)
+		}
+		version = schemaVersion54
+	}
+	if version == schemaVersion54 {
+		if err := migrateSchemaV54ToV55(tx); err != nil {
 			return 0, err
 		}
 		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion); err != nil {
@@ -325,6 +335,42 @@ func migrateSchemaV52ToV53(tx *sql.Tx) error {
 func migrateSchemaV53ToV54(tx *sql.Tx) error {
 	if err := ensureTelegramThreadSessions(tx); err != nil {
 		return fmt.Errorf("migrate schema v53 to v54 ensure telegram thread sessions: %w", err)
+	}
+	return nil
+}
+
+func migrateSchemaV54ToV55(tx *sql.Tx) error {
+	if err := ensureApprovalWindowOfferTables(tx); err != nil {
+		return fmt.Errorf("migrate schema v54 to v55 ensure approval window offers: %w", err)
+	}
+	return nil
+}
+
+func ensureApprovalWindowOfferTables(tx *sql.Tx) error {
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS approval_window_offers (
+			offer_id TEXT PRIMARY KEY,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			admin_user_id INTEGER NOT NULL DEFAULT 0,
+			session_id TEXT NOT NULL DEFAULT '',
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			source_kind TEXT NOT NULL DEFAULT '',
+			source_id TEXT NOT NULL DEFAULT '',
+			source_decision_kind TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			expires_at TEXT NOT NULL,
+			used_at TEXT,
+			closed_at TEXT,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_approval_window_offers_source_active ON approval_window_offers(chat_id, source_kind, source_id, expires_at DESC, closed_at, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_approval_window_offers_scope_active ON approval_window_offers(chat_id, scope_kind, scope_id, expires_at DESC, closed_at, updated_at DESC)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -11,19 +11,12 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/internal/decisionprojection"
 	"github.com/idolum-ai/aphelion/session"
 )
 
-func renderDecisionSummaryFromFields(kind string, prompt string) string {
-	kind = strings.TrimSpace(kind)
-	prompt = truncateStatusDiagnostic(strings.TrimSpace(prompt), 80)
-	if kind == "" {
-		return "prompt=" + prompt
-	}
-	if prompt == "" {
-		return "kind=" + kind
-	}
-	return fmt.Sprintf("kind=%s prompt=%s", kind, prompt)
+func renderDecisionSummaryFromFields(kind string, prompt string, details string) string {
+	return decisionprojection.DecisionSummary(kind, prompt, details)
 }
 
 func continuationSnapshotIsPending(state core.ContinuationStatusSnapshot) bool {
@@ -184,15 +177,7 @@ func renderMissionPendingSummary(mission session.MissionState) string {
 }
 
 func renderDecisionSummary(record session.PendingDecisionRecord) string {
-	kind := strings.TrimSpace(record.Kind)
-	prompt := truncateStatusDiagnostic(record.Prompt, 80)
-	if kind == "" {
-		return "prompt=" + prompt
-	}
-	if prompt == "" {
-		return "kind=" + kind
-	}
-	return fmt.Sprintf("kind=%s prompt=%s", kind, prompt)
+	return decisionprojection.DecisionSummary(record.Kind, record.Prompt, record.Details)
 }
 
 func renderPendingReviewSummary(event session.ReviewEvent) string {

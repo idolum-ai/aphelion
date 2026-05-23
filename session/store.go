@@ -10,7 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 54
+const schemaVersion = 55
 
 type SQLiteStore struct {
 	db     *sql.DB
@@ -458,6 +458,25 @@ func (s *SQLiteStore) init() error {
 		`CREATE INDEX IF NOT EXISTS idx_operator_auto_approvals_chat_active ON operator_auto_approvals(chat_id, expires_at DESC, revoked_at, updated_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_operator_auto_approvals_admin_active ON operator_auto_approvals(admin_user_id, expires_at DESC, revoked_at, updated_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_operator_auto_approvals_scope_active ON operator_auto_approvals(chat_id, scope_kind, scope_id, expires_at DESC, revoked_at, updated_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS approval_window_offers (
+			offer_id TEXT PRIMARY KEY,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			admin_user_id INTEGER NOT NULL DEFAULT 0,
+			session_id TEXT NOT NULL DEFAULT '',
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			source_kind TEXT NOT NULL DEFAULT '',
+			source_id TEXT NOT NULL DEFAULT '',
+			source_decision_kind TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			expires_at TEXT NOT NULL,
+			used_at TEXT,
+			closed_at TEXT,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_approval_window_offers_source_active ON approval_window_offers(chat_id, source_kind, source_id, expires_at DESC, closed_at, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_approval_window_offers_scope_active ON approval_window_offers(chat_id, scope_kind, scope_id, expires_at DESC, closed_at, updated_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS operator_autonomy_overrides (
 			override_id TEXT PRIMARY KEY,
 			admin_user_id INTEGER NOT NULL DEFAULT 0,

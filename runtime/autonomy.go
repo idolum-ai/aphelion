@@ -296,7 +296,7 @@ func parseOperatorAutonomyCommand(raw string) (string, operatorAutonomyCommandSp
 	case "mission":
 		return "mission", operatorAutonomyCommandSpec{Mode: "mission"}, nil
 	default:
-		return "", operatorAutonomyCommandSpec{}, fmt.Errorf("usage: /auto mode [status|off|leased <duration> [all|workspace|deploy] [reason]]")
+		return "", operatorAutonomyCommandSpec{}, fmt.Errorf("auto mode action must be status, off, leased, or double")
 	}
 }
 
@@ -312,7 +312,7 @@ func parseOperatorAutoModeLeaseSpec(raw string) (operatorAutonomyCommandSpec, er
 			continue
 		}
 		if strings.HasPrefix(lower, "uses=") || strings.HasPrefix(lower, "max_uses=") || strings.HasPrefix(lower, "max=") {
-			return spec, fmt.Errorf("usage: /auto mode leased <duration> [all|workspace|deploy] [reason]")
+			return spec, fmt.Errorf("auto mode does not accept a use budget")
 		}
 		if isOperatorAutoApprovalScope(lower) {
 			spec.Scope = session.NormalizeOperatorAutoApprovalScope(lower)
@@ -328,7 +328,7 @@ func parseOperatorAutoModeLeaseSpec(raw string) (operatorAutonomyCommandSpec, er
 		reason = append(reason, token)
 	}
 	if !durationSet {
-		return spec, fmt.Errorf("usage: /auto mode leased <duration> [all|workspace|deploy] [reason]")
+		return spec, fmt.Errorf("auto mode duration, scope, and optional reason are required")
 	}
 	if spec.Duration < operatorAutoApprovalMinDuration {
 		return spec, fmt.Errorf("auto mode duration must be at least %s", operatorAutoApprovalMinDuration)
@@ -343,7 +343,7 @@ func renderAutonomyCommandStatus(snapshot core.AutonomyStatusSnapshot) string {
 			Title: "Auto mode",
 			State: "no live mode override",
 			Why:   "Approval grants are spendable only when the configured default or a live mode override opens the gate.",
-			Next:  "Use /auto mode leased <duration> <scope> to open a bounded gate if config allows it.",
+			Next:  "Approve one request and use the inline approval-window controls to open a bounded gate if config allows it.",
 			Details: []string{
 				"Default: " + autonomyModeRuntimeLabel(snapshot.DefaultMode) + ".",
 				"Ceiling: " + autonomyModeRuntimeLabel(snapshot.Ceiling) + ".",
@@ -363,7 +363,7 @@ func renderAutonomyCommandStatus(snapshot core.AutonomyStatusSnapshot) string {
 		Title:   "Auto mode",
 		State:   "live gate open",
 		Why:     "Approval grants may be spent only for prompts allowed by this mode.",
-		Next:    "Use /auto mode off to close it.",
+		Next:    "Use approval-window controls to close it.",
 		Details: details,
 	})
 }
@@ -380,7 +380,7 @@ func (r *Runtime) doubleOperatorAutonomyOverrideForScope(ctx context.Context, ch
 		return "", err
 	}
 	if !ok {
-		return "", fmt.Errorf("no active auto mode to double; use /auto mode leased <duration> <scope> first")
+		return "", fmt.Errorf("no active auto mode to double")
 	}
 	override = session.NormalizeOperatorAutonomyOverride(override)
 	policy := config.EffectiveAutonomyPolicy(nil)
@@ -449,7 +449,7 @@ func renderOperatorAutonomyDoubled(override session.OperatorAutonomyOverride, no
 	details := []string{
 		"Mode: " + autonomyModeRuntimeLabel(override.Mode) + ".",
 		"Scope: " + operatorAutoApprovalScopeLabel(override.Scope) + ".",
-		"Doubled: " + roundDuration(previousDuration) + " → " + roundDuration(doubledDuration) + ".",
+		"Doubled: " + roundDuration(previousDuration) + " -> " + roundDuration(doubledDuration) + ".",
 		"Expires: " + override.ExpiresAt.UTC().Format(time.RFC3339) + " (" + roundDuration(override.ExpiresAt.Sub(now)) + ").",
 	}
 	if reason := strings.TrimSpace(override.Reason); reason != "" {
@@ -459,7 +459,7 @@ func renderOperatorAutonomyDoubled(override session.OperatorAutonomyOverride, no
 		Title:   "Auto mode",
 		State:   "live gate open",
 		Why:     "Expanded the current auto mode gate by doubling its full time window.",
-		Next:    "Use /auto mode off to close it, or press 2× Time again to extend within the cap.",
+		Next:    "Use approval-window controls to close it, or press Double time again to extend within the cap.",
 		Details: details,
 	})
 }
@@ -478,7 +478,7 @@ func renderOperatorAutonomyEnabled(override session.OperatorAutonomyOverride, no
 		Title:   "Auto mode",
 		State:   "live gate open",
 		Why:     "This permits matching approval grants to be spent until the mode expires.",
-		Next:    "Use /auto mode off to close it.",
+		Next:    "Use approval-window controls to close it.",
 		Details: details,
 	})
 }
@@ -489,7 +489,7 @@ func renderOperatorAutonomyRevoked(overrides []session.OperatorAutonomyOverride,
 			Title: "Auto mode",
 			State: "off",
 			Why:   "No live auto mode override is active for this chat.",
-			Next:  "Use /auto mode leased <duration> <scope> if a bounded gate is needed.",
+			Next:  "Approve one request and use the inline approval-window controls if a bounded gate is needed.",
 			Details: []string{
 				"Already off for this chat.",
 			},
@@ -506,7 +506,7 @@ func renderOperatorAutonomyRevoked(overrides []session.OperatorAutonomyOverride,
 		Title: "Auto mode",
 		State: "off",
 		Why:   "No live auto mode override is active for this chat.",
-		Next:  "Use /auto mode leased <duration> <scope> if a bounded gate is needed.",
+		Next:  "Approve one request and use the inline approval-window controls if a bounded gate is needed.",
 		Details: []string{
 			detail,
 		},

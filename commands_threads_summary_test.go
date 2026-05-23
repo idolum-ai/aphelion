@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/internal/telegramcontrol"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
@@ -162,7 +163,7 @@ func TestQueueTelegramThreadSummarySuppressesDuplicateCallbackWork(t *testing.T)
 		}
 		return &core.TurnResult{}, nil
 	})
-	ingress := newIngressSequencer(router, time.Minute)
+	ingress := telegramcontrol.NewIngressSequencer(router, time.Minute)
 	t.Cleanup(ingress.Close)
 	control := telegramCommandControl{store: store, router: router, ingress: ingress}
 

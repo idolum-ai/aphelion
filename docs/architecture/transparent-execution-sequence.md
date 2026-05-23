@@ -101,10 +101,17 @@ TES write/read behavior currently relies on the following indexes:
   - `provider.attempt.retried`
   - `provider.attempt.failed`
   - `provider.attempt.succeeded`
+- Model requests
+  - `model.request.started`
+  - `model.request.succeeded`
+  - `model.request.failed`
 - Tool lifecycle
   - `tool.started`
   - `tool.succeeded`
   - `tool.failed`
+- Tool batches
+  - `tool.batch.started`
+  - `tool.batch.completed`
 - Delivery
   - `progress.surface`
   - `delivery.progress.sent`
@@ -202,6 +209,19 @@ Code anchors:
 - [`main.go`](../../main.go)
 - [`telegram/poller.go`](../../telegram/poller.go)
 - [`session/store_telegram_ingress.go`](../../session/store_telegram_ingress.go)
+
+## Model and Tool Batch Evidence
+
+Provider attempt events describe the configured backend path and failover story.
+Model request events describe each concrete request made by a turn loop: attempt
+number, history size, tool manifest size, response token usage, model duration,
+and whether the request returned tool calls.
+
+Tool lifecycle events remain per-call evidence. Tool batch events describe the
+model-emitted batch envelope and execution mode. The runtime may execute a batch
+in parallel only when every call is classified as parallel-safe by the concrete
+tool registry; otherwise the batch is executed serially in model order. Tool
+results are always appended back to the conversation in model order.
 
 ## Current Projection Usage
 

@@ -13,6 +13,9 @@ import (
 )
 
 func (r *Runtime) sendContinuationApprovalPrompt(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState, text string) error {
+	if _, blocked, err := r.blockInvalidContinuationAuthorityContract(ctx, key, msg, state, "approval_prompt", time.Now().UTC(), false); blocked || err != nil {
+		return err
+	}
 	sender, ok := r.continuationApprovalPromptSender()
 	if !ok {
 		return nil
@@ -20,7 +23,7 @@ func (r *Runtime) sendContinuationApprovalPrompt(ctx context.Context, key sessio
 	messageID, err := sender.SendInlineKeyboard(
 		ctx,
 		msg.ChatID,
-		prefixTelegramThreadText(msg.TelegramThreadID, text),
+		r.prefixTelegramPresentedText(r.telegramPresentationForMessage(msg), text),
 		continuationApprovalButtonRows(state),
 		nil,
 	)

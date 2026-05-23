@@ -138,6 +138,33 @@ func TestMachineHandleOrdersGoldenPath(t *testing.T) {
 	}
 }
 
+func TestMachineHandleRejectsNilGovernorTurn(t *testing.T) {
+	var order []string
+	m := &Machine{
+		Governor: &fakeGovernor{
+			order: &order,
+			resp:  &GovernorResult{Turn: nil, FloorText: "floor text"},
+		},
+		Face:        &fakeFace{order: &order, renderResp: &FaceRenderResult{Text: "visible scene", Usage: core.TokenUsage{OutputTokens: 5}}},
+		Persistence: &fakePersistence{order: &order},
+		Delivery:    &fakeDelivery{order: &order},
+	}
+
+	result, err := m.Handle(context.Background(), seedRequest())
+	if err == nil {
+		t.Fatal("Handle() err = nil, want nil governor turn rejection")
+	}
+	if !strings.Contains(err.Error(), "governor result turn is required") {
+		t.Fatalf("Handle() err = %v, want governor result turn rejection", err)
+	}
+	if result != nil {
+		t.Fatalf("result = %#v, want nil when governor result is structurally invalid", result)
+	}
+	if got, want := order, []string{"face.propose", "governor.execute"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("order = %#v, want %#v", got, want)
+	}
+}
+
 func TestMachineHandleFallsBackToFloorWhenFaceAbsent(t *testing.T) {
 	m := &Machine{
 		Governor: &fakeGovernor{resp: &GovernorResult{Turn: &core.TurnResult{Text: "governor raw"}, FloorText: "floor fallback text"}},

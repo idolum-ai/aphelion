@@ -174,8 +174,8 @@ func TestRuntimeProgressDetailsViewRerendersWholeWindowAndSticks(t *testing.T) {
 	if inlineCount != 1 {
 		t.Fatalf("inline len = %d, want initial progress card", inlineCount)
 	}
-	if got := initialText; !strings.Contains(got, "Searching files") || !strings.Contains(got, "Reading file evidence") || strings.Contains(got, "rg first") {
-		t.Fatalf("summary progress = %q, want semantic whole-window summary", got)
+	if got := initialText; !strings.Contains(got, "Exploring files (2x)") || strings.Contains(got, "rg first") {
+		t.Fatalf("summary progress = %q, want compact semantic whole-window summary", got)
 	}
 
 	updated, detailsText, err := rt.ToggleProgressView(context.Background(), 9933, 1001, monitor.runID, true)
@@ -216,7 +216,7 @@ func TestRuntimeProgressDetailsViewRerendersWholeWindowAndSticks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToggleProgressView(summary) err = %v", err)
 	}
-	if !updated || !strings.Contains(summaryText, "Searching files") || !strings.Contains(summaryText, "Reading file evidence") || !strings.Contains(summaryText, "Running tests") {
+	if !updated || !strings.Contains(summaryText, "Exploring files (2x)") || !strings.Contains(summaryText, "Running tests") {
 		t.Fatalf("summary text = %q, want retained entries rerendered as semantic summary", summaryText)
 	}
 	if strings.Contains(summaryText, "rg first") || strings.Contains(summaryText, "sed -n") || strings.Contains(summaryText, "go test ./runtime") {
@@ -278,7 +278,11 @@ func TestRuntimeToggleProgressViewPrefixesTelegramThreadProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	key := session.SessionKey{ChatID: 9938, UserID: 1001, Scope: session.TelegramThreadScopeRef(9938, 6)}
+	thread, _, err := store.CreateTelegramThreadForUpdate(9938, 1001, 601, 206, "inspect thread progress", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9938, UserID: 1001, Scope: session.TelegramThreadScopeRef(9938, thread.ThreadID)}
 	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "inspect thread progress")
 	if err != nil {
 		t.Fatalf("BeginTurnRun() err = %v", err)
@@ -300,14 +304,14 @@ func TestRuntimeToggleProgressViewPrefixesTelegramThreadProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToggleProgressView(details) err = %v", err)
 	}
-	if !updated || !strings.HasPrefix(detailsText, "(thread 6)\n\n") || strings.Count(detailsText, "(thread 6)") != 1 {
+	if !updated || !strings.HasPrefix(detailsText, "(thread 1)\n\n") || strings.Count(detailsText, "(thread 1)") != 1 {
 		t.Fatalf("details text = %q, want one visible thread prefix", detailsText)
 	}
 	updated, summaryText, err := rt.ToggleProgressView(context.Background(), 9938, 1001, run.ID, false)
 	if err != nil {
 		t.Fatalf("ToggleProgressView(summary) err = %v", err)
 	}
-	if !updated || !strings.HasPrefix(summaryText, "(thread 6)\n\n") || strings.Count(summaryText, "(thread 6)") != 1 {
+	if !updated || !strings.HasPrefix(summaryText, "(thread 1)\n\n") || strings.Count(summaryText, "(thread 1)") != 1 {
 		t.Fatalf("summary text = %q, want one visible thread prefix", summaryText)
 	}
 }

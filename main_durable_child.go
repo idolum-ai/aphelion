@@ -4,17 +4,15 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"flag"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/internal/childcli"
 	"github.com/idolum-ai/aphelion/memory"
 	runtimepkg "github.com/idolum-ai/aphelion/runtime"
 	"github.com/idolum-ai/aphelion/session"
@@ -156,66 +154,20 @@ func validateDurableChildBootstrapConfig(cfg *config.Config) error {
 }
 
 func runDurableAgentChildCommand(args []string) error {
-	fs := flag.NewFlagSet("durable-agent child-run", flag.ContinueOnError)
-	bootstrapPath := fs.String("bootstrap", "", "path to durable child bootstrap json")
-	messagePath := fs.String("message", "", "path to inbound message json")
-	agentID := fs.String("agent", "", "durable agent id for non-interactive child wake")
-	nowRaw := fs.String("now", "", "override wake timestamp (RFC3339 or RFC3339Nano)")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if *bootstrapPath == "" {
-		return fmt.Errorf("durable-agent child-run requires --bootstrap")
-	}
-
-	var bootstrap runtimepkg.DurableAgentChildBootstrap
-	if err := decodeJSONFile(*bootstrapPath, &bootstrap); err != nil {
-		return fmt.Errorf("load durable child bootstrap: %w", err)
-	}
-
-	if strings.TrimSpace(*messagePath) != "" {
-		var msg core.InboundMessage
-		if err := decodeJSONFile(*messagePath, &msg); err != nil {
-			return fmt.Errorf("load durable child message: %w", err)
-		}
-
-		result, err := runDurableTelegramGroupChildBootstrap(context.Background(), bootstrap, msg)
-		if err != nil {
-			return err
-		}
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetEscapeHTML(false)
-		return enc.Encode(result)
-	}
-	if strings.TrimSpace(*agentID) == "" {
-		return fmt.Errorf("durable-agent child-run requires --message or --agent")
-	}
-	now, err := parseDurableChildWakeTime(*nowRaw)
-	if err != nil {
-		return err
-	}
-	return runDurableAgentChildWakeBootstrap(context.Background(), bootstrap, *agentID, now)
+	return childcli.RunDurableAgentChildCommand(args, childcli.DurableAgentChildDeps{
+		RunTelegramGroupChild: func(ctx context.Context, cfg config.Config, msg core.InboundMessage) (any, error) {
+			return runDurableTelegramGroupChildBootstrap(ctx, runtimepkg.DurableAgentChildBootstrap{Config: cfg}, msg)
+		},
+		RunChildWake: func(ctx context.Context, cfg config.Config, agentID string, now time.Time) error {
+			return runDurableAgentChildWakeBootstrap(ctx, runtimepkg.DurableAgentChildBootstrap{Config: cfg}, agentID, now)
+		},
+	})
 }
 
 func decodeJSONFile(path string, out any) error {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(raw, out)
+	return childcli.DecodeJSONFile(path, out)
 }
 
 func parseDurableChildWakeTime(raw string) (time.Time, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return time.Now().UTC(), nil
-	}
-	if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-		return parsed.UTC(), nil
-	}
-	parsed, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("parse durable child --now: %w", err)
-	}
-	return parsed.UTC(), nil
+	return childcli.ParseDurableChildWakeTime(raw)
 }

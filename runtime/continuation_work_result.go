@@ -73,7 +73,7 @@ func (r *Runtime) deliverWorkResult(ctx context.Context, key session.SessionKey,
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	text = prefixTelegramThreadText(telegramThreadIDFromScope(key.ChatID, key.Scope), text)
+	text = r.prefixTelegramPresentedText(r.telegramPresentationForKey(key), text)
 	if _, err := r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: key.ChatID, Text: text}); err != nil {
 		return fmt.Errorf("send work executor result: %w", err)
 	}

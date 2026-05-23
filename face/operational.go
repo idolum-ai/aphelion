@@ -65,7 +65,7 @@ func renderTelegramCommandSurface(title string, state string, next string, perso
 	}
 	if includeAdminCommands {
 		details = append(details,
-			"Admin operations: /auto - show automation mode, approval, and limit controls; /restart - force an immediate gateway restart",
+			"Admin operations: /restart - force an immediate gateway restart",
 		)
 	}
 	details = append(details,
@@ -107,7 +107,7 @@ func RenderTelegramAutonomyStatus(snapshot core.AutonomyStatusSnapshot) string {
 		Title: "Auto mode",
 		State: "default " + autonomyModeLabel(snapshot.DefaultMode) + ", ceiling " + autonomyModeLabel(snapshot.Ceiling),
 		Why:   behavior + ". This report does not grant new authority by itself.",
-		Next:  "Use /auto mode leased <duration> <scope> to open a bounded gate, or /auto mode off to close one.",
+		Next:  "Approve one request and use the inline approval-window controls to open or close a bounded gate.",
 		Details: []string{
 			"Default: " + autonomyModeLabel(snapshot.DefaultMode),
 			"Ceiling: " + autonomyModeLabel(snapshot.Ceiling),
@@ -132,7 +132,7 @@ func RenderTelegramAutoLimits(snapshot core.AutonomyStatusSnapshot) string {
 		Title: "Auto limits",
 		State: "default " + autonomyModeLabel(snapshot.DefaultMode) + ", ceiling " + autonomyModeLabel(snapshot.Ceiling),
 		Why:   "Configured limits bound live mode changes. This panel is read-only.",
-		Next:  "Use /auto mode for the live gate or /auto approvals for spendable prompt grants.",
+		Next:  "Approval-window controls manage the live gate and spendable prompt grant together.",
 		Details: []string{
 			"Default: " + autonomyModeLabel(snapshot.DefaultMode),
 			"Ceiling: " + autonomyModeLabel(snapshot.Ceiling),

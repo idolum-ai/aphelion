@@ -4,9 +4,11 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +19,67 @@ import (
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 	"github.com/idolum-ai/aphelion/turn"
 )
+
+func TestTurnAuditRecorderPairsSameNameToolFinishesByInput(t *testing.T) {
+	t.Parallel()
+
+	audit := newTurnAuditRecorder(session.SessionKey{ChatID: 9101, UserID: 1001}, "telegram", "admin", "parallel read")
+	audit.ToolStarted("read_file", `{"path":"a.md"}`)
+	audit.ToolStarted("read_file", `{"path":"b.md"}`)
+	audit.ToolFinished("read_file", `{"path":"a.md"}`, "a output", "")
+	audit.ToolFinished("read_file", `{"path":"b.md"}`, "b output", "")
+
+	snapshot := audit.Snapshot()
+	if len(snapshot.ToolCalls) != 2 {
+		t.Fatalf("tool calls = %#v, want two paired calls", snapshot.ToolCalls)
+	}
+	got := map[string]string{}
+	for _, call := range snapshot.ToolCalls {
+		got[call.InputPreview] = call.OutputPreview
+	}
+	if got[`{"path":"a.md"}`] != "a output" || got[`{"path":"b.md"}`] != "b output" {
+		t.Fatalf("tool outputs by input = %#v, want stable same-name pairing", got)
+	}
+}
+
+func TestTurnAuditRecorderConcurrentToolAuditIsStable(t *testing.T) {
+	t.Parallel()
+
+	audit := newTurnAuditRecorder(session.SessionKey{ChatID: 9102, UserID: 1001}, "telegram", "admin", "parallel read")
+	const calls = 32
+	var wg sync.WaitGroup
+	wg.Add(calls)
+	for i := 0; i < calls; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			input := fmt.Sprintf(`{"path":"file-%02d.md"}`, i)
+			output := fmt.Sprintf("output-%02d", i)
+			audit.ToolStarted("read_file", input)
+			audit.ToolFinished("read_file", input, output, "")
+		}()
+	}
+	wg.Wait()
+
+	snapshot := audit.Snapshot()
+	if len(snapshot.ToolCalls) != calls {
+		t.Fatalf("tool calls = %d, want %d: %#v", len(snapshot.ToolCalls), calls, snapshot.ToolCalls)
+	}
+	got := map[string]string{}
+	for _, call := range snapshot.ToolCalls {
+		if call.OutputPreview == "" {
+			t.Fatalf("unpaired tool call in snapshot: %#v", call)
+		}
+		got[call.InputPreview] = call.OutputPreview
+	}
+	for i := 0; i < calls; i++ {
+		input := fmt.Sprintf(`{"path":"file-%02d.md"}`, i)
+		want := fmt.Sprintf("output-%02d", i)
+		if got[input] != want {
+			t.Fatalf("output for %s = %q, want %q", input, got[input], want)
+		}
+	}
+}
 
 func TestHandleInboundRepairsVisibleGovernorLeakageBeforeDelivery(t *testing.T) {
 	t.Parallel()

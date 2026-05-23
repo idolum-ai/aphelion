@@ -54,6 +54,61 @@ func TestHandleBusyTelegramMessageQueuesMessageOnTimeout(t *testing.T) {
 	}
 }
 
+func TestHandleBusyTelegramMessageQueueAckPreservesThreadDisplaySlot(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	now := time.Now().UTC()
+	first, _, err := store.CreateTelegramThreadForUpdate(7, 42, 1001, 2001, "old thread", now)
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate(first) err = %v", err)
+	}
+	if _, closed, err := store.CloseTelegramThread(7, first.ThreadID, "closed", now); err != nil || !closed {
+		t.Fatalf("CloseTelegramThread() closed=%t err=%v", closed, err)
+	}
+	thread, _, err := store.CreateTelegramThreadForUpdate(7, 42, 1002, 2002, "visible slot reused", now)
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate(second) err = %v", err)
+	}
+	if thread.ThreadID == thread.DisplaySlot || thread.DisplaySlot != 1 {
+		t.Fatalf("thread = %#v, want canonical id distinct from visible slot 1", thread)
+	}
+
+	sender := &decisionTestSender{}
+	var broker *decision.Broker
+	broker = decision.NewBroker(func(_ context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
+		go broker.Resolve(pending.ID, "queue")
+		return decision.Delivery{MessageID: 41}, nil
+	})
+	router := &decisionAcceptedTestRouter{decisionTestRouter: &decisionTestRouter{status: core.SessionStatus{Active: true}}}
+	handler := newTelegramDecisionHandler(sender, router, broker, store)
+	handler.interruptTimeout = time.Minute
+
+	msg := core.InboundMessage{ChatID: 7, SenderID: 42, MessageID: 99, TelegramThreadID: thread.ThreadID, Text: "next task"}
+	handled, err := handler.HandleBusyMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatalf("HandleBusyMessage() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	edit := waitForDecisionEdit(t, sender, 1)
+	if !strings.HasPrefix(edit.text, "(thread 1)\n\n") {
+		t.Fatalf("edit text = %q, want visible thread display-slot prefix", edit.text)
+	}
+	if strings.Contains(edit.text, "(thread 2)") {
+		t.Fatalf("edit text = %q, leaked canonical thread id instead of visible slot", edit.text)
+	}
+	if !strings.Contains(edit.text, "Got it — I'll process your message next. ⏳") {
+		t.Fatalf("edit text = %q, want queue acknowledgement", edit.text)
+	}
+}
+
 func TestHandleBusyTelegramMessageStopWordOnlyCancelsWithoutRouting(t *testing.T) {
 	t.Parallel()
 

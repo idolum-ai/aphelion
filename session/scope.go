@@ -80,3 +80,20 @@ func TelegramThreadScopeRef(chatID int64, threadID int64) ScopeRef {
 	}
 	return ScopeRef{Kind: ScopeKindTelegramThread, ID: id}
 }
+
+func TelegramThreadIDFromScope(chatID int64, scope ScopeRef) (int64, bool) {
+	scope = NormalizeScopeRef(scope)
+	if scope.Kind != ScopeKindTelegramThread || chatID == 0 {
+		return 0, false
+	}
+	prefix := strconv.FormatInt(chatID, 10) + ":"
+	raw := strings.TrimSpace(scope.ID)
+	if !strings.HasPrefix(raw, prefix) {
+		return 0, false
+	}
+	threadID, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(raw, prefix)), 10, 64)
+	if err != nil || threadID <= 0 {
+		return 0, false
+	}
+	return threadID, true
+}

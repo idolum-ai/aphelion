@@ -123,9 +123,59 @@ func assertDoesNotImportAny(t *testing.T, pkg architecturePackage, localTargets 
 
 func importsPackage(pkg architecturePackage, target string) bool {
 	for _, imported := range pkg.Imports {
-		if imported == target {
+		if imported == target || strings.HasPrefix(imported, target+"/") {
 			return true
 		}
 	}
 	return false
+}
+
+func TestImportsPackageMatchesExactAndSubpackages(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		imports []string
+		target  string
+		want    bool
+	}{
+		{
+			name:    "exact",
+			imports: []string{aphelionModulePath + "/runtime"},
+			target:  aphelionModulePath + "/runtime",
+			want:    true,
+		},
+		{
+			name:    "subpackage",
+			imports: []string{aphelionModulePath + "/tool/sandbox"},
+			target:  aphelionModulePath + "/tool",
+			want:    true,
+		},
+		{
+			name:    "sibling prefix is not subpackage",
+			imports: []string{aphelionModulePath + "/runtimechild"},
+			target:  aphelionModulePath + "/runtime",
+			want:    false,
+		},
+		{
+			name:    "absent",
+			imports: []string{aphelionModulePath + "/session"},
+			target:  aphelionModulePath + "/telegram",
+			want:    false,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pkg := architecturePackage{
+				ImportPath: aphelionModulePath + "/turn",
+				Imports:    tc.imports,
+			}
+			if got := importsPackage(pkg, tc.target); got != tc.want {
+				t.Fatalf("importsPackage(%q) = %t, want %t", tc.target, got, tc.want)
+			}
+		})
+	}
 }

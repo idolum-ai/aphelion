@@ -5,6 +5,9 @@ package main
 import (
 	"embed"
 	"os"
+
+	"github.com/idolum-ai/aphelion/internal/maintenancecli"
+	aphruntime "github.com/idolum-ai/aphelion/runtime"
 )
 
 //go:embed defaults/agent/* defaults/agent/memory/*
@@ -33,6 +36,12 @@ var defaultSharedMemorySeedFiles = []string{
 	"memory/rhizome.md",
 }
 
+func runAuthorityCommand(args []string) error {
+	return maintenancecli.RunAuthorityCommand(args, maintenancecli.AuthorityDeps{
+		SnapshotFromStore: aphruntime.AuthorityStatusSnapshotFromStore,
+	})
+}
+
 func runMaintenanceCommand(args []string) (bool, error) {
 	if len(args) == 0 {
 		return false, nil
@@ -58,31 +67,31 @@ func runMaintenanceCommand(args []string) (bool, error) {
 	case "repair-review-redactions":
 		return true, runRepairReviewRedactionsCommand(args[1:])
 	case "gc":
-		return true, runGCCommand(args[1:])
+		return true, maintenancecli.RunGCCommand(args[1:])
 	case "forget":
-		return true, runForgetCommand(args[1:])
+		return true, maintenancecli.RunForgetCommand(args[1:])
 	case "reset":
-		return true, runResetCommand(args[1:])
+		return true, maintenancecli.RunResetCommand(args[1:])
 	case "import-audit":
-		return true, runImportAuditCommand(args[1:])
+		return true, maintenancecli.RunImportAuditCommand(args[1:])
 	case "import-semantic":
-		return true, runImportSemanticCommand(args[1:])
+		return true, maintenancecli.RunImportSemanticCommand(args[1:])
 	case "import-codex-sessions":
-		return true, runImportCodexSessionsCommand(args[1:])
+		return true, maintenancecli.RunImportCodexSessionsCommand(args[1:])
 	case "verify-deploy":
 		return true, runVerifyDeployCommand(args[1:])
 	case "durable-agent":
 		return true, runDurableAgentCommand(args[1:])
 	case "tailnet":
-		return true, runTailnetCommand(args[1:])
+		return true, maintenancecli.RunTailnetCommand(args[1:])
 	case "sandbox-net":
-		return true, runSandboxNetCommand(args[1:])
+		return true, maintenancecli.RunSandboxNetCommand(args[1:])
 	case "schema":
-		return true, runSchemaMaintenanceCommand(args[1:])
+		return true, maintenancecli.RunSchemaMaintenanceCommand(args[1:])
 	case "telegram-child-bot":
 		return true, runTelegramChildBotCommand(args[1:])
 	case "telegram-threads":
-		return true, runTelegramThreadsMaintenanceCommand(args[1:])
+		return true, maintenancecli.RunTelegramThreadsMaintenanceCommand(args[1:])
 	case "agency-eval":
 		return true, runAgencyEvalCommand(args[1:])
 	case "version":

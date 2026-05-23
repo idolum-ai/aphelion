@@ -4,6 +4,7 @@ package turn
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/idolum-ai/aphelion/agent"
@@ -44,6 +45,9 @@ func (m *Machine) Handle(ctx context.Context, req Request) (*Result, error) {
 
 	gov, err := m.executeGovernor(ctx, prepared, policy, proposal)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateGovernorResult(gov); err != nil {
 		return nil, err
 	}
 	result.Turn = gov.Turn
@@ -111,4 +115,14 @@ func (m *Machine) Handle(ctx context.Context, req Request) (*Result, error) {
 	}
 
 	return result, nil
+}
+
+func validateGovernorResult(gov *GovernorResult) error {
+	if gov == nil {
+		return fmt.Errorf("turn: governor result is required")
+	}
+	if gov.Turn == nil {
+		return fmt.Errorf("turn: governor result turn is required")
+	}
+	return nil
 }

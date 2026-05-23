@@ -23,6 +23,15 @@ func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessa
 	return r.executeWithRoot(ctx, name, input, r.workspace)
 }
 
+func (r *Registry) SupportsParallelToolCall(name string, _ json.RawMessage) bool {
+	switch strings.TrimSpace(name) {
+	case "read_file", "list_dir", "search":
+		return true
+	default:
+		return false
+	}
+}
+
 func (r *Registry) ExecuteForPrincipal(ctx context.Context, p principal.Principal, name string, input json.RawMessage) (string, error) {
 	return r.ExecuteForSessionPrincipal(ctx, p, session.SessionKey{}, name, input)
 }
@@ -83,6 +92,8 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.sessionSearch(ctx, input, p, key)
 	case "update_operation":
 		return r.updateOperation(ctx, input, key)
+	case "request_approval":
+		return r.requestApproval(ctx, input, key)
 	case "operation_artifact":
 		return r.operationArtifact(ctx, input, scope, key)
 	case "update_plan":

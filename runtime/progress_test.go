@@ -582,11 +582,8 @@ func TestToolProgressReporterSemanticProjectionAggregatesAndRedactsToolEvents(t 
 	}
 
 	got := reporter.renderLocked(false)
-	if strings.Count(got, "Searching files") != 1 || !strings.Contains(got, "Searching files (2x)") {
-		t.Fatalf("rendered progress = %q, want aggregated Searching files projection", got)
-	}
-	if !strings.Contains(got, "Reading file evidence") {
-		t.Fatalf("rendered progress = %q, want read-file evidence category", got)
+	if strings.Count(got, "Exploring files") != 1 || !strings.Contains(got, "Exploring files (3x)") {
+		t.Fatalf("rendered progress = %q, want compact file-exploration projection", got)
 	}
 	for _, leaked := range []string{"sk-secret", "bearer-secret", "/tmp/private-token-path"} {
 		if strings.Contains(got, leaked) {
@@ -615,7 +612,7 @@ func TestToolProgressReporterDetailsProjectionUsesSafeRawFromTES(t *testing.T) {
 	reporter := &toolProgressReporter{runtime: rt, executionKey: key, chatID: 9930, mode: "all", style: "semantic", window: 4, runID: 31, seenKeys: make(map[string]struct{})}
 
 	summary := reporter.renderLockedWithDetails(false, false)
-	if !strings.Contains(summary, "Searching files") || strings.Contains(summary, "rg progress") || strings.Contains(summary, "private-token-path") {
+	if !strings.Contains(summary, "Exploring files") || strings.Contains(summary, "rg progress") || strings.Contains(summary, "private-token-path") {
 		t.Fatalf("summary = %q, want semantic redacted summary", summary)
 	}
 	details := reporter.renderLockedWithDetails(false, true)

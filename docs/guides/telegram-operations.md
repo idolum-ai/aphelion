@@ -106,12 +106,11 @@ thread before the turn is accepted.
 
 Bare slash commands still operate on the main chat-level view, except for the
 global operator surfaces which are always global. Work-lane commands can be
-explicitly pointed at a side thread: use `(thread N) /status`, `(thread N)
-/memory`, `(thread N) /stop`, `(thread N) /new`, or `(thread N) /detach`, or
-send those commands as replies to side-thread messages. `/auto`, `/health`,
+explicitly pointed at a side thread. Examples: `(thread N) /status`, `(thread N) /memory`, `(thread N) /stop`, `(thread N) /new`, or `(thread N) /detach`.
+You can also send those commands as replies to side-thread messages. `/health`,
 `/tailnet`, `/model`, `/agents`, `/thread`, `/threads`, `/absorb`, `/restart`,
-`/reinstall`, mission controls, and durable-agent setup remain global/operator
-surfaces.
+`/reinstall`, mission controls, durable-agent setup, and approval-window
+callbacks remain global/operator surfaces.
 
 Each side thread has its own durable session scope, router queue, plan state,
 progress state, continuation approvals, busy/interrupt decisions, artifact
@@ -150,24 +149,35 @@ after the stop.
 If the service itself needs attention, use `/health` first so the next action is
 grounded in current state.
 
+## Request Button-Backed Approval
+
+The native `request_approval` tool is for cases where the model already has a
+bounded phase contract and needs to show the real Telegram approval card. It
+persists a pending operation phase, validates the authority contract before
+offering buttons, and then relies on the continuation materialization path to
+show `Start`, `Details`, `Change`, `Pause`, and `Stop`.
+
+Use `request_approval` instead of `update_operation` when the immediate goal is
+operator approval. Use `update_operation` for ordinary operation bookkeeping,
+findings, artifacts, or durable phase-plan state that should not by itself force
+a visible approval prompt.
+
+`request_approval` does not execute the requested work and does not create
+authority. Execution is still gated on the operator pressing the approval button.
+
 ## Grant Bounded Automation
 
-```text
-/auto
-```
+After an approval succeeds, the approved message shows `Approve 15m` and
+`Close`. `Approve 15m` opens a bounded approval window for matching
+requests in the current chat or side thread. It creates the temporary automation
+gate and the spendable approval grant together, so the operator does not have to
+manage them as separate controls.
 
-Use `/auto` for automation mode, approval, and limit controls. The panels are
-button-driven, so command parameters are optional. Keep automation bounded by
-duration, scope, use count, and reason.
-
-`/auto mode` opens or closes the current bounded automation gate. `/auto
-approvals` grants bounded approval-prompt budget. `/auto limits` shows the
-configured default, ceiling, live override setting, and maximum live mode
-duration. Automatic approval requires both an open mode gate and a matching
-approval grant. By default `/auto` applies to the main/default Telegram chat
-scope. To target a side thread explicitly, use `/auto thread <id> mode ...` and
-`/auto thread <id> approvals ...`; the target thread must exist and still be
-open, and its grant/mode is consumed only by that thread.
+An active window shows `Double time` and `Cancel approvals`. Each `Double time`
+press doubles the current window duration within the configured live-override
+ceiling. `Cancel approvals` revokes both the approval grant and the matching
+automation gate for that scope. Side-thread approval windows are consumed only by
+that side thread; they do not approve default-chat work or another thread's work.
 
 ## Manage Work Surfaces
 
@@ -210,9 +220,9 @@ machine-readable mirrors.
 When a panel and a trace disagree, prefer the canonical records named by the
 trace and then check `/health diagnose`.
 
-## Scoped Telegram Thread and Auto-Control Smoke Checklist
+## Scoped Telegram Thread and Approval-Window Smoke Checklist
 
-Before deploying changes that affect scoped Telegram threads, auto controls, recovery, or schema invariants:
+Before deploying changes that affect scoped Telegram threads, approval windows, recovery, or schema invariants:
 
 - Run `go test ./...`.
 - Run `aphelion --check-config --config ~/.aphelion/aphelion.toml` and remove unsupported watchdog restart keys if present (`recovery.watchdog.restart_cooldown`, `recovery.watchdog.max_restart_attempts`).
@@ -223,7 +233,7 @@ Before deploying changes that affect scoped Telegram threads, auto controls, rec
 - Run `/threads` and verify only visible open thread numbers are shown in normal UI.
 - Create a side thread, reply to it, then verify replies still route to that visible thread number after restart.
 - Run `/absorb <visible-thread-number>` and verify that the visible label becomes available for the next open thread.
-- Run `/auto` in the default chat and verify no thread prefix is shown.
-- Run `/auto thread <visible-thread-number>` and verify the panel starts with `(thread N)`.
-- Verify a thread-scoped auto approval cannot approve default-chat work or another thread's work.
+- Approve a request and verify the approved message offers `Approve 15m`.
+- Open an approval window from a side-thread approval prompt and verify the edit starts with `(thread N)`.
+- Verify a thread-scoped approval window cannot approve default-chat work or another thread's work.
 - Observe durable-wake/provider warnings: repeated transient failures should stay compact and actionable, while permanent child blockers may interrupt chat.

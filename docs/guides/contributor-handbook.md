@@ -47,6 +47,8 @@ sequencing.
 
 ## Local Loop
 
+On Linux, run the full loop:
+
 ```bash
 go test ./...
 make architecture
@@ -54,6 +56,15 @@ make design-principles
 make public-readiness
 make build
 git diff --check
+```
+
+Aphelion is Linux-only. On macOS or another non-Linux host, `make test` and
+`make architecture` intentionally stop with a clear Linux-only message instead
+of surfacing partial build-tag failures. Use the compile-only check locally, then
+run the full loop on Linux before merge:
+
+```bash
+make verify-linux-compile
 ```
 
 Use `make architecture` when changing package boundaries or architecture docs.

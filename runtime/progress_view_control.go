@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -54,7 +53,7 @@ func (r *Runtime) ToggleProgressView(ctx context.Context, chatID int64, senderID
 		controls:       deliberationControlRows(runID, details),
 		seenKeys:       make(map[string]struct{}),
 		validateText:   r.filterProgressText,
-		displayPrefix:  progressTurnRunDisplayPrefix(run),
+		displayPrefix:  r.telegramPresentationForTurnRun(run).Prefix,
 	}
 	if reporter.window <= 0 {
 		reporter.window = 4
@@ -87,22 +86,6 @@ func (r *Runtime) ToggleProgressView(ctx context.Context, chatID int64, senderID
 		"transport_status": "acknowledged",
 	}, time.Now().UTC())
 	return true, text, nil
-}
-
-func progressTurnRunDisplayPrefix(run session.TurnRun) string {
-	scope := session.NormalizeScopeRef(run.Scope)
-	if scope.Kind != session.ScopeKindTelegramThread {
-		return ""
-	}
-	parts := strings.Split(scope.ID, ":")
-	if len(parts) != 2 {
-		return ""
-	}
-	threadID, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
-	if err != nil || threadID <= 0 {
-		return ""
-	}
-	return telegramThreadDisplayPrefix(threadID)
 }
 
 func (r *Runtime) activeProgressTurnRun(chatID int64, runID int64) (session.TurnRun, bool, error) {

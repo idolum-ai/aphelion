@@ -135,6 +135,14 @@ func (s *SQLiteStore) TelegramThreadByCreatedUpdate(chatID int64, updateID int64
 	return telegramThreadByCreatedUpdateDB(s.db, chatID, updateID)
 }
 
+func (s *SQLiteStore) TelegramThreadIsOpen(chatID int64, threadID int64) (bool, bool, error) {
+	thread, ok, err := s.TelegramThread(chatID, threadID)
+	if err != nil || !ok {
+		return false, ok, err
+	}
+	return thread.Open(), true, nil
+}
+
 func (s *SQLiteStore) ListTelegramThreads(chatID int64, limit int) ([]TelegramThread, error) {
 	return s.ListTelegramThreadsByView(chatID, "all", limit)
 }
@@ -196,13 +204,19 @@ func (s *SQLiteStore) CloseTelegramThread(chatID int64, threadID int64, summary 
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return TelegramThread{}, false, fmt.Errorf("begin telegram thread close: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	atRaw := at.UTC().Format(time.RFC3339Nano)
-	res, err := s.db.Exec(`
+	res, err := tx.Exec(`
 		UPDATE telegram_threads
 		SET status = ?, closed_at = COALESCE(closed_at, ?), absorbed_at = COALESCE(absorbed_at, ?),
 			absorb_summary = ?, archived_display_name = COALESCE(NULLIF(archived_display_name, ''), ?), display_slot = 0, updated_at = ?
 		WHERE chat_id = ? AND thread_id = ? AND status = ?
-	`, string(TelegramThreadStatusClosed), atRaw, atRaw, clampStoreText(summary, 4000), s.telegramThreadArchivedDisplayName(chatID, threadID, at), atRaw, chatID, threadID, string(TelegramThreadStatusOpen))
+	`, string(TelegramThreadStatusClosed), atRaw, atRaw, clampStoreText(summary, 4000), telegramThreadArchivedDisplayNameTx(tx, chatID, threadID, at), atRaw, chatID, threadID, string(TelegramThreadStatusOpen))
 	if err != nil {
 		return TelegramThread{}, false, fmt.Errorf("close telegram thread: %w", err)
 	}
@@ -210,9 +224,17 @@ func (s *SQLiteStore) CloseTelegramThread(chatID int64, threadID int64, summary 
 	if err != nil {
 		return TelegramThread{}, false, fmt.Errorf("close telegram thread rows affected: %w", err)
 	}
-	thread, ok, err := s.TelegramThread(chatID, threadID)
+	if affected > 0 {
+		if _, err := dropPendingTelegramIngressForTelegramThreadTx(tx, chatID, threadID, TelegramIngressDropReasonTelegramThreadClosed, at); err != nil {
+			return TelegramThread{}, false, err
+		}
+	}
+	thread, ok, err := telegramThreadTx(tx, chatID, threadID)
 	if err != nil {
 		return TelegramThread{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return TelegramThread{}, false, fmt.Errorf("commit telegram thread close: %w", err)
 	}
 	return thread, ok && affected > 0, nil
 }
@@ -258,6 +280,9 @@ func (s *SQLiteStore) RecordTelegramThreadAbsorb(chatID int64, threadID int64, s
 			return TelegramThread{}, false, fmt.Errorf("commit telegram thread absorb no-op: %w", err)
 		}
 		return thread, ok && affected > 0, nil
+	}
+	if _, err := dropPendingTelegramIngressForTelegramThreadTx(tx, chatID, threadID, TelegramIngressDropReasonTelegramThreadClosed, at); err != nil {
+		return TelegramThread{}, false, err
 	}
 	if err := saveSessionInTx(tx, defaultSession, newMessages, at); err != nil {
 		return TelegramThread{}, false, fmt.Errorf("record telegram thread absorb note: %w", err)
@@ -522,6 +547,10 @@ func firstNonZeroTime(values ...time.Time) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+func TelegramThreadIDFromSessionID(chatID int64, sessionID string) (int64, bool) {
+	return telegramThreadIDFromSessionID(chatID, sessionID)
 }
 
 func telegramThreadIDFromSessionID(chatID int64, sessionID string) (int64, bool) {

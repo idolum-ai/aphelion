@@ -394,7 +394,8 @@ func SanitizeActionProposalAuthority(proposal ActionProposal) ActionProposal {
 }
 
 func ContinuationStateAuthorityNeedsSanitization(state ContinuationState) bool {
-	return actionAuthorityHasContradiction(state.ActionProposal.AllowedActions, state.ActionProposal.ForbiddenActions) ||
+	return CompileContinuationAuthorityContract(state).Invalid() ||
+		actionAuthorityHasContradiction(state.ActionProposal.AllowedActions, state.ActionProposal.ForbiddenActions) ||
 		actionAuthorityHasContradiction(state.ContinuationLease.AllowedActions, state.ContinuationLease.ForbiddenActions) ||
 		continuationLeaseClassContradictedByActions(state.ContinuationLease.LeaseClass, sanitizeAllowedActionsAgainstForbidden(state.ContinuationLease.AllowedActions, state.ContinuationLease.ForbiddenActions), state.ContinuationLease.ForbiddenActions)
 }

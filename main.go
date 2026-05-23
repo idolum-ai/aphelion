@@ -18,6 +18,7 @@ import (
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/decision"
+	"github.com/idolum-ai/aphelion/internal/telegramcontrol"
 	"github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/openai"
 	"github.com/idolum-ai/aphelion/principal"
@@ -60,11 +61,18 @@ func main() {
 }
 
 func run() error {
-	if topLevelHelpRequested(os.Args[1:]) {
+	args := os.Args[1:]
+	if topLevelHelpRequested(args) {
 		printTopLevelHelp(os.Stdout, "")
 		return nil
 	}
-	handled, err := runMaintenanceCommand(os.Args[1:])
+	if topLevelVersionRequested(args) {
+		return runVersionCommand(topLevelVersionArgs(args))
+	}
+	if flagName, ok := unknownTopLevelFlag(args); ok {
+		return &cliUsageError{Text: renderUnknownFlagHelp(flagName)}
+	}
+	handled, err := runMaintenanceCommand(args)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -78,7 +86,7 @@ func run() error {
 	flags := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	configPathFlag := flags.String("config", "", "path to config.toml")
 	checkConfig := flags.Bool("check-config", false, "validate config and exit")
-	if err := flags.Parse(os.Args[1:]); err != nil {
+	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -229,7 +237,7 @@ func run() error {
 
 	router := core.NewRouter(rt.AgentFunc())
 	router.SetEventHandler(rt.RouterEventHandler())
-	ingress := newIngressSequencer(router, turnTimeout)
+	ingress := telegramcontrol.NewIngressSequencer(router, turnTimeout)
 	decisionBroker := newTelegramDecisionBrokerWithSummary(
 		tgOutbound,
 		func(ctx context.Context, pending decision.PendingDecision) string {
@@ -237,6 +245,11 @@ func run() error {
 				return ""
 			}
 			return rt.StatusReadableSummary(ctx, "approval", renderPendingDecisionExpanded(pending))
+		},
+		telegramDecisionBrokerUIOptions{
+			ApprovalWindows: rt,
+			ThreadResolver:  store,
+			ThreadRecorder:  store,
 		},
 		decision.WithDurableStore(newTelegramDecisionDurableStore(store)),
 		decision.WithObserver(rt.DecisionEventObserver()),
@@ -269,9 +282,15 @@ func run() error {
 	}
 	cancelDecisionLoad()
 	decisionHandler := newTelegramDecisionHandler(tgOutbound, commandControl, decisionBroker, store, rt)
-	tools.WithExecApprover(newTelegramExecApprover(tgOutbound, decisionBroker))
-	tools.WithDurableMemoryDelegationApprover(newTelegramDurableMemoryDelegationApprover(tgOutbound, decisionBroker))
-	tools.WithDurableSnapshotRestoreApprover(newTelegramDurableSnapshotRestoreApprover(tgOutbound, decisionBroker))
+	execApprover := newTelegramExecApprover(tgOutbound, decisionBroker, rt)
+	execApprover.SetPresentation(store)
+	tools.WithExecApprover(execApprover)
+	memoryApprover := newTelegramDurableMemoryDelegationApprover(tgOutbound, decisionBroker)
+	memoryApprover.SetPresentation(store)
+	tools.WithDurableMemoryDelegationApprover(memoryApprover)
+	snapshotApprover := newTelegramDurableSnapshotRestoreApprover(tgOutbound, decisionBroker)
+	snapshotApprover.SetPresentation(store)
+	tools.WithDurableSnapshotRestoreApprover(snapshotApprover)
 
 	registerCtx, cancelRegister := context.WithTimeout(context.Background(), 15*time.Second)
 	if err := registerTelegramCommands(registerCtx, tgClient); err != nil {

@@ -13,6 +13,10 @@ import (
 	"github.com/idolum-ai/aphelion/turn"
 )
 
+func (r *Runtime) MaterializeRequestedApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string) (bool, error) {
+	return r.materializePendingOperationProposalApproval(ctx, key, msg, promptInput, nil)
+}
+
 func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, _ *turn.Result) (bool, error) {
 	if r == nil || r.store == nil || r.outbound == nil || msg.ChatID == 0 {
 		return false, nil
@@ -61,6 +65,11 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		}
 
 		state := continuationStateFromOperationPlanLease(opState, opState.PlanLease, promptInput, now)
+		if updatedOpState, blocked, err := r.blockInvalidMaterializedContinuationAuthority(ctx, key, msg, opState, state, "operation_plan_lease", now); err != nil || blocked {
+			return true, err
+		} else {
+			opState = updatedOpState
+		}
 		opState = operationStateWithMaterializedPlanLease(opState, state, now)
 		if err := r.store.UpdateOperationState(key, opState); err != nil {
 			return false, fmt.Errorf("persist operation plan lease state: %w", err)
@@ -77,35 +86,42 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		}
 		return true, nil
 	}
-	if lease, ok := operationPlanLeaseFromPhasePlan(opState, time.Now().UTC()); ok {
-		now := time.Now().UTC()
-		opState.PlanLease = lease
-		priorState, priorExists, err := r.store.ContinuationStateIfExists(key)
-		if err != nil {
-			return false, fmt.Errorf("read synthesized plan-lease continuation state: %w", err)
-		}
-		priorState = session.NormalizeContinuationState(priorState)
-		if priorExists && continuationStateHasFreshPendingLease(priorState, now) && operationPlanLeaseMatchesContinuation(opState.PlanLease, priorState) {
+	if opState.Stage != "approval_request" {
+		if lease, ok := operationPlanLeaseFromPhasePlan(opState, time.Now().UTC()); ok {
+			now := time.Now().UTC()
+			opState.PlanLease = lease
+			priorState, priorExists, err := r.store.ContinuationStateIfExists(key)
+			if err != nil {
+				return false, fmt.Errorf("read synthesized plan-lease continuation state: %w", err)
+			}
+			priorState = session.NormalizeContinuationState(priorState)
+			if priorExists && continuationStateHasFreshPendingLease(priorState, now) && operationPlanLeaseMatchesContinuation(opState.PlanLease, priorState) {
+				return true, nil
+			}
+
+			state := continuationStateFromOperationPlanLease(opState, opState.PlanLease, promptInput, now)
+			if updatedOpState, blocked, err := r.blockInvalidMaterializedContinuationAuthority(ctx, key, msg, opState, state, "operation_plan_lease", now); err != nil || blocked {
+				return true, err
+			} else {
+				opState = updatedOpState
+			}
+			opState = operationStateWithMaterializedPlanLease(opState, state, now)
+			if err := r.store.UpdateOperationState(key, opState); err != nil {
+				return false, fmt.Errorf("persist synthesized operation plan lease state: %w", err)
+			}
+			if err := r.store.UpdateContinuationState(key, state); err != nil {
+				return false, fmt.Errorf("persist synthesized operation plan lease continuation state: %w", err)
+			}
+			payload := continuationExecutionPayload(state)
+			payload["materialized_from"] = "operation_plan_lease"
+			payload["plan_lease_id"] = strings.TrimSpace(opState.PlanLease.ID)
+			payload["synthesized_from_phase_plan"] = true
+			r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
+			if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_plan_lease"); err != nil {
+				return false, fmt.Errorf("send synthesized operation plan lease continuation approval: %w", err)
+			}
 			return true, nil
 		}
-
-		state := continuationStateFromOperationPlanLease(opState, opState.PlanLease, promptInput, now)
-		opState = operationStateWithMaterializedPlanLease(opState, state, now)
-		if err := r.store.UpdateOperationState(key, opState); err != nil {
-			return false, fmt.Errorf("persist synthesized operation plan lease state: %w", err)
-		}
-		if err := r.store.UpdateContinuationState(key, state); err != nil {
-			return false, fmt.Errorf("persist synthesized operation plan lease continuation state: %w", err)
-		}
-		payload := continuationExecutionPayload(state)
-		payload["materialized_from"] = "operation_plan_lease"
-		payload["plan_lease_id"] = strings.TrimSpace(opState.PlanLease.ID)
-		payload["synthesized_from_phase_plan"] = true
-		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
-		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_plan_lease"); err != nil {
-			return false, fmt.Errorf("send synthesized operation plan lease continuation approval: %w", err)
-		}
-		return true, nil
 	}
 	if bundle, ok := nextOperationPhaseBundleForApproval(opState); ok {
 		now := time.Now().UTC()
@@ -119,6 +135,11 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		}
 
 		state := continuationStateFromOperationPhaseBundle(opState, bundle, promptInput, now)
+		if updatedOpState, blocked, err := r.blockInvalidMaterializedContinuationAuthority(ctx, key, msg, opState, state, "operation_phase_bundle", now); err != nil || blocked {
+			return true, err
+		} else {
+			opState = updatedOpState
+		}
 		opState = operationStateWithMaterializedPhaseBundleLease(opState, bundle, state, now)
 		if err := r.store.UpdateOperationState(key, opState); err != nil {
 			return false, fmt.Errorf("persist operation phase bundle lease state: %w", err)
@@ -156,6 +177,11 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		}
 
 		state := continuationStateFromOperationPhase(opState, phase, promptInput, now)
+		if updatedOpState, blocked, err := r.blockInvalidMaterializedContinuationAuthority(ctx, key, msg, opState, state, "operation_phase_plan", now); err != nil || blocked {
+			return true, err
+		} else {
+			opState = updatedOpState
+		}
 		opState = operationStateWithMaterializedPhaseLease(opState, phase.ID, state, now)
 		if err := r.store.UpdateOperationState(key, opState); err != nil {
 			return false, fmt.Errorf("persist operation phase lease state: %w", err)
@@ -194,6 +220,11 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 
 	now = time.Now().UTC()
 	state := continuationStateFromOperationProposal(opState, promptInput, now)
+	if updatedOpState, blocked, err := r.blockInvalidMaterializedContinuationAuthority(ctx, key, msg, opState, state, "operation_proposal", now); err != nil || blocked {
+		return true, err
+	} else {
+		opState = updatedOpState
+	}
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return false, fmt.Errorf("persist operation proposal continuation state: %w", err)
 	}

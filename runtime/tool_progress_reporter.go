@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
@@ -33,7 +34,9 @@ func (m *turnMonitor) ToolStarted(ctx context.Context, name string, input json.R
 		}
 	}
 	if m.toolStarts != nil {
-		m.toolStarts[toolDurationKey(name, input)] = startedAt
+		m.toolStartsMu.Lock()
+		m.toolStarts[toolDurationKey(name, input)] = append(m.toolStarts[toolDurationKey(name, input)], startedAt)
+		m.toolStartsMu.Unlock()
 	}
 	m.runtime.recordExecutionEvent(m.key, core.ExecutionEventToolStarted, "tool", "started", map[string]any{
 		"run_id":  m.runID,
@@ -52,7 +55,7 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 		errorText = trimError(err.Error())
 	}
 	if m.audit != nil {
-		m.audit.ToolFinished(name, resultPreview, errorText)
+		m.audit.ToolFinished(name, toolInputPreview(input), resultPreview, errorText)
 	}
 	if m.runID != 0 {
 		if storeErr := m.runtime.store.NoteTurnRunToolFinish(m.runID, resultPreview, errorText); storeErr != nil {
@@ -72,10 +75,18 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 	toolDurationMS := int64(0)
 	if m.toolStarts != nil {
 		key := toolDurationKey(name, input)
-		if startedAt, ok := m.toolStarts[key]; ok {
+		m.toolStartsMu.Lock()
+		starts := m.toolStarts[key]
+		if len(starts) > 0 {
+			startedAt := starts[0]
 			toolDurationMS = elapsedMillisSince(startedAt)
-			delete(m.toolStarts, key)
+			if len(starts) == 1 {
+				delete(m.toolStarts, key)
+			} else {
+				m.toolStarts[key] = starts[1:]
+			}
 		}
+		m.toolStartsMu.Unlock()
 	}
 	m.runtime.recordExecutionEvent(m.key, eventType, "tool", status, map[string]any{
 		"run_id":           m.runID,
@@ -86,6 +97,96 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 	}, time.Now().UTC())
 	if m.progress != nil {
 		m.progress.ToolFinished(ctx, name, err)
+	}
+}
+
+func (m *turnMonitor) ModelRequestStarted(ctx context.Context, event agent.ModelRequestEvent) {
+	if m == nil || m.runtime == nil {
+		return
+	}
+	m.runtime.recordExecutionEvent(m.key, core.ExecutionEventModelRequestStarted, "model", "started", map[string]any{
+		"run_id":        m.runID,
+		"attempt":       event.Attempt,
+		"history_count": event.HistoryCount,
+		"tool_count":    event.ToolCount,
+	}, time.Now().UTC())
+}
+
+func (m *turnMonitor) ModelRequestFinished(ctx context.Context, event agent.ModelRequestEvent) {
+	if m == nil || m.runtime == nil {
+		return
+	}
+	eventType := core.ExecutionEventModelRequestSucceeded
+	status := "succeeded"
+	if strings.TrimSpace(event.Error) != "" {
+		eventType = core.ExecutionEventModelRequestFailed
+		status = "failed"
+	}
+	payload := map[string]any{
+		"run_id":            m.runID,
+		"attempt":           event.Attempt,
+		"history_count":     event.HistoryCount,
+		"tool_count":        event.ToolCount,
+		"tool_call_count":   event.ToolCallCount,
+		"output_chars":      event.OutputChars,
+		"model_duration_ms": durationMillis(event.Duration),
+	}
+	if strings.TrimSpace(event.Error) != "" {
+		payload["error"] = trimError(event.Error)
+		payload["retryable"] = event.Retryable
+	}
+	appendTokenUsagePayload(payload, event.TokenUsage)
+	m.runtime.recordExecutionEvent(m.key, eventType, "model", status, payload, time.Now().UTC())
+}
+
+func (m *turnMonitor) ToolBatchStarted(ctx context.Context, event agent.ToolBatchEvent) {
+	if m == nil || m.runtime == nil {
+		return
+	}
+	m.runtime.recordExecutionEvent(m.key, core.ExecutionEventToolBatchStarted, "tool_batch", "started", map[string]any{
+		"run_id":     m.runID,
+		"mode":       strings.TrimSpace(event.Mode),
+		"batch_size": event.BatchSize,
+		"tools":      append([]string(nil), event.ToolNames...),
+	}, time.Now().UTC())
+}
+
+func (m *turnMonitor) ToolBatchFinished(ctx context.Context, event agent.ToolBatchEvent) {
+	if m == nil || m.runtime == nil {
+		return
+	}
+	status := "succeeded"
+	if event.FailedCount > 0 {
+		status = "completed_with_errors"
+	}
+	m.runtime.recordExecutionEvent(m.key, core.ExecutionEventToolBatchCompleted, "tool_batch", status, map[string]any{
+		"run_id":            m.runID,
+		"mode":              strings.TrimSpace(event.Mode),
+		"batch_size":        event.BatchSize,
+		"tools":             append([]string(nil), event.ToolNames...),
+		"failed_count":      event.FailedCount,
+		"batch_duration_ms": durationMillis(event.Duration),
+	}, time.Now().UTC())
+}
+
+func appendTokenUsagePayload(payload map[string]any, usage core.TokenUsage) {
+	if payload == nil {
+		return
+	}
+	if usage.InputTokens != 0 {
+		payload["input_tokens"] = usage.InputTokens
+	}
+	if usage.OutputTokens != 0 {
+		payload["output_tokens"] = usage.OutputTokens
+	}
+	if usage.TotalTokens != 0 {
+		payload["total_tokens"] = usage.TotalTokens
+	}
+	if usage.CacheReadTokens != 0 {
+		payload["cache_read_tokens"] = usage.CacheReadTokens
+	}
+	if usage.CacheWriteTokens != 0 {
+		payload["cache_write_tokens"] = usage.CacheWriteTokens
 	}
 }
 
@@ -229,7 +330,7 @@ func (r *Runtime) newToolProgressReporter(key session.SessionKey, msg core.Inbou
 		seenKeys:         make(map[string]struct{}),
 		audit:            audit,
 		taskSummary:      summarizeProgressTask(msg.Text),
-		displayPrefix:    telegramThreadDisplayPrefix(msg.TelegramThreadID),
+		displayPrefix:    r.telegramPresentationForMessage(msg).Prefix,
 	}
 	if target.SuppressControls {
 		reporter.reportIssue = r.reportToolProgressIssue

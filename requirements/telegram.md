@@ -355,7 +355,6 @@ At minimum for current implementation:
 - `/memory`
 - `/mission`
 - `/model`
-- `/auto`
 - `/stop`
 - `/new`
 - `/detach`

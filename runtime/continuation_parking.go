@@ -286,10 +286,7 @@ func (r *Runtime) reofferRestartParkedContinuation(ctx context.Context, key sess
 	offerPayload["resume_mode"] = "reoffer_pending"
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", offerPayload, now)
 
-	msg := core.InboundMessage{ChatID: key.ChatID, Origin: core.InboundOriginTurnAuthorization, Text: "restart parked continuation resume"}
-	if threadID := telegramThreadIDFromScope(key.ChatID, key.Scope); threadID > 0 {
-		msg.TelegramThreadID = threadID
-	}
+	msg := continuationPromptInboundForKey(key, "restart parked continuation resume", core.InboundOriginTurnAuthorization, "")
 	text := r.renderContinuationPrompt(ctx, key, msg, state)
 	if reason := strings.TrimSpace(state.ParkedReason); reason != "" && !strings.Contains(text, reason) {
 		text = strings.TrimSpace(text) + "\n\nRestart note:\n" + reason

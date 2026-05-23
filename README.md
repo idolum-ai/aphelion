@@ -84,8 +84,10 @@ and refuses to replace an existing config unless `--force` is passed. With
 `--install-service`, it also runs the service install path and verifies the
 deploy.
 
-Normal turns stay at `ask_first` by default. Admins can open a bounded
-automation mode and grant bounded approval budget from Telegram through `/auto`.
+Normal turns stay at `ask_first` by default. After manually approving a request,
+admins can open a bounded 15-minute approval window from the approved Telegram
+message; the inline controls create the temporary automation gate and matching
+approval grant together.
 
 ## Operate
 
@@ -111,12 +113,19 @@ Isolated work defaults to no network. When a non-admin or durable profile needs
 narrow internet access, use the helper-backed path in
 [docs/guides/sandbox-networking.md](docs/guides/sandbox-networking.md).
 
-For source checkout work:
+For source checkout work on Linux:
 
 ```bash
 make build
 make test
 make architecture
+```
+
+Aphelion is Linux-only. On macOS or another non-Linux host, use the compile-only
+check instead of runtime tests:
+
+```bash
+make verify-linux-compile
 ```
 
 ## Architecture
@@ -148,7 +157,7 @@ Reference map:
 
 ## Verify
 
-Before changing behavior:
+Before changing behavior on Linux:
 
 ```bash
 go test ./...
@@ -158,6 +167,10 @@ make public-readiness
 make secrets   # when Gitleaks is installed
 git diff --check
 ```
+
+On non-Linux hosts, `make test` and `make architecture` intentionally stop with
+a Linux-only message. Use `make verify-linux-compile` for a static compile check,
+then run the full verification loop on Linux before merge.
 
 Run `make design-principles` when touching authority, consent, continuation,
 wake, goal, status, or operator-facing control surfaces.

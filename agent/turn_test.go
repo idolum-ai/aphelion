@@ -9,6 +9,7 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -34,11 +35,13 @@ type toolInvocation struct {
 }
 
 type mockTools struct {
-	mu         sync.Mutex
-	defs       []ToolDef
-	execCalls  []toolInvocation
-	exec       func(ctx context.Context, name string, input json.RawMessage) (string, error)
-	defsCalled int
+	mu              sync.Mutex
+	defs            []ToolDef
+	execCalls       []toolInvocation
+	exec            func(ctx context.Context, name string, input json.RawMessage) (string, error)
+	parallelSafe    map[string]bool
+	parallelSupport func(name string, input json.RawMessage) bool
+	defsCalled      int
 }
 
 func (m *mockTools) Execute(ctx context.Context, name string, input json.RawMessage) (string, error) {
@@ -54,6 +57,49 @@ func (m *mockTools) Definitions() []ToolDef {
 	defer m.mu.Unlock()
 	m.defsCalled++
 	return append([]ToolDef(nil), m.defs...)
+}
+
+func (m *mockTools) SupportsParallelToolCall(name string, input json.RawMessage) bool {
+	m.mu.Lock()
+	support := m.parallelSupport
+	safe := m.parallelSafe[strings.TrimSpace(name)]
+	m.mu.Unlock()
+	if support != nil {
+		return support(name, input)
+	}
+	return safe
+}
+
+type recordingTurnObserver struct {
+	mu            sync.Mutex
+	modelStarts   []ModelRequestEvent
+	modelFinishes []ModelRequestEvent
+	batchStarts   []ToolBatchEvent
+	batchFinishes []ToolBatchEvent
+}
+
+func (r *recordingTurnObserver) ModelRequestStarted(_ context.Context, event ModelRequestEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.modelStarts = append(r.modelStarts, event)
+}
+
+func (r *recordingTurnObserver) ModelRequestFinished(_ context.Context, event ModelRequestEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.modelFinishes = append(r.modelFinishes, event)
+}
+
+func (r *recordingTurnObserver) ToolBatchStarted(_ context.Context, event ToolBatchEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.batchStarts = append(r.batchStarts, event)
+}
+
+func (r *recordingTurnObserver) ToolBatchFinished(_ context.Context, event ToolBatchEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.batchFinishes = append(r.batchFinishes, event)
 }
 
 type retryableError struct {
@@ -248,6 +294,168 @@ func TestMultipleToolCalls(t *testing.T) {
 	}
 	if result.Text != "final" {
 		t.Fatalf("result.Text = %q, want %q", result.Text, "final")
+	}
+}
+
+func TestRunTurnExecutesSafeToolBatchInParallel(t *testing.T) {
+	var maxActive int32
+	var active int32
+	provider := &mockProvider{
+		complete: func(_ context.Context, call int, messages []Message, _ []ToolDef) (*Response, error) {
+			switch call {
+			case 1:
+				return &Response{
+					ToolCalls: []ToolCall{
+						{ID: "read-1", Name: "read_file", Input: json.RawMessage(`{"path":"README.md"}`)},
+						{ID: "search-1", Name: "search", Input: json.RawMessage(`{"query":"Aphelion"}`)},
+					},
+				}, nil
+			case 2:
+				if len(messages) < 3 {
+					t.Fatalf("messages len = %d, want assistant plus two tool outputs", len(messages))
+				}
+				first := messages[len(messages)-2]
+				second := messages[len(messages)-1]
+				if first.Role != "tool" || first.ToolCallID != "read-1" || first.ToolName != "read_file" || first.Content != "read_file output" {
+					t.Fatalf("first tool message = %#v, want read_file output in call order", first)
+				}
+				if second.Role != "tool" || second.ToolCallID != "search-1" || second.ToolName != "search" || second.Content != "search output" {
+					t.Fatalf("second tool message = %#v, want search output in call order", second)
+				}
+				return &Response{Content: "done"}, nil
+			default:
+				t.Fatalf("unexpected call %d", call)
+				return nil, nil
+			}
+		},
+	}
+	tools := &mockTools{
+		parallelSafe: map[string]bool{"read_file": true, "search": true},
+		exec: func(_ context.Context, name string, _ json.RawMessage) (string, error) {
+			nowActive := atomic.AddInt32(&active, 1)
+			for {
+				observed := atomic.LoadInt32(&maxActive)
+				if nowActive <= observed || atomic.CompareAndSwapInt32(&maxActive, observed, nowActive) {
+					break
+				}
+			}
+			time.Sleep(25 * time.Millisecond)
+			atomic.AddInt32(&active, -1)
+			return name + " output", nil
+		},
+	}
+
+	result, _, err := RunTurn(context.Background(), provider, tools, defaultBudget(), nil, nil)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "done" {
+		t.Fatalf("result.Text = %q, want done", result.Text)
+	}
+	if got := atomic.LoadInt32(&maxActive); got < 2 {
+		t.Fatalf("max active tools = %d, want parallel overlap", got)
+	}
+	if result.ToolLog[0] != "read_file:ok" || result.ToolLog[1] != "search:ok" {
+		t.Fatalf("tool log = %#v, want call-order results", result.ToolLog)
+	}
+}
+
+func TestRunTurnKeepsMixedSafetyToolBatchSerial(t *testing.T) {
+	var maxActive int32
+	var active int32
+	provider := &mockProvider{
+		complete: func(_ context.Context, call int, _ []Message, _ []ToolDef) (*Response, error) {
+			if call == 1 {
+				return &Response{
+					ToolCalls: []ToolCall{
+						{ID: "read-1", Name: "read_file", Input: json.RawMessage(`{"path":"README.md"}`)},
+						{ID: "write-1", Name: "write_file", Input: json.RawMessage(`{"path":"out.txt","content":"x"}`)},
+					},
+				}, nil
+			}
+			if call == 2 {
+				return &Response{Content: "done"}, nil
+			}
+			t.Fatalf("unexpected call %d", call)
+			return nil, nil
+		},
+	}
+	tools := &mockTools{
+		parallelSafe: map[string]bool{"read_file": true},
+		exec: func(_ context.Context, name string, _ json.RawMessage) (string, error) {
+			nowActive := atomic.AddInt32(&active, 1)
+			for {
+				observed := atomic.LoadInt32(&maxActive)
+				if nowActive <= observed || atomic.CompareAndSwapInt32(&maxActive, observed, nowActive) {
+					break
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+			atomic.AddInt32(&active, -1)
+			return name + " output", nil
+		},
+	}
+
+	result, _, err := RunTurn(context.Background(), provider, tools, defaultBudget(), nil, nil)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "done" {
+		t.Fatalf("result.Text = %q, want done", result.Text)
+	}
+	if got := atomic.LoadInt32(&maxActive); got != 1 {
+		t.Fatalf("max active tools = %d, want serial execution for mixed-safety batch", got)
+	}
+	if len(tools.execCalls) != 2 || tools.execCalls[0].name != "read_file" || tools.execCalls[1].name != "write_file" {
+		t.Fatalf("exec calls = %#v, want serial call order", tools.execCalls)
+	}
+}
+
+func TestRunTurnObserverRecordsModelRequestsAndToolBatches(t *testing.T) {
+	observer := &recordingTurnObserver{}
+	provider := &mockProvider{
+		complete: func(_ context.Context, call int, _ []Message, _ []ToolDef) (*Response, error) {
+			if call == 1 {
+				return &Response{
+					ToolCalls: []ToolCall{
+						{ID: "read-1", Name: "read_file", Input: json.RawMessage(`{"path":"README.md"}`)},
+						{ID: "list-1", Name: "list_dir", Input: json.RawMessage(`{"path":"."}`)},
+					},
+					Usage: core.TokenUsage{InputTokens: 3, OutputTokens: 2, TotalTokens: 5},
+				}, nil
+			}
+			if call == 2 {
+				return &Response{Content: "done", Usage: core.TokenUsage{InputTokens: 7, OutputTokens: 4, TotalTokens: 11}}, nil
+			}
+			t.Fatalf("unexpected call %d", call)
+			return nil, nil
+		},
+	}
+	tools := &mockTools{
+		parallelSafe: map[string]bool{"read_file": true, "list_dir": true},
+		exec: func(_ context.Context, name string, _ json.RawMessage) (string, error) {
+			return name + " output", nil
+		},
+	}
+
+	result, _, err := RunTurn(context.Background(), provider, tools, defaultBudget(), &CompleteOptions{Observer: observer}, nil)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "done" {
+		t.Fatalf("result.Text = %q, want done", result.Text)
+	}
+	if len(observer.modelStarts) != 2 || len(observer.modelFinishes) != 2 {
+		t.Fatalf("model events starts=%#v finishes=%#v, want two requests", observer.modelStarts, observer.modelFinishes)
+	}
+	if observer.modelFinishes[0].ToolCallCount != 2 || observer.modelFinishes[0].TokenUsage.TotalTokens != 5 {
+		t.Fatalf("first model finish = %#v, want tool call and token evidence", observer.modelFinishes[0])
+	}
+	if len(observer.batchStarts) != 1 || observer.batchStarts[0].Mode != toolBatchModeParallel || observer.batchStarts[0].BatchSize != 2 {
+		t.Fatalf("batch starts = %#v, want one parallel batch", observer.batchStarts)
+	}
+	if len(observer.batchFinishes) != 1 || observer.batchFinishes[0].FailedCount != 0 || observer.batchFinishes[0].Mode != toolBatchModeParallel {
+		t.Fatalf("batch finishes = %#v, want successful parallel batch", observer.batchFinishes)
 	}
 }
 

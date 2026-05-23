@@ -195,7 +195,7 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 			Kind:          core.PendingItemKindDecision,
 			ChatID:        state.ChatID,
 			ID:            decisionID,
-			Summary:       renderDecisionSummaryFromFields(state.Kind, state.Prompt),
+			Summary:       firstNonEmpty(state.Summary, renderDecisionSummaryFromFields(state.Kind, state.Prompt, state.Details)),
 			Age:           statusAge(now, updatedAt, state.CreatedAt),
 			CreatedAt:     state.CreatedAt,
 			UpdatedAt:     updatedAt,

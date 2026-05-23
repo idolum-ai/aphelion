@@ -3,11 +3,13 @@
 package runtime
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/internal/decisionprojection"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -318,6 +320,12 @@ func TestSystemStatusSnapshotPrefersOperationalPendingDecisionsOverTES(t *testin
 	}
 
 	now := time.Now().UTC()
+	decisionDetails := decisionprojection.FormatExecApprovalDetails(session.OperationProposal{
+		Kind:          "workspace_escape",
+		Summary:       "Run command outside the configured workspace",
+		WhyNow:        "The requested command needs an explicit admin-approved working directory outside the current sandbox root.",
+		BoundedEffect: "The command will run once.",
+	}, "workspace escape", `rg -n "renderDecisionSummary" runtime`, "/home/sadasant_gmail_com/code/github.com/idolum-ai/aphelion")
 	if err := store.UpsertPendingDecision(session.PendingDecisionRecord{
 		ID:            "decision-from-events",
 		Sequence:      1,
@@ -327,6 +335,7 @@ func TestSystemStatusSnapshotPrefersOperationalPendingDecisionsOverTES(t *testin
 		SenderID:      1002,
 		MessageID:     111,
 		Prompt:        "Approve from events?",
+		Details:       decisionDetails,
 		DefaultChoice: "deny",
 		ChoicesJSON:   `[{"id":"approve","label":"Approve"},{"id":"deny","label":"Deny"}]`,
 		CreatedAt:     now.Add(-2 * time.Minute),
@@ -343,6 +352,7 @@ func TestSystemStatusSnapshotPrefersOperationalPendingDecisionsOverTES(t *testin
 		SenderID:      1002,
 		MessageID:     222,
 		Prompt:        "Store only decision?",
+		Details:       decisionDetails,
 		DefaultChoice: "deny",
 		ChoicesJSON:   `[{"id":"approve","label":"Approve"},{"id":"deny","label":"Deny"}]`,
 		CreatedAt:     now.Add(-2 * time.Minute),
@@ -352,6 +362,16 @@ func TestSystemStatusSnapshotPrefersOperationalPendingDecisionsOverTES(t *testin
 	}
 
 	key := session.SessionKey{ChatID: 9001, UserID: 0, Scope: telegramDMScopeRef(9001)}
+	eventsOnlyPayload, err := json.Marshal(map[string]any{
+		"decision_id":   "decision-events-only",
+		"decision_kind": "proposal_approval",
+		"owner_key":     "chat:9003:sender:1002",
+		"prompt":        "Events only decision?",
+		"details":       decisionDetails,
+	})
+	if err != nil {
+		t.Fatalf("marshal event payload: %v", err)
+	}
 	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
 		{
 			EventType: core.ExecutionEventDecisionOpened,
@@ -379,16 +399,11 @@ func TestSystemStatusSnapshotPrefersOperationalPendingDecisionsOverTES(t *testin
 			CreatedAt: now.Add(-70 * time.Second),
 		},
 		{
-			EventType: core.ExecutionEventDecisionOpened,
-			Stage:     "decision",
-			Status:    "pending",
-			PayloadJSON: `{
-					"decision_id":"decision-events-only",
-					"decision_kind":"proposal_approval",
-					"owner_key":"chat:9003:sender:1002",
-					"prompt":"Events only decision?"
-				}`,
-			CreatedAt: now.Add(-50 * time.Second),
+			EventType:   core.ExecutionEventDecisionOpened,
+			Stage:       "decision",
+			Status:      "pending",
+			PayloadJSON: string(eventsOnlyPayload),
+			CreatedAt:   now.Add(-50 * time.Second),
 		},
 	}); err != nil {
 		t.Fatalf("AppendExecutionEvents(decision events) err = %v", err)
@@ -407,6 +422,19 @@ func TestSystemStatusSnapshotPrefersOperationalPendingDecisionsOverTES(t *testin
 	}
 	if !pendingDecisionByID(snapshot.PendingItems, "decision-events-only") {
 		t.Fatalf("PendingItems missing TES fallback decision decision-events-only: %#v", snapshot.PendingItems)
+	}
+	for _, id := range []string{"decision-store-only", "decision-events-only"} {
+		item, ok := pendingDecisionItemByID(snapshot.PendingItems, id)
+		if !ok {
+			t.Fatalf("PendingItems missing %s: %#v", id, snapshot.PendingItems)
+		}
+		if !strings.Contains(item.Summary, "read repository files outside the configured workspace") ||
+			!strings.Contains(item.Summary, "Command class: repo_read") {
+			t.Fatalf("summary for %s = %q, want decision-oriented workspace-escape projection", id, item.Summary)
+		}
+		if strings.Contains(item.Summary, "kind=proposal_approval prompt=") {
+			t.Fatalf("summary for %s = %q, should not use kind/prompt fallback while details are available", id, item.Summary)
+		}
 	}
 }
 
@@ -681,16 +709,21 @@ func containsPendingKind(items []core.PendingItemKind, target core.PendingItemKi
 }
 
 func pendingDecisionByID(items []core.PendingItem, id string) bool {
+	_, ok := pendingDecisionItemByID(items, id)
+	return ok
+}
+
+func pendingDecisionItemByID(items []core.PendingItem, id string) (core.PendingItem, bool) {
 	id = strings.TrimSpace(id)
 	for _, item := range items {
 		if item.Kind != core.PendingItemKindDecision {
 			continue
 		}
 		if strings.TrimSpace(item.ID) == id {
-			return true
+			return item, true
 		}
 	}
-	return false
+	return core.PendingItem{}, false
 }
 
 func pendingKindCount(items []core.PendingItem, kind core.PendingItemKind) int {

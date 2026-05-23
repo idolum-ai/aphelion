@@ -232,7 +232,7 @@ func TestHandleInboundShowsToolProgressForActualToolCalls(t *testing.T) {
 	if !strings.HasPrefix(sender.inline[0].text, "Working...") || strings.Contains(sender.inline[0].text, "Thinking") {
 		t.Fatalf("progress text = %q, want non-reasoning progress header", sender.inline[0].text)
 	}
-	if !strings.Contains(sender.inline[0].text, "Searching files") {
+	if !strings.Contains(sender.inline[0].text, "Exploring files") {
 		t.Fatalf("progress text = %q, want evidence-surface progress label", sender.inline[0].text)
 	}
 	if strings.Contains(sender.inline[0].text, "rg first") {
@@ -244,7 +244,7 @@ func TestHandleInboundShowsToolProgressForActualToolCalls(t *testing.T) {
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
 	}
-	if !strings.Contains(sender.editInline[0].Text, "Searching files (2x)") {
+	if !strings.Contains(sender.editInline[0].Text, "Exploring files (2x)") {
 		t.Fatalf("edit text = %q, want aggregated evidence-surface progress", sender.editInline[0].Text)
 	}
 	if len(sender.edits) != 0 {

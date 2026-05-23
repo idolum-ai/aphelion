@@ -152,10 +152,7 @@ func (p *toolProgressReporter) renderNoticeFromExecutionEventsLocked(details boo
 			if preview != "" && json.Valid([]byte(preview)) {
 				input = json.RawMessage(preview)
 			}
-			entry := toolProgressEntry{
-				Key:  "tool:" + toolName,
-				Text: semanticToolProgressEntry(toolName, input, p.currentPlanStep, p.taskSummary).Text,
-			}
+			entry := summaryToolProgressEntry(toolName, input, p.currentPlanStep, p.taskSummary)
 			if details || p.style == "raw" {
 				entry.Text = safeRawToolProgressEventText(toolName, preview)
 				detailToolEntries++
@@ -437,6 +434,16 @@ func semanticToolProgressEntry(name string, input json.RawMessage, currentStep s
 		return toolProgressEntry{Key: "task:" + name, Text: "Working on " + contextLabel}
 	}
 	return toolProgressEntry{Key: "task:" + name, Text: "Working through the request"}
+}
+
+func summaryToolProgressEntry(name string, input json.RawMessage, currentStep string, taskSummary string) toolProgressEntry {
+	entry := semanticToolProgressEntry(name, input, currentStep, taskSummary)
+	switch strings.TrimSpace(entry.Text) {
+	case "Searching files", "Reading file", "Reading file evidence", "Listing directory":
+		return toolProgressEntry{Key: "task:file_exploration", Text: "Exploring files", Count: entry.Count}
+	default:
+		return entry
+	}
 }
 
 func isProgressMetadataTool(name string) bool {

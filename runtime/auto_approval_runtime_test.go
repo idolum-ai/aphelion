@@ -437,7 +437,7 @@ func TestRuntimeAutoApprovalExistingLeaseIsInertWhenAutonomyCeilingTightens(t *t
 		t.Fatalf("ChatStatusSnapshot() err = %v", err)
 	}
 	if chatStatus.AutoApproval != nil {
-		if chatStatus.AutoApproval.Usable || !strings.Contains(chatStatus.AutoApproval.BlockedReason, "open /auto mode") {
+		if chatStatus.AutoApproval.Usable || !strings.Contains(chatStatus.AutoApproval.BlockedReason, "open an approval window") {
 			t.Fatalf("ChatStatusSnapshot.AutoApproval = %#v, want blocked visible grant", chatStatus.AutoApproval)
 		}
 	} else {

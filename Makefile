@@ -5,8 +5,10 @@ CONFIG ?= $(HOME)/.aphelion/aphelion.toml
 STATIC_BIN ?= $(BIN_DIR)/$(APP)-static
 STATIC_TAGS ?= netgo osusergo sqlite_omit_load_extension
 STATIC_LDFLAGS ?= -linkmode external -extldflags "-static"
+GOHOSTOS ?= $(shell go env GOHOSTOS 2>/dev/null || uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo unknown)
+TEST_EXEC_TRUE ?= /usr/bin/true
 
-.PHONY: build build-static run test check-config init install-user-service install-sandbox-net-helper restart-user-service logs-user-service update install-release update-release paths gc docs-architecture architecture public-readiness secrets design-principles deadcode check-live-fixtures taste
+.PHONY: build build-static run test verify-linux-compile test-compile check-config init install-user-service install-sandbox-net-helper restart-user-service logs-user-service update install-release update-release paths gc docs-architecture architecture public-readiness secrets design-principles deadcode check-live-fixtures taste
 
 build:
 	mkdir -p $(BIN_DIR)
@@ -21,7 +23,17 @@ run: build
 	./$(BIN) --config $(CONFIG)
 
 test:
+	@if [ "$(GOHOSTOS)" != "linux" ]; then \
+		echo "Aphelion is Linux-only; 'make test' runs Linux runtime tests and cannot run on $(GOHOSTOS)." >&2; \
+		echo "Run 'make verify-linux-compile' for a non-Linux compile-only check, or run 'make test' on Linux." >&2; \
+		exit 1; \
+	fi
 	go test ./...
+
+verify-linux-compile:
+	GOOS=linux go test -exec $(TEST_EXEC_TRUE) ./...
+
+test-compile: verify-linux-compile
 
 check-config: build
 	./$(BIN) --config $(CONFIG) --check-config
@@ -40,7 +52,14 @@ docs-architecture:
 	./scripts/check-design-principles.sh
 	./scripts/check-no-live-child-fixtures.sh
 
-architecture: docs-architecture public-readiness
+architecture:
+	@if [ "$(GOHOSTOS)" != "linux" ]; then \
+		echo "Aphelion architecture checks are Linux-only and cannot run on $(GOHOSTOS)." >&2; \
+		echo "Run 'make verify-linux-compile' for a non-Linux compile-only check, or run 'make architecture' on Linux." >&2; \
+		exit 1; \
+	fi
+	$(MAKE) docs-architecture
+	$(MAKE) public-readiness
 	go test . -run TestArchitectureImportBoundaries -count=1
 
 public-readiness:
