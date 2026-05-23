@@ -13,16 +13,16 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
-func (r *Runtime) PromoteTelegramThread(ctx context.Context, chatID int64, senderID int64, threadID int64) (string, error) {
+func (r *Runtime) PromoteTelegramThread(ctx context.Context, chatID int64, senderID int64, threadID int64) (session.TelegramThreadPromotionResult, error) {
 	_ = ctx
 	if r == nil || r.store == nil {
-		return "", fmt.Errorf("runtime unavailable")
+		return session.TelegramThreadPromotionResult{}, fmt.Errorf("runtime unavailable")
 	}
 	if chatID == 0 || threadID <= 0 {
-		return "", fmt.Errorf("thread id is required")
+		return session.TelegramThreadPromotionResult{}, fmt.Errorf("thread id is required")
 	}
 	if err := r.requireTelegramThreadPromotionAdmin(senderID, "Promote"); err != nil {
-		return "", err
+		return session.TelegramThreadPromotionResult{}, err
 	}
 
 	threadKey := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramThreadScopeRef(chatID, threadID)}
@@ -31,140 +31,150 @@ func (r *Runtime) PromoteTelegramThread(ctx context.Context, chatID int64, sende
 
 	thread, ok, err := r.store.TelegramThread(chatID, threadID)
 	if err != nil {
-		return "", err
+		return session.TelegramThreadPromotionResult{}, err
 	}
 	if !ok {
-		return "", telegramThreadRuntimeUserError(fmt.Sprintf("Thread %d does not exist. Start a new side thread with `/thread <message>`.", threadID))
+		return session.TelegramThreadPromotionResult{}, telegramThreadRuntimeUserError(fmt.Sprintf("Thread %d does not exist. Start a new side thread with `/thread <message>`.", threadID))
 	}
 	threadLabel := telegramThreadOperatorLabel(thread, threadID)
 	if !thread.Open() {
-		return "", telegramThreadRuntimeUserError(fmt.Sprintf("Thread %s is closed. Start a new side thread with `/thread <message>`.", threadLabel))
+		return session.TelegramThreadPromotionResult{}, telegramThreadRuntimeUserError(fmt.Sprintf("Thread %s is closed. Start a new side thread with `/thread <message>`.", threadLabel))
 	}
 
 	handoff, created, err := r.store.CreateTelegramThreadPromotionDraft(chatID, threadID, senderID, time.Now().UTC())
 	if err != nil {
-		return "", err
+		return session.TelegramThreadPromotionResult{}, err
 	}
 	if handoff.Status == session.TelegramThreadPromotionStatusDraft {
 		packaged, err := r.populateTelegramThreadPromotionReviewPackage(thread, handoff)
 		if err != nil {
-			return "", err
+			return session.TelegramThreadPromotionResult{}, err
 		}
 		handoff = packaged
 	}
-	return renderTelegramThreadPromotionDraft(threadLabel, handoff, created), nil
+	return telegramThreadPromotionResult(renderTelegramThreadPromotionDraft(threadLabel, handoff, created), handoff), nil
 }
 
-func (r *Runtime) PrepareTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (string, error) {
+func (r *Runtime) PrepareTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error) {
 	_ = ctx
 	if r == nil || r.store == nil {
-		return "", fmt.Errorf("runtime unavailable")
+		return session.TelegramThreadPromotionResult{}, fmt.Errorf("runtime unavailable")
 	}
 	if err := r.requireTelegramThreadPromotionAdmin(senderID, "Promote"); err != nil {
-		return "", err
+		return session.TelegramThreadPromotionResult{}, err
 	}
 	handoff, ok, err := r.store.TelegramThreadPromotionHandoff(handoffID)
 	if err != nil {
-		return "", err
+		return session.TelegramThreadPromotionResult{}, err
 	}
 	if !ok {
-		return "", telegramThreadRuntimeUserError("Promotion handoff is no longer available. Run /threads and promote again.")
+		return session.TelegramThreadPromotionResult{}, telegramThreadRuntimeUserError("Promotion handoff is no longer available. Run /threads and promote again.")
 	}
 	if chatID != 0 && handoff.ChatID != chatID {
-		return "", telegramThreadRuntimeUserError("Promotion handoff belongs to another chat. Run /threads again.")
+		return session.TelegramThreadPromotionResult{}, telegramThreadRuntimeUserError("Promotion handoff belongs to another chat. Run /threads again.")
 	}
 	threadKey := session.SessionKey{ChatID: handoff.ChatID, UserID: 0, Scope: telegramThreadScopeRef(handoff.ChatID, handoff.ThreadID)}
 	unlockThread := r.lockSession(threadKey)
 	defer unlockThread()
 	thread, ok, err := r.store.TelegramThread(handoff.ChatID, handoff.ThreadID)
 	if err != nil {
-		return "", err
+		return session.TelegramThreadPromotionResult{}, err
 	}
 	if !ok {
-		return "", telegramThreadRuntimeUserError("Source thread is no longer available. Cancel this promotion and start again.")
+		return session.TelegramThreadPromotionResult{}, telegramThreadRuntimeUserError("Source thread is no longer available. Cancel this promotion and start again.")
 	}
 	threadLabel := telegramThreadOperatorLabel(thread, handoff.ThreadID)
 	switch handoff.Status {
 	case session.TelegramThreadPromotionStatusDraft:
 		packaged, err := r.populateTelegramThreadPromotionReviewPackage(thread, handoff)
 		if err != nil {
-			return "", err
+			return session.TelegramThreadPromotionResult{}, err
 		}
 		handoff, err = r.store.MarkTelegramThreadPromotionReady(packaged.HandoffID, time.Now().UTC())
 		if err != nil {
-			return "", err
+			return session.TelegramThreadPromotionResult{}, err
 		}
 	case session.TelegramThreadPromotionStatusReady:
 		// Idempotent ready callback.
 	default:
-		return "", telegramThreadRuntimeUserError(fmt.Sprintf("Promotion handoff %s is %s and cannot be marked ready.", handoff.HandoffID, handoff.Status))
+		return session.TelegramThreadPromotionResult{}, telegramThreadRuntimeUserError(fmt.Sprintf("Promotion handoff %s is %s and cannot be marked ready.", handoff.HandoffID, handoff.Status))
 	}
-	return renderTelegramThreadPromotionReady(threadLabel, handoff), nil
+	return telegramThreadPromotionResult(renderTelegramThreadPromotionReady(threadLabel, handoff), handoff), nil
 }
 
-func (r *Runtime) CancelTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (string, error) {
+func (r *Runtime) CancelTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error) {
 	_ = ctx
 	if r == nil || r.store == nil {
-		return "", fmt.Errorf("runtime unavailable")
+		return session.TelegramThreadPromotionResult{}, fmt.Errorf("runtime unavailable")
 	}
 	if err := r.requireTelegramThreadPromotionAdmin(senderID, "Promote"); err != nil {
-		return "", err
+		return session.TelegramThreadPromotionResult{}, err
 	}
 	handoff, ok, err := r.store.TelegramThreadPromotionHandoff(handoffID)
 	if err != nil {
-		return "", err
+		return session.TelegramThreadPromotionResult{}, err
 	}
 	if !ok {
-		return "", telegramThreadRuntimeUserError("Promotion handoff is no longer available. Run /threads again.")
+		return session.TelegramThreadPromotionResult{}, telegramThreadRuntimeUserError("Promotion handoff is no longer available. Run /threads again.")
 	}
 	if chatID != 0 && handoff.ChatID != chatID {
-		return "", telegramThreadRuntimeUserError("Promotion handoff belongs to another chat. Run /threads again.")
+		return session.TelegramThreadPromotionResult{}, telegramThreadRuntimeUserError("Promotion handoff belongs to another chat. Run /threads again.")
 	}
 	updated, err := r.store.CancelTelegramThreadPromotion(handoff.HandoffID, time.Now().UTC())
 	if err != nil {
-		return "", err
+		return session.TelegramThreadPromotionResult{}, err
 	}
-	return renderTelegramThreadPromotionTerminal("Promotion cancelled", updated), nil
+	return telegramThreadPromotionResult(renderTelegramThreadPromotionTerminal("Promotion cancelled", updated), updated), nil
 }
 
-func (r *Runtime) SupersedeTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (string, error) {
+func (r *Runtime) SupersedeTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error) {
 	_ = ctx
 	if r == nil || r.store == nil {
-		return "", fmt.Errorf("runtime unavailable")
+		return session.TelegramThreadPromotionResult{}, fmt.Errorf("runtime unavailable")
 	}
 	if err := r.requireTelegramThreadPromotionAdmin(senderID, "Promote"); err != nil {
-		return "", err
+		return session.TelegramThreadPromotionResult{}, err
 	}
 	handoff, ok, err := r.store.TelegramThreadPromotionHandoff(handoffID)
 	if err != nil {
-		return "", err
+		return session.TelegramThreadPromotionResult{}, err
 	}
 	if !ok {
-		return "", telegramThreadRuntimeUserError("Promotion handoff is no longer available. Run /threads again.")
+		return session.TelegramThreadPromotionResult{}, telegramThreadRuntimeUserError("Promotion handoff is no longer available. Run /threads again.")
 	}
 	if chatID != 0 && handoff.ChatID != chatID {
-		return "", telegramThreadRuntimeUserError("Promotion handoff belongs to another chat. Run /threads again.")
+		return session.TelegramThreadPromotionResult{}, telegramThreadRuntimeUserError("Promotion handoff belongs to another chat. Run /threads again.")
 	}
 	thread, ok, err := r.store.TelegramThread(handoff.ChatID, handoff.ThreadID)
 	if err != nil {
-		return "", err
+		return session.TelegramThreadPromotionResult{}, err
 	}
 	if !ok || !thread.Open() {
-		return "", telegramThreadRuntimeUserError("Source thread is not open. Cancel this promotion and start a new side thread if needed.")
+		return session.TelegramThreadPromotionResult{}, telegramThreadRuntimeUserError("Source thread is not open. Cancel this promotion and start a new side thread if needed.")
 	}
 	if _, err := r.store.SupersedeTelegramThreadPromotion(handoff.HandoffID, time.Now().UTC()); err != nil {
-		return "", err
+		return session.TelegramThreadPromotionResult{}, err
 	}
 	fresh, created, err := r.store.CreateTelegramThreadPromotionDraft(handoff.ChatID, handoff.ThreadID, senderID, time.Now().UTC())
 	if err != nil {
-		return "", err
+		return session.TelegramThreadPromotionResult{}, err
 	}
 	fresh, err = r.populateTelegramThreadPromotionReviewPackage(thread, fresh)
 	if err != nil {
-		return "", err
+		return session.TelegramThreadPromotionResult{}, err
 	}
 	text := renderTelegramThreadPromotionDraft(telegramThreadOperatorLabel(thread, handoff.ThreadID), fresh, created)
-	return "Previous promotion handoff superseded.\n\n" + text, nil
+	return telegramThreadPromotionResult("Previous promotion handoff superseded.\n\n"+text, fresh), nil
+}
+
+func telegramThreadPromotionResult(text string, handoff session.TelegramThreadPromotionHandoff) session.TelegramThreadPromotionResult {
+	handoff = session.NormalizeTelegramThreadPromotionHandoff(handoff)
+	return session.TelegramThreadPromotionResult{
+		Text:      strings.TrimSpace(text),
+		HandoffID: handoff.HandoffID,
+		ThreadID:  handoff.ThreadID,
+		Status:    handoff.Status,
+	}
 }
 
 func (r *Runtime) requireTelegramThreadPromotionAdmin(senderID int64, verb string) error {

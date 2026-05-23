@@ -638,7 +638,7 @@ func TestThreadPromoteCallbackCreatesDraftThroughRouter(t *testing.T) {
 
 	order := []string{}
 	sender := &stubCommandSender{}
-	router := &stubCommandRouter{canRestart: true, promoteThreadReturn: "Promotion draft created for thread 3.\n\nHandoff: thread-promotion:1001:3:99\nStatus: draft", order: &order}
+	router := &stubCommandRouter{canRestart: true, promoteThreadReturn: session.TelegramThreadPromotionResult{Text: "Promotion draft created for thread 3.\n\nHandoff: ignored-rendered-handoff\nStatus: draft", HandoffID: "thread-promotion:1001:3:99", ThreadID: 3, Status: session.TelegramThreadPromotionStatusDraft}, order: &order}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
 		ID:       "promote-cb",
 		Data:     encodeTelegramThreadPromoteCallback(3),
@@ -667,10 +667,16 @@ func TestThreadPromoteCallbackCreatesDraftThroughRouter(t *testing.T) {
 	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Promotion draft created for thread 3.") {
 		t.Fatalf("editInline = %#v, want promotion draft text with buttons", sender.editInline)
 	}
-	if !commandRowsContain(sender.editInline[0].rows, "Ready", "thread_promo_ready:thread-promotion:1001:3:99") ||
-		!commandRowsContain(sender.editInline[0].rows, "Cancel", "thread_promo_cancel:thread-promotion:1001:3:99") {
-		t.Fatalf("promotion rows = %#v, want ready/cancel", sender.editInline[0].rows)
+	readyData, ok := commandRowCallbackData(sender.editInline[0].rows, "Ready")
+	if !ok {
+		t.Fatalf("promotion rows = %#v, want ready button", sender.editInline[0].rows)
 	}
+	assertThreadPromotionCallbackData(t, 1001, readyData, "ready", "thread-promotion:1001:3:99")
+	cancelData, ok := commandRowCallbackData(sender.editInline[0].rows, "Cancel")
+	if !ok {
+		t.Fatalf("promotion rows = %#v, want cancel button", sender.editInline[0].rows)
+	}
+	assertThreadPromotionCallbackData(t, 1001, cancelData, "cancel", "thread-promotion:1001:3:99")
 }
 
 func TestThreadPromoteCallbackIsAdminOnly(t *testing.T) {
@@ -698,5 +704,26 @@ func TestThreadPromoteCallbackIsAdminOnly(t *testing.T) {
 	}
 	if len(sender.editClear) != 0 || len(sender.editInline) != 0 {
 		t.Fatalf("edits = %#v/%#v, want no message edit", sender.editClear, sender.editInline)
+	}
+}
+
+func commandRowCallbackData(rows [][]telegram.InlineButton, label string) (string, bool) {
+	for _, row := range rows {
+		for _, button := range row {
+			if button.Text == label {
+				return button.CallbackData, true
+			}
+		}
+	}
+	return "", false
+}
+
+func assertThreadPromotionCallbackData(t *testing.T, chatID int64, data string, wantAction string, wantHandoffID string) {
+	t.Helper()
+	if data == "" || len(data) > core.TelegramCallbackDataMaxBytes {
+		t.Fatalf("callback data for %s = %q len=%d, want non-empty <= %d", wantAction, data, len(data), core.TelegramCallbackDataMaxBytes)
+	}
+	if wantHandoffID == "thread-promotion:1001:3:99" && data != "thread_promo_"+wantAction+":"+wantHandoffID {
+		t.Fatalf("callback data = %q, want legacy typed handoff callback for %s", data, wantAction)
 	}
 }

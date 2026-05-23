@@ -256,22 +256,22 @@ type stubCommandRouter struct {
 	promoteThreadChatID          int64
 	promoteThreadSenderID        int64
 	promoteThreadID              int64
-	promoteThreadReturn          string
+	promoteThreadReturn          session.TelegramThreadPromotionResult
 	promoteThreadErr             error
 	preparePromotionChatID       int64
 	preparePromotionSenderID     int64
 	preparePromotionHandoffID    string
-	preparePromotionReturn       string
+	preparePromotionReturn       session.TelegramThreadPromotionResult
 	preparePromotionErr          error
 	cancelPromotionChatID        int64
 	cancelPromotionSenderID      int64
 	cancelPromotionHandoffID     string
-	cancelPromotionReturn        string
+	cancelPromotionReturn        session.TelegramThreadPromotionResult
 	cancelPromotionErr           error
 	supersedePromotionChatID     int64
 	supersedePromotionSenderID   int64
 	supersedePromotionHandoffID  string
-	supersedePromotionReturn     string
+	supersedePromotionReturn     session.TelegramThreadPromotionResult
 	supersedePromotionErr        error
 	absorbThreadChatID           int64
 	absorbThreadSenderID         int64

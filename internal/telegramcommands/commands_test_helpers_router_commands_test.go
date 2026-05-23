@@ -158,7 +158,7 @@ func (s *stubCommandRouter) QueueTelegramThreadSummary(_ context.Context, msg co
 	return "Summary queued.", nil
 }
 
-func (s *stubCommandRouter) PromoteTelegramThread(_ context.Context, chatID int64, senderID int64, threadID int64) (string, error) {
+func (s *stubCommandRouter) PromoteTelegramThread(_ context.Context, chatID int64, senderID int64, threadID int64) (session.TelegramThreadPromotionResult, error) {
 	if s.order != nil {
 		*s.order = append(*s.order, "promote")
 	}
@@ -166,15 +166,15 @@ func (s *stubCommandRouter) PromoteTelegramThread(_ context.Context, chatID int6
 	s.promoteThreadSenderID = senderID
 	s.promoteThreadID = threadID
 	if s.promoteThreadErr != nil {
-		return "", s.promoteThreadErr
+		return session.TelegramThreadPromotionResult{}, s.promoteThreadErr
 	}
-	if strings.TrimSpace(s.promoteThreadReturn) != "" {
+	if strings.TrimSpace(s.promoteThreadReturn.Text) != "" || strings.TrimSpace(s.promoteThreadReturn.HandoffID) != "" {
 		return s.promoteThreadReturn, nil
 	}
-	return "Promotion draft created for thread " + strconv.FormatInt(threadID, 10) + ".", nil
+	return session.TelegramThreadPromotionResult{Text: "Promotion draft created for thread.", ThreadID: threadID, Status: session.TelegramThreadPromotionStatusDraft}, nil
 }
 
-func (s *stubCommandRouter) PrepareTelegramThreadPromotion(_ context.Context, chatID int64, senderID int64, handoffID string) (string, error) {
+func (s *stubCommandRouter) PrepareTelegramThreadPromotion(_ context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error) {
 	if s.order != nil {
 		*s.order = append(*s.order, "promotion_ready")
 	}
@@ -182,15 +182,15 @@ func (s *stubCommandRouter) PrepareTelegramThreadPromotion(_ context.Context, ch
 	s.preparePromotionSenderID = senderID
 	s.preparePromotionHandoffID = handoffID
 	if s.preparePromotionErr != nil {
-		return "", s.preparePromotionErr
+		return session.TelegramThreadPromotionResult{}, s.preparePromotionErr
 	}
-	if strings.TrimSpace(s.preparePromotionReturn) != "" {
+	if strings.TrimSpace(s.preparePromotionReturn.Text) != "" || strings.TrimSpace(s.preparePromotionReturn.HandoffID) != "" {
 		return s.preparePromotionReturn, nil
 	}
-	return "Promotion handoff ready.", nil
+	return session.TelegramThreadPromotionResult{Text: "Promotion handoff ready.", HandoffID: handoffID, Status: session.TelegramThreadPromotionStatusReady}, nil
 }
 
-func (s *stubCommandRouter) CancelTelegramThreadPromotion(_ context.Context, chatID int64, senderID int64, handoffID string) (string, error) {
+func (s *stubCommandRouter) CancelTelegramThreadPromotion(_ context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error) {
 	if s.order != nil {
 		*s.order = append(*s.order, "promotion_cancel")
 	}
@@ -198,15 +198,15 @@ func (s *stubCommandRouter) CancelTelegramThreadPromotion(_ context.Context, cha
 	s.cancelPromotionSenderID = senderID
 	s.cancelPromotionHandoffID = handoffID
 	if s.cancelPromotionErr != nil {
-		return "", s.cancelPromotionErr
+		return session.TelegramThreadPromotionResult{}, s.cancelPromotionErr
 	}
-	if strings.TrimSpace(s.cancelPromotionReturn) != "" {
+	if strings.TrimSpace(s.cancelPromotionReturn.Text) != "" || strings.TrimSpace(s.cancelPromotionReturn.HandoffID) != "" {
 		return s.cancelPromotionReturn, nil
 	}
-	return "Promotion cancelled.", nil
+	return session.TelegramThreadPromotionResult{Text: "Promotion cancelled.", HandoffID: handoffID, Status: session.TelegramThreadPromotionStatusCancelled}, nil
 }
 
-func (s *stubCommandRouter) SupersedeTelegramThreadPromotion(_ context.Context, chatID int64, senderID int64, handoffID string) (string, error) {
+func (s *stubCommandRouter) SupersedeTelegramThreadPromotion(_ context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error) {
 	if s.order != nil {
 		*s.order = append(*s.order, "promotion_refresh")
 	}
@@ -214,12 +214,12 @@ func (s *stubCommandRouter) SupersedeTelegramThreadPromotion(_ context.Context, 
 	s.supersedePromotionSenderID = senderID
 	s.supersedePromotionHandoffID = handoffID
 	if s.supersedePromotionErr != nil {
-		return "", s.supersedePromotionErr
+		return session.TelegramThreadPromotionResult{}, s.supersedePromotionErr
 	}
-	if strings.TrimSpace(s.supersedePromotionReturn) != "" {
+	if strings.TrimSpace(s.supersedePromotionReturn.Text) != "" || strings.TrimSpace(s.supersedePromotionReturn.HandoffID) != "" {
 		return s.supersedePromotionReturn, nil
 	}
-	return "Previous promotion handoff superseded.\n\nHandoff: thread-promotion:1001:3:9\nStatus: draft", nil
+	return session.TelegramThreadPromotionResult{Text: "Previous promotion handoff superseded.", HandoffID: "thread-promotion:1001:3:9", ThreadID: 3, Status: session.TelegramThreadPromotionStatusDraft}, nil
 }
 
 func (s *stubCommandRouter) AbsorbTelegramThread(_ context.Context, chatID int64, senderID int64, threadID int64) (string, error) {

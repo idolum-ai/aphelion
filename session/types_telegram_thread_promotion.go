@@ -18,6 +18,13 @@ const (
 	TelegramThreadPromotionStatusSuperseded TelegramThreadPromotionStatus = "superseded"
 )
 
+type TelegramThreadPromotionResult struct {
+	Text      string                        `json:"text"`
+	HandoffID string                        `json:"handoff_id"`
+	ThreadID  int64                         `json:"thread_id"`
+	Status    TelegramThreadPromotionStatus `json:"status"`
+}
+
 type TelegramThreadPromotionHandoff struct {
 	HandoffID           string                        `json:"handoff_id"`
 	ChatID              int64                         `json:"chat_id"`

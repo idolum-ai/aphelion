@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
@@ -230,21 +231,21 @@ func handleTelegramThreadPromoteCallback(ctx context.Context, sender commandCall
 	if err := recordTelegramThreadCallbackMessage(router, chatID, threadID, messageID, "thread_promote"); err != nil {
 		return true, err
 	}
-	text, err := threadRouter.PromoteTelegramThread(ctx, chatID, senderID, threadID)
+	result, err := threadRouter.PromoteTelegramThread(ctx, chatID, senderID, threadID)
 	if err != nil {
 		if isTelegramThreadUserError(err) {
-			text = err.Error()
+			result.Text = err.Error()
 		} else {
 			return true, err
 		}
 	}
-	if handoffID := telegramThreadPromotionHandoffIDFromText(text); handoffID != "" {
-		if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, text, "", telegramThreadPromotionDraftRows(handoffID)); err != nil {
+	if result.HandoffID != "" && result.Status == session.TelegramThreadPromotionStatusDraft {
+		if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, result.Text, "", telegramThreadPromotionDraftRows(result.HandoffID)); err != nil {
 			return true, err
 		}
 		return true, nil
 	}
-	if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
+	if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, result.Text); err != nil {
 		return true, err
 	}
 	return true, nil
@@ -288,34 +289,32 @@ func handleTelegramThreadPromotionActionCallback(ctx context.Context, sender com
 			return true, err
 		}
 	}
-	var text string
+	var result session.TelegramThreadPromotionResult
 	var err error
 	switch action {
 	case "ready":
-		text, err = threadRouter.PrepareTelegramThreadPromotion(ctx, chatID, senderID, handoffID)
+		result, err = threadRouter.PrepareTelegramThreadPromotion(ctx, chatID, senderID, handoffID)
 	case "cancel":
-		text, err = threadRouter.CancelTelegramThreadPromotion(ctx, chatID, senderID, handoffID)
+		result, err = threadRouter.CancelTelegramThreadPromotion(ctx, chatID, senderID, handoffID)
 	case "refresh":
-		text, err = threadRouter.SupersedeTelegramThreadPromotion(ctx, chatID, senderID, handoffID)
+		result, err = threadRouter.SupersedeTelegramThreadPromotion(ctx, chatID, senderID, handoffID)
 	default:
 		return true, nil
 	}
 	if err != nil {
 		if isTelegramThreadUserError(err) {
-			text = err.Error()
+			result.Text = err.Error()
 		} else {
 			return true, err
 		}
 	}
-	if action == "refresh" {
-		if refreshedID := telegramThreadPromotionLastHandoffIDFromText(text); refreshedID != "" {
-			if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, text, "", telegramThreadPromotionDraftRows(refreshedID)); err != nil {
-				return true, err
-			}
-			return true, nil
+	if action == "refresh" && result.HandoffID != "" && result.Status == session.TelegramThreadPromotionStatusDraft {
+		if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, result.Text, "", telegramThreadPromotionDraftRows(result.HandoffID)); err != nil {
+			return true, err
 		}
+		return true, nil
 	}
-	if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
+	if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, result.Text); err != nil {
 		return true, err
 	}
 	return true, nil
@@ -364,25 +363,6 @@ func telegramThreadPromotionDraftRows(handoffID string) [][]telegram.InlineButto
 			{Text: "Cancel", CallbackData: encodeTelegramThreadPromotionCancelCallback(handoffID)},
 		},
 	}
-}
-func telegramThreadPromotionHandoffIDFromText(text string) string {
-	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "Handoff:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "Handoff:"))
-		}
-	}
-	return ""
-}
-func telegramThreadPromotionLastHandoffIDFromText(text string) string {
-	last := ""
-	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "Handoff:") {
-			last = strings.TrimSpace(strings.TrimPrefix(line, "Handoff:"))
-		}
-	}
-	return last
 }
 func telegramThreadPromotionCallbackHandoffID(chatID int64, handoffID string) string {
 	handoffID = strings.TrimSpace(handoffID)

@@ -65,19 +65,19 @@ func (c telegramCommandControl) QueueTelegramThreadSummary(ctx context.Context, 
 	return c.threadController().QueueTelegramThreadSummary(ctx, msg)
 }
 
-func (c telegramCommandControl) PromoteTelegramThread(ctx context.Context, chatID int64, senderID int64, threadID int64) (string, error) {
+func (c telegramCommandControl) PromoteTelegramThread(ctx context.Context, chatID int64, senderID int64, threadID int64) (session.TelegramThreadPromotionResult, error) {
 	return c.threadController().PromoteTelegramThread(ctx, chatID, senderID, threadID)
 }
 
-func (c telegramCommandControl) PrepareTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (string, error) {
+func (c telegramCommandControl) PrepareTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error) {
 	return c.threadController().PrepareTelegramThreadPromotion(ctx, chatID, senderID, handoffID)
 }
 
-func (c telegramCommandControl) CancelTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (string, error) {
+func (c telegramCommandControl) CancelTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error) {
 	return c.threadController().CancelTelegramThreadPromotion(ctx, chatID, senderID, handoffID)
 }
 
-func (c telegramCommandControl) SupersedeTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (string, error) {
+func (c telegramCommandControl) SupersedeTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error) {
 	return c.threadController().SupersedeTelegramThreadPromotion(ctx, chatID, senderID, handoffID)
 }
 

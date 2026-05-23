@@ -47,7 +47,7 @@ func TestThreadPromoteCallbackCreatesDraftThroughRouter(t *testing.T) {
 
 	order := []string{}
 	sender := &stubCommandSender{}
-	router := &stubCommandRouter{canRestart: true, promoteThreadReturn: "Promotion draft created for thread 3.\n\nHandoff: thread-promotion:1001:3:99\nStatus: draft", order: &order}
+	router := &stubCommandRouter{canRestart: true, promoteThreadReturn: session.TelegramThreadPromotionResult{Text: "Promotion draft created for thread 3.\n\nHandoff: ignored-rendered-handoff\nStatus: draft", HandoffID: "thread-promotion:1001:3:99", ThreadID: 3, Status: session.TelegramThreadPromotionStatusDraft}, order: &order}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
 		ID:       "promote-cb",
 		Data:     encodeTelegramThreadPromoteCallback(3),
@@ -114,7 +114,7 @@ func TestThreadPromotionReadyCallbackIsAdminGatedAndClearsKeyboard(t *testing.T)
 
 	order := []string{}
 	sender := &stubCommandSender{}
-	router := &stubCommandRouter{canRestart: true, preparePromotionReturn: "Promotion handoff ready.\n\nHandoff: thread-promotion:1001:3:99\nStatus: ready", order: &order}
+	router := &stubCommandRouter{canRestart: true, preparePromotionReturn: session.TelegramThreadPromotionResult{Text: "Promotion handoff ready.\n\nHandoff: ignored-rendered-handoff\nStatus: ready", HandoffID: "thread-promotion:1001:3:99", ThreadID: 3, Status: session.TelegramThreadPromotionStatusReady}, order: &order}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
 		ID:      "ready-cb",
 		Data:    encodeTelegramThreadPromotionReadyCallback("thread-promotion:1001:3:99"),
@@ -142,6 +142,53 @@ func TestThreadPromotionReadyCallbackIsAdminGatedAndClearsKeyboard(t *testing.T)
 	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "Promotion handoff ready") {
 		t.Fatalf("editClear = %#v, want ready text", sender.editClear)
 	}
+}
+
+func TestThreadPromotionRefreshCallbackUsesTypedResultForButtons(t *testing.T) {
+	t.Parallel()
+
+	order := []string{}
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		canRestart: true,
+		supersedePromotionReturn: session.TelegramThreadPromotionResult{
+			Text:      "Previous promotion handoff superseded.\n\nHandoff: ignored-rendered-handoff\nStatus: draft",
+			HandoffID: "thread-promotion:1001:3:123",
+			ThreadID:  3,
+			Status:    session.TelegramThreadPromotionStatusDraft,
+		},
+		order: &order,
+	}
+	oldHandoffID := "thread-promotion:1001:3:99"
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:      "refresh-cb",
+		Data:    encodeTelegramThreadPromotionRefreshCallback(oldHandoffID),
+		From:    &telegram.User{ID: 2002},
+		Message: &telegram.Message{MessageID: 9004, Chat: &telegram.Chat{ID: 1001}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want refresh callback handled")
+	}
+	if router.supersedePromotionHandoffID != oldHandoffID {
+		t.Fatalf("supersede handoff = %q, want original callback handoff %q", router.supersedePromotionHandoffID, oldHandoffID)
+	}
+	if router.threadCallbackSurface != "thread_promotion_refresh" || router.threadCallbackID != 3 {
+		t.Fatalf("callback ledger surface=%q thread=%d", router.threadCallbackSurface, router.threadCallbackID)
+	}
+	if len(order) == 0 || order[0] != "promotion_refresh" {
+		t.Fatalf("order = %#v", order)
+	}
+	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Previous promotion handoff superseded") {
+		t.Fatalf("editInline = %#v, want refreshed draft text with buttons", sender.editInline)
+	}
+	readyData, ok := commandRowCallbackData(sender.editInline[0].rows, "Ready")
+	if !ok {
+		t.Fatalf("promotion rows = %#v, want ready button", sender.editInline[0].rows)
+	}
+	assertThreadPromotionCallbackData(t, 1001, readyData, "ready", "thread-promotion:1001:3:123")
 }
 
 func TestThreadPromoteCallbackIsAdminOnly(t *testing.T) {

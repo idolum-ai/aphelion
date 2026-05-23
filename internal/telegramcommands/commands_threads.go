@@ -32,10 +32,10 @@ type commandThreadRouter interface {
 	TelegramThreadForReplyMessage(chatID int64, replyMessageID int64) (session.TelegramThread, bool, error)
 	TelegramThreads(chatID int64) ([]session.TelegramThread, error)
 	QueueTelegramThreadSummary(ctx context.Context, msg core.InboundMessage) (string, error)
-	PromoteTelegramThread(ctx context.Context, chatID int64, senderID int64, threadID int64) (string, error)
-	PrepareTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (string, error)
-	CancelTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (string, error)
-	SupersedeTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (string, error)
+	PromoteTelegramThread(ctx context.Context, chatID int64, senderID int64, threadID int64) (session.TelegramThreadPromotionResult, error)
+	PrepareTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error)
+	CancelTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error)
+	SupersedeTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error)
 	AbsorbTelegramThread(ctx context.Context, chatID int64, senderID int64, threadID int64) (string, error)
 }
 

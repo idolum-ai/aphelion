@@ -38,10 +38,14 @@ func TestPromoteTelegramThreadCreatesReviewPackageOnly(t *testing.T) {
 		t.Fatalf("Save(thread messages) err = %v", err)
 	}
 
-	text, err := rt.PromoteTelegramThread(context.Background(), 9106, 1001, thread.ThreadID)
+	result, err := rt.PromoteTelegramThread(context.Background(), 9106, 1001, thread.ThreadID)
 	if err != nil {
 		t.Fatalf("PromoteTelegramThread() err = %v", err)
 	}
+	if result.HandoffID == "" || result.ThreadID != thread.ThreadID || result.Status != session.TelegramThreadPromotionStatusDraft {
+		t.Fatalf("promotion result = %#v, want typed draft handoff for thread %d", result, thread.ThreadID)
+	}
+
 	for _, want := range []string{
 		"Promotion draft created for thread 1.",
 		"Handoff: thread-promotion:9106:1:",
@@ -52,8 +56,8 @@ func TestPromoteTelegramThreadCreatesReviewPackageOnly(t *testing.T) {
 		"Policy: review_before_reply / parent_relay_only / shared_context=isolated",
 		"does not create a durable child, transfer memory, grant resources, or run work",
 	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("promotion text missing %q:\n%s", want, text)
+		if !strings.Contains(result.Text, want) {
+			t.Fatalf("promotion text missing %q:\n%s", want, result.Text)
 		}
 	}
 
@@ -89,8 +93,11 @@ func TestPromoteTelegramThreadCreatesReviewPackageOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PromoteTelegramThread(second) err = %v", err)
 	}
-	if !strings.Contains(again, "Promotion draft already exists for thread 1.") || !strings.Contains(again, handoff.HandoffID) {
-		t.Fatalf("second promotion text = %q, want existing handoff", again)
+	if !strings.Contains(again.Text, "Promotion draft already exists for thread 1.") || !strings.Contains(again.Text, handoff.HandoffID) {
+		t.Fatalf("second promotion text = %q, want existing handoff", again.Text)
+	}
+	if again.HandoffID != handoff.HandoffID || again.ThreadID != handoff.ThreadID || again.Status != session.TelegramThreadPromotionStatusDraft {
+		t.Fatalf("second promotion result = %#v, want existing typed draft handoff", again)
 	}
 }
 
@@ -113,12 +120,15 @@ func TestPrepareAndCancelTelegramThreadPromotionStayInsideReviewBoundary(t *test
 	if err != nil || !ok {
 		t.Fatalf("LatestTelegramThreadPromotionHandoff() ok=%t err=%v", ok, err)
 	}
-	readyText, err := rt.PrepareTelegramThreadPromotion(context.Background(), 9116, 1001, handoff.HandoffID)
+	readyResult, err := rt.PrepareTelegramThreadPromotion(context.Background(), 9116, 1001, handoff.HandoffID)
 	if err != nil {
 		t.Fatalf("PrepareTelegramThreadPromotion() err = %v", err)
 	}
-	if !strings.Contains(readyText, "Promotion handoff ready") || !strings.Contains(readyText, "No durable child, memory write, capability grant, or first run happened") {
-		t.Fatalf("ready text = %q", readyText)
+	if !strings.Contains(readyResult.Text, "Promotion handoff ready") || !strings.Contains(readyResult.Text, "No durable child, memory write, capability grant, or first run happened") {
+		t.Fatalf("ready text = %q", readyResult.Text)
+	}
+	if readyResult.HandoffID != handoff.HandoffID || readyResult.ThreadID != handoff.ThreadID || readyResult.Status != session.TelegramThreadPromotionStatusReady {
+		t.Fatalf("ready result = %#v, want typed ready handoff", readyResult)
 	}
 	ready, _, err := store.LatestTelegramThreadPromotionHandoff(9116, thread.ThreadID)
 	if err != nil {
@@ -127,12 +137,15 @@ func TestPrepareAndCancelTelegramThreadPromotionStayInsideReviewBoundary(t *test
 	if ready.Status != session.TelegramThreadPromotionStatusReady {
 		t.Fatalf("status = %s, want ready", ready.Status)
 	}
-	cancelText, err := rt.CancelTelegramThreadPromotion(context.Background(), 9116, 1001, handoff.HandoffID)
+	cancelResult, err := rt.CancelTelegramThreadPromotion(context.Background(), 9116, 1001, handoff.HandoffID)
 	if err != nil {
 		t.Fatalf("CancelTelegramThreadPromotion() err = %v", err)
 	}
-	if !strings.Contains(cancelText, "Promotion cancelled") || !strings.Contains(cancelText, "No durable child") {
-		t.Fatalf("cancel text = %q", cancelText)
+	if !strings.Contains(cancelResult.Text, "Promotion cancelled") || !strings.Contains(cancelResult.Text, "No durable child") {
+		t.Fatalf("cancel text = %q", cancelResult.Text)
+	}
+	if cancelResult.HandoffID != handoff.HandoffID || cancelResult.ThreadID != handoff.ThreadID || cancelResult.Status != session.TelegramThreadPromotionStatusCancelled {
+		t.Fatalf("cancel result = %#v, want typed cancelled handoff", cancelResult)
 	}
 	agents, err := store.ListDurableAgents()
 	if err != nil {
