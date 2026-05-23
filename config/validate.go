@@ -211,6 +211,9 @@ func validate(cfg *Config) error {
 	if len(cfg.Agent.BootstrapFiles) == 0 {
 		return fmt.Errorf("agent.bootstrap_files must not be empty")
 	}
+	if err := validateWebSearchConfig(cfg.Tools.WebSearch); err != nil {
+		return err
+	}
 	if strings.TrimSpace(cfg.Agent.DailyNotesDir) == "" {
 		return fmt.Errorf("agent.daily_notes_dir is required")
 	}
@@ -697,6 +700,43 @@ func validateTelegramDurableGroups(cfg *Config) error {
 		}
 		seenChats[group.ChatID] = agentID
 		seenAgents[agentID] = group.ChatID
+	}
+	return nil
+}
+
+func validateWebSearchConfig(cfg WebSearchConfig) error {
+	if cfg.MaxCount <= 0 {
+		return fmt.Errorf("tools.web_search.max_count must be > 0")
+	}
+	if cfg.DefaultCount <= 0 {
+		return fmt.Errorf("tools.web_search.default_count must be > 0")
+	}
+	if cfg.DefaultCount > cfg.MaxCount {
+		return fmt.Errorf("tools.web_search.default_count must be <= max_count")
+	}
+	if _, err := time.ParseDuration(strings.TrimSpace(cfg.Timeout)); err != nil {
+		return fmt.Errorf("tools.web_search.timeout must be a valid duration: %w", err)
+	}
+	if _, err := time.ParseDuration(strings.TrimSpace(cfg.CacheTTL)); err != nil {
+		return fmt.Errorf("tools.web_search.cache_ttl must be a valid duration: %w", err)
+	}
+	for i, provider := range cfg.ProviderOrder {
+		switch strings.ToLower(strings.TrimSpace(provider)) {
+		case "openai_hosted", "brave":
+		default:
+			return fmt.Errorf("tools.web_search.provider_order[%d] must be one of openai_hosted|brave", i)
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.OpenAIHosted.ContextSize)) {
+	case "low", "medium", "high":
+	default:
+		return fmt.Errorf("tools.web_search.openai_hosted.context_size must be one of low|medium|high")
+	}
+	if strings.TrimSpace(cfg.Brave.Endpoint) == "" {
+		return fmt.Errorf("tools.web_search.brave.endpoint is required")
+	}
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(cfg.Brave.Endpoint)), "https://") && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(cfg.Brave.Endpoint)), "http://") {
+		return fmt.Errorf("tools.web_search.brave.endpoint must be http(s)")
 	}
 	return nil
 }

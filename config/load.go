@@ -68,6 +68,7 @@ func Load(path string) (*Config, error) {
 		cfg.Work.AutoOrder = []string{"native", "codex"}
 	}
 	cfg.Work.Codex.AppServerAddress = strings.TrimSpace(cfg.Work.Codex.AppServerAddress)
+	cfg.Tools.WebSearch = normalizeWebSearchConfig(cfg.Tools.WebSearch)
 	cfg.Autonomy.DefaultMode = NormalizeAutonomyMode(cfg.Autonomy.DefaultMode)
 	cfg.Autonomy.Ceiling = NormalizeAutonomyMode(cfg.Autonomy.Ceiling)
 	if strings.TrimSpace(cfg.Autonomy.MaxOverrideDuration) == "" {
@@ -108,6 +109,10 @@ func Load(path string) (*Config, error) {
 	cfg.Tools.ExternalManifestDir, err = expandConfiguredPath(cfg.Tools.ExternalManifestDir, baseDir)
 	if err != nil {
 		return nil, fmt.Errorf("expand tools.external_manifest_dir: %w", err)
+	}
+	cfg.Tools.WebSearch.Brave.APIKeyFile, err = expandConfiguredPath(cfg.Tools.WebSearch.Brave.APIKeyFile, baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("expand tools.web_search.brave.api_key_file: %w", err)
 	}
 	cfg.Tailscale.Parent.StateDir, err = expandConfiguredPath(cfg.Tailscale.Parent.StateDir, baseDir)
 	if err != nil {

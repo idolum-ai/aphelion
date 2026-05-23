@@ -202,6 +202,7 @@ func newTelegramChildBotRuntime(cfg *config.Config, store *session.SQLiteStore, 
 		WithUserAgent(config.EffectiveUserAgent(cfg, tool.DefaultNativeFetchUserAgent)).
 		WithSessionStore(store).
 		WithDurableAgentPrincipalFallback().
+		WithWebSearchOptions(tool.WebSearchOptionsFromConfig(cfg.Tools.WebSearch)).
 		WithDurableAgentBootstrapLLM(defaultDurableAgentBootstrapFromConfig(cfg))
 	if manifestDir := strings.TrimSpace(cfg.Tools.ExternalManifestDir); manifestDir != "" {
 		if _, err := tools.WithExternalToolManifestDir(manifestDir); err != nil {

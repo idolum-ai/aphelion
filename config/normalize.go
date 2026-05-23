@@ -4,6 +4,42 @@ package config
 
 import "strings"
 
+func normalizeWebSearchConfig(cfg WebSearchConfig) WebSearchConfig {
+	cfg.ProviderOrder = normalizeStringList(cfg.ProviderOrder)
+	if len(cfg.ProviderOrder) == 0 {
+		cfg.ProviderOrder = []string{"openai_hosted", "brave"}
+	}
+	for i := range cfg.ProviderOrder {
+		cfg.ProviderOrder[i] = strings.ToLower(strings.TrimSpace(cfg.ProviderOrder[i]))
+	}
+	if cfg.MaxCount <= 0 {
+		cfg.MaxCount = 10
+	}
+	if cfg.DefaultCount <= 0 {
+		cfg.DefaultCount = 5
+	}
+	if cfg.DefaultCount > cfg.MaxCount {
+		cfg.DefaultCount = cfg.MaxCount
+	}
+	if strings.TrimSpace(cfg.Timeout) == "" {
+		cfg.Timeout = "15s"
+	}
+	if strings.TrimSpace(cfg.CacheTTL) == "" {
+		cfg.CacheTTL = "15m"
+	}
+	cfg.OpenAIHosted.ContextSize = strings.ToLower(strings.TrimSpace(cfg.OpenAIHosted.ContextSize))
+	if cfg.OpenAIHosted.ContextSize == "" {
+		cfg.OpenAIHosted.ContextSize = "medium"
+	}
+	cfg.Brave.APIKeyEnv = strings.TrimSpace(cfg.Brave.APIKeyEnv)
+	cfg.Brave.APIKeyFile = strings.TrimSpace(cfg.Brave.APIKeyFile)
+	cfg.Brave.Endpoint = strings.TrimSpace(cfg.Brave.Endpoint)
+	if cfg.Brave.Endpoint == "" {
+		cfg.Brave.Endpoint = "https://api.search.brave.com/res/v1/web/search"
+	}
+	return cfg
+}
+
 func normalizeSandboxProfileConfig(profile SandboxProfileConfig) SandboxProfileConfig {
 	profile.Mode = strings.ToLower(strings.TrimSpace(profile.Mode))
 	profile.Network = strings.ToLower(strings.TrimSpace(profile.Network))

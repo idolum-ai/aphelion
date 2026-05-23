@@ -148,7 +148,8 @@ func run() error {
 	}
 	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).
 		WithUserAgent(config.EffectiveUserAgent(cfg, tool.DefaultNativeFetchUserAgent)).
-		WithSessionStore(store)
+		WithSessionStore(store).
+		WithWebSearchOptions(tool.WebSearchOptionsFromConfig(cfg.Tools.WebSearch))
 	if manifestDir := strings.TrimSpace(cfg.Tools.ExternalManifestDir); manifestDir != "" {
 		if _, err := tools.WithExternalToolManifestDir(manifestDir); err != nil {
 			return fmt.Errorf("load external tool manifests: %w", err)

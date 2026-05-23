@@ -294,7 +294,31 @@ type AgentConfig struct {
 }
 
 type ToolsConfig struct {
-	ExternalManifestDir string `toml:"external_manifest_dir"`
+	ExternalManifestDir string          `toml:"external_manifest_dir"`
+	WebSearch           WebSearchConfig `toml:"web_search"`
+}
+
+type WebSearchConfig struct {
+	Enabled       bool                  `toml:"enabled"`
+	ProviderOrder []string              `toml:"provider_order"`
+	MaxCount      int                   `toml:"max_count"`
+	DefaultCount  int                   `toml:"default_count"`
+	Timeout       string                `toml:"timeout"`
+	CacheTTL      string                `toml:"cache_ttl"`
+	OpenAIHosted  WebSearchOpenAIConfig `toml:"openai_hosted"`
+	Brave         WebSearchBraveConfig  `toml:"brave"`
+}
+
+type WebSearchOpenAIConfig struct {
+	Enabled     bool   `toml:"enabled"`
+	ContextSize string `toml:"context_size"`
+}
+
+type WebSearchBraveConfig struct {
+	Enabled    bool   `toml:"enabled"`
+	APIKeyEnv  string `toml:"api_key_env"`
+	APIKeyFile string `toml:"api_key_file"`
+	Endpoint   string `toml:"endpoint"`
 }
 
 type SandboxConfig struct {
@@ -554,6 +578,25 @@ func Default() Config {
 				Model:         "llama3.2",
 				MaxTokens:     4096,
 				ContextWindow: 128000,
+			},
+		},
+		Tools: ToolsConfig{
+			WebSearch: WebSearchConfig{
+				Enabled:       false,
+				ProviderOrder: []string{"openai_hosted", "brave"},
+				MaxCount:      10,
+				DefaultCount:  5,
+				Timeout:       "15s",
+				CacheTTL:      "15m",
+				OpenAIHosted: WebSearchOpenAIConfig{
+					Enabled:     true,
+					ContextSize: "medium",
+				},
+				Brave: WebSearchBraveConfig{
+					Enabled:   false,
+					APIKeyEnv: "BRAVE_API_KEY",
+					Endpoint:  "https://api.search.brave.com/res/v1/web/search",
+				},
 			},
 		},
 		OpenAI: OpenAIConfig{

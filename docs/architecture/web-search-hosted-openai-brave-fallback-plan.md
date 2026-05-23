@@ -1,8 +1,8 @@
 # Web Search Implementation Plan: Hosted OpenAI First, Brave Fallback
 
-Status: implementation plan only  
-Branch: `docs/web-search-hosted-brave-plan-20260523`  
-Baseline: `origin/main` at `a074ce7`  
+Status: implementation plan only
+Branch: `docs/web-search-hosted-brave-plan-20260523`
+Baseline: `origin/main` at `a074ce7`
 Scope: native Aphelion web search design; no code implemented in this branch yet.
 
 ## Framing

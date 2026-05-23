@@ -42,6 +42,9 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 	writeDoctorSection(&b, "Authority Projection")
 	r.writeDoctorAuthorityProjection(&b, now)
 
+	writeDoctorSection(&b, "Web Search")
+	r.writeDoctorWebSearchStatus(&b)
+
 	writeDoctorSection(&b, "Sandbox Readiness")
 	r.writeDoctorSandboxReadiness(&b, now)
 
