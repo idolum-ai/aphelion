@@ -98,11 +98,13 @@ func TestTurnMonitorRecordsModelAndToolBatchEvents(t *testing.T) {
 	monitor.ModelRequestStarted(context.Background(), modelEvent)
 	monitor.ModelRequestFinished(context.Background(), modelEvent)
 	batchEvent := agent.ToolBatchEvent{
-		Mode:        "parallel",
-		BatchSize:   2,
-		ToolNames:   []string{"read_file", "search"},
-		Duration:    3 * time.Millisecond,
-		FailedCount: 1,
+		Mode:              "parallel",
+		BatchSize:         2,
+		ToolNames:         []string{"read_file", "search"},
+		Duration:          3 * time.Millisecond,
+		FailedCount:       1,
+		ParallelEligible:  true,
+		ParallelSafeCount: 2,
 	}
 	monitor.ToolBatchStarted(context.Background(), batchEvent)
 	monitor.ToolBatchFinished(context.Background(), batchEvent)
@@ -128,5 +130,11 @@ func TestTurnMonitorRecordsModelAndToolBatchEvents(t *testing.T) {
 	}
 	if got := payloadStringSlice(batchPayload, "tools"); len(got) != 2 || got[0] != "read_file" || got[1] != "search" {
 		t.Fatalf("tool batch tools payload = %#v, want read_file/search", batchPayload)
+	}
+	if got, ok := payloadBool(batchPayload, "parallel_eligible"); !ok || !got {
+		t.Fatalf("tool batch parallel eligibility payload = %#v, want true", batchPayload)
+	}
+	if got, ok := payloadInt64(batchPayload, "parallel_safe_count"); !ok || got != 2 {
+		t.Fatalf("tool batch parallel safe count payload = %#v, want 2", batchPayload)
 	}
 }

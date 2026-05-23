@@ -223,6 +223,21 @@ in parallel only when every call is classified as parallel-safe by the concrete
 tool registry; otherwise the batch is executed serially in model order. Tool
 results are always appended back to the conversation in model order.
 
+Tool batch payloads also carry bounded diagnostic fields:
+
+- `parallel_eligible`: the emitted batch was safe to run in parallel.
+- `parallel_safe_count`: number of calls classified safe by the registry.
+- `parallel_blocked_reason`: why a batch stayed serial, when known.
+- `parallel_missed_opportunity`: true when the model chose a single exploratory
+  `exec` command that native file tools could likely have expressed.
+- `parallel_missed_reason`: the native-tool affordance that was probably missed.
+
+These fields are evaluation evidence, not authority. They help tune tool
+affordances without granting new capabilities or rewriting the model's request.
+Prompt/tool-affordance changes that should affect this behavior can be checked
+with the opt-in live eval:
+`APHELION_LIVE_PARALLEL_TOOL_EVAL=1 go test ./internal/standalonecli -run TestLiveParallelNativeFileToolAffordance -count=1`.
+
 ## Current Projection Usage
 
 `ChatStatusSnapshot` now derives `TurnPhase` and `TurnPhaseSummary` from TES

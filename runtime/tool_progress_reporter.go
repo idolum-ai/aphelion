@@ -143,12 +143,14 @@ func (m *turnMonitor) ToolBatchStarted(ctx context.Context, event agent.ToolBatc
 	if m == nil || m.runtime == nil {
 		return
 	}
-	m.runtime.recordExecutionEvent(m.key, core.ExecutionEventToolBatchStarted, "tool_batch", "started", map[string]any{
+	payload := map[string]any{
 		"run_id":     m.runID,
 		"mode":       strings.TrimSpace(event.Mode),
 		"batch_size": event.BatchSize,
 		"tools":      append([]string(nil), event.ToolNames...),
-	}, time.Now().UTC())
+	}
+	appendToolBatchParallelEvidence(payload, event)
+	m.runtime.recordExecutionEvent(m.key, core.ExecutionEventToolBatchStarted, "tool_batch", "started", payload, time.Now().UTC())
 }
 
 func (m *turnMonitor) ToolBatchFinished(ctx context.Context, event agent.ToolBatchEvent) {
@@ -159,14 +161,33 @@ func (m *turnMonitor) ToolBatchFinished(ctx context.Context, event agent.ToolBat
 	if event.FailedCount > 0 {
 		status = "completed_with_errors"
 	}
-	m.runtime.recordExecutionEvent(m.key, core.ExecutionEventToolBatchCompleted, "tool_batch", status, map[string]any{
+	payload := map[string]any{
 		"run_id":            m.runID,
 		"mode":              strings.TrimSpace(event.Mode),
 		"batch_size":        event.BatchSize,
 		"tools":             append([]string(nil), event.ToolNames...),
 		"failed_count":      event.FailedCount,
 		"batch_duration_ms": durationMillis(event.Duration),
-	}, time.Now().UTC())
+	}
+	appendToolBatchParallelEvidence(payload, event)
+	m.runtime.recordExecutionEvent(m.key, core.ExecutionEventToolBatchCompleted, "tool_batch", status, payload, time.Now().UTC())
+}
+
+func appendToolBatchParallelEvidence(payload map[string]any, event agent.ToolBatchEvent) {
+	if payload == nil {
+		return
+	}
+	payload["parallel_eligible"] = event.ParallelEligible
+	payload["parallel_safe_count"] = event.ParallelSafeCount
+	if reason := strings.TrimSpace(event.ParallelBlockedReason); reason != "" {
+		payload["parallel_blocked_reason"] = reason
+	}
+	if event.ParallelMissedOpportunity {
+		payload["parallel_missed_opportunity"] = true
+		if reason := strings.TrimSpace(event.ParallelMissedReason); reason != "" {
+			payload["parallel_missed_reason"] = reason
+		}
+	}
 }
 
 func appendTokenUsagePayload(payload map[string]any, usage core.TokenUsage) {

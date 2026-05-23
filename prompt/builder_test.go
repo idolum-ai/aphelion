@@ -283,6 +283,24 @@ func TestBuildGovernorPromptAddsValidationDisciplineWhenExecIsAvailable(t *testi
 	}
 }
 
+func TestBuildGovernorPromptAddsNativeFileExplorationDiscipline(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		ToolManifest: "tools:\n- read_file: read files\n- list_dir: list directories\n- search: search files",
+	})
+
+	if !strings.Contains(got, "## Native File Exploration Discipline") {
+		t.Fatalf("prompt missing native file exploration discipline block: %q", got)
+	}
+	if !strings.Contains(got, "emit those native tool calls together") {
+		t.Fatalf("prompt missing parallel native tool guidance: %q", got)
+	}
+	if !strings.Contains(got, "reserve exec for commands, validation, builds") {
+		t.Fatalf("prompt missing exec-vs-native boundary: %q", got)
+	}
+}
+
 func TestBuildGovernorPromptAddsGeneratedMediaDeliveryWhenExecIsAvailable(t *testing.T) {
 	t.Parallel()
 
@@ -354,6 +372,7 @@ func TestBuildGovernorPromptAddsDisciplineFromExplicitToolCapabilities(t *testin
 	got := BuildGovernorPrompt(GovernorRequest{
 		ToolCapabilities: ToolCapabilities{
 			Exec:              true,
+			ReadFile:          true,
 			UpdatePlan:        true,
 			UpdateOperation:   true,
 			OperationArtifact: true,
@@ -375,6 +394,9 @@ func TestBuildGovernorPromptAddsDisciplineFromExplicitToolCapabilities(t *testin
 	}
 	if !strings.Contains(got, "## Validation Discipline") {
 		t.Fatalf("prompt missing validation discipline from capability flags: %q", got)
+	}
+	if !strings.Contains(got, "## Native File Exploration Discipline") {
+		t.Fatalf("prompt missing native file exploration discipline from capability flags: %q", got)
 	}
 	if !strings.Contains(got, "## Generated Media Delivery") {
 		t.Fatalf("prompt missing generated media delivery from capability flags: %q", got)

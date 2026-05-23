@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -520,13 +521,19 @@ func TestDefinitionsIncludeNativeFileTools(t *testing.T) {
 	t.Parallel()
 
 	defs := NewRegistry(t.TempDir(), 2*time.Second).Definitions()
-	names := make(map[string]bool, len(defs))
+	names := make(map[string]agent.ToolDef, len(defs))
 	for _, def := range defs {
-		names[def.Name] = true
+		names[def.Name] = def
 	}
 	for _, name := range []string{"read_file", "write_file", "list_dir", "search", "fetch_url"} {
-		if !names[name] {
+		if _, ok := names[name]; !ok {
 			t.Fatalf("Definitions() missing %s", name)
+		}
+	}
+	for _, name := range []string{"read_file", "list_dir", "search"} {
+		desc := strings.ToLower(names[name].Description)
+		if !strings.Contains(desc, "parallel-safe") || !strings.Contains(desc, "together in one response") {
+			t.Fatalf("%s description = %q, want parallel-safe batch affordance", name, names[name].Description)
 		}
 	}
 }

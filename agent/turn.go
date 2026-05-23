@@ -65,11 +65,16 @@ type ModelRequestEvent struct {
 }
 
 type ToolBatchEvent struct {
-	Mode        string
-	BatchSize   int
-	ToolNames   []string
-	Duration    time.Duration
-	FailedCount int
+	Mode                      string
+	BatchSize                 int
+	ToolNames                 []string
+	Duration                  time.Duration
+	FailedCount               int
+	ParallelEligible          bool
+	ParallelSafeCount         int
+	ParallelBlockedReason     string
+	ParallelMissedOpportunity bool
+	ParallelMissedReason      string
 }
 
 type Message struct {

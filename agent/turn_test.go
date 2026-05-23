@@ -454,8 +454,57 @@ func TestRunTurnObserverRecordsModelRequestsAndToolBatches(t *testing.T) {
 	if len(observer.batchStarts) != 1 || observer.batchStarts[0].Mode != toolBatchModeParallel || observer.batchStarts[0].BatchSize != 2 {
 		t.Fatalf("batch starts = %#v, want one parallel batch", observer.batchStarts)
 	}
+	if !observer.batchStarts[0].ParallelEligible || observer.batchStarts[0].ParallelSafeCount != 2 || observer.batchStarts[0].ParallelBlockedReason != "" {
+		t.Fatalf("batch start parallel evidence = %#v, want eligible two-call batch", observer.batchStarts[0])
+	}
 	if len(observer.batchFinishes) != 1 || observer.batchFinishes[0].FailedCount != 0 || observer.batchFinishes[0].Mode != toolBatchModeParallel {
 		t.Fatalf("batch finishes = %#v, want successful parallel batch", observer.batchFinishes)
+	}
+}
+
+func TestRunTurnObserverFlagsSingleExecExplorationMissedOpportunity(t *testing.T) {
+	observer := &recordingTurnObserver{}
+	provider := &mockProvider{
+		complete: func(_ context.Context, call int, _ []Message, _ []ToolDef) (*Response, error) {
+			if call == 1 {
+				return &Response{
+					ToolCalls: []ToolCall{{
+						ID:    "exec-search",
+						Name:  "exec",
+						Input: json.RawMessage(`{"command":"rg ParallelSafeToolRegistry agent runtime"}`),
+					}},
+				}, nil
+			}
+			if call == 2 {
+				return &Response{Content: "done"}, nil
+			}
+			t.Fatalf("unexpected call %d", call)
+			return nil, nil
+		},
+	}
+	tools := &mockTools{
+		parallelSafe: map[string]bool{"read_file": true, "list_dir": true, "search": true},
+		exec: func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+			return "match", nil
+		},
+	}
+
+	result, _, err := RunTurn(context.Background(), provider, tools, defaultBudget(), &CompleteOptions{Observer: observer}, nil)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "done" {
+		t.Fatalf("result.Text = %q, want done", result.Text)
+	}
+	if len(observer.batchFinishes) != 1 {
+		t.Fatalf("batch finishes = %#v, want one batch", observer.batchFinishes)
+	}
+	got := observer.batchFinishes[0]
+	if got.Mode != toolBatchModeSerial || got.BatchSize != 1 || got.ParallelBlockedReason != "single_call" {
+		t.Fatalf("batch evidence = %#v, want serial single-call block", got)
+	}
+	if !got.ParallelMissedOpportunity || got.ParallelMissedReason != "exec_search_could_use_search" {
+		t.Fatalf("missed opportunity = %#v, want search-native opportunity", got)
 	}
 }
 

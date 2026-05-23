@@ -10,6 +10,9 @@ import (
 
 type ToolCapabilities struct {
 	Exec                bool
+	ReadFile            bool
+	ListDir             bool
+	Search              bool
 	UpdatePlan          bool
 	UpdateOperation     bool
 	OperationArtifact   bool
@@ -20,6 +23,9 @@ type ToolCapabilities struct {
 
 func (c ToolCapabilities) Empty() bool {
 	return !c.Exec &&
+		!c.ReadFile &&
+		!c.ListDir &&
+		!c.Search &&
 		!c.UpdatePlan &&
 		!c.UpdateOperation &&
 		!c.OperationArtifact &&
@@ -83,6 +89,9 @@ func appendToolDisciplineBlocks(parts []agent.SystemBlock, toolCaps ToolCapabili
 	if operations := renderOperationalDisciplineBlock(toolCaps); operations != "" {
 		parts = append(parts, agent.SystemBlock{Text: operations})
 	}
+	if nativeFileExploration := renderNativeFileExplorationDisciplineBlock(toolCaps); nativeFileExploration != "" {
+		parts = append(parts, agent.SystemBlock{Text: nativeFileExploration})
+	}
 	if artifacts := renderOperationArtifactDeliveryBlock(toolCaps); artifacts != "" {
 		parts = append(parts, agent.SystemBlock{Text: artifacts})
 	}
@@ -99,6 +108,18 @@ func appendToolDisciplineBlocks(parts []agent.SystemBlock, toolCaps ToolCapabili
 		parts = append(parts, agent.SystemBlock{Text: mediaDelivery})
 	}
 	return parts
+}
+
+func renderNativeFileExplorationDisciplineBlock(capabilities ToolCapabilities) string {
+	if !capabilities.ReadFile && !capabilities.ListDir && !capabilities.Search {
+		return ""
+	}
+	return strings.Join([]string{
+		"## Native File Exploration Discipline",
+		"Prefer read_file, list_dir, and search for scoped repository and filesystem inspection; reserve exec for commands, validation, builds, service actions, or logic that native tools cannot express.",
+		"When several independent reads, directory listings, or literal searches are needed, emit those native tool calls together in one assistant response so the runtime can execute the parallel-safe batch.",
+		"Keep each native file call bounded to the smallest useful path, query, and byte or result limit.",
+	}, "\n")
 }
 
 func renderConfirmationDisciplineBlock(capabilities ToolCapabilities) string {
@@ -159,6 +180,12 @@ func ToolCapabilitiesFromDefs(defs []agent.ToolDef) ToolCapabilities {
 		switch normalizeToolName(def.Name) {
 		case "exec":
 			out.Exec = true
+		case "read_file":
+			out.ReadFile = true
+		case "list_dir":
+			out.ListDir = true
+		case "search":
+			out.Search = true
 		case "update_plan":
 			out.UpdatePlan = true
 		case "update_operation":
@@ -180,6 +207,9 @@ func toolCapabilitiesFromManifest(manifest string) ToolCapabilities {
 	names := parseManifestToolNames(manifest)
 	return ToolCapabilities{
 		Exec:                manifestHasTool(names, "exec"),
+		ReadFile:            manifestHasTool(names, "read_file"),
+		ListDir:             manifestHasTool(names, "list_dir"),
+		Search:              manifestHasTool(names, "search"),
 		UpdatePlan:          manifestHasTool(names, "update_plan"),
 		UpdateOperation:     manifestHasTool(names, "update_operation"),
 		OperationArtifact:   manifestHasTool(names, "operation_artifact"),

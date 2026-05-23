@@ -79,7 +79,7 @@ func nativeFileToolDefinitions() []agent.ToolDef {
 	return []agent.ToolDef{
 		{
 			Name:        "read_file",
-			Description: "Read a bounded text file through the current sandbox profile. Relative paths resolve inside the current working root; hidden and out-of-scope paths are rejected.",
+			Description: "Parallel-safe. Read a bounded text file through the current sandbox profile. Prefer this over exec cat/sed/head/tail/nl for scoped file inspection. For independent file reads, issue multiple read_file/list_dir/search calls together in one response.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -105,7 +105,7 @@ func nativeFileToolDefinitions() []agent.ToolDef {
 		},
 		{
 			Name:        "list_dir",
-			Description: "List a scoped directory through the current sandbox profile.",
+			Description: "Parallel-safe. List a scoped directory through the current sandbox profile. Prefer this over exec ls/tree/find for basic directory inspection. For independent listings, issue multiple read_file/list_dir/search calls together in one response.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -116,7 +116,7 @@ func nativeFileToolDefinitions() []agent.ToolDef {
 		},
 		{
 			Name:        "search",
-			Description: "Search text files under a scoped path with literal matching. Hidden and out-of-scope paths are skipped or rejected.",
+			Description: "Parallel-safe. Search text files under a scoped path with literal matching. Prefer this over exec rg/grep/find for ordinary literal repository searches. For independent searches, issue multiple read_file/list_dir/search calls together in one response.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {

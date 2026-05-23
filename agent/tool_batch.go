@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -28,6 +29,16 @@ type preparedToolCall struct {
 	requestSig string
 }
 
+type parallelToolBatchPlan struct {
+	prepared                  []preparedToolCall
+	parallel                  bool
+	parallelEligible          bool
+	parallelSafeCount         int
+	parallelBlockedReason     string
+	parallelMissedOpportunity bool
+	parallelMissedReason      string
+}
+
 type toolExecutionResult struct {
 	call       ToolCall
 	requestSig string
@@ -44,15 +55,20 @@ func executeToolBatch(
 	observer TurnObserver,
 ) toolBatchResult {
 	mode := toolBatchModeSerial
-	prepared, parallel := prepareParallelToolBatch(tools, calls, loopGuard)
-	if parallel {
+	plan := planParallelToolBatch(tools, calls, loopGuard)
+	if plan.parallel {
 		mode = toolBatchModeParallel
 	}
 
 	event := ToolBatchEvent{
-		Mode:      mode,
-		BatchSize: len(calls),
-		ToolNames: toolBatchNames(calls),
+		Mode:                      mode,
+		BatchSize:                 len(calls),
+		ToolNames:                 toolBatchNames(calls),
+		ParallelEligible:          plan.parallelEligible,
+		ParallelSafeCount:         plan.parallelSafeCount,
+		ParallelBlockedReason:     plan.parallelBlockedReason,
+		ParallelMissedOpportunity: plan.parallelMissedOpportunity,
+		ParallelMissedReason:      plan.parallelMissedReason,
 	}
 	if observer != nil {
 		observer.ToolBatchStarted(ctx, event)
@@ -60,8 +76,8 @@ func executeToolBatch(
 	started := time.Now()
 
 	var result toolBatchResult
-	if parallel {
-		result = executeParallelToolBatch(ctx, tools, prepared, loopGuard, pendingBudget)
+	if plan.parallel {
+		result = executeParallelToolBatch(ctx, tools, plan.prepared, loopGuard, pendingBudget)
 	} else {
 		result = executeSerialToolBatch(ctx, tools, calls, loopGuard, pendingBudget)
 	}
@@ -74,32 +90,52 @@ func executeToolBatch(
 	return result
 }
 
-func prepareParallelToolBatch(tools ToolRegistry, calls []ToolCall, loopGuard *toolLoopGuardState) ([]preparedToolCall, bool) {
-	if len(calls) <= 1 || tools == nil {
-		return nil, false
+func planParallelToolBatch(tools ToolRegistry, calls []ToolCall, loopGuard *toolLoopGuardState) parallelToolBatchPlan {
+	plan := parallelToolBatchPlan{}
+	if len(calls) == 0 {
+		plan.parallelBlockedReason = "empty_batch"
+		return plan
+	}
+	if len(calls) == 1 {
+		plan.parallelBlockedReason = "single_call"
+		plan.parallelMissedOpportunity, plan.parallelMissedReason = missedParallelOpportunityForCall(calls[0])
+		return plan
+	}
+	if tools == nil {
+		plan.parallelBlockedReason = "no_tool_registry"
+		return plan
 	}
 	parallelSafe, ok := tools.(ParallelSafeToolRegistry)
 	if !ok {
-		return nil, false
+		plan.parallelBlockedReason = "registry_without_parallel_support"
+		return plan
 	}
 
 	prepared := make([]preparedToolCall, 0, len(calls))
 	for _, call := range calls {
 		repairedInput, inputErr := repairToolInput(call.Input)
 		if inputErr != nil {
-			return nil, false
+			plan.parallelBlockedReason = "invalid_tool_input"
+			return plan
 		}
 		call.Input = repairedInput
 		requestSig, loopBlocked := loopGuard.shouldBlock(call)
 		if loopBlocked {
-			return nil, false
+			plan.parallelBlockedReason = "loop_guard"
+			return plan
 		}
 		if !parallelSafe.SupportsParallelToolCall(call.Name, call.Input) {
-			return nil, false
+			plan.parallelBlockedReason = "unsafe_tool"
+			plan.parallelMissedOpportunity, plan.parallelMissedReason = missedParallelOpportunityForCall(call)
+			return plan
 		}
+		plan.parallelSafeCount++
 		prepared = append(prepared, preparedToolCall{call: call, requestSig: requestSig})
 	}
-	return prepared, true
+	plan.prepared = prepared
+	plan.parallel = true
+	plan.parallelEligible = true
+	return plan
 }
 
 func executeSerialToolBatch(
@@ -221,4 +257,86 @@ func toolBatchNames(calls []ToolCall) []string {
 		}
 	}
 	return names
+}
+
+func missedParallelOpportunityForCall(call ToolCall) (bool, string) {
+	if strings.TrimSpace(call.Name) != "exec" {
+		return false, ""
+	}
+	command := toolCallInputString(call.Input, "command", "cmd")
+	switch explorationCommandKind(command) {
+	case "search":
+		return true, "exec_search_could_use_search"
+	case "read":
+		return true, "exec_read_could_use_read_file"
+	case "list":
+		return true, "exec_list_could_use_list_dir"
+	default:
+		return false, ""
+	}
+}
+
+func toolCallInputString(input json.RawMessage, keys ...string) string {
+	if len(input) == 0 {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return ""
+	}
+	for _, key := range keys {
+		value := strings.TrimSpace(fmt.Sprint(payload[strings.TrimSpace(key)]))
+		if value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	return ""
+}
+
+func explorationCommandKind(command string) string {
+	command = strings.ToLower(strings.TrimSpace(command))
+	if command == "" {
+		return ""
+	}
+	if commandHasToken(command, "rg", "grep", "ripgrep") {
+		return "search"
+	}
+	if commandHasToken(command, "cat", "sed", "head", "tail", "nl", "less") {
+		return "read"
+	}
+	if commandHasToken(command, "ls", "tree") {
+		return "list"
+	}
+	if commandHasToken(command, "find") {
+		return "search"
+	}
+	return ""
+}
+
+func commandHasToken(command string, tokens ...string) bool {
+	fields := strings.FieldsFunc(command, func(r rune) bool {
+		switch r {
+		case ' ', '\t', '\r', '\n', ';', '&', '|', '(', ')':
+			return true
+		default:
+			return false
+		}
+	})
+	if len(fields) == 0 {
+		return false
+	}
+	want := make(map[string]struct{}, len(tokens))
+	for _, token := range tokens {
+		token = strings.TrimSpace(token)
+		if token != "" {
+			want[token] = struct{}{}
+		}
+	}
+	for _, field := range fields {
+		field = strings.Trim(strings.TrimSpace(field), `"'`)
+		if _, ok := want[field]; ok {
+			return true
+		}
+	}
+	return false
 }
