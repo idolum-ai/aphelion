@@ -5,6 +5,12 @@ Branch: `docs/web-search-hosted-brave-plan-20260523`
 Baseline: `origin/main` at `a074ce7`  
 Scope: native Aphelion web search design; no code implemented in this branch yet.
 
+## Framing
+
+Web search is **public-web evidence acquisition under explicit approval**, not ambient browsing.
+
+That frame matters more than the provider choice. OpenAI hosted search and Brave Search are both external evidence sources: they spend quota, cross the sandbox boundary, and return untrusted public content that can steer a turn. Aphelion should therefore expose search only as a governed tool invocation with query, provider, attempt budget, grant, lease, and result provenance attached.
+
 ## 0. Why this shape
 
 Daniel's design target is an in-between path:
@@ -488,13 +494,26 @@ No live OpenAI or Brave calls in default tests.
 
 ## 15. Recommended first implementation PR
 
-The first code PR should be narrow:
+The first code PR should be narrow and blocker-heavy. Its purpose is not to prove web search works against live providers; its purpose is to prove that search cannot become ambient authority.
+
+Hard acceptance criteria:
+
+- `web_search` is hidden or returns a structured blocker without an active `kind=tool` grant.
+- An active grant still blocks without active continuation or operation-plan lease evidence.
+- The OpenAI hosted-search path is represented by a fake-provider test before any live-provider smoke test.
+- Brave is not called until fallback policy, request budget, and credential resolution behavior are covered by tests.
+- Default CI performs no live OpenAI, Brave, or public-web calls.
+- `/doctor` or equivalent status projection can explain the current blocker: disabled config, missing provider support, missing grant, missing lease, missing credential, or fallback not allowed.
+- All successful or blocked outputs mark public-web content as untrusted and exclude credential values, request headers, raw logs, and hidden config paths.
+
+Suggested first slice:
 
 1. Add config structs for `[tools.web_search]`.
-2. Add native authority-managed `web_search` skeleton with blockers.
-3. Add tests for grant + lease enforcement.
-4. Add fake hosted-provider interface and one successful normalization test.
-5. Do not add Brave live HTTP until the skeleton and hosted adapter are proven.
+2. Add a native authority-managed `web_search` skeleton with structured blockers.
+3. Add tests for grant + lease enforcement and malformed constraints.
+4. Add a fake hosted-provider adapter and one successful normalization test.
+5. Add status/doctor projection for why search is unavailable.
+6. Defer Brave live HTTP and any real-provider smoke test to a separately approved follow-up.
 
 Then a second PR can add Brave provider + fallback chain.
 
