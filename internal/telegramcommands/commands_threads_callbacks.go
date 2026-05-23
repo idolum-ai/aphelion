@@ -36,29 +36,106 @@ func decodeTelegramThreadPromoteCallback(data string) (int64, bool) {
 	threadID, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(trimmed, telegramThreadPromoteCallbackPrefix)), 10, 64)
 	return threadID, err == nil && threadID > 0
 }
+
+const telegramThreadPromotionActionCompactPrefix = "tp:"
+
 func encodeTelegramThreadPromotionReadyCallback(handoffID string) string {
-	handoffID = strings.TrimSpace(handoffID)
-	if handoffID == "" {
-		return ""
-	}
-	return telegramThreadPromotionReadyPrefix + handoffID
+	return encodeTelegramThreadPromotionActionCallback("ready", handoffID)
 }
 func encodeTelegramThreadPromotionCancelCallback(handoffID string) string {
-	handoffID = strings.TrimSpace(handoffID)
-	if handoffID == "" {
-		return ""
-	}
-	return telegramThreadPromotionCancelPrefix + handoffID
+	return encodeTelegramThreadPromotionActionCallback("cancel", handoffID)
 }
 func encodeTelegramThreadPromotionRefreshCallback(handoffID string) string {
+	return encodeTelegramThreadPromotionActionCallback("refresh", handoffID)
+}
+func encodeTelegramThreadPromotionActionCallback(action string, handoffID string) string {
+	action = strings.TrimSpace(action)
 	handoffID = strings.TrimSpace(handoffID)
-	if handoffID == "" {
+	if action == "" || handoffID == "" {
 		return ""
 	}
-	return telegramThreadPromotionRefreshPrefix + handoffID
+	if prefix := telegramThreadPromotionActionLegacyPrefix(action); prefix != "" {
+		data := prefix + handoffID
+		if len(data) <= core.TelegramCallbackDataMaxBytes {
+			return data
+		}
+	}
+	if code := telegramThreadPromotionActionCode(action); code != "" {
+		if threadID, token, ok := telegramThreadPromotionCompactParts(handoffID); ok {
+			data := telegramThreadPromotionActionCompactPrefix + code + ":" + strconv.FormatInt(threadID, 10) + ":" + token
+			if len(data) <= core.TelegramCallbackDataMaxBytes {
+				return data
+			}
+		}
+	}
+	return ""
+}
+func telegramThreadPromotionActionCode(action string) string {
+	switch strings.TrimSpace(action) {
+	case "ready":
+		return "r"
+	case "cancel":
+		return "c"
+	case "refresh":
+		return "f"
+	default:
+		return ""
+	}
+}
+func telegramThreadPromotionActionFromCode(code string) string {
+	switch strings.TrimSpace(code) {
+	case "r":
+		return "ready"
+	case "c":
+		return "cancel"
+	case "f":
+		return "refresh"
+	default:
+		return ""
+	}
+}
+func telegramThreadPromotionActionLegacyPrefix(action string) string {
+	switch strings.TrimSpace(action) {
+	case "ready":
+		return telegramThreadPromotionReadyPrefix
+	case "cancel":
+		return telegramThreadPromotionCancelPrefix
+	case "refresh":
+		return telegramThreadPromotionRefreshPrefix
+	default:
+		return ""
+	}
+}
+func telegramThreadPromotionCompactParts(handoffID string) (int64, string, bool) {
+	parts := strings.Split(strings.TrimSpace(handoffID), ":")
+	if len(parts) < 4 || parts[0] != "thread-promotion" {
+		return 0, "", false
+	}
+	threadID, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil || threadID <= 0 {
+		return 0, "", false
+	}
+	token := strings.TrimSpace(parts[3])
+	if token == "" {
+		return 0, "", false
+	}
+	return threadID, token, true
 }
 func decodeTelegramThreadPromotionActionCallback(data string) (string, string, bool) {
 	trimmed := strings.TrimSpace(data)
+	if strings.HasPrefix(trimmed, telegramThreadPromotionActionCompactPrefix) {
+		parts := strings.Split(strings.TrimPrefix(trimmed, telegramThreadPromotionActionCompactPrefix), ":")
+		if len(parts) != 3 {
+			return "", "", false
+		}
+		action := telegramThreadPromotionActionFromCode(parts[0])
+		threadID, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+		token := strings.TrimSpace(parts[2])
+		if action == "" || err != nil || threadID <= 0 || token == "" {
+			return "", "", false
+		}
+		return action, "thread-promotion::" + strconv.FormatInt(threadID, 10) + ":" + token, true
+	}
 	for _, candidate := range []struct{ prefix, action string }{
 		{telegramThreadPromotionReadyPrefix, "ready"},
 		{telegramThreadPromotionCancelPrefix, "cancel"},
@@ -192,6 +269,7 @@ func handleTelegramThreadPromotionActionCallback(ctx context.Context, sender com
 		}
 		return true, nil
 	}
+	handoffID = telegramThreadPromotionCallbackHandoffID(chatID, handoffID)
 	ack := "Updating promotion."
 	surface := "thread_promotion_" + action
 	switch action {
@@ -305,6 +383,18 @@ func telegramThreadPromotionLastHandoffIDFromText(text string) string {
 		}
 	}
 	return last
+}
+func telegramThreadPromotionCallbackHandoffID(chatID int64, handoffID string) string {
+	handoffID = strings.TrimSpace(handoffID)
+	parts := strings.Split(handoffID, ":")
+	if len(parts) < 4 || parts[0] != "thread-promotion" {
+		return handoffID
+	}
+	if strings.TrimSpace(parts[1]) != "" || chatID == 0 {
+		return handoffID
+	}
+	parts[1] = strconv.FormatInt(chatID, 10)
+	return strings.Join(parts, ":")
 }
 func telegramThreadPromotionThreadIDFromHandoffID(handoffID string) int64 {
 	parts := strings.Split(strings.TrimSpace(handoffID), ":")

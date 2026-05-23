@@ -4,6 +4,7 @@ package telegramcommands
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -75,9 +76,36 @@ func TestThreadPromoteCallbackCreatesDraftThroughRouter(t *testing.T) {
 	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Promotion draft created for thread 3.") {
 		t.Fatalf("editInline = %#v, want promotion draft text with buttons", sender.editInline)
 	}
-	if !commandRowsContain(sender.editInline[0].rows, "Ready", "thread_promo_ready:thread-promotion:1001:3:99") ||
-		!commandRowsContain(sender.editInline[0].rows, "Cancel", "thread_promo_cancel:thread-promotion:1001:3:99") {
-		t.Fatalf("promotion rows = %#v, want ready/cancel", sender.editInline[0].rows)
+	readyData, ok := commandRowCallbackData(sender.editInline[0].rows, "Ready")
+	if !ok {
+		t.Fatalf("promotion rows = %#v, want ready button", sender.editInline[0].rows)
+	}
+	assertThreadPromotionCallbackData(t, 1001, readyData, "ready", "thread-promotion:1001:3:99")
+	cancelData, ok := commandRowCallbackData(sender.editInline[0].rows, "Cancel")
+	if !ok {
+		t.Fatalf("promotion rows = %#v, want cancel button", sender.editInline[0].rows)
+	}
+	assertThreadPromotionCallbackData(t, 1001, cancelData, "cancel", "thread-promotion:1001:3:99")
+}
+
+func TestThreadPromotionActionCallbacksStayWithinTelegramLimit(t *testing.T) {
+	t.Parallel()
+
+	for _, handoffID := range []string{
+		"thread-promotion:6313146:8:1779540000000000000",
+		"thread-promotion:-1001234567890:8:1779540000000000000",
+	} {
+		chatID := telegramThreadPromotionChatIDForTest(t, handoffID)
+		for _, tc := range []struct {
+			action string
+			data   string
+		}{
+			{action: "ready", data: encodeTelegramThreadPromotionReadyCallback(handoffID)},
+			{action: "cancel", data: encodeTelegramThreadPromotionCancelCallback(handoffID)},
+			{action: "refresh", data: encodeTelegramThreadPromotionRefreshCallback(handoffID)},
+		} {
+			assertThreadPromotionCallbackData(t, chatID, tc.data, tc.action, handoffID)
+		}
 	}
 }
 
@@ -142,4 +170,43 @@ func TestThreadPromoteCallbackIsAdminOnly(t *testing.T) {
 	if len(sender.editClear) != 0 || len(sender.editInline) != 0 {
 		t.Fatalf("edits = %#v/%#v, want no message edit", sender.editClear, sender.editInline)
 	}
+}
+
+func commandRowCallbackData(rows [][]telegram.InlineButton, label string) (string, bool) {
+	for _, row := range rows {
+		for _, button := range row {
+			if button.Text == label {
+				return button.CallbackData, true
+			}
+		}
+	}
+	return "", false
+}
+
+func assertThreadPromotionCallbackData(t *testing.T, chatID int64, data string, wantAction string, wantHandoffID string) {
+	t.Helper()
+	if data == "" || len(data) > core.TelegramCallbackDataMaxBytes {
+		t.Fatalf("callback data for %s = %q len=%d, want non-empty <= %d", wantAction, data, len(data), core.TelegramCallbackDataMaxBytes)
+	}
+	action, handoffID, ok := decodeTelegramThreadPromotionActionCallback(data)
+	if !ok {
+		t.Fatalf("decodeTelegramThreadPromotionActionCallback(%q) ok=false", data)
+	}
+	handoffID = telegramThreadPromotionCallbackHandoffID(chatID, handoffID)
+	if action != wantAction || handoffID != wantHandoffID {
+		t.Fatalf("decodeTelegramThreadPromotionActionCallback(%q) = action:%q handoff:%q, want action:%q handoff:%q", data, action, handoffID, wantAction, wantHandoffID)
+	}
+}
+
+func telegramThreadPromotionChatIDForTest(t *testing.T, handoffID string) int64 {
+	t.Helper()
+	parts := strings.Split(handoffID, ":")
+	if len(parts) < 4 || parts[0] != "thread-promotion" {
+		t.Fatalf("invalid handoff id fixture %q", handoffID)
+	}
+	chatID, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		t.Fatalf("parse chat id from %q: %v", handoffID, err)
+	}
+	return chatID
 }
