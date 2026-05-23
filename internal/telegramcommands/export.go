@@ -61,6 +61,9 @@ func ResolveTelegramThreadReply(ctx context.Context, sender Sender, router Route
 func HandleTelegramThreadCommand(ctx context.Context, sender Sender, router Router, msg core.InboundMessage, command string) (bool, error) {
 	return handleTelegramThreadCommand(ctx, sender, router, msg, command)
 }
+func EncodeTelegramThreadPromoteCallback(threadID int64) string {
+	return encodeTelegramThreadPromoteCallback(threadID)
+}
 func EncodeTelegramThreadAbsorbCallback(threadID int64) string {
 	return encodeTelegramThreadAbsorbCallback(threadID)
 }

@@ -125,11 +125,58 @@ func (r *Runtime) blockInvalidMaterializedContinuationAuthority(ctx context.Cont
 			return reconciledOpState, true, reconcileErr
 		}
 	}
-	if r != nil && r.outbound != nil && msg.ChatID != 0 {
-		text := r.prefixTelegramPresentedText(r.telegramPresentationForMessage(msg), renderInvalidAuthorityNeedsNarrowerProposalStatus(blockedState))
-		_, _ = r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: msg.ChatID, Text: text})
+	if err := r.sendInvalidMaterializedAuthoritySafeBlockedNotice(ctx, key, msg, blockedState, source, now); err != nil {
+		return opState, true, err
 	}
 	return opState, true, nil
+}
+
+func (r *Runtime) sendInvalidMaterializedAuthoritySafeBlockedNotice(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState, source string, now time.Time) error {
+	if r == nil {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	state = session.NormalizeContinuationState(state)
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "authority_contract_compiler"
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", map[string]any{
+		"reason":                 "invalid_authority_no_safe_repair",
+		"materialization_source": source,
+		"decision_id":            strings.TrimSpace(state.DecisionID),
+		"proposal_id":            strings.TrimSpace(state.ActionProposal.ID),
+		"user_visible":           r.outbound != nil && msg.ChatID != 0,
+		"debug_breadcrumb": core.ContinuationDebugBreadcrumb(
+			key.ChatID,
+			strings.TrimSpace(state.DecisionID),
+			"runtime.renderInvalidMaterializedAuthoritySafeBlockedStatus",
+			"runtime/continuation_authority_contract.go",
+			"inspect /health trace for internal authority-contract compiler details",
+		),
+	}, now)
+	if r.outbound == nil || msg.ChatID == 0 {
+		return nil
+	}
+	text := r.prefixTelegramPresentedText(r.telegramPresentationForMessage(msg), renderInvalidMaterializedAuthoritySafeBlockedStatus(state))
+	_, err := r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: msg.ChatID, Text: text})
+	return err
+}
+
+func renderInvalidMaterializedAuthoritySafeBlockedStatus(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
+	title := firstNonEmptyContinuation(state.ActionProposal.OperatorTitle, state.ActionProposal.PlanTitle, state.ActionProposal.Summary, state.StageSummary, "this step")
+	return strings.Join([]string{
+		"I couldn't produce a safe approval for this step.",
+		"",
+		"Plan: " + truncatePreview(title, 96),
+		"",
+		"I stopped before showing approval buttons because the available action boundary is not safe enough to approve as-is.",
+		"Please ask for a smaller phase that names exactly what I should do and where I must stop.",
+	}, "\n")
 }
 
 func renderInvalidAuthorityNeedsNarrowerProposalStatus(state session.ContinuationState) string {

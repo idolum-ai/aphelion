@@ -777,3 +777,129 @@ func TestMigratesSchemaV53ToV54BackfillsTelegramThreadSessions(t *testing.T) {
 		t.Fatalf("TelegramThreadIDForReplyMessage(guide) = %d ok=%v err=%v, want thread 7", got, ok, err)
 	}
 }
+
+func TestMigratesSchemaV55ToV57TelegramThreadPromotionHandoffs(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v55.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v55 db: %v", err)
+	}
+	now := time.Date(2026, 5, 23, 2, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	for _, stmt := range []string{
+		`PRAGMA foreign_keys=ON`,
+		`CREATE TABLE schema_version(version INTEGER NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+		`INSERT INTO schema_version(version) VALUES (55)`,
+		`CREATE TABLE sessions (
+			session_id TEXT PRIMARY KEY,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			system_prompt TEXT,
+			last_floor_text TEXT,
+			last_floor_metadata TEXT,
+			plan_state_json TEXT NOT NULL DEFAULT '{}',
+			operation_state_json TEXT NOT NULL DEFAULT '{}',
+			continuation_state_json TEXT NOT NULL DEFAULT '{}',
+			working_objective_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			turn_count INTEGER NOT NULL DEFAULT 0,
+			chat_type TEXT NOT NULL DEFAULT 'dm',
+			chat_title TEXT,
+			user_name TEXT,
+			cache_last_write_block INTEGER NOT NULL DEFAULT 0,
+			cache_blocks_since INTEGER NOT NULL DEFAULT 0,
+			cache_last_write_time TEXT,
+			cache_hit_rate REAL NOT NULL DEFAULT 0.0,
+			cache_consecutive_misses INTEGER NOT NULL DEFAULT 0,
+			total_input_tokens INTEGER NOT NULL DEFAULT 0,
+			total_output_tokens INTEGER NOT NULL DEFAULT 0,
+			total_cache_read INTEGER NOT NULL DEFAULT 0,
+			total_cache_write INTEGER NOT NULL DEFAULT 0,
+			last_provider TEXT,
+			last_model TEXT,
+			active_tool_calls INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT
+		)`,
+		`CREATE TABLE telegram_threads (
+			chat_id INTEGER NOT NULL,
+			thread_id INTEGER NOT NULL,
+			status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'closed')),
+			created_by_sender_id INTEGER NOT NULL DEFAULT 0,
+			created_from_update_id INTEGER NOT NULL DEFAULT 0,
+			created_message_id INTEGER NOT NULL DEFAULT 0,
+			created_text TEXT NOT NULL DEFAULT '',
+			display_slot INTEGER NOT NULL DEFAULT 0,
+			archived_display_name TEXT NOT NULL DEFAULT '',
+			last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
+			closed_at TEXT,
+			absorb_summary TEXT NOT NULL DEFAULT '',
+			absorbed_at TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			PRIMARY KEY(chat_id, thread_id)
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v55 fixture: %v", err)
+		}
+	}
+	if _, err := db.Exec(`
+		INSERT INTO telegram_threads(
+			chat_id, thread_id, display_slot, status, created_by_sender_id, created_from_update_id,
+			created_message_id, created_text, last_activity_at, created_at, updated_at
+		) VALUES (1001, 7, 2, 'open', 2002, 385535816, 9253, 'promote me safely', ?, ?, ?)
+	`, now, now, now); err != nil {
+		t.Fatalf("insert v55 thread fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v55 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v55) err = %v", err)
+	}
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteTable(t, store.db, "telegram_thread_promotion_handoffs")
+	assertSQLiteIndex(t, store.db, "idx_telegram_thread_promotion_handoffs_thread")
+	assertSQLiteIndex(t, store.db, "idx_telegram_thread_promotion_handoffs_status")
+	thread, ok, err := store.TelegramThread(1001, 7)
+	if err != nil || !ok {
+		t.Fatalf("TelegramThread() ok=%t err=%v, want preserved v55 thread", ok, err)
+	}
+	if thread.DisplaySlot != 2 || thread.CreatedText != "promote me safely" || !thread.Open() {
+		t.Fatalf("thread = %#v, want preserved v55 thread data", thread)
+	}
+	handoff, created, err := store.CreateTelegramThreadPromotionDraft(1001, 7, 2002, time.Date(2026, 5, 23, 2, 5, 0, 0, time.UTC))
+	if err != nil || !created {
+		t.Fatalf("CreateTelegramThreadPromotionDraft() created=%t err=%v", created, err)
+	}
+	if handoff.HandoffID == "" || handoff.Status != TelegramThreadPromotionStatusDraft || handoff.SourceSessionID != "telegram_thread:1001:7" {
+		t.Fatalf("handoff = %#v, want usable migrated promotion handoff", handoff)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close migrated v55 store: %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen v55 migrated) err = %v", err)
+	}
+	defer reopened.Close()
+	assertSchemaVersion(t, reopened.db, schemaVersion)
+	loaded, ok, err := reopened.TelegramThreadPromotionHandoff(handoff.HandoffID)
+	if err != nil || !ok {
+		t.Fatalf("TelegramThreadPromotionHandoff(reopen) ok=%t err=%v", ok, err)
+	}
+	if loaded.ThreadID != 7 || loaded.ChatID != 1001 || loaded.Status != TelegramThreadPromotionStatusDraft {
+		t.Fatalf("reopened handoff = %#v, want preserved migrated handoff", loaded)
+	}
+	if thread, ok, err := reopened.TelegramThread(1001, 7); err != nil || !ok || thread.CreatedText != "promote me safely" {
+		t.Fatalf("TelegramThread(reopen) = %#v ok=%t err=%v, want preserved thread", thread, ok, err)
+	}
+}

@@ -603,3 +603,127 @@ func TestThreadPrefixResolvesOpenDisplaySlotToCanonicalThreadID(t *testing.T) {
 		t.Fatalf("routed thread=%d routeID=%d, want canonical thread 42", routed.TelegramThreadID, router.threadRouteID)
 	}
 }
+
+func TestThreadsCommandListsPromoteButtons(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		threadsReturn: []session.TelegramThread{
+			{ChatID: 1001, ThreadID: 42, DisplaySlot: 1, Status: session.TelegramThreadStatusOpen, CreatedText: "promote this lane"},
+		},
+	}
+	handled, err := handleTelegramThreadCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    1001,
+		SenderID:  2002,
+		MessageID: 3003,
+		Text:      "/threads",
+	}, "threads")
+	if err != nil {
+		t.Fatalf("handleTelegramThreadCommand() err = %v", err)
+	}
+	if !handled || len(sender.inline) != 1 {
+		t.Fatalf("handled=%t inline=%d, want threads inline panel", handled, len(sender.inline))
+	}
+	if !commandRowsContain(sender.inline[0].rows, "Promote 1", "thread_promote:42") {
+		t.Fatalf("rows = %#v, want Promote 1 canonical callback", sender.inline[0].rows)
+	}
+	if !strings.Contains(sender.inline[0].text, "Promote one into a draft handoff") {
+		t.Fatalf("panel text = %q, want promote guidance", sender.inline[0].text)
+	}
+}
+
+func TestThreadPromoteCallbackCreatesDraftThroughRouter(t *testing.T) {
+	t.Parallel()
+
+	order := []string{}
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{canRestart: true, promoteThreadReturn: session.TelegramThreadPromotionResult{Text: "Promotion draft created for thread 3.\n\nHandoff: ignored-rendered-handoff\nStatus: draft", HandoffID: "thread-promotion:1001:3:99", ThreadID: 3, Status: session.TelegramThreadPromotionStatusDraft}, order: &order}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:       "promote-cb",
+		Data:     encodeTelegramThreadPromoteCallback(3),
+		UpdateID: 707,
+		From:     &telegram.User{ID: 2002},
+		Message:  &telegram.Message{MessageID: 9004, Chat: &telegram.Chat{ID: 1001}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want promote callback handled")
+	}
+	if router.promoteThreadChatID != 1001 || router.promoteThreadSenderID != 2002 || router.promoteThreadID != 3 {
+		t.Fatalf("promote inputs chat=%d sender=%d thread=%d", router.promoteThreadChatID, router.promoteThreadSenderID, router.promoteThreadID)
+	}
+	if router.threadCallbackChatID != 1001 || router.threadCallbackID != 3 || router.threadCallbackMessageID != 9004 || router.threadCallbackSurface != "thread_promote" {
+		t.Fatalf("callback ledger = chat:%d thread:%d msg:%d surface:%q", router.threadCallbackChatID, router.threadCallbackID, router.threadCallbackMessageID, router.threadCallbackSurface)
+	}
+	if len(sender.answers) != 1 || sender.answers[0].text != "Drafting promotion." {
+		t.Fatalf("answers = %#v, want drafting ack", sender.answers)
+	}
+	if len(order) == 0 || order[0] != "promote" {
+		t.Fatalf("order = %#v, want promote after ack", order)
+	}
+	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Promotion draft created for thread 3.") {
+		t.Fatalf("editInline = %#v, want promotion draft text with buttons", sender.editInline)
+	}
+	readyData, ok := commandRowCallbackData(sender.editInline[0].rows, "Ready")
+	if !ok {
+		t.Fatalf("promotion rows = %#v, want ready button", sender.editInline[0].rows)
+	}
+	assertThreadPromotionCallbackData(t, 1001, readyData, "ready", "thread-promotion:1001:3:99")
+	cancelData, ok := commandRowCallbackData(sender.editInline[0].rows, "Cancel")
+	if !ok {
+		t.Fatalf("promotion rows = %#v, want cancel button", sender.editInline[0].rows)
+	}
+	assertThreadPromotionCallbackData(t, 1001, cancelData, "cancel", "thread-promotion:1001:3:99")
+}
+
+func TestThreadPromoteCallbackIsAdminOnly(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{canRestart: false}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:      "promote-cb",
+		Data:    encodeTelegramThreadPromoteCallback(3),
+		From:    &telegram.User{ID: 2002},
+		Message: &telegram.Message{MessageID: 9004, Chat: &telegram.Chat{ID: 1001}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want admin-only callback handled")
+	}
+	if router.promoteThreadID != 0 {
+		t.Fatalf("promoteThreadID = %d, want no promote call", router.promoteThreadID)
+	}
+	if len(sender.answers) != 1 || sender.answers[0].text != "Promote is admin only." {
+		t.Fatalf("answers = %#v, want admin-only answer", sender.answers)
+	}
+	if len(sender.editClear) != 0 || len(sender.editInline) != 0 {
+		t.Fatalf("edits = %#v/%#v, want no message edit", sender.editClear, sender.editInline)
+	}
+}
+
+func commandRowCallbackData(rows [][]telegram.InlineButton, label string) (string, bool) {
+	for _, row := range rows {
+		for _, button := range row {
+			if button.Text == label {
+				return button.CallbackData, true
+			}
+		}
+	}
+	return "", false
+}
+
+func assertThreadPromotionCallbackData(t *testing.T, chatID int64, data string, wantAction string, wantHandoffID string) {
+	t.Helper()
+	if data == "" || len(data) > core.TelegramCallbackDataMaxBytes {
+		t.Fatalf("callback data for %s = %q len=%d, want non-empty <= %d", wantAction, data, len(data), core.TelegramCallbackDataMaxBytes)
+	}
+	if wantHandoffID == "thread-promotion:1001:3:99" && data != "thread_promo_"+wantAction+":"+wantHandoffID {
+		t.Fatalf("callback data = %q, want legacy typed handoff callback for %s", data, wantAction)
+	}
+}

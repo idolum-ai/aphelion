@@ -24,30 +24,32 @@ func (r *Runtime) reconciledContinuationStateFromInvalidAuthority(state session.
 	}
 	now = now.UTC()
 
-	forbiddenToRemove := map[string]struct{}{}
+	allowedToRemove := map[string]struct{}{}
 	for _, contradiction := range compilation.Contradictions {
-		if strings.TrimSpace(contradiction.Reason) != "allowed_action_implies_forbidden_authority" {
+		switch strings.TrimSpace(contradiction.Reason) {
+		case "allowed_action_implies_forbidden_authority", "allowed_action_exactly_forbidden":
+		default:
 			continue
 		}
-		if normalized := normalizeContinuationAuthorityAction(contradiction.ForbiddenAction); normalized != "" {
-			forbiddenToRemove[normalized] = struct{}{}
+		if normalized := normalizeContinuationAuthorityAction(contradiction.AllowedAction); normalized != "" {
+			allowedToRemove[normalized] = struct{}{}
 		}
 	}
-	if len(forbiddenToRemove) == 0 {
+	if len(allowedToRemove) == 0 {
 		return session.ContinuationState{}, false
 	}
 
 	action := state.ActionProposal
-	reconciledForbidden := make([]string, 0, len(action.ForbiddenActions))
+	reconciledAllowed := make([]string, 0, len(action.AllowedActions))
 	removed := false
-	for _, forbidden := range action.ForbiddenActions {
-		if _, ok := forbiddenToRemove[normalizeContinuationAuthorityAction(forbidden)]; ok {
+	for _, allowed := range action.AllowedActions {
+		if _, ok := allowedToRemove[normalizeContinuationAuthorityAction(allowed)]; ok {
 			removed = true
 			continue
 		}
-		reconciledForbidden = append(reconciledForbidden, forbidden)
+		reconciledAllowed = append(reconciledAllowed, allowed)
 	}
-	if !removed {
+	if !removed || len(reconciledAllowed) == 0 {
 		return session.ContinuationState{}, false
 	}
 
@@ -60,7 +62,8 @@ func (r *Runtime) reconciledContinuationStateFromInvalidAuthority(state session.
 	}
 	decisionID := newContinuationDecisionID()
 	action.ID = "aprop-" + decisionID
-	action.ForbiddenActions = reconciledForbidden
+	action.AllowedActions = reconciledAllowed
+	action.RiskClass = safestContinuationRiskClassForAllowedActions(action.RiskClass, reconciledAllowed)
 	action.Status = session.ProposalStatusPending
 	action.CreatedAt = now
 	action.UpdatedAt = now
@@ -85,6 +88,25 @@ func (r *Runtime) reconciledContinuationStateFromInvalidAuthority(state session.
 		return session.ContinuationState{}, false
 	}
 	return reconciled, true
+}
+
+func safestContinuationRiskClassForAllowedActions(current string, allowed []string) string {
+	mode := workModeFromStructuredAuthorityList(allowed)
+	switch mode {
+	case WorkModeDeploy:
+		return "deploy"
+	case WorkModeCommit:
+		return "commit"
+	case WorkModeWorkspaceWrite:
+		return "workspace_write"
+	case WorkModeReadOnly:
+		return "read_only_review"
+	default:
+		if workModeFromStructuredAuthority(current) == WorkModeDeploy || workModeFromStructuredAuthority(current) == WorkModeCommit {
+			return "read_only_review"
+		}
+		return strings.TrimSpace(current)
+	}
 }
 
 func (r *Runtime) materializeReconciledAuthorityApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, opState session.OperationState, state session.ContinuationState, source string, now time.Time) (session.OperationState, error) {

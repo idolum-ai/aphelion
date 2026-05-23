@@ -19,6 +19,10 @@ func (c telegramCommandControl) threadController() telegramcontrol.ThreadControl
 		StopForMessage: c.StopForMessage,
 	}
 	if c.rt != nil {
+		controller.Promote = c.rt.PromoteTelegramThread
+		controller.PreparePromotion = c.rt.PrepareTelegramThreadPromotion
+		controller.CancelPromotion = c.rt.CancelTelegramThreadPromotion
+		controller.SupersedePromotion = c.rt.SupersedeTelegramThreadPromotion
 		controller.Absorb = c.rt.AbsorbTelegramThread
 		controller.IsAbsorbUserError = runtime.IsTelegramThreadUserError
 	}
@@ -59,6 +63,22 @@ func (c telegramCommandControl) TelegramThreads(chatID int64) ([]session.Telegra
 
 func (c telegramCommandControl) QueueTelegramThreadSummary(ctx context.Context, msg core.InboundMessage) (string, error) {
 	return c.threadController().QueueTelegramThreadSummary(ctx, msg)
+}
+
+func (c telegramCommandControl) PromoteTelegramThread(ctx context.Context, chatID int64, senderID int64, threadID int64) (session.TelegramThreadPromotionResult, error) {
+	return c.threadController().PromoteTelegramThread(ctx, chatID, senderID, threadID)
+}
+
+func (c telegramCommandControl) PrepareTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error) {
+	return c.threadController().PrepareTelegramThreadPromotion(ctx, chatID, senderID, handoffID)
+}
+
+func (c telegramCommandControl) CancelTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error) {
+	return c.threadController().CancelTelegramThreadPromotion(ctx, chatID, senderID, handoffID)
+}
+
+func (c telegramCommandControl) SupersedeTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error) {
+	return c.threadController().SupersedeTelegramThreadPromotion(ctx, chatID, senderID, handoffID)
 }
 
 func (c telegramCommandControl) AbsorbTelegramThread(ctx context.Context, chatID int64, senderID int64, threadID int64) (string, error) {

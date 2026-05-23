@@ -21,6 +21,8 @@ const schemaVersion51 = 51
 const schemaVersion52 = 52
 const schemaVersion53 = 53
 const schemaVersion54 = 54
+const schemaVersion55 = 55
+const schemaVersion56 = 56
 
 func existingUserTableCount(tx *sql.Tx) (int, error) {
 	var count int
@@ -47,7 +49,7 @@ func validateCurrentSchemaVersion(tx *sql.Tx, existingTables int) (int, error) {
 		return 0, fmt.Errorf("unsupported unversioned database schema; reinstall from a clean current state")
 	}
 	if currentVersion < schemaVersion {
-		if currentVersion == schemaVersion43 || currentVersion == schemaVersion44 || currentVersion == schemaVersion45 || currentVersion == schemaVersion46 || currentVersion == schemaVersion47 || currentVersion == schemaVersion48 || currentVersion == schemaVersion49 || currentVersion == schemaVersion50 || currentVersion == schemaVersion51 || currentVersion == schemaVersion52 || currentVersion == schemaVersion53 || currentVersion == schemaVersion54 {
+		if currentVersion == schemaVersion43 || currentVersion == schemaVersion44 || currentVersion == schemaVersion45 || currentVersion == schemaVersion46 || currentVersion == schemaVersion47 || currentVersion == schemaVersion48 || currentVersion == schemaVersion49 || currentVersion == schemaVersion50 || currentVersion == schemaVersion51 || currentVersion == schemaVersion52 || currentVersion == schemaVersion53 || currentVersion == schemaVersion54 || currentVersion == schemaVersion55 || currentVersion == schemaVersion56 {
 			return currentVersion, nil
 		}
 		return 0, fmt.Errorf("unsupported database schema version %d (current schema version is %d); reinstall from a clean current state", currentVersion, schemaVersion)
@@ -161,6 +163,24 @@ func migrateCurrentSchemaVersion(tx *sql.Tx, currentVersion int) (int, error) {
 	}
 	if version == schemaVersion54 {
 		if err := migrateSchemaV54ToV55(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion55); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion55, err)
+		}
+		version = schemaVersion55
+	}
+	if version == schemaVersion55 {
+		if err := migrateSchemaV55ToV56(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion56); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion56, err)
+		}
+		version = schemaVersion56
+	}
+	if version == schemaVersion56 {
+		if err := migrateSchemaV56ToV57(tx); err != nil {
 			return 0, err
 		}
 		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion); err != nil {
@@ -342,6 +362,13 @@ func migrateSchemaV53ToV54(tx *sql.Tx) error {
 func migrateSchemaV54ToV55(tx *sql.Tx) error {
 	if err := ensureApprovalWindowOfferTables(tx); err != nil {
 		return fmt.Errorf("migrate schema v54 to v55 ensure approval window offers: %w", err)
+	}
+	return nil
+}
+
+func migrateSchemaV55ToV56(tx *sql.Tx) error {
+	if err := ensureTelegramThreadPromotionHandoffTables(tx); err != nil {
+		return fmt.Errorf("migrate schema v55 to v56 ensure telegram thread promotion handoffs: %w", err)
 	}
 	return nil
 }
@@ -797,6 +824,68 @@ func ensureTelegramThreadDisplayColumns(tx *sql.Tx) error {
 		if _, err := tx.Exec(stmt); err != nil {
 			return fmt.Errorf("backfill telegram thread display columns: %w", err)
 		}
+	}
+	return nil
+}
+
+func ensureTelegramThreadPromotionHandoffTables(tx *sql.Tx) error {
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS telegram_thread_promotion_handoffs (
+			handoff_id TEXT PRIMARY KEY,
+			chat_id INTEGER NOT NULL,
+			thread_id INTEGER NOT NULL,
+			display_slot INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft', 'ready', 'approved', 'cancelled', 'superseded')),
+			created_by_sender_id INTEGER NOT NULL DEFAULT 0,
+			source_session_id TEXT NOT NULL DEFAULT '',
+			source_thread_status TEXT NOT NULL DEFAULT '',
+			source_preview TEXT NOT NULL DEFAULT '',
+			context_summary TEXT NOT NULL DEFAULT '',
+			memory_digest_json TEXT NOT NULL DEFAULT '[]',
+			resource_review_json TEXT NOT NULL DEFAULT '[]',
+			policy_patch_json TEXT NOT NULL DEFAULT '{}',
+			proposed_child_json TEXT NOT NULL DEFAULT '{}',
+			first_task TEXT NOT NULL DEFAULT '',
+			validation_json TEXT NOT NULL DEFAULT '[]',
+			review_checklist_json TEXT NOT NULL DEFAULT '[]',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY(chat_id, thread_id) REFERENCES telegram_threads(chat_id, thread_id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_telegram_thread_promotion_handoffs_thread ON telegram_thread_promotion_handoffs(chat_id, thread_id, updated_at DESC, handoff_id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_telegram_thread_promotion_handoffs_status ON telegram_thread_promotion_handoffs(status, updated_at DESC)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_telegram_thread_promotion_handoffs_open_draft ON telegram_thread_promotion_handoffs(chat_id, thread_id) WHERE status = 'draft'`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("ensure telegram thread promotion handoff table: %w", err)
+		}
+	}
+	return ensureTelegramThreadPromotionReviewColumns(tx)
+}
+
+func ensureTelegramThreadPromotionReviewColumns(tx *sql.Tx) error {
+	exists, err := schemaTableExists(tx, "telegram_thread_promotion_handoffs")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	for _, column := range []schemaColumnMigration{
+		{table: "telegram_thread_promotion_handoffs", column: "proposed_child_json", statement: `ALTER TABLE telegram_thread_promotion_handoffs ADD COLUMN proposed_child_json TEXT NOT NULL DEFAULT '{}'`},
+		{table: "telegram_thread_promotion_handoffs", column: "first_task", statement: `ALTER TABLE telegram_thread_promotion_handoffs ADD COLUMN first_task TEXT NOT NULL DEFAULT ''`},
+		{table: "telegram_thread_promotion_handoffs", column: "validation_json", statement: `ALTER TABLE telegram_thread_promotion_handoffs ADD COLUMN validation_json TEXT NOT NULL DEFAULT '[]'`},
+	} {
+		if err := addSchemaColumnIfMissing(tx, column); err != nil {
+			return fmt.Errorf("ensure telegram thread promotion review column %s: %w", column.column, err)
+		}
+	}
+	return nil
+}
+
+func migrateSchemaV56ToV57(tx *sql.Tx) error {
+	if err := ensureTelegramThreadPromotionHandoffTables(tx); err != nil {
+		return fmt.Errorf("migrate schema v56 to v57 ensure telegram thread promotion review columns: %w", err)
 	}
 	return nil
 }
