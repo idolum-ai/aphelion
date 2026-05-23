@@ -158,11 +158,7 @@ func durableAgentChildConfig(parent *config.Config, agent core.DurableAgent, sco
 	switch bootstrap.Backend {
 	case "codex":
 		copy.Governor.Backend = "codex"
-		copy.Governor.Codex = config.GovernorCodexConfig{
-			AuthSource: bootstrap.CodexAuthSource,
-			CodexHome:  bootstrap.CodexHome,
-			BaseURL:    bootstrap.CodexBaseURL,
-		}
+		copy.Governor.Codex = durableChildCodexConfig(parent, bootstrap)
 		copy.Providers = config.ProvidersConfig{}
 	case "native":
 		copy.Governor.Backend = "native"
@@ -170,6 +166,40 @@ func durableAgentChildConfig(parent *config.Config, agent core.DurableAgent, sco
 		copy.Providers = durableChildProviders(parent, bootstrap)
 	}
 	return &copy
+}
+
+func durableChildCodexConfig(parent *config.Config, bootstrap core.NodeLLMBootstrap) config.GovernorCodexConfig {
+	bootstrap = core.NormalizeNodeLLMBootstrap(bootstrap)
+	defaults := config.Default().Governor.Codex
+	codex := defaults
+	if parent != nil {
+		codex = parent.Governor.Codex
+		if strings.TrimSpace(codex.AuthSource) == "" {
+			codex.AuthSource = defaults.AuthSource
+		}
+		if strings.TrimSpace(codex.BaseURL) == "" {
+			codex.BaseURL = defaults.BaseURL
+		}
+		if strings.TrimSpace(codex.Model) == "" {
+			codex.Model = defaults.Model
+		}
+		if codex.ContextWindow <= 0 {
+			codex.ContextWindow = defaults.ContextWindow
+		}
+		if codex.MaxContinuations <= 0 {
+			codex.MaxContinuations = defaults.MaxContinuations
+		}
+		if codex.TransportRetries < 0 {
+			codex.TransportRetries = defaults.TransportRetries
+		}
+		if strings.TrimSpace(codex.ResponseHeaderTimeout) == "" {
+			codex.ResponseHeaderTimeout = defaults.ResponseHeaderTimeout
+		}
+	}
+	codex.AuthSource = firstNonEmpty(strings.TrimSpace(bootstrap.CodexAuthSource), strings.TrimSpace(codex.AuthSource))
+	codex.CodexHome = firstNonEmpty(strings.TrimSpace(bootstrap.CodexHome), strings.TrimSpace(codex.CodexHome))
+	codex.BaseURL = firstNonEmpty(strings.TrimSpace(bootstrap.CodexBaseURL), strings.TrimSpace(codex.BaseURL))
+	return codex
 }
 
 func durableChildProviders(parent *config.Config, bootstrap core.NodeLLMBootstrap) config.ProvidersConfig {

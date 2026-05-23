@@ -94,11 +94,7 @@ func applyRemoteNodeLLMBootstrap(cfg *config.Config, bootstrap core.NodeLLMBoots
 	switch bootstrap.Backend {
 	case "codex":
 		cfg.Governor.Backend = "codex"
-		cfg.Governor.Codex = config.GovernorCodexConfig{
-			AuthSource: bootstrap.CodexAuthSource,
-			CodexHome:  bootstrap.CodexHome,
-			BaseURL:    bootstrap.CodexBaseURL,
-		}
+		cfg.Governor.Codex = remoteChildCodexConfig(bootstrap)
 	case "native":
 		cfg.Governor.Backend = "native"
 		cfg.Governor.NativeProvider = bootstrap.NativeProvider
@@ -121,6 +117,15 @@ func applyRemoteNodeLLMBootstrap(cfg *config.Config, bootstrap core.NodeLLMBoots
 			}
 		}
 	}
+}
+
+func remoteChildCodexConfig(bootstrap core.NodeLLMBootstrap) config.GovernorCodexConfig {
+	bootstrap = core.NormalizeNodeLLMBootstrap(bootstrap)
+	codex := config.Default().Governor.Codex
+	codex.AuthSource = remoteFirstNonEmpty(bootstrap.CodexAuthSource, codex.AuthSource)
+	codex.CodexHome = remoteFirstNonEmpty(bootstrap.CodexHome, codex.CodexHome)
+	codex.BaseURL = remoteFirstNonEmpty(bootstrap.CodexBaseURL, codex.BaseURL)
+	return codex
 }
 
 func remoteFirstNonEmpty(values ...string) string {

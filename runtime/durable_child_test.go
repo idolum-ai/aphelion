@@ -351,6 +351,11 @@ func TestDurableAgentChildConfigUsesCodexBootstrapWithoutParentCredentials(t *te
 	parent.Sessions.DBPath = filepath.Join(root, "sessions.db")
 	parent.Governor.Backend = "native"
 	parent.Governor.NativeProvider = "anthropic"
+	parent.Governor.Codex.Model = "gpt-5.5-child-parent"
+	parent.Governor.Codex.ContextWindow = 240000
+	parent.Governor.Codex.MaxContinuations = 4
+	parent.Governor.Codex.TransportRetries = 2
+	parent.Governor.Codex.ResponseHeaderTimeout = "2m"
 	parent.Face.Backend = "provider"
 	parent.Providers.Default = "anthropic"
 	parent.Providers.Anthropic.APIKey = "sk-ant-parent"
@@ -396,6 +401,21 @@ func TestDurableAgentChildConfigUsesCodexBootstrapWithoutParentCredentials(t *te
 	}
 	if child.Governor.Codex.BaseURL != "https://chatgpt.example.test/backend-api" {
 		t.Fatalf("Governor.Codex.BaseURL = %q, want child codex base url", child.Governor.Codex.BaseURL)
+	}
+	if child.Governor.Codex.Model != "gpt-5.5-child-parent" {
+		t.Fatalf("Governor.Codex.Model = %q, want inherited parent model", child.Governor.Codex.Model)
+	}
+	if child.Governor.Codex.ContextWindow != 240000 {
+		t.Fatalf("Governor.Codex.ContextWindow = %d, want inherited parent context window", child.Governor.Codex.ContextWindow)
+	}
+	if child.Governor.Codex.MaxContinuations != 4 {
+		t.Fatalf("Governor.Codex.MaxContinuations = %d, want inherited parent continuation limit", child.Governor.Codex.MaxContinuations)
+	}
+	if child.Governor.Codex.TransportRetries != 2 {
+		t.Fatalf("Governor.Codex.TransportRetries = %d, want inherited parent retry limit", child.Governor.Codex.TransportRetries)
+	}
+	if child.Governor.Codex.ResponseHeaderTimeout != "2m" {
+		t.Fatalf("Governor.Codex.ResponseHeaderTimeout = %q, want inherited parent response header timeout", child.Governor.Codex.ResponseHeaderTimeout)
 	}
 	if child.Face.Backend != "floor_fallback" {
 		t.Fatalf("Face.Backend = %q, want floor_fallback", child.Face.Backend)
