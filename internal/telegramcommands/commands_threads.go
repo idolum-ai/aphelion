@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	telegramThreadCallbackPrefix      = "thread_absorb:"
-	telegramThreadSummaryCallbackData = "thread_summary"
-	telegramThreadsPageSize           = 6
+	telegramThreadCallbackPrefix        = "thread_absorb:"
+	telegramThreadPromoteCallbackPrefix = "thread_promote:"
+	telegramThreadSummaryCallbackData   = "thread_summary"
+	telegramThreadsPageSize             = 6
 )
 
 var telegramThreadPrefixPattern = regexp.MustCompile(`(?is)^\(\s*thread\s+([0-9]+)\s*\)\s*`)
@@ -32,6 +33,7 @@ type commandThreadRouter interface {
 	TelegramThreadForReplyMessage(chatID int64, replyMessageID int64) (session.TelegramThread, bool, error)
 	TelegramThreads(chatID int64) ([]session.TelegramThread, error)
 	QueueTelegramThreadSummary(ctx context.Context, msg core.InboundMessage) (string, error)
+	PromoteTelegramThread(ctx context.Context, chatID int64, senderID int64, threadID int64) (string, error)
 	AbsorbTelegramThread(ctx context.Context, chatID int64, senderID int64, threadID int64) (string, error)
 }
 
@@ -112,6 +114,7 @@ func sendTelegramThreadGuide(ctx context.Context, sender commandSender, router c
 	operatorID := telegramThreadOperatorID(thread)
 	rendered := renderTelegramThreadGuide(operatorID)
 	rows := [][]telegram.InlineButton{{
+		{Text: fmt.Sprintf("Promote %d", operatorID), CallbackData: encodeTelegramThreadPromoteCallback(thread.ThreadID)},
 		{Text: fmt.Sprintf("Absorb %d", operatorID), CallbackData: encodeTelegramThreadAbsorbCallback(thread.ThreadID)},
 	}}
 	messageID, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID))
@@ -301,7 +304,7 @@ func sendTelegramThreadText(ctx context.Context, sender commandSender, msg core.
 }
 
 func renderTelegramThreadGuide(threadID int64) string {
-	return fmt.Sprintf("Thread %d created.\n\nSend work here with:\n(thread %d) create the inbox child\n\nYou can also reply to side-thread messages. Main chat remains thread 0. Close this thread with /absorb %d.", threadID, threadID, threadID)
+	return fmt.Sprintf("Thread %d created.\n\nSend work here with:\n(thread %d) create the inbox child\n\nYou can also reply to side-thread messages. Main chat remains thread 0. Promote this thread into a draft durable handoff with Promote %d, or close it with /absorb %d.", threadID, threadID, threadID, threadID)
 }
 
 func renderTelegramThreadsHelp(threads []session.TelegramThread) string {
@@ -320,7 +323,7 @@ func renderTelegramThreadsPanel(threads []session.TelegramThread, view string, p
 	} else {
 		b.WriteString("Threads — open\n")
 	}
-	b.WriteString("Default chat is thread 0. Start a side thread with `/thread <message>`. Reply to side-thread messages or use `(thread N) <message>`. Close one with `/absorb N`.\n")
+	b.WriteString("Default chat is thread 0. Start a side thread with `/thread <message>`. Reply to side-thread messages or use `(thread N) <message>`. Promote one into a draft handoff with Promote, or close one with `/absorb N`.\n")
 	if len(threads) == 0 {
 		if view == telegramPageViewNonOpen {
 			b.WriteString("\nNo non-open side threads.")
@@ -379,10 +382,10 @@ func telegramThreadsRowsPage(threads []session.TelegramThread, allThreads []sess
 			continue
 		}
 		operatorID := telegramThreadOperatorID(thread)
-		rows = append(rows, []telegram.InlineButton{{
-			Text:         fmt.Sprintf("Absorb %d", operatorID),
-			CallbackData: encodeTelegramThreadAbsorbCallback(thread.ThreadID),
-		}})
+		rows = append(rows, []telegram.InlineButton{
+			{Text: fmt.Sprintf("Promote %d", operatorID), CallbackData: encodeTelegramThreadPromoteCallback(thread.ThreadID)},
+			{Text: fmt.Sprintf("Absorb %d", operatorID), CallbackData: encodeTelegramThreadAbsorbCallback(thread.ThreadID)},
+		})
 	}
 	if view == telegramPageViewNonOpen {
 		rows = append(rows, []telegram.InlineButton{{Text: "Show open", CallbackData: encodeTelegramPageCallbackData(telegramPageSurfaceThreads, telegramPageViewList, 1)}})
@@ -409,6 +412,22 @@ func telegramThreadsHasNonOpen(threads []session.TelegramThread) bool {
 		}
 	}
 	return false
+}
+
+func encodeTelegramThreadPromoteCallback(threadID int64) string {
+	if threadID <= 0 {
+		return ""
+	}
+	return telegramThreadPromoteCallbackPrefix + strconv.FormatInt(threadID, 10)
+}
+
+func decodeTelegramThreadPromoteCallback(data string) (int64, bool) {
+	trimmed := strings.TrimSpace(data)
+	if !strings.HasPrefix(trimmed, telegramThreadPromoteCallbackPrefix) {
+		return 0, false
+	}
+	threadID, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(trimmed, telegramThreadPromoteCallbackPrefix)), 10, 64)
+	return threadID, err == nil && threadID > 0
 }
 
 func encodeTelegramThreadAbsorbCallback(threadID int64) string {
@@ -464,6 +483,48 @@ func handleTelegramThreadSummaryCallback(ctx context.Context, sender commandCall
 		text = "Summary queued."
 	}
 	if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), text); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+		return true, err
+	}
+	return true, nil
+}
+
+func handleTelegramThreadPromoteCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, threadID int64) (bool, error) {
+	threadRouter, ok := router.(commandThreadRouter)
+	if !ok {
+		return true, sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Thread controls are unavailable.")
+	}
+	chatID := callbackChatID(cb)
+	senderID := callbackSenderID(cb)
+	messageID := callbackMessageID(cb)
+	if chatID == 0 || senderID == 0 || messageID == 0 {
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleCommandMenuCallbackText); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+			return true, err
+		}
+		return true, nil
+	}
+	if !router.CanRestart(senderID) {
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Promote is admin only."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+			return true, err
+		}
+		return true, nil
+	}
+	if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Drafting promotion."); err != nil {
+		if !telegram.IsStaleCallbackQueryError(err) {
+			return true, err
+		}
+	}
+	if err := recordTelegramThreadCallbackMessage(router, chatID, threadID, messageID, "thread_promote"); err != nil {
+		return true, err
+	}
+	text, err := threadRouter.PromoteTelegramThread(ctx, chatID, senderID, threadID)
+	if err != nil {
+		if isTelegramThreadUserError(err) {
+			text = err.Error()
+		} else {
+			return true, err
+		}
+	}
+	if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
 		return true, err
 	}
 	return true, nil

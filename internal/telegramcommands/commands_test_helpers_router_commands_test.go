@@ -158,6 +158,22 @@ func (s *stubCommandRouter) QueueTelegramThreadSummary(_ context.Context, msg co
 	return "Summary queued.", nil
 }
 
+func (s *stubCommandRouter) PromoteTelegramThread(_ context.Context, chatID int64, senderID int64, threadID int64) (string, error) {
+	if s.order != nil {
+		*s.order = append(*s.order, "promote")
+	}
+	s.promoteThreadChatID = chatID
+	s.promoteThreadSenderID = senderID
+	s.promoteThreadID = threadID
+	if s.promoteThreadErr != nil {
+		return "", s.promoteThreadErr
+	}
+	if strings.TrimSpace(s.promoteThreadReturn) != "" {
+		return s.promoteThreadReturn, nil
+	}
+	return "Promotion draft created for thread " + strconv.FormatInt(threadID, 10) + ".", nil
+}
+
 func (s *stubCommandRouter) AbsorbTelegramThread(_ context.Context, chatID int64, senderID int64, threadID int64) (string, error) {
 	if s.order != nil {
 		*s.order = append(*s.order, "absorb")

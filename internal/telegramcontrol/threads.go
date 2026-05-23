@@ -19,6 +19,7 @@ type ThreadController struct {
 	Rebind            func(core.InboundMessage) error
 	RouteAccepted     func(context.Context, core.InboundMessage) error
 	StopForMessage    func(core.InboundMessage) core.StopResult
+	Promote           func(context.Context, int64, int64, int64) (string, error)
 	Absorb            func(context.Context, int64, int64, int64) (string, error)
 	IsAbsorbUserError func(error) bool
 }
@@ -267,6 +268,22 @@ func truncateTelegramThreadSummaryEvidence(text string, limit int) string {
 		return strings.TrimSpace(string(runes[:limit]))
 	}
 	return strings.TrimSpace(string(runes[:limit-3])) + "..."
+}
+
+func (c ThreadController) PromoteTelegramThread(ctx context.Context, chatID int64, senderID int64, threadID int64) (string, error) {
+	if c.Promote == nil {
+		return "", fmt.Errorf("runtime is unavailable")
+	}
+	c.stopForMessage(core.InboundMessage{
+		ChatID:           chatID,
+		SenderID:         senderID,
+		TelegramThreadID: threadID,
+	})
+	text, err := c.Promote(ctx, chatID, senderID, threadID)
+	if err != nil && c.IsAbsorbUserError != nil && c.IsAbsorbUserError(err) {
+		return "", telegramcommands.ThreadUserError(err.Error())
+	}
+	return text, err
 }
 
 func (c ThreadController) AbsorbTelegramThread(ctx context.Context, chatID int64, senderID int64, threadID int64) (string, error) {

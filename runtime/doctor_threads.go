@@ -20,6 +20,17 @@ func (r *Runtime) writeDoctorTelegramThreads(b *strings.Builder, key session.Ses
 		return
 	}
 	writeDoctorKV(b, "telegram_threads_count", strconv.Itoa(len(threads)))
+	handoffByThread := map[int64]session.TelegramThreadPromotionHandoff{}
+	if handoffs, err := r.store.ListTelegramThreadPromotionHandoffs(key.ChatID, 100); err == nil {
+		for _, handoff := range handoffs {
+			if _, exists := handoffByThread[handoff.ThreadID]; !exists {
+				handoffByThread[handoff.ThreadID] = handoff
+			}
+		}
+	} else {
+		writeDoctorKV(b, "telegram_thread_promotion_handoffs_error", err.Error())
+	}
+	writeDoctorKV(b, "telegram_thread_promotion_handoffs_count", strconv.Itoa(len(handoffByThread)))
 	for _, thread := range threads {
 		parts := []string{
 			"visible=" + strconv.FormatInt(thread.DisplaySlot, 10),
@@ -35,6 +46,12 @@ func (r *Runtime) writeDoctorTelegramThreads(b *strings.Builder, key session.Ses
 		}
 		if name := strings.TrimSpace(thread.ArchivedDisplayName); name != "" {
 			parts = append(parts, "archived_display_name="+strconv.Quote(name))
+		}
+		if handoff, ok := handoffByThread[thread.ThreadID]; ok {
+			parts = append(parts,
+				"promotion_handoff="+strconv.Quote(strings.TrimSpace(handoff.HandoffID)),
+				"promotion_status="+strings.TrimSpace(string(handoff.Status)),
+			)
 		}
 		writeDoctorLine(b, "telegram_thread "+strings.Join(parts, " "))
 	}

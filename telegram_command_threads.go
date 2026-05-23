@@ -19,6 +19,7 @@ func (c telegramCommandControl) threadController() telegramcontrol.ThreadControl
 		StopForMessage: c.StopForMessage,
 	}
 	if c.rt != nil {
+		controller.Promote = c.rt.PromoteTelegramThread
 		controller.Absorb = c.rt.AbsorbTelegramThread
 		controller.IsAbsorbUserError = runtime.IsTelegramThreadUserError
 	}
@@ -59,6 +60,10 @@ func (c telegramCommandControl) TelegramThreads(chatID int64) ([]session.Telegra
 
 func (c telegramCommandControl) QueueTelegramThreadSummary(ctx context.Context, msg core.InboundMessage) (string, error) {
 	return c.threadController().QueueTelegramThreadSummary(ctx, msg)
+}
+
+func (c telegramCommandControl) PromoteTelegramThread(ctx context.Context, chatID int64, senderID int64, threadID int64) (string, error) {
+	return c.threadController().PromoteTelegramThread(ctx, chatID, senderID, threadID)
 }
 
 func (c telegramCommandControl) AbsorbTelegramThread(ctx context.Context, chatID int64, senderID int64, threadID int64) (string, error) {

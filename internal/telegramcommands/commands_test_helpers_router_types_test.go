@@ -253,6 +253,11 @@ type stubCommandRouter struct {
 	threadSummaryMsg             *core.InboundMessage
 	threadSummaryReturn          string
 	threadSummaryErr             error
+	promoteThreadChatID          int64
+	promoteThreadSenderID        int64
+	promoteThreadID              int64
+	promoteThreadReturn          string
+	promoteThreadErr             error
 	absorbThreadChatID           int64
 	absorbThreadSenderID         int64
 	absorbThreadID               int64
