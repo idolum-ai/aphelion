@@ -5,7 +5,6 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"strings"
 
@@ -30,16 +29,16 @@ func (r *Runtime) StartCronLoop(ctx context.Context, logger func(string, ...any)
 		if err != nil || cadence <= 0 {
 			logger("WARN cron job disabled due to invalid cadence id=%s every=%q err=%v", job.ID, job.Every, err)
 			if err != nil {
-				r.reportOperationalIssue(ctx, "cron:"+strings.TrimSpace(job.ID), fmt.Errorf("invalid cadence %q: %w", job.Every, err))
+				r.reportOperationalIssue(ctx, "cron:"+job.ID.String(), fmt.Errorf("invalid cadence %q: %w", job.Every, err))
 			} else {
-				r.reportOperationalIssue(ctx, "cron:"+strings.TrimSpace(job.ID), fmt.Errorf("invalid cadence %q", job.Every))
+				r.reportOperationalIssue(ctx, "cron:"+job.ID.String(), fmt.Errorf("invalid cadence %q", job.Every))
 			}
 			continue
 		}
 		go runPeriodic(ctx, cadence, func(runCtx context.Context) {
 			if err := r.runScheduledJobOnce(runCtx, job); err != nil {
 				logger("WARN cron job failed id=%s err=%v", job.ID, err)
-				r.reportOperationalIssue(runCtx, "cron:"+strings.TrimSpace(job.ID), err)
+				r.reportOperationalIssue(runCtx, "cron:"+job.ID.String(), err)
 			}
 		})
 	}
@@ -50,9 +49,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 }
 
 func cronSessionChatID(id string) int64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(strings.TrimSpace(id)))
-	value := int64(h.Sum64() & 0x3fffffffffffffff)
+	value := int64(fnvHash64(strings.TrimSpace(id)) & 0x3fffffffffffffff)
 	return -(value + 1000)
 }
 

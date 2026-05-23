@@ -47,6 +47,8 @@ type maintenanceTurnAssemblyInput struct {
 	RenderLatestUserInput string
 	ProposalDeliveryMode  string
 	RenderDeliveryMode    string
+	ScheduledJobID        string
+	ScheduledJobKind      string
 	CronJobID             string
 	CurrentFaceModel      face.Renderer
 	BaseGovernorAwareness prompt.RuntimeAwareness
@@ -111,6 +113,8 @@ func (a *runtimeMaintenanceTurnAssembler) Run(ctx context.Context, input mainten
 		renderLatestUserInput: input.RenderLatestUserInput,
 		proposalDeliveryMode:  input.ProposalDeliveryMode,
 		renderDeliveryMode:    input.RenderDeliveryMode,
+		scheduledJobID:        input.ScheduledJobID,
+		scheduledJobKind:      input.ScheduledJobKind,
 		cronJobID:             input.CronJobID,
 		currentFaceModel:      input.CurrentFaceModel,
 		baseGovernorAwareness: input.BaseGovernorAwareness,

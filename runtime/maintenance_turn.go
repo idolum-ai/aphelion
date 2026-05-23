@@ -47,6 +47,8 @@ type maintenanceTurnCoordinator struct {
 	renderLatestUserInput string
 	proposalDeliveryMode  string
 	renderDeliveryMode    string
+	scheduledJobID        string
+	scheduledJobKind      string
 	cronJobID             string
 	currentFaceModel      face.Renderer
 	baseGovernorAwareness prompt.RuntimeAwareness
@@ -234,7 +236,7 @@ func (c *maintenanceTurnCoordinator) Render(ctx context.Context, req turn.FaceRe
 		case maintenanceTurnHeartbeat:
 			log.Printf("WARN heartbeat face render failed backend=%s err=%v; using floor_fallback serializer", c.runtime.faceBackend, err)
 		case maintenanceTurnCron:
-			log.Printf("WARN cron face render failed backend=%s job=%s err=%v; using floor_fallback serializer", c.runtime.faceBackend, c.cronJobID, err)
+			log.Printf("WARN cron face render failed backend=%s job=%s err=%v; using floor_fallback serializer", c.runtime.faceBackend, firstNonEmpty(c.scheduledJobID, c.cronJobID), err)
 		default:
 			log.Printf("WARN maintenance face render failed backend=%s err=%v; using floor_fallback serializer", c.runtime.faceBackend, err)
 		}

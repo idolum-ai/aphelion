@@ -132,6 +132,9 @@ func TestCronUsesMaintenanceTurnAssemblerBoundary(t *testing.T) {
 	if recorder.input.CronJobID != job.ID {
 		t.Fatalf("cron job id = %q, want %q", recorder.input.CronJobID, job.ID)
 	}
+	if recorder.input.ScheduledJobID != job.ID || recorder.input.ScheduledJobKind != "cron" {
+		t.Fatalf("scheduled job identity = %q/%q, want %q/cron", recorder.input.ScheduledJobID, recorder.input.ScheduledJobKind, job.ID)
+	}
 	if !strings.Contains(recorder.input.Prepared.LedgerText, "Cron job run: nightly") {
 		t.Fatalf("prepared ledger text = %q, want cron heading", recorder.input.Prepared.LedgerText)
 	}

@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -17,21 +18,56 @@ import (
 	"github.com/idolum-ai/aphelion/turn"
 )
 
+type scheduledJobID string
+
+type scheduledJobKind string
+
 type scheduledDeliveryMode string
 
 const (
+	scheduledJobKindGeneric scheduledJobKind = "scheduled_job"
+	scheduledJobKindCron    scheduledJobKind = "cron"
+
 	scheduledDeliveryNone     scheduledDeliveryMode = "none"
 	scheduledDeliveryAnnounce scheduledDeliveryMode = "announce"
+
+	scheduledJobScopeKind session.ScopeKind = "scheduled_job"
 )
 
 type scheduledJob struct {
-	ID           string
-	Every        string
-	Prompt       string
-	Delivery     scheduledDeliveryMode
-	DeliveryRaw  string
-	Enabled      bool
-	Source       string
+	ID       scheduledJobID
+	Kind     scheduledJobKind
+	Every    string
+	Prompt   string
+	Delivery scheduledJobDelivery
+	Enabled  bool
+}
+
+type scheduledJobDelivery struct {
+	Mode         scheduledDeliveryMode
+	Label        string
+	OutboundKind string
+}
+
+type scheduledJobExecution struct {
+	Job         scheduledJob
+	Key         session.SessionKey
+	Session     *session.Session
+	Scope       sandbox.Scope
+	RequestText string
+	Prepared    pipeline.TurnPrepareContract
+	Exec        pipeline.TurnExecutionContract
+}
+
+type scheduledJobExecutionResult struct {
+	Execution scheduledJobExecution
+	Turn      *turn.Result
+}
+
+type scheduledJobDeliveryPlan struct {
+	TargetChatID int64
+	ReplyText    string
+	FloorText    string
 	OutboundKind string
 }
 
@@ -52,34 +88,51 @@ func scheduledJobsFromCronConfig(cfg config.CronConfig) []scheduledJob {
 
 func scheduledJobFromCronConfig(job config.CronJobConfig) scheduledJob {
 	return normalizeScheduledJob(scheduledJob{
-		ID:           job.ID,
-		Every:        job.Every,
-		Prompt:       job.Prompt,
-		Delivery:     normalizeScheduledDeliveryMode(job.Delivery),
-		DeliveryRaw:  job.Delivery,
-		Enabled:      job.Enabled,
-		Source:       "cron",
-		OutboundKind: "cron",
+		ID:     scheduledJobID(job.ID),
+		Kind:   scheduledJobKindCron,
+		Every:  job.Every,
+		Prompt: job.Prompt,
+		Delivery: scheduledJobDelivery{
+			Mode:         normalizeScheduledDeliveryMode(job.Delivery),
+			Label:        job.Delivery,
+			OutboundKind: "cron",
+		},
+		Enabled: job.Enabled,
 	})
 }
 
 func normalizeScheduledJob(job scheduledJob) scheduledJob {
-	job.ID = strings.TrimSpace(job.ID)
+	job.ID = scheduledJobID(strings.TrimSpace(job.ID.String()))
+	job.Kind = normalizeScheduledJobKind(job.Kind)
 	job.Every = strings.TrimSpace(job.Every)
 	job.Prompt = strings.TrimSpace(job.Prompt)
-	job.DeliveryRaw = strings.TrimSpace(job.DeliveryRaw)
-	job.Source = strings.TrimSpace(job.Source)
-	job.OutboundKind = strings.TrimSpace(job.OutboundKind)
-	if job.Source == "" {
-		job.Source = "scheduled_job"
-	}
-	if job.OutboundKind == "" {
-		job.OutboundKind = job.Source
-	}
-	if job.Delivery == "" {
-		job.Delivery = normalizeScheduledDeliveryMode(job.DeliveryRaw)
-	}
+	job.Delivery = normalizeScheduledJobDelivery(job.Kind, job.Delivery)
 	return job
+}
+
+func normalizeScheduledJobKind(kind scheduledJobKind) scheduledJobKind {
+	switch scheduledJobKind(strings.TrimSpace(strings.ToLower(string(kind)))) {
+	case "", scheduledJobKindGeneric:
+		return scheduledJobKindGeneric
+	case scheduledJobKindCron:
+		return scheduledJobKindCron
+	default:
+		return scheduledJobKind(strings.TrimSpace(strings.ToLower(string(kind))))
+	}
+}
+
+func normalizeScheduledJobDelivery(kind scheduledJobKind, delivery scheduledJobDelivery) scheduledJobDelivery {
+	delivery.Label = strings.TrimSpace(delivery.Label)
+	delivery.OutboundKind = strings.TrimSpace(delivery.OutboundKind)
+	if delivery.Mode == "" {
+		delivery.Mode = normalizeScheduledDeliveryMode(delivery.Label)
+	} else {
+		delivery.Mode = normalizeScheduledDeliveryMode(delivery.Mode.String())
+	}
+	if delivery.OutboundKind == "" {
+		delivery.OutboundKind = kind.String()
+	}
+	return delivery
 }
 
 func normalizeScheduledDeliveryMode(raw string) scheduledDeliveryMode {
@@ -93,121 +146,177 @@ func normalizeScheduledDeliveryMode(raw string) scheduledDeliveryMode {
 	}
 }
 
-func (m scheduledDeliveryMode) announces() bool {
-	return m == scheduledDeliveryAnnounce
+func (id scheduledJobID) String() string {
+	return strings.TrimSpace(string(id))
 }
 
-func (m scheduledDeliveryMode) String() string {
-	if strings.TrimSpace(string(m)) == "" {
-		return string(scheduledDeliveryNone)
-	}
-	return strings.TrimSpace(string(m))
+func (kind scheduledJobKind) String() string {
+	return string(normalizeScheduledJobKind(kind))
 }
 
-func (job scheduledJob) cadence() (time.Duration, error) {
-	return time.ParseDuration(strings.TrimSpace(job.Every))
-}
-
-func (job scheduledJob) deliveryLabel() string {
-	job = normalizeScheduledJob(job)
-	if job.Source == "cron" {
-		return strings.TrimSpace(job.DeliveryRaw)
-	}
-	if raw := strings.TrimSpace(job.DeliveryRaw); raw != "" {
-		return raw
-	}
-	return job.Delivery.String()
-}
-
-func (job scheduledJob) sourceLabel() string {
-	job = normalizeScheduledJob(job)
-	return job.Source
-}
-
-func (job scheduledJob) requestHeading() string {
-	job = normalizeScheduledJob(job)
-	switch job.Source {
-	case "cron":
+func (kind scheduledJobKind) requestHeading() string {
+	switch normalizeScheduledJobKind(kind) {
+	case scheduledJobKindCron:
 		return "Cron job run"
 	default:
 		return "Scheduled job run"
 	}
 }
 
+func (kind scheduledJobKind) turnRunKind() session.TurnRunKind {
+	switch normalizeScheduledJobKind(kind) {
+	case scheduledJobKindCron:
+		return session.TurnRunKindCron
+	default:
+		return session.TurnRunKind(kind.String())
+	}
+}
+
+func (kind scheduledJobKind) maintenanceSpecies() maintenanceTurnSpecies {
+	switch normalizeScheduledJobKind(kind) {
+	case scheduledJobKindCron:
+		return maintenanceTurnCron
+	default:
+		return maintenanceTurnSpecies(kind.String())
+	}
+}
+
+func (mode scheduledDeliveryMode) announces() bool {
+	return mode == scheduledDeliveryAnnounce
+}
+
+func (mode scheduledDeliveryMode) String() string {
+	if strings.TrimSpace(string(mode)) == "" {
+		return string(scheduledDeliveryNone)
+	}
+	return strings.TrimSpace(string(mode))
+}
+
+func (delivery scheduledJobDelivery) labelForKind(kind scheduledJobKind) string {
+	delivery = normalizeScheduledJobDelivery(kind, delivery)
+	if normalizeScheduledJobKind(kind) == scheduledJobKindCron {
+		return delivery.Label
+	}
+	if delivery.Label != "" {
+		return delivery.Label
+	}
+	return delivery.Mode.String()
+}
+
+func (job scheduledJob) cadence() (time.Duration, error) {
+	return time.ParseDuration(strings.TrimSpace(job.Every))
+}
+
+func (job scheduledJob) sourceLabel() string {
+	return normalizeScheduledJob(job).Kind.String()
+}
+
 func scheduledJobSessionKey(job scheduledJob) session.SessionKey {
 	job = normalizeScheduledJob(job)
-	// Cron scopes are preserved as the compatibility storage surface for the
-	// existing public [cron] config. The scheduled-job boundary is intentionally
-	// internal so future local rituals can add their own scope shape without
-	// changing current cron session identity.
-	return session.SessionKey{ChatID: cronSessionChatID(job.ID), UserID: 0, Scope: cronScopeRef(job.ID)}
+	return session.SessionKey{ChatID: scheduledJobSessionChatID(job.Kind, job.ID), UserID: 0, Scope: scheduledJobScopeRef(job.Kind, job.ID)}
+}
+
+func scheduledJobSessionChatID(kind scheduledJobKind, id scheduledJobID) int64 {
+	kind = normalizeScheduledJobKind(kind)
+	if kind == scheduledJobKindCron {
+		return cronSessionChatID(id.String())
+	}
+	h := fnvHash64(kind.String() + ":" + id.String())
+	value := int64(h & 0x3fffffffffffffff)
+	return -(value + 1000)
+}
+
+func scheduledJobScopeRef(kind scheduledJobKind, id scheduledJobID) session.ScopeRef {
+	kind = normalizeScheduledJobKind(kind)
+	if kind == scheduledJobKindCron {
+		return cronScopeRef(id.String())
+	}
+	return session.ScopeRef{Kind: scheduledJobScopeKind, ID: id.String()}
 }
 
 func (r *Runtime) runScheduledJobOnce(ctx context.Context, job scheduledJob) error {
 	job = normalizeScheduledJob(job)
-	if job.ID == "" {
+	if job.ID.String() == "" {
 		return fmt.Errorf("scheduled job id is required")
 	}
 	key := scheduledJobSessionKey(job)
 	unlockJob := r.lockSession(key)
 	defer unlockJob()
 
+	execution, err := r.prepareScheduledJobExecution(job, key)
+	if err != nil {
+		return err
+	}
+	result, err := r.runScheduledJobExecution(ctx, execution)
+	if err != nil {
+		return err
+	}
+	return r.deliverScheduledJobResult(ctx, result)
+}
+
+func (r *Runtime) prepareScheduledJobExecution(job scheduledJob, key session.SessionKey) (scheduledJobExecution, error) {
+	job = normalizeScheduledJob(job)
 	jobSession, err := r.store.Load(key)
 	if err != nil {
-		return fmt.Errorf("load %s session: %w", job.sourceLabel(), err)
+		return scheduledJobExecution{}, fmt.Errorf("load %s session: %w", job.sourceLabel(), err)
 	}
 	applySessionScope(jobSession, key)
 
 	scope, err := r.scopeForPrincipal(principal.Principal{Role: principal.RoleAdmin})
 	if err != nil {
-		return fmt.Errorf("resolve %s scope: %w", job.sourceLabel(), err)
+		return scheduledJobExecution{}, fmt.Errorf("resolve %s scope: %w", job.sourceLabel(), err)
 	}
 	requestText := renderScheduledJobRequest(job)
 	prepared := pipeline.TurnPrepareContract{
 		UserText:   requestText,
 		LedgerText: requestText,
 	}
-	exec := r.executionForTurn(prepared)
-
-	turnResult, err := r.runScheduledJobTurn(ctx, job, key, jobSession, scope, prepared, exec)
-	if err != nil {
-		return err
-	}
-	return r.deliverScheduledJobResult(ctx, job, key, jobSession, turnResult)
+	return scheduledJobExecution{
+		Job:         job,
+		Key:         key,
+		Session:     jobSession,
+		Scope:       scope,
+		RequestText: requestText,
+		Prepared:    prepared,
+		Exec:        r.executionForTurn(prepared),
+	}, nil
 }
 
-func (r *Runtime) runScheduledJobTurn(ctx context.Context, job scheduledJob, key session.SessionKey, jobSession *session.Session, scope sandbox.Scope, prepared pipeline.TurnPrepareContract, exec pipeline.TurnExecutionContract) (*turn.Result, error) {
-	job = normalizeScheduledJob(job)
-	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "system", exec)
-	faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "telegram", exec)
+func (r *Runtime) runScheduledJobExecution(ctx context.Context, execution scheduledJobExecution) (scheduledJobExecutionResult, error) {
+	job := normalizeScheduledJob(execution.Job)
+	runKind := job.Kind.turnRunKind()
+	governorAwareness := r.governorRuntimeAwareness(execution.Scope, runKind, "system", execution.Exec)
+	faceAwareness := r.governorRuntimeAwareness(execution.Scope, runKind, "telegram", execution.Exec)
 
 	assembler := r.maintenanceAssembler
 	if assembler == nil {
 		assembler = newMaintenanceTurnAssembler(r)
 	}
-	return assembler.Run(ctx, maintenanceTurnAssemblyInput{
-		Species:               maintenanceTurnCron,
-		RunKind:               session.TurnRunKindCron,
-		Key:                   key,
-		Sess:                  jobSession,
-		Scope:                 scope,
-		Prepared:              prepared,
-		Exec:                  exec,
+	turnResult, err := assembler.Run(ctx, maintenanceTurnAssemblyInput{
+		Species:               job.Kind.maintenanceSpecies(),
+		RunKind:               runKind,
+		Key:                   execution.Key,
+		Sess:                  execution.Session,
+		Scope:                 execution.Scope,
+		Prepared:              execution.Prepared,
+		Exec:                  execution.Exec,
 		UseMaterialFloor:      true,
 		GovernorName:          r.governorName(),
 		FaceName:              r.faceName(),
 		Channel:               "telegram",
 		PrincipalRole:         "admin",
-		SessionUserName:       job.sourceLabel() + ":" + job.ID,
-		RenderLatestUserInput: "[" + job.sourceLabel() + ":" + job.ID + "]",
+		SessionUserName:       job.sourceLabel() + ":" + job.ID.String(),
+		RenderLatestUserInput: "[" + job.sourceLabel() + ":" + job.ID.String() + "]",
 		RenderDeliveryMode:    job.sourceLabel() + "_delivery",
-		CronJobID:             job.ID,
+		ScheduledJobID:        job.ID.String(),
+		ScheduledJobKind:      job.Kind.String(),
+		CronJobID:             job.ID.String(),
 		CurrentFaceModel:      r.currentFaceRenderer(),
 		BaseGovernorAwareness: governorAwareness,
 		RuntimeAwareness:      faceAwareness,
 		PolicyFunc: func(turn.Request) turn.Policy {
 			return turn.Policy{
-				Render: job.Delivery.announces(),
+				Render: job.Delivery.Mode.announces(),
 				Reason: job.sourceLabel() + "_delivery_policy",
 			}
 		},
@@ -218,74 +327,89 @@ func (r *Runtime) runScheduledJobTurn(ctx context.Context, job scheduledJob, key
 			SaveSession:     "save " + job.sourceLabel() + " session",
 		},
 		Inbound: core.InboundMessage{
-			ChatID: key.ChatID,
-			Text:   renderScheduledJobRequest(job),
+			ChatID: execution.Key.ChatID,
+			Text:   execution.RequestText,
 		},
 		Now:         time.Now().UTC(),
 		UseFacePort: true,
 	})
+	return scheduledJobExecutionResult{Execution: execution, Turn: turnResult}, err
 }
 
-func (r *Runtime) deliverScheduledJobResult(ctx context.Context, job scheduledJob, _ session.SessionKey, jobSession *session.Session, turnResult *turn.Result) error {
-	job = normalizeScheduledJob(job)
-	if turnResult == nil || turnResult.Turn == nil {
-		return fmt.Errorf("%s turn did not return a result", job.sourceLabel())
+func (r *Runtime) deliverScheduledJobResult(ctx context.Context, result scheduledJobExecutionResult) error {
+	plan, ok, err := r.planScheduledJobDelivery(result)
+	if err != nil || !ok {
+		return err
 	}
-	if !turnResult.Commit.Persisted {
-		return nil
-	}
-	floorText := strings.TrimSpace(turnResult.FloorText)
 
-	if !job.Delivery.announces() {
-		return nil
+	msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
+		ChatID: plan.TargetChatID,
+		Text:   plan.ReplyText,
+	})
+	if err != nil {
+		return fmt.Errorf("send %s outbound: %w", result.Execution.Job.sourceLabel(), err)
+	}
+
+	adminKey := session.SessionKey{ChatID: plan.TargetChatID, UserID: 0, Scope: telegramDMScopeRef(plan.TargetChatID)}
+	unlockAdmin := r.lockSession(adminKey)
+	defer unlockAdmin()
+
+	adminSession, err := r.store.Load(adminKey)
+	if err != nil {
+		return fmt.Errorf("load %s target session: %w", result.Execution.Job.sourceLabel(), err)
+	}
+	applySessionScope(adminSession, adminKey)
+	adminSession.ChatType = "dm"
+	adminSession.SystemPrompt = result.Execution.Session.SystemPrompt
+	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, plan.ReplyText, plan.FloorText, ""), core.TokenUsage{}); err != nil {
+		return fmt.Errorf("save %s admin session: %w", result.Execution.Job.sourceLabel(), err)
+	}
+	if err := r.store.RecordOutbound(adminKey, adminSession.TurnCount, msgID, plan.OutboundKind); err != nil {
+		return fmt.Errorf("record %s outbound: %w", result.Execution.Job.sourceLabel(), err)
+	}
+
+	return nil
+}
+
+func (r *Runtime) planScheduledJobDelivery(result scheduledJobExecutionResult) (scheduledJobDeliveryPlan, bool, error) {
+	job := normalizeScheduledJob(result.Execution.Job)
+	if result.Turn == nil || result.Turn.Turn == nil {
+		return scheduledJobDeliveryPlan{}, false, fmt.Errorf("%s turn did not return a result", job.sourceLabel())
+	}
+	if !result.Turn.Commit.Persisted || !job.Delivery.Mode.announces() {
+		return scheduledJobDeliveryPlan{}, false, nil
 	}
 
 	targetChatID := r.lastActiveAdminChat(uniquePositiveIDs(r.cfg.Principals.Telegram.AdminUserIDs))
 	if targetChatID == 0 {
 		targetChatID = r.cfg.Principals.Telegram.AdminUserIDs[0]
 	}
-
-	replyText := strings.TrimSpace(turnResult.VisibleReply)
+	floorText := strings.TrimSpace(result.Turn.FloorText)
+	replyText := strings.TrimSpace(result.Turn.VisibleReply)
 	if replyText == "" {
 		replyText = floorText
 	}
-
-	msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
-		ChatID: targetChatID,
-		Text:   replyText,
-	})
-	if err != nil {
-		return fmt.Errorf("send %s outbound: %w", job.sourceLabel(), err)
-	}
-
-	adminKey := session.SessionKey{ChatID: targetChatID, UserID: 0, Scope: telegramDMScopeRef(targetChatID)}
-	unlockAdmin := r.lockSession(adminKey)
-	defer unlockAdmin()
-
-	adminSession, err := r.store.Load(adminKey)
-	if err != nil {
-		return fmt.Errorf("load %s target session: %w", job.sourceLabel(), err)
-	}
-	applySessionScope(adminSession, adminKey)
-	adminSession.ChatType = "dm"
-	adminSession.SystemPrompt = jobSession.SystemPrompt
-	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, replyText, floorText, ""), core.TokenUsage{}); err != nil {
-		return fmt.Errorf("save %s admin session: %w", job.sourceLabel(), err)
-	}
-	if err := r.store.RecordOutbound(adminKey, adminSession.TurnCount, msgID, job.OutboundKind); err != nil {
-		return fmt.Errorf("record %s outbound: %w", job.sourceLabel(), err)
-	}
-
-	return nil
+	return scheduledJobDeliveryPlan{
+		TargetChatID: targetChatID,
+		ReplyText:    replyText,
+		FloorText:    floorText,
+		OutboundKind: job.Delivery.OutboundKind,
+	}, true, nil
 }
 
 func renderScheduledJobRequest(job scheduledJob) string {
 	job = normalizeScheduledJob(job)
 	return strings.Join([]string{
-		fmt.Sprintf("%s: %s", job.requestHeading(), job.ID),
-		"Delivery mode: " + job.deliveryLabel(),
+		fmt.Sprintf("%s: %s", job.Kind.requestHeading(), job.ID.String()),
+		"Delivery mode: " + job.Delivery.labelForKind(job.Kind),
 		"Execute the following scheduled instruction. Return empty if there is nothing to report.",
 		"",
 		job.Prompt,
 	}, "\n")
+}
+
+func fnvHash64(value string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(value))
+	return h.Sum64()
 }
