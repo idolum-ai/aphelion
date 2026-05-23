@@ -51,8 +51,36 @@ func (r *Runtime) writeDoctorTelegramThreads(b *strings.Builder, key session.Ses
 			parts = append(parts,
 				"promotion_handoff="+strconv.Quote(strings.TrimSpace(handoff.HandoffID)),
 				"promotion_status="+strings.TrimSpace(string(handoff.Status)),
+				"promotion_next_action="+telegramThreadPromotionDoctorNextAction(handoff),
 			)
+			if memory, ok := session.DecodeTelegramThreadPromotionMemoryCandidates(handoff.MemoryDigestJSON); ok {
+				parts = append(parts, "promotion_memory_candidates="+strconv.Itoa(len(memory)))
+			}
+			if resources, ok := session.DecodeTelegramThreadPromotionResourceCandidates(handoff.ResourceReviewJSON); ok {
+				parts = append(parts, "promotion_resource_candidates="+strconv.Itoa(len(resources)))
+			}
+			if child, ok := session.DecodeTelegramThreadPromotionProposedChild(handoff.ProposedChildJSON); ok && strings.TrimSpace(child.AgentID) != "" {
+				parts = append(parts, "promotion_proposed_child="+strconv.Quote(strings.TrimSpace(child.AgentID)))
+			}
 		}
 		writeDoctorLine(b, "telegram_thread "+strings.Join(parts, " "))
+	}
+}
+
+func telegramThreadPromotionDoctorNextAction(handoff session.TelegramThreadPromotionHandoff) string {
+	switch handoff.Status {
+	case session.TelegramThreadPromotionStatusDraft:
+		if strings.TrimSpace(handoff.ProposedChildJSON) == "" || strings.TrimSpace(handoff.ProposedChildJSON) == "{}" {
+			return "generate_review_package"
+		}
+		return "review_package"
+	case session.TelegramThreadPromotionStatusReady:
+		return "await_apply_approval"
+	case session.TelegramThreadPromotionStatusApproved:
+		return "apply_with_separate_authority"
+	case session.TelegramThreadPromotionStatusCancelled, session.TelegramThreadPromotionStatusSuperseded:
+		return "none"
+	default:
+		return "inspect"
 	}
 }

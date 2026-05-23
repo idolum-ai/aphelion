@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
 
-func TestPromoteTelegramThreadCreatesDraftOnly(t *testing.T) {
+func TestPromoteTelegramThreadCreatesReviewPackageOnly(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -19,9 +20,22 @@ func TestPromoteTelegramThreadCreatesDraftOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	thread, _, err := store.CreateTelegramThreadForUpdate(9106, 1001, 901, 101, "promote this work lane", time.Now().UTC())
+	now := time.Now().UTC()
+	thread, _, err := store.CreateTelegramThreadForUpdate(9106, 1001, 901, 101, "promote this work lane", now)
 	if err != nil {
 		t.Fatalf("CreateTelegramThreadForUpdate() err = %v", err)
+	}
+	threadKey := session.SessionKey{ChatID: 9106, UserID: 0, Scope: telegramThreadScopeRef(9106, thread.ThreadID)}
+	sess, err := store.Load(threadKey)
+	if err != nil {
+		t.Fatalf("Load(thread session) err = %v", err)
+	}
+	sess.TurnCount = 2
+	if err := store.Save(sess, []session.Message{
+		{Role: "user", Content: "We need this lane to become durable but safe.", TurnIndex: 1, CreatedAt: now.Add(time.Minute)},
+		{Role: "assistant", Content: "I will preserve context but stop before grants or child creation.", TurnIndex: 1, CreatedAt: now.Add(2 * time.Minute)},
+	}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save(thread messages) err = %v", err)
 	}
 
 	text, err := rt.PromoteTelegramThread(context.Background(), 9106, 1001, thread.ThreadID)
@@ -31,8 +45,11 @@ func TestPromoteTelegramThreadCreatesDraftOnly(t *testing.T) {
 	for _, want := range []string{
 		"Promotion draft created for thread 1.",
 		"Handoff: thread-promotion:9106:1:",
-		"memory candidates: review required; no child memory written",
-		"resources/capabilities: review required; no grants created",
+		"Proposed child:",
+		"Context digest:",
+		"Memory candidates:",
+		"Resource candidates:",
+		"Policy: review_before_reply / parent_relay_only / shared_context=isolated",
 		"does not create a durable child, transfer memory, grant resources, or run work",
 	} {
 		if !strings.Contains(text, want) {
@@ -46,6 +63,12 @@ func TestPromoteTelegramThreadCreatesDraftOnly(t *testing.T) {
 	}
 	if handoff.Status != session.TelegramThreadPromotionStatusDraft || handoff.SourceSessionID != "telegram_thread:9106:1" {
 		t.Fatalf("handoff = %#v, want draft typed source", handoff)
+	}
+	if handoff.ProposedChildJSON == "{}" || handoff.MemoryDigestJSON == "[]" || handoff.ResourceReviewJSON == "[]" || handoff.PolicyPatchJSON == "{}" {
+		t.Fatalf("handoff package = %#v, want review package without applying", handoff)
+	}
+	if !strings.Contains(handoff.ContextSummary, "Promotion candidate") || !strings.Contains(handoff.FirstTask, "stop for parent review") {
+		t.Fatalf("context/first task = %q / %q", handoff.ContextSummary, handoff.FirstTask)
 	}
 	agents, err := store.ListDurableAgents()
 	if err != nil {
@@ -68,6 +91,62 @@ func TestPromoteTelegramThreadCreatesDraftOnly(t *testing.T) {
 	}
 	if !strings.Contains(again, "Promotion draft already exists for thread 1.") || !strings.Contains(again, handoff.HandoffID) {
 		t.Fatalf("second promotion text = %q, want existing handoff", again)
+	}
+}
+
+func TestPrepareAndCancelTelegramThreadPromotionStayInsideReviewBoundary(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	thread, _, err := store.CreateTelegramThreadForUpdate(9116, 1001, 901, 101, "make this production ready", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate() err = %v", err)
+	}
+	if _, err := rt.PromoteTelegramThread(context.Background(), 9116, 1001, thread.ThreadID); err != nil {
+		t.Fatalf("PromoteTelegramThread() err = %v", err)
+	}
+	handoff, ok, err := store.LatestTelegramThreadPromotionHandoff(9116, thread.ThreadID)
+	if err != nil || !ok {
+		t.Fatalf("LatestTelegramThreadPromotionHandoff() ok=%t err=%v", ok, err)
+	}
+	readyText, err := rt.PrepareTelegramThreadPromotion(context.Background(), 9116, 1001, handoff.HandoffID)
+	if err != nil {
+		t.Fatalf("PrepareTelegramThreadPromotion() err = %v", err)
+	}
+	if !strings.Contains(readyText, "Promotion handoff ready") || !strings.Contains(readyText, "No durable child, memory write, capability grant, or first run happened") {
+		t.Fatalf("ready text = %q", readyText)
+	}
+	ready, _, err := store.LatestTelegramThreadPromotionHandoff(9116, thread.ThreadID)
+	if err != nil {
+		t.Fatalf("LatestTelegramThreadPromotionHandoff(after ready) err = %v", err)
+	}
+	if ready.Status != session.TelegramThreadPromotionStatusReady {
+		t.Fatalf("status = %s, want ready", ready.Status)
+	}
+	cancelText, err := rt.CancelTelegramThreadPromotion(context.Background(), 9116, 1001, handoff.HandoffID)
+	if err != nil {
+		t.Fatalf("CancelTelegramThreadPromotion() err = %v", err)
+	}
+	if !strings.Contains(cancelText, "Promotion cancelled") || !strings.Contains(cancelText, "No durable child") {
+		t.Fatalf("cancel text = %q", cancelText)
+	}
+	agents, err := store.ListDurableAgents()
+	if err != nil {
+		t.Fatalf("ListDurableAgents() err = %v", err)
+	}
+	if len(agents) != 0 {
+		t.Fatalf("durable agents = %#v, want no child creation", agents)
+	}
+	grants, err := store.CapabilityGrants(10, "", "", "")
+	if err != nil {
+		t.Fatalf("CapabilityGrants() err = %v", err)
+	}
+	if len(grants) != 0 {
+		t.Fatalf("capability grants = %#v, want no grants", grants)
 	}
 }
 
@@ -114,6 +193,9 @@ func TestDoctorTelegramThreadsShowsPromotionHandoff(t *testing.T) {
 		`telegram_thread_promotion_handoffs_count="1"`,
 		`promotion_handoff="thread-promotion:9108:1:`,
 		"promotion_status=draft",
+		"promotion_next_action=review_package",
+		"promotion_memory_candidates=1",
+		"promotion_resource_candidates=1",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("doctor thread report missing %q:\n%s", want, report)

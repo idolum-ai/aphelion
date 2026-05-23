@@ -251,6 +251,21 @@ type stubCommandRouter struct {
 	promoteThreadID              int64
 	promoteThreadReturn          string
 	promoteThreadErr             error
+	preparePromotionChatID       int64
+	preparePromotionSenderID     int64
+	preparePromotionHandoffID    string
+	preparePromotionReturn       string
+	preparePromotionErr          error
+	cancelPromotionChatID        int64
+	cancelPromotionSenderID      int64
+	cancelPromotionHandoffID     string
+	cancelPromotionReturn        string
+	cancelPromotionErr           error
+	supersedePromotionChatID     int64
+	supersedePromotionSenderID   int64
+	supersedePromotionHandoffID  string
+	supersedePromotionReturn     string
+	supersedePromotionErr        error
 	absorbThreadChatID           int64
 	absorbThreadSenderID         int64
 	absorbThreadID               int64

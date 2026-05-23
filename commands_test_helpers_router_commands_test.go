@@ -174,6 +174,54 @@ func (s *stubCommandRouter) PromoteTelegramThread(_ context.Context, chatID int6
 	return "Promotion draft created for thread " + strconv.FormatInt(threadID, 10) + ".", nil
 }
 
+func (s *stubCommandRouter) PrepareTelegramThreadPromotion(_ context.Context, chatID int64, senderID int64, handoffID string) (string, error) {
+	if s.order != nil {
+		*s.order = append(*s.order, "promotion_ready")
+	}
+	s.preparePromotionChatID = chatID
+	s.preparePromotionSenderID = senderID
+	s.preparePromotionHandoffID = handoffID
+	if s.preparePromotionErr != nil {
+		return "", s.preparePromotionErr
+	}
+	if strings.TrimSpace(s.preparePromotionReturn) != "" {
+		return s.preparePromotionReturn, nil
+	}
+	return "Promotion handoff ready.", nil
+}
+
+func (s *stubCommandRouter) CancelTelegramThreadPromotion(_ context.Context, chatID int64, senderID int64, handoffID string) (string, error) {
+	if s.order != nil {
+		*s.order = append(*s.order, "promotion_cancel")
+	}
+	s.cancelPromotionChatID = chatID
+	s.cancelPromotionSenderID = senderID
+	s.cancelPromotionHandoffID = handoffID
+	if s.cancelPromotionErr != nil {
+		return "", s.cancelPromotionErr
+	}
+	if strings.TrimSpace(s.cancelPromotionReturn) != "" {
+		return s.cancelPromotionReturn, nil
+	}
+	return "Promotion cancelled.", nil
+}
+
+func (s *stubCommandRouter) SupersedeTelegramThreadPromotion(_ context.Context, chatID int64, senderID int64, handoffID string) (string, error) {
+	if s.order != nil {
+		*s.order = append(*s.order, "promotion_refresh")
+	}
+	s.supersedePromotionChatID = chatID
+	s.supersedePromotionSenderID = senderID
+	s.supersedePromotionHandoffID = handoffID
+	if s.supersedePromotionErr != nil {
+		return "", s.supersedePromotionErr
+	}
+	if strings.TrimSpace(s.supersedePromotionReturn) != "" {
+		return s.supersedePromotionReturn, nil
+	}
+	return "Previous promotion handoff superseded.\n\nHandoff: thread-promotion:1001:3:9\nStatus: draft", nil
+}
+
 func (s *stubCommandRouter) AbsorbTelegramThread(_ context.Context, chatID int64, senderID int64, threadID int64) (string, error) {
 	if s.order != nil {
 		*s.order = append(*s.order, "absorb")

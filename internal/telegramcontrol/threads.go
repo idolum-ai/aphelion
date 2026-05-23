@@ -15,13 +15,16 @@ import (
 )
 
 type ThreadController struct {
-	Store             *session.SQLiteStore
-	Rebind            func(core.InboundMessage) error
-	RouteAccepted     func(context.Context, core.InboundMessage) error
-	StopForMessage    func(core.InboundMessage) core.StopResult
-	Promote           func(context.Context, int64, int64, int64) (string, error)
-	Absorb            func(context.Context, int64, int64, int64) (string, error)
-	IsAbsorbUserError func(error) bool
+	Store              *session.SQLiteStore
+	Rebind             func(core.InboundMessage) error
+	RouteAccepted      func(context.Context, core.InboundMessage) error
+	StopForMessage     func(core.InboundMessage) core.StopResult
+	Promote            func(context.Context, int64, int64, int64) (string, error)
+	PreparePromotion   func(context.Context, int64, int64, string) (string, error)
+	CancelPromotion    func(context.Context, int64, int64, string) (string, error)
+	SupersedePromotion func(context.Context, int64, int64, string) (string, error)
+	Absorb             func(context.Context, int64, int64, int64) (string, error)
+	IsAbsorbUserError  func(error) bool
 }
 
 func (c ThreadController) rebindTelegramIngressForMessage(msg core.InboundMessage) error {
@@ -280,6 +283,39 @@ func (c ThreadController) PromoteTelegramThread(ctx context.Context, chatID int6
 		TelegramThreadID: threadID,
 	})
 	text, err := c.Promote(ctx, chatID, senderID, threadID)
+	if err != nil && c.IsAbsorbUserError != nil && c.IsAbsorbUserError(err) {
+		return "", telegramcommands.ThreadUserError(err.Error())
+	}
+	return text, err
+}
+
+func (c ThreadController) PrepareTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (string, error) {
+	if c.PreparePromotion == nil {
+		return "", fmt.Errorf("runtime is unavailable")
+	}
+	text, err := c.PreparePromotion(ctx, chatID, senderID, handoffID)
+	if err != nil && c.IsAbsorbUserError != nil && c.IsAbsorbUserError(err) {
+		return "", telegramcommands.ThreadUserError(err.Error())
+	}
+	return text, err
+}
+
+func (c ThreadController) CancelTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (string, error) {
+	if c.CancelPromotion == nil {
+		return "", fmt.Errorf("runtime is unavailable")
+	}
+	text, err := c.CancelPromotion(ctx, chatID, senderID, handoffID)
+	if err != nil && c.IsAbsorbUserError != nil && c.IsAbsorbUserError(err) {
+		return "", telegramcommands.ThreadUserError(err.Error())
+	}
+	return text, err
+}
+
+func (c ThreadController) SupersedeTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (string, error) {
+	if c.SupersedePromotion == nil {
+		return "", fmt.Errorf("runtime is unavailable")
+	}
+	text, err := c.SupersedePromotion(ctx, chatID, senderID, handoffID)
 	if err != nil && c.IsAbsorbUserError != nil && c.IsAbsorbUserError(err) {
 		return "", telegramcommands.ThreadUserError(err.Error())
 	}
