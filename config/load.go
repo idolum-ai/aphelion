@@ -117,6 +117,18 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("expand tailscale.parent.auth_key_file: %w", err)
 	}
+	if strings.TrimSpace(cfg.GitHub.APIBaseURL) == "" {
+		cfg.GitHub.APIBaseURL = "https://api.github.com"
+	}
+	if strings.TrimSpace(cfg.GitHub.APIVersion) == "" {
+		cfg.GitHub.APIVersion = "2026-03-10"
+	}
+	for i := range cfg.GitHub.Apps {
+		cfg.GitHub.Apps[i].PrivateKeyFile, err = expandConfiguredPath(cfg.GitHub.Apps[i].PrivateKeyFile, baseDir)
+		if err != nil {
+			return nil, fmt.Errorf("expand github.apps[%d].private_key_file: %w", i, err)
+		}
+	}
 	for i := range cfg.Telegram.ChildBots {
 		cfg.Telegram.ChildBots[i].TokenFile, err = expandConfiguredPath(cfg.Telegram.ChildBots[i].TokenFile, baseDir)
 		if err != nil {
@@ -124,6 +136,8 @@ func Load(path string) (*Config, error) {
 		}
 	}
 	normalizeAgentRoots(&cfg)
+	normalizeGitHubConfig(&cfg)
+	addGitHubSecretHiddenPaths(&cfg)
 	cfg.Face.Backend = NormalizeFaceBackendValue(cfg.Face.Backend)
 	normalizeTelegramDurableGroups(&cfg)
 	normalizeTelegramChildBots(&cfg)

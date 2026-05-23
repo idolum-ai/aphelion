@@ -35,7 +35,7 @@ var cliCommandGroups = []struct {
 		"import-audit", "import-semantic", "import-codex-sessions",
 	}},
 	{Title: "Governed control", Commands: []string{
-		"authority", "durable-agent", "tailnet", "sandbox-net check", "sandbox-net helper serve", "telegram-child-bot", "agency-eval",
+		"authority", "durable-agent", "tailnet", "github-app status", "sandbox-net check", "sandbox-net helper serve", "telegram-child-bot", "agency-eval",
 	}},
 }
 
@@ -66,6 +66,7 @@ func renderTopLevelHelp(note string) string {
 	lines = append(lines, "  aphelion quickstart --detect-admin --install-service")
 	lines = append(lines, "  aphelion durable-agent list --config ~/.aphelion/aphelion.toml")
 	lines = append(lines, "  aphelion tailnet surfaces --config ~/.aphelion/aphelion.toml")
+	lines = append(lines, "  aphelion github-app status --config ~/.aphelion/aphelion.toml")
 	lines = append(lines, "  aphelion sandbox-net check --config ~/.aphelion/aphelion.toml")
 	lines = append(lines, "  sudo aphelion sandbox-net helper serve --allowed-uid $(id -u)")
 	return strings.Join(lines, "\n")

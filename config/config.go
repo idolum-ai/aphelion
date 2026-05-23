@@ -30,6 +30,7 @@ type Config struct {
 	Voice         VoiceConfig         `toml:"voice"`
 	DurableAgents DurableAgentsConfig `toml:"durable_agents"`
 	Tailscale     TailscaleConfig     `toml:"tailscale"`
+	GitHub        GitHubConfig        `toml:"github"`
 
 	warnings []ConfigWarning
 }
@@ -118,6 +119,24 @@ type TailscaleParentConfig struct {
 	AuthKeyFile     string   `toml:"auth_key_file"`
 	Tags            []string `toml:"tags"`
 	AdminLoginNames []string `toml:"admin_login_names"`
+}
+
+type GitHubConfig struct {
+	Enabled    bool              `toml:"enabled"`
+	APIBaseURL string            `toml:"api_base_url"`
+	APIVersion string            `toml:"api_version"`
+	Apps       []GitHubAppConfig `toml:"apps"`
+}
+
+type GitHubAppConfig struct {
+	Name                 string   `toml:"name"`
+	AppID                int64    `toml:"app_id"`
+	InstallationID       int64    `toml:"installation_id"`
+	PrivateKeyFile       string   `toml:"private_key_file"`
+	Repositories         []string `toml:"repositories"`
+	Permissions          []string `toml:"permissions"`
+	AllowAllRepositories bool     `toml:"allow_all_repositories"`
+	AllowAllPermissions  bool     `toml:"allow_all_permissions"`
 }
 
 type PrincipalsConfig struct {
@@ -745,6 +764,11 @@ func Default() Config {
 				ListenAddr: ":8765",
 				AuthKeyEnv: "APHELION_TS_AUTHKEY",
 			},
+		},
+		GitHub: GitHubConfig{
+			Enabled:    false,
+			APIBaseURL: "https://api.github.com",
+			APIVersion: "2026-03-10",
 		},
 	}
 }

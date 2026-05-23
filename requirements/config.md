@@ -302,6 +302,22 @@ daily_notes_dir = "memory/daily"
 # Empty disables external manifest loading.
 external_manifest_dir = ""
 
+[github]
+enabled = false
+api_base_url = "https://api.github.com"
+api_version = "2026-03-10"
+
+[[github.apps]]
+name = "maintenance"
+app_id = 123456
+installation_id = 987654
+private_key_file = "~/.aphelion/secrets/github/maintenance.pem"
+repositories = ["owner/repo"]
+permissions = ["metadata:read", "contents:read"]
+# Broad installation scope must be explicit.
+allow_all_repositories = false
+allow_all_permissions = false
+
 # ─── Sessions ───
 [sessions]
 db_path = "~/.aphelion/state/sessions.db"

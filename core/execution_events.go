@@ -104,6 +104,8 @@ const (
 	ExecutionEventTailnetSurfaceChanged = "tailnet.surface.changed"
 	ExecutionEventTailnetGrantChanged   = "tailnet.grant.changed"
 
+	ExecutionEventGitHubAppTokenMinted = "github_app.token.minted"
+
 	ExecutionEventDurableWakeStarted        = "durable.wake.started"
 	ExecutionEventDurableWakeSkipped        = "durable.wake.skipped"
 	ExecutionEventDurableWakeCompleted      = "durable.wake.completed"

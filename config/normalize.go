@@ -68,6 +68,73 @@ func normalizeTelegramChildBots(cfg *Config) {
 	}
 }
 
+func normalizeGitHubConfig(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	cfg.GitHub.APIBaseURL = strings.TrimRight(strings.TrimSpace(cfg.GitHub.APIBaseURL), "/")
+	cfg.GitHub.APIVersion = strings.TrimSpace(cfg.GitHub.APIVersion)
+	for i := range cfg.GitHub.Apps {
+		app := &cfg.GitHub.Apps[i]
+		app.Name = strings.TrimSpace(app.Name)
+		app.PrivateKeyFile = strings.TrimSpace(app.PrivateKeyFile)
+		app.Repositories = normalizeStringList(app.Repositories)
+		app.Permissions = normalizeGitHubPermissionList(app.Permissions)
+	}
+}
+
+func addGitHubSecretHiddenPaths(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	var paths []string
+	for _, app := range cfg.GitHub.Apps {
+		if path := strings.TrimSpace(app.PrivateKeyFile); path != "" {
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) == 0 {
+		return
+	}
+	cfg.Sandbox.Profiles.ApprovedUser.HiddenPaths = normalizeStringList(append(cfg.Sandbox.Profiles.ApprovedUser.HiddenPaths, paths...))
+	cfg.Sandbox.Profiles.DurableAgent.HiddenPaths = normalizeStringList(append(cfg.Sandbox.Profiles.DurableAgent.HiddenPaths, paths...))
+}
+
+func normalizeGitHubPermissionList(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		name, level, ok := splitGitHubPermission(value)
+		if !ok {
+			value = strings.ToLower(strings.TrimSpace(value))
+		} else {
+			value = name + ":" + level
+		}
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func splitGitHubPermission(raw string) (string, string, bool) {
+	parts := strings.Split(strings.TrimSpace(raw), ":")
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	name := strings.ToLower(strings.TrimSpace(parts[0]))
+	level := strings.ToLower(strings.TrimSpace(parts[1]))
+	if name == "" || level == "" {
+		return "", "", false
+	}
+	return name, level, true
+}
+
 func normalizeStringList(values []string) []string {
 	out := make([]string, 0, len(values))
 	seen := map[string]struct{}{}
