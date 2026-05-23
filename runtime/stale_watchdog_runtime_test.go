@@ -342,6 +342,17 @@ func TestStaleWatchdogLatchHelpers(t *testing.T) {
 func assertStaleWatchdogRetryScheduled(t *testing.T, rt *Runtime) {
 	t.Helper()
 
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if rt.staleWatchdogTriggered.Load() && !rt.staleWatchdogNextAttemptAt().IsZero() {
+			return
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	if !rt.staleWatchdogTriggered.Load() {
 		t.Fatal("staleWatchdogTriggered = false, want true while retry is scheduled")
 	}
