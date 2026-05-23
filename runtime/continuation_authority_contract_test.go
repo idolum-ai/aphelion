@@ -65,6 +65,140 @@ func TestInvalidAuthorityContractDoesNotRenderApprovalButtons(t *testing.T) {
 	}
 }
 
+func TestMaterializedInvalidAuthorityContractFallsBackToGenericBlockedNotice(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9046, UserID: 0, Scope: telegramDMScopeRef(9046)}
+	now := time.Now().UTC()
+	state := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "invalid-no-safe-repair",
+		Objective:      "Deploy the runtime with no remaining safe action.",
+		StageSummary:   "Deploy-only invalid phase",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:               "aprop-invalid-no-safe-repair",
+			Summary:          "Deploy-only invalid phase",
+			RiskClass:        "continuation",
+			AllowedActions:   []string{"deploy"},
+			ForbiddenActions: []string{"deploy"},
+			Status:           session.ProposalStatusPending,
+			ExpiresAt:        now.Add(time.Hour),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-invalid-no-safe-repair",
+			ProposalID:     "aprop-invalid-no-safe-repair",
+			Status:         session.ContinuationLeaseStatusPending,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ExpiresAt:      now.Add(time.Hour),
+		},
+	}
+	_, blocked, err := rt.blockInvalidMaterializedContinuationAuthority(context.Background(), key, core.InboundMessage{ChatID: 9046, SenderID: 1001, Text: "continue", MessageID: 1}, session.OperationState{ID: "invalid-no-safe-repair-op"}, state, "operation_phase_plan", now)
+	if err != nil {
+		t.Fatalf("blockInvalidMaterializedContinuationAuthority() err = %v", err)
+	}
+	if !blocked {
+		t.Fatal("blocked = false, want invalid authority handled")
+	}
+
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sent := append([]core.OutboundMessage(nil), sender.sent...)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no unsafe approval buttons", inlineCount)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("sent = %#v, want one generic blocked notice", sent)
+	}
+	text := sent[0].Text
+	for _, notWant := range []string{"allowed_action_implies_forbidden_authority", "allowed_action_exactly_forbidden", "internally contradictory", "I need a narrower approval shape"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("blocked notice = %q, want no compiler diagnostic %q", text, notWant)
+		}
+	}
+	if !strings.Contains(text, "I couldn't produce a safe approval") || !strings.Contains(text, "smaller phase") {
+		t.Fatalf("blocked notice = %q, want generic safe clarification", text)
+	}
+}
+
+func TestMaterializedBundleAuthorityContradictionFallsBackToGenericBlockedNotice(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9047, UserID: 0, Scope: telegramDMScopeRef(9047)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "bundle-invalid-op",
+		Objective: "Approve bundled local phases without leaking compiler diagnostics.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "bundle-invalid-plan",
+			CurrentPhaseID: "phase-one",
+			Phases: []session.OperationPhase{
+				{
+					ID:               "phase-one",
+					Summary:          "Patch local files",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "workspace_write",
+					BoundedEffect:    "Edit local files and stop before commit.",
+					AllowedActions:   []string{"edit_files"},
+					ForbiddenActions: []string{"commit"},
+				},
+				{
+					ID:               "phase-two",
+					Summary:          "Run local tests",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "workspace_write",
+					BoundedEffect:    "Run tests only.",
+					AllowedActions:   []string{"restart_aphelion_service"},
+					ForbiddenActions: []string{"deploy"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9047, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want handled generic blocked notice")
+	}
+
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sent := append([]core.OutboundMessage(nil), sender.sent...)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no invalid bundle approval buttons", inlineCount)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("sent = %#v, want one generic blocked notice for bundle contradiction", sent)
+	}
+	text := sent[0].Text
+	for _, notWant := range []string{"allowed_action_exactly_forbidden", "allowed_action_implies_forbidden_authority", "internally contradictory", "I need a narrower approval shape"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("blocked notice = %q, want no compiler diagnostic %q", text, notWant)
+		}
+	}
+	if !strings.Contains(text, "I couldn't produce a safe approval") || !strings.Contains(text, "smaller phase") {
+		t.Fatalf("blocked notice = %q, want generic safe clarification", text)
+	}
+}
+
 func TestMaterializedInvalidAuthorityContractReconcilesToFreshApproval(t *testing.T) {
 	t.Parallel()
 
