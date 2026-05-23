@@ -125,10 +125,8 @@ func (r *Runtime) blockInvalidMaterializedContinuationAuthority(ctx context.Cont
 			return reconciledOpState, true, reconcileErr
 		}
 	}
-	if r != nil && r.outbound != nil && msg.ChatID != 0 {
-		text := r.prefixTelegramPresentedText(r.telegramPresentationForMessage(msg), renderInvalidAuthorityNeedsNarrowerProposalStatus(blockedState))
-		_, _ = r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: msg.ChatID, Text: text})
-	}
+	_ = ctx
+	_ = msg
 	return opState, true, nil
 }
 

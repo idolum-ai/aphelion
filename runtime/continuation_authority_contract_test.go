@@ -87,7 +87,7 @@ func TestMaterializedInvalidAuthorityContractReconcilesToFreshApproval(t *testin
 				Status:         session.PlanStatusPending,
 				AuthorityClass: "deploy",
 				BoundedEffect:  "Build, install, restart, and verify the service.",
-				AllowedActions: []string{"install_user_service", "restart_aphelion_service", "run_verify_deploy"},
+				AllowedActions: []string{"inspect_readonly_state", "install_user_service", "restart_aphelion_service", "run_verify_deploy"},
 				ForbiddenActions: []string{
 					"deploy or restart",
 					"credentials_or_tokens",
@@ -137,12 +137,17 @@ func TestMaterializedInvalidAuthorityContractReconcilesToFreshApproval(t *testin
 	if compilation := continuationAuthorityCompilation(cont); compilation.Invalid() {
 		t.Fatalf("compilation = %#v, want valid reconciled authority", compilation)
 	}
-	if actionListContains(cont.ActionProposal.ForbiddenActions, "deploy or restart") {
-		t.Fatalf("forbidden actions = %#v, want broad self-cancelling deploy/restart stop removed", cont.ActionProposal.ForbiddenActions)
+	for _, notWant := range []string{"install_user_service", "restart_aphelion_service", "run_verify_deploy", "deploy"} {
+		if actionListContains(cont.ActionProposal.AllowedActions, notWant) {
+			t.Fatalf("allowed actions = %#v, want unsafe deploy/restart action %q removed", cont.ActionProposal.AllowedActions, notWant)
+		}
 	}
-	for _, want := range []string{"credentials_or_tokens", "deploy_without_handoff", "restart_without_recovery_artifact"} {
+	if cont.ActionProposal.RiskClass != "commit" || !actionListContains(cont.ActionProposal.AllowedActions, "git_commit_intended_changes") {
+		t.Fatalf("action proposal = %#v, want safest remaining non-deploy approval", cont.ActionProposal)
+	}
+	for _, want := range []string{"deploy or restart", "credentials_or_tokens"} {
 		if !actionListContains(cont.ActionProposal.ForbiddenActions, want) {
-			t.Fatalf("forbidden actions = %#v, want %q", cont.ActionProposal.ForbiddenActions, want)
+			t.Fatalf("forbidden actions = %#v, want preserved stop boundary %q", cont.ActionProposal.ForbiddenActions, want)
 		}
 	}
 
