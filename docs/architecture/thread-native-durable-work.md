@@ -399,7 +399,7 @@ Current `/thread` already has most of the lane mechanics:
   `TouchTelegramThread`, `CloseTelegramThread`, `RecordTelegramThreadAbsorb`,
   and reply-message lookup. The row is already per-chat, idempotent by source
   update, and atomic when absorb writes the main-chat note.
-- `session/store_schema.go` creates `telegram_threads`,
+- `session/store_schema_threads.go` creates `telegram_threads`,
   `telegram_callback_messages`, and the thread-session backfill migrations.
 - `session/scope.go` and `session/types.go` define
   `ScopeKindTelegramThread`, `TelegramThreadScopeRef`, and
