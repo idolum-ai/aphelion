@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
@@ -52,7 +53,8 @@ func TestThreadDetailCallbackShowsPromoteAbsorbBackCard(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
-	router := &stubCommandRouter{threadsReturn: []session.TelegramThread{{ChatID: 1001, ThreadID: 42, DisplaySlot: 1, Status: session.TelegramThreadStatusOpen, CreatedText: "review the readme of Aphelion"}}}
+	lastActive := time.Date(2026, 5, 23, 18, 42, 0, 0, time.UTC)
+	router := &stubCommandRouter{threadsReturn: []session.TelegramThread{{ChatID: 1001, ThreadID: 42, DisplaySlot: 1, Status: session.TelegramThreadStatusOpen, CreatedText: "review the readme of Aphelion", LastActivityAt: lastActive}}}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
 		ID:      "detail-cb",
 		Data:    encodeTelegramThreadDetailCallback(42),
@@ -71,11 +73,25 @@ func TestThreadDetailCallbackShowsPromoteAbsorbBackCard(t *testing.T) {
 	if !strings.Contains(sender.editInline[0].text, "**Thread 1**") || !strings.Contains(sender.editInline[0].text, "**Promote**") || !strings.Contains(sender.editInline[0].text, "**Absorb**") {
 		t.Fatalf("detail text = %q, want thread detail guidance", sender.editInline[0].text)
 	}
+	if !strings.Contains(sender.editInline[0].text, "Last active: May 23, 2026, 6:42 PM UTC") {
+		t.Fatalf("detail text = %q, want last active absolute time", sender.editInline[0].text)
+	}
 	if !commandRowsContain(sender.editInline[0].rows, "Promote", "thread_promote:42") || !commandRowsContain(sender.editInline[0].rows, "Absorb", "thread_absorb:42") || !commandRowsContain(sender.editInline[0].rows, "Back", "thread_back") {
 		t.Fatalf("detail rows = %#v, want Promote/Absorb/Back", sender.editInline[0].rows)
 	}
 	if router.threadCallbackChatID != 1001 || router.threadCallbackID != 42 || router.threadCallbackMessageID != 9004 || router.threadCallbackSurface != "thread_detail" {
 		t.Fatalf("callback ledger = chat:%d thread:%d msg:%d surface:%q", router.threadCallbackChatID, router.threadCallbackID, router.threadCallbackMessageID, router.threadCallbackSurface)
+	}
+}
+
+func TestRenderThreadDetailUsesCreatedAtFallbackAndRelativeTime(t *testing.T) {
+	t.Parallel()
+
+	created := time.Date(2026, 5, 21, 23, 8, 0, 0, time.UTC)
+	now := time.Date(2026, 5, 23, 23, 8, 0, 0, time.UTC)
+	rendered := renderTelegramThreadDetailAt(session.TelegramThread{ThreadID: 7, DisplaySlot: 3, Status: session.TelegramThreadStatusOpen, CreatedText: "older lane", CreatedAt: created}, now)
+	if !strings.Contains(rendered, "Last active: May 21, 2026, 11:08 PM UTC") || !strings.Contains(rendered, "2 days ago") {
+		t.Fatalf("rendered detail = %q, want created-at fallback with relative time", rendered)
 	}
 }
 

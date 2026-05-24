@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
@@ -147,6 +148,9 @@ func telegramThreadsRowsPage(threads []session.TelegramThread, allThreads []sess
 	return rows
 }
 func renderTelegramThreadDetail(thread session.TelegramThread) string {
+	return renderTelegramThreadDetailAt(thread, time.Now().UTC())
+}
+func renderTelegramThreadDetailAt(thread session.TelegramThread, now time.Time) string {
 	operatorID := telegramThreadOperatorID(thread)
 	preview := compactThreadPreview(thread.CreatedText)
 	if preview == "" {
@@ -155,11 +159,68 @@ func renderTelegramThreadDetail(thread session.TelegramThread) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "**Thread %d**\n", operatorID)
 	fmt.Fprintf(&b, "*%s*\n\n", preview)
+	if lastActive := telegramThreadLastActiveAt(thread); !lastActive.IsZero() {
+		fmt.Fprintf(&b, "Last active: %s\n", formatTelegramThreadDetailTime(lastActive))
+		fmt.Fprintf(&b, "%s\n\n", formatTelegramThreadRelativeTime(lastActive, now))
+	} else {
+		b.WriteString("Last active: unknown\n\n")
+	}
 	b.WriteString("**Promote**\n")
 	b.WriteString("Turn this thread into a real work item.\n\n")
 	b.WriteString("**Absorb**\n")
 	b.WriteString("Fold the useful result back into the main chat and remove it from open threads.")
 	return b.String()
+}
+func telegramThreadLastActiveAt(thread session.TelegramThread) time.Time {
+	if !thread.LastActivityAt.IsZero() {
+		return thread.LastActivityAt.UTC()
+	}
+	if !thread.CreatedAt.IsZero() {
+		return thread.CreatedAt.UTC()
+	}
+	if !thread.UpdatedAt.IsZero() {
+		return thread.UpdatedAt.UTC()
+	}
+	return time.Time{}
+}
+func formatTelegramThreadDetailTime(t time.Time) string {
+	return t.UTC().Format("Jan 2, 2006, 3:04 PM UTC")
+}
+func formatTelegramThreadRelativeTime(t time.Time, now time.Time) string {
+	if t.IsZero() {
+		return "unknown"
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	delta := now.UTC().Sub(t.UTC())
+	future := false
+	if delta < 0 {
+		future = true
+		delta = -delta
+	}
+	if delta < time.Minute {
+		if future {
+			return "moments from now"
+		}
+		return "just now"
+	}
+	value := int64(delta / time.Minute)
+	unit := "minute"
+	if delta >= 48*time.Hour {
+		value = int64(delta / (24 * time.Hour))
+		unit = "day"
+	} else if delta >= 2*time.Hour {
+		value = int64(delta / time.Hour)
+		unit = "hour"
+	}
+	if value != 1 {
+		unit += "s"
+	}
+	if future {
+		return fmt.Sprintf("in %d %s", value, unit)
+	}
+	return fmt.Sprintf("%d %s ago", value, unit)
 }
 func telegramThreadDetailRows(thread session.TelegramThread) [][]telegram.InlineButton {
 	return [][]telegram.InlineButton{{
