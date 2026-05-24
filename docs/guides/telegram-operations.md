@@ -126,8 +126,10 @@ memory candidates when something from a thread should become durable knowledge.
 
 `/threads` also exposes `Analyze` when there are open side threads. That
 button queues ordinary thread-0 work with bounded evidence from the open
-threads, so Aphelion can send one short main-chat status without absorbing or
-modifying anything.
+threads, so Aphelion can produce a compact thread-board triage note without
+absorbing, promoting, closing, or modifying anything. The analysis prompt asks
+for a quick read, threads needing action, likely stale/absorbable threads,
+blocked/waiting threads, and one suggested next move.
 
 ## Stop Or Reset A Chat
 

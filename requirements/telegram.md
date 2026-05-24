@@ -90,7 +90,9 @@ Requirements:
 - `/threads` exposes an `Analyze` button when open threads exist. The callback
   is recorded as recoverable callback-work ingress, then queues ordinary
   main-chat work with bounded open-thread evidence; it does not analyze inline
-  in the callback.
+  in the callback. The queued prompt uses operator-facing display thread
+  numbers, includes age/last-active/session-state evidence when available, and
+  asks for a structured triage note rather than a flat status list.
 - `/absorb N` closes thread `N` and records a compact outcome note in the main
   chat session.
 - Thread-visible replies, progress cards, and stream edits are prefixed with
@@ -104,7 +106,7 @@ Requirements:
   They share the same Telegram transport and same configured principal rules.
 - Absorb is bookkeeping and pruning. It does not automatically approve curated
   memory writes or copy the full thread transcript into thread `0`.
-- Analyze is bookkeeping. It does not close, absorb, or mutate side threads.
+- Analyze is bookkeeping. It does not close, promote, absorb, or mutate side threads.
 
 ## Update Normalization
 

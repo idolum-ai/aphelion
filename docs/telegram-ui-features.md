@@ -57,7 +57,7 @@ Current command surface:
 - `/threads`
   - Shows open and recently closed side threads for the chat.
   - Provides compact numeric buttons for opening per-thread detail cards.
-  - Provides an `Analyze` button that queues ordinary main-chat work to produce one short status across open threads.
+  - Provides an `Analyze` button that queues ordinary main-chat work to produce a structured triage note across open threads.
   - Provides `Promote`, `Absorb`, and `Back` buttons inside each open thread detail card.
 - `/absorb`
   - Closes a side thread with `/absorb N` and appends a compact bookkeeping note to the main chat session.
@@ -287,7 +287,9 @@ it closes the side lane and carries the outcome back to the main transcript, but
 it does not merge every thread message into thread `0` and does not automatically
 approve memory writes. Analyze is also bookkeeping: its callback is recorded
 as recoverable ingress, then it queues a normal thread-0 turn with bounded
-evidence from open side threads and does not close or absorb them.
+evidence from open side threads. It asks for quick read / needs action /
+stale-or-absorbable / blocked-or-waiting / suggested next move sections, and
+it does not close, promote, absorb, or otherwise mutate threads.
 
 Thread-scoped work-lane controls follow the same typed session scope as the
 turns themselves. Continuation approvals, progress-card `Stop`/`Reassess`,
