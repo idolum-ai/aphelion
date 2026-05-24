@@ -15,6 +15,10 @@ func RenderTelegramStatusChatOperatorCard(snapshot core.ChatStatusSnapshot, pers
 	if pendingOnly {
 		lines = append(lines, renderOperatorAttentionLines(snapshot, true)...)
 		lines = append(lines, renderOperatorBacklogLines(snapshot, true)...)
+		if next := operatorNextLine(snapshot, "pending"); next != "" {
+			lines = append(lines, "next: "+next)
+		}
+		lines = append(lines, operatorEvidenceLine(snapshot))
 		lines = append(lines, renderOperatorRuntimeLine(personaEffort, governorEffort))
 		lines = append(lines, "details: /health trace has the full execution trace and source attribution.")
 		return strings.Join(compactStatusLines(lines), "\n")
@@ -27,6 +31,9 @@ func RenderTelegramStatusChatOperatorCard(snapshot core.ChatStatusSnapshot, pers
 	}
 	if now := operatorNowLine(snapshot, state); now != "" {
 		lines = append(lines, "now: "+now)
+	}
+	if next := operatorNextLine(snapshot, state); next != "" {
+		lines = append(lines, "next: "+next)
 	}
 	if work := operatorLastKnownWork(snapshot); work != "" {
 		lines = append(lines, "last_known_work: "+work)
@@ -43,6 +50,7 @@ func RenderTelegramStatusChatOperatorCard(snapshot core.ChatStatusSnapshot, pers
 	lines = append(lines, renderOperatorAttentionLines(snapshot, false)...)
 	lines = append(lines, operatorQueueLine(snapshot))
 	lines = append(lines, renderOperatorBacklogLines(snapshot, false)...)
+	lines = append(lines, operatorEvidenceLine(snapshot))
 	lines = append(lines, renderOperatorRuntimeLine(personaEffort, governorEffort))
 	lines = append(lines, "details: /health trace has the full execution trace and source attribution.")
 	return strings.Join(compactStatusLines(lines), "\n")
@@ -162,6 +170,80 @@ func operatorLastKnownWork(snapshot core.ChatStatusSnapshot) string {
 		}
 	}
 	return ""
+}
+
+func operatorNextLine(snapshot core.ChatStatusSnapshot, state string) string {
+	attention := operatorAttentionItems(snapshot.PendingItems)
+	if strings.TrimSpace(state) == "needs_recovery" || (chatHasStaleWorkEvidence(snapshot) && !pendingItemsContainKind(attention, core.PendingItemKindStaleTurn)) {
+		return "run /health diagnose, or use /stop if this stale work should be cleared"
+	}
+	if len(attention) > 0 {
+		return operatorAttentionNextLine(attention[0], len(attention))
+	}
+
+	switch strings.TrimSpace(state) {
+	case "pending":
+		if len(operatorBacklogItems(snapshot.PendingItems)) > 0 {
+			return "review backlog when ready; no immediate operator action is visible"
+		}
+		return "return to This Chat; no pending operator action is visible"
+	case "blocked":
+		return "resolve the blocker above before continuing"
+	case "working":
+		return "wait for the active turn; tap Refresh to re-check, or use /stop if it should not continue"
+	case "queued":
+		return "wait for queued work to start, or use /stop to drop queued work"
+	case "failed":
+		return "run /health trace for error evidence or /health diagnose for repair guidance"
+	case "interrupted":
+		return "send the next instruction, or run /health diagnose if recovery is unclear"
+	case "idle":
+		if len(operatorBacklogItems(snapshot.PendingItems)) > 0 {
+			return "no immediate action; review backlog when ready"
+		}
+		return "send the next request; no operator action needed"
+	default:
+		return "tap Refresh to re-check status"
+	}
+}
+
+func operatorAttentionNextLine(item core.PendingItem, count int) string {
+	base := "tap Pending Only to inspect pending operator items"
+	switch item.Kind {
+	case core.PendingItemKindDecision:
+		base = "tap Pending Only, then approve or deny the pending decision"
+	case core.PendingItemKindContinuation:
+		base = "tap Pending Only, then approve or stop the continuation"
+	case core.PendingItemKindReview:
+		base = "tap Pending Only to inspect the pending review"
+	case core.PendingItemKindRecovery:
+		base = "tap Pending Only or run /health diagnose for repair guidance"
+	case core.PendingItemKindStaleTurn:
+		base = "run /health diagnose, or use /stop if this stale work should be cleared"
+	}
+	if count > 1 {
+		return fmt.Sprintf("%s (%d attention item(s))", base, count)
+	}
+	return base
+}
+
+func operatorEvidenceLine(snapshot core.ChatStatusSnapshot) string {
+	parts := make([]string, 0, 4)
+	if !snapshot.GeneratedAt.IsZero() {
+		parts = append(parts, "as of "+formatStatusTime(snapshot.GeneratedAt))
+	} else {
+		parts = append(parts, "as of unavailable")
+	}
+	parts = append(parts, "source: chat status projection")
+	if latest := snapshot.LatestTurnRun; latest != nil {
+		if source := strings.TrimSpace(latest.Source); source != "" {
+			parts = append(parts, "latest turn: "+truncateStatusField(source, 120))
+		}
+	}
+	if delivery := strings.TrimSpace(snapshot.DeliveryStatus); delivery != "" {
+		parts = append(parts, "delivery: "+delivery)
+	}
+	return "evidence: " + strings.Join(parts, "; ")
 }
 
 func operatorContinuationLine(snapshot *core.ContinuationStatusSnapshot) string {

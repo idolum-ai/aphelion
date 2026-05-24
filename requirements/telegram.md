@@ -392,7 +392,7 @@ Show the current command list and what each command does.
 
 `/status` is button-driven (no command arguments).
 
-The first response is a summary-first status snapshot plus inline controls.
+The first response is a summary-first status snapshot plus inline controls. Chat-scoped `/status` must act as a deterministic operator triage card, not just a telemetry projection: it should show `Status`, `Why`, `Now`, state-specific `Next`, attention/backlog items, `Evidence` with as-of time/source, runtime, and a bounded details pointer.
 
 User controls:
 
@@ -427,6 +427,8 @@ At minimum, status snapshots should surface:
 - detached/outstanding work counters (decisions, continuations, recovery, stale runs)
 - stale running turn indicators
 - stale-turn watchdog/restart health indicator
+- deterministic `Next:` guidance for the chat state (for example: inspect pending decisions, wait/refresh active work, resolve blockers, run `/health diagnose` for stale/recovery, or send the next request when idle)
+- `Evidence:` line with snapshot as-of time and status projection source
 
 ### `/health trace`
 

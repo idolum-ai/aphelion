@@ -168,6 +168,9 @@ Chat-scoped status now reports live work telemetry, not only router occupancy:
 
 - `Quick Read:` one-line human summary (Haiku-backed when a native provider key is configured), prepended ahead of the status block.
 - `Quick Read:` is grounded against the rendered status tokens; contradictory generated summaries are replaced with deterministic snapshot text.
+- Chat `/status` renders as a deterministic operator triage card: `Status`, `Why`, `Now`, `Next`, attention/backlog counts, `Evidence`, runtime, and details.
+- `Next:` is state-specific: wait/refresh for active work, inspect pending decisions, resolve blockers, run `/health diagnose` for recovery, or send the next request when idle.
+- `Evidence:` includes the snapshot as-of time and status projection source so `/status` remains a bounded truth surface even when `/health trace` carries the raw evidence.
 - Telemetry labels are rendered as human-readable labels with colons inside trace/evidence contexts. Operator `/status` panels use direct titles such as `Chat Status`, `System Status`, and `Durable Agents` instead of surfacing raw status-scope markers.
 - Bracketed machine envelopes are humanized in Telegram-facing status/trace output (for example, `[PLAN_UPDATED]` renders as `Plan Updated:` and closing tags are removed).
 - `turn_phase` for active in-flight stage (`face_proposal`, `brokerage`, `governor`, `render`, `persist`, `deliver`) when available.

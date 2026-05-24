@@ -6,6 +6,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
@@ -121,6 +122,7 @@ func TestHandleTelegramCommandStatus(t *testing.T) {
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
 		statusChat: core.ChatStatusSnapshot{
+			GeneratedAt:   time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC),
 			ChatID:        7,
 			ActiveTurnIDs: []uint64{91},
 			QueueDepth:    2,
@@ -146,6 +148,12 @@ func TestHandleTelegramCommandStatus(t *testing.T) {
 	}
 	if got := sender.inline[0].text; !strings.Contains(got, "Status: working") || strings.Contains(got, "Status Scope: chat") {
 		t.Fatalf("status text = %q, want human chat status without raw scope", got)
+	}
+	if got := sender.inline[0].text; !strings.Contains(got, "Next: wait for the active turn; tap Refresh to re-check") {
+		t.Fatalf("status text = %q, want state-specific next action", got)
+	}
+	if got := sender.inline[0].text; !strings.Contains(got, "Evidence: as of 2026-05-07T12:00:00Z; source: chat status projection") {
+		t.Fatalf("status text = %q, want as-of evidence line", got)
 	}
 	foundThisChat := false
 	foundPending := false
@@ -613,6 +621,7 @@ func TestHandleTelegramCommandStatusShowsBlockedOperationSignal(t *testing.T) {
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
 		statusChat: core.ChatStatusSnapshot{
+			GeneratedAt:      time.Date(2026, 5, 7, 13, 0, 0, 0, time.UTC),
 			ChatID:           7,
 			OperationStatus:  "blocked",
 			OperationStage:   "approval_wait",
@@ -642,6 +651,9 @@ func TestHandleTelegramCommandStatusShowsBlockedOperationSignal(t *testing.T) {
 	if got := sender.inline[0].text; !strings.Contains(got, "Why: Waiting for admin review") {
 		t.Fatalf("status text = %q, want blocked operation reason", got)
 	}
+	if got := sender.inline[0].text; !strings.Contains(got, "Next: resolve the blocker above before continuing") {
+		t.Fatalf("status text = %q, want blocked next action", got)
+	}
 }
 
 func TestHandleTelegramCommandStatusUsesReadableCardInsteadOfRawDump(t *testing.T) {
@@ -650,6 +662,7 @@ func TestHandleTelegramCommandStatusUsesReadableCardInsteadOfRawDump(t *testing.
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
 		statusChat: core.ChatStatusSnapshot{
+			GeneratedAt:      time.Date(2026, 5, 7, 14, 0, 0, 0, time.UTC),
 			ChatID:           7,
 			OperationStatus:  "blocked",
 			OperationStage:   "approval_wait",
@@ -691,6 +704,8 @@ func TestHandleTelegramCommandStatusUsesReadableCardInsteadOfRawDump(t *testing.
 		"Status: blocked",
 		"Why: Waiting for admin review",
 		"Now: Await admin approval",
+		"Next: resolve the blocker above before continuing",
+		"Evidence: as of 2026-05-07T14:00:00Z; source: chat status projection",
 		"Details: /health trace has the full execution trace and source attribution.",
 	} {
 		if !strings.Contains(text, needle) {

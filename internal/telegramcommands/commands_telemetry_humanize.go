@@ -31,6 +31,7 @@ var telemetryLabelOverrides = map[string]string{
 	"status":            "Status",
 	"why":               "Why",
 	"now":               "Now",
+	"next":              "Next",
 	"state":             "State",
 	"kind":              "Kind",
 	"id":                "ID",
