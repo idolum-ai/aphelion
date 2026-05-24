@@ -30,7 +30,11 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 	if decodeTelegramThreadSummaryCallback(cb.Data) {
 		return handleTelegramThreadSummaryCallback(ctx, sender, router, cb)
 	}
-	if threadID, ok := decodeTelegramThreadPromoteCallback(cb.Data); ok {
+	if _, ok := decodeTelegramThreadDetailCallback(cb.Data); ok {
+		return handleTelegramThreadDetailCallback(ctx, sender, router, cb)
+	} else if decodeTelegramThreadBackCallback(cb.Data) {
+		return handleTelegramThreadBackCallback(ctx, sender, router, cb)
+	} else if threadID, ok := decodeTelegramThreadPromoteCallback(cb.Data); ok {
 		return handleTelegramThreadPromoteCallback(ctx, sender, router, cb, threadID)
 	}
 	if action, handoffID, ok := decodeTelegramThreadPromotionActionCallback(cb.Data); ok {

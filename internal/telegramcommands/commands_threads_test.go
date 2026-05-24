@@ -13,7 +13,7 @@ import (
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
-func TestThreadsCommandListsPromoteButtons(t *testing.T) {
+func TestThreadsCommandRendersBoardWithThreadOpenButtons(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
@@ -34,11 +34,70 @@ func TestThreadsCommandListsPromoteButtons(t *testing.T) {
 	if !handled || len(sender.inline) != 1 {
 		t.Fatalf("handled=%t inline=%d, want threads inline panel", handled, len(sender.inline))
 	}
-	if !commandRowsContain(sender.inline[0].rows, "Promote 1", "thread_promote:42") {
-		t.Fatalf("rows = %#v, want Promote 1 canonical callback", sender.inline[0].rows)
+	if !commandRowsContain(sender.inline[0].rows, "Analyze", "thread_summary") {
+		t.Fatalf("rows = %#v, want Analyze", sender.inline[0].rows)
 	}
-	if !strings.Contains(sender.inline[0].text, "Promote one into a draft handoff") {
-		t.Fatalf("panel text = %q, want promote guidance", sender.inline[0].text)
+	if !commandRowsContain(sender.inline[0].rows, "1", "thread_detail:42") {
+		t.Fatalf("rows = %#v, want thread detail callback for display slot 1", sender.inline[0].rows)
+	}
+	if commandRowsContain(sender.inline[0].rows, "Promote 1", "thread_promote:42") || commandRowsContain(sender.inline[0].rows, "Absorb 1", "thread_absorb:42") {
+		t.Fatalf("rows = %#v, want promote/absorb moved out of board", sender.inline[0].rows)
+	}
+	if !strings.Contains(sender.inline[0].text, "**On Threads**") || !strings.Contains(sender.inline[0].text, "Use **Analyze**") {
+		t.Fatalf("panel text = %q, want board guidance", sender.inline[0].text)
+	}
+}
+
+func TestThreadDetailCallbackShowsPromoteAbsorbBackCard(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{threadsReturn: []session.TelegramThread{{ChatID: 1001, ThreadID: 42, DisplaySlot: 1, Status: session.TelegramThreadStatusOpen, CreatedText: "review the readme of Aphelion"}}}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:      "detail-cb",
+		Data:    encodeTelegramThreadDetailCallback(42),
+		From:    &telegram.User{ID: 2002},
+		Message: &telegram.Message{MessageID: 9004, Chat: &telegram.Chat{ID: 1001}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want detail callback handled")
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline = %d, want detail card edit", len(sender.editInline))
+	}
+	if !strings.Contains(sender.editInline[0].text, "**Thread 1**") || !strings.Contains(sender.editInline[0].text, "**Promote**") || !strings.Contains(sender.editInline[0].text, "**Absorb**") {
+		t.Fatalf("detail text = %q, want thread detail guidance", sender.editInline[0].text)
+	}
+	if !commandRowsContain(sender.editInline[0].rows, "Promote", "thread_promote:42") || !commandRowsContain(sender.editInline[0].rows, "Absorb", "thread_absorb:42") || !commandRowsContain(sender.editInline[0].rows, "Back", "thread_back") {
+		t.Fatalf("detail rows = %#v, want Promote/Absorb/Back", sender.editInline[0].rows)
+	}
+	if router.threadCallbackChatID != 1001 || router.threadCallbackID != 42 || router.threadCallbackMessageID != 9004 || router.threadCallbackSurface != "thread_detail" {
+		t.Fatalf("callback ledger = chat:%d thread:%d msg:%d surface:%q", router.threadCallbackChatID, router.threadCallbackID, router.threadCallbackMessageID, router.threadCallbackSurface)
+	}
+}
+
+func TestThreadBackCallbackReturnsToBoard(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{threadsReturn: []session.TelegramThread{{ChatID: 1001, ThreadID: 42, DisplaySlot: 1, Status: session.TelegramThreadStatusOpen, CreatedText: "open task"}}}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:      "back-cb",
+		Data:    telegramThreadBackCallbackData,
+		From:    &telegram.User{ID: 2002},
+		Message: &telegram.Message{MessageID: 9004, Chat: &telegram.Chat{ID: 1001}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled || len(sender.editInline) != 1 {
+		t.Fatalf("handled=%t editInline=%d, want board edit", handled, len(sender.editInline))
+	}
+	if !strings.Contains(sender.editInline[0].text, "**Open Threads**") || !commandRowsContain(sender.editInline[0].rows, "1", "thread_detail:42") {
+		t.Fatalf("board edit text=%q rows=%#v, want board with thread button", sender.editInline[0].text, sender.editInline[0].rows)
 	}
 }
 

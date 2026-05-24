@@ -316,11 +316,11 @@ func TestThreadsCommandListsAbsorbButtons(t *testing.T) {
 	if router.threadsChatID != 1001 {
 		t.Fatalf("threadsChatID = %d, want 1001", router.threadsChatID)
 	}
-	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "thread 2: open") {
+	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "thread 2:") {
 		t.Fatalf("inline = %#v, want thread list", sender.inline)
 	}
-	if !commandRowsContain(sender.inline[0].rows, "Summarize", telegramThreadSummaryCallbackData) || !commandRowsContain(sender.inline[0].rows, "Absorb 2", "thread_absorb:2") {
-		t.Fatalf("rows = %#v, want summarize and absorb buttons", sender.inline[0].rows)
+	if !commandRowsContain(sender.inline[0].rows, "Analyze", telegramThreadSummaryCallbackData) || !commandRowsContain(sender.inline[0].rows, "2", "thread_detail:2") {
+		t.Fatalf("rows = %#v, want analyze and detail buttons", sender.inline[0].rows)
 	}
 }
 
@@ -345,15 +345,15 @@ func TestThreadsCommandShowsDisplaySlotWithCanonicalAbsorbCallback(t *testing.T)
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "thread 1: open") || strings.Contains(sender.inline[0].text, "thread 42: open") {
+	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "thread 1:") || strings.Contains(sender.inline[0].text, "thread 42:") {
 		t.Fatalf("inline = %#v, want visible display slot", sender.inline)
 	}
-	if !commandRowsContain(sender.inline[0].rows, "Absorb 1", "thread_absorb:42") {
-		t.Fatalf("rows = %#v, want display-slot label with canonical callback", sender.inline[0].rows)
+	if !commandRowsContain(sender.inline[0].rows, "1", "thread_detail:42") {
+		t.Fatalf("rows = %#v, want display-slot label with canonical detail callback", sender.inline[0].rows)
 	}
 }
 
-func TestAbsorbCommandWithoutArgumentShowsThreadButtons(t *testing.T) {
+func TestAbsorbCommandWithoutArgumentShowsThreadBoard(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
@@ -374,8 +374,8 @@ func TestAbsorbCommandWithoutArgumentShowsThreadButtons(t *testing.T) {
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if len(sender.inline) != 1 || !commandRowsContain(sender.inline[0].rows, "Absorb 4", "thread_absorb:4") {
-		t.Fatalf("inline = %#v, want absorb buttons", sender.inline)
+	if len(sender.inline) != 1 || !commandRowsContain(sender.inline[0].rows, "4", "thread_detail:4") {
+		t.Fatalf("inline = %#v, want thread board detail button", sender.inline)
 	}
 }
 
@@ -541,11 +541,11 @@ func TestThreadsCommandDefaultsToOpenAndShowsNonOpenView(t *testing.T) {
 		{ChatID: 1001, ThreadID: 9, ArchivedDisplayName: "1-2026-05-17", Status: session.TelegramThreadStatusClosed, CreatedText: "closed task"},
 	}
 	rendered, rows := renderTelegramThreadsPanel(threads, telegramPageViewList, 1)
-	if !strings.Contains(rendered, "thread 1: open") || strings.Contains(rendered, "1-2026-05-17") {
+	if !strings.Contains(rendered, "thread 1:") || strings.Contains(rendered, "1-2026-05-17") {
 		t.Fatalf("open view = %q, want only open display slot", rendered)
 	}
-	if !commandRowsContain(rows, "Show non-open", "page:threads:nonopen:1") {
-		t.Fatalf("rows = %#v, want Show non-open", rows)
+	if !commandRowsContain(rows, "Show absorbed", "page:threads:nonopen:1") {
+		t.Fatalf("rows = %#v, want Show absorbed", rows)
 	}
 
 	rendered, rows = renderTelegramThreadsPanel(threads, telegramPageViewNonOpen, 1)
@@ -625,11 +625,17 @@ func TestThreadsCommandListsPromoteButtons(t *testing.T) {
 	if !handled || len(sender.inline) != 1 {
 		t.Fatalf("handled=%t inline=%d, want threads inline panel", handled, len(sender.inline))
 	}
-	if !commandRowsContain(sender.inline[0].rows, "Promote 1", "thread_promote:42") {
-		t.Fatalf("rows = %#v, want Promote 1 canonical callback", sender.inline[0].rows)
+	if !commandRowsContain(sender.inline[0].rows, "Analyze", "thread_summary") {
+		t.Fatalf("rows = %#v, want Analyze", sender.inline[0].rows)
 	}
-	if !strings.Contains(sender.inline[0].text, "Promote one into a draft handoff") {
-		t.Fatalf("panel text = %q, want promote guidance", sender.inline[0].text)
+	if !commandRowsContain(sender.inline[0].rows, "1", "thread_detail:42") {
+		t.Fatalf("rows = %#v, want thread detail callback for display slot 1", sender.inline[0].rows)
+	}
+	if commandRowsContain(sender.inline[0].rows, "Promote 1", "thread_promote:42") || commandRowsContain(sender.inline[0].rows, "Absorb 1", "thread_absorb:42") {
+		t.Fatalf("rows = %#v, want promote/absorb moved out of board", sender.inline[0].rows)
+	}
+	if !strings.Contains(sender.inline[0].text, "**On Threads**") || !strings.Contains(sender.inline[0].text, "Use **Analyze**") {
+		t.Fatalf("panel text = %q, want board guidance", sender.inline[0].text)
 	}
 }
 

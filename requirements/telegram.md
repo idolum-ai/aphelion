@@ -87,9 +87,9 @@ Requirements:
   prefix is stripped before storage.
 - `/threads` lists open and recent side threads and exposes absorb buttons for
   open threads.
-- `/threads` exposes a `Summarize` button when open threads exist. The callback
+- `/threads` exposes an `Analyze` button when open threads exist. The callback
   is recorded as recoverable callback-work ingress, then queues ordinary
-  main-chat work with bounded open-thread evidence; it does not summarize inline
+  main-chat work with bounded open-thread evidence; it does not analyze inline
   in the callback.
 - `/absorb N` closes thread `N` and records a compact outcome note in the main
   chat session.
@@ -104,7 +104,7 @@ Requirements:
   They share the same Telegram transport and same configured principal rules.
 - Absorb is bookkeeping and pruning. It does not automatically approve curated
   memory writes or copy the full thread transcript into thread `0`.
-- Summarize is bookkeeping. It does not close, absorb, or mutate side threads.
+- Analyze is bookkeeping. It does not close, absorb, or mutate side threads.
 
 ## Update Normalization
 

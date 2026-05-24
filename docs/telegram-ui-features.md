@@ -56,8 +56,9 @@ Current command surface:
   - Thread identity is stored as a typed session scope; the prefix is presentation, not transcript text.
 - `/threads`
   - Shows open and recently closed side threads for the chat.
-  - Provides `Absorb N` buttons for open threads.
-  - Provides a `Summarize` button that queues ordinary main-chat work to produce one short status across open threads.
+  - Provides compact numeric buttons for opening per-thread detail cards.
+  - Provides an `Analyze` button that queues ordinary main-chat work to produce one short status across open threads.
+  - Provides `Promote`, `Absorb`, and `Back` buttons inside each open thread detail card.
 - `/absorb`
   - Closes a side thread with `/absorb N` and appends a compact bookkeeping note to the main chat session.
   - Stops the target side-thread lane before closing so active or queued side-thread work cannot append after absorb.
@@ -276,7 +277,7 @@ requests apart without creating another operator channel.
 - Replies to side-thread messages route back to that thread when the reply
   target is present in the durable Telegram ledger, including guide cards,
   progress cards, thread-created messages, and ordinary outbound replies.
-- `/threads` lists threads and shows summarize/absorb buttons for open ones.
+- `/threads` lists open threads as a compact board with `Analyze` plus numeric thread buttons. Thread detail cards show `Promote`, `Absorb`, and `Back` controls.
 - `/absorb N` closes the thread and records a compact note in the main chat.
 
 The main chat remains thread `0`. Thread sessions have independent transcript,
@@ -284,7 +285,7 @@ plan, progress, and recovery state, so three child-agent setup requests in three
 threads do not share the same turn plan or router queue. Absorb is bookkeeping:
 it closes the side lane and carries the outcome back to the main transcript, but
 it does not merge every thread message into thread `0` and does not automatically
-approve memory writes. Summarize is also bookkeeping: its callback is recorded
+approve memory writes. Analyze is also bookkeeping: its callback is recorded
 as recoverable ingress, then it queues a normal thread-0 turn with bounded
 evidence from open side threads and does not close or absorb them.
 

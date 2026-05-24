@@ -158,7 +158,7 @@ func (c ThreadController) QueueTelegramThreadSummary(ctx context.Context, msg co
 		return "", err
 	}
 	if strings.TrimSpace(text) == "" {
-		return "", telegramcommands.ThreadUserError("No open side threads to summarize.")
+		return "", telegramcommands.ThreadUserError("No open side threads to analyze.")
 	}
 	routed := msg
 	routed.Text = text
@@ -169,7 +169,7 @@ func (c ThreadController) QueueTelegramThreadSummary(ctx context.Context, msg co
 	if err := c.routeAccepted(ctx, routed); err != nil {
 		return "", err
 	}
-	return "Summary queued.", nil
+	return "Analysis queued.", nil
 }
 
 func (c ThreadController) recordTelegramThreadSummaryAccepted(msg core.InboundMessage) error {
@@ -213,7 +213,7 @@ func (c ThreadController) renderTelegramThreadSummaryQuest(chatID int64) (string
 	}
 
 	var b strings.Builder
-	b.WriteString("Summarize the open Telegram side threads below into one short main-chat status message.\n")
+	b.WriteString("Analyze the open Telegram side threads below into one short main-chat status message.\n")
 	b.WriteString("Keep it compact: one line per thread when possible, then name the most important next action if one is clear.\n")
 	b.WriteString("Do not absorb, close, or modify any thread. Do not claim memory was written.\n\n")
 	b.WriteString("Open side-thread evidence:\n")

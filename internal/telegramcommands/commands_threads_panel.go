@@ -52,14 +52,21 @@ func renderTelegramThreadsPanel(threads []session.TelegramThread, view string, p
 	visible, info := telegramPageItems(threads, page, telegramThreadsPageSize)
 	var b strings.Builder
 	if view == telegramPageViewNonOpen {
-		b.WriteString("Threads — non-open\n")
+		b.WriteString("**Absorbed Threads**\n")
 	} else {
-		b.WriteString("Threads — open\n")
+		b.WriteString("**On Threads**\n")
+		b.WriteString("Thread 0 is the main chat.\n\n")
+		b.WriteString("Start a side thread with:\n")
+		b.WriteString("/thread <message>\n\n")
+		b.WriteString("Continue one by replying to its messages, or by saying:\n")
+		b.WriteString("(thread N) <message>\n\n")
+		b.WriteString("Use **Analyze** to understand what the open threads are doing.\n")
+		b.WriteString("Open a thread below to decide whether to **Promote** it or **Absorb** it.\n\n")
+		b.WriteString("**Open Threads**\n")
 	}
-	b.WriteString("Default chat is thread 0. Start a side thread with `/thread <message>`. Reply to side-thread messages or use `(thread N) <message>`. Promote one into a draft handoff with Promote, or close one with `/absorb N`.\n")
 	if len(threads) == 0 {
 		if view == telegramPageViewNonOpen {
-			b.WriteString("\nNo non-open side threads.")
+			b.WriteString("\nNo absorbed side threads.")
 		} else {
 			b.WriteString("\nNo open side threads.")
 		}
@@ -70,14 +77,18 @@ func renderTelegramThreadsPanel(threads []session.TelegramThread, view string, p
 	}
 	b.WriteString("\n")
 	for _, thread := range visible {
-		status := strings.TrimSpace(string(thread.Status))
-		if status == "" {
-			status = "unknown"
-		}
 		label := telegramThreadDisplayLabel(thread)
-		fmt.Fprintf(&b, "- %s: %s", label, status)
+		if view == telegramPageViewNonOpen {
+			status := strings.TrimSpace(string(thread.Status))
+			if status == "" {
+				status = "unknown"
+			}
+			fmt.Fprintf(&b, "%s: %s", label, status)
+		} else {
+			fmt.Fprintf(&b, "%s:", label)
+		}
 		if preview := compactThreadPreview(thread.CreatedText); preview != "" {
-			fmt.Fprintf(&b, " - %s", preview)
+			fmt.Fprintf(&b, " *%s*", preview)
 		}
 		b.WriteString("\n")
 	}
@@ -103,27 +114,59 @@ func telegramThreadsRowsPage(threads []session.TelegramThread, allThreads []sess
 	var rows [][]telegram.InlineButton
 	if telegramThreadsHasOpen(threads) {
 		rows = append(rows, []telegram.InlineButton{{
-			Text:         "Summarize",
+			Text:         "Analyze",
 			CallbackData: telegramThreadSummaryCallbackData,
 		}})
 	}
-	for _, thread := range threads[info.Start:info.End] {
-		if !thread.Open() {
-			continue
+	if view != telegramPageViewNonOpen {
+		var threadRow []telegram.InlineButton
+		for _, thread := range threads[info.Start:info.End] {
+			if !thread.Open() {
+				continue
+			}
+			operatorID := telegramThreadOperatorID(thread)
+			threadRow = append(threadRow, telegram.InlineButton{
+				Text:         fmt.Sprintf("%d", operatorID),
+				CallbackData: encodeTelegramThreadDetailCallback(thread.ThreadID),
+			})
+			if len(threadRow) == 6 {
+				rows = append(rows, threadRow)
+				threadRow = nil
+			}
 		}
-		operatorID := telegramThreadOperatorID(thread)
-		rows = append(rows, []telegram.InlineButton{
-			{Text: fmt.Sprintf("Promote %d", operatorID), CallbackData: encodeTelegramThreadPromoteCallback(thread.ThreadID)},
-			{Text: fmt.Sprintf("Absorb %d", operatorID), CallbackData: encodeTelegramThreadAbsorbCallback(thread.ThreadID)},
-		})
+		if len(threadRow) > 0 {
+			rows = append(rows, threadRow)
+		}
 	}
+	rows = append(rows, telegramPageNavigationRows(info, telegramPageSurfaceThreads, view)...)
 	if view == telegramPageViewNonOpen {
 		rows = append(rows, []telegram.InlineButton{{Text: "Show open", CallbackData: encodeTelegramPageCallbackData(telegramPageSurfaceThreads, telegramPageViewList, 1)}})
 	} else if telegramThreadsHasNonOpen(allThreads) {
-		rows = append(rows, []telegram.InlineButton{{Text: "Show non-open", CallbackData: encodeTelegramPageCallbackData(telegramPageSurfaceThreads, telegramPageViewNonOpen, 1)}})
+		rows = append(rows, []telegram.InlineButton{{Text: "Show absorbed", CallbackData: encodeTelegramPageCallbackData(telegramPageSurfaceThreads, telegramPageViewNonOpen, 1)}})
 	}
-	rows = append(rows, telegramPageNavigationRows(info, telegramPageSurfaceThreads, view)...)
 	return rows
+}
+func renderTelegramThreadDetail(thread session.TelegramThread) string {
+	operatorID := telegramThreadOperatorID(thread)
+	preview := compactThreadPreview(thread.CreatedText)
+	if preview == "" {
+		preview = "No opening message recorded."
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "**Thread %d**\n", operatorID)
+	fmt.Fprintf(&b, "*%s*\n\n", preview)
+	b.WriteString("**Promote**\n")
+	b.WriteString("Turn this thread into a real work item.\n\n")
+	b.WriteString("**Absorb**\n")
+	b.WriteString("Fold the useful result back into the main chat and remove it from open threads.")
+	return b.String()
+}
+func telegramThreadDetailRows(thread session.TelegramThread) [][]telegram.InlineButton {
+	return [][]telegram.InlineButton{{
+		{Text: "Promote", CallbackData: encodeTelegramThreadPromoteCallback(thread.ThreadID)},
+		{Text: "Absorb", CallbackData: encodeTelegramThreadAbsorbCallback(thread.ThreadID)},
+		{Text: "Back", CallbackData: telegramThreadBackCallbackData},
+	}}
 }
 func telegramThreadsHasOpen(threads []session.TelegramThread) bool {
 	for _, thread := range threads {

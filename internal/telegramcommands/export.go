@@ -67,6 +67,9 @@ func EncodeTelegramThreadPromoteCallback(threadID int64) string {
 func EncodeTelegramThreadAbsorbCallback(threadID int64) string {
 	return encodeTelegramThreadAbsorbCallback(threadID)
 }
+func EncodeTelegramThreadDetailCallback(threadID int64) string {
+	return encodeTelegramThreadDetailCallback(threadID)
+}
 func ParseTelegramThreadPrefix(text string) (int64, string, bool) {
 	return parseTelegramThreadPrefix(text)
 }

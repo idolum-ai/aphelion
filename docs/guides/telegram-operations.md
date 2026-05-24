@@ -124,10 +124,10 @@ does not copy the whole side transcript into thread `0`, and it does not
 automatically write curated memory; use `/memory` in the relevant lane to review
 memory candidates when something from a thread should become durable knowledge.
 
-`/threads` also exposes `Summarize` when there are open side threads. That
+`/threads` also exposes `Analyze` when there are open side threads. That
 button queues ordinary thread-0 work with bounded evidence from the open
 threads, so Aphelion can send one short main-chat status without absorbing or
-closing anything.
+modifying anything.
 
 ## Stop Or Reset A Chat
 
@@ -183,7 +183,7 @@ that side thread; they do not approve default-chat work or another thread's work
 
 ## Manage Work Surfaces
 
-`/threads` shows open side threads by default. Use the **Show non-open** button, or `/threads nonopen`, to inspect closed/absorbed threads without mixing them into the default work view. Open side threads use reusable display slots, so when slot 2 is closed the next new side thread can become thread 2 again. Closed threads keep their durable internal thread id and receive an archived display name like `2-2026-05-17`, with `-1`, `-2`, etc. added if that archived name is already taken on the server-local date. Admins can audit or repair old rows with `telegram-threads sanitize` (`--apply` to mutate; dry-run by default).
+`/threads` shows open side threads by default. Use the **Show absorbed** button, or `/threads nonopen`, to inspect absorbed/closed threads without mixing them into the default work view. Open side threads use reusable display slots, so when slot 2 is closed the next new side thread can become thread 2 again. Closed threads keep their durable internal thread id and receive an archived display name like `2-2026-05-17`, with `-1`, `-2`, etc. added if that archived name is already taken on the server-local date. Admins can audit or repair old rows with `telegram-threads sanitize` (`--apply` to mutate; dry-run by default).
 
 Use `/agents` to inspect durable agents and open chat controls.
 
