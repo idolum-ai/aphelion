@@ -158,11 +158,7 @@ func durableAgentChildConfig(parent *config.Config, agent core.DurableAgent, sco
 	switch bootstrap.Backend {
 	case "codex":
 		copy.Governor.Backend = "codex"
-		copy.Governor.Codex = config.GovernorCodexConfig{
-			AuthSource: bootstrap.CodexAuthSource,
-			CodexHome:  bootstrap.CodexHome,
-			BaseURL:    bootstrap.CodexBaseURL,
-		}
+		copy.Governor.Codex = durableChildCodexConfig(parent, bootstrap)
 		copy.Providers = config.ProvidersConfig{}
 	case "native":
 		copy.Governor.Backend = "native"
@@ -170,6 +166,30 @@ func durableAgentChildConfig(parent *config.Config, agent core.DurableAgent, sco
 		copy.Providers = durableChildProviders(parent, bootstrap)
 	}
 	return &copy
+}
+
+func durableChildCodexConfig(parent *config.Config, bootstrap core.NodeLLMBootstrap) config.GovernorCodexConfig {
+	bootstrap = core.NormalizeNodeLLMBootstrap(bootstrap)
+	defaults := config.Default().Governor.Codex
+	parentCodex := defaults
+	if parent != nil {
+		parentCodex = parent.Governor.Codex
+		if parentCodex == (config.GovernorCodexConfig{}) {
+			parentCodex = defaults
+		}
+	}
+
+	return config.GovernorCodexConfig{
+		AuthSource:            firstNonEmpty(bootstrap.CodexAuthSource, parentCodex.AuthSource, defaults.AuthSource),
+		CodexHome:             bootstrap.CodexHome,
+		BaseURL:               firstNonEmpty(bootstrap.CodexBaseURL, parentCodex.BaseURL, defaults.BaseURL),
+		Model:                 firstNonEmpty(parentCodex.Model, defaults.Model),
+		ContextWindow:         firstPositive(parentCodex.ContextWindow, defaults.ContextWindow),
+		StoreResponses:        parentCodex.StoreResponses,
+		MaxContinuations:      firstPositive(parentCodex.MaxContinuations, defaults.MaxContinuations),
+		TransportRetries:      parentCodex.TransportRetries,
+		ResponseHeaderTimeout: firstNonEmpty(parentCodex.ResponseHeaderTimeout, defaults.ResponseHeaderTimeout),
+	}
 }
 
 func durableChildProviders(parent *config.Config, bootstrap core.NodeLLMBootstrap) config.ProvidersConfig {

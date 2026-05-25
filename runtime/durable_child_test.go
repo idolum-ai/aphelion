@@ -351,6 +351,12 @@ func TestDurableAgentChildConfigUsesCodexBootstrapWithoutParentCredentials(t *te
 	parent.Sessions.DBPath = filepath.Join(root, "sessions.db")
 	parent.Governor.Backend = "native"
 	parent.Governor.NativeProvider = "anthropic"
+	parent.Governor.Codex.Model = "gpt-parent-codex"
+	parent.Governor.Codex.ContextWindow = 123456
+	parent.Governor.Codex.StoreResponses = false
+	parent.Governor.Codex.MaxContinuations = 9
+	parent.Governor.Codex.TransportRetries = 4
+	parent.Governor.Codex.ResponseHeaderTimeout = "2m"
 	parent.Face.Backend = "provider"
 	parent.Providers.Default = "anthropic"
 	parent.Providers.Anthropic.APIKey = "sk-ant-parent"
@@ -397,11 +403,78 @@ func TestDurableAgentChildConfigUsesCodexBootstrapWithoutParentCredentials(t *te
 	if child.Governor.Codex.BaseURL != "https://chatgpt.example.test/backend-api" {
 		t.Fatalf("Governor.Codex.BaseURL = %q, want child codex base url", child.Governor.Codex.BaseURL)
 	}
+	if child.Governor.Codex.Model != "gpt-parent-codex" {
+		t.Fatalf("Governor.Codex.Model = %q, want parent codex model", child.Governor.Codex.Model)
+	}
+	if child.Governor.Codex.ContextWindow != 123456 {
+		t.Fatalf("Governor.Codex.ContextWindow = %d, want 123456", child.Governor.Codex.ContextWindow)
+	}
+	if child.Governor.Codex.StoreResponses {
+		t.Fatalf("Governor.Codex.StoreResponses = true, want parent false")
+	}
+	if child.Governor.Codex.MaxContinuations != 9 {
+		t.Fatalf("Governor.Codex.MaxContinuations = %d, want 9", child.Governor.Codex.MaxContinuations)
+	}
+	if child.Governor.Codex.TransportRetries != 4 {
+		t.Fatalf("Governor.Codex.TransportRetries = %d, want 4", child.Governor.Codex.TransportRetries)
+	}
+	if child.Governor.Codex.ResponseHeaderTimeout != "2m" {
+		t.Fatalf("Governor.Codex.ResponseHeaderTimeout = %q, want 2m", child.Governor.Codex.ResponseHeaderTimeout)
+	}
 	if child.Face.Backend != "floor_fallback" {
 		t.Fatalf("Face.Backend = %q, want floor_fallback", child.Face.Backend)
 	}
 	if child.Providers.Anthropic.APIKey != "" || child.Providers.OpenRouter.APIKey != "" || child.Providers.OpenAI.APIKey != "" {
 		t.Fatalf("Providers = %#v, want cleared parent/native credentials", child.Providers)
+	}
+}
+
+func TestDurableAgentChildConfigDefaultsCodexOperationalFields(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	parent := config.Config{}
+	parent.Sessions.DBPath = filepath.Join(root, "sessions.db")
+	parent.Agent.PromptRoot = filepath.Join(root, "prompt")
+
+	scope, err := sandbox.DurableAgentScope(
+		"family-group",
+		parent.Agent.PromptRoot,
+		filepath.Join(root, "workspace"),
+		filepath.Join(root, "memory"),
+		"default",
+	)
+	if err != nil {
+		t.Fatalf("DurableAgentScope() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID: "family-group",
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:   "codex",
+			CodexHome: "/srv/family-group/.codex",
+		},
+	}
+
+	child := durableAgentChildConfig(&parent, agent, scope)
+	defaults := config.Default().Governor.Codex
+	if child.Governor.Codex.BaseURL != defaults.BaseURL {
+		t.Fatalf("Governor.Codex.BaseURL = %q, want default %q", child.Governor.Codex.BaseURL, defaults.BaseURL)
+	}
+	if child.Governor.Codex.Model != defaults.Model {
+		t.Fatalf("Governor.Codex.Model = %q, want default %q", child.Governor.Codex.Model, defaults.Model)
+	}
+	if child.Governor.Codex.ContextWindow != defaults.ContextWindow {
+		t.Fatalf("Governor.Codex.ContextWindow = %d, want default %d", child.Governor.Codex.ContextWindow, defaults.ContextWindow)
+	}
+	if child.Governor.Codex.MaxContinuations != defaults.MaxContinuations {
+		t.Fatalf("Governor.Codex.MaxContinuations = %d, want default %d", child.Governor.Codex.MaxContinuations, defaults.MaxContinuations)
+	}
+	if child.Governor.Codex.TransportRetries != defaults.TransportRetries {
+		t.Fatalf("Governor.Codex.TransportRetries = %d, want default %d", child.Governor.Codex.TransportRetries, defaults.TransportRetries)
+	}
+	if child.Governor.Codex.ResponseHeaderTimeout != defaults.ResponseHeaderTimeout {
+		t.Fatalf("Governor.Codex.ResponseHeaderTimeout = %q, want default %q", child.Governor.Codex.ResponseHeaderTimeout, defaults.ResponseHeaderTimeout)
 	}
 }
 
