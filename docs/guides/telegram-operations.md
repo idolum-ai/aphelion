@@ -108,7 +108,7 @@ thread before the turn is accepted.
 
 Bare slash commands still operate on the main chat-level view, except for the
 global operator surfaces which are always global. Work-lane commands can be
-explicitly pointed at a side thread. Examples: `(thread N) /status`, `(thread N) /memory`, `(thread N) /stop`, `(thread N) /new`, or `(thread N) /detach`.
+explicitly pointed at a side thread. Examples: `(thread N) /status`, `(thread N) /context`, `(thread N) /memory`, `(thread N) /stop`, `(thread N) /new`, or `(thread N) /detach`.
 You can also send those commands as replies to side-thread messages. `/health`,
 `/tailnet`, `/model`, `/agents`, `/thread`, `/threads`, `/absorb`, `/restart`,
 `/reinstall`, mission controls, durable-agent setup, and approval-window
@@ -116,7 +116,7 @@ callbacks remain global/operator surfaces.
 
 Each side thread has its own durable session scope, router queue, plan state,
 progress state, continuation approvals, busy/interrupt decisions, artifact
-retention prompts, memory focus, and recovery records. `/absorb N` closes the
+retention prompts, read-only context/memory panels, and recovery records. `/absorb N` closes the
 thread and appends a compact outcome note to the main chat for bookkeeping.
 Before closing, Aphelion stops that side-thread lane and takes the thread session
 lock so queued or active side-thread work cannot write after absorb. It
@@ -189,8 +189,12 @@ that side thread; they do not approve default-chat work or another thread's work
 
 Use `/agents` to inspect durable agents and open chat controls.
 
-Use `/memory` to review curated memory, inspect suggestions, and approve or
-reject changes.
+Use `/context` to inspect the current chat/thread context that is shaping replies.
+It is read-only; `Ask Me` queues clarification questions without writing memory.
+
+Use `/memory` to inspect read-only durable/semantic memory state and recall
+previews. `Ask Me` queues confirmation/correction questions without writing
+curated memory or changing focus.
 
 Use `/mission` to review objectives and mission candidates. Mission state
 preserves intent and review material; it does not grant new authority on its

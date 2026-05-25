@@ -101,3 +101,9 @@ func (c telegramCommandControl) Restart(chatID int64) error {
 	}()
 	return nil
 }
+
+func (c telegramCommandControl) QueueClarification(ctx context.Context, msg core.InboundMessage) error {
+	msg.IngressSurface = ""
+	msg.IngressUpdateID = 0
+	return c.controlFacade().RouteAccepted(ctx, msg)
+}

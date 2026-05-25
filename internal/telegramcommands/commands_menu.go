@@ -19,6 +19,7 @@ var commandMenuPublicCommands = []struct {
 }{
 	{Label: "Status", Command: "status"},
 	{Label: "Health", Command: "health"},
+	{Label: "Context", Command: "context"},
 	{Label: "Memory", Command: "memory"},
 	{Label: "Threads", Command: "threads"},
 	{Label: "Mission", Command: "mission"},

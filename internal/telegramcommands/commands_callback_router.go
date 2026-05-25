@@ -76,6 +76,9 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 	if action, agentID, ok := decodeDurableAgentsCallbackData(cb.Data); ok {
 		return handleDurableAgentsCallback(ctx, sender, router, cb, action, agentID)
 	}
+	if action, ok := decodeContextCallbackData(cb.Data); ok {
+		return handleContextCallback(ctx, sender, router, cb, action)
+	}
 	if action, source, index, ok := decodeMemoryReviewCallbackData(cb.Data); ok {
 		return handleMemoryReviewCallback(ctx, sender, router, cb, action, source, index)
 	}

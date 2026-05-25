@@ -25,6 +25,7 @@ func TestParseTelegramCommand(t *testing.T) {
 		{text: "/health", want: "health", ok: true},
 		{text: "/tailnet", want: "tailnet", ok: true},
 		{text: "/agents", want: "agents", ok: true},
+		{text: "/context", want: "context", ok: true},
 		{text: "/memory", want: "memory", ok: true},
 		{text: "/mission", want: "mission", ok: true},
 		{text: "/model status", want: "model", ok: true},
@@ -58,6 +59,21 @@ func TestDefaultTelegramCommandsIncludeMemory(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("defaultTelegramCommands = %#v, want /memory command entry", defaultTelegramCommands)
+	}
+}
+
+func TestDefaultTelegramCommandsIncludeContext(t *testing.T) {
+	t.Parallel()
+
+	found := false
+	for _, cmd := range defaultTelegramCommands {
+		if cmd.Command == "context" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("defaultTelegramCommands = %#v, want /context command entry", defaultTelegramCommands)
 	}
 }
 

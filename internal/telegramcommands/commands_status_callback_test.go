@@ -133,7 +133,7 @@ func TestOperatorPanelsAvoidRawTelemetryByDefault(t *testing.T) {
 			Label:   "Release note",
 			Excerpt: "The latest release check passed.",
 		}},
-	}, core.MemoryFocus{})
+	})
 	tailnetText, _ := renderTailnetCommand(core.TailnetStatusSnapshot{
 		Enabled: true,
 		Backend: "cli",

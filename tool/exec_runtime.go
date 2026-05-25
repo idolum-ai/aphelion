@@ -193,10 +193,14 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 			return "", err
 		}
 		if !decision.Approved {
-			if err := r.persistExecProposalState(key, proposal, session.ProposalStatusDenied); err != nil {
+			status := session.ProposalStatusDenied
+			if decision.TimedOut {
+				status = session.ProposalStatusExpired
+			}
+			if err := r.persistExecProposalState(key, proposal, status); err != nil {
 				return "", err
 			}
-			return "", fmt.Errorf("proposal denied: workspace escape")
+			return "", execApprovalDeniedError("workspace escape", decision)
 		}
 		if err := r.persistExecProposalState(key, proposal, session.ProposalStatusApproved); err != nil {
 			return "", err
@@ -225,10 +229,14 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 			return "", err
 		}
 		if !decision.Approved {
-			if err := r.persistExecProposalState(key, proposal, session.ProposalStatusDenied); err != nil {
+			status := session.ProposalStatusDenied
+			if decision.TimedOut {
+				status = session.ProposalStatusExpired
+			}
+			if err := r.persistExecProposalState(key, proposal, status); err != nil {
 				return "", err
 			}
-			return "", fmt.Errorf("proposal denied: %s", reason)
+			return "", execApprovalDeniedError(reason, decision)
 		}
 		if err := r.persistExecProposalState(key, proposal, session.ProposalStatusApproved); err != nil {
 			return "", err

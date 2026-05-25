@@ -17,6 +17,13 @@ func (s *stubCommandRouter) QueueReinstall(ctx context.Context, msg core.Inbound
 	return nil
 }
 
+func (s *stubCommandRouter) QueueClarification(ctx context.Context, msg core.InboundMessage) error {
+	copied := msg
+	s.clarificationMsg = &copied
+	_ = ctx
+	return nil
+}
+
 func (s *stubCommandRouter) QueueDoctor(ctx context.Context, msg core.InboundMessage) error {
 	copied := msg
 	s.queuedDoctorMsg = &copied

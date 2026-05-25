@@ -218,18 +218,51 @@ func (a *ExecApprover) ConfirmExec(ctx context.Context, req toolpkg.ExecApproval
 				return toolpkg.ExecApprovalDecision{}, err
 			}
 		}
-		return toolpkg.ExecApprovalDecision{Approved: true}, nil
+		return execApprovalDecisionFromResult(result, true), nil
 	}
 
 	if result.Delivery.MessageID != 0 {
-		text := "Proposal denied."
-		if result.TimedOut {
-			text = "Proposal denied — approval timed out."
-		}
+		text := deniedExecApprovalText(req, result)
 		text = prefixDecisionTextForKey(req.SessionKey, a.presentation, text)
 		_ = EditDecisionMessageClearingInlineKeyboard(ctx, a.sender, req.SessionKey.ChatID, result.Delivery.MessageID, text)
 	}
-	return toolpkg.ExecApprovalDecision{Approved: false}, nil
+	return execApprovalDecisionFromResult(result, false), nil
+}
+
+func execApprovalDecisionFromResult(result decision.Result, approved bool) toolpkg.ExecApprovalDecision {
+	return toolpkg.ExecApprovalDecision{
+		Approved:             approved,
+		DecisionID:           result.DecisionID,
+		Choice:               result.Choice,
+		TimedOut:             result.TimedOut,
+		DefaultChoice:        "deny",
+		RequiredApprovalKind: string(decision.KindProposalApproval),
+	}
+}
+
+func deniedExecApprovalText(req toolpkg.ExecApprovalRequest, result decision.Result) string {
+	if req.Proposal.Kind == "repo_history_mutation" || req.Reason == "repository commit" || decisionprojection.ExecCommandClass(req.Command) == decisionprojection.ExecCommandClassGitCommit {
+		lines := []string{
+			"Repository commit blocked.",
+			"gate: repository_commit",
+			"required approval: proposal_approval",
+		}
+		if result.TimedOut {
+			lines = append(lines, "status: expired", "reason: timeout/default-deny")
+		} else {
+			lines = append(lines, "status: denied")
+		}
+		lines = append(lines,
+			"continuation approval covered it: no",
+			"why: continuation approval resumes the plan turn; git commit opens a separate repository-history proposal.",
+			"next: approve the specific git commit proposal card, or request a fresh commit approval if it expired.",
+		)
+		return strings.Join(lines, "\n")
+	}
+	if result.TimedOut {
+		return "Proposal denied — approval timed out."
+	}
+	return "Proposal denied."
 }
 
 func (a *DurableMemoryDelegationApprover) ConfirmDurableMemoryDelegation(ctx context.Context, req toolpkg.DurableMemoryDelegationApprovalRequest) (toolpkg.DurableMemoryDelegationApprovalDecision, error) {

@@ -381,6 +381,99 @@ func TestExecGitCommitUsesApprover(t *testing.T) {
 	}
 }
 
+type timedOutExecApprover struct {
+	request ExecApprovalRequest
+}
+
+func (t *timedOutExecApprover) ConfirmExec(_ context.Context, req ExecApprovalRequest) (ExecApprovalDecision, error) {
+	t.request = req
+	return ExecApprovalDecision{
+		Approved:             false,
+		DecisionID:           "commit-decision-1",
+		Choice:               "deny",
+		TimedOut:             true,
+		DefaultChoice:        "deny",
+		RequiredApprovalKind: "proposal_approval",
+	}, nil
+}
+
+func TestExecGitCommitDeniedErrorExplainsNestedApproval(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	approver := &timedOutExecApprover{}
+	registry := NewRegistry(workspace, 2*time.Second).WithExecApprover(approver)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"git commit -m test"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin},
+		session.SessionKey{ChatID: 7},
+	)
+	if err == nil {
+		t.Fatal("executeWithScopeAndPrincipal() err = nil, want repository commit denial diagnostic")
+	}
+	got := err.Error()
+	for _, want := range []string{
+		"proposal denied: repository commit",
+		"gate: repository_commit",
+		"required_approval_kind: proposal_approval",
+		"required_approval_status: expired",
+		"required_approval_default: deny",
+		"denial_reason: timeout",
+		"decision_id: commit-decision-1",
+		"decision_choice: deny",
+		"continuation_approval_covered: false",
+		"git commit opens a separate repository-history proposal gate",
+		"next_action: approve the specific git commit proposal card",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("error = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestExecGitCommitTimeoutPersistsExpiredProposalState(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	key := session.SessionKey{ChatID: 7, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "7"}}
+	registry := NewRegistry(workspace, 2*time.Second).
+		WithSessionStore(store).
+		WithExecApprover(&timedOutExecApprover{})
+
+	_, err = registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"git commit -m test"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+	)
+	if err == nil {
+		t.Fatal("executeWithScopeAndPrincipal() err = nil, want repository commit denial")
+	}
+
+	got, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if got.Proposal.Kind != "repo_history_mutation" || got.Proposal.Status != session.ProposalStatusExpired {
+		t.Fatalf("proposal = kind:%q status:%q, want repo_history_mutation/expired", got.Proposal.Kind, got.Proposal.Status)
+	}
+	if !strings.Contains(got.Summary, "Repository commit blocked: approval timed out/default-denied") || !strings.Contains(got.Summary, "request and approve a fresh git commit proposal") {
+		t.Fatalf("summary = %q, want causal repository commit timeout next-action", got.Summary)
+	}
+}
+
 func TestExecCapabilityAcquisitionUsesApprover(t *testing.T) {
 	t.Parallel()
 

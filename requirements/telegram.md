@@ -354,6 +354,7 @@ At minimum for current implementation:
 - `/health`
 - `/tailnet`
 - `/agents`
+- `/context`
 - `/memory`
 - `/mission`
 - `/model`
@@ -379,6 +380,26 @@ This includes continuation approval and durable decision prompts, so users do no
 Inline button labels must stay compact for Telegram surfaces: non-empty and at
 most two words. Put scope, phase, and safety detail in the surrounding message,
 not the button label.
+
+### Repository commit approval diagnostics
+
+`git commit` is a repository-history mutation and must be explained as its own
+nested approval gate. A continuation approval can resume the plan turn, but it
+does not by itself approve the lower-level repository-history proposal.
+
+When a repository commit approval is denied or expires, the user-facing denial
+and the tool error should include:
+
+- `gate: repository_commit`
+- required approval kind (`proposal_approval`)
+- required approval status (`denied` or `expired`)
+- default choice (`deny`)
+- timeout/default-deny reason when known
+- whether continuation approval covered it (`false` / `no`)
+- why not: continuation approval resumes the plan turn; git commit opens a
+  separate repository-history proposal
+- next action: approve the specific git commit proposal card, or request a fresh
+  commit approval if it expired
 
 ### `/start`
 
@@ -475,6 +496,42 @@ Requirements:
   - mismatched current-step callbacks are acknowledged as stale and ignored
   - malformed wizard cards are acknowledged as stale and ignored
 - valid callbacks must execute deterministic wizard actions (`wizard_answer`, `wizard_show`, `wizard_finalize`, `wizard_cancel`) and edit the same Telegram message in place
+
+### `/context`
+
+Show a read-only current-context panel for the current chat or side-thread lane.
+
+At minimum it should surface:
+
+- current lane/scope
+- operation and plan summaries when present
+- active scratchpad/focus signal if present
+- recent session context preview
+- evidence/source labels
+- `Writes: none`
+
+Buttons:
+
+- `Ask Me` queues ordinary clarification work about context assumptions; it must not write memory or mutate focus.
+- `Refresh` reloads the same panel in place.
+
+### `/memory`
+
+Show a read-only memory-state panel. It is not a mutation surface.
+
+At minimum it should surface:
+
+- durable store counts
+- session/semantic recall counts
+- selected source and query seed
+- recall preview items as evidence candidates, not approved memories
+- `Writes: none`
+
+Buttons:
+
+- `Session`, `Shared`, and `Local` switch read-only source views.
+- `Ask Me` queues ordinary clarification work about memory assumptions or recall items; it must not write memory or mutate focus.
+- `Refresh` reloads the selected source in place.
 
 ### `/stop`
 

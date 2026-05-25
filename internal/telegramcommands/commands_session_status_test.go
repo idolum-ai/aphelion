@@ -243,6 +243,153 @@ func TestHandleTelegramCommandAgentsShowsButtons(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandContextShowsReadOnlyPanel(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		statusChat: core.ChatStatusSnapshot{
+			GeneratedAt:      time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC),
+			ChatID:           7,
+			OperationStatus:  "active",
+			OperationSummary: "Implement read-only panels",
+			PlanStep:         "Update tests and docs",
+		},
+		memoryReviewBySource: map[memoryReviewSource]memoryReviewSnapshot{
+			memoryReviewSourceSession: {
+				Source: memoryReviewSourceSession,
+				Query:  "context seed",
+				Items:  []memoryReviewItem{{ID: "session:12:user", Label: "turn=12 role=user", Excerpt: "Current context evidence."}},
+			},
+		},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 20,
+		Text:      "/context",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
+	}
+	text := sender.inline[0].text
+	for _, want := range []string{"Context", "read-only context snapshot", "Implement read-only panels", "Writes: none"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("context text = %q, want %q", text, want)
+		}
+	}
+	foundAsk := false
+	foundRefresh := false
+	for _, row := range sender.inline[0].rows {
+		for _, button := range row {
+			if button.Text == "Ask Me" && button.CallbackData == "context:ask" {
+				foundAsk = true
+			}
+			if button.Text == "Refresh" && button.CallbackData == "context:refresh" {
+				foundRefresh = true
+			}
+		}
+	}
+	if !foundAsk || !foundRefresh {
+		t.Fatalf("context rows = %#v, want Ask Me and Refresh", sender.inline[0].rows)
+	}
+}
+
+func TestHandleTelegramCommandContextRecordsThreadCallbackMessage(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		statusChat: core.ChatStatusSnapshot{ChatID: 7},
+		memoryReviewBySource: map[memoryReviewSource]memoryReviewSnapshot{
+			memoryReviewSourceSession: {Source: memoryReviewSourceSession, Query: "thread context"},
+		},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:           7,
+		SenderID:         1001,
+		MessageID:        21,
+		TelegramThreadID: 3,
+		Text:             "/context",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.threadCallbackChatID != 7 || router.threadCallbackID != 3 || router.threadCallbackMessageID != 1 || router.threadCallbackSurface != "context" {
+		t.Fatalf("thread callback record = chat:%d thread:%d message:%d surface:%q, want 7/3/1/context", router.threadCallbackChatID, router.threadCallbackID, router.threadCallbackMessageID, router.threadCallbackSurface)
+	}
+}
+
+func TestHandleTelegramCommandCallbackContextAskMeQueuesClarification(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:   "cb-context-ask",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "context:ask",
+		Message: &telegram.Message{
+			MessageID: 95,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.clarificationMsg == nil {
+		t.Fatal("clarification not queued")
+	}
+	if got := router.clarificationMsg.Text; !strings.Contains(got, "Ask me concise clarifying questions about the current context") || !strings.Contains(got, "Do not write memory") {
+		t.Fatalf("clarification text = %q, want context Ask Me prompt", got)
+	}
+}
+
+func TestHandleTelegramCommandCallbackContextRefreshEditsPanel(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		statusChat: core.ChatStatusSnapshot{ChatID: 7, OperationSummary: "Fresh context"},
+		memoryReviewBySource: map[memoryReviewSource]memoryReviewSnapshot{
+			memoryReviewSourceSession: {Source: memoryReviewSourceSession, Query: "fresh", Items: []memoryReviewItem{{Excerpt: "Fresh recent context."}}},
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:   "cb-context-refresh",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "context:refresh",
+		Message: &telegram.Message{
+			MessageID: 95,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+	if got := sender.editInline[0].text; !strings.Contains(got, "Context") || !strings.Contains(got, "Fresh context") {
+		t.Fatalf("context panel text = %q, want refreshed context", got)
+	}
+}
+
 func TestHandleTelegramCommandMemoryShowsButtons(t *testing.T) {
 	t.Parallel()
 
@@ -285,20 +432,20 @@ func TestHandleTelegramCommandMemoryShowsButtons(t *testing.T) {
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "Memory Review") {
-		t.Fatalf("memory text = %q, want Memory Review heading", got)
+	if got := sender.inline[0].text; !strings.Contains(got, "Memory") || !strings.Contains(got, "read-only memory state") {
+		t.Fatalf("memory text = %q, want read-only Memory panel", got)
 	}
-	foundFocus := false
+	foundAsk := false
 	for _, row := range sender.inline[0].rows {
 		for _, button := range row {
-			if strings.Contains(button.CallbackData, "memory:focus:session:1") {
-				foundFocus = true
+			if button.Text == "Ask Me" && strings.Contains(button.CallbackData, "memory:ask:session") {
+				foundAsk = true
 				break
 			}
 		}
 	}
-	if !foundFocus {
-		t.Fatalf("rows = %#v, want focus callback button", sender.inline[0].rows)
+	if !foundAsk {
+		t.Fatalf("rows = %#v, want Ask Me callback button", sender.inline[0].rows)
 	}
 }
 
@@ -366,29 +513,15 @@ func TestHandleTelegramCommandCallbackAgentsStartInvokesBackgroundConversation(t
 	}
 }
 
-func TestHandleTelegramCommandCallbackMemoryFocusSetsFocus(t *testing.T) {
+func TestHandleTelegramCommandCallbackMemoryAskMeQueuesClarification(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
-	router := &stubCommandRouter{
-		memoryReviewBySource: map[memoryReviewSource]memoryReviewSnapshot{
-			memoryReviewSourceSession: {
-				Source: memoryReviewSourceSession,
-				Query:  "investigation thread",
-				Items: []memoryReviewItem{
-					{
-						ID:      "session:12:user",
-						Label:   "turn=12 role=user",
-						Excerpt: "Can you investigate alternatives for the architecture?",
-					},
-				},
-			},
-		},
-	}
+	router := &stubCommandRouter{}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
-		ID:   "cb-memory-focus",
+		ID:   "cb-memory-ask",
 		From: &telegram.User{ID: 1001, Username: "admin"},
-		Data: "memory:focus:session:1",
+		Data: "memory:ask:session",
 		Message: &telegram.Message{
 			MessageID: 95,
 			Chat:      &telegram.Chat{ID: 7, Type: "private"},
@@ -400,43 +533,32 @@ func TestHandleTelegramCommandCallbackMemoryFocusSetsFocus(t *testing.T) {
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	focus, ok := router.MemoryFocus(7)
-	if !ok {
-		t.Fatal("memory focus not set")
+	if router.clarificationMsg == nil {
+		t.Fatal("clarification not queued")
 	}
-	if focus.ItemID != "session:12:user" {
-		t.Fatalf("focus item id = %q, want session:12:user", focus.ItemID)
+	if got := router.clarificationMsg.Text; !strings.Contains(got, "Ask me concise clarifying questions about memory") || strings.Contains(got, "write memory") && !strings.Contains(got, "Do not write memory") {
+		t.Fatalf("clarification text = %q, want memory Ask Me prompt", got)
 	}
-	if len(sender.editInline) != 1 {
-		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
-	}
-	if got := sender.editInline[0].text; !strings.Contains(got, "Active Focus") {
-		t.Fatalf("memory panel text = %q, want Active Focus section", got)
+	if _, ok := router.MemoryFocus(7); ok {
+		t.Fatal("memory focus was set, want Ask Me to be read-only")
 	}
 }
 
-func TestHandleTelegramCommandCallbackMemoryFocusTargetsDurableThreadMessage(t *testing.T) {
+func TestHandleTelegramCommandCallbackMemoryAskMeTargetsDurableThreadMessage(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
 	router := &stubCommandRouter{
 		threadReplyOK:     true,
 		threadReplyReturn: session.TelegramThread{ChatID: 7, ThreadID: 3, Status: session.TelegramThreadStatusOpen},
-		memoryReviewBySource: map[memoryReviewSource]memoryReviewSnapshot{
-			memoryReviewSourceSession: {
-				Source: memoryReviewSourceSession,
-				Query:  "thread investigation",
-				Items:  []memoryReviewItem{{ID: "session:12:user", Label: "turn=12 role=user", Excerpt: "Thread-specific evidence."}},
-			},
-		},
 	}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
 		ID:   "cb-memory-thread",
 		From: &telegram.User{ID: 1001, Username: "admin"},
-		Data: "memory:focus:session:1",
+		Data: "memory:ask:session",
 		Message: &telegram.Message{
 			MessageID: 95,
-			Text:      "Memory Review",
+			Text:      "Memory",
 			Chat:      &telegram.Chat{ID: 7, Type: "private"},
 		},
 	})
@@ -446,38 +568,23 @@ func TestHandleTelegramCommandCallbackMemoryFocusTargetsDurableThreadMessage(t *
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if router.threadReplyChatID != 7 || router.threadReplyMessageID != 95 {
-		t.Fatalf("thread reply lookup = chat:%d message:%d, want 7/95", router.threadReplyChatID, router.threadReplyMessageID)
-	}
-	if router.memoryReviewMessage.TelegramThreadID != 3 || router.setMemoryFocusMessage.TelegramThreadID != 3 {
-		t.Fatalf("memory messages = review:%#v set:%#v, want durable thread 3", router.memoryReviewMessage, router.setMemoryFocusMessage)
-	}
-	focus, ok := router.memoryFocusByThread[3]
-	if !ok || focus.ItemID != "session:12:user" {
-		t.Fatalf("thread focus = %#v ok=%t, want selected thread focus", focus, ok)
+	if router.clarificationMsg == nil || router.clarificationMsg.TelegramThreadID != 3 {
+		t.Fatalf("clarification msg = %#v, want thread 3", router.clarificationMsg)
 	}
 }
 
-func TestHandleTelegramCommandCallbackMemoryFocusDoesNotTrustThreadPrefixWithoutLedger(t *testing.T) {
+func TestHandleTelegramCommandCallbackMemoryAskMeDoesNotTrustThreadPrefixWithoutLedger(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
-	router := &stubCommandRouter{
-		memoryReviewBySource: map[memoryReviewSource]memoryReviewSnapshot{
-			memoryReviewSourceSession: {
-				Source: memoryReviewSourceSession,
-				Query:  "main investigation",
-				Items:  []memoryReviewItem{{ID: "session:12:user", Label: "turn=12 role=user", Excerpt: "Main evidence."}},
-			},
-		},
-	}
+	router := &stubCommandRouter{}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
 		ID:   "cb-memory-prefix-only",
 		From: &telegram.User{ID: 1001, Username: "admin"},
-		Data: "memory:focus:session:1",
+		Data: "memory:ask:session",
 		Message: &telegram.Message{
 			MessageID: 96,
-			Text:      "(thread 3)\n\nMemory Review",
+			Text:      "(thread 3)\n\nMemory",
 			Chat:      &telegram.Chat{ID: 7, Type: "private"},
 		},
 	})
@@ -487,12 +594,11 @@ func TestHandleTelegramCommandCallbackMemoryFocusDoesNotTrustThreadPrefixWithout
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if router.setMemoryFocusMessage.TelegramThreadID != 0 || router.memoryReviewMessage.TelegramThreadID != 0 {
-		t.Fatalf("memory messages = review:%#v set:%#v, want no thread from presentation text", router.memoryReviewMessage, router.setMemoryFocusMessage)
+	if router.clarificationMsg == nil {
+		t.Fatal("clarification not queued")
 	}
-	focus, ok := router.MemoryFocus(7)
-	if !ok || focus.ItemID != "session:12:user" {
-		t.Fatalf("main focus = %#v ok=%t, want selected main focus", focus, ok)
+	if router.clarificationMsg.TelegramThreadID != 0 {
+		t.Fatalf("clarification msg = %#v, want no thread from presentation text", router.clarificationMsg)
 	}
 }
 

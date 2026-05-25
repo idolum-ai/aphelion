@@ -206,13 +206,27 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			return true, err
 		}
 		return true, nil
+	case "context":
+		snapshot, err := contextSnapshotForCommand(ctx, router, msg)
+		if err != nil {
+			return true, err
+		}
+		rendered, rows := renderContextPanel(snapshot)
+		rendered = telegramThreadDisplayPrefixForMessage(msg) + rendered
+		messageID, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID))
+		if err != nil {
+			return true, err
+		}
+		if err := recordTelegramThreadCallbackMessage(router, msg.ChatID, msg.TelegramThreadID, messageID, "context"); err != nil {
+			return true, err
+		}
+		return true, nil
 	case "memory":
 		snapshot, err := memoryReviewSnapshotForCommand(ctx, router, msg, memoryReviewSourceSession)
 		if err != nil {
 			return true, err
 		}
-		focus, _ := memoryFocusForCommand(router, msg)
-		rendered, rows := renderMemoryReviewPanel(snapshot, focus)
+		rendered, rows := renderMemoryReviewPanel(snapshot)
 		rendered = telegramThreadDisplayPrefixForMessage(msg) + rendered
 		messageID, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID))
 		if err != nil {

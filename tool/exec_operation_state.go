@@ -3,6 +3,8 @@
 package tool
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -100,6 +102,18 @@ func proposalStatusSummary(proposal session.OperationProposal) string {
 	if summary == "" {
 		summary = "bounded operational proposal"
 	}
+	if proposal.Kind == "repo_history_mutation" {
+		switch proposal.Status {
+		case session.ProposalStatusApproved:
+			return "Repository commit approval granted: " + summary
+		case session.ProposalStatusDenied:
+			return "Repository commit blocked: proposal denied. Next action: approve the specific git commit proposal card or request a fresh one."
+		case session.ProposalStatusExpired:
+			return "Repository commit blocked: approval timed out/default-denied. Next action: request and approve a fresh git commit proposal."
+		default:
+			return "Waiting on repository commit approval: " + summary
+		}
+	}
 	switch proposal.Status {
 	case session.ProposalStatusApproved:
 		return "Proposal approved: " + summary
@@ -110,4 +124,55 @@ func proposalStatusSummary(proposal session.OperationProposal) string {
 	default:
 		return "Waiting on proposal approval: " + summary
 	}
+}
+
+func execApprovalDeniedError(reason string, decision ExecApprovalDecision) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "command approval"
+	}
+	if reason != "repository commit" {
+		return fmt.Errorf("proposal denied: %s", reason)
+	}
+	return errors.New(repositoryCommitDeniedDiagnostic(decision))
+}
+
+func repositoryCommitDeniedDiagnostic(decision ExecApprovalDecision) string {
+	status := "denied"
+	denialReason := "denied"
+	if decision.TimedOut {
+		status = "expired"
+		denialReason = "timeout"
+	} else if strings.TrimSpace(decision.Choice) == "" {
+		denialReason = "unknown"
+	}
+	requiredKind := strings.TrimSpace(decision.RequiredApprovalKind)
+	if requiredKind == "" {
+		requiredKind = "proposal_approval"
+	}
+	defaultChoice := strings.TrimSpace(decision.DefaultChoice)
+	if defaultChoice == "" {
+		defaultChoice = "deny"
+	}
+
+	lines := []string{
+		"proposal denied: repository commit",
+		"gate: repository_commit",
+		"required_approval_kind: " + requiredKind,
+		"required_approval_status: " + status,
+		"required_approval_default: " + defaultChoice,
+		"denial_reason: " + denialReason,
+	}
+	if decisionID := strings.TrimSpace(decision.DecisionID); decisionID != "" {
+		lines = append(lines, "decision_id: "+decisionID)
+	}
+	if choice := strings.TrimSpace(decision.Choice); choice != "" {
+		lines = append(lines, "decision_choice: "+choice)
+	}
+	lines = append(lines,
+		"continuation_approval_covered: false",
+		"why_not: continuation approval resumes the plan turn; git commit opens a separate repository-history proposal gate.",
+		"next_action: approve the specific git commit proposal card, or request a fresh commit approval if it expired.",
+	)
+	return strings.Join(lines, "\n")
 }

@@ -574,6 +574,56 @@ func TestTelegramDecisionCallbackRequiresOriginalActorAndMessage(t *testing.T) {
 	}
 }
 
+func TestTelegramExecApproverRepositoryCommitTimeoutExplainsNestedGate(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	broker := newTelegramDecisionBroker(sender)
+	approver := newTelegramExecApprover(sender, broker)
+	approver.SetTimeout(10 * time.Millisecond)
+
+	decisionResult, err := approver.ConfirmExec(context.Background(), toolpkg.ExecApprovalRequest{
+		Principal:  principal.Principal{Role: principal.RoleAdmin},
+		SessionKey: session.SessionKey{ChatID: 7},
+		Command:    `git commit -m "telegram: add read-only context and memory panels"`,
+		Reason:     "repository commit",
+		Proposal: session.OperationProposal{
+			Kind:          "repo_history_mutation",
+			Summary:       "Create a local git commit",
+			WhyNow:        "Saving this work as a commit gives us a clean review and rollback point before continuing.",
+			BoundedEffect: "Create or amend one local git commit for the current operation. This approval will not push to any remote.",
+			Status:        session.ProposalStatusPending,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ConfirmExec() err = %v", err)
+	}
+	if decisionResult.Approved {
+		t.Fatal("Approved = true, want false")
+	}
+	if !decisionResult.TimedOut || decisionResult.DefaultChoice != "deny" || decisionResult.RequiredApprovalKind != "proposal_approval" {
+		t.Fatalf("decisionResult = %#v, want timed-out proposal_approval default deny", decisionResult)
+	}
+	if len(sender.edits) != 1 {
+		t.Fatalf("edits = %#v, want one blocked edit", sender.edits)
+	}
+	text := sender.edits[0].text
+	for _, want := range []string{
+		"Repository commit blocked.",
+		"gate: repository_commit",
+		"required approval: proposal_approval",
+		"status: expired",
+		"reason: timeout/default-deny",
+		"continuation approval covered it: no",
+		"git commit opens a separate repository-history proposal",
+		"next: approve the specific git commit proposal card",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("blocked edit = %q, want %q", text, want)
+		}
+	}
+}
+
 func TestTelegramExecApproverTimesOutToDeny(t *testing.T) {
 	t.Parallel()
 

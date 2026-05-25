@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -37,12 +38,21 @@ func (r *Runtime) MemoryReviewSnapshotForKey(ctx context.Context, key session.Se
 	}
 
 	source = core.NormalizeMemoryReviewSource(string(source))
+	var (
+		snapshot core.MemoryReviewSnapshot
+		err      error
+	)
 	switch source {
 	case core.MemoryReviewSourceSemanticShared, core.MemoryReviewSourceSemanticLocal:
-		return r.memoryReviewSemantic(ctx, key, actor, source)
+		snapshot, err = r.memoryReviewSemantic(ctx, key, actor, source)
 	default:
-		return r.memoryReviewSessionRecent(key, source)
+		snapshot, err = r.memoryReviewSessionRecent(key, source)
 	}
+	if err != nil {
+		return core.MemoryReviewSnapshot{}, err
+	}
+	r.enrichMemoryReviewStats(actor, &snapshot)
+	return snapshot, nil
 }
 
 func (r *Runtime) MemoryFocus(chatID int64) (core.MemoryFocus, bool) {
@@ -130,6 +140,7 @@ func (r *Runtime) memoryReviewSessionRecent(key session.SessionKey, source core.
 			}
 		}
 		snapshot.Items = items
+		snapshot.Stats.SessionRecentCount = len(items)
 		return snapshot, nil
 	}
 	threads, err := r.store.ListTelegramThreads(key.ChatID, 12)
@@ -162,6 +173,7 @@ func (r *Runtime) memoryReviewSessionRecent(key session.SessionKey, source core.
 		}
 	}
 	snapshot.Items = items
+	snapshot.Stats.SessionRecentCount = len(items)
 	return snapshot, nil
 }
 
@@ -248,7 +260,59 @@ func (r *Runtime) memoryReviewSemantic(ctx context.Context, key session.SessionK
 		})
 	}
 	snapshot.Items = items
+	if source == core.MemoryReviewSourceSemanticLocal {
+		snapshot.Stats.SemanticLocalCount = len(items)
+	} else {
+		snapshot.Stats.SemanticSharedCount = len(items)
+	}
 	return snapshot, nil
+}
+
+func (r *Runtime) enrichMemoryReviewStats(actor principal.Principal, snapshot *core.MemoryReviewSnapshot) {
+	if snapshot == nil {
+		return
+	}
+	if snapshot.Stats.StoreCounts == nil {
+		snapshot.Stats.StoreCounts = map[string]int{}
+	}
+	scope, err := r.scopeForPrincipal(actor)
+	if err != nil {
+		snapshot.Stats.Partial = true
+		snapshot.Stats.Missing = append(snapshot.Stats.Missing, "durable store counts")
+		return
+	}
+	root := dynamicPromptRoot(scope)
+	for _, store := range []string{memstore.StoreMemory, memstore.StoreKnowledge, memstore.StoreDecisions, memstore.StoreQuestions, memstore.StoreRhizome, memstore.StoreDreams} {
+		count, err := countMemoryStoreLines(root, store)
+		if err != nil {
+			snapshot.Stats.Partial = true
+			snapshot.Stats.Missing = append(snapshot.Stats.Missing, store)
+			continue
+		}
+		snapshot.Stats.StoreCounts[store] = count
+	}
+}
+
+func countMemoryStoreLines(root string, store string) (int, error) {
+	path, _, err := memstore.ResolveStorePath(root, store)
+	if err != nil {
+		return 0, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	count := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- ") {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (r *Runtime) memoryReviewSeedQuery(key session.SessionKey) string {

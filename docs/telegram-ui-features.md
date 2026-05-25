@@ -44,10 +44,14 @@ Current command surface:
   - Admin-only durable-agent launcher.
   - Lists durable agents with compact health cards and inline `Chat` buttons.
   - Starts a background parent-child conversation kickoff for the selected durable agent.
+- `/context`
+  - Opens a read-only context panel for the current chat or side-thread lane.
+  - Shows current lane, operation/plan summary, active scratchpad/focus signal if present, recent context preview, evidence, and `Writes: none`.
+  - `Ask Me` queues an ordinary clarification turn; it does not write memory or mutate focus.
 - `/memory`
-  - Opens memory review with current focus, candidate count, source evidence, and inline controls across session history and semantic memory views.
-  - Lets the user set an active memory focus from a candidate item (`Focus 1/2/3`).
-  - Active focus is stored per session lane and injected as bounded turn context on subsequent non-command messages in that lane until cleared.
+  - Opens a read-only memory-state panel with durable store counts, session/semantic recall preview, source/query evidence, and `Writes: none`.
+  - Source selectors switch between session, shared semantic, and local semantic recall views.
+  - `Ask Me` queues an ordinary clarification turn for memory confirmation/correction; it does not write memory or mutate focus.
 - `/thread`
   - Creates an empty per-chat side thread and shows a compact guide when called without arguments.
   - Starts a side thread and routes the first turn from `/thread <message>`.
@@ -115,7 +119,7 @@ Visibility notes:
   side-thread work-lane commands. Approval-window callbacks use the scope of the
   approval message they are attached to.
 - Work-lane commands can be explicitly scoped to a side thread: `/status`,
-  `/memory`, `/stop`, `/new`, and `/detach` target a side thread when the
+  `/context`, `/memory`, `/stop`, `/new`, and `/detach` target a side thread when the
   command is written after `(thread N)` or sent as a reply to a known
   side-thread message. Bare commands still target the main chat-level view.
 
@@ -137,7 +141,7 @@ in the prompt body.
 ### Command menu
 
 `/start` and `/help` attach role-scoped command buttons. Public buttons include
-status, health, memory, mission, threads, stop, new, and detach. Admin buttons
+status, health, context, memory, mission, threads, stop, new, and detach. Admin buttons
 add models, agents, tailnet, reinstall, and restart.
 
 Menu callbacks route through the same command dispatcher as typed slash commands;
@@ -297,7 +301,7 @@ it does not close, promote, absorb, or otherwise mutate threads.
 Thread-scoped work-lane controls follow the same typed session scope as the
 turns themselves. Continuation approvals, progress-card `Stop`/`Reassess`,
 startup recovery prompts, busy/interrupt decisions, artifact retention prompts,
-and `/memory` focus are keyed to the side-thread session when the work came from
+and `/context`/`/memory` panels are keyed to the side-thread session when the work came from
 that side thread. Deferred busy and artifact decisions resume through their own
 recoverable Telegram ingress surfaces before the pending decision is cleared.
 Global operator surfaces stay global so authority and service state do not
@@ -368,29 +372,33 @@ Behavior:
 - delivers the child reply in the same chat when channel policy allows local reply
 - sender must still be authorized by the child (`allowed_telegram_user_ids` or admin role)
 
+### `/context` controls
+
+- `Ask Me`
+- `Refresh`
+
+Behavior:
+
+- panel includes the current lane, operation/plan summary, active scratchpad/focus signal if present, recent context preview, evidence, and `Writes: none`.
+- `Ask Me` queues ordinary clarification work asking what context assumptions should be confirmed or corrected. It does not write memory or change focus.
+- `Refresh` reloads the panel in place.
+
 ### `/memory` review controls
 
 - Source selectors:
   - `Session`
-  - `Semantic Shared`
-  - `Semantic Local`
-- Candidate selectors:
-  - `Focus 1`
-  - `Focus 2`
-  - `Focus 3`
+  - `Shared`
+  - `Local`
 - Control row:
-  - `Clear Focus`
+  - `Ask Me`
   - `Refresh`
 
 Behavior:
 
-- panel includes:
-  - source id
-  - query seed
-  - active focus summary (or `none`)
-  - candidate items with labels and excerpts
-- focus applies to subsequent non-command inbound messages by prepending a machine-only `MEMORY_FOCUS_CONTEXT` block.
-- slash commands and durable relay payloads are not rewritten by memory-focus injection.
+- panel includes durable store counts, semantic/session recall counts, recall preview items, source/query evidence, and `Writes: none`.
+- recall preview items are evidence candidates only; they are not approved memories.
+- `Ask Me` queues ordinary clarification work asking which memory assumptions or recall items should be confirmed, corrected, or rejected. It does not write memory or change focus.
+- `Refresh` reloads the selected source in place.
 
 ### Continuation approval prompt
 
@@ -447,6 +455,14 @@ Decision prompts are shown with inline buttons. Depending on context, users can 
   - `Turn only`
   - `Session`
   - `Save locally`
+
+Repository-history proposals are a nested gate under ordinary work
+continuation. If `git commit` is blocked, Telegram and tool diagnostics should
+name the causal chain instead of only saying `proposal denied`: gate
+`repository_commit`, required approval `proposal_approval`, status
+`expired`/`denied`, timeout/default-deny when applicable, whether continuation
+approval covered it (`no`), why not, and the concrete next action to approve
+the specific git commit proposal card or request a fresh one.
 
 ### Live progress card controls
 

@@ -278,5 +278,6 @@ type stubCommandRouter struct {
 	absorbThreadID               int64
 	absorbThreadReturn           string
 	absorbThreadErr              error
+	clarificationMsg             *core.InboundMessage
 	order                        *[]string
 }

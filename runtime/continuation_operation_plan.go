@@ -425,13 +425,31 @@ func nextOperationPhaseBundleForApproval(opState session.OperationState) ([]sess
 		return nil, false
 	}
 	start := 0
+	currentFound := false
 	if currentID := strings.TrimSpace(plan.CurrentPhaseID); currentID != "" {
 		for i, phase := range plan.Phases {
 			if strings.TrimSpace(phase.ID) == currentID {
 				start = i
+				currentFound = true
 				break
 			}
 		}
+	}
+	bundle := operationPhaseBundleForApprovalFrom(opState, start)
+	if len(bundle) < 2 && start > 0 && !currentFound {
+		bundle = operationPhaseBundleForApprovalFrom(opState, 0)
+	}
+	if len(bundle) < 2 {
+		return nil, false
+	}
+	return bundle, true
+}
+
+func operationPhaseBundleForApprovalFrom(opState session.OperationState, start int) []session.OperationPhase {
+	opState = session.NormalizeOperationState(opState)
+	plan := opState.PhasePlan
+	if start < 0 {
+		start = 0
 	}
 	bundle := make([]session.OperationPhase, 0, operationApprovalBundleMaxPhases)
 	for i := start; i < len(plan.Phases) && len(bundle) < operationApprovalBundleMaxPhases; i++ {
@@ -454,37 +472,24 @@ func nextOperationPhaseBundleForApproval(opState session.OperationState) ([]sess
 		if !operationPhaseBundleCanAdd(bundle, phase) {
 			break
 		}
-		bundle = append(bundle, phase)
-	}
-	if len(bundle) < 2 && start > 0 {
-		bundle = bundle[:0]
-		for i := 0; i < len(plan.Phases) && len(bundle) < operationApprovalBundleMaxPhases; i++ {
-			phase := normalizeSingleOperationPhase(plan.Phases[i])
-			if operationPhasePlanPhaseIsStaleInProgress(plan, phase) {
-				continue
-			}
-			if operationPhaseApprovalExcludedReason(plan, phase) != "" {
-				continue
-			}
-			if phase.Status == session.PlanStatusCompleted {
-				continue
-			}
-			if !operationPhaseEligibleForPlanBudget(phase) {
-				break
-			}
-			if operationPlanLeaseCoversPhaseAsBudget(opState.PlanLease, phase) {
-				break
-			}
-			if !operationPhaseBundleCanAdd(bundle, phase) {
-				break
-			}
-			bundle = append(bundle, phase)
+		candidate := append(append([]session.OperationPhase(nil), bundle...), phase)
+		if operationPhaseBundleInvalidReason(opState, candidate) != "" {
+			break
 		}
+		bundle = candidate
 	}
-	if len(bundle) < 2 {
-		return nil, false
+	return bundle
+}
+
+func operationPhaseBundleInvalidReason(opState session.OperationState, phases []session.OperationPhase) string {
+	if len(phases) == 0 {
+		return ""
 	}
-	return bundle, true
+	opState = session.NormalizeOperationState(opState)
+	bundle := session.ContinuationApprovalBundle{
+		Phases: continuationApprovalBundlePhasesFromOperation(opState, phases),
+	}
+	return continuationApprovalBundleInvalidReason(opState.PhasePlan, bundle)
 }
 
 func operationPhaseBundleCanAdd(bundle []session.OperationPhase, phase session.OperationPhase) bool {

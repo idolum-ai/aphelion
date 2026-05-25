@@ -116,6 +116,99 @@ func TestMaterializeDurablePhasePlanBundlesConsecutiveSafePhases(t *testing.T) {
 	}
 }
 
+func TestMaterializeCurrentFreshPhaseDoesNotFallbackToOlderPendingBundle(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9044, UserID: 0, Scope: telegramDMScopeRef(9044)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "current-fresh-phase-no-stale-bundle-op",
+		Objective: "Commit the already-staged final QoL patch.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "approval_request",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "current-fresh-phase-no-stale-bundle-plan",
+			Goal:           "Do not resurrect older pending phases when reoffering a current commit approval.",
+			CurrentPhaseID: "phase-final-commit",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-old-design",
+					Summary:        "Old read-only design review",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "read_only_review",
+					BoundedEffect:  "Inspect only; do not edit or commit.",
+				},
+				{
+					ID:             "phase-old-implementation",
+					Summary:        "Old implementation phase",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "workspace_write",
+					BoundedEffect:  "Edit local files and run tests only; do not commit.",
+				},
+				{
+					ID:               "phase-final-commit",
+					Summary:          "Create one local commit for the staged QoL patch",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "commit",
+					BoundedEffect:    "Create exactly one local git commit from staged intended files, then report the hash.",
+					AllowedActions:   []string{"git_commit", "report_commit_evidence"},
+					ForbiddenActions: []string{"git_push", "deploy", "restart_service", "additional_file_edits"},
+					ValidationPlan:   []string{"confirm staged files", "report commit hash"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9044, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want current commit phase approval")
+	}
+
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.ApprovalBundle.Active() || len(cont.ApprovalBundle.Phases) != 0 {
+		t.Fatalf("approval bundle = %#v, want standalone current commit phase", cont.ApprovalBundle)
+	}
+	if cont.RemainingTurns != 1 || continuationWorkMode(cont) != WorkModeCommit {
+		t.Fatalf("continuation = %#v, want one-turn commit work mode", cont)
+	}
+	if actionListContains(cont.ActionProposal.ForbiddenActions, "commit") || actionListContains(cont.ContinuationLease.ForbiddenActions, "commit") {
+		t.Fatalf("proposal/lease forbid commit: action=%#v lease=%#v", cont.ActionProposal.ForbiddenActions, cont.ContinuationLease.ForbiddenActions)
+	}
+
+	got, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if got.PhasePlan.CurrentPhaseID != "phase-final-commit" || got.PhasePlan.Phases[2].LeaseID != cont.ContinuationLease.ID {
+		t.Fatalf("phase plan = %#v, want current final commit phase linked to standalone lease", got.PhasePlan)
+	}
+	if got.PhasePlan.Phases[0].LeaseID != "" || got.PhasePlan.Phases[1].LeaseID != "" {
+		t.Fatalf("phase plan = %#v, want older pending phases untouched by commit approval", got.PhasePlan)
+	}
+
+	sender.mu.Lock()
+	inlineText := ""
+	if len(sender.inline) > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if !strings.Contains(inlineText, "Create one local commit") || strings.Contains(inlineText, "Old read-only design") || strings.Contains(inlineText, "Old implementation phase") {
+		t.Fatalf("inline text = %q, want only current commit approval", inlineText)
+	}
+}
+
 func TestMaterializeBlockedConsentPhaseSendsStatusWithoutApprovalButtons(t *testing.T) {
 	t.Parallel()
 

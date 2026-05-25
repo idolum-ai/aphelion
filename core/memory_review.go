@@ -35,11 +35,28 @@ type MemoryReviewItem struct {
 	Score   float64
 }
 
+type MemoryReviewStats struct {
+	StoreCounts         map[string]int
+	SemanticSharedCount int
+	SemanticLocalCount  int
+	SessionRecentCount  int
+	Partial             bool
+	Missing             []string
+}
+
 type MemoryReviewSnapshot struct {
 	GeneratedAt time.Time
 	Source      MemoryReviewSource
 	Query       string
 	Items       []MemoryReviewItem
+	Stats       MemoryReviewStats
+}
+
+type ContextSnapshot struct {
+	GeneratedAt time.Time
+	Chat        ChatStatusSnapshot
+	Focus       MemoryFocus
+	Recent      []MemoryReviewItem
 }
 
 type MemoryFocus struct {

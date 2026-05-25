@@ -27,7 +27,12 @@ type ExecApprovalRequest struct {
 }
 
 type ExecApprovalDecision struct {
-	Approved bool
+	Approved             bool
+	DecisionID           string
+	Choice               string
+	TimedOut             bool
+	DefaultChoice        string
+	RequiredApprovalKind string
 }
 
 type execProposalPattern struct {
