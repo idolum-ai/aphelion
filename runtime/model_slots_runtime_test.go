@@ -4,7 +4,6 @@ package runtime
 
 import (
 	"testing"
-	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
@@ -29,7 +28,7 @@ func TestRuntimeModelSlotOverrideRoutesGovernorExecution(t *testing.T) {
 		Model:     "claude-opus-4.7",
 		Effort:    "high",
 		Transport: core.ModelTransportAuto,
-	}, "test", "route governor", time.Hour)
+	}, "test", "route governor")
 	if err != nil {
 		t.Fatalf("SetModelSlotOverride() err = %v", err)
 	}
@@ -50,6 +49,53 @@ func TestRuntimeModelSlotOverrideRoutesGovernorExecution(t *testing.T) {
 	opts := rt.reasoningOptionsForRun(session.TurnRunKindInteractive)
 	if opts == nil || opts.Reasoning.Effort != agent.ReasoningEffortHigh {
 		t.Fatalf("reasoning effort = %#v, want high", opts)
+	}
+}
+
+func TestRuntimeModelSlotOverrideDoesNotMutateRecipeDefault(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Providers.Anthropic.APIKey = "test-key"
+	cfg.Providers.Anthropic.Model = "claude-sonnet-4-6"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	defaultBefore, err := rt.EffectiveModelSlot(core.ModelSlotGovernor)
+	if err != nil {
+		t.Fatalf("EffectiveModelSlot(before) err = %v", err)
+	}
+	before := rt.currentRecipeSnapshot()
+
+	if _, err := rt.SetModelSlotOverride(core.ModelSlotConfig{
+		Slot:      core.ModelSlotGovernor,
+		Provider:  core.ModelProviderAnthropic,
+		Model:     "claude-opus-4.7",
+		Effort:    "xhigh",
+		Transport: core.ModelTransportAuto,
+	}, "test", "temporary investigation"); err != nil {
+		t.Fatalf("SetModelSlotOverride() err = %v", err)
+	}
+	if _, err := rt.ClearModelSlot(core.ModelSlotGovernor, "test", "done"); err != nil {
+		t.Fatalf("ClearModelSlot() err = %v", err)
+	}
+
+	after := rt.currentRecipeSnapshot()
+	if after != before {
+		t.Fatalf("recipe snapshot = %#v, want unchanged %#v", after, before)
+	}
+	status, err := rt.EffectiveModelSlot(core.ModelSlotGovernor)
+	if err != nil {
+		t.Fatalf("EffectiveModelSlot() err = %v", err)
+	}
+	if status.Source != "default" ||
+		status.Effective.Provider != defaultBefore.Effective.Provider ||
+		status.Effective.Model != defaultBefore.Effective.Model ||
+		status.Effective.Effort != defaultBefore.Effective.Effort ||
+		status.Effective.Transport != defaultBefore.Effective.Transport ||
+		status.Effective.ServiceTier != defaultBefore.Effective.ServiceTier {
+		t.Fatalf("status = %#v, want default governor %#v after clear", status, defaultBefore)
 	}
 }
 

@@ -64,6 +64,40 @@ func TestOpenAICompleteTextUsageAndReasoning(t *testing.T) {
 	if seen.ReasoningEffort != "xhigh" {
 		t.Fatalf("reasoning_effort = %q, want xhigh", seen.ReasoningEffort)
 	}
+	if seen.ServiceTier != "" {
+		t.Fatalf("service_tier = %q, want omitted standard tier", seen.ServiceTier)
+	}
+}
+
+func TestOpenAICompleteIncludesPriorityServiceTier(t *testing.T) {
+	var seen openAIRequest
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(openRouterResponse{
+			Choices: []struct {
+				Message openRouterResponseMessage `json:"message"`
+			}{{Message: openRouterResponseMessage{Content: json.RawMessage(`"fast"`)}}},
+		})
+	})
+
+	client, err := NewOpenAI(OpenAIOptions{
+		APIKey:      "test-key",
+		Model:       "gpt-5.4",
+		ServiceTier: "fast",
+		Transport:   core.ModelTransportOpenAIChat,
+		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAI() err = %v", err)
+	}
+	if _, err := client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil); err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+	if seen.ServiceTier != core.ModelServiceTierPriority {
+		t.Fatalf("service_tier = %q, want priority", seen.ServiceTier)
+	}
 }
 
 func TestOpenAICompleteMapsTools(t *testing.T) {
@@ -205,6 +239,9 @@ func TestOpenAICompleteWithToolsAndReasoningUsesResponsesAPI(t *testing.T) {
 	if seen.Text == nil || seen.Text.Verbosity != "low" {
 		t.Fatalf("text config = %#v, want low verbosity", seen.Text)
 	}
+	if seen.ServiceTier != "" {
+		t.Fatalf("service_tier = %q, want omitted standard tier", seen.ServiceTier)
+	}
 	if !responsesInputHasType(seen.Input, "function_call_output") {
 		t.Fatalf("responses input = %#v, want function_call_output item", seen.Input)
 	}
@@ -216,6 +253,41 @@ func TestOpenAICompleteWithToolsAndReasoningUsesResponsesAPI(t *testing.T) {
 	}
 	if resp.Usage.InputTokens != 13 || resp.Usage.OutputTokens != 8 || resp.Usage.TotalTokens != 21 {
 		t.Fatalf("usage = %+v, want responses usage", resp.Usage)
+	}
+}
+
+func TestOpenAIResponsesIncludesPriorityServiceTier(t *testing.T) {
+	var seen openAIResponsesRequest
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(openAIResponsesResponse{
+			Output: []openAIResponsesOutputItem{{
+				Type: "message",
+				Content: []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				}{{Type: "output_text", Text: "fast responses"}},
+			}},
+		})
+	})
+
+	client, err := NewOpenAI(OpenAIOptions{
+		APIKey:      "test-key",
+		Model:       "gpt-5.5",
+		ServiceTier: "priority",
+		Transport:   core.ModelTransportOpenAIResponses,
+		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAI() err = %v", err)
+	}
+	if _, err := client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil); err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+	if seen.ServiceTier != core.ModelServiceTierPriority {
+		t.Fatalf("service_tier = %q, want priority", seen.ServiceTier)
 	}
 }
 

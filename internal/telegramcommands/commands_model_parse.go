@@ -6,82 +6,109 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 )
 
 type modelSlotMutation struct {
 	Config core.ModelSlotConfig
-	TTL    time.Duration
 }
 
-func parseModelSlotMutation(raw string) (core.ModelSlotConfig, time.Duration, error) {
-	fields := strings.Fields(strings.TrimSpace(raw))
+func parseModelSlotMutation(raw string) (core.ModelSlotConfig, error) {
+	optionsRaw, reason := splitModelCommandReason(raw)
+	fields := strings.Fields(strings.TrimSpace(optionsRaw))
 	if len(fields) < 2 {
-		return core.ModelSlotConfig{}, 0, fmt.Errorf("usage: /model set <slot> <provider/model> [effort=high] [transport=auto] [ttl=2h] [reason=text]")
+		return core.ModelSlotConfig{}, fmt.Errorf("usage: /model set <slot> <provider/model> [effort=high] [speed=fast] [transport=auto] [reason=text]")
 	}
 	slot := core.NormalizeModelSlot(fields[0])
 	if slot == "" {
-		return core.ModelSlotConfig{}, 0, fmt.Errorf("unknown model slot %q", fields[0])
+		return core.ModelSlotConfig{}, fmt.Errorf("unknown model slot %q", fields[0])
 	}
 	cfg := core.ModelSlotConfig{Slot: slot, Transport: core.ModelTransportAuto}
 	provider, model := core.ParseProviderModel(fields[1])
 	if provider == "" || model == "" {
-		return core.ModelSlotConfig{}, 0, fmt.Errorf("model must be written as provider/model")
+		return core.ModelSlotConfig{}, fmt.Errorf("model must be written as provider/model")
 	}
 	cfg.Provider = provider
 	cfg.Model = model
-	var ttl time.Duration
+	cfg.Reason = reason
 	for _, field := range fields[2:] {
 		key, value, ok := strings.Cut(field, "=")
 		if !ok {
-			continue
+			return core.ModelSlotConfig{}, fmt.Errorf("unknown model option %q", field)
 		}
 		key = strings.ToLower(strings.TrimSpace(key))
 		value = strings.TrimSpace(value)
 		switch key {
 		case "provider":
 			cfg.Provider = core.NormalizeModelProvider(value)
+			if cfg.Provider == "" {
+				return core.ModelSlotConfig{}, fmt.Errorf("unknown provider %q", value)
+			}
 		case "model":
 			cfg.Model = value
 		case "effort":
 			cfg.Effort = core.NormalizeModelEffort(value)
+			if cfg.Effort == "" && strings.TrimSpace(value) != "" && !strings.EqualFold(value, "default") {
+				return core.ModelSlotConfig{}, fmt.Errorf("unknown effort %q", value)
+			}
 		case "transport":
 			cfg.Transport = core.NormalizeModelTransport(value)
-		case "fallback", "fallbacks":
-			cfg.Fallbacks = parseModelFallbacks(value, cfg.Provider)
-		case "ttl", "expires", "expires_in":
-			parsed, err := time.ParseDuration(value)
-			if err != nil {
-				return core.ModelSlotConfig{}, 0, fmt.Errorf("invalid ttl %q", value)
+			if cfg.Transport == "" {
+				return core.ModelSlotConfig{}, fmt.Errorf("unknown transport %q", value)
 			}
-			ttl = parsed
+		case "speed", "service_tier":
+			cfg.ServiceTier = core.NormalizeModelServiceTier(value)
+			if cfg.ServiceTier == "" && !isModelServiceTierStandardAlias(value) {
+				return core.ModelSlotConfig{}, fmt.Errorf("unknown speed %q", value)
+			}
+		case "fallback", "fallbacks":
+			fallbacks, err := parseModelFallbacks(value, cfg.Provider)
+			if err != nil {
+				return core.ModelSlotConfig{}, err
+			}
+			cfg.Fallbacks = fallbacks
+		case "ttl", "expires", "expires_in":
+			return core.ModelSlotConfig{}, fmt.Errorf("%s is not a /model option; use /model clear <slot> to return to the default", key)
 		case "reason":
-			cfg.Reason = modelCommandReason(raw)
+			cfg.Reason = reason
+		default:
+			return core.ModelSlotConfig{}, fmt.Errorf("unknown model option %q", key)
 		}
 	}
 	cfg = core.NormalizeModelSlotConfig(cfg)
 	if cfg.Provider == "" || cfg.Model == "" {
-		return core.ModelSlotConfig{}, 0, fmt.Errorf("provider and model are required")
+		return core.ModelSlotConfig{}, fmt.Errorf("provider and model are required")
 	}
-	return cfg, ttl, nil
+	return cfg, nil
 }
 
-func parseModelFallbacks(raw string, defaultProvider string) []core.ModelFallback {
+func parseModelFallbacks(raw string, defaultProvider string) ([]core.ModelFallback, error) {
 	parts := strings.Split(raw, ",")
 	out := make([]core.ModelFallback, 0, len(parts))
 	for _, part := range parts {
 		provider, model := core.ParseProviderModel(part)
 		if model == "" {
-			continue
+			return nil, fmt.Errorf("fallback model must be written as provider/model or model")
 		}
 		if provider == "" {
 			provider = core.NormalizeModelProvider(defaultProvider)
 		}
+		if provider == "" {
+			return nil, fmt.Errorf("fallback provider is required")
+		}
 		out = append(out, core.ModelFallback{Provider: provider, Model: model})
 	}
-	return out
+	return out, nil
+}
+
+func isModelServiceTierStandardAlias(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "standard", "default":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseModelSlotActionTarget(raw string) (string, string) {
@@ -93,7 +120,7 @@ func parseModelSlotActionTarget(raw string) (string, string) {
 	return core.NormalizeModelSlot(slot), modelCommandReason(raw)
 }
 
-func parseModelSlotHistoryArgs(raw string) (string, int) {
+func parseModelSlotChangesArgs(raw string) (string, int) {
 	fields := strings.Fields(strings.TrimSpace(raw))
 	slot := ""
 	limit := 8
@@ -134,10 +161,15 @@ func nextModelToken(raw string) (string, string) {
 }
 
 func modelCommandReason(raw string) string {
+	_, reason := splitModelCommandReason(raw)
+	return reason
+}
+
+func splitModelCommandReason(raw string) (string, string) {
 	for _, marker := range []string{" reason=", " reason:"} {
 		if idx := strings.Index(raw, marker); idx >= 0 {
-			return strings.TrimSpace(raw[idx+len(marker):])
+			return strings.TrimSpace(raw[:idx]), strings.TrimSpace(raw[idx+len(marker):])
 		}
 	}
-	return ""
+	return raw, ""
 }

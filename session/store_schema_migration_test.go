@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/idolum-ai/aphelion/core"
 )
 
 func TestMigratesSchemaV43ToCurrent(t *testing.T) {
@@ -902,4 +904,134 @@ func TestMigratesSchemaV55ToV57TelegramThreadPromotionHandoffs(t *testing.T) {
 	if thread, ok, err := reopened.TelegramThread(1001, 7); err != nil || !ok || thread.CreatedText != "promote me safely" {
 		t.Fatalf("TelegramThread(reopen) = %#v ok=%t err=%v, want preserved thread", thread, ok, err)
 	}
+}
+
+func TestMigratesSchemaV57ToV58ModelSlotOverrides(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v57.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v57 db: %v", err)
+	}
+	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version(version INTEGER NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+		`INSERT INTO schema_version(version) VALUES (57)`,
+		`CREATE TABLE model_slot_overrides (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			slot TEXT NOT NULL,
+			config_json TEXT NOT NULL DEFAULT '{}',
+			previous_config_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'superseded', 'rolled_back', 'expired', 'cleared')),
+			created_by TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			expires_at TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE INDEX idx_model_slot_overrides_slot_status ON model_slot_overrides(slot, status, id DESC)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v57 fixture: %v", err)
+		}
+	}
+	activeCreated := now.Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	expiredAt := now.Add(-time.Hour).Format(time.RFC3339Nano)
+	if _, err := db.Exec(`
+		INSERT INTO model_slot_overrides(
+			id, slot, config_json, previous_config_json, status, created_by, reason, expires_at, created_at, updated_at
+		) VALUES
+			(1, 'governor', '{"slot":"governor","provider":"openai","model":"gpt-5.5","effort":"high","transport":"auto","service_tier":"priority"}', '{"slot":"governor","provider":"anthropic","model":"claude-sonnet-4-6","transport":"auto"}', 'active', 'test', 'preserve active', ?, ?, ?),
+			(2, 'persona', '{"slot":"persona","provider":"openai","model":"gpt-5.4","transport":"auto"}', '{}', 'expired', 'test', 'map terminal', ?, ?, ?),
+			(3, 'doctor', '{"slot":"doctor","provider":"codex","model":"gpt-5.5","transport":"auto"}', '{}', 'rolled_back', 'test', 'map terminal', ?, ?, ?)
+	`, expiredAt, activeCreated, activeCreated, expiredAt, activeCreated, activeCreated, expiredAt, activeCreated, activeCreated); err != nil {
+		t.Fatalf("insert v57 model slot fixtures: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v57 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v57) err = %v", err)
+	}
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteIndex(t, store.db, "idx_model_slot_overrides_slot_status")
+	if sqliteColumnExistsInTestDB(t, store.db, "model_slot_overrides", "expires_at") {
+		t.Fatalf("model_slot_overrides.expires_at exists after v58 migration")
+	}
+
+	active, ok, err := store.ActiveModelSlotOverride(core.ModelSlotGovernor)
+	if err != nil || !ok {
+		t.Fatalf("ActiveModelSlotOverride(governor) ok=%t err=%v, want active non-expiring row", ok, err)
+	}
+	if active.Config.Provider != core.ModelProviderOpenAI || active.Config.Model != "gpt-5.5" || active.Config.ServiceTier != core.ModelServiceTierPriority {
+		t.Fatalf("active model slot = %#v, want preserved OpenAI fast override", active.Config)
+	}
+
+	history, err := store.ModelSlotOverrideHistory("", 10)
+	if err != nil {
+		t.Fatalf("ModelSlotOverrideHistory() err = %v", err)
+	}
+	statusByID := map[int64]string{}
+	for _, record := range history {
+		statusByID[record.ID] = record.Status
+	}
+	if statusByID[2] != "cleared" || statusByID[3] != "cleared" {
+		t.Fatalf("terminal migrated statuses = %#v, want expired and rolled_back rows mapped to cleared", statusByID)
+	}
+	if _, err := store.SetModelSlotOverride(ModelSlotOverrideRecord{
+		Slot: core.ModelSlotPersona,
+		Config: core.ModelSlotConfig{
+			Slot:      core.ModelSlotPersona,
+			Provider:  core.ModelProviderAnthropic,
+			Model:     "claude-sonnet-4-6",
+			Transport: core.ModelTransportAuto,
+		},
+		CreatedBy: "test",
+		Reason:    "post-migration insert",
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("SetModelSlotOverride() after v58 migration err = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close migrated v57 store: %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen v57 migrated) err = %v", err)
+	}
+	defer reopened.Close()
+	assertSchemaVersion(t, reopened.db, schemaVersion)
+	if _, ok, err := reopened.ActiveModelSlotOverride(core.ModelSlotGovernor); err != nil || !ok {
+		t.Fatalf("ActiveModelSlotOverride(reopen) ok=%t err=%v, want active row remains non-expiring", ok, err)
+	}
+}
+
+func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {
+	t.Helper()
+	rows, err := db.Query(`PRAGMA table_info(` + tableName + `)`)
+	if err != nil {
+		t.Fatalf("pragma table_info(%s): %v", tableName, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typeName string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typeName, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatalf("scan table_info(%s): %v", tableName, err)
+		}
+		if name == columnName {
+			return true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate table_info(%s): %v", tableName, err)
+	}
+	return false
 }

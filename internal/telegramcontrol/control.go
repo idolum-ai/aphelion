@@ -59,8 +59,7 @@ type Runtime interface {
 
 	ModelSlotStatuses() ([]core.ModelSlotStatus, error)
 	ValidateModelSlotConfig(cfg core.ModelSlotConfig) core.ModelValidation
-	SetModelSlotOverride(cfg core.ModelSlotConfig, actor string, reason string, ttl time.Duration) (core.ModelSlotStatus, error)
-	RollbackModelSlot(slot string, actor string, reason string) (core.ModelSlotStatus, error)
+	SetModelSlotOverride(cfg core.ModelSlotConfig, actor string, reason string) (core.ModelSlotStatus, error)
 	ClearModelSlot(slot string, actor string, reason string) (core.ModelSlotStatus, error)
 	ModelSlotHistory(slot string, limit int) ([]session.ModelSlotOverrideRecord, error)
 

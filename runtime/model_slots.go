@@ -24,21 +24,6 @@ func (r *Runtime) ModelSlotStatuses() ([]core.ModelSlotStatus, error) {
 	if r == nil {
 		return nil, fmt.Errorf("runtime is nil")
 	}
-	if r.store != nil {
-		expired, err := r.store.ExpireModelSlotOverrides(time.Now().UTC())
-		if err != nil {
-			return nil, err
-		}
-		for _, record := range expired {
-			r.recordModelConfigEvent(core.ExecutionEventModelConfigExpired, "expired", map[string]any{
-				"slot":        record.Slot,
-				"override_id": record.ID,
-				"provider":    record.Config.Provider,
-				"model":       record.Config.Model,
-				"expires_at":  nullableEventTime(record.ExpiresAt),
-			})
-		}
-	}
 	statuses := make([]core.ModelSlotStatus, 0, len(core.ModelSlotNames()))
 	for _, slot := range core.ModelSlotNames() {
 		status, err := r.EffectiveModelSlot(slot)
@@ -66,7 +51,7 @@ func (r *Runtime) EffectiveModelSlot(slot string) (core.ModelSlotStatus, error) 
 		Default:   defaultCfg,
 	}
 	if r.store != nil {
-		if record, ok, err := r.store.ActiveModelSlotOverride(slot, time.Now().UTC()); err != nil {
+		if record, ok, err := r.store.ActiveModelSlotOverride(slot); err != nil {
 			return core.ModelSlotStatus{}, err
 		} else if ok {
 			status.Effective = core.NormalizeModelSlotConfig(record.Config)
@@ -74,7 +59,6 @@ func (r *Runtime) EffectiveModelSlot(slot string) (core.ModelSlotStatus, error) 
 			status.OverrideID = record.ID
 			status.CreatedBy = record.CreatedBy
 			status.Reason = record.Reason
-			status.ExpiresAt = record.ExpiresAt
 		}
 	}
 	status.Effective.Slot = slot
@@ -95,7 +79,7 @@ func (r *Runtime) ValidateModelSlotConfig(cfg core.ModelSlotConfig) core.ModelVa
 	return validation
 }
 
-func (r *Runtime) SetModelSlotOverride(cfg core.ModelSlotConfig, createdBy string, reason string, ttl time.Duration) (core.ModelSlotStatus, error) {
+func (r *Runtime) SetModelSlotOverride(cfg core.ModelSlotConfig, createdBy string, reason string) (core.ModelSlotStatus, error) {
 	if r == nil {
 		return core.ModelSlotStatus{}, fmt.Errorf("runtime is nil")
 	}
@@ -128,16 +112,10 @@ func (r *Runtime) SetModelSlotOverride(cfg core.ModelSlotConfig, createdBy strin
 		Reason:         strings.TrimSpace(firstNonEmptyRuntimeModel(reason, cfg.Reason)),
 		CreatedAt:      time.Now().UTC(),
 	}
-	if ttl > 0 {
-		record.ExpiresAt = record.CreatedAt.Add(ttl)
-	}
 	if _, err := r.store.SetModelSlotOverride(record); err != nil {
 		return core.ModelSlotStatus{}, err
 	}
 	r.invalidateModelSlotCaches(cfg.Slot)
-	if err := r.syncRecipeStateFromModelSlot(validation.Config); err != nil {
-		return core.ModelSlotStatus{}, err
-	}
 	status, err := r.EffectiveModelSlot(cfg.Slot)
 	if err != nil {
 		return core.ModelSlotStatus{}, err
@@ -148,70 +126,17 @@ func (r *Runtime) SetModelSlotOverride(cfg core.ModelSlotConfig, createdBy strin
 		"provider":           status.Effective.Provider,
 		"model":              status.Effective.Model,
 		"effort":             status.Effective.Effort,
+		"service_tier":       status.Effective.ServiceTier,
 		"transport":          status.Effective.Transport,
 		"resolved_transport": status.Validation.ResolvedTransport,
 		"created_by":         strings.TrimSpace(createdBy),
 		"reason":             strings.TrimSpace(reason),
-		"expires_at":         nullableEventTime(status.ExpiresAt),
 	})
 	return status, nil
 }
 
 func (r *Runtime) ClearModelSlot(slot string, actor string, reason string) (core.ModelSlotStatus, error) {
 	return r.clearModelSlot(slot, "cleared", actor, reason)
-}
-
-func (r *Runtime) RollbackModelSlot(slot string, actor string, reason string) (core.ModelSlotStatus, error) {
-	if r == nil {
-		return core.ModelSlotStatus{}, fmt.Errorf("runtime is nil")
-	}
-	slot = core.NormalizeModelSlot(slot)
-	if slot == "" {
-		return core.ModelSlotStatus{}, fmt.Errorf("model slot is required")
-	}
-	if r.store == nil {
-		return core.ModelSlotStatus{}, fmt.Errorf("session store is nil")
-	}
-	now := time.Now().UTC()
-	active, ok, err := r.store.ClearModelSlotOverride(slot, "rolled_back", now)
-	if err != nil {
-		return core.ModelSlotStatus{}, err
-	}
-	if !ok {
-		return r.EffectiveModelSlot(slot)
-	}
-	r.invalidateModelSlotCaches(slot)
-	defaultCfg := r.defaultModelSlot(slot)
-	previous := core.NormalizeModelSlotConfig(active.PreviousConfig)
-	if previous.Slot == "" {
-		previous.Slot = slot
-	}
-	if previous.Provider != "" && previous.Model != "" && !sameModelSlotEffective(previous, defaultCfg) {
-		record := session.ModelSlotOverrideRecord{
-			Slot:           slot,
-			Config:         previous,
-			PreviousConfig: defaultCfg,
-			CreatedBy:      strings.TrimSpace(actor),
-			Reason:         strings.TrimSpace(firstNonEmptyRuntimeModel(reason, "rollback")),
-			CreatedAt:      now,
-		}
-		if _, err := r.store.SetModelSlotOverride(record); err != nil {
-			return core.ModelSlotStatus{}, err
-		}
-	}
-	status, err := r.EffectiveModelSlot(slot)
-	if err != nil {
-		return core.ModelSlotStatus{}, err
-	}
-	r.recordModelConfigEvent(core.ExecutionEventModelConfigRolledBack, "rolled_back", map[string]any{
-		"slot":               slot,
-		"rolled_back_id":     active.ID,
-		"effective_provider": status.Effective.Provider,
-		"effective_model":    status.Effective.Model,
-		"created_by":         strings.TrimSpace(actor),
-		"reason":             strings.TrimSpace(reason),
-	})
-	return status, nil
 }
 
 func (r *Runtime) clearModelSlot(slot string, statusText string, actor string, reason string) (core.ModelSlotStatus, error) {
@@ -422,13 +347,14 @@ func buildSingleProviderForModelSlot(cfg *config.Config, slot core.ModelSlotConf
 	switch core.NormalizeModelProvider(providerName) {
 	case core.ModelProviderOpenAI:
 		return providerpkg.NewOpenAI(providerpkg.OpenAIOptions{
-			APIKey:     cfg.Providers.OpenAI.APIKey,
-			BaseURL:    cfg.Providers.OpenAI.BaseURL,
-			Model:      model,
-			MaxTokens:  cfg.Providers.OpenAI.MaxTokens,
-			Transport:  resolvedTransport,
-			HTTPClient: httpClient,
-			UserAgent:  config.EffectiveUserAgent(cfg, ""),
+			APIKey:      cfg.Providers.OpenAI.APIKey,
+			BaseURL:     cfg.Providers.OpenAI.BaseURL,
+			Model:       model,
+			MaxTokens:   cfg.Providers.OpenAI.MaxTokens,
+			Transport:   resolvedTransport,
+			ServiceTier: slot.ServiceTier,
+			HTTPClient:  httpClient,
+			UserAgent:   config.EffectiveUserAgent(cfg, ""),
 		})
 	case core.ModelProviderAnthropic:
 		return providerpkg.NewAnthropic(providerpkg.AnthropicOptions{
@@ -527,45 +453,6 @@ func (r *Runtime) invalidateModelSlotCaches(slot string) {
 	}
 }
 
-func (r *Runtime) syncRecipeStateFromModelSlot(cfg core.ModelSlotConfig) error {
-	cfg = core.NormalizeModelSlotConfig(cfg)
-	switch cfg.Slot {
-	case core.ModelSlotPersona:
-		model := normalizePersonaModel(cfg.Model)
-		if model == "" {
-			return nil
-		}
-		r.recipeMu.Lock()
-		prev := r.recipeState
-		r.recipeState.PersonaModel = model
-		state := r.recipeState
-		r.recipeMu.Unlock()
-		if err := saveRuntimeRecipeState(r.recipePath, state, &r.recipeFileMu); err != nil {
-			r.recipeMu.Lock()
-			r.recipeState = prev
-			r.recipeMu.Unlock()
-			return err
-		}
-	case core.ModelSlotGovernor:
-		effort := normalizeGovernorEffort(cfg.Effort)
-		if effort == "" {
-			return nil
-		}
-		r.recipeMu.Lock()
-		prev := r.recipeState
-		r.recipeState.GovernorEffort = effort
-		state := r.recipeState
-		r.recipeMu.Unlock()
-		if err := saveRuntimeRecipeState(r.recipePath, state, &r.recipeFileMu); err != nil {
-			r.recipeMu.Lock()
-			r.recipeState = prev
-			r.recipeMu.Unlock()
-			return err
-		}
-	}
-	return nil
-}
-
 func (r *Runtime) validateConfiguredModelProvider(providerName string) error {
 	if r == nil {
 		return fmt.Errorf("runtime is nil")
@@ -601,28 +488,12 @@ func (r *Runtime) modelProviderConfigured(providerName string) bool {
 	}
 }
 
-func sameModelSlotEffective(a core.ModelSlotConfig, b core.ModelSlotConfig) bool {
-	a = core.NormalizeModelSlotConfig(a)
-	b = core.NormalizeModelSlotConfig(b)
-	return a.Provider == b.Provider &&
-		a.Model == b.Model &&
-		a.Effort == b.Effort &&
-		a.Transport == b.Transport
-}
-
 func (r *Runtime) recordModelConfigEvent(eventType string, status string, payload map[string]any) {
 	if r == nil {
 		return
 	}
 	key := session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()}
 	r.recordExecutionEvent(key, eventType, "model_config", status, payload, time.Now().UTC())
-}
-
-func nullableEventTime(t time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
-	return t.UTC().Format(time.RFC3339)
 }
 
 func firstNonEmptyRuntimeModel(values ...string) string {

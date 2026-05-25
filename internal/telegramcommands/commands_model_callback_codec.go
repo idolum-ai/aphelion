@@ -18,9 +18,9 @@ func encodeModelCallbackData(action modelCallbackAction, slot string, value stri
 	switch action {
 	case modelCallbackStatus:
 		return modelCallbackPrefix + actionToken
-	case modelCallbackSlot, modelCallbackHistory, modelCallbackClear, modelCallbackRollback:
+	case modelCallbackSlot, modelCallbackChanges, modelCallbackClear:
 		return modelCallbackPrefix + actionToken + ":" + slotToken
-	case modelCallbackEffort, modelCallbackPreset:
+	case modelCallbackEffort, modelCallbackPreset, modelCallbackSpeed:
 		return modelCallbackPrefix + actionToken + ":" + slotToken + ":" + value
 	default:
 		return ""
@@ -44,16 +44,16 @@ func decodeModelCallbackData(data string) (modelCallbackAction, string, string, 
 	switch action {
 	case modelCallbackStatus:
 		return action, "", "", len(parts) == 1
-	case modelCallbackSlot, modelCallbackHistory, modelCallbackClear, modelCallbackRollback:
+	case modelCallbackSlot, modelCallbackChanges, modelCallbackClear:
 		if len(parts) != 2 {
 			return "", "", "", false
 		}
 		slot := decodeModelSlotToken(parts[1])
-		if slot == "" && action != modelCallbackHistory {
+		if slot == "" && action != modelCallbackChanges {
 			return "", "", "", false
 		}
 		return action, slot, "", true
-	case modelCallbackEffort, modelCallbackPreset:
+	case modelCallbackEffort, modelCallbackPreset, modelCallbackSpeed:
 		if len(parts) != 3 {
 			return "", "", "", false
 		}
@@ -74,16 +74,16 @@ func modelCallbackActionToken(action modelCallbackAction) string {
 		return "status"
 	case modelCallbackSlot:
 		return "slot"
-	case modelCallbackHistory:
-		return "hist"
+	case modelCallbackChanges:
+		return "changes"
 	case modelCallbackClear:
 		return "clear"
-	case modelCallbackRollback:
-		return "rb"
 	case modelCallbackEffort:
 		return "eff"
 	case modelCallbackPreset:
 		return "preset"
+	case modelCallbackSpeed:
+		return "speed"
 	default:
 		return ""
 	}
@@ -95,16 +95,16 @@ func decodeModelCallbackActionToken(token string) (modelCallbackAction, bool) {
 		return modelCallbackStatus, true
 	case "slot":
 		return modelCallbackSlot, true
-	case "hist":
-		return modelCallbackHistory, true
+	case "changes":
+		return modelCallbackChanges, true
 	case "clear":
 		return modelCallbackClear, true
-	case "rb":
-		return modelCallbackRollback, true
 	case "eff":
 		return modelCallbackEffort, true
 	case "preset":
 		return modelCallbackPreset, true
+	case "speed":
+		return modelCallbackSpeed, true
 	default:
 		return "", false
 	}

@@ -48,6 +48,61 @@ func TestValidateModelSlotConfigRejectsOpenAIGPT5ToolsEffortOnChatCompletions(t 
 	}
 }
 
+func TestValidateModelSlotConfigAcceptsOpenAIFastServiceTier(t *testing.T) {
+	t.Parallel()
+
+	got := ValidateModelSlotConfig(ModelSlotConfig{
+		Slot:        "governor",
+		Provider:    "openai",
+		Model:       "gpt-5.5",
+		Effort:      "high",
+		ServiceTier: "fast",
+	}, true)
+
+	if !got.Valid {
+		t.Fatalf("Valid = false: %s", got.Error)
+	}
+	if got.Config.ServiceTier != ModelServiceTierPriority {
+		t.Fatalf("service tier = %q, want priority", got.Config.ServiceTier)
+	}
+}
+
+func TestValidateModelSlotConfigRejectsFastForNonOpenAI(t *testing.T) {
+	t.Parallel()
+
+	got := ValidateModelSlotConfig(ModelSlotConfig{
+		Slot:        "governor",
+		Provider:    "anthropic",
+		Model:       "claude-sonnet-4-6",
+		ServiceTier: "fast",
+	}, true)
+
+	if got.Valid {
+		t.Fatal("Valid = true, want rejected fast mode")
+	}
+	if !strings.Contains(got.Error, "only available for openai") {
+		t.Fatalf("error = %q, want openai-only guidance", got.Error)
+	}
+}
+
+func TestValidateModelSlotConfigRejectsUnknownSpeed(t *testing.T) {
+	t.Parallel()
+
+	got := ValidateModelSlotConfig(ModelSlotConfig{
+		Slot:        "governor",
+		Provider:    "openai",
+		Model:       "gpt-5.5",
+		ServiceTier: "turbo",
+	}, true)
+
+	if got.Valid {
+		t.Fatal("Valid = true, want unknown speed rejected")
+	}
+	if !strings.Contains(got.Error, "standard or fast") {
+		t.Fatalf("error = %q, want speed guidance", got.Error)
+	}
+}
+
 func TestParseProviderModel(t *testing.T) {
 	t.Parallel()
 

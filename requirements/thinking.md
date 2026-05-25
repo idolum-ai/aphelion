@@ -174,6 +174,9 @@ For the current system shape, that layer is intentionally small:
 
 - interactive/recovery governor effort is operator-selectable through the admin-only `/model` slot controls across `low|medium|high|xhigh`
 - heartbeat and cron should continue to use their own lower defaults
+- OpenAI fast mode, when exposed through `/model`, is a provider service tier,
+  not a reasoning-effort level; it should stay separate from the cross-backend
+  thinking vocabulary
 
 This remains a hardcoded application recipe surface, not yet a configurable recipe framework.
 

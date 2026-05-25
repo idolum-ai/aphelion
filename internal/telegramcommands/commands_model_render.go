@@ -27,9 +27,6 @@ func renderModelSlotStatuses(statuses []core.ModelSlotStatus) string {
 	for _, status := range statuses {
 		line := modelSlotTitle(status.Slot) + ": " + renderModelSlotConfig(status.Effective)
 		line += " from " + firstNonEmptyModelUI(status.Source, "default")
-		if !status.ExpiresAt.IsZero() {
-			line += ", expires " + status.ExpiresAt.UTC().Format("2006-01-02 15:04Z")
-		}
 		details = append(details, line)
 		if !status.Validation.Valid {
 			evidence = append(evidence, modelSlotTitle(status.Slot)+" invalid: "+trimTelegramModelError(status.Validation.Error))
@@ -44,7 +41,7 @@ func renderModelSlotStatuses(statuses []core.ModelSlotStatus) string {
 		Title:    "Models",
 		State:    fmt.Sprintf("%d slot(s) configured", len(statuses)),
 		Why:      "Model slots control which backend handles each kind of runtime work.",
-		Next:     "Open a slot button, or use /model set <slot> <provider/model> effort=<low|medium|high|xhigh> ttl=2h.",
+		Next:     "Open a slot button, or use /model set <slot> <provider/model> effort=<low|medium|high|xhigh> speed=<standard|fast>.",
 		Details:  details,
 		Evidence: evidence,
 	}, false)
@@ -58,10 +55,10 @@ func renderModelStatusRows() [][]telegram.InlineButton {
 	return [][]telegram.InlineButton{
 		{
 			{Text: "Persona", CallbackData: encodeModelCallbackData(modelCallbackSlot, core.ModelSlotPersona, "")},
-			{Text: "Governor", CallbackData: encodeModelCallbackData(modelCallbackSlot, core.ModelSlotGovernor, "")},
+			{Text: "Main", CallbackData: encodeModelCallbackData(modelCallbackSlot, core.ModelSlotGovernor, "")},
 		},
 		{
-			{Text: "Doctor", CallbackData: encodeModelCallbackData(modelCallbackSlot, core.ModelSlotDoctor, "")},
+			{Text: "Health", CallbackData: encodeModelCallbackData(modelCallbackSlot, core.ModelSlotDoctor, "")},
 			{Text: "Children", CallbackData: encodeModelCallbackData(modelCallbackSlot, core.ModelSlotChildDefault, "")},
 		},
 		{
@@ -72,11 +69,10 @@ func renderModelStatusRows() [][]telegram.InlineButton {
 
 func renderModelSlotDetail(status core.ModelSlotStatus) string {
 	details := []string{
-		"Current: " + renderModelSlotConfig(status.Effective),
+		"Current: " + renderModelSlotProvider(status.Effective),
+		"Thinking: " + firstNonEmptyModelUI(status.Effective.Effort, "default"),
+		"Speed: " + renderModelSlotSpeed(status.Effective),
 		"Source: " + firstNonEmptyModelUI(status.Source, "default"),
-	}
-	if !status.ExpiresAt.IsZero() {
-		details = append(details, "Expires: "+status.ExpiresAt.UTC().Format("2006-01-02 15:04Z"))
 	}
 	if status.Reason != "" {
 		details = append(details, "Reason: "+status.Reason)
@@ -99,7 +95,7 @@ func renderModelSlotDetail(status core.ModelSlotStatus) string {
 		Title:    modelSlotTitle(status.Slot),
 		State:    state,
 		Why:      "This slot determines the backend used for its runtime role.",
-		Next:     "Choose a preset or effort, inspect history, rollback, or clear the override.",
+		Next:     "Choose a preset, thinking level, speed when available, or clear the override.",
 		Details:  details,
 		Evidence: evidence,
 	}, false)
@@ -122,15 +118,20 @@ func renderModelSlotRows(status core.ModelSlotStatus) [][]telegram.InlineButton 
 			{Text: modelGPT55PresetLabel(slot), CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "gpt55")},
 		},
 		effortRow,
-		{
-			{Text: "History", CallbackData: encodeModelCallbackData(modelCallbackHistory, slot, "")},
-			{Text: "Refresh", CallbackData: encodeModelCallbackData(modelCallbackSlot, slot, "")},
-			{Text: "All Slots", CallbackData: encodeModelCallbackData(modelCallbackStatus, "", "")},
-		},
 	}
+	if core.NormalizeModelProvider(status.Effective.Provider) == core.ModelProviderOpenAI {
+		rows = append(rows, []telegram.InlineButton{
+			{Text: "Standard", CallbackData: encodeModelCallbackData(modelCallbackSpeed, slot, "standard")},
+			{Text: "Fast", CallbackData: encodeModelCallbackData(modelCallbackSpeed, slot, "fast")},
+		})
+	}
+	rows = append(rows, []telegram.InlineButton{
+		{Text: "Changes", CallbackData: encodeModelCallbackData(modelCallbackChanges, slot, "")},
+		{Text: "Refresh", CallbackData: encodeModelCallbackData(modelCallbackSlot, slot, "")},
+		{Text: "All", CallbackData: encodeModelCallbackData(modelCallbackStatus, "", "")},
+	})
 	if strings.EqualFold(strings.TrimSpace(status.Source), "override") {
 		rows = append(rows, []telegram.InlineButton{
-			{Text: "Rollback", CallbackData: encodeModelCallbackData(modelCallbackRollback, slot, "")},
 			{Text: "Clear", CallbackData: encodeModelCallbackData(modelCallbackClear, slot, "")},
 		})
 	}
@@ -149,19 +150,19 @@ func hideModelSlotMaxEffort(status core.ModelSlotStatus) bool {
 		core.NormalizeModelProvider(status.Effective.Provider) == core.ModelProviderOpenAI
 }
 
-func renderModelHistoryRows(slot string) [][]telegram.InlineButton {
+func renderModelChangesRows(slot string) [][]telegram.InlineButton {
 	slot = core.NormalizeModelSlot(slot)
 	if slot == "" {
 		return [][]telegram.InlineButton{{
-			{Text: "All Slots", CallbackData: encodeModelCallbackData(modelCallbackStatus, "", "")},
-			{Text: "Refresh", CallbackData: encodeModelCallbackData(modelCallbackHistory, "", "")},
+			{Text: "All", CallbackData: encodeModelCallbackData(modelCallbackStatus, "", "")},
+			{Text: "Refresh", CallbackData: encodeModelCallbackData(modelCallbackChanges, "", "")},
 		}}
 	}
 	return [][]telegram.InlineButton{
 		{
 			{Text: modelSlotTitle(slot), CallbackData: encodeModelCallbackData(modelCallbackSlot, slot, "")},
-			{Text: "Refresh", CallbackData: encodeModelCallbackData(modelCallbackHistory, slot, "")},
-			{Text: "All Slots", CallbackData: encodeModelCallbackData(modelCallbackStatus, "", "")},
+			{Text: "Refresh", CallbackData: encodeModelCallbackData(modelCallbackChanges, slot, "")},
+			{Text: "All", CallbackData: encodeModelCallbackData(modelCallbackStatus, "", "")},
 		},
 	}
 }
@@ -197,9 +198,6 @@ func renderModelSlotChange(prefix string, status core.ModelSlotStatus) string {
 		"Effective: " + renderModelSlotConfig(status.Effective),
 		"Source: " + firstNonEmptyModelUI(status.Source, "default"),
 	}
-	if !status.ExpiresAt.IsZero() {
-		details = append(details, "Expires: "+status.ExpiresAt.UTC().Format("2006-01-02 15:04Z"))
-	}
 	evidence := make([]string, 0, 1)
 	if status.Validation.ResolvedTransport != "" {
 		evidence = append(evidence, "Transport: "+status.Validation.ResolvedTransport)
@@ -207,19 +205,19 @@ func renderModelSlotChange(prefix string, status core.ModelSlotStatus) string {
 	return renderTelegramCompactPanel(face.OperatorPanel{
 		Title:    modelSlotTitle(status.Slot),
 		State:    strings.ToLower(strings.TrimSpace(prefix)),
-		Why:      "The runtime will use this effective model slot until the override expires or changes.",
-		Next:     "Use History to inspect changes, Rollback/Clear when shown, or All Slots to return.",
+		Why:      "The runtime will use this effective model slot until it changes or is cleared.",
+		Next:     "Use Changes to inspect edits, Clear when shown, or All to return.",
 		Details:  details,
 		Evidence: evidence,
 	}, false)
 }
 
-func renderModelSlotHistory(records []session.ModelSlotOverrideRecord) string {
+func renderModelSlotChanges(records []session.ModelSlotOverrideRecord) string {
 	if len(records) == 0 {
 		return renderTelegramCompactPanel(face.OperatorPanel{
-			Title: "Model history",
+			Title: "Model changes",
 			State: "empty",
-			Next:  "Set or change a slot to create override history.",
+			Next:  "Set or change a slot to create override records.",
 		}, false)
 	}
 	details := make([]string, 0, len(records))
@@ -231,9 +229,9 @@ func renderModelSlotHistory(records []session.ModelSlotOverrideRecord) string {
 		details = append(details, line)
 	}
 	return renderTelegramCompactPanel(face.OperatorPanel{
-		Title:   "Model history",
+		Title:   "Model changes",
 		State:   fmt.Sprintf("%d record(s)", len(records)),
-		Why:     "History shows operator changes to model-slot overrides.",
+		Why:     "Changes show operator edits to model-slot overrides.",
 		Next:    "Return to the slot or all slots after inspection.",
 		Details: details,
 	}, false)
@@ -249,6 +247,9 @@ func renderModelSlotConfig(cfg core.ModelSlotConfig) string {
 	if cfg.Transport != "" && cfg.Transport != core.ModelTransportAuto {
 		parts = append(parts, "transport="+cfg.Transport)
 	}
+	if cfg.ServiceTier == core.ModelServiceTierPriority {
+		parts = append(parts, "speed=fast")
+	}
 	if len(cfg.Fallbacks) > 0 {
 		fallbacks := make([]string, 0, len(cfg.Fallbacks))
 		for _, fallback := range cfg.Fallbacks {
@@ -259,19 +260,34 @@ func renderModelSlotConfig(cfg core.ModelSlotConfig) string {
 	return strings.Join(parts, " ")
 }
 
+func renderModelSlotProvider(cfg core.ModelSlotConfig) string {
+	cfg = core.NormalizeModelSlotConfig(cfg)
+	return cfg.Provider + "/" + cfg.Model
+}
+
+func renderModelSlotSpeed(cfg core.ModelSlotConfig) string {
+	cfg = core.NormalizeModelSlotConfig(cfg)
+	if cfg.ServiceTier == core.ModelServiceTierPriority {
+		return "fast"
+	}
+	if cfg.Provider == core.ModelProviderOpenAI {
+		return "standard"
+	}
+	return "provider default"
+}
+
 func renderModelCommandHelp() string {
 	return renderTelegramCompactPanel(face.OperatorPanel{
 		Title: "Model controls",
 		State: "ready",
 		Why:   "Model slots route runtime roles to configured providers and transports.",
-		Next:  "Use /model status, then open a slot or set a bounded override.",
+		Next:  "Use /model status, then open a slot or set an override.",
 		Details: []string{
 			"/model status",
-			"/model validate <slot> <provider/model> effort=high transport=auto",
-			"/model set <slot> <provider/model> effort=high ttl=2h reason=why",
-			"/model rollback <slot>",
+			"/model validate <slot> <provider/model> effort=high speed=fast transport=auto",
+			"/model set <slot> <provider/model> effort=high speed=fast reason=why",
 			"/model clear <slot>",
-			"/model history [slot] limit=8",
+			"/model changes [slot] limit=8",
 		},
 		Evidence: []string{
 			"Slots: persona, governor, doctor, child_default",
@@ -285,11 +301,11 @@ func modelSlotTitle(slot string) string {
 	case core.ModelSlotPersona:
 		return "Persona"
 	case core.ModelSlotGovernor:
-		return "Governor"
+		return "Main"
 	case core.ModelSlotDoctor:
-		return "Doctor"
+		return "Health"
 	case core.ModelSlotChildDefault:
-		return "Child default"
+		return "Children"
 	default:
 		return strings.TrimSpace(slot)
 	}

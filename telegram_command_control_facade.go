@@ -189,11 +189,8 @@ func (c telegramCommandControl) ModelSlotStatuses() ([]core.ModelSlotStatus, err
 func (c telegramCommandControl) ValidateModelSlotConfig(cfg core.ModelSlotConfig) core.ModelValidation {
 	return c.controlFacade().ValidateModelSlotConfig(cfg)
 }
-func (c telegramCommandControl) SetModelSlotConfig(cfg core.ModelSlotConfig, actor string, reason string, ttl time.Duration) (core.ModelSlotStatus, error) {
-	return c.controlFacade().SetModelSlotConfig(cfg, actor, reason, ttl)
-}
-func (c telegramCommandControl) RollbackModelSlot(slot string, actor string, reason string) (core.ModelSlotStatus, error) {
-	return c.controlFacade().RollbackModelSlot(slot, actor, reason)
+func (c telegramCommandControl) SetModelSlotConfig(cfg core.ModelSlotConfig, actor string, reason string) (core.ModelSlotStatus, error) {
+	return c.controlFacade().SetModelSlotConfig(cfg, actor, reason)
 }
 func (c telegramCommandControl) ClearModelSlot(slot string, actor string, reason string) (core.ModelSlotStatus, error) {
 	return c.controlFacade().ClearModelSlot(slot, actor, reason)

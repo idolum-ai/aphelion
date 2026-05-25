@@ -10,7 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 57
+const schemaVersion = 58
 
 type SQLiteStore struct {
 	db     *sql.DB
@@ -190,10 +190,9 @@ func (s *SQLiteStore) init() error {
 			slot TEXT NOT NULL,
 			config_json TEXT NOT NULL DEFAULT '{}',
 			previous_config_json TEXT NOT NULL DEFAULT '{}',
-			status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'superseded', 'rolled_back', 'cleared', 'expired')),
+			status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'superseded', 'cleared')),
 			created_by TEXT NOT NULL DEFAULT '',
 			reason TEXT NOT NULL DEFAULT '',
-			expires_at TEXT,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,

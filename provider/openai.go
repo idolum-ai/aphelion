@@ -23,13 +23,14 @@ var _ agent.StreamingProvider = (*OpenAI)(nil)
 var _ agent.StreamingProviderWithOptions = (*OpenAI)(nil)
 
 type OpenAIOptions struct {
-	APIKey     string
-	BaseURL    string
-	Model      string
-	MaxTokens  int
-	Transport  string
-	HTTPClient *http.Client
-	UserAgent  string
+	APIKey      string
+	BaseURL     string
+	Model       string
+	MaxTokens   int
+	Transport   string
+	ServiceTier string
+	HTTPClient  *http.Client
+	UserAgent   string
 }
 
 type OpenAI struct {
@@ -40,6 +41,7 @@ type OpenAI struct {
 	model             string
 	maxTokens         int
 	transport         string
+	serviceTier       string
 	userAgent         string
 }
 
@@ -59,6 +61,12 @@ func NewOpenAI(opts OpenAIOptions) (*OpenAI, error) {
 	default:
 		return nil, fmt.Errorf("openai: unsupported transport %q", opts.Transport)
 	}
+	serviceTier := core.NormalizeModelServiceTier(opts.ServiceTier)
+	if serviceTier == "" && strings.TrimSpace(opts.ServiceTier) != "" &&
+		!strings.EqualFold(strings.TrimSpace(opts.ServiceTier), "standard") &&
+		!strings.EqualFold(strings.TrimSpace(opts.ServiceTier), "default") {
+		return nil, fmt.Errorf("openai: unsupported service tier %q", opts.ServiceTier)
+	}
 	client := opts.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
@@ -75,6 +83,7 @@ func NewOpenAI(opts OpenAIOptions) (*OpenAI, error) {
 		model:             opts.Model,
 		maxTokens:         opts.MaxTokens,
 		transport:         transport,
+		serviceTier:       serviceTier,
 		userAgent:         opts.UserAgent,
 	}, nil
 }

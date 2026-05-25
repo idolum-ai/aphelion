@@ -52,8 +52,7 @@ type commandRouter interface {
 	CurrentEfforts() (persona string, governor string)
 	ModelSlotStatuses() ([]core.ModelSlotStatus, error)
 	ValidateModelSlotConfig(cfg core.ModelSlotConfig) core.ModelValidation
-	SetModelSlotConfig(cfg core.ModelSlotConfig, actor string, reason string, ttl time.Duration) (core.ModelSlotStatus, error)
-	RollbackModelSlot(slot string, actor string, reason string) (core.ModelSlotStatus, error)
+	SetModelSlotConfig(cfg core.ModelSlotConfig, actor string, reason string) (core.ModelSlotStatus, error)
 	ClearModelSlot(slot string, actor string, reason string) (core.ModelSlotStatus, error)
 	ModelSlotHistory(slot string, limit int) ([]session.ModelSlotOverrideRecord, error)
 	RunDurableWizard(ctx context.Context, chatID int64, senderID int64, action string, agentID string, wizardAnswers map[string]any) (string, error)

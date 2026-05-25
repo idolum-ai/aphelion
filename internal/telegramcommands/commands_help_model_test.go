@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/telegram"
@@ -149,7 +148,7 @@ func TestHandleTelegramCommandModelStatus(t *testing.T) {
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if !strings.Contains(sender.inline[0].text, "Governor: openai/gpt-5.5 effort=high") {
+	if !strings.Contains(sender.inline[0].text, "Main: openai/gpt-5.5 effort=high") {
 		t.Fatalf("model status text = %q", sender.inline[0].text)
 	}
 	if !strings.Contains(sender.inline[0].text, "Transport: responses") {
@@ -169,7 +168,7 @@ func TestHandleTelegramCommandModelSetParsesSlotConfig(t *testing.T) {
 		ChatID:    7,
 		SenderID:  1001,
 		MessageID: 22,
-		Text:      "/model set governor anthropic/claude-opus-4.7 effort=max ttl=2h reason=debug swap",
+		Text:      "/model set governor openai/gpt-5.5 effort=max speed=fast reason=debug swap",
 	})
 	if err != nil {
 		t.Fatalf("handleTelegramCommand() err = %v", err)
@@ -180,17 +179,42 @@ func TestHandleTelegramCommandModelSetParsesSlotConfig(t *testing.T) {
 	if router.setModelSlotInput.Slot != core.ModelSlotGovernor {
 		t.Fatalf("slot = %q, want governor", router.setModelSlotInput.Slot)
 	}
-	if router.setModelSlotInput.Provider != core.ModelProviderAnthropic || router.setModelSlotInput.Model != "claude-opus-4.7" {
+	if router.setModelSlotInput.Provider != core.ModelProviderOpenAI || router.setModelSlotInput.Model != "gpt-5.5" {
 		t.Fatalf("provider/model = %s/%s", router.setModelSlotInput.Provider, router.setModelSlotInput.Model)
 	}
 	if router.setModelSlotInput.Effort != "xhigh" {
 		t.Fatalf("effort = %q, want xhigh", router.setModelSlotInput.Effort)
 	}
-	if router.setModelSlotTTL != 2*time.Hour {
-		t.Fatalf("ttl = %s, want 2h", router.setModelSlotTTL)
+	if router.setModelSlotInput.ServiceTier != core.ModelServiceTierPriority {
+		t.Fatalf("service tier = %q, want priority", router.setModelSlotInput.ServiceTier)
 	}
 	if router.setModelSlotReason != "debug swap" {
 		t.Fatalf("reason = %q, want debug swap", router.setModelSlotReason)
+	}
+}
+
+func TestHandleTelegramCommandModelSetRejectsTTL(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: true}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 22,
+		Text:      "/model set governor openai/gpt-5.5 ttl=2h",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.msgs) != 1 || !strings.Contains(sender.msgs[0].Text, "ttl is not a /model option") {
+		t.Fatalf("message = %#v, want ttl rejection", sender.msgs)
+	}
+	if router.setModelSlotInput.Slot != "" {
+		t.Fatalf("setModelSlotInput = %#v, want no mutation", router.setModelSlotInput)
 	}
 }
 
@@ -301,8 +325,8 @@ func TestHandleTelegramCommandCallbackModelSlotDetail(t *testing.T) {
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
 	}
-	if !strings.Contains(sender.editInline[0].text, "Governor") {
-		t.Fatalf("edit text = %q, want Governor detail", sender.editInline[0].text)
+	if !strings.Contains(sender.editInline[0].text, "Main") {
+		t.Fatalf("edit text = %q, want Main detail", sender.editInline[0].text)
 	}
 	if len(sender.editInline[0].rows) < 3 {
 		t.Fatalf("rows = %#v, want slot controls", sender.editInline[0].rows)
@@ -352,15 +376,60 @@ func TestHandleTelegramCommandCallbackModelEffortSetsSlot(t *testing.T) {
 	if router.setModelSlotActor != "telegram:1001" {
 		t.Fatalf("actor = %q, want telegram:1001", router.setModelSlotActor)
 	}
-	if router.setModelSlotTTL != modelButtonOverrideTTL {
-		t.Fatalf("ttl = %s, want %s", router.setModelSlotTTL, modelButtonOverrideTTL)
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+}
+
+func TestHandleTelegramCommandCallbackModelSpeedSetsOpenAIServiceTier(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		modelStatuses: []core.ModelSlotStatus{{
+			Slot: core.ModelSlotGovernor,
+			Effective: core.ModelSlotConfig{
+				Slot:      core.ModelSlotGovernor,
+				Provider:  core.ModelProviderOpenAI,
+				Model:     "gpt-5.5",
+				Effort:    "high",
+				Transport: core.ModelTransportAuto,
+			},
+			Source: "override",
+			Validation: core.ModelValidation{
+				Valid:             true,
+				ResolvedTransport: core.ModelTransportOpenAIResponses,
+			},
+		}},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "model-speed",
+		Data: encodeModelCallbackData(modelCallbackSpeed, core.ModelSlotGovernor, "fast"),
+		From: &telegram.User{ID: 1001},
+		Message: &telegram.Message{
+			MessageID: 32,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.setModelSlotInput.ServiceTier != core.ModelServiceTierPriority {
+		t.Fatalf("service tier = %q, want priority", router.setModelSlotInput.ServiceTier)
+	}
+	if router.setModelSlotReason != "telegram button: fast speed" {
+		t.Fatalf("reason = %q, want fast speed", router.setModelSlotReason)
 	}
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
 	}
 }
 
-func TestHandleTelegramCommandCallbackModelPresetDoctorGPTUsesCodexWithTTL(t *testing.T) {
+func TestHandleTelegramCommandCallbackModelPresetDoctorGPTUsesCodex(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
@@ -406,9 +475,6 @@ func TestHandleTelegramCommandCallbackModelPresetDoctorGPTUsesCodexWithTTL(t *te
 	if router.setModelSlotInput.Effort != "xhigh" {
 		t.Fatalf("effort = %q, want inherited xhigh", router.setModelSlotInput.Effort)
 	}
-	if router.setModelSlotTTL != modelButtonOverrideTTL {
-		t.Fatalf("ttl = %s, want %s", router.setModelSlotTTL, modelButtonOverrideTTL)
-	}
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
 	}
@@ -437,6 +503,32 @@ func TestRenderModelSlotRowsHidesMaxForDoctorDirectOpenAI(t *testing.T) {
 	}
 	if slices.Contains(labels, "Max") {
 		t.Fatalf("labels = %#v, should hide Max for direct OpenAI doctor slot", labels)
+	}
+	if !slices.Contains(labels, "Fast") || !slices.Contains(labels, "Standard") {
+		t.Fatalf("labels = %#v, want OpenAI speed controls", labels)
+	}
+}
+
+func TestRenderModelSlotRowsHidesSpeedForNonOpenAI(t *testing.T) {
+	t.Parallel()
+
+	rows := renderModelSlotRows(core.ModelSlotStatus{
+		Slot: core.ModelSlotGovernor,
+		Effective: core.ModelSlotConfig{
+			Slot:     core.ModelSlotGovernor,
+			Provider: core.ModelProviderAnthropic,
+			Model:    "claude-sonnet-4-6",
+			Effort:   "medium",
+		},
+	})
+	var labels []string
+	for _, row := range rows {
+		for _, button := range row {
+			labels = append(labels, button.Text)
+		}
+	}
+	if slices.Contains(labels, "Fast") || slices.Contains(labels, "Standard") {
+		t.Fatalf("labels = %#v, want no speed controls for non-OpenAI slot", labels)
 	}
 }
 

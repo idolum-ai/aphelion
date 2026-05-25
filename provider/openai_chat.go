@@ -22,6 +22,7 @@ func (o *OpenAI) completeChat(ctx context.Context, messages []agent.Message, too
 		MaxCompletionTokens: o.maxTokens,
 		Messages:            toOpenRouterMessages(messages),
 		ReasoningEffort:     openAIReasoningEffort(opts.Reasoning.Effort),
+		ServiceTier:         o.serviceTier,
 	}
 	if defs := toOpenRouterTools(tools); len(defs) > 0 {
 		reqBody.Tools = defs
@@ -73,6 +74,7 @@ func (o *OpenAI) streamChat(ctx context.Context, messages []agent.Message, tools
 		MaxCompletionTokens: o.maxTokens,
 		Messages:            toOpenRouterMessages(messages),
 		ReasoningEffort:     openAIReasoningEffort(opts.Reasoning.Effort),
+		ServiceTier:         o.serviceTier,
 		Stream:              true,
 		StreamOptions:       &openAIStreamOptions{IncludeUsage: true},
 	}
@@ -123,6 +125,7 @@ type openAIRequest struct {
 	Tools               []openRouterTool     `json:"tools,omitempty"`
 	ToolChoice          string               `json:"tool_choice,omitempty"`
 	ReasoningEffort     string               `json:"reasoning_effort,omitempty"`
+	ServiceTier         string               `json:"service_tier,omitempty"`
 	Stream              bool                 `json:"stream,omitempty"`
 	StreamOptions       *openAIStreamOptions `json:"stream_options,omitempty"`
 }

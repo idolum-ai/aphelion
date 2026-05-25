@@ -20,12 +20,11 @@ type ModelSlotOverrideRecord struct {
 	Status         string
 	CreatedBy      string
 	Reason         string
-	ExpiresAt      time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
 
-func (s *SQLiteStore) ActiveModelSlotOverride(slot string, now time.Time) (ModelSlotOverrideRecord, bool, error) {
+func (s *SQLiteStore) ActiveModelSlotOverride(slot string) (ModelSlotOverrideRecord, bool, error) {
 	if s == nil {
 		return ModelSlotOverrideRecord{}, false, fmt.Errorf("store is nil")
 	}
@@ -33,27 +32,21 @@ func (s *SQLiteStore) ActiveModelSlotOverride(slot string, now time.Time) (Model
 	if slot == "" {
 		return ModelSlotOverrideRecord{}, false, fmt.Errorf("model slot is required")
 	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
 	rows, err := s.db.Query(`
-		SELECT id, slot, config_json, previous_config_json, status, created_by, reason, expires_at, created_at, updated_at
+		SELECT id, slot, config_json, previous_config_json, status, created_by, reason, created_at, updated_at
 		FROM model_slot_overrides
 		WHERE slot = ? AND status = 'active'
 		ORDER BY id DESC
-		LIMIT 10
+		LIMIT 1
 	`, slot)
 	if err != nil {
 		return ModelSlotOverrideRecord{}, false, fmt.Errorf("query model slot override: %w", err)
 	}
 	defer rows.Close()
-	for rows.Next() {
+	if rows.Next() {
 		record, err := scanModelSlotOverride(rows)
 		if err != nil {
 			return ModelSlotOverrideRecord{}, false, err
-		}
-		if !record.ExpiresAt.IsZero() && !record.ExpiresAt.After(now.UTC()) {
-			continue
 		}
 		return record, true, nil
 	}
@@ -106,15 +99,14 @@ func (s *SQLiteStore) SetModelSlotOverride(record ModelSlotOverrideRecord) (Mode
 	}
 	res, err := tx.Exec(`
 		INSERT INTO model_slot_overrides (
-			slot, config_json, previous_config_json, status, created_by, reason, expires_at, created_at, updated_at
-		) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?)
+			slot, config_json, previous_config_json, status, created_by, reason, created_at, updated_at
+		) VALUES (?, ?, ?, 'active', ?, ?, ?, ?)
 	`,
 		record.Slot,
 		string(configJSON),
 		string(previousJSON),
 		record.CreatedBy,
 		record.Reason,
-		nullableTimeRFC3339(record.ExpiresAt),
 		record.CreatedAt.Format(time.RFC3339Nano),
 		record.UpdatedAt.Format(time.RFC3339Nano),
 	)
@@ -141,11 +133,11 @@ func (s *SQLiteStore) ClearModelSlotOverride(slot string, status string, now tim
 		return ModelSlotOverrideRecord{}, false, fmt.Errorf("model slot is required")
 	}
 	switch strings.TrimSpace(status) {
-	case "cleared", "rolled_back", "expired":
+	case "cleared":
 	default:
 		status = "cleared"
 	}
-	active, ok, err := s.ActiveModelSlotOverride(slot, now)
+	active, ok, err := s.ActiveModelSlotOverride(slot)
 	if err != nil || !ok {
 		return ModelSlotOverrideRecord{}, ok, err
 	}
@@ -164,57 +156,6 @@ func (s *SQLiteStore) ClearModelSlotOverride(slot string, status string, now tim
 	return active, true, nil
 }
 
-func (s *SQLiteStore) ExpireModelSlotOverrides(now time.Time) ([]ModelSlotOverrideRecord, error) {
-	if s == nil {
-		return nil, fmt.Errorf("store is nil")
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	rows, err := s.db.Query(`
-		SELECT id, slot, config_json, previous_config_json, status, created_by, reason, expires_at, created_at, updated_at
-		FROM model_slot_overrides
-		WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at != '' AND expires_at <= ?
-		ORDER BY id ASC
-	`, now.UTC().Format(time.RFC3339Nano))
-	if err != nil {
-		return nil, fmt.Errorf("query expired model slot overrides: %w", err)
-	}
-	var expired []ModelSlotOverrideRecord
-	for rows.Next() {
-		record, err := scanModelSlotOverride(rows)
-		if err != nil {
-			rows.Close()
-			return nil, err
-		}
-		expired = append(expired, record)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, fmt.Errorf("iterate expired model slot overrides: %w", err)
-	}
-	rows.Close()
-	if len(expired) == 0 {
-		return nil, nil
-	}
-	args := make([]any, 0, len(expired)+1)
-	placeholders := make([]string, 0, len(expired))
-	for _, record := range expired {
-		placeholders = append(placeholders, "?")
-		args = append(args, record.ID)
-	}
-	query := fmt.Sprintf(`
-		UPDATE model_slot_overrides
-		SET status = 'expired', updated_at = ?
-		WHERE id IN (%s) AND status = 'active'
-	`, strings.Join(placeholders, ","))
-	args = append([]any{now.UTC().Format(time.RFC3339Nano)}, args...)
-	if _, err := s.db.Exec(query, args...); err != nil {
-		return nil, fmt.Errorf("mark model slot overrides expired: %w", err)
-	}
-	return expired, nil
-}
-
 func (s *SQLiteStore) ModelSlotOverrideHistory(slot string, limit int) ([]ModelSlotOverrideRecord, error) {
 	if s == nil {
 		return nil, fmt.Errorf("store is nil")
@@ -229,14 +170,14 @@ func (s *SQLiteStore) ModelSlotOverrideHistory(slot string, limit int) ([]ModelS
 	)
 	if slot == "" {
 		rows, err = s.db.Query(`
-			SELECT id, slot, config_json, previous_config_json, status, created_by, reason, expires_at, created_at, updated_at
+			SELECT id, slot, config_json, previous_config_json, status, created_by, reason, created_at, updated_at
 			FROM model_slot_overrides
 			ORDER BY id DESC
 			LIMIT ?
 		`, limit)
 	} else {
 		rows, err = s.db.Query(`
-			SELECT id, slot, config_json, previous_config_json, status, created_by, reason, expires_at, created_at, updated_at
+			SELECT id, slot, config_json, previous_config_json, status, created_by, reason, created_at, updated_at
 			FROM model_slot_overrides
 			WHERE slot = ?
 			ORDER BY id DESC
@@ -266,7 +207,6 @@ func scanModelSlotOverride(rows interface {
 }) (ModelSlotOverrideRecord, error) {
 	var record ModelSlotOverrideRecord
 	var configRaw, previousRaw string
-	var expiresRaw sql.NullString
 	var createdRaw, updatedRaw string
 	if err := rows.Scan(
 		&record.ID,
@@ -276,7 +216,6 @@ func scanModelSlotOverride(rows interface {
 		&record.Status,
 		&record.CreatedBy,
 		&record.Reason,
-		&expiresRaw,
 		&createdRaw,
 		&updatedRaw,
 	); err != nil {
@@ -287,13 +226,6 @@ func scanModelSlotOverride(rows interface {
 	}
 	if err := json.Unmarshal([]byte(firstNonEmptyModelSlot(previousRaw, "{}")), &record.PreviousConfig); err != nil {
 		return ModelSlotOverrideRecord{}, fmt.Errorf("decode previous model slot config: %w", err)
-	}
-	if expiresRaw.Valid && strings.TrimSpace(expiresRaw.String) != "" {
-		expiresAt, err := parseSQLiteTime(expiresRaw.String)
-		if err != nil {
-			return ModelSlotOverrideRecord{}, fmt.Errorf("parse model slot expires_at: %w", err)
-		}
-		record.ExpiresAt = expiresAt
 	}
 	createdAt, err := parseSQLiteTime(createdRaw)
 	if err != nil {

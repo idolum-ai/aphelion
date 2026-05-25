@@ -43,7 +43,7 @@ func TestModelSlotOverrideRoundTripAndSupersede(t *testing.T) {
 		t.Fatalf("SetModelSlotOverride(second) err = %v", err)
 	}
 
-	active, ok, err := store.ActiveModelSlotOverride(core.ModelSlotGovernor, now.Add(2*time.Second))
+	active, ok, err := store.ActiveModelSlotOverride(core.ModelSlotGovernor)
 	if err != nil {
 		t.Fatalf("ActiveModelSlotOverride() err = %v", err)
 	}
@@ -62,7 +62,7 @@ func TestModelSlotOverrideRoundTripAndSupersede(t *testing.T) {
 	}
 }
 
-func TestExpireModelSlotOverrides(t *testing.T) {
+func TestModelSlotOverridesDoNotExpire(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSQLiteStore(t)
@@ -73,22 +73,16 @@ func TestExpireModelSlotOverrides(t *testing.T) {
 		Slot:      core.ModelSlotGovernor,
 		Config:    core.ModelSlotConfig{Slot: core.ModelSlotGovernor, Provider: core.ModelProviderOpenAI, Model: "gpt-5.5", Effort: "high", Transport: "auto"},
 		CreatedBy: "telegram:1001",
-		ExpiresAt: now.Add(-time.Second),
 		CreatedAt: now.Add(-time.Hour),
 	}); err != nil {
 		t.Fatalf("SetModelSlotOverride() err = %v", err)
 	}
 
-	expired, err := store.ExpireModelSlotOverrides(now)
+	active, ok, err := store.ActiveModelSlotOverride(core.ModelSlotGovernor)
 	if err != nil {
-		t.Fatalf("ExpireModelSlotOverrides() err = %v", err)
-	}
-	if len(expired) != 1 || expired[0].Slot != core.ModelSlotGovernor {
-		t.Fatalf("expired = %#v, want governor override", expired)
-	}
-	if _, ok, err := store.ActiveModelSlotOverride(core.ModelSlotGovernor, now); err != nil {
 		t.Fatalf("ActiveModelSlotOverride() err = %v", err)
-	} else if ok {
-		t.Fatal("ActiveModelSlotOverride() ok = true, want expired override hidden")
+	}
+	if !ok || active.Config.Model != "gpt-5.5" {
+		t.Fatalf("active = %#v ok=%t, want persistent override", active, ok)
 	}
 }

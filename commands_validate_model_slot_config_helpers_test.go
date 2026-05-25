@@ -7,7 +7,6 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 	"strings"
-	"time"
 )
 
 func (s *stubCommandRouter) ValidateModelSlotConfig(cfg core.ModelSlotConfig) core.ModelValidation {
@@ -18,11 +17,10 @@ func (s *stubCommandRouter) ValidateModelSlotConfig(cfg core.ModelSlotConfig) co
 	return core.ModelValidation{Valid: true, Config: core.NormalizeModelSlotConfig(cfg), ResolvedTransport: core.ModelTransportAnthropicMessages}
 }
 
-func (s *stubCommandRouter) SetModelSlotConfig(cfg core.ModelSlotConfig, actor string, reason string, ttl time.Duration) (core.ModelSlotStatus, error) {
+func (s *stubCommandRouter) SetModelSlotConfig(cfg core.ModelSlotConfig, actor string, reason string) (core.ModelSlotStatus, error) {
 	s.setModelSlotInput = cfg
 	s.setModelSlotActor = actor
 	s.setModelSlotReason = reason
-	s.setModelSlotTTL = ttl
 	if s.setModelSlotErr != nil {
 		return core.ModelSlotStatus{}, s.setModelSlotErr
 	}
@@ -40,16 +38,6 @@ func (s *stubCommandRouter) SetModelSlotConfig(cfg core.ModelSlotConfig, actor s
 			ResolvedTransport: core.ResolveModelTransport(normalized, core.ModelSlotUsesTools(normalized.Slot)),
 		},
 	}, nil
-}
-
-func (s *stubCommandRouter) RollbackModelSlot(slot string, actor string, reason string) (core.ModelSlotStatus, error) {
-	s.rollbackModelSlotInput = slot
-	s.rollbackModelSlotActor = actor
-	s.rollbackModelSlotReason = reason
-	if s.rollbackModelSlotErr != nil {
-		return core.ModelSlotStatus{}, s.rollbackModelSlotErr
-	}
-	return s.rollbackModelSlotReturn, nil
 }
 
 func (s *stubCommandRouter) ClearModelSlot(slot string, actor string, reason string) (core.ModelSlotStatus, error) {

@@ -565,12 +565,23 @@ Default behavior should set `detach_pending_on_restart` to enabled.
 Admin-only model slot surface.
 
 The command should show current model routing and provide inline controls for
-slot-scoped model and effort choices when the configured provider surface allows
-them.
+slot-scoped model, thinking, and speed choices when the configured provider
+surface allows them.
 
-Selection should persist as runtime recipe state. Face model selection should
-affect future face proposal/render calls, and governor effort selection should
-affect interactive/recovery turns without changing heartbeat/cron defaults.
+The surface should stay small and role-shaped:
+
+- `Persona`: face proposal/render work
+- `Main`: interactive and recovery governor work
+- `Health`: diagnostic work
+- `Children`: default durable-child bootstrap work
+
+Slot overrides persist until changed or cleared. Clearing a slot returns it to
+the configured default. Runtime overrides should not mutate recipe files,
+constitutional files, or the base config on disk.
+
+OpenAI slots may expose `speed=fast`, which maps to the provider's priority
+service tier. Standard speed omits a service tier. Non-OpenAI slots should not
+show speed controls or accept fast mode.
 
 ## Outbound Delivery
 

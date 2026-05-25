@@ -5,7 +5,6 @@ package main
 import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
-	"time"
 )
 
 type stubCommandRouter struct {
@@ -72,14 +71,8 @@ type stubCommandRouter struct {
 	setModelSlotInput            core.ModelSlotConfig
 	setModelSlotActor            string
 	setModelSlotReason           string
-	setModelSlotTTL              time.Duration
 	setModelSlotReturn           core.ModelSlotStatus
 	setModelSlotErr              error
-	rollbackModelSlotInput       string
-	rollbackModelSlotActor       string
-	rollbackModelSlotReason      string
-	rollbackModelSlotReturn      core.ModelSlotStatus
-	rollbackModelSlotErr         error
 	clearModelSlotInput          string
 	clearModelSlotActor          string
 	clearModelSlotReason         string

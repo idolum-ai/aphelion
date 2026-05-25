@@ -23,6 +23,7 @@ const schemaVersion53 = 53
 const schemaVersion54 = 54
 const schemaVersion55 = 55
 const schemaVersion56 = 56
+const schemaVersion57 = 57
 
 func existingUserTableCount(tx *sql.Tx) (int, error) {
 	var count int
@@ -49,7 +50,7 @@ func validateCurrentSchemaVersion(tx *sql.Tx, existingTables int) (int, error) {
 		return 0, fmt.Errorf("unsupported unversioned database schema; reinstall from a clean current state")
 	}
 	if currentVersion < schemaVersion {
-		if currentVersion == schemaVersion43 || currentVersion == schemaVersion44 || currentVersion == schemaVersion45 || currentVersion == schemaVersion46 || currentVersion == schemaVersion47 || currentVersion == schemaVersion48 || currentVersion == schemaVersion49 || currentVersion == schemaVersion50 || currentVersion == schemaVersion51 || currentVersion == schemaVersion52 || currentVersion == schemaVersion53 || currentVersion == schemaVersion54 || currentVersion == schemaVersion55 || currentVersion == schemaVersion56 {
+		if currentVersion == schemaVersion43 || currentVersion == schemaVersion44 || currentVersion == schemaVersion45 || currentVersion == schemaVersion46 || currentVersion == schemaVersion47 || currentVersion == schemaVersion48 || currentVersion == schemaVersion49 || currentVersion == schemaVersion50 || currentVersion == schemaVersion51 || currentVersion == schemaVersion52 || currentVersion == schemaVersion53 || currentVersion == schemaVersion54 || currentVersion == schemaVersion55 || currentVersion == schemaVersion56 || currentVersion == schemaVersion57 {
 			return currentVersion, nil
 		}
 		return 0, fmt.Errorf("unsupported database schema version %d (current schema version is %d); reinstall from a clean current state", currentVersion, schemaVersion)
@@ -181,6 +182,15 @@ func migrateCurrentSchemaVersion(tx *sql.Tx, currentVersion int) (int, error) {
 	}
 	if version == schemaVersion56 {
 		if err := migrateSchemaV56ToV57(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion57); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion57, err)
+		}
+		version = schemaVersion57
+	}
+	if version == schemaVersion57 {
+		if err := migrateSchemaV57ToV58(tx); err != nil {
 			return 0, err
 		}
 		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion); err != nil {
@@ -886,6 +896,59 @@ func ensureTelegramThreadPromotionReviewColumns(tx *sql.Tx) error {
 func migrateSchemaV56ToV57(tx *sql.Tx) error {
 	if err := ensureTelegramThreadPromotionHandoffTables(tx); err != nil {
 		return fmt.Errorf("migrate schema v56 to v57 ensure telegram thread promotion review columns: %w", err)
+	}
+	return nil
+}
+
+func migrateSchemaV57ToV58(tx *sql.Tx) error {
+	exists, err := schemaTableExists(tx, "model_slot_overrides")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	hasExpiresAt, err := schemaColumnExists(tx, "model_slot_overrides", "expires_at")
+	if err != nil {
+		return err
+	}
+	if !hasExpiresAt {
+		return nil
+	}
+	for _, stmt := range []string{
+		`DROP INDEX IF EXISTS idx_model_slot_overrides_slot_status`,
+		`ALTER TABLE model_slot_overrides RENAME TO model_slot_overrides_v57`,
+		`CREATE TABLE model_slot_overrides (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			slot TEXT NOT NULL,
+			config_json TEXT NOT NULL DEFAULT '{}',
+			previous_config_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'superseded', 'cleared')),
+			created_by TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO model_slot_overrides (
+			id, slot, config_json, previous_config_json, status, created_by, reason, created_at, updated_at
+		)
+		SELECT
+			id,
+			slot,
+			config_json,
+			previous_config_json,
+			CASE status WHEN 'expired' THEN 'cleared' WHEN 'rolled_back' THEN 'cleared' ELSE status END,
+			created_by,
+			reason,
+			created_at,
+			updated_at
+		FROM model_slot_overrides_v57`,
+		`DROP TABLE model_slot_overrides_v57`,
+		`CREATE INDEX IF NOT EXISTS idx_model_slot_overrides_slot_status ON model_slot_overrides(slot, status, id DESC)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("migrate schema v57 to v58 model slot overrides: %w", err)
+		}
 	}
 	return nil
 }

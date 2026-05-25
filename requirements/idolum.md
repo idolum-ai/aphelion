@@ -175,7 +175,9 @@ The primary Telegram control is the admin-only `/model` surface.
 
 This is not yet a general face-profile system. It is still a hardcoded application recipe.
 
-Model selection should affect future face proposal/render calls only. It should not mutate constitutional files or the base config on disk.
+Model selection should affect future face proposal/render calls only. Runtime
+slot overrides persist until changed or cleared, and should not mutate runtime
+recipe files, constitutional files, or the base config on disk.
 
 ## Config Surface
 

@@ -25,6 +25,7 @@ func (o *OpenAI) completeResponses(ctx context.Context, messages []agent.Message
 		MaxOutputTokens: o.maxTokens,
 		Reasoning:       openAIResponsesReasoning(opts.Reasoning),
 		Text:            openAIResponsesText(opts.Verbosity),
+		ServiceTier:     o.serviceTier,
 		Store:           boolPtr(false),
 	}
 	if defs := toOpenAIResponsesTools(tools); len(defs) > 0 {
@@ -80,6 +81,7 @@ func (o *OpenAI) streamResponses(ctx context.Context, messages []agent.Message, 
 		MaxOutputTokens: o.maxTokens,
 		Reasoning:       openAIResponsesReasoning(opts.Reasoning),
 		Text:            openAIResponsesText(opts.Verbosity),
+		ServiceTier:     o.serviceTier,
 		Stream:          true,
 		Store:           boolPtr(false),
 	}
@@ -147,6 +149,7 @@ type openAIResponsesRequest struct {
 	ParallelToolCalls bool                       `json:"parallel_tool_calls,omitempty"`
 	Reasoning         map[string]any             `json:"reasoning,omitempty"`
 	Text              *openAIResponsesTextConfig `json:"text,omitempty"`
+	ServiceTier       string                     `json:"service_tier,omitempty"`
 	Stream            bool                       `json:"stream,omitempty"`
 	Store             *bool                      `json:"store,omitempty"`
 }

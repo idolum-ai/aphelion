@@ -219,6 +219,11 @@ After either path, check `/health` and `/status`.
 Use `/model` to inspect and change model routing through the admin-only model
 slot controls when the configured provider surface allows it.
 
+The current slots are `Persona`, `Main`, `Health`, and `Children`. Slot changes
+stay active until changed again or cleared; `Clear` returns the slot to the
+configured default. OpenAI slots can also use `Fast`, which requests OpenAI's
+priority service tier. Other providers keep provider-default speed behavior.
+
 ## Read Evidence
 
 Operator panels should show current status, why it matters, the next action,

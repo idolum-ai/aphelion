@@ -31,8 +31,6 @@ const (
 	ExecutionEventModelConfigValidated     = "model.config.validated"
 	ExecutionEventModelConfigChanged       = "model.config.changed"
 	ExecutionEventModelConfigRejected      = "model.config.rejected"
-	ExecutionEventModelConfigRolledBack    = "model.config.rolled_back"
-	ExecutionEventModelConfigExpired       = "model.config.expired"
 
 	ExecutionEventToolStarted               = "tool.started"
 	ExecutionEventToolSucceeded             = "tool.succeeded"

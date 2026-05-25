@@ -5,7 +5,6 @@ package core
 import (
 	"fmt"
 	"strings"
-	"time"
 )
 
 const (
@@ -29,6 +28,8 @@ const (
 	ModelTransportGeminiGenerate    = "gemini_generate_content"
 	ModelTransportOllamaChat        = "ollama_chat"
 	ModelTransportCodex             = "codex"
+
+	ModelServiceTierPriority = "priority"
 )
 
 var modelSlots = []string{
@@ -44,13 +45,14 @@ type ModelFallback struct {
 }
 
 type ModelSlotConfig struct {
-	Slot      string          `json:"slot,omitempty"`
-	Provider  string          `json:"provider,omitempty"`
-	Model     string          `json:"model,omitempty"`
-	Effort    string          `json:"effort,omitempty"`
-	Transport string          `json:"transport,omitempty"`
-	Fallbacks []ModelFallback `json:"fallbacks,omitempty"`
-	Reason    string          `json:"reason,omitempty"`
+	Slot        string          `json:"slot,omitempty"`
+	Provider    string          `json:"provider,omitempty"`
+	Model       string          `json:"model,omitempty"`
+	Effort      string          `json:"effort,omitempty"`
+	Transport   string          `json:"transport,omitempty"`
+	ServiceTier string          `json:"service_tier,omitempty"`
+	Fallbacks   []ModelFallback `json:"fallbacks,omitempty"`
+	Reason      string          `json:"reason,omitempty"`
 }
 
 type ModelSlotStatus struct {
@@ -60,7 +62,6 @@ type ModelSlotStatus struct {
 	OverrideID int64           `json:"override_id,omitempty"`
 	CreatedBy  string          `json:"created_by,omitempty"`
 	Reason     string          `json:"reason,omitempty"`
-	ExpiresAt  time.Time       `json:"expires_at,omitempty"`
 	Validation ModelValidation `json:"validation"`
 	Default    ModelSlotConfig `json:"default"`
 }
@@ -83,6 +84,7 @@ func NormalizeModelSlotConfig(cfg ModelSlotConfig) ModelSlotConfig {
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.Effort = NormalizeModelEffort(cfg.Effort)
 	cfg.Transport = NormalizeModelTransport(cfg.Transport)
+	cfg.ServiceTier = NormalizeModelServiceTier(cfg.ServiceTier)
 	cfg.Reason = strings.TrimSpace(cfg.Reason)
 	if cfg.Transport == "" {
 		cfg.Transport = ModelTransportAuto
@@ -101,6 +103,17 @@ func NormalizeModelSlotConfig(cfg ModelSlotConfig) ModelSlotConfig {
 	}
 	cfg.Fallbacks = fallbacks
 	return cfg
+}
+
+func NormalizeModelServiceTier(serviceTier string) string {
+	switch strings.ToLower(strings.TrimSpace(serviceTier)) {
+	case "", "standard", "default":
+		return ""
+	case "fast", ModelServiceTierPriority:
+		return ModelServiceTierPriority
+	default:
+		return ""
+	}
 }
 
 func NormalizeModelSlot(slot string) string {
@@ -195,6 +208,7 @@ func ParseProviderModel(raw string) (provider string, model string) {
 }
 
 func ValidateModelSlotConfig(cfg ModelSlotConfig, usesTools bool) ModelValidation {
+	rawServiceTier := strings.TrimSpace(cfg.ServiceTier)
 	normalized := NormalizeModelSlotConfig(cfg)
 	result := ModelValidation{Config: normalized}
 	if normalized.Slot == "" {
@@ -213,6 +227,14 @@ func ValidateModelSlotConfig(cfg ModelSlotConfig, usesTools bool) ModelValidatio
 		result.Error = "transport must be auto, responses, chat_completions, anthropic_messages, openrouter_chat, gemini_generate_content, ollama_chat, or codex"
 		return result
 	}
+	if rawServiceTier != "" && normalized.ServiceTier == "" && !isModelServiceTierStandardAlias(rawServiceTier) {
+		result.Error = "speed must be standard or fast"
+		return result
+	}
+	if normalized.ServiceTier != "" && normalized.Provider != ModelProviderOpenAI {
+		result.Error = "fast mode is only available for openai model slots"
+		return result
+	}
 
 	resolved := ResolveModelTransport(normalized, usesTools)
 	if resolved == "" {
@@ -229,6 +251,15 @@ func ValidateModelSlotConfig(cfg ModelSlotConfig, usesTools bool) ModelValidatio
 	}
 	result.Valid = true
 	return result
+}
+
+func isModelServiceTierStandardAlias(serviceTier string) bool {
+	switch strings.ToLower(strings.TrimSpace(serviceTier)) {
+	case "", "standard", "default":
+		return true
+	default:
+		return false
+	}
 }
 
 func ResolveModelTransport(cfg ModelSlotConfig, usesTools bool) string {

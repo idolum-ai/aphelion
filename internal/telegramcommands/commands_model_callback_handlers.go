@@ -63,13 +63,13 @@ func handleModelCallback(ctx context.Context, sender commandCallbackSender, rout
 		text := renderModelSlotDetail(status)
 		rows := renderModelSlotRows(status)
 		return true, sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, clampTelegramModelText(text), "", rows)
-	case modelCallbackHistory:
+	case modelCallbackChanges:
 		records, err := router.ModelSlotHistory(slot, 8)
 		if err != nil {
 			return true, err
 		}
-		text := renderModelSlotHistory(records)
-		rows := renderModelHistoryRows(slot)
+		text := renderModelSlotChanges(records)
+		rows := renderModelChangesRows(slot)
 		return true, sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, clampTelegramModelText(text), "", rows)
 	case modelCallbackClear:
 		status, err := router.ClearModelSlot(slot, actor, "telegram button: clear")
@@ -79,16 +79,16 @@ func handleModelCallback(ctx context.Context, sender commandCallbackSender, rout
 		text := renderModelSlotChange("Cleared", status)
 		rows := renderModelSlotRows(status)
 		return true, sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, clampTelegramModelText(text), "", rows)
-	case modelCallbackRollback:
-		status, err := router.RollbackModelSlot(slot, actor, "telegram button: rollback")
+	case modelCallbackEffort:
+		status, err := setModelSlotEffortFromCallback(router, slot, value, actor)
 		if err != nil {
 			return true, err
 		}
-		text := renderModelSlotChange("Rolled back", status)
+		text := renderModelSlotChange("Updated", status)
 		rows := renderModelSlotRows(status)
 		return true, sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, clampTelegramModelText(text), "", rows)
-	case modelCallbackEffort:
-		status, err := setModelSlotEffortFromCallback(router, slot, value, actor)
+	case modelCallbackSpeed:
+		status, err := setModelSlotSpeedFromCallback(router, slot, value, actor)
 		if err != nil {
 			return true, err
 		}
@@ -119,7 +119,28 @@ func setModelSlotEffortFromCallback(router commandRouter, slot string, effort st
 	if cfg.Effort == "" {
 		return core.ModelSlotStatus{}, fmt.Errorf("unknown effort %q", effort)
 	}
-	return router.SetModelSlotConfig(cfg, actor, "telegram button: effort "+cfg.Effort, modelButtonOverrideTTL)
+	return router.SetModelSlotConfig(cfg, actor, "telegram button: effort "+cfg.Effort)
+}
+
+func setModelSlotSpeedFromCallback(router commandRouter, slot string, speed string, actor string) (core.ModelSlotStatus, error) {
+	status, err := modelSlotStatus(router, slot)
+	if err != nil {
+		return core.ModelSlotStatus{}, err
+	}
+	cfg := status.Effective
+	cfg.Slot = core.NormalizeModelSlot(slot)
+	if core.NormalizeModelProvider(cfg.Provider) != core.ModelProviderOpenAI {
+		return core.ModelSlotStatus{}, fmt.Errorf("fast mode is only available for openai model slots")
+	}
+	cfg.ServiceTier = core.NormalizeModelServiceTier(speed)
+	if cfg.ServiceTier == "" && !isModelServiceTierStandardAlias(speed) {
+		return core.ModelSlotStatus{}, fmt.Errorf("unknown speed %q", speed)
+	}
+	reason := "telegram button: standard speed"
+	if cfg.ServiceTier == core.ModelServiceTierPriority {
+		reason = "telegram button: fast speed"
+	}
+	return router.SetModelSlotConfig(cfg, actor, reason)
 }
 
 func setModelSlotPresetFromCallback(router commandRouter, slot string, preset string, actor string) (core.ModelSlotStatus, error) {
@@ -131,7 +152,7 @@ func setModelSlotPresetFromCallback(router commandRouter, slot string, preset st
 	if err != nil {
 		return core.ModelSlotStatus{}, err
 	}
-	return router.SetModelSlotConfig(cfg, actor, "telegram button: preset "+strings.TrimSpace(preset), modelButtonOverrideTTL)
+	return router.SetModelSlotConfig(cfg, actor, "telegram button: preset "+strings.TrimSpace(preset))
 }
 
 func modelSlotStatus(router commandRouter, slot string) (core.ModelSlotStatus, error) {
@@ -157,6 +178,7 @@ func modelPresetConfig(status core.ModelSlotStatus, preset string) (core.ModelSl
 	cfg.Slot = slot
 	cfg.Fallbacks = nil
 	effort := core.NormalizeModelEffort(cfg.Effort)
+	serviceTier := cfg.ServiceTier
 	switch strings.ToLower(strings.TrimSpace(preset)) {
 	case "sonnet":
 		cfg.Provider = core.ModelProviderAnthropic
@@ -184,6 +206,11 @@ func modelPresetConfig(status core.ModelSlotStatus, preset string) (core.ModelSl
 		return core.ModelSlotConfig{}, fmt.Errorf("unknown model preset %q", preset)
 	}
 	cfg.Effort = effort
+	if cfg.Provider == core.ModelProviderOpenAI {
+		cfg.ServiceTier = serviceTier
+	} else {
+		cfg.ServiceTier = ""
+	}
 	cfg.Transport = core.ModelTransportAuto
 	return core.NormalizeModelSlotConfig(cfg), nil
 }
