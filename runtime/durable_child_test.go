@@ -351,12 +351,16 @@ func TestDurableAgentChildConfigUsesCodexBootstrapWithoutParentCredentials(t *te
 	parent.Sessions.DBPath = filepath.Join(root, "sessions.db")
 	parent.Governor.Backend = "native"
 	parent.Governor.NativeProvider = "anthropic"
+	parent.Governor.Codex.AuthSource = "aphelion"
+	parent.Governor.Codex.AuthPath = "/parent/codex-auth.json"
+	parent.Governor.Codex.CodexHome = "/parent/.codex"
 	parent.Governor.Codex.Model = "gpt-parent-codex"
 	parent.Governor.Codex.ContextWindow = 123456
 	parent.Governor.Codex.StoreResponses = false
-	parent.Governor.Codex.MaxContinuations = 9
-	parent.Governor.Codex.TransportRetries = 4
-	parent.Governor.Codex.ResponseHeaderTimeout = "2m"
+	parent.Governor.Codex.MaxContinuations = 7
+	parent.Governor.Codex.TransportRetries = 0
+	parent.Governor.Codex.ResponseHeaderTimeout = "45s"
+	parent.Governor.Brokerage.MaxRounds = 5
 	parent.Face.Backend = "provider"
 	parent.Providers.Default = "anthropic"
 	parent.Providers.Anthropic.APIKey = "sk-ant-parent"
@@ -403,23 +407,29 @@ func TestDurableAgentChildConfigUsesCodexBootstrapWithoutParentCredentials(t *te
 	if child.Governor.Codex.BaseURL != "https://chatgpt.example.test/backend-api" {
 		t.Fatalf("Governor.Codex.BaseURL = %q, want child codex base url", child.Governor.Codex.BaseURL)
 	}
+	if child.Governor.Codex.AuthPath != "" {
+		t.Fatalf("Governor.Codex.AuthPath = %q, want empty child auth path", child.Governor.Codex.AuthPath)
+	}
 	if child.Governor.Codex.Model != "gpt-parent-codex" {
-		t.Fatalf("Governor.Codex.Model = %q, want parent codex model", child.Governor.Codex.Model)
+		t.Fatalf("Governor.Codex.Model = %q, want inherited parent codex model", child.Governor.Codex.Model)
 	}
 	if child.Governor.Codex.ContextWindow != 123456 {
-		t.Fatalf("Governor.Codex.ContextWindow = %d, want 123456", child.Governor.Codex.ContextWindow)
+		t.Fatalf("Governor.Codex.ContextWindow = %d, want inherited parent context window", child.Governor.Codex.ContextWindow)
 	}
 	if child.Governor.Codex.StoreResponses {
-		t.Fatalf("Governor.Codex.StoreResponses = true, want parent false")
+		t.Fatalf("Governor.Codex.StoreResponses = true, want inherited false")
 	}
-	if child.Governor.Codex.MaxContinuations != 9 {
-		t.Fatalf("Governor.Codex.MaxContinuations = %d, want 9", child.Governor.Codex.MaxContinuations)
+	if child.Governor.Codex.MaxContinuations != 7 {
+		t.Fatalf("Governor.Codex.MaxContinuations = %d, want inherited parent max continuations", child.Governor.Codex.MaxContinuations)
 	}
-	if child.Governor.Codex.TransportRetries != 4 {
-		t.Fatalf("Governor.Codex.TransportRetries = %d, want 4", child.Governor.Codex.TransportRetries)
+	if child.Governor.Codex.TransportRetries != 0 {
+		t.Fatalf("Governor.Codex.TransportRetries = %d, want inherited zero retries", child.Governor.Codex.TransportRetries)
 	}
-	if child.Governor.Codex.ResponseHeaderTimeout != "2m" {
-		t.Fatalf("Governor.Codex.ResponseHeaderTimeout = %q, want 2m", child.Governor.Codex.ResponseHeaderTimeout)
+	if child.Governor.Codex.ResponseHeaderTimeout != "45s" {
+		t.Fatalf("Governor.Codex.ResponseHeaderTimeout = %q, want inherited parent timeout", child.Governor.Codex.ResponseHeaderTimeout)
+	}
+	if child.Governor.Brokerage.MaxRounds != 5 {
+		t.Fatalf("Governor.Brokerage.MaxRounds = %d, want inherited parent brokerage", child.Governor.Brokerage.MaxRounds)
 	}
 	if child.Face.Backend != "floor_fallback" {
 		t.Fatalf("Face.Backend = %q, want floor_fallback", child.Face.Backend)
