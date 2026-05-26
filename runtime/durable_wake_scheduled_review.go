@@ -36,6 +36,9 @@ func newScheduledReviewDurableWakeAdapter() durableWakeIngressAdapter {
 func (scheduledReviewDurableWakeAdapter) Name() string { return scheduledReviewChannelKind }
 
 func (scheduledReviewDurableWakeAdapter) Supports(agent core.DurableAgent) bool {
+	if strings.ToLower(strings.TrimSpace(agent.Status)) != "active" {
+		return false
+	}
 	return strings.TrimSpace(agent.ChannelKind) == scheduledReviewChannelKind && agent.ChannelConfig.ScheduledReviewConfig() != nil
 }
 

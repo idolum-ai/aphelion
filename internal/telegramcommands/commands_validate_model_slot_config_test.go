@@ -92,10 +92,15 @@ func (s *stubCommandRouter) DurableAgentsList(senderID int64) ([]core.DurableAge
 }
 
 func (s *stubCommandRouter) StartDurableAgentConversation(ctx context.Context, chatID int64, senderID int64, agentID string) (string, error) {
+	return s.SendDurableAgentParentMessage(ctx, chatID, senderID, agentID, "Scheduled parent-child check-in from /agents. Share current status, blockers, and concrete next actions.")
+}
+
+func (s *stubCommandRouter) SendDurableAgentParentMessage(ctx context.Context, chatID int64, senderID int64, agentID string, message string) (string, error) {
 	_ = ctx
 	s.startDurableChatID = chatID
 	s.startDurableSenderID = senderID
 	s.startDurableAgentID = agentID
+	s.startDurableMessage = message
 	if s.startDurableErr != nil {
 		return "", s.startDurableErr
 	}
@@ -103,6 +108,53 @@ func (s *stubCommandRouter) StartDurableAgentConversation(ctx context.Context, c
 		return s.startDurableResult, nil
 	}
 	return "Started background conversation with durable agent " + strings.TrimSpace(agentID) + ".", nil
+}
+
+func (s *stubCommandRouter) DurableAgentLifecycleAction(ctx context.Context, chatID int64, senderID int64, agentID string, action string) (string, error) {
+	_ = ctx
+	s.durableLifecycleChatID = chatID
+	s.durableLifecycleSenderID = senderID
+	s.durableLifecycleAgentID = agentID
+	s.durableLifecycleAction = action
+	if s.durableLifecycleErr != nil {
+		return "", s.durableLifecycleErr
+	}
+	if strings.TrimSpace(s.durableLifecycleResult) != "" {
+		return s.durableLifecycleResult, nil
+	}
+	return "action: durable-agent " + strings.TrimSpace(action) + "\nagent_id: " + strings.TrimSpace(agentID), nil
+}
+
+func (s *stubCommandRouter) QueueDurableAgentGather(_ context.Context, msg core.InboundMessage) (string, error) {
+	copied := msg
+	s.agentGatherMsg = &copied
+	if s.agentGatherErr != nil {
+		return "", s.agentGatherErr
+	}
+	if strings.TrimSpace(s.agentGatherResult) != "" {
+		return s.agentGatherResult, nil
+	}
+	return "Agent board analysis queued.", nil
+}
+
+func (s *stubCommandRouter) RecordTelegramAgentCallbackMessage(chatID int64, agentID string, messageID int64, surface string) error {
+	s.agentCallbackChatID = chatID
+	s.agentCallbackAgentID = agentID
+	s.agentCallbackMessageID = messageID
+	s.agentCallbackSurface = surface
+	return s.agentCallbackErr
+}
+
+func (s *stubCommandRouter) TelegramAgentIDForReplyMessage(chatID int64, replyMessageID int64) (string, bool, error) {
+	s.agentReplyChatID = chatID
+	s.agentReplyMessageID = replyMessageID
+	if s.agentReplyErr != nil {
+		return "", false, s.agentReplyErr
+	}
+	if s.agentReplyOK {
+		return s.agentReplyAgentID, true, nil
+	}
+	return "", false, nil
 }
 
 func (s *stubCommandRouter) MissionCommand(ctx context.Context, chatID int64, senderID int64, args string) (string, error) {

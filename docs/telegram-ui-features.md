@@ -41,9 +41,10 @@ Current command surface:
   - Diagnosis launched from a button is durable callback work: the callback is terminally recorded and the diagnosis request is queued on its own replay surface.
   - Admin users get system and durable-agent sections in the expanded trace view.
 - `/agents`
-  - Admin-only durable-agent launcher.
-  - Lists durable agents with compact health cards and inline `Chat` buttons.
-  - Starts a background parent-child conversation kickoff for the selected durable agent.
+  - Admin-only durable-agent board.
+  - Lists current durable agents by default, with `Show Retired` for inspect-only retired children.
+  - Opens detail cards with `Brief`, `Park`, `Resume`, and guarded `Retire` controls where appropriate.
+  - `Gather` queues a read-only main-chat analysis of the agent board; it does not wake, park, resume, or retire children.
 - `/context`
   - Opens a read-only context panel for the current chat or side-thread lane.
   - Shows current lane, operation/plan summary, recent context preview, evidence, and `Writes: none`.
@@ -377,6 +378,41 @@ Behavior:
 - routes the turn as `durable_agent` scoped execution
 - delivers the child reply in the same chat when channel policy allows local reply
 - sender must still be authorized by the child (`allowed_telegram_user_ids` or admin role)
+
+### Durable agent board
+
+`/agents` is the operator board for durable children. It is global to the
+operator chat, not scoped to a side thread. The default view shows non-retired
+agents; the retired view is available for evidence without mixing old children
+into the active board.
+
+Board controls:
+
+- `Refresh`: re-read the current durable-agent projection.
+- `Gather`: queue ordinary main-chat work that analyzes the board as a compact
+  triage note. The request is recorded as durable callback ingress before the
+  turn starts. It is read-only and explicitly asks not to wake children or mutate
+  authority.
+- `Show Retired` / `Show Current`: switch between current and retired views.
+- `Agent N`: open an agent detail card.
+
+Detail controls:
+
+- `Brief`: append a parent-conversation message asking the child for status,
+  then starts a bounded background wake attempt.
+- `Park`: mark the child parked and dormant. Scheduled and poll wakes stop while
+  policy, memory, profile, and audit history remain intact.
+- `Resume`: reactivate a parked or draft child after activation checks pass and
+  profile files are synced.
+- `Retire`: opens a confirmation card first. Confirmation removes the child from
+  active use, marks runtime dormant, revokes active child grants, decommissions
+  remote enrollment, and revokes local Tailnet surface trust when present. It
+  preserves memory, files, parent conversation, and audit records.
+
+Messages created by `/agents` carry a durable Telegram message-to-agent ledger.
+Replying to a ledgered agent card or agent ack sends that reply as a parent
+message to the same child and returns a visible `(agent <id>)` acknowledgement.
+The prefix is presentation; the routing source is the ledger.
 
 ### `/context` controls
 

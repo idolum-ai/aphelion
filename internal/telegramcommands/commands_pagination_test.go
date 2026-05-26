@@ -156,10 +156,10 @@ func TestDurableAgentsCommandPaginatesAgentButtons(t *testing.T) {
 	if got := sender.inline[0].text; !strings.Contains(got, "page 1 of 2") || !strings.Contains(got, "5. child-5") || strings.Contains(got, "child-6") {
 		t.Fatalf("agents text = %q, want first page details", got)
 	}
-	if !commandRowsContain(sender.inline[0].rows, "Chat 5", "agents:start:child-5") ||
-		commandRowsContain(sender.inline[0].rows, "Chat 6", "agents:start:child-6") ||
+	if !commandRowsContain(sender.inline[0].rows, "Agent 5", encodeDurableAgentsDetailCallbackData("child-5", telegramPageViewList, 1)) ||
+		commandRowsContain(sender.inline[0].rows, "Agent 6", encodeDurableAgentsDetailCallbackData("child-6", telegramPageViewList, 1)) ||
 		!commandRowsContain(sender.inline[0].rows, "Next", "page:agents:list:2") {
-		t.Fatalf("agents rows = %#v, want first-page chat buttons and next", sender.inline[0].rows)
+		t.Fatalf("agents rows = %#v, want first-page agent buttons and next", sender.inline[0].rows)
 	}
 }
 

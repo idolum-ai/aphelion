@@ -21,6 +21,7 @@ const (
 
 	telegramPageViewList     = "list"
 	telegramPageViewNonOpen  = "nonopen"
+	telegramPageViewRetired  = "retired"
 	telegramPageViewTrace    = "trace"
 	telegramPageViewSurfaces = "surfaces"
 	telegramPageViewGrants   = "grants"
@@ -81,7 +82,7 @@ func validTelegramPageSurfaceView(surface string, view string) bool {
 	case telegramPageSurfaceThreads:
 		return view == telegramPageViewList || view == telegramPageViewNonOpen
 	case telegramPageSurfaceAgents:
-		return view == telegramPageViewList
+		return view == telegramPageViewList || view == telegramPageViewRetired
 	case telegramPageSurfaceHealth:
 		return view == telegramPageViewTrace
 	case telegramPageSurfaceTailnet:

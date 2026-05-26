@@ -130,6 +130,27 @@ func TestScheduledReviewWakeStagesTranscriptAndQueuesArtifact(t *testing.T) {
 	}
 }
 
+func TestScheduledReviewWakeAdapterSupportsOnlyActiveAgents(t *testing.T) {
+	t.Parallel()
+
+	adapter := scheduledReviewDurableWakeAdapter{}
+	agent := core.DurableAgent{
+		AgentID:       "daily-review",
+		ChannelKind:   scheduledReviewChannelKind,
+		ChannelConfig: testScheduledReviewChannelConfig(),
+		Status:        "active",
+	}
+	if !adapter.Supports(agent) {
+		t.Fatal("Supports(active scheduled review) = false, want true")
+	}
+	for _, status := range []string{"parked", "retired", "draft", ""} {
+		agent.Status = status
+		if adapter.Supports(agent) {
+			t.Fatalf("Supports(status=%q) = true, want false", status)
+		}
+	}
+}
+
 func TestScheduledReviewWakeCanUseDurableAgentScopedExec(t *testing.T) {
 	cfg, store, _, sender := buildRuntimeFixtures(t)
 	provider := &durableWakeExecRequestingProvider{}

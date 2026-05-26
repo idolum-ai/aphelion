@@ -150,8 +150,28 @@ type stubCommandRouter struct {
 	startDurableChatID           int64
 	startDurableSenderID         int64
 	startDurableAgentID          string
+	startDurableMessage          string
 	startDurableResult           string
 	startDurableErr              error
+	durableLifecycleChatID       int64
+	durableLifecycleSenderID     int64
+	durableLifecycleAgentID      string
+	durableLifecycleAction       string
+	durableLifecycleResult       string
+	durableLifecycleErr          error
+	agentGatherMsg               *core.InboundMessage
+	agentGatherResult            string
+	agentGatherErr               error
+	agentCallbackChatID          int64
+	agentCallbackAgentID         string
+	agentCallbackMessageID       int64
+	agentCallbackSurface         string
+	agentCallbackErr             error
+	agentReplyChatID             int64
+	agentReplyMessageID          int64
+	agentReplyAgentID            string
+	agentReplyOK                 bool
+	agentReplyErr                error
 	missionCommandText           string
 	missionCommandErr            error
 	missionCommandChatID         int64

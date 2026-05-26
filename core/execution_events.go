@@ -113,6 +113,7 @@ const (
 	ExecutionEventDurablePolicyApplied      = "durable.policy.applied"
 	ExecutionEventDurablePolicyApplyFailed  = "durable.policy.failed"
 	ExecutionEventDurableParentAck          = "durable.parent.acknowledged"
+	ExecutionEventDurableLifecycleChanged   = "durable.lifecycle.changed"
 	ExecutionEventDurableProvisionStarted   = "durable.provision.started"
 	ExecutionEventDurableProvisionCompleted = "durable.provision.completed"
 	ExecutionEventDurableProvisionFailed    = "durable.provision.failed"

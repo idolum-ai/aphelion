@@ -197,24 +197,27 @@ inspect before editing, keep a current plan, cite file paths and commands,
 validate meaningful changes, report uncertainty, and escalate gated actions.
 The wizard turns those habits into policy, not ambient permission.
 
-## Absorb Review Threads
+## Lifecycle Review Threads
 
-Promotion needs a symmetric return path. If `/threads` can promote a lane into
-`/agents`, `/agents` should be able to absorb a promoted agent back into an
-ordinary conversation lane.
+Promotion does not need a symmetric "absorb agent" command. A durable child is a
+separate governed principal, so returning its knowledge or authority to the
+parent should be explicit review, not a one-button merge. `/agents` owns child
+lifecycle (`Brief`, `Park`, `Resume`, `Retire`) while `/threads` remains the
+place to discuss what, if anything, should be incorporated into parent-facing
+work.
 
 The source thread may no longer exist, may already be absorbed, or may no longer
 be the right place for review. The simpler rule is:
 
-> Absorbing a promoted agent creates a new absorb review thread using the next
-> available lowest visible thread number.
+> Reviewing a child creates or uses an ordinary side thread with bounded child
+> evidence; child lifecycle changes still happen through `/agents`.
 
 That thread is not a continuation of the child's work. It is a parent-facing
 review session whose job is to decide what, if anything, should be incorporated
 into the parent.
 
 ```text
-Thread 1: Absorb Inbox Triage
+Thread 1: Review Inbox Triage
 
 I am reviewing Inbox Triage for possible incorporation.
 
@@ -239,10 +242,10 @@ Keep the receipts workflow and the lesson about sender heuristics,
 but revoke mail access and do not keep the daily wake.
 ```
 
-The runtime should compile the conversation into a typed absorb plan:
+The runtime should compile the conversation into typed parent-facing actions:
 
 ```text
-Absorb plan for Inbox Triage
+Review plan for Inbox Triage
 
 Roll up:
 - outcome summary to Thread 1
@@ -250,18 +253,17 @@ Roll up:
 - artifact index with 4 reports
 - open question about receipts
 
-Teardown:
+Lifecycle:
 - revoke read-only mail grant
-- cancel daily wake
-- archive child as absorbed
+- park or retire the child from `/agents` if the operator confirms it
 
 [Apply] [Edit] [Cancel] [Details]
 ```
 
-The absorb review thread can then be absorbed into the main chat like any other
-side thread after the plan is applied or canceled. The key invariant remains:
-review text is presentation and deliberation; incorporation happens only through
-typed memory candidates, capability disposition records, wake teardown records,
+The review thread can then be absorbed into the main chat like any other side
+thread after the plan is applied or canceled. The key invariant remains: review
+text is presentation and deliberation; incorporation happens only through typed
+memory candidates, capability disposition records, wake/lifecycle records,
 artifact indexes, and child lifecycle state.
 
 ## Proposed Vocabulary
@@ -283,13 +285,14 @@ artifact indexes, and child lifecycle state.
 - **Promoted agent**: the operator-facing `/agents` card created from a thread
   when durable controls become useful. Internally it may be backed by a durable
   thread profile, a durable-agent record, or another backing principal.
-- **Absorb review thread**: a fresh side thread created when a promoted agent is
-  being reintegrated. It gives the parent persona a bounded conversation for
-  choosing memory, policy, artifact, wake, grant, and teardown outcomes.
+- **Lifecycle review thread**: a side thread used to discuss child evidence and
+  parent-facing roll-up choices. It can propose memory, artifact, wake, grant,
+  or lifecycle actions, but `/agents` remains the control surface for parking,
+  resuming, and retiring the child.
 
-The operator should mostly see threads. Backing principals and legacy durable
-agent IDs can remain visible in details, health traces, CLI maintenance, and
-forensic records.
+The operator should mostly see threads. Backing principals and durable-agent IDs
+can remain visible in details, health traces, CLI maintenance, and forensic
+records.
 
 ## Operator Flows
 
@@ -355,18 +358,21 @@ Buttons are projections of typed state. They should not be treated as command
 shortcuts that bypass parsing or authority checks. Callback payloads should carry
 canonical IDs, and every action should re-read current state before mutating it.
 
-When the work should return to parent context, `/agents` should offer `Absorb`:
+When the work should return to parent context, `/agents` should expose
+lifecycle and review controls without pretending the child can be merged back by
+button press:
 
 ```text
 Inbox Triage
 
-[Continue] [Wake] [Access] [Policy] [Absorb]
+[Brief] [Park] [Retire] [Details]
 ```
 
-`Absorb` creates a fresh absorb review thread. The parent can discuss the child
-context there, then apply a typed absorb plan. This is the path for semantic
-incorporation into parent-facing sessions without dumping a child transcript
-into the main chat.
+`Brief` asks the child for a bounded status update. `Park` stops ordinary wakes
+without deleting history. `Retire` requires confirmation and removes the child
+from active use while preserving evidence. If the parent wants to discuss child
+context before incorporating anything, it should do that in an ordinary side
+thread, then apply typed memory, grant, wake, or lifecycle changes explicitly.
 
 ## Attachment Model
 
@@ -384,7 +390,7 @@ attachments:
 | Capability records | Requests, reviews, grants, invocations | canonical |
 | Promotion handoff | Selected context digest, grant set, denied grants, first task, source refs, expected validation | canonical after approval |
 | Execution events | Runtime evidence for wake, delivery, tool use, failure, recovery | canonical |
-| Absorb plan | Roll-up choices, memory candidates, grant disposition, wake teardown, archive action | canonical after approval |
+| Review plan | Roll-up choices, memory candidates, grant disposition, wake/lifecycle disposition, artifact index | canonical after approval |
 
 The important constraint is that text remains presentation. A message like
 "wake every morning" proposes a durable change; it does not become authority
@@ -574,15 +580,14 @@ Suggested initial test set:
 - Remote or isolated execution still needs a hard principal, storage boundary,
   bootstrap ceiling, and control-plane evidence. The operator can see it as a
   thread-backed runtime binding, not as a separate everyday object.
-- Absorbing or closing a durable thread must have explicit semantics for wakes,
-  bindings, pending approvals, capability grants, and remote enrollment.
-- Absorbing a promoted agent should create an absorb review thread by default,
-  using the next available lowest visible thread number.
-- Parent-child reintegration should be conversational before it is executable:
-  discuss first, compile a typed absorb plan, then apply or cancel.
-- Absorb must not silently transfer child capabilities to the parent. Grants
-  should default toward revoke, expire, or mark-stale unless the operator
-  explicitly approves a new parent-scoped grant.
+- Closing a durable thread or retiring a child must have explicit semantics for
+  wakes, bindings, pending approvals, capability grants, and remote enrollment.
+- Parent-child roll-up should be conversational before it is executable:
+  discuss first, compile typed memory/grant/wake/lifecycle actions, then apply
+  or cancel.
+- Retire must not silently transfer child capabilities to the parent. Grants
+  default toward revoke, expire, or mark-stale unless the operator explicitly
+  approves a new parent-scoped grant.
 
 ## Migration Shape
 
@@ -599,18 +604,18 @@ This should not be a flag-day deletion of durable agents. A safer sequence:
    can report actual selected context, grants, denied grants, and first task
    instead of inferring them from chat.
 6. Make `/agents` render promoted durable work as cards with state-derived
-   buttons for continue, wake, access, policy, details, and archive.
+   buttons for brief, park, resume, retire confirmation, and details.
 7. Add a canonical thread-profile/policy surface for local durable threads.
 8. Let new local or scheduled durable work attach to a thread profile before it
    creates any backing durable-agent record.
-9. Add an `Absorb` action to promoted agent cards that creates a fresh absorb
-   review thread with bounded child context and roll-up material.
-10. Add a typed absorb-plan surface for memory candidates, artifact indexes,
-   grant disposition, wake teardown, binding disposition, and child archive
+9. Add a typed review-plan surface for memory candidates, artifact indexes,
+   grant disposition, wake teardown, binding disposition, and child lifecycle
    state.
+10. Keep side-thread absorb as bookkeeping for parent review conversations; do
+   not add an agent absorb shortcut.
 11. Introduce an internal backing-principal link for cases that need isolated
    sandbox identity, capability grants, or Tailnet enrollment.
-12. Project legacy durable-agent records as backing principals attached to
+12. Project existing durable-agent records as backing principals attached to
    operator-visible threads where possible.
 13. Keep durable-agent CLI commands for maintenance and migration until the new
    thread-native surfaces cover the operational need.
@@ -633,8 +638,9 @@ This should not be a flag-day deletion of durable agents. A safer sequence:
   `thread:<id>`, `telegram_thread:<chat>:<id>`, or a backing durable principal?
 - Should a thread profile be allowed without a backing principal, or should every
   durable thread immediately receive a backing principal record?
-- What does `/absorb` mean for a scheduled thread: pause wakes, revoke wakes, or
-  ask the operator?
+- What does `/absorb` mean for a scheduled thread's parent-review lane: leave
+  child wakes unchanged, ask the operator, or require a separate `/agents`
+  lifecycle action?
 - Should `Promote` close the source thread, leave it open as an alias, or ask
   after the promoted agent is created?
 - What is the exact schema for a promotion handoff artifact, and which fields
@@ -645,17 +651,17 @@ This should not be a flag-day deletion of durable agents. A safer sequence:
   resources the child is actually allowed to keep?
 - Should `/agents` replace `/threads` for promoted work entirely, or should
   `/threads` show promoted backlinks in a compact read-only form?
-- Should absorb review threads always use the next available lowest visible
-  thread number, or should there be a setting for main-chat review instead?
-- What is the exact schema boundary between an absorb review conversation and
-  the typed absorb plan it proposes?
+- Should lifecycle review conversations use a side thread by default, or should
+  the main chat be allowed for small child roll-ups?
+- What is the exact schema boundary between a lifecycle review conversation and
+  the typed review plan it proposes?
 - Which roll-up candidates should be generated automatically, and which should
   only appear after the parent asks for them?
-- What child states block absorb entirely, such as active remote execution,
+- What child states block retirement, such as active remote execution,
   unacknowledged control-plane enrollment, or destructive pending approvals?
 - How should group-bound threads be represented when the Telegram group itself
   has a durable transcript and independent reply policy?
-- Which legacy durable-agent fields belong directly on thread profile/policy,
+- Which existing durable-agent fields belong directly on thread profile/policy,
   and which should remain only on backing runtime records?
 
 ## Review Criteria
@@ -669,10 +675,10 @@ The direction is working if:
   controls;
 - `/agents` becomes a state-driven durable work board rather than a setup-heavy
   registry;
-- absorbing a promoted agent starts a focused parent review thread instead of
+- reviewing a promoted agent starts a focused parent review thread instead of
   silently merging child context;
-- the absorb review conversation compiles to an explicit plan for memory,
-  artifacts, grants, wakes, bindings, and archive state;
+- the review conversation compiles to an explicit plan for memory, artifacts,
+  grants, wakes, bindings, and lifecycle state;
 - `/status` and `/health trace` can point from visible thread to typed authority
   and execution evidence in one hop;
 - ordinary threads do not inherit ambient capability;

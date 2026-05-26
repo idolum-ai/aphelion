@@ -57,6 +57,11 @@ func TestDurableAgentToolDefinitionIncludesPolicyPatchSurface(t *testing.T) {
 	if !strings.Contains(durableDefJSON, `"policy_overrides"`) {
 		t.Fatalf("durable_agent definition missing policy_overrides field: %s", durableDefJSON)
 	}
+	for _, action := range []string{`"park"`, `"resume"`, `"retire"`} {
+		if !strings.Contains(durableDefJSON, action) {
+			t.Fatalf("durable_agent definition missing lifecycle action %s: %s", action, durableDefJSON)
+		}
+	}
 	if !strings.Contains(durableDefJSON, `"mode"`) || !strings.Contains(durableDefJSON, `"sketch"`) {
 		t.Fatalf("durable_agent definition missing lightweight mode surface: %s", durableDefJSON)
 	}

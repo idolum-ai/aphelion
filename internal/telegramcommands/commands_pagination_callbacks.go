@@ -25,7 +25,7 @@ func handleTelegramPageCallback(ctx context.Context, sender commandCallbackSende
 	case telegramPageSurfaceThreads:
 		return handleTelegramThreadsPageCallback(ctx, sender, router, cb, chatID, messageID, req.View, req.Page)
 	case telegramPageSurfaceAgents:
-		return handleDurableAgentsPageCallback(ctx, sender, router, cb, chatID, messageID, senderID, req.Page)
+		return handleDurableAgentsPageCallback(ctx, sender, router, cb, chatID, messageID, senderID, req.View, req.Page)
 	case telegramPageSurfaceHealth:
 		return handleHealthTracePageCallback(ctx, sender, router, cb, chatID, messageID, senderID, req.Page)
 	case telegramPageSurfaceTailnet:
@@ -63,7 +63,7 @@ func handleTelegramThreadsPageCallback(ctx context.Context, sender commandCallba
 	return true, nil
 }
 
-func handleDurableAgentsPageCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, chatID int64, messageID int64, senderID int64, page int) (bool, error) {
+func handleDurableAgentsPageCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, chatID int64, messageID int64, senderID int64, view string, page int) (bool, error) {
 	if !router.CanRestart(senderID) {
 		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Durable-agent controls are admin only."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 			return true, err
@@ -77,8 +77,9 @@ func handleDurableAgentsPageCallback(ctx context.Context, sender commandCallback
 	if err != nil {
 		return true, err
 	}
-	rendered, rows := renderDurableAgentsCommandPage(agents, page)
+	rendered, rows := renderDurableAgentsCommandViewPage(agents, view, page)
 	if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, rendered, "", rows); err != nil {
+		recordTelegramCallbackError(router, chatID, "agents.page.edit", err)
 		return true, err
 	}
 	return true, nil

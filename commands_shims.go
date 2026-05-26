@@ -57,6 +57,9 @@ func resolveTelegramThreadPrefix(ctx context.Context, sender commandSender, rout
 func resolveTelegramThreadReply(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (core.InboundMessage, bool, error) {
 	return telegramcommands.ResolveTelegramThreadReply(ctx, sender, router, msg)
 }
+func resolveTelegramAgentReply(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {
+	return telegramcommands.ResolveTelegramAgentReply(ctx, sender, router, msg)
+}
 func handleTelegramThreadCommand(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage, command string) (bool, error) {
 	return telegramcommands.HandleTelegramThreadCommand(ctx, sender, router, msg, command)
 }

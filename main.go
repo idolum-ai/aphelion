@@ -355,6 +355,11 @@ func run() error {
 		} else {
 			msg = routed
 		}
+		if handled, err := resolveTelegramAgentReply(parent, tgOutbound, commandControl, msg); err != nil {
+			return err
+		} else if handled {
+			return nil
+		}
 		if busyHandled, busyErr := decisionHandler.HandleBusyMessage(parent, msg); busyErr != nil {
 			return busyErr
 		} else if busyHandled {

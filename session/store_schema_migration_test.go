@@ -1015,6 +1015,52 @@ func TestMigratesSchemaV57ToV58ModelSlotOverrides(t *testing.T) {
 	}
 }
 
+func TestMigratesSchemaV58ToV59TelegramAgentMessageLedger(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v58.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v58 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version(version INTEGER NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+		`INSERT INTO schema_version(version) VALUES (58)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v58 fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v58 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v58) err = %v", err)
+	}
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteTable(t, store.db, "telegram_agent_messages")
+	assertSQLiteIndex(t, store.db, "idx_telegram_agent_messages_agent")
+	if err := store.RecordTelegramAgentMessage(1001, 7007, "ops-child", "agent_detail", time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("RecordTelegramAgentMessage() after v59 migration err = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close migrated v58 store: %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen v58 migrated) err = %v", err)
+	}
+	defer reopened.Close()
+	assertSchemaVersion(t, reopened.db, schemaVersion)
+	agentID, ok, err := reopened.TelegramAgentIDForReplyMessage(1001, 7007)
+	if err != nil || !ok || agentID != "ops-child" {
+		t.Fatalf("TelegramAgentIDForReplyMessage(reopen) = %q ok=%t err=%v, want ops-child", agentID, ok, err)
+	}
+}
+
 func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {
 	t.Helper()
 	rows, err := db.Query(`PRAGMA table_info(` + tableName + `)`)

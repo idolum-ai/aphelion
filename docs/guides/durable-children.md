@@ -33,7 +33,9 @@ Every child setup should leave the same trail:
 ```
 
 From Telegram, use `/agents`, `/status`, and `/health` to check the same parent
-ledger from the operator channel.
+ledger from the operator channel. `/agents` is the lifecycle board: inspect the
+child, request a bounded `Brief`, `Park` it, `Resume` it after activation checks,
+or confirm `Retire` when it should leave active use.
 
 ## Daily Review Recipe
 
@@ -281,7 +283,8 @@ Example raw SSH invocation:
 
 ## Operate
 
-- `/agents`: inspect children and open parent-child conversation controls.
+- `/agents`: inspect children, request a bounded brief, park/resume lifecycle,
+  confirm retirement, and gather read-only board triage.
 - `agent:<agent_id> <message>`: route one Telegram DM message to an active
   durable Telegram child.
 - `/status`: inspect active work and durable aggregate health.

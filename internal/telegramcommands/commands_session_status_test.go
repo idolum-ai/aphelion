@@ -220,26 +220,30 @@ func TestHandleTelegramCommandAgentsShowsButtons(t *testing.T) {
 	if got := sender.inline[0].text; !strings.Contains(got, "Durable Agents") {
 		t.Fatalf("agents text = %q, want Durable Agents heading", got)
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "ops-child (telegram_dm | active | dormant | tailnet:tsnet)") {
+	if got := sender.inline[0].text; !strings.Contains(got, "ops-child (telegram_dm | active | dormant); tailnet:tsnet") {
 		t.Fatalf("agents text = %q, want tailnet declaration marker", got)
 	}
-	foundStart := false
+	foundAgent := false
 	foundRefresh := false
+	foundGather := false
 	for _, row := range sender.inline[0].rows {
 		for _, button := range row {
 			if words := strings.Fields(button.Text); len(words) > 2 {
 				t.Fatalf("button label %q has %d words, want at most 2", button.Text, len(words))
 			}
-			if strings.Contains(button.CallbackData, "agents:start:idolum-daily-review") {
-				foundStart = true
+			if button.Text == "Agent 1" && button.CallbackData == encodeDurableAgentsDetailCallbackData("idolum-daily-review", telegramPageViewList, 1) {
+				foundAgent = true
 			}
-			if button.CallbackData == "agents:refresh" {
+			if button.Text == "Refresh" {
 				foundRefresh = true
+			}
+			if button.Text == "Gather" {
+				foundGather = true
 			}
 		}
 	}
-	if !foundStart || !foundRefresh {
-		t.Fatalf("agents rows = %#v, want start and refresh callbacks", sender.inline[0].rows)
+	if !foundAgent || !foundRefresh || !foundGather {
+		t.Fatalf("agents rows = %#v, want agent/detail, gather, and refresh callbacks", sender.inline[0].rows)
 	}
 }
 
@@ -487,11 +491,17 @@ func TestHandleTelegramCommandCallbackAgentsStartInvokesBackgroundConversation(t
 	router := &stubCommandRouter{
 		canRestart:         true,
 		startDurableResult: "Started background conversation with durable agent idolum-daily-review (wake requested).",
+		durableAgentsList: []core.DurableAgentStatusSnapshot{{
+			AgentID:     "idolum-daily-review",
+			ChannelKind: "scheduled_review",
+			Status:      "active",
+			Health:      "ok",
+		}},
 	}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
 		ID:   "cb-agents-start",
 		From: &telegram.User{ID: 1001, Username: "admin"},
-		Data: "agents:start:idolum-daily-review",
+		Data: encodeDurableAgentsActionCallbackData(durableAgentsCallbackBrief, "idolum-daily-review", telegramPageViewList, 1),
 		Message: &telegram.Message{
 			MessageID: 88,
 			Chat:      &telegram.Chat{ID: 7, Type: "private"},

@@ -188,7 +188,13 @@ that side thread; they do not approve default-chat work or another thread's work
 
 `/threads` shows open side threads by default. Use the **Show absorbed** button, or `/threads nonopen`, to inspect absorbed/closed threads without mixing them into the default work view. Open side threads use reusable display slots, so when slot 2 is closed the next new side thread can become thread 2 again. Closed threads keep their durable internal thread id and receive an archived display name like `2-2026-05-17`, with `-1`, `-2`, etc. added if that archived name is already taken on the server-local date. Admins can audit or repair old rows with `telegram-threads sanitize` (`--apply` to mutate; dry-run by default).
 
-Use `/agents` to inspect durable agents and open chat controls.
+Use `/agents` to inspect durable children as governed work surfaces. Open an
+agent card before acting: `Brief` asks for a bounded child status check, `Park`
+pauses scheduled or poll wakes without deleting history, `Resume` reactivates a
+parked child after checks, and `Retire` removes a child from active use only
+after a confirmation card. `Gather` queues a read-only main-chat board analysis
+and does not wake children or change authority. Replies to `/agents` cards route
+back to the ledgered child and show an `(agent <id>)` prefix for attribution.
 
 Use `/context` to inspect the current chat/thread context that is shaping replies.
 It is read-only; `Ask Me` queues clarification questions without writing memory.
