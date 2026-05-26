@@ -132,8 +132,14 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 		if renderErr != nil {
 			return true, renderErr
 		}
-		if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID)); err != nil {
+		messageID, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID))
+		if err != nil {
 			return true, err
+		}
+		if msg.TelegramThreadID > 0 {
+			if err := recordTelegramThreadCallbackMessage(router, msg.ChatID, msg.TelegramThreadID, messageID, "status"); err != nil {
+				return true, err
+			}
 		}
 		return true, nil
 	case "health":
@@ -167,12 +173,24 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			return true, nil
 		}
 		if action == tailnetCommandRevoke {
-			surfaceID, _ := nextTailnetToken(rest)
+			surfaceID := strings.TrimSpace(rest)
 			if surfaceID == "" {
 				text = "Usage: /tailnet revoke <surface_id>"
 				break
 			}
-			rendered, rows := renderTailnetRevokeConfirmation(surfaceID)
+			surfaces, err := router.TailnetSurfaces(msg.SenderID)
+			if err != nil {
+				return true, err
+			}
+			surface, found := findTailnetSurfaceByID(surfaces, surfaceID)
+			if !found {
+				rendered := renderTailnetRevokeResult(surfaceID, core.TailnetSurfaceStatus{}, false)
+				if _, err := sender.SendMessage(ctx, core.OutboundMessage{ChatID: msg.ChatID, Text: rendered, ReplyTo: replyToMessageID(msg.MessageID)}); err != nil {
+					return true, err
+				}
+				return true, nil
+			}
+			rendered, rows := renderTailnetRevokeTokenConfirmation(surface.SurfaceID)
 			if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID)); err != nil {
 				return true, err
 			}

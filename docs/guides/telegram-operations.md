@@ -201,7 +201,10 @@ Use `/mission` to review objectives and mission candidates. Mission state
 preserves intent and review material; it does not grant new authority on its
 own.
 
-Use `/tailnet` to inspect declared Tailnet surfaces and grant bindings.
+Use `/tailnet` to inspect declared Tailnet surfaces and grant bindings. Surface
+and grant lists are paged and button-driven; open a surface detail card before
+revoking local registry trust. Telegram revoke records a local Aphelion registry
+event only. It does not mutate live Tailscale policy.
 
 ## Service Actions
 

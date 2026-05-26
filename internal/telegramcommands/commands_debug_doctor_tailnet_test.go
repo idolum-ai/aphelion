@@ -4,6 +4,7 @@ package telegramcommands
 
 import (
 	"context"
+	"fmt"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/telegram"
 	"strings"
@@ -335,8 +336,8 @@ func TestHandleTelegramCommandTailnetSurfacesShowsRegistry(t *testing.T) {
 	if got := sender.inline[0].text; !strings.Contains(got, "Tailnet Surfaces") || !strings.Contains(got, "active status") || !strings.Contains(got, "http://aphelion.example.ts.net:8765/status") {
 		t.Fatalf("tailnet surfaces text = %q, want registry surface", got)
 	}
-	if len(sender.inline[0].rows) != 2 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" || sender.inline[0].rows[0][1].CallbackData != "tailnet:surfaces" || sender.inline[0].rows[0][2].CallbackData != "tailnet:grants" || !strings.HasPrefix(sender.inline[0].rows[1][0].CallbackData, tailnetRevokeTokenCallbackPrefix+tailnetRevokeCallbackAsk+":") {
-		t.Fatalf("tailnet surfaces rows = %#v, want status/refresh and revoke button", sender.inline[0].rows)
+	if len(sender.inline[0].rows) != 2 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" || sender.inline[0].rows[0][1].CallbackData != "tailnet:surfaces" || sender.inline[0].rows[0][2].CallbackData != "tailnet:grants" || !strings.HasPrefix(sender.inline[0].rows[1][0].CallbackData, tailnetSurfaceCallbackPrefix) {
+		t.Fatalf("tailnet surfaces rows = %#v, want status/refresh and surface detail button", sender.inline[0].rows)
 	}
 }
 
@@ -375,8 +376,8 @@ func TestHandleTelegramCommandTailnetGrantsShowsBindings(t *testing.T) {
 	if got := sender.inline[0].text; !strings.Contains(got, "Tailnet Grants") || !strings.Contains(got, "applied tailnet-bind-capg-mail-status") || !strings.Contains(got, "Target: network_access/tailnet:mail-helper") {
 		t.Fatalf("tailnet grants text = %q, want grant binding projection", got)
 	}
-	if len(sender.inline[0].rows) != 1 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" || sender.inline[0].rows[0][1].CallbackData != "tailnet:surfaces" || sender.inline[0].rows[0][2].CallbackData != "tailnet:grants" {
-		t.Fatalf("tailnet grants rows = %#v, want status/surfaces/refresh", sender.inline[0].rows)
+	if len(sender.inline[0].rows) != 2 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" || sender.inline[0].rows[0][1].CallbackData != "tailnet:surfaces" || sender.inline[0].rows[0][2].CallbackData != "tailnet:grants" || !strings.HasPrefix(sender.inline[0].rows[1][0].CallbackData, tailnetGrantCallbackPrefix) {
+		t.Fatalf("tailnet grants rows = %#v, want status/surfaces/refresh and grant detail button", sender.inline[0].rows)
 	}
 }
 
@@ -384,7 +385,13 @@ func TestHandleTelegramCommandTailnetRevokeShowsConfirmation(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
-	router := stubCommandRouter{canRestart: true}
+	router := stubCommandRouter{
+		canRestart: true,
+		tailnetSurfaces: []core.TailnetSurfaceStatus{{
+			SurfaceID: "parent:tsnet_http:status",
+			Status:    "active",
+		}},
+	}
 	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
 		ChatID:    7,
 		SenderID:  1001,
@@ -406,8 +413,36 @@ func TestHandleTelegramCommandTailnetRevokeShowsConfirmation(t *testing.T) {
 	if len(sender.inline[0].rows) != 1 || sender.inline[0].rows[0][0].Text != "Cancel" || sender.inline[0].rows[0][1].Text != "Revoke" {
 		t.Fatalf("revoke rows = %#v, want cancel/revoke", sender.inline[0].rows)
 	}
+	if !strings.HasPrefix(sender.inline[0].rows[0][1].CallbackData, tailnetRevokeTokenCallbackPrefix+tailnetRevokeCallbackConfirm+":") {
+		t.Fatalf("revoke rows = %#v, want tokenized confirm callback", sender.inline[0].rows)
+	}
 	if router.revokeTailnetSurfaceID != "" {
 		t.Fatalf("revokeTailnetSurfaceID = %q, want no revoke before confirmation", router.revokeTailnetSurfaceID)
+	}
+}
+
+func TestHandleTelegramCommandTailnetRevokeUnknownSurfaceDoesNotPrompt(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: true}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		Text:      "/tailnet revoke parent:tsnet_http:missing",
+		MessageID: 55,
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.msgs) != 1 || !strings.Contains(sender.msgs[0].Text, "not found") {
+		t.Fatalf("messages = %#v, want not-found result", sender.msgs)
+	}
+	if len(sender.inline) != 0 || router.revokeTailnetSurfaceID != "" {
+		t.Fatalf("inline=%#v revoke=%q, want no confirmation or mutation", sender.inline, router.revokeTailnetSurfaceID)
 	}
 }
 
@@ -624,6 +659,43 @@ func TestHandleTelegramCommandCallbackTailnetSurfacesForAdmin(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandCallbackTailnetSurfacesPageForAdmin(t *testing.T) {
+	t.Parallel()
+
+	surfaces := make([]core.TailnetSurfaceStatus, 0, 6)
+	for i := 1; i <= 6; i++ {
+		surfaces = append(surfaces, core.TailnetSurfaceStatus{
+			SurfaceID: fmt.Sprintf("surface:%d", i),
+			Name:      fmt.Sprintf("surface-%d", i),
+			Status:    "active",
+		})
+	}
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: true, tailnetSurfaces: surfaces}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-tailnet-surfaces-page",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "page:tailnet:surfaces:2",
+		Message: &telegram.Message{
+			MessageID: 97,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled || len(sender.editInline) != 1 {
+		t.Fatalf("handled=%t editInline=%#v, want page edit", handled, sender.editInline)
+	}
+	if got := sender.editInline[0].text; !strings.Contains(got, "page 2 of 2") || !strings.Contains(got, "6. active surface-6") || strings.Contains(got, "surface-1") {
+		t.Fatalf("tailnet surface page = %q, want second page only", got)
+	}
+	if !commandRowsContain(sender.editInline[0].rows, "Prev", "page:tailnet:surfaces:1") ||
+		!commandRowsContain(sender.editInline[0].rows, "Surface 6", encodeTailnetSurfaceCallbackData("surface:6")) {
+		t.Fatalf("tailnet page rows = %#v, want prev and page-local surface detail", sender.editInline[0].rows)
+	}
+}
+
 func TestHandleTelegramCommandCallbackTailnetGrantsForAdmin(t *testing.T) {
 	t.Parallel()
 
@@ -666,5 +738,45 @@ func TestHandleTelegramCommandCallbackTailnetGrantsForAdmin(t *testing.T) {
 	}
 	if router.tailnetGrantBindingsSenderID != 1001 || router.tailnetStatusSenderID != 0 || router.tailnetSurfacesSenderID != 0 {
 		t.Fatalf("tailnet calls bindings=%d status=%d surfaces=%d, want bindings only", router.tailnetGrantBindingsSenderID, router.tailnetStatusSenderID, router.tailnetSurfacesSenderID)
+	}
+}
+
+func TestHandleTelegramCommandCallbackTailnetGrantsPageForAdmin(t *testing.T) {
+	t.Parallel()
+
+	bindings := make([]core.TailnetGrantBindingStatus, 0, 6)
+	for i := 1; i <= 6; i++ {
+		bindings = append(bindings, core.TailnetGrantBindingStatus{
+			BindingID:      fmt.Sprintf("binding-%d", i),
+			GrantID:        fmt.Sprintf("grant-%d", i),
+			SurfaceID:      fmt.Sprintf("surface:%d", i),
+			CapabilityKind: "network_access",
+			TargetResource: fmt.Sprintf("tailnet:surface-%d", i),
+			Status:         "applied",
+		})
+	}
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: true, tailnetGrantBindings: bindings}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-tailnet-grants-page",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "page:tailnet:grants:2",
+		Message: &telegram.Message{
+			MessageID: 97,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled || len(sender.editInline) != 1 {
+		t.Fatalf("handled=%t editInline=%#v, want page edit", handled, sender.editInline)
+	}
+	if got := sender.editInline[0].text; !strings.Contains(got, "page 2 of 2") || !strings.Contains(got, "6. applied binding-6") || strings.Contains(got, "binding-1") {
+		t.Fatalf("tailnet grants page = %q, want second page only", got)
+	}
+	if !commandRowsContain(sender.editInline[0].rows, "Prev", "page:tailnet:grants:1") ||
+		!commandRowsContain(sender.editInline[0].rows, "Grant 6", encodeTailnetGrantCallbackData("binding-6")) {
+		t.Fatalf("tailnet grant rows = %#v, want prev and grant detail", sender.editInline[0].rows)
 	}
 }

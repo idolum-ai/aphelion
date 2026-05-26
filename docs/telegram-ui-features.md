@@ -31,7 +31,7 @@ Current command surface:
   - Shows grouped, role-aware command help and a no-argument command menu.
 - `/status`
   - Opens status output with inline status controls (no command arguments).
-  - When explicitly targeted with `(thread N) /status` or by replying to a side-thread message, reports that side thread's session state.
+  - When explicitly targeted with `(thread N) /status` or by replying to a side-thread message, reports that side thread's session state and keeps its buttons thread-local.
 - `/health`
   - Opens status, trace, and diagnosis controls without requiring arguments.
   - `/health status` opens the live status view.
@@ -70,7 +70,7 @@ Current command surface:
 - `/tailnet`
   - Admin-only Tailnet declaration, private-surface, grant-binding, drift, and rollback evidence.
   - Shows local registry readiness, private parent status, durable-child control-plane evidence, and issue evidence without mutating live Tailscale policy.
-  - Provides button navigation for status, surfaces, grants, refresh, private status URL, and per-surface local revoke confirmation.
+  - Provides button navigation for status, paged surfaces, paged grants, refresh, private status URL, and inspect-before-revoke local registry confirmation.
 - `/mission`
   - Shows the current working objective and the caller-owned Mission Ledger entries.
   - Provides buttons for home/list, show, propose, pin/unpin, activate, pause, complete, archive, refresh, and admin health.
@@ -155,6 +155,10 @@ Always visible:
 - `Pending Only`
 - `Refresh`
 
+Side-thread cards replace `This Chat` with `This Thread` and keep `Pending Only`
+and `Refresh` scoped to that side-thread session. Global admin drilldowns are
+available from default-chat `/status`, not from a thread-local status card.
+
 Admin-only:
 
 - `System Overview`
@@ -171,11 +175,11 @@ Admin-only:
 Chat-scoped status now reports live work telemetry, not only router occupancy:
 
 - `Quick Read:` one-line human summary (Haiku-backed when a native provider key is configured), prepended ahead of the status block.
-- `Quick Read:` is grounded against the rendered status tokens; contradictory generated summaries are replaced with deterministic snapshot text.
-- Chat `/status` renders as a deterministic operator triage card: `Status`, `Why`, `Now`, `Next`, attention/backlog counts, `Evidence`, runtime, and details.
+- `Quick Read:` is grounded against typed status facts; contradictory generated summaries are replaced with deterministic snapshot text.
+- Chat and admin `/status` views render as deterministic operator triage cards: `Status`, `Why`, `Now` when chat-local, `Next`, attention/backlog or bounded detail counts, `Evidence`, runtime, and details.
 - `Next:` is state-specific: wait/refresh for active work, inspect pending decisions, resolve blockers, run `/health diagnose` for recovery, or send the next request when idle.
 - `Evidence:` includes the snapshot as-of time and status projection source so `/status` remains a bounded truth surface even when `/health trace` carries the raw evidence.
-- Telemetry labels are rendered as human-readable labels with colons inside trace/evidence contexts. Operator `/status` panels use direct titles such as `Chat Status`, `System Status`, and `Durable Agents` instead of surfacing raw status-scope markers.
+- Raw status telemetry remains in `/health trace` and debug evidence. Operator `/status` panels use direct titles such as `Chat Status`, `System Status`, and `Durable Agents` instead of surfacing raw status-scope markers.
 - Bracketed machine envelopes are humanized in Telegram-facing status/trace output (for example, `[PLAN_UPDATED]` renders as `Plan Updated:` and closing tags are removed).
 - `turn_phase` for active in-flight stage (`face_proposal`, `brokerage`, `governor`, `render`, `persist`, `deliver`) when available.
 - `operation` and `plan_step` from persisted session sidecars.
@@ -230,11 +234,13 @@ Tailnet buttons keep private networking as a diagnostic/control projection:
 - `Surfaces`
 - `Grants`
 - `Open Status` when the private parent status URL is known
-- `Revoke <n>` on visible registered surfaces
+- `Surface <n>` and `Grant <n>` inside paged registry lists
+- `Revoke` only from a surface detail card
 
-Surface revoke buttons use short callback tokens, re-resolve the live surface
-registry on click, and require a second confirmation before writing the local
-registry revoke event.
+Surface and grant detail buttons use short callback tokens and re-resolve the
+current registry on click. Surface revoke also re-resolves the current registry,
+requires a second confirmation, writes only the local registry revoke event, and
+does not mutate live Tailscale policy.
 
 ### `/mission` controls
 

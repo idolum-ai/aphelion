@@ -4,22 +4,19 @@ package telegramcommands
 
 import (
 	"context"
+	"errors"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/telegram"
 	"strings"
 	"testing"
 )
 
-func TestHandleTelegramCommandCallbackTailnetRevokeForAdmin(t *testing.T) {
+func TestHandleTelegramCommandCallbackTailnetRawRevokeIsRetired(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
-		canRestart: true,
-		revokeTailnetSurfaceReturn: core.TailnetSurfaceStatus{
-			SurfaceID: "parent:tsnet_http:status",
-			Status:    "revoked",
-		},
+		canRestart:             true,
 		revokeTailnetSurfaceOK: true,
 	}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
@@ -34,20 +31,11 @@ func TestHandleTelegramCommandCallbackTailnetRevokeForAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
 	}
-	if !handled {
-		t.Fatal("handled = false, want true")
+	if handled {
+		t.Fatal("handled = true, want retired raw revoke callback ignored")
 	}
-	if router.revokeTailnetSurfaceSenderID != 1001 || router.revokeTailnetSurfaceID != "parent:tsnet_http:status" {
-		t.Fatalf("revoke call sender=%d surface=%q, want admin surface revoke", router.revokeTailnetSurfaceSenderID, router.revokeTailnetSurfaceID)
-	}
-	if len(sender.answers) != 1 {
-		t.Fatalf("answers count = %d, want 1", len(sender.answers))
-	}
-	if len(sender.editClear) != 1 {
-		t.Fatalf("editClear count = %d, want confirmation edit", len(sender.editClear))
-	}
-	if got := sender.editClear[0].text; !strings.Contains(got, "Tailnet surface revoked") || !strings.Contains(got, "parent:tsnet_http:status") {
-		t.Fatalf("revoke edit = %q, want revoked confirmation", got)
+	if router.revokeTailnetSurfaceID != "" || len(sender.answers) != 0 || len(sender.editClear) != 0 {
+		t.Fatalf("router=%q answers=%#v editClear=%#v, want no raw revoke side effect", router.revokeTailnetSurfaceID, sender.answers, sender.editClear)
 	}
 }
 
@@ -123,7 +111,7 @@ func TestHandleTelegramCommandCallbackTailnetRevokeDeniedForNonAdmin(t *testing.
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:   "cb-tailnet-revoke-denied",
 		From: &telegram.User{ID: 1002},
-		Data: "tailnet_revoke:confirm:parent:tsnet_http:status",
+		Data: encodeTailnetRevokeTokenCallbackData(tailnetRevokeCallbackConfirm, "parent:tsnet_http:status"),
 		Message: &telegram.Message{
 			MessageID: 97,
 			Chat:      &telegram.Chat{ID: 7, Type: "private"},
@@ -140,6 +128,150 @@ func TestHandleTelegramCommandCallbackTailnetRevokeDeniedForNonAdmin(t *testing.
 	}
 	if router.revokeTailnetSurfaceID != "" {
 		t.Fatalf("revokeTailnetSurfaceID = %q, want no revoke", router.revokeTailnetSurfaceID)
+	}
+}
+
+func TestHandleTelegramCommandCallbackTailnetSurfaceDetailForAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		tailnetSurfaces: []core.TailnetSurfaceStatus{{
+			SurfaceID:   "parent:tsnet_http:status",
+			OwnerKind:   "parent",
+			OwnerID:     "aphelion",
+			SurfaceKind: "tsnet_http",
+			Name:        "status",
+			URL:         "http://aphelion.example.ts.net:8765/status",
+			Status:      "active",
+		}},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-tailnet-surface",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: encodeTailnetSurfaceCallbackData("parent:tsnet_http:status"),
+		Message: &telegram.Message{
+			MessageID: 97,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled || len(sender.editInline) != 1 {
+		t.Fatalf("handled=%t editInline=%#v, want detail edit", handled, sender.editInline)
+	}
+	if got := sender.editInline[0].text; !strings.Contains(got, "Tailnet Surface") || !strings.Contains(got, "parent:tsnet_http:status") || !strings.Contains(got, "local registry evidence") {
+		t.Fatalf("surface detail = %q, want surface evidence", got)
+	}
+	if !commandRowsContain(sender.editInline[0].rows, "Revoke", encodeTailnetRevokeTokenCallbackData(tailnetRevokeCallbackAsk, "parent:tsnet_http:status")) {
+		t.Fatalf("surface detail rows = %#v, want tokenized revoke action", sender.editInline[0].rows)
+	}
+}
+
+func TestHandleTelegramCommandCallbackTailnetGrantDetailForAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		tailnetGrantBindings: []core.TailnetGrantBindingStatus{{
+			BindingID:          "tailnet-bind-capg-status",
+			GrantID:            "capg-status",
+			SurfaceID:          "parent:tsnet_http:status",
+			CapabilityKind:     "network_access",
+			TargetResource:     "tailnet:status",
+			Status:             "drifted",
+			ObservedPolicyHash: "sha256:observed",
+			DriftReason:        "observed policy hash changed",
+		}},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-tailnet-grant",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: encodeTailnetGrantCallbackData("tailnet-bind-capg-status"),
+		Message: &telegram.Message{
+			MessageID: 97,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled || len(sender.editInline) != 1 {
+		t.Fatalf("handled=%t editInline=%#v, want grant detail edit", handled, sender.editInline)
+	}
+	if got := sender.editInline[0].text; !strings.Contains(got, "Tailnet Grant") || !strings.Contains(got, "tailnet-bind-capg-status") || !strings.Contains(got, "observed policy hash changed") {
+		t.Fatalf("grant detail = %q, want binding evidence", got)
+	}
+}
+
+func TestHandleTelegramCommandCallbackTailnetTokenCollisionDoesNotRevoke(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		tailnetSurfaces: []core.TailnetSurfaceStatus{
+			{SurfaceID: "parent:tsnet_http:status", Status: "active"},
+			{SurfaceID: "parent:tsnet_http:status", Status: "active"},
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-tailnet-collision",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: encodeTailnetRevokeTokenCallbackData(tailnetRevokeCallbackConfirm, "parent:tsnet_http:status"),
+		Message: &telegram.Message{
+			MessageID: 97,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled || router.revokeTailnetSurfaceID != "" {
+		t.Fatalf("handled=%t revoked=%q, want stale collision without revoke", handled, router.revokeTailnetSurfaceID)
+	}
+	if len(sender.answers) != 1 || !strings.Contains(strings.ToLower(sender.answers[0].text), "no longer available") {
+		t.Fatalf("answers = %#v, want stale token answer", sender.answers)
+	}
+}
+
+func TestHandleTelegramCommandCallbackTailnetRevokeEditFailureRecordsSpecificError(t *testing.T) {
+	t.Parallel()
+
+	editErr := errors.New("telegram edit failed")
+	sender := &stubCommandSender{editErr: editErr}
+	router := stubCommandRouter{
+		canRestart: true,
+		tailnetSurfaces: []core.TailnetSurfaceStatus{{
+			SurfaceID: "parent:tsnet_http:status",
+			Status:    "active",
+		}},
+		revokeTailnetSurfaceReturn: core.TailnetSurfaceStatus{
+			SurfaceID: "parent:tsnet_http:status",
+			Status:    "revoked",
+		},
+		revokeTailnetSurfaceOK: true,
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-tailnet-revoke-edit-fail",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: encodeTailnetRevokeTokenCallbackData(tailnetRevokeCallbackConfirm, "parent:tsnet_http:status"),
+		Message: &telegram.Message{
+			MessageID: 97,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if !handled || !errors.Is(err, editErr) {
+		t.Fatalf("handled=%t err=%v, want edit failure", handled, err)
+	}
+	if router.revokeTailnetSurfaceID != "parent:tsnet_http:status" {
+		t.Fatalf("revoked surface = %q, want mutation before failed edit evidence", router.revokeTailnetSurfaceID)
+	}
+	if len(router.callbackErrorRecords) != 1 || router.callbackErrorRecords[0].callbackKind != "tailnet.revoke.edit" {
+		t.Fatalf("callback errors = %#v, want tailnet.revoke.edit", router.callbackErrorRecords)
 	}
 }
 

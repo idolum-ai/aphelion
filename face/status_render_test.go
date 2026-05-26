@@ -255,6 +255,52 @@ func TestRenderTelegramStatusChatOperatorCardPrioritizesAttentionWhileWorking(t 
 	}
 }
 
+func TestRenderTelegramStatusOperatorViewsAvoidRawTelemetry(t *testing.T) {
+	t.Parallel()
+
+	views := map[string]string{
+		"system": RenderTelegramStatusSystemOperatorCard(core.SystemStatusSnapshot{
+			GeneratedAt: time.Date(2026, 5, 7, 16, 0, 0, 0, time.UTC),
+			PendingItems: []core.PendingItem{{
+				Kind:    core.PendingItemKindDecision,
+				ChatID:  7,
+				Summary: "Approve a pending action.",
+			}},
+		}, "sonnet", "medium"),
+		"hot": RenderTelegramStatusHotChatsOperatorCard(core.SystemStatusSnapshot{
+			GeneratedAt: time.Date(2026, 5, 7, 16, 0, 0, 0, time.UTC),
+			HotChats:    []core.ChatStatusRollup{{ChatID: 7, PendingCount: 1}},
+		}),
+		"find": RenderTelegramStatusFindChatOperatorCard(core.SystemStatusSnapshot{
+			GeneratedAt: time.Date(2026, 5, 7, 16, 0, 0, 0, time.UTC),
+			HotChats:    []core.ChatStatusRollup{{ChatID: 7, PendingCount: 1}},
+		}),
+		"durables": RenderTelegramStatusDurablesOperatorCard(core.DurableAgentsStatusSnapshot{
+			GeneratedAt:    time.Date(2026, 5, 7, 16, 0, 0, 0, time.UTC),
+			TotalAgents:    1,
+			DegradedAgents: 1,
+			Agents: []core.DurableAgentStatusSnapshot{{
+				AgentID:          "ops-child",
+				Status:           "active",
+				Health:           "degraded",
+				EnrollmentStatus: "active",
+			}},
+		}),
+	}
+	for name, out := range views {
+		for _, want := range []string{"Status:", "Why:", "Next:"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("%s operator view = %q, want %q", name, out, want)
+			}
+		}
+		for _, forbidden := range []string{"status_scope=", "summary ", "source=", "enabled=true", "kind="} {
+			if strings.Contains(out, forbidden) {
+				t.Fatalf("%s operator view = %q, should not contain raw telemetry %q", name, out, forbidden)
+			}
+		}
+	}
+}
+
 func TestRenderTelegramStatusChatIncludesCanonicalToolLifecycleSnapshot(t *testing.T) {
 	t.Parallel()
 

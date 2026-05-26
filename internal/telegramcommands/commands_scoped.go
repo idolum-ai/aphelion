@@ -6,13 +6,19 @@ import (
 	"context"
 
 	"github.com/idolum-ai/aphelion/core"
-	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
 func renderStatusCommand(ctx context.Context, router commandRouter, msg core.InboundMessage, personaEffort string, governorEffort string) (string, [][]telegram.InlineButton, error) {
 	if msg.TelegramThreadID <= 0 {
 		return renderStatusView(ctx, router, msg.ChatID, msg.SenderID, statusViewChat, msg.ChatID, personaEffort, governorEffort)
+	}
+	return renderThreadStatusView(ctx, router, msg, statusViewChat, personaEffort, governorEffort)
+}
+
+func renderThreadStatusView(ctx context.Context, router commandRouter, msg core.InboundMessage, view statusView, personaEffort string, governorEffort string) (string, [][]telegram.InlineButton, error) {
+	if view != statusViewPending {
+		view = statusViewChat
 	}
 	scoped, ok := router.(commandScopedStatusRouter)
 	if !ok {
@@ -22,11 +28,11 @@ func renderStatusCommand(ctx context.Context, router commandRouter, msg core.Inb
 	if err != nil {
 		return "", nil, err
 	}
-	rawText := face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
-	summary := statusReadableSummaryText(ctx, router, statusViewChat, rawText)
-	text := telegramThreadDisplayPrefixForMessage(msg) + renderStatusChatOperatorView(chat, personaEffort, governorEffort, false, summary)
+	pendingOnly := view == statusViewPending
+	summary := statusReadableSummaryText(ctx, router, statusReadableFactsFromChat(view, chat))
+	text := telegramThreadDisplayPrefixForMessage(msg) + renderStatusChatOperatorView(chat, personaEffort, governorEffort, pendingOnly, summary)
 	text = humanizeTelegramTelemetryText(text)
-	rows := statusKeyboardRows(statusViewChat, msg.ChatID, msg.ChatID, router.CanRestart(msg.SenderID), core.SystemStatusSnapshot{}, false)
+	rows := statusKeyboardRows(view, msg.ChatID, msg.ChatID, false, core.SystemStatusSnapshot{}, false, true)
 	return text, rows, nil
 }
 

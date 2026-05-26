@@ -322,6 +322,19 @@ func chatSummaryState(snapshot core.ChatStatusSnapshot) string {
 	return "idle"
 }
 
+func TelegramStatusChatState(snapshot core.ChatStatusSnapshot) string {
+	return chatSummaryState(snapshot)
+}
+
+func TelegramStatusChatCurrentSignal(snapshot core.ChatStatusSnapshot) string {
+	state := chatSummaryState(snapshot)
+	return chatCurrentSignal(snapshot, state)
+}
+
+func TelegramStatusPendingItemCounts(items []core.PendingItem) (int, int) {
+	return statusPendingItemCounts(items)
+}
+
 func statusPendingItemCounts(items []core.PendingItem) (int, int) {
 	actionable := 0
 	backlog := 0

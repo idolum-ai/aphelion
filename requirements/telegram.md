@@ -368,6 +368,24 @@ These commands should be handled directly by the Telegram/runtime boundary rathe
 
 Telegram Bot API command identifiers should use underscore form rather than hyphen form so they remain valid commands and display correctly in Telegram clients.
 
+### `/tailnet`
+
+`/tailnet` is an admin-only Tailnet operator projection. It must show compact
+status, private parent status URL when known, registry surface evidence, grant
+binding evidence, and drift/issue evidence without mutating live Tailscale
+policy.
+
+Controls must be button-driven for finite choices:
+
+- `Refresh`, `Surfaces`, `Grants`, and optional `Open Status`
+- paged `Surface <n>` and `Grant <n>` detail buttons
+- `Revoke` only from a resolved surface detail card
+
+Surface and grant callbacks must use compact tokens that re-resolve against the
+current registry on click. Missing or colliding tokens are stale and must not
+mutate state. Surface revoke requires a second confirmation and writes only the
+local registry revoke/audit event.
+
 ### Button order language
 
 Binary decision prompts should keep a stable side language:
@@ -413,7 +431,7 @@ Show the current command list and what each command does.
 
 `/status` is button-driven (no command arguments).
 
-The first response is a summary-first status snapshot plus inline controls. Chat-scoped `/status` must act as a deterministic operator triage card, not just a telemetry projection: it should show `Status`, `Why`, `Now`, state-specific `Next`, attention/backlog items, `Evidence` with as-of time/source, runtime, and a bounded details pointer.
+The first response is a summary-first status snapshot plus inline controls. Chat-scoped `/status` must act as a deterministic operator triage card, not just a telemetry projection: it should show `Status`, `Why`, `Now`, state-specific `Next`, attention/backlog items, `Evidence` with as-of time/source, runtime, and a bounded details pointer. Admin status drilldowns use the same operator-panel shape and keep raw telemetry in `/health trace`.
 
 User controls:
 
@@ -421,18 +439,24 @@ User controls:
 - `Pending Only`
 - `Refresh`
 
+When `/status` is scoped to a side thread, the first button is `This Thread`.
+The status message is recorded in the thread callback ledger, and `This Thread`,
+`Pending Only`, and `Refresh` callbacks must keep rendering that side thread's
+session state. Thread-local cards must not expose global admin drilldowns.
+
 Admin-only controls (visible only to Telegram admins):
 
 - `System Overview`
 - `Hot Chats`
 - `Find Chat`
+- `Durables`
 
 `Find Chat` must remain callback-first:
 
 - show recent active/pending chats as drill-down buttons (`status:chat:<chat_id>`)
 - avoid slash-command parameters for view selection
 
-Status payloads must include stable key labels so they remain machine-parseable later.
+Raw diagnostic status payloads must include stable key labels so they remain machine-parseable later. Telegram `/status` panels should consume typed status snapshots directly and render bounded human operator cards.
 
 At minimum, status snapshots should surface:
 

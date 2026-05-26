@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
@@ -55,7 +56,7 @@ func TestHandleTelegramCommandCallbackStatusFindChatShowsChatButtons(t *testing.
 	}
 }
 
-func TestHandleTelegramCommandCallbackStatusChunksOverflowDeterministically(t *testing.T) {
+func TestHandleTelegramCommandCallbackStatusBoundsOverflowWithoutFollowupChunks(t *testing.T) {
 	t.Parallel()
 
 	pending := make([]core.PendingItem, 0, 120)
@@ -98,27 +99,54 @@ func TestHandleTelegramCommandCallbackStatusChunksOverflowDeterministically(t *t
 	if len([]rune(sender.editInline[0].text)) > 3800 {
 		t.Fatalf("edited text rune length = %d, want <= 3800", len([]rune(sender.editInline[0].text)))
 	}
-	if len(sender.msgs) == 0 {
-		t.Fatalf("follow-up messages = %#v, want overflow chunks", sender.msgs)
+	if len(sender.msgs) != 0 {
+		t.Fatalf("follow-up messages = %#v, want compact status without overflow chunks", sender.msgs)
+	}
+	if strings.Contains(sender.editInline[0].text, "status_scope=") || strings.Contains(sender.editInline[0].text, "summary ") {
+		t.Fatalf("status text = %q, want operator panel instead of raw status telemetry", sender.editInline[0].text)
 	}
 }
 
-func TestRenderStatusSourceAttributionLifecycleFieldScope(t *testing.T) {
+func TestHandleTelegramCommandCallbackStatusUsesTypedFactsForQuickReadGrounding(t *testing.T) {
 	t.Parallel()
 
-	system := renderStatusSourceAttribution(statusViewSystem)
-	if !strings.Contains(system, "field=tool_authority_lifecycle") {
-		t.Fatalf("system source attribution = %q, want tool_authority_lifecycle field", system)
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart:            true,
+		statusReadableSummary: "System is idle with no pending items.",
+		statusSystem: core.SystemStatusSnapshot{
+			PendingItems: []core.PendingItem{{
+				Kind:    core.PendingItemKindDecision,
+				ChatID:  7,
+				ID:      "decision-system-status",
+				Summary: "Needs review.",
+			}},
+		},
 	}
-
-	hot := renderStatusSourceAttribution(statusViewHotChats)
-	if strings.Contains(hot, "field=tool_authority_lifecycle") {
-		t.Fatalf("hot source attribution = %q, do not want tool_authority_lifecycle field", hot)
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-status-system-ground",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "status:system",
+		Message: &telegram.Message{
+			MessageID: 99,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
 	}
-
-	find := renderStatusSourceAttribution(statusViewFindChat)
-	if strings.Contains(find, "field=tool_authority_lifecycle") {
-		t.Fatalf("find source attribution = %q, do not want tool_authority_lifecycle field", find)
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+	text := sender.editInline[0].text
+	if strings.Contains(strings.ToLower(text), "system is idle with no pending") {
+		t.Fatalf("status text = %q, should reject contradictory Quick Read", text)
+	}
+	if !strings.Contains(text, "Quick Read: System has 0 active turn(s), 0 queued chat(s), and 1 pending item(s).") {
+		t.Fatalf("status text = %q, want deterministic typed-fact fallback", text)
 	}
 }
 
@@ -146,10 +174,28 @@ func TestOperatorPanelsAvoidRawTelemetryByDefault(t *testing.T) {
 		Status:      "active",
 		Health:      "ok",
 	}})
-	for name, text := range map[string]string{"memory": memoryText, "tailnet": tailnetText, "agents": agentsText} {
+	systemText := face.RenderTelegramStatusSystemOperatorCard(core.SystemStatusSnapshot{
+		PendingItems: []core.PendingItem{{Kind: core.PendingItemKindDecision, ChatID: 7}},
+	}, "sonnet", "medium")
+	durablesText := face.RenderTelegramStatusDurablesOperatorCard(core.DurableAgentsStatusSnapshot{
+		TotalAgents:    1,
+		DegradedAgents: 1,
+		Agents: []core.DurableAgentStatusSnapshot{{
+			AgentID:          "ops-child",
+			Status:           "active",
+			Health:           "degraded",
+			EnrollmentStatus: "active",
+		}},
+	})
+	for name, text := range map[string]string{"memory": memoryText, "tailnet": tailnetText, "agents": agentsText, "status-system": systemText, "status-durables": durablesText} {
 		for _, forbidden := range []string{"source=", "enabled=true", "running=true", "kind=", "owner="} {
 			if strings.Contains(text, forbidden) {
 				t.Fatalf("%s panel = %q, should not contain raw telemetry %q", name, text, forbidden)
+			}
+		}
+		for _, forbidden := range []string{"status_scope=", "summary "} {
+			if strings.Contains(text, forbidden) {
+				t.Fatalf("%s panel = %q, should not contain raw status telemetry %q", name, text, forbidden)
 			}
 		}
 		for _, want := range []string{"Status:", "Why:", "Next:"} {

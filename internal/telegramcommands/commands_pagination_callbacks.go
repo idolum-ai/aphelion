@@ -28,6 +28,8 @@ func handleTelegramPageCallback(ctx context.Context, sender commandCallbackSende
 		return handleDurableAgentsPageCallback(ctx, sender, router, cb, chatID, messageID, senderID, req.Page)
 	case telegramPageSurfaceHealth:
 		return handleHealthTracePageCallback(ctx, sender, router, cb, chatID, messageID, senderID, req.Page)
+	case telegramPageSurfaceTailnet:
+		return handleTailnetPageCallback(ctx, sender, router, cb, chatID, messageID, senderID, req.View, req.Page)
 	default:
 		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), stalePageCallbackText); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 			return true, err
@@ -77,6 +79,44 @@ func handleDurableAgentsPageCallback(ctx context.Context, sender commandCallback
 	}
 	rendered, rows := renderDurableAgentsCommandPage(agents, page)
 	if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, rendered, "", rows); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func handleTailnetPageCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, chatID int64, messageID int64, senderID int64, view string, page int) (bool, error) {
+	if !router.CanRestart(senderID) {
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Tailnet controls are admin only."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+			return true, err
+		}
+		return true, nil
+	}
+	if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+		return true, err
+	}
+	var rendered string
+	var rows [][]telegram.InlineButton
+	switch view {
+	case telegramPageViewSurfaces:
+		surfaces, err := router.TailnetSurfaces(senderID)
+		if err != nil {
+			return true, err
+		}
+		rendered, rows = renderTailnetSurfacesCommandPage(surfaces, page)
+	case telegramPageViewGrants:
+		bindings, err := router.TailnetGrantBindings(senderID)
+		if err != nil {
+			return true, err
+		}
+		rendered, rows = renderTailnetGrantBindingsCommandPage(bindings, page)
+	default:
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), stalePageCallbackText); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+			return true, err
+		}
+		return true, nil
+	}
+	if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, rendered, "", rows); err != nil {
+		recordTelegramCallbackError(router, chatID, "tailnet.page.edit", err)
 		return true, err
 	}
 	return true, nil

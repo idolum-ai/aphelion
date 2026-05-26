@@ -36,24 +36,21 @@ func renderStatusView(ctx context.Context, router commandRouter, currentChatID i
 		if err != nil {
 			return "", nil, err
 		}
-		rawText := face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
-		summary := statusReadableSummaryText(ctx, router, view, rawText)
+		summary := statusReadableSummaryText(ctx, router, statusReadableFactsFromChat(view, chat))
 		text = renderStatusChatOperatorView(chat, personaEffort, governorEffort, false, summary)
 	case statusViewPending:
 		chat, err := router.StatusChat(currentChatID)
 		if err != nil {
 			return "", nil, err
 		}
-		rawText := face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, true)
-		summary := statusReadableSummaryText(ctx, router, view, rawText)
+		summary := statusReadableSummaryText(ctx, router, statusReadableFactsFromChat(view, chat))
 		text = renderStatusChatOperatorView(chat, personaEffort, governorEffort, true, summary)
 	case statusViewChatTarget:
 		chat, err := router.StatusChat(targetChatID)
 		if err != nil {
 			return "", nil, err
 		}
-		rawText := face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
-		summary := statusReadableSummaryText(ctx, router, view, rawText)
+		summary := statusReadableSummaryText(ctx, router, statusReadableFactsFromChat(view, chat))
 		text = renderStatusChatOperatorView(chat, personaEffort, governorEffort, false, summary)
 	case statusViewSystem:
 		if !isAdmin {
@@ -65,7 +62,8 @@ func renderStatusView(ctx context.Context, router commandRouter, currentChatID i
 		}
 		systemStatus = status
 		systemLoaded = true
-		text = face.RenderTelegramStatusSystem(status, personaEffort, governorEffort)
+		summary := statusReadableSummaryText(ctx, router, statusReadableFactsFromSystem(view, status))
+		text = renderReadableStatusOperatorView(face.RenderTelegramStatusSystemOperatorCard(status, personaEffort, governorEffort), summary)
 	case statusViewHotChats:
 		if !isAdmin {
 			return "", nil, fmt.Errorf("admin status view denied")
@@ -76,7 +74,8 @@ func renderStatusView(ctx context.Context, router commandRouter, currentChatID i
 		}
 		systemStatus = status
 		systemLoaded = true
-		text = face.RenderTelegramStatusHotChats(status)
+		summary := statusReadableSummaryText(ctx, router, statusReadableFactsFromSystem(view, status))
+		text = renderReadableStatusOperatorView(face.RenderTelegramStatusHotChatsOperatorCard(status), summary)
 	case statusViewFindChat:
 		if !isAdmin {
 			return "", nil, fmt.Errorf("admin status view denied")
@@ -87,7 +86,7 @@ func renderStatusView(ctx context.Context, router commandRouter, currentChatID i
 		}
 		systemStatus = status
 		systemLoaded = true
-		text = face.RenderTelegramStatusFindChat(status)
+		text = face.RenderTelegramStatusFindChatOperatorCard(status)
 	case statusViewDurables:
 		if !isAdmin {
 			return "", nil, fmt.Errorf("admin status view denied")
@@ -96,28 +95,33 @@ func renderStatusView(ctx context.Context, router commandRouter, currentChatID i
 		if err != nil {
 			return "", nil, err
 		}
-		text = face.RenderTelegramStatusDurables(status)
+		summary := statusReadableSummaryText(ctx, router, statusReadableFactsFromDurables(status))
+		text = renderReadableStatusOperatorView(face.RenderTelegramStatusDurablesOperatorCard(status), summary)
 	default:
 		chat, err := router.StatusChat(currentChatID)
 		if err != nil {
 			return "", nil, err
 		}
 		view = statusViewChat
-		rawText := face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
-		summary := statusReadableSummaryText(ctx, router, view, rawText)
+		summary := statusReadableSummaryText(ctx, router, statusReadableFactsFromChat(view, chat))
 		text = renderStatusChatOperatorView(chat, personaEffort, governorEffort, false, summary)
 	}
-	if view != statusViewChat && view != statusViewPending && view != statusViewChatTarget {
-		summary := statusReadableSummaryText(ctx, router, view, text)
-		text = renderReadableStatusView(view, text, summary)
-	}
 	text = humanizeTelegramTelemetryText(text)
-	rows := statusKeyboardRows(view, currentChatID, targetChatID, isAdmin, systemStatus, systemLoaded)
+	rows := statusKeyboardRows(view, currentChatID, targetChatID, isAdmin, systemStatus, systemLoaded, false)
 	return text, rows, nil
 }
 
 func renderStatusChatOperatorView(chat core.ChatStatusSnapshot, personaEffort string, governorEffort string, pendingOnly bool, quickRead string) string {
 	text := strings.TrimSpace(face.RenderTelegramStatusChatOperatorCard(chat, personaEffort, governorEffort, pendingOnly))
+	quickRead = strings.TrimSpace(quickRead)
+	if quickRead == "" {
+		return text
+	}
+	return "Quick Read: " + quickRead + "\n\n" + text
+}
+
+func renderReadableStatusOperatorView(text string, quickRead string) string {
+	text = strings.TrimSpace(text)
 	quickRead = strings.TrimSpace(quickRead)
 	if quickRead == "" {
 		return text

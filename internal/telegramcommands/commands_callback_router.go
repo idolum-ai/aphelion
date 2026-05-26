@@ -52,8 +52,11 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 	if action, token, ok := decodeTailnetRevokeTokenCallbackData(cb.Data); ok {
 		return handleTailnetRevokeTokenCallback(ctx, sender, router, cb, action, token)
 	}
-	if action, surfaceID, ok := decodeTailnetRevokeCallbackData(cb.Data); ok {
-		return handleTailnetRevokeCallback(ctx, sender, router, cb, action, surfaceID)
+	if token, ok := decodeTailnetSurfaceCallbackData(cb.Data); ok {
+		return handleTailnetSurfaceCallback(ctx, sender, router, cb, token)
+	}
+	if token, ok := decodeTailnetGrantCallbackData(cb.Data); ok {
+		return handleTailnetGrantCallback(ctx, sender, router, cb, token)
 	}
 	if action, ok := decodeTailnetCallbackData(cb.Data); ok {
 		return handleTailnetCallback(ctx, sender, router, cb, action)
@@ -111,7 +114,21 @@ func handleStatusCallback(ctx context.Context, sender commandCallbackSender, rou
 		return true, err
 	}
 	personaEffort, governorEffort := router.CurrentEfforts()
-	rendered, rows, err := renderStatusView(ctx, router, chatID, senderID, view, targetChatID, personaEffort, governorEffort)
+	targetMsg, targetErr := telegramCallbackTargetMessage(router, cb)
+	if targetErr != nil {
+		return true, targetErr
+	}
+	var (
+		rendered string
+		rows     [][]telegram.InlineButton
+		err      error
+	)
+	if targetMsg.TelegramThreadID > 0 {
+		targetMsg.SenderID = senderID
+		rendered, rows, err = renderThreadStatusView(ctx, router, targetMsg, view, personaEffort, governorEffort)
+	} else {
+		rendered, rows, err = renderStatusView(ctx, router, chatID, senderID, view, targetChatID, personaEffort, governorEffort)
+	}
 	if err != nil {
 		return true, err
 	}

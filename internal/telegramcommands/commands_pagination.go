@@ -17,10 +17,13 @@ const (
 	telegramPageSurfaceThreads = "threads"
 	telegramPageSurfaceAgents  = "agents"
 	telegramPageSurfaceHealth  = "health"
+	telegramPageSurfaceTailnet = "tailnet"
 
-	telegramPageViewList    = "list"
-	telegramPageViewNonOpen = "nonopen"
-	telegramPageViewTrace   = "trace"
+	telegramPageViewList     = "list"
+	telegramPageViewNonOpen  = "nonopen"
+	telegramPageViewTrace    = "trace"
+	telegramPageViewSurfaces = "surfaces"
+	telegramPageViewGrants   = "grants"
 )
 
 type telegramPageRequest struct {
@@ -81,6 +84,8 @@ func validTelegramPageSurfaceView(surface string, view string) bool {
 		return view == telegramPageViewList
 	case telegramPageSurfaceHealth:
 		return view == telegramPageViewTrace
+	case telegramPageSurfaceTailnet:
+		return view == telegramPageViewSurfaces || view == telegramPageViewGrants
 	default:
 		return false
 	}

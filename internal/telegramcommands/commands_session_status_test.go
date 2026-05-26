@@ -726,6 +726,115 @@ func TestHandleTelegramCommandStatusShowsAdminButtonsForAdmins(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandStatusRecordsThreadCallbackMessage(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		canRestart: true,
+		statusMessageSnapshot: core.ChatStatusSnapshot{
+			GeneratedAt: time.Date(2026, 5, 7, 15, 0, 0, 0, time.UTC),
+			ChatID:      7,
+			PendingItems: []core.PendingItem{{
+				Kind:    core.PendingItemKindDecision,
+				ChatID:  7,
+				ID:      "decision-thread-status",
+				Summary: "Approve thread-local work.",
+			}},
+		},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:           7,
+		SenderID:         1001,
+		MessageID:        40,
+		TelegramThreadID: 3,
+		Text:             "/status",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.threadCallbackChatID != 7 || router.threadCallbackID != 3 || router.threadCallbackMessageID != 1 || router.threadCallbackSurface != "status" {
+		t.Fatalf("thread callback record = chat:%d thread:%d message:%d surface:%q, want 7/3/1/status", router.threadCallbackChatID, router.threadCallbackID, router.threadCallbackMessageID, router.threadCallbackSurface)
+	}
+	if router.statusMessage == nil || router.statusMessage.TelegramThreadID != 3 {
+		t.Fatalf("status message = %#v, want thread-scoped status lookup", router.statusMessage)
+	}
+	text := sender.inline[0].text
+	if !strings.HasPrefix(text, "(thread 3)\n\n") {
+		t.Fatalf("status text = %q, want thread prefix", text)
+	}
+	foundThisThread := false
+	for _, row := range sender.inline[0].rows {
+		for _, button := range row {
+			if button.Text == "This Thread" {
+				foundThisThread = true
+			}
+			if button.Text == "System Overview" || button.Text == "Hot Chats" || button.Text == "Find Chat" || button.Text == "Durables" {
+				t.Fatalf("thread status rows = %#v, should not include global admin status controls", sender.inline[0].rows)
+			}
+		}
+	}
+	if !foundThisThread {
+		t.Fatalf("thread status rows = %#v, want This Thread control", sender.inline[0].rows)
+	}
+}
+
+func TestHandleTelegramCommandCallbackStatusPreservesThreadScope(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		canRestart:        true,
+		threadReplyOK:     true,
+		threadReplyReturn: session.TelegramThread{ChatID: 7, ThreadID: 3, DisplaySlot: 3, Status: session.TelegramThreadStatusOpen},
+		statusMessageSnapshot: core.ChatStatusSnapshot{
+			GeneratedAt: time.Date(2026, 5, 7, 15, 30, 0, 0, time.UTC),
+			ChatID:      7,
+			PendingItems: []core.PendingItem{{
+				Kind:    core.PendingItemKindDecision,
+				ChatID:  7,
+				ID:      "decision-thread-status",
+				Summary: "Approve thread-local work.",
+			}},
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:   "cb-thread-status-pending",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "status:pending",
+		Message: &telegram.Message{
+			MessageID: 99,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.statusMessage == nil || router.statusMessage.TelegramThreadID != 3 || router.statusMessage.MessageID != 99 {
+		t.Fatalf("status message = %#v, want callback message resolved to thread 3", router.statusMessage)
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+	text := sender.editInline[0].text
+	if !strings.HasPrefix(text, "(thread 3)\n\n") || !strings.Contains(text, "Needs Attention:") {
+		t.Fatalf("thread status callback text = %q, want thread-prefixed pending view", text)
+	}
+	for _, row := range sender.editInline[0].rows {
+		for _, button := range row {
+			if button.Text == "System Overview" || button.Text == "Hot Chats" || button.Text == "Find Chat" || button.Text == "Durables" {
+				t.Fatalf("thread status callback rows = %#v, should not include global admin status controls", sender.editInline[0].rows)
+			}
+		}
+	}
+}
+
 func TestHandleTelegramCommandStatusShowsBlockedOperationSignal(t *testing.T) {
 	t.Parallel()
 

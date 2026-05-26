@@ -12,7 +12,7 @@ import (
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
-func statusKeyboardRows(view statusView, currentChatID int64, targetChatID int64, isAdmin bool, system core.SystemStatusSnapshot, systemLoaded bool) [][]telegram.InlineButton {
+func statusKeyboardRows(view statusView, currentChatID int64, targetChatID int64, isAdmin bool, system core.SystemStatusSnapshot, systemLoaded bool, threadScoped bool) [][]telegram.InlineButton {
 	if targetChatID == 0 {
 		targetChatID = currentChatID
 	}
@@ -20,13 +20,23 @@ func statusKeyboardRows(view statusView, currentChatID int64, targetChatID int64
 	if activeView == "" {
 		activeView = statusViewChat
 	}
+	if threadScoped && activeView != statusViewPending {
+		activeView = statusViewChat
+	}
+	thisLabel := "This Chat"
+	if threadScoped {
+		thisLabel = "This Thread"
+	}
 
 	rows := [][]telegram.InlineButton{
 		{
-			{Text: "This Chat", CallbackData: encodeStatusCallbackData(statusViewChat, currentChatID)},
+			{Text: thisLabel, CallbackData: encodeStatusCallbackData(statusViewChat, currentChatID)},
 			{Text: "Pending Only", CallbackData: encodeStatusCallbackData(statusViewPending, currentChatID)},
 			{Text: "Refresh", CallbackData: encodeStatusCallbackData(activeView, targetChatID)},
 		},
+	}
+	if threadScoped {
+		return rows
 	}
 	if isAdmin {
 		rows = append(rows, []telegram.InlineButton{

@@ -3,8 +3,6 @@
 package telegramcommands
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -20,7 +18,9 @@ const tailnetCallbackGrants = "grants"
 const tailnetCommandSurfaces = "surfaces"
 const tailnetCommandGrants = "grants"
 const tailnetCommandRevoke = "revoke"
-const tailnetRevokeCallbackPrefix = "tailnet_revoke:"
+const tailnetPageSize = 5
+const tailnetSurfaceCallbackPrefix = "tailnet_surface:"
+const tailnetGrantCallbackPrefix = "tailnet_grant:"
 const tailnetRevokeTokenCallbackPrefix = "tailnet_revoke_v2:"
 const tailnetRevokeCallbackAsk = "ask"
 const tailnetRevokeCallbackConfirm = "confirm"
@@ -120,48 +120,25 @@ func renderTailnetCommandWithMode(snapshot core.TailnetStatusSnapshot, detailed 
 	}, detailed), rows
 }
 
-func encodeTailnetCallbackData(action string) string {
-	return tailnetCallbackPrefix + strings.TrimSpace(action)
-}
-
-func decodeTailnetCallbackData(data string) (string, bool) {
-	trimmed := strings.TrimSpace(data)
-	if !strings.HasPrefix(trimmed, tailnetCallbackPrefix) {
-		return "", false
-	}
-	action := strings.TrimSpace(strings.TrimPrefix(trimmed, tailnetCallbackPrefix))
-	switch action {
-	case tailnetCallbackRefresh:
-		return action, true
-	case tailnetCallbackSurfaces:
-		return action, true
-	case tailnetCallbackGrants:
-		return action, true
-	default:
-		return "", false
-	}
-}
-
 func renderTailnetSurfacesCommand(surfaces []core.TailnetSurfaceStatus) (string, [][]telegram.InlineButton) {
-	return renderTailnetSurfacesCommandWithMode(surfaces, false)
+	return renderTailnetSurfacesCommandPage(surfaces, 1)
 }
 
-func renderTailnetSurfacesCommandWithMode(surfaces []core.TailnetSurfaceStatus, detailed bool) (string, [][]telegram.InlineButton) {
+func renderTailnetSurfacesCommandPage(surfaces []core.TailnetSurfaceStatus, page int) (string, [][]telegram.InlineButton) {
+	visible, info := telegramPageItems(surfaces, page, tailnetPageSize)
 	state := fmt.Sprintf("%d registered surface(s)", len(surfaces))
-	next := "Refresh after child or Tailnet policy changes."
-	details := make([]string, 0, len(surfaces)*3)
+	if info.PageCount > 1 {
+		state = fmt.Sprintf("%d registered surface(s); page %d of %d", len(surfaces), info.Page, info.PageCount)
+	}
+	next := "Inspect a surface before revoking local registry trust."
+	details := make([]string, 0, len(visible)*3)
 	if len(surfaces) == 0 {
 		details = append(details, "No registered surfaces.")
 	} else {
-		limit := len(surfaces)
-		if limit > 10 {
-			limit = 10
-		}
-		for i := 0; i < limit; i++ {
-			surface := surfaces[i]
+		for i, surface := range visible {
 			label := firstTailnetNonEmpty(surface.Name, surface.SurfaceID, "surface")
 			owner := strings.Trim(strings.TrimSpace(surface.OwnerKind)+"/"+strings.TrimSpace(surface.OwnerID), "/")
-			line := fmt.Sprintf("%s %s", firstTailnetNonEmpty(surface.Status, "unknown"), label)
+			line := fmt.Sprintf("%d. %s %s", info.Start+i+1, firstTailnetNonEmpty(surface.Status, "unknown"), label)
 			if kind := strings.TrimSpace(surface.SurfaceKind); kind != "" {
 				line += " (" + kind + ")"
 			}
@@ -179,44 +156,40 @@ func renderTailnetSurfacesCommandWithMode(surfaces []core.TailnetSurfaceStatus, 
 				details = append(details, "Error: "+truncateOperatorLine(errText, 180))
 			}
 		}
-		if len(surfaces) > limit {
-			details = append(details, fmt.Sprintf("%d more surface(s) omitted", len(surfaces)-limit))
-		}
 	}
 	rows := [][]telegram.InlineButton{{
 		{Text: "Status", CallbackData: encodeTailnetCallbackData(tailnetCallbackRefresh)},
 		{Text: "Refresh", CallbackData: encodeTailnetCallbackData(tailnetCallbackSurfaces)},
 		{Text: "Grants", CallbackData: encodeTailnetCallbackData(tailnetCallbackGrants)},
 	}}
-	revokeRows := tailnetSurfaceRevokeRows(surfaces)
-	rows = append(rows, revokeRows...)
-	return renderTelegramCompactPanel(face.OperatorPanel{
+	rows = append(rows, tailnetSurfaceDetailRows(visible, info.Start)...)
+	rows = append(rows, telegramPageNavigationRows(info, telegramPageSurfaceTailnet, telegramPageViewSurfaces)...)
+	return renderTelegramCompactPanelWithLimits(face.OperatorPanel{
 		Title:   "Tailnet Surfaces",
 		State:   state,
 		Why:     "Registered surfaces are private mirrors of approved child or parent grants.",
 		Next:    next,
 		Details: details,
-	}, detailed), rows
+	}, 12, 0), rows
 }
 
 func renderTailnetGrantBindingsCommand(bindings []core.TailnetGrantBindingStatus) (string, [][]telegram.InlineButton) {
-	return renderTailnetGrantBindingsCommandWithMode(bindings, false)
+	return renderTailnetGrantBindingsCommandPage(bindings, 1)
 }
 
-func renderTailnetGrantBindingsCommandWithMode(bindings []core.TailnetGrantBindingStatus, detailed bool) (string, [][]telegram.InlineButton) {
+func renderTailnetGrantBindingsCommandPage(bindings []core.TailnetGrantBindingStatus, page int) (string, [][]telegram.InlineButton) {
+	visible, info := telegramPageItems(bindings, page, tailnetPageSize)
 	state := fmt.Sprintf("%d grant binding(s)", len(bindings))
-	next := "Apply, drift, or rollback Tailnet grant bindings from the CLI after policy evidence changes."
-	details := make([]string, 0, len(bindings)*3)
+	if info.PageCount > 1 {
+		state = fmt.Sprintf("%d grant binding(s); page %d of %d", len(bindings), info.Page, info.PageCount)
+	}
+	next := "Inspect a binding here; apply, drift, or rollback from the CLI."
+	details := make([]string, 0, len(visible)*3)
 	if len(bindings) == 0 {
 		details = append(details, "No Tailnet grant bindings.")
 	} else {
-		limit := len(bindings)
-		if limit > 10 {
-			limit = 10
-		}
-		for i := 0; i < limit; i++ {
-			binding := bindings[i]
-			line := fmt.Sprintf("%s %s", firstTailnetNonEmpty(binding.Status, "unknown"), firstTailnetNonEmpty(binding.BindingID, "binding"))
+		for i, binding := range visible {
+			line := fmt.Sprintf("%d. %s %s", info.Start+i+1, firstTailnetNonEmpty(binding.Status, "unknown"), firstTailnetNonEmpty(binding.BindingID, "binding"))
 			if grantID := strings.TrimSpace(binding.GrantID); grantID != "" {
 				line += "; grant " + grantID
 			}
@@ -232,22 +205,131 @@ func renderTailnetGrantBindingsCommandWithMode(bindings []core.TailnetGrantBindi
 				details = append(details, "Reason: "+truncateOperatorLine(drift, 180))
 			}
 		}
-		if len(bindings) > limit {
-			details = append(details, fmt.Sprintf("%d more grant binding(s) omitted", len(bindings)-limit))
-		}
 	}
 	rows := [][]telegram.InlineButton{{
 		{Text: "Status", CallbackData: encodeTailnetCallbackData(tailnetCallbackRefresh)},
 		{Text: "Surfaces", CallbackData: encodeTailnetCallbackData(tailnetCallbackSurfaces)},
 		{Text: "Refresh", CallbackData: encodeTailnetCallbackData(tailnetCallbackGrants)},
 	}}
-	return renderTelegramCompactPanel(face.OperatorPanel{
+	rows = append(rows, tailnetGrantDetailRows(visible, info.Start)...)
+	rows = append(rows, telegramPageNavigationRows(info, telegramPageSurfaceTailnet, telegramPageViewGrants)...)
+	return renderTelegramCompactPanelWithLimits(face.OperatorPanel{
 		Title:   "Tailnet Grants",
 		State:   state,
 		Why:     "Grant bindings project approved Aphelion authority into private-network policy evidence.",
 		Next:    next,
 		Details: details,
-	}, detailed), rows
+	}, 12, 0), rows
+}
+
+func renderTailnetSurfaceDetail(surface core.TailnetSurfaceStatus) (string, [][]telegram.InlineButton) {
+	surfaceID := strings.TrimSpace(surface.SurfaceID)
+	label := firstTailnetNonEmpty(surface.Name, surfaceID, "surface")
+	owner := strings.Trim(strings.TrimSpace(surface.OwnerKind)+"/"+strings.TrimSpace(surface.OwnerID), "/")
+	state := firstTailnetNonEmpty(surface.Status, "unknown") + " " + label
+	details := []string{
+		"Surface: " + surfaceID,
+	}
+	if kind := strings.TrimSpace(surface.SurfaceKind); kind != "" {
+		details = append(details, "Kind: "+kind)
+	}
+	if owner != "" {
+		details = append(details, "Owner: "+owner)
+	}
+	if url := strings.TrimSpace(surface.URL); url != "" {
+		details = append(details, "URL: "+truncateOperatorLine(url, 220))
+	}
+	if host := firstTailnetNonEmpty(surface.Hostname, surface.TailnetName); host != "" {
+		details = append(details, "Host: "+truncateOperatorLine(host, 160))
+	}
+	if listen := strings.TrimSpace(surface.ListenAddr); listen != "" {
+		details = append(details, "Listen: "+truncateOperatorLine(listen, 160))
+	}
+	if len(surface.Tags) > 0 {
+		details = append(details, "Tags: "+strings.Join(surface.Tags, ", "))
+	}
+	evidence := tailnetTimeEvidence(
+		tailnetEvidenceTime{Label: "Declared", At: surface.DeclaredAt},
+		tailnetEvidenceTime{Label: "Activated", At: surface.ActivatedAt},
+		tailnetEvidenceTime{Label: "Observed", At: surface.LastObservedAt},
+		tailnetEvidenceTime{Label: "Revoked", At: surface.RevokedAt},
+		tailnetEvidenceTime{Label: "Updated", At: surface.UpdatedAt},
+	)
+	if errText := strings.TrimSpace(surface.LastError); errText != "" {
+		evidence = append(evidence, "Last error: "+truncateOperatorLine(errText, 180))
+	}
+	rows := [][]telegram.InlineButton{{
+		{Text: "Surfaces", CallbackData: encodeTailnetCallbackData(tailnetCallbackSurfaces)},
+		{Text: "Grants", CallbackData: encodeTailnetCallbackData(tailnetCallbackGrants)},
+	}}
+	actionRow := []telegram.InlineButton{}
+	if url := strings.TrimSpace(surface.URL); url != "" {
+		actionRow = append(actionRow, telegram.InlineButton{Text: "Open", URL: url})
+	}
+	if surfaceID != "" && strings.TrimSpace(surface.Status) != "revoked" {
+		actionRow = append(actionRow, telegram.InlineButton{Text: "Revoke", CallbackData: encodeTailnetRevokeTokenCallbackData(tailnetRevokeCallbackAsk, surfaceID)})
+	}
+	if len(actionRow) > 0 {
+		rows = append(rows, actionRow)
+	}
+	return renderTelegramCompactPanelWithLimits(face.OperatorPanel{
+		Title:    "Tailnet Surface",
+		State:    state,
+		Why:      "This is local registry evidence for a private Tailnet-facing surface.",
+		Next:     "Refresh surfaces after external Tailnet or child policy changes.",
+		Details:  details,
+		Evidence: evidence,
+	}, 12, 4), rows
+}
+
+func renderTailnetGrantDetail(binding core.TailnetGrantBindingStatus) (string, [][]telegram.InlineButton) {
+	bindingID := strings.TrimSpace(binding.BindingID)
+	state := firstTailnetNonEmpty(binding.Status, "unknown") + " " + firstTailnetNonEmpty(bindingID, "binding")
+	details := []string{
+		"Binding: " + bindingID,
+	}
+	if grantID := strings.TrimSpace(binding.GrantID); grantID != "" {
+		details = append(details, "Grant: "+grantID)
+	}
+	if surfaceID := strings.TrimSpace(binding.SurfaceID); surfaceID != "" {
+		details = append(details, "Surface: "+surfaceID)
+	}
+	target := strings.Trim(strings.TrimSpace(binding.CapabilityKind)+"/"+strings.TrimSpace(binding.TargetResource), "/")
+	if target != "" {
+		details = append(details, "Target: "+truncateOperatorLine(target, 160))
+	}
+	if grantedTo := strings.TrimSpace(binding.GrantedTo); grantedTo != "" {
+		details = append(details, "Granted to: "+truncateOperatorLine(grantedTo, 160))
+	}
+	evidence := make([]string, 0, 6)
+	if policyHash := strings.TrimSpace(binding.AppliedPolicyHash); policyHash != "" {
+		evidence = append(evidence, "Applied policy: "+truncateOperatorLine(policyHash, 160))
+	}
+	if policyHash := strings.TrimSpace(binding.ObservedPolicyHash); policyHash != "" {
+		evidence = append(evidence, "Observed policy: "+truncateOperatorLine(policyHash, 160))
+	}
+	if drift := strings.TrimSpace(binding.DriftReason); drift != "" {
+		evidence = append(evidence, "Reason: "+truncateOperatorLine(drift, 180))
+	}
+	evidence = append(evidence, tailnetTimeEvidence(
+		tailnetEvidenceTime{Label: "Created", At: binding.CreatedAt},
+		tailnetEvidenceTime{Label: "Applied", At: binding.AppliedAt},
+		tailnetEvidenceTime{Label: "Revoked", At: binding.RevokedAt},
+		tailnetEvidenceTime{Label: "Updated", At: binding.UpdatedAt},
+	)...)
+	rows := [][]telegram.InlineButton{{
+		{Text: "Grants", CallbackData: encodeTailnetCallbackData(tailnetCallbackGrants)},
+		{Text: "Surfaces", CallbackData: encodeTailnetCallbackData(tailnetCallbackSurfaces)},
+		{Text: "Status", CallbackData: encodeTailnetCallbackData(tailnetCallbackRefresh)},
+	}}
+	return renderTelegramCompactPanelWithLimits(face.OperatorPanel{
+		Title:    "Tailnet Grant",
+		State:    state,
+		Why:      "This binding is the evidence that approved Aphelion authority maps to private-network policy.",
+		Next:     "Use the CLI for apply, drift, or rollback actions after inspecting policy evidence.",
+		Details:  details,
+		Evidence: evidence,
+	}, 12, 6), rows
 }
 
 func renderTailnetRevokeConfirmation(surfaceID string) (string, [][]telegram.InlineButton) {
@@ -265,20 +347,14 @@ func renderTailnetRevokeConfirmation(surfaceID string) (string, [][]telegram.Inl
 		}),
 	}
 	rows := [][]telegram.InlineButton{{
-		{Text: "Cancel", CallbackData: encodeTailnetRevokeCallbackData(tailnetRevokeCallbackCancel, surfaceID)},
-		{Text: "Revoke", CallbackData: encodeTailnetRevokeCallbackData(tailnetRevokeCallbackConfirm, surfaceID)},
+		{Text: "Cancel", CallbackData: encodeTailnetRevokeTokenCallbackData(tailnetRevokeCallbackCancel, surfaceID)},
+		{Text: "Revoke", CallbackData: encodeTailnetRevokeTokenCallbackData(tailnetRevokeCallbackConfirm, surfaceID)},
 	}}
 	return strings.Join(compactStatusDisplayLines(lines), "\n"), rows
 }
 
 func renderTailnetRevokeTokenConfirmation(surfaceID string) (string, [][]telegram.InlineButton) {
-	surfaceID = strings.TrimSpace(surfaceID)
-	text, _ := renderTailnetRevokeConfirmation(surfaceID)
-	rows := [][]telegram.InlineButton{{
-		{Text: "Cancel", CallbackData: encodeTailnetRevokeTokenCallbackData(tailnetRevokeCallbackCancel, surfaceID)},
-		{Text: "Revoke", CallbackData: encodeTailnetRevokeTokenCallbackData(tailnetRevokeCallbackConfirm, surfaceID)},
-	}}
-	return text, rows
+	return renderTailnetRevokeConfirmation(surfaceID)
 }
 
 func renderTailnetRevokeCanceled(surfaceID string) string {
@@ -313,130 +389,4 @@ func renderTailnetRevokeResult(requestedID string, surface core.TailnetSurfaceSt
 		Next:     "Refresh surfaces; any still-observed listener will be reported as drift.",
 		Evidence: evidence,
 	})
-}
-
-func encodeTailnetRevokeCallbackData(action string, surfaceID string) string {
-	return tailnetRevokeCallbackPrefix + strings.TrimSpace(action) + ":" + strings.TrimSpace(surfaceID)
-}
-
-func encodeTailnetRevokeTokenCallbackData(action string, surfaceID string) string {
-	return tailnetRevokeTokenCallbackPrefix + strings.TrimSpace(action) + ":" + tailnetSurfaceCallbackToken(surfaceID)
-}
-
-func decodeTailnetRevokeCallbackData(data string) (string, string, bool) {
-	trimmed := strings.TrimSpace(data)
-	if !strings.HasPrefix(trimmed, tailnetRevokeCallbackPrefix) {
-		return "", "", false
-	}
-	rest := strings.TrimPrefix(trimmed, tailnetRevokeCallbackPrefix)
-	idx := strings.Index(rest, ":")
-	if idx <= 0 {
-		return "", "", false
-	}
-	action := strings.TrimSpace(rest[:idx])
-	surfaceID := strings.TrimSpace(rest[idx+1:])
-	if surfaceID == "" {
-		return "", "", false
-	}
-	switch action {
-	case tailnetRevokeCallbackConfirm, tailnetRevokeCallbackCancel:
-		return action, surfaceID, true
-	default:
-		return "", "", false
-	}
-}
-
-func decodeTailnetRevokeTokenCallbackData(data string) (string, string, bool) {
-	trimmed := strings.TrimSpace(data)
-	if !strings.HasPrefix(trimmed, tailnetRevokeTokenCallbackPrefix) {
-		return "", "", false
-	}
-	rest := strings.TrimPrefix(trimmed, tailnetRevokeTokenCallbackPrefix)
-	idx := strings.Index(rest, ":")
-	if idx <= 0 {
-		return "", "", false
-	}
-	action := strings.TrimSpace(rest[:idx])
-	token := strings.TrimSpace(rest[idx+1:])
-	if token == "" {
-		return "", "", false
-	}
-	switch action {
-	case tailnetRevokeCallbackAsk, tailnetRevokeCallbackConfirm, tailnetRevokeCallbackCancel:
-		return action, token, true
-	default:
-		return "", "", false
-	}
-}
-
-func tailnetSurfaceRevokeRows(surfaces []core.TailnetSurfaceStatus) [][]telegram.InlineButton {
-	limit := len(surfaces)
-	if limit > 6 {
-		limit = 6
-	}
-	rows := make([][]telegram.InlineButton, 0, (limit+1)/2)
-	row := make([]telegram.InlineButton, 0, 2)
-	for i := 0; i < limit; i++ {
-		surfaceID := strings.TrimSpace(surfaces[i].SurfaceID)
-		if surfaceID == "" {
-			continue
-		}
-		row = append(row, telegram.InlineButton{
-			Text:         fmt.Sprintf("Revoke %d", i+1),
-			CallbackData: encodeTailnetRevokeTokenCallbackData(tailnetRevokeCallbackAsk, surfaceID),
-		})
-		if len(row) == 2 {
-			rows = append(rows, row)
-			row = make([]telegram.InlineButton, 0, 2)
-		}
-	}
-	if len(row) > 0 {
-		rows = append(rows, row)
-	}
-	return rows
-}
-
-func tailnetSurfaceCallbackToken(surfaceID string) string {
-	sum := sha1.Sum([]byte(strings.TrimSpace(surfaceID)))
-	return hex.EncodeToString(sum[:])[:12]
-}
-
-func resolveTailnetSurfaceCallbackToken(surfaces []core.TailnetSurfaceStatus, token string) (string, bool) {
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return "", false
-	}
-	found := ""
-	for _, surface := range surfaces {
-		surfaceID := strings.TrimSpace(surface.SurfaceID)
-		if surfaceID == "" || tailnetSurfaceCallbackToken(surfaceID) != token {
-			continue
-		}
-		if found != "" {
-			return "", false
-		}
-		found = surfaceID
-	}
-	return found, found != ""
-}
-
-func nextTailnetToken(raw string) (string, string) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", ""
-	}
-	if idx := strings.IndexAny(raw, " \n\t"); idx >= 0 {
-		return strings.ToLower(strings.TrimSpace(raw[:idx])), strings.TrimSpace(raw[idx+1:])
-	}
-	return strings.ToLower(raw), ""
-}
-
-func firstTailnetNonEmpty(values ...string) string {
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
