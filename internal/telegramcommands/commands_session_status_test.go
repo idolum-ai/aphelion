@@ -335,9 +335,10 @@ func TestHandleTelegramCommandCallbackContextAskMeQueuesClarification(t *testing
 	sender := &stubCommandSender{}
 	router := &stubCommandRouter{}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
-		ID:   "cb-context-ask",
-		From: &telegram.User{ID: 1001, Username: "admin"},
-		Data: "context:ask",
+		ID:       "cb-context-ask",
+		From:     &telegram.User{ID: 1001, Username: "admin"},
+		Data:     "context:ask",
+		UpdateID: 808,
 		Message: &telegram.Message{
 			MessageID: 95,
 			Chat:      &telegram.Chat{ID: 7, Type: "private"},
@@ -354,6 +355,9 @@ func TestHandleTelegramCommandCallbackContextAskMeQueuesClarification(t *testing
 	}
 	if got := router.clarificationMsg.Text; !strings.Contains(got, "Ask me concise clarifying questions about the current context") || !strings.Contains(got, "Do not write memory") {
 		t.Fatalf("clarification text = %q, want context Ask Me prompt", got)
+	}
+	if router.clarificationMsg.IngressSurface != telegramContextClarificationIngressSurface || router.clarificationMsg.IngressUpdateID != 808 {
+		t.Fatalf("clarification ingress = %s/%d, want context clarification callback work", router.clarificationMsg.IngressSurface, router.clarificationMsg.IngressUpdateID)
 	}
 }
 
@@ -519,9 +523,10 @@ func TestHandleTelegramCommandCallbackMemoryAskMeQueuesClarification(t *testing.
 	sender := &stubCommandSender{}
 	router := &stubCommandRouter{}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
-		ID:   "cb-memory-ask",
-		From: &telegram.User{ID: 1001, Username: "admin"},
-		Data: "memory:ask:session",
+		ID:       "cb-memory-ask",
+		From:     &telegram.User{ID: 1001, Username: "admin"},
+		Data:     "memory:ask:session",
+		UpdateID: 809,
 		Message: &telegram.Message{
 			MessageID: 95,
 			Chat:      &telegram.Chat{ID: 7, Type: "private"},
@@ -539,8 +544,8 @@ func TestHandleTelegramCommandCallbackMemoryAskMeQueuesClarification(t *testing.
 	if got := router.clarificationMsg.Text; !strings.Contains(got, "Ask me concise clarifying questions about memory") || strings.Contains(got, "write memory") && !strings.Contains(got, "Do not write memory") {
 		t.Fatalf("clarification text = %q, want memory Ask Me prompt", got)
 	}
-	if _, ok := router.MemoryFocus(7); ok {
-		t.Fatal("memory focus was set, want Ask Me to be read-only")
+	if router.clarificationMsg.IngressSurface != telegramMemoryClarificationIngressSurface || router.clarificationMsg.IngressUpdateID != 809 {
+		t.Fatalf("clarification ingress = %s/%d, want memory clarification callback work", router.clarificationMsg.IngressSurface, router.clarificationMsg.IngressUpdateID)
 	}
 }
 

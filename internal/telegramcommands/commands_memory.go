@@ -173,7 +173,6 @@ func renderContextPanel(snapshot core.ContextSnapshot) (string, [][]telegram.Inl
 		"Current lane: " + contextLaneLabel(chat),
 		"Active operation: " + firstNonEmpty(chat.OperationSummary, chat.OperationStatus, "none"),
 		"Current plan: " + firstNonEmpty(chat.PlanStep, chat.PlanStepStatus, "none"),
-		"Active focus/scratchpad: " + contextFocusLabel(snapshot.Focus),
 	}
 	if len(snapshot.Recent) == 0 {
 		details = append(details, "Recent relevant context: none surfaced")
@@ -233,13 +232,6 @@ func contextLaneLabel(chat core.ChatStatusSnapshot) string {
 	return "unknown"
 }
 
-func contextFocusLabel(focus core.MemoryFocus) string {
-	if !focus.Active() {
-		return "none"
-	}
-	return firstNonEmpty(focus.Label, focus.Excerpt, focus.ItemID)
-}
-
 func handleMemoryReviewCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, action memoryReviewCallbackAction, source memoryReviewSource, index int) (bool, error) {
 	_ = index
 	targetMsg, err := telegramCallbackTargetMessage(router, cb)
@@ -257,7 +249,7 @@ func handleMemoryReviewCallback(ctx context.Context, sender commandCallbackSende
 		source = memoryReviewSourceSession
 	}
 	if action == memoryReviewActionAsk {
-		return queueAskMeCallback(ctx, sender, router, cb, targetMsg, askMePrompt("memory", source))
+		return queueAskMeCallback(ctx, sender, router, cb, targetMsg, telegramMemoryClarificationIngressSurface, askMePrompt("memory", source))
 	}
 	if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 		return true, err
@@ -286,7 +278,7 @@ func handleContextCallback(ctx context.Context, sender commandCallbackSender, ro
 		return true, nil
 	}
 	if action == memoryReviewActionAsk {
-		return queueAskMeCallback(ctx, sender, router, cb, targetMsg, askMePrompt("context", memoryReviewSourceSession))
+		return queueAskMeCallback(ctx, sender, router, cb, targetMsg, telegramContextClarificationIngressSurface, askMePrompt("context", memoryReviewSourceSession))
 	}
 	if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 		return true, err
@@ -303,19 +295,18 @@ func handleContextCallback(ctx context.Context, sender commandCallbackSender, ro
 	return true, nil
 }
 
-func queueAskMeCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, targetMsg core.InboundMessage, prompt string) (bool, error) {
-	if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Clarification queued."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
-		return true, err
-	}
+func queueAskMeCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, targetMsg core.InboundMessage, surface string, prompt string) (bool, error) {
 	queued := targetMsg
 	queued.Text = prompt
-	queued.IngressSurface = ""
-	queued.IngressUpdateID = 0
-	queued.MessageID = 0
+	queued.IngressSurface = strings.TrimSpace(surface)
+	queued.IngressUpdateID = cb.UpdateID
 	if clarification, ok := router.(interface {
 		QueueClarification(context.Context, core.InboundMessage) error
 	}); ok {
 		if err := clarification.QueueClarification(ctx, queued); err != nil {
+			return true, err
+		}
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Clarification queued."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 			return true, err
 		}
 		return true, nil
@@ -325,7 +316,13 @@ func queueAskMeCallback(ctx context.Context, sender commandCallbackSender, route
 		Text:    prompt,
 		ReplyTo: replyToMessageID(targetMsg.MessageID),
 	})
-	return true, err
+	if err != nil {
+		return true, err
+	}
+	if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Clarification queued."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+		return true, err
+	}
+	return true, nil
 }
 
 func askMePrompt(surface string, source memoryReviewSource) string {

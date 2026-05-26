@@ -22,6 +22,8 @@ const (
 	telegramPrimaryIngressSurface                         = telegramruntime.PrimaryIngressSurface
 	telegramThreadSummaryIngressSurface                   = telegramruntime.ThreadSummaryIngressSurface
 	telegramDoctorIngressSurface                          = telegramruntime.DoctorIngressSurface
+	telegramContextClarificationIngressSurface            = telegramruntime.ContextClarificationIngressSurface
+	telegramMemoryClarificationIngressSurface             = telegramruntime.MemoryClarificationIngressSurface
 	telegramBusyDecisionResumeIngressSurface              = telegramruntime.BusyDecisionResumeIngressSurface
 	telegramArtifactRetentionDecisionResumeIngressSurface = telegramruntime.ArtifactRetentionDecisionResumeIngressSurface
 

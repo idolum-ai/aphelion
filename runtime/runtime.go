@@ -116,8 +116,6 @@ type Runtime struct {
 	recipeFileMu           sync.Mutex
 	recipePath             string
 	recipeState            runtimeRecipeState
-	memoryFocusMu          sync.RWMutex
-	memoryFocusBySession   map[string]core.MemoryFocus
 	shuttingDown           atomic.Bool
 }
 
@@ -405,7 +403,6 @@ func New(
 		modelProviderCache:       make(map[string]agent.Provider),
 		recipePath:               recipePath,
 		recipeState:              recipeState,
-		memoryFocusBySession:     make(map[string]core.MemoryFocus),
 		scopeResolver:            scopeResolver,
 		workExecutor: newWorkExecutorSelector(cfg.Work, []WorkExecutor{
 			newCodexWorkExecutor(cfg.Work.Codex),

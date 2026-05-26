@@ -115,6 +115,9 @@ func TestThreadBackCallbackReturnsToBoard(t *testing.T) {
 	if !strings.Contains(sender.editInline[0].text, "**Open Threads**") || !commandRowsContain(sender.editInline[0].rows, "1", "thread_detail:42") {
 		t.Fatalf("board edit text=%q rows=%#v, want board with thread button", sender.editInline[0].text, sender.editInline[0].rows)
 	}
+	if router.threadCallbackClearChatID != 1001 || router.threadCallbackClearMessageID != 9004 || router.threadCallbackClearSurface != "threads_list" {
+		t.Fatalf("callback clear ledger = chat:%d msg:%d surface:%q, want 1001/9004/threads_list", router.threadCallbackClearChatID, router.threadCallbackClearMessageID, router.threadCallbackClearSurface)
+	}
 }
 
 func TestThreadPromoteCallbackCreatesDraftThroughRouter(t *testing.T) {

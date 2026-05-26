@@ -50,12 +50,6 @@ type Runtime interface {
 	MissionLedgerHealth(ctx context.Context, senderID int64) (session.MissionLedgerHealth, error)
 	MissionActionProposal(ctx context.Context, chatID int64, senderID int64, missionID string) (session.ActionProposal, error)
 	ApplyMissionActionProposalDecision(ctx context.Context, chatID int64, senderID int64, missionID string, choice string) (session.MissionState, bool, error)
-	MemoryFocus(chatID int64) (core.MemoryFocus, bool)
-	MemoryFocusForKey(key session.SessionKey) (core.MemoryFocus, bool)
-	SetMemoryFocus(chatID int64, focus core.MemoryFocus)
-	SetMemoryFocusForKey(key session.SessionKey, focus core.MemoryFocus)
-	ClearMemoryFocus(chatID int64) bool
-	ClearMemoryFocusForKey(key session.SessionKey) bool
 
 	ModelSlotStatuses() ([]core.ModelSlotStatus, error)
 	ValidateModelSlotConfig(cfg core.ModelSlotConfig) core.ModelValidation

@@ -47,7 +47,6 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 	defer r.clearChatTurnPhase(msg.ChatID)
 
 	key := session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramInboundScopeRef(msg)}
-	msg = r.applyMemoryFocusToInbound(msg, key)
 	unlock := r.lockSession(key)
 	defer unlock()
 

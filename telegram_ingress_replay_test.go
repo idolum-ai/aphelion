@@ -281,8 +281,8 @@ func TestStartupTelegramIngressReplaysEveryTypedWorkSurface(t *testing.T) {
 	defer store.Close()
 
 	surfaces := telegramStartupWorkSurfaces()
-	if len(surfaces) != 5 {
-		t.Fatalf("startup work surfaces = %#v, want primary, thread summary, doctor, busy resume, artifact resume", surfaces)
+	if len(surfaces) != 7 {
+		t.Fatalf("startup work surfaces = %#v, want primary, thread summary, doctor, clarification, busy resume, artifact resume", surfaces)
 	}
 	seenDefinitions := make(map[string]telegramWorkSurface)
 	for i, workSurface := range surfaces {

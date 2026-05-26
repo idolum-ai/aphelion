@@ -46,12 +46,12 @@ Current command surface:
   - Starts a background parent-child conversation kickoff for the selected durable agent.
 - `/context`
   - Opens a read-only context panel for the current chat or side-thread lane.
-  - Shows current lane, operation/plan summary, active scratchpad/focus signal if present, recent context preview, evidence, and `Writes: none`.
-  - `Ask Me` queues an ordinary clarification turn; it does not write memory or mutate focus.
+  - Shows current lane, operation/plan summary, recent context preview, evidence, and `Writes: none`.
+  - `Ask Me` queues durable callback-work clarification; it does not write memory or mutate state.
 - `/memory`
   - Opens a read-only memory-state panel with durable store counts, session/semantic recall preview, source/query evidence, and `Writes: none`.
   - Source selectors switch between session, shared semantic, and local semantic recall views.
-  - `Ask Me` queues an ordinary clarification turn for memory confirmation/correction; it does not write memory or mutate focus.
+  - `Ask Me` queues durable callback-work clarification for memory confirmation/correction; it does not write memory or mutate state.
 - `/thread`
   - Creates an empty per-chat side thread and shows a compact guide when called without arguments.
   - Starts a side thread and routes the first turn from `/thread <message>`.
@@ -379,8 +379,8 @@ Behavior:
 
 Behavior:
 
-- panel includes the current lane, operation/plan summary, active scratchpad/focus signal if present, recent context preview, evidence, and `Writes: none`.
-- `Ask Me` queues ordinary clarification work asking what context assumptions should be confirmed or corrected. It does not write memory or change focus.
+- panel includes the current lane, operation/plan summary, recent context preview, evidence, and `Writes: none`.
+- `Ask Me` queues durable callback-work clarification asking what context assumptions should be confirmed or corrected. It does not write memory or change state.
 - `Refresh` reloads the panel in place.
 
 ### `/memory` review controls
@@ -397,7 +397,7 @@ Behavior:
 
 - panel includes durable store counts, semantic/session recall counts, recall preview items, source/query evidence, and `Writes: none`.
 - recall preview items are evidence candidates only; they are not approved memories.
-- `Ask Me` queues ordinary clarification work asking which memory assumptions or recall items should be confirmed, corrected, or rejected. It does not write memory or change focus.
+- `Ask Me` queues durable callback-work clarification asking which memory assumptions or recall items should be confirmed, corrected, or rejected. It does not write memory or change state.
 - `Refresh` reloads the selected source in place.
 
 ### Continuation approval prompt
@@ -496,7 +496,8 @@ When a turn enters long-running activity/tool execution, Telegram shows one auto
   button can resume that exact pending message, or startup reissues a fresh
   prompt/defaults it through durable Telegram ingress.
 - Startup replay is limited to typed Telegram work surfaces: primary messages,
-  thread-summary work, doctor work, and decision-resume work.
+  thread-summary work, doctor work, context/memory clarification work, and
+  decision-resume work.
 - Approval buttons without a typed restart-resume path are detached as stale
   after restart; they do not grant authority to work that no longer has a live
   waiter.

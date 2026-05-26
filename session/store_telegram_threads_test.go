@@ -229,6 +229,12 @@ func TestTelegramThreadIDForReplyMessageUsesThreadLedgers(t *testing.T) {
 	if got, ok, err := store.TelegramThreadIDForReplyMessage(1001, 9004); err != nil || !ok || got != thread.ThreadID {
 		t.Fatalf("TelegramThreadIDForReplyMessage(callback) = %d ok=%v err=%v, want thread %d", got, ok, err, thread.ThreadID)
 	}
+	if err := store.ClearTelegramCallbackMessageThread(1001, 9004, "threads_list", time.Now().UTC()); err != nil {
+		t.Fatalf("ClearTelegramCallbackMessageThread() err = %v", err)
+	}
+	if got, ok, err := store.TelegramThreadIDForReplyMessage(1001, 9004); err != nil || ok || got != 0 {
+		t.Fatalf("TelegramThreadIDForReplyMessage(cleared callback) = %d ok=%v err=%v, want no thread", got, ok, err)
+	}
 	if err := store.UpsertPendingDecision(PendingDecisionRecord{
 		ID:                "thread-decision",
 		Sequence:          10,

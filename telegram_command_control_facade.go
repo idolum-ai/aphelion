@@ -164,24 +164,6 @@ func (c telegramCommandControl) MissionActionProposal(ctx context.Context, chatI
 func (c telegramCommandControl) ApplyMissionActionProposalDecision(ctx context.Context, chatID int64, senderID int64, missionID string, choice string) (session.MissionState, bool, error) {
 	return c.controlFacade().ApplyMissionActionProposalDecision(ctx, chatID, senderID, missionID, choice)
 }
-func (c telegramCommandControl) MemoryFocus(chatID int64) (core.MemoryFocus, bool) {
-	return c.controlFacade().MemoryFocus(chatID)
-}
-func (c telegramCommandControl) MemoryFocusForMessage(msg core.InboundMessage) (core.MemoryFocus, bool) {
-	return c.controlFacade().MemoryFocusForMessage(msg)
-}
-func (c telegramCommandControl) SetMemoryFocus(chatID int64, focus core.MemoryFocus) {
-	c.controlFacade().SetMemoryFocus(chatID, focus)
-}
-func (c telegramCommandControl) SetMemoryFocusForMessage(msg core.InboundMessage, focus core.MemoryFocus) {
-	c.controlFacade().SetMemoryFocusForMessage(msg, focus)
-}
-func (c telegramCommandControl) ClearMemoryFocus(chatID int64) bool {
-	return c.controlFacade().ClearMemoryFocus(chatID)
-}
-func (c telegramCommandControl) ClearMemoryFocusForMessage(msg core.InboundMessage) bool {
-	return c.controlFacade().ClearMemoryFocusForMessage(msg)
-}
 
 func (c telegramCommandControl) ModelSlotStatuses() ([]core.ModelSlotStatus, error) {
 	return c.controlFacade().ModelSlotStatuses()

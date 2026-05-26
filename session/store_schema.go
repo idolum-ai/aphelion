@@ -936,8 +936,12 @@ func migrateSchemaV57ToV58(tx *sql.Tx) error {
 			id,
 			slot,
 			config_json,
-			previous_config_json,
-			CASE status WHEN 'expired' THEN 'cleared' WHEN 'rolled_back' THEN 'cleared' ELSE status END,
+				previous_config_json,
+				CASE
+					WHEN status IN ('expired', 'rolled_back') THEN 'cleared'
+					WHEN status = 'active' AND TRIM(COALESCE(expires_at, '')) != '' THEN 'cleared'
+					ELSE status
+				END,
 			created_by,
 			reason,
 			created_at,

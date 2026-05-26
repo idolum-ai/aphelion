@@ -43,6 +43,7 @@ type commandThreadRouter interface {
 
 type commandThreadCallbackRecorder interface {
 	RecordTelegramThreadCallbackMessage(chatID int64, threadID int64, messageID int64, surface string) error
+	ClearTelegramThreadCallbackMessage(chatID int64, messageID int64, surface string) error
 }
 
 type telegramThreadUserError string

@@ -58,12 +58,13 @@ from chat history.
 Terminal-only callback or skipped rows may show `accepted_at` equal to the
 ledger write time. Treat `status`, `completed_at`, and the reason text as the
 evidence for those updates; `accepted_at` is literal only for accepted work rows.
-Long-running callback work, including `/health diagnose`, is recorded on a
-callback-work ingress surface before it starts so restart replay can recover it.
+Callback work that launches model turns, including `/health diagnose` and
+`/context`/`/memory` `Ask Me`, is recorded on a callback-work ingress surface
+before it starts so restart replay can recover it.
 Startup replay uses the compiled Telegram work-surface registry: primary
-messages, thread-summary callback work, doctor callback work, busy-decision
-resume work, and artifact-retention resume work are replayable; arbitrary
-callback text is not.
+messages, thread-summary callback work, doctor callback work,
+context/memory-clarification callback work, busy-decision resume work, and
+artifact-retention resume work are replayable; arbitrary callback text is not.
 Busy/interrupt and artifact-retention prompts keep a typed pending row alongside
 the Telegram approval prompt. After restart, Aphelion either resumes from the
 typed row when the old button is clicked, reissues a fresh prompt, or applies the
@@ -194,7 +195,7 @@ It is read-only; `Ask Me` queues clarification questions without writing memory.
 
 Use `/memory` to inspect read-only durable/semantic memory state and recall
 previews. `Ask Me` queues confirmation/correction questions without writing
-curated memory or changing focus.
+curated memory or changing state.
 
 Use `/mission` to review objectives and mission candidates. Mission state
 preserves intent and review material; it does not grant new authority on its

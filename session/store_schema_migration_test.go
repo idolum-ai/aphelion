@@ -938,14 +938,16 @@ func TestMigratesSchemaV57ToV58ModelSlotOverrides(t *testing.T) {
 	}
 	activeCreated := now.Add(-2 * time.Hour).Format(time.RFC3339Nano)
 	expiredAt := now.Add(-time.Hour).Format(time.RFC3339Nano)
+	futureAt := now.Add(time.Hour).Format(time.RFC3339Nano)
 	if _, err := db.Exec(`
 		INSERT INTO model_slot_overrides(
 			id, slot, config_json, previous_config_json, status, created_by, reason, expires_at, created_at, updated_at
 		) VALUES
-			(1, 'governor', '{"slot":"governor","provider":"openai","model":"gpt-5.5","effort":"high","transport":"auto","service_tier":"priority"}', '{"slot":"governor","provider":"anthropic","model":"claude-sonnet-4-6","transport":"auto"}', 'active', 'test', 'preserve active', ?, ?, ?),
+			(1, 'governor', '{"slot":"governor","provider":"openai","model":"gpt-5.5","effort":"high","transport":"auto","service_tier":"priority"}', '{"slot":"governor","provider":"anthropic","model":"claude-sonnet-4-6","transport":"auto"}', 'active', 'test', 'preserve active', NULL, ?, ?),
 			(2, 'persona', '{"slot":"persona","provider":"openai","model":"gpt-5.4","transport":"auto"}', '{}', 'expired', 'test', 'map terminal', ?, ?, ?),
-			(3, 'doctor', '{"slot":"doctor","provider":"codex","model":"gpt-5.5","transport":"auto"}', '{}', 'rolled_back', 'test', 'map terminal', ?, ?, ?)
-	`, expiredAt, activeCreated, activeCreated, expiredAt, activeCreated, activeCreated, expiredAt, activeCreated, activeCreated); err != nil {
+			(3, 'doctor', '{"slot":"doctor","provider":"codex","model":"gpt-5.5","transport":"auto"}', '{}', 'rolled_back', 'test', 'map terminal', ?, ?, ?),
+			(4, 'child_default', '{"slot":"child_default","provider":"openai","model":"gpt-5.5","transport":"auto","service_tier":"priority"}', '{}', 'active', 'test', 'drop time-bound active', ?, ?, ?)
+	`, activeCreated, activeCreated, expiredAt, activeCreated, activeCreated, expiredAt, activeCreated, activeCreated, futureAt, activeCreated, activeCreated); err != nil {
 		t.Fatalf("insert v57 model slot fixtures: %v", err)
 	}
 	if err := db.Close(); err != nil {
@@ -978,8 +980,11 @@ func TestMigratesSchemaV57ToV58ModelSlotOverrides(t *testing.T) {
 	for _, record := range history {
 		statusByID[record.ID] = record.Status
 	}
-	if statusByID[2] != "cleared" || statusByID[3] != "cleared" {
-		t.Fatalf("terminal migrated statuses = %#v, want expired and rolled_back rows mapped to cleared", statusByID)
+	if statusByID[2] != "cleared" || statusByID[3] != "cleared" || statusByID[4] != "cleared" {
+		t.Fatalf("migrated statuses = %#v, want expired, rolled_back, and time-bound active rows mapped to cleared", statusByID)
+	}
+	if _, ok, err := store.ActiveModelSlotOverride(core.ModelSlotChildDefault); err != nil || ok {
+		t.Fatalf("ActiveModelSlotOverride(child_default) ok=%t err=%v, want time-bound active row cleared", ok, err)
 	}
 	if _, err := store.SetModelSlotOverride(ModelSlotOverrideRecord{
 		Slot: core.ModelSlotPersona,

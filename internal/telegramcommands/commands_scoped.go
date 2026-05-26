@@ -66,15 +66,6 @@ func memoryReviewSnapshotForCommand(ctx context.Context, router commandRouter, m
 	return router.MemoryReviewSnapshot(ctx, msg.ChatID, msg.SenderID, source)
 }
 
-func memoryFocusForCommand(router commandRouter, msg core.InboundMessage) (core.MemoryFocus, bool) {
-	if msg.TelegramThreadID > 0 {
-		if scoped, ok := router.(commandScopedMemoryRouter); ok {
-			return scoped.MemoryFocusForMessage(msg)
-		}
-	}
-	return router.MemoryFocus(msg.ChatID)
-}
-
 func contextSnapshotForCommand(ctx context.Context, router commandRouter, msg core.InboundMessage) (core.ContextSnapshot, error) {
 	var (
 		chat core.ChatStatusSnapshot
@@ -92,7 +83,6 @@ func contextSnapshotForCommand(ctx context.Context, router commandRouter, msg co
 	if err != nil {
 		return core.ContextSnapshot{}, err
 	}
-	focus, _ := memoryFocusForCommand(router, msg)
 	recent, err := memoryReviewSnapshotForCommand(ctx, router, msg, memoryReviewSourceSession)
 	if err != nil {
 		return core.ContextSnapshot{}, err
@@ -100,7 +90,6 @@ func contextSnapshotForCommand(ctx context.Context, router commandRouter, msg co
 	return core.ContextSnapshot{
 		GeneratedAt: recent.GeneratedAt,
 		Chat:        chat,
-		Focus:       focus,
 		Recent:      recent.Items,
 	}, nil
 }

@@ -39,7 +39,6 @@ func (r *Runtime) ClearSessionContextForKey(key session.SessionKey) (bool, error
 	if err != nil {
 		return false, err
 	}
-	r.ClearMemoryFocusForKey(key)
 	return removed > 0, nil
 }
 

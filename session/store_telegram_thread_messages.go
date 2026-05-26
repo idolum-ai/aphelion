@@ -18,6 +18,27 @@ func (s *SQLiteStore) RecordTelegramCallbackMessageThread(chatID int64, messageI
 	return recordTelegramCallbackMessageThreadTx(s.db, chatID, messageID, threadID, surface, at)
 }
 
+func (s *SQLiteStore) ClearTelegramCallbackMessageThread(chatID int64, messageID int64, surface string, at time.Time) error {
+	if chatID == 0 || messageID <= 0 {
+		return nil
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	atRaw := at.UTC().Format(time.RFC3339Nano)
+	if _, err := s.db.Exec(`
+		INSERT INTO telegram_callback_messages(chat_id, message_id, thread_id, surface, created_at, updated_at)
+		VALUES (?, ?, 0, ?, ?, ?)
+		ON CONFLICT(chat_id, message_id) DO UPDATE SET
+			thread_id = 0,
+			surface = excluded.surface,
+			updated_at = excluded.updated_at
+	`, chatID, messageID, clampStoreText(surface, 120), atRaw, atRaw); err != nil {
+		return fmt.Errorf("clear telegram callback message thread: %w", err)
+	}
+	return nil
+}
+
 func (s *SQLiteStore) RecordTelegramThreadMessage(chatID int64, threadID int64, messageID int64, msgType string, surface string, at time.Time) error {
 	if chatID == 0 || threadID <= 0 || messageID <= 0 {
 		return nil

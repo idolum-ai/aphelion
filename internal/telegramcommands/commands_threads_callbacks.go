@@ -23,6 +23,18 @@ func recordTelegramThreadCallbackMessage(router commandRouter, chatID int64, thr
 	}
 	return recorder.RecordTelegramThreadCallbackMessage(chatID, threadID, messageID, surface)
 }
+
+func clearTelegramThreadCallbackMessage(router commandRouter, chatID int64, messageID int64, surface string) error {
+	if chatID == 0 || messageID <= 0 {
+		return nil
+	}
+	recorder, ok := router.(commandThreadCallbackRecorder)
+	if !ok {
+		return nil
+	}
+	return recorder.ClearTelegramThreadCallbackMessage(chatID, messageID, surface)
+}
+
 func encodeTelegramThreadPromoteCallback(threadID int64) string {
 	if threadID <= 0 {
 		return ""
@@ -291,6 +303,9 @@ func handleTelegramThreadBackCallback(ctx context.Context, sender commandCallbac
 		return true, nil
 	}
 	if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Back to threads."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+		return true, err
+	}
+	if err := clearTelegramThreadCallbackMessage(router, chatID, messageID, "threads_list"); err != nil {
 		return true, err
 	}
 	if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, rendered, "", rows); err != nil {

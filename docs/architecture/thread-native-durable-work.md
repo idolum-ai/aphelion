@@ -25,7 +25,7 @@ Side threads have the right operator texture:
 - Continuing one is obvious: reply to its messages or use `(thread N)`.
 - Closing one is cheap: `/absorb N`.
 - The lane remains inside the normal Telegram radio link, busy gate, turn
-  router, progress state, continuation approvals, memory focus, and replay
+  router, progress state, continuation approvals, context/memory scope, and replay
   recovery.
 
 Durable children have the right governance ingredients, but the operator path
@@ -271,7 +271,7 @@ artifact indexes, and child lifecycle state.
 - **Durable thread**: a thread with one or more durable attachments such as a
   charter, schedule, capability grant, local workspace, or external binding.
 - **Thread profile**: typed metadata for the thread's role: title, charter,
-  memory focus, model preference, and parent scope.
+  memory/context scope, model preference, and parent scope.
 - **Thread policy**: typed authority limits for the thread: outbound mode,
   autonomy, drift policy, visibility, capability envelope, and stop conditions.
 - **Thread wake**: a typed trigger that can enqueue work for the thread: schedule,
@@ -377,7 +377,7 @@ attachments:
 | --- | --- | --- |
 | Thread row | Open/closed state, display slot, created text, absorb summary | operational current-state store |
 | Thread session | Transcript, floor sidecars, plan state, operation state | canonical or operational per field |
-| Thread profile | Durable role, title, charter, memory focus, model preference | canonical |
+| Thread profile | Durable role, title, charter, memory/context scope, model preference | canonical |
 | Thread policy | Autonomy, outbound mode, drift policy, visibility, capability envelope | canonical |
 | Thread wake | Schedule, queue, retry/backoff, last attempt/result | operational current-state store |
 | Thread binding | Telegram group, adapter, isolated process, Tailnet remote | canonical for declared binding |
@@ -520,9 +520,9 @@ the operator choices inspectable.
 
 ### Implementation Risks And Required Tests
 
-- **Scope leakage:** thread-scoped approvals, memory focus, progress, and
+- **Scope leakage:** thread-scoped approvals, context/memory scope, progress, and
   callbacks must not leak to the default chat or another thread. Existing tests
-  around continuation scope, auto-approval scope, memory focus, and callback
+  around continuation scope, auto-approval scope, context/memory scope, and callback
   ledgers should be extended for promotion callbacks.
 - **Authority leakage:** promotion must not turn text, thread membership, or a
   child-like name into capability. Tests should prove promotion without approved
@@ -663,7 +663,7 @@ This should not be a flag-day deletion of durable agents. A safer sequence:
 The direction is working if:
 
 - a new durable workflow starts as quickly as a side thread;
-- adding wake, memory focus, or a capability feels like extending the current
+- adding wake, context/memory scope, or a capability feels like extending the current
   lane, not switching products;
 - `/threads` stays compact, with promotion as the main bridge to durable
   controls;

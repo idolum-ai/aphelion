@@ -41,6 +41,10 @@ func (c telegramCommandControl) RecordTelegramThreadCallbackMessage(chatID int64
 	return c.threadController().RecordTelegramThreadCallbackMessage(chatID, threadID, messageID, surface)
 }
 
+func (c telegramCommandControl) ClearTelegramThreadCallbackMessage(chatID int64, messageID int64, surface string) error {
+	return c.threadController().ClearTelegramThreadCallbackMessage(chatID, messageID, surface)
+}
+
 func (c telegramCommandControl) StartTelegramThreadTarget(ctx context.Context, msg core.InboundMessage, text string) (core.InboundMessage, session.TelegramThread, error) {
 	return c.threadController().StartTelegramThreadTarget(ctx, msg, text)
 }

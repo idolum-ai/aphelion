@@ -67,9 +67,6 @@ type commandRouter interface {
 	MissionLedgerHealth(ctx context.Context, senderID int64) (session.MissionLedgerHealth, error)
 	MissionActionProposal(ctx context.Context, chatID int64, senderID int64, missionID string) (session.ActionProposal, error)
 	ApplyMissionActionProposalDecision(ctx context.Context, chatID int64, senderID int64, missionID string, choice string) (session.MissionState, bool, error)
-	MemoryFocus(chatID int64) (core.MemoryFocus, bool)
-	SetMemoryFocus(chatID int64, focus core.MemoryFocus)
-	ClearMemoryFocus(chatID int64) bool
 }
 
 type commandScopedStatusRouter interface {
@@ -95,7 +92,6 @@ type approvalWindowRouter interface {
 
 type commandScopedMemoryRouter interface {
 	MemoryReviewSnapshotForMessage(ctx context.Context, msg core.InboundMessage, source memoryReviewSource) (memoryReviewSnapshot, error)
-	MemoryFocusForMessage(msg core.InboundMessage) (core.MemoryFocus, bool)
 }
 
 func handleTelegramCommand(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {

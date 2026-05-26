@@ -202,12 +202,6 @@ type stubCommandRouter struct {
 	memoryReviewSenderID         int64
 	memoryReviewSource           memoryReviewSource
 	memoryReviewMessage          core.InboundMessage
-	memoryFocusByChat            map[int64]core.MemoryFocus
-	memoryFocusByThread          map[int64]core.MemoryFocus
-	setMemoryFocusMessage        core.InboundMessage
-	clearMemoryFocusMessage      core.InboundMessage
-	clearMemoryFocusChatID       int64
-	clearMemoryFocusResult       bool
 	threadCreateMsg              *core.InboundMessage
 	threadCreateReturn           session.TelegramThread
 	threadCreateErr              error
@@ -219,6 +213,10 @@ type stubCommandRouter struct {
 	threadCallbackMessageID      int64
 	threadCallbackSurface        string
 	threadCallbackErr            error
+	threadCallbackClearChatID    int64
+	threadCallbackClearMessageID int64
+	threadCallbackClearSurface   string
+	threadCallbackClearErr       error
 	threadStartMsg               *core.InboundMessage
 	threadStartText              string
 	threadStartReturn            session.TelegramThread

@@ -288,42 +288,6 @@ func TestMemoryReviewIncludesTelegramThreadCandidates(t *testing.T) {
 	}
 }
 
-func TestMemoryFocusIsScopedToTelegramThread(t *testing.T) {
-	t.Parallel()
-
-	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	rt, err := New(cfg, store, provider, nil, sender)
-	if err != nil {
-		t.Fatalf("New() err = %v", err)
-	}
-	key := session.SessionKey{ChatID: 91033, UserID: 0, Scope: telegramThreadScopeRef(91033, 2)}
-	focus := core.MemoryFocus{
-		Source:  core.MemoryReviewSourceSessionRecent,
-		ItemID:  "thread:2:user",
-		Label:   "thread=2 role=user",
-		Excerpt: "Keep this thread focused on child setup.",
-		Query:   "child setup",
-		SetAt:   time.Now().UTC(),
-	}
-	rt.SetMemoryFocusForKey(key, focus)
-	if _, ok := rt.MemoryFocus(91033); ok {
-		t.Fatal("MemoryFocus(main chat) = active, want thread focus isolated")
-	}
-	got, ok := rt.MemoryFocusForKey(key)
-	if !ok || got.ItemID != focus.ItemID {
-		t.Fatalf("MemoryFocusForKey(thread) = %#v/%t, want thread focus", got, ok)
-	}
-	msg := rt.applyMemoryFocusToInbound(core.InboundMessage{ChatID: 91033, TelegramThreadID: 2, Text: "continue"}, key)
-	if !strings.Contains(msg.Text, "MEMORY_FOCUS_CONTEXT") || !strings.Contains(msg.Text, "child setup") {
-		t.Fatalf("thread-focused text = %q, want injected focus context", msg.Text)
-	}
-	mainKey := session.SessionKey{ChatID: 91033, UserID: 0, Scope: telegramDMScopeRef(91033)}
-	mainMsg := rt.applyMemoryFocusToInbound(core.InboundMessage{ChatID: 91033, Text: "continue"}, mainKey)
-	if mainMsg.Text != "continue" {
-		t.Fatalf("main text = %q, want no thread focus injection", mainMsg.Text)
-	}
-}
-
 func TestTelegramThreadProgressPrefixHelpers(t *testing.T) {
 	t.Parallel()
 

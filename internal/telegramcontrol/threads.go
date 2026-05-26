@@ -4,7 +4,6 @@ package telegramcontrol
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -71,6 +70,13 @@ func (c ThreadController) RecordTelegramThreadCallbackMessage(chatID int64, thre
 		return nil
 	}
 	return c.Store.RecordTelegramCallbackMessageThread(chatID, messageID, threadID, surface, time.Now().UTC())
+}
+
+func (c ThreadController) ClearTelegramThreadCallbackMessage(chatID int64, messageID int64, surface string) error {
+	if c.Store == nil {
+		return nil
+	}
+	return c.Store.ClearTelegramCallbackMessageThread(chatID, messageID, surface, time.Now().UTC())
 }
 
 func (c ThreadController) StartTelegramThreadTarget(_ context.Context, msg core.InboundMessage, text string) (core.InboundMessage, session.TelegramThread, error) {
@@ -173,28 +179,7 @@ func (c ThreadController) QueueTelegramThreadSummary(ctx context.Context, msg co
 }
 
 func (c ThreadController) recordTelegramThreadSummaryAccepted(msg core.InboundMessage) error {
-	if c.Store == nil || strings.TrimSpace(msg.IngressSurface) == "" || msg.IngressUpdateID <= 0 {
-		return nil
-	}
-	encoded := ""
-	if raw, err := json.Marshal(msg); err == nil {
-		encoded = string(raw)
-	}
-	now := time.Now().UTC()
-	_, err := c.Store.RecordTelegramIngressAccepted(session.TelegramIngressUpdateRecord{
-		Surface:     msg.IngressSurface,
-		UpdateID:    msg.IngressUpdateID,
-		UpdateKind:  "callback_thread_summary",
-		ChatID:      msg.ChatID,
-		SenderID:    msg.SenderID,
-		MessageID:   msg.MessageID,
-		SessionID:   core.SessionIDForInboundMessage(msg),
-		Status:      session.TelegramIngressUpdateAccepted,
-		InboundJSON: encoded,
-		AcceptedAt:  now,
-		UpdatedAt:   now,
-	})
-	return err
+	return recordTelegramCallbackWorkAccepted(c.Store, msg, "callback_thread_summary")
 }
 
 func (c ThreadController) renderTelegramThreadSummaryQuest(chatID int64) (string, error) {

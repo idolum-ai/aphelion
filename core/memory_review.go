@@ -55,19 +55,5 @@ type MemoryReviewSnapshot struct {
 type ContextSnapshot struct {
 	GeneratedAt time.Time
 	Chat        ChatStatusSnapshot
-	Focus       MemoryFocus
 	Recent      []MemoryReviewItem
-}
-
-type MemoryFocus struct {
-	Source  MemoryReviewSource
-	ItemID  string
-	Label   string
-	Excerpt string
-	Query   string
-	SetAt   time.Time
-}
-
-func (f MemoryFocus) Active() bool {
-	return strings.TrimSpace(f.ItemID) != ""
 }

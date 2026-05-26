@@ -505,14 +505,13 @@ At minimum it should surface:
 
 - current lane/scope
 - operation and plan summaries when present
-- active scratchpad/focus signal if present
 - recent session context preview
 - evidence/source labels
 - `Writes: none`
 
 Buttons:
 
-- `Ask Me` queues ordinary clarification work about context assumptions; it must not write memory or mutate focus.
+- `Ask Me` queues durable callback-work clarification about context assumptions; it must not write memory or mutate state.
 - `Refresh` reloads the same panel in place.
 
 ### `/memory`
@@ -530,7 +529,7 @@ At minimum it should surface:
 Buttons:
 
 - `Session`, `Shared`, and `Local` switch read-only source views.
-- `Ask Me` queues ordinary clarification work about memory assumptions or recall items; it must not write memory or mutate focus.
+- `Ask Me` queues durable callback-work clarification about memory assumptions or recall items; it must not write memory or mutate state.
 - `Refresh` reloads the selected source in place.
 
 ### `/stop`
