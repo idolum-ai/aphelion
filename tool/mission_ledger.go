@@ -56,6 +56,8 @@ type missionLedgerInput struct {
 	NotIncluded        []string                      `json:"not_included,omitempty"`
 	RiskClass          string                        `json:"risk_class,omitempty"`
 	ReviewTargetChatID int64                         `json:"review_target_chat_id,omitempty"`
+	PromptID           string                        `json:"prompt_id,omitempty"`
+	PromptStatus       string                        `json:"prompt_status,omitempty"`
 }
 
 func missionLedgerToolDefinition() agent.ToolDef {
@@ -65,7 +67,7 @@ func missionLedgerToolDefinition() agent.ToolDef {
 		Parameters: json.RawMessage(`{
 			"type":"object",
 			"properties":{
-				"action":{"type":"string","enum":["list","show","create_candidate","propose_candidate","update_evidence","block","archive","event","summon","health","working_objective_set","working_objective_show","handoff_create","result_record"],"description":"Mission Ledger operation"},
+				"action":{"type":"string","enum":["list","show","create_candidate","propose_candidate","update_evidence","block","archive","event","summon","health","working_objective_set","working_objective_show","handoff_create","result_record","mission_ask_resolve"],"description":"Mission Ledger operation"},
 				"mission_id":{"type":"string","description":"Mission id for show/update/archive/event/handoff/result actions"},
 				"title":{"type":"string","description":"Mission title when creating a candidate"},
 				"objective":{"type":"string","description":"Mission objective when creating a candidate"},
@@ -101,7 +103,9 @@ func missionLedgerToolDefinition() agent.ToolDef {
 				"why_proposed":{"type":"string","description":"Why the candidate mission is being proposed for Mission Control review"},
 				"not_included":{"type":"array","items":{"type":"string"},"description":"Explicit non-scope boundaries for proposed candidate mission"},
 				"risk_class":{"type":"string","description":"Operator-facing risk label for proposed candidate mission"},
-				"review_target_chat_id":{"type":"integer","description":"Optional Telegram chat id for Mission Control proposal card; defaults to current chat"}
+				"review_target_chat_id":{"type":"integer","description":"Optional Telegram chat id for Mission Control proposal card; defaults to current chat"},
+				"prompt_id":{"type":"string","description":"Mission Ask Me prompt id for mission_ask_resolve"},
+				"prompt_status":{"type":"string","enum":["resolved","snoozed","ignored"],"description":"Terminal Mission Ask Me prompt status"}
 			},
 			"required":["action"]
 		}`),
@@ -333,8 +337,24 @@ func (r *Registry) missionLedger(_ context.Context, input json.RawMessage, p pri
 			return "", err
 		}
 		return renderMissionResult(result), nil
+	case "mission_ask_resolve":
+		promptID := strings.TrimSpace(in.PromptID)
+		if promptID == "" {
+			return "", fmt.Errorf("mission_ledger mission_ask_resolve requires prompt_id")
+		}
+		status := session.NormalizeMissionAskStatus(session.MissionAskStatus(in.PromptStatus))
+		switch status {
+		case session.MissionAskStatusResolved, session.MissionAskStatusSnoozed, session.MissionAskStatusIgnored:
+		default:
+			return "", fmt.Errorf("mission_ledger mission_ask_resolve prompt_status must be resolved, snoozed, or ignored")
+		}
+		prompt, err := r.store.UpdateMissionAskPromptStatus(promptID, missionOwnerFromInput(in, p), status, firstMissionToolNonEmpty(in.Summary, "mission ask prompt resolved"), time.Now().UTC())
+		if err != nil {
+			return "", err
+		}
+		return renderMissionAskPrompt(prompt), nil
 	default:
-		return "", fmt.Errorf("mission_ledger action must be one of list|show|create_candidate|propose_candidate|update_evidence|block|archive|event|summon|health|working_objective_set|working_objective_show|handoff_create|result_record")
+		return "", fmt.Errorf("mission_ledger action must be one of list|show|create_candidate|propose_candidate|update_evidence|block|archive|event|summon|health|working_objective_set|working_objective_show|handoff_create|result_record|mission_ask_resolve")
 	}
 }
 
@@ -522,4 +542,8 @@ func renderMissionHandoff(h session.MissionHandoff) string {
 
 func renderMissionResult(result session.MissionResult) string {
 	return fmt.Sprintf("[MISSION_RESULT]\nid: %s\nhandoff_id: %s\nmission_id: %s\noperation_id: %s\nstatus: %s\nsummary: %s\nremaining_risk: %s", result.ID, result.HandoffID, result.MissionID, result.OperationID, result.Status, result.Summary, result.RemainingRisk)
+}
+
+func renderMissionAskPrompt(prompt session.MissionAskPrompt) string {
+	return fmt.Sprintf("[MISSION_ASK]\nprompt_id: %s\nstatus: %s\nmission_id: %s\nsummary: %s", prompt.ID, prompt.Status, prompt.MissionID, prompt.ResultSummary)
 }

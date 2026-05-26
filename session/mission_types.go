@@ -124,6 +124,53 @@ type MissionResult struct {
 	RecordedAt       time.Time `json:"recorded_at,omitempty"`
 }
 
+type MissionAskConfidence string
+
+const (
+	MissionAskConfidenceLow  MissionAskConfidence = "low"
+	MissionAskConfidenceHigh MissionAskConfidence = "high"
+)
+
+type MissionAskStatus string
+
+const (
+	MissionAskStatusPending  MissionAskStatus = "pending"
+	MissionAskStatusAsked    MissionAskStatus = "asked"
+	MissionAskStatusIgnored  MissionAskStatus = "ignored"
+	MissionAskStatusSnoozed  MissionAskStatus = "snoozed"
+	MissionAskStatusResolved MissionAskStatus = "resolved"
+	MissionAskStatusExpired  MissionAskStatus = "expired"
+)
+
+type MissionAskPrompt struct {
+	ID                string               `json:"id"`
+	Owner             string               `json:"owner"`
+	ChatID            int64                `json:"chat_id,omitempty"`
+	SenderID          int64                `json:"sender_id,omitempty"`
+	SessionID         string               `json:"session_id,omitempty"`
+	Scope             ScopeRef             `json:"scope,omitempty"`
+	SourceMessageID   int64                `json:"source_message_id,omitempty"`
+	SourceTurnRunID   int64                `json:"source_turn_run_id,omitempty"`
+	MissionID         string               `json:"mission_id,omitempty"`
+	Confidence        MissionAskConfidence `json:"confidence"`
+	Status            MissionAskStatus     `json:"status"`
+	QuestionText      string               `json:"question_text"`
+	SourceFingerprint string               `json:"source_fingerprint"`
+	EvidenceJSON      string               `json:"evidence_json,omitempty"`
+	ResultSummary     string               `json:"result_summary,omitempty"`
+	CreatedAt         time.Time            `json:"created_at,omitempty"`
+	AskedAt           time.Time            `json:"asked_at,omitempty"`
+	ResolvedAt        time.Time            `json:"resolved_at,omitempty"`
+	UpdatedAt         time.Time            `json:"updated_at,omitempty"`
+}
+
+type MissionAskPromptFilter struct {
+	Owner     string
+	SessionID string
+	Status    MissionAskStatus
+	Limit     int
+}
+
 type MissionFilter struct {
 	Scope  string
 	Owner  string
@@ -241,6 +288,62 @@ func NormalizeWorkingObjective(w WorkingObjective) WorkingObjective {
 	w.Source = strings.TrimSpace(w.Source)
 	w.Confidence = strings.TrimSpace(w.Confidence)
 	return w
+}
+
+func NormalizeMissionAskConfidence(confidence MissionAskConfidence) MissionAskConfidence {
+	switch MissionAskConfidence(strings.ToLower(strings.TrimSpace(string(confidence)))) {
+	case MissionAskConfidenceHigh:
+		return MissionAskConfidenceHigh
+	default:
+		return MissionAskConfidenceLow
+	}
+}
+
+func NormalizeMissionAskStatus(status MissionAskStatus) MissionAskStatus {
+	switch MissionAskStatus(strings.ToLower(strings.TrimSpace(string(status)))) {
+	case MissionAskStatusPending:
+		return MissionAskStatusPending
+	case MissionAskStatusAsked:
+		return MissionAskStatusAsked
+	case MissionAskStatusIgnored:
+		return MissionAskStatusIgnored
+	case MissionAskStatusSnoozed:
+		return MissionAskStatusSnoozed
+	case MissionAskStatusResolved:
+		return MissionAskStatusResolved
+	case MissionAskStatusExpired:
+		return MissionAskStatusExpired
+	default:
+		return MissionAskStatusPending
+	}
+}
+
+func MissionAskStatusTerminal(status MissionAskStatus) bool {
+	switch NormalizeMissionAskStatus(status) {
+	case MissionAskStatusIgnored, MissionAskStatusSnoozed, MissionAskStatusResolved, MissionAskStatusExpired:
+		return true
+	default:
+		return false
+	}
+}
+
+func NormalizeMissionAskPrompt(prompt MissionAskPrompt) MissionAskPrompt {
+	prompt.ID = strings.TrimSpace(prompt.ID)
+	prompt.Owner = strings.TrimSpace(prompt.Owner)
+	prompt.SessionID = strings.TrimSpace(prompt.SessionID)
+	prompt.Scope = NormalizeScopeRef(prompt.Scope)
+	prompt.MissionID = strings.TrimSpace(prompt.MissionID)
+	prompt.Confidence = NormalizeMissionAskConfidence(prompt.Confidence)
+	prompt.Status = NormalizeMissionAskStatus(prompt.Status)
+	prompt.QuestionText = strings.TrimSpace(prompt.QuestionText)
+	prompt.SourceFingerprint = strings.TrimSpace(prompt.SourceFingerprint)
+	if strings.TrimSpace(prompt.EvidenceJSON) == "" {
+		prompt.EvidenceJSON = "{}"
+	} else {
+		prompt.EvidenceJSON = strings.TrimSpace(prompt.EvidenceJSON)
+	}
+	prompt.ResultSummary = strings.TrimSpace(prompt.ResultSummary)
+	return prompt
 }
 
 func normalizeMissionEvidence(evidence []MissionEvidenceItem) []MissionEvidenceItem {

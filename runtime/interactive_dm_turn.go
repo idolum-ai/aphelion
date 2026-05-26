@@ -188,7 +188,10 @@ func (r *Runtime) runInteractiveDMTurn(ctx context.Context, input interactiveDMT
 					_, err := r.materializePendingOperationProposalApproval(postCtx, key, msg, ledgerText, result)
 					return err
 				}
-				return r.offerContinuationApproval(postCtx, key, msg, ledgerText, result)
+				if err := r.offerContinuationApproval(postCtx, key, msg, ledgerText, result); err != nil {
+					return err
+				}
+				return r.maybeOfferMissionAsk(postCtx, key, msg, ledgerText, result)
 			},
 		},
 	}

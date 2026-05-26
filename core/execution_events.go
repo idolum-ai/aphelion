@@ -68,6 +68,9 @@ const (
 	ExecutionEventContinuationParked      = "continuation.parked"
 	ExecutionEventContinuationResumed     = "continuation.resumed"
 
+	ExecutionEventMissionAskOffered    = "mission_ask.offered"
+	ExecutionEventMissionAskSuppressed = "mission_ask.suppressed"
+
 	ExecutionEventWorkExecutorSelected  = "work.executor.selected"
 	ExecutionEventWorkExecutorFallback  = "work.executor.fallback"
 	ExecutionEventWorkExecutorStarted   = "work.executor.started"

@@ -154,7 +154,7 @@ func (s hiddenInputSet) toTurnAwareness() turn.HiddenInputAwareness {
 	}
 }
 
-func (r *Runtime) assembleInteractiveHiddenInputs(ctx context.Context, scope sandbox.Scope, now time.Time, userText string, priorFloorMetadata string) hiddenInputSet {
+func (r *Runtime) assembleInteractiveHiddenInputs(ctx context.Context, key session.SessionKey, scope sandbox.Scope, now time.Time, userText string, priorFloorMetadata string) hiddenInputSet {
 	root := dynamicPromptRoot(scope)
 	query := strings.TrimSpace(userText)
 	inputs := hiddenInputSet{}
@@ -169,7 +169,29 @@ func (r *Runtime) assembleInteractiveHiddenInputs(ctx context.Context, scope san
 	if summary := detectRetainedArtifactContext(priorFloorMetadata); summary != "" {
 		inputs.add(hiddenInputRetainedArtifacts, summary)
 	}
+	if summary := r.pendingMissionAskHiddenInput(scope.Principal, key); summary != "" {
+		inputs.add(hiddenInputMissionAsk, summary)
+	}
 	return inputs
+}
+
+func (r *Runtime) pendingMissionAskHiddenInput(actor principal.Principal, key session.SessionKey) string {
+	if r == nil || r.store == nil {
+		return ""
+	}
+	owner := missionCommandOwner(actor, actor.TelegramUserID)
+	if owner == "" || owner == "system" {
+		return ""
+	}
+	prompt, ok, err := r.store.PendingMissionAskPromptForSession(owner, key)
+	if err != nil || !ok {
+		return ""
+	}
+	target := strings.TrimSpace(prompt.MissionID)
+	if target == "" {
+		target = "possible new mission"
+	}
+	return "mission Ask Me prompt is awaiting the user's natural answer; prompt_id=" + prompt.ID + "; target=" + target + "; question=" + prompt.QuestionText
 }
 
 func detectRetainedArtifactContext(priorFloorMetadata string) string {

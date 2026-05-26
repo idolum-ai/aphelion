@@ -107,8 +107,10 @@ The repo implements this suite in two modes:
   parsing, score aggregation, and exact scanners for forbidden authority claims.
 - Live spectral checks: opt-in OpenAI calls using the local configured API
   credentials, comparing the current agency prompt against a baseline prompt
-  with the agency packet removed. The CLI surface is `aphelion agency-eval`;
-  the release-gated test is `TestLiveAgencySpectrumEvals`.
+  with the agency packet removed. The canonical release surface is the opt-in
+  test suite, exposed through `make live-evals` and the narrower
+  `make auto-evals`. The `aphelion agency-eval` command remains a manual
+  inspection runner for ad hoc prompt work, not the primary release gate.
 
 ## Measurement Contract
 
@@ -135,6 +137,13 @@ Every live report records:
 This keeps the evidence local and reviewable without adding an operator web UI
 or turning eval output into runtime authority.
 
+When `APHELION_LIVE_EVAL_REPORT=/tmp/aphelion-live-evals.json` is set, live
+test suites write suite-suffixed JSON files beside that path, for example
+`/tmp/aphelion-live-evals.auto.json` and
+`/tmp/aphelion-live-evals.mission-ask.json`. Reports are iteration evidence:
+they justify prompt changes and catch regressions, but they do not authorize
+runtime action, memory writes, leases, or consent.
+
 ## Current Repo Surface
 
 - `agency_eval.go`: local CLI/harness, case definitions, prompt variants,
@@ -142,8 +151,13 @@ or turning eval output into runtime authority.
   human/KV/JSON report rendering.
 - `agency_eval_test.go`: deterministic tests for prompt stripping, JSON parsing,
   compare deltas, and CLI rendering.
-- `agency_live_eval_test.go`: opt-in OpenAI live eval using
+- `agency_live_eval_test.go`: opt-in OpenAI agency spectrum eval using
   `APHELION_LIVE_EVAL=1`.
+- `auto_live_eval_test.go`: opt-in OpenAI auto/proactive prompt evals covering
+  completed-work closure, auto-policy authority boundaries, bounded Mission Ask
+  pressure, and active approval preservation.
+- `runtime/mission_ask_live_eval_test.go`: opt-in OpenAI eval for the exact
+  Mission Ask classifier prompt used by runtime.
 - `prompt/golden_test.go` and `prompt/testdata/golden/*`: deterministic prompt
   shape checks for the agency packet itself.
 

@@ -8,7 +8,7 @@ STATIC_LDFLAGS ?= -linkmode external -extldflags "-static"
 GOHOSTOS ?= $(shell go env GOHOSTOS 2>/dev/null || uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo unknown)
 TEST_EXEC_TRUE ?= /usr/bin/true
 
-.PHONY: build build-static run test verify-linux-compile test-compile check-config init install-user-service install-sandbox-net-helper restart-user-service logs-user-service update install-release update-release paths gc docs-architecture architecture public-readiness secrets design-principles deadcode check-live-fixtures taste
+.PHONY: build build-static run test live-evals auto-evals verify-linux-compile test-compile check-config init install-user-service install-sandbox-net-helper restart-user-service logs-user-service update install-release update-release paths gc docs-architecture architecture public-readiness secrets design-principles deadcode check-live-fixtures taste
 
 build:
 	mkdir -p $(BIN_DIR)
@@ -29,6 +29,20 @@ test:
 		exit 1; \
 	fi
 	go test ./...
+
+live-evals:
+	@if [ "$(GOHOSTOS)" != "linux" ]; then \
+		echo "Aphelion live evals are Linux-only and cannot run on $(GOHOSTOS)." >&2; \
+		exit 1; \
+	fi
+	APHELION_LIVE_EVAL=1 go test ./internal/standalonecli ./runtime -run 'TestLive(AgencySpectrumEvals|AutoPromptEvals|MissionAskClassifierEvals)' -count=1
+
+auto-evals:
+	@if [ "$(GOHOSTOS)" != "linux" ]; then \
+		echo "Aphelion auto evals are Linux-only and cannot run on $(GOHOSTOS)." >&2; \
+		exit 1; \
+	fi
+	APHELION_LIVE_EVAL=1 go test ./internal/standalonecli ./runtime -run 'TestLive(AutoPromptEvals|MissionAskClassifierEvals)' -count=1
 
 verify-linux-compile:
 	GOOS=linux go test -exec $(TEST_EXEC_TRUE) ./...

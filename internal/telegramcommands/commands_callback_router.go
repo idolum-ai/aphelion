@@ -64,6 +64,9 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 	if view, targetChatID, ok := decodeStatusCallbackData(cb.Data); ok {
 		return handleStatusCallback(ctx, sender, router, cb, view, targetChatID)
 	}
+	if promptID, action, ok := core.DecodeMissionAskCallbackData(cb.Data); ok {
+		return handleMissionAskCallback(ctx, sender, router, cb, promptID, action)
+	}
 	if action, token, ok := decodeMissionCallbackData(cb.Data); ok {
 		return handleMissionCallback(ctx, sender, router, cb, action, token)
 	}

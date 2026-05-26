@@ -59,12 +59,13 @@ Terminal-only callback or skipped rows may show `accepted_at` equal to the
 ledger write time. Treat `status`, `completed_at`, and the reason text as the
 evidence for those updates; `accepted_at` is literal only for accepted work rows.
 Callback work that launches model turns, including `/health diagnose` and
-`/context`/`/memory` `Ask Me`, is recorded on a callback-work ingress surface
-before it starts so restart replay can recover it.
+`/context`/`/memory`/`/mission` `Ask Me`, is recorded on a callback-work ingress
+surface before it starts so restart replay can recover it.
 Startup replay uses the compiled Telegram work-surface registry: primary
 messages, thread-summary callback work, doctor callback work,
-context/memory-clarification callback work, busy-decision resume work, and
-artifact-retention resume work are replayable; arbitrary callback text is not.
+context/memory/mission-clarification callback work, busy-decision resume work,
+and artifact-retention resume work are replayable; arbitrary callback text is
+not.
 Busy/interrupt and artifact-retention prompts keep a typed pending row alongside
 the Telegram approval prompt. After restart, Aphelion either resumes from the
 typed row when the old button is clicked, reissues a fresh prompt, or applies the
@@ -206,6 +207,17 @@ curated memory or changing state.
 Use `/mission` to review objectives and mission candidates. Mission state
 preserves intent and review material; it does not grant new authority on its
 own.
+
+Mission `Ask Me` is Aphelion's low-burden mission clarification surface. After
+an ordinary turn, Aphelion can offer a small card when the current work appears
+semantically close to a mission or to a possible new durable objective. The card
+does not write mission state. `Ask Me` queues one natural clarification question
+as durable callback work; `Ignore` records that this association should stay out
+of the way. If you answer the clarification, the next turn receives the prompt
+id as hidden context and the model can resolve the prompt through the Mission
+Ledger tool. Low-confidence prompts are throttled to about once per day per
+owner, high-confidence prompts to about once per four hours, and ignored
+associations stay quiet longer.
 
 Use `/tailnet` to inspect declared Tailnet surfaces and grant bindings. Surface
 and grant lists are paged and button-driven; open a surface detail card before

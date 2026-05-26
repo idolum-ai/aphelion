@@ -95,7 +95,7 @@ func (r *Runtime) assembleInteractiveLikeTurn(ctx context.Context, input interac
 		return out, fmt.Errorf("%s: %w", promptContextErr, err)
 	}
 
-	hiddenInputs := r.assembleInteractiveHiddenInputs(ctx, input.Scope, now, prepared.LedgerText, sess.LastFloorMetadata)
+	hiddenInputs := r.assembleInteractiveHiddenInputs(ctx, input.Key, input.Scope, now, prepared.LedgerText, sess.LastFloorMetadata)
 	hiddenInputs.addCoreAll(prepared.ArtifactDecisionInputs)
 	baseGovernorAwareness := turn.ApplyContinuationAwareness(
 		turn.ApplyOperationAwareness(

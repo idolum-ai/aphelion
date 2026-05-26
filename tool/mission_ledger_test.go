@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
@@ -85,6 +86,49 @@ func TestMissionLedgerToolWorkingObjectiveDoesNotPromoteMission(t *testing.T) {
 	}
 	if len(missions) != 0 {
 		t.Fatalf("missions len = %d, want no durable promotion", len(missions))
+	}
+}
+
+func TestMissionLedgerToolResolvesMissionAskPrompt(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	prompt, allowed, reason, err := store.CreateMissionAskPromptIfAllowed(session.MissionAskPrompt{
+		Owner:             "telegram:1001",
+		ChatID:            key.ChatID,
+		SenderID:          1001,
+		SessionID:         session.SessionIDForKey(key),
+		Scope:             key.Scope,
+		MissionID:         "mission-ledger-tool",
+		Confidence:        session.MissionAskConfidenceHigh,
+		Status:            session.MissionAskStatusPending,
+		QuestionText:      "Should this be tied to mission-ledger-tool?",
+		SourceFingerprint: "mission-ledger-tool-resolve",
+	}, time.Now().UTC())
+	if err != nil || !allowed || reason != "" {
+		t.Fatalf("CreateMissionAskPromptIfAllowed() allowed=%t reason=%q err=%v, want prompt", allowed, reason, err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, missionLedgerToolName, json.RawMessage(`{
+		"action":"mission_ask_resolve",
+		"prompt_id":"`+prompt.ID+`",
+		"prompt_status":"resolved",
+		"summary":"operator confirmed mission association"
+	}`))
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(mission_ask_resolve) err = %v", err)
+	}
+	if !strings.Contains(out, "[MISSION_ASK]") || !strings.Contains(out, "status: resolved") {
+		t.Fatalf("out = %q, want resolved mission ask prompt", out)
+	}
+	updated, ok, err := store.MissionAskPrompt(prompt.ID)
+	if err != nil || !ok {
+		t.Fatalf("MissionAskPrompt() = %#v ok=%t err=%v", updated, ok, err)
+	}
+	if updated.Status != session.MissionAskStatusResolved || updated.ResultSummary != "operator confirmed mission association" || updated.ResolvedAt.IsZero() {
+		t.Fatalf("updated prompt = %#v, want resolved prompt with summary", updated)
 	}
 }
 

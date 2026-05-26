@@ -254,6 +254,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 			"When a hidden input is materially shaping your note and runtime awareness says one is active, name it briefly.",
 			"Notice what the user is reaching for, not just what they said. If something feels off or important beneath the surface, name it.",
 			"Be brief. Write only when your push would materially change the turn. Return nothing if there is no useful guidance.",
+			"When runtime awareness says a proposal, approval, or continuation is already pending or blocked, preserve that active boundary; do not add a new Organic proposal unless it directly resolves the active approval.",
 			"If ordinary conversation clearly implies exactly one bounded next lease that should be confirmed with buttons rather than a /mission command, append this optional Organic proposal contract before the continuation contract:",
 			"ORGANIC_PROPOSAL_SCHEMA_VERSION: 1",
 			"ORGANIC_PROPOSAL_PROPOSAL: <yes|no>",

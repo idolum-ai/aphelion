@@ -1061,6 +1061,66 @@ func TestMigratesSchemaV58ToV59TelegramAgentMessageLedger(t *testing.T) {
 	}
 }
 
+func TestMigratesSchemaV59ToV60MissionAskPrompts(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v59.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v59 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version(version INTEGER NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+		`INSERT INTO schema_version(version) VALUES (59)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v59 fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v59 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v59) err = %v", err)
+	}
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteTable(t, store.db, "mission_ask_prompts")
+	assertSQLiteIndex(t, store.db, "idx_mission_ask_owner_status")
+	key := SessionKey{ChatID: 1001, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "1001"}}
+	if _, allowed, reason, err := store.CreateMissionAskPromptIfAllowed(MissionAskPrompt{
+		Owner:             "telegram:1001",
+		ChatID:            1001,
+		SenderID:          1001,
+		SessionID:         SessionIDForKey(key),
+		Scope:             key.Scope,
+		MissionID:         "mission-v60",
+		Confidence:        MissionAskConfidenceHigh,
+		QuestionText:      "Should this become a mission association?",
+		SourceFingerprint: "v60-migration",
+	}, time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)); err != nil || !allowed || reason != "" {
+		t.Fatalf("CreateMissionAskPromptIfAllowed() after v60 migration allowed=%t reason=%q err=%v, want insert", allowed, reason, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close migrated v59 store: %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen v59 migrated) err = %v", err)
+	}
+	defer reopened.Close()
+	assertSchemaVersion(t, reopened.db, schemaVersion)
+	prompts, err := reopened.MissionAskPrompts(MissionAskPromptFilter{Owner: "telegram:1001", Limit: 10})
+	if err != nil {
+		t.Fatalf("MissionAskPrompts(reopen) err = %v", err)
+	}
+	if len(prompts) != 1 || prompts[0].MissionID != "mission-v60" {
+		t.Fatalf("prompts after reopen = %#v, want migrated prompt", prompts)
+	}
+}
+
 func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {
 	t.Helper()
 	rows, err := db.Query(`PRAGMA table_info(` + tableName + `)`)

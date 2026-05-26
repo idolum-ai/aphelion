@@ -266,6 +266,52 @@ func (s *stubCommandRouter) ApplyMissionActionProposalDecision(ctx context.Conte
 	return session.MissionState{ID: missionID, Title: "Mission", Status: session.MissionStatusActive}, true, nil
 }
 
+func (s *stubCommandRouter) MissionAskPrompt(ctx context.Context, senderID int64, promptID string) (session.MissionAskPrompt, bool, error) {
+	_ = ctx
+	s.missionAskPromptSenderID = senderID
+	s.missionAskPromptID = promptID
+	if s.missionAskPromptErr != nil {
+		return session.MissionAskPrompt{}, false, s.missionAskPromptErr
+	}
+	if strings.TrimSpace(s.missionAskPrompt.ID) != "" || s.missionAskPromptOK {
+		prompt := s.missionAskPrompt
+		if strings.TrimSpace(prompt.ID) == "" {
+			prompt.ID = promptID
+		}
+		if prompt.Status == "" {
+			prompt.Status = session.MissionAskStatusPending
+		}
+		return prompt, true, nil
+	}
+	return session.MissionAskPrompt{}, false, nil
+}
+
+func (s *stubCommandRouter) ResolveMissionAskPrompt(ctx context.Context, senderID int64, promptID string, status session.MissionAskStatus, summary string) (session.MissionAskPrompt, error) {
+	_ = ctx
+	s.missionAskPromptSenderID = senderID
+	s.missionAskPromptID = promptID
+	s.resolveMissionAskStatus = status
+	s.resolveMissionAskSummary = summary
+	if s.resolveMissionAskErr != nil {
+		return session.MissionAskPrompt{}, s.resolveMissionAskErr
+	}
+	prompt := s.missionAskPrompt
+	if strings.TrimSpace(prompt.ID) == "" {
+		prompt.ID = promptID
+	}
+	prompt.Status = status
+	prompt.ResultSummary = summary
+	return prompt, nil
+}
+
+func (s *stubCommandRouter) QueueMissionClarification(ctx context.Context, msg core.InboundMessage, promptID string) error {
+	_ = ctx
+	copied := msg
+	s.queueMissionClarificationMsg = &copied
+	s.queueMissionClarificationID = promptID
+	return s.queueMissionClarificationErr
+}
+
 func stubMissionState(id string, status session.MissionStatus) session.MissionState {
 	id = strings.TrimSpace(id)
 	if id == "" {

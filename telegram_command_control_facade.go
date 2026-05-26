@@ -164,6 +164,12 @@ func (c telegramCommandControl) MissionActionProposal(ctx context.Context, chatI
 func (c telegramCommandControl) ApplyMissionActionProposalDecision(ctx context.Context, chatID int64, senderID int64, missionID string, choice string) (session.MissionState, bool, error) {
 	return c.controlFacade().ApplyMissionActionProposalDecision(ctx, chatID, senderID, missionID, choice)
 }
+func (c telegramCommandControl) MissionAskPrompt(ctx context.Context, senderID int64, promptID string) (session.MissionAskPrompt, bool, error) {
+	return c.controlFacade().MissionAskPrompt(ctx, senderID, promptID)
+}
+func (c telegramCommandControl) ResolveMissionAskPrompt(ctx context.Context, senderID int64, promptID string, status session.MissionAskStatus, summary string) (session.MissionAskPrompt, error) {
+	return c.controlFacade().ResolveMissionAskPrompt(ctx, senderID, promptID, status, summary)
+}
 
 func (c telegramCommandControl) ModelSlotStatuses() ([]core.ModelSlotStatus, error) {
 	return c.controlFacade().ModelSlotStatuses()

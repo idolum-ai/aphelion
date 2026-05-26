@@ -17,6 +17,7 @@ const (
 	telegramDoctorIngressSurface                          = "telegram:callback-work:doctor"
 	telegramContextClarificationIngressSurface            = "telegram:callback-work:context-clarification"
 	telegramMemoryClarificationIngressSurface             = "telegram:callback-work:memory-clarification"
+	telegramMissionClarificationIngressSurface            = "telegram:callback-work:mission-clarification"
 	telegramBusyDecisionResumeIngressSurface              = "telegram:decision-resume:busy"
 	telegramArtifactRetentionDecisionResumeIngressSurface = "telegram:decision-resume:artifact-retention"
 )
@@ -43,6 +44,7 @@ func telegramStartupWorkSurfaces() []telegramWorkSurface {
 		{Name: "doctor", Surface: telegramDoctorIngressSurface, Kind: telegramWorkSurfaceCallbackWork, ReplayLimit: 100},
 		{Name: "context_clarification", Surface: telegramContextClarificationIngressSurface, Kind: telegramWorkSurfaceCallbackWork, ReplayLimit: 100},
 		{Name: "memory_clarification", Surface: telegramMemoryClarificationIngressSurface, Kind: telegramWorkSurfaceCallbackWork, ReplayLimit: 100},
+		{Name: "mission_clarification", Surface: telegramMissionClarificationIngressSurface, Kind: telegramWorkSurfaceCallbackWork, ReplayLimit: 100},
 		{Name: "busy_decision_resume", Surface: telegramBusyDecisionResumeIngressSurface, Kind: telegramWorkSurfaceDecisionResume, ReplayLimit: 100},
 		{Name: "artifact_retention_decision_resume", Surface: telegramArtifactRetentionDecisionResumeIngressSurface, Kind: telegramWorkSurfaceDecisionResume, ReplayLimit: 100},
 	}

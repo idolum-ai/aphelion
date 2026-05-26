@@ -5,14 +5,9 @@ package standalonecli
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"os"
-	"strings"
 	"testing"
 	"time"
-
-	"github.com/idolum-ai/aphelion/config"
-	"github.com/idolum-ai/aphelion/provider"
 )
 
 func TestLiveAgencySpectrumEvals(t *testing.T) {
@@ -20,58 +15,21 @@ func TestLiveAgencySpectrumEvals(t *testing.T) {
 		t.Skip("set APHELION_LIVE_EVAL=1 to run live OpenAI agency spectrum evals")
 	}
 
-	cfg, configPath, err := loadConfigForCommand(os.Getenv("APHELION_CONFIG"))
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-	if strings.TrimSpace(cfg.Providers.OpenAI.APIKey) == "" {
-		t.Skipf("providers.openai.api_key is not configured in %s", configPath)
-	}
-	model := firstAgencyEvalNonEmpty(os.Getenv("APHELION_LIVE_EVAL_MODEL"), cfg.Providers.OpenAI.Model)
-	if strings.TrimSpace(model) == "" {
-		t.Skipf("providers.openai.model is not configured in %s", configPath)
-	}
-	judgeModel := firstAgencyEvalNonEmpty(os.Getenv("APHELION_LIVE_EVAL_JUDGE_MODEL"), model)
-
-	httpClient := &http.Client{Timeout: 90 * time.Second}
-	subject, err := provider.NewOpenAI(provider.OpenAIOptions{
-		APIKey:     cfg.Providers.OpenAI.APIKey,
-		BaseURL:    cfg.Providers.OpenAI.BaseURL,
-		Model:      model,
-		MaxTokens:  cfg.Providers.OpenAI.MaxTokens,
-		HTTPClient: httpClient,
-		UserAgent:  config.EffectiveUserAgent(cfg, ""),
-	})
-	if err != nil {
-		t.Fatalf("new OpenAI subject provider: %v", err)
-	}
-	judge := subject
-	if judgeModel != model {
-		judge, err = provider.NewOpenAI(provider.OpenAIOptions{
-			APIKey:     cfg.Providers.OpenAI.APIKey,
-			BaseURL:    cfg.Providers.OpenAI.BaseURL,
-			Model:      judgeModel,
-			MaxTokens:  cfg.Providers.OpenAI.MaxTokens,
-			HTTPClient: httpClient,
-			UserAgent:  config.EffectiveUserAgent(cfg, ""),
-		})
-		if err != nil {
-			t.Fatalf("new OpenAI judge provider: %v", err)
-		}
-	}
+	providers := loadLiveAgencyEvalProviders(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	report, err := runAgencyEval(ctx, subject, judge, agencyEvalRunOptions{
+	report, err := runAgencyEval(ctx, providers.Subject, providers.Judge, agencyEvalRunOptions{
 		Profile:    agencyEvalProfileFull,
 		Variant:    agencyEvalVariantCompare,
-		Model:      model,
-		JudgeModel: judgeModel,
+		Model:      providers.Model,
+		JudgeModel: providers.JudgeModel,
 		Now:        time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatalf("live agency eval: %v", err)
 	}
+	writeLiveAgencyEvalReportIfRequested(t, "agency", report)
 	t.Logf("agency eval summary: current_avg=%.2f baseline_avg=%.2f hard_failures=%d improved=%d regressed=%d",
 		agencyEvalVariantAverage(report.Results, agencyEvalVariantCurrent),
 		agencyEvalVariantAverage(report.Results, agencyEvalVariantBaseline),

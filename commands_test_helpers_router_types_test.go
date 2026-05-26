@@ -216,6 +216,17 @@ type stubCommandRouter struct {
 	applyMissionProposalSender   int64
 	applyMissionProposalID       string
 	applyMissionProposalChoice   string
+	missionAskPrompt             session.MissionAskPrompt
+	missionAskPromptOK           bool
+	missionAskPromptErr          error
+	missionAskPromptSenderID     int64
+	missionAskPromptID           string
+	resolveMissionAskStatus      session.MissionAskStatus
+	resolveMissionAskSummary     string
+	resolveMissionAskErr         error
+	queueMissionClarificationMsg *core.InboundMessage
+	queueMissionClarificationID  string
+	queueMissionClarificationErr error
 	memoryReviewBySource         map[memoryReviewSource]memoryReviewSnapshot
 	memoryReviewErr              error
 	memoryReviewChatID           int64

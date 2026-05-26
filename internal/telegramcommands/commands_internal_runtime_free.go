@@ -174,5 +174,6 @@ const telegramThreadSummaryIngressSurface = "telegram:callback-work:thread-summa
 const telegramDoctorIngressSurface = "telegram:callback-work:doctor"
 const telegramContextClarificationIngressSurface = "telegram:callback-work:context-clarification"
 const telegramMemoryClarificationIngressSurface = "telegram:callback-work:memory-clarification"
+const telegramMissionClarificationIngressSurface = "telegram:callback-work:mission-clarification"
 
 var _ = core.TelegramCallbackDataMaxBytes

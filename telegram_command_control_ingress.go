@@ -105,3 +105,7 @@ func (c telegramCommandControl) Restart(chatID int64) error {
 func (c telegramCommandControl) QueueClarification(ctx context.Context, msg core.InboundMessage) error {
 	return c.controlFacade().QueueClarification(ctx, msg)
 }
+
+func (c telegramCommandControl) QueueMissionClarification(ctx context.Context, msg core.InboundMessage, promptID string) error {
+	return c.controlFacade().QueueMissionClarification(ctx, msg, promptID)
+}
