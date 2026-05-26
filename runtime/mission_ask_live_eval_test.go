@@ -51,7 +51,7 @@ type missionAskLiveEvalReport struct {
 
 func TestLiveMissionAskClassifierEvals(t *testing.T) {
 	if os.Getenv("APHELION_LIVE_EVAL") != "1" {
-		t.Skip("set APHELION_LIVE_EVAL=1 to run live OpenAI Mission Ask classifier evals")
+		t.Skip("set APHELION_LIVE_EVAL=1 to run live OpenAI Mission Question classifier evals")
 	}
 
 	cfg, configPath, err := loadMissionAskLiveEvalConfig()

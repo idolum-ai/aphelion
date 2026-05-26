@@ -109,9 +109,9 @@ func TestDurableAgentRetireCallbackRequiresConfirmationThenRunsLifecycleAction(t
 	if askRouter.durableLifecycleAction != "" {
 		t.Fatalf("durableLifecycleAction = %q, want no mutation before confirmation", askRouter.durableLifecycleAction)
 	}
-	if !commandRowsContain(askSender.editInline[0].rows, "Brief First", encodeDurableAgentsActionCallbackData(durableAgentsCallbackRetireBrief, "ops-child", telegramPageViewList, 1)) ||
+	if !commandRowsContain(askSender.editInline[0].rows, "Brief", encodeDurableAgentsActionCallbackData(durableAgentsCallbackRetireBrief, "ops-child", telegramPageViewList, 1)) ||
 		!commandRowsContain(askSender.editInline[0].rows, "Retire", encodeDurableAgentsActionCallbackData(durableAgentsCallbackRetireConfirm, "ops-child", telegramPageViewList, 1)) {
-		t.Fatalf("retire ask rows = %#v, want brief-first and confirm controls", askSender.editInline[0].rows)
+		t.Fatalf("retire ask rows = %#v, want brief and confirm controls", askSender.editInline[0].rows)
 	}
 
 	confirmSender := &stubCommandSender{}
@@ -141,35 +141,35 @@ func TestDurableAgentRetireCallbackRequiresConfirmationThenRunsLifecycleAction(t
 	}
 }
 
-func TestDurableAgentsGatherCallbackQueuesAnalysisTurn(t *testing.T) {
+func TestDurableAgentsAnalyzeCallbackQueuesAnalysisTurn(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
 	router := &stubCommandRouter{canRestart: true}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
-		ID:       "cb-agent-gather",
+		ID:       "cb-agent-analyze",
 		UpdateID: 8801,
 		From:     &telegram.User{ID: 1001},
-		Data:     encodeDurableAgentsGatherCallbackData(),
+		Data:     encodeDurableAgentsAnalyzeCallbackData(),
 		Message: &telegram.Message{
 			MessageID: 7007,
 			Chat:      &telegram.Chat{ID: 9009, Type: "private"},
 		},
 	})
 	if err != nil {
-		t.Fatalf("handleTelegramCommandCallback(gather) err = %v", err)
+		t.Fatalf("handleTelegramCommandCallback(analyze) err = %v", err)
 	}
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if router.agentGatherMsg == nil {
-		t.Fatal("agentGatherMsg = nil, want queued analysis request")
+	if router.agentAnalyzeMsg == nil {
+		t.Fatal("agentAnalyzeMsg = nil, want queued analysis request")
 	}
-	if router.agentGatherMsg.ChatID != 9009 || router.agentGatherMsg.SenderID != 1001 ||
-		router.agentGatherMsg.MessageID != 7007 || router.agentGatherMsg.IngressUpdateID != 8801 ||
-		router.agentGatherMsg.IngressSurface != telegramAgentsGatherIngressSurface ||
-		router.agentGatherMsg.Text != "/agents gather" {
-		t.Fatalf("agentGatherMsg = %#v, want callback-backed gather request", *router.agentGatherMsg)
+	if router.agentAnalyzeMsg.ChatID != 9009 || router.agentAnalyzeMsg.SenderID != 1001 ||
+		router.agentAnalyzeMsg.MessageID != 7007 || router.agentAnalyzeMsg.IngressUpdateID != 8801 ||
+		router.agentAnalyzeMsg.IngressSurface != telegramAgentsAnalyzeIngressSurface ||
+		router.agentAnalyzeMsg.Text != "/agents analyze" {
+		t.Fatalf("agentAnalyzeMsg = %#v, want callback-backed analyze request", *router.agentAnalyzeMsg)
 	}
 	if len(sender.answers) != 1 || sender.answers[0].text != "Agent board analysis queued." {
 		t.Fatalf("answers = %#v, want queued ack", sender.answers)

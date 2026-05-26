@@ -60,7 +60,7 @@ type commandRouter interface {
 	StartDurableAgentConversation(ctx context.Context, chatID int64, senderID int64, agentID string) (string, error)
 	SendDurableAgentParentMessage(ctx context.Context, chatID int64, senderID int64, agentID string, message string) (string, error)
 	DurableAgentLifecycleAction(ctx context.Context, chatID int64, senderID int64, agentID string, action string) (string, error)
-	QueueDurableAgentGather(ctx context.Context, msg core.InboundMessage) (string, error)
+	QueueDurableAgentAnalyze(ctx context.Context, msg core.InboundMessage) (string, error)
 	RecordTelegramAgentCallbackMessage(chatID int64, agentID string, messageID int64, surface string) error
 	TelegramAgentIDForReplyMessage(chatID int64, replyMessageID int64) (string, bool, error)
 	MemoryReviewSnapshot(ctx context.Context, chatID int64, senderID int64, source memoryReviewSource) (memoryReviewSnapshot, error)

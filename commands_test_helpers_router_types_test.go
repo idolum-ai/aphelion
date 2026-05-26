@@ -159,9 +159,9 @@ type stubCommandRouter struct {
 	durableLifecycleAction       string
 	durableLifecycleResult       string
 	durableLifecycleErr          error
-	agentGatherMsg               *core.InboundMessage
-	agentGatherResult            string
-	agentGatherErr               error
+	agentAnalyzeMsg              *core.InboundMessage
+	agentAnalyzeResult           string
+	agentAnalyzeErr              error
 	agentCallbackChatID          int64
 	agentCallbackAgentID         string
 	agentCallbackMessageID       int64

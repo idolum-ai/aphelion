@@ -167,7 +167,7 @@ func durableAgentsBoardTopRow(view string, page int) []telegram.InlineButton {
 	}
 	return []telegram.InlineButton{
 		{Text: "Refresh", CallbackData: encodeDurableAgentsRefreshCallbackData(view, page)},
-		{Text: "Gather", CallbackData: encodeDurableAgentsGatherCallbackData()},
+		{Text: "Analyze", CallbackData: encodeDurableAgentsAnalyzeCallbackData()},
 		{Text: label, CallbackData: encodeDurableAgentsRefreshCallbackData(nextView, 1)},
 	}
 }
@@ -183,7 +183,7 @@ func durableAgentsBoardNext(view string) string {
 	if normalizeDurableAgentsView(view) == telegramPageViewRetired {
 		return "Open a retired agent for evidence; restore or purge from governed tools outside Telegram."
 	}
-	return "Open an agent before taking lifecycle action, or gather a read-only board analysis."
+	return "Open an agent before taking lifecycle action, or analyze the board without waking children."
 }
 
 func durableAgentsEmptyDetail(view string) string {

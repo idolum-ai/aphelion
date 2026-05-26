@@ -20,12 +20,12 @@ func TestMissionActionProposalBuildsReviewOnlyMissionApproval(t *testing.T) {
 	}
 	mission, err := store.UpsertMission(session.MissionState{
 		ID:                "mission-action-ui",
-		Title:             "Generic ActionProposal approval UI",
+		Title:             "Generic Mission Proposal UI",
 		Objective:         "Make approval a real control surface.",
 		Scope:             "principal",
 		Owner:             "telegram:1001",
 		Status:            session.MissionStatusCandidate,
-		NextAllowedAction: "Implement the generic ActionProposal approval UI slice.",
+		NextAllowedAction: "Implement the generic Mission Proposal UI slice.",
 	}, "telegram:1001", "candidate")
 	if err != nil {
 		t.Fatalf("UpsertMission() err = %v", err)

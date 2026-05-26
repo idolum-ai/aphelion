@@ -47,17 +47,17 @@ func TestMissionProposeCommandSendsActionProposalButtons(t *testing.T) {
 		t.Fatalf("inline len = %d, want 1", len(sender.inline))
 	}
 	text := sender.inline[0].text
-	for _, needle := range []string{"ActionProposal", "Implement the generic approval UI.", "Bounded effect:", "do not self-continue", "Forbidden:"} {
+	for _, needle := range []string{"Mission Proposal", "Implement the generic approval UI.", "Effect:", "do not self-continue", "Forbidden:"} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("inline text = %q, want substring %q", text, needle)
 		}
 	}
 	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 3 {
-		t.Fatalf("rows = %#v, want one Deny/Ask edit/Approve row", sender.inline[0].rows)
+		t.Fatalf("rows = %#v, want one Reject/Change/Approve row", sender.inline[0].rows)
 	}
 	row := sender.inline[0].rows[0]
-	if row[0].Text != "Deny" || row[1].Text != "Ask edit" || row[2].Text != "Approve" {
-		t.Fatalf("button row = %#v, want Deny / Ask edit / Approve", row)
+	if row[0].Text != "Reject" || row[1].Text != "Change" || row[2].Text != "Approve" {
+		t.Fatalf("button row = %#v, want Reject / Change / Approve", row)
 	}
 }
 
@@ -169,7 +169,7 @@ func TestActionProposalApproveCallbackAppliesMissionDecision(t *testing.T) {
 			BoundedEffect: "Mark active only.",
 			Status:        session.ProposalStatusPending,
 		},
-		applyMissionProposalMission: session.MissionState{ID: "mission-action-ui", Title: "Generic ActionProposal approval UI", Status: session.MissionStatusActive},
+		applyMissionProposalMission: session.MissionState{ID: "mission-action-ui", Title: "Generic Mission Proposal UI", Status: session.MissionStatusActive},
 		applyMissionProposalChanged: true,
 	}
 	cb := telegram.CallbackQuery{
@@ -195,7 +195,7 @@ func TestActionProposalApproveCallbackAppliesMissionDecision(t *testing.T) {
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline len = %d, want approval-window offer edit", len(sender.editInline))
 	}
-	if !strings.Contains(sender.editInline[0].text, "ActionProposal approved") || !strings.Contains(sender.editInline[0].text, "No self-continuation") {
+	if !strings.Contains(sender.editInline[0].text, "Mission proposal approved") || !strings.Contains(sender.editInline[0].text, "No self-continuation") {
 		t.Fatalf("edit text = %q, want approval and authority boundary", sender.editInline[0].text)
 	}
 	if !commandRowsContain(sender.editInline[0].rows, "Approve 15m", encodeApprovalWindowCallbackData("offer-test", approvalWindowActionEnable15)) {

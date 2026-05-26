@@ -66,5 +66,5 @@ func handleMissionAskCallback(ctx context.Context, sender commandCallbackSender,
 }
 
 func missionAskClarificationPrompt(prompt session.MissionAskPrompt) string {
-	return strings.TrimSpace(prompt.QuestionText + "\n\nAsk me one concise natural question to clarify this mission association. Do not write Mission Ledger state yet. If I answer later, use the Mission Ask Me prompt id " + prompt.ID + " when resolving it.")
+	return strings.TrimSpace(prompt.QuestionText + "\n\nAsk me one concise natural question to clarify this mission association. Do not write Mission Ledger state yet. If I answer later, use the Mission Question prompt id " + prompt.ID + " when resolving it.")
 }

@@ -98,14 +98,14 @@ request/review/grant lane.
 
 The first generic UI surface is mission-review backed:
 
-- `/mission propose <mission_id>` renders an `ActionProposal` with Telegram
-  `Deny`, `Ask edit`, and `Approve` buttons.
+- `/mission propose <mission_id>` renders a Mission Proposal card with Telegram
+  `Reject`, `Change`, and `Approve` buttons.
 - Callback data is keyed by the proposal id (`action_proposal:<proposal_id>:<action>`).
 - For mission-backed proposals the proposal id currently derives from the
   mission id (`aprop-<mission_id>`).
 - `Approve` marks a candidate/dormant mission active for review/planning only.
-- `Ask edit` leaves the mission candidate and records `waiting_for=proposal_edit`.
-- `Deny` leaves the mission review-only and records `waiting_for=proposal_denied`.
+- `Change` leaves the mission candidate and records `waiting_for=proposal_edit`.
+- `Reject` leaves the mission review-only and records `waiting_for=proposal_denied`.
 
 This v1 UI is intentionally not a tool execution grant and does not create a
 self-continuation lease. It makes the approval control surface real while
@@ -121,11 +121,11 @@ in the ledger.
 
 Buttons:
 
+- `Reject`: reject the idea; no mission is created.
 - `Add mission`: create a candidate mission with default review-only
   authority.
-- `Ask edit`: request a revised proposal; no mission is created.
 - `Park`: leave the idea untracked for now; no mission is created.
-- `Reject`: reject the idea; no mission is created.
+- `Change`: request a revised proposal; no mission is created.
 
 This card deliberately does not authorize execution. It only decides whether an
 idea becomes a candidate mission that may later receive an ActionProposal /

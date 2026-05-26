@@ -16,6 +16,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
@@ -455,7 +456,7 @@ func (r *Runtime) sendMissionAskPrompt(ctx context.Context, key session.SessionK
 func (r *Runtime) MissionAskPrompt(ctx context.Context, senderID int64, promptID string) (session.MissionAskPrompt, bool, error) {
 	_ = ctx
 	if r == nil || r.store == nil {
-		return session.MissionAskPrompt{}, false, fmt.Errorf("Mission Ask Me is unavailable")
+		return session.MissionAskPrompt{}, false, fmt.Errorf("Mission Question is unavailable")
 	}
 	actor, owner, err := r.missionCommandActor(senderID)
 	if err != nil {
@@ -474,7 +475,7 @@ func (r *Runtime) MissionAskPrompt(ctx context.Context, senderID int64, promptID
 func (r *Runtime) ResolveMissionAskPrompt(ctx context.Context, senderID int64, promptID string, status session.MissionAskStatus, summary string) (session.MissionAskPrompt, error) {
 	_ = ctx
 	if r == nil || r.store == nil {
-		return session.MissionAskPrompt{}, fmt.Errorf("Mission Ask Me is unavailable")
+		return session.MissionAskPrompt{}, fmt.Errorf("Mission Question is unavailable")
 	}
 	actor, owner, err := r.missionCommandActor(senderID)
 	if err != nil {
@@ -499,13 +500,28 @@ func renderMissionAskPromptCard(prompt session.MissionAskPrompt) string {
 		}
 		question = "This may belong with " + target + "."
 	}
-	return strings.TrimSpace("Mission Ask Me\n\n" + question + "\n\nAsk one quick clarification, or ignore this connection.")
+	details := []string{"Question: " + question}
+	if missionID := strings.TrimSpace(prompt.MissionID); missionID != "" {
+		details = append(details, "Mission candidate: "+missionID)
+	}
+	evidence := []string{"confidence: " + string(prompt.Confidence)}
+	if promptID := strings.TrimSpace(prompt.ID); promptID != "" {
+		evidence = append([]string{"prompt: " + promptID}, evidence...)
+	}
+	return face.RenderCompactOperatorPanel(face.OperatorPanel{
+		Title:    "Mission Question",
+		State:    "waiting for choice",
+		Why:      "This looks related to mission work, but mission state should not change without your direction.",
+		Next:     "Ask one clarification, or ignore this connection.",
+		Details:  details,
+		Evidence: evidence,
+	}, face.OperatorPanelCompactOptions{DetailLimit: 3, EvidenceLimit: 2})
 }
 
 func missionAskPromptRows(promptID string) [][]telegram.InlineButton {
 	return [][]telegram.InlineButton{{
-		{Text: "Ask Me", CallbackData: core.EncodeMissionAskCallbackData(promptID, core.MissionAskCallbackAsk)},
 		{Text: "Ignore", CallbackData: core.EncodeMissionAskCallbackData(promptID, core.MissionAskCallbackIgnore)},
+		{Text: "Ask Me", CallbackData: core.EncodeMissionAskCallbackData(promptID, core.MissionAskCallbackAsk)},
 	}}
 }
 

@@ -29,7 +29,7 @@ func (c CommandControl) QueueClarification(ctx context.Context, msg core.Inbound
 
 func (c CommandControl) QueueMissionClarification(ctx context.Context, msg core.InboundMessage, promptID string) error {
 	if c.Runtime == nil {
-		return fmt.Errorf("Mission Ask Me is unavailable.")
+		return fmt.Errorf("Mission Question is unavailable.")
 	}
 	msg.IngressSurface = telegramruntime.MissionClarificationIngressSurface
 	if err := recordTelegramCallbackWorkAccepted(c.Store, msg, "callback_mission_clarification"); err != nil {

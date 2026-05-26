@@ -186,7 +186,7 @@ func (c telegramCommandControl) DurableAgentLifecycleAction(ctx context.Context,
 	return c.durableTools.ExecuteForSessionPrincipal(ctx, actor, key, "durable_agent", payload)
 }
 
-func (c telegramCommandControl) QueueDurableAgentGather(ctx context.Context, msg core.InboundMessage) (string, error) {
+func (c telegramCommandControl) QueueDurableAgentAnalyze(ctx context.Context, msg core.InboundMessage) (string, error) {
 	if !c.CanRestart(msg.SenderID) {
 		return "", fmt.Errorf("durable-agent controls are admin only")
 	}
@@ -197,13 +197,13 @@ func (c telegramCommandControl) QueueDurableAgentGather(ctx context.Context, msg
 	if err != nil {
 		return "", err
 	}
-	if err := c.recordDurableAgentGatherAccepted(msg); err != nil {
+	if err := c.recordDurableAgentAnalyzeAccepted(msg); err != nil {
 		return "", err
 	}
 	queued := msg
 	queued.DurableAgentID = ""
 	queued.TelegramThreadID = 0
-	queued.Text = renderDurableAgentGatherQuest(snapshot)
+	queued.Text = renderDurableAgentAnalyzeQuest(snapshot)
 	queued.Raw = nil
 	if err := c.RouteAccepted(ctx, queued); err != nil {
 		return "", err
@@ -211,7 +211,7 @@ func (c telegramCommandControl) QueueDurableAgentGather(ctx context.Context, msg
 	return "Agent board analysis queued.", nil
 }
 
-func (c telegramCommandControl) recordDurableAgentGatherAccepted(msg core.InboundMessage) error {
+func (c telegramCommandControl) recordDurableAgentAnalyzeAccepted(msg core.InboundMessage) error {
 	if c.store == nil || strings.TrimSpace(msg.IngressSurface) == "" || msg.IngressUpdateID <= 0 {
 		return nil
 	}
@@ -223,7 +223,7 @@ func (c telegramCommandControl) recordDurableAgentGatherAccepted(msg core.Inboun
 	_, err := c.store.RecordTelegramIngressAccepted(session.TelegramIngressUpdateRecord{
 		Surface:     strings.TrimSpace(msg.IngressSurface),
 		UpdateID:    msg.IngressUpdateID,
-		UpdateKind:  "callback_agents_gather",
+		UpdateKind:  "callback_agents_analyze",
 		ChatID:      msg.ChatID,
 		SenderID:    msg.SenderID,
 		MessageID:   msg.MessageID,
@@ -250,7 +250,7 @@ func (c telegramCommandControl) TelegramAgentIDForReplyMessage(chatID int64, rep
 	return c.store.TelegramAgentIDForReplyMessage(chatID, replyMessageID)
 }
 
-func renderDurableAgentGatherQuest(snapshot core.DurableAgentsStatusSnapshot) string {
+func renderDurableAgentAnalyzeQuest(snapshot core.DurableAgentsStatusSnapshot) string {
 	var b strings.Builder
 	b.WriteString("Analyze the durable-agent board as a compact operator triage note for the main chat.\n")
 	b.WriteString("Do not wake children, retire agents, merge child memory, or mutate authority.\n")

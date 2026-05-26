@@ -11,7 +11,7 @@ import (
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
-const telegramAgentsGatherIngressSurface = "telegram:callback-work:agents-gather"
+const telegramAgentsAnalyzeIngressSurface = "telegram:callback-work:agents-analyze"
 
 func handleDurableAgentsCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, req durableAgentsCallbackRequest) (bool, error) {
 	chatID := callbackChatID(cb)
@@ -32,8 +32,8 @@ func handleDurableAgentsCallback(ctx context.Context, sender commandCallbackSend
 	switch req.Action {
 	case durableAgentsCallbackRefresh, durableAgentsCallbackBack:
 		return handleDurableAgentsListCallback(ctx, sender, router, cb, chatID, messageID, senderID, req)
-	case durableAgentsCallbackGather:
-		return handleDurableAgentsGatherCallback(ctx, sender, router, cb, chatID, messageID, senderID)
+	case durableAgentsCallbackAnalyze:
+		return handleDurableAgentsAnalyzeCallback(ctx, sender, router, cb, chatID, messageID, senderID)
 	default:
 		return handleDurableAgentTargetCallback(ctx, sender, router, cb, chatID, messageID, senderID, req)
 	}
@@ -55,17 +55,17 @@ func handleDurableAgentsListCallback(ctx context.Context, sender commandCallback
 	return true, nil
 }
 
-func handleDurableAgentsGatherCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, chatID int64, messageID int64, senderID int64) (bool, error) {
-	text, err := router.QueueDurableAgentGather(ctx, core.InboundMessage{
+func handleDurableAgentsAnalyzeCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, chatID int64, messageID int64, senderID int64) (bool, error) {
+	text, err := router.QueueDurableAgentAnalyze(ctx, core.InboundMessage{
 		ChatID:          chatID,
 		SenderID:        senderID,
 		MessageID:       messageID,
-		IngressSurface:  telegramAgentsGatherIngressSurface,
+		IngressSurface:  telegramAgentsAnalyzeIngressSurface,
 		IngressUpdateID: cb.UpdateID,
-		Text:            "/agents gather",
+		Text:            "/agents analyze",
 	})
 	if err != nil {
-		recordTelegramCallbackError(router, chatID, "agents.gather", err)
+		recordTelegramCallbackError(router, chatID, "agents.analyze", err)
 		return true, err
 	}
 	if strings.TrimSpace(text) == "" {

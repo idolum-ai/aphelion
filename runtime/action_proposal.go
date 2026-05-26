@@ -94,15 +94,15 @@ func (r *Runtime) ApplyMissionActionProposalDecision(ctx context.Context, chatID
 			mission.Status = session.MissionStatusActive
 			changed = true
 		}
-		summary = "ActionProposal approved; mission marked active for review/planning"
+		summary = "Mission proposal approved; mission marked active for review/planning"
 	case "ask_edit", "ask-edit", "edit":
 		mission.WaitingFor = "proposal_edit"
 		changed = true
-		summary = "ActionProposal needs edit before approval"
+		summary = "Mission proposal needs change before approval"
 	case "deny", "reject":
 		mission.WaitingFor = "proposal_denied"
 		changed = true
-		summary = "ActionProposal denied; mission left review-only"
+		summary = "Mission proposal rejected; mission left review-only"
 	default:
 		return session.MissionState{}, false, fmt.Errorf("unsupported action proposal choice %q", choice)
 	}

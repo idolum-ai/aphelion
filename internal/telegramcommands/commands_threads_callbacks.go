@@ -468,9 +468,11 @@ func telegramThreadPromotionDraftRows(handoffID string) [][]telegram.InlineButto
 	}
 	return [][]telegram.InlineButton{
 		{
-			{Text: "Ready", CallbackData: encodeTelegramThreadPromotionReadyCallback(handoffID)},
-			{Text: "Refresh", CallbackData: encodeTelegramThreadPromotionRefreshCallback(handoffID)},
 			{Text: "Cancel", CallbackData: encodeTelegramThreadPromotionCancelCallback(handoffID)},
+			{Text: "Ready", CallbackData: encodeTelegramThreadPromotionReadyCallback(handoffID)},
+		},
+		{
+			{Text: "Refresh", CallbackData: encodeTelegramThreadPromotionRefreshCallback(handoffID)},
 		},
 	}
 }

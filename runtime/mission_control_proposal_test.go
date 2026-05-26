@@ -25,7 +25,7 @@ func TestMissionControlProposalReviewEventRendersButtons(t *testing.T) {
 	}
 	event := session.ReviewEvent{ID: 88, Summary: "proposal", MetadataJSON: metadata}
 	text := FormatReviewEventMessage(event)
-	for _, needle := range []string{"Mission Control Proposal", "Runtime recovery", "Adding this only creates a candidate"} {
+	for _, needle := range []string{"Mission Proposal", "Runtime recovery", "review-only candidate"} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("FormatReviewEventMessage() = %q, want substring %q", text, needle)
 		}
@@ -35,8 +35,8 @@ func TestMissionControlProposalReviewEventRendersButtons(t *testing.T) {
 		t.Fatalf("rows = %#v, want two rows with four mission proposal buttons", rows)
 	}
 	labels := []string{rows[0][0].Text, rows[0][1].Text, rows[1][0].Text, rows[1][1].Text}
-	if want := []string{"Add mission", "Ask edit", "Park", "Reject"}; !equalStringSlices(labels, want) {
-		t.Fatalf("rows = %#v, want Add mission/Ask edit/Park/Reject", rows)
+	if want := []string{"Reject", "Add mission", "Park", "Change"}; !equalStringSlices(labels, want) {
+		t.Fatalf("rows = %#v, want Reject/Add mission/Park/Change", rows)
 	}
 	for _, label := range labels {
 		if words := strings.Fields(label); len(words) > 2 {

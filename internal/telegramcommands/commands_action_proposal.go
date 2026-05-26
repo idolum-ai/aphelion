@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
 const actionProposalCallbackPrefix = "action_proposal:"
-const staleActionProposalCallbackText = "This action proposal is no longer active. Use the newest prompt."
+const staleActionProposalCallbackText = "This mission proposal is no longer active. Use the newest prompt."
 
 func missionProposalCommandMissionID(args string) (string, bool) {
 	action, rest := nextCommandToken(args)
@@ -37,36 +38,44 @@ func nextCommandToken(raw string) (string, string) {
 
 func renderActionProposalPrompt(proposal session.ActionProposal) string {
 	proposal = session.NormalizeActionProposal(proposal)
-	lines := []string{"ActionProposal"}
+	details := make([]string, 0, 8)
+	evidence := make([]string, 0, 2)
 	if id := strings.TrimSpace(proposal.ID); id != "" {
-		lines = append(lines, "id: "+id)
+		evidence = append(evidence, "proposal: "+id)
 	}
 	if missionID := strings.TrimSpace(proposal.MissionID); missionID != "" {
-		lines = append(lines, "mission: "+missionID)
+		evidence = append(evidence, "mission: "+missionID)
 	}
 	if summary := strings.TrimSpace(proposal.Summary); summary != "" {
-		lines = append(lines, "", "Proposal:", summary)
-	}
-	if whyNow := strings.TrimSpace(proposal.WhyNow); whyNow != "" {
-		lines = append(lines, "", "Why now:", whyNow)
+		details = append(details, "Proposal: "+truncateOperatorLine(summary, 220))
 	}
 	if effect := strings.TrimSpace(proposal.BoundedEffect); effect != "" {
-		lines = append(lines, "", "Bounded effect:", effect)
+		details = append(details, "Effect: "+truncateOperatorLine(effect, 220))
 	}
 	if risk := strings.TrimSpace(proposal.RiskClass); risk != "" {
-		lines = append(lines, "", "Risk:", risk)
+		details = append(details, "Risk: "+risk)
 	}
 	if len(proposal.AllowedActions) > 0 {
-		lines = append(lines, "", "Allowed:", strings.Join(proposal.AllowedActions, ", "))
+		details = append(details, "Allowed: "+truncateOperatorLine(strings.Join(proposal.AllowedActions, ", "), 220))
 	}
 	if len(proposal.ForbiddenActions) > 0 {
-		lines = append(lines, "", "Forbidden:", strings.Join(proposal.ForbiddenActions, ", "))
+		details = append(details, "Forbidden: "+truncateOperatorLine(strings.Join(proposal.ForbiddenActions, ", "), 220))
 	}
 	if len(proposal.ValidationPlan) > 0 {
-		lines = append(lines, "", "Validation:", strings.Join(proposal.ValidationPlan, "; "))
+		details = append(details, "Validation: "+truncateOperatorLine(strings.Join(proposal.ValidationPlan, "; "), 220))
 	}
-	lines = append(lines, "", "Choose: Deny, Ask edit, or Approve.")
-	return strings.TrimSpace(strings.Join(lines, "\n"))
+	why := strings.TrimSpace(proposal.WhyNow)
+	if why == "" {
+		why = "This mission action is review-only until you approve it."
+	}
+	return renderTelegramCompactPanelWithLimits(face.OperatorPanel{
+		Title:    "Mission Proposal",
+		State:    "waiting for approval",
+		Why:      truncateOperatorLine(why, 220),
+		Next:     "Reject it, ask for a change, or approve the bounded mission action.",
+		Details:  details,
+		Evidence: evidence,
+	}, 8, 2)
 }
 
 func actionProposalButtonRows(proposalID string) [][]telegram.InlineButton {
@@ -75,8 +84,8 @@ func actionProposalButtonRows(proposalID string) [][]telegram.InlineButton {
 		return nil
 	}
 	return [][]telegram.InlineButton{{
-		{Text: "Deny", CallbackData: encodeActionProposalCallbackData(proposalID, "deny")},
-		{Text: "Ask edit", CallbackData: encodeActionProposalCallbackData(proposalID, "ask_edit")},
+		{Text: "Reject", CallbackData: encodeActionProposalCallbackData(proposalID, "deny")},
+		{Text: "Change", CallbackData: encodeActionProposalCallbackData(proposalID, "ask_edit")},
 		{Text: "Approve", CallbackData: encodeActionProposalCallbackData(proposalID, "approve")},
 	}}
 }
@@ -126,7 +135,7 @@ func renderActionProposalDecision(proposal session.ActionProposal, mission sessi
 	status := strings.TrimSpace(string(mission.Status))
 	switch action {
 	case "approve":
-		line := "ActionProposal approved."
+		line := "Mission proposal approved."
 		if title != "" {
 			line += " Mission: " + title + "."
 		}
@@ -136,14 +145,14 @@ func renderActionProposalDecision(proposal session.ActionProposal, mission sessi
 		line += " No self-continuation authority was granted."
 		return line
 	case "ask_edit":
-		line := "ActionProposal needs edits."
+		line := "Mission proposal needs changes."
 		if title != "" {
 			line += " Mission: " + title + "."
 		}
 		line += " I will revise the proposal before asking again."
 		return line
 	case "deny":
-		line := "ActionProposal denied."
+		line := "Mission proposal rejected."
 		if title != "" {
 			line += " Mission: " + title + "."
 		}
@@ -152,6 +161,6 @@ func renderActionProposalDecision(proposal session.ActionProposal, mission sessi
 		}
 		return line
 	default:
-		return fmt.Sprintf("ActionProposal %s recorded.", action)
+		return fmt.Sprintf("Mission proposal %s recorded.", action)
 	}
 }

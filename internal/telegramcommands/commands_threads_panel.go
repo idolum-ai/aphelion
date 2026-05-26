@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
@@ -27,8 +28,8 @@ func sendTelegramThreadGuide(ctx context.Context, sender commandSender, router c
 	operatorID := telegramThreadOperatorID(thread)
 	rendered := renderTelegramThreadGuide(operatorID)
 	rows := [][]telegram.InlineButton{{
-		{Text: fmt.Sprintf("Promote %d", operatorID), CallbackData: encodeTelegramThreadPromoteCallback(thread.ThreadID)},
-		{Text: fmt.Sprintf("Absorb %d", operatorID), CallbackData: encodeTelegramThreadAbsorbCallback(thread.ThreadID)},
+		{Text: "Promote", CallbackData: encodeTelegramThreadPromoteCallback(thread.ThreadID)},
+		{Text: "Absorb", CallbackData: encodeTelegramThreadAbsorbCallback(thread.ThreadID)},
 	}}
 	messageID, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID))
 	if err != nil {
@@ -40,7 +41,18 @@ func sendTelegramThreadGuide(ctx context.Context, sender commandSender, router c
 	return true, nil
 }
 func renderTelegramThreadGuide(threadID int64) string {
-	return fmt.Sprintf("Thread %d created.\n\nSend work here with:\n(thread %d) create the inbox child\n\nYou can also reply to side-thread messages. Main chat remains thread 0. Promote this thread into a draft durable handoff with Promote %d, or close it with /absorb %d.", threadID, threadID, threadID, threadID)
+	return renderTelegramCompactPanel(face.OperatorPanel{
+		Title: "Thread " + fmt.Sprint(threadID),
+		State: "created",
+		Why:   "Side threads keep parallel work in separate session lanes while the main chat remains thread 0.",
+		Next:  fmt.Sprintf("Reply here or send (thread %d) with the next message. Promote for a durable handoff, or absorb when done.", threadID),
+		Details: []string{
+			fmt.Sprintf("Example: (thread %d) create the inbox child", threadID),
+			"Replies to known side-thread messages stay in this thread.",
+			"Promote drafts a durable handoff; Absorb closes the lane.",
+		},
+		Evidence: []string{"main chat: thread 0"},
+	}, false)
 }
 func renderTelegramThreadsHelp(threads []session.TelegramThread) string {
 	rendered, _ := renderTelegramThreadsPanel(threads, telegramPageViewList, 1)
@@ -51,50 +63,71 @@ func renderTelegramThreadsPanel(threads []session.TelegramThread, view string, p
 	allThreads := append([]session.TelegramThread(nil), threads...)
 	threads = filterTelegramThreadsForView(threads, view)
 	visible, info := telegramPageItems(threads, page, telegramThreadsPageSize)
-	var b strings.Builder
+	details := make([]string, 0, len(visible)+1)
 	if view == telegramPageViewNonOpen {
-		b.WriteString("**Absorbed Threads**\n")
+		for _, thread := range visible {
+			details = append(details, telegramThreadBoardLine(thread, true))
+		}
 	} else {
-		b.WriteString("**On Threads**\n")
-		b.WriteString("Thread 0 is the main chat.\n\n")
-		b.WriteString("Start a side thread with:\n")
-		b.WriteString("/thread <message>\n\n")
-		b.WriteString("Continue one by replying to its messages, or by saying:\n")
-		b.WriteString("(thread N) <message>\n\n")
-		b.WriteString("Use **Analyze** to understand what the open threads are doing.\n")
-		b.WriteString("Open a thread below to decide whether to **Promote** it or **Absorb** it.\n\n")
-		b.WriteString("**Open Threads**\n")
+		for _, thread := range visible {
+			details = append(details, telegramThreadBoardLine(thread, false))
+		}
 	}
 	if len(threads) == 0 {
 		if view == telegramPageViewNonOpen {
-			b.WriteString("\nNo absorbed side threads.")
+			details = append(details, "No absorbed side threads.")
 		} else {
-			b.WriteString("\nNo open side threads.")
+			details = append(details, "No open side threads.")
 		}
-		return b.String(), nil
 	}
+	state := fmt.Sprintf("%d shown; %d total", len(threads), len(allThreads))
 	if info.PageCount > 1 {
-		fmt.Fprintf(&b, "\nPage %d of %d. Showing %d-%d of %d.\n", info.Page, info.PageCount, info.Start+1, info.End, info.Total)
+		state = fmt.Sprintf("Page %d of %d; %d shown; %d total", info.Page, info.PageCount, len(threads), len(allThreads))
 	}
-	b.WriteString("\n")
-	for _, thread := range visible {
-		label := telegramThreadDisplayLabel(thread)
-		if view == telegramPageViewNonOpen {
-			status := strings.TrimSpace(string(thread.Status))
-			if status == "" {
-				status = "unknown"
-			}
-			fmt.Fprintf(&b, "%s: %s", label, status)
-		} else {
-			fmt.Fprintf(&b, "%s:", label)
-		}
-		if preview := compactThreadPreview(thread.CreatedText); preview != "" {
-			fmt.Fprintf(&b, " *%s*", preview)
-		}
-		b.WriteString("\n")
+	if len(threads) == 0 {
+		state = "none"
 	}
-	return strings.TrimSpace(b.String()), telegramThreadsRowsPage(threads, allThreads, view, info)
+	panel := face.OperatorPanel{
+		Title:    telegramThreadsBoardTitle(view),
+		State:    state,
+		Why:      "Thread 0 is the main chat; side threads keep simultaneous work in separate session lanes.",
+		Next:     telegramThreadsBoardNext(view),
+		Details:  details,
+		Evidence: []string{"targeting: (thread N) <message>", "reply routing: durable message ledger"},
+	}
+	return renderTelegramCompactPanelWithLimits(panel, telegramThreadsPageSize, 2), telegramThreadsRowsPage(threads, allThreads, view, info)
 }
+
+func telegramThreadsBoardTitle(view string) string {
+	if normalizeTelegramThreadsView(view) == telegramPageViewNonOpen {
+		return "Absorbed Threads"
+	}
+	return "Side Threads"
+}
+
+func telegramThreadsBoardNext(view string) string {
+	if normalizeTelegramThreadsView(view) == telegramPageViewNonOpen {
+		return "Switch back to open threads when you need active lanes."
+	}
+	return "Start with /thread, reply to side-thread messages, or open a thread before promoting or absorbing it."
+}
+
+func telegramThreadBoardLine(thread session.TelegramThread, includeStatus bool) string {
+	label := telegramThreadDisplayLabel(thread)
+	preview := compactThreadPreview(thread.CreatedText)
+	if preview == "" {
+		preview = "No opening message recorded."
+	}
+	if includeStatus {
+		status := strings.TrimSpace(string(thread.Status))
+		if status == "" {
+			status = "unknown"
+		}
+		return fmt.Sprintf("%s: %s; %s", label, status, preview)
+	}
+	return fmt.Sprintf("%s: %s", label, preview)
+}
+
 func compactThreadPreview(text string) string {
 	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
 	if text == "" {
@@ -156,20 +189,31 @@ func renderTelegramThreadDetailAt(thread session.TelegramThread, now time.Time) 
 	if preview == "" {
 		preview = "No opening message recorded."
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "**Thread %d**\n", operatorID)
-	fmt.Fprintf(&b, "*%s*\n\n", preview)
-	if lastActive := telegramThreadLastActiveAt(thread); !lastActive.IsZero() {
-		fmt.Fprintf(&b, "Last active: %s\n", formatTelegramThreadDetailTime(lastActive))
-		fmt.Fprintf(&b, "%s\n\n", formatTelegramThreadRelativeTime(lastActive, now))
-	} else {
-		b.WriteString("Last active: unknown\n\n")
+	state := strings.TrimSpace(string(thread.Status))
+	if state == "" {
+		state = "unknown"
 	}
-	b.WriteString("**Promote**\n")
-	b.WriteString("Turn this thread into a real work item.\n\n")
-	b.WriteString("**Absorb**\n")
-	b.WriteString("Fold the useful result back into the main chat and remove it from open threads.")
-	return b.String()
+	details := []string{"Opening message: " + preview}
+	if lastActive := telegramThreadLastActiveAt(thread); !lastActive.IsZero() {
+		details = append(details,
+			"Last active: "+formatTelegramThreadDetailTime(lastActive),
+			"Relative time: "+formatTelegramThreadRelativeTime(lastActive, now),
+		)
+	} else {
+		details = append(details, "Last active: unknown")
+	}
+	details = append(details,
+		"Promote: draft a durable handoff from this lane.",
+		"Absorb: close the lane and record a main-chat note.",
+	)
+	return renderTelegramCompactPanelWithLimits(face.OperatorPanel{
+		Title:    fmt.Sprintf("Thread %d", operatorID),
+		State:    state,
+		Why:      "This side thread has its own transcript, plan, progress, and recovery state.",
+		Next:     "Promote it into a durable handoff, absorb it when complete, or go back to the board.",
+		Details:  details,
+		Evidence: []string{fmt.Sprintf("thread_id: %d", thread.ThreadID), fmt.Sprintf("display_slot: %d", operatorID)},
+	}, 6, 2)
 }
 func telegramThreadLastActiveAt(thread session.TelegramThread) time.Time {
 	if !thread.LastActivityAt.IsZero() {
@@ -223,11 +267,15 @@ func formatTelegramThreadRelativeTime(t time.Time, now time.Time) string {
 	return fmt.Sprintf("%d %s ago", value, unit)
 }
 func telegramThreadDetailRows(thread session.TelegramThread) [][]telegram.InlineButton {
-	return [][]telegram.InlineButton{{
-		{Text: "Promote", CallbackData: encodeTelegramThreadPromoteCallback(thread.ThreadID)},
-		{Text: "Absorb", CallbackData: encodeTelegramThreadAbsorbCallback(thread.ThreadID)},
-		{Text: "Back", CallbackData: telegramThreadBackCallbackData},
-	}}
+	return [][]telegram.InlineButton{
+		{
+			{Text: "Promote", CallbackData: encodeTelegramThreadPromoteCallback(thread.ThreadID)},
+			{Text: "Absorb", CallbackData: encodeTelegramThreadAbsorbCallback(thread.ThreadID)},
+		},
+		{
+			{Text: "Back", CallbackData: telegramThreadBackCallbackData},
+		},
+	}
 }
 func telegramThreadsHasOpen(threads []session.TelegramThread) bool {
 	for _, thread := range threads {

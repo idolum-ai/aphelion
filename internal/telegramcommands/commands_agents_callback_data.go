@@ -19,7 +19,7 @@ type durableAgentsCallbackAction string
 
 const (
 	durableAgentsCallbackRefresh       durableAgentsCallbackAction = "refresh"
-	durableAgentsCallbackGather        durableAgentsCallbackAction = "gather"
+	durableAgentsCallbackAnalyze       durableAgentsCallbackAction = "analyze"
 	durableAgentsCallbackDetail        durableAgentsCallbackAction = "detail"
 	durableAgentsCallbackBack          durableAgentsCallbackAction = "back"
 	durableAgentsCallbackBrief         durableAgentsCallbackAction = "brief"
@@ -42,8 +42,8 @@ func encodeDurableAgentsRefreshCallbackData(view string, page int) string {
 	return encodeDurableAgentsCallback(durableAgentsCallbackRefresh, view, page, "")
 }
 
-func encodeDurableAgentsGatherCallbackData() string {
-	return durableAgentsCallbackPrefix + string(durableAgentsCallbackGather)
+func encodeDurableAgentsAnalyzeCallbackData() string {
+	return durableAgentsCallbackPrefix + string(durableAgentsCallbackAnalyze)
 }
 
 func encodeDurableAgentsDetailCallbackData(agentID string, view string, page int) string {
@@ -80,8 +80,8 @@ func decodeDurableAgentsCallbackData(data string) (durableAgentsCallbackRequest,
 		return durableAgentsCallbackRequest{}, false
 	}
 	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, durableAgentsCallbackPrefix))
-	if payload == string(durableAgentsCallbackGather) {
-		return durableAgentsCallbackRequest{Action: durableAgentsCallbackGather, View: telegramPageViewList, Page: 1}, true
+	if payload == string(durableAgentsCallbackAnalyze) {
+		return durableAgentsCallbackRequest{Action: durableAgentsCallbackAnalyze, View: telegramPageViewList, Page: 1}, true
 	}
 	parts := strings.Split(payload, ":")
 	if len(parts) < 3 || len(parts) > 4 {
@@ -210,11 +210,11 @@ func durableAgentDetailButtonRows(agent core.DurableAgentStatusSnapshot, view st
 func durableAgentRetireConfirmRows(agentID string, view string, page int) [][]telegram.InlineButton {
 	return [][]telegram.InlineButton{
 		{
-			{Text: "Brief First", CallbackData: encodeDurableAgentsActionCallbackData(durableAgentsCallbackRetireBrief, agentID, view, page)},
+			{Text: "Cancel", CallbackData: encodeDurableAgentsActionCallbackData(durableAgentsCallbackRetireCancel, agentID, view, page)},
 			{Text: "Retire", CallbackData: encodeDurableAgentsActionCallbackData(durableAgentsCallbackRetireConfirm, agentID, view, page)},
 		},
 		{
-			{Text: "Cancel", CallbackData: encodeDurableAgentsActionCallbackData(durableAgentsCallbackRetireCancel, agentID, view, page)},
+			{Text: "Brief", CallbackData: encodeDurableAgentsActionCallbackData(durableAgentsCallbackRetireBrief, agentID, view, page)},
 		},
 	}
 }

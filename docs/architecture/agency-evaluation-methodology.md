@@ -154,10 +154,10 @@ runtime action, memory writes, leases, or consent.
 - `agency_live_eval_test.go`: opt-in OpenAI agency spectrum eval using
   `APHELION_LIVE_EVAL=1`.
 - `auto_live_eval_test.go`: opt-in OpenAI auto/proactive prompt evals covering
-  completed-work closure, auto-policy authority boundaries, bounded Mission Ask
+  completed-work closure, auto-policy authority boundaries, bounded Mission Question
   pressure, and active approval preservation.
 - `runtime/mission_ask_live_eval_test.go`: opt-in OpenAI eval for the exact
-  Mission Ask classifier prompt used by runtime.
+  Mission Question classifier prompt used by runtime.
 - `prompt/golden_test.go` and `prompt/testdata/golden/*`: deterministic prompt
   shape checks for the agency packet itself.
 

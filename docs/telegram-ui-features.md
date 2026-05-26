@@ -44,7 +44,7 @@ Current command surface:
   - Admin-only durable-agent board.
   - Lists current durable agents by default, with `Show Retired` for inspect-only retired children.
   - Opens detail cards with `Brief`, `Park`, `Resume`, and guarded `Retire` controls where appropriate.
-  - `Gather` queues a read-only main-chat analysis of the agent board; it does not wake, park, resume, or retire children.
+  - `Analyze` queues a read-only main-chat analysis of the agent board; it does not wake, park, resume, or retire children.
 - `/context`
   - Opens a read-only context panel for the current chat or side-thread lane.
   - Shows current lane, operation/plan summary, recent context preview, evidence, and `Writes: none`.
@@ -76,8 +76,8 @@ Current command surface:
   - Shows the current working objective and the caller-owned Mission Ledger entries.
   - Provides buttons for home/list, show, propose, pin/unpin, activate, pause, complete, archive, refresh, and admin health.
   - Supports manual `create`, `block`, and `summon` actions when typed input is the natural carrier for the new objective or reason.
-  - May offer a Mission `Ask Me` card after an ordinary turn when typed mission evidence suggests the current work belongs with an existing mission or may be a new durable objective.
-  - Mission `Ask Me` prompts are cooldown-governed typed ledger rows. `Ask Me` queues one clarification turn; `Ignore` records the ignored association.
+  - May offer a Mission Question card after an ordinary turn when typed mission evidence suggests the current work belongs with an existing mission or may be a new durable objective.
+  - Mission Question prompts are cooldown-governed typed ledger rows. `Ask Me` queues one clarification turn; `Ignore` records the ignored association.
   - Self-summon is review-only; Mission Ledger state does not grant self-continuation, autonomous continuation, new capabilities, or external authority.
 - Approval windows
   - Admin-only inline controls shown after an approval succeeds.
@@ -261,7 +261,7 @@ Callbacks resolve short mission tokens against the current authorized mission
 view before applying any state change. Mission actions update ledger records; they
 do not create continuation authority or capability grants.
 
-Mission `Ask Me` cards are proactive clarification prompts. They appear only
+Mission Question cards are proactive clarification prompts. They appear only
 after a persisted ordinary reply, never for slash commands, callback work,
 durable-agent turns, or active approval surfaces. The card text is presentation;
 the durable record is `mission_ask_prompts`, with owner, scope, session, source
@@ -270,11 +270,12 @@ fingerprint. Low-confidence prompts are limited to roughly once per day per
 owner; high-confidence prompts to roughly once per four hours; repeated
 associations and ignored associations have their own longer cooldowns.
 
-`Ask Me` queues durable callback work that asks one natural clarification
-question and marks the prompt as asked. The next relevant turn receives a hidden
-input with the pending prompt id so the model can resolve it through the
-Mission Ledger tool after the operator answers. `Ignore` marks the prompt
-ignored without changing mission state.
+Mission Question buttons are ordered as `Ignore` then `Ask Me`. `Ask Me` queues
+durable callback work that asks one natural clarification question and marks
+the prompt as asked. The next relevant turn receives a hidden input with the
+pending prompt id so the model can resolve it through the Mission Ledger tool
+after the operator answers. `Ignore` marks the prompt ignored without changing
+mission state.
 
 ### Approval Windows
 
@@ -406,7 +407,7 @@ into the active board.
 Board controls:
 
 - `Refresh`: re-read the current durable-agent projection.
-- `Gather`: queue ordinary main-chat work that analyzes the board as a compact
+- `Analyze`: queue ordinary main-chat work that analyzes the board as a compact
   triage note. The request is recorded as durable callback ingress before the
   turn starts. It is read-only and explicitly asks not to wake children or mutate
   authority.

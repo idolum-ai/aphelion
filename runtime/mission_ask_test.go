@@ -55,17 +55,17 @@ func TestMaybeOfferMissionAskCreatesLedgerPromptAndTelegramCard(t *testing.T) {
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline len = %d, want mission Ask Me card", len(sender.inline))
 	}
-	if !strings.Contains(sender.inline[0].text, "Mission Ask Me") || !strings.Contains(sender.inline[0].text, "README cleanup") {
+	if !strings.Contains(sender.inline[0].text, "Mission Question") || !strings.Contains(sender.inline[0].text, "README cleanup") {
 		t.Fatalf("inline text = %q, want question card", sender.inline[0].text)
 	}
 	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 2 {
-		t.Fatalf("inline rows = %#v, want Ask Me/Ignore buttons", sender.inline[0].rows)
+		t.Fatalf("inline rows = %#v, want Ignore/Ask Me buttons", sender.inline[0].rows)
 	}
-	if _, action, ok := core.DecodeMissionAskCallbackData(sender.inline[0].rows[0][0].CallbackData); !ok || action != core.MissionAskCallbackAsk {
-		t.Fatalf("Ask Me callback = %q, want mission ask callback", sender.inline[0].rows[0][0].CallbackData)
+	if _, action, ok := core.DecodeMissionAskCallbackData(sender.inline[0].rows[0][0].CallbackData); !ok || action != core.MissionAskCallbackIgnore {
+		t.Fatalf("Ignore callback = %q, want mission ignore callback", sender.inline[0].rows[0][0].CallbackData)
 	}
-	if _, action, ok := core.DecodeMissionAskCallbackData(sender.inline[0].rows[0][1].CallbackData); !ok || action != core.MissionAskCallbackIgnore {
-		t.Fatalf("Ignore callback = %q, want mission ignore callback", sender.inline[0].rows[0][1].CallbackData)
+	if _, action, ok := core.DecodeMissionAskCallbackData(sender.inline[0].rows[0][1].CallbackData); !ok || action != core.MissionAskCallbackAsk {
+		t.Fatalf("Ask Me callback = %q, want mission ask callback", sender.inline[0].rows[0][1].CallbackData)
 	}
 }
 

@@ -125,14 +125,14 @@ func (s *stubCommandRouter) DurableAgentLifecycleAction(ctx context.Context, cha
 	return "action: durable-agent " + strings.TrimSpace(action) + "\nagent_id: " + strings.TrimSpace(agentID), nil
 }
 
-func (s *stubCommandRouter) QueueDurableAgentGather(_ context.Context, msg core.InboundMessage) (string, error) {
+func (s *stubCommandRouter) QueueDurableAgentAnalyze(_ context.Context, msg core.InboundMessage) (string, error) {
 	copied := msg
-	s.agentGatherMsg = &copied
-	if s.agentGatherErr != nil {
-		return "", s.agentGatherErr
+	s.agentAnalyzeMsg = &copied
+	if s.agentAnalyzeErr != nil {
+		return "", s.agentAnalyzeErr
 	}
-	if strings.TrimSpace(s.agentGatherResult) != "" {
-		return s.agentGatherResult, nil
+	if strings.TrimSpace(s.agentAnalyzeResult) != "" {
+		return s.agentAnalyzeResult, nil
 	}
 	return "Agent board analysis queued.", nil
 }

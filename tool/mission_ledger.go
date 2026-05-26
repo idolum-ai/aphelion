@@ -104,8 +104,8 @@ func missionLedgerToolDefinition() agent.ToolDef {
 				"not_included":{"type":"array","items":{"type":"string"},"description":"Explicit non-scope boundaries for proposed candidate mission"},
 				"risk_class":{"type":"string","description":"Operator-facing risk label for proposed candidate mission"},
 				"review_target_chat_id":{"type":"integer","description":"Optional Telegram chat id for Mission Control proposal card; defaults to current chat"},
-				"prompt_id":{"type":"string","description":"Mission Ask Me prompt id for mission_ask_resolve"},
-				"prompt_status":{"type":"string","enum":["resolved","snoozed","ignored"],"description":"Terminal Mission Ask Me prompt status"}
+				"prompt_id":{"type":"string","description":"Mission Question prompt id for mission_ask_resolve"},
+				"prompt_status":{"type":"string","enum":["resolved","snoozed","ignored"],"description":"Terminal Mission Question prompt status"}
 			},
 			"required":["action"]
 		}`),

@@ -90,14 +90,14 @@ func (c CommandControl) ApplyMissionActionProposalDecision(ctx context.Context, 
 
 func (c CommandControl) MissionAskPrompt(ctx context.Context, senderID int64, promptID string) (session.MissionAskPrompt, bool, error) {
 	if c.Runtime == nil {
-		return session.MissionAskPrompt{}, false, fmt.Errorf("Mission Ask Me is unavailable.")
+		return session.MissionAskPrompt{}, false, fmt.Errorf("Mission Question is unavailable.")
 	}
 	return c.Runtime.MissionAskPrompt(ctx, senderID, promptID)
 }
 
 func (c CommandControl) ResolveMissionAskPrompt(ctx context.Context, senderID int64, promptID string, status session.MissionAskStatus, summary string) (session.MissionAskPrompt, error) {
 	if c.Runtime == nil {
-		return session.MissionAskPrompt{}, fmt.Errorf("Mission Ask Me is unavailable.")
+		return session.MissionAskPrompt{}, fmt.Errorf("Mission Question is unavailable.")
 	}
 	return c.Runtime.ResolveMissionAskPrompt(ctx, senderID, promptID, status, summary)
 }

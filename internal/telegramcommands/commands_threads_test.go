@@ -44,8 +44,8 @@ func TestThreadsCommandRendersBoardWithThreadOpenButtons(t *testing.T) {
 	if commandRowsContain(sender.inline[0].rows, "Promote 1", "thread_promote:42") || commandRowsContain(sender.inline[0].rows, "Absorb 1", "thread_absorb:42") {
 		t.Fatalf("rows = %#v, want promote/absorb moved out of board", sender.inline[0].rows)
 	}
-	if !strings.Contains(sender.inline[0].text, "**On Threads**") || !strings.Contains(sender.inline[0].text, "Use **Analyze**") {
-		t.Fatalf("panel text = %q, want board guidance", sender.inline[0].text)
+	if !strings.Contains(sender.inline[0].text, "Side Threads") || !strings.Contains(sender.inline[0].text, "Next:") {
+		t.Fatalf("panel text = %q, want operator board guidance", sender.inline[0].text)
 	}
 }
 
@@ -70,8 +70,8 @@ func TestThreadDetailCallbackShowsPromoteAbsorbBackCard(t *testing.T) {
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline = %d, want detail card edit", len(sender.editInline))
 	}
-	if !strings.Contains(sender.editInline[0].text, "**Thread 1**") || !strings.Contains(sender.editInline[0].text, "**Promote**") || !strings.Contains(sender.editInline[0].text, "**Absorb**") {
-		t.Fatalf("detail text = %q, want thread detail guidance", sender.editInline[0].text)
+	if !strings.Contains(sender.editInline[0].text, "Thread 1") || !strings.Contains(sender.editInline[0].text, "Promote:") || !strings.Contains(sender.editInline[0].text, "Absorb:") {
+		t.Fatalf("detail text = %q, want operator thread detail guidance", sender.editInline[0].text)
 	}
 	if !strings.Contains(sender.editInline[0].text, "Last active: May 23, 2026, 6:42 PM UTC") {
 		t.Fatalf("detail text = %q, want last active absolute time", sender.editInline[0].text)
@@ -112,7 +112,7 @@ func TestThreadBackCallbackReturnsToBoard(t *testing.T) {
 	if !handled || len(sender.editInline) != 1 {
 		t.Fatalf("handled=%t editInline=%d, want board edit", handled, len(sender.editInline))
 	}
-	if !strings.Contains(sender.editInline[0].text, "**Open Threads**") || !commandRowsContain(sender.editInline[0].rows, "1", "thread_detail:42") {
+	if !strings.Contains(sender.editInline[0].text, "Side Threads") || !commandRowsContain(sender.editInline[0].rows, "1", "thread_detail:42") {
 		t.Fatalf("board edit text=%q rows=%#v, want board with thread button", sender.editInline[0].text, sender.editInline[0].rows)
 	}
 	if router.threadCallbackClearChatID != 1001 || router.threadCallbackClearMessageID != 9004 || router.threadCallbackClearSurface != "threads_list" {

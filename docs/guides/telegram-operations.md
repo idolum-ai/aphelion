@@ -193,7 +193,7 @@ Use `/agents` to inspect durable children as governed work surfaces. Open an
 agent card before acting: `Brief` asks for a bounded child status check, `Park`
 pauses scheduled or poll wakes without deleting history, `Resume` reactivates a
 parked child after checks, and `Retire` removes a child from active use only
-after a confirmation card. `Gather` queues a read-only main-chat board analysis
+after a confirmation card. `Analyze` queues a read-only main-chat board analysis
 and does not wake children or change authority. Replies to `/agents` cards route
 back to the ledgered child and show an `(agent <id>)` prefix for attribution.
 
@@ -208,7 +208,7 @@ Use `/mission` to review objectives and mission candidates. Mission state
 preserves intent and review material; it does not grant new authority on its
 own.
 
-Mission `Ask Me` is Aphelion's low-burden mission clarification surface. After
+Mission Question is Aphelion's low-burden mission clarification surface. After
 an ordinary turn, Aphelion can offer a small card when the current work appears
 semantically close to a mission or to a possible new durable objective. The card
 does not write mission state. `Ask Me` queues one natural clarification question

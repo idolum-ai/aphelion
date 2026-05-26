@@ -225,7 +225,7 @@ func TestHandleTelegramCommandAgentsShowsButtons(t *testing.T) {
 	}
 	foundAgent := false
 	foundRefresh := false
-	foundGather := false
+	foundAnalyze := false
 	for _, row := range sender.inline[0].rows {
 		for _, button := range row {
 			if words := strings.Fields(button.Text); len(words) > 2 {
@@ -237,13 +237,13 @@ func TestHandleTelegramCommandAgentsShowsButtons(t *testing.T) {
 			if button.Text == "Refresh" {
 				foundRefresh = true
 			}
-			if button.Text == "Gather" {
-				foundGather = true
+			if button.Text == "Analyze" {
+				foundAnalyze = true
 			}
 		}
 	}
-	if !foundAgent || !foundRefresh || !foundGather {
-		t.Fatalf("agents rows = %#v, want agent/detail, gather, and refresh callbacks", sender.inline[0].rows)
+	if !foundAgent || !foundRefresh || !foundAnalyze {
+		t.Fatalf("agents rows = %#v, want agent/detail, analyze, and refresh callbacks", sender.inline[0].rows)
 	}
 }
 

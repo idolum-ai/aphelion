@@ -284,7 +284,7 @@ Example raw SSH invocation:
 ## Operate
 
 - `/agents`: inspect children, request a bounded brief, park/resume lifecycle,
-  confirm retirement, and gather read-only board triage.
+  confirm retirement, and analyze read-only board triage.
 - `agent:<agent_id> <message>`: route one Telegram DM message to an active
   durable Telegram child.
 - `/status`: inspect active work and durable aggregate health.

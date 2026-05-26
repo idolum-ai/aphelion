@@ -113,13 +113,13 @@ func TestThreadCommandWithoutArgsCreatesEmptyThreadGuide(t *testing.T) {
 	if router.threadStartMsg != nil {
 		t.Fatalf("threadStartMsg = %#v, want no routed turn", router.threadStartMsg)
 	}
-	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "Thread 7 created.") || !strings.Contains(sender.inline[0].text, "(thread 7) create the inbox child") {
+	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "Thread 7") || !strings.Contains(sender.inline[0].text, "(thread 7) create the inbox child") {
 		t.Fatalf("inline = %#v, want thread guide", sender.inline)
 	}
 	if router.threadGuideChatID != 1001 || router.threadGuideID != 7 || router.threadGuideMessageID != 1 {
 		t.Fatalf("guide record chat=%d thread=%d message=%d, want 1001/7/1", router.threadGuideChatID, router.threadGuideID, router.threadGuideMessageID)
 	}
-	if !commandRowsContain(sender.inline[0].rows, "Absorb 7", "thread_absorb:7") {
+	if !commandRowsContain(sender.inline[0].rows, "Absorb", "thread_absorb:7") {
 		t.Fatalf("rows = %#v, want absorb button", sender.inline[0].rows)
 	}
 }
@@ -634,8 +634,8 @@ func TestThreadsCommandListsPromoteButtons(t *testing.T) {
 	if commandRowsContain(sender.inline[0].rows, "Promote 1", "thread_promote:42") || commandRowsContain(sender.inline[0].rows, "Absorb 1", "thread_absorb:42") {
 		t.Fatalf("rows = %#v, want promote/absorb moved out of board", sender.inline[0].rows)
 	}
-	if !strings.Contains(sender.inline[0].text, "**On Threads**") || !strings.Contains(sender.inline[0].text, "Use **Analyze**") {
-		t.Fatalf("panel text = %q, want board guidance", sender.inline[0].text)
+	if !strings.Contains(sender.inline[0].text, "Side Threads") || !strings.Contains(sender.inline[0].text, "Next:") {
+		t.Fatalf("panel text = %q, want operator board guidance", sender.inline[0].text)
 	}
 }
 
