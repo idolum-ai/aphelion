@@ -45,6 +45,7 @@ func TestBuildFacePromptIncludesGPT55OutcomeStructure(t *testing.T) {
 		"Return nothing when no pressure is useful.",
 		"include the required continuation contract exactly once",
 		"Any suggested next lease is one concrete bounded action, not approval to make a plan.",
+		"Hidden recurrence or memory signals are named as runtime/context signals",
 	} {
 		if !strings.Contains(proposal, want) {
 			t.Fatalf("proposal face prompt missing %q: %q", want, proposal)

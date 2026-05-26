@@ -35,7 +35,7 @@ live-evals:
 		echo "Aphelion live evals are Linux-only and cannot run on $(GOHOSTOS)." >&2; \
 		exit 1; \
 	fi
-	APHELION_LIVE_EVAL=1 go test ./internal/standalonecli ./runtime -run 'TestLive(AgencySpectrumEvals|AutoPromptEvals|MissionAskClassifierEvals)' -count=1
+	APHELION_LIVE_EVAL=1 go test ./internal/standalonecli ./runtime -run 'TestLive(AgencySpectrumEvals|AutoPromptEvals|MissionAskClassifierEvals|ReflectionEvals)' -count=1
 
 auto-evals:
 	@if [ "$(GOHOSTOS)" != "linux" ]; then \

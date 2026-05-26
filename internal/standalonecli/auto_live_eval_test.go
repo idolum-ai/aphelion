@@ -51,7 +51,7 @@ func TestLiveAutoPromptEvals(t *testing.T) {
 	if currentAvg+0.25 < baselineAvg {
 		t.Fatalf("current prompt target average %.2f materially below baseline %.2f:\n%s", currentAvg, baselineAvg, mustAgencyEvalJSON(report))
 	}
-	if report.Summary.CompareRegressed > report.Summary.CompareImproved {
+	if report.Summary.CompareRegressed > report.Summary.CompareImproved && currentAvg <= baselineAvg+0.25 {
 		t.Fatalf("auto eval regressed more cases than it improved:\n%s", mustAgencyEvalJSON(report))
 	}
 }

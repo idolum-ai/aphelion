@@ -2,7 +2,7 @@
 
 This is the working review table for prompt purpose, ownership, and default model
 selection. It reflects the current branch and the live local configuration in
-`~/.aphelion/aphelion.toml` as of 2026-05-12. Secrets are intentionally omitted.
+`~/.aphelion/aphelion.toml` as of 2026-05-26. Secrets are intentionally omitted.
 
 ## Live Defaults
 
@@ -40,6 +40,22 @@ selection. It reflects the current branch and the live local configuration in
 | Status-readable summary | Summarize status into operator-readable prose. | User-visible in status surfaces. | Informational; no execution authority. | Small status summary prompt, not the main governor/face prompt. | Native status-readable provider chain; OpenAI path uses configured OpenAI model first. | Low effort, compact summary. | `runtime/status_readable.go`, status tests. |
 | Tool schema descriptions | Tell models what tools exist and how to call them. | Internal prompt/tool manifest. | Advisory description; actual tool access is enforced by code. | Registry definitions and generated tool manifest. | Same model as caller prompt target. | Same as caller prompt target. | Tool tests and prompt builder tests. |
 | Agency context packet | Give governor and face a compact per-turn map of objective, authority envelope, evidence posture, open loops, and available affordances. | Internal; face packet shapes user-visible ownership without exposing machinery. | Non-authorizing. It summarizes typed state but cannot create access, leases, grants, tool claims, or commitments. | Rendered by `prompt.renderGovernorAgencyContextPacket` and `prompt.renderFaceAgencyContextPacket` inside existing prompt blocks. | Same model as the prompt target that receives it. | Same as caller prompt target. | `prompt/builder_test.go`, scrubbed prompt goldens, `make live-evals`, `make auto-evals`, env-gated live tests. |
+
+## Prompt Shape Standard
+
+Prompts that affect user-visible behavior, memory, authority, proactivity, or
+durable children should use a compact outcome contract unless a narrower machine
+schema is clearer:
+
+- role: what this prompt target is doing
+- goal: the one outcome it should optimize for
+- success criteria: observable qualities of a good result
+- output: exact response shape, schema, tags, or user-visible boundary
+- stop rules: what to leave empty, refuse, ask, or avoid when evidence is weak
+
+The governor and face prompt builders already render this shape through
+contract blocks. Smaller runtime prompts should follow the same style directly
+instead of accumulating prose instructions.
 
 ## Workspace Prompt File Map
 

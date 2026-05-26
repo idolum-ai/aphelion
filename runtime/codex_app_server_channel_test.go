@@ -77,10 +77,21 @@ func TestCodexAppServerStatusPromptUsesGenericChildEnvelope(t *testing.T) {
 
 	prompt := codexAppServerStatusPrompt(core.DurableAgent{AgentID: "console"}, time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC))
 	for _, want := range []string{
+		"## Role",
+		"## Goal",
+		"## Success Criteria",
+		"## Stop Rules",
+		"## Output",
 		`"kind": "durable_child_status"`,
 		`"agent_id": "console"`,
 		`"schema_version": "durable_child_status.v1"`,
+		`"capability_posture": "read_only"`,
 		`"display_name": "console"`,
+		`"machine": {`,
+		`"top_processes": {`,
+		`"capability_limits": {`,
+		"Process entries include process names only",
+		"Unsafe or unavailable fields are empty arrays or null",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt = %q, want %q", prompt, want)
@@ -89,6 +100,27 @@ func TestCodexAppServerStatusPromptUsesGenericChildEnvelope(t *testing.T) {
 	for _, notWant := range []string{"Lighthouse", "lighthouse.status.v1"} {
 		if strings.Contains(prompt, notWant) {
 			t.Fatalf("prompt = %q, did not want child-specific fixture %q", prompt, notWant)
+		}
+	}
+}
+
+func TestCodexAppServerInstructionsUseReadOnlyContract(t *testing.T) {
+	t.Parallel()
+
+	agent := core.DurableAgent{
+		AgentID:    "console",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{Charter: "Observe status only."}),
+	}
+	base := codexAppServerBaseInstructions(agent)
+	for _, want := range []string{"## Role", "## Goal", "## Success Criteria", "## Stop Rules", "console", "return only the requested durable_child_status JSON object"} {
+		if !strings.Contains(base, want) {
+			t.Fatalf("base instructions missing %q:\n%s", want, base)
+		}
+	}
+	developer := codexAppServerDeveloperInstructions(agent)
+	for _, want := range []string{"## Charter", "Observe status only.", "## Boundary", "read-only status/heartbeat tasks only", "process names only"} {
+		if !strings.Contains(developer, want) {
+			t.Fatalf("developer instructions missing %q:\n%s", want, developer)
 		}
 	}
 }

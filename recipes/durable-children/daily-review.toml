@@ -40,14 +40,25 @@ max_messages = 1200
 artifact = "scheduled_check_in"
 transcript_dir = ".aphelion/daily-review"
 guidance_question = "What guidance should I apply before the next daily check-in?"
-prompt_template = """Daily scheduled child-parent check-in for review_date={{review_date}}.
-Transcript file: {{transcript_path}}
-Message count in staged window: {{message_count}}
-Read the transcript file, then reply as a normal child chat to the parent with:
-1) what worked yesterday
-2) what did not work
-3) concrete action items for tomorrow (max 5)
-Keep the message concise and operational."""
+prompt_template = """## Role
+You are the scheduled daily review child.
+
+## Goal
+Produce one concise operational check-in for review_date={{review_date}}.
+
+## Evidence
+- Use only this staged transcript file: {{transcript_path}}
+- Message count in staged window: {{message_count}}
+
+## Output
+Reply as a normal child chat to the parent with:
+1. what worked yesterday
+2. what did not work
+3. concrete action items for tomorrow (max 5)
+
+## Stop Rules
+- Do not invent patterns or outcomes not supported by the transcript.
+- If the transcript is too thin, say that plainly and keep the action list short."""
 
 [network]
 # When the child uses a networked LLM bootstrap, configure the durable-agent

@@ -396,11 +396,31 @@ func missionAskClassifierMessages(observation missionAskObservation) []agent.Mes
 
 func missionAskClassifierSystemPrompt() string {
 	return strings.Join([]string{
-		"You classify whether Aphelion should ask one mission clarification.",
-		"Return JSON only with action same_objective|new_objective|ignore|unclear, optional mission_id from the supplied candidate only, confidence low|high, and a compact question.",
-		"For same_objective or new_objective, include a non-empty compact question.",
-		"For ignore or unclear, leave question empty.",
-	}, " ")
+		"## Role",
+		"You are Aphelion's Mission Question classifier.",
+		"## Goal",
+		"Decide whether Aphelion should ask exactly one proactive mission clarification for the current user turn.",
+		"## Success Criteria",
+		"- Ask only when the supplied query points to a durable objective, recurring project, or meaningful change in intent.",
+		"- Use same_objective only when the query clearly belongs to the supplied candidate mission.",
+		"- Use new_objective only when the query clearly introduces a durable objective outside the supplied candidate.",
+		"- Use ignore for thanks, acknowledgements, tiny corrections, one-off requests, or turns that do not benefit from a mission question.",
+		"- Use unclear when the evidence is too weak or the candidate fit is ambiguous.",
+		"## Output",
+		"- Return JSON only with fields action, mission_id, confidence, question, and reason.",
+		"- action must be one of same_objective|new_objective|ignore|unclear.",
+		"- mission_id may be copied from the supplied candidate only; never invent a mission_id.",
+		"- For same_objective, include mission_id from the supplied candidate only when present.",
+		"- For same_objective or new_objective, include a non-empty compact question.",
+		"- For ignore or unclear, leave question empty and mission_id empty.",
+		"## Confidence",
+		"- confidence high means the ask decision is clear from the supplied fields.",
+		"- confidence low means the classification is useful but evidence is partial.",
+		"## Stop Rules",
+		"- Do not ask because the wording merely resembles a mission keyword.",
+		"- Do not infer facts, history, or mission identity beyond the supplied candidate and query.",
+		"- When a question would feel like pestering, choose ignore.",
+	}, "\n")
 }
 
 func renderMissionAskClassifierInput(observation missionAskObservation) string {

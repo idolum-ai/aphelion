@@ -201,7 +201,19 @@ func TestMissionAskClassifierMessagesUseProductionContract(t *testing.T) {
 		t.Fatalf("message roles = %q/%q, want system/user", messages[0].Role, messages[1].Role)
 	}
 	system := messages[0].Content
-	for _, want := range []string{"Return JSON only", "same_objective|new_objective|ignore|unclear", "mission_id from the supplied candidate only", "include a non-empty compact question"} {
+	for _, want := range []string{
+		"## Role",
+		"## Goal",
+		"## Success Criteria",
+		"## Output",
+		"## Confidence",
+		"## Stop Rules",
+		"Return JSON only",
+		"same_objective|new_objective|ignore|unclear",
+		"mission_id may be copied from the supplied candidate only",
+		"include a non-empty compact question",
+		"When a question would feel like pestering, choose ignore.",
+	} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("classifier system prompt missing %q: %q", want, system)
 		}

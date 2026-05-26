@@ -155,6 +155,7 @@ func TestBuildGovernorPromptIncludesGPT55OutcomeStructure(t *testing.T) {
 		"produce a concrete bounded proposal or phase_plan instead of asking approval to make a plan",
 		"## Stop Rules",
 		"Stop before destructive, irreversible, external, credential, purchase, public-contact, deploy, or restart actions",
+		"Auto policy, continuation state, and pending proposals do not authorize install, release, deploy, or restart actions",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("governor prompt missing %q: %q", want, got)

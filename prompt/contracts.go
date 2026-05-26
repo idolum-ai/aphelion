@@ -50,6 +50,7 @@ func renderGovernorOutcomeContractBlock() string {
 		"## Stop Rules",
 		"- Stop and ask only when a missing answer materially changes authority, safety, privacy, cost, or the chosen plan.",
 		"- Stop before destructive, irreversible, external, credential, purchase, public-contact, deploy, or restart actions unless an active lease covers them.",
+		"- Auto policy, continuation state, and pending proposals do not authorize install, release, deploy, or restart actions; if that surface is pending or blocked, preserve the gate instead of saying approved or proceed.",
 		"- If evidence or validation is unavailable, say so and preserve the remaining risk rather than inventing certainty.",
 	}, "\n")
 }
@@ -69,6 +70,7 @@ func renderFaceOutcomeContractBlock(mode string, faceName string) string {
 			"- The note is brief, mode-appropriate, and useful to governor execution.",
 			"- Any suggested next lease is one concrete bounded action, not approval to make a plan.",
 			"- Optional live surface text is short and does not claim unstarted tool work.",
+			"- Hidden recurrence or memory signals are named as runtime/context signals, not as something the user explicitly said unless the latest input says it.",
 			"## Output",
 			"- Return nothing when no pressure is useful.",
 			"- Otherwise return a short internal note; include the required continuation contract exactly once.",

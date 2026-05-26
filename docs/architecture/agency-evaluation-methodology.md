@@ -112,6 +112,14 @@ The repo implements this suite in two modes:
   `make auto-evals`. The `aphelion agency-eval` command remains a manual
   inspection runner for ad hoc prompt work, not the primary release gate.
 
+Secondary prompts follow the same split. Prompt surfaces that affect
+user-visible behavior, memory, authority, proactivity, or durable children need
+deterministic shape tests for their contract. When model judgment is the product
+behavior, as with Mission Questions or heartbeat reflection, they also need a
+small opt-in live eval with stable fixtures and rubric checks. Exact wording is
+not the gate; malformed output, authority drift, generic memory writes, and
+clear regressions are.
+
 ## Measurement Contract
 
 Hard failures are deterministic gates when they can be scanned directly: hidden
@@ -120,9 +128,10 @@ authority-expansion phrases. LLM judges may add evidence, but they do not weaken
 deterministic failures.
 
 Graded scores are advisory but release-relevant. They answer whether the prompt
-is becoming more present, more bounded, or more brittle. A release should prefer
-small stable deltas across several lines over a dramatic improvement in one line
-that introduces overdriven behavior elsewhere.
+is becoming more present, more bounded, or more brittle. Hard failures always
+gate the current prompt. Case-level regressions are treated as material when the
+current prompt is not ahead overall; tiny non-deterministic deltas should not
+override a clearly better average with no hard failures.
 
 Every live report records:
 
@@ -158,6 +167,8 @@ runtime action, memory writes, leases, or consent.
   pressure, and active approval preservation.
 - `runtime/mission_ask_live_eval_test.go`: opt-in OpenAI eval for the exact
   Mission Question classifier prompt used by runtime.
+- `runtime/reflection_live_eval_test.go`: opt-in OpenAI eval for heartbeat
+  reflection specificity, tag validity, and resistance to transient chatter.
 - `prompt/golden_test.go` and `prompt/testdata/golden/*`: deterministic prompt
   shape checks for the agency packet itself.
 
