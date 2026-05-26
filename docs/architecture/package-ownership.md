@@ -72,6 +72,25 @@ Code anchors:
 - [`pipeline/fallback.go`](../../pipeline/fallback.go)
 - [`pipeline/constitution.go`](../../pipeline/constitution.go)
 
+## Config
+
+`config` owns the operator configuration contract.
+
+- Owns defaults, TOML loading, ignored-key warnings, normalization, and
+  validation for live knobs.
+- Keeps validation split by durable config concept: Telegram, governor,
+  runtime-state, provider/work selection, operator controls, integrations, and
+  sandbox ceilings.
+- Should not own runtime assembly, provider clients, or migration behavior.
+
+Code anchors:
+
+- [`config/config.go`](../../config/config.go)
+- [`config/load.go`](../../config/load.go)
+- [`config/validate.go`](../../config/validate.go)
+- [`config/validate_governor.go`](../../config/validate_governor.go)
+- [`config/validate_provider_work.go`](../../config/validate_provider_work.go)
+
 ## Boundary Guards
 
 - [`architecture_import_guard_test.go`](../../architecture_import_guard_test.go) enforces stable import boundaries between composition, runtime, turn, pipeline, transport, storage, and tool packages.
