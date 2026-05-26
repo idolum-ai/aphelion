@@ -68,7 +68,7 @@ func TestWorkspaceEscapeProposalSummaryIsDecisionOriented(t *testing.T) {
 		},
 		"workspace escape",
 		`grep -RIn "ContinuationState(" session | sed -n '1,120p'`,
-		"/home/sadasant_gmail_com/code/github.com/idolum-ai/aphelion",
+		"/home/user/code/github.com/idolum-ai/aphelion",
 	)
 	pending := decision.PendingDecision{Request: decision.Request{
 		Kind:    decision.KindProposalApproval,
@@ -80,7 +80,7 @@ func TestWorkspaceEscapeProposalSummaryIsDecisionOriented(t *testing.T) {
 	for _, want := range []string{
 		"I’d like to read repository files outside the configured workspace.",
 		"Command class: repo_read",
-		"Workdir: /home/sadasant_gmail_com/code/github.com/idolum-ai/aphelion",
+		"Workdir: /home/user/code/github.com/idolum-ai/aphelion",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary = %q, want %q", summary, want)

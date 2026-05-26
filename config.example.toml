@@ -203,7 +203,7 @@ stale_turn_limit = 8
 
 [agent]
 prompt_root = "~/.aphelion/agent"
-exec_root = "/absolute/path/to/workspace"
+exec_root = "~/.aphelion/workspace"
 shared_memory_root = "~/.aphelion/agent"
 user_workspace_root = "~/.aphelion/state/isolated/workspaces"
 user_memory_root = "~/.aphelion/state/isolated/memory"

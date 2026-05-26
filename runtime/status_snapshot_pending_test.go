@@ -325,7 +325,7 @@ func TestSystemStatusSnapshotPrefersOperationalPendingDecisionsOverTES(t *testin
 		Summary:       "Run command outside the configured workspace",
 		WhyNow:        "The requested command needs an explicit admin-approved working directory outside the current sandbox root.",
 		BoundedEffect: "The command will run once.",
-	}, "workspace escape", `rg -n "renderDecisionSummary" runtime`, "/home/sadasant_gmail_com/code/github.com/idolum-ai/aphelion")
+	}, "workspace escape", `rg -n "renderDecisionSummary" runtime`, "/home/user/code/github.com/idolum-ai/aphelion")
 	if err := store.UpsertPendingDecision(session.PendingDecisionRecord{
 		ID:            "decision-from-events",
 		Sequence:      1,

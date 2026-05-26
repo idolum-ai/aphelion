@@ -59,4 +59,21 @@ if rg -n --glob '*.md' --glob '*.toml' "$private_pattern" "${public_surfaces[@]}
   exit 1
 fi
 
+source_private_pattern='[[:alnum:]_]+_gmail_com|/home/[[:alnum:]_]+_gmail_com[^[:space:]"`<>)]*|[[:alnum:]._%+-]+@idolum\.ai|Organic[[:space:]]+R[[:alpha:]]+'
+
+tracked_public_source_files() {
+  git ls-files -z | while IFS= read -r -d '' file; do
+    case "$file" in
+      third_party/*) ;;
+      *) printf '%s\0' "$file" ;;
+    esac
+  done
+}
+
+if tracked_public_source_files | xargs -0 -r rg -n "$source_private_pattern" >/dev/null; then
+  echo "tracked source contains private workstation or account markers:" >&2
+  tracked_public_source_files | xargs -0 -r rg -n "$source_private_pattern" >&2
+  exit 1
+fi
+
 echo "public readiness check passed"

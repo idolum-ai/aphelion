@@ -30,12 +30,16 @@ download() {
   local url="$1"
   local dest="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl --fail --location --silent --show-error --retry 3 --proto '=https' --tlsv1.2 "${url}" --output "${dest}"
-    return
+    if curl --fail --location --silent --show-error --retry 3 --proto '=https' --tlsv1.2 "${url}" --output "${dest}"; then
+      return
+    fi
+    die "download failed: ${url}"
   fi
   if command -v wget >/dev/null 2>&1; then
-    wget --https-only --tries=3 --quiet --output-document="${dest}" "${url}"
-    return
+    if wget --https-only --tries=3 --quiet --output-document="${dest}" "${url}"; then
+      return
+    fi
+    die "download failed: ${url}"
   fi
   die "curl or wget is required"
 }
@@ -64,7 +68,7 @@ install_release() {
   local version="${1:-}"
   local tmp_dir
   tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "${tmp_dir}"' EXIT
+  trap '[[ -n "${tmp_dir:-}" ]] && rm -rf "${tmp_dir}"' EXIT
 
   need_cmd uname
   need_cmd tar
