@@ -70,7 +70,7 @@ func (r *Runtime) EnableApprovalWindowOffer(ctx context.Context, offerID string,
 }
 
 func (r *Runtime) EnableApprovalWindowOfferResult(ctx context.Context, offerID string, adminUserID int64, duration time.Duration) (core.ApprovalWindowEnableResult, error) {
-	offer, ok, err := r.activeApprovalWindowOffer(offerID, false)
+	offer, ok, err := r.activeApprovalWindowOffer(offerID, true)
 	if err != nil || !ok {
 		return core.ApprovalWindowEnableResult{}, err
 	}
@@ -79,6 +79,9 @@ func (r *Runtime) EnableApprovalWindowOfferResult(ctx context.Context, offerID s
 	}
 	if !r.IsTelegramAdmin(adminUserID) {
 		return core.ApprovalWindowEnableResult{Text: "Approval windows are admin only."}, nil
+	}
+	if !offer.UsedAt.IsZero() {
+		return r.repairClaimedApprovalWindowOffer(ctx, offer, adminUserID)
 	}
 	if duration <= 0 {
 		duration = approvalWindowDefaultDuration
@@ -99,6 +102,24 @@ func (r *Runtime) EnableApprovalWindowOfferResult(ctx context.Context, offerID s
 		return result, err
 	}
 	return result, nil
+}
+
+func (r *Runtime) repairClaimedApprovalWindowOffer(_ context.Context, offer session.ApprovalWindowOffer, adminUserID int64) (core.ApprovalWindowEnableResult, error) {
+	now := time.Now().UTC()
+	scopeKind, scopeID := session.OperatorAutoScopeForRef(offer.ScopeRef())
+	lease, leaseOK, err := r.activeOperatorAutoApprovalLeaseForAdminAndScope(offer.ChatID, scopeKind, scopeID, adminUserID, now)
+	if err != nil {
+		return core.ApprovalWindowEnableResult{}, err
+	}
+	override, overrideOK, err := r.activeOperatorAutonomyOverrideForAdminAndScope(offer.ChatID, scopeKind, scopeID, adminUserID, now)
+	if err != nil {
+		return core.ApprovalWindowEnableResult{}, err
+	}
+	if leaseOK && overrideOK {
+		return core.ApprovalWindowEnableResult{Text: renderApprovalWindowEnabled(lease, override, now), Active: true}, nil
+	}
+	_, _, _ = r.store.CloseApprovalWindowOffer(offer.ID, now)
+	return core.ApprovalWindowEnableResult{}, fmt.Errorf("approval window offer was claimed but no live approval window exists; offer closed")
 }
 
 func (r *Runtime) DoubleApprovalWindowOffer(ctx context.Context, offerID string, adminUserID int64) (string, error) {

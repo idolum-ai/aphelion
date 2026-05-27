@@ -46,6 +46,15 @@ func callbackDataForCommandButton(t *testing.T, rows [][]telegram.InlineButton, 
 	return ""
 }
 
+func TestApprovalWindowRowsForOfferDoesNotRenderUsedOfferAsActive(t *testing.T) {
+	t.Parallel()
+
+	offer := session.ApprovalWindowOffer{ID: "offer-used", UsedAt: time.Now().UTC()}
+	if rows := ApprovalWindowRowsForOffer(offer); rows != nil {
+		t.Fatalf("ApprovalWindowRowsForOffer(used) = %#v, want nil stale controls", rows)
+	}
+}
+
 func TestApprovalWindowRowsExposeOnlyReachableCompoundCallbacks(t *testing.T) {
 	t.Parallel()
 

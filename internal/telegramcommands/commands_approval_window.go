@@ -65,7 +65,7 @@ func ApprovalWindowRowsForOffer(offer session.ApprovalWindowOffer) [][]telegram.
 		return nil
 	}
 	if !offer.UsedAt.IsZero() {
-		return ApprovalWindowActiveRows(offer.ID)
+		return nil
 	}
 	return ApprovalWindowOfferRows(offer.ID)
 }

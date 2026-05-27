@@ -90,6 +90,7 @@ func (s *SQLiteStore) ActiveApprovalWindowOfferForSource(chatID int64, sourceKin
 		WHERE chat_id = ?
 			AND source_kind = ?
 			AND source_id = ?
+			AND used_at IS NULL
 			AND closed_at IS NULL
 			AND expires_at > ?
 		ORDER BY updated_at DESC, created_at DESC, offer_id DESC

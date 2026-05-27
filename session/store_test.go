@@ -272,6 +272,37 @@ func TestContinuationStateRoundTripAndUpdate(t *testing.T) {
 	}
 }
 
+func TestActiveApprovalWindowOfferForSourceExcludesUsedOffers(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC()
+	offer, err := store.CreateApprovalWindowOffer(ApprovalWindowOffer{
+		ID:                 "offer-source-used",
+		ChatID:             7002,
+		AdminUserID:        1001,
+		ScopeKind:          string(ScopeKindTelegramDM),
+		ScopeID:            "7002",
+		SourceKind:         ApprovalWindowOfferSourceDecision,
+		SourceID:           "decision-source-used",
+		SourceDecisionKind: "proposal_approval",
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(time.Hour),
+		UpdatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
+	}
+	if _, ok, err := store.MarkApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
+		t.Fatalf("MarkApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
+	}
+	if got, ok, err := store.ActiveApprovalWindowOfferForSource(7002, ApprovalWindowOfferSourceDecision, "decision-source-used", now.Add(2*time.Second)); err != nil || ok {
+		t.Fatalf("ActiveApprovalWindowOfferForSource() = %#v, %t, %v; want no used offer", got, ok, err)
+	}
+}
+
 func TestApprovalWindowOfferUsedMarkIsCAS(t *testing.T) {
 	t.Parallel()
 
