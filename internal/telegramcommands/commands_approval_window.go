@@ -65,6 +65,17 @@ func ApprovalWindowRowsForOffer(offer session.ApprovalWindowOffer) [][]telegram.
 		return nil
 	}
 	if !offer.UsedAt.IsZero() {
+		return nil
+	}
+	return ApprovalWindowOfferRows(offer.ID)
+}
+
+func ApprovalWindowRowsForLiveOffer(offer session.ApprovalWindowOffer) [][]telegram.InlineButton {
+	offer = session.NormalizeApprovalWindowOffer(offer)
+	if offer.ID == "" || !offer.ClosedAt.IsZero() {
+		return nil
+	}
+	if !offer.UsedAt.IsZero() {
 		if offer.OpenedLeaseID != "" && offer.OpenedOverrideID != "" {
 			return ApprovalWindowActiveRows(offer.ID)
 		}
@@ -82,7 +93,7 @@ func approvalWindowOfferRowsForSource(ctx context.Context, router commandRouter,
 	if err != nil || !created {
 		return nil, err
 	}
-	return ApprovalWindowRowsForOffer(offer), nil
+	return ApprovalWindowRowsForLiveOffer(offer), nil
 }
 
 func encodeApprovalWindowCallbackData(offerID string, action string) string {

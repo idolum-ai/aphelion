@@ -137,48 +137,120 @@ func (r *Runtime) repairClaimedApprovalWindowOffer(_ context.Context, offer sess
 
 func (r *Runtime) liveApprovalWindowForOffer(offer session.ApprovalWindowOffer, adminUserID int64, now time.Time) (session.OperatorAutoApprovalLease, session.OperatorAutonomyOverride, bool, error) {
 	offer = session.NormalizeApprovalWindowOffer(offer)
-	if offer.OpenedLeaseID == "" || offer.OpenedOverrideID == "" {
+	if offer.OpenedLeaseID == "" || offer.OpenedOverrideID == "" || r == nil || r.store == nil {
+		return session.OperatorAutoApprovalLease{}, session.OperatorAutonomyOverride{}, false, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	lease, leaseOK, err := r.store.OperatorAutoApprovalLease(offer.OpenedLeaseID)
+	if err != nil {
+		return session.OperatorAutoApprovalLease{}, session.OperatorAutonomyOverride{}, false, err
+	}
+	override, overrideOK, err := r.store.OperatorAutonomyOverride(offer.OpenedOverrideID)
+	if err != nil {
+		return session.OperatorAutoApprovalLease{}, session.OperatorAutonomyOverride{}, false, err
+	}
+	if !leaseOK || !overrideOK {
 		return session.OperatorAutoApprovalLease{}, session.OperatorAutonomyOverride{}, false, nil
 	}
 	scopeKind, scopeID := session.OperatorAutoScopeForRef(offer.ScopeRef())
-	lease, leaseOK, err := r.activeOperatorAutoApprovalLeaseForAdminAndScope(offer.ChatID, scopeKind, scopeID, adminUserID, now)
-	if err != nil {
-		return session.OperatorAutoApprovalLease{}, session.OperatorAutonomyOverride{}, false, err
+	lease = session.NormalizeOperatorAutoApprovalLease(lease)
+	override = session.NormalizeOperatorAutonomyOverride(override)
+	if lease.ChatID != offer.ChatID || lease.AdminUserID != adminUserID || lease.ScopeKind != scopeKind || lease.ScopeID != scopeID || !lease.ActiveAt(now) {
+		return session.OperatorAutoApprovalLease{}, session.OperatorAutonomyOverride{}, false, nil
 	}
-	override, overrideOK, err := r.activeOperatorAutonomyOverrideForAdminAndScope(offer.ChatID, scopeKind, scopeID, adminUserID, now)
-	if err != nil {
-		return session.OperatorAutoApprovalLease{}, session.OperatorAutonomyOverride{}, false, err
-	}
-	if !leaseOK || !overrideOK || lease.ID != offer.OpenedLeaseID || override.ID != offer.OpenedOverrideID {
+	if override.ChatID != offer.ChatID || override.AdminUserID != adminUserID || override.ScopeKind != scopeKind || override.ScopeID != scopeID || !override.ActiveAt(now) {
 		return session.OperatorAutoApprovalLease{}, session.OperatorAutonomyOverride{}, false, nil
 	}
 	return lease, override, true, nil
 }
 
 func (r *Runtime) DoubleApprovalWindowOffer(ctx context.Context, offerID string, adminUserID int64) (string, error) {
+	_ = ctx
+	if r == nil || r.store == nil {
+		return "Approval windows are unavailable.", nil
+	}
+	if !r.IsTelegramAdmin(adminUserID) {
+		return "Approval windows are admin only.", nil
+	}
 	offer, ok, err := r.activeApprovalWindowOffer(offerID, true)
 	if err != nil || !ok {
 		return "", err
 	}
-	if _, _, live, err := r.liveApprovalWindowForOffer(offer, adminUserID, time.Now().UTC()); err != nil {
+	now := time.Now().UTC()
+	lease, override, live, err := r.liveApprovalWindowForOffer(offer, adminUserID, now)
+	if err != nil {
 		return "", err
-	} else if !live {
-		_, _, _ = r.store.CloseApprovalWindowOffer(offer.ID, time.Now().UTC())
+	}
+	if !live {
+		_, _, _ = r.store.CloseApprovalWindowOffer(offer.ID, now)
 		return "", fmt.Errorf("approval window offer is no longer active")
 	}
-	text, err := r.DoubleApprovalWindowForKey(ctx, approvalWindowOfferSessionKey(offer), adminUserID)
-	if err != nil {
-		return text, err
+	previousDuration, doubledDuration := doubledOperatorWindowDuration(lease.CreatedAt, lease.ExpiresAt, now, operatorAutoApprovalMinDuration, r.approvalWindowMaxDuration())
+	if err := r.validateApprovalWindowDuration(doubledDuration); err != nil {
+		return "", err
 	}
-	now := time.Now().UTC()
-	lease, override, live, err := r.currentApprovalWindowForOfferScope(offer, adminUserID, now)
+	maxUses := lease.MaxUses
+	if lease.MaxUses > 0 {
+		remainingUses := lease.MaxUses - lease.UsedCount
+		if remainingUses <= 0 {
+			return "", fmt.Errorf("active approval window has no remaining uses to double")
+		}
+		maxUses = remainingUses
+	}
+	createdOverride := session.OperatorAutonomyOverride{
+		ID:          newOperatorAutonomyOverrideID(offer.ChatID, adminUserID, now),
+		AdminUserID: adminUserID,
+		ChatID:      offer.ChatID,
+		ScopeKind:   lease.ScopeKind,
+		ScopeID:     lease.ScopeID,
+		Mode:        override.Mode,
+		Scope:       override.Scope,
+		Reason:      approvalWindowReason,
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(doubledDuration),
+		UpdatedAt:   now,
+	}
+	createdLease := session.OperatorAutoApprovalLease{
+		ID:          newOperatorAutoApprovalLeaseID(offer.ChatID, adminUserID, now),
+		AdminUserID: adminUserID,
+		ChatID:      offer.ChatID,
+		ScopeKind:   lease.ScopeKind,
+		ScopeID:     lease.ScopeID,
+		Scope:       lease.Scope,
+		Reason:      approvalWindowReason,
+		MaxUses:     maxUses,
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(doubledDuration),
+		UpdatedAt:   now,
+	}
+	oldLease, oldOverride, storedLease, storedOverride, replaced, err := r.store.ReplaceOperatorApprovalWindowByIDs(offer.ChatID, adminUserID, lease.ScopeKind, lease.ScopeID, offer.OpenedLeaseID, offer.OpenedOverrideID, createdLease, createdOverride, now)
 	if err != nil {
 		return "", err
 	}
-	if live {
-		_, _, _ = r.store.MarkApprovalWindowOfferOpened(offer.ID, lease.ID, override.ID, now)
+	if !replaced {
+		_, _, _ = r.store.CloseApprovalWindowOffer(offer.ID, now)
+		return "", fmt.Errorf("approval window offer is no longer active")
 	}
-	return text, nil
+	r.recordOperatorAutoModeEvent(offer.ChatID, core.ExecutionEventAutoModeEnabled, "active", storedOverride, map[string]any{
+		"source":                    "approval_window",
+		"doubled_from_override_id":  strings.TrimSpace(oldOverride.ID),
+		"previous_duration_seconds": int64(previousDuration / time.Second),
+		"new_duration_seconds":      int64(doubledDuration / time.Second),
+	})
+	r.recordOperatorAutoApprovalEvent(offer.ChatID, core.ExecutionEventAutoApprovalGranted, "active", storedLease, map[string]any{
+		"source":                    "approval_window",
+		"doubled_from_lease_id":     strings.TrimSpace(oldLease.ID),
+		"previous_duration_seconds": int64(previousDuration / time.Second),
+		"new_duration_seconds":      int64(doubledDuration / time.Second),
+	})
+	if _, ok, err := r.store.MarkApprovalWindowOfferOpened(offer.ID, storedLease.ID, storedOverride.ID, now); err != nil {
+		return "", err
+	} else if !ok {
+		return "", fmt.Errorf("approval window offer is no longer active")
+	}
+	return renderApprovalWindowDoubled(storedLease, storedOverride, now, previousDuration, doubledDuration), nil
 }
 
 func (r *Runtime) CancelApprovalWindowOffer(ctx context.Context, offerID string, adminUserID int64) (string, error) {
@@ -187,42 +259,41 @@ func (r *Runtime) CancelApprovalWindowOffer(ctx context.Context, offerID string,
 }
 
 func (r *Runtime) CancelApprovalWindowOfferResult(ctx context.Context, offerID string, adminUserID int64) (core.ApprovalWindowCancelResult, error) {
+	if r == nil || r.store == nil {
+		return core.ApprovalWindowCancelResult{Text: "Approval windows are unavailable."}, nil
+	}
+	if !r.IsTelegramAdmin(adminUserID) {
+		return core.ApprovalWindowCancelResult{Text: "Approval windows are admin only."}, nil
+	}
 	offer, ok, err := r.activeApprovalWindowOffer(offerID, true)
 	if err != nil || !ok {
 		return core.ApprovalWindowCancelResult{}, err
 	}
-	if _, _, live, err := r.liveApprovalWindowForOffer(offer, adminUserID, time.Now().UTC()); err != nil {
+	now := time.Now().UTC()
+	lease, _, live, err := r.liveApprovalWindowForOffer(offer, adminUserID, now)
+	if err != nil {
 		return core.ApprovalWindowCancelResult{}, err
-	} else if !live {
-		_, _, _ = r.store.CloseApprovalWindowOffer(offer.ID, time.Now().UTC())
+	}
+	if !live {
+		_, _, _ = r.store.CloseApprovalWindowOffer(offer.ID, now)
 		return core.ApprovalWindowCancelResult{}, fmt.Errorf("approval window offer is no longer active")
 	}
-	result, err := r.CancelApprovalWindowForKeyResult(ctx, approvalWindowOfferSessionKey(offer), adminUserID)
-	if err != nil || !result.Canceled {
-		return result, err
+	revokedLeases, revokedOverrides, canceled, err := r.store.RevokeOperatorApprovalWindowByIDs(offer.ChatID, adminUserID, lease.ScopeKind, lease.ScopeID, offer.OpenedLeaseID, offer.OpenedOverrideID, now)
+	if err != nil {
+		return core.ApprovalWindowCancelResult{}, err
 	}
-	if _, ok, err := r.store.CloseApprovalWindowOffer(offer.ID, time.Now().UTC()); err != nil {
+	if !canceled {
+		_, _, _ = r.store.CloseApprovalWindowOffer(offer.ID, now)
+		return core.ApprovalWindowCancelResult{}, fmt.Errorf("approval window offer is no longer active")
+	}
+	r.recordOperatorAutoApprovalEvent(offer.ChatID, core.ExecutionEventAutoApprovalRevoked, "revoked", operatorAutoApprovalPrimaryLeaseForScope(revokedLeases, offer.ChatID, lease.ScopeKind, lease.ScopeID, adminUserID), operatorAutoApprovalRevokedEventPayload(revokedLeases, now))
+	r.recordOperatorAutoModeEvent(offer.ChatID, core.ExecutionEventAutoModeRevoked, "revoked", operatorAutoModePrimaryOverrideForScope(revokedOverrides, offer.ChatID, lease.ScopeKind, lease.ScopeID, adminUserID), operatorAutoModeRevokedEventPayload(revokedOverrides, now))
+	if _, ok, err := r.store.CloseApprovalWindowOffer(offer.ID, now); err != nil {
 		return core.ApprovalWindowCancelResult{}, err
 	} else if !ok {
 		return core.ApprovalWindowCancelResult{}, fmt.Errorf("approval window offer is no longer active")
 	}
-	return result, nil
-}
-
-func (r *Runtime) currentApprovalWindowForOfferScope(offer session.ApprovalWindowOffer, adminUserID int64, now time.Time) (session.OperatorAutoApprovalLease, session.OperatorAutonomyOverride, bool, error) {
-	scopeKind, scopeID := session.OperatorAutoScopeForRef(offer.ScopeRef())
-	lease, leaseOK, err := r.activeOperatorAutoApprovalLeaseForAdminAndScope(offer.ChatID, scopeKind, scopeID, adminUserID, now)
-	if err != nil {
-		return session.OperatorAutoApprovalLease{}, session.OperatorAutonomyOverride{}, false, err
-	}
-	override, overrideOK, err := r.activeOperatorAutonomyOverrideForAdminAndScope(offer.ChatID, scopeKind, scopeID, adminUserID, now)
-	if err != nil {
-		return session.OperatorAutoApprovalLease{}, session.OperatorAutonomyOverride{}, false, err
-	}
-	if !leaseOK || !overrideOK {
-		return session.OperatorAutoApprovalLease{}, session.OperatorAutonomyOverride{}, false, nil
-	}
-	return lease, override, true, nil
+	return core.ApprovalWindowCancelResult{Text: renderApprovalWindowCanceled(revokedLeases, revokedOverrides, now), Canceled: true}, nil
 }
 
 func (r *Runtime) CloseApprovalWindowOffer(ctx context.Context, offerID string) error {

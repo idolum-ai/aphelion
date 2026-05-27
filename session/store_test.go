@@ -326,6 +326,35 @@ func TestActiveApprovalWindowOfferForSourceReturnsOpenedUsedOffer(t *testing.T) 
 	if err != nil {
 		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
 	}
+	if _, err := store.CreateOperatorAutonomyOverride(OperatorAutonomyOverride{
+		ID:          "override-opened",
+		AdminUserID: 1001,
+		ChatID:      7003,
+		ScopeKind:   string(ScopeKindTelegramDM),
+		ScopeID:     "7003",
+		Mode:        "leased",
+		Scope:       OperatorAutoApprovalScopeAll,
+		Reason:      "inline approval window",
+		CreatedAt:   now.Add(time.Second),
+		ExpiresAt:   now.Add(time.Hour),
+		UpdatedAt:   now.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutonomyOverride() err = %v", err)
+	}
+	if _, err := store.CreateOperatorAutoApprovalLease(OperatorAutoApprovalLease{
+		ID:          "lease-opened",
+		AdminUserID: 1001,
+		ChatID:      7003,
+		ScopeKind:   string(ScopeKindTelegramDM),
+		ScopeID:     "7003",
+		Scope:       OperatorAutoApprovalScopeAll,
+		Reason:      "inline approval window",
+		CreatedAt:   now.Add(time.Second),
+		ExpiresAt:   now.Add(time.Hour),
+		UpdatedAt:   now.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutoApprovalLease() err = %v", err)
+	}
 	if _, ok, err := store.MarkApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
 		t.Fatalf("MarkApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
 	}
@@ -338,6 +367,139 @@ func TestActiveApprovalWindowOfferForSourceReturnsOpenedUsedOffer(t *testing.T) 
 	}
 	if got.ID != offer.ID || got.OpenedLeaseID != "lease-opened" || got.OpenedOverrideID != "override-opened" {
 		t.Fatalf("got = %#v, want opened offer binding", got)
+	}
+}
+
+func TestActiveApprovalWindowOfferForSourceExcludesExpiredOpenedOffer(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC()
+	offer, err := store.CreateApprovalWindowOffer(ApprovalWindowOffer{
+		ID:                 "offer-source-expired-opened",
+		ChatID:             7004,
+		AdminUserID:        1001,
+		ScopeKind:          string(ScopeKindTelegramDM),
+		ScopeID:            "7004",
+		SourceKind:         ApprovalWindowOfferSourceDecision,
+		SourceID:           "decision-source-expired-opened",
+		SourceDecisionKind: "proposal_approval",
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(24 * time.Hour),
+		UpdatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
+	}
+	if _, err := store.CreateOperatorAutonomyOverride(OperatorAutonomyOverride{
+		ID:          "override-expired-opened",
+		AdminUserID: 1001,
+		ChatID:      7004,
+		ScopeKind:   string(ScopeKindTelegramDM),
+		ScopeID:     "7004",
+		Mode:        "leased",
+		Scope:       OperatorAutoApprovalScopeAll,
+		Reason:      "inline approval window",
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(time.Minute),
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutonomyOverride() err = %v", err)
+	}
+	if _, err := store.CreateOperatorAutoApprovalLease(OperatorAutoApprovalLease{
+		ID:          "lease-expired-opened",
+		AdminUserID: 1001,
+		ChatID:      7004,
+		ScopeKind:   string(ScopeKindTelegramDM),
+		ScopeID:     "7004",
+		Scope:       OperatorAutoApprovalScopeAll,
+		Reason:      "inline approval window",
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(time.Minute),
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutoApprovalLease() err = %v", err)
+	}
+	if _, ok, err := store.MarkApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
+		t.Fatalf("MarkApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
+	}
+	if _, ok, err := store.MarkApprovalWindowOfferOpened(offer.ID, "lease-expired-opened", "override-expired-opened", now.Add(2*time.Second)); err != nil || !ok {
+		t.Fatalf("MarkApprovalWindowOfferOpened() ok=%t err=%v", ok, err)
+	}
+	if got, ok, err := store.ActiveApprovalWindowOfferForSource(7004, ApprovalWindowOfferSourceDecision, "decision-source-expired-opened", now.Add(2*time.Minute)); err != nil || ok {
+		t.Fatalf("ActiveApprovalWindowOfferForSource(expired) = %#v, %t, %v; want no active opened offer", got, ok, err)
+	}
+}
+
+func TestRevokeOperatorApprovalWindowByIDsDoesNotRevokeNewerWindow(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC()
+	seedWindow := func(leaseID, overrideID string, created time.Time) {
+		t.Helper()
+		if _, err := store.CreateOperatorAutonomyOverride(OperatorAutonomyOverride{
+			ID:          overrideID,
+			AdminUserID: 1001,
+			ChatID:      7005,
+			ScopeKind:   string(ScopeKindTelegramDM),
+			ScopeID:     "7005",
+			Mode:        "leased",
+			Scope:       OperatorAutoApprovalScopeAll,
+			Reason:      "inline approval window",
+			CreatedAt:   created,
+			ExpiresAt:   created.Add(time.Hour),
+			UpdatedAt:   created,
+		}); err != nil {
+			t.Fatalf("CreateOperatorAutonomyOverride(%s) err = %v", overrideID, err)
+		}
+		if _, err := store.CreateOperatorAutoApprovalLease(OperatorAutoApprovalLease{
+			ID:          leaseID,
+			AdminUserID: 1001,
+			ChatID:      7005,
+			ScopeKind:   string(ScopeKindTelegramDM),
+			ScopeID:     "7005",
+			Scope:       OperatorAutoApprovalScopeAll,
+			Reason:      "inline approval window",
+			CreatedAt:   created,
+			ExpiresAt:   created.Add(time.Hour),
+			UpdatedAt:   created,
+		}); err != nil {
+			t.Fatalf("CreateOperatorAutoApprovalLease(%s) err = %v", leaseID, err)
+		}
+	}
+	seedWindow("lease-old", "override-old", now)
+	seedWindow("lease-new", "override-new", now.Add(time.Minute))
+
+	leases, overrides, revoked, err := store.RevokeOperatorApprovalWindowByIDs(7005, 1001, string(ScopeKindTelegramDM), "7005", "lease-missing", "override-old", now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("RevokeOperatorApprovalWindowByIDs(missing) err = %v", err)
+	}
+	if revoked || len(leases) != 0 || len(overrides) != 0 {
+		t.Fatalf("missing revoke = leases:%#v overrides:%#v revoked:%v, want CAS miss", leases, overrides, revoked)
+	}
+	active, err := store.ActiveOperatorAutoApprovalLeasesForScope(7005, string(ScopeKindTelegramDM), "7005", now.Add(3*time.Minute))
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeasesForScope() err = %v", err)
+	}
+	if len(active) != 2 {
+		t.Fatalf("active leases after CAS miss = %#v, want both windows preserved", active)
+	}
+
+	leases, overrides, revoked, err = store.RevokeOperatorApprovalWindowByIDs(7005, 1001, string(ScopeKindTelegramDM), "7005", "lease-old", "override-old", now.Add(4*time.Minute))
+	if err != nil || !revoked {
+		t.Fatalf("RevokeOperatorApprovalWindowByIDs(old) = leases:%#v overrides:%#v revoked:%v err:%v, want revoke", leases, overrides, revoked, err)
+	}
+	active, err = store.ActiveOperatorAutoApprovalLeasesForScope(7005, string(ScopeKindTelegramDM), "7005", now.Add(5*time.Minute))
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeasesForScope(after revoke) err = %v", err)
+	}
+	if len(active) != 1 || active[0].ID != "lease-new" {
+		t.Fatalf("active leases after exact revoke = %#v, want newer window only", active)
 	}
 }
 

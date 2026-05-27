@@ -59,7 +59,7 @@ func TestApprovalWindowRowsForOfferRendersOpenedUsedOfferAsActive(t *testing.T) 
 	t.Parallel()
 
 	offer := session.ApprovalWindowOffer{ID: "offer-opened", UsedAt: time.Now().UTC(), OpenedLeaseID: "lease-opened", OpenedOverrideID: "override-opened"}
-	rows := ApprovalWindowRowsForOffer(offer)
+	rows := ApprovalWindowRowsForLiveOffer(offer)
 	if len(rows) != 1 || len(rows[0]) != 2 {
 		t.Fatalf("ApprovalWindowRowsForOffer(opened) = %#v, want active controls", rows)
 	}

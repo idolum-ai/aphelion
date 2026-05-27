@@ -326,7 +326,7 @@ func (h *Handler) appendApprovalWindowRows(pending decision.PendingDecision, row
 	if err != nil || !ok {
 		return rows
 	}
-	return appendTelegramRows(rows, telegramcommands.ApprovalWindowRowsForOffer(offer))
+	return appendTelegramRows(rows, telegramcommands.ApprovalWindowRowsForLiveOffer(offer))
 }
 
 func (h *Handler) appendEmbeddedApprovalWindowRows(pending decision.PendingDecision, rows [][]telegram.InlineButton) [][]telegram.InlineButton {

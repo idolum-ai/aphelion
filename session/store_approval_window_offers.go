@@ -90,12 +90,39 @@ func (s *SQLiteStore) ActiveApprovalWindowOfferForSource(chatID int64, sourceKin
 		WHERE chat_id = ?
 			AND source_kind = ?
 			AND source_id = ?
-			AND (used_at IS NULL OR (TRIM(opened_lease_id) != '' AND TRIM(opened_override_id) != ''))
+			AND (
+				used_at IS NULL
+				OR (
+					TRIM(opened_lease_id) != ''
+					AND TRIM(opened_override_id) != ''
+					AND EXISTS (
+						SELECT 1 FROM operator_auto_approvals leases
+						WHERE leases.lease_id = approval_window_offers.opened_lease_id
+							AND leases.chat_id = approval_window_offers.chat_id
+							AND leases.admin_user_id = approval_window_offers.admin_user_id
+							AND leases.scope_kind = approval_window_offers.scope_kind
+							AND leases.scope_id = approval_window_offers.scope_id
+							AND leases.revoked_at IS NULL
+							AND leases.expires_at > ?
+							AND (leases.max_uses <= 0 OR leases.used_count < leases.max_uses)
+					)
+					AND EXISTS (
+						SELECT 1 FROM operator_autonomy_overrides overrides
+						WHERE overrides.override_id = approval_window_offers.opened_override_id
+							AND overrides.chat_id = approval_window_offers.chat_id
+							AND overrides.admin_user_id = approval_window_offers.admin_user_id
+							AND overrides.scope_kind = approval_window_offers.scope_kind
+							AND overrides.scope_id = approval_window_offers.scope_id
+							AND overrides.revoked_at IS NULL
+							AND overrides.expires_at > ?
+					)
+				)
+			)
 			AND closed_at IS NULL
 			AND expires_at > ?
 		ORDER BY updated_at DESC, created_at DESC, offer_id DESC
 		LIMIT 1
-	`, chatID, normalizeEnumValue(sourceKind), strings.TrimSpace(sourceID), now.UTC().Format(time.RFC3339Nano))
+	`, chatID, normalizeEnumValue(sourceKind), strings.TrimSpace(sourceID), now.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano))
 	offer, err := scanApprovalWindowOffer(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ApprovalWindowOffer{}, false, nil
