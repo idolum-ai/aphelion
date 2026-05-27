@@ -28,12 +28,13 @@ they reach an impasse on something material, the conversation pauses and asks
 you to arbitrate.
 
 This is structural, not theatrical. The face cannot grant itself permissions;
-the governor never speaks to you directly. You remain the source of authority,
-but you are not the constant context driving what the protected layer is
-doing. Think of the restaurant kitchen: you order from a waiter, and you
-don't usually speak to the cook. That structure exists so the meal arrives
-faster, hotter, and right. You can always ask to speak to the cook; that path
-stays open. Aphelion is shaped the same way.
+the governor does not present itself as the conversational persona. Its work
+surfaces as approvals, refusals, status, recovery, and typed evidence. You
+remain the source of authority, but you are not the constant context driving
+what the protected layer is doing. Think of the restaurant kitchen: you order
+from a waiter, and you don't usually speak to the cook. That structure exists
+so the meal arrives faster, hotter, and right. You can always ask to speak to
+the cook; that path stays open. Aphelion is shaped the same way.
 
 ### Authority before capability
 
@@ -67,8 +68,10 @@ prose*. The conversation transcript is presentation; the ledger is truth.
 
 Three direct module dependencies: SQLite (vendored in-repo), a TOML parser,
 and Tailscale (the substrate that enables remote-host children). Everything
-else is pinned and small. No system packages required, no services beyond
-systemd, no SaaS account anywhere in the loop.
+else is pinned and small. A source install needs Go and a Linux user service;
+a release install needs only the Aphelion binary and systemd. Model providers,
+GitHub App credentials, Sponsors, and hosted storage are explicit operator
+choices, not hidden platform dependencies.
 
 This is defensive, not aesthetic. Recent campaigns like Mini Shai-Hulud
 (170+ npm and PyPI packages compromised, valid SLSA Build Level 3 attestations
