@@ -131,6 +131,13 @@ type stubCommandRouter struct {
 	approvalWindowDuration       time.Duration
 	approvalWindowReturn         string
 	approvalWindowErr            error
+	approvalWindowLookupOffer    session.ApprovalWindowOffer
+	approvalWindowLookupOK       bool
+	approvalWindowLookupErr      error
+	resolvedDecisionID           string
+	resolvedDecisionChoice       string
+	resolvedDecisionActor        int64
+	resolvedDecisionOK           bool
 	autonomyChatID               int64
 	autonomySenderID             int64
 	autonomyArgs                 string

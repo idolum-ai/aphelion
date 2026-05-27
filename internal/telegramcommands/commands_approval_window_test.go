@@ -31,6 +31,98 @@ func TestApprovalWindowRowsRespectTelegramLabelContract(t *testing.T) {
 	}
 }
 
+func TestApprovalWindowEnableCallbackApprovesEmbeddedDecision(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		approvalWindowReturn:   "Approval window active.",
+		approvalWindowLookupOK: true,
+		approvalWindowLookupOffer: session.ApprovalWindowOffer{
+			ID:         "offer-decision",
+			ChatID:     7,
+			ScopeKind:  string(session.ScopeKindTelegramDM),
+			ScopeID:    "7",
+			SourceKind: session.ApprovalWindowOfferSourceDecision,
+			SourceID:   "decision-embedded",
+		},
+		resolvedDecisionOK: true,
+	}
+	triggerStarted := make(chan struct{})
+	router.triggerContinuationStarted = triggerStarted
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:      "cb-aw-enable-decision-compound",
+		From:    &telegram.User{ID: 1001},
+		Data:    encodeApprovalWindowCallbackData("offer-decision", approvalWindowActionEnable15),
+		Message: &telegram.Message{MessageID: 77, Chat: &telegram.Chat{ID: 7}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.resolvedDecisionID != "decision-embedded" || router.resolvedDecisionChoice != "approve" || router.resolvedDecisionActor != 1001 {
+		t.Fatalf("resolved decision = %q/%q/%d, want embedded approve by actor", router.resolvedDecisionID, router.resolvedDecisionChoice, router.resolvedDecisionActor)
+	}
+	if router.approveContinuationInput != 0 || router.triggerContinuationInput != 0 {
+		t.Fatalf("continuation approve/trigger = %d/%d, want no continuation mutation for decision offer", router.approveContinuationInput, router.triggerContinuationInput)
+	}
+	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "Current approval: approved.") {
+		t.Fatalf("inline = %#v, want active approval-window card with decision approval note", sender.inline)
+	}
+}
+
+func TestApprovalWindowEnableCallbackApprovesAndStartsEmbeddedContinuation(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	triggerStarted := make(chan struct{})
+	router := &stubCommandRouter{
+		canRestart:             true,
+		approvalWindowReturn:   "Approval window active.",
+		approvalWindowLookupOK: true,
+		approvalWindowLookupOffer: session.ApprovalWindowOffer{
+			ID:         "offer-continuation",
+			ChatID:     7,
+			ScopeKind:  string(session.ScopeKindTelegramDM),
+			ScopeID:    "7",
+			SourceKind: session.ApprovalWindowOfferSourceContinuation,
+			SourceID:   "decision-continuation",
+		},
+		continuationState: session.ContinuationState{
+			Status:            session.ContinuationStatusPending,
+			DecisionID:        "decision-continuation",
+			DecisionMessageID: 77,
+			RemainingTurns:    1,
+			StageSummary:      "Resume the next bounded step.",
+		},
+		triggerContinuationStarted: triggerStarted,
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:      "cb-aw-enable-continuation-compound",
+		From:    &telegram.User{ID: 1001},
+		Data:    encodeApprovalWindowCallbackData("offer-continuation", approvalWindowActionEnable15),
+		Message: &telegram.Message{MessageID: 77, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.approveContinuationInput != 7 || router.approveContinuationApprover != 1001 {
+		t.Fatalf("approve continuation = %d/%d, want chat 7 actor 1001", router.approveContinuationInput, router.approveContinuationApprover)
+	}
+	waitForStubContinuationTrigger(t, triggerStarted)
+	if router.triggerContinuationInput != 7 {
+		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)
+	}
+	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "Current continuation: approved and starting.") {
+		t.Fatalf("inline = %#v, want active approval-window card with continuation start note", sender.inline)
+	}
+}
+
 func TestApprovalWindowEnableCallbackTargetsThreadScope(t *testing.T) {
 	t.Parallel()
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/decision"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -163,6 +164,25 @@ func (c CommandControl) CloseApprovalWindowOffer(ctx context.Context, offerID st
 		return nil
 	}
 	return c.Runtime.CloseApprovalWindowOffer(ctx, offerID)
+}
+
+func (c CommandControl) ApprovalWindowOfferByID(offerID string) (session.ApprovalWindowOffer, bool, error) {
+	if c.Runtime == nil {
+		return session.ApprovalWindowOffer{}, false, nil
+	}
+	return c.Runtime.ApprovalWindowOfferByID(offerID)
+}
+
+type decisionCallbackResolver interface {
+	ResolveCallbackDetailed(id string, choice string, actor decision.CallbackActor) decision.ResolveResult
+}
+
+func (c CommandControl) ResolveDecisionCallback(decisionID string, choice string, actor decision.CallbackActor) decision.ResolveResult {
+	resolver, ok := c.DecisionDetacher.(decisionCallbackResolver)
+	if !ok || resolver == nil {
+		return decision.ResolveResult{}
+	}
+	return resolver.ResolveCallbackDetailed(decisionID, choice, actor)
 }
 
 func (c CommandControl) RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error) {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/decision"
 	"github.com/idolum-ai/aphelion/internal/telegramcontrol"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -112,6 +113,12 @@ func (c telegramCommandControl) CancelApprovalWindowOffer(ctx context.Context, o
 }
 func (c telegramCommandControl) CloseApprovalWindowOffer(ctx context.Context, offerID string) error {
 	return c.controlFacade().CloseApprovalWindowOffer(ctx, offerID)
+}
+func (c telegramCommandControl) ApprovalWindowOfferByID(offerID string) (session.ApprovalWindowOffer, bool, error) {
+	return c.controlFacade().ApprovalWindowOfferByID(offerID)
+}
+func (c telegramCommandControl) ResolveDecisionCallback(decisionID string, choice string, actor decision.CallbackActor) decision.ResolveResult {
+	return c.controlFacade().ResolveDecisionCallback(decisionID, choice, actor)
 }
 func (c telegramCommandControl) RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error) {
 	return c.controlFacade().RefreshContinuationProposal(ctx, chatID, reason)

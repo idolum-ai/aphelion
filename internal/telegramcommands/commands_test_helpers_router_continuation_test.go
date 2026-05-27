@@ -4,11 +4,13 @@ package telegramcommands
 
 import (
 	"context"
-	"github.com/idolum-ai/aphelion/core"
-	"github.com/idolum-ai/aphelion/session"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/decision"
+	"github.com/idolum-ai/aphelion/session"
 )
 
 func (s *stubCommandRouter) ContinuationState(chatID int64) (session.ContinuationState, error) {
@@ -347,4 +349,25 @@ func (s *stubCommandRouter) CloseApprovalWindowOffer(_ context.Context, offerID 
 	s.approvalWindowAction = approvalWindowActionClose
 	s.approvalWindowOfferID = offerID
 	return s.approvalWindowErr
+}
+
+func (s *stubCommandRouter) ApprovalWindowOfferByID(offerID string) (session.ApprovalWindowOffer, bool, error) {
+	s.approvalWindowOfferID = offerID
+	if s.approvalWindowLookupErr != nil {
+		return session.ApprovalWindowOffer{}, false, s.approvalWindowLookupErr
+	}
+	if s.approvalWindowLookupOK {
+		return s.approvalWindowLookupOffer, true, nil
+	}
+	return session.ApprovalWindowOffer{}, false, nil
+}
+
+func (s *stubCommandRouter) ResolveDecisionCallback(decisionID string, choice string, actor decision.CallbackActor) decision.ResolveResult {
+	s.resolvedDecisionID = decisionID
+	s.resolvedDecisionChoice = choice
+	s.resolvedDecisionActor = actor.TelegramUserID
+	if !s.resolvedDecisionOK {
+		return decision.ResolveResult{}
+	}
+	return decision.ResolveResult{Resolved: true, Choice: choice}
 }

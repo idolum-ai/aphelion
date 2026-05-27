@@ -112,6 +112,17 @@ func (r *Runtime) CloseApprovalWindowOffer(ctx context.Context, offerID string) 
 	return err
 }
 
+func (r *Runtime) ApprovalWindowOfferByID(offerID string) (session.ApprovalWindowOffer, bool, error) {
+	if r == nil || r.store == nil {
+		return session.ApprovalWindowOffer{}, false, nil
+	}
+	offer, ok, err := r.store.ApprovalWindowOffer(strings.TrimSpace(offerID))
+	if err != nil || !ok {
+		return session.ApprovalWindowOffer{}, ok, err
+	}
+	return session.NormalizeApprovalWindowOffer(offer), true, nil
+}
+
 func (r *Runtime) activeApprovalWindowOffer(offerID string, allowUsed bool) (session.ApprovalWindowOffer, bool, error) {
 	if r == nil || r.store == nil {
 		return session.ApprovalWindowOffer{}, false, fmt.Errorf("approval windows are unavailable")

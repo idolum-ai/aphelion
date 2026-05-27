@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/decision"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
@@ -160,6 +161,9 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 	switch action {
 	case approvalWindowActionEnable15:
 		text, err = approvals.EnableApprovalWindowOffer(ctx, offerID, senderID, approvalWindowCallbackDuration)
+		if err == nil {
+			text, err = applyApprovalWindowCompoundAction(ctx, sender, router, targetMsg, offerID, senderID, text)
+		}
 		rows = ApprovalWindowActiveRows(offerID)
 	case approvalWindowActionDouble:
 		text, err = approvals.DoubleApprovalWindowOffer(ctx, offerID, senderID)
@@ -202,6 +206,84 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 		return true, err
 	}
 	return true, nil
+}
+
+type approvalWindowOfferLookupRouter interface {
+	ApprovalWindowOfferByID(offerID string) (session.ApprovalWindowOffer, bool, error)
+}
+
+type approvalWindowDecisionResolverRouter interface {
+	ResolveDecisionCallback(decisionID string, choice string, actor decision.CallbackActor) decision.ResolveResult
+}
+
+func applyApprovalWindowCompoundAction(ctx context.Context, sender commandCallbackSender, router commandRouter, targetMsg core.InboundMessage, offerID string, senderID int64, text string) (string, error) {
+	lookup, ok := router.(approvalWindowOfferLookupRouter)
+	if !ok {
+		return text, nil
+	}
+	offer, ok, err := lookup.ApprovalWindowOfferByID(offerID)
+	if err != nil || !ok {
+		return text, err
+	}
+	offer = session.NormalizeApprovalWindowOffer(offer)
+	switch offer.SourceKind {
+	case session.ApprovalWindowOfferSourceDecision:
+		return applyApprovalWindowDecisionCompoundAction(router, targetMsg, senderID, offer, text), nil
+	case session.ApprovalWindowOfferSourceContinuation:
+		return applyApprovalWindowContinuationCompoundAction(ctx, sender, router, targetMsg, senderID, offer, text), nil
+	default:
+		return text, nil
+	}
+}
+
+func applyApprovalWindowDecisionCompoundAction(router commandRouter, targetMsg core.InboundMessage, senderID int64, offer session.ApprovalWindowOffer, text string) string {
+	resolver, ok := router.(approvalWindowDecisionResolverRouter)
+	if !ok || strings.TrimSpace(offer.SourceID) == "" {
+		return text
+	}
+	result := resolver.ResolveDecisionCallback(strings.TrimSpace(offer.SourceID), "approve", decision.CallbackActor{
+		TelegramUserID: senderID,
+		ChatID:         targetMsg.ChatID,
+		MessageID:      targetMsg.MessageID,
+	})
+	if !result.Resolved {
+		return text + "\n\nCurrent approval: no longer active; use the newest prompt if approval is still needed."
+	}
+	return text + "\n\nCurrent approval: approved."
+}
+
+func applyApprovalWindowContinuationCompoundAction(ctx context.Context, sender commandCallbackSender, router commandRouter, targetMsg core.InboundMessage, senderID int64, offer session.ApprovalWindowOffer, text string) string {
+	state, err := continuationStateForCallbackTarget(router, targetMsg)
+	if err != nil || !continuationCallbackMatchesState(state, offer.SourceID, continuationActionApproveLease) {
+		return text
+	}
+	if authText := continuationCallbackAuthorizationFailure(router, telegram.CallbackQuery{From: &telegram.User{ID: senderID}, Message: &telegram.Message{MessageID: targetMsg.MessageID, Chat: &telegram.Chat{ID: targetMsg.ChatID}}}, targetMsg.ChatID, targetMsg.MessageID, state); authText != "" {
+		return text
+	}
+	approved, err := approveContinuationForCallbackTarget(router, targetMsg, senderID)
+	if err != nil {
+		return text + "\n\nCurrent continuation: approval failed; use the original continuation controls."
+	}
+	if approved.Status == session.ContinuationStatusApproved && approved.RemainingTurns > 0 {
+		triggerContinuationAfterCallback(sender, router, targetMsg, targetMsg.MessageID, "approval_window.compound_continuation_trigger", approved)
+		return text + "\n\nCurrent continuation: approved and starting."
+	}
+	_ = ctx
+	return text + "\n\nCurrent continuation: approved."
+}
+
+func continuationStateForCallbackTarget(router commandRouter, targetMsg core.InboundMessage) (session.ContinuationState, error) {
+	if scoped, ok := router.(scopedContinuationRouter); ok && targetMsg.TelegramThreadID > 0 {
+		return scoped.ContinuationStateForMessage(targetMsg)
+	}
+	return router.ContinuationState(targetMsg.ChatID)
+}
+
+func approveContinuationForCallbackTarget(router commandRouter, targetMsg core.InboundMessage, approverID int64) (session.ContinuationState, error) {
+	if scoped, ok := router.(scopedContinuationRouter); ok && targetMsg.TelegramThreadID > 0 {
+		return scoped.ApproveContinuationForMessage(targetMsg, approverID)
+	}
+	return router.ApproveContinuation(targetMsg.ChatID, approverID)
 }
 
 func approvalWindowCallbackClosedText(cb telegram.CallbackQuery) string {
