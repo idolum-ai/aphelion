@@ -31,6 +31,52 @@ func TestApprovalWindowRowsRespectTelegramLabelContract(t *testing.T) {
 	}
 }
 
+func TestApprovalWindowEnableCallbackDoesNotApplyCompoundActionWhenEnableNotConfirmed(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		approvalWindowReturn:   "Approval windows are admin only.",
+		approvalWindowLookupOK: true,
+		approvalWindowLookupOffer: session.ApprovalWindowOffer{
+			ID:         "offer-decision-denied",
+			ChatID:     7,
+			ScopeKind:  string(session.ScopeKindTelegramDM),
+			ScopeID:    "7",
+			SourceKind: session.ApprovalWindowOfferSourceDecision,
+			SourceID:   "decision-embedded",
+		},
+		resolvedDecisionOK: true,
+	}
+	triggerStarted := make(chan struct{})
+	router.triggerContinuationStarted = triggerStarted
+
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:      "cb-aw-enable-decision-denied-compound",
+		From:    &telegram.User{ID: 1002},
+		Data:    encodeApprovalWindowCallbackData("offer-decision-denied", approvalWindowActionEnable15),
+		Message: &telegram.Message{MessageID: 77, Chat: &telegram.Chat{ID: 7}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.resolvedDecisionID != "" || router.resolvedDecisionChoice != "" || router.resolvedDecisionActor != 0 {
+		t.Fatalf("resolved decision = %q/%q/%d, want no compound decision resolution", router.resolvedDecisionID, router.resolvedDecisionChoice, router.resolvedDecisionActor)
+	}
+	if router.approveContinuationInput != 0 || router.triggerContinuationInput != 0 {
+		t.Fatalf("continuation approve/trigger = %d/%d, want no compound continuation mutation", router.approveContinuationInput, router.triggerContinuationInput)
+	}
+	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "Approval windows are admin only.") {
+		t.Fatalf("inline = %#v, want original approval-window failure text", sender.inline)
+	}
+	if strings.Contains(sender.inline[0].text, "Current approval:") || strings.Contains(sender.inline[0].text, "Current continuation:") {
+		t.Fatalf("inline text = %q, should not include compound success/failure note", sender.inline[0].text)
+	}
+}
+
 func TestApprovalWindowEnableCallbackApprovesEmbeddedDecision(t *testing.T) {
 	t.Parallel()
 

@@ -161,7 +161,7 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 	switch action {
 	case approvalWindowActionEnable15:
 		text, err = approvals.EnableApprovalWindowOffer(ctx, offerID, senderID, approvalWindowCallbackDuration)
-		if err == nil {
+		if err == nil && approvalWindowEnableConfirmed(text) {
 			text, err = applyApprovalWindowCompoundAction(ctx, sender, router, targetMsg, offerID, senderID, text)
 		}
 		rows = ApprovalWindowActiveRows(offerID)
@@ -206,6 +206,11 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 		return true, err
 	}
 	return true, nil
+}
+
+func approvalWindowEnableConfirmed(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	return strings.HasPrefix(trimmed, "Approval window active.")
 }
 
 type approvalWindowOfferLookupRouter interface {
