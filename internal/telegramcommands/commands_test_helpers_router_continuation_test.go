@@ -362,7 +362,19 @@ func (s *stubCommandRouter) ApprovalWindowOfferByID(offerID string) (session.App
 	return session.ApprovalWindowOffer{}, false, nil
 }
 
+func (s *stubCommandRouter) PeekDecisionCallback(decisionID string, actor decision.CallbackActor) (decision.PendingDecision, bool) {
+	s.resolvedDecisionID = decisionID
+	s.resolvedDecisionActor = actor.TelegramUserID
+	if !s.resolvedDecisionOK {
+		return decision.PendingDecision{}, false
+	}
+	return decision.PendingDecision{ID: decisionID, Request: decision.Request{ChatID: actor.ChatID, SenderID: actor.TelegramUserID}, Delivery: decision.Delivery{MessageID: actor.MessageID}}, true
+}
+
 func (s *stubCommandRouter) ResolveDecisionCallback(decisionID string, choice string, actor decision.CallbackActor) decision.ResolveResult {
+	if !s.approvalWindowReturnBeforeResolve && s.approvalWindowAction != approvalWindowActionEnable15 {
+		return decision.ResolveResult{}
+	}
 	s.resolvedDecisionID = decisionID
 	s.resolvedDecisionChoice = choice
 	s.resolvedDecisionActor = actor.TelegramUserID

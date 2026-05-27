@@ -164,14 +164,17 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 		text, err = approvals.EnableApprovalWindowOffer(ctx, offerID, senderID, approvalWindowCallbackDuration)
 		rows = ApprovalWindowActiveRows(offerID)
 	case approvalWindowActionEnable15Compound:
-		compoundNote, compoundErr := applyApprovalWindowCompoundAction(router, targetMsg, offerID, senderID)
+		compound, compoundErr := prepareApprovalWindowCompoundDecisionAction(router, targetMsg, offerID, senderID)
 		if compoundErr != nil {
 			err = compoundErr
 			break
 		}
 		text, err = approvals.EnableApprovalWindowOffer(ctx, offerID, senderID, approvalWindowCallbackDuration)
 		if err == nil && approvalWindowEnableConfirmed(text) {
-			text += compoundNote
+			text += compound.note
+			if resolveErr := compound.resolve(); resolveErr != nil {
+				err = resolveErr
+			}
 		}
 		rows = ApprovalWindowActiveRows(offerID)
 	case approvalWindowActionDouble:
@@ -233,42 +236,57 @@ type approvalWindowOfferLookupRouter interface {
 }
 
 type approvalWindowDecisionResolverRouter interface {
+	PeekDecisionCallback(decisionID string, actor decision.CallbackActor) (decision.PendingDecision, bool)
 	ResolveDecisionCallback(decisionID string, choice string, actor decision.CallbackActor) decision.ResolveResult
 }
 
-func applyApprovalWindowCompoundAction(router commandRouter, targetMsg core.InboundMessage, offerID string, senderID int64) (string, error) {
+type approvalWindowCompoundDecisionAction struct {
+	note    string
+	resolve func() error
+}
+
+func prepareApprovalWindowCompoundDecisionAction(router commandRouter, targetMsg core.InboundMessage, offerID string, senderID int64) (approvalWindowCompoundDecisionAction, error) {
 	lookup, ok := router.(approvalWindowOfferLookupRouter)
 	if !ok {
-		return "", fmt.Errorf("approval window source is unavailable")
+		return approvalWindowCompoundDecisionAction{}, fmt.Errorf("approval window source is unavailable")
 	}
 	offer, ok, err := lookup.ApprovalWindowOfferByID(offerID)
 	if err != nil {
-		return "", err
+		return approvalWindowCompoundDecisionAction{}, err
 	}
 	if !ok {
-		return "", fmt.Errorf("approval window source is no longer active")
+		return approvalWindowCompoundDecisionAction{}, fmt.Errorf("approval window source is no longer active")
 	}
 	offer = session.NormalizeApprovalWindowOffer(offer)
 	if offer.SourceKind != session.ApprovalWindowOfferSourceDecision {
-		return "", fmt.Errorf("approval window source is not actionable")
+		return approvalWindowCompoundDecisionAction{}, fmt.Errorf("approval window source is not actionable")
 	}
-	return applyApprovalWindowDecisionCompoundAction(router, targetMsg, senderID, offer)
+	return prepareApprovalWindowDecisionCompoundAction(router, targetMsg, senderID, offer)
 }
 
-func applyApprovalWindowDecisionCompoundAction(router commandRouter, targetMsg core.InboundMessage, senderID int64, offer session.ApprovalWindowOffer) (string, error) {
+func prepareApprovalWindowDecisionCompoundAction(router commandRouter, targetMsg core.InboundMessage, senderID int64, offer session.ApprovalWindowOffer) (approvalWindowCompoundDecisionAction, error) {
 	resolver, ok := router.(approvalWindowDecisionResolverRouter)
 	if !ok || strings.TrimSpace(offer.SourceID) == "" {
-		return "", fmt.Errorf("current approval is no longer active; use the newest prompt if approval is still needed")
+		return approvalWindowCompoundDecisionAction{}, fmt.Errorf("current approval is no longer active; use the newest prompt if approval is still needed")
 	}
-	result := resolver.ResolveDecisionCallback(strings.TrimSpace(offer.SourceID), "approve", decision.CallbackActor{
+	actor := decision.CallbackActor{
 		TelegramUserID: senderID,
 		ChatID:         targetMsg.ChatID,
 		MessageID:      targetMsg.MessageID,
-	})
-	if !result.Resolved {
-		return "", fmt.Errorf("current approval is no longer active; use the newest prompt if approval is still needed")
 	}
-	return "\n\nCurrent approval: approved.", nil
+	if _, ok := resolver.PeekDecisionCallback(strings.TrimSpace(offer.SourceID), actor); !ok {
+		return approvalWindowCompoundDecisionAction{}, fmt.Errorf("current approval is no longer active; use the newest prompt if approval is still needed")
+	}
+	return approvalWindowCompoundDecisionAction{
+		note: "\n\nCurrent approval: approved.",
+		resolve: func() error {
+			result := resolver.ResolveDecisionCallback(strings.TrimSpace(offer.SourceID), "approve", actor)
+			if !result.Resolved {
+				return fmt.Errorf("current approval is no longer active; use the newest prompt if approval is still needed")
+			}
+			return nil
+		},
+	}, nil
 }
 
 func approvalWindowCallbackClosedText(cb telegram.CallbackQuery) string {

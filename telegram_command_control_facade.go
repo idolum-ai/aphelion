@@ -117,6 +117,9 @@ func (c telegramCommandControl) CloseApprovalWindowOffer(ctx context.Context, of
 func (c telegramCommandControl) ApprovalWindowOfferByID(offerID string) (session.ApprovalWindowOffer, bool, error) {
 	return c.controlFacade().ApprovalWindowOfferByID(offerID)
 }
+func (c telegramCommandControl) PeekDecisionCallback(decisionID string, actor decision.CallbackActor) (decision.PendingDecision, bool) {
+	return c.controlFacade().PeekDecisionCallback(decisionID, actor)
+}
 func (c telegramCommandControl) ResolveDecisionCallback(decisionID string, choice string, actor decision.CallbackActor) decision.ResolveResult {
 	return c.controlFacade().ResolveDecisionCallback(decisionID, choice, actor)
 }

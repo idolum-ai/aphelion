@@ -121,8 +121,9 @@ func TestApprovalWindowEmbeddedCompoundStaleDecisionFailsBeforeOpeningWindow(t *
 
 	sender := &stubCommandSender{}
 	router := &stubCommandRouter{
-		approvalWindowReturn:   "Approval window active.",
-		approvalWindowLookupOK: true,
+		approvalWindowReturn:              "Approval window active.",
+		approvalWindowReturnBeforeResolve: true,
+		approvalWindowLookupOK:            true,
 		approvalWindowLookupOffer: session.ApprovalWindowOffer{
 			ID:         "offer-stale-decision",
 			ChatID:     7,
@@ -149,8 +150,8 @@ func TestApprovalWindowEmbeddedCompoundStaleDecisionFailsBeforeOpeningWindow(t *
 	if router.approvalWindowAction != "" {
 		t.Fatalf("approvalWindowAction = %q, want no approval window enable before valid source", router.approvalWindowAction)
 	}
-	if router.resolvedDecisionID != "decision-stale" || router.resolvedDecisionChoice != "approve" {
-		t.Fatalf("resolved decision attempt = %q/%q, want stale source checked", router.resolvedDecisionID, router.resolvedDecisionChoice)
+	if router.resolvedDecisionID != "decision-stale" || router.resolvedDecisionChoice != "" {
+		t.Fatalf("decision preflight/resolve = %q/%q, want stale source preflight without resolve", router.resolvedDecisionID, router.resolvedDecisionChoice)
 	}
 	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "Approval window was not opened.") {
 		t.Fatalf("editClear = %#v, want fail-closed approval-window edit", sender.editClear)

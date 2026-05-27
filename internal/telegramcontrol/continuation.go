@@ -177,6 +177,18 @@ type decisionCallbackResolver interface {
 	ResolveCallbackDetailed(id string, choice string, actor decision.CallbackActor) decision.ResolveResult
 }
 
+type decisionCallbackPeeker interface {
+	PeekCallback(id string, actor decision.CallbackActor) (decision.PendingDecision, bool)
+}
+
+func (c CommandControl) PeekDecisionCallback(decisionID string, actor decision.CallbackActor) (decision.PendingDecision, bool) {
+	peeker, ok := c.DecisionDetacher.(decisionCallbackPeeker)
+	if !ok || peeker == nil {
+		return decision.PendingDecision{}, false
+	}
+	return peeker.PeekCallback(decisionID, actor)
+}
+
 func (c CommandControl) ResolveDecisionCallback(decisionID string, choice string, actor decision.CallbackActor) decision.ResolveResult {
 	resolver, ok := c.DecisionDetacher.(decisionCallbackResolver)
 	if !ok || resolver == nil {
