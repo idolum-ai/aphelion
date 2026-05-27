@@ -100,7 +100,7 @@ type Runtime struct {
 	operationalAlertClock  func() time.Time
 	operationalAlertWindow time.Duration
 	sessionMu              sync.Mutex
-	sessionLocks           map[string]*sync.Mutex
+	sessionLocks           map[string]*sessionLock
 	statusReadableMu       sync.Mutex
 	statusReadableProvider agent.Provider
 	statusReadableReady    bool
@@ -415,7 +415,7 @@ func New(
 		operationalAlerts:      make(map[string]operationalAlertState),
 		operationalAlertClock:  time.Now,
 		operationalAlertWindow: 10 * time.Minute,
-		sessionLocks:           make(map[string]*sync.Mutex),
+		sessionLocks:           make(map[string]*sessionLock),
 		activeTurnCancels:      make(map[int64]*activeTurnRun),
 	}
 	if rt.workExecutor != nil {
