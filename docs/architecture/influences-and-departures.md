@@ -218,6 +218,49 @@ Current repo surface:
 - `requirements/telegram.md`
 - `docs/telegram-ui-features.md`
 
+### Spectral Faithfulness
+
+Source: sibling research repository under the same author/org;
+`github.com/idolum-ai/spectral-faithfulness`.
+
+What Aphelion took:
+
+- The measurement that models silently absorb unreferenced context
+  ("implicit context drift"), captured by the paper's epigraph
+  *"the space biases the function."*
+- The finding that models cannot reliably perceive their own boundaries —
+  a measurable provenance failure between generated and implied content.
+- The conclusion that boundaries must live in the runtime architecture,
+  not in prompted instructions, because fresh sessions are the only
+  reliable boundary the paper found.
+
+Where Aphelion stops:
+
+- Aphelion does not claim to resolve the paper's open Inversion Problem
+  (ecologically valid and explicit instruments producing opposite conclusions
+  about the same model).
+- It does not generalize Spectral Faithfulness's catalog into a unified
+  theory of model behavior; the paper itself flags the spectral metaphor
+  as an organizing image, not a physical claim.
+- Provider-specific findings in the paper are treated as provider-correlated,
+  not provider-determined.
+
+Why Aphelion diverges:
+
+- Aphelion's response to the architecture-shapes-behavior finding is
+  structural: typed records, sandbox policy, scoped tools, and the
+  governor/face split are *the boundary*. Prompted persona is collaboration,
+  not load-bearing structure. This matches the design principle
+  *prefer typed records over interpreting prose*.
+
+Current repo surface:
+
+- `defaults/agent/IDOLUM.md`
+- `requirements/idolum.md`
+- `requirements/self-awareness.md`
+- `docs/architecture/design-principles.md` (especially "compile contracts;
+  interpret ambiguity" and "ledger, not vibes")
+
 ## Research And Theory
 
 ### Julian Jaynes And Compositional Identity
