@@ -342,10 +342,11 @@ func operatorPendingItemLine(item core.PendingItem, includeDetails bool) string 
 	if item.Age > 0 {
 		parts = append(parts, "age "+item.Age.Truncate(time.Second).String())
 	}
-	if includeDetails {
-		if id := strings.TrimSpace(item.ID); id != "" {
-			parts = append(parts, id)
-		}
+	// Always surface the item ID when present. The operator needs a CLI
+	// handle from the first surface — withholding it forces a navigation
+	// hop just to discover what to type next.
+	if id := strings.TrimSpace(item.ID); id != "" {
+		parts = append(parts, id)
 	}
 	if summary := strings.TrimSpace(item.Summary); summary != "" && (includeDetails || item.Kind != core.PendingItemKindStaleTurn) {
 		parts = append(parts, truncateStatusField(summary, 140))
