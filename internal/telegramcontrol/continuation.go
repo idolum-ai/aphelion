@@ -118,10 +118,15 @@ func (c CommandControl) CreateApprovalWindowOfferForMessage(ctx context.Context,
 }
 
 func (c CommandControl) EnableApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage, duration time.Duration) (string, error) {
+	result, err := c.EnableApprovalWindowForMessageResult(ctx, msg, duration)
+	return result.Text, err
+}
+
+func (c CommandControl) EnableApprovalWindowForMessageResult(ctx context.Context, msg core.InboundMessage, duration time.Duration) (core.ApprovalWindowEnableResult, error) {
 	if c.Runtime == nil {
-		return "Approval windows are unavailable.", nil
+		return core.ApprovalWindowEnableResult{Text: "Approval windows are unavailable."}, nil
 	}
-	return c.Runtime.EnableApprovalWindowForKey(ctx, SessionKeyForMessage(msg), msg.SenderID, duration)
+	return c.Runtime.EnableApprovalWindowForKeyResult(ctx, SessionKeyForMessage(msg), msg.SenderID, duration)
 }
 
 func (c CommandControl) DoubleApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage) (string, error) {
@@ -132,17 +137,27 @@ func (c CommandControl) DoubleApprovalWindowForMessage(ctx context.Context, msg 
 }
 
 func (c CommandControl) CancelApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage) (string, error) {
+	result, err := c.CancelApprovalWindowForMessageResult(ctx, msg)
+	return result.Text, err
+}
+
+func (c CommandControl) CancelApprovalWindowForMessageResult(ctx context.Context, msg core.InboundMessage) (core.ApprovalWindowCancelResult, error) {
 	if c.Runtime == nil {
-		return "Approval windows are unavailable.", nil
+		return core.ApprovalWindowCancelResult{Text: "Approval windows are unavailable."}, nil
 	}
-	return c.Runtime.CancelApprovalWindowForKey(ctx, SessionKeyForMessage(msg), msg.SenderID)
+	return c.Runtime.CancelApprovalWindowForKeyResult(ctx, SessionKeyForMessage(msg), msg.SenderID)
 }
 
 func (c CommandControl) EnableApprovalWindowOffer(ctx context.Context, offerID string, senderID int64, duration time.Duration) (string, error) {
+	result, err := c.EnableApprovalWindowOfferResult(ctx, offerID, senderID, duration)
+	return result.Text, err
+}
+
+func (c CommandControl) EnableApprovalWindowOfferResult(ctx context.Context, offerID string, senderID int64, duration time.Duration) (core.ApprovalWindowEnableResult, error) {
 	if c.Runtime == nil {
-		return "Approval windows are unavailable.", nil
+		return core.ApprovalWindowEnableResult{Text: "Approval windows are unavailable."}, nil
 	}
-	return c.Runtime.EnableApprovalWindowOffer(ctx, offerID, senderID, duration)
+	return c.Runtime.EnableApprovalWindowOfferResult(ctx, offerID, senderID, duration)
 }
 
 func (c CommandControl) DoubleApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error) {
@@ -153,10 +168,15 @@ func (c CommandControl) DoubleApprovalWindowOffer(ctx context.Context, offerID s
 }
 
 func (c CommandControl) CancelApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error) {
+	result, err := c.CancelApprovalWindowOfferResult(ctx, offerID, senderID)
+	return result.Text, err
+}
+
+func (c CommandControl) CancelApprovalWindowOfferResult(ctx context.Context, offerID string, senderID int64) (core.ApprovalWindowCancelResult, error) {
 	if c.Runtime == nil {
-		return "Approval windows are unavailable.", nil
+		return core.ApprovalWindowCancelResult{Text: "Approval windows are unavailable."}, nil
 	}
-	return c.Runtime.CancelApprovalWindowOffer(ctx, offerID, senderID)
+	return c.Runtime.CancelApprovalWindowOfferResult(ctx, offerID, senderID)
 }
 
 func (c CommandControl) CloseApprovalWindowOffer(ctx context.Context, offerID string) error {

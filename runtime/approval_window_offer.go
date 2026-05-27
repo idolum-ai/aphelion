@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -64,23 +65,25 @@ func (r *Runtime) CreateApprovalWindowOfferForKey(ctx context.Context, key sessi
 }
 
 func (r *Runtime) EnableApprovalWindowOffer(ctx context.Context, offerID string, adminUserID int64, duration time.Duration) (string, error) {
+	result, err := r.EnableApprovalWindowOfferResult(ctx, offerID, adminUserID, duration)
+	return result.Text, err
+}
+
+func (r *Runtime) EnableApprovalWindowOfferResult(ctx context.Context, offerID string, adminUserID int64, duration time.Duration) (core.ApprovalWindowEnableResult, error) {
 	offer, ok, err := r.activeApprovalWindowOffer(offerID, false)
 	if err != nil || !ok {
-		return "", err
+		return core.ApprovalWindowEnableResult{}, err
 	}
-	text, err := r.EnableApprovalWindowForKey(ctx, approvalWindowOfferSessionKey(offer), adminUserID, duration)
-	if err != nil {
-		return "", err
-	}
-	if !approvalWindowTextConfirmsActive(text) {
-		return text, nil
+	result, err := r.EnableApprovalWindowForKeyResult(ctx, approvalWindowOfferSessionKey(offer), adminUserID, duration)
+	if err != nil || !result.Active {
+		return result, err
 	}
 	if _, ok, err := r.store.MarkApprovalWindowOfferUsed(offer.ID, time.Now().UTC()); err != nil {
-		return "", err
+		return core.ApprovalWindowEnableResult{}, err
 	} else if !ok {
-		return "", fmt.Errorf("approval window offer is no longer active")
+		return core.ApprovalWindowEnableResult{}, fmt.Errorf("approval window offer is no longer active")
 	}
-	return text, nil
+	return result, nil
 }
 
 func (r *Runtime) DoubleApprovalWindowOffer(ctx context.Context, offerID string, adminUserID int64) (string, error) {
@@ -92,18 +95,25 @@ func (r *Runtime) DoubleApprovalWindowOffer(ctx context.Context, offerID string,
 }
 
 func (r *Runtime) CancelApprovalWindowOffer(ctx context.Context, offerID string, adminUserID int64) (string, error) {
+	result, err := r.CancelApprovalWindowOfferResult(ctx, offerID, adminUserID)
+	return result.Text, err
+}
+
+func (r *Runtime) CancelApprovalWindowOfferResult(ctx context.Context, offerID string, adminUserID int64) (core.ApprovalWindowCancelResult, error) {
 	offer, ok, err := r.activeApprovalWindowOffer(offerID, true)
 	if err != nil || !ok {
-		return "", err
+		return core.ApprovalWindowCancelResult{}, err
 	}
-	text, err := r.CancelApprovalWindowForKey(ctx, approvalWindowOfferSessionKey(offer), adminUserID)
-	if err != nil {
-		return "", err
+	result, err := r.CancelApprovalWindowForKeyResult(ctx, approvalWindowOfferSessionKey(offer), adminUserID)
+	if err != nil || !result.Canceled {
+		return result, err
 	}
-	if _, _, closeErr := r.store.CloseApprovalWindowOffer(offer.ID, time.Now().UTC()); closeErr != nil {
-		return "", closeErr
+	if _, ok, err := r.store.CloseApprovalWindowOffer(offer.ID, time.Now().UTC()); err != nil {
+		return core.ApprovalWindowCancelResult{}, err
+	} else if !ok {
+		return core.ApprovalWindowCancelResult{}, fmt.Errorf("approval window offer is no longer active")
 	}
-	return text, nil
+	return result, nil
 }
 
 func (r *Runtime) CloseApprovalWindowOffer(ctx context.Context, offerID string) error {

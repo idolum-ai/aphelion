@@ -96,20 +96,32 @@ func (c telegramCommandControl) CreateApprovalWindowOfferForMessage(ctx context.
 func (c telegramCommandControl) EnableApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage, duration time.Duration) (string, error) {
 	return c.controlFacade().EnableApprovalWindowForMessage(ctx, msg, duration)
 }
+func (c telegramCommandControl) EnableApprovalWindowForMessageResult(ctx context.Context, msg core.InboundMessage, duration time.Duration) (core.ApprovalWindowEnableResult, error) {
+	return c.controlFacade().EnableApprovalWindowForMessageResult(ctx, msg, duration)
+}
 func (c telegramCommandControl) DoubleApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage) (string, error) {
 	return c.controlFacade().DoubleApprovalWindowForMessage(ctx, msg)
 }
 func (c telegramCommandControl) CancelApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage) (string, error) {
 	return c.controlFacade().CancelApprovalWindowForMessage(ctx, msg)
 }
+func (c telegramCommandControl) CancelApprovalWindowForMessageResult(ctx context.Context, msg core.InboundMessage) (core.ApprovalWindowCancelResult, error) {
+	return c.controlFacade().CancelApprovalWindowForMessageResult(ctx, msg)
+}
 func (c telegramCommandControl) EnableApprovalWindowOffer(ctx context.Context, offerID string, senderID int64, duration time.Duration) (string, error) {
 	return c.controlFacade().EnableApprovalWindowOffer(ctx, offerID, senderID, duration)
+}
+func (c telegramCommandControl) EnableApprovalWindowOfferResult(ctx context.Context, offerID string, senderID int64, duration time.Duration) (core.ApprovalWindowEnableResult, error) {
+	return c.controlFacade().EnableApprovalWindowOfferResult(ctx, offerID, senderID, duration)
 }
 func (c telegramCommandControl) DoubleApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error) {
 	return c.controlFacade().DoubleApprovalWindowOffer(ctx, offerID, senderID)
 }
 func (c telegramCommandControl) CancelApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error) {
 	return c.controlFacade().CancelApprovalWindowOffer(ctx, offerID, senderID)
+}
+func (c telegramCommandControl) CancelApprovalWindowOfferResult(ctx context.Context, offerID string, senderID int64) (core.ApprovalWindowCancelResult, error) {
+	return c.controlFacade().CancelApprovalWindowOfferResult(ctx, offerID, senderID)
 }
 func (c telegramCommandControl) CloseApprovalWindowOffer(ctx context.Context, offerID string) error {
 	return c.controlFacade().CloseApprovalWindowOffer(ctx, offerID)

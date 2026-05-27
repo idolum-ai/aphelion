@@ -128,6 +128,7 @@ func TestApprovalWindowEmbeddedCompoundStaleDecisionFailsBeforeOpeningWindow(t *
 	sender := &stubCommandSender{}
 	router := &stubCommandRouter{
 		approvalWindowReturn:              "Approval window active.",
+		approvalWindowActive:              true,
 		approvalWindowReturnBeforeResolve: true,
 		approvalWindowLookupOK:            true,
 		approvalWindowLookupOffer: session.ApprovalWindowOffer{
@@ -173,6 +174,7 @@ func TestApprovalWindowEmbeddedDecisionCompoundRollsBackWhenResolveFailsAfterOpe
 	sender := &stubCommandSender{}
 	router := &stubCommandRouter{
 		approvalWindowReturn:              "Approval window active.",
+		approvalWindowActive:              true,
 		approvalWindowReturnBeforeResolve: true,
 		approvalWindowLookupOK:            true,
 		approvalWindowLookupOffer: session.ApprovalWindowOffer{
@@ -219,6 +221,7 @@ func TestApprovalWindowEmbeddedDecisionCompoundOpensBeforeResolveWithoutDuplicat
 	sender := &stubCommandSender{}
 	router := &stubCommandRouter{
 		approvalWindowReturn:              "Approval window active.",
+		approvalWindowActive:              true,
 		approvalWindowReturnBeforeResolve: true,
 		approvalWindowLookupOK:            true,
 		approvalWindowLookupOffer: session.ApprovalWindowOffer{
@@ -265,6 +268,7 @@ func TestApprovalWindowEnableCallbackTargetsThreadScope(t *testing.T) {
 	sender := &stubCommandSender{}
 	router := &stubCommandRouter{
 		approvalWindowReturn: "Approval window active.",
+		approvalWindowActive: true,
 		threadReplyOK:        true,
 		threadReplyReturn: session.TelegramThread{
 			ChatID:      7,
@@ -338,7 +342,7 @@ func TestApprovalWindowCancelCallbackClearsControls(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
-	router := &stubCommandRouter{approvalWindowReturn: "Approval window canceled."}
+	router := &stubCommandRouter{approvalWindowReturn: "Approval window canceled.", approvalWindowCanceled: true}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
 		ID:      "cb-aw-cancel",
 		From:    &telegram.User{ID: 1001},

@@ -205,17 +205,22 @@ func (s *stubCommandRouter) CreateApprovalWindowOfferForMessage(_ context.Contex
 }
 
 func (s *stubCommandRouter) EnableApprovalWindowForMessage(_ context.Context, msg core.InboundMessage, duration time.Duration) (string, error) {
+	result, err := s.EnableApprovalWindowForMessageResult(context.Background(), msg, duration)
+	return result.Text, err
+}
+
+func (s *stubCommandRouter) EnableApprovalWindowForMessageResult(_ context.Context, msg core.InboundMessage, duration time.Duration) (core.ApprovalWindowEnableResult, error) {
 	copied := msg
 	s.approvalWindowAction = approvalWindowActionEnable15
 	s.approvalWindowMessage = &copied
 	s.approvalWindowDuration = duration
 	if s.approvalWindowErr != nil {
-		return "", s.approvalWindowErr
+		return core.ApprovalWindowEnableResult{}, s.approvalWindowErr
 	}
 	if strings.TrimSpace(s.approvalWindowReturn) != "" {
-		return s.approvalWindowReturn, nil
+		return core.ApprovalWindowEnableResult{Text: s.approvalWindowReturn, Active: s.approvalWindowActive}, nil
 	}
-	return "Approval window active.", nil
+	return core.ApprovalWindowEnableResult{Text: "Approval window active.", Active: true}, nil
 }
 
 func (s *stubCommandRouter) DoubleApprovalWindowForMessage(_ context.Context, msg core.InboundMessage) (string, error) {
@@ -232,16 +237,21 @@ func (s *stubCommandRouter) DoubleApprovalWindowForMessage(_ context.Context, ms
 }
 
 func (s *stubCommandRouter) CancelApprovalWindowForMessage(_ context.Context, msg core.InboundMessage) (string, error) {
+	result, err := s.CancelApprovalWindowForMessageResult(context.Background(), msg)
+	return result.Text, err
+}
+
+func (s *stubCommandRouter) CancelApprovalWindowForMessageResult(_ context.Context, msg core.InboundMessage) (core.ApprovalWindowCancelResult, error) {
 	copied := msg
 	s.approvalWindowAction = approvalWindowActionCancel
 	s.approvalWindowMessage = &copied
 	if s.approvalWindowErr != nil {
-		return "", s.approvalWindowErr
+		return core.ApprovalWindowCancelResult{}, s.approvalWindowErr
 	}
 	if strings.TrimSpace(s.approvalWindowReturn) != "" {
-		return s.approvalWindowReturn, nil
+		return core.ApprovalWindowCancelResult{Text: s.approvalWindowReturn, Canceled: s.approvalWindowCanceled}, nil
 	}
-	return "Approval window canceled.", nil
+	return core.ApprovalWindowCancelResult{Text: "Approval window canceled.", Canceled: true}, nil
 }
 
 func (s *stubCommandRouter) ConfigureAutonomy(_ context.Context, chatID int64, senderID int64, args string) (string, error) {
@@ -309,16 +319,21 @@ func (s *stubCommandRouter) RefreshContinuationProposalForMessage(ctx context.Co
 }
 
 func (s *stubCommandRouter) EnableApprovalWindowOffer(_ context.Context, offerID string, senderID int64, duration time.Duration) (string, error) {
+	result, err := s.EnableApprovalWindowOfferResult(context.Background(), offerID, senderID, duration)
+	return result.Text, err
+}
+
+func (s *stubCommandRouter) EnableApprovalWindowOfferResult(_ context.Context, offerID string, senderID int64, duration time.Duration) (core.ApprovalWindowEnableResult, error) {
 	s.approvalWindowAction = approvalWindowActionEnable15
 	s.approvalWindowOfferID = offerID
 	s.approvalWindowDuration = duration
 	if s.approvalWindowErr != nil {
-		return "", s.approvalWindowErr
+		return core.ApprovalWindowEnableResult{}, s.approvalWindowErr
 	}
 	if strings.TrimSpace(s.approvalWindowReturn) != "" {
-		return s.approvalWindowReturn, nil
+		return core.ApprovalWindowEnableResult{Text: s.approvalWindowReturn, Active: s.approvalWindowActive}, nil
 	}
-	return "Approval window active.", nil
+	return core.ApprovalWindowEnableResult{Text: "Approval window active.", Active: true}, nil
 }
 
 func (s *stubCommandRouter) DoubleApprovalWindowOffer(_ context.Context, offerID string, senderID int64) (string, error) {
@@ -334,16 +349,21 @@ func (s *stubCommandRouter) DoubleApprovalWindowOffer(_ context.Context, offerID
 }
 
 func (s *stubCommandRouter) CancelApprovalWindowOffer(_ context.Context, offerID string, senderID int64) (string, error) {
+	result, err := s.CancelApprovalWindowOfferResult(context.Background(), offerID, senderID)
+	return result.Text, err
+}
+
+func (s *stubCommandRouter) CancelApprovalWindowOfferResult(_ context.Context, offerID string, senderID int64) (core.ApprovalWindowCancelResult, error) {
 	s.approvalWindowAction = approvalWindowActionCancel
 	s.approvalWindowCancelCalls++
 	s.approvalWindowOfferID = offerID
 	if s.approvalWindowErr != nil {
-		return "", s.approvalWindowErr
+		return core.ApprovalWindowCancelResult{}, s.approvalWindowErr
 	}
 	if strings.TrimSpace(s.approvalWindowReturn) != "" {
-		return s.approvalWindowReturn, nil
+		return core.ApprovalWindowCancelResult{Text: s.approvalWindowReturn, Canceled: s.approvalWindowCanceled}, nil
 	}
-	return "Approval window canceled.", nil
+	return core.ApprovalWindowCancelResult{Text: "Approval window canceled.", Canceled: true}, nil
 }
 
 func (s *stubCommandRouter) CloseApprovalWindowOffer(_ context.Context, offerID string) error {
@@ -376,7 +396,7 @@ func (s *stubCommandRouter) PeekDecisionCallback(decisionID string, actor decisi
 }
 
 func (s *stubCommandRouter) ResolveDecisionCallback(decisionID string, choice string, actor decision.CallbackActor) decision.ResolveResult {
-	if !s.approvalWindowReturnBeforeResolve && s.approvalWindowAction != approvalWindowActionEnable15 {
+	if !s.approvalWindowReturnBeforeResolve && !s.approvalWindowActive {
 		return decision.ResolveResult{}
 	}
 	s.resolvedDecisionID = decisionID

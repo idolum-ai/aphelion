@@ -161,8 +161,10 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 	var rows [][]telegram.InlineButton
 	switch action {
 	case approvalWindowActionEnable15:
-		text, err = approvals.EnableApprovalWindowOffer(ctx, offerID, senderID, approvalWindowCallbackDuration)
-		if err == nil && approvalWindowEnableConfirmed(text) {
+		var result core.ApprovalWindowEnableResult
+		result, err = approvals.EnableApprovalWindowOfferResult(ctx, offerID, senderID, approvalWindowCallbackDuration)
+		text = result.Text
+		if err == nil && result.Active {
 			rows = ApprovalWindowActiveRows(offerID)
 		}
 	case approvalWindowActionEnable15Compound:
@@ -171,12 +173,15 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 			err = compoundErr
 			break
 		}
-		text, err = approvals.EnableApprovalWindowOffer(ctx, offerID, senderID, approvalWindowCallbackDuration)
-		if err == nil && approvalWindowEnableConfirmed(text) {
+		var result core.ApprovalWindowEnableResult
+		result, err = approvals.EnableApprovalWindowOfferResult(ctx, offerID, senderID, approvalWindowCallbackDuration)
+		text = result.Text
+		if err == nil && result.Active {
 			text += compound.note
 			if resolveErr := compound.resolve(); resolveErr != nil {
-				if _, cancelErr := approvals.CancelApprovalWindowOffer(ctx, offerID, senderID); cancelErr != nil {
-					err = fmt.Errorf("%w; rollback approval window: %v", resolveErr, cancelErr)
+				cancelResult, cancelErr := approvals.CancelApprovalWindowOfferResult(ctx, offerID, senderID)
+				if cancelErr != nil || !cancelResult.Canceled {
+					err = fmt.Errorf("%w; rollback approval window failed", resolveErr)
 				} else {
 					err = resolveErr
 				}
@@ -188,7 +193,9 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 		text, err = approvals.DoubleApprovalWindowOffer(ctx, offerID, senderID)
 		rows = ApprovalWindowActiveRows(offerID)
 	case approvalWindowActionCancel:
-		text, err = approvals.CancelApprovalWindowOffer(ctx, offerID, senderID)
+		var result core.ApprovalWindowCancelResult
+		result, err = approvals.CancelApprovalWindowOfferResult(ctx, offerID, senderID)
+		text = result.Text
 	default:
 		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), approvalWindowCallbackStale); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 			return true, err
@@ -231,11 +238,6 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 		return true, err
 	}
 	return true, nil
-}
-
-func approvalWindowEnableConfirmed(text string) bool {
-	trimmed := strings.TrimSpace(text)
-	return strings.Contains(trimmed, "Status: active") || strings.HasPrefix(trimmed, "Approval window active.")
 }
 
 type approvalWindowOfferLookupRouter interface {
