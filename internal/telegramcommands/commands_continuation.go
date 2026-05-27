@@ -217,7 +217,6 @@ func renderContinuationEdgeStatus(state session.ContinuationState, prefix string
 	if state.HandshakeBlockedReason != "" {
 		lines = append(lines, "Blocked reason: "+state.HandshakeBlockedReason)
 	}
-	lines = append(lines, "No new authority was granted by this status view.")
 	return strings.Join(lines, "\n")
 }
 
@@ -262,7 +261,6 @@ func renderContinuationScopeDetails(state session.ContinuationState, prefix stri
 	if state.RemainingTurns > 0 {
 		lines = append(lines, fmt.Sprintf("Remaining turns: %d", state.RemainingTurns))
 	}
-	lines = append(lines, "No new authority was granted by this status view.")
 	return strings.Join(lines, "\n")
 }
 
@@ -303,7 +301,6 @@ func renderContinuationPlanBudgetDetails(state session.ContinuationState, prefix
 	if len(stops) > 0 {
 		lines = append(lines, "Stops for: "+strings.Join(stops, ", "))
 	}
-	lines = append(lines, "This details view does not change permissions.")
 	return strings.Join(lines, "\n")
 }
 

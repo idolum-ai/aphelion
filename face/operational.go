@@ -106,7 +106,7 @@ func RenderTelegramAutonomyStatus(snapshot core.AutonomyStatusSnapshot) string {
 	return RenderCompactOperatorPanel(OperatorPanel{
 		Title: "Auto mode",
 		State: "default " + autonomyModeLabel(snapshot.DefaultMode) + ", ceiling " + autonomyModeLabel(snapshot.Ceiling),
-		Why:   behavior + ". This report does not grant new authority by itself.",
+		Why:   behavior + ".",
 		Next:  "Approve one request and use the inline approval-window controls to open or close a bounded gate.",
 		Details: []string{
 			"Default: " + autonomyModeLabel(snapshot.DefaultMode),
