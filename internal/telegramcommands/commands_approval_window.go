@@ -164,7 +164,7 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 		text, err = approvals.EnableApprovalWindowOffer(ctx, offerID, senderID, approvalWindowCallbackDuration)
 		rows = ApprovalWindowActiveRows(offerID)
 	case approvalWindowActionEnable15Compound:
-		compoundNote, trigger, compoundErr := applyApprovalWindowCompoundAction(ctx, sender, router, targetMsg, offerID, senderID)
+		compoundNote, compoundErr := applyApprovalWindowCompoundAction(router, targetMsg, offerID, senderID)
 		if compoundErr != nil {
 			err = compoundErr
 			break
@@ -172,9 +172,6 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 		text, err = approvals.EnableApprovalWindowOffer(ctx, offerID, senderID, approvalWindowCallbackDuration)
 		if err == nil && approvalWindowEnableConfirmed(text) {
 			text += compoundNote
-			if trigger != nil {
-				trigger()
-			}
 		}
 		rows = ApprovalWindowActiveRows(offerID)
 	case approvalWindowActionDouble:
@@ -201,11 +198,17 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 		return true, err
 	}
 	text = continuationCallbackDisplayText(targetMsg, text)
-	if action == approvalWindowActionEnable15 || action == approvalWindowActionEnable15Compound {
+	if action == approvalWindowActionEnable15 {
 		replyTo := messageID
 		if _, err := sender.SendInlineKeyboard(ctx, chatID, text, rows, &replyTo); err != nil {
 			return true, err
 		}
+		return true, nil
+	}
+	if action == approvalWindowActionEnable15Compound {
+		// The source decision completion path owns updating the original card with
+		// the active approval-window controls. Sending here creates duplicate
+		// active control cards for the same offer.
 		return true, nil
 	}
 	if len(rows) > 0 {
@@ -233,33 +236,29 @@ type approvalWindowDecisionResolverRouter interface {
 	ResolveDecisionCallback(decisionID string, choice string, actor decision.CallbackActor) decision.ResolveResult
 }
 
-func applyApprovalWindowCompoundAction(ctx context.Context, sender commandCallbackSender, router commandRouter, targetMsg core.InboundMessage, offerID string, senderID int64) (string, func(), error) {
+func applyApprovalWindowCompoundAction(router commandRouter, targetMsg core.InboundMessage, offerID string, senderID int64) (string, error) {
 	lookup, ok := router.(approvalWindowOfferLookupRouter)
 	if !ok {
-		return "", nil, fmt.Errorf("approval window source is unavailable")
+		return "", fmt.Errorf("approval window source is unavailable")
 	}
 	offer, ok, err := lookup.ApprovalWindowOfferByID(offerID)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	if !ok {
-		return "", nil, fmt.Errorf("approval window source is no longer active")
+		return "", fmt.Errorf("approval window source is no longer active")
 	}
 	offer = session.NormalizeApprovalWindowOffer(offer)
-	switch offer.SourceKind {
-	case session.ApprovalWindowOfferSourceDecision:
-		return applyApprovalWindowDecisionCompoundAction(router, targetMsg, senderID, offer)
-	case session.ApprovalWindowOfferSourceContinuation:
-		return applyApprovalWindowContinuationCompoundAction(ctx, sender, router, targetMsg, senderID, offer)
-	default:
-		return "", nil, fmt.Errorf("approval window source is not actionable")
+	if offer.SourceKind != session.ApprovalWindowOfferSourceDecision {
+		return "", fmt.Errorf("approval window source is not actionable")
 	}
+	return applyApprovalWindowDecisionCompoundAction(router, targetMsg, senderID, offer)
 }
 
-func applyApprovalWindowDecisionCompoundAction(router commandRouter, targetMsg core.InboundMessage, senderID int64, offer session.ApprovalWindowOffer) (string, func(), error) {
+func applyApprovalWindowDecisionCompoundAction(router commandRouter, targetMsg core.InboundMessage, senderID int64, offer session.ApprovalWindowOffer) (string, error) {
 	resolver, ok := router.(approvalWindowDecisionResolverRouter)
 	if !ok || strings.TrimSpace(offer.SourceID) == "" {
-		return "", nil, fmt.Errorf("current approval is no longer active; use the newest prompt if approval is still needed")
+		return "", fmt.Errorf("current approval is no longer active; use the newest prompt if approval is still needed")
 	}
 	result := resolver.ResolveDecisionCallback(strings.TrimSpace(offer.SourceID), "approve", decision.CallbackActor{
 		TelegramUserID: senderID,
@@ -267,46 +266,9 @@ func applyApprovalWindowDecisionCompoundAction(router commandRouter, targetMsg c
 		MessageID:      targetMsg.MessageID,
 	})
 	if !result.Resolved {
-		return "", nil, fmt.Errorf("current approval is no longer active; use the newest prompt if approval is still needed")
+		return "", fmt.Errorf("current approval is no longer active; use the newest prompt if approval is still needed")
 	}
-	return "\n\nCurrent approval: approved.", nil, nil
-}
-
-func applyApprovalWindowContinuationCompoundAction(ctx context.Context, sender commandCallbackSender, router commandRouter, targetMsg core.InboundMessage, senderID int64, offer session.ApprovalWindowOffer) (string, func(), error) {
-	state, err := continuationStateForCallbackTarget(router, targetMsg)
-	if err != nil || !continuationCallbackMatchesState(state, offer.SourceID, continuationActionApproveLease) {
-		return "", nil, fmt.Errorf("current continuation is no longer active; use the original continuation controls")
-	}
-	if authText := continuationCallbackAuthorizationFailure(router, telegram.CallbackQuery{From: &telegram.User{ID: senderID}, Message: &telegram.Message{MessageID: targetMsg.MessageID, Chat: &telegram.Chat{ID: targetMsg.ChatID}}}, targetMsg.ChatID, targetMsg.MessageID, state); authText != "" {
-		return "", nil, fmt.Errorf("%s", authText)
-	}
-	approved, err := approveContinuationForCallbackTarget(router, targetMsg, senderID)
-	if err != nil {
-		return "", nil, fmt.Errorf("current continuation approval failed; use the original continuation controls")
-	}
-	if approved.Status == session.ContinuationStatusApproved && approved.RemainingTurns > 0 {
-		trigger := func() {
-			triggerContinuationAfterCallback(sender, router, targetMsg, targetMsg.MessageID, "approval_window.compound_continuation_trigger", approved)
-		}
-		_ = ctx
-		return "\n\nCurrent continuation: approved and starting.", trigger, nil
-	}
-	_ = ctx
-	return "\n\nCurrent continuation: approved.", nil, nil
-}
-
-func continuationStateForCallbackTarget(router commandRouter, targetMsg core.InboundMessage) (session.ContinuationState, error) {
-	if scoped, ok := router.(scopedContinuationRouter); ok && targetMsg.TelegramThreadID > 0 {
-		return scoped.ContinuationStateForMessage(targetMsg)
-	}
-	return router.ContinuationState(targetMsg.ChatID)
-}
-
-func approveContinuationForCallbackTarget(router commandRouter, targetMsg core.InboundMessage, approverID int64) (session.ContinuationState, error) {
-	if scoped, ok := router.(scopedContinuationRouter); ok && targetMsg.TelegramThreadID > 0 {
-		return scoped.ApproveContinuationForMessage(targetMsg, approverID)
-	}
-	return router.ApproveContinuation(targetMsg.ChatID, approverID)
+	return "\n\nCurrent approval: approved.", nil
 }
 
 func approvalWindowCallbackClosedText(cb telegram.CallbackQuery) string {

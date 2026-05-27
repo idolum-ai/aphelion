@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
@@ -28,6 +29,44 @@ func TestApprovalWindowRowsRespectTelegramLabelContract(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func callbackDataForCommandButton(t *testing.T, rows [][]telegram.InlineButton, label string) string {
+	t.Helper()
+	for _, row := range rows {
+		for _, button := range row {
+			if button.Text == label {
+				return button.CallbackData
+			}
+		}
+	}
+	t.Fatalf("button %q not found in rows %#v", label, rows)
+	return ""
+}
+
+func TestApprovalWindowRowsExposeOnlyReachableCompoundCallbacks(t *testing.T) {
+	t.Parallel()
+
+	offer := session.ApprovalWindowOffer{ID: "offer-test"}
+	standaloneData := callbackDataForCommandButton(t, ApprovalWindowOfferRows("offer-test"), "Approve 15m")
+	_, standaloneAction, ok := decodeApprovalWindowCallbackData(standaloneData)
+	if !ok || standaloneAction != approvalWindowActionEnable15 {
+		t.Fatalf("standalone callback action = %q ok=%v, want plain enable15", standaloneAction, ok)
+	}
+	embeddedData := callbackDataForCommandButton(t, ApprovalWindowEmbeddedOfferRows(offer), "Approve 15m")
+	_, embeddedAction, ok := decodeApprovalWindowCallbackData(embeddedData)
+	if !ok || embeddedAction != approvalWindowActionEnable15Compound {
+		t.Fatalf("embedded callback action = %q ok=%v, want compound enable15", embeddedAction, ok)
+	}
+	continuationRows, err := approvalWindowOfferRowsForSource(context.Background(), &stubCommandRouter{}, core.InboundMessage{ChatID: 7, SenderID: 1001}, session.ApprovalWindowOfferSourceContinuation, "decision-continuation", "continuation")
+	if err != nil {
+		t.Fatalf("approvalWindowOfferRowsForSource() err = %v", err)
+	}
+	continuationData := callbackDataForCommandButton(t, continuationRows, "Approve 15m")
+	_, continuationAction, ok := decodeApprovalWindowCallbackData(continuationData)
+	if !ok || continuationAction != approvalWindowActionEnable15 {
+		t.Fatalf("continuation callback action = %q ok=%v, want plain enable15", continuationAction, ok)
 	}
 }
 
@@ -121,61 +160,7 @@ func TestApprovalWindowEmbeddedCompoundStaleDecisionFailsBeforeOpeningWindow(t *
 	}
 }
 
-func TestApprovalWindowEmbeddedCompoundMismatchedContinuationFailsBeforeOpeningWindow(t *testing.T) {
-	t.Parallel()
-
-	sender := &stubCommandSender{}
-	router := &stubCommandRouter{
-		canRestart:             true,
-		approvalWindowReturn:   "Approval window active.",
-		approvalWindowLookupOK: true,
-		approvalWindowLookupOffer: session.ApprovalWindowOffer{
-			ID:         "offer-stale-continuation",
-			ChatID:     7,
-			ScopeKind:  string(session.ScopeKindTelegramDM),
-			ScopeID:    "7",
-			SourceKind: session.ApprovalWindowOfferSourceContinuation,
-			SourceID:   "decision-old",
-		},
-		continuationState: session.ContinuationState{
-			Status:            session.ContinuationStatusPending,
-			DecisionID:        "decision-current",
-			DecisionMessageID: 77,
-			RemainingTurns:    1,
-		},
-	}
-	triggerStarted := make(chan struct{})
-	router.triggerContinuationStarted = triggerStarted
-
-	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
-		ID:      "cb-aw-enable-stale-continuation-compound",
-		From:    &telegram.User{ID: 1001},
-		Data:    encodeApprovalWindowCallbackData("offer-stale-continuation", approvalWindowActionEnable15Compound),
-		Message: &telegram.Message{MessageID: 77, Chat: &telegram.Chat{ID: 7, Type: "private"}},
-	})
-	if err != nil {
-		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
-	}
-	if !handled {
-		t.Fatal("handled = false, want true")
-	}
-	if router.approvalWindowAction != "" {
-		t.Fatalf("approvalWindowAction = %q, want no approval window enable before valid continuation", router.approvalWindowAction)
-	}
-	if router.approveContinuationInput != 0 || router.triggerContinuationInput != 0 {
-		t.Fatalf("continuation approve/trigger = %d/%d, want no source mutation", router.approveContinuationInput, router.triggerContinuationInput)
-	}
-	select {
-	case <-triggerStarted:
-		t.Fatal("continuation trigger started for mismatched source")
-	default:
-	}
-	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "Approval window was not opened.") {
-		t.Fatalf("editClear = %#v, want fail-closed approval-window edit", sender.editClear)
-	}
-}
-
-func TestApprovalWindowEnableCallbackApprovesEmbeddedDecision(t *testing.T) {
+func TestApprovalWindowEmbeddedDecisionCompoundDoesNotSendDuplicateActiveCard(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
@@ -212,58 +197,8 @@ func TestApprovalWindowEnableCallbackApprovesEmbeddedDecision(t *testing.T) {
 	if router.approveContinuationInput != 0 || router.triggerContinuationInput != 0 {
 		t.Fatalf("continuation approve/trigger = %d/%d, want no continuation mutation for decision offer", router.approveContinuationInput, router.triggerContinuationInput)
 	}
-	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "Current approval: approved.") {
-		t.Fatalf("inline = %#v, want active approval-window card with decision approval note", sender.inline)
-	}
-}
-
-func TestApprovalWindowEnableCallbackApprovesAndStartsEmbeddedContinuation(t *testing.T) {
-	t.Parallel()
-
-	sender := &stubCommandSender{}
-	triggerStarted := make(chan struct{})
-	router := &stubCommandRouter{
-		canRestart:             true,
-		approvalWindowReturn:   "Approval window active.",
-		approvalWindowLookupOK: true,
-		approvalWindowLookupOffer: session.ApprovalWindowOffer{
-			ID:         "offer-continuation",
-			ChatID:     7,
-			ScopeKind:  string(session.ScopeKindTelegramDM),
-			ScopeID:    "7",
-			SourceKind: session.ApprovalWindowOfferSourceContinuation,
-			SourceID:   "decision-continuation",
-		},
-		continuationState: session.ContinuationState{
-			Status:            session.ContinuationStatusPending,
-			DecisionID:        "decision-continuation",
-			DecisionMessageID: 77,
-			RemainingTurns:    1,
-			StageSummary:      "Resume the next bounded step.",
-		},
-		triggerContinuationStarted: triggerStarted,
-	}
-	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
-		ID:      "cb-aw-enable-continuation-compound",
-		From:    &telegram.User{ID: 1001},
-		Data:    encodeApprovalWindowCallbackData("offer-continuation", approvalWindowActionEnable15Compound),
-		Message: &telegram.Message{MessageID: 77, Chat: &telegram.Chat{ID: 7, Type: "private"}},
-	})
-	if err != nil {
-		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
-	}
-	if !handled {
-		t.Fatal("handled = false, want true")
-	}
-	if router.approveContinuationInput != 7 || router.approveContinuationApprover != 1001 {
-		t.Fatalf("approve continuation = %d/%d, want chat 7 actor 1001", router.approveContinuationInput, router.approveContinuationApprover)
-	}
-	waitForStubContinuationTrigger(t, triggerStarted)
-	if router.triggerContinuationInput != 7 {
-		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)
-	}
-	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "Current continuation: approved and starting.") {
-		t.Fatalf("inline = %#v, want active approval-window card with continuation start note", sender.inline)
+	if len(sender.inline) != 0 {
+		t.Fatalf("inline = %#v, want no duplicate active approval-window card from compound callback", sender.inline)
 	}
 }
 
