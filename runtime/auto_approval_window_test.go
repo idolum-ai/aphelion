@@ -350,6 +350,52 @@ func TestParseOperatorAutoApprovalDurationCapAllowsTwentyFourHours(t *testing.T)
 	}
 }
 
+func TestRuntimeApprovalWindowOfferNonAdminDoesNotConsumeOffer(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	chatID := int64(99311)
+	key := session.SessionKey{ChatID: chatID, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "99311"}}
+	offer, created, err := rt.CreateApprovalWindowOfferForKey(context.Background(), key, 1001, session.ApprovalWindowOfferSourceDecision, "decision-nonadmin", string(decision.KindProposalApproval))
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOfferForKey() err = %v", err)
+	}
+	if !created || offer.ID == "" {
+		t.Fatalf("offer = %#v created=%v, want persisted offer", offer, created)
+	}
+
+	text, err := rt.EnableApprovalWindowOffer(context.Background(), offer.ID, 1002, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("EnableApprovalWindowOffer(non-admin) err = %v", err)
+	}
+	if !strings.Contains(text, "admin only") {
+		t.Fatalf("EnableApprovalWindowOffer(non-admin) text = %q, want admin-only response", text)
+	}
+
+	stored, ok, err := store.ApprovalWindowOffer(offer.ID)
+	if err != nil || !ok {
+		t.Fatalf("ApprovalWindowOffer() = %#v, %t, %v; want stored offer", stored, ok, err)
+	}
+	if !stored.UsedAt.IsZero() {
+		t.Fatalf("offer UsedAt = %s, want zero for non-active enable response", stored.UsedAt)
+	}
+	if !stored.ClosedAt.IsZero() {
+		t.Fatalf("offer ClosedAt = %s, want zero", stored.ClosedAt)
+	}
+	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
+	leases, err := store.ActiveOperatorAutoApprovalLeasesForScope(chatID, scopeKind, scopeID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeasesForScope() err = %v", err)
+	}
+	if len(leases) != 0 {
+		t.Fatalf("leases = %#v, want no active approval leases for non-admin tap", leases)
+	}
+}
+
 func TestRuntimeApprovalWindowOfferUsesPersistedThreadScope(t *testing.T) {
 	t.Parallel()
 

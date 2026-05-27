@@ -271,6 +271,10 @@ func (r *Runtime) approvalWindowMaxDuration() time.Duration {
 	return maxDuration
 }
 
+func approvalWindowTextConfirmsActive(text string) bool {
+	return strings.Contains(strings.TrimSpace(text), "Status: active")
+}
+
 func renderApprovalWindowEnabled(lease session.OperatorAutoApprovalLease, override session.OperatorAutonomyOverride, now time.Time) string {
 	lease = session.NormalizeOperatorAutoApprovalLease(lease)
 	override = session.NormalizeOperatorAutonomyOverride(override)

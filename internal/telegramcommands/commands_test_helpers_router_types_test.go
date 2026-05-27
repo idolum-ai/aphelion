@@ -125,6 +125,7 @@ type stubCommandRouter struct {
 	autoApproveReturn                 string
 	autoApproveErr                    error
 	approvalWindowAction              string
+	approvalWindowCancelCalls         int
 	approvalWindowOfferID             string
 	approvalWindowOfferSource         string
 	approvalWindowMessage             *core.InboundMessage
@@ -139,6 +140,7 @@ type stubCommandRouter struct {
 	resolvedDecisionChoice            string
 	resolvedDecisionActor             int64
 	resolvedDecisionOK                bool
+	resolvedDecisionPeekOK            bool
 	autonomyChatID                    int64
 	autonomySenderID                  int64
 	autonomyArgs                      string

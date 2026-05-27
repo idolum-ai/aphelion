@@ -108,8 +108,14 @@ func TestApprovalWindowStandaloneEnableCallbackDoesNotApplyCompoundAction(t *tes
 	if router.approveContinuationInput != 0 || router.triggerContinuationInput != 0 {
 		t.Fatalf("continuation approve/trigger = %d/%d, want no compound continuation mutation", router.approveContinuationInput, router.triggerContinuationInput)
 	}
+	if len(sender.editInline) != 0 {
+		t.Fatalf("editInline = %#v, want no active controls for non-active response", sender.editInline)
+	}
 	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "Approval windows are admin only.") {
 		t.Fatalf("inline = %#v, want original approval-window failure text", sender.inline)
+	}
+	if len(sender.inline[0].rows) != 0 {
+		t.Fatalf("inline rows = %#v, want no active controls for non-active response", sender.inline[0].rows)
 	}
 	if strings.Contains(sender.inline[0].text, "Current approval:") || strings.Contains(sender.inline[0].text, "Current continuation:") {
 		t.Fatalf("inline text = %q, should not include compound success/failure note", sender.inline[0].text)
@@ -161,13 +167,60 @@ func TestApprovalWindowEmbeddedCompoundStaleDecisionFailsBeforeOpeningWindow(t *
 	}
 }
 
-func TestApprovalWindowEmbeddedDecisionCompoundDoesNotSendDuplicateActiveCard(t *testing.T) {
+func TestApprovalWindowEmbeddedDecisionCompoundRollsBackWhenResolveFailsAfterOpen(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
 	router := &stubCommandRouter{
-		approvalWindowReturn:   "Approval window active.",
-		approvalWindowLookupOK: true,
+		approvalWindowReturn:              "Approval window active.",
+		approvalWindowReturnBeforeResolve: true,
+		approvalWindowLookupOK:            true,
+		approvalWindowLookupOffer: session.ApprovalWindowOffer{
+			ID:         "offer-resolve-race",
+			ChatID:     7,
+			ScopeKind:  string(session.ScopeKindTelegramDM),
+			ScopeID:    "7",
+			SourceKind: session.ApprovalWindowOfferSourceDecision,
+			SourceID:   "decision-race",
+		},
+		resolvedDecisionPeekOK: true,
+		resolvedDecisionOK:     false,
+	}
+
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:      "cb-aw-enable-decision-compound-race",
+		From:    &telegram.User{ID: 1001},
+		Data:    encodeApprovalWindowCallbackData("offer-resolve-race", approvalWindowActionEnable15Compound),
+		Message: &telegram.Message{MessageID: 77, Chat: &telegram.Chat{ID: 7}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.approvalWindowCancelCalls != 1 || router.approvalWindowAction != approvalWindowActionCancel {
+		t.Fatalf("approval rollback action/calls = %q/%d, want one cancel", router.approvalWindowAction, router.approvalWindowCancelCalls)
+	}
+	if router.resolvedDecisionID != "decision-race" || router.resolvedDecisionChoice != "approve" {
+		t.Fatalf("resolve attempt = %q/%q, want final resolve attempted after open", router.resolvedDecisionID, router.resolvedDecisionChoice)
+	}
+	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "Approval window was not opened.") {
+		t.Fatalf("editClear = %#v, want fail-closed approval-window edit", sender.editClear)
+	}
+	if len(sender.inline) != 0 || len(sender.editInline) != 0 {
+		t.Fatalf("inline=%#v editInline=%#v, want no active controls after rollback", sender.inline, sender.editInline)
+	}
+}
+
+func TestApprovalWindowEmbeddedDecisionCompoundOpensBeforeResolveWithoutDuplicateCard(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		approvalWindowReturn:              "Approval window active.",
+		approvalWindowReturnBeforeResolve: true,
+		approvalWindowLookupOK:            true,
 		approvalWindowLookupOffer: session.ApprovalWindowOffer{
 			ID:         "offer-decision",
 			ChatID:     7,
@@ -191,6 +244,9 @@ func TestApprovalWindowEmbeddedDecisionCompoundDoesNotSendDuplicateActiveCard(t 
 	}
 	if !handled {
 		t.Fatal("handled = false, want true")
+	}
+	if router.approvalWindowAction != approvalWindowActionEnable15 || router.approvalWindowOfferID != "offer-decision" {
+		t.Fatalf("approval window action = %q offer=%q, want enable15 offer-decision", router.approvalWindowAction, router.approvalWindowOfferID)
 	}
 	if router.resolvedDecisionID != "decision-embedded" || router.resolvedDecisionChoice != "approve" || router.resolvedDecisionActor != 1001 {
 		t.Fatalf("resolved decision = %q/%q/%d, want embedded approve by actor", router.resolvedDecisionID, router.resolvedDecisionChoice, router.resolvedDecisionActor)

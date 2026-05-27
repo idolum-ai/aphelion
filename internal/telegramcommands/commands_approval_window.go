@@ -162,7 +162,9 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 	switch action {
 	case approvalWindowActionEnable15:
 		text, err = approvals.EnableApprovalWindowOffer(ctx, offerID, senderID, approvalWindowCallbackDuration)
-		rows = ApprovalWindowActiveRows(offerID)
+		if err == nil && approvalWindowEnableConfirmed(text) {
+			rows = ApprovalWindowActiveRows(offerID)
+		}
 	case approvalWindowActionEnable15Compound:
 		compound, compoundErr := prepareApprovalWindowCompoundDecisionAction(router, targetMsg, offerID, senderID)
 		if compoundErr != nil {
@@ -173,10 +175,15 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 		if err == nil && approvalWindowEnableConfirmed(text) {
 			text += compound.note
 			if resolveErr := compound.resolve(); resolveErr != nil {
-				err = resolveErr
+				if _, cancelErr := approvals.CancelApprovalWindowOffer(ctx, offerID, senderID); cancelErr != nil {
+					err = fmt.Errorf("%w; rollback approval window: %v", resolveErr, cancelErr)
+				} else {
+					err = resolveErr
+				}
+			} else {
+				rows = ApprovalWindowActiveRows(offerID)
 			}
 		}
-		rows = ApprovalWindowActiveRows(offerID)
 	case approvalWindowActionDouble:
 		text, err = approvals.DoubleApprovalWindowOffer(ctx, offerID, senderID)
 		rows = ApprovalWindowActiveRows(offerID)
@@ -228,7 +235,7 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 
 func approvalWindowEnableConfirmed(text string) bool {
 	trimmed := strings.TrimSpace(text)
-	return strings.HasPrefix(trimmed, "Approval window active.")
+	return strings.Contains(trimmed, "Status: active") || strings.HasPrefix(trimmed, "Approval window active.")
 }
 
 type approvalWindowOfferLookupRouter interface {

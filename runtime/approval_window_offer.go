@@ -72,6 +72,9 @@ func (r *Runtime) EnableApprovalWindowOffer(ctx context.Context, offerID string,
 	if err != nil {
 		return "", err
 	}
+	if !approvalWindowTextConfirmsActive(text) {
+		return text, nil
+	}
 	if _, ok, err := r.store.MarkApprovalWindowOfferUsed(offer.ID, time.Now().UTC()); err != nil {
 		return "", err
 	} else if !ok {
