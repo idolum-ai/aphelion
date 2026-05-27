@@ -15,7 +15,7 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
-const autonomyAuthorityBehavior = "approval grants require an open auto mode gate"
+const autonomyAuthorityBehavior = "approvals require an open auto-mode window"
 
 type operatorAutoModeGate struct {
 	Mode      string

@@ -101,7 +101,7 @@ func RenderTelegramAutonomyStatus(snapshot core.AutonomyStatusSnapshot) string {
 	}
 	behavior := strings.TrimSpace(snapshot.AuthorityBehavior)
 	if behavior == "" {
-		behavior = "approval grants require an open auto mode gate"
+		behavior = "approvals require an open auto-mode window"
 	}
 	return RenderCompactOperatorPanel(OperatorPanel{
 		Title: "Auto mode",
@@ -126,13 +126,13 @@ func RenderTelegramAutoLimits(snapshot core.AutonomyStatusSnapshot) string {
 	}
 	behavior := strings.TrimSpace(snapshot.AuthorityBehavior)
 	if behavior == "" {
-		behavior = "approval grants require an open auto mode gate"
+		behavior = "approvals require an open auto-mode window"
 	}
 	return RenderCompactOperatorPanel(OperatorPanel{
 		Title: "Auto limits",
 		State: "default " + autonomyModeLabel(snapshot.DefaultMode) + ", ceiling " + autonomyModeLabel(snapshot.Ceiling),
 		Why:   "Configured limits bound live mode changes. This panel is read-only.",
-		Next:  "Approval-window controls manage the live gate and spendable prompt grant together.",
+		Next:  "Approval-window controls manage the live window and approved access together.",
 		Details: []string{
 			"Default: " + autonomyModeLabel(snapshot.DefaultMode),
 			"Ceiling: " + autonomyModeLabel(snapshot.Ceiling),
@@ -252,7 +252,7 @@ func RenderTelegramDetach(detached core.DetachResult) string {
 }
 
 func RenderTelegramRestart() string {
-	return "Restarting the gateway now. Active work and continuation leases will be parked for startup recovery."
+	return "Restarting now. Active work and pending continuations will be parked and resumed after."
 }
 
 func RenderTelegramRestartDenied() string {

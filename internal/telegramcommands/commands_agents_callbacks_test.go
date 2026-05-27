@@ -53,7 +53,7 @@ func TestDurableAgentDetailCallbackRecordsMessageAndShowsLifecycleControls(t *te
 	if got := sender.editInline[0].text; !strings.Contains(got, "Durable Agent") ||
 		!strings.Contains(got, "Agent: ops-child") ||
 		!strings.Contains(got, "Tailnet host: ops-child") ||
-		!strings.Contains(got, "Child grants: 2") {
+		!strings.Contains(got, "Approvals: 2") {
 		t.Fatalf("detail text = %q, want governed agent detail", got)
 	}
 	for _, want := range []struct {

@@ -69,7 +69,7 @@ func renderDurableAgentsCommandViewPage(agents []core.DurableAgentStatusSnapshot
 	return renderTelegramCompactPanelWithLimits(face.OperatorPanel{
 		Title:    durableAgentsBoardTitle(view),
 		State:    state,
-		Why:      "Durable children are governed outposts with their own policy, memory, grants, and evidence.",
+		Why:      "Durable children run with their own policy, memory, approvals, and audit history.",
 		Next:     durableAgentsBoardNext(view),
 		Details:  details,
 		Evidence: evidence,
@@ -104,7 +104,7 @@ func renderDurableAgentDetail(agent core.DurableAgentStatusSnapshot, view string
 		details = append(details, "Outbound: "+outbound)
 	}
 	if grants := agent.ChildRuntimeGrantCount; grants > 0 {
-		details = append(details, fmt.Sprintf("Child grants: %d", grants))
+		details = append(details, fmt.Sprintf("Approvals: %d", grants))
 	}
 	if reason := strings.TrimSpace(agent.ChildRuntimeBlockedReason); reason != "" {
 		details = append(details, "Blocked: "+truncateOperatorLine(reason, 160))
@@ -147,7 +147,7 @@ func renderDurableAgentRetireConfirm(agent core.DurableAgentStatusSnapshot, view
 		"Status: " + firstNonEmpty(strings.TrimSpace(agent.Status), "-"),
 		"Health: " + firstNonEmpty(strings.TrimSpace(agent.Health), "-"),
 		"Retire removes this child from active use but preserves history, files, parent conversation, and audit records.",
-		"Retire also revokes active child grants, remote enrollment, and local Tailnet surface trust when present.",
+		"Retire also revokes active approvals, remote enrollment, and local Tailnet surface trust when present.",
 	}
 	return renderTelegramCompactPanel(face.OperatorPanel{
 		Title:   "Retire Agent?",

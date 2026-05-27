@@ -467,8 +467,8 @@ func TestHandleTelegramCommandCallbackContinuationApproveLease(t *testing.T) {
 	if router.triggerContinuationInput != 7 {
 		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)
 	}
-	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Continuation lease approved") {
-		t.Fatalf("editInline = %#v, want lease approval confirmation with approval-window offer", sender.editInline)
+	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Continuation approved") {
+		t.Fatalf("editInline = %#v, want approval confirmation with approval-window offer", sender.editInline)
 	}
 }
 
@@ -555,8 +555,8 @@ func TestHandleTelegramCommandCallbackContinuationApproveDoesNotWaitForTrigger(t
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Continuation lease approved") {
-		t.Fatalf("editInline = %#v, want immediate lease approval confirmation with approval-window offer", sender.editInline)
+	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Continuation approved") {
+		t.Fatalf("editInline = %#v, want immediate approval confirmation with approval-window offer", sender.editInline)
 	}
 	waitForStubContinuationTrigger(t, triggerStarted)
 	if router.triggerContinuationInput != 7 {

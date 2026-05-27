@@ -159,7 +159,7 @@ func handleContinuationCallback(ctx context.Context, sender commandCallbackSende
 					recordTelegramCallbackError(router, chatID, "continuation.refresh", refreshErr)
 					log.Printf("WARN continuation refresh callback failed chat_id=%d err=%v", chatID, refreshErr)
 				} else if refreshed {
-					answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.approve", "That continuation lease expired, so I sent a fresh approval prompt.")
+					answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.approve", "That continuation request expired, so I sent a fresh approval prompt.")
 					editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", continuationCallbackDisplayText(targetMsg, renderContinuationRefreshedDecision(refreshedState)))
 					return true, nil
 				} else if refreshedState.Status == session.ContinuationStatusPending {
