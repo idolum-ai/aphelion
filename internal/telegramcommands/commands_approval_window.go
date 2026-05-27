@@ -145,7 +145,7 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 	approvals, ok := router.(approvalWindowRouter)
 	if action == approvalWindowActionClose {
 		if ok && strings.TrimSpace(offerID) != "" {
-			if err := approvals.CloseApprovalWindowOffer(ctx, offerID); err != nil {
+			if err := approvals.CloseApprovalWindowOffer(ctx, offerID, senderID); err != nil {
 				return true, err
 			}
 		}

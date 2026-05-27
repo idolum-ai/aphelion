@@ -99,7 +99,7 @@ type approvalWindowRouter interface {
 	DoubleApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error)
 	CancelApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error)
 	CancelApprovalWindowOfferResult(ctx context.Context, offerID string, senderID int64) (core.ApprovalWindowCancelResult, error)
-	CloseApprovalWindowOffer(ctx context.Context, offerID string) error
+	CloseApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) error
 }
 
 type commandScopedMemoryRouter interface {

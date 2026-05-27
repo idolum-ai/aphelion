@@ -19,7 +19,7 @@ type approvalWindowFacadeRouter interface {
 	EnableApprovalWindowOffer(ctx context.Context, offerID string, senderID int64, duration time.Duration) (string, error)
 	DoubleApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error)
 	CancelApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error)
-	CloseApprovalWindowOffer(ctx context.Context, offerID string) error
+	CloseApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) error
 }
 
 var _ approvalWindowFacadeRouter = telegramCommandControl{}

@@ -165,7 +165,7 @@ func initialDecisionRows(ctx context.Context, pending decision.PendingDecision, 
 }
 
 type approvalWindowOfferCloser interface {
-	CloseApprovalWindowOffer(ctx context.Context, offerID string) error
+	CloseApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) error
 }
 
 func closeApprovalWindowOffer(ctx context.Context, offerer ApprovalWindowOfferer, offerID string) error {
@@ -173,7 +173,7 @@ func closeApprovalWindowOffer(ctx context.Context, offerer ApprovalWindowOfferer
 	if !ok {
 		return nil
 	}
-	return closer.CloseApprovalWindowOffer(ctx, offerID)
+	return closer.CloseApprovalWindowOffer(ctx, offerID, 0)
 }
 
 func recordDecisionCallbackThread(ctx context.Context, recorder DecisionCallbackThreadRecorder, pending decision.PendingDecision, messageID int64) error {

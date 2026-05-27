@@ -37,7 +37,7 @@ type Runtime interface {
 	DoubleApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error)
 	CancelApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error)
 	CancelApprovalWindowOfferResult(ctx context.Context, offerID string, senderID int64) (core.ApprovalWindowCancelResult, error)
-	CloseApprovalWindowOffer(ctx context.Context, offerID string) error
+	CloseApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) error
 	ApprovalWindowOfferByID(offerID string) (session.ApprovalWindowOffer, bool, error)
 	RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error)
 	RefreshContinuationProposalForKey(ctx context.Context, key session.SessionKey, reason string) (session.ContinuationState, bool, error)

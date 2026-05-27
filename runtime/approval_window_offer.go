@@ -41,6 +41,9 @@ func (r *Runtime) CreateApprovalWindowOfferForKey(ctx context.Context, key sessi
 		return session.ApprovalWindowOffer{}, false, err
 	} else if ok {
 		if !existing.UsedAt.IsZero() {
+			if existing.OpenedLeaseID == "" && existing.OpenedOverrideID == "" {
+				return existing, true, nil
+			}
 			if _, _, live, liveErr := r.liveApprovalWindowForOffer(existing, existing.AdminUserID, now); liveErr != nil {
 				return session.ApprovalWindowOffer{}, false, liveErr
 			} else if !live {
@@ -111,15 +114,43 @@ func (r *Runtime) EnableApprovalWindowOfferResult(ctx context.Context, offerID s
 		_, _, _ = r.store.CloseClaimedUnopenedApprovalWindowOffer(offer.ID, time.Now().UTC())
 		return result, err
 	}
-	opened, ok, err := r.store.MarkApprovalWindowOfferOpened(offer.ID, result.LeaseID, result.OverrideID, time.Now().UTC())
-	if err != nil {
+	if err := r.bindApprovalWindowOfferOrRollback(claimed, adminUserID, result); err != nil {
 		return core.ApprovalWindowEnableResult{}, err
 	}
-	if !ok {
-		return core.ApprovalWindowEnableResult{}, fmt.Errorf("approval window offer is no longer active")
-	}
-	_ = opened
 	return result, nil
+}
+
+func (r *Runtime) bindApprovalWindowOfferOrRollback(claimed session.ApprovalWindowOffer, adminUserID int64, result core.ApprovalWindowEnableResult) error {
+	if r == nil || r.store == nil || !result.Active {
+		return nil
+	}
+	now := time.Now().UTC()
+	opened, ok, err := r.store.MarkApprovalWindowOfferOpened(claimed.ID, result.LeaseID, result.OverrideID, now)
+	if err == nil && ok {
+		_ = opened
+		return nil
+	}
+	rollbackErr := r.revokeCreatedApprovalWindowForOffer(claimed, adminUserID, result, now)
+	if err != nil {
+		if rollbackErr != nil {
+			return fmt.Errorf("mark approval window offer opened: %w; rollback failed: %v", err, rollbackErr)
+		}
+		return err
+	}
+	if rollbackErr != nil {
+		return fmt.Errorf("approval window offer is no longer active; rollback failed: %w", rollbackErr)
+	}
+	return fmt.Errorf("approval window offer is no longer active")
+}
+
+func (r *Runtime) revokeCreatedApprovalWindowForOffer(offer session.ApprovalWindowOffer, adminUserID int64, result core.ApprovalWindowEnableResult, now time.Time) error {
+	if r == nil || r.store == nil || !result.Active || result.LeaseID == "" || result.OverrideID == "" {
+		return nil
+	}
+	offer = session.NormalizeApprovalWindowOffer(offer)
+	scopeKind, scopeID := session.OperatorAutoScopeForRef(offer.ScopeRef())
+	_, _, _, err := r.store.RevokeOperatorApprovalWindowByIDs(offer.ChatID, adminUserID, scopeKind, scopeID, result.LeaseID, result.OverrideID, now)
+	return err
 }
 
 func (r *Runtime) repairClaimedApprovalWindowOffer(_ context.Context, offer session.ApprovalWindowOffer, adminUserID int64) (core.ApprovalWindowEnableResult, error) {
@@ -131,8 +162,11 @@ func (r *Runtime) repairClaimedApprovalWindowOffer(_ context.Context, offer sess
 	if live {
 		return core.ApprovalWindowEnableResult{Text: renderApprovalWindowEnabled(lease, override, now), Active: true, LeaseID: lease.ID, OverrideID: override.ID}, nil
 	}
-	_, _, _ = r.closeOfferIfStillBound(offer, now)
-	return core.ApprovalWindowEnableResult{}, fmt.Errorf("approval window offer was claimed but no matching live approval window exists; offer closed")
+	if offer.OpenedLeaseID != "" || offer.OpenedOverrideID != "" {
+		_, _, _ = r.closeOfferIfStillBound(offer, now)
+		return core.ApprovalWindowEnableResult{}, fmt.Errorf("approval window offer was opened but no matching live approval window exists; offer closed")
+	}
+	return core.ApprovalWindowEnableResult{}, fmt.Errorf("approval window offer is already being opened")
 }
 
 func (r *Runtime) liveApprovalWindowForOffer(offer session.ApprovalWindowOffer, adminUserID int64, now time.Time) (session.OperatorAutoApprovalLease, session.OperatorAutonomyOverride, bool, error) {
@@ -313,7 +347,7 @@ func (r *Runtime) closeOfferIfStillBound(offer session.ApprovalWindowOffer, now 
 	return r.store.CloseUnusedApprovalWindowOffer(offer.ID, now)
 }
 
-func (r *Runtime) CloseApprovalWindowOffer(ctx context.Context, offerID string) error {
+func (r *Runtime) CloseApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) error {
 	_ = ctx
 	if r == nil || r.store == nil {
 		return nil
@@ -325,6 +359,9 @@ func (r *Runtime) CloseApprovalWindowOffer(ctx context.Context, offerID string) 
 	offer = session.NormalizeApprovalWindowOffer(offer)
 	now := time.Now().UTC()
 	if offer.OpenedLeaseID == "" && offer.OpenedOverrideID == "" {
+		if !offer.UsedAt.IsZero() {
+			return fmt.Errorf("approval window offer is already being opened")
+		}
 		_, _, err := r.closeOfferIfStillBound(offer, now)
 		return err
 	}
@@ -335,6 +372,9 @@ func (r *Runtime) CloseApprovalWindowOffer(ctx context.Context, offerID string) 
 	if !live {
 		_, _, err := r.closeOfferIfStillBound(offer, now)
 		return err
+	}
+	if !r.IsTelegramAdmin(senderID) {
+		return fmt.Errorf("approval windows are admin only")
 	}
 	revokedLeases, revokedOverrides, canceled, err := r.store.RevokeOperatorApprovalWindowByIDs(offer.ChatID, offer.AdminUserID, lease.ScopeKind, lease.ScopeID, offer.OpenedLeaseID, offer.OpenedOverrideID, now)
 	if err != nil {

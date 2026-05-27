@@ -451,8 +451,8 @@ func TestApprovalWindowCloseCallbackOnlyClearsButtons(t *testing.T) {
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if router.approvalWindowAction != approvalWindowActionClose || router.approvalWindowOfferID != "offer-test" {
-		t.Fatalf("approval close = action:%q offer:%q, want close/offer-test", router.approvalWindowAction, router.approvalWindowOfferID)
+	if router.approvalWindowAction != approvalWindowActionClose || router.approvalWindowOfferID != "offer-test" || router.approvalWindowSenderID != 1001 {
+		t.Fatalf("approval close = action:%q offer:%q sender:%d, want close/offer-test/1001", router.approvalWindowAction, router.approvalWindowOfferID, router.approvalWindowSenderID)
 	}
 	if len(sender.editClear) != 1 || sender.editClear[0].text != "Approved." {
 		t.Fatalf("editClear = %#v, want original text without controls", sender.editClear)

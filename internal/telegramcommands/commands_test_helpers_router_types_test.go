@@ -127,6 +127,7 @@ type stubCommandRouter struct {
 	approvalWindowAction              string
 	approvalWindowCancelCalls         int
 	approvalWindowOfferID             string
+	approvalWindowSenderID            int64
 	approvalWindowOfferSource         string
 	approvalWindowMessage             *core.InboundMessage
 	approvalWindowDuration            time.Duration

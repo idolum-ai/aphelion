@@ -179,11 +179,11 @@ func (c CommandControl) CancelApprovalWindowOfferResult(ctx context.Context, off
 	return c.Runtime.CancelApprovalWindowOfferResult(ctx, offerID, senderID)
 }
 
-func (c CommandControl) CloseApprovalWindowOffer(ctx context.Context, offerID string) error {
+func (c CommandControl) CloseApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) error {
 	if c.Runtime == nil {
 		return nil
 	}
-	return c.Runtime.CloseApprovalWindowOffer(ctx, offerID)
+	return c.Runtime.CloseApprovalWindowOffer(ctx, offerID, senderID)
 }
 
 func (c CommandControl) ApprovalWindowOfferByID(offerID string) (session.ApprovalWindowOffer, bool, error) {

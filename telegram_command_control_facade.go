@@ -123,8 +123,8 @@ func (c telegramCommandControl) CancelApprovalWindowOffer(ctx context.Context, o
 func (c telegramCommandControl) CancelApprovalWindowOfferResult(ctx context.Context, offerID string, senderID int64) (core.ApprovalWindowCancelResult, error) {
 	return c.controlFacade().CancelApprovalWindowOfferResult(ctx, offerID, senderID)
 }
-func (c telegramCommandControl) CloseApprovalWindowOffer(ctx context.Context, offerID string) error {
-	return c.controlFacade().CloseApprovalWindowOffer(ctx, offerID)
+func (c telegramCommandControl) CloseApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) error {
+	return c.controlFacade().CloseApprovalWindowOffer(ctx, offerID, senderID)
 }
 func (c telegramCommandControl) ApprovalWindowOfferByID(offerID string) (session.ApprovalWindowOffer, bool, error) {
 	return c.controlFacade().ApprovalWindowOfferByID(offerID)

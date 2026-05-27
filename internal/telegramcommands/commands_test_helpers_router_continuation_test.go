@@ -366,9 +366,10 @@ func (s *stubCommandRouter) CancelApprovalWindowOfferResult(_ context.Context, o
 	return core.ApprovalWindowCancelResult{Text: "Approval window canceled.", Canceled: true}, nil
 }
 
-func (s *stubCommandRouter) CloseApprovalWindowOffer(_ context.Context, offerID string) error {
+func (s *stubCommandRouter) CloseApprovalWindowOffer(_ context.Context, offerID string, senderID int64) error {
 	s.approvalWindowAction = approvalWindowActionClose
 	s.approvalWindowOfferID = offerID
+	s.approvalWindowSenderID = senderID
 	return s.approvalWindowErr
 }
 
