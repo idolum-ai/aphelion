@@ -55,7 +55,6 @@ diagram_bases=(
   "04-durable-topology"
   "05-state-surfaces"
   "06-delivery-polymorphism"
-  "07-present-vs-intended"
 )
 
 for base in "${diagram_bases[@]}"; do
