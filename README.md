@@ -1,44 +1,101 @@
 # Aphelion
 
-Aphelion lets you operate a personal AI agent from Telegram with explicit
-consent and auditable execution. It runs as a Linux service on a machine you
-control.
+Aphelion is a personal AI harness built for distance. It runs as a Linux
+service on a machine you control and gives you a Telegram operator surface.
+Every action passes through explicit consent on its way to a typed audit
+ledger.
+
+The agent inside Aphelion can fork its own work into parallel side threads,
+promote a thread into a distinct sub-agent, and push that sub-agent to a
+remote machine over Tailscale — all under the same authority model. The user
+is the final arbiter; the architecture takes care of the rest.
 
 ## Why Aphelion
 
-Most AI harnesses are built for a developer at a terminal. Aphelion is built
-for an operator with a phone.
+Most personal AI harnesses are built for a developer at a terminal. Aphelion
+is built for an operator running their agent at a remove — from a phone,
+across time, across machines they don't sit at, and across the boundary
+between intention and action where things tend to go wrong.
 
-- **You approve before the agent acts.** Every tool call waits for your
-  explicit OK, or for a time-bounded approval window you opened.
-- **The audit is structural.** Authority, consent, leases, grants, and
-  execution are rows in a SQLite ledger; the chat transcript is the
-  presentation layer.
-- **You operate from Telegram.** Approve, inspect, stop, recover, and review
-  evidence from your phone. The CLI handles install and local repair.
-- **You own the machine.** Linux only, single binary, single host. No cloud
-  account, no SaaS dashboard.
-- **You pick the model.** Anthropic, OpenAI, OpenRouter, Gemini, or Ollama,
-  configurable per work lane, with failover.
+### Two layers, two reference frames
+
+The agent inside Aphelion is two collaborating roles, not one persona. The
+**face** (`Idolum` by default) is who you talk to — present, direct,
+conversation-oriented. The **governor** (`Idolum (System)`) is what holds
+authority, decides what the face is allowed to commit to, and produces the
+typed records that survive the conversation. The two argue internally. When
+they reach an impasse on something material, the conversation pauses and asks
+you to arbitrate.
+
+This is structural, not theatrical. The face cannot grant itself permissions;
+the governor never speaks to you directly. You remain the source of authority,
+but you are not the constant context driving what the protected layer is
+doing. Think of the restaurant kitchen: you order from a waiter, and you
+don't usually speak to the cook. That structure exists so the meal arrives
+faster, hotter, and right. You can always ask to speak to the cook; that path
+stays open. Aphelion is shaped the same way.
+
+### Authority before capability
+
+Permissions in Aphelion are not configuration files. They are typed records
+that travel through a pipeline: `request → classify → review → provision →
+attest → grant → expose → observe → renew/revoke`. Each tool, each remote-host
+child, each external account, each capability that crosses a trust boundary
+lives on this lane. The runtime cannot invoke something it does not have an
+active, unexpired grant for.
+
+A child agent on a remote Tailnet host has a different permission envelope
+than the parent. A side thread you promoted into its own agent inherits scope
+from the promotion act, not from ambient parent state. Scaling permissions up
+or down is an explicit governed step, not a config edit; the operator and the
+durable record are both involved.
+
+### Continuity is structural
+
+Aphelion remembers, parks work during deploys, recovers after restarts, and
+explains what happened. Every meaningful event — ingress, turn, tool call,
+delivery, continuation authorization — becomes a typed row in an
+execution-events ledger. `/status` and `/health trace` are projections of
+that ledger with source attribution, not log dumps. If the service crashes
+mid-turn, the next start picks up the typed run and either resumes it or
+surfaces it for repair.
+
+The design principle behind this: *prefer typed records over interpreting
+prose*. The conversation transcript is presentation; the ledger is truth.
+
+### Small surface, defended on purpose
+
+Three direct module dependencies: SQLite (vendored in-repo), a TOML parser,
+and Tailscale (the substrate that enables remote-host children). Everything
+else is pinned and small. No system packages required, no services beyond
+systemd, no SaaS account anywhere in the loop.
+
+This is defensive, not aesthetic. Recent campaigns like Mini Shai-Hulud
+(170+ npm and PyPI packages compromised, valid SLSA Build Level 3 attestations
+broken) and the cascade following autonomous vulnerability-discovery
+capabilities reaching production make small, deliberate dependency trees a
+runtime safety property. Aphelion treats its dependency tree the way it
+treats user input reaching the governor: as ambient context that should not
+be allowed to steer the runtime by default.
 
 ## What's in the box
 
 - **Operator surfaces (Telegram):** approvals, `/health`, `/status`,
-  `/context`, `/memory`, `/mission`, `/model`, side threads via `/thread`.
+  `/context`, `/memory`, `/mission`, `/model`, side threads via `/thread`,
+  thread-to-agent promotion.
 - **Voice:** Telegram voice-note transcription on input; optional ElevenLabs
   replies on output.
 - **Tools:** scoped exec, file, search, and fetch tools; curated memory and
   session recall; optional OpenAI hosted-storage integration.
-- **Automation:** heartbeat, cron, and bounded auto-approval leases with
+- **Automation:** heartbeat, cron, and bounded approval-window grants with
   separate state for the main chat and each side thread.
 - **Durable children:** configured agents that survive restarts, with daily
   review recipes, Telegram group admission, and Tailnet provisioning of
   remote-host children.
+- **Providers:** Anthropic, OpenAI, OpenRouter, Gemini, Ollama —
+  configurable per work lane, with failover.
 - **Service plumbing:** Linux user-service install/update scripts, optional
   GitHub App token helper, health and inventory surfaces.
-
-The design direction lives in
-[docs/architecture/design-principles.md](docs/architecture/design-principles.md).
 
 ## Install
 
@@ -79,6 +136,7 @@ together.
 - Contributors: [Contributor Handbook](docs/guides/contributor-handbook.md)
 - Full docs map: [docs/README.md](docs/README.md)
 - Current promises: [docs/promises.md](docs/promises.md)
+- Design substrate: see [Going deeper](#going-deeper) below
 
 ## Operate
 
@@ -144,11 +202,11 @@ All other packages (`agent`, `config`, `core`, `face`, `prompt`, `provider`,
 `session`, `tool`, etc.) are implementation details consumed by `runtime`.
 
 Full architecture set (package map, turn sequence, constitutional flow,
-durable topology, state surfaces, delivery polymorphism, present vs.
-intended): [docs/architecture/README.md](docs/architecture/README.md). Package
-detail: [runtime/README.md](runtime/README.md),
-[turn/README.md](turn/README.md), [pipeline/README.md](pipeline/README.md).
-Requirements: [requirements/INDEX.md](requirements/INDEX.md).
+durable topology, state surfaces, delivery polymorphism):
+[docs/architecture/README.md](docs/architecture/README.md). Package detail:
+[runtime/README.md](runtime/README.md), [turn/README.md](turn/README.md),
+[pipeline/README.md](pipeline/README.md). Requirements:
+[requirements/INDEX.md](requirements/INDEX.md).
 
 ## Verify
 
@@ -174,6 +232,24 @@ status, or operator-facing control surfaces.
 Run `make live-evals` or the narrower `make auto-evals` *(opt-in; spend
 provider API calls)* before releases that materially change agency,
 authority, proactive mission, or prompt behavior.
+
+## Going deeper
+
+For readers who want the design substrate, not just the operator surface:
+
+- [Design principles](docs/architecture/design-principles.md) — the
+  load-bearing principles that govern implementation choices.
+- [Influences and departures](docs/architecture/influences-and-departures.md)
+  — what Aphelion borrowed from where (Codex, Hermes, OpenClaw, Julian
+  Jaynes, behavioral agency literature) and where it deliberately stops.
+- [Spectral Faithfulness](https://github.com/idolum-ai/spectral-faithfulness)
+  — sibling research project measuring how silently context steers model
+  output. Aphelion's compositional-identity design treats those findings as
+  load-bearing.
+- [Architecture reference set](docs/architecture/README.md) — package
+  ownership, turn lifecycle, constitutional flow, durable topology, state
+  surfaces, delivery polymorphism.
+- [Requirements index](requirements/INDEX.md) — the normative behavior spec.
 
 ## Support
 
