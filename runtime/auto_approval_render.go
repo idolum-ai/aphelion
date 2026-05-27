@@ -13,7 +13,7 @@ import (
 
 func renderOperatorAutoApprovalRevoked(leases []session.OperatorAutoApprovalLease, now time.Time) string {
 	state := "off"
-	next := "Approve one request and use the inline approval-window controls to open a bounded grant."
+	next := "Approve one request and use the inline approval-window controls to open a bounded approval window."
 	if len(leases) == 0 {
 		return renderRuntimeCompactPanel(face.OperatorPanel{
 			Title: "Auto approvals",
@@ -28,16 +28,16 @@ func renderOperatorAutoApprovalRevoked(leases []session.OperatorAutoApprovalLeas
 	active := operatorAutoApprovalActiveLeases(leases, now)
 	detail := ""
 	if len(active) > 0 {
-		detail = "Cleared active grant: " + operatorAutoApprovalGrantSummary(active) + "."
+		detail = "Cleared active approval window: " + operatorAutoApprovalWindowSummary(active) + "."
 	} else {
 		latest := session.NormalizeOperatorAutoApprovalLease(leases[0])
 		switch {
 		case !latest.ExpiresAt.IsZero() && !latest.ExpiresAt.After(now.UTC()):
-			detail = "Cleared old expired " + operatorAutoApprovalGrantNoun(leases) + operatorAutoApprovalClearedOldGrantDetail(leases) + "."
+			detail = "Cleared old expired " + operatorAutoApprovalWindowNoun(leases) + operatorAutoApprovalClearedOldWindowDetail(leases) + "."
 		case latest.MaxUses > 0 && latest.UsedCount >= latest.MaxUses:
-			detail = "Cleared old spent " + operatorAutoApprovalGrantNoun(leases) + operatorAutoApprovalClearedOldGrantDetail(leases) + "."
+			detail = "Cleared old spent " + operatorAutoApprovalWindowNoun(leases) + operatorAutoApprovalClearedOldWindowDetail(leases) + "."
 		default:
-			detail = "Cleared old " + operatorAutoApprovalGrantNoun(leases) + operatorAutoApprovalClearedOldGrantDetail(leases) + "."
+			detail = "Cleared old " + operatorAutoApprovalWindowNoun(leases) + operatorAutoApprovalClearedOldWindowDetail(leases) + "."
 		}
 	}
 	return renderRuntimeCompactPanel(face.OperatorPanel{
@@ -65,19 +65,19 @@ func operatorAutoApprovalActiveLeases(leases []session.OperatorAutoApprovalLease
 	return out
 }
 
-func operatorAutoApprovalClearedOldGrantDetail(leases []session.OperatorAutoApprovalLease) string {
+func operatorAutoApprovalClearedOldWindowDetail(leases []session.OperatorAutoApprovalLease) string {
 	if len(leases) != 1 {
 		return ""
 	}
-	return ": " + operatorAutoApprovalGrantSummary(leases)
+	return ": " + operatorAutoApprovalWindowSummary(leases)
 }
 
-func operatorAutoApprovalGrantSummary(leases []session.OperatorAutoApprovalLease) string {
+func operatorAutoApprovalWindowSummary(leases []session.OperatorAutoApprovalLease) string {
 	if len(leases) == 0 {
-		return "0 grants"
+		return "0 approval windows"
 	}
 	if len(leases) > 1 {
-		return fmt.Sprintf("%d grants", len(leases))
+		return fmt.Sprintf("%d approval windows", len(leases))
 	}
 	lease := session.NormalizeOperatorAutoApprovalLease(leases[0])
 	used := fmt.Sprintf("used %d %s", lease.UsedCount, pluralWord(lease.UsedCount, "time", "times"))
@@ -98,11 +98,11 @@ func operatorAutoApprovalScopeLabel(scope string) string {
 	}
 }
 
-func operatorAutoApprovalGrantNoun(leases []session.OperatorAutoApprovalLease) string {
+func operatorAutoApprovalWindowNoun(leases []session.OperatorAutoApprovalLease) string {
 	if len(leases) == 1 {
-		return "grant"
+		return "approval window"
 	}
-	return "grants"
+	return "approval windows"
 }
 
 func pluralWord(count int, singular string, plural string) string {
@@ -124,10 +124,10 @@ func renderOperatorAutoApprovalEnabled(lease session.OperatorAutoApprovalLease, 
 	if reason := strings.TrimSpace(lease.Reason); reason != "" {
 		details = append(details, "Reason: "+reason)
 	}
-	why := "Eligible approval prompts in this chat may be answered automatically until the grant expires or is spent."
+	why := "Eligible approval prompts in this chat may be answered automatically until the approval window expires or is spent."
 	if blockedReason = strings.TrimSpace(blockedReason); blockedReason != "" {
 		details = append(details, "Mode: blocked - "+blockedReason+".")
-		why = "This grant is recorded, but it will not be spent until auto mode allows matching prompts."
+		why = "This approval window is recorded, but it will not be used until auto mode allows matching prompts."
 	}
 	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title:   "Auto approvals",
@@ -151,10 +151,10 @@ func renderOperatorAutoApprovalDoubled(lease session.OperatorAutoApprovalLease, 
 	if reason := strings.TrimSpace(lease.Reason); reason != "" {
 		details = append(details, "Reason: "+reason)
 	}
-	why := "Expanded the current auto approval grant by doubling its full time window."
+	why := "Expanded the current auto-approval window by doubling its full time window."
 	if blockedReason = strings.TrimSpace(blockedReason); blockedReason != "" {
 		details = append(details, "Mode: blocked - "+blockedReason+".")
-		why = "Expanded the grant, but it will not be spent until auto mode allows matching prompts."
+		why = "Expanded the approval window, but it will not be used until auto mode allows matching prompts."
 	}
 	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title:   "Auto approvals",
@@ -178,10 +178,10 @@ func renderOperatorAutoApprovalStatusActive(lease session.OperatorAutoApprovalLe
 	if lease.Reason != "" {
 		details = append(details, "Reason: "+lease.Reason)
 	}
-	why := "Eligible approval prompts in this chat can use this bounded grant."
+	why := "Eligible approval prompts in this chat can use this bounded approval window."
 	if blockedReason = strings.TrimSpace(blockedReason); blockedReason != "" {
 		details = append(details, "Mode: blocked - "+blockedReason+".")
-		why = "This grant is active, but it will not be spent until auto mode allows matching prompts."
+		why = "This approval window is active, but it will not be used until auto mode allows matching prompts."
 	}
 	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title:   "Auto approvals",
@@ -205,10 +205,10 @@ func renderOperatorAutoApprovalStatusInactive(lease session.OperatorAutoApproval
 	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title: "Auto approvals",
 		State: "inactive",
-		Why:   "No current approval prompt will use this old grant.",
-		Next:  "Approve one request and use the inline approval-window controls to open a bounded grant.",
+		Why:   "No current approval prompt will use this old approval window.",
+		Next:  "Approve one request and use the inline approval-window controls to open a bounded approval window.",
 		Details: []string{
-			"Last grant: " + reason + ".",
+			"Last approval window: " + reason + ".",
 		},
 	})
 }
