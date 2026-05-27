@@ -203,6 +203,98 @@ func (s *SQLiteStore) MarkApprovalWindowOfferOpened(id string, leaseID string, o
 	return offer, ok, nil
 }
 
+func (s *SQLiteStore) CloseUnusedApprovalWindowOffer(id string, now time.Time) (ApprovalWindowOffer, bool, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ApprovalWindowOffer{}, false, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	stamp := now.UTC().Format(time.RFC3339Nano)
+	return s.closeApprovalWindowOfferWhere(id, stamp, `
+			AND used_at IS NULL
+			AND TRIM(opened_lease_id) = ''
+			AND TRIM(opened_override_id) = ''
+	`)
+}
+
+func (s *SQLiteStore) CloseClaimedUnopenedApprovalWindowOffer(id string, now time.Time) (ApprovalWindowOffer, bool, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ApprovalWindowOffer{}, false, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	stamp := now.UTC().Format(time.RFC3339Nano)
+	return s.closeApprovalWindowOfferWhere(id, stamp, `
+			AND used_at IS NOT NULL
+			AND TRIM(opened_lease_id) = ''
+			AND TRIM(opened_override_id) = ''
+	`)
+}
+
+func (s *SQLiteStore) CloseApprovalWindowOfferIfOpened(id string, openedLeaseID string, openedOverrideID string, now time.Time) (ApprovalWindowOffer, bool, error) {
+	id = strings.TrimSpace(id)
+	openedLeaseID = strings.TrimSpace(openedLeaseID)
+	openedOverrideID = strings.TrimSpace(openedOverrideID)
+	if id == "" || openedLeaseID == "" || openedOverrideID == "" {
+		return ApprovalWindowOffer{}, false, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	stamp := now.UTC().Format(time.RFC3339Nano)
+	res, err := s.db.Exec(`
+		UPDATE approval_window_offers
+		SET closed_at = COALESCE(closed_at, ?), updated_at = ?
+		WHERE offer_id = ?
+			AND closed_at IS NULL
+			AND opened_lease_id = ?
+			AND opened_override_id = ?
+	`, stamp, stamp, id, openedLeaseID, openedOverrideID)
+	if err != nil {
+		return ApprovalWindowOffer{}, false, fmt.Errorf("close approval window offer if opened: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return ApprovalWindowOffer{}, false, fmt.Errorf("approval window offer conditional close rows affected: %w", err)
+	}
+	if affected == 0 {
+		return ApprovalWindowOffer{}, false, nil
+	}
+	offer, ok, err := s.ApprovalWindowOffer(id)
+	if err != nil {
+		return ApprovalWindowOffer{}, false, err
+	}
+	return offer, ok, nil
+}
+
+func (s *SQLiteStore) closeApprovalWindowOfferWhere(id string, stamp string, extraWhere string) (ApprovalWindowOffer, bool, error) {
+	res, err := s.db.Exec(`
+		UPDATE approval_window_offers
+		SET closed_at = COALESCE(closed_at, ?), updated_at = ?
+		WHERE offer_id = ?
+			AND closed_at IS NULL
+	`+extraWhere, stamp, stamp, id)
+	if err != nil {
+		return ApprovalWindowOffer{}, false, fmt.Errorf("close approval window offer conditionally: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return ApprovalWindowOffer{}, false, fmt.Errorf("approval window offer conditional close rows affected: %w", err)
+	}
+	if affected == 0 {
+		return ApprovalWindowOffer{}, false, nil
+	}
+	offer, ok, err := s.ApprovalWindowOffer(id)
+	if err != nil {
+		return ApprovalWindowOffer{}, false, err
+	}
+	return offer, ok, nil
+}
+
 func (s *SQLiteStore) CloseApprovalWindowOffer(id string, now time.Time) (ApprovalWindowOffer, bool, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {

@@ -503,6 +503,103 @@ func TestRevokeOperatorApprovalWindowByIDsDoesNotRevokeNewerWindow(t *testing.T)
 	}
 }
 
+func TestCloseApprovalWindowOfferIfOpenedRequiresExpectedBinding(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC()
+	offer, err := store.CreateApprovalWindowOffer(ApprovalWindowOffer{
+		ID:                 "offer-close-binding",
+		ChatID:             7006,
+		AdminUserID:        1001,
+		ScopeKind:          string(ScopeKindTelegramDM),
+		ScopeID:            "7006",
+		SourceKind:         ApprovalWindowOfferSourceDecision,
+		SourceID:           "decision-close-binding",
+		SourceDecisionKind: "proposal_approval",
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(time.Hour),
+		UpdatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
+	}
+	if _, ok, err := store.MarkApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
+		t.Fatalf("MarkApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
+	}
+	if _, ok, err := store.MarkApprovalWindowOfferOpened(offer.ID, "lease-new", "override-new", now.Add(2*time.Second)); err != nil || !ok {
+		t.Fatalf("MarkApprovalWindowOfferOpened() ok=%t err=%v", ok, err)
+	}
+	if closed, ok, err := store.CloseApprovalWindowOfferIfOpened(offer.ID, "lease-old", "override-old", now.Add(3*time.Second)); err != nil || ok {
+		t.Fatalf("CloseApprovalWindowOfferIfOpened(stale) = %#v, %t, %v; want CAS miss", closed, ok, err)
+	}
+	stored, ok, err := store.ApprovalWindowOffer(offer.ID)
+	if err != nil || !ok {
+		t.Fatalf("ApprovalWindowOffer() ok=%t err=%v", ok, err)
+	}
+	if !stored.ClosedAt.IsZero() {
+		t.Fatalf("stored.ClosedAt = %s, want open after stale close miss", stored.ClosedAt)
+	}
+	if closed, ok, err := store.CloseApprovalWindowOfferIfOpened(offer.ID, "lease-new", "override-new", now.Add(4*time.Second)); err != nil || !ok {
+		t.Fatalf("CloseApprovalWindowOfferIfOpened(current) = %#v, %t, %v; want close", closed, ok, err)
+	}
+}
+
+func TestCloseUnusedApprovalWindowOfferDoesNotCloseOpenedOffer(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC()
+	unused, err := store.CreateApprovalWindowOffer(ApprovalWindowOffer{
+		ID:                 "offer-close-unused",
+		ChatID:             7007,
+		AdminUserID:        1001,
+		ScopeKind:          string(ScopeKindTelegramDM),
+		ScopeID:            "7007",
+		SourceKind:         ApprovalWindowOfferSourceDecision,
+		SourceID:           "decision-close-unused",
+		SourceDecisionKind: "proposal_approval",
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(time.Hour),
+		UpdatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer(unused) err = %v", err)
+	}
+	if _, ok, err := store.CloseUnusedApprovalWindowOffer(unused.ID, now.Add(time.Second)); err != nil || !ok {
+		t.Fatalf("CloseUnusedApprovalWindowOffer(unused) ok=%t err=%v", ok, err)
+	}
+	opened, err := store.CreateApprovalWindowOffer(ApprovalWindowOffer{
+		ID:                 "offer-close-opened",
+		ChatID:             7007,
+		AdminUserID:        1001,
+		ScopeKind:          string(ScopeKindTelegramDM),
+		ScopeID:            "7007",
+		SourceKind:         ApprovalWindowOfferSourceDecision,
+		SourceID:           "decision-close-opened",
+		SourceDecisionKind: "proposal_approval",
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(time.Hour),
+		UpdatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer(opened) err = %v", err)
+	}
+	if _, ok, err := store.MarkApprovalWindowOfferUsed(opened.ID, now.Add(time.Second)); err != nil || !ok {
+		t.Fatalf("MarkApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
+	}
+	if _, ok, err := store.MarkApprovalWindowOfferOpened(opened.ID, "lease-opened", "override-opened", now.Add(2*time.Second)); err != nil || !ok {
+		t.Fatalf("MarkApprovalWindowOfferOpened() ok=%t err=%v", ok, err)
+	}
+	if closed, ok, err := store.CloseUnusedApprovalWindowOffer(opened.ID, now.Add(3*time.Second)); err != nil || ok {
+		t.Fatalf("CloseUnusedApprovalWindowOffer(opened) = %#v, %t, %v; want no close", closed, ok, err)
+	}
+}
+
 func TestApprovalWindowOfferUsedMarkIsCAS(t *testing.T) {
 	t.Parallel()
 
