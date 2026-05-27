@@ -2,6 +2,9 @@
 
 ![Package map](diagrams/01-package-map.svg)
 
+*Package layout grouped by role; runtime is the central shell consuming
+storage, transport, providers, capabilities, and shared domain packages.*
+
 ## Root Package
 
 The root package is the single-binary composition surface.
