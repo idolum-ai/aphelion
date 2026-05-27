@@ -294,17 +294,18 @@ func renderHealthTracePage(projection debugSnapshotProjection, page int) (string
 	}
 	section := sections[0]
 	var b strings.Builder
-	b.WriteString("Health Trace\n")
-	b.WriteString("Status: section ")
+	// Single-line breadcrumb collapses Title + page + section name. The
+	// previous header repeated a constant 'Why: This page is a projection
+	// of the current status ledger.' on every page; it carried no
+	// per-section information and ate scarce mobile viewport.
+	b.WriteString("Health Trace · section ")
 	b.WriteString(strconv.Itoa(info.Page))
 	b.WriteString(" of ")
 	b.WriteString(strconv.Itoa(info.PageCount))
-	b.WriteString("\n")
-	b.WriteString("Why: This page is a projection of the current status ledger.\n")
-	b.WriteString("Next: Use Next or Prev for nearby evidence, or Summary for the compact view.\n")
-	b.WriteString("Section: ")
+	b.WriteString(" · ")
 	b.WriteString(strings.TrimSpace(section.Title))
-	b.WriteString("\n\n")
+	b.WriteString("\n")
+	b.WriteString("Next or Prev for nearby evidence; Summary for the compact view.\n\n")
 	b.WriteString(strings.TrimSpace(section.Text))
 	return strings.TrimSpace(b.String()), healthTracePageRows(info)
 }
