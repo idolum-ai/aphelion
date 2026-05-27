@@ -63,9 +63,13 @@ func (r *Registry) toolAuthorityAuditRun(ctx context.Context, in toolAuthorityIn
 			installRecord.StaleReason = string(record.DriftSource) + ": " + err.Error()
 			installRecord.DriftSource = record.DriftSource
 			installRecord.UpdatedAt = now
-			_, _ = r.store.UpsertToolInstallRecord(installRecord)
+			if _, updateErr := r.store.UpsertToolInstallRecord(installRecord); updateErr != nil {
+				return "", updateErr
+			}
 		}
-		_ = r.appendToolAuthorityEvent(key, core.ExecutionEventToolAuditUpdated, string(stored.Status), map[string]any{"tool_name": stored.ToolName, "status": string(stored.Status), "actor_role": strings.TrimSpace(string(actor.Role)), "actor_user_id": actor.TelegramUserID})
+		if eventErr := r.appendToolAuthorityEvent(key, core.ExecutionEventToolAuditUpdated, string(stored.Status), map[string]any{"tool_name": stored.ToolName, "status": string(stored.Status), "actor_role": strings.TrimSpace(string(actor.Role)), "actor_user_id": actor.TelegramUserID}); eventErr != nil {
+			warnDroppedEvidenceWrite("tool_authority.audit_run.failure_event", eventErr)
+		}
 		return "", err
 	}
 	record.Status = session.ToolAuditStatusPassed

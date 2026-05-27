@@ -86,14 +86,16 @@ func (r *Registry) toolAuthorityProbeRun(ctx context.Context, in toolAuthorityIn
 		if saveErr != nil {
 			return "", saveErr
 		}
-		_ = r.appendToolAuthorityEvent(key, core.ExecutionEventToolInstallUpdated, string(stored.Status), map[string]any{
+		if eventErr := r.appendToolAuthorityEvent(key, core.ExecutionEventToolInstallUpdated, string(stored.Status), map[string]any{
 			"tool_name":     stored.ToolName,
 			"status":        string(stored.Status),
 			"probe_status":  string(stored.ProbeStatus),
 			"install_ref":   stored.InstallRef,
 			"actor_role":    strings.TrimSpace(string(actor.Role)),
 			"actor_user_id": actor.TelegramUserID,
-		})
+		}); eventErr != nil {
+			warnDroppedEvidenceWrite("tool_authority.probe_run.failure_event", eventErr)
+		}
 		return "", err
 	}
 	record.ProbeStatus = session.ToolProbeStatusPassed

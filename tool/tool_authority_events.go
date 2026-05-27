@@ -5,6 +5,7 @@ package tool
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -38,6 +39,13 @@ func (r *Registry) appendToolLifecycleEvent(key session.SessionKey, stage string
 		return fmt.Errorf("append tool authority event %q: %w", strings.TrimSpace(eventType), err)
 	}
 	return nil
+}
+
+func warnDroppedEvidenceWrite(context string, err error) {
+	if err == nil {
+		return
+	}
+	log.Printf("WARN tool evidence write failed context=%s error=%v", strings.TrimSpace(context), err)
 }
 
 func boolToStatus(v bool) string {

@@ -255,14 +255,18 @@ func (r *Registry) markExternalToolStale(record session.ToolInstallRecord, curre
 		audit.StaleReason = reason
 		audit.DriftSource = source
 		audit.UpdatedAt = now
-		_, _ = r.store.UpsertToolAuditRecord(audit)
+		if _, err := r.store.UpsertToolAuditRecord(audit); err != nil {
+			return session.ToolInstallRecord{}, true, err
+		}
 	}
 	if probe, exists, err := r.store.ToolProbeRecord(record.ToolName); err == nil && exists {
 		setProbeRecordCurrentAnchors(&probe, current)
 		probe.StaleReason = reason
 		probe.DriftSource = source
 		probe.UpdatedAt = now
-		_, _ = r.store.UpsertToolProbeRecord(probe)
+		if _, err := r.store.UpsertToolProbeRecord(probe); err != nil {
+			return session.ToolInstallRecord{}, true, err
+		}
 	}
 	return stored, true, nil
 }

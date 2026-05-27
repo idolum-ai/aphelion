@@ -449,8 +449,10 @@ func (r *Registry) capabilityAuthorityGrantSet(ctx context.Context, in capabilit
 			failed.UpdatedAt = failed.LastFailureAt
 			if stored, storeErr := r.store.UpsertCapabilityGrant(failed); storeErr == nil {
 				grant = stored
+			} else {
+				warnDroppedEvidenceWrite("capability.grant.failure_status", storeErr)
 			}
-			_ = r.appendCapabilityEvent(key, core.ExecutionEventCapabilityGrantChanged, string(session.CapabilityGrantStatusFailed), map[string]any{
+			if eventErr := r.appendCapabilityEvent(key, core.ExecutionEventCapabilityGrantChanged, string(session.CapabilityGrantStatusFailed), map[string]any{
 				"grant_id":        grant.GrantID,
 				"request_id":      grant.RequestID,
 				"kind":            string(grant.Kind),
@@ -458,7 +460,9 @@ func (r *Registry) capabilityAuthorityGrantSet(ctx context.Context, in capabilit
 				"granted_to":      grant.GrantedTo,
 				"status":          string(session.CapabilityGrantStatusFailed),
 				"failure_reason":  failed.StaleReason,
-			})
+			}); eventErr != nil {
+				warnDroppedEvidenceWrite("capability.grant.failure_event", eventErr)
+			}
 			return renderCapabilityGrantFailure(grant, err), err
 		}
 		grantRecord.Status = session.CapabilityGrantStatusActive

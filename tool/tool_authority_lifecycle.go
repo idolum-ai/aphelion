@@ -55,13 +55,15 @@ func (r *Registry) toolAuthorityInstallExecute(ctx context.Context, in toolAutho
 		if saveErr != nil {
 			return "", saveErr
 		}
-		_ = r.appendToolAuthorityEvent(key, core.ExecutionEventToolInstallUpdated, string(stored.Status), map[string]any{
+		if eventErr := r.appendToolAuthorityEvent(key, core.ExecutionEventToolInstallUpdated, string(stored.Status), map[string]any{
 			"tool_name":     stored.ToolName,
 			"status":        string(stored.Status),
 			"install_ref":   stored.InstallRef,
 			"actor_role":    strings.TrimSpace(string(actor.Role)),
 			"actor_user_id": actor.TelegramUserID,
-		})
+		}); eventErr != nil {
+			warnDroppedEvidenceWrite("tool_authority.install_execute.failure_event", eventErr)
+		}
 		return "", err
 	}
 	record.Status = session.ToolInstallStatusInstalled
@@ -154,20 +156,24 @@ func (r *Registry) toolAuthorityRetireExternal(ctx context.Context, in toolAutho
 			if saveErr != nil {
 				return "", saveErr
 			}
-			_ = r.appendToolAuthorityEvent(key, core.ExecutionEventToolInstallUpdated, string(stored.Status), map[string]any{
+			if eventErr := r.appendToolAuthorityEvent(key, core.ExecutionEventToolInstallUpdated, string(stored.Status), map[string]any{
 				"tool_name":     stored.ToolName,
 				"status":        string(stored.Status),
 				"install_ref":   stored.InstallRef,
 				"actor_role":    strings.TrimSpace(string(actor.Role)),
 				"actor_user_id": actor.TelegramUserID,
-			})
-			_ = r.appendToolAuthorityEvent(key, eventType, "failed", map[string]any{
+			}); eventErr != nil {
+				warnDroppedEvidenceWrite("tool_authority."+mode+".failure_install_event", eventErr)
+			}
+			if eventErr := r.appendToolAuthorityEvent(key, eventType, "failed", map[string]any{
 				"tool_name":     stored.ToolName,
 				"status":        string(stored.Status),
 				"reason":        record.StaleReason,
 				"actor_role":    strings.TrimSpace(string(actor.Role)),
 				"actor_user_id": actor.TelegramUserID,
-			})
+			}); eventErr != nil {
+				warnDroppedEvidenceWrite("tool_authority."+mode+".failure_lifecycle_event", eventErr)
+			}
 			return "", err
 		}
 	}
@@ -189,13 +195,17 @@ func (r *Registry) toolAuthorityRetireExternal(ctx context.Context, in toolAutho
 		audit.StaleReason = record.StaleReason
 		audit.DriftSource = driftSource
 		audit.UpdatedAt = now
-		_, _ = r.store.UpsertToolAuditRecord(audit)
+		if _, err := r.store.UpsertToolAuditRecord(audit); err != nil {
+			return "", err
+		}
 	}
 	if probe, exists, err := r.store.ToolProbeRecord(manifest.Name); err == nil && exists {
 		probe.StaleReason = record.StaleReason
 		probe.DriftSource = driftSource
 		probe.UpdatedAt = now
-		_, _ = r.store.UpsertToolProbeRecord(probe)
+		if _, err := r.store.UpsertToolProbeRecord(probe); err != nil {
+			return "", err
+		}
 	}
 
 	registrationDisabled, err := r.disableRegisteredTool(manifest.Name, actor, key)
