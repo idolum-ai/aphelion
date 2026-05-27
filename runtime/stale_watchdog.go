@@ -39,104 +39,106 @@ func (r *Runtime) StartStaleTurnWatchdogLoop(ctx context.Context, logger func(st
 }
 
 func (r *Runtime) startStaleTurnWatchdogLoop(ctx context.Context, cadence time.Duration, logger func(string, ...any)) {
-	go runPeriodic(ctx, cadence, func(runCtx context.Context) {
-		select {
-		case <-runCtx.Done():
-			return
-		default:
-		}
+	r.startBackgroundLoop("stale_turn_watchdog", func() {
+		runPeriodic(ctx, cadence, func(runCtx context.Context) {
+			select {
+			case <-runCtx.Done():
+				return
+			default:
+			}
 
-		if !r.staleTurnWatchdogEnabled || r.staleTurnThreshold <= 0 || r.staleTurnSweep == nil {
-			return
-		}
-		now := time.Now().UTC()
-		if nextAttempt := r.staleWatchdogNextAttemptAt(); !nextAttempt.IsZero() {
-			if now.Before(nextAttempt) {
+			if !r.staleTurnWatchdogEnabled || r.staleTurnThreshold <= 0 || r.staleTurnSweep == nil {
+				return
+			}
+			now := time.Now().UTC()
+			if nextAttempt := r.staleWatchdogNextAttemptAt(); !nextAttempt.IsZero() {
+				if now.Before(nextAttempt) {
+					return
+				}
+				r.releaseStaleWatchdogLatch()
+			}
+			cutoff := now.Add(-r.staleTurnThreshold)
+			stale, err := r.staleTurnSweep(cutoff, r.staleTurnLimit)
+			if err != nil {
+				logger("WARN stale turn watchdog sweep failed: %v", err)
+				r.reportOperationalIssue(runCtx, "stale_watchdog", err)
+				return
+			}
+			if len(stale) == 0 {
+				return
+			}
+			if !r.staleWatchdogTriggered.CompareAndSwap(false, true) {
+				return
+			}
+
+			observations := r.staleTurnObservations(stale, now)
+			if err := r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogObserved, "observed", observations, map[string]any{
+				"stale_count": len(stale),
+			}, now); err != nil {
+				logger("WARN stale turn watchdog failed to record observation: %v", err)
+				r.reportOperationalIssue(runCtx, "stale_watchdog", err)
+				r.releaseStaleWatchdogLatch()
+				return
+			}
+			logger("WARN stale turn watchdog detected %d stale running turn(s); threshold=%s", len(stale), r.staleTurnThreshold)
+			r.reportOperationalIssue(runCtx, "stale_watchdog", fmt.Errorf("detected %d stale running turn(s); threshold=%s", len(stale), r.staleTurnThreshold))
+			if r.interruptStaleTurnRuns == nil {
+				nextRetryAt := r.defaultStaleWatchdogRetryAt(time.Now().UTC())
+				if err := r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogFailed, "failed", observations, map[string]any{
+					"reason":          "scoped_interrupt_persister_unavailable",
+					"next_attempt_at": nextRetryAt.Format(time.RFC3339Nano),
+				}, time.Now().UTC()); err != nil {
+					logger("WARN stale turn watchdog failed to record missing interrupt persister: %v", err)
+					r.reportOperationalIssue(runCtx, "stale_watchdog", err)
+				}
+				r.scheduleStaleWatchdogRetry(nextRetryAt)
+				return
+			}
+			cancelledIDs := r.cancelActiveTurnRuns(stale)
+			r.waitForCancelledTurnRuns(cancelledIDs, 250*time.Millisecond)
+			interrupted, interruptErr := r.interruptStaleTurnRuns(turnRunIDs(stale), "stale turn watchdog interrupted scoped turn")
+			if interruptErr != nil {
+				logger("WARN stale turn watchdog failed to interrupt running turns: %v", interruptErr)
+				r.reportOperationalIssue(runCtx, "stale_watchdog", interruptErr)
+				nextRetryAt := r.defaultStaleWatchdogRetryAt(time.Now().UTC())
+				_ = r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogFailed, "failed", observations, map[string]any{
+					"error":           trimError(interruptErr.Error()),
+					"phase":           "interrupt_scoped_turn_runs",
+					"next_attempt_at": nextRetryAt.Format(time.RFC3339Nano),
+				}, time.Now().UTC())
+				r.scheduleStaleWatchdogRetry(nextRetryAt)
+				return
+			}
+			if len(interrupted) == 0 {
+				if err := r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogRecoverySuppressed, "suppressed", observations, map[string]any{
+					"reason": "stale_rows_already_terminal",
+				}, time.Now().UTC()); err != nil {
+					logger("WARN stale turn watchdog failed to record terminal-row suppression: %v", err)
+					r.reportOperationalIssue(runCtx, "stale_watchdog", err)
+				}
+				r.releaseStaleWatchdogLatch()
+				return
+			}
+			if err := r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogRecovered, "recovered", observations, map[string]any{
+				"reason":              "scoped_turn_recovery",
+				"interrupted_count":   len(interrupted),
+				"interrupted_run_ids": turnRunIDs(interrupted),
+				"cancelled_run_ids":   cancelledIDs,
+			}, time.Now().UTC()); err != nil {
+				logger("WARN stale turn watchdog failed to record scoped recovery: %v", err)
+				r.reportOperationalIssue(runCtx, "stale_watchdog", err)
+				nextRetryAt := r.defaultStaleWatchdogRetryAt(time.Now().UTC())
+				_ = r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogFailed, "failed", observations, map[string]any{
+					"error":             trimError(err.Error()),
+					"phase":             "record_scoped_recovery",
+					"interrupted_count": len(interrupted),
+					"next_attempt_at":   nextRetryAt.Format(time.RFC3339Nano),
+				}, time.Now().UTC())
+				r.scheduleStaleWatchdogRetry(nextRetryAt)
 				return
 			}
 			r.releaseStaleWatchdogLatch()
-		}
-		cutoff := now.Add(-r.staleTurnThreshold)
-		stale, err := r.staleTurnSweep(cutoff, r.staleTurnLimit)
-		if err != nil {
-			logger("WARN stale turn watchdog sweep failed: %v", err)
-			r.reportOperationalIssue(runCtx, "stale_watchdog", err)
-			return
-		}
-		if len(stale) == 0 {
-			return
-		}
-		if !r.staleWatchdogTriggered.CompareAndSwap(false, true) {
-			return
-		}
-
-		observations := r.staleTurnObservations(stale, now)
-		if err := r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogObserved, "observed", observations, map[string]any{
-			"stale_count": len(stale),
-		}, now); err != nil {
-			logger("WARN stale turn watchdog failed to record observation: %v", err)
-			r.reportOperationalIssue(runCtx, "stale_watchdog", err)
-			r.releaseStaleWatchdogLatch()
-			return
-		}
-		logger("WARN stale turn watchdog detected %d stale running turn(s); threshold=%s", len(stale), r.staleTurnThreshold)
-		r.reportOperationalIssue(runCtx, "stale_watchdog", fmt.Errorf("detected %d stale running turn(s); threshold=%s", len(stale), r.staleTurnThreshold))
-		if r.interruptStaleTurnRuns == nil {
-			nextRetryAt := r.defaultStaleWatchdogRetryAt(time.Now().UTC())
-			if err := r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogFailed, "failed", observations, map[string]any{
-				"reason":          "scoped_interrupt_persister_unavailable",
-				"next_attempt_at": nextRetryAt.Format(time.RFC3339Nano),
-			}, time.Now().UTC()); err != nil {
-				logger("WARN stale turn watchdog failed to record missing interrupt persister: %v", err)
-				r.reportOperationalIssue(runCtx, "stale_watchdog", err)
-			}
-			r.scheduleStaleWatchdogRetry(nextRetryAt)
-			return
-		}
-		cancelledIDs := r.cancelActiveTurnRuns(stale)
-		r.waitForCancelledTurnRuns(cancelledIDs, 250*time.Millisecond)
-		interrupted, interruptErr := r.interruptStaleTurnRuns(turnRunIDs(stale), "stale turn watchdog interrupted scoped turn")
-		if interruptErr != nil {
-			logger("WARN stale turn watchdog failed to interrupt running turns: %v", interruptErr)
-			r.reportOperationalIssue(runCtx, "stale_watchdog", interruptErr)
-			nextRetryAt := r.defaultStaleWatchdogRetryAt(time.Now().UTC())
-			_ = r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogFailed, "failed", observations, map[string]any{
-				"error":           trimError(interruptErr.Error()),
-				"phase":           "interrupt_scoped_turn_runs",
-				"next_attempt_at": nextRetryAt.Format(time.RFC3339Nano),
-			}, time.Now().UTC())
-			r.scheduleStaleWatchdogRetry(nextRetryAt)
-			return
-		}
-		if len(interrupted) == 0 {
-			if err := r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogRecoverySuppressed, "suppressed", observations, map[string]any{
-				"reason": "stale_rows_already_terminal",
-			}, time.Now().UTC()); err != nil {
-				logger("WARN stale turn watchdog failed to record terminal-row suppression: %v", err)
-				r.reportOperationalIssue(runCtx, "stale_watchdog", err)
-			}
-			r.releaseStaleWatchdogLatch()
-			return
-		}
-		if err := r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogRecovered, "recovered", observations, map[string]any{
-			"reason":              "scoped_turn_recovery",
-			"interrupted_count":   len(interrupted),
-			"interrupted_run_ids": turnRunIDs(interrupted),
-			"cancelled_run_ids":   cancelledIDs,
-		}, time.Now().UTC()); err != nil {
-			logger("WARN stale turn watchdog failed to record scoped recovery: %v", err)
-			r.reportOperationalIssue(runCtx, "stale_watchdog", err)
-			nextRetryAt := r.defaultStaleWatchdogRetryAt(time.Now().UTC())
-			_ = r.recordStaleTurnWatchdogEvent(core.ExecutionEventWatchdogFailed, "failed", observations, map[string]any{
-				"error":             trimError(err.Error()),
-				"phase":             "record_scoped_recovery",
-				"interrupted_count": len(interrupted),
-				"next_attempt_at":   nextRetryAt.Format(time.RFC3339Nano),
-			}, time.Now().UTC())
-			r.scheduleStaleWatchdogRetry(nextRetryAt)
-			return
-		}
-		r.releaseStaleWatchdogLatch()
+		})
 	})
 }
 

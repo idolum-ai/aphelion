@@ -120,6 +120,7 @@ type Runtime struct {
 	recipeState            runtimeRecipeState
 	shuttingDown           atomic.Bool
 	startupRecoveryWG      sync.WaitGroup
+	backgroundLoopsWG      sync.WaitGroup
 	modelProviderSF        singleflight.Group
 	buildProviderHook      func(*config.Config, core.ModelSlotConfig) (agent.Provider, error)
 }
@@ -515,32 +516,62 @@ func (r *Runtime) StartIdleExpiryLoop(ctx context.Context, logger func(string, .
 }
 
 func (r *Runtime) startIdleExpiryLoop(ctx context.Context, cadence time.Duration, logger func(string, ...any)) {
-	go runPeriodic(ctx, cadence, func(runCtx context.Context) {
-		select {
-		case <-runCtx.Done():
-			return
-		default:
-		}
+	r.startBackgroundLoop("idle_expiry", func() {
+		runPeriodic(ctx, cadence, func(runCtx context.Context) {
+			select {
+			case <-runCtx.Done():
+				return
+			default:
+			}
 
-		expired, err := r.expireIdle(r.idleExpiry)
-		if err != nil {
-			logger("WARN idle expiry sweep failed: %v", err)
-			r.reportOperationalIssue(runCtx, "idle_expiry", err)
-			return
-		}
-		if expired > 0 {
-			logger("INFO expired %d idle session(s)", expired)
-		}
-		removedAudio, cleanupErr := r.cleanupTemporaryAudioArtifacts(time.Now().UTC())
-		if cleanupErr != nil {
-			logger("WARN temporary audio cleanup failed: %v", cleanupErr)
-			r.reportOperationalIssue(runCtx, "temporary_audio_cleanup", cleanupErr)
-			return
-		}
-		if removedAudio > 0 {
-			logger("INFO removed %d temporary audio artifact(s)", removedAudio)
-		}
+			expired, err := r.expireIdle(r.idleExpiry)
+			if err != nil {
+				logger("WARN idle expiry sweep failed: %v", err)
+				r.reportOperationalIssue(runCtx, "idle_expiry", err)
+				return
+			}
+			if expired > 0 {
+				logger("INFO expired %d idle session(s)", expired)
+			}
+			removedAudio, cleanupErr := r.cleanupTemporaryAudioArtifacts(time.Now().UTC())
+			if cleanupErr != nil {
+				logger("WARN temporary audio cleanup failed: %v", cleanupErr)
+				r.reportOperationalIssue(runCtx, "temporary_audio_cleanup", cleanupErr)
+				return
+			}
+			if removedAudio > 0 {
+				logger("INFO removed %d temporary audio artifact(s)", removedAudio)
+			}
+		})
 	})
+}
+
+func (r *Runtime) startBackgroundLoop(_ string, fn func()) {
+	if r == nil || fn == nil {
+		return
+	}
+	r.backgroundLoopsWG.Add(1)
+	go func() {
+		defer r.backgroundLoopsWG.Done()
+		fn()
+	}()
+}
+
+func (r *Runtime) WaitForBackgroundLoops(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		r.backgroundLoopsWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func runPeriodic(ctx context.Context, cadence time.Duration, fn func(context.Context)) {

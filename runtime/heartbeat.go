@@ -41,11 +41,13 @@ func (r *Runtime) StartHeartbeatLoop(ctx context.Context, logger func(string, ..
 		return
 	}
 
-	go runPeriodic(ctx, cadence, func(runCtx context.Context) {
-		if err := r.runHeartbeatOnce(runCtx, time.Now()); err != nil {
-			logger("WARN heartbeat failed: %v", err)
-			r.reportOperationalIssue(runCtx, "heartbeat", err)
-		}
+	r.startBackgroundLoop("heartbeat", func() {
+		runPeriodic(ctx, cadence, func(runCtx context.Context) {
+			if err := r.runHeartbeatOnce(runCtx, time.Now()); err != nil {
+				logger("WARN heartbeat failed: %v", err)
+				r.reportOperationalIssue(runCtx, "heartbeat", err)
+			}
+		})
 	})
 }
 

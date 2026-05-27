@@ -30,11 +30,13 @@ func (r *Runtime) StartNocturneLoop(ctx context.Context, logger func(string, ...
 		logger("WARN nocturne disabled due to invalid cadence: %q err=%v", r.cfg.Nocturne.CheckEvery, err)
 		return
 	}
-	go runPeriodic(ctx, cadence, func(runCtx context.Context) {
-		if err := r.runNocturneTick(runCtx, time.Now()); err != nil {
-			logger("WARN nocturne failed: %v", err)
-			r.reportOperationalIssue(runCtx, "nocturne", err)
-		}
+	r.startBackgroundLoop("nocturne", func() {
+		runPeriodic(ctx, cadence, func(runCtx context.Context) {
+			if err := r.runNocturneTick(runCtx, time.Now()); err != nil {
+				logger("WARN nocturne failed: %v", err)
+				r.reportOperationalIssue(runCtx, "nocturne", err)
+			}
+		})
 	})
 }
 

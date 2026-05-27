@@ -28,6 +28,12 @@ func (r *Runtime) BeginShutdown() {
 		log.Printf("WARN startup recovery did not drain before shutdown deadline: %v", err)
 	}
 
+	loopCtx, loopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer loopCancel()
+	if err := r.WaitForBackgroundLoops(loopCtx); err != nil {
+		log.Printf("WARN background loops did not drain before shutdown deadline: %v", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if _, err := r.ParkActiveWorkForRestart(ctx, restartParkSourceShutdown); err != nil {

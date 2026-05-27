@@ -35,11 +35,13 @@ func (r *Runtime) StartCronLoop(ctx context.Context, logger func(string, ...any)
 			}
 			continue
 		}
-		go runPeriodic(ctx, cadence, func(runCtx context.Context) {
-			if err := r.runScheduledJobOnce(runCtx, job); err != nil {
-				logger("WARN cron job failed id=%s err=%v", job.ID, err)
-				r.reportOperationalIssue(runCtx, "cron:"+job.ID.String(), err)
-			}
+		r.startBackgroundLoop("cron:"+job.ID.String(), func() {
+			runPeriodic(ctx, cadence, func(runCtx context.Context) {
+				if err := r.runScheduledJobOnce(runCtx, job); err != nil {
+					logger("WARN cron job failed id=%s err=%v", job.ID, err)
+					r.reportOperationalIssue(runCtx, "cron:"+job.ID.String(), err)
+				}
+			})
 		})
 	}
 }
