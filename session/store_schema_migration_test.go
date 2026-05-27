@@ -1121,6 +1121,86 @@ func TestMigratesSchemaV59ToV60MissionAskPrompts(t *testing.T) {
 	}
 }
 
+func TestMigratesSchemaV60ToV61ApprovalWindowOfferOpenedColumns(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v60.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v60 db: %v", err)
+	}
+	createdAt := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	expiresAt := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version(version INTEGER NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+		`INSERT INTO schema_version(version) VALUES (60)`,
+		`CREATE TABLE approval_window_offers (
+			offer_id TEXT PRIMARY KEY,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			admin_user_id INTEGER NOT NULL DEFAULT 0,
+			session_id TEXT NOT NULL DEFAULT '',
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			source_kind TEXT NOT NULL DEFAULT '',
+			source_id TEXT NOT NULL DEFAULT '',
+			source_decision_kind TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			expires_at TEXT NOT NULL,
+			used_at TEXT,
+			closed_at TEXT,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v60 fixture: %v", err)
+		}
+	}
+	if _, err := db.Exec(`
+		INSERT INTO approval_window_offers(
+			offer_id, chat_id, admin_user_id, session_id, scope_kind, scope_id, durable_agent_id,
+			source_kind, source_id, source_decision_kind, created_at, expires_at, used_at, closed_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "offer-v60", int64(9901), int64(1001), "telegram_dm:9901", string(ScopeKindTelegramDM), "9901", "", ApprovalWindowOfferSourceDecision, "decision-v60", "proposal_approval", createdAt, expiresAt, nil, nil, createdAt); err != nil {
+		t.Fatalf("insert v60 approval window offer: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v60 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v60) err = %v", err)
+	}
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteColumn(t, store.db, "approval_window_offers", "opened_lease_id")
+	assertSQLiteColumn(t, store.db, "approval_window_offers", "opened_override_id")
+	offer, ok, err := store.ApprovalWindowOffer("offer-v60")
+	if err != nil || !ok {
+		t.Fatalf("ApprovalWindowOffer(v60 migrated) ok=%t err=%v", ok, err)
+	}
+	if offer.OpenedLeaseID != "" || offer.OpenedOverrideID != "" || offer.ID != "offer-v60" || offer.SourceID != "decision-v60" {
+		t.Fatalf("migrated offer = %#v, want readable row with empty opened IDs", offer)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close migrated v60 store: %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen v60 migrated) err = %v", err)
+	}
+	defer reopened.Close()
+	assertSchemaVersion(t, reopened.db, schemaVersion)
+	reopenedOffer, ok, err := reopened.ApprovalWindowOffer("offer-v60")
+	if err != nil || !ok {
+		t.Fatalf("ApprovalWindowOffer(reopen v60 migrated) ok=%t err=%v", ok, err)
+	}
+	if reopenedOffer.OpenedLeaseID != "" || reopenedOffer.OpenedOverrideID != "" || reopenedOffer.ID != "offer-v60" {
+		t.Fatalf("reopened migrated offer = %#v, want empty opened IDs preserved", reopenedOffer)
+	}
+}
+
 func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {
 	t.Helper()
 	rows, err := db.Query(`PRAGMA table_info(` + tableName + `)`)

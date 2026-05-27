@@ -133,7 +133,7 @@ func (s *SQLiteStore) ActiveApprovalWindowOfferForSource(chatID int64, sourceKin
 	return offer, true, nil
 }
 
-func (s *SQLiteStore) MarkApprovalWindowOfferUsed(id string, now time.Time) (ApprovalWindowOffer, bool, error) {
+func (s *SQLiteStore) markApprovalWindowOfferUsed(id string, now time.Time) (ApprovalWindowOffer, bool, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return ApprovalWindowOffer{}, false, nil
@@ -167,7 +167,7 @@ func (s *SQLiteStore) MarkApprovalWindowOfferUsed(id string, now time.Time) (App
 	return offer, ok, nil
 }
 
-func (s *SQLiteStore) MarkApprovalWindowOfferOpened(id string, leaseID string, overrideID string, now time.Time) (ApprovalWindowOffer, bool, error) {
+func (s *SQLiteStore) markApprovalWindowOfferOpened(id string, leaseID string, overrideID string, now time.Time) (ApprovalWindowOffer, bool, error) {
 	id = strings.TrimSpace(id)
 	leaseID = strings.TrimSpace(leaseID)
 	overrideID = strings.TrimSpace(overrideID)

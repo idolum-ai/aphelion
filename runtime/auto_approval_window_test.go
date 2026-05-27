@@ -436,12 +436,23 @@ func TestRuntimeApprovalWindowOfferClaimWithoutLiveWindowStaysInflight(t *testin
 	}
 	chatID := int64(99313)
 	key := session.SessionKey{ChatID: chatID, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "99313"}}
-	offer, created, err := rt.CreateApprovalWindowOfferForKey(context.Background(), key, 1001, session.ApprovalWindowOfferSourceDecision, "decision-stranded", string(decision.KindProposalApproval))
-	if err != nil || !created {
-		t.Fatalf("CreateApprovalWindowOfferForKey() = %#v, %t, %v; want offer", offer, created, err)
-	}
-	if _, ok, err := store.MarkApprovalWindowOfferUsed(offer.ID, time.Now().UTC()); err != nil || !ok {
-		t.Fatalf("MarkApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
+	offer, err := store.CreateApprovalWindowOffer(session.ApprovalWindowOffer{
+		ID:                 "offer-fresh-claimed-unopened",
+		ChatID:             chatID,
+		AdminUserID:        1001,
+		SessionID:          session.SessionIDForKey(key),
+		ScopeKind:          string(session.ScopeKindTelegramDM),
+		ScopeID:            "99313",
+		SourceKind:         session.ApprovalWindowOfferSourceDecision,
+		SourceID:           "decision-stranded",
+		SourceDecisionKind: string(decision.KindProposalApproval),
+		CreatedAt:          time.Now().UTC().Add(-time.Second),
+		ExpiresAt:          time.Now().UTC().Add(time.Hour),
+		UsedAt:             time.Now().UTC(),
+		UpdatedAt:          time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer(claimed unopened) err = %v", err)
 	}
 	result, err := rt.EnableApprovalWindowOfferResult(context.Background(), offer.ID, 1001, 15*time.Minute)
 	if err == nil {

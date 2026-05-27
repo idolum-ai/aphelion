@@ -295,8 +295,8 @@ func TestActiveApprovalWindowOfferForSourceExcludesUsedOffers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
 	}
-	if _, ok, err := store.MarkApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
-		t.Fatalf("MarkApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
+	if _, ok, err := store.markApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
+		t.Fatalf("markApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
 	}
 	if got, ok, err := store.ActiveApprovalWindowOfferForSource(7002, ApprovalWindowOfferSourceDecision, "decision-source-used", now.Add(2*time.Second)); err != nil || ok {
 		t.Fatalf("ActiveApprovalWindowOfferForSource() = %#v, %t, %v; want no used offer", got, ok, err)
@@ -355,11 +355,11 @@ func TestActiveApprovalWindowOfferForSourceReturnsOpenedUsedOffer(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("CreateOperatorAutoApprovalLease() err = %v", err)
 	}
-	if _, ok, err := store.MarkApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
-		t.Fatalf("MarkApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
+	if _, ok, err := store.markApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
+		t.Fatalf("markApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
 	}
-	if _, ok, err := store.MarkApprovalWindowOfferOpened(offer.ID, "lease-opened", "override-opened", now.Add(2*time.Second)); err != nil || !ok {
-		t.Fatalf("MarkApprovalWindowOfferOpened() ok=%t err=%v", ok, err)
+	if _, ok, err := store.markApprovalWindowOfferOpened(offer.ID, "lease-opened", "override-opened", now.Add(2*time.Second)); err != nil || !ok {
+		t.Fatalf("markApprovalWindowOfferOpened() ok=%t err=%v", ok, err)
 	}
 	got, ok, err := store.ActiveApprovalWindowOfferForSource(7003, ApprovalWindowOfferSourceDecision, "decision-source-opened", now.Add(3*time.Second))
 	if err != nil || !ok {
@@ -422,11 +422,11 @@ func TestActiveApprovalWindowOfferForSourceExcludesExpiredOpenedOffer(t *testing
 	}); err != nil {
 		t.Fatalf("CreateOperatorAutoApprovalLease() err = %v", err)
 	}
-	if _, ok, err := store.MarkApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
-		t.Fatalf("MarkApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
+	if _, ok, err := store.markApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
+		t.Fatalf("markApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
 	}
-	if _, ok, err := store.MarkApprovalWindowOfferOpened(offer.ID, "lease-expired-opened", "override-expired-opened", now.Add(2*time.Second)); err != nil || !ok {
-		t.Fatalf("MarkApprovalWindowOfferOpened() ok=%t err=%v", ok, err)
+	if _, ok, err := store.markApprovalWindowOfferOpened(offer.ID, "lease-expired-opened", "override-expired-opened", now.Add(2*time.Second)); err != nil || !ok {
+		t.Fatalf("markApprovalWindowOfferOpened() ok=%t err=%v", ok, err)
 	}
 	if got, ok, err := store.ActiveApprovalWindowOfferForSource(7004, ApprovalWindowOfferSourceDecision, "decision-source-expired-opened", now.Add(2*time.Minute)); err != nil || ok {
 		t.Fatalf("ActiveApprovalWindowOfferForSource(expired) = %#v, %t, %v; want no active opened offer", got, ok, err)
@@ -526,11 +526,11 @@ func TestCloseApprovalWindowOfferIfOpenedRequiresExpectedBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
 	}
-	if _, ok, err := store.MarkApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
-		t.Fatalf("MarkApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
+	if _, ok, err := store.markApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
+		t.Fatalf("markApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
 	}
-	if _, ok, err := store.MarkApprovalWindowOfferOpened(offer.ID, "lease-new", "override-new", now.Add(2*time.Second)); err != nil || !ok {
-		t.Fatalf("MarkApprovalWindowOfferOpened() ok=%t err=%v", ok, err)
+	if _, ok, err := store.markApprovalWindowOfferOpened(offer.ID, "lease-new", "override-new", now.Add(2*time.Second)); err != nil || !ok {
+		t.Fatalf("markApprovalWindowOfferOpened() ok=%t err=%v", ok, err)
 	}
 	if closed, ok, err := store.CloseApprovalWindowOfferIfOpened(offer.ID, "lease-old", "override-old", now.Add(3*time.Second)); err != nil || ok {
 		t.Fatalf("CloseApprovalWindowOfferIfOpened(stale) = %#v, %t, %v; want CAS miss", closed, ok, err)
@@ -589,11 +589,11 @@ func TestCloseUnusedApprovalWindowOfferDoesNotCloseOpenedOffer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateApprovalWindowOffer(opened) err = %v", err)
 	}
-	if _, ok, err := store.MarkApprovalWindowOfferUsed(opened.ID, now.Add(time.Second)); err != nil || !ok {
-		t.Fatalf("MarkApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
+	if _, ok, err := store.markApprovalWindowOfferUsed(opened.ID, now.Add(time.Second)); err != nil || !ok {
+		t.Fatalf("markApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
 	}
-	if _, ok, err := store.MarkApprovalWindowOfferOpened(opened.ID, "lease-opened", "override-opened", now.Add(2*time.Second)); err != nil || !ok {
-		t.Fatalf("MarkApprovalWindowOfferOpened() ok=%t err=%v", ok, err)
+	if _, ok, err := store.markApprovalWindowOfferOpened(opened.ID, "lease-opened", "override-opened", now.Add(2*time.Second)); err != nil || !ok {
+		t.Fatalf("markApprovalWindowOfferOpened() ok=%t err=%v", ok, err)
 	}
 	if closed, ok, err := store.CloseUnusedApprovalWindowOffer(opened.ID, now.Add(3*time.Second)); err != nil || ok {
 		t.Fatalf("CloseUnusedApprovalWindowOffer(opened) = %#v, %t, %v; want no close", closed, ok, err)
@@ -805,18 +805,18 @@ func TestApprovalWindowOfferUsedMarkIsCAS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
 	}
-	claimed, ok, err := store.MarkApprovalWindowOfferUsed(offer.ID, now.Add(time.Second))
+	claimed, ok, err := store.markApprovalWindowOfferUsed(offer.ID, now.Add(time.Second))
 	if err != nil || !ok {
-		t.Fatalf("first MarkApprovalWindowOfferUsed() = %#v, %t, %v; want claim", claimed, ok, err)
+		t.Fatalf("first markApprovalWindowOfferUsed() = %#v, %t, %v; want claim", claimed, ok, err)
 	}
 	if claimed.UsedAt.IsZero() {
 		t.Fatalf("claimed UsedAt is zero")
 	}
-	second, ok, err := store.MarkApprovalWindowOfferUsed(offer.ID, now.Add(2*time.Second))
+	second, ok, err := store.markApprovalWindowOfferUsed(offer.ID, now.Add(2*time.Second))
 	if err != nil {
-		t.Fatalf("second MarkApprovalWindowOfferUsed() err = %v", err)
+		t.Fatalf("second markApprovalWindowOfferUsed() err = %v", err)
 	}
 	if ok {
-		t.Fatalf("second MarkApprovalWindowOfferUsed() = %#v, true; want CAS miss", second)
+		t.Fatalf("second markApprovalWindowOfferUsed() = %#v, true; want CAS miss", second)
 	}
 }

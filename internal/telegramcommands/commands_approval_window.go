@@ -108,14 +108,20 @@ func decodeApprovalWindowCallbackData(data string) (string, string, bool) {
 	body := strings.TrimSpace(strings.TrimPrefix(trimmed, approvalWindowCallbackPrefix))
 	offerID, action, ok := strings.Cut(body, ":")
 	if !ok {
-		// Legacy no-token callbacks fail closed for authority-bearing actions.
-		return "", strings.TrimSpace(body), true
+		// Legacy no-token callbacks fail closed for known authority-bearing actions.
+		action = strings.TrimSpace(body)
+		switch action {
+		case approvalWindowActionEnable15, approvalWindowActionEnable15Compound, approvalWindowActionDouble, approvalWindowActionCancel, approvalWindowActionClose:
+			return "", action, true
+		default:
+			return "", "", false
+		}
 	}
 	offerID = strings.TrimSpace(offerID)
 	action = strings.TrimSpace(action)
 	switch action {
 	case approvalWindowActionEnable15, approvalWindowActionEnable15Compound, approvalWindowActionDouble, approvalWindowActionCancel, approvalWindowActionClose:
-		return offerID, action, offerID != "" || action == approvalWindowActionClose
+		return offerID, action, true
 	default:
 		return "", "", false
 	}
@@ -142,6 +148,13 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 		return true, nil
 	}
 
+	if strings.TrimSpace(offerID) == "" {
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), approvalWindowCallbackStale); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+			return true, err
+		}
+		return true, nil
+	}
+
 	approvals, ok := router.(approvalWindowRouter)
 	if action == approvalWindowActionClose {
 		if ok && strings.TrimSpace(offerID) != "" {
@@ -157,12 +170,6 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 		}
 		text := continuationCallbackDisplayText(targetMsg, approvalWindowCallbackClosedText(cb))
 		if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
-			return true, err
-		}
-		return true, nil
-	}
-	if strings.TrimSpace(offerID) == "" {
-		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), approvalWindowCallbackStale); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 			return true, err
 		}
 		return true, nil

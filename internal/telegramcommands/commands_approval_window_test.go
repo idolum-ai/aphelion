@@ -463,6 +463,45 @@ func TestApprovalWindowCloseCallbackErrorAnswersWithoutClearingControls(t *testi
 	}
 }
 
+func TestApprovalWindowEmptyOfferCloseCallbackIsStaleAndKeepsControls(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{}
+	for name, data := range map[string]string{
+		"empty_token":     encodeApprovalWindowCallbackData("", approvalWindowActionClose),
+		"legacy_no_token": approvalWindowCallbackPrefix + approvalWindowActionClose,
+	} {
+		t.Run(name, func(t *testing.T) {
+			sender.answers = nil
+			sender.editClear = nil
+			router.approvalWindowAction = ""
+			router.approvalWindowOfferID = ""
+			handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+				ID:      "cb-aw-close-empty-" + name,
+				From:    &telegram.User{ID: 1001},
+				Data:    data,
+				Message: &telegram.Message{MessageID: 77, Text: "Approved.", Chat: &telegram.Chat{ID: 7}},
+			})
+			if err != nil {
+				t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+			}
+			if !handled {
+				t.Fatal("handled = false, want true")
+			}
+			if len(sender.answers) != 1 || sender.answers[0].text != approvalWindowCallbackStale {
+				t.Fatalf("answers = %#v, want stale answer", sender.answers)
+			}
+			if len(sender.editClear) != 0 {
+				t.Fatalf("editClear = %#v, want controls left intact", sender.editClear)
+			}
+			if router.approvalWindowAction != "" || router.approvalWindowOfferID != "" {
+				t.Fatalf("router close action=%q offer=%q, want no authoritative close", router.approvalWindowAction, router.approvalWindowOfferID)
+			}
+		})
+	}
+}
+
 func TestApprovalWindowCloseCallbackOnlyClearsButtons(t *testing.T) {
 	t.Parallel()
 
