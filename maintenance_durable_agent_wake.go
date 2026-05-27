@@ -70,6 +70,7 @@ func newDurableAgentWakeRuntimeForCommand(cfg *config.Config) (durableAgentWakeR
 		WithRemoteHostSSH(cfg.Tailscale.SSHPath, remoteHostSSHTimeoutFromConfig(cfg)).
 		WithDurableAgentPrincipalFallback().
 		WithWebSearchOptions(tool.WebSearchOptionsFromConfig(cfg.Tools.WebSearch)).
+		WithConfiguredCapabilityVisibility(configuredCapabilityVisibilityFromConfig(cfg)).
 		WithDurableAgentBootstrapLLM(defaultDurableAgentBootstrapFromConfig(cfg))
 	if manifestDir := strings.TrimSpace(cfg.Tools.ExternalManifestDir); manifestDir != "" {
 		if _, err := tools.WithExternalToolManifestDir(manifestDir); err != nil {

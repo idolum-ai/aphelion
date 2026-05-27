@@ -49,6 +49,14 @@ func SelectRepository(app App, repo string) (App, error) {
 	return App{}, fmt.Errorf("repository %q is outside configured github app repository scope", repo)
 }
 
+func RepositoryName(repo string) string {
+	parts := strings.Split(strings.TrimSpace(repo), "/")
+	if len(parts) == 2 {
+		return strings.TrimSpace(parts[1])
+	}
+	return strings.TrimSpace(repo)
+}
+
 func validRepository(repo string) bool {
 	parts := strings.Split(strings.TrimSpace(repo), "/")
 	if len(parts) != 2 {

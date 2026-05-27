@@ -100,8 +100,8 @@ func TestMintInstallationTokenPostsScopedRequest(t *testing.T) {
 			t.Fatalf("decode request body: %v", err)
 		}
 		repos, ok := body["repositories"].([]any)
-		if !ok || len(repos) != 1 || repos[0] != "idolum-ai/aphelion" {
-			t.Fatalf("repositories = %#v", body["repositories"])
+		if !ok || len(repos) != 1 || repos[0] != "aphelion" {
+			t.Fatalf("repositories = %#v, want GitHub API repository name only", body["repositories"])
 		}
 		perms, ok := body["permissions"].(map[string]any)
 		if !ok || perms["contents"] != "read" || perms["metadata"] != "read" {
@@ -136,6 +136,27 @@ func TestMintInstallationTokenPostsScopedRequest(t *testing.T) {
 	}
 	if strings.Contains(token.GoString(), "token-for-test") {
 		t.Fatalf("GoString leaked token: %s", token.GoString())
+	}
+}
+
+func TestTokenRequestBodyUsesRepositoryNamesOnly(t *testing.T) {
+	t.Parallel()
+	body, err := tokenRequestBody(App{
+		Repositories: []string{"idolum-ai/aphelion"},
+		Permissions:  []string{"contents:read"},
+	})
+	if err != nil {
+		t.Fatalf("tokenRequestBody() err = %v", err)
+	}
+	var got struct {
+		Repositories []string          `json:"repositories"`
+		Permissions  map[string]string `json:"permissions"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("Unmarshal() err = %v", err)
+	}
+	if len(got.Repositories) != 1 || got.Repositories[0] != "aphelion" {
+		t.Fatalf("repositories = %#v, want [aphelion]", got.Repositories)
 	}
 }
 
