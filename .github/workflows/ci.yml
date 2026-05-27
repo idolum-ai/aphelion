@@ -9,9 +9,72 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
-  test:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      source: ${{ steps.filter.outputs.source }}
+      architecture: ${{ steps.filter.outputs.architecture }}
+      scripts: ${{ steps.filter.outputs.scripts }}
+      secrets_full: ${{ steps.scope.outputs.secrets_full }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            source:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - 'Makefile'
+              - 'third_party/**'
+              - 'config.example.toml'
+            architecture:
+              - 'docs/**'
+              - 'requirements/**'
+              - 'README.md'
+              - 'AGENTS.md'
+              - 'CONTRIBUTING.md'
+              - 'SECURITY.md'
+              - 'THIRD_PARTY_NOTICES.md'
+              - 'config.example.toml'
+              - 'Makefile'
+              - 'scripts/check-architecture-docs.sh'
+              - 'scripts/check-design-principles.sh'
+              - 'scripts/check-no-live-child-fixtures.sh'
+              - 'scripts/check-public-readiness.sh'
+            scripts:
+              - 'scripts/**'
+              - '.github/workflows/**'
+
+      - name: Select secrets scan scope
+        id: scope
+        run: |
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "secrets_full=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "secrets_full=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  scripts:
+    needs: changes
+    if: needs.changes.outputs.scripts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check shell scripts
+        run: bash -n scripts/*.sh
+
+  secrets:
+    needs: changes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,27 +85,87 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Check shell scripts
-        run: bash -n scripts/*.sh
+      - name: Install Gitleaks
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@v8.30.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Scan working tree
+        if: needs.changes.outputs.secrets_full != 'true'
+        run: gitleaks dir --redact .
+
+      - name: Scan full tree and history
+        if: needs.changes.outputs.secrets_full == 'true'
+        run: make secrets
+
+  architecture:
+    needs: changes
+    if: needs.changes.outputs.architecture == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
 
       - name: Install ripgrep
         run: |
           sudo apt-get update
           sudo apt-get install -y ripgrep
 
-      - name: Install Gitleaks
-        run: |
-          go install github.com/zricethezav/gitleaks/v8@v8.30.1
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-
-      - name: Secrets
-        run: make secrets
-
       - name: Architecture
         run: make architecture
+
+  build_test:
+    needs: changes
+    if: needs.changes.outputs.source == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
 
       - name: Build
         run: make build
 
       - name: Test
         run: go test ./...
+
+  test:
+    needs:
+      - changes
+      - scripts
+      - secrets
+      - architecture
+      - build_test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check CI result
+        run: |
+          echo "source=${{ needs.changes.outputs.source }}"
+          echo "architecture=${{ needs.changes.outputs.architecture }}"
+          echo "scripts=${{ needs.changes.outputs.scripts }}"
+          echo "secrets_full=${{ needs.changes.outputs.secrets_full }}"
+          echo "scripts_result=${{ needs.scripts.result }}"
+          echo "secrets_result=${{ needs.secrets.result }}"
+          echo "architecture_result=${{ needs.architecture.result }}"
+          echo "build_test_result=${{ needs.build_test.result }}"
+
+          for result in \
+            "${{ needs.changes.result }}" \
+            "${{ needs.scripts.result }}" \
+            "${{ needs.secrets.result }}" \
+            "${{ needs.architecture.result }}" \
+            "${{ needs.build_test.result }}"; do
+            case "$result" in
+              success|skipped) ;;
+              *)
+                echo "CI dependency failed: $result" >&2
+                exit 1
+                ;;
+            esac
+          done
