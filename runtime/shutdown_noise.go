@@ -17,6 +17,17 @@ func (r *Runtime) BeginShutdown() {
 	if !r.shuttingDown.CompareAndSwap(false, true) {
 		return
 	}
+
+	// Give any in-flight startup recovery a bounded window to finish so its
+	// SQLite writes don't race the rest of the shutdown sequence. If the
+	// deadline elapses we log and continue — the recovery goroutine still
+	// gets ctx cancellation from its own caller's context.
+	recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer recoveryCancel()
+	if err := r.WaitForStartupRecovery(recoveryCtx); err != nil {
+		log.Printf("WARN startup recovery did not drain before shutdown deadline: %v", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if _, err := r.ParkActiveWorkForRestart(ctx, restartParkSourceShutdown); err != nil {

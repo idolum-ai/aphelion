@@ -117,6 +117,7 @@ type Runtime struct {
 	recipePath             string
 	recipeState            runtimeRecipeState
 	shuttingDown           atomic.Bool
+	startupRecoveryWG      sync.WaitGroup
 }
 
 func (r *Runtime) ConfigureVoice(cfg config.VoiceConfig, transcriber media.TranscriptionProvider, synth voice.Synthesizer) {
