@@ -125,6 +125,149 @@ func (s *SQLiteStore) ReplaceOperatorApprovalWindowByIDs(chatID int64, adminUser
 	return NormalizeOperatorAutoApprovalLease(oldLease), NormalizeOperatorAutonomyOverride(oldOverride), createdLease, createdOverride, true, nil
 }
 
+func (s *SQLiteStore) OpenApprovalWindowOfferWithAuthority(offerID string, createdLease OperatorAutoApprovalLease, createdOverride OperatorAutonomyOverride, now time.Time) (ApprovalWindowOffer, OperatorAutoApprovalLease, OperatorAutonomyOverride, bool, error) {
+	offerID = strings.TrimSpace(offerID)
+	if offerID == "" {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	createdLease = NormalizeOperatorAutoApprovalLease(createdLease)
+	createdOverride = NormalizeOperatorAutonomyOverride(createdOverride)
+	if createdLease.ID == "" || createdOverride.ID == "" {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, fmt.Errorf("approval window authority ids are required")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, fmt.Errorf("begin approval window offer open: %w", err)
+	}
+	defer tx.Rollback()
+
+	offer, ok, err := approvalWindowOfferByIDTx(tx, offerID)
+	if err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	}
+	if !ok {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, nil
+	}
+	if err := validateApprovalWindowAuthorityMatchesOffer(offer, createdLease, createdOverride); err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	}
+	if err := revokeScopedOperatorAutonomyOverridesTx(tx, offer.ChatID, offer.AdminUserID, offer.ScopeKind, offer.ScopeID, now); err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	}
+	if err := revokeScopedOperatorAutoApprovalLeasesTx(tx, offer.ChatID, offer.AdminUserID, offer.ScopeKind, offer.ScopeID, now); err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	}
+	if err := insertOperatorAutonomyOverrideTx(tx, createdOverride); err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	}
+	if err := insertOperatorAutoApprovalLeaseTx(tx, createdLease); err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	}
+	if ok, err := markApprovalWindowOfferOpenedTx(tx, offer.ID, "", "", createdLease.ID, createdOverride.ID, now, true); err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	} else if !ok {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, nil
+	}
+	opened, ok, err := approvalWindowOfferByIDTx(tx, offer.ID)
+	if err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	}
+	if !ok {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, fmt.Errorf("approval window offer %q not found after open", offer.ID)
+	}
+	if err := tx.Commit(); err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, fmt.Errorf("commit approval window offer open: %w", err)
+	}
+	return opened, createdLease, createdOverride, true, nil
+}
+
+func (s *SQLiteStore) ReplaceApprovalWindowOfferAuthorityByIDs(offerID string, chatID int64, adminUserID int64, scopeKind string, scopeID string, leaseID string, overrideID string, createdLease OperatorAutoApprovalLease, createdOverride OperatorAutonomyOverride, now time.Time) (ApprovalWindowOffer, OperatorAutoApprovalLease, OperatorAutonomyOverride, OperatorAutoApprovalLease, OperatorAutonomyOverride, bool, error) {
+	offerID = strings.TrimSpace(offerID)
+	scopeKind = strings.TrimSpace(scopeKind)
+	scopeID = strings.TrimSpace(scopeID)
+	leaseID = strings.TrimSpace(leaseID)
+	overrideID = strings.TrimSpace(overrideID)
+	if offerID == "" || chatID == 0 || adminUserID <= 0 || scopeKind == "" || scopeID == "" || leaseID == "" || overrideID == "" {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	createdLease = NormalizeOperatorAutoApprovalLease(createdLease)
+	createdOverride = NormalizeOperatorAutonomyOverride(createdOverride)
+	if createdLease.ID == "" || createdOverride.ID == "" {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, fmt.Errorf("replacement approval window ids are required")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, fmt.Errorf("begin approval window offer replace: %w", err)
+	}
+	defer tx.Rollback()
+
+	offer, offerOK, err := approvalWindowOfferByIDTx(tx, offerID)
+	if err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	}
+	if !offerOK || offer.ChatID != chatID || offer.AdminUserID != adminUserID || offer.ScopeKind != scopeKind || offer.ScopeID != scopeID || !offer.ActiveAt(now) {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, nil
+	}
+	if err := validateApprovalWindowAuthorityMatchesOffer(offer, createdLease, createdOverride); err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	}
+	oldLease, leaseOK, err := activeOperatorAutoApprovalLeaseByIDTx(tx, leaseID, chatID, adminUserID, scopeKind, scopeID, now)
+	if err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	}
+	oldOverride, overrideOK, err := activeOperatorAutonomyOverrideByIDTx(tx, overrideID, chatID, adminUserID, scopeKind, scopeID, now)
+	if err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	}
+	if !leaseOK || !overrideOK {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, nil
+	}
+	if ok, err := revokeOperatorAutoApprovalLeaseByIDTx(tx, leaseID, chatID, adminUserID, scopeKind, scopeID, now); err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	} else if !ok {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, nil
+	}
+	if ok, err := revokeOperatorAutonomyOverrideByIDTx(tx, overrideID, chatID, adminUserID, scopeKind, scopeID, now); err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	} else if !ok {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, nil
+	}
+	if err := insertOperatorAutonomyOverrideTx(tx, createdOverride); err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	}
+	if err := insertOperatorAutoApprovalLeaseTx(tx, createdLease); err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	}
+	if ok, err := markApprovalWindowOfferOpenedTx(tx, offer.ID, leaseID, overrideID, createdLease.ID, createdOverride.ID, now, false); err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	} else if !ok {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, nil
+	}
+	opened, ok, err := approvalWindowOfferByIDTx(tx, offer.ID)
+	if err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, err
+	}
+	if !ok {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, fmt.Errorf("approval window offer %q not found after replace", offer.ID)
+	}
+	if err := tx.Commit(); err != nil {
+		return ApprovalWindowOffer{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, OperatorAutoApprovalLease{}, OperatorAutonomyOverride{}, false, fmt.Errorf("commit approval window offer replace: %w", err)
+	}
+	oldLease.RevokedAt = now
+	oldLease.UpdatedAt = now
+	oldOverride.RevokedAt = now
+	oldOverride.UpdatedAt = now
+	return opened, NormalizeOperatorAutoApprovalLease(oldLease), NormalizeOperatorAutonomyOverride(oldOverride), createdLease, createdOverride, true, nil
+}
+
 func activeOperatorAutoApprovalLeaseByIDTx(tx *sql.Tx, leaseID string, chatID int64, adminUserID int64, scopeKind string, scopeID string, now time.Time) (OperatorAutoApprovalLease, bool, error) {
 	row := tx.QueryRow(`
 		SELECT lease_id, admin_user_id, chat_id, scope_kind, scope_id, scope, reason, max_uses, used_count,
@@ -215,6 +358,112 @@ func revokeOperatorAutonomyOverrideByIDTx(tx *sql.Tx, overrideID string, chatID 
 	count, err := res.RowsAffected()
 	if err != nil {
 		return false, fmt.Errorf("exact operator autonomy override rows affected: %w", err)
+	}
+	return count == 1, nil
+}
+
+func approvalWindowOfferByIDTx(tx *sql.Tx, id string) (ApprovalWindowOffer, bool, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ApprovalWindowOffer{}, false, nil
+	}
+	row := tx.QueryRow(`
+		SELECT offer_id, chat_id, admin_user_id, session_id, scope_kind, scope_id, durable_agent_id,
+			source_kind, source_id, source_decision_kind, opened_lease_id, opened_override_id,
+			created_at, expires_at, used_at, closed_at, updated_at
+		FROM approval_window_offers
+		WHERE offer_id = ?
+	`, id)
+	offer, err := scanApprovalWindowOffer(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ApprovalWindowOffer{}, false, nil
+	}
+	if err != nil {
+		return ApprovalWindowOffer{}, false, err
+	}
+	return offer, true, nil
+}
+
+func validateApprovalWindowAuthorityMatchesOffer(offer ApprovalWindowOffer, lease OperatorAutoApprovalLease, override OperatorAutonomyOverride) error {
+	offer = NormalizeApprovalWindowOffer(offer)
+	lease = NormalizeOperatorAutoApprovalLease(lease)
+	override = NormalizeOperatorAutonomyOverride(override)
+	if offer.ChatID == 0 || offer.AdminUserID <= 0 || offer.ScopeKind == "" || offer.ScopeID == "" {
+		return fmt.Errorf("approval window offer authority target is incomplete")
+	}
+	if lease.ChatID != offer.ChatID || lease.AdminUserID != offer.AdminUserID || lease.ScopeKind != offer.ScopeKind || lease.ScopeID != offer.ScopeID {
+		return fmt.Errorf("approval window lease does not match offer target")
+	}
+	if override.ChatID != offer.ChatID || override.AdminUserID != offer.AdminUserID || override.ScopeKind != offer.ScopeKind || override.ScopeID != offer.ScopeID {
+		return fmt.Errorf("approval window override does not match offer target")
+	}
+	if lease.ExpiresAt.IsZero() || override.ExpiresAt.IsZero() {
+		return fmt.Errorf("approval window authority expiry is required")
+	}
+	return nil
+}
+
+func revokeScopedOperatorAutoApprovalLeasesTx(tx *sql.Tx, chatID int64, adminUserID int64, scopeKind string, scopeID string, now time.Time) error {
+	stamp := now.UTC().Format(time.RFC3339Nano)
+	if _, err := tx.Exec(`
+		UPDATE operator_auto_approvals
+		SET revoked_at = ?, updated_at = ?
+		WHERE chat_id = ? AND admin_user_id = ? AND scope_kind = ? AND scope_id = ? AND revoked_at IS NULL AND expires_at > ?
+	`, stamp, stamp, chatID, adminUserID, strings.TrimSpace(scopeKind), strings.TrimSpace(scopeID), stamp); err != nil {
+		return fmt.Errorf("revoke scoped operator auto approval leases: %w", err)
+	}
+	return nil
+}
+
+func revokeScopedOperatorAutonomyOverridesTx(tx *sql.Tx, chatID int64, adminUserID int64, scopeKind string, scopeID string, now time.Time) error {
+	stamp := now.UTC().Format(time.RFC3339Nano)
+	if _, err := tx.Exec(`
+		UPDATE operator_autonomy_overrides
+		SET revoked_at = ?, updated_at = ?
+		WHERE chat_id = ? AND admin_user_id = ? AND scope_kind = ? AND scope_id = ? AND revoked_at IS NULL AND expires_at > ?
+	`, stamp, stamp, chatID, adminUserID, strings.TrimSpace(scopeKind), strings.TrimSpace(scopeID), stamp); err != nil {
+		return fmt.Errorf("revoke scoped operator autonomy overrides: %w", err)
+	}
+	return nil
+}
+
+func markApprovalWindowOfferOpenedTx(tx *sql.Tx, offerID string, expectedLeaseID string, expectedOverrideID string, openedLeaseID string, openedOverrideID string, now time.Time, requireUnused bool) (bool, error) {
+	offerID = strings.TrimSpace(offerID)
+	openedLeaseID = strings.TrimSpace(openedLeaseID)
+	openedOverrideID = strings.TrimSpace(openedOverrideID)
+	if offerID == "" || openedLeaseID == "" || openedOverrideID == "" {
+		return false, nil
+	}
+	stamp := now.UTC().Format(time.RFC3339Nano)
+	where := `
+		WHERE offer_id = ?
+			AND closed_at IS NULL
+			AND expires_at > ?
+	`
+	args := []any{stamp, openedLeaseID, openedOverrideID, stamp, offerID, stamp}
+	if requireUnused {
+		where += `
+			AND used_at IS NULL
+			AND TRIM(opened_lease_id) = ''
+			AND TRIM(opened_override_id) = ''
+		`
+	} else {
+		where += `
+			AND opened_lease_id = ?
+			AND opened_override_id = ?
+		`
+		args = append(args, strings.TrimSpace(expectedLeaseID), strings.TrimSpace(expectedOverrideID))
+	}
+	res, err := tx.Exec(`
+		UPDATE approval_window_offers
+		SET used_at = COALESCE(used_at, ?), opened_lease_id = ?, opened_override_id = ?, updated_at = ?
+	`+where, args...)
+	if err != nil {
+		return false, fmt.Errorf("mark approval window offer opened transactionally: %w", err)
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("approval window offer opened rows affected: %w", err)
 	}
 	return count == 1, nil
 }

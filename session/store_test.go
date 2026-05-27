@@ -600,6 +600,188 @@ func TestCloseUnusedApprovalWindowOfferDoesNotCloseOpenedOffer(t *testing.T) {
 	}
 }
 
+func TestOpenApprovalWindowOfferWithAuthorityBindsAtomically(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC()
+	offer, err := store.CreateApprovalWindowOffer(ApprovalWindowOffer{
+		ID:                 "offer-open-atomic-success",
+		ChatID:             7100,
+		AdminUserID:        1001,
+		ScopeKind:          string(ScopeKindTelegramDM),
+		ScopeID:            "7100",
+		SourceKind:         ApprovalWindowOfferSourceDecision,
+		SourceID:           "decision-open-atomic-success",
+		SourceDecisionKind: "proposal_approval",
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(time.Hour),
+		UpdatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
+	}
+	lease := OperatorAutoApprovalLease{
+		ID:          "lease-open-atomic-success",
+		AdminUserID: 1001,
+		ChatID:      offer.ChatID,
+		ScopeKind:   offer.ScopeKind,
+		ScopeID:     offer.ScopeID,
+		Scope:       OperatorAutoApprovalScopeAll,
+		Reason:      "inline approval window",
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(15 * time.Minute),
+		UpdatedAt:   now,
+	}
+	override := OperatorAutonomyOverride{
+		ID:          "override-open-atomic-success",
+		AdminUserID: 1001,
+		ChatID:      offer.ChatID,
+		ScopeKind:   offer.ScopeKind,
+		ScopeID:     offer.ScopeID,
+		Mode:        "leased",
+		Scope:       OperatorAutoApprovalScopeAll,
+		Reason:      "inline approval window",
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(15 * time.Minute),
+		UpdatedAt:   now,
+	}
+	opened, storedLease, storedOverride, ok, err := store.OpenApprovalWindowOfferWithAuthority(offer.ID, lease, override, now.Add(time.Second))
+	if err != nil || !ok {
+		t.Fatalf("OpenApprovalWindowOfferWithAuthority() ok=%t err=%v", ok, err)
+	}
+	if opened.OpenedLeaseID != storedLease.ID || opened.OpenedOverrideID != storedOverride.ID || opened.UsedAt.IsZero() {
+		t.Fatalf("opened offer = %#v, lease=%q override=%q; want bound used offer", opened, storedLease.ID, storedOverride.ID)
+	}
+	if got, ok, err := store.OperatorAutoApprovalLease(storedLease.ID); err != nil || !ok || !got.ActiveAt(now.Add(2*time.Second)) {
+		t.Fatalf("OperatorAutoApprovalLease() got=%#v ok=%t err=%v, want active created lease", got, ok, err)
+	}
+	if got, ok, err := store.OperatorAutonomyOverride(storedOverride.ID); err != nil || !ok || !got.ActiveAt(now.Add(2*time.Second)) {
+		t.Fatalf("OperatorAutonomyOverride() got=%#v ok=%t err=%v, want active created override", got, ok, err)
+	}
+}
+
+func TestOpenApprovalWindowOfferWithAuthorityRollsBackWhenBindCASMisses(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC()
+	offer, err := store.CreateApprovalWindowOffer(ApprovalWindowOffer{
+		ID:                 "offer-open-atomic-cas-miss",
+		ChatID:             7101,
+		AdminUserID:        1001,
+		ScopeKind:          string(ScopeKindTelegramDM),
+		ScopeID:            "7101",
+		SourceKind:         ApprovalWindowOfferSourceDecision,
+		SourceID:           "decision-open-atomic-cas-miss",
+		SourceDecisionKind: "proposal_approval",
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(time.Hour),
+		UsedAt:             now,
+		UpdatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
+	}
+	lease := OperatorAutoApprovalLease{ID: "lease-open-atomic-cas-miss", AdminUserID: 1001, ChatID: offer.ChatID, ScopeKind: offer.ScopeKind, ScopeID: offer.ScopeID, Scope: OperatorAutoApprovalScopeAll, Reason: "inline approval window", CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute), UpdatedAt: now}
+	override := OperatorAutonomyOverride{ID: "override-open-atomic-cas-miss", AdminUserID: 1001, ChatID: offer.ChatID, ScopeKind: offer.ScopeKind, ScopeID: offer.ScopeID, Mode: "leased", Scope: OperatorAutoApprovalScopeAll, Reason: "inline approval window", CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute), UpdatedAt: now}
+	if opened, _, _, ok, err := store.OpenApprovalWindowOfferWithAuthority(offer.ID, lease, override, now.Add(time.Second)); err != nil || ok {
+		t.Fatalf("OpenApprovalWindowOfferWithAuthority() opened=%#v ok=%t err=%v, want CAS miss", opened, ok, err)
+	}
+	if got, ok, err := store.OperatorAutoApprovalLease(lease.ID); err != nil || ok {
+		t.Fatalf("OperatorAutoApprovalLease(created) got=%#v ok=%t err=%v, want rolled back", got, ok, err)
+	}
+	if got, ok, err := store.OperatorAutonomyOverride(override.ID); err != nil || ok {
+		t.Fatalf("OperatorAutonomyOverride(created) got=%#v ok=%t err=%v, want rolled back", got, ok, err)
+	}
+	stored, ok, err := store.ApprovalWindowOffer(offer.ID)
+	if err != nil || !ok {
+		t.Fatalf("ApprovalWindowOffer() ok=%t err=%v", ok, err)
+	}
+	if stored.OpenedLeaseID != "" || stored.OpenedOverrideID != "" {
+		t.Fatalf("stored offer = %#v, want not rebound after CAS miss", stored)
+	}
+}
+
+func TestReplaceApprovalWindowOfferAuthorityByIDsRebindsAtomically(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC()
+	oldLease := OperatorAutoApprovalLease{ID: "lease-rebind-atomic-old", AdminUserID: 1001, ChatID: 7102, ScopeKind: string(ScopeKindTelegramDM), ScopeID: "7102", Scope: OperatorAutoApprovalScopeAll, Reason: "inline approval window", CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute), UpdatedAt: now}
+	oldOverride := OperatorAutonomyOverride{ID: "override-rebind-atomic-old", AdminUserID: 1001, ChatID: 7102, ScopeKind: string(ScopeKindTelegramDM), ScopeID: "7102", Mode: "leased", Scope: OperatorAutoApprovalScopeAll, Reason: "inline approval window", CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute), UpdatedAt: now}
+	if _, err := store.CreateOperatorAutoApprovalLease(oldLease); err != nil {
+		t.Fatalf("CreateOperatorAutoApprovalLease(old) err = %v", err)
+	}
+	if _, err := store.CreateOperatorAutonomyOverride(oldOverride); err != nil {
+		t.Fatalf("CreateOperatorAutonomyOverride(old) err = %v", err)
+	}
+	offer, err := store.CreateApprovalWindowOffer(ApprovalWindowOffer{ID: "offer-rebind-atomic-success", ChatID: 7102, AdminUserID: 1001, ScopeKind: string(ScopeKindTelegramDM), ScopeID: "7102", SourceKind: ApprovalWindowOfferSourceDecision, SourceID: "decision-rebind-atomic-success", SourceDecisionKind: "proposal_approval", OpenedLeaseID: oldLease.ID, OpenedOverrideID: oldOverride.ID, CreatedAt: now, ExpiresAt: now.Add(time.Hour), UsedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
+	}
+	newLease := OperatorAutoApprovalLease{ID: "lease-rebind-atomic-new", AdminUserID: 1001, ChatID: 7102, ScopeKind: string(ScopeKindTelegramDM), ScopeID: "7102", Scope: OperatorAutoApprovalScopeAll, Reason: "inline approval window", CreatedAt: now.Add(time.Second), ExpiresAt: now.Add(30 * time.Minute), UpdatedAt: now.Add(time.Second)}
+	newOverride := OperatorAutonomyOverride{ID: "override-rebind-atomic-new", AdminUserID: 1001, ChatID: 7102, ScopeKind: string(ScopeKindTelegramDM), ScopeID: "7102", Mode: "leased", Scope: OperatorAutoApprovalScopeAll, Reason: "inline approval window", CreatedAt: now.Add(time.Second), ExpiresAt: now.Add(30 * time.Minute), UpdatedAt: now.Add(time.Second)}
+	opened, revokedLease, revokedOverride, storedLease, storedOverride, ok, err := store.ReplaceApprovalWindowOfferAuthorityByIDs(offer.ID, offer.ChatID, offer.AdminUserID, offer.ScopeKind, offer.ScopeID, oldLease.ID, oldOverride.ID, newLease, newOverride, now.Add(time.Second))
+	if err != nil || !ok {
+		t.Fatalf("ReplaceApprovalWindowOfferAuthorityByIDs() ok=%t err=%v", ok, err)
+	}
+	if opened.OpenedLeaseID != storedLease.ID || opened.OpenedOverrideID != storedOverride.ID {
+		t.Fatalf("opened = %#v stored lease=%q override=%q, want rebound", opened, storedLease.ID, storedOverride.ID)
+	}
+	if revokedLease.RevokedAt.IsZero() || revokedOverride.RevokedAt.IsZero() {
+		t.Fatalf("revoked lease=%#v override=%#v, want old authority revoked", revokedLease, revokedOverride)
+	}
+	if got, ok, err := store.OperatorAutoApprovalLease(storedLease.ID); err != nil || !ok || !got.ActiveAt(now.Add(2*time.Second)) {
+		t.Fatalf("OperatorAutoApprovalLease(new) got=%#v ok=%t err=%v, want active replacement", got, ok, err)
+	}
+}
+
+func TestReplaceApprovalWindowOfferAuthorityByIDsRollsBackWhenRebindCASMisses(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC()
+	oldLease := OperatorAutoApprovalLease{ID: "lease-rebind-atomic-rollback-old", AdminUserID: 1001, ChatID: 7103, ScopeKind: string(ScopeKindTelegramDM), ScopeID: "7103", Scope: OperatorAutoApprovalScopeAll, Reason: "inline approval window", CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute), UpdatedAt: now}
+	oldOverride := OperatorAutonomyOverride{ID: "override-rebind-atomic-rollback-old", AdminUserID: 1001, ChatID: 7103, ScopeKind: string(ScopeKindTelegramDM), ScopeID: "7103", Mode: "leased", Scope: OperatorAutoApprovalScopeAll, Reason: "inline approval window", CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute), UpdatedAt: now}
+	if _, err := store.CreateOperatorAutoApprovalLease(oldLease); err != nil {
+		t.Fatalf("CreateOperatorAutoApprovalLease(old) err = %v", err)
+	}
+	if _, err := store.CreateOperatorAutonomyOverride(oldOverride); err != nil {
+		t.Fatalf("CreateOperatorAutonomyOverride(old) err = %v", err)
+	}
+	offer, err := store.CreateApprovalWindowOffer(ApprovalWindowOffer{ID: "offer-rebind-atomic-rollback", ChatID: 7103, AdminUserID: 1001, ScopeKind: string(ScopeKindTelegramDM), ScopeID: "7103", SourceKind: ApprovalWindowOfferSourceDecision, SourceID: "decision-rebind-atomic-rollback", SourceDecisionKind: "proposal_approval", OpenedLeaseID: "lease-other-binding", OpenedOverrideID: "override-other-binding", CreatedAt: now, ExpiresAt: now.Add(time.Hour), UsedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
+	}
+	newLease := OperatorAutoApprovalLease{ID: "lease-rebind-atomic-rollback-new", AdminUserID: 1001, ChatID: 7103, ScopeKind: string(ScopeKindTelegramDM), ScopeID: "7103", Scope: OperatorAutoApprovalScopeAll, Reason: "inline approval window", CreatedAt: now.Add(time.Second), ExpiresAt: now.Add(30 * time.Minute), UpdatedAt: now.Add(time.Second)}
+	newOverride := OperatorAutonomyOverride{ID: "override-rebind-atomic-rollback-new", AdminUserID: 1001, ChatID: 7103, ScopeKind: string(ScopeKindTelegramDM), ScopeID: "7103", Mode: "leased", Scope: OperatorAutoApprovalScopeAll, Reason: "inline approval window", CreatedAt: now.Add(time.Second), ExpiresAt: now.Add(30 * time.Minute), UpdatedAt: now.Add(time.Second)}
+	if opened, _, _, _, _, ok, err := store.ReplaceApprovalWindowOfferAuthorityByIDs(offer.ID, offer.ChatID, offer.AdminUserID, offer.ScopeKind, offer.ScopeID, oldLease.ID, oldOverride.ID, newLease, newOverride, now.Add(time.Second)); err != nil || ok {
+		t.Fatalf("ReplaceApprovalWindowOfferAuthorityByIDs() opened=%#v ok=%t err=%v, want rebind CAS miss", opened, ok, err)
+	}
+	if got, ok, err := store.OperatorAutoApprovalLease(oldLease.ID); err != nil || !ok || !got.ActiveAt(now.Add(2*time.Second)) {
+		t.Fatalf("OperatorAutoApprovalLease(old) got=%#v ok=%t err=%v, want old lease still active", got, ok, err)
+	}
+	if got, ok, err := store.OperatorAutoApprovalLease(newLease.ID); err != nil || ok {
+		t.Fatalf("OperatorAutoApprovalLease(new) got=%#v ok=%t err=%v, want replacement rolled back", got, ok, err)
+	}
+	stored, ok, err := store.ApprovalWindowOffer(offer.ID)
+	if err != nil || !ok {
+		t.Fatalf("ApprovalWindowOffer() ok=%t err=%v", ok, err)
+	}
+	if stored.OpenedLeaseID != "lease-other-binding" || stored.OpenedOverrideID != "override-other-binding" {
+		t.Fatalf("stored offer = %#v, want original rebound target unchanged", stored)
+	}
+}
+
 func TestApprovalWindowOfferUsedMarkIsCAS(t *testing.T) {
 	t.Parallel()
 

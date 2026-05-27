@@ -787,44 +787,6 @@ func TestRuntimeCASMissCleanupDoesNotCloseReboundOffer(t *testing.T) {
 	}
 }
 
-func TestRuntimeApprovalWindowOfferBindFailureRollsBackCreatedWindow(t *testing.T) {
-	t.Parallel()
-
-	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	rt, err := New(cfg, store, provider, nil, sender)
-	if err != nil {
-		t.Fatalf("New() err = %v", err)
-	}
-	chatID := int64(99320)
-	key := session.SessionKey{ChatID: chatID, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "99320"}}
-	offer, created, err := rt.CreateApprovalWindowOfferForKey(context.Background(), key, 1001, session.ApprovalWindowOfferSourceDecision, "decision-bind-rollback", string(decision.KindProposalApproval))
-	if err != nil || !created {
-		t.Fatalf("CreateApprovalWindowOfferForKey() = %#v, %t, %v; want offer", offer, created, err)
-	}
-	claimed, ok, err := store.MarkApprovalWindowOfferUsed(offer.ID, time.Now().UTC())
-	if err != nil || !ok {
-		t.Fatalf("MarkApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
-	}
-	result, err := rt.EnableApprovalWindowForKeyResult(context.Background(), key, 1001, 15*time.Minute)
-	if err != nil || !result.Active {
-		t.Fatalf("EnableApprovalWindowForKeyResult() = %#v, %v; want active", result, err)
-	}
-	if _, ok, err := store.CloseClaimedUnopenedApprovalWindowOffer(offer.ID, time.Now().UTC()); err != nil || !ok {
-		t.Fatalf("CloseClaimedUnopenedApprovalWindowOffer() ok=%t err=%v", ok, err)
-	}
-	if err := rt.bindApprovalWindowOfferOrRollback(claimed, 1001, result); err == nil {
-		t.Fatal("bindApprovalWindowOfferOrRollback() err = nil, want bind failure")
-	}
-	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
-	leases, err := store.ActiveOperatorAutoApprovalLeasesForScope(chatID, scopeKind, scopeID, time.Now().UTC())
-	if err != nil {
-		t.Fatalf("ActiveOperatorAutoApprovalLeasesForScope() err = %v", err)
-	}
-	if len(leases) != 0 {
-		t.Fatalf("leases = %#v, want created window rolled back", leases)
-	}
-}
-
 func TestRuntimeCloseApprovalWindowOfferNonAdminDoesNotRevokeLiveWindow(t *testing.T) {
 	t.Parallel()
 
