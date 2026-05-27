@@ -57,7 +57,8 @@ jobs:
       - name: Select secrets scan scope
         id: scope
         run: |
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+          if [[ "${{ github.event_name }}" == "pull_request" ]] ||
+             [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
             echo "secrets_full=true" >> "$GITHUB_OUTPUT"
           else
             echo "secrets_full=false" >> "$GITHUB_OUTPUT"
