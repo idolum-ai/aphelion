@@ -2,8 +2,6 @@
 
 A governed outpost for personal agents.
 
-License: Apache-2.0.
-
 Aphelion exists for the moment when a conversation has to touch the world: a
 file, a service, a memory, a machine far from the laptop. Before capability
 becomes action, Aphelion makes authority explicit. It keeps a Telegram radio
@@ -46,10 +44,10 @@ into a general agent marketplace or broad channel platform.
 ## Public Release Provenance
 
 The canonical public source is `github.com/idolum-ai/aphelion`. A separate
-historical archive may exist at `github.com/sadasant/aphelion`; that archive is
-not the public release source of truth. Private pre-public development history is
-kept out of the canonical public release because it may contain operational
-paths, identifiers, transcripts, or other non-public material.
+historical archive may exist at another location; that archive is not the public
+release source of truth. Private pre-public development history is kept out of
+the canonical public release because it may contain operational paths,
+identifiers, transcripts, or other non-public material.
 
 See [Public Release Provenance](docs/public-release.md) for the release-history
 policy.
@@ -105,6 +103,9 @@ OPENAI_API_KEY=sk-... \
 ~/.local/bin/aphelion quickstart --admin-user-id 123456789 --provider openai --install-service
 ```
 
+Other supported providers: `anthropic`, `openrouter`, `gemini`, `ollama`. See
+[Operator Setup](docs/guides/operator-setup.md) for configuration details.
+
 `quickstart` writes `~/.aphelion/aphelion.toml` with mode `0600`, validates it,
 and refuses to replace an existing config unless `--force` is passed. With
 `--install-service`, it also runs the service install path and verifies the
@@ -143,7 +144,7 @@ Isolated work defaults to no network. When a non-admin or durable profile needs
 narrow internet access, use the helper-backed path in
 [docs/guides/sandbox-networking.md](docs/guides/sandbox-networking.md).
 
-For source checkout work on Linux:
+For source checkout work on Linux (requires Go 1.26+; check with `go version`):
 
 ```bash
 make build
@@ -168,6 +169,9 @@ Live package ownership:
   commit/delivery contracts
 - `pipeline`: governor/face conversational transforms and render/floor contract
   helpers
+
+All other packages (`agent`, `config`, `core`, `face`, `prompt`, `provider`,
+`session`, `tool`, etc.) are implementation details consumed by `runtime`.
 
 ```text
 Telegram transport
@@ -202,9 +206,14 @@ On non-Linux hosts, `make test` and `make architecture` intentionally stop with
 a Linux-only message. Use `make verify-linux-compile` for a static compile check,
 then run the full verification loop on Linux before merge.
 
-Run `make design-principles` when touching authority, consent, continuation,
-wake, goal, status, or operator-facing control surfaces.
+Run `make design-principles` *(static analysis of authority/consent/control
+surfaces)* when touching authority, consent, continuation, wake, goal, status,
+or operator-facing control surfaces.
 
-Run `make live-evals` or the narrower `make auto-evals` before releases that
-materially change agency, authority, proactive mission, or prompt behavior.
-These evals are opt-in because they spend provider API calls.
+Run `make live-evals` or the narrower `make auto-evals` *(opt-in; spend
+provider API calls)* before releases that materially change agency, authority,
+proactive mission, or prompt behavior.
+
+## License
+
+[Apache-2.0](LICENSE)
