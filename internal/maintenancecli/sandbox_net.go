@@ -35,6 +35,10 @@ type sandboxNetProfileStatus struct {
 }
 
 func runSandboxNetCommand(args []string) error {
+	if commandGroupHelpRequested(args) {
+		printCommandGroupHelp("sandbox-net", []string{"check", "helper"})
+		return nil
+	}
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "check" {
 		if len(args) > 0 {
 			args = args[1:]
@@ -48,6 +52,10 @@ func runSandboxNetCommand(args []string) error {
 }
 
 func runSandboxNetHelperCommand(args []string) error {
+	if commandGroupHelpRequested(args) {
+		printCommandGroupHelp("sandbox-net helper", []string{"serve"})
+		return nil
+	}
 	if len(args) == 0 || strings.TrimSpace(args[0]) != "serve" {
 		return fmt.Errorf("unknown sandbox-net helper command %q", firstArgOrEmpty(args))
 	}

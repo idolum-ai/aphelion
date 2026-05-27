@@ -18,6 +18,10 @@ type DurableAgentDeps struct {
 }
 
 func RunDurableAgentCommand(args []string, deps DurableAgentDeps) error {
+	if commandGroupHelpRequested(args) {
+		printCommandGroupHelp("durable-agent", []string{"list", "health", "policy", "enrollment", "forensic", "bootstrap", "provision", "remote", "wake", "child-run", "reconcile"})
+		return nil
+	}
 	if len(args) == 0 {
 		return fmt.Errorf("durable-agent requires a subcommand: list, health, policy, enrollment, forensic, bootstrap, provision, remote, wake, child-run, or reconcile")
 	}

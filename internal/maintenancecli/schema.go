@@ -12,6 +12,10 @@ import (
 )
 
 func RunSchemaMaintenanceCommand(args []string) error {
+	if commandGroupHelpRequested(args) {
+		printCommandGroupHelp("schema", []string{"verify"})
+		return nil
+	}
 	if len(args) == 0 {
 		return fmt.Errorf("usage: schema verify --db <sessions.db>")
 	}

@@ -29,6 +29,10 @@ func RunGitHubAppCommand(args []string) error {
 }
 
 func runGitHubAppCommand(args []string) error {
+	if commandGroupHelpRequested(args) {
+		printCommandGroupHelp("github-app", []string{"status", "token"})
+		return nil
+	}
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "status" {
 		if len(args) > 0 {
 			args = args[1:]

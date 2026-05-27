@@ -12,6 +12,10 @@ import (
 )
 
 func runTelegramThreadsMaintenanceCommand(args []string) error {
+	if commandGroupHelpRequested(args) {
+		printCommandGroupHelp("telegram-threads", []string{"sanitize"})
+		return nil
+	}
 	if len(args) == 0 {
 		return fmt.Errorf("usage: telegram-threads sanitize [--config <path>] [--apply]")
 	}

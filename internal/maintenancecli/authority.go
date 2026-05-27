@@ -18,6 +18,10 @@ type AuthorityDeps struct {
 }
 
 func RunAuthorityCommand(args []string, deps AuthorityDeps) error {
+	if commandGroupHelpRequested(args) {
+		printCommandGroupHelp("authority", []string{"doctor", "repair", "revoke-grant", "revoke-continuation"})
+		return nil
+	}
 	if len(args) == 0 {
 		return fmt.Errorf("usage: authority <doctor|repair|revoke-grant|revoke-continuation> [--config path]")
 	}

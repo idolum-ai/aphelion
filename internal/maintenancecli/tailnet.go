@@ -61,6 +61,10 @@ type tailnetGrantBindingReport struct {
 }
 
 func runTailnetCommand(args []string) error {
+	if commandGroupHelpRequested(args) {
+		printCommandGroupHelp("tailnet", []string{"status", "surfaces", "grants", "bind-grant", "apply-binding", "drift-binding", "rollback-binding", "revoke"})
+		return nil
+	}
 	if len(args) == 0 {
 		return fmt.Errorf("tailnet requires a subcommand: status, surfaces, grants, bind-grant, apply-binding, drift-binding, rollback-binding, or revoke")
 	}
