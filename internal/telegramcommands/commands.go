@@ -102,11 +102,6 @@ type approvalWindowRouter interface {
 	CloseApprovalWindowOffer(ctx context.Context, offerID string) error
 }
 
-type approvalWindowCompoundRouter interface {
-	approvalWindowRouter
-	ApprovalWindowOfferByID(offerID string) (session.ApprovalWindowOffer, bool, error)
-}
-
 type commandScopedMemoryRouter interface {
 	MemoryReviewSnapshotForMessage(ctx context.Context, msg core.InboundMessage, source memoryReviewSource) (memoryReviewSnapshot, error)
 }

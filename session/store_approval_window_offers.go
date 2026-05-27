@@ -118,6 +118,7 @@ func (s *SQLiteStore) MarkApprovalWindowOfferUsed(id string, now time.Time) (App
 		UPDATE approval_window_offers
 		SET used_at = COALESCE(used_at, ?), updated_at = ?
 		WHERE offer_id = ?
+			AND used_at IS NULL
 			AND closed_at IS NULL
 			AND expires_at > ?
 	`, stamp, stamp, id, stamp)

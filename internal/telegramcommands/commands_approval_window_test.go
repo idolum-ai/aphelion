@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/decision"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
@@ -78,12 +79,13 @@ func TestApprovalWindowStandaloneEnableCallbackDoesNotApplyCompoundAction(t *tes
 		approvalWindowReturn:   "Approval windows are admin only.",
 		approvalWindowLookupOK: true,
 		approvalWindowLookupOffer: session.ApprovalWindowOffer{
-			ID:         "offer-decision-denied",
-			ChatID:     7,
-			ScopeKind:  string(session.ScopeKindTelegramDM),
-			ScopeID:    "7",
-			SourceKind: session.ApprovalWindowOfferSourceDecision,
-			SourceID:   "decision-embedded",
+			ID:                 "offer-decision-denied",
+			ChatID:             7,
+			ScopeKind:          string(session.ScopeKindTelegramDM),
+			ScopeID:            "7",
+			SourceKind:         session.ApprovalWindowOfferSourceDecision,
+			SourceDecisionKind: string(decision.KindProposalApproval),
+			SourceID:           "decision-embedded",
 		},
 		resolvedDecisionOK: true,
 	}
@@ -132,12 +134,13 @@ func TestApprovalWindowEmbeddedCompoundStaleDecisionFailsBeforeOpeningWindow(t *
 		approvalWindowReturnBeforeResolve: true,
 		approvalWindowLookupOK:            true,
 		approvalWindowLookupOffer: session.ApprovalWindowOffer{
-			ID:         "offer-stale-decision",
-			ChatID:     7,
-			ScopeKind:  string(session.ScopeKindTelegramDM),
-			ScopeID:    "7",
-			SourceKind: session.ApprovalWindowOfferSourceDecision,
-			SourceID:   "decision-stale",
+			ID:                 "offer-stale-decision",
+			ChatID:             7,
+			ScopeKind:          string(session.ScopeKindTelegramDM),
+			ScopeID:            "7",
+			SourceKind:         session.ApprovalWindowOfferSourceDecision,
+			SourceDecisionKind: string(decision.KindProposalApproval),
+			SourceID:           "decision-stale",
 		},
 		resolvedDecisionOK: false,
 	}
@@ -168,6 +171,50 @@ func TestApprovalWindowEmbeddedCompoundStaleDecisionFailsBeforeOpeningWindow(t *
 	}
 }
 
+func TestApprovalWindowEmbeddedDecisionCompoundRejectsNonProposalDecisionKind(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		approvalWindowReturn:              "Approval window active.",
+		approvalWindowActive:              true,
+		approvalWindowReturnBeforeResolve: true,
+		approvalWindowLookupOK:            true,
+		approvalWindowLookupOffer: session.ApprovalWindowOffer{
+			ID:                 "offer-non-proposal",
+			ChatID:             7,
+			ScopeKind:          string(session.ScopeKindTelegramDM),
+			ScopeID:            "7",
+			SourceKind:         session.ApprovalWindowOfferSourceDecision,
+			SourceDecisionKind: string(decision.KindArtifactRetention),
+			SourceID:           "decision-continuation",
+		},
+		resolvedDecisionOK: true,
+	}
+
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:      "cb-aw-enable-non-proposal-compound",
+		From:    &telegram.User{ID: 1001},
+		Data:    encodeApprovalWindowCallbackData("offer-non-proposal", approvalWindowActionEnable15Compound),
+		Message: &telegram.Message{MessageID: 77, Chat: &telegram.Chat{ID: 7}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.approvalWindowAction != "" {
+		t.Fatalf("approvalWindowAction = %q, want no approval window enable", router.approvalWindowAction)
+	}
+	if router.resolvedDecisionChoice != "" {
+		t.Fatalf("resolvedDecisionChoice = %q, want no resolve", router.resolvedDecisionChoice)
+	}
+	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "not a proposal approval") {
+		t.Fatalf("editClear = %#v, want proposal-kind rejection", sender.editClear)
+	}
+}
+
 func TestApprovalWindowEmbeddedDecisionCompoundRollsBackWhenResolveFailsAfterOpen(t *testing.T) {
 	t.Parallel()
 
@@ -178,12 +225,13 @@ func TestApprovalWindowEmbeddedDecisionCompoundRollsBackWhenResolveFailsAfterOpe
 		approvalWindowReturnBeforeResolve: true,
 		approvalWindowLookupOK:            true,
 		approvalWindowLookupOffer: session.ApprovalWindowOffer{
-			ID:         "offer-resolve-race",
-			ChatID:     7,
-			ScopeKind:  string(session.ScopeKindTelegramDM),
-			ScopeID:    "7",
-			SourceKind: session.ApprovalWindowOfferSourceDecision,
-			SourceID:   "decision-race",
+			ID:                 "offer-resolve-race",
+			ChatID:             7,
+			ScopeKind:          string(session.ScopeKindTelegramDM),
+			ScopeID:            "7",
+			SourceKind:         session.ApprovalWindowOfferSourceDecision,
+			SourceDecisionKind: string(decision.KindProposalApproval),
+			SourceID:           "decision-race",
 		},
 		resolvedDecisionPeekOK: true,
 		resolvedDecisionOK:     false,
@@ -225,12 +273,13 @@ func TestApprovalWindowEmbeddedDecisionCompoundOpensBeforeResolveWithoutDuplicat
 		approvalWindowReturnBeforeResolve: true,
 		approvalWindowLookupOK:            true,
 		approvalWindowLookupOffer: session.ApprovalWindowOffer{
-			ID:         "offer-decision",
-			ChatID:     7,
-			ScopeKind:  string(session.ScopeKindTelegramDM),
-			ScopeID:    "7",
-			SourceKind: session.ApprovalWindowOfferSourceDecision,
-			SourceID:   "decision-embedded",
+			ID:                 "offer-decision",
+			ChatID:             7,
+			ScopeKind:          string(session.ScopeKindTelegramDM),
+			ScopeID:            "7",
+			SourceKind:         session.ApprovalWindowOfferSourceDecision,
+			SourceDecisionKind: string(decision.KindProposalApproval),
+			SourceID:           "decision-embedded",
 		},
 		resolvedDecisionOK: true,
 	}

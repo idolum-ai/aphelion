@@ -396,6 +396,36 @@ func TestRuntimeApprovalWindowOfferNonAdminDoesNotConsumeOffer(t *testing.T) {
 	}
 }
 
+func TestRuntimeApprovalWindowOfferDuplicateTapDoesNotOpenSecondWindow(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	chatID := int64(99312)
+	key := session.SessionKey{ChatID: chatID, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "99312"}}
+	offer, created, err := rt.CreateApprovalWindowOfferForKey(context.Background(), key, 1001, session.ApprovalWindowOfferSourceDecision, "decision-duplicate", string(decision.KindProposalApproval))
+	if err != nil || !created {
+		t.Fatalf("CreateApprovalWindowOfferForKey() = %#v, %t, %v; want offer", offer, created, err)
+	}
+	if _, err := rt.EnableApprovalWindowOffer(context.Background(), offer.ID, 1001, 15*time.Minute); err != nil {
+		t.Fatalf("first EnableApprovalWindowOffer() err = %v", err)
+	}
+	if _, err := rt.EnableApprovalWindowOffer(context.Background(), offer.ID, 1001, 15*time.Minute); err == nil {
+		t.Fatal("second EnableApprovalWindowOffer() err = nil, want duplicate claim failure")
+	}
+	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
+	leases, err := store.ActiveOperatorAutoApprovalLeasesForScope(chatID, scopeKind, scopeID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeasesForScope() err = %v", err)
+	}
+	if len(leases) != 1 {
+		t.Fatalf("leases = %#v, want exactly one live approval lease", leases)
+	}
+}
+
 func TestRuntimeApprovalWindowOfferUsesPersistedThreadScope(t *testing.T) {
 	t.Parallel()
 

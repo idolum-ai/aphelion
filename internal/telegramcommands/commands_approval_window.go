@@ -270,6 +270,9 @@ func prepareApprovalWindowCompoundDecisionAction(router commandRouter, targetMsg
 	if offer.SourceKind != session.ApprovalWindowOfferSourceDecision {
 		return approvalWindowCompoundDecisionAction{}, fmt.Errorf("approval window source is not actionable")
 	}
+	if offer.SourceDecisionKind != string(decision.KindProposalApproval) {
+		return approvalWindowCompoundDecisionAction{}, fmt.Errorf("approval window source is not a proposal approval")
+	}
 	return prepareApprovalWindowDecisionCompoundAction(router, targetMsg, senderID, offer)
 }
 

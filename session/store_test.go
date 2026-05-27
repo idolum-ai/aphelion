@@ -271,3 +271,42 @@ func TestContinuationStateRoundTripAndUpdate(t *testing.T) {
 		t.Fatalf("handshake blocked reason = %q, want empty after normalize", got.HandshakeBlockedReason)
 	}
 }
+
+func TestApprovalWindowOfferUsedMarkIsCAS(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC()
+	offer, err := store.CreateApprovalWindowOffer(ApprovalWindowOffer{
+		ID:                 "offer-cas",
+		ChatID:             7001,
+		AdminUserID:        1001,
+		ScopeKind:          string(ScopeKindTelegramDM),
+		ScopeID:            "7001",
+		SourceKind:         ApprovalWindowOfferSourceDecision,
+		SourceID:           "decision-cas",
+		SourceDecisionKind: "proposal_approval",
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(time.Hour),
+		UpdatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
+	}
+	claimed, ok, err := store.MarkApprovalWindowOfferUsed(offer.ID, now.Add(time.Second))
+	if err != nil || !ok {
+		t.Fatalf("first MarkApprovalWindowOfferUsed() = %#v, %t, %v; want claim", claimed, ok, err)
+	}
+	if claimed.UsedAt.IsZero() {
+		t.Fatalf("claimed UsedAt is zero")
+	}
+	second, ok, err := store.MarkApprovalWindowOfferUsed(offer.ID, now.Add(2*time.Second))
+	if err != nil {
+		t.Fatalf("second MarkApprovalWindowOfferUsed() err = %v", err)
+	}
+	if ok {
+		t.Fatalf("second MarkApprovalWindowOfferUsed() = %#v, true; want CAS miss", second)
+	}
+}

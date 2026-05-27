@@ -74,14 +74,29 @@ func (r *Runtime) EnableApprovalWindowOfferResult(ctx context.Context, offerID s
 	if err != nil || !ok {
 		return core.ApprovalWindowEnableResult{}, err
 	}
-	result, err := r.EnableApprovalWindowForKeyResult(ctx, approvalWindowOfferSessionKey(offer), adminUserID, duration)
-	if err != nil || !result.Active {
-		return result, err
+	if r == nil || r.store == nil {
+		return core.ApprovalWindowEnableResult{Text: "Approval windows are unavailable."}, nil
 	}
-	if _, ok, err := r.store.MarkApprovalWindowOfferUsed(offer.ID, time.Now().UTC()); err != nil {
+	if !r.IsTelegramAdmin(adminUserID) {
+		return core.ApprovalWindowEnableResult{Text: "Approval windows are admin only."}, nil
+	}
+	if duration <= 0 {
+		duration = approvalWindowDefaultDuration
+	}
+	if err := r.validateApprovalWindowDuration(duration); err != nil {
 		return core.ApprovalWindowEnableResult{}, err
-	} else if !ok {
+	}
+	claimed, ok, err := r.store.MarkApprovalWindowOfferUsed(offer.ID, time.Now().UTC())
+	if err != nil {
+		return core.ApprovalWindowEnableResult{}, err
+	}
+	if !ok {
 		return core.ApprovalWindowEnableResult{}, fmt.Errorf("approval window offer is no longer active")
+	}
+	result, err := r.EnableApprovalWindowForKeyResult(ctx, approvalWindowOfferSessionKey(claimed), adminUserID, duration)
+	if err != nil || !result.Active {
+		_, _, _ = r.store.CloseApprovalWindowOffer(offer.ID, time.Now().UTC())
+		return result, err
 	}
 	return result, nil
 }
