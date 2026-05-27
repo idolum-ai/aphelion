@@ -13,7 +13,10 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
-const approvalWindowOfferTTL = 24 * time.Hour
+const (
+	approvalWindowOfferTTL          = 24 * time.Hour
+	approvalWindowOfferOpeningGrace = 2 * time.Minute
+)
 
 func (r *Runtime) CreateApprovalWindowOfferForKey(ctx context.Context, key session.SessionKey, adminUserID int64, sourceKind string, sourceID string, sourceDecisionKind string) (session.ApprovalWindowOffer, bool, error) {
 	_ = ctx
@@ -42,9 +45,11 @@ func (r *Runtime) CreateApprovalWindowOfferForKey(ctx context.Context, key sessi
 	} else if ok {
 		if !existing.UsedAt.IsZero() {
 			if existing.OpenedLeaseID == "" && existing.OpenedOverrideID == "" {
-				return existing, true, nil
-			}
-			if _, _, live, liveErr := r.liveApprovalWindowForOffer(existing, existing.AdminUserID, now); liveErr != nil {
+				if approvalWindowOfferClaimStillOpening(existing, now) {
+					return existing, true, nil
+				}
+				_, _, _ = r.closeOfferIfStillBound(existing, now)
+			} else if _, _, live, liveErr := r.liveApprovalWindowForOffer(existing, existing.AdminUserID, now); liveErr != nil {
 				return session.ApprovalWindowOffer{}, false, liveErr
 			} else if !live {
 				_, _, _ = r.closeOfferIfStillBound(existing, now)
@@ -166,7 +171,22 @@ func (r *Runtime) repairClaimedApprovalWindowOffer(_ context.Context, offer sess
 		_, _, _ = r.closeOfferIfStillBound(offer, now)
 		return core.ApprovalWindowEnableResult{}, fmt.Errorf("approval window offer was opened but no matching live approval window exists; offer closed")
 	}
-	return core.ApprovalWindowEnableResult{}, fmt.Errorf("approval window offer is already being opened")
+	if approvalWindowOfferClaimStillOpening(offer, now) {
+		return core.ApprovalWindowEnableResult{}, fmt.Errorf("approval window offer is already being opened")
+	}
+	_, _, _ = r.closeOfferIfStillBound(offer, now)
+	return core.ApprovalWindowEnableResult{}, fmt.Errorf("approval window offer was claimed but no matching live approval window exists; offer closed")
+}
+
+func approvalWindowOfferClaimStillOpening(offer session.ApprovalWindowOffer, now time.Time) bool {
+	offer = session.NormalizeApprovalWindowOffer(offer)
+	if offer.UsedAt.IsZero() || offer.OpenedLeaseID != "" || offer.OpenedOverrideID != "" {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return now.UTC().Before(offer.UsedAt.UTC().Add(approvalWindowOfferOpeningGrace))
 }
 
 func (r *Runtime) liveApprovalWindowForOffer(offer session.ApprovalWindowOffer, adminUserID int64, now time.Time) (session.OperatorAutoApprovalLease, session.OperatorAutonomyOverride, bool, error) {
@@ -342,6 +362,9 @@ func (r *Runtime) closeOfferIfStillBound(offer session.ApprovalWindowOffer, now 
 		return r.store.CloseApprovalWindowOfferIfOpened(offer.ID, offer.OpenedLeaseID, offer.OpenedOverrideID, now)
 	}
 	if !offer.UsedAt.IsZero() {
+		if approvalWindowOfferClaimStillOpening(offer, now) {
+			return session.ApprovalWindowOffer{}, false, nil
+		}
 		return r.store.CloseClaimedUnopenedApprovalWindowOffer(offer.ID, now)
 	}
 	return r.store.CloseUnusedApprovalWindowOffer(offer.ID, now)
@@ -359,7 +382,7 @@ func (r *Runtime) CloseApprovalWindowOffer(ctx context.Context, offerID string, 
 	offer = session.NormalizeApprovalWindowOffer(offer)
 	now := time.Now().UTC()
 	if offer.OpenedLeaseID == "" && offer.OpenedOverrideID == "" {
-		if !offer.UsedAt.IsZero() {
+		if !offer.UsedAt.IsZero() && approvalWindowOfferClaimStillOpening(offer, now) {
 			return fmt.Errorf("approval window offer is already being opened")
 		}
 		_, _, err := r.closeOfferIfStillBound(offer, now)

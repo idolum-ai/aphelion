@@ -464,6 +464,90 @@ func TestRuntimeApprovalWindowOfferClaimWithoutLiveWindowStaysInflight(t *testin
 	}
 }
 
+func TestRuntimeStaleClaimedUnopenedOfferRepairsClosed(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Now().UTC()
+	chatID := int64(99322)
+	key := session.SessionKey{ChatID: chatID, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "99322"}}
+	usedAt := now.Add(-approvalWindowOfferOpeningGrace - time.Minute)
+	offer, err := store.CreateApprovalWindowOffer(session.ApprovalWindowOffer{
+		ID:                 "offer-stale-claimed-repair",
+		ChatID:             chatID,
+		AdminUserID:        1001,
+		SessionID:          session.SessionIDForKey(key),
+		ScopeKind:          string(session.ScopeKindTelegramDM),
+		ScopeID:            "99322",
+		SourceKind:         session.ApprovalWindowOfferSourceDecision,
+		SourceID:           "decision-stale-claimed-repair",
+		SourceDecisionKind: string(decision.KindProposalApproval),
+		CreatedAt:          usedAt.Add(-time.Second),
+		ExpiresAt:          now.Add(time.Hour),
+		UsedAt:             usedAt,
+		UpdatedAt:          usedAt,
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
+	}
+	if result, err := rt.EnableApprovalWindowOfferResult(context.Background(), offer.ID, 1001, 15*time.Minute); err == nil {
+		t.Fatalf("EnableApprovalWindowOfferResult() = %#v, nil; want stale repair error", result)
+	}
+	stored, ok, err := store.ApprovalWindowOffer(offer.ID)
+	if err != nil || !ok {
+		t.Fatalf("ApprovalWindowOffer() ok=%t err=%v", ok, err)
+	}
+	if stored.ClosedAt.IsZero() {
+		t.Fatalf("stored.ClosedAt is zero, want stale claimed-unopened offer closed")
+	}
+}
+
+func TestRuntimeCloseStaleClaimedUnopenedOfferCloses(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Now().UTC()
+	chatID := int64(99323)
+	key := session.SessionKey{ChatID: chatID, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "99323"}}
+	usedAt := now.Add(-approvalWindowOfferOpeningGrace - time.Minute)
+	offer, err := store.CreateApprovalWindowOffer(session.ApprovalWindowOffer{
+		ID:                 "offer-stale-claimed-close",
+		ChatID:             chatID,
+		AdminUserID:        1001,
+		SessionID:          session.SessionIDForKey(key),
+		ScopeKind:          string(session.ScopeKindTelegramDM),
+		ScopeID:            "99323",
+		SourceKind:         session.ApprovalWindowOfferSourceDecision,
+		SourceID:           "decision-stale-claimed-close",
+		SourceDecisionKind: string(decision.KindProposalApproval),
+		CreatedAt:          usedAt.Add(-time.Second),
+		ExpiresAt:          now.Add(time.Hour),
+		UsedAt:             usedAt,
+		UpdatedAt:          usedAt,
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
+	}
+	if err := rt.CloseApprovalWindowOffer(context.Background(), offer.ID, 1001); err != nil {
+		t.Fatalf("CloseApprovalWindowOffer(stale claimed unopened) err = %v", err)
+	}
+	stored, ok, err := store.ApprovalWindowOffer(offer.ID)
+	if err != nil || !ok {
+		t.Fatalf("ApprovalWindowOffer() ok=%t err=%v", ok, err)
+	}
+	if stored.ClosedAt.IsZero() {
+		t.Fatalf("stored.ClosedAt is zero, want stale claimed-unopened offer closed")
+	}
+}
+
 func TestRuntimeApprovalWindowOfferSourceReplayReturnsOpenedOfferForRedraw(t *testing.T) {
 	t.Parallel()
 

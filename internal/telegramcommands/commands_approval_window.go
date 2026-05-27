@@ -146,7 +146,10 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 	if action == approvalWindowActionClose {
 		if ok && strings.TrimSpace(offerID) != "" {
 			if err := approvals.CloseApprovalWindowOffer(ctx, offerID, senderID); err != nil {
-				return true, err
+				if answerErr := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), approvalWindowCallbackErrorAnswer(err)); answerErr != nil && !telegram.IsStaleCallbackQueryError(answerErr) {
+					return true, answerErr
+				}
+				return true, nil
 			}
 		}
 		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {

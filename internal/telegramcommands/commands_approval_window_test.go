@@ -4,6 +4,7 @@ package telegramcommands
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -431,6 +432,34 @@ func TestApprovalWindowCancelCallbackClearsControls(t *testing.T) {
 	}
 	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "canceled") {
 		t.Fatalf("editClear = %#v, want canceled text without controls", sender.editClear)
+	}
+}
+
+func TestApprovalWindowCloseCallbackErrorAnswersWithoutClearingControls(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{approvalWindowErr: errors.New("approval windows are admin only")}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:      "cb-aw-close-non-admin",
+		From:    &telegram.User{ID: 2002},
+		Data:    encodeApprovalWindowCallbackData("offer-live", approvalWindowActionClose),
+		Message: &telegram.Message{MessageID: 77, Text: "Approved.", Chat: &telegram.Chat{ID: 7}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.answers) != 1 || !strings.Contains(sender.answers[0].text, "admin only") {
+		t.Fatalf("answers = %#v, want admin-only callback answer", sender.answers)
+	}
+	if len(sender.editClear) != 0 || len(sender.editInline) != 0 {
+		t.Fatalf("editClear=%#v editInline=%#v, want controls left intact on Close error", sender.editClear, sender.editInline)
+	}
+	if router.approvalWindowAction != approvalWindowActionClose || router.approvalWindowSenderID != 2002 {
+		t.Fatalf("approval close action=%q sender=%d, want close sender 2002", router.approvalWindowAction, router.approvalWindowSenderID)
 	}
 }
 
