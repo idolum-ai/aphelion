@@ -181,12 +181,16 @@ func tokenRequestBody(app App) ([]byte, error) {
 		if len(app.Repositories) == 0 {
 			return nil, fmt.Errorf("github app repositories are required unless allow_all_repositories is true")
 		}
+		repositories := make([]string, 0, len(app.Repositories))
 		for _, repo := range app.Repositories {
 			if !validRepository(repo) {
 				return nil, fmt.Errorf("invalid github app repository %q", repo)
 			}
+			// Local authorization keeps owner/repo full names; GitHub's
+			// installation-token request expects repository names only.
+			repositories = append(repositories, RepositoryName(repo))
 		}
-		payload["repositories"] = app.Repositories
+		payload["repositories"] = repositories
 	}
 	if !app.AllowAllPermissions {
 		permissions, err := PermissionMap(app.Permissions)

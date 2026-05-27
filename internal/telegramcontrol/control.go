@@ -28,12 +28,17 @@ type Runtime interface {
 	AutoApprovalStatusForKey(ctx context.Context, key session.SessionKey, senderID int64) (string, error)
 	CreateApprovalWindowOfferForKey(ctx context.Context, key session.SessionKey, senderID int64, sourceKind string, sourceID string, sourceDecisionKind string) (session.ApprovalWindowOffer, bool, error)
 	EnableApprovalWindowForKey(ctx context.Context, key session.SessionKey, senderID int64, duration time.Duration) (string, error)
+	EnableApprovalWindowForKeyResult(ctx context.Context, key session.SessionKey, senderID int64, duration time.Duration) (core.ApprovalWindowEnableResult, error)
 	DoubleApprovalWindowForKey(ctx context.Context, key session.SessionKey, senderID int64) (string, error)
 	CancelApprovalWindowForKey(ctx context.Context, key session.SessionKey, senderID int64) (string, error)
+	CancelApprovalWindowForKeyResult(ctx context.Context, key session.SessionKey, senderID int64) (core.ApprovalWindowCancelResult, error)
 	EnableApprovalWindowOffer(ctx context.Context, offerID string, senderID int64, duration time.Duration) (string, error)
+	EnableApprovalWindowOfferResult(ctx context.Context, offerID string, senderID int64, duration time.Duration) (core.ApprovalWindowEnableResult, error)
 	DoubleApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error)
 	CancelApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error)
-	CloseApprovalWindowOffer(ctx context.Context, offerID string) error
+	CancelApprovalWindowOfferResult(ctx context.Context, offerID string, senderID int64) (core.ApprovalWindowCancelResult, error)
+	CloseApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) error
+	ApprovalWindowOfferByID(offerID string) (session.ApprovalWindowOffer, bool, error)
 	RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error)
 	RefreshContinuationProposalForKey(ctx context.Context, key session.SessionKey, reason string) (session.ContinuationState, bool, error)
 

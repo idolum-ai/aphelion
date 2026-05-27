@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/decision"
 	"github.com/idolum-ai/aphelion/internal/telegramcontrol"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -95,14 +96,23 @@ func (c telegramCommandControl) CreateApprovalWindowOfferForMessage(ctx context.
 func (c telegramCommandControl) EnableApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage, duration time.Duration) (string, error) {
 	return c.controlFacade().EnableApprovalWindowForMessage(ctx, msg, duration)
 }
+func (c telegramCommandControl) EnableApprovalWindowForMessageResult(ctx context.Context, msg core.InboundMessage, duration time.Duration) (core.ApprovalWindowEnableResult, error) {
+	return c.controlFacade().EnableApprovalWindowForMessageResult(ctx, msg, duration)
+}
 func (c telegramCommandControl) DoubleApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage) (string, error) {
 	return c.controlFacade().DoubleApprovalWindowForMessage(ctx, msg)
 }
 func (c telegramCommandControl) CancelApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage) (string, error) {
 	return c.controlFacade().CancelApprovalWindowForMessage(ctx, msg)
 }
+func (c telegramCommandControl) CancelApprovalWindowForMessageResult(ctx context.Context, msg core.InboundMessage) (core.ApprovalWindowCancelResult, error) {
+	return c.controlFacade().CancelApprovalWindowForMessageResult(ctx, msg)
+}
 func (c telegramCommandControl) EnableApprovalWindowOffer(ctx context.Context, offerID string, senderID int64, duration time.Duration) (string, error) {
 	return c.controlFacade().EnableApprovalWindowOffer(ctx, offerID, senderID, duration)
+}
+func (c telegramCommandControl) EnableApprovalWindowOfferResult(ctx context.Context, offerID string, senderID int64, duration time.Duration) (core.ApprovalWindowEnableResult, error) {
+	return c.controlFacade().EnableApprovalWindowOfferResult(ctx, offerID, senderID, duration)
 }
 func (c telegramCommandControl) DoubleApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error) {
 	return c.controlFacade().DoubleApprovalWindowOffer(ctx, offerID, senderID)
@@ -110,8 +120,20 @@ func (c telegramCommandControl) DoubleApprovalWindowOffer(ctx context.Context, o
 func (c telegramCommandControl) CancelApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error) {
 	return c.controlFacade().CancelApprovalWindowOffer(ctx, offerID, senderID)
 }
-func (c telegramCommandControl) CloseApprovalWindowOffer(ctx context.Context, offerID string) error {
-	return c.controlFacade().CloseApprovalWindowOffer(ctx, offerID)
+func (c telegramCommandControl) CancelApprovalWindowOfferResult(ctx context.Context, offerID string, senderID int64) (core.ApprovalWindowCancelResult, error) {
+	return c.controlFacade().CancelApprovalWindowOfferResult(ctx, offerID, senderID)
+}
+func (c telegramCommandControl) CloseApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) error {
+	return c.controlFacade().CloseApprovalWindowOffer(ctx, offerID, senderID)
+}
+func (c telegramCommandControl) ApprovalWindowOfferByID(offerID string) (session.ApprovalWindowOffer, bool, error) {
+	return c.controlFacade().ApprovalWindowOfferByID(offerID)
+}
+func (c telegramCommandControl) PeekDecisionCallback(decisionID string, actor decision.CallbackActor) (decision.PendingDecision, bool) {
+	return c.controlFacade().PeekDecisionCallback(decisionID, actor)
+}
+func (c telegramCommandControl) ResolveDecisionCallback(decisionID string, choice string, actor decision.CallbackActor) decision.ResolveResult {
+	return c.controlFacade().ResolveDecisionCallback(decisionID, choice, actor)
 }
 func (c telegramCommandControl) RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error) {
 	return c.controlFacade().RefreshContinuationProposal(ctx, chatID, reason)

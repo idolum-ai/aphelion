@@ -10,7 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 60
+const schemaVersion = 61
 
 type SQLiteStore struct {
 	db     *sql.DB
@@ -471,6 +471,8 @@ func (s *SQLiteStore) init() error {
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			expires_at TEXT NOT NULL,
 			used_at TEXT,
+			opened_lease_id TEXT NOT NULL DEFAULT '',
+			opened_override_id TEXT NOT NULL DEFAULT '',
 			closed_at TEXT,
 			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,

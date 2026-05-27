@@ -26,7 +26,8 @@ type schemaProperty struct {
 // execution constraints.
 func (r *Registry) Manifest() string {
 	defs := r.Definitions()
-	lines := []string{RenderManifest(defs, r.externalManifests, r.externalExecutor), "", "exec constraints:"}
+	lines := []string{RenderManifest(defs, r.externalManifests, r.externalExecutor)}
+	lines = append(lines, "", "exec constraints:")
 
 	execRoot := r.workspace
 	if abs, err := filepath.Abs(r.workspace); err == nil {
@@ -38,13 +39,17 @@ func (r *Registry) Manifest() string {
 		fmt.Sprintf("- default_timeout_sec: %d", int(defaultTimeout(r.timeout).Seconds())),
 		fmt.Sprintf("- max_output_bytes: %d", r.maxOutputBytes),
 	)
+	for _, surface := range r.promptSupportSurfacesForPrincipal(principal.Principal{Role: principal.RoleAdmin}, defs, r.externalManifests) {
+		lines = append(lines, "", surface)
+	}
 	return strings.Join(lines, "\n")
 }
 
 func (r *Registry) ManifestForPrincipal(p principal.Principal) string {
 	defs := r.nativeDefinitionsForPrincipal(p)
 	external := r.externalManifestsForPrincipal(p)
-	lines := []string{RenderManifest(defs, external, r.externalExecutor), "", "exec constraints:"}
+	lines := []string{RenderManifest(defs, external, r.externalExecutor)}
+	lines = append(lines, "", "exec constraints:")
 
 	execRoot := r.workspace
 	if abs, err := filepath.Abs(r.workspace); err == nil {
@@ -56,6 +61,9 @@ func (r *Registry) ManifestForPrincipal(p principal.Principal) string {
 		fmt.Sprintf("- default_timeout_sec: %d", int(defaultTimeout(r.timeout).Seconds())),
 		fmt.Sprintf("- max_output_bytes: %d", r.maxOutputBytes),
 	)
+	for _, surface := range r.promptSupportSurfacesForPrincipal(p, defs, external) {
+		lines = append(lines, "", surface)
+	}
 	return strings.Join(lines, "\n")
 }
 
