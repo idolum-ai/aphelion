@@ -6,7 +6,12 @@ require github.com/mattn/go-sqlite3 v1.14.41
 
 require github.com/BurntSushi/toml v1.5.0
 
-require tailscale.com v1.96.5
+require (
+	github.com/coder/websocket v1.8.12
+	golang.org/x/sync v0.19.0
+	golang.org/x/term v0.38.0
+	tailscale.com v1.96.5
+)
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
@@ -25,7 +30,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.28.13 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.5 // indirect
 	github.com/aws/smithy-go v1.24.0 // indirect
-	github.com/coder/websocket v1.8.12 // indirect
 	github.com/creachadair/msync v0.7.1 // indirect
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
@@ -59,9 +63,7 @@ require (
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/oauth2 v0.33.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
-	golang.org/x/term v0.38.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect

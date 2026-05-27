@@ -282,6 +282,7 @@ func (r *Runtime) cachedProviderForModelSlot(cfg core.ModelSlotConfig) (agent.Pr
 	}
 	cfg = core.NormalizeModelSlotConfig(cfg)
 	key := modelSlotProviderCacheKey(cfg)
+
 	r.modelProviderMu.Lock()
 	if r.modelProviderCache == nil {
 		r.modelProviderCache = make(map[string]agent.Provider)
@@ -292,15 +293,44 @@ func (r *Runtime) cachedProviderForModelSlot(cfg core.ModelSlotConfig) (agent.Pr
 	}
 	r.modelProviderMu.Unlock()
 
-	provider, err := buildProviderForModelSlot(r.cfg, cfg)
+	// Use singleflight to deduplicate concurrent builds for the same key.
+	// Without this, N parallel cache misses would each call the (slow)
+	// buildProviderForModelSlot path, then race to write the result back.
+	v, err, _ := r.modelProviderSF.Do(key, func() (any, error) {
+		// Re-check under the lock once we own the singleflight slot — another
+		// caller may have populated the cache between our miss above and our
+		// arrival here.
+		r.modelProviderMu.Lock()
+		if provider := r.modelProviderCache[key]; provider != nil {
+			r.modelProviderMu.Unlock()
+			return provider, nil
+		}
+		r.modelProviderMu.Unlock()
+
+		provider, err := r.buildProviderForCache(cfg)
+		if err != nil {
+			return nil, err
+		}
+		r.modelProviderMu.Lock()
+		r.modelProviderCache[key] = provider
+		r.modelProviderMu.Unlock()
+		return provider, nil
+	})
 	if err != nil {
 		return nil, err
 	}
+	return v.(agent.Provider), nil
+}
 
-	r.modelProviderMu.Lock()
-	r.modelProviderCache[key] = provider
-	r.modelProviderMu.Unlock()
-	return provider, nil
+// buildProviderForCache is the indirection cachedProviderForModelSlot uses
+// when populating the cache. Tests can override Runtime.buildProviderHook to
+// count or fake the build path; production callers fall through to the real
+// buildProviderForModelSlot.
+func (r *Runtime) buildProviderForCache(slot core.ModelSlotConfig) (agent.Provider, error) {
+	if r.buildProviderHook != nil {
+		return r.buildProviderHook(r.cfg, slot)
+	}
+	return buildProviderForModelSlot(r.cfg, slot)
 }
 
 func buildProviderForModelSlot(cfg *config.Config, slot core.ModelSlotConfig) (agent.Provider, error) {

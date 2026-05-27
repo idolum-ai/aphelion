@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
@@ -118,6 +120,8 @@ type Runtime struct {
 	recipeState            runtimeRecipeState
 	shuttingDown           atomic.Bool
 	startupRecoveryWG      sync.WaitGroup
+	modelProviderSF        singleflight.Group
+	buildProviderHook      func(*config.Config, core.ModelSlotConfig) (agent.Provider, error)
 }
 
 func (r *Runtime) ConfigureVoice(cfg config.VoiceConfig, transcriber media.TranscriptionProvider, synth voice.Synthesizer) {
