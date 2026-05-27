@@ -303,6 +303,44 @@ func TestActiveApprovalWindowOfferForSourceExcludesUsedOffers(t *testing.T) {
 	}
 }
 
+func TestActiveApprovalWindowOfferForSourceReturnsOpenedUsedOffer(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC()
+	offer, err := store.CreateApprovalWindowOffer(ApprovalWindowOffer{
+		ID:                 "offer-source-opened",
+		ChatID:             7003,
+		AdminUserID:        1001,
+		ScopeKind:          string(ScopeKindTelegramDM),
+		ScopeID:            "7003",
+		SourceKind:         ApprovalWindowOfferSourceDecision,
+		SourceID:           "decision-source-opened",
+		SourceDecisionKind: "proposal_approval",
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(time.Hour),
+		UpdatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
+	}
+	if _, ok, err := store.MarkApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
+		t.Fatalf("MarkApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
+	}
+	if _, ok, err := store.MarkApprovalWindowOfferOpened(offer.ID, "lease-opened", "override-opened", now.Add(2*time.Second)); err != nil || !ok {
+		t.Fatalf("MarkApprovalWindowOfferOpened() ok=%t err=%v", ok, err)
+	}
+	got, ok, err := store.ActiveApprovalWindowOfferForSource(7003, ApprovalWindowOfferSourceDecision, "decision-source-opened", now.Add(3*time.Second))
+	if err != nil || !ok {
+		t.Fatalf("ActiveApprovalWindowOfferForSource() = %#v, %t, %v; want opened used offer", got, ok, err)
+	}
+	if got.ID != offer.ID || got.OpenedLeaseID != "lease-opened" || got.OpenedOverrideID != "override-opened" {
+		t.Fatalf("got = %#v, want opened offer binding", got)
+	}
+}
+
 func TestApprovalWindowOfferUsedMarkIsCAS(t *testing.T) {
 	t.Parallel()
 

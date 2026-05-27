@@ -23,6 +23,8 @@ func ensureApprovalWindowOfferTables(tx *sql.Tx) error {
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			expires_at TEXT NOT NULL,
 			used_at TEXT,
+			opened_lease_id TEXT NOT NULL DEFAULT '',
+			opened_override_id TEXT NOT NULL DEFAULT '',
 			closed_at TEXT,
 			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
@@ -147,6 +149,25 @@ func ensureScopedDecisionColumns(tx *sql.Tx) error {
 		}
 		if _, err := tx.Exec(index.stmt); err != nil {
 			return fmt.Errorf("ensure scoped decision index: %w", err)
+		}
+	}
+	return nil
+}
+
+func ensureApprovalWindowOfferOpenedColumns(tx *sql.Tx) error {
+	for _, column := range []schemaColumnMigration{
+		{table: "approval_window_offers", column: "opened_lease_id", statement: `ALTER TABLE approval_window_offers ADD COLUMN opened_lease_id TEXT NOT NULL DEFAULT ''`},
+		{table: "approval_window_offers", column: "opened_override_id", statement: `ALTER TABLE approval_window_offers ADD COLUMN opened_override_id TEXT NOT NULL DEFAULT ''`},
+	} {
+		exists, err := schemaTableExists(tx, column.table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		if err := addSchemaColumnIfMissing(tx, column); err != nil {
+			return err
 		}
 	}
 	return nil

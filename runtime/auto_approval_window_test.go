@@ -464,6 +464,75 @@ func TestRuntimeApprovalWindowOfferClaimWithoutLiveWindowRepairsClosed(t *testin
 	}
 }
 
+func TestRuntimeApprovalWindowOfferSourceReplayReturnsOpenedOfferForRedraw(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	chatID := int64(99314)
+	key := session.SessionKey{ChatID: chatID, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "99314"}}
+	offer, created, err := rt.CreateApprovalWindowOfferForKey(context.Background(), key, 1001, session.ApprovalWindowOfferSourceDecision, "decision-redraw", string(decision.KindProposalApproval))
+	if err != nil || !created {
+		t.Fatalf("CreateApprovalWindowOfferForKey() = %#v, %t, %v; want offer", offer, created, err)
+	}
+	if _, err := rt.EnableApprovalWindowOffer(context.Background(), offer.ID, 1001, 15*time.Minute); err != nil {
+		t.Fatalf("EnableApprovalWindowOffer() err = %v", err)
+	}
+	redrawOffer, ok, err := rt.CreateApprovalWindowOfferForKey(context.Background(), key, 1001, session.ApprovalWindowOfferSourceDecision, "decision-redraw", string(decision.KindProposalApproval))
+	if err != nil || !ok {
+		t.Fatalf("CreateApprovalWindowOfferForKey(redraw) = %#v, %t, %v; want existing opened offer", redrawOffer, ok, err)
+	}
+	if redrawOffer.ID != offer.ID {
+		t.Fatalf("redraw offer ID = %q, want original %q", redrawOffer.ID, offer.ID)
+	}
+	if redrawOffer.OpenedLeaseID == "" || redrawOffer.OpenedOverrideID == "" {
+		t.Fatalf("redraw offer = %#v, want opened binding for active controls", redrawOffer)
+	}
+}
+
+func TestRuntimeApprovalWindowOfferStaleUsedHandleCannotCancelLaterWindow(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	chatID := int64(99315)
+	key := session.SessionKey{ChatID: chatID, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "99315"}}
+	offer, created, err := rt.CreateApprovalWindowOfferForKey(context.Background(), key, 1001, session.ApprovalWindowOfferSourceDecision, "decision-stale-handle", string(decision.KindProposalApproval))
+	if err != nil || !created {
+		t.Fatalf("CreateApprovalWindowOfferForKey() = %#v, %t, %v; want offer", offer, created, err)
+	}
+	if _, err := rt.EnableApprovalWindowOffer(context.Background(), offer.ID, 1001, 15*time.Minute); err != nil {
+		t.Fatalf("EnableApprovalWindowOffer() err = %v", err)
+	}
+	if _, err := rt.EnableApprovalWindowForKey(context.Background(), key, 1001, 20*time.Minute); err != nil {
+		t.Fatalf("EnableApprovalWindowForKey(later) err = %v", err)
+	}
+	if result, err := rt.CancelApprovalWindowOfferResult(context.Background(), offer.ID, 1001); err == nil || result.Canceled {
+		t.Fatalf("CancelApprovalWindowOfferResult(stale) = %#v, %v; want stale handle rejection", result, err)
+	}
+	stored, ok, err := store.ApprovalWindowOffer(offer.ID)
+	if err != nil || !ok {
+		t.Fatalf("ApprovalWindowOffer() ok=%t err=%v", ok, err)
+	}
+	if stored.ClosedAt.IsZero() {
+		t.Fatalf("stored.ClosedAt is zero; want stale handle closed")
+	}
+	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
+	leases, err := store.ActiveOperatorAutoApprovalLeasesForScope(chatID, scopeKind, scopeID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeasesForScope() err = %v", err)
+	}
+	if len(leases) != 1 {
+		t.Fatalf("leases = %#v, want later live window preserved", leases)
+	}
+}
+
 func TestRuntimeApprovalWindowOfferUsesPersistedThreadScope(t *testing.T) {
 	t.Parallel()
 

@@ -5,8 +5,10 @@ package core
 // ApprovalWindowEnableResult carries rendered text plus typed authority state.
 // Text is presentation only; Active is the authority signal.
 type ApprovalWindowEnableResult struct {
-	Text   string
-	Active bool
+	Text       string
+	Active     bool
+	LeaseID    string
+	OverrideID string
 }
 
 // ApprovalWindowCancelResult carries rendered text plus typed cancellation state.

@@ -126,7 +126,7 @@ func (r *Runtime) enableApprovalWindowForScope(ctx context.Context, chatID int64
 	r.recordOperatorAutoApprovalEvent(chatID, core.ExecutionEventAutoApprovalGranted, "active", createdLease, map[string]any{
 		"source": "approval_window",
 	})
-	return core.ApprovalWindowEnableResult{Text: renderApprovalWindowEnabled(createdLease, createdOverride, now), Active: true}, nil
+	return core.ApprovalWindowEnableResult{Text: renderApprovalWindowEnabled(createdLease, createdOverride, now), Active: true, LeaseID: createdLease.ID, OverrideID: createdOverride.ID}, nil
 }
 
 func (r *Runtime) doubleApprovalWindowForScope(ctx context.Context, chatID int64, scopeKind string, scopeID string, adminUserID int64) (string, error) {

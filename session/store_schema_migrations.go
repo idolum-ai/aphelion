@@ -260,3 +260,10 @@ func migrateSchemaV59ToV60(tx *sql.Tx) error {
 	}
 	return nil
 }
+
+func migrateSchemaV60ToV61(tx *sql.Tx) error {
+	if err := ensureApprovalWindowOfferOpenedColumns(tx); err != nil {
+		return fmt.Errorf("migrate schema v60 to v61 ensure approval window offer opened columns: %w", err)
+	}
+	return nil
+}

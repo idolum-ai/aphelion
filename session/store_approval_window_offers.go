@@ -39,9 +39,9 @@ func (s *SQLiteStore) CreateApprovalWindowOffer(offer ApprovalWindowOffer) (Appr
 	_, err := s.db.Exec(`
 		INSERT INTO approval_window_offers(
 			offer_id, chat_id, admin_user_id, session_id, scope_kind, scope_id, durable_agent_id,
-			source_kind, source_id, source_decision_kind, created_at, expires_at, used_at, closed_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, offer.ID, offer.ChatID, offer.AdminUserID, offer.SessionID, offer.ScopeKind, offer.ScopeID, offer.DurableAgentID, offer.SourceKind, offer.SourceID, offer.SourceDecisionKind, offer.CreatedAt.UTC().Format(time.RFC3339Nano), offer.ExpiresAt.UTC().Format(time.RFC3339Nano), usedAt, closedAt, offer.UpdatedAt.UTC().Format(time.RFC3339Nano))
+			source_kind, source_id, source_decision_kind, opened_lease_id, opened_override_id, created_at, expires_at, used_at, closed_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, offer.ID, offer.ChatID, offer.AdminUserID, offer.SessionID, offer.ScopeKind, offer.ScopeID, offer.DurableAgentID, offer.SourceKind, offer.SourceID, offer.SourceDecisionKind, offer.OpenedLeaseID, offer.OpenedOverrideID, offer.CreatedAt.UTC().Format(time.RFC3339Nano), offer.ExpiresAt.UTC().Format(time.RFC3339Nano), usedAt, closedAt, offer.UpdatedAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return ApprovalWindowOffer{}, fmt.Errorf("create approval window offer: %w", err)
 	}
@@ -62,7 +62,7 @@ func (s *SQLiteStore) ApprovalWindowOffer(id string) (ApprovalWindowOffer, bool,
 	}
 	row := s.db.QueryRow(`
 		SELECT offer_id, chat_id, admin_user_id, session_id, scope_kind, scope_id, durable_agent_id,
-			source_kind, source_id, source_decision_kind, created_at, expires_at, used_at, closed_at, updated_at
+			source_kind, source_id, source_decision_kind, opened_lease_id, opened_override_id, created_at, expires_at, used_at, closed_at, updated_at
 		FROM approval_window_offers
 		WHERE offer_id = ?
 	`, id)
@@ -85,12 +85,12 @@ func (s *SQLiteStore) ActiveApprovalWindowOfferForSource(chatID int64, sourceKin
 	}
 	row := s.db.QueryRow(`
 		SELECT offer_id, chat_id, admin_user_id, session_id, scope_kind, scope_id, durable_agent_id,
-			source_kind, source_id, source_decision_kind, created_at, expires_at, used_at, closed_at, updated_at
+			source_kind, source_id, source_decision_kind, opened_lease_id, opened_override_id, created_at, expires_at, used_at, closed_at, updated_at
 		FROM approval_window_offers
 		WHERE chat_id = ?
 			AND source_kind = ?
 			AND source_id = ?
-			AND used_at IS NULL
+			AND (used_at IS NULL OR (TRIM(opened_lease_id) != '' AND TRIM(opened_override_id) != ''))
 			AND closed_at IS NULL
 			AND expires_at > ?
 		ORDER BY updated_at DESC, created_at DESC, offer_id DESC
@@ -129,6 +129,42 @@ func (s *SQLiteStore) MarkApprovalWindowOfferUsed(id string, now time.Time) (App
 	affected, err := res.RowsAffected()
 	if err != nil {
 		return ApprovalWindowOffer{}, false, fmt.Errorf("approval window offer used rows affected: %w", err)
+	}
+	if affected == 0 {
+		return ApprovalWindowOffer{}, false, nil
+	}
+	offer, ok, err := s.ApprovalWindowOffer(id)
+	if err != nil {
+		return ApprovalWindowOffer{}, false, err
+	}
+	return offer, ok, nil
+}
+
+func (s *SQLiteStore) MarkApprovalWindowOfferOpened(id string, leaseID string, overrideID string, now time.Time) (ApprovalWindowOffer, bool, error) {
+	id = strings.TrimSpace(id)
+	leaseID = strings.TrimSpace(leaseID)
+	overrideID = strings.TrimSpace(overrideID)
+	if id == "" || leaseID == "" || overrideID == "" {
+		return ApprovalWindowOffer{}, false, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	stamp := now.UTC().Format(time.RFC3339Nano)
+	res, err := s.db.Exec(`
+		UPDATE approval_window_offers
+		SET opened_lease_id = ?, opened_override_id = ?, updated_at = ?
+		WHERE offer_id = ?
+			AND used_at IS NOT NULL
+			AND closed_at IS NULL
+			AND expires_at > ?
+	`, leaseID, overrideID, stamp, id, stamp)
+	if err != nil {
+		return ApprovalWindowOffer{}, false, fmt.Errorf("mark approval window offer opened: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return ApprovalWindowOffer{}, false, fmt.Errorf("approval window offer opened rows affected: %w", err)
 	}
 	if affected == 0 {
 		return ApprovalWindowOffer{}, false, nil
@@ -184,7 +220,7 @@ func scanApprovalWindowOffer(scanner approvalWindowOfferScanner) (ApprovalWindow
 		closedRaw  sql.NullString
 		updatedRaw string
 	)
-	if err := scanner.Scan(&offer.ID, &offer.ChatID, &offer.AdminUserID, &offer.SessionID, &offer.ScopeKind, &offer.ScopeID, &offer.DurableAgentID, &offer.SourceKind, &offer.SourceID, &offer.SourceDecisionKind, &createdRaw, &expiresRaw, &usedRaw, &closedRaw, &updatedRaw); err != nil {
+	if err := scanner.Scan(&offer.ID, &offer.ChatID, &offer.AdminUserID, &offer.SessionID, &offer.ScopeKind, &offer.ScopeID, &offer.DurableAgentID, &offer.SourceKind, &offer.SourceID, &offer.SourceDecisionKind, &offer.OpenedLeaseID, &offer.OpenedOverrideID, &createdRaw, &expiresRaw, &usedRaw, &closedRaw, &updatedRaw); err != nil {
 		return ApprovalWindowOffer{}, err
 	}
 	var err error
