@@ -87,10 +87,10 @@ func writeCodexAppServerFailureArtifact(memoryRoot string, agent core.DurableAge
 	rel := filepath.ToSlash(filepath.Join("heartbeats", fmt.Sprintf("codex-app-server-failure-%s.json", date)))
 	artifactRoot := filepath.Join(memoryRoot, "artifacts")
 	target := filepath.Join(artifactRoot, filepath.FromSlash(rel))
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return "", "", err
 	}
-	if err := os.WriteFile(target, raw, 0o644); err != nil {
+	if err := os.WriteFile(target, raw, 0o600); err != nil {
 		return "", "", err
 	}
 	sum := sha256.Sum256(raw)
@@ -171,11 +171,11 @@ func writeCodexAppServerHeartbeatArtifact(memoryRoot string, agent core.DurableA
 	rel := filepath.ToSlash(filepath.Join("heartbeats", fmt.Sprintf("codex-app-server-%s.json", date)))
 	artifactRoot := filepath.Join(memoryRoot, "artifacts")
 	target := filepath.Join(artifactRoot, filepath.FromSlash(rel))
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return "", "", fmt.Errorf("create codex app-server heartbeat artifact dir: %w", err)
 	}
 	content := append(pretty.Bytes(), '\n')
-	if err := os.WriteFile(target, content, 0o644); err != nil {
+	if err := os.WriteFile(target, content, 0o600); err != nil {
 		return "", "", fmt.Errorf("write codex app-server heartbeat artifact: %w", err)
 	}
 	sum := sha256.Sum256(content)

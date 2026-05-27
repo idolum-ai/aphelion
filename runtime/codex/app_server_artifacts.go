@@ -58,7 +58,7 @@ func UpsertArtifactManifestEntry(manifest ArtifactManifest, entry ArtifactManife
 }
 
 func WriteArtifactManifest(artifactRoot string, manifest ArtifactManifest) error {
-	if err := os.MkdirAll(artifactRoot, 0o755); err != nil {
+	if err := os.MkdirAll(artifactRoot, 0o700); err != nil {
 		return err
 	}
 	raw, err := json.MarshalIndent(manifest, "", "  ")
@@ -66,7 +66,7 @@ func WriteArtifactManifest(artifactRoot string, manifest ArtifactManifest) error
 		return err
 	}
 	raw = append(raw, '\n')
-	return os.WriteFile(filepath.Join(artifactRoot, "ARTIFACTS.json"), raw, 0o644)
+	return os.WriteFile(filepath.Join(artifactRoot, "ARTIFACTS.json"), raw, 0o600)
 }
 
 func WakeSummary(agent core.DurableAgent, result Result, artifactRel string) string {
