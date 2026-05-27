@@ -108,7 +108,6 @@ func runDurableAgentChildWakeBootstrap(ctx context.Context, bootstrap runtimepkg
 		WithSessionStore(store).
 		WithRemoteHostSSH(cfg.Tailscale.SSHPath, remoteHostSSHTimeoutFromConfig(cfg)).
 		WithDurableAgentPrincipalFallback().
-		WithWebSearchOptions(tool.WebSearchOptionsFromConfig(cfg.Tools.WebSearch)).
 		WithConfiguredCapabilityVisibility(configuredCapabilityVisibilityFromConfig(cfg))
 	tools.WithSemanticEngine(memory.NewSemanticEngine(memory.SemanticOptions{
 		Enabled:             cfg.Memory.Semantic.Enabled,

@@ -104,3 +104,38 @@ func TestManifestShowsGrantedWebSearchAsExposedInConfiguredVisibility(t *testing
 		t.Fatalf("configured visibility did not show exposed grant:\n%s", manifest)
 	}
 }
+
+func TestManifestRestrictsGitHubAppDetailsForDurableAgentWithoutGrant(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	keyPath := filepath.Join(root, "github-app.pem")
+	if err := os.WriteFile(keyPath, []byte("not-a-real-key"), 0o600); err != nil {
+		t.Fatalf("WriteFile(key) err = %v", err)
+	}
+	registry := NewRegistry(t.TempDir(), time.Second).
+		WithSessionStore(newToolTestStore(t)).
+		WithConfiguredCapabilityVisibility(ConfiguredCapabilityVisibilityOptions{
+			GitHub: GitHubCapabilityVisibilityOptions{
+				Enabled:    true,
+				APIBaseURL: "https://api.github.com",
+				Apps: []GitHubAppCapabilityVisibility{{
+					Name:           "idolum-bot",
+					InstallationID: 123,
+					PrivateKeyFile: keyPath,
+					Repositories:   []string{"idolum-ai/aphelion"},
+					Permissions:    []string{"contents:write", "pull_requests:write"},
+				}},
+			},
+		})
+
+	manifest := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"})
+	if !strings.Contains(manifest, "- github_apps: configured=true details=restricted reason=request_external_account_authority") {
+		t.Fatalf("manifest missing coarse restricted GitHub line:\n%s", manifest)
+	}
+	for _, forbidden := range []string{"idolum-bot", "installation_id", "github-app.pem", "key_present", "idolum-ai/aphelion", "contents:write", "pull_requests:write", root, "not-a-real-key"} {
+		if strings.Contains(manifest, forbidden) {
+			t.Fatalf("manifest leaked %q to durable agent without grant:\n%s", forbidden, manifest)
+		}
+	}
+}

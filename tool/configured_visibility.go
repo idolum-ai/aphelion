@@ -79,7 +79,7 @@ func (r *Registry) configuredCapabilityVisibilityForPrincipal(p principal.Princi
 	if block := r.webSearchConfiguredVisibility(principalID, exposedNative); len(block) > 0 {
 		lines = append(lines, block...)
 	}
-	if block := r.githubConfiguredVisibility(principalID); len(block) > 0 {
+	if block := r.githubConfiguredVisibility(p, principalID); len(block) > 0 {
 		lines = append(lines, block...)
 	}
 	if block := r.skillConfiguredVisibility(); len(block) > 0 {
@@ -165,23 +165,15 @@ func (r *Registry) externalToolConfiguredVisibility(principalID string, exposed 
 	return lines
 }
 
-func (r *Registry) githubConfiguredVisibility(principalID string) []string {
+func (r *Registry) githubConfiguredVisibility(p principal.Principal, principalID string) []string {
 	cfg := r.configuredVisibility.GitHub
 	if !cfg.Enabled && len(cfg.Apps) == 0 {
 		return nil
 	}
-	grantStatus := "not_modeled_as_runtime_tool"
-	if r.store != nil && principalID != "" {
-		if grants, err := r.store.CapabilityGrants(200, session.CapabilityGrantStatusActive, session.CapabilityKindExternalAccount, principalID); err == nil {
-			for _, grant := range grants {
-				if strings.Contains(strings.ToLower(grant.TargetResource), "github") {
-					grantStatus = "active_external_account_grant"
-					break
-				}
-			}
-		} else {
-			grantStatus = "error"
-		}
+	grantStatus := r.githubExternalAccountGrantStatus(principalID)
+	canSeeDetails := p.Role == principal.RoleAdmin || grantStatus == "active_external_account_grant"
+	if !canSeeDetails {
+		return []string{fmt.Sprintf("- github_apps: configured=%t details=restricted reason=request_external_account_authority", cfg.Enabled)}
 	}
 	lines := []string{fmt.Sprintf("- github_apps: configured=%t runtime_tool=none maintenance_cli=github-app active_external_account_grant=%s api_base_url=%s", cfg.Enabled, grantStatus, firstNonEmpty(cfg.APIBaseURL, "not_configured"))}
 	apps := append([]GitHubAppCapabilityVisibility(nil), cfg.Apps...)
@@ -199,6 +191,22 @@ func (r *Registry) githubConfiguredVisibility(principalID string) []string {
 		lines = append(lines, fmt.Sprintf("  app.%s: installation_id=%d key_file=%s key_present=%s repos=%s repo_scope=%s permissions=%s permission_scope=%s", firstNonEmpty(app.Name, "unnamed"), app.InstallationID, keySource, keyPresent, listOrNone(app.Repositories), repoScope, listOrNone(app.Permissions), permScope))
 	}
 	return lines
+}
+
+func (r *Registry) githubExternalAccountGrantStatus(principalID string) string {
+	if r == nil || r.store == nil || strings.TrimSpace(principalID) == "" {
+		return "not_checkable"
+	}
+	grants, err := r.store.CapabilityGrants(200, session.CapabilityGrantStatusActive, session.CapabilityKindExternalAccount, principalID)
+	if err != nil {
+		return "error"
+	}
+	for _, grant := range grants {
+		if strings.Contains(strings.ToLower(grant.TargetResource), "github") {
+			return "active_external_account_grant"
+		}
+	}
+	return "missing"
 }
 
 func (r *Registry) skillConfiguredVisibility() []string {
