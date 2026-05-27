@@ -60,7 +60,6 @@ These invariants are normative for architecture and requirements alignment:
 - [04-durable-topology.svg](diagrams/04-durable-topology.svg)
 - [05-state-surfaces.svg](diagrams/05-state-surfaces.svg)
 - [06-delivery-polymorphism.svg](diagrams/06-delivery-polymorphism.svg)
-- [07-present-vs-intended.svg](diagrams/07-present-vs-intended.svg)
 
 ## Update Rule
 
