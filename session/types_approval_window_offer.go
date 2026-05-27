@@ -24,6 +24,8 @@ type ApprovalWindowOffer struct {
 	SourceKind         string
 	SourceID           string
 	SourceDecisionKind string
+	OpenedLeaseID      string
+	OpenedOverrideID   string
 	CreatedAt          time.Time
 	ExpiresAt          time.Time
 	UsedAt             time.Time
@@ -40,6 +42,8 @@ func NormalizeApprovalWindowOffer(offer ApprovalWindowOffer) ApprovalWindowOffer
 	offer.SourceKind = normalizeEnumValue(offer.SourceKind)
 	offer.SourceID = strings.TrimSpace(offer.SourceID)
 	offer.SourceDecisionKind = strings.TrimSpace(offer.SourceDecisionKind)
+	offer.OpenedLeaseID = strings.TrimSpace(offer.OpenedLeaseID)
+	offer.OpenedOverrideID = strings.TrimSpace(offer.OpenedOverrideID)
 	if !offer.CreatedAt.IsZero() {
 		offer.CreatedAt = offer.CreatedAt.UTC()
 	}

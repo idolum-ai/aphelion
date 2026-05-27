@@ -455,7 +455,7 @@ func (a *ExecApprover) approvalWindowOfferRows(ctx context.Context, key session.
 	if err != nil || !created {
 		return nil, err
 	}
-	return telegramcommands.ApprovalWindowRowsForOffer(offer), nil
+	return telegramcommands.ApprovalWindowRowsForLiveOffer(offer), nil
 }
 
 func appendTelegramRows(base [][]telegram.InlineButton, extra [][]telegram.InlineButton) [][]telegram.InlineButton {

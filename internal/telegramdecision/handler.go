@@ -165,7 +165,7 @@ func initialDecisionRows(ctx context.Context, pending decision.PendingDecision, 
 }
 
 type approvalWindowOfferCloser interface {
-	CloseApprovalWindowOffer(ctx context.Context, offerID string) error
+	CloseApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) error
 }
 
 func closeApprovalWindowOffer(ctx context.Context, offerer ApprovalWindowOfferer, offerID string) error {
@@ -173,7 +173,7 @@ func closeApprovalWindowOffer(ctx context.Context, offerer ApprovalWindowOfferer
 	if !ok {
 		return nil
 	}
-	return closer.CloseApprovalWindowOffer(ctx, offerID)
+	return closer.CloseApprovalWindowOffer(ctx, offerID, 0)
 }
 
 func recordDecisionCallbackThread(ctx context.Context, recorder DecisionCallbackThreadRecorder, pending decision.PendingDecision, messageID int64) error {
@@ -326,7 +326,7 @@ func (h *Handler) appendApprovalWindowRows(pending decision.PendingDecision, row
 	if err != nil || !ok {
 		return rows
 	}
-	return appendTelegramRows(rows, telegramcommands.ApprovalWindowRowsForOffer(offer))
+	return appendTelegramRows(rows, telegramcommands.ApprovalWindowRowsForLiveOffer(offer))
 }
 
 func (h *Handler) appendEmbeddedApprovalWindowRows(pending decision.PendingDecision, rows [][]telegram.InlineButton) [][]telegram.InlineButton {

@@ -21,10 +21,16 @@ const (
 
 func (r *Runtime) EnableApprovalWindow(ctx context.Context, chatID int64, adminUserID int64, duration time.Duration) (string, error) {
 	scopeKind, scopeID := operatorAutoDefaultScope(chatID)
-	return r.enableApprovalWindowForScope(ctx, chatID, scopeKind, scopeID, adminUserID, duration)
+	result, err := r.enableApprovalWindowForScope(ctx, chatID, scopeKind, scopeID, adminUserID, duration)
+	return result.Text, err
 }
 
 func (r *Runtime) EnableApprovalWindowForKey(ctx context.Context, key session.SessionKey, adminUserID int64, duration time.Duration) (string, error) {
+	result, err := r.EnableApprovalWindowForKeyResult(ctx, key, adminUserID, duration)
+	return result.Text, err
+}
+
+func (r *Runtime) EnableApprovalWindowForKeyResult(ctx context.Context, key session.SessionKey, adminUserID int64, duration time.Duration) (core.ApprovalWindowEnableResult, error) {
 	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
 	return r.enableApprovalWindowForScope(ctx, key.ChatID, scopeKind, scopeID, adminUserID, duration)
 }
@@ -41,27 +47,33 @@ func (r *Runtime) DoubleApprovalWindowForKey(ctx context.Context, key session.Se
 
 func (r *Runtime) CancelApprovalWindow(ctx context.Context, chatID int64, adminUserID int64) (string, error) {
 	scopeKind, scopeID := operatorAutoDefaultScope(chatID)
-	return r.cancelApprovalWindowForScope(ctx, chatID, scopeKind, scopeID, adminUserID)
+	result, err := r.cancelApprovalWindowForScope(ctx, chatID, scopeKind, scopeID, adminUserID)
+	return result.Text, err
 }
 
 func (r *Runtime) CancelApprovalWindowForKey(ctx context.Context, key session.SessionKey, adminUserID int64) (string, error) {
+	result, err := r.CancelApprovalWindowForKeyResult(ctx, key, adminUserID)
+	return result.Text, err
+}
+
+func (r *Runtime) CancelApprovalWindowForKeyResult(ctx context.Context, key session.SessionKey, adminUserID int64) (core.ApprovalWindowCancelResult, error) {
 	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
 	return r.cancelApprovalWindowForScope(ctx, key.ChatID, scopeKind, scopeID, adminUserID)
 }
 
-func (r *Runtime) enableApprovalWindowForScope(ctx context.Context, chatID int64, scopeKind string, scopeID string, adminUserID int64, duration time.Duration) (string, error) {
+func (r *Runtime) enableApprovalWindowForScope(ctx context.Context, chatID int64, scopeKind string, scopeID string, adminUserID int64, duration time.Duration) (core.ApprovalWindowEnableResult, error) {
 	_ = ctx
 	if r == nil || r.store == nil {
-		return "Approval windows are unavailable.", nil
+		return core.ApprovalWindowEnableResult{Text: "Approval windows are unavailable."}, nil
 	}
 	if !r.IsTelegramAdmin(adminUserID) {
-		return "Approval windows are admin only.", nil
+		return core.ApprovalWindowEnableResult{Text: "Approval windows are admin only."}, nil
 	}
 	if duration <= 0 {
 		duration = approvalWindowDefaultDuration
 	}
 	if err := r.validateApprovalWindowDuration(duration); err != nil {
-		return "", err
+		return core.ApprovalWindowEnableResult{}, err
 	}
 	now := time.Now().UTC()
 	scopeKind = strings.TrimSpace(scopeKind)
@@ -94,27 +106,27 @@ func (r *Runtime) enableApprovalWindowForScope(ctx context.Context, chatID int64
 		UpdatedAt:   now,
 	}
 	if _, err := r.store.RevokeOperatorAutonomyOverridesForScope(chatID, adminUserID, scopeKind, scopeID, now); err != nil {
-		return "", err
+		return core.ApprovalWindowEnableResult{}, err
 	}
 	createdOverride, err := r.store.CreateOperatorAutonomyOverride(override)
 	if err != nil {
-		return "", err
+		return core.ApprovalWindowEnableResult{}, err
 	}
 	r.recordOperatorAutoModeEvent(chatID, core.ExecutionEventAutoModeEnabled, "active", createdOverride, map[string]any{
 		"source": "approval_window",
 	})
 
 	if _, err := r.store.RevokeOperatorAutoApprovalLeasesForScope(chatID, adminUserID, scopeKind, scopeID, now); err != nil {
-		return "", err
+		return core.ApprovalWindowEnableResult{}, err
 	}
 	createdLease, err := r.store.CreateOperatorAutoApprovalLease(lease)
 	if err != nil {
-		return "", err
+		return core.ApprovalWindowEnableResult{}, err
 	}
 	r.recordOperatorAutoApprovalEvent(chatID, core.ExecutionEventAutoApprovalGranted, "active", createdLease, map[string]any{
 		"source": "approval_window",
 	})
-	return renderApprovalWindowEnabled(createdLease, createdOverride, now), nil
+	return core.ApprovalWindowEnableResult{Text: renderApprovalWindowEnabled(createdLease, createdOverride, now), Active: true, LeaseID: createdLease.ID, OverrideID: createdOverride.ID}, nil
 }
 
 func (r *Runtime) doubleApprovalWindowForScope(ctx context.Context, chatID int64, scopeKind string, scopeID string, adminUserID int64) (string, error) {
@@ -213,20 +225,20 @@ func (r *Runtime) doubleApprovalWindowForScope(ctx context.Context, chatID int64
 	return renderApprovalWindowDoubled(storedLease, storedOverride, now, previousDuration, doubledDuration), nil
 }
 
-func (r *Runtime) cancelApprovalWindowForScope(ctx context.Context, chatID int64, scopeKind string, scopeID string, adminUserID int64) (string, error) {
+func (r *Runtime) cancelApprovalWindowForScope(ctx context.Context, chatID int64, scopeKind string, scopeID string, adminUserID int64) (core.ApprovalWindowCancelResult, error) {
 	_ = ctx
 	if r == nil || r.store == nil {
-		return "Approval windows are unavailable.", nil
+		return core.ApprovalWindowCancelResult{Text: "Approval windows are unavailable."}, nil
 	}
 	if !r.IsTelegramAdmin(adminUserID) {
-		return "Approval windows are admin only.", nil
+		return core.ApprovalWindowCancelResult{Text: "Approval windows are admin only."}, nil
 	}
 	now := time.Now().UTC()
 	scopeKind = strings.TrimSpace(scopeKind)
 	scopeID = strings.TrimSpace(scopeID)
 	revokedLeases, err := r.store.RevokeOperatorAutoApprovalLeasesForScope(chatID, adminUserID, scopeKind, scopeID, now)
 	if err != nil {
-		return "", err
+		return core.ApprovalWindowCancelResult{}, err
 	}
 	r.recordOperatorAutoApprovalEvent(
 		chatID,
@@ -237,7 +249,7 @@ func (r *Runtime) cancelApprovalWindowForScope(ctx context.Context, chatID int64
 	)
 	revokedOverrides, err := r.store.RevokeOperatorAutonomyOverridesForScope(chatID, adminUserID, scopeKind, scopeID, now)
 	if err != nil {
-		return "", err
+		return core.ApprovalWindowCancelResult{}, err
 	}
 	r.recordOperatorAutoModeEvent(
 		chatID,
@@ -246,7 +258,7 @@ func (r *Runtime) cancelApprovalWindowForScope(ctx context.Context, chatID int64
 		operatorAutoModePrimaryOverrideForScope(revokedOverrides, chatID, scopeKind, scopeID, adminUserID),
 		operatorAutoModeRevokedEventPayload(revokedOverrides, now),
 	)
-	return renderApprovalWindowCanceled(revokedLeases, revokedOverrides, now), nil
+	return core.ApprovalWindowCancelResult{Text: renderApprovalWindowCanceled(revokedLeases, revokedOverrides, now), Canceled: true}, nil
 }
 
 func (r *Runtime) validateApprovalWindowDuration(duration time.Duration) error {
