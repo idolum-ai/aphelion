@@ -73,10 +73,13 @@ func (r *Registry) configuredCapabilityVisibilityForPrincipal(p principal.Princi
 	}
 	lines := []string{}
 	exposedNative := toolDefNameSet(exposedDefs)
-	_ = exposedExternal
+	exposedExternalNames := externalManifestNameSet(exposedExternal)
 	principalID := toolAuthorityPrincipalDisplay(p)
 
 	if block := r.webSearchConfiguredVisibility(principalID, exposedNative); len(block) > 0 {
+		lines = append(lines, block...)
+	}
+	if block := r.externalToolConfiguredVisibility(p, principalID, exposedExternalNames); len(block) > 0 {
 		lines = append(lines, block...)
 	}
 	if block := r.githubConfiguredVisibility(p, principalID); len(block) > 0 {
@@ -130,8 +133,8 @@ func (r *Registry) webSearchConfiguredVisibility(principalID string, exposed map
 	return lines
 }
 
-func (r *Registry) externalToolConfiguredVisibility(principalID string, exposed map[string]struct{}) []string {
-	if len(r.externalManifests) == 0 {
+func (r *Registry) externalToolConfiguredVisibility(p principal.Principal, principalID string, exposed map[string]struct{}) []string {
+	if len(r.externalManifests) == 0 || p.Role != principal.RoleAdmin {
 		return nil
 	}
 	lines := []string{"- external_tool_manifests:"}
@@ -160,7 +163,7 @@ func (r *Registry) externalToolConfiguredVisibility(principalID string, exposed 
 			}
 		}
 		_, exposedNow := exposed[manifest.Name]
-		lines = append(lines, fmt.Sprintf("  - %s: configured=true owner=%s registered=%s exposed=%t active_grant=%s executable=%t", manifest.Name, firstNonEmpty(manifest.Owner, "unknown"), registered, exposedNow, grantStatus, r.externalExecutor != nil && r.externalExecutor.Supports(manifest)))
+		lines = append(lines, fmt.Sprintf("  manifest[%s]: configured=true owner=%s registered=%s exposed=%t active_grant=%s executable=%t", manifest.Name, firstNonEmpty(manifest.Owner, "unknown"), registered, exposedNow, grantStatus, r.externalExecutor != nil && r.externalExecutor.Supports(manifest)))
 	}
 	return lines
 }
@@ -197,14 +200,15 @@ func (r *Registry) githubExternalAccountGrantStatus(principalID string) string {
 	if r == nil || r.store == nil || strings.TrimSpace(principalID) == "" {
 		return "not_checkable"
 	}
-	grants, err := r.store.CapabilityGrants(200, session.CapabilityGrantStatusActive, session.CapabilityKindExternalAccount, principalID)
-	if err != nil {
+	if _, ok, err := r.store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github", principalID, "read"); err != nil {
 		return "error"
+	} else if ok {
+		return "active_external_account_grant"
 	}
-	for _, grant := range grants {
-		if strings.Contains(strings.ToLower(grant.TargetResource), "github") {
-			return "active_external_account_grant"
-		}
+	if _, ok, err := r.store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github_app", principalID, "read"); err != nil {
+		return "error"
+	} else if ok {
+		return "active_external_account_grant"
 	}
 	return "missing"
 }

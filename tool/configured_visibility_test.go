@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/session"
 )
 
 func TestManifestShowsConfiguredButUngrantableWebSearchWithoutExposingTool(t *testing.T) {
@@ -137,5 +138,106 @@ func TestManifestRestrictsGitHubAppDetailsForDurableAgentWithoutGrant(t *testing
 		if strings.Contains(manifest, forbidden) {
 			t.Fatalf("manifest leaked %q to durable agent without grant:\n%s", forbidden, manifest)
 		}
+	}
+}
+
+func TestGitHubDetailsRequireExactActiveExternalAccountGrant(t *testing.T) {
+	t.Parallel()
+
+	store := newToolTestStore(t)
+	registry := NewRegistry(t.TempDir(), time.Second).
+		WithSessionStore(store).
+		WithConfiguredCapabilityVisibility(ConfiguredCapabilityVisibilityOptions{
+			GitHub: GitHubCapabilityVisibilityOptions{
+				Enabled: true,
+				Apps: []GitHubAppCapabilityVisibility{{
+					Name:           "idolum-bot",
+					InstallationID: 123,
+					Repositories:   []string{"idolum-ai/aphelion"},
+					Permissions:    []string{"pull_requests:write"},
+				}},
+			},
+		})
+	actor := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"}
+
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-github-granted-by-false-positive",
+		GrantedBy:      "child-alpha",
+		GrantedTo:      "other-child",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github",
+		AllowedActions: []string{"read"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(granted_by false positive) err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-github-wrong-action",
+		GrantedBy:      "test",
+		GrantedTo:      "child-alpha",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github",
+		AllowedActions: []string{"write"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(wrong action) err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-github-wrong-target",
+		GrantedBy:      "test",
+		GrantedTo:      "child-alpha",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github-enterprise-other",
+		AllowedActions: []string{"read"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(wrong target) err = %v", err)
+	}
+
+	manifest := registry.ManifestForPrincipal(actor)
+	if !strings.Contains(manifest, "details=restricted") {
+		t.Fatalf("manifest should restrict details without exact grant:\n%s", manifest)
+	}
+	if strings.Contains(manifest, "idolum-bot") || strings.Contains(manifest, "installation_id") || strings.Contains(manifest, "pull_requests:write") {
+		t.Fatalf("manifest leaked GitHub app details without exact grant:\n%s", manifest)
+	}
+
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-github-exact-read",
+		GrantedBy:      "test",
+		GrantedTo:      "child-alpha",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github",
+		AllowedActions: []string{"read"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(exact) err = %v", err)
+	}
+	manifest = registry.ManifestForPrincipal(actor)
+	if !strings.Contains(manifest, "active_external_account_grant=active_external_account_grant") || !strings.Contains(manifest, "app.idolum-bot: installation_id=123") {
+		t.Fatalf("manifest did not show details with exact active grant:\n%s", manifest)
+	}
+}
+
+func TestConfiguredExternalToolVisibilityIsReachableWithoutCallableExposure(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	manifest := ExternalToolManifest{
+		Name:      "browse_page",
+		Owner:     "child-alpha",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+	}
+	if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest}); err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	out := registry.ManifestForPrincipal(actor)
+	toolsOnly := strings.Split(out, "Configured capability visibility:")[0]
+	if strings.Contains(toolsOnly, "- browse_page:") {
+		t.Fatalf("manifest exposed ungranted external tool as callable:\n%s", out)
+	}
+	if !strings.Contains(out, "- external_tool_manifests:") || !strings.Contains(out, "manifest[browse_page]: configured=true") || !strings.Contains(out, "exposed=false") || !strings.Contains(out, "active_grant=missing") {
+		t.Fatalf("manifest missing configured external tool visibility:\n%s", out)
 	}
 }
