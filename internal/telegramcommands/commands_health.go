@@ -85,26 +85,23 @@ func renderHealthHomePanel(isAdmin bool) string {
 	if isAdmin {
 		details = append(details, "Diagnose queues a read-only runtime analysis from a private admin chat.")
 	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return face.RenderInlinePanel(face.InlinePanel{
 		Title:   "Health",
-		State:   "ready",
-		Why:     "Health is the operator surface for status, trace evidence, and read-only diagnosis.",
-		Next:    "Open the view that matches the question you need answered.",
+		Next:    "Pick the view that matches your question.",
 		Details: details,
 	})
 }
 
 func renderHealthCommandUsage(action string) string {
 	action = strings.TrimSpace(action)
-	why := "Unknown health action."
+	state := "Unknown health action."
 	if action != "" {
-		why = "Unknown health action: " + action + "."
+		state = "Unknown health action: " + action + "."
 	}
-	return face.RenderOperatorPanel(face.OperatorPanel{
+	return face.RenderInlinePanel(face.InlinePanel{
 		Title: "Health",
-		State: "not applied",
-		Why:   why,
-		Next:  "Use /health, /health status, /health trace, or /health diagnose.",
+		State: state,
+		Next:  "Try /health, /health status, /health trace, or /health diagnose.",
 	})
 }
 
