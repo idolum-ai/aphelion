@@ -67,4 +67,3 @@ func TestWaitForStartupRecoveryHonorsCtxDeadlineWhenStuck(t *testing.T) {
 		t.Fatalf("WaitForStartupRecovery returned in %v, expected to wait for the deadline", elapsed)
 	}
 }
-
