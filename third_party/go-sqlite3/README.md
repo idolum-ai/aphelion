@@ -77,7 +77,7 @@ If you want to build your app using go-sqlite3, you need gcc.
 
 API documentation can be found [here](http://godoc.org/github.com/mattn/go-sqlite3).
 
-Examples can be found under the [examples](./_example) directory.
+Examples are not vendored in this tree; see the upstream [examples](https://github.com/mattn/go-sqlite3/tree/master/_example) directory.
 
 # Connection String
 

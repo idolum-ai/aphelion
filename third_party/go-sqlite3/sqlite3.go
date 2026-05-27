@@ -704,7 +704,8 @@ func (c *SQLiteConn) RegisterAuthorizer(callback func(int, string, string, strin
 // value depends only on its inputs, and make more aggressive
 // optimizations in its queries.
 //
-// See _example/go_custom_funcs for a detailed example.
+// See the upstream _example/go_custom_funcs directory for a detailed example:
+// https://github.com/mattn/go-sqlite3/tree/master/_example/go_custom_funcs
 func (c *SQLiteConn) RegisterFunc(name string, impl any, pure bool) error {
 	var fi functionInfo
 	fi.f = reflect.ValueOf(impl)
@@ -786,7 +787,8 @@ func sqlite3CreateFunction(db *C.sqlite3, zFunctionName *C.char, nArg C.int, eTe
 // The constructor function and the Step/Done methods may optionally
 // return an error in addition to their other return values.
 //
-// See _example/go_custom_funcs for a detailed example.
+// See the upstream _example/go_custom_funcs directory for a detailed example:
+// https://github.com/mattn/go-sqlite3/tree/master/_example/go_custom_funcs
 func (c *SQLiteConn) RegisterAggregator(name string, impl any, pure bool) error {
 	var ai aggInfo
 	ai.constructor = reflect.ValueOf(impl)
