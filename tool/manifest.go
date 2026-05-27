@@ -26,7 +26,11 @@ type schemaProperty struct {
 // execution constraints.
 func (r *Registry) Manifest() string {
 	defs := r.Definitions()
-	lines := []string{RenderManifest(defs, r.externalManifests, r.externalExecutor), "", "exec constraints:"}
+	lines := []string{RenderManifest(defs, r.externalManifests, r.externalExecutor)}
+	if visibility := strings.TrimSpace(r.configuredCapabilityVisibilityForPrincipal(principal.Principal{Role: principal.RoleAdmin}, defs, r.externalManifests)); visibility != "" {
+		lines = append(lines, "", visibility)
+	}
+	lines = append(lines, "", "exec constraints:")
 
 	execRoot := r.workspace
 	if abs, err := filepath.Abs(r.workspace); err == nil {
@@ -44,7 +48,11 @@ func (r *Registry) Manifest() string {
 func (r *Registry) ManifestForPrincipal(p principal.Principal) string {
 	defs := r.nativeDefinitionsForPrincipal(p)
 	external := r.externalManifestsForPrincipal(p)
-	lines := []string{RenderManifest(defs, external, r.externalExecutor), "", "exec constraints:"}
+	lines := []string{RenderManifest(defs, external, r.externalExecutor)}
+	if visibility := strings.TrimSpace(r.configuredCapabilityVisibilityForPrincipal(p, defs, external)); visibility != "" {
+		lines = append(lines, "", visibility)
+	}
+	lines = append(lines, "", "exec constraints:")
 
 	execRoot := r.workspace
 	if abs, err := filepath.Abs(r.workspace); err == nil {

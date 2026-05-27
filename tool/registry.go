@@ -47,6 +47,7 @@ type Registry struct {
 	remoteHostRunner                tailnet.OpenSSHRunner
 	durableAgentPrincipalFallback   bool
 	capabilityGrantObserver         func(context.Context, session.SessionKey, session.CapabilityGrant)
+	configuredVisibility            ConfiguredCapabilityVisibilityOptions
 }
 
 func NewRegistry(workspace string, timeout time.Duration) *Registry {
