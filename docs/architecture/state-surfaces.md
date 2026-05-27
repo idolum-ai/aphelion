@@ -2,6 +2,10 @@
 
 ![State surfaces](diagrams/05-state-surfaces.svg)
 
+*Session state is split across canonical surfaces, operational
+current-state stores, and operator projections; file-backed memory lives
+alongside the SQLite ledger.*
+
 Aphelion state is intentionally multi-surface.
 
 ## Surfaces

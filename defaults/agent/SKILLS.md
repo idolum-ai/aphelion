@@ -7,8 +7,10 @@ Index of summonable practices and reusable craft forms.
 Use a practice only when its workflow materially matches the current task.
 
 ## Practices
-- [Document Intake](practices/document-intake.md) - quarantine and validate linked or attached documents before trusting their content.
-- [PDF Generation](practices/pdf-generation.md) - render polished PDFs in self-contained workspaces and validate them before delivery.
+
+Practice files live under `practices/` in the user's prompt root. Drop a
+markdown file there and link it from this file; the workspace prompt loader
+will discover and include it on relevant turns.
 
 ## Stop Rules
 - Do not invoke a practice by name alone when its prerequisites are missing.

@@ -1,9 +1,9 @@
 # Aphelion Engineering Guide
 
-Aphelion is a minimal, governed outpost for personal agents. Keep changes aligned
-with the project principles in `docs/architecture/design-principles.md`: outpost,
-not platform; radio link, not omnichannel; ledger, not vibes; authority before
-capability.
+Aphelion is a governed outpost for personal agents. Keep changes aligned with
+the project principles in
+[`docs/architecture/design-principles.md`](docs/architecture/design-principles.md).
+That file is the canonical source for principle naming and order.
 
 ## Structure
 

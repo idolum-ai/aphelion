@@ -10,7 +10,6 @@ This directory is the canonical architecture diagram set.
 - `04-durable-topology.svg`
 - `05-state-surfaces.svg`
 - `06-delivery-polymorphism.svg`
-- `07-present-vs-intended.svg`
 
 Use `svg` for docs embedding and canonical review. Regenerate raster exports
 only as temporary local artifacts when a downstream surface explicitly needs

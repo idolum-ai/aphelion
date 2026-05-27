@@ -1,0 +1,24 @@
+sequenceDiagram
+    actor User
+    participant TG as Telegram
+    participant RT as Runtime
+    participant Session
+    participant Turn as turn.Machine
+    participant Face as Face / Governor
+    participant Tools
+
+    User->>TG: DM / media / voice
+    TG->>RT: InboundMessage
+    RT->>Session: load + lock + scope
+    RT->>RT: extract media + parse floor
+    RT->>Turn: build coordinator + ports
+    Turn->>Face: system prompt + history + advisory
+    Face->>Tools: tool calls as needed
+    Tools-->>Face: tool results
+    Face-->>Turn: proposal + brokerage note
+    Turn->>Turn: render visible scene
+    Turn->>Session: persist scene + floor + sidecars
+    Turn->>TG: deliver text / media / voice
+    TG->>User: visible reply
+    Turn-->>RT: turn result
+    RT->>RT: process-level follow-up

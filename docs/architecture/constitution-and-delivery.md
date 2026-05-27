@@ -2,6 +2,10 @@
 
 ![Constitutional flow](diagrams/03-constitutional-flow.svg)
 
+*How a turn becomes a delivered scene, with the operator approval gate at
+material thresholds; the approval window short-circuits the pending-proposal
+path when open.*
+
 ## Floor And Scene
 
 Governor output and user-visible reply stay separated:
@@ -34,6 +38,9 @@ Code anchors:
 ## Delivery Polymorphism
 
 ![Delivery polymorphism](diagrams/06-delivery-polymorphism.svg)
+
+*One upstream turn, multiple delivery paths; all converge on the outbound
+sender's transport ledger.*
 
 The same upstream turn can yield different delivery paths (text, streaming,
 voice, media), but commit semantics remain explicit and testable.

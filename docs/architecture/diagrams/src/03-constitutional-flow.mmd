@@ -1,0 +1,21 @@
+flowchart TD
+    Inbound["Inbound turn"]
+    Governor["Governor execution"]
+    FloorScene["Floor / scene split<br/>(constitution check)"]
+    Material{"Material<br/>threshold?"}
+    Window{"Approval window<br/>open?"}
+    Auto["Auto-approve<br/>(within bounded window)"]
+    Pending["Pending proposal<br/>(decision broker)"]
+    Decide{"Operator<br/>decision"}
+    Ratify["Ratification"]
+    Deliver["Scene delivery"]
+    Deny["Denial recorded"]
+
+    Inbound --> Governor --> FloorScene --> Material
+    Material -->|no| Deliver
+    Material -->|yes| Window
+    Window -->|yes| Auto --> Ratify
+    Window -->|no| Pending --> Decide
+    Decide -->|approve| Ratify
+    Decide -->|deny| Deny
+    Ratify --> Deliver

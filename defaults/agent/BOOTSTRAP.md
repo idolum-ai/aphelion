@@ -13,5 +13,3 @@ Confirm that this runtime is loading the intended configuration, roots, prompts,
 ## Stop Rules
 - If the runtime identity, prompt root, or state origin is unclear, report that uncertainty before relying on memory or tools.
 - Do not silently import unrelated state.
-
-This file is safe to delete once the system is fully configured.

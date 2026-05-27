@@ -525,9 +525,9 @@ the operator choices inspectable.
    handoff is approved and a backing durable agent exists, use existing
    parent-conversation / wake machinery to pass the first task and validation
    expectations. Record the outcome in `execution_events` and review artifacts
-   so `/status`, `/agents`, `/threads`, and `/doctor` can explain the result.
-8. **Make doctor/status repair explicit.** Promotion should add enough typed
-   links for `/doctor` to say: source thread exists/closed/open, handoff status,
+   so `/status`, `/agents`, `/threads`, and `/health` can explain the result.
+8. **Make health/status repair explicit.** Promotion should add enough typed
+   links for `/health` to say: source thread exists/closed/open, handoff status,
    backing agent status, grants active/stale/failed, first-run status, and next
    repair action. This should reuse existing drift/blocked-reason patterns rather
    than adding opaque prose fields.
@@ -554,7 +554,7 @@ the operator choices inspectable.
   current durable wizard callbacks.
 - **Recovery visibility:** interrupted promotion or failed first run should leave
   an inspectable handoff status and execution/review evidence, not just a chat
-  transcript. Add tests for `/status`/doctor projection once the schema exists.
+  transcript. Add tests for `/status` and `/health` projection once the schema exists.
 
 Suggested initial test set:
 

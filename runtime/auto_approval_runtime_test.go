@@ -218,8 +218,8 @@ func TestRuntimeAutoApprovalOffRendersClearedGrantAndAuditsLeaseID(t *testing.T)
 	if err != nil {
 		t.Fatalf("ConfigureAutoApproval(off) err = %v", err)
 	}
-	if !strings.Contains(text, "Status: off") || !strings.Contains(text, "Cleared active grant: all prompts, used 1 time.") {
-		t.Fatalf("off text = %q, want human grant summary", text)
+	if !strings.Contains(text, "Status: off") || !strings.Contains(text, "Cleared active approval window: all prompts, used 1 time.") {
+		t.Fatalf("off text = %q, want human approval-window summary", text)
 	}
 	if strings.Contains(strings.ToLower(text), "lease") || strings.Contains(text, "Revoked leases") {
 		t.Fatalf("off text = %q, want no operator-facing lease wording", text)
@@ -282,8 +282,8 @@ func TestRuntimeAutoApprovalOffExplainsExpiredOldGrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigureAutoApproval(off) err = %v", err)
 	}
-	if !strings.Contains(text, "Status: off") || !strings.Contains(text, "Cleared old expired grant: workspace prompts, used 2 times.") {
-		t.Fatalf("off text = %q, want expired old-grant summary", text)
+	if !strings.Contains(text, "Status: off") || !strings.Contains(text, "Cleared old expired approval window: workspace prompts, used 2 times.") {
+		t.Fatalf("off text = %q, want expired old approval-window summary", text)
 	}
 	if strings.Contains(strings.ToLower(text), "lease") || strings.Contains(text, "Revoked leases") {
 		t.Fatalf("off text = %q, want no operator-facing lease wording", text)

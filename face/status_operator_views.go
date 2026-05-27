@@ -260,7 +260,7 @@ func operatorAuthorityStatusDetail(snapshot core.AuthorityStatusSnapshot) string
 	if strings.TrimSpace(snapshot.Status) == "healthy" && snapshot.FindingCount == 0 {
 		return "authority: healthy"
 	}
-	return fmt.Sprintf("authority: %d finding(s), %d error(s), %d active approval(s); run 'aphelion authority repair --finding <id>' to apply repairable fixes", snapshot.FindingCount, snapshot.ErrorCount, snapshot.CapabilityGrants)
+	return fmt.Sprintf("authority: %d finding(s), %d error(s), %d active approval(s); run 'aphelion authority repair --apply --finding <id>' to apply repairable fixes", snapshot.FindingCount, snapshot.ErrorCount, snapshot.CapabilityGrants)
 }
 
 func operatorTailnetStatusDetail(snapshot *core.TailnetStatusSnapshot) string {

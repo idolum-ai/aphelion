@@ -71,6 +71,11 @@ backend = "auto"
 native_provider = "" # Empty lets providers.selection choose from configured providers.
 
 [governor.codex]
+# Optional Codex backend for the governor (the layer that authors the
+# material floor). Leave the [governor] backend at "auto" unless you have
+# a reachable Codex installation; this section is read only when the
+# governor selects Codex. Unrelated to [work.codex] below, which configures
+# a separate Codex executor for repo work lanes.
 auth_source = "auto"
 codex_home = ""
 base_url = "https://chatgpt.com/backend-api"
