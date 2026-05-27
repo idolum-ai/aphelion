@@ -45,8 +45,10 @@ func configuredSkillFiles(files []string) []string {
 		if file == "" {
 			continue
 		}
-		base := filepath.Base(file)
-		if strings.EqualFold(base, "SKILLS.md") || strings.EqualFold(base, "SKILL.md") || strings.Contains(strings.ToLower(file), "/skills/") {
+		normalized := filepath.ToSlash(file)
+		base := filepath.Base(normalized)
+		lower := strings.ToLower(normalized)
+		if strings.EqualFold(base, "SKILLS.md") || strings.EqualFold(base, "SKILL.md") || strings.HasPrefix(lower, "skills/") || strings.Contains(lower, "/skills/") {
 			out = append(out, file)
 		}
 	}

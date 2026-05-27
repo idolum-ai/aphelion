@@ -11,6 +11,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 func TestManifestShowsConfiguredButUngrantableWebSearchWithoutExposingTool(t *testing.T) {
@@ -325,5 +326,61 @@ func TestGitHubRequestableCapabilityListsAreCapped(t *testing.T) {
 	}
 	if strings.Contains(manifest, "owner/e") || strings.Contains(manifest, "pull_requests:write") {
 		t.Fatalf("manifest leaked capped GitHub list details:\n%s", manifest)
+	}
+}
+
+func TestCanonicalSkillFileUsesParentDirectoryName(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), time.Second).
+		WithConfiguredCapabilityVisibility(ConfiguredCapabilityVisibilityOptions{
+			SkillFiles: []string{"openai-docs/SKILL.md", "imagegen/SKILLS.md"},
+		})
+
+	manifest := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001})
+	for _, want := range []string{
+		"- skill.imagegen: description=configured_skill_instructions location=imagegen/SKILLS.md",
+		"- skill.openai-docs: description=configured_skill_instructions location=openai-docs/SKILL.md",
+	} {
+		if !strings.Contains(manifest, want) {
+			t.Fatalf("manifest missing canonical skill name %q:\n%s", want, manifest)
+		}
+	}
+	if strings.Contains(manifest, "skill.skill:") || strings.Contains(manifest, "skill.skills:") {
+		t.Fatalf("manifest used canonical SKILL.md basename instead of parent dir:\n%s", manifest)
+	}
+}
+
+func TestExternalToolVisibilityUsesAliasAwareGrantStatus(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	script := []byte("#!/usr/bin/env bash\necho '{\"summary\":\"ok\"}'\n")
+	if err := os.WriteFile(filepath.Join(registry.workspace, "run.sh"), script, 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh) err = %v", err)
+	}
+	manifest := ExternalToolManifest{
+		Name:      "browse_page",
+		Owner:     "child-alpha",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+	}
+	if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest}); err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	seedVerifiedExternalToolLifecycle(t, registry, store, manifest, sandbox.Scope{WorkingRoot: registry.workspace})
+	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
+		t.Fatalf("UpsertRegisteredTool() err = %v", err)
+	}
+	grantToolInvoke(t, store, "browse_page", "principal:1001")
+
+	out := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001})
+	if !strings.Contains(strings.Split(out, "## Requestable Capabilities")[0], "- browse_page:") {
+		t.Fatalf("callable manifest missing alias-granted external tool:\n%s", out)
+	}
+	if !strings.Contains(out, "manifest[browse_page]: configured=true") || !strings.Contains(out, "active_grant=active") {
+		t.Fatalf("requestable visibility did not use alias-aware active grant status:\n%s", out)
 	}
 }

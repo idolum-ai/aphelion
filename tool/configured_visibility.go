@@ -177,8 +177,8 @@ func (r *Registry) externalToolConfiguredVisibility(p principal.Principal, princ
 			}
 		}
 		grantStatus := "not_checkable"
-		if r.store != nil && principalID != "" {
-			if _, ok, err := r.store.ActiveCapabilityGrant(session.CapabilityKindTool, manifest.Name, principalID, "invoke"); err == nil && ok {
+		if r.store != nil {
+			if _, ok, err := r.capabilityGrantAllowsAuthorityToolAccess(manifest.Name, p); err == nil && ok {
 				grantStatus = "active"
 			} else if err != nil {
 				grantStatus = "error"
@@ -383,13 +383,21 @@ func compactPath(value string) string {
 }
 
 func skillNameFromPath(value string) string {
-	base := strings.TrimSuffix(filepath.Base(strings.TrimSpace(value)), filepath.Ext(value))
-	base = strings.ToLower(strings.TrimSpace(base))
-	base = strings.ReplaceAll(base, "_", "-")
-	if base == "" || base == "." {
+	value = filepath.ToSlash(strings.TrimSpace(value))
+	baseName := filepath.Base(value)
+	name := strings.TrimSuffix(baseName, filepath.Ext(baseName))
+	if strings.EqualFold(baseName, "SKILL.md") || strings.EqualFold(baseName, "SKILLS.md") {
+		parent := filepath.Base(filepath.Dir(value))
+		if strings.TrimSpace(parent) != "" && parent != "." && parent != "/" {
+			name = parent
+		}
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	name = strings.ReplaceAll(name, "_", "-")
+	if name == "" || name == "." {
 		return "unnamed"
 	}
-	return base
+	return name
 }
 
 func stringSliceContains(values []string, want string) bool {
