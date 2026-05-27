@@ -502,7 +502,6 @@ Current repo surface:
 
 - `docs/architecture/transparent-execution-sequence.md`
 - `docs/architecture/state-surfaces.md`
-- `session/store_execution.go`
 - `commands_status.go`
 
 ## Non-Goals From The Lineage
