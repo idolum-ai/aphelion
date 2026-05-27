@@ -1,0 +1,58 @@
+flowchart LR
+    Root["main / commands<br/>(root composition)"] --> RT["runtime"]
+    RT --> Turn["turn"]
+    Turn --> Pipe["pipeline"]
+
+    subgraph leaves["runtime leaves"]
+        direction TB
+        Doctor["runtime/doctor"]
+        Mission["runtime/mission"]
+        Codex["runtime/codex"]
+    end
+    RT --> Doctor
+
+    subgraph storage["Storage &amp; memory"]
+        direction TB
+        Session["session<br/>(SQLite ledger)"]
+        Memory["memory<br/>(curated + semantic)"]
+    end
+    RT --> Session
+
+    subgraph transport["Transport"]
+        direction TB
+        Telegram["telegram"]
+        Tailnet["tailnet<br/>(remote children)"]
+    end
+    RT --> Telegram
+
+    subgraph providers["Inference providers"]
+        direction TB
+        Provider["provider<br/>(failover chain)"]
+        OpenAI["openai<br/>(Responses)"]
+    end
+    RT --> Provider
+
+    subgraph caps["Capabilities &amp; integrations"]
+        direction TB
+        Tool["tool"]
+        ExtTools["external-tools"]
+        GithubApp["githubapp"]
+        Voice["voice<br/>(ElevenLabs)"]
+        Media["media"]
+    end
+    RT --> Tool
+
+    subgraph domain["Domain &amp; shared"]
+        direction TB
+        Agent["agent"]
+        Config["config"]
+        Core["core"]
+        Decision["decision"]
+        DurableAgent["durableagent"]
+        Face["face"]
+        Prompt["prompt"]
+        GovBackend["governorbackend"]
+        GovAuth["governorauth"]
+        Principal["principal"]
+    end
+    RT --> Config
