@@ -205,17 +205,17 @@ func TestGitHubDetailsRequireExactActiveExternalAccountGrant(t *testing.T) {
 	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
 		GrantID:        "grant-github-exact-read",
 		GrantedBy:      "test",
-		GrantedTo:      "child-alpha",
+		GrantedTo:      "durable_agent:child-alpha",
 		Kind:           session.CapabilityKindExternalAccount,
 		TargetResource: "github",
 		AllowedActions: []string{"read"},
 		Status:         session.CapabilityGrantStatusActive,
 	}); err != nil {
-		t.Fatalf("UpsertCapabilityGrant(exact) err = %v", err)
+		t.Fatalf("UpsertCapabilityGrant(exact canonical durable agent) err = %v", err)
 	}
 	manifest = registry.ManifestForPrincipal(actor)
 	if !strings.Contains(manifest, "active_external_account_grant=active_external_account_grant") || !strings.Contains(manifest, "app.idolum-bot: installation_id=123") {
-		t.Fatalf("manifest did not show details with exact active grant:\n%s", manifest)
+		t.Fatalf("manifest did not show details with exact canonical durable-agent grant:\n%s", manifest)
 	}
 }
 
@@ -239,5 +239,30 @@ func TestConfiguredExternalToolVisibilityIsReachableWithoutCallableExposure(t *t
 	}
 	if !strings.Contains(out, "- external_tool_manifests:") || !strings.Contains(out, "manifest[browse_page]: configured=true") || !strings.Contains(out, "exposed=false") || !strings.Contains(out, "active_grant=missing") {
 		t.Fatalf("manifest missing configured external tool visibility:\n%s", out)
+	}
+}
+
+func TestWebSearchConfiguredVisibilityRestrictsUngranteddurableAgentDetails(t *testing.T) {
+	store := newToolTestStore(t)
+	registry := NewRegistry(t.TempDir(), time.Second).
+		WithSessionStore(store).
+		WithWebSearchOptions(WebSearchOptions{
+			Enabled:       true,
+			ProviderOrder: []string{"openai_hosted", "brave"},
+			DefaultCount:  3,
+			MaxCount:      7,
+			OpenAIHosted:  WebSearchOpenAIOptions{Enabled: true, ContextSize: "high"},
+			Brave:         WebSearchBraveOptions{Enabled: true, APIKeyEnv: "BRAVE_TEST_KEY", APIKeyFile: "/tmp/brave-key", Endpoint: "https://api.search.brave.com/res/v1/web/search"},
+		})
+	t.Setenv("BRAVE_TEST_KEY", "secret-token")
+
+	manifest := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"})
+	if !strings.Contains(manifest, "- web_search: configured=true") || !strings.Contains(manifest, "active_grant=missing") || !strings.Contains(manifest, "details=restricted reason=request_web_search_authority") {
+		t.Fatalf("manifest missing coarse web_search restriction:\n%s", manifest)
+	}
+	for _, forbidden := range []string{"providers_order", "provider.openai_hosted", "provider.brave", "BRAVE_TEST_KEY", "brave-key", "credential_present", "secret-token"} {
+		if strings.Contains(manifest, forbidden) {
+			t.Fatalf("manifest leaked web_search detail %q to ungranted durable agent:\n%s", forbidden, manifest)
+		}
 	}
 }

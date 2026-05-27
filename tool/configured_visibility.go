@@ -76,7 +76,7 @@ func (r *Registry) configuredCapabilityVisibilityForPrincipal(p principal.Princi
 	exposedExternalNames := externalManifestNameSet(exposedExternal)
 	principalID := toolAuthorityPrincipalDisplay(p)
 
-	if block := r.webSearchConfiguredVisibility(principalID, exposedNative); len(block) > 0 {
+	if block := r.webSearchConfiguredVisibility(p, principalID, exposedNative); len(block) > 0 {
 		lines = append(lines, block...)
 	}
 	if block := r.externalToolConfiguredVisibility(p, principalID, exposedExternalNames); len(block) > 0 {
@@ -100,7 +100,7 @@ func (r *Registry) configuredCapabilityVisibilityForPrincipal(p principal.Princi
 	return strings.Join(out, "\n")
 }
 
-func (r *Registry) webSearchConfiguredVisibility(principalID string, exposed map[string]struct{}) []string {
+func (r *Registry) webSearchConfiguredVisibility(p principal.Principal, principalID string, exposed map[string]struct{}) []string {
 	if !r.webSearchOptions.Enabled && !r.webSearchOptions.OpenAIHosted.Enabled && !r.webSearchOptions.Brave.Enabled {
 		return nil
 	}
@@ -116,11 +116,15 @@ func (r *Registry) webSearchConfiguredVisibility(principalID string, exposed map
 			grantStatus = "missing"
 		}
 	}
-	providers := r.webSearchProviderMap()
 	lines := []string{
 		fmt.Sprintf("- web_search: configured=%t runtime_defined=%t exposed=%t active_grant=%s invocation_requires=active_tool_grant+active_turn_or_operation_lease", r.webSearchOptions.Enabled, defined, exposedNow, grantStatus),
-		fmt.Sprintf("  providers_order=%s default_count=%d max_count=%d", strings.Join(r.webSearchOptions.ProviderOrder, ","), r.webSearchOptions.DefaultCount, r.webSearchOptions.MaxCount),
 	}
+	canSeeDetails := p.Role == principal.RoleAdmin || grantStatus == "active"
+	if !canSeeDetails {
+		return append(lines, "  details=restricted reason=request_web_search_authority")
+	}
+	providers := r.webSearchProviderMap()
+	lines = append(lines, fmt.Sprintf("  providers_order=%s default_count=%d max_count=%d", strings.Join(r.webSearchOptions.ProviderOrder, ","), r.webSearchOptions.DefaultCount, r.webSearchOptions.MaxCount))
 	if r.webSearchOptions.OpenAIHosted.Enabled || stringSliceContains(r.webSearchOptions.ProviderOrder, "openai_hosted") {
 		_, wired := providers["openai_hosted"]
 		lines = append(lines, fmt.Sprintf("  provider.openai_hosted: configured=%t registered_provider=%t context_size=%s credential_status=provider_level_not_exposed", r.webSearchOptions.OpenAIHosted.Enabled, wired, firstNonEmpty(r.webSearchOptions.OpenAIHosted.ContextSize, "medium")))
@@ -173,7 +177,7 @@ func (r *Registry) githubConfiguredVisibility(p principal.Principal, principalID
 	if !cfg.Enabled && len(cfg.Apps) == 0 {
 		return nil
 	}
-	grantStatus := r.githubExternalAccountGrantStatus(principalID)
+	grantStatus := r.githubExternalAccountGrantStatus(p, principalID)
 	canSeeDetails := p.Role == principal.RoleAdmin || grantStatus == "active_external_account_grant"
 	if !canSeeDetails {
 		return []string{fmt.Sprintf("- github_apps: configured=%t details=restricted reason=request_external_account_authority", cfg.Enabled)}
@@ -196,19 +200,29 @@ func (r *Registry) githubConfiguredVisibility(p principal.Principal, principalID
 	return lines
 }
 
-func (r *Registry) githubExternalAccountGrantStatus(principalID string) string {
-	if r == nil || r.store == nil || strings.TrimSpace(principalID) == "" {
+func (r *Registry) githubExternalAccountGrantStatus(p principal.Principal, principalID string) string {
+	if r == nil || r.store == nil {
 		return "not_checkable"
 	}
-	if _, ok, err := r.store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github", principalID, "read"); err != nil {
-		return "error"
-	} else if ok {
-		return "active_external_account_grant"
-	}
-	if _, ok, err := r.store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github_app", principalID, "read"); err != nil {
-		return "error"
-	} else if ok {
-		return "active_external_account_grant"
+	candidates := append([]string{}, toolAuthorityPrincipalKeys(p)...)
+	candidates = append(candidates, principalID)
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		for _, target := range []string{"github", "github_app"} {
+			if _, ok, err := r.store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, target, candidate, "read"); err != nil {
+				return "error"
+			} else if ok {
+				return "active_external_account_grant"
+			}
+		}
 	}
 	return "missing"
 }
