@@ -160,22 +160,17 @@ func missionDetailRows(mission session.MissionState) [][]telegram.InlineButton {
 }
 
 func renderMissionHealthPanel(health session.MissionLedgerHealth) (string, [][]telegram.InlineButton) {
-	panel := face.OperatorPanel{
+	state := fmt.Sprintf(
+		"%d active, %d pinned, %d blocked, %d stale, %d pending handoff(s)",
+		health.ActiveCount, health.PinnedCount, health.BlockedCount,
+		health.StaleCandidateCount, health.PendingHandoffCount,
+	)
+	text := face.RenderInlinePanel(face.InlinePanel{
 		Title: "Mission Health",
-		State: fmt.Sprintf("%d active, %d blocked", health.ActiveCount, health.BlockedCount),
-		Why:   "Health highlights ledger state that may need review or cleanup.",
+		State: state,
 		Next:  "Inspect blocked missions or stale candidates before relying on the ledger.",
-		Evidence: []string{
-			fmt.Sprintf("Active: %d", health.ActiveCount),
-			fmt.Sprintf("Pinned: %d", health.PinnedCount),
-			fmt.Sprintf("Recurring: %d", health.RecurringCount),
-			fmt.Sprintf("Blocked: %d", health.BlockedCount),
-			fmt.Sprintf("Self-continuation enabled: %d", health.SelfContinuationEnabledCount),
-			fmt.Sprintf("Stale candidates: %d", health.StaleCandidateCount),
-			fmt.Sprintf("Pending handoffs: %d", health.PendingHandoffCount),
-		},
-	}
-	return renderTelegramCompactPanel(panel, false), [][]telegram.InlineButton{{
+	})
+	return text, [][]telegram.InlineButton{{
 		{Text: "All", CallbackData: encodeMissionCallbackData(missionCallbackHome, "")},
 		{Text: "Refresh", CallbackData: encodeMissionCallbackData(missionCallbackHealth, "")},
 	}}
