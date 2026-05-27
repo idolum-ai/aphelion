@@ -152,7 +152,7 @@ func TestHandleTelegramCommandStatus(t *testing.T) {
 	if got := sender.inline[0].text; !strings.Contains(got, "Next: wait for the active turn; tap Refresh to re-check") {
 		t.Fatalf("status text = %q, want state-specific next action", got)
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "Evidence: as of 2026-05-07T12:00:00Z; source: chat status projection") {
+	if got := sender.inline[0].text; !strings.Contains(got, "Evidence: as of 2026-05-07T12:00:00Z; source: sessions table snapshot") {
 		t.Fatalf("status text = %q, want as-of evidence line", got)
 	}
 	foundThisChat := false
@@ -935,7 +935,7 @@ func TestHandleTelegramCommandStatusUsesReadableCardInsteadOfRawDump(t *testing.
 		"Why: Waiting for admin review",
 		"Now: Await admin approval",
 		"Next: resolve the blocker above before continuing",
-		"Evidence: as of 2026-05-07T14:00:00Z; source: chat status projection",
+		"Evidence: as of 2026-05-07T14:00:00Z; source: sessions table snapshot",
 		"Details: /health trace has the full execution trace and source attribution.",
 	} {
 		if !strings.Contains(text, needle) {

@@ -140,7 +140,7 @@ func operatorSystemStatusDetails(snapshot core.SystemStatusSnapshot, personaEffo
 }
 
 func operatorSystemStatusEvidence(snapshot core.SystemStatusSnapshot) string {
-	return fmt.Sprintf("as of %s; source: system status projection with TES-preferred runtime evidence", formatStatusTime(snapshot.GeneratedAt))
+	return fmt.Sprintf("as of %s; source: sessions + execution_events projection (TES-preferred); /health trace for raw evidence", formatStatusTime(snapshot.GeneratedAt))
 }
 
 func operatorHotChatDetails(snapshot core.SystemStatusSnapshot) []string {

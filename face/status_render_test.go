@@ -211,7 +211,7 @@ func TestRenderTelegramStatusChatOperatorCardSeparatesBacklogAndRevokedContinuat
 		"needs_attention:",
 		"- approval needed",
 		"backlog: 1 candidate mission(s)",
-		"evidence: as of 2026-05-06T12:00:00Z; source: chat status projection",
+		"evidence: as of 2026-05-06T12:00:00Z; source: sessions table snapshot; /health trace for the underlying execution_events",
 	} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("RenderTelegramStatusChatOperatorCard() = %q, want substring %q", out, needle)
@@ -247,7 +247,7 @@ func TestRenderTelegramStatusChatOperatorCardPrioritizesAttentionWhileWorking(t 
 		"why: running tool exec",
 		"next: tap Pending Only, then approve or deny the pending decision",
 		"needs_attention:",
-		"evidence: as of 2026-05-07T12:30:00Z; source: chat status projection; latest turn: canonical:execution_events.turn",
+		"evidence: as of 2026-05-07T12:30:00Z; source: sessions table snapshot; /health trace for the underlying execution_events; latest turn: canonical:execution_events.turn",
 	} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("RenderTelegramStatusChatOperatorCard() = %q, want substring %q", out, needle)

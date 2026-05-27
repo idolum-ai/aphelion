@@ -234,7 +234,7 @@ func operatorEvidenceLine(snapshot core.ChatStatusSnapshot) string {
 	} else {
 		parts = append(parts, "as of unavailable")
 	}
-	parts = append(parts, "source: chat status projection")
+	parts = append(parts, "source: sessions table snapshot; /health trace for the underlying execution_events")
 	if latest := snapshot.LatestTurnRun; latest != nil {
 		if source := strings.TrimSpace(latest.Source); source != "" {
 			parts = append(parts, "latest turn: "+truncateStatusField(source, 120))
