@@ -108,14 +108,7 @@ func decodeApprovalWindowCallbackData(data string) (string, string, bool) {
 	body := strings.TrimSpace(strings.TrimPrefix(trimmed, approvalWindowCallbackPrefix))
 	offerID, action, ok := strings.Cut(body, ":")
 	if !ok {
-		// Legacy no-token callbacks fail closed for known authority-bearing actions.
-		action = strings.TrimSpace(body)
-		switch action {
-		case approvalWindowActionEnable15, approvalWindowActionEnable15Compound, approvalWindowActionDouble, approvalWindowActionCancel, approvalWindowActionClose:
-			return "", action, true
-		default:
-			return "", "", false
-		}
+		return "", "", true
 	}
 	offerID = strings.TrimSpace(offerID)
 	action = strings.TrimSpace(action)
@@ -123,7 +116,7 @@ func decodeApprovalWindowCallbackData(data string) (string, string, bool) {
 	case approvalWindowActionEnable15, approvalWindowActionEnable15Compound, approvalWindowActionDouble, approvalWindowActionCancel, approvalWindowActionClose:
 		return offerID, action, true
 	default:
-		return "", "", false
+		return offerID, "", true
 	}
 }
 

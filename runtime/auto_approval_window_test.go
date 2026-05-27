@@ -547,8 +547,8 @@ func TestRuntimeCloseStaleClaimedUnopenedOfferCloses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
 	}
-	if err := rt.CloseApprovalWindowOffer(context.Background(), offer.ID, 1001); err != nil {
-		t.Fatalf("CloseApprovalWindowOffer(stale claimed unopened) err = %v", err)
+	if err := rt.CloseApprovalWindowOffer(context.Background(), offer.ID, 0); err != nil {
+		t.Fatalf("CloseApprovalWindowOffer(internal stale claimed unopened) err = %v", err)
 	}
 	stored, ok, err := store.ApprovalWindowOffer(offer.ID)
 	if err != nil || !ok {
@@ -795,6 +795,32 @@ func TestRuntimeCASMissCleanupDoesNotCloseReboundOffer(t *testing.T) {
 	}
 	if rebound.OpenedLeaseID == opened.OpenedLeaseID || rebound.OpenedOverrideID == opened.OpenedOverrideID {
 		t.Fatalf("rebound = %#v opened = %#v, want new binding after double", rebound, opened)
+	}
+}
+
+func TestRuntimeCloseApprovalWindowOfferNonAdminDoesNotCloseUnusedOffer(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	chatID := int64(99322)
+	key := session.SessionKey{ChatID: chatID, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramGroup, ID: "99322"}}
+	offer, created, err := rt.CreateApprovalWindowOfferForKey(context.Background(), key, 1001, session.ApprovalWindowOfferSourceDecision, "decision-close-unused-non-admin", string(decision.KindProposalApproval))
+	if err != nil || !created {
+		t.Fatalf("CreateApprovalWindowOfferForKey() = %#v, %t, %v; want offer", offer, created, err)
+	}
+	if err := rt.CloseApprovalWindowOffer(context.Background(), offer.ID, 2002); err == nil {
+		t.Fatal("CloseApprovalWindowOffer(non-admin unused) err = nil, want admin-only")
+	}
+	stored, ok, err := store.ApprovalWindowOffer(offer.ID)
+	if err != nil || !ok {
+		t.Fatalf("ApprovalWindowOffer() ok=%t err=%v", ok, err)
+	}
+	if !stored.ClosedAt.IsZero() {
+		t.Fatalf("stored.ClosedAt = %s, want unused offer still open", stored.ClosedAt)
 	}
 }
 

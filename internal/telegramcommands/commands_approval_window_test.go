@@ -469,8 +469,8 @@ func TestApprovalWindowEmptyOfferCloseCallbackIsStaleAndKeepsControls(t *testing
 	sender := &stubCommandSender{}
 	router := &stubCommandRouter{}
 	for name, data := range map[string]string{
-		"empty_token":     encodeApprovalWindowCallbackData("", approvalWindowActionClose),
-		"legacy_no_token": approvalWindowCallbackPrefix + approvalWindowActionClose,
+		"empty_token":       encodeApprovalWindowCallbackData("", approvalWindowActionClose),
+		"missing_separator": approvalWindowCallbackPrefix + approvalWindowActionClose,
 	} {
 		t.Run(name, func(t *testing.T) {
 			sender.answers = nil

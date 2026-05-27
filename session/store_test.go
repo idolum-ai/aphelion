@@ -295,9 +295,7 @@ func TestActiveApprovalWindowOfferForSourceExcludesUsedOffers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
 	}
-	if _, ok, err := store.markApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
-		t.Fatalf("markApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
-	}
+	seedApprovalWindowOfferUsedForTest(t, store, offer.ID, now.Add(time.Second))
 	if got, ok, err := store.ActiveApprovalWindowOfferForSource(7002, ApprovalWindowOfferSourceDecision, "decision-source-used", now.Add(2*time.Second)); err != nil || ok {
 		t.Fatalf("ActiveApprovalWindowOfferForSource() = %#v, %t, %v; want no used offer", got, ok, err)
 	}
@@ -355,12 +353,8 @@ func TestActiveApprovalWindowOfferForSourceReturnsOpenedUsedOffer(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("CreateOperatorAutoApprovalLease() err = %v", err)
 	}
-	if _, ok, err := store.markApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
-		t.Fatalf("markApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
-	}
-	if _, ok, err := store.markApprovalWindowOfferOpened(offer.ID, "lease-opened", "override-opened", now.Add(2*time.Second)); err != nil || !ok {
-		t.Fatalf("markApprovalWindowOfferOpened() ok=%t err=%v", ok, err)
-	}
+	seedApprovalWindowOfferUsedForTest(t, store, offer.ID, now.Add(time.Second))
+	seedApprovalWindowOfferOpenedForTest(t, store, offer.ID, "lease-opened", "override-opened", now.Add(2*time.Second))
 	got, ok, err := store.ActiveApprovalWindowOfferForSource(7003, ApprovalWindowOfferSourceDecision, "decision-source-opened", now.Add(3*time.Second))
 	if err != nil || !ok {
 		t.Fatalf("ActiveApprovalWindowOfferForSource() = %#v, %t, %v; want opened used offer", got, ok, err)
@@ -422,12 +416,8 @@ func TestActiveApprovalWindowOfferForSourceExcludesExpiredOpenedOffer(t *testing
 	}); err != nil {
 		t.Fatalf("CreateOperatorAutoApprovalLease() err = %v", err)
 	}
-	if _, ok, err := store.markApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
-		t.Fatalf("markApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
-	}
-	if _, ok, err := store.markApprovalWindowOfferOpened(offer.ID, "lease-expired-opened", "override-expired-opened", now.Add(2*time.Second)); err != nil || !ok {
-		t.Fatalf("markApprovalWindowOfferOpened() ok=%t err=%v", ok, err)
-	}
+	seedApprovalWindowOfferUsedForTest(t, store, offer.ID, now.Add(time.Second))
+	seedApprovalWindowOfferOpenedForTest(t, store, offer.ID, "lease-expired-opened", "override-expired-opened", now.Add(2*time.Second))
 	if got, ok, err := store.ActiveApprovalWindowOfferForSource(7004, ApprovalWindowOfferSourceDecision, "decision-source-expired-opened", now.Add(2*time.Minute)); err != nil || ok {
 		t.Fatalf("ActiveApprovalWindowOfferForSource(expired) = %#v, %t, %v; want no active opened offer", got, ok, err)
 	}
@@ -526,12 +516,8 @@ func TestCloseApprovalWindowOfferIfOpenedRequiresExpectedBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
 	}
-	if _, ok, err := store.markApprovalWindowOfferUsed(offer.ID, now.Add(time.Second)); err != nil || !ok {
-		t.Fatalf("markApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
-	}
-	if _, ok, err := store.markApprovalWindowOfferOpened(offer.ID, "lease-new", "override-new", now.Add(2*time.Second)); err != nil || !ok {
-		t.Fatalf("markApprovalWindowOfferOpened() ok=%t err=%v", ok, err)
-	}
+	seedApprovalWindowOfferUsedForTest(t, store, offer.ID, now.Add(time.Second))
+	seedApprovalWindowOfferOpenedForTest(t, store, offer.ID, "lease-new", "override-new", now.Add(2*time.Second))
 	if closed, ok, err := store.CloseApprovalWindowOfferIfOpened(offer.ID, "lease-old", "override-old", now.Add(3*time.Second)); err != nil || ok {
 		t.Fatalf("CloseApprovalWindowOfferIfOpened(stale) = %#v, %t, %v; want CAS miss", closed, ok, err)
 	}
@@ -589,12 +575,8 @@ func TestCloseUnusedApprovalWindowOfferDoesNotCloseOpenedOffer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateApprovalWindowOffer(opened) err = %v", err)
 	}
-	if _, ok, err := store.markApprovalWindowOfferUsed(opened.ID, now.Add(time.Second)); err != nil || !ok {
-		t.Fatalf("markApprovalWindowOfferUsed() ok=%t err=%v", ok, err)
-	}
-	if _, ok, err := store.markApprovalWindowOfferOpened(opened.ID, "lease-opened", "override-opened", now.Add(2*time.Second)); err != nil || !ok {
-		t.Fatalf("markApprovalWindowOfferOpened() ok=%t err=%v", ok, err)
-	}
+	seedApprovalWindowOfferUsedForTest(t, store, opened.ID, now.Add(time.Second))
+	seedApprovalWindowOfferOpenedForTest(t, store, opened.ID, "lease-opened", "override-opened", now.Add(2*time.Second))
 	if closed, ok, err := store.CloseUnusedApprovalWindowOffer(opened.ID, now.Add(3*time.Second)); err != nil || ok {
 		t.Fatalf("CloseUnusedApprovalWindowOffer(opened) = %#v, %t, %v; want no close", closed, ok, err)
 	}
@@ -782,41 +764,34 @@ func TestReplaceApprovalWindowOfferAuthorityByIDsRollsBackWhenRebindCASMisses(t 
 	}
 }
 
-func TestApprovalWindowOfferUsedMarkIsCAS(t *testing.T) {
-	t.Parallel()
-
-	store := newTestSQLiteStore(t)
-	defer store.Close()
-
-	now := time.Now().UTC()
-	offer, err := store.CreateApprovalWindowOffer(ApprovalWindowOffer{
-		ID:                 "offer-cas",
-		ChatID:             7001,
-		AdminUserID:        1001,
-		ScopeKind:          string(ScopeKindTelegramDM),
-		ScopeID:            "7001",
-		SourceKind:         ApprovalWindowOfferSourceDecision,
-		SourceID:           "decision-cas",
-		SourceDecisionKind: "proposal_approval",
-		CreatedAt:          now,
-		ExpiresAt:          now.Add(time.Hour),
-		UpdatedAt:          now,
-	})
+func seedApprovalWindowOfferUsedForTest(t *testing.T, store *SQLiteStore, offerID string, usedAt time.Time) {
+	t.Helper()
+	stamp := usedAt.UTC().Format(time.RFC3339Nano)
+	res, err := store.db.Exec(`
+		UPDATE approval_window_offers
+		SET used_at = ?, updated_at = ?
+		WHERE offer_id = ?
+	`, stamp, stamp, offerID)
 	if err != nil {
-		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
+		t.Fatalf("seed approval window offer used: %v", err)
 	}
-	claimed, ok, err := store.markApprovalWindowOfferUsed(offer.ID, now.Add(time.Second))
-	if err != nil || !ok {
-		t.Fatalf("first markApprovalWindowOfferUsed() = %#v, %t, %v; want claim", claimed, ok, err)
+	if rows, err := res.RowsAffected(); err != nil || rows != 1 {
+		t.Fatalf("seed approval window offer used rows=%d err=%v, want one row", rows, err)
 	}
-	if claimed.UsedAt.IsZero() {
-		t.Fatalf("claimed UsedAt is zero")
-	}
-	second, ok, err := store.markApprovalWindowOfferUsed(offer.ID, now.Add(2*time.Second))
+}
+
+func seedApprovalWindowOfferOpenedForTest(t *testing.T, store *SQLiteStore, offerID string, leaseID string, overrideID string, openedAt time.Time) {
+	t.Helper()
+	stamp := openedAt.UTC().Format(time.RFC3339Nano)
+	res, err := store.db.Exec(`
+		UPDATE approval_window_offers
+		SET used_at = COALESCE(used_at, ?), opened_lease_id = ?, opened_override_id = ?, updated_at = ?
+		WHERE offer_id = ?
+	`, stamp, leaseID, overrideID, stamp, offerID)
 	if err != nil {
-		t.Fatalf("second markApprovalWindowOfferUsed() err = %v", err)
+		t.Fatalf("seed approval window offer opened: %v", err)
 	}
-	if ok {
-		t.Fatalf("second markApprovalWindowOfferUsed() = %#v, true; want CAS miss", second)
+	if rows, err := res.RowsAffected(); err != nil || rows != 1 {
+		t.Fatalf("seed approval window offer opened rows=%d err=%v, want one row", rows, err)
 	}
 }

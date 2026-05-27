@@ -378,6 +378,9 @@ func (r *Runtime) CloseApprovalWindowOffer(ctx context.Context, offerID string, 
 	}
 	offer = session.NormalizeApprovalWindowOffer(offer)
 	now := time.Now().UTC()
+	if senderID != 0 && !r.IsTelegramAdmin(senderID) {
+		return fmt.Errorf("approval windows are admin only")
+	}
 	if offer.OpenedLeaseID == "" && offer.OpenedOverrideID == "" {
 		if !offer.UsedAt.IsZero() && approvalWindowOfferClaimStillOpening(offer, now) {
 			return fmt.Errorf("approval window offer is already being opened")
