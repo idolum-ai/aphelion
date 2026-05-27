@@ -42,7 +42,7 @@ Code anchors:
 - [`runtime/maintenance_turn.go`](../../runtime/maintenance_turn.go)
 - [`runtime/durable_group.go`](../../runtime/durable_group.go)
 - [`runtime/codex`](../../runtime/codex) for Codex app-server leaf helpers consumed only by the runtime shell.
-- [`runtime/doctor`](../../runtime/doctor) for `/doctor` report assembly, evidence sections, Telegram condensation helpers, and maintainer artifact formatting consumed only by the runtime shell.
+- [`runtime/doctor`](../../runtime/doctor) for the doctor report assembly (the operator-visible Telegram command is `/health`; this package's name reflects the report's heritage as the doctor projection), evidence sections, Telegram condensation helpers, and maintainer artifact formatting consumed only by the runtime shell.
 - [`runtime/mission`](../../runtime/mission) for Mission Ledger command rendering, Mission Question prompt/classifier mechanics, and mission proposal formatting consumed only by the runtime shell.
 
 Runtime leaf subpackages may be imported by top-level `runtime` for bounded helper mechanics. They must not become new owners for ingress/session/lifecycle wiring or broad runtime policy. The architecture import guard forbids non-root packages from importing `runtime` internals, which keeps these leaves private to the runtime shell rather than turning them into cross-repository domain APIs.
