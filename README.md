@@ -175,6 +175,11 @@ Run `make live-evals` or the narrower `make auto-evals` *(opt-in; spend
 provider API calls)* before releases that materially change agency,
 authority, proactive mission, or prompt behavior.
 
+## Support
+
+If this project saves you time or becomes part of your stack, you can support
+its maintenance through [GitHub Sponsors](https://github.com/sponsors/idolum-ai).
+
 ## License
 
 [Apache-2.0](LICENSE)
