@@ -157,7 +157,7 @@ func renderMemoryReviewPanel(snapshot memoryReviewSnapshot) (string, [][]telegra
 		Title:    "Memory",
 		State:    state,
 		Why:      "Durable memory is signed-off claims; semantic memory is recall material, not fact.",
-		Next:     "Read this snapshot, refresh it, or tap Ask Me for clarifying questions. No memory is changed here.",
+		Next:     "Read this snapshot, refresh it, or tap Ask Me for clarifying questions.",
 		Details:  details,
 		Evidence: evidence,
 	}, 8, 3), rows
@@ -193,7 +193,7 @@ func renderContextPanel(snapshot core.ContextSnapshot) (string, [][]telegram.Inl
 		Title:    "Context",
 		State:    state,
 		Why:      "This is the context currently shaping replies in this chat or thread.",
-		Next:     "Read it, refresh it, or tap Ask Me for clarifying questions. No memory is changed here.",
+		Next:     "Read it, refresh it, or tap Ask Me for clarifying questions.",
 		Details:  details,
 		Evidence: evidence,
 	}, 8, 3), rows

@@ -361,7 +361,7 @@ func renderMissionCommandShow(mission session.MissionState, events []session.Mis
 	return renderRuntimeCompactPanel(face.OperatorPanel{
 		Title:    "Mission " + strings.TrimSpace(mission.ID),
 		State:    firstNonEmptyRuntime(strings.TrimSpace(string(mission.Status)), "unknown"),
-		Why:      "Mission state is ledger context; action still needs explicit plan, lease, or grant authority.",
+		Why:      "Mission state is context, not action. Anything that touches the world still needs your approval.",
 		Next:     "Use /mission propose <id> for a bounded action, or update status with activate, pause, block, complete, or archive.",
 		Details:  details,
 		Evidence: evidence,

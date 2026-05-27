@@ -449,5 +449,5 @@ func operatorAuthorityLine(snapshot core.AuthorityStatusSnapshot) string {
 	if strings.TrimSpace(snapshot.Status) == "healthy" && snapshot.FindingCount == 0 {
 		return "authority: healthy"
 	}
-	return fmt.Sprintf("authority: needs attention (%d finding(s), %d error(s)); /health trace has source and repair details.", snapshot.FindingCount, snapshot.ErrorCount)
+	return fmt.Sprintf("authority: needs attention (%d finding(s), %d error(s)); run 'aphelion authority repair --apply --finding <id>' to apply repairable fixes, or open /health trace for source detail", snapshot.FindingCount, snapshot.ErrorCount)
 }

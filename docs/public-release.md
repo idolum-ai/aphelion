@@ -13,18 +13,6 @@ github.com/idolum-ai/aphelion
 Public documentation, install snippets, issue templates, and contribution
 workflows should point to that repository after the public cutover.
 
-## Historical Archive
-
-A separate historical archive may exist at:
-
-```text
-github.com/sadasant/aphelion
-```
-
-That archive preserves private development lineage and should not be treated as
-the release source of truth. It may contain pre-public operational material in
-old commits, so it is intentionally distinct from the canonical public source.
-
 ## Clean Public Cut
 
 The first public/canonical cut should be made from a reviewed clean tree rather

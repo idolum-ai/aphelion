@@ -189,7 +189,7 @@ func TestDoctorRuntimeConfigReportsAutonomyPolicy(t *testing.T) {
 		`autonomy_ceiling="leased"`,
 		`autonomy_live_overrides="true"`,
 		`autonomy_max_override_duration="2h0m0s"`,
-		`autonomy_authority_behavior="approval grants require an open auto mode gate"`,
+		`autonomy_authority_behavior="approvals require an open auto-mode window"`,
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("runtime config report missing %s:\n%s", want, report)

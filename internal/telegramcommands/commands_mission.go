@@ -124,7 +124,7 @@ func renderMissionDetailPanel(mission session.MissionState, events []session.Mis
 	panel := face.OperatorPanel{
 		Title:    "Mission: " + truncateOperatorLine(title, 90),
 		State:    firstNonEmpty(strings.TrimSpace(string(mission.Status)), "unknown"),
-		Why:      "Mission state is ledger context; action still needs explicit plan, lease, or grant authority.",
+		Why:      "Mission state is context, not action. Anything that touches the world still needs your approval.",
 		Next:     "Use Propose for a bounded action, or update the mission state with buttons.",
 		Details:  details,
 		Evidence: evidence,

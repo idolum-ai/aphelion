@@ -1,0 +1,14 @@
+flowchart LR
+    Upstream["Governor result<br/>+ floor parsing"]
+    Render{"Render decision"}
+
+    Upstream --> Render
+    Render --> TGText["Telegram text<br/>(+ streaming edits)"]
+    Render --> TGPhoto["Telegram photo / document"]
+    Render --> TGVoice["Telegram voice reply<br/>(ElevenLabs synthesis)"]
+    Render --> Fallback["Floor fallback<br/>(degraded)"]
+
+    TGText --> Outbound["Outbound sender<br/>(transport ledger)"]
+    TGPhoto --> Outbound
+    TGVoice --> Outbound
+    Fallback --> Outbound

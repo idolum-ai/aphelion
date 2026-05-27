@@ -130,23 +130,23 @@ func renderContinuationDecision(state session.ContinuationState, action string) 
 	state = session.NormalizeContinuationState(state)
 	switch normalizeContinuationCallbackAction(action) {
 	case continuationActionApproveLease:
-		return renderContinuationApprovedDecision(state, "Continuation lease approved.")
+		return renderContinuationApprovedDecision(state, "Continuation approved.")
 	case continuationActionContinueOnce:
-		return renderContinuationApprovedDecision(state, "Continuing once under the approved lease.")
+		return renderContinuationApprovedDecision(state, "Continuing once under your approval.")
 	case continuationActionAskEdit:
-		return "Continuation lease needs edits. I parked this prompt; no continuation was approved or started."
+		return "Continuation needs edits. I parked this prompt; no continuation was approved or started."
 	case continuationActionAskNextLease:
-		return renderContinuationEdgeStatus(state, "Next lease needed.")
+		return renderContinuationEdgeStatus(state, "Next approval needed.")
 	case continuationActionStatusOnly:
 		if state.Status == session.ContinuationStatusPending {
-			return renderContinuationScopeDetails(state, "Lease scope details.")
+			return renderContinuationScopeDetails(state, "Continuation scope details.")
 		}
 		return renderContinuationEdgeStatus(state, "Continuation status only.")
 	case continuationActionResumeEdge:
 		if state.Status == session.ContinuationStatusApproved && state.RemainingTurns > 0 {
 			return renderContinuationApprovedDecision(state, "Resuming the approved edge.")
 		}
-		return renderContinuationEdgeStatus(state, "Resume edge needs an approved lease first.")
+		return renderContinuationEdgeStatus(state, "Resume needs your approval first.")
 	default:
 		return renderContinuationEdgeStatus(state, "Continuation decision recorded.")
 	}
@@ -155,7 +155,7 @@ func renderContinuationDecision(state session.ContinuationState, action string) 
 func continuationCallbackErrorText(err error) string {
 	switch {
 	case errors.Is(err, core.ErrContinuationExpired):
-		return "That continuation lease expired before it could be approved."
+		return "That continuation request expired before you could approve it."
 	case errors.Is(err, core.ErrContinuationNotPending), errors.Is(err, core.ErrContinuationNoTurns), errors.Is(err, core.ErrContinuationStale):
 		return staleContinuationCallbackText
 	default:
@@ -166,7 +166,7 @@ func continuationCallbackErrorText(err error) string {
 func renderContinuationCallbackError(state session.ContinuationState, err error) string {
 	switch {
 	case errors.Is(err, core.ErrContinuationExpired):
-		return renderContinuationEdgeStatus(state, "Continuation lease expired before approval.")
+		return renderContinuationEdgeStatus(state, "Continuation request expired before approval.")
 	case errors.Is(err, core.ErrContinuationNotPending), errors.Is(err, core.ErrContinuationNoTurns), errors.Is(err, core.ErrContinuationStale):
 		return renderContinuationEdgeStatus(state, "Continuation prompt is no longer active.")
 	default:
@@ -175,11 +175,11 @@ func renderContinuationCallbackError(state session.ContinuationState, err error)
 }
 
 func renderContinuationRefreshedDecision(state session.ContinuationState) string {
-	return renderContinuationEdgeStatus(state, "Continuation lease expired before approval. I sent a fresh approval prompt.")
+	return renderContinuationEdgeStatus(state, "Continuation request expired before approval. I sent a fresh approval prompt.")
 }
 
 func renderContinuationRefreshAlreadyActiveDecision(state session.ContinuationState) string {
-	return renderContinuationEdgeStatus(state, "Continuation lease expired before approval. A fresh approval prompt is already active.")
+	return renderContinuationEdgeStatus(state, "Continuation request expired before approval. A fresh approval prompt is already active.")
 }
 
 func renderContinuationApprovedDecision(state session.ContinuationState, prefix string) string {
@@ -217,7 +217,6 @@ func renderContinuationEdgeStatus(state session.ContinuationState, prefix string
 	if state.HandshakeBlockedReason != "" {
 		lines = append(lines, "Blocked reason: "+state.HandshakeBlockedReason)
 	}
-	lines = append(lines, "No new authority was granted by this status view.")
 	return strings.Join(lines, "\n")
 }
 
@@ -262,7 +261,6 @@ func renderContinuationScopeDetails(state session.ContinuationState, prefix stri
 	if state.RemainingTurns > 0 {
 		lines = append(lines, fmt.Sprintf("Remaining turns: %d", state.RemainingTurns))
 	}
-	lines = append(lines, "No new authority was granted by this status view.")
 	return strings.Join(lines, "\n")
 }
 
@@ -303,7 +301,6 @@ func renderContinuationPlanBudgetDetails(state session.ContinuationState, prefix
 	if len(stops) > 0 {
 		lines = append(lines, "Stops for: "+strings.Join(stops, ", "))
 	}
-	lines = append(lines, "This details view does not change permissions.")
 	return strings.Join(lines, "\n")
 }
 

@@ -2,6 +2,9 @@
 
 ![Interactive turn sequence](diagrams/02-interactive-turn-sequence.svg)
 
+*What a single visible reply passes through, from inbound Telegram update
+to outbound delivery.*
+
 ## Interactive DM
 
 Current interactive turn order:

@@ -18,6 +18,15 @@ import (
 	"github.com/idolum-ai/aphelion/workspace"
 )
 
+// sessionLock pairs a per-session mutex with a refcount so the map entry can
+// be reclaimed once no goroutine is holding or waiting on it. The refcount is
+// guarded by Runtime.sessionMu, not by sessionLock.mu, so a waiter that has
+// already incremented its share is visible to the current holder's unlock.
+type sessionLock struct {
+	mu       sync.Mutex
+	refCount int
+}
+
 func (r *Runtime) lockSession(key session.SessionKey) func() {
 	lockKey := session.SessionIDForKey(key)
 	if strings.TrimSpace(lockKey) == "" {
@@ -27,13 +36,22 @@ func (r *Runtime) lockSession(key session.SessionKey) func() {
 	r.sessionMu.Lock()
 	lock := r.sessionLocks[lockKey]
 	if lock == nil {
-		lock = &sync.Mutex{}
+		lock = &sessionLock{}
 		r.sessionLocks[lockKey] = lock
 	}
+	lock.refCount++
 	r.sessionMu.Unlock()
 
-	lock.Lock()
-	return lock.Unlock
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		r.sessionMu.Lock()
+		lock.refCount--
+		if lock.refCount == 0 {
+			delete(r.sessionLocks, lockKey)
+		}
+		r.sessionMu.Unlock()
+	}
 }
 
 func (r *Runtime) scopeForPrincipal(p principal.Principal) (sandbox.Scope, error) {

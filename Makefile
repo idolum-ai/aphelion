@@ -8,7 +8,7 @@ STATIC_LDFLAGS ?= -linkmode external -extldflags "-static"
 GOHOSTOS ?= $(shell go env GOHOSTOS 2>/dev/null || uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo unknown)
 TEST_EXEC_TRUE ?= /usr/bin/true
 
-.PHONY: build build-static run test live-evals auto-evals verify-linux-compile test-compile check-config init install-user-service install-sandbox-net-helper restart-user-service logs-user-service update install-release update-release paths gc docs-architecture architecture public-readiness secrets design-principles deadcode check-live-fixtures taste
+.PHONY: build build-static run test live-evals auto-evals verify-linux-compile test-compile init install-user-service install-sandbox-net-helper restart-user-service logs-user-service update install-release update-release docs-architecture architecture public-readiness secrets design-principles taste
 
 build:
 	mkdir -p $(BIN_DIR)
@@ -49,17 +49,8 @@ verify-linux-compile:
 
 test-compile: verify-linux-compile
 
-check-config: build
-	./$(BIN) --config $(CONFIG) --check-config
-
 init: build
 	./$(BIN) init --config $(CONFIG)
-
-paths: build
-	./$(BIN) paths --config $(CONFIG)
-
-gc: build
-	./$(BIN) gc --config $(CONFIG)
 
 docs-architecture:
 	./scripts/check-architecture-docs.sh
@@ -86,12 +77,6 @@ secrets:
 
 design-principles:
 	./scripts/check-design-principles.sh
-
-deadcode:
-	./scripts/check-deadcode.sh
-
-check-live-fixtures:
-	./scripts/check-no-live-child-fixtures.sh
 
 taste:
 	./scripts/check-structural-taste.sh

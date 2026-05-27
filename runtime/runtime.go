@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
@@ -100,7 +102,7 @@ type Runtime struct {
 	operationalAlertClock  func() time.Time
 	operationalAlertWindow time.Duration
 	sessionMu              sync.Mutex
-	sessionLocks           map[string]*sync.Mutex
+	sessionLocks           map[string]*sessionLock
 	statusReadableMu       sync.Mutex
 	statusReadableProvider agent.Provider
 	statusReadableReady    bool
@@ -117,6 +119,9 @@ type Runtime struct {
 	recipePath             string
 	recipeState            runtimeRecipeState
 	shuttingDown           atomic.Bool
+	startupRecoveryWG      sync.WaitGroup
+	modelProviderSF        singleflight.Group
+	buildProviderHook      func(*config.Config, core.ModelSlotConfig) (agent.Provider, error)
 }
 
 func (r *Runtime) ConfigureVoice(cfg config.VoiceConfig, transcriber media.TranscriptionProvider, synth voice.Synthesizer) {
@@ -415,7 +420,7 @@ func New(
 		operationalAlerts:      make(map[string]operationalAlertState),
 		operationalAlertClock:  time.Now,
 		operationalAlertWindow: 10 * time.Minute,
-		sessionLocks:           make(map[string]*sync.Mutex),
+		sessionLocks:           make(map[string]*sessionLock),
 		activeTurnCancels:      make(map[int64]*activeTurnRun),
 	}
 	if rt.workExecutor != nil {

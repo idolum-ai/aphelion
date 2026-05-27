@@ -124,7 +124,7 @@ func (c CommandControl) AutonomyStatus(chatID int64, senderID int64) (core.Auton
 			AllowLiveOverrides:  policy.AllowLiveOverrides,
 			MaxOverrideDuration: policy.MaxOverrideDuration,
 			Source:              "default",
-			AuthorityBehavior:   "approval grants require an open auto mode gate",
+			AuthorityBehavior:   "approvals require an open auto-mode window",
 		}, nil
 	}
 	return c.Runtime.ChatAutonomyStatusSnapshot(chatID, senderID)

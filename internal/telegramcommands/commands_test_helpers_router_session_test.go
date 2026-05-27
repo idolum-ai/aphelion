@@ -142,7 +142,7 @@ func (s *stubCommandRouter) AutonomyStatus(chatID int64, senderID int64) (core.A
 		AllowLiveOverrides:  true,
 		MaxOverrideDuration: 4 * time.Hour,
 		Source:              "test",
-		AuthorityBehavior:   "approval grants require an open auto mode gate",
+		AuthorityBehavior:   "approvals require an open auto-mode window",
 	}, nil
 }
 
@@ -163,7 +163,7 @@ func (s *stubCommandRouter) AutonomyStatusForMessage(msg core.InboundMessage) (c
 		AllowLiveOverrides:  true,
 		MaxOverrideDuration: 4 * time.Hour,
 		Source:              "test",
-		AuthorityBehavior:   "approval grants require an open auto mode gate",
+		AuthorityBehavior:   "approvals require an open auto-mode window",
 	}, nil
 }
 

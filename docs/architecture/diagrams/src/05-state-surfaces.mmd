@@ -1,0 +1,49 @@
+flowchart LR
+    SessionsDB[("sessions.db<br/>(SQLite)")]
+
+    subgraph canonical["Canonical surfaces"]
+        direction TB
+        ExecEvents["execution_events<br/>(turn / tool / delivery timeline)"]
+        Messages["messages<br/>(scene text + floor)"]
+        Outbound["outbound_messages"]
+        ReviewDelivered["review_events<br/>(delivered)"]
+        DurableAgents["durable_agents<br/>(identity + config)"]
+        TGFailures["telegram_ingress_failures"]
+    end
+
+    subgraph operational["Operational current-state stores"]
+        direction TB
+        FloorState["sessions.last_floor_*"]
+        PlanState["sessions.plan_state_json"]
+        OpState["sessions.operation_state_json"]
+        Continuation["sessions.continuation_state_json"]
+        Pending["pending_decisions"]
+        AutoApproval["auto_approval_store"]
+        TGOffsets["telegram_ingress_offsets"]
+        TGUpdates["telegram_ingress_updates"]
+        TGThreads["telegram_threads<br/>(side lanes)"]
+        TurnRuns["turn_runs"]
+    end
+
+    subgraph projections["Projections"]
+        direction TB
+        Status["/status"]
+        HealthTrace["/health trace"]
+        QuickRead["quick-read / progress"]
+    end
+
+    subgraph memory["Memory (file-backed)"]
+        direction TB
+        CuratedMem["curated memory files"]
+        Semantic["rhizome / semantic store"]
+    end
+
+    SessionsDB --> ExecEvents
+    SessionsDB --> FloorState
+    ExecEvents --> Status
+    Messages --> Status
+    Pending --> Status
+    ExecEvents --> HealthTrace
+    Messages --> QuickRead
+    Messages --> CuratedMem
+    DurableAgents --> Semantic

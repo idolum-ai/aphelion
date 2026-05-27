@@ -98,15 +98,48 @@ Then check the surface:
 ```
 
 `status` is redacted. `--online` mints and discards an installation token and
-records a redacted evidence event. To intentionally print token material for a
-manual credential-helper flow, use:
+records a redacted evidence event. `token --format=git-credential` prints a
+one-shot Git credential protocol payload for manual plumbing, for example with
+`git credential approve`:
 
 ```bash
 ./bin/aphelion github-app token --config ~/.aphelion/aphelion.toml --app maintenance --show-token --format=git-credential
 ```
 
-This v1 does not inject GitHub credentials into ordinary shell or git
-execution. It makes the credential source typed, checkable, and ledgered first.
+That command is not a persistent Git credential helper. Aphelion does not
+currently ship an `aphelion github-app credential-helper` mode; the
+`git-credential` format is just `protocol`, `host`, `username`, and `password`
+for the minted installation token.
+
+When repository work is approved and the operator has separately installed a
+dedicated git credential helper for the configured app, prefer that path-aware
+operator-provided helper over a broad personal token. Clear any stale/default
+helper first and force git to include the repository path in credential lookup:
+
+```bash
+GIT_TERMINAL_PROMPT=0 git \
+  -c credential.helper= \
+  -c credential.helper=/path/to/operator-provided-github-app-helper \
+  -c credential.useHttpPath=true \
+  ls-remote https://github.com/owner/repo.git HEAD
+```
+
+`credential.useHttpPath=true` is load-bearing for repo-scoped helpers. Without
+it, git may ask only for host-level `github.com` credentials; a helper that is
+intentionally scoped to paths such as `owner/repo` will decline and git may fail
+before any installation token is supplied. The one-shot payload above also does
+not include a `path=` field, so it does not by itself demonstrate repo-path
+scoped credential storage.
+
+Invalid `gh auth status` is therefore not decisive for Aphelion repository work.
+After a bounded external-account grant, check the configured GitHub App route
+before declaring GitHub blocked. Never print PEM contents or installation
+tokens in chat, logs, memory, or review artifacts.
+
+This v1 does not automatically inject GitHub credentials into ordinary shell or
+git execution. It makes the credential source typed, checkable, and ledgered
+first; operators can then use a governed, separately installed helper path
+explicitly inside the approved work boundary.
 
 ## Post-Install Telegram Check
 

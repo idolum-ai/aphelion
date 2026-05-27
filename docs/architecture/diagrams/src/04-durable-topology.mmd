@@ -1,0 +1,40 @@
+flowchart LR
+    Admin["Admin DM"]
+    Cron["Cron"]
+    Heartbeat["Heartbeat"]
+
+    subgraph parent["Parent Aphelion"]
+        direction TB
+        Runtime["runtime<br/>(wake loops)"]
+        Sessions[("session store")]
+        Reviews["Review artifacts"]
+        Control["/control plane<br/>(Tailnet)"]
+    end
+
+    subgraph children["Durable children"]
+        direction TB
+        TGChild["Telegram durable<br/>(channel-facing)"]
+        ThreadPromoted["Telegram thread<br/>(promoted side lane)"]
+        TailnetChild["Tailnet-provisioned child<br/>(remote host)"]
+        CodexAdapter["Codex app-server adapter<br/>(read-only status)"]
+        Scheduled["Scheduled child<br/>(idolum-daily-review)"]
+    end
+
+    Admin --> Runtime
+    Cron --> Runtime
+    Heartbeat --> Runtime
+    Runtime --> Sessions
+    Runtime --> Reviews
+
+    Runtime --> TGChild
+    Runtime --> ThreadPromoted
+    Runtime --> CodexAdapter
+    Runtime --> Scheduled
+    Runtime --> Control
+    Control <--> TailnetChild
+
+    TGChild -->|review| Reviews
+    ThreadPromoted -->|review| Reviews
+    TailnetChild -->|upload| Reviews
+    CodexAdapter -->|status| Reviews
+    Scheduled -->|review| Reviews

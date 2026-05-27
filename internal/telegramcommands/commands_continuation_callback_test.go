@@ -467,8 +467,8 @@ func TestHandleTelegramCommandCallbackContinuationApproveLease(t *testing.T) {
 	if router.triggerContinuationInput != 7 {
 		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)
 	}
-	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Continuation lease approved") {
-		t.Fatalf("editInline = %#v, want lease approval confirmation with approval-window offer", sender.editInline)
+	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Continuation approved") {
+		t.Fatalf("editInline = %#v, want approval confirmation with approval-window offer", sender.editInline)
 	}
 }
 
@@ -514,7 +514,7 @@ func TestHandleTelegramCommandCallbackContinuationDetailsKeepsPendingPlanButtons
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline = %#v, want details edit with buttons retained", sender.editInline)
 	}
-	if !strings.Contains(sender.editInline[0].text, "Budget remaining: 3 turn(s)") || !strings.Contains(sender.editInline[0].text, "This details view does not change permissions.") {
+	if !strings.Contains(sender.editInline[0].text, "Budget remaining: 3 turn(s)") {
 		t.Fatalf("details text = %q, want expanded plan details", sender.editInline[0].text)
 	}
 	var labels []string
@@ -555,8 +555,8 @@ func TestHandleTelegramCommandCallbackContinuationApproveDoesNotWaitForTrigger(t
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Continuation lease approved") {
-		t.Fatalf("editInline = %#v, want immediate lease approval confirmation with approval-window offer", sender.editInline)
+	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Continuation approved") {
+		t.Fatalf("editInline = %#v, want immediate approval confirmation with approval-window offer", sender.editInline)
 	}
 	waitForStubContinuationTrigger(t, triggerStarted)
 	if router.triggerContinuationInput != 7 {
@@ -603,11 +603,10 @@ func TestHandleTelegramCommandCallbackContinuationStatusOnlyDoesNotMutateOrTrigg
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline = %#v, want status-only no-authority text with buttons", sender.editInline)
 	}
-	if !strings.Contains(sender.editInline[0].text, "Lease scope details") ||
+	if !strings.Contains(sender.editInline[0].text, "Continuation scope details") ||
 		!strings.Contains(sender.editInline[0].text, "Bounded effect: Inspect local state and report only.") ||
-		!strings.Contains(sender.editInline[0].text, "Forbidden actions: edit_files, deploy") ||
-		!strings.Contains(sender.editInline[0].text, "No new authority was granted") {
-		t.Fatalf("editInline = %#v, want detailed scope no-authority text", sender.editInline)
+		!strings.Contains(sender.editInline[0].text, "Forbidden actions: edit_files, deploy") {
+		t.Fatalf("editInline = %#v, want detailed continuation scope text", sender.editInline)
 	}
 	var labels []string
 	for _, row := range sender.editInline[0].rows {

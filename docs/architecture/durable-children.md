@@ -2,6 +2,10 @@
 
 ![Durable topology](diagrams/04-durable-topology.svg)
 
+*Parent Aphelion with its bounded child runtimes (Telegram, promoted threads,
+Tailnet-provisioned remote hosts, Codex app-server adapter, scheduled
+children) and the review surfaces that connect them upward.*
+
 Durable children are bounded child Aphelions. Some may be user-facing personas,
 but they remain subordinate to parent governance and policy boundaries.
 

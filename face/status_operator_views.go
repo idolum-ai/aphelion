@@ -60,7 +60,7 @@ func RenderTelegramStatusDurablesOperatorCard(snapshot core.DurableAgentsStatusS
 	panel := OperatorPanel{
 		Title:    "Durable Agents",
 		State:    state,
-		Why:      "durable children need visible health, policy, grant, wake, and enrollment posture",
+		Why:      "durable children need visible health, policy, approvals, wake, and enrollment posture",
 		Next:     operatorDurablesStatusNext(snapshot),
 		Details:  operatorDurableAgentDetails(snapshot),
 		Evidence: []string{operatorDurablesStatusEvidence(snapshot)},
@@ -199,7 +199,7 @@ func operatorDurablesStatusNext(snapshot core.DurableAgentsStatusSnapshot) strin
 	if snapshot.DegradedAgents > 0 {
 		return "inspect the degraded child with /agents or run /health diagnose"
 	}
-	return "refresh after child wake, policy, grant, or Tailnet changes"
+	return "refresh after child wake, policy, approval, or Tailnet changes"
 }
 
 func operatorDurableAgentDetails(snapshot core.DurableAgentsStatusSnapshot) []string {
@@ -260,7 +260,7 @@ func operatorAuthorityStatusDetail(snapshot core.AuthorityStatusSnapshot) string
 	if strings.TrimSpace(snapshot.Status) == "healthy" && snapshot.FindingCount == 0 {
 		return "authority: healthy"
 	}
-	return fmt.Sprintf("authority: %d finding(s), %d error(s), %d active grant(s)", snapshot.FindingCount, snapshot.ErrorCount, snapshot.CapabilityGrants)
+	return fmt.Sprintf("authority: %d finding(s), %d error(s), %d active approval(s); run 'aphelion authority repair --apply --finding <id>' to apply repairable fixes", snapshot.FindingCount, snapshot.ErrorCount, snapshot.CapabilityGrants)
 }
 
 func operatorTailnetStatusDetail(snapshot *core.TailnetStatusSnapshot) string {

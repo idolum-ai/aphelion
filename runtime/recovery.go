@@ -33,11 +33,34 @@ func (r *Runtime) StartStartupRecovery(ctx context.Context, logger func(string, 
 		logger = log.Printf
 	}
 
+	r.startupRecoveryWG.Add(1)
 	go func() {
+		defer r.startupRecoveryWG.Done()
 		if err := r.runStartupRecoveryOnce(ctx, time.Now()); err != nil {
 			logger("WARN startup recovery failed: %v", err)
 		}
 	}()
+}
+
+// WaitForStartupRecovery blocks until the startup recovery goroutine started
+// by StartStartupRecovery completes, or until ctx is canceled. Returns
+// ctx.Err() on timeout/cancellation, nil otherwise. Safe to call when no
+// startup recovery is in flight (returns immediately).
+func (r *Runtime) WaitForStartupRecovery(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		r.startupRecoveryWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (err error) {
