@@ -67,10 +67,34 @@ func normalizeConfiguredCapabilityVisibilityOptions(opts ConfiguredCapabilityVis
 	return opts
 }
 
-func (r *Registry) configuredCapabilityVisibilityForPrincipal(p principal.Principal, exposedDefs []agent.ToolDef, exposedExternal []ExternalToolManifest) string {
+func (r *Registry) promptSupportSurfacesForPrincipal(p principal.Principal, exposedDefs []agent.ToolDef, exposedExternal []ExternalToolManifest) []string {
 	if r == nil {
+		return nil
+	}
+	surfaces := []string{}
+	if skills := strings.TrimSpace(r.availableSkillsForPrincipal()); skills != "" {
+		surfaces = append(surfaces, skills)
+	}
+	if capabilities := strings.TrimSpace(r.requestableCapabilitiesForPrincipal(p, exposedDefs, exposedExternal)); capabilities != "" {
+		surfaces = append(surfaces, capabilities)
+	}
+	return surfaces
+}
+
+func (r *Registry) availableSkillsForPrincipal() string {
+	lines := r.skillConfiguredVisibility()
+	if len(lines) == 0 {
 		return ""
 	}
+	out := []string{
+		"## Available Skills",
+		"- Skills are instruction affordances, not callable tools. Use the listed file only when its workflow matches the task.",
+	}
+	out = append(out, lines...)
+	return strings.Join(out, "\n")
+}
+
+func (r *Registry) requestableCapabilitiesForPrincipal(p principal.Principal, exposedDefs []agent.ToolDef, exposedExternal []ExternalToolManifest) string {
 	lines := []string{}
 	exposedNative := toolDefNameSet(exposedDefs)
 	exposedExternalNames := externalManifestNameSet(exposedExternal)
@@ -85,16 +109,12 @@ func (r *Registry) configuredCapabilityVisibilityForPrincipal(p principal.Princi
 	if block := r.githubConfiguredVisibility(p, principalID); len(block) > 0 {
 		lines = append(lines, block...)
 	}
-	if block := r.skillConfiguredVisibility(); len(block) > 0 {
-		lines = append(lines, block...)
-	}
 	if len(lines) == 0 {
 		return ""
 	}
 	out := []string{
-		"Configured capability visibility:",
-		"- This section is read-only status, not invocation authority.",
-		"- configured means present in config/runtime setup; exposed means listed as a callable tool for this principal; invokable still requires the relevant active grant/lease and runtime checks.",
+		"## Requestable Capabilities",
+		"- Read-only authority hints. Configured is not callable; request and wait for an active grant before use.",
 	}
 	out = append(out, lines...)
 	return strings.Join(out, "\n")
@@ -117,14 +137,14 @@ func (r *Registry) webSearchConfiguredVisibility(p principal.Principal, principa
 		}
 	}
 	lines := []string{
-		fmt.Sprintf("- web_search: configured=%t runtime_defined=%t exposed=%t active_grant=%s invocation_requires=active_tool_grant+active_turn_or_operation_lease", r.webSearchOptions.Enabled, defined, exposedNow, grantStatus),
+		fmt.Sprintf("- capability.web_search: configured=%t runtime_defined=%t exposed=%t active_grant=%s request=capability_request kind=tool target_resource=web_search action=invoke until_granted=not_callable,no_provider_call,no_credential_check", r.webSearchOptions.Enabled, defined, exposedNow, grantStatus),
 	}
 	canSeeDetails := p.Role == principal.RoleAdmin || grantStatus == "active"
 	if !canSeeDetails {
-		return append(lines, "  details=restricted reason=request_web_search_authority")
+		return append(lines, "  details=restricted")
 	}
 	providers := r.webSearchProviderMap()
-	lines = append(lines, fmt.Sprintf("  providers_order=%s default_count=%d max_count=%d", strings.Join(r.webSearchOptions.ProviderOrder, ","), r.webSearchOptions.DefaultCount, r.webSearchOptions.MaxCount))
+	lines = append(lines, fmt.Sprintf("  providers_order=%s default_count=%d max_count=%d", compactList(r.webSearchOptions.ProviderOrder, promptSurfaceListLimit), r.webSearchOptions.DefaultCount, r.webSearchOptions.MaxCount))
 	if r.webSearchOptions.OpenAIHosted.Enabled || stringSliceContains(r.webSearchOptions.ProviderOrder, "openai_hosted") {
 		_, wired := providers["openai_hosted"]
 		lines = append(lines, fmt.Sprintf("  provider.openai_hosted: configured=%t registered_provider=%t context_size=%s credential_status=provider_level_not_exposed", r.webSearchOptions.OpenAIHosted.Enabled, wired, firstNonEmpty(r.webSearchOptions.OpenAIHosted.ContextSize, "medium")))
@@ -141,7 +161,7 @@ func (r *Registry) externalToolConfiguredVisibility(p principal.Principal, princ
 	if len(r.externalManifests) == 0 || p.Role != principal.RoleAdmin {
 		return nil
 	}
-	lines := []string{"- external_tool_manifests:"}
+	lines := []string{"- capability.external_tool_manifests:"}
 	manifests := append([]ExternalToolManifest(nil), r.externalManifests...)
 	sort.Slice(manifests, func(i, j int) bool { return manifests[i].Name < manifests[j].Name })
 	for _, manifest := range manifests {
@@ -167,7 +187,7 @@ func (r *Registry) externalToolConfiguredVisibility(p principal.Principal, princ
 			}
 		}
 		_, exposedNow := exposed[manifest.Name]
-		lines = append(lines, fmt.Sprintf("  manifest[%s]: configured=true owner=%s registered=%s exposed=%t active_grant=%s executable=%t", manifest.Name, firstNonEmpty(manifest.Owner, "unknown"), registered, exposedNow, grantStatus, r.externalExecutor != nil && r.externalExecutor.Supports(manifest)))
+		lines = append(lines, fmt.Sprintf("  manifest[%s]: configured=true owner=%s registered=%s exposed=%t active_grant=%s executable=%t request=capability_request kind=tool target_resource=%s action=invoke until_granted=not_callable,no_external_execution", manifest.Name, firstNonEmpty(manifest.Owner, "unknown"), registered, exposedNow, grantStatus, r.externalExecutor != nil && r.externalExecutor.Supports(manifest), manifest.Name))
 	}
 	return lines
 }
@@ -180,9 +200,9 @@ func (r *Registry) githubConfiguredVisibility(p principal.Principal, principalID
 	grantStatus := r.githubExternalAccountGrantStatus(p, principalID)
 	canSeeDetails := p.Role == principal.RoleAdmin || grantStatus == "active_external_account_grant"
 	if !canSeeDetails {
-		return []string{fmt.Sprintf("- github_apps: configured=%t details=restricted reason=request_external_account_authority", cfg.Enabled)}
+		return []string{fmt.Sprintf("- capability.github_apps: configured=%t active_external_account_grant=%s details=restricted request=capability_request kind=external_account target_resource=github action=read until_granted=hide_app_details,no_github_api_call", cfg.Enabled, grantStatus)}
 	}
-	lines := []string{fmt.Sprintf("- github_apps: configured=%t runtime_tool=none maintenance_cli=github-app active_external_account_grant=%s api_base_url=%s", cfg.Enabled, grantStatus, firstNonEmpty(cfg.APIBaseURL, "not_configured"))}
+	lines := []string{fmt.Sprintf("- capability.github_apps: configured=%t runtime_tool=none maintenance_cli=github-app active_external_account_grant=%s api_base_url=%s request=capability_request kind=external_account target_resource=github action=read until_granted=hide_app_details,no_github_api_call", cfg.Enabled, grantStatus, firstNonEmpty(cfg.APIBaseURL, "not_configured"))}
 	apps := append([]GitHubAppCapabilityVisibility(nil), cfg.Apps...)
 	sort.Slice(apps, func(i, j int) bool { return apps[i].Name < apps[j].Name })
 	for _, app := range apps {
@@ -195,7 +215,7 @@ func (r *Registry) githubConfiguredVisibility(p principal.Principal, principalID
 		if app.AllowAllPermissions {
 			permScope = "installation"
 		}
-		lines = append(lines, fmt.Sprintf("  app.%s: installation_id=%d key_file=%s key_present=%s repos=%s repo_scope=%s permissions=%s permission_scope=%s", firstNonEmpty(app.Name, "unnamed"), app.InstallationID, keySource, keyPresent, listOrNone(app.Repositories), repoScope, listOrNone(app.Permissions), permScope))
+		lines = append(lines, fmt.Sprintf("  app.%s: installation_id=%d key_file=%s key_present=%s repos=%s repo_scope=%s permissions=%s permission_scope=%s", firstNonEmpty(app.Name, "unnamed"), app.InstallationID, keySource, keyPresent, compactList(app.Repositories, promptSurfaceListLimit), repoScope, compactList(app.Permissions, promptSurfaceListLimit), permScope))
 	}
 	return lines
 }
@@ -227,11 +247,26 @@ func (r *Registry) githubExternalAccountGrantStatus(p principal.Principal, princ
 	return "missing"
 }
 
+const promptSurfaceListLimit = 4
+
 func (r *Registry) skillConfiguredVisibility() []string {
 	if len(r.configuredVisibility.SkillFiles) == 0 {
 		return nil
 	}
-	return []string{fmt.Sprintf("- skills: prompt_file_backed=true configured_files=%s note=skills_are_instructions_not_tools", strings.Join(r.configuredVisibility.SkillFiles, ","))}
+	files := append([]string(nil), r.configuredVisibility.SkillFiles...)
+	limit := promptSurfaceListLimit
+	if len(files) < limit {
+		limit = len(files)
+	}
+	lines := make([]string, 0, limit+1)
+	for _, file := range files[:limit] {
+		name := skillNameFromPath(file)
+		lines = append(lines, fmt.Sprintf("- skill.%s: description=configured_skill_instructions location=%s", name, compactPath(file)))
+	}
+	if remaining := len(files) - limit; remaining > 0 {
+		lines = append(lines, fmt.Sprintf("- skills_more: count=%d ask_operator_for=skill_detail_surface", remaining))
+	}
+	return lines
 }
 
 func toolDefNameSet(defs []agent.ToolDef) map[string]struct{} {
@@ -312,11 +347,49 @@ func compactSortedStrings(values []string) []string {
 	return out
 }
 
-func listOrNone(values []string) string {
+func compactList(values []string, limit int) string {
 	if len(values) == 0 {
 		return "none"
 	}
-	return strings.Join(values, ",")
+	if limit <= 0 || len(values) <= limit {
+		return strings.Join(values, ",")
+	}
+	shown := append([]string(nil), values[:limit]...)
+	shown = append(shown, fmt.Sprintf("+%d_more", len(values)-limit))
+	return strings.Join(shown, ",")
+}
+
+func compactPath(value string) string {
+	value = filepath.ToSlash(strings.TrimSpace(value))
+	if value == "" {
+		return "unknown"
+	}
+	parts := strings.Split(value, "/")
+	kept := make([]string, 0, 2)
+	for i := len(parts) - 1; i >= 0 && len(kept) < 2; i-- {
+		part := strings.TrimSpace(parts[i])
+		if part == "" {
+			continue
+		}
+		kept = append([]string{part}, kept...)
+	}
+	if len(kept) == 0 {
+		return filepath.Base(value)
+	}
+	if len(parts) > len(kept) {
+		return ".../" + strings.Join(kept, "/")
+	}
+	return strings.Join(kept, "/")
+}
+
+func skillNameFromPath(value string) string {
+	base := strings.TrimSuffix(filepath.Base(strings.TrimSpace(value)), filepath.Ext(value))
+	base = strings.ToLower(strings.TrimSpace(base))
+	base = strings.ReplaceAll(base, "_", "-")
+	if base == "" || base == "." {
+		return "unnamed"
+	}
+	return base
 }
 
 func stringSliceContains(values []string, want string) bool {

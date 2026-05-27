@@ -29,13 +29,13 @@ func TestManifestShowsConfiguredButUngrantableWebSearchWithoutExposingTool(t *te
 	t.Setenv("BRAVE_TEST_KEY", "secret-token")
 
 	manifest := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001})
-	toolsOnly := strings.Split(manifest, "Configured capability visibility:")[0]
+	toolsOnly := strings.Split(manifest, "## Requestable Capabilities")[0]
 	if strings.Contains(toolsOnly, "- web_search:") {
 		t.Fatalf("tool manifest exposed ungranted web_search as callable:\n%s", manifest)
 	}
 	for _, want := range []string{
-		"Configured capability visibility:",
-		"- web_search: configured=true runtime_defined=true exposed=false active_grant=missing",
+		"## Requestable Capabilities",
+		"- capability.web_search: configured=true runtime_defined=true exposed=false active_grant=missing",
 		"provider.openai_hosted: configured=true",
 		"provider.brave: configured=true",
 		"credential_source=env:BRAVE_TEST_KEY credential_present=true",
@@ -74,7 +74,7 @@ func TestManifestShowsConfiguredGitHubAppsWithoutSecretPathsOrRuntimeTool(t *tes
 
 	manifest := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001})
 	for _, want := range []string{
-		"- github_apps: configured=true runtime_tool=none maintenance_cli=github-app",
+		"- capability.github_apps: configured=true runtime_tool=none maintenance_cli=github-app",
 		"app.idolum-bot: installation_id=123 key_file=github-app.pem key_present=true",
 		"repos=idolum-ai/aphelion",
 		"permissions=contents:write,pull_requests:write",
@@ -98,10 +98,10 @@ func TestManifestShowsGrantedWebSearchAsExposedInConfiguredVisibility(t *testing
 	grantToolInvoke(t, store, webSearchToolName, "telegram:1001")
 
 	manifest := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001})
-	if !strings.Contains(strings.Split(manifest, "Configured capability visibility:")[0], "- web_search:") {
+	if !strings.Contains(strings.Split(manifest, "## Requestable Capabilities")[0], "- web_search:") {
 		t.Fatalf("callable tools missing granted web_search:\n%s", manifest)
 	}
-	if !strings.Contains(manifest, "- web_search: configured=true runtime_defined=true exposed=true active_grant=active") {
+	if !strings.Contains(manifest, "- capability.web_search: configured=true runtime_defined=true exposed=true active_grant=active") {
 		t.Fatalf("configured visibility did not show exposed grant:\n%s", manifest)
 	}
 }
@@ -131,7 +131,7 @@ func TestManifestRestrictsGitHubAppDetailsForDurableAgentWithoutGrant(t *testing
 		})
 
 	manifest := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"})
-	if !strings.Contains(manifest, "- github_apps: configured=true details=restricted reason=request_external_account_authority") {
+	if !strings.Contains(manifest, "- capability.github_apps: configured=true active_external_account_grant=missing details=restricted request=capability_request kind=external_account target_resource=github action=read") {
 		t.Fatalf("manifest missing coarse restricted GitHub line:\n%s", manifest)
 	}
 	for _, forbidden := range []string{"idolum-bot", "installation_id", "github-app.pem", "key_present", "idolum-ai/aphelion", "contents:write", "pull_requests:write", root, "not-a-real-key"} {
@@ -233,11 +233,11 @@ func TestConfiguredExternalToolVisibilityIsReachableWithoutCallableExposure(t *t
 	}
 	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 	out := registry.ManifestForPrincipal(actor)
-	toolsOnly := strings.Split(out, "Configured capability visibility:")[0]
+	toolsOnly := strings.Split(out, "## Requestable Capabilities")[0]
 	if strings.Contains(toolsOnly, "- browse_page:") {
 		t.Fatalf("manifest exposed ungranted external tool as callable:\n%s", out)
 	}
-	if !strings.Contains(out, "- external_tool_manifests:") || !strings.Contains(out, "manifest[browse_page]: configured=true") || !strings.Contains(out, "exposed=false") || !strings.Contains(out, "active_grant=missing") {
+	if !strings.Contains(out, "- capability.external_tool_manifests:") || !strings.Contains(out, "manifest[browse_page]: configured=true") || !strings.Contains(out, "exposed=false") || !strings.Contains(out, "active_grant=missing") {
 		t.Fatalf("manifest missing configured external tool visibility:\n%s", out)
 	}
 }
@@ -257,12 +257,73 @@ func TestWebSearchConfiguredVisibilityRestrictsUngranteddurableAgentDetails(t *t
 	t.Setenv("BRAVE_TEST_KEY", "secret-token")
 
 	manifest := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"})
-	if !strings.Contains(manifest, "- web_search: configured=true") || !strings.Contains(manifest, "active_grant=missing") || !strings.Contains(manifest, "details=restricted reason=request_web_search_authority") {
+	if !strings.Contains(manifest, "- capability.web_search: configured=true") || !strings.Contains(manifest, "active_grant=missing") || !strings.Contains(manifest, "details=restricted") {
 		t.Fatalf("manifest missing coarse web_search restriction:\n%s", manifest)
 	}
 	for _, forbidden := range []string{"providers_order", "provider.openai_hosted", "provider.brave", "BRAVE_TEST_KEY", "brave-key", "credential_present", "secret-token"} {
 		if strings.Contains(manifest, forbidden) {
 			t.Fatalf("manifest leaked web_search detail %q to ungranted durable agent:\n%s", forbidden, manifest)
 		}
+	}
+}
+
+func TestAvailableSkillsAreCompactBoundedAndSeparateFromTools(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), time.Second).
+		WithConfiguredCapabilityVisibility(ConfiguredCapabilityVisibilityOptions{
+			SkillFiles: []string{
+				"/very/long/workspace/grimoire/practices/commit-archeology.md",
+				"/very/long/workspace/grimoire/practices/review.md",
+				"/very/long/workspace/grimoire/SKILLS.md",
+				"relative/skills/scout.md",
+				"relative/skills/extra.md",
+			},
+		})
+
+	manifest := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001})
+	toolsOnly := strings.Split(manifest, "## Available Skills")[0]
+	if strings.Contains(toolsOnly, "commit-archeology") || strings.Contains(toolsOnly, "skills_more") {
+		t.Fatalf("tool manifest leaked skill affordances:\n%s", manifest)
+	}
+	for _, want := range []string{
+		"## Available Skills",
+		"- skill.commit-archeology: description=configured_skill_instructions location=.../practices/commit-archeology.md",
+		"- skills_more: count=1",
+	} {
+		if !strings.Contains(manifest, want) {
+			t.Fatalf("manifest missing compact skill surface %q:\n%s", want, manifest)
+		}
+	}
+	if strings.Contains(manifest, "/very/long/workspace") {
+		t.Fatalf("manifest leaked raw long skill path:\n%s", manifest)
+	}
+}
+
+func TestGitHubRequestableCapabilityListsAreCapped(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), time.Second).
+		WithConfiguredCapabilityVisibility(ConfiguredCapabilityVisibilityOptions{
+			GitHub: GitHubCapabilityVisibilityOptions{
+				Enabled: true,
+				Apps: []GitHubAppCapabilityVisibility{{
+					Name:           "idolum-bot",
+					InstallationID: 123,
+					Repositories:   []string{"owner/a", "owner/b", "owner/c", "owner/d", "owner/e"},
+					Permissions:    []string{"checks:read", "contents:write", "issues:write", "metadata:read", "pull_requests:write"},
+				}},
+			},
+		})
+
+	manifest := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001})
+	if !strings.Contains(manifest, "repos=owner/a,owner/b,owner/c,owner/d,+1_more") {
+		t.Fatalf("manifest did not cap repositories:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, "permissions=checks:read,contents:write,issues:write,metadata:read,+1_more") {
+		t.Fatalf("manifest did not cap permissions:\n%s", manifest)
+	}
+	if strings.Contains(manifest, "owner/e") || strings.Contains(manifest, "pull_requests:write") {
+		t.Fatalf("manifest leaked capped GitHub list details:\n%s", manifest)
 	}
 }
