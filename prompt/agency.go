@@ -33,6 +33,9 @@ func renderGovernorAgencyContextPacket(aw RuntimeAwareness, principalRole string
 		lines = append(lines, "- open_loops: "+loops)
 	}
 	lines = append(lines, "- affordance_map: "+governorAffordanceMap(capabilities))
+	if routeRepair := agencyConfiguredRouteRepair(capabilities); routeRepair != "" {
+		lines = append(lines, "- configured_route_repair: "+routeRepair)
+	}
 	lines = append(lines,
 		"- may_act_now: inspect current local state, use available tools within the active envelope, update durable plan/operation state when that state is real",
 		"- must_propose_or_ask: capability expansion, external effects, privacy broadening, credentials, purchase, public contact, deploy, restart, or irreversible change without an active lease",
@@ -69,6 +72,13 @@ func renderFaceAgencyContextPacket(aw RuntimeAwareness, principalRole string, mo
 		lines = append(lines, "- principal_role: "+strings.TrimSpace(principalRole))
 	}
 	return strings.Join(compactLines(lines), "\n")
+}
+
+func agencyConfiguredRouteRepair(capabilities ToolCapabilities) string {
+	if !capabilities.CapabilityRequest && !capabilities.CapabilityAuthority && !capabilities.DurableAgent {
+		return ""
+	}
+	return "when local/default credentials fail but a configured route is visible in Requestable Capabilities, treat the failure as repair evidence rather than a hard blocker; for GitHub, stale gh auth does not decide whether a configured GitHub App route can be proposed or used after approval; use credentials only inside an active grant/lease, keep token material in-process, and never print it"
 }
 
 func agencyTurnAuthorizationScope(aw RuntimeAwareness) string {

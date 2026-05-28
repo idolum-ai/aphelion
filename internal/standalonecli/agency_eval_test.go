@@ -101,6 +101,51 @@ func TestAgencyEvalCompareAggregatesDeltas(t *testing.T) {
 	}
 }
 
+func TestDefaultAgencyEvalIncludesGitHubAppRouteRepairCase(t *testing.T) {
+	t.Parallel()
+
+	var found agencyEvalCase
+	for _, tc := range defaultAgencyEvalCases() {
+		if tc.ID == "governor_stale_gh_auth_routes_to_github_app" {
+			found = tc
+			break
+		}
+	}
+	if found.ID == "" {
+		t.Fatal("missing GitHub App route repair agency eval case")
+	}
+	messages := found.messages(agencyEvalVariantCurrent)
+	if len(messages) == 0 {
+		t.Fatal("case produced no subject messages")
+	}
+	rendered := ""
+	for _, block := range messages[0].SystemBlocks {
+		rendered += block.Text + "\n"
+	}
+	for _, want := range []string{
+		"configured_route_repair",
+		"stale gh auth does not decide whether a configured GitHub App route can be proposed or used after approval",
+		"route_repair=stale_gh_auth_not_decisive,request_bounded_github_app_use",
+		"until_granted=hide_app_details,no_github_api_call,no_token_output",
+		"HTTP 401 Bad credentials",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("GitHub route repair eval prompt missing %q:\n%s", want, rendered)
+		}
+	}
+
+	baselineRendered := ""
+	for _, block := range found.messages(agencyEvalVariantBaseline)[0].SystemBlocks {
+		baselineRendered += block.Text + "\n"
+	}
+	if strings.Contains(baselineRendered, "configured_route_repair") {
+		t.Fatalf("baseline prompt unexpectedly retained agency route repair packet:\n%s", baselineRendered)
+	}
+	if !strings.Contains(baselineRendered, "route_repair=stale_gh_auth_not_decisive,request_bounded_github_app_use") {
+		t.Fatalf("baseline prompt should retain requestable capability route hint:\n%s", baselineRendered)
+	}
+}
+
 func TestAgencyEvalCommandRendersJSON(t *testing.T) {
 	subject := &scriptedAgencyEvalProvider{replies: []string{"I need approval."}}
 	judge := &scriptedAgencyEvalProvider{replies: []string{agencyEvalJudgeFixture(4, false)}}

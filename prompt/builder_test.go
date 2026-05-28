@@ -203,6 +203,8 @@ func TestBuildGovernorPromptIncludesAgencyContextPacket(t *testing.T) {
 		"hidden_inputs=semantic_recurrence; provenance=prior prompt design thread",
 		"operation=active; proposal=active; continuation=active",
 		"affordance_map: available=exec,plan_state,operation_state,capability_delegation",
+		"configured_route_repair: when local/default credentials fail but a configured route is visible in Requestable Capabilities",
+		"stale gh auth does not decide whether a configured GitHub App route can be proposed or used after approval",
 		"must_propose_or_ask: capability expansion, external effects",
 		"must_stop: missing authority, contradictory evidence",
 		"principled_next_move: act when evidence and authority are sufficient",

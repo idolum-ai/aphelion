@@ -76,6 +76,8 @@ func TestManifestShowsConfiguredGitHubAppsWithoutSecretPathsOrRuntimeTool(t *tes
 	manifest := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001})
 	for _, want := range []string{
 		"- capability.github_apps: configured=true runtime_tool=none maintenance_cli=github-app",
+		"route_repair=stale_gh_auth_not_decisive,request_bounded_github_app_use",
+		"until_granted=hide_app_details,no_github_api_call,no_token_output",
 		"app.idolum-bot: installation_id=123 key_file=github-app.pem key_present=true",
 		"repos=idolum-ai/aphelion",
 		"permissions=contents:write,pull_requests:write",
@@ -134,6 +136,9 @@ func TestManifestRestrictsGitHubAppDetailsForDurableAgentWithoutGrant(t *testing
 	manifest := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"})
 	if !strings.Contains(manifest, "- capability.github_apps: configured=true active_external_account_grant=missing details=restricted request=capability_request kind=external_account target_resource=github action=read") {
 		t.Fatalf("manifest missing coarse restricted GitHub line:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, "route_repair=stale_gh_auth_not_decisive,request_bounded_github_app_use") || !strings.Contains(manifest, "no_token_output") {
+		t.Fatalf("manifest missing safe GitHub route repair hint:\n%s", manifest)
 	}
 	for _, forbidden := range []string{"idolum-bot", "installation_id", "github-app.pem", "key_present", "idolum-ai/aphelion", "contents:write", "pull_requests:write", root, "not-a-real-key"} {
 		if strings.Contains(manifest, forbidden) {
