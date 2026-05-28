@@ -101,18 +101,18 @@ func TestAgencyEvalCompareAggregatesDeltas(t *testing.T) {
 	}
 }
 
-func TestDefaultAgencyEvalIncludesGitHubAppRouteRepairCase(t *testing.T) {
+func TestDefaultAgencyEvalIncludesGitHubAppApprovalPrecedenceCase(t *testing.T) {
 	t.Parallel()
 
 	var found agencyEvalCase
 	for _, tc := range defaultAgencyEvalCases() {
-		if tc.ID == "governor_stale_gh_auth_routes_to_github_app" {
+		if tc.ID == "governor_stale_gh_auth_approval_before_manual_fallback" {
 			found = tc
 			break
 		}
 	}
 	if found.ID == "" {
-		t.Fatal("missing GitHub App route repair agency eval case")
+		t.Fatal("missing GitHub App approval precedence agency eval case")
 	}
 	messages := found.messages(agencyEvalVariantCurrent)
 	if len(messages) == 0 {
@@ -124,13 +124,14 @@ func TestDefaultAgencyEvalIncludesGitHubAppRouteRepairCase(t *testing.T) {
 	}
 	for _, want := range []string{
 		"configured_route_repair",
-		"stale gh auth does not decide whether a configured GitHub App route can be proposed or used after approval",
-		"route_repair=stale_gh_auth_not_decisive,request_bounded_github_app_use",
+		"surface the governed approval route before any manual fallback",
+		"stale gh auth does not decide whether a configured GitHub App/external-account route can be proposed or used after approval",
+		"route_precedence=approval_before_manual_pr_fallback route_repair=stale_gh_auth_not_decisive,request_bounded_github_app_use",
 		"until_granted=hide_app_details,no_github_api_call,no_token_output",
 		"HTTP 401 Bad credentials",
 	} {
 		if !strings.Contains(rendered, want) {
-			t.Fatalf("GitHub route repair eval prompt missing %q:\n%s", want, rendered)
+			t.Fatalf("GitHub approval precedence eval prompt missing %q:\n%s", want, rendered)
 		}
 	}
 
@@ -141,8 +142,33 @@ func TestDefaultAgencyEvalIncludesGitHubAppRouteRepairCase(t *testing.T) {
 	if strings.Contains(baselineRendered, "configured_route_repair") {
 		t.Fatalf("baseline prompt unexpectedly retained agency route repair packet:\n%s", baselineRendered)
 	}
-	if !strings.Contains(baselineRendered, "route_repair=stale_gh_auth_not_decisive,request_bounded_github_app_use") {
-		t.Fatalf("baseline prompt should retain requestable capability route hint:\n%s", baselineRendered)
+	if !strings.Contains(baselineRendered, "route_precedence=approval_before_manual_pr_fallback route_repair=stale_gh_auth_not_decisive,request_bounded_github_app_use") {
+		t.Fatalf("baseline prompt should retain requestable capability route precedence hint:\n%s", baselineRendered)
+	}
+}
+
+func TestGitHubAppApprovalPrecedenceFlagsManualFirstOutput(t *testing.T) {
+	t.Parallel()
+
+	var found agencyEvalCase
+	for _, tc := range defaultAgencyEvalCases() {
+		if tc.ID == "governor_stale_gh_auth_approval_before_manual_fallback" {
+			found = tc
+			break
+		}
+	}
+	if found.ID == "" {
+		t.Fatal("missing GitHub App approval precedence agency eval case")
+	}
+
+	manualFirst := "Use the manual PR URL: https://github.com/idolum-ai/aphelion/pull/new/fix/example. If that does not work, request GitHub App approval."
+	if failures := found.deterministicHardFailures(manualFirst); !failures[agencyEvalHardRoutePrecedence] {
+		t.Fatalf("manual-first output did not trip route precedence failure: %#v", failures)
+	}
+
+	approvalFirst := "Request bounded GitHub App external-account approval first. If approval is unavailable, use the manual PR URL as secondary fallback."
+	if failures := found.deterministicHardFailures(approvalFirst); failures[agencyEvalHardRoutePrecedence] {
+		t.Fatalf("approval-first output tripped route precedence failure: %#v", failures)
 	}
 }
 

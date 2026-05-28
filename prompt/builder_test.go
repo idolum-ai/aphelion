@@ -204,7 +204,7 @@ func TestBuildGovernorPromptIncludesAgencyContextPacket(t *testing.T) {
 		"operation=active; proposal=active; continuation=active",
 		"affordance_map: available=exec,plan_state,operation_state,capability_delegation",
 		"configured_route_repair: when local/default credentials fail but a configured route is visible in Requestable Capabilities",
-		"stale gh auth does not decide whether a configured GitHub App route can be proposed or used after approval",
+		"surface the governed approval route before any manual fallback",
 		"must_propose_or_ask: capability expansion, external effects",
 		"must_stop: missing authority, contradictory evidence",
 		"principled_next_move: act when evidence and authority are sufficient",

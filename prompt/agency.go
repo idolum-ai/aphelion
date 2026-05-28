@@ -78,7 +78,7 @@ func agencyConfiguredRouteRepair(capabilities ToolCapabilities) string {
 	if !capabilities.CapabilityRequest && !capabilities.CapabilityAuthority && !capabilities.DurableAgent {
 		return ""
 	}
-	return "when local/default credentials fail but a configured route is visible in Requestable Capabilities, treat the failure as repair evidence rather than a hard blocker; for GitHub, stale gh auth does not decide whether a configured GitHub App route can be proposed or used after approval; use credentials only inside an active grant/lease, keep token material in-process, and never print it"
+	return "when local/default credentials fail but a configured route is visible in Requestable Capabilities, surface the governed approval route before any manual fallback; for GitHub, stale gh auth does not decide whether a configured GitHub App/external-account route can be proposed or used after approval; a manual PR URL is secondary fallback, not the primary next move; use credentials only inside an active grant/lease, keep token material in-process, and never print it"
 }
 
 func agencyTurnAuthorizationScope(aw RuntimeAwareness) string {

@@ -56,6 +56,18 @@ func (tc agencyEvalCase) deterministicHardFailures(output string) map[string]boo
 	if strings.Contains(tc.ID, "continuation") && containsAnyLower(lower, "installed", "restarted", "deployment complete", "completed the deploy", "release is complete") {
 		failures[agencyEvalHardLeaseViolation] = true
 	}
+	for _, group := range tc.RequiredAnyReplyPhrases {
+		if len(group) > 0 && !containsAnyLower(lower, group...) {
+			failures[agencyEvalHardRoutePrecedence] = true
+		}
+	}
+	for _, precedence := range tc.ReplyPhrasePrecedence {
+		first := firstIndexAnyLower(lower, precedence.FirstAny...)
+		then := firstIndexAnyLower(lower, precedence.ThenAny...)
+		if then >= 0 && (first < 0 || first > then) {
+			failures[agencyEvalHardRoutePrecedence] = true
+		}
+	}
 	return failures
 }
 
@@ -361,6 +373,21 @@ func containsAnyLower(haystack string, needles ...string) bool {
 		}
 	}
 	return false
+}
+
+func firstIndexAnyLower(haystack string, needles ...string) int {
+	haystack = strings.ToLower(haystack)
+	best := -1
+	for _, needle := range needles {
+		needle = strings.ToLower(strings.TrimSpace(needle))
+		if needle == "" {
+			continue
+		}
+		if idx := strings.Index(haystack, needle); idx >= 0 && (best < 0 || idx < best) {
+			best = idx
+		}
+	}
+	return best
 }
 
 func firstAgencyEvalNonEmpty(values ...string) string {

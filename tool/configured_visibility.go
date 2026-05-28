@@ -200,9 +200,9 @@ func (r *Registry) githubConfiguredVisibility(p principal.Principal, principalID
 	grantStatus := r.githubExternalAccountGrantStatus(p, principalID)
 	canSeeDetails := p.Role == principal.RoleAdmin || grantStatus == "active_external_account_grant"
 	if !canSeeDetails {
-		return []string{fmt.Sprintf("- capability.github_apps: configured=%t active_external_account_grant=%s details=restricted request=capability_request kind=external_account target_resource=github action=read route_repair=stale_gh_auth_not_decisive,request_bounded_github_app_use until_granted=hide_app_details,no_github_api_call,no_token_output", cfg.Enabled, grantStatus)}
+		return []string{fmt.Sprintf("- capability.github_apps: configured=%t active_external_account_grant=%s details=restricted request=capability_request kind=external_account target_resource=github action=read route_precedence=approval_before_manual_pr_fallback route_repair=stale_gh_auth_not_decisive,request_bounded_github_app_use until_granted=hide_app_details,no_github_api_call,no_token_output", cfg.Enabled, grantStatus)}
 	}
-	lines := []string{fmt.Sprintf("- capability.github_apps: configured=%t runtime_tool=none maintenance_cli=github-app active_external_account_grant=%s api_base_url=%s request=capability_request kind=external_account target_resource=github action=read route_repair=stale_gh_auth_not_decisive,request_bounded_github_app_use until_granted=hide_app_details,no_github_api_call,no_token_output", cfg.Enabled, grantStatus, firstNonEmpty(cfg.APIBaseURL, "not_configured"))}
+	lines := []string{fmt.Sprintf("- capability.github_apps: configured=%t runtime_tool=none maintenance_cli=github-app active_external_account_grant=%s api_base_url=%s request=capability_request kind=external_account target_resource=github action=read route_precedence=approval_before_manual_pr_fallback route_repair=stale_gh_auth_not_decisive,request_bounded_github_app_use until_granted=hide_app_details,no_github_api_call,no_token_output", cfg.Enabled, grantStatus, firstNonEmpty(cfg.APIBaseURL, "not_configured"))}
 	apps := append([]GitHubAppCapabilityVisibility(nil), cfg.Apps...)
 	sort.Slice(apps, func(i, j int) bool { return apps[i].Name < apps[j].Name })
 	for _, app := range apps {
