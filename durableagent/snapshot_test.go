@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -253,5 +254,127 @@ func writeSnapshotFixture(t *testing.T, snapshotDir string, manifest SnapshotMan
 	}
 	if err := os.WriteFile(filepath.Join(snapshotDir, "manifest.json"), raw, 0o600); err != nil {
 		t.Fatalf("WriteFile(manifest) err = %v", err)
+	}
+}
+
+func TestSnapshotSkipsNestedSnapshotStorageAndListsNewestFirst(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions.db")
+	workspaceRoot := filepath.Join(t.TempDir(), "child", "workspace")
+	memoryRoot := filepath.Join(t.TempDir(), "child", "memory")
+	if err := os.MkdirAll(filepath.Join(memoryRoot, ".snapshots", "legacy"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(memory .snapshots) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(memoryRoot, ".snapshots", "legacy", "old.txt"), []byte("old"), 0o600); err != nil {
+		t.Fatalf("WriteFile(old snapshot marker) err = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(memoryRoot, "notes"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(notes) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(memoryRoot, "notes", "keep.md"), []byte("keep"), 0o600); err != nil {
+		t.Fatalf("WriteFile(keep) err = %v", err)
+	}
+	agent := core.DurableAgent{AgentID: "child-a", LocalStorageRoots: []string{workspaceRoot, memoryRoot}}
+	firstTime := time.Date(2026, time.April, 21, 12, 0, 0, 0, time.UTC)
+	secondTime := firstTime.Add(time.Minute)
+	first, err := CreateSnapshot(agent, nil, dbPath, "first", firstTime)
+	if err != nil {
+		t.Fatalf("CreateSnapshot(first) err = %v", err)
+	}
+	second, err := CreateSnapshot(agent, nil, dbPath, "second", secondTime)
+	if err != nil {
+		t.Fatalf("CreateSnapshot(second) err = %v", err)
+	}
+	_, firstDir, err := LoadSnapshot(agent, dbPath, first.SnapshotID)
+	if err != nil {
+		t.Fatalf("LoadSnapshot(first) err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(firstDir, "memory", ".snapshots", "legacy", "old.txt")); !os.IsNotExist(err) {
+		t.Fatalf("legacy .snapshots copied into snapshot, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(firstDir, "memory", "notes", "keep.md")); err != nil {
+		t.Fatalf("kept memory file stat err = %v", err)
+	}
+	records, err := ListSnapshots(agent, dbPath, 1)
+	if err != nil {
+		t.Fatalf("ListSnapshots(limit) err = %v", err)
+	}
+	if len(records) != 1 || records[0].SnapshotID != second.SnapshotID || records[0].Reason != "second" {
+		t.Fatalf("records = %#v, want newest second snapshot only", records)
+	}
+}
+
+func TestRestoreSnapshotLeavesBackupOnOverwrite(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions.db")
+	workspaceRoot := filepath.Join(t.TempDir(), "child", "workspace")
+	memoryRoot := filepath.Join(t.TempDir(), "child", "memory")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspaceRoot) err = %v", err)
+	}
+	if err := os.MkdirAll(memoryRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(memoryRoot) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "task.txt"), []byte("snapshot value"), 0o600); err != nil {
+		t.Fatalf("WriteFile(snapshot workspace) err = %v", err)
+	}
+	agent := core.DurableAgent{AgentID: "child-a", LocalStorageRoots: []string{workspaceRoot, memoryRoot}}
+	now := time.Date(2026, time.April, 21, 12, 0, 0, 0, time.UTC)
+	manifest, err := CreateSnapshot(agent, nil, dbPath, "before-overwrite", now)
+	if err != nil {
+		t.Fatalf("CreateSnapshot() err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "task.txt"), []byte("current value"), 0o600); err != nil {
+		t.Fatalf("WriteFile(current workspace) err = %v", err)
+	}
+	restoreTime := now.Add(time.Minute)
+	if _, err := RestoreSnapshot(agent, dbPath, manifest.SnapshotID, restoreTime); err != nil {
+		t.Fatalf("RestoreSnapshot() err = %v", err)
+	}
+	restored, err := os.ReadFile(filepath.Join(workspaceRoot, "task.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile(restored) err = %v", err)
+	}
+	if string(restored) != "snapshot value" {
+		t.Fatalf("restored workspace = %q, want snapshot value", string(restored))
+	}
+	backupPath := workspaceRoot + ".restore-bak-" + strings.ToLower(strconv.FormatInt(restoreTime.UnixNano(), 36))
+	backup, err := os.ReadFile(filepath.Join(backupPath, "task.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile(backup) err = %v", err)
+	}
+	if string(backup) != "current value" {
+		t.Fatalf("backup workspace = %q, want current value", string(backup))
+	}
+}
+
+func TestMigrateChildMemorySnapshotsKeepsExistingValidDestination(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions.db")
+	workspaceRoot := filepath.Join(t.TempDir(), "child", "workspace")
+	memoryRoot := filepath.Join(t.TempDir(), "child", "memory")
+	agent := core.DurableAgent{AgentID: "child-a", LocalStorageRoots: []string{workspaceRoot, memoryRoot}}
+	snapshotID := durableSnapshotID(time.Date(2026, time.April, 21, 12, 0, 0, 0, time.UTC))
+	sourceBase, err := childMemorySnapshotBaseDir(agent, dbPath)
+	if err != nil {
+		t.Fatalf("childMemorySnapshotBaseDir() err = %v", err)
+	}
+	targetBase, err := SnapshotBaseDir(agent, dbPath)
+	if err != nil {
+		t.Fatalf("SnapshotBaseDir() err = %v", err)
+	}
+	manifest := SnapshotManifest{SchemaVersion: durableAgentSnapshotSchemaVersion, SnapshotID: snapshotID, AgentID: agent.AgentID, CreatedAt: time.Date(2026, time.April, 21, 12, 0, 0, 0, time.UTC), Agent: agent}
+	writeSnapshotFixture(t, filepath.Join(sourceBase, snapshotID), manifest)
+	writeSnapshotFixture(t, filepath.Join(targetBase, snapshotID), manifest)
+
+	result, err := MigrateChildMemorySnapshots(agent, dbPath)
+	if err != nil {
+		t.Fatalf("MigrateChildMemorySnapshots() err = %v", err)
+	}
+	if result.Scanned != 1 || result.Migrated != 0 || result.AlreadyPresent != 1 || result.Rejected != 0 || !result.SourceRemoved {
+		t.Fatalf("migration result = %#v, want already-present accounting and source removal", result)
 	}
 }

@@ -188,3 +188,148 @@ func TestHTTPEnrollDoesNotPersistEnrollmentForStaleEnvelope(t *testing.T) {
 		t.Fatalf("DurableAgentRemoteEnrollment() err = %v, want sql.ErrNoRows", err)
 	}
 }
+
+func TestHTTPReattestationRequiresExistingActiveEnrollment(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	agent := testRemoteDurableAgent()
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	handler := NewHTTPHandler(store).Handler()
+	bootstrap := core.DurableAgentRemoteBootstrap{
+		AgentID:          agent.AgentID,
+		ParentAgentID:    "house",
+		ChannelKind:      agent.ChannelKind,
+		ParentControlURL: "https://house.example/control",
+		EnrollmentToken:  "enroll-token-1",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:     testDurableAgentBootstrapLLM(),
+		BootstrapCeiling: agent.BootstrapCeiling,
+	}
+	reqBody := signedEnrollmentRequest(t, agent, bootstrap, core.DurableAgentControlMessageReattestation, "reattest-missing-1", 1, time.Now().UTC())
+
+	rec := performJSONRequest(t, handler, http.MethodPost, ControlPlaneEnrollPath, reqBody)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s, want 404 for missing enrollment", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHTTPReattestationRejectsInactiveEnrollment(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	agent := testRemoteDurableAgent()
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
+		AgentID:          agent.AgentID,
+		ParentControlURL: "https://house.example/control",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		Status:           "revoked",
+		RevokedAt:        time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgentRemoteEnrollment() err = %v", err)
+	}
+	handler := NewHTTPHandler(store).Handler()
+	bootstrap := core.DurableAgentRemoteBootstrap{
+		AgentID:          agent.AgentID,
+		ParentAgentID:    "house",
+		ChannelKind:      agent.ChannelKind,
+		ParentControlURL: "https://house.example/control",
+		EnrollmentToken:  "enroll-token-1",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:     testDurableAgentBootstrapLLM(),
+		BootstrapCeiling: agent.BootstrapCeiling,
+	}
+	reqBody := signedEnrollmentRequest(t, agent, bootstrap, core.DurableAgentControlMessageReattestation, "reattest-revoked-1", 1, time.Now().UTC())
+
+	rec := performJSONRequest(t, handler, http.MethodPost, ControlPlaneEnrollPath, reqBody)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body = %s, want 403 for inactive enrollment", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHTTPReattestationRejectsDifferentTailnetPeer(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	agent := testRemoteDurableAgent()
+	agent.LivePolicy.TailnetMode = "tsnet"
+	agent.LivePolicy.TailnetHostname = "family-child"
+	agent.LivePolicy.TailnetTags = []string{"tag:aphelion-child"}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
+		AgentID:          agent.AgentID,
+		ParentControlURL: "https://house.example/control",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		Status:           "active",
+		TailnetIdentity: core.TailnetPeerIdentity{
+			StableNodeID: "node-original",
+			NodeName:     "family-child.example.ts.net",
+			ComputedName: "family-child",
+			Tags:         []string{"tag:aphelion-child"},
+		},
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgentRemoteEnrollment() err = %v", err)
+	}
+	handler := NewHTTPHandler(store)
+	handler.RequirePeerIdentity = true
+	bootstrap := core.DurableAgentRemoteBootstrap{
+		AgentID:          agent.AgentID,
+		ParentAgentID:    "house",
+		ChannelKind:      agent.ChannelKind,
+		ParentControlURL: "https://house.example/control",
+		EnrollmentToken:  "enroll-token-1",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:     testDurableAgentBootstrapLLM(),
+		BootstrapCeiling: agent.BootstrapCeiling,
+	}
+	reqBody := signedEnrollmentRequest(t, agent, bootstrap, core.DurableAgentControlMessageReattestation, "reattest-peer-1", 1, time.Now().UTC())
+
+	rec := performJSONRequestWithIdentity(t, handler.Handler(), http.MethodPost, ControlPlaneEnrollPath, reqBody, core.TailnetPeerIdentity{
+		StableNodeID: "node-other",
+		NodeName:     "family-child.example.ts.net",
+		ComputedName: "family-child",
+		Tags:         []string{"tag:aphelion-child"},
+	})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body = %s, want 403 for different tailnet peer", rec.Code, rec.Body.String())
+	}
+	enrollment, err := store.DurableAgentRemoteEnrollment(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentRemoteEnrollment() err = %v", err)
+	}
+	if enrollment.TailnetIdentity.StableNodeID != "node-original" {
+		t.Fatalf("TailnetIdentity.StableNodeID = %q, want unchanged original identity", enrollment.TailnetIdentity.StableNodeID)
+	}
+}
+
+func signedEnrollmentRequest(t *testing.T, agent core.DurableAgent, bootstrap core.DurableAgentRemoteBootstrap, kind string, messageID string, sequence int64, timestamp time.Time) core.DurableAgentEnrollmentRequest {
+	t.Helper()
+	reqBody := core.DurableAgentEnrollmentRequest{
+		Envelope: core.DurableAgentControlEnvelope{
+			ProtocolVersion: core.DefaultDurableAgentControlProtocolVersion,
+			AgentID:         agent.AgentID,
+			ParentAgentID:   "house",
+			MessageKind:     kind,
+			MessageID:       messageID,
+			Sequence:        sequence,
+			Timestamp:       timestamp,
+		},
+		Payload: bootstrap.EnrollmentPayload(),
+	}
+	signature, err := SignEnvelopeHMAC(agent.ControlPlaneSecret, reqBody.Envelope, reqBody.Payload)
+	if err != nil {
+		t.Fatalf("SignEnvelopeHMAC(%s) err = %v", kind, err)
+	}
+	reqBody.Envelope.Signature = signature
+	return reqBody
+}

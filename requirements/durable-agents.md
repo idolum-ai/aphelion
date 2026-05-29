@@ -14,6 +14,14 @@ where a concrete governed outpost workflow requires one.
 This remains partly forward-looking and does not retroactively widen current
 admission or security claims.
 
+Implementation/product-contract note: the current `durableagent/` package now has
+an implemented child-parent HTTP control plane, remote sync loop, review artifact
+upload path, tailnet identity binding, and snapshot/provisioning helpers. The
+feature inventory and maturity matrix live in
+[`docs/architecture/durableagent-product-contract.md`](../docs/architecture/durableagent-product-contract.md);
+that contract should be read as the current package-level product surface, while
+this requirements document remains the broader constitutional boundary.
+
 These agents are not ordinary task subagents.
 They are persistent subordinate organs attached to the house through an external ingress surface such as:
 

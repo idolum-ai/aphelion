@@ -24,8 +24,13 @@ type RemoteChildLoopResult struct {
 	LastPolicyVersion       int64
 }
 
+type remoteChildCycleRunner interface {
+	RunOnce(ctx context.Context, bootstrapPath string, msg core.InboundMessage) (*RemoteChildRunResult, error)
+	RunParentConversation(ctx context.Context, bootstrapPath string) (*RemoteChildRunResult, error)
+}
+
 type RemoteChildLoopRunner struct {
-	runner *RemoteChildRunner
+	runner remoteChildCycleRunner
 	Sleep  func(context.Context, time.Duration) error
 }
 

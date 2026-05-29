@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
@@ -367,4 +368,53 @@ func newTestSQLiteStore(t *testing.T) *session.SQLiteStore {
 		t.Fatalf("NewSQLiteStore() err = %v", err)
 	}
 	return store
+}
+
+func TestQueueReviewArtifactReturnsErrorForInvalidContinuityJSON(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	agent := core.DurableAgent{
+		AgentID:            "family-group",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		BootstrapLLM:       testDurableAgentBootstrapLLM(),
+		Status:             "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agent.AgentID, StateJSON: `{not json`}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+	_, err := NewRuntime(store).QueueReviewArtifact(agent, core.DurableReviewArtifact{Summary: "Child report."})
+	if err == nil {
+		t.Fatal("QueueReviewArtifact() err = nil, want invalid continuity JSON error")
+	}
+	if !strings.Contains(err.Error(), "parse durable agent continuity state") {
+		t.Fatalf("QueueReviewArtifact() err = %v, want parse continuity context", err)
+	}
+}
+
+func TestReadForensicRecordRejectsCrossAgentAndInvalidRefs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	agent := core.DurableAgent{AgentID: "child-a", LocalStorageRoots: []string{filepath.Join(root, "work-a"), filepath.Join(root, "mem-a")}}
+	other := core.DurableAgent{AgentID: "child-b", LocalStorageRoots: []string{filepath.Join(root, "work-b"), filepath.Join(root, "mem-b")}}
+	ref, err := WriteForensicRecord(agent, ForensicRecord{AgentID: agent.AgentID, Reason: "test", CreatedAt: time.Now().UTC(), Payload: map[string]string{"summary": "raw"}})
+	if err != nil {
+		t.Fatalf("WriteForensicRecord() err = %v", err)
+	}
+	if _, err := ReadForensicRecord(other, ref); err == nil {
+		t.Fatal("ReadForensicRecord(cross-agent) err = nil, want rejection")
+	}
+	for _, badRef := range []string{"", "forensic://durable-agent/child-a/../secret.json", "file://durable-agent/child-a/x.json"} {
+		if _, err := ReadForensicRecord(agent, badRef); err == nil {
+			t.Fatalf("ReadForensicRecord(%q) err = nil, want invalid ref", badRef)
+		}
+	}
 }

@@ -116,8 +116,11 @@ Code anchors:
   turn, or pipeline orchestration.
 - `tool` owns bounded tool implementations and sandbox integration. It should
   not import runtime, turn, or pipeline orchestration.
-- `durableagent` owns child-agent substrate, enrollment, policy, and forensics.
-  It may depend on storage contracts, but not on runtime orchestration.
+- `durableagent` owns child-agent substrate, enrollment, policy transport,
+  remote child sync, snapshots, provisioning, and forensics. It may depend on
+  storage contracts, but not on runtime orchestration; higher layers still decide
+  policy semantics, authority grants, deployment, and operator review. See
+  [`durableagent-product-contract.md`](./durableagent-product-contract.md).
 - `githubapp` owns GitHub App key parsing, JWT signing, and installation-token
   exchange. It does not decide runtime authority or inject credentials into
   tools.
