@@ -27,6 +27,7 @@ views.
 | Check whether the service is ready | `/health`, then `/health trace` or `/health diagnose` when needed |
 | See active work and pending decisions | `/status` |
 | Keep a separate task from mixing with the main chat | `/thread <message>`, replies to that thread, then `/threads` |
+| Notice stale side lanes without polling manually | Default-on stale-thread reminders; `/threads remind` for admin diagnostics |
 | Close a side lane after it is no longer active | `/absorb N` |
 | Inspect what is shaping replies | `/context` and `/memory` |
 | Review objective candidates | `/mission` |
@@ -145,6 +146,32 @@ threads, so Aphelion can produce a compact thread-board triage note without
 absorbing, promoting, closing, or modifying anything. The analysis prompt asks
 for a quick read, threads needing action, likely stale/absorbable threads,
 blocked/waiting threads, and one suggested next move.
+
+### Stale Thread Reminders
+
+Open side threads are eligible for default-on stale-thread reminders. The
+reminder path is intentionally conservative: Aphelion chooses candidates with a
+deterministic heuristic, sends at most a small bounded number per sweep, applies
+per-thread cooldown and one-reminder-per-activity-epoch dedupe, and suppresses
+threads that already have pending, ignored, resumed, absorbed, or expired
+reminder state for the same activity epoch.
+
+A reminder is a Telegram message that tells the operator there is an old living
+side thread and offers three safe ways forward:
+
+- reply to the reminder to continue the original side thread;
+- press `ignore` to suppress the reminder without deleting thread content;
+- press `absorb` to use the existing thread absorb flow.
+
+`/threads remind` remains an admin diagnostic for exercising the same selection
+and emission path without waiting for the background sweep. It is not the
+primary product surface and should not be treated as required ordinary workflow.
+Keep it until live observation shows the background path is stable enough to
+remove or hide further.
+
+`/doctor` / health evidence may show pending reminder counts through the
+Telegram thread section and sweep telemetry through execution events. Treat that
+as repair-loop evidence, not as a separate authority surface.
 
 ## Stop Or Reset A Chat
 

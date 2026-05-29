@@ -107,6 +107,25 @@ Requirements:
 - Absorb is bookkeeping and pruning. It does not automatically approve curated
   memory writes or copy the full thread transcript into thread `0`.
 - Analyze is bookkeeping. It does not close, promote, absorb, or mutate side threads.
+- Open side threads are eligible for default-on stale-thread reminders.
+- Reminder selection is deterministic and bounded: hard eligibility, scoring,
+  max-per-sweep budget, per-thread cooldown, and one-reminder-per-activity-epoch
+  dedupe.
+- Reminder state must suppress noisy repeats: pending, ignored, resumed,
+  absorbed, and expired states prevent duplicate reminders for the same activity
+  epoch.
+- Reminder copy must avoid exposing sensitive-looking thread openings by
+  default; privacy-softened summaries are preferred over raw topic text.
+- Replying to a reminder must resume the original side-thread scope through
+  durable Telegram message/thread ledger evidence.
+- `ignore` must suppress/edit the reminder without deleting thread content.
+- `absorb` must delegate to the existing absorb semantics rather than inventing
+  a separate close path.
+- `/threads remind` is an admin diagnostic command. The background sweep is the
+  product path.
+- `/doctor` and health/status projections should expose enough reminder evidence
+  for repair: pending reminder counts and sweep telemetry, without making those
+  projections an authority source.
 
 ## Update Normalization
 

@@ -432,6 +432,12 @@ Current `/thread` already has most of the lane mechanics:
 - `runtime/telegram_threads.go` already implements absorb as a scoped summary
   and synthetic main-chat turn with provenance metadata. `runtime/doctor_threads.go`
   exposes thread count/status/session evidence to doctor output.
+- `session/store_telegram_thread_reminders.go`,
+  `internal/telegramcommands/commands_thread_reminders.go`, and
+  `telegram_thread_reminder_sweep.go` add the current stale-thread reminder
+  layer: reminder records, reply/ignore/absorb handling, deterministic
+  background sweep, execution-event telemetry, and `/threads remind` as an
+  admin diagnostic.
 - Tests cover the important invariants: `session/store_telegram_threads_test.go`,
   `runtime/telegram_threads_test.go`,
   `runtime/continuation_scope_invariant_test.go`,
@@ -567,6 +573,8 @@ Suggested initial test set:
 ## Design Rules
 
 - A plain thread must stay cheap to create and close.
+- Default-on stale-thread reminders may help surface forgotten work, but they
+  must remain bounded, deterministic, suppressible, and non-destructive.
 - Durable features attach progressively; they must not be required for ordinary
   side-thread work.
 - `/threads` should remain a lightweight work-lane board. Rich durable controls
