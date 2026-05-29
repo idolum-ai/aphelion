@@ -30,6 +30,7 @@ func (p OperationPhase) Active() bool {
 		len(p.AllowedActions) > 0 ||
 		len(p.ForbiddenActions) > 0 ||
 		len(p.ValidationPlan) > 0 ||
+		len(p.RequiredCapabilityGrants) > 0 ||
 		strings.TrimSpace(p.GateLevel) != "" ||
 		strings.TrimSpace(p.GateReasonCode) != "" ||
 		strings.TrimSpace(p.ApprovalSubject) != "" ||
@@ -122,6 +123,18 @@ func (r CapabilityRequest) Active() bool {
 		strings.TrimSpace(r.GrantID) != ""
 }
 
+func (s CapabilityGrantSpec) Active() bool {
+	return strings.TrimSpace(s.RequestID) != "" ||
+		strings.TrimSpace(s.GrantID) != "" ||
+		strings.TrimSpace(string(s.Kind)) != "" ||
+		strings.TrimSpace(s.TargetResource) != "" ||
+		strings.TrimSpace(s.GrantedTo) != "" ||
+		len(s.AllowedActions) > 0 ||
+		strings.TrimSpace(s.Contract) != "" ||
+		strings.TrimSpace(s.Constraints) != "" ||
+		!s.ExpiresAt.IsZero()
+}
+
 func (r DurableChildAgreement) Active() bool {
 	return strings.TrimSpace(r.AgreementID) != "" ||
 		strings.TrimSpace(r.AgentID) != "" ||
@@ -200,5 +213,6 @@ func (p ContinuationApprovalBundlePhase) Active() bool {
 		len(p.AllowedActions) > 0 ||
 		len(p.ForbiddenActions) > 0 ||
 		len(p.ValidationPlan) > 0 ||
+		len(p.RequiredCapabilityGrants) > 0 ||
 		strings.TrimSpace(string(p.Status)) != ""
 }

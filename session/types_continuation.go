@@ -34,43 +34,45 @@ type ContinuationLeaseStatus string
 type ContinuationLeaseClass string
 
 type ContinuationLease struct {
-	ID               string                  `json:"id,omitempty"`
-	ProposalID       string                  `json:"proposal_id,omitempty"`
-	MissionID        string                  `json:"mission_id,omitempty"`
-	OperatorTitle    string                  `json:"operator_title,omitempty"`
-	PlanTitle        string                  `json:"plan_title,omitempty"`
-	Status           ContinuationLeaseStatus `json:"status,omitempty"`
-	MaxTurns         int                     `json:"max_turns,omitempty"`
-	RemainingTurns   int                     `json:"remaining_turns,omitempty"`
-	ApprovedBy       int64                   `json:"approved_by,omitempty"`
-	LeaseClass       ContinuationLeaseClass  `json:"lease_class,omitempty"`
-	Constraints      map[string]string       `json:"constraints,omitempty"`
-	AllowedActions   []string                `json:"allowed_actions,omitempty"`
-	ForbiddenActions []string                `json:"forbidden_actions,omitempty"`
-	ValidationPlan   []string                `json:"validation_plan,omitempty"`
-	ExpiresAt        time.Time               `json:"expires_at,omitempty"`
-	PlanHash         string                  `json:"plan_hash,omitempty"`
-	CreatedAt        time.Time               `json:"created_at,omitempty"`
-	UpdatedAt        time.Time               `json:"updated_at,omitempty"`
-	ApprovedAt       time.Time               `json:"approved_at,omitempty"`
-	ConsumedAt       time.Time               `json:"consumed_at,omitempty"`
-	RevokedAt        time.Time               `json:"revoked_at,omitempty"`
+	ID                       string                  `json:"id,omitempty"`
+	ProposalID               string                  `json:"proposal_id,omitempty"`
+	MissionID                string                  `json:"mission_id,omitempty"`
+	OperatorTitle            string                  `json:"operator_title,omitempty"`
+	PlanTitle                string                  `json:"plan_title,omitempty"`
+	Status                   ContinuationLeaseStatus `json:"status,omitempty"`
+	MaxTurns                 int                     `json:"max_turns,omitempty"`
+	RemainingTurns           int                     `json:"remaining_turns,omitempty"`
+	ApprovedBy               int64                   `json:"approved_by,omitempty"`
+	LeaseClass               ContinuationLeaseClass  `json:"lease_class,omitempty"`
+	Constraints              map[string]string       `json:"constraints,omitempty"`
+	AllowedActions           []string                `json:"allowed_actions,omitempty"`
+	ForbiddenActions         []string                `json:"forbidden_actions,omitempty"`
+	ValidationPlan           []string                `json:"validation_plan,omitempty"`
+	RequiredCapabilityGrants []CapabilityGrantSpec   `json:"required_capability_grants,omitempty"`
+	ExpiresAt                time.Time               `json:"expires_at,omitempty"`
+	PlanHash                 string                  `json:"plan_hash,omitempty"`
+	CreatedAt                time.Time               `json:"created_at,omitempty"`
+	UpdatedAt                time.Time               `json:"updated_at,omitempty"`
+	ApprovedAt               time.Time               `json:"approved_at,omitempty"`
+	ConsumedAt               time.Time               `json:"consumed_at,omitempty"`
+	RevokedAt                time.Time               `json:"revoked_at,omitempty"`
 }
 
 type ContinuationApprovalBundlePhase struct {
-	ID               string                  `json:"id,omitempty"`
-	OperationPhaseID string                  `json:"operation_phase_id,omitempty"`
-	Index            int                     `json:"index,omitempty"`
-	OperatorTitle    string                  `json:"operator_title,omitempty"`
-	PlanTitle        string                  `json:"plan_title,omitempty"`
-	Summary          string                  `json:"summary,omitempty"`
-	AuthorityClass   string                  `json:"authority_class,omitempty"`
-	WhyNow           string                  `json:"why_now,omitempty"`
-	BoundedEffect    string                  `json:"bounded_effect,omitempty"`
-	AllowedActions   []string                `json:"allowed_actions,omitempty"`
-	ForbiddenActions []string                `json:"forbidden_actions,omitempty"`
-	ValidationPlan   []string                `json:"validation_plan,omitempty"`
-	Status           ContinuationLeaseStatus `json:"status,omitempty"`
+	ID                       string                  `json:"id,omitempty"`
+	OperationPhaseID         string                  `json:"operation_phase_id,omitempty"`
+	Index                    int                     `json:"index,omitempty"`
+	OperatorTitle            string                  `json:"operator_title,omitempty"`
+	PlanTitle                string                  `json:"plan_title,omitempty"`
+	Summary                  string                  `json:"summary,omitempty"`
+	AuthorityClass           string                  `json:"authority_class,omitempty"`
+	WhyNow                   string                  `json:"why_now,omitempty"`
+	BoundedEffect            string                  `json:"bounded_effect,omitempty"`
+	AllowedActions           []string                `json:"allowed_actions,omitempty"`
+	ForbiddenActions         []string                `json:"forbidden_actions,omitempty"`
+	ValidationPlan           []string                `json:"validation_plan,omitempty"`
+	RequiredCapabilityGrants []CapabilityGrantSpec   `json:"required_capability_grants,omitempty"`
+	Status                   ContinuationLeaseStatus `json:"status,omitempty"`
 }
 
 type ContinuationApprovalBundle struct {
@@ -673,6 +675,7 @@ func NormalizeContinuationLease(lease ContinuationLease) ContinuationLease {
 	lease.ForbiddenActions = normalizeActionStringSlice(lease.ForbiddenActions)
 	lease.AllowedActions = sanitizeAllowedActionsAgainstForbidden(lease.AllowedActions, lease.ForbiddenActions)
 	lease.ValidationPlan = normalizeActionStringSlice(lease.ValidationPlan)
+	lease.RequiredCapabilityGrants = NormalizeCapabilityGrantSpecs(lease.RequiredCapabilityGrants)
 	if continuationLeaseClassContradictedByActions(lease.LeaseClass, lease.AllowedActions, lease.ForbiddenActions) {
 		lease.LeaseClass = ""
 		lease.Constraints = nil

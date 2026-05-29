@@ -107,19 +107,20 @@ func continuationApprovalBundlePhasesFromOperation(opState session.OperationStat
 			phaseIndex = i + 1
 		}
 		out = append(out, session.ContinuationApprovalBundlePhase{
-			ID:               id,
-			OperationPhaseID: strings.TrimSpace(phase.ID),
-			Index:            phaseIndex,
-			OperatorTitle:    firstNonEmptyContinuation(phase.OperatorTitle, phase.PlanTitle, continuationPlanTitleFromText(phase.Summary)),
-			PlanTitle:        firstNonEmptyContinuation(phase.PlanTitle, phase.OperatorTitle, continuationPlanTitleFromText(phase.Summary)),
-			Summary:          strings.TrimSpace(phase.Summary),
-			AuthorityClass:   strings.TrimSpace(phase.AuthorityClass),
-			WhyNow:           strings.TrimSpace(phase.WhyNow),
-			BoundedEffect:    strings.TrimSpace(phase.BoundedEffect),
-			AllowedActions:   append([]string(nil), phase.AllowedActions...),
-			ForbiddenActions: append([]string(nil), phase.ForbiddenActions...),
-			ValidationPlan:   append([]string(nil), phase.ValidationPlan...),
-			Status:           session.ContinuationLeaseStatusPending,
+			ID:                       id,
+			OperationPhaseID:         strings.TrimSpace(phase.ID),
+			Index:                    phaseIndex,
+			OperatorTitle:            firstNonEmptyContinuation(phase.OperatorTitle, phase.PlanTitle, continuationPlanTitleFromText(phase.Summary)),
+			PlanTitle:                firstNonEmptyContinuation(phase.PlanTitle, phase.OperatorTitle, continuationPlanTitleFromText(phase.Summary)),
+			Summary:                  strings.TrimSpace(phase.Summary),
+			AuthorityClass:           strings.TrimSpace(phase.AuthorityClass),
+			WhyNow:                   strings.TrimSpace(phase.WhyNow),
+			BoundedEffect:            strings.TrimSpace(phase.BoundedEffect),
+			AllowedActions:           append([]string(nil), phase.AllowedActions...),
+			ForbiddenActions:         append([]string(nil), phase.ForbiddenActions...),
+			ValidationPlan:           append([]string(nil), phase.ValidationPlan...),
+			RequiredCapabilityGrants: append([]session.CapabilityGrantSpec(nil), phase.RequiredCapabilityGrants...),
+			Status:                   session.ContinuationLeaseStatusPending,
 		})
 	}
 	return out
