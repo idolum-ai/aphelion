@@ -192,3 +192,90 @@ func TestRequiredCapabilityGrantPrevalidationPreventsPartialGrant(t *testing.T) 
 		t.Fatalf("first request ok=%t status=%q err=%v, want still proposed", ok, req.ReviewStatus, err)
 	}
 }
+
+func TestRequiredCapabilityExistingGrantMustCoverAllActions(t *testing.T) {
+	t.Parallel()
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9140, UserID: 0, Scope: telegramDMScopeRef(9140)}
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-partial-existing",
+		RequestedBy:    "telegram:1001",
+		RequestedFor:   "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github-partial-existing",
+		Purpose:        "Existing read-only grant must not satisfy read+write.",
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-existing-read-only",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github-partial-existing",
+		AllowedActions: []string{"read"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(read-only) err = %v", err)
+	}
+	state := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-partial-existing-required-grant",
+		Objective:      "Existing grant must cover every required action.",
+		StageSummary:   "Grant read and write if only read exists",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:               "aprop-partial-existing-required-grant",
+			OperationID:      "partial-existing-required-grant",
+			Summary:          "Valid authority with partial existing grant",
+			RiskClass:        "workspace_write",
+			AllowedActions:   []string{"edit_files"},
+			ForbiddenActions: []string{"deploy"},
+			Status:           session.ProposalStatusPending,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-partial-existing-required-grant",
+			ProposalID:     "aprop-partial-existing-required-grant",
+			Status:         session.ContinuationLeaseStatusPending,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+				RequestID:      "cap-partial-existing",
+				Kind:           session.CapabilityKindExternalAccount,
+				TargetResource: "github-partial-existing",
+				GrantedTo:      "telegram:1001",
+				AllowedActions: []string{"read", "write"},
+			}},
+		},
+	}
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if _, err := rt.ApproveContinuationForKey(key, 1001); err != nil {
+		t.Fatalf("ApproveContinuationForKey() err = %v", err)
+	}
+	readGrant, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github-partial-existing", "telegram:1001", "read")
+	if err != nil || !ok {
+		t.Fatalf("ActiveCapabilityGrant(read) ok=%t err=%v, want existing/new grant", ok, err)
+	}
+	writeGrant, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github-partial-existing", "telegram:1001", "write")
+	if err != nil || !ok {
+		t.Fatalf("ActiveCapabilityGrant(write) ok=%t err=%v, want new grant", ok, err)
+	}
+	if writeGrant.GrantID == "capg-existing-read-only" {
+		t.Fatalf("write grant id = existing read-only grant %q, want bundled required grant", writeGrant.GrantID)
+	}
+	if readGrant.GrantID == "capg-existing-read-only" && writeGrant.RequestID != "cap-partial-existing" {
+		t.Fatalf("write grant = %#v, want request-linked grant covering missing action", writeGrant)
+	}
+	req, ok, err := store.CapabilityRequest("cap-partial-existing")
+	if err != nil || !ok || req.ReviewStatus != session.CapabilityReviewStatusApproved {
+		t.Fatalf("request ok=%t status=%q err=%v, want approved", ok, req.ReviewStatus, err)
+	}
+}

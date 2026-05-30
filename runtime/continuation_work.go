@@ -175,13 +175,26 @@ func (r *Runtime) validateRequiredCapabilityGrantSpecs(specs []session.Capabilit
 		if len(actions) == 0 {
 			actions = []string{"invoke"}
 		}
-		existingGrant, ok, err := r.store.ActiveCapabilityGrant(kind, target, grantedTo, actions[0])
+		existing, err := r.requiredCapabilityGrantActionsCovered(kind, target, grantedTo, actions)
 		if err != nil {
 			return nil, err
 		}
-		resolved = append(resolved, resolvedRequiredCapabilityGrant{spec: spec, request: request, kind: kind, target: target, grantedTo: grantedTo, actions: actions, existing: ok && existingGrant.GrantID != ""})
+		resolved = append(resolved, resolvedRequiredCapabilityGrant{spec: spec, request: request, kind: kind, target: target, grantedTo: grantedTo, actions: actions, existing: existing})
 	}
 	return resolved, nil
+}
+
+func (r *Runtime) requiredCapabilityGrantActionsCovered(kind session.CapabilityKind, target string, grantedTo string, actions []string) (bool, error) {
+	for _, action := range session.NormalizeCapabilityActions(actions) {
+		grant, ok, err := r.store.ActiveCapabilityGrant(kind, target, grantedTo, action)
+		if err != nil {
+			return false, err
+		}
+		if !ok || grant.GrantID == "" {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (r *Runtime) approveResolvedRequiredCapabilityGrant(item resolvedRequiredCapabilityGrant, approver string, now time.Time) error {
