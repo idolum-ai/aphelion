@@ -110,6 +110,7 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 			renderGovernorAgencyContextPacket(req.Runtime, principalRole, toolCaps),
 			renderEvidenceRetrievalStopRulesBlock(),
 			renderGovernorTurnSequencingBlock(),
+			renderGovernorJudgmentRouteContractBlock(),
 			renderGovernorAgencyTelosBlock(),
 			renderVisibleRecurrenceContractBlock(req.Runtime),
 			renderGoalContinuityContractBlock(req.Runtime),
