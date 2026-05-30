@@ -506,6 +506,24 @@ Offer conditions:
   deploy prompt must ask for a fresh standalone lease whose body names commit,
   build, install, restart, and post-restart verification.
 
+- Operation phases and continuation approval bundles may include
+  `required_capability_grants` when the approved phase also needs a bounded
+  capability grant, such as a GitHub/external-account action. Pressing the
+  phase approval can approve/create those required grants as part of the same
+  bounded operator act, but only after the continuation authority contract is
+  compiled and accepted.
+- Required capability grants are prevalidated before request/review/grant state
+  is mutated. If any required grant spec is missing, malformed, or otherwise
+  invalid, approval must fail without leaving partial active grants behind.
+- Existing active grants satisfy a required grant only when they cover every
+  requested action after normalization. A grant that covers only `read` does
+  not satisfy a required `read` + `write` bundle; the missing action still has
+  to be materialized by the bundled approval.
+- Bundled required grants do not broaden the approved phase. They create only
+  the bounded capability authority named by the phase/bundle, and they do not
+  merge PRs, deploy, restart services, edit policy, or perform unrelated
+  external-account mutations by themselves.
+
 ### Runtime decision prompts
 
 Decision prompts are shown with inline buttons. Depending on context, users can see:

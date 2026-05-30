@@ -211,6 +211,13 @@ a visible approval prompt.
 `request_approval` does not execute the requested work and does not create
 authority. Execution is still gated on the operator pressing the approval button.
 
+Some operation phases also declare `required_capability_grants`. Treat those as
+phase-local dependencies, not ambient permission. When the operator approves the
+phase, Aphelion may approve/create the named bounded capability grant in the
+same approval path, after validating the continuation authority contract and all
+required grant specs. If validation fails, no partial grant should be left
+behind. Existing grants count only if they cover all requested actions.
+
 ## Grant Bounded Automation
 
 After an approval succeeds, the approved message shows `Approve 15m` and
