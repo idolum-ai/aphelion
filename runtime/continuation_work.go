@@ -68,6 +68,13 @@ func (r *Runtime) ApproveContinuationForKey(key session.SessionKey, approverID i
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), now)
 		return state, err
 	}
+	if compilation := continuationAuthorityCompilation(state); compilation.Invalid() {
+		blocked, _, blockErr := r.blockInvalidContinuationAuthorityContract(context.Background(), key, core.InboundMessage{ChatID: key.ChatID}, state, "approval", now, false)
+		if blockErr != nil {
+			return session.ContinuationState{}, blockErr
+		}
+		return blocked, fmt.Errorf("continuation authority contract invalid: %s", continuationAuthorityContractInvalidReason(compilation))
+	}
 	if err := r.approveRequiredCapabilityGrantsForContinuation(key, state, approverID, now); err != nil {
 		state.Status = session.ContinuationStatusPending
 		state.ApprovalBundle.Status = session.ContinuationLeaseStatusPending
@@ -76,13 +83,6 @@ func (r *Runtime) ApproveContinuationForKey(key session.SessionKey, approverID i
 		}
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), now)
 		return state, fmt.Errorf("approve required capability grants: %w", err)
-	}
-	if compilation := continuationAuthorityCompilation(state); compilation.Invalid() {
-		blocked, _, blockErr := r.blockInvalidContinuationAuthorityContract(context.Background(), key, core.InboundMessage{ChatID: key.ChatID}, state, "approval", now, false)
-		if blockErr != nil {
-			return session.ContinuationState{}, blockErr
-		}
-		return blocked, fmt.Errorf("continuation authority contract invalid: %s", continuationAuthorityContractInvalidReason(compilation))
 	}
 	if continuationActionIsPlanLeaseApproval(state) && !state.ApprovalBundle.Active() {
 		state = continuationStateWithPlanLeaseApprovalConsumed(state, now)
@@ -105,9 +105,13 @@ func (r *Runtime) approveRequiredCapabilityGrantsForContinuation(key session.Ses
 	if len(specs) == 0 {
 		return nil
 	}
+	resolved, err := r.validateRequiredCapabilityGrantSpecs(specs)
+	if err != nil {
+		return err
+	}
 	approver := fmt.Sprintf("telegram:%d", approverID)
-	for _, spec := range specs {
-		if err := r.approveRequiredCapabilityGrantSpec(key, spec, approver, now); err != nil {
+	for _, item := range resolved {
+		if err := r.approveResolvedRequiredCapabilityGrant(item, approver, now); err != nil {
 			return err
 		}
 	}
@@ -133,47 +137,67 @@ func continuationRequiredCapabilityGrantSpecs(state session.ContinuationState) [
 	return session.NormalizeCapabilityGrantSpecs(specs)
 }
 
-func (r *Runtime) approveRequiredCapabilityGrantSpec(key session.SessionKey, spec session.CapabilityGrantSpec, approver string, now time.Time) error {
-	spec = session.NormalizeCapabilityGrantSpec(spec)
-	request := session.CapabilityRequest{}
-	if spec.RequestID != "" {
-		stored, ok, err := r.store.CapabilityRequest(spec.RequestID)
+type resolvedRequiredCapabilityGrant struct {
+	spec      session.CapabilityGrantSpec
+	request   session.CapabilityRequest
+	kind      session.CapabilityKind
+	target    string
+	grantedTo string
+	actions   []string
+	existing  bool
+}
+
+func (r *Runtime) validateRequiredCapabilityGrantSpecs(specs []session.CapabilityGrantSpec) ([]resolvedRequiredCapabilityGrant, error) {
+	resolved := make([]resolvedRequiredCapabilityGrant, 0, len(specs))
+	for _, spec := range specs {
+		spec = session.NormalizeCapabilityGrantSpec(spec)
+		request := session.CapabilityRequest{}
+		if spec.RequestID != "" {
+			stored, ok, err := r.store.CapabilityRequest(spec.RequestID)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				return nil, fmt.Errorf("required capability request %q not found", spec.RequestID)
+			}
+			request = session.NormalizeCapabilityRequest(stored)
+		}
+		kind := spec.Kind
+		if kind == "" {
+			kind = request.Kind
+		}
+		target := firstNonEmptyContinuation(spec.TargetResource, request.TargetResource)
+		grantedTo := firstNonEmptyContinuation(spec.GrantedTo, request.RequestedFor, request.RequestedBy)
+		if kind == "" || target == "" || grantedTo == "" {
+			return nil, fmt.Errorf("required capability grant spec for request %q is incomplete", spec.RequestID)
+		}
+		actions := session.NormalizeCapabilityActions(spec.AllowedActions)
+		if len(actions) == 0 {
+			actions = []string{"invoke"}
+		}
+		existingGrant, ok, err := r.store.ActiveCapabilityGrant(kind, target, grantedTo, actions[0])
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if !ok {
-			return fmt.Errorf("required capability request %q not found", spec.RequestID)
-		}
-		request = session.NormalizeCapabilityRequest(stored)
+		resolved = append(resolved, resolvedRequiredCapabilityGrant{spec: spec, request: request, kind: kind, target: target, grantedTo: grantedTo, actions: actions, existing: ok && existingGrant.GrantID != ""})
 	}
-	kind := spec.Kind
-	if kind == "" {
-		kind = request.Kind
-	}
-	target := firstNonEmptyContinuation(spec.TargetResource, request.TargetResource)
-	grantedTo := firstNonEmptyContinuation(spec.GrantedTo, request.RequestedFor, request.RequestedBy)
-	if kind == "" || target == "" || grantedTo == "" {
-		return fmt.Errorf("required capability grant spec for request %q is incomplete", spec.RequestID)
-	}
-	actions := session.NormalizeCapabilityActions(spec.AllowedActions)
-	if len(actions) == 0 {
-		actions = []string{"invoke"}
-	}
-	if existing, ok, err := r.store.ActiveCapabilityGrant(kind, target, grantedTo, actions[0]); err != nil {
-		return err
-	} else if ok && existing.GrantID != "" {
+	return resolved, nil
+}
+
+func (r *Runtime) approveResolvedRequiredCapabilityGrant(item resolvedRequiredCapabilityGrant, approver string, now time.Time) error {
+	if item.existing {
 		return nil
 	}
-	if spec.RequestID != "" && request.ReviewStatus != session.CapabilityReviewStatusApproved {
-		if _, err := r.store.AppendCapabilityReview(session.CapabilityReview{ReviewID: fmt.Sprintf("review-%s-%d", safeContinuationIDPart(spec.RequestID), now.UnixNano()), RequestID: spec.RequestID, Reviewer: approver, ReviewerRole: string(principal.RoleAdmin), Status: session.CapabilityReviewStatusApproved, Rationale: "bundled plan/capability approval", CreatedAt: now}); err != nil {
+	if item.spec.RequestID != "" && item.request.ReviewStatus != session.CapabilityReviewStatusApproved {
+		if _, err := r.store.AppendCapabilityReview(session.CapabilityReview{ReviewID: fmt.Sprintf("review-%s-%d", safeContinuationIDPart(item.spec.RequestID), now.UnixNano()), RequestID: item.spec.RequestID, Reviewer: approver, ReviewerRole: string(principal.RoleAdmin), Status: session.CapabilityReviewStatusApproved, Rationale: "bundled plan/capability approval", CreatedAt: now}); err != nil {
 			return err
 		}
 	}
-	grantID := spec.GrantID
+	grantID := item.spec.GrantID
 	if grantID == "" {
-		grantID = fmt.Sprintf("capg-%s-%d", safeContinuationIDPart(firstNonEmptyContinuation(spec.RequestID, string(kind)+"-"+target)), now.UnixNano())
+		grantID = fmt.Sprintf("capg-%s-%d", safeContinuationIDPart(firstNonEmptyContinuation(item.spec.RequestID, string(item.kind)+"-"+item.target)), now.UnixNano())
 	}
-	_, err := r.store.UpsertCapabilityGrant(session.CapabilityGrant{GrantID: grantID, RequestID: spec.RequestID, GrantedBy: approver, GrantedTo: grantedTo, Kind: kind, TargetResource: target, AllowedActions: actions, Contract: firstNonEmptyContinuation(spec.Contract, request.Contract), Constraints: firstNonEmptyContinuation(spec.Constraints, request.Constraints), Status: session.CapabilityGrantStatusActive, GrantedAt: now, ExpiresAt: spec.ExpiresAt, CreatedAt: now, UpdatedAt: now})
+	_, err := r.store.UpsertCapabilityGrant(session.CapabilityGrant{GrantID: grantID, RequestID: item.spec.RequestID, GrantedBy: approver, GrantedTo: item.grantedTo, Kind: item.kind, TargetResource: item.target, AllowedActions: item.actions, Contract: firstNonEmptyContinuation(item.spec.Contract, item.request.Contract), Constraints: firstNonEmptyContinuation(item.spec.Constraints, item.request.Constraints), Status: session.CapabilityGrantStatusActive, GrantedAt: now, ExpiresAt: item.spec.ExpiresAt, CreatedAt: now, UpdatedAt: now})
 	return err
 }
 
