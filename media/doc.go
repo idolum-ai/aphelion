@@ -1,7 +1,9 @@
 //go:build linux
 
-// Package media owns media transcription contracts.
+// Package media owns provider-neutral media contracts.
 //
-// It defines provider-neutral media interfaces used by runtime and transport
-// code. Concrete provider clients stay outside this package.
+// It defines media interfaces and normalized request/response types used by
+// runtime and transport code. Current contracts cover audio transcription and
+// document text extraction. Concrete provider clients, Telegram UX, retention
+// policy, prompt injection, and turn orchestration stay outside this package.
 package media

@@ -112,6 +112,7 @@ func TestArchitectureImportBoundaries(t *testing.T) {
 		assertRuntimeImportBoundary(t, pkg)
 		assertLayerImportBoundaries(t, pkg)
 		assertCredentialAndBackendMembraneBoundaries(t, pkg)
+		assertMediaMembraneBoundary(t, pkg)
 		assertDurableAgentDoesNotOwnToolAuthority(t, pkg)
 	}
 }
@@ -268,6 +269,24 @@ func assertCredentialAndBackendMembraneBoundaries(t *testing.T, pkg architecture
 			}
 		}
 	}
+}
+
+func assertMediaMembraneBoundary(t *testing.T, pkg architecturePackage) {
+	t.Helper()
+	if !isPackageOrSubpackage(pkg, "media") {
+		return
+	}
+	assertDoesNotImportAny(t, pkg, []string{
+		"runtime",
+		"tool",
+		"session",
+		"telegram",
+		"provider",
+		"internal/telegramcommands",
+		"internal/telegramcontrol",
+		"internal/telegramdecision",
+		"internal/telegramruntime",
+	})
 }
 
 func assertDurableAgentDoesNotOwnToolAuthority(t *testing.T, pkg architecturePackage) {

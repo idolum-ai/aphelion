@@ -96,6 +96,61 @@ func TestPrepareInboundTurnPDFExtractionFailureFallsBackToPlaceholder(t *testing
 	}
 }
 
+func TestPrepareInboundTurnPDFExtractionUsesMediaExtractor(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	scope, err := rt.scopeForPrincipal(principal.Principal{TelegramUserID: 1001, Role: principal.RoleAdmin})
+	if err != nil {
+		t.Fatalf("scopeForPrincipal() err = %v", err)
+	}
+
+	prepared, err := rt.prepareInboundTurn(context.Background(), scope, core.InboundMessage{
+		ChatID:    410,
+		SenderID:  1001,
+		MessageID: 1,
+		Artifacts: []core.Artifact{{
+			ID:         "pdf-410",
+			Channel:    "telegram",
+			SourceType: "document",
+			Kind:       "document",
+			Subtype:    "pdf",
+			Data: []byte(`%PDF-1.1
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length 44 >>
+stream
+BT /F1 24 Tf 72 72 Td (Hello PDF substrate) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+trailer
+<< /Root 1 0 R >>
+%%EOF`),
+			MimeType: "application/pdf",
+			Filename: "hello.pdf",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("prepareInboundTurn() err = %v", err)
+	}
+	if !strings.Contains(prepared.UserText, "[DOCUMENT_TEXT]") || !strings.Contains(prepared.UserText, "Hello PDF substrate") {
+		t.Fatalf("user text = %q, want extracted PDF text", prepared.UserText)
+	}
+}
+
 func TestPrepareInboundTurnHydratesTelegramArtifactsAtRuntime(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)

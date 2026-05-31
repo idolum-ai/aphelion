@@ -127,6 +127,17 @@ Code anchors:
 These packages are intentionally small because their power comes from what they
 refuse to own. Their boundaries are enforced by `architecture_import_guard_test.go`.
 
+### `media`: provider-neutral media substrate
+
+- Owns provider-neutral media contracts, currently transcription and document
+  text extraction requests/responses.
+- May define local extraction adapters when they stay provider-neutral and do
+  not decide retention, prompt injection, or transport UX.
+- Must not own Telegram attachment flow, provider-specific media encoding,
+  session retention policy, tool authority, or runtime turn orchestration.
+- The invariant is: media extraction is an input transformation, not permission
+  to retain content or inject it invisibly into future turns.
+
 ### `githubapp`: GitHub credential membrane
 
 - Owns GitHub App private-key parsing, JWT signing, installation-token minting,
