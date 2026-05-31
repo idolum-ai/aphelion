@@ -74,6 +74,7 @@ type Dependencies struct {
 	StaleRunningTurnRuns                          func(now time.Time) ([]session.TurnRun, error)
 	WriteAuthorityProjection                      func(b *strings.Builder, now time.Time)
 	WriteProviderHealth                           func(b *strings.Builder, now time.Time)
+	WritePerceptionBudget                         func(b *strings.Builder, key session.SessionKey, now time.Time)
 	WriteExternalChannelAdapterReadiness          func(b *strings.Builder, input DiagnosticInput)
 	ReasoningOptionsForRun                        func(kind session.TurnRunKind) *agent.CompleteOptions
 	RecordExecutionEvent                          func(key session.SessionKey, eventType string, stage string, status string, payload map[string]any, createdAt time.Time)
@@ -100,6 +101,7 @@ type Runtime struct {
 	staleRunningTurnRuns                          func(now time.Time) ([]session.TurnRun, error)
 	writeDoctorAuthorityProjection                func(b *strings.Builder, now time.Time)
 	writeDoctorProviderHealth                     func(b *strings.Builder, now time.Time)
+	writeDoctorPerceptionBudget                   func(b *strings.Builder, key session.SessionKey, now time.Time)
 	writeDoctorExternalChannelAdapterReadiness    func(b *strings.Builder, input DiagnosticInput)
 	reasoningOptionsForRun                        func(kind session.TurnRunKind) *agent.CompleteOptions
 	recordExecutionEvent                          func(key session.SessionKey, eventType string, stage string, status string, payload map[string]any, createdAt time.Time)
@@ -126,6 +128,7 @@ func NewRuntime(deps Dependencies) *Runtime {
 		staleRunningTurnRuns:                          deps.StaleRunningTurnRuns,
 		writeDoctorAuthorityProjection:                deps.WriteAuthorityProjection,
 		writeDoctorProviderHealth:                     deps.WriteProviderHealth,
+		writeDoctorPerceptionBudget:                   deps.WritePerceptionBudget,
 		writeDoctorExternalChannelAdapterReadiness:    deps.WriteExternalChannelAdapterReadiness,
 		reasoningOptionsForRun:                        deps.ReasoningOptionsForRun,
 		recordExecutionEvent:                          deps.RecordExecutionEvent,
