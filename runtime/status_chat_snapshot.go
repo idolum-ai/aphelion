@@ -62,6 +62,13 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 		}
 		snapshot.RecentExecution = summarizeExecutionEvents(events, 12)
 		snapshot.RecentAdjudications = statusAdjudicationsFromExecutionEvents(events, 6)
+		if latestPerception, ok := latestPerceptionBudgetForSessionFromExecutionEvents(events, key.ChatID); ok {
+			latestPerception.SessionID = snapshot.SessionID
+			latestPerception.ScopeKind = string(key.Scope.Kind)
+			latestPerception.ScopeID = key.Scope.ID
+			latestPerception.AgentID = key.Scope.DurableAgentID
+			snapshot.LatestPerceptionBudget = &latestPerception
+		}
 		if latestFromEvents, ok := latestTurnSnapshotForChatFromExecutionEvents(events, chatID); ok {
 			copied := latestFromEvents
 			snapshot.LatestTurnRun = &copied
@@ -229,6 +236,13 @@ func (r *Runtime) ChatStatusSnapshotForKey(key session.SessionKey, router core.R
 	if len(events) > 0 {
 		snapshot.RecentExecution = summarizeExecutionEvents(events, 12)
 		snapshot.RecentAdjudications = statusAdjudicationsFromExecutionEvents(events, 6)
+		if latestPerception, ok := latestPerceptionBudgetForSessionFromExecutionEvents(events, key.ChatID); ok {
+			latestPerception.SessionID = snapshot.SessionID
+			latestPerception.ScopeKind = string(key.Scope.Kind)
+			latestPerception.ScopeID = key.Scope.ID
+			latestPerception.AgentID = key.Scope.DurableAgentID
+			snapshot.LatestPerceptionBudget = &latestPerception
+		}
 		if latestFromEvents, ok := latestTurnSnapshotForChatFromExecutionEvents(events, key.ChatID); ok {
 			latestFromEvents.SessionID = sessionID
 			latestFromEvents.ScopeKind = string(key.Scope.Kind)

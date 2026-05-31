@@ -16,17 +16,18 @@ import (
 func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.SystemStatusSnapshot, error) {
 	now := time.Now().UTC()
 	snapshot := core.SystemStatusSnapshot{
-		GeneratedAt:          now,
-		ActiveTurnsByChat:    make(map[int64][]uint64),
-		QueueDepthByChat:     make(map[int64]int),
-		PendingItems:         make([]core.PendingItem, 0, 16),
-		Continuations:        make([]core.ContinuationStatusSnapshot, 0, 8),
-		LatestTurnRunsByChat: make(map[int64]core.TurnRunStatusSnapshot),
-		StaleRunningTurns:    make([]core.TurnRunStatusSnapshot, 0, 8),
-		HotChats:             make([]core.ChatStatusRollup, 0, 8),
-		RestartHealth:        r.restartHealthSnapshot(),
-		Autonomy:             r.AutonomyStatusSnapshot(),
-		Sandbox:              r.sandboxReadinessSnapshot(now),
+		GeneratedAt:                  now,
+		ActiveTurnsByChat:            make(map[int64][]uint64),
+		QueueDepthByChat:             make(map[int64]int),
+		PendingItems:                 make([]core.PendingItem, 0, 16),
+		Continuations:                make([]core.ContinuationStatusSnapshot, 0, 8),
+		LatestTurnRunsByChat:         make(map[int64]core.TurnRunStatusSnapshot),
+		LatestPerceptionBudgetByChat: make(map[int64]core.PerceptionBudgetStatusSnapshot),
+		StaleRunningTurns:            make([]core.TurnRunStatusSnapshot, 0, 8),
+		HotChats:                     make([]core.ChatStatusRollup, 0, 8),
+		RestartHealth:                r.restartHealthSnapshot(),
+		Autonomy:                     r.AutonomyStatusSnapshot(),
+		Sandbox:                      r.sandboxReadinessSnapshot(now),
 	}
 
 	if r == nil || r.store == nil {
@@ -104,6 +105,7 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		return core.SystemStatusSnapshot{}, err
 	}
 	snapshot.RecentExecution = summarizeExecutionEvents(recentEvents, 20)
+	snapshot.LatestPerceptionBudgetByChat = latestPerceptionBudgetByChatFromExecutionEvents(recentEvents)
 	snapshot.RestartHealth = restartHealthWithLatestWatchdogEvent(snapshot.RestartHealth, recentEvents)
 	snapshot.ProviderHealth = providerHealthFromExecutionEvents(recentEvents, now)
 	snapshot.RecentAdjudications = statusAdjudicationsFromExecutionEvents(recentEvents, 12)

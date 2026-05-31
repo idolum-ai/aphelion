@@ -101,6 +101,7 @@ func perceptionBudgetExecutionPayload(contract memstore.PerceptionBudgetContract
 		"perception_remaining_headroom_tokens": contract.RemainingHeadroomTokens,
 		"perception_admitted_layers":           perceptionLayerNames(contract.Admitted),
 		"perception_suppressed_layers":         perceptionSuppressedLayerNames(contract.Suppressed),
+		"perception_observed_evidence_sources": perceptionAccountingObservedEvidenceSources(contract.Admitted),
 		"perception_risks":                     append([]string(nil), contract.Risks...),
 	}
 }
@@ -339,6 +340,26 @@ func perceptionLayerNames(layers []memstore.PerceptionLayerAccounting) []string 
 	out := make([]string, 0, len(layers))
 	for _, layer := range layers {
 		out = append(out, string(layer.Name))
+	}
+	return out
+}
+
+func perceptionAccountingObservedEvidenceSources(layers []memstore.PerceptionLayerAccounting) []string {
+	seen := make(map[string]struct{}, len(layers))
+	out := make([]string, 0, len(layers))
+	for _, layer := range layers {
+		if layer.Name != memstore.PerceptionLayerToolEvidence {
+			continue
+		}
+		source := strings.TrimSpace(layer.Source)
+		if source == "" {
+			continue
+		}
+		if _, exists := seen[source]; exists {
+			continue
+		}
+		seen[source] = struct{}{}
+		out = append(out, source)
 	}
 	return out
 }

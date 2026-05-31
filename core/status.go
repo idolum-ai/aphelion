@@ -81,6 +81,28 @@ type ExecutionEventSummary struct {
 	CreatedAt time.Time
 }
 
+type PerceptionBudgetStatusSnapshot struct {
+	SessionID               string
+	ChatID                  int64
+	ScopeKind               string
+	ScopeID                 string
+	AgentID                 string
+	Seq                     int64
+	Posture                 string
+	TotalBudgetTokens       int64
+	TotalEstimatedTokens    int64
+	MemoryBudgetTokens      int64
+	MemoryEstimatedTokens   int64
+	CurrentInputTokens      int64
+	ToolEvidenceTokens      int64
+	RemainingHeadroomTokens int64
+	AdmittedLayers          []string
+	SuppressedLayers        []string
+	ObservedEvidenceSources []string
+	Risks                   []string
+	CreatedAt               time.Time
+}
+
 type AdjudicationStatusSnapshot struct {
 	SessionID     string
 	ChatID        int64
@@ -338,6 +360,7 @@ type ChatStatusSnapshot struct {
 	PendingItems                    []PendingItem
 	Continuation                    *ContinuationStatusSnapshot
 	LatestTurnRun                   *TurnRunStatusSnapshot
+	LatestPerceptionBudget          *PerceptionBudgetStatusSnapshot
 	RecentExecution                 []ExecutionEventSummary
 	RecentAdjudications             []AdjudicationStatusSnapshot
 	ToolLifecycle                   []ToolLifecycleStatusSnapshot
@@ -361,32 +384,33 @@ type ChatStatusRollup struct {
 }
 
 type SystemStatusSnapshot struct {
-	GeneratedAt            time.Time
-	ActiveTurnCount        int
-	ActiveChatIDs          []int64
-	ActiveTurnsByChat      map[int64][]uint64
-	QueueDepthByChat       map[int64]int
-	TotalQueuedMessages    int
-	MaxQueueDepth          int
-	MaxQueueDepthChatID    int64
-	OldestQueuedAge        time.Duration
-	OldestQueuedChatID     int64
-	PendingItems           []PendingItem
-	Continuations          []ContinuationStatusSnapshot
-	LatestTurnRunsByChat   map[int64]TurnRunStatusSnapshot
-	RecentExecution        []ExecutionEventSummary
-	RecentAdjudications    []AdjudicationStatusSnapshot
-	StaleRunningTurns      []TurnRunStatusSnapshot
-	HotChats               []ChatStatusRollup
-	RestartHealth          RestartHealthSnapshot
-	ProviderHealth         ProviderHealthSnapshot
-	Tailnet                *TailnetStatusSnapshot
-	Autonomy               AutonomyStatusSnapshot
-	Sandbox                SandboxReadinessSnapshot
-	TelegramIngressUpdates []TelegramIngressUpdateSnapshot
-	TelegramIngress        []TelegramIngressFailureSnapshot
-	MissionLedger          MissionLedgerStatusSnapshot
-	Authority              AuthorityStatusSnapshot
+	GeneratedAt                  time.Time
+	ActiveTurnCount              int
+	ActiveChatIDs                []int64
+	ActiveTurnsByChat            map[int64][]uint64
+	QueueDepthByChat             map[int64]int
+	TotalQueuedMessages          int
+	MaxQueueDepth                int
+	MaxQueueDepthChatID          int64
+	OldestQueuedAge              time.Duration
+	OldestQueuedChatID           int64
+	PendingItems                 []PendingItem
+	Continuations                []ContinuationStatusSnapshot
+	LatestTurnRunsByChat         map[int64]TurnRunStatusSnapshot
+	LatestPerceptionBudgetByChat map[int64]PerceptionBudgetStatusSnapshot
+	RecentExecution              []ExecutionEventSummary
+	RecentAdjudications          []AdjudicationStatusSnapshot
+	StaleRunningTurns            []TurnRunStatusSnapshot
+	HotChats                     []ChatStatusRollup
+	RestartHealth                RestartHealthSnapshot
+	ProviderHealth               ProviderHealthSnapshot
+	Tailnet                      *TailnetStatusSnapshot
+	Autonomy                     AutonomyStatusSnapshot
+	Sandbox                      SandboxReadinessSnapshot
+	TelegramIngressUpdates       []TelegramIngressUpdateSnapshot
+	TelegramIngress              []TelegramIngressFailureSnapshot
+	MissionLedger                MissionLedgerStatusSnapshot
+	Authority                    AuthorityStatusSnapshot
 }
 
 type AutonomyStatusSnapshot struct {
