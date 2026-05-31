@@ -89,6 +89,7 @@ type stubCommandRouter struct {
 	approveContinuationInput     int64
 	approveContinuationMessage   core.InboundMessage
 	approveContinuationApprover  int64
+	approveContinuationPhaseIDs  []string
 	approveContinuationReturn    session.ContinuationState
 	approveContinuationErr       error
 	stopContinuationInput        int64
