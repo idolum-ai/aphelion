@@ -6,6 +6,7 @@ import (
 	"context"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/media"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"os"
@@ -97,6 +98,14 @@ func TestPrepareInboundTurnPDFExtractionFailureFallsBackToPlaceholder(t *testing
 }
 
 func TestPrepareInboundTurnPDFExtractionUsesMediaExtractor(t *testing.T) {
+	oldExtractor := newPDFTextExtractor
+	newPDFTextExtractor = func() media.PDFTextExtractor {
+		return media.PDFTextExtractor{Runner: func(_ context.Context, _ string, _ ...string) ([]byte, []byte, error) {
+			return []byte("Hello PDF substrate"), nil, nil
+		}}
+	}
+	t.Cleanup(func() { newPDFTextExtractor = oldExtractor })
+
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {

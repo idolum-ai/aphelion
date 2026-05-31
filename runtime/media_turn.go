@@ -495,6 +495,8 @@ func mediaAnalysisMode(artifact core.Artifact) string {
 	}
 }
 
+var newPDFTextExtractor = media.NewPDFTextExtractor
+
 func (r *Runtime) extractArtifactText(ctx context.Context, scope sandbox.Scope, artifact core.Artifact) (string, error) {
 	if artifact.Subtype == "pdf" || strings.EqualFold(strings.TrimSpace(artifact.MimeType), "application/pdf") {
 		return r.extractPDFText(ctx, scope, core.Media{
@@ -521,7 +523,8 @@ func (r *Runtime) extractPDFText(ctx context.Context, scope sandbox.Scope, item 
 	if err != nil {
 		return "", err
 	}
-	extraction, err := media.NewPDFTextExtractor().ExtractDocumentText(ctx, &media.DocumentTextExtractionRequest{
+	extractor := newPDFTextExtractor()
+	extraction, err := extractor.ExtractDocumentText(ctx, &media.DocumentTextExtractionRequest{
 		Data:     item.Data,
 		MimeType: item.MimeType,
 		Filename: item.Filename,
