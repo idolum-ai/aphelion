@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
 	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/workspace"
@@ -21,6 +22,7 @@ type turnPerceptionBudgetInput struct {
 	ExtraSystem   []agent.Message
 	History       []agent.Message
 	UserText      string
+	ArtifactRefs  []core.ArtifactReference
 }
 
 func buildTurnPerceptionBudgetContract(input turnPerceptionBudgetInput) memstore.PerceptionBudgetContract {
@@ -37,13 +39,14 @@ func buildTurnPerceptionBudgetContract(input turnPerceptionBudgetInput) memstore
 			Name:            memstore.PerceptionLayerCurrentInput,
 			Source:          "turn.user_text",
 			EpistemicStatus: memstore.PerceptionStatusCurrent,
-			Text:            input.UserText,
+			EstimatedTokens: estimateCurrentInputTokens(input.UserText, input.ArtifactRefs),
 			Required:        true,
 			AdmissionReason: "prepared_current_user_input",
 		},
 	}
 
 	layers = append(layers, workspaceMemoryPerceptionLayers(input.PromptContext)...)
+	layers = append(layers, mediaEvidencePerceptionLayers(input.UserText, input.ArtifactRefs, input.HiddenInputs)...)
 	layers = append(layers, systemMessagePerceptionLayers(input.ExtraSystem)...)
 	if historyTokens := estimateHistoryTokens(input.History); historyTokens > 0 {
 		layers = append(layers, memstore.PerceptionLayerRequest{
@@ -120,6 +123,113 @@ func estimateSystemAuthorityTokens(blocks []agent.SystemBlock) int {
 			continue
 		}
 		total += memstore.EstimatePerceptionTokens(text)
+	}
+	return total
+}
+
+func estimateCurrentInputTokens(userText string, refs []core.ArtifactReference) int {
+	return memstore.EstimatePerceptionTokens(stripAccountedDocumentTextSections(userText, refs))
+}
+
+func mediaEvidencePerceptionLayers(userText string, refs []core.ArtifactReference, hidden hiddenInputSet) []memstore.PerceptionLayerRequest {
+	layers := make([]memstore.PerceptionLayerRequest, 0, 2)
+	if tokens := estimateDocumentTextEvidenceTokens(userText, refs); tokens > 0 {
+		layers = append(layers, memstore.PerceptionLayerRequest{
+			Name:            memstore.PerceptionLayerToolEvidence,
+			Source:          "media.document_text_extraction",
+			EpistemicStatus: memstore.PerceptionStatusObserved,
+			EstimatedTokens: tokens,
+			AdmissionReason: "document_text_extraction_observed_in_turn_context",
+		})
+	}
+	if tokens := estimateRetainedArtifactContextTokens(hidden); tokens > 0 {
+		layers = append(layers, memstore.PerceptionLayerRequest{
+			Name:            memstore.PerceptionLayerToolEvidence,
+			Source:          "floor_metadata.retained_artifact_context",
+			EpistemicStatus: memstore.PerceptionStatusObserved,
+			EstimatedTokens: tokens,
+			AdmissionReason: "retained_artifact_context_observed_from_floor_metadata",
+		})
+	}
+	return layers
+}
+
+func estimateDocumentTextEvidenceTokens(userText string, refs []core.ArtifactReference) int {
+	if !hasDocumentTextExtractionRef(refs) {
+		return 0
+	}
+	return memstore.EstimatePerceptionTokens(extractDocumentTextSections(userText))
+}
+
+func stripAccountedDocumentTextSections(userText string, refs []core.ArtifactReference) string {
+	if !hasDocumentTextExtractionRef(refs) {
+		return userText
+	}
+	return replaceDocumentTextSections(userText, "[DOCUMENT_TEXT accounted as observed media evidence]")
+}
+
+func extractDocumentTextSections(userText string) string {
+	parts := collectDocumentTextSectionParts(userText, false)
+	return strings.Join(parts, "\n\n")
+}
+
+func replaceDocumentTextSections(userText string, replacement string) string {
+	parts := collectDocumentTextSectionParts(userText, true)
+	if len(parts) == 0 {
+		return userText
+	}
+	out := userText
+	for _, section := range parts {
+		out = strings.Replace(out, section, replacement, 1)
+	}
+	return out
+}
+
+func collectDocumentTextSectionParts(userText string, includeEnvelope bool) []string {
+	const startMarker = "[DOCUMENT_TEXT]"
+	const endMarker = "[/DOCUMENT_TEXT]"
+	var parts []string
+	remaining := userText
+	for {
+		start := strings.Index(remaining, startMarker)
+		if start < 0 {
+			break
+		}
+		afterStart := start + len(startMarker)
+		endRel := strings.Index(remaining[afterStart:], endMarker)
+		if endRel < 0 {
+			break
+		}
+		end := afterStart + endRel
+		if includeEnvelope {
+			parts = append(parts, remaining[start:end+len(endMarker)])
+		} else if text := strings.TrimSpace(remaining[afterStart:end]); text != "" {
+			parts = append(parts, text)
+		}
+		remaining = remaining[end+len(endMarker):]
+	}
+	return parts
+}
+
+func hasDocumentTextExtractionRef(refs []core.ArtifactReference) bool {
+	for _, ref := range refs {
+		if strings.TrimSpace(ref.DerivedOutput) != "extracted_text" {
+			continue
+		}
+		if strings.TrimSpace(ref.Handling) == "extract_text" || strings.TrimSpace(ref.Kind) == "document" || strings.TrimSpace(ref.SourceType) == "document" {
+			return true
+		}
+	}
+	return false
+}
+
+func estimateRetainedArtifactContextTokens(hidden hiddenInputSet) int {
+	var total int
+	for _, input := range hidden.Inputs {
+		if input.Category != hiddenInputRetainedArtifacts {
+			continue
+		}
+		total += memstore.EstimatePerceptionTokens(input.Summary)
 	}
 	return total
 }

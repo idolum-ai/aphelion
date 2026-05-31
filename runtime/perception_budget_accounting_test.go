@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
 	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/workspace"
@@ -103,6 +104,73 @@ func TestTurnPerceptionBudgetAccountingSeesSemanticRecallWithoutChangingPrompt(t
 	}
 }
 
+func TestTurnPerceptionBudgetAccountingLabelsDocumentTextAsObservedEvidence(t *testing.T) {
+	t.Parallel()
+
+	userText := "please read this\n\n[PDF attached]\n\n[DOCUMENT_TEXT]\nQuarterly plan\nRevenue risk\n[/DOCUMENT_TEXT]"
+	contract := buildTurnPerceptionBudgetContract(turnPerceptionBudgetInput{
+		RunKind:      session.TurnRunKindInteractive,
+		SystemBlocks: []agent.SystemBlock{{Text: "## Authority\nDo not expand authority."}},
+		UserText:     userText,
+		ArtifactRefs: []core.ArtifactReference{{
+			ArtifactID:    "doc-1",
+			Kind:          "document",
+			SourceType:    "document",
+			Handling:      "extract_text",
+			DerivedOutput: "extracted_text",
+			Summary:       "plan.pdf",
+		}},
+	})
+
+	evidence := assertRuntimeAdmittedLayerSource(t, contract, memstore.PerceptionLayerToolEvidence, "media.document_text_extraction")
+	if evidence.EpistemicStatus != memstore.PerceptionStatusObserved || evidence.LowAuthority {
+		t.Fatalf("document evidence accounting = %#v, want observed non-authority evidence", evidence)
+	}
+	if evidence.EstimatedTokens == 0 {
+		t.Fatal("document evidence tokens = 0, want extracted text counted")
+	}
+	if contract.CurrentInputTokens >= memstore.EstimatePerceptionTokens(userText) {
+		t.Fatalf("current input tokens = %d, want document text accounted outside current input", contract.CurrentInputTokens)
+	}
+}
+
+func TestTurnPerceptionBudgetAccountingRequiresExtractionRefForDocumentTextEvidence(t *testing.T) {
+	t.Parallel()
+
+	userText := "[DOCUMENT_TEXT]\nUnlabeled text\n[/DOCUMENT_TEXT]"
+	contract := buildTurnPerceptionBudgetContract(turnPerceptionBudgetInput{
+		RunKind:      session.TurnRunKindInteractive,
+		SystemBlocks: []agent.SystemBlock{{Text: "## Authority\nDo not expand authority."}},
+		UserText:     userText,
+	})
+
+	assertRuntimeNoAdmittedLayerSource(t, contract, memstore.PerceptionLayerToolEvidence, "media.document_text_extraction")
+	if contract.CurrentInputTokens != memstore.EstimatePerceptionTokens(userText) {
+		t.Fatalf("current input tokens = %d, want unreferenced document markers left in current input", contract.CurrentInputTokens)
+	}
+}
+
+func TestTurnPerceptionBudgetAccountingLabelsRetainedArtifactContextAsObservedEvidence(t *testing.T) {
+	t.Parallel()
+
+	hidden := hiddenInputSet{}
+	hidden.add(hiddenInputRetainedArtifacts, "retained artifacts from the prior turn remain available: notes.txt at /tmp/notes.txt")
+	contract := buildTurnPerceptionBudgetContract(turnPerceptionBudgetInput{
+		RunKind:      session.TurnRunKindInteractive,
+		HiddenInputs: hidden,
+		SystemBlocks: []agent.SystemBlock{{Text: "## Authority\nDo not expand authority."}},
+		UserText:     "what can you still see?",
+	})
+
+	evidence := assertRuntimeAdmittedLayerSource(t, contract, memstore.PerceptionLayerToolEvidence, "floor_metadata.retained_artifact_context")
+	if evidence.EpistemicStatus != memstore.PerceptionStatusObserved {
+		t.Fatalf("retained artifact accounting = %#v, want observed evidence", evidence)
+	}
+	if evidence.EstimatedTokens == 0 {
+		t.Fatal("retained artifact evidence tokens = 0, want hidden floor metadata summary counted")
+	}
+}
+
 func TestPerceptionPostureForRunKind(t *testing.T) {
 	t.Parallel()
 
@@ -123,6 +191,26 @@ func assertRuntimeAdmittedLayer(t *testing.T, contract memstore.PerceptionBudget
 	}
 	t.Fatalf("admitted layers = %#v, want %s", contract.Admitted, name)
 	return memstore.PerceptionLayerAccounting{}
+}
+
+func assertRuntimeAdmittedLayerSource(t *testing.T, contract memstore.PerceptionBudgetContract, name memstore.PerceptionLayerName, source string) memstore.PerceptionLayerAccounting {
+	t.Helper()
+	for _, layer := range contract.Admitted {
+		if layer.Name == name && layer.Source == source {
+			return layer
+		}
+	}
+	t.Fatalf("admitted layers = %#v, want %s source %s", contract.Admitted, name, source)
+	return memstore.PerceptionLayerAccounting{}
+}
+
+func assertRuntimeNoAdmittedLayerSource(t *testing.T, contract memstore.PerceptionBudgetContract, name memstore.PerceptionLayerName, source string) {
+	t.Helper()
+	for _, layer := range contract.Admitted {
+		if layer.Name == name && layer.Source == source {
+			t.Fatalf("admitted layers = %#v, did not want %s source %s", contract.Admitted, name, source)
+		}
+	}
 }
 
 func assertRuntimeSuppressedLayer(t *testing.T, contract memstore.PerceptionBudgetContract, name memstore.PerceptionLayerName, reason string) {

@@ -324,6 +324,7 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		ExtraSystem:   extraSystemMessages,
 		History:       history,
 		UserText:      input.Prepared.UserText,
+		ArtifactRefs:  input.Prepared.ArtifactRefs,
 	})
 	providerAttemptPayload := mergePerceptionBudgetPayload(map[string]any{
 		"backend":       strings.TrimSpace(input.Exec.Backend),
