@@ -316,14 +316,24 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	turnInput = append(turnInput, agent.Message{Role: "user", Content: input.Prepared.UserText, Media: input.Prepared.AgentMedia})
 
 	providerStarted := time.Now()
-	r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptStarted, "provider", "started", map[string]any{
+	perceptionBudget := buildTurnPerceptionBudgetContract(turnPerceptionBudgetInput{
+		RunKind:       runKind,
+		HiddenInputs:  input.HiddenInputs,
+		PromptContext: input.PromptContext,
+		SystemBlocks:  systemBlocks,
+		ExtraSystem:   extraSystemMessages,
+		History:       history,
+		UserText:      input.Prepared.UserText,
+	})
+	providerAttemptPayload := mergePerceptionBudgetPayload(map[string]any{
 		"backend":       strings.TrimSpace(input.Exec.Backend),
 		"provider":      strings.TrimSpace(input.Exec.ProviderName),
 		"model":         strings.TrimSpace(input.Exec.ModelName),
 		"provider_path": strings.Join(input.Exec.ProviderPath, ","),
 		"history_count": len(history),
 		"tool_count":    len(toolManifest(tools)),
-	}, time.Now().UTC())
+	}, perceptionBudget)
+	r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptStarted, "provider", "started", providerAttemptPayload, time.Now().UTC())
 
 	runOpts := r.reasoningOptionsForRun(runKind)
 	if runOpts == nil {
