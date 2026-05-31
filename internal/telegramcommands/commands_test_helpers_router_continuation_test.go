@@ -77,12 +77,32 @@ func (s *stubCommandRouter) ApproveContinuationForMessage(msg core.InboundMessag
 	return s.continuationState, nil
 }
 
+func (s *stubCommandRouter) ApproveContinuationBundle(chatID int64, approverID int64, phaseIDs []string) (session.ContinuationState, error) {
+	s.approveContinuationInput = chatID
+	s.approveContinuationApprover = approverID
+	s.approveContinuationPhaseIDs = append([]string(nil), phaseIDs...)
+	if s.approveContinuationErr != nil {
+		return session.ContinuationState{}, s.approveContinuationErr
+	}
+	return s.approveContinuationReturn, nil
+}
+
 func (s *stubCommandRouter) StopContinuation(chatID int64) (core.StopResult, error) {
 	s.stopContinuationInput = chatID
 	if s.stopContinuationErr != nil {
 		return core.StopResult{}, s.stopContinuationErr
 	}
 	return s.stopContinuationResult, nil
+}
+
+func (s *stubCommandRouter) ApproveContinuationBundleForMessage(msg core.InboundMessage, approverID int64, phaseIDs []string) (session.ContinuationState, error) {
+	s.approveContinuationMessage = msg
+	s.approveContinuationApprover = approverID
+	s.approveContinuationPhaseIDs = append([]string(nil), phaseIDs...)
+	if s.approveContinuationErr != nil {
+		return session.ContinuationState{}, s.approveContinuationErr
+	}
+	return s.approveContinuationReturn, nil
 }
 
 func (s *stubCommandRouter) StopContinuationForMessage(msg core.InboundMessage) (core.StopResult, error) {

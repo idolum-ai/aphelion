@@ -246,6 +246,10 @@ func actionProposalHash(proposal session.ActionProposal) string {
 }
 
 func continuationStateWithLeaseApproved(state session.ContinuationState, approverID int64, now time.Time) (session.ContinuationState, error) {
+	return continuationStateWithLeaseApprovedForBundlePhases(state, approverID, nil, now)
+}
+
+func continuationStateWithLeaseApprovedForBundlePhases(state session.ContinuationState, approverID int64, phaseIDs []string, now time.Time) (session.ContinuationState, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -291,19 +295,7 @@ func continuationStateWithLeaseApproved(state session.ContinuationState, approve
 	state.ContinuationLease.ApprovedAt = now
 	state.ContinuationLease.UpdatedAt = now
 	if state.ApprovalBundle.Active() {
-		state.ApprovalBundle.Status = session.ContinuationLeaseStatusActive
-		state.ApprovalBundle.ApprovedBy = approverID
-		state.ApprovalBundle.ApprovedAt = now
-		state.ApprovalBundle.UpdatedAt = now
-		if state.ApprovalBundle.CurrentPhaseID == "" {
-			state.ApprovalBundle.CurrentPhaseID = firstContinuationBundlePhaseID(state.ApprovalBundle.Phases)
-		}
-		for i := range state.ApprovalBundle.Phases {
-			if strings.TrimSpace(state.ApprovalBundle.Phases[i].ID) == strings.TrimSpace(state.ApprovalBundle.CurrentPhaseID) {
-				state.ApprovalBundle.Phases[i].Status = session.ContinuationLeaseStatusActive
-				break
-			}
-		}
+		state.ApprovalBundle = continuationApprovalBundleWithPhaseSubsetApproved(state.ApprovalBundle, phaseIDs, approverID, now)
 	}
 	if state.ContinuationLease.RemainingTurns <= 0 {
 		state.ContinuationLease.RemainingTurns = state.RemainingTurns
@@ -427,6 +419,50 @@ func continuationStateAfterLeaseTurnConsumed(state session.ContinuationState, no
 	return session.NormalizeContinuationState(state)
 }
 
+func continuationApprovalBundleWithPhaseSubsetApproved(bundle session.ContinuationApprovalBundle, phaseIDs []string, approverID int64, now time.Time) session.ContinuationApprovalBundle {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	bundle = session.NormalizeContinuationApprovalBundle(bundle)
+	if !bundle.Active() {
+		return bundle
+	}
+	selected := make(map[string]struct{}, len(phaseIDs))
+	for _, id := range phaseIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			selected[id] = struct{}{}
+		}
+	}
+	approveAll := len(selected) == 0
+	bundle.Status = session.ContinuationLeaseStatusActive
+	bundle.ApprovedBy = approverID
+	bundle.ApprovedAt = now
+	bundle.UpdatedAt = now
+	bundle.CurrentPhaseID = ""
+	for i := range bundle.Phases {
+		phaseID := strings.TrimSpace(bundle.Phases[i].ID)
+		_, approve := selected[phaseID]
+		if approveAll || approve {
+			bundle.Phases[i].Status = session.ContinuationLeaseStatusPending
+			bundle.Phases[i].ApprovedAt = now
+			if bundle.CurrentPhaseID == "" {
+				bundle.Phases[i].Status = session.ContinuationLeaseStatusActive
+				bundle.Phases[i].ActivatedAt = now
+				bundle.CurrentPhaseID = phaseID
+			}
+		} else {
+			bundle.Phases[i].Status = session.ContinuationLeaseStatusDeferred
+			bundle.Phases[i].DeferredAt = now
+		}
+	}
+	if bundle.CurrentPhaseID == "" {
+		bundle.Status = session.ContinuationLeaseStatusDeferred
+	}
+	return session.NormalizeContinuationApprovalBundle(bundle)
+}
+
 func currentContinuationBundlePhase(bundle session.ContinuationApprovalBundle) (session.ContinuationApprovalBundlePhase, bool) {
 	bundle = session.NormalizeContinuationApprovalBundle(bundle)
 	if len(bundle.Phases) == 0 {
@@ -469,6 +505,7 @@ func continuationApprovalBundleAfterTurnConsumed(bundle session.ContinuationAppr
 		currentIndex = 0
 	}
 	bundle.Phases[currentIndex].Status = session.ContinuationLeaseStatusConsumed
+	bundle.Phases[currentIndex].ConsumedAt = now
 	nextIndex := -1
 	for i := currentIndex + 1; i < len(bundle.Phases); i++ {
 		if bundle.Phases[i].Status == session.ContinuationLeaseStatusPending || bundle.Phases[i].Status == "" {
@@ -478,6 +515,7 @@ func continuationApprovalBundleAfterTurnConsumed(bundle session.ContinuationAppr
 	}
 	if nextIndex >= 0 {
 		bundle.Phases[nextIndex].Status = session.ContinuationLeaseStatusActive
+		bundle.Phases[nextIndex].ActivatedAt = now
 		bundle.CurrentPhaseID = strings.TrimSpace(bundle.Phases[nextIndex].ID)
 		if bundle.Status != session.ContinuationLeaseStatusRevoked && bundle.Status != session.ContinuationLeaseStatusExpired {
 			bundle.Status = session.ContinuationLeaseStatusActive

@@ -62,6 +62,7 @@ type ContinuationApprovalBundlePhase struct {
 	ID                       string                  `json:"id,omitempty"`
 	OperationPhaseID         string                  `json:"operation_phase_id,omitempty"`
 	Index                    int                     `json:"index,omitempty"`
+	PhaseFingerprint         string                  `json:"phase_fingerprint,omitempty"`
 	OperatorTitle            string                  `json:"operator_title,omitempty"`
 	PlanTitle                string                  `json:"plan_title,omitempty"`
 	Summary                  string                  `json:"summary,omitempty"`
@@ -73,20 +74,27 @@ type ContinuationApprovalBundlePhase struct {
 	ValidationPlan           []string                `json:"validation_plan,omitempty"`
 	RequiredCapabilityGrants []CapabilityGrantSpec   `json:"required_capability_grants,omitempty"`
 	Status                   ContinuationLeaseStatus `json:"status,omitempty"`
+	ApprovedAt               time.Time               `json:"approved_at,omitempty"`
+	ActivatedAt              time.Time               `json:"activated_at,omitempty"`
+	ConsumedAt               time.Time               `json:"consumed_at,omitempty"`
+	DeferredAt               time.Time               `json:"deferred_at,omitempty"`
 }
 
 type ContinuationApprovalBundle struct {
-	ID             string                            `json:"id,omitempty"`
-	Status         ContinuationLeaseStatus           `json:"status,omitempty"`
-	CurrentPhaseID string                            `json:"current_phase_id,omitempty"`
-	ApprovedBy     int64                             `json:"approved_by,omitempty"`
-	Phases         []ContinuationApprovalBundlePhase `json:"phases,omitempty"`
-	ExpiresAt      time.Time                         `json:"expires_at,omitempty"`
-	CreatedAt      time.Time                         `json:"created_at,omitempty"`
-	UpdatedAt      time.Time                         `json:"updated_at,omitempty"`
-	ApprovedAt     time.Time                         `json:"approved_at,omitempty"`
-	ConsumedAt     time.Time                         `json:"consumed_at,omitempty"`
-	RevokedAt      time.Time                         `json:"revoked_at,omitempty"`
+	ID              string                            `json:"id,omitempty"`
+	OperationID     string                            `json:"operation_id,omitempty"`
+	PhasePlanID     string                            `json:"phase_plan_id,omitempty"`
+	PlanFingerprint string                            `json:"plan_fingerprint,omitempty"`
+	Status          ContinuationLeaseStatus           `json:"status,omitempty"`
+	CurrentPhaseID  string                            `json:"current_phase_id,omitempty"`
+	ApprovedBy      int64                             `json:"approved_by,omitempty"`
+	Phases          []ContinuationApprovalBundlePhase `json:"phases,omitempty"`
+	ExpiresAt       time.Time                         `json:"expires_at,omitempty"`
+	CreatedAt       time.Time                         `json:"created_at,omitempty"`
+	UpdatedAt       time.Time                         `json:"updated_at,omitempty"`
+	ApprovedAt      time.Time                         `json:"approved_at,omitempty"`
+	ConsumedAt      time.Time                         `json:"consumed_at,omitempty"`
+	RevokedAt       time.Time                         `json:"revoked_at,omitempty"`
 }
 
 type TurnAuthorizationKind string
@@ -560,7 +568,7 @@ func NormalizeActionProposal(proposal ActionProposal) ActionProposal {
 func NormalizeContinuationLeaseStatus(status ContinuationLeaseStatus) ContinuationLeaseStatus {
 	value := normalizeEnumValue(string(status))
 	switch ContinuationLeaseStatus(value) {
-	case ContinuationLeaseStatusPending, ContinuationLeaseStatusActive, ContinuationLeaseStatusConsumed, ContinuationLeaseStatusRevoked, ContinuationLeaseStatusExpired:
+	case ContinuationLeaseStatusPending, ContinuationLeaseStatusActive, ContinuationLeaseStatusConsumed, ContinuationLeaseStatusDeferred, ContinuationLeaseStatusRevoked, ContinuationLeaseStatusExpired:
 		return ContinuationLeaseStatus(value)
 	default:
 		return ""
@@ -569,6 +577,9 @@ func NormalizeContinuationLeaseStatus(status ContinuationLeaseStatus) Continuati
 
 func NormalizeContinuationApprovalBundle(bundle ContinuationApprovalBundle) ContinuationApprovalBundle {
 	bundle.ID = strings.TrimSpace(bundle.ID)
+	bundle.OperationID = strings.TrimSpace(bundle.OperationID)
+	bundle.PhasePlanID = strings.TrimSpace(bundle.PhasePlanID)
+	bundle.PlanFingerprint = strings.TrimSpace(bundle.PlanFingerprint)
 	bundle.Status = NormalizeContinuationLeaseStatus(bundle.Status)
 	bundle.CurrentPhaseID = strings.TrimSpace(bundle.CurrentPhaseID)
 	phases := make([]ContinuationApprovalBundlePhase, 0, len(bundle.Phases))
@@ -646,6 +657,7 @@ func NormalizeContinuationApprovalBundle(bundle ContinuationApprovalBundle) Cont
 func NormalizeContinuationApprovalBundlePhase(phase ContinuationApprovalBundlePhase) ContinuationApprovalBundlePhase {
 	phase.ID = strings.TrimSpace(phase.ID)
 	phase.OperationPhaseID = strings.TrimSpace(phase.OperationPhaseID)
+	phase.PhaseFingerprint = strings.TrimSpace(phase.PhaseFingerprint)
 	phase.OperatorTitle = strings.TrimSpace(phase.OperatorTitle)
 	phase.PlanTitle = strings.TrimSpace(phase.PlanTitle)
 	phase.Summary = strings.TrimSpace(phase.Summary)
@@ -656,7 +668,20 @@ func NormalizeContinuationApprovalBundlePhase(phase ContinuationApprovalBundlePh
 	phase.ForbiddenActions = normalizeActionStringSlice(phase.ForbiddenActions)
 	phase.AllowedActions = sanitizeAllowedActionsAgainstForbidden(phase.AllowedActions, phase.ForbiddenActions)
 	phase.ValidationPlan = normalizeActionStringSlice(phase.ValidationPlan)
+	phase.RequiredCapabilityGrants = NormalizeCapabilityGrantSpecs(phase.RequiredCapabilityGrants)
 	phase.Status = NormalizeContinuationLeaseStatus(phase.Status)
+	if !phase.ApprovedAt.IsZero() {
+		phase.ApprovedAt = phase.ApprovedAt.UTC()
+	}
+	if !phase.ActivatedAt.IsZero() {
+		phase.ActivatedAt = phase.ActivatedAt.UTC()
+	}
+	if !phase.ConsumedAt.IsZero() {
+		phase.ConsumedAt = phase.ConsumedAt.UTC()
+	}
+	if !phase.DeferredAt.IsZero() {
+		phase.DeferredAt = phase.DeferredAt.UTC()
+	}
 	if phase.Index < 0 {
 		phase.Index = 0
 	}

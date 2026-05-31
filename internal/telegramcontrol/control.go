@@ -17,7 +17,9 @@ type Runtime interface {
 	ContinuationState(chatID int64) (session.ContinuationState, error)
 	ContinuationStateForKey(key session.SessionKey) (session.ContinuationState, error)
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
+	ApproveContinuationBundle(chatID int64, approverID int64, phaseIDs []string) (session.ContinuationState, error)
 	ApproveContinuationForKey(key session.SessionKey, approverID int64) (session.ContinuationState, error)
+	ApproveContinuationBundleForKey(key session.SessionKey, approverID int64, phaseIDs []string) (session.ContinuationState, error)
 	TriggerContinuation(ctx context.Context, chatID int64) error
 	TriggerContinuationForKey(ctx context.Context, key session.SessionKey) error
 	RecordTelegramCallbackError(chatID int64, callbackKind string, err error)

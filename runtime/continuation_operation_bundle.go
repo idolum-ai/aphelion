@@ -3,6 +3,9 @@
 package runtime
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -56,13 +59,16 @@ func continuationStateFromOperationPhaseBundle(opState session.OperationState, p
 			UpdatedAt:   now,
 		},
 		ApprovalBundle: session.ContinuationApprovalBundle{
-			ID:             bundleID,
-			Status:         session.ContinuationLeaseStatusPending,
-			CurrentPhaseID: firstContinuationBundlePhaseID(bundlePhases),
-			Phases:         bundlePhases,
-			ExpiresAt:      now.Add(continuationLeaseDefaultTTL),
-			CreatedAt:      now,
-			UpdatedAt:      now,
+			ID:              bundleID,
+			OperationID:     strings.TrimSpace(opState.ID),
+			PhasePlanID:     strings.TrimSpace(opState.PhasePlan.ID),
+			PlanFingerprint: operationPhasePlanFingerprint(opState, phases),
+			Status:          session.ContinuationLeaseStatusPending,
+			CurrentPhaseID:  firstContinuationBundlePhaseID(bundlePhases),
+			Phases:          bundlePhases,
+			ExpiresAt:       now.Add(continuationLeaseDefaultTTL),
+			CreatedAt:       now,
+			UpdatedAt:       now,
 		},
 		UpdatedAt: now,
 	}
@@ -108,8 +114,9 @@ func continuationApprovalBundlePhasesFromOperation(opState session.OperationStat
 		}
 		out = append(out, session.ContinuationApprovalBundlePhase{
 			ID:                       id,
-			OperationPhaseID:         strings.TrimSpace(phase.ID),
+			OperationPhaseID:         firstNonEmptyContinuation(phase.ID, fmt.Sprintf("phase-%d", i+1)),
 			Index:                    phaseIndex,
+			PhaseFingerprint:         operationPhaseFingerprint(opState, phase, i),
 			OperatorTitle:            firstNonEmptyContinuation(phase.OperatorTitle, phase.PlanTitle, continuationPlanTitleFromText(phase.Summary)),
 			PlanTitle:                firstNonEmptyContinuation(phase.PlanTitle, phase.OperatorTitle, continuationPlanTitleFromText(phase.Summary)),
 			Summary:                  strings.TrimSpace(phase.Summary),
@@ -124,6 +131,114 @@ func continuationApprovalBundlePhasesFromOperation(opState session.OperationStat
 		})
 	}
 	return out
+}
+
+func (r *Runtime) validateContinuationApprovalBundleFingerprints(key session.SessionKey, state session.ContinuationState) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	state = session.NormalizeContinuationState(state)
+	bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle)
+	if !bundle.Active() || len(bundle.Phases) == 0 || strings.TrimSpace(bundle.PlanFingerprint) == "" {
+		return nil
+	}
+	opState, err := r.store.OperationState(key)
+	if err != nil {
+		return nil
+	}
+	opState = session.NormalizeOperationState(opState)
+	if strings.TrimSpace(bundle.OperationID) != "" && strings.TrimSpace(opState.ID) != "" && strings.TrimSpace(bundle.OperationID) != strings.TrimSpace(opState.ID) {
+		return fmt.Errorf("approval bundle operation changed: %w", core.ErrContinuationStale)
+	}
+	if strings.TrimSpace(bundle.PhasePlanID) != "" && strings.TrimSpace(opState.PhasePlan.ID) != "" && strings.TrimSpace(bundle.PhasePlanID) != strings.TrimSpace(opState.PhasePlan.ID) {
+		return fmt.Errorf("approval bundle phase plan changed: %w", core.ErrContinuationStale)
+	}
+	planPhases := opState.PhasePlan.Phases
+	if got := operationPhasePlanFingerprint(opState, planPhases); got != "" && strings.TrimSpace(bundle.PlanFingerprint) != "" && got != strings.TrimSpace(bundle.PlanFingerprint) {
+		return fmt.Errorf("approval bundle plan fingerprint changed: %w", core.ErrContinuationStale)
+	}
+	byOperationPhaseID := make(map[string]session.OperationPhase, len(planPhases))
+	byOperationPhaseIndex := make(map[string]int, len(planPhases))
+	for i, phase := range planPhases {
+		phase = normalizeSingleOperationPhase(phase)
+		id := strings.TrimSpace(phase.ID)
+		if id == "" {
+			id = fmt.Sprintf("phase-%d", i+1)
+		}
+		byOperationPhaseID[id] = phase
+		byOperationPhaseIndex[id] = i
+	}
+	for _, token := range bundle.Phases {
+		token = session.NormalizeContinuationApprovalBundlePhase(token)
+		if token.Status == session.ContinuationLeaseStatusDeferred || token.Status == session.ContinuationLeaseStatusConsumed || strings.TrimSpace(token.PhaseFingerprint) == "" {
+			continue
+		}
+		phaseID := strings.TrimSpace(token.OperationPhaseID)
+		phase, ok := byOperationPhaseID[phaseID]
+		if !ok {
+			return fmt.Errorf("approval bundle phase missing: %w", core.ErrContinuationStale)
+		}
+		if !continuationApprovalBundlePhaseMatchesOperation(opState, token, phase, byOperationPhaseIndex[phaseID]) {
+			return fmt.Errorf("approval bundle phase fingerprint changed: %w", core.ErrContinuationStale)
+		}
+	}
+	return nil
+}
+
+func operationPhasePlanFingerprint(opState session.OperationState, phases []session.OperationPhase) string {
+	opState = session.NormalizeOperationState(opState)
+	entries := make([]string, 0, len(phases))
+	for i, phase := range phases {
+		entries = append(entries, operationPhaseFingerprint(opState, phase, i))
+	}
+	return stableOperationBundleFingerprint(map[string]any{
+		"operation_id":  strings.TrimSpace(opState.ID),
+		"phase_plan_id": strings.TrimSpace(opState.PhasePlan.ID),
+		"goal":          strings.TrimSpace(opState.PhasePlan.Goal),
+		"phase_tokens":  entries,
+	})
+}
+
+func operationPhaseFingerprint(opState session.OperationState, phase session.OperationPhase, index int) string {
+	opState = session.NormalizeOperationState(opState)
+	phase = normalizeSingleOperationPhase(phase)
+	return stableOperationBundleFingerprint(map[string]any{
+		"operation_id":               strings.TrimSpace(opState.ID),
+		"phase_plan_id":              strings.TrimSpace(opState.PhasePlan.ID),
+		"operation_phase_id":         firstNonEmptyContinuation(phase.ID, fmt.Sprintf("phase-%d", index+1)),
+		"index":                      index + 1,
+		"authority_class":            strings.TrimSpace(phase.AuthorityClass),
+		"bounded_effect":             strings.TrimSpace(phase.BoundedEffect),
+		"allowed_actions":            append([]string(nil), phase.AllowedActions...),
+		"forbidden_actions":          append([]string(nil), phase.ForbiddenActions...),
+		"validation_plan":            append([]string(nil), phase.ValidationPlan...),
+		"required_capability_grants": append([]session.CapabilityGrantSpec(nil), phase.RequiredCapabilityGrants...),
+		"gate_level":                 strings.TrimSpace(phase.GateLevel),
+		"gate_reason_code":           strings.TrimSpace(phase.GateReasonCode),
+		"approval_subject":           strings.TrimSpace(phase.ApprovalSubject),
+		"requires_consent":           phase.RequiresConsent,
+		"requires_opt_in":            phase.RequiresOptIn,
+		"stale_authority":            phase.StaleAuthority,
+		"supersedes_phase_ids":       append([]string(nil), phase.SupersedesPhaseIDs...),
+	})
+}
+
+func stableOperationBundleFingerprint(v any) string {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func continuationApprovalBundlePhaseMatchesOperation(opState session.OperationState, token session.ContinuationApprovalBundlePhase, phase session.OperationPhase, index int) bool {
+	token = session.NormalizeContinuationApprovalBundlePhase(token)
+	phase = normalizeSingleOperationPhase(phase)
+	if strings.TrimSpace(token.OperationPhaseID) != firstNonEmptyContinuation(phase.ID, fmt.Sprintf("phase-%d", index+1)) {
+		return false
+	}
+	return strings.TrimSpace(token.PhaseFingerprint) != "" && strings.TrimSpace(token.PhaseFingerprint) == operationPhaseFingerprint(opState, phase, index)
 }
 
 func operationPhaseBundleID(opState session.OperationState, phases []session.OperationPhase) string {

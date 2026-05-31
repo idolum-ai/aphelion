@@ -62,6 +62,22 @@ func continuationApprovalButtonRows(state session.ContinuationState) [][]telegra
 		}
 	}
 	if state.Status == session.ContinuationStatusPending {
+		if continuationStateHasApprovalBundle(state) {
+			return [][]telegram.InlineButton{
+				{
+					{Text: "Approve all", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionApproveBundleAll)},
+					{Text: "Approve current", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionApproveBundleCurrent)},
+				},
+				{
+					{Text: "Details", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStatusOnly)},
+					{Text: "Change", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionAskEdit)},
+				},
+				{
+					{Text: "Pause", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStopPark)},
+					{Text: "Stop", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStop)},
+				},
+			}
+		}
 		return [][]telegram.InlineButton{
 			{
 				{Text: "Start", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionApproveLease)},
@@ -125,4 +141,9 @@ func continuationApprovalButtonSubject(state session.ContinuationState) string {
 
 func encodeContinuationCallbackData(decisionID string, action string) string {
 	return core.EncodeContinuationCallbackData(decisionID, action)
+}
+
+func continuationStateHasApprovalBundle(state session.ContinuationState) bool {
+	state = session.NormalizeContinuationState(state)
+	return strings.TrimSpace(state.ActionProposal.RiskClass) == "approval_bundle" && state.ApprovalBundle.Active() && len(state.ApprovalBundle.Phases) > 0
 }

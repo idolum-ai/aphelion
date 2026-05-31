@@ -26,6 +26,7 @@ type scopedContinuationProposalRefresher interface {
 type scopedContinuationRouter interface {
 	ContinuationStateForMessage(msg core.InboundMessage) (session.ContinuationState, error)
 	ApproveContinuationForMessage(msg core.InboundMessage, approverID int64) (session.ContinuationState, error)
+	ApproveContinuationBundleForMessage(msg core.InboundMessage, approverID int64, phaseIDs []string) (session.ContinuationState, error)
 	StopContinuationForMessage(msg core.InboundMessage) (core.StopResult, error)
 	TriggerContinuationForMessage(ctx context.Context, msg core.InboundMessage) error
 }
@@ -139,7 +140,7 @@ func handleContinuationCallback(ctx context.Context, sender commandCallbackSende
 
 	var text string
 	switch action {
-	case continuationActionApproveLease, continuationActionContinueOnce:
+	case continuationActionApproveLease, continuationActionApproveBundleAll, continuationActionApproveBundleCurrent, continuationActionContinueOnce:
 		approverID := int64(0)
 		if cb.From != nil {
 			approverID = cb.From.ID
@@ -147,7 +148,14 @@ func handleContinuationCallback(ctx context.Context, sender commandCallbackSende
 		if targetMsg.SenderID == 0 {
 			targetMsg.SenderID = approverID
 		}
-		if scoped, ok := router.(scopedContinuationRouter); ok && targetMsg.TelegramThreadID > 0 {
+		phaseIDs := continuationCallbackBundlePhaseIDs(state, action)
+		if action == continuationActionApproveBundleAll || action == continuationActionApproveBundleCurrent {
+			if scoped, ok := router.(scopedContinuationRouter); ok && targetMsg.TelegramThreadID > 0 {
+				state, err = scoped.ApproveContinuationBundleForMessage(targetMsg, approverID, phaseIDs)
+			} else {
+				state, err = router.ApproveContinuationBundle(chatID, approverID, phaseIDs)
+			}
+		} else if scoped, ok := router.(scopedContinuationRouter); ok && targetMsg.TelegramThreadID > 0 {
 			state, err = scoped.ApproveContinuationForMessage(targetMsg, approverID)
 		} else {
 			state, err = router.ApproveContinuation(chatID, approverID)
@@ -258,4 +266,19 @@ func handleContinuationCallback(ctx context.Context, sender commandCallbackSende
 	default:
 		return true, nil
 	}
+}
+
+func continuationCallbackBundlePhaseIDs(state session.ContinuationState, action string) []string {
+	if action != continuationActionApproveBundleCurrent {
+		return nil
+	}
+	bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle)
+	current := strings.TrimSpace(bundle.CurrentPhaseID)
+	if current == "" && len(bundle.Phases) > 0 {
+		current = strings.TrimSpace(bundle.Phases[0].ID)
+	}
+	if current == "" {
+		return nil
+	}
+	return []string{current}
 }

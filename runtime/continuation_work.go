@@ -47,7 +47,16 @@ func (r *Runtime) ApproveContinuation(chatID int64, approverID int64) (session.C
 	return r.ApproveContinuationForKey(key, approverID)
 }
 
+func (r *Runtime) ApproveContinuationBundle(chatID int64, approverID int64, phaseIDs []string) (session.ContinuationState, error) {
+	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+	return r.ApproveContinuationBundleForKey(key, approverID, phaseIDs)
+}
+
 func (r *Runtime) ApproveContinuationForKey(key session.SessionKey, approverID int64) (session.ContinuationState, error) {
+	return r.ApproveContinuationBundleForKey(key, approverID, nil)
+}
+
+func (r *Runtime) ApproveContinuationBundleForKey(key session.SessionKey, approverID int64, phaseIDs []string) (session.ContinuationState, error) {
 	state, err := r.store.ContinuationState(key)
 	if err != nil {
 		return session.ContinuationState{}, err
@@ -59,8 +68,11 @@ func (r *Runtime) ApproveContinuationForKey(key session.SessionKey, approverID i
 	if state.RemainingTurns <= 0 {
 		return state, core.ErrContinuationNoTurns
 	}
+	if err := r.validateContinuationApprovalBundleFingerprints(key, state); err != nil {
+		return state, err
+	}
 	now := time.Now().UTC()
-	state, err = continuationStateWithLeaseApproved(state, approverID, now)
+	state, err = continuationStateWithLeaseApprovedForBundlePhases(state, approverID, phaseIDs, now)
 	if err != nil {
 		if updateErr := r.store.UpdateContinuationState(key, state); updateErr != nil {
 			return session.ContinuationState{}, updateErr
@@ -291,6 +303,10 @@ func (r *Runtime) TriggerContinuationForKey(ctx context.Context, key session.Ses
 	if state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), time.Now().UTC())
 		return nil
+	}
+	if err := r.validateContinuationApprovalBundleFingerprints(key, state); err != nil {
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "stale_bundle", continuationExecutionPayload(state), time.Now().UTC())
+		return err
 	}
 	approverID := state.ApprovedBy
 	if approverID <= 0 {

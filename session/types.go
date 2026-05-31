@@ -65,6 +65,7 @@ const (
 	ContinuationLeaseStatusPending  ContinuationLeaseStatus = "pending"
 	ContinuationLeaseStatusActive   ContinuationLeaseStatus = "active"
 	ContinuationLeaseStatusConsumed ContinuationLeaseStatus = "consumed"
+	ContinuationLeaseStatusDeferred ContinuationLeaseStatus = "deferred"
 	ContinuationLeaseStatusRevoked  ContinuationLeaseStatus = "revoked"
 	ContinuationLeaseStatusExpired  ContinuationLeaseStatus = "expired"
 )
