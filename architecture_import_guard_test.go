@@ -111,6 +111,8 @@ func TestArchitectureImportBoundaries(t *testing.T) {
 	for _, pkg := range packages {
 		assertRuntimeImportBoundary(t, pkg)
 		assertLayerImportBoundaries(t, pkg)
+		assertCredentialAndBackendMembraneBoundaries(t, pkg)
+		assertDurableAgentDoesNotOwnToolAuthority(t, pkg)
 	}
 }
 
@@ -203,6 +205,93 @@ func assertLayerImportBoundaries(t *testing.T, pkg architecturePackage) {
 			"pipeline",
 		})
 	}
+}
+
+func assertCredentialAndBackendMembraneBoundaries(t *testing.T, pkg architecturePackage) {
+	t.Helper()
+
+	for _, rule := range []struct {
+		prefix    string
+		forbidden []string
+		why       string
+	}{
+		{
+			prefix: "governorauth",
+			forbidden: []string{
+				"governorbackend",
+				"runtime",
+				"tool",
+				"session",
+				"telegram",
+				"internal/telegramcommands",
+				"internal/telegramcontrol",
+				"internal/telegramdecision",
+				"internal/telegramruntime",
+			},
+			why: "governorauth resolves auth material; backend transport, runtime orchestration, tool authority, session state, and Telegram adapters must stay outside that membrane",
+		},
+		{
+			prefix: "governorbackend",
+			forbidden: []string{
+				"runtime",
+				"tool",
+				"session",
+				"telegram",
+				"internal/telegramcommands",
+				"internal/telegramcontrol",
+				"internal/telegramdecision",
+				"internal/telegramruntime",
+			},
+			why: "governorbackend is a provider-shaped backend adapter; runtime wiring, tools, sessions, and Telegram surfaces must not leak inward",
+		},
+		{
+			prefix: "githubapp",
+			forbidden: []string{
+				"runtime",
+				"tool",
+				"session",
+				"telegram",
+				"internal/telegramcommands",
+				"internal/telegramcontrol",
+				"internal/telegramdecision",
+				"internal/telegramruntime",
+			},
+			why: "githubapp is a credential membrane; PR/workflow authority, tool invocation, session state, and UI adapters must stay outside it",
+		},
+	} {
+		if !isPackageOrSubpackage(pkg, rule.prefix) {
+			continue
+		}
+		for _, forbidden := range rule.forbidden {
+			if importsPackage(pkg, aphelionModulePath+"/"+forbidden) {
+				t.Fatalf("%s imports %s; %s", pkg.ImportPath, forbidden, rule.why)
+			}
+		}
+	}
+}
+
+func assertDurableAgentDoesNotOwnToolAuthority(t *testing.T, pkg architecturePackage) {
+	t.Helper()
+	if !isPackageOrSubpackage(pkg, "durableagent") {
+		return
+	}
+	// durableagent may depend on session storage contracts, but tool authority,
+	// runtime orchestration, and Telegram adapters must stay outside the child
+	// continuation substrate.
+	assertDoesNotImportAny(t, pkg, []string{
+		"tool",
+		"runtime",
+		"telegram",
+		"internal/telegramcommands",
+		"internal/telegramcontrol",
+		"internal/telegramdecision",
+		"internal/telegramruntime",
+	})
+}
+
+func isPackageOrSubpackage(pkg architecturePackage, localTarget string) bool {
+	target := aphelionModulePath + "/" + strings.Trim(localTarget, "/")
+	return pkg.ImportPath == target || strings.HasPrefix(pkg.ImportPath, target+"/")
 }
 
 func assertDoesNotImportAny(t *testing.T, pkg architecturePackage, localTargets []string) {

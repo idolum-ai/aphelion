@@ -121,6 +121,54 @@ Code anchors:
   storage contracts, but not on runtime orchestration; higher layers still decide
   policy semantics, authority grants, deployment, and operator review. See
   [`durableagent-product-contract.md`](./durableagent-product-contract.md).
+
+## Membranes worth keeping explicit
+
+These packages are intentionally small because their power comes from what they
+refuse to own. Their boundaries are enforced by `architecture_import_guard_test.go`.
+
+### `githubapp`: GitHub credential membrane
+
+- Owns GitHub App private-key parsing, JWT signing, installation-token minting,
+  repository/permission narrowing, Git credential host rendering, and token
+  redaction.
+- Must not own PR creation, git workflow decisions, GitHub action authority,
+  tool invocation, session state, runtime orchestration, or Telegram UI.
+- The invariant is: credential availability is not authority. A token minted by
+  this package is only material; a higher approved grant/lease decides whether it
+  may be used.
+
+### `governorauth`: governor auth material membrane
+
+- Owns resolving, loading, validating, and saving governor backend auth material
+  from configured Aphelion or Codex CLI sources.
+- Must not own backend transport, streaming, retry policy, turn orchestration,
+  tool authority, session state, or Telegram UI.
+- The invariant is: auth source discovery is not backend behavior. It returns a
+  typed bundle; `runtime` chooses the active route and `governorbackend` speaks
+  the backend protocol.
+
+### `governorbackend`: provider-shaped governor backend adapter
+
+- Owns Codex/ChatGPT-style backend request translation, streaming event
+  normalization, continuation handling, auth refresh transport, error
+  classification, and partial-output accumulation.
+- Must not own auth discovery, prompt policy, authority gates, tool execution,
+  session state, runtime orchestration, or Telegram UI.
+- The invariant is: backend transport is not judgment. It adapts a backend into
+  Aphelion's provider interface so the governor can run through it without
+  leaking backend-specific protocol into core authority semantics.
+
+### `durableagent`: child continuation substrate
+
+- Owns child-agent persistence, enrollment, signatures, snapshots, profiles,
+  remote-loop plumbing, conversation relay, and review artifact movement.
+- Must not own tool authority, parent session state, runtime orchestration, or
+  Telegram command/UI behavior.
+- The invariant is: continuation is not permission. Child reports, enrollment,
+  wakeups, and durable state are evidence until higher governance grants
+  authority.
+
 - `githubapp` owns GitHub App key parsing, JWT signing, and installation-token
   exchange. It does not decide runtime authority or inject credentials into
   tools.

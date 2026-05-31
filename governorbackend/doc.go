@@ -1,8 +1,11 @@
 //go:build linux
 
-// Package governorbackend contains provider adapters used as governor backends.
+// Package governorbackend contains provider-shaped adapters for governor-only
+// backends.
 //
-// Adapters in this package translate agent messages, tool definitions, stream
-// events, and provider errors. They should not own runtime policy or prompt
-// construction beyond provider-specific request shaping.
+// It speaks backend protocols such as Codex/ChatGPT-style streaming,
+// continuation, auth refresh transport, and error normalization so runtime can
+// wire the governor through a normal agent.Provider shape. It does not discover
+// auth sources, decide policy, execute tools, own sessions, or render Telegram
+// UI.
 package governorbackend

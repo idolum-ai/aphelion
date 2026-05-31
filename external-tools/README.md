@@ -1,21 +1,21 @@
 # external-tools
 
-`external-tools/` is Aphelion's local exemplar surface for agent-owned external
-tools.
+`external-tools/` is Aphelion's repository-bundled exemplar surface for
+manifest-backed external tool bodies.
 
-It is not a plugin marketplace. It is not a bag of scripts that become callable
-because they exist in the repository. It is the place where Aphelion demonstrates
-how a tool can be described, installed, audited, probed, drift-checked,
-registered, granted, and eventually invoked without putting domain behavior into
-core.
+It is not core tool machinery, durable-agent state, a plugin marketplace, or a
+bag of scripts that become callable because they exist in the repository. It is
+the place where Aphelion demonstrates how a tool body can be described,
+installed, audited, probed, drift-checked, registered, granted, and eventually
+invoked without putting domain behavior into core.
 
 The invariant is:
 
 > Tool presence is not authority.
 
-A manifest in this directory may make a tool visible as a requestable capability.
-It does not make the tool installed, verified, registered, granted, callable, or
-safe for a child to use.
+A manifest in this directory may make a tool visible as a requestable capability
+or lifecycle fixture. It does not make the tool installed, verified, registered,
+granted, callable, or safe for a child to use.
 
 ## Why this folder exists
 
