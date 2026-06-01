@@ -468,8 +468,8 @@ func TestRuntimeAutonomyLeasedCommandCreatesBoundedOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigureAutonomy() err = %v", err)
 	}
-	if !strings.Contains(text, "Auto mode") || !strings.Contains(text, "Mode: Leased") || !strings.Contains(text, "Scope: workspace prompts") {
-		t.Fatalf("ConfigureAutonomy() text = %q, want leased workspace override", text)
+	if !strings.Contains(text, "Auto mode is live for workspace prompts") || !strings.Contains(text, "Matching approval grants may be spent") || strings.Contains(text, "Status:") || strings.Contains(text, "Details:") {
+		t.Fatalf("ConfigureAutonomy() text = %q, want compact leased workspace override", text)
 	}
 	snapshot, err := rt.ChatAutonomyStatusSnapshot(99130, 1001)
 	if err != nil {
@@ -509,8 +509,8 @@ func TestRuntimeAutonomyOffRevokesBoundedOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigureAutonomy(off) err = %v", err)
 	}
-	if !strings.Contains(text, "Auto mode") || !strings.Contains(text, "Status: off") || !strings.Contains(text, "Cleared") {
-		t.Fatalf("ConfigureAutonomy(off) text = %q, want cleared override", text)
+	if !strings.Contains(text, "Auto mode is off; cleared") || !strings.Contains(text, "New approval grants need a live gate again") || strings.Contains(text, "Status:") || strings.Contains(text, "Details:") || strings.Contains(text, "Evidence:") {
+		t.Fatalf("ConfigureAutonomy(off) text = %q, want compact cleared override", text)
 	}
 	snapshot, err := rt.ChatAutonomyStatusSnapshot(99131, 1001)
 	if err != nil {

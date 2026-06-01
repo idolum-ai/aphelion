@@ -11,7 +11,6 @@ import (
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
-	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -339,33 +338,17 @@ func parseOperatorAutoModeLeaseSpec(raw string) (operatorAutonomyCommandSpec, er
 
 func renderAutonomyCommandStatus(snapshot core.AutonomyStatusSnapshot) string {
 	if strings.TrimSpace(snapshot.ActiveOverrideMode) == "" {
-		return renderRuntimeCompactPanel(face.OperatorPanel{
-			Title: "Auto mode",
-			State: "no live mode override",
-			Why:   "Approval grants are spendable only when the configured default or a live mode override opens the gate.",
-			Next:  "Approve one request and use the inline approval-window controls to open a bounded gate if config allows it.",
-			Details: []string{
-				"Default: " + autonomyModeRuntimeLabel(snapshot.DefaultMode) + ".",
-				"Ceiling: " + autonomyModeRuntimeLabel(snapshot.Ceiling) + ".",
-			},
-		})
+		return "Auto mode has no live override. Default: " + autonomyModeRuntimeLabel(snapshot.DefaultMode) + "; ceiling: " + autonomyModeRuntimeLabel(snapshot.Ceiling) + ". Approval grants need the configured default or a bounded approval window before they can be spent."
 	}
-	details := []string{
-		"Mode: " + autonomyModeRuntimeLabel(snapshot.ActiveOverrideMode) + ".",
+	scope := strings.TrimSuffix(operatorAutoApprovalScopeLabel(snapshot.ActiveOverrideScope), ".")
+	if strings.TrimSpace(scope) == "" {
+		scope = "matching prompts"
 	}
-	if scope := strings.TrimSpace(snapshot.ActiveOverrideScope); scope != "" {
-		details = append(details, "Scope: "+operatorAutoApprovalScopeLabel(scope)+".")
-	}
+	expires := ""
 	if !snapshot.ActiveOverrideExpiry.IsZero() {
-		details = append(details, "Expires: "+snapshot.ActiveOverrideExpiry.UTC().Format(time.RFC3339)+".")
+		expires = " until " + formatApprovalWindowExpiry(snapshot.ActiveOverrideExpiry, time.Now().UTC(), time.UTC)
 	}
-	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title:   "Auto mode",
-		State:   "live gate open",
-		Why:     "Approval grants may be spent only for prompts allowed by this mode.",
-		Next:    "Use approval-window controls to close it.",
-		Details: details,
-	})
+	return "Auto mode is live in " + strings.ToLower(autonomyModeRuntimeLabel(snapshot.ActiveOverrideMode)) + " mode for " + scope + expires + ". Approval grants may be spent only for prompts allowed by this mode."
 }
 
 func (r *Runtime) doubleOperatorAutonomyOverride(ctx context.Context, chatID int64, adminUserID int64, now time.Time) (string, error) {
@@ -452,52 +435,26 @@ func renderOperatorAutonomyDoubled(override session.OperatorAutonomyOverride, no
 
 func renderOperatorAutonomyEnabled(override session.OperatorAutonomyOverride, now time.Time) string {
 	override = session.NormalizeOperatorAutonomyOverride(override)
-	details := []string{
-		"Mode: " + autonomyModeRuntimeLabel(override.Mode) + ".",
-		"Scope: " + operatorAutoApprovalScopeLabel(override.Scope) + ".",
-		"Expires: " + override.ExpiresAt.UTC().Format(time.RFC3339) + " (" + roundDuration(override.ExpiresAt.Sub(now)) + ").",
-	}
+	scope := strings.TrimSuffix(operatorAutoApprovalScopeLabel(override.Scope), ".")
+	text := "Auto mode is live for " + scope + " until " + formatApprovalWindowExpiry(override.ExpiresAt, now, time.UTC) + ". Matching approval grants may be spent until it expires."
 	if reason := strings.TrimSpace(override.Reason); reason != "" {
-		details = append(details, "Reason: "+reason)
+		text += " Reason: " + reason + "."
 	}
-	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title:   "Auto mode",
-		State:   "live gate open",
-		Why:     "This permits matching approval grants to be spent until the mode expires.",
-		Next:    "Use approval-window controls to close it.",
-		Details: details,
-	})
+	return text
 }
 
 func renderOperatorAutonomyRevoked(overrides []session.OperatorAutonomyOverride, now time.Time) string {
 	if len(overrides) == 0 {
-		return renderRuntimeCompactPanel(face.OperatorPanel{
-			Title: "Auto mode",
-			State: "off",
-			Why:   "No live auto mode override is active for this chat.",
-			Next:  "Approve one request and use the inline approval-window controls if a bounded gate is needed.",
-			Details: []string{
-				"Already off for this chat.",
-			},
-		})
+		return "Auto mode is already off for this chat. Approve one request and open an approval window to use it again."
 	}
 	active := operatorAutoModeActiveOverrides(overrides, now)
-	detail := "Cleared stored mode record."
 	if len(active) > 0 {
-		detail = "Cleared active mode: " + operatorAutoModeOverrideSummary(active) + "."
-	} else if len(overrides) > 1 {
-		detail = fmt.Sprintf("Cleared %d stored mode records.", len(overrides))
+		return "Auto mode is off; cleared " + operatorAutoModeOverrideSummary(active) + ". New approval grants need a live gate again."
 	}
-	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title: "Auto mode",
-		State: "off",
-		Why:   "No live auto mode override is active for this chat.",
-		Next:  "Approve one request and use the inline approval-window controls if a bounded gate is needed.",
-		Details: []string{
-			detail,
-		},
-		Evidence: []string{fmt.Sprintf("Revoked records: %d", len(overrides))},
-	})
+	if len(overrides) > 1 {
+		return fmt.Sprintf("Auto mode is off; cleared %d stored mode records. New approval grants need a live gate again.", len(overrides))
+	}
+	return "Auto mode is off; cleared stored mode record. New approval grants need a live gate again."
 }
 
 func operatorAutoModeActiveOverrides(overrides []session.OperatorAutonomyOverride, now time.Time) []session.OperatorAutonomyOverride {
