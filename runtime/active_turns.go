@@ -44,6 +44,20 @@ func (r *Runtime) unregisterActiveTurn(runID int64) {
 	}
 }
 
+func (r *Runtime) CancelActiveTurnRun(runID int64) bool {
+	if r == nil || runID <= 0 {
+		return false
+	}
+	r.activeTurnMu.Lock()
+	entry := r.activeTurnCancels[runID]
+	r.activeTurnMu.Unlock()
+	if entry == nil || entry.cancel == nil {
+		return false
+	}
+	entry.cancel()
+	return true
+}
+
 func (r *Runtime) cancelActiveTurnRuns(runs []session.TurnRun) []int64 {
 	if r == nil || len(runs) == 0 {
 		return nil
