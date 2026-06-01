@@ -1,0 +1,94 @@
+name: Release Candidate
+
+on:
+  pull_request:
+    branches:
+      - "release/**"
+  push:
+    branches:
+      - "release/**"
+  workflow_dispatch:
+    inputs:
+      from:
+        description: "Optional base ref for release notes"
+        required: false
+        type: string
+      to:
+        description: "Optional head ref for release notes"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate:
+    name: Validate release candidate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Public readiness
+        run: make public-readiness
+
+      - name: Architecture checks
+        run: make architecture
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        run: make build
+
+      - name: Static release build smoke test
+        run: make build-static STATIC_BIN=dist/aphelion
+
+  release_notes_preview:
+    name: Generate release notes preview
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release note range
+        id: range
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_FROM: ${{ inputs.from }}
+          INPUT_TO: ${{ inputs.to }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          from_ref="${INPUT_FROM}"
+          to_ref="${INPUT_TO:-${GITHUB_SHA}}"
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            from_ref="${PR_BASE_SHA}"
+            to_ref="${PR_HEAD_SHA}"
+          fi
+          echo "from_ref=${from_ref}" >> "${GITHUB_OUTPUT}"
+          echo "to_ref=${to_ref}" >> "${GITHUB_OUTPUT}"
+
+      - name: Generate release notes preview
+        run: |
+          set -euo pipefail
+          args=(--to "${{ steps.range.outputs.to_ref }}" --output release-notes-preview.md --title "Release candidate ${{ github.ref_name }}")
+          if [[ -n "${{ steps.range.outputs.from_ref }}" ]]; then
+            args+=(--from "${{ steps.range.outputs.from_ref }}")
+          fi
+          ./scripts/generate-release-notes.sh "${args[@]}"
+          cat release-notes-preview.md >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload release notes preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes-preview
+          path: release-notes-preview.md
