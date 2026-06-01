@@ -94,8 +94,10 @@ Range: \`${short_from}..${short_to}\`
 
 NOTES
 
-  if git log --first-parent --reverse --format='%s%x09%h' "${range}" | grep -q .; then
-    git log --first-parent --reverse --format='%s%x09%h' "${range}" | while IFS=$'\t' read -r subject short_hash; do
+  mapfile -t commit_lines < <(git log --first-parent --reverse --format='%s%x09%h' "${range}")
+  if [[ "${#commit_lines[@]}" -gt 0 ]]; then
+    for line in "${commit_lines[@]}"; do
+      IFS=$'\t' read -r subject short_hash <<<"${line}"
       subject="$(printf '%s' "${subject}" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
       [[ -n "${subject}" ]] || continue
       printf -- '- %s (`%s`)\n' "${subject}" "${short_hash}"
