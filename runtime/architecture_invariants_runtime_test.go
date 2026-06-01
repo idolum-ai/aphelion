@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -113,4 +114,82 @@ func TestInvariantPersistBeforeDeliverWhenSendFails(t *testing.T) {
 	if len(outboundIDs) != 0 {
 		t.Fatalf("outbound ids = %#v, want empty on failed delivery", outboundIDs)
 	}
+}
+
+func TestInvariantRuntimeReadmeDefinesShellBoundaryContract(t *testing.T) {
+	t.Parallel()
+
+	readme := readRuntimeInvariantFile(t, "README.md")
+	for _, want := range []string{
+		"## Shell Boundary Contract",
+		"## Top-Level Growth Rules",
+		"## Extraction Criteria",
+		"## Current Subsystem Map",
+		"Top-level `runtime` owns behavior only when that behavior needs direct access to",
+		"Runtime must also not take ownership of one-turn stage order.",
+		"A top-level file is acceptable when it is an adapter from live runtime facts into",
+		"A subsystem is ready for extraction when most of these are true:",
+	} {
+		assertRuntimeInvariantContains(t, readme, want)
+	}
+}
+
+func TestInvariantRuntimeReadmeMapsKnownLeafPackages(t *testing.T) {
+	t.Parallel()
+
+	readme := readRuntimeInvariantFile(t, "README.md")
+	for _, want := range []string{
+		"## Leaf Packages",
+		"`runtime/codex`: bounded Codex app-server helper package",
+		"Top-level `runtime` still owns durable-agent wake wiring, executor",
+		"`runtime/doctor`: bounded `/doctor` diagnostics package",
+		"Top-level `runtime` still owns command admission, principal resolution",
+		"`runtime/mission`: bounded Mission Ledger helper package",
+		"Top-level `runtime` still owns hidden-input assembly, transport callback integration",
+	} {
+		assertRuntimeInvariantContains(t, readme, want)
+	}
+}
+
+func TestInvariantRuntimeLeafPackageDocsDeclareOwnershipAndStopBoundary(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		path string
+		owns string
+		stop string
+	}{
+		{path: "codex/doc.go", owns: "Package codex owns", stop: "must stay a leaf under the"},
+		{path: "doctor/doc.go", owns: "Package doctor owns", stop: "must not import runtime orchestration"},
+		{path: "mission/doc.go", owns: "Package mission owns", stop: "must not own leases"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.path, func(t *testing.T) {
+			t.Parallel()
+			doc := readRuntimeInvariantFile(t, tc.path)
+			assertRuntimeInvariantContains(t, doc, tc.owns)
+			assertRuntimeInvariantContains(t, doc, tc.stop)
+		})
+	}
+}
+
+func readRuntimeInvariantFile(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) err = %v", path, err)
+	}
+	return string(content)
+}
+
+func assertRuntimeInvariantContains(t *testing.T, content string, want string) {
+	t.Helper()
+	if strings.Contains(content, want) {
+		return
+	}
+	if strings.Contains(strings.Join(strings.Fields(content), " "), strings.Join(strings.Fields(want), " ")) {
+		return
+	}
+	t.Fatalf("content missing %q", want)
 }
