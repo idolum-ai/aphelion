@@ -55,7 +55,7 @@ func TestHandleInboundMaterializesPendingOperationProposalAsButtonBackedLease(t 
 		t.Fatalf("inline count = %d, want 1 button-backed lease prompt", len(sender.inline))
 	}
 	text := sender.inline[0].text
-	if !strings.Contains(text, "Approval:") || !strings.Contains(text, "Materialize assistant-authored leases as buttons") || !strings.Contains(text, "Inspect and patch locally") {
+	if !strings.Contains(text, "Approve “Materialize assistant-authored leases as buttons”") || !strings.Contains(text, "Inspect and patch locally") {
 		t.Fatalf("inline text = %q, want materialized operation proposal details", text)
 	}
 	labels := []string{
@@ -192,7 +192,7 @@ func TestMaterializeOperationProposalShowsDataAccessLeaseClassCard(t *testing.T)
 		inlineText = sender.inline[0].text
 	}
 	sender.mu.Unlock()
-	for _, want := range []string{"Approval: Read one generated image artifact", "Scope:", "Read artifact://image2/field-of-attention.png once"} {
+	for _, want := range []string{"Approve “Read one generated image artifact”", "Read artifact://image2/field-of-attention.png once"} {
 		if !strings.Contains(inlineText, want) {
 			t.Fatalf("inline text = %q, want %q", inlineText, want)
 		}

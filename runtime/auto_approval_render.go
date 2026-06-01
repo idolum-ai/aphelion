@@ -7,51 +7,26 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/session"
 )
 
-func renderOperatorAutoApprovalRevoked(leases []session.OperatorAutoApprovalLease, now time.Time) string {
-	state := "off"
-	next := "Approve one request and use the inline approval-window controls to open a bounded approval window."
+func (r *Runtime) renderOperatorAutoApprovalRevoked(leases []session.OperatorAutoApprovalLease, now time.Time) string {
 	if len(leases) == 0 {
-		return renderRuntimeCompactPanel(face.OperatorPanel{
-			Title: "Auto approvals",
-			State: state,
-			Why:   "No active approval prompts will be answered automatically.",
-			Next:  next,
-			Details: []string{
-				"Already off for this chat.",
-			},
-		})
+		return "Auto-approval is already off for this chat. Approve one request and open an approval window to use it again."
 	}
 	active := operatorAutoApprovalActiveLeases(leases, now)
-	detail := ""
 	if len(active) > 0 {
-		detail = "Cleared active approval window: " + operatorAutoApprovalWindowSummary(active) + "."
-	} else {
-		latest := session.NormalizeOperatorAutoApprovalLease(leases[0])
-		switch {
-		case !latest.ExpiresAt.IsZero() && !latest.ExpiresAt.After(now.UTC()):
-			detail = "Cleared old expired " + operatorAutoApprovalWindowNoun(leases) + operatorAutoApprovalClearedOldWindowDetail(leases) + "."
-		case latest.MaxUses > 0 && latest.UsedCount >= latest.MaxUses:
-			detail = "Cleared old spent " + operatorAutoApprovalWindowNoun(leases) + operatorAutoApprovalClearedOldWindowDetail(leases) + "."
-		default:
-			detail = "Cleared old " + operatorAutoApprovalWindowNoun(leases) + operatorAutoApprovalClearedOldWindowDetail(leases) + "."
-		}
+		return "Auto-approval is off; cleared " + operatorAutoApprovalWindowSummary(active) + ". New prompts need manual approval again."
 	}
-	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title: "Auto approvals",
-		State: state,
-		Why:   "No active approval prompts will be answered automatically.",
-		Next:  next,
-		Details: []string{
-			detail,
-		},
-		Evidence: []string{
-			fmt.Sprintf("Revoked records: %d", len(leases)),
-		},
-	})
+	latest := session.NormalizeOperatorAutoApprovalLease(leases[0])
+	reason := "old"
+	switch {
+	case !latest.ExpiresAt.IsZero() && !latest.ExpiresAt.After(now.UTC()):
+		reason = "old expired"
+	case latest.MaxUses > 0 && latest.UsedCount >= latest.MaxUses:
+		reason = "old spent"
+	}
+	return "Auto-approval is off; cleared " + reason + " " + operatorAutoApprovalWindowNoun(leases) + operatorAutoApprovalClearedOldWindowDetail(leases) + ". New prompts need manual approval again."
 }
 
 func operatorAutoApprovalActiveLeases(leases []session.OperatorAutoApprovalLease, now time.Time) []session.OperatorAutoApprovalLease {
@@ -112,105 +87,57 @@ func pluralWord(count int, singular string, plural string) string {
 	return plural
 }
 
-func renderOperatorAutoApprovalEnabled(lease session.OperatorAutoApprovalLease, now time.Time, blockedReason string) string {
+func (r *Runtime) renderOperatorAutoApprovalEnabled(lease session.OperatorAutoApprovalLease, now time.Time, blockedReason string) string {
 	lease = session.NormalizeOperatorAutoApprovalLease(lease)
-	details := []string{
-		"Scope: " + operatorAutoApprovalScopeLabel(lease.Scope) + ".",
-		"Expires: " + lease.ExpiresAt.UTC().Format(time.RFC3339) + " (" + roundDuration(lease.ExpiresAt.Sub(now)) + ").",
-	}
-	if lease.MaxUses > 0 {
-		details = append(details, fmt.Sprintf("Use budget: %d approval(s).", lease.MaxUses))
-	}
-	if reason := strings.TrimSpace(lease.Reason); reason != "" {
-		details = append(details, "Reason: "+reason)
-	}
-	why := "Eligible approval prompts in this chat may be answered automatically until the approval window expires or is spent."
-	if blockedReason = strings.TrimSpace(blockedReason); blockedReason != "" {
-		details = append(details, "Mode: blocked - "+blockedReason+".")
-		why = "This approval window is recorded, but it will not be used until auto mode allows matching prompts."
-	}
-	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title:   "Auto approvals",
-		State:   "enabled",
-		Why:     why,
-		Next:    "Use approval-window controls to revoke it.",
-		Details: details,
-	})
+	return renderOperatorAutoApprovalActiveLine("active", lease, now, r.approvalWindowDisplayLocation(), blockedReason, "")
 }
 
-func renderOperatorAutoApprovalDoubled(lease session.OperatorAutoApprovalLease, now time.Time, blockedReason string, previousDuration time.Duration, doubledDuration time.Duration) string {
+func (r *Runtime) renderOperatorAutoApprovalDoubled(lease session.OperatorAutoApprovalLease, now time.Time, blockedReason string, previousDuration time.Duration, doubledDuration time.Duration) string {
 	lease = session.NormalizeOperatorAutoApprovalLease(lease)
-	details := []string{
-		"Scope: " + operatorAutoApprovalScopeLabel(lease.Scope) + ".",
-		"Doubled: " + roundDuration(previousDuration) + " -> " + roundDuration(doubledDuration) + ".",
-		"Expires: " + lease.ExpiresAt.UTC().Format(time.RFC3339) + " (" + roundDuration(lease.ExpiresAt.Sub(now)) + ").",
-	}
-	if lease.MaxUses > 0 {
-		details = append(details, fmt.Sprintf("Use budget remaining: %d approval(s).", lease.MaxUses))
-	}
-	if reason := strings.TrimSpace(lease.Reason); reason != "" {
-		details = append(details, "Reason: "+reason)
-	}
-	why := "Expanded the current auto-approval window by doubling its full time window."
-	if blockedReason = strings.TrimSpace(blockedReason); blockedReason != "" {
-		details = append(details, "Mode: blocked - "+blockedReason+".")
-		why = "Expanded the approval window, but it will not be used until auto mode allows matching prompts."
-	}
-	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title:   "Auto approvals",
-		State:   "enabled",
-		Why:     why,
-		Next:    "Use approval-window controls to revoke it, or press Double time again to extend within the cap.",
-		Details: details,
-	})
+	detail := "extended from " + roundDuration(previousDuration) + " to " + roundDuration(doubledDuration)
+	return renderOperatorAutoApprovalActiveLine("extended", lease, now, r.approvalWindowDisplayLocation(), blockedReason, detail)
 }
 
-func renderOperatorAutoApprovalStatusActive(lease session.OperatorAutoApprovalLease, now time.Time, blockedReason string) string {
+func (r *Runtime) renderOperatorAutoApprovalStatusActive(lease session.OperatorAutoApprovalLease, now time.Time, blockedReason string) string {
 	lease = session.NormalizeOperatorAutoApprovalLease(lease)
-	details := []string{
-		"Scope: " + operatorAutoApprovalScopeLabel(lease.Scope) + ".",
-		"Expires: " + lease.ExpiresAt.UTC().Format(time.RFC3339) + " (" + roundDuration(lease.ExpiresAt.Sub(now)) + ").",
-		fmt.Sprintf("Used: %d", lease.UsedCount),
-	}
-	if lease.MaxUses > 0 {
-		details[len(details)-1] = fmt.Sprintf("Used: %d/%d", lease.UsedCount, lease.MaxUses)
-	}
-	if lease.Reason != "" {
-		details = append(details, "Reason: "+lease.Reason)
-	}
-	why := "Eligible approval prompts in this chat can use this bounded approval window."
-	if blockedReason = strings.TrimSpace(blockedReason); blockedReason != "" {
-		details = append(details, "Mode: blocked - "+blockedReason+".")
-		why = "This approval window is active, but it will not be used until auto mode allows matching prompts."
-	}
-	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title:   "Auto approvals",
-		State:   "active",
-		Why:     why,
-		Next:    "Use approval-window controls to revoke it.",
-		Details: details,
-	})
+	return renderOperatorAutoApprovalActiveLine("active", lease, now, r.approvalWindowDisplayLocation(), blockedReason, "")
 }
 
-func renderOperatorAutoApprovalStatusInactive(lease session.OperatorAutoApprovalLease, now time.Time) string {
+func renderOperatorAutoApprovalActiveLine(state string, lease session.OperatorAutoApprovalLease, now time.Time, loc *time.Location, blockedReason string, detail string) string {
+	scope := strings.TrimSuffix(operatorAutoApprovalScopeLabel(lease.Scope), ".")
+	if scope == "" {
+		scope = "matching prompts"
+	}
+	expires := formatApprovalWindowExpiry(lease.ExpiresAt, now, loc)
+	used := fmt.Sprintf("used %d times", lease.UsedCount)
+	if lease.MaxUses > 0 {
+		used = fmt.Sprintf("used %d/%d approvals", lease.UsedCount, lease.MaxUses)
+	}
+	prefix := "Auto-approval is active"
+	if state == "extended" {
+		prefix = "Auto-approval was extended"
+	}
+	if br := strings.TrimSpace(blockedReason); br != "" {
+		return "Auto-approval exists for " + scope + " until " + expires + ", but it is blocked: " + br + "."
+	}
+	if d := strings.TrimSpace(detail); d != "" {
+		return prefix + " for " + scope + " until " + expires + " (" + d + "); " + used + "."
+	}
+	return prefix + " for " + scope + " until " + expires + "; " + used + "."
+}
+
+func (r *Runtime) renderOperatorAutoApprovalStatusInactive(lease session.OperatorAutoApprovalLease, now time.Time) string {
 	lease = session.NormalizeOperatorAutoApprovalLease(lease)
-	reason := "expired"
-	if !lease.RevokedAt.IsZero() {
+	reason := "inactive"
+	switch {
+	case !lease.RevokedAt.IsZero():
 		reason = "revoked"
-	} else if lease.MaxUses > 0 && lease.UsedCount >= lease.MaxUses {
-		reason = "use budget exhausted"
-	} else if lease.ExpiresAt.After(now) {
-		reason = "inactive"
+	case lease.MaxUses > 0 && lease.UsedCount >= lease.MaxUses:
+		reason = fmt.Sprintf("spent: used %d/%d approvals", lease.UsedCount, lease.MaxUses)
+	case !lease.ExpiresAt.IsZero() && !lease.ExpiresAt.After(now):
+		reason = "expired"
 	}
-	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title: "Auto approvals",
-		State: "inactive",
-		Why:   "No current approval prompt will use this old approval window.",
-		Next:  "Approve one request and use the inline approval-window controls to open a bounded approval window.",
-		Details: []string{
-			"Last approval window: " + reason + ".",
-		},
-	})
+	return "Auto-approval is off; last approval window was " + reason + ". Approve one request and open an approval window to use it again."
 }
 
 func roundDuration(d time.Duration) string {

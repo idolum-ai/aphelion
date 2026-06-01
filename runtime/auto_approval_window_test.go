@@ -49,8 +49,8 @@ func TestRuntimeAutoApprovalDoubleExtendsWindowAndPreservesRemainingUses(t *test
 	if err != nil {
 		t.Fatalf("ConfigureAutoApproval(double) err = %v", err)
 	}
-	if !strings.Contains(text, "Doubled: 15m0s -> 30m0s") || !strings.Contains(text, "Use budget remaining: 2 approval(s).") {
-		t.Fatalf("double text = %q, want doubled duration and remaining-use budget", text)
+	if !strings.Contains(text, "Auto-approval was extended") || !strings.Contains(text, "extended from 15m0s to 30m0s") || !strings.Contains(text, "used 0/2 approvals") {
+		t.Fatalf("double text = %q, want compact doubled duration and budget", text)
 	}
 	leases, err := store.ActiveOperatorAutoApprovalLeases(99201, time.Now().UTC())
 	if err != nil {
@@ -89,8 +89,8 @@ func TestRuntimeAutoApprovalDoubleCapsAtTwentyFourHours(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigureAutoApproval(double) err = %v", err)
 	}
-	if !strings.Contains(text, "Doubled: 20h0m0s -> 24h0m0s") {
-		t.Fatalf("double text = %q, want capped 24h duration", text)
+	if !strings.Contains(text, "Auto-approval") || !strings.Contains(text, "tomorrow") {
+		t.Fatalf("double text = %q, want compact capped 24h duration", text)
 	}
 	leases, err := store.ActiveOperatorAutoApprovalLeases(99202, time.Now().UTC())
 	if err != nil {
@@ -123,6 +123,7 @@ func TestRuntimeAutoModeDoubleExtendsWindowAndRespectsCap(t *testing.T) {
 	cfg.Autonomy.Ceiling = "leased"
 	cfg.Autonomy.AllowLiveOverrides = true
 	cfg.Autonomy.MaxOverrideDuration = "45m"
+	cfg.Operator.DisplayTimezone = "America/New_York"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
@@ -134,8 +135,8 @@ func TestRuntimeAutoModeDoubleExtendsWindowAndRespectsCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigureAutonomy(double) err = %v", err)
 	}
-	if !strings.Contains(text, "Doubled: 15m0s -> 30m0s") {
-		t.Fatalf("double text = %q, want 15m to 30m", text)
+	if !strings.Contains(text, "Auto mode was extended") || !strings.Contains(text, "extended from 15m0s to 30m0s") || strings.Contains(text, "UTC") {
+		t.Fatalf("double text = %q, want compact 15m to 30m", text)
 	}
 	overrides, err := store.ActiveOperatorAutonomyOverrides(99204, time.Now().UTC())
 	if err != nil {
@@ -150,8 +151,8 @@ func TestRuntimeAutoModeDoubleExtendsWindowAndRespectsCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigureAutonomy(double capped) err = %v", err)
 	}
-	if !strings.Contains(text, "Doubled: 30m0s -> 45m0s") {
-		t.Fatalf("double text = %q, want cap at 45m", text)
+	if !strings.Contains(text, "Auto mode was extended") || !strings.Contains(text, "extended from 30m0s to 45m0s") {
+		t.Fatalf("double text = %q, want compact cap at 45m", text)
 	}
 	overrides, err = store.ActiveOperatorAutonomyOverrides(99204, time.Now().UTC())
 	if err != nil {
@@ -174,6 +175,67 @@ func TestRuntimeAutoModeDoubleRequiresActiveOverride(t *testing.T) {
 	_, err = rt.ConfigureAutonomy(context.Background(), 99205, 1001, "double")
 	if err == nil || !strings.Contains(err.Error(), "no active auto mode to double") {
 		t.Fatalf("ConfigureAutonomy(double) err = %v, want no-active mode error", err)
+	}
+}
+
+func TestApprovalWindowOfferRendersIntentSubjectAndLocalExpiry(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Operator.DisplayTimezone = "America/New_York"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Date(2026, 6, 1, 10, 50, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 99213, UserID: 0, Scope: telegramDMScopeRef(99213)}
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-compact-window",
+		StageSummary:   "Commit validated rendering updates",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:            "aprop-compact-window",
+			Summary:       "Commit the validated compact patch",
+			BoundedEffect: "Create one commit and open the PR.",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	offer, err := store.CreateApprovalWindowOffer(session.ApprovalWindowOffer{
+		ID:                 "offer-compact-window",
+		ChatID:             99213,
+		AdminUserID:        1001,
+		SessionID:          session.SessionIDForKey(key),
+		ScopeKind:          string(key.Scope.Kind),
+		ScopeID:            key.Scope.ID,
+		SourceKind:         session.ApprovalWindowOfferSourceContinuation,
+		SourceID:           "decision-compact-window",
+		SourceDecisionKind: string(session.TurnAuthorizationKindContinuation),
+		OpenedLeaseID:      "lease-offer",
+		OpenedOverrideID:   "override-offer",
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(15 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
+	}
+	lease := session.OperatorAutoApprovalLease{ID: "lease-offer", AdminUserID: 1001, ChatID: 99213, ScopeKind: string(key.Scope.Kind), ScopeID: key.Scope.ID, Scope: session.OperatorAutoApprovalScopeAll, CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute)}
+	override := session.OperatorAutonomyOverride{ID: "override-offer", ChatID: 99213, ScopeKind: string(key.Scope.Kind), ScopeID: key.Scope.ID, Mode: "leased", Scope: session.OperatorAutoApprovalScopeAll, CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute)}
+
+	text := rt.renderApprovalWindowEnabledForOffer(offer, lease, override, now)
+	for _, want := range []string{"Approval window is active for “Commit the validated compact patch”", "matching requests in this chat or thread until 7:05 AM."} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("approval window text = %q, want %q", text, want)
+		}
+	}
+	for _, notWant := range []string{"Status:", "Details:", "Expires:", "UTC", "aprop-compact-window", "decision-compact-window"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("approval window text = %q, did not want scaffold/internal fragment %q", text, notWant)
+		}
 	}
 }
 
@@ -309,8 +371,8 @@ func TestRuntimeApprovalWindowDoubleAndCancelKeepGateAndGrantTogether(t *testing
 	if err != nil {
 		t.Fatalf("CancelApprovalWindowForKey() err = %v", err)
 	}
-	if !strings.Contains(text, "Status: off") {
-		t.Fatalf("CancelApprovalWindowForKey() text = %q, want off status", text)
+	if !strings.Contains(text, "Approval window is off") {
+		t.Fatalf("CancelApprovalWindowForKey() text = %q, want compact off status", text)
 	}
 	leases, err = store.ActiveOperatorAutoApprovalLeasesForScope(99207, scopeKind, scopeID, time.Now().UTC())
 	if err != nil {

@@ -423,7 +423,7 @@ func TestMaterializePlanningOnlyPhaseOffersPlanBudget(t *testing.T) {
 		labels = continuationButtonLabels(sender.inline[0].rows)
 	}
 	sender.mu.Unlock()
-	if !strings.Contains(inlineText, "Plan:") || !strings.Contains(inlineText, "I'll do:") || strings.Contains(inlineText, "Allowed actions:") {
+	if !strings.Contains(inlineText, "Approve plan for “Turn child diagnostic failures") || !strings.Contains(inlineText, "Covers Step 1: Turn child diagnostic failures") || strings.Contains(inlineText, "Allowed actions:") {
 		t.Fatalf("inline text = %q, want compact plan budget prompt", inlineText)
 	}
 	if got, want := labels, []string{"Start", "Details", "Change", "Pause", "Stop"}; !equalStringSlices(got, want) {

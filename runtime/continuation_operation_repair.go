@@ -467,16 +467,17 @@ func (r *Runtime) recordAndSendBlockedOperationPhaseApproval(ctx context.Context
 func renderOperationPhaseApprovalBlockedStatus(opState session.OperationState, phase session.OperationPhase, reason string) string {
 	opState = session.NormalizeOperationState(opState)
 	phase = normalizeSingleOperationPhase(phase)
-	title := firstNonEmptyContinuation(phase.Summary, opState.PhasePlan.Goal, opState.Objective, "Next phase")
-	lines := []string{"I can't continue that step yet.", "", "Plan: " + truncatePreview(title, 96)}
-	if explanation := operationBlockedApprovalExplanation(phase, reason); explanation != "" {
-		lines = append(lines, "", "Reason:", explanation)
+	title := firstNonEmptyContinuation(phase.Summary, opState.PhasePlan.Goal, opState.Objective, "next phase")
+	explanation := operationBlockedApprovalExplanation(phase, reason)
+	next := operationBlockedApprovalNextStep(phase, reason)
+	line := "I can't continue “" + truncatePreview(title, 96) + "” yet"
+	if explanation != "" {
+		line += "; " + strings.TrimSuffix(explanation, ".")
 	}
-	if next := operationBlockedApprovalNextStep(phase, reason); next != "" {
-		lines = append(lines, "", "Next:", next)
+	if next != "" {
+		line += ". " + strings.TrimSuffix(next, ".")
 	}
-	lines = append(lines, "", "Use /status for the current state.")
-	return strings.Join(lines, "\n")
+	return line + ". Use /status for the current state."
 }
 
 func operationBlockedApprovalExplanation(phase session.OperationPhase, reason string) string {

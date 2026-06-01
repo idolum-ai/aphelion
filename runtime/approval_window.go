@@ -10,7 +10,6 @@ import (
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
-	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/internal/decisionprojection"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -445,15 +444,8 @@ func approvalWindowDecisionSubject(rec session.PendingDecisionRecord) string {
 func renderApprovalWindowCanceled(leases []session.OperatorAutoApprovalLease, overrides []session.OperatorAutonomyOverride, now time.Time) string {
 	leaseActive := len(operatorAutoApprovalActiveLeases(leases, now))
 	overrideActive := len(operatorAutoModeActiveOverrides(overrides, now))
-	details := []string{fmt.Sprintf("Revoked approval grants: %d.", len(leases))}
-	details = append(details, fmt.Sprintf("Revoked auto mode gates: %d.", len(overrides)))
 	if leaseActive == 0 && overrideActive == 0 {
-		details = append(details, "No active approval window was open.")
+		return "Approval window is off; no active window was open. Matching requests need manual approval again."
 	}
-	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title:   "Approval window",
-		State:   "off",
-		Why:     "Matching requests require explicit approval again.",
-		Details: details,
-	})
+	return fmt.Sprintf("Approval window is off; cleared %d approval grant(s) and %d auto-mode gate(s). Matching requests need manual approval again.", len(leases), len(overrides))
 }
