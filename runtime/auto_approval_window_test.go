@@ -123,6 +123,7 @@ func TestRuntimeAutoModeDoubleExtendsWindowAndRespectsCap(t *testing.T) {
 	cfg.Autonomy.Ceiling = "leased"
 	cfg.Autonomy.AllowLiveOverrides = true
 	cfg.Autonomy.MaxOverrideDuration = "45m"
+	cfg.Operator.DisplayTimezone = "America/New_York"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
@@ -134,7 +135,7 @@ func TestRuntimeAutoModeDoubleExtendsWindowAndRespectsCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigureAutonomy(double) err = %v", err)
 	}
-	if !strings.Contains(text, "Auto mode was extended") || !strings.Contains(text, "extended from 15m0s to 30m0s") {
+	if !strings.Contains(text, "Auto mode was extended") || !strings.Contains(text, "extended from 15m0s to 30m0s") || strings.Contains(text, "UTC") {
 		t.Fatalf("double text = %q, want compact 15m to 30m", text)
 	}
 	overrides, err := store.ActiveOperatorAutonomyOverrides(99204, time.Now().UTC())

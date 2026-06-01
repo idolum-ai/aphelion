@@ -459,6 +459,7 @@ func TestRuntimeAutonomyLeasedCommandCreatesBoundedOverride(t *testing.T) {
 	cfg.Autonomy.Ceiling = "leased"
 	cfg.Autonomy.AllowLiveOverrides = true
 	cfg.Autonomy.MaxOverrideDuration = "2h"
+	cfg.Operator.DisplayTimezone = "America/New_York"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
@@ -468,7 +469,7 @@ func TestRuntimeAutonomyLeasedCommandCreatesBoundedOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfigureAutonomy() err = %v", err)
 	}
-	if !strings.Contains(text, "Auto mode is live for workspace prompts") || !strings.Contains(text, "Matching approval grants may be spent") || strings.Contains(text, "Status:") || strings.Contains(text, "Details:") {
+	if !strings.Contains(text, "Auto mode is live for workspace prompts") || !strings.Contains(text, "Matching approval grants may be spent") || strings.Contains(text, "UTC") || strings.Contains(text, "Status:") || strings.Contains(text, "Details:") {
 		t.Fatalf("ConfigureAutonomy() text = %q, want compact leased workspace override", text)
 	}
 	snapshot, err := rt.ChatAutonomyStatusSnapshot(99130, 1001)
@@ -491,6 +492,37 @@ func TestRuntimeAutonomyLeasedCommandCreatesBoundedOverride(t *testing.T) {
 	}
 	if len(leases) != 0 {
 		t.Fatalf("leases = %#v, want no auto-approval grants from mode command", leases)
+	}
+}
+
+func TestRuntimeAutonomyCompactExpiryUsesOperatorTimezone(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Operator.DisplayTimezone = "America/New_York"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Date(2026, 6, 1, 10, 50, 0, 0, time.UTC)
+	override := session.OperatorAutonomyOverride{
+		ID:        "override-local-expiry",
+		ChatID:    99132,
+		Mode:      "leased",
+		Scope:     session.OperatorAutoApprovalScopeAll,
+		CreatedAt: now,
+		ExpiresAt: now.Add(15 * time.Minute),
+	}
+
+	enabled := rt.renderOperatorAutonomyEnabled(override, now)
+	if !strings.Contains(enabled, "until 7:05 AM") || strings.Contains(enabled, "11:05 AM") || strings.Contains(enabled, "UTC") {
+		t.Fatalf("enabled text = %q, want operator-local expiry", enabled)
+	}
+
+	override.ExpiresAt = now.Add(30 * time.Minute)
+	doubled := rt.renderOperatorAutonomyDoubled(override, now, 15*time.Minute, 30*time.Minute)
+	if !strings.Contains(doubled, "until 7:20 AM") || strings.Contains(doubled, "11:20 AM") || strings.Contains(doubled, "UTC") {
+		t.Fatalf("doubled text = %q, want operator-local expiry", doubled)
 	}
 }
 

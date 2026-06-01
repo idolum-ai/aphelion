@@ -67,7 +67,7 @@ func (r *Runtime) configureAutonomyForScope(ctx context.Context, chatID int64, s
 		if err != nil {
 			return "", err
 		}
-		return renderAutonomyCommandStatus(snapshot), nil
+		return r.renderAutonomyCommandStatus(snapshot, now), nil
 	case "off":
 		revoked, err := r.store.RevokeOperatorAutonomyOverridesForScope(chatID, adminUserID, scopeKind, scopeID, now)
 		if err != nil {
@@ -107,7 +107,7 @@ func (r *Runtime) configureAutonomyForScope(ctx context.Context, chatID int64, s
 		}
 		r.recordOperatorAutoModeEvent(chatID, core.ExecutionEventAutoModeEnabled, "active", created, nil)
 		_ = ctx
-		return renderOperatorAutonomyEnabled(created, now), nil
+		return r.renderOperatorAutonomyEnabled(created, now), nil
 	case "mission":
 		if err := r.validateAutonomyLiveOverride(spec.Mode, 0); err != nil {
 			return "", err
@@ -336,7 +336,7 @@ func parseOperatorAutoModeLeaseSpec(raw string) (operatorAutonomyCommandSpec, er
 	return spec, nil
 }
 
-func renderAutonomyCommandStatus(snapshot core.AutonomyStatusSnapshot) string {
+func (r *Runtime) renderAutonomyCommandStatus(snapshot core.AutonomyStatusSnapshot, now time.Time) string {
 	if strings.TrimSpace(snapshot.ActiveOverrideMode) == "" {
 		return "Auto mode has no live override. Default: " + autonomyModeRuntimeLabel(snapshot.DefaultMode) + "; ceiling: " + autonomyModeRuntimeLabel(snapshot.Ceiling) + ". Approval grants need the configured default or a bounded approval window before they can be spent."
 	}
@@ -346,7 +346,7 @@ func renderAutonomyCommandStatus(snapshot core.AutonomyStatusSnapshot) string {
 	}
 	expires := ""
 	if !snapshot.ActiveOverrideExpiry.IsZero() {
-		expires = " until " + formatApprovalWindowExpiry(snapshot.ActiveOverrideExpiry, time.Now().UTC(), time.UTC)
+		expires = " until " + formatApprovalWindowExpiry(snapshot.ActiveOverrideExpiry, now, r.approvalWindowDisplayLocation())
 	}
 	return "Auto mode is live in " + strings.ToLower(autonomyModeRuntimeLabel(snapshot.ActiveOverrideMode)) + " mode for " + scope + expires + ". Approval grants may be spent only for prompts allowed by this mode."
 }
@@ -399,7 +399,7 @@ func (r *Runtime) doubleOperatorAutonomyOverrideForScope(ctx context.Context, ch
 		"previous_duration_seconds": int64(previousDuration / time.Second),
 		"new_duration_seconds":      int64(doubledDuration / time.Second),
 	})
-	return renderOperatorAutonomyDoubled(created, now, previousDuration, doubledDuration), nil
+	return r.renderOperatorAutonomyDoubled(created, now, previousDuration, doubledDuration), nil
 }
 
 func (r *Runtime) activeOperatorAutonomyOverrideForAdmin(chatID int64, adminUserID int64, now time.Time) (session.OperatorAutonomyOverride, bool, error) {
@@ -427,16 +427,16 @@ func (r *Runtime) activeOperatorAutonomyOverrideForAdminAndScope(chatID int64, s
 	return session.OperatorAutonomyOverride{}, false, nil
 }
 
-func renderOperatorAutonomyDoubled(override session.OperatorAutonomyOverride, now time.Time, previousDuration time.Duration, doubledDuration time.Duration) string {
+func (r *Runtime) renderOperatorAutonomyDoubled(override session.OperatorAutonomyOverride, now time.Time, previousDuration time.Duration, doubledDuration time.Duration) string {
 	override = session.NormalizeOperatorAutonomyOverride(override)
 	scope := strings.TrimSuffix(operatorAutoApprovalScopeLabel(override.Scope), ".")
-	return "Auto mode was extended for " + scope + " until " + formatApprovalWindowExpiry(override.ExpiresAt, now, time.UTC) + " (extended from " + roundDuration(previousDuration) + " to " + roundDuration(doubledDuration) + ")."
+	return "Auto mode was extended for " + scope + " until " + formatApprovalWindowExpiry(override.ExpiresAt, now, r.approvalWindowDisplayLocation()) + " (extended from " + roundDuration(previousDuration) + " to " + roundDuration(doubledDuration) + ")."
 }
 
-func renderOperatorAutonomyEnabled(override session.OperatorAutonomyOverride, now time.Time) string {
+func (r *Runtime) renderOperatorAutonomyEnabled(override session.OperatorAutonomyOverride, now time.Time) string {
 	override = session.NormalizeOperatorAutonomyOverride(override)
 	scope := strings.TrimSuffix(operatorAutoApprovalScopeLabel(override.Scope), ".")
-	text := "Auto mode is live for " + scope + " until " + formatApprovalWindowExpiry(override.ExpiresAt, now, time.UTC) + ". Matching approval grants may be spent until it expires."
+	text := "Auto mode is live for " + scope + " until " + formatApprovalWindowExpiry(override.ExpiresAt, now, r.approvalWindowDisplayLocation()) + ". Matching approval grants may be spent until it expires."
 	if reason := strings.TrimSpace(override.Reason); reason != "" {
 		text += " Reason: " + reason + "."
 	}
