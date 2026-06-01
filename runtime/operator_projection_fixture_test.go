@@ -45,12 +45,10 @@ func TestLiveApprovalCardFixtureRendersAsHumanPlanProjection(t *testing.T) {
 	text := renderOperationProposalMaterializedPromptFallback(state)
 
 	for _, want := range []string{
-		"Plan:",
-		"Budget: up to 2 turns",
-		"I'll do:",
-		"Step 1: Inspect status and recent evidence",
-		"Step 2: Patch local rendering",
-		"Stops before:",
+		"Approve plan for “Inspect status and recent evidence” for 2 turns",
+		"first, Inspect status and recent evidence",
+		"Covers Step 1: Inspect status and recent evidence",
+		"Stops before",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("approval card = %q, want %q", text, want)
@@ -58,6 +56,9 @@ func TestLiveApprovalCardFixtureRendersAsHumanPlanProjection(t *testing.T) {
 	}
 	for _, notWant := range []string{
 		"Approval needed",
+		"Plan:",
+		"Budget:",
+		"I'll do:",
 		"Lease:",
 		"Operator card:",
 		"Bundle phases:",
@@ -86,7 +87,7 @@ func TestBlockedApprovalFixtureRendersHumanStatusWithoutApprovalRitual(t *testin
 		WhyNow:  "Blocked until the resource owner opts in.",
 	}
 	text := renderOperationPhaseApprovalBlockedStatus(opState, phase, "waiting for explicit opt-in")
-	for _, want := range []string{"I can't continue that step yet.", "Plan: Collect approved profile preferences", "Reason:", "has not opted in", "Next:", "Use /status"} {
+	for _, want := range []string{"I can't continue “Collect approved profile preferences” yet", "has not opted in", "Use /status"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("blocked status = %q, want %q", text, want)
 		}
@@ -164,7 +165,7 @@ func TestSynthesizedPlanBudgetUsesMilestoneEvidenceAndHardStops(t *testing.T) {
 	}
 	state := continuationStateFromOperationPlanLease(opState, lease, "continue", time.Now().UTC())
 	card := renderOperationProposalMaterializedPromptFallback(state)
-	for _, want := range []string{"Stops before:", "credentials/tokens", "external send/contact", "archive/delete", "deploy/restart"} {
+	for _, want := range []string{"Stops before", "credentials/tokens", "external send/contact", "archive/delete", "deploy/restart"} {
 		if !strings.Contains(card, want) {
 			t.Fatalf("plan budget card = %q, want %q", card, want)
 		}

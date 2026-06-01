@@ -71,7 +71,7 @@ func (r *Runtime) configureAutoApprovalForScope(ctx context.Context, chatID int6
 			operatorAutoApprovalPrimaryLeaseForScope(revoked, chatID, scopeKind, scopeID, adminUserID),
 			operatorAutoApprovalRevokedEventPayload(revoked, now),
 		)
-		return renderOperatorAutoApprovalRevoked(revoked, now), nil
+		return r.renderOperatorAutoApprovalRevoked(revoked, now), nil
 	case "double":
 		return r.doubleOperatorAutoApprovalForScope(ctx, chatID, scopeKind, scopeID, adminUserID, now)
 	case "enable":
@@ -100,7 +100,7 @@ func (r *Runtime) configureAutoApprovalForScope(ctx context.Context, chatID int6
 		if err != nil {
 			return "", err
 		}
-		return renderOperatorAutoApprovalEnabled(created, now, blocked), nil
+		return r.renderOperatorAutoApprovalEnabled(created, now, blocked), nil
 	default:
 		return "", fmt.Errorf("unknown auto-approval action %q", action)
 	}
@@ -343,7 +343,7 @@ func (r *Runtime) doubleOperatorAutoApprovalForScope(ctx context.Context, chatID
 	if err != nil {
 		return "", err
 	}
-	return renderOperatorAutoApprovalDoubled(created, now, blocked, previousDuration, doubledDuration), nil
+	return r.renderOperatorAutoApprovalDoubled(created, now, blocked, previousDuration, doubledDuration), nil
 }
 
 func (r *Runtime) activeOperatorAutoApprovalLeaseForAdmin(chatID int64, adminUserID int64, now time.Time) (session.OperatorAutoApprovalLease, bool, error) {
@@ -448,7 +448,7 @@ func (r *Runtime) renderOperatorAutoApprovalStatusForScope(chatID int64, scopeKi
 			if err != nil {
 				return "", err
 			}
-			return renderOperatorAutoApprovalStatusActive(lease, now, blocked), nil
+			return r.renderOperatorAutoApprovalStatusActive(lease, now, blocked), nil
 		}
 	}
 	latest, ok, err := r.store.LatestOperatorAutoApprovalLeaseForScope(chatID, adminUserID, scopeKind, scopeID)
@@ -458,7 +458,7 @@ func (r *Runtime) renderOperatorAutoApprovalStatusForScope(chatID int64, scopeKi
 	if !ok {
 		return "Auto approvals are inactive for this chat.", nil
 	}
-	return renderOperatorAutoApprovalStatusInactive(latest, now), nil
+	return r.renderOperatorAutoApprovalStatusInactive(latest, now), nil
 }
 
 func (r *Runtime) operatorAutoApprovalBlockedReason(chatID int64, adminUserID int64, approvalScope string, now time.Time) (string, error) {

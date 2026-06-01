@@ -446,22 +446,8 @@ func (r *Runtime) activeOperatorAutonomyOverrideForAdminAndScope(chatID int64, s
 
 func renderOperatorAutonomyDoubled(override session.OperatorAutonomyOverride, now time.Time, previousDuration time.Duration, doubledDuration time.Duration) string {
 	override = session.NormalizeOperatorAutonomyOverride(override)
-	details := []string{
-		"Mode: " + autonomyModeRuntimeLabel(override.Mode) + ".",
-		"Scope: " + operatorAutoApprovalScopeLabel(override.Scope) + ".",
-		"Doubled: " + roundDuration(previousDuration) + " -> " + roundDuration(doubledDuration) + ".",
-		"Expires: " + override.ExpiresAt.UTC().Format(time.RFC3339) + " (" + roundDuration(override.ExpiresAt.Sub(now)) + ").",
-	}
-	if reason := strings.TrimSpace(override.Reason); reason != "" {
-		details = append(details, "Reason: "+reason)
-	}
-	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title:   "Auto mode",
-		State:   "live gate open",
-		Why:     "Expanded the current auto mode gate by doubling its full time window.",
-		Next:    "Use approval-window controls to close it, or press Double time again to extend within the cap.",
-		Details: details,
-	})
+	scope := strings.TrimSuffix(operatorAutoApprovalScopeLabel(override.Scope), ".")
+	return "Auto mode was extended for " + scope + " until " + formatApprovalWindowExpiry(override.ExpiresAt, now, time.UTC) + " (extended from " + roundDuration(previousDuration) + " to " + roundDuration(doubledDuration) + ")."
 }
 
 func renderOperatorAutonomyEnabled(override session.OperatorAutonomyOverride, now time.Time) string {

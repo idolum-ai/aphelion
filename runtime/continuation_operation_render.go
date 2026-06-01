@@ -18,35 +18,26 @@ func renderOperationProposalMaterializedPromptFallback(state session.Continuatio
 	if continuationRequiresEscalatedOperatorApproval(state) {
 		return renderEscalatedOperatorApprovalPromptFallback(state)
 	}
-	proposal := session.NormalizeActionProposal(state.ActionProposal)
+	_ = session.NormalizeActionProposal(state.ActionProposal)
 	title := continuationApprovalPromptTitle(state)
 	if title == "" {
 		title = "bounded continuation"
 	}
-	lines := []string{"Approval: " + title}
-	if why := continuationPromptCompactLine(proposal.WhyNow, 220); why != "" {
-		lines = append(lines, "", "Why now:", why)
+	action := continuationApprovalPromptScope(state)
+	if action == "" {
+		action = title
 	}
-	if scope := continuationApprovalPromptScope(state); scope != "" {
-		lines = append(lines, "", "Scope:", scope)
+	line := "Approve “" + title + "”: " + action
+	if state.RemainingTurns > 0 {
+		line = fmt.Sprintf("Approve “%s” for %d %s: %s", title, state.RemainingTurns, continuationTurnWord(state.RemainingTurns), action)
 	}
 	if included := continuationApprovalPromptIncludedLines(state); len(included) > 0 {
-		lines = append(lines, "", "This covers:")
-		for _, line := range included {
-			lines = append(lines, "- "+line)
-		}
+		line += ". Covers " + strings.Join(included, "; ")
 	}
 	if stops := continuationApprovalPromptStops(state); len(stops) > 0 {
-		lines = append(lines, "", "Stops before:", strings.Join(stops, ", "))
+		line += ". Stops before " + strings.Join(stops, ", ")
 	}
-	if state.RemainingTurns > 0 {
-		turnLabel := "turn"
-		if state.RemainingTurns != 1 {
-			turnLabel = "turns"
-		}
-		lines = append(lines, "", fmt.Sprintf("Approve %d bounded %s?", state.RemainingTurns, turnLabel))
-	}
-	return strings.Join(lines, "\n")
+	return line + "."
 }
 
 func continuationRequiresEscalatedOperatorApproval(state session.ContinuationState) bool {
@@ -56,29 +47,22 @@ func continuationRequiresEscalatedOperatorApproval(state session.ContinuationSta
 
 func renderEscalatedOperatorApprovalPromptFallback(state session.ContinuationState) string {
 	state = session.NormalizeContinuationState(state)
-	proposal := session.NormalizeActionProposal(state.ActionProposal)
 	title := continuationApprovalPromptTitle(state)
 	if title == "" {
 		title = "sensitive bounded action"
 	}
-	lines := []string{"Approval: " + title}
-	if why := continuationPromptCompactLine(firstNonEmptyContinuation(proposal.WhyNow, state.GovernorIntent.Rationale), 220); why != "" {
-		lines = append(lines, "", "Why I'm asking:", why)
+	action := continuationApprovalPromptScope(state)
+	if action == "" {
+		action = title
 	}
-	if scope := continuationApprovalPromptScope(state); scope != "" {
-		lines = append(lines, "", "I'll do:", scope)
-	}
+	line := "Approve “" + title + "”: " + action
 	if included := continuationEscalatedApprovalAllowedLines(state); len(included) > 0 {
-		lines = append(lines, "", "This can use:")
-		for _, line := range included {
-			lines = append(lines, "- "+line)
-		}
+		line += ". This can use " + strings.Join(included, ", ")
 	}
 	if stops := continuationApprovalPromptStops(state); len(stops) > 0 {
-		lines = append(lines, "", "Stops before:", strings.Join(stops, ", "))
+		line += ". Stops before " + strings.Join(stops, ", ")
 	}
-	lines = append(lines, "", "Approve this step?")
-	return strings.Join(lines, "\n")
+	return line + "."
 }
 
 func continuationEscalatedApprovalAllowedLines(state session.ContinuationState) []string {
@@ -190,27 +174,20 @@ func renderPlanBudgetPromptFallback(state session.ContinuationState) string {
 	state = session.NormalizeContinuationState(state)
 	proposal := session.NormalizeActionProposal(state.ActionProposal)
 	title := planBudgetPromptTitle(state, proposal)
-	lines := []string{"Plan: " + title}
-	if goal := firstNonEmptyContinuation(state.Objective, proposal.Summary); goal != "" && goal != title {
-		lines = append(lines, "", "Goal: "+continuationPromptCompactLine(goal, 220))
-	}
+	line := "Approve plan for “" + title + "”"
 	if state.RemainingTurns > 0 {
-		lines = append(lines, fmt.Sprintf("Budget: up to %d %s", state.RemainingTurns, continuationTurnWord(state.RemainingTurns)))
-	}
-	if included := planBudgetIncludedLines(state); len(included) > 0 {
-		lines = append(lines, "", "I'll do:")
-		for _, line := range included {
-			lines = append(lines, "- "+line)
-		}
-	}
-	if stops := planBudgetStopLines(state); len(stops) > 0 {
-		lines = append(lines, "", "Stops before: "+strings.Join(stops, ", "))
+		line += fmt.Sprintf(" for %d %s", state.RemainingTurns, continuationTurnWord(state.RemainingTurns))
 	}
 	if first := planBudgetFirstStep(state); first != "" {
-		lines = append(lines, "", "First step: "+first)
+		line += ": first, " + continuationPromptCompactLine(first, 160)
 	}
-	lines = append(lines, "", "Anything outside this plan needs a fresh approval.")
-	return strings.Join(lines, "\n")
+	if included := planBudgetIncludedLines(state); len(included) > 0 {
+		line += ". Covers " + strings.Join(included, "; ")
+	}
+	if stops := planBudgetStopLines(state); len(stops) > 0 {
+		line += ". Stops before " + strings.Join(stops, ", ")
+	}
+	return line + ". Anything outside this plan needs a fresh approval."
 }
 
 func planBudgetPromptTitle(state session.ContinuationState, proposal session.ActionProposal) string {
