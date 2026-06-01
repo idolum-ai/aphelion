@@ -72,6 +72,9 @@ func validate(cfg *Config) error {
 	if err := validateHeartbeatConfig(cfg.Heartbeat); err != nil {
 		return err
 	}
+	if err := validateOperatorConfig(cfg.Operator); err != nil {
+		return err
+	}
 	if err := validateCronConfig(cfg.Cron); err != nil {
 		return err
 	}
@@ -144,4 +147,13 @@ func ParseByteSize(raw string) (int64, error) {
 		return 0, fmt.Errorf("must be positive")
 	}
 	return value * multiplier, nil
+}
+
+func validateOperatorConfig(cfg OperatorConfig) error {
+	if zone := strings.TrimSpace(cfg.DisplayTimezone); zone != "" {
+		if _, err := time.LoadLocation(zone); err != nil {
+			return fmt.Errorf("operator.display_timezone must be a valid IANA timezone: %w", err)
+		}
+	}
+	return nil
 }

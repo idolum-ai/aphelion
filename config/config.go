@@ -25,6 +25,7 @@ type Config struct {
 	Thinking      ThinkingConfig      `toml:"thinking"`
 	Face          FaceConfig          `toml:"face"`
 	Heartbeat     HeartbeatConfig     `toml:"heartbeat"`
+	Operator      OperatorConfig      `toml:"operator"`
 	Cron          CronConfig          `toml:"cron"`
 	Nocturne      NocturneConfig      `toml:"nocturne"`
 	Voice         VoiceConfig         `toml:"voice"`
@@ -404,6 +405,10 @@ type HeartbeatActiveHoursConfig struct {
 	Start    string `toml:"start"`
 	End      string `toml:"end"`
 	Timezone string `toml:"timezone"`
+}
+
+type OperatorConfig struct {
+	DisplayTimezone string `toml:"display_timezone"`
 }
 
 type CronConfig struct {

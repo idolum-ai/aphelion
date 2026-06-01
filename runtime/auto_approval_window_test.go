@@ -190,8 +190,8 @@ func TestRuntimeApprovalWindowCreatesModeGateAndApprovalGrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnableApprovalWindowForKey() err = %v", err)
 	}
-	if !strings.Contains(text, "Approval window") || !strings.Contains(text, "Status: active") {
-		t.Fatalf("EnableApprovalWindowForKey() text = %q, want active approval window", text)
+	if !strings.Contains(text, "Approval window is active for matching requests") || strings.Contains(text, "Status:") || strings.Contains(text, "Details:") {
+		t.Fatalf("EnableApprovalWindowForKey() text = %q, want compact active approval window", text)
 	}
 	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
 	leases, err := store.ActiveOperatorAutoApprovalLeasesForScope(99206, scopeKind, scopeID, time.Now().UTC())
@@ -287,8 +287,8 @@ func TestRuntimeApprovalWindowDoubleAndCancelKeepGateAndGrantTogether(t *testing
 	if err != nil {
 		t.Fatalf("DoubleApprovalWindowForKey() err = %v", err)
 	}
-	if !strings.Contains(text, "Doubled: 15m0s -> 30m0s") {
-		t.Fatalf("DoubleApprovalWindowForKey() text = %q, want doubled duration", text)
+	if !strings.Contains(text, "Approval window was extended") || !strings.Contains(text, "extended from 15m0s to 30m0s") {
+		t.Fatalf("DoubleApprovalWindowForKey() text = %q, want compact doubled duration", text)
 	}
 	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
 	leases, err := store.ActiveOperatorAutoApprovalLeasesForScope(99207, scopeKind, scopeID, time.Now().UTC())

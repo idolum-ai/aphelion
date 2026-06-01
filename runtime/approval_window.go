@@ -11,6 +11,7 @@ import (
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/internal/decisionprojection"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -126,7 +127,7 @@ func (r *Runtime) enableApprovalWindowForScope(ctx context.Context, chatID int64
 	r.recordOperatorAutoApprovalEvent(chatID, core.ExecutionEventAutoApprovalGranted, "active", createdLease, map[string]any{
 		"source": "approval_window",
 	})
-	return core.ApprovalWindowEnableResult{Text: renderApprovalWindowEnabled(createdLease, createdOverride, now), Active: true, LeaseID: createdLease.ID, OverrideID: createdOverride.ID}, nil
+	return core.ApprovalWindowEnableResult{Text: r.renderApprovalWindowEnabled(createdLease, createdOverride, now), Active: true, LeaseID: createdLease.ID, OverrideID: createdOverride.ID}, nil
 }
 
 func (r *Runtime) doubleApprovalWindowForScope(ctx context.Context, chatID int64, scopeKind string, scopeID string, adminUserID int64) (string, error) {
@@ -222,7 +223,7 @@ func (r *Runtime) doubleApprovalWindowForScope(ctx context.Context, chatID int64
 		"previous_duration_seconds": int64(previousDuration / time.Second),
 		"new_duration_seconds":      int64(doubledDuration / time.Second),
 	})
-	return renderApprovalWindowDoubled(storedLease, storedOverride, now, previousDuration, doubledDuration), nil
+	return r.renderApprovalWindowDoubled(storedLease, storedOverride, now, previousDuration, doubledDuration), nil
 }
 
 func (r *Runtime) cancelApprovalWindowForScope(ctx context.Context, chatID int64, scopeKind string, scopeID string, adminUserID int64) (core.ApprovalWindowCancelResult, error) {
@@ -283,38 +284,162 @@ func (r *Runtime) approvalWindowMaxDuration() time.Duration {
 	return maxDuration
 }
 
-func renderApprovalWindowEnabled(lease session.OperatorAutoApprovalLease, override session.OperatorAutonomyOverride, now time.Time) string {
-	lease = session.NormalizeOperatorAutoApprovalLease(lease)
-	override = session.NormalizeOperatorAutonomyOverride(override)
-	return renderApprovalWindowActivePanel("active", "Opened a bounded approval window for matching requests.", lease, override, now, "")
+func (r *Runtime) renderApprovalWindowEnabled(lease session.OperatorAutoApprovalLease, override session.OperatorAutonomyOverride, now time.Time) string {
+	return renderApprovalWindowActiveLine("active", lease, override, now, r.approvalWindowDisplayLocation(), "matching requests", "")
 }
 
-func renderApprovalWindowDoubled(lease session.OperatorAutoApprovalLease, override session.OperatorAutonomyOverride, now time.Time, previousDuration time.Duration, doubledDuration time.Duration) string {
-	lease = session.NormalizeOperatorAutoApprovalLease(lease)
-	override = session.NormalizeOperatorAutonomyOverride(override)
-	detail := "Doubled: " + roundDuration(previousDuration) + " -> " + roundDuration(doubledDuration) + "."
-	return renderApprovalWindowActivePanel("extended", "Expanded the current approval window by doubling its full time window.", lease, override, now, detail)
+func (r *Runtime) renderApprovalWindowEnabledForOffer(offer session.ApprovalWindowOffer, lease session.OperatorAutoApprovalLease, override session.OperatorAutonomyOverride, now time.Time) string {
+	return renderApprovalWindowActiveLine("active", lease, override, now, r.approvalWindowDisplayLocation(), r.approvalWindowOfferSubject(offer), "")
 }
 
-func renderApprovalWindowActivePanel(state string, why string, lease session.OperatorAutoApprovalLease, override session.OperatorAutonomyOverride, now time.Time, extraDetail string) string {
+func (r *Runtime) renderApprovalWindowDoubled(lease session.OperatorAutoApprovalLease, override session.OperatorAutonomyOverride, now time.Time, previousDuration time.Duration, doubledDuration time.Duration) string {
+	detail := "extended from " + roundDuration(previousDuration) + " to " + roundDuration(doubledDuration)
+	return renderApprovalWindowActiveLine("extended", lease, override, now, r.approvalWindowDisplayLocation(), "matching requests", detail)
+}
+
+func (r *Runtime) renderApprovalWindowDoubledForOffer(offer session.ApprovalWindowOffer, lease session.OperatorAutoApprovalLease, override session.OperatorAutonomyOverride, now time.Time, previousDuration time.Duration, doubledDuration time.Duration) string {
+	detail := "extended from " + roundDuration(previousDuration) + " to " + roundDuration(doubledDuration)
+	return renderApprovalWindowActiveLine("extended", lease, override, now, r.approvalWindowDisplayLocation(), r.approvalWindowOfferSubject(offer), detail)
+}
+
+func renderApprovalWindowActiveLine(state string, lease session.OperatorAutoApprovalLease, override session.OperatorAutonomyOverride, now time.Time, loc *time.Location, subject string, detail string) string {
+	lease = session.NormalizeOperatorAutoApprovalLease(lease)
+	override = session.NormalizeOperatorAutonomyOverride(override)
 	expiresAt := lease.ExpiresAt
 	if !override.ExpiresAt.IsZero() && (expiresAt.IsZero() || override.ExpiresAt.Before(expiresAt)) {
 		expiresAt = override.ExpiresAt
 	}
-	details := []string{
-		"Scope: all approval requests in this chat or thread.",
-		"Expires: " + expiresAt.UTC().Format(time.RFC3339) + " (" + roundDuration(expiresAt.Sub(now)) + ").",
+	if loc == nil {
+		loc = time.UTC
 	}
-	if strings.TrimSpace(extraDetail) != "" {
-		details = append(details, strings.TrimSpace(extraDetail))
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		subject = "matching requests"
 	}
-	return renderRuntimeCompactPanel(face.OperatorPanel{
-		Title:   "Approval window",
-		State:   state,
-		Why:     why,
-		Next:    "Use Double time to extend it, or cancel approvals to stop it.",
-		Details: details,
-	})
+	verb := "is active"
+	if state == "extended" {
+		verb = "was extended"
+	}
+	tail := " until " + formatApprovalWindowExpiry(expiresAt, now, loc) + "."
+	if d := strings.TrimSpace(detail); d != "" {
+		tail = " (" + d + ")" + tail
+	}
+	if strings.EqualFold(subject, "matching requests") {
+		return "Approval window " + verb + " for matching requests in this chat or thread" + tail
+	}
+	return "Approval window " + verb + " for “" + subject + "” and matching requests in this chat or thread" + tail
+}
+
+func (r *Runtime) approvalWindowDisplayLocation() *time.Location {
+	zone := ""
+	if r != nil && r.cfg != nil {
+		zone = strings.TrimSpace(r.cfg.Operator.DisplayTimezone)
+	}
+	if zone == "" {
+		return time.UTC
+	}
+	loc, err := time.LoadLocation(zone)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}
+
+func formatApprovalWindowExpiry(expiresAt time.Time, now time.Time, loc *time.Location) string {
+	if loc == nil {
+		loc = time.UTC
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	local := expiresAt.In(loc)
+	current := now.In(loc)
+	if sameLocalDate(local, current) {
+		return local.Format("3:04 PM")
+	}
+	if sameLocalDate(local, current.AddDate(0, 0, 1)) {
+		return "tomorrow at " + local.Format("3:04 PM")
+	}
+	if local.Year() == current.Year() {
+		return local.Format("Jan 2 at 3:04 PM")
+	}
+	return local.Format("Jan 2, 2006 at 3:04 PM")
+}
+
+func sameLocalDate(a time.Time, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.Date()
+	return ay == by && am == bm && ad == bd
+}
+
+func (r *Runtime) approvalWindowOfferSubject(offer session.ApprovalWindowOffer) string {
+	offer = session.NormalizeApprovalWindowOffer(offer)
+	if r == nil || r.store == nil {
+		return "matching requests"
+	}
+	if offer.SourceKind == session.ApprovalWindowOfferSourceContinuation {
+		if states, err := r.store.ContinuationStates(); err == nil {
+			for _, rec := range states {
+				state := session.NormalizeContinuationState(rec.State)
+				if approvalWindowContinuationMatchesOffer(state, offer) {
+					if subject := approvalWindowContinuationSubject(state); subject != "" {
+						return subject
+					}
+				}
+			}
+		}
+	}
+	if offer.SourceKind == session.ApprovalWindowOfferSourceDecision {
+		if decisions, err := r.store.PendingDecisions(); err == nil {
+			for _, rec := range decisions {
+				if strings.TrimSpace(rec.ID) != offer.SourceID {
+					continue
+				}
+				if subject := approvalWindowDecisionSubject(rec); subject != "" {
+					return subject
+				}
+			}
+		}
+	}
+	return "matching requests"
+}
+
+func approvalWindowContinuationMatchesOffer(state session.ContinuationState, offer session.ApprovalWindowOffer) bool {
+	sourceID := strings.TrimSpace(offer.SourceID)
+	if sourceID == "" {
+		return false
+	}
+	return sourceID == strings.TrimSpace(state.DecisionID) ||
+		sourceID == strings.TrimSpace(state.ActionProposal.ID) ||
+		sourceID == strings.TrimSpace(state.ApprovalBundle.ID) ||
+		sourceID == strings.TrimSpace(state.ActionProposal.OperationID)
+}
+
+func approvalWindowContinuationSubject(state session.ContinuationState) string {
+	title := continuationUserFacingPlanTitle(state)
+	phase := continuationUserFacingPhaseLabel(state)
+	if phase != "" && title != "" {
+		return strings.ToLower(phase) + " for " + title
+	}
+	if phase != "" {
+		return strings.ToLower(phase)
+	}
+	return title
+}
+
+func approvalWindowDecisionSubject(rec session.PendingDecisionRecord) string {
+	summary := strings.TrimSpace(decisionprojection.DecisionSummary(rec.Kind, rec.Prompt, rec.Details))
+	summary = strings.TrimPrefix(summary, "I’d like to ")
+	summary = strings.TrimPrefix(summary, "I'd like to ")
+	summary = strings.TrimSpace(strings.TrimRight(summary, "."))
+	if summary == "" {
+		summary = strings.TrimSpace(rec.Prompt)
+	}
+	runes := []rune(summary)
+	if len(runes) > 72 {
+		summary = strings.TrimSpace(string(runes[:72])) + "..."
+	}
+	return summary
 }
 
 func renderApprovalWindowCanceled(leases []session.OperatorAutoApprovalLease, overrides []session.OperatorAutonomyOverride, now time.Time) string {
