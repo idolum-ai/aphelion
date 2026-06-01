@@ -5,6 +5,7 @@ package doctor
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -31,6 +32,11 @@ func (r *Runtime) writeDoctorTelegramThreads(b *strings.Builder, key session.Ses
 		WriteKV(b, "telegram_thread_promotion_handoffs_error", err.Error())
 	}
 	WriteKV(b, "telegram_thread_promotion_handoffs_count", strconv.Itoa(len(handoffByThread)))
+	if reminders, err := r.store.ListTelegramThreadReminders(key.ChatID, session.TelegramThreadReminderStatusPending, 100); err == nil {
+		WriteKV(b, "telegram_thread_reminders_pending", strconv.Itoa(len(reminders)))
+	} else {
+		WriteKV(b, "telegram_thread_reminders_error", err.Error())
+	}
 	for _, thread := range threads {
 		parts := []string{
 			"visible=" + strconv.FormatInt(thread.DisplaySlot, 10),
@@ -43,6 +49,20 @@ func (r *Runtime) writeDoctorTelegramThreads(b *strings.Builder, key session.Ses
 		}
 		if !thread.LastActivityAt.IsZero() {
 			parts = append(parts, "last_activity="+thread.LastActivityAt.UTC().Format(TimeFormat))
+		}
+		eligibility := thread.ReminderEligibility(time.Now().UTC(), session.DefaultTelegramThreadReminderPolicy())
+		parts = append(parts,
+			"reminder_eligible="+strconv.FormatBool(eligibility.Eligible),
+			"reminder_reason="+strings.TrimSpace(eligibility.Reason),
+			"reminder_summary="+strings.TrimSpace(eligibility.SummaryKind),
+		)
+		if reminders, err := r.store.ListTelegramThreadReminders(key.ChatID, session.TelegramThreadReminderStatusPending, 100); err == nil {
+			for _, reminder := range reminders {
+				if reminder.ThreadID == thread.ThreadID {
+					parts = append(parts, "reminder_pending_message="+strconv.FormatInt(reminder.MessageID, 10))
+					break
+				}
+			}
 		}
 		if name := strings.TrimSpace(thread.ArchivedDisplayName); name != "" {
 			parts = append(parts, "archived_display_name="+strconv.Quote(name))

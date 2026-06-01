@@ -8,6 +8,7 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func (s *stubCommandRouter) QueueReinstall(ctx context.Context, msg core.InboundMessage) error {
@@ -78,6 +79,44 @@ func (s *stubCommandRouter) RecordTelegramThreadGuideMessage(chatID int64, threa
 	return nil
 }
 
+func (s *stubCommandRouter) RecordTelegramThreadReminderMessage(chatID int64, threadID int64, messageID int64, summary string, summaryKind string, _ time.Time, createdBySenderID int64) error {
+	s.threadReminderChatID = chatID
+	s.threadReminderID = threadID
+	s.threadReminderMessageID = messageID
+	s.threadReminderSummary = summary
+	s.threadReminderSummaryKind = summaryKind
+	s.threadReminderSenderID = createdBySenderID
+	return s.threadReminderErr
+}
+
+func (s *stubCommandRouter) IgnoreTelegramThreadReminder(_ context.Context, chatID int64, senderID int64, threadID int64, messageID int64) (string, error) {
+	s.ignoreReminderChatID = chatID
+	s.ignoreReminderSenderID = senderID
+	s.ignoreReminderThreadID = threadID
+	s.ignoreReminderMessageID = messageID
+	if s.ignoreReminderErr != nil {
+		return "", s.ignoreReminderErr
+	}
+	if strings.TrimSpace(s.ignoreReminderReturn) != "" {
+		return s.ignoreReminderReturn, nil
+	}
+	return "Ignored reminder for thread.", nil
+}
+
+func (s *stubCommandRouter) AbsorbTelegramThreadReminder(_ context.Context, chatID int64, senderID int64, threadID int64, messageID int64) (string, error) {
+	s.absorbReminderChatID = chatID
+	s.absorbReminderSenderID = senderID
+	s.absorbReminderThreadID = threadID
+	s.absorbReminderMessageID = messageID
+	if s.absorbReminderErr != nil {
+		return "", s.absorbReminderErr
+	}
+	if strings.TrimSpace(s.absorbReminderReturn) != "" {
+		return s.absorbReminderReturn, nil
+	}
+	return "Absorbed thread from reminder.", nil
+}
+
 func (s *stubCommandRouter) RecordTelegramThreadCallbackMessage(chatID int64, threadID int64, messageID int64, surface string) error {
 	s.threadCallbackChatID = chatID
 	s.threadCallbackID = threadID
@@ -140,6 +179,12 @@ func (s *stubCommandRouter) TelegramThread(chatID int64, threadID int64) (sessio
 	return session.TelegramThread{ChatID: chatID, ThreadID: threadID, Status: session.TelegramThreadStatusOpen}, true, nil
 }
 
+func (s *stubCommandRouter) MarkTelegramThreadReminderResumed(chatID int64, replyMessageID int64) error {
+	s.threadReminderChatID = chatID
+	s.threadReminderMessageID = replyMessageID
+	return nil
+}
+
 func (s *stubCommandRouter) TelegramThreadForReplyMessage(chatID int64, replyMessageID int64) (session.TelegramThread, bool, error) {
 	s.threadReplyChatID = chatID
 	s.threadReplyMessageID = replyMessageID
@@ -158,6 +203,16 @@ func (s *stubCommandRouter) TelegramThreads(chatID int64) ([]session.TelegramThr
 		return nil, s.threadsErr
 	}
 	return append([]session.TelegramThread(nil), s.threadsReturn...), nil
+}
+
+func (s *stubCommandRouter) TelegramThreadReminders(chatID int64, status session.TelegramThreadReminderStatus, limit int) ([]session.TelegramThreadReminder, error) {
+	s.threadRemindersChatID = chatID
+	s.threadRemindersStatus = status
+	s.threadRemindersLimit = limit
+	if s.threadRemindersErr != nil {
+		return nil, s.threadRemindersErr
+	}
+	return append([]session.TelegramThreadReminder(nil), s.threadRemindersReturn...), nil
 }
 
 func (s *stubCommandRouter) QueueTelegramThreadSummary(_ context.Context, msg core.InboundMessage) (string, error) {

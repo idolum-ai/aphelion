@@ -35,6 +35,9 @@ func (r *Runtime) StatusDiagnostics(chatID int64) ([]string, error) {
 			lines = append(lines, "Last error: "+truncateStatusDiagnostic(errorText, 180)+".")
 		}
 	}
+	if perception := chatSnapshot.LatestPerceptionBudget; perception != nil {
+		lines = append(lines, "Perception budget: "+summarizePerceptionBudgetStatus(*perception)+".")
+	}
 	if continuation := chatSnapshot.Continuation; continuation != nil {
 		status := strings.ToLower(strings.TrimSpace(continuation.Status))
 		if status == "pending" || status == "approved" || status == "revoked" {

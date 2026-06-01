@@ -18,6 +18,7 @@ type statusReadableFacts struct {
 	ActiveTurns    int
 	QueuedChats    int
 	QueueDepth     int
+	MaxQueueDepth  int
 	PendingItems   int
 	ActionItems    int
 	BacklogItems   int
@@ -56,12 +57,14 @@ func statusReadableFactsFromChat(view statusView, snapshot core.ChatStatusSnapsh
 
 func statusReadableFactsFromSystem(view statusView, snapshot core.SystemStatusSnapshot) statusReadableFacts {
 	facts := statusReadableFacts{
-		View:         normalizeStatusReadableFactsView(view),
-		ActiveTurns:  snapshot.ActiveTurnCount,
-		QueuedChats:  len(snapshot.QueueDepthByChat),
-		PendingItems: len(snapshot.PendingItems),
-		StaleRunning: len(snapshot.StaleRunningTurns),
-		HotChats:     len(snapshot.HotChats),
+		View:          normalizeStatusReadableFactsView(view),
+		ActiveTurns:   snapshot.ActiveTurnCount,
+		QueuedChats:   len(snapshot.QueueDepthByChat),
+		QueueDepth:    snapshot.TotalQueuedMessages,
+		MaxQueueDepth: snapshot.MaxQueueDepth,
+		PendingItems:  len(snapshot.PendingItems),
+		StaleRunning:  len(snapshot.StaleRunningTurns),
+		HotChats:      len(snapshot.HotChats),
 	}
 	switch view {
 	case statusViewHotChats:
@@ -121,6 +124,7 @@ func (f statusReadableFacts) providerInput() string {
 		fmt.Sprintf("active_turns=%d", f.ActiveTurns),
 		fmt.Sprintf("queued_chats=%d", f.QueuedChats),
 		fmt.Sprintf("queue_depth=%d", f.QueueDepth),
+		fmt.Sprintf("max_queue_depth=%d", f.MaxQueueDepth),
 		fmt.Sprintf("pending_items=%d", f.PendingItems),
 		fmt.Sprintf("action_items=%d", f.ActionItems),
 		fmt.Sprintf("backlog_items=%d", f.BacklogItems),

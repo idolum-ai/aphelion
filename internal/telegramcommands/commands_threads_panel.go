@@ -202,6 +202,8 @@ func renderTelegramThreadDetailAt(thread session.TelegramThread, now time.Time) 
 	} else {
 		details = append(details, "Last active: unknown")
 	}
+	eligibility := thread.ReminderEligibility(now, session.DefaultTelegramThreadReminderPolicy())
+	details = append(details, fmt.Sprintf("Reminder eligibility: %s", telegramThreadReminderEligibilityLine(eligibility)))
 	details = append(details,
 		"Promote: draft a durable handoff from this lane.",
 		"Absorb: close the lane and record a main-chat note.",
@@ -292,4 +294,23 @@ func telegramThreadsHasNonOpen(threads []session.TelegramThread) bool {
 		}
 	}
 	return false
+}
+
+func telegramThreadReminderEligibilityLine(eligibility session.TelegramThreadReminderEligibility) string {
+	parts := []string{"reason=" + eligibility.Reason}
+	if eligibility.Eligible {
+		parts = append(parts, "eligible=true")
+	} else {
+		parts = append(parts, "eligible=false")
+	}
+	if eligibility.Age > 0 {
+		parts = append(parts, "age="+eligibility.Age.Truncate(time.Minute).String())
+	}
+	if eligibility.StaleAfter > 0 {
+		parts = append(parts, "threshold="+eligibility.StaleAfter.Truncate(time.Minute).String())
+	}
+	if strings.TrimSpace(eligibility.SummaryKind) != "" {
+		parts = append(parts, "summary="+strings.TrimSpace(eligibility.SummaryKind))
+	}
+	return strings.Join(parts, " ")
 }

@@ -109,14 +109,60 @@ func TestBuildFacePromptIncludesIdolumFilesAndOrder(t *testing.T) {
 	stableIdx := strings.Index(got, "## Stable Face Files")
 	awarenessIdx := strings.Index(got, "## Delivery Awareness")
 	agencyIdx := strings.Index(got, "## Agency And Telos")
+	routeIdx := strings.Index(got, "## Route / Scene Contract")
 	dynamicIdx := strings.Index(got, "## Dynamic Face Files")
 	floorIdx := strings.Index(got, "## Execution Facts Fallback")
 	userIdx := strings.Index(got, "## Latest User Message")
-	if awarenessIdx == -1 || agencyIdx == -1 || stableIdx == -1 || dynamicIdx == -1 || floorIdx == -1 || userIdx == -1 {
+	if awarenessIdx == -1 || agencyIdx == -1 || routeIdx == -1 || stableIdx == -1 || dynamicIdx == -1 || floorIdx == -1 || userIdx == -1 {
 		t.Fatalf("face prompt missing expected layered sections: %q", got)
 	}
-	if !(awarenessIdx < agencyIdx && agencyIdx < stableIdx && stableIdx < dynamicIdx && dynamicIdx < floorIdx && floorIdx < userIdx) {
+	if !(awarenessIdx < agencyIdx && agencyIdx < routeIdx && routeIdx < stableIdx && stableIdx < dynamicIdx && dynamicIdx < floorIdx && floorIdx < userIdx) {
 		t.Fatalf("face prompt sections are out of order: %q", got)
+	}
+}
+
+func TestBuildFacePromptIncludesRoutedSceneContract(t *testing.T) {
+	t.Parallel()
+
+	got := BuildFacePrompt(FaceRequest{
+		GovernorName:    DefaultGovernorName,
+		FaceName:        "Idolum",
+		Channel:         "telegram",
+		Scene:           "architecture-exploration",
+		LatestUserInput: "How should face contracts work?",
+	})
+
+	for _, want := range []string{
+		"## Route / Scene Contract",
+		"- active_scene: architecture_exploration",
+		"The active route chooses the scene contract before semantic memory",
+		"Active scene purpose: develop the user's architecture idea",
+		"Route beats retrieval",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("face prompt missing routed scene text %q: %q", want, got)
+		}
+	}
+}
+
+func TestBuildFacePromptInfersCompletionSceneFromMaterialFacts(t *testing.T) {
+	t.Parallel()
+
+	got := BuildFacePrompt(FaceRequest{
+		GovernorName:    DefaultGovernorName,
+		FaceName:        "Idolum",
+		Channel:         "telegram",
+		MaterialFloor:   core.MaterialPacket{Facts: []string{"The branch was pushed."}, Commitments: []string{"Stop before merge."}},
+		LatestUserInput: "What happened?",
+	})
+
+	for _, want := range []string{
+		"- active_scene: completion_report",
+		"Active scene purpose: report completed work",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("face prompt missing inferred completion scene text %q: %q", want, got)
+		}
 	}
 }
 
@@ -240,14 +286,24 @@ func TestBuildFacePromptBlocksMarksStableBoundaryForCaching(t *testing.T) {
 		},
 	})
 
-	if len(blocks) < 5 {
-		t.Fatalf("block count = %d, want at least 5", len(blocks))
+	stableIdx := -1
+	dynamicIdx := -1
+	for i, block := range blocks {
+		if strings.Contains(block.Text, "## Stable Face Files") {
+			stableIdx = i
+		}
+		if strings.Contains(block.Text, "## Dynamic Face Files") {
+			dynamicIdx = i
+		}
 	}
-	if !blocks[3].CacheBreakpoint {
-		t.Fatalf("stable face files block should be cache breakpoint: %#v", blocks[3])
+	if stableIdx == -1 || dynamicIdx == -1 {
+		t.Fatalf("missing stable/dynamic face file blocks: %#v", blocks)
 	}
-	if blocks[4].CacheBreakpoint {
-		t.Fatalf("dynamic face block should not be cache breakpoint: %#v", blocks[4])
+	if !blocks[stableIdx].CacheBreakpoint {
+		t.Fatalf("stable face files block should be cache breakpoint: %#v", blocks[stableIdx])
+	}
+	if blocks[dynamicIdx].CacheBreakpoint {
+		t.Fatalf("dynamic face block should not be cache breakpoint: %#v", blocks[dynamicIdx])
 	}
 }
 

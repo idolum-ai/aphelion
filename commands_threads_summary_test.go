@@ -13,6 +13,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/internal/telegramcontrol"
+	"github.com/idolum-ai/aphelion/router"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
@@ -88,7 +89,7 @@ func TestQueueTelegramThreadSummaryRoutesMainThreadEvidence(t *testing.T) {
 	}
 
 	var routed core.InboundMessage
-	router := core.NewRouter(func(_ context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
+	router := router.NewRouter(func(_ context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		routed = msg
 		return &core.TurnResult{}, nil
 	})
@@ -163,7 +164,7 @@ func TestQueueTelegramThreadSummarySuppressesDuplicateCallbackWork(t *testing.T)
 
 	started := make(chan core.InboundMessage, 3)
 	release := make(chan struct{})
-	router := core.NewRouter(func(ctx context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
+	router := router.NewRouter(func(ctx context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		started <- msg
 		select {
 		case <-ctx.Done():

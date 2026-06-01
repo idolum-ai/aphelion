@@ -22,6 +22,8 @@ Current implemented tool surface:
 - role-aware sandbox policy for non-admin and durable execution
 - narrow external `process`/`subprocess` manifests behind install/audit/probe,
   grant, drift, and rollback checks
+  (see [`external-tools/README.md`](../external-tools/README.md) for the
+  package-local orientation)
 
 The security floor matters here:
 

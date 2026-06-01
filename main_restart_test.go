@@ -14,6 +14,7 @@ import (
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/router"
 	"github.com/idolum-ai/aphelion/runtime"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -258,7 +259,7 @@ func TestTelegramCommandControlStopFlushesMemoryOnBoundaryWhenConfigured(t *test
 	}
 
 	control := telegramCommandControl{
-		router: core.NewRouter(rt.AgentFunc()),
+		router: router.NewRouter(rt.AgentFunc()),
 		rt:     rt,
 	}
 	control.Stop(chatID)

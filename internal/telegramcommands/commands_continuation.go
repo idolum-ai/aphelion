@@ -17,14 +17,16 @@ const staleContinuationCallbackText = "This continuation prompt is no longer act
 const continuationCallbackFailureText = "Continuation action failed. Check /health diagnose for details."
 
 const (
-	continuationActionApproveLease = "approve_lease"
-	continuationActionContinueOnce = "continue_once"
-	continuationActionAskEdit      = "ask_edit"
-	continuationActionStop         = "stop"
-	continuationActionStopPark     = "stop_park"
-	continuationActionResumeEdge   = "resume_edge"
-	continuationActionAskNextLease = "ask_next_lease"
-	continuationActionStatusOnly   = "status_only"
+	continuationActionApproveLease         = "approve_lease"
+	continuationActionApproveBundleAll     = "approve_bundle_all"
+	continuationActionApproveBundleCurrent = "approve_bundle_current"
+	continuationActionContinueOnce         = "continue_once"
+	continuationActionAskEdit              = "ask_edit"
+	continuationActionStop                 = "stop"
+	continuationActionStopPark             = "stop_park"
+	continuationActionResumeEdge           = "resume_edge"
+	continuationActionAskNextLease         = "ask_next_lease"
+	continuationActionStatusOnly           = "status_only"
 )
 
 func encodeContinuationCallbackData(decisionID string, action string) string {
@@ -52,6 +54,10 @@ func normalizeContinuationCallbackAction(action string) string {
 	switch strings.ToLower(strings.TrimSpace(action)) {
 	case continuationActionApproveLease, "approve-lease":
 		return continuationActionApproveLease
+	case continuationActionApproveBundleAll, "approve-bundle-all", "approve_all", "approve-all":
+		return continuationActionApproveBundleAll
+	case continuationActionApproveBundleCurrent, "approve-bundle-current", "approve_current", "approve-current", "approve-subset":
+		return continuationActionApproveBundleCurrent
 	case continuationActionContinueOnce, "continue-once":
 		return continuationActionContinueOnce
 	case continuationActionAskEdit, "ask-edit", "edit":
@@ -82,7 +88,7 @@ func continuationCallbackMatchesState(state session.ContinuationState, decisionI
 		return false
 	}
 	switch action {
-	case continuationActionApproveLease, continuationActionContinueOnce:
+	case continuationActionApproveLease, continuationActionApproveBundleAll, continuationActionApproveBundleCurrent, continuationActionContinueOnce:
 		return state.Status == session.ContinuationStatusPending && state.RemainingTurns > 0
 	case continuationActionAskEdit:
 		return state.Status == session.ContinuationStatusPending
@@ -131,6 +137,10 @@ func renderContinuationDecision(state session.ContinuationState, action string) 
 	switch normalizeContinuationCallbackAction(action) {
 	case continuationActionApproveLease:
 		return renderContinuationApprovedDecision(state, "Continuation approved.")
+	case continuationActionApproveBundleAll:
+		return renderContinuationApprovedDecision(state, "Approval bundle approved: all currently sealed phase tokens are available when each phase becomes current.")
+	case continuationActionApproveBundleCurrent:
+		return renderContinuationApprovedDecision(state, "Current phase approved. Later bundled phases were deferred and will need a fresh prompt before use.")
 	case continuationActionContinueOnce:
 		return renderContinuationApprovedDecision(state, "Continuing once under your approval.")
 	case continuationActionAskEdit:
@@ -167,7 +177,9 @@ func renderContinuationCallbackError(state session.ContinuationState, err error)
 	switch {
 	case errors.Is(err, core.ErrContinuationExpired):
 		return renderContinuationEdgeStatus(state, "Continuation request expired before approval.")
-	case errors.Is(err, core.ErrContinuationNotPending), errors.Is(err, core.ErrContinuationNoTurns), errors.Is(err, core.ErrContinuationStale):
+	case errors.Is(err, core.ErrContinuationStale):
+		return renderContinuationEdgeStatus(state, "Continuation prompt is stale. Use the newest prompt; old buttons cannot approve a changed plan.")
+	case errors.Is(err, core.ErrContinuationNotPending), errors.Is(err, core.ErrContinuationNoTurns):
 		return renderContinuationEdgeStatus(state, "Continuation prompt is no longer active.")
 	default:
 		return renderContinuationEdgeStatus(state, "Continuation action failed.")
@@ -222,6 +234,9 @@ func renderContinuationEdgeStatus(state session.ContinuationState, prefix string
 
 func renderContinuationScopeDetails(state session.ContinuationState, prefix string) string {
 	state = session.NormalizeContinuationState(state)
+	if continuationStateHasApprovalBundle(state) {
+		return renderContinuationApprovalBundleDetails(state, prefix)
+	}
 	if continuationStateIsPlanBudget(state) {
 		return renderContinuationPlanBudgetDetails(state, prefix)
 	}
@@ -271,6 +286,55 @@ func continuationStateIsPlanBudget(state session.ContinuationState) bool {
 		actionListContainsMain(state.ContinuationLease.AllowedActions, "approve_operation_plan_lease")
 }
 
+func renderContinuationApprovalBundleDetails(state session.ContinuationState, prefix string) string {
+	lines := continuationScopeDetailLines(state, prefix)
+	bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle)
+	if len(bundle.Phases) > 0 {
+		lines = append(lines, "Approval bundle: sealed per-phase tokens, not a blank check.")
+		lines = append(lines, "Approve all: approve the currently sealed tokens; each phase is consumed only when it becomes current.")
+		lines = append(lines, "Approve current: approve only the current token and defer later bundled phases for a fresh prompt.")
+		lines = append(lines, "Stale prompt rule: if the phase plan or authority envelope changes, old buttons cannot approve it.")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func continuationScopeDetailLines(state session.ContinuationState, prefix string) []string {
+	state = session.NormalizeContinuationState(state)
+	proposal := session.NormalizeActionProposal(state.ActionProposal)
+	lease := session.NormalizeContinuationLease(state.ContinuationLease)
+	lines := []string{strings.TrimSpace(prefix)}
+	if lines[0] == "" {
+		lines[0] = "Lease scope details."
+	}
+	if state.Status != "" {
+		lines = append(lines, "Status: "+string(state.Status))
+	}
+	if state.Objective != "" {
+		lines = append(lines, "Objective: "+state.Objective)
+	}
+	if state.StageSummary != "" {
+		lines = append(lines, "Next: "+state.StageSummary)
+	}
+	if proposal.Summary != "" {
+		lines = append(lines, "Proposal: "+proposal.Summary)
+	}
+	if proposal.WhyNow != "" {
+		lines = append(lines, "Why now: "+proposal.WhyNow)
+	}
+	if proposal.BoundedEffect != "" {
+		lines = append(lines, "Bounded effect: "+proposal.BoundedEffect)
+	}
+	if allowed := firstNonEmptyContinuationCommandList(proposal.AllowedActions, lease.AllowedActions); len(allowed) > 0 {
+		lines = append(lines, "Allowed actions: "+strings.Join(allowed, ", "))
+	}
+	if forbidden := firstNonEmptyContinuationCommandList(proposal.ForbiddenActions, lease.ForbiddenActions); len(forbidden) > 0 {
+		lines = append(lines, "Forbidden actions: "+strings.Join(forbidden, ", "))
+	}
+	if validations := firstNonEmptyContinuationCommandList(proposal.ValidationPlan, lease.ValidationPlan); len(validations) > 0 {
+		lines = append(lines, "Validation: "+strings.Join(validations, "; "))
+	}
+	return lines
+}
 func renderContinuationPlanBudgetDetails(state session.ContinuationState, prefix string) string {
 	state = session.NormalizeContinuationState(state)
 	lines := []string{strings.TrimSpace(prefix)}

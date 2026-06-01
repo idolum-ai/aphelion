@@ -5,6 +5,7 @@ package tool
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -94,20 +95,21 @@ func parseOperationPhaseInputs(inputs []updateOperationPhaseInput) ([]session.Op
 func parseOperationPhaseInput(in updateOperationPhaseInput) (session.OperationPhase, error) {
 	inputID := strings.TrimSpace(in.ID)
 	phase := session.OperationPhase{
-		ID:                 inputID,
-		Summary:            strings.TrimSpace(in.Summary),
-		AuthorityClass:     strings.TrimSpace(in.AuthorityClass),
-		WhyNow:             strings.TrimSpace(in.WhyNow),
-		BoundedEffect:      strings.TrimSpace(in.BoundedEffect),
-		AllowedActions:     append([]string(nil), in.AllowedActions...),
-		ForbiddenActions:   append([]string(nil), in.ForbiddenActions...),
-		ValidationPlan:     append([]string(nil), in.ValidationPlan...),
-		GateLevel:          strings.TrimSpace(in.GateLevel),
-		GateReasonCode:     strings.TrimSpace(in.GateReasonCode),
-		ApprovalSubject:    strings.TrimSpace(in.ApprovalSubject),
-		BlockedReasonCode:  strings.TrimSpace(in.BlockedReasonCode),
-		SupersedesPhaseIDs: append([]string(nil), in.SupersedesPhaseIDs...),
-		LeaseID:            strings.TrimSpace(in.LeaseID),
+		ID:                       inputID,
+		Summary:                  strings.TrimSpace(in.Summary),
+		AuthorityClass:           strings.TrimSpace(in.AuthorityClass),
+		WhyNow:                   strings.TrimSpace(in.WhyNow),
+		BoundedEffect:            strings.TrimSpace(in.BoundedEffect),
+		AllowedActions:           append([]string(nil), in.AllowedActions...),
+		ForbiddenActions:         append([]string(nil), in.ForbiddenActions...),
+		ValidationPlan:           append([]string(nil), in.ValidationPlan...),
+		RequiredCapabilityGrants: parseCapabilityGrantSpecInputs(in.RequiredCapabilityGrants),
+		GateLevel:                strings.TrimSpace(in.GateLevel),
+		GateReasonCode:           strings.TrimSpace(in.GateReasonCode),
+		ApprovalSubject:          strings.TrimSpace(in.ApprovalSubject),
+		BlockedReasonCode:        strings.TrimSpace(in.BlockedReasonCode),
+		SupersedesPhaseIDs:       append([]string(nil), in.SupersedesPhaseIDs...),
+		LeaseID:                  strings.TrimSpace(in.LeaseID),
 	}
 	if in.AutoApproveEligible != nil {
 		value := *in.AutoApproveEligible
@@ -128,6 +130,9 @@ func parseOperationPhaseInput(in updateOperationPhaseInput) (session.OperationPh
 			return session.OperationPhase{}, fmt.Errorf("update_operation phase status must be pending, in_progress, or completed")
 		}
 	}
+	if len(in.RequiredCapabilityGrants) > 0 {
+		phase.RequiredCapabilityGrants = parseCapabilityGrantSpecInputs(in.RequiredCapabilityGrants)
+	}
 	if in.RequiresApproval != nil {
 		phase.RequiresApproval = *in.RequiresApproval
 	} else if phase.Status != session.PlanStatusCompleted {
@@ -142,6 +147,33 @@ func parseOperationPhaseInput(in updateOperationPhaseInput) (session.OperationPh
 		phase.ID = ""
 	}
 	return phase, nil
+}
+
+func parseCapabilityGrantSpecInputs(inputs []capabilityGrantSpecInput) []session.CapabilityGrantSpec {
+	specs := make([]session.CapabilityGrantSpec, 0, len(inputs))
+	for _, in := range inputs {
+		spec := session.CapabilityGrantSpec{
+			RequestID:      strings.TrimSpace(in.RequestID),
+			GrantID:        strings.TrimSpace(in.GrantID),
+			Kind:           session.CapabilityKind(in.Kind),
+			TargetResource: strings.TrimSpace(in.TargetResource),
+			GrantedTo:      strings.TrimSpace(in.GrantedTo),
+			AllowedActions: append([]string(nil), in.AllowedActions...),
+		}
+		if len(in.Contract) > 0 {
+			spec.Contract = strings.TrimSpace(string(in.Contract))
+		}
+		if len(in.Constraints) > 0 {
+			spec.Constraints = strings.TrimSpace(string(in.Constraints))
+		}
+		if raw := strings.TrimSpace(in.ExpiresAt); raw != "" {
+			if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+				spec.ExpiresAt = t.UTC()
+			}
+		}
+		specs = append(specs, spec)
+	}
+	return session.NormalizeCapabilityGrantSpecs(specs)
 }
 
 func mergeOperationPhaseInput(current session.OperationPhase, in updateOperationPhaseInput) (session.OperationPhase, error) {
@@ -204,6 +236,9 @@ func mergeOperationPhaseInput(current session.OperationPhase, in updateOperation
 	}
 	if in.StaleAuthority != nil {
 		phase.StaleAuthority = *in.StaleAuthority
+	}
+	if len(in.RequiredCapabilityGrants) > 0 {
+		phase.RequiredCapabilityGrants = parseCapabilityGrantSpecInputs(in.RequiredCapabilityGrants)
 	}
 	if in.RequiresApproval != nil {
 		phase.RequiresApproval = *in.RequiresApproval

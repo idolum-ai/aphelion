@@ -43,6 +43,7 @@ type commandRouter interface {
 	RevokeTailnetSurface(ctx context.Context, senderID int64, surfaceID string, reason string) (core.TailnetSurfaceStatus, bool, error)
 	ContinuationState(chatID int64) (session.ContinuationState, error)
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
+	ApproveContinuationBundle(chatID int64, approverID int64, phaseIDs []string) (session.ContinuationState, error)
 	StopContinuation(chatID int64) (core.StopResult, error)
 	TriggerContinuation(ctx context.Context, chatID int64) error
 	QueueReinstall(ctx context.Context, msg core.InboundMessage) error

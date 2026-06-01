@@ -24,6 +24,19 @@ func RenderTelegramStatusSystem(snapshot core.SystemStatusSnapshot, personaEffor
 	if providerLine := renderProviderHealthLine(snapshot.ProviderHealth); providerLine != "" {
 		lines = append(lines, providerLine)
 	}
+	if snapshot.TotalQueuedMessages > 0 {
+		line := fmt.Sprintf("router_health queued_messages=%d max_queue_depth=%d", snapshot.TotalQueuedMessages, snapshot.MaxQueueDepth)
+		if snapshot.MaxQueueDepthChatID != 0 {
+			line += fmt.Sprintf(" max_queue_chat_id=%d", snapshot.MaxQueueDepthChatID)
+		}
+		if snapshot.OldestQueuedAge > 0 {
+			line += fmt.Sprintf(" oldest_queued_age=%s", snapshot.OldestQueuedAge.Truncate(time.Second))
+			if snapshot.OldestQueuedChatID != 0 {
+				line += fmt.Sprintf(" oldest_queued_chat_id=%d", snapshot.OldestQueuedChatID)
+			}
+		}
+		lines = append(lines, line)
+	}
 	if len(snapshot.QueueDepthByChat) > 0 {
 		queueKeys := make([]int64, 0, len(snapshot.QueueDepthByChat))
 		for chatID := range snapshot.QueueDepthByChat {

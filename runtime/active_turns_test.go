@@ -86,3 +86,24 @@ func TestWaitForCancelledTurnRunsTimesOutWhenTurnDoesNotUnregister(t *testing.T)
 	}
 	_ = ctx
 }
+
+func TestCancelActiveTurnRunCancelsRegisteredRun(t *testing.T) {
+	t.Parallel()
+
+	rt := &Runtime{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rt.registerActiveTurn(404, cancel)
+
+	if !rt.CancelActiveTurnRun(404) {
+		t.Fatal("CancelActiveTurnRun() = false, want true for active run")
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("context was not cancelled")
+	}
+	if rt.CancelActiveTurnRun(405) {
+		t.Fatal("CancelActiveTurnRun() = true for unknown run, want false")
+	}
+}

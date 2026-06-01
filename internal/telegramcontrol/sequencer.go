@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/router"
 )
 
 const (
@@ -19,7 +20,7 @@ const (
 var errIngressWorkerRetired = errors.New("ingress worker retired")
 
 type IngressSequencer struct {
-	router      *core.Router
+	router      *router.Router
 	turnTimeout time.Duration
 	idleTTL     time.Duration
 
@@ -28,7 +29,7 @@ type IngressSequencer struct {
 	dropHandler func([]core.InboundMessage)
 }
 
-func NewIngressSequencer(router *core.Router, turnTimeout time.Duration) *IngressSequencer {
+func NewIngressSequencer(router *router.Router, turnTimeout time.Duration) *IngressSequencer {
 	if router == nil {
 		return nil
 	}

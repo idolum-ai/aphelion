@@ -50,29 +50,30 @@ type OperationProposal struct {
 }
 
 type OperationPhase struct {
-	ID                  string     `json:"id,omitempty"`
-	OperatorTitle       string     `json:"operator_title,omitempty"`
-	PlanTitle           string     `json:"plan_title,omitempty"`
-	Summary             string     `json:"summary,omitempty"`
-	Status              PlanStatus `json:"status,omitempty"`
-	AuthorityClass      string     `json:"authority_class,omitempty"`
-	WhyNow              string     `json:"why_now,omitempty"`
-	BoundedEffect       string     `json:"bounded_effect,omitempty"`
-	AllowedActions      []string   `json:"allowed_actions,omitempty"`
-	ForbiddenActions    []string   `json:"forbidden_actions,omitempty"`
-	ValidationPlan      []string   `json:"validation_plan,omitempty"`
-	GateLevel           string     `json:"gate_level,omitempty"`
-	GateReasonCode      string     `json:"gate_reason_code,omitempty"`
-	ApprovalSubject     string     `json:"approval_subject,omitempty"`
-	AutoApproveEligible *bool      `json:"autoapprove_eligible,omitempty"`
-	BlockedReasonCode   string     `json:"blocked_reason_code,omitempty"`
-	RequiresConsent     bool       `json:"requires_consent,omitempty"`
-	RequiresOptIn       bool       `json:"requires_opt_in,omitempty"`
-	SupersedesPhaseIDs  []string   `json:"supersedes_phase_ids,omitempty"`
-	StaleAuthority      bool       `json:"stale_authority,omitempty"`
-	RequiresApproval    bool       `json:"requires_approval,omitempty"`
-	LeaseID             string     `json:"lease_id,omitempty"`
-	CompletedAt         time.Time  `json:"completed_at,omitempty"`
+	ID                       string                `json:"id,omitempty"`
+	OperatorTitle            string                `json:"operator_title,omitempty"`
+	PlanTitle                string                `json:"plan_title,omitempty"`
+	Summary                  string                `json:"summary,omitempty"`
+	Status                   PlanStatus            `json:"status,omitempty"`
+	AuthorityClass           string                `json:"authority_class,omitempty"`
+	WhyNow                   string                `json:"why_now,omitempty"`
+	BoundedEffect            string                `json:"bounded_effect,omitempty"`
+	AllowedActions           []string              `json:"allowed_actions,omitempty"`
+	ForbiddenActions         []string              `json:"forbidden_actions,omitempty"`
+	ValidationPlan           []string              `json:"validation_plan,omitempty"`
+	GateLevel                string                `json:"gate_level,omitempty"`
+	GateReasonCode           string                `json:"gate_reason_code,omitempty"`
+	ApprovalSubject          string                `json:"approval_subject,omitempty"`
+	AutoApproveEligible      *bool                 `json:"autoapprove_eligible,omitempty"`
+	BlockedReasonCode        string                `json:"blocked_reason_code,omitempty"`
+	RequiresConsent          bool                  `json:"requires_consent,omitempty"`
+	RequiresOptIn            bool                  `json:"requires_opt_in,omitempty"`
+	SupersedesPhaseIDs       []string              `json:"supersedes_phase_ids,omitempty"`
+	StaleAuthority           bool                  `json:"stale_authority,omitempty"`
+	RequiresApproval         bool                  `json:"requires_approval,omitempty"`
+	RequiredCapabilityGrants []CapabilityGrantSpec `json:"required_capability_grants,omitempty"`
+	LeaseID                  string                `json:"lease_id,omitempty"`
+	CompletedAt              time.Time             `json:"completed_at,omitempty"`
 }
 
 type OperationPhasePlan struct {

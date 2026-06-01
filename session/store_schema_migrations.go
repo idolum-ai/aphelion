@@ -267,3 +267,10 @@ func migrateSchemaV60ToV61(tx *sql.Tx) error {
 	}
 	return nil
 }
+
+func migrateSchemaV61ToV62(tx *sql.Tx) error {
+	if err := ensureTelegramThreadReminderTables(tx); err != nil {
+		return fmt.Errorf("migrate schema v61 to v62 ensure telegram thread reminders: %w", err)
+	}
+	return nil
+}

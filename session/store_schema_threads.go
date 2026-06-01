@@ -207,3 +207,30 @@ func ensureTelegramCallbackMessageTables(tx *sql.Tx) error {
 	}
 	return nil
 }
+
+func ensureTelegramThreadReminderTables(tx *sql.Tx) error {
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS telegram_thread_reminders (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chat_id INTEGER NOT NULL,
+			thread_id INTEGER NOT NULL,
+			message_id INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'ignored', 'absorbed', 'resumed', 'expired')),
+			summary_text TEXT NOT NULL DEFAULT '',
+			summary_kind TEXT NOT NULL DEFAULT '',
+			source_last_activity_at TEXT,
+			created_by_sender_id INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY(chat_id, thread_id) REFERENCES telegram_threads(chat_id, thread_id) ON DELETE CASCADE
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_telegram_thread_reminders_message ON telegram_thread_reminders(chat_id, message_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_telegram_thread_reminders_thread_status ON telegram_thread_reminders(chat_id, thread_id, status, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_telegram_thread_reminders_status ON telegram_thread_reminders(chat_id, status, updated_at DESC)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("ensure telegram thread reminder table: %w", err)
+		}
+	}
+	return nil
+}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/internal/telegramcontrol"
+	"github.com/idolum-ai/aphelion/router"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
@@ -79,7 +80,7 @@ func TestStoppedQueuedTelegramIngressIsDroppedInsteadOfReplayed(t *testing.T) {
 
 	started := make(chan string, 2)
 	release := make(chan struct{})
-	router := core.NewRouter(func(ctx context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
+	router := router.NewRouter(func(ctx context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		started <- msg.Text
 		if msg.Text == "active" {
 			select {

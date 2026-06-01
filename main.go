@@ -26,6 +26,7 @@ import (
 	"github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/openai"
 	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/router"
 	"github.com/idolum-ai/aphelion/runtime"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
@@ -243,7 +244,7 @@ func run() error {
 		rt.ConfigureVoice(cfg.Voice, transcriber, synth)
 	}
 
-	router := core.NewRouter(rt.AgentFunc())
+	router := router.NewRouter(rt.AgentFunc())
 	router.SetEventHandler(rt.RouterEventHandler())
 	ingress := telegramcontrol.NewIngressSequencer(router, turnTimeout)
 	decisionBroker := telegramdecision.NewBrokerWithSummaryAndUI(
@@ -325,6 +326,7 @@ func run() error {
 	rt.StartDurableWakeLoop(ctx, log.Printf)
 	rt.StartCronLoop(ctx, log.Printf)
 	rt.StartNocturneLoop(ctx, log.Printf)
+	startTelegramThreadReminderSweepLoop(ctx, tgOutbound, commandControl, store)
 
 	telegramHandler := func(parent context.Context, msg core.InboundMessage) error {
 		msg = telegramruntime.RewriteDurableWizardIntent(msg, commandControl)

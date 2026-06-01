@@ -477,3 +477,73 @@ func TestRecordTelegramThreadAbsorbDropsPendingThreadIngress(t *testing.T) {
 		t.Fatalf("absorbed-thread update = %#v, want dropped", record)
 	}
 }
+
+func TestTelegramThreadReminderEligibilityIsPassiveAccounting(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
+	thread := TelegramThread{
+		ChatID:         1001,
+		ThreadID:       7,
+		DisplaySlot:    3,
+		Status:         TelegramThreadStatusOpen,
+		CreatedText:    "call with the therapist",
+		LastActivityAt: now.Add(-25 * time.Hour),
+		CreatedAt:      now.Add(-48 * time.Hour),
+	}
+
+	eligibility := thread.ReminderEligibility(now, DefaultTelegramThreadReminderPolicy())
+	if !eligibility.Eligible || eligibility.Reason != "stale_open_thread" {
+		t.Fatalf("eligibility = %+v, want stale open thread", eligibility)
+	}
+	if eligibility.SummaryKind != "privacy_softened" {
+		t.Fatalf("SummaryKind = %q, want privacy_softened", eligibility.SummaryKind)
+	}
+	if eligibility.Age != 25*time.Hour || eligibility.StaleAfter != 24*time.Hour {
+		t.Fatalf("age/threshold = %s/%s, want 25h/24h", eligibility.Age, eligibility.StaleAfter)
+	}
+
+	fresh := thread
+	fresh.CreatedText = "router observability PR"
+	fresh.LastActivityAt = now.Add(-2 * time.Hour)
+	eligibility = fresh.ReminderEligibility(now, DefaultTelegramThreadReminderPolicy())
+	if eligibility.Eligible || eligibility.Reason != "fresh" || eligibility.SummaryKind != "specific" {
+		t.Fatalf("fresh eligibility = %+v, want ineligible fresh specific", eligibility)
+	}
+
+	closed := thread
+	closed.Status = TelegramThreadStatusClosed
+	eligibility = closed.ReminderEligibility(now, DefaultTelegramThreadReminderPolicy())
+	if eligibility.Eligible || eligibility.Reason != "thread_not_open" {
+		t.Fatalf("closed eligibility = %+v, want thread_not_open", eligibility)
+	}
+}
+
+func TestRecordTelegramThreadReminderRecordsReplyLedgerAndSuppression(t *testing.T) {
+	t.Parallel()
+	store := newTestSQLiteStore(t)
+	now := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
+	thread, _, err := store.CreateTelegramThreadForUpdate(1001, 2002, 301, 401, "call with the therapist", now.Add(-25*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate() err = %v", err)
+	}
+	reminder, err := store.RecordTelegramThreadReminder(1001, thread.ThreadID, 9901, "a personal conversation", "privacy_softened", thread.LastActivityAt, 2002, now)
+	if err != nil {
+		t.Fatalf("RecordTelegramThreadReminder() err = %v", err)
+	}
+	if reminder.Status != TelegramThreadReminderStatusPending || reminder.MessageID != 9901 || reminder.SummaryKind != "privacy_softened" {
+		t.Fatalf("reminder = %+v, want pending privacy-softened reminder", reminder)
+	}
+	threadID, ok, err := store.TelegramThreadIDForReplyMessage(1001, 9901)
+	if err != nil || !ok || threadID != thread.ThreadID {
+		t.Fatalf("TelegramThreadIDForReplyMessage() = %d,%t,%v; want %d,true,nil", threadID, ok, err, thread.ThreadID)
+	}
+	marked, changed, err := store.MarkTelegramThreadReminderStatus(1001, 9901, TelegramThreadReminderStatusIgnored, now.Add(time.Minute))
+	if err != nil || !changed || marked.Status != TelegramThreadReminderStatusIgnored {
+		t.Fatalf("MarkTelegramThreadReminderStatus() = %+v,%t,%v; want ignored change", marked, changed, err)
+	}
+	threadID, ok, err = store.TelegramThreadIDForReplyMessage(1001, 9901)
+	if err != nil || !ok || threadID != thread.ThreadID {
+		t.Fatalf("reply ledger after ignore = %d,%t,%v; want thread retained", threadID, ok, err)
+	}
+}

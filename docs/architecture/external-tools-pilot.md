@@ -6,6 +6,9 @@ loads manifest JSON, enforces the governor lifecycle, executes supported
 domain behavior outside core. This is not a plugin marketplace or a general
 tool platform; unsupported execution modes remain non-callable.
 
+For the package-local orientation and newcomer map, see
+[`external-tools/README.md`](../../external-tools/README.md).
+
 ## Bundled Pilot
 
 The first pilot is `browse_page`, owned by `child-alpha`:

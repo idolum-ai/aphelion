@@ -27,6 +27,7 @@ type RenderRequest struct {
 	FaceName        string
 	Channel         string
 	Mode            string
+	Scene           string
 	Style           string
 	PrincipalRole   string
 	WorkspaceRoot   string
@@ -54,6 +55,7 @@ type ProposalRequest struct {
 	Channel           string
 	Style             string
 	Mode              string
+	Scene             string
 	PrincipalRole     string
 	WorkspaceRoot     string
 	LatestUserInput   string

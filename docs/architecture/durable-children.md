@@ -59,6 +59,10 @@ Code anchors:
   wake bookkeeping do not overwrite each other under concurrent control-plane
   traffic.
 
+Product contract:
+
+- [`docs/architecture/durableagent-product-contract.md`](./durableagent-product-contract.md) tracks the feature inventory, 5/5 maturity rubric, lifecycle seams, and test/doc acceptance matrix for `durableagent/`.
+
 Related requirements:
 
 - [`requirements/durable-agents.md`](../../requirements/durable-agents.md)

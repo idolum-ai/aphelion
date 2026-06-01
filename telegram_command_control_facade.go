@@ -57,8 +57,14 @@ func (c telegramCommandControl) ContinuationStateForMessage(msg core.InboundMess
 func (c telegramCommandControl) ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error) {
 	return c.controlFacade().ApproveContinuation(chatID, approverID)
 }
+func (c telegramCommandControl) ApproveContinuationBundle(chatID int64, approverID int64, phaseIDs []string) (session.ContinuationState, error) {
+	return c.controlFacade().ApproveContinuationBundle(chatID, approverID, phaseIDs)
+}
 func (c telegramCommandControl) ApproveContinuationForMessage(msg core.InboundMessage, approverID int64) (session.ContinuationState, error) {
 	return c.controlFacade().ApproveContinuationForMessage(msg, approverID)
+}
+func (c telegramCommandControl) ApproveContinuationBundleForMessage(msg core.InboundMessage, approverID int64, phaseIDs []string) (session.ContinuationState, error) {
+	return c.controlFacade().ApproveContinuationBundleForMessage(msg, approverID, phaseIDs)
 }
 func (c telegramCommandControl) StopContinuation(chatID int64) (core.StopResult, error) {
 	return c.controlFacade().StopContinuation(chatID)

@@ -36,6 +36,7 @@ type FaceRequest struct {
 	FaceName          string
 	Channel           string
 	Mode              string
+	Scene             string
 	Style             string
 	PrincipalRole     string
 	FloorText         string
@@ -109,6 +110,7 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 			renderGovernorAgencyContextPacket(req.Runtime, principalRole, toolCaps),
 			renderEvidenceRetrievalStopRulesBlock(),
 			renderGovernorTurnSequencingBlock(),
+			renderGovernorJudgmentRouteContractBlock(),
 			renderGovernorAgencyTelosBlock(),
 			renderVisibleRecurrenceContractBlock(req.Runtime),
 			renderGoalContinuityContractBlock(req.Runtime),
@@ -206,6 +208,10 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 	mode := strings.ToLower(strings.TrimSpace(req.Mode))
 	if mode == "" {
 		mode = "render"
+	}
+	scene := normalizeFaceScene(req.Scene)
+	if scene == "" {
+		scene = inferFaceScene(mode, req.MaterialFloor)
 	}
 
 	parts := make([]agent.SystemBlock, 0, 6)
@@ -305,6 +311,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 		parts = append(parts, agent.SystemBlock{Text: modality})
 	}
 	parts = append(parts, agent.SystemBlock{Text: renderFaceAgencyTelosBlock(mode, faceName)})
+	parts = append(parts, agent.SystemBlock{Text: renderFaceRouteContractBlock(mode, scene)})
 
 	if len(req.StableFiles) > 0 {
 		parts = append(parts, agent.SystemBlock{

@@ -1,11 +1,13 @@
 //go:build linux
 
-// Package githubapp owns Aphelion's narrow GitHub App credential helper.
+// Package githubapp is Aphelion's GitHub App credential membrane.
 //
-// It parses configured RSA private keys, signs app JWTs, mints installation
-// tokens through GitHub's App API, validates requested repository/permission
-// scope, and redacts token-shaped output. The package must not decide whether a
-// repository workflow is authorized, persist installation tokens, or broaden a
-// caller's authority. Runtime and CLI callers remain responsible for config,
-// operator intent, and any surrounding approval boundary.
+// It owns local key parsing, JWT signing, installation-token minting,
+// repository/permission scope validation, and token redaction. It does not own
+// PR workflows, git authority, tool invocation, runtime orchestration, session
+// state, or Telegram presentation.
+//
+// Credential availability is not authority: callers must keep token material
+// inside an active bounded grant/lease and should avoid printing tokens unless
+// an explicit operator command requested that output.
 package githubapp

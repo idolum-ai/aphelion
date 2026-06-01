@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/router"
 )
 
 func TestIngressSequencerStopDropsQueuedGenerationAndAllowsNewWork(t *testing.T) {
@@ -17,7 +18,7 @@ func TestIngressSequencerStopDropsQueuedGenerationAndAllowsNewWork(t *testing.T)
 	var mu sync.Mutex
 	handled := []string{}
 	var dropped []core.InboundMessage
-	router := core.NewRouter(func(ctx context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
+	router := router.NewRouter(func(ctx context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		started <- msg.Text
 		if msg.Text == "first" {
 			<-ctx.Done()
@@ -101,7 +102,7 @@ func TestIngressSequencerStopDropsQueuedGenerationAndAllowsNewWork(t *testing.T)
 func TestIngressSequencerSuppressesDuplicateIngressIdentity(t *testing.T) {
 	started := make(chan string, 4)
 	release := make(chan struct{})
-	router := core.NewRouter(func(ctx context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
+	router := router.NewRouter(func(ctx context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		started <- msg.Text
 		if msg.Text == "first" {
 			select {
@@ -167,7 +168,7 @@ func TestIngressSequencerSuppressesDuplicateIngressIdentity(t *testing.T) {
 
 func TestIngressSequencerSnapshotAndIdleRetirement(t *testing.T) {
 	block := make(chan struct{})
-	router := core.NewRouter(func(ctx context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
+	router := router.NewRouter(func(ctx context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		if msg.Text == "first" {
 			select {
 			case <-ctx.Done():

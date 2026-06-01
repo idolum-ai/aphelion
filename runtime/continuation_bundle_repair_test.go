@@ -207,7 +207,7 @@ func TestRenderOperationPhaseBundlePromptIsConciseAndHidesRawLeaseDetails(t *tes
 	}
 	state := continuationStateFromOperationPhaseBundle(opState, opState.PhasePlan.Phases, "continue", time.Now().UTC())
 	text := renderOperationProposalMaterializedPromptFallback(state)
-	for _, want := range []string{"Approval: Inspect approval rendering", "Scope:", "This covers:", "Approve 2 bounded turns?"} {
+	for _, want := range []string{"Approve “Inspect approval rendering” for 2 turns", "Review only continuation prompt rendering", "Covers phase 1: Inspect approval rendering", "phase 2: Patch approval rendering"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("text = %q, want %q", text, want)
 		}
@@ -441,7 +441,7 @@ func TestMaterializePlanBudgetCanDiscloseEscalatedReadOnlyLane(t *testing.T) {
 		labels = continuationButtonLabels(sender.inline[0].rows)
 	}
 	sender.mu.Unlock()
-	if !strings.Contains(inlineText, "Plan: Check nonsecret adapter auth status") || !strings.Contains(inlineText, "Step 1: Check nonsecret adapter auth status") || !strings.Contains(inlineText, "Step 2: Patch local status reporting") {
+	if !strings.Contains(inlineText, "Approve plan for “Check nonsecret adapter auth status”") || !strings.Contains(inlineText, "Step 1: Check nonsecret adapter auth status") || !strings.Contains(inlineText, "Step 2: Patch local status reporting") {
 		t.Fatalf("inline text = %q, want disclosed multi-step plan", inlineText)
 	}
 	if got, want := labels, []string{"Start", "Details", "Change", "Pause", "Stop"}; !equalStringSlices(got, want) {

@@ -31,6 +31,18 @@ type CapabilityRequest struct {
 	UpdatedAt       time.Time              `json:"updated_at,omitempty"`
 }
 
+type CapabilityGrantSpec struct {
+	RequestID      string         `json:"request_id,omitempty"`
+	GrantID        string         `json:"grant_id,omitempty"`
+	Kind           CapabilityKind `json:"kind,omitempty"`
+	TargetResource string         `json:"target_resource,omitempty"`
+	GrantedTo      string         `json:"granted_to,omitempty"`
+	AllowedActions []string       `json:"allowed_actions,omitempty"`
+	Contract       string         `json:"contract,omitempty"`
+	Constraints    string         `json:"constraints,omitempty"`
+	ExpiresAt      time.Time      `json:"expires_at,omitempty"`
+}
+
 type CapabilityReview struct {
 	ReviewID     string                 `json:"review_id"`
 	RequestID    string                 `json:"request_id"`
@@ -154,6 +166,39 @@ func NormalizeCapabilityGrantStatus(status CapabilityGrantStatus) CapabilityGran
 	default:
 		return ""
 	}
+}
+
+func NormalizeCapabilityGrantSpec(spec CapabilityGrantSpec) CapabilityGrantSpec {
+	spec.RequestID = strings.TrimSpace(spec.RequestID)
+	spec.GrantID = strings.TrimSpace(spec.GrantID)
+	spec.Kind = NormalizeCapabilityKind(spec.Kind)
+	spec.TargetResource = strings.TrimSpace(spec.TargetResource)
+	spec.GrantedTo = strings.TrimSpace(spec.GrantedTo)
+	spec.AllowedActions = NormalizeCapabilityActions(spec.AllowedActions)
+	spec.Contract = strings.TrimSpace(spec.Contract)
+	spec.Constraints = strings.TrimSpace(spec.Constraints)
+	if !spec.ExpiresAt.IsZero() {
+		spec.ExpiresAt = spec.ExpiresAt.UTC()
+	}
+	return spec
+}
+
+func NormalizeCapabilityGrantSpecs(specs []CapabilityGrantSpec) []CapabilityGrantSpec {
+	out := make([]CapabilityGrantSpec, 0, len(specs))
+	seen := make(map[string]struct{}, len(specs))
+	for _, spec := range specs {
+		spec = NormalizeCapabilityGrantSpec(spec)
+		if !spec.Active() {
+			continue
+		}
+		key := spec.RequestID + "\x00" + string(spec.Kind) + "\x00" + spec.TargetResource + "\x00" + spec.GrantedTo
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, spec)
+	}
+	return out
 }
 
 func NormalizeCapabilityActions(actions []string) []string {

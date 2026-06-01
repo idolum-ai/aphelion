@@ -14,7 +14,10 @@ import (
 )
 
 type recordingIngressRouter struct {
-	enqueued []core.InboundMessage
+	enqueued             []core.InboundMessage
+	stopForMessageCalls  int
+	stopForMessageMsg    core.InboundMessage
+	stopForMessageResult core.StopResult
 }
 
 func (r *recordingIngressRouter) Status(int64) core.SessionStatus { return core.SessionStatus{} }
@@ -25,8 +28,10 @@ func (r *recordingIngressRouter) Snapshot() core.RouterStatusSnapshot {
 	return core.RouterStatusSnapshot{}
 }
 func (r *recordingIngressRouter) Stop(int64) core.StopResult { return core.StopResult{} }
-func (r *recordingIngressRouter) StopForMessage(core.InboundMessage) core.StopResult {
-	return core.StopResult{}
+func (r *recordingIngressRouter) StopForMessage(msg core.InboundMessage) core.StopResult {
+	r.stopForMessageCalls++
+	r.stopForMessageMsg = msg
+	return r.stopForMessageResult
 }
 func (r *recordingIngressRouter) Enqueue(_ context.Context, msg core.InboundMessage) error {
 	r.enqueued = append(r.enqueued, msg)
@@ -128,5 +133,86 @@ func TestQueueClarificationRecordsRecoverableCallbackWork(t *testing.T) {
 	}
 	if record.Status != session.TelegramIngressUpdateQueued || record.UpdateKind != "callback_memory_clarification" {
 		t.Fatalf("record = %#v, want queued memory clarification callback work", record)
+	}
+}
+
+type stopRunRuntime struct {
+	Runtime
+	cancelRunID int64
+	cancelOK    bool
+}
+
+func (r *stopRunRuntime) CancelActiveTurnRun(runID int64) bool {
+	r.cancelRunID = runID
+	return r.cancelOK
+}
+
+func TestStopRunCancelsRegisteredActiveTurnByRunID(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "control-stop-run.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	key := session.SessionKey{ChatID: 7101}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "long work")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	ingress := &recordingIngressRouter{stopForMessageResult: core.StopResult{QueuedDropped: true}}
+	rt := &stopRunRuntime{cancelOK: true}
+	control := CommandControl{Store: store, Ingress: ingress, Runtime: rt}
+
+	stopped, ok, err := control.StopRun(run.ID, 42)
+	if err != nil {
+		t.Fatalf("StopRun() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("StopRun() ok = false, want true for running run")
+	}
+	if !stopped.ActiveCanceled || !stopped.QueuedDropped {
+		t.Fatalf("StopRun() result = %#v, want active cancellation merged with ingress cleanup", stopped)
+	}
+	if rt.cancelRunID != run.ID {
+		t.Fatalf("cancelRunID = %d, want %d", rt.cancelRunID, run.ID)
+	}
+	if ingress.stopForMessageCalls != 1 {
+		t.Fatalf("StopForMessage calls = %d, want 1", ingress.stopForMessageCalls)
+	}
+	if ingress.stopForMessageMsg.ChatID != key.ChatID || ingress.stopForMessageMsg.SenderID != 42 {
+		t.Fatalf("StopForMessage msg = %#v, want chat %d sender 42", ingress.stopForMessageMsg, key.ChatID)
+	}
+}
+
+func TestStopRunRejectsStaleRunWithoutCancel(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "control-stop-stale-run.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	run, err := store.BeginTurnRun(session.SessionKey{ChatID: 7102}, session.TurnRunKindInteractive, "finished work")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if err := store.CompleteTurnRun(run.ID, session.TurnRunStatusCompleted, ""); err != nil {
+		t.Fatalf("CompleteTurnRun() err = %v", err)
+	}
+	ingress := &recordingIngressRouter{}
+	rt := &stopRunRuntime{cancelOK: true}
+	control := CommandControl{Store: store, Ingress: ingress, Runtime: rt}
+
+	if stopped, ok, err := control.StopRun(run.ID, 42); err != nil || ok || stopped != (core.StopResult{}) {
+		t.Fatalf("StopRun() = (%#v,%v,%v), want zero/false/nil for stale run", stopped, ok, err)
+	}
+	if rt.cancelRunID != 0 {
+		t.Fatalf("cancelRunID = %d, want 0", rt.cancelRunID)
+	}
+	if ingress.stopForMessageCalls != 0 {
+		t.Fatalf("StopForMessage calls = %d, want 0", ingress.stopForMessageCalls)
 	}
 }

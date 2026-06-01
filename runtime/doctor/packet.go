@@ -41,6 +41,13 @@ func (r *Runtime) BuildDiagnosticPacket(ctx context.Context, input DiagnosticInp
 		WriteLine(&b, "provider_health: unavailable")
 	}
 
+	WriteSection(&b, "Perception Budget")
+	if r.writeDoctorPerceptionBudget != nil {
+		r.writeDoctorPerceptionBudget(&b, input.Key, now)
+	} else {
+		WriteLine(&b, "perception_budget: unavailable")
+	}
+
 	WriteSection(&b, "Autonomy")
 	r.writeDoctorAutonomyStatus(&b, input.Key, input.Message.SenderID, now)
 

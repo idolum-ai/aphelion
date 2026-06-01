@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/router"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -77,7 +78,7 @@ func TestTelegramCommandControlQueueReinstallUsesDurableAcceptedRoute(t *testing
 	}
 
 	var routed core.InboundMessage
-	router := core.NewRouter(func(_ context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
+	router := router.NewRouter(func(_ context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		routed = msg
 		return &core.TurnResult{}, nil
 	})
@@ -128,7 +129,7 @@ func TestTelegramCommandControlRouteAcceptedDoesNotRedispatchTerminalIngress(t *
 	}
 
 	routed := false
-	router := core.NewRouter(func(_ context.Context, _ *core.SessionState, _ core.InboundMessage) (*core.TurnResult, error) {
+	router := router.NewRouter(func(_ context.Context, _ *core.SessionState, _ core.InboundMessage) (*core.TurnResult, error) {
 		routed = true
 		return &core.TurnResult{}, nil
 	})

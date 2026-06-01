@@ -110,6 +110,9 @@ func resolveTelegramThreadCommandTarget(ctx context.Context, sender commandSende
 		_, sendErr := sendTelegramThreadText(ctx, sender, msg, fmt.Sprintf("Thread %d is closed. Start a new side thread with `/thread <message>`.", thread.ThreadID))
 		return msg, true, sendErr
 	}
+	if err := threadRouter.MarkTelegramThreadReminderResumed(msg.ChatID, *msg.ReplyTo); err != nil {
+		return msg, true, err
+	}
 	routed := msg
 	routed.TelegramThreadID = thread.ThreadID
 	return routed, false, nil
@@ -135,6 +138,9 @@ func resolveTelegramThreadReply(ctx context.Context, sender commandSender, route
 	if !thread.Open() {
 		_, sendErr := sendTelegramThreadText(ctx, sender, msg, fmt.Sprintf("Thread %d is closed. Start a new side thread with `/thread <message>`.", thread.ThreadID))
 		return msg, true, sendErr
+	}
+	if err := threadRouter.MarkTelegramThreadReminderResumed(msg.ChatID, *msg.ReplyTo); err != nil {
+		return msg, true, err
 	}
 	routed := msg
 	routed.TelegramThreadID = thread.ThreadID

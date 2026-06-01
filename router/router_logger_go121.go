@@ -1,6 +1,6 @@
 //go:build linux && go1.21
 
-package core
+package router
 
 import "log/slog"
 

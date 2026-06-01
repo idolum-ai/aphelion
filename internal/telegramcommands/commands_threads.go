@@ -6,6 +6,7 @@ import (
 	"context"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
@@ -20,6 +21,8 @@ const (
 	telegramThreadPromotionCancelPrefix  = "thread_promo_cancel:"
 	telegramThreadPromotionRefreshPrefix = "thread_promo_refresh:"
 	telegramThreadSummaryCallbackData    = "thread_summary"
+	telegramThreadReminderIgnorePrefix   = "thread_rem_ignore:"
+	telegramThreadReminderAbsorbPrefix   = "thread_rem_absorb:"
 	telegramThreadsPageSize              = 6
 )
 
@@ -29,10 +32,15 @@ type commandThreadRouter interface {
 	CreateTelegramThread(ctx context.Context, msg core.InboundMessage) (session.TelegramThread, error)
 	StartTelegramThreadTarget(ctx context.Context, msg core.InboundMessage, text string) (core.InboundMessage, session.TelegramThread, error)
 	RecordTelegramThreadGuideMessage(chatID int64, threadID int64, messageID int64) error
+	RecordTelegramThreadReminderMessage(chatID int64, threadID int64, messageID int64, summary string, summaryKind string, sourceLastActivityAt time.Time, createdBySenderID int64) error
+	IgnoreTelegramThreadReminder(ctx context.Context, chatID int64, senderID int64, threadID int64, messageID int64) (string, error)
+	AbsorbTelegramThreadReminder(ctx context.Context, chatID int64, senderID int64, threadID int64, messageID int64) (string, error)
 	TargetTelegramThreadMessage(ctx context.Context, msg core.InboundMessage, threadID int64, text string) (core.InboundMessage, session.TelegramThread, error)
 	TelegramThread(chatID int64, threadID int64) (session.TelegramThread, bool, error)
 	TelegramThreadForReplyMessage(chatID int64, replyMessageID int64) (session.TelegramThread, bool, error)
+	MarkTelegramThreadReminderResumed(chatID int64, replyMessageID int64) error
 	TelegramThreads(chatID int64) ([]session.TelegramThread, error)
+	TelegramThreadReminders(chatID int64, status session.TelegramThreadReminderStatus, limit int) ([]session.TelegramThreadReminder, error)
 	QueueTelegramThreadSummary(ctx context.Context, msg core.InboundMessage) (string, error)
 	PromoteTelegramThread(ctx context.Context, chatID int64, senderID int64, threadID int64) (session.TelegramThreadPromotionResult, error)
 	PrepareTelegramThreadPromotion(ctx context.Context, chatID int64, senderID int64, handoffID string) (session.TelegramThreadPromotionResult, error)
@@ -71,7 +79,11 @@ func handleTelegramThreadCommand(ctx context.Context, sender commandSender, rout
 		}
 		return false, nil
 	case "threads":
-		view := telegramThreadsViewFromArgs(telegramCommandArgs(msg.Text))
+		args := telegramCommandArgs(msg.Text)
+		if action, _ := nextCommandToken(args); strings.EqualFold(action, "remind") || strings.EqualFold(action, "reminders") {
+			return sendTelegramThreadReminders(ctx, sender, threadRouter, msg)
+		}
+		view := telegramThreadsViewFromArgs(args)
 		threads, err := threadRouter.TelegramThreads(msg.ChatID)
 		if err != nil {
 			return true, err

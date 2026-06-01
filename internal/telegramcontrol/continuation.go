@@ -30,8 +30,16 @@ func (c CommandControl) ApproveContinuation(chatID int64, approverID int64) (ses
 	return c.Runtime.ApproveContinuation(chatID, approverID)
 }
 
+func (c CommandControl) ApproveContinuationBundle(chatID int64, approverID int64, phaseIDs []string) (session.ContinuationState, error) {
+	return c.Runtime.ApproveContinuationBundle(chatID, approverID, phaseIDs)
+}
+
 func (c CommandControl) ApproveContinuationForMessage(msg core.InboundMessage, approverID int64) (session.ContinuationState, error) {
 	return c.Runtime.ApproveContinuationForKey(SessionKeyForMessage(msg), approverID)
+}
+
+func (c CommandControl) ApproveContinuationBundleForMessage(msg core.InboundMessage, approverID int64, phaseIDs []string) (session.ContinuationState, error) {
+	return c.Runtime.ApproveContinuationBundleForKey(SessionKeyForMessage(msg), approverID, phaseIDs)
 }
 
 func (c CommandControl) StopContinuation(chatID int64) (core.StopResult, error) {

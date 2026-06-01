@@ -750,3 +750,107 @@ func TestCompactContinuationStopsForReadOnlyLeaseStillStopBeforeDeployRestart(t 
 		t.Fatalf("stops = %#v, want broad deploy/restart stop for non-deploy lease", stops)
 	}
 }
+
+func TestHandleTelegramCommandCallbackApprovalBundleCurrentCopyAndSelection(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	triggerStarted := make(chan struct{})
+	state := session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "bundle-decision-current",
+		RemainingTurns: 1,
+		StageSummary:   "Run the current sealed phase.",
+		ActionProposal: session.ActionProposal{RiskClass: "approval_bundle"},
+		ApprovalBundle: session.ContinuationApprovalBundle{
+			ID:             "bundle-current",
+			Status:         session.ContinuationLeaseStatusPending,
+			CurrentPhaseID: "token-current",
+			Phases: []session.ContinuationApprovalBundlePhase{
+				{ID: "token-current", OperationPhaseID: "phase-1", Status: session.ContinuationLeaseStatusPending},
+				{ID: "token-later", OperationPhaseID: "phase-2", Status: session.ContinuationLeaseStatusPending},
+			},
+		},
+	}
+	router := stubCommandRouter{continuationState: state, approveContinuationReturn: state, canRestart: true, triggerContinuationStarted: triggerStarted}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-bundle-current",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
+		Data:    encodeContinuationCallbackData("bundle-decision-current", continuationActionApproveBundleCurrent),
+		Message: &telegram.Message{MessageID: 302, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if got, want := router.approveContinuationPhaseIDs, []string{"token-current"}; !slices.Equal(got, want) {
+		t.Fatalf("approveContinuationPhaseIDs = %#v, want %#v", got, want)
+	}
+	waitForStubContinuationTrigger(t, triggerStarted)
+	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Later bundled phases were deferred") {
+		t.Fatalf("editInline = %#v, want current-only deferred copy", sender.editInline)
+	}
+}
+
+func TestHandleTelegramCommandCallbackApprovalBundleStatusDetailsExplainTokens(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	state := session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "bundle-decision-details",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			RiskClass:        "approval_bundle",
+			BoundedEffect:    "Run bounded phase work only.",
+			AllowedActions:   []string{"edit_docs"},
+			ForbiddenActions: []string{"deploy"},
+		},
+		ApprovalBundle: session.ContinuationApprovalBundle{
+			ID:             "bundle-details",
+			Status:         session.ContinuationLeaseStatusPending,
+			CurrentPhaseID: "token-current",
+			Phases:         []session.ContinuationApprovalBundlePhase{{ID: "token-current", OperationPhaseID: "phase-1", Status: session.ContinuationLeaseStatusPending}},
+		},
+	}
+	router := stubCommandRouter{continuationState: state, canRestart: true}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-bundle-details",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
+		Data:    encodeContinuationCallbackData("bundle-decision-details", continuationActionStatusOnly),
+		Message: &telegram.Message{MessageID: 303, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline = %#v, want details with buttons", sender.editInline)
+	}
+	text := sender.editInline[0].text
+	for _, want := range []string{"sealed per-phase tokens, not a blank check", "Approve all", "Approve current", "old buttons cannot approve"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("details text = %q, missing %q", text, want)
+		}
+	}
+	for _, want := range []string{"Approve all", "Approve current", "Details", "Change", "Pause", "Stop"} {
+		if !buttonRowsContainLabel(sender.editInline[0].rows, want) {
+			t.Fatalf("rows = %#v, missing %q", sender.editInline[0].rows, want)
+		}
+	}
+}
+
+func buttonRowsContainLabel(rows [][]telegram.InlineButton, label string) bool {
+	for _, row := range rows {
+		for _, button := range row {
+			if button.Text == label {
+				return true
+			}
+		}
+	}
+	return false
+}

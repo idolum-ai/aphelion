@@ -12,6 +12,7 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/decision"
 	"github.com/idolum-ai/aphelion/pipeline"
+	"github.com/idolum-ai/aphelion/router"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -24,7 +25,7 @@ func TestRouterAndRuntimeEmitExecutionEvents(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 
-	router := core.NewRouter(rt.AgentFunc())
+	router := router.NewRouter(rt.AgentFunc())
 	router.SetEventHandler(rt.RouterEventHandler())
 	router.Route(context.Background(), core.InboundMessage{
 		ChatID:     99101,

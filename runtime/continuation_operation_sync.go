@@ -153,6 +153,11 @@ func syncOperationBundlePhaseStatusFromContinuation(opState *session.OperationSt
 		}
 		switch status {
 		case session.ProposalStatusApproved:
+			if bundlePhase.Status == session.ContinuationLeaseStatusDeferred {
+				opState.PhasePlan.Phases[i].Status = session.PlanStatusPending
+				opState.PhasePlan.Phases[i].LeaseID = ""
+				break
+			}
 			opState.PhasePlan.Phases[i].LeaseID = leaseID
 			if strings.TrimSpace(bundlePhase.ID) == currentPhaseID || currentPhaseID == "" {
 				opState.PhasePlan.Phases[i].Status = session.PlanStatusInProgress

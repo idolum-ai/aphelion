@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +25,43 @@ func (r *Runtime) writeDoctorCodexWorkEvidenceReview(ctx context.Context, b *str
 
 func (r *Runtime) writeDoctorRuntimeConfig(b *strings.Builder, exec pipeline.TurnExecutionContract, scope sandbox.Scope) {
 	r.doctorRuntime().WriteRuntimeConfig(b, exec, scope)
+}
+
+func (r *Runtime) writeDoctorPerceptionBudget(b *strings.Builder, key session.SessionKey, now time.Time) {
+	if r == nil || r.store == nil {
+		doctor.WriteLine(b, "perception_budget: unavailable")
+		return
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	events, err := r.store.ExecutionEventsByChat(key.ChatID, now.Add(-24*time.Hour), 200)
+	if err != nil {
+		doctor.WriteLine(b, "perception_budget_error="+strconv.Quote(err.Error()))
+		return
+	}
+	latest, ok := latestPerceptionBudgetForSessionFromExecutionEvents(events, key.ChatID)
+	if !ok {
+		doctor.WriteLine(b, "perception_budget: unavailable")
+		doctor.WriteLine(b, "perception_budget_source=execution_events.provider.attempt.started")
+		return
+	}
+	doctor.WriteKV(b, "perception_budget_source", "execution_events.provider.attempt.started")
+	doctor.WriteKV(b, "perception_budget_posture", latest.Posture)
+	doctor.WriteKV(b, "perception_budget_total_tokens", strconv.FormatInt(latest.TotalBudgetTokens, 10))
+	doctor.WriteKV(b, "perception_budget_estimated_tokens", strconv.FormatInt(latest.TotalEstimatedTokens, 10))
+	doctor.WriteKV(b, "perception_budget_remaining_headroom_tokens", strconv.FormatInt(latest.RemainingHeadroomTokens, 10))
+	doctor.WriteKV(b, "perception_budget_current_input_tokens", strconv.FormatInt(latest.CurrentInputTokens, 10))
+	doctor.WriteKV(b, "perception_budget_tool_evidence_tokens", strconv.FormatInt(latest.ToolEvidenceTokens, 10))
+	if len(latest.AdmittedLayers) > 0 {
+		doctor.WriteKV(b, "perception_budget_admitted_layers", strings.Join(latest.AdmittedLayers, ","))
+	}
+	if len(latest.SuppressedLayers) > 0 {
+		doctor.WriteKV(b, "perception_budget_suppressed_layers", strings.Join(latest.SuppressedLayers, ","))
+	}
+	if len(latest.ObservedEvidenceSources) > 0 {
+		doctor.WriteKV(b, "perception_budget_observed_evidence_sources", strings.Join(latest.ObservedEvidenceSources, ","))
+	}
 }
 
 func (r *Runtime) writeDoctorAutonomyStatus(b *strings.Builder, key session.SessionKey, senderID int64, now time.Time) {

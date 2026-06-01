@@ -3,11 +3,9 @@
 package runtime
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -18,6 +16,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/media"
 	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -496,6 +495,8 @@ func mediaAnalysisMode(artifact core.Artifact) string {
 	}
 }
 
+var newPDFTextExtractor = media.NewPDFTextExtractor
+
 func (r *Runtime) extractArtifactText(ctx context.Context, scope sandbox.Scope, artifact core.Artifact) (string, error) {
 	if artifact.Subtype == "pdf" || strings.EqualFold(strings.TrimSpace(artifact.MimeType), "application/pdf") {
 		return r.extractPDFText(ctx, scope, core.Media{
@@ -514,7 +515,7 @@ func (r *Runtime) extractArtifactText(ctx context.Context, scope sandbox.Scope, 
 	return strings.TrimSpace(string(artifact.Data)), nil
 }
 
-func (r *Runtime) extractPDFText(ctx context.Context, scope sandbox.Scope, media core.Media) (string, error) {
+func (r *Runtime) extractPDFText(ctx context.Context, scope sandbox.Scope, item core.Media) (string, error) {
 	if !r.cfg.Telegram.Media.ExtractPDFText {
 		return "", fmt.Errorf("pdf extraction disabled")
 	}
@@ -522,41 +523,18 @@ func (r *Runtime) extractPDFText(ctx context.Context, scope sandbox.Scope, media
 	if err != nil {
 		return "", err
 	}
-	if maxBytes > 0 && int64(len(media.Data)) > maxBytes {
-		return "", fmt.Errorf("pdf exceeds configured size limit")
-	}
-
-	tmpRoot := voiceTempRoot(scope, r.cfg.Agent)
-	if err := os.MkdirAll(tmpRoot, 0o755); err != nil {
-		return "", fmt.Errorf("create pdf temp root: %w", err)
-	}
-	tmp, err := os.CreateTemp(tmpRoot, "aphelion-doc-*.pdf")
+	extractor := newPDFTextExtractor()
+	extraction, err := extractor.ExtractDocumentText(ctx, &media.DocumentTextExtractionRequest{
+		Data:     item.Data,
+		MimeType: item.MimeType,
+		Filename: item.Filename,
+		TempDir:  voiceTempRoot(scope, r.cfg.Agent),
+		MaxBytes: maxBytes,
+	})
 	if err != nil {
-		return "", fmt.Errorf("create temp pdf: %w", err)
-	}
-	path := filepath.Clean(tmp.Name())
-	defer os.Remove(path)
-	if _, err := tmp.Write(media.Data); err != nil {
-		_ = tmp.Close()
-		return "", fmt.Errorf("write temp pdf: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return "", fmt.Errorf("close temp pdf: %w", err)
-	}
-
-	cmd := exec.CommandContext(ctx, "pdftotext", "-layout", "-nopgbrk", path, "-")
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		errText := strings.TrimSpace(stderr.String())
-		if errText != "" {
-			return "", fmt.Errorf("%s", errText)
-		}
 		return "", err
 	}
-	return strings.TrimSpace(stdout.String()), nil
+	return extraction.Text, nil
 }
 
 func appendTextSection(base string, addition string) string {

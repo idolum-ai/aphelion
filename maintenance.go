@@ -16,7 +16,7 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
-//go:embed defaults/agent/* defaults/agent/memory/*
+//go:embed defaults/agent/* defaults/agent/memory/* defaults/agent/face/persona/* defaults/agent/face/contracts/* defaults/agent/face/scenes/* defaults/agent/face/models/*
 var defaultAgentFilesFS embed.FS
 
 //go:embed recipes/durable-children/*.toml
@@ -31,6 +31,23 @@ var defaultPromptSeedFiles = []string{
 	"BOOTSTRAP.md",
 	"IDOLUM.md",
 	"QUESTIONS-TO-IDOLUM.md",
+	"face/persona/telos.md",
+	"face/persona/name.md",
+	"face/persona/anti-idolatry.md",
+	"face/persona/voice.md",
+	"face/contracts/material-floor.md",
+	"face/contracts/no-new-authority.md",
+	"face/contracts/no-new-facts.md",
+	"face/contracts/semantic-memory-is-texture.md",
+	"face/contracts/usefulness-not-obedience.md",
+	"face/scenes/architecture-exploration.md",
+	"face/scenes/approval-request.md",
+	"face/scenes/blocked-notice.md",
+	"face/scenes/completion-report.md",
+	"face/scenes/refusal.md",
+	"face/models/overlays.md",
+	"face/models/openai-gpt-5.5.md",
+	"face/models/anthropic-claude-sonnet-4-6.md",
 }
 
 var defaultSharedMemorySeedFiles = []string{

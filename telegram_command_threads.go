@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/internal/telegramcontrol"
@@ -45,6 +46,18 @@ func (c telegramCommandControl) ClearTelegramThreadCallbackMessage(chatID int64,
 	return c.threadController().ClearTelegramThreadCallbackMessage(chatID, messageID, surface)
 }
 
+func (c telegramCommandControl) RecordTelegramThreadReminderMessage(chatID int64, threadID int64, messageID int64, summary string, summaryKind string, sourceLastActivityAt time.Time, createdBySenderID int64) error {
+	return c.threadController().RecordTelegramThreadReminderMessage(chatID, threadID, messageID, summary, summaryKind, sourceLastActivityAt, createdBySenderID)
+}
+
+func (c telegramCommandControl) IgnoreTelegramThreadReminder(ctx context.Context, chatID int64, senderID int64, threadID int64, messageID int64) (string, error) {
+	return c.threadController().IgnoreTelegramThreadReminder(ctx, chatID, senderID, threadID, messageID)
+}
+
+func (c telegramCommandControl) AbsorbTelegramThreadReminder(ctx context.Context, chatID int64, senderID int64, threadID int64, messageID int64) (string, error) {
+	return c.threadController().AbsorbTelegramThreadReminder(ctx, chatID, senderID, threadID, messageID)
+}
+
 func (c telegramCommandControl) StartTelegramThreadTarget(ctx context.Context, msg core.InboundMessage, text string) (core.InboundMessage, session.TelegramThread, error) {
 	return c.threadController().StartTelegramThreadTarget(ctx, msg, text)
 }
@@ -57,12 +70,20 @@ func (c telegramCommandControl) TelegramThreadForReplyMessage(chatID int64, repl
 	return c.threadController().TelegramThreadForReplyMessage(chatID, replyMessageID)
 }
 
+func (c telegramCommandControl) MarkTelegramThreadReminderResumed(chatID int64, replyMessageID int64) error {
+	return c.threadController().MarkTelegramThreadReminderResumed(chatID, replyMessageID)
+}
+
 func (c telegramCommandControl) TelegramThread(chatID int64, threadID int64) (session.TelegramThread, bool, error) {
 	return c.threadController().TelegramThread(chatID, threadID)
 }
 
 func (c telegramCommandControl) TelegramThreads(chatID int64) ([]session.TelegramThread, error) {
 	return c.threadController().TelegramThreads(chatID)
+}
+
+func (c telegramCommandControl) TelegramThreadReminders(chatID int64, status session.TelegramThreadReminderStatus, limit int) ([]session.TelegramThreadReminder, error) {
+	return c.threadController().TelegramThreadReminders(chatID, status, limit)
 }
 
 func (c telegramCommandControl) QueueTelegramThreadSummary(ctx context.Context, msg core.InboundMessage) (string, error) {

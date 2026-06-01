@@ -17,7 +17,9 @@ type Runtime interface {
 	ContinuationState(chatID int64) (session.ContinuationState, error)
 	ContinuationStateForKey(key session.SessionKey) (session.ContinuationState, error)
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
+	ApproveContinuationBundle(chatID int64, approverID int64, phaseIDs []string) (session.ContinuationState, error)
 	ApproveContinuationForKey(key session.SessionKey, approverID int64) (session.ContinuationState, error)
+	ApproveContinuationBundleForKey(key session.SessionKey, approverID int64, phaseIDs []string) (session.ContinuationState, error)
 	TriggerContinuation(ctx context.Context, chatID int64) error
 	TriggerContinuationForKey(ctx context.Context, key session.SessionKey) error
 	RecordTelegramCallbackError(chatID int64, callbackKind string, err error)
@@ -82,6 +84,7 @@ type Runtime interface {
 	CurrentEfforts() (string, string)
 
 	MarkStreamControlStopping(streamID string, chatID int64) bool
+	CancelActiveTurnRun(runID int64) bool
 	ClearChatSessionContext(chatID int64) (bool, error)
 	ClearSessionContextForKey(key session.SessionKey) (bool, error)
 	FlushChatMemory(ctx context.Context, chatID int64, reason string) error
@@ -153,9 +156,20 @@ func mergeRouterStatusSnapshots(a core.RouterStatusSnapshot, b core.RouterStatus
 	}
 	for chatID, ids := range b.ActiveTurnsByChat {
 		a.ActiveTurnsByChat[chatID] = append(a.ActiveTurnsByChat[chatID], ids...)
+		a.TotalActiveTurns += len(ids)
 	}
 	for chatID, depth := range b.QueueDepthByChat {
 		a.QueueDepthByChat[chatID] += depth
+		a.TotalQueuedMessages += depth
+		if mergedDepth := a.QueueDepthByChat[chatID]; mergedDepth > a.MaxQueueDepth {
+			a.MaxQueueDepth = mergedDepth
+			a.MaxQueueDepthChatID = chatID
+		}
+	}
+	if !b.OldestQueuedAt.IsZero() && (a.OldestQueuedAt.IsZero() || b.OldestQueuedAt.Before(a.OldestQueuedAt)) {
+		a.OldestQueuedAt = b.OldestQueuedAt
+		a.OldestQueuedAge = b.OldestQueuedAge
+		a.OldestQueuedChatID = b.OldestQueuedChatID
 	}
 	return a
 }

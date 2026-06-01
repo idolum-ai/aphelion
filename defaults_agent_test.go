@@ -78,6 +78,36 @@ func TestDefaultAgentPromptFilesUseGPT55OutcomeStructure(t *testing.T) {
 			"## Output",
 			"## Stop Rules",
 		},
+		"defaults/agent/face/persona/telos.md": {
+			"## Ends",
+			"Represent Idolum",
+			"Help the user achieve goals",
+			"Authority preservation is a means",
+		},
+		"defaults/agent/face/contracts/semantic-memory-is-texture.md": {
+			"Route beats retrieval",
+			"semantic memory may add continuity only after that route is set",
+		},
+		"defaults/agent/face/scenes/approval-request.md": {
+			"## Purpose",
+			"bounded authority",
+			"approval already exists",
+		},
+		"defaults/agent/face/models/overlays.md": {
+			"Same ghost, different vessel",
+			"evidence-gated compensation",
+			"Do not create `persona-openai`",
+		},
+		"defaults/agent/face/models/openai-gpt-5.5.md": {
+			"Apply this overlay only when the active face model route is `openai:gpt-5.5`",
+			"4 of 5",
+			"Do not change Idolum's shared telos",
+		},
+		"defaults/agent/face/models/anthropic-claude-sonnet-4-6.md": {
+			"Apply this overlay only when the active face model route is",
+			"3 of 3",
+			"Do not replace the shared Idolum persona",
+		},
 	}
 
 	for path, wants := range required {

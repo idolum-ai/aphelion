@@ -101,8 +101,12 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 				return turn.FaceRenderResult{}, false, nil
 			}
 			streamID := ""
+			streamCtx := ctx
+			streamCancel := context.CancelFunc(nil)
 			if editor.keyboardEditor != nil {
 				streamID = r.beginStreamControl(input.Msg.ChatID)
+				streamCtx, streamCancel = context.WithCancel(ctx)
+				r.attachStreamControlCancel(streamID, streamCancel)
 				editor.controlRows = streamStopControlRows(streamID)
 				editor.onMessageID = func(messageID int64) {
 					r.attachStreamControlMessage(streamID, messageID)
@@ -113,6 +117,9 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 					}
 				}
 				defer r.finishStreamControl(streamID)
+			}
+			if streamCancel != nil {
+				defer streamCancel()
 			}
 			faceReq := face.RenderRequest{
 				GovernorName:    req.GovernorName,
@@ -126,8 +133,8 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 				LatestUserInput: req.LatestUserInput,
 				Runtime:         req.Runtime,
 			}
-			renderedReply, streamErr := streamer.RenderStream(ctx, faceReq, func(chunk string) error {
-				return editor.OnChunk(ctx, chunk)
+			renderedReply, streamErr := streamer.RenderStream(streamCtx, faceReq, func(chunk string) error {
+				return editor.OnChunk(streamCtx, chunk)
 			})
 			if streamErr != nil {
 				if errors.Is(streamErr, context.Canceled) {

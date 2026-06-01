@@ -1,6 +1,6 @@
 //go:build linux
 
-package core
+package router
 
 import (
 	"context"
@@ -9,18 +9,20 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/idolum-ai/aphelion/core"
 )
 
 func TestRouteToSession(t *testing.T) {
 	t.Parallel()
 
 	called := make(chan int64, 1)
-	router := NewRouter(func(_ context.Context, session *SessionState, _ InboundMessage) (*TurnResult, error) {
+	router := NewRouter(func(_ context.Context, session *core.SessionState, _ core.InboundMessage) (*core.TurnResult, error) {
 		called <- session.ChatID
-		return &TurnResult{}, nil
+		return &core.TurnResult{}, nil
 	})
 
-	router.Route(context.Background(), InboundMessage{ChatID: 42})
+	router.Route(context.Background(), core.InboundMessage{ChatID: 42})
 
 	select {
 	case chatID := <-called:
@@ -39,7 +41,7 @@ func TestSessionMutex(t *testing.T) {
 	releaseFirst := make(chan struct{})
 	order := make(chan string, 4)
 
-	router := NewRouter(func(_ context.Context, _ *SessionState, msg InboundMessage) (*TurnResult, error) {
+	router := NewRouter(func(_ context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		switch msg.Text {
 		case "first":
 			order <- "first-start"
@@ -52,13 +54,13 @@ func TestSessionMutex(t *testing.T) {
 		default:
 			t.Fatalf("unexpected message text: %s", msg.Text)
 		}
-		return &TurnResult{}, nil
+		return &core.TurnResult{}, nil
 	})
 
 	doneFirst := make(chan struct{})
 	go func() {
 		defer close(doneFirst)
-		router.Route(context.Background(), InboundMessage{ChatID: 1, Text: "first"})
+		router.Route(context.Background(), core.InboundMessage{ChatID: 1, Text: "first"})
 	}()
 
 	select {
@@ -70,7 +72,7 @@ func TestSessionMutex(t *testing.T) {
 	doneSecond := make(chan struct{})
 	go func() {
 		defer close(doneSecond)
-		router.Route(context.Background(), InboundMessage{ChatID: 1, Text: "second"})
+		router.Route(context.Background(), core.InboundMessage{ChatID: 1, Text: "second"})
 	}()
 
 	select {
@@ -111,9 +113,9 @@ func TestSessionMutex(t *testing.T) {
 func TestConcurrentSessions(t *testing.T) {
 	t.Parallel()
 
-	router := NewRouter(func(_ context.Context, _ *SessionState, _ InboundMessage) (*TurnResult, error) {
+	router := NewRouter(func(_ context.Context, _ *core.SessionState, _ core.InboundMessage) (*core.TurnResult, error) {
 		time.Sleep(150 * time.Millisecond)
-		return &TurnResult{}, nil
+		return &core.TurnResult{}, nil
 	})
 
 	start := time.Now()
@@ -122,11 +124,11 @@ func TestConcurrentSessions(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		router.Route(context.Background(), InboundMessage{ChatID: 10})
+		router.Route(context.Background(), core.InboundMessage{ChatID: 10})
 	}()
 	go func() {
 		defer wg.Done()
-		router.Route(context.Background(), InboundMessage{ChatID: 20})
+		router.Route(context.Background(), core.InboundMessage{ChatID: 20})
 	}()
 
 	wg.Wait()
@@ -143,7 +145,7 @@ func TestConcurrentSessionsSameChatDifferentDurableAgents(t *testing.T) {
 	secondStarted := make(chan struct{}, 1)
 	releaseFirst := make(chan struct{})
 
-	router := NewRouter(func(_ context.Context, _ *SessionState, msg InboundMessage) (*TurnResult, error) {
+	router := NewRouter(func(_ context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		switch msg.DurableAgentID {
 		case "agent-a":
 			firstStarted <- struct{}{}
@@ -153,13 +155,13 @@ func TestConcurrentSessionsSameChatDifferentDurableAgents(t *testing.T) {
 		default:
 			t.Fatalf("unexpected durable agent id: %q", msg.DurableAgentID)
 		}
-		return &TurnResult{}, nil
+		return &core.TurnResult{}, nil
 	})
 
 	doneFirst := make(chan struct{})
 	go func() {
 		defer close(doneFirst)
-		router.Route(context.Background(), InboundMessage{
+		router.Route(context.Background(), core.InboundMessage{
 			ChatID:         99,
 			ChatType:       "private",
 			DurableAgentID: "agent-a",
@@ -176,7 +178,7 @@ func TestConcurrentSessionsSameChatDifferentDurableAgents(t *testing.T) {
 	doneSecond := make(chan struct{})
 	go func() {
 		defer close(doneSecond)
-		router.Route(context.Background(), InboundMessage{
+		router.Route(context.Background(), core.InboundMessage{
 			ChatID:         99,
 			ChatType:       "private",
 			DurableAgentID: "agent-b",
@@ -204,7 +206,7 @@ func TestQueueCompaction(t *testing.T) {
 	var mu sync.Mutex
 	processed := make([]string, 0, 2)
 
-	router := NewRouter(func(_ context.Context, _ *SessionState, msg InboundMessage) (*TurnResult, error) {
+	router := NewRouter(func(_ context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		mu.Lock()
 		processed = append(processed, msg.Text)
 		mu.Unlock()
@@ -213,13 +215,13 @@ func TestQueueCompaction(t *testing.T) {
 			firstStarted <- struct{}{}
 			<-releaseFirst
 		}
-		return &TurnResult{}, nil
+		return &core.TurnResult{}, nil
 	})
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		router.Route(context.Background(), InboundMessage{ChatID: 55, Text: "first"})
+		router.Route(context.Background(), core.InboundMessage{ChatID: 55, Text: "first"})
 	}()
 
 	select {
@@ -228,8 +230,8 @@ func TestQueueCompaction(t *testing.T) {
 		t.Fatal("first message did not start")
 	}
 
-	router.Route(context.Background(), InboundMessage{ChatID: 55, Text: "second"})
-	router.Route(context.Background(), InboundMessage{ChatID: 55, Text: "third"})
+	router.Route(context.Background(), core.InboundMessage{ChatID: 55, Text: "second"})
+	router.Route(context.Background(), core.InboundMessage{ChatID: 55, Text: "third"})
 
 	close(releaseFirst)
 	<-done
@@ -259,26 +261,26 @@ func TestQueueCompactionKeepsLatestArtifactsOnly(t *testing.T) {
 	var (
 		mu                sync.Mutex
 		secondTurnText    string
-		secondTurnMessage InboundMessage
+		secondTurnMessage core.InboundMessage
 	)
 
-	router := NewRouter(func(_ context.Context, _ *SessionState, msg InboundMessage) (*TurnResult, error) {
+	router := NewRouter(func(_ context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		if msg.Text == "first" {
 			firstStarted <- struct{}{}
 			<-releaseFirst
-			return &TurnResult{}, nil
+			return &core.TurnResult{}, nil
 		}
 		mu.Lock()
 		secondTurnText = msg.Text
 		secondTurnMessage = msg
 		mu.Unlock()
-		return &TurnResult{}, nil
+		return &core.TurnResult{}, nil
 	})
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		router.Route(context.Background(), InboundMessage{ChatID: 56, Text: "first"})
+		router.Route(context.Background(), core.InboundMessage{ChatID: 56, Text: "first"})
 	}()
 
 	select {
@@ -287,15 +289,15 @@ func TestQueueCompactionKeepsLatestArtifactsOnly(t *testing.T) {
 		t.Fatal("first message did not start")
 	}
 
-	router.Route(context.Background(), InboundMessage{
+	router.Route(context.Background(), core.InboundMessage{
 		ChatID:    56,
 		Text:      "older queued",
-		Artifacts: []Artifact{{ID: "old-artifact", Filename: "old.txt"}},
+		Artifacts: []core.Artifact{{ID: "old-artifact", Filename: "old.txt"}},
 	})
-	router.Route(context.Background(), InboundMessage{
+	router.Route(context.Background(), core.InboundMessage{
 		ChatID:    56,
 		Text:      "newest queued",
-		Artifacts: []Artifact{{ID: "new-artifact", Filename: "new.txt"}},
+		Artifacts: []core.Artifact{{ID: "new-artifact", Filename: "new.txt"}},
 	})
 
 	close(releaseFirst)
@@ -319,20 +321,20 @@ func TestRouteDoesNotDequeueCompactedWorkAfterParentCancellation(t *testing.T) {
 	releaseFirst := make(chan struct{})
 	var calls atomic.Int32
 
-	router := NewRouter(func(_ context.Context, _ *SessionState, msg InboundMessage) (*TurnResult, error) {
+	router := NewRouter(func(_ context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		calls.Add(1)
 		if msg.Text == "first" {
 			firstStarted <- struct{}{}
 			<-releaseFirst
 			cancel()
 		}
-		return &TurnResult{}, nil
+		return &core.TurnResult{}, nil
 	})
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		router.Route(ctx, InboundMessage{ChatID: 57, Text: "first"})
+		router.Route(ctx, core.InboundMessage{ChatID: 57, Text: "first"})
 	}()
 
 	select {
@@ -341,7 +343,7 @@ func TestRouteDoesNotDequeueCompactedWorkAfterParentCancellation(t *testing.T) {
 		t.Fatal("first message did not start")
 	}
 
-	router.Route(context.Background(), InboundMessage{ChatID: 57, Text: "queued"})
+	router.Route(context.Background(), core.InboundMessage{ChatID: 57, Text: "queued"})
 	close(releaseFirst)
 	<-done
 
@@ -357,19 +359,19 @@ func TestRouteDoesNotDequeueCompactedWorkAfterParentCancellation(t *testing.T) {
 func TestSessionResolution(t *testing.T) {
 	t.Parallel()
 
-	seen := make(map[string]*SessionState)
+	seen := make(map[string]*core.SessionState)
 	var mu sync.Mutex
 
-	router := NewRouter(func(_ context.Context, session *SessionState, msg InboundMessage) (*TurnResult, error) {
+	router := NewRouter(func(_ context.Context, session *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		mu.Lock()
 		seen[msg.Text] = session
 		mu.Unlock()
-		return &TurnResult{}, nil
+		return &core.TurnResult{}, nil
 	})
 
-	router.Route(context.Background(), InboundMessage{ChatID: 99, Text: "a"})
-	router.Route(context.Background(), InboundMessage{ChatID: 99, Text: "b"})
-	router.Route(context.Background(), InboundMessage{ChatID: 100, Text: "c"})
+	router.Route(context.Background(), core.InboundMessage{ChatID: 99, Text: "a"})
+	router.Route(context.Background(), core.InboundMessage{ChatID: 99, Text: "b"})
+	router.Route(context.Background(), core.InboundMessage{ChatID: 100, Text: "c"})
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -398,7 +400,7 @@ func TestStopCancelsActiveTurnAndClearsQueue(t *testing.T) {
 	canceled := make(chan struct{}, 1)
 	var calls atomic.Int32
 
-	router := NewRouter(func(ctx context.Context, _ *SessionState, msg InboundMessage) (*TurnResult, error) {
+	router := NewRouter(func(ctx context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		calls.Add(1)
 		started <- struct{}{}
 		<-ctx.Done()
@@ -409,7 +411,7 @@ func TestStopCancelsActiveTurnAndClearsQueue(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		router.Route(context.Background(), InboundMessage{ChatID: 7, Text: "first"})
+		router.Route(context.Background(), core.InboundMessage{ChatID: 7, Text: "first"})
 	}()
 
 	select {
@@ -418,7 +420,7 @@ func TestStopCancelsActiveTurnAndClearsQueue(t *testing.T) {
 		t.Fatal("active turn did not start")
 	}
 
-	router.Route(context.Background(), InboundMessage{ChatID: 7, Text: "queued"})
+	router.Route(context.Background(), core.InboundMessage{ChatID: 7, Text: "queued"})
 
 	status := router.Status(7)
 	if !status.Active || !status.Queued {
@@ -453,18 +455,18 @@ func TestSnapshotReportsActiveTurnIDsAndQueueDepth(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 
-	router := NewRouter(func(ctx context.Context, _ *SessionState, msg InboundMessage) (*TurnResult, error) {
+	router := NewRouter(func(ctx context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		if msg.Text == "first" {
 			started <- struct{}{}
 			<-release
 		}
-		return &TurnResult{}, nil
+		return &core.TurnResult{}, nil
 	})
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		router.Route(context.Background(), InboundMessage{ChatID: 31, Text: "first"})
+		router.Route(context.Background(), core.InboundMessage{ChatID: 31, Text: "first"})
 	}()
 
 	select {
@@ -473,8 +475,8 @@ func TestSnapshotReportsActiveTurnIDsAndQueueDepth(t *testing.T) {
 		t.Fatal("active turn did not start")
 	}
 
-	router.Route(context.Background(), InboundMessage{ChatID: 31, Text: "second"})
-	router.Route(context.Background(), InboundMessage{ChatID: 31, Text: "third"})
+	router.Route(context.Background(), core.InboundMessage{ChatID: 31, Text: "second"})
+	router.Route(context.Background(), core.InboundMessage{ChatID: 31, Text: "third"})
 
 	snapshot := router.Snapshot()
 	if got := snapshot.QueueDepthByChat[31]; got != 2 {
@@ -499,8 +501,8 @@ func TestSnapshotReportsActiveTurnIDsAndQueueDepth(t *testing.T) {
 func TestStopReturnsIdleWhenNothingRunning(t *testing.T) {
 	t.Parallel()
 
-	router := NewRouter(func(context.Context, *SessionState, InboundMessage) (*TurnResult, error) {
-		return &TurnResult{}, nil
+	router := NewRouter(func(context.Context, *core.SessionState, core.InboundMessage) (*core.TurnResult, error) {
+		return &core.TurnResult{}, nil
 	})
 
 	got := router.Stop(42)
@@ -517,12 +519,12 @@ func TestRouterIngressSequenceAndEvents(t *testing.T) {
 
 	var (
 		processedMu sync.Mutex
-		processed   []InboundMessage
+		processed   []core.InboundMessage
 		eventsMu    sync.Mutex
-		events      []RouterEvent
+		events      []core.RouterEvent
 	)
 
-	router := NewRouter(func(_ context.Context, _ *SessionState, msg InboundMessage) (*TurnResult, error) {
+	router := NewRouter(func(_ context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		processedMu.Lock()
 		processed = append(processed, msg)
 		processedMu.Unlock()
@@ -530,9 +532,9 @@ func TestRouterIngressSequenceAndEvents(t *testing.T) {
 			firstStarted <- struct{}{}
 			<-releaseFirst
 		}
-		return &TurnResult{}, nil
+		return &core.TurnResult{}, nil
 	})
-	router.SetEventHandler(func(_ context.Context, event RouterEvent) {
+	router.SetEventHandler(func(_ context.Context, event core.RouterEvent) {
 		eventsMu.Lock()
 		events = append(events, event)
 		eventsMu.Unlock()
@@ -541,7 +543,7 @@ func TestRouterIngressSequenceAndEvents(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		router.Route(context.Background(), InboundMessage{ChatID: 9001, Text: "first", MessageID: 11})
+		router.Route(context.Background(), core.InboundMessage{ChatID: 9001, Text: "first", MessageID: 11})
 	}()
 
 	select {
@@ -550,8 +552,8 @@ func TestRouterIngressSequenceAndEvents(t *testing.T) {
 		t.Fatal("first message did not start")
 	}
 
-	router.Route(context.Background(), InboundMessage{ChatID: 9001, Text: "second", MessageID: 12})
-	router.Route(context.Background(), InboundMessage{ChatID: 9001, Text: "third", MessageID: 13})
+	router.Route(context.Background(), core.InboundMessage{ChatID: 9001, Text: "second", MessageID: 12})
+	router.Route(context.Background(), core.InboundMessage{ChatID: 9001, Text: "third", MessageID: 13})
 	close(releaseFirst)
 	<-done
 
@@ -571,7 +573,7 @@ func TestRouterIngressSequenceAndEvents(t *testing.T) {
 	}
 
 	eventsMu.Lock()
-	copied := append([]RouterEvent(nil), events...)
+	copied := append([]core.RouterEvent(nil), events...)
 	eventsMu.Unlock()
 
 	type typed struct {
@@ -598,14 +600,14 @@ func TestRouterIngressSequenceAndEvents(t *testing.T) {
 	}
 
 	expected := []typed{
-		{Type: ExecutionEventIngressAccepted, Seq: 1},
-		{Type: ExecutionEventIngressSelected, Seq: 1},
-		{Type: ExecutionEventIngressAccepted, Seq: 2},
-		{Type: ExecutionEventIngressQueued, Seq: 2, QueueDepth: 1},
-		{Type: ExecutionEventIngressAccepted, Seq: 3},
-		{Type: ExecutionEventIngressQueued, Seq: 3, QueueDepth: 2},
-		{Type: ExecutionEventIngressCompacted, Seq: 3, Drained: 2},
-		{Type: ExecutionEventIngressSelected, Seq: 3},
+		{Type: core.ExecutionEventIngressAccepted, Seq: 1},
+		{Type: core.ExecutionEventIngressSelected, Seq: 1},
+		{Type: core.ExecutionEventIngressAccepted, Seq: 2},
+		{Type: core.ExecutionEventIngressQueued, Seq: 2, QueueDepth: 1},
+		{Type: core.ExecutionEventIngressAccepted, Seq: 3},
+		{Type: core.ExecutionEventIngressQueued, Seq: 3, QueueDepth: 2},
+		{Type: core.ExecutionEventIngressCompacted, Seq: 3, Drained: 2},
+		{Type: core.ExecutionEventIngressSelected, Seq: 3},
 	}
 	if len(got) != len(expected) {
 		t.Fatalf("event len = %d, want %d\n got=%#v", len(got), len(expected), got)
@@ -616,7 +618,7 @@ func TestRouterIngressSequenceAndEvents(t *testing.T) {
 		}
 	}
 	for _, event := range copied {
-		if event.ChatID != 9001 || event.EventType != ExecutionEventIngressSelected || event.IngressSeq != 3 {
+		if event.ChatID != 9001 || event.EventType != core.ExecutionEventIngressSelected || event.IngressSeq != 3 {
 			continue
 		}
 		if !event.IngressQueueWaitKnown {
@@ -628,4 +630,44 @@ func TestRouterIngressSequenceAndEvents(t *testing.T) {
 		return
 	}
 	t.Fatal("missing compacted ingress selected event")
+}
+
+func TestRouterSnapshotIncludesPassiveQueueHealth(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	done := make(chan struct{})
+	router := NewRouter(func(_ context.Context, _ *core.SessionState, _ core.InboundMessage) (*core.TurnResult, error) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		return &core.TurnResult{}, nil
+	})
+
+	go func() {
+		defer close(done)
+		router.Route(context.Background(), core.InboundMessage{ChatID: 88, Text: "first"})
+	}()
+	<-started
+
+	oldest := time.Now().UTC().Add(-2 * time.Minute)
+	router.Route(context.Background(), core.InboundMessage{ChatID: 88, Text: "second", IngressQueuedAt: oldest})
+	router.Route(context.Background(), core.InboundMessage{ChatID: 88, Text: "third", IngressQueuedAt: oldest.Add(time.Minute)})
+
+	snapshot := router.Snapshot()
+	if snapshot.TotalActiveTurns != 1 {
+		t.Fatalf("TotalActiveTurns = %d, want 1", snapshot.TotalActiveTurns)
+	}
+	if snapshot.TotalQueuedMessages != 2 || snapshot.MaxQueueDepth != 2 || snapshot.MaxQueueDepthChatID != 88 {
+		t.Fatalf("queue health = total %d max %d chat %d, want total 2 max 2 chat 88", snapshot.TotalQueuedMessages, snapshot.MaxQueueDepth, snapshot.MaxQueueDepthChatID)
+	}
+	if snapshot.OldestQueuedChatID != 88 || snapshot.OldestQueuedAge <= 0 || !snapshot.OldestQueuedAt.Equal(oldest) {
+		t.Fatalf("oldest queue = chat %d age %s at %s, want chat 88 positive age at %s", snapshot.OldestQueuedChatID, snapshot.OldestQueuedAge, snapshot.OldestQueuedAt, oldest)
+	}
+
+	close(release)
+	<-done
 }

@@ -1,6 +1,6 @@
 //go:build linux
 
-package core
+package router
 
 import (
 	"context"
@@ -10,32 +10,24 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/idolum-ai/aphelion/core"
 )
-
-// AgentFunc executes one agent turn for a session.
-type AgentFunc func(ctx context.Context, session *SessionState, msg InboundMessage) (*TurnResult, error)
-
-// SessionState is the in-memory state for a chat session.
-type SessionState struct {
-	ChatID       int64
-	Messages     []map[string]interface{}
-	SystemPrompt string
-}
 
 // Router maps inbound messages to sessions and enforces per-session turn serialization.
 type Router struct {
-	agent AgentFunc
+	agent core.AgentFunc
 
 	mu           sync.Mutex
 	locks        map[string]*sync.Mutex
-	queues       map[string][]InboundMessage
-	sessions     map[string]*SessionState
+	queues       map[string][]core.InboundMessage
+	sessions     map[string]*core.SessionState
 	active       map[string]activeTurn
 	sessionChats map[string]map[int64]struct{}
 	ingressSeq   map[string]int64
 	nextID       uint64
 	logger       routerLogger
-	onEvent      RouterEventHandler
+	onEvent      core.RouterEventHandler
 }
 
 type activeTurn struct {
@@ -43,44 +35,13 @@ type activeTurn struct {
 	cancel context.CancelFunc
 }
 
-type SessionStatus struct {
-	Active bool
-	Queued bool
-	// QueueDepth is the count of queued follow-up messages for this chat.
-	QueueDepth int
-	// Diagnostics includes optional status details from higher-level runtime layers.
-	Diagnostics []string
-}
-
-type StopResult struct {
-	ActiveCanceled      bool
-	QueuedDropped       bool
-	ContinuationRevoked bool
-	ContinuationLabel   string
-}
-
-type DetachResult struct {
-	ActiveCanceled           bool
-	QueuedDropped            bool
-	ContinuationRevoked      bool
-	PendingDecisionsDetached int
-}
-
-type NewSessionResult struct {
-	ActiveCanceled           bool
-	QueuedDropped            bool
-	ContinuationRevoked      bool
-	PendingDecisionsDetached int
-	ContextCleared           bool
-}
-
 // NewRouter constructs a Router using fn for each routed turn.
-func NewRouter(fn AgentFunc) *Router {
+func NewRouter(fn core.AgentFunc) *Router {
 	return &Router{
 		agent:        fn,
 		locks:        make(map[string]*sync.Mutex),
-		queues:       make(map[string][]InboundMessage),
-		sessions:     make(map[string]*SessionState),
+		queues:       make(map[string][]core.InboundMessage),
+		sessions:     make(map[string]*core.SessionState),
 		active:       make(map[string]activeTurn),
 		sessionChats: make(map[string]map[int64]struct{}),
 		ingressSeq:   make(map[string]int64),
@@ -88,7 +49,7 @@ func NewRouter(fn AgentFunc) *Router {
 	}
 }
 
-func (r *Router) SetEventHandler(handler RouterEventHandler) {
+func (r *Router) SetEventHandler(handler core.RouterEventHandler) {
 	if r == nil {
 		return
 	}
@@ -100,7 +61,7 @@ func (r *Router) SetEventHandler(handler RouterEventHandler) {
 // Route routes msg to its session. If a turn is active for the session, the message
 // is queued. When queued messages exist after a turn completes, they are compacted
 // into a single follow-up input so the next turn has full queue context.
-func (r *Router) Route(ctx context.Context, msg InboundMessage) {
+func (r *Router) Route(ctx context.Context, msg core.InboundMessage) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return
@@ -111,7 +72,7 @@ func (r *Router) Route(ctx context.Context, msg InboundMessage) {
 	}
 	sessionID, lock, session := r.resolveSession(msg)
 	msg = r.assignIngressSeq(sessionID, msg)
-	r.emitRouterEvent(ctx, msg, sessionID, ExecutionEventIngressAccepted, 0, 0, 0, false)
+	r.emitRouterEvent(ctx, msg, sessionID, core.ExecutionEventIngressAccepted, 0, 0, 0, false)
 
 	lockStart := time.Now()
 	if !lock.TryLock() {
@@ -121,7 +82,7 @@ func (r *Router) Route(ctx context.Context, msg InboundMessage) {
 			}
 		}
 		queued := r.enqueue(sessionID, msg)
-		r.emitRouterEvent(ctx, msg, sessionID, ExecutionEventIngressQueued, queued, 0, 0, false)
+		r.emitRouterEvent(ctx, msg, sessionID, core.ExecutionEventIngressQueued, queued, 0, 0, false)
 		r.logger.Debug("session busy; queued message", "chat_id", msg.ChatID, "message_id", msg.MessageID, "queued_count", queued)
 		return
 	}
@@ -129,7 +90,7 @@ func (r *Router) Route(ctx context.Context, msg InboundMessage) {
 	defer lock.Unlock()
 
 	current := msg
-	r.emitRouterEvent(ctx, current, sessionID, ExecutionEventIngressSelected, 0, 0, routerLockWait, true)
+	r.emitRouterEvent(ctx, current, sessionID, core.ExecutionEventIngressSelected, 0, 0, routerLockWait, true)
 	for {
 		turnCtx, cancel := context.WithCancel(ctx)
 		activeID := r.markActive(sessionID, current.ChatID, cancel)
@@ -155,14 +116,14 @@ func (r *Router) Route(ctx context.Context, msg InboundMessage) {
 		if !ok {
 			return
 		}
-		r.emitRouterEvent(ctx, next, sessionID, ExecutionEventIngressCompacted, 0, drained, 0, false)
+		r.emitRouterEvent(ctx, next, sessionID, core.ExecutionEventIngressCompacted, 0, drained, 0, false)
 		r.logger.Debug("processing compacted queued messages", "chat_id", next.ChatID, "message_id", next.MessageID, "drained_count", drained)
 		current = next
-		r.emitRouterEvent(ctx, current, sessionID, ExecutionEventIngressSelected, 0, 0, 0, true)
+		r.emitRouterEvent(ctx, current, sessionID, core.ExecutionEventIngressSelected, 0, 0, 0, true)
 	}
 }
 
-func (r *Router) StatusForMessage(msg InboundMessage) SessionStatus {
+func (r *Router) StatusForMessage(msg core.InboundMessage) core.SessionStatus {
 	sessionID := routeSessionID(msg)
 
 	r.mu.Lock()
@@ -170,14 +131,14 @@ func (r *Router) StatusForMessage(msg InboundMessage) SessionStatus {
 
 	queue := r.queues[sessionID]
 	_, active := r.active[sessionID]
-	return SessionStatus{
+	return core.SessionStatus{
 		Active:     active,
 		Queued:     len(queue) > 0,
 		QueueDepth: len(queue),
 	}
 }
 
-func (r *Router) Status(chatID int64) SessionStatus {
+func (r *Router) Status(chatID int64) core.SessionStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -198,18 +159,19 @@ func (r *Router) Status(chatID int64) SessionStatus {
 		}
 	}
 
-	return SessionStatus{
+	return core.SessionStatus{
 		Active:     active,
 		Queued:     queueDepth > 0,
 		QueueDepth: queueDepth,
 	}
 }
 
-func (r *Router) Snapshot() RouterStatusSnapshot {
+func (r *Router) Snapshot() core.RouterStatusSnapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	snapshot := RouterStatusSnapshot{
+	observedAt := time.Now().UTC()
+	snapshot := core.RouterStatusSnapshot{
 		ActiveTurnsByChat: make(map[int64][]uint64, len(r.active)),
 		QueueDepthByChat:  make(map[int64]int, len(r.queues)),
 	}
@@ -219,6 +181,7 @@ func (r *Router) Snapshot() RouterStatusSnapshot {
 		}
 		for _, chatID := range r.chatsForSessionLocked(sessionID) {
 			snapshot.ActiveTurnsByChat[chatID] = append(snapshot.ActiveTurnsByChat[chatID], active.id)
+			snapshot.TotalActiveTurns++
 		}
 	}
 	for sessionID, queue := range r.queues {
@@ -227,27 +190,52 @@ func (r *Router) Snapshot() RouterStatusSnapshot {
 		}
 		for _, chatID := range r.chatsForSessionLocked(sessionID) {
 			snapshot.QueueDepthByChat[chatID] += len(queue)
+			snapshot.TotalQueuedMessages += len(queue)
+			if depth := snapshot.QueueDepthByChat[chatID]; depth > snapshot.MaxQueueDepth {
+				snapshot.MaxQueueDepth = depth
+				snapshot.MaxQueueDepthChatID = chatID
+			}
+		}
+		for _, msg := range queue {
+			if msg.IngressQueuedAt.IsZero() {
+				continue
+			}
+			queuedAt := msg.IngressQueuedAt.UTC()
+			if snapshot.OldestQueuedAt.IsZero() || queuedAt.Before(snapshot.OldestQueuedAt) {
+				snapshot.OldestQueuedAt = queuedAt
+				snapshot.OldestQueuedAge = nonNegativeDuration(observedAt.Sub(queuedAt))
+				snapshot.OldestQueuedChatID = firstSnapshotChatID(r.chatsForSessionLocked(sessionID), msg.ChatID)
+			}
 		}
 	}
 	return snapshot
 }
 
-func (r *Router) StopForMessage(msg InboundMessage) StopResult {
+func firstSnapshotChatID(chatIDs []int64, fallback int64) int64 {
+	for _, chatID := range chatIDs {
+		if chatID != 0 {
+			return chatID
+		}
+	}
+	return fallback
+}
+
+func (r *Router) StopForMessage(msg core.InboundMessage) core.StopResult {
 	sessionID := routeSessionID(msg)
 	return r.stopMatching(func(candidate string) bool {
 		return candidate == sessionID
 	})
 }
 
-func (r *Router) Stop(chatID int64) StopResult {
+func (r *Router) Stop(chatID int64) core.StopResult {
 	return r.stopMatching(func(sessionID string) bool {
 		return r.sessionBelongsToChatLocked(sessionID, chatID)
 	})
 }
 
-func (r *Router) stopMatching(match func(sessionID string) bool) StopResult {
+func (r *Router) stopMatching(match func(sessionID string) bool) core.StopResult {
 	var (
-		result  StopResult
+		result  core.StopResult
 		cancels []context.CancelFunc
 	)
 
@@ -277,7 +265,7 @@ func (r *Router) stopMatching(match func(sessionID string) bool) StopResult {
 	return result
 }
 
-func (r *Router) resolveSession(msg InboundMessage) (string, *sync.Mutex, *SessionState) {
+func (r *Router) resolveSession(msg core.InboundMessage) (string, *sync.Mutex, *core.SessionState) {
 	sessionID := routeSessionID(msg)
 
 	r.mu.Lock()
@@ -291,7 +279,7 @@ func (r *Router) resolveSession(msg InboundMessage) (string, *sync.Mutex, *Sessi
 
 	session := r.sessions[sessionID]
 	if session == nil {
-		session = &SessionState{ChatID: msg.ChatID}
+		session = &core.SessionState{ChatID: msg.ChatID}
 		r.sessions[sessionID] = session
 	} else if session.ChatID == 0 && msg.ChatID != 0 {
 		session.ChatID = msg.ChatID
@@ -301,7 +289,7 @@ func (r *Router) resolveSession(msg InboundMessage) (string, *sync.Mutex, *Sessi
 	return sessionID, lock, session
 }
 
-func (r *Router) enqueue(sessionID string, msg InboundMessage) int {
+func (r *Router) enqueue(sessionID string, msg core.InboundMessage) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.trackSessionChatLocked(sessionID, msg.ChatID)
@@ -311,21 +299,21 @@ func (r *Router) enqueue(sessionID string, msg InboundMessage) int {
 	return len(queue)
 }
 
-func (r *Router) dequeueCompacted(sessionID string) (InboundMessage, int, bool) {
+func (r *Router) dequeueCompacted(sessionID string) (core.InboundMessage, int, bool) {
 	r.mu.Lock()
 	queue := r.queues[sessionID]
 	if len(queue) == 0 {
 		r.mu.Unlock()
-		return InboundMessage{}, 0, false
+		return core.InboundMessage{}, 0, false
 	}
 	delete(r.queues, sessionID)
 	r.mu.Unlock()
 	return compactQueuedMessages(queue), len(queue), true
 }
 
-func compactQueuedMessages(queue []InboundMessage) InboundMessage {
+func compactQueuedMessages(queue []core.InboundMessage) core.InboundMessage {
 	if len(queue) == 0 {
-		return InboundMessage{}
+		return core.InboundMessage{}
 	}
 	if len(queue) == 1 {
 		return queue[0]
@@ -418,7 +406,7 @@ func (r *Router) chatsForSessionLocked(sessionID string) []int64 {
 	return []int64{sess.ChatID}
 }
 
-func (r *Router) assignIngressSeq(sessionID string, msg InboundMessage) InboundMessage {
+func (r *Router) assignIngressSeq(sessionID string, msg core.InboundMessage) core.InboundMessage {
 	if r == nil || strings.TrimSpace(sessionID) == "" {
 		return msg
 	}
@@ -433,7 +421,7 @@ func (r *Router) assignIngressSeq(sessionID string, msg InboundMessage) InboundM
 	return msg
 }
 
-func (r *Router) emitRouterEvent(ctx context.Context, msg InboundMessage, sessionID string, eventType string, queueDepth int, drainedCount int, routerLockWait time.Duration, routerLockWaitKnown bool) {
+func (r *Router) emitRouterEvent(ctx context.Context, msg core.InboundMessage, sessionID string, eventType string, queueDepth int, drainedCount int, routerLockWait time.Duration, routerLockWaitKnown bool) {
 	if r == nil {
 		return
 	}
@@ -445,7 +433,7 @@ func (r *Router) emitRouterEvent(ctx context.Context, msg InboundMessage, sessio
 	}
 	createdAt := time.Now().UTC()
 	ingressQueueWait, ingressQueueWaitKnown := ingressQueueWaitSince(msg.IngressQueuedAt, createdAt)
-	handler(ctx, RouterEvent{
+	handler(ctx, core.RouterEvent{
 		EventType:             strings.TrimSpace(eventType),
 		SessionID:             strings.TrimSpace(sessionID),
 		ChatID:                msg.ChatID,
@@ -480,26 +468,6 @@ func nonNegativeDuration(d time.Duration) time.Duration {
 	return d
 }
 
-func routeSessionID(msg InboundMessage) string {
-	if agentID := strings.TrimSpace(msg.DurableAgentID); agentID != "" {
-		return "durable_agent:" + agentID
-	}
-	if msg.ChatID != 0 && msg.TelegramThreadID > 0 {
-		return fmt.Sprintf("telegram_thread:%d:%d", msg.ChatID, msg.TelegramThreadID)
-	}
-	switch strings.ToLower(strings.TrimSpace(msg.ChatType)) {
-	case "group", "supergroup", "channel":
-		if msg.ChatID != 0 {
-			return fmt.Sprintf("telegram_group:%d", msg.ChatID)
-		}
-	default:
-		if msg.ChatID != 0 {
-			return fmt.Sprintf("telegram_dm:%d", msg.ChatID)
-		}
-	}
-	return fmt.Sprintf("transport:%d", msg.ChatID)
-}
-
-func SessionIDForInboundMessage(msg InboundMessage) string {
-	return routeSessionID(msg)
+func routeSessionID(msg core.InboundMessage) string {
+	return core.SessionIDForInboundMessage(msg)
 }

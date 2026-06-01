@@ -110,6 +110,7 @@ func continuationStateFromOperationPhase(opState session.OperationState, phase s
 	action.PlanHash = actionProposalHash(action)
 	state.ActionProposal = session.NormalizeActionProposal(action)
 	state.ContinuationLease = buildContinuationLease(state.ActionProposal, 1, now)
+	state.ContinuationLease.RequiredCapabilityGrants = append([]session.CapabilityGrantSpec(nil), phase.RequiredCapabilityGrants...)
 	return session.NormalizeContinuationState(state)
 }
 

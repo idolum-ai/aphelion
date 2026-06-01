@@ -89,6 +89,7 @@ type stubCommandRouter struct {
 	approveContinuationInput     int64
 	approveContinuationMessage   core.InboundMessage
 	approveContinuationApprover  int64
+	approveContinuationPhaseIDs  []string
 	approveContinuationReturn    session.ContinuationState
 	approveContinuationErr       error
 	stopContinuationInput        int64
@@ -239,6 +240,24 @@ type stubCommandRouter struct {
 	threadGuideChatID            int64
 	threadGuideID                int64
 	threadGuideMessageID         int64
+	threadReminderChatID         int64
+	threadReminderID             int64
+	threadReminderMessageID      int64
+	threadReminderSummary        string
+	threadReminderSummaryKind    string
+	threadReminderSenderID       int64
+	ignoreReminderChatID         int64
+	ignoreReminderSenderID       int64
+	ignoreReminderThreadID       int64
+	ignoreReminderMessageID      int64
+	ignoreReminderReturn         string
+	ignoreReminderErr            error
+	absorbReminderChatID         int64
+	absorbReminderSenderID       int64
+	absorbReminderThreadID       int64
+	absorbReminderMessageID      int64
+	absorbReminderReturn         string
+	absorbReminderErr            error
 	threadCallbackChatID         int64
 	threadCallbackID             int64
 	threadCallbackMessageID      int64
@@ -262,6 +281,11 @@ type stubCommandRouter struct {
 	threadReplyReturn            session.TelegramThread
 	threadReplyOK                bool
 	threadReplyErr               error
+	threadRemindersReturn        []session.TelegramThreadReminder
+	threadRemindersErr           error
+	threadRemindersChatID        int64
+	threadRemindersStatus        session.TelegramThreadReminderStatus
+	threadRemindersLimit         int
 	threadsReturn                []session.TelegramThread
 	threadsErr                   error
 	threadsChatID                int64

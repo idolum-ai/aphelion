@@ -58,6 +58,7 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 		FaceName:        faceName,
 		Channel:         firstNonEmpty(req.Channel, r.cfg.Channel, "telegram"),
 		Mode:            mode,
+		Scene:           firstNonEmpty(req.Scene),
 		Style:           firstNonEmpty(req.Style, r.cfg.Style),
 		PrincipalRole:   req.PrincipalRole,
 		FloorText:       FloorTextOrFallback(req.FloorText),
@@ -111,6 +112,7 @@ func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, 
 		FaceName:        faceName,
 		Channel:         firstNonEmpty(req.Channel, r.cfg.Channel, "telegram"),
 		Mode:            mode,
+		Scene:           firstNonEmpty(req.Scene),
 		Style:           firstNonEmpty(req.Style, r.cfg.Style),
 		PrincipalRole:   req.PrincipalRole,
 		FloorText:       FloorTextOrFallback(req.FloorText),
@@ -187,6 +189,7 @@ func (r *ProviderRenderer) Propose(ctx context.Context, req ProposalRequest) (st
 		StableFiles:       stableFiles,
 		DynamicFiles:      dynamicFiles,
 		Mode:              mode,
+		Scene:             firstNonEmpty(req.Scene),
 		Runtime:           req.Runtime,
 	}
 	systemBlocks := prompt.BuildFacePromptBlocks(facePrompt)

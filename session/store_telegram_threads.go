@@ -41,6 +41,83 @@ func (t TelegramThread) Open() bool {
 	return normalizeTelegramThreadStatus(t.Status) == TelegramThreadStatusOpen
 }
 
+type TelegramThreadReminderPolicy struct {
+	// StaleAfter is the passive threshold after which an open thread is eligible
+	// for a reminder. It is diagnostic/accounting only; it does not schedule or
+	// send reminders.
+	StaleAfter time.Duration
+}
+
+type TelegramThreadReminderEligibility struct {
+	ChatID         int64
+	ThreadID       int64
+	DisplaySlot    int64
+	Eligible       bool
+	Reason         string
+	LastActivityAt time.Time
+	Age            time.Duration
+	StaleAfter     time.Duration
+	SummaryKind    string
+}
+
+func DefaultTelegramThreadReminderPolicy() TelegramThreadReminderPolicy {
+	return TelegramThreadReminderPolicy{StaleAfter: 24 * time.Hour}
+}
+
+func (t TelegramThread) ReminderEligibility(now time.Time, policy TelegramThreadReminderPolicy) TelegramThreadReminderEligibility {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if policy.StaleAfter <= 0 {
+		policy = DefaultTelegramThreadReminderPolicy()
+	}
+	lastActivity := t.LastActivityAt
+	if lastActivity.IsZero() {
+		lastActivity = t.CreatedAt
+	}
+	result := TelegramThreadReminderEligibility{
+		ChatID:         t.ChatID,
+		ThreadID:       t.ThreadID,
+		DisplaySlot:    t.DisplaySlot,
+		LastActivityAt: lastActivity.UTC(),
+		StaleAfter:     policy.StaleAfter,
+		SummaryKind:    TelegramThreadReminderSummaryKind(t),
+	}
+	if !t.Open() {
+		result.Reason = "thread_not_open"
+		return result
+	}
+	if lastActivity.IsZero() {
+		result.Reason = "missing_activity"
+		return result
+	}
+	age := now.UTC().Sub(lastActivity.UTC())
+	if age < 0 {
+		age = 0
+	}
+	result.Age = age
+	if age < policy.StaleAfter {
+		result.Reason = "fresh"
+		return result
+	}
+	result.Eligible = true
+	result.Reason = "stale_open_thread"
+	return result
+}
+
+func TelegramThreadReminderSummaryKind(t TelegramThread) string {
+	text := strings.ToLower(strings.TrimSpace(t.CreatedText))
+	if text == "" {
+		return "generic"
+	}
+	for _, marker := range []string{"therapy", "therapist", "doctor", "medical", "health", "personal", "private", "family"} {
+		if strings.Contains(text, marker) {
+			return "privacy_softened"
+		}
+	}
+	return "specific"
+}
+
 func (s *SQLiteStore) CreateTelegramThreadForUpdate(chatID int64, senderID int64, updateID int64, messageID int64, text string, now time.Time) (TelegramThread, bool, error) {
 	if chatID == 0 {
 		return TelegramThread{}, false, fmt.Errorf("telegram thread chat id is required")
@@ -732,4 +809,38 @@ func normalizeTelegramThreadStatus(status TelegramThreadStatus) TelegramThreadSt
 	default:
 		return ""
 	}
+}
+
+func (s *SQLiteStore) ListTelegramThreadChatIDs(limit int) ([]int64, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.db.Query(`
+		SELECT DISTINCT chat_id
+		FROM telegram_threads
+		WHERE status = ?
+		ORDER BY chat_id
+		LIMIT ?
+	`, string(TelegramThreadStatusOpen), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list telegram thread chat ids: %w", err)
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var chatID int64
+		if err := rows.Scan(&chatID); err != nil {
+			return nil, err
+		}
+		if chatID != 0 {
+			out = append(out, chatID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

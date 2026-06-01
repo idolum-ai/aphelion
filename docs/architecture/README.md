@@ -38,10 +38,12 @@ These invariants are normative for architecture and requirements alignment:
 - [agency-evaluation-methodology.md](agency-evaluation-methodology.md): grounded behavioral methodology for measuring agency prompt quality, drift, and hard authority failures.
 - [principle-debt.md](principle-debt.md): active implementation gaps against the design principles.
 - [package-ownership.md](package-ownership.md): runtime/turn/pipeline ownership boundaries.
+- [memory-perception-budget.md](memory-perception-budget.md): memory as governed perception under context scarcity, with posture-specific layer accounting.
 - [turn-lifecycle.md](turn-lifecycle.md): stage order across interactive, maintenance, and durable-child turns.
 - [action-proposal-continuation-lease.md](action-proposal-continuation-lease.md): typed bounded action proposals and consumable continuation leases.
 - [constitution-and-delivery.md](constitution-and-delivery.md): floor/scene and commit/delivery invariants.
 - [operator-presentation-contract.md](operator-presentation-contract.md): human Telegram/CLI presentation contract for status, rationale, next action, details, and evidence.
+- [routing-based-face-prompting.md](routing-based-face-prompting.md): route-first face prompt assembly and nondeterministic persona eval invariants.
 - [durable-children.md](durable-children.md): bounded child topology and adapters.
 - [thread-native-durable-work.md](thread-native-durable-work.md): exploratory direction for making threads the operator-facing durable work primitive while keeping authority typed.
 - [state-surfaces.md](state-surfaces.md): transcript, sidecars, and operational state.

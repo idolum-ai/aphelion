@@ -122,7 +122,7 @@ func (r *Runtime) EnableApprovalWindowOfferResult(ctx context.Context, offerID s
 	r.recordOperatorAutoApprovalEvent(offer.ChatID, core.ExecutionEventAutoApprovalGranted, "active", storedLease, map[string]any{
 		"source": "approval_window",
 	})
-	return core.ApprovalWindowEnableResult{Text: renderApprovalWindowEnabled(storedLease, storedOverride, now), Active: true, LeaseID: storedLease.ID, OverrideID: storedOverride.ID}, nil
+	return core.ApprovalWindowEnableResult{Text: r.renderApprovalWindowEnabledForOffer(offer, storedLease, storedOverride, now), Active: true, LeaseID: storedLease.ID, OverrideID: storedOverride.ID}, nil
 }
 
 func approvalWindowOfferAuthorityRows(offer session.ApprovalWindowOffer, adminUserID int64, duration time.Duration, now time.Time) (session.OperatorAutoApprovalLease, session.OperatorAutonomyOverride) {
@@ -167,7 +167,7 @@ func (r *Runtime) repairClaimedApprovalWindowOffer(_ context.Context, offer sess
 		return core.ApprovalWindowEnableResult{}, err
 	}
 	if live {
-		return core.ApprovalWindowEnableResult{Text: renderApprovalWindowEnabled(lease, override, now), Active: true, LeaseID: lease.ID, OverrideID: override.ID}, nil
+		return core.ApprovalWindowEnableResult{Text: r.renderApprovalWindowEnabledForOffer(offer, lease, override, now), Active: true, LeaseID: lease.ID, OverrideID: override.ID}, nil
 	}
 	if offer.OpenedLeaseID != "" || offer.OpenedOverrideID != "" {
 		_, _, _ = r.closeOfferIfStillBound(offer, now)
@@ -301,7 +301,7 @@ func (r *Runtime) DoubleApprovalWindowOffer(ctx context.Context, offerID string,
 		"previous_duration_seconds": int64(previousDuration / time.Second),
 		"new_duration_seconds":      int64(doubledDuration / time.Second),
 	})
-	return renderApprovalWindowDoubled(storedLease, storedOverride, now, previousDuration, doubledDuration), nil
+	return r.renderApprovalWindowDoubledForOffer(offer, storedLease, storedOverride, now, previousDuration, doubledDuration), nil
 }
 
 func (r *Runtime) CancelApprovalWindowOffer(ctx context.Context, offerID string, adminUserID int64) (string, error) {

@@ -30,6 +30,7 @@ func (p OperationPhase) Active() bool {
 		len(p.AllowedActions) > 0 ||
 		len(p.ForbiddenActions) > 0 ||
 		len(p.ValidationPlan) > 0 ||
+		len(p.RequiredCapabilityGrants) > 0 ||
 		strings.TrimSpace(p.GateLevel) != "" ||
 		strings.TrimSpace(p.GateReasonCode) != "" ||
 		strings.TrimSpace(p.ApprovalSubject) != "" ||
@@ -122,6 +123,18 @@ func (r CapabilityRequest) Active() bool {
 		strings.TrimSpace(r.GrantID) != ""
 }
 
+func (s CapabilityGrantSpec) Active() bool {
+	return strings.TrimSpace(s.RequestID) != "" ||
+		strings.TrimSpace(s.GrantID) != "" ||
+		strings.TrimSpace(string(s.Kind)) != "" ||
+		strings.TrimSpace(s.TargetResource) != "" ||
+		strings.TrimSpace(s.GrantedTo) != "" ||
+		len(s.AllowedActions) > 0 ||
+		strings.TrimSpace(s.Contract) != "" ||
+		strings.TrimSpace(s.Constraints) != "" ||
+		!s.ExpiresAt.IsZero()
+}
+
 func (r DurableChildAgreement) Active() bool {
 	return strings.TrimSpace(r.AgreementID) != "" ||
 		strings.TrimSpace(r.AgentID) != "" ||
@@ -177,6 +190,9 @@ func (l ContinuationLease) Active() bool {
 
 func (b ContinuationApprovalBundle) Active() bool {
 	return strings.TrimSpace(b.ID) != "" ||
+		strings.TrimSpace(b.OperationID) != "" ||
+		strings.TrimSpace(b.PhasePlanID) != "" ||
+		strings.TrimSpace(b.PlanFingerprint) != "" ||
 		strings.TrimSpace(string(b.Status)) != "" ||
 		strings.TrimSpace(b.CurrentPhaseID) != "" ||
 		b.ApprovedBy > 0 ||
@@ -190,6 +206,7 @@ func (b ContinuationApprovalBundle) Active() bool {
 func (p ContinuationApprovalBundlePhase) Active() bool {
 	return strings.TrimSpace(p.ID) != "" ||
 		strings.TrimSpace(p.OperationPhaseID) != "" ||
+		strings.TrimSpace(p.PhaseFingerprint) != "" ||
 		p.Index > 0 ||
 		strings.TrimSpace(p.OperatorTitle) != "" ||
 		strings.TrimSpace(p.PlanTitle) != "" ||
@@ -200,5 +217,10 @@ func (p ContinuationApprovalBundlePhase) Active() bool {
 		len(p.AllowedActions) > 0 ||
 		len(p.ForbiddenActions) > 0 ||
 		len(p.ValidationPlan) > 0 ||
-		strings.TrimSpace(string(p.Status)) != ""
+		len(p.RequiredCapabilityGrants) > 0 ||
+		strings.TrimSpace(string(p.Status)) != "" ||
+		!p.ApprovedAt.IsZero() ||
+		!p.ActivatedAt.IsZero() ||
+		!p.ConsumedAt.IsZero() ||
+		!p.DeferredAt.IsZero()
 }

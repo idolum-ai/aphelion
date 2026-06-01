@@ -10,6 +10,8 @@ approval without widening authority by vibe.
 - `ContinuationLease` is the consumable authorization derived from an approved
   proposal.
 - Approval callbacks carry proposal/lease identity, not freeform authority.
+- Compound-plan approvals are sealed as per-phase approval tokens. They are not
+  blank checks for the whole plan.
 - The lease is consumed, revoked, or expired by runtime state; it does not grant
   new tools, accounts, devices, purchases, or public effects by itself.
 
@@ -71,13 +73,48 @@ machine-authored continuation event is processed.
    - pending `ActionProposal`
    - pending `ContinuationLease`
    - pending continuation state
-3. Telegram renders a `Continue` / `Stop` button pair.
-4. `Continue` approves the proposal and activates the lease.
+3. Telegram renders a bounded approval card. Ordinary continuations use
+   `Continue` / `Stop`; approval bundles use `Approve all` / `Approve current`
+   plus status/change/stop controls.
+4. `Continue`, `Approve all`, or `Approve current` approves only the sealed
+   proposal/token envelope that is still fresh.
 5. Runtime triggers one machine-authored continuation turn.
 6. Consuming the turn decrements the lease; zero remaining turns marks it
    consumed and returns continuation state to idle.
 7. `Stop` revokes the continuation and lease.
 8. Expired proposals/leases fail closed and emit `continuation.blocked`.
+
+## Compound plan approval bundles
+
+A durable phase plan may materialize as an `approval_bundle` when multiple
+phases are specific enough to ask about together. The bundle exists to reduce
+approval friction without turning the plan into ambient authority.
+
+Each bundled phase is stored as a sealed token:
+
+- the bundle records the operation id, phase-plan id, and plan fingerprint;
+- each phase token records its phase id, authority envelope, validation plan,
+  required grants, and phase fingerprint;
+- approval and trigger paths compare the stored fingerprints against the current
+  operation phase plan before execution.
+
+The user-facing buttons mean:
+
+- `Approve all`: approve the currently sealed phase tokens in the bundle. Each
+  phase is still consumed only when it becomes current; approval does not grant
+  unrelated work or later mutated phase text.
+- `Approve current`: approve only the current sealed phase token. Unselected
+  tokens are marked deferred, left pending in the operation phase plan, and must
+  be re-prompted before use.
+- `Details`: show the bounded effect, allow/stop lists, and the bundle warning
+  that approval is per-phase sealed authority.
+- `Change`, `Pause`, and `Stop`: avoid approving the prompt.
+
+If the operation, phase plan, bounded effect, authority class, allowed/stopped
+actions, validation plan, or required grants drift after the card is shown, the
+bundle becomes stale. A stale bundle is rejected before approval or trigger and
+the operator must use the newest prompt. This is intentional: old buttons cannot
+approve a changed plan.
 
 ## Non-Authority Rule
 

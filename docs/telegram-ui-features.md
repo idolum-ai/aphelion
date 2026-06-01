@@ -64,6 +64,7 @@ Current command surface:
   - Provides compact numeric buttons for opening per-thread detail cards.
   - Provides an `Analyze` button that queues ordinary main-chat work to produce a structured triage note across open threads.
   - Provides `Promote`, `Absorb`, and `Back` buttons inside each open thread detail card.
+  - Supports admin diagnostic reminder emission with `/threads remind`; ordinary stale-thread reminders are background/default-on for eligible open threads.
 - `/absorb`
   - Closes a side thread with `/absorb N` and appends a compact bookkeeping note to the main chat session.
   - Stops the target side-thread lane before closing so active or queued side-thread work cannot append after absorb.
@@ -315,6 +316,9 @@ requests apart without creating another operator channel.
   target is present in the durable Telegram ledger, including guide cards,
   progress cards, thread-created messages, and ordinary outbound replies.
 - `/threads` lists open threads as a compact board with `Analyze` plus numeric thread buttons. Thread detail cards show `Promote`, `Absorb`, and `Back` controls.
+- Background stale-thread reminders are default-on for eligible open side threads. Reminder cards offer reply-to-resume plus `ignore` and `absorb` callbacks.
+- `ignore` suppresses the reminder without deleting the thread; `absorb` delegates to the existing thread absorb flow; replying to the reminder routes back into the original side thread.
+- `/threads remind` is an admin diagnostic path for forcing the same reminder selection/emission path during repair or live testing.
 - `/absorb N` closes the thread and records a compact note in the main chat.
 
 The main chat remains thread `0`. Thread sessions have independent transcript,
@@ -501,6 +505,24 @@ Offer conditions:
 - Deploy/restart work is not bundled into ordinary development approvals. A
   deploy prompt must ask for a fresh standalone lease whose body names commit,
   build, install, restart, and post-restart verification.
+
+- Operation phases and continuation approval bundles may include
+  `required_capability_grants` when the approved phase also needs a bounded
+  capability grant, such as a GitHub/external-account action. Pressing the
+  phase approval can approve/create those required grants as part of the same
+  bounded operator act, but only after the continuation authority contract is
+  compiled and accepted.
+- Required capability grants are prevalidated before request/review/grant state
+  is mutated. If any required grant spec is missing, malformed, or otherwise
+  invalid, approval must fail without leaving partial active grants behind.
+- Existing active grants satisfy a required grant only when they cover every
+  requested action after normalization. A grant that covers only `read` does
+  not satisfy a required `read` + `write` bundle; the missing action still has
+  to be materialized by the bundled approval.
+- Bundled required grants do not broaden the approved phase. They create only
+  the bounded capability authority named by the phase/bundle, and they do not
+  merge PRs, deploy, restart services, edit policy, or perform unrelated
+  external-account mutations by themselves.
 
 ### Runtime decision prompts
 

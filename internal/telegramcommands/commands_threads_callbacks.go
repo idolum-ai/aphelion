@@ -35,6 +35,35 @@ func clearTelegramThreadCallbackMessage(router commandRouter, chatID int64, mess
 	return recorder.ClearTelegramThreadCallbackMessage(chatID, messageID, surface)
 }
 
+func encodeTelegramThreadReminderIgnoreCallback(threadID int64) string {
+	if threadID <= 0 {
+		return ""
+	}
+	return telegramThreadReminderIgnorePrefix + strconv.FormatInt(threadID, 10)
+}
+func decodeTelegramThreadReminderIgnoreCallback(data string) (int64, bool) {
+	trimmed := strings.TrimSpace(data)
+	if !strings.HasPrefix(trimmed, telegramThreadReminderIgnorePrefix) {
+		return 0, false
+	}
+	threadID, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(trimmed, telegramThreadReminderIgnorePrefix)), 10, 64)
+	return threadID, err == nil && threadID > 0
+}
+func encodeTelegramThreadReminderAbsorbCallback(threadID int64) string {
+	if threadID <= 0 {
+		return ""
+	}
+	return telegramThreadReminderAbsorbPrefix + strconv.FormatInt(threadID, 10)
+}
+func decodeTelegramThreadReminderAbsorbCallback(data string) (int64, bool) {
+	trimmed := strings.TrimSpace(data)
+	if !strings.HasPrefix(trimmed, telegramThreadReminderAbsorbPrefix) {
+		return 0, false
+	}
+	threadID, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(trimmed, telegramThreadReminderAbsorbPrefix)), 10, 64)
+	return threadID, err == nil && threadID > 0
+}
+
 func encodeTelegramThreadPromoteCallback(threadID int64) string {
 	if threadID <= 0 {
 		return ""
@@ -429,6 +458,72 @@ func handleTelegramThreadPromotionActionCallback(ctx context.Context, sender com
 	}
 	return true, nil
 }
+
+func handleTelegramThreadReminderIgnoreCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, threadID int64) (bool, error) {
+	threadRouter, ok := router.(commandThreadRouter)
+	if !ok {
+		return true, sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Thread controls are unavailable.")
+	}
+	chatID := callbackChatID(cb)
+	senderID := callbackSenderID(cb)
+	messageID := callbackMessageID(cb)
+	if chatID == 0 || senderID == 0 || messageID == 0 {
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleCommandMenuCallbackText); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+			return true, err
+		}
+		return true, nil
+	}
+	text, err := threadRouter.IgnoreTelegramThreadReminder(ctx, chatID, senderID, threadID, messageID)
+	if err != nil {
+		if isTelegramThreadUserError(err) {
+			text = err.Error()
+		} else {
+			return true, err
+		}
+	}
+	if strings.TrimSpace(text) == "" {
+		text = "Reminder ignored."
+	}
+	if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Ignored."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+		return true, err
+	}
+	if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func handleTelegramThreadReminderAbsorbCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, threadID int64) (bool, error) {
+	threadRouter, ok := router.(commandThreadRouter)
+	if !ok {
+		return true, sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Thread controls are unavailable.")
+	}
+	chatID := callbackChatID(cb)
+	senderID := callbackSenderID(cb)
+	messageID := callbackMessageID(cb)
+	if chatID == 0 || senderID == 0 || messageID == 0 {
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleCommandMenuCallbackText); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+			return true, err
+		}
+		return true, nil
+	}
+	if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Absorbing."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+		return true, err
+	}
+	text, err := threadRouter.AbsorbTelegramThreadReminder(ctx, chatID, senderID, threadID, messageID)
+	if err != nil {
+		if isTelegramThreadUserError(err) {
+			text = err.Error()
+		} else {
+			return true, err
+		}
+	}
+	if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
 func handleTelegramThreadCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, threadID int64) (bool, error) {
 	threadRouter, ok := router.(commandThreadRouter)
 	if !ok {

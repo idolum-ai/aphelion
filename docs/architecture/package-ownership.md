@@ -101,6 +101,33 @@ Code anchors:
 - [`config/validate_governor.go`](../../config/validate_governor.go)
 - [`config/validate_provider_work.go`](../../config/validate_provider_work.go)
 
+## Memory
+
+`memory` is the governed continuity substrate.
+
+- Owns local curated and semantic memory services, import provenance/review
+  state, promotion mechanics, recall budgeting primitives, and perception-budget
+  accounting.
+- May define typed posture/layer/accounting contracts for context selection so
+  callers can attest what memory entered or was suppressed.
+- Should keep recall, provenance, quarantine, and promotion mechanics separate
+  from operator authority: remembered material can inform perception but cannot
+  grant permission.
+- Must not own transport behavior, provider calls, operator authority, tool
+  execution, Telegram UX, deploy/restart decisions, or final runtime turn
+  orchestration.
+- The invariant is: memory is governed perception under context scarcity.
+  Semantic recall is recall, not fact; motifs and dreams are low-authority
+  continuity signals; imported archives require provenance and review before
+  becoming durable context.
+
+Code anchors:
+
+- [`memory/doc.go`](../../memory/doc.go)
+- [`memory/perception_budget.go`](../../memory/perception_budget.go)
+- [`memory/semantic.go`](../../memory/semantic.go)
+- [`memory/curated.go`](../../memory/curated.go)
+
 ## Boundary Guards
 
 - [`architecture_import_guard_test.go`](../../architecture_import_guard_test.go) enforces stable import boundaries between composition, runtime, turn, pipeline, transport, storage, and tool packages.
@@ -116,8 +143,70 @@ Code anchors:
   turn, or pipeline orchestration.
 - `tool` owns bounded tool implementations and sandbox integration. It should
   not import runtime, turn, or pipeline orchestration.
-- `durableagent` owns child-agent substrate, enrollment, policy, and forensics.
-  It may depend on storage contracts, but not on runtime orchestration.
+- `durableagent` owns child-agent substrate, enrollment, policy transport,
+  remote child sync, snapshots, provisioning, and forensics. It may depend on
+  storage contracts, but not on runtime orchestration; higher layers still decide
+  policy semantics, authority grants, deployment, and operator review. See
+  [`durableagent-product-contract.md`](./durableagent-product-contract.md).
+
+## Membranes worth keeping explicit
+
+These packages are intentionally small because their power comes from what they
+refuse to own. Their boundaries are enforced by `architecture_import_guard_test.go`.
+
+### `media`: provider-neutral media substrate
+
+- Owns provider-neutral media contracts, currently transcription and document
+  text extraction requests/responses.
+- May define local extraction adapters when they stay provider-neutral and do
+  not decide retention, prompt injection, or transport UX.
+- Must not own Telegram attachment flow, provider-specific media encoding,
+  session retention policy, tool authority, or runtime turn orchestration.
+- The invariant is: media extraction is an input transformation, not permission
+  to retain content or inject it invisibly into future turns.
+
+### `githubapp`: GitHub credential membrane
+
+- Owns GitHub App private-key parsing, JWT signing, installation-token minting,
+  repository/permission narrowing, Git credential host rendering, and token
+  redaction.
+- Must not own PR creation, git workflow decisions, GitHub action authority,
+  tool invocation, session state, runtime orchestration, or Telegram UI.
+- The invariant is: credential availability is not authority. A token minted by
+  this package is only material; a higher approved grant/lease decides whether it
+  may be used.
+
+### `governorauth`: governor auth material membrane
+
+- Owns resolving, loading, validating, and saving governor backend auth material
+  from configured Aphelion or Codex CLI sources.
+- Must not own backend transport, streaming, retry policy, turn orchestration,
+  tool authority, session state, or Telegram UI.
+- The invariant is: auth source discovery is not backend behavior. It returns a
+  typed bundle; `runtime` chooses the active route and `governorbackend` speaks
+  the backend protocol.
+
+### `governorbackend`: provider-shaped governor backend adapter
+
+- Owns Codex/ChatGPT-style backend request translation, streaming event
+  normalization, continuation handling, auth refresh transport, error
+  classification, and partial-output accumulation.
+- Must not own auth discovery, prompt policy, authority gates, tool execution,
+  session state, runtime orchestration, or Telegram UI.
+- The invariant is: backend transport is not judgment. It adapts a backend into
+  Aphelion's provider interface so the governor can run through it without
+  leaking backend-specific protocol into core authority semantics.
+
+### `durableagent`: child continuation substrate
+
+- Owns child-agent persistence, enrollment, signatures, snapshots, profiles,
+  remote-loop plumbing, conversation relay, and review artifact movement.
+- Must not own tool authority, parent session state, runtime orchestration, or
+  Telegram command/UI behavior.
+- The invariant is: continuation is not permission. Child reports, enrollment,
+  wakeups, and durable state are evidence until higher governance grants
+  authority.
+
 - `githubapp` owns GitHub App key parsing, JWT signing, and installation-token
   exchange. It does not decide runtime authority or inject credentials into
   tools.

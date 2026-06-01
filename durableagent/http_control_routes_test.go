@@ -193,3 +193,129 @@ func TestHTTPReviewArtifactUploadQueuesReviewEvent(t *testing.T) {
 		t.Fatalf("Summary = %q, want uploaded artifact summary", events[0].Summary)
 	}
 }
+
+func TestHTTPControlReceiptRejectsSameMessageIDDifferentEnvelope(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	agent := testRemoteDurableAgent()
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
+		AgentID:          agent.AgentID,
+		ParentControlURL: "https://house.example/control",
+		Status:           "active",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgentRemoteEnrollment() err = %v", err)
+	}
+
+	handler := NewHTTPHandler(store).Handler()
+	first := signedPolicyPollRouteRequest(t, agent, "poll-conflict-1", 1, time.Now().UTC(), 0, "")
+	firstRec := performJSONRequest(t, handler, http.MethodPost, ControlPlanePolicyPollPath, first)
+	if firstRec.Code != http.StatusOK {
+		t.Fatalf("first status = %d, body = %s", firstRec.Code, firstRec.Body.String())
+	}
+	conflict := signedPolicyPollRouteRequest(t, agent, "poll-conflict-1", 2, time.Now().UTC(), 0, "")
+	secondRec := performJSONRequest(t, handler, http.MethodPost, ControlPlanePolicyPollPath, conflict)
+	if secondRec.Code != http.StatusConflict {
+		t.Fatalf("second status = %d, body = %s, want conflict", secondRec.Code, secondRec.Body.String())
+	}
+}
+
+func TestHTTPParentConversationAckRejectsUnknownMessageIDWithoutMutatingState(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	agent := testRemoteDurableAgent()
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
+		AgentID:          agent.AgentID,
+		ParentControlURL: "https://house.example/control",
+		Status:           "active",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgentRemoteEnrollment() err = %v", err)
+	}
+	msg := core.DurableAgentConversationMessage{MessageID: "parent-known", Role: "parent", Text: "Known parent guidance.", CreatedAt: time.Now().UTC()}
+	continuity := core.DurableAgentContinuityState{}.WithConversationMessages(msg)
+	stateJSON, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agent.AgentID, StateJSON: stateJSON}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	reqBody := core.DurableAgentParentConversationAckRequest{
+		Envelope: core.DurableAgentControlEnvelope{
+			ProtocolVersion: core.DefaultDurableAgentControlProtocolVersion,
+			AgentID:         agent.AgentID,
+			ParentAgentID:   "house",
+			MessageKind:     core.DurableAgentControlMessageParentConversationAck,
+			MessageID:       "parent-ack-unknown-1",
+			Sequence:        1,
+			Timestamp:       time.Now().UTC(),
+		},
+		Ack: core.DurableAgentParentConversationAcknowledgement{
+			AgentID:        agent.AgentID,
+			MessageIDs:     []string{"missing-message"},
+			AcknowledgedAt: time.Now().UTC(),
+		},
+	}
+	signature, err := SignEnvelopeHMAC(agent.ControlPlaneSecret, reqBody.Envelope, reqBody.Ack)
+	if err != nil {
+		t.Fatalf("SignEnvelopeHMAC(parent ack) err = %v", err)
+	}
+	reqBody.Envelope.Signature = signature
+	rec := performJSONRequest(t, NewHTTPHandler(store).Handler(), http.MethodPost, ControlPlaneParentConversationAckPath, reqBody)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s, want bad request", rec.Code, rec.Body.String())
+	}
+	updated, err := store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	updatedContinuity, err := core.ParseDurableAgentContinuityState(updated.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	pending := updatedContinuity.PendingParentConversationMessages(5)
+	if len(pending) != 1 || pending[0].MessageID != "parent-known" || !pending[0].AcknowledgedAt.IsZero() {
+		t.Fatalf("pending after rejected ack = %#v, want original unacknowledged message", pending)
+	}
+}
+
+func signedPolicyPollRouteRequest(t *testing.T, agent core.DurableAgent, messageID string, sequence int64, timestamp time.Time, knownVersion int64, knownHash string) core.DurableAgentPolicyPollRequest {
+	t.Helper()
+	reqBody := core.DurableAgentPolicyPollRequest{
+		Envelope: core.DurableAgentControlEnvelope{
+			ProtocolVersion: core.DefaultDurableAgentControlProtocolVersion,
+			AgentID:         agent.AgentID,
+			ParentAgentID:   "house",
+			MessageKind:     core.DurableAgentControlMessagePolicyPoll,
+			MessageID:       messageID,
+			Sequence:        sequence,
+			Timestamp:       timestamp,
+		},
+		KnownVersion: knownVersion,
+		KnownHash:    knownHash,
+	}
+	signature, err := SignEnvelopeHMAC(agent.ControlPlaneSecret, reqBody.Envelope, struct {
+		KnownVersion int64  `json:"known_version,omitempty"`
+		KnownHash    string `json:"known_hash,omitempty"`
+	}{
+		KnownVersion: reqBody.KnownVersion,
+		KnownHash:    reqBody.KnownHash,
+	})
+	if err != nil {
+		t.Fatalf("SignEnvelopeHMAC(policy poll) err = %v", err)
+	}
+	reqBody.Envelope.Signature = signature
+	return reqBody
+}

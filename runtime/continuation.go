@@ -18,14 +18,16 @@ const continuationOperationalStateNote = "operational continuation_state remains
 const continuationLeaseDefaultTTL = 30 * time.Minute
 
 const (
-	continuationActionApproveLease = "approve_lease"
-	continuationActionContinueOnce = "continue_once"
-	continuationActionAskEdit      = "ask_edit"
-	continuationActionStopPark     = "stop_park"
-	continuationActionResumeEdge   = "resume_edge"
-	continuationActionAskNextLease = "ask_next_lease"
-	continuationActionStatusOnly   = "status_only"
-	continuationActionStop         = "stop"
+	continuationActionApproveLease         = "approve_lease"
+	continuationActionApproveBundleAll     = "approve_bundle_all"
+	continuationActionApproveBundleCurrent = "approve_bundle_current"
+	continuationActionContinueOnce         = "continue_once"
+	continuationActionAskEdit              = "ask_edit"
+	continuationActionStopPark             = "stop_park"
+	continuationActionResumeEdge           = "resume_edge"
+	continuationActionAskNextLease         = "ask_next_lease"
+	continuationActionStatusOnly           = "status_only"
+	continuationActionStop                 = "stop"
 )
 
 func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, result *turn.Result) error {
