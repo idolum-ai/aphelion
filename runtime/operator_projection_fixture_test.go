@@ -73,6 +73,38 @@ func TestLiveApprovalCardFixtureRendersAsHumanPlanProjection(t *testing.T) {
 	}
 }
 
+func TestApprovalPromptRendersAsSingleDecisionSentence(t *testing.T) {
+	t.Parallel()
+
+	state := session.ContinuationState{
+		Objective:      "Implement compact operator surface rendering.",
+		StageSummary:   "Commit validated rendering updates",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:               "aprop-compact-rendering",
+			Summary:          "Commit the validated rendering updates, push branch, and open a pull request",
+			BoundedEffect:    "Create one commit, push the branch, and open the PR.",
+			ForbiddenActions: []string{"merge", "deploy", "restart", "credential_token_output"},
+		},
+	}
+
+	text := renderOperationProposalMaterializedPromptFallback(state)
+	for _, want := range []string{
+		"Approve “Commit the validated rendering updates, push branch, and open a pull request” for 1 turn",
+		"Create one commit, push the branch, and open the PR",
+		"Stops before deploy/restart, credentials/tokens, merge",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("approval card = %q, want %q", text, want)
+		}
+	}
+	for _, notWant := range []string{"Approval:", "Plan:", "Status:", "Why now:", "Scope:", "Details:", "aprop-compact-rendering"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("approval card = %q, did not want scaffold/internal fragment %q", text, notWant)
+		}
+	}
+}
+
 func TestBlockedApprovalFixtureRendersHumanStatusWithoutApprovalRitual(t *testing.T) {
 	t.Parallel()
 

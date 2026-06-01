@@ -177,6 +177,67 @@ func TestRuntimeAutoModeDoubleRequiresActiveOverride(t *testing.T) {
 	}
 }
 
+func TestApprovalWindowOfferRendersIntentSubjectAndLocalExpiry(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Operator.DisplayTimezone = "America/New_York"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Date(2026, 6, 1, 10, 50, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 99213, UserID: 0, Scope: telegramDMScopeRef(99213)}
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-compact-window",
+		StageSummary:   "Commit validated rendering updates",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:            "aprop-compact-window",
+			Summary:       "Commit the validated compact patch",
+			BoundedEffect: "Create one commit and open the PR.",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	offer, err := store.CreateApprovalWindowOffer(session.ApprovalWindowOffer{
+		ID:                 "offer-compact-window",
+		ChatID:             99213,
+		AdminUserID:        1001,
+		SessionID:          session.SessionIDForKey(key),
+		ScopeKind:          string(key.Scope.Kind),
+		ScopeID:            key.Scope.ID,
+		SourceKind:         session.ApprovalWindowOfferSourceContinuation,
+		SourceID:           "decision-compact-window",
+		SourceDecisionKind: string(session.TurnAuthorizationKindContinuation),
+		OpenedLeaseID:      "lease-offer",
+		OpenedOverrideID:   "override-offer",
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(15 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
+	}
+	lease := session.OperatorAutoApprovalLease{ID: "lease-offer", AdminUserID: 1001, ChatID: 99213, ScopeKind: string(key.Scope.Kind), ScopeID: key.Scope.ID, Scope: session.OperatorAutoApprovalScopeAll, CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute)}
+	override := session.OperatorAutonomyOverride{ID: "override-offer", ChatID: 99213, ScopeKind: string(key.Scope.Kind), ScopeID: key.Scope.ID, Mode: "leased", Scope: session.OperatorAutoApprovalScopeAll, CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute)}
+
+	text := rt.renderApprovalWindowEnabledForOffer(offer, lease, override, now)
+	for _, want := range []string{"Approval window is active for “Commit the validated compact patch”", "matching requests in this chat or thread until 7:05 AM."} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("approval window text = %q, want %q", text, want)
+		}
+	}
+	for _, notWant := range []string{"Status:", "Details:", "Expires:", "UTC", "aprop-compact-window", "decision-compact-window"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("approval window text = %q, did not want scaffold/internal fragment %q", text, notWant)
+		}
+	}
+}
+
 func TestRuntimeApprovalWindowCreatesModeGateAndApprovalGrant(t *testing.T) {
 	t.Parallel()
 
