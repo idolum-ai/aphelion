@@ -113,3 +113,22 @@ func TestRuntimeStreamControlLifecycle(t *testing.T) {
 		t.Fatal("MarkStreamControlStopping() = true after finish, want false")
 	}
 }
+
+func TestRuntimeStreamControlStopCancelsAttachedContext(t *testing.T) {
+	t.Parallel()
+
+	rt := &Runtime{}
+	streamID := rt.beginStreamControl(42)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rt.attachStreamControlCancel(streamID, cancel)
+
+	if !rt.MarkStreamControlStopping(streamID, 42) {
+		t.Fatal("MarkStreamControlStopping() = false, want true")
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("stream context was not cancelled")
+	}
+}

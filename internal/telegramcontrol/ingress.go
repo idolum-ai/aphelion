@@ -162,7 +162,12 @@ func (c CommandControl) StopRun(runID int64, senderID int64) (core.StopResult, b
 	if strings.TrimSpace(string(run.Status)) != string(session.TurnRunStatusRunning) {
 		return core.StopResult{}, false, nil
 	}
-	return c.StopForMessage(telegramruntime.InboundForTurnRun(*run, senderID)), true, nil
+	result := core.StopResult{}
+	if c.Runtime != nil && c.Runtime.CancelActiveTurnRun(runID) {
+		result.ActiveCanceled = true
+	}
+	result = mergeStopResults(result, c.StopForMessage(telegramruntime.InboundForTurnRun(*run, senderID)))
+	return result, true, nil
 }
 
 func (c CommandControl) DetachRun(runID int64, senderID int64) (core.DetachResult, bool, error) {
