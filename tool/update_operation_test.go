@@ -454,6 +454,47 @@ func TestUpdateOperationToolRequiresPlanLeaseLaneAuthorityAndTurns(t *testing.T)
 	}
 }
 
+func TestRequestApprovalToolDefinitionExposesRequiredCapabilityGrants(t *testing.T) {
+	t.Parallel()
+
+	var schema map[string]any
+	if err := json.Unmarshal(requestApprovalToolDefinition().Parameters, &schema); err != nil {
+		t.Fatalf("decode request_approval schema: %v", err)
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_approval schema properties = %#v, want object", schema["properties"])
+	}
+	phase, ok := properties["phase"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_approval phase schema = %#v, want object", properties["phase"])
+	}
+	phaseProperties, ok := phase["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_approval phase properties = %#v, want object", phase["properties"])
+	}
+	grantSchema, ok := phaseProperties["required_capability_grants"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_approval phase properties = %#v, want required_capability_grants", phaseProperties)
+	}
+	if grantSchema["type"] != "array" {
+		t.Fatalf("required_capability_grants type = %#v, want array", grantSchema["type"])
+	}
+	items, ok := grantSchema["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("required_capability_grants items = %#v, want object schema", grantSchema["items"])
+	}
+	itemProperties, ok := items["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("required_capability_grants item properties = %#v, want object", items["properties"])
+	}
+	for _, want := range []string{"request_id", "grant_id", "kind", "target_resource", "granted_to", "allowed_actions", "contract", "constraints", "expires_at"} {
+		if _, ok := itemProperties[want]; !ok {
+			t.Fatalf("required_capability_grants item properties = %#v, want %q", itemProperties, want)
+		}
+	}
+}
+
 func TestDefinitionsIncludeRequestApprovalToolWhenStoreConfigured(t *testing.T) {
 	t.Parallel()
 
