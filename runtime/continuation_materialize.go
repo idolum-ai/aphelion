@@ -53,6 +53,48 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 			}
 		}
 	}
+	if phase, ok := nextOperationPhaseForApproval(opState); ok && len(phase.RequiredCapabilityGrants) > 0 {
+		now := time.Now().UTC()
+		if reason := operationPhaseApprovalBlockedReason(phase); reason != "" {
+			r.recordAndSendBlockedOperationPhaseApproval(ctx, key, msg, opState, phase, reason, now)
+			return true, nil
+		}
+		if operationPhaseIsPlanningOnlyApproval(phase) {
+			r.recordPlanningOnlyOperationPhaseBlocked(key, opState, phase, now)
+			return true, nil
+		}
+		priorState, priorExists, err := r.store.ContinuationStateIfExists(key)
+		if err != nil {
+			return false, fmt.Errorf("read required-capability phase continuation state: %w", err)
+		}
+		priorState = session.NormalizeContinuationState(priorState)
+		if priorExists && continuationStateHasFreshPendingLease(priorState, now) && operationPhaseMatchesContinuation(opState, phase, priorState) {
+			return true, nil
+		}
+		state := continuationStateFromOperationPhase(opState, phase, promptInput, now)
+		if updatedOpState, blocked, err := r.blockInvalidMaterializedContinuationAuthority(ctx, key, msg, opState, state, "operation_phase_required_capability", now); err != nil || blocked {
+			return true, err
+		} else {
+			opState = updatedOpState
+		}
+		opState = operationStateWithMaterializedPhaseLease(opState, phase.ID, state, now)
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return false, fmt.Errorf("persist required-capability operation phase lease state: %w", err)
+		}
+		if err := r.store.UpdateContinuationState(key, state); err != nil {
+			return false, fmt.Errorf("persist required-capability operation phase continuation state: %w", err)
+		}
+		payload := continuationExecutionPayload(state)
+		payload["materialized_from"] = "operation_phase_required_capability"
+		payload["phase_plan_id"] = strings.TrimSpace(opState.PhasePlan.ID)
+		payload["phase_id"] = strings.TrimSpace(phase.ID)
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
+		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_required_capability"); err != nil {
+			return false, fmt.Errorf("send required-capability operation phase continuation approval: %w", err)
+		}
+		return true, nil
+	}
+
 	if pendingOperationPlanLeaseNeedsButton(opState.PlanLease) {
 		now := time.Now().UTC()
 		priorState, priorExists, err := r.store.ContinuationStateIfExists(key)

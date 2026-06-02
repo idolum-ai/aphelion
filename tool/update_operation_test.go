@@ -501,7 +501,14 @@ func TestRequestApprovalToolPersistsPendingManualApprovalPhase(t *testing.T) {
 				"bounded_effect":"Edit local files and run targeted tests; stop before deploy.",
 				"allowed_actions":["edit_files","run_tests"],
 				"forbidden_actions":["commit","deploy","restart_service"],
-				"validation_plan":["targeted tests pass"]
+				"validation_plan":["targeted tests pass"],
+				"required_capability_grants":[{
+					"request_id":"cap-imexx-github",
+					"kind":"external_account",
+					"target_resource":"github:imexx/processes",
+					"granted_to":"telegram:1001",
+					"allowed_actions":["contents:write","pull_requests:write"]
+				}]
 			}
 		}`),
 	)
@@ -528,6 +535,13 @@ func TestRequestApprovalToolPersistsPendingManualApprovalPhase(t *testing.T) {
 	}
 	if phase.Status != session.PlanStatusPending || phase.AuthorityClass != "workspace_write" {
 		t.Fatalf("phase = %#v, want pending workspace_write", phase)
+	}
+	if len(phase.RequiredCapabilityGrants) != 1 {
+		t.Fatalf("required capability grants = %#v, want one bundled grant", phase.RequiredCapabilityGrants)
+	}
+	grant := phase.RequiredCapabilityGrants[0]
+	if grant.RequestID != "cap-imexx-github" || grant.Kind != session.CapabilityKindExternalAccount || grant.TargetResource != "github:imexx/processes" || grant.GrantedTo != "telegram:1001" || !containsString(grant.AllowedActions, "contents:write") {
+		t.Fatalf("required capability grant = %#v, want parsed Imexx GitHub grant dependency", grant)
 	}
 }
 

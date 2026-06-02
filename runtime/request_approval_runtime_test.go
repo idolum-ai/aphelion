@@ -16,7 +16,7 @@ import (
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
-func TestRequestApprovalToolMaterializesVisibleContinuationButtons(t *testing.T) {
+func TestRequestApprovalToolMaterializesVisibleContinuationWithCapabilityDependency(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -29,6 +29,17 @@ func TestRequestApprovalToolMaterializesVisibleContinuationButtons(t *testing.T)
 	}
 	if _, err := rt.ConfigureAutoApproval(context.Background(), 9044, 1001, "15m all"); err != nil {
 		t.Fatalf("ConfigureAutoApproval() err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-imexx-github-runtime",
+		RequestedBy:    "telegram:1001",
+		RequestedFor:   "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github:imexx/processes",
+		Purpose:        "Push Imexx process scaffold after approval.",
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
 	}
 
 	resolver, err := sandbox.NewResolver(
@@ -48,6 +59,13 @@ func TestRequestApprovalToolMaterializesVisibleContinuationButtons(t *testing.T)
 	setFakeBubblewrapRunnerForRegistry(t, tools)
 
 	key := session.SessionKey{ChatID: 9044, UserID: 0, Scope: telegramDMScopeRef(9044)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-imexx-request-approval",
+		Status:    session.OperationStatusActive,
+		PhasePlan: session.OperationPhasePlan{ID: "plan-imexx-request-approval", Goal: "Ship Imexx scaffold safely"},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed operation) err = %v", err)
+	}
 	out, err := tools.ExecuteForSessionPrincipal(
 		context.Background(),
 		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
@@ -57,13 +75,20 @@ func TestRequestApprovalToolMaterializesVisibleContinuationButtons(t *testing.T)
 			"objective":"Make approval cards first-class.",
 			"phase":{
 				"id":"phase-request-approval-runtime",
-				"summary":"Implement request_approval native tool",
+				"summary":"Push Imexx process scaffold",
 				"authority_class":"workspace_write",
-				"why_now":"The operator asked for real buttons, not prose.",
-				"bounded_effect":"Edit native tool and runtime bridge files, add tests and docs, and stop before commit, push, deploy, restart, or external effects.",
+				"why_now":"The operator approved a narrow repo push phase that depends on GitHub access.",
+				"bounded_effect":"Push only the non-secret Imexx process scaffold and stop before deploy, restart, or unrelated external effects.",
 				"allowed_actions":["edit_files","run_tests"],
 				"forbidden_actions":["commit","deploy","restart_service","external_send_or_contact"],
-				"validation_plan":["request_approval materializes visible buttons"]
+				"validation_plan":["request_approval materializes visible buttons"],
+				"required_capability_grants":[{
+					"request_id":"cap-imexx-github-runtime",
+					"kind":"external_account",
+					"target_resource":"github:imexx/processes",
+					"granted_to":"telegram:1001",
+					"allowed_actions":["contents:write","pull_requests:write"]
+				}]
 			}
 		}`),
 	)
@@ -73,7 +98,6 @@ func TestRequestApprovalToolMaterializesVisibleContinuationButtons(t *testing.T)
 	if !strings.Contains(out, "[APPROVAL_REQUESTED]") {
 		t.Fatalf("request_approval output = %q, want approval requested marker", out)
 	}
-
 	materialized, err := rt.MaterializeRequestedApproval(
 		context.Background(),
 		key,
@@ -99,8 +123,10 @@ func TestRequestApprovalToolMaterializesVisibleContinuationButtons(t *testing.T)
 	if inlineCount != 1 {
 		t.Fatalf("inline count = %d, want one approval card", inlineCount)
 	}
-	if !strings.Contains(inlineText, "Implement request_approval native tool") {
-		t.Fatalf("inline text = %q, want request_approval phase summary", inlineText)
+	for _, want := range []string{"Push Imexx process scaffold", "external_account", "github:imexx/processes", "cap-imexx-github-runtime", "contents:write"} {
+		if !strings.Contains(inlineText, want) {
+			t.Fatalf("inline text = %q, want %q", inlineText, want)
+		}
 	}
 	if got, want := labels, []string{"Start", "Details", "Change", "Pause", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("inline labels = %#v, want %#v", got, want)
@@ -118,6 +144,13 @@ func TestRequestApprovalToolMaterializesVisibleContinuationButtons(t *testing.T)
 	}
 	if cont.ActionProposal.RiskClass != "workspace_write" || !actionListContains(cont.ActionProposal.AllowedActions, "edit_files") {
 		t.Fatalf("action proposal = %#v, want workspace_write edit_files", cont.ActionProposal)
+	}
+	if len(cont.ContinuationLease.RequiredCapabilityGrants) != 1 {
+		t.Fatalf("continuation lease grants = %#v, want required capability grant preserved", cont.ContinuationLease.RequiredCapabilityGrants)
+	}
+	grantSpec := cont.ContinuationLease.RequiredCapabilityGrants[0]
+	if grantSpec.RequestID != "cap-imexx-github-runtime" || grantSpec.TargetResource != "github:imexx/processes" || !actionListContains(grantSpec.AllowedActions, "contents:write") {
+		t.Fatalf("grant spec = %#v, want Imexx GitHub dependency", grantSpec)
 	}
 	leases, err := store.ActiveOperatorAutoApprovalLeases(9044, time.Now().UTC())
 	if err != nil {
