@@ -56,8 +56,15 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	if phase, ok := nextOperationPhaseForApproval(opState); ok && len(phase.RequiredCapabilityGrants) > 0 {
 		now := time.Now().UTC()
 		if reason := operationPhaseApprovalBlockedReason(phase); reason != "" {
-			r.recordAndSendBlockedOperationPhaseApproval(ctx, key, msg, opState, phase, reason, now)
-			return true, nil
+			if repairedState, repaired := operationStateWithApprovalBoundaryRepairPlan(opState, phase, reason, now); repaired {
+				if err := r.store.UpdateOperationState(key, repairedState); err != nil {
+					return false, fmt.Errorf("persist required-capability approval-boundary repair plan: %w", err)
+				}
+				opState = repairedState
+			} else {
+				r.recordAndSendBlockedOperationPhaseApproval(ctx, key, msg, opState, phase, reason, now)
+				return true, nil
+			}
 		}
 		if operationPhaseIsPlanningOnlyApproval(phase) {
 			r.recordPlanningOnlyOperationPhaseBlocked(key, opState, phase, now)
@@ -202,8 +209,20 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	if phase, ok := nextOperationPhaseForApproval(opState); ok {
 		now := time.Now().UTC()
 		if reason := operationPhaseApprovalBlockedReason(phase); reason != "" {
-			r.recordAndSendBlockedOperationPhaseApproval(ctx, key, msg, opState, phase, reason, now)
-			return true, nil
+			if repairedState, repaired := operationStateWithApprovalBoundaryRepairPlan(opState, phase, reason, now); repaired {
+				if err := r.store.UpdateOperationState(key, repairedState); err != nil {
+					return false, fmt.Errorf("persist approval-boundary repair plan: %w", err)
+				}
+				opState = repairedState
+				var refreshed bool
+				phase, refreshed = nextOperationPhaseForApproval(opState)
+				if !refreshed {
+					return true, nil
+				}
+			} else {
+				r.recordAndSendBlockedOperationPhaseApproval(ctx, key, msg, opState, phase, reason, now)
+				return true, nil
+			}
 		}
 		if operationPhaseIsPlanningOnlyApproval(phase) {
 			r.recordPlanningOnlyOperationPhaseBlocked(key, opState, phase, now)

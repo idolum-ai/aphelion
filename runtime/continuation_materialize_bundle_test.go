@@ -714,3 +714,151 @@ func TestMaterializeRepairsInvalidPendingMixedAuthorityBundle(t *testing.T) {
 		t.Fatalf("sender inline=%d sent=%d, want one repair notice and one fresh approval", inlineCount, sentCount)
 	}
 }
+
+func TestMaterializeUnclearApprovalBoundaryAutoRepairsToFirstPhaseApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9030, UserID: 0, Scope: telegramDMScopeRef(9030)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "unclear-boundary-op",
+		Objective: "Do a broad ambiguous repo operation.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "unclear-boundary-plan",
+			Goal:           "Complete the broad ambiguous repo operation safely.",
+			CurrentPhaseID: "phase-broad-work",
+			Phases: []session.OperationPhase{{
+				ID:                "phase-broad-work",
+				Summary:           "Do the broad ambiguous repo operation",
+				Status:            session.PlanStatusPending,
+				AuthorityClass:    "workspace_write",
+				BoundedEffect:     "Do some unspecified repo work.",
+				AllowedActions:    []string{"edit_files"},
+				BlockedReasonCode: "unclear_resource_action_or_stop_boundary",
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9030, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want repair-phase approval")
+	}
+
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	opState = session.NormalizeOperationState(opState)
+	if got := opState.PhasePlan.CurrentPhaseID; got != operationApprovalBoundaryRepairPhaseID {
+		t.Fatalf("current phase = %q, want repair phase", got)
+	}
+	if len(opState.PhasePlan.Phases) != 2 {
+		t.Fatalf("phase count = %d, want repair + original", len(opState.PhasePlan.Phases))
+	}
+	repair := opState.PhasePlan.Phases[0]
+	if repair.ID != operationApprovalBoundaryRepairPhaseID || repair.AuthorityClass != "read_only_review" || !repair.RequiresApproval {
+		t.Fatalf("repair phase = %#v, want read-only approval repair phase", repair)
+	}
+	if strings.Contains(strings.Join(repair.AllowedActions, " "), "edit_files") {
+		t.Fatalf("repair allowed actions = %#v, want no inherited execution action", repair.AllowedActions)
+	}
+	original := opState.PhasePlan.Phases[1]
+	if original.ID != "phase-broad-work" || original.BlockedReasonCode != "" || !original.RequiresApproval {
+		t.Fatalf("original phase = %#v, want pending later approval with unclear blocker cleared", original)
+	}
+
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.OperationID != operationPhaseProposalID(opState, repair) {
+		t.Fatalf("continuation = %#v, want pending repair-phase approval", cont)
+	}
+	if strings.Contains(strings.Join(cont.ActionProposal.AllowedActions, " "), "edit_files") {
+		t.Fatalf("proposal allowed actions = %#v, want repair planning only", cont.ActionProposal.AllowedActions)
+	}
+
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sentCount := len(sender.sent)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[inlineCount-1].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 || sentCount != 0 {
+		t.Fatalf("inline=%d sent=%d text=%q, want one approval prompt and no blocked notice", inlineCount, sentCount, inlineText)
+	}
+	if !strings.Contains(inlineText, "Clarify approval boundary") {
+		t.Fatalf("inline text = %q, want repair phase approval", inlineText)
+	}
+}
+
+func TestMaterializeConsentBlockDoesNotAutoRepairApprovalBoundary(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9031, UserID: 0, Scope: telegramDMScopeRef(9031)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "consent-block-op",
+		Objective: "Process private material.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "consent-block-plan",
+			Goal:           "Process private material safely.",
+			CurrentPhaseID: "phase-private-material",
+			Phases: []session.OperationPhase{{
+				ID:                "phase-private-material",
+				Summary:           "Read private material",
+				Status:            session.PlanStatusPending,
+				AuthorityClass:    "private_data_intake",
+				GateReasonCode:    "mailbox_content",
+				ApprovalSubject:   "third_party",
+				BlockedReasonCode: "waiting_for_consent",
+				RequiresConsent:   true,
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9031, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want blocked notice")
+	}
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if len(opState.PhasePlan.Phases) != 1 || opState.PhasePlan.Phases[0].ID == operationApprovalBoundaryRepairPhaseID {
+		t.Fatalf("phase plan = %#v, want no auto-repair for consent gate", opState.PhasePlan.Phases)
+	}
+	cont, err := store.ContinuationState(key)
+	if err == nil && cont.Status == session.ContinuationStatusPending {
+		t.Fatalf("ContinuationState() = %#v, want no pending approval continuation", cont)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sentCount := len(sender.sent)
+	sender.mu.Unlock()
+	if inlineCount != 0 || sentCount != 1 {
+		t.Fatalf("inline=%d sent=%d, want blocked notice only", inlineCount, sentCount)
+	}
+}
