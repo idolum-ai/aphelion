@@ -15,7 +15,11 @@ import (
 )
 
 func (r *Runtime) maybeHandleOperationArtifactRequest(ctx context.Context, key session.SessionKey, scope sandbox.Scope, msg core.InboundMessage) (bool, *core.TurnResult, error) {
-	if r == nil || r.store == nil || r.outbound == nil || !artifactRequestAllowedForOrigin(msg) || !looksLikeOperationArtifactSendRequest(msg.Text) {
+	if r == nil || r.store == nil || r.outbound == nil || !artifactRequestAllowedForOrigin(msg) {
+		return false, nil, nil
+	}
+	turnEvidenceCommand := isTurnEvidenceCommand(msg.Text)
+	if !turnEvidenceCommand && !looksLikeOperationArtifactSendRequest(msg.Text) {
 		return false, nil, nil
 	}
 	state, err := r.store.OperationState(key)
@@ -23,20 +27,33 @@ func (r *Runtime) maybeHandleOperationArtifactRequest(ctx context.Context, key s
 		return false, nil, nil
 	}
 	state = session.NormalizeOperationState(state)
+	if turnEvidenceCommand {
+		artifact, media, ok := latestSendableWorkEvidenceArtifact(scope, state.Artifacts)
+		if !ok {
+			reply := "No turn evidence artifact is available for this chat."
+			return r.sendOperationArtifactReply(ctx, key, msg, state, reply, nil, session.OperationArtifact{})
+		}
+		reply := operationArtifactReplyText(artifact, media)
+		return r.sendOperationArtifactReply(ctx, key, msg, state, reply, []core.Media{media}, artifact)
+	}
+
 	artifact, media, ok := latestSendableOperationArtifact(scope, state.Artifacts, msg.Text)
 	if !ok {
 		return false, nil, nil
 	}
-
 	reply := operationArtifactReplyText(artifact, media)
-	outboundID, outboundType, err := r.sendReply(ctx, msg, reply, []core.Media{media}, false)
+	return r.sendOperationArtifactReply(ctx, key, msg, state, reply, []core.Media{media}, artifact)
+}
+
+func (r *Runtime) sendOperationArtifactReply(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.OperationState, reply string, media []core.Media, artifact session.OperationArtifact) (bool, *core.TurnResult, error) {
+	outboundID, outboundType, err := r.sendReply(ctx, msg, reply, media, false)
 	if err != nil {
-		return true, &core.TurnResult{Text: reply, Media: []core.Media{media}}, fmt.Errorf("send operation artifact: %w", err)
+		return true, &core.TurnResult{Text: reply, Media: media}, fmt.Errorf("send operation artifact: %w", err)
 	}
 
 	sess, err := r.store.Load(key)
 	if err != nil {
-		return true, &core.TurnResult{Text: reply, Media: []core.Media{media}}, fmt.Errorf("load session for operation artifact reply: %w", err)
+		return true, &core.TurnResult{Text: reply, Media: media}, fmt.Errorf("load session for operation artifact reply: %w", err)
 	}
 	applySessionScope(sess, key)
 	sess.ChatType = "dm"
@@ -59,24 +76,40 @@ func (r *Runtime) maybeHandleOperationArtifactRequest(ctx context.Context, key s
 		},
 	}
 	if err := r.store.Save(sess, newMessages, core.TokenUsage{}); err != nil {
-		return true, &core.TurnResult{Text: reply, Media: []core.Media{media}}, fmt.Errorf("save operation artifact reply: %w", err)
+		return true, &core.TurnResult{Text: reply, Media: media}, fmt.Errorf("save operation artifact reply: %w", err)
 	}
 	if outboundID != 0 {
 		if err := r.store.RecordOutbound(key, turnIndex, outboundID, outboundType); err != nil {
-			return true, &core.TurnResult{Text: reply, Media: []core.Media{media}}, fmt.Errorf("record operation artifact reply: %w", err)
+			return true, &core.TurnResult{Text: reply, Media: media}, fmt.Errorf("record operation artifact reply: %w", err)
 		}
 	}
-	r.recordExecutionEvent(key, core.ExecutionEventDeliveryFinalSent, "delivery", "sent", map[string]any{
+	payload := map[string]any{
 		"message_id":   outboundID,
 		"message_type": outboundType,
-		"artifact_ref": artifact.Ref,
-		"artifact":     firstNonEmpty(artifact.Label, filepath.Base(artifact.Ref)),
-	}, time.Now().UTC())
-	return true, &core.TurnResult{Text: reply, Media: []core.Media{media}}, nil
+	}
+	if strings.TrimSpace(artifact.Ref) != "" {
+		payload["artifact_ref"] = artifact.Ref
+		payload["artifact"] = firstNonEmpty(artifact.Label, filepath.Base(artifact.Ref))
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventDeliveryFinalSent, "delivery", "sent", payload, time.Now().UTC())
+	return true, &core.TurnResult{Text: reply, Media: media}, nil
 }
 
 func artifactRequestAllowedForOrigin(msg core.InboundMessage) bool {
 	return msg.Origin == "" || msg.Origin == core.InboundOriginUser
+}
+
+func isTurnEvidenceCommand(text string) bool {
+	userText := operationArtifactRequestUserText(text)
+	fields := strings.Fields(strings.TrimSpace(userText))
+	if len(fields) != 1 {
+		return false
+	}
+	command := strings.ToLower(strings.TrimSpace(fields[0]))
+	if at := strings.Index(command, "@"); at >= 0 {
+		command = command[:at]
+	}
+	return command == "/turn-evidence"
 }
 
 func looksLikeOperationArtifactSendRequest(text string) bool {
@@ -161,6 +194,9 @@ func operationArtifactStartsWithSendRequest(normalized string) bool {
 }
 
 func operationArtifactRequestNamesArtifact(normalized string) bool {
+	if operationArtifactNormalizedTextNamesWorkEvidence(normalized) {
+		return false
+	}
 	return operationArtifactNormalizedTextNamesArtifact(normalized)
 }
 
@@ -169,13 +205,20 @@ func operationArtifactReplyContextNamesArtifact(replyContext string) bool {
 }
 
 func operationArtifactNormalizedTextNamesArtifact(normalized string) bool {
+	if operationArtifactNormalizedTextNamesWorkEvidence(normalized) {
+		return false
+	}
 	for _, field := range strings.Fields(normalized) {
 		switch field {
-		case "pdf", "artifact", "artifacts", "file", "files", "report", "reports", "evidence", "log", "logs":
+		case "pdf", "artifact", "artifacts", "file", "files", "report", "reports", "log", "logs":
 			return true
 		}
 	}
 	return strings.Contains(normalized, ".pdf")
+}
+
+func operationArtifactNormalizedTextNamesWorkEvidence(normalized string) bool {
+	return strings.Contains(normalized, "work evidence") || strings.Contains(normalized, "turn evidence") || strings.TrimSpace(normalized) == "evidence"
 }
 
 func operationArtifactShortPronounRequest(normalized string) bool {
@@ -208,6 +251,9 @@ func latestSendableOperationArtifact(scope sandbox.Scope, artifacts []session.Op
 	wantPDF := strings.Contains(strings.ToLower(requestText), "pdf")
 	for i := len(artifacts) - 1; i >= 0; i-- {
 		artifact := artifacts[i]
+		if operationArtifactIsWorkEvidence(artifact) {
+			continue
+		}
 		ref := strings.TrimSpace(artifact.Ref)
 		if ref == "" {
 			continue
@@ -222,6 +268,27 @@ func latestSendableOperationArtifact(scope sandbox.Scope, artifacts []session.Op
 		return artifact, media, true
 	}
 	return session.OperationArtifact{}, core.Media{}, false
+}
+
+func latestSendableWorkEvidenceArtifact(scope sandbox.Scope, artifacts []session.OperationArtifact) (session.OperationArtifact, core.Media, bool) {
+	for i := len(artifacts) - 1; i >= 0; i-- {
+		artifact := artifacts[i]
+		if !operationArtifactIsWorkEvidence(artifact) {
+			continue
+		}
+		media, ok := normalizeOutboundReplyMediaPath(scope, artifact.Ref, false)
+		if !ok {
+			continue
+		}
+		return artifact, media, true
+	}
+	return session.OperationArtifact{}, core.Media{}, false
+}
+
+func operationArtifactIsWorkEvidence(artifact session.OperationArtifact) bool {
+	label := strings.ToLower(strings.TrimSpace(artifact.Label))
+	ref := strings.ToLower(filepath.ToSlash(strings.TrimSpace(artifact.Ref)))
+	return label == "work evidence" || strings.Contains(ref, "/work-evidence/") || strings.Contains(ref, "memory/work-evidence/")
 }
 
 func operationArtifactLooksLikePDF(artifact session.OperationArtifact) bool {

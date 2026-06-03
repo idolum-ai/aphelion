@@ -13,6 +13,106 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
+func TestHandleInboundTurnEvidenceCommandSendsLatestWorkEvidenceArtifact(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	oldPath := filepath.Join(cfg.Agent.ExecRoot, "memory", "work-evidence", "old.md")
+	latestPath := filepath.Join(cfg.Agent.ExecRoot, "memory", "work-evidence", "latest.md")
+	for _, item := range []struct {
+		path string
+		body string
+	}{
+		{oldPath, "old work evidence"},
+		{latestPath, "latest work evidence"},
+	} {
+		if err := os.MkdirAll(filepath.Dir(item.path), 0o755); err != nil {
+			t.Fatalf("MkdirAll() err = %v", err)
+		}
+		if err := os.WriteFile(item.path, []byte(item.body), 0o600); err != nil {
+			t.Fatalf("WriteFile() err = %v", err)
+		}
+	}
+	key := session.SessionKey{ChatID: 8800, UserID: 0, Scope: telegramDMScopeRef(8800)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		Status: session.OperationStatusCompleted,
+		Artifacts: []session.OperationArtifact{
+			{Label: "Work evidence", Ref: "memory/work-evidence/old.md"},
+			{Label: "Work evidence", Ref: "memory/work-evidence/latest.md"},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     8800,
+		ChatType:   "private",
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  43,
+		Text:       "/turn-evidence",
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if result == nil || len(result.Media) != 1 {
+		t.Fatalf("result = %#v, want one media artifact", result)
+	}
+	if provider.callCount != 0 {
+		t.Fatalf("provider.callCount = %d, want direct command without model turn", provider.callCount)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want one media send", len(sender.sent))
+	}
+	if len(sender.sent[0].Media) != 1 || sender.sent[0].Media[0].Path != latestPath {
+		t.Fatalf("sent media = %#v, want latest work evidence path %q", sender.sent[0].Media, latestPath)
+	}
+	if !strings.Contains(sender.sent[0].Text, "Sending Work evidence.") {
+		t.Fatalf("sent text = %q, want work evidence caption", sender.sent[0].Text)
+	}
+}
+
+func TestHandleInboundTurnEvidenceCommandReportsMissingArtifact(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8799, UserID: 0, Scope: telegramDMScopeRef(8799)}
+	if err := store.UpdateOperationState(key, session.OperationState{Status: session.OperationStatusCompleted}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     8799,
+		ChatType:   "private",
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  42,
+		Text:       "/turn-evidence",
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if result == nil || strings.TrimSpace(result.Text) != "No turn evidence artifact is available for this chat." || len(result.Media) != 0 {
+		t.Fatalf("result = %#v, want no-evidence text without media", result)
+	}
+	if provider.callCount != 0 {
+		t.Fatalf("provider.callCount = %d, want direct command without model turn", provider.callCount)
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 || strings.TrimSpace(sender.sent[0].Text) != "No turn evidence artifact is available for this chat." || len(sender.sent[0].Media) != 0 {
+		t.Fatalf("sent = %#v, want no-evidence text without media", sender.sent)
+	}
+}
+
 func TestHandleInboundSendsLatestOperationPDFArtifactDirectly(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)
@@ -205,10 +305,23 @@ func TestLooksLikeOperationArtifactSendRequestStillUsesUserText(t *testing.T) {
 		"send it\n\nReply context:\nidolum_bot: Proposal denial bugfix validation log.",
 		"please attach the file",
 		"share that report",
-		"can you send me the work evidence",
 	} {
 		if !looksLikeOperationArtifactSendRequest(text) {
 			t.Fatalf("looksLikeOperationArtifactSendRequest(%q) = false, want true", text)
+		}
+	}
+}
+
+func TestLooksLikeOperationArtifactSendRequestRejectsWorkEvidenceText(t *testing.T) {
+	t.Parallel()
+
+	for _, text := range []string{
+		"can you send me the work evidence",
+		"send work evidence",
+		"please attach the evidence",
+	} {
+		if looksLikeOperationArtifactSendRequest(text) {
+			t.Fatalf("looksLikeOperationArtifactSendRequest(%q) = true, want false; use /turn-evidence", text)
 		}
 	}
 }
