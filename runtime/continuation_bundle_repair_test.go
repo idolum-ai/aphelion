@@ -178,6 +178,109 @@ func TestStartupRepairRevokesStaleContinuationDerivedOrganicProposal(t *testing.
 	}
 }
 
+func TestMaterializeRevokesPendingContinuationForCompletedOperation(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9040, UserID: 0, Scope: telegramDMScopeRef(9040)}
+	now := time.Now().UTC()
+	opState := session.OperationState{
+		ID:        "completed-followup-op",
+		Objective: "Commit and push the validated reshape.",
+		Status:    session.OperationStatusCompleted,
+		Stage:     "completed",
+		Summary:   "PR #130 already updated with commit 39123e1.",
+		Proposal: session.OperationProposal{
+			ID:            "proposal-completed-followup",
+			Kind:          "commit_push_pr",
+			Summary:       "Commit and push the reshape",
+			BoundedEffect: "Already completed.",
+			Status:        session.ProposalStatusApproved,
+			UpdatedAt:     now,
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "completed-followup-plan",
+			CurrentPhaseID: "phase-commit-push",
+			Phases: []session.OperationPhase{{
+				ID:             "phase-commit-push",
+				Summary:        "Commit and push the reshape",
+				Status:         session.PlanStatusCompleted,
+				AuthorityClass: "commit_push_pr",
+				CompletedAt:    now,
+			}},
+		},
+		UpdatedAt: now,
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	stalePhase := opState.PhasePlan.Phases[0]
+	stalePhase.Status = session.PlanStatusPending
+	cont := continuationStateFromOperationPhase(opState, stalePhase, "continue", now)
+	cont.DecisionID = "decision-completed-followup"
+	if err := store.UpdateContinuationState(key, cont); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9040, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if materialized {
+		t.Fatal("materialized = true, want stale completed approval repaired without re-offer")
+	}
+
+	cont, err = store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusRevoked || cont.ActionProposal.Status != session.ProposalStatusSuperseded || cont.ContinuationLease.Status != session.ContinuationLeaseStatusRevoked {
+		t.Fatalf("continuation = %#v, want revoked stale completed approval", cont)
+	}
+	if cont.HandshakeBlockedReason != "stale_completed_operation" {
+		t.Fatalf("HandshakeBlockedReason = %q, want stale_completed_operation", cont.HandshakeBlockedReason)
+	}
+	reloaded, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if reloaded.Status != session.OperationStatusCompleted || reloaded.Proposal.Status != session.ProposalStatusSuperseded {
+		t.Fatalf("operation = %#v, want completed operation preserved with stale proposal superseded", reloaded)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var adjudicated session.ExecutionEvent
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationOffered {
+			t.Fatalf("events = %#v, want no reoffered completed continuation", events)
+		}
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationAdjudicated {
+			adjudicated = event
+		}
+	}
+	if adjudicated.ID == 0 || !strings.Contains(adjudicated.PayloadJSON, "stale_completed_approval") || !strings.Contains(adjudicated.PayloadJSON, "repair_completed_or_superseded_approval") || !strings.Contains(adjudicated.PayloadJSON, "phase:phase-commit-push") {
+		t.Fatalf("adjudicated event = %#v payload=%q, want completed repair evidence", adjudicated, adjudicated.PayloadJSON)
+	}
+
+	sender.mu.Lock()
+	sentCount := len(sender.sent)
+	sentText := ""
+	if sentCount > 0 {
+		sentText = sender.sent[0].Text
+	}
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if sentCount != 1 || inlineCount != 0 || !strings.Contains(sentText, "already completed") || !strings.Contains(sentText, "new bounded follow-up") {
+		t.Fatalf("sender sent=%d inline=%d text=%q, want completed stale notice without buttons", sentCount, inlineCount, sentText)
+	}
+}
+
 func TestRenderOperationPhaseBundlePromptIsConciseAndHidesRawLeaseDetails(t *testing.T) {
 	t.Parallel()
 

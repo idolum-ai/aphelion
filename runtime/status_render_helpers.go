@@ -60,10 +60,45 @@ func statusAdjudicationDiagnosticLine(adjudication core.AdjudicationStatusSnapsh
 	if action != "" {
 		parts = append(parts, "action="+action)
 	}
+	if subject := strings.TrimSpace(adjudication.SubjectID); subject != "" && subject != "latest_turn" {
+		parts = append(parts, "subject="+subject)
+	}
+	if len(adjudication.EvidenceRefs) > 0 {
+		refs := make([]string, 0, minStatusInt(3, len(adjudication.EvidenceRefs)))
+		for _, ref := range adjudication.EvidenceRefs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			refs = append(refs, ref)
+			if len(refs) == 3 {
+				break
+			}
+		}
+		if len(refs) > 0 {
+			parts = append(parts, "refs="+strings.Join(refs, ","))
+		}
+	}
 	if detail != "" {
 		parts = append(parts, "detail="+strconv.Quote(truncateStatusDiagnostic(detail, 180)))
 	}
+	if next := statusAdjudicationNextAction(adjudication); next != "" {
+		parts = append(parts, "next="+strconv.Quote(next))
+	}
 	return strings.Join(parts, " ") + "."
+}
+
+func statusAdjudicationNextAction(adjudication core.AdjudicationStatusSnapshot) string {
+	switch strings.TrimSpace(adjudication.VisibleAction) {
+	case "repair_completed_or_superseded_approval":
+		return "Ask for a new bounded follow-up if more work remains."
+	case "repair_invalid_pending_approval", "repair_stale_continuation_projection":
+		return "Use the fresh eligible proposal; do not press stale approval buttons."
+	case "blocked_status":
+		return "Resolve the named blocker, then request a fresh bounded approval."
+	default:
+		return ""
+	}
 }
 
 func summarizeExecutionEventPayload(eventType string, eventStatus string, payload map[string]any) string {
