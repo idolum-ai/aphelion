@@ -715,7 +715,7 @@ func TestMaterializeRepairsInvalidPendingMixedAuthorityBundle(t *testing.T) {
 	}
 }
 
-func TestMaterializeUnclearApprovalBoundaryAutoRepairsToFirstPhaseApproval(t *testing.T) {
+func TestMaterializeUnclearApprovalBoundaryRoutesThroughDeliberationToFirstPhaseApproval(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -751,7 +751,7 @@ func TestMaterializeUnclearApprovalBoundaryAutoRepairsToFirstPhaseApproval(t *te
 		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
 	}
 	if !materialized {
-		t.Fatal("materialized = false, want repair-phase approval")
+		t.Fatal("materialized = false, want first-slice approval")
 	}
 
 	opState, err := store.OperationState(key)
@@ -759,20 +759,20 @@ func TestMaterializeUnclearApprovalBoundaryAutoRepairsToFirstPhaseApproval(t *te
 		t.Fatalf("OperationState() err = %v", err)
 	}
 	opState = session.NormalizeOperationState(opState)
-	if got := opState.PhasePlan.CurrentPhaseID; got != operationApprovalBoundaryRepairPhaseID {
-		t.Fatalf("current phase = %q, want repair phase", got)
-	}
 	if len(opState.PhasePlan.Phases) != 2 {
-		t.Fatalf("phase count = %d, want repair + original", len(opState.PhasePlan.Phases))
+		t.Fatalf("phase count = %d, want first slice + original", len(opState.PhasePlan.Phases))
 	}
-	repair := opState.PhasePlan.Phases[0]
-	if repair.ID != operationApprovalBoundaryRepairPhaseID || repair.AuthorityClass != "read_only_review" || !repair.RequiresApproval {
-		t.Fatalf("repair phase = %#v, want read-only approval repair phase", repair)
-	}
-	if strings.Contains(strings.Join(repair.AllowedActions, " "), "edit_files") {
-		t.Fatalf("repair allowed actions = %#v, want no inherited execution action", repair.AllowedActions)
-	}
+	first := opState.PhasePlan.Phases[0]
 	original := opState.PhasePlan.Phases[1]
+	if got := opState.PhasePlan.CurrentPhaseID; got != operationApprovalBoundaryFirstPhaseID(original) {
+		t.Fatalf("current phase = %q, want first slice", got)
+	}
+	if first.ID != operationApprovalBoundaryFirstPhaseID(original) || first.AuthorityClass != "read_only_review" || !first.RequiresApproval {
+		t.Fatalf("first phase = %#v, want normal read-only first slice", first)
+	}
+	if strings.Contains(strings.Join(first.AllowedActions, " "), "edit_files") {
+		t.Fatalf("first allowed actions = %#v, want no inherited execution action", first.AllowedActions)
+	}
 	if original.ID != "phase-broad-work" || original.BlockedReasonCode != "" || !original.RequiresApproval {
 		t.Fatalf("original phase = %#v, want pending later approval with unclear blocker cleared", original)
 	}
@@ -781,11 +781,11 @@ func TestMaterializeUnclearApprovalBoundaryAutoRepairsToFirstPhaseApproval(t *te
 	if err != nil {
 		t.Fatalf("ContinuationState() err = %v", err)
 	}
-	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.OperationID != operationPhaseProposalID(opState, repair) {
-		t.Fatalf("continuation = %#v, want pending repair-phase approval", cont)
+	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.OperationID != operationPhaseProposalID(opState, first) {
+		t.Fatalf("continuation = %#v, want pending first-slice approval", cont)
 	}
 	if strings.Contains(strings.Join(cont.ActionProposal.AllowedActions, " "), "edit_files") {
-		t.Fatalf("proposal allowed actions = %#v, want repair planning only", cont.ActionProposal.AllowedActions)
+		t.Fatalf("proposal allowed actions = %#v, want boundary review only", cont.ActionProposal.AllowedActions)
 	}
 
 	sender.mu.Lock()
@@ -804,7 +804,7 @@ func TestMaterializeUnclearApprovalBoundaryAutoRepairsToFirstPhaseApproval(t *te
 	}
 }
 
-func TestMaterializeConsentBlockDoesNotAutoRepairApprovalBoundary(t *testing.T) {
+func TestMaterializeConsentBlockDoesNotRouteThroughApprovalBoundaryDeliberation(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -847,8 +847,8 @@ func TestMaterializeConsentBlockDoesNotAutoRepairApprovalBoundary(t *testing.T) 
 	if err != nil {
 		t.Fatalf("OperationState() err = %v", err)
 	}
-	if len(opState.PhasePlan.Phases) != 1 || opState.PhasePlan.Phases[0].ID == operationApprovalBoundaryRepairPhaseID {
-		t.Fatalf("phase plan = %#v, want no auto-repair for consent gate", opState.PhasePlan.Phases)
+	if len(opState.PhasePlan.Phases) != 1 || strings.HasPrefix(opState.PhasePlan.Phases[0].ID, operationApprovalBoundaryPlanPhasePrefix) {
+		t.Fatalf("phase plan = %#v, want no deliberation repair for consent gate", opState.PhasePlan.Phases)
 	}
 	cont, err := store.ContinuationState(key)
 	if err == nil && cont.Status == session.ContinuationStatusPending {
