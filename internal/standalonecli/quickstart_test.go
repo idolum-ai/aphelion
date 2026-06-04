@@ -236,7 +236,7 @@ func (r *fakeQuickstartCommandRunner) RunServiceGuardCommand(_ context.Context, 
 	if name == "systemctl" && reflect.DeepEqual(args, []string{"--user", "list-unit-files", "--no-legend", "--plain"}) {
 		return []byte(r.unitFiles), nil
 	}
-	if name == "systemctl" && reflect.DeepEqual(args, []string{"--user", "show", "aphelion", "-p", "MainPID", "-p", "ExecStart", "--no-pager"}) {
+	if name == "systemctl" && len(args) >= 4 && args[0] == "--user" && args[1] == "show" && args[2] == "aphelion" {
 		return []byte(r.show), nil
 	}
 	return nil, errors.New("unexpected service guard command: " + name + " " + strings.Join(args, " "))

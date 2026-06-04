@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestRunStatusCommandKVReady(t *testing.T) {
+func TestRunStatusCommandKVDegradesWhenBuildRevisionUnknown(t *testing.T) {
 	configPath := writeMinimalStatusConfig(t)
 	metaPath := filepath.Join(t.TempDir(), "release.json")
 	if err := os.WriteFile(metaPath, []byte(`{"latest_version":"v0.2.2","installed_version":"v0.2.2","checked_at":"2026-06-04T14:38:27Z","source":"test"}`), 0o600); err != nil {
@@ -45,14 +45,14 @@ func TestRunStatusCommandKVReady(t *testing.T) {
 	}
 	for _, want := range []string{
 		"action: status",
-		"status: ready",
+		"status: degraded",
 		"config_path: " + configPath,
 		"service_main_pid: 123",
 		"service_running_exec: " + execPath,
-		"service_binary_matches: true",
+		"service_binary_matches: false",
 		"release_installed_version: v0.2.2",
-		"next_action: none",
-		"issues: none",
+		"next_action: run doctor",
+		"running service binary does not match expected binary",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("status output missing %q in %q", want, out)
@@ -170,4 +170,76 @@ external_manifest_dir = "./external-tools"
 		t.Fatalf("write config: %v", err)
 	}
 	return configPath
+}
+
+func TestRunStatusCommandDegradesWhenVersionOrRevisionUnknown(t *testing.T) {
+	configPath := writeMinimalStatusConfig(t)
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	fake := statusFakeService{
+		show:      "MainPID=123\nExecStart={ path=" + execPath + " ; argv[]=" + execPath + " --config " + configPath + " }\n",
+		unitList:  "aphelion.service loaded active running Aphelion\n",
+		unitFiles: "aphelion.service enabled\n",
+		readlinks: map[string]string{"/proc/123/exe": execPath},
+		versions:  map[string]versionInfo{execPath: {Version: "", VCSRevision: ""}},
+	}
+	out, err := captureStandaloneStdout(t, func() error {
+		return runStatusCommandWithOptions([]string{"--config", configPath}, statusCommandOptions{
+			Runner:   fake.run,
+			Readlink: fake.readlink,
+			ExecVersion: func(ctx context.Context, path string) (versionInfo, error) {
+				return fake.versions[path], nil
+			},
+			MetadataPath: filepath.Join(t.TempDir(), "missing.json"),
+		})
+	})
+	if err != nil {
+		t.Fatalf("runStatusCommand() err = %v", err)
+	}
+	for _, want := range []string{"status: degraded", "service_binary_matches: false", "running service binary does not match expected binary"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("status output missing %q in %q", want, out)
+		}
+	}
+}
+
+func TestRunStatusCommandReturnsDegradedPacketForConfigLoadFailure(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "missing.toml")
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	info := readVersionInfo()
+	fake := statusFakeService{
+		show:      "MainPID=123\nExecStart={ path=" + execPath + " ; argv[]=" + execPath + " --config " + configPath + " }\n",
+		unitList:  "aphelion.service loaded active running Aphelion\n",
+		unitFiles: "aphelion.service enabled\n",
+		readlinks: map[string]string{"/proc/123/exe": execPath},
+		versions:  map[string]versionInfo{execPath: info},
+	}
+	out, err := captureStandaloneStdout(t, func() error {
+		return runStatusCommandWithOptions([]string{"--config", configPath, "--format=json"}, statusCommandOptions{
+			Runner:   fake.run,
+			Readlink: fake.readlink,
+			ExecVersion: func(ctx context.Context, path string) (versionInfo, error) {
+				return fake.versions[path], nil
+			},
+			MetadataPath: filepath.Join(t.TempDir(), "missing-release.json"),
+		})
+	})
+	if err != nil {
+		t.Fatalf("runStatusCommand(config failure) err = %v, want degraded packet", err)
+	}
+	var got statusSnapshot
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("json.Unmarshal(status) err = %v; output=%q", err, out)
+	}
+	if got.Status != "degraded" || got.ConfigPath != configPath {
+		t.Fatalf("status=%q config=%q, want degraded config path %q", got.Status, got.ConfigPath, configPath)
+	}
+	if !strings.Contains(strings.Join(got.Issues, ";"), "config load failed") {
+		t.Fatalf("issues = %#v, want config load failed", got.Issues)
+	}
 }

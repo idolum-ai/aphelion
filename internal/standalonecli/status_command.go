@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/internal/releaseinfo"
 )
 
@@ -134,9 +135,13 @@ func normalizeStatusOutputFormat(raw string, jsonAlias bool) (string, error) {
 }
 
 func buildStatusSnapshot(ctx context.Context, opts statusCommandOptions) (statusSnapshot, error) {
-	cfg, configPath, err := loadConfigForCommand(opts.ConfigPath)
-	if err != nil {
-		return statusSnapshot{}, err
+	cfg, configPath, configErr := loadConfigForCommand(opts.ConfigPath)
+	if configPath == "" {
+		if resolved, err := config.ResolveConfigPath(opts.ConfigPath); err == nil {
+			configPath = resolved
+		} else {
+			configPath = opts.ConfigPath
+		}
 	}
 	version := readVersionInfo()
 	current := releaseinfo.Current{Version: version.Version, Revision: version.VCSRevision, Modified: version.VCSModified}
@@ -190,8 +195,15 @@ func buildStatusSnapshot(ctx context.Context, opts statusCommandOptions) (status
 			ExpectedVersion:  report.ExpectedVersion,
 			ExpectedRevision: report.ExpectedRevision,
 		},
-		DurableChildren: readDurableChildrenSummary(cfg.Sessions.DBPath),
-		DuplicateUnits:  report.DuplicateUnitNames,
+		DuplicateUnits: report.DuplicateUnitNames,
+	}
+	if cfg != nil {
+		s.DurableChildren = readDurableChildrenSummary(cfg.Sessions.DBPath)
+	} else {
+		s.DurableChildren = statusDurableChildrenInfo{Status: "unavailable"}
+	}
+	if configErr != nil {
+		s.Issues = append(s.Issues, "config load failed: "+configErr.Error())
 	}
 	if metaOK {
 		s.Release.MetadataStatus = "present"
@@ -278,10 +290,16 @@ func serviceBinaryMatches(info statusServiceInfo) bool {
 	if info.RunningExecPath != info.ExpectedExecPath {
 		return false
 	}
-	if info.ExpectedRevision != "" && info.RunningRevision != "" && info.ExpectedRevision != info.RunningRevision {
+	if strings.TrimSpace(info.ExpectedRevision) == "" || strings.TrimSpace(info.RunningRevision) == "" {
 		return false
 	}
-	if info.ExpectedVersion != "" && info.RunningVersion != "" && info.ExpectedVersion != info.RunningVersion {
+	if info.ExpectedRevision != info.RunningRevision {
+		return false
+	}
+	if strings.TrimSpace(info.ExpectedVersion) == "" || strings.TrimSpace(info.RunningVersion) == "" {
+		return false
+	}
+	if info.ExpectedVersion != info.RunningVersion {
 		return false
 	}
 	return true
