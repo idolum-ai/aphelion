@@ -42,6 +42,7 @@ type builtDeployVerificationRuntime = standalonecli.BuiltDeployVerificationRunti
 
 var deployVerificationRuntimeBuilder = defaultDeployVerificationRuntimeBuilder
 var deployVerificationRunner = verifyDeployment
+var deployVerificationServiceGuard = standalonecli.VerifyAphelionServiceGuard
 
 func verifyDeployDeps() standalonecli.VerifyDeployDeps {
 	return standalonecli.VerifyDeployDeps{
@@ -49,6 +50,7 @@ func verifyDeployDeps() standalonecli.VerifyDeployDeps {
 		TESRetentionConfigSafety:            maintenancecli.TESRetentionConfigSafety,
 		PrepareFilesystem:                   prepareFilesystem,
 		SyncConfiguredTelegramDurableGroups: syncConfiguredTelegramDurableGroups,
+		ServiceGuard:                        deployVerificationServiceGuard,
 	}
 }
 

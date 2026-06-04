@@ -156,6 +156,16 @@ type ContinuationStatusSnapshot struct {
 	Source           string
 }
 
+type ReleaseNoticeSnapshot struct {
+	Available      bool
+	CurrentVersion string
+	LatestVersion  string
+	MetadataPath   string
+	CheckedAt      time.Time
+	Source         string
+	Reason         string
+}
+
 type RestartHealthSnapshot struct {
 	WatchdogEnabled              bool
 	WatchdogTriggered            bool
@@ -403,6 +413,7 @@ type SystemStatusSnapshot struct {
 	StaleRunningTurns            []TurnRunStatusSnapshot
 	HotChats                     []ChatStatusRollup
 	RestartHealth                RestartHealthSnapshot
+	ReleaseNotice                ReleaseNoticeSnapshot
 	ProviderHealth               ProviderHealthSnapshot
 	Tailnet                      *TailnetStatusSnapshot
 	Autonomy                     AutonomyStatusSnapshot

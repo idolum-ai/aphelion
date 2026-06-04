@@ -261,3 +261,58 @@ func TestPendingReviewEventsAllExcludesDeliveredRows(t *testing.T) {
 		t.Fatalf("pending review summaries = [%q, %q], want [pending-a, pending-b]", events[0].Summary, events[1].Summary)
 	}
 }
+
+func TestDismissPendingCapabilityReviewEventsTracksDeliveryMessageID(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	oldID, err := store.InsertReviewEvent(ReviewEvent{
+		SourceChatID:      101,
+		SourceUserID:      202,
+		SourceRole:        "capability_request",
+		TargetAdminChatID: 9001,
+		Summary:           "old capability request",
+		MetadataJSON:      `{"request_id":"cap-stale","request_via":"capability_request"}`,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent(old) err = %v", err)
+	}
+	if err := store.MarkReviewDeliveredWithMessage(oldID, 777); err != nil {
+		t.Fatalf("MarkReviewDeliveredWithMessage() err = %v", err)
+	}
+	newID, err := store.InsertReviewEvent(ReviewEvent{
+		SourceChatID:      101,
+		SourceUserID:      202,
+		SourceRole:        "capability_request",
+		TargetAdminChatID: 9001,
+		Summary:           "new capability request",
+		MetadataJSON:      `{"request_id":"cap-stale","request_via":"capability_request"}`,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent(new) err = %v", err)
+	}
+
+	stale, err := store.DismissPendingCapabilityReviewEvents(9001, "cap-stale", newID)
+	if err != nil {
+		t.Fatalf("DismissPendingCapabilityReviewEvents() err = %v", err)
+	}
+	if len(stale) != 1 || stale[0].ID != oldID || stale[0].DeliveryMessageID != 777 {
+		t.Fatalf("stale events = %#v, want old event with delivery_message_id 777", stale)
+	}
+	oldEvent, err := store.ReviewEventByID(oldID)
+	if err != nil {
+		t.Fatalf("ReviewEventByID(old) err = %v", err)
+	}
+	if oldEvent.Status != "dismissed" {
+		t.Fatalf("old status = %q, want dismissed", oldEvent.Status)
+	}
+	newEvent, err := store.ReviewEventByID(newID)
+	if err != nil {
+		t.Fatalf("ReviewEventByID(new) err = %v", err)
+	}
+	if newEvent.Status != "pending" {
+		t.Fatalf("new status = %q, want pending", newEvent.Status)
+	}
+}

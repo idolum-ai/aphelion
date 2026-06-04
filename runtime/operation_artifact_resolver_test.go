@@ -14,67 +14,80 @@ import (
 )
 
 func TestHandleInboundTurnEvidenceCommandSendsLatestWorkEvidenceArtifact(t *testing.T) {
-	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	rt, err := New(cfg, store, provider, nil, sender)
-	if err != nil {
-		t.Fatalf("New() err = %v", err)
-	}
-
-	oldPath := filepath.Join(cfg.Agent.ExecRoot, "memory", "work-evidence", "old.md")
-	latestPath := filepath.Join(cfg.Agent.ExecRoot, "memory", "work-evidence", "latest.md")
-	for _, item := range []struct {
-		path string
-		body string
+	tests := []struct {
+		name string
+		text string
 	}{
-		{oldPath, "old work evidence"},
-		{latestPath, "latest work evidence"},
-	} {
-		if err := os.MkdirAll(filepath.Dir(item.path), 0o755); err != nil {
-			t.Fatalf("MkdirAll() err = %v", err)
-		}
-		if err := os.WriteFile(item.path, []byte(item.body), 0o600); err != nil {
-			t.Fatalf("WriteFile() err = %v", err)
-		}
-	}
-	key := session.SessionKey{ChatID: 8800, UserID: 0, Scope: telegramDMScopeRef(8800)}
-	if err := store.UpdateOperationState(key, session.OperationState{
-		Status: session.OperationStatusCompleted,
-		Artifacts: []session.OperationArtifact{
-			{Label: "Work evidence", Ref: "memory/work-evidence/old.md"},
-			{Label: "Work evidence", Ref: "memory/work-evidence/latest.md"},
-		},
-	}); err != nil {
-		t.Fatalf("UpdateOperationState() err = %v", err)
+		{name: "compat hyphen", text: "/turn-evidence"},
+		{name: "visible underscore", text: "/turn_evidence"},
+		{name: "visible underscore with bot suffix", text: "/turn_evidence@idolum_bot"},
 	}
 
-	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
-		ChatID:     8800,
-		ChatType:   "private",
-		SenderID:   1001,
-		SenderName: "admin",
-		MessageID:  43,
-		Text:       "/turn-evidence",
-	})
-	if err != nil {
-		t.Fatalf("HandleInbound() err = %v", err)
-	}
-	if result == nil || len(result.Media) != 1 {
-		t.Fatalf("result = %#v, want one media artifact", result)
-	}
-	if provider.callCount != 0 {
-		t.Fatalf("provider.callCount = %d, want direct command without model turn", provider.callCount)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, store, provider, sender := buildRuntimeFixtures(t)
+			rt, err := New(cfg, store, provider, nil, sender)
+			if err != nil {
+				t.Fatalf("New() err = %v", err)
+			}
 
-	sender.mu.Lock()
-	defer sender.mu.Unlock()
-	if len(sender.sent) != 1 {
-		t.Fatalf("sent len = %d, want one media send", len(sender.sent))
-	}
-	if len(sender.sent[0].Media) != 1 || sender.sent[0].Media[0].Path != latestPath {
-		t.Fatalf("sent media = %#v, want latest work evidence path %q", sender.sent[0].Media, latestPath)
-	}
-	if !strings.Contains(sender.sent[0].Text, "Sending Work evidence.") {
-		t.Fatalf("sent text = %q, want work evidence caption", sender.sent[0].Text)
+			oldPath := filepath.Join(cfg.Agent.ExecRoot, "memory", "work-evidence", "old.md")
+			latestPath := filepath.Join(cfg.Agent.ExecRoot, "memory", "work-evidence", "latest.md")
+			for _, item := range []struct {
+				path string
+				body string
+			}{
+				{oldPath, "old work evidence"},
+				{latestPath, "latest work evidence"},
+			} {
+				if err := os.MkdirAll(filepath.Dir(item.path), 0o755); err != nil {
+					t.Fatalf("MkdirAll() err = %v", err)
+				}
+				if err := os.WriteFile(item.path, []byte(item.body), 0o600); err != nil {
+					t.Fatalf("WriteFile() err = %v", err)
+				}
+			}
+			key := session.SessionKey{ChatID: 8800, UserID: 0, Scope: telegramDMScopeRef(8800)}
+			if err := store.UpdateOperationState(key, session.OperationState{
+				Status: session.OperationStatusCompleted,
+				Artifacts: []session.OperationArtifact{
+					{Label: "Work evidence", Ref: "memory/work-evidence/old.md"},
+					{Label: "Work evidence", Ref: "memory/work-evidence/latest.md"},
+				},
+			}); err != nil {
+				t.Fatalf("UpdateOperationState() err = %v", err)
+			}
+
+			result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+				ChatID:     8800,
+				ChatType:   "private",
+				SenderID:   1001,
+				SenderName: "admin",
+				MessageID:  43,
+				Text:       tt.text,
+			})
+			if err != nil {
+				t.Fatalf("HandleInbound() err = %v", err)
+			}
+			if result == nil || len(result.Media) != 1 {
+				t.Fatalf("result = %#v, want one media artifact", result)
+			}
+			if provider.callCount != 0 {
+				t.Fatalf("provider.callCount = %d, want direct command without model turn", provider.callCount)
+			}
+
+			sender.mu.Lock()
+			defer sender.mu.Unlock()
+			if len(sender.sent) != 1 {
+				t.Fatalf("sent len = %d, want one media send", len(sender.sent))
+			}
+			if len(sender.sent[0].Media) != 1 || sender.sent[0].Media[0].Path != latestPath {
+				t.Fatalf("sent media = %#v, want latest work evidence path %q", sender.sent[0].Media, latestPath)
+			}
+			if !strings.Contains(sender.sent[0].Text, "Sending Work evidence.") {
+				t.Fatalf("sent text = %q, want work evidence caption", sender.sent[0].Text)
+			}
+		})
 	}
 }
 

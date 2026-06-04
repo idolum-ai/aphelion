@@ -116,8 +116,11 @@ func TestVerifyDeploymentSuccessRunsGoldenPathAndCleansProbeSession(t *testing.T
 	if !report.Blessed {
 		t.Fatal("report.Blessed = false, want true")
 	}
-	if len(report.Probes) != 5 {
-		t.Fatalf("probe len = %d, want 5", len(report.Probes))
+	if len(report.Probes) != 6 {
+		t.Fatalf("probe len = %d, want 6", len(report.Probes))
+	}
+	if report.Probes[2].Name != "service_binary" || report.Probes[2].Status != deployProbeStatusPass {
+		t.Fatalf("service binary probe = %#v, want pass", report.Probes[2])
 	}
 	bootProbe := report.Probes[0]
 	if bootProbe.Name != "boot" {

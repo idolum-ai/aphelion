@@ -97,6 +97,7 @@ type VerifyDeployDeps struct {
 	PrepareFilesystem                   func(*config.Config) error
 	SyncConfiguredTelegramDurableGroups func(*config.Config, *session.SQLiteStore) error
 	VerifyRunner                        func(context.Context, *config.Config, DeployVerificationOptions) (DeployVerificationReport, error)
+	ServiceGuard                        func(context.Context, serviceGuardCheck) (serviceGuardReport, error)
 }
 
 func RunVerifyDeployCommand(args []string, deps VerifyDeployDeps) error {
@@ -279,6 +280,29 @@ func verifyDeployment(ctx context.Context, cfg *config.Config, opts deployVerifi
 			return "", fmt.Errorf("verification runtime builder returned nil tool probe")
 		}
 		return built.Probe(ctx, key, adminPrincipal)
+	}); err != nil {
+		return report, err
+	}
+
+	if err := runProbe("service_binary", func() (string, error) {
+		guard := deps.ServiceGuard
+		if guard == nil {
+			guard = verifyAphelionServiceGuard
+		}
+		currentVersion := readVersionInfo()
+		execPath, execErr := os.Executable()
+		if execErr != nil {
+			return "", fmt.Errorf("resolve current executable: %w", execErr)
+		}
+		guardReport, guardErr := guard(ctx, serviceGuardCheck{
+			ExpectedExecPath: execPath,
+			ExpectedVersion:  currentVersion.Version,
+			ExpectedRevision: currentVersion.VCSRevision,
+		})
+		if guardErr != nil {
+			return guardReport.Summary(), guardErr
+		}
+		return guardReport.Summary(), nil
 	}); err != nil {
 		return report, err
 	}

@@ -29,6 +29,8 @@ func TestParseTelegramCommand(t *testing.T) {
 		{text: "/memory", want: "memory", ok: true},
 		{text: "/mission", want: "mission", ok: true},
 		{text: "/model status", want: "model", ok: true},
+		{text: "/turn_evidence", want: "turn_evidence", ok: true},
+		{text: "/turn_evidence@idolum_bot", want: "turn_evidence", ok: true},
 		{text: "/auto mode", ok: false},
 		{text: "/stop\n\nReply context:\nidolum: Please confirm.", want: "stop", ok: true},
 		{text: "/set_persona_model", ok: false},
@@ -177,6 +179,21 @@ func TestDefaultTelegramCommandsIncludeTailnet(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("defaultTelegramCommands = %#v, want /tailnet command entry", defaultTelegramCommands)
+	}
+}
+
+func TestDefaultTelegramCommandsIncludeTurnEvidence(t *testing.T) {
+	t.Parallel()
+
+	found := false
+	for _, cmd := range defaultTelegramCommands {
+		if cmd.Command == "turn_evidence" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("defaultTelegramCommands = %#v, want /turn_evidence command entry", defaultTelegramCommands)
 	}
 }
 

@@ -27,6 +27,7 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "new", Description: "Start a fresh chat session context"},
 	{Command: "detach", Description: "Detach from pending work in this chat"},
 	{Command: "restart", Description: "Force an immediate gateway restart"},
+	{Command: "turn_evidence", Description: "Send the latest work evidence artifact"},
 	{Command: "reinstall", Description: "Queue a rebuild/reinstall/restart request"},
 }
 

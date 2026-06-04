@@ -12,6 +12,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/internal/releaseinfo"
 	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -33,6 +34,9 @@ func (r *Runtime) BuildDiagnosticPacket(ctx context.Context, input DiagnosticInp
 
 	WriteSection(&b, "Effective Runtime")
 	r.writeDoctorRuntimeConfig(&b, input.Exec, input.Scope)
+
+	WriteSection(&b, "Release Metadata")
+	writeDoctorReleaseMetadata(&b)
 
 	WriteSection(&b, "Provider Health")
 	if r.writeDoctorProviderHealth != nil {
@@ -538,4 +542,23 @@ func (r *Runtime) writeDoctorMemoryFootprint(b *strings.Builder, scope sandbox.S
 		writeDoctorFileStat(b, root, today)
 		writeDoctorFileStat(b, root, yesterday)
 	}
+}
+
+func writeDoctorReleaseMetadata(b *strings.Builder) {
+	current := releaseinfo.CurrentBuild()
+	notice, err := releaseinfo.NewerReleaseNotice(current, "")
+	WriteKV(b, "running_version", firstNonEmpty(current.Version, "unknown"))
+	WriteKV(b, "release_metadata_path", notice.MetadataPath)
+	if err != nil {
+		WriteKV(b, "release_metadata_status", "unreadable")
+		WriteKV(b, "release_metadata_error", err.Error())
+		return
+	}
+	if notice.Available {
+		WriteKV(b, "update_available", notice.LatestVersion)
+		WriteKV(b, "update_notice", notice.Reason)
+		WriteLine(b, "update_next=approve install/release/deploy separately; doctor does not auto-install")
+		return
+	}
+	WriteKV(b, "update_available", "false")
 }

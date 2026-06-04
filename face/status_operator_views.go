@@ -93,6 +93,9 @@ func operatorSystemStatusWhy(snapshot core.SystemStatusSnapshot) string {
 }
 
 func operatorSystemStatusNext(snapshot core.SystemStatusSnapshot, state string) string {
+	if snapshot.ReleaseNotice.Available {
+		return "newer release known from local metadata; approve install/release/deploy separately before updating"
+	}
 	switch state {
 	case "needs recovery":
 		return "run /health diagnose for recovery guidance, or inspect /health trace"
@@ -117,6 +120,9 @@ func operatorSystemStatusDetails(snapshot core.SystemStatusSnapshot, personaEffo
 	}
 	if provider := operatorProviderHealthDetail(snapshot.ProviderHealth); provider != "" {
 		details = append(details, provider)
+	}
+	if snapshot.ReleaseNotice.Available {
+		details = append(details, fmt.Sprintf("update available: %s -> %s", firstNonEmpty(snapshot.ReleaseNotice.CurrentVersion, "unknown"), snapshot.ReleaseNotice.LatestVersion))
 	}
 	if authority := operatorAuthorityStatusDetail(snapshot.Authority); authority != "" {
 		details = append(details, authority)

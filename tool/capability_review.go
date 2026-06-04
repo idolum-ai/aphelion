@@ -44,7 +44,7 @@ func (r *Registry) queueCapabilityRequestReviewEvent(record session.CapabilityRe
 	if summary == "" {
 		summary = capabilityRequestReviewSummary(record)
 	}
-	return r.store.InsertReviewEvent(session.ReviewEvent{
+	eventID, err := r.store.InsertReviewEvent(session.ReviewEvent{
 		SourceChatID:      key.ChatID,
 		SourceUserID:      actor.TelegramUserID,
 		SourceRole:        "capability_request",
@@ -57,6 +57,13 @@ func (r *Registry) queueCapabilityRequestReviewEvent(record session.CapabilityRe
 		Summary:      summary,
 		MetadataJSON: string(raw),
 	})
+	if err != nil {
+		return 0, err
+	}
+	if _, err := r.store.DismissPendingCapabilityReviewEvents(in.ReviewTargetChatID, record.RequestID, eventID); err != nil {
+		return 0, err
+	}
+	return eventID, nil
 }
 
 func capabilityRequestActorScope(actor principal.Principal) session.ScopeRef {
