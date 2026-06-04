@@ -90,7 +90,7 @@ func installQuickstartUserService(ctx context.Context, opts quickstartServiceOpt
 	}
 	guardRunner := opts.ServiceGuardRunner
 	if guardRunner == nil {
-		guardRunner = commandRunnerServiceGuardRunner(runner)
+		guardRunner = execServiceGuardCommand
 	}
 	timeout := opts.Timeout
 	if timeout <= 0 {

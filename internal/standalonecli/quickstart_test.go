@@ -302,6 +302,52 @@ func TestRunQuickstartInstallServiceUsesDeploySequence(t *testing.T) {
 	}
 }
 
+func TestRunQuickstartInstallServiceDefaultGuardRunnerCapturesOutput(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg"))
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(binDir) err = %v", err)
+	}
+	configPath := filepath.Join(root, "aphelion.toml")
+	execPath := filepath.Join(binDir, "aphelion")
+	systemctlPath := filepath.Join(binDir, "systemctl")
+	versionJSON := `{"version":"v0.2.2","vcs_revision":"abc123"}`
+	aphelionScript := "#!/bin/sh\n" +
+		"if [ \"$1\" = version ] && [ \"$2\" = --json ]; then printf '%s\\n' '" + versionJSON + "'; exit 0; fi\n" +
+		"exit 0\n"
+	if err := os.WriteFile(execPath, []byte(aphelionScript), 0o755); err != nil {
+		t.Fatalf("WriteFile(aphelion) err = %v", err)
+	}
+	systemctlScript := "#!/bin/sh\n" +
+		"if [ \"$1 $2 $3\" = '--user is-active --quiet' ]; then exit 0; fi\n" +
+		"if [ \"$1 $2 $3 $4 $5\" = '--user list-units --all --no-legend --plain' ]; then printf '%s\\n' 'aphelion.service loaded active running Aphelion'; exit 0; fi\n" +
+		"if [ \"$1 $2 $3 $4\" = '--user list-unit-files --no-legend --plain' ]; then printf '%s\\n' 'aphelion.service enabled'; exit 0; fi\n" +
+		"if [ \"$1 $2 $3 $4\" = '--user show aphelion -p' ]; then printf '%s\\n' 'MainPID=123' 'ExecStart={ path=" + execPath + " ; argv[]=" + execPath + " --config " + configPath + " }'; exit 0; fi\n" +
+		"exit 0\n"
+	if err := os.WriteFile(systemctlPath, []byte(systemctlScript), 0o755); err != nil {
+		t.Fatalf("WriteFile(systemctl) err = %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	err := runQuickstart(context.Background(), quickstartOptions{
+		ConfigPath:           configPath,
+		NoInput:              true,
+		InstallService:       true,
+		TelegramBotToken:     "telegram-token",
+		AdminUserID:          123,
+		Provider:             "ollama",
+		ExecPath:             execPath,
+		WorkDir:              root,
+		Out:                  ioDiscard{},
+		Getenv:               emptyQuickstartEnv,
+		ServiceGuardReadlink: func(string) (string, error) { return execPath, nil },
+	})
+	if err != nil {
+		t.Fatalf("runQuickstart(default service guard runner) err = %v", err)
+	}
+}
+
 func TestRunQuickstartInstallServiceFailsOnDuplicatePrimaryUnits(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg"))

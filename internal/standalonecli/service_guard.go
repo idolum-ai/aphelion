@@ -18,10 +18,6 @@ const aphelionServiceGuardTimeout = 15 * time.Second
 
 type serviceGuardRunner func(ctx context.Context, name string, args ...string) ([]byte, error)
 
-type serviceGuardCommandRunner interface {
-	RunServiceGuardCommand(ctx context.Context, name string, args ...string) ([]byte, error)
-}
-
 type serviceGuardCheck struct {
 	ServiceName      string
 	ExpectedExecPath string
@@ -258,16 +254,4 @@ func execServiceGuardCommand(ctx context.Context, name string, args ...string) (
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = os.Environ()
 	return cmd.CombinedOutput()
-}
-
-func commandRunnerServiceGuardRunner(runner quickstartCommandRunner) serviceGuardRunner {
-	return func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		if capturing, ok := any(runner).(serviceGuardCommandRunner); ok {
-			return capturing.RunServiceGuardCommand(ctx, name, args...)
-		}
-		if err := runner(ctx, name, args...); err != nil {
-			return nil, err
-		}
-		return nil, nil
-	}
 }
