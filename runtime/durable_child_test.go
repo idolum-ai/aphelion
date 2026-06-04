@@ -169,6 +169,73 @@ func TestDurableChildSandboxAccessBlocksExpiredRuntimeGrant(t *testing.T) {
 	}
 }
 
+func TestDurableChildSandboxAccessBlocksStoredExpiredRuntimeGrantWhenNoActiveRuntimeGrant(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewSQLiteStore(filepath.Join(root, "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-stored-expired-runtime",
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "mail-reader",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusExpired,
+		Contract:       `{"child_runtime":{"readonly_paths":["/srv/mail"]}}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	_, err = durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{AgentID: "child-alpha"}, store)
+	if err == nil || !strings.Contains(err.Error(), "child_runtime_blocked: grant_expired grant_id=capg-stored-expired-runtime") {
+		t.Fatalf("durableChildSandboxAccessFor() err = %v, want stored expired child_runtime block", err)
+	}
+}
+
+func TestDurableChildSandboxAccessIgnoresStoredExpiredRuntimeGrantWhenActiveReplacementExists(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "mail-config")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(configDir) err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(filepath.Join(root, "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-stored-expired-runtime",
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "mail-reader",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusExpired,
+		Contract:       `{"child_runtime":{"readonly_paths":["/srv/old-mail"]}}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(expired) err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-active-runtime-replacement",
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "mail-reader",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract:       `{"child_runtime":{"readonly_paths":["` + configDir + `"]}}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(active) err = %v", err)
+	}
+
+	access, err := durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{AgentID: "child-alpha"}, store)
+	if err != nil {
+		t.Fatalf("durableChildSandboxAccessFor() err = %v, want active runtime replacement to win", err)
+	}
+	if !containsString(access.readonlyPaths, configDir) {
+		t.Fatalf("readonlyPaths = %#v, want active runtime replacement materialized", access.readonlyPaths)
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
