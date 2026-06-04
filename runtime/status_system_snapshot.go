@@ -5,7 +5,9 @@ package runtime
 import (
 	"context"
 	"fmt"
+
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/internal/releaseinfo"
 	"github.com/idolum-ai/aphelion/session"
 	"sort"
 	"strconv"
@@ -26,6 +28,7 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		StaleRunningTurns:            make([]core.TurnRunStatusSnapshot, 0, 8),
 		HotChats:                     make([]core.ChatStatusRollup, 0, 8),
 		RestartHealth:                r.restartHealthSnapshot(),
+		ReleaseNotice:                releaseNoticeSnapshot(),
 		Autonomy:                     r.AutonomyStatusSnapshot(),
 		Sandbox:                      r.sandboxReadinessSnapshot(now),
 	}
@@ -416,5 +419,18 @@ func applyRouterHealthSnapshot(snapshot *core.SystemStatusSnapshot, router core.
 	if !router.OldestQueuedAt.IsZero() {
 		snapshot.OldestQueuedAge = statusAge(snapshot.GeneratedAt, router.OldestQueuedAt, router.OldestQueuedAt)
 		snapshot.OldestQueuedChatID = router.OldestQueuedChatID
+	}
+}
+
+func releaseNoticeSnapshot() core.ReleaseNoticeSnapshot {
+	notice, _ := releaseinfo.NewerReleaseNotice(releaseinfo.CurrentBuild(), "")
+	return core.ReleaseNoticeSnapshot{
+		Available:      notice.Available,
+		CurrentVersion: notice.CurrentVersion,
+		LatestVersion:  notice.LatestVersion,
+		MetadataPath:   notice.MetadataPath,
+		CheckedAt:      notice.CheckedAt,
+		Source:         notice.Source,
+		Reason:         notice.Reason,
 	}
 }
