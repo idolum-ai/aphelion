@@ -109,7 +109,7 @@ func isTurnEvidenceCommand(text string) bool {
 	if at := strings.Index(command, "@"); at >= 0 {
 		command = command[:at]
 	}
-	return command == "/turn-evidence"
+	return command == "/turn-evidence" || command == "/turn_evidence"
 }
 
 func looksLikeOperationArtifactSendRequest(text string) bool {
