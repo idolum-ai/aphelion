@@ -274,3 +274,17 @@ func migrateSchemaV61ToV62(tx *sql.Tx) error {
 	}
 	return nil
 }
+
+func migrateSchemaV62ToV63(tx *sql.Tx) error {
+	exists, err := schemaTableExists(tx, "review_events")
+	if err != nil {
+		return fmt.Errorf("migrate schema v62 to v63 inspect review_events: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+	if _, err := tx.Exec(`ALTER TABLE review_events ADD COLUMN delivery_message_id INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("migrate schema v62 to v63 add review event delivery message id: %w", err)
+	}
+	return nil
+}

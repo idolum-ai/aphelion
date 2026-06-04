@@ -252,7 +252,15 @@ func RenderTelegramDetach(detached core.DetachResult) string {
 }
 
 func RenderTelegramRestart() string {
-	return "Restarting now. Active work and pending continuations will be parked and resumed after."
+	return RenderTelegramRestartWithReleaseNotice(core.ReleaseNoticeSnapshot{})
+}
+
+func RenderTelegramRestartWithReleaseNotice(notice core.ReleaseNoticeSnapshot) string {
+	text := "Restarting now. Active work and pending continuations will be parked and resumed after."
+	if notice.Available {
+		text += fmt.Sprintf("\n\nUpdate available: local release metadata says %s is newer than the running %s. Restart will not install it; approve install/release/deploy separately.", notice.LatestVersion, notice.CurrentVersion)
+	}
+	return text
 }
 
 func RenderTelegramRestartDenied() string {

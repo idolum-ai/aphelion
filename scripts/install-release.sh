@@ -50,6 +50,23 @@ latest_version() {
   sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "${tmp}" | head -n1
 }
 
+write_release_metadata() {
+  local version="$1"
+  local installed_version="$2"
+  local metadata_path="${APHELION_RELEASE_METADATA:-${XDG_CACHE_HOME:-${HOME}/.cache}/aphelion/release.json}"
+  mkdir -p "$(dirname "${metadata_path}")"
+  cat >"${metadata_path}" <<EOF_METADATA
+{
+  "repo": "${APHELION_RELEASE_REPO}",
+  "latest_version": "${version}",
+  "installed_version": "${installed_version}",
+  "checked_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "source": "install-release"
+}
+EOF_METADATA
+  log "Wrote release metadata to ${metadata_path}"
+}
+
 verify_checksum() {
   local checksums_path="$1"
   local asset="$2"
@@ -95,6 +112,7 @@ install_release() {
   tar -xzf "${asset_path}" -C "${tmp_dir}"
   mkdir -p "${APHELION_INSTALL_DIR}"
   install -m 0755 "${tmp_dir}/aphelion" "${APHELION_INSTALL_DIR}/aphelion"
+  write_release_metadata "${version}" "${version}"
 
   log "Installed ${version} to ${APHELION_INSTALL_DIR}/aphelion"
   log "Next:"

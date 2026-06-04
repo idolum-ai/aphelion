@@ -314,7 +314,8 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 		text = face.RenderTelegramDetach(detached)
 	case "restart":
 		if isAdmin {
-			text = face.RenderTelegramRestart()
+			snapshot, _ := router.StatusSystem(msg.SenderID)
+			text = face.RenderTelegramRestartWithReleaseNotice(snapshot.ReleaseNotice)
 			restartRequested = true
 		} else {
 			text = face.RenderTelegramRestartDenied()

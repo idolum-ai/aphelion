@@ -1,0 +1,339 @@
+//go:build linux
+
+package standalonecli
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/idolum-ai/aphelion/config"
+	"github.com/idolum-ai/aphelion/internal/releaseinfo"
+)
+
+type statusCommandOptions struct {
+	ConfigPath   string
+	Format       string
+	JSON         bool
+	Timeout      time.Duration
+	Runner       serviceGuardRunner
+	Readlink     func(string) (string, error)
+	ExecVersion  func(context.Context, string) (versionInfo, error)
+	MetadataPath string
+}
+
+type statusSnapshot struct {
+	Action          string                    `json:"action"`
+	Status          string                    `json:"status"`
+	ConfigPath      string                    `json:"config_path,omitempty"`
+	Version         versionInfo               `json:"version"`
+	Release         statusReleaseInfo         `json:"release"`
+	Service         statusServiceInfo         `json:"service"`
+	DurableChildren statusDurableChildrenInfo `json:"durable_children"`
+	DuplicateUnits  []string                  `json:"duplicate_units,omitempty"`
+	Issues          []string                  `json:"issues,omitempty"`
+	NextAction      string                    `json:"next_action"`
+}
+
+type statusReleaseInfo struct {
+	MetadataPath     string `json:"metadata_path,omitempty"`
+	CurrentVersion   string `json:"current_version,omitempty"`
+	LatestVersion    string `json:"latest_version,omitempty"`
+	InstalledVersion string `json:"installed_version,omitempty"`
+	CheckedAt        string `json:"checked_at,omitempty"`
+	Source           string `json:"source,omitempty"`
+	UpdateAvailable  bool   `json:"update_available"`
+	Notice           string `json:"notice,omitempty"`
+	MetadataStatus   string `json:"metadata_status"`
+	MetadataError    string `json:"metadata_error,omitempty"`
+}
+
+type statusServiceInfo struct {
+	Name             string `json:"name"`
+	LoadState        string `json:"load_state,omitempty"`
+	ActiveState      string `json:"active_state,omitempty"`
+	SubState         string `json:"sub_state,omitempty"`
+	FragmentPath     string `json:"fragment_path,omitempty"`
+	MainPID          string `json:"main_pid,omitempty"`
+	ExecStart        string `json:"exec_start,omitempty"`
+	RunningExecPath  string `json:"running_exec_path,omitempty"`
+	ExpectedExecPath string `json:"expected_exec_path,omitempty"`
+	RunningVersion   string `json:"running_version,omitempty"`
+	RunningRevision  string `json:"running_revision,omitempty"`
+	ExpectedVersion  string `json:"expected_version,omitempty"`
+	ExpectedRevision string `json:"expected_revision,omitempty"`
+	BinaryMatches    bool   `json:"binary_matches"`
+}
+
+type statusDurableChildrenInfo struct {
+	MetadataPath string `json:"metadata_path,omitempty"`
+	Status       string `json:"status"`
+	TotalCount   int    `json:"total_count"`
+}
+
+func runStatusCommand(args []string) error {
+	return runStatusCommandWithOptions(args, statusCommandOptions{})
+}
+
+func runStatusCommandWithOptions(args []string, opts statusCommandOptions) error {
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	configFlag := fs.String("config", opts.ConfigPath, "path to aphelion config")
+	formatFlag := fs.String("format", firstNonEmpty(opts.Format, commandOutputKV), "output format: kv or json")
+	jsonOutput := fs.Bool("json", opts.JSON, "print status as JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if extra, ok := firstPositionalArg(fs.Args()); ok {
+		return fmt.Errorf("unknown argument %q for status", extra)
+	}
+	format, err := normalizeStatusOutputFormat(*formatFlag, *jsonOutput)
+	if err != nil {
+		return err
+	}
+	snapshot, err := buildStatusSnapshot(context.Background(), statusCommandOptions{
+		ConfigPath:   *configFlag,
+		Format:       format,
+		JSON:         *jsonOutput,
+		Timeout:      opts.Timeout,
+		Runner:       opts.Runner,
+		Readlink:     opts.Readlink,
+		ExecVersion:  opts.ExecVersion,
+		MetadataPath: opts.MetadataPath,
+	})
+	if err != nil {
+		return err
+	}
+	if format == commandOutputJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetEscapeHTML(false)
+		enc.SetIndent("", "  ")
+		return enc.Encode(snapshot)
+	}
+	renderStatusKV(os.Stdout, snapshot)
+	return nil
+}
+
+func normalizeStatusOutputFormat(raw string, jsonAlias bool) (string, error) {
+	if jsonAlias {
+		return commandOutputJSON, nil
+	}
+	format := strings.ToLower(strings.TrimSpace(raw))
+	if format == "" {
+		return commandOutputKV, nil
+	}
+	switch format {
+	case commandOutputKV, commandOutputJSON:
+		return format, nil
+	default:
+		return "", fmt.Errorf("unsupported output format %q; use kv or json", raw)
+	}
+}
+
+func buildStatusSnapshot(ctx context.Context, opts statusCommandOptions) (statusSnapshot, error) {
+	cfg, configPath, configErr := loadConfigForCommand(opts.ConfigPath)
+	if configPath == "" {
+		if resolved, err := config.ResolveConfigPath(opts.ConfigPath); err == nil {
+			configPath = resolved
+		} else {
+			configPath = opts.ConfigPath
+		}
+	}
+	version := readVersionInfo()
+	current := releaseinfo.Current{Version: version.Version, Revision: version.VCSRevision, Modified: version.VCSModified}
+	if current.Version == "" && current.Revision == "" && current.Modified == "" {
+		current = releaseinfo.CurrentBuild()
+	}
+	meta, metaPath, metaOK, metaErr := releaseinfo.ReadMetadata(opts.MetadataPath)
+	notice, noticeErr := releaseinfo.NewerReleaseNotice(current, metaPath)
+	if metaPath == "" {
+		metaPath = notice.MetadataPath
+	}
+
+	expectedExec, _ := os.Executable()
+	report, guardErr := verifyAphelionServiceGuard(ctx, serviceGuardCheck{
+		ExpectedExecPath: expectedExec,
+		ExpectedRevision: version.VCSRevision,
+		ExpectedVersion:  version.Version,
+		Timeout:          opts.Timeout,
+		Runner:           opts.Runner,
+		Readlink:         opts.Readlink,
+		ExecVersion:      opts.ExecVersion,
+		Lenient:          true,
+	})
+
+	s := statusSnapshot{
+		Action:     "status",
+		Status:     "ready",
+		ConfigPath: configPath,
+		Version:    version,
+		Release: statusReleaseInfo{
+			MetadataPath:     metaPath,
+			CurrentVersion:   current.Version,
+			LatestVersion:    meta.LatestVersion,
+			InstalledVersion: meta.InstalledVersion,
+			CheckedAt:        meta.CheckedAt,
+			Source:           meta.Source,
+			MetadataStatus:   "missing",
+		},
+		Service: statusServiceInfo{
+			Name:             firstNonEmpty(report.ServiceName, aphelionUserServiceName),
+			LoadState:        report.LoadState,
+			ActiveState:      report.ActiveState,
+			SubState:         report.SubState,
+			FragmentPath:     report.FragmentPath,
+			MainPID:          report.MainPID,
+			ExecStart:        report.ExecStart,
+			RunningExecPath:  report.RunningExecPath,
+			ExpectedExecPath: report.ExpectedExecPath,
+			RunningVersion:   report.RunningVersion,
+			RunningRevision:  report.RunningRevision,
+			ExpectedVersion:  report.ExpectedVersion,
+			ExpectedRevision: report.ExpectedRevision,
+		},
+		DuplicateUnits: report.DuplicateUnitNames,
+	}
+	if cfg != nil {
+		s.DurableChildren = readDurableChildrenSummary(cfg.Sessions.DBPath)
+	} else {
+		s.DurableChildren = statusDurableChildrenInfo{Status: "unavailable"}
+	}
+	if configErr != nil {
+		s.Issues = append(s.Issues, "config load failed: "+configErr.Error())
+	}
+	if metaOK {
+		s.Release.MetadataStatus = "present"
+	}
+	if metaErr != nil {
+		s.Release.MetadataStatus = "unreadable"
+		s.Release.MetadataError = metaErr.Error()
+		s.Issues = append(s.Issues, "release metadata unreadable")
+	}
+	if noticeErr != nil && metaErr == nil {
+		s.Release.MetadataStatus = "unreadable"
+		s.Release.MetadataError = noticeErr.Error()
+		s.Issues = append(s.Issues, "release metadata unreadable")
+	}
+	s.Release.UpdateAvailable = notice.Available
+	if notice.LatestVersion != "" {
+		s.Release.LatestVersion = notice.LatestVersion
+	}
+	if !notice.CheckedAt.IsZero() && s.Release.CheckedAt == "" {
+		s.Release.CheckedAt = notice.CheckedAt.Format(time.RFC3339)
+	}
+	if notice.Source != "" {
+		s.Release.Source = notice.Source
+	}
+	if notice.Reason != "" {
+		s.Release.Notice = notice.Reason
+	}
+
+	if guardErr != nil {
+		s.Issues = append(s.Issues, guardErr.Error())
+	}
+	if len(s.DuplicateUnits) > 0 {
+		s.Issues = append(s.Issues, "duplicate/stale Aphelion primary units present")
+	}
+	s.Service.BinaryMatches = serviceBinaryMatches(s.Service)
+	if !s.Service.BinaryMatches {
+		s.Issues = append(s.Issues, "running service binary does not match expected binary")
+	}
+	if strings.TrimSpace(s.Service.MainPID) == "" || strings.TrimSpace(s.Service.MainPID) == "0" {
+		s.Issues = append(s.Issues, "aphelion service is not running")
+	}
+	if s.Release.UpdateAvailable {
+		s.Issues = append(s.Issues, "newer release available in cached metadata")
+	}
+	if len(s.Issues) > 0 {
+		s.Status = "degraded"
+		s.NextAction = "run doctor"
+	} else {
+		s.NextAction = "none"
+	}
+	return s, nil
+}
+
+func readDurableChildrenSummary(dbPath string) statusDurableChildrenInfo {
+	root := ""
+	if strings.TrimSpace(dbPath) != "" {
+		root = filepath.Join(filepath.Dir(dbPath), "durable_agents")
+	}
+	info := statusDurableChildrenInfo{MetadataPath: root, Status: "missing"}
+	if root == "" {
+		return info
+	}
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return info
+	}
+	if err != nil {
+		info.Status = "unreadable"
+		return info
+	}
+	info.Status = "present"
+	for _, entry := range entries {
+		if entry.IsDir() && strings.TrimSpace(entry.Name()) != "" {
+			info.TotalCount++
+		}
+	}
+	return info
+}
+
+func serviceBinaryMatches(info statusServiceInfo) bool {
+	if strings.TrimSpace(info.RunningExecPath) == "" || strings.TrimSpace(info.ExpectedExecPath) == "" {
+		return false
+	}
+	if info.RunningExecPath != info.ExpectedExecPath {
+		return false
+	}
+	if strings.TrimSpace(info.ExpectedRevision) == "" || strings.TrimSpace(info.RunningRevision) == "" {
+		return false
+	}
+	if info.ExpectedRevision != info.RunningRevision {
+		return false
+	}
+	if strings.TrimSpace(info.ExpectedVersion) == "" || strings.TrimSpace(info.RunningVersion) == "" {
+		return false
+	}
+	if info.ExpectedVersion != info.RunningVersion {
+		return false
+	}
+	return true
+}
+
+func renderStatusKV(out *os.File, s statusSnapshot) {
+	fmt.Fprintf(out, "action: %s\n", s.Action)
+	fmt.Fprintf(out, "status: %s\n", s.Status)
+	fmt.Fprintf(out, "config_path: %s\n", firstNonEmpty(s.ConfigPath, "unknown"))
+	fmt.Fprintf(out, "binary_version: %s\n", firstNonEmpty(s.Version.Version, "unknown"))
+	fmt.Fprintf(out, "binary_revision: %s\n", firstNonEmpty(s.Version.VCSRevision, "unknown"))
+	fmt.Fprintf(out, "service_name: %s\n", firstNonEmpty(s.Service.Name, aphelionUserServiceName))
+	fmt.Fprintf(out, "service_load_state: %s\n", firstNonEmpty(s.Service.LoadState, "unknown"))
+	fmt.Fprintf(out, "service_active_state: %s\n", firstNonEmpty(s.Service.ActiveState, "unknown"))
+	fmt.Fprintf(out, "service_sub_state: %s\n", firstNonEmpty(s.Service.SubState, "unknown"))
+	fmt.Fprintf(out, "service_main_pid: %s\n", firstNonEmpty(s.Service.MainPID, "unknown"))
+	fmt.Fprintf(out, "service_running_exec: %s\n", firstNonEmpty(s.Service.RunningExecPath, "unknown"))
+	fmt.Fprintf(out, "service_expected_exec: %s\n", firstNonEmpty(s.Service.ExpectedExecPath, "unknown"))
+	fmt.Fprintf(out, "service_running_version: %s\n", firstNonEmpty(s.Service.RunningVersion, "unknown"))
+	fmt.Fprintf(out, "service_running_revision: %s\n", firstNonEmpty(s.Service.RunningRevision, "unknown"))
+	fmt.Fprintf(out, "service_binary_matches: %t\n", s.Service.BinaryMatches)
+	fmt.Fprintf(out, "duplicate_units: %s\n", strings.Join(s.DuplicateUnits, ","))
+	fmt.Fprintf(out, "release_metadata_path: %s\n", firstNonEmpty(s.Release.MetadataPath, "unknown"))
+	fmt.Fprintf(out, "release_metadata_status: %s\n", firstNonEmpty(s.Release.MetadataStatus, "unknown"))
+	fmt.Fprintf(out, "release_installed_version: %s\n", firstNonEmpty(s.Release.InstalledVersion, "unknown"))
+	fmt.Fprintf(out, "release_latest_version: %s\n", firstNonEmpty(s.Release.LatestVersion, "unknown"))
+	fmt.Fprintf(out, "release_update_available: %t\n", s.Release.UpdateAvailable)
+	fmt.Fprintf(out, "durable_children_metadata_path: %s\n", firstNonEmpty(s.DurableChildren.MetadataPath, "unknown"))
+	fmt.Fprintf(out, "durable_children_status: %s\n", firstNonEmpty(s.DurableChildren.Status, "unknown"))
+	fmt.Fprintf(out, "durable_children_total: %d\n", s.DurableChildren.TotalCount)
+	fmt.Fprintf(out, "next_action: %s\n", firstNonEmpty(s.NextAction, "unknown"))
+	if len(s.Issues) == 0 {
+		fmt.Fprintln(out, "issues: none")
+		return
+	}
+	fmt.Fprintf(out, "issues: %s\n", strings.Join(s.Issues, "; "))
+}
