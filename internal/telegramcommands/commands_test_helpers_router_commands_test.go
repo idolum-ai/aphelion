@@ -306,3 +306,31 @@ func (s *stubCommandRouter) AbsorbTelegramThread(_ context.Context, chatID int64
 	}
 	return "Absorbed thread " + strconv.FormatInt(threadID, 10) + ".", nil
 }
+
+func (s *stubCommandRouter) RecordTelegramMediaThreadPicker(chatID int64, pickerMessageID int64, inbound core.InboundMessage) error {
+	s.mediaPickerRecordChatID = chatID
+	s.mediaPickerRecordMessageID = pickerMessageID
+	s.mediaPickerRecordInbound = inbound
+	return s.mediaPickerRecordErr
+}
+
+func (s *stubCommandRouter) TelegramMediaThreadPicker(chatID int64, pickerMessageID int64) (core.InboundMessage, bool, error) {
+	s.mediaPickerGetChatID = chatID
+	s.mediaPickerGetMessageID = pickerMessageID
+	if s.mediaPickerErr != nil {
+		return core.InboundMessage{}, false, s.mediaPickerErr
+	}
+	return s.mediaPickerReturn, s.mediaPickerOK, nil
+}
+
+func (s *stubCommandRouter) MarkTelegramMediaThreadPickerRouted(chatID int64, pickerMessageID int64) error {
+	s.mediaPickerMarkChatID = chatID
+	s.mediaPickerMarkMessageID = pickerMessageID
+	return s.mediaPickerMarkErr
+}
+
+func (s *stubCommandRouter) RouteAccepted(_ context.Context, msg core.InboundMessage) error {
+	copied := msg
+	s.routeAcceptedMsg = &copied
+	return s.routeAcceptedErr
+}

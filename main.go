@@ -378,6 +378,11 @@ func run() error {
 		} else if retentionHandled {
 			return nil
 		}
+		if mediaPickerHandled, mediaPickerErr := telegramcommands.MaybeAskTelegramMediaThreadPicker(parent, tgOutbound, commandControl, msg); mediaPickerErr != nil {
+			return mediaPickerErr
+		} else if mediaPickerHandled {
+			return nil
+		}
 
 		return commandControl.RouteAccepted(parent, msg)
 	}

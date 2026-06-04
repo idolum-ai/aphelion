@@ -12,6 +12,9 @@ import (
 )
 
 func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery) (bool, error) {
+	if handled, err := handleTelegramMediaThreadPickerCallback(ctx, sender, router, cb); handled || err != nil {
+		return handled, err
+	}
 	if sender == nil || router == nil {
 		return false, nil
 	}

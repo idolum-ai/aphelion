@@ -721,6 +721,9 @@ func (s *SQLiteStore) init() error {
 	if err := ensureTelegramCallbackMessageTables(tx); err != nil {
 		return err
 	}
+	if err := ensureTelegramMediaPickerTables(tx); err != nil {
+		return err
+	}
 	if err := ensureTelegramAgentMessageTables(tx); err != nil {
 		return err
 	}
