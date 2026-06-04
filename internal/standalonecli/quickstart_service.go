@@ -117,13 +117,12 @@ func installQuickstartUserService(ctx context.Context, opts quickstartServiceOpt
 		return quickstartServiceResult{}, err
 	}
 
-	targetVersion, err := readExecutableVersion(ctx, guardRunner, execPath)
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	targetVersion, err := readExecutableVersion(runCtx, guardRunner, execPath)
 	if err != nil {
 		return quickstartServiceResult{}, fmt.Errorf("read target executable version: %w", err)
 	}
-
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	if err := runner(runCtx, execPath, "--config", opts.ConfigPath, "--check-config"); err != nil {
 		return quickstartServiceResult{}, fmt.Errorf("check config: %w", err)
 	}

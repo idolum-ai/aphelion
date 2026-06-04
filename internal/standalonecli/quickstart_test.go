@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/telegram"
@@ -299,6 +300,42 @@ func TestRunQuickstartInstallServiceUsesDeploySequence(t *testing.T) {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("service = %q, want %q", text, needle)
 		}
+	}
+}
+
+func TestInstallQuickstartUserServiceTargetVersionUsesTimeout(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg"))
+	configPath := filepath.Join(root, "aphelion.toml")
+	execPath := filepath.Join(root, "bin", "aphelion")
+	calledRunner := false
+
+	err := func() error {
+		_, err := installQuickstartUserService(context.Background(), quickstartServiceOptions{
+			ConfigPath: configPath,
+			ExecPath:   execPath,
+			WorkDir:    root,
+			Out:        ioDiscard{},
+			Timeout:    time.Nanosecond,
+			CommandRunner: func(context.Context, string, ...string) error {
+				calledRunner = true
+				return nil
+			},
+			ServiceGuardRunner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				if _, ok := ctx.Deadline(); !ok {
+					return nil, errors.New("service guard version probe missing deadline")
+				}
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		})
+		return err
+	}()
+	if err == nil || !strings.Contains(err.Error(), "read target executable version") || !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("installQuickstartUserService() err = %v, want target version deadline", err)
+	}
+	if calledRunner {
+		t.Fatal("CommandRunner was called after timed-out target version probe")
 	}
 }
 
