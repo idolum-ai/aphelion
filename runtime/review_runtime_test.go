@@ -455,3 +455,69 @@ func TestHandleInboundDeliversDurableReviewEventCompactWithExpandButton(t *testi
 		t.Fatalf("button = %#v, want expand callback for review event %d", button, eventID)
 	}
 }
+
+func TestDeliverReviewEventsMarksOlderCapabilityCardStale(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 1001, Scope: telegramDMScopeRef(1001)}
+	sess := &session.Session{}
+	oldID, err := store.InsertReviewEvent(session.ReviewEvent{
+		SourceChatID:      7001,
+		SourceUserID:      1002,
+		SourceRole:        "capability_request",
+		TargetAdminChatID: 1001,
+		TargetScope:       telegramDMScopeRef(1001),
+		Summary:           "old capability request",
+		MetadataJSON:      `{"request_id":"cap-runtime-stale","request_via":"capability_request"}`,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent(old) err = %v", err)
+	}
+	if err := rt.deliverReviewEvents(context.Background(), key, sess); err != nil {
+		t.Fatalf("deliverReviewEvents(old) err = %v", err)
+	}
+	oldEvent, err := store.ReviewEventByID(oldID)
+	if err != nil {
+		t.Fatalf("ReviewEventByID(old) err = %v", err)
+	}
+	if oldEvent.DeliveryMessageID == 0 {
+		t.Fatal("old delivery message id = 0, want recorded")
+	}
+	newID, err := store.InsertReviewEvent(session.ReviewEvent{
+		SourceChatID:      7001,
+		SourceUserID:      1002,
+		SourceRole:        "capability_request",
+		TargetAdminChatID: 1001,
+		TargetScope:       telegramDMScopeRef(1001),
+		Summary:           "new capability request",
+		MetadataJSON:      `{"request_id":"cap-runtime-stale","request_via":"capability_request"}`,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent(new) err = %v", err)
+	}
+	if err := rt.deliverReviewEvents(context.Background(), key, sess); err != nil {
+		t.Fatalf("deliverReviewEvents(new) err = %v", err)
+	}
+	oldEvent, err = store.ReviewEventByID(oldID)
+	if err != nil {
+		t.Fatalf("ReviewEventByID(old after) err = %v", err)
+	}
+	if oldEvent.Status != "dismissed" {
+		t.Fatalf("old status = %q, want dismissed", oldEvent.Status)
+	}
+	newEvent, err := store.ReviewEventByID(newID)
+	if err != nil {
+		t.Fatalf("ReviewEventByID(new after) err = %v", err)
+	}
+	if newEvent.Status != "delivered" || newEvent.DeliveryMessageID == 0 {
+		t.Fatalf("new event status/message = %q/%d, want delivered with message", newEvent.Status, newEvent.DeliveryMessageID)
+	}
+	if len(sender.editClear) == 0 || !strings.Contains(sender.editClear[len(sender.editClear)-1].Text, "Stale approval card") {
+		t.Fatalf("editClear = %#v, want stale approval card edit", sender.editClear)
+	}
+}

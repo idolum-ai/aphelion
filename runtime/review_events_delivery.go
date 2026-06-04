@@ -20,6 +20,10 @@ type reviewEventInlineSender interface {
 	SendInlineKeyboard(ctx context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error)
 }
 
+type reviewEventKeyboardClearer interface {
+	EditMessageTextWithoutInlineKeyboard(ctx context.Context, chatID int64, messageID int64, text string, parseMode string) error
+}
+
 func shouldGenerateReviewEvent(actor principal.Principal, key session.SessionKey) bool {
 	if actor.Role != principal.RoleAdmin {
 		return true
@@ -120,8 +124,13 @@ func (r *Runtime) deliverReviewEvents(ctx context.Context, key session.SessionKe
 		if err := r.store.RecordOutbound(key, sess.TurnCount, msgID, "review_digest"); err != nil {
 			return err
 		}
-		if err := r.store.MarkReviewDelivered([]int64{event.ID}); err != nil {
+		if err := r.store.MarkReviewDeliveredWithMessage(event.ID, msgID); err != nil {
 			return err
+		}
+		if staleEvents, err := r.store.DismissPendingCapabilityReviewEvents(key.ChatID, reviewEventCapabilityRequestID(event), event.ID); err != nil {
+			return err
+		} else if len(staleEvents) > 0 {
+			r.markStaleReviewEventMessages(ctx, key.ChatID, staleEvents)
 		}
 	}
 	return nil
@@ -212,4 +221,18 @@ func uniquePositiveIDs(ids []int64) []int64 {
 		out = append(out, id)
 	}
 	return out
+}
+
+func (r *Runtime) markStaleReviewEventMessages(ctx context.Context, chatID int64, events []session.ReviewEvent) {
+	clearer, ok := r.outbound.(reviewEventKeyboardClearer)
+	if !ok {
+		return
+	}
+	for _, event := range events {
+		if event.DeliveryMessageID <= 0 {
+			continue
+		}
+		text := FormatReviewEventCompactMessage(event) + "\n\nStale approval card — use the newest prompt."
+		_ = clearer.EditMessageTextWithoutInlineKeyboard(ctx, chatID, event.DeliveryMessageID, text, "")
+	}
 }
