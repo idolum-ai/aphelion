@@ -73,6 +73,11 @@ func durableChildActiveCapabilityGrants(store *session.SQLiteStore, agentID stri
 		if strings.TrimSpace(grant.GrantID) == "" {
 			continue
 		}
+		if _, ok, err := durableChildGrantMaterializationFrom(grant); err != nil {
+			return nil, err
+		} else if !ok {
+			continue
+		}
 		if err := durableChildGrantFreshnessError(grant); err != nil {
 			return nil, err
 		}
