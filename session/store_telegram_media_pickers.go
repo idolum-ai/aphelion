@@ -12,7 +12,10 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 )
 
-const TelegramMediaThreadPickerPendingTTL = 24 * time.Hour
+const (
+	TelegramMediaThreadPickerPendingTTL    = 24 * time.Hour
+	telegramMediaThreadPickerExpiredStatus = "cleared"
+)
 
 type TelegramMediaThreadPicker struct {
 	ChatID          int64
@@ -94,7 +97,7 @@ func (s *SQLiteStore) ExpireTelegramMediaThreadPickers(before time.Time, at time
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
-	result, err := s.db.Exec(`UPDATE telegram_media_thread_pickers SET status = 'expired', updated_at = ? WHERE status = 'pending' AND updated_at < ?`, at.UTC().Format(time.RFC3339Nano), before.UTC().Format(time.RFC3339Nano))
+	result, err := s.db.Exec(`UPDATE telegram_media_thread_pickers SET status = ?, updated_at = ? WHERE status = 'pending' AND updated_at < ?`, telegramMediaThreadPickerExpiredStatus, at.UTC().Format(time.RFC3339Nano), before.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return 0, fmt.Errorf("expire telegram media thread pickers: %w", err)
 	}

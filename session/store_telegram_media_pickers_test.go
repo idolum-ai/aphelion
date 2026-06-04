@@ -104,6 +104,79 @@ func TestExpireTelegramMediaThreadPickersOnlyExpiresStalePendingRows(t *testing.
 	}
 }
 
+func TestExpireTelegramMediaThreadPickersUsesLegacyCompatibleStatus(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "session.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	created := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC).Add(-TelegramMediaThreadPickerPendingTTL - time.Minute)
+	inbound := core.InboundMessage{ChatID: 44, MessageID: 700}
+	if err := store.RecordTelegramMediaThreadPicker(44, 901, inbound, created); err != nil {
+		t.Fatalf("RecordTelegramMediaThreadPicker() err = %v", err)
+	}
+	now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	if n, err := store.ExpireTelegramMediaThreadPickers(now.Add(-TelegramMediaThreadPickerPendingTTL), now); err != nil {
+		t.Fatalf("ExpireTelegramMediaThreadPickers() err = %v", err)
+	} else if n != 1 {
+		t.Fatalf("expired rows = %d, want 1", n)
+	}
+	var status string
+	if err := store.db.QueryRow(`SELECT status FROM telegram_media_thread_pickers WHERE chat_id = ? AND picker_message_id = ?`, int64(44), int64(901)).Scan(&status); err != nil {
+		t.Fatalf("select picker status err = %v", err)
+	}
+	if status != "cleared" {
+		t.Fatalf("expired picker status = %q, want legacy-compatible cleared", status)
+	}
+}
+
+func TestExpireTelegramMediaThreadPickersWorksWithLegacyCheckConstraint(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "session.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.db.Exec(`DROP TABLE telegram_media_thread_pickers`); err != nil {
+		t.Fatalf("drop media picker table err = %v", err)
+	}
+	if _, err := store.db.Exec(`CREATE TABLE telegram_media_thread_pickers (
+		chat_id INTEGER NOT NULL,
+		picker_message_id INTEGER NOT NULL,
+		source_message_id INTEGER NOT NULL DEFAULT 0,
+		inbound_json TEXT NOT NULL DEFAULT '{}',
+		status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'routed', 'cleared')),
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+		PRIMARY KEY(chat_id, picker_message_id)
+	)`); err != nil {
+		t.Fatalf("create legacy media picker table err = %v", err)
+	}
+
+	created := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	inbound := sanitizeTelegramMediaPickerInbound(core.InboundMessage{ChatID: 44, MessageID: 700})
+	raw, err := json.Marshal(inbound)
+	if err != nil {
+		t.Fatalf("marshal inbound err = %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO telegram_media_thread_pickers(chat_id, picker_message_id, source_message_id, inbound_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)`, int64(44), int64(901), int64(700), string(raw), created.UTC().Format(time.RFC3339Nano), created.UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("insert legacy picker err = %v", err)
+	}
+	now := created.Add(TelegramMediaThreadPickerPendingTTL + time.Minute)
+	if n, err := store.ExpireTelegramMediaThreadPickers(now.Add(-TelegramMediaThreadPickerPendingTTL), now); err != nil {
+		t.Fatalf("ExpireTelegramMediaThreadPickers() err = %v", err)
+	} else if n != 1 {
+		t.Fatalf("expired rows = %d, want 1", n)
+	}
+	var status string
+	if err := store.db.QueryRow(`SELECT status FROM telegram_media_thread_pickers WHERE chat_id = ? AND picker_message_id = ?`, int64(44), int64(901)).Scan(&status); err != nil {
+		t.Fatalf("select picker status err = %v", err)
+	}
+	if status != "cleared" {
+		t.Fatalf("legacy picker status = %q, want cleared", status)
+	}
+}
+
 func TestRecordTelegramMediaThreadPickerExpiresRowsPastTTL(t *testing.T) {
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "session.db"))
 	if err != nil {

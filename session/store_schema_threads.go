@@ -215,7 +215,7 @@ func ensureTelegramMediaPickerTables(tx *sql.Tx) error {
 			picker_message_id INTEGER NOT NULL,
 			source_message_id INTEGER NOT NULL DEFAULT 0,
 			inbound_json TEXT NOT NULL DEFAULT '{}',
-			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'routed', 'cleared', 'expired')),
+			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'routed', 'cleared')),
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 			PRIMARY KEY(chat_id, picker_message_id)
