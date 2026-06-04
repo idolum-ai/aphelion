@@ -150,6 +150,25 @@ func requestApprovalToolDefinition() agent.ToolDef {
 						"allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Allowed action labels for this approval"},
 						"forbidden_actions": {"type": "array", "items": {"type": "string"}, "description": "Forbidden action labels / stop boundaries"},
 						"validation_plan": {"type": "array", "items": {"type": "string"}, "description": "Evidence expected after approved work"},
+						"required_capability_grants": {
+							"type": "array",
+							"description": "Capability grants that are approved together with this phase when the operator approves the continuation. Use only for capability requests that already exist and are visibly required by the bounded phase.",
+							"items": {
+								"type": "object",
+								"properties": {
+									"request_id": {"type": "string", "description": "Existing capability_request id to approve with this phase"},
+									"grant_id": {"type": "string", "description": "Optional explicit grant id to create"},
+									"kind": {"type": "string", "description": "Capability kind, e.g. external_account, tool, file_access, network_access, or generic_delegation"},
+									"target_resource": {"type": "string", "description": "Capability target such as github, a repo path, or a tool name"},
+									"granted_to": {"type": "string", "description": "Principal receiving the grant"},
+									"allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Allowed grant actions such as read, write, or invoke"},
+									"contract": {"description": "Optional grant contract JSON copied into capability grant state"},
+									"constraints": {"description": "Optional grant constraints JSON copied into capability grant state"},
+									"expires_at": {"type": "string", "description": "Optional absolute expiration timestamp"}
+								},
+								"required": ["request_id"]
+							}
+						},
 						"gate_level": {"type": "string", "enum": ["normal_approval", "escalated_operator_approval", "hard_consent_block"], "description": "Typed approval gate"},
 						"gate_reason_code": {"type": "string", "description": "Typed gate reason such as external_account_auth_status, credential_metadata_check, capability_grant, deploy, or workspace_write"},
 						"approval_subject": {"type": "string", "description": "Who can satisfy this gate: operator, third_party, or resource_owner"},

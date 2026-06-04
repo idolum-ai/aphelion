@@ -115,7 +115,7 @@ func (r *Runtime) writeDoctorRuntimeAdjudications(ctx context.Context, b *string
 				details = append(details, finding.Detail)
 			}
 		}
-		WriteLine(b, fmt.Sprintf("- time=%s chat_id=%d seq=%d kind=%s surface=%s action=%s label=%q findings=%q detail=%q",
+		WriteLine(b, fmt.Sprintf("- time=%s chat_id=%d seq=%d kind=%s surface=%s action=%s label=%q subject=%s refs=%q findings=%q detail=%q next=%q",
 			adjudication.CreatedAt.UTC().Format(time.RFC3339),
 			adjudication.ChatID,
 			adjudication.Seq,
@@ -123,11 +123,27 @@ func (r *Runtime) writeDoctorRuntimeAdjudications(ctx context.Context, b *string
 			strings.TrimSpace(adjudication.Surface),
 			strings.TrimSpace(adjudication.VisibleAction),
 			strings.TrimSpace(adjudication.OperatorLabel),
+			strings.TrimSpace(adjudication.SubjectID),
+			strings.Join(adjudication.EvidenceRefs, ","),
 			strings.Join(findingKinds, ","),
 			truncatePreview(strings.Join(details, "; "), 260),
+			doctorAdjudicationNextAction(adjudication),
 		))
 	}
 	_ = ctx
+}
+
+func doctorAdjudicationNextAction(adjudication core.AdjudicationStatusSnapshot) string {
+	switch strings.TrimSpace(adjudication.VisibleAction) {
+	case "repair_completed_or_superseded_approval":
+		return "Ask for a new bounded follow-up if more work remains."
+	case "repair_invalid_pending_approval", "repair_stale_continuation_projection":
+		return "Use the fresh eligible proposal; do not press stale approval buttons."
+	case "blocked_status":
+		return "Resolve the named blocker, then request a fresh bounded approval."
+	default:
+		return ""
+	}
 }
 
 func writeDoctorEvents(b *strings.Builder, events []session.ExecutionEvent, limit int) {

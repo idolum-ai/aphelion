@@ -22,12 +22,14 @@ var aphelionServiceTemplate string
 type quickstartCommandRunner func(ctx context.Context, name string, args ...string) error
 
 type quickstartServiceOptions struct {
-	ConfigPath    string
-	ExecPath      string
-	WorkDir       string
-	Out           io.Writer
-	CommandRunner quickstartCommandRunner
-	Timeout       time.Duration
+	ConfigPath           string
+	ExecPath             string
+	WorkDir              string
+	Out                  io.Writer
+	CommandRunner        quickstartCommandRunner
+	ServiceGuardRunner   serviceGuardRunner
+	ServiceGuardReadlink func(string) (string, error)
+	Timeout              time.Duration
 }
 
 type quickstartServiceResult struct {
@@ -56,12 +58,14 @@ func runQuickstartInstallExisting(ctx context.Context, opts quickstartOptions, c
 
 func runQuickstartServiceInstall(ctx context.Context, opts quickstartOptions, configPath string) error {
 	serviceResult, err := installQuickstartUserService(ctx, quickstartServiceOptions{
-		ConfigPath:    configPath,
-		ExecPath:      opts.ExecPath,
-		WorkDir:       opts.WorkDir,
-		Out:           opts.Out,
-		CommandRunner: opts.CommandRunner,
-		Timeout:       defaultQuickstartCommandTimeout,
+		ConfigPath:           configPath,
+		ExecPath:             opts.ExecPath,
+		WorkDir:              opts.WorkDir,
+		Out:                  opts.Out,
+		CommandRunner:        opts.CommandRunner,
+		ServiceGuardRunner:   opts.ServiceGuardRunner,
+		ServiceGuardReadlink: opts.ServiceGuardReadlink,
+		Timeout:              defaultQuickstartCommandTimeout,
 	})
 	if err != nil {
 		return err
@@ -83,6 +87,10 @@ func installQuickstartUserService(ctx context.Context, opts quickstartServiceOpt
 	runner := opts.CommandRunner
 	if runner == nil {
 		runner = execQuickstartCommand
+	}
+	guardRunner := opts.ServiceGuardRunner
+	if guardRunner == nil {
+		guardRunner = execServiceGuardCommand
 	}
 	timeout := opts.Timeout
 	if timeout <= 0 {
@@ -111,6 +119,10 @@ func installQuickstartUserService(ctx context.Context, opts quickstartServiceOpt
 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	targetVersion, err := readExecutableVersion(runCtx, guardRunner, execPath)
+	if err != nil {
+		return quickstartServiceResult{}, fmt.Errorf("read target executable version: %w", err)
+	}
 	if err := runner(runCtx, execPath, "--config", opts.ConfigPath, "--check-config"); err != nil {
 		return quickstartServiceResult{}, fmt.Errorf("check config: %w", err)
 	}
@@ -145,6 +157,19 @@ func installQuickstartUserService(ctx context.Context, opts quickstartServiceOpt
 	}
 	if err := waitForAphelionUserService(runCtx, runner); err != nil {
 		return quickstartServiceResult{}, err
+	}
+	guardReport, err := verifyAphelionServiceGuard(runCtx, serviceGuardCheck{
+		ExpectedExecPath: execPath,
+		ExpectedVersion:  targetVersion.Version,
+		ExpectedRevision: targetVersion.VCSRevision,
+		Runner:           guardRunner,
+		Readlink:         opts.ServiceGuardReadlink,
+	})
+	if err != nil {
+		return quickstartServiceResult{}, fmt.Errorf("verify service binary: %w", err)
+	}
+	if opts.Out != nil {
+		fmt.Fprintf(opts.Out, "service_guard: %s\n", guardReport.Summary())
 	}
 	if err := runner(runCtx, execPath, "verify-deploy", "--config", opts.ConfigPath, "--format=kv"); err != nil {
 		return quickstartServiceResult{}, fmt.Errorf("verify deploy: %w", err)

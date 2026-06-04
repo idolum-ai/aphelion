@@ -84,6 +84,7 @@ type Runtime interface {
 	CurrentEfforts() (string, string)
 
 	MarkStreamControlStopping(streamID string, chatID int64) bool
+	CancelActiveTurnRun(runID int64) bool
 	ClearChatSessionContext(chatID int64) (bool, error)
 	ClearSessionContextForKey(key session.SessionKey) (bool, error)
 	FlushChatMemory(ctx context.Context, chatID int64, reason string) error

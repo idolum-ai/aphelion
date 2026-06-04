@@ -61,7 +61,12 @@ func (h *DecisionHandler) handleReviewEventCallback(ctx context.Context, cb tele
 	if !ok {
 		return h.answerReviewEventCallback(ctx, cb, "Capability request not found.")
 	}
+	if event.Status == "dismissed" {
+		_ = h.editReviewEventCallbackMessage(ctx, cb, "Stale approval card — use the newest prompt.")
+		return h.answerReviewEventCallback(ctx, cb, "This approval is stale. Use the newest prompt.")
+	}
 	if !reviewEventRequestStillActionable(record, action) {
+		_ = h.editReviewEventCallbackMessage(ctx, cb, "Stale approval card — use the newest prompt.")
 		return h.answerReviewEventCallback(ctx, cb, "This approval is no longer active. Use the newest prompt.")
 	}
 	fromID := int64(0)

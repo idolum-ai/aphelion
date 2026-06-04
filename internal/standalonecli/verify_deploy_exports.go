@@ -29,6 +29,12 @@ type DeployVerificationOptions = deployVerificationOptions
 type DeployTurnRunner = deployTurnRunner
 type DeployVerificationSender = deployVerificationSender
 type BuiltDeployVerificationRuntime = builtDeployVerificationRuntime
+type ServiceGuardCheck = serviceGuardCheck
+type ServiceGuardReport = serviceGuardReport
+
+func VerifyAphelionServiceGuard(ctx context.Context, check ServiceGuardCheck) (ServiceGuardReport, error) {
+	return verifyAphelionServiceGuard(ctx, check)
+}
 
 func NormalizeVerifyDeployDurableChildrenMode(mode string) (string, error) {
 	return normalizeVerifyDeployDurableChildrenMode(mode)

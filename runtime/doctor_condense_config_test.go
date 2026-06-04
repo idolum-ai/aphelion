@@ -569,7 +569,7 @@ func TestDoctorRuntimeAdjudicationsIncludesContinuationApprovals(t *testing.T) {
 	var b strings.Builder
 	rt.writeDoctorRuntimeAdjudications(context.Background(), &b, key, now)
 	report := b.String()
-	for _, want := range []string{"kind=continuation_approval", "action=blocked_status", "Continuation approval blocked", "approval_blocked", "waiting for explicit opt-in"} {
+	for _, want := range []string{"kind=continuation_approval", "action=blocked_status", "Continuation approval blocked", "approval_blocked", "waiting for explicit opt-in", `next="Resolve the named blocker, then request a fresh bounded approval."`} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("doctor adjudications = %q, want %q", report, want)
 		}

@@ -119,6 +119,7 @@ type ReviewEvent struct {
 	Status            string // "pending" | "delivered" | "dismissed"
 	CreatedAt         time.Time
 	DeliveredAt       time.Time
+	DeliveryMessageID int64
 }
 
 type DurableAgentPolicyUpdate struct {

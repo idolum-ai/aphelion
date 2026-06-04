@@ -10,7 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 62
+const schemaVersion = 63
 
 type SQLiteStore struct {
 	db     *sql.DB
@@ -169,7 +169,8 @@ func (s *SQLiteStore) init() error {
 			metadata_json TEXT,
 			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'delivered', 'dismissed')),
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
-			delivered_at TEXT
+			delivered_at TEXT,
+			delivery_message_id INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE IF NOT EXISTS plan_events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

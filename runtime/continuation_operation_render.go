@@ -34,6 +34,9 @@ func renderOperationProposalMaterializedPromptFallback(state session.Continuatio
 	if included := continuationApprovalPromptIncludedLines(state); len(included) > 0 {
 		line += ". Covers " + strings.Join(included, "; ")
 	}
+	if capabilities := continuationRequiredCapabilityLines(state); len(capabilities) > 0 {
+		line += ". Requires " + strings.Join(capabilities, "; ")
+	}
 	if stops := continuationApprovalPromptStops(state); len(stops) > 0 {
 		line += ". Stops before " + strings.Join(stops, ", ")
 	}
@@ -58,6 +61,9 @@ func renderEscalatedOperatorApprovalPromptFallback(state session.ContinuationSta
 	line := "Approve “" + title + "”: " + action
 	if included := continuationEscalatedApprovalAllowedLines(state); len(included) > 0 {
 		line += ". This can use " + strings.Join(included, ", ")
+	}
+	if capabilities := continuationRequiredCapabilityLines(state); len(capabilities) > 0 {
+		line += ". Requires " + strings.Join(capabilities, "; ")
 	}
 	if stops := continuationApprovalPromptStops(state); len(stops) > 0 {
 		line += ". Stops before " + strings.Join(stops, ", ")
@@ -150,6 +156,56 @@ func continuationApprovalPromptIncludedLines(state session.ContinuationState) []
 	return lines
 }
 
+func continuationRequiredCapabilityLines(state session.ContinuationState) []string {
+	state = session.NormalizeContinuationState(state)
+	specs := append([]session.CapabilityGrantSpec(nil), state.ContinuationLease.RequiredCapabilityGrants...)
+	if phase, ok := currentContinuationBundlePhase(state.ApprovalBundle); ok {
+		specs = append(specs, phase.RequiredCapabilityGrants...)
+	}
+	if len(specs) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, minStatusInt(len(specs), 4))
+	seen := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		spec = session.NormalizeCapabilityGrantSpec(spec)
+		line := capabilityGrantSpecPromptLine(spec)
+		if line == "" || seen[line] {
+			continue
+		}
+		seen[line] = true
+		lines = append(lines, line)
+		if len(lines) >= 4 {
+			break
+		}
+	}
+	return lines
+}
+
+func capabilityGrantSpecPromptLine(spec session.CapabilityGrantSpec) string {
+	spec = session.NormalizeCapabilityGrantSpec(spec)
+	parts := make([]string, 0, 5)
+	if spec.Kind != "" {
+		parts = append(parts, strings.TrimSpace(string(spec.Kind)))
+	}
+	if spec.TargetResource != "" {
+		parts = append(parts, spec.TargetResource)
+	}
+	if len(spec.AllowedActions) > 0 {
+		parts = append(parts, "actions "+strings.Join(spec.AllowedActions, ", "))
+	}
+	if spec.GrantedTo != "" {
+		parts = append(parts, "for "+spec.GrantedTo)
+	}
+	if spec.RequestID != "" {
+		parts = append(parts, "request "+spec.RequestID)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return continuationPromptCompactLine(strings.Join(parts, " · "), 180)
+}
+
 func continuationApprovalPromptStops(state session.ContinuationState) []string {
 	state = session.NormalizeContinuationState(state)
 	values := append([]string(nil), state.ActionProposal.ForbiddenActions...)
@@ -183,6 +239,9 @@ func renderPlanBudgetPromptFallback(state session.ContinuationState) string {
 	}
 	if included := planBudgetIncludedLines(state); len(included) > 0 {
 		line += ". Covers " + strings.Join(included, "; ")
+	}
+	if capabilities := continuationRequiredCapabilityLines(state); len(capabilities) > 0 {
+		line += ". Requires " + strings.Join(capabilities, "; ")
 	}
 	if stops := planBudgetStopLines(state); len(stops) > 0 {
 		line += ". Stops before " + strings.Join(stops, ", ")

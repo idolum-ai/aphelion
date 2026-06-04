@@ -143,6 +143,53 @@ func TestStatusDiagnosticsSurfacesApprovalAffordanceGap(t *testing.T) {
 	}
 }
 
+func TestStatusDiagnosticsShowsRepairLoopNextActionAndRefs(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8123, UserID: 0, Scope: telegramDMScopeRef(8123)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{{
+		EventType: core.ExecutionEventContinuationAdjudicated,
+		Stage:     "continuation",
+		Status:    "adjudicated",
+		PayloadJSON: `{
+			"adjudication_kind":"continuation_approval",
+			"surface":"materialization_repair",
+			"subject_id":"decision-completed-followup",
+			"operator_label":"Completed continuation approval repaired",
+			"visible_action":"repair_completed_or_superseded_approval",
+			"evidence_refs":["operation:completed-followup-op","phase:phase-commit-push","lease:lease-old"],
+			"findings":[{"kind":"stale_completed_approval","claim_type":"stale_completed_approval","detail":"operation completed","required_behavior":"Do not re-offer completed work."}]
+		}`,
+		CreatedAt: now,
+	}}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	lines, err := rt.StatusDiagnostics(8123)
+	if err != nil {
+		t.Fatalf("StatusDiagnostics() err = %v", err)
+	}
+	text := strings.Join(lines, "\n")
+	for _, needle := range []string{
+		"Completed continuation approval repaired",
+		"action=repair_completed_or_superseded_approval",
+		"subject=decision-completed-followup",
+		"refs=operation:completed-followup-op,phase:phase-commit-push,lease:lease-old",
+		`detail="operation completed"`,
+		`next="Ask for a new bounded follow-up if more work remains."`,
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("StatusDiagnostics() = %q, want substring %q", text, needle)
+		}
+	}
+}
+
 func TestStatusDiagnosticsPrefersTurnProjectionFromExecutionEvents(t *testing.T) {
 	t.Parallel()
 

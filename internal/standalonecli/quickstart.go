@@ -25,25 +25,27 @@ const (
 )
 
 type quickstartOptions struct {
-	ConfigPath         string
-	Force              bool
-	NoInput            bool
-	AllowPrompt        bool
-	DetectAdmin        bool
-	DetectAdminTimeout time.Duration
-	InstallService     bool
-	TelegramBotToken   string
-	AdminUserID        int64
-	Provider           string
-	ProviderAPIKey     string
-	ProviderModel      string
-	ExecPath           string
-	WorkDir            string
-	In                 io.Reader
-	Out                io.Writer
-	Getenv             func(string) string
-	NewTelegramClient  func(string) quickstartTelegramClient
-	CommandRunner      quickstartCommandRunner
+	ConfigPath           string
+	Force                bool
+	NoInput              bool
+	AllowPrompt          bool
+	DetectAdmin          bool
+	DetectAdminTimeout   time.Duration
+	InstallService       bool
+	TelegramBotToken     string
+	AdminUserID          int64
+	Provider             string
+	ProviderAPIKey       string
+	ProviderModel        string
+	ExecPath             string
+	WorkDir              string
+	In                   io.Reader
+	Out                  io.Writer
+	Getenv               func(string) string
+	NewTelegramClient    func(string) quickstartTelegramClient
+	CommandRunner        quickstartCommandRunner
+	ServiceGuardRunner   serviceGuardRunner
+	ServiceGuardReadlink func(string) (string, error)
 }
 
 type quickstartTelegramClient interface {

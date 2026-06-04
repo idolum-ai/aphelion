@@ -4,6 +4,7 @@ package session
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -77,7 +78,7 @@ func (s *SQLiteStore) PendingReviewEvents(targetChatID int64, limit int) ([]Revi
 		SELECT
 			id, source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
 			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
-			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at
+			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at, delivery_message_id
 		FROM review_events
 		WHERE target_chat_id = ? AND status = 'pending'
 		ORDER BY created_at ASC, id ASC
@@ -111,7 +112,7 @@ func (s *SQLiteStore) PendingReviewEventsAll(limit int) ([]ReviewEvent, error) {
 		SELECT
 			id, source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
 			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
-			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at
+			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at, delivery_message_id
 		FROM review_events
 		WHERE status = 'pending'
 		ORDER BY created_at ASC, id ASC
@@ -144,7 +145,7 @@ func (s *SQLiteStore) ReviewEventsWithRedactedSummary(limit int) ([]ReviewEvent,
 		SELECT
 			id, source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
 			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
-			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at
+			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at, delivery_message_id
 		FROM review_events
 		WHERE summary LIKE ? OR metadata_json LIKE ?
 		ORDER BY created_at ASC, id ASC
@@ -233,6 +234,81 @@ func (s *SQLiteStore) MarkReviewDelivered(ids []int64) error {
 	return nil
 }
 
+func (s *SQLiteStore) MarkReviewDeliveredWithMessage(id int64, messageID int64) error {
+	if id <= 0 {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := s.db.Exec(`
+		UPDATE review_events
+		SET status = 'delivered', delivered_at = ?, delivery_message_id = ?
+		WHERE id = ? AND status = 'pending'
+	`, now, messageID, id); err != nil {
+		return fmt.Errorf("mark review delivered with message id=%d: %w", id, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) DismissPendingCapabilityReviewEvents(targetChatID int64, requestID string, exceptEventID int64) ([]ReviewEvent, error) {
+	requestID = strings.TrimSpace(requestID)
+	if targetChatID == 0 || requestID == "" {
+		return nil, nil
+	}
+	pattern := "%\"request_id\":\"" + requestID + "\"%"
+	rows, err := s.db.Query(`
+		SELECT
+			id, source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
+			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
+			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at, delivery_message_id
+		FROM review_events
+		WHERE target_chat_id = ? AND source_role = 'capability_request' AND status IN ('pending', 'delivered') AND id != ? AND metadata_json LIKE ?
+		ORDER BY created_at ASC, id ASC
+	`, targetChatID, exceptEventID, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("query stale capability review events: %w", err)
+	}
+	defer rows.Close()
+	events := []ReviewEvent{}
+	ids := []int64{}
+	for rows.Next() {
+		event, err := scanReviewEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		if reviewEventMetadataRequestID(event.MetadataJSON) != requestID {
+			continue
+		}
+		events = append(events, event)
+		ids = append(ids, event.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate stale capability review events: %w", err)
+	}
+	if len(ids) == 0 {
+		return events, nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	if _, err := s.db.Exec("UPDATE review_events SET status = 'dismissed' WHERE id IN ("+placeholders+")", args...); err != nil {
+		return nil, fmt.Errorf("dismiss stale capability review events: %w", err)
+	}
+	return events, nil
+}
+
+func reviewEventMetadataRequestID(raw string) string {
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(raw), &meta); err != nil {
+		return ""
+	}
+	if v, ok := meta["request_id"].(string); ok {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+
 func (s *SQLiteStore) ReviewEventByID(id int64) (*ReviewEvent, error) {
 	if id <= 0 {
 		return nil, fmt.Errorf("review event id is required")
@@ -241,7 +317,7 @@ func (s *SQLiteStore) ReviewEventByID(id int64) (*ReviewEvent, error) {
 		SELECT
 			id, source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
 			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
-			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at
+			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at, delivery_message_id
 		FROM review_events
 		WHERE id = ?
 	`, id)
@@ -261,27 +337,28 @@ func (s *SQLiteStore) ReviewEventByID(id int64) (*ReviewEvent, error) {
 
 func scanReviewEvent(scanner interface{ Scan(dest ...any) error }) (ReviewEvent, error) {
 	var (
-		event           ReviewEvent
-		createdAtRaw    string
-		deliveredAtRaw  sql.NullString
-		turnFromRaw     sql.NullInt64
-		turnToRaw       sql.NullInt64
-		targetChatIDRaw int64
-		sourceSessionID sql.NullString
-		sourceScopeKind sql.NullString
-		sourceScopeID   sql.NullString
-		sourceAgentID   sql.NullString
-		targetSessionID sql.NullString
-		targetScopeKind sql.NullString
-		targetScopeID   sql.NullString
-		targetAgentID   sql.NullString
-		metadataJSON    sql.NullString
+		event                ReviewEvent
+		createdAtRaw         string
+		deliveredAtRaw       sql.NullString
+		turnFromRaw          sql.NullInt64
+		turnToRaw            sql.NullInt64
+		targetChatIDRaw      int64
+		sourceSessionID      sql.NullString
+		sourceScopeKind      sql.NullString
+		sourceScopeID        sql.NullString
+		sourceAgentID        sql.NullString
+		targetSessionID      sql.NullString
+		targetScopeKind      sql.NullString
+		targetScopeID        sql.NullString
+		targetAgentID        sql.NullString
+		metadataJSON         sql.NullString
+		deliveryMessageIDRaw sql.NullInt64
 	)
 
 	if err := scanner.Scan(
 		&event.ID, &sourceSessionID, &event.SourceChatID, &event.SourceUserID, &event.SourceRole, &sourceScopeKind, &sourceScopeID, &sourceAgentID,
 		&targetSessionID, &targetChatIDRaw, &targetScopeKind, &targetScopeID, &targetAgentID,
-		&turnFromRaw, &turnToRaw, &event.Summary, &metadataJSON, &event.Status, &createdAtRaw, &deliveredAtRaw,
+		&turnFromRaw, &turnToRaw, &event.Summary, &metadataJSON, &event.Status, &createdAtRaw, &deliveredAtRaw, &deliveryMessageIDRaw,
 	); err != nil {
 		return ReviewEvent{}, fmt.Errorf("scan review event: %w", err)
 	}
@@ -317,6 +394,9 @@ func scanReviewEvent(scanner interface{ Scan(dest ...any) error }) (ReviewEvent,
 			return ReviewEvent{}, fmt.Errorf("parse review event delivered_at: %w", err)
 		}
 		event.DeliveredAt = deliveredAt
+	}
+	if deliveryMessageIDRaw.Valid {
+		event.DeliveryMessageID = deliveryMessageIDRaw.Int64
 	}
 	return event, nil
 }

@@ -723,6 +723,9 @@ func operationPhaseNeedsStandaloneApproval(opState session.OperationState, phase
 	if operationPhaseApprovalExcludedReason(opState.PhasePlan, phase) != "" {
 		return false
 	}
+	if len(phase.RequiredCapabilityGrants) > 0 {
+		return true
+	}
 	switch operationPhaseApprovalKindFor(phase) {
 	case operationPhaseApprovalBlocked:
 		return true

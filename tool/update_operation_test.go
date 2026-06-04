@@ -454,6 +454,47 @@ func TestUpdateOperationToolRequiresPlanLeaseLaneAuthorityAndTurns(t *testing.T)
 	}
 }
 
+func TestRequestApprovalToolDefinitionExposesRequiredCapabilityGrants(t *testing.T) {
+	t.Parallel()
+
+	var schema map[string]any
+	if err := json.Unmarshal(requestApprovalToolDefinition().Parameters, &schema); err != nil {
+		t.Fatalf("decode request_approval schema: %v", err)
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_approval schema properties = %#v, want object", schema["properties"])
+	}
+	phase, ok := properties["phase"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_approval phase schema = %#v, want object", properties["phase"])
+	}
+	phaseProperties, ok := phase["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_approval phase properties = %#v, want object", phase["properties"])
+	}
+	grantSchema, ok := phaseProperties["required_capability_grants"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_approval phase properties = %#v, want required_capability_grants", phaseProperties)
+	}
+	if grantSchema["type"] != "array" {
+		t.Fatalf("required_capability_grants type = %#v, want array", grantSchema["type"])
+	}
+	items, ok := grantSchema["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("required_capability_grants items = %#v, want object schema", grantSchema["items"])
+	}
+	itemProperties, ok := items["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("required_capability_grants item properties = %#v, want object", items["properties"])
+	}
+	for _, want := range []string{"request_id", "grant_id", "kind", "target_resource", "granted_to", "allowed_actions", "contract", "constraints", "expires_at"} {
+		if _, ok := itemProperties[want]; !ok {
+			t.Fatalf("required_capability_grants item properties = %#v, want %q", itemProperties, want)
+		}
+	}
+}
+
 func TestDefinitionsIncludeRequestApprovalToolWhenStoreConfigured(t *testing.T) {
 	t.Parallel()
 
@@ -501,7 +542,14 @@ func TestRequestApprovalToolPersistsPendingManualApprovalPhase(t *testing.T) {
 				"bounded_effect":"Edit local files and run targeted tests; stop before deploy.",
 				"allowed_actions":["edit_files","run_tests"],
 				"forbidden_actions":["commit","deploy","restart_service"],
-				"validation_plan":["targeted tests pass"]
+				"validation_plan":["targeted tests pass"],
+				"required_capability_grants":[{
+					"request_id":"cap-imexx-github",
+					"kind":"external_account",
+					"target_resource":"github:imexx/processes",
+					"granted_to":"telegram:1001",
+					"allowed_actions":["contents:write","pull_requests:write"]
+				}]
 			}
 		}`),
 	)
@@ -528,6 +576,13 @@ func TestRequestApprovalToolPersistsPendingManualApprovalPhase(t *testing.T) {
 	}
 	if phase.Status != session.PlanStatusPending || phase.AuthorityClass != "workspace_write" {
 		t.Fatalf("phase = %#v, want pending workspace_write", phase)
+	}
+	if len(phase.RequiredCapabilityGrants) != 1 {
+		t.Fatalf("required capability grants = %#v, want one bundled grant", phase.RequiredCapabilityGrants)
+	}
+	grant := phase.RequiredCapabilityGrants[0]
+	if grant.RequestID != "cap-imexx-github" || grant.Kind != session.CapabilityKindExternalAccount || grant.TargetResource != "github:imexx/processes" || grant.GrantedTo != "telegram:1001" || !containsString(grant.AllowedActions, "contents:write") {
+		t.Fatalf("required capability grant = %#v, want parsed Imexx GitHub grant dependency", grant)
 	}
 }
 

@@ -23,7 +23,8 @@ func (r *Runtime) sendMaterializedContinuationApproval(ctx context.Context, key 
 }
 
 func (r *Runtime) repairInvalidPendingPhaseApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, opState session.OperationState, state session.ContinuationState, now time.Time) (session.OperationState, bool) {
-	repairedOpState, repaired, err := r.repairInvalidPendingPhaseApprovalState(ctx, key, msg.ChatID, opState, state, now, true, "materialization_repair")
+	notify := strings.TrimSpace(msg.Text) == "continue"
+	repairedOpState, repaired, err := r.repairInvalidPendingPhaseApprovalState(ctx, key, msg.ChatID, opState, state, now, notify, "materialization_repair")
 	if err != nil {
 		return session.NormalizeOperationState(opState), false
 	}
@@ -113,6 +114,10 @@ func (r *Runtime) repairInvalidPendingPhaseApprovalState(ctx context.Context, ke
 	if state.Status != session.ContinuationStatusPending {
 		return opState, false, nil
 	}
+	if opState.Status == session.OperationStatusCompleted || opState.Status == session.OperationStatusFailed {
+		reason := "operation " + string(opState.Status)
+		return r.repairStaleCompletedContinuationApprovalState(ctx, key, chatID, opState, state, reason, now, notify, surface)
+	}
 	reason := continuationApprovalBundleInvalidReason(opState.PhasePlan, state.ApprovalBundle)
 	if reason == "" {
 		return opState, false, nil
@@ -147,6 +152,7 @@ func (r *Runtime) repairInvalidPendingPhaseApprovalState(ctx context.Context, ke
 		"operator_label":    "Invalid continuation approval repaired",
 		"visible_action":    "repair_invalid_pending_approval",
 		"decision":          "revoked_invalid_pending_approval",
+		"evidence_refs":     continuationRepairEvidenceRefs(opState, state),
 		"findings": []core.RuntimeFinding{{
 			Kind:             "invalid_pending_approval",
 			EvidenceStatus:   "detected_from_phase_contract",
@@ -162,6 +168,105 @@ func (r *Runtime) repairInvalidPendingPhaseApprovalState(ctx context.Context, ke
 		})
 	}
 	return opState, true, nil
+}
+
+func (r *Runtime) repairStaleCompletedContinuationApprovalState(ctx context.Context, key session.SessionKey, chatID int64, opState session.OperationState, state session.ContinuationState, reason string, now time.Time, notify bool, surface string) (session.OperationState, bool, error) {
+	opState = session.NormalizeOperationState(opState)
+	state = session.NormalizeContinuationState(state)
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "operation already reached a terminal state"
+	}
+	state.Status = session.ContinuationStatusRevoked
+	state.RemainingTurns = 0
+	state.HandshakeBlockedReason = "stale_completed_operation"
+	state.ActionProposal.Status = session.ProposalStatusSuperseded
+	state.ActionProposal.UpdatedAt = now
+	state.ContinuationLease.Status = session.ContinuationLeaseStatusRevoked
+	state.ContinuationLease.RevokedAt = now
+	state.ContinuationLease.UpdatedAt = now
+	state.ApprovalBundle.Status = session.ContinuationLeaseStatusRevoked
+	for i := range state.ApprovalBundle.Phases {
+		state.ApprovalBundle.Phases[i].Status = session.ContinuationLeaseStatusRevoked
+	}
+	state.ApprovalBundle.UpdatedAt = now
+	state.UpdatedAt = now
+	if err := r.store.UpdateContinuationState(key, state); err != nil {
+		return opState, false, fmt.Errorf("revoke stale completed continuation chat_id=%d: %w", key.ChatID, err)
+	}
+
+	if opState.Proposal.Status == session.ProposalStatusPending || opState.Proposal.Status == session.ProposalStatusApproved {
+		opState.Proposal.Status = session.ProposalStatusSuperseded
+		opState.Proposal.UpdatedAt = now
+	}
+	opState.UpdatedAt = now
+	if err := r.store.UpdateOperationState(key, opState); err != nil {
+		return opState, false, fmt.Errorf("persist stale completed continuation repair chat_id=%d: %w", key.ChatID, err)
+	}
+
+	surface = strings.TrimSpace(surface)
+	if surface == "" {
+		surface = "materialization_repair"
+	}
+	subjectID := firstNonEmptyContinuation(state.DecisionID, state.ActionProposal.OperationID, opState.Proposal.ID, opState.ID)
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationAdjudicated, "continuation", "adjudicated", map[string]any{
+		"adjudication_kind": "continuation_approval",
+		"surface":           surface,
+		"subject_id":        subjectID,
+		"operator_label":    "Completed continuation approval repaired",
+		"visible_action":    "repair_completed_or_superseded_approval",
+		"decision":          "revoked_stale_completed_approval",
+		"evidence_refs":     continuationRepairEvidenceRefs(opState, state),
+		"findings": []core.RuntimeFinding{{
+			Kind:             "stale_completed_approval",
+			EvidenceStatus:   "detected_from_operation_terminal_state",
+			Detail:           reason,
+			RequiredBehavior: "Do not re-offer completed or superseded continuation work; report the completed state or ask for a new bounded objective.",
+		}},
+	}, now)
+	if notify && r.outbound != nil && chatID != 0 {
+		text := r.prefixTelegramPresentedText(r.telegramPresentationForKey(key), "Stopped stale approval.\n\nThat work is already "+string(opState.Status)+"; I will not re-offer the completed continuation. Ask for a new bounded follow-up if more work is needed.")
+		_, _ = r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: chatID, Text: text})
+	}
+	return session.NormalizeOperationState(opState), true, nil
+}
+
+func continuationRepairEvidenceRefs(opState session.OperationState, state session.ContinuationState) []string {
+	refs := make([]string, 0, 6)
+	if id := strings.TrimSpace(opState.ID); id != "" {
+		refs = append(refs, "operation:"+id)
+	}
+	if proposalID := strings.TrimSpace(opState.Proposal.ID); proposalID != "" {
+		refs = append(refs, "proposal:"+proposalID)
+	}
+	if decisionID := strings.TrimSpace(state.DecisionID); decisionID != "" {
+		refs = append(refs, "decision:"+decisionID)
+	}
+	actionOpID := strings.TrimSpace(state.ActionProposal.OperationID)
+	actionID := strings.TrimPrefix(strings.TrimSpace(state.ActionProposal.ID), "aprop-")
+	decisionID := strings.TrimSpace(state.DecisionID)
+	for _, phase := range opState.PhasePlan.Phases {
+		phase = normalizeSingleOperationPhase(phase)
+		phaseID := strings.TrimSpace(phase.ID)
+		if phaseID == "" {
+			continue
+		}
+		proposalID := operationPhaseProposalID(opState, phase)
+		if proposalID != "" && (proposalID == actionOpID || proposalID == actionID || proposalID == decisionID) {
+			refs = append(refs, "phase:"+phaseID)
+			break
+		}
+	}
+	if leaseID := strings.TrimSpace(state.ContinuationLease.ID); leaseID != "" {
+		refs = append(refs, "lease:"+leaseID)
+	}
+	bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle)
+	for _, phase := range bundle.Phases {
+		if phaseID := strings.TrimSpace(phase.OperationPhaseID); phaseID != "" {
+			refs = append(refs, "phase:"+phaseID)
+		}
+	}
+	return refs
 }
 
 func operationStateWithInvalidApprovalCleared(opState session.OperationState, state session.ContinuationState, now time.Time) session.OperationState {
