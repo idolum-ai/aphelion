@@ -103,6 +103,8 @@ func runMaintenanceCommand(args []string) (bool, error) {
 		return true, maintenancecli.RunImportCodexSessionsCommand(args[1:])
 	case "verify-deploy":
 		return true, runVerifyDeployCommand(args[1:])
+	case "status":
+		return true, standalonecli.RunStatusCommand(args[1:])
 	case "durable-agent":
 		return true, runDurableAgentCommand(args[1:])
 	case "tailnet":

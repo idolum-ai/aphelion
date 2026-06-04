@@ -27,7 +27,7 @@ func (f *fakeServiceGuard) run(_ context.Context, name string, args ...string) (
 	if name == "systemctl" && reflect.DeepEqual(args, []string{"--user", "list-unit-files", "--no-legend", "--plain"}) {
 		return []byte(f.unitFiles), nil
 	}
-	if name == "systemctl" && reflect.DeepEqual(args, []string{"--user", "show", "aphelion", "-p", "MainPID", "-p", "ExecStart", "--no-pager"}) {
+	if name == "systemctl" && len(args) >= 4 && args[0] == "--user" && args[1] == "show" && args[2] == "aphelion" {
 		return []byte(f.show), nil
 	}
 	if len(args) == 2 && args[0] == "version" && args[1] == "--json" {

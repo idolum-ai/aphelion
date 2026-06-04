@@ -27,10 +27,15 @@ type serviceGuardCheck struct {
 	Runner           serviceGuardRunner
 	Readlink         func(string) (string, error)
 	ExecVersion      func(context.Context, string) (versionInfo, error)
+	Lenient          bool
 }
 
 type serviceGuardReport struct {
 	ServiceName        string
+	LoadState          string
+	ActiveState        string
+	SubState           string
+	FragmentPath       string
 	MainPID            string
 	ExecStart          string
 	RunningExecPath    string
@@ -109,44 +114,57 @@ func verifyAphelionServiceGuard(ctx context.Context, check serviceGuardCheck) (s
 		return report, err
 	}
 	report.DuplicateUnitNames = duplicates
-	if len(duplicates) > 0 {
+	if len(duplicates) > 0 && !check.Lenient {
 		return report, fmt.Errorf("duplicate/stale Aphelion primary unit(s) detected: %s", strings.Join(duplicates, ", "))
 	}
 
-	show, err := runner(runCtx, "systemctl", "--user", "show", serviceName, "-p", "MainPID", "-p", "ExecStart", "--no-pager")
+	show, err := runner(runCtx, "systemctl", "--user", "show", serviceName, "-p", "LoadState", "-p", "ActiveState", "-p", "SubState", "-p", "FragmentPath", "-p", "MainPID", "-p", "ExecStart", "--no-pager")
 	if err != nil {
 		return report, fmt.Errorf("inspect %s: %w", serviceName, err)
 	}
 	props := parseSystemctlShowProperties(string(show))
+	report.LoadState = strings.TrimSpace(props["LoadState"])
+	report.ActiveState = strings.TrimSpace(props["ActiveState"])
+	report.SubState = strings.TrimSpace(props["SubState"])
+	report.FragmentPath = strings.TrimSpace(props["FragmentPath"])
 	report.MainPID = strings.TrimSpace(props["MainPID"])
 	report.ExecStart = strings.TrimSpace(props["ExecStart"])
 	if report.MainPID == "" || report.MainPID == "0" {
-		return report, fmt.Errorf("%s has no active MainPID", serviceName)
+		if !check.Lenient {
+			return report, fmt.Errorf("%s has no active MainPID", serviceName)
+		}
+		return report, nil
 	}
 
 	runningExec, err := readlink(filepath.Join("/proc", report.MainPID, "exe"))
 	if err != nil {
-		return report, fmt.Errorf("resolve running executable for %s pid %s: %w", serviceName, report.MainPID, err)
+		if !check.Lenient {
+			return report, fmt.Errorf("resolve running executable for %s pid %s: %w", serviceName, report.MainPID, err)
+		}
+		return report, nil
 	}
 	runningExec, err = normalizeExistingPath(runningExec)
 	if err != nil {
 		return report, fmt.Errorf("normalize running executable for %s pid %s: %w", serviceName, report.MainPID, err)
 	}
 	report.RunningExecPath = runningExec
-	if expectedExec != "" && runningExec != expectedExec {
+	if expectedExec != "" && runningExec != expectedExec && !check.Lenient {
 		return report, fmt.Errorf("%s running executable mismatch: got %s, want %s", serviceName, runningExec, expectedExec)
 	}
 
 	versionInfo, err := execVersion(runCtx, runningExec)
 	if err != nil {
-		return report, fmt.Errorf("read running executable version: %w", err)
+		if !check.Lenient {
+			return report, fmt.Errorf("read running executable version: %w", err)
+		}
+		return report, nil
 	}
 	report.RunningVersion = versionInfo.Version
 	report.RunningRevision = versionInfo.VCSRevision
-	if report.ExpectedVersion != "" && report.RunningVersion != report.ExpectedVersion {
+	if report.ExpectedVersion != "" && report.RunningVersion != report.ExpectedVersion && !check.Lenient {
 		return report, fmt.Errorf("%s running version mismatch: got %s, want %s", serviceName, firstNonEmpty(report.RunningVersion, "unknown"), report.ExpectedVersion)
 	}
-	if report.ExpectedRevision != "" && report.RunningRevision != report.ExpectedRevision {
+	if report.ExpectedRevision != "" && report.RunningRevision != report.ExpectedRevision && !check.Lenient {
 		return report, fmt.Errorf("%s running revision mismatch: got %s, want %s", serviceName, firstNonEmpty(report.RunningRevision, "unknown"), report.ExpectedRevision)
 	}
 	return report, nil
