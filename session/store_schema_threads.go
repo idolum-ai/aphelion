@@ -208,6 +208,27 @@ func ensureTelegramCallbackMessageTables(tx *sql.Tx) error {
 	return nil
 }
 
+func ensureTelegramMediaPickerTables(tx *sql.Tx) error {
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS telegram_media_thread_pickers (
+			chat_id INTEGER NOT NULL,
+			picker_message_id INTEGER NOT NULL,
+			source_message_id INTEGER NOT NULL DEFAULT 0,
+			inbound_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'routed', 'cleared')),
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			PRIMARY KEY(chat_id, picker_message_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_telegram_media_thread_pickers_status ON telegram_media_thread_pickers(chat_id, status, updated_at DESC)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("ensure telegram media thread picker table: %w", err)
+		}
+	}
+	return nil
+}
+
 func ensureTelegramThreadReminderTables(tx *sql.Tx) error {
 	for _, stmt := range []string{
 		`CREATE TABLE IF NOT EXISTS telegram_thread_reminders (

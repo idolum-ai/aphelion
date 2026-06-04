@@ -241,6 +241,7 @@ func TestCodexCompleteRefreshesAndPersistsTokensAfterUnauthorized(t *testing.T) 
 	var seenAuth []string
 	var saved governorauth.CodexTokens
 	var savedAt time.Time
+	var saveCalls int
 	client, err := NewCodex(CodexOptions{
 		BaseURL:      "https://chatgpt.com/backend-api",
 		AccessToken:  "stale-token",
@@ -248,6 +249,7 @@ func TestCodexCompleteRefreshesAndPersistsTokensAfterUnauthorized(t *testing.T) 
 		AccountID:    "acct-123",
 		RefreshURL:   "https://auth.openai.com/oauth/token",
 		SaveTokens: func(tokens governorauth.CodexTokens, refreshedAt time.Time) error {
+			saveCalls++
 			saved = tokens
 			savedAt = refreshedAt
 			return nil
@@ -308,11 +310,54 @@ func TestCodexCompleteRefreshesAndPersistsTokensAfterUnauthorized(t *testing.T) 
 	if got, want := strings.Join(seenAuth, ","), "Bearer stale-token|acct-123,Bearer fresh-access|acct-123"; got != want {
 		t.Fatalf("auth sequence = %q, want %q", got, want)
 	}
+	if saveCalls != 1 {
+		t.Fatalf("SaveTokens calls = %d, want 1", saveCalls)
+	}
 	if saved.AccessToken != "fresh-access" || saved.RefreshToken != "fresh-refresh" || saved.AccountID != "acct-123" {
 		t.Fatalf("saved tokens = %#v, want refreshed pair plus account id", saved)
 	}
 	if savedAt.IsZero() {
 		t.Fatal("save timestamp was not set")
+	}
+}
+
+func TestCodexCompleteDoesNotPersistTokensWhenRefreshFails(t *testing.T) {
+	t.Parallel()
+
+	var saveCalls int
+	client, err := NewCodex(CodexOptions{
+		BaseURL:      "https://chatgpt.com/backend-api",
+		AccessToken:  "stale-token",
+		RefreshToken: "refresh-token",
+		AccountID:    "acct-123",
+		RefreshURL:   "https://auth.openai.com/oauth/token",
+		SaveTokens: func(tokens governorauth.CodexTokens, refreshedAt time.Time) error {
+			saveCalls++
+			return nil
+		},
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			rec := httptest.NewRecorder()
+			switch req.URL.String() {
+			case "https://chatgpt.com/backend-api/codex/responses":
+				rec.WriteHeader(http.StatusUnauthorized)
+			case "https://auth.openai.com/oauth/token":
+				rec.WriteHeader(http.StatusUnauthorized)
+			default:
+				t.Fatalf("unexpected request url: %s", req.URL.String())
+			}
+			return rec.Result(), nil
+		})},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil)
+	if err == nil {
+		t.Fatal("Complete() err = nil, want refresh failure")
+	}
+	if saveCalls != 0 {
+		t.Fatalf("SaveTokens calls = %d, want 0 after failed refresh", saveCalls)
 	}
 }
 

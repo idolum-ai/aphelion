@@ -30,6 +30,9 @@ func HandleTelegramCommand(ctx context.Context, sender Sender, router Router, ms
 func HandleTelegramCommandCallback(ctx context.Context, sender CallbackSender, router Router, cb telegram.CallbackQuery) (bool, error) {
 	return handleTelegramCommandCallback(ctx, sender, router, cb)
 }
+func MaybeAskTelegramMediaThreadPicker(ctx context.Context, sender Sender, router Router, msg core.InboundMessage) (bool, error) {
+	return maybeAskTelegramMediaThreadPicker(ctx, sender, router, msg)
+}
 
 func RegisterTelegramCommands(ctx context.Context, client *telegram.Client) error {
 	return registerTelegramCommands(ctx, client)
