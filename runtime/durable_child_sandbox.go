@@ -38,7 +38,7 @@ func (a *durableChildSandboxAccess) addGrantedCapabilities(agent core.DurableAge
 	if a == nil || store == nil {
 		return nil
 	}
-	grants, err := durableChildActiveCapabilityGrants(store, strings.TrimSpace(agent.AgentID))
+	grants, err := durableChildRuntimeCapabilityGrants(store, strings.TrimSpace(agent.AgentID))
 	if err != nil {
 		return err
 	}
@@ -57,22 +57,44 @@ func (a *durableChildSandboxAccess) addGrantedCapabilities(agent core.DurableAge
 	return nil
 }
 
-func durableChildActiveCapabilityGrants(store *session.SQLiteStore, agentID string) ([]session.CapabilityGrant, error) {
+func durableChildRuntimeCapabilityGrants(store *session.SQLiteStore, agentID string) ([]session.CapabilityGrant, error) {
 	agentID = strings.TrimSpace(agentID)
 	if store == nil || agentID == "" {
 		return nil, nil
 	}
 	principalID := core.DurableAgentPrincipal(agentID)
-	grants, err := store.CapabilityGrants(100, session.CapabilityGrantStatusActive, "", principalID)
+	grants, err := store.CapabilityGrants(100, "", "", principalID)
 	if err != nil {
 		return nil, fmt.Errorf("load durable child capability grants principal=%s: %w", principalID, err)
 	}
-	out := make([]session.CapabilityGrant, 0, len(grants))
+	activeRuntime := make([]session.CapabilityGrant, 0, len(grants))
+	inactiveRuntime := make([]session.CapabilityGrant, 0)
 	for _, grant := range grants {
 		grant = session.NormalizeCapabilityGrant(grant)
 		if strings.TrimSpace(grant.GrantID) == "" {
 			continue
 		}
+		if _, ok, err := durableChildGrantMaterializationFrom(grant); err != nil {
+			return nil, err
+		} else if !ok {
+			continue
+		}
+		if grant.Status == session.CapabilityGrantStatusActive {
+			activeRuntime = append(activeRuntime, grant)
+			continue
+		}
+		inactiveRuntime = append(inactiveRuntime, grant)
+	}
+	if len(activeRuntime) == 0 && len(inactiveRuntime) > 0 {
+		// Inactive child_runtime grants are not materialized. Keep them reachable
+		// only as the operator-facing reason a required runtime grant cannot be
+		// used, instead of letting the child wake with silently missing material.
+		if err := durableChildGrantFreshnessError(inactiveRuntime[0]); err != nil {
+			return nil, err
+		}
+	}
+	out := make([]session.CapabilityGrant, 0, len(activeRuntime))
+	for _, grant := range activeRuntime {
 		if err := durableChildGrantFreshnessError(grant); err != nil {
 			return nil, err
 		}

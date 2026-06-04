@@ -99,14 +99,18 @@ func TestGenericExternalChannelReviewArtifactGrantExpiredIsOperatorReadable(t *t
 	agent.ChannelConfig.External.Adapter = "codex_app_server"
 	artifact := genericExternalChannelReviewArtifact(agent, "codex_app_server", "", time.Date(2026, 5, 6, 3, 14, 45, 0, time.UTC), "wake_blocked", "child_runtime_blocked: grant_expired grant_id=capg-console-codex-app-server-readonly-heartbeat-20260505T0040Z")
 
-	if artifact.Summary != "Console wake paused: Codex app-server heartbeat grant expired." {
+	if artifact.Summary != "Console wake paused: required Codex app-server heartbeat grant expired." {
 		t.Fatalf("summary = %q, want operator-readable pause", artifact.Summary)
 	}
 	for key, want := range map[string]string{
 		"operator_title":             "Console wake paused",
 		"operator_status":            "paused",
-		"operator_summary":           "The Codex app-server heartbeat grant expired, so Console did not wake.",
-		"operator_action":            "no_action_unless_work_item",
+		"operator_summary":           "The required Codex app-server heartbeat grant expired, so Console did not wake.",
+		"operator_action":            "request_admin_grant_review",
+		"operator_next_action":       "Approve renewal or replacement of the required Codex app-server heartbeat grant if Console should wake; otherwise leave it expired.",
+		"admin_approval_required":    "true",
+		"wake_hold_reason":           "required_grant_expired",
+		"grant_scope":                "required_child_runtime",
 		"child_runtime_block_reason": "grant_expired",
 		"grant_id":                   "capg-console-codex-app-server-readonly-heartbeat-20260505T0040Z",
 		"grant_label":                "Codex app-server heartbeat grant",

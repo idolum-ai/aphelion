@@ -81,8 +81,8 @@ func (r *Runtime) recordDurableWakeChildRuntimeBlock(agent core.DurableAgent, ca
 	}
 	artifact := genericExternalChannelReviewArtifact(agent, adapterName, "", now, "wake_blocked", cause.Error())
 	if block.Reason == "grant_expired" {
-		artifact.LocalActions = []string{"Backoff is recorded; no retry loop is running."}
-		artifact.Questions = []string{"Renew the grant only if there is a concrete parent/user work item."}
+		artifact.LocalActions = []string{"Wake held because a required child-runtime grant expired; recorded backoff and queued admin review instead of retrying or auto-renewing."}
+		artifact.Questions = []string{"Approve renewal or replacement of the required child-runtime grant only if this child should wake; otherwise leave it expired."}
 	} else {
 		artifact.LocalActions = []string{"Child runtime wake blocked by capability/grant state; recorded backoff/suppression instead of retrying noisily."}
 		artifact.Questions = []string{"Only renew or create the required grant when there is a concrete parent/user work item."}
