@@ -120,7 +120,10 @@ func handleTelegramMediaThreadPickerCallback(ctx context.Context, sender command
 		if len(parts) < 3 {
 			return true, sender.AnswerCallbackQuery(ctx, cb.ID, "Invalid thread choice.")
 		}
-		threadID, _ := strconv.ParseInt(parts[2], 10, 64)
+		threadID, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil || threadID <= 0 {
+			return true, sender.AnswerCallbackQuery(ctx, cb.ID, "Invalid thread choice.")
+		}
 		msg, ok, err := picker.TelegramMediaThreadPicker(chatID, messageID)
 		if err != nil {
 			return true, err

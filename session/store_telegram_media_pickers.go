@@ -29,6 +29,7 @@ func (s *SQLiteStore) RecordTelegramMediaThreadPicker(chatID int64, pickerMessag
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
+	inbound = sanitizeTelegramMediaPickerInbound(inbound)
 	raw, err := json.Marshal(inbound)
 	if err != nil {
 		return fmt.Errorf("marshal telegram media picker inbound: %w", err)
@@ -47,6 +48,14 @@ func (s *SQLiteStore) RecordTelegramMediaThreadPicker(chatID int64, pickerMessag
 	return nil
 }
 
+func sanitizeTelegramMediaPickerInbound(inbound core.InboundMessage) core.InboundMessage {
+	inbound.Raw = nil
+	for i := range inbound.Artifacts {
+		inbound.Artifacts[i].Data = nil
+	}
+	return inbound
+}
+
 func (s *SQLiteStore) TelegramMediaThreadPicker(chatID int64, pickerMessageID int64) (TelegramMediaThreadPicker, bool, error) {
 	if s == nil || s.db == nil || chatID == 0 || pickerMessageID <= 0 {
 		return TelegramMediaThreadPicker{}, false, nil
@@ -61,9 +70,13 @@ func (s *SQLiteStore) TelegramMediaThreadPicker(chatID int64, pickerMessageID in
 		}
 		return TelegramMediaThreadPicker{}, false, fmt.Errorf("get telegram media thread picker: %w", err)
 	}
+	if !strings.EqualFold(strings.TrimSpace(rec.Status), "pending") {
+		return TelegramMediaThreadPicker{}, false, nil
+	}
 	if err := json.Unmarshal([]byte(raw), &rec.Inbound); err != nil {
 		return TelegramMediaThreadPicker{}, false, fmt.Errorf("decode telegram media thread picker inbound: %w", err)
 	}
+	rec.Inbound = sanitizeTelegramMediaPickerInbound(rec.Inbound)
 	rec.CreatedAt, _ = parseSQLiteTime(created)
 	rec.UpdatedAt, _ = parseSQLiteTime(updated)
 	return rec, true, nil

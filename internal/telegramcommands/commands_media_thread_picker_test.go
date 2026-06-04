@@ -146,3 +146,27 @@ func mediaPickerTestThreads(n int) []session.TelegramThread {
 func mediaPickerCallback(data string, chatID int64, messageID int64) telegram.CallbackQuery {
 	return telegram.CallbackQuery{ID: "cb1", Data: data, Message: &telegram.Message{MessageID: messageID, Chat: &telegram.Chat{ID: chatID, Type: "private"}}}
 }
+
+func TestMediaThreadPickerCallbackRejectsInvalidThreadID(t *testing.T) {
+	sender := &stubCommandSender{}
+	inbound := mediaPickerTestInbound()
+	router := &stubCommandRouter{threadsReturn: mediaPickerTestThreads(3), mediaPickerReturn: inbound, mediaPickerOK: true}
+	cb := mediaPickerCallback("mtpick:thread:not-a-thread", inbound.ChatID, 77)
+
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, cb)
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want invalid thread callback handled")
+	}
+	if len(sender.answers) != 1 || sender.answers[0].text != "Invalid thread choice." {
+		t.Fatalf("answers = %#v, want invalid thread answer", sender.answers)
+	}
+	if router.mediaPickerGetMessageID != 0 {
+		t.Fatalf("picker lookup message = %d, want no lookup for invalid thread id", router.mediaPickerGetMessageID)
+	}
+	if router.routeAcceptedMsg != nil {
+		t.Fatalf("routeAcceptedMsg = %#v, want no routing", router.routeAcceptedMsg)
+	}
+}
