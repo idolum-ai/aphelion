@@ -37,6 +37,7 @@ type statusSnapshot struct {
 	DurableChildren statusDurableChildrenInfo `json:"durable_children"`
 	DuplicateUnits  []string                  `json:"duplicate_units,omitempty"`
 	Issues          []string                  `json:"issues,omitempty"`
+	IssueRecords    []statusIssue             `json:"issue_records,omitempty"`
 	NextAction      string                    `json:"next_action"`
 }
 
@@ -51,6 +52,11 @@ type statusReleaseInfo struct {
 	Notice           string `json:"notice,omitempty"`
 	MetadataStatus   string `json:"metadata_status"`
 	MetadataError    string `json:"metadata_error,omitempty"`
+}
+
+type statusIssue struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 type statusServiceInfo struct {
@@ -134,6 +140,32 @@ func normalizeStatusOutputFormat(raw string, jsonAlias bool) (string, error) {
 	}
 }
 
+func appendStatusIssue(s *statusSnapshot, code string, message string) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return
+	}
+	code = strings.TrimSpace(code)
+	if code == "" {
+		code = "unknown"
+	}
+	s.Issues = append(s.Issues, message)
+	s.IssueRecords = append(s.IssueRecords, statusIssue{Code: code, Message: message})
+}
+
+func finalizeStatusSnapshot(s *statusSnapshot) {
+	if s == nil {
+		return
+	}
+	if len(s.Issues) > 0 {
+		s.Status = "degraded"
+		s.NextAction = "run doctor"
+		return
+	}
+	s.Status = "ready"
+	s.NextAction = "none"
+}
+
 func buildStatusSnapshot(ctx context.Context, opts statusCommandOptions) (statusSnapshot, error) {
 	cfg, configPath, configErr := loadConfigForCommand(opts.ConfigPath)
 	if configPath == "" {
@@ -203,7 +235,7 @@ func buildStatusSnapshot(ctx context.Context, opts statusCommandOptions) (status
 		s.DurableChildren = statusDurableChildrenInfo{Status: "unavailable"}
 	}
 	if configErr != nil {
-		s.Issues = append(s.Issues, "config load failed: "+configErr.Error())
+		appendStatusIssue(&s, "config_load_failed", "config load failed: "+configErr.Error())
 	}
 	if metaOK {
 		s.Release.MetadataStatus = "present"
@@ -211,12 +243,12 @@ func buildStatusSnapshot(ctx context.Context, opts statusCommandOptions) (status
 	if metaErr != nil {
 		s.Release.MetadataStatus = "unreadable"
 		s.Release.MetadataError = metaErr.Error()
-		s.Issues = append(s.Issues, "release metadata unreadable")
+		appendStatusIssue(&s, "release_metadata_unreadable", "release metadata unreadable")
 	}
 	if noticeErr != nil && metaErr == nil {
 		s.Release.MetadataStatus = "unreadable"
 		s.Release.MetadataError = noticeErr.Error()
-		s.Issues = append(s.Issues, "release metadata unreadable")
+		appendStatusIssue(&s, "release_metadata_unreadable", "release metadata unreadable")
 	}
 	s.Release.UpdateAvailable = notice.Available
 	if notice.LatestVersion != "" {
@@ -233,27 +265,22 @@ func buildStatusSnapshot(ctx context.Context, opts statusCommandOptions) (status
 	}
 
 	if guardErr != nil {
-		s.Issues = append(s.Issues, guardErr.Error())
+		appendStatusIssue(&s, "service_guard_failed", guardErr.Error())
 	}
 	if len(s.DuplicateUnits) > 0 {
-		s.Issues = append(s.Issues, "duplicate/stale Aphelion primary units present")
+		appendStatusIssue(&s, "duplicate_primary_units", "duplicate/stale Aphelion primary units present")
 	}
 	s.Service.BinaryMatches = serviceBinaryMatches(s.Service)
 	if !s.Service.BinaryMatches {
-		s.Issues = append(s.Issues, "running service binary does not match expected binary")
+		appendStatusIssue(&s, "service_binary_mismatch", "running service binary does not match expected binary")
 	}
 	if strings.TrimSpace(s.Service.MainPID) == "" || strings.TrimSpace(s.Service.MainPID) == "0" {
-		s.Issues = append(s.Issues, "aphelion service is not running")
+		appendStatusIssue(&s, "service_not_running", "aphelion service is not running")
 	}
 	if s.Release.UpdateAvailable {
-		s.Issues = append(s.Issues, "newer release available in cached metadata")
+		appendStatusIssue(&s, "release_update_available", "newer release available in cached metadata")
 	}
-	if len(s.Issues) > 0 {
-		s.Status = "degraded"
-		s.NextAction = "run doctor"
-	} else {
-		s.NextAction = "none"
-	}
+	finalizeStatusSnapshot(&s)
 	return s, nil
 }
 

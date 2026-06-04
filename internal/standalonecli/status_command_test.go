@@ -92,6 +92,9 @@ func TestRunStatusCommandJSONDegradedForDuplicateUnits(t *testing.T) {
 	if got.Status != "degraded" || got.NextAction != "run doctor" {
 		t.Fatalf("status=%q next=%q, want degraded/run doctor", got.Status, got.NextAction)
 	}
+	if !statusIssueCodePresent(got.IssueRecords, "duplicate_primary_units") || !statusIssueCodePresent(got.IssueRecords, "service_binary_mismatch") {
+		t.Fatalf("issue records = %#v, want typed duplicate and binary-mismatch issues", got.IssueRecords)
+	}
 	wantUnits := strings.Join(got.DuplicateUnits, ",")
 	if !strings.Contains(wantUnits, "aphelion-main-redeploy-1779159152.service") || !strings.Contains(wantUnits, "aphelion-v013-deploy.service") {
 		t.Fatalf("duplicate units = %#v, want both stale units", got.DuplicateUnits)
@@ -242,4 +245,13 @@ func TestRunStatusCommandReturnsDegradedPacketForConfigLoadFailure(t *testing.T)
 	if !strings.Contains(strings.Join(got.Issues, ";"), "config load failed") {
 		t.Fatalf("issues = %#v, want config load failed", got.Issues)
 	}
+}
+
+func statusIssueCodePresent(records []statusIssue, code string) bool {
+	for _, record := range records {
+		if record.Code == code {
+			return true
+		}
+	}
+	return false
 }
