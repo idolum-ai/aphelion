@@ -196,44 +196,78 @@ func TestQuickstartServiceTemplateMatchesDeployTemplate(t *testing.T) {
 	}
 }
 
+type fakeQuickstartCommandRunner struct {
+	calls     []string
+	active    bool
+	unitList  string
+	unitFiles string
+	show      string
+	versions  map[string]string
+}
+
+func (r *fakeQuickstartCommandRunner) Run(ctx context.Context, name string, args ...string) error {
+	call := name
+	if len(args) > 0 {
+		call += " " + strings.Join(args, " ")
+	}
+	r.calls = append(r.calls, call)
+	if name == "systemctl" && reflect.DeepEqual(args, []string{"--user", "is-active", "--quiet", "aphelion"}) {
+		if r.active {
+			return nil
+		}
+		return errors.New("inactive")
+	}
+	if name == "systemctl" && reflect.DeepEqual(args, []string{"--user", "enable", "--now", "aphelion"}) {
+		r.active = true
+	}
+	return nil
+}
+
+func (r *fakeQuickstartCommandRunner) RunServiceGuardCommand(_ context.Context, name string, args ...string) ([]byte, error) {
+	if len(args) == 2 && args[0] == "version" && args[1] == "--json" {
+		if out, ok := r.versions[name]; ok {
+			return []byte(out), nil
+		}
+	}
+	if name == "systemctl" && reflect.DeepEqual(args, []string{"--user", "list-units", "--all", "--no-legend", "--plain"}) {
+		return []byte(r.unitList), nil
+	}
+	if name == "systemctl" && reflect.DeepEqual(args, []string{"--user", "list-unit-files", "--no-legend", "--plain"}) {
+		return []byte(r.unitFiles), nil
+	}
+	if name == "systemctl" && reflect.DeepEqual(args, []string{"--user", "show", "aphelion", "-p", "MainPID", "-p", "ExecStart", "--no-pager"}) {
+		return []byte(r.show), nil
+	}
+	return nil, errors.New("unexpected service guard command: " + name + " " + strings.Join(args, " "))
+}
+
 func TestRunQuickstartInstallServiceUsesDeploySequence(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg"))
 	configPath := filepath.Join(root, "aphelion.toml")
 	execPath := filepath.Join(root, "bin", "aphelion")
 	workDir := filepath.Join(root, "work")
-	var calls []string
-	active := false
-	runner := func(_ context.Context, name string, args ...string) error {
-		call := name
-		if len(args) > 0 {
-			call += " " + strings.Join(args, " ")
-		}
-		calls = append(calls, call)
-		if name == "systemctl" && reflect.DeepEqual(args, []string{"--user", "is-active", "--quiet", "aphelion"}) {
-			if active {
-				return nil
-			}
-			return errors.New("inactive")
-		}
-		if name == "systemctl" && reflect.DeepEqual(args, []string{"--user", "enable", "--now", "aphelion"}) {
-			active = true
-		}
-		return nil
+	runner := &fakeQuickstartCommandRunner{
+		unitList:  "aphelion.service loaded active running Aphelion\n",
+		unitFiles: "aphelion.service enabled\n",
+		show:      "MainPID=123\nExecStart={ path=" + execPath + " ; argv[]=" + execPath + " --config " + configPath + " }\n",
+		versions:  map[string]string{execPath: `{"version":"v0.2.2","vcs_revision":"abc123"}`},
 	}
 
 	err := runQuickstart(context.Background(), quickstartOptions{
-		ConfigPath:       configPath,
-		NoInput:          true,
-		InstallService:   true,
-		TelegramBotToken: "telegram-token",
-		AdminUserID:      123,
-		Provider:         "ollama",
-		ExecPath:         execPath,
-		WorkDir:          workDir,
-		Out:              ioDiscard{},
-		Getenv:           emptyQuickstartEnv,
-		CommandRunner:    runner,
+		ConfigPath:           configPath,
+		NoInput:              true,
+		InstallService:       true,
+		TelegramBotToken:     "telegram-token",
+		AdminUserID:          123,
+		Provider:             "ollama",
+		ExecPath:             execPath,
+		WorkDir:              workDir,
+		Out:                  ioDiscard{},
+		Getenv:               emptyQuickstartEnv,
+		CommandRunner:        runner.Run,
+		ServiceGuardRunner:   runner.RunServiceGuardCommand,
+		ServiceGuardReadlink: func(string) (string, error) { return execPath, nil },
 	})
 	if err != nil {
 		t.Fatalf("runQuickstart() err = %v", err)
@@ -248,8 +282,8 @@ func TestRunQuickstartInstallServiceUsesDeploySequence(t *testing.T) {
 		"systemctl --user is-active --quiet aphelion",
 		execPath + " verify-deploy --config " + configPath + " --format=kv",
 	}
-	if !reflect.DeepEqual(calls, want) {
-		t.Fatalf("calls = %#v, want %#v", calls, want)
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
 
 	servicePath := filepath.Join(root, "xdg", "systemd", "user", "aphelion.service")
@@ -265,6 +299,38 @@ func TestRunQuickstartInstallServiceUsesDeploySequence(t *testing.T) {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("service = %q, want %q", text, needle)
 		}
+	}
+}
+
+func TestRunQuickstartInstallServiceFailsOnDuplicatePrimaryUnits(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg"))
+	configPath := filepath.Join(root, "aphelion.toml")
+	execPath := filepath.Join(root, "bin", "aphelion")
+	runner := &fakeQuickstartCommandRunner{
+		unitList:  "aphelion.service loaded active running Aphelion\naphelion-v013-deploy.service loaded failed failed old\n",
+		unitFiles: "aphelion.service enabled\n",
+		show:      "MainPID=123\nExecStart={ path=" + execPath + " ; argv[]=" + execPath + " --config " + configPath + " }\n",
+		versions:  map[string]string{execPath: `{"version":"v0.2.2","vcs_revision":"abc123"}`},
+	}
+
+	err := runQuickstart(context.Background(), quickstartOptions{
+		ConfigPath:           configPath,
+		NoInput:              true,
+		InstallService:       true,
+		TelegramBotToken:     "telegram-token",
+		AdminUserID:          123,
+		Provider:             "ollama",
+		ExecPath:             execPath,
+		WorkDir:              root,
+		Out:                  ioDiscard{},
+		Getenv:               emptyQuickstartEnv,
+		CommandRunner:        runner.Run,
+		ServiceGuardRunner:   runner.RunServiceGuardCommand,
+		ServiceGuardReadlink: func(string) (string, error) { return execPath, nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "duplicate/stale Aphelion primary unit") {
+		t.Fatalf("runQuickstart() err = %v, want duplicate/stale primary unit", err)
 	}
 }
 
@@ -285,29 +351,25 @@ func TestRunQuickstartInstallServiceReusesExistingConfig(t *testing.T) {
 		t.Fatalf("ReadFile(before) err = %v", err)
 	}
 
-	active := false
-	runner := func(_ context.Context, name string, args ...string) error {
-		if name == "systemctl" && reflect.DeepEqual(args, []string{"--user", "is-active", "--quiet", "aphelion"}) {
-			if active {
-				return nil
-			}
-			return errors.New("inactive")
-		}
-		if name == "systemctl" && reflect.DeepEqual(args, []string{"--user", "enable", "--now", "aphelion"}) {
-			active = true
-		}
-		return nil
+	execPath := filepath.Join(root, "bin", "aphelion")
+	runner := &fakeQuickstartCommandRunner{
+		unitList:  "aphelion.service loaded active running Aphelion\n",
+		unitFiles: "aphelion.service enabled\n",
+		show:      "MainPID=123\nExecStart={ path=" + execPath + " ; argv[]=" + execPath + " --config " + configPath + " }\n",
+		versions:  map[string]string{execPath: `{"version":"v0.2.2","vcs_revision":"abc123"}`},
 	}
 
 	err = runQuickstart(context.Background(), quickstartOptions{
-		ConfigPath:     configPath,
-		NoInput:        true,
-		InstallService: true,
-		ExecPath:       filepath.Join(root, "bin", "aphelion"),
-		WorkDir:        root,
-		Out:            ioDiscard{},
-		Getenv:         emptyQuickstartEnv,
-		CommandRunner:  runner,
+		ConfigPath:           configPath,
+		NoInput:              true,
+		InstallService:       true,
+		ExecPath:             execPath,
+		WorkDir:              root,
+		Out:                  ioDiscard{},
+		Getenv:               emptyQuickstartEnv,
+		CommandRunner:        runner.Run,
+		ServiceGuardRunner:   runner.RunServiceGuardCommand,
+		ServiceGuardReadlink: func(string) (string, error) { return execPath, nil },
 	})
 	if err != nil {
 		t.Fatalf("runQuickstart(existing install) err = %v", err)
