@@ -130,10 +130,11 @@ func renderOperationUpdateAck(state session.OperationState, in updateOperationIn
 		b.WriteString("snapshot: operation_state\n")
 	} else {
 		fmt.Fprintf(&b, "snapshot: operation_state@%s\n", state.UpdatedAt.UTC().Format(time.RFC3339))
+		// TODO(turn-performance): replace timestamp-only snapshot pointers with ledger versions or CAS-addressable operation snapshots before adding version-aware update semantics.
 	}
-	fields := updateOperationAppliedFields(in)
+	fields := updateOperationReceivedFields(in)
 	if len(fields) > 0 {
-		fmt.Fprintf(&b, "applied_fields: %s\n", strings.Join(fields, ", "))
+		fmt.Fprintf(&b, "received_fields: %s\n", strings.Join(fields, ", "))
 	}
 	if state.PhasePlan.Active() {
 		current := strings.TrimSpace(state.PhasePlan.CurrentPhaseID)
@@ -160,7 +161,7 @@ func renderOperationUpdateAck(state session.OperationState, in updateOperationIn
 	return strings.TrimSpace(b.String())
 }
 
-func updateOperationAppliedFields(in updateOperationInput) []string {
+func updateOperationReceivedFields(in updateOperationInput) []string {
 	fields := make([]string, 0, 10)
 	if strings.TrimSpace(in.ID) != "" {
 		fields = append(fields, "id")

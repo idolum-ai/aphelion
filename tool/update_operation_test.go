@@ -36,6 +36,29 @@ func TestDefinitionsIncludeUpdateOperationToolWhenStoreConfigured(t *testing.T) 
 	}
 }
 
+func TestUpdateOperationDefinitionDocumentsEmptyInputInspection(t *testing.T) {
+	t.Parallel()
+
+	store := newToolTestStore(t)
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	var found bool
+	for _, def := range registry.Definitions() {
+		if def.Name != "update_operation" {
+			continue
+		}
+		found = true
+		desc := strings.ToLower(def.Description)
+		for _, want := range []string{"empty input", "inspect", "full persisted operation state", "compact acknowledgement"} {
+			if !strings.Contains(desc, want) {
+				t.Fatalf("description = %q, want guidance containing %q", def.Description, want)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("update_operation definition not found")
+	}
+}
+
 func TestUpdateOperationToolPersistsAndShowsOperationState(t *testing.T) {
 	t.Parallel()
 
@@ -74,8 +97,14 @@ func TestUpdateOperationToolPersistsAndShowsOperationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v", err)
 	}
-	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "applied_fields:") {
+	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "received_fields:") {
 		t.Fatalf("update output = %q, want compact update ack", out)
+	}
+	if strings.Contains(out, "applied_fields:") {
+		t.Fatalf("update output = %q, want received_fields naming, not applied_fields", out)
+	}
+	if got, max := len(out), 500; got > max {
+		t.Fatalf("compact update ack length = %d, want <= %d: %q", got, max, out)
 	}
 	if strings.Contains(out, "Browser automation is not currently available") || strings.Contains(out, "A screenshot requires browser automation") {
 		t.Fatalf("update output = %q, want compact ack without full operation echo", out)
@@ -107,6 +136,33 @@ func TestUpdateOperationToolPersistsAndShowsOperationState(t *testing.T) {
 	}
 	if !strings.Contains(showOut, "[OPERATION]") || !strings.Contains(showOut, "Acquire browser automation") {
 		t.Fatalf("show output = %q, want current operation state", showOut)
+	}
+}
+
+func TestUpdateOperationAckOmitsEmptyReceivedFieldsLine(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{"id":"   ","objective":"\t "}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation whitespace) err = %v", err)
+	}
+	if strings.Contains(out, "received_fields:") {
+		t.Fatalf("update output = %q, want no received_fields line when received fields trim empty/invalid", out)
+	}
+	if strings.Contains(out, "applied_fields:") {
+		t.Fatalf("update output = %q, want no legacy applied_fields line", out)
 	}
 }
 
@@ -165,7 +221,7 @@ func TestUpdateOperationToolMergeAppendsFindingsAndAdvancesProposal(t *testing.T
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(update_operation merge) err = %v", err)
 	}
-	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "applied_fields:") {
+	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "received_fields:") {
 		t.Fatalf("merge output = %q, want compact update ack", out)
 	}
 	if strings.Contains(out, "tmp/reddit.png") || strings.Contains(out, "Browser automation can be acquired locally") {
@@ -417,7 +473,7 @@ func TestUpdateOperationToolPersistsAndRendersPlanLease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(update_operation plan_lease) err = %v", err)
 	}
-	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "applied_fields:") {
+	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "received_fields:") {
 		t.Fatalf("update output = %q, want compact ack", out)
 	}
 	showOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "update_operation", nil)

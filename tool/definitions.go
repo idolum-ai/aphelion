@@ -251,7 +251,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 		defs = append(defs, requestApprovalToolDefinition())
 		defs = append(defs, agent.ToolDef{
 			Name:        "update_operation",
-			Description: "Persist or inspect the current operational state for this session. Use this to track the objective, stage, proposal, durable phase plan, findings, and artifacts as work evolves across turns.",
+			Description: "Persist or inspect the current operational state for this session. Use this to track the objective, stage, proposal, durable phase plan, findings, and artifacts as work evolves across turns. Pass empty input to inspect the full persisted operation state; non-empty updates return a compact acknowledgement rather than echoing the full state.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
