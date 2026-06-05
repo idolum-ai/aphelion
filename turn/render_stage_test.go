@@ -250,7 +250,7 @@ func TestRunRenderStageFallsBackWhenOperationalFaceRenderIsPartial(t *testing.T)
 		"Current state:",
 		"- Service active/running: PID `100755`",
 		"- Started: `Fri 2026-06-05 10:55:04 UTC`",
-		"- Executable: `/home/sadasant_gmail_com/.local/bin/aphelion`",
+		"- Executable: `/opt/aphelion/bin/aphelion`",
 		"- Revision: `37928e5ecc7f624a0284df26bf70b7b9ac89ddbd`",
 		"- `verify-deploy --format=kv` passed.",
 		"What likely happened:",
