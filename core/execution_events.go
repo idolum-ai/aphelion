@@ -55,6 +55,7 @@ const (
 	ExecutionEventDeliveryProgressFailed      = "delivery.progress.failed"
 	ExecutionEventDeliveryFinalSent           = "delivery.final.sent"
 	ExecutionEventDeliveryFinalFailed         = "delivery.final.failed"
+	ExecutionEventFaceRenderSkipped           = "face.render.skipped"
 	ExecutionEventTelegramCallbackFailed      = "telegram.callback.failed"
 	ExecutionEventTelegramThreadReminderSweep = "telegram.thread_reminder.sweep"
 	ExecutionEventProgressSurface             = "progress.surface"

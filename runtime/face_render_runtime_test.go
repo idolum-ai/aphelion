@@ -5,10 +5,13 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/pipeline"
+	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -155,5 +158,104 @@ func TestHandleInboundFloorFallbackBackendSkipsFaceRender(t *testing.T) {
 	defer provider.mu.Unlock()
 	if len(provider.seenFaceSystem) != 0 {
 		t.Fatalf("face should not be called in passthrough mode; calls=%d", len(provider.seenFaceSystem))
+	}
+}
+
+func TestRenderTurnReplySkipsFaceForMaterialStatusReport(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, _ := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, &fakeSender{})
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendProvider
+	renderer := &countingFaceRenderer{text: "unexpected face render"}
+	packet := core.MaterialPacket{
+		Facts:          []string{"PR #140 deployed and verified at revision 3942a132."},
+		AllowedActions: []string{"Report post-deploy token/cache telemetry."},
+		Refusals:       []string{"No deploy or restart was repeated."},
+	}
+	floorText := packet.Text()
+	fallback := pipeline.SerializeFloorFallback(packet, floorText, pipeline.FallbackOptions{Channel: "telegram"})
+	key := session.SessionKey{ChatID: 904, UserID: 0}
+
+	result, err := rt.renderTurnReply(turnRenderInput{
+		Ctx:              context.Background(),
+		Key:              key,
+		Result:           &core.TurnResult{Text: floorText},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		ReplyText:        fallback,
+		FloorText:        floorText,
+		MaterialFloor:    packet,
+		FallbackOpts:     pipeline.FallbackOptions{Channel: "telegram"},
+		FaceAwareness:    prompt.RuntimeAwareness{ReplyModalityDefault: "text", ReplyModalityOverride: "none"},
+		CurrentFaceModel: renderer,
+		PromptInput:      "report deploy status",
+	})
+	if err != nil {
+		t.Fatalf("renderTurnReply() err = %v", err)
+	}
+	if renderer.calls != 0 {
+		t.Fatalf("face render calls = %d, want 0 for material status report", renderer.calls)
+	}
+	if !strings.Contains(result.ReplyText, "What matters:") || !strings.Contains(result.ReplyText, "PR #140 deployed") {
+		t.Fatalf("ReplyText = %q, want serialized material fallback", result.ReplyText)
+	}
+
+	events, err := store.ExecutionEventsBySession(key, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	found := false
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventFaceRenderSkipped && strings.Contains(event.PayloadJSON, faceSkipReasonMaterialStatusReport) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("events = %#v, want face.render.skipped material_status_report", events)
+	}
+}
+
+func TestRenderTurnReplyDoesNotSkipFaceForVoiceModality(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, _ := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, &fakeSender{})
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendProvider
+	renderer := &countingFaceRenderer{text: "voice-shaped face render"}
+	packet := core.MaterialPacket{Facts: []string{"PR #140 deployed and verified."}}
+	floorText := packet.Text()
+	fallback := pipeline.SerializeFloorFallback(packet, floorText, pipeline.FallbackOptions{Channel: "telegram", Voice: true})
+
+	result, err := rt.renderTurnReply(turnRenderInput{
+		Ctx:              context.Background(),
+		Key:              session.SessionKey{ChatID: 905, UserID: 0},
+		Result:           &core.TurnResult{Text: floorText},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		ReplyWithVoice:   true,
+		ReplyText:        fallback,
+		FloorText:        floorText,
+		MaterialFloor:    packet,
+		FallbackOpts:     pipeline.FallbackOptions{Channel: "telegram", Voice: true},
+		FaceAwareness:    prompt.RuntimeAwareness{ReplyModalityDefault: "voice", ReplyModalityOverride: "voice"},
+		CurrentFaceModel: renderer,
+		PromptInput:      "say the deployment status",
+	})
+	if err != nil {
+		t.Fatalf("renderTurnReply() err = %v", err)
+	}
+	if renderer.calls != 1 {
+		t.Fatalf("face render calls = %d, want 1 for voice modality", renderer.calls)
+	}
+	if result.ReplyText != "voice-shaped face render" {
+		t.Fatalf("ReplyText = %q, want face-rendered voice text", result.ReplyText)
 	}
 }

@@ -68,6 +68,11 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 	}
 	generatedMessages := input.OutHistory[input.HistoryInputLen:]
 	workspaceRoot := faceWorkspaceRoot(input.Scope)
+	structuralSkip, structuralSkipReason := r.structuralFaceRenderSkip(input)
+	conditionalSkipReason := ""
+	if !structuralSkip {
+		conditionalSkipReason = faceConditionalSkipReason(input)
+	}
 	stageResult, err := turn.RunRenderStage(input.Ctx, turn.RenderStageRequest{
 		Render: turn.FaceRenderRequest{
 			GovernorName:    r.governorName(),
@@ -80,16 +85,18 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 			LatestUserInput: input.PromptInput,
 			Runtime:         input.FaceAwareness,
 		},
-		FacePolicy:        input.FacePolicy,
-		UseMaterialFloor:  input.UseMaterialFloor,
-		ReplyWithVoice:    input.ReplyWithVoice,
-		AllowStream:       input.AllowStream && !r.personaContextRequestEligible(input),
-		Media:             input.Result.Media,
-		ToolLog:           input.Result.ToolLog,
-		GeneratedMessages: generatedMessages,
-		InitialReply:      output.ReplyText,
-		FallbackOptions:   input.FallbackOpts,
-		SkipRender:        input.MediaOnlyReply || strings.TrimSpace(input.Result.ProviderFailure) != "" || r.faceBackend == face.BackendFloorFallback || input.CurrentFaceModel == nil,
+		FacePolicy:            input.FacePolicy,
+		UseMaterialFloor:      input.UseMaterialFloor,
+		ReplyWithVoice:        input.ReplyWithVoice,
+		AllowStream:           input.AllowStream && !r.personaContextRequestEligible(input),
+		Media:                 input.Result.Media,
+		ToolLog:               input.Result.ToolLog,
+		GeneratedMessages:     generatedMessages,
+		InitialReply:          output.ReplyText,
+		FallbackOptions:       input.FallbackOpts,
+		SkipRender:            structuralSkip,
+		SkipRenderReason:      structuralSkipReason,
+		ConditionalSkipReason: conditionalSkipReason,
 	}, turn.RenderStageCallbacks{
 		Stream: func(ctx context.Context, req turn.FaceRenderRequest) (turn.FaceRenderResult, bool, error) {
 			streamer, ok := input.CurrentFaceModel.(face.StreamRenderer)
@@ -209,6 +216,9 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 	}
 	if stageResult.RenderError != nil {
 		log.Printf("WARN face render failed backend=%s err=%v; using floor_fallback serializer", r.faceBackend, stageResult.RenderError)
+	}
+	if strings.TrimSpace(stageResult.SkipReason) != "" && shouldRecordFaceSkipEvent(input.Key) {
+		r.recordExecutionEvent(input.Key, core.ExecutionEventFaceRenderSkipped, "render", "skipped", faceSkipPayload(stageResult.SkipReason, input, stageResult.ReplyText), time.Now().UTC())
 	}
 	output.ReplyText = strings.TrimSpace(stageResult.ReplyText)
 	output.ReplyModality = strings.TrimSpace(stageResult.ReplyModality)

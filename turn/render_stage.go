@@ -14,17 +14,19 @@ import (
 
 // RenderStageRequest captures the render-stage decision input for one turn.
 type RenderStageRequest struct {
-	Render            FaceRenderRequest
-	FacePolicy        pipeline.FacePolicy
-	UseMaterialFloor  bool
-	ReplyWithVoice    bool
-	AllowStream       bool
-	Media             []core.Media
-	ToolLog           []string
-	GeneratedMessages []agent.Message
-	InitialReply      string
-	FallbackOptions   pipeline.FallbackOptions
-	SkipRender        bool
+	Render                FaceRenderRequest
+	FacePolicy            pipeline.FacePolicy
+	UseMaterialFloor      bool
+	ReplyWithVoice        bool
+	AllowStream           bool
+	Media                 []core.Media
+	ToolLog               []string
+	GeneratedMessages     []agent.Message
+	InitialReply          string
+	FallbackOptions       pipeline.FallbackOptions
+	SkipRender            bool
+	SkipRenderReason      string
+	ConditionalSkipReason string
 }
 
 // RenderStageCallbacks are runtime-supplied hooks for render execution.
@@ -50,6 +52,7 @@ type RenderStageResult struct {
 	ShouldRender  bool
 	RenderError   error
 	StreamHandled bool
+	SkipReason    string
 }
 
 // RunRenderStage applies stream/non-stream/fallback selection for one turn.
@@ -70,6 +73,7 @@ func RunRenderStage(ctx context.Context, req RenderStageRequest, callbacks Rende
 	}
 
 	if req.SkipRender {
+		result.SkipReason = firstNonEmpty(strings.TrimSpace(req.SkipRenderReason), "structural_skip")
 		return result, nil
 	}
 
@@ -86,7 +90,14 @@ func RunRenderStage(ctx context.Context, req RenderStageRequest, callbacks Rende
 		ToolLog:           req.ToolLog,
 		GeneratedMessages: req.GeneratedMessages,
 	})
+	if result.ShouldRender && strings.TrimSpace(req.ConditionalSkipReason) != "" && !req.ReplyWithVoice {
+		result.ShouldRender = false
+		result.SkipReason = strings.TrimSpace(req.ConditionalSkipReason)
+	}
 	if !result.ShouldRender && !req.ReplyWithVoice {
+		if result.SkipReason == "" {
+			result.SkipReason = "render_policy"
+		}
 		result.Runtime.DeliveryMode = "floor_fallback"
 		renderReq.Runtime = result.Runtime
 	}
@@ -132,6 +143,15 @@ func RunRenderStage(ctx context.Context, req RenderStageRequest, callbacks Rende
 	}
 
 	return result, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func renderStageFallback(callbacks RenderStageCallbacks, packet core.MaterialPacket, floorText string, opts pipeline.FallbackOptions) string {

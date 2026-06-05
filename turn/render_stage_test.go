@@ -197,3 +197,46 @@ func TestRunRenderStageSkipRenderBypassesCallbacks(t *testing.T) {
 		t.Fatalf("Runtime.DeliveryMode = %q, want idolum_render", got.Runtime.DeliveryMode)
 	}
 }
+
+func TestRunRenderStageConditionalSkipBypassesCallbacks(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	got, err := RunRenderStage(context.Background(), RenderStageRequest{
+		Render: FaceRenderRequest{
+			LatestUserInput: "deployment status",
+			FloorText:       "PR #140 deployed and verified.",
+			Runtime:         prompt.RuntimeAwareness{},
+		},
+		FacePolicy:            pipeline.FacePolicy{Render: true},
+		InitialReply:          "fallback status",
+		ConditionalSkipReason: "material_status_report",
+	}, RenderStageCallbacks{
+		Stream: func(context.Context, FaceRenderRequest) (FaceRenderResult, bool, error) {
+			called = true
+			return FaceRenderResult{}, false, nil
+		},
+		Render: func(context.Context, FaceRenderRequest) (*FaceRenderResult, error) {
+			called = true
+			return &FaceRenderResult{Text: "unexpected"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunRenderStage() err = %v", err)
+	}
+	if called {
+		t.Fatal("render callbacks called for conditional skip path")
+	}
+	if got.ShouldRender {
+		t.Fatal("ShouldRender = true, want false after conditional skip")
+	}
+	if got.SkipReason != "material_status_report" {
+		t.Fatalf("SkipReason = %q, want material_status_report", got.SkipReason)
+	}
+	if got.Runtime.DeliveryMode != "floor_fallback" {
+		t.Fatalf("DeliveryMode = %q, want floor_fallback", got.Runtime.DeliveryMode)
+	}
+	if got.ReplyText != "fallback status" {
+		t.Fatalf("ReplyText = %q, want fallback status", got.ReplyText)
+	}
+}
