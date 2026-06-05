@@ -78,20 +78,15 @@ CONTINUATION_CONFIDENCE: <low|medium|high>
 - session_kind: interactive
 - run_kind: interactive
 - channel: telegram
-- principal_role: admin
-- mode: proposal
 - fallback_active: false
-- brokerage_active: false
 - hidden_inputs_active: true
 - hidden_input_categories: semantic_recurrence
 - provenance_summary: prior agency analysis
+- plan_active: false
+- operation_active: false
+- operation_objective: Negotiate the next safe agency improvement.
 - stream_reply: false
 - inbound_was_voice: false
-- proposal_active: false
-- phase_plan_active: false
-- continuation_status: pending
-- continuation_active: true
-- continuation_governor_ratified: false
 - media_attached: false
 
 ## Agency Context Packet

@@ -32,22 +32,17 @@ Translate authority mechanics into human operator language: prefer explicit appr
 - session_kind: interactive
 - run_kind: interactive
 - channel: telegram
-- principal_role: admin
-- mode: render
 - fallback_active: false
-- brokerage_active: false
 - hidden_inputs_active: false
+- plan_active: false
+- operation_active: false
+- operation_objective: Complete agency quality hardening.
 - face_backend: provider
 - face_provider: openai
 - face_model: gpt-5.5
 - delivery_mode: stream
 - stream_reply: true
 - inbound_was_voice: false
-- proposal_active: true
-- proposal_status: pending
-- phase_plan_active: false
-- continuation_active: false
-- continuation_governor_ratified: false
 - media_attached: false
 
 ## Agency Context Packet

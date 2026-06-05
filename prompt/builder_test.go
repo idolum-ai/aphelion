@@ -692,3 +692,78 @@ func TestBuildFacePromptIncludesRuntimeFactsForAdjudications(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeAwarenessRoleFactoringKeepsAuthorityOutOfFace(t *testing.T) {
+	t.Parallel()
+
+	aw := RuntimeAwareness{
+		SessionKind:                "interactive",
+		RunKind:                    "interactive",
+		Channel:                    "telegram",
+		EventOrigin:                "user",
+		ActiveProvider:             "openai",
+		PlanActive:                 true,
+		PlanSummary:                "finish performance work",
+		OperationActive:            true,
+		OperationObjective:         "reduce token cost",
+		OperationStatus:            "active",
+		OperationStage:             "r3",
+		OperationSummary:           "shared awareness factoring",
+		TurnAuthorizationKind:      "admin_dm",
+		GovernorBackend:            "openai",
+		GovernorProvider:           "openai",
+		GovernorModel:              "gpt-5.5",
+		GovernorProviderPath:       []string{"openai", "anthropic"},
+		BrokerageActive:            true,
+		BrokeragePhase:             "proposal",
+		SuggestedExecutionContract: "governor-only contract",
+		RatifiedExecutionContract:  "ratified-governor-contract",
+		SignalJudgment:             "bounded_execution",
+		ProposalActive:             true,
+		ProposalKind:               "deploy",
+		ProposalStatus:             "pending",
+		ProposalBoundedEffect:      "restart service once",
+		PhasePlanCurrentPhaseID:    "phase-secret-authority",
+		OperationFindings:          []string{"authority finding"},
+		OperationArtifacts:         []string{"authority artifact"},
+		ContinuationGovernorIntent: "governor should continue",
+		ContinuationRatified:       true,
+		PromptRoot:                 "/prompt-root",
+		ExecRoot:                   "/exec-root",
+		SandboxMode:                "trusted",
+		NetworkPolicy:              "allowlist",
+		FaceBackend:                "provider",
+		FaceProvider:               "anthropic",
+		FaceModel:                  "claude",
+		PersonaEffortRecipe:        "low",
+		DeliveryMode:               "stream",
+		StreamReply:                true,
+		ReplyModalityDefault:       "text",
+		ReplyModalityReason:        "voice.mode=auto",
+		MediaMode:                  "floor",
+	}
+
+	governor := renderGovernorRuntimeAwarenessBlock(aw)
+	face := renderFaceAwarenessBlock(aw, "admin", "")
+
+	for _, want := range []string{"session_kind", "plan_summary", "operation_objective", "governor_model", "proposal_bounded_effect", "phase_plan_current_phase_id", "exec_root"} {
+		if !strings.Contains(governor, want) {
+			t.Fatalf("governor awareness missing %q:\n%s", want, governor)
+		}
+	}
+	for _, want := range []string{"session_kind", "plan_summary", "operation_objective", "face_backend", "reply_modality_default", "media_mode"} {
+		if !strings.Contains(face, want) {
+			t.Fatalf("face awareness missing %q:\n%s", want, face)
+		}
+	}
+	for _, forbidden := range []string{"turn_authorization_kind", "governor_model", "configured_provider_path", "idolum_suggested_execution_contract", "ratified_execution_contract", "proposal_bounded_effect", "phase_plan_current_phase_id", "operation_findings", "operation_artifacts", "continuation_governor_intent", "exec_root", "sandbox_mode", "network_policy"} {
+		if strings.Contains(face, forbidden) {
+			t.Fatalf("face awareness leaked governor-only field %q:\n%s", forbidden, face)
+		}
+	}
+	for _, forbidden := range []string{"face_backend", "face_provider", "face_model", "persona_effort_recipe", "delivery_mode", "stream_reply", "reply_modality_default", "reply_modality_reason", "media_mode"} {
+		if strings.Contains(governor, forbidden) {
+			t.Fatalf("governor awareness leaked face-only field %q:\n%s", forbidden, governor)
+		}
+	}
+}

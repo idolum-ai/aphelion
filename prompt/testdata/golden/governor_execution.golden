@@ -31,15 +31,8 @@ Role: You are Idolum (System), the governor of this system.
 - run_kind: interactive
 - channel: telegram
 - event_origin: message
-- turn_authorization_kind: admin_dm
-- governor_provider: openai
-- governor_model: gpt-5.5
-- configured_provider_path: openai -> anthropic
 - active_provider: openai
 - fallback_active: false
-- reasoning_effort: high
-- reasoning_summary: auto
-- brokerage_active: false
 - hidden_inputs_active: true
 - hidden_input_categories: semantic_recurrence
 - provenance_summary: similar release-hardening thread
@@ -48,13 +41,18 @@ Role: You are Idolum (System), the governor of this system.
 - operation_active: true
 - operation_objective: Complete agency quality hardening.
 - operation_status: active
+- turn_authorization_kind: admin_dm
+- governor_provider: openai
+- governor_model: gpt-5.5
+- configured_provider_path: openai -> anthropic
+- reasoning_effort: high
+- reasoning_summary: auto
+- brokerage_active: false
 - proposal_active: true
 - proposal_status: pending
 - phase_plan_active: false
 - continuation_active: false
 - continuation_governor_ratified: false
-- inbound_was_voice: false
-- media_attached: false
 - sandbox_mode: trusted
 - network_policy: allowlist
 

@@ -83,120 +83,124 @@ type RuntimeAwareness struct {
 	NetworkPolicy              string
 }
 
+type AwarenessRole string
+
+const (
+	AwarenessRoleGovernor AwarenessRole = "governor"
+	AwarenessRoleFace     AwarenessRole = "face"
+)
+
 func renderGovernorRuntimeAwarenessBlock(aw RuntimeAwareness) string {
-	lines := []string{"## Runtime Awareness"}
-	lines = append(lines, nonEmptyAwarenessLine("session_kind", aw.SessionKind))
-	lines = append(lines, nonEmptyAwarenessLine("run_kind", aw.RunKind))
-	lines = append(lines, nonEmptyAwarenessLine("channel", aw.Channel))
-	lines = append(lines, nonEmptyAwarenessLine("event_origin", aw.EventOrigin))
-	lines = append(lines, nonEmptyAwarenessLine("turn_authorization_kind", aw.TurnAuthorizationKind))
-	lines = append(lines, nonEmptyAwarenessLine("governor_backend", aw.GovernorBackend))
-	lines = append(lines, nonEmptyAwarenessLine("governor_provider", aw.GovernorProvider))
-	lines = append(lines, nonEmptyAwarenessLine("governor_model", aw.GovernorModel))
-	if path := formatProviderPath(aw.GovernorProviderPath); path != "" {
-		lines = append(lines, fmt.Sprintf("- configured_provider_path: %s", path))
-	}
-	lines = append(lines, nonEmptyAwarenessLine("active_provider", aw.ActiveProvider))
-	lines = append(lines, fmt.Sprintf("- fallback_active: %t", aw.FallbackActive))
-	lines = append(lines, nonEmptyAwarenessLine("reasoning_effort", aw.ReasoningEffort))
-	lines = append(lines, nonEmptyAwarenessLine("reasoning_summary", aw.ReasoningSummary))
-	lines = append(lines, nonEmptyAwarenessLine("governor_effort_recipe", aw.GovernorEffortRecipe))
-	lines = append(lines, nonEmptyAwarenessLine("artifact_mode", aw.ArtifactMode))
-	lines = append(lines, fmt.Sprintf("- brokerage_active: %t", aw.BrokerageActive))
-	lines = append(lines, nonEmptyAwarenessLine("brokerage_phase", aw.BrokeragePhase))
-	lines = append(lines, nonEmptyAwarenessLine("idolum_suggested_execution_contract", aw.SuggestedExecutionContract))
-	lines = append(lines, nonEmptyAwarenessLine("brokerage_ratification", aw.BrokerageRatification))
-	lines = append(lines, nonEmptyAwarenessLine("ratified_execution_contract", aw.RatifiedExecutionContract))
-	lines = append(lines, nonEmptyAwarenessLine("signal_judgment", aw.SignalJudgment))
-	lines = append(lines, fmt.Sprintf("- hidden_inputs_active: %t", aw.HiddenInputsActive))
-	lines = append(lines, nonEmptyAwarenessLine("hidden_input_categories", formatAwarenessList(aw.HiddenInputCategories)))
-	lines = append(lines, nonEmptyAwarenessLine("provenance_summary", aw.ProvenanceSummary))
-	lines = append(lines, fmt.Sprintf("- plan_active: %t", aw.PlanActive))
-	lines = append(lines, nonEmptyAwarenessLine("plan_summary", aw.PlanSummary))
-	lines = append(lines, fmt.Sprintf("- operation_active: %t", aw.OperationActive))
-	lines = append(lines, nonEmptyAwarenessLine("operation_objective", aw.OperationObjective))
-	lines = append(lines, nonEmptyAwarenessLine("operation_status", aw.OperationStatus))
-	lines = append(lines, nonEmptyAwarenessLine("operation_stage", aw.OperationStage))
-	lines = append(lines, nonEmptyAwarenessLine("operation_summary", aw.OperationSummary))
-	lines = append(lines, fmt.Sprintf("- proposal_active: %t", aw.ProposalActive))
-	lines = append(lines, nonEmptyAwarenessLine("proposal_kind", aw.ProposalKind))
-	lines = append(lines, nonEmptyAwarenessLine("proposal_status", aw.ProposalStatus))
-	lines = append(lines, nonEmptyAwarenessLine("proposal_summary", aw.ProposalSummary))
-	lines = append(lines, fmt.Sprintf("- phase_plan_active: %t", aw.PhasePlanActive))
-	lines = append(lines, nonEmptyAwarenessLine("phase_plan_current_phase_id", aw.PhasePlanCurrentPhaseID))
-	lines = append(lines, nonEmptyAwarenessLine("continuation_status", aw.ContinuationStatus))
-	lines = append(lines, fmt.Sprintf("- continuation_active: %t", aw.ContinuationActive))
-	lines = append(lines, nonEmptyAwarenessLine("continuation_persona_intent", aw.ContinuationPersonaIntent))
-	lines = append(lines, nonEmptyAwarenessLine("continuation_persona_rationale", aw.ContinuationPersonaWhy))
-	lines = append(lines, nonEmptyAwarenessLine("continuation_governor_intent", aw.ContinuationGovernorIntent))
-	lines = append(lines, nonEmptyAwarenessLine("continuation_governor_rationale", aw.ContinuationGovernorWhy))
-	lines = append(lines, fmt.Sprintf("- continuation_governor_ratified: %t", aw.ContinuationRatified))
-	lines = append(lines, nonEmptyAwarenessLine("continuation_blocked_reason", aw.ContinuationBlockedReason))
-	lines = append(lines, fmt.Sprintf("- inbound_was_voice: %t", aw.InboundWasVoice))
-	lines = append(lines, nonEmptyAwarenessLine("reply_modality_default", aw.ReplyModalityDefault))
-	lines = append(lines, nonEmptyAwarenessLine("reply_modality_reason", aw.ReplyModalityReason))
-	lines = append(lines, nonEmptyAwarenessLine("reply_modality_override", aw.ReplyModalityOverride))
-	lines = append(lines, fmt.Sprintf("- media_attached: %t", aw.MediaAttached))
-	lines = append(lines, nonEmptyAwarenessLine("media_mode", aw.MediaMode))
-	lines = append(lines, nonEmptyAwarenessLine("prompt_root", aw.PromptRoot))
-	lines = append(lines, nonEmptyAwarenessLine("exec_root", aw.ExecRoot))
-	lines = append(lines, nonEmptyAwarenessLine("shared_memory_root", aw.SharedMemoryRoot))
-	lines = append(lines, nonEmptyAwarenessLine("user_workspace_root", aw.UserWorkspaceRoot))
-	lines = append(lines, nonEmptyAwarenessLine("user_memory_root", aw.UserMemoryRoot))
-	lines = append(lines, nonEmptyAwarenessLine("working_root", aw.WorkingRoot))
-	lines = append(lines, nonEmptyAwarenessLine("sandbox_mode", aw.SandboxMode))
-	lines = append(lines, nonEmptyAwarenessLine("network_policy", aw.NetworkPolicy))
-	return strings.Join(compactLines(lines), "\n")
+	return renderRuntimeAwarenessBlock(aw, AwarenessRoleGovernor, "## Runtime Awareness")
 }
 
 func renderFaceAwarenessBlock(aw RuntimeAwareness, principalRole string, mode string) string {
-	lines := []string{"## Delivery Awareness"}
-	lines = append(lines, nonEmptyAwarenessLine("session_kind", aw.SessionKind))
-	lines = append(lines, nonEmptyAwarenessLine("run_kind", aw.RunKind))
-	lines = append(lines, nonEmptyAwarenessLine("channel", aw.Channel))
-	lines = append(lines, nonEmptyAwarenessLine("principal_role", principalRole))
-	lines = append(lines, nonEmptyAwarenessLine("mode", mode))
-	lines = append(lines, nonEmptyAwarenessLine("governor_backend", aw.GovernorBackend))
-	lines = append(lines, nonEmptyAwarenessLine("governor_provider", aw.GovernorProvider))
-	lines = append(lines, nonEmptyAwarenessLine("governor_model", aw.GovernorModel))
-	lines = append(lines, nonEmptyAwarenessLine("active_provider", aw.ActiveProvider))
-	lines = append(lines, fmt.Sprintf("- fallback_active: %t", aw.FallbackActive))
-	lines = append(lines, nonEmptyAwarenessLine("reasoning_effort", aw.ReasoningEffort))
-	lines = append(lines, nonEmptyAwarenessLine("reasoning_summary", aw.ReasoningSummary))
-	lines = append(lines, nonEmptyAwarenessLine("governor_effort_recipe", aw.GovernorEffortRecipe))
-	lines = append(lines, nonEmptyAwarenessLine("artifact_mode", aw.ArtifactMode))
-	lines = append(lines, fmt.Sprintf("- brokerage_active: %t", aw.BrokerageActive))
-	lines = append(lines, nonEmptyAwarenessLine("brokerage_phase", aw.BrokeragePhase))
-	lines = append(lines, nonEmptyAwarenessLine("idolum_suggested_execution_contract", aw.SuggestedExecutionContract))
-	lines = append(lines, nonEmptyAwarenessLine("brokerage_ratification", aw.BrokerageRatification))
-	lines = append(lines, nonEmptyAwarenessLine("ratified_execution_contract", aw.RatifiedExecutionContract))
-	lines = append(lines, nonEmptyAwarenessLine("signal_judgment", aw.SignalJudgment))
-	lines = append(lines, fmt.Sprintf("- hidden_inputs_active: %t", aw.HiddenInputsActive))
-	lines = append(lines, nonEmptyAwarenessLine("hidden_input_categories", formatAwarenessList(aw.HiddenInputCategories)))
-	lines = append(lines, nonEmptyAwarenessLine("provenance_summary", aw.ProvenanceSummary))
-	lines = append(lines, nonEmptyAwarenessLine("face_backend", aw.FaceBackend))
-	lines = append(lines, nonEmptyAwarenessLine("face_provider", aw.FaceProvider))
-	lines = append(lines, nonEmptyAwarenessLine("face_model", aw.FaceModel))
-	lines = append(lines, nonEmptyAwarenessLine("persona_effort_recipe", aw.PersonaEffortRecipe))
-	lines = append(lines, nonEmptyAwarenessLine("delivery_mode", aw.DeliveryMode))
-	lines = append(lines, fmt.Sprintf("- stream_reply: %t", aw.StreamReply))
-	lines = append(lines, fmt.Sprintf("- inbound_was_voice: %t", aw.InboundWasVoice))
-	lines = append(lines, nonEmptyAwarenessLine("reply_modality_default", aw.ReplyModalityDefault))
-	lines = append(lines, nonEmptyAwarenessLine("reply_modality_reason", aw.ReplyModalityReason))
-	lines = append(lines, nonEmptyAwarenessLine("reply_modality_override", aw.ReplyModalityOverride))
-	lines = append(lines, fmt.Sprintf("- proposal_active: %t", aw.ProposalActive))
-	lines = append(lines, nonEmptyAwarenessLine("proposal_status", aw.ProposalStatus))
-	lines = append(lines, fmt.Sprintf("- phase_plan_active: %t", aw.PhasePlanActive))
-	lines = append(lines, nonEmptyAwarenessLine("phase_plan_current_phase_id", aw.PhasePlanCurrentPhaseID))
-	lines = append(lines, nonEmptyAwarenessLine("continuation_status", aw.ContinuationStatus))
-	lines = append(lines, fmt.Sprintf("- continuation_active: %t", aw.ContinuationActive))
-	lines = append(lines, nonEmptyAwarenessLine("continuation_persona_intent", aw.ContinuationPersonaIntent))
-	lines = append(lines, nonEmptyAwarenessLine("continuation_governor_intent", aw.ContinuationGovernorIntent))
-	lines = append(lines, fmt.Sprintf("- continuation_governor_ratified: %t", aw.ContinuationRatified))
-	lines = append(lines, nonEmptyAwarenessLine("continuation_blocked_reason", aw.ContinuationBlockedReason))
-	lines = append(lines, fmt.Sprintf("- media_attached: %t", aw.MediaAttached))
-	lines = append(lines, nonEmptyAwarenessLine("media_mode", aw.MediaMode))
+	return renderRuntimeAwarenessBlock(aw, AwarenessRoleFace, "## Delivery Awareness")
+}
+
+func renderRuntimeAwarenessBlock(aw RuntimeAwareness, role AwarenessRole, heading string) string {
+	lines := []string{heading}
+	lines = append(lines, renderSharedAwarenessLines(aw)...)
+	switch role {
+	case AwarenessRoleFace:
+		lines = append(lines, renderFaceAwarenessLines(aw)...)
+	default:
+		lines = append(lines, renderGovernorAwarenessLines(aw)...)
+	}
 	return strings.Join(compactLines(lines), "\n")
+}
+
+func renderSharedAwarenessLines(aw RuntimeAwareness) []string {
+	lines := []string{
+		nonEmptyAwarenessLine("session_kind", aw.SessionKind),
+		nonEmptyAwarenessLine("run_kind", aw.RunKind),
+		nonEmptyAwarenessLine("channel", aw.Channel),
+		nonEmptyAwarenessLine("event_origin", aw.EventOrigin),
+		nonEmptyAwarenessLine("active_provider", aw.ActiveProvider),
+		fmt.Sprintf("- fallback_active: %t", aw.FallbackActive),
+		nonEmptyAwarenessLine("artifact_mode", aw.ArtifactMode),
+		fmt.Sprintf("- hidden_inputs_active: %t", aw.HiddenInputsActive),
+		nonEmptyAwarenessLine("hidden_input_categories", formatAwarenessList(aw.HiddenInputCategories)),
+		nonEmptyAwarenessLine("provenance_summary", aw.ProvenanceSummary),
+		fmt.Sprintf("- plan_active: %t", aw.PlanActive),
+		nonEmptyAwarenessLine("plan_summary", aw.PlanSummary),
+		fmt.Sprintf("- operation_active: %t", aw.OperationActive),
+		nonEmptyAwarenessLine("operation_objective", aw.OperationObjective),
+		nonEmptyAwarenessLine("operation_status", aw.OperationStatus),
+		nonEmptyAwarenessLine("operation_stage", aw.OperationStage),
+		nonEmptyAwarenessLine("operation_summary", aw.OperationSummary),
+	}
+	return lines
+}
+
+func renderGovernorAwarenessLines(aw RuntimeAwareness) []string {
+	lines := []string{
+		nonEmptyAwarenessLine("turn_authorization_kind", aw.TurnAuthorizationKind),
+		nonEmptyAwarenessLine("governor_backend", aw.GovernorBackend),
+		nonEmptyAwarenessLine("governor_provider", aw.GovernorProvider),
+		nonEmptyAwarenessLine("governor_model", aw.GovernorModel),
+	}
+	if path := formatProviderPath(aw.GovernorProviderPath); path != "" {
+		lines = append(lines, fmt.Sprintf("- configured_provider_path: %s", path))
+	}
+	lines = append(lines,
+		nonEmptyAwarenessLine("reasoning_effort", aw.ReasoningEffort),
+		nonEmptyAwarenessLine("reasoning_summary", aw.ReasoningSummary),
+		nonEmptyAwarenessLine("governor_effort_recipe", aw.GovernorEffortRecipe),
+		fmt.Sprintf("- brokerage_active: %t", aw.BrokerageActive),
+		nonEmptyAwarenessLine("brokerage_phase", aw.BrokeragePhase),
+		nonEmptyAwarenessLine("idolum_suggested_execution_contract", aw.SuggestedExecutionContract),
+		nonEmptyAwarenessLine("brokerage_ratification", aw.BrokerageRatification),
+		nonEmptyAwarenessLine("ratified_execution_contract", aw.RatifiedExecutionContract),
+		nonEmptyAwarenessLine("signal_judgment", aw.SignalJudgment),
+		fmt.Sprintf("- proposal_active: %t", aw.ProposalActive),
+		nonEmptyAwarenessLine("proposal_kind", aw.ProposalKind),
+		nonEmptyAwarenessLine("proposal_status", aw.ProposalStatus),
+		nonEmptyAwarenessLine("proposal_summary", aw.ProposalSummary),
+		nonEmptyAwarenessLine("proposal_why_now", aw.ProposalWhyNow),
+		nonEmptyAwarenessLine("proposal_bounded_effect", aw.ProposalBoundedEffect),
+		fmt.Sprintf("- phase_plan_active: %t", aw.PhasePlanActive),
+		nonEmptyAwarenessLine("phase_plan_id", aw.PhasePlanID),
+		nonEmptyAwarenessLine("phase_plan_goal", aw.PhasePlanGoal),
+		nonEmptyAwarenessLine("phase_plan_current_phase_id", aw.PhasePlanCurrentPhaseID),
+		nonEmptyAwarenessLine("operation_phases", formatAwarenessList(aw.OperationPhases)),
+		nonEmptyAwarenessLine("operation_findings", formatAwarenessList(aw.OperationFindings)),
+		nonEmptyAwarenessLine("operation_artifacts", formatAwarenessList(aw.OperationArtifacts)),
+		nonEmptyAwarenessLine("continuation_status", aw.ContinuationStatus),
+		fmt.Sprintf("- continuation_active: %t", aw.ContinuationActive),
+		nonEmptyAwarenessLine("continuation_persona_intent", aw.ContinuationPersonaIntent),
+		nonEmptyAwarenessLine("continuation_persona_why", aw.ContinuationPersonaWhy),
+		nonEmptyAwarenessLine("continuation_governor_intent", aw.ContinuationGovernorIntent),
+		nonEmptyAwarenessLine("continuation_governor_why", aw.ContinuationGovernorWhy),
+		fmt.Sprintf("- continuation_governor_ratified: %t", aw.ContinuationRatified),
+		nonEmptyAwarenessLine("continuation_blocked_reason", aw.ContinuationBlockedReason),
+		nonEmptyAwarenessLine("prompt_root", aw.PromptRoot),
+		nonEmptyAwarenessLine("exec_root", aw.ExecRoot),
+		nonEmptyAwarenessLine("shared_memory_root", aw.SharedMemoryRoot),
+		nonEmptyAwarenessLine("user_workspace_root", aw.UserWorkspaceRoot),
+		nonEmptyAwarenessLine("user_memory_root", aw.UserMemoryRoot),
+		nonEmptyAwarenessLine("working_root", aw.WorkingRoot),
+		nonEmptyAwarenessLine("sandbox_mode", aw.SandboxMode),
+		nonEmptyAwarenessLine("network_policy", aw.NetworkPolicy),
+	)
+	return lines
+}
+
+func renderFaceAwarenessLines(aw RuntimeAwareness) []string {
+	return []string{
+		nonEmptyAwarenessLine("face_backend", aw.FaceBackend),
+		nonEmptyAwarenessLine("face_provider", aw.FaceProvider),
+		nonEmptyAwarenessLine("face_model", aw.FaceModel),
+		nonEmptyAwarenessLine("persona_effort_recipe", aw.PersonaEffortRecipe),
+		nonEmptyAwarenessLine("delivery_mode", aw.DeliveryMode),
+		fmt.Sprintf("- stream_reply: %t", aw.StreamReply),
+		fmt.Sprintf("- inbound_was_voice: %t", aw.InboundWasVoice),
+		nonEmptyAwarenessLine("reply_modality_default", aw.ReplyModalityDefault),
+		nonEmptyAwarenessLine("reply_modality_reason", aw.ReplyModalityReason),
+		nonEmptyAwarenessLine("reply_modality_override", aw.ReplyModalityOverride),
+		fmt.Sprintf("- media_attached: %t", aw.MediaAttached),
+		nonEmptyAwarenessLine("media_mode", aw.MediaMode),
+	}
 }
 
 func nonEmptyAwarenessLine(key, value string) string {
