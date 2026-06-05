@@ -37,6 +37,9 @@ type toolProgressReporter struct {
 	recordMessageID  func(messageID int64)
 	validateText     func(string) (string, []ConstitutionViolation)
 	audit            *turnAuditRecorder
+	// taskSummary is intentionally retained as a presentation-only compatibility hook
+	// for the planned Layer C headline path. Layer A must not consume this
+	// inbound-user-derived value as a semantic fallback label.
 	taskSummary      string
 	displayPrefix    string
 	currentPlanStep  string

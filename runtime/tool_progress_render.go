@@ -416,6 +416,9 @@ func rawToolProgressEntry(name string, input json.RawMessage) toolProgressEntry 
 }
 
 func semanticToolProgressEntry(name string, input json.RawMessage, currentStep string, taskSummary string) toolProgressEntry {
+	// Layer A intentionally ignores taskSummary here: it is derived from inbound
+	// user text and remains only as a reserved Layer C headline compatibility hook.
+	_ = taskSummary
 	name = strings.TrimSpace(name)
 	switch name {
 	case "update_plan":
@@ -426,6 +429,9 @@ func semanticToolProgressEntry(name string, input json.RawMessage, currentStep s
 	if label := progressToolEvidenceLabel(name, input); label != "" {
 		return toolProgressEntry{Key: "task:" + name, Text: label}
 	}
+	// TODO(progress-headline): emit a presentation-source execution event for the
+	// selected branch (typed tool, metadata tool, plan step, generic fallback)
+	// before using fallback distribution to decide whether Layer C is warranted.
 	contextLabel := strings.TrimSpace(currentStep)
 	if contextLabel != "" {
 		return toolProgressEntry{Key: "task:" + name, Text: "Working on " + contextLabel}
@@ -603,6 +609,9 @@ func currentProgressPlanStepFromUpdatePlanInput(input json.RawMessage) (string, 
 	return currentProgressPlanStep(session.PlanState{Steps: payload.Plan}), true
 }
 
+// summarizeProgressTask prepares an inbound-message-derived headline candidate
+// for the planned Layer C compatibility path. Layer A must not use this value as
+// a semantic progress fallback because that would echo the user's request.
 func summarizeProgressTask(text string) string {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {

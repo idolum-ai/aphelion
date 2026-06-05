@@ -127,6 +127,41 @@ func TestSemanticToolProgressEvidenceSummaries(t *testing.T) {
 	}
 }
 
+func TestDoctorProgressFallbackDoesNotEchoTaskSummary(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	reporter := rt.newDoctorProgressReporter(session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}, core.InboundMessage{
+		ChatID:    1001,
+		SenderID:  1001,
+		ChatType:  "private",
+		Text:      "/health diagnose",
+		MessageID: 77,
+	})
+	if reporter == nil {
+		t.Fatal("newDoctorProgressReporter() = nil, want reporter")
+	}
+
+	reporter.ToolStarted(context.Background(), "doctor_unlabeled_probe", json.RawMessage(`{"note":"force generic fallback"}`))
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1 doctor progress message", len(sender.sent))
+	}
+	got := sender.sent[0].Text
+	if !strings.Contains(got, "Working through the request") {
+		t.Fatalf("doctor progress = %q, want generic fallback", got)
+	}
+	if strings.Contains(got, "health diagnosis") || strings.Contains(got, "/health diagnose") {
+		t.Fatalf("doctor progress = %q, should not echo doctor task summary", got)
+	}
+}
+
 func TestSummarizeProgressTaskDropsConversationalContinuation(t *testing.T) {
 	t.Parallel()
 
