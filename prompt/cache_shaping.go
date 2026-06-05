@@ -10,14 +10,16 @@ import (
 	"github.com/idolum-ai/aphelion/workspace"
 )
 
-const maxStableCacheBreakpoints = 4
+// Anthropic allows at most four cache_control entries across system, tools, and messages.
+// Reserve one slot for the final tool definition, which is usually the most stable cache target.
+const maxStableCacheBreakpoints = 3
 
 func markLastStableCacheBreakpoint(blocks []agent.SystemBlock) {
 	markStableCacheBreakpoints(blocks, 1)
 }
 
-func markStableCacheBreakpoints(blocks []agent.SystemBlock, max int) {
-	if max <= 0 {
+func markStableCacheBreakpoints(blocks []agent.SystemBlock, limit int) {
+	if limit <= 0 {
 		return
 	}
 	marked := 0
@@ -27,7 +29,7 @@ func markStableCacheBreakpoints(blocks []agent.SystemBlock, max int) {
 		}
 		blocks[i].CacheBreakpoint = true
 		marked++
-		if marked >= max {
+		if marked >= limit {
 			return
 		}
 	}

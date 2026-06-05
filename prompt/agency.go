@@ -177,9 +177,6 @@ func agencyEvidencePosture(aw RuntimeAwareness) string {
 	if provenance := strings.TrimSpace(aw.ProvenanceSummary); provenance != "" {
 		parts = append(parts, "provenance="+provenance)
 	}
-	if aw.MediaAttached {
-		parts = append(parts, "media="+firstNonEmptyPrompt(aw.MediaMode, "attached"))
-	}
 	if aw.FallbackActive {
 		parts = append(parts, "provider_fallback=active")
 	}

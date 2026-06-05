@@ -9,9 +9,10 @@ import (
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/turn"
 )
 
-const faceSkipReasonMaterialStatusReport = "material_status_report"
+const faceSkipReasonMaterialStatusReport = string(turn.FaceSkipReasonMaterialStatusReport)
 
 func faceConditionalSkipReason(input turnRenderInput) string {
 	if !shouldSkipFaceForMaterialStatusReport(input) {
@@ -108,20 +109,14 @@ func faceSkipPayload(reason string, input turnRenderInput, fallbackText string) 
 		mediaCount = len(input.Result.Media)
 	}
 	return map[string]any{
-		"reason":                  strings.TrimSpace(reason),
-		"policy_render":           input.FacePolicy.Render,
-		"reply_with_voice":        input.ReplyWithVoice,
-		"inbound_was_voice":       input.FaceAwareness.InboundWasVoice,
-		"reply_modality_default":  strings.TrimSpace(input.FaceAwareness.ReplyModalityDefault),
-		"reply_modality_override": strings.TrimSpace(input.FaceAwareness.ReplyModalityOverride),
-		"media_count":             mediaCount,
-		"facts":                   len(nonBlankMaterialItems(packet.Facts)),
-		"allowed_actions":         len(nonBlankMaterialItems(packet.AllowedActions)),
-		"commitments":             len(nonBlankMaterialItems(packet.Commitments)),
-		"refusals":                len(nonBlankMaterialItems(packet.Refusals)),
-		"notes":                   len(nonBlankMaterialItems(packet.Notes)),
-		"scene_constraints":       len(nonBlankMaterialItems(packet.SceneConstraints)),
-		"fallback_chars":          len(strings.TrimSpace(fallbackText)),
+		"reason":          strings.TrimSpace(reason),
+		"media_count":     mediaCount,
+		"facts":           len(nonBlankMaterialItems(packet.Facts)),
+		"allowed_actions": len(nonBlankMaterialItems(packet.AllowedActions)),
+		"commitments":     len(nonBlankMaterialItems(packet.Commitments)),
+		"refusals":        len(nonBlankMaterialItems(packet.Refusals)),
+		"notes":           len(nonBlankMaterialItems(packet.Notes)),
+		"fallback_chars":  len(strings.TrimSpace(fallbackText)),
 	}
 }
 
@@ -146,5 +141,5 @@ func (r *Runtime) structuralFaceRenderSkip(input turnRenderInput) (bool, string)
 }
 
 func shouldRecordFaceSkipEvent(key session.SessionKey) bool {
-	return key.ChatID != 0 || key.UserID != 0 || !key.Scope.IsZero()
+	return true
 }

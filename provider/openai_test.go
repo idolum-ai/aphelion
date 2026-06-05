@@ -69,6 +69,39 @@ func TestOpenAICompleteTextUsageAndReasoning(t *testing.T) {
 	}
 }
 
+func TestOpenAICompleteWithOptionsOverridesMaxTokensInChatRequest(t *testing.T) {
+	var seen openAIRequest
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(openRouterResponse{
+			Choices: []struct {
+				Message openRouterResponseMessage `json:"message"`
+			}{{Message: openRouterResponseMessage{Content: json.RawMessage(`"ok"`)}}},
+		})
+	})
+
+	client, err := NewOpenAI(OpenAIOptions{
+		APIKey:     "test-key",
+		Model:      "gpt-5.5",
+		MaxTokens:  1024,
+		Transport:  core.ModelTransportOpenAIChat,
+		HTTPClient: &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAI() err = %v", err)
+	}
+
+	_, err = client.CompleteWithOptions(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil, agent.CompleteOptions{MaxTokens: 333})
+	if err != nil {
+		t.Fatalf("CompleteWithOptions() err = %v", err)
+	}
+	if seen.MaxCompletionTokens != 333 {
+		t.Fatalf("max_completion_tokens = %d, want 333", seen.MaxCompletionTokens)
+	}
+}
+
 func TestOpenAICompleteIncludesPriorityServiceTier(t *testing.T) {
 	var seen openAIRequest
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -214,6 +247,7 @@ func TestOpenAICompleteWithToolsAndReasoningUsesResponsesAPI(t *testing.T) {
 	}}, agent.CompleteOptions{
 		Reasoning: agent.ReasoningConfig{Effort: agent.ReasoningEffortMedium},
 		Verbosity: agent.VerbosityLow,
+		MaxTokens: 384,
 	})
 	if err != nil {
 		t.Fatalf("CompleteWithOptions() err = %v", err)
@@ -221,8 +255,8 @@ func TestOpenAICompleteWithToolsAndReasoningUsesResponsesAPI(t *testing.T) {
 	if seenPath != "/v1/responses" {
 		t.Fatalf("path = %q, want /v1/responses", seenPath)
 	}
-	if seen.Model != "gpt-5.5" || seen.MaxOutputTokens != 512 {
-		t.Fatalf("request model/tokens = %q/%d, want gpt-5.5/512", seen.Model, seen.MaxOutputTokens)
+	if seen.Model != "gpt-5.5" || seen.MaxOutputTokens != 384 {
+		t.Fatalf("request model/tokens = %q/%d, want gpt-5.5/384", seen.Model, seen.MaxOutputTokens)
 	}
 	if seen.Instructions != "system instructions" {
 		t.Fatalf("instructions = %q, want system instructions", seen.Instructions)

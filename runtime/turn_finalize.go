@@ -217,8 +217,8 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 	if stageResult.RenderError != nil {
 		log.Printf("WARN face render failed backend=%s err=%v; using floor_fallback serializer", r.faceBackend, stageResult.RenderError)
 	}
-	if strings.TrimSpace(stageResult.SkipReason) != "" && shouldRecordFaceSkipEvent(input.Key) {
-		r.recordExecutionEvent(input.Key, core.ExecutionEventFaceRenderSkipped, "render", "skipped", faceSkipPayload(stageResult.SkipReason, input, stageResult.ReplyText), time.Now().UTC())
+	if strings.TrimSpace(string(stageResult.SkipReason)) != "" && shouldRecordFaceSkipEvent(input.Key) {
+		r.recordExecutionEvent(input.Key, core.ExecutionEventFaceRenderSkipped, "render", "skipped", faceSkipPayload(string(stageResult.SkipReason), input, stageResult.ReplyText), time.Now().UTC())
 	}
 	output.ReplyText = strings.TrimSpace(stageResult.ReplyText)
 	output.ReplyModality = strings.TrimSpace(stageResult.ReplyModality)

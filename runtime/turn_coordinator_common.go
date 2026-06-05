@@ -390,12 +390,16 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		if turnResult != nil {
 			providerName = providerNameAfterProviderEvents(providerName, turnResult.ProviderEvents)
 		}
-		r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptSucceeded, "provider", "succeeded", map[string]any{
+		payload := map[string]any{
 			"backend":              strings.TrimSpace(input.Exec.Backend),
 			"provider":             providerName,
 			"model":                strings.TrimSpace(input.Exec.ModelName),
 			"provider_duration_ms": durationMillis(time.Since(providerStarted)),
-		}, time.Now().UTC())
+		}
+		if turnResult != nil {
+			appendTokenUsagePayload(payload, turnResult.TokenUsage)
+		}
+		r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptSucceeded, "provider", "succeeded", payload, time.Now().UTC())
 	}
 	if len(outHistory) < len(turnInput) {
 		monitorErr = fmt.Errorf("%s: history shrank from %d to %d", firstNonEmpty(strings.TrimSpace(input.InvalidOutputPrefix), "invalid turn output"), len(turnInput), len(outHistory))

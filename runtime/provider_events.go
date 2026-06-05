@@ -64,6 +64,7 @@ func (r *Runtime) recordProviderAttemptEvents(key session.SessionKey, exec pipel
 		if event.PartialToolCalls > 0 {
 			payload["partial_tool_calls"] = event.PartialToolCalls
 		}
+		appendTokenUsagePayload(payload, result.TokenUsage)
 		observedAt := event.ObservedAt
 		if observedAt.IsZero() {
 			observedAt = time.Now().UTC()

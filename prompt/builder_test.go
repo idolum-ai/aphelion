@@ -693,6 +693,84 @@ func TestBuildFacePromptIncludesRuntimeFactsForAdjudications(t *testing.T) {
 	}
 }
 
+func TestRuntimeAwarenessSharedLinesAreByteIdenticalAcrossRoles(t *testing.T) {
+	t.Parallel()
+
+	aw := RuntimeAwareness{
+		SessionKind:        "interactive",
+		RunKind:            "interactive",
+		Channel:            "telegram",
+		EventOrigin:        "user",
+		ActiveProvider:     "openai:gpt-5.5",
+		FallbackActive:     true,
+		ArtifactMode:       "floor",
+		HiddenInputsActive: true,
+		ProvenanceSummary:  "prior status thread",
+		PlanActive:         true,
+		PlanSummary:        "current plan only",
+		OperationActive:    true,
+		OperationObjective: "harden awareness",
+		OperationStatus:    "active",
+		OperationStage:     "tests",
+		OperationSummary:   "shared block check",
+		MediaAttached:      true,
+		MediaMode:          "attachments",
+	}
+
+	shared := sharedAwarenessBody(aw)
+	governor := renderGovernorRuntimeAwarenessBlock(aw)
+	face := renderFaceAwarenessBlock(aw)
+	if !strings.Contains(governor, shared) {
+		t.Fatalf("governor missing shared lines:\nshared=%s\n\ngovernor=%s", shared, governor)
+	}
+	if !strings.Contains(face, shared) {
+		t.Fatalf("face missing shared lines:\nshared=%s\n\nface=%s", shared, face)
+	}
+}
+
+func sharedAwarenessBody(aw RuntimeAwareness) string {
+	return strings.Join(compactLines(renderSharedAwarenessLines(aw)), "\n")
+}
+
+func TestBuildFacePromptKeepsContinuationAuthorityOutOfDeliveryAwareness(t *testing.T) {
+	t.Parallel()
+
+	got := BuildFacePrompt(FaceRequest{
+		GovernorName:    DefaultGovernorName,
+		FaceName:        "Idolum",
+		Channel:         "telegram",
+		PrincipalRole:   "admin",
+		FloorText:       "Approval is still pending.",
+		LatestUserInput: "continue",
+		Mode:            "render",
+		Runtime: RuntimeAwareness{
+			SessionKind:                "interactive",
+			OperationObjective:         "Deploy safely",
+			ContinuationActive:         true,
+			ContinuationStatus:         "pending",
+			ContinuationPersonaIntent:  "sound eager",
+			ContinuationGovernorIntent: "restart service",
+			ContinuationRatified:       false,
+			ContinuationBlockedReason:  "stale_authority",
+			ProposalBoundedEffect:      "restart aphelion.service",
+			PhasePlanCurrentPhaseID:    "deploy-phase",
+			MediaAttached:              true,
+			MediaMode:                  "attachments",
+			ReplyModalityDefault:       "text",
+		},
+	})
+	for _, want := range []string{"## Delivery Awareness", "operation_objective", "media_attached", "media_mode", "reply_modality_default"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("face prompt missing %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{"continuation_governor_intent", "continuation_governor_ratified", "continuation_blocked_reason", "proposal_bounded_effect", "phase_plan_current_phase_id"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("face prompt leaked authority field %q:\n%s", forbidden, got)
+		}
+	}
+}
+
 func TestRuntimeAwarenessRoleFactoringKeepsAuthorityOutOfFace(t *testing.T) {
 	t.Parallel()
 
@@ -744,14 +822,14 @@ func TestRuntimeAwarenessRoleFactoringKeepsAuthorityOutOfFace(t *testing.T) {
 	}
 
 	governor := renderGovernorRuntimeAwarenessBlock(aw)
-	face := renderFaceAwarenessBlock(aw, "admin", "")
+	face := renderFaceAwarenessBlock(aw)
 
 	for _, want := range []string{"session_kind", "plan_summary", "operation_objective", "governor_model", "proposal_bounded_effect", "phase_plan_current_phase_id", "exec_root"} {
 		if !strings.Contains(governor, want) {
 			t.Fatalf("governor awareness missing %q:\n%s", want, governor)
 		}
 	}
-	for _, want := range []string{"session_kind", "plan_summary", "operation_objective", "face_backend", "reply_modality_default", "media_mode"} {
+	for _, want := range []string{"session_kind", "plan_summary", "operation_objective", "media_attached", "media_mode", "face_backend", "reply_modality_default"} {
 		if !strings.Contains(face, want) {
 			t.Fatalf("face awareness missing %q:\n%s", want, face)
 		}
@@ -761,7 +839,7 @@ func TestRuntimeAwarenessRoleFactoringKeepsAuthorityOutOfFace(t *testing.T) {
 			t.Fatalf("face awareness leaked governor-only field %q:\n%s", forbidden, face)
 		}
 	}
-	for _, forbidden := range []string{"face_backend", "face_provider", "face_model", "persona_effort_recipe", "delivery_mode", "stream_reply", "reply_modality_default", "reply_modality_reason", "media_mode"} {
+	for _, forbidden := range []string{"face_backend", "face_provider", "face_model", "persona_effort_recipe", "delivery_mode", "stream_reply", "reply_modality_default", "reply_modality_reason"} {
 		if strings.Contains(governor, forbidden) {
 			t.Fatalf("governor awareness leaked face-only field %q:\n%s", forbidden, governor)
 		}

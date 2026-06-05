@@ -130,6 +130,11 @@ type TokenUsage struct {
 	TotalTokens      int64
 	CacheReadTokens  int64
 	CacheWriteTokens int64
+	// CacheCreationTokens preserves provider-native cache creation/write accounting.
+	// Anthropic reports this as cache_creation_input_tokens; OpenAI/OpenRouter may
+	// surface cache_write_tokens instead. CacheWriteTokens remains the normalized
+	// cross-provider write/create total used by existing aggregation paths.
+	CacheCreationTokens int64
 }
 
 type Budget struct {

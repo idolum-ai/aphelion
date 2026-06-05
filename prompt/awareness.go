@@ -94,7 +94,7 @@ func renderGovernorRuntimeAwarenessBlock(aw RuntimeAwareness) string {
 	return renderRuntimeAwarenessBlock(aw, AwarenessRoleGovernor, "## Runtime Awareness")
 }
 
-func renderFaceAwarenessBlock(aw RuntimeAwareness, principalRole string, mode string) string {
+func renderFaceAwarenessBlock(aw RuntimeAwareness) string {
 	return renderRuntimeAwarenessBlock(aw, AwarenessRoleFace, "## Delivery Awareness")
 }
 
@@ -129,6 +129,8 @@ func renderSharedAwarenessLines(aw RuntimeAwareness) []string {
 		nonEmptyAwarenessLine("operation_status", aw.OperationStatus),
 		nonEmptyAwarenessLine("operation_stage", aw.OperationStage),
 		nonEmptyAwarenessLine("operation_summary", aw.OperationSummary),
+		fmt.Sprintf("- media_attached: %t", aw.MediaAttached),
+		nonEmptyAwarenessLine("media_mode", aw.MediaMode),
 	}
 	return lines
 }
@@ -198,8 +200,6 @@ func renderFaceAwarenessLines(aw RuntimeAwareness) []string {
 		nonEmptyAwarenessLine("reply_modality_default", aw.ReplyModalityDefault),
 		nonEmptyAwarenessLine("reply_modality_reason", aw.ReplyModalityReason),
 		nonEmptyAwarenessLine("reply_modality_override", aw.ReplyModalityOverride),
-		fmt.Sprintf("- media_attached: %t", aw.MediaAttached),
-		nonEmptyAwarenessLine("media_mode", aw.MediaMode),
 	}
 }
 

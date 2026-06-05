@@ -202,6 +202,7 @@ func (p *anthropicStreamParser) captureUsage(usage anthropicUsage) {
 	}
 	if usage.CacheCreationInputTokens != 0 {
 		p.usage.CacheWriteTokens = usage.CacheCreationInputTokens
+		p.usage.CacheCreationTokens = usage.CacheCreationInputTokens
 	}
 }
 

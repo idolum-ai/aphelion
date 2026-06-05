@@ -303,7 +303,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 	parts = append(parts, agent.SystemBlock{Text: strings.Join(intro, "\n\n")})
 	parts = append(parts, agent.SystemBlock{
 		Text: strings.Join([]string{
-			renderFaceAwarenessBlock(req.Runtime, principalRole, mode),
+			renderFaceAwarenessBlock(req.Runtime),
 			renderFaceAgencyContextPacket(req.Runtime, principalRole, mode),
 		}, "\n\n"),
 	})

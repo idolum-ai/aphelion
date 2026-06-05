@@ -41,6 +41,28 @@ type RenderStageCallbacks struct {
 }
 
 // RenderStageResult is the output of render-stage orchestration.
+type FaceSkipReason string
+
+const (
+	FaceSkipReasonStructuralSkip       FaceSkipReason = "structural_skip"
+	FaceSkipReasonRenderPolicy         FaceSkipReason = "render_policy"
+	FaceSkipReasonMaterialStatusReport FaceSkipReason = "material_status_report"
+)
+
+func NormalizeFaceSkipReason(reason string) FaceSkipReason {
+	switch FaceSkipReason(strings.TrimSpace(reason)) {
+	case FaceSkipReasonStructuralSkip:
+		return FaceSkipReasonStructuralSkip
+	case FaceSkipReasonRenderPolicy:
+		return FaceSkipReasonRenderPolicy
+	case FaceSkipReasonMaterialStatusReport:
+		return FaceSkipReasonMaterialStatusReport
+	default:
+		return FaceSkipReason(strings.TrimSpace(reason))
+	}
+}
+
+// RenderStageResult is the output of render-stage orchestration.
 type RenderStageResult struct {
 	ReplyText     string
 	Runtime       prompt.RuntimeAwareness
@@ -52,7 +74,7 @@ type RenderStageResult struct {
 	ShouldRender  bool
 	RenderError   error
 	StreamHandled bool
-	SkipReason    string
+	SkipReason    FaceSkipReason
 }
 
 // RunRenderStage applies stream/non-stream/fallback selection for one turn.
@@ -73,7 +95,7 @@ func RunRenderStage(ctx context.Context, req RenderStageRequest, callbacks Rende
 	}
 
 	if req.SkipRender {
-		result.SkipReason = firstNonEmpty(strings.TrimSpace(req.SkipRenderReason), "structural_skip")
+		result.SkipReason = NormalizeFaceSkipReason(firstNonEmpty(strings.TrimSpace(req.SkipRenderReason), string(FaceSkipReasonStructuralSkip)))
 		return result, nil
 	}
 
@@ -92,11 +114,11 @@ func RunRenderStage(ctx context.Context, req RenderStageRequest, callbacks Rende
 	})
 	if result.ShouldRender && strings.TrimSpace(req.ConditionalSkipReason) != "" && !req.ReplyWithVoice {
 		result.ShouldRender = false
-		result.SkipReason = strings.TrimSpace(req.ConditionalSkipReason)
+		result.SkipReason = NormalizeFaceSkipReason(req.ConditionalSkipReason)
 	}
 	if !result.ShouldRender && !req.ReplyWithVoice {
 		if result.SkipReason == "" {
-			result.SkipReason = "render_policy"
+			result.SkipReason = FaceSkipReasonRenderPolicy
 		}
 		result.Runtime.DeliveryMode = "floor_fallback"
 		renderReq.Runtime = result.Runtime

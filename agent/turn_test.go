@@ -123,6 +123,49 @@ func defaultBudget() *Budget {
 	}
 }
 
+func TestRunTurnRetriesEmptySuccessfulResponseWithProviderDefaultTokens(t *testing.T) {
+	provider := &mockProvider{complete: func(ctx context.Context, call int, messages []Message, tools []ToolDef) (*Response, error) {
+		if call == 1 {
+			return &Response{Content: "", Usage: core.TokenUsage{OutputTokens: 2048}}, nil
+		}
+		return &Response{Content: "recovered", Usage: core.TokenUsage{OutputTokens: 3}}, nil
+	}}
+	opts := &CompleteOptions{MaxTokens: 4096}
+
+	result, history, err := RunTurn(context.Background(), provider, nil, defaultBudget(), opts, []Message{{Role: "user", Content: "continue"}})
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "recovered" {
+		t.Fatalf("result.Text = %q, want recovered", result.Text)
+	}
+	if opts.MaxTokens != 0 {
+		t.Fatalf("opts.MaxTokens = %d, want cleared provider default retry", opts.MaxTokens)
+	}
+	if opts.EmptyRetry == nil || !opts.EmptyRetry.Retried {
+		t.Fatalf("opts.EmptyRetry = %#v, want retried", opts.EmptyRetry)
+	}
+	if len(history) != 2 {
+		t.Fatalf("history len = %d, want user plus recovered assistant only", len(history))
+	}
+}
+
+func TestRunTurnDoesNotRetryEmptyResponseWithToolCall(t *testing.T) {
+	provider := &mockProvider{complete: func(ctx context.Context, call int, messages []Message, tools []ToolDef) (*Response, error) {
+		return &Response{ToolCalls: []ToolCall{{Name: "noop", Input: json.RawMessage(`{}`)}}}, nil
+	}}
+	tools := &mockTools{
+		defs: []ToolDef{{Name: "noop"}},
+		exec: func(context.Context, string, json.RawMessage) (string, error) { return "ok", nil },
+	}
+	opts := &CompleteOptions{MaxTokens: 4096}
+
+	_, _, _ = RunTurn(context.Background(), provider, tools, &Budget{Max: 1}, opts, []Message{{Role: "user", Content: "use tool"}})
+	if opts.EmptyRetry != nil && opts.EmptyRetry.Retried {
+		t.Fatalf("empty retry triggered for tool-call response")
+	}
+}
+
 func TestSimpleTurn(t *testing.T) {
 	provider := &mockProvider{
 		complete: func(_ context.Context, call int, _ []Message, _ []ToolDef) (*Response, error) {

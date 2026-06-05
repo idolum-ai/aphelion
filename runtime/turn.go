@@ -95,6 +95,7 @@ func addTokenUsage(dst core.TokenUsage, src core.TokenUsage) core.TokenUsage {
 	dst.TotalTokens += src.TotalTokens
 	dst.CacheReadTokens += src.CacheReadTokens
 	dst.CacheWriteTokens += src.CacheWriteTokens
+	dst.CacheCreationTokens += src.CacheCreationTokens
 	return dst
 }
 

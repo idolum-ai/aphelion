@@ -85,9 +85,9 @@ CONTINUATION_CONFIDENCE: <low|medium|high>
 - plan_active: false
 - operation_active: false
 - operation_objective: Negotiate the next safe agency improvement.
+- media_attached: false
 - stream_reply: false
 - inbound_was_voice: false
-- media_attached: false
 
 ## Agency Context Packet
 - packet_role: face

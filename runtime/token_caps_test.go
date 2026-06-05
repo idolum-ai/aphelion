@@ -30,6 +30,9 @@ func TestReasoningOptionsForRunAppliesMaxTokenCaps(t *testing.T) {
 }
 
 func TestFaceAndCompactionMaxTokenCapsAreSeparate(t *testing.T) {
+	if interactiveRunMaxTokens != 4096 {
+		t.Fatalf("interactive cap = %d, want 4096", interactiveRunMaxTokens)
+	}
 	if faceRenderMaxTokens != 512 || compactionMaxTokens != 512 {
 		t.Fatalf("face/compaction caps = %d/%d, want 512/512", faceRenderMaxTokens, compactionMaxTokens)
 	}

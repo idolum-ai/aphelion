@@ -210,7 +210,7 @@ func TestRunRenderStageConditionalSkipBypassesCallbacks(t *testing.T) {
 		},
 		FacePolicy:            pipeline.FacePolicy{Render: true},
 		InitialReply:          "fallback status",
-		ConditionalSkipReason: "material_status_report",
+		ConditionalSkipReason: string(FaceSkipReasonMaterialStatusReport),
 	}, RenderStageCallbacks{
 		Stream: func(context.Context, FaceRenderRequest) (FaceRenderResult, bool, error) {
 			called = true
@@ -230,7 +230,7 @@ func TestRunRenderStageConditionalSkipBypassesCallbacks(t *testing.T) {
 	if got.ShouldRender {
 		t.Fatal("ShouldRender = true, want false after conditional skip")
 	}
-	if got.SkipReason != "material_status_report" {
+	if got.SkipReason != FaceSkipReasonMaterialStatusReport {
 		t.Fatalf("SkipReason = %q, want material_status_report", got.SkipReason)
 	}
 	if got.Runtime.DeliveryMode != "floor_fallback" {

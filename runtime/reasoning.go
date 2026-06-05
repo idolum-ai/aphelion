@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	interactiveRunMaxTokens = 2048
+	interactiveRunMaxTokens = 4096
 	heartbeatRunMaxTokens   = 1024
 	cronRunMaxTokens        = 1024
 	recoveryRunMaxTokens    = 1024

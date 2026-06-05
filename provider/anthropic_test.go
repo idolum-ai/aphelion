@@ -67,8 +67,8 @@ func TestAnthropicCompleteText(t *testing.T) {
 	if got := resp.Usage.TotalTokens; got != 8 {
 		t.Fatalf("total tokens = %d, want %d", got, 8)
 	}
-	if resp.Usage.CacheReadTokens != 7 || resp.Usage.CacheWriteTokens != 11 {
-		t.Fatalf("cache usage = %+v, want read=7 write=11", resp.Usage)
+	if resp.Usage.CacheReadTokens != 7 || resp.Usage.CacheWriteTokens != 11 || resp.Usage.CacheCreationTokens != 11 {
+		t.Fatalf("cache usage = %+v, want read=7 write=11 creation=11", resp.Usage)
 	}
 	if len(seen.Messages) != 1 {
 		t.Fatalf("messages = %#v", seen.Messages)
@@ -82,6 +82,105 @@ func TestAnthropicCompleteText(t *testing.T) {
 	if seen.Messages[0].Role != "user" {
 		t.Fatalf("role = %q, want user", seen.Messages[0].Role)
 	}
+}
+
+func TestAnthropicCompleteWithOptionsOverridesMaxTokens(t *testing.T) {
+	var seen anthropicRequest
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(anthropicResponse{Content: []anthropicContent{{Type: "text", Text: "ok"}}})
+	})
+
+	client, err := NewAnthropic(AnthropicOptions{
+		APIKey:     "test-key",
+		Model:      "claude-2",
+		MaxTokens:  4096,
+		HTTPClient: &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	_, err = client.CompleteWithOptions(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil, agent.CompleteOptions{MaxTokens: 777})
+	if err != nil {
+		t.Fatalf("CompleteWithOptions() err = %v", err)
+	}
+	if seen.MaxTokens != 777 {
+		t.Fatalf("max_tokens = %d, want 777", seen.MaxTokens)
+	}
+}
+
+func TestAnthropicCacheControlCountStaysWithinProviderLimitWithTools(t *testing.T) {
+	var seen anthropicRequest
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(anthropicResponse{Content: []anthropicContent{{Type: "text", Text: "ok"}}})
+	})
+
+	client, err := NewAnthropic(AnthropicOptions{
+		APIKey:     "test-key",
+		Model:      "claude-2",
+		HTTPClient: &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	blocks := make([]agent.SystemBlock, 5)
+	for i := range blocks {
+		blocks[i] = agent.SystemBlock{Text: "stable block"}
+	}
+	markStable := func(i int) { blocks[i].CacheBreakpoint = true }
+	markStable(1)
+	markStable(2)
+	markStable(3)
+	markStable(4)
+
+	_, err = client.Complete(context.Background(), []agent.Message{{
+		Role:         "system",
+		Content:      "flattened system prompt",
+		SystemBlocks: blocks,
+	}, {Role: "user", Content: "hi"}}, []agent.ToolDef{
+		{Name: "exec", Parameters: json.RawMessage(`{"type":"object"}`)},
+		{Name: "status", Parameters: json.RawMessage(`{"type":"object"}`)},
+	})
+	if err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+
+	count := anthropicCacheControlCount(seen)
+	if count > 4 {
+		t.Fatalf("cache_control count = %d, want <= 4; system=%#v tools=%#v", count, seen.System, seen.Tools)
+	}
+	if len(seen.Tools) == 0 || seen.Tools[len(seen.Tools)-1].CacheControl == nil {
+		t.Fatalf("last tool cache control = %#v, want reserved breakpoint", seen.Tools)
+	}
+}
+
+func anthropicCacheControlCount(req anthropicRequest) int {
+	count := 0
+	for _, block := range req.System {
+		if block.CacheControl != nil {
+			count++
+		}
+	}
+	for _, msg := range req.Messages {
+		for _, block := range msg.Content {
+			if block.CacheControl != nil {
+				count++
+			}
+		}
+	}
+	for _, tool := range req.Tools {
+		if tool.CacheControl != nil {
+			count++
+		}
+	}
+	return count
 }
 
 func TestAnthropicCompleteToolCall(t *testing.T) {
@@ -512,8 +611,8 @@ func TestAnthropicStreamText(t *testing.T) {
 	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 5 {
 		t.Fatalf("usage = %+v, want input 12 output 5", resp.Usage)
 	}
-	if resp.Usage.CacheReadTokens != 22 || resp.Usage.CacheWriteTokens != 40 {
-		t.Fatalf("cache usage = %+v, want read 22 write 40", resp.Usage)
+	if resp.Usage.CacheReadTokens != 22 || resp.Usage.CacheWriteTokens != 40 || resp.Usage.CacheCreationTokens != 40 {
+		t.Fatalf("cache usage = %+v, want read 22 write 40 creation 40", resp.Usage)
 	}
 }
 

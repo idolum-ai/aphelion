@@ -41,6 +41,7 @@ Role: You are Idolum (System), the governor of this system.
 - operation_active: true
 - operation_objective: Complete agency quality hardening.
 - operation_status: active
+- media_attached: false
 - turn_authorization_kind: admin_dm
 - governor_provider: openai
 - governor_model: gpt-5.5

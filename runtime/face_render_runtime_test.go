@@ -220,6 +220,125 @@ func TestRenderTurnReplySkipsFaceForMaterialStatusReport(t *testing.T) {
 	}
 }
 
+func TestRenderTurnReplyDoesNotSkipFaceForRelationalStatusShapedPacket(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, _ := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, &fakeSender{})
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendProvider
+	renderer := &countingFaceRenderer{text: "relational face render"}
+	packet := core.MaterialPacket{
+		Facts: []string{"The eulogy draft passed review and merged grief into something warmer."},
+	}
+	floorText := packet.Text()
+	fallback := pipeline.SerializeFloorFallback(packet, floorText, pipeline.FallbackOptions{Channel: "telegram"})
+
+	result, err := rt.renderTurnReply(turnRenderInput{
+		Ctx:              context.Background(),
+		Key:              session.SessionKey{ChatID: 906, UserID: 0},
+		Result:           &core.TurnResult{Text: floorText},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		ReplyText:        fallback,
+		FloorText:        floorText,
+		MaterialFloor:    packet,
+		FallbackOpts:     pipeline.FallbackOptions{Channel: "telegram"},
+		FaceAwareness:    prompt.RuntimeAwareness{ReplyModalityDefault: "text", ReplyModalityOverride: "none"},
+		CurrentFaceModel: renderer,
+		PromptInput:      "read this carefully",
+	})
+	if err != nil {
+		t.Fatalf("renderTurnReply() err = %v", err)
+	}
+	if renderer.calls != 1 {
+		t.Fatalf("face render calls = %d, want 1 for relational override", renderer.calls)
+	}
+	if result.ReplyText != "relational face render" {
+		t.Fatalf("ReplyText = %q, want face-rendered relational text", result.ReplyText)
+	}
+}
+
+func TestRenderTurnReplyDoesNotSkipFaceForSceneConstraints(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, _ := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, &fakeSender{})
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendProvider
+	renderer := &countingFaceRenderer{text: "scene-aware face render"}
+	packet := core.MaterialPacket{
+		Facts:            []string{"PR #140 deployed and verified."},
+		SceneConstraints: []string{"Keep the visible reply warm and brief."},
+	}
+	floorText := packet.Text()
+	fallback := pipeline.SerializeFloorFallback(packet, floorText, pipeline.FallbackOptions{Channel: "telegram"})
+
+	result, err := rt.renderTurnReply(turnRenderInput{
+		Ctx:              context.Background(),
+		Key:              session.SessionKey{ChatID: 907, UserID: 0},
+		Result:           &core.TurnResult{Text: floorText},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		ReplyText:        fallback,
+		FloorText:        floorText,
+		MaterialFloor:    packet,
+		FallbackOpts:     pipeline.FallbackOptions{Channel: "telegram"},
+		FaceAwareness:    prompt.RuntimeAwareness{ReplyModalityDefault: "text", ReplyModalityOverride: "none"},
+		CurrentFaceModel: renderer,
+		PromptInput:      "report deploy status",
+	})
+	if err != nil {
+		t.Fatalf("renderTurnReply() err = %v", err)
+	}
+	if renderer.calls != 1 {
+		t.Fatalf("face render calls = %d, want 1 for scene constraints", renderer.calls)
+	}
+	if result.ReplyText != "scene-aware face render" {
+		t.Fatalf("ReplyText = %q, want scene-aware face render", result.ReplyText)
+	}
+}
+
+func TestFaceSkipPayloadContainsOnlyDecisionFields(t *testing.T) {
+	t.Parallel()
+
+	packet := core.MaterialPacket{
+		Facts:          []string{"PR #140 deployed and verified."},
+		AllowedActions: []string{"Report evidence."},
+		Refusals:       []string{"No restart repeated."},
+	}
+	payload := faceSkipPayload(faceSkipReasonMaterialStatusReport, turnRenderInput{
+		Result:           &core.TurnResult{},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		MaterialFloor:    packet,
+		FaceAwareness:    prompt.RuntimeAwareness{ReplyModalityDefault: "text"},
+	}, "fallback")
+
+	for _, key := range []string{"reason", "media_count", "facts", "allowed_actions", "commitments", "refusals", "notes", "fallback_chars"} {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("payload missing %q: %#v", key, payload)
+		}
+	}
+	for _, key := range []string{"policy_render", "reply_with_voice", "inbound_was_voice", "reply_modality_default", "reply_modality_override", "scene_constraints"} {
+		if _, ok := payload[key]; ok {
+			t.Fatalf("payload contains non-decision field %q: %#v", key, payload)
+		}
+	}
+}
+
+func TestShouldRecordFaceSkipEventAllowsZeroSessionKey(t *testing.T) {
+	t.Parallel()
+
+	if !shouldRecordFaceSkipEvent(session.SessionKey{}) {
+		t.Fatal("shouldRecordFaceSkipEvent(zero key) = false, want true for maintenance observability")
+	}
+}
+
 func TestRenderTurnReplyDoesNotSkipFaceForVoiceModality(t *testing.T) {
 	t.Parallel()
 

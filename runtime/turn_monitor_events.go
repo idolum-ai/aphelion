@@ -235,6 +235,9 @@ func appendTokenUsagePayload(payload map[string]any, usage core.TokenUsage) {
 	if usage.CacheWriteTokens != 0 {
 		payload["cache_write_tokens"] = usage.CacheWriteTokens
 	}
+	if usage.CacheCreationTokens != 0 {
+		payload["cache_creation_input_tokens"] = usage.CacheCreationTokens
+	}
 }
 
 func toolDurationKey(name string, input json.RawMessage) string {

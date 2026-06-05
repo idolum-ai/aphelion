@@ -195,12 +195,14 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 		}, time.Now().UTC())
 		r.reportOperationalIssueAsync("doctor", fmt.Errorf("%s", strings.TrimSpace(turnResult.ProviderFailure)))
 	} else {
-		r.recordExecutionEvent(key, core.ExecutionEventProviderAttemptSucceeded, "provider", "succeeded", map[string]any{
+		payload := map[string]any{
 			"backend":  strings.TrimSpace(exec.Backend),
 			"provider": strings.TrimSpace(exec.ProviderName),
 			"model":    strings.TrimSpace(exec.ModelName),
 			"run_kind": string(session.TurnRunKindDoctor),
-		}, time.Now().UTC())
+		}
+		appendTokenUsagePayload(payload, turnResult.TokenUsage)
+		r.recordExecutionEvent(key, core.ExecutionEventProviderAttemptSucceeded, "provider", "succeeded", payload, time.Now().UTC())
 	}
 
 	report := strings.TrimSpace(turnResult.Text)
