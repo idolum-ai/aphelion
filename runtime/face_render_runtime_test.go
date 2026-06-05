@@ -378,3 +378,52 @@ func TestRenderTurnReplyDoesNotSkipFaceForVoiceModality(t *testing.T) {
 		t.Fatalf("ReplyText = %q, want face-rendered voice text", result.ReplyText)
 	}
 }
+
+func TestRenderTurnReplyFallsBackWhenFaceRenderReturnsPartialOperationalReply(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, _ := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, &fakeSender{})
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendProvider
+	renderer := &countingFaceRenderer{text: "The reinstall repair is clean now.\n\nEvidence:\n- Service is active as PID `100755`\n\nWhat likely happened: the direct"}
+	packet := core.MaterialPacket{
+		Facts: []string{
+			"Service active/running: PID `100755`.",
+			"Revision `37928e5ecc7f624a0284df26bf70b7b9ac89ddbd`.",
+			"`verify-deploy --format=kv` passed.",
+		},
+		SceneConstraints: []string{"Render the status in the face, but preserve completeness."},
+	}
+	floorText := packet.Text() + strings.Repeat("\n- Reinstall evidence remained available.", 8)
+	fallback := pipeline.SerializeFloorFallback(packet, floorText, pipeline.FallbackOptions{Channel: "telegram"})
+
+	result, err := rt.renderTurnReply(turnRenderInput{
+		Ctx:              context.Background(),
+		Key:              session.SessionKey{ChatID: 906, UserID: 0},
+		Result:           &core.TurnResult{Text: floorText},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		ReplyText:        fallback,
+		FloorText:        floorText,
+		MaterialFloor:    packet,
+		FallbackOpts:     pipeline.FallbackOptions{Channel: "telegram"},
+		FaceAwareness:    prompt.RuntimeAwareness{},
+		CurrentFaceModel: renderer,
+		PromptInput:      "continue",
+	})
+	if err != nil {
+		t.Fatalf("renderTurnReply() err = %v", err)
+	}
+	if renderer.calls != 1 {
+		t.Fatalf("face render calls = %d, want 1", renderer.calls)
+	}
+	if result.ReplyText != fallback {
+		t.Fatalf("ReplyText = %q, want floor fallback %q", result.ReplyText, fallback)
+	}
+	if strings.Contains(result.ReplyText, "What likely happened: the direct") {
+		t.Fatalf("ReplyText kept partial face render: %q", result.ReplyText)
+	}
+}

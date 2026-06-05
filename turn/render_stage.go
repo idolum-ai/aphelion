@@ -5,6 +5,7 @@ package turn
 import (
 	"context"
 	"strings"
+	"unicode"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
@@ -64,17 +65,19 @@ func NormalizeFaceSkipReason(reason string) FaceSkipReason {
 
 // RenderStageResult is the output of render-stage orchestration.
 type RenderStageResult struct {
-	ReplyText     string
-	Runtime       prompt.RuntimeAwareness
-	Usage         core.TokenUsage
-	Streamed      bool
-	RenderedID    int64
-	RenderedType  string
-	ReplyModality string
-	ShouldRender  bool
-	RenderError   error
-	StreamHandled bool
-	SkipReason    FaceSkipReason
+	ReplyText       string
+	Runtime         prompt.RuntimeAwareness
+	Usage           core.TokenUsage
+	Streamed        bool
+	RenderedID      int64
+	RenderedType    string
+	ReplyModality   string
+	ShouldRender    bool
+	RenderError     error
+	StreamHandled   bool
+	SkipReason      FaceSkipReason
+	FallbackReason  string
+	FallbackApplied bool
 }
 
 // RunRenderStage applies stream/non-stream/fallback selection for one turn.
@@ -139,9 +142,7 @@ func RunRenderStage(ctx context.Context, req RenderStageRequest, callbacks Rende
 			result.Usage = addTokenUsage(result.Usage, streamResult.Usage)
 			result.ReplyText = strings.TrimSpace(streamResult.Text)
 			result.ReplyModality = strings.TrimSpace(streamResult.ReplyModality)
-			if result.ReplyText == "" {
-				result.ReplyText = renderStageFallback(callbacks, req.Render.MaterialFloor, req.Render.FloorText, req.FallbackOptions)
-			}
+			applyRenderCompletenessFallback(&result, callbacks, req)
 		}
 	}
 
@@ -158,13 +159,108 @@ func RunRenderStage(ctx context.Context, req RenderStageRequest, callbacks Rende
 			result.ReplyText = strings.TrimSpace(rendered.Text)
 			result.ReplyModality = strings.TrimSpace(rendered.ReplyModality)
 			result.Usage = addTokenUsage(result.Usage, rendered.Usage)
-			if result.ReplyText == "" {
-				result.ReplyText = renderStageFallback(callbacks, req.Render.MaterialFloor, req.Render.FloorText, req.FallbackOptions)
-			}
+			applyRenderCompletenessFallback(&result, callbacks, req)
 		}
 	}
 
 	return result, nil
+}
+
+func applyRenderCompletenessFallback(result *RenderStageResult, callbacks RenderStageCallbacks, req RenderStageRequest) {
+	if result == nil || req.ReplyWithVoice {
+		return
+	}
+	reason := incompleteFaceRenderFallbackReason(result.ReplyText, req.Render.FloorText, req.Render.MaterialFloor)
+	if reason == "" && strings.TrimSpace(result.ReplyText) != "" {
+		return
+	}
+	fallback := renderStageFallback(callbacks, req.Render.MaterialFloor, req.Render.FloorText, req.FallbackOptions)
+	if strings.TrimSpace(fallback) == "" {
+		return
+	}
+	result.ReplyText = fallback
+	result.Runtime.DeliveryMode = "floor_fallback"
+	if reason == "" {
+		reason = "empty_face_render"
+	}
+	result.FallbackReason = reason
+	result.FallbackApplied = true
+}
+
+func incompleteFaceRenderFallbackReason(renderedText string, floorText string, packet core.MaterialPacket) string {
+	rendered := strings.TrimSpace(renderedText)
+	floor := strings.TrimSpace(floorText)
+	if rendered == "" || floor == "" || packet.Empty() {
+		return ""
+	}
+	if !materialPacketLooksOperational(packet) {
+		return ""
+	}
+	if !looksTruncatedSentence(rendered) {
+		return ""
+	}
+	// A deliberately conservative ratio: normal face summaries may be shorter than
+	// the floor, but an operational scene ending mid-sentence at less than two
+	// thirds of the complete floor is safer as deterministic floor fallback.
+	if len([]rune(rendered))*3 >= len([]rune(floor))*2 {
+		return ""
+	}
+	return "partial_face_render"
+}
+
+func materialPacketLooksOperational(packet core.MaterialPacket) bool {
+	terms := []string{
+		"active", "artifact", "binary", "branch", "build", "checksum", "commit", "deploy", "deployment", "evidence", "installed", "pid", "pr #", "pull request", "restart", "revision", "service", "status", "verify-deploy", "verified", "vcs_modified",
+	}
+	text := strings.ToLower(strings.Join([]string{
+		strings.Join(packet.Facts, "\n"),
+		strings.Join(packet.AllowedActions, "\n"),
+		strings.Join(packet.Commitments, "\n"),
+		strings.Join(packet.Refusals, "\n"),
+		strings.Join(packet.Notes, "\n"),
+	}, "\n"))
+	for _, term := range terms {
+		if strings.Contains(text, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksTruncatedSentence(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	last := lastNonSpaceRune(trimmed)
+	if last == 0 {
+		return false
+	}
+	switch last {
+	case '.', '!', '?', '…', '`', ')', ']', '}', '"', '\'':
+		return false
+	case ':', ';':
+		return true
+	default:
+		return unicode.IsLetter(last) || unicode.IsDigit(last)
+	}
+}
+
+func lastNonSpaceRune(text string) rune {
+	for _, r := range reverseRunes(text) {
+		if !unicode.IsSpace(r) {
+			return r
+		}
+	}
+	return 0
+}
+
+func reverseRunes(text string) []rune {
+	runes := []rune(text)
+	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+		runes[i], runes[j] = runes[j], runes[i]
+	}
+	return runes
 }
 
 func firstNonEmpty(values ...string) string {
