@@ -326,3 +326,42 @@ func TestRunRenderStageKeepsCompleteOperationalFaceRender(t *testing.T) {
 		t.Fatalf("fallback = %v/%q, want none", got.FallbackApplied, got.FallbackReason)
 	}
 }
+
+func TestRunRenderStageKeepsSceneConstrainedShortOperationalFaceRender(t *testing.T) {
+	t.Parallel()
+
+	floorText := strings.Join([]string{
+		"PR #140 deployed and verified.",
+		"The operator asked for a warm, brief visible reply.",
+	}, "\n")
+	renderedText := "scene-aware face render"
+	got, err := RunRenderStage(context.Background(), RenderStageRequest{
+		Render: FaceRenderRequest{
+			LatestUserInput: "report deploy status",
+			FloorText:       floorText,
+			MaterialFloor: core.MaterialPacket{
+				Facts:            []string{"PR #140 deployed and verified."},
+				SceneConstraints: []string{"Keep the visible reply warm and brief."},
+			},
+		},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		InitialReply:     floorText,
+	}, RenderStageCallbacks{
+		Render: func(context.Context, FaceRenderRequest) (*FaceRenderResult, error) {
+			return &FaceRenderResult{Text: renderedText}, nil
+		},
+		Fallback: func(core.MaterialPacket, string, pipeline.FallbackOptions) string {
+			return "unexpected fallback"
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunRenderStage() err = %v", err)
+	}
+	if got.ReplyText != renderedText {
+		t.Fatalf("ReplyText = %q, want rendered text", got.ReplyText)
+	}
+	if got.FallbackApplied || got.FallbackReason != "" {
+		t.Fatalf("fallback = %v/%q, want none", got.FallbackApplied, got.FallbackReason)
+	}
+}

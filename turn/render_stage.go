@@ -193,6 +193,9 @@ func incompleteFaceRenderFallbackReason(renderedText string, floorText string, p
 	if rendered == "" || floor == "" || packet.Empty() {
 		return ""
 	}
+	if materialPacketHasSceneConstraints(packet) {
+		return ""
+	}
 	if !materialPacketLooksOperational(packet) {
 		return ""
 	}
@@ -206,6 +209,24 @@ func incompleteFaceRenderFallbackReason(renderedText string, floorText string, p
 		return ""
 	}
 	return "partial_face_render"
+}
+
+func materialPacketHasSceneConstraints(packet core.MaterialPacket) bool {
+	for _, constraint := range packet.SceneConstraints {
+		trimmed := strings.TrimSpace(constraint)
+		if trimmed == "" {
+			continue
+		}
+		// Scene constraints can intentionally authorize a short/shaped visible
+		// render. Do not let the generic operational-length heuristic override
+		// that unless the constraint itself asks the face to preserve completeness.
+		lower := strings.ToLower(trimmed)
+		if strings.Contains(lower, "complete") || strings.Contains(lower, "completeness") || strings.Contains(lower, "preserve") || strings.Contains(lower, "full") || strings.Contains(lower, "evidence") {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func materialPacketLooksOperational(packet core.MaterialPacket) bool {
