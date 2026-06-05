@@ -74,8 +74,11 @@ func TestUpdateOperationToolPersistsAndShowsOperationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v", err)
 	}
-	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "Investigate my internet footprint.") {
-		t.Fatalf("update output = %q, want updated operation summary", out)
+	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "applied_fields:") {
+		t.Fatalf("update output = %q, want compact update ack", out)
+	}
+	if strings.Contains(out, "Browser automation is not currently available") || strings.Contains(out, "A screenshot requires browser automation") {
+		t.Fatalf("update output = %q, want compact ack without full operation echo", out)
 	}
 
 	state, err := store.OperationState(key)
@@ -162,8 +165,11 @@ func TestUpdateOperationToolMergeAppendsFindingsAndAdvancesProposal(t *testing.T
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(update_operation merge) err = %v", err)
 	}
-	if !strings.Contains(out, "tmp/reddit.png") {
-		t.Fatalf("merge output = %q, want appended artifact", out)
+	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "applied_fields:") {
+		t.Fatalf("merge output = %q, want compact update ack", out)
+	}
+	if strings.Contains(out, "tmp/reddit.png") || strings.Contains(out, "Browser automation can be acquired locally") {
+		t.Fatalf("merge output = %q, want compact ack without appended state echo", out)
 	}
 
 	state, err := store.OperationState(key)
@@ -234,8 +240,15 @@ func TestUpdateOperationToolPersistsDurablePhasePlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(update_operation phase_plan) err = %v", err)
 	}
-	if !strings.Contains(out, "phase_plan:") || !strings.Contains(out, "phase-2-implementation") {
-		t.Fatalf("update output = %q, want rendered phase plan", out)
+	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "current_phase: phase-2-implementation") {
+		t.Fatalf("update output = %q, want compact ack with current phase", out)
+	}
+	showOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "update_operation", nil)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(show update_operation) err = %v", err)
+	}
+	if !strings.Contains(showOut, "phase_plan:") || !strings.Contains(showOut, "phase-2-implementation") {
+		t.Fatalf("show output = %q, want rendered phase plan", showOut)
 	}
 
 	state, err := store.OperationState(key)
@@ -300,9 +313,16 @@ func TestUpdateOperationToolPersistsTypedPhaseGovernanceMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(update_operation phase metadata) err = %v", err)
 	}
+	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "current_phase: phase-consent") {
+		t.Fatalf("update output = %q, want compact ack with current phase", out)
+	}
+	showOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "update_operation", nil)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(show update_operation) err = %v", err)
+	}
 	for _, want := range []string{"gate_level: escalated_operator_approval", "gate_reason_code: external_account_auth_status", "approval_subject: operator", "autoapprove_eligible: false", "blocked_reason_code: waiting_for_opt_in", "requires_opt_in: true", "requires_consent: true", "supersedes_phase_ids: phase-old", "stale_authority: true"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("output = %q, want %q", out, want)
+		if !strings.Contains(showOut, want) {
+			t.Fatalf("show output = %q, want %q", showOut, want)
 		}
 	}
 
@@ -397,9 +417,16 @@ func TestUpdateOperationToolPersistsAndRendersPlanLease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(update_operation plan_lease) err = %v", err)
 	}
+	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "applied_fields:") {
+		t.Fatalf("update output = %q, want compact ack", out)
+	}
+	showOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "update_operation", nil)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(show update_operation) err = %v", err)
+	}
 	for _, want := range []string{"plan_lease:", "Low-risk coordination lease", "expected_turns: 3", "hard_interrupts:", "policy_or_grant_change", "child_initiation_lanes:", "capability_request", "authority_note: plan lease is a bounded plan envelope, not a capability grant", "evidence_digest:"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("output = %q, want %q", out, want)
+		if !strings.Contains(showOut, want) {
+			t.Fatalf("show output = %q, want %q", showOut, want)
 		}
 	}
 

@@ -594,8 +594,8 @@ func TestOpenAIStreamUsesChatCompletionsTransport(t *testing.T) {
 	if strings.Join(chunks, "") != "hello" || resp.Content != "hello" {
 		t.Fatalf("chunks/content = %#v/%q, want hello", chunks, resp.Content)
 	}
-	if resp.Usage.InputTokens != 4 || resp.Usage.OutputTokens != 2 || resp.Usage.TotalTokens != 6 {
-		t.Fatalf("usage = %+v, want 4/2/6", resp.Usage)
+	if resp.Usage.InputTokens != 4 || resp.Usage.OutputTokens != 2 || resp.Usage.TotalTokens != 6 || resp.Usage.CacheReadTokens != 1 {
+		t.Fatalf("usage = %+v, want 4/2/6 with cache read 1", resp.Usage)
 	}
 }
 
