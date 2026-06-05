@@ -426,10 +426,7 @@ func semanticToolProgressEntry(name string, input json.RawMessage, currentStep s
 	if label := progressToolEvidenceLabel(name, input); label != "" {
 		return toolProgressEntry{Key: "task:" + name, Text: label}
 	}
-	contextLabel := strings.TrimSpace(taskSummary)
-	if contextLabel == "" {
-		contextLabel = strings.TrimSpace(currentStep)
-	}
+	contextLabel := strings.TrimSpace(currentStep)
 	if contextLabel != "" {
 		return toolProgressEntry{Key: "task:" + name, Text: "Working on " + contextLabel}
 	}

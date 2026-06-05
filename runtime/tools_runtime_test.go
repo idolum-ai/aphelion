@@ -187,8 +187,11 @@ func TestHandleInboundAdminCanManageDurableAgentThroughConversationTool(t *testi
 	if !strings.HasPrefix(sender.inline[0].text, "Working...") || strings.Contains(sender.inline[0].text, "Thinking") {
 		t.Fatalf("progress text = %q, want non-reasoning progress header", sender.inline[0].text)
 	}
-	if !strings.Contains(sender.inline[0].text, "Working on Set family-group to read only") {
-		t.Fatalf("progress text = %q, want conversation-derived durable_agent progress entry", sender.inline[0].text)
+	if strings.Contains(sender.inline[0].text, "Set family-group to read only") {
+		t.Fatalf("progress text = %q, should not echo inbound task summary", sender.inline[0].text)
+	}
+	if !strings.Contains(sender.inline[0].text, "Working through the request") {
+		t.Fatalf("progress text = %q, want generic fallback without user echo", sender.inline[0].text)
 	}
 	if len(sender.sent) != 1 {
 		t.Fatalf("sent len = %d, want final reply only", len(sender.sent))

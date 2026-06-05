@@ -77,9 +77,16 @@ func TestSemanticToolProgressLabel(t *testing.T) {
 	if got.Text != "Searching memory" {
 		t.Fatalf("semanticToolProgressEntry() = %q, want tool-intent label", got.Text)
 	}
-	unknown := semanticToolProgressEntry("custom_tool", json.RawMessage(`{"query":"operator preference"}`), "review the runtime", "")
+	unknown := semanticToolProgressEntry("custom_tool", json.RawMessage(`{"query":"operator preference"}`), "review the runtime", "echo this inbound user request")
 	if unknown.Text != "Working on review the runtime" {
 		t.Fatalf("unknown semanticToolProgressEntry() = %q, want plan-step fallback", unknown.Text)
+	}
+	generic := semanticToolProgressEntry("custom_tool", json.RawMessage(`{"query":"operator preference"}`), "", "echo this inbound user request")
+	if generic.Text != "Working through the request" {
+		t.Fatalf("unknown semanticToolProgressEntry() = %q, want generic fallback without user echo", generic.Text)
+	}
+	if strings.Contains(generic.Text, "echo this inbound user request") {
+		t.Fatalf("unknown semanticToolProgressEntry() = %q, should not echo task summary", generic.Text)
 	}
 }
 
