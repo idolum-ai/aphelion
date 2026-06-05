@@ -547,3 +547,28 @@ func TestRecordTelegramThreadReminderRecordsReplyLedgerAndSuppression(t *testing
 		t.Fatalf("reply ledger after ignore = %d,%t,%v; want thread retained", threadID, ok, err)
 	}
 }
+
+func TestTelegramThreadLastMessageAnchorRoundTripAndReplyLookup(t *testing.T) {
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	thread, _, err := store.CreateTelegramThreadForUpdate(1001, 2002, 3003, 4004, "thread opener", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate() err = %v", err)
+	}
+	if err := store.RecordTelegramThreadLastMessage(1001, thread.ThreadID, 9901, "assistant_chunk", time.Now().UTC()); err != nil {
+		t.Fatalf("RecordTelegramThreadLastMessage(first) err = %v", err)
+	}
+	if got, ok, err := store.TelegramThreadIDForReplyMessage(1001, 9901); err != nil || !ok || got != thread.ThreadID {
+		t.Fatalf("TelegramThreadIDForReplyMessage(first anchor) = %d ok=%v err=%v, want thread %d", got, ok, err, thread.ThreadID)
+	}
+	if err := store.RecordTelegramThreadLastMessage(1001, thread.ThreadID, 9902, "assistant_chunk", time.Now().UTC().Add(time.Second)); err != nil {
+		t.Fatalf("RecordTelegramThreadLastMessage(second) err = %v", err)
+	}
+	anchor, ok, err := store.TelegramThreadLastMessage(1001, thread.ThreadID)
+	if err != nil || !ok || anchor.MessageID != 9902 || anchor.Source != "assistant_chunk" {
+		t.Fatalf("TelegramThreadLastMessage() = %#v ok=%v err=%v, want 9902 assistant_chunk", anchor, ok, err)
+	}
+	if got, ok, err := store.TelegramThreadIDForReplyMessage(1001, 9902); err != nil || !ok || got != thread.ThreadID {
+		t.Fatalf("TelegramThreadIDForReplyMessage(second anchor) = %d ok=%v err=%v, want thread %d", got, ok, err, thread.ThreadID)
+	}
+}
