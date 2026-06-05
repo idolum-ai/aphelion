@@ -114,6 +114,13 @@ func TestSemanticToolProgressEvidenceSummaries(t *testing.T) {
 		{name: "list_dir", input: json.RawMessage(`{"path":"/tmp/secret-token-value"}`), want: "Listing directory"},
 		{name: "session_search", input: json.RawMessage(`{"query":"secret-token-value"}`), want: "Searching transcript history"},
 		{name: "semantic_search", input: json.RawMessage(`{"query":"secret-token-value"}`), want: "Searching memory"},
+		{name: "request_approval", input: json.RawMessage(`{"objective":"secret-token-value"}`), want: "Requesting approval"},
+		{name: "mission_ledger", input: json.RawMessage(`{"summary":"secret-token-value"}`), want: "Recording mission ledger"},
+		{name: "capability_request", input: json.RawMessage(`{"purpose":"secret-token-value"}`), want: "Requesting capability"},
+		{name: "capability_authority", input: json.RawMessage(`{"rationale":"secret-token-value"}`), want: "Checking capability authority"},
+		{name: "tool_authority", input: json.RawMessage(`{"tool_name":"secret-token-value"}`), want: "Checking tool authority"},
+		{name: "memory", input: json.RawMessage(`{"content":"secret-token-value"}`), want: "Updating memory"},
+		{name: "durable_agent", input: json.RawMessage(`{"message":"secret-token-value"}`), want: "Coordinating durable agent"},
 	}
 
 	for _, tc := range cases {

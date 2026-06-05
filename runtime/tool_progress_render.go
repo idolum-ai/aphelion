@@ -478,6 +478,20 @@ func progressToolEvidenceLabel(name string, input json.RawMessage) string {
 		return "Writing file"
 	case "operation_artifact":
 		return "Resolving operation artifact"
+	case "request_approval":
+		return "Requesting approval"
+	case "mission_ledger":
+		return "Recording mission ledger"
+	case "capability_request":
+		return "Requesting capability"
+	case "capability_authority":
+		return "Checking capability authority"
+	case "tool_authority":
+		return "Checking tool authority"
+	case "memory":
+		return "Updating memory"
+	case "durable_agent":
+		return "Coordinating durable agent"
 	}
 	return ""
 }
