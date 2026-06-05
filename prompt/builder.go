@@ -159,12 +159,12 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 			lines = append(lines, omitted)
 		}
 		lines = append(lines, renderFiles(shapedDynamic)...)
-		markLastStableCacheBreakpoint(parts)
+		markStableCacheBreakpoints(parts, maxStableCacheBreakpoints)
 		parts = append(parts, agent.SystemBlock{
 			Text: strings.Join(lines, "\n\n"),
 		})
 	} else {
-		markLastStableCacheBreakpoint(parts)
+		markStableCacheBreakpoints(parts, maxStableCacheBreakpoints)
 	}
 
 	return parts
@@ -328,12 +328,12 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 			lines = append(lines, omitted)
 		}
 		lines = append(lines, renderFiles(shapedDynamic)...)
-		markLastStableCacheBreakpoint(parts)
+		markStableCacheBreakpoints(parts, maxStableCacheBreakpoints)
 		parts = append(parts, agent.SystemBlock{
 			Text: strings.Join(lines, "\n\n"),
 		})
 	} else {
-		markLastStableCacheBreakpoint(parts)
+		markStableCacheBreakpoints(parts, maxStableCacheBreakpoints)
 	}
 	if len(req.ContextNotes) > 0 {
 		lines := []string{

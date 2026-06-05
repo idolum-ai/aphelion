@@ -73,6 +73,10 @@ external_manifest_dir = "./external-tools"
 	if cfg.Tailscale.Enabled || cfg.Tailscale.Backend != "cli" || cfg.Tailscale.CLIPath != "tailscale" || cfg.Tailscale.SSHPath != "ssh" || cfg.Tailscale.CommandTimeout != "5s" || cfg.Tailscale.SSHCommandTimeout != "15m" {
 		t.Fatalf("tailscale defaults = %#v, want disabled cli backend", cfg.Tailscale)
 	}
+
+	if cfg.Providers.Anthropic.CacheStrategy != "hybrid" || cfg.Providers.Anthropic.CacheTTL != "1h" {
+		t.Fatalf("anthropic cache defaults = %s/%s, want hybrid/1h", cfg.Providers.Anthropic.CacheStrategy, cfg.Providers.Anthropic.CacheTTL)
+	}
 	if cfg.Tailscale.Parent.Enabled || cfg.Tailscale.Parent.Hostname != "aphelion" || !strings.HasSuffix(cfg.Tailscale.Parent.StateDir, "/.aphelion/state/tailnet/parent") || cfg.Tailscale.Parent.ListenAddr != ":8765" || cfg.Tailscale.Parent.AuthKeyEnv != "APHELION_TS_AUTHKEY" {
 		t.Fatalf("tailscale parent defaults = %#v, want disabled parent tsnet defaults", cfg.Tailscale.Parent)
 	}

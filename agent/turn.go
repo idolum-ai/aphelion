@@ -147,6 +147,7 @@ type StreamCallback func(StreamChunk) error
 type CompleteOptions struct {
 	Reasoning        ReasoningConfig
 	Verbosity        Verbosity
+	MaxTokens        int
 	ProviderFailover *ProviderFailoverState
 	Observer         TurnObserver
 	ContextBudget    *ContextBudget

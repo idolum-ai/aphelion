@@ -299,6 +299,18 @@ func TestBuildFacePromptBlocksMarksStableBoundaryForCaching(t *testing.T) {
 	if stableIdx == -1 || dynamicIdx == -1 {
 		t.Fatalf("missing stable/dynamic face file blocks: %#v", blocks)
 	}
+	breakpoints := 0
+	for i, block := range blocks {
+		if block.CacheBreakpoint {
+			breakpoints++
+			if i >= dynamicIdx {
+				t.Fatalf("face cache breakpoint crossed into dynamic section: idx=%d block=%#v", i, block)
+			}
+		}
+	}
+	if breakpoints == 0 || breakpoints > maxStableCacheBreakpoints {
+		t.Fatalf("face cache breakpoints = %d, want 1..%d: %#v", breakpoints, maxStableCacheBreakpoints, blocks)
+	}
 	if !blocks[stableIdx].CacheBreakpoint {
 		t.Fatalf("stable face files block should be cache breakpoint: %#v", blocks[stableIdx])
 	}

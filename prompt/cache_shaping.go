@@ -10,13 +10,26 @@ import (
 	"github.com/idolum-ai/aphelion/workspace"
 )
 
+const maxStableCacheBreakpoints = 4
+
 func markLastStableCacheBreakpoint(blocks []agent.SystemBlock) {
+	markStableCacheBreakpoints(blocks, 1)
+}
+
+func markStableCacheBreakpoints(blocks []agent.SystemBlock, max int) {
+	if max <= 0 {
+		return
+	}
+	marked := 0
 	for i := len(blocks) - 1; i >= 0; i-- {
 		if strings.TrimSpace(blocks[i].Text) == "" {
 			continue
 		}
 		blocks[i].CacheBreakpoint = true
-		return
+		marked++
+		if marked >= max {
+			return
+		}
 	}
 }
 

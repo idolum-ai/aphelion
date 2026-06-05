@@ -145,10 +145,12 @@ func normalizeProviderSelection(selection string) string {
 
 func normalizeAnthropicCacheStrategy(strategy string) string {
 	switch strings.ToLower(strings.TrimSpace(strategy)) {
-	case "", "explicit":
+	case "", "auto", "hybrid":
+		return "hybrid"
+	case "explicit", "manual":
 		return "explicit"
-	case "auto", "hybrid", "off":
-		return strings.ToLower(strings.TrimSpace(strategy))
+	case "off":
+		return "off"
 	default:
 		return strings.ToLower(strings.TrimSpace(strategy))
 	}
@@ -156,10 +158,10 @@ func normalizeAnthropicCacheStrategy(strategy string) string {
 
 func normalizeAnthropicCacheTTL(ttl string) string {
 	switch strings.ToLower(strings.TrimSpace(ttl)) {
-	case "", "5m":
-		return "5m"
-	case "1h":
+	case "", "1h":
 		return "1h"
+	case "5m":
+		return "5m"
 	default:
 		return strings.ToLower(strings.TrimSpace(ttl))
 	}

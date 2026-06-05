@@ -75,11 +75,11 @@ func (g *Gemini) Complete(ctx context.Context, messages []agent.Message, tools [
 	return g.CompleteWithOptions(ctx, messages, tools, agent.CompleteOptions{})
 }
 
-func (g *Gemini) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, _ agent.CompleteOptions) (*agent.Response, error) {
+func (g *Gemini) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
 	reqBody := geminiRequest{
 		Contents:          toGeminiContents(messages),
 		SystemInstruction: geminiSystemInstruction(messages),
-		GenerationConfig:  geminiGenerationConfig{MaxOutputTokens: g.maxTokens},
+		GenerationConfig:  geminiGenerationConfig{MaxOutputTokens: resolveMaxTokens(g.maxTokens, opts)},
 	}
 	if defs := toGeminiTools(tools); len(defs) > 0 {
 		reqBody.Tools = defs

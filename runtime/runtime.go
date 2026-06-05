@@ -270,6 +270,7 @@ func New(
 		FaceName:      config.EffectiveFaceName(cfg, face.DefaultFaceName),
 		Channel:       "telegram",
 		WorkspaceRoot: cfg.Agent.PromptRoot,
+		MaxTokens:     faceRenderMaxTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("init face renderer: %w", err)

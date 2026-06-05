@@ -71,10 +71,10 @@ func (o *OpenRouter) Complete(ctx context.Context, messages []agent.Message, too
 	return o.CompleteWithOptions(ctx, messages, tools, agent.CompleteOptions{})
 }
 
-func (o *OpenRouter) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, _ agent.CompleteOptions) (*agent.Response, error) {
+func (o *OpenRouter) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
 	reqBody := openRouterRequest{
 		Model:     o.model,
-		MaxTokens: o.maxTokens,
+		MaxTokens: resolveMaxTokens(o.maxTokens, opts),
 		Messages:  toOpenRouterMessages(messages),
 	}
 	if defs := toOpenRouterTools(tools); len(defs) > 0 {

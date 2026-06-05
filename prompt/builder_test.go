@@ -498,11 +498,21 @@ func TestBuildGovernorPromptBlocksMarksStableBoundaryForCaching(t *testing.T) {
 	if len(blocks) < 3 {
 		t.Fatalf("block count = %d, want at least 3", len(blocks))
 	}
+	breakpoints := 0
+	lastDynamicIdx := len(blocks) - 1
+	for i, block := range blocks {
+		if block.CacheBreakpoint {
+			breakpoints++
+			if i >= lastDynamicIdx {
+				t.Fatalf("dynamic block should not be cache breakpoint: %#v", block)
+			}
+		}
+	}
+	if breakpoints == 0 || breakpoints > maxStableCacheBreakpoints {
+		t.Fatalf("cache breakpoints = %d, want 1..%d: %#v", breakpoints, maxStableCacheBreakpoints, blocks)
+	}
 	if !blocks[len(blocks)-2].CacheBreakpoint {
 		t.Fatalf("last stable block should be cache breakpoint: %#v", blocks)
-	}
-	if blocks[len(blocks)-1].CacheBreakpoint {
-		t.Fatalf("dynamic block should not be cache breakpoint: %#v", blocks[len(blocks)-1])
 	}
 }
 

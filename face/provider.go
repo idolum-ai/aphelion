@@ -24,6 +24,7 @@ type ProviderRendererConfig struct {
 	WorkspaceRoot string
 	Reasoning     agent.ReasoningConfig
 	Verbosity     agent.Verbosity
+	MaxTokens     int
 }
 
 type ProviderRenderer struct {
@@ -242,6 +243,7 @@ func (r *ProviderRenderer) completeOptionsForMode(mode string) agent.CompleteOpt
 	return agent.CompleteOptions{
 		Reasoning: r.cfg.Reasoning,
 		Verbosity: r.verbosityForMode(mode),
+		MaxTokens: r.cfg.MaxTokens,
 	}
 }
 

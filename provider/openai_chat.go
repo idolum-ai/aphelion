@@ -19,7 +19,7 @@ import (
 func (o *OpenAI) completeChat(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
 	reqBody := openAIRequest{
 		Model:               o.model,
-		MaxCompletionTokens: o.maxTokens,
+		MaxCompletionTokens: resolveMaxTokens(o.maxTokens, opts),
 		Messages:            toOpenRouterMessages(messages),
 		ReasoningEffort:     openAIReasoningEffort(opts.Reasoning.Effort),
 		ServiceTier:         o.serviceTier,
@@ -71,7 +71,7 @@ func (o *OpenAI) completeChat(ctx context.Context, messages []agent.Message, too
 func (o *OpenAI) streamChat(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback) (*agent.Response, error) {
 	reqBody := openAIRequest{
 		Model:               o.model,
-		MaxCompletionTokens: o.maxTokens,
+		MaxCompletionTokens: resolveMaxTokens(o.maxTokens, opts),
 		Messages:            toOpenRouterMessages(messages),
 		ReasoningEffort:     openAIReasoningEffort(opts.Reasoning.Effort),
 		ServiceTier:         o.serviceTier,
