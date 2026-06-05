@@ -245,6 +245,72 @@ func TestToolProgressReporterInlineEditPayloadCarriesRunID(t *testing.T) {
 	assertPayloadNonNegativeInt64(t, editPayload, "progress_delivery_duration_ms")
 }
 
+func TestToolProgressRecordsProgressSourceBranches(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 7731, UserID: 0, Scope: telegramDMScopeRef(7731)}
+	reporter := &toolProgressReporter{runtime: rt, executionKey: key, sender: sender, chatID: 7731, mode: "all", style: "semantic", window: 8, seenKeys: make(map[string]struct{}), currentPlanStep: "instrument progress source"}
+	reporter.BindTurnRun(42)
+	reporter.ToolStarted(context.Background(), "read_file", json.RawMessage(`{"path":"runtime/tool_progress_render.go"}`))
+	reporter.ToolStarted(context.Background(), "update_plan", json.RawMessage(`{"plan":[{"step":"instrument progress source"}]}`))
+	reporter.ToolStarted(context.Background(), "unknown_tool_with_step", json.RawMessage(`{"query":"secret-token-value"}`))
+	reporter.currentPlanStep = ""
+	reporter.ToolStarted(context.Background(), "unknown_tool_without_step", json.RawMessage(`{"query":"secret-token-value"}`))
+
+	events, err := store.ExecutionEventsBySession(key, 0, 80)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	sources := progressSourcePayloads(events)
+	for _, want := range []string{progressSourceTypedTool, progressSourceMetadataTool, progressSourcePlanStep, progressSourceGenericFallback} {
+		if sources[want] == nil {
+			t.Fatalf("progress sources = %#v, missing %s", sources, want)
+		}
+	}
+	if label := payloadString(sources[progressSourceGenericFallback], "progress_label"); label != "Working through the request" {
+		t.Fatalf("generic fallback label = %q, want Working through the request", label)
+	}
+	for source, payload := range sources {
+		for _, leaked := range []string{"secret-token-value"} {
+			if strings.Contains(payloadString(payload, "progress_label"), leaked) || strings.Contains(payloadString(payload, "progress_key"), leaked) {
+				t.Fatalf("source %s leaked %q in payload %#v", source, leaked, payload)
+			}
+		}
+	}
+}
+
+func progressSourcePayloads(events []session.ExecutionEvent) map[string]map[string]any {
+	out := make(map[string]map[string]any)
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) != core.ExecutionEventProgressSurface {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			continue
+		}
+		source := strings.TrimSpace(payloadString(payload, "progress_source"))
+		if source != "" {
+			out[source] = payload
+		}
+	}
+	return out
+}
+
+func TestStatusSummarizesProgressSourceEvents(t *testing.T) {
+	payload := map[string]any{"progress_source": "generic_fallback", "progress_label": "Working through the request", "tool": "unknown_tool"}
+	got := summarizeExecutionEventPayload(core.ExecutionEventProgressSurface, "source", payload)
+	for _, want := range []string{"source=generic_fallback", "label=Working through the request", "tool=unknown_tool"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary = %q, missing %q", got, want)
+		}
+	}
+}
+
 func TestRuntimeLockSessionDoesNotWriteExecutionEvent(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)

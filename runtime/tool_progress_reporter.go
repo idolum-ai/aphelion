@@ -52,9 +52,48 @@ type toolProgressReporter struct {
 }
 
 type toolProgressEntry struct {
-	Key   string
-	Text  string
-	Count int
+	Key    string
+	Text   string
+	Count  int
+	Source string
+}
+
+const (
+	progressSourceTypedTool       = "typed_tool"
+	progressSourceMetadataTool    = "metadata_tool"
+	progressSourcePlanStep        = "plan_step"
+	progressSourceGenericFallback = "generic_fallback"
+	progressSourceSurface         = "progress_surface"
+	progressSourceRawTool         = "raw_tool"
+)
+
+func normalizeProgressSource(source string) string {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return progressSourceGenericFallback
+	}
+	return source
+}
+
+func (p *toolProgressReporter) recordProgressSource(entry toolProgressEntry) {
+	if p == nil || p.runtime == nil {
+		return
+	}
+	source := normalizeProgressSource(entry.Source)
+	payload := map[string]any{
+		"run_id":          p.runID,
+		"progress_key":    strings.TrimSpace(entry.Key),
+		"progress_label":  strings.TrimSpace(entry.Text),
+		"progress_source": source,
+	}
+	if strings.HasPrefix(entry.Key, "task:") {
+		payload["tool"] = strings.TrimPrefix(entry.Key, "task:")
+	} else if strings.HasPrefix(entry.Key, "metadata:") {
+		payload["tool"] = strings.TrimPrefix(entry.Key, "metadata:")
+	} else if strings.HasPrefix(entry.Key, "raw:") {
+		payload["tool"] = strings.TrimPrefix(entry.Key, "raw:")
+	}
+	p.recordProgressEvent(core.ExecutionEventProgressSurface, "source", payload)
 }
 
 func (r *Runtime) newToolProgressReporter(key session.SessionKey, msg core.InboundMessage, audit *turnAuditRecorder) *toolProgressReporter {
@@ -210,10 +249,11 @@ func (p *toolProgressReporter) ToolStarted(ctx context.Context, name string, inp
 		p.startedAt = time.Now().UTC()
 	}
 	p.observePlanToolInput(name, input)
+	entry := p.makeEntry(name, input)
 	if p.style != "raw" && isProgressMetadataTool(name) {
+		p.recordProgressSource(entry)
 		return
 	}
-	entry := p.makeEntry(name, input)
 
 	update := false
 	switch p.mode {
@@ -269,8 +309,9 @@ func (p *toolProgressReporter) Surface(ctx context.Context, text string) {
 		"text":   normalized,
 	})
 	entry := toolProgressEntry{
-		Key:  "surface:" + normalized,
-		Text: normalized,
+		Key:    "surface:" + normalized,
+		Text:   normalized,
+		Source: progressSourceSurface,
 	}
 	if !p.addEntry(entry) {
 		return

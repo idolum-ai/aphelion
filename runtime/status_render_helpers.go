@@ -179,6 +179,20 @@ func summarizeExecutionEventPayload(eventType string, eventStatus string, payloa
 			parts = append(parts, "status="+status)
 		}
 		return strings.TrimSpace(strings.Join(parts, " "))
+	case core.ExecutionEventProgressSurface:
+		parts := make([]string, 0, 4)
+		if source := strings.TrimSpace(payloadString(payload, "progress_source")); source != "" {
+			parts = append(parts, "source="+source)
+		}
+		if label := strings.TrimSpace(payloadString(payload, "progress_label")); label != "" {
+			parts = append(parts, "label="+truncateStatusDiagnostic(label, 80))
+		}
+		if toolName := strings.TrimSpace(payloadString(payload, "tool")); toolName != "" {
+			parts = append(parts, "tool="+toolName)
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, " ")
+		}
 	}
 	if len(payload) == 0 {
 		return ""

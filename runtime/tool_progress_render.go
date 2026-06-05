@@ -383,7 +383,18 @@ func (p *toolProgressReporter) addEntry(entry toolProgressEntry) bool {
 	if p == nil {
 		return false
 	}
-	return appendOrAggregateProgressEntry(&p.entries, entry)
+	entry.Key = strings.TrimSpace(entry.Key)
+	entry.Text = strings.TrimSpace(entry.Text)
+	entry.Source = normalizeProgressSource(entry.Source)
+	if entry.Key == "" || entry.Text == "" {
+		return false
+	}
+	before := len(p.entries)
+	changed := appendOrAggregateProgressEntry(&p.entries, entry)
+	if changed && len(p.entries) > before {
+		p.recordProgressSource(entry)
+	}
+	return changed
 }
 
 func (p *toolProgressReporter) makeEntry(name string, input json.RawMessage) toolProgressEntry {
@@ -410,8 +421,9 @@ func (p *toolProgressReporter) observePlanToolInput(name string, input json.RawM
 
 func rawToolProgressEntry(name string, input json.RawMessage) toolProgressEntry {
 	return toolProgressEntry{
-		Key:  name,
-		Text: safeRawToolProgressEventText(name, toolInputPreview(input)),
+		Key:    "raw:" + strings.TrimSpace(name),
+		Text:   safeRawToolProgressEventText(name, toolInputPreview(input)),
+		Source: progressSourceRawTool,
 	}
 }
 
@@ -422,28 +434,25 @@ func semanticToolProgressEntry(name string, input json.RawMessage, currentStep s
 	name = strings.TrimSpace(name)
 	switch name {
 	case "update_plan":
-		return toolProgressEntry{Key: "metadata:plan", Text: "Updating plan metadata"}
+		return toolProgressEntry{Key: "metadata:plan", Text: "Updating plan metadata", Source: progressSourceMetadataTool}
 	case "update_operation":
-		return toolProgressEntry{Key: "metadata:operation", Text: "Updating operation metadata"}
+		return toolProgressEntry{Key: "metadata:operation", Text: "Updating operation metadata", Source: progressSourceMetadataTool}
 	}
 	if label := progressToolEvidenceLabel(name, input); label != "" {
-		return toolProgressEntry{Key: "task:" + name, Text: label}
+		return toolProgressEntry{Key: "task:" + name, Text: label, Source: progressSourceTypedTool}
 	}
-	// TODO(progress-headline): emit a presentation-source execution event for the
-	// selected branch (typed tool, metadata tool, plan step, generic fallback)
-	// before using fallback distribution to decide whether Layer C is warranted.
 	contextLabel := strings.TrimSpace(currentStep)
 	if contextLabel != "" {
-		return toolProgressEntry{Key: "task:" + name, Text: "Working on " + contextLabel}
+		return toolProgressEntry{Key: "task:" + name, Text: "Working on " + contextLabel, Source: progressSourcePlanStep}
 	}
-	return toolProgressEntry{Key: "task:" + name, Text: "Working through the request"}
+	return toolProgressEntry{Key: "task:" + name, Text: "Working through the request", Source: progressSourceGenericFallback}
 }
 
 func summaryToolProgressEntry(name string, input json.RawMessage, currentStep string, taskSummary string) toolProgressEntry {
 	entry := semanticToolProgressEntry(name, input, currentStep, taskSummary)
 	switch strings.TrimSpace(entry.Text) {
 	case "Searching files", "Reading file", "Reading file evidence", "Listing directory":
-		return toolProgressEntry{Key: "task:file_exploration", Text: "Exploring files", Count: entry.Count}
+		return toolProgressEntry{Key: "task:file_exploration", Text: "Exploring files", Count: entry.Count, Source: entry.Source}
 	default:
 		return entry
 	}
