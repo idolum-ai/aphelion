@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/idolum-ai/aphelion/core"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,27 @@ func (m *mockProvider) Complete(ctx context.Context, messages []Message, tools [
 	complete := m.complete
 	m.mu.Unlock()
 	return complete(ctx, call, messages, tools)
+}
+
+type mockOptionsProvider struct {
+	mu       sync.Mutex
+	calls    int
+	seenOpts []CompleteOptions
+	complete func(ctx context.Context, call int, opts CompleteOptions, messages []Message, tools []ToolDef) (*Response, error)
+}
+
+func (m *mockOptionsProvider) Complete(ctx context.Context, messages []Message, tools []ToolDef) (*Response, error) {
+	return m.CompleteWithOptions(ctx, messages, tools, CompleteOptions{})
+}
+
+func (m *mockOptionsProvider) CompleteWithOptions(ctx context.Context, messages []Message, tools []ToolDef, opts CompleteOptions) (*Response, error) {
+	m.mu.Lock()
+	m.calls++
+	call := m.calls
+	m.seenOpts = append(m.seenOpts, opts)
+	complete := m.complete
+	m.mu.Unlock()
+	return complete(ctx, call, opts, messages, tools)
 }
 
 type toolInvocation struct {
@@ -123,14 +145,16 @@ func defaultBudget() *Budget {
 	}
 }
 
-func TestRunTurnRetriesEmptySuccessfulResponseWithProviderDefaultTokens(t *testing.T) {
-	provider := &mockProvider{complete: func(ctx context.Context, call int, messages []Message, tools []ToolDef) (*Response, error) {
-		if call == 1 {
-			return &Response{Content: "", Usage: core.TokenUsage{OutputTokens: 2048}}, nil
+func TestRunTurnRetriesEmptySuccessfulResponseWithIncreasingTokenBudget(t *testing.T) {
+	provider := &mockOptionsProvider{complete: func(ctx context.Context, call int, opts CompleteOptions, messages []Message, tools []ToolDef) (*Response, error) {
+		switch call {
+		case 1, 2:
+			return &Response{Content: "", Usage: core.TokenUsage{OutputTokens: int64(opts.MaxTokens)}}, nil
+		default:
+			return &Response{Content: "recovered", Usage: core.TokenUsage{OutputTokens: 3}}, nil
 		}
-		return &Response{Content: "recovered", Usage: core.TokenUsage{OutputTokens: 3}}, nil
 	}}
-	opts := &CompleteOptions{MaxTokens: 4096}
+	opts := &CompleteOptions{MaxTokens: 2048}
 
 	result, history, err := RunTurn(context.Background(), provider, nil, defaultBudget(), opts, []Message{{Role: "user", Content: "continue"}})
 	if err != nil {
@@ -139,14 +163,48 @@ func TestRunTurnRetriesEmptySuccessfulResponseWithProviderDefaultTokens(t *testi
 	if result.Text != "recovered" {
 		t.Fatalf("result.Text = %q, want recovered", result.Text)
 	}
-	if opts.MaxTokens != 0 {
-		t.Fatalf("opts.MaxTokens = %d, want cleared provider default retry", opts.MaxTokens)
+	if opts.MaxTokens != 8192 {
+		t.Fatalf("opts.MaxTokens = %d, want final retry cap 8192", opts.MaxTokens)
 	}
-	if opts.EmptyRetry == nil || !opts.EmptyRetry.Retried {
-		t.Fatalf("opts.EmptyRetry = %#v, want retried", opts.EmptyRetry)
+	if opts.EmptyRetry == nil || opts.EmptyRetry.Retries != 2 {
+		t.Fatalf("opts.EmptyRetry = %#v, want 2 retries", opts.EmptyRetry)
+	}
+	if got := provider.seenMaxTokens(); !reflect.DeepEqual(got, []int{2048, 4096, 8192}) {
+		t.Fatalf("seen MaxTokens = %#v, want [2048 4096 8192]", got)
 	}
 	if len(history) != 2 {
 		t.Fatalf("history len = %d, want user plus recovered assistant only", len(history))
+	}
+}
+
+func (m *mockOptionsProvider) seenMaxTokens() []int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]int, 0, len(m.seenOpts))
+	for _, opts := range m.seenOpts {
+		out = append(out, opts.MaxTokens)
+	}
+	return out
+}
+
+func TestRunTurnStopsEmptySuccessfulRetryAtMaxTokenBudget(t *testing.T) {
+	provider := &mockOptionsProvider{complete: func(ctx context.Context, call int, opts CompleteOptions, messages []Message, tools []ToolDef) (*Response, error) {
+		return &Response{Content: "", Usage: core.TokenUsage{OutputTokens: int64(opts.MaxTokens)}}, nil
+	}}
+	opts := &CompleteOptions{MaxTokens: 2048}
+
+	result, history, err := RunTurn(context.Background(), provider, nil, defaultBudget(), opts, []Message{{Role: "user", Content: "continue"}})
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "" {
+		t.Fatalf("result.Text = %q, want final empty response after retry budget exhausted", result.Text)
+	}
+	if got := provider.seenMaxTokens(); !reflect.DeepEqual(got, []int{2048, 4096, 8192}) {
+		t.Fatalf("seen MaxTokens = %#v, want capped retries [2048 4096 8192]", got)
+	}
+	if len(history) != 2 {
+		t.Fatalf("history len = %d, want user plus final empty assistant only", len(history))
 	}
 }
 
@@ -161,7 +219,7 @@ func TestRunTurnDoesNotRetryEmptyResponseWithToolCall(t *testing.T) {
 	opts := &CompleteOptions{MaxTokens: 4096}
 
 	_, _, _ = RunTurn(context.Background(), provider, tools, &Budget{Max: 1}, opts, []Message{{Role: "user", Content: "use tool"}})
-	if opts.EmptyRetry != nil && opts.EmptyRetry.Retried {
+	if opts.EmptyRetry != nil && opts.EmptyRetry.Retries != 0 {
 		t.Fatalf("empty retry triggered for tool-call response")
 	}
 }

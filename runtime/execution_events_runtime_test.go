@@ -93,6 +93,9 @@ func TestRuntimeRecordsProviderAttemptSucceededTokenCacheTelemetry(t *testing.T)
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
 	}
 	payload := payloadForEventType(events, core.ExecutionEventProviderAttemptSucceeded)
+	if got, ok := payload["provider"].(string); !ok || got == "" {
+		t.Fatalf("payload provider = %q/%t, want provider metadata in %#v", got, ok, payload)
+	}
 	for field, want := range map[string]int64{
 		"input_tokens":                100,
 		"output_tokens":               10,

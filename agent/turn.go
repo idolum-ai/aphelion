@@ -162,7 +162,7 @@ type ProviderFailoverState struct {
 // EmptySuccessRetryState records when a successful provider response was
 // semantically empty and retried with relaxed per-run limits.
 type EmptySuccessRetryState struct {
-	Retried bool
+	Retries int
 }
 
 type ContextBudget struct {
@@ -501,10 +501,9 @@ func completeWithRetry(
 		}
 		finishModelRequest(ctx, observer, event, started, resp, err)
 		if err == nil {
-			if shouldRetryEmptySuccess(resp, opts) {
-				markEmptySuccessRetried(opts)
-				relaxMaxTokensForRetry(opts)
-				log.Printf("WARN provider returned empty successful response; retrying with relaxed max_tokens")
+			if retryMaxTokens, ok := nextEmptySuccessRetryMaxTokens(resp, opts); ok {
+				markEmptySuccessRetried(opts, retryMaxTokens)
+				log.Printf("WARN provider returned empty successful response; retrying with max_tokens=%d", retryMaxTokens)
 				attempt++
 				continue
 			}
@@ -530,33 +529,38 @@ func completeWithRetry(
 	}
 }
 
-func shouldRetryEmptySuccess(resp *Response, opts *CompleteOptions) bool {
+const (
+	emptySuccessRetryInitialMaxTokens = 2048
+	emptySuccessRetryMaxTokens        = 8192
+)
+
+func nextEmptySuccessRetryMaxTokens(resp *Response, opts *CompleteOptions) (int, bool) {
 	if resp == nil || opts == nil {
-		return false
+		return 0, false
 	}
-	if opts.EmptyRetry != nil && opts.EmptyRetry.Retried {
-		return false
+	if strings.TrimSpace(resp.Content) != "" || len(resp.ToolCalls) != 0 || len(resp.Media) != 0 {
+		return 0, false
 	}
-	return strings.TrimSpace(resp.Content) == "" && len(resp.ToolCalls) == 0 && len(resp.Media) == 0
+	current := opts.MaxTokens
+	if current <= 0 || current < emptySuccessRetryInitialMaxTokens {
+		current = emptySuccessRetryInitialMaxTokens
+	}
+	next := current * 2
+	if next <= current || next > emptySuccessRetryMaxTokens {
+		return 0, false
+	}
+	return next, true
 }
 
-func markEmptySuccessRetried(opts *CompleteOptions) {
+func markEmptySuccessRetried(opts *CompleteOptions, maxTokens int) {
 	if opts == nil {
 		return
 	}
 	if opts.EmptyRetry == nil {
 		opts.EmptyRetry = &EmptySuccessRetryState{}
 	}
-	opts.EmptyRetry.Retried = true
-}
-
-func relaxMaxTokensForRetry(opts *CompleteOptions) {
-	if opts == nil {
-		return
-	}
-	// Clearing the per-run override lets provider constructors fall back to their
-	// configured defaults, preserving older behavior after an empty-success turn.
-	opts.MaxTokens = 0
+	opts.EmptyRetry.Retries++
+	opts.MaxTokens = maxTokens
 }
 
 func modelRequestEvent(attempt int, historyCount int, toolCount int, preflight contextPreflight) ModelRequestEvent {

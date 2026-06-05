@@ -693,6 +693,35 @@ func TestBuildFacePromptIncludesRuntimeFactsForAdjudications(t *testing.T) {
 	}
 }
 
+func TestGovernorRuntimeAwarenessRetainsMediaAndVoiceSignals(t *testing.T) {
+	t.Parallel()
+
+	aw := RuntimeAwareness{
+		SessionKind:     "interactive",
+		RunKind:         "interactive",
+		Channel:         "telegram",
+		MediaAttached:   true,
+		MediaMode:       "voice",
+		InboundWasVoice: true,
+	}
+	governor := renderGovernorRuntimeAwarenessBlock(aw)
+	face := renderFaceAwarenessBlock(aw)
+	for _, want := range []string{"media_attached: true", "media_mode: voice"} {
+		if !strings.Contains(governor, want) {
+			t.Fatalf("governor awareness missing %q:\n%s", want, governor)
+		}
+		if !strings.Contains(face, want) {
+			t.Fatalf("face awareness missing shared media signal %q:\n%s", want, face)
+		}
+	}
+	if strings.Contains(governor, "inbound_was_voice") {
+		t.Fatalf("governor awareness leaked face-only voice presentation field:\n%s", governor)
+	}
+	if !strings.Contains(face, "inbound_was_voice: true") {
+		t.Fatalf("face awareness missing inbound voice field:\n%s", face)
+	}
+}
+
 func TestRuntimeAwarenessSharedLinesAreByteIdenticalAcrossRoles(t *testing.T) {
 	t.Parallel()
 
