@@ -427,3 +427,102 @@ func TestRenderTurnReplyFallsBackWhenFaceRenderReturnsPartialOperationalReply(t 
 		t.Fatalf("ReplyText kept partial face render: %q", result.ReplyText)
 	}
 }
+
+type streamingCountingFaceRenderer struct {
+	text   string
+	chunks []string
+	calls  int
+}
+
+func (r *streamingCountingFaceRenderer) Render(context.Context, face.RenderRequest) (string, error) {
+	r.calls++
+	return r.text, nil
+}
+
+func (r *streamingCountingFaceRenderer) RenderStream(ctx context.Context, _ face.RenderRequest, onChunk func(string) error) (string, error) {
+	r.calls++
+	for _, chunk := range r.chunks {
+		if err := onChunk(chunk); err != nil {
+			return "", err
+		}
+		select {
+		case <-ctx.Done():
+			return strings.Join(r.chunks, ""), ctx.Err()
+		default:
+		}
+	}
+	if r.text != "" {
+		return r.text, nil
+	}
+	return strings.Join(r.chunks, ""), nil
+}
+
+func TestRenderTurnReplyReconcilesStreamedFallbackToExistingMessage(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, _ := buildRuntimeFixtures(t)
+	sender := &fakeSender{}
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendProvider
+	rt.streamEditInterval = 0
+	renderer := &streamingCountingFaceRenderer{
+		text:   "The reinstall repair is clean now.\n\nEvidence:\n- Service is active as PID `100755`\n\nWhat likely happened: the direct",
+		chunks: []string{"The reinstall repair is clean now.", "\n\nEvidence:\n- Service is active as PID `100755`", "\n\nWhat likely happened: the direct"},
+	}
+	packet := core.MaterialPacket{
+		Facts: []string{
+			"Service active/running: PID `100755`.",
+			"Revision `37928e5ecc7f624a0284df26bf70b7b9ac89ddbd`.",
+			"`verify-deploy --format=kv` passed.",
+		},
+		SceneConstraints: []string{"Render the status in the face, but preserve completeness."},
+	}
+	floorText := packet.Text() + strings.Repeat("\n- Reinstall evidence remained available.", 8)
+	fallback := pipeline.SerializeFloorFallback(packet, floorText, pipeline.FallbackOptions{Channel: "telegram"})
+	key := session.SessionKey{ChatID: 916, UserID: 0}
+
+	result, err := rt.renderTurnReply(turnRenderInput{
+		Ctx:              context.Background(),
+		Key:              key,
+		Msg:              core.InboundMessage{ChatID: 916, MessageID: 44},
+		Result:           &core.TurnResult{Text: floorText},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		AllowStream:      true,
+		ReplyText:        fallback,
+		FloorText:        floorText,
+		MaterialFloor:    packet,
+		FallbackOpts:     pipeline.FallbackOptions{Channel: "telegram"},
+		FaceAwareness:    prompt.RuntimeAwareness{},
+		CurrentFaceModel: renderer,
+		PromptInput:      "continue",
+	})
+	if err != nil {
+		t.Fatalf("renderTurnReply() err = %v", err)
+	}
+	if !result.StreamedReply || result.OutboundID == 0 || result.OutboundType != "streaming" {
+		t.Fatalf("stream metadata = streamed:%v id:%d type:%q, want existing streaming message", result.StreamedReply, result.OutboundID, result.OutboundType)
+	}
+	if result.ReplyText != fallback {
+		t.Fatalf("ReplyText = %q, want fallback %q", result.ReplyText, fallback)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent = %d, want one initial streamed message", len(sender.sent))
+	}
+	if len(sender.editClear) == 0 {
+		t.Fatalf("editClear empty, want final stream edit plus fallback reconciliation")
+	}
+	got := sender.editClear[len(sender.editClear)-1].Text
+	if got != fallback {
+		t.Fatalf("last edited text = %q, want fallback %q", got, fallback)
+	}
+	if strings.Contains(got, "What likely happened: the direct") {
+		t.Fatalf("last edit kept partial streamed text: %q", got)
+	}
+}

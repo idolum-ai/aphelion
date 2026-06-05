@@ -267,7 +267,48 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 	}
 	output.ReplyText = enforceVisibleRecurrenceContract(output.ReplyText, stageResult.Runtime)
 
+	if stageResult.FallbackApplied && output.StreamedReply && output.OutboundID != 0 {
+		if err := r.reconcileStreamedFallback(input.Ctx, input.Key, input.Msg, output.OutboundID, output.ReplyText, stageResult.FallbackReason); err != nil {
+			log.Printf("WARN streamed face fallback reconciliation failed backend=%s message_id=%d reason=%s err=%v; forcing normal delivery", r.faceBackend, output.OutboundID, stageResult.FallbackReason, err)
+			r.recordExecutionEvent(input.Key, core.ExecutionEventStreamFallbackReconcileFail, "render", "failed", map[string]any{
+				"message_id": output.OutboundID,
+				"reason":     strings.TrimSpace(stageResult.FallbackReason),
+				"error":      trimError(err.Error()),
+			}, time.Now().UTC())
+			output.StreamedReply = false
+			output.OutboundID = 0
+			output.OutboundType = ""
+		} else {
+			r.recordExecutionEvent(input.Key, core.ExecutionEventStreamFallbackReconciled, "render", "edited", map[string]any{
+				"message_id": output.OutboundID,
+				"reason":     strings.TrimSpace(stageResult.FallbackReason),
+				"text_chars": len([]rune(strings.TrimSpace(output.ReplyText))),
+			}, time.Now().UTC())
+		}
+	}
+
 	return output, nil
+}
+
+func (r *Runtime) reconcileStreamedFallback(ctx context.Context, key session.SessionKey, msg core.InboundMessage, messageID int64, text string, reason string) error {
+	if r == nil || r.outbound == nil {
+		return fmt.Errorf("outbound sender unavailable")
+	}
+	if messageID == 0 {
+		return fmt.Errorf("streamed message id is missing")
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return fmt.Errorf("fallback text is empty")
+	}
+	visibleText := r.prefixTelegramPresentedText(r.telegramPresentationForMessage(msg), text)
+	if clearer, ok := r.outbound.(messageKeyboardClearer); ok {
+		return clearer.EditMessageTextWithoutInlineKeyboard(ctx, msg.ChatID, messageID, visibleText, "")
+	}
+	if editor, ok := r.outbound.(messageEditor); ok {
+		return editor.EditMessageText(ctx, msg.ChatID, messageID, visibleText, "")
+	}
+	return fmt.Errorf("outbound sender cannot edit streamed message")
 }
 
 func enforceVisibleRecurrenceContract(reply string, aw prompt.RuntimeAwareness) string {
