@@ -11,6 +11,16 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
+const (
+	interactiveRunMaxTokens = 2048
+	heartbeatRunMaxTokens   = 1024
+	cronRunMaxTokens        = 1024
+	recoveryRunMaxTokens    = 1024
+	doctorRunMaxTokens      = 4096
+	faceRenderMaxTokens     = 512
+	compactionMaxTokens     = 512
+)
+
 func reasoningOptionsForRun(cfg *config.Config, kind session.TurnRunKind) *agent.CompleteOptions {
 	if cfg == nil {
 		return nil
@@ -41,6 +51,22 @@ func reasoningOptionsForRun(cfg *config.Config, kind session.TurnRunKind) *agent
 			Effort:  agent.ReasoningEffort(effort),
 			Summary: agent.ReasoningSummaryMode(summary),
 		},
+		MaxTokens: maxTokensForRunKind(kind),
+	}
+}
+
+func maxTokensForRunKind(kind session.TurnRunKind) int {
+	switch kind {
+	case session.TurnRunKindDoctor:
+		return doctorRunMaxTokens
+	case session.TurnRunKindHeartbeat:
+		return heartbeatRunMaxTokens
+	case session.TurnRunKindCron:
+		return cronRunMaxTokens
+	case session.TurnRunKindRecovery:
+		return recoveryRunMaxTokens
+	default:
+		return interactiveRunMaxTokens
 	}
 }
 

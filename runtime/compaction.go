@@ -136,7 +136,11 @@ func (r *Runtime) buildCompactionSummary(ctx context.Context, sess *session.Sess
 		},
 	}
 
-	resp, err := completeProvider(ctx, r.provider, messages, nil, r.reasoningOptionsForRun(session.TurnRunKindHeartbeat))
+	opts := r.reasoningOptionsForRun(session.TurnRunKindHeartbeat)
+	if opts != nil {
+		opts.MaxTokens = compactionMaxTokens
+	}
+	resp, err := completeProvider(ctx, r.provider, messages, nil, opts)
 	if err != nil {
 		return "", err
 	}

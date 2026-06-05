@@ -537,8 +537,8 @@ func Default() Config {
 				Model:         "claude-sonnet-4-6",
 				MaxTokens:     4096,
 				ContextWindow: 200000,
-				CacheStrategy: "explicit",
-				CacheTTL:      "5m",
+				CacheStrategy: "hybrid",
+				CacheTTL:      "1h",
 			},
 			OpenAI: OpenAIProviderConfig{
 				BaseURL:        "https://api.openai.com/v1",

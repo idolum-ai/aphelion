@@ -68,13 +68,13 @@ func (o *Ollama) Complete(ctx context.Context, messages []agent.Message, tools [
 	return o.CompleteWithOptions(ctx, messages, tools, agent.CompleteOptions{})
 }
 
-func (o *Ollama) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, _ agent.CompleteOptions) (*agent.Response, error) {
+func (o *Ollama) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
 	reqBody := ollamaRequest{
 		Model:    o.model,
 		Messages: toOllamaMessages(messages),
 		Tools:    toOllamaTools(tools),
 		Stream:   false,
-		Options:  ollamaOptions{NumPredict: o.maxTokens},
+		Options:  ollamaOptions{NumPredict: resolveMaxTokens(o.maxTokens, opts)},
 	}
 
 	var buf bytes.Buffer
@@ -112,13 +112,13 @@ func (o *Ollama) Stream(ctx context.Context, messages []agent.Message, tools []a
 	return o.StreamWithOptions(ctx, messages, tools, agent.CompleteOptions{}, cb)
 }
 
-func (o *Ollama) StreamWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, _ agent.CompleteOptions, cb agent.StreamCallback) (*agent.Response, error) {
+func (o *Ollama) StreamWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback) (*agent.Response, error) {
 	reqBody := ollamaRequest{
 		Model:    o.model,
 		Messages: toOllamaMessages(messages),
 		Tools:    toOllamaTools(tools),
 		Stream:   true,
-		Options:  ollamaOptions{NumPredict: o.maxTokens},
+		Options:  ollamaOptions{NumPredict: resolveMaxTokens(o.maxTokens, opts)},
 	}
 
 	var buf bytes.Buffer

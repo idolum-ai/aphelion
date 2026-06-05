@@ -16,7 +16,7 @@ func (a *Anthropic) buildRequest(messages []agent.Message, tools []agent.ToolDef
 	systemPrompt, reqMessages := splitMessages(messages, a.cache)
 	reqBody := anthropicRequest{
 		Model:     a.model,
-		MaxTokens: a.maxTokens,
+		MaxTokens: resolveMaxTokens(a.maxTokens, opts),
 		System:    systemPrompt,
 		Messages:  toAnthropicMessages(reqMessages),
 		Stream:    stream,
