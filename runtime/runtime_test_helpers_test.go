@@ -366,6 +366,7 @@ type fakeSender struct {
 	sendErr         error
 	sendErrAfter    int
 	voice           []voiceSend
+	documents       []documentSend
 	actions         []chatAction
 	edits           []messageEdit
 	editClear       []messageEdit
@@ -585,11 +586,25 @@ type voiceSend struct {
 	ReplyTo *int64
 }
 
+type documentSend struct {
+	ChatID  int64
+	Media   core.Media
+	Caption string
+	ReplyTo *int64
+}
+
 func (f *fakeSender) SendVoiceMessage(_ context.Context, chatID int64, media core.Media, replyTo *int64) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.voice = append(f.voice, voiceSend{ChatID: chatID, Media: media, ReplyTo: replyTo})
 	return int64(len(f.voice)), nil
+}
+
+func (f *fakeSender) SendDocumentMessage(_ context.Context, chatID int64, media core.Media, caption string, replyTo *int64) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.documents = append(f.documents, documentSend{ChatID: chatID, Media: media, Caption: caption, ReplyTo: replyTo})
+	return int64(len(f.documents)), nil
 }
 
 type fakeTranscriber struct {

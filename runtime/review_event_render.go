@@ -54,6 +54,14 @@ func FormatReviewEventCompactMessage(event session.ReviewEvent) string {
 }
 
 func FormatReviewEventDetailsMessage(event session.ReviewEvent) string {
+	return formatReviewEventDetails(event, false)
+}
+
+func FormatReviewEventDetailsMarkdown(event session.ReviewEvent) string {
+	return formatReviewEventDetails(event, true)
+}
+
+func formatReviewEventDetails(event session.ReviewEvent, markdownDocument bool) string {
 	lines := []string{FormatReviewEventMessage(event)}
 	meta, ok := parseReviewEventArtifactMetadata(event)
 	if ok && len(meta.ArtifactRefs) > 0 {

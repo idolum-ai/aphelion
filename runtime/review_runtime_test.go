@@ -454,6 +454,62 @@ func TestHandleInboundDeliversDurableReviewEventCompactWithExpandButton(t *testi
 	if button.Text != "Details" || button.CallbackData != core.EncodeReviewEventCallbackData(eventID, core.ReviewEventActionExpand) {
 		t.Fatalf("button = %#v, want expand callback for review event %d", button, eventID)
 	}
+	if len(sender.documents) != 1 {
+		t.Fatalf("documents len = %d, want safe details markdown attachment", len(sender.documents))
+	}
+	doc := sender.documents[0]
+	if doc.ChatID != 42 || doc.ReplyTo == nil || *doc.ReplyTo != 1 {
+		t.Fatalf("document routing = chat:%d reply:%v, want reply to compact review", doc.ChatID, doc.ReplyTo)
+	}
+	if doc.Media.Type != "document" || doc.Media.MimeType != "text/markdown; charset=utf-8" || !strings.HasSuffix(doc.Media.Filename, ".md") {
+		t.Fatalf("document media = %#v, want markdown document", doc.Media)
+	}
+	body := string(doc.Media.Data)
+	for _, want := range []string{"**Review: image2**", "**Metadata**", "external_channel_status: wake_completed", "projection: runtime.FormatReviewEventDetailsMessage"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("document body = %q, want %q", body, want)
+		}
+	}
+}
+
+func TestDeliverReviewEventsAttachmentUsesSafeRedactedProjection(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 43, Scope: telegramDMScopeRef(43)}
+	sess := &session.Session{}
+	_, err = store.InsertReviewEvent(session.ReviewEvent{
+		SourceChatID:      -200,
+		SourceUserID:      0,
+		SourceRole:        "durable_agent",
+		SourceScope:       session.ScopeRef{Kind: session.ScopeKindDurableAgent, DurableAgentID: "mail-child"},
+		TargetAdminChatID: 43,
+		TargetScope:       telegramDMScopeRef(43),
+		Summary:           "durable_agent=mail-child channel=external_channel\nsummary: External-channel wake blocked because mailbox adapter credentials need a passphrase prompt.\nrisks: external_channel",
+		MetadataJSON:      `{"agent_id":"mail-child","summary":"[REDACTED: summary]","interval_label":"2026-05-08T02:50:01Z","risk_flags":["external_channel"],"artifact_refs":["forensic://durable-agent/mail-child/private-sidecar"],"metadata":{"forensic_ref":"forensic://durable-agent/mail-child/private-sidecar","redacted_fields":"summary","redaction_action":"quarantined_fields"}}`,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+	if err := rt.deliverReviewEvents(context.Background(), key, sess); err != nil {
+		t.Fatalf("deliverReviewEvents() err = %v", err)
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.documents) != 1 {
+		t.Fatalf("documents len = %d, want one safe details attachment", len(sender.documents))
+	}
+	body := string(sender.documents[0].Media.Data)
+	if !strings.Contains(body, "redacted_fields: summary") || !strings.Contains(body, "Raw redacted text is stored only in the local forensic sidecar") {
+		t.Fatalf("document body = %q, want redacted safe projection", body)
+	}
+	if strings.Contains(body, "private-sidecar contents") || strings.Contains(body, "sk-test") {
+		t.Fatalf("document body = %q, leaked raw/private content", body)
+	}
 }
 
 func TestDeliverReviewEventsMarksOlderCapabilityCardStale(t *testing.T) {
