@@ -80,6 +80,8 @@ func (r *Runtime) writeDoctorExecutionEvents(ctx context.Context, b *strings.Bui
 		writeDoctorEvents(b, chatEvents, 20)
 		WriteLine(b, "approval_bundle_width_last_24h:")
 		writeDoctorApprovalBundleWidth(b, chatEvents, 8)
+		WriteLine(b, "continuation_self_block_repair_last_24h:")
+		writeDoctorContinuationCompileRepair(b, chatEvents, 8)
 	}
 	recentEvents, err := r.store.ExecutionEventsRecent(80)
 	if err != nil {
@@ -192,6 +194,52 @@ func writeDoctorApprovalBundleWidth(b *strings.Builder, events []session.Executi
 			if value := payloadString(payload, key); value != "" {
 				parts = append(parts, key+"="+value)
 			}
+		}
+		WriteLine(b, fmt.Sprintf("- time=%s chat_id=%d seq=%d %s",
+			event.CreatedAt.UTC().Format(time.RFC3339),
+			event.ChatID,
+			event.Seq,
+			strings.Join(parts, " "),
+		))
+		written++
+		if written >= limit {
+			break
+		}
+	}
+	if written == 0 {
+		WriteLine(b, "- none")
+	}
+}
+
+func writeDoctorContinuationCompileRepair(b *strings.Builder, events []session.ExecutionEvent, limit int) {
+	if len(events) == 0 {
+		WriteLine(b, "- none")
+		return
+	}
+	if limit <= 0 {
+		limit = len(events)
+	}
+	ordered := append([]session.ExecutionEvent(nil), events...)
+	sort.Slice(ordered, func(i, j int) bool { return executionEventBefore(ordered[i], ordered[j]) })
+	written := 0
+	for i := len(ordered) - 1; i >= 0; i-- {
+		event := ordered[i]
+		eventType := strings.TrimSpace(event.EventType)
+		switch eventType {
+		case core.ExecutionEventContinuationCompileRepaired, core.ExecutionEventContinuationCompileRepairExhausted, core.ExecutionEventContinuationCompileUnknownReason:
+		default:
+			continue
+		}
+		payload := executionEventPayload(event.PayloadJSON)
+		parts := make([]string, 0, 9)
+		parts = append(parts, "type="+eventType)
+		for _, key := range []string{"repair_kind", "normalized_reason", "phase_id", "repair_phase_id", "blocked_phase_id", "operation_id", "phase_plan_id", "materialization_source", "authority_contract_summary"} {
+			if value := payloadString(payload, key); value != "" {
+				parts = append(parts, key+"="+strconv.Quote(truncatePreview(value, 180)))
+			}
+		}
+		if count := payloadString(payload, "authority_contract_contradiction_count"); count != "" {
+			parts = append(parts, "authority_contract_contradiction_count="+count)
 		}
 		WriteLine(b, fmt.Sprintf("- time=%s chat_id=%d seq=%d %s",
 			event.CreatedAt.UTC().Format(time.RFC3339),

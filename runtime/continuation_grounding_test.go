@@ -179,7 +179,7 @@ func TestRenderContinuationPromptUsesAnonymousFaceNameInRepairNotes(t *testing.T
 	}
 }
 
-func TestHandleInboundSkipsContinuationWhenPersonaRationaleMissing(t *testing.T) {
+func TestHandleInboundRepairsContinuationWhenPersonaRationaleMissing(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -233,50 +233,67 @@ func TestHandleInboundSkipsContinuationWhenPersonaRationaleMissing(t *testing.T)
 	}
 
 	sender.mu.Lock()
-	defer sender.mu.Unlock()
-	if len(sender.inline) != 0 {
-		t.Fatalf("inline count = %d, want 0 without persona rationale", len(sender.inline))
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[inlineCount-1].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one read-only repair approval without persona rationale", inlineCount)
+	}
+	if !strings.Contains(inlineText, "Rebuild continuation rationale") || strings.Contains(inlineText, "persona_rationale_missing") {
+		t.Fatalf("inline text = %q, want normal repair approval without raw reason", inlineText)
 	}
 
 	state, err := store.ContinuationState(session.SessionKey{ChatID: 8111, UserID: 0})
 	if err != nil {
 		t.Fatalf("ContinuationState() err = %v", err)
 	}
-	if state.Status != session.ContinuationStatusIdle {
-		t.Fatalf("status = %q, want idle when clearing stale pending continuation", state.Status)
+	if state.Status != session.ContinuationStatusPending {
+		t.Fatalf("status = %q, want pending repair continuation", state.Status)
 	}
-	if state.DecisionID != "" {
-		t.Fatalf("decision id = %q, want cleared", state.DecisionID)
+	if state.DecisionID == "" {
+		t.Fatalf("decision id = empty, want repair decision")
 	}
-	if state.PersonaIntent.Decision != session.ContinuationIntentDecisionContinue {
-		t.Fatalf("persona decision = %q, want continue when explicit intent is present", state.PersonaIntent.Decision)
+	if state.HandshakeBlockedReason != "" {
+		t.Fatalf("handshake blocked reason = %q, want cleared for repair approval", state.HandshakeBlockedReason)
 	}
-	if state.HandshakeBlockedReason != "persona_rationale_missing" {
-		t.Fatalf("handshake blocked reason = %q, want persona_rationale_missing", state.HandshakeBlockedReason)
+	if !strings.Contains(state.ActionProposal.Summary, "Rebuild continuation rationale") {
+		t.Fatalf("action proposal = %#v, want rationale repair approval", state.ActionProposal)
+	}
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	opState = session.NormalizeOperationState(opState)
+	if len(opState.PhasePlan.Phases) != 2 {
+		t.Fatalf("phase count = %d, want repair phase plus original proposal phase", len(opState.PhasePlan.Phases))
+	}
+	repair := opState.PhasePlan.Phases[0]
+	original := opState.PhasePlan.Phases[1]
+	if !strings.HasPrefix(repair.ID, operationPersonaRationaleRepairPhasePrefix) || repair.AuthorityClass != "read_only_review" || !repair.RequiresApproval {
+		t.Fatalf("repair phase = %#v, want read-only persona-rationale repair", repair)
+	}
+	if !original.RequiresApproval || original.Status != session.PlanStatusPending {
+		t.Fatalf("original phase = %#v, want original work preserved for later approval", original)
 	}
 	events, err := store.ExecutionEventsBySession(key, 0, 200)
 	if err != nil {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
 	}
-	var blocked session.ExecutionEvent
+	var repaired session.ExecutionEvent
 	for _, event := range events {
-		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationBlocked {
-			blocked = event
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationCompileRepaired {
+			repaired = event
 		}
 	}
-	if blocked.ID == 0 {
-		t.Fatalf("events = %#v, want continuation.blocked event", events)
+	if repaired.ID == 0 {
+		t.Fatalf("events = %#v, want continuation.compile_repaired event", events)
 	}
-	payload := executionEventPayload(blocked.PayloadJSON)
-	if payloadString(payload, "reason") != state.HandshakeBlockedReason {
-		t.Fatalf("blocked payload reason = %q, want %q", payloadString(payload, "reason"), state.HandshakeBlockedReason)
-	}
-	remainingTurns, ok := payloadInt64(payload, "remaining_turns")
-	if !ok || remainingTurns != 0 {
-		t.Fatalf("blocked payload remaining_turns = %d (ok=%v), want 0", remainingTurns, ok)
-	}
-	if payloadString(payload, "state_source") != "continuation_state" {
-		t.Fatalf("blocked payload state_source = %q, want continuation_state", payloadString(payload, "state_source"))
+	payload := executionEventPayload(repaired.PayloadJSON)
+	if payloadString(payload, "repair_kind") != string(continuationCompileRepairPersonaRationale) || payloadString(payload, "normalized_reason") != "persona_rationale_missing" {
+		t.Fatalf("compile repair payload = %#v, want persona rationale repair", payload)
 	}
 }
 

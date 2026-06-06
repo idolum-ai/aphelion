@@ -56,3 +56,46 @@ func TestWriteDoctorApprovalBundleWidthSummarizesNarrowEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteDoctorContinuationCompileRepairSummarizesEvents(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	events := []session.ExecutionEvent{
+		{
+			ID:        1,
+			ChatID:    9048,
+			Seq:       1,
+			EventType: core.ExecutionEventContinuationCompileRepaired,
+			PayloadJSON: `{
+				"repair_kind":"clarify_authority_contract",
+				"normalized_reason":"invalid_authority_no_safe_repair",
+				"phase_id":"phase-deploy",
+				"repair_phase_id":"phase-clarify-authority-contract-for-phase-deploy",
+				"blocked_phase_id":"phase-deploy",
+				"operation_id":"op-deploy",
+				"phase_plan_id":"plan-deploy",
+				"materialization_source":"operation_phase_plan",
+				"authority_contract_summary":"invalid authority contract",
+				"authority_contract_contradiction_count":2
+			}`,
+			CreatedAt: now,
+		},
+	}
+	var b strings.Builder
+	writeDoctorContinuationCompileRepair(&b, events, 8)
+	text := b.String()
+	for _, want := range []string{
+		"type=continuation.compile_repaired",
+		"repair_kind=\"clarify_authority_contract\"",
+		"normalized_reason=\"invalid_authority_no_safe_repair\"",
+		"repair_phase_id=\"phase-clarify-authority-contract-for-phase-deploy\"",
+		"blocked_phase_id=\"phase-deploy\"",
+		"operation_id=\"op-deploy\"",
+		"authority_contract_contradiction_count=2",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("doctor compile repair text = %q, want %q", text, want)
+		}
+	}
+}

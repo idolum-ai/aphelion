@@ -92,6 +92,14 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		}
 		payload["user_visible"] = notify
 		payload["prior_active"] = priorExists && session.NormalizeContinuationState(priorState).Active()
+		if repaired, err := r.repairOrganicContinuationHandshakeCompileBlock(ctx, key, msg, consensus, state, strings.TrimSpace(consensus.BlockedReason), time.Now().UTC()); err != nil {
+			return err
+		} else if repaired {
+			return nil
+		}
+		if _, ok := continuationCompileRepairForReason(consensus.BlockedReason); !ok && strings.TrimSpace(consensus.BlockedReason) != "" {
+			r.recordContinuationCompileUnknownReason(key, consensus.OperationState, state, consensus.BlockedReason, "organic_continuation", notify, time.Now().UTC())
+		}
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", payload, time.Now().UTC())
 		if notify {
 			if err := r.sendContinuationBlockedNotice(ctx, key, msg, state); err != nil {

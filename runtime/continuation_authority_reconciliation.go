@@ -109,7 +109,7 @@ func safestContinuationRiskClassForAllowedActions(current string, allowed []stri
 	}
 }
 
-func (r *Runtime) materializeReconciledAuthorityApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, opState session.OperationState, state session.ContinuationState, source string, now time.Time) (session.OperationState, error) {
+func (r *Runtime) materializeReconciledAuthorityApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, opState session.OperationState, state session.ContinuationState, compilation session.AuthorityContractCompilation, source string, now time.Time) (session.OperationState, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -141,6 +141,11 @@ func (r *Runtime) materializeReconciledAuthorityApproval(ctx context.Context, ke
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return opState, err
 	}
+	phase, _ := operationPhaseFromInvalidMaterializedAuthority(opState, state, source)
+	r.recordContinuationCompileRepaired(key, opState, phase, state, compilation, "invalid_authority_contract", continuationCompileRepairAuthorityContract, source, map[string]any{
+		"repair_strategy": "remove_contradictory_allowed_actions",
+		"user_visible":    false,
+	}, now)
 	payload := continuationExecutionPayload(state)
 	payload["materialized_from"] = firstNonEmptyContinuation(source, "authority_reconciliation")
 	payload["reconciled_from_invalid_authority_contract"] = true
