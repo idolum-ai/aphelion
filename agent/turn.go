@@ -203,11 +203,12 @@ const (
 )
 
 const (
-	maxProviderRetries   = 3
-	initialRetryBackoff  = 100 * time.Millisecond
-	providerFailureReply = "Inference backend is unavailable. This turn did not complete. You can /stop to cancel current work and try again."
-	budgetExhaustedReply = "Iteration budget exhausted before final response."
-	planningOnlySteer    = "Your previous reply only described a plan. Do not restate the plan. Start executing now using available tools. Use update_plan only if the work is genuinely multi-step."
+	maxProviderRetries       = 3
+	initialRetryBackoff      = 100 * time.Millisecond
+	providerFailureReply     = "Inference backend is unavailable. This turn did not complete. You can /stop to cancel current work and try again."
+	budgetExhaustedReply     = "Iteration budget exhausted before final response."
+	toolBudgetExhaustedReply = "Tool-call budget exhausted before final response. Summarize progress and continue in a new turn."
+	planningOnlySteer        = "Your previous reply only described a plan. Do not restate the plan. Start executing now using available tools. Use update_plan only if the work is genuinely multi-step."
 )
 
 var sleepWithContextFn = sleepWithContext
@@ -327,6 +328,22 @@ func RunTurn(
 				TokenUsage:     resp.Usage,
 				ProviderEvents: append([]core.ProviderEvent(nil), providerEvents...),
 			}, history, nil
+		}
+
+		if budget != nil {
+			warning, exhausted := budget.AddToolCalls(len(resp.ToolCalls))
+			if exhausted {
+				log.Printf("WARN tool-call budget exhausted tool_calls=%d hard_limit=%d", budget.ToolCallCount+len(resp.ToolCalls), budget.ToolCallHardLimit)
+				return &core.TurnResult{
+					Text:           toolBudgetExhaustedReply,
+					ToolLog:        toolLog,
+					TokenUsage:     resp.Usage,
+					ProviderEvents: append([]core.ProviderEvent(nil), providerEvents...),
+				}, history, nil
+			}
+			if warning != "" {
+				pendingBudget = warning
+			}
 		}
 
 		if tools == nil {

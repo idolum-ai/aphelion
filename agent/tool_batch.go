@@ -153,7 +153,7 @@ func executeSerialToolBatch(
 	for _, call := range calls {
 		repairedInput, inputErr := repairToolInput(call.Input)
 		if inputErr != nil {
-			content := withBudgetWarning(fmt.Sprintf("tool_error: Invalid tool arguments for %s: %v", call.Name, inputErr), pendingBudget)
+			content := withBudgetWarning(renderToolFailure(toolFailure{OK: false, Code: "SCHEMA_VIOLATION", ShortReason: fmt.Sprintf("invalid tool arguments for %s", call.Name), RetryHint: "Reformulate"}), pendingBudget)
 			result.appendToolMessage(call, content, true)
 			continue
 		}
@@ -161,7 +161,7 @@ func executeSerialToolBatch(
 
 		requestSig, loopBlocked := loopGuard.shouldBlock(call)
 		if loopBlocked {
-			content := withBudgetWarning(fmt.Sprintf("tool_error: no-progress tool loop blocked for %s", call.Name), pendingBudget)
+			content := withBudgetWarning(renderToolFailure(toolFailure{OK: false, Code: "NO_PROGRESS_LOOP", ShortReason: fmt.Sprintf("no-progress tool loop blocked for %s", call.Name), RetryHint: "DoNotRetry"}), pendingBudget)
 			result.appendToolMessage(call, content, true)
 			continue
 		}
@@ -239,14 +239,78 @@ func (r *toolBatchResult) appendToolMessage(call ToolCall, content string, faile
 	})
 }
 
+type toolFailure struct {
+	OK          bool   `json:"ok"`
+	Code        string `json:"code"`
+	ShortReason string `json:"short_reason"`
+	RetryHint   string `json:"retry_hint"`
+}
+
 func toolResultContent(output string, err error) (string, bool) {
 	if err == nil {
 		return output, false
 	}
-	if output != "" {
-		return fmt.Sprintf("tool_error: %v\n%s", err, output), true
+	return renderToolFailure(classifyToolFailure(err, output)), true
+}
+
+func classifyToolFailure(err error, output string) toolFailure {
+	failure := toolFailure{
+		OK:          false,
+		Code:        "TOOL_ERROR",
+		ShortReason: shortToolFailureReason(err, output),
+		RetryHint:   "Reformulate",
 	}
-	return fmt.Sprintf("tool_error: %v", err), true
+	if errors.Is(err, context.Canceled) {
+		failure.Code = "CANCELED"
+		failure.RetryHint = "DoNotRetry"
+		return failure
+	}
+	lower := strings.ToLower(failure.ShortReason)
+	switch {
+	case strings.Contains(lower, "authority") || strings.Contains(lower, "approval") || strings.Contains(lower, "grant") || strings.Contains(lower, "permission") || strings.Contains(lower, "denied"):
+		failure.Code = "AUTHORITY_REJECTED"
+		failure.RetryHint = "AskForGrant(scope)"
+	case strings.Contains(lower, "deadline") || strings.Contains(lower, "timeout") || strings.Contains(lower, "timed out"):
+		failure.Code = "TIMEOUT"
+		failure.RetryHint = "RetryOnce"
+	}
+	return failure
+}
+
+func shortToolFailureReason(err error, output string) string {
+	parts := []string{}
+	if err != nil {
+		parts = append(parts, err.Error())
+	}
+	if strings.TrimSpace(output) != "" {
+		parts = append(parts, strings.TrimSpace(output))
+	}
+	reason := strings.Join(strings.Fields(strings.Join(parts, ": ")), " ")
+	if reason == "" {
+		reason = "tool execution failed"
+	}
+	if len(reason) > 140 {
+		reason = strings.TrimSpace(reason[:139]) + "…"
+	}
+	return reason
+}
+
+func renderToolFailure(failure toolFailure) string {
+	failure.OK = false
+	if strings.TrimSpace(failure.Code) == "" {
+		failure.Code = "TOOL_ERROR"
+	}
+	if strings.TrimSpace(failure.ShortReason) == "" {
+		failure.ShortReason = "tool execution failed"
+	}
+	if strings.TrimSpace(failure.RetryHint) == "" {
+		failure.RetryHint = "Reformulate"
+	}
+	data, err := json.Marshal(failure)
+	if err != nil {
+		return `{"ok":false,"code":"TOOL_ERROR","short_reason":"tool execution failed","retry_hint":"Reformulate"}`
+	}
+	return string(data)
 }
 
 func toolBatchNames(calls []ToolCall) []string {

@@ -2,13 +2,22 @@
 
 package agent
 
-// Budget tracks iteration usage for an agent turn.
+// Budget tracks iteration and tool-call usage for an agent turn.
 type Budget struct {
 	Max     int
 	Used    int
 	Caution float64
 	Warning float64
+
+	ToolCallCount     int
+	ToolCallSoftLimit int
+	ToolCallHardLimit int
 }
+
+const (
+	defaultToolCallSoftLimit = 15
+	defaultToolCallHardLimit = 30
+)
 
 // Tick consumes one iteration and reports warning text or exhaustion.
 func (b *Budget) Tick() (warning string, exhausted bool) {
@@ -25,4 +34,39 @@ func (b *Budget) Tick() (warning string, exhausted bool) {
 	default:
 		return "", false
 	}
+}
+
+// AddToolCalls records model-requested tool calls and reports soft/hard budget pressure.
+func (b *Budget) AddToolCalls(count int) (warning string, exhausted bool) {
+	if b == nil || count <= 0 {
+		return "", false
+	}
+	soft, hard := b.toolCallLimits()
+	if hard <= 0 {
+		b.ToolCallCount += count
+		return "", false
+	}
+	if b.ToolCallCount+count > hard {
+		return "", true
+	}
+	b.ToolCallCount += count
+	if soft > 0 && b.ToolCallCount >= soft {
+		return "⚠️ Tool-call budget is running high. Summarize progress and avoid nonessential tool calls.", false
+	}
+	return "", false
+}
+
+func (b *Budget) toolCallLimits() (soft int, hard int) {
+	soft = b.ToolCallSoftLimit
+	hard = b.ToolCallHardLimit
+	if soft <= 0 {
+		soft = defaultToolCallSoftLimit
+	}
+	if hard <= 0 {
+		hard = defaultToolCallHardLimit
+	}
+	if hard > 0 && soft > hard {
+		soft = hard
+	}
+	return soft, hard
 }

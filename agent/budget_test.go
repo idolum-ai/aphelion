@@ -92,3 +92,25 @@ func TestBudgetTick(t *testing.T) {
 		})
 	}
 }
+
+func TestBudgetAddToolCalls(t *testing.T) {
+	budget := Budget{ToolCallSoftLimit: 3, ToolCallHardLimit: 5}
+	if warning, exhausted := budget.AddToolCalls(2); warning != "" || exhausted {
+		t.Fatalf("first AddToolCalls warning=%q exhausted=%v, want no pressure", warning, exhausted)
+	}
+	if budget.ToolCallCount != 2 {
+		t.Fatalf("ToolCallCount = %d, want 2", budget.ToolCallCount)
+	}
+	if warning, exhausted := budget.AddToolCalls(1); warning == "" || exhausted {
+		t.Fatalf("soft AddToolCalls warning=%q exhausted=%v, want warning only", warning, exhausted)
+	}
+	if budget.ToolCallCount != 3 {
+		t.Fatalf("ToolCallCount = %d, want 3", budget.ToolCallCount)
+	}
+	if warning, exhausted := budget.AddToolCalls(3); warning != "" || !exhausted {
+		t.Fatalf("hard AddToolCalls warning=%q exhausted=%v, want hard stop", warning, exhausted)
+	}
+	if budget.ToolCallCount != 3 {
+		t.Fatalf("ToolCallCount changed after hard stop = %d, want 3", budget.ToolCallCount)
+	}
+}

@@ -6,8 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/idolum-ai/aphelion/core"
 	"reflect"
+
+	"github.com/idolum-ai/aphelion/core"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -709,6 +710,40 @@ func (e providerEventsError) ProviderEvents() []core.ProviderEvent {
 	return append([]core.ProviderEvent(nil), e.events...)
 }
 
+func TestRunTurnStopsBeforeExecutingBatchPastToolCallHardCap(t *testing.T) {
+	provider := &mockProvider{complete: func(_ context.Context, call int, messages []Message, _ []ToolDef) (*Response, error) {
+		if call != 1 {
+			t.Fatalf("unexpected provider call %d", call)
+		}
+		return &Response{ToolCalls: []ToolCall{
+			{ID: "tool-1", Name: "read_file", Input: json.RawMessage(`{"path":"a","offset":0,"limit":1}`)},
+			{ID: "tool-2", Name: "read_file", Input: json.RawMessage(`{"path":"b","offset":0,"limit":1}`)},
+		}}, nil
+	}}
+	executed := 0
+	tools := &mockTools{exec: func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+		executed++
+		return "ok", nil
+	}}
+	budget := defaultBudget()
+	budget.ToolCallSoftLimit = 1
+	budget.ToolCallHardLimit = 1
+
+	result, history, err := RunTurn(context.Background(), provider, tools, budget, nil, nil)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if executed != 0 {
+		t.Fatalf("executed tools = %d, want hard cap before execution", executed)
+	}
+	if result.Text != toolBudgetExhaustedReply {
+		t.Fatalf("result.Text = %q, want tool budget exhausted reply", result.Text)
+	}
+	if len(history) != 1 || len(history[0].ToolCalls) != 2 {
+		t.Fatalf("history = %#v, want assistant tool request preserved", history)
+	}
+}
+
 func TestRunTurnPreservesProviderEventsFromTerminalError(t *testing.T) {
 	provider := &mockProvider{
 		complete: func(_ context.Context, _ int, _ []Message, _ []ToolDef) (*Response, error) {
@@ -745,8 +780,20 @@ func TestToolError(t *testing.T) {
 				if last.Role != "tool" {
 					t.Fatalf("last role = %q, want tool", last.Role)
 				}
-				if !strings.Contains(last.Content, "tool_error: boom") {
-					t.Fatalf("tool error message = %q", last.Content)
+				if strings.Contains(last.Content, "tool_error:") {
+					t.Fatalf("tool error message = %q, want typed failure without legacy prefix", last.Content)
+				}
+				var failure struct {
+					OK          bool   `json:"ok"`
+					Code        string `json:"code"`
+					ShortReason string `json:"short_reason"`
+					RetryHint   string `json:"retry_hint"`
+				}
+				if err := json.Unmarshal([]byte(last.Content), &failure); err != nil {
+					t.Fatalf("decode typed tool failure %q: %v", last.Content, err)
+				}
+				if failure.OK || failure.Code != "TOOL_ERROR" || failure.ShortReason != "boom" || failure.RetryHint == "" {
+					t.Fatalf("failure = %#v, want bounded typed tool failure", failure)
 				}
 				return &Response{Content: "handled"}, nil
 			default:
