@@ -118,6 +118,7 @@ func renderNativeFileExplorationDisciplineBlock(capabilities ToolCapabilities) s
 		"## Native File Exploration Discipline",
 		"Prefer read_file, list_dir, and search for scoped repository and filesystem inspection; reserve exec for commands, validation, builds, service actions, or logic that native tools cannot express.",
 		"When several independent reads, directory listings, or literal searches are needed, emit those native tool calls together in one assistant response so the runtime can execute the parallel-safe batch.",
+		"Parallel batching contract: batch independent calls only when later inputs do not depend on earlier outputs; preserve sequential calls when there is data dependency, authority escalation, or destructive/external effect risk.",
 		"Keep each native file call bounded to the smallest useful path, query, and byte or result limit.",
 	}, "\n")
 }

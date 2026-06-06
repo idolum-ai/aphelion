@@ -45,6 +45,11 @@ type ParallelSafeToolRegistry interface {
 	SupportsParallelToolCall(name string, input json.RawMessage) bool
 }
 
+type BatchExecutionTelemetry interface {
+	ToolBatchStarted(ctx context.Context, event ToolBatchEvent)
+	ToolBatchFinished(ctx context.Context, event ToolBatchEvent)
+}
+
 type TurnObserver interface {
 	ModelRequestStarted(ctx context.Context, event ModelRequestEvent)
 	ModelRequestFinished(ctx context.Context, event ModelRequestEvent)
@@ -78,6 +83,7 @@ type ToolBatchEvent struct {
 	Mode                      string
 	BatchSize                 int
 	ToolNames                 []string
+	ParallelContract          string
 	Duration                  time.Duration
 	FailedCount               int
 	ParallelEligible          bool

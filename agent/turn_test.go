@@ -556,7 +556,7 @@ func TestRunTurnObserverRecordsModelRequestsAndToolBatches(t *testing.T) {
 	if len(observer.batchStarts) != 1 || observer.batchStarts[0].Mode != toolBatchModeParallel || observer.batchStarts[0].BatchSize != 2 {
 		t.Fatalf("batch starts = %#v, want one parallel batch", observer.batchStarts)
 	}
-	if !observer.batchStarts[0].ParallelEligible || observer.batchStarts[0].ParallelSafeCount != 2 || observer.batchStarts[0].ParallelBlockedReason != "" {
+	if !observer.batchStarts[0].ParallelEligible || observer.batchStarts[0].ParallelSafeCount != 2 || observer.batchStarts[0].ParallelBlockedReason != "" || observer.batchStarts[0].ParallelContract != "independent_parallel_batch" {
 		t.Fatalf("batch start parallel evidence = %#v, want eligible two-call batch", observer.batchStarts[0])
 	}
 	if len(observer.batchFinishes) != 1 || observer.batchFinishes[0].FailedCount != 0 || observer.batchFinishes[0].Mode != toolBatchModeParallel {
@@ -602,7 +602,7 @@ func TestRunTurnObserverFlagsSingleExecExplorationMissedOpportunity(t *testing.T
 		t.Fatalf("batch finishes = %#v, want one batch", observer.batchFinishes)
 	}
 	got := observer.batchFinishes[0]
-	if got.Mode != toolBatchModeSerial || got.BatchSize != 1 || got.ParallelBlockedReason != "single_call" {
+	if got.Mode != toolBatchModeSerial || got.BatchSize != 1 || got.ParallelBlockedReason != "single_call" || got.ParallelContract != "single_call_missed_parallel_opportunity:exec_search_could_use_search" {
 		t.Fatalf("batch evidence = %#v, want serial single-call block", got)
 	}
 	if !got.ParallelMissedOpportunity || got.ParallelMissedReason != "exec_search_could_use_search" {

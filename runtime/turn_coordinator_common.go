@@ -171,8 +171,8 @@ func (r *Runtime) buildTurnCoordinatorGovernorPrompt(input turnCoordinatorExecut
 		GovernorBackend:  input.Exec.Backend,
 		PrincipalRole:    input.PrincipalRole,
 		WorkspaceRoot:    input.Scope.WorkingRoot,
-		ToolManifest:     toolManifest(input.Tools),
-		ToolCapabilities: toolCapabilities(input.Tools),
+		ToolManifest:     toolManifestForRunKind(input.Tools, input.RunKind),
+		ToolCapabilities: toolCapabilitiesForRunKind(input.Tools, input.RunKind),
 		Workspace:        input.PromptContext,
 		Runtime:          governorAwareness,
 		CacheStrategy:    r.promptCacheStrategyForExecution(input.Exec),
@@ -332,7 +332,7 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		"model":         strings.TrimSpace(input.Exec.ModelName),
 		"provider_path": strings.Join(input.Exec.ProviderPath, ","),
 		"history_count": len(history),
-		"tool_count":    len(toolManifest(tools)),
+		"tool_count":    len(toolManifestForRunKind(tools, runKind)),
 	}, perceptionBudget)
 	r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptStarted, "provider", "started", providerAttemptPayload, time.Now().UTC())
 

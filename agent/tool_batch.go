@@ -71,6 +71,7 @@ func executeToolBatch(
 		ParallelMissedReason:      plan.parallelMissedReason,
 	}
 	if observer != nil {
+		event.ParallelContract = describeParallelBatchContract(event)
 		observer.ToolBatchStarted(ctx, event)
 	}
 	started := time.Now()
@@ -85,6 +86,7 @@ func executeToolBatch(
 	if observer != nil {
 		event.Duration = time.Since(started)
 		event.FailedCount = result.failedCount
+		event.ParallelContract = describeParallelBatchContract(event)
 		observer.ToolBatchFinished(ctx, event)
 	}
 	return result
@@ -311,6 +313,22 @@ func renderToolFailure(failure toolFailure) string {
 		return `{"ok":false,"code":"TOOL_ERROR","short_reason":"tool execution failed","retry_hint":"Reformulate"}`
 	}
 	return string(data)
+}
+
+func describeParallelBatchContract(event ToolBatchEvent) string {
+	if event.BatchSize <= 1 {
+		if event.ParallelMissedOpportunity {
+			return "single_call_missed_parallel_opportunity:" + event.ParallelMissedReason
+		}
+		return "single_call"
+	}
+	if event.ParallelEligible && event.Mode == toolBatchModeParallel {
+		return "independent_parallel_batch"
+	}
+	if event.ParallelBlockedReason != "" {
+		return "serial_due_to_" + event.ParallelBlockedReason
+	}
+	return "serial_not_parallel_eligible"
 }
 
 func toolBatchNames(calls []ToolCall) []string {
