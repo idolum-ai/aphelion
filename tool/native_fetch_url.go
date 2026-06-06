@@ -4,6 +4,8 @@ package tool
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -12,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -80,21 +83,7 @@ func (r *Registry) fetchURL(ctx context.Context, input json.RawMessage, scope sa
 	if err != nil {
 		return "", fmt.Errorf("fetch_url read response: %w", err)
 	}
-	var b strings.Builder
-	b.WriteString("[FETCH_URL]\n")
-	fmt.Fprintf(&b, "url: %s\nstatus: %s\ncontent_type: %s\nbytes: %d\ntruncated: %t\nbody:\n",
-		parsed.String(),
-		res.Status,
-		res.Header.Get("Content-Type"),
-		len(data),
-		truncated,
-	)
-	b.Write(data)
-	if len(data) > 0 && data[len(data)-1] != '\n' {
-		b.WriteByte('\n')
-	}
-	b.WriteString("[/FETCH_URL]")
-	return b.String(), nil
+	return renderFetchURLDigest(parsed.String(), res.Status, res.Header.Get("Content-Type"), data, truncated), nil
 }
 
 func fetchURLPort(parsed *url.URL) (uint16, error) {
@@ -131,4 +120,48 @@ func hostLooksLocal(host string) bool {
 		return false
 	}
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+}
+
+func renderFetchURLDigest(rawURL, status, contentType string, data []byte, truncated bool) string {
+	sum := sha256.Sum256(data)
+	excerpt, excerptTruncated := fetchURLExcerpt(data, 2048)
+	var b strings.Builder
+	b.WriteString("[FETCH_URL]\n")
+	fmt.Fprintf(&b, "url: %s\n", rawURL)
+	fmt.Fprintf(&b, "status: %s\n", status)
+	fmt.Fprintf(&b, "content_type: %s\n", contentType)
+	fmt.Fprintf(&b, "bytes_read: %d\n", len(data))
+	fmt.Fprintf(&b, "sha256: %s\n", hex.EncodeToString(sum[:]))
+	fmt.Fprintf(&b, "truncated: %t\n", truncated)
+	fmt.Fprintf(&b, "body_ref: fetch_url.raw sha256=%s bytes=%d truncated=%t max_bytes_param=re-run_with_higher_max_bytes_if_needed\n", hex.EncodeToString(sum[:]), len(data), truncated)
+	fmt.Fprintf(&b, "excerpt_truncated: %t\n", excerptTruncated)
+	b.WriteString("excerpt:\n")
+	if excerpt != "" {
+		b.WriteString(excerpt)
+		if !strings.HasSuffix(excerpt, "\n") {
+			b.WriteByte('\n')
+		}
+	}
+	b.WriteString("[/FETCH_URL]")
+	return b.String()
+}
+
+func fetchURLExcerpt(data []byte, limit int) (string, bool) {
+	text := string(data)
+	text = strings.ReplaceAll(text, "\x00", "�")
+	text = strings.TrimSpace(text)
+	if text == "" || limit <= 0 {
+		return "", text != ""
+	}
+	if len(text) <= limit {
+		return text, false
+	}
+	cut := limit
+	for cut > 0 && !utf8.ValidString(text[:cut]) {
+		cut--
+	}
+	if cut <= 0 {
+		return "", true
+	}
+	return strings.TrimSpace(text[:cut]) + "…", true
 }

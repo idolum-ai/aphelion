@@ -209,8 +209,10 @@ func TestFetchURLHonorsNetworkPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetch_url admin err = %v", err)
 	}
-	if !strings.Contains(out, "hello from server") || !strings.Contains(out, "[FETCH_URL]") {
-		t.Fatalf("fetch_url out = %q", out)
+	for _, want := range []string{"[FETCH_URL]", "excerpt:\nhello from server", "sha256:", "body_ref:"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("fetch_url out = %q, want %q", out, want)
+		}
 	}
 
 	approved := principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 42}
@@ -236,6 +238,38 @@ func TestFetchURLHonorsNetworkPolicy(t *testing.T) {
 	}
 }
 
+func TestFetchURLRendersDigestBeforeExcerptAndBodyReference(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Repeat("abcdefghij", 260)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	workspace := t.TempDir()
+	registry := NewRegistry(workspace, 2*time.Second)
+	admin := principal.Principal{Role: principal.RoleAdmin}
+	scope := sandbox.Scope{Principal: admin, Profile: sandbox.DefaultProfiles().Admin, GlobalRoot: workspace, WorkingRoot: workspace}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"`+server.URL+`","max_bytes":4096}`), scope, admin, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("fetch_url err = %v", err)
+	}
+	for _, want := range []string{"status: 200 OK", "content_type: text/plain; charset=utf-8", "bytes_read: 2600", "sha256:", "body_ref: fetch_url.raw", "excerpt_truncated: true", "excerpt:\nabcdefghij"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("fetch_url digest = %q, want %q", out, want)
+		}
+	}
+	if strings.Contains(out, "body:\n") {
+		t.Fatalf("fetch_url digest leaked legacy raw body label: %q", out)
+	}
+	if len(out) >= len(body)+200 {
+		t.Fatalf("fetch_url digest length = %d, raw body len = %d; want excerpt-first compact output", len(out), len(body))
+	}
+}
+
 func TestFetchURLAllowlistDialsResolvedDestination(t *testing.T) {
 	t.Parallel()
 
@@ -251,8 +285,8 @@ func TestFetchURLAllowlistDialsResolvedDestination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetch_url allowlist err = %v", err)
 	}
-	if !strings.Contains(out, "ok") {
-		t.Fatalf("fetch_url out = %q, want response body", out)
+	if !strings.Contains(out, "excerpt:\nok") || strings.Contains(out, "body:\n") {
+		t.Fatalf("fetch_url out = %q, want excerpt-first digest", out)
 	}
 	if got, want := strings.Join(dialer.dialed(), ","), "203.0.113.10:80"; got != want {
 		t.Fatalf("dial targets = %q, want %q", got, want)
@@ -321,8 +355,8 @@ func TestFetchURLAllowlistDialsOnlyAuthorizedResolvedDestinations(t *testing.T) 
 	if err != nil {
 		t.Fatalf("fetch_url mixed err = %v", err)
 	}
-	if !strings.Contains(out, "allowed") {
-		t.Fatalf("fetch_url out = %q, want allowed response", out)
+	if !strings.Contains(out, "excerpt:\nallowed") {
+		t.Fatalf("fetch_url out = %q, want allowed excerpt", out)
 	}
 	if got, want := strings.Join(dialer.dialed(), ","), "203.0.113.10:80"; got != want {
 		t.Fatalf("dial targets = %q, want only authorized destination %q", got, want)
