@@ -61,6 +61,19 @@ func renderOperationalDisciplineBlock(capabilities ToolCapabilities) string {
 	}, "\n")
 }
 
+func renderApprovalBundleDisciplineBlock(capabilities ToolCapabilities) string {
+	if !capabilities.UpdateOperation {
+		return ""
+	}
+	return strings.Join([]string{
+		"## Approval Bundle Discipline",
+		"When a durable phase_plan contains consecutive mechanically determined phases under the same authority family, write them as named future phases so runtime can offer one approval bundle instead of one approval per phase.",
+		"Bundle repo-local execution slices such as inspect -> implement -> validate -> commit, and self-owned PR maintenance slices such as open-pr -> review-own-pr -> merge, when the bounded effect and stop gates are already clear.",
+		"Keep separate approvals for deploy/restart, new capability, external-account effect, private-content access, third-party consent or opt-in, destructive or irreversible action, or any phase whose safety depends on new facts from an earlier phase.",
+		"Do not fragment approvals just to pace normal local work; use typed phase fields to name the stopping point, then let the revocable bundle execute phases sequentially.",
+	}, "\n")
+}
+
 func renderCapabilityDelegationDisciplineBlock(capabilities ToolCapabilities) string {
 	if !capabilities.CapabilityRequest && !capabilities.CapabilityAuthority && !capabilities.DurableAgent {
 		return ""
@@ -88,6 +101,9 @@ func appendToolDisciplineBlocks(parts []agent.SystemBlock, toolCaps ToolCapabili
 	}
 	if operations := renderOperationalDisciplineBlock(toolCaps); operations != "" {
 		parts = append(parts, agent.SystemBlock{Text: operations})
+	}
+	if approvalBundle := renderApprovalBundleDisciplineBlock(toolCaps); approvalBundle != "" {
+		parts = append(parts, agent.SystemBlock{Text: approvalBundle})
 	}
 	if nativeFileExploration := renderNativeFileExplorationDisciplineBlock(toolCaps); nativeFileExploration != "" {
 		parts = append(parts, agent.SystemBlock{Text: nativeFileExploration})

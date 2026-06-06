@@ -96,6 +96,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		payload["phase_plan_id"] = strings.TrimSpace(opState.PhasePlan.ID)
 		payload["phase_id"] = strings.TrimSpace(phase.ID)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
+		r.recordContinuationBundleNarrowing(key, opState, []session.OperationPhase{phase}, state, "operation_phase_required_capability", now)
 		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_required_capability"); err != nil {
 			return false, fmt.Errorf("send required-capability operation phase continuation approval: %w", err)
 		}
@@ -130,6 +131,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		payload["materialized_from"] = "operation_plan_lease"
 		payload["plan_lease_id"] = strings.TrimSpace(opState.PlanLease.ID)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
+		r.recordContinuationBundleNarrowing(key, opState, operationPlanLeasePhasesFromOperation(opState, opState.PlanLease), state, "operation_plan_lease", now)
 		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_plan_lease"); err != nil {
 			return false, fmt.Errorf("send operation plan lease continuation approval: %w", err)
 		}
@@ -166,6 +168,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 			payload["plan_lease_id"] = strings.TrimSpace(opState.PlanLease.ID)
 			payload["synthesized_from_phase_plan"] = true
 			r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
+			r.recordContinuationBundleNarrowing(key, opState, operationPlanLeasePhasesFromOperation(opState, opState.PlanLease), state, "operation_plan_lease", now)
 			if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_plan_lease"); err != nil {
 				return false, fmt.Errorf("send synthesized operation plan lease continuation approval: %w", err)
 			}
@@ -255,6 +258,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		payload["phase_plan_id"] = strings.TrimSpace(opState.PhasePlan.ID)
 		payload["phase_id"] = strings.TrimSpace(phase.ID)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
+		r.recordContinuationBundleNarrowing(key, opState, []session.OperationPhase{phase}, state, "operation_phase_plan", now)
 		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_plan"); err != nil {
 			return false, fmt.Errorf("send operation phase continuation approval: %w", err)
 		}

@@ -328,6 +328,34 @@ func TestBuildGovernorPromptAddsNativeFileExplorationDiscipline(t *testing.T) {
 	}
 }
 
+func TestBuildGovernorPromptAddsApprovalBundleDisciplineWhenUpdateOperationIsAvailable(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		ToolManifest: "tools:\n- update_operation: durable operation updates",
+	})
+
+	operationalIdx := strings.Index(got, "## Operational Discipline")
+	bundleIdx := strings.Index(got, "## Approval Bundle Discipline")
+	if operationalIdx == -1 || bundleIdx == -1 {
+		t.Fatalf("prompt missing operational or approval-bundle discipline block: %q", got)
+	}
+	if bundleIdx < operationalIdx {
+		t.Fatalf("approval-bundle discipline should follow operational discipline: %q", got)
+	}
+	for _, want := range []string{
+		"consecutive mechanically determined phases under the same authority family",
+		"one approval bundle instead of one approval per phase",
+		"inspect -> implement -> validate -> commit",
+		"Keep separate approvals for deploy/restart",
+		"revocable bundle execute phases sequentially",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt missing approval-bundle guidance %q: %q", want, got)
+		}
+	}
+}
+
 func TestBuildGovernorPromptAddsGeneratedMediaDeliveryWhenExecIsAvailable(t *testing.T) {
 	t.Parallel()
 
@@ -411,6 +439,9 @@ func TestBuildGovernorPromptAddsDisciplineFromExplicitToolCapabilities(t *testin
 	}
 	if !strings.Contains(got, "## Operational Discipline") {
 		t.Fatalf("prompt missing operational discipline from capability flags: %q", got)
+	}
+	if !strings.Contains(got, "## Approval Bundle Discipline") {
+		t.Fatalf("prompt missing approval-bundle discipline from capability flags: %q", got)
 	}
 	if !strings.Contains(got, "gate_level, gate_reason_code, approval_subject, autoapprove_eligible") ||
 		!strings.Contains(got, "hard_consent_block/requires_opt_in/requires_consent") {

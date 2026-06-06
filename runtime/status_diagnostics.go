@@ -83,10 +83,27 @@ func (r *Runtime) StatusDiagnostics(chatID int64) ([]string, error) {
 	if stuck, ok := r.operationApprovalAffordanceDiagnostic(chatID, chatSnapshot); ok {
 		lines = append(lines, stuck)
 	}
+	if line, ok := latestContinuationBundleNarrowingDiagnostic(chatSnapshot.RecentExecution); ok {
+		lines = append(lines, line)
+	}
 	if len(chatSnapshot.RecentAdjudications) > 0 {
 		lines = append(lines, statusAdjudicationDiagnosticLine(chatSnapshot.RecentAdjudications[0]))
 	}
 	return lines, nil
+}
+
+func latestContinuationBundleNarrowingDiagnostic(events []core.ExecutionEventSummary) (string, bool) {
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) != core.ExecutionEventContinuationBundleNarrowed {
+			continue
+		}
+		summary := strings.TrimSpace(event.Summary)
+		if summary == "" {
+			summary = "width=1"
+		}
+		return "Approval bundle width: narrow phase-plan approval observed (" + summary + ").", true
+	}
+	return "", false
 }
 
 func (r *Runtime) operationApprovalAffordanceDiagnostic(chatID int64, snapshot core.ChatStatusSnapshot) (string, bool) {

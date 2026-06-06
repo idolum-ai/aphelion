@@ -141,6 +141,8 @@ func summarizeExecutionEventPayload(eventType string, eventStatus string, payloa
 			parts = append(parts, "findings="+strings.Join(claimTypes, ","))
 		}
 		return strings.Join(parts, " ")
+	case core.ExecutionEventContinuationBundleNarrowed:
+		return continuationBundleNarrowingSummary(payload)
 	case core.ExecutionEventToolRegistered:
 		registered := strings.TrimSpace(eventStatus) == "enabled"
 		if value, ok := payloadBool(payload, "registered"); ok {

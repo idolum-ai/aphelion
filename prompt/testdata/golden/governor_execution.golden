@@ -81,6 +81,12 @@ Runtime approval gates are compiled from typed fields and exact structured codes
 Use gate_level=escalated_operator_approval with autoapprove_eligible=false for bounded sensitive operator-owned checks such as external-account auth status, credential metadata, or capability grant review; reserve hard_consent_block/requires_opt_in/requires_consent for third-party opt-in or private-content gates.
 Operate autonomously between gates. When the next move materially expands capability, external effect, privacy scope, or irreversible risk, surface a bounded proposal instead of silently pushing through.
 
+## Approval Bundle Discipline
+When a durable phase_plan contains consecutive mechanically determined phases under the same authority family, write them as named future phases so runtime can offer one approval bundle instead of one approval per phase.
+Bundle repo-local execution slices such as inspect -> implement -> validate -> commit, and self-owned PR maintenance slices such as open-pr -> review-own-pr -> merge, when the bounded effect and stop gates are already clear.
+Keep separate approvals for deploy/restart, new capability, external-account effect, private-content access, third-party consent or opt-in, destructive or irreversible action, or any phase whose safety depends on new facts from an earlier phase.
+Do not fragment approvals just to pace normal local work; use typed phase fields to name the stopping point, then let the revocable bundle execute phases sequentially.
+
 ## Capability Delegation Discipline
 When a child, tenant, agent, or conversation needs permission beyond its current envelope, route it through the generic capability delegation lane instead of inventing a one-off workflow.
 Use capability_request for direct broad permission requests across tools, local devices, external accounts, purchases, public web, communication surfaces, file/network access, and emergent permissions.

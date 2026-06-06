@@ -78,6 +78,8 @@ func (r *Runtime) writeDoctorExecutionEvents(ctx context.Context, b *strings.Bui
 	} else {
 		WriteLine(b, "chat_events_last_24h:")
 		writeDoctorEvents(b, chatEvents, 20)
+		WriteLine(b, "approval_bundle_width_last_24h:")
+		writeDoctorApprovalBundleWidth(b, chatEvents, 8)
 	}
 	recentEvents, err := r.store.ExecutionEventsRecent(80)
 	if err != nil {
@@ -165,6 +167,45 @@ func writeDoctorEvents(b *strings.Builder, events []session.ExecutionEvent, limi
 			strings.TrimSpace(event.Status),
 			strconv.Quote(truncatePreview(event.PayloadJSON, 500)),
 		))
+	}
+}
+
+func writeDoctorApprovalBundleWidth(b *strings.Builder, events []session.ExecutionEvent, limit int) {
+	if len(events) == 0 {
+		WriteLine(b, "- none")
+		return
+	}
+	if limit <= 0 {
+		limit = len(events)
+	}
+	ordered := append([]session.ExecutionEvent(nil), events...)
+	sort.Slice(ordered, func(i, j int) bool { return executionEventBefore(ordered[i], ordered[j]) })
+	written := 0
+	for i := len(ordered) - 1; i >= 0; i-- {
+		event := ordered[i]
+		if strings.TrimSpace(event.EventType) != core.ExecutionEventContinuationBundleNarrowed {
+			continue
+		}
+		payload := executionEventPayload(event.PayloadJSON)
+		parts := make([]string, 0, 8)
+		for _, key := range []string{"phase_id", "phase_family", "phase_category", "materialized_from", "narrow_streak", "prior_phase_id"} {
+			if value := payloadString(payload, key); value != "" {
+				parts = append(parts, key+"="+value)
+			}
+		}
+		WriteLine(b, fmt.Sprintf("- time=%s chat_id=%d seq=%d %s",
+			event.CreatedAt.UTC().Format(time.RFC3339),
+			event.ChatID,
+			event.Seq,
+			strings.Join(parts, " "),
+		))
+		written++
+		if written >= limit {
+			break
+		}
+	}
+	if written == 0 {
+		WriteLine(b, "- none")
 	}
 }
 
