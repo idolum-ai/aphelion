@@ -210,7 +210,20 @@ func writeDoctorRuns(b *strings.Builder, runs []session.TurnRun, limit int) {
 	}
 	for i := 0; i < limit; i++ {
 		run := runs[i]
-		WriteLine(b, fmt.Sprintf("- id=%d chat_id=%d kind=%s status=%s started=%s last_activity=%s tools=%d/%d request=%q last_tool=%q last_error=%q",
+		accounting := ""
+		if run.TotalToolCharsIn > 0 || run.TotalAssistantCharsOut > 0 || run.ProviderInputTokens > 0 || run.ProviderOutputTokens > 0 {
+			accounting = fmt.Sprintf(" turn_index=%d tool_chars=%d assistant_chars=%d asst_tool_ratio=%s provider_tokens=%d/%d cache=%d/%d",
+				run.TurnIndex,
+				run.TotalToolCharsIn,
+				run.TotalAssistantCharsOut,
+				formatAssistantToolRatio(run.TotalAssistantCharsOut, run.TotalToolCharsIn),
+				run.ProviderInputTokens,
+				run.ProviderOutputTokens,
+				run.ProviderCacheReadTokens,
+				run.ProviderCacheWriteTokens,
+			)
+		}
+		WriteLine(b, fmt.Sprintf("- id=%d chat_id=%d kind=%s status=%s started=%s last_activity=%s tools=%d/%d request=%q last_tool=%q last_error=%q%s",
 			run.ID,
 			run.ChatID,
 			run.Kind,
@@ -222,8 +235,16 @@ func writeDoctorRuns(b *strings.Builder, runs []session.TurnRun, limit int) {
 			truncatePreview(run.RequestText, 260),
 			truncatePreview(run.LastToolName, 120),
 			truncatePreview(run.ErrorText, 220),
+			accounting,
 		))
 	}
+}
+
+func formatAssistantToolRatio(assistantChars int64, toolChars int64) string {
+	if toolChars <= 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.3f", float64(assistantChars)/float64(toolChars))
 }
 
 func (r *Runtime) writeDoctorSemanticStats(b *strings.Builder) {

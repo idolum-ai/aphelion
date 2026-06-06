@@ -150,6 +150,7 @@ type turnCoordinatorExecuteInput struct {
 
 type turnCoordinatorExecuteOutput struct {
 	Sess              *session.Session
+	RunID             int64
 	GovernorResult    *turn.GovernorResult
 	LastFaceAwareness prompt.RuntimeAwareness
 }
@@ -221,6 +222,7 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	if err != nil {
 		return out, err
 	}
+	out.RunID = monitor.runID
 	ctx = monitor.Context()
 	defer monitor.Finish(ctx, monitorErr)
 

@@ -265,7 +265,6 @@ type toolFailure struct {
 	Code        string `json:"code"`
 	ShortReason string `json:"short_reason"`
 	RetryHint   string `json:"retry_hint"`
-	Output      string `json:"output,omitempty"`
 }
 
 func toolResultContent(output string, err error) (string, bool) {
@@ -282,15 +281,12 @@ func classifyToolFailure(err error, output string) toolFailure {
 		ShortReason: shortToolFailureReason(err),
 		RetryHint:   "Reformulate",
 	}
-	if output := boundedToolFailureOutput(output); output != "" {
-		failure.Output = output
-	}
 	if errors.Is(err, context.Canceled) {
 		failure.Code = "CANCELED"
 		failure.RetryHint = "DoNotRetry"
 		return failure
 	}
-	lower := strings.ToLower(strings.TrimSpace(failure.ShortReason + "\n" + failure.Output))
+	lower := strings.ToLower(strings.TrimSpace(failure.ShortReason + "\n" + output))
 	switch {
 	case strings.Contains(lower, "authority") || strings.Contains(lower, "approval") || strings.Contains(lower, "grant") || strings.Contains(lower, "permission") || strings.Contains(lower, "denied"):
 		failure.Code = "AUTHORITY_REJECTED"
@@ -315,20 +311,6 @@ func shortToolFailureReason(err error) string {
 		reason = strings.TrimSpace(reason[:139]) + "…"
 	}
 	return reason
-}
-
-const maxToolFailureOutputRunes = 6000
-
-func boundedToolFailureOutput(output string) string {
-	output = strings.TrimSpace(output)
-	if output == "" {
-		return ""
-	}
-	runes := []rune(output)
-	if len(runes) <= maxToolFailureOutputRunes {
-		return output
-	}
-	return strings.TrimSpace(string(runes[:maxToolFailureOutputRunes])) + "…"
 }
 
 func renderToolFailure(failure toolFailure) string {

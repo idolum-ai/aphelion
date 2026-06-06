@@ -26,8 +26,9 @@ func (s *SQLiteStore) InterruptRunningTurnRunIDs(ids []int64, reason string) ([]
 	queryArgs := append([]any{string(TurnRunStatusRunning)}, args...)
 	rows, err := tx.Query(`
 		SELECT
-			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
-			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started, tool_calls_finished, last_tool_result_preview, last_tool_error,
+			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, turn_index, status, request_text, started_at, completed_at,
+			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started, tool_calls_finished, total_tool_chars_in, total_assistant_chars_out,
+			provider_input_tokens, provider_output_tokens, provider_cache_read_tokens, provider_cache_write_tokens, last_tool_result_preview, last_tool_error,
 			progress_message_id, error_text, recovery_summary, recovery_logged_at
 		FROM turn_runs
 		WHERE status = ? AND id IN (`+placeholders+`)

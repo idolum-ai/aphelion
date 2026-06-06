@@ -525,6 +525,7 @@ func runtimeAwarenessHasAnyHiddenCategory(aw prompt.RuntimeAwareness, categories
 
 type turnCommitInput struct {
 	Key             session.SessionKey
+	RunID           int64
 	Scope           sandbox.Scope
 	RunKind         session.TurnRunKind
 	Sess            *session.Session
@@ -575,6 +576,9 @@ type turnPersistencePort struct {
 	sessionState interface {
 		session() *session.Session
 	}
+	runIDSource interface {
+		turnRunID() int64
+	}
 	msg    core.InboundMessage
 	actor  principal.Principal
 	errCtx turnCommitErrorContext
@@ -595,6 +599,7 @@ func (p *turnPersistencePort) Persist(ctx context.Context, req turn.CommitReques
 	}
 	result, err := p.runtime.persistTurn(ctx, turnCommitInput{
 		Key:             p.key,
+		RunID:           p.currentRunID(),
 		Scope:           p.scope,
 		RunKind:         req.Request.RunKind,
 		Sess:            sess,
@@ -630,6 +635,18 @@ func (p *turnPersistencePort) currentSession() *session.Session {
 		}
 	}
 	return p.sess
+}
+
+func (p *turnPersistencePort) currentRunID() int64 {
+	if p == nil {
+		return 0
+	}
+	if p.runIDSource != nil {
+		if id := p.runIDSource.turnRunID(); id != 0 {
+			return id
+		}
+	}
+	return 0
 }
 
 type turnDeliveryPort struct {
@@ -807,6 +824,11 @@ func (r *Runtime) persistTurn(ctx context.Context, input turnCommitInput) (turnC
 		return out, err
 	}
 	out.Committed = stageResult.Committed
+	if out.Committed && input.RunID != 0 {
+		if err := r.store.UpdateTurnRunAccounting(input.RunID, input.Sess.TurnCount, stageResult.NewMessages, usage); err != nil {
+			return out, err
+		}
+	}
 	if out.Committed && input.Audit != nil && input.Result != nil {
 		input.Audit.RecordFinalReply(sceneText, input.Result.Media, out.OutboundType)
 	}

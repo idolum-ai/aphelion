@@ -458,12 +458,13 @@ func (r *Runtime) runDurableWakeConversation(
 		}
 	}
 	machine.Persistence = &turnPersistencePort{
-		runtime: r,
-		key:     key,
-		scope:   scope,
-		sess:    sess,
-		errCtx:  errCtx,
-		audit:   audit,
+		runtime:     r,
+		key:         key,
+		scope:       scope,
+		sess:        sess,
+		runIDSource: coordinator,
+		errCtx:      errCtx,
+		audit:       audit,
 	}
 	machine.Delivery = &turnDeliveryPort{
 		runtime:         r,

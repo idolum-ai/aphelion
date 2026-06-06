@@ -301,6 +301,12 @@ func inferFaceScene(mode string, material core.MaterialPacket) string {
 	case "repair":
 		return "refusal"
 	}
+	switch material.Kind {
+	case core.MaterialPacketKindStatusReport:
+		return "completion_report"
+	case core.MaterialPacketKindRelational, core.MaterialPacketKindCreative:
+		return "general_render"
+	}
 	combined := strings.ToLower(strings.Join(append(append(append([]string{}, material.Facts...), material.AllowedActions...), append(append(material.Refusals, material.SceneConstraints...), material.Notes...)...), "\n"))
 	if strings.Contains(combined, "architecture") || strings.Contains(combined, "scaffold") || strings.Contains(combined, "design") {
 		return "architecture_exploration"
@@ -337,6 +343,7 @@ func renderMaterialFloorContractBlock(aw RuntimeAwareness) string {
 		"## Output Contract",
 		"For this turn, the system core is authoring the material floor, not the final user-visible scene.",
 		"Return the final assistant result using these sections when they contain relevant material:",
+		"KIND: <status_report|relational|creative|general>",
 		"FACTS:",
 		"- <bounded factual points or tool-established realities>",
 		"ALLOWED_ACTIONS:",

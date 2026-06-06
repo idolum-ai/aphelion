@@ -15,6 +15,7 @@ import (
 // coordinator-owned caches.
 type interactiveTurnState struct {
 	sess              *session.Session
+	lastRunID         int64
 	lastGovernor      *turn.GovernorResult
 	lastFaceAwareness prompt.RuntimeAwareness
 	replyWithVoiceOn  bool
@@ -31,6 +32,7 @@ func (s *interactiveTurnState) applyExecution(output turnCoordinatorExecuteOutpu
 	if output.Sess != nil {
 		s.sess = output.Sess
 	}
+	s.lastRunID = output.RunID
 	s.lastGovernor = output.GovernorResult
 	s.lastFaceAwareness = output.LastFaceAwareness
 	s.replyWithVoiceOn = preferVoice && !governorHasMedia(output.GovernorResult)
@@ -41,6 +43,13 @@ func (s *interactiveTurnState) session() *session.Session {
 		return nil
 	}
 	return s.sess
+}
+
+func (s *interactiveTurnState) turnRunID() int64 {
+	if s == nil {
+		return 0
+	}
+	return s.lastRunID
 }
 
 func (s *interactiveTurnState) governor() *turn.GovernorResult {

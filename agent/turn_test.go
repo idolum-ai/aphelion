@@ -836,7 +836,7 @@ func TestToolError(t *testing.T) {
 	}
 }
 
-func TestToolErrorPreservesBoundedOutputEvidence(t *testing.T) {
+func TestToolErrorDropsVerboseOutputEvidence(t *testing.T) {
 	provider := &mockProvider{
 		complete: func(_ context.Context, call int, messages []Message, _ []ToolDef) (*Response, error) {
 			switch call {
@@ -853,7 +853,6 @@ func TestToolErrorPreservesBoundedOutputEvidence(t *testing.T) {
 				var failure struct {
 					Code        string `json:"code"`
 					ShortReason string `json:"short_reason"`
-					Output      string `json:"output"`
 				}
 				if err := json.Unmarshal([]byte(last.Content), &failure); err != nil {
 					t.Fatalf("decode typed tool failure %q: %v", last.Content, err)
@@ -861,10 +860,8 @@ func TestToolErrorPreservesBoundedOutputEvidence(t *testing.T) {
 				if failure.Code != "TOOL_ERROR" || failure.ShortReason != "command failed with exit code 1" {
 					t.Fatalf("failure = %#v, want typed command failure", failure)
 				}
-				for _, want := range []string{"stdout:\npackage failed", "stderr:\ncompile error detail"} {
-					if !strings.Contains(failure.Output, want) {
-						t.Fatalf("failure output = %q, missing %q", failure.Output, want)
-					}
+				if strings.Contains(last.Content, "stdout:") || strings.Contains(last.Content, "stderr:") || strings.Contains(last.Content, `"output"`) {
+					t.Fatalf("tool failure content = %q, want compact fixed shape without output echo", last.Content)
 				}
 				return &Response{Content: "handled"}, nil
 			default:
@@ -889,19 +886,16 @@ func TestToolErrorPreservesBoundedOutputEvidence(t *testing.T) {
 	}
 }
 
-func TestToolErrorOutputEvidenceIsBounded(t *testing.T) {
+func TestToolFailureClassifiesFromOutputWithoutEchoingIt(t *testing.T) {
 	t.Parallel()
 
-	longOutput := strings.Repeat("x", maxToolFailureOutputRunes+500)
-	failure := classifyToolFailure(errors.New("command failed with exit code 1"), longOutput)
-	if len([]rune(failure.Output)) > maxToolFailureOutputRunes+1 {
-		t.Fatalf("failure output runes = %d, want bounded", len([]rune(failure.Output)))
+	failure := classifyToolFailure(errors.New("command failed with exit code 1"), "stderr: deadline exceeded while waiting")
+	if failure.Code != "TIMEOUT" || failure.RetryHint != "RetryOnce" {
+		t.Fatalf("failure = %#v, want timeout classification from output evidence", failure)
 	}
-	if !strings.HasSuffix(failure.Output, "…") {
-		t.Fatalf("failure output suffix = %q, want ellipsis", failure.Output[len(failure.Output)-4:])
-	}
-	if strings.Contains(failure.ShortReason, longOutput[:200]) {
-		t.Fatalf("short reason included long output: %q", failure.ShortReason)
+	rendered := renderToolFailure(failure)
+	if strings.Contains(rendered, "deadline exceeded") || strings.Contains(rendered, `"output"`) {
+		t.Fatalf("rendered failure = %q, want no output echo", rendered)
 	}
 }
 

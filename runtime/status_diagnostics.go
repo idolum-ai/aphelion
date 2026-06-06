@@ -31,6 +31,13 @@ func (r *Runtime) StatusDiagnostics(chatID int64) ([]string, error) {
 		if latest.ProgressMessageID != 0 {
 			lines = append(lines, fmt.Sprintf("Progress message id: %d.", latest.ProgressMessageID))
 		}
+		if latest.TotalToolCharsIn > 0 || latest.TotalAssistantCharsOut > 0 {
+			if latest.TotalToolCharsIn > 0 {
+				lines = append(lines, fmt.Sprintf("Assistant/tool chars: %d/%d (ratio %.3f).", latest.TotalAssistantCharsOut, latest.TotalToolCharsIn, latest.AssistantToolRatio))
+			} else {
+				lines = append(lines, fmt.Sprintf("Assistant/tool chars: %d/%d.", latest.TotalAssistantCharsOut, latest.TotalToolCharsIn))
+			}
+		}
 		if errorText := strings.TrimSpace(latest.ErrorText); errorText != "" {
 			lines = append(lines, "Last error: "+truncateStatusDiagnostic(errorText, 180)+".")
 		}

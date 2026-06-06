@@ -225,10 +225,11 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	machine.Governor = coordinator
 	machine.Face = coordinator
 	machine.Persistence = &turnPersistencePort{
-		runtime: r,
-		key:     key,
-		scope:   scope,
-		sess:    sess,
+		runtime:     r,
+		key:         key,
+		scope:       scope,
+		sess:        sess,
+		runIDSource: coordinator,
 		errCtx: turnCommitErrorContext{
 			ConvertMessages: "convert durable telegram messages",
 			LoadPlanState:   "load durable telegram plan state before save",

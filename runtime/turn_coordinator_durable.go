@@ -44,6 +44,7 @@ type durableGroupTurnCoordinator struct {
 	allowStream               bool
 	pendingParentConversation []core.DurableAgentConversationMessage
 	governorContextBuilder    durableWakeGovernorContextBuilder
+	lastRunID                 int64
 	lastGovernor              *turn.GovernorResult
 	lastFaceAwareness         prompt.RuntimeAwareness
 }
@@ -185,9 +186,17 @@ func (c *durableGroupTurnCoordinator) Execute(ctx context.Context, req turn.Gove
 		return nil, err
 	}
 	c.sess = output.Sess
+	c.lastRunID = output.RunID
 	c.lastFaceAwareness = output.LastFaceAwareness
 	c.lastGovernor = output.GovernorResult
 	return output.GovernorResult, nil
+}
+
+func (c *durableGroupTurnCoordinator) turnRunID() int64 {
+	if c == nil {
+		return 0
+	}
+	return c.lastRunID
 }
 
 func (c *durableGroupTurnCoordinator) governorContext() string {

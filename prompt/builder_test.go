@@ -629,6 +629,9 @@ func TestBuildGovernorPromptIncludesMaterialFloorContractForInteractiveSceneTurn
 	if !strings.Contains(got, "## Output Contract") {
 		t.Fatalf("prompt missing material floor contract: %q", got)
 	}
+	if !strings.Contains(got, "KIND: <status_report|relational|creative|general>") {
+		t.Fatalf("prompt missing typed material kind contract: %q", got)
+	}
 	if !strings.Contains(got, "Do not write the final user-facing reply text here.") {
 		t.Fatalf("prompt missing non-scene instruction: %q", got)
 	}
@@ -843,84 +846,122 @@ func TestBuildFacePromptKeepsContinuationAuthorityOutOfDeliveryAwareness(t *test
 			t.Fatalf("face prompt missing %q:\n%s", want, got)
 		}
 	}
-	for _, forbidden := range []string{"continuation_governor_intent", "continuation_governor_ratified", "continuation_blocked_reason", "proposal_bounded_effect", "phase_plan_current_phase_id"} {
-		if strings.Contains(got, forbidden) {
-			t.Fatalf("face prompt leaked authority field %q:\n%s", forbidden, got)
-		}
-	}
+	assertAwarenessKeysAbsent(t, "face prompt", got, awarenessRoleExcludedLineKeys(awarenessRoleFace))
 }
 
 func TestRuntimeAwarenessRoleFactoringKeepsAuthorityOutOfFace(t *testing.T) {
 	t.Parallel()
 
-	aw := RuntimeAwareness{
+	aw := fullRuntimeAwarenessFixture()
+
+	governor := renderGovernorRuntimeAwarenessBlock(aw)
+	face := renderFaceAwarenessBlock(aw)
+
+	assertAwarenessKeysPresent(t, "governor", governor, awarenessRoleLineKeys(awarenessRoleGovernor))
+	assertAwarenessKeysPresent(t, "face", face, awarenessRoleLineKeys(awarenessRoleFace))
+	assertAwarenessKeysAbsent(t, "face", face, awarenessRoleExcludedLineKeys(awarenessRoleFace))
+	assertAwarenessKeysAbsent(t, "governor", governor, awarenessRoleExcludedLineKeys(awarenessRoleGovernor))
+}
+
+func fullRuntimeAwarenessFixture() RuntimeAwareness {
+	return RuntimeAwareness{
 		SessionKind:                "interactive",
 		RunKind:                    "interactive",
 		Channel:                    "telegram",
 		EventOrigin:                "user",
-		ActiveProvider:             "openai",
-		PlanActive:                 true,
-		PlanSummary:                "finish performance work",
-		OperationActive:            true,
-		OperationObjective:         "reduce token cost",
-		OperationStatus:            "active",
-		OperationStage:             "r3",
-		OperationSummary:           "shared awareness factoring",
 		TurnAuthorizationKind:      "admin_dm",
-		GovernorBackend:            "openai",
+		GovernorBackend:            "native",
 		GovernorProvider:           "openai",
 		GovernorModel:              "gpt-5.5",
 		GovernorProviderPath:       []string{"openai", "anthropic"},
+		ActiveProvider:             "openai",
+		FallbackActive:             true,
+		ReasoningEffort:            "high",
+		ReasoningSummary:           "auto",
+		GovernorEffortRecipe:       "high",
+		ArtifactMode:               "floor",
 		BrokerageActive:            true,
 		BrokeragePhase:             "proposal",
-		SuggestedExecutionContract: "governor-only contract",
-		RatifiedExecutionContract:  "ratified-governor-contract",
-		SignalJudgment:             "bounded_execution",
-		ProposalActive:             true,
-		ProposalKind:               "deploy",
-		ProposalStatus:             "pending",
-		ProposalBoundedEffect:      "restart service once",
-		PhasePlanCurrentPhaseID:    "phase-secret-authority",
-		OperationFindings:          []string{"authority finding"},
-		OperationArtifacts:         []string{"authority artifact"},
-		ContinuationGovernorIntent: "governor should continue",
-		ContinuationRatified:       true,
-		PromptRoot:                 "/prompt-root",
-		ExecRoot:                   "/exec-root",
-		SandboxMode:                "trusted",
-		NetworkPolicy:              "allowlist",
+		SuggestedExecutionContract: "suggested contract",
+		BrokerageRatification:      "ratified",
+		RatifiedExecutionContract:  "ratified contract",
+		SignalJudgment:             "bounded",
 		FaceBackend:                "provider",
 		FaceProvider:               "anthropic",
 		FaceModel:                  "claude",
 		PersonaEffortRecipe:        "low",
 		DeliveryMode:               "stream",
 		StreamReply:                true,
+		InboundWasVoice:            true,
 		ReplyModalityDefault:       "text",
-		ReplyModalityReason:        "voice.mode=auto",
+		ReplyModalityReason:        "voice auto",
+		ReplyModalityOverride:      "none",
+		MediaAttached:              true,
 		MediaMode:                  "floor",
+		HiddenInputsActive:         true,
+		HiddenInputCategories:      []string{"semantic recurrence"},
+		ProvenanceSummary:          "prior work",
+		PlanActive:                 true,
+		PlanSummary:                "finish performance work",
+		PlanEvents:                 []string{"plan updated"},
+		OperationActive:            true,
+		OperationObjective:         "reduce token cost",
+		OperationStatus:            "active",
+		OperationStage:             "r3",
+		OperationSummary:           "shared awareness factoring",
+		OperationDigest:            []string{"tool output compacted"},
+		ProposalActive:             true,
+		ProposalKind:               "deploy",
+		ProposalStatus:             "pending",
+		ProposalSummary:            "restart service",
+		ProposalWhyNow:             "approval needed",
+		ProposalBoundedEffect:      "restart service once",
+		PhasePlanActive:            true,
+		PhasePlanID:                "phase-plan",
+		PhasePlanGoal:              "complete rollout",
+		PhasePlanCurrentPhaseID:    "phase-one",
+		OperationPhases:            []string{"phase one"},
+		OperationFindings:          []string{"authority finding"},
+		OperationArtifacts:         []string{"authority artifact"},
+		ContinuationStatus:         "pending",
+		ContinuationActive:         true,
+		ContinuationPersonaIntent:  "speak clearly",
+		ContinuationPersonaWhy:     "visible continuity",
+		ContinuationGovernorIntent: "continue bounded work",
+		ContinuationGovernorWhy:    "approval exists",
+		ContinuationRatified:       true,
+		ContinuationBlockedReason:  "none",
+		PromptRoot:                 "/prompt-root",
+		ExecRoot:                   "/exec-root",
+		SharedMemoryRoot:           "/shared-memory",
+		UserWorkspaceRoot:          "/workspace",
+		UserMemoryRoot:             "/user-memory",
+		WorkingRoot:                "/working",
+		SandboxMode:                "trusted",
+		NetworkPolicy:              "allowlist",
 	}
+}
 
-	governor := renderGovernorRuntimeAwarenessBlock(aw)
-	face := renderFaceAwarenessBlock(aw)
+func assertAwarenessKeysPresent(t *testing.T, label string, text string, keys []string) {
+	t.Helper()
+	for _, key := range keys {
+		token := awarenessLineToken(key)
+		if !strings.Contains(text, token) {
+			t.Fatalf("%s awareness missing %q:\n%s", label, key, text)
+		}
+	}
+}
 
-	for _, want := range []string{"session_kind", "plan_summary", "operation_objective", "governor_model", "proposal_bounded_effect", "phase_plan_current_phase_id", "exec_root"} {
-		if !strings.Contains(governor, want) {
-			t.Fatalf("governor awareness missing %q:\n%s", want, governor)
+func assertAwarenessKeysAbsent(t *testing.T, label string, text string, keys []string) {
+	t.Helper()
+	for _, key := range keys {
+		token := awarenessLineToken(key)
+		if strings.Contains(text, token) {
+			t.Fatalf("%s awareness leaked %q:\n%s", label, key, text)
 		}
 	}
-	for _, want := range []string{"session_kind", "plan_summary", "operation_objective", "media_attached", "media_mode", "face_backend", "reply_modality_default"} {
-		if !strings.Contains(face, want) {
-			t.Fatalf("face awareness missing %q:\n%s", want, face)
-		}
-	}
-	for _, forbidden := range []string{"turn_authorization_kind", "governor_model", "configured_provider_path", "idolum_suggested_execution_contract", "ratified_execution_contract", "proposal_bounded_effect", "phase_plan_current_phase_id", "operation_findings", "operation_artifacts", "continuation_governor_intent", "exec_root", "sandbox_mode", "network_policy"} {
-		if strings.Contains(face, forbidden) {
-			t.Fatalf("face awareness leaked governor-only field %q:\n%s", forbidden, face)
-		}
-	}
-	for _, forbidden := range []string{"face_backend", "face_provider", "face_model", "persona_effort_recipe", "delivery_mode", "stream_reply", "reply_modality_default", "reply_modality_reason"} {
-		if strings.Contains(governor, forbidden) {
-			t.Fatalf("governor awareness leaked face-only field %q:\n%s", forbidden, governor)
-		}
-	}
+}
+
+func awarenessLineToken(key string) string {
+	return "- " + strings.TrimSpace(key) + ":"
 }
