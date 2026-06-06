@@ -18,7 +18,6 @@ func renderOperationProposalMaterializedPromptFallback(state session.Continuatio
 	if continuationRequiresEscalatedOperatorApproval(state) {
 		return renderEscalatedOperatorApprovalPromptFallback(state)
 	}
-	_ = session.NormalizeActionProposal(state.ActionProposal)
 	title := continuationApprovalPromptTitle(state)
 	if title == "" {
 		title = "bounded continuation"
@@ -27,20 +26,97 @@ func renderOperationProposalMaterializedPromptFallback(state session.Continuatio
 	if action == "" {
 		action = title
 	}
-	line := "Approve “" + title + "”: " + action
-	if state.RemainingTurns > 0 {
-		line = fmt.Sprintf("Approve “%s” for %d %s: %s", title, state.RemainingTurns, continuationTurnWord(state.RemainingTurns), action)
+	card := newContinuationApprovalPromptCard("Approve", title, state.RemainingTurns)
+	card.addSection("Scope", action)
+	card.addListSection("Covers", continuationApprovalPromptIncludedLines(state))
+	card.addListSectionWithLimit("Requires", continuationRequiredCapabilityLines(state), 4, 220)
+	card.addListSection("Stops before", continuationApprovalPromptStops(state))
+	return card.String()
+}
+
+type continuationApprovalPromptCard struct {
+	heading  string
+	sections []string
+}
+
+func newContinuationApprovalPromptCard(action string, title string, turns int) *continuationApprovalPromptCard {
+	action = strings.TrimSpace(action)
+	if action == "" {
+		action = "Approve"
 	}
-	if included := continuationApprovalPromptIncludedLines(state); len(included) > 0 {
-		line += ". Covers " + strings.Join(included, "; ")
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = "bounded continuation"
 	}
-	if capabilities := continuationRequiredCapabilityLines(state); len(capabilities) > 0 {
-		line += ". Requires " + strings.Join(capabilities, "; ")
+	heading := action + ":\n" + title
+	if turns > 0 {
+		heading += fmt.Sprintf("\n\nBudget:\nup to %d %s", turns, continuationTurnWord(turns))
 	}
-	if stops := continuationApprovalPromptStops(state); len(stops) > 0 {
-		line += ". Stops before " + strings.Join(stops, ", ")
+	return &continuationApprovalPromptCard{heading: heading}
+}
+
+func (c *continuationApprovalPromptCard) addSection(label string, value string) {
+	if c == nil {
+		return
 	}
-	return line + "."
+	label = strings.TrimSpace(label)
+	value = continuationPromptCompactLine(value, 360)
+	if label == "" || value == "" {
+		return
+	}
+	c.sections = append(c.sections, label+":\n"+value)
+}
+
+func (c *continuationApprovalPromptCard) addListSection(label string, values []string) {
+	c.addListSectionWithLimit(label, values, 6, 140)
+}
+
+func (c *continuationApprovalPromptCard) addListSectionWithLimit(label string, values []string, limit int, itemLimit int) {
+	if c == nil {
+		return
+	}
+	label = strings.TrimSpace(label)
+	items := continuationPromptBulletItems(values, limit, itemLimit)
+	if label == "" || len(items) == 0 {
+		return
+	}
+	c.sections = append(c.sections, label+":\n- "+strings.Join(items, "\n- "))
+}
+
+func (c *continuationApprovalPromptCard) String() string {
+	if c == nil {
+		return ""
+	}
+	parts := []string{strings.TrimSpace(c.heading)}
+	for _, section := range c.sections {
+		if section = strings.TrimSpace(section); section != "" {
+			parts = append(parts, section)
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+}
+
+func continuationPromptBulletItems(values []string, limit int, itemLimit int) []string {
+	if limit <= 0 {
+		limit = len(values)
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, minStatusInt(len(values), limit))
+	for _, value := range values {
+		value = continuationPromptCompactLine(value, itemLimit)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
 }
 
 func continuationRequiresEscalatedOperatorApproval(state session.ContinuationState) bool {
@@ -58,17 +134,12 @@ func renderEscalatedOperatorApprovalPromptFallback(state session.ContinuationSta
 	if action == "" {
 		action = title
 	}
-	line := "Approve “" + title + "”: " + action
-	if included := continuationEscalatedApprovalAllowedLines(state); len(included) > 0 {
-		line += ". This can use " + strings.Join(included, ", ")
-	}
-	if capabilities := continuationRequiredCapabilityLines(state); len(capabilities) > 0 {
-		line += ". Requires " + strings.Join(capabilities, "; ")
-	}
-	if stops := continuationApprovalPromptStops(state); len(stops) > 0 {
-		line += ". Stops before " + strings.Join(stops, ", ")
-	}
-	return line + "."
+	card := newContinuationApprovalPromptCard("Approve", title, state.RemainingTurns)
+	card.addSection("Scope", action)
+	card.addListSection("Can use", continuationEscalatedApprovalAllowedLines(state))
+	card.addListSectionWithLimit("Requires", continuationRequiredCapabilityLines(state), 4, 220)
+	card.addListSection("Stops before", continuationApprovalPromptStops(state))
+	return card.String()
 }
 
 func continuationEscalatedApprovalAllowedLines(state session.ContinuationState) []string {
@@ -230,23 +301,15 @@ func renderPlanBudgetPromptFallback(state session.ContinuationState) string {
 	state = session.NormalizeContinuationState(state)
 	proposal := session.NormalizeActionProposal(state.ActionProposal)
 	title := planBudgetPromptTitle(state, proposal)
-	line := "Approve plan for “" + title + "”"
-	if state.RemainingTurns > 0 {
-		line += fmt.Sprintf(" for %d %s", state.RemainingTurns, continuationTurnWord(state.RemainingTurns))
-	}
+	card := newContinuationApprovalPromptCard("Approve plan", title, state.RemainingTurns)
 	if first := planBudgetFirstStep(state); first != "" {
-		line += ": first, " + continuationPromptCompactLine(first, 160)
+		card.addSection("First step", continuationPromptCompactLine(first, 160))
 	}
-	if included := planBudgetIncludedLines(state); len(included) > 0 {
-		line += ". Covers " + strings.Join(included, "; ")
-	}
-	if capabilities := continuationRequiredCapabilityLines(state); len(capabilities) > 0 {
-		line += ". Requires " + strings.Join(capabilities, "; ")
-	}
-	if stops := planBudgetStopLines(state); len(stops) > 0 {
-		line += ". Stops before " + strings.Join(stops, ", ")
-	}
-	return line + ". Anything outside this plan needs a fresh approval."
+	card.addListSection("Covers", planBudgetIncludedLines(state))
+	card.addListSectionWithLimit("Requires", continuationRequiredCapabilityLines(state), 4, 220)
+	card.addListSection("Stops before", planBudgetStopLines(state))
+	card.addSection("Fresh approval", "Anything outside this plan needs a fresh approval.")
+	return card.String()
 }
 
 func planBudgetPromptTitle(state session.ContinuationState, proposal session.ActionProposal) string {
