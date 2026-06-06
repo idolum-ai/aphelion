@@ -52,10 +52,15 @@ func ApplyHiddenInputAwareness(aw prompt.RuntimeAwareness, input HiddenInputAwar
 // ApplyPlanAwareness composes plan-state fields from the operational
 // current-state store into runtime awareness.
 func ApplyPlanAwareness(aw prompt.RuntimeAwareness, state session.PlanState) prompt.RuntimeAwareness {
+	return ApplyPlanAwarenessWithEvents(aw, state, nil)
+}
+
+func ApplyPlanAwarenessWithEvents(aw prompt.RuntimeAwareness, state session.PlanState, events []session.PlanEvent) prompt.RuntimeAwareness {
 	state = session.NormalizePlanState(state)
 	aw.PlanActive = len(state.Steps) > 0
 	aw.PlanSummary = strings.TrimSpace(state.Explanation)
 	aw.PlanSteps = append([]string(nil), state.FormattedSteps()...)
+	aw.PlanEvents = session.SemanticPlanEventProjections(events, 5)
 	return aw
 }
 

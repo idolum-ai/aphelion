@@ -52,7 +52,10 @@ func TestApplyPlanAwarenessCopiesPlanState(t *testing.T) {
 			{Step: "  draft design  ", Status: session.PlanStatusCompleted},
 		},
 	}
-	aw := ApplyPlanAwareness(base, state)
+	aw := ApplyPlanAwarenessWithEvents(base, state, []session.PlanEvent{
+		{Kind: session.PlanEventKindToolUpdated, PlanState: state},
+		{Kind: session.PlanEventKindPhaseEntered, PlanState: state},
+	})
 
 	if !aw.PlanActive {
 		t.Fatal("PlanActive = false, want true")
@@ -62,6 +65,9 @@ func TestApplyPlanAwarenessCopiesPlanState(t *testing.T) {
 	}
 	if got, want := aw.PlanSteps, []string{"[completed] draft design"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("PlanSteps = %#v, want %#v", got, want)
+	}
+	if got := strings.Join(aw.PlanEvents, "\n"); !strings.Contains(got, "phase.entered") || strings.Contains(got, "tool_updated") {
+		t.Fatalf("PlanEvents = %#v, want semantic events without tool_updated", aw.PlanEvents)
 	}
 }
 

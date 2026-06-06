@@ -354,7 +354,7 @@ func renderMaterialFloorContractBlock(aw RuntimeAwareness) string {
 }
 
 func renderCurrentPlanStateBlock(aw RuntimeAwareness) string {
-	if !aw.PlanActive && strings.TrimSpace(aw.PlanSummary) == "" && len(aw.PlanSteps) == 0 {
+	if !aw.PlanActive && strings.TrimSpace(aw.PlanSummary) == "" && len(aw.PlanSteps) == 0 && len(aw.PlanEvents) == 0 {
 		return ""
 	}
 	lines := []string{
@@ -370,6 +370,16 @@ func renderCurrentPlanStateBlock(aw RuntimeAwareness) string {
 			continue
 		}
 		lines = append(lines, "- "+step)
+	}
+	if len(aw.PlanEvents) > 0 {
+		lines = append(lines, "Recent semantic plan events:")
+		for _, event := range aw.PlanEvents {
+			event = strings.TrimSpace(event)
+			if event == "" {
+				continue
+			}
+			lines = append(lines, "- "+event)
+		}
 	}
 	return strings.Join(lines, "\n\n")
 }

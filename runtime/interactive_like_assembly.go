@@ -97,14 +97,16 @@ func (r *Runtime) assembleInteractiveLikeTurn(ctx context.Context, input interac
 
 	hiddenInputs := r.assembleInteractiveHiddenInputs(ctx, input.Key, input.Scope, now, prepared.LedgerText, sess.LastFloorMetadata)
 	hiddenInputs.addCoreAll(prepared.ArtifactDecisionInputs)
+	planEvents, _ := r.store.PlanEvents(input.Key, 20)
 	baseGovernorAwareness := turn.ApplyContinuationAwareness(
 		turn.ApplyOperationAwareness(
-			turn.ApplyPlanAwareness(
+			turn.ApplyPlanAwarenessWithEvents(
 				turn.ApplyEventAwareness(
 					turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(input.Scope, runKind, channel, exec), hiddenInputs.toTurnAwareness()),
 					input.EventAwareness,
 				),
 				sess.PlanState,
+				planEvents,
 			),
 			sess.OperationState,
 		),

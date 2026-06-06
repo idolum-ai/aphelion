@@ -47,6 +47,7 @@ type RuntimeAwareness struct {
 	PlanActive                 bool
 	PlanSummary                string
 	PlanSteps                  []string
+	PlanEvents                 []string
 	OperationActive            bool
 	OperationObjective         string
 	OperationStatus            string
@@ -125,6 +126,7 @@ func renderSharedAwarenessLines(aw RuntimeAwareness) []string {
 		nonEmptyAwarenessLine("provenance_summary", aw.ProvenanceSummary),
 		fmt.Sprintf("- plan_active: %t", aw.PlanActive),
 		nonEmptyAwarenessLine("plan_summary", aw.PlanSummary),
+		nonEmptyAwarenessLine("plan_events", formatAwarenessList(aw.PlanEvents)),
 		fmt.Sprintf("- operation_active: %t", aw.OperationActive),
 		nonEmptyAwarenessLine("operation_objective", aw.OperationObjective),
 		nonEmptyAwarenessLine("operation_status", aw.OperationStatus),

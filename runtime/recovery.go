@@ -25,6 +25,21 @@ type startupRecoveryMissionEvidence struct {
 	RecentResults   []session.MissionResult
 }
 
+type RecoveryRecord struct {
+	RunID              int64    `json:"run_id"`
+	Cause              string   `json:"cause"`
+	LastTool           string   `json:"last_tool,omitempty"`
+	LastToolPreview    string   `json:"last_tool_preview,omitempty"`
+	LastPhase          string   `json:"last_phase,omitempty"`
+	DoNotAssume        []string `json:"do_not_assume,omitempty"`
+	SafeOptions        []string `json:"safe_options,omitempty"`
+	LedgerPointer      string   `json:"ledger_pointer"`
+	ToolCallsStarted   int      `json:"tool_calls_started,omitempty"`
+	ToolCallsFinished  int      `json:"tool_calls_finished,omitempty"`
+	LastToolResultHint string   `json:"last_tool_result_hint,omitempty"`
+	LastToolError      string   `json:"last_tool_error,omitempty"`
+}
+
 func (r *Runtime) StartStartupRecovery(ctx context.Context, logger func(string, ...any)) {
 	if r == nil {
 		return
@@ -316,8 +331,8 @@ func (r *Runtime) startupRecoveryMissionEvidence() (startupRecoveryMissionEviden
 func renderStartupRecoveryRequest(runs []session.TurnRun, evidence ...startupRecoveryMissionEvidence) string {
 	lines := []string{
 		"Startup recovery analysis.",
-		"The previous service process ended while the following turns were still running.",
-		"Analyze where execution likely stopped and suggest safe recovery options.",
+		"The previous service process ended while turns were still running.",
+		"Use these typed RecoveryRecords; do not infer completion beyond the fields.",
 		"",
 	}
 
@@ -325,42 +340,55 @@ func renderStartupRecoveryRequest(runs []session.TurnRun, evidence ...startupRec
 		lines = appendStartupRecoveryMissionEvidence(lines, evidence[0])
 	}
 
+	lines = append(lines, "recovery_records:")
 	for _, run := range runs {
-		lines = append(lines, fmt.Sprintf("- run_id=%d kind=%s chat_id=%d user_id=%d", run.ID, run.Kind, run.ChatID, run.UserID))
-		lines = append(lines, "  started_at="+run.StartedAt.UTC().Format(time.RFC3339))
-		if !run.LastActivityAt.IsZero() {
-			lines = append(lines, "  last_activity_at="+run.LastActivityAt.UTC().Format(time.RFC3339))
+		for _, line := range renderRecoveryRecordLines(recoveryRecordForTurnRun(run)) {
+			lines = append(lines, "  "+line)
 		}
-		lines = append(lines, "  request="+strconv.Quote(truncatePreview(run.RequestText, 220)))
-		if run.ToolCallsStarted > 0 {
-			lines = append(lines, fmt.Sprintf("  tool_calls_started=%d", run.ToolCallsStarted))
-		}
-		if run.ToolCallsFinished > 0 {
-			lines = append(lines, fmt.Sprintf("  tool_calls_finished=%d", run.ToolCallsFinished))
-		}
-		if strings.TrimSpace(run.LastToolName) != "" {
-			lines = append(lines, "  last_tool="+run.LastToolName)
-		}
-		if strings.TrimSpace(run.LastToolPreview) != "" {
-			lines = append(lines, "  last_tool_preview="+truncatePreview(run.LastToolPreview, 220))
-		}
-		if strings.TrimSpace(run.LastToolResultPreview) != "" {
-			lines = append(lines, "  last_tool_result_preview="+truncatePreview(run.LastToolResultPreview, 220))
-		}
-		if strings.TrimSpace(run.LastToolError) != "" {
-			lines = append(lines, "  last_tool_error="+strconv.Quote(truncatePreview(run.LastToolError, 220)))
-		}
-		if run.ProgressMessageID != 0 {
-			lines = append(lines, fmt.Sprintf("  progress_message_id=%d", run.ProgressMessageID))
-		}
-		if strings.TrimSpace(run.ErrorText) != "" {
-			lines = append(lines, "  machine_error="+strconv.Quote(truncatePreview(run.ErrorText, 220)))
-		}
-		lines = append(lines, "")
 	}
-
-	lines = append(lines, "Return a concise recovery note. The runtime will persist it into the maintenance ledger and recovered turn rows.")
+	lines = append(lines, "")
+	lines = append(lines, "Return 3-5 concise lines: likely stop point, do_not_assume items, and safest next check.")
 	return strings.Join(lines, "\n")
+}
+
+func recoveryRecordForTurnRun(run session.TurnRun) RecoveryRecord {
+	cause := strings.TrimSpace(run.ErrorText)
+	if cause == "" {
+		cause = "process_restarted_before_turn_completed"
+	}
+	return RecoveryRecord{
+		RunID:              run.ID,
+		Cause:              cause,
+		LastTool:           strings.TrimSpace(run.LastToolName),
+		LastToolPreview:    truncatePreview(strings.TrimSpace(run.LastToolPreview), 120),
+		LastPhase:          strings.TrimSpace(string(run.Kind)),
+		DoNotAssume:        []string{"turn_completed", "external_effect_completed", "verification_completed"},
+		SafeOptions:        []string{"inspect_current_state", "check_turn_run_status", "non_mutating_health_check"},
+		LedgerPointer:      fmt.Sprintf("turn_runs:%d", run.ID),
+		ToolCallsStarted:   run.ToolCallsStarted,
+		ToolCallsFinished:  run.ToolCallsFinished,
+		LastToolResultHint: truncatePreview(strings.TrimSpace(run.LastToolResultPreview), 120),
+		LastToolError:      truncatePreview(strings.TrimSpace(run.LastToolError), 120),
+	}
+}
+
+func renderRecoveryRecordLines(record RecoveryRecord) []string {
+	lines := []string{fmt.Sprintf("- RecoveryRecord run_id=%d cause=%q ledger_pointer=%q", record.RunID, record.Cause, record.LedgerPointer)}
+	if record.LastTool != "" {
+		lines = append(lines, fmt.Sprintf("  last_tool=%s last_tool_preview=%q", record.LastTool, record.LastToolPreview))
+	}
+	if record.ToolCallsStarted > 0 || record.ToolCallsFinished > 0 {
+		lines = append(lines, fmt.Sprintf("  tool_calls_started=%d tool_calls_finished=%d", record.ToolCallsStarted, record.ToolCallsFinished))
+	}
+	if record.LastToolResultHint != "" {
+		lines = append(lines, fmt.Sprintf("  last_tool_result_hint=%q", record.LastToolResultHint))
+	}
+	if record.LastToolError != "" {
+		lines = append(lines, fmt.Sprintf("  last_tool_error=%q", record.LastToolError))
+	}
+	lines = append(lines, "  do_not_assume="+strings.Join(record.DoNotAssume, ","))
+	lines = append(lines, "  safe_options="+strings.Join(record.SafeOptions, ","))
+	return lines
 }
 
 func appendStartupRecoveryMissionEvidence(lines []string, evidence startupRecoveryMissionEvidence) []string {
