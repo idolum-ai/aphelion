@@ -207,6 +207,9 @@ func (c *maintenanceTurnCoordinator) Render(ctx context.Context, req turn.FaceRe
 	replyText := pipeline.SerializeFloorFallback(c.lastGovernor.MaterialFloor, c.lastGovernor.FloorText, pipeline.FallbackOptions{
 		Channel: c.requestChannel(),
 	})
+	if maintenanceRunKindSkipsFaceRender(maintenanceRunKind(c.species)) {
+		return &turn.FaceRenderResult{Text: strings.TrimSpace(replyText)}, nil
+	}
 	if c.currentFaceModel == nil || c.runtime.faceBackend == face.BackendFloorFallback {
 		return &turn.FaceRenderResult{Text: strings.TrimSpace(replyText)}, nil
 	}
@@ -316,6 +319,15 @@ func maintenanceRunKind(species maintenanceTurnSpecies) session.TurnRunKind {
 		return session.TurnRunKindRecovery
 	default:
 		return session.TurnRunKindInteractive
+	}
+}
+
+func maintenanceRunKindSkipsFaceRender(kind session.TurnRunKind) bool {
+	switch kind {
+	case session.TurnRunKindHeartbeat, session.TurnRunKindCron, session.TurnRunKindRecovery:
+		return true
+	default:
+		return false
 	}
 }
 

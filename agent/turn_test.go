@@ -951,6 +951,45 @@ func TestRunTurnDoesNotExecuteToolMissingFromDefinitions(t *testing.T) {
 	}
 }
 
+func TestRunTurnStopsToolLoopOnTokenBudgetExhaustion(t *testing.T) {
+	t.Parallel()
+
+	provider := &mockProvider{
+		complete: func(_ context.Context, call int, _ []Message, _ []ToolDef) (*Response, error) {
+			if call != 1 {
+				t.Fatalf("provider call = %d, want one call", call)
+			}
+			return &Response{
+				Usage: core.TokenUsage{InputTokens: 10, OutputTokens: 80, TotalTokens: 90},
+				ToolCalls: []ToolCall{{
+					ID:    "call-1",
+					Name:  "exec",
+					Input: json.RawMessage(`{"command":"pwd"}`),
+				}},
+			}, nil
+		},
+	}
+	tools := &mockTools{
+		defs: []ToolDef{{Name: "exec"}},
+		exec: func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+			t.Fatal("tool should not execute after token budget exhaustion")
+			return "", nil
+		},
+	}
+	budget := &Budget{Max: 5, Caution: 0.7, Warning: 0.9, OutputTokenHardLimit: 75}
+
+	result, _, err := RunTurn(context.Background(), provider, tools, budget, nil, nil)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != tokenBudgetExhaustedReply {
+		t.Fatalf("result.Text = %q, want token budget exhaustion", result.Text)
+	}
+	if len(tools.execCalls) != 0 {
+		t.Fatalf("exec calls = %#v, want none", tools.execCalls)
+	}
+}
+
 func TestContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

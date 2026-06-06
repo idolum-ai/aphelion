@@ -96,6 +96,7 @@ func (r *Runtime) newFaceRendererForProvider(provider agent.Provider, slot core.
 		Channel:       "telegram",
 		WorkspaceRoot: r.cfg.Agent.PromptRoot,
 		Reasoning:     reasoning,
+		MaxTokens:     faceRenderMaxTokens,
 	})
 }
 

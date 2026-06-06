@@ -3,6 +3,7 @@
 package prompt
 
 import (
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/workspace"
 	"strings"
@@ -499,21 +500,67 @@ func TestBuildGovernorPromptBlocksMarksStableBoundaryForCaching(t *testing.T) {
 		t.Fatalf("block count = %d, want at least 3", len(blocks))
 	}
 	breakpoints := 0
-	lastDynamicIdx := len(blocks) - 1
 	for i, block := range blocks {
 		if block.CacheBreakpoint {
 			breakpoints++
-			if i >= lastDynamicIdx {
-				t.Fatalf("dynamic block should not be cache breakpoint: %#v", block)
+			if strings.Contains(block.Text, "## Runtime Awareness") || strings.Contains(block.Text, "## Dynamic Workspace Files") {
+				t.Fatalf("volatile block should not be cache breakpoint at %d: %#v", i, block)
 			}
 		}
 	}
 	if breakpoints == 0 || breakpoints > maxStableCacheBreakpoints {
 		t.Fatalf("cache breakpoints = %d, want 1..%d: %#v", breakpoints, maxStableCacheBreakpoints, blocks)
 	}
-	if !blocks[len(blocks)-2].CacheBreakpoint {
-		t.Fatalf("last stable block should be cache breakpoint: %#v", blocks)
+	awarenessIdx := governorPromptBlockIndexContaining(blocks, "## Runtime Awareness")
+	if awarenessIdx < 0 {
+		t.Fatalf("missing runtime awareness block: %#v", blocks)
 	}
+	for i, block := range blocks {
+		if block.CacheBreakpoint && i >= awarenessIdx {
+			t.Fatalf("cache breakpoint at %d should precede runtime awareness at %d: %#v", i, awarenessIdx, blocks)
+		}
+	}
+	for _, want := range []string{"## Authority", "## Stable Workspace Files"} {
+		idx := governorPromptBlockIndexContaining(blocks, want)
+		if idx < 0 {
+			t.Fatalf("missing block containing %q: %#v", want, blocks)
+		}
+		if !blocks[idx].CacheBreakpoint {
+			t.Fatalf("block %q at %d should be cache breakpoint: %#v", want, idx, blocks)
+		}
+	}
+	manifestIdx := governorPromptBlockIndexContaining(blocks, "## Tool Manifest")
+	if manifestIdx < 0 {
+		t.Fatalf("missing tool manifest block: %#v", blocks)
+	}
+	toolContractCached := false
+	for i := manifestIdx; i < len(blocks); i++ {
+		if strings.Contains(blocks[i].Text, "## Runtime Awareness") || strings.Contains(blocks[i].Text, "## Dynamic Workspace Files") {
+			break
+		}
+		if blocks[i].CacheBreakpoint {
+			toolContractCached = true
+			break
+		}
+	}
+	if !toolContractCached {
+		t.Fatalf("no tool contract cache breakpoint after manifest: %#v", blocks)
+	}
+	for _, notWant := range []string{"## Runtime Awareness", "## Dynamic Workspace Files"} {
+		idx := governorPromptBlockIndexContaining(blocks, notWant)
+		if idx >= 0 && blocks[idx].CacheBreakpoint {
+			t.Fatalf("block %q at %d should not be cache breakpoint: %#v", notWant, idx, blocks)
+		}
+	}
+}
+
+func governorPromptBlockIndexContaining(blocks []agent.SystemBlock, needle string) int {
+	for i, block := range blocks {
+		if strings.Contains(block.Text, needle) {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestBuildGovernorPromptCacheAwareLookbackShapesDynamicFiles(t *testing.T) {
@@ -758,7 +805,10 @@ func TestRuntimeAwarenessSharedLinesAreByteIdenticalAcrossRoles(t *testing.T) {
 }
 
 func sharedAwarenessBody(aw RuntimeAwareness) string {
-	return strings.Join(compactLines(renderSharedAwarenessLines(aw)), "\n")
+	lines := []string{}
+	lines = appendAwarenessSection(lines, "Shared Stable Facts", renderSharedStableAwarenessLines(aw))
+	lines = appendAwarenessSection(lines, "Shared Turn State", renderSharedTurnAwarenessLines(aw))
+	return strings.Join(compactLines(lines), "\n")
 }
 
 func TestBuildFacePromptKeepsContinuationAuthorityOutOfDeliveryAwareness(t *testing.T) {

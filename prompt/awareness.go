@@ -102,25 +102,38 @@ func renderFaceAwarenessBlock(aw RuntimeAwareness) string {
 
 func renderRuntimeAwarenessBlock(aw RuntimeAwareness, role AwarenessRole, heading string) string {
 	lines := []string{heading}
-	lines = append(lines, renderSharedAwarenessLines(aw)...)
+	lines = appendAwarenessSection(lines, "Shared Stable Facts", renderSharedStableAwarenessLines(aw))
+	lines = appendAwarenessSection(lines, "Shared Turn State", renderSharedTurnAwarenessLines(aw))
 	switch role {
 	case AwarenessRoleFace:
-		lines = append(lines, renderFaceAwarenessLines(aw)...)
+		lines = appendAwarenessSection(lines, "Face Delta", renderFaceAwarenessLines(aw))
 	default:
-		lines = append(lines, renderGovernorAwarenessLines(aw)...)
+		lines = appendAwarenessSection(lines, "Governor Delta", renderGovernorAwarenessLines(aw))
 	}
 	return strings.Join(compactLines(lines), "\n")
 }
 
 func renderSharedAwarenessLines(aw RuntimeAwareness) []string {
+	lines := renderSharedStableAwarenessLines(aw)
+	lines = append(lines, renderSharedTurnAwarenessLines(aw)...)
+	return lines
+}
+
+func renderSharedStableAwarenessLines(aw RuntimeAwareness) []string {
 	lines := []string{
 		nonEmptyAwarenessLine("session_kind", aw.SessionKind),
 		nonEmptyAwarenessLine("run_kind", aw.RunKind),
 		nonEmptyAwarenessLine("channel", aw.Channel),
 		nonEmptyAwarenessLine("event_origin", aw.EventOrigin),
+		nonEmptyAwarenessLine("artifact_mode", aw.ArtifactMode),
+	}
+	return lines
+}
+
+func renderSharedTurnAwarenessLines(aw RuntimeAwareness) []string {
+	lines := []string{
 		nonEmptyAwarenessLine("active_provider", aw.ActiveProvider),
 		fmt.Sprintf("- fallback_active: %t", aw.FallbackActive),
-		nonEmptyAwarenessLine("artifact_mode", aw.ArtifactMode),
 		fmt.Sprintf("- hidden_inputs_active: %t", aw.HiddenInputsActive),
 		nonEmptyAwarenessLine("hidden_input_categories", formatAwarenessList(aw.HiddenInputCategories)),
 		nonEmptyAwarenessLine("provenance_summary", aw.ProvenanceSummary),
@@ -137,6 +150,15 @@ func renderSharedAwarenessLines(aw RuntimeAwareness) []string {
 		nonEmptyAwarenessLine("media_mode", aw.MediaMode),
 	}
 	return lines
+}
+
+func appendAwarenessSection(lines []string, title string, section []string) []string {
+	section = compactLines(section)
+	if len(section) == 0 {
+		return lines
+	}
+	lines = append(lines, "### "+strings.TrimSpace(title))
+	return append(lines, section...)
 }
 
 func renderGovernorAwarenessLines(aw RuntimeAwareness) []string {

@@ -58,25 +58,29 @@ type TurnObserver interface {
 }
 
 type ModelRequestEvent struct {
-	Attempt                            int
-	HistoryCount                       int
-	ToolCount                          int
-	Duration                           time.Duration
-	Error                              string
-	FailureKind                        string
-	Retryable                          bool
-	ToolCallCount                      int
-	OutputChars                        int
-	TokenUsage                         core.TokenUsage
-	EstimatedInputTokens               int
-	ContextWindow                      int
-	ContextMaxTokens                   int
-	ContextHardTokens                  int
-	ContextPreflightCompacted          bool
-	ContextPreflightOriginalTokens     int
-	ContextPreflightCompactedTokens    int
-	ContextPreflightOriginalToolChars  int
-	ContextPreflightCompactedToolChars int
+	Attempt                             int
+	HistoryCount                        int
+	ToolCount                           int
+	Duration                            time.Duration
+	Error                               string
+	FailureKind                         string
+	Retryable                           bool
+	ToolCallCount                       int
+	OutputChars                         int
+	TokenUsage                          core.TokenUsage
+	EstimatedInputTokens                int
+	ContextWindow                       int
+	ContextMaxTokens                    int
+	ContextHardTokens                   int
+	ContextPreflightCompacted           bool
+	ContextPreflightOriginalTokens      int
+	ContextPreflightCompactedTokens     int
+	ContextPreflightOriginalToolChars   int
+	ContextPreflightCompactedToolChars  int
+	ContextAdmissionToolEvidenceLayers  int
+	ContextAdmissionToolEvidencePacked  int
+	ContextAdmissionToolEvidenceDigests int
+	ContextAdmissionSuppressedLayers    int
 }
 
 type ToolBatchEvent struct {
@@ -209,12 +213,13 @@ const (
 )
 
 const (
-	maxProviderRetries       = 3
-	initialRetryBackoff      = 100 * time.Millisecond
-	providerFailureReply     = "Inference backend is unavailable. This turn did not complete. You can /stop to cancel current work and try again."
-	budgetExhaustedReply     = "Iteration budget exhausted before final response."
-	toolBudgetExhaustedReply = "Tool-call budget exhausted before final response. Summarize progress and continue in a new turn."
-	planningOnlySteer        = "Your previous reply only described a plan. Do not restate the plan. Start executing now using available tools. Use update_plan only if the work is genuinely multi-step."
+	maxProviderRetries        = 3
+	initialRetryBackoff       = 100 * time.Millisecond
+	providerFailureReply      = "Inference backend is unavailable. This turn did not complete. You can /stop to cancel current work and try again."
+	budgetExhaustedReply      = "Iteration budget exhausted before final response."
+	toolBudgetExhaustedReply  = "Tool-call budget exhausted before final response. Summarize progress and continue in a new turn."
+	tokenBudgetExhaustedReply = "Token budget exhausted before final response. Summarize progress and continue in a new turn."
+	planningOnlySteer         = "Your previous reply only described a plan. Do not restate the plan. Start executing now using available tools. Use update_plan only if the work is genuinely multi-step."
 )
 
 var sleepWithContextFn = sleepWithContext
@@ -310,6 +315,22 @@ func RunTurn(
 		} else if retried != nil {
 			providerEvents = append(providerEvents, retried.ProviderEvents...)
 			resp = retried
+		}
+
+		if budget != nil {
+			warning, exhausted := budget.AddTokenUsage(resp.Usage.InputTokens, resp.Usage.OutputTokens)
+			if exhausted && len(resp.ToolCalls) > 0 {
+				log.Printf("WARN token budget exhausted input_tokens=%d output_tokens=%d", budget.InputTokenCount, budget.OutputTokenCount)
+				return &core.TurnResult{
+					Text:           tokenBudgetExhaustedReply,
+					ToolLog:        toolLog,
+					TokenUsage:     resp.Usage,
+					ProviderEvents: append([]core.ProviderEvent(nil), providerEvents...),
+				}, history, nil
+			}
+			if warning != "" {
+				pendingBudget = warning
+			}
 		}
 
 		repairedCalls := make([]ToolCall, 0, len(resp.ToolCalls))
@@ -601,18 +622,22 @@ func markEmptySuccessRetried(opts *CompleteOptions, maxTokens int) {
 
 func modelRequestEvent(attempt int, historyCount int, toolCount int, preflight contextPreflight) ModelRequestEvent {
 	return ModelRequestEvent{
-		Attempt:                            attempt,
-		HistoryCount:                       historyCount,
-		ToolCount:                          toolCount,
-		EstimatedInputTokens:               preflight.EstimatedTokens,
-		ContextWindow:                      preflight.ContextWindow,
-		ContextMaxTokens:                   preflight.MaxTokens,
-		ContextHardTokens:                  preflight.HardTokens,
-		ContextPreflightCompacted:          preflight.Compacted,
-		ContextPreflightOriginalTokens:     preflight.OriginalTokens,
-		ContextPreflightCompactedTokens:    preflight.CompactedTokens,
-		ContextPreflightOriginalToolChars:  preflight.OriginalToolChars,
-		ContextPreflightCompactedToolChars: preflight.CompactedToolChars,
+		Attempt:                             attempt,
+		HistoryCount:                        historyCount,
+		ToolCount:                           toolCount,
+		EstimatedInputTokens:                preflight.EstimatedTokens,
+		ContextWindow:                       preflight.ContextWindow,
+		ContextMaxTokens:                    preflight.MaxTokens,
+		ContextHardTokens:                   preflight.HardTokens,
+		ContextPreflightCompacted:           preflight.Compacted,
+		ContextPreflightOriginalTokens:      preflight.OriginalTokens,
+		ContextPreflightCompactedTokens:     preflight.CompactedTokens,
+		ContextPreflightOriginalToolChars:   preflight.OriginalToolChars,
+		ContextPreflightCompactedToolChars:  preflight.CompactedToolChars,
+		ContextAdmissionToolEvidenceLayers:  preflight.Admission.ToolEvidenceLayers,
+		ContextAdmissionToolEvidencePacked:  preflight.Admission.ToolEvidenceCompacted,
+		ContextAdmissionToolEvidenceDigests: preflight.Admission.ToolEvidenceDigested,
+		ContextAdmissionSuppressedLayers:    preflight.Admission.SuppressedLayers,
 	}
 }
 

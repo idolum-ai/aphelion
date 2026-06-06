@@ -199,3 +199,29 @@ func TestStartupRecoveryUsesMaintenanceTurnAssemblerBoundary(t *testing.T) {
 		t.Fatalf("policy = %#v, want no proposal/render/brokerage", policy)
 	}
 }
+
+func TestMaintenanceRenderSkipsFaceForHeartbeat(t *testing.T) {
+	t.Parallel()
+
+	renderer := &countingFaceRenderer{text: "unexpected face render"}
+	coordinator := &maintenanceTurnCoordinator{
+		runtime:          &Runtime{},
+		species:          maintenanceTurnHeartbeat,
+		currentFaceModel: renderer,
+		lastGovernor: &turn.GovernorResult{
+			Turn:      &core.TurnResult{Text: "Heartbeat checked."},
+			FloorText: "Heartbeat checked.",
+		},
+	}
+
+	got, err := coordinator.Render(context.Background(), turn.FaceRenderRequest{})
+	if err != nil {
+		t.Fatalf("Render() err = %v", err)
+	}
+	if renderer.calls != 0 {
+		t.Fatalf("face render calls = %d, want maintenance heartbeat floor fallback", renderer.calls)
+	}
+	if strings.TrimSpace(got.Text) != "Heartbeat checked." {
+		t.Fatalf("render text = %q, want floor fallback", got.Text)
+	}
+}

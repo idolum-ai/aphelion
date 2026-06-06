@@ -101,3 +101,34 @@ func firstNonEmptyThinking(values ...string) string {
 	}
 	return ""
 }
+
+func tokenAwareTurnBudget(maxIterations int, opts *agent.CompleteOptions) *agent.Budget {
+	budget := &agent.Budget{
+		Max:     maxIterations,
+		Caution: 0.7,
+		Warning: 0.9,
+	}
+	if opts == nil {
+		return budget
+	}
+	if opts.MaxTokens > 0 {
+		budget.OutputTokenSoftLimit = int64(opts.MaxTokens) * 2
+		budget.OutputTokenHardLimit = int64(opts.MaxTokens) * 3
+	}
+	if opts.ContextBudget != nil && opts.ContextBudget.ContextWindow > 0 {
+		maxRatio := opts.ContextBudget.MaxRatio
+		if maxRatio <= 0 {
+			maxRatio = 0.90
+		}
+		hardRatio := opts.ContextBudget.HardRatio
+		if hardRatio <= 0 {
+			hardRatio = 1.10
+		}
+		if hardRatio < maxRatio {
+			hardRatio = maxRatio
+		}
+		budget.InputTokenSoftLimit = int64(float64(opts.ContextBudget.ContextWindow) * maxRatio * 2)
+		budget.InputTokenHardLimit = int64(float64(opts.ContextBudget.ContextWindow) * hardRatio * 3)
+	}
+	return budget
+}

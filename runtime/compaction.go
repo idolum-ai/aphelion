@@ -140,7 +140,12 @@ func (r *Runtime) buildCompactionSummary(ctx context.Context, sess *session.Sess
 	if opts != nil {
 		opts.MaxTokens = compactionMaxTokens
 	}
-	resp, err := completeProvider(ctx, r.provider, messages, nil, opts)
+	provider := r.provider
+	if laneProvider, status, ok := r.renderLaneProvider(); ok {
+		provider = laneProvider
+		opts = renderLaneCompleteOptions(status, compactionMaxTokens)
+	}
+	resp, err := completeProvider(ctx, provider, messages, nil, opts)
 	if err != nil {
 		return "", err
 	}

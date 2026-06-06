@@ -344,11 +344,7 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	}
 	runOpts.Observer = monitor
 	runOpts.ContextBudget = r.providerContextBudget()
-	turnResult, outHistory, runErr := agent.RunTurn(ctx, input.Exec.Provider, tools, &agent.Budget{
-		Max:     r.cfg.Agent.MaxIterations,
-		Caution: 0.7,
-		Warning: 0.9,
-	}, runOpts, turnInput)
+	turnResult, outHistory, runErr := agent.RunTurn(ctx, input.Exec.Provider, tools, tokenAwareTurnBudget(r.cfg.Agent.MaxIterations, runOpts), runOpts, turnInput)
 	if runErr != nil {
 		failureKind := core.ProviderFailureKind(runErr)
 		r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptFailed, "provider", "failed", map[string]any{

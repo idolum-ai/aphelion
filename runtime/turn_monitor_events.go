@@ -101,7 +101,7 @@ func (m *turnMonitor) ModelRequestStarted(ctx context.Context, event agent.Model
 	if m == nil || m.runtime == nil {
 		return
 	}
-	m.runtime.recordExecutionEvent(m.key, core.ExecutionEventModelRequestStarted, "model", "started", map[string]any{
+	payload := map[string]any{
 		"run_id":                 m.runID,
 		"attempt":                event.Attempt,
 		"history_count":          event.HistoryCount,
@@ -111,7 +111,11 @@ func (m *turnMonitor) ModelRequestStarted(ctx context.Context, event agent.Model
 		"context_max_tokens":     event.ContextMaxTokens,
 		"context_hard_tokens":    event.ContextHardTokens,
 		"context_compacted":      event.ContextPreflightCompacted,
-	}, time.Now().UTC())
+	}
+	if admission := modelContextAdmissionPayload(event); len(admission) > 0 {
+		payload["context_admission"] = admission
+	}
+	m.runtime.recordExecutionEvent(m.key, core.ExecutionEventModelRequestStarted, "model", "started", payload, time.Now().UTC())
 }
 
 func (m *turnMonitor) ModelRequestFinished(ctx context.Context, event agent.ModelRequestEvent) {
@@ -163,6 +167,26 @@ func appendModelContextPreflightPayload(payload map[string]any, event agent.Mode
 		payload["context_original_tool_chars"] = event.ContextPreflightOriginalToolChars
 		payload["context_compacted_tool_chars"] = event.ContextPreflightCompactedToolChars
 	}
+	if admission := modelContextAdmissionPayload(event); len(admission) > 0 {
+		payload["context_admission"] = admission
+	}
+}
+
+func modelContextAdmissionPayload(event agent.ModelRequestEvent) map[string]any {
+	payload := map[string]any{}
+	if event.ContextAdmissionToolEvidenceLayers > 0 {
+		payload["tool_evidence_layers"] = event.ContextAdmissionToolEvidenceLayers
+	}
+	if event.ContextAdmissionToolEvidencePacked > 0 {
+		payload["tool_evidence_packed"] = event.ContextAdmissionToolEvidencePacked
+	}
+	if event.ContextAdmissionToolEvidenceDigests > 0 {
+		payload["tool_evidence_digests"] = event.ContextAdmissionToolEvidenceDigests
+	}
+	if event.ContextAdmissionSuppressedLayers > 0 {
+		payload["suppressed_layers"] = event.ContextAdmissionSuppressedLayers
+	}
+	return payload
 }
 
 func (m *turnMonitor) ToolBatchStarted(ctx context.Context, event agent.ToolBatchEvent) {
