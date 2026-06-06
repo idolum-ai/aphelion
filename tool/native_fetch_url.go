@@ -46,6 +46,9 @@ func (r *Registry) fetchURL(ctx context.Context, input json.RawMessage, scope sa
 		return "", fmt.Errorf("fetch_url rejects local/private hosts for non-admin principals")
 	}
 	transport := http.DefaultTransport
+	if r.nativeFetchTransport != nil {
+		transport = r.nativeFetchTransport
+	}
 	var fetchPolicy *nativeFetchNetworkPolicy
 	if scope.Profile.Mode == sandbox.ModeIsolated && scope.Profile.Network == sandbox.NetworkAllowlist {
 		allowlistTransport, policy, err := r.fetchURLAllowlistTransport(ctx, scope.Profile, p.Role != principal.RoleAdmin)

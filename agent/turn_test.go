@@ -79,6 +79,21 @@ func (m *mockTools) Definitions() []ToolDef {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.defsCalled++
+	if m.defs == nil {
+		return []ToolDef{
+			{Name: "exec"},
+			{Name: "echo"},
+			{Name: "explode"},
+			{Name: "noop"},
+			{Name: "read_file"},
+			{Name: "search"},
+			{Name: "step"},
+			{Name: "list_dir"},
+			{Name: "write_file"},
+			{Name: "update_plan"},
+			{Name: "update_operation"},
+		}
+	}
 	return append([]ToolDef(nil), m.defs...)
 }
 
@@ -871,6 +886,68 @@ func TestToolErrorPreservesBoundedOutputEvidence(t *testing.T) {
 	}
 	if result.Text != "handled" {
 		t.Fatalf("result.Text = %q, want handled", result.Text)
+	}
+}
+
+func TestToolErrorOutputEvidenceIsBounded(t *testing.T) {
+	t.Parallel()
+
+	longOutput := strings.Repeat("x", maxToolFailureOutputRunes+500)
+	failure := classifyToolFailure(errors.New("command failed with exit code 1"), longOutput)
+	if len([]rune(failure.Output)) > maxToolFailureOutputRunes+1 {
+		t.Fatalf("failure output runes = %d, want bounded", len([]rune(failure.Output)))
+	}
+	if !strings.HasSuffix(failure.Output, "…") {
+		t.Fatalf("failure output suffix = %q, want ellipsis", failure.Output[len(failure.Output)-4:])
+	}
+	if strings.Contains(failure.ShortReason, longOutput[:200]) {
+		t.Fatalf("short reason included long output: %q", failure.ShortReason)
+	}
+}
+
+func TestRunTurnDoesNotExecuteToolMissingFromDefinitions(t *testing.T) {
+	t.Parallel()
+
+	provider := &mockProvider{
+		complete: func(_ context.Context, call int, messages []Message, _ []ToolDef) (*Response, error) {
+			switch call {
+			case 1:
+				return &Response{ToolCalls: []ToolCall{{ID: "hidden-1", Name: "exec", Input: json.RawMessage(`{"command":"pwd"}`)}}}, nil
+			case 2:
+				last := messages[len(messages)-1]
+				var failure struct {
+					Code string `json:"code"`
+				}
+				if err := json.Unmarshal([]byte(last.Content), &failure); err != nil {
+					t.Fatalf("decode typed tool failure %q: %v", last.Content, err)
+				}
+				if failure.Code != "TOOL_NOT_AVAILABLE" {
+					t.Fatalf("failure = %#v, want TOOL_NOT_AVAILABLE", failure)
+				}
+				return &Response{Content: "handled"}, nil
+			default:
+				t.Fatalf("unexpected call %d", call)
+				return nil, nil
+			}
+		},
+	}
+	tools := &mockTools{
+		defs: []ToolDef{{Name: "update_plan"}},
+		exec: func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+			t.Fatal("hidden tool should not execute")
+			return "", nil
+		},
+	}
+
+	result, _, err := RunTurn(context.Background(), provider, tools, defaultBudget(), nil, nil)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "handled" {
+		t.Fatalf("result.Text = %q, want handled", result.Text)
+	}
+	if len(tools.execCalls) != 0 {
+		t.Fatalf("exec calls = %#v, want none", tools.execCalls)
 	}
 }
 

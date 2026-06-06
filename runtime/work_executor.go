@@ -305,12 +305,14 @@ func newCodexWorkExecutor(cfg config.WorkCodexConfig) WorkExecutor {
 	}}
 }
 
+var codexWorkCheckHTTP = runtimecodex.CheckHTTP
+
 func checkCodexWorkAppServerReady(ctx context.Context, address string) error {
-	if err := runtimecodex.CheckHTTP(ctx, address, "/healthz"); err == nil {
+	if err := codexWorkCheckHTTP(ctx, address, "/healthz"); err == nil {
 		return nil
 	} else {
 		healthzErr := err
-		if err := runtimecodex.CheckHTTP(ctx, address, "/health"); err == nil {
+		if err := codexWorkCheckHTTP(ctx, address, "/health"); err == nil {
 			return nil
 		} else {
 			return fmt.Errorf("healthz failed: %v; health failed: %w", healthzErr, err)

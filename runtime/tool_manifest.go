@@ -14,6 +14,10 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
+type toolManifestProvider interface {
+	Manifest() string
+}
+
 func toolManifest(registry agent.ToolRegistry) string {
 	return toolManifestForRunKind(registry, session.TurnRunKindInteractive)
 }
@@ -22,11 +26,8 @@ func toolManifestForRunKind(registry agent.ToolRegistry, runKind session.TurnRun
 	if registry == nil {
 		return ""
 	}
-	type manifestProvider interface {
-		Manifest() string
-	}
 	defs := definitionsForRunKind(registry, runKind)
-	if provider, ok := registry.(manifestProvider); ok && isInteractiveToolLane(runKind) {
+	if provider, ok := registry.(toolManifestProvider); ok && isInteractiveToolLane(runKind) {
 		return provider.Manifest()
 	}
 	return renderToolManifest(defs)

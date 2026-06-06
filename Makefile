@@ -7,8 +7,46 @@ STATIC_TAGS ?= netgo osusergo sqlite_omit_load_extension
 STATIC_LDFLAGS ?= -linkmode external -extldflags "-static"
 GOHOSTOS ?= $(shell go env GOHOSTOS 2>/dev/null || uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo unknown)
 TEST_EXEC_TRUE ?= /usr/bin/true
+UNIT_TEST_PACKAGES := \
+	./agent \
+	./config \
+	./core \
+	./decision \
+	./durableagent \
+	./face \
+	./githubapp \
+	./governorauth \
+	./governorbackend \
+	./internal \
+	./internal/decisionprojection \
+	./internal/durabledefaults \
+	./internal/maintenancecli \
+	./internal/releaseinfo \
+	./internal/standalonecli \
+	./internal/stoplabels \
+	./internal/telegramcommands \
+	./internal/telegramcontrol \
+	./internal/telegrampresentation \
+	./internal/telegramruntime \
+	./media \
+	./memory \
+	./openai \
+	./pipeline \
+	./principal \
+	./prompt \
+	./provider \
+	./router \
+	./runtime/doctor \
+	./runtime/mission \
+	./session \
+	./telegram \
+	./tool/sandbox \
+	./turn \
+	./voice \
+	./workspace
+CONTRACT_TEST_PATTERN := Test(ArchitectureImportBoundaries|DefinitionsIncludeNativeFileTools|FetchURL|NativeToolSchemasMatchRuntimeRequiredInputs|ReadFile|RootPackage|RunTurnDoesNotExecuteToolMissingFromDefinitions|ToolError|ToolLaneAllowlistsByRunKind|ToolManifestForRunKindFiltersConservativeLanes|ToolRegistryForRunKind)
 
-.PHONY: build build-static run test live-evals auto-evals verify-linux-compile test-compile init install-user-service install-sandbox-net-helper restart-user-service logs-user-service update install-release update-release docs-architecture architecture public-readiness secrets design-principles taste
+.PHONY: build build-static run test test-unit test-contracts test-integration live-evals auto-evals verify-linux-compile test-compile init install-user-service install-sandbox-net-helper restart-user-service logs-user-service update install-release update-release docs-architecture architecture public-readiness secrets design-principles taste
 
 build:
 	mkdir -p $(BIN_DIR)
@@ -29,6 +67,23 @@ test:
 		exit 1; \
 	fi
 	go test ./...
+
+test-unit:
+	@if [ "$(GOHOSTOS)" != "linux" ]; then \
+		echo "Aphelion is Linux-only; 'make test-unit' cannot run on $(GOHOSTOS)." >&2; \
+		exit 1; \
+	fi
+	go test $(UNIT_TEST_PACKAGES)
+
+test-contracts:
+	@if [ "$(GOHOSTOS)" != "linux" ]; then \
+		echo "Aphelion contract tests are Linux-only and cannot run on $(GOHOSTOS)." >&2; \
+		exit 1; \
+	fi
+	$(MAKE) design-principles
+	go test . ./agent ./runtime ./tool -run '$(CONTRACT_TEST_PATTERN)' -count=1
+
+test-integration: test
 
 live-evals:
 	@if [ "$(GOHOSTOS)" != "linux" ]; then \

@@ -143,6 +143,7 @@ func TestWorkExecutorSelectorFallsBackAfterCodexPreEffectFailure(t *testing.T) {
 }
 
 func TestWorkExecutorSelectorFallsBackAfterReadOnlyCodexApprovalFailure(t *testing.T) {
+	requireLocalTCPListener(t, "localhost:0")
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

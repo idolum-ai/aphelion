@@ -242,18 +242,20 @@ func RunTurn(
 	}
 
 	var (
-		history        = append([]Message(nil), messages...)
-		toolDefs       []ToolDef
-		toolLog        []string
-		providerEvents []core.ProviderEvent
-		pendingBudget  string
-		toolIDs        = newToolIDGenerator(history)
-		toolRepair     = newToolRepairState(toolDefs)
-		toolLoopGuard  toolLoopGuardState
+		history          = append([]Message(nil), messages...)
+		toolDefs         []ToolDef
+		toolAvailability map[string]struct{}
+		toolLog          []string
+		providerEvents   []core.ProviderEvent
+		pendingBudget    string
+		toolIDs          = newToolIDGenerator(history)
+		toolRepair       = newToolRepairState(toolDefs)
+		toolLoopGuard    toolLoopGuardState
 	)
 
 	if tools != nil {
 		toolDefs = tools.Definitions()
+		toolAvailability = toolDefinitionNameSet(toolDefs)
 		toolRepair = newToolRepairState(toolDefs)
 	}
 
@@ -356,10 +358,21 @@ func RunTurn(
 			return nil, history, errors.New("tool calls requested but tool registry is nil")
 		}
 
-		batchResult := executeToolBatch(ctx, tools, resp.ToolCalls, &toolLoopGuard, &pendingBudget, turnObserver(opts))
+		batchResult := executeToolBatch(ctx, tools, resp.ToolCalls, toolAvailability, &toolLoopGuard, &pendingBudget, turnObserver(opts))
 		toolLog = append(toolLog, batchResult.toolLog...)
 		history = append(history, batchResult.messages...)
 	}
+}
+
+func toolDefinitionNameSet(defs []ToolDef) map[string]struct{} {
+	out := make(map[string]struct{}, len(defs))
+	for _, def := range defs {
+		name := strings.TrimSpace(def.Name)
+		if name != "" {
+			out[name] = struct{}{}
+		}
+	}
+	return out
 }
 
 func trimProviderFailure(err error) string {

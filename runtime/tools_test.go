@@ -32,6 +32,13 @@ func (stubPrincipalManifestRegistry) ManifestForPrincipal(p principal.Principal)
 	return "principal=" + p.DurableAgentID
 }
 
+type lyingManifestToolRegistry struct {
+	stubToolRegistry
+	manifest string
+}
+
+func (s *lyingManifestToolRegistry) Manifest() string { return s.manifest }
+
 func TestPrincipalScopedToolsManifestUsesPrincipalAwareManifest(t *testing.T) {
 	registry := &principalScopedTools{base: stubPrincipalManifestRegistry{}, principal: principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"}}
 	if got := registry.Manifest(); got != "principal=child-alpha" {
@@ -70,6 +77,35 @@ func TestToolManifestForRunKindFiltersConservativeLanes(t *testing.T) {
 	}
 }
 
+func TestToolLaneAllowlistsByRunKind(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		runKind   session.TurnRunKind
+		allowed   []string
+		forbidden []string
+	}{
+		{runKind: session.TurnRunKindHeartbeat, allowed: []string{"update_plan", "update_operation", "operation_artifact", "memory", "session_search", "semantic_search"}, forbidden: []string{"exec", "fetch_url", "read_file", "request_approval"}},
+		{runKind: session.TurnRunKindCron, allowed: []string{"update_plan", "update_operation", "operation_artifact", "memory", "session_search", "semantic_search"}, forbidden: []string{"exec", "fetch_url", "read_file", "request_approval"}},
+		{runKind: session.TurnRunKindDoctor, allowed: []string{"read_file", "list_dir", "search", "session_search", "semantic_search", "operation_artifact"}, forbidden: []string{"exec", "fetch_url", "request_approval", "write_file"}},
+		{runKind: session.TurnRunKindRecovery, allowed: []string{"read_file", "operation_artifact"}, forbidden: []string{"exec", "fetch_url", "request_approval", "write_file", "update_operation"}},
+	}
+
+	for _, tc := range cases {
+		allowed := toolLaneAllowlist(tc.runKind)
+		for _, name := range tc.allowed {
+			if !toolAllowedByName(name, allowed) {
+				t.Fatalf("%s allowlist missing %s", tc.runKind, name)
+			}
+		}
+		for _, name := range tc.forbidden {
+			if toolAllowedByName(name, allowed) {
+				t.Fatalf("%s allowlist unexpectedly permits %s", tc.runKind, name)
+			}
+		}
+	}
+}
+
 func TestToolRegistryForRunKindEnforcesConservativeLane(t *testing.T) {
 	registry := &stubToolRegistry{defs: []agent.ToolDef{
 		{Name: "exec"},
@@ -93,5 +129,23 @@ func TestToolRegistryForRunKindEnforcesConservativeLane(t *testing.T) {
 	interactive := toolRegistryForRunKind(registry, session.TurnRunKindInteractive)
 	if interactive != registry {
 		t.Fatalf("interactive registry was wrapped; want original registry")
+	}
+}
+
+func TestToolRegistryForRunKindIgnoresManifestTextForAuthority(t *testing.T) {
+	registry := &lyingManifestToolRegistry{
+		stubToolRegistry: stubToolRegistry{defs: []agent.ToolDef{
+			{Name: "exec"},
+			{Name: "update_operation"},
+		}},
+		manifest: "exec, update_operation",
+	}
+
+	heartbeat := toolRegistryForRunKind(registry, session.TurnRunKindHeartbeat)
+	if got := toolManifestForRunKind(heartbeat, session.TurnRunKindHeartbeat); strings.Contains(got, "exec") {
+		t.Fatalf("heartbeat manifest = %q, want filtered definitions instead of registry manifest text", got)
+	}
+	if _, err := heartbeat.Execute(context.Background(), "exec", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("heartbeat exec err = nil, want lane rejection despite manifest text")
 	}
 }
