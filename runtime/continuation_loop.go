@@ -53,14 +53,14 @@ func (r *Runtime) triggerContinuationLoop(ctx context.Context, key session.Sessi
 	for {
 		if !decision.Continue {
 			r.recordContinuationLoopBoundary(key, state, decision, turnsRun)
-			return nil
+			return r.maybeOfferNextOperationPhaseAfterContinuationBoundary(ctx, key, state, decision)
 		}
 		if turnsRun >= loopBudget {
 			decision.Continue = false
 			decision.Reason = "loop_budget_exhausted"
 			decision.Boundary = fmt.Sprintf("automatic loop stopped after %d approved turn(s); remaining work requires a fresh trigger or approval boundary", turnsRun)
 			r.recordContinuationLoopBoundary(key, state, decision, turnsRun)
-			return nil
+			return r.maybeOfferNextOperationPhaseAfterContinuationBoundary(ctx, key, state, decision)
 		}
 		if err := ctx.Err(); err != nil {
 			return err
@@ -76,6 +76,72 @@ func (r *Runtime) triggerContinuationLoop(ctx context.Context, key session.Sessi
 		decision = r.continuationLoopDecisionForState(key, state, time.Now().UTC())
 		r.recordContinuationLoopAssessment(key, state, decision, turnsRun)
 	}
+}
+
+func (r *Runtime) maybeOfferNextOperationPhaseAfterContinuationBoundary(ctx context.Context, key session.SessionKey, state session.ContinuationState, decision continuationLoopDecision) error {
+	if r == nil || r.store == nil || key.ChatID == 0 {
+		return nil
+	}
+	if !continuationBoundaryCanOfferNextOperationPhase(state, decision) {
+		return nil
+	}
+	now := time.Now().UTC()
+	opState, err := r.store.OperationState(key)
+	if err != nil {
+		return nil
+	}
+	opState, completed := operationStateWithConsumedWorkContinuationPhaseCompleted(opState, state, now)
+	if completed {
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return fmt.Errorf("persist completed consumed operation phase: %w", err)
+		}
+	}
+	if operationPhasePlanHasBlockingInProgress(opState.PhasePlan) {
+		return nil
+	}
+	prompt := continuationNextPhasePromptText(opState, state)
+	msg := core.InboundMessage{
+		ChatID:   key.ChatID,
+		SenderID: firstNonZeroInt64(state.ContinuationLease.ApprovedBy, state.ApprovedBy, key.UserID),
+		Text:     prompt,
+		Origin:   core.InboundOriginTurnAuthorization,
+	}
+	_, err = r.materializePendingOperationProposalApproval(ctx, key, msg, prompt, nil)
+	return err
+}
+
+func continuationBoundaryCanOfferNextOperationPhase(state session.ContinuationState, decision continuationLoopDecision) bool {
+	state = session.NormalizeContinuationState(state)
+	if decision.Continue {
+		return false
+	}
+	switch strings.TrimSpace(decision.Reason) {
+	case "not_approved", "no_remaining_turns":
+	default:
+		return false
+	}
+	return state.ContinuationLease.Status == session.ContinuationLeaseStatusConsumed &&
+		state.ContinuationLease.RemainingTurns <= 0 &&
+		strings.TrimSpace(state.ContinuationLease.ID) != ""
+}
+
+func continuationNextPhasePromptText(opState session.OperationState, state session.ContinuationState) string {
+	opState = session.NormalizeOperationState(opState)
+	state = session.NormalizeContinuationState(state)
+	next := "Offer the next bounded approval for the remaining operation phase."
+	if phase, ok := nextOperationPhaseForApproval(opState); ok {
+		next = firstNonEmptyContinuation(phase.Summary, phase.ID, next)
+	} else if bundle, ok := nextOperationPhaseBundleForApproval(opState); ok && len(bundle) > 0 {
+		next = operationPhaseBundleSummary(continuationApprovalBundlePhasesFromOperation(opState, bundle))
+	} else if lease, ok := operationPlanLeaseFromPhasePlan(opState, time.Now().UTC()); ok {
+		next = firstNonEmptyContinuation(lease.Summary, lease.Objective, next)
+	}
+	return strings.TrimSpace(strings.Join([]string{
+		"The previous approved continuation lease was consumed.",
+		"Do not execute new work without approval.",
+		"Next pending operation phase: " + next,
+		firstNonEmptyContinuation(opState.Objective, state.Objective),
+	}, "\n"))
 }
 
 func continuationLoopBudget(state session.ContinuationState) int {

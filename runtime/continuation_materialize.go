@@ -41,6 +41,15 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	if staleRepaired {
 		return false, nil
 	}
+	if priorContinuationExists {
+		var completed bool
+		opState, completed = operationStateWithConsumedWorkContinuationPhaseCompleted(opState, priorContinuation, now)
+		if completed {
+			if err := r.store.UpdateOperationState(key, opState); err != nil {
+				return false, fmt.Errorf("persist completed consumed operation phase: %w", err)
+			}
+		}
+	}
 	opState = operationStateWithNonCurrentInProgressPhasesCleared(opState, now)
 	opState = operationStateWithInactiveCurrentPhaseLeaseCleared(opState, priorContinuation, priorContinuationExists, now)
 	if priorContinuationExists {

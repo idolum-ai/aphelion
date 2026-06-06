@@ -223,3 +223,56 @@ func syncOperationPhaseStatusFromContinuation(opState *session.OperationState, s
 	}
 	return updated
 }
+
+func operationStateWithConsumedWorkContinuationPhaseCompleted(opState session.OperationState, state session.ContinuationState, now time.Time) (session.OperationState, bool) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	opState = session.NormalizeOperationState(opState)
+	state = session.NormalizeContinuationState(state)
+	if state.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed ||
+		state.ContinuationLease.RemainingTurns > 0 ||
+		strings.TrimSpace(state.ContinuationLease.ID) == "" ||
+		continuationWorkMode(state) == "" {
+		return opState, false
+	}
+	leaseID := strings.TrimSpace(state.ContinuationLease.ID)
+	updated := false
+	for i := range opState.PhasePlan.Phases {
+		phase := normalizeSingleOperationPhase(opState.PhasePlan.Phases[i])
+		if phase.Status != session.PlanStatusInProgress {
+			continue
+		}
+		if strings.TrimSpace(phase.LeaseID) != leaseID && !operationPhaseMatchesConsumedContinuation(opState, phase, state) {
+			continue
+		}
+		opState.PhasePlan.Phases[i].Status = session.PlanStatusCompleted
+		if opState.PhasePlan.Phases[i].CompletedAt.IsZero() {
+			opState.PhasePlan.Phases[i].CompletedAt = now
+		}
+		updated = true
+		break
+	}
+	if !updated {
+		return opState, false
+	}
+	opState.Status = session.OperationStatusActive
+	opState.Stage = firstNonEmptyContinuation(strings.TrimSpace(opState.Stage), "phase_completed")
+	opState.PhasePlan.UpdatedAt = now
+	opState.UpdatedAt = now
+	return session.NormalizeOperationState(opState), true
+}
+
+func operationPhaseMatchesConsumedContinuation(opState session.OperationState, phase session.OperationPhase, state session.ContinuationState) bool {
+	opState = session.NormalizeOperationState(opState)
+	phase = normalizeSingleOperationPhase(phase)
+	state = session.NormalizeContinuationState(state)
+	proposalID := operationPhaseProposalID(opState, phase)
+	if proposalID == "" {
+		return false
+	}
+	return strings.TrimSpace(state.ActionProposal.OperationID) == proposalID ||
+		strings.TrimPrefix(strings.TrimSpace(state.ActionProposal.ID), "aprop-") == proposalID ||
+		strings.TrimSpace(state.ContinuationLease.ProposalID) == "aprop-"+proposalID
+}

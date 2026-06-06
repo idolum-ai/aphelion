@@ -313,6 +313,142 @@ func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	}
 }
 
+func TestConsumedWorkPhaseOffersNextPhaseApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{Summary: "committed and pushed"}}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Hour)
+	key := session.SessionKey{ChatID: 8192, UserID: 0, Scope: telegramDMScopeRef(8192)}
+	opState := session.OperationState{
+		ID:        "planning-improvements-pr-review",
+		Objective: "Commit and push the branch, then create a draft PR and assess readiness.",
+		Status:    session.OperationStatusActive,
+		Stage:     "phase_approval",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "planning-improvements-pr-review-plan",
+			Goal:           "Prepare branch for draft PR review.",
+			CurrentPhaseID: "commit-push",
+			Phases: []session.OperationPhase{
+				{
+					ID:                "commit-push",
+					Summary:           "Commit and push inspected planning changes",
+					Status:            session.PlanStatusInProgress,
+					AuthorityClass:    "commit",
+					BoundedEffect:     "Commit and push only the inspected branch changes, then report the remote head.",
+					AllowedActions:    []string{"git_commit", "git_push", "report_commit_evidence"},
+					ForbiddenActions:  []string{"create_or_update_pull_request", "deploy_or_restart"},
+					RequiresApproval:  true,
+					GateLevel:         operationGateLevelNormalApproval,
+					GateReasonCode:    "capability_grant",
+					ApprovalSubject:   "operator",
+					BlockedReasonCode: "requires_approval",
+					LeaseID:           "lease-phase-planning-improvements-pr-review-commit-push",
+				},
+				{
+					ID:                "draft-pr-review",
+					Summary:           "Read full branch, create draft PR, and assess readiness",
+					Status:            session.PlanStatusPending,
+					AuthorityClass:    "commit",
+					BoundedEffect:     "Read the full branch diff, create or update one draft PR against main, and report readiness. No merge or deploy.",
+					AllowedActions:    []string{"read_full_branch_diff", "create_or_update_draft_pull_request", "report_pr_url", "provide_readiness_review"},
+					ForbiddenActions:  []string{"merge_pull_request", "deploy_or_restart", "credential_token_output"},
+					RequiresApproval:  true,
+					GateLevel:         operationGateLevelNormalApproval,
+					GateReasonCode:    "capability_grant",
+					ApprovalSubject:   "operator",
+					BlockedReasonCode: "requires_approval",
+				},
+			},
+		},
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	proposalID := operationPhaseProposalID(opState, opState.PhasePlan.Phases[0])
+	action := session.ActionProposal{
+		ID:               "aprop-" + proposalID,
+		OperationID:      proposalID,
+		Summary:          opState.PhasePlan.Phases[0].Summary,
+		BoundedEffect:    opState.PhasePlan.Phases[0].BoundedEffect,
+		RiskClass:        "commit",
+		AllowedActions:   opState.PhasePlan.Phases[0].AllowedActions,
+		ForbiddenActions: opState.PhasePlan.Phases[0].ForbiddenActions,
+		Status:           session.ProposalStatusApproved,
+		ExpiresAt:        expiresAt,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	lease := buildContinuationLease(action, 1, now)
+	lease.ID = "lease-phase-planning-improvements-pr-review-commit-push"
+	lease.Status = session.ContinuationLeaseStatusActive
+	lease.RemainingTurns = 1
+	lease.ApprovedBy = 1001
+	lease.ApprovedAt = now
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusApproved,
+		DecisionID:        proposalID,
+		Objective:         opState.Objective,
+		StageSummary:      action.Summary,
+		RemainingTurns:    1,
+		ApprovedBy:        1001,
+		ActionProposal:    action,
+		ContinuationLease: lease,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v", err)
+	}
+	if work.calls != 1 {
+		t.Fatalf("work calls = %d, want one approved work phase", work.calls)
+	}
+	gotOp, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if gotOp.PhasePlan.Phases[0].Status != session.PlanStatusCompleted {
+		t.Fatalf("first phase status = %q, want completed", gotOp.PhasePlan.Phases[0].Status)
+	}
+	if gotOp.PhasePlan.Phases[1].LeaseID == "" || gotOp.PhasePlan.CurrentPhaseID != "draft-pr-review" {
+		t.Fatalf("phase plan = %#v, want next phase linked to a pending approval", gotOp.PhasePlan)
+	}
+	gotCont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if gotCont.Status != session.ContinuationStatusPending || !strings.Contains(gotCont.ActionProposal.Summary, "draft PR") {
+		t.Fatalf("continuation = %#v, want pending draft PR approval", gotCont)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[inlineCount-1].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 || !strings.Contains(inlineText, "draft PR") {
+		t.Fatalf("inline count/text = %d/%q, want next approval prompt", inlineCount, inlineText)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if countEventsByType(events, core.ExecutionEventContinuationOffered) != 1 || !hasExecutionEvent(events, core.ExecutionEventContinuationBoundaryReached) {
+		t.Fatalf("events = %#v, want boundary plus next continuation offer", events)
+	}
+}
+
 func TestNativeWorkExecutorTreatsProviderFailureTurnAsFailed(t *testing.T) {
 	t.Parallel()
 
