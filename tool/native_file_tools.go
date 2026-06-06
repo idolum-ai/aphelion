@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 )
 
 const (
+	maxNativeReadLines          = 10000
 	defaultNativeReadMaxBytes   = 64 * 1024
 	maxNativeReadBytes          = 512 * 1024
 	defaultNativeFetchMaxBytes  = 128 * 1024
@@ -34,6 +36,9 @@ const (
 
 type readFileInput struct {
 	Path     string `json:"path"`
+	Offset   *int   `json:"offset,omitempty"`
+	Limit    *int   `json:"limit,omitempty"`
+	Full     bool   `json:"full,omitempty"`
 	MaxBytes int    `json:"max_bytes,omitempty"`
 }
 
@@ -72,11 +77,14 @@ func nativeFileToolDefinitions() []agent.ToolDef {
 	return []agent.ToolDef{
 		{
 			Name:        "read_file",
-			Description: "Parallel-safe. Read a bounded text file through the current sandbox profile. Prefer this over exec cat/sed/head/tail/nl for scoped file inspection. For independent file reads, issue multiple read_file/list_dir/search calls together in one response.",
+			Description: "Parallel-safe. Read a bounded text file through the current sandbox profile. Prefer this over exec cat/sed/head/tail/nl for scoped file inspection. Requires offset+limit unless full=true is set; independent file reads should be emitted together in one response so the runtime can execute the parallel-safe batch.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"path": {"type": "string", "description": "File path to read. Relative paths are scoped to the current working root."},
+					"offset": {"type": "integer", "minimum": 0, "description": "Zero-based line offset. Required with limit unless full=true."},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 10000, "description": "Maximum lines to return. Required with offset unless full=true."},
+					"full": {"type": "boolean", "description": "Explicitly read from the beginning without offset/limit, still bounded by max_bytes."},
 					"max_bytes": {"type": "integer", "minimum": 1, "maximum": 524288, "description": "Maximum bytes to return; defaults to 65536."}
 				},
 				"required": ["path"]
@@ -144,6 +152,26 @@ func (r *Registry) readFile(_ context.Context, input json.RawMessage, scope sand
 	if strings.TrimSpace(in.Path) == "" {
 		return "", fmt.Errorf("read_file path is required")
 	}
+	if !in.Full && (in.Offset == nil || in.Limit == nil) {
+		return "", fmt.Errorf("read_file requires offset+limit or full=true")
+	}
+	offset := 0
+	if in.Offset != nil {
+		if *in.Offset < 0 {
+			return "", fmt.Errorf("read_file offset must be >= 0")
+		}
+		offset = *in.Offset
+	}
+	limit := 0
+	if in.Limit != nil {
+		if *in.Limit <= 0 {
+			return "", fmt.Errorf("read_file limit must be >= 1")
+		}
+		limit = *in.Limit
+		if limit > maxNativeReadLines {
+			limit = maxNativeReadLines
+		}
+	}
 	maxBytes := clampNativeLimit(in.MaxBytes, defaultNativeReadMaxBytes, maxNativeReadBytes)
 	path, err := resolveNativeToolPath(scope, in.Path, nativePathRead)
 	if err != nil {
@@ -156,16 +184,20 @@ func (r *Registry) readFile(_ context.Context, input json.RawMessage, scope sand
 	if info.IsDir() {
 		return "", fmt.Errorf("read_file path %q is a directory", in.Path)
 	}
-	data, truncated, err := readBoundedFile(path, maxBytes)
+	data, lines, truncated, err := readBoundedFileWindow(path, offset, limit, maxBytes)
 	if err != nil {
 		return "", err
 	}
 	if bytes.Contains(data, []byte{0}) {
 		return "", fmt.Errorf("read_file path %q appears to be binary", in.Path)
 	}
+	limitLabel := "full"
+	if limit > 0 {
+		limitLabel = fmt.Sprintf("%d", limit)
+	}
 	var b strings.Builder
 	b.WriteString("[READ_FILE]\n")
-	fmt.Fprintf(&b, "path: %s\nbytes: %d\ntruncated: %t\ncontent:\n", path, len(data), truncated)
+	fmt.Fprintf(&b, "path: %s\noffset: %d\nlimit: %s\nlines: %d\nbytes: %d\ntruncated: %t\nfull: %t\ncontent:\n", path, offset, limitLabel, lines, len(data), truncated, in.Full)
 	b.Write(data)
 	if len(data) > 0 && data[len(data)-1] != '\n' {
 		b.WriteByte('\n')
@@ -267,6 +299,43 @@ func (r *Registry) listDir(_ context.Context, input json.RawMessage, scope sandb
 	}
 	b.WriteString("[/LIST_DIR]")
 	return b.String(), nil
+}
+
+func readBoundedFileWindow(path string, offset, limit, maxBytes int) ([]byte, int, bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, 0, false, fmt.Errorf("read_file open %q: %w", path, err)
+	}
+	defer file.Close()
+	reader := bufio.NewReader(file)
+	var out bytes.Buffer
+	lineNo, lines := 0, 0
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			if lineNo >= offset {
+				if limit > 0 && lines >= limit {
+					return out.Bytes(), lines, true, nil
+				}
+				if out.Len()+len(line) > maxBytes {
+					remaining := maxBytes - out.Len()
+					if remaining > 0 {
+						out.Write(line[:remaining])
+					}
+					return out.Bytes(), lines, true, nil
+				}
+				out.Write(line)
+				lines++
+			}
+			lineNo++
+		}
+		if err == io.EOF {
+			return out.Bytes(), lines, false, nil
+		}
+		if err != nil {
+			return nil, lines, false, fmt.Errorf("read_file read %q: %w", path, err)
+		}
+	}
 }
 
 func readBoundedFile(path string, maxBytes int) ([]byte, bool, error) {

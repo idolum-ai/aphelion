@@ -50,7 +50,7 @@ func TestNativeFileToolsStayInsideScopedRoots(t *testing.T) {
 		t.Fatalf("write_file out = %q", out)
 	}
 
-	out, err = registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"notes/one.txt"}`), scope, scope.Principal, session.SessionKey{})
+	out, err = registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"notes/one.txt","full":true}`), scope, scope.Principal, session.SessionKey{})
 	if err != nil {
 		t.Fatalf("read_file err = %v", err)
 	}
@@ -74,7 +74,7 @@ func TestNativeFileToolsStayInsideScopedRoots(t *testing.T) {
 		t.Fatalf("search out = %q", out)
 	}
 
-	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"../outside-secret.txt"}`), scope, scope.Principal, session.SessionKey{})
+	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"../outside-secret.txt","full":true}`), scope, scope.Principal, session.SessionKey{})
 	if err == nil || !strings.Contains(err.Error(), "outside the read roots") {
 		t.Fatalf("read_file escape err = %v, want scoped rejection", err)
 	}
@@ -112,7 +112,7 @@ func TestNativeFileToolsHonorApprovedUserProfile(t *testing.T) {
 	}
 	registry := NewRegistry(workspace, 2*time.Second)
 
-	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(global, "public.txt"))+`"}`), scope, p, session.SessionKey{})
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(global, "public.txt"))+`","full":true}`), scope, p, session.SessionKey{})
 	if err != nil {
 		t.Fatalf("read_file global readonly err = %v", err)
 	}
@@ -129,9 +129,33 @@ func TestNativeFileToolsHonorApprovedUserProfile(t *testing.T) {
 		t.Fatalf("write_file workspace err = %v", err)
 	}
 
-	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(userMemory, "hidden", "secret.txt"))+`"}`), scope, p, session.SessionKey{})
+	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(userMemory, "hidden", "secret.txt"))+`","full":true}`), scope, p, session.SessionKey{})
 	if err == nil || !strings.Contains(err.Error(), "hidden by the sandbox profile") {
 		t.Fatalf("read_file hidden err = %v, want hidden-path rejection", err)
+	}
+}
+
+func TestReadFileRequiresExplicitWindowOrFull(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "sample.txt"), []byte("one\ntwo\nthree\n"), 0o600); err != nil {
+		t.Fatalf("write sample: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{Principal: principal.Principal{Role: principal.RoleAdmin}, Profile: sandbox.DefaultProfiles().Admin, GlobalRoot: workspace, WorkingRoot: workspace}
+
+	_, err := registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"sample.txt"}`), scope, scope.Principal, session.SessionKey{})
+	if err == nil || !strings.Contains(err.Error(), "offset+limit or full=true") {
+		t.Fatalf("read_file err = %v, want explicit-window rejection", err)
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"sample.txt","offset":1,"limit":1}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("read_file window err = %v", err)
+	}
+	if !strings.Contains(out, "offset: 1") || !strings.Contains(out, "limit: 1") || !strings.Contains(out, "lines: 1") || !strings.Contains(out, "two") || strings.Contains(out, "one") || strings.Contains(out, "three") {
+		t.Fatalf("read_file window out = %q", out)
 	}
 }
 
