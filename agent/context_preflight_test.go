@@ -60,6 +60,34 @@ func TestRunTurnCompactsToolResultsBeforeProviderCall(t *testing.T) {
 	}
 }
 
+func TestPrepareProviderMessagesCompactsOversizedToolOutputBySizeNotName(t *testing.T) {
+	originalTool := strings.Repeat("a", providerContextOversizedToolChars+1)
+	messages := []Message{
+		{Role: "user", Content: "continue"},
+		{Role: "tool", ToolName: "custom_probe", Content: originalTool},
+	}
+	estimated := estimateProviderRequestTokens(messages, nil)
+
+	compacted, preflight, err := prepareProviderMessages(messages, nil, &CompleteOptions{
+		ContextBudget: &ContextBudget{ContextWindow: 100000},
+	})
+	if err != nil {
+		t.Fatalf("prepareProviderMessages() err = %v", err)
+	}
+	if estimated > preflight.MaxTokens {
+		t.Fatalf("test premise failed: estimated=%d max=%d", estimated, preflight.MaxTokens)
+	}
+	if !preflight.Compacted {
+		t.Fatalf("preflight = %#v, want oversized tool output compacted even below max tokens", preflight)
+	}
+	if got := compacted[1].Content; !strings.Contains(got, "tool output compacted for provider context") || len(got) >= len(originalTool) {
+		t.Fatalf("compacted tool content len=%d, want size-based compaction", len(got))
+	}
+	if messages[1].Content != originalTool {
+		t.Fatal("original messages were compacted; want provider-only copy")
+	}
+}
+
 func TestRunTurnBlocksRequestsAboveHardContextBudget(t *testing.T) {
 	provider := &contextCaptureProvider{}
 	messages := []Message{
