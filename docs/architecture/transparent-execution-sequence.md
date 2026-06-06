@@ -100,11 +100,16 @@ TES write/read behavior currently relies on the following indexes:
   - `provider.attempt.started`
   - `provider.attempt.retried`
   - `provider.attempt.failed`
+  - `provider.partial`
   - `provider.attempt.succeeded`
+  - `provider.failover.engaged`
 - Model requests
   - `model.request.started`
   - `model.request.succeeded`
   - `model.request.failed`
+  - `model.config.validated`
+  - `model.config.changed`
+  - `model.config.rejected`
 - Tool lifecycle
   - `tool.started`
   - `tool.succeeded`
@@ -121,10 +126,25 @@ TES write/read behavior currently relies on the following indexes:
   - `delivery.final.failed`
 - Continuation control
   - `continuation.offered`
+  - `continuation.bundle.narrowed`
+  - `continuation.compile_repaired`
+  - `continuation.compile_repair_exhausted`
+  - `continuation.compile_unknown_reason`
+  - `continuation.approval.adjudicated`
   - `continuation.approved`
   - `continuation.revoked`
   - `continuation.consumed`
+  - `continuation.class_scoped_consumption`
+  - `continuation.boundary_reached`
   - `continuation.blocked`
+  - `continuation.parked`
+  - `continuation.resumed`
+- Mission control
+  - `mission_ask.offered`
+  - `mission_ask.suppressed`
+  - `mission.objective.derived`
+  - `mission.progress.assessed`
+  - `mission.completion.declared`
 - Decision control
   - `decision.opened`
   - `decision.resolved`
@@ -138,6 +158,7 @@ TES write/read behavior currently relies on the following indexes:
   - `recovery.failed`
 - Durable runtime lifecycle
   - `durable.wake.started`
+  - `durable.wake.skipped`
   - `durable.wake.completed`
   - `durable.wake.failed`
   - `durable.state.awake`
@@ -145,6 +166,10 @@ TES write/read behavior currently relies on the following indexes:
   - `durable.policy.applied`
   - `durable.policy.failed`
   - `durable.parent.acknowledged`
+  - `durable.lifecycle.changed`
+  - `durable.provision.started`
+  - `durable.provision.completed`
+  - `durable.provision.failed`
 
 Code anchors:
 
@@ -272,7 +297,17 @@ Collapsed `/health trace` quick-read text is grounded against chat execution sta
 inconsistent readable summaries are replaced with a deterministic, snapshot-based
 summary to avoid "idle/done" drift while turns are failed, blocked, or running.
 
-Continuation events now include proposal/lease identifiers and lease counters when an embedded `ActionProposal` / `ContinuationLease` exists in continuation state.
+Continuation events now include proposal/lease identifiers and lease counters
+when an embedded `ActionProposal` / `ContinuationLease` exists in continuation
+state. Bundle-aware events also carry bundle and current-phase identifiers where
+available. The active continuation loop records class-scoped reuse and terminal
+loop boundaries as TES rather than relying on chat prose.
+
+Status and doctor projections may also display turn-run accounting fields such
+as turn index, tool input characters, assistant output characters, provider
+input/output tokens, provider cache-read/cache-write tokens, and
+assistant/tool ratio. Those fields are operational accounting projections; TES
+remains canonical for execution order.
 
 Continuation approval prompt text is now grounded against TES continuation
 events for the same `decision_id` (expected `continuation.offered` while

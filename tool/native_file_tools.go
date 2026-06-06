@@ -90,11 +90,7 @@ func nativeFileToolDefinitions() []agent.ToolDef {
 					"full": {"type": "boolean", "description": "Explicitly read from the beginning without offset/limit, still bounded by max_bytes."},
 					"max_bytes": {"type": "integer", "minimum": 1, "maximum": 524288, "description": "Maximum bytes to return; defaults to 65536."}
 				},
-				"required": ["path"],
-				"anyOf": [
-					{"required": ["offset", "limit"]},
-					{"required": ["full"], "properties": {"full": {"const": true}}}
-				]
+				"required": ["path"]
 			}`),
 		},
 		{

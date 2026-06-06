@@ -211,6 +211,30 @@ But operations themselves may continue across turns until:
 - delivery is ready
 - policy or budget forces a stop
 
+## Relationship To Continuation Leases
+
+Continuation leases are the operational mechanism for carrying approved work
+across turn boundaries. An approved multi-turn lease may continue automatically
+inside its remaining turn budget when the next action stays inside the same
+bounded authority.
+
+This is autonomy between gates, not autonomy across gates. The runtime must stop
+and require a fresh operator boundary when:
+
+- the lease is exhausted, expired, revoked, or stale against the operation plan;
+- the next step asks for a new lease class, new allowed action, new required
+  capability grant, deploy/restart authority, or external effect not covered by
+  the lease;
+- Mission Ledger state says the mission is completed, blocked, archived,
+  expired, or dormant;
+- the approved bundle no longer matches the current phase-plan fingerprints.
+
+Runtime may reduce approval friction by consuming a newly materialized phase or
+proposal under an already-active lease, but only when the lease class,
+allowed-action set, and required grants are structurally covered by the active
+lease. This reuse is a transport/runtime optimization, not a new authority
+source and not a lease renewal.
+
 ## Relationship To The Decision Broker
 
 The decision broker should remain the transport/runtime mechanism for waiting on explicit user choices.
@@ -301,6 +325,8 @@ The runtime may also update operation state directly when real transport/runtime
 
 - **Operations are session-native.** They belong in the existing session store.
 - **Autonomy lives between gates.** The system should not ask permission for every minor step.
+- **Continuation loops stay inside gates.** Approved leases may consume multiple
+  turns, but they must not renew, widen, or cross material thresholds silently.
 - **Proposals gate material thresholds.** They are broader than dangerous-command confirmations.
 - **Plans remain useful but insufficient.** Operational state needs more than a checklist.
 - **One public persona.** Internal autonomy must not fracture the visible relationship surface.

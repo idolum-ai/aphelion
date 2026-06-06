@@ -615,7 +615,7 @@ func TestDefinitionsIncludeNativeFileTools(t *testing.T) {
 	}
 }
 
-func TestReadFileDefinitionRequiresWindowOrFullSchema(t *testing.T) {
+func TestReadFileDefinitionAdvertisesProviderCompatibleWindowContract(t *testing.T) {
 	t.Parallel()
 
 	readFile := nativeToolDefForTest(t, "read_file")
@@ -623,12 +623,19 @@ func TestReadFileDefinitionRequiresWindowOrFullSchema(t *testing.T) {
 	if err := json.Unmarshal(readFile.Parameters, &schema); err != nil {
 		t.Fatalf("decode read_file schema: %v", err)
 	}
-	anyOf, ok := schema["anyOf"].([]any)
-	if !ok || len(anyOf) != 2 {
-		t.Fatalf("read_file schema anyOf = %#v, want offset+limit/full alternatives", schema["anyOf"])
+	if got := strings.TrimSpace(fmt.Sprint(schema["type"])); got != "object" {
+		t.Fatalf("read_file schema type = %q, want object", got)
+	}
+	for _, keyword := range []string{"oneOf", "anyOf", "allOf", "enum", "not"} {
+		if _, ok := schema[keyword]; ok {
+			t.Fatalf("read_file schema has top-level %s, which provider function schemas reject", keyword)
+		}
+	}
+	if !toolSchemaRequiredContains(t, readFile, "path") {
+		t.Fatalf("read_file schema missing required path")
 	}
 	rendered := string(readFile.Parameters)
-	for _, want := range []string{`"required": ["offset", "limit"]`, `"const": true`} {
+	for _, want := range []string{`"offset"`, `"limit"`, `"full"`} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("read_file schema = %s, missing %s", rendered, want)
 		}
