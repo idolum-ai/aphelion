@@ -268,7 +268,8 @@ func TestAuthoritySanitizerReoffersRevokedRequiredCapabilityPhase(t *testing.T) 
 	if repaired < 2 {
 		t.Fatalf("repaired = %d, want sanitizer plus reoffer", repaired)
 	}
-	assertPRMetadataContinuationReoffered(t, store, sender, key, "cap-pr-158-sanitize")
+	expectedGrantRequestID := "cap-pr-158-sanitize"
+	assertPRMetadataContinuationReoffered(t, store, sender, key, expectedGrantRequestID)
 }
 
 func TestStartupRepairReoffersAlreadyRevokedInvalidRequiredCapabilityPhase(t *testing.T) {

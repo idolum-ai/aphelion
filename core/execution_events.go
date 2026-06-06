@@ -16,6 +16,7 @@ const (
 	ExecutionEventTurnStarted              = "turn.started"
 	ExecutionEventTurnStageChanged         = "turn.stage.changed"
 	ExecutionEventTurnSidecarsCaptured     = "turn.sidecars.captured"
+	ExecutionEventTurnBudgetRecovery       = "turn.budget_recovery"
 	ExecutionEventTurnCompleted            = "turn.completed"
 	ExecutionEventTurnFailed               = "turn.failed"
 	ExecutionEventTurnInterrupted          = "turn.interrupted"

@@ -751,8 +751,14 @@ func TestRunTurnStopsBeforeExecutingBatchPastToolCallHardCap(t *testing.T) {
 	if executed != 0 {
 		t.Fatalf("executed tools = %d, want hard cap before execution", executed)
 	}
-	if result.Text != toolBudgetExhaustedReply {
-		t.Fatalf("result.Text = %q, want tool budget exhausted reply", result.Text)
+	if result.Recovery == nil || result.Recovery.Kind != core.TurnRecoveryToolBudgetExhausted {
+		t.Fatalf("result.Recovery = %#v, want tool budget recovery", result.Recovery)
+	}
+	if !result.Recovery.ReplanRequired {
+		t.Fatalf("Recovery.ReplanRequired = false, want true")
+	}
+	if !strings.Contains(result.Text, "Budget recovery handoff:") {
+		t.Fatalf("result.Text = %q, want budget recovery handoff", result.Text)
 	}
 	if len(history) != 1 || len(history[0].ToolCalls) != 2 {
 		t.Fatalf("history = %#v, want assistant tool request preserved", history)
@@ -976,8 +982,14 @@ func TestRunTurnStopsToolLoopOnTokenBudgetExhaustion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunTurn() err = %v", err)
 	}
-	if result.Text != tokenBudgetExhaustedReply {
-		t.Fatalf("result.Text = %q, want token budget exhaustion", result.Text)
+	if result.Recovery == nil || result.Recovery.Kind != core.TurnRecoveryTokenBudgetExhausted {
+		t.Fatalf("result.Recovery = %#v, want token budget recovery", result.Recovery)
+	}
+	if !result.Recovery.ReplanRequired {
+		t.Fatalf("Recovery.ReplanRequired = false, want true")
+	}
+	if !strings.Contains(result.Text, "Budget recovery handoff:") {
+		t.Fatalf("result.Text = %q, want budget recovery handoff", result.Text)
 	}
 	if len(tools.execCalls) != 0 {
 		t.Fatalf("exec calls = %#v, want none", tools.execCalls)

@@ -61,6 +61,14 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 	if input.Result == nil {
 		return output, nil
 	}
+	if recovery, ok := turnResultBudgetRecovery(input.Result); ok {
+		output.ReplyText = turnBudgetRecoveryHandoffText(recovery)
+		r.recordExecutionEvent(input.Key, core.ExecutionEventFaceRenderSkipped, "face", "skipped", map[string]any{
+			"reason":        "budget_recovery",
+			"recovery_kind": string(recovery.Kind),
+		}, time.Now().UTC())
+		return output, nil
+	}
 
 	output.ReplyText = strings.TrimSpace(input.ReplyText)
 	if len(input.OutHistory) < input.HistoryInputLen {
@@ -671,6 +679,9 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 		return nil, fmt.Errorf("turn delivery port is unavailable")
 	}
 	p.runtime.markSessionTurnPhase(p.key, "deliver", "sending or finalizing outbound delivery")
+	if _, ok := turnResultBudgetRecoveryFromTurnResult(req.Result); ok {
+		return p.deliverBudgetRecovery(ctx, req)
+	}
 	return turn.RunDeliveryStage(ctx, turn.DeliveryStageInput{
 		Request:        req,
 		Deliver:        p.deliver,

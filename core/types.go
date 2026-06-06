@@ -104,6 +104,23 @@ type TurnResult struct {
 	TokenUsage      TokenUsage
 	ProviderFailure string
 	ProviderEvents  []ProviderEvent
+	Recovery        *TurnRecovery
+}
+
+type TurnRecoveryKind string
+
+const (
+	TurnRecoveryTokenBudgetExhausted     TurnRecoveryKind = "token_budget_exhausted"
+	TurnRecoveryToolBudgetExhausted      TurnRecoveryKind = "tool_budget_exhausted"
+	TurnRecoveryIterationBudgetExhausted TurnRecoveryKind = "iteration_budget_exhausted"
+)
+
+type TurnRecovery struct {
+	Kind           TurnRecoveryKind
+	Recoverable    bool
+	ReplanRequired bool
+	Summary        string
+	MaxAutoHops    int
 }
 
 type ProviderEvent struct {
