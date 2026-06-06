@@ -353,6 +353,20 @@ func TestConsumedWorkPhaseOffersNextPhaseApproval(t *testing.T) {
 					LeaseID:           "lease-phase-planning-improvements-pr-review-commit-push",
 				},
 				{
+					ID:                "phase-planning-improvements-pr-review-commit-push",
+					Summary:           "Commit and push inspected planning changes",
+					Status:            session.PlanStatusPending,
+					AuthorityClass:    "commit",
+					BoundedEffect:     "Duplicate proposal-shaped phase that should be reconciled to the completed commit/push work.",
+					AllowedActions:    []string{"git_commit", "git_push", "report_commit_evidence"},
+					ForbiddenActions:  []string{"create_or_update_pull_request", "deploy_or_restart"},
+					RequiresApproval:  true,
+					GateLevel:         operationGateLevelNormalApproval,
+					GateReasonCode:    "capability_grant",
+					ApprovalSubject:   "operator",
+					BlockedReasonCode: "requires_approval",
+				},
+				{
 					ID:                "draft-pr-review",
 					Summary:           "Read full branch, create draft PR, and assess readiness",
 					Status:            session.PlanStatusPending,
@@ -420,7 +434,10 @@ func TestConsumedWorkPhaseOffersNextPhaseApproval(t *testing.T) {
 	if gotOp.PhasePlan.Phases[0].Status != session.PlanStatusCompleted {
 		t.Fatalf("first phase status = %q, want completed", gotOp.PhasePlan.Phases[0].Status)
 	}
-	if gotOp.PhasePlan.Phases[1].LeaseID == "" || gotOp.PhasePlan.CurrentPhaseID != "draft-pr-review" {
+	if gotOp.PhasePlan.Phases[1].Status != session.PlanStatusCompleted || !gotOp.PhasePlan.Phases[1].StaleAuthority {
+		t.Fatalf("duplicate phase = %#v, want stale completed duplicate", gotOp.PhasePlan.Phases[1])
+	}
+	if gotOp.PhasePlan.Phases[2].LeaseID == "" || gotOp.PhasePlan.CurrentPhaseID != "draft-pr-review" {
 		t.Fatalf("phase plan = %#v, want next phase linked to a pending approval", gotOp.PhasePlan)
 	}
 	gotCont, err := store.ContinuationState(key)
@@ -446,6 +463,171 @@ func TestConsumedWorkPhaseOffersNextPhaseApproval(t *testing.T) {
 	}
 	if countEventsByType(events, core.ExecutionEventContinuationOffered) != 1 || !hasExecutionEvent(events, core.ExecutionEventContinuationBoundaryReached) {
 		t.Fatalf("events = %#v, want boundary plus next continuation offer", events)
+	}
+}
+
+func TestStartupRepairRevokesStaleDuplicateCompletedPhaseApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 8193, UserID: 0, Scope: telegramDMScopeRef(8193)}
+	duplicateID := "phase-stale-duplicate-op-commit-push"
+	opState := session.OperationState{
+		ID:        "stale-duplicate-op",
+		Objective: "Commit and push the branch, then review the result.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "plan_lease_approval",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "stale-duplicate-plan",
+			Goal:           "Do not re-offer already completed work.",
+			CurrentPhaseID: duplicateID,
+			Phases: []session.OperationPhase{
+				{
+					ID:             "commit-push",
+					Summary:        "Commit and push inspected planning changes",
+					Status:         session.PlanStatusCompleted,
+					AuthorityClass: "commit",
+					CompletedAt:    now.Add(-10 * time.Minute),
+				},
+				{
+					ID:               duplicateID,
+					Summary:          "Commit and push inspected planning changes",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "commit",
+					BoundedEffect:    "Re-offered duplicate of already completed commit/push work.",
+					AllowedActions:   []string{"git_commit", "git_push", "report_commit_evidence"},
+					ForbiddenActions: []string{"deploy_or_restart"},
+					RequiresApproval: true,
+				},
+			},
+		},
+	}
+	lease, ok := operationPlanLeaseFromPhasePlan(opState, now)
+	if !ok {
+		t.Fatal("operationPlanLeaseFromPhasePlan() ok = false, want stale plan lease fixture")
+	}
+	opState.PlanLease = lease
+	state := continuationStateFromOperationPlanLease(opState, lease, "continue", now)
+	opState = operationStateWithMaterializedPlanLease(opState, state, now)
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	repaired, err := rt.repairInvalidPendingContinuationApprovals(context.Background(), now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("repairInvalidPendingContinuationApprovals() err = %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired = %d, want one stale duplicate approval repair", repaired)
+	}
+	gotOp, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if gotOp.PhasePlan.Phases[1].Status != session.PlanStatusCompleted || !gotOp.PhasePlan.Phases[1].StaleAuthority {
+		t.Fatalf("duplicate phase = %#v, want reconciled completed duplicate", gotOp.PhasePlan.Phases[1])
+	}
+	if gotOp.PlanLease.Status != session.PlanLeaseStatusCompleted {
+		t.Fatalf("plan lease status = %q, want completed stale lease", gotOp.PlanLease.Status)
+	}
+	if gotOp.Status != session.OperationStatusCompleted || gotOp.Stage != "completed" {
+		t.Fatalf("operation status/stage = %q/%q, want completed/completed", gotOp.Status, gotOp.Stage)
+	}
+	gotCont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if gotCont.Status != session.ContinuationStatusRevoked || gotCont.ContinuationLease.Status != session.ContinuationLeaseStatusRevoked {
+		t.Fatalf("continuation = %#v, want stale pending approval revoked", gotCont)
+	}
+	if gotCont.HandshakeBlockedReason != "stale_completed_operation" {
+		t.Fatalf("HandshakeBlockedReason = %q, want stale_completed_operation", gotCont.HandshakeBlockedReason)
+	}
+}
+
+func TestStartupRepairClosesCompletedPhasePlanWithoutPendingContinuation(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 8194, UserID: 0, Scope: telegramDMScopeRef(8194)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "completed-after-stale-approval-op",
+		Objective: "Commit and push the branch, then review the result.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "phase_approval_adjudicated",
+		Proposal: session.OperationProposal{
+			ID:     "plan-lease-completed-after-stale-approval-op",
+			Kind:   "plan_lease",
+			Status: session.ProposalStatusSuperseded,
+		},
+		PlanLease: session.OperationPlanLease{
+			ID:              "completed-after-stale-approval-op",
+			Status:          session.PlanLeaseStatusCompleted,
+			CoveredPhaseIDs: []string{"phase-completed-after-stale-approval-op-commit-push"},
+			UpdatedAt:       now,
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "completed-after-stale-approval-plan",
+			Goal:           "Close when no pending work remains.",
+			CurrentPhaseID: "phase-completed-after-stale-approval-op-commit-push",
+			Phases: []session.OperationPhase{
+				{
+					ID:                 "commit-push",
+					Summary:            "Commit and push inspected planning changes",
+					Status:             session.PlanStatusCompleted,
+					AuthorityClass:     "commit",
+					CompletedAt:        now.Add(-10 * time.Minute),
+					SupersedesPhaseIDs: []string{"phase-completed-after-stale-approval-op-commit-push"},
+				},
+				{
+					ID:                "phase-completed-after-stale-approval-op-commit-push",
+					Summary:           "Commit and push inspected planning changes",
+					Status:            session.PlanStatusCompleted,
+					AuthorityClass:    "commit",
+					StaleAuthority:    true,
+					BlockedReasonCode: "superseded_phase",
+					CompletedAt:       now.Add(-10 * time.Minute),
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:            session.ContinuationStatusRevoked,
+		ContinuationLease: session.ContinuationLease{Status: session.ContinuationLeaseStatusRevoked},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	repaired, err := rt.repairInvalidPendingContinuationApprovals(context.Background(), now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("repairInvalidPendingContinuationApprovals() err = %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired = %d, want one operation closure repair", repaired)
+	}
+	gotOp, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if gotOp.Status != session.OperationStatusCompleted || gotOp.Stage != "completed" {
+		t.Fatalf("operation status/stage = %q/%q, want completed/completed", gotOp.Status, gotOp.Stage)
 	}
 }
 

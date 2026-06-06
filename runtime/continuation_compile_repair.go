@@ -74,6 +74,7 @@ func operationStateWithCompileFailureRepairPlan(opState session.OperationState, 
 	}
 	opState = session.NormalizeOperationState(opState)
 	blockedPhase = normalizeSingleOperationPhase(blockedPhase)
+	blockedPhase = operationPhaseResolvedFromProposalID(opState, blockedPhase)
 	if !operationCompileRepairAnchorCanEnter(opState, blockedPhase, kind) {
 		return opState, session.OperationPhase{}, false
 	}
@@ -86,6 +87,32 @@ func operationStateWithCompileFailureRepairPlan(opState session.OperationState, 
 		}
 	}
 	return repaired, repairPhase, true
+}
+
+func operationPhaseResolvedFromProposalID(opState session.OperationState, phase session.OperationPhase) session.OperationPhase {
+	opState = session.NormalizeOperationState(opState)
+	phase = normalizeSingleOperationPhase(phase)
+	phaseID := strings.TrimSpace(phase.ID)
+	if phaseID == "" {
+		return phase
+	}
+	for _, candidate := range opState.PhasePlan.Phases {
+		candidate = normalizeSingleOperationPhase(candidate)
+		if operationPhaseProposalID(opState, candidate) != phaseID {
+			continue
+		}
+		if strings.TrimSpace(candidate.Summary) == "" {
+			candidate.Summary = phase.Summary
+		}
+		if strings.TrimSpace(candidate.AuthorityClass) == "" {
+			candidate.AuthorityClass = phase.AuthorityClass
+		}
+		if strings.TrimSpace(candidate.BoundedEffect) == "" {
+			candidate.BoundedEffect = phase.BoundedEffect
+		}
+		return normalizeSingleOperationPhase(candidate)
+	}
+	return phase
 }
 
 func operationCompileRepairAnchorCanEnter(opState session.OperationState, phase session.OperationPhase, kind continuationCompileRepairKind) bool {

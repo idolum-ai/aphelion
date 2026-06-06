@@ -50,6 +50,24 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 			}
 		}
 	}
+	if repairedState, repaired := operationStateWithCompletedPhaseDuplicatesReconciled(opState, now); repaired {
+		opState = repairedState
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return false, fmt.Errorf("persist reconciled completed operation phase duplicates: %w", err)
+		}
+	}
+	if repairedState, repaired := operationStateWithStalePlanLeaseCleared(opState, now); repaired {
+		opState = repairedState
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return false, fmt.Errorf("persist cleared stale operation plan lease: %w", err)
+		}
+	}
+	if repairedState, repaired := operationStateWithCompletedPhasePlanClosed(opState, now); repaired {
+		opState = repairedState
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return false, fmt.Errorf("persist completed operation phase plan closure: %w", err)
+		}
+	}
 	opState = operationStateWithNonCurrentInProgressPhasesCleared(opState, now)
 	opState = operationStateWithInactiveCurrentPhaseLeaseCleared(opState, priorContinuation, priorContinuationExists, now)
 	if priorContinuationExists {

@@ -83,6 +83,14 @@ func (r *Runtime) repairInvalidPendingContinuationApprovals(ctx context.Context,
 		if err := ctx.Err(); err != nil {
 			return repaired, err
 		}
+		opState, operationRepaired := operationStateWithStartupPhasePlanReconciled(record.State, now)
+		if operationRepaired {
+			if err := r.store.UpdateOperationState(record.Key, opState); err != nil {
+				return repaired, fmt.Errorf("persist startup operation phase-plan repair chat_id=%d: %w", record.Key.ChatID, err)
+			}
+			repaired++
+			record.State = opState
+		}
 		if staleContinuationDerivedOrganicProposalReason(record.State) == "" {
 			continue
 		}
@@ -101,6 +109,24 @@ func (r *Runtime) repairInvalidPendingContinuationApprovals(ctx context.Context,
 	return repaired, nil
 }
 
+func operationStateWithStartupPhasePlanReconciled(opState session.OperationState, now time.Time) (session.OperationState, bool) {
+	opState = session.NormalizeOperationState(opState)
+	repaired := false
+	if repairedState, ok := operationStateWithCompletedPhaseDuplicatesReconciled(opState, now); ok {
+		opState = repairedState
+		repaired = true
+	}
+	if repairedState, ok := operationStateWithStalePlanLeaseCleared(opState, now); ok {
+		opState = repairedState
+		repaired = true
+	}
+	if repairedState, ok := operationStateWithCompletedPhasePlanClosed(opState, now); ok {
+		opState = repairedState
+		repaired = true
+	}
+	return session.NormalizeOperationState(opState), repaired
+}
+
 func (r *Runtime) repairInvalidPendingPhaseApprovalState(ctx context.Context, key session.SessionKey, chatID int64, opState session.OperationState, state session.ContinuationState, now time.Time, notify bool, surface string) (session.OperationState, bool, error) {
 	if r == nil || r.store == nil {
 		return session.NormalizeOperationState(opState), false, nil
@@ -113,6 +139,24 @@ func (r *Runtime) repairInvalidPendingPhaseApprovalState(ctx context.Context, ke
 	state = session.NormalizeContinuationState(state)
 	if state.Status != session.ContinuationStatusPending {
 		return opState, false, nil
+	}
+	reconciled := false
+	if repairedState, repaired := operationStateWithCompletedPhaseDuplicatesReconciled(opState, now); repaired {
+		opState = repairedState
+		reconciled = true
+	}
+	if repairedState, repaired := operationStateWithStalePlanLeaseCleared(opState, now); repaired {
+		opState = repairedState
+		reconciled = true
+	}
+	if repairedState, repaired := operationStateWithCompletedPhasePlanClosed(opState, now); repaired {
+		opState = repairedState
+		reconciled = true
+	}
+	if reconciled {
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return opState, false, fmt.Errorf("persist stale duplicate operation repair chat_id=%d: %w", key.ChatID, err)
+		}
 	}
 	if opState.Status == session.OperationStatusCompleted || opState.Status == session.OperationStatusFailed {
 		reason := "operation " + string(opState.Status)
