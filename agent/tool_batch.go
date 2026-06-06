@@ -246,6 +246,7 @@ type toolFailure struct {
 	Code        string `json:"code"`
 	ShortReason string `json:"short_reason"`
 	RetryHint   string `json:"retry_hint"`
+	Output      string `json:"output,omitempty"`
 }
 
 func toolResultContent(output string, err error) (string, bool) {
@@ -259,15 +260,18 @@ func classifyToolFailure(err error, output string) toolFailure {
 	failure := toolFailure{
 		OK:          false,
 		Code:        "TOOL_ERROR",
-		ShortReason: shortToolFailureReason(err, output),
+		ShortReason: shortToolFailureReason(err),
 		RetryHint:   "Reformulate",
+	}
+	if output := boundedToolFailureOutput(output); output != "" {
+		failure.Output = output
 	}
 	if errors.Is(err, context.Canceled) {
 		failure.Code = "CANCELED"
 		failure.RetryHint = "DoNotRetry"
 		return failure
 	}
-	lower := strings.ToLower(failure.ShortReason)
+	lower := strings.ToLower(strings.TrimSpace(failure.ShortReason + "\n" + failure.Output))
 	switch {
 	case strings.Contains(lower, "authority") || strings.Contains(lower, "approval") || strings.Contains(lower, "grant") || strings.Contains(lower, "permission") || strings.Contains(lower, "denied"):
 		failure.Code = "AUTHORITY_REJECTED"
@@ -279,13 +283,10 @@ func classifyToolFailure(err error, output string) toolFailure {
 	return failure
 }
 
-func shortToolFailureReason(err error, output string) string {
+func shortToolFailureReason(err error) string {
 	parts := []string{}
 	if err != nil {
 		parts = append(parts, err.Error())
-	}
-	if strings.TrimSpace(output) != "" {
-		parts = append(parts, strings.TrimSpace(output))
 	}
 	reason := strings.Join(strings.Fields(strings.Join(parts, ": ")), " ")
 	if reason == "" {
@@ -295,6 +296,20 @@ func shortToolFailureReason(err error, output string) string {
 		reason = strings.TrimSpace(reason[:139]) + "…"
 	}
 	return reason
+}
+
+const maxToolFailureOutputRunes = 6000
+
+func boundedToolFailureOutput(output string) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return ""
+	}
+	runes := []rune(output)
+	if len(runes) <= maxToolFailureOutputRunes {
+		return output
+	}
+	return strings.TrimSpace(string(runes[:maxToolFailureOutputRunes])) + "…"
 }
 
 func renderToolFailure(failure toolFailure) string {

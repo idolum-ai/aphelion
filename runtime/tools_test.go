@@ -69,3 +69,29 @@ func TestToolManifestForRunKindFiltersConservativeLanes(t *testing.T) {
 		t.Fatalf("doctor manifest = %q, want read-only diagnostic subset", doctor)
 	}
 }
+
+func TestToolRegistryForRunKindEnforcesConservativeLane(t *testing.T) {
+	registry := &stubToolRegistry{defs: []agent.ToolDef{
+		{Name: "exec"},
+		{Name: "fetch_url"},
+		{Name: "read_file"},
+		{Name: "operation_artifact"},
+		{Name: "update_operation"},
+	}}
+
+	heartbeat := toolRegistryForRunKind(registry, session.TurnRunKindHeartbeat)
+	if got := renderToolManifest(heartbeat.Definitions()); strings.Contains(got, "exec") || strings.Contains(got, "read_file") {
+		t.Fatalf("heartbeat definitions = %q leaked disallowed tools", got)
+	}
+	if _, err := heartbeat.Execute(context.Background(), "exec", json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "not available") {
+		t.Fatalf("heartbeat exec err = %v, want lane rejection", err)
+	}
+	if _, err := heartbeat.Execute(context.Background(), "update_operation", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("heartbeat update_operation err = %v, want allowed execution", err)
+	}
+
+	interactive := toolRegistryForRunKind(registry, session.TurnRunKindInteractive)
+	if interactive != registry {
+		t.Fatalf("interactive registry was wrapped; want original registry")
+	}
+}

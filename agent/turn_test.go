@@ -821,6 +821,59 @@ func TestToolError(t *testing.T) {
 	}
 }
 
+func TestToolErrorPreservesBoundedOutputEvidence(t *testing.T) {
+	provider := &mockProvider{
+		complete: func(_ context.Context, call int, messages []Message, _ []ToolDef) (*Response, error) {
+			switch call {
+			case 1:
+				return &Response{
+					ToolCalls: []ToolCall{{
+						ID:    "tool-1",
+						Name:  "exec",
+						Input: json.RawMessage(`{"command":"go test ./..."}`),
+					}},
+				}, nil
+			case 2:
+				last := messages[len(messages)-1]
+				var failure struct {
+					Code        string `json:"code"`
+					ShortReason string `json:"short_reason"`
+					Output      string `json:"output"`
+				}
+				if err := json.Unmarshal([]byte(last.Content), &failure); err != nil {
+					t.Fatalf("decode typed tool failure %q: %v", last.Content, err)
+				}
+				if failure.Code != "TOOL_ERROR" || failure.ShortReason != "command failed with exit code 1" {
+					t.Fatalf("failure = %#v, want typed command failure", failure)
+				}
+				for _, want := range []string{"stdout:\npackage failed", "stderr:\ncompile error detail"} {
+					if !strings.Contains(failure.Output, want) {
+						t.Fatalf("failure output = %q, missing %q", failure.Output, want)
+					}
+				}
+				return &Response{Content: "handled"}, nil
+			default:
+				t.Fatalf("unexpected call %d", call)
+				return nil, nil
+			}
+		},
+	}
+
+	tools := &mockTools{
+		exec: func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+			return "stdout:\npackage failed\nstderr:\ncompile error detail", errors.New("command failed with exit code 1")
+		},
+	}
+
+	result, _, err := RunTurn(context.Background(), provider, tools, defaultBudget(), nil, nil)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "handled" {
+		t.Fatalf("result.Text = %q, want handled", result.Text)
+	}
+}
+
 func TestContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

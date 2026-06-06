@@ -209,10 +209,13 @@ func TestFetchURLHonorsNetworkPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetch_url admin err = %v", err)
 	}
-	for _, want := range []string{"[FETCH_URL]", "excerpt:\nhello from server", "sha256:", "body_ref:"} {
+	for _, want := range []string{"[FETCH_URL]", "excerpt:\nhello from server", "sha256:", "excerpt_bytes:"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("fetch_url out = %q, want %q", out, want)
 		}
+	}
+	if strings.Contains(out, "body_ref:") {
+		t.Fatalf("fetch_url out = %q, want no inaccessible body_ref", out)
 	}
 
 	approved := principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 42}
@@ -238,35 +241,31 @@ func TestFetchURLHonorsNetworkPolicy(t *testing.T) {
 	}
 }
 
-func TestFetchURLRendersDigestBeforeExcerptAndBodyReference(t *testing.T) {
+func TestFetchURLRendersDigestWithConfigurableExcerpt(t *testing.T) {
 	t.Parallel()
 
-	body := strings.Repeat("abcdefghij", 260)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte(body))
-	}))
-	defer server.Close()
-
-	workspace := t.TempDir()
-	registry := NewRegistry(workspace, 2*time.Second)
-	admin := principal.Principal{Role: principal.RoleAdmin}
-	scope := sandbox.Scope{Principal: admin, Profile: sandbox.DefaultProfiles().Admin, GlobalRoot: workspace, WorkingRoot: workspace}
-
-	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"`+server.URL+`","max_bytes":4096}`), scope, admin, session.SessionKey{})
-	if err != nil {
-		t.Fatalf("fetch_url err = %v", err)
-	}
-	for _, want := range []string{"status: 200 OK", "content_type: text/plain; charset=utf-8", "bytes_read: 2600", "sha256:", "body_ref: fetch_url.raw", "excerpt_truncated: true", "excerpt:\nabcdefghij"} {
+	body := strings.Repeat("a", 2300) + "TAIL-MARKER"
+	out := renderFetchURLDigest("http://example.test", "200 OK", "text/plain; charset=utf-8", []byte(body), false, defaultNativeFetchExcerptBytes)
+	for _, want := range []string{"status: 200 OK", "content_type: text/plain; charset=utf-8", "bytes_read: 2311", "sha256:", "excerpt_bytes: 2048", "excerpt_truncated: true", "excerpt:\naaaa"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("fetch_url digest = %q, want %q", out, want)
 		}
+	}
+	if strings.Contains(out, "body_ref:") {
+		t.Fatalf("fetch_url digest = %q, want no inaccessible body_ref", out)
 	}
 	if strings.Contains(out, "body:\n") {
 		t.Fatalf("fetch_url digest leaked legacy raw body label: %q", out)
 	}
 	if len(out) >= len(body)+200 {
 		t.Fatalf("fetch_url digest length = %d, raw body len = %d; want excerpt-first compact output", len(out), len(body))
+	}
+
+	expanded := renderFetchURLDigest("http://example.test", "200 OK", "text/plain; charset=utf-8", []byte(body), false, 4096)
+	for _, want := range []string{"excerpt_bytes: 4096", "excerpt_truncated: false", "TAIL-MARKER"} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded fetch_url digest = %q, want %q", expanded, want)
+		}
 	}
 }
 
@@ -592,6 +591,36 @@ func TestDefinitionsIncludeNativeFileTools(t *testing.T) {
 		desc := strings.ToLower(names[name].Description)
 		if !strings.Contains(desc, "parallel-safe") || !strings.Contains(desc, "together in one response") {
 			t.Fatalf("%s description = %q, want parallel-safe batch affordance", name, names[name].Description)
+		}
+	}
+}
+
+func TestReadFileDefinitionRequiresWindowOrFullSchema(t *testing.T) {
+	t.Parallel()
+
+	defs := NewRegistry(t.TempDir(), 2*time.Second).Definitions()
+	var readFile agent.ToolDef
+	for _, def := range defs {
+		if def.Name == "read_file" {
+			readFile = def
+			break
+		}
+	}
+	if readFile.Name == "" {
+		t.Fatal("Definitions() missing read_file")
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(readFile.Parameters, &schema); err != nil {
+		t.Fatalf("decode read_file schema: %v", err)
+	}
+	anyOf, ok := schema["anyOf"].([]any)
+	if !ok || len(anyOf) != 2 {
+		t.Fatalf("read_file schema anyOf = %#v, want offset+limit/full alternatives", schema["anyOf"])
+	}
+	rendered := string(readFile.Parameters)
+	for _, want := range []string{`"required": ["offset", "limit"]`, `"const": true`} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("read_file schema = %s, missing %s", rendered, want)
 		}
 	}
 }

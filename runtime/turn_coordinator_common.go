@@ -213,6 +213,8 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	if runKind == "" {
 		runKind = session.TurnRunKindInteractive
 	}
+	input.RunKind = runKind
+	input.Tools = toolRegistryForRunKind(input.Tools, runKind)
 
 	progress := r.newToolProgressReporter(input.Key, input.Msg, input.Audit)
 	monitor, err := r.startTurnMonitor(ctx, input.Key, runKind, input.Prepared.LedgerText, progress, input.Audit, input.Msg)

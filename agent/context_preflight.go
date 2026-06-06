@@ -11,6 +11,7 @@ const (
 	providerContextRecentToolChars = 4000
 	providerContextOlderToolChars  = 800
 	providerContextTotalToolChars  = 60000
+	providerContextFatToolChars    = 16000
 	defaultContextMaxRatio         = 0.90
 	defaultContextHardRatio        = 1.10
 )
@@ -69,7 +70,7 @@ func prepareProviderMessages(messages []Message, tools []ToolDef, opts *Complete
 
 	estimated := estimateProviderRequestTokens(messages, tools)
 	preflight.EstimatedTokens = estimated
-	if estimated <= preflight.MaxTokens {
+	if estimated <= preflight.MaxTokens && !hasKnownFatToolOutput(messages) {
 		return messages, preflight, nil
 	}
 
@@ -109,6 +110,18 @@ func CompactToolResultMessagesForProviderContext(messages []Message) []Message {
 		totalToolChars += len(out[i].Content)
 	}
 	return out
+}
+
+func hasKnownFatToolOutput(messages []Message) bool {
+	for _, msg := range messages {
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "tool") {
+			continue
+		}
+		if len(strings.TrimSpace(msg.Content)) > providerContextFatToolChars {
+			return true
+		}
+	}
+	return false
 }
 
 func CompactProviderContextText(text string, limit int) string {
