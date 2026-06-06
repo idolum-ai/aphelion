@@ -508,6 +508,53 @@ func TestWorkPromptForContinuationIncludesOutcomeValidationAndStopRules(t *testi
 	}
 }
 
+func TestWorkPromptForContinuationUsesCurrentApprovedBundlePhase(t *testing.T) {
+	t.Parallel()
+
+	prompt := workPromptForContinuation(session.ContinuationState{
+		Objective:    "Improve continuation autonomy.",
+		StageSummary: "Bundle-level planning summary.",
+		ActionProposal: session.ActionProposal{
+			Summary:       "Execute the broad approved bundle.",
+			BoundedEffect: "Complete the whole bundle.",
+		},
+		ApprovalBundle: session.ContinuationApprovalBundle{
+			ID:             "bundle-loop",
+			Status:         session.ContinuationLeaseStatusActive,
+			CurrentPhaseID: "phase-b",
+			Phases: []session.ContinuationApprovalBundlePhase{
+				{ID: "phase-a", OperationPhaseID: "op-phase-a", Summary: "Already consumed", Status: session.ContinuationLeaseStatusConsumed},
+				{
+					ID:               "phase-b",
+					OperationPhaseID: "op-phase-b",
+					Summary:          "Patch the loop driver.",
+					AuthorityClass:   "local_workspace",
+					BoundedEffect:    "Edit runtime loop code and run focused tests.",
+					AllowedActions:   []string{"edit_repo_code", "run_go_tests"},
+					ForbiddenActions: []string{"deploy", "restart_service"},
+					Status:           session.ContinuationLeaseStatusActive,
+				},
+			},
+		},
+	}, session.OperationState{})
+
+	for _, want := range []string{
+		"Approved bundle phase: op-phase-b",
+		"Phase authority class: local_workspace",
+		"Next step: Patch the loop driver.",
+		"Bounded effect: Edit runtime loop code and run focused tests.",
+		"Allowed phase actions: edit_repo_code, run_go_tests",
+		"Forbidden phase actions: deploy, restart_service",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("work prompt missing %q: %q", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "Next step: Execute the broad approved bundle.") {
+		t.Fatalf("work prompt used bundle summary instead of current phase: %q", prompt)
+	}
+}
+
 func TestTriggerContinuationBlocksWorkExecutorWhenLeaseForbidsMode(t *testing.T) {
 	t.Parallel()
 

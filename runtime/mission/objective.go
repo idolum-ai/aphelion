@@ -22,6 +22,7 @@ func (r *Runtime) RecordWorkingObjectiveForInbound(key session.SessionKey, msg c
 	if objective == "" {
 		return
 	}
+	previous, _ := r.store.WorkingObjective(key)
 	if err := r.store.UpdateWorkingObjective(key, session.WorkingObjective{
 		Objective:  objective,
 		Source:     "inferred",
@@ -29,6 +30,15 @@ func (r *Runtime) RecordWorkingObjectiveForInbound(key session.SessionKey, msg c
 		CreatedAt:  time.Now().UTC(),
 	}); err != nil {
 		log.Printf("WARN working objective update failed chat_id=%d err=%v", key.ChatID, err)
+		return
+	}
+	if strings.TrimSpace(previous.Objective) != objective {
+		r.recordExecutionEvent(key, core.ExecutionEventMissionObjectiveDerived, "mission", "derived", map[string]any{
+			"objective":          objective,
+			"previous_objective": strings.TrimSpace(previous.Objective),
+			"source":             "inbound_user_text",
+			"confidence":         "medium",
+		}, time.Now().UTC())
 	}
 }
 

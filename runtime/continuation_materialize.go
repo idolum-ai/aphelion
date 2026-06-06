@@ -85,6 +85,9 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 			opState = updatedOpState
 		}
 		opState = operationStateWithMaterializedPhaseLease(opState, phase.ID, state, now)
+		if reused, err := r.consumeActiveContinuationLeaseForMaterializedState(ctx, key, msg, opState, state, "operation_phase_required_capability", now); err != nil || reused {
+			return true, err
+		}
 		if err := r.store.UpdateOperationState(key, opState); err != nil {
 			return false, fmt.Errorf("persist required-capability operation phase lease state: %w", err)
 		}
@@ -193,6 +196,9 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 			opState = updatedOpState
 		}
 		opState = operationStateWithMaterializedPhaseBundleLease(opState, bundle, state, now)
+		if reused, err := r.consumeActiveContinuationLeaseForMaterializedState(ctx, key, msg, opState, state, "operation_phase_bundle", now); err != nil || reused {
+			return true, err
+		}
 		if err := r.store.UpdateOperationState(key, opState); err != nil {
 			return false, fmt.Errorf("persist operation phase bundle lease state: %w", err)
 		}
@@ -247,6 +253,9 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 			opState = updatedOpState
 		}
 		opState = operationStateWithMaterializedPhaseLease(opState, phase.ID, state, now)
+		if reused, err := r.consumeActiveContinuationLeaseForMaterializedState(ctx, key, msg, opState, state, "operation_phase_plan", now); err != nil || reused {
+			return true, err
+		}
 		if err := r.store.UpdateOperationState(key, opState); err != nil {
 			return false, fmt.Errorf("persist operation phase lease state: %w", err)
 		}
@@ -289,6 +298,9 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		return true, err
 	} else {
 		opState = updatedOpState
+	}
+	if reused, err := r.consumeActiveContinuationLeaseForMaterializedState(ctx, key, msg, opState, state, "operation_proposal", now); err != nil || reused {
+		return true, err
 	}
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return false, fmt.Errorf("persist operation proposal continuation state: %w", err)
