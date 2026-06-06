@@ -78,41 +78,13 @@ func ApplyOperationAwareness(aw prompt.RuntimeAwareness, state session.Operation
 	aw.PhasePlanID = strings.TrimSpace(state.PhasePlan.ID)
 	aw.PhasePlanGoal = strings.TrimSpace(state.PhasePlan.Goal)
 	aw.PhasePlanCurrentPhaseID = strings.TrimSpace(state.PhasePlan.CurrentPhaseID)
+	aw.OperationDigest = operationDigestLines(state)
 	aw.OperationPhases = aw.OperationPhases[:0]
 	for _, phase := range state.PhasePlan.Phases {
 		if strings.TrimSpace(phase.ID) == "" && strings.TrimSpace(phase.Summary) == "" {
 			continue
 		}
-		line := "[" + string(phase.Status) + "] " + strings.TrimSpace(phase.ID)
-		if summary := strings.TrimSpace(phase.Summary); summary != "" {
-			if strings.TrimSpace(phase.ID) == "" {
-				line = "[" + string(phase.Status) + "] " + summary
-			} else {
-				line += ": " + summary
-			}
-		}
-		if authority := strings.TrimSpace(phase.AuthorityClass); authority != "" {
-			line += " (authority: " + authority + ")"
-		}
-		if effect := strings.TrimSpace(phase.BoundedEffect); effect != "" {
-			line += " bounded_effect: " + effect
-		}
-		if code := strings.TrimSpace(phase.BlockedReasonCode); code != "" {
-			line += " blocked_reason_code: " + code
-		}
-		if phase.RequiresConsent {
-			line += " requires_consent: true"
-		}
-		if phase.RequiresOptIn {
-			line += " requires_opt_in: true"
-		}
-		if len(phase.SupersedesPhaseIDs) > 0 {
-			line += " supersedes_phase_ids: " + strings.Join(phase.SupersedesPhaseIDs, ", ")
-		}
-		if phase.StaleAuthority {
-			line += " stale_authority: true"
-		}
-		aw.OperationPhases = append(aw.OperationPhases, line)
+		aw.OperationPhases = append(aw.OperationPhases, compactOperationPhaseDigest(phase))
 	}
 	aw.OperationFindings = aw.OperationFindings[:0]
 	for _, finding := range state.Findings {
@@ -137,6 +109,75 @@ func ApplyOperationAwareness(aw prompt.RuntimeAwareness, state session.Operation
 		aw.OperationArtifacts = append(aw.OperationArtifacts, artifact.Ref)
 	}
 	return aw
+}
+
+func operationDigestLines(state session.OperationState) []string {
+	state = session.NormalizeOperationState(state)
+	if !state.Active() && strings.TrimSpace(state.ID) == "" {
+		return nil
+	}
+	id := strings.TrimSpace(state.ID)
+	if id == "" {
+		id = "operation"
+	}
+	parts := []string{"op " + id}
+	if status := strings.TrimSpace(string(state.Status)); status != "" {
+		parts = append(parts, status)
+	}
+	if stage := strings.TrimSpace(state.Stage); stage != "" {
+		parts = append(parts, "stage="+stage)
+	}
+	if !state.UpdatedAt.IsZero() {
+		parts = append(parts, "snapshot=operation_state@"+state.UpdatedAt.UTC().Format("20060102T150405Z"))
+	}
+	if state.PhasePlan.Active() {
+		current := strings.TrimSpace(state.PhasePlan.CurrentPhaseID)
+		if current == "" && len(state.PhasePlan.Phases) > 0 {
+			current = strings.TrimSpace(state.PhasePlan.Phases[0].ID)
+		}
+		if current != "" {
+			parts = append(parts, "current_phase="+current)
+		}
+	}
+	return []string{strings.Join(parts, " · ")}
+}
+
+func compactOperationPhaseDigest(phase session.OperationPhase) string {
+	label := strings.TrimSpace(phase.ID)
+	if label == "" {
+		label = compactText(phase.Summary, 72)
+	}
+	parts := []string{"[" + string(phase.Status) + "] " + label}
+	if authority := strings.TrimSpace(phase.AuthorityClass); authority != "" {
+		parts = append(parts, "authority="+authority)
+	}
+	if code := strings.TrimSpace(phase.BlockedReasonCode); code != "" {
+		parts = append(parts, "blocked="+code)
+	}
+	if phase.RequiresConsent {
+		parts = append(parts, "requires_consent")
+	}
+	if phase.RequiresOptIn {
+		parts = append(parts, "requires_opt_in")
+	}
+	if phase.StaleAuthority {
+		parts = append(parts, "stale_authority")
+	}
+	if summary := compactText(phase.Summary, 96); summary != "" && summary != label {
+		parts = append(parts, "summary="+summary)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func compactText(text string, limit int) string {
+	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	if limit <= 1 {
+		return text[:limit]
+	}
+	return strings.TrimSpace(text[:limit-1]) + "…"
 }
 
 // ApplyContinuationAwareness composes continuation-handshake signals from the

@@ -4,6 +4,7 @@ package turn
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/idolum-ai/aphelion/pipeline"
@@ -136,11 +137,19 @@ func TestApplyOperationAwarenessBuildsRuntimeFindingsAndArtifacts(t *testing.T) 
 	if got, want := aw.PhasePlanCurrentPhaseID, "phase-2"; got != want {
 		t.Fatalf("PhasePlanCurrentPhaseID = %q, want %q", got, want)
 	}
+	if len(aw.OperationDigest) != 1 || !strings.Contains(aw.OperationDigest[0], "op operation") || !strings.Contains(aw.OperationDigest[0], "current_phase=phase-2") {
+		t.Fatalf("OperationDigest = %#v, want compact op/current phase", aw.OperationDigest)
+	}
 	if got, want := aw.OperationPhases, []string{
-		"[completed] phase-1: inspect first (authority: read_only_review)",
-		"[pending] phase-2: patch next (authority: workspace_write) bounded_effect: edit files and run tests blocked_reason_code: waiting_for_opt_in requires_opt_in: true supersedes_phase_ids: phase-old",
+		"[completed] phase-1 · authority=read_only_review · summary=inspect first",
+		"[pending] phase-2 · authority=workspace_write · blocked=waiting_for_opt_in · requires_opt_in · summary=patch next",
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("OperationPhases = %#v, want %#v", got, want)
+	}
+	for _, line := range aw.OperationPhases {
+		if strings.Contains(line, "bounded_effect") || strings.Contains(line, "supersedes_phase_ids") {
+			t.Fatalf("OperationPhases line is not compact: %q", line)
+		}
 	}
 	if got, want := aw.OperationFindings, []string{"[high] signal detected (basis: first pass)"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("OperationFindings = %#v, want %#v", got, want)

@@ -52,6 +52,7 @@ type RuntimeAwareness struct {
 	OperationStatus            string
 	OperationStage             string
 	OperationSummary           string
+	OperationDigest            []string
 	ProposalActive             bool
 	ProposalKind               string
 	ProposalStatus             string
@@ -129,6 +130,7 @@ func renderSharedAwarenessLines(aw RuntimeAwareness) []string {
 		nonEmptyAwarenessLine("operation_status", aw.OperationStatus),
 		nonEmptyAwarenessLine("operation_stage", aw.OperationStage),
 		nonEmptyAwarenessLine("operation_summary", aw.OperationSummary),
+		nonEmptyAwarenessLine("operation_digest", formatAwarenessList(aw.OperationDigest)),
 		fmt.Sprintf("- media_attached: %t", aw.MediaAttached),
 		nonEmptyAwarenessLine("media_mode", aw.MediaMode),
 	}

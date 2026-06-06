@@ -537,6 +537,27 @@ func TestUpdateOperationToolRequiresPlanLeaseLaneAuthorityAndTurns(t *testing.T)
 	}
 }
 
+func TestUpdateOperationAckUsesLedgerSnapshotPointer(t *testing.T) {
+	t.Parallel()
+
+	store := newToolTestStore(t)
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	out, err := registry.updateOperation(
+		context.Background(),
+		json.RawMessage(`{"id":"op-ledger","status":"active","stage":"slice-1","summary":"short"}`),
+		adminSessionKey(),
+	)
+	if err != nil {
+		t.Fatalf("updateOperation() err = %v", err)
+	}
+	if !strings.Contains(out, "snapshot: ledger:operations/op-ledger@") {
+		t.Fatalf("update_operation ack = %q, want ledger snapshot pointer", out)
+	}
+	if strings.Contains(out, "summary: short") {
+		t.Fatalf("update_operation ack echoed full summary: %q", out)
+	}
+}
+
 func TestRequestApprovalToolDefinitionExposesRequiredCapabilityGrants(t *testing.T) {
 	t.Parallel()
 

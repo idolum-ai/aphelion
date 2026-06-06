@@ -129,8 +129,7 @@ func renderOperationUpdateAck(state session.OperationState, in updateOperationIn
 	if state.UpdatedAt.IsZero() {
 		b.WriteString("snapshot: operation_state\n")
 	} else {
-		fmt.Fprintf(&b, "snapshot: operation_state@%s\n", state.UpdatedAt.UTC().Format(time.RFC3339))
-		// TODO(turn-performance): replace timestamp-only snapshot pointers with ledger versions or CAS-addressable operation snapshots before adding version-aware update semantics.
+		fmt.Fprintf(&b, "snapshot: ledger:operations/%s@%s\n", state.ID, state.UpdatedAt.UTC().Format(time.RFC3339))
 	}
 	fields := updateOperationReceivedFields(in)
 	if len(fields) > 0 {
