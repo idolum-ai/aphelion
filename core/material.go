@@ -4,13 +4,44 @@ package core
 
 import "strings"
 
+type MaterialPacketKind string
+
+const (
+	MaterialPacketKindUnspecified  MaterialPacketKind = ""
+	MaterialPacketKindGeneral      MaterialPacketKind = "general"
+	MaterialPacketKindStatusReport MaterialPacketKind = "status_report"
+	MaterialPacketKindRelational   MaterialPacketKind = "relational"
+	MaterialPacketKindCreative     MaterialPacketKind = "creative"
+)
+
 type MaterialPacket struct {
+	Kind             MaterialPacketKind
 	Facts            []string
 	AllowedActions   []string
 	Commitments      []string
 	Refusals         []string
 	SceneConstraints []string
 	Notes            []string
+}
+
+func NormalizeMaterialPacketKind(kind string) MaterialPacketKind {
+	normalized := strings.ToLower(strings.TrimSpace(kind))
+	normalized = strings.ReplaceAll(normalized, "-", "_")
+	normalized = strings.ReplaceAll(normalized, " ", "_")
+	switch normalized {
+	case "", "unspecified", "unknown", "none":
+		return MaterialPacketKindUnspecified
+	case "general", "general_render":
+		return MaterialPacketKindGeneral
+	case "status", "status_report", "completion", "completion_report", "evidence_report":
+		return MaterialPacketKindStatusReport
+	case "relational", "relationship", "relational_reply", "relational_scene":
+		return MaterialPacketKindRelational
+	case "creative", "creative_scene", "story", "poem", "essay":
+		return MaterialPacketKindCreative
+	default:
+		return MaterialPacketKindUnspecified
+	}
 }
 
 func (m MaterialPacket) Empty() bool {

@@ -5,8 +5,8 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -129,27 +129,39 @@ func TestWebSearchFallbackRequiresAttemptBudget(t *testing.T) {
 }
 
 func TestBraveProviderUsesHTTPEndpointAndRedactsCredential(t *testing.T) {
-	seenToken := ""
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seenToken = r.Header.Get("X-Subscription-Token")
-		if r.URL.Query().Get("q") != "bounded search" {
-			t.Fatalf("query = %q", r.URL.RawQuery)
-		}
-		_, _ = w.Write([]byte(`{"web":{"results":[{"title":"Brave Result","url":"https://example.test","description":"snippet","age":"2 days ago","profile":{"name":"Example"}}]}}`))
-	}))
-	defer server.Close()
+	transport := &recordingBraveTransport{}
 	t.Setenv("BRAVE_TEST_KEY", "secret-token")
-	provider := newBraveWebSearchProvider(WebSearchBraveOptions{Enabled: true, APIKeyEnv: "BRAVE_TEST_KEY", Endpoint: server.URL, HTTPClient: server.Client()})
+	provider := newBraveWebSearchProvider(WebSearchBraveOptions{Enabled: true, APIKeyEnv: "BRAVE_TEST_KEY", Endpoint: "https://brave.test/search", HTTPClient: &http.Client{Transport: transport}})
 	result, err := provider.Search(context.Background(), WebSearchRequest{Query: "bounded search", Count: 1})
 	if err != nil {
 		t.Fatalf("Brave Search() err = %v", err)
 	}
-	if seenToken != "secret-token" {
-		t.Fatalf("seen token = %q", seenToken)
+	if transport.token != "secret-token" {
+		t.Fatalf("seen token = %q", transport.token)
+	}
+	if transport.query != "bounded search" {
+		t.Fatalf("query = %q", transport.query)
 	}
 	if len(result.Results) != 1 || result.Results[0].Title != "Brave Result" || result.Results[0].SiteName != "Example" {
 		t.Fatalf("result = %#v", result)
 	}
+}
+
+type recordingBraveTransport struct {
+	token string
+	query string
+}
+
+func (t *recordingBraveTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.token = req.Header.Get("X-Subscription-Token")
+	t.query = req.URL.Query().Get("q")
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"web":{"results":[{"title":"Brave Result","url":"https://example.test","description":"snippet","age":"2 days ago","profile":{"name":"Example"}}]}}`)),
+		Request:    req,
+	}, nil
 }
 
 func grantWebSearchInvoke(t *testing.T, store *session.SQLiteStore, principal string, constraints string) {

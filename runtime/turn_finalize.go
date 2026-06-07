@@ -61,6 +61,14 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 	if input.Result == nil {
 		return output, nil
 	}
+	if recovery, ok := turnResultBudgetRecovery(input.Result); ok {
+		output.ReplyText = turnBudgetRecoveryHandoffText(recovery)
+		r.recordExecutionEvent(input.Key, core.ExecutionEventFaceRenderSkipped, "face", "skipped", map[string]any{
+			"reason":        "budget_recovery",
+			"recovery_kind": string(recovery.Kind),
+		}, time.Now().UTC())
+		return output, nil
+	}
 
 	output.ReplyText = strings.TrimSpace(input.ReplyText)
 	if len(input.OutHistory) < input.HistoryInputLen {
@@ -525,6 +533,7 @@ func runtimeAwarenessHasAnyHiddenCategory(aw prompt.RuntimeAwareness, categories
 
 type turnCommitInput struct {
 	Key             session.SessionKey
+	RunID           int64
 	Scope           sandbox.Scope
 	RunKind         session.TurnRunKind
 	Sess            *session.Session
@@ -575,6 +584,9 @@ type turnPersistencePort struct {
 	sessionState interface {
 		session() *session.Session
 	}
+	runIDSource interface {
+		turnRunID() int64
+	}
 	msg    core.InboundMessage
 	actor  principal.Principal
 	errCtx turnCommitErrorContext
@@ -595,6 +607,7 @@ func (p *turnPersistencePort) Persist(ctx context.Context, req turn.CommitReques
 	}
 	result, err := p.runtime.persistTurn(ctx, turnCommitInput{
 		Key:             p.key,
+		RunID:           p.currentRunID(),
 		Scope:           p.scope,
 		RunKind:         req.Request.RunKind,
 		Sess:            sess,
@@ -632,6 +645,18 @@ func (p *turnPersistencePort) currentSession() *session.Session {
 	return p.sess
 }
 
+func (p *turnPersistencePort) currentRunID() int64 {
+	if p == nil {
+		return 0
+	}
+	if p.runIDSource != nil {
+		if id := p.runIDSource.turnRunID(); id != 0 {
+			return id
+		}
+	}
+	return 0
+}
+
 type turnDeliveryPort struct {
 	runtime      *Runtime
 	key          session.SessionKey
@@ -647,6 +672,7 @@ type turnDeliveryPort struct {
 	audit           *turnAuditRecorder
 	sendErrCtx      string
 	recordErrCtx    string
+	deliveryMsgIDs  []int64
 }
 
 func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest) (*turn.DeliveryResult, error) {
@@ -654,13 +680,17 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 		return nil, fmt.Errorf("turn delivery port is unavailable")
 	}
 	p.runtime.markSessionTurnPhase(p.key, "deliver", "sending or finalizing outbound delivery")
+	if _, ok := turnResultBudgetRecoveryFromTurnResult(req.Result); ok {
+		return p.deliverBudgetRecovery(ctx, req)
+	}
 	return turn.RunDeliveryStage(ctx, turn.DeliveryStageInput{
 		Request:        req,
 		Deliver:        p.deliver,
 		RecordOutbound: p.recordOutbound,
 	}, turn.DeliveryStageCallbacks{
 		Send: func(ctx context.Context, msg core.OutboundMessage, replyWithVoice bool) (int64, string, error) {
-			outboundID, outboundType, err := p.runtime.sendReply(ctx, p.msg, msg.Text, msg.Media, replyWithVoice)
+			outboundID, outboundType, messageIDs, err := p.runtime.sendReplyWithDelivery(ctx, p.msg, msg.Text, msg.Media, replyWithVoice)
+			p.deliveryMsgIDs = messageIDs
 			if err != nil {
 				p.runtime.recordExecutionEvent(p.key, core.ExecutionEventDeliveryFinalFailed, "delivery", "failed", map[string]any{
 					"error": trimError(err.Error()),
@@ -736,8 +766,22 @@ func (p *turnDeliveryPort) recordOutboundWithContext(_ context.Context, sess *se
 	if p.recordErrCtx == "" {
 		p.recordErrCtx = "record outbound reply"
 	}
-	if err := p.runtime.store.RecordOutbound(key, sess.TurnCount, outboundID, outboundType); err != nil {
-		return fmt.Errorf("%s: %w", p.recordErrCtx, err)
+	messageIDs := p.deliveryMsgIDs
+	if len(messageIDs) == 0 {
+		messageIDs = []int64{outboundID}
+	}
+	for _, messageID := range messageIDs {
+		if messageID == 0 {
+			continue
+		}
+		if err := p.runtime.store.RecordOutbound(key, sess.TurnCount, messageID, outboundType); err != nil {
+			return fmt.Errorf("%s: %w", p.recordErrCtx, err)
+		}
+		if p.msg.TelegramThreadID > 0 && strings.TrimSpace(p.msg.DurableAgentID) == "" {
+			if err := p.runtime.store.RecordTelegramThreadLastMessage(p.msg.ChatID, p.msg.TelegramThreadID, messageID, outboundType, time.Now().UTC()); err != nil {
+				return fmt.Errorf("record telegram thread reply anchor: %w", err)
+			}
+		}
 	}
 	return nil
 }
@@ -807,6 +851,11 @@ func (r *Runtime) persistTurn(ctx context.Context, input turnCommitInput) (turnC
 		return out, err
 	}
 	out.Committed = stageResult.Committed
+	if out.Committed && input.RunID != 0 {
+		if err := r.store.UpdateTurnRunAccounting(input.RunID, input.Sess.TurnCount, stageResult.NewMessages, usage); err != nil {
+			return out, err
+		}
+	}
 	if out.Committed && input.Audit != nil && input.Result != nil {
 		input.Audit.RecordFinalReply(sceneText, input.Result.Media, out.OutboundType)
 	}

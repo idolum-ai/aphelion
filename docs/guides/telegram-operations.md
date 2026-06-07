@@ -46,6 +46,14 @@ admin chat.
 Use `/status` when the question is about active work, pending approvals,
 durable-agent state, or a specific chat.
 
+When you approve a continuation with `Start`, Aphelion may keep going for more
+than one turn if the approved lease has remaining turns and the next phase stays
+inside the same approved authority. You should see compact "continuing approved
+lease" messages before automatic follow-up turns. If work needs a wider action,
+new capability grant, expired/stale lease, deploy/restart boundary, or a mission
+has completed or blocked, Aphelion stops and asks again instead of renewing the
+lease silently.
+
 System health includes provider pressure as a typed projection. A
 `provider_health` line summarizes recent provider failures, retries, failovers,
 and successes across the last few hours, with the latest provider/model/failure
@@ -92,6 +100,12 @@ running turns, it records the observation, cancels any matching in-process turn,
 interrupts those exact turn-run rows and matching Telegram ingress rows, then
 records `watchdog.recovered`. A process restart remains an explicit operator
 action; watchdog recovery should leave unrelated chats and threads alone.
+
+For continuation diagnosis, `/status` and `/health trace` can surface recent
+bundle narrowing, continuation compile repair, class-scoped lease consumption,
+and loop-boundary events. Doctor evidence also includes turn accounting such as
+assistant/tool character ratio and provider input/output/cache token counts so
+context-pressure problems are visible without reading raw logs first.
 
 ## Keep Parallel Requests Apart
 

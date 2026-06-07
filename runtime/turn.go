@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
@@ -22,7 +23,17 @@ func (r *Runtime) handleInternalContinuation(ctx context.Context, actor principa
 	if actor.TelegramUserID <= 0 && strings.TrimSpace(actor.DurableAgentID) == "" {
 		return nil, ErrPrincipalDenied
 	}
+	msg = detachInternalContinuationIngress(msg)
 	return r.handleInteractiveInbound(ctx, msg, &actor)
+}
+
+func detachInternalContinuationIngress(msg core.InboundMessage) core.InboundMessage {
+	msg.IngressSeq = 0
+	msg.IngressQueuedAt = time.Time{}
+	msg.IngressSurface = ""
+	msg.IngressUpdateID = 0
+	msg.Raw = nil
+	return msg
 }
 
 func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.InboundMessage, forcedActor *principal.Principal) (result *core.TurnResult, err error) {

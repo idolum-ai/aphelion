@@ -196,7 +196,7 @@ func incompleteFaceRenderFallbackReason(renderedText string, floorText string, p
 	if materialPacketHasSceneConstraints(packet) {
 		return ""
 	}
-	if !materialPacketLooksOperational(packet) {
+	if packet.Kind != core.MaterialPacketKindStatusReport {
 		return ""
 	}
 	if !looksTruncatedSentence(rendered) {
@@ -225,25 +225,6 @@ func materialPacketHasSceneConstraints(packet core.MaterialPacket) bool {
 			continue
 		}
 		return true
-	}
-	return false
-}
-
-func materialPacketLooksOperational(packet core.MaterialPacket) bool {
-	terms := []string{
-		"active", "artifact", "binary", "branch", "build", "checksum", "commit", "deploy", "deployment", "evidence", "installed", "pid", "pr #", "pull request", "restart", "revision", "service", "status", "verify-deploy", "verified", "vcs_modified",
-	}
-	text := strings.ToLower(strings.Join([]string{
-		strings.Join(packet.Facts, "\n"),
-		strings.Join(packet.AllowedActions, "\n"),
-		strings.Join(packet.Commitments, "\n"),
-		strings.Join(packet.Refusals, "\n"),
-		strings.Join(packet.Notes, "\n"),
-	}, "\n"))
-	for _, term := range terms {
-		if strings.Contains(text, term) {
-			return true
-		}
 	}
 	return false
 }

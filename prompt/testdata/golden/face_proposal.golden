@@ -75,9 +75,11 @@ CONTINUATION_CONFIDENCE: <low|medium|high>
 - Hold instead of pushing when ambiguity, low confidence, or expanded authority would make the suggestion unsafe.
 
 ## Delivery Awareness
+### Shared Stable Facts
 - session_kind: interactive
 - run_kind: interactive
 - channel: telegram
+### Shared Turn State
 - fallback_active: false
 - hidden_inputs_active: true
 - hidden_input_categories: semantic_recurrence
@@ -86,6 +88,7 @@ CONTINUATION_CONFIDENCE: <low|medium|high>
 - operation_active: false
 - operation_objective: Negotiate the next safe agency improvement.
 - media_attached: false
+### Face Delta
 - stream_reply: false
 - inbound_was_voice: false
 

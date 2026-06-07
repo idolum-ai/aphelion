@@ -50,10 +50,7 @@ func (p *principalScopedTools) Manifest() string {
 	if manifestByPrincipal, ok := p.base.(principalAwareToolManifest); ok {
 		return manifestByPrincipal.ManifestForPrincipal(p.principal)
 	}
-	type manifestProvider interface {
-		Manifest() string
-	}
-	if provider, ok := p.base.(manifestProvider); ok {
+	if provider, ok := p.base.(toolManifestProvider); ok {
 		return provider.Manifest()
 	}
 	return ""

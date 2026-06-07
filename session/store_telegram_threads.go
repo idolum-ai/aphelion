@@ -381,8 +381,22 @@ func (s *SQLiteStore) TelegramThreadIDForReplyMessage(chatID int64, messageID in
 	if chatID == 0 || messageID <= 0 {
 		return 0, false, nil
 	}
-	var callbackThreadID int64
+	var anchorThreadID int64
 	err := s.db.QueryRow(`
+		SELECT thread_id
+		FROM telegram_thread_last_messages
+		WHERE chat_id = ? AND message_id = ? AND thread_id > 0
+		LIMIT 1
+	`, chatID, messageID).Scan(&anchorThreadID)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, false, fmt.Errorf("lookup telegram thread last message: %w", err)
+	}
+	if err == nil {
+		return anchorThreadID, true, nil
+	}
+
+	var callbackThreadID int64
+	err = s.db.QueryRow(`
 		SELECT thread_id
 		FROM telegram_callback_messages
 		WHERE chat_id = ? AND message_id = ? AND thread_id > 0

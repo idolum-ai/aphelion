@@ -223,3 +223,307 @@ func syncOperationPhaseStatusFromContinuation(opState *session.OperationState, s
 	}
 	return updated
 }
+
+func operationStateWithConsumedWorkContinuationPhaseCompleted(opState session.OperationState, state session.ContinuationState, now time.Time) (session.OperationState, bool) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	opState = session.NormalizeOperationState(opState)
+	state = session.NormalizeContinuationState(state)
+	if state.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed ||
+		state.ContinuationLease.RemainingTurns > 0 ||
+		strings.TrimSpace(state.ContinuationLease.ID) == "" ||
+		continuationWorkMode(state) == "" {
+		return opState, false
+	}
+	leaseID := strings.TrimSpace(state.ContinuationLease.ID)
+	updated := false
+	for i := range opState.PhasePlan.Phases {
+		phase := normalizeSingleOperationPhase(opState.PhasePlan.Phases[i])
+		if phase.Status != session.PlanStatusInProgress {
+			continue
+		}
+		if strings.TrimSpace(phase.LeaseID) != leaseID && !operationPhaseMatchesConsumedContinuation(opState, phase, state) {
+			continue
+		}
+		opState.PhasePlan.Phases[i].Status = session.PlanStatusCompleted
+		if opState.PhasePlan.Phases[i].CompletedAt.IsZero() {
+			opState.PhasePlan.Phases[i].CompletedAt = now
+		}
+		updated = true
+		break
+	}
+	if !updated {
+		return opState, false
+	}
+	if reconciled, reconciledDuplicates := operationStateWithCompletedPhaseDuplicatesReconciled(opState, now); reconciledDuplicates {
+		opState = reconciled
+	}
+	if reconciled, clearedStaleLease := operationStateWithStalePlanLeaseCleared(opState, now); clearedStaleLease {
+		opState = reconciled
+	}
+	if closed, completed := operationStateWithCompletedPhasePlanClosed(opState, now); completed {
+		opState = closed
+		return session.NormalizeOperationState(opState), true
+	}
+	opState.Status = session.OperationStatusActive
+	opState.Stage = firstNonEmptyContinuation(strings.TrimSpace(opState.Stage), "phase_completed")
+	opState.PhasePlan.UpdatedAt = now
+	opState.UpdatedAt = now
+	return session.NormalizeOperationState(opState), true
+}
+
+func operationPhaseMatchesConsumedContinuation(opState session.OperationState, phase session.OperationPhase, state session.ContinuationState) bool {
+	opState = session.NormalizeOperationState(opState)
+	phase = normalizeSingleOperationPhase(phase)
+	state = session.NormalizeContinuationState(state)
+	proposalID := operationPhaseProposalID(opState, phase)
+	if proposalID == "" {
+		return false
+	}
+	return strings.TrimSpace(state.ActionProposal.OperationID) == proposalID ||
+		strings.TrimPrefix(strings.TrimSpace(state.ActionProposal.ID), "aprop-") == proposalID ||
+		strings.TrimSpace(state.ContinuationLease.ProposalID) == "aprop-"+proposalID
+}
+
+func operationStateWithCompletedPhaseDuplicatesReconciled(opState session.OperationState, now time.Time) (session.OperationState, bool) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	opState = session.NormalizeOperationState(opState)
+	if len(opState.PhasePlan.Phases) < 2 {
+		return opState, false
+	}
+
+	type completedPhase struct {
+		index int
+		phase session.OperationPhase
+	}
+	completed := make([]completedPhase, 0, len(opState.PhasePlan.Phases))
+	for i, phase := range opState.PhasePlan.Phases {
+		phase = normalizeSingleOperationPhase(phase)
+		if phase.Status == session.PlanStatusCompleted {
+			completed = append(completed, completedPhase{index: i, phase: phase})
+		}
+	}
+	if len(completed) == 0 {
+		return opState, false
+	}
+
+	updated := false
+	for i := range opState.PhasePlan.Phases {
+		candidate := normalizeSingleOperationPhase(opState.PhasePlan.Phases[i])
+		if candidate.Status == session.PlanStatusCompleted {
+			continue
+		}
+		for _, done := range completed {
+			if !operationPhaseDuplicatesCompletedPhase(opState, candidate, done.phase) {
+				continue
+			}
+			opState.PhasePlan.Phases[i].Status = session.PlanStatusCompleted
+			opState.PhasePlan.Phases[i].StaleAuthority = true
+			opState.PhasePlan.Phases[i].BlockedReasonCode = "superseded_phase"
+			opState.PhasePlan.Phases[i].LeaseID = ""
+			if opState.PhasePlan.Phases[i].CompletedAt.IsZero() {
+				opState.PhasePlan.Phases[i].CompletedAt = firstNonZeroTime(done.phase.CompletedAt, now)
+			}
+			doneID := strings.TrimSpace(done.phase.ID)
+			candidateID := strings.TrimSpace(candidate.ID)
+			if doneID != "" && candidateID != "" && !stringSliceContains(opState.PhasePlan.Phases[done.index].SupersedesPhaseIDs, candidateID) {
+				opState.PhasePlan.Phases[done.index].SupersedesPhaseIDs = append(opState.PhasePlan.Phases[done.index].SupersedesPhaseIDs, candidateID)
+			}
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		return opState, false
+	}
+	opState.PhasePlan.UpdatedAt = now
+	opState.UpdatedAt = now
+	return session.NormalizeOperationState(opState), true
+}
+
+func operationStateWithCompletedPhasePlanClosed(opState session.OperationState, now time.Time) (session.OperationState, bool) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	opState = session.NormalizeOperationState(opState)
+	if !operationPhasePlanAllPhasesCompleted(opState.PhasePlan) || opState.Status == session.OperationStatusCompleted {
+		return opState, false
+	}
+	if operationStateHasNonPhasePendingProposal(opState) {
+		return opState, false
+	}
+	opState.Status = session.OperationStatusCompleted
+	opState.Stage = "completed"
+	if opState.Proposal.Status == session.ProposalStatusPending || opState.Proposal.Status == session.ProposalStatusApproved {
+		opState.Proposal.Status = session.ProposalStatusSuperseded
+		opState.Proposal.UpdatedAt = now
+	}
+	switch opState.PlanLease.Status {
+	case session.PlanLeaseStatusProposed, session.PlanLeaseStatusApproved, session.PlanLeaseStatusActive:
+		opState.PlanLease.Status = session.PlanLeaseStatusCompleted
+		opState.PlanLease.RemainingTurns = 0
+		opState.PlanLease.UpdatedAt = now
+	}
+	opState.PhasePlan.UpdatedAt = now
+	opState.UpdatedAt = now
+	return session.NormalizeOperationState(opState), true
+}
+
+func operationStateHasNonPhasePendingProposal(opState session.OperationState) bool {
+	opState = session.NormalizeOperationState(opState)
+	if !pendingOperationProposalNeedsButton(opState.Proposal) {
+		return false
+	}
+	if operationProposalBelongsToPhasePlan(opState, opState.Proposal) {
+		return false
+	}
+	if operationProposalMatchesPlanLease(opState.Proposal, opState.PlanLease) {
+		return false
+	}
+	return true
+}
+
+func operationPhasePlanAllPhasesCompleted(plan session.OperationPhasePlan) bool {
+	plan = session.NormalizeOperationState(session.OperationState{PhasePlan: plan}).PhasePlan
+	if len(plan.Phases) == 0 {
+		return false
+	}
+	for _, phase := range plan.Phases {
+		phase = normalizeSingleOperationPhase(phase)
+		if phase.Status != session.PlanStatusCompleted {
+			return false
+		}
+	}
+	return true
+}
+
+func operationPhaseDuplicatesCompletedPhase(opState session.OperationState, candidate session.OperationPhase, completed session.OperationPhase) bool {
+	opState = session.NormalizeOperationState(opState)
+	candidate = normalizeSingleOperationPhase(candidate)
+	completed = normalizeSingleOperationPhase(completed)
+	candidateID := strings.TrimSpace(candidate.ID)
+	completedID := strings.TrimSpace(completed.ID)
+	if candidateID == "" || completedID == "" || candidateID == completedID {
+		return false
+	}
+	for _, supersededID := range completed.SupersedesPhaseIDs {
+		if strings.TrimSpace(supersededID) == candidateID {
+			return true
+		}
+	}
+	completedProposalID := operationPhaseProposalID(opState, completed)
+	if completedProposalID != "" && candidateID == completedProposalID {
+		return true
+	}
+	if completedID != "" && strings.Contains(candidateID, completedID) && operationPhaseCoreEquivalent(candidate, completed) {
+		return true
+	}
+	if completedProposalID != "" && strings.Contains(candidateID, completedProposalID) && operationPhaseCoreEquivalent(candidate, completed) {
+		return true
+	}
+	return false
+}
+
+func operationPhaseCoreEquivalent(a session.OperationPhase, b session.OperationPhase) bool {
+	a = normalizeSingleOperationPhase(a)
+	b = normalizeSingleOperationPhase(b)
+	if normalizeOperationPhaseReasonCode(a.Summary) != normalizeOperationPhaseReasonCode(b.Summary) {
+		return false
+	}
+	return strings.TrimSpace(a.AuthorityClass) == strings.TrimSpace(b.AuthorityClass)
+}
+
+func operationStateWithStalePlanLeaseCleared(opState session.OperationState, now time.Time) (session.OperationState, bool) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	opState = session.NormalizeOperationState(opState)
+	if !opState.PlanLease.Active() || len(opState.PlanLease.CoveredPhaseIDs) == 0 {
+		return opState, false
+	}
+	switch opState.PlanLease.Status {
+	case session.PlanLeaseStatusProposed, session.PlanLeaseStatusApproved, session.PlanLeaseStatusActive:
+	default:
+		return opState, false
+	}
+	covered := make(map[string]struct{}, len(opState.PlanLease.CoveredPhaseIDs))
+	for _, id := range opState.PlanLease.CoveredPhaseIDs {
+		if trimmed := strings.TrimSpace(id); trimmed != "" {
+			covered[trimmed] = struct{}{}
+		}
+	}
+	if len(covered) == 0 {
+		return opState, false
+	}
+	foundCovered := false
+	for _, phase := range opState.PhasePlan.Phases {
+		phase = normalizeSingleOperationPhase(phase)
+		if _, ok := covered[strings.TrimSpace(phase.ID)]; !ok {
+			continue
+		}
+		foundCovered = true
+		if phase.Status == session.PlanStatusCompleted {
+			continue
+		}
+		if operationPhaseApprovalExcludedReason(opState.PhasePlan, phase) != "" {
+			continue
+		}
+		if operationPhaseEligibleForPlanBudget(phase) || operationPhaseNeedsStandaloneApproval(opState, phase) {
+			return opState, false
+		}
+	}
+	if !foundCovered {
+		return opState, false
+	}
+	opState.PlanLease.Status = session.PlanLeaseStatusCompleted
+	opState.PlanLease.RemainingTurns = 0
+	opState.PlanLease.UpdatedAt = now
+	if opState.Proposal.Status == session.ProposalStatusPending && operationProposalMatchesPlanLease(opState.Proposal, opState.PlanLease) {
+		opState.Proposal.Status = session.ProposalStatusSuperseded
+		opState.Proposal.UpdatedAt = now
+	}
+	if opState.Stage == "plan_lease_approval" {
+		opState.Stage = "stale_plan_lease_repaired"
+	}
+	opState.UpdatedAt = now
+	return session.NormalizeOperationState(opState), true
+}
+
+func operationProposalMatchesPlanLease(proposal session.OperationProposal, lease session.OperationPlanLease) bool {
+	proposal = session.NormalizeOperationState(session.OperationState{Proposal: proposal}).Proposal
+	lease = session.NormalizeOperationPlanLease(lease)
+	proposalID := strings.TrimSpace(proposal.ID)
+	if proposalID == "" {
+		return false
+	}
+	return proposalID == strings.TrimSpace(lease.ID) || proposalID == operationPlanLeaseProposalID(lease)
+}
+
+func firstNonZeroTime(values ...time.Time) time.Time {
+	for _, value := range values {
+		if !value.IsZero() {
+			return value.UTC()
+		}
+	}
+	return time.Time{}
+}
+
+func stringSliceContains(values []string, want string) bool {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return false
+	}
+	for _, value := range values {
+		if strings.TrimSpace(value) == want {
+			return true
+		}
+	}
+	return false
+}

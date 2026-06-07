@@ -547,3 +547,84 @@ func TestRecordTelegramThreadReminderRecordsReplyLedgerAndSuppression(t *testing
 		t.Fatalf("reply ledger after ignore = %d,%t,%v; want thread retained", threadID, ok, err)
 	}
 }
+
+func TestTelegramThreadLastMessageAnchorRoundTripAndReplyLookup(t *testing.T) {
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	thread, _, err := store.CreateTelegramThreadForUpdate(1001, 2002, 3003, 4004, "thread opener", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate() err = %v", err)
+	}
+	if err := store.RecordTelegramThreadLastMessage(1001, thread.ThreadID, 9901, "assistant_chunk", time.Now().UTC()); err != nil {
+		t.Fatalf("RecordTelegramThreadLastMessage(first) err = %v", err)
+	}
+	if got, ok, err := store.TelegramThreadIDForReplyMessage(1001, 9901); err != nil || !ok || got != thread.ThreadID {
+		t.Fatalf("TelegramThreadIDForReplyMessage(first anchor) = %d ok=%v err=%v, want thread %d", got, ok, err, thread.ThreadID)
+	}
+	if err := store.RecordTelegramThreadLastMessage(1001, thread.ThreadID, 9902, "assistant_chunk", time.Now().UTC().Add(time.Second)); err != nil {
+		t.Fatalf("RecordTelegramThreadLastMessage(second) err = %v", err)
+	}
+	anchor, ok, err := store.TelegramThreadLastMessage(1001, thread.ThreadID)
+	if err != nil || !ok || anchor.MessageID != 9902 || anchor.Source != "assistant_chunk" {
+		t.Fatalf("TelegramThreadLastMessage() = %#v ok=%v err=%v, want 9902 assistant_chunk", anchor, ok, err)
+	}
+	if got, ok, err := store.TelegramThreadIDForReplyMessage(1001, 9902); err != nil || !ok || got != thread.ThreadID {
+		t.Fatalf("TelegramThreadIDForReplyMessage(second anchor) = %d ok=%v err=%v, want thread %d", got, ok, err, thread.ThreadID)
+	}
+}
+
+func TestTelegramThreadLastMessageDoesNotRegress(t *testing.T) {
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	first := time.Date(2026, 6, 7, 10, 0, 0, 0, time.UTC)
+	second := first.Add(time.Minute)
+	thread, _, err := store.CreateTelegramThreadForUpdate(1234, 2002, 3003, 4004, "thread opener", first)
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate() err = %v", err)
+	}
+
+	if err := store.RecordTelegramThreadLastMessage(1234, thread.ThreadID, 100, "outbound", first); err != nil {
+		t.Fatalf("record first anchor: %v", err)
+	}
+	if err := store.RecordTelegramThreadLastMessage(1234, thread.ThreadID, 90, "inbound", second); err != nil {
+		t.Fatalf("record stale anchor: %v", err)
+	}
+
+	anchor, ok, err := store.TelegramThreadLastMessage(1234, thread.ThreadID)
+	if err != nil {
+		t.Fatalf("load anchor: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected anchor")
+	}
+	if anchor.MessageID != 100 {
+		t.Fatalf("message id regressed to %d", anchor.MessageID)
+	}
+	if anchor.Source != "outbound" {
+		t.Fatalf("source changed with stale anchor: %q", anchor.Source)
+	}
+	if !anchor.UpdatedAt.Equal(first) {
+		t.Fatalf("updated_at changed with stale anchor: got %s want %s", anchor.UpdatedAt, first)
+	}
+
+	third := second.Add(time.Minute)
+	if err := store.RecordTelegramThreadLastMessage(1234, thread.ThreadID, 101, "new-outbound", third); err != nil {
+		t.Fatalf("record newer anchor: %v", err)
+	}
+	anchor, ok, err = store.TelegramThreadLastMessage(1234, thread.ThreadID)
+	if err != nil {
+		t.Fatalf("load advanced anchor: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected advanced anchor")
+	}
+	if anchor.MessageID != 101 {
+		t.Fatalf("message id did not advance: %d", anchor.MessageID)
+	}
+	if anchor.Source != "new-outbound" {
+		t.Fatalf("source did not advance: %q", anchor.Source)
+	}
+	if !anchor.UpdatedAt.Equal(third) {
+		t.Fatalf("updated_at did not advance: got %s want %s", anchor.UpdatedAt, third)
+	}
+}

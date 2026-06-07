@@ -57,28 +57,11 @@ func operationStateWithApprovalBoundaryDeliberationPlan(opState session.Operatio
 func operationPhaseApprovalBlockCanEnterDeliberation(opState session.OperationState, phase session.OperationPhase, reason string) bool {
 	phase = normalizeSingleOperationPhase(phase)
 	reason = normalizeOperationPhaseReasonCode(reason)
-	if !phase.Active() || phase.Status != session.PlanStatusPending {
+	kind, ok := continuationCompileRepairForReason(reason)
+	if !ok || kind != continuationCompileRepairApprovalBoundary {
 		return false
 	}
-	if strings.HasPrefix(strings.TrimSpace(phase.ID), operationApprovalBoundaryPlanPhasePrefix) {
-		return false
-	}
-	if operationPhaseApprovalExcludedReason(opState.PhasePlan, phase) != "" {
-		return false
-	}
-	if reason != "waiting_for_a_clearer_approval_boundary" {
-		return false
-	}
-	if phase.RequiresConsent || phase.RequiresOptIn || len(phase.RequiredCapabilityGrants) > 0 {
-		return false
-	}
-	if operationPhaseHasThirdPartyPrivateDataGate(phase) {
-		return false
-	}
-	if operationPhasePlanBudgetHardStopReason(phase) != "" {
-		return false
-	}
-	return true
+	return operationCompileRepairAnchorCanEnter(opState, phase, kind)
 }
 
 func operationApprovalBoundaryDeliberationFirstPhase(opState session.OperationState, blockedPhase session.OperationPhase, reason string) session.OperationPhase {

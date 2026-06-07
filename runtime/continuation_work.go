@@ -284,39 +284,50 @@ func (r *Runtime) TriggerContinuationForKey(ctx context.Context, key session.Ses
 	if r == nil {
 		return nil
 	}
+	return r.triggerContinuationLoop(ctx, key)
+}
+
+func (r *Runtime) triggerApprovedContinuationOnce(ctx context.Context, key session.SessionKey) (session.ContinuationState, error) {
 	state, err := r.ContinuationStateForKey(key)
 	if err != nil {
-		return err
+		return session.ContinuationState{}, err
 	}
 	if continuationLeaseExpired(state, time.Now().UTC()) {
 		state = continuationStateWithLeaseExpired(state, time.Now().UTC())
 		if err := r.store.UpdateContinuationState(key, state); err != nil {
-			return err
+			return session.ContinuationState{}, err
 		}
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), time.Now().UTC())
-		return nil
+		return state, nil
 	}
 	if continuationActionIsPlanLeaseApproval(state) && !state.ApprovalBundle.Active() {
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "approval_only", continuationExecutionPayload(state), time.Now().UTC())
-		return nil
+		return state, nil
 	}
 	if state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), time.Now().UTC())
-		return nil
+		return state, nil
 	}
 	if err := r.validateContinuationApprovalBundleFingerprints(key, state); err != nil {
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "stale_bundle", continuationExecutionPayload(state), time.Now().UTC())
-		return err
+		return state, err
 	}
 	approverID := state.ApprovedBy
 	if approverID <= 0 {
-		return fmt.Errorf("continuation approver is not recorded")
+		return state, fmt.Errorf("continuation approver is not recorded")
 	}
 	actor, ok := r.resolver.ResolveTelegramUser(approverID)
 	if !ok {
-		return fmt.Errorf("continuation approver %d is not admitted", approverID)
+		return state, fmt.Errorf("continuation approver %d is not admitted", approverID)
 	}
-	return r.runApprovedContinuation(ctx, actor, key, state)
+	if err := r.runApprovedContinuation(ctx, actor, key, state); err != nil {
+		return state, err
+	}
+	updated, err := r.ContinuationStateForKey(key)
+	if err != nil {
+		return session.ContinuationState{}, err
+	}
+	return updated, nil
 }
 
 func (r *Runtime) runApprovedContinuation(ctx context.Context, actor principal.Principal, key session.SessionKey, state session.ContinuationState) error {

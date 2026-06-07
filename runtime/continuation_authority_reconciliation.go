@@ -63,7 +63,11 @@ func (r *Runtime) reconciledContinuationStateFromInvalidAuthority(state session.
 	decisionID := newContinuationDecisionID()
 	action.ID = "aprop-" + decisionID
 	action.AllowedActions = reconciledAllowed
-	action.RiskClass = safestContinuationRiskClassForAllowedActions(action.RiskClass, reconciledAllowed)
+	if continuationStateHasExternalAccountGrant(state) && !allowedActionsIncludeLocalRepoMutation(reconciledAllowed) {
+		action.RiskClass = "external_account_action"
+	} else {
+		action.RiskClass = safestContinuationRiskClassForAllowedActions(action.RiskClass, reconciledAllowed)
+	}
 	action.Status = session.ProposalStatusPending
 	action.CreatedAt = now
 	action.UpdatedAt = now
@@ -82,12 +86,31 @@ func (r *Runtime) reconciledContinuationStateFromInvalidAuthority(state session.
 	reconciled.ParkedSource = ""
 	reconciled.ActionProposal = action
 	reconciled.ContinuationLease = buildContinuationLease(action, turns, now)
+	reconciled.ContinuationLease.RequiredCapabilityGrants = continuationRequiredCapabilityGrantSpecs(state)
 	reconciled.UpdatedAt = now
 	reconciled = session.NormalizeContinuationState(reconciled)
 	if continuationAuthorityCompilation(reconciled).Invalid() {
 		return session.ContinuationState{}, false
 	}
 	return reconciled, true
+}
+
+func allowedActionsIncludeLocalRepoMutation(actions []string) bool {
+	switch workModeFromStructuredAuthorityList(actions) {
+	case WorkModeWorkspaceWrite, WorkModeCommit, WorkModeDeploy:
+		return true
+	default:
+		return false
+	}
+}
+
+func continuationStateHasExternalAccountGrant(state session.ContinuationState) bool {
+	for _, grant := range continuationRequiredCapabilityGrantSpecs(state) {
+		if grant.Kind == session.CapabilityKindExternalAccount {
+			return true
+		}
+	}
+	return false
 }
 
 func safestContinuationRiskClassForAllowedActions(current string, allowed []string) string {
@@ -109,7 +132,7 @@ func safestContinuationRiskClassForAllowedActions(current string, allowed []stri
 	}
 }
 
-func (r *Runtime) materializeReconciledAuthorityApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, opState session.OperationState, state session.ContinuationState, source string, now time.Time) (session.OperationState, error) {
+func (r *Runtime) materializeReconciledAuthorityApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, opState session.OperationState, state session.ContinuationState, compilation session.AuthorityContractCompilation, source string, now time.Time) (session.OperationState, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -125,7 +148,7 @@ func (r *Runtime) materializeReconciledAuthorityApproval(ctx context.Context, ke
 		if phases := operationPhasesForApprovalBundle(opState, state.ApprovalBundle); len(phases) > 0 {
 			opState = operationStateWithMaterializedPhaseBundleLease(opState, phases, state, now)
 		}
-	case "operation_phase_plan":
+	case "operation_phase_plan", "operation_phase_required_capability":
 		if phaseID := operationPhaseIDForContinuationState(opState, state); phaseID != "" {
 			opState = operationStateWithMaterializedPhaseLease(opState, phaseID, state, now)
 		}
@@ -141,6 +164,11 @@ func (r *Runtime) materializeReconciledAuthorityApproval(ctx context.Context, ke
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return opState, err
 	}
+	phase, _ := operationPhaseFromInvalidMaterializedAuthority(opState, state, source)
+	r.recordContinuationCompileRepaired(key, opState, phase, state, compilation, "invalid_authority_contract", continuationCompileRepairAuthorityContract, source, map[string]any{
+		"repair_strategy": "remove_contradictory_allowed_actions",
+		"user_visible":    false,
+	}, now)
 	payload := continuationExecutionPayload(state)
 	payload["materialized_from"] = firstNonEmptyContinuation(source, "authority_reconciliation")
 	payload["reconciled_from_invalid_authority_contract"] = true

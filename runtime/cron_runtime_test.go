@@ -53,12 +53,12 @@ func TestCronJobNoneStoresDedicatedSessionWithoutOutbound(t *testing.T) {
 	}
 }
 
-func TestCronJobAnnounceUsesFaceAndUpdatesAdminSession(t *testing.T) {
+func TestCronJobAnnounceUsesFloorFallbackAndUpdatesAdminSession(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "cron canonical"
-	provider.faceReplyText = "cron rendered"
+	provider.faceReplyText = "unexpected cron face render"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
@@ -78,8 +78,8 @@ func TestCronJobAnnounceUsesFaceAndUpdatesAdminSession(t *testing.T) {
 	if len(sender.sent) != 1 {
 		t.Fatalf("sent len = %d, want 1", len(sender.sent))
 	}
-	if sender.sent[0].ChatID != 1001 || sender.sent[0].Text != "cron rendered" {
-		t.Fatalf("sent = %#v, want rendered cron to admin", sender.sent[0])
+	if sender.sent[0].ChatID != 1001 || sender.sent[0].Text != "cron canonical" {
+		t.Fatalf("sent = %#v, want cron floor to admin", sender.sent[0])
 	}
 	sender.mu.Unlock()
 
@@ -90,11 +90,17 @@ func TestCronJobAnnounceUsesFaceAndUpdatesAdminSession(t *testing.T) {
 	if adminSession.LastFloorText != "cron canonical" {
 		t.Fatalf("admin floor = %q, want cron canonical", adminSession.LastFloorText)
 	}
-	if len(adminSession.Messages) == 0 || adminSession.Messages[len(adminSession.Messages)-1].Content != "cron rendered" {
-		t.Fatalf("admin messages = %#v, want rendered cron entry", adminSession.Messages)
+	if len(adminSession.Messages) == 0 || adminSession.Messages[len(adminSession.Messages)-1].Content != "cron canonical" {
+		t.Fatalf("admin messages = %#v, want cron floor entry", adminSession.Messages)
 	}
 	if adminSession.Messages[len(adminSession.Messages)-1].FloorContent != "cron canonical" {
 		t.Fatalf("admin floor content = %q, want cron canonical", adminSession.Messages[len(adminSession.Messages)-1].FloorContent)
+	}
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.seenFaceSystem) != 0 {
+		t.Fatalf("seenFaceSystem = %#v, want no face render for cron maintenance delivery", provider.seenFaceSystem)
 	}
 }
 

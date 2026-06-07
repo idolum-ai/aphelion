@@ -58,6 +58,19 @@ make build
 git diff --check
 ```
 
+For faster local iteration:
+
+```bash
+make test-unit
+make test-contracts
+make test-integration
+```
+
+`make test-unit` runs the package set intended to stay fast and deterministic.
+`make test-contracts` runs design-principles plus focused architecture, runtime,
+tool, and manifest contract tests. `make test-integration` is currently an
+alias for the full `make test` path.
+
 Aphelion is Linux-only. On macOS or another non-Linux host, `make test` and
 `make architecture` intentionally stop with a clear Linux-only message instead
 of surfacing partial build-tag failures. Use the compile-only check locally, then

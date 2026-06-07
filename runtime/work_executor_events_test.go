@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/coder/websocket"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
@@ -113,21 +114,18 @@ func TestCodexAppServerClientRecordsServerRequestEvents(t *testing.T) {
 }
 
 func TestCodexWorkExecutorReadinessUsesHealthz(t *testing.T) {
-	t.Parallel()
-
+	previous := codexWorkCheckHTTP
+	t.Cleanup(func() { codexWorkCheckHTTP = previous })
 	var paths []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		paths = append(paths, r.URL.Path)
-		if r.URL.Path == "/healthz" {
-			w.WriteHeader(http.StatusOK)
-			return
+	codexWorkCheckHTTP = func(_ context.Context, _ string, path string) error {
+		paths = append(paths, path)
+		if path == "/healthz" {
+			return nil
 		}
-		http.Error(w, "upgrade required", http.StatusBadRequest)
-	}))
-	defer server.Close()
+		return errors.New("upgrade required")
+	}
 
-	address := "ws://" + strings.TrimPrefix(server.URL, "http://")
-	if err := checkCodexWorkAppServerReady(context.Background(), address); err != nil {
+	if err := checkCodexWorkAppServerReady(context.Background(), "ws://codex.test"); err != nil {
 		t.Fatalf("checkCodexWorkAppServerReady() err = %v", err)
 	}
 	if len(paths) != 1 || paths[0] != "/healthz" {
@@ -136,21 +134,18 @@ func TestCodexWorkExecutorReadinessUsesHealthz(t *testing.T) {
 }
 
 func TestCodexWorkExecutorReadinessFallsBackToHealth(t *testing.T) {
-	t.Parallel()
-
+	previous := codexWorkCheckHTTP
+	t.Cleanup(func() { codexWorkCheckHTTP = previous })
 	var paths []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		paths = append(paths, r.URL.Path)
-		if r.URL.Path == "/health" {
-			w.WriteHeader(http.StatusOK)
-			return
+	codexWorkCheckHTTP = func(_ context.Context, _ string, path string) error {
+		paths = append(paths, path)
+		if path == "/health" {
+			return nil
 		}
-		http.NotFound(w, r)
-	}))
-	defer server.Close()
+		return errors.New("not ready")
+	}
 
-	address := "ws://" + strings.TrimPrefix(server.URL, "http://")
-	if err := checkCodexWorkAppServerReady(context.Background(), address); err != nil {
+	if err := checkCodexWorkAppServerReady(context.Background(), "ws://codex.test"); err != nil {
 		t.Fatalf("checkCodexWorkAppServerReady() err = %v", err)
 	}
 	if len(paths) != 2 || paths[0] != "/healthz" || paths[1] != "/health" {
@@ -159,6 +154,7 @@ func TestCodexWorkExecutorReadinessFallsBackToHealth(t *testing.T) {
 }
 
 func TestCodexWorkExecutorTimesOutSilentTurnBeforeSideEffects(t *testing.T) {
+	requireLocalTCPListener(t, "localhost:0")
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -224,6 +220,7 @@ func TestCodexWorkExecutorTimesOutSilentTurnBeforeSideEffects(t *testing.T) {
 }
 
 func TestCodexWorkExecutorRetainsTruncatedOversizedEvidence(t *testing.T) {
+	requireLocalTCPListener(t, "localhost:0")
 	t.Parallel()
 
 	largeOutput := strings.Repeat("x", 40*1024)

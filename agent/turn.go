@@ -58,25 +58,29 @@ type TurnObserver interface {
 }
 
 type ModelRequestEvent struct {
-	Attempt                            int
-	HistoryCount                       int
-	ToolCount                          int
-	Duration                           time.Duration
-	Error                              string
-	FailureKind                        string
-	Retryable                          bool
-	ToolCallCount                      int
-	OutputChars                        int
-	TokenUsage                         core.TokenUsage
-	EstimatedInputTokens               int
-	ContextWindow                      int
-	ContextMaxTokens                   int
-	ContextHardTokens                  int
-	ContextPreflightCompacted          bool
-	ContextPreflightOriginalTokens     int
-	ContextPreflightCompactedTokens    int
-	ContextPreflightOriginalToolChars  int
-	ContextPreflightCompactedToolChars int
+	Attempt                             int
+	HistoryCount                        int
+	ToolCount                           int
+	Duration                            time.Duration
+	Error                               string
+	FailureKind                         string
+	Retryable                           bool
+	ToolCallCount                       int
+	OutputChars                         int
+	TokenUsage                          core.TokenUsage
+	EstimatedInputTokens                int
+	ContextWindow                       int
+	ContextMaxTokens                    int
+	ContextHardTokens                   int
+	ContextPreflightCompacted           bool
+	ContextPreflightOriginalTokens      int
+	ContextPreflightCompactedTokens     int
+	ContextPreflightOriginalToolChars   int
+	ContextPreflightCompactedToolChars  int
+	ContextAdmissionToolEvidenceLayers  int
+	ContextAdmissionToolEvidencePacked  int
+	ContextAdmissionToolEvidenceDigests int
+	ContextAdmissionSuppressedLayers    int
 }
 
 type ToolBatchEvent struct {
@@ -209,12 +213,12 @@ const (
 )
 
 const (
-	maxProviderRetries       = 3
-	initialRetryBackoff      = 100 * time.Millisecond
-	providerFailureReply     = "Inference backend is unavailable. This turn did not complete. You can /stop to cancel current work and try again."
-	budgetExhaustedReply     = "Iteration budget exhausted before final response."
-	toolBudgetExhaustedReply = "Tool-call budget exhausted before final response. Summarize progress and continue in a new turn."
-	planningOnlySteer        = "Your previous reply only described a plan. Do not restate the plan. Start executing now using available tools. Use update_plan only if the work is genuinely multi-step."
+	maxProviderRetries          = 3
+	initialRetryBackoff         = 100 * time.Millisecond
+	providerFailureReply        = "Inference backend is unavailable. This turn did not complete. You can /stop to cancel current work and try again."
+	budgetRecoveryAutoHopLimit  = 3
+	budgetRecoveryHandoffPrefix = "Budget recovery handoff:"
+	planningOnlySteer           = "Your previous reply only described a plan. Do not restate the plan. Start executing now using available tools. Use update_plan only if the work is genuinely multi-step."
 )
 
 var sleepWithContextFn = sleepWithContext
@@ -242,18 +246,20 @@ func RunTurn(
 	}
 
 	var (
-		history        = append([]Message(nil), messages...)
-		toolDefs       []ToolDef
-		toolLog        []string
-		providerEvents []core.ProviderEvent
-		pendingBudget  string
-		toolIDs        = newToolIDGenerator(history)
-		toolRepair     = newToolRepairState(toolDefs)
-		toolLoopGuard  toolLoopGuardState
+		history          = append([]Message(nil), messages...)
+		toolDefs         []ToolDef
+		toolAvailability map[string]struct{}
+		toolLog          []string
+		providerEvents   []core.ProviderEvent
+		pendingBudget    string
+		toolIDs          = newToolIDGenerator(history)
+		toolRepair       = newToolRepairState(toolDefs)
+		toolLoopGuard    toolLoopGuardState
 	)
 
 	if tools != nil {
 		toolDefs = tools.Definitions()
+		toolAvailability = toolDefinitionNameSet(toolDefs)
 		toolRepair = newToolRepairState(toolDefs)
 	}
 
@@ -266,12 +272,13 @@ func RunTurn(
 			warning, exhausted := budget.Tick()
 			if exhausted {
 				log.Printf("WARN turn budget exhausted used=%d max=%d", budget.Used, budget.Max)
-				return &core.TurnResult{
-					Text:           budgetExhaustedReply,
-					ToolLog:        toolLog,
-					TokenUsage:     core.TokenUsage{},
-					ProviderEvents: append([]core.ProviderEvent(nil), providerEvents...),
-				}, history, nil
+				return budgetRecoveryResult(
+					core.TurnRecoveryIterationBudgetExhausted,
+					"Iteration budget exhausted before a final response.",
+					toolLog,
+					core.TokenUsage{},
+					providerEvents,
+				), history, nil
 			}
 			if warning != "" {
 				pendingBudget = warning
@@ -310,6 +317,23 @@ func RunTurn(
 			resp = retried
 		}
 
+		if budget != nil {
+			warning, exhausted := budget.AddTokenUsage(resp.Usage.InputTokens, resp.Usage.OutputTokens)
+			if exhausted && len(resp.ToolCalls) > 0 {
+				log.Printf("WARN token budget exhausted input_tokens=%d output_tokens=%d", budget.InputTokenCount, budget.OutputTokenCount)
+				return budgetRecoveryResult(
+					core.TurnRecoveryTokenBudgetExhausted,
+					"Token budget exhausted before a final response. Pending tool calls were not executed and must be re-decided from persisted state.",
+					toolLog,
+					resp.Usage,
+					providerEvents,
+				), history, nil
+			}
+			if warning != "" {
+				pendingBudget = warning
+			}
+		}
+
 		repairedCalls := make([]ToolCall, 0, len(resp.ToolCalls))
 		for _, call := range resp.ToolCalls {
 			repairedCalls = append(repairedCalls, toolRepair.repair(call, toolIDs.next))
@@ -340,12 +364,13 @@ func RunTurn(
 			warning, exhausted := budget.AddToolCalls(len(resp.ToolCalls))
 			if exhausted {
 				log.Printf("WARN tool-call budget exhausted tool_calls=%d hard_limit=%d", budget.ToolCallCount+len(resp.ToolCalls), budget.ToolCallHardLimit)
-				return &core.TurnResult{
-					Text:           toolBudgetExhaustedReply,
-					ToolLog:        toolLog,
-					TokenUsage:     resp.Usage,
-					ProviderEvents: append([]core.ProviderEvent(nil), providerEvents...),
-				}, history, nil
+				return budgetRecoveryResult(
+					core.TurnRecoveryToolBudgetExhausted,
+					"Tool-call budget exhausted before a final response. Any pending tool call request must be re-decided instead of replayed.",
+					toolLog,
+					resp.Usage,
+					providerEvents,
+				), history, nil
 			}
 			if warning != "" {
 				pendingBudget = warning
@@ -356,10 +381,41 @@ func RunTurn(
 			return nil, history, errors.New("tool calls requested but tool registry is nil")
 		}
 
-		batchResult := executeToolBatch(ctx, tools, resp.ToolCalls, &toolLoopGuard, &pendingBudget, turnObserver(opts))
+		batchResult := executeToolBatch(ctx, tools, resp.ToolCalls, toolAvailability, &toolLoopGuard, &pendingBudget, turnObserver(opts))
 		toolLog = append(toolLog, batchResult.toolLog...)
 		history = append(history, batchResult.messages...)
 	}
+}
+
+func budgetRecoveryResult(kind core.TurnRecoveryKind, summary string, toolLog []string, usage core.TokenUsage, providerEvents []core.ProviderEvent) *core.TurnResult {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		summary = "The turn exhausted its execution budget before a final response."
+	}
+	return &core.TurnResult{
+		Text:           budgetRecoveryHandoffPrefix + " " + summary,
+		ToolLog:        append([]string(nil), toolLog...),
+		TokenUsage:     usage,
+		ProviderEvents: append([]core.ProviderEvent(nil), providerEvents...),
+		Recovery: &core.TurnRecovery{
+			Kind:           kind,
+			Recoverable:    true,
+			ReplanRequired: true,
+			Summary:        summary,
+			MaxAutoHops:    budgetRecoveryAutoHopLimit,
+		},
+	}
+}
+
+func toolDefinitionNameSet(defs []ToolDef) map[string]struct{} {
+	out := make(map[string]struct{}, len(defs))
+	for _, def := range defs {
+		name := strings.TrimSpace(def.Name)
+		if name != "" {
+			out[name] = struct{}{}
+		}
+	}
+	return out
 }
 
 func trimProviderFailure(err error) string {
@@ -588,18 +644,22 @@ func markEmptySuccessRetried(opts *CompleteOptions, maxTokens int) {
 
 func modelRequestEvent(attempt int, historyCount int, toolCount int, preflight contextPreflight) ModelRequestEvent {
 	return ModelRequestEvent{
-		Attempt:                            attempt,
-		HistoryCount:                       historyCount,
-		ToolCount:                          toolCount,
-		EstimatedInputTokens:               preflight.EstimatedTokens,
-		ContextWindow:                      preflight.ContextWindow,
-		ContextMaxTokens:                   preflight.MaxTokens,
-		ContextHardTokens:                  preflight.HardTokens,
-		ContextPreflightCompacted:          preflight.Compacted,
-		ContextPreflightOriginalTokens:     preflight.OriginalTokens,
-		ContextPreflightCompactedTokens:    preflight.CompactedTokens,
-		ContextPreflightOriginalToolChars:  preflight.OriginalToolChars,
-		ContextPreflightCompactedToolChars: preflight.CompactedToolChars,
+		Attempt:                             attempt,
+		HistoryCount:                        historyCount,
+		ToolCount:                           toolCount,
+		EstimatedInputTokens:                preflight.EstimatedTokens,
+		ContextWindow:                       preflight.ContextWindow,
+		ContextMaxTokens:                    preflight.MaxTokens,
+		ContextHardTokens:                   preflight.HardTokens,
+		ContextPreflightCompacted:           preflight.Compacted,
+		ContextPreflightOriginalTokens:      preflight.OriginalTokens,
+		ContextPreflightCompactedTokens:     preflight.CompactedTokens,
+		ContextPreflightOriginalToolChars:   preflight.OriginalToolChars,
+		ContextPreflightCompactedToolChars:  preflight.CompactedToolChars,
+		ContextAdmissionToolEvidenceLayers:  preflight.Admission.ToolEvidenceLayers,
+		ContextAdmissionToolEvidencePacked:  preflight.Admission.ToolEvidenceCompacted,
+		ContextAdmissionToolEvidenceDigests: preflight.Admission.ToolEvidenceDigested,
+		ContextAdmissionSuppressedLayers:    preflight.Admission.SuppressedLayers,
 	}
 }
 

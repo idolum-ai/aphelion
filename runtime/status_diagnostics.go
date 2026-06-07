@@ -31,6 +31,13 @@ func (r *Runtime) StatusDiagnostics(chatID int64) ([]string, error) {
 		if latest.ProgressMessageID != 0 {
 			lines = append(lines, fmt.Sprintf("Progress message id: %d.", latest.ProgressMessageID))
 		}
+		if latest.TotalToolCharsIn > 0 || latest.TotalAssistantCharsOut > 0 {
+			if latest.TotalToolCharsIn > 0 {
+				lines = append(lines, fmt.Sprintf("Assistant/tool chars: %d/%d (ratio %.3f).", latest.TotalAssistantCharsOut, latest.TotalToolCharsIn, latest.AssistantToolRatio))
+			} else {
+				lines = append(lines, fmt.Sprintf("Assistant/tool chars: %d/%d.", latest.TotalAssistantCharsOut, latest.TotalToolCharsIn))
+			}
+		}
 		if errorText := strings.TrimSpace(latest.ErrorText); errorText != "" {
 			lines = append(lines, "Last error: "+truncateStatusDiagnostic(errorText, 180)+".")
 		}
@@ -76,10 +83,44 @@ func (r *Runtime) StatusDiagnostics(chatID int64) ([]string, error) {
 	if stuck, ok := r.operationApprovalAffordanceDiagnostic(chatID, chatSnapshot); ok {
 		lines = append(lines, stuck)
 	}
+	if line, ok := latestContinuationBundleNarrowingDiagnostic(chatSnapshot.RecentExecution); ok {
+		lines = append(lines, line)
+	}
+	if line, ok := latestContinuationCompileRepairDiagnostic(chatSnapshot.RecentExecution); ok {
+		lines = append(lines, line)
+	}
 	if len(chatSnapshot.RecentAdjudications) > 0 {
 		lines = append(lines, statusAdjudicationDiagnosticLine(chatSnapshot.RecentAdjudications[0]))
 	}
 	return lines, nil
+}
+
+func latestContinuationBundleNarrowingDiagnostic(events []core.ExecutionEventSummary) (string, bool) {
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) != core.ExecutionEventContinuationBundleNarrowed {
+			continue
+		}
+		summary := strings.TrimSpace(event.Summary)
+		if summary == "" {
+			summary = "width=1"
+		}
+		return "Approval bundle width: narrow phase-plan approval observed (" + summary + ").", true
+	}
+	return "", false
+}
+
+func latestContinuationCompileRepairDiagnostic(events []core.ExecutionEventSummary) (string, bool) {
+	for _, event := range events {
+		switch strings.TrimSpace(event.EventType) {
+		case core.ExecutionEventContinuationCompileRepaired:
+			return "Continuation self-block repair: repaired (" + firstNonEmpty(strings.TrimSpace(event.Summary), "compile repair recorded") + ").", true
+		case core.ExecutionEventContinuationCompileRepairExhausted:
+			return "Continuation self-block repair: exhausted (" + firstNonEmpty(strings.TrimSpace(event.Summary), "no safe repair phase") + ").", true
+		case core.ExecutionEventContinuationCompileUnknownReason:
+			return "Continuation self-block repair: unknown reason (" + firstNonEmpty(strings.TrimSpace(event.Summary), "unclassified blocker") + ").", true
+		}
+	}
+	return "", false
 }
 
 func (r *Runtime) operationApprovalAffordanceDiagnostic(chatID int64, snapshot core.ChatStatusSnapshot) (string, bool) {

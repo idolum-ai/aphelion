@@ -19,17 +19,19 @@ import (
 )
 
 const (
-	maxNativeReadLines          = 10000
-	defaultNativeReadMaxBytes   = 64 * 1024
-	maxNativeReadBytes          = 512 * 1024
-	defaultNativeFetchMaxBytes  = 128 * 1024
-	maxNativeFetchBytes         = 1024 * 1024
-	defaultNativeListLimit      = 100
-	maxNativeListLimit          = 500
-	defaultNativeSearchLimit    = 25
-	maxNativeSearchLimit        = 100
-	defaultNativeSearchMaxBytes = 128 * 1024
-	maxNativeSearchMaxBytes     = 512 * 1024
+	maxNativeReadLines             = 10000
+	defaultNativeReadMaxBytes      = 64 * 1024
+	maxNativeReadBytes             = 512 * 1024
+	defaultNativeFetchMaxBytes     = 128 * 1024
+	maxNativeFetchBytes            = 1024 * 1024
+	defaultNativeFetchExcerptBytes = 2048
+	maxNativeFetchExcerptBytes     = 64 * 1024
+	defaultNativeListLimit         = 100
+	maxNativeListLimit             = 500
+	defaultNativeSearchLimit       = 25
+	maxNativeSearchLimit           = 100
+	defaultNativeSearchMaxBytes    = 128 * 1024
+	maxNativeSearchMaxBytes        = 512 * 1024
 
 	DefaultNativeFetchUserAgent = "aphelion-fetch-url/1"
 )
@@ -62,8 +64,9 @@ type searchFilesInput struct {
 }
 
 type fetchURLInput struct {
-	URL      string `json:"url"`
-	MaxBytes int    `json:"max_bytes,omitempty"`
+	URL          string `json:"url"`
+	MaxBytes     int    `json:"max_bytes,omitempty"`
+	ExcerptBytes int    `json:"excerpt_bytes,omitempty"`
 }
 
 type nativePathAccess string
@@ -131,12 +134,13 @@ func nativeFileToolDefinitions() []agent.ToolDef {
 		},
 		{
 			Name:        "fetch_url",
-			Description: "Fetch a bounded HTTP(S) URL when the current sandbox profile allows network access. Network-denied profiles cannot use this tool.",
+			Description: "Fetch a bounded HTTP(S) URL digest when the current sandbox profile allows network access. Network-denied profiles cannot use this tool. max_bytes controls bytes read and hashed; excerpt_bytes controls the visible excerpt returned to the model.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"url": {"type": "string", "description": "HTTP or HTTPS URL to fetch."},
-					"max_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576, "description": "Maximum response body bytes to return; defaults to 131072."}
+					"max_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576, "description": "Maximum response body bytes to read and hash; defaults to 131072."},
+					"excerpt_bytes": {"type": "integer", "minimum": 1, "maximum": 65536, "description": "Maximum visible response bytes to include in excerpt; defaults to 2048 and is capped by max_bytes."}
 				},
 				"required": ["url"]
 			}`),

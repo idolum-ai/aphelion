@@ -141,6 +141,10 @@ func summarizeExecutionEventPayload(eventType string, eventStatus string, payloa
 			parts = append(parts, "findings="+strings.Join(claimTypes, ","))
 		}
 		return strings.Join(parts, " ")
+	case core.ExecutionEventContinuationBundleNarrowed:
+		return continuationBundleNarrowingSummary(payload)
+	case core.ExecutionEventContinuationCompileRepaired, core.ExecutionEventContinuationCompileRepairExhausted, core.ExecutionEventContinuationCompileUnknownReason:
+		return continuationCompileRepairEventSummary(eventType, payload)
 	case core.ExecutionEventToolRegistered:
 		registered := strings.TrimSpace(eventStatus) == "enabled"
 		if value, ok := payloadBool(payload, "registered"); ok {
@@ -203,6 +207,33 @@ func summarizeExecutionEventPayload(eventType string, eventStatus string, payloa
 		}
 	}
 	return ""
+}
+
+func continuationCompileRepairEventSummary(eventType string, payload map[string]any) string {
+	parts := make([]string, 0, 5)
+	if kind := strings.TrimSpace(payloadString(payload, "repair_kind")); kind != "" {
+		parts = append(parts, "kind="+kind)
+	}
+	if reason := firstNonEmpty(payloadString(payload, "normalized_reason"), payloadString(payload, "reason")); strings.TrimSpace(reason) != "" {
+		parts = append(parts, "reason="+strings.TrimSpace(reason))
+	}
+	if phaseID := strings.TrimSpace(payloadString(payload, "repair_phase_id")); phaseID != "" {
+		parts = append(parts, "repair_phase="+phaseID)
+	} else if phaseID := strings.TrimSpace(payloadString(payload, "phase_id")); phaseID != "" {
+		parts = append(parts, "phase="+phaseID)
+	}
+	if source := strings.TrimSpace(payloadString(payload, "materialization_source")); source != "" {
+		parts = append(parts, "source="+source)
+	}
+	switch strings.TrimSpace(eventType) {
+	case core.ExecutionEventContinuationCompileRepaired:
+		parts = append([]string{"status=repaired"}, parts...)
+	case core.ExecutionEventContinuationCompileRepairExhausted:
+		parts = append([]string{"status=exhausted"}, parts...)
+	case core.ExecutionEventContinuationCompileUnknownReason:
+		parts = append([]string{"status=unknown_reason"}, parts...)
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
 func minStatusInt(left int, right int) int {

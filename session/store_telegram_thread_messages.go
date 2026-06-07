@@ -5,6 +5,7 @@ package session
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -62,6 +63,9 @@ func (s *SQLiteStore) RecordTelegramThreadMessage(chatID int64, threadID int64, 
 	if err := recordTelegramCallbackMessageThreadTx(tx, chatID, messageID, threadID, surface, at); err != nil {
 		return err
 	}
+	if err := recordTelegramThreadLastMessageTx(tx, chatID, threadID, messageID, msgType, at); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit telegram thread message record: %w", err)
 	}
@@ -87,6 +91,40 @@ func recordTelegramCallbackMessageThreadTx(exec interface {
 			updated_at = excluded.updated_at
 	`, chatID, messageID, threadID, clampStoreText(surface, 120), atRaw, atRaw); err != nil {
 		return fmt.Errorf("record telegram callback message thread: %w", err)
+	}
+	return nil
+}
+
+func recordTelegramThreadLastMessageTx(exec interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}, chatID int64, threadID int64, messageID int64, source string, at time.Time) error {
+	if chatID == 0 || threadID <= 0 || messageID <= 0 {
+		return nil
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	atRaw := at.UTC().Format(time.RFC3339Nano)
+	source = clampStoreText(strings.TrimSpace(source), 120)
+	if source == "" {
+		source = "unknown"
+	}
+	if _, err := exec.Exec(`
+		INSERT INTO telegram_thread_last_messages(chat_id, thread_id, message_id, source, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(chat_id, thread_id) DO UPDATE SET
+			message_id = excluded.message_id,
+			source = excluded.source,
+			updated_at = excluded.updated_at
+	`, chatID, threadID, messageID, source, atRaw, atRaw); err != nil {
+		return fmt.Errorf("record telegram thread last message: %w", err)
+	}
+	if _, err := exec.Exec(`
+		UPDATE telegram_threads
+		SET last_activity_at = ?, updated_at = ?
+		WHERE chat_id = ? AND thread_id = ? AND status = ?
+	`, atRaw, atRaw, chatID, threadID, string(TelegramThreadStatusOpen)); err != nil {
+		return fmt.Errorf("touch telegram thread last message: %w", err)
 	}
 	return nil
 }

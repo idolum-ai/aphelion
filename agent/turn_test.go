@@ -79,6 +79,21 @@ func (m *mockTools) Definitions() []ToolDef {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.defsCalled++
+	if m.defs == nil {
+		return []ToolDef{
+			{Name: "exec"},
+			{Name: "echo"},
+			{Name: "explode"},
+			{Name: "noop"},
+			{Name: "read_file"},
+			{Name: "search"},
+			{Name: "step"},
+			{Name: "list_dir"},
+			{Name: "write_file"},
+			{Name: "update_plan"},
+			{Name: "update_operation"},
+		}
+	}
 	return append([]ToolDef(nil), m.defs...)
 }
 
@@ -736,8 +751,14 @@ func TestRunTurnStopsBeforeExecutingBatchPastToolCallHardCap(t *testing.T) {
 	if executed != 0 {
 		t.Fatalf("executed tools = %d, want hard cap before execution", executed)
 	}
-	if result.Text != toolBudgetExhaustedReply {
-		t.Fatalf("result.Text = %q, want tool budget exhausted reply", result.Text)
+	if result.Recovery == nil || result.Recovery.Kind != core.TurnRecoveryToolBudgetExhausted {
+		t.Fatalf("result.Recovery = %#v, want tool budget recovery", result.Recovery)
+	}
+	if !result.Recovery.ReplanRequired {
+		t.Fatalf("Recovery.ReplanRequired = false, want true")
+	}
+	if !strings.Contains(result.Text, "Budget recovery handoff:") {
+		t.Fatalf("result.Text = %q, want budget recovery handoff", result.Text)
 	}
 	if len(history) != 1 || len(history[0].ToolCalls) != 2 {
 		t.Fatalf("history = %#v, want assistant tool request preserved", history)
@@ -818,6 +839,160 @@ func TestToolError(t *testing.T) {
 	}
 	if len(result.ToolLog) != 1 || result.ToolLog[0] != "explode:error" {
 		t.Fatalf("result.ToolLog = %#v", result.ToolLog)
+	}
+}
+
+func TestToolErrorDropsVerboseOutputEvidence(t *testing.T) {
+	provider := &mockProvider{
+		complete: func(_ context.Context, call int, messages []Message, _ []ToolDef) (*Response, error) {
+			switch call {
+			case 1:
+				return &Response{
+					ToolCalls: []ToolCall{{
+						ID:    "tool-1",
+						Name:  "exec",
+						Input: json.RawMessage(`{"command":"go test ./..."}`),
+					}},
+				}, nil
+			case 2:
+				last := messages[len(messages)-1]
+				var failure struct {
+					Code        string `json:"code"`
+					ShortReason string `json:"short_reason"`
+				}
+				if err := json.Unmarshal([]byte(last.Content), &failure); err != nil {
+					t.Fatalf("decode typed tool failure %q: %v", last.Content, err)
+				}
+				if failure.Code != "TOOL_ERROR" || failure.ShortReason != "command failed with exit code 1" {
+					t.Fatalf("failure = %#v, want typed command failure", failure)
+				}
+				if strings.Contains(last.Content, "stdout:") || strings.Contains(last.Content, "stderr:") || strings.Contains(last.Content, `"output"`) {
+					t.Fatalf("tool failure content = %q, want compact fixed shape without output echo", last.Content)
+				}
+				return &Response{Content: "handled"}, nil
+			default:
+				t.Fatalf("unexpected call %d", call)
+				return nil, nil
+			}
+		},
+	}
+
+	tools := &mockTools{
+		exec: func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+			return "stdout:\npackage failed\nstderr:\ncompile error detail", errors.New("command failed with exit code 1")
+		},
+	}
+
+	result, _, err := RunTurn(context.Background(), provider, tools, defaultBudget(), nil, nil)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "handled" {
+		t.Fatalf("result.Text = %q, want handled", result.Text)
+	}
+}
+
+func TestToolFailureClassifiesFromOutputWithoutEchoingIt(t *testing.T) {
+	t.Parallel()
+
+	failure := classifyToolFailure(errors.New("command failed with exit code 1"), "stderr: deadline exceeded while waiting")
+	if failure.Code != "TIMEOUT" || failure.RetryHint != "RetryOnce" {
+		t.Fatalf("failure = %#v, want timeout classification from output evidence", failure)
+	}
+	rendered := renderToolFailure(failure)
+	if strings.Contains(rendered, "deadline exceeded") || strings.Contains(rendered, `"output"`) {
+		t.Fatalf("rendered failure = %q, want no output echo", rendered)
+	}
+}
+
+func TestRunTurnDoesNotExecuteToolMissingFromDefinitions(t *testing.T) {
+	t.Parallel()
+
+	provider := &mockProvider{
+		complete: func(_ context.Context, call int, messages []Message, _ []ToolDef) (*Response, error) {
+			switch call {
+			case 1:
+				return &Response{ToolCalls: []ToolCall{{ID: "hidden-1", Name: "exec", Input: json.RawMessage(`{"command":"pwd"}`)}}}, nil
+			case 2:
+				last := messages[len(messages)-1]
+				var failure struct {
+					Code string `json:"code"`
+				}
+				if err := json.Unmarshal([]byte(last.Content), &failure); err != nil {
+					t.Fatalf("decode typed tool failure %q: %v", last.Content, err)
+				}
+				if failure.Code != "TOOL_NOT_AVAILABLE" {
+					t.Fatalf("failure = %#v, want TOOL_NOT_AVAILABLE", failure)
+				}
+				return &Response{Content: "handled"}, nil
+			default:
+				t.Fatalf("unexpected call %d", call)
+				return nil, nil
+			}
+		},
+	}
+	tools := &mockTools{
+		defs: []ToolDef{{Name: "update_plan"}},
+		exec: func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+			t.Fatal("hidden tool should not execute")
+			return "", nil
+		},
+	}
+
+	result, _, err := RunTurn(context.Background(), provider, tools, defaultBudget(), nil, nil)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "handled" {
+		t.Fatalf("result.Text = %q, want handled", result.Text)
+	}
+	if len(tools.execCalls) != 0 {
+		t.Fatalf("exec calls = %#v, want none", tools.execCalls)
+	}
+}
+
+func TestRunTurnStopsToolLoopOnTokenBudgetExhaustion(t *testing.T) {
+	t.Parallel()
+
+	provider := &mockProvider{
+		complete: func(_ context.Context, call int, _ []Message, _ []ToolDef) (*Response, error) {
+			if call != 1 {
+				t.Fatalf("provider call = %d, want one call", call)
+			}
+			return &Response{
+				Usage: core.TokenUsage{InputTokens: 10, OutputTokens: 80, TotalTokens: 90},
+				ToolCalls: []ToolCall{{
+					ID:    "call-1",
+					Name:  "exec",
+					Input: json.RawMessage(`{"command":"pwd"}`),
+				}},
+			}, nil
+		},
+	}
+	tools := &mockTools{
+		defs: []ToolDef{{Name: "exec"}},
+		exec: func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+			t.Fatal("tool should not execute after token budget exhaustion")
+			return "", nil
+		},
+	}
+	budget := &Budget{Max: 5, Caution: 0.7, Warning: 0.9, OutputTokenHardLimit: 75}
+
+	result, _, err := RunTurn(context.Background(), provider, tools, budget, nil, nil)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Recovery == nil || result.Recovery.Kind != core.TurnRecoveryTokenBudgetExhausted {
+		t.Fatalf("result.Recovery = %#v, want token budget recovery", result.Recovery)
+	}
+	if !result.Recovery.ReplanRequired {
+		t.Fatalf("Recovery.ReplanRequired = false, want true")
+	}
+	if !strings.Contains(result.Text, "Budget recovery handoff:") {
+		t.Fatalf("result.Text = %q, want budget recovery handoff", result.Text)
+	}
+	if len(tools.execCalls) != 0 {
+		t.Fatalf("exec calls = %#v, want none", tools.execCalls)
 	}
 }
 

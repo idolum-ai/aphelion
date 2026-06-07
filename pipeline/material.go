@@ -52,7 +52,17 @@ func ParseMaterialPacket(text string) (core.MaterialPacket, error) {
 		if line == "" {
 			continue
 		}
+		if kind, ok := parseInlineMaterialKind(line); ok {
+			packet.Kind = kind
+			current = "kind"
+			recognized++
+			continue
+		}
 		switch NormalizeMaterialHeading(line) {
+		case "kind":
+			current = "kind"
+			recognized++
+			continue
 		case "facts":
 			current = "facts"
 			recognized++
@@ -81,13 +91,15 @@ func ParseMaterialPacket(text string) (core.MaterialPacket, error) {
 
 		item := ParseMaterialItem(line)
 		if item == "" {
-			if current == "notes" {
+			if current == "notes" || current == "kind" {
 				item = line
 			} else {
 				continue
 			}
 		}
 		switch current {
+		case "kind":
+			packet.Kind = core.NormalizeMaterialPacketKind(item)
 		case "facts":
 			packet.Facts = append(packet.Facts, item)
 		case "allowed_actions":
@@ -109,10 +121,23 @@ func ParseMaterialPacket(text string) (core.MaterialPacket, error) {
 	return packet, nil
 }
 
+func parseInlineMaterialKind(line string) (core.MaterialPacketKind, bool) {
+	key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+	if !ok || strings.TrimSpace(value) == "" {
+		return core.MaterialPacketKindUnspecified, false
+	}
+	if NormalizeMaterialHeading(key+":") != "kind" {
+		return core.MaterialPacketKindUnspecified, false
+	}
+	return core.NormalizeMaterialPacketKind(value), true
+}
+
 // NormalizeMaterialHeading normalizes recognized section headings.
 func NormalizeMaterialHeading(line string) string {
 	trimmed := strings.ToUpper(strings.TrimSuffix(strings.TrimSpace(line), ":"))
 	switch trimmed {
+	case "KIND", "MATERIAL_KIND", "MATERIAL KIND", "PACKET_KIND", "PACKET KIND":
+		return "kind"
 	case "FACTS":
 		return "facts"
 	case "ALLOWED_ACTIONS", "ALLOWED ACTIONS":

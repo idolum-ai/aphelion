@@ -8,4 +8,5 @@ paths = [
 ]
 regexes = [
   '''sk-testSECRETabcdef123456''',
+  '''cap-pr-158-sanitize''',
 ]

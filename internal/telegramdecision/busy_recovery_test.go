@@ -412,6 +412,7 @@ func TestRestartReconciliationDetachesLoadedBusyPromptWhenResumeIngressOwnsWork(
 }
 
 func TestTelegramPollerBusyMessageCallbackStarvesBehindBlockingMessageHandler(t *testing.T) {
+	requireLocalTCPListener(t, "localhost:0")
 	t.Parallel()
 
 	sender := &decisionTestSender{}

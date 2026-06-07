@@ -637,11 +637,24 @@ Aphelion should therefore:
 
 - split oversized outbound text into multiple messages before delivery
 - prefer paragraph boundaries before hard length splitting
-- keep `reply_to_message_id` only on the first chunk by default
+- reply the first chunk to the selected reply anchor when one is available
+- reply each following chunk to the message id of the preceding delivered chunk
 - preserve formatting on each chunk when possible
 - fall back to plain text for a chunk if formatted delivery fails
 
-The first delivered chunk should remain the canonical outbound message id for bookkeeping purposes.
+The first delivered chunk should remain the canonical outbound message id for ordinary bookkeeping. For thread-aware replies, every delivered chunk should also be recorded as a thread message anchor so later user replies can recover the thread by navigating through Telegram reply links.
+
+### Thread reply anchors
+
+For non-agent Telegram side threads, visual `(thread N)` prefixes are not enough. Aphelion should maintain a durable last-message anchor per `(chat_id, thread_id)` and use it as the default reply target for assistant responses in that thread.
+
+- inbound non-agent thread messages update the thread anchor to the user's Telegram message id
+- outbound non-agent thread replies use the latest known anchor when present, falling back to the inbound message id when absent
+- each delivered outbound chunk updates the thread anchor to its own Telegram message id
+- replies to any recorded chunk should resolve back to the same thread through normal reply lookup
+- durable-agent lanes keep their own reply behavior and must not inherit ordinary thread anchors
+
+This keeps long model responses navigable even when Telegram displays them as multiple messages or the operator is working across several side threads at once.
 
 ### Streaming and edits
 

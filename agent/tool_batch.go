@@ -50,12 +50,13 @@ func executeToolBatch(
 	ctx context.Context,
 	tools ToolRegistry,
 	calls []ToolCall,
+	availableTools map[string]struct{},
 	loopGuard *toolLoopGuardState,
 	pendingBudget *string,
 	observer TurnObserver,
 ) toolBatchResult {
 	mode := toolBatchModeSerial
-	plan := planParallelToolBatch(tools, calls, loopGuard)
+	plan := planParallelToolBatch(tools, calls, availableTools, loopGuard)
 	if plan.parallel {
 		mode = toolBatchModeParallel
 	}
@@ -80,7 +81,7 @@ func executeToolBatch(
 	if plan.parallel {
 		result = executeParallelToolBatch(ctx, tools, plan.prepared, loopGuard, pendingBudget)
 	} else {
-		result = executeSerialToolBatch(ctx, tools, calls, loopGuard, pendingBudget)
+		result = executeSerialToolBatch(ctx, tools, calls, availableTools, loopGuard, pendingBudget)
 	}
 
 	if observer != nil {
@@ -92,7 +93,7 @@ func executeToolBatch(
 	return result
 }
 
-func planParallelToolBatch(tools ToolRegistry, calls []ToolCall, loopGuard *toolLoopGuardState) parallelToolBatchPlan {
+func planParallelToolBatch(tools ToolRegistry, calls []ToolCall, availableTools map[string]struct{}, loopGuard *toolLoopGuardState) parallelToolBatchPlan {
 	plan := parallelToolBatchPlan{}
 	if len(calls) == 0 {
 		plan.parallelBlockedReason = "empty_batch"
@@ -115,6 +116,10 @@ func planParallelToolBatch(tools ToolRegistry, calls []ToolCall, loopGuard *tool
 
 	prepared := make([]preparedToolCall, 0, len(calls))
 	for _, call := range calls {
+		if !toolCallAvailable(call.Name, availableTools) {
+			plan.parallelBlockedReason = "unavailable_tool"
+			return plan
+		}
 		repairedInput, inputErr := repairToolInput(call.Input)
 		if inputErr != nil {
 			plan.parallelBlockedReason = "invalid_tool_input"
@@ -144,6 +149,7 @@ func executeSerialToolBatch(
 	ctx context.Context,
 	tools ToolRegistry,
 	calls []ToolCall,
+	availableTools map[string]struct{},
 	loopGuard *toolLoopGuardState,
 	pendingBudget *string,
 ) toolBatchResult {
@@ -153,6 +159,11 @@ func executeSerialToolBatch(
 	}
 
 	for _, call := range calls {
+		if !toolCallAvailable(call.Name, availableTools) {
+			content := withBudgetWarning(renderToolFailure(toolFailure{OK: false, Code: "TOOL_NOT_AVAILABLE", ShortReason: fmt.Sprintf("tool %s was not advertised for this turn", strings.TrimSpace(call.Name)), RetryHint: "DoNotRetry"}), pendingBudget)
+			result.appendToolMessage(call, content, true)
+			continue
+		}
 		repairedInput, inputErr := repairToolInput(call.Input)
 		if inputErr != nil {
 			content := withBudgetWarning(renderToolFailure(toolFailure{OK: false, Code: "SCHEMA_VIOLATION", ShortReason: fmt.Sprintf("invalid tool arguments for %s", call.Name), RetryHint: "Reformulate"}), pendingBudget)
@@ -219,6 +230,14 @@ func executeSingleToolCall(ctx context.Context, tools ToolRegistry, prepared pre
 	return toolExecutionResult{call: call, requestSig: prepared.requestSig, output: out, err: toolErr}
 }
 
+func toolCallAvailable(name string, availableTools map[string]struct{}) bool {
+	if len(availableTools) == 0 {
+		return false
+	}
+	_, ok := availableTools[strings.TrimSpace(name)]
+	return ok
+}
+
 func (r *toolBatchResult) appendExecutedToolMessage(executed toolExecutionResult, loopGuard *toolLoopGuardState, pendingBudget *string) {
 	content, failed := toolResultContent(executed.output, executed.err)
 	loopGuard.recordOutcome(executed.requestSig, content, failed)
@@ -259,7 +278,7 @@ func classifyToolFailure(err error, output string) toolFailure {
 	failure := toolFailure{
 		OK:          false,
 		Code:        "TOOL_ERROR",
-		ShortReason: shortToolFailureReason(err, output),
+		ShortReason: shortToolFailureReason(err),
 		RetryHint:   "Reformulate",
 	}
 	if errors.Is(err, context.Canceled) {
@@ -267,7 +286,7 @@ func classifyToolFailure(err error, output string) toolFailure {
 		failure.RetryHint = "DoNotRetry"
 		return failure
 	}
-	lower := strings.ToLower(failure.ShortReason)
+	lower := strings.ToLower(strings.TrimSpace(failure.ShortReason + "\n" + output))
 	switch {
 	case strings.Contains(lower, "authority") || strings.Contains(lower, "approval") || strings.Contains(lower, "grant") || strings.Contains(lower, "permission") || strings.Contains(lower, "denied"):
 		failure.Code = "AUTHORITY_REJECTED"
@@ -279,13 +298,10 @@ func classifyToolFailure(err error, output string) toolFailure {
 	return failure
 }
 
-func shortToolFailureReason(err error, output string) string {
+func shortToolFailureReason(err error) string {
 	parts := []string{}
 	if err != nil {
 		parts = append(parts, err.Error())
-	}
-	if strings.TrimSpace(output) != "" {
-		parts = append(parts, strings.TrimSpace(output))
 	}
 	reason := strings.Join(strings.Fields(strings.Join(parts, ": ")), " ")
 	if reason == "" {
