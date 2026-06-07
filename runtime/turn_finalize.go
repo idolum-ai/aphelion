@@ -569,11 +569,12 @@ type turnCommitHooks struct {
 }
 
 type turnCommitErrorContext struct {
-	ConvertMessages string
-	LoadPlanState   string
-	LoadOperation   string
-	SaveSession     string
-	RecordOutbound  string
+	ConvertMessages  string
+	LoadPlanState    string
+	LoadOperation    string
+	LoadContinuation string
+	SaveSession      string
+	RecordOutbound   string
 }
 
 type turnPersistencePort struct {
@@ -672,6 +673,7 @@ type turnDeliveryPort struct {
 	audit           *turnAuditRecorder
 	sendErrCtx      string
 	recordErrCtx    string
+	deliveryMsgIDs  []int64
 }
 
 func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest) (*turn.DeliveryResult, error) {
@@ -688,7 +690,8 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 		RecordOutbound: p.recordOutbound,
 	}, turn.DeliveryStageCallbacks{
 		Send: func(ctx context.Context, msg core.OutboundMessage, replyWithVoice bool) (int64, string, error) {
-			outboundID, outboundType, err := p.runtime.sendReply(ctx, p.msg, msg.Text, msg.Media, replyWithVoice)
+			outboundID, outboundType, messageIDs, err := p.runtime.sendReplyWithDelivery(ctx, p.msg, msg.Text, msg.Media, replyWithVoice)
+			p.deliveryMsgIDs = messageIDs
 			if err != nil {
 				p.runtime.recordExecutionEvent(p.key, core.ExecutionEventDeliveryFinalFailed, "delivery", "failed", map[string]any{
 					"error": trimError(err.Error()),
@@ -764,8 +767,22 @@ func (p *turnDeliveryPort) recordOutboundWithContext(_ context.Context, sess *se
 	if p.recordErrCtx == "" {
 		p.recordErrCtx = "record outbound reply"
 	}
-	if err := p.runtime.store.RecordOutbound(key, sess.TurnCount, outboundID, outboundType); err != nil {
-		return fmt.Errorf("%s: %w", p.recordErrCtx, err)
+	messageIDs := p.deliveryMsgIDs
+	if len(messageIDs) == 0 {
+		messageIDs = []int64{outboundID}
+	}
+	for _, messageID := range messageIDs {
+		if messageID == 0 {
+			continue
+		}
+		if err := p.runtime.store.RecordOutbound(key, sess.TurnCount, messageID, outboundType); err != nil {
+			return fmt.Errorf("%s: %w", p.recordErrCtx, err)
+		}
+		if p.msg.TelegramThreadID > 0 && strings.TrimSpace(p.msg.DurableAgentID) == "" {
+			if err := p.runtime.store.RecordTelegramThreadLastMessage(p.msg.ChatID, p.msg.TelegramThreadID, messageID, outboundType, time.Now().UTC()); err != nil {
+				return fmt.Errorf("record telegram thread reply anchor: %w", err)
+			}
+		}
 	}
 	return nil
 }
@@ -799,10 +816,11 @@ func (r *Runtime) persistTurn(ctx context.Context, input turnCommitInput) (turnC
 		FloorMetadata:   floorMetadata,
 		Usage:           usage,
 		ErrorContext: turn.PersistStageErrorContext{
-			ConvertMessages: input.ErrCtx.ConvertMessages,
-			LoadPlanState:   input.ErrCtx.LoadPlanState,
-			LoadOperation:   input.ErrCtx.LoadOperation,
-			SaveSession:     input.ErrCtx.SaveSession,
+			ConvertMessages:  input.ErrCtx.ConvertMessages,
+			LoadPlanState:    input.ErrCtx.LoadPlanState,
+			LoadOperation:    input.ErrCtx.LoadOperation,
+			LoadContinuation: input.ErrCtx.LoadContinuation,
+			SaveSession:      input.ErrCtx.SaveSession,
 		},
 	}, turn.PersistStageCallbacks{
 		BuildMessages: func(ledgerText string, generated []agent.Message, turnIndex int) ([]session.Message, error) {
@@ -827,6 +845,10 @@ func (r *Runtime) persistTurn(ctx context.Context, input turnCommitInput) (turnC
 			return r.store.OperationState(input.Key)
 		},
 		MergeOperationState: mergeSessionOperationState,
+		LoadContinuationState: func(context.Context) (session.ContinuationState, error) {
+			return r.store.ContinuationState(input.Key)
+		},
+		MergeContinuationState: mergeSessionContinuationState,
 		Save: func(_ context.Context, sess *session.Session, newMessages []session.Message, usage core.TokenUsage) error {
 			return r.store.Save(sess, newMessages, usage)
 		},

@@ -47,9 +47,11 @@ func (r *Runtime) persistWorkResult(key session.SessionKey, req WorkRequest, res
 	opState.Work.LastError = ""
 	if cause != nil {
 		opState.Work.LastError = cause.Error()
+	} else if result.Recovery != nil {
+		opState.Work.LastError = workResultRecoverySummary(result)
 	}
 	opState.Work.LastExecutorUpdatedAt = time.Now().UTC()
-	if cause == nil {
+	if cause == nil && result.Recovery == nil {
 		opState.Work.LastCompletedAt = opState.Work.LastExecutorUpdatedAt
 	}
 	artifact := r.writeWorkResultArtifact(key, req, result, status, cause, opState.Work.LastExecutorUpdatedAt)
@@ -228,6 +230,19 @@ func workResultArtifactMarkdown(key session.SessionKey, req WorkRequest, result 
 	if result.ProviderFailure != "" {
 		fmt.Fprintf(&b, "- provider_failure: %s\n", trimError(result.ProviderFailure))
 	}
+	if result.Recovery != nil {
+		fmt.Fprintf(&b, "- recovery_kind: %s\n", strings.TrimSpace(string(result.Recovery.Kind)))
+		if strings.TrimSpace(result.Recovery.Summary) != "" {
+			fmt.Fprintf(&b, "- recovery_summary: %s\n", trimError(result.Recovery.Summary))
+		}
+	} else {
+		if result.RecoveryKind != "" {
+			fmt.Fprintf(&b, "- recovery_kind: %s\n", strings.TrimSpace(result.RecoveryKind))
+		}
+		if result.RecoverySummary != "" {
+			fmt.Fprintf(&b, "- recovery_summary: %s\n", trimError(result.RecoverySummary))
+		}
+	}
 	if cause != nil {
 		fmt.Fprintf(&b, "- error: %s\n", trimError(cause.Error()))
 	}
@@ -351,10 +366,16 @@ func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorSt
 		"active_executor":       strings.TrimSpace(status.Active),
 		"fallback_reason":       strings.TrimSpace(status.FallbackReason),
 		"provider_events_count": len(result.ProviderEvents),
+		"side_effects":          result.SideEffects,
 		"changed_files_count":   len(result.ChangedFiles),
 		"commands_count":        len(result.Commands),
 		"codex_events_count":    len(result.CodexEvents),
 		"approval_events_count": len(result.ApprovalLog),
+	}
+	if result.Recovery != nil {
+		payload["recovery_kind"] = strings.TrimSpace(string(result.Recovery.Kind))
+		payload["recovery_recoverable"] = result.Recovery.Recoverable
+		payload["recovery_replan_required"] = result.Recovery.ReplanRequired
 	}
 	if strings.TrimSpace(result.ThreadID) != "" {
 		payload["thread_id"] = strings.TrimSpace(result.ThreadID)
@@ -365,6 +386,15 @@ func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorSt
 	if strings.TrimSpace(result.CommitLaneStatus) != "" {
 		payload["commit_lane_status"] = strings.TrimSpace(result.CommitLaneStatus)
 	}
+	if strings.TrimSpace(result.CompletionKind) != "" {
+		payload["completion_kind"] = strings.TrimSpace(result.CompletionKind)
+	}
+	if strings.TrimSpace(result.RecoveryKind) != "" {
+		payload["recovery_kind"] = strings.TrimSpace(result.RecoveryKind)
+	}
+	if strings.TrimSpace(result.RecoverySummary) != "" {
+		payload["recovery_summary"] = trimError(result.RecoverySummary)
+	}
 	if strings.TrimSpace(result.ProviderFailure) != "" {
 		payload["provider_failure"] = trimError(result.ProviderFailure)
 	}
@@ -372,6 +402,21 @@ func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorSt
 		payload["error"] = trimError(cause.Error())
 	}
 	return payload
+}
+
+func workResultRecoverySummary(result WorkResult) string {
+	if result.Recovery == nil {
+		return ""
+	}
+	kind := strings.TrimSpace(string(result.Recovery.Kind))
+	if kind == "" {
+		kind = "turn_recovery"
+	}
+	summary := strings.TrimSpace(result.Recovery.Summary)
+	if summary == "" {
+		return "turn recovery handoff: " + kind
+	}
+	return "turn recovery handoff: " + kind + ": " + summary
 }
 
 func actorLabel(actor principal.Principal) string {

@@ -15,6 +15,7 @@ architecture and requirements docs define the deeper contracts.
 | Keep parallel work separated | [Telegram Operations: side threads](guides/telegram-operations.md#keep-parallel-requests-apart) |
 | Inspect context, memory, missions, and model routing | [Telegram Operations: work surfaces](guides/telegram-operations.md#manage-work-surfaces) |
 | Understand or contribute to the codebase | [Contributor Handbook](guides/contributor-handbook.md) |
+| Plan and review a release | [Release Strategy](guides/release-strategy.md) |
 
 ## References
 
@@ -27,6 +28,7 @@ architecture and requirements docs define the deeper contracts.
 - [Design Principles](architecture/design-principles.md): normative direction.
 - [Requirements Index](../requirements/INDEX.md): component behavior specs.
 - [Public Release Provenance](public-release.md): canonical source and private-history boundary.
+- [Release Strategy](guides/release-strategy.md): release branch, review, notes, and automation plan.
 
 ## Reading Order
 

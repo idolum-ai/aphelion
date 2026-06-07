@@ -63,6 +63,14 @@ type OutboundMessage struct {
 	ReplyTo   *int64
 	ParseMode string
 	Reactions []string
+	Delivery  *OutboundDelivery
+}
+
+// OutboundDelivery records transport-local delivery details for multi-message
+// sends. Single-message callers can ignore it and keep using SendMessage's
+// canonical first returned message id.
+type OutboundDelivery struct {
+	MessageIDs []int64
 }
 
 type Media struct {

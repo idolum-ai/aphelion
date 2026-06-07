@@ -141,7 +141,14 @@ func (c CommandControl) RebindTelegramIngressForMessage(msg core.InboundMessage)
 	if raw, err := json.Marshal(msg); err == nil {
 		encoded = string(raw)
 	}
-	return c.Store.RebindTelegramIngressSession(msg.IngressSurface, msg.IngressUpdateID, core.SessionIDForInboundMessage(msg), encoded, time.Now().UTC())
+	now := time.Now().UTC()
+	if err := c.Store.RebindTelegramIngressSession(msg.IngressSurface, msg.IngressUpdateID, core.SessionIDForInboundMessage(msg), encoded, now); err != nil {
+		return err
+	}
+	if strings.TrimSpace(msg.DurableAgentID) == "" && msg.MessageID > 0 {
+		return c.Store.RecordTelegramThreadLastMessage(msg.ChatID, msg.TelegramThreadID, msg.MessageID, "ingress", now)
+	}
+	return nil
 }
 
 func (c CommandControl) MarkStreamControlStopping(streamID string, chatID int64) bool {
