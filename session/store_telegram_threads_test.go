@@ -572,3 +572,59 @@ func TestTelegramThreadLastMessageAnchorRoundTripAndReplyLookup(t *testing.T) {
 		t.Fatalf("TelegramThreadIDForReplyMessage(second anchor) = %d ok=%v err=%v, want thread %d", got, ok, err, thread.ThreadID)
 	}
 }
+
+func TestTelegramThreadLastMessageDoesNotRegress(t *testing.T) {
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	first := time.Date(2026, 6, 7, 10, 0, 0, 0, time.UTC)
+	second := first.Add(time.Minute)
+	thread, _, err := store.CreateTelegramThreadForUpdate(1234, 2002, 3003, 4004, "thread opener", first)
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate() err = %v", err)
+	}
+
+	if err := store.RecordTelegramThreadLastMessage(1234, thread.ThreadID, 100, "outbound", first); err != nil {
+		t.Fatalf("record first anchor: %v", err)
+	}
+	if err := store.RecordTelegramThreadLastMessage(1234, thread.ThreadID, 90, "inbound", second); err != nil {
+		t.Fatalf("record stale anchor: %v", err)
+	}
+
+	anchor, ok, err := store.TelegramThreadLastMessage(1234, thread.ThreadID)
+	if err != nil {
+		t.Fatalf("load anchor: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected anchor")
+	}
+	if anchor.MessageID != 100 {
+		t.Fatalf("message id regressed to %d", anchor.MessageID)
+	}
+	if anchor.Source != "outbound" {
+		t.Fatalf("source changed with stale anchor: %q", anchor.Source)
+	}
+	if !anchor.UpdatedAt.Equal(first) {
+		t.Fatalf("updated_at changed with stale anchor: got %s want %s", anchor.UpdatedAt, first)
+	}
+
+	third := second.Add(time.Minute)
+	if err := store.RecordTelegramThreadLastMessage(1234, thread.ThreadID, 101, "new-outbound", third); err != nil {
+		t.Fatalf("record newer anchor: %v", err)
+	}
+	anchor, ok, err = store.TelegramThreadLastMessage(1234, thread.ThreadID)
+	if err != nil {
+		t.Fatalf("load advanced anchor: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected advanced anchor")
+	}
+	if anchor.MessageID != 101 {
+		t.Fatalf("message id did not advance: %d", anchor.MessageID)
+	}
+	if anchor.Source != "new-outbound" {
+		t.Fatalf("source did not advance: %q", anchor.Source)
+	}
+	if !anchor.UpdatedAt.Equal(third) {
+		t.Fatalf("updated_at did not advance: got %s want %s", anchor.UpdatedAt, third)
+	}
+}
