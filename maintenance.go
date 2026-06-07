@@ -119,6 +119,8 @@ func runMaintenanceCommand(args []string) (bool, error) {
 		return true, runTelegramChildBotCommand(args[1:])
 	case "telegram-threads":
 		return true, maintenancecli.RunTelegramThreadsMaintenanceCommand(args[1:])
+	case "eval":
+		return true, runEvalCommand(args[1:])
 	case "agency-eval":
 		return true, standalonecli.RunAgencyEvalCommand(args[1:])
 	case "version":
