@@ -83,42 +83,84 @@ func (r *Runtime) preparedReplyWithVoice(prepared pipeline.TurnPrepareContract) 
 }
 
 func (r *Runtime) sendReply(ctx context.Context, msg core.InboundMessage, text string, media []core.Media, replyWithVoice bool) (int64, string, error) {
+	msgID, kind, _, err := r.sendReplyWithDelivery(ctx, msg, text, media, replyWithVoice)
+	return msgID, kind, err
+}
+
+func (r *Runtime) sendReplyWithDelivery(ctx context.Context, msg core.InboundMessage, text string, media []core.Media, replyWithVoice bool) (int64, string, []int64, error) {
 	visibleText := r.prefixTelegramPresentedText(r.telegramPresentationForMessage(msg), text)
+	replyTo := r.replyAnchorForTelegramMessage(msg)
 	if len(media) > 0 {
+		delivery := &core.OutboundDelivery{}
 		msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
-			ChatID:  msg.ChatID,
-			Text:    visibleText,
-			Media:   media,
-			ReplyTo: replyToMessageID(msg.MessageID),
+			ChatID:   msg.ChatID,
+			Text:     visibleText,
+			Media:    media,
+			ReplyTo:  replyTo,
+			Delivery: delivery,
 		})
 		if err != nil {
-			return 0, "", err
+			return 0, "", nil, err
 		}
-		return msgID, "media", nil
+		return msgID, "media", outboundDeliveryIDs(delivery, msgID), nil
 	}
 
 	if replyWithVoice && r.synth != nil {
 		if sender, ok := r.outbound.(voiceSender); ok {
 			audio, err := r.synth.Synthesize(ctx, text)
 			if err == nil {
-				msgID, sendErr := sender.SendVoiceMessage(ctx, msg.ChatID, audio, replyToMessageID(msg.MessageID))
+				msgID, sendErr := sender.SendVoiceMessage(ctx, msg.ChatID, audio, replyTo)
 				if sendErr == nil {
-					return msgID, "voice", nil
+					return msgID, "voice", []int64{msgID}, nil
 				}
 				err = sendErr
 			}
 		}
 	}
 
+	delivery := &core.OutboundDelivery{}
 	msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
-		ChatID:  msg.ChatID,
-		Text:    visibleText,
-		ReplyTo: replyToMessageID(msg.MessageID),
+		ChatID:   msg.ChatID,
+		Text:     visibleText,
+		ReplyTo:  replyTo,
+		Delivery: delivery,
 	})
 	if err != nil {
-		return 0, "", err
+		return 0, "", nil, err
 	}
-	return msgID, "text", nil
+	return msgID, "text", outboundDeliveryIDs(delivery, msgID), nil
+}
+
+func outboundDeliveryIDs(delivery *core.OutboundDelivery, fallback int64) []int64 {
+	seen := map[int64]struct{}{}
+	var out []int64
+	for _, id := range append([]int64{fallback}, deliveryIDs(delivery)...) {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func deliveryIDs(delivery *core.OutboundDelivery) []int64 {
+	if delivery == nil {
+		return nil
+	}
+	return delivery.MessageIDs
+}
+
+func (r *Runtime) replyAnchorForTelegramMessage(msg core.InboundMessage) *int64 {
+	if msg.TelegramThreadID > 0 && strings.TrimSpace(msg.DurableAgentID) == "" && r != nil && r.store != nil {
+		if anchor, ok, err := r.store.TelegramThreadLastMessage(msg.ChatID, msg.TelegramThreadID); err == nil && ok && anchor.MessageID > 0 {
+			return replyToMessageID(anchor.MessageID)
+		}
+	}
+	return replyToMessageID(msg.MessageID)
 }
 
 func replyToMessageID(id int64) *int64 {

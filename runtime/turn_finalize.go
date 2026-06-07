@@ -672,6 +672,7 @@ type turnDeliveryPort struct {
 	audit           *turnAuditRecorder
 	sendErrCtx      string
 	recordErrCtx    string
+	deliveryMsgIDs  []int64
 }
 
 func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest) (*turn.DeliveryResult, error) {
@@ -688,7 +689,8 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 		RecordOutbound: p.recordOutbound,
 	}, turn.DeliveryStageCallbacks{
 		Send: func(ctx context.Context, msg core.OutboundMessage, replyWithVoice bool) (int64, string, error) {
-			outboundID, outboundType, err := p.runtime.sendReply(ctx, p.msg, msg.Text, msg.Media, replyWithVoice)
+			outboundID, outboundType, messageIDs, err := p.runtime.sendReplyWithDelivery(ctx, p.msg, msg.Text, msg.Media, replyWithVoice)
+			p.deliveryMsgIDs = messageIDs
 			if err != nil {
 				p.runtime.recordExecutionEvent(p.key, core.ExecutionEventDeliveryFinalFailed, "delivery", "failed", map[string]any{
 					"error": trimError(err.Error()),
@@ -764,8 +766,22 @@ func (p *turnDeliveryPort) recordOutboundWithContext(_ context.Context, sess *se
 	if p.recordErrCtx == "" {
 		p.recordErrCtx = "record outbound reply"
 	}
-	if err := p.runtime.store.RecordOutbound(key, sess.TurnCount, outboundID, outboundType); err != nil {
-		return fmt.Errorf("%s: %w", p.recordErrCtx, err)
+	messageIDs := p.deliveryMsgIDs
+	if len(messageIDs) == 0 {
+		messageIDs = []int64{outboundID}
+	}
+	for _, messageID := range messageIDs {
+		if messageID == 0 {
+			continue
+		}
+		if err := p.runtime.store.RecordOutbound(key, sess.TurnCount, messageID, outboundType); err != nil {
+			return fmt.Errorf("%s: %w", p.recordErrCtx, err)
+		}
+		if p.msg.TelegramThreadID > 0 && strings.TrimSpace(p.msg.DurableAgentID) == "" {
+			if err := p.runtime.store.RecordTelegramThreadLastMessage(p.msg.ChatID, p.msg.TelegramThreadID, messageID, outboundType, time.Now().UTC()); err != nil {
+				return fmt.Errorf("record telegram thread reply anchor: %w", err)
+			}
+		}
 	}
 	return nil
 }

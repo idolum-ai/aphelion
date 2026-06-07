@@ -239,8 +239,9 @@ func TestSendInlineKeyboardSplitsLongTextIntoFollowUpMessages(t *testing.T) {
 		if _, ok := bodies[i]["reply_markup"]; ok {
 			t.Fatalf("chunk %d unexpectedly includes reply_markup", i+1)
 		}
-		if _, ok := bodies[i]["reply_to_message_id"]; ok {
-			t.Fatalf("chunk %d unexpectedly includes reply_to_message_id", i+1)
+		wantReply := float64(300 + i)
+		if bodies[i]["reply_to_message_id"] != wantReply {
+			t.Fatalf("chunk %d reply_to_message_id = %v, want previous chunk id %.0f", i+1, bodies[i]["reply_to_message_id"], wantReply)
 		}
 	}
 	for i, body := range bodies {
@@ -480,8 +481,9 @@ func TestSendMessageChunksLongReplies(t *testing.T) {
 		t.Fatalf("first chunk reply_to_message_id = %v, want 77", bodies[0]["reply_to_message_id"])
 	}
 	for i := 1; i < len(bodies); i++ {
-		if _, ok := bodies[i]["reply_to_message_id"]; ok {
-			t.Fatalf("chunk %d unexpectedly carried reply_to_message_id", i+1)
+		wantReply := float64(100 + i)
+		if bodies[i]["reply_to_message_id"] != wantReply {
+			t.Fatalf("chunk %d reply_to_message_id = %v, want previous chunk id %.0f", i+1, bodies[i]["reply_to_message_id"], wantReply)
 		}
 	}
 	for i, body := range bodies {
