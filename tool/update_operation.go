@@ -85,5 +85,5 @@ func (r *Registry) updateOperation(_ context.Context, input json.RawMessage, key
 	if err := r.store.UpdateOperationState(key, state); err != nil {
 		return "", err
 	}
-	return renderOperationState("[OPERATION_UPDATED]", state), nil
+	return renderOperationUpdateAck(state, in), nil
 }

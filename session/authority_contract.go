@@ -83,6 +83,7 @@ func authorityClassificationPriority() []authorityClassificationGroup {
 	return []authorityClassificationGroup{
 		{Key: "deploy", Tokens: []string{"deploy", "live_deploy", "run_deploy", "system_change", "restart", "service_restart", "restart_aphelion_service", "systemctl_restart", "install_user_service", "make_install_user_service", "run_verify_deploy", "git_push", "push_remote"}},
 		{Key: "capability_grant", Tokens: []string{"capability_grant", "capability_acquisition", "grant_capability", "grant_set", "capability_authority", "capability_access_check", "grant_or_revoke_capability", "capability_revoke"}},
+		{Key: "external_account_action", Tokens: []string{"external_account_action", "github_pr_update", "github_pr_metadata_update", "pull_request_update", "pull_request_metadata_update", "update_pull_request_title", "update_pull_request_body"}},
 		{Key: "child_wake", Tokens: []string{"child_wake", "durable_child_wake", "selected_child_wake", "durable_agent_wake"}},
 		{Key: AuthorityClassLocalSecretMetadataReadLiveConfigRead, Tokens: []string{
 			AuthorityClassLocalSecretMetadataReadLiveConfigRead,
@@ -408,6 +409,38 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 				"show request id, target resource, allowed actions, and active grant/access-check evidence before invocation",
 			},
 			RequiresInlineApproval: true,
+		}, true
+	case "external_account_action", "github_pr_update", "github_pr_metadata_update", "pull_request_update", "pull_request_metadata_update", "update_pull_request_title", "update_pull_request_body":
+		return AuthorityContract{
+			Key:        "external_account_action",
+			LeaseClass: ContinuationLeaseClassCapabilityGrant,
+			WorkAction: AuthorityWorkActionReadOnly,
+			AllowedActions: []string{
+				AuthorityWorkActionReadOnly,
+				"capability_access_check",
+				"invoke_active_capability_grant",
+				"report_capability_result",
+			},
+			ForbiddenActions: []string{
+				"invoke_without_active_capability_grant",
+				"broaden_capability_target_silently",
+				"credential_token_output",
+				"commit",
+				"git_commit",
+				"repo_history_mutation",
+				"git_push",
+				"deploy",
+				"restart_service",
+				"external_account_effect_outside_grant",
+			},
+			ValidationPlan: []string{
+				"show request id, target resource, allowed actions, and active grant/access-check evidence before invocation",
+				"perform only the named external-account effect covered by the active grant",
+				"report external-account mutation evidence without printing credentials or tokens",
+			},
+			AutoApprovalAllowed:    false,
+			RequiresInlineApproval: true,
+			ExternalEffectsAllowed: true,
 		}, true
 	default:
 		return AuthorityContract{}, false

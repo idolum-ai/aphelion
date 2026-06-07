@@ -331,7 +331,7 @@ func (s *SQLiteStore) OperationStates() ([]OperationStateRecord, error) {
 }
 
 func (s *SQLiteStore) UpdatePlanStateWithEvent(key SessionKey, state PlanState, kind PlanEventKind) error {
-	return s.updatePlanState(key, state, kind)
+	return s.updatePlanState(key, state, NormalizePlanEventKind(kind))
 }
 
 func (s *SQLiteStore) updatePlanState(key SessionKey, state PlanState, kind PlanEventKind) error {
@@ -484,7 +484,7 @@ func recordPlanEventTx(tx *sql.Tx, sessionID string, kind PlanEventKind, state P
 	if _, err := tx.Exec(`
 		INSERT INTO plan_events(session_id, event_kind, plan_state_json, created_at)
 		VALUES (?, ?, ?, ?)
-	`, sessionID, string(kind), encodePlanState(state), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	`, sessionID, string(NormalizePlanEventKind(kind)), encodePlanState(state), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("insert plan event: %w", err)
 	}
 	return nil

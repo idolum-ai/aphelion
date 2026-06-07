@@ -61,6 +61,14 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 	if input.Result == nil {
 		return output, nil
 	}
+	if recovery, ok := turnResultBudgetRecovery(input.Result); ok {
+		output.ReplyText = turnBudgetRecoveryHandoffText(recovery)
+		r.recordExecutionEvent(input.Key, core.ExecutionEventFaceRenderSkipped, "face", "skipped", map[string]any{
+			"reason":        "budget_recovery",
+			"recovery_kind": string(recovery.Kind),
+		}, time.Now().UTC())
+		return output, nil
+	}
 
 	output.ReplyText = strings.TrimSpace(input.ReplyText)
 	if len(input.OutHistory) < input.HistoryInputLen {
@@ -68,6 +76,11 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 	}
 	generatedMessages := input.OutHistory[input.HistoryInputLen:]
 	workspaceRoot := faceWorkspaceRoot(input.Scope)
+	structuralSkip, structuralSkipReason := r.structuralFaceRenderSkip(input)
+	conditionalSkipReason := ""
+	if !structuralSkip {
+		conditionalSkipReason = faceConditionalSkipReason(input)
+	}
 	stageResult, err := turn.RunRenderStage(input.Ctx, turn.RenderStageRequest{
 		Render: turn.FaceRenderRequest{
 			GovernorName:    r.governorName(),
@@ -80,16 +93,18 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 			LatestUserInput: input.PromptInput,
 			Runtime:         input.FaceAwareness,
 		},
-		FacePolicy:        input.FacePolicy,
-		UseMaterialFloor:  input.UseMaterialFloor,
-		ReplyWithVoice:    input.ReplyWithVoice,
-		AllowStream:       input.AllowStream && !r.personaContextRequestEligible(input),
-		Media:             input.Result.Media,
-		ToolLog:           input.Result.ToolLog,
-		GeneratedMessages: generatedMessages,
-		InitialReply:      output.ReplyText,
-		FallbackOptions:   input.FallbackOpts,
-		SkipRender:        input.MediaOnlyReply || strings.TrimSpace(input.Result.ProviderFailure) != "" || r.faceBackend == face.BackendFloorFallback || input.CurrentFaceModel == nil,
+		FacePolicy:            input.FacePolicy,
+		UseMaterialFloor:      input.UseMaterialFloor,
+		ReplyWithVoice:        input.ReplyWithVoice,
+		AllowStream:           input.AllowStream && !r.personaContextRequestEligible(input),
+		Media:                 input.Result.Media,
+		ToolLog:               input.Result.ToolLog,
+		GeneratedMessages:     generatedMessages,
+		InitialReply:          output.ReplyText,
+		FallbackOptions:       input.FallbackOpts,
+		SkipRender:            structuralSkip,
+		SkipRenderReason:      structuralSkipReason,
+		ConditionalSkipReason: conditionalSkipReason,
 	}, turn.RenderStageCallbacks{
 		Stream: func(ctx context.Context, req turn.FaceRenderRequest) (turn.FaceRenderResult, bool, error) {
 			streamer, ok := input.CurrentFaceModel.(face.StreamRenderer)
@@ -210,6 +225,9 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 	if stageResult.RenderError != nil {
 		log.Printf("WARN face render failed backend=%s err=%v; using floor_fallback serializer", r.faceBackend, stageResult.RenderError)
 	}
+	if strings.TrimSpace(string(stageResult.SkipReason)) != "" && shouldRecordFaceSkipEvent(input.Key) {
+		r.recordExecutionEvent(input.Key, core.ExecutionEventFaceRenderSkipped, "render", "skipped", faceSkipPayload(string(stageResult.SkipReason), input, stageResult.ReplyText), time.Now().UTC())
+	}
 	output.ReplyText = strings.TrimSpace(stageResult.ReplyText)
 	output.ReplyModality = strings.TrimSpace(stageResult.ReplyModality)
 	output.Usage = addTokenUsage(output.Usage, stageResult.Usage)
@@ -257,7 +275,48 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 	}
 	output.ReplyText = enforceVisibleRecurrenceContract(output.ReplyText, stageResult.Runtime)
 
+	if stageResult.FallbackApplied && output.StreamedReply && output.OutboundID != 0 {
+		if err := r.reconcileStreamedFallback(input.Ctx, input.Key, input.Msg, output.OutboundID, output.ReplyText, stageResult.FallbackReason); err != nil {
+			log.Printf("WARN streamed face fallback reconciliation failed backend=%s message_id=%d reason=%s err=%v; forcing normal delivery", r.faceBackend, output.OutboundID, stageResult.FallbackReason, err)
+			r.recordExecutionEvent(input.Key, core.ExecutionEventStreamFallbackReconcileFail, "render", "failed", map[string]any{
+				"message_id": output.OutboundID,
+				"reason":     strings.TrimSpace(stageResult.FallbackReason),
+				"error":      trimError(err.Error()),
+			}, time.Now().UTC())
+			output.StreamedReply = false
+			output.OutboundID = 0
+			output.OutboundType = ""
+		} else {
+			r.recordExecutionEvent(input.Key, core.ExecutionEventStreamFallbackReconciled, "render", "edited", map[string]any{
+				"message_id": output.OutboundID,
+				"reason":     strings.TrimSpace(stageResult.FallbackReason),
+				"text_chars": len([]rune(strings.TrimSpace(output.ReplyText))),
+			}, time.Now().UTC())
+		}
+	}
+
 	return output, nil
+}
+
+func (r *Runtime) reconcileStreamedFallback(ctx context.Context, key session.SessionKey, msg core.InboundMessage, messageID int64, text string, reason string) error {
+	if r == nil || r.outbound == nil {
+		return fmt.Errorf("outbound sender unavailable")
+	}
+	if messageID == 0 {
+		return fmt.Errorf("streamed message id is missing")
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return fmt.Errorf("fallback text is empty")
+	}
+	visibleText := r.prefixTelegramPresentedText(r.telegramPresentationForMessage(msg), text)
+	if clearer, ok := r.outbound.(messageKeyboardClearer); ok {
+		return clearer.EditMessageTextWithoutInlineKeyboard(ctx, msg.ChatID, messageID, visibleText, "")
+	}
+	if editor, ok := r.outbound.(messageEditor); ok {
+		return editor.EditMessageText(ctx, msg.ChatID, messageID, visibleText, "")
+	}
+	return fmt.Errorf("outbound sender cannot edit streamed message")
 }
 
 func enforceVisibleRecurrenceContract(reply string, aw prompt.RuntimeAwareness) string {
@@ -474,6 +533,7 @@ func runtimeAwarenessHasAnyHiddenCategory(aw prompt.RuntimeAwareness, categories
 
 type turnCommitInput struct {
 	Key             session.SessionKey
+	RunID           int64
 	Scope           sandbox.Scope
 	RunKind         session.TurnRunKind
 	Sess            *session.Session
@@ -524,6 +584,9 @@ type turnPersistencePort struct {
 	sessionState interface {
 		session() *session.Session
 	}
+	runIDSource interface {
+		turnRunID() int64
+	}
 	msg    core.InboundMessage
 	actor  principal.Principal
 	errCtx turnCommitErrorContext
@@ -544,6 +607,7 @@ func (p *turnPersistencePort) Persist(ctx context.Context, req turn.CommitReques
 	}
 	result, err := p.runtime.persistTurn(ctx, turnCommitInput{
 		Key:             p.key,
+		RunID:           p.currentRunID(),
 		Scope:           p.scope,
 		RunKind:         req.Request.RunKind,
 		Sess:            sess,
@@ -581,6 +645,18 @@ func (p *turnPersistencePort) currentSession() *session.Session {
 	return p.sess
 }
 
+func (p *turnPersistencePort) currentRunID() int64 {
+	if p == nil {
+		return 0
+	}
+	if p.runIDSource != nil {
+		if id := p.runIDSource.turnRunID(); id != 0 {
+			return id
+		}
+	}
+	return 0
+}
+
 type turnDeliveryPort struct {
 	runtime      *Runtime
 	key          session.SessionKey
@@ -604,6 +680,9 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 		return nil, fmt.Errorf("turn delivery port is unavailable")
 	}
 	p.runtime.markSessionTurnPhase(p.key, "deliver", "sending or finalizing outbound delivery")
+	if _, ok := turnResultBudgetRecoveryFromTurnResult(req.Result); ok {
+		return p.deliverBudgetRecovery(ctx, req)
+	}
 	return turn.RunDeliveryStage(ctx, turn.DeliveryStageInput{
 		Request:        req,
 		Deliver:        p.deliver,
@@ -772,6 +851,11 @@ func (r *Runtime) persistTurn(ctx context.Context, input turnCommitInput) (turnC
 		return out, err
 	}
 	out.Committed = stageResult.Committed
+	if out.Committed && input.RunID != 0 {
+		if err := r.store.UpdateTurnRunAccounting(input.RunID, input.Sess.TurnCount, stageResult.NewMessages, usage); err != nil {
+			return out, err
+		}
+	}
 	if out.Committed && input.Audit != nil && input.Result != nil {
 		input.Audit.RecordFinalReply(sceneText, input.Result.Media, out.OutboundType)
 	}

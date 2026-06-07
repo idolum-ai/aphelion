@@ -377,6 +377,9 @@ func TestBuildGovernorPromptIncludesCurrentPlanState(t *testing.T) {
 				"[in_progress] Inspect the relevant files.",
 				"[pending] Patch the issue.",
 			},
+			PlanEvents: []string{
+				"phase.entered summary=Inspect before editing. current=Inspect the relevant files.",
+			},
 		},
 	})
 
@@ -385,6 +388,9 @@ func TestBuildGovernorPromptIncludesCurrentPlanState(t *testing.T) {
 	}
 	if !strings.Contains(got, "Inspect before editing.") || !strings.Contains(got, "[pending] Patch the issue.") {
 		t.Fatalf("prompt missing plan details: %q", got)
+	}
+	if !strings.Contains(got, "Recent semantic plan events:") || !strings.Contains(got, "phase.entered summary=Inspect before editing.") {
+		t.Fatalf("prompt missing semantic plan events: %q", got)
 	}
 }
 

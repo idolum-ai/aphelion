@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
+
 	"github.com/idolum-ai/aphelion/core"
 	"strings"
 	"sync"
@@ -27,6 +29,27 @@ func (m *mockProvider) Complete(ctx context.Context, messages []Message, tools [
 	complete := m.complete
 	m.mu.Unlock()
 	return complete(ctx, call, messages, tools)
+}
+
+type mockOptionsProvider struct {
+	mu       sync.Mutex
+	calls    int
+	seenOpts []CompleteOptions
+	complete func(ctx context.Context, call int, opts CompleteOptions, messages []Message, tools []ToolDef) (*Response, error)
+}
+
+func (m *mockOptionsProvider) Complete(ctx context.Context, messages []Message, tools []ToolDef) (*Response, error) {
+	return m.CompleteWithOptions(ctx, messages, tools, CompleteOptions{})
+}
+
+func (m *mockOptionsProvider) CompleteWithOptions(ctx context.Context, messages []Message, tools []ToolDef, opts CompleteOptions) (*Response, error) {
+	m.mu.Lock()
+	m.calls++
+	call := m.calls
+	m.seenOpts = append(m.seenOpts, opts)
+	complete := m.complete
+	m.mu.Unlock()
+	return complete(ctx, call, opts, messages, tools)
 }
 
 type toolInvocation struct {
@@ -56,6 +79,21 @@ func (m *mockTools) Definitions() []ToolDef {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.defsCalled++
+	if m.defs == nil {
+		return []ToolDef{
+			{Name: "exec"},
+			{Name: "echo"},
+			{Name: "explode"},
+			{Name: "noop"},
+			{Name: "read_file"},
+			{Name: "search"},
+			{Name: "step"},
+			{Name: "list_dir"},
+			{Name: "write_file"},
+			{Name: "update_plan"},
+			{Name: "update_operation"},
+		}
+	}
 	return append([]ToolDef(nil), m.defs...)
 }
 
@@ -120,6 +158,85 @@ func defaultBudget() *Budget {
 		Max:     10,
 		Caution: 0.7,
 		Warning: 0.9,
+	}
+}
+
+func TestRunTurnRetriesEmptySuccessfulResponseWithIncreasingTokenBudget(t *testing.T) {
+	provider := &mockOptionsProvider{complete: func(ctx context.Context, call int, opts CompleteOptions, messages []Message, tools []ToolDef) (*Response, error) {
+		switch call {
+		case 1, 2:
+			return &Response{Content: "", Usage: core.TokenUsage{OutputTokens: int64(opts.MaxTokens)}}, nil
+		default:
+			return &Response{Content: "recovered", Usage: core.TokenUsage{OutputTokens: 3}}, nil
+		}
+	}}
+	opts := &CompleteOptions{MaxTokens: 2048}
+
+	result, history, err := RunTurn(context.Background(), provider, nil, defaultBudget(), opts, []Message{{Role: "user", Content: "continue"}})
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "recovered" {
+		t.Fatalf("result.Text = %q, want recovered", result.Text)
+	}
+	if opts.MaxTokens != 8192 {
+		t.Fatalf("opts.MaxTokens = %d, want final retry cap 8192", opts.MaxTokens)
+	}
+	if opts.EmptyRetry == nil || opts.EmptyRetry.Retries != 2 {
+		t.Fatalf("opts.EmptyRetry = %#v, want 2 retries", opts.EmptyRetry)
+	}
+	if got := provider.seenMaxTokens(); !reflect.DeepEqual(got, []int{2048, 4096, 8192}) {
+		t.Fatalf("seen MaxTokens = %#v, want [2048 4096 8192]", got)
+	}
+	if len(history) != 2 {
+		t.Fatalf("history len = %d, want user plus recovered assistant only", len(history))
+	}
+}
+
+func (m *mockOptionsProvider) seenMaxTokens() []int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]int, 0, len(m.seenOpts))
+	for _, opts := range m.seenOpts {
+		out = append(out, opts.MaxTokens)
+	}
+	return out
+}
+
+func TestRunTurnStopsEmptySuccessfulRetryAtMaxTokenBudget(t *testing.T) {
+	provider := &mockOptionsProvider{complete: func(ctx context.Context, call int, opts CompleteOptions, messages []Message, tools []ToolDef) (*Response, error) {
+		return &Response{Content: "", Usage: core.TokenUsage{OutputTokens: int64(opts.MaxTokens)}}, nil
+	}}
+	opts := &CompleteOptions{MaxTokens: 2048}
+
+	result, history, err := RunTurn(context.Background(), provider, nil, defaultBudget(), opts, []Message{{Role: "user", Content: "continue"}})
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "" {
+		t.Fatalf("result.Text = %q, want final empty response after retry budget exhausted", result.Text)
+	}
+	if got := provider.seenMaxTokens(); !reflect.DeepEqual(got, []int{2048, 4096, 8192}) {
+		t.Fatalf("seen MaxTokens = %#v, want capped retries [2048 4096 8192]", got)
+	}
+	if len(history) != 2 {
+		t.Fatalf("history len = %d, want user plus final empty assistant only", len(history))
+	}
+}
+
+func TestRunTurnDoesNotRetryEmptyResponseWithToolCall(t *testing.T) {
+	provider := &mockProvider{complete: func(ctx context.Context, call int, messages []Message, tools []ToolDef) (*Response, error) {
+		return &Response{ToolCalls: []ToolCall{{Name: "noop", Input: json.RawMessage(`{}`)}}}, nil
+	}}
+	tools := &mockTools{
+		defs: []ToolDef{{Name: "noop"}},
+		exec: func(context.Context, string, json.RawMessage) (string, error) { return "ok", nil },
+	}
+	opts := &CompleteOptions{MaxTokens: 4096}
+
+	_, _, _ = RunTurn(context.Background(), provider, tools, &Budget{Max: 1}, opts, []Message{{Role: "user", Content: "use tool"}})
+	if opts.EmptyRetry != nil && opts.EmptyRetry.Retries != 0 {
+		t.Fatalf("empty retry triggered for tool-call response")
 	}
 }
 
@@ -454,7 +571,7 @@ func TestRunTurnObserverRecordsModelRequestsAndToolBatches(t *testing.T) {
 	if len(observer.batchStarts) != 1 || observer.batchStarts[0].Mode != toolBatchModeParallel || observer.batchStarts[0].BatchSize != 2 {
 		t.Fatalf("batch starts = %#v, want one parallel batch", observer.batchStarts)
 	}
-	if !observer.batchStarts[0].ParallelEligible || observer.batchStarts[0].ParallelSafeCount != 2 || observer.batchStarts[0].ParallelBlockedReason != "" {
+	if !observer.batchStarts[0].ParallelEligible || observer.batchStarts[0].ParallelSafeCount != 2 || observer.batchStarts[0].ParallelBlockedReason != "" || observer.batchStarts[0].ParallelContract != "independent_parallel_batch" {
 		t.Fatalf("batch start parallel evidence = %#v, want eligible two-call batch", observer.batchStarts[0])
 	}
 	if len(observer.batchFinishes) != 1 || observer.batchFinishes[0].FailedCount != 0 || observer.batchFinishes[0].Mode != toolBatchModeParallel {
@@ -500,7 +617,7 @@ func TestRunTurnObserverFlagsSingleExecExplorationMissedOpportunity(t *testing.T
 		t.Fatalf("batch finishes = %#v, want one batch", observer.batchFinishes)
 	}
 	got := observer.batchFinishes[0]
-	if got.Mode != toolBatchModeSerial || got.BatchSize != 1 || got.ParallelBlockedReason != "single_call" {
+	if got.Mode != toolBatchModeSerial || got.BatchSize != 1 || got.ParallelBlockedReason != "single_call" || got.ParallelContract != "single_call_missed_parallel_opportunity:exec_search_could_use_search" {
 		t.Fatalf("batch evidence = %#v, want serial single-call block", got)
 	}
 	if !got.ParallelMissedOpportunity || got.ParallelMissedReason != "exec_search_could_use_search" {
@@ -608,6 +725,46 @@ func (e providerEventsError) ProviderEvents() []core.ProviderEvent {
 	return append([]core.ProviderEvent(nil), e.events...)
 }
 
+func TestRunTurnStopsBeforeExecutingBatchPastToolCallHardCap(t *testing.T) {
+	provider := &mockProvider{complete: func(_ context.Context, call int, messages []Message, _ []ToolDef) (*Response, error) {
+		if call != 1 {
+			t.Fatalf("unexpected provider call %d", call)
+		}
+		return &Response{ToolCalls: []ToolCall{
+			{ID: "tool-1", Name: "read_file", Input: json.RawMessage(`{"path":"a","offset":0,"limit":1}`)},
+			{ID: "tool-2", Name: "read_file", Input: json.RawMessage(`{"path":"b","offset":0,"limit":1}`)},
+		}}, nil
+	}}
+	executed := 0
+	tools := &mockTools{exec: func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+		executed++
+		return "ok", nil
+	}}
+	budget := defaultBudget()
+	budget.ToolCallSoftLimit = 1
+	budget.ToolCallHardLimit = 1
+
+	result, history, err := RunTurn(context.Background(), provider, tools, budget, nil, nil)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if executed != 0 {
+		t.Fatalf("executed tools = %d, want hard cap before execution", executed)
+	}
+	if result.Recovery == nil || result.Recovery.Kind != core.TurnRecoveryToolBudgetExhausted {
+		t.Fatalf("result.Recovery = %#v, want tool budget recovery", result.Recovery)
+	}
+	if !result.Recovery.ReplanRequired {
+		t.Fatalf("Recovery.ReplanRequired = false, want true")
+	}
+	if !strings.Contains(result.Text, "Budget recovery handoff:") {
+		t.Fatalf("result.Text = %q, want budget recovery handoff", result.Text)
+	}
+	if len(history) != 1 || len(history[0].ToolCalls) != 2 {
+		t.Fatalf("history = %#v, want assistant tool request preserved", history)
+	}
+}
+
 func TestRunTurnPreservesProviderEventsFromTerminalError(t *testing.T) {
 	provider := &mockProvider{
 		complete: func(_ context.Context, _ int, _ []Message, _ []ToolDef) (*Response, error) {
@@ -644,8 +801,20 @@ func TestToolError(t *testing.T) {
 				if last.Role != "tool" {
 					t.Fatalf("last role = %q, want tool", last.Role)
 				}
-				if !strings.Contains(last.Content, "tool_error: boom") {
-					t.Fatalf("tool error message = %q", last.Content)
+				if strings.Contains(last.Content, "tool_error:") {
+					t.Fatalf("tool error message = %q, want typed failure without legacy prefix", last.Content)
+				}
+				var failure struct {
+					OK          bool   `json:"ok"`
+					Code        string `json:"code"`
+					ShortReason string `json:"short_reason"`
+					RetryHint   string `json:"retry_hint"`
+				}
+				if err := json.Unmarshal([]byte(last.Content), &failure); err != nil {
+					t.Fatalf("decode typed tool failure %q: %v", last.Content, err)
+				}
+				if failure.OK || failure.Code != "TOOL_ERROR" || failure.ShortReason != "boom" || failure.RetryHint == "" {
+					t.Fatalf("failure = %#v, want bounded typed tool failure", failure)
 				}
 				return &Response{Content: "handled"}, nil
 			default:
@@ -670,6 +839,160 @@ func TestToolError(t *testing.T) {
 	}
 	if len(result.ToolLog) != 1 || result.ToolLog[0] != "explode:error" {
 		t.Fatalf("result.ToolLog = %#v", result.ToolLog)
+	}
+}
+
+func TestToolErrorDropsVerboseOutputEvidence(t *testing.T) {
+	provider := &mockProvider{
+		complete: func(_ context.Context, call int, messages []Message, _ []ToolDef) (*Response, error) {
+			switch call {
+			case 1:
+				return &Response{
+					ToolCalls: []ToolCall{{
+						ID:    "tool-1",
+						Name:  "exec",
+						Input: json.RawMessage(`{"command":"go test ./..."}`),
+					}},
+				}, nil
+			case 2:
+				last := messages[len(messages)-1]
+				var failure struct {
+					Code        string `json:"code"`
+					ShortReason string `json:"short_reason"`
+				}
+				if err := json.Unmarshal([]byte(last.Content), &failure); err != nil {
+					t.Fatalf("decode typed tool failure %q: %v", last.Content, err)
+				}
+				if failure.Code != "TOOL_ERROR" || failure.ShortReason != "command failed with exit code 1" {
+					t.Fatalf("failure = %#v, want typed command failure", failure)
+				}
+				if strings.Contains(last.Content, "stdout:") || strings.Contains(last.Content, "stderr:") || strings.Contains(last.Content, `"output"`) {
+					t.Fatalf("tool failure content = %q, want compact fixed shape without output echo", last.Content)
+				}
+				return &Response{Content: "handled"}, nil
+			default:
+				t.Fatalf("unexpected call %d", call)
+				return nil, nil
+			}
+		},
+	}
+
+	tools := &mockTools{
+		exec: func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+			return "stdout:\npackage failed\nstderr:\ncompile error detail", errors.New("command failed with exit code 1")
+		},
+	}
+
+	result, _, err := RunTurn(context.Background(), provider, tools, defaultBudget(), nil, nil)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "handled" {
+		t.Fatalf("result.Text = %q, want handled", result.Text)
+	}
+}
+
+func TestToolFailureClassifiesFromOutputWithoutEchoingIt(t *testing.T) {
+	t.Parallel()
+
+	failure := classifyToolFailure(errors.New("command failed with exit code 1"), "stderr: deadline exceeded while waiting")
+	if failure.Code != "TIMEOUT" || failure.RetryHint != "RetryOnce" {
+		t.Fatalf("failure = %#v, want timeout classification from output evidence", failure)
+	}
+	rendered := renderToolFailure(failure)
+	if strings.Contains(rendered, "deadline exceeded") || strings.Contains(rendered, `"output"`) {
+		t.Fatalf("rendered failure = %q, want no output echo", rendered)
+	}
+}
+
+func TestRunTurnDoesNotExecuteToolMissingFromDefinitions(t *testing.T) {
+	t.Parallel()
+
+	provider := &mockProvider{
+		complete: func(_ context.Context, call int, messages []Message, _ []ToolDef) (*Response, error) {
+			switch call {
+			case 1:
+				return &Response{ToolCalls: []ToolCall{{ID: "hidden-1", Name: "exec", Input: json.RawMessage(`{"command":"pwd"}`)}}}, nil
+			case 2:
+				last := messages[len(messages)-1]
+				var failure struct {
+					Code string `json:"code"`
+				}
+				if err := json.Unmarshal([]byte(last.Content), &failure); err != nil {
+					t.Fatalf("decode typed tool failure %q: %v", last.Content, err)
+				}
+				if failure.Code != "TOOL_NOT_AVAILABLE" {
+					t.Fatalf("failure = %#v, want TOOL_NOT_AVAILABLE", failure)
+				}
+				return &Response{Content: "handled"}, nil
+			default:
+				t.Fatalf("unexpected call %d", call)
+				return nil, nil
+			}
+		},
+	}
+	tools := &mockTools{
+		defs: []ToolDef{{Name: "update_plan"}},
+		exec: func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+			t.Fatal("hidden tool should not execute")
+			return "", nil
+		},
+	}
+
+	result, _, err := RunTurn(context.Background(), provider, tools, defaultBudget(), nil, nil)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "handled" {
+		t.Fatalf("result.Text = %q, want handled", result.Text)
+	}
+	if len(tools.execCalls) != 0 {
+		t.Fatalf("exec calls = %#v, want none", tools.execCalls)
+	}
+}
+
+func TestRunTurnStopsToolLoopOnTokenBudgetExhaustion(t *testing.T) {
+	t.Parallel()
+
+	provider := &mockProvider{
+		complete: func(_ context.Context, call int, _ []Message, _ []ToolDef) (*Response, error) {
+			if call != 1 {
+				t.Fatalf("provider call = %d, want one call", call)
+			}
+			return &Response{
+				Usage: core.TokenUsage{InputTokens: 10, OutputTokens: 80, TotalTokens: 90},
+				ToolCalls: []ToolCall{{
+					ID:    "call-1",
+					Name:  "exec",
+					Input: json.RawMessage(`{"command":"pwd"}`),
+				}},
+			}, nil
+		},
+	}
+	tools := &mockTools{
+		defs: []ToolDef{{Name: "exec"}},
+		exec: func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+			t.Fatal("tool should not execute after token budget exhaustion")
+			return "", nil
+		},
+	}
+	budget := &Budget{Max: 5, Caution: 0.7, Warning: 0.9, OutputTokenHardLimit: 75}
+
+	result, _, err := RunTurn(context.Background(), provider, tools, budget, nil, nil)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Recovery == nil || result.Recovery.Kind != core.TurnRecoveryTokenBudgetExhausted {
+		t.Fatalf("result.Recovery = %#v, want token budget recovery", result.Recovery)
+	}
+	if !result.Recovery.ReplanRequired {
+		t.Fatalf("Recovery.ReplanRequired = false, want true")
+	}
+	if !strings.Contains(result.Text, "Budget recovery handoff:") {
+		t.Fatalf("result.Text = %q, want budget recovery handoff", result.Text)
+	}
+	if len(tools.execCalls) != 0 {
+		t.Fatalf("exec calls = %#v, want none", tools.execCalls)
 	}
 }
 

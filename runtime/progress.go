@@ -95,6 +95,12 @@ func (r *Runtime) startTurnMonitor(ctx context.Context, key session.SessionKey, 
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ingressSurface := strings.TrimSpace(msg.IngressSurface)
+	ingressUpdateID := msg.IngressUpdateID
+	if msg.Origin == core.InboundOriginTurnAuthorization {
+		ingressSurface = ""
+		ingressUpdateID = 0
+	}
 	turnCtx, cancelTurn := context.WithCancel(ctx)
 	monitor := &turnMonitor{
 		runtime:         r,
@@ -105,8 +111,8 @@ func (r *Runtime) startTurnMonitor(ctx context.Context, key session.SessionKey, 
 		toolStarts:      make(map[string][]time.Time),
 		ctx:             turnCtx,
 		cancelTurn:      cancelTurn,
-		ingressSurface:  strings.TrimSpace(msg.IngressSurface),
-		ingressUpdateID: msg.IngressUpdateID,
+		ingressSurface:  ingressSurface,
+		ingressUpdateID: ingressUpdateID,
 	}
 
 	var (

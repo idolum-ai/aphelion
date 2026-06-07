@@ -118,24 +118,32 @@ type AdjudicationStatusSnapshot struct {
 }
 
 type TurnRunStatusSnapshot struct {
-	ID                    int64
-	SessionID             string
-	ChatID                int64
-	ScopeKind             string
-	ScopeID               string
-	DurableAgentID        string
-	Kind                  string
-	Status                string
-	RequestText           string
-	LastActivityAt        time.Time
-	ProgressMessageID     int64
-	LastToolName          string
-	LastToolPreview       string
-	LastToolResultPreview string
-	LastToolError         string
-	ErrorText             string
-	StartedAt             time.Time
-	Source                string
+	ID                       int64
+	SessionID                string
+	ChatID                   int64
+	ScopeKind                string
+	ScopeID                  string
+	DurableAgentID           string
+	Kind                     string
+	TurnIndex                int
+	Status                   string
+	RequestText              string
+	LastActivityAt           time.Time
+	ProgressMessageID        int64
+	LastToolName             string
+	LastToolPreview          string
+	LastToolResultPreview    string
+	LastToolError            string
+	ErrorText                string
+	TotalToolCharsIn         int64
+	TotalAssistantCharsOut   int64
+	ProviderInputTokens      int64
+	ProviderOutputTokens     int64
+	ProviderCacheReadTokens  int64
+	ProviderCacheWriteTokens int64
+	AssistantToolRatio       float64
+	StartedAt                time.Time
+	Source                   string
 }
 
 type ContinuationStatusSnapshot struct {

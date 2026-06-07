@@ -5,12 +5,15 @@ package pipeline
 import (
 	"strings"
 	"testing"
+
+	"github.com/idolum-ai/aphelion/core"
 )
 
 func TestParseMaterialPacketParsesStructuredSections(t *testing.T) {
 	t.Parallel()
 
 	packet, err := ParseMaterialPacket(strings.Join([]string{
+		"KIND: status_report",
 		"FACTS:",
 		"- The repo was inspected.",
 		"ALLOWED_ACTIONS:",
@@ -30,8 +33,31 @@ func TestParseMaterialPacketParsesStructuredSections(t *testing.T) {
 	if packet.Facts[0] != "The repo was inspected." {
 		t.Fatalf("Facts = %#v, want parsed fact", packet.Facts)
 	}
+	if packet.Kind != core.MaterialPacketKindStatusReport {
+		t.Fatalf("Kind = %q, want status_report", packet.Kind)
+	}
 	if packet.SceneConstraints[0] != "Sound direct and grounded." {
 		t.Fatalf("SceneConstraints = %#v, want parsed constraint", packet.SceneConstraints)
+	}
+}
+
+func TestParseMaterialPacketParsesKindSection(t *testing.T) {
+	t.Parallel()
+
+	packet, err := ParseMaterialPacket(strings.Join([]string{
+		"KIND:",
+		"- relational",
+		"FACTS:",
+		"- The reply needs visible care.",
+	}, "\n"))
+	if err != nil {
+		t.Fatalf("ParseMaterialPacket() err = %v", err)
+	}
+	if packet.Kind != core.MaterialPacketKindRelational {
+		t.Fatalf("Kind = %q, want relational", packet.Kind)
+	}
+	if strings.Contains(packet.Text(), "KIND") || strings.Contains(packet.Text(), "relational") {
+		t.Fatalf("packet.Text() leaked metadata kind: %q", packet.Text())
 	}
 }
 

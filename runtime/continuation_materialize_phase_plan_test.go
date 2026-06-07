@@ -111,6 +111,112 @@ func TestMaterializeDurablePhasePlanUsesNextPendingPhase(t *testing.T) {
 	}
 }
 
+func TestMaterializeSinglePhasePlanRecordsNarrowBundleSignal(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9044, UserID: 0, Scope: telegramDMScopeRef(9044)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType: core.ExecutionEventContinuationBundleNarrowed,
+		Stage:     "continuation",
+		Status:    "observed",
+		PayloadJSON: `{
+			"operation_id":"narrow-op",
+			"phase_plan_id":"narrow-plan",
+			"phase_id":"phase-prior-commit",
+			"phase_family":"local_workspace",
+			"phase_category":"mechanical",
+			"materialized_from":"operation_plan_lease",
+			"bundle_width":1,
+			"narrow_streak":1
+		}`,
+		CreatedAt: now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvent(prior narrow) err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "narrow-op",
+		Objective: "Finish a repo-local implementation slice.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "phase_plan",
+		PhasePlan: session.OperationPhasePlan{
+			ID:   "narrow-plan",
+			Goal: "Finish a repo-local implementation slice.",
+			Phases: []session.OperationPhase{{
+				ID:               "phase-implement-local",
+				Summary:          "Implement the local repo patch",
+				Status:           session.PlanStatusPending,
+				AuthorityClass:   "workspace_write",
+				BoundedEffect:    "Edit local files and run focused tests; stop before deploy or external effects.",
+				AllowedActions:   []string{"edit_files", "run_tests"},
+				ForbiddenActions: []string{"deploy", "restart_service", "push_remote"},
+				RequiresApproval: true,
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9044, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want single-phase approval")
+	}
+
+	events, err := store.ExecutionEventsBySession(key, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var narrowed session.ExecutionEvent
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationBundleNarrowed {
+			narrowed = event
+		}
+	}
+	if narrowed.ID == 0 {
+		t.Fatalf("events = %#v, want continuation.bundle.narrowed event", events)
+	}
+	payload := executionEventPayload(narrowed.PayloadJSON)
+	for key, want := range map[string]string{
+		"operation_id":       "narrow-op",
+		"phase_plan_id":      "narrow-plan",
+		"phase_id":           "phase-implement-local",
+		"phase_family":       "local_workspace",
+		"phase_category":     "mechanical",
+		"materialized_from":  "operation_plan_lease",
+		"prior_phase_id":     "phase-prior-commit",
+		"prior_bundle_width": "1",
+	} {
+		if got := payloadString(payload, key); got != want {
+			t.Fatalf("narrow payload %s = %q, want %q; payload=%s", key, got, want, narrowed.PayloadJSON)
+		}
+	}
+	if streak, ok := payloadInt64(payload, "narrow_streak"); !ok || streak != 2 {
+		t.Fatalf("narrow_streak = %d ok=%v, want 2; payload=%s", streak, ok, narrowed.PayloadJSON)
+	}
+	if count, ok := payloadInt64(payload, "consecutive_narrow_count"); !ok || count != 2 {
+		t.Fatalf("consecutive_narrow_count = %d ok=%v, want 2; payload=%s", count, ok, narrowed.PayloadJSON)
+	}
+
+	lines, err := rt.StatusDiagnostics(9044)
+	if err != nil {
+		t.Fatalf("StatusDiagnostics() err = %v", err)
+	}
+	text := strings.Join(lines, "\n")
+	for _, want := range []string{"Approval bundle width", "phase_id=phase-implement-local", "narrow_streak=2"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("StatusDiagnostics() = %q, want %q", text, want)
+		}
+	}
+}
+
 func TestMaterializePhasePlanIgnoresStaleInProgressWhenCurrentPhaseIsPending(t *testing.T) {
 	t.Parallel()
 

@@ -113,6 +113,7 @@ func (r *Runtime) runInteractiveDMTurn(ctx context.Context, input interactiveDMT
 		scope:        input.Scope,
 		sess:         sess,
 		sessionState: turnState,
+		runIDSource:  turnState,
 		msg:          msg,
 		actor:        actor,
 		errCtx: turnCommitErrorContext{

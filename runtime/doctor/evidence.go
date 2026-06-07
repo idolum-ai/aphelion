@@ -78,6 +78,10 @@ func (r *Runtime) writeDoctorExecutionEvents(ctx context.Context, b *strings.Bui
 	} else {
 		WriteLine(b, "chat_events_last_24h:")
 		writeDoctorEvents(b, chatEvents, 20)
+		WriteLine(b, "approval_bundle_width_last_24h:")
+		writeDoctorApprovalBundleWidth(b, chatEvents, 8)
+		WriteLine(b, "continuation_self_block_repair_last_24h:")
+		writeDoctorContinuationCompileRepair(b, chatEvents, 8)
 	}
 	recentEvents, err := r.store.ExecutionEventsRecent(80)
 	if err != nil {
@@ -168,6 +172,91 @@ func writeDoctorEvents(b *strings.Builder, events []session.ExecutionEvent, limi
 	}
 }
 
+func writeDoctorApprovalBundleWidth(b *strings.Builder, events []session.ExecutionEvent, limit int) {
+	if len(events) == 0 {
+		WriteLine(b, "- none")
+		return
+	}
+	if limit <= 0 {
+		limit = len(events)
+	}
+	ordered := append([]session.ExecutionEvent(nil), events...)
+	sort.Slice(ordered, func(i, j int) bool { return executionEventBefore(ordered[i], ordered[j]) })
+	written := 0
+	for i := len(ordered) - 1; i >= 0; i-- {
+		event := ordered[i]
+		if strings.TrimSpace(event.EventType) != core.ExecutionEventContinuationBundleNarrowed {
+			continue
+		}
+		payload := executionEventPayload(event.PayloadJSON)
+		parts := make([]string, 0, 8)
+		for _, key := range []string{"phase_id", "phase_family", "phase_category", "materialized_from", "narrow_streak", "prior_phase_id"} {
+			if value := payloadString(payload, key); value != "" {
+				parts = append(parts, key+"="+value)
+			}
+		}
+		WriteLine(b, fmt.Sprintf("- time=%s chat_id=%d seq=%d %s",
+			event.CreatedAt.UTC().Format(time.RFC3339),
+			event.ChatID,
+			event.Seq,
+			strings.Join(parts, " "),
+		))
+		written++
+		if written >= limit {
+			break
+		}
+	}
+	if written == 0 {
+		WriteLine(b, "- none")
+	}
+}
+
+func writeDoctorContinuationCompileRepair(b *strings.Builder, events []session.ExecutionEvent, limit int) {
+	if len(events) == 0 {
+		WriteLine(b, "- none")
+		return
+	}
+	if limit <= 0 {
+		limit = len(events)
+	}
+	ordered := append([]session.ExecutionEvent(nil), events...)
+	sort.Slice(ordered, func(i, j int) bool { return executionEventBefore(ordered[i], ordered[j]) })
+	written := 0
+	for i := len(ordered) - 1; i >= 0; i-- {
+		event := ordered[i]
+		eventType := strings.TrimSpace(event.EventType)
+		switch eventType {
+		case core.ExecutionEventContinuationCompileRepaired, core.ExecutionEventContinuationCompileRepairExhausted, core.ExecutionEventContinuationCompileUnknownReason:
+		default:
+			continue
+		}
+		payload := executionEventPayload(event.PayloadJSON)
+		parts := make([]string, 0, 9)
+		parts = append(parts, "type="+eventType)
+		for _, key := range []string{"repair_kind", "normalized_reason", "phase_id", "repair_phase_id", "blocked_phase_id", "operation_id", "phase_plan_id", "materialization_source", "authority_contract_summary"} {
+			if value := payloadString(payload, key); value != "" {
+				parts = append(parts, key+"="+strconv.Quote(truncatePreview(value, 180)))
+			}
+		}
+		if count := payloadString(payload, "authority_contract_contradiction_count"); count != "" {
+			parts = append(parts, "authority_contract_contradiction_count="+count)
+		}
+		WriteLine(b, fmt.Sprintf("- time=%s chat_id=%d seq=%d %s",
+			event.CreatedAt.UTC().Format(time.RFC3339),
+			event.ChatID,
+			event.Seq,
+			strings.Join(parts, " "),
+		))
+		written++
+		if written >= limit {
+			break
+		}
+	}
+	if written == 0 {
+		WriteLine(b, "- none")
+	}
+}
+
 func (r *Runtime) writeDoctorTurnRuns(ctx context.Context, b *strings.Builder, now time.Time) {
 	if r == nil || r.store == nil {
 		return
@@ -210,7 +299,20 @@ func writeDoctorRuns(b *strings.Builder, runs []session.TurnRun, limit int) {
 	}
 	for i := 0; i < limit; i++ {
 		run := runs[i]
-		WriteLine(b, fmt.Sprintf("- id=%d chat_id=%d kind=%s status=%s started=%s last_activity=%s tools=%d/%d request=%q last_tool=%q last_error=%q",
+		accounting := ""
+		if run.TotalToolCharsIn > 0 || run.TotalAssistantCharsOut > 0 || run.ProviderInputTokens > 0 || run.ProviderOutputTokens > 0 {
+			accounting = fmt.Sprintf(" turn_index=%d tool_chars=%d assistant_chars=%d asst_tool_ratio=%s provider_tokens=%d/%d cache=%d/%d",
+				run.TurnIndex,
+				run.TotalToolCharsIn,
+				run.TotalAssistantCharsOut,
+				formatAssistantToolRatio(run.TotalAssistantCharsOut, run.TotalToolCharsIn),
+				run.ProviderInputTokens,
+				run.ProviderOutputTokens,
+				run.ProviderCacheReadTokens,
+				run.ProviderCacheWriteTokens,
+			)
+		}
+		WriteLine(b, fmt.Sprintf("- id=%d chat_id=%d kind=%s status=%s started=%s last_activity=%s tools=%d/%d request=%q last_tool=%q last_error=%q%s",
 			run.ID,
 			run.ChatID,
 			run.Kind,
@@ -222,8 +324,16 @@ func writeDoctorRuns(b *strings.Builder, runs []session.TurnRun, limit int) {
 			truncatePreview(run.RequestText, 260),
 			truncatePreview(run.LastToolName, 120),
 			truncatePreview(run.ErrorText, 220),
+			accounting,
 		))
 	}
+}
+
+func formatAssistantToolRatio(assistantChars int64, toolChars int64) string {
+	if toolChars <= 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.3f", float64(assistantChars)/float64(toolChars))
 }
 
 func (r *Runtime) writeDoctorSemanticStats(b *strings.Builder) {

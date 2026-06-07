@@ -14,6 +14,8 @@ import (
 
 func (a *Anthropic) buildRequest(messages []agent.Message, tools []agent.ToolDef, stream bool, opts agent.CompleteOptions) anthropicRequest {
 	systemPrompt, reqMessages := splitMessages(messages, a.cache)
+	toolDefs := toAnthropicTools(tools, a.cache)
+	limitAnthropicCacheControls(systemPrompt, reqMessages, toolDefs, maxAnthropicCacheControls)
 	reqBody := anthropicRequest{
 		Model:     a.model,
 		MaxTokens: resolveMaxTokens(a.maxTokens, opts),
@@ -21,13 +23,98 @@ func (a *Anthropic) buildRequest(messages []agent.Message, tools []agent.ToolDef
 		Messages:  toAnthropicMessages(reqMessages),
 		Stream:    stream,
 	}
-	if toolDefs := toAnthropicTools(tools, a.cache); len(toolDefs) > 0 {
+	if len(toolDefs) > 0 {
 		reqBody.Tools = toolDefs
 	}
 	if thinking := anthropicThinkingForOptions(opts.Reasoning, a.maxTokens); thinking != nil {
 		reqBody.Thinking = thinking
 	}
 	return reqBody
+}
+
+const maxAnthropicCacheControls = 4
+
+func limitAnthropicCacheControls(system []anthropicContent, messages []agent.Message, tools []anthropicToolDef, limit int) {
+	if limit <= 0 {
+		clearAnthropicCacheControls(system, messages, tools)
+		return
+	}
+	count := countAnthropicCacheControls(system, messages, tools)
+	for count > limit {
+		if clearLastMessageCacheControl(messages) || clearLastSystemCacheControl(system) || clearLastToolCacheControl(tools) {
+			count--
+			continue
+		}
+		return
+	}
+}
+
+func countAnthropicCacheControls(system []anthropicContent, messages []agent.Message, tools []anthropicToolDef) int {
+	count := 0
+	for _, block := range system {
+		if block.CacheControl != nil {
+			count++
+		}
+	}
+	for _, msg := range messages {
+		for _, block := range msg.SystemBlocks {
+			if block.CacheBreakpoint {
+				count++
+			}
+		}
+	}
+	for _, tool := range tools {
+		if tool.CacheControl != nil {
+			count++
+		}
+	}
+	return count
+}
+
+func clearAnthropicCacheControls(system []anthropicContent, messages []agent.Message, tools []anthropicToolDef) {
+	for i := range system {
+		system[i].CacheControl = nil
+	}
+	for i := range messages {
+		for j := range messages[i].SystemBlocks {
+			messages[i].SystemBlocks[j].CacheBreakpoint = false
+		}
+	}
+	for i := range tools {
+		tools[i].CacheControl = nil
+	}
+}
+
+func clearLastSystemCacheControl(system []anthropicContent) bool {
+	for i := len(system) - 1; i >= 0; i-- {
+		if system[i].CacheControl != nil {
+			system[i].CacheControl = nil
+			return true
+		}
+	}
+	return false
+}
+
+func clearLastMessageCacheControl(messages []agent.Message) bool {
+	for i := len(messages) - 1; i >= 0; i-- {
+		for j := len(messages[i].SystemBlocks) - 1; j >= 0; j-- {
+			if messages[i].SystemBlocks[j].CacheBreakpoint {
+				messages[i].SystemBlocks[j].CacheBreakpoint = false
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func clearLastToolCacheControl(tools []anthropicToolDef) bool {
+	for i := len(tools) - 1; i >= 0; i-- {
+		if tools[i].CacheControl != nil {
+			tools[i].CacheControl = nil
+			return true
+		}
+	}
+	return false
 }
 
 type anthropicRequest struct {

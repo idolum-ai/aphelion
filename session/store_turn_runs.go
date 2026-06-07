@@ -195,6 +195,51 @@ func (s *SQLiteStore) NoteTurnRunToolFinish(id int64, resultPreview string, tool
 	return nil
 }
 
+func (s *SQLiteStore) UpdateTurnRunAccounting(id int64, turnIndex int, messages []Message, usage core.TokenUsage) error {
+	if id == 0 {
+		return nil
+	}
+	totalToolChars := int64(0)
+	totalAssistantChars := int64(0)
+	for _, msg := range messages {
+		chars := int64(msg.ContentChars)
+		if chars == 0 && msg.Content != "" {
+			chars = int64(len(msg.Content))
+		}
+		switch strings.TrimSpace(msg.Role) {
+		case "tool":
+			totalToolChars += chars
+		case "assistant":
+			totalAssistantChars += chars
+		}
+	}
+	_, err := s.db.Exec(`
+		UPDATE turn_runs
+		SET
+			turn_index = ?,
+			total_tool_chars_in = ?,
+			total_assistant_chars_out = ?,
+			provider_input_tokens = ?,
+			provider_output_tokens = ?,
+			provider_cache_read_tokens = ?,
+			provider_cache_write_tokens = ?
+		WHERE id = ?
+	`,
+		turnIndex,
+		totalToolChars,
+		totalAssistantChars,
+		usage.InputTokens,
+		usage.OutputTokens,
+		usage.CacheReadTokens,
+		usage.CacheWriteTokens,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("update turn run accounting: %w", err)
+	}
+	return nil
+}
+
 func (s *SQLiteStore) UpdateTurnRunProgressMessage(id int64, progressMessageID int64) error {
 	if id == 0 {
 		return fmt.Errorf("turn run id is required")
@@ -317,8 +362,9 @@ func (s *SQLiteStore) InterruptRunningTurnRuns() ([]TurnRun, error) {
 
 	rows, err := tx.Query(`
 		SELECT
-			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
-			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started, tool_calls_finished, last_tool_result_preview, last_tool_error,
+			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, turn_index, status, request_text, started_at, completed_at,
+			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started, tool_calls_finished, total_tool_chars_in, total_assistant_chars_out,
+			provider_input_tokens, provider_output_tokens, provider_cache_read_tokens, provider_cache_write_tokens, last_tool_result_preview, last_tool_error,
 			progress_message_id, error_text, recovery_summary, recovery_logged_at
 		FROM turn_runs
 		WHERE status = ?
@@ -416,8 +462,9 @@ func (s *SQLiteStore) StaleRunningTurnRunsWithUnmatchedToolCutoff(activityCutoff
 
 	rows, err := s.db.Query(`
 		SELECT
-			tr.id, tr.session_id, tr.chat_id, tr.user_id, tr.scope_kind, tr.scope_id, tr.durable_agent_id, tr.kind, tr.status, tr.request_text, tr.started_at, tr.completed_at,
-			tr.last_activity_at, tr.last_tool_name, tr.last_tool_preview, tr.tool_calls_started, tr.tool_calls_finished, tr.last_tool_result_preview, tr.last_tool_error,
+			tr.id, tr.session_id, tr.chat_id, tr.user_id, tr.scope_kind, tr.scope_id, tr.durable_agent_id, tr.kind, tr.turn_index, tr.status, tr.request_text, tr.started_at, tr.completed_at,
+			tr.last_activity_at, tr.last_tool_name, tr.last_tool_preview, tr.tool_calls_started, tr.tool_calls_finished, tr.total_tool_chars_in, tr.total_assistant_chars_out,
+			tr.provider_input_tokens, tr.provider_output_tokens, tr.provider_cache_read_tokens, tr.provider_cache_write_tokens, tr.last_tool_result_preview, tr.last_tool_error,
 			tr.progress_message_id, tr.error_text, tr.recovery_summary, tr.recovery_logged_at
 		FROM turn_runs tr
 		WHERE tr.status = ?
@@ -477,8 +524,9 @@ func (s *SQLiteStore) PendingRecoveryTurnRuns(limit int) ([]TurnRun, error) {
 
 	rows, err := s.db.Query(`
 		SELECT
-			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
-			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started, tool_calls_finished, last_tool_result_preview, last_tool_error,
+			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, turn_index, status, request_text, started_at, completed_at,
+			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started, tool_calls_finished, total_tool_chars_in, total_assistant_chars_out,
+			provider_input_tokens, provider_output_tokens, provider_cache_read_tokens, provider_cache_write_tokens, last_tool_result_preview, last_tool_error,
 			progress_message_id, error_text, recovery_summary, recovery_logged_at
 		FROM turn_runs
 		WHERE status = ? AND recovery_logged_at IS NULL
@@ -549,8 +597,9 @@ func (s *SQLiteStore) LatestTurnRun(key SessionKey) (*TurnRun, error) {
 	sessionID := SessionIDForKey(key)
 	rows, err := s.db.Query(`
 		SELECT
-			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
-			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started, tool_calls_finished, last_tool_result_preview, last_tool_error,
+			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, turn_index, status, request_text, started_at, completed_at,
+			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started, tool_calls_finished, total_tool_chars_in, total_assistant_chars_out,
+			provider_input_tokens, provider_output_tokens, provider_cache_read_tokens, provider_cache_write_tokens, last_tool_result_preview, last_tool_error,
 			progress_message_id, error_text, recovery_summary, recovery_logged_at
 		FROM turn_runs
 		WHERE session_id = ?
@@ -578,8 +627,9 @@ func (s *SQLiteStore) LatestTurnRunsByChat(limit int) ([]TurnRun, error) {
 
 	rows, err := s.db.Query(`
 		SELECT
-			tr.id, tr.session_id, tr.chat_id, tr.user_id, tr.scope_kind, tr.scope_id, tr.durable_agent_id, tr.kind, tr.status, tr.request_text, tr.started_at, tr.completed_at,
-			tr.last_activity_at, tr.last_tool_name, tr.last_tool_preview, tr.tool_calls_started, tr.tool_calls_finished, tr.last_tool_result_preview, tr.last_tool_error,
+			tr.id, tr.session_id, tr.chat_id, tr.user_id, tr.scope_kind, tr.scope_id, tr.durable_agent_id, tr.kind, tr.turn_index, tr.status, tr.request_text, tr.started_at, tr.completed_at,
+			tr.last_activity_at, tr.last_tool_name, tr.last_tool_preview, tr.tool_calls_started, tr.tool_calls_finished, tr.total_tool_chars_in, tr.total_assistant_chars_out,
+			tr.provider_input_tokens, tr.provider_output_tokens, tr.provider_cache_read_tokens, tr.provider_cache_write_tokens, tr.last_tool_result_preview, tr.last_tool_error,
 			tr.progress_message_id, tr.error_text, tr.recovery_summary, tr.recovery_logged_at
 		FROM turn_runs tr
 		INNER JOIN (
@@ -614,8 +664,9 @@ func (s *SQLiteStore) LatestTurnRunsByChat(limit int) ([]TurnRun, error) {
 func (s *SQLiteStore) TurnRun(id int64) (*TurnRun, error) {
 	rows, err := s.db.Query(`
 		SELECT
-			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
-			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started, tool_calls_finished, last_tool_result_preview, last_tool_error,
+			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, turn_index, status, request_text, started_at, completed_at,
+			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started, tool_calls_finished, total_tool_chars_in, total_assistant_chars_out,
+			provider_input_tokens, provider_output_tokens, provider_cache_read_tokens, provider_cache_write_tokens, last_tool_result_preview, last_tool_error,
 			progress_message_id, error_text, recovery_summary, recovery_logged_at
 		FROM turn_runs
 		WHERE id = ?
@@ -636,29 +687,37 @@ func (s *SQLiteStore) TurnRun(id int64) (*TurnRun, error) {
 
 func scanTurnRun(scanner interface{ Scan(dest ...any) error }) (TurnRun, error) {
 	var (
-		run                 TurnRun
-		sessionIDRaw        string
-		scopeKindRaw        sql.NullString
-		scopeIDRaw          sql.NullString
-		durableAgentIDRaw   sql.NullString
-		kindRaw             string
-		statusRaw           string
-		startedAtRaw        string
-		completedAtRaw      sql.NullString
-		lastActivityAtRaw   string
-		lastToolNameRaw     sql.NullString
-		lastToolPreviewRaw  sql.NullString
-		lastToolResultRaw   sql.NullString
-		lastToolErrorRaw    sql.NullString
-		progressMessageRaw  sql.NullInt64
-		errorTextRaw        sql.NullString
-		recoverySummaryRaw  sql.NullString
-		recoveryLoggedAtRaw sql.NullString
+		run                   TurnRun
+		sessionIDRaw          string
+		scopeKindRaw          sql.NullString
+		scopeIDRaw            sql.NullString
+		durableAgentIDRaw     sql.NullString
+		kindRaw               string
+		turnIndexRaw          sql.NullInt64
+		statusRaw             string
+		startedAtRaw          string
+		completedAtRaw        sql.NullString
+		lastActivityAtRaw     string
+		lastToolNameRaw       sql.NullString
+		lastToolPreviewRaw    sql.NullString
+		lastToolResultRaw     sql.NullString
+		lastToolErrorRaw      sql.NullString
+		totalToolCharsRaw     sql.NullInt64
+		totalAsstCharsRaw     sql.NullInt64
+		providerInputRaw      sql.NullInt64
+		providerOutputRaw     sql.NullInt64
+		providerCacheReadRaw  sql.NullInt64
+		providerCacheWriteRaw sql.NullInt64
+		progressMessageRaw    sql.NullInt64
+		errorTextRaw          sql.NullString
+		recoverySummaryRaw    sql.NullString
+		recoveryLoggedAtRaw   sql.NullString
 	)
 
 	if err := scanner.Scan(
-		&run.ID, &sessionIDRaw, &run.ChatID, &run.UserID, &scopeKindRaw, &scopeIDRaw, &durableAgentIDRaw, &kindRaw, &statusRaw, &run.RequestText, &startedAtRaw, &completedAtRaw,
-		&lastActivityAtRaw, &lastToolNameRaw, &lastToolPreviewRaw, &run.ToolCallsStarted, &run.ToolCallsFinished, &lastToolResultRaw, &lastToolErrorRaw,
+		&run.ID, &sessionIDRaw, &run.ChatID, &run.UserID, &scopeKindRaw, &scopeIDRaw, &durableAgentIDRaw, &kindRaw, &turnIndexRaw, &statusRaw, &run.RequestText, &startedAtRaw, &completedAtRaw,
+		&lastActivityAtRaw, &lastToolNameRaw, &lastToolPreviewRaw, &run.ToolCallsStarted, &run.ToolCallsFinished, &totalToolCharsRaw, &totalAsstCharsRaw,
+		&providerInputRaw, &providerOutputRaw, &providerCacheReadRaw, &providerCacheWriteRaw, &lastToolResultRaw, &lastToolErrorRaw,
 		&progressMessageRaw, &errorTextRaw, &recoverySummaryRaw, &recoveryLoggedAtRaw,
 	); err != nil {
 		return TurnRun{}, fmt.Errorf("scan turn run: %w", err)
@@ -672,6 +731,9 @@ func scanTurnRun(scanner interface{ Scan(dest ...any) error }) (TurnRun, error) 
 		DurableAgentID: nullToString(durableAgentIDRaw),
 	})
 	run.Kind = TurnRunKind(kindRaw)
+	if turnIndexRaw.Valid {
+		run.TurnIndex = int(turnIndexRaw.Int64)
+	}
 	run.Status = TurnRunStatus(statusRaw)
 	run.StartedAt, err = parseSQLiteTime(startedAtRaw)
 	if err != nil {
@@ -695,6 +757,24 @@ func scanTurnRun(scanner interface{ Scan(dest ...any) error }) (TurnRun, error) 
 	}
 	if progressMessageRaw.Valid {
 		run.ProgressMessageID = progressMessageRaw.Int64
+	}
+	if totalToolCharsRaw.Valid {
+		run.TotalToolCharsIn = totalToolCharsRaw.Int64
+	}
+	if totalAsstCharsRaw.Valid {
+		run.TotalAssistantCharsOut = totalAsstCharsRaw.Int64
+	}
+	if providerInputRaw.Valid {
+		run.ProviderInputTokens = providerInputRaw.Int64
+	}
+	if providerOutputRaw.Valid {
+		run.ProviderOutputTokens = providerOutputRaw.Int64
+	}
+	if providerCacheReadRaw.Valid {
+		run.ProviderCacheReadTokens = providerCacheReadRaw.Int64
+	}
+	if providerCacheWriteRaw.Valid {
+		run.ProviderCacheWriteTokens = providerCacheWriteRaw.Int64
 	}
 	run.LastToolName = nullToString(lastToolNameRaw)
 	run.LastToolPreview = nullToString(lastToolPreviewRaw)

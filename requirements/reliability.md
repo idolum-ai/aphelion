@@ -379,10 +379,13 @@ Rules:
 - do not cascade through every provider on deterministic request/config/auth errors
 - successful failover must be visible to logs and machine state even if the user-visible turn completes normally
 - before each provider call, estimate the prompt/tool payload and compact
-  tool-result history when the request exceeds the configured session context
-  ratio; if the compacted request still exceeds the hard budget, fail locally
-  with typed `context_budget_exceeded` evidence instead of sending an oversized
+  or digest tool-result history when the request exceeds the configured session
+  context ratio or when recent known-fat tool output predicts context pressure;
+  if the compacted request still exceeds the hard budget, fail locally with
+  typed `context_budget_exceeded` evidence instead of sending an oversized
   request upstream
+- provider-reported input/output and cache-read/cache-write token usage should
+  update turn accounting and budget pressure when available
 
 ### Face ladder
 
@@ -436,10 +439,20 @@ Tool failure does not automatically fail the turn if the governor can still answ
 ### Compaction ladder
 
 1. estimate active prompt size
-2. if below threshold, do nothing
-3. if above threshold and strategy is `summarize`, try summary compaction
-4. if summarization fails, fall back to `truncate`
-5. if even truncation cannot achieve a safe prompt window, fail the turn with explicit context-limit error
+2. if recent known-fat tool output (`fetch_url`, `read_file`, `exec`, or
+   `request_approval`) exceeds the oversized threshold, lower the compaction
+   trigger ratio before the next prompt grows too close to the context ceiling
+3. if below threshold and no oversized tool output is present, do nothing
+4. if provider-context pressure exists, project large tool results into bounded
+   tool-result digests before sending the request
+5. if full session compaction is still needed and strategy is `summarize`, try
+   summary compaction
+6. if summarization fails, fall back to `truncate`
+7. if even truncation cannot achieve a safe prompt window, fail the turn with
+   explicit context-limit error
+
+Provider-context digests are prompt projections. Raw tool evidence remains in
+session/runtime records for audit, status, and doctor inspection.
 
 ## Retry Policy
 
@@ -730,6 +743,8 @@ Not all of this must be implemented immediately. But the spec should reserve the
 ### Session and compaction
 
 - **TestCompactionTriggerByContextEstimate**
+- **TestAnticipatoryCompactionForKnownFatToolOutput**
+- **TestProviderContextProjectsOversizedToolResultDigest**
 - **TestCompactionSummarizeFallbackToTruncate**
 - **TestCompactionPreservesAuditRows**
 - **TestCompactionFailureReturnsExplicitContextError**

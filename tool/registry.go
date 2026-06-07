@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ type Registry struct {
 	retrievalStore                  memstore.RetrievalStore
 	defaultStore                    string
 	nativeFetchUserAgent            string
+	nativeFetchTransport            http.RoundTripper
 	nativeFetchResolver             sandbox.NetworkResolver
 	nativeFetchDialContext          nativeFetchDialContext
 	semantic                        *memstore.SemanticEngine

@@ -83,12 +83,28 @@ func (r *Runtime) repairInvalidPendingContinuationApprovals(ctx context.Context,
 		if err := ctx.Err(); err != nil {
 			return repaired, err
 		}
-		if staleContinuationDerivedOrganicProposalReason(record.State) == "" {
-			continue
+		opState, operationRepaired := operationStateWithStartupPhasePlanReconciled(record.State, now)
+		if operationRepaired {
+			if err := r.store.UpdateOperationState(record.Key, opState); err != nil {
+				return repaired, fmt.Errorf("persist startup operation phase-plan repair chat_id=%d: %w", record.Key.ChatID, err)
+			}
+			repaired++
+			record.State = opState
 		}
 		state, exists, err := r.store.ContinuationStateIfExists(record.Key)
 		if err != nil {
 			return repaired, fmt.Errorf("load continuation state chat_id=%d: %w", record.Key.ChatID, err)
+		}
+		reoffered, err := r.rematerializeRevokedInvalidAuthorityPhaseApproval(ctx, record.Key, record.Key.ChatID, record.State, state, exists, now, "startup_repair")
+		if err != nil {
+			return repaired, err
+		}
+		if reoffered {
+			repaired++
+			continue
+		}
+		if staleContinuationDerivedOrganicProposalReason(record.State) == "" {
+			continue
 		}
 		_, ok, err := r.repairStaleContinuationDerivedOrganicProposalState(ctx, record.Key, record.Key.ChatID, record.State, state, exists, now, false, "startup_repair")
 		if err != nil {
@@ -99,6 +115,116 @@ func (r *Runtime) repairInvalidPendingContinuationApprovals(ctx context.Context,
 		}
 	}
 	return repaired, nil
+}
+
+func (r *Runtime) rematerializeRevokedInvalidAuthorityPhaseApproval(
+	ctx context.Context,
+	key session.SessionKey,
+	chatID int64,
+	opState session.OperationState,
+	state session.ContinuationState,
+	stateExists bool,
+	now time.Time,
+	surface string,
+) (bool, error) {
+	if r == nil || r.store == nil || r.outbound == nil || chatID == 0 {
+		return false, nil
+	}
+	if _, ok := r.continuationApprovalPromptSender(); !ok {
+		return false, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	opState = session.NormalizeOperationState(opState)
+	state = session.NormalizeContinuationState(state)
+	if !revokedInvalidAuthorityContinuationNeedsReoffer(state, stateExists) {
+		return false, nil
+	}
+	opState = operationStateWithInactiveCurrentPhaseLeaseCleared(opState, state, true, now)
+	phase, ok := nextOperationPhaseForApproval(opState)
+	if !ok || len(phase.RequiredCapabilityGrants) == 0 {
+		return false, nil
+	}
+	if !operationPhaseMatchesContinuation(opState, phase, state) {
+		return false, nil
+	}
+	if operationPhaseApprovalBlockedReason(phase) != "" || operationPhaseIsPlanningOnlyApproval(phase) {
+		return false, nil
+	}
+	expected := continuationStateFromOperationPhase(opState, phase, "continue", now)
+	if continuationAuthorityCompilation(expected).Invalid() {
+		return false, nil
+	}
+
+	msg := core.InboundMessage{
+		ChatID:   chatID,
+		SenderID: key.UserID,
+		Text:     "continue",
+	}
+	materialized, err := r.materializePendingOperationProposalApproval(ctx, key, msg, "continue", nil)
+	if err != nil || !materialized {
+		return false, err
+	}
+	refreshedOpState, err := r.store.OperationState(key)
+	if err != nil {
+		return false, fmt.Errorf("load reoffered operation state chat_id=%d: %w", key.ChatID, err)
+	}
+	refreshed, exists, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return false, fmt.Errorf("load reoffered continuation state chat_id=%d: %w", key.ChatID, err)
+	}
+	refreshed = session.NormalizeContinuationState(refreshed)
+	if !exists || !continuationStateHasFreshPendingLease(refreshed, now) || !operationPhaseMatchesContinuation(refreshedOpState, phase, refreshed) {
+		return false, nil
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventRecoveryCompleted, "recovery", "invalid_authority_phase_reoffered", map[string]any{
+		"phase":                 "invalid_authority_phase_reoffer",
+		"surface":               firstNonEmptyContinuation(strings.TrimSpace(surface), "startup_repair"),
+		"operation_id":          strings.TrimSpace(opState.ID),
+		"phase_id":              strings.TrimSpace(phase.ID),
+		"previous_decision_id":  strings.TrimSpace(state.DecisionID),
+		"reoffered_decision_id": strings.TrimSpace(refreshed.DecisionID),
+	}, now)
+	return true, nil
+}
+
+func revokedInvalidAuthorityContinuationNeedsReoffer(state session.ContinuationState, stateExists bool) bool {
+	if !stateExists {
+		return false
+	}
+	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusRevoked && state.ContinuationLease.Status != session.ContinuationLeaseStatusRevoked {
+		return false
+	}
+	if continuationAuthorityCompilation(state).Valid() {
+		return false
+	}
+	reason := strings.ToLower(strings.ReplaceAll(strings.Join([]string{
+		state.HandshakeBlockedReason,
+		state.ParkedReason,
+		state.ParkedSource,
+	}, " "), "_", " "))
+	return strings.Contains(reason, "invalid authority") || strings.Contains(reason, "authority contract compiler")
+}
+
+func operationStateWithStartupPhasePlanReconciled(opState session.OperationState, now time.Time) (session.OperationState, bool) {
+	opState = session.NormalizeOperationState(opState)
+	repaired := false
+	if repairedState, ok := operationStateWithCompletedPhaseDuplicatesReconciled(opState, now); ok {
+		opState = repairedState
+		repaired = true
+	}
+	if repairedState, ok := operationStateWithStalePlanLeaseCleared(opState, now); ok {
+		opState = repairedState
+		repaired = true
+	}
+	if repairedState, ok := operationStateWithCompletedPhasePlanClosed(opState, now); ok {
+		opState = repairedState
+		repaired = true
+	}
+	return session.NormalizeOperationState(opState), repaired
 }
 
 func (r *Runtime) repairInvalidPendingPhaseApprovalState(ctx context.Context, key session.SessionKey, chatID int64, opState session.OperationState, state session.ContinuationState, now time.Time, notify bool, surface string) (session.OperationState, bool, error) {
@@ -113,6 +239,24 @@ func (r *Runtime) repairInvalidPendingPhaseApprovalState(ctx context.Context, ke
 	state = session.NormalizeContinuationState(state)
 	if state.Status != session.ContinuationStatusPending {
 		return opState, false, nil
+	}
+	reconciled := false
+	if repairedState, repaired := operationStateWithCompletedPhaseDuplicatesReconciled(opState, now); repaired {
+		opState = repairedState
+		reconciled = true
+	}
+	if repairedState, repaired := operationStateWithStalePlanLeaseCleared(opState, now); repaired {
+		opState = repairedState
+		reconciled = true
+	}
+	if repairedState, repaired := operationStateWithCompletedPhasePlanClosed(opState, now); repaired {
+		opState = repairedState
+		reconciled = true
+	}
+	if reconciled {
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return opState, false, fmt.Errorf("persist stale duplicate operation repair chat_id=%d: %w", key.ChatID, err)
+		}
 	}
 	if opState.Status == session.OperationStatusCompleted || opState.Status == session.OperationStatusFailed {
 		reason := "operation " + string(opState.Status)

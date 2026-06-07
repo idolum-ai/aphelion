@@ -435,3 +435,20 @@ func TestProviderRendererUsesConfiguredVerbosityOverride(t *testing.T) {
 		t.Fatalf("configured verbosity = %q, want high", provider.seenOptions.Verbosity)
 	}
 }
+
+func TestProviderRendererPassesConfiguredMaxTokens(t *testing.T) {
+	t.Parallel()
+
+	provider := &optionsProvider{stubProvider: stubProvider{reply: "Rendered reply"}}
+	renderer, err := NewProviderRenderer(provider, ProviderRendererConfig{MaxTokens: 512})
+	if err != nil {
+		t.Fatalf("NewProviderRenderer() err = %v", err)
+	}
+
+	if _, err := renderer.Render(context.Background(), RenderRequest{FloorText: "Canonical text"}); err != nil {
+		t.Fatalf("Render() err = %v", err)
+	}
+	if provider.seenOptions.MaxTokens != 512 {
+		t.Fatalf("max tokens = %d, want 512", provider.seenOptions.MaxTokens)
+	}
+}

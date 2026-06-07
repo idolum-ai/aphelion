@@ -10,6 +10,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,11 @@ const aphelionModulePath = "github.com/idolum-ai/aphelion"
 type architecturePackage struct {
 	ImportPath string
 	Imports    []string
+	Error      *architecturePackageError
+}
+
+type architecturePackageError struct {
+	Err string
 }
 
 func TestRootPackageHasNoShimFiles(t *testing.T) {
@@ -120,10 +126,15 @@ func TestArchitectureImportBoundaries(t *testing.T) {
 func loadArchitecturePackages(t *testing.T) []architecturePackage {
 	t.Helper()
 
-	cmd := exec.Command("go", "list", "-json", "./...")
-	out, err := cmd.CombinedOutput()
+	cmd := exec.Command("go", "list", "-e", "-json", "./...")
+	if strings.TrimSpace(os.Getenv("GOCACHE")) == "" {
+		cmd.Env = append(os.Environ(), "GOCACHE="+t.TempDir())
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("go list packages failed: %v\n%s", err, string(out))
+		t.Fatalf("go list packages failed: %v\nstderr:\n%s\nstdout:\n%s", err, stderr.String(), string(out))
 	}
 
 	dec := json.NewDecoder(bytes.NewReader(out))
@@ -135,14 +146,24 @@ func loadArchitecturePackages(t *testing.T) []architecturePackage {
 			break
 		}
 		if err != nil {
-			t.Fatalf("decode go list package JSON: %v", err)
+			t.Fatalf("decode go list package JSON: %v\nstderr:\n%s\nstdout_prefix:\n%s", err, stderr.String(), prefixString(string(out), 2000))
 		}
 		if pkg.ImportPath == "" || !strings.HasPrefix(pkg.ImportPath, aphelionModulePath) {
 			continue
 		}
+		if pkg.Error != nil && strings.TrimSpace(pkg.Error.Err) != "" {
+			t.Fatalf("go list package %s has error: %s", pkg.ImportPath, pkg.Error.Err)
+		}
 		packages = append(packages, pkg)
 	}
 	return packages
+}
+
+func prefixString(value string, max int) string {
+	if max <= 0 || len(value) <= max {
+		return value
+	}
+	return value[:max] + "..."
 }
 
 func assertRuntimeImportBoundary(t *testing.T, pkg architecturePackage) {

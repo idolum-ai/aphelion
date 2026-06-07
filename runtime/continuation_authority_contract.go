@@ -121,9 +121,24 @@ func (r *Runtime) blockInvalidMaterializedContinuationAuthority(ctx context.Cont
 	}
 	if r != nil && r.store != nil {
 		if reconciled, ok := r.reconciledContinuationStateFromInvalidAuthority(state, compilation, now); ok {
-			reconciledOpState, reconcileErr := r.materializeReconciledAuthorityApproval(ctx, key, msg, opState, reconciled, source, now)
+			reconciledOpState, reconcileErr := r.materializeReconciledAuthorityApproval(ctx, key, msg, opState, reconciled, compilation, source, now)
 			return reconciledOpState, true, reconcileErr
 		}
+	}
+	repairReason := "invalid_authority_no_safe_repair"
+	repairKind, _ := continuationCompileRepairForReason(repairReason)
+	if blockedPhase, ok := operationPhaseFromInvalidMaterializedAuthority(opState, state, source); ok {
+		operationID := strings.TrimSpace(opState.ID)
+		phaseID := strings.TrimSpace(blockedPhase.ID)
+		if !r.continuationCompileRepairAlreadyAttempted(key, operationID, phaseID, repairReason, repairKind) {
+			if repairedState, repairPhase, repaired := operationStateWithCompileFailureRepairPlan(opState, blockedPhase, repairReason, now); repaired {
+				repairedOpState, repairErr := r.materializeCompileRepairPhaseApproval(ctx, key, msg, repairedState, repairPhase, blockedPhase, blockedState, compilation, repairReason, repairKind, source, now)
+				return repairedOpState, true, repairErr
+			}
+		}
+		r.recordContinuationCompileRepairExhausted(key, opState, blockedPhase, blockedState, compilation, repairReason, repairKind, source, r.outbound != nil && msg.ChatID != 0, now)
+	} else {
+		r.recordContinuationCompileRepairExhausted(key, opState, session.OperationPhase{}, blockedState, compilation, repairReason, repairKind, source, r.outbound != nil && msg.ChatID != 0, now)
 	}
 	if err := r.sendInvalidMaterializedAuthoritySafeBlockedNotice(ctx, key, msg, blockedState, source, now); err != nil {
 		return opState, true, err

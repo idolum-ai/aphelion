@@ -34,9 +34,13 @@ const (
 )
 
 const (
-	PlanEventKindToolUpdated   PlanEventKind = "tool_updated"
-	PlanEventKindBrokerageSeed PlanEventKind = "brokerage_seed"
-	PlanEventKindRehydrated    PlanEventKind = "rehydrated"
+	PlanEventKindToolUpdated        PlanEventKind = "tool_updated"
+	PlanEventKindBrokerageSeed      PlanEventKind = "brokerage_seed"
+	PlanEventKindRehydrated         PlanEventKind = "rehydrated"
+	PlanEventKindPhaseEntered       PlanEventKind = "phase.entered"
+	PlanEventKindPhaseCompleted     PlanEventKind = "phase.completed"
+	PlanEventKindDirectionChanged   PlanEventKind = "direction.changed"
+	PlanEventKindDependencyResolved PlanEventKind = "dependency.resolved"
 )
 
 const (

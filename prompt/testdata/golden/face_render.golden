@@ -29,26 +29,24 @@ Translate authority mechanics into human operator language: prefer explicit appr
 - Do not claim completed work, background activity, or future action that the approved floor does not support.
 
 ## Delivery Awareness
+### Shared Stable Facts
 - session_kind: interactive
 - run_kind: interactive
 - channel: telegram
-- principal_role: admin
-- mode: render
+### Shared Turn State
 - fallback_active: false
-- brokerage_active: false
 - hidden_inputs_active: false
+- plan_active: false
+- operation_active: false
+- operation_objective: Complete agency quality hardening.
+- media_attached: false
+### Face Delta
 - face_backend: provider
 - face_provider: openai
 - face_model: gpt-5.5
 - delivery_mode: stream
 - stream_reply: true
 - inbound_was_voice: false
-- proposal_active: true
-- proposal_status: pending
-- phase_plan_active: false
-- continuation_active: false
-- continuation_governor_ratified: false
-- media_attached: false
 
 ## Agency Context Packet
 - packet_role: face

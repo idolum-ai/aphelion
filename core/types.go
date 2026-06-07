@@ -112,6 +112,23 @@ type TurnResult struct {
 	TokenUsage      TokenUsage
 	ProviderFailure string
 	ProviderEvents  []ProviderEvent
+	Recovery        *TurnRecovery
+}
+
+type TurnRecoveryKind string
+
+const (
+	TurnRecoveryTokenBudgetExhausted     TurnRecoveryKind = "token_budget_exhausted"
+	TurnRecoveryToolBudgetExhausted      TurnRecoveryKind = "tool_budget_exhausted"
+	TurnRecoveryIterationBudgetExhausted TurnRecoveryKind = "iteration_budget_exhausted"
+)
+
+type TurnRecovery struct {
+	Kind           TurnRecoveryKind
+	Recoverable    bool
+	ReplanRequired bool
+	Summary        string
+	MaxAutoHops    int
 }
 
 type ProviderEvent struct {
@@ -138,6 +155,11 @@ type TokenUsage struct {
 	TotalTokens      int64
 	CacheReadTokens  int64
 	CacheWriteTokens int64
+	// CacheCreationTokens preserves provider-native cache creation/write accounting.
+	// Anthropic reports this as cache_creation_input_tokens; OpenAI/OpenRouter may
+	// surface cache_write_tokens instead. CacheWriteTokens remains the normalized
+	// cross-provider write/create total used by existing aggregation paths.
+	CacheCreationTokens int64
 }
 
 type Budget struct {

@@ -4,6 +4,8 @@ package tool
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -12,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -43,6 +46,9 @@ func (r *Registry) fetchURL(ctx context.Context, input json.RawMessage, scope sa
 		return "", fmt.Errorf("fetch_url rejects local/private hosts for non-admin principals")
 	}
 	transport := http.DefaultTransport
+	if r.nativeFetchTransport != nil {
+		transport = r.nativeFetchTransport
+	}
 	var fetchPolicy *nativeFetchNetworkPolicy
 	if scope.Profile.Mode == sandbox.ModeIsolated && scope.Profile.Network == sandbox.NetworkAllowlist {
 		allowlistTransport, policy, err := r.fetchURLAllowlistTransport(ctx, scope.Profile, p.Role != principal.RoleAdmin)
@@ -53,6 +59,10 @@ func (r *Registry) fetchURL(ctx context.Context, input json.RawMessage, scope sa
 		fetchPolicy = policy
 	}
 	maxBytes := clampNativeLimit(in.MaxBytes, defaultNativeFetchMaxBytes, maxNativeFetchBytes)
+	excerptBytes := clampNativeLimit(in.ExcerptBytes, defaultNativeFetchExcerptBytes, maxNativeFetchExcerptBytes)
+	if excerptBytes > maxBytes {
+		excerptBytes = maxBytes
+	}
 	client := &http.Client{Timeout: 20 * time.Second, Transport: transport}
 	if fetchPolicy != nil {
 		client.CheckRedirect = func(req *http.Request, _ []*http.Request) error {
@@ -80,21 +90,7 @@ func (r *Registry) fetchURL(ctx context.Context, input json.RawMessage, scope sa
 	if err != nil {
 		return "", fmt.Errorf("fetch_url read response: %w", err)
 	}
-	var b strings.Builder
-	b.WriteString("[FETCH_URL]\n")
-	fmt.Fprintf(&b, "url: %s\nstatus: %s\ncontent_type: %s\nbytes: %d\ntruncated: %t\nbody:\n",
-		parsed.String(),
-		res.Status,
-		res.Header.Get("Content-Type"),
-		len(data),
-		truncated,
-	)
-	b.Write(data)
-	if len(data) > 0 && data[len(data)-1] != '\n' {
-		b.WriteByte('\n')
-	}
-	b.WriteString("[/FETCH_URL]")
-	return b.String(), nil
+	return renderFetchURLDigest(parsed.String(), res.Status, res.Header.Get("Content-Type"), data, truncated, excerptBytes), nil
 }
 
 func fetchURLPort(parsed *url.URL) (uint16, error) {
@@ -131,4 +127,48 @@ func hostLooksLocal(host string) bool {
 		return false
 	}
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+}
+
+func renderFetchURLDigest(rawURL, status, contentType string, data []byte, truncated bool, excerptBytes int) string {
+	sum := sha256.Sum256(data)
+	excerpt, excerptTruncated := fetchURLExcerpt(data, excerptBytes)
+	var b strings.Builder
+	b.WriteString("[FETCH_URL]\n")
+	fmt.Fprintf(&b, "url: %s\n", rawURL)
+	fmt.Fprintf(&b, "status: %s\n", status)
+	fmt.Fprintf(&b, "content_type: %s\n", contentType)
+	fmt.Fprintf(&b, "bytes_read: %d\n", len(data))
+	fmt.Fprintf(&b, "sha256: %s\n", hex.EncodeToString(sum[:]))
+	fmt.Fprintf(&b, "truncated: %t\n", truncated)
+	fmt.Fprintf(&b, "excerpt_bytes: %d\n", excerptBytes)
+	fmt.Fprintf(&b, "excerpt_truncated: %t\n", excerptTruncated)
+	b.WriteString("excerpt:\n")
+	if excerpt != "" {
+		b.WriteString(excerpt)
+		if !strings.HasSuffix(excerpt, "\n") {
+			b.WriteByte('\n')
+		}
+	}
+	b.WriteString("[/FETCH_URL]")
+	return b.String()
+}
+
+func fetchURLExcerpt(data []byte, limit int) (string, bool) {
+	text := string(data)
+	text = strings.ReplaceAll(text, "\x00", "�")
+	text = strings.TrimSpace(text)
+	if text == "" || limit <= 0 {
+		return "", text != ""
+	}
+	if len(text) <= limit {
+		return text, false
+	}
+	cut := limit
+	for cut > 0 && !utf8.ValidString(text[:cut]) {
+		cut--
+	}
+	if cut <= 0 {
+		return "", true
+	}
+	return strings.TrimSpace(text[:cut]) + "…", true
 }

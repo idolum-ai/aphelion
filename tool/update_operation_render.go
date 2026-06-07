@@ -111,6 +111,87 @@ func renderOperationPlanLease(b *strings.Builder, lease session.OperationPlanLea
 	b.WriteString("- authority_note: plan lease is a bounded plan envelope, not a capability grant\n")
 }
 
+func renderOperationUpdateAck(state session.OperationState, in updateOperationInput) string {
+	state = session.NormalizeOperationState(state)
+	var b strings.Builder
+	b.WriteString("[OPERATION_UPDATED]\n")
+	b.WriteString("ok: true\n")
+	if state.ID != "" {
+		fmt.Fprintf(&b, "id: %s\n", state.ID)
+	}
+	fmt.Fprintf(&b, "active: %t\n", state.Active())
+	if state.Status != "" {
+		fmt.Fprintf(&b, "status: %s\n", state.Status)
+	}
+	if state.Stage != "" {
+		fmt.Fprintf(&b, "stage: %s\n", state.Stage)
+	}
+	if state.UpdatedAt.IsZero() {
+		b.WriteString("snapshot: operation_state\n")
+	} else {
+		fmt.Fprintf(&b, "snapshot: ledger:operations/%s@%s\n", state.ID, state.UpdatedAt.UTC().Format(time.RFC3339))
+	}
+	fields := updateOperationReceivedFields(in)
+	if len(fields) > 0 {
+		fmt.Fprintf(&b, "received_fields: %s\n", strings.Join(fields, ", "))
+	}
+	if state.PhasePlan.Active() {
+		current := strings.TrimSpace(state.PhasePlan.CurrentPhaseID)
+		if current == "" && len(state.PhasePlan.Phases) > 0 {
+			current = state.PhasePlan.Phases[0].ID
+		}
+		if current != "" {
+			fmt.Fprintf(&b, "current_phase: %s\n", current)
+		}
+	}
+	if state.Proposal.Active() {
+		parts := []string{}
+		if state.Proposal.ID != "" {
+			parts = append(parts, state.Proposal.ID)
+		}
+		if state.Proposal.Status != "" {
+			parts = append(parts, string(state.Proposal.Status))
+		}
+		if len(parts) > 0 {
+			fmt.Fprintf(&b, "proposal: %s\n", strings.Join(parts, " "))
+		}
+	}
+	b.WriteString("note: full operation state is persisted; call update_operation with empty input to inspect")
+	return strings.TrimSpace(b.String())
+}
+
+func updateOperationReceivedFields(in updateOperationInput) []string {
+	fields := make([]string, 0, 10)
+	if strings.TrimSpace(in.ID) != "" {
+		fields = append(fields, "id")
+	}
+	if strings.TrimSpace(in.Objective) != "" {
+		fields = append(fields, "objective")
+	}
+	if strings.TrimSpace(in.Status) != "" {
+		fields = append(fields, "status")
+	}
+	if strings.TrimSpace(in.Stage) != "" {
+		fields = append(fields, "stage")
+	}
+	if strings.TrimSpace(in.Summary) != "" {
+		fields = append(fields, "summary")
+	}
+	if in.Proposal != nil {
+		fields = append(fields, "proposal")
+	}
+	if in.PhasePlan != nil {
+		fields = append(fields, "phase_plan")
+	}
+	if in.Findings != nil {
+		fields = append(fields, "findings")
+	}
+	if in.Artifacts != nil {
+		fields = append(fields, "artifacts")
+	}
+	return fields
+}
+
 func renderOperationState(header string, state session.OperationState) string {
 	state = session.NormalizeOperationState(state)
 	var b strings.Builder

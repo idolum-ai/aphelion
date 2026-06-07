@@ -126,6 +126,94 @@ func TestHandleInboundTypedApprovalConsumesPendingContinuation(t *testing.T) {
 	}
 }
 
+func TestTriggerContinuationLoopsWhileApprovedLeaseHasTurns(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{Text: "continued"}}
+	rt.interactiveDMAssembler = recorder
+
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 8121, UserID: 0, Scope: telegramDMScopeRef(8121)}
+	action := session.ActionProposal{
+		ID:               "aprop-loop-approved",
+		Summary:          "Run the next approved continuation turn.",
+		BoundedEffect:    "Use only the active approved lease and report evidence.",
+		RiskClass:        "continuation",
+		AllowedActions:   []string{"continue_one_turn", "use_existing_authority_only", "report_evidence"},
+		ForbiddenActions: []string{"expand_authority_without_new_approval"},
+		Status:           session.ProposalStatusApproved,
+		ExpiresAt:        now.Add(time.Hour),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "loop-approved",
+		Objective:      "Finish all approved continuation turns.",
+		StageSummary:   "Run approved follow-up work.",
+		RemainingTurns: 3,
+		ApprovedBy:     1001,
+		ActionProposal: action,
+		ContinuationLease: session.ContinuationLease{
+			ID:               "lease-loop-approved",
+			ProposalID:       action.ID,
+			Status:           session.ContinuationLeaseStatusActive,
+			MaxTurns:         3,
+			RemainingTurns:   3,
+			ApprovedBy:       1001,
+			AllowedActions:   action.AllowedActions,
+			ForbiddenActions: action.ForbiddenActions,
+			ExpiresAt:        now.Add(time.Hour),
+			PlanHash:         action.PlanHash,
+			ApprovedAt:       now,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v", err)
+	}
+	if recorder.callCount != 3 {
+		t.Fatalf("assembler calls = %d, want all 3 approved turns consumed", recorder.callCount)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusIdle || got.RemainingTurns != 0 || got.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed {
+		t.Fatalf("continuation = %#v, want consumed idle continuation", got)
+	}
+	sender.mu.Lock()
+	progressCount := len(sender.sent)
+	sender.mu.Unlock()
+	if progressCount != 2 {
+		t.Fatalf("progress messages = %d, want one compact progress line before each automatic follow-up turn", progressCount)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if got := countEventsByType(events, core.ExecutionEventContinuationConsumed); got != 3 {
+		t.Fatalf("consumed events = %d, want 3", got)
+	}
+	if got := countEventsByType(events, core.ExecutionEventMissionProgressAssessed); got != 3 {
+		t.Fatalf("mission progress assessments = %d, want 3", got)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventContinuationBoundaryReached) {
+		t.Fatalf("events = %#v, want continuation boundary event after loop exhausts", events)
+	}
+}
+
 func TestApproveContinuationReturnsTypedExpiredErrorAndRecordsBlocked(t *testing.T) {
 	t.Parallel()
 
