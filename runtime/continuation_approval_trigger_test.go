@@ -98,7 +98,7 @@ func TestHandleInboundTypedApprovalConsumesPendingContinuation(t *testing.T) {
 	if recorder.input.Msg.Origin != core.InboundOriginTurnAuthorization {
 		t.Fatalf("origin = %q, want turn authorization", recorder.input.Msg.Origin)
 	}
-	if recorder.input.Msg.Text == "approved" || !strings.Contains(recorder.input.Msg.Text, "Next: Run the approved typed continuation") {
+	if recorder.input.Msg.Text == "approved" || !strings.Contains(recorder.input.Msg.Text, "Next:\nRun the approved typed continuation") {
 		t.Fatalf("continuation text = %q, want machine-authored approved step", recorder.input.Msg.Text)
 	}
 	for _, notWant := range []string{"approved_step:", "proposal_id:", "lease_id:", "risk_class:"} {
@@ -671,8 +671,8 @@ func TestTriggerContinuationUsesMachineAuthoredContinuationEventText(t *testing.
 	for _, want := range []string{
 		approvedContinuationEventText,
 		"Approved work:",
-		"Next: Bundled Phase 4B: one bounded mail-child read-only adapter proof",
-		"Scope: Inspect current email due/backoff state, run at most one bounded read-only proof, then report.",
+		"Next:\nBundled Phase 4B: one bounded mail-child read-only adapter proof",
+		"Scope:\nInspect current email due/backoff state, run at most one bounded read-only proof, then report.",
 	} {
 		if !strings.Contains(last.Content, want) {
 			t.Fatalf("last content = %q, want substring %q", last.Content, want)

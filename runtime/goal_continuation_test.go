@@ -126,7 +126,7 @@ func TestGoalContinuationInfersNextPhaseAfterConsumedPhaseOneLease(t *testing.T)
 		inlineText = sender.inline[0].text
 	}
 	sender.mu.Unlock()
-	if inlineCount != 1 || !strings.Contains(inlineText, "Approve “Plan the next bounded phase") {
+	if inlineCount != 1 || !strings.Contains(inlineText, "Approve:\nPlan the next bounded phase") {
 		t.Fatalf("inline count/text = %d/%q, want next-phase approval prompt", inlineCount, inlineText)
 	}
 }

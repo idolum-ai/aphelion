@@ -628,3 +628,60 @@ func TestTelegramThreadLastMessageDoesNotRegress(t *testing.T) {
 		t.Fatalf("updated_at did not advance: got %s want %s", anchor.UpdatedAt, third)
 	}
 }
+
+func TestRecordTelegramThreadMessageDoesNotRegressLastMessage(t *testing.T) {
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	first := time.Date(2026, 6, 7, 10, 0, 0, 0, time.UTC)
+	second := first.Add(time.Minute)
+	third := second.Add(time.Minute)
+	thread, _, err := store.CreateTelegramThreadForUpdate(2234, 2202, 3303, 4404, "thread opener", first)
+	if err != nil {
+		t.Fatalf("CreateTelegramThreadForUpdate() err = %v", err)
+	}
+
+	if err := store.RecordTelegramThreadMessage(2234, thread.ThreadID, 100, "outbound", "surface", first); err != nil {
+		t.Fatalf("record first thread message: %v", err)
+	}
+	if err := store.RecordTelegramThreadMessage(2234, thread.ThreadID, 90, "stale-outbound", "surface", second); err != nil {
+		t.Fatalf("record stale thread message: %v", err)
+	}
+
+	anchor, ok, err := store.TelegramThreadLastMessage(2234, thread.ThreadID)
+	if err != nil {
+		t.Fatalf("load anchor: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected anchor")
+	}
+	if anchor.MessageID != 100 {
+		t.Fatalf("message id regressed through RecordTelegramThreadMessage to %d", anchor.MessageID)
+	}
+	if anchor.Source != "outbound" {
+		t.Fatalf("source changed with stale thread message: %q", anchor.Source)
+	}
+	if !anchor.UpdatedAt.Equal(first) {
+		t.Fatalf("updated_at changed with stale thread message: got %s want %s", anchor.UpdatedAt, first)
+	}
+
+	if err := store.RecordTelegramThreadMessage(2234, thread.ThreadID, 101, "new-outbound", "surface", third); err != nil {
+		t.Fatalf("record newer thread message: %v", err)
+	}
+	anchor, ok, err = store.TelegramThreadLastMessage(2234, thread.ThreadID)
+	if err != nil {
+		t.Fatalf("load advanced anchor: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected advanced anchor")
+	}
+	if anchor.MessageID != 101 {
+		t.Fatalf("message id did not advance through RecordTelegramThreadMessage: %d", anchor.MessageID)
+	}
+	if anchor.Source != "new-outbound" {
+		t.Fatalf("source did not advance through RecordTelegramThreadMessage: %q", anchor.Source)
+	}
+	if !anchor.UpdatedAt.Equal(third) {
+		t.Fatalf("updated_at did not advance through RecordTelegramThreadMessage: got %s want %s", anchor.UpdatedAt, third)
+	}
+}

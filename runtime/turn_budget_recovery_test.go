@@ -86,7 +86,7 @@ func TestBudgetRecoveryDeliverySuppressesFinalReplyAndSchedulesInternalContinuat
 	if recorder.input.Msg.Origin != core.InboundOriginTurnAuthorization || recorder.input.Msg.OriginDetail != turnBudgetRecoveryOriginDetail {
 		t.Fatalf("recovery origin = %q/%q, want turn authorization budget recovery", recorder.input.Msg.Origin, recorder.input.Msg.OriginDetail)
 	}
-	if !strings.Contains(recorder.input.Msg.Text, "Do not replay pending tool calls") {
+	if !strings.Contains(recorder.input.Msg.Text, "do not replay pending calls") {
 		t.Fatalf("recovery prompt = %q, want re-decision instruction", recorder.input.Msg.Text)
 	}
 

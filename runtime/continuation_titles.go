@@ -3,7 +3,6 @@
 package runtime
 
 import (
-	"fmt"
 	"strings"
 	"unicode"
 
@@ -352,30 +351,20 @@ func continuationSubjectStopWord(word string) bool {
 
 func approvedContinuationEventTextForState(state session.ContinuationState) string {
 	state = session.NormalizeContinuationState(state)
-	lines := []string{approvedContinuationEventText, "", "Approved work:"}
-	if label := continuationUserFacingPlanLabel(state); label != "" {
-		lines = append(lines, label)
-	}
-	if next := continuationApprovedNextStepLine(state); next != "" {
-		lines = append(lines, "Next: "+next)
-	}
-	if scope := continuationApprovedScopeLine(state); scope != "" {
-		lines = append(lines, "Scope: "+scope)
-	}
-	if state.RemainingTurns > 0 {
-		lines = append(lines, fmt.Sprintf("Budget: up to %d %s.", state.RemainingTurns, continuationTurnWord(state.RemainingTurns)))
-	}
+	card := newContinuationApprovalPromptCard("Approved work", continuationUserFacingPlanLabel(state), state.RemainingTurns)
+	card.addSection("Next", continuationApprovedNextStepLine(state))
+	card.addSection("Scope", continuationApprovedScopeLine(state))
 	if stops := continuationApprovalPromptStops(state); len(stops) > 0 {
-		lines = append(lines, "Stops before: "+strings.Join(stops, ", ")+".")
+		card.addSection("Stops before", strings.Join(stops, ", ")+".")
 	}
 	if continuationActionIsPlanLeaseApproval(state) {
 		if state.ApprovalBundle.Active() {
-			lines = append(lines, "This approval covers the named plan budget only.")
+			card.addSection("Boundary", "This approval covers the named plan budget only.")
 		} else {
-			lines = append(lines, "This records the plan budget approval; execution still stops at hard gates.")
+			card.addSection("Boundary", "This records the plan budget approval; execution still stops at hard gates.")
 		}
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join([]string{approvedContinuationEventText, "", card.String()}, "\n")
 }
 
 func continuationApprovedNextStepLine(state session.ContinuationState) string {
