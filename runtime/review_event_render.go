@@ -15,22 +15,25 @@ import (
 )
 
 type reviewEventArtifactMetadata struct {
-	AgentID        string            `json:"agent_id"`
-	Summary        string            `json:"summary"`
-	IntervalLabel  string            `json:"interval_label"`
-	LocalActions   []string          `json:"local_actions"`
-	Questions      []string          `json:"questions"`
-	RiskFlags      []string          `json:"risk_flags"`
-	ArtifactRefs   []string          `json:"artifact_refs"`
-	Metadata       map[string]string `json:"metadata"`
-	Contract       string            `json:"contract"`
-	Constraints    string            `json:"constraints"`
-	Purpose        string            `json:"purpose"`
-	Kind           string            `json:"kind"`
-	TargetResource string            `json:"target_resource"`
-	RiskClass      string            `json:"risk_class"`
-	RequestedBy    string            `json:"requested_by"`
-	RequestedFor   string            `json:"requested_for"`
+	AgentID           string            `json:"agent_id"`
+	Summary           string            `json:"summary"`
+	IntervalLabel     string            `json:"interval_label"`
+	LocalActions      []string          `json:"local_actions"`
+	Questions         []string          `json:"questions"`
+	RiskFlags         []string          `json:"risk_flags"`
+	ArtifactRefs      []string          `json:"artifact_refs"`
+	Metadata          map[string]string `json:"metadata"`
+	Contract          string            `json:"contract"`
+	Constraints       string            `json:"constraints"`
+	Purpose           string            `json:"purpose"`
+	Kind              string            `json:"kind"`
+	TargetResource    string            `json:"target_resource"`
+	RiskClass         string            `json:"risk_class"`
+	RequestedBy       string            `json:"requested_by"`
+	RequestedFor      string            `json:"requested_for"`
+	RequestVia        string            `json:"request_via"`
+	ChannelKind       string            `json:"channel_kind"`
+	DelegationSurface string            `json:"delegation_surface"`
 }
 
 func FormatReviewEventCompactMessage(event session.ReviewEvent) string {
@@ -128,6 +131,9 @@ func reviewEventCapabilityDetailsLines(meta reviewEventArtifactMetadata) []strin
 		{"Purpose", meta.Purpose},
 		{"Requested by", meta.RequestedBy},
 		{"Requested for", meta.RequestedFor},
+		{"Request via", meta.RequestVia},
+		{"Channel", meta.ChannelKind},
+		{"Delegation surface", meta.DelegationSurface},
 	}
 	for _, field := range fields {
 		if value := strings.TrimSpace(field.value); value != "" {

@@ -130,7 +130,7 @@ func (r *Runtime) deliverReviewEvents(ctx context.Context, key session.SessionKe
 		if err := r.store.RecordOutbound(key, sess.TurnCount, msgID, "review_digest"); err != nil {
 			return err
 		}
-		if compact && reviewEventCapabilityRequestID(event) == "" {
+		if compact && !ReviewEventDetailsButtonOnly(event) {
 			if _, err := r.sendReviewEventDetailsAttachment(ctx, key.ChatID, msgID, event); err != nil {
 				return err
 			}
@@ -247,6 +247,15 @@ func ReviewEventInlineRowsExpanded(event session.ReviewEvent, expanded bool) [][
 	return rows
 }
 
+func ReviewEventDetailsButtonOnly(event session.ReviewEvent) bool {
+	switch reviewEventMetadataString(event, "request_via") {
+	case "capability_request", "durable_agent.delegation_request":
+		return true
+	default:
+		return false
+	}
+}
+
 func ReviewEventDetailsExpandable(event session.ReviewEvent) bool {
 	if _, ok := core.MissionControlProposalFromMetadataJSON(event.MetadataJSON); ok {
 		return false
@@ -254,7 +263,7 @@ func ReviewEventDetailsExpandable(event session.ReviewEvent) bool {
 	if strings.TrimSpace(event.Summary) == "" {
 		return false
 	}
-	if reviewEventMetadataString(event, "request_via") == "capability_request" {
+	if ReviewEventDetailsButtonOnly(event) {
 		return true
 	}
 	scope := session.NormalizeScopeRef(event.SourceScope)
