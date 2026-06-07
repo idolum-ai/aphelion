@@ -577,3 +577,56 @@ func TestDeliverReviewEventsMarksOlderCapabilityCardStale(t *testing.T) {
 		t.Fatalf("editClear = %#v, want stale approval card edit", sender.editClear)
 	}
 }
+
+func TestCapabilityReviewEventUsesDetailsButtonWithoutAutoAttachment(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 44, Scope: telegramDMScopeRef(44)}
+	sess := &session.Session{}
+	_, err = store.InsertReviewEvent(session.ReviewEvent{
+		SourceChatID:      7001,
+		SourceUserID:      1002,
+		SourceRole:        "capability_request",
+		TargetAdminChatID: 44,
+		TargetScope:       telegramDMScopeRef(44),
+		Summary:           "Approve GitHub App use for PR branch maintenance.",
+		MetadataJSON:      `{"request_id":"cap-pr157","request_via":"capability_request","kind":"external_account","target_resource":"github","risk_class":"sensitive","purpose":"Maintain PR branch","contract":"Use app token only for contents and pull request operations on idolum-ai/aphelion.","constraints":"No deploy, restart, release, tag, workflow dispatch, or credential output."}`,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+	if err := rt.deliverReviewEvents(context.Background(), key, sess); err != nil {
+		t.Fatalf("deliverReviewEvents() err = %v", err)
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline messages = %d, want 1", len(sender.inline))
+	}
+	var foundDetails bool
+	for _, row := range sender.inline[0].rows {
+		for _, button := range row {
+			if button.Text == "Details" {
+				foundDetails = true
+			}
+		}
+	}
+	if !foundDetails {
+		t.Fatalf("inline rows = %#v, want Details button", sender.inline[0].rows)
+	}
+	if len(sender.documents) != 0 {
+		t.Fatalf("documents len = %d, want no automatic details attachment", len(sender.documents))
+	}
+	details := FormatReviewEventDetailsMessage(session.ReviewEvent{
+		Summary:      "Approve GitHub App use for PR branch maintenance.",
+		MetadataJSON: `{"request_id":"cap-pr157","request_via":"capability_request","kind":"external_account","target_resource":"github","risk_class":"sensitive","purpose":"Maintain PR branch","contract":"Use app token only for contents and pull request operations on idolum-ai/aphelion.","constraints":"No deploy, restart, release, tag, workflow dispatch, or credential output."}`,
+	})
+	for _, want := range []string{"**Capability request**", "Kind: external_account", "Target: github", "**Contract**", "**Constraints**", "No deploy"} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("details = %q, want %q", details, want)
+		}
+	}
+}

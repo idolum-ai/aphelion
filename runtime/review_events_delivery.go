@@ -130,7 +130,7 @@ func (r *Runtime) deliverReviewEvents(ctx context.Context, key session.SessionKe
 		if err := r.store.RecordOutbound(key, sess.TurnCount, msgID, "review_digest"); err != nil {
 			return err
 		}
-		if compact {
+		if compact && reviewEventCapabilityRequestID(event) == "" {
 			if _, err := r.sendReviewEventDetailsAttachment(ctx, key.ChatID, msgID, event); err != nil {
 				return err
 			}
@@ -253,6 +253,9 @@ func ReviewEventDetailsExpandable(event session.ReviewEvent) bool {
 	}
 	if strings.TrimSpace(event.Summary) == "" {
 		return false
+	}
+	if reviewEventMetadataString(event, "request_via") == "capability_request" {
+		return true
 	}
 	scope := session.NormalizeScopeRef(event.SourceScope)
 	return scope.Kind == session.ScopeKindDurableAgent || strings.TrimSpace(scope.DurableAgentID) != "" || strings.TrimSpace(event.SourceRole) == "durable_agent"

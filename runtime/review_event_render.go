@@ -15,14 +15,22 @@ import (
 )
 
 type reviewEventArtifactMetadata struct {
-	AgentID       string            `json:"agent_id"`
-	Summary       string            `json:"summary"`
-	IntervalLabel string            `json:"interval_label"`
-	LocalActions  []string          `json:"local_actions"`
-	Questions     []string          `json:"questions"`
-	RiskFlags     []string          `json:"risk_flags"`
-	ArtifactRefs  []string          `json:"artifact_refs"`
-	Metadata      map[string]string `json:"metadata"`
+	AgentID        string            `json:"agent_id"`
+	Summary        string            `json:"summary"`
+	IntervalLabel  string            `json:"interval_label"`
+	LocalActions   []string          `json:"local_actions"`
+	Questions      []string          `json:"questions"`
+	RiskFlags      []string          `json:"risk_flags"`
+	ArtifactRefs   []string          `json:"artifact_refs"`
+	Metadata       map[string]string `json:"metadata"`
+	Contract       string            `json:"contract"`
+	Constraints    string            `json:"constraints"`
+	Purpose        string            `json:"purpose"`
+	Kind           string            `json:"kind"`
+	TargetResource string            `json:"target_resource"`
+	RiskClass      string            `json:"risk_class"`
+	RequestedBy    string            `json:"requested_by"`
+	RequestedFor   string            `json:"requested_for"`
 }
 
 func FormatReviewEventCompactMessage(event session.ReviewEvent) string {
@@ -74,6 +82,12 @@ func formatReviewEventDetails(event session.ReviewEvent, markdownDocument bool) 
 			lines = append(lines, "- "+truncateReviewEventText(ref, 220))
 		}
 	}
+	if ok {
+		if capability := reviewEventCapabilityDetailsLines(meta); len(capability) > 0 {
+			lines = append(lines, "", "**Capability request**")
+			lines = append(lines, capability...)
+		}
+	}
 	if ok && len(meta.Metadata) > 0 {
 		keys := make([]string, 0, len(meta.Metadata))
 		for key := range meta.Metadata {
@@ -100,6 +114,33 @@ func formatReviewEventDetails(event session.ReviewEvent, markdownDocument bool) 
 	}
 	lines = append(lines, "", reviewEventDetailsFooter(meta))
 	return truncateReviewEventBlock(strings.Join(lines, "\n"), 3900)
+}
+
+func reviewEventCapabilityDetailsLines(meta reviewEventArtifactMetadata) []string {
+	var lines []string
+	fields := []struct {
+		label string
+		value string
+	}{
+		{"Kind", meta.Kind},
+		{"Target", meta.TargetResource},
+		{"Risk", meta.RiskClass},
+		{"Purpose", meta.Purpose},
+		{"Requested by", meta.RequestedBy},
+		{"Requested for", meta.RequestedFor},
+	}
+	for _, field := range fields {
+		if value := strings.TrimSpace(field.value); value != "" {
+			lines = append(lines, fmt.Sprintf("- %s: %s", field.label, truncateReviewEventText(value, 360)))
+		}
+	}
+	if contract := strings.TrimSpace(meta.Contract); contract != "" {
+		lines = append(lines, "", "**Contract**", truncateReviewEventText(contract, 1200))
+	}
+	if constraints := strings.TrimSpace(meta.Constraints); constraints != "" {
+		lines = append(lines, "", "**Constraints**", truncateReviewEventText(constraints, 1200))
+	}
+	return lines
 }
 
 func parseReviewEventArtifactMetadata(event session.ReviewEvent) (reviewEventArtifactMetadata, bool) {

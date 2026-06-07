@@ -32,6 +32,12 @@ func (r *Registry) queueCapabilityRequestReviewEvent(record session.CapabilityRe
 		"purpose":          record.Purpose,
 		"request_via":      "capability_request",
 	}
+	if contract := strings.TrimSpace(record.Contract); contract != "" {
+		metadata["contract"] = contract
+	}
+	if constraints := strings.TrimSpace(record.Constraints); constraints != "" {
+		metadata["constraints"] = constraints
+	}
 	raw, err := json.Marshal(metadata)
 	if err != nil {
 		return 0, fmt.Errorf("marshal capability request review metadata: %w", err)
