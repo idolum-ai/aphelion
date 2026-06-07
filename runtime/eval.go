@@ -1271,7 +1271,7 @@ func runEvalJudgeRoute(ctx context.Context, opts EvalOptions, e *evalScenarioCon
 	resp, err := route.Subject.CompleteWithOptions(ctx, messages, nil, agent.CompleteOptions{
 		Reasoning: agent.ReasoningConfig{Effort: agent.ReasoningEffortLow, Summary: agent.ReasoningSummaryAuto},
 		Verbosity: agent.VerbosityLow,
-		MaxTokens: 800,
+		MaxTokens: 4096,
 	})
 	if err != nil {
 		result.ProviderFailure = true
@@ -1356,17 +1356,23 @@ func parseEvalJudgeResponse(content string) (EvalJudgeResult, error) {
 	}
 	raw = raw[start : end+1]
 	var parsed struct {
-		Pass         bool          `json:"pass"`
-		HardFailures []EvalFinding `json:"hard_failures"`
-		SoftFindings []EvalFinding `json:"soft_findings"`
-		Confidence   float64       `json:"confidence"`
-		Rationale    string        `json:"rationale"`
+		Pass         bool            `json:"pass"`
+		HardFailures json.RawMessage `json:"hard_failures"`
+		SoftFindings json.RawMessage `json:"soft_findings"`
+		Confidence   float64         `json:"confidence"`
+		Rationale    string          `json:"rationale"`
 	}
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		return EvalJudgeResult{}, fmt.Errorf("decode judge JSON: %w", err)
 	}
-	hard := dedupeEvalFindings(parsed.HardFailures)
-	soft := dedupeEvalFindings(parsed.SoftFindings)
+	hard, err := parseEvalJudgeFindings(parsed.HardFailures, "judge_hard_failure")
+	if err != nil {
+		return EvalJudgeResult{}, fmt.Errorf("decode judge hard_failures: %w", err)
+	}
+	soft, err := parseEvalJudgeFindings(parsed.SoftFindings, "judge_soft_finding")
+	if err != nil {
+		return EvalJudgeResult{}, fmt.Errorf("decode judge soft_findings: %w", err)
+	}
 	pass := parsed.Pass
 	if len(hard) > 0 {
 		pass = false
@@ -1388,6 +1394,48 @@ func parseEvalJudgeResponse(content string) (EvalJudgeResult, error) {
 		Confidence:   confidence,
 		Rationale:    redactEvalText(parsed.Rationale, 500),
 	}, nil
+}
+
+func parseEvalJudgeFindings(raw json.RawMessage, defaultClass string) ([]EvalFinding, error) {
+	raw = json.RawMessage(strings.TrimSpace(string(raw)))
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	if raw[0] == '[' {
+		var items []json.RawMessage
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return nil, err
+		}
+		var out []EvalFinding
+		for _, item := range items {
+			finding, err := parseEvalJudgeFinding(item, defaultClass)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, finding)
+		}
+		return dedupeEvalFindings(out), nil
+	}
+	finding, err := parseEvalJudgeFinding(raw, defaultClass)
+	if err != nil {
+		return nil, err
+	}
+	return dedupeEvalFindings([]EvalFinding{finding}), nil
+}
+
+func parseEvalJudgeFinding(raw json.RawMessage, defaultClass string) (EvalFinding, error) {
+	var finding EvalFinding
+	if err := json.Unmarshal(raw, &finding); err == nil {
+		finding.Class = firstNonEmptyEvalText(finding.Class, defaultClass)
+		finding.Reason = redactEvalText(firstNonEmptyEvalText(finding.Reason, finding.Details, finding.Class), 500)
+		finding.Details = redactEvalText(finding.Details, 500)
+		return finding, nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return EvalFinding{Class: defaultClass, Reason: redactEvalText(text, 500)}, nil
+	}
+	return EvalFinding{}, fmt.Errorf("unsupported finding shape %s", redactEvalText(string(raw), 240))
 }
 
 func evalScenarioMessages(opts EvalOptions, e *evalScenarioContext) ([]agent.Message, string, error) {

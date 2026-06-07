@@ -269,6 +269,27 @@ func TestJudgeScoringKeepsTypedInvariantHardDespiteJudgePass(t *testing.T) {
 	}
 }
 
+func TestParseEvalJudgeResponseAcceptsStringFindings(t *testing.T) {
+	t.Parallel()
+
+	parsed, err := parseEvalJudgeResponse(`{
+		"pass": false,
+		"hard_failures": ["candidate claimed completion without evidence"],
+		"soft_findings": ["wording is vague"],
+		"confidence": 0.7,
+		"rationale": "string-shaped findings"
+	}`)
+	if err != nil {
+		t.Fatalf("parseEvalJudgeResponse() err = %v", err)
+	}
+	if parsed.Pass || len(parsed.HardFailures) != 1 || parsed.HardFailures[0].Class != "judge_hard_failure" {
+		t.Fatalf("hard findings = %#v", parsed.HardFailures)
+	}
+	if len(parsed.SoftFindings) != 1 || parsed.SoftFindings[0].Class != "judge_soft_finding" {
+		t.Fatalf("soft findings = %#v", parsed.SoftFindings)
+	}
+}
+
 func TestRunEvalSuiteReturnsPartialReportOnCancellation(t *testing.T) {
 	t.Parallel()
 
