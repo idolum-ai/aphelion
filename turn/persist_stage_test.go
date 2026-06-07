@@ -23,6 +23,7 @@ func TestRunPersistStageOrdersCallbacksAndCommits(t *testing.T) {
 		TurnCount:         3,
 		PlanState:         session.PlanState{Explanation: "in-memory"},
 		OperationState:    session.OperationState{ID: "in-memory"},
+		ContinuationState: session.ContinuationState{DecisionID: "in-memory"},
 		LastFloorText:     "old floor",
 		LastFloorMetadata: "old metadata",
 	}
@@ -91,6 +92,17 @@ func TestRunPersistStageOrdersCallbacksAndCommits(t *testing.T) {
 			}
 			return persisted
 		},
+		LoadContinuationState: func(context.Context) (session.ContinuationState, error) {
+			order = append(order, "continuation_load")
+			return session.ContinuationState{DecisionID: "persisted"}, nil
+		},
+		MergeContinuationState: func(inMemory session.ContinuationState, persisted session.ContinuationState) session.ContinuationState {
+			order = append(order, "continuation_merge")
+			if inMemory.DecisionID != "in-memory" {
+				t.Fatalf("inMemory continuation = %#v", inMemory)
+			}
+			return persisted
+		},
 		Save: func(_ context.Context, saveSess *session.Session, newMessages []session.Message, usage core.TokenUsage) error {
 			order = append(order, "save")
 			if usage.TotalTokens != 9 {
@@ -102,6 +114,9 @@ func TestRunPersistStageOrdersCallbacksAndCommits(t *testing.T) {
 			if saveSess.OperationState.ID != "persisted" {
 				t.Fatalf("session operation = %#v, want persisted", saveSess.OperationState)
 			}
+			if saveSess.ContinuationState.DecisionID != "persisted" {
+				t.Fatalf("session continuation = %#v, want persisted", saveSess.ContinuationState)
+			}
 			savedMessages = append([]session.Message(nil), newMessages...)
 			return nil
 		},
@@ -112,7 +127,7 @@ func TestRunPersistStageOrdersCallbacksAndCommits(t *testing.T) {
 	if !got.Committed {
 		t.Fatal("Committed = false, want true")
 	}
-	if want := []string{"build", "scene", "floor", "plan_load", "plan_merge", "op_load", "op_merge", "save"}; !reflect.DeepEqual(order, want) {
+	if want := []string{"build", "scene", "floor", "plan_load", "plan_merge", "op_load", "op_merge", "continuation_load", "continuation_merge", "save"}; !reflect.DeepEqual(order, want) {
 		t.Fatalf("order = %#v, want %#v", order, want)
 	}
 	if got.NewMessages == nil || len(got.NewMessages) != 2 {

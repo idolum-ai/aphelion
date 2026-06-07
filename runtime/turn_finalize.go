@@ -569,11 +569,12 @@ type turnCommitHooks struct {
 }
 
 type turnCommitErrorContext struct {
-	ConvertMessages string
-	LoadPlanState   string
-	LoadOperation   string
-	SaveSession     string
-	RecordOutbound  string
+	ConvertMessages  string
+	LoadPlanState    string
+	LoadOperation    string
+	LoadContinuation string
+	SaveSession      string
+	RecordOutbound   string
 }
 
 type turnPersistencePort struct {
@@ -799,10 +800,11 @@ func (r *Runtime) persistTurn(ctx context.Context, input turnCommitInput) (turnC
 		FloorMetadata:   floorMetadata,
 		Usage:           usage,
 		ErrorContext: turn.PersistStageErrorContext{
-			ConvertMessages: input.ErrCtx.ConvertMessages,
-			LoadPlanState:   input.ErrCtx.LoadPlanState,
-			LoadOperation:   input.ErrCtx.LoadOperation,
-			SaveSession:     input.ErrCtx.SaveSession,
+			ConvertMessages:  input.ErrCtx.ConvertMessages,
+			LoadPlanState:    input.ErrCtx.LoadPlanState,
+			LoadOperation:    input.ErrCtx.LoadOperation,
+			LoadContinuation: input.ErrCtx.LoadContinuation,
+			SaveSession:      input.ErrCtx.SaveSession,
 		},
 	}, turn.PersistStageCallbacks{
 		BuildMessages: func(ledgerText string, generated []agent.Message, turnIndex int) ([]session.Message, error) {
@@ -827,6 +829,10 @@ func (r *Runtime) persistTurn(ctx context.Context, input turnCommitInput) (turnC
 			return r.store.OperationState(input.Key)
 		},
 		MergeOperationState: mergeSessionOperationState,
+		LoadContinuationState: func(context.Context) (session.ContinuationState, error) {
+			return r.store.ContinuationState(input.Key)
+		},
+		MergeContinuationState: mergeSessionContinuationState,
 		Save: func(_ context.Context, sess *session.Session, newMessages []session.Message, usage core.TokenUsage) error {
 			return r.store.Save(sess, newMessages, usage)
 		},
