@@ -757,6 +757,151 @@ func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
 	}
 }
 
+func TestNoEffectRecoveryHandoffRestoresApprovedContinuation(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recovery := &core.TurnRecovery{
+		Kind:           core.TurnRecoveryTokenBudgetExhausted,
+		Recoverable:    true,
+		ReplanRequired: true,
+		Summary:        "Token budget exhausted before a final response. Pending tool calls were not executed and must be re-decided from persisted state.",
+		MaxAutoHops:    3,
+	}
+	key := session.SessionKey{ChatID: 8195, UserID: 0, Scope: telegramDMScopeRef(8195)}
+	work := &fakeWorkExecutor{
+		name:  "native",
+		ready: true,
+		result: WorkResult{
+			ExecutorName:    "native",
+			Summary:         "Budget recovery handoff: " + recovery.Summary,
+			Recovery:        recovery,
+			CompletionKind:  "native_turn_recovery_handoff",
+			ProviderFailure: "",
+		},
+		runHook: func(_ WorkRequest) {
+			scope, scopePayload := rt.turnBudgetRecoveryScope(key, core.InboundMessage{ChatID: key.ChatID, SenderID: 1001}, nil)
+			payload := turnBudgetRecoveryPayload(recovery, scope, scopePayload, 1, 3)
+			rt.recordExecutionEvent(key, core.ExecutionEventTurnBudgetRecovery, "turn", "resuming", payload, time.Now().UTC())
+		},
+	}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"native"}}, []WorkExecutor{work})
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Hour)
+	opState := session.OperationState{
+		ID:        "op-no-effect-recovery",
+		Objective: "Patch the approved runtime task.",
+		Status:    session.OperationStatusActive,
+		Stage:     "phase_approval",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-no-effect-recovery",
+			CurrentPhaseID: "phase-1",
+			Phases: []session.OperationPhase{{
+				ID:             "phase-1",
+				Summary:        "Patch runtime continuation recovery",
+				Status:         session.PlanStatusInProgress,
+				AuthorityClass: "workspace_write",
+				BoundedEffect:  "Edit runtime continuation recovery files and run focused tests.",
+				AllowedActions: []string{"workspace_write", "run_tests"},
+				LeaseID:        "lease-no-effect-recovery",
+			}},
+		},
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	prior := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "phase-1",
+		Objective:      opState.Objective,
+		StageSummary:   "Patch runtime continuation recovery",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-no-effect-recovery",
+			OperationID:    operationPhaseProposalID(opState, opState.PhasePlan.Phases[0]),
+			Summary:        "Patch runtime continuation recovery",
+			BoundedEffect:  "Edit runtime continuation recovery files and run focused tests.",
+			RiskClass:      "workspace_write",
+			AllowedActions: []string{"workspace_write", "run_tests"},
+			Status:         session.ProposalStatusApproved,
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:no-effect-recovery",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-no-effect-recovery",
+			ProposalID:     "aprop-no-effect-recovery",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ApprovedBy:     1001,
+			ApprovedAt:     now,
+			AllowedActions: []string{"workspace_write", "run_tests"},
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:no-effect-recovery",
+		},
+	}
+	if err := store.UpdateContinuationState(key, prior); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v", err)
+	}
+	if work.calls != 1 {
+		t.Fatalf("work calls = %d, want one call while recovery owns the next attempt", work.calls)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusApproved || got.RemainingTurns != 1 || got.ContinuationLease.Status != session.ContinuationLeaseStatusActive || got.ContinuationLease.RemainingTurns != 1 {
+		t.Fatalf("continuation = %#v, want approved lease restored for recovery", got)
+	}
+	gotOp, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if gotOp.PhasePlan.Phases[0].Status != session.PlanStatusInProgress {
+		t.Fatalf("phase = %#v, want not completed after no-effect recovery handoff", gotOp.PhasePlan.Phases[0])
+	}
+	if !gotOp.Work.LastCompletedAt.IsZero() || !strings.Contains(gotOp.Work.LastError, "token_budget_exhausted") {
+		t.Fatalf("operation work = %#v, want recovery handoff recorded without completion", gotOp.Work)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no fresh approval prompt", inlineCount)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventRecoveryIssued) {
+		t.Fatalf("events = %#v, want lease restoration recovery event", events)
+	}
+	var boundary session.ExecutionEvent
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventContinuationBoundaryReached {
+			boundary = event
+		}
+	}
+	if boundary.ID == 0 {
+		t.Fatalf("events = %#v, want continuation boundary", events)
+	}
+	payload := executionEventPayload(boundary.PayloadJSON)
+	if payloadString(payload, "boundary_reason") != "recovery_pending" {
+		t.Fatalf("boundary payload = %#v, want recovery_pending", payload)
+	}
+}
+
 func TestTriggerCodingContinuationAllowsCompoundWorkspaceRiskClass(t *testing.T) {
 	t.Parallel()
 

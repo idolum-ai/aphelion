@@ -27,6 +27,7 @@ type fakeWorkExecutor struct {
 	lastReq   WorkRequest
 	lastAvail WorkRequest
 	result    WorkResult
+	runHook   func(WorkRequest)
 }
 
 func (f *fakeWorkExecutor) Name() string {
@@ -44,6 +45,9 @@ func (f *fakeWorkExecutor) Available(_ context.Context, req WorkRequest) WorkAva
 func (f *fakeWorkExecutor) Run(_ context.Context, req WorkRequest) (WorkResult, error) {
 	f.calls++
 	f.lastReq = req
+	if f.runHook != nil {
+		f.runHook(req)
+	}
 	if f.err != nil {
 		return WorkResult{}, f.err
 	}

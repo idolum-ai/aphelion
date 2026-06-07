@@ -90,6 +90,25 @@ func TestExecSuccess(t *testing.T) {
 	}
 }
 
+func TestExecAcceptsJSONStringWrappedObjectInput(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	registry := NewRegistry(workspace, 2*time.Second)
+	wrapped, err := json.Marshal(`{"command":"printf 'ok'"}`)
+	if err != nil {
+		t.Fatalf("Marshal() err = %v", err)
+	}
+
+	out, err := registry.Execute(context.Background(), "exec", json.RawMessage(wrapped))
+	if err != nil {
+		t.Fatalf("Execute() err = %v", err)
+	}
+	if !strings.Contains(out, "ok") {
+		t.Fatalf("output = %q, want command output", out)
+	}
+}
+
 func TestExecDangerousCommandRequiresApproval(t *testing.T) {
 	t.Parallel()
 
