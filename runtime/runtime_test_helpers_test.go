@@ -365,6 +365,7 @@ type fakeSender struct {
 	sendCount       int
 	sendErr         error
 	sendErrAfter    int
+	documentErr     error
 	voice           []voiceSend
 	documents       []documentSend
 	actions         []chatAction
@@ -607,6 +608,9 @@ func (f *fakeSender) SendVoiceMessage(_ context.Context, chatID int64, media cor
 func (f *fakeSender) SendDocumentMessage(_ context.Context, chatID int64, media core.Media, caption string, replyTo *int64) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.documentErr != nil {
+		return 0, f.documentErr
+	}
 	f.documents = append(f.documents, documentSend{ChatID: chatID, Media: media, Caption: caption, ReplyTo: replyTo})
 	return int64(len(f.documents)), nil
 }

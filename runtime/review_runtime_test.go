@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -509,6 +510,51 @@ func TestDeliverReviewEventsAttachmentUsesSafeRedactedProjection(t *testing.T) {
 	}
 	if strings.Contains(body, "private-sidecar contents") || strings.Contains(body, "sk-test") {
 		t.Fatalf("document body = %q, leaked raw/private content", body)
+	}
+}
+
+func TestDeliverReviewEventsMarksDeliveredBeforeAttachmentError(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	sender.documentErr = errors.New("document send failed")
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 45, Scope: telegramDMScopeRef(45)}
+	sess := &session.Session{}
+	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
+		SourceChatID:      -200,
+		SourceUserID:      0,
+		SourceRole:        "durable_agent",
+		SourceScope:       session.ScopeRef{Kind: session.ScopeKindDurableAgent, DurableAgentID: "mail-child"},
+		TargetAdminChatID: 45,
+		TargetScope:       telegramDMScopeRef(45),
+		Summary:           "durable_agent=mail-child channel=external_channel\nsummary: Review details are available.",
+		MetadataJSON:      `{"agent_id":"mail-child","summary":"Review details are available."}`,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+	if err := rt.deliverReviewEvents(context.Background(), key, sess); err == nil {
+		t.Fatalf("deliverReviewEvents() err = nil, want attachment error")
+	}
+	event, err := store.ReviewEventByID(eventID)
+	if err != nil {
+		t.Fatalf("ReviewEventByID() err = %v", err)
+	}
+	if event.Status != "delivered" || event.DeliveryMessageID == 0 {
+		t.Fatalf("event status=%q message_id=%d, want delivered with compact message id", event.Status, event.DeliveryMessageID)
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline messages after first delivery = %d, want 1", len(sender.inline))
+	}
+	if err := rt.deliverReviewEvents(context.Background(), key, sess); err != nil {
+		t.Fatalf("deliverReviewEvents retry err = %v", err)
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline messages after retry = %d, want no duplicate compact card", len(sender.inline))
 	}
 }
 

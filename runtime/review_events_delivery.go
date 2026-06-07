@@ -130,13 +130,13 @@ func (r *Runtime) deliverReviewEvents(ctx context.Context, key session.SessionKe
 		if err := r.store.RecordOutbound(key, sess.TurnCount, msgID, "review_digest"); err != nil {
 			return err
 		}
+		if err := r.store.MarkReviewDeliveredWithMessage(event.ID, msgID); err != nil {
+			return err
+		}
 		if compact && !ReviewEventDetailsButtonOnly(event) {
 			if _, err := r.sendReviewEventDetailsAttachment(ctx, key.ChatID, msgID, event); err != nil {
 				return err
 			}
-		}
-		if err := r.store.MarkReviewDeliveredWithMessage(event.ID, msgID); err != nil {
-			return err
 		}
 		if staleEvents, err := r.store.DismissPendingCapabilityReviewEvents(key.ChatID, reviewEventCapabilityRequestID(event), event.ID); err != nil {
 			return err
@@ -148,7 +148,7 @@ func (r *Runtime) deliverReviewEvents(ctx context.Context, key session.SessionKe
 }
 
 func (r *Runtime) sendReviewEventDetailsAttachment(ctx context.Context, chatID int64, replyTo int64, event session.ReviewEvent) (int64, error) {
-	if r == nil || r.outbound == nil || chatID == 0 || !ReviewEventDetailsExpandable(event) {
+	if r.outbound == nil || chatID == 0 || !ReviewEventDetailsExpandable(event) {
 		return 0, nil
 	}
 	sender, ok := r.outbound.(reviewEventDocumentSender)
@@ -166,14 +166,7 @@ func (r *Runtime) sendReviewEventDetailsAttachment(ctx context.Context, chatID i
 		Filename: reviewEventDetailsAttachmentFilename(event),
 	}
 	caption := "Full child review details (safe projection)."
-	return sender.SendDocumentMessage(ctx, chatID, media, caption, positiveReplyToMessageID(replyTo))
-}
-
-func positiveReplyToMessageID(id int64) *int64 {
-	if id <= 0 {
-		return nil
-	}
-	return &id
+	return sender.SendDocumentMessage(ctx, chatID, media, caption, replyToMessageID(replyTo))
 }
 
 func reviewEventDetailsAttachmentFilename(event session.ReviewEvent) string {
