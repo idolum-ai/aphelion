@@ -76,6 +76,26 @@ func TestEvalRunCommandSupportsGovernorSubjectAndScenarioFilter(t *testing.T) {
 	}
 }
 
+func TestEvalRunCommandSupportsLocalJudgeScoring(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"run", "--suite", "canonical", "--mode", "local", "--subject", "governor", "--scenario", "token_budget_recovery_no_dead_end", "--rollouts", "1", "--scoring", "judge", "--trace", "redacted", "--format", "json"}, &out)
+	if err != nil {
+		t.Fatalf("eval run err = %v\n%s", err, out.String())
+	}
+	var report aphruntime.EvalReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("decode eval report JSON: %v\n%s", err, out.String())
+	}
+	if report.ScoringMode != aphruntime.EvalScoringJudge || report.JudgeRouteCount != 2 || report.AmbiguousCount != 0 {
+		t.Fatalf("judge report = %#v", report)
+	}
+	if len(report.Results) != 1 || len(report.Results[0].JudgeResults) != 2 || report.Results[0].CandidateTrace == "" {
+		t.Fatalf("judge result = %#v", report.Results)
+	}
+}
+
 func TestEvalLocalModeDoesNotRequireConfigOrRoutes(t *testing.T) {
 	t.Parallel()
 
@@ -85,6 +105,26 @@ func TestEvalLocalModeDoesNotRequireConfigOrRoutes(t *testing.T) {
 	}
 	if len(routes) != 0 {
 		t.Fatalf("local eval routes = %#v, want command to defer to runtime default", routes)
+	}
+}
+
+func TestEvalGateCommandRendersMarkdown(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	beforePath := filepath.Join(dir, "before.json")
+	afterPath := filepath.Join(dir, "after.json")
+	before := evalCommandGateReportFixture(1, 0, "baseline failure")
+	after := evalCommandGateReportFixture(0, 0, "")
+	writeEvalReportFixture(t, beforePath, before)
+	writeEvalReportFixture(t, afterPath, after)
+
+	var out bytes.Buffer
+	if err := runEvalCommandWithDeps([]string{"gate", "--before", beforePath, "--after", afterPath, "--format", "markdown"}, &out); err != nil {
+		t.Fatalf("eval gate err = %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "Eval Stability Gate: pass") || !strings.Contains(out.String(), "Scenario Deltas") {
+		t.Fatalf("gate output missing expected content:\n%s", out.String())
 	}
 }
 
@@ -146,4 +186,48 @@ func writeEvalReportFixture(t *testing.T, path string, report aphruntime.EvalRep
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatalf("write report: %v", err)
 	}
+}
+
+func evalCommandGateReportFixture(hardFailures int, providerFailures int, trace string) aphruntime.EvalReport {
+	result := aphruntime.EvalScenarioResult{
+		ScenarioID:       "token_budget_recovery_no_dead_end",
+		ScenarioName:     "Token budget recovery keeps work incomplete",
+		ScenarioRevision: aphruntime.EvalScenarioRevision,
+		Domain:           "budget_recovery",
+		AuthorityClass:   "commit",
+		TransportSurface: "telegram_dm",
+		Route:            "openai:gpt-5.5",
+		Provider:         "openai",
+		Model:            "gpt-5.5",
+		SubjectMode:      aphruntime.EvalSubjectGovernor,
+		Pass:             hardFailures == 0 && providerFailures == 0,
+		CandidateTrace:   trace,
+		CandidatePreview: trace,
+	}
+	for i := 0; i < hardFailures; i++ {
+		result.HardFailures = append(result.HardFailures, aphruntime.EvalFinding{Class: "forbidden_claim", Reason: "fixture"})
+	}
+	if providerFailures > 0 {
+		result.ProviderFailure = true
+	}
+	report := aphruntime.EvalReport{
+		Suite:                aphruntime.EvalSuiteCanonical,
+		Mode:                 aphruntime.EvalModeLive,
+		SubjectMode:          aphruntime.EvalSubjectGovernor,
+		ScenarioRevision:     aphruntime.EvalScenarioRevision,
+		ScoringMode:          aphruntime.EvalScoringJudge,
+		JudgeQuorum:          aphruntime.EvalJudgeQuorumPair,
+		TraceMode:            aphruntime.EvalTraceRedacted,
+		Rollouts:             1,
+		RouteCount:           1,
+		JudgeRouteCount:      2,
+		ScenarioCount:        1,
+		ResultCount:          1,
+		HardFailureCount:     hardFailures,
+		ProviderFailureCount: providerFailures,
+		HardFailureRate:      float64(hardFailures),
+		Failed:               hardFailures > 0,
+		Results:              []aphruntime.EvalScenarioResult{result},
+	}
+	return report
 }

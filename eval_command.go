@@ -48,6 +48,8 @@ func runEvalCommandWithDeps(args []string, out io.Writer) error {
 		return runEvalRunCommand(args[1:], out)
 	case "compare":
 		return runEvalCompareCommand(args[1:], out)
+	case "gate":
+		return runEvalGateCommand(args[1:], out)
 	default:
 		return &cliUsageError{Text: renderEvalCommandHelp("Unknown eval command: " + args[0])}
 	}
@@ -101,6 +103,10 @@ func runEvalRunCommand(args []string, out io.Writer) error {
 	rolloutsFlag := fs.Int("rollouts", 0, "rollouts per scenario/route")
 	routesFlag := fs.String("routes", "configured", "live routes: configured or comma-separated provider:model specs")
 	scenarioFlag := fs.String("scenario", "", "comma-separated scenario IDs to run")
+	scoringFlag := fs.String("scoring", aphruntime.EvalScoringDeterministic, "scoring mode: deterministic or judge")
+	judgeRoutesFlag := fs.String("judge-routes", "configured", "judge routes: configured or comma-separated provider:model specs")
+	judgeQuorumFlag := fs.String("judge-quorum", aphruntime.EvalJudgeQuorumPair, "judge quorum: pair or single")
+	traceFlag := fs.String("trace", aphruntime.EvalTraceRedacted, "trace mode: redacted or minimal")
 	providerRetriesFlag := fs.Int("provider-retries", 0, "retries for transient provider failures")
 	progressFlag := fs.Bool("progress", false, "emit route/scenario/sample progress to stderr")
 	formatFlag := fs.String("format", "human", "output format: human, kv, json")
@@ -119,6 +125,10 @@ func runEvalRunCommand(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	judgeRoutes, err := evalJudgeRoutesForCommand(mode, *scoringFlag, *judgeRoutesFlag, *configFlag)
+	if err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeoutFlag)
 	defer cancel()
 	report, runErr := aphruntime.RunEvalSuite(ctx, aphruntime.EvalOptions{
@@ -128,6 +138,10 @@ func runEvalRunCommand(args []string, out io.Writer) error {
 		Rollouts:        *rolloutsFlag,
 		Routes:          routes,
 		ScenarioIDs:     splitEvalCSV(*scenarioFlag),
+		Scoring:         *scoringFlag,
+		JudgeRoutes:     judgeRoutes,
+		JudgeQuorum:     *judgeQuorumFlag,
+		TraceMode:       *traceFlag,
 		ProviderRetries: *providerRetriesFlag,
 		Progress:        evalProgressReporter(*progressFlag),
 		Seed:            *seedFlag,
@@ -206,6 +220,60 @@ func runEvalCompareCommand(args []string, out io.Writer) error {
 	return nil
 }
 
+func runEvalGateCommand(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("eval gate", flag.ContinueOnError)
+	beforeFlag := fs.String("before", "", "comma-separated baseline JSON report paths")
+	afterFlag := fs.String("after", "", "comma-separated branch JSON report paths")
+	formatFlag := fs.String("format", "markdown", "output format: markdown or json")
+	jsonFlag := fs.Bool("json", false, "emit JSON output")
+	outFlag := fs.String("out", "", "optional gate report path")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if extra, ok := firstPositionalArg(fs.Args()); ok {
+		return fmt.Errorf("unknown argument %q for eval gate", extra)
+	}
+	beforePaths := splitEvalCSV(*beforeFlag)
+	afterPaths := splitEvalCSV(*afterFlag)
+	if len(beforePaths) == 0 || len(afterPaths) == 0 {
+		return fmt.Errorf("eval gate requires --before and --after")
+	}
+	before, err := readEvalJSONReports(beforePaths)
+	if err != nil {
+		return err
+	}
+	after, err := readEvalJSONReports(afterPaths)
+	if err != nil {
+		return err
+	}
+	gate, err := aphruntime.GateEvalReports(before, after)
+	if err != nil {
+		return err
+	}
+	format := normalizeEvalCompareFormat(*formatFlag, *jsonFlag)
+	rendered := ""
+	switch format {
+	case "json":
+		raw, err := json.MarshalIndent(gate, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal eval gate: %w", err)
+		}
+		rendered = string(raw) + "\n"
+	default:
+		rendered = aphruntime.RenderEvalGateMarkdown(gate) + "\n"
+	}
+	if path := strings.TrimSpace(*outFlag); path != "" {
+		if err := os.WriteFile(path, []byte(rendered), 0o600); err != nil {
+			return fmt.Errorf("write eval gate %s: %w", path, err)
+		}
+	}
+	fmt.Fprint(out, rendered)
+	if !gate.Passed {
+		return fmt.Errorf("eval gate failed")
+	}
+	return nil
+}
+
 func evalRoutesForCommand(mode string, routesSpec string, configPath string) ([]aphruntime.EvalRoute, error) {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode != aphruntime.EvalModeLive {
@@ -238,6 +306,45 @@ func evalRoutesForCommand(mode string, routesSpec string, configPath string) ([]
 	return routes, nil
 }
 
+func evalJudgeRoutesForCommand(mode string, scoring string, routesSpec string, configPath string) ([]aphruntime.EvalRoute, error) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	scoring = strings.ToLower(strings.TrimSpace(scoring))
+	if scoring == "" || scoring == aphruntime.EvalScoringDeterministic {
+		return nil, nil
+	}
+	if scoring != aphruntime.EvalScoringJudge {
+		return nil, fmt.Errorf("unsupported eval scoring %q; use deterministic or judge", scoring)
+	}
+	if mode != aphruntime.EvalModeLive {
+		return nil, nil
+	}
+	cfgPath, err := config.ResolveConfigPath(configPath)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return nil, err
+	}
+	httpClient := &http.Client{Timeout: 90 * time.Second}
+	spec := strings.TrimSpace(routesSpec)
+	if spec == "" || strings.EqualFold(spec, "configured") {
+		return configuredEvalJudgeRoutes(cfg, httpClient)
+	}
+	var routes []aphruntime.EvalRoute
+	for _, raw := range strings.Split(spec, ",") {
+		route, err := explicitEvalRoute(cfg, httpClient, raw)
+		if err != nil {
+			return nil, err
+		}
+		routes = append(routes, route)
+	}
+	if len(routes) == 0 {
+		return nil, fmt.Errorf("no live eval judge routes selected")
+	}
+	return routes, nil
+}
+
 func configuredEvalRoutes(cfg *config.Config, httpClient *http.Client) ([]aphruntime.EvalRoute, error) {
 	var routes []aphruntime.EvalRoute
 	for _, name := range orderedNativeProviderNames(cfg) {
@@ -257,6 +364,54 @@ func configuredEvalRoutes(cfg *config.Config, httpClient *http.Client) ([]aphrun
 		return nil, fmt.Errorf("no configured provider routes are available for live evals")
 	}
 	return routes, nil
+}
+
+func configuredEvalJudgeRoutes(cfg *config.Config, httpClient *http.Client) ([]aphruntime.EvalRoute, error) {
+	var routes []aphruntime.EvalRoute
+	for _, name := range []string{"openai", "anthropic"} {
+		if !isConfiguredProvider(name, cfg) {
+			continue
+		}
+		route, err := configuredSingleModelEvalRoute(name, cfg, httpClient)
+		if err != nil {
+			return nil, err
+		}
+		routes = append(routes, route)
+	}
+	if len(routes) == 0 {
+		return nil, fmt.Errorf("no configured OpenAI or Anthropic provider routes are available for judge evals")
+	}
+	return routes, nil
+}
+
+func configuredSingleModelEvalRoute(name string, cfg *config.Config, httpClient *http.Client) (aphruntime.EvalRoute, error) {
+	p, err := buildNamedProvider(name, cfg, httpClient)
+	if err != nil {
+		return aphruntime.EvalRoute{}, err
+	}
+	model := configuredProviderModel(name, cfg)
+	routeName := strings.ToLower(strings.TrimSpace(name))
+	if model != "" {
+		routeName += ":" + model
+	}
+	return evalRouteFromProvider(routeName, p)
+}
+
+func configuredProviderModel(name string, cfg *config.Config) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "openai":
+		return strings.TrimSpace(cfg.Providers.OpenAI.Model)
+	case "anthropic":
+		return strings.TrimSpace(cfg.Providers.Anthropic.Model)
+	case "openrouter":
+		return strings.TrimSpace(cfg.Providers.OpenRouter.Model)
+	case "gemini":
+		return strings.TrimSpace(cfg.Providers.Gemini.Model)
+	case "ollama":
+		return strings.TrimSpace(cfg.Providers.Ollama.Model)
+	default:
+		return ""
+	}
 }
 
 func explicitEvalRoute(cfg *config.Config, httpClient *http.Client, raw string) (aphruntime.EvalRoute, error) {
@@ -355,6 +510,18 @@ func readEvalJSONReport(path string) (aphruntime.EvalReport, error) {
 	return report, nil
 }
 
+func readEvalJSONReports(paths []string) ([]aphruntime.EvalReport, error) {
+	reports := make([]aphruntime.EvalReport, 0, len(paths))
+	for _, path := range paths {
+		report, err := readEvalJSONReport(path)
+		if err != nil {
+			return nil, err
+		}
+		reports = append(reports, report)
+	}
+	return reports, nil
+}
+
 func normalizeEvalOutputFormat(format string, jsonAlias bool) string {
 	if jsonAlias {
 		return "json"
@@ -418,7 +585,7 @@ func renderEvalReportHuman(report aphruntime.EvalReport) string {
 		status = "fail"
 	}
 	fmt.Fprintf(&b, "Aphelion eval %s: %s\n", report.Suite, status)
-	fmt.Fprintf(&b, "mode=%s subject=%s routes=%d scenarios=%d rollouts=%d results=%d hard_failures=%d provider_failures=%d hard_failure_rate=%.2f%%\n", report.Mode, report.SubjectMode, report.RouteCount, report.ScenarioCount, report.Rollouts, report.ResultCount, report.HardFailureCount, report.ProviderFailureCount, report.HardFailureRate*100)
+	fmt.Fprintf(&b, "mode=%s subject=%s scoring=%s routes=%d judge_routes=%d scenarios=%d rollouts=%d results=%d hard_failures=%d provider_failures=%d ambiguous=%d hard_failure_rate=%.2f%%\n", report.Mode, report.SubjectMode, report.ScoringMode, report.RouteCount, report.JudgeRouteCount, report.ScenarioCount, report.Rollouts, report.ResultCount, report.HardFailureCount, report.ProviderFailureCount, report.AmbiguousCount, report.HardFailureRate*100)
 	for _, result := range report.Results {
 		mark := "PASS"
 		if !result.Pass {
@@ -435,6 +602,12 @@ func renderEvalReportHuman(report aphruntime.EvalReport) string {
 		if result.ProviderFailure {
 			fmt.Fprintf(&b, " provider_failure=true")
 		}
+		if result.JudgeFailure {
+			fmt.Fprintf(&b, " judge_provider_failure=true")
+		}
+		if result.Ambiguous {
+			fmt.Fprintf(&b, " ambiguous=true")
+		}
 		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
@@ -446,9 +619,11 @@ func renderEvalReportKV(report aphruntime.EvalReport) string {
 	fmt.Fprintf(&b, "mode=%s\n", report.Mode)
 	fmt.Fprintf(&b, "subject_mode=%s\n", report.SubjectMode)
 	fmt.Fprintf(&b, "scenario_revision=%s\n", report.ScenarioRevision)
+	fmt.Fprintf(&b, "scoring_mode=%s\n", report.ScoringMode)
 	fmt.Fprintf(&b, "failed=%t\n", report.Failed)
 	fmt.Fprintf(&b, "hard_failure_count=%d\n", report.HardFailureCount)
 	fmt.Fprintf(&b, "provider_failure_count=%d\n", report.ProviderFailureCount)
+	fmt.Fprintf(&b, "ambiguous_count=%d\n", report.AmbiguousCount)
 	fmt.Fprintf(&b, "hard_failure_rate=%.6f\n", report.HardFailureRate)
 	fmt.Fprintf(&b, "result_count=%d\n", report.ResultCount)
 	for i, result := range report.Results {
@@ -458,6 +633,7 @@ func renderEvalReportKV(report aphruntime.EvalReport) string {
 		fmt.Fprintf(&b, "%spass=%t\n", prefix, result.Pass)
 		fmt.Fprintf(&b, "%sscore=%d\n", prefix, result.Score)
 		fmt.Fprintf(&b, "%sprovider_failure=%t\n", prefix, result.ProviderFailure)
+		fmt.Fprintf(&b, "%sambiguous=%t\n", prefix, result.Ambiguous)
 	}
 	return b.String()
 }
@@ -470,7 +646,7 @@ func evalReportFailureError(report aphruntime.EvalReport) error {
 }
 
 func renderEvalCommandHelp(note string) string {
-	lines := []string{"Aphelion eval", "Usage:", "  aphelion eval list [--suite canonical] [--format human|kv|json]", "  aphelion eval run [--suite canonical] [--mode local|live] [--subject eval|governor] [--rollouts N] [--routes configured|provider:model,...] [--scenario id[,id]] [--progress] [--format human|kv|json] [--out report.json]", "  aphelion eval compare --before baseline.json --after branch.json [--format markdown|json] [--out impact.md]", ""}
+	lines := []string{"Aphelion eval", "Usage:", "  aphelion eval list [--suite canonical] [--format human|kv|json]", "  aphelion eval run [--suite canonical] [--mode local|live] [--subject eval|governor] [--rollouts N] [--routes configured|provider:model,...] [--scenario id[,id]] [--scoring deterministic|judge] [--judge-routes configured|provider:model,...] [--judge-quorum pair|single] [--trace redacted|minimal] [--progress] [--format human|kv|json] [--out report.json]", "  aphelion eval compare --before baseline.json --after branch.json [--format markdown|json] [--out impact.md]", "  aphelion eval gate --before base1.json,base2.json --after branch1.json,branch2.json [--format markdown|json] [--out gate.md]", ""}
 	if note = strings.TrimSpace(note); note != "" {
 		lines = append([]string{note, ""}, lines...)
 	}
