@@ -37,27 +37,27 @@ jobs:
           set -euo pipefail
           notes_path="release-notes.md"
           if [ "$EVENT_NAME" = "pull_request" ]; then
-            python3 - <<'PYCODE' "$GITHUB_EVENT_PATH" "$notes_path" >> "$GITHUB_OUTPUT"
-            import json, re, sys
-            path, notes = sys.argv[1], sys.argv[2]
-            event = json.load(open(path, encoding="utf-8"))
-            pr = event.get("pull_request") or {}
-            if not pr.get("merged"):
-                print("release_ref="); print("release_tag="); print("release_name="); print(f"notes_path={notes}"); print("should_tag=false")
-                raise SystemExit(0)
-            base = ((pr.get("base") or {}).get("ref")) or ""
-            m = re.fullmatch(r"release/(v[0-9]+\.[0-9]+\.[0-9]+(?:[-.][0-9A-Za-z.-]+)?)", base)
-            if not m:
-                raise SystemExit(f"release PR base must match release/vX.Y.Z; got {base!r}")
-            sha = pr.get("merge_commit_sha") or ""
-            if not sha:
-                raise SystemExit("merged release PR did not expose merge_commit_sha")
-            tag = m.group(1)
-            title = pr.get("title") or tag
-            body = pr.get("body") or "_Release PR body was empty._\n"
-            open(notes, "w", encoding="utf-8").write(f"# {tag}\n\nSource PR: {title}\n\n" + body.rstrip() + "\n")
-            print(f"release_ref={sha}"); print(f"release_tag={tag}"); print(f"release_name={tag}"); print(f"notes_path={notes}"); print("should_tag=true")
-            PYCODE
+            : > /tmp/resolve-release-pr.py
+            printf '%s\n' 'import json, re, sys' >> /tmp/resolve-release-pr.py
+            printf '%s\n' 'path, notes = sys.argv[1], sys.argv[2]' >> /tmp/resolve-release-pr.py
+            printf '%s\n' 'event = json.load(open(path, encoding="utf-8"))' >> /tmp/resolve-release-pr.py
+            printf '%s\n' 'pr = event.get("pull_request") or {}' >> /tmp/resolve-release-pr.py
+            printf '%s\n' 'if not pr.get("merged"):' >> /tmp/resolve-release-pr.py
+            printf '%s\n' '    print("release_ref="); print("release_tag="); print("release_name="); print(f"notes_path={notes}"); print("should_tag=false")' >> /tmp/resolve-release-pr.py
+            printf '%s\n' '    raise SystemExit(0)' >> /tmp/resolve-release-pr.py
+            printf '%s\n' 'base = ((pr.get("base") or {}).get("ref")) or ""' >> /tmp/resolve-release-pr.py
+            printf '%s\n' 'm = re.fullmatch(r"release/(v[0-9]+\\\\.[0-9]+\\\\.[0-9]+(?:[-.][0-9A-Za-z.-]+)?)", base)' >> /tmp/resolve-release-pr.py
+            printf '%s\n' 'if not m:' >> /tmp/resolve-release-pr.py
+            printf '%s\n' '    raise SystemExit(f"release PR base must match release/vX.Y.Z; got {base!r}")' >> /tmp/resolve-release-pr.py
+            printf '%s\n' 'sha = pr.get("merge_commit_sha") or ""' >> /tmp/resolve-release-pr.py
+            printf '%s\n' 'if not sha:' >> /tmp/resolve-release-pr.py
+            printf '%s\n' '    raise SystemExit("merged release PR did not expose merge_commit_sha")' >> /tmp/resolve-release-pr.py
+            printf '%s\n' 'tag = m.group(1)' >> /tmp/resolve-release-pr.py
+            printf '%s\n' 'title = pr.get("title") or tag' >> /tmp/resolve-release-pr.py
+            printf '%s\n' 'body = pr.get("body") or "_Release PR body was empty._\\\\n"' >> /tmp/resolve-release-pr.py
+            printf '%s\n' 'open(notes, "w", encoding="utf-8").write(f"# {tag}\\\\n\\\\nSource PR: {title}\\\\n\\\\n" + body.rstrip() + "\\\\n")' >> /tmp/resolve-release-pr.py
+            printf '%s\n' 'print(f"release_ref={sha}"); print(f"release_tag={tag}"); print(f"release_name={tag}"); print(f"notes_path={notes}"); print("should_tag=true")' >> /tmp/resolve-release-pr.py
+            python3 /tmp/resolve-release-pr.py "$GITHUB_EVENT_PATH" "$notes_path" >> "$GITHUB_OUTPUT"
           elif [ "$EVENT_NAME" = "push" ]; then
             if ! [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
               echo "release tag must match vX.Y.Z; got '$REF_NAME'" >&2
