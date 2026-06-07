@@ -329,62 +329,7 @@ func run() error {
 	startTelegramThreadReminderSweepLoop(ctx, tgOutbound, commandControl, store)
 
 	telegramHandler := func(parent context.Context, msg core.InboundMessage) error {
-		msg = telegramruntime.RewriteDurableWizardIntent(msg, commandControl)
-		msg = telegramruntime.RewriteDurableRelayIntent(msg)
-		if routed, handled, err := telegramcommands.ResolveTelegramThreadPrefix(parent, tgOutbound, commandControl, msg); err != nil {
-			return err
-		} else if handled {
-			return nil
-		} else {
-			msg = routed
-		}
-		threadCommandPayload := false
-		if routed, retargeted, handled, err := telegramcommands.ResolveTelegramThreadStartCommand(parent, tgOutbound, commandControl, msg); err != nil {
-			return err
-		} else if handled {
-			return nil
-		} else if retargeted {
-			msg = routed
-			threadCommandPayload = true
-		}
-		if !threadCommandPayload {
-			handled, err := telegramcommands.HandleTelegramCommand(parent, tgOutbound, commandControl, msg)
-			if err != nil {
-				return err
-			}
-			if handled {
-				return nil
-			}
-		}
-		if routed, handled, err := telegramcommands.ResolveTelegramThreadReply(parent, tgOutbound, commandControl, msg); err != nil {
-			return err
-		} else if handled {
-			return nil
-		} else {
-			msg = routed
-		}
-		if handled, err := telegramcommands.ResolveTelegramAgentReply(parent, tgOutbound, commandControl, msg); err != nil {
-			return err
-		} else if handled {
-			return nil
-		}
-		if busyHandled, busyErr := decisionHandler.HandleBusyMessage(parent, msg); busyErr != nil {
-			return busyErr
-		} else if busyHandled {
-			return nil
-		}
-		if retentionHandled, retentionErr := decisionHandler.HandleArtifactRetentionMessage(parent, msg); retentionErr != nil {
-			return retentionErr
-		} else if retentionHandled {
-			return nil
-		}
-		if mediaPickerHandled, mediaPickerErr := telegramcommands.MaybeAskTelegramMediaThreadPicker(parent, tgOutbound, commandControl, msg); mediaPickerErr != nil {
-			return mediaPickerErr
-		} else if mediaPickerHandled {
-			return nil
-		}
-
-		return commandControl.RouteAccepted(parent, msg)
+		return handleTelegramIngressMessage(parent, tgOutbound, commandControl, decisionHandler, msg)
 	}
 	checkpoint, err := telegramruntime.ReplayStartupIngress(ctx, store, telegramHandler, log.Printf)
 	if err != nil {
