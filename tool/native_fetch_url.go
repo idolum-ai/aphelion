@@ -46,6 +46,9 @@ func (r *Registry) fetchURL(ctx context.Context, input json.RawMessage, scope sa
 		return "", fmt.Errorf("fetch_url rejects local/private hosts for non-admin principals")
 	}
 	transport := http.DefaultTransport
+	if r.nativeFetchTransport != nil {
+		transport = r.nativeFetchTransport
+	}
 	var fetchPolicy *nativeFetchNetworkPolicy
 	if scope.Profile.Mode == sandbox.ModeIsolated && scope.Profile.Network == sandbox.NetworkAllowlist {
 		allowlistTransport, policy, err := r.fetchURLAllowlistTransport(ctx, scope.Profile, p.Role != principal.RoleAdmin)
@@ -56,6 +59,10 @@ func (r *Registry) fetchURL(ctx context.Context, input json.RawMessage, scope sa
 		fetchPolicy = policy
 	}
 	maxBytes := clampNativeLimit(in.MaxBytes, defaultNativeFetchMaxBytes, maxNativeFetchBytes)
+	excerptBytes := clampNativeLimit(in.ExcerptBytes, defaultNativeFetchExcerptBytes, maxNativeFetchExcerptBytes)
+	if excerptBytes > maxBytes {
+		excerptBytes = maxBytes
+	}
 	client := &http.Client{Timeout: 20 * time.Second, Transport: transport}
 	if fetchPolicy != nil {
 		client.CheckRedirect = func(req *http.Request, _ []*http.Request) error {
@@ -83,7 +90,7 @@ func (r *Registry) fetchURL(ctx context.Context, input json.RawMessage, scope sa
 	if err != nil {
 		return "", fmt.Errorf("fetch_url read response: %w", err)
 	}
-	return renderFetchURLDigest(parsed.String(), res.Status, res.Header.Get("Content-Type"), data, truncated), nil
+	return renderFetchURLDigest(parsed.String(), res.Status, res.Header.Get("Content-Type"), data, truncated, excerptBytes), nil
 }
 
 func fetchURLPort(parsed *url.URL) (uint16, error) {
@@ -122,9 +129,9 @@ func hostLooksLocal(host string) bool {
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
 }
 
-func renderFetchURLDigest(rawURL, status, contentType string, data []byte, truncated bool) string {
+func renderFetchURLDigest(rawURL, status, contentType string, data []byte, truncated bool, excerptBytes int) string {
 	sum := sha256.Sum256(data)
-	excerpt, excerptTruncated := fetchURLExcerpt(data, 2048)
+	excerpt, excerptTruncated := fetchURLExcerpt(data, excerptBytes)
 	var b strings.Builder
 	b.WriteString("[FETCH_URL]\n")
 	fmt.Fprintf(&b, "url: %s\n", rawURL)
@@ -133,7 +140,7 @@ func renderFetchURLDigest(rawURL, status, contentType string, data []byte, trunc
 	fmt.Fprintf(&b, "bytes_read: %d\n", len(data))
 	fmt.Fprintf(&b, "sha256: %s\n", hex.EncodeToString(sum[:]))
 	fmt.Fprintf(&b, "truncated: %t\n", truncated)
-	fmt.Fprintf(&b, "body_ref: fetch_url.raw sha256=%s bytes=%d truncated=%t max_bytes_param=re-run_with_higher_max_bytes_if_needed\n", hex.EncodeToString(sum[:]), len(data), truncated)
+	fmt.Fprintf(&b, "excerpt_bytes: %d\n", excerptBytes)
 	fmt.Fprintf(&b, "excerpt_truncated: %t\n", excerptTruncated)
 	b.WriteString("excerpt:\n")
 	if excerpt != "" {

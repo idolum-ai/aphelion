@@ -1,6 +1,9 @@
 # Perception, Tool Evidence, and Token Budgets
 
-Status: local design note for the token-performance plan. No runtime behavior is changed by this file.
+Status: local design note for the token-performance plan. The current branch
+implements the provider-context digest/admission and accounting parts described
+below; first-class persisted digest records and hard prompt-admission enforcement
+remain future work.
 
 ## Problem
 
@@ -17,11 +20,51 @@ The goal is to reduce prompt/input token load without weakening the typed-record
 5. When evidence is omitted from a prompt for budget reasons, the prompt must include a typed digest and evidence reference so the model can ask for more or report uncertainty.
 6. Budget exhaustion should produce a typed blocker or continuation proposal, not a hidden truncation.
 
-## Proposed shape
+## Implemented shape
+
+### Provider-context tool evidence projection
+
+Before provider calls, runtime estimates context pressure and projects large
+tool-result messages into compact provider-context digests when needed. The
+projection preserves raw evidence in the session history / canonical runtime
+records and only changes what is admitted into the provider request.
+
+The current digest shape includes:
+
+- `projection_kind: tool_result_digest`
+- source marker `provider_context_projection`
+- original character count
+- optional tool call id and tool name
+- bounded key-fact excerpts
+
+The projection is triggered by tool-result size and recent tool-output pressure.
+Known fat tools such as `fetch_url`, `read_file`, `exec`, and
+`request_approval` also lower the compaction threshold when their recent output
+is large enough to predict context pressure.
+
+### Runtime accounting
+
+Turn budgets now track provider input and output token usage alongside model
+iteration/tool-call pressure. `turn_runs`, `/status`, `/health trace`, and doctor
+evidence can project:
+
+- turn index
+- tool input characters
+- assistant output characters
+- assistant/tool character ratio
+- provider input/output tokens
+- provider cache-read/cache-write tokens
+
+These fields are accounting and diagnosis projections, not billing authority and
+not canonical execution history.
+
+## Proposed remaining shape
 
 ### 1. Tool evidence admission
 
-Add a prompt-admission pass after tool execution and before the next model request. It classifies each tool result as one of:
+Extend the current provider-context projection into a first-class
+prompt-admission pass after tool execution and before the next model request. It
+classifies each tool result as one of:
 
 - `inline_required`: small/load-bearing evidence needed for immediate reasoning.
 - `digest_required`: large evidence summarized with stable refs and bounded excerpts.
@@ -45,7 +88,9 @@ Persist a `tool_evidence_digest` execution event or adjacent table record with:
 - `lossiness` (`none`, `bounded_excerpt`, `semantic_summary`, `ref_only`)
 - `created_at`, `policy_version`
 
-The prompt should cite digest IDs instead of reinserting full tool output when possible.
+The current provider-context digest does not create stable digest IDs. The
+future persisted form should cite digest IDs instead of reinserting full tool
+output when possible.
 
 ### 3. Perception budget enforcement
 
@@ -83,15 +128,21 @@ Runtime decrements budget from actual provider usage when available and from est
 
 ## Rollout phases
 
-1. **Design/telemetry only**: add budget projection events and status fields without changing behavior.
-2. **Digest persistence**: persist typed tool digests and references; prompts still include current raw evidence.
-3. **Soft admission**: include digest plus raw excerpt for large results; report omitted bytes/tokens.
-4. **Hard admission**: enforce per-turn prompt budgets, with explicit blockers/continuation proposals.
-5. **Face lane integration**: face prompt consumes only material floor + scene-safe shared awareness + digest refs, never raw tool dumps.
+1. **Implemented soft projection/accounting**: provider-context digests,
+   known-fat-tool anticipatory compaction, token-aware turn budget warnings, and
+   status/doctor accounting projection.
+2. **Digest persistence**: persist typed tool digests and references; prompts
+   still include current raw evidence when policy allows.
+3. **Hard admission**: enforce per-turn prompt budgets with explicit
+   blockers/continuation proposals.
+4. **Face lane integration**: face prompt consumes only material floor +
+   scene-safe shared awareness + digest refs, never raw tool dumps.
 
 ## Validation
 
-- Unit tests for admission classes and digest schema normalization.
+- Unit tests for provider-context digest rendering, admission counters, and
+  compaction prediction.
+- Unit tests for future admission classes and digest schema normalization.
 - Golden prompt tests showing large tool results become digest refs, not raw dumps.
 - Runtime tests that budget exhaustion creates typed blocker/status, not silent truncation.
 - Telemetry checks: prompt estimated tokens, actual provider input tokens, cache-read ratio, digest token savings, and retry count.
@@ -99,11 +150,10 @@ Runtime decrements budget from actual provider usage when available and from est
 
 ## Gates
 
-Implementation should be split into PRs:
+Remaining implementation should be split into small, reviewable changes:
 
-1. telemetry/projection only
-2. typed digest persistence and status projection
-3. soft prompt admission with golden tests
-4. hard budget enforcement
+1. typed digest persistence and status projection
+2. soft prompt admission with golden tests
+3. hard budget enforcement
 
 Deploy/restart remains a separate approval after merge. No schema migration that drops raw evidence should be accepted for this plan.

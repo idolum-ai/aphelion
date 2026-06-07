@@ -63,6 +63,14 @@ type OutboundMessage struct {
 	ReplyTo   *int64
 	ParseMode string
 	Reactions []string
+	Delivery  *OutboundDelivery
+}
+
+// OutboundDelivery records transport-local delivery details for multi-message
+// sends. Single-message callers can ignore it and keep using SendMessage's
+// canonical first returned message id.
+type OutboundDelivery struct {
+	MessageIDs []int64
 }
 
 type Media struct {
@@ -104,6 +112,23 @@ type TurnResult struct {
 	TokenUsage      TokenUsage
 	ProviderFailure string
 	ProviderEvents  []ProviderEvent
+	Recovery        *TurnRecovery
+}
+
+type TurnRecoveryKind string
+
+const (
+	TurnRecoveryTokenBudgetExhausted     TurnRecoveryKind = "token_budget_exhausted"
+	TurnRecoveryToolBudgetExhausted      TurnRecoveryKind = "tool_budget_exhausted"
+	TurnRecoveryIterationBudgetExhausted TurnRecoveryKind = "iteration_budget_exhausted"
+)
+
+type TurnRecovery struct {
+	Kind           TurnRecoveryKind
+	Recoverable    bool
+	ReplanRequired bool
+	Summary        string
+	MaxAutoHops    int
 }
 
 type ProviderEvent struct {

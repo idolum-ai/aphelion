@@ -57,6 +57,21 @@ func (r *Runtime) repairContinuationAuthorityContradictions(ctx context.Context,
 			return repaired, fmt.Errorf("repair continuation authority chat_id=%d: %w", record.Key.ChatID, err)
 		}
 		repaired++
+		if compilation.Invalid() {
+			_, opState, exists, err := r.store.PlanAndOperationStateIfExists(record.Key)
+			if err != nil {
+				return repaired, fmt.Errorf("load operation state for authority reoffer chat_id=%d: %w", record.Key.ChatID, err)
+			}
+			if exists && opState.Active() {
+				reoffered, err := r.rematerializeRevokedInvalidAuthorityPhaseApproval(ctx, record.Key, record.Key.ChatID, opState, state, true, now, "authority_sanitizer")
+				if err != nil {
+					return repaired, err
+				}
+				if reoffered {
+					repaired++
+				}
+			}
+		}
 		r.recordExecutionEvent(record.Key, core.ExecutionEventRecoveryCompleted, "recovery", status, payload, now)
 	}
 	return repaired, nil

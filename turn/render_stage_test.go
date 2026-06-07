@@ -264,6 +264,7 @@ func TestRunRenderStageFallsBackWhenOperationalFaceRenderIsPartial(t *testing.T)
 			LatestUserInput: "continue",
 			FloorText:       floorText,
 			MaterialFloor: core.MaterialPacket{
+				Kind:  core.MaterialPacketKindStatusReport,
 				Facts: []string{"Service active/running: PID 100755", "verify-deploy passed", "revision 37928e5"},
 			},
 			Runtime: prompt.RuntimeAwareness{},
@@ -294,6 +295,41 @@ func TestRunRenderStageFallsBackWhenOperationalFaceRenderIsPartial(t *testing.T)
 	}
 }
 
+func TestRunRenderStageDoesNotFallbackForUnclassifiedOperationalText(t *testing.T) {
+	t.Parallel()
+
+	floorText := strings.Repeat("Service active at PID 100755 and verify-deploy passed. ", 8)
+	renderedText := "Service active at PID 100755 and verify-deploy"
+	got, err := RunRenderStage(context.Background(), RenderStageRequest{
+		Render: FaceRenderRequest{
+			LatestUserInput: "status",
+			FloorText:       floorText,
+			MaterialFloor: core.MaterialPacket{
+				Facts: []string{"Service active at PID 100755.", "verify-deploy passed."},
+			},
+		},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		InitialReply:     floorText,
+	}, RenderStageCallbacks{
+		Render: func(context.Context, FaceRenderRequest) (*FaceRenderResult, error) {
+			return &FaceRenderResult{Text: renderedText}, nil
+		},
+		Fallback: func(core.MaterialPacket, string, pipeline.FallbackOptions) string {
+			return "unexpected fallback"
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunRenderStage() err = %v", err)
+	}
+	if got.ReplyText != renderedText {
+		t.Fatalf("ReplyText = %q, want unclassified rendered text", got.ReplyText)
+	}
+	if got.FallbackApplied || got.FallbackReason != "" {
+		t.Fatalf("fallback = %v/%q, want none for unclassified material", got.FallbackApplied, got.FallbackReason)
+	}
+}
+
 func TestRunRenderStageKeepsCompleteOperationalFaceRender(t *testing.T) {
 	t.Parallel()
 
@@ -303,7 +339,7 @@ func TestRunRenderStageKeepsCompleteOperationalFaceRender(t *testing.T) {
 		Render: FaceRenderRequest{
 			LatestUserInput: "status",
 			FloorText:       floorText,
-			MaterialFloor:   core.MaterialPacket{Facts: []string{"Service verified from main."}},
+			MaterialFloor:   core.MaterialPacket{Kind: core.MaterialPacketKindStatusReport, Facts: []string{"Service verified from main."}},
 		},
 		FacePolicy:       pipeline.FacePolicy{Render: true},
 		UseMaterialFloor: true,
@@ -340,6 +376,7 @@ func TestRunRenderStageKeepsSceneConstrainedShortOperationalFaceRender(t *testin
 			LatestUserInput: "report deploy status",
 			FloorText:       floorText,
 			MaterialFloor: core.MaterialPacket{
+				Kind:             core.MaterialPacketKindStatusReport,
 				Facts:            []string{"PR #140 deployed and verified."},
 				SceneConstraints: []string{"Keep the visible reply warm and brief."},
 			},

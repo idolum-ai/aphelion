@@ -14,9 +14,11 @@ import (
 )
 
 const (
-	compactionSummaryMaxChars = 1800
-	compactionMinTurnsKept    = 2
-	compactionSummaryBudget   = 512
+	compactionSummaryMaxChars       = 1800
+	compactionMinTurnsKept          = 2
+	compactionSummaryBudget         = 512
+	anticipatoryCompactionRatio     = 0.50
+	anticipatoryCompactionToolChars = 12000
 )
 
 type turnTokenEstimate struct {
@@ -74,8 +76,43 @@ func (r *Runtime) shouldCompact(systemBlocks []agent.SystemBlock, history []agen
 		return false
 	}
 	estimate := estimateInteractivePromptTokens(systemBlocks, history, userText, idolumProposal)
-	threshold := int(float64(contextWindow) * r.cfg.Sessions.MaxContextRatio)
+	ratio := r.cfg.Sessions.MaxContextRatio
+	if hasKnownFatToolOutput(history) && ratio > anticipatoryCompactionRatio {
+		ratio = anticipatoryCompactionRatio
+	}
+	threshold := int(float64(contextWindow) * ratio)
 	return estimate > threshold
+}
+
+func hasKnownFatToolOutput(history []agent.Message) bool {
+	scanned := 0
+	for i := len(history) - 1; i >= 0; i-- {
+		msg := history[i]
+		scanned++
+		if scanned > 16 {
+			break
+		}
+		role := strings.TrimSpace(msg.Role)
+		if role != "tool" {
+			continue
+		}
+		if !isKnownFatToolName(msg.ToolName) {
+			continue
+		}
+		if len(strings.TrimSpace(msg.Content)) > anticipatoryCompactionToolChars {
+			return true
+		}
+	}
+	return false
+}
+
+func isKnownFatToolName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "fetch_url", "read_file", "exec", "request_approval":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *Runtime) compactionBoundary(sess *session.Session, systemBlocks []agent.SystemBlock, userText string, idolumProposal string) (int, bool) {
@@ -140,7 +177,12 @@ func (r *Runtime) buildCompactionSummary(ctx context.Context, sess *session.Sess
 	if opts != nil {
 		opts.MaxTokens = compactionMaxTokens
 	}
-	resp, err := completeProvider(ctx, r.provider, messages, nil, opts)
+	provider := r.provider
+	if laneProvider, status, ok := r.renderLaneProvider(); ok {
+		provider = laneProvider
+		opts = renderLaneCompleteOptions(status, compactionMaxTokens)
+	}
+	resp, err := completeProvider(ctx, provider, messages, nil, opts)
 	if err != nil {
 		return "", err
 	}

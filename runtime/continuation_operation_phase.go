@@ -71,6 +71,7 @@ func continuationStateFromOperationPhase(opState session.OperationState, phase s
 	if deployPhase && riskClass == "continuation" {
 		riskClass = "deploy"
 	}
+	riskClass = operationPhaseRiskClassForContinuationAction(phase, riskClass)
 	action := session.ActionProposal{
 		ID:               "aprop-" + decisionID,
 		OperationID:      decisionID,
@@ -120,6 +121,34 @@ func operationPhaseIsDeployRestartPhase(phase session.OperationPhase) bool {
 		return true
 	}
 	return operationPhasePlanBudgetHardStopReason(phase) == "deploy/restart"
+}
+
+func operationPhaseRiskClassForContinuationAction(phase session.OperationPhase, fallback string) string {
+	phase = normalizeSingleOperationPhase(phase)
+	if operationPhaseHasExternalAccountGrant(phase) && !operationPhaseAllowsLocalRepoMutation(phase) {
+		return "external_account_action"
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func operationPhaseHasExternalAccountGrant(phase session.OperationPhase) bool {
+	phase = normalizeSingleOperationPhase(phase)
+	for _, grant := range phase.RequiredCapabilityGrants {
+		if grant.Kind == session.CapabilityKindExternalAccount {
+			return true
+		}
+	}
+	return false
+}
+
+func operationPhaseAllowsLocalRepoMutation(phase session.OperationPhase) bool {
+	phase = normalizeSingleOperationPhase(phase)
+	switch workModeFromStructuredAuthorityList(phase.AllowedActions) {
+	case WorkModeWorkspaceWrite, WorkModeCommit, WorkModeDeploy:
+		return true
+	default:
+		return false
+	}
 }
 
 func deployPhaseBoundedEffect(current string) string {

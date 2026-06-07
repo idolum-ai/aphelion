@@ -7,9 +7,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/prompt"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/turn"
 )
 
@@ -52,6 +55,89 @@ func TestTurnDeliveryPortPostCommitHooksReceiveTurnResult(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, []*turn.Result{result, result, result, result}) {
 		t.Fatalf("hook results = %#v, want all hooks to receive same turn result", got)
+	}
+}
+
+func TestPersistTurnPreservesConsumedContinuationState(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9716, UserID: 0, Scope: telegramDMScopeRef(9716)}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	now := time.Now().UTC()
+	pending := session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusPending,
+		DecisionID:        "phase-stale-recovery",
+		DecisionMessageID: 17492,
+		Objective:         "Finish approved recovery work.",
+		StageSummary:      "Run approved phase",
+		RemainingTurns:    1,
+		UpdatedAt:         now,
+		ActionProposal: session.ActionProposal{
+			ID:        "aprop-phase-stale-recovery",
+			Summary:   "Run approved phase",
+			Status:    session.ProposalStatusPending,
+			UpdatedAt: now,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-phase-stale-recovery",
+			ProposalID:     "aprop-phase-stale-recovery",
+			Status:         session.ContinuationLeaseStatusPending,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			UpdatedAt:      now,
+		},
+	}
+	sess.ContinuationState = pending
+
+	consumed := pending
+	consumed.Status = session.ContinuationStatusIdle
+	consumed.DecisionID = ""
+	consumed.DecisionMessageID = 0
+	consumed.RemainingTurns = 0
+	consumed.ActionProposal.Status = session.ProposalStatusApproved
+	consumed.ActionProposal.UpdatedAt = now.Add(time.Second)
+	consumed.ContinuationLease.Status = session.ContinuationLeaseStatusConsumed
+	consumed.ContinuationLease.RemainingTurns = 0
+	consumed.ContinuationLease.ConsumedAt = now.Add(time.Second)
+	consumed.ContinuationLease.UpdatedAt = now.Add(time.Second)
+	consumed.UpdatedAt = now.Add(time.Second)
+	if err := store.UpdateContinuationState(key, consumed); err != nil {
+		t.Fatalf("UpdateContinuationState(consumed) err = %v", err)
+	}
+
+	if _, err := rt.persistTurn(context.Background(), turnCommitInput{
+		Key:             key,
+		Sess:            sess,
+		Msg:             core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "continue"},
+		OutHistory:      []agent.Message{{Role: "assistant", Content: "done"}},
+		HistoryInputLen: 0,
+		Result:          &core.TurnResult{Text: "done"},
+		ReplyText:       "done",
+	}); err != nil {
+		t.Fatalf("persistTurn() err = %v", err)
+	}
+
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusIdle ||
+		got.DecisionID != "" ||
+		got.DecisionMessageID != 0 ||
+		got.RemainingTurns != 0 ||
+		got.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed ||
+		got.ContinuationLease.RemainingTurns != 0 {
+		t.Fatalf("continuation = %#v, want consumed state preserved over stale pending session snapshot", got)
 	}
 }
 

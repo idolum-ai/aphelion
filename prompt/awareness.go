@@ -85,126 +85,235 @@ type RuntimeAwareness struct {
 	NetworkPolicy              string
 }
 
-type AwarenessRole string
+type awarenessRole string
 
 const (
-	AwarenessRoleGovernor AwarenessRole = "governor"
-	AwarenessRoleFace     AwarenessRole = "face"
+	awarenessRoleGovernor awarenessRole = "governor"
+	awarenessRoleFace     awarenessRole = "face"
 )
 
+type awarenessField struct {
+	key    string
+	render func(RuntimeAwareness) string
+}
+
+var sharedStableAwarenessFields = []awarenessField{
+	stringAwarenessField("session_kind", func(aw RuntimeAwareness) string { return aw.SessionKind }),
+	stringAwarenessField("run_kind", func(aw RuntimeAwareness) string { return aw.RunKind }),
+	stringAwarenessField("channel", func(aw RuntimeAwareness) string { return aw.Channel }),
+	stringAwarenessField("event_origin", func(aw RuntimeAwareness) string { return aw.EventOrigin }),
+	stringAwarenessField("artifact_mode", func(aw RuntimeAwareness) string { return aw.ArtifactMode }),
+}
+
+var sharedTurnAwarenessFields = []awarenessField{
+	stringAwarenessField("active_provider", func(aw RuntimeAwareness) string { return aw.ActiveProvider }),
+	boolAwarenessField("fallback_active", func(aw RuntimeAwareness) bool { return aw.FallbackActive }),
+	boolAwarenessField("hidden_inputs_active", func(aw RuntimeAwareness) bool { return aw.HiddenInputsActive }),
+	listAwarenessField("hidden_input_categories", func(aw RuntimeAwareness) []string { return aw.HiddenInputCategories }),
+	stringAwarenessField("provenance_summary", func(aw RuntimeAwareness) string { return aw.ProvenanceSummary }),
+	boolAwarenessField("plan_active", func(aw RuntimeAwareness) bool { return aw.PlanActive }),
+	stringAwarenessField("plan_summary", func(aw RuntimeAwareness) string { return aw.PlanSummary }),
+	listAwarenessField("plan_events", func(aw RuntimeAwareness) []string { return aw.PlanEvents }),
+	boolAwarenessField("operation_active", func(aw RuntimeAwareness) bool { return aw.OperationActive }),
+	stringAwarenessField("operation_objective", func(aw RuntimeAwareness) string { return aw.OperationObjective }),
+	stringAwarenessField("operation_status", func(aw RuntimeAwareness) string { return aw.OperationStatus }),
+	stringAwarenessField("operation_stage", func(aw RuntimeAwareness) string { return aw.OperationStage }),
+	stringAwarenessField("operation_summary", func(aw RuntimeAwareness) string { return aw.OperationSummary }),
+	listAwarenessField("operation_digest", func(aw RuntimeAwareness) []string { return aw.OperationDigest }),
+	boolAwarenessField("media_attached", func(aw RuntimeAwareness) bool { return aw.MediaAttached }),
+	stringAwarenessField("media_mode", func(aw RuntimeAwareness) string { return aw.MediaMode }),
+}
+
+var governorAwarenessFields = []awarenessField{
+	stringAwarenessField("turn_authorization_kind", func(aw RuntimeAwareness) string { return aw.TurnAuthorizationKind }),
+	stringAwarenessField("governor_backend", func(aw RuntimeAwareness) string { return aw.GovernorBackend }),
+	stringAwarenessField("governor_provider", func(aw RuntimeAwareness) string { return aw.GovernorProvider }),
+	stringAwarenessField("governor_model", func(aw RuntimeAwareness) string { return aw.GovernorModel }),
+	{
+		key: "configured_provider_path",
+		render: func(aw RuntimeAwareness) string {
+			if path := formatProviderPath(aw.GovernorProviderPath); path != "" {
+				return fmt.Sprintf("- configured_provider_path: %s", path)
+			}
+			return ""
+		},
+	},
+	stringAwarenessField("reasoning_effort", func(aw RuntimeAwareness) string { return aw.ReasoningEffort }),
+	stringAwarenessField("reasoning_summary", func(aw RuntimeAwareness) string { return aw.ReasoningSummary }),
+	stringAwarenessField("governor_effort_recipe", func(aw RuntimeAwareness) string { return aw.GovernorEffortRecipe }),
+	boolAwarenessField("brokerage_active", func(aw RuntimeAwareness) bool { return aw.BrokerageActive }),
+	stringAwarenessField("brokerage_phase", func(aw RuntimeAwareness) string { return aw.BrokeragePhase }),
+	stringAwarenessField("idolum_suggested_execution_contract", func(aw RuntimeAwareness) string { return aw.SuggestedExecutionContract }),
+	stringAwarenessField("brokerage_ratification", func(aw RuntimeAwareness) string { return aw.BrokerageRatification }),
+	stringAwarenessField("ratified_execution_contract", func(aw RuntimeAwareness) string { return aw.RatifiedExecutionContract }),
+	stringAwarenessField("signal_judgment", func(aw RuntimeAwareness) string { return aw.SignalJudgment }),
+	boolAwarenessField("proposal_active", func(aw RuntimeAwareness) bool { return aw.ProposalActive }),
+	stringAwarenessField("proposal_kind", func(aw RuntimeAwareness) string { return aw.ProposalKind }),
+	stringAwarenessField("proposal_status", func(aw RuntimeAwareness) string { return aw.ProposalStatus }),
+	stringAwarenessField("proposal_summary", func(aw RuntimeAwareness) string { return aw.ProposalSummary }),
+	stringAwarenessField("proposal_why_now", func(aw RuntimeAwareness) string { return aw.ProposalWhyNow }),
+	stringAwarenessField("proposal_bounded_effect", func(aw RuntimeAwareness) string { return aw.ProposalBoundedEffect }),
+	boolAwarenessField("phase_plan_active", func(aw RuntimeAwareness) bool { return aw.PhasePlanActive }),
+	stringAwarenessField("phase_plan_id", func(aw RuntimeAwareness) string { return aw.PhasePlanID }),
+	stringAwarenessField("phase_plan_goal", func(aw RuntimeAwareness) string { return aw.PhasePlanGoal }),
+	stringAwarenessField("phase_plan_current_phase_id", func(aw RuntimeAwareness) string { return aw.PhasePlanCurrentPhaseID }),
+	listAwarenessField("operation_phases", func(aw RuntimeAwareness) []string { return aw.OperationPhases }),
+	listAwarenessField("operation_findings", func(aw RuntimeAwareness) []string { return aw.OperationFindings }),
+	listAwarenessField("operation_artifacts", func(aw RuntimeAwareness) []string { return aw.OperationArtifacts }),
+	stringAwarenessField("continuation_status", func(aw RuntimeAwareness) string { return aw.ContinuationStatus }),
+	boolAwarenessField("continuation_active", func(aw RuntimeAwareness) bool { return aw.ContinuationActive }),
+	stringAwarenessField("continuation_persona_intent", func(aw RuntimeAwareness) string { return aw.ContinuationPersonaIntent }),
+	stringAwarenessField("continuation_persona_why", func(aw RuntimeAwareness) string { return aw.ContinuationPersonaWhy }),
+	stringAwarenessField("continuation_governor_intent", func(aw RuntimeAwareness) string { return aw.ContinuationGovernorIntent }),
+	stringAwarenessField("continuation_governor_why", func(aw RuntimeAwareness) string { return aw.ContinuationGovernorWhy }),
+	boolAwarenessField("continuation_governor_ratified", func(aw RuntimeAwareness) bool { return aw.ContinuationRatified }),
+	stringAwarenessField("continuation_blocked_reason", func(aw RuntimeAwareness) string { return aw.ContinuationBlockedReason }),
+	stringAwarenessField("prompt_root", func(aw RuntimeAwareness) string { return aw.PromptRoot }),
+	stringAwarenessField("exec_root", func(aw RuntimeAwareness) string { return aw.ExecRoot }),
+	stringAwarenessField("shared_memory_root", func(aw RuntimeAwareness) string { return aw.SharedMemoryRoot }),
+	stringAwarenessField("user_workspace_root", func(aw RuntimeAwareness) string { return aw.UserWorkspaceRoot }),
+	stringAwarenessField("user_memory_root", func(aw RuntimeAwareness) string { return aw.UserMemoryRoot }),
+	stringAwarenessField("working_root", func(aw RuntimeAwareness) string { return aw.WorkingRoot }),
+	stringAwarenessField("sandbox_mode", func(aw RuntimeAwareness) string { return aw.SandboxMode }),
+	stringAwarenessField("network_policy", func(aw RuntimeAwareness) string { return aw.NetworkPolicy }),
+}
+
+var faceAwarenessFields = []awarenessField{
+	stringAwarenessField("face_backend", func(aw RuntimeAwareness) string { return aw.FaceBackend }),
+	stringAwarenessField("face_provider", func(aw RuntimeAwareness) string { return aw.FaceProvider }),
+	stringAwarenessField("face_model", func(aw RuntimeAwareness) string { return aw.FaceModel }),
+	stringAwarenessField("persona_effort_recipe", func(aw RuntimeAwareness) string { return aw.PersonaEffortRecipe }),
+	stringAwarenessField("delivery_mode", func(aw RuntimeAwareness) string { return aw.DeliveryMode }),
+	boolAwarenessField("stream_reply", func(aw RuntimeAwareness) bool { return aw.StreamReply }),
+	boolAwarenessField("inbound_was_voice", func(aw RuntimeAwareness) bool { return aw.InboundWasVoice }),
+	stringAwarenessField("reply_modality_default", func(aw RuntimeAwareness) string { return aw.ReplyModalityDefault }),
+	stringAwarenessField("reply_modality_reason", func(aw RuntimeAwareness) string { return aw.ReplyModalityReason }),
+	stringAwarenessField("reply_modality_override", func(aw RuntimeAwareness) string { return aw.ReplyModalityOverride }),
+}
+
+func stringAwarenessField(key string, value func(RuntimeAwareness) string) awarenessField {
+	return awarenessField{
+		key: key,
+		render: func(aw RuntimeAwareness) string {
+			return nonEmptyAwarenessLine(key, value(aw))
+		},
+	}
+}
+
+func boolAwarenessField(key string, value func(RuntimeAwareness) bool) awarenessField {
+	return awarenessField{
+		key: key,
+		render: func(aw RuntimeAwareness) string {
+			return fmt.Sprintf("- %s: %t", key, value(aw))
+		},
+	}
+}
+
+func listAwarenessField(key string, value func(RuntimeAwareness) []string) awarenessField {
+	return awarenessField{
+		key: key,
+		render: func(aw RuntimeAwareness) string {
+			return nonEmptyAwarenessLine(key, formatAwarenessList(value(aw)))
+		},
+	}
+}
+
 func renderGovernorRuntimeAwarenessBlock(aw RuntimeAwareness) string {
-	return renderRuntimeAwarenessBlock(aw, AwarenessRoleGovernor, "## Runtime Awareness")
+	return renderRuntimeAwarenessBlock(aw, awarenessRoleGovernor, "## Runtime Awareness")
 }
 
 func renderFaceAwarenessBlock(aw RuntimeAwareness) string {
-	return renderRuntimeAwarenessBlock(aw, AwarenessRoleFace, "## Delivery Awareness")
+	return renderRuntimeAwarenessBlock(aw, awarenessRoleFace, "## Delivery Awareness")
 }
 
-func renderRuntimeAwarenessBlock(aw RuntimeAwareness, role AwarenessRole, heading string) string {
+func renderRuntimeAwarenessBlock(aw RuntimeAwareness, role awarenessRole, heading string) string {
 	lines := []string{heading}
-	lines = append(lines, renderSharedAwarenessLines(aw)...)
+	lines = appendAwarenessSection(lines, "Shared Stable Facts", renderSharedStableAwarenessLines(aw))
+	lines = appendAwarenessSection(lines, "Shared Turn State", renderSharedTurnAwarenessLines(aw))
 	switch role {
-	case AwarenessRoleFace:
-		lines = append(lines, renderFaceAwarenessLines(aw)...)
+	case awarenessRoleFace:
+		lines = appendAwarenessSection(lines, "Face Delta", renderFaceAwarenessLines(aw))
 	default:
-		lines = append(lines, renderGovernorAwarenessLines(aw)...)
+		lines = appendAwarenessSection(lines, "Governor Delta", renderGovernorAwarenessLines(aw))
 	}
 	return strings.Join(compactLines(lines), "\n")
 }
 
 func renderSharedAwarenessLines(aw RuntimeAwareness) []string {
-	lines := []string{
-		nonEmptyAwarenessLine("session_kind", aw.SessionKind),
-		nonEmptyAwarenessLine("run_kind", aw.RunKind),
-		nonEmptyAwarenessLine("channel", aw.Channel),
-		nonEmptyAwarenessLine("event_origin", aw.EventOrigin),
-		nonEmptyAwarenessLine("active_provider", aw.ActiveProvider),
-		fmt.Sprintf("- fallback_active: %t", aw.FallbackActive),
-		nonEmptyAwarenessLine("artifact_mode", aw.ArtifactMode),
-		fmt.Sprintf("- hidden_inputs_active: %t", aw.HiddenInputsActive),
-		nonEmptyAwarenessLine("hidden_input_categories", formatAwarenessList(aw.HiddenInputCategories)),
-		nonEmptyAwarenessLine("provenance_summary", aw.ProvenanceSummary),
-		fmt.Sprintf("- plan_active: %t", aw.PlanActive),
-		nonEmptyAwarenessLine("plan_summary", aw.PlanSummary),
-		nonEmptyAwarenessLine("plan_events", formatAwarenessList(aw.PlanEvents)),
-		fmt.Sprintf("- operation_active: %t", aw.OperationActive),
-		nonEmptyAwarenessLine("operation_objective", aw.OperationObjective),
-		nonEmptyAwarenessLine("operation_status", aw.OperationStatus),
-		nonEmptyAwarenessLine("operation_stage", aw.OperationStage),
-		nonEmptyAwarenessLine("operation_summary", aw.OperationSummary),
-		nonEmptyAwarenessLine("operation_digest", formatAwarenessList(aw.OperationDigest)),
-		fmt.Sprintf("- media_attached: %t", aw.MediaAttached),
-		nonEmptyAwarenessLine("media_mode", aw.MediaMode),
-	}
+	lines := renderSharedStableAwarenessLines(aw)
+	lines = append(lines, renderSharedTurnAwarenessLines(aw)...)
 	return lines
+}
+
+func renderSharedStableAwarenessLines(aw RuntimeAwareness) []string {
+	return renderAwarenessFields(sharedStableAwarenessFields, aw)
+}
+
+func renderSharedTurnAwarenessLines(aw RuntimeAwareness) []string {
+	return renderAwarenessFields(sharedTurnAwarenessFields, aw)
+}
+
+func appendAwarenessSection(lines []string, title string, section []string) []string {
+	section = compactLines(section)
+	if len(section) == 0 {
+		return lines
+	}
+	lines = append(lines, "### "+strings.TrimSpace(title))
+	return append(lines, section...)
 }
 
 func renderGovernorAwarenessLines(aw RuntimeAwareness) []string {
-	lines := []string{
-		nonEmptyAwarenessLine("turn_authorization_kind", aw.TurnAuthorizationKind),
-		nonEmptyAwarenessLine("governor_backend", aw.GovernorBackend),
-		nonEmptyAwarenessLine("governor_provider", aw.GovernorProvider),
-		nonEmptyAwarenessLine("governor_model", aw.GovernorModel),
-	}
-	if path := formatProviderPath(aw.GovernorProviderPath); path != "" {
-		lines = append(lines, fmt.Sprintf("- configured_provider_path: %s", path))
-	}
-	lines = append(lines,
-		nonEmptyAwarenessLine("reasoning_effort", aw.ReasoningEffort),
-		nonEmptyAwarenessLine("reasoning_summary", aw.ReasoningSummary),
-		nonEmptyAwarenessLine("governor_effort_recipe", aw.GovernorEffortRecipe),
-		fmt.Sprintf("- brokerage_active: %t", aw.BrokerageActive),
-		nonEmptyAwarenessLine("brokerage_phase", aw.BrokeragePhase),
-		nonEmptyAwarenessLine("idolum_suggested_execution_contract", aw.SuggestedExecutionContract),
-		nonEmptyAwarenessLine("brokerage_ratification", aw.BrokerageRatification),
-		nonEmptyAwarenessLine("ratified_execution_contract", aw.RatifiedExecutionContract),
-		nonEmptyAwarenessLine("signal_judgment", aw.SignalJudgment),
-		fmt.Sprintf("- proposal_active: %t", aw.ProposalActive),
-		nonEmptyAwarenessLine("proposal_kind", aw.ProposalKind),
-		nonEmptyAwarenessLine("proposal_status", aw.ProposalStatus),
-		nonEmptyAwarenessLine("proposal_summary", aw.ProposalSummary),
-		nonEmptyAwarenessLine("proposal_why_now", aw.ProposalWhyNow),
-		nonEmptyAwarenessLine("proposal_bounded_effect", aw.ProposalBoundedEffect),
-		fmt.Sprintf("- phase_plan_active: %t", aw.PhasePlanActive),
-		nonEmptyAwarenessLine("phase_plan_id", aw.PhasePlanID),
-		nonEmptyAwarenessLine("phase_plan_goal", aw.PhasePlanGoal),
-		nonEmptyAwarenessLine("phase_plan_current_phase_id", aw.PhasePlanCurrentPhaseID),
-		nonEmptyAwarenessLine("operation_phases", formatAwarenessList(aw.OperationPhases)),
-		nonEmptyAwarenessLine("operation_findings", formatAwarenessList(aw.OperationFindings)),
-		nonEmptyAwarenessLine("operation_artifacts", formatAwarenessList(aw.OperationArtifacts)),
-		nonEmptyAwarenessLine("continuation_status", aw.ContinuationStatus),
-		fmt.Sprintf("- continuation_active: %t", aw.ContinuationActive),
-		nonEmptyAwarenessLine("continuation_persona_intent", aw.ContinuationPersonaIntent),
-		nonEmptyAwarenessLine("continuation_persona_why", aw.ContinuationPersonaWhy),
-		nonEmptyAwarenessLine("continuation_governor_intent", aw.ContinuationGovernorIntent),
-		nonEmptyAwarenessLine("continuation_governor_why", aw.ContinuationGovernorWhy),
-		fmt.Sprintf("- continuation_governor_ratified: %t", aw.ContinuationRatified),
-		nonEmptyAwarenessLine("continuation_blocked_reason", aw.ContinuationBlockedReason),
-		nonEmptyAwarenessLine("prompt_root", aw.PromptRoot),
-		nonEmptyAwarenessLine("exec_root", aw.ExecRoot),
-		nonEmptyAwarenessLine("shared_memory_root", aw.SharedMemoryRoot),
-		nonEmptyAwarenessLine("user_workspace_root", aw.UserWorkspaceRoot),
-		nonEmptyAwarenessLine("user_memory_root", aw.UserMemoryRoot),
-		nonEmptyAwarenessLine("working_root", aw.WorkingRoot),
-		nonEmptyAwarenessLine("sandbox_mode", aw.SandboxMode),
-		nonEmptyAwarenessLine("network_policy", aw.NetworkPolicy),
-	)
-	return lines
+	return renderAwarenessFields(governorAwarenessFields, aw)
 }
 
 func renderFaceAwarenessLines(aw RuntimeAwareness) []string {
-	return []string{
-		nonEmptyAwarenessLine("face_backend", aw.FaceBackend),
-		nonEmptyAwarenessLine("face_provider", aw.FaceProvider),
-		nonEmptyAwarenessLine("face_model", aw.FaceModel),
-		nonEmptyAwarenessLine("persona_effort_recipe", aw.PersonaEffortRecipe),
-		nonEmptyAwarenessLine("delivery_mode", aw.DeliveryMode),
-		fmt.Sprintf("- stream_reply: %t", aw.StreamReply),
-		fmt.Sprintf("- inbound_was_voice: %t", aw.InboundWasVoice),
-		nonEmptyAwarenessLine("reply_modality_default", aw.ReplyModalityDefault),
-		nonEmptyAwarenessLine("reply_modality_reason", aw.ReplyModalityReason),
-		nonEmptyAwarenessLine("reply_modality_override", aw.ReplyModalityOverride),
+	return renderAwarenessFields(faceAwarenessFields, aw)
+}
+
+func renderAwarenessFields(fields []awarenessField, aw RuntimeAwareness) []string {
+	lines := make([]string, 0, len(fields))
+	for _, field := range fields {
+		lines = append(lines, field.render(aw))
 	}
+	return lines
+}
+
+func awarenessRoleLineKeys(role awarenessRole) []string {
+	keys := append([]string{}, awarenessFieldKeys(sharedStableAwarenessFields)...)
+	keys = append(keys, awarenessFieldKeys(sharedTurnAwarenessFields)...)
+	switch role {
+	case awarenessRoleFace:
+		keys = append(keys, awarenessFieldKeys(faceAwarenessFields)...)
+	default:
+		keys = append(keys, awarenessFieldKeys(governorAwarenessFields)...)
+	}
+	return keys
+}
+
+func awarenessRoleExcludedLineKeys(role awarenessRole) []string {
+	switch role {
+	case awarenessRoleFace:
+		return awarenessFieldKeys(governorAwarenessFields)
+	default:
+		return awarenessFieldKeys(faceAwarenessFields)
+	}
+}
+
+func awarenessFieldKeys(fields []awarenessField) []string {
+	keys := make([]string, 0, len(fields))
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		key := strings.TrimSpace(field.key)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func nonEmptyAwarenessLine(key, value string) string {

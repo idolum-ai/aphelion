@@ -35,6 +35,7 @@ func TestNewCodexHTTPClientDoesNotUseEndToEndTimeout(t *testing.T) {
 }
 
 func TestRealAppServerDoerHonorsRequestApprovalHandler(t *testing.T) {
+	requireLocalTCPListener(t, "localhost:0")
 	t.Parallel()
 
 	now := time.Date(2026, 5, 27, 15, 0, 0, 0, time.UTC)

@@ -38,58 +38,10 @@ func shouldSkipFaceForMaterialStatusReport(input turnRenderInput) bool {
 	if strings.TrimSpace(input.Result.ProviderFailure) != "" {
 		return false
 	}
-	if materialPacketHasRelationalOrCreativePressure(packet) {
-		return false
-	}
-	if !materialPacketLooksLikeStatusReport(packet) {
+	if packet.Kind != core.MaterialPacketKindStatusReport {
 		return false
 	}
 	return true
-}
-
-func materialPacketLooksLikeStatusReport(packet core.MaterialPacket) bool {
-	facts := nonBlankMaterialItems(packet.Facts)
-	allowed := nonBlankMaterialItems(packet.AllowedActions)
-	commitments := nonBlankMaterialItems(packet.Commitments)
-	refusals := nonBlankMaterialItems(packet.Refusals)
-	notes := nonBlankMaterialItems(packet.Notes)
-	if len(facts) == 0 && len(allowed) == 0 && len(commitments) == 0 && len(refusals) == 0 {
-		return false
-	}
-	if len(notes) > 1 {
-		return false
-	}
-	statusText := append([]string{}, facts...)
-	statusText = append(statusText, allowed...)
-	statusText = append(statusText, commitments...)
-	statusText = append(statusText, refusals...)
-	text := strings.ToLower(strings.Join(statusText, "\n"))
-	statusTerms := []string{
-		"tested", "validated", "verified", "passed", "deployed", "merged", "commit", "branch", "diff", "telemetry", "metric", "token", "cache", "service", "revision", "pr #", "pull request", "report", "evidence", "status", "stopped before",
-	}
-	for _, term := range statusTerms {
-		if strings.Contains(text, term) {
-			return true
-		}
-	}
-	return false
-}
-
-func materialPacketHasRelationalOrCreativePressure(packet core.MaterialPacket) bool {
-	materialText := append([]string{}, packet.Facts...)
-	materialText = append(materialText, packet.AllowedActions...)
-	materialText = append(materialText, packet.Commitments...)
-	materialText = append(materialText, packet.Refusals...)
-	materialText = append(materialText, packet.Notes...)
-	text := strings.ToLower(strings.Join(materialText, "\n"))
-	for _, marker := range []string{
-		"tone", "warm", "voice", "relational", "grief", "love", "feel", "felt", "overwhelmed", "creative", "essay", "story", "poem", "music", "ritual", "dream", "persona", "scene", "nuance",
-	} {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 func nonBlankMaterialItems(items []string) []string {
@@ -110,6 +62,7 @@ func faceSkipPayload(reason string, input turnRenderInput, fallbackText string) 
 	}
 	return map[string]any{
 		"reason":          strings.TrimSpace(reason),
+		"kind":            strings.TrimSpace(string(packet.Kind)),
 		"media_count":     mediaCount,
 		"facts":           len(nonBlankMaterialItems(packet.Facts)),
 		"allowed_actions": len(nonBlankMaterialItems(packet.AllowedActions)),

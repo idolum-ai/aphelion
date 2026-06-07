@@ -21,6 +21,52 @@ type updatePlanToolProvider struct {
 	callCount int
 }
 
+func TestMergeSessionContinuationStateTerminalLeaseBeatsStalePending(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	inMemory := session.ContinuationState{
+		Status:            session.ContinuationStatusPending,
+		DecisionID:        "phase-stale",
+		DecisionMessageID: 17492,
+		RemainingTurns:    1,
+		UpdatedAt:         now.Add(time.Minute),
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-stale",
+			Status:         session.ContinuationLeaseStatusPending,
+			RemainingTurns: 1,
+			UpdatedAt:      now.Add(time.Minute),
+		},
+	}
+	persisted := inMemory
+	persisted.Status = session.ContinuationStatusIdle
+	persisted.DecisionID = ""
+	persisted.DecisionMessageID = 0
+	persisted.RemainingTurns = 0
+	persisted.UpdatedAt = now
+	persisted.ContinuationLease.Status = session.ContinuationLeaseStatusConsumed
+	persisted.ContinuationLease.RemainingTurns = 0
+	persisted.ContinuationLease.ConsumedAt = now
+	persisted.ContinuationLease.UpdatedAt = now
+
+	got := mergeSessionContinuationState(inMemory, persisted)
+	if got.Status != session.ContinuationStatusIdle ||
+		got.DecisionID != "" ||
+		got.DecisionMessageID != 0 ||
+		got.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed {
+		t.Fatalf("mergeSessionContinuationState() = %#v, want consumed persisted state", got)
+	}
+}
+
+func TestMergeSessionContinuationStateKeepsEmptyStateEmpty(t *testing.T) {
+	t.Parallel()
+
+	got := mergeSessionContinuationState(session.ContinuationState{}, session.ContinuationState{})
+	if got.Kind != "" || !got.UpdatedAt.IsZero() || continuationStateHasDurableRecord(got) {
+		t.Fatalf("mergeSessionContinuationState(empty) = %#v, want empty state", got)
+	}
+}
+
 func (p *updatePlanToolProvider) Complete(_ context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
 	if resp, ok := fakeInterpretationResponse(messages, "", core.TokenUsage{}); ok {
 		return resp, nil

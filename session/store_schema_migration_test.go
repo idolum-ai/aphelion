@@ -1201,6 +1201,96 @@ func TestMigratesSchemaV60ToV61ApprovalWindowOfferOpenedColumns(t *testing.T) {
 	}
 }
 
+func TestMigratesSchemaV63ToV64TurnRunAccounting(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v63.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v63 db: %v", err)
+	}
+	sessionID := SessionIDFromParts(99364, 1001, ScopeRef{})
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version(version INTEGER NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+		`INSERT INTO schema_version(version) VALUES (63)`,
+		`CREATE TABLE turn_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL,
+			status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed', 'interrupted')),
+			request_text TEXT NOT NULL,
+			started_at TEXT NOT NULL DEFAULT (datetime('now')),
+			completed_at TEXT,
+			last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
+			last_tool_name TEXT,
+			last_tool_preview TEXT,
+			tool_calls_started INTEGER NOT NULL DEFAULT 0,
+			tool_calls_finished INTEGER NOT NULL DEFAULT 0,
+			last_tool_result_preview TEXT,
+			last_tool_error TEXT,
+			progress_message_id INTEGER,
+			error_text TEXT,
+			recovery_summary TEXT,
+			recovery_logged_at TEXT
+		)`,
+		`CREATE TABLE messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'tool')),
+			content TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			turn_index INTEGER NOT NULL,
+			content_chars INTEGER NOT NULL DEFAULT 0,
+			compacted INTEGER NOT NULL DEFAULT 0
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v63 fixture: %v", err)
+		}
+	}
+	if _, err := db.Exec(`
+		INSERT INTO turn_runs(session_id, chat_id, user_id, kind, status, request_text, started_at, last_activity_at)
+		VALUES (?, 99364, 1001, 'interactive', 'completed', 'old accounted turn', ?, ?)
+	`, sessionID, time.Date(2026, 6, 1, 1, 0, 0, 0, time.UTC).Format(time.RFC3339Nano), time.Date(2026, 6, 1, 1, 1, 0, 0, time.UTC).Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("insert v63 turn run: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v63 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v63) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	for _, column := range []string{
+		"turn_index",
+		"total_tool_chars_in",
+		"total_assistant_chars_out",
+		"provider_input_tokens",
+		"provider_output_tokens",
+		"provider_cache_read_tokens",
+		"provider_cache_write_tokens",
+	} {
+		assertSQLiteColumn(t, store.db, "turn_runs", column)
+	}
+	run, err := store.TurnRun(1)
+	if err != nil {
+		t.Fatalf("TurnRun() after v64 migration err = %v", err)
+	}
+	if run.RequestText != "old accounted turn" || run.TotalToolCharsIn != 0 || run.ProviderInputTokens != 0 {
+		t.Fatalf("run = %#v, want preserved row with zero accounting defaults", run)
+	}
+}
+
 func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {
 	t.Helper()
 	rows, err := db.Query(`PRAGMA table_info(` + tableName + `)`)

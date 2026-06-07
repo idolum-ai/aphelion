@@ -172,6 +172,7 @@ func TestRenderTurnReplySkipsFaceForMaterialStatusReport(t *testing.T) {
 	rt.faceBackend = face.BackendProvider
 	renderer := &countingFaceRenderer{text: "unexpected face render"}
 	packet := core.MaterialPacket{
+		Kind:           core.MaterialPacketKindStatusReport,
 		Facts:          []string{"PR #140 deployed and verified at revision 3942a132."},
 		AllowedActions: []string{"Report post-deploy token/cache telemetry."},
 		Refusals:       []string{"No deploy or restart was repeated."},
@@ -220,6 +221,33 @@ func TestRenderTurnReplySkipsFaceForMaterialStatusReport(t *testing.T) {
 	}
 }
 
+func TestMaterialStatusSkipRequiresTypedPacketKind(t *testing.T) {
+	t.Parallel()
+
+	input := turnRenderInput{
+		Result:           &core.TurnResult{Text: "PR #140 deployed and verified."},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		MaterialFloor: core.MaterialPacket{
+			Facts: []string{"PR #140 deployed and verified."},
+		},
+		FaceAwareness: prompt.RuntimeAwareness{ReplyModalityDefault: "text", ReplyModalityOverride: "none"},
+	}
+	if shouldSkipFaceForMaterialStatusReport(input) {
+		t.Fatal("shouldSkipFaceForMaterialStatusReport() = true for unclassified status-shaped text")
+	}
+
+	input.MaterialFloor.Kind = core.MaterialPacketKindStatusReport
+	if !shouldSkipFaceForMaterialStatusReport(input) {
+		t.Fatal("shouldSkipFaceForMaterialStatusReport() = false for typed status_report")
+	}
+
+	input.MaterialFloor.Kind = core.MaterialPacketKindRelational
+	if shouldSkipFaceForMaterialStatusReport(input) {
+		t.Fatal("shouldSkipFaceForMaterialStatusReport() = true for typed relational packet")
+	}
+}
+
 func TestRenderTurnReplyDoesNotSkipFaceForRelationalStatusShapedPacket(t *testing.T) {
 	t.Parallel()
 
@@ -231,6 +259,7 @@ func TestRenderTurnReplyDoesNotSkipFaceForRelationalStatusShapedPacket(t *testin
 	rt.faceBackend = face.BackendProvider
 	renderer := &countingFaceRenderer{text: "relational face render"}
 	packet := core.MaterialPacket{
+		Kind:  core.MaterialPacketKindRelational,
 		Facts: []string{"The eulogy draft passed review and merged grief into something warmer."},
 	}
 	floorText := packet.Text()
@@ -272,6 +301,7 @@ func TestRenderTurnReplyDoesNotSkipFaceForSceneConstraints(t *testing.T) {
 	rt.faceBackend = face.BackendProvider
 	renderer := &countingFaceRenderer{text: "scene-aware face render"}
 	packet := core.MaterialPacket{
+		Kind:             core.MaterialPacketKindStatusReport,
 		Facts:            []string{"PR #140 deployed and verified."},
 		SceneConstraints: []string{"Keep the visible reply warm and brief."},
 	}
@@ -307,6 +337,7 @@ func TestFaceSkipPayloadContainsOnlyDecisionFields(t *testing.T) {
 	t.Parallel()
 
 	packet := core.MaterialPacket{
+		Kind:           core.MaterialPacketKindStatusReport,
 		Facts:          []string{"PR #140 deployed and verified."},
 		AllowedActions: []string{"Report evidence."},
 		Refusals:       []string{"No restart repeated."},
@@ -319,7 +350,7 @@ func TestFaceSkipPayloadContainsOnlyDecisionFields(t *testing.T) {
 		FaceAwareness:    prompt.RuntimeAwareness{ReplyModalityDefault: "text"},
 	}, "fallback")
 
-	for _, key := range []string{"reason", "media_count", "facts", "allowed_actions", "commitments", "refusals", "notes", "fallback_chars"} {
+	for _, key := range []string{"reason", "kind", "media_count", "facts", "allowed_actions", "commitments", "refusals", "notes", "fallback_chars"} {
 		if _, ok := payload[key]; !ok {
 			t.Fatalf("payload missing %q: %#v", key, payload)
 		}
@@ -349,7 +380,7 @@ func TestRenderTurnReplyDoesNotSkipFaceForVoiceModality(t *testing.T) {
 	}
 	rt.faceBackend = face.BackendProvider
 	renderer := &countingFaceRenderer{text: "voice-shaped face render"}
-	packet := core.MaterialPacket{Facts: []string{"PR #140 deployed and verified."}}
+	packet := core.MaterialPacket{Kind: core.MaterialPacketKindStatusReport, Facts: []string{"PR #140 deployed and verified."}}
 	floorText := packet.Text()
 	fallback := pipeline.SerializeFloorFallback(packet, floorText, pipeline.FallbackOptions{Channel: "telegram", Voice: true})
 
@@ -390,6 +421,7 @@ func TestRenderTurnReplyFallsBackWhenFaceRenderReturnsPartialOperationalReply(t 
 	rt.faceBackend = face.BackendProvider
 	renderer := &countingFaceRenderer{text: "The reinstall repair is clean now.\n\nEvidence:\n- Service is active as PID `100755`\n\nWhat likely happened: the direct"}
 	packet := core.MaterialPacket{
+		Kind: core.MaterialPacketKindStatusReport,
 		Facts: []string{
 			"Service active/running: PID `100755`.",
 			"Revision `37928e5ecc7f624a0284df26bf70b7b9ac89ddbd`.",
@@ -473,6 +505,7 @@ func TestRenderTurnReplyReconcilesStreamedFallbackToExistingMessage(t *testing.T
 		chunks: []string{"The reinstall repair is clean now.", "\n\nEvidence:\n- Service is active as PID `100755`", "\n\nWhat likely happened: the direct"},
 	}
 	packet := core.MaterialPacket{
+		Kind: core.MaterialPacketKindStatusReport,
 		Facts: []string{
 			"Service active/running: PID `100755`.",
 			"Revision `37928e5ecc7f624a0284df26bf70b7b9ac89ddbd`.",

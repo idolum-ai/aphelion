@@ -275,7 +275,7 @@ func normalizeFaceVerbosity(verbosity agent.Verbosity) agent.Verbosity {
 }
 
 func faceOptionsConfigured(opts agent.CompleteOptions) bool {
-	return opts.Reasoning.Effort != "" || opts.Reasoning.Summary != "" || opts.Verbosity != ""
+	return opts.Reasoning.Effort != "" || opts.Reasoning.Summary != "" || opts.Verbosity != "" || opts.MaxTokens > 0
 }
 
 func firstNonEmpty(values ...string) string {

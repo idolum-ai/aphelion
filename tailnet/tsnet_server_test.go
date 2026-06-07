@@ -57,6 +57,7 @@ func TestParentServiceRequiresAuthKeyForFirstStart(t *testing.T) {
 }
 
 func TestParentServiceReusesExistingStateWithoutAuthKey(t *testing.T) {
+	requireLocalTCPListener(t, "127.0.0.1:0")
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -105,6 +106,7 @@ func TestParentServiceReusesExistingStateWithoutAuthKey(t *testing.T) {
 }
 
 func TestParentServiceStartsWithAuthKey(t *testing.T) {
+	requireLocalTCPListener(t, "127.0.0.1:0")
 	t.Parallel()
 
 	node := &fakeParentNode{}
@@ -138,6 +140,7 @@ func TestParentServiceStartsWithAuthKey(t *testing.T) {
 }
 
 func TestParentServiceStartIsIdempotentWhileRunning(t *testing.T) {
+	requireLocalTCPListener(t, "127.0.0.1:0")
 	t.Parallel()
 
 	node := &fakeParentNode{}
@@ -169,6 +172,7 @@ func TestParentServiceStartIsIdempotentWhileRunning(t *testing.T) {
 }
 
 func TestParentServiceCanRestartAfterClose(t *testing.T) {
+	requireLocalTCPListener(t, "127.0.0.1:0")
 	t.Parallel()
 
 	node := &fakeParentNode{}

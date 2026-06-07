@@ -29,7 +29,7 @@ selection. It reflects the current branch and the live local configuration in
 | Governor media / vision turn | Same as interactive execution, but switches to native provider when media requires vision. | Internal. | Highest prompt authority. | Same governor prompt path; `executionForTurn` forces native provider for `MediaMode=vision`. | Native provider chain, currently OpenAI first. | Same as run kind; interactive uses recipe override. | `runtime/media_turn.go`, media/runtime tests. |
 | Face proposal | Let Idolum apply conversational pressure before governor execution. Should notice subtext, propose posture, optionally emit a one-line surface update. | Internal except optional `### Surface` block streamed to Telegram. | Advisory only; cannot authorize tools or commitments. | `prompt.BuildFacePromptBlocks` with mode `proposal`, a route/scene contract block, stable `face/persona`, `face/contracts`, and `face/scenes` files, runtime awareness, and latest user input. | Face provider chain using persona recipe: `openai:gpt-5.5 -> openai:gpt-5.4 -> openai:gpt-5.4-mini -> anthropic:claude-sonnet-4-6 -> openrouter:openai/gpt-5.5`. | Low verbosity; reasoning only when a persona slot override supplies effort. | `prompt/builder_test.go`, `runtime/constitution_test.go`, `face/provider_test.go`. |
 | Face brokerage | Negotiate a more explicit execution contract when proposal and governor need convergence. | Internal except optional `### Surface` block. | Advisory; shapes governor input but does not execute. | Same face builder with mode `brokerage`, prior proposal, feedback, runtime awareness. | Same as face proposal. | Low verbosity; reasoning only when a persona slot override supplies effort. | `runtime/brokerage.go`, `runtime/constitution_test.go`, `prompt/builder_test.go`, `face/provider_test.go`. |
-| Face render | Author the user-visible response from governor material floor or approved facts. Must feel like one persona, not a handoff. | User-visible. | Bound by governor material; cannot add unapproved actions, commitments, or tool claims. | `prompt.BuildFacePromptBlocks` with mode `render`, an inferred or supplied route/scene contract block, stable `face/persona`, `face/contracts`, and `face/scenes` files, material floor or floor fallback, latest user input, and runtime awareness. | Same as face proposal. | Medium verbosity; reasoning only when a persona slot override supplies effort. | `prompt/builder_test.go`, `runtime/constitution_test.go`, `face/provider_test.go`. |
+| Face render | Author the user-visible response from governor material floor or approved facts. Must feel like one persona, not a handoff. | User-visible. | Bound by governor material; cannot add unapproved actions, commitments, or tool claims. | `prompt.BuildFacePromptBlocks` with mode `render`, an inferred or supplied route/scene contract block, stable `face/persona`, `face/contracts`, and `face/scenes` files, material floor or floor fallback, latest user input, and runtime awareness. Explicit `MaterialPacket.Kind` values guide status-report render skipping and fallback behavior. | Same as face proposal. | Medium verbosity; reasoning only when a persona slot override supplies effort; render-lane calls pass bounded max-token/options to the provider. | `prompt/builder_test.go`, `runtime/constitution_test.go`, `face/provider_test.go`. |
 | Face repair | Repair a candidate visible reply that leaked internals, contradicted media delivery, or broke the relationship surface. | User-visible. | Bound by existing governor-authored material and repair notes. | Face builder with mode `repair`, candidate reply, repair constraints, a route/scene contract block, face contract files, and runtime awareness. | Same as face proposal. | Low verbosity; reasoning only when a persona slot override supplies effort. | `runtime/constitution_test.go`, `prompt/builder_test.go`, `face/provider_test.go`. |
 | Heartbeat governor | Process review events, maintenance work, memory reflection, and possible operator outreach. | Internal; may create rendered outreach. | System/governor authority for maintenance. | Governor builder with run kind `heartbeat`, system channel, prompt context, hidden inputs, optional material floor for outreach. | Codex `gpt-5.5` primary if available; native fallback chain otherwise. | `thinking.defaults.heartbeat=low`; heartbeat reflection also uses low effort. | `runtime/heartbeat*_test.go`. |
 | Heartbeat reflection | Distill daily notes, review events, and semantic context into proposed/applied curated memory updates. | Internal. | Memory-writing assistant bounded by reflection request and memory policy. | Reuses heartbeat governor system blocks, then adds `renderReflectionRequest` as user message. | Uses `r.provider` governor provider, currently Codex-backed failover chain. | Heartbeat effort. | `runtime/reflection.go`, memory tests. |
@@ -40,6 +40,28 @@ selection. It reflects the current branch and the live local configuration in
 | Status-readable summary | Summarize status into operator-readable prose. | User-visible in status surfaces. | Informational; no execution authority. | Small status summary prompt, not the main governor/face prompt. | Native status-readable provider chain; OpenAI path uses configured OpenAI model first. | Low effort, compact summary. | `runtime/status_readable.go`, status tests. |
 | Tool schema descriptions | Tell models what tools exist and how to call them. | Internal prompt/tool manifest. | Advisory description; actual tool access is enforced by code. | Registry definitions and generated tool manifest. | Same model as caller prompt target. | Same as caller prompt target. | Tool tests and prompt builder tests. |
 | Agency context packet | Give governor and face a compact per-turn map of objective, authority envelope, evidence posture, open loops, and available affordances. | Internal; face packet shapes user-visible ownership without exposing machinery. | Non-authorizing. It summarizes typed state but cannot create access, leases, grants, tool claims, or commitments. | Rendered by `prompt.renderGovernorAgencyContextPacket` and `prompt.renderFaceAgencyContextPacket` inside existing prompt blocks. | Same model as the prompt target that receives it. | Same as caller prompt target. | `prompt/builder_test.go`, scrubbed prompt goldens, `make live-evals`, `make auto-evals`, env-gated live tests. |
+
+## Runtime Awareness Shape
+
+Governor and face prompts receive runtime awareness as a structured projection,
+not as a flat dump of internals.
+
+- **Shared stable facts**: session kind, run kind, channel, event origin, and
+  artifact mode.
+- **Shared turn state**: provider/fallback posture, hidden-input presence,
+  plan/operation summaries, operation digest, and media mode.
+- **Governor delta**: authority, proposal, phase-plan, continuation, sandbox,
+  model, and tool-relevant execution context.
+- **Face delta**: delivery, modality, persona provider/model, and render
+  posture needed to author the visible scene honestly.
+
+This packet is non-authorizing. Code, sandbox policy, leases, grants, tool
+registry filtering, and TES remain the source of authority and evidence.
+
+`MaterialPacket.Kind` is the explicit render/fallback hint for material floors.
+`status_report` packets may skip expensive scene authorship or trigger stricter
+truncation checks; relational and creative packets remain eligible for ordinary
+face scene authorship.
 
 ## Prompt Shape Standard
 

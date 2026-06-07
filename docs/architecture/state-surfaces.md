@@ -18,7 +18,8 @@ Aphelion state is intentionally multi-surface.
 - Review events and outbound delivery records: pending review events are
   operational current-state stores; delivered review events and outbound records
   are canonical delivery evidence.
-- Turn-run recovery records for startup repair: operational current-state store.
+- Turn-run recovery and accounting records for startup repair and live
+  diagnosis: operational current-state store.
 - Execution event timeline (`execution_events`) for ingress/turn/tool/delivery
   truth: canonical.
 - Telegram ingress offset, accepted-update, and poison-update ledgers:
@@ -74,7 +75,7 @@ Classifications below use the shared truth classes defined in
 | `/health trace` | projection | How should execution evidence be rendered for diagnosis now? |
 | `provider_health` in `/health` | projection | Is recent inference-provider pressure the current explanation for slow, failed, or retried work? |
 | Quick-read and progress render blocks | projection | What compact operator narration should be surfaced now? |
-| `turn_runs` | operational current-state store | What startup recovery/run bookkeeping hints are available to park interrupted work? |
+| `turn_runs` | operational current-state store | What startup recovery/run bookkeeping and accounting hints are available for interrupted or active work? |
 
 ## Removed Surface Rule
 
@@ -87,6 +88,15 @@ ActionProposal / ContinuationLease note:
 
 - In v1 these records are embedded in `sessions.continuation_state_json` so the existing continuation button flow remains the operational current-state surface.
 - TES `continuation.*` events remain canonical for what was offered, approved, consumed, revoked, or blocked at runtime.
+
+Turn-run accounting note:
+
+- `turn_runs` now also stores operational counters such as turn index, tool input
+  characters, assistant output characters, provider input/output tokens, and
+  provider cache read/write tokens.
+- Those counters support `/status`, `/health trace`, and doctor diagnosis. They
+  do not replace TES as execution-order truth and should not be treated as a
+  canonical transcript.
 
 Staged identity decision:
 

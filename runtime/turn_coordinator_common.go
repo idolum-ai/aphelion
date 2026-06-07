@@ -150,6 +150,7 @@ type turnCoordinatorExecuteInput struct {
 
 type turnCoordinatorExecuteOutput struct {
 	Sess              *session.Session
+	RunID             int64
 	GovernorResult    *turn.GovernorResult
 	LastFaceAwareness prompt.RuntimeAwareness
 }
@@ -213,12 +214,15 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	if runKind == "" {
 		runKind = session.TurnRunKindInteractive
 	}
+	input.RunKind = runKind
+	input.Tools = toolRegistryForRunKind(input.Tools, runKind)
 
 	progress := r.newToolProgressReporter(input.Key, input.Msg, input.Audit)
 	monitor, err := r.startTurnMonitor(ctx, input.Key, runKind, input.Prepared.LedgerText, progress, input.Audit, input.Msg)
 	if err != nil {
 		return out, err
 	}
+	out.RunID = monitor.runID
 	ctx = monitor.Context()
 	defer monitor.Finish(ctx, monitorErr)
 
@@ -342,11 +346,7 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	}
 	runOpts.Observer = monitor
 	runOpts.ContextBudget = r.providerContextBudget()
-	turnResult, outHistory, runErr := agent.RunTurn(ctx, input.Exec.Provider, tools, &agent.Budget{
-		Max:     r.cfg.Agent.MaxIterations,
-		Caution: 0.7,
-		Warning: 0.9,
-	}, runOpts, turnInput)
+	turnResult, outHistory, runErr := agent.RunTurn(ctx, input.Exec.Provider, tools, tokenAwareTurnBudget(r.cfg.Agent.MaxIterations, runOpts), runOpts, turnInput)
 	if runErr != nil {
 		failureKind := core.ProviderFailureKind(runErr)
 		r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptFailed, "provider", "failed", map[string]any{

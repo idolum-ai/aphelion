@@ -68,6 +68,7 @@ func (r *Registry) executeWithRoot(ctx context.Context, name string, input json.
 }
 
 func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
+	input = normalizeToolInput(input)
 	authorityGrant, authorityManaged, err := r.requireAuthorityToolAccess(name, p, key, input)
 	if err != nil {
 		return "", err

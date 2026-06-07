@@ -273,14 +273,30 @@ func workPromptForContinuation(state session.ContinuationState, opState session.
 		"- Stop before any action outside the lease or any action whose failure could create irreversible, external, privacy, or credential risk.",
 		"- If required evidence or validation is unavailable, report that limitation instead of inventing certainty.",
 	}
+	currentBundlePhase, hasCurrentBundlePhase := currentContinuationBundlePhase(state.ApprovalBundle)
 	if objective := firstNonEmptyContinuation(opState.Objective, state.Objective); objective != "" {
 		lines = append(lines, "Objective: "+objective)
 	}
-	if summary := firstNonEmptyContinuation(state.ActionProposal.Summary, state.StageSummary); summary != "" {
+	if hasCurrentBundlePhase {
+		phaseID := firstNonEmptyContinuation(currentBundlePhase.OperationPhaseID, currentBundlePhase.ID)
+		if phaseID != "" {
+			lines = append(lines, "Approved bundle phase: "+phaseID)
+		}
+		if authority := strings.TrimSpace(currentBundlePhase.AuthorityClass); authority != "" {
+			lines = append(lines, "Phase authority class: "+authority)
+		}
+	}
+	if summary := firstNonEmptyContinuation(currentBundlePhase.Summary, state.ActionProposal.Summary, state.StageSummary); summary != "" {
 		lines = append(lines, "Next step: "+summary)
 	}
-	if effect := strings.TrimSpace(state.ActionProposal.BoundedEffect); effect != "" {
+	if effect := firstNonEmptyContinuation(currentBundlePhase.BoundedEffect, state.ActionProposal.BoundedEffect); effect != "" {
 		lines = append(lines, "Bounded effect: "+effect)
+	}
+	if hasCurrentBundlePhase && len(currentBundlePhase.AllowedActions) > 0 {
+		lines = append(lines, "Allowed phase actions: "+strings.Join(currentBundlePhase.AllowedActions, ", "))
+	}
+	if hasCurrentBundlePhase && len(currentBundlePhase.ForbiddenActions) > 0 {
+		lines = append(lines, "Forbidden phase actions: "+strings.Join(currentBundlePhase.ForbiddenActions, ", "))
 	}
 	if opState.PhasePlan.Active() {
 		lines = append(lines, "Durable phase plan: "+firstNonEmptyContinuation(opState.PhasePlan.Goal, opState.PhasePlan.ID))

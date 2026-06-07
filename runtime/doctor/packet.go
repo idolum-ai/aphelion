@@ -404,8 +404,27 @@ func writeDoctorSessionSummary(b *strings.Builder, sess *session.Session) {
 	WriteKV(b, "total_output_tokens", strconv.FormatInt(sess.TotalOutputTokens, 10))
 	WriteKV(b, "total_cache_read", strconv.FormatInt(sess.TotalCacheRead, 10))
 	WriteKV(b, "total_cache_write", strconv.FormatInt(sess.TotalCacheWrite, 10))
+	toolChars, assistantChars := sessionAssistantToolChars(sess.Messages)
+	WriteKV(b, "assistant_tool_chars", fmt.Sprintf("%d/%d", assistantChars, toolChars))
+	WriteKV(b, "assistant_tool_ratio", formatAssistantToolRatio(assistantChars, toolChars))
 	WriteKV(b, "continuation_status", string(sess.ContinuationState.Status))
 	WriteKV(b, "active_tool_calls", strconv.Itoa(sess.ActiveToolCalls))
+}
+
+func sessionAssistantToolChars(messages []session.Message) (toolChars int64, assistantChars int64) {
+	for _, msg := range messages {
+		chars := int64(msg.ContentChars)
+		if chars == 0 && msg.Content != "" {
+			chars = int64(len(msg.Content))
+		}
+		switch strings.TrimSpace(msg.Role) {
+		case "tool":
+			toolChars += chars
+		case "assistant":
+			assistantChars += chars
+		}
+	}
+	return toolChars, assistantChars
 }
 
 func writeDoctorRecentMessages(b *strings.Builder, sess *session.Session, limit int) {

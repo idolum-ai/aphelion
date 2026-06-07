@@ -5,6 +5,7 @@ package runtime
 import (
 	"testing"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -38,5 +39,22 @@ func TestFaceAndCompactionMaxTokenCapsAreSeparate(t *testing.T) {
 	}
 	if faceRenderMaxTokens >= interactiveRunMaxTokens {
 		t.Fatalf("face cap = %d should remain below interactive cap %d", faceRenderMaxTokens, interactiveRunMaxTokens)
+	}
+}
+
+func TestTokenAwareTurnBudgetUsesRunAndContextCaps(t *testing.T) {
+	budget := tokenAwareTurnBudget(10, &agent.CompleteOptions{
+		MaxTokens: 512,
+		ContextBudget: &agent.ContextBudget{
+			ContextWindow: 1000,
+			MaxRatio:      0.50,
+			HardRatio:     0.75,
+		},
+	})
+	if budget.OutputTokenSoftLimit != 1024 || budget.OutputTokenHardLimit != 1536 {
+		t.Fatalf("output token limits = %d/%d, want 1024/1536", budget.OutputTokenSoftLimit, budget.OutputTokenHardLimit)
+	}
+	if budget.InputTokenSoftLimit != 1000 || budget.InputTokenHardLimit != 2250 {
+		t.Fatalf("input token limits = %d/%d, want 1000/2250", budget.InputTokenSoftLimit, budget.InputTokenHardLimit)
 	}
 }

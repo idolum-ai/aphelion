@@ -288,3 +288,65 @@ func migrateSchemaV62ToV63(tx *sql.Tx) error {
 	}
 	return nil
 }
+
+func migrateSchemaV63ToV64(tx *sql.Tx) error {
+	if err := ensureTurnRunAccountingColumns(tx); err != nil {
+		return fmt.Errorf("migrate schema v63 to v64 ensure turn run accounting columns: %w", err)
+	}
+	return nil
+}
+
+func ensureTurnRunAccountingColumns(tx *sql.Tx) error {
+	exists, err := schemaTableExists(tx, "turn_runs")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	for _, column := range []schemaColumnMigration{
+		{table: "turn_runs", column: "turn_index", statement: `ALTER TABLE turn_runs ADD COLUMN turn_index INTEGER NOT NULL DEFAULT 0`},
+		{table: "turn_runs", column: "total_tool_chars_in", statement: `ALTER TABLE turn_runs ADD COLUMN total_tool_chars_in INTEGER NOT NULL DEFAULT 0`},
+		{table: "turn_runs", column: "total_assistant_chars_out", statement: `ALTER TABLE turn_runs ADD COLUMN total_assistant_chars_out INTEGER NOT NULL DEFAULT 0`},
+		{table: "turn_runs", column: "provider_input_tokens", statement: `ALTER TABLE turn_runs ADD COLUMN provider_input_tokens INTEGER NOT NULL DEFAULT 0`},
+		{table: "turn_runs", column: "provider_output_tokens", statement: `ALTER TABLE turn_runs ADD COLUMN provider_output_tokens INTEGER NOT NULL DEFAULT 0`},
+		{table: "turn_runs", column: "provider_cache_read_tokens", statement: `ALTER TABLE turn_runs ADD COLUMN provider_cache_read_tokens INTEGER NOT NULL DEFAULT 0`},
+		{table: "turn_runs", column: "provider_cache_write_tokens", statement: `ALTER TABLE turn_runs ADD COLUMN provider_cache_write_tokens INTEGER NOT NULL DEFAULT 0`},
+	} {
+		if err := addSchemaColumnIfMissing(tx, column); err != nil {
+			return err
+		}
+	}
+
+	messagesExists, err := schemaTableExists(tx, "messages")
+	if err != nil {
+		return err
+	}
+	if !messagesExists {
+		return nil
+	}
+	if _, err := tx.Exec(`
+		UPDATE turn_runs
+		SET
+			total_tool_chars_in = COALESCE((
+				SELECT SUM(content_chars)
+				FROM messages
+				WHERE messages.session_id = turn_runs.session_id
+					AND messages.turn_index = turn_runs.turn_index
+					AND messages.role = 'tool'
+			), 0),
+			total_assistant_chars_out = COALESCE((
+				SELECT SUM(content_chars)
+				FROM messages
+				WHERE messages.session_id = turn_runs.session_id
+					AND messages.turn_index = turn_runs.turn_index
+					AND messages.role = 'assistant'
+			), 0)
+		WHERE total_tool_chars_in = 0
+			AND total_assistant_chars_out = 0
+			AND turn_index > 0
+	`); err != nil {
+		return fmt.Errorf("backfill turn run char accounting: %w", err)
+	}
+	return nil
+}

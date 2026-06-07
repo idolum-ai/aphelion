@@ -481,6 +481,8 @@ When a turn offers continuation approval, an inline prompt is shown with:
 
 Telegram button labels stay short because the chat surface is narrow. Scope,
 phase names, and stop conditions belong in the prompt body, not in button text.
+`Start` approves the exact pending lease and may launch repeated automatic
+follow-up turns only while that approved lease remains active and in scope.
 
 Offer conditions:
 
@@ -505,6 +507,13 @@ Offer conditions:
 - Deploy/restart work is not bundled into ordinary development approvals. A
   deploy prompt must ask for a fresh standalone lease whose body names commit,
   build, install, restart, and post-restart verification.
+- Approved multi-turn leases may continue automatically inside the approved
+  `remaining_turns` budget. The loop stops instead of renewing when the lease is
+  exhausted, expired, revoked, stale against the operation phase plan, widened by
+  a new action/grant requirement, or blocked/completed by Mission Ledger state.
+- Before an automatic follow-up turn starts, Telegram receives a compact
+  "continuing approved lease" progress line. That line is visibility only; it
+  does not create authority.
 
 - Operation phases and continuation approval bundles may include
   `required_capability_grants` when the approved phase also needs a bounded
@@ -523,6 +532,10 @@ Offer conditions:
   the bounded capability authority named by the phase/bundle, and they do not
   merge PRs, deploy, restart services, edit policy, or perform unrelated
   external-account mutations by themselves.
+- If a fresh operation phase or proposal fits the already-active lease class,
+  allowed-action set, and required-grant coverage, runtime may consume it under
+  that active lease instead of showing another prompt. This class-scoped reuse is
+  recorded in TES and stops at any authority boundary.
 
 ### Runtime decision prompts
 

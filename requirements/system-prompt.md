@@ -128,6 +128,13 @@ It should still receive enough machine-authored runtime awareness to remain hone
 - visible degraded state
 - whether the turn is passthrough, voiced, silent, or rendered
 
+Runtime awareness should be structured, not dumped. Shared stable facts and
+shared turn state may be visible to both governor and face; governor-only deltas
+carry authority, proposal, phase-plan, continuation, sandbox, and tool-relevant
+execution context; face-only deltas carry delivery, modality, and render posture.
+The face delta must not include tool definitions or present permission rules as
+face-owned.
+
 ### Face layers
 
 The default face prompt should be assembled in layers.
@@ -135,7 +142,7 @@ The default face prompt should be assembled in layers.
 1. machine-generated face header
 2. stable face files
 3. dynamic face files
-4. material floor
+4. material floor, including explicit material kind when present
 5. latest user message
 6. channel/rendering context
 

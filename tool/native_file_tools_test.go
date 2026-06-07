@@ -5,11 +5,13 @@ package tool
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -189,31 +191,8 @@ func TestWriteFileCreateDirsValidatesSymlinkAncestorBeforeMkdir(t *testing.T) {
 func TestFetchURLHonorsNetworkPolicy(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		_, _ = w.Write([]byte("hello from server"))
-	}))
-	defer server.Close()
-
 	workspace := t.TempDir()
 	registry := NewRegistry(workspace, 2*time.Second)
-	admin := principal.Principal{Role: principal.RoleAdmin}
-	adminScope := sandbox.Scope{
-		Principal:   admin,
-		Profile:     sandbox.DefaultProfiles().Admin,
-		GlobalRoot:  workspace,
-		WorkingRoot: workspace,
-	}
-
-	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"`+server.URL+`"}`), adminScope, admin, session.SessionKey{})
-	if err != nil {
-		t.Fatalf("fetch_url admin err = %v", err)
-	}
-	for _, want := range []string{"[FETCH_URL]", "excerpt:\nhello from server", "sha256:", "body_ref:"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("fetch_url out = %q, want %q", out, want)
-		}
-	}
 
 	approved := principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 42}
 	deniedProfile := sandbox.DefaultProfiles().ApprovedUser
@@ -223,7 +202,7 @@ func TestFetchURLHonorsNetworkPolicy(t *testing.T) {
 		GlobalRoot:  workspace,
 		WorkingRoot: workspace,
 	}
-	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"`+server.URL+`"}`), deniedScope, approved, session.SessionKey{})
+	_, err := registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"https://example.com"}`), deniedScope, approved, session.SessionKey{})
 	if err == nil || !strings.Contains(err.Error(), "network policy") {
 		t.Fatalf("fetch_url denied err = %v, want network-policy rejection", err)
 	}
@@ -238,35 +217,56 @@ func TestFetchURLHonorsNetworkPolicy(t *testing.T) {
 	}
 }
 
-func TestFetchURLRendersDigestBeforeExcerptAndBodyReference(t *testing.T) {
+func TestFetchURLRendersDigestWithConfigurableExcerpt(t *testing.T) {
 	t.Parallel()
 
-	body := strings.Repeat("abcdefghij", 260)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte(body))
-	}))
-	defer server.Close()
-
-	workspace := t.TempDir()
-	registry := NewRegistry(workspace, 2*time.Second)
-	admin := principal.Principal{Role: principal.RoleAdmin}
-	scope := sandbox.Scope{Principal: admin, Profile: sandbox.DefaultProfiles().Admin, GlobalRoot: workspace, WorkingRoot: workspace}
-
-	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"`+server.URL+`","max_bytes":4096}`), scope, admin, session.SessionKey{})
-	if err != nil {
-		t.Fatalf("fetch_url err = %v", err)
-	}
-	for _, want := range []string{"status: 200 OK", "content_type: text/plain; charset=utf-8", "bytes_read: 2600", "sha256:", "body_ref: fetch_url.raw", "excerpt_truncated: true", "excerpt:\nabcdefghij"} {
+	body := strings.Repeat("a", 2300) + "TAIL-MARKER"
+	out := renderFetchURLDigest("http://example.test", "200 OK", "text/plain; charset=utf-8", []byte(body), false, defaultNativeFetchExcerptBytes)
+	for _, want := range []string{"status: 200 OK", "content_type: text/plain; charset=utf-8", "bytes_read: 2311", "sha256:", "excerpt_bytes: 2048", "excerpt_truncated: true", "excerpt:\naaaa"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("fetch_url digest = %q, want %q", out, want)
 		}
+	}
+	if strings.Contains(out, "body_ref:") {
+		t.Fatalf("fetch_url digest = %q, want no inaccessible body_ref", out)
 	}
 	if strings.Contains(out, "body:\n") {
 		t.Fatalf("fetch_url digest leaked legacy raw body label: %q", out)
 	}
 	if len(out) >= len(body)+200 {
 		t.Fatalf("fetch_url digest length = %d, raw body len = %d; want excerpt-first compact output", len(out), len(body))
+	}
+
+	expanded := renderFetchURLDigest("http://example.test", "200 OK", "text/plain; charset=utf-8", []byte(body), false, 4096)
+	for _, want := range []string{"excerpt_bytes: 4096", "excerpt_truncated: false", "TAIL-MARKER"} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded fetch_url digest = %q, want %q", expanded, want)
+		}
+	}
+}
+
+func TestFetchURLDigestGoldenContract(t *testing.T) {
+	t.Parallel()
+
+	sum := sha256.Sum256([]byte("ok"))
+	want := strings.Join([]string{
+		"[FETCH_URL]",
+		"url: https://example.test/status",
+		"status: 200 OK",
+		"content_type: text/plain",
+		"bytes_read: 2",
+		"sha256: " + hex.EncodeToString(sum[:]),
+		"truncated: false",
+		"excerpt_bytes: 2",
+		"excerpt_truncated: false",
+		"excerpt:",
+		"ok",
+		"[/FETCH_URL]",
+	}, "\n")
+
+	got := renderFetchURLDigest("https://example.test/status", "200 OK", "text/plain", []byte("ok"), false, 2)
+	if got != want {
+		t.Fatalf("fetch_url digest = %q, want %q", got, want)
 	}
 }
 
@@ -470,13 +470,6 @@ func TestFetchURLAllowlistAllowsResolvedPrivateDestinationForAdmin(t *testing.T)
 func TestFetchURLUsesConfiguredUserAgent(t *testing.T) {
 	t.Parallel()
 
-	seen := make(chan string, 2)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen <- r.Header.Get("User-Agent")
-		_, _ = w.Write([]byte("ok"))
-	}))
-	defer server.Close()
-
 	workspace := t.TempDir()
 	admin := principal.Principal{Role: principal.RoleAdmin}
 	adminScope := sandbox.Scope{
@@ -485,21 +478,47 @@ func TestFetchURLUsesConfiguredUserAgent(t *testing.T) {
 		GlobalRoot:  workspace,
 		WorkingRoot: workspace,
 	}
+	transport := &recordingFetchTransport{}
 	registry := NewRegistry(workspace, 2*time.Second).WithUserAgent("custom-fetch/1")
-	if _, err := registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"`+server.URL+`"}`), adminScope, admin, session.SessionKey{}); err != nil {
+	registry.nativeFetchTransport = transport
+	if _, err := registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"https://example.test/"}`), adminScope, admin, session.SessionKey{}); err != nil {
 		t.Fatalf("fetch_url custom user-agent err = %v", err)
 	}
-	if got := <-seen; got != "custom-fetch/1" {
+	if got := transport.lastUserAgent(); got != "custom-fetch/1" {
 		t.Fatalf("User-Agent = %q, want custom-fetch/1", got)
 	}
 
 	registry.WithUserAgent("")
-	if _, err := registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"`+server.URL+`"}`), adminScope, admin, session.SessionKey{}); err != nil {
+	if _, err := registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"https://example.test/"}`), adminScope, admin, session.SessionKey{}); err != nil {
 		t.Fatalf("fetch_url anonymous user-agent err = %v", err)
 	}
-	if got := <-seen; strings.Contains(strings.ToLower(got), "aphelion") || got == "custom-fetch/1" {
+	if got := transport.lastUserAgent(); strings.Contains(strings.ToLower(got), "aphelion") || got == "custom-fetch/1" {
 		t.Fatalf("User-Agent = %q, want anonymous override without Aphelion/custom identity", got)
 	}
+}
+
+type recordingFetchTransport struct {
+	mu        sync.Mutex
+	userAgent string
+}
+
+func (t *recordingFetchTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.mu.Lock()
+	t.userAgent = req.Header.Get("User-Agent")
+	t.mu.Unlock()
+	return &http.Response{
+		StatusCode: 200,
+		Status:     "200 OK",
+		Header:     http.Header{"Content-Type": []string{"text/plain"}},
+		Body:       io.NopCloser(strings.NewReader("ok")),
+		Request:    req,
+	}, nil
+}
+
+func (t *recordingFetchTransport) lastUserAgent() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.userAgent
 }
 
 func newNativeFetchAllowlistRegistry(t *testing.T, records map[string][]netip.Addr, allow []string) (*Registry, sandbox.Scope, principal.Principal) {
@@ -594,4 +613,106 @@ func TestDefinitionsIncludeNativeFileTools(t *testing.T) {
 			t.Fatalf("%s description = %q, want parallel-safe batch affordance", name, names[name].Description)
 		}
 	}
+}
+
+func TestReadFileDefinitionAdvertisesProviderCompatibleWindowContract(t *testing.T) {
+	t.Parallel()
+
+	readFile := nativeToolDefForTest(t, "read_file")
+	var schema map[string]any
+	if err := json.Unmarshal(readFile.Parameters, &schema); err != nil {
+		t.Fatalf("decode read_file schema: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprint(schema["type"])); got != "object" {
+		t.Fatalf("read_file schema type = %q, want object", got)
+	}
+	for _, keyword := range []string{"oneOf", "anyOf", "allOf", "enum", "not"} {
+		if _, ok := schema[keyword]; ok {
+			t.Fatalf("read_file schema has top-level %s, which provider function schemas reject", keyword)
+		}
+	}
+	if !toolSchemaRequiredContains(t, readFile, "path") {
+		t.Fatalf("read_file schema missing required path")
+	}
+	rendered := string(readFile.Parameters)
+	for _, want := range []string{`"offset"`, `"limit"`, `"full"`} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("read_file schema = %s, missing %s", rendered, want)
+		}
+	}
+}
+
+func TestNativeToolSchemasMatchRuntimeRequiredInputs(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:   principal.Principal{Role: principal.RoleAdmin},
+		Profile:     sandbox.DefaultProfiles().Admin,
+		GlobalRoot:  workspace,
+		WorkingRoot: workspace,
+	}
+
+	cases := []struct {
+		name         string
+		required     []string
+		input        json.RawMessage
+		errorSnippet string
+	}{
+		{name: "exec", required: []string{"command"}, input: json.RawMessage(`{}`), errorSnippet: "exec command is required"},
+		{name: "fetch_url", required: []string{"url"}, input: json.RawMessage(`{}`), errorSnippet: "fetch_url url is required"},
+		{name: "search", required: []string{"query"}, input: json.RawMessage(`{}`), errorSnippet: "search query is required"},
+	}
+
+	for _, tc := range cases {
+		def := nativeToolDefForTest(t, tc.name)
+		for _, field := range tc.required {
+			if !toolSchemaRequiredContains(t, def, field) {
+				t.Fatalf("%s schema missing required field %q", tc.name, field)
+			}
+		}
+		_, err := registry.executeWithScopeAndPrincipal(context.Background(), tc.name, tc.input, scope, scope.Principal, session.SessionKey{})
+		if err == nil || !strings.Contains(err.Error(), tc.errorSnippet) {
+			t.Fatalf("%s err = %v, want %q", tc.name, err, tc.errorSnippet)
+		}
+	}
+
+	fetchURL := nativeToolDefForTest(t, "fetch_url")
+	rendered := string(fetchURL.Parameters)
+	for _, want := range []string{`"excerpt_bytes"`, `"maximum": 65536`} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("fetch_url schema = %s, missing %s", rendered, want)
+		}
+	}
+}
+
+func nativeToolDefForTest(t *testing.T, name string) agent.ToolDef {
+	t.Helper()
+	defs := NewRegistry(t.TempDir(), 2*time.Second).Definitions()
+	for _, def := range defs {
+		if def.Name == name {
+			return def
+		}
+	}
+	t.Fatalf("Definitions() missing %s", name)
+	return agent.ToolDef{}
+}
+
+func toolSchemaRequiredContains(t *testing.T, def agent.ToolDef, field string) bool {
+	t.Helper()
+	var schema map[string]any
+	if err := json.Unmarshal(def.Parameters, &schema); err != nil {
+		t.Fatalf("decode %s schema: %v", def.Name, err)
+	}
+	required, ok := schema["required"].([]any)
+	if !ok {
+		return false
+	}
+	for _, raw := range required {
+		if strings.TrimSpace(fmt.Sprint(raw)) == field {
+			return true
+		}
+	}
+	return false
 }

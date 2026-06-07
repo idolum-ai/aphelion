@@ -20,7 +20,7 @@ approval without widening authority by vibe.
 For v1, both records are embedded in
 `session.ContinuationState` / `sessions.continuation_state_json`.
 
-This keeps the current Telegram `Continue` / `Stop` flow intact while making the
+This keeps the current Telegram `Start` / `Stop` flow intact while making the
 implicit continuation prompt contract typed and auditable.
 
 ## ActionProposal Fields
@@ -30,6 +30,8 @@ The typed record includes:
 - `id`
 - `operation_id`
 - `mission_id`
+- `operator_title`
+- `plan_title`
 - `summary`
 - `why_now`
 - `bounded_effect`
@@ -42,7 +44,7 @@ The typed record includes:
 - `status`
 
 Runtime builds a proposal when continuation consensus is eligible. The proposal
-is pending until the user presses `Continue`, then approved if still fresh.
+is pending until the user presses `Start`, then approved if still fresh.
 
 ## ContinuationLease Fields
 
@@ -55,15 +57,20 @@ The typed record includes:
 - `max_turns`
 - `remaining_turns`
 - `approved_by`
+- `lease_class`
+- `constraints`
 - `allowed_actions`
 - `forbidden_actions`
 - `validation_plan`
+- `required_capability_grants`
 - `expires_at`
 - `plan_hash`
 - lifecycle timestamps
 
-The current v1 lease is one-turn by default with a short TTL. On trigger, stale
-leases expire closed. On execution, the lease consumes a turn before the
+The current v1 lease remains bounded by a short TTL and explicit turn budget.
+Ordinary continuations may be one-turn leases; materialized operation phase
+bundles and explicit multi-turn leases may carry more than one turn. On trigger,
+stale leases expire closed. On execution, each turn is consumed before the
 machine-authored continuation event is processed.
 
 ## Lifecycle
@@ -74,15 +81,40 @@ machine-authored continuation event is processed.
    - pending `ContinuationLease`
    - pending continuation state
 3. Telegram renders a bounded approval card. Ordinary continuations use
-   `Continue` / `Stop`; approval bundles use `Approve all` / `Approve current`
+   `Start` / `Stop`; approval bundles use `Approve all` / `Approve current`
    plus status/change/stop controls.
-4. `Continue`, `Approve all`, or `Approve current` approves only the sealed
+4. `Start`, `Approve all`, or `Approve current` approves only the sealed
    proposal/token envelope that is still fresh.
-5. Runtime triggers one machine-authored continuation turn.
-6. Consuming the turn decrements the lease; zero remaining turns marks it
-   consumed and returns continuation state to idle.
+5. Runtime triggers the approved continuation path. If the approved lease
+   remains active, has remaining turns, still matches the sealed bundle or
+   proposal, and mission state does not impose a stop, runtime may continue
+   consuming approved turns automatically.
+6. Consuming each turn decrements the lease; zero remaining turns marks it
+   consumed and returns continuation state to idle. The loop never renews,
+   widens, or reinterprets the lease.
 7. `Stop` revokes the continuation and lease.
 8. Expired proposals/leases fail closed and emit `continuation.blocked`.
+
+## Default-on continuation loop
+
+After approval, runtime reuses the existing approved-continuation trigger and
+execution path for every automatic follow-up turn. There is no parallel
+continuation executor.
+
+Automatic in-lease continuation stops when any boundary is reached:
+
+- continuation state is no longer approved;
+- `RemainingTurns` or lease `remaining_turns` reaches zero;
+- the lease expires, is revoked, or is consumed;
+- an approval-only plan lease has no active executable bundle;
+- a bundle fingerprint no longer matches the current operation phase plan;
+- mission state is completed, blocked, archived, expired, or dormant;
+- the next proposed work would require wider authority, new actions, or new
+  required capability grants.
+
+Each automatic follow-up turn emits a compact Telegram progress line before it
+starts. Boundary stops are recorded in TES as
+`continuation.boundary_reached`.
 
 ## Compound plan approval bundles
 
@@ -116,6 +148,33 @@ bundle becomes stale. A stale bundle is rejected before approval or trigger and
 the operator must use the newest prompt. This is intentional: old buttons cannot
 approve a changed plan.
 
+When an approved bundle is active, execution prompt text is phase-focused: the
+current sealed bundle phase supplies the next step, bounded effect, authority
+class, allowed actions, and forbidden actions. The broader bundle title is
+presentation, not executable scope.
+
+Runtime records `continuation.bundle.narrowed` when a phase-plan approval is
+observed as too narrow across related phases. Compile/repair events record
+self-block repair evidence when a proposed continuation contract is repaired,
+exhausted, or too ambiguous to repair.
+
+## Active lease reuse
+
+When a fresh operation phase or proposal would otherwise ask for approval while
+an approved lease is still active, runtime may consume it under that active
+lease instead of re-prompting. Reuse is conservative:
+
+- the prior continuation must still be approved and active;
+- the proposed lease class must match the active lease class;
+- every proposed allowed action must pass `CheckContinuationLeaseAction` against
+  the active lease;
+- required capability grants must already be covered by the active lease;
+- local-workspace leases cannot adopt proposed external effects.
+
+This is approval-friction reduction only. It does not create authority, grant
+capabilities, or auto-renew the lease. Runtime records successful reuse as
+`continuation.class_scoped_consumption`.
+
 ## Non-Authority Rule
 
 A `ContinuationLease` authorizes only continuation under existing authority and
@@ -127,8 +186,10 @@ request/review/grant lane.
 - [`session/types.go`](../../session/types.go)
 - [`session/store.go`](../../session/store.go)
 - [`runtime/continuation.go`](../../runtime/continuation.go)
-- [`runtime/runtime.go`](../../runtime/runtime.go)
-- [`commands_continuation.go`](../../commands_continuation.go)
+- [`runtime/continuation_work.go`](../../runtime/continuation_work.go)
+- [`runtime/continuation_loop.go`](../../runtime/continuation_loop.go)
+- [`runtime/continuation_class_scope.go`](../../runtime/continuation_class_scope.go)
+- [`internal/telegramcommands/commands_continuation.go`](../../internal/telegramcommands/commands_continuation.go)
 
 
 ## Generic ActionProposal UI v1
@@ -174,7 +235,9 @@ Continuation prompts now use short explicit lease-control buttons instead of a
 single ambiguous `Continue` button. Newly rendered Telegram labels are:
 
 - `Start`: approve the pending ContinuationLease exactly as written and trigger
-  the bounded continuation.
+  the bounded continuation. If the lease carries multiple executable turns,
+  runtime may continue automatically inside the approved lease until a boundary
+  is reached.
 - `Details`: render the current continuation edge without mutating state.
 - `Change`: revoke/park the pending continuation prompt and ask for a revised
   lease. It does not trigger continuation.

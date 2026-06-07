@@ -45,10 +45,11 @@ func TestLiveApprovalCardFixtureRendersAsHumanPlanProjection(t *testing.T) {
 	text := renderOperationProposalMaterializedPromptFallback(state)
 
 	for _, want := range []string{
-		"Approve plan for “Inspect status and recent evidence” for 2 turns",
-		"first, Inspect status and recent evidence",
-		"Covers Step 1: Inspect status and recent evidence",
-		"Stops before",
+		"Approve plan:\nInspect status and recent evidence",
+		"Budget:\nup to 2 turns",
+		"First step:\nInspect status and recent evidence",
+		"Covers:\n- Step 1: Inspect status and recent evidence",
+		"Stops before:\n- anything outside scope",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("approval card = %q, want %q", text, want)
@@ -56,8 +57,6 @@ func TestLiveApprovalCardFixtureRendersAsHumanPlanProjection(t *testing.T) {
 	}
 	for _, notWant := range []string{
 		"Approval needed",
-		"Plan:",
-		"Budget:",
 		"I'll do:",
 		"Lease:",
 		"Operator card:",
@@ -73,7 +72,7 @@ func TestLiveApprovalCardFixtureRendersAsHumanPlanProjection(t *testing.T) {
 	}
 }
 
-func TestApprovalPromptRendersAsSingleDecisionSentence(t *testing.T) {
+func TestApprovalPromptRendersAsTelegramReadableDecisionCard(t *testing.T) {
 	t.Parallel()
 
 	state := session.ContinuationState{
@@ -90,15 +89,16 @@ func TestApprovalPromptRendersAsSingleDecisionSentence(t *testing.T) {
 
 	text := renderOperationProposalMaterializedPromptFallback(state)
 	for _, want := range []string{
-		"Approve “Commit the validated rendering updates, push branch, and open a pull request” for 1 turn",
-		"Create one commit, push the branch, and open the PR",
-		"Stops before deploy/restart, credentials/tokens, merge",
+		"Approve:\nCommit the validated rendering updates, push branch, and open a pull request",
+		"Budget:\nup to 1 turn",
+		"Scope:\nCreate one commit, push the branch, and open the PR",
+		"Stops before:\n- deploy/restart\n- credentials/tokens\n- merge",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("approval card = %q, want %q", text, want)
 		}
 	}
-	for _, notWant := range []string{"Approval:", "Plan:", "Status:", "Why now:", "Scope:", "Details:", "aprop-compact-rendering"} {
+	for _, notWant := range []string{"Approval needed", "Status:", "Why now:", "Details:", "aprop-compact-rendering"} {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("approval card = %q, did not want scaffold/internal fragment %q", text, notWant)
 		}
@@ -155,7 +155,7 @@ func TestApprovedContinuationEventProjectionHidesLedgerInternals(t *testing.T) {
 		},
 	}
 	text := approvedContinuationEventTextForState(state)
-	for _, want := range []string{"Approved work:", "Next: Bundled Phase 4B", "Scope: Inspect adapter state", "Budget: up to 2 turns", "Stops before:"} {
+	for _, want := range []string{"Approved work:", "Next:\nBundled Phase 4B", "Scope:\nInspect adapter state", "Budget:\nup to 2 turns", "Stops before:"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("approved continuation text = %q, want %q", text, want)
 		}
@@ -300,10 +300,18 @@ func stopTextForProjection(text string) string {
 		if !strings.Contains(line, "Stops before") {
 			continue
 		}
-		if strings.TrimSpace(line) == "Stops before:" && i+1 < len(lines) {
-			return strings.TrimSpace(lines[i+1])
+		if strings.TrimSpace(line) != "Stops before:" {
+			return line
 		}
-		return line
+		var bullets []string
+		for _, next := range lines[i+1:] {
+			next = strings.TrimSpace(next)
+			if next == "" {
+				break
+			}
+			bullets = append(bullets, next)
+		}
+		return strings.Join(bullets, " ")
 	}
 	return ""
 }

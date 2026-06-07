@@ -41,6 +41,33 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	if staleRepaired {
 		return false, nil
 	}
+	if priorContinuationExists {
+		var completed bool
+		opState, completed = operationStateWithConsumedWorkContinuationPhaseCompleted(opState, priorContinuation, now)
+		if completed {
+			if err := r.store.UpdateOperationState(key, opState); err != nil {
+				return false, fmt.Errorf("persist completed consumed operation phase: %w", err)
+			}
+		}
+	}
+	if repairedState, repaired := operationStateWithCompletedPhaseDuplicatesReconciled(opState, now); repaired {
+		opState = repairedState
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return false, fmt.Errorf("persist reconciled completed operation phase duplicates: %w", err)
+		}
+	}
+	if repairedState, repaired := operationStateWithStalePlanLeaseCleared(opState, now); repaired {
+		opState = repairedState
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return false, fmt.Errorf("persist cleared stale operation plan lease: %w", err)
+		}
+	}
+	if repairedState, repaired := operationStateWithCompletedPhasePlanClosed(opState, now); repaired {
+		opState = repairedState
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return false, fmt.Errorf("persist completed operation phase plan closure: %w", err)
+		}
+	}
 	opState = operationStateWithNonCurrentInProgressPhasesCleared(opState, now)
 	opState = operationStateWithInactiveCurrentPhaseLeaseCleared(opState, priorContinuation, priorContinuationExists, now)
 	if priorContinuationExists {
@@ -52,6 +79,9 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 				return false, fmt.Errorf("read repaired continuation state: %w", err)
 			}
 		}
+	}
+	if operationStatusIsTerminal(opState.Status) {
+		return false, nil
 	}
 	if phase, ok := nextOperationPhaseForApproval(opState); ok && len(phase.RequiredCapabilityGrants) > 0 {
 		now := time.Now().UTC()
@@ -85,6 +115,9 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 			opState = updatedOpState
 		}
 		opState = operationStateWithMaterializedPhaseLease(opState, phase.ID, state, now)
+		if reused, err := r.consumeActiveContinuationLeaseForMaterializedState(ctx, key, msg, opState, state, "operation_phase_required_capability", now); err != nil || reused {
+			return true, err
+		}
 		if err := r.store.UpdateOperationState(key, opState); err != nil {
 			return false, fmt.Errorf("persist required-capability operation phase lease state: %w", err)
 		}
@@ -96,6 +129,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		payload["phase_plan_id"] = strings.TrimSpace(opState.PhasePlan.ID)
 		payload["phase_id"] = strings.TrimSpace(phase.ID)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
+		r.recordContinuationBundleNarrowing(key, opState, []session.OperationPhase{phase}, state, "operation_phase_required_capability", now)
 		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_required_capability"); err != nil {
 			return false, fmt.Errorf("send required-capability operation phase continuation approval: %w", err)
 		}
@@ -130,6 +164,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		payload["materialized_from"] = "operation_plan_lease"
 		payload["plan_lease_id"] = strings.TrimSpace(opState.PlanLease.ID)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
+		r.recordContinuationBundleNarrowing(key, opState, operationPlanLeasePhasesFromOperation(opState, opState.PlanLease), state, "operation_plan_lease", now)
 		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_plan_lease"); err != nil {
 			return false, fmt.Errorf("send operation plan lease continuation approval: %w", err)
 		}
@@ -166,6 +201,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 			payload["plan_lease_id"] = strings.TrimSpace(opState.PlanLease.ID)
 			payload["synthesized_from_phase_plan"] = true
 			r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
+			r.recordContinuationBundleNarrowing(key, opState, operationPlanLeasePhasesFromOperation(opState, opState.PlanLease), state, "operation_plan_lease", now)
 			if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_plan_lease"); err != nil {
 				return false, fmt.Errorf("send synthesized operation plan lease continuation approval: %w", err)
 			}
@@ -190,6 +226,9 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 			opState = updatedOpState
 		}
 		opState = operationStateWithMaterializedPhaseBundleLease(opState, bundle, state, now)
+		if reused, err := r.consumeActiveContinuationLeaseForMaterializedState(ctx, key, msg, opState, state, "operation_phase_bundle", now); err != nil || reused {
+			return true, err
+		}
 		if err := r.store.UpdateOperationState(key, opState); err != nil {
 			return false, fmt.Errorf("persist operation phase bundle lease state: %w", err)
 		}
@@ -244,6 +283,9 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 			opState = updatedOpState
 		}
 		opState = operationStateWithMaterializedPhaseLease(opState, phase.ID, state, now)
+		if reused, err := r.consumeActiveContinuationLeaseForMaterializedState(ctx, key, msg, opState, state, "operation_phase_plan", now); err != nil || reused {
+			return true, err
+		}
 		if err := r.store.UpdateOperationState(key, opState); err != nil {
 			return false, fmt.Errorf("persist operation phase lease state: %w", err)
 		}
@@ -255,6 +297,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		payload["phase_plan_id"] = strings.TrimSpace(opState.PhasePlan.ID)
 		payload["phase_id"] = strings.TrimSpace(phase.ID)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
+		r.recordContinuationBundleNarrowing(key, opState, []session.OperationPhase{phase}, state, "operation_phase_plan", now)
 		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_plan"); err != nil {
 			return false, fmt.Errorf("send operation phase continuation approval: %w", err)
 		}
@@ -285,6 +328,9 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		return true, err
 	} else {
 		opState = updatedOpState
+	}
+	if reused, err := r.consumeActiveContinuationLeaseForMaterializedState(ctx, key, msg, opState, state, "operation_proposal", now); err != nil || reused {
+		return true, err
 	}
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return false, fmt.Errorf("persist operation proposal continuation state: %w", err)

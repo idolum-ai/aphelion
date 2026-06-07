@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
@@ -119,6 +120,377 @@ func TestInvalidContinuationAuthorityDoesNotCreateRequiredCapabilityGrant(t *tes
 	req, ok, err := store.CapabilityRequest("cap-invalid-authority")
 	if err != nil || !ok || req.ReviewStatus != session.CapabilityReviewStatusProposed {
 		t.Fatalf("request ok=%t status=%q err=%v, want still proposed", ok, req.ReviewStatus, err)
+	}
+}
+
+func TestRequiredCapabilityPhaseRescopesExternalAccountMetadataApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9141, UserID: 0, Scope: telegramDMScopeRef(9141)}
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-pr-158",
+		RequestedBy:    "telegram:1001",
+		RequestedFor:   "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github",
+		Purpose:        "Update PR #158 title and body.",
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "planning-improvements-pr-metadata",
+		Objective: "Update PR #158 title and description.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "approval_request",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "planning-improvements-pr-metadata",
+			CurrentPhaseID: "update-pr-158-title-body",
+			Phases: []session.OperationPhase{{
+				ID:             "update-pr-158-title-body",
+				Summary:        "Update PR #158 title and description",
+				Status:         session.PlanStatusPending,
+				AuthorityClass: "commit",
+				WhyNow:         "PR #158 metadata should accurately represent the branch.",
+				BoundedEffect:  "Update only PR #158 title and body. No code/repo changes, merge, release/tag, deploy/restart, branch mutation, or unrelated GitHub effects.",
+				AllowedActions: []string{
+					"read_pr_metadata_if_needed",
+					"update_pull_request_title",
+					"update_pull_request_body",
+					"report_updated_pr_url",
+				},
+				ForbiddenActions: []string{
+					"git_commit",
+					"git_push",
+					"merge_pull_request",
+					"release_or_tag",
+					"deploy_or_restart",
+					"credential_token_output",
+					"unrelated_github_effects",
+				},
+				RequiresApproval: true,
+				RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+					RequestID:      "cap-pr-158",
+					Kind:           session.CapabilityKindExternalAccount,
+					TargetResource: "github",
+					GrantedTo:      "telegram:1001",
+					AllowedActions: []string{"read", "write"},
+				}},
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9141, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want rescope to valid GitHub metadata approval")
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending {
+		t.Fatalf("continuation status = %q, want pending", cont.Status)
+	}
+	if cont.ActionProposal.RiskClass != "external_account_action" {
+		t.Fatalf("risk class = %q, want external_account_action", cont.ActionProposal.RiskClass)
+	}
+	for _, notWant := range []string{"commit", "git_commit", "repo_history_mutation"} {
+		if actionListContains(cont.ActionProposal.AllowedActions, notWant) || actionListContains(cont.ContinuationLease.AllowedActions, notWant) {
+			t.Fatalf("allowed action %q present in action=%#v lease=%#v", notWant, cont.ActionProposal.AllowedActions, cont.ContinuationLease.AllowedActions)
+		}
+	}
+	for _, want := range []string{"update_pull_request_title", "update_pull_request_body"} {
+		if !actionListContains(cont.ActionProposal.AllowedActions, want) {
+			t.Fatalf("allowed actions = %#v, want %q", cont.ActionProposal.AllowedActions, want)
+		}
+	}
+	if cont.ContinuationLease.LeaseClass != session.ContinuationLeaseClassCapabilityGrant {
+		t.Fatalf("lease class = %q, want capability_grant", cont.ContinuationLease.LeaseClass)
+	}
+	if len(cont.ContinuationLease.RequiredCapabilityGrants) != 1 || cont.ContinuationLease.RequiredCapabilityGrants[0].RequestID != "cap-pr-158" {
+		t.Fatalf("required grants = %#v, want cap-pr-158 preserved", cont.ContinuationLease.RequiredCapabilityGrants)
+	}
+	if compilation := continuationAuthorityCompilation(cont); compilation.Invalid() {
+		t.Fatalf("authority compilation = %#v, want valid rescope", compilation)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one approval prompt", inlineCount)
+	}
+}
+
+func TestAuthoritySanitizerReoffersRevokedRequiredCapabilityPhase(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9142, UserID: 1001, Scope: telegramDMScopeRef(9142)}
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-pr-158-sanitize",
+		RequestedBy:    "telegram:1001",
+		RequestedFor:   "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github",
+		Purpose:        "Update PR #158 title and body.",
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	opState := requiredCapabilityPRMetadataOperationState("planning-improvements-pr-metadata-sanitize", "cap-pr-158-sanitize")
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	now := time.Now().UTC()
+	bad := invalidPRMetadataContinuationForTest(opState, now)
+	if err := store.UpdateContinuationState(key, bad); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	repaired, err := rt.repairContinuationAuthorityContradictions(context.Background(), now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("repairContinuationAuthorityContradictions() err = %v", err)
+	}
+	if repaired < 2 {
+		t.Fatalf("repaired = %d, want sanitizer plus reoffer", repaired)
+	}
+	expectedGrantRequestID := "cap-pr-158-sanitize"
+	assertPRMetadataContinuationReoffered(t, store, sender, key, expectedGrantRequestID)
+}
+
+func TestStartupRepairReoffersAlreadyRevokedInvalidRequiredCapabilityPhase(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9143, UserID: 1001, Scope: telegramDMScopeRef(9143)}
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-pr-158-reoffer",
+		RequestedBy:    "telegram:1001",
+		RequestedFor:   "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github",
+		Purpose:        "Update PR #158 title and body.",
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	opState := requiredCapabilityPRMetadataOperationState("planning-improvements-pr-metadata-reoffer", "cap-pr-158-reoffer")
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	now := time.Now().UTC()
+	bad := invalidPRMetadataContinuationForTest(opState, now)
+	compilation := continuationAuthorityCompilation(bad)
+	if compilation.Valid() {
+		t.Fatal("bad continuation compilation valid, want invalid authority fixture")
+	}
+	revoked := continuationStateWithInvalidAuthorityContract(bad, compilation, now)
+	if err := store.UpdateContinuationState(key, revoked); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	repaired, err := rt.repairInvalidPendingContinuationApprovals(context.Background(), now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("repairInvalidPendingContinuationApprovals() err = %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired = %d, want one reoffered approval", repaired)
+	}
+	assertPRMetadataContinuationReoffered(t, store, sender, key, "cap-pr-158-reoffer")
+}
+
+func TestInvalidAuthorityReconciliationPreservesExternalAccountGrant(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	_ = store
+	_ = sender
+	now := time.Now().UTC()
+	state := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "invalid-pr-metadata",
+		Objective:      "Update PR metadata.",
+		StageSummary:   "Update PR #158 title and description",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:          "aprop-invalid-pr-metadata",
+			OperationID: "invalid-pr-metadata",
+			Summary:     "Update PR #158 title and description",
+			RiskClass:   "commit",
+			AllowedActions: []string{
+				"read_pr_metadata_if_needed",
+				"update_pull_request_title",
+				"update_pull_request_body",
+				"commit",
+				"git_commit",
+			},
+			ForbiddenActions: []string{"git_commit", "git_push", "deploy_or_restart"},
+			Status:           session.ProposalStatusPending,
+			ExpiresAt:        now.Add(time.Hour),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:               "lease-invalid-pr-metadata",
+			ProposalID:       "aprop-invalid-pr-metadata",
+			Status:           session.ContinuationLeaseStatusPending,
+			MaxTurns:         1,
+			RemainingTurns:   1,
+			AllowedActions:   []string{"read_pr_metadata_if_needed", "update_pull_request_title", "update_pull_request_body", "commit", "git_commit"},
+			ForbiddenActions: []string{"git_commit", "git_push", "deploy_or_restart"},
+			RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+				RequestID:      "cap-pr-158",
+				Kind:           session.CapabilityKindExternalAccount,
+				TargetResource: "github",
+				GrantedTo:      "telegram:1001",
+				AllowedActions: []string{"read", "write"},
+			}},
+			ExpiresAt: now.Add(time.Hour),
+		},
+	}
+	compilation := continuationAuthorityCompilation(state)
+	if compilation.Valid() {
+		t.Fatal("compilation valid, want invalid fixture")
+	}
+	reconciled, ok := rt.reconciledContinuationStateFromInvalidAuthority(state, compilation, now)
+	if !ok {
+		t.Fatal("reconciled = false, want narrower external-account proposal")
+	}
+	if reconciled.ActionProposal.RiskClass != "external_account_action" {
+		t.Fatalf("risk class = %q, want external_account_action", reconciled.ActionProposal.RiskClass)
+	}
+	if len(reconciled.ContinuationLease.RequiredCapabilityGrants) != 1 || reconciled.ContinuationLease.RequiredCapabilityGrants[0].RequestID != "cap-pr-158" {
+		t.Fatalf("required grants = %#v, want cap-pr-158 preserved", reconciled.ContinuationLease.RequiredCapabilityGrants)
+	}
+	if compilation := continuationAuthorityCompilation(reconciled); compilation.Invalid() {
+		t.Fatalf("reconciled compilation = %#v, want valid", compilation)
+	}
+}
+
+func requiredCapabilityPRMetadataOperationState(operationID string, capabilityRequestID string) session.OperationState {
+	return session.OperationState{
+		ID:        operationID,
+		Objective: "Update PR #158 title and description.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "phase_approval_adjudicated",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             operationID,
+			CurrentPhaseID: "update-pr-158-title-body",
+			Phases: []session.OperationPhase{{
+				ID:             "update-pr-158-title-body",
+				Summary:        "Update PR #158 title and description",
+				Status:         session.PlanStatusPending,
+				AuthorityClass: "commit",
+				WhyNow:         "PR #158 metadata should accurately represent the branch.",
+				BoundedEffect:  "Update only PR #158 title and body. No code/repo changes, merge, release/tag, deploy/restart, branch mutation, or unrelated GitHub effects.",
+				AllowedActions: []string{
+					"read_pr_metadata_if_needed",
+					"update_pull_request_title",
+					"update_pull_request_body",
+					"report_updated_pr_url",
+				},
+				ForbiddenActions: []string{
+					"git_commit",
+					"git_push",
+					"merge_pull_request",
+					"release_or_tag",
+					"deploy_or_restart",
+					"credential_token_output",
+					"unrelated_github_effects",
+				},
+				RequiresApproval: true,
+				RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+					RequestID:      capabilityRequestID,
+					Kind:           session.CapabilityKindExternalAccount,
+					TargetResource: "github",
+					GrantedTo:      "telegram:1001",
+					AllowedActions: []string{"read", "write"},
+				}},
+			}},
+		},
+	}
+}
+
+func invalidPRMetadataContinuationForTest(opState session.OperationState, now time.Time) session.ContinuationState {
+	phase := opState.PhasePlan.Phases[0]
+	state := continuationStateFromOperationPhase(opState, phase, "continue", now)
+	state.ActionProposal.RiskClass = "commit"
+	state.ActionProposal.AllowedActions = append(state.ActionProposal.AllowedActions, "commit", "git_commit")
+	state.ActionProposal.ForbiddenActions = append(state.ActionProposal.ForbiddenActions, "git_commit", "git_push", "deploy_or_restart")
+	state.ActionProposal.Status = session.ProposalStatusPending
+	state.ContinuationLease = buildContinuationLease(state.ActionProposal, 1, now)
+	state.ContinuationLease.RequiredCapabilityGrants = append([]session.CapabilityGrantSpec(nil), phase.RequiredCapabilityGrants...)
+	state.ContinuationLease.AllowedActions = append(state.ContinuationLease.AllowedActions, "commit", "git_commit")
+	state.ContinuationLease.ForbiddenActions = append(state.ContinuationLease.ForbiddenActions, "git_commit", "git_push", "deploy_or_restart")
+	state = session.NormalizeContinuationState(state)
+	if compilation := continuationAuthorityCompilation(state); compilation.Valid() {
+		panic("invalid PR metadata continuation fixture compiled valid")
+	}
+	return state
+}
+
+func assertPRMetadataContinuationReoffered(t *testing.T, store *session.SQLiteStore, sender *fakeSender, key session.SessionKey, capabilityRequestID string) {
+	t.Helper()
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending {
+		t.Fatalf("continuation status = %q, want pending reoffered approval", cont.Status)
+	}
+	if cont.ActionProposal.RiskClass != "external_account_action" {
+		t.Fatalf("risk class = %q, want external_account_action", cont.ActionProposal.RiskClass)
+	}
+	for _, notWant := range []string{"commit", "git_commit", "repo_history_mutation"} {
+		if actionListContains(cont.ActionProposal.AllowedActions, notWant) || actionListContains(cont.ContinuationLease.AllowedActions, notWant) {
+			t.Fatalf("allowed action %q present in action=%#v lease=%#v", notWant, cont.ActionProposal.AllowedActions, cont.ContinuationLease.AllowedActions)
+		}
+	}
+	for _, want := range []string{"update_pull_request_title", "update_pull_request_body"} {
+		if !actionListContains(cont.ActionProposal.AllowedActions, want) {
+			t.Fatalf("allowed actions = %#v, want %q", cont.ActionProposal.AllowedActions, want)
+		}
+	}
+	if len(cont.ContinuationLease.RequiredCapabilityGrants) != 1 || cont.ContinuationLease.RequiredCapabilityGrants[0].RequestID != capabilityRequestID {
+		t.Fatalf("required grants = %#v, want %s preserved", cont.ContinuationLease.RequiredCapabilityGrants, capabilityRequestID)
+	}
+	if compilation := continuationAuthorityCompilation(cont); compilation.Invalid() {
+		t.Fatalf("authority compilation = %#v, want valid reoffered approval", compilation)
+	}
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	phase := opState.PhasePlan.Phases[0]
+	if phase.LeaseID != cont.ContinuationLease.ID {
+		t.Fatalf("phase lease id = %q, want %q", phase.LeaseID, cont.ContinuationLease.ID)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one reoffered approval prompt", inlineCount)
 	}
 }
 

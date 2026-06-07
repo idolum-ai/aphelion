@@ -13,10 +13,11 @@ import (
 
 // PersistStageErrorContext controls persisted error-prefix semantics.
 type PersistStageErrorContext struct {
-	ConvertMessages string
-	LoadPlanState   string
-	LoadOperation   string
-	SaveSession     string
+	ConvertMessages  string
+	LoadPlanState    string
+	LoadOperation    string
+	LoadContinuation string
+	SaveSession      string
 }
 
 // PersistStageInput captures persist-stage orchestration facts.
@@ -34,14 +35,16 @@ type PersistStageInput struct {
 
 // PersistStageCallbacks provides side-effectful persistence callbacks.
 type PersistStageCallbacks struct {
-	BuildMessages       func(ledgerText string, generated []agent.Message, turnIndex int) ([]session.Message, error)
-	ApplyScene          func(messages []session.Message, sceneText string) []session.Message
-	ApplyFloor          func(messages []session.Message, floorText string, floorMetadata string) []session.Message
-	LoadPlanState       func(ctx context.Context) (session.PlanState, error)
-	MergePlanState      func(inMemory session.PlanState, persisted session.PlanState) session.PlanState
-	LoadOperationState  func(ctx context.Context) (session.OperationState, error)
-	MergeOperationState func(inMemory session.OperationState, persisted session.OperationState) session.OperationState
-	Save                func(ctx context.Context, sess *session.Session, newMessages []session.Message, usage core.TokenUsage) error
+	BuildMessages          func(ledgerText string, generated []agent.Message, turnIndex int) ([]session.Message, error)
+	ApplyScene             func(messages []session.Message, sceneText string) []session.Message
+	ApplyFloor             func(messages []session.Message, floorText string, floorMetadata string) []session.Message
+	LoadPlanState          func(ctx context.Context) (session.PlanState, error)
+	MergePlanState         func(inMemory session.PlanState, persisted session.PlanState) session.PlanState
+	LoadOperationState     func(ctx context.Context) (session.OperationState, error)
+	MergeOperationState    func(inMemory session.OperationState, persisted session.OperationState) session.OperationState
+	LoadContinuationState  func(ctx context.Context) (session.ContinuationState, error)
+	MergeContinuationState func(inMemory session.ContinuationState, persisted session.ContinuationState) session.ContinuationState
+	Save                   func(ctx context.Context, sess *session.Session, newMessages []session.Message, usage core.TokenUsage) error
 }
 
 // PersistStageResult captures persist-stage output facts.
@@ -64,6 +67,10 @@ func RunPersistStage(ctx context.Context, input PersistStageInput, callbacks Per
 	operationStateErrPrefix := input.ErrorContext.LoadOperation
 	if operationStateErrPrefix == "" {
 		operationStateErrPrefix = "load operation state before save"
+	}
+	continuationStateErrPrefix := input.ErrorContext.LoadContinuation
+	if continuationStateErrPrefix == "" {
+		continuationStateErrPrefix = "load continuation state before save"
 	}
 	saveErrPrefix := input.ErrorContext.SaveSession
 	if saveErrPrefix == "" {
@@ -112,6 +119,17 @@ func RunPersistStage(ctx context.Context, input PersistStageInput, callbacks Per
 			input.Session.OperationState = callbacks.MergeOperationState(input.Session.OperationState, operationState)
 		} else {
 			input.Session.OperationState = operationState
+		}
+	}
+	if callbacks.LoadContinuationState != nil {
+		continuationState, continuationErr := callbacks.LoadContinuationState(ctx)
+		if continuationErr != nil {
+			return out, fmt.Errorf("%s: %w", continuationStateErrPrefix, continuationErr)
+		}
+		if callbacks.MergeContinuationState != nil {
+			input.Session.ContinuationState = callbacks.MergeContinuationState(input.Session.ContinuationState, continuationState)
+		} else {
+			input.Session.ContinuationState = continuationState
 		}
 	}
 	if callbacks.Save == nil {

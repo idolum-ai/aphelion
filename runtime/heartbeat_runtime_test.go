@@ -73,7 +73,7 @@ func TestHeartbeatTargetNoneStoresMaintenanceWithoutOutbound(t *testing.T) {
 	}
 }
 
-func TestHeartbeatDeliveryUsesFaceAndMarksReviewEventsDelivered(t *testing.T) {
+func TestHeartbeatDeliveryUsesFloorFallbackAndMarksReviewEventsDelivered(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -81,7 +81,7 @@ func TestHeartbeatDeliveryUsesFaceAndMarksReviewEventsDelivered(t *testing.T) {
 	cfg.Heartbeat.Target = "last"
 	provider.replyText = "heartbeat canonical"
 	provider.proposalReplyText = "A recurring deployment blocker keeps surfacing. Name it."
-	provider.faceReplyText = "heartbeat rendered"
+	provider.faceReplyText = "unexpected heartbeat face render"
 
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -126,8 +126,8 @@ func TestHeartbeatDeliveryUsesFaceAndMarksReviewEventsDelivered(t *testing.T) {
 	if len(sender.sent) != 1 {
 		t.Fatalf("sent len = %d, want 1", len(sender.sent))
 	}
-	if sender.sent[0].ChatID != 1001 || sender.sent[0].Text != "heartbeat rendered" {
-		t.Fatalf("sent = %#v, want rendered heartbeat to admin", sender.sent[0])
+	if sender.sent[0].ChatID != 1001 || sender.sent[0].Text != "heartbeat canonical" {
+		t.Fatalf("sent = %#v, want heartbeat floor to admin", sender.sent[0])
 	}
 	sender.mu.Unlock()
 
@@ -138,8 +138,8 @@ func TestHeartbeatDeliveryUsesFaceAndMarksReviewEventsDelivered(t *testing.T) {
 	if adminSession.LastFloorText != "heartbeat canonical" {
 		t.Fatalf("admin floor = %q, want heartbeat canonical", adminSession.LastFloorText)
 	}
-	if len(adminSession.Messages) == 0 || adminSession.Messages[len(adminSession.Messages)-1].Content != "heartbeat rendered" {
-		t.Fatalf("admin messages = %#v, want rendered heartbeat entry", adminSession.Messages)
+	if len(adminSession.Messages) == 0 || adminSession.Messages[len(adminSession.Messages)-1].Content != "heartbeat canonical" {
+		t.Fatalf("admin messages = %#v, want heartbeat floor entry", adminSession.Messages)
 	}
 	if adminSession.Messages[len(adminSession.Messages)-1].FloorContent != "heartbeat canonical" {
 		t.Fatalf("admin floor content = %q, want heartbeat canonical", adminSession.Messages[len(adminSession.Messages)-1].FloorContent)
@@ -155,6 +155,9 @@ func TestHeartbeatDeliveryUsesFaceAndMarksReviewEventsDelivered(t *testing.T) {
 
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
+	if len(provider.seenFaceSystem) != 0 {
+		t.Fatalf("seenFaceSystem = %#v, want no face render for heartbeat maintenance delivery", provider.seenFaceSystem)
+	}
 	if len(provider.seenProposalSystem) == 0 {
 		t.Fatal("seenProposalSystem empty, want hidden-input proposal for heartbeat outreach")
 	}
@@ -242,7 +245,7 @@ func TestHeartbeatDeliveryCanTriggerFromLatentStateWithoutReviewEvents(t *testin
 	cfg.Agent.DailyNotes = true
 	provider.replyText = "latent heartbeat floor"
 	provider.proposalReplyText = "Something unresolved keeps surfacing around deployment readiness."
-	provider.faceReplyText = "latent heartbeat scene"
+	provider.faceReplyText = "unexpected latent heartbeat face render"
 
 	noteDir := filepath.Join(cfg.Agent.SharedMemoryRoot, cfg.Agent.DailyNotesDir)
 	if err := os.MkdirAll(filepath.Join(cfg.Agent.SharedMemoryRoot, "memory"), 0o755); err != nil {
@@ -274,8 +277,8 @@ func TestHeartbeatDeliveryCanTriggerFromLatentStateWithoutReviewEvents(t *testin
 	if len(sender.sent) != 1 {
 		t.Fatalf("sent len = %d, want 1", len(sender.sent))
 	}
-	if sender.sent[0].ChatID != 1001 || sender.sent[0].Text != "latent heartbeat scene" {
-		t.Fatalf("sent = %#v, want latent heartbeat scene to admin", sender.sent[0])
+	if sender.sent[0].ChatID != 1001 || sender.sent[0].Text != "latent heartbeat floor" {
+		t.Fatalf("sent = %#v, want latent heartbeat floor to admin", sender.sent[0])
 	}
 	sender.mu.Unlock()
 
@@ -286,8 +289,8 @@ func TestHeartbeatDeliveryCanTriggerFromLatentStateWithoutReviewEvents(t *testin
 	if adminSession.LastFloorText != "latent heartbeat floor" {
 		t.Fatalf("admin floor = %q, want latent heartbeat floor", adminSession.LastFloorText)
 	}
-	if len(adminSession.Messages) == 0 || adminSession.Messages[len(adminSession.Messages)-1].Content != "latent heartbeat scene" {
-		t.Fatalf("admin messages = %#v, want latent heartbeat scene entry", adminSession.Messages)
+	if len(adminSession.Messages) == 0 || adminSession.Messages[len(adminSession.Messages)-1].Content != "latent heartbeat floor" {
+		t.Fatalf("admin messages = %#v, want latent heartbeat floor entry", adminSession.Messages)
 	}
 	if adminSession.Messages[len(adminSession.Messages)-1].FloorContent != "latent heartbeat floor" {
 		t.Fatalf("admin floor content = %q, want latent heartbeat floor", adminSession.Messages[len(adminSession.Messages)-1].FloorContent)
@@ -295,6 +298,9 @@ func TestHeartbeatDeliveryCanTriggerFromLatentStateWithoutReviewEvents(t *testin
 
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
+	if len(provider.seenFaceSystem) != 0 {
+		t.Fatalf("seenFaceSystem = %#v, want no face render for latent heartbeat delivery", provider.seenFaceSystem)
+	}
 	if len(provider.seenProposalSystem) == 0 {
 		t.Fatal("seenProposalSystem empty, want hidden-input proposal for latent heartbeat outreach")
 	}

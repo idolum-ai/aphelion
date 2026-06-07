@@ -18,6 +18,23 @@ func markLastStableCacheBreakpoint(blocks []agent.SystemBlock) {
 	markStableCacheBreakpoints(blocks, 1)
 }
 
+func markCacheBreakpointsByIndex(blocks []agent.SystemBlock, indexes ...int) {
+	marked := 0
+	for i := range blocks {
+		blocks[i].CacheBreakpoint = false
+	}
+	for _, idx := range indexes {
+		if marked >= maxStableCacheBreakpoints {
+			return
+		}
+		if idx < 0 || idx >= len(blocks) || strings.TrimSpace(blocks[idx].Text) == "" || blocks[idx].CacheBreakpoint {
+			continue
+		}
+		blocks[idx].CacheBreakpoint = true
+		marked++
+	}
+}
+
 func markStableCacheBreakpoints(blocks []agent.SystemBlock, limit int) {
 	if limit <= 0 {
 		return

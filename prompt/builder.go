@@ -100,23 +100,73 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 		toolCaps = toolCapabilitiesFromManifest(manifest)
 	}
 
-	parts := make([]agent.SystemBlock, 0, 5)
+	parts := make([]agent.SystemBlock, 0, 8)
 	parts = append(parts, agent.SystemBlock{
 		Text: strings.Join([]string{
 			fmt.Sprintf("Role: You are %s, the governor of this system.", governorName),
 			renderAuthorityBlock(governorName, governorBackend, principalRole, workspaceRoot, manifest != ""),
 			renderGovernorOutcomeContractBlock(),
-			renderGovernorRuntimeAwarenessBlock(req.Runtime),
-			renderGovernorAgencyContextPacket(req.Runtime, principalRole, toolCaps),
+		}, "\n\n"),
+	})
+	authorityIdx := 0
+
+	parts = append(parts, agent.SystemBlock{
+		Text: strings.Join([]string{
 			renderEvidenceRetrievalStopRulesBlock(),
 			renderGovernorTurnSequencingBlock(),
 			renderGovernorJudgmentRouteContractBlock(),
 			renderGovernorAgencyTelosBlock(),
-			renderVisibleRecurrenceContractBlock(req.Runtime),
-			renderGoalContinuityContractBlock(req.Runtime),
+		}, "\n\n"),
+	})
+	stableContractIdx := len(parts) - 1
+
+	toolContractIdx := -1
+	if manifest != "" {
+		parts = append(parts, agent.SystemBlock{
+			Text: "## Tool Manifest\n" + manifest,
+		})
+		toolContractIdx = len(parts) - 1
+	}
+	beforeToolDiscipline := len(parts)
+	parts = appendToolDisciplineBlocks(parts, toolCaps)
+	if len(parts) > beforeToolDiscipline {
+		toolContractIdx = len(parts) - 1
+	}
+
+	workspaceStableIdx := -1
+	if len(nonToolStable) > 0 {
+		parts = append(parts, agent.SystemBlock{
+			Text: renderFileSection("Stable Workspace Files", nonToolStable),
+		})
+		workspaceStableIdx = len(parts) - 1
+	}
+
+	if len(toolPolicyFiles) > 0 {
+		parts = append(parts, agent.SystemBlock{
+			Text: renderFileSection("Advisory Tool Policy", toolPolicyFiles),
+		})
+		workspaceStableIdx = len(parts) - 1
+	}
+
+	if toolContractIdx < 0 && workspaceStableIdx < 0 {
+		markCacheBreakpointsByIndex(parts, authorityIdx, stableContractIdx)
+	} else {
+		markCacheBreakpointsByIndex(parts, authorityIdx, toolContractIdx, workspaceStableIdx)
+	}
+
+	parts = append(parts, agent.SystemBlock{
+		Text: strings.Join([]string{
+			renderGovernorRuntimeAwarenessBlock(req.Runtime),
+			renderGovernorAgencyContextPacket(req.Runtime, principalRole, toolCaps),
 		}, "\n\n"),
 	})
 
+	if visibleRecurrence := renderVisibleRecurrenceContractBlock(req.Runtime); visibleRecurrence != "" {
+		parts = append(parts, agent.SystemBlock{Text: visibleRecurrence})
+	}
+	if goalContinuity := renderGoalContinuityContractBlock(req.Runtime); goalContinuity != "" {
+		parts = append(parts, agent.SystemBlock{Text: goalContinuity})
+	}
 	if currentPlan := renderCurrentPlanStateBlock(req.Runtime); currentPlan != "" {
 		parts = append(parts, agent.SystemBlock{Text: currentPlan})
 	}
@@ -126,27 +176,6 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 
 	if contract := renderMaterialFloorContractBlock(req.Runtime); contract != "" {
 		parts = append(parts, agent.SystemBlock{Text: contract})
-	}
-
-	if len(nonToolStable) > 0 {
-		parts = append(parts, agent.SystemBlock{
-			Text: renderFileSection("Stable Workspace Files", nonToolStable),
-		})
-	}
-
-	if manifest != "" {
-		parts = append(parts, agent.SystemBlock{
-			Text: "## Tool Manifest\n" + manifest,
-		})
-		parts = appendToolDisciplineBlocks(parts, toolCaps)
-	} else {
-		parts = appendToolDisciplineBlocks(parts, toolCaps)
-	}
-
-	if len(toolPolicyFiles) > 0 {
-		parts = append(parts, agent.SystemBlock{
-			Text: renderFileSection("Advisory Tool Policy", toolPolicyFiles),
-		})
 	}
 
 	if len(dynamic) > 0 {
@@ -159,12 +188,9 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 			lines = append(lines, omitted)
 		}
 		lines = append(lines, renderFiles(shapedDynamic)...)
-		markStableCacheBreakpoints(parts, maxStableCacheBreakpoints)
 		parts = append(parts, agent.SystemBlock{
 			Text: strings.Join(lines, "\n\n"),
 		})
-	} else {
-		markStableCacheBreakpoints(parts, maxStableCacheBreakpoints)
 	}
 
 	return parts

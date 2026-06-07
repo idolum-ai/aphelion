@@ -114,3 +114,27 @@ func TestBudgetAddToolCalls(t *testing.T) {
 		t.Fatalf("ToolCallCount changed after hard stop = %d, want 3", budget.ToolCallCount)
 	}
 }
+
+func TestBudgetAddTokenUsage(t *testing.T) {
+	budget := Budget{
+		InputTokenSoftLimit:  100,
+		InputTokenHardLimit:  150,
+		OutputTokenSoftLimit: 50,
+		OutputTokenHardLimit: 75,
+	}
+	if warning, exhausted := budget.AddTokenUsage(40, 20); warning != "" || exhausted {
+		t.Fatalf("first AddTokenUsage warning=%q exhausted=%v, want no pressure", warning, exhausted)
+	}
+	if budget.InputTokenCount != 40 || budget.OutputTokenCount != 20 {
+		t.Fatalf("token counts = %d/%d, want 40/20", budget.InputTokenCount, budget.OutputTokenCount)
+	}
+	if warning, exhausted := budget.AddTokenUsage(20, 30); warning == "" || exhausted {
+		t.Fatalf("soft AddTokenUsage warning=%q exhausted=%v, want warning only", warning, exhausted)
+	}
+	if budget.InputTokenCount != 60 || budget.OutputTokenCount != 50 {
+		t.Fatalf("token counts = %d/%d, want 60/50", budget.InputTokenCount, budget.OutputTokenCount)
+	}
+	if warning, exhausted := budget.AddTokenUsage(0, 30); warning != "" || !exhausted {
+		t.Fatalf("hard AddTokenUsage warning=%q exhausted=%v, want hard stop", warning, exhausted)
+	}
+}

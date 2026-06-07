@@ -102,6 +102,42 @@ func TestStatusDiagnosticsReturnsEmptyWithoutSessionHistory(t *testing.T) {
 	}
 }
 
+func TestStatusDiagnosticsSurfacesContinuationCompileRepair(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8124, UserID: 0, Scope: telegramDMScopeRef(8124)}
+	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType: core.ExecutionEventContinuationCompileRepaired,
+		Stage:     "continuation",
+		Status:    "repaired",
+		PayloadJSON: `{
+			"repair_kind":"clarify_authority_contract",
+			"normalized_reason":"invalid_authority_no_safe_repair",
+			"repair_phase_id":"phase-clarify-authority-contract-for-phase-deploy",
+			"materialization_source":"operation_phase_plan"
+		}`,
+		CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvent() err = %v", err)
+	}
+
+	lines, err := rt.StatusDiagnostics(8124)
+	if err != nil {
+		t.Fatalf("StatusDiagnostics() err = %v", err)
+	}
+	text := strings.Join(lines, "\n")
+	for _, want := range []string{"Continuation self-block repair", "repaired", "clarify_authority_contract", "invalid_authority_no_safe_repair"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("StatusDiagnostics() = %q, want %q", text, want)
+		}
+	}
+}
+
 func TestStatusDiagnosticsSurfacesApprovalAffordanceGap(t *testing.T) {
 	t.Parallel()
 

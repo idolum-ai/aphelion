@@ -65,7 +65,7 @@ func TestInvalidAuthorityContractDoesNotRenderApprovalButtons(t *testing.T) {
 	}
 }
 
-func TestMaterializedInvalidAuthorityContractFallsBackToGenericBlockedNotice(t *testing.T) {
+func TestMaterializedInvalidAuthorityContractRoutesToRepairPhaseApproval(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -110,26 +110,83 @@ func TestMaterializedInvalidAuthorityContractFallsBackToGenericBlockedNotice(t *
 
 	sender.mu.Lock()
 	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[inlineCount-1].text
+	}
 	sent := append([]core.OutboundMessage(nil), sender.sent...)
 	sender.mu.Unlock()
-	if inlineCount != 0 {
-		t.Fatalf("inline count = %d, want no unsafe approval buttons", inlineCount)
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one read-only repair approval", inlineCount)
 	}
-	if len(sent) != 1 {
-		t.Fatalf("sent = %#v, want one generic blocked notice", sent)
+	if len(sent) != 0 {
+		t.Fatalf("sent = %#v, want no generic blocked notice", sent)
 	}
-	text := sent[0].Text
-	for _, notWant := range []string{"allowed_action_implies_forbidden_authority", "allowed_action_exactly_forbidden", "internally contradictory", "I need a narrower approval shape"} {
-		if strings.Contains(text, notWant) {
-			t.Fatalf("blocked notice = %q, want no compiler diagnostic %q", text, notWant)
+	for _, want := range []string{"Approve", "Clarify authority contract"} {
+		if !strings.Contains(inlineText, want) {
+			t.Fatalf("inline text = %q, want %q", inlineText, want)
 		}
 	}
-	if !strings.Contains(text, "I couldn't produce a safe approval") || !strings.Contains(text, "smaller phase") {
-		t.Fatalf("blocked notice = %q, want generic safe clarification", text)
+	for _, notWant := range []string{"allowed_action_implies_forbidden_authority", "allowed_action_exactly_forbidden", "internally contradictory", "smaller phase"} {
+		if strings.Contains(inlineText, notWant) {
+			t.Fatalf("inline text = %q, want no compiler diagnostic %q", inlineText, notWant)
+		}
+	}
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	opState = session.NormalizeOperationState(opState)
+	if len(opState.PhasePlan.Phases) != 2 {
+		t.Fatalf("phase count = %d, want repair phase + original phase", len(opState.PhasePlan.Phases))
+	}
+	repair := opState.PhasePlan.Phases[0]
+	original := opState.PhasePlan.Phases[1]
+	if !strings.HasPrefix(repair.ID, operationAuthorityContractRepairPhasePrefix) || repair.AuthorityClass != "read_only_review" || !repair.RequiresApproval {
+		t.Fatalf("repair phase = %#v, want read-only authority repair approval", repair)
+	}
+	if got := opState.PhasePlan.CurrentPhaseID; got != repair.ID {
+		t.Fatalf("current phase = %q, want repair phase %q", got, repair.ID)
+	}
+	if actionListContains(repair.AllowedActions, "deploy") || actionListContains(repair.ForbiddenActions, "read_only_review") {
+		t.Fatalf("repair actions = allowed %#v forbidden %#v, want read-only repair without deploy conflict", repair.AllowedActions, repair.ForbiddenActions)
+	}
+	if !original.RequiresApproval || original.Status != session.PlanStatusPending {
+		t.Fatalf("original phase = %#v, want original work preserved for later approval", original)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.OperationID != operationPhaseProposalID(opState, repair) {
+		t.Fatalf("continuation = %#v, want pending repair-phase approval", cont)
+	}
+	if compilation := continuationAuthorityCompilation(cont); compilation.Invalid() {
+		t.Fatalf("repair continuation compilation = %#v, want valid read-only repair authority", compilation)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var repaired session.ExecutionEvent
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationCompileRepaired {
+			repaired = event
+		}
+	}
+	if repaired.ID == 0 {
+		t.Fatalf("events = %#v, want continuation.compile_repaired", events)
+	}
+	payload := executionEventPayload(repaired.PayloadJSON)
+	if payloadString(payload, "repair_kind") != string(continuationCompileRepairAuthorityContract) || payloadString(payload, "normalized_reason") != "invalid_authority_no_safe_repair" {
+		t.Fatalf("compile repair payload = %#v, want authority repair reason", payload)
+	}
+	if count, ok := payloadInt64(payload, "authority_contract_contradiction_count"); !ok || count == 0 {
+		t.Fatalf("compile repair payload = %#v, want contradiction count", payload)
 	}
 }
 
-func TestMaterializedBundleAuthorityContradictionFallsBackToGenericBlockedNotice(t *testing.T) {
+func TestMaterializedBundleAuthorityContradictionRoutesToRepairPhaseApproval(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -175,27 +232,69 @@ func TestMaterializedBundleAuthorityContradictionFallsBackToGenericBlockedNotice
 		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
 	}
 	if !materialized {
-		t.Fatal("materialized = false, want handled generic blocked notice")
+		t.Fatal("materialized = false, want handled repair approval")
 	}
 
 	sender.mu.Lock()
 	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[inlineCount-1].text
+	}
 	sent := append([]core.OutboundMessage(nil), sender.sent...)
 	sender.mu.Unlock()
-	if inlineCount != 0 {
-		t.Fatalf("inline count = %d, want no invalid bundle approval buttons", inlineCount)
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one repair approval", inlineCount)
 	}
-	if len(sent) != 1 {
-		t.Fatalf("sent = %#v, want one generic blocked notice for bundle contradiction", sent)
+	if len(sent) != 0 {
+		t.Fatalf("sent = %#v, want no generic blocked notice", sent)
 	}
-	text := sent[0].Text
-	for _, notWant := range []string{"allowed_action_exactly_forbidden", "allowed_action_implies_forbidden_authority", "internally contradictory", "I need a narrower approval shape"} {
-		if strings.Contains(text, notWant) {
-			t.Fatalf("blocked notice = %q, want no compiler diagnostic %q", text, notWant)
+	if !strings.Contains(inlineText, "Clarify authority contract") {
+		t.Fatalf("inline text = %q, want authority repair approval", inlineText)
+	}
+	for _, notWant := range []string{"allowed_action_exactly_forbidden", "allowed_action_implies_forbidden_authority", "internally contradictory", "smaller phase"} {
+		if strings.Contains(inlineText, notWant) {
+			t.Fatalf("inline text = %q, want no compiler diagnostic %q", inlineText, notWant)
 		}
 	}
-	if !strings.Contains(text, "I couldn't produce a safe approval") || !strings.Contains(text, "smaller phase") {
-		t.Fatalf("blocked notice = %q, want generic safe clarification", text)
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	opState = session.NormalizeOperationState(opState)
+	if len(opState.PhasePlan.Phases) != 3 {
+		t.Fatalf("phase count = %d, want repair phase plus original bundle phases", len(opState.PhasePlan.Phases))
+	}
+	repair := opState.PhasePlan.Phases[0]
+	if !strings.HasPrefix(repair.ID, operationAuthorityContractRepairPhasePrefix) || repair.AuthorityClass != "read_only_review" {
+		t.Fatalf("repair phase = %#v, want read-only authority repair", repair)
+	}
+	if opState.PhasePlan.Phases[1].ID != "phase-one" || opState.PhasePlan.Phases[2].ID != "phase-two" {
+		t.Fatalf("phase order = %#v, want repair before original phases", opState.PhasePlan.Phases)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.OperationID != operationPhaseProposalID(opState, repair) {
+		t.Fatalf("continuation = %#v, want pending repair approval", cont)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var repaired session.ExecutionEvent
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationCompileRepaired {
+			repaired = event
+		}
+	}
+	if repaired.ID == 0 {
+		t.Fatalf("events = %#v, want continuation.compile_repaired", events)
+	}
+	payload := executionEventPayload(repaired.PayloadJSON)
+	if payloadString(payload, "repair_kind") != string(continuationCompileRepairAuthorityContract) || payloadString(payload, "normalized_reason") != "invalid_authority_no_safe_repair" {
+		t.Fatalf("compile repair payload = %#v, want authority repair reason", payload)
 	}
 }
 
@@ -291,5 +390,22 @@ func TestMaterializedInvalidAuthorityContractReconcilesToFreshApproval(t *testin
 	}
 	if opState.Stage != "deploy_approval" || opState.PhasePlan.Phases[0].LeaseID != cont.ContinuationLease.ID {
 		t.Fatalf("operation state = %#v, want deploy approval linked to reconciled lease %q", opState, cont.ContinuationLease.ID)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var repaired session.ExecutionEvent
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationCompileRepaired {
+			repaired = event
+		}
+	}
+	if repaired.ID == 0 {
+		t.Fatalf("events = %#v, want continuation.compile_repaired from reconciliation", events)
+	}
+	payload := executionEventPayload(repaired.PayloadJSON)
+	if payloadString(payload, "repair_strategy") != "remove_contradictory_allowed_actions" {
+		t.Fatalf("compile repair payload = %#v, want reconciliation repair strategy", payload)
 	}
 }
