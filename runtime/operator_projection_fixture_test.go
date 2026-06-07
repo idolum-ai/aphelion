@@ -155,7 +155,7 @@ func TestApprovedContinuationEventProjectionHidesLedgerInternals(t *testing.T) {
 		},
 	}
 	text := approvedContinuationEventTextForState(state)
-	for _, want := range []string{"Approved work:", "Next: Bundled Phase 4B", "Scope: Inspect adapter state", "Budget: up to 2 turns", "Stops before:"} {
+	for _, want := range []string{"Approved work:", "Next:\nBundled Phase 4B", "Scope:\nInspect adapter state", "Budget:\nup to 2 turns", "Stops before:"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("approved continuation text = %q, want %q", text, want)
 		}

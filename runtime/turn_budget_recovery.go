@@ -359,25 +359,27 @@ func turnBudgetRecoveryPayload(recovery *core.TurnRecovery, scope string, scopeP
 }
 
 func renderTurnBudgetRecoveryPrompt(recovery *core.TurnRecovery, scope string, hop int, maxHops int) string {
-	lines := []string{
-		fmt.Sprintf("Budget recovery hop %d/%d.", hop, maxHops),
+	card := newContinuationApprovalPromptCard("Recover", fmt.Sprintf("budget hop %d/%d", hop, maxHops), 0)
+	card.addListSection("Re-check", []string{
 		"Re-evaluate persisted operation, session, plan, and continuation state before choosing the next action.",
-		"Do not replay pending tool calls from the exhausted response; re-decide any needed tool use from current durable state.",
+		"Any tool use from current durable state; do not replay pending calls from the exhausted response.",
+	})
+	card.addListSection("Still allowed", []string{
 		"Continue only work still needed inside the same objective, phase, authority class, and bounded effect.",
 		"Return a compact final response as soon as enough evidence is gathered.",
-	}
+	})
 	if recovery != nil {
 		if recovery.Kind != "" {
-			lines = append(lines, "Recovery kind: "+string(recovery.Kind)+".")
+			card.addSection("Reason", string(recovery.Kind))
 		}
 		if summary := strings.TrimSpace(recovery.Summary); summary != "" {
-			lines = append(lines, "Previous turn summary: "+summary)
+			card.addSection("Previous", summary)
 		}
 	}
 	if scope = strings.TrimSpace(scope); scope != "" {
-		lines = append(lines, "Recovery scope: "+scope)
+		card.addSection("Scope", scope)
 	}
-	return strings.Join(lines, "\n")
+	return card.String()
 }
 
 func turnBudgetRecoveryBlockedText(recovery *core.TurnRecovery, maxHops int, reason string) string {

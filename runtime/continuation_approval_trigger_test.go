@@ -671,8 +671,8 @@ func TestTriggerContinuationUsesMachineAuthoredContinuationEventText(t *testing.
 	for _, want := range []string{
 		approvedContinuationEventText,
 		"Approved work:",
-		"Next: Bundled Phase 4B: one bounded mail-child read-only adapter proof",
-		"Scope: Inspect current email due/backoff state, run at most one bounded read-only proof, then report.",
+		"Next:\nBundled Phase 4B: one bounded mail-child read-only adapter proof",
+		"Scope:\nInspect current email due/backoff state, run at most one bounded read-only proof, then report.",
 	} {
 		if !strings.Contains(last.Content, want) {
 			t.Fatalf("last content = %q, want substring %q", last.Content, want)
