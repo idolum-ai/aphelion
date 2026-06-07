@@ -290,6 +290,25 @@ func TestParseEvalJudgeResponseAcceptsStringFindings(t *testing.T) {
 	}
 }
 
+func TestRunEvalJudgeRouteDoesNotRequestReasoning(t *testing.T) {
+	t.Parallel()
+
+	provider := &capturingEvalProvider{content: `{"pass":true,"hard_failures":[],"soft_findings":[],"confidence":0.9,"rationale":"ok"}`}
+	result := runEvalJudgeRoute(context.Background(), EvalOptions{}, &evalScenarioContext{
+		Scenario:  tokenBudgetRecoveryEvalScenario(),
+		Candidate: "The operation remains active and retry is pending.",
+	}, EvalRoute{Name: "judge", Subject: provider}, nil, nil, nil)
+	if result.ProviderFailure {
+		t.Fatalf("judge result = %#v", result)
+	}
+	if provider.opts.Reasoning.Effort != "" {
+		t.Fatalf("judge reasoning effort = %q, want empty", provider.opts.Reasoning.Effort)
+	}
+	if provider.opts.MaxTokens != 2048 {
+		t.Fatalf("judge max tokens = %d, want 2048", provider.opts.MaxTokens)
+	}
+}
+
 func TestRunEvalSuiteReturnsPartialReportOnCancellation(t *testing.T) {
 	t.Parallel()
 
@@ -502,6 +521,16 @@ type staticEvalProvider struct {
 }
 
 func (p *staticEvalProvider) CompleteWithOptions(context.Context, []agent.Message, []agent.ToolDef, agent.CompleteOptions) (*agent.Response, error) {
+	return &agent.Response{Content: p.content}, nil
+}
+
+type capturingEvalProvider struct {
+	content string
+	opts    agent.CompleteOptions
+}
+
+func (p *capturingEvalProvider) CompleteWithOptions(_ context.Context, _ []agent.Message, _ []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
+	p.opts = opts
 	return &agent.Response{Content: p.content}, nil
 }
 

@@ -1269,9 +1269,8 @@ func runEvalJudgeRoute(ctx context.Context, opts EvalOptions, e *evalScenarioCon
 	}
 	messages := evalJudgeMessages(e, heuristic, typedHard, soft)
 	resp, err := route.Subject.CompleteWithOptions(ctx, messages, nil, agent.CompleteOptions{
-		Reasoning: agent.ReasoningConfig{Effort: agent.ReasoningEffortLow, Summary: agent.ReasoningSummaryAuto},
 		Verbosity: agent.VerbosityLow,
-		MaxTokens: 4096,
+		MaxTokens: 2048,
 	})
 	if err != nil {
 		result.ProviderFailure = true
