@@ -165,6 +165,21 @@ func TestBuildGovernorPromptIncludesEvidenceRetrievalAndStopRules(t *testing.T) 
 	}
 }
 
+func TestBuildGovernorPromptIncludesRecoveryApprovalAndMediaRoutingContracts(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{})
+	for _, want := range []string{
+		"Token-budget, provider, queueing, or recovery failures are continuity events",
+		"Completed, revoked, expired, stale, or merely similar approvals are not reusable authority",
+		"Telegram media with no caption, reply, or explicit thread signal in a multi-thread chat is ambiguous",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("governor prompt missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestBuildGovernorPromptIncludesGPT55OutcomeStructure(t *testing.T) {
 	t.Parallel()
 

@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -51,6 +53,29 @@ func TestEvalRunCommandLocalRendersJSON(t *testing.T) {
 	}
 }
 
+func TestEvalRunCommandSupportsGovernorSubjectAndScenarioFilter(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"run", "--suite", "canonical", "--mode", "local", "--subject", "governor", "--scenario", "token_budget_recovery_no_dead_end", "--rollouts", "1", "--format", "json"}, &out)
+	if err != nil {
+		t.Fatalf("eval run err = %v\n%s", err, out.String())
+	}
+	var report aphruntime.EvalReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("decode eval report JSON: %v\n%s", err, out.String())
+	}
+	if report.SubjectMode != aphruntime.EvalSubjectGovernor || report.ResultCount != 1 {
+		t.Fatalf("report subject/results = %s/%d", report.SubjectMode, report.ResultCount)
+	}
+	if got := report.Results[0].ScenarioID; got != "token_budget_recovery_no_dead_end" {
+		t.Fatalf("scenario = %s", got)
+	}
+	if !strings.HasPrefix(report.Results[0].PromptHash, "sha256:") {
+		t.Fatalf("prompt hash = %q", report.Results[0].PromptHash)
+	}
+}
+
 func TestEvalLocalModeDoesNotRequireConfigOrRoutes(t *testing.T) {
 	t.Parallel()
 
@@ -73,5 +98,52 @@ func TestEvalReportFailureReturnsCommandError(t *testing.T) {
 	}
 	if err := evalReportFailureError(aphruntime.EvalReport{}); err != nil {
 		t.Fatalf("passing report err = %v", err)
+	}
+}
+
+func TestEvalCompareCommandRendersMarkdown(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	beforePath := filepath.Join(dir, "before.json")
+	afterPath := filepath.Join(dir, "after.json")
+	before := aphruntime.EvalReport{
+		Suite:            aphruntime.EvalSuiteCanonical,
+		Mode:             aphruntime.EvalModeLive,
+		SubjectMode:      aphruntime.EvalSubjectGovernor,
+		ScenarioRevision: aphruntime.EvalScenarioRevision,
+		ResultCount:      1,
+		HardFailureCount: 1,
+		HardFailureRate:  1,
+		Results: []aphruntime.EvalScenarioResult{{
+			ScenarioID:       "token_budget_recovery_no_dead_end",
+			HardFailures:     []aphruntime.EvalFinding{{Class: "completed_after_budget_recovery"}},
+			CandidatePreview: "completed",
+		}},
+	}
+	after := before
+	after.HardFailureCount = 0
+	after.HardFailureRate = 0
+	after.Results = []aphruntime.EvalScenarioResult{{ScenarioID: "token_budget_recovery_no_dead_end", Pass: true}}
+	writeEvalReportFixture(t, beforePath, before)
+	writeEvalReportFixture(t, afterPath, after)
+
+	var out bytes.Buffer
+	if err := runEvalCommandWithDeps([]string{"compare", "--before", beforePath, "--after", afterPath, "--format", "markdown"}, &out); err != nil {
+		t.Fatalf("eval compare err = %v", err)
+	}
+	if !strings.Contains(out.String(), "Measured Impact") || !strings.Contains(out.String(), "token_budget_recovery_no_dead_end") {
+		t.Fatalf("compare output missing expected content:\n%s", out.String())
+	}
+}
+
+func writeEvalReportFixture(t *testing.T, path string, report aphruntime.EvalReport) {
+	t.Helper()
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("marshal report: %v", err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write report: %v", err)
 	}
 }
