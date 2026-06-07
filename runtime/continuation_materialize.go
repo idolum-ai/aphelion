@@ -80,6 +80,9 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 			}
 		}
 	}
+	if operationStatusIsTerminal(opState.Status) {
+		return false, nil
+	}
 	if phase, ok := nextOperationPhaseForApproval(opState); ok && len(phase.RequiredCapabilityGrants) > 0 {
 		now := time.Now().UTC()
 		if reason := operationPhaseApprovalBlockedReason(phase); reason != "" {

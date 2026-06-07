@@ -111,6 +111,128 @@ func TestMaterializeDurablePhasePlanUsesNextPendingPhase(t *testing.T) {
 	}
 }
 
+func TestContinuationBoundaryDoesNotOfferStalePhaseAfterCompletedOperation(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9049, UserID: 0, Scope: telegramDMScopeRef(9049)}
+	now := time.Now().UTC()
+	consumedLeaseID := "lease-phase-imexx-repo-push-route-repair"
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "imexx-repo-effort-update",
+		Objective: "Commit and push the Imexx repo documentation update.",
+		Status:    session.OperationStatusCompleted,
+		Stage:     "completed",
+		Summary:   "Completed. Pushed existing commit and verified local HEAD matches origin/main.",
+		Proposal: session.OperationProposal{
+			ID:      "phase-imexx-repo-effort-update-phase-imexx-repo-push-route-repair",
+			Summary: "Use approved GitHub route to push existing local commit.",
+			Status:  session.ProposalStatusApproved,
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "imexx-repo-effort-update-plan",
+			Goal:           "Commit and push the Imexx repo documentation update.",
+			CurrentPhaseID: "phase-imexx-repo-push-route-repair",
+			Phases: []session.OperationPhase{
+				{
+					ID:               "phase-imexx-repo-doc-update",
+					Summary:          "Update local documentation/status artifacts.",
+					Status:           session.PlanStatusCompleted,
+					AuthorityClass:   "workspace_write",
+					RequiresApproval: true,
+				},
+				{
+					ID:               "phase-imexx-repo-commit-push",
+					Summary:          "Commit and push the approved repo documentation update to idolum-ai.",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "commit",
+					BoundedEffect:    "Commit validated documentation-only changes and push to the intended repository.",
+					AllowedActions:   []string{"commit", "push_remote"},
+					RequiresApproval: true,
+				},
+				{
+					ID:               "phase-imexx-repo-push-route-repair",
+					Summary:          "Use approved GitHub route to push existing local commit.",
+					Status:           session.PlanStatusInProgress,
+					AuthorityClass:   "commit",
+					BoundedEffect:    "Use approved GitHub credentials to push the existing commit and verify remote status.",
+					AllowedActions:   []string{"commit", "push_remote"},
+					RequiresApproval: true,
+					LeaseID:          consumedLeaseID,
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	consumed := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusIdle,
+		Objective:      "Commit and push the Imexx repo documentation update.",
+		StageSummary:   "Use approved GitHub route to push existing local commit.",
+		RemainingTurns: 0,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-phase-imexx-repo-effort-update-phase-imexx-repo-push-route-repair",
+			OperationID:    "phase-imexx-repo-effort-update-phase-imexx-repo-push-route-repair",
+			Summary:        "Use approved GitHub route to push existing local commit.",
+			RiskClass:      "commit",
+			AllowedActions: []string{"commit", "push_remote"},
+			Status:         session.ProposalStatusApproved,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             consumedLeaseID,
+			ProposalID:     "aprop-phase-imexx-repo-effort-update-phase-imexx-repo-push-route-repair",
+			Status:         session.ContinuationLeaseStatusConsumed,
+			MaxTurns:       1,
+			RemainingTurns: 0,
+			AllowedActions: []string{"commit", "push_remote"},
+			ConsumedAt:     now,
+			ExpiresAt:      now.Add(time.Minute),
+		},
+		UpdatedAt: now,
+	}
+	if err := store.UpdateContinuationState(key, consumed); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	err = rt.maybeOfferNextOperationPhaseAfterContinuationBoundary(context.Background(), key, consumed, continuationLoopDecision{
+		Continue: false,
+		Reason:   "not_approved",
+		Boundary: "no active approved continuation remains",
+		Mission:  missionLoopAssessment{Status: "not_bound", Continue: true},
+	})
+	if err != nil {
+		t.Fatalf("maybeOfferNextOperationPhaseAfterContinuationBoundary() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no stale approval after completed operation", inlineCount)
+	}
+	reloaded, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if reloaded.Status != session.OperationStatusCompleted {
+		t.Fatalf("operation status = %q, want completed; operation=%#v", reloaded.Status, reloaded)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationOffered {
+			t.Fatalf("events = %#v, want no continuation.offered after completed operation", events)
+		}
+	}
+}
+
 func TestMaterializeSinglePhasePlanRecordsNarrowBundleSignal(t *testing.T) {
 	t.Parallel()
 

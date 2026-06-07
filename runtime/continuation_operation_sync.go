@@ -9,6 +9,15 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
+func operationStatusIsTerminal(status session.OperationStatus) bool {
+	switch status {
+	case session.OperationStatusCompleted, session.OperationStatusFailed:
+		return true
+	default:
+		return false
+	}
+}
+
 func (r *Runtime) syncOperationProposalStatusFromContinuation(key session.SessionKey, state session.ContinuationState, status session.ProposalStatus) {
 	if r == nil || r.store == nil || status == "" {
 		return
@@ -231,6 +240,9 @@ func operationStateWithConsumedWorkContinuationPhaseCompleted(opState session.Op
 	now = now.UTC()
 	opState = session.NormalizeOperationState(opState)
 	state = session.NormalizeContinuationState(state)
+	priorStatus := opState.Status
+	priorStage := strings.TrimSpace(opState.Stage)
+	wasTerminal := operationStatusIsTerminal(priorStatus)
 	if state.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed ||
 		state.ContinuationLease.RemainingTurns > 0 ||
 		strings.TrimSpace(state.ContinuationLease.ID) == "" ||
@@ -265,6 +277,18 @@ func operationStateWithConsumedWorkContinuationPhaseCompleted(opState session.Op
 	}
 	if closed, completed := operationStateWithCompletedPhasePlanClosed(opState, now); completed {
 		opState = closed
+		return session.NormalizeOperationState(opState), true
+	}
+	if wasTerminal {
+		opState.Status = priorStatus
+		opState.Stage = firstNonEmptyContinuation(priorStage, string(priorStatus))
+		if priorStatus == session.OperationStatusCompleted &&
+			(opState.Proposal.Status == session.ProposalStatusPending || opState.Proposal.Status == session.ProposalStatusApproved) {
+			opState.Proposal.Status = session.ProposalStatusSuperseded
+			opState.Proposal.UpdatedAt = now
+		}
+		opState.PhasePlan.UpdatedAt = now
+		opState.UpdatedAt = now
 		return session.NormalizeOperationState(opState), true
 	}
 	opState.Status = session.OperationStatusActive

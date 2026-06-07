@@ -96,6 +96,9 @@ func (r *Runtime) maybeOfferNextOperationPhaseAfterContinuationBoundary(ctx cont
 			return fmt.Errorf("persist completed consumed operation phase: %w", err)
 		}
 	}
+	if operationStatusIsTerminal(opState.Status) {
+		return nil
+	}
 	if operationPhasePlanHasBlockingInProgress(opState.PhasePlan) {
 		return nil
 	}
