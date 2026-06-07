@@ -228,6 +228,12 @@ func workResultArtifactMarkdown(key session.SessionKey, req WorkRequest, result 
 	if result.ProviderFailure != "" {
 		fmt.Fprintf(&b, "- provider_failure: %s\n", trimError(result.ProviderFailure))
 	}
+	if result.RecoveryKind != "" {
+		fmt.Fprintf(&b, "- recovery_kind: %s\n", strings.TrimSpace(result.RecoveryKind))
+	}
+	if result.RecoverySummary != "" {
+		fmt.Fprintf(&b, "- recovery_summary: %s\n", trimError(result.RecoverySummary))
+	}
 	if cause != nil {
 		fmt.Fprintf(&b, "- error: %s\n", trimError(cause.Error()))
 	}
@@ -364,6 +370,15 @@ func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorSt
 	}
 	if strings.TrimSpace(result.CommitLaneStatus) != "" {
 		payload["commit_lane_status"] = strings.TrimSpace(result.CommitLaneStatus)
+	}
+	if strings.TrimSpace(result.CompletionKind) != "" {
+		payload["completion_kind"] = strings.TrimSpace(result.CompletionKind)
+	}
+	if strings.TrimSpace(result.RecoveryKind) != "" {
+		payload["recovery_kind"] = strings.TrimSpace(result.RecoveryKind)
+	}
+	if strings.TrimSpace(result.RecoverySummary) != "" {
+		payload["recovery_summary"] = trimError(result.RecoverySummary)
 	}
 	if strings.TrimSpace(result.ProviderFailure) != "" {
 		payload["provider_failure"] = trimError(result.ProviderFailure)
