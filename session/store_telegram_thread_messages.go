@@ -113,9 +113,18 @@ func recordTelegramThreadLastMessageTx(exec interface {
 		INSERT INTO telegram_thread_last_messages(chat_id, thread_id, message_id, source, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(chat_id, thread_id) DO UPDATE SET
-			message_id = excluded.message_id,
-			source = excluded.source,
-			updated_at = excluded.updated_at
+			message_id = CASE
+				WHEN excluded.message_id > telegram_thread_last_messages.message_id THEN excluded.message_id
+				ELSE telegram_thread_last_messages.message_id
+			END,
+			source = CASE
+				WHEN excluded.message_id > telegram_thread_last_messages.message_id THEN excluded.source
+				ELSE telegram_thread_last_messages.source
+			END,
+			updated_at = CASE
+				WHEN excluded.message_id > telegram_thread_last_messages.message_id THEN excluded.updated_at
+				ELSE telegram_thread_last_messages.updated_at
+			END
 	`, chatID, threadID, messageID, source, atRaw, atRaw); err != nil {
 		return fmt.Errorf("record telegram thread last message: %w", err)
 	}
