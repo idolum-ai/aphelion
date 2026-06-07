@@ -9,7 +9,7 @@ notes, release automation, and final review converge.
 - keep release work organized and auditable;
 - make the release delta reviewable before publication;
 - preserve a release PR as the human-readable release artifact;
-- define the GitHub automation we want before relying on it for publication;
+- publish through guarded GitHub automation after the release PR is approved and merged;
 - explain not only what changed, but what the change means for operators and users.
 
 ## Branch model
@@ -36,11 +36,11 @@ notes, release automation, and final review converge.
 
 4. Review and approve the release PR.
 5. Merge the release PR into the release branch.
-6. After the merge, publish through the configured release automation. Today,
-   `.github/workflows/release-candidate.yml` validates `release/**` branches and
-   `.github/workflows/release.yml` publishes from `v*` tags or manual dispatch.
-   Automatic publication from a merged release branch is an intended contract, not
-   something the current workflows fully implement yet.
+6. After the merge, `.github/workflows/release.yml` publishes the release from
+   the release PR merge commit. It derives the release tag from the release branch
+   name, refuses to overwrite an existing tag, builds release artifacts, creates
+   the tag, and publishes the GitHub Release using the release PR body as the
+   release-note source.
 
 ## Release branch as stabilization window
 
@@ -91,22 +91,20 @@ where Aphelion translates implementation into operational significance.
 
 ## Automation contract
 
-The desired automation contract is: after a release PR is merged into a release
-branch, GitHub Actions validates the release candidate and publishes the release.
-The repository does not fully implement that contract yet; the current release
-workflow publishes on `v*` tags or manual dispatch. Until automation is updated,
-use this section as the target design and do not assume that merging a release PR
-will publish by itself.
+After a release PR is merged into a `release/v*` branch, GitHub Actions validates
+and publishes the release. The release workflow also keeps `v*` tag pushes and
+manual dispatch as maintainer recovery paths, but the normal path is the reviewed
+release PR.
 
-The automation should be narrow and explicit:
+The automation is narrow and explicit:
 
 - accept only release branches matching the chosen naming scheme, for example
   `release/v*`;
 - derive or verify the release version from the branch/tag plan;
-- build and test the release candidate;
-- create the git tag only after validation passes;
-- publish the GitHub release using the release PR description as the release-note
-  source or as the starting draft;
+- build and test the release candidate from the release PR merge commit;
+- create the git tag only after validation passes, and refuse to overwrite an existing tag;
+- publish the GitHub release using the release PR body as the release-note
+  source;
 - fail closed if the branch name, version, tag, or release-note source is
   ambiguous.
 
