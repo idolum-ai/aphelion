@@ -80,8 +80,11 @@ type WorkResult struct {
 	ThreadID         string
 	TurnID           string
 	Summary          string
+	RecoveryKind     string
+	RecoverySummary  string
 	ProviderFailure  string
 	ProviderEvents   []core.ProviderEvent
+	Recovery         *core.TurnRecovery
 	ChangedFiles     []string
 	Commands         []string
 	CodexEvents      []session.WorkCodexEvent

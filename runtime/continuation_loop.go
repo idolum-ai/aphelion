@@ -180,6 +180,11 @@ func (r *Runtime) continuationLoopDecisionForState(key session.SessionKey, state
 		decision.Boundary = "approved lease is inactive or expired"
 		return decision
 	}
+	if r.continuationBudgetRecoveryPending(key, state, now) {
+		decision.Reason = "recovery_pending"
+		decision.Boundary = "automatic recovery turn is already scheduled for this approved continuation"
+		return decision
+	}
 	if continuationActionIsPlanLeaseApproval(state) && !state.ApprovalBundle.Active() {
 		decision.Reason = "approval_only"
 		decision.Boundary = "plan lease approval has no active executable bundle"
@@ -255,6 +260,48 @@ func (r *Runtime) assessContinuationLoopMission(key session.SessionKey, state se
 		assessment.Continue = true
 	}
 	return assessment
+}
+
+func (r *Runtime) continuationBudgetRecoveryPending(key session.SessionKey, state session.ContinuationState, now time.Time) bool {
+	if r == nil || r.store == nil {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	scope, _ := r.turnBudgetRecoveryScope(key, core.InboundMessage{ChatID: key.ChatID, SenderID: firstNonZeroInt64(state.ApprovedBy, state.ContinuationLease.ApprovedBy, key.UserID)}, nil)
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return false
+	}
+	events, err := r.store.LatestExecutionEventsBySession(key, 100)
+	if err != nil {
+		return false
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		if strings.TrimSpace(event.EventType) != core.ExecutionEventTurnBudgetRecovery {
+			continue
+		}
+		if !event.CreatedAt.IsZero() && now.Sub(event.CreatedAt) > turnBudgetRecoveryTimeout {
+			continue
+		}
+		payload := map[string]any{}
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			continue
+		}
+		if strings.TrimSpace(fmt.Sprint(payload["recovery_scope"])) != scope {
+			continue
+		}
+		switch strings.TrimSpace(event.Status) {
+		case "scheduled", "resuming":
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func (r *Runtime) recordContinuationLoopAssessment(key session.SessionKey, state session.ContinuationState, decision continuationLoopDecision, turnsRun int) {

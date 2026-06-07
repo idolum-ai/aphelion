@@ -108,7 +108,7 @@ func TestMaterializeDurablePhasePlanBundlesConsecutiveSafePhases(t *testing.T) {
 		labels = continuationButtonLabels(sender.inline[0].rows)
 	}
 	sender.mu.Unlock()
-	if !strings.Contains(inlineText, "Approve plan for “Design the bundle contract”") || !strings.Contains(inlineText, "Covers Step 1: Design the bundle contract") || !strings.Contains(inlineText, "Implement bundled approvals") {
+	if !strings.Contains(inlineText, "Approve plan:\nDesign the bundle contract") || !strings.Contains(inlineText, "Covers:\n- Step 1: Design the bundle contract") || !strings.Contains(inlineText, "Implement bundled approvals") {
 		t.Fatalf("inline text = %q, want compact plan budget details", inlineText)
 	}
 	if got, want := labels, []string{"Start", "Details", "Change", "Pause", "Stop"}; !equalStringSlices(got, want) {
@@ -367,7 +367,7 @@ func TestMaterializeEscalatedOperatorPhaseShowsManualApprovalDespiteAutoApproval
 	if inlineCount != 1 || sentCount != 0 {
 		t.Fatalf("inline=%d sent=%d text=%q, want one manual approval prompt and no blocked notice", inlineCount, sentCount, inlineText)
 	}
-	for _, want := range []string{"Approve “", "This can use", "Stops before"} {
+	for _, want := range []string{"Approve:\n", "Can use", "Stops before"} {
 		if !strings.Contains(inlineText, want) {
 			t.Fatalf("inline text = %q, want %q", inlineText, want)
 		}
@@ -466,7 +466,7 @@ func TestMaterializeResourceOwnerMailboxConsentShowsManualApproval(t *testing.T)
 	if inlineCount != 1 || sentCount != 0 {
 		t.Fatalf("inline=%d sent=%d text=%q, want one manual approval prompt and no blocked notice", inlineCount, sentCount, inlineText)
 	}
-	for _, want := range []string{"Approve “", "This can use", "Stops before"} {
+	for _, want := range []string{"Approve:\n", "Can use", "Stops before"} {
 		if !strings.Contains(inlineText, want) {
 			t.Fatalf("inline text = %q, want %q", inlineText, want)
 		}
@@ -641,7 +641,7 @@ func TestMaterializeMixedAuthorityPhasePlanSplitsToSingleDataApproval(t *testing
 		inlineText = sender.inline[0].text
 	}
 	sender.mu.Unlock()
-	if !strings.Contains(inlineText, "Approve “Collect approved profile preferences”") || strings.Contains(inlineText, "Patch the local runner") {
+	if !strings.Contains(inlineText, "Approve:\nCollect approved profile preferences") || strings.Contains(inlineText, "Patch the local runner") {
 		t.Fatalf("inline text = %q, want only first data phase surfaced", inlineText)
 	}
 	if strings.Contains(inlineText, "phase-private-profile") || strings.Contains(inlineText, "Use the buttons") || strings.Contains(inlineText, "Operator card:") {

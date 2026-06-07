@@ -1,6 +1,10 @@
 name: Release
 
 on:
+  pull_request:
+    types: [closed]
+    branches:
+      - "release/v*"
   push:
     tags:
       - "v*"
@@ -8,9 +12,100 @@ on:
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
+  resolve:
+    name: Resolve release source
+    runs-on: ubuntu-latest
+    outputs:
+      release_ref: ${{ steps.resolve.outputs.release_ref }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      release_name: ${{ steps.resolve.outputs.release_name }}
+      notes_path: ${{ steps.resolve.outputs.notes_path }}
+      should_tag: ${{ steps.resolve.outputs.should_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve release source
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          notes_path="release-notes.md"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            {
+              printf '%s\n' 'import json, re, sys'
+              printf '%s\n' 'path, notes = sys.argv[1], sys.argv[2]'
+              printf '%s\n' 'event = json.load(open(path, encoding="utf-8"))'
+              printf '%s\n' 'pr = event.get("pull_request") or {}'
+              printf '%s\n' 'if not pr.get("merged"):'
+              printf '%s\n' '    print("release_ref="); print("release_tag="); print("release_name="); print(f"notes_path={notes}"); print("should_tag=false")'
+              printf '%s\n' '    raise SystemExit(0)'
+              printf '%s\n' 'base = ((pr.get("base") or {}).get("ref")) or ""'
+              printf '%s\n' 'm = re.fullmatch(r"release/(v[0-9]+\\.[0-9]+\\.[0-9]+(?:[-.][0-9A-Za-z.-]+)?)", base)'
+              printf '%s\n' 'if not m:'
+              printf '%s\n' '    raise SystemExit(f"release PR base must match release/vX.Y.Z; got {base!r}")'
+              printf '%s\n' 'sha = pr.get("merge_commit_sha") or ""'
+              printf '%s\n' 'if not sha:'
+              printf '%s\n' '    raise SystemExit("merged release PR did not expose merge_commit_sha")'
+              printf '%s\n' 'tag = m.group(1)'
+              printf '%s\n' 'title = pr.get("title") or tag'
+              printf '%s\n' 'body = pr.get("body") or "_Release PR body was empty._\\n"'
+              printf '%s\n' 'open(notes, "w", encoding="utf-8").write(f"# {tag}\\n\\nSource PR: {title}\\n\\n" + body.rstrip() + "\\n")'
+              printf '%s\n' 'print(f"release_ref={sha}"); print(f"release_tag={tag}"); print(f"release_name={tag}"); print(f"notes_path={notes}"); print("should_tag=true")'
+            } > /tmp/resolve-release-pr.py
+            python3 /tmp/resolve-release-pr.py "$GITHUB_EVENT_PATH" "$notes_path" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            if ! [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+              echo "release tag must match vX.Y.Z; got '$REF_NAME'" >&2
+              exit 1
+            fi
+            git log -1 --format='%B' "$GITHUB_SHA" > "$notes_path"
+            {
+              echo "release_ref=$GITHUB_SHA"
+              echo "release_tag=$REF_NAME"
+              echo "release_name=$REF_NAME"
+              echo "notes_path=$notes_path"
+              echo "should_tag=false"
+            } >> "$GITHUB_OUTPUT"
+          else
+            if ! [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+              echo "manual release dispatch must run from a vX.Y.Z tag ref; got '$REF_NAME'" >&2
+              exit 1
+            fi
+            git log -1 --format='%B' "$GITHUB_SHA" > "$notes_path"
+            {
+              echo "release_ref=$GITHUB_SHA"
+              echo "release_tag=$REF_NAME"
+              echo "release_name=$REF_NAME"
+              echo "notes_path=$notes_path"
+              echo "should_tag=false"
+            } >> "$GITHUB_OUTPUT"
+          fi
+      - name: Refuse existing release tag
+        if: steps.resolve.outputs.release_ref != '' && steps.resolve.outputs.should_tag == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.resolve.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if git rev-parse "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Tag '$RELEASE_TAG' already exists; refusing to republish." >&2
+            exit 1
+          fi
+      - name: Upload release notes
+        if: steps.resolve.outputs.release_ref != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: ${{ steps.resolve.outputs.notes_path }}
+
   build:
+    needs: resolve
+    if: needs.resolve.outputs.release_ref != ''
     strategy:
       fail-fast: false
       matrix:
@@ -22,6 +117,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.release_ref }}
 
       - uses: actions/setup-go@v5
         with:
@@ -42,12 +139,23 @@ jobs:
           path: aphelion-linux-${{ matrix.arch }}.tar.gz
 
   release:
-    needs: build
+    needs: [resolve, build]
+    if: needs.resolve.outputs.release_ref != ''
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.resolve.outputs.release_ref }}
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes
 
       - name: Flatten artifacts
         run: |
@@ -55,9 +163,22 @@ jobs:
           find dist -name '*.tar.gz' -exec cp {} release/ \;
           (cd release && sha256sum -- *.tar.gz > checksums.txt)
 
+      - name: Create release tag from merged release PR
+        if: needs.resolve.outputs.should_tag == 'true'
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          RELEASE_REF: ${{ needs.resolve.outputs.release_ref }}
+        run: |
+          set -euo pipefail
+          git tag "$RELEASE_TAG" "$RELEASE_REF"
+          git push origin "$RELEASE_TAG"
+
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.resolve.outputs.release_tag }}
+          name: ${{ needs.resolve.outputs.release_name }}
+          body_path: release-notes/release-notes.md
           files: |
             release/*.tar.gz
             release/checksums.txt

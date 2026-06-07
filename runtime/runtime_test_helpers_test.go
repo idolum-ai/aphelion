@@ -456,8 +456,12 @@ func (f *fakeSender) SendMessage(_ context.Context, msg core.OutboundMessage) (i
 			return 0, f.sendErr
 		}
 	}
+	messageID := int64(len(f.sent) + 1)
+	if msg.Delivery != nil {
+		msg.Delivery.MessageIDs = append(msg.Delivery.MessageIDs, messageID)
+	}
 	f.sent = append(f.sent, msg)
-	return int64(len(f.sent)), nil
+	return messageID, nil
 }
 
 func (f *fakeSender) SendInlineKeyboard(_ context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error) {
