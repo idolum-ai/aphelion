@@ -9,7 +9,7 @@ notes, release automation, and final review converge.
 - keep release work organized and auditable;
 - make the release delta reviewable before publication;
 - preserve a release PR as the human-readable release artifact;
-- let GitHub automation publish only after the release PR is approved and merged;
+- define the GitHub automation we want before relying on it for publication;
 - explain not only what changed, but what the change means for operators and users.
 
 ## Branch model
@@ -36,15 +36,26 @@ notes, release automation, and final review converge.
 
 4. Review and approve the release PR.
 5. Merge the release PR into the release branch.
-6. GitHub Actions should publish the release automatically from the merged release
-   branch.
+6. After the merge, publish through the configured release automation. Today,
+   `.github/workflows/release-candidate.yml` validates `release/**` branches and
+   `.github/workflows/release.yml` publishes from `v*` tags or manual dispatch.
+   Automatic publication from a merged release branch is an intended contract, not
+   something the current workflows fully implement yet.
 
 ## Release branch as stabilization window
 
 The release branch also creates a short stabilization window before publication.
 If review finds a last-minute release blocker, documentation gap, validation issue,
-or small polish change, that fix can be pushed to the release branch before the
-release PR is merged.
+or small polish change, the fix can still land before publication, but it should
+remain visible to review and release-note generation. Prefer one of these paths:
+
+- merge the fix to `main`, so the existing `main` -> release PR includes it;
+- or open a separate reviewed PR directly into the release branch, then record how
+  that release-only change will be back-merged or cherry-picked to `main`.
+
+Avoid unreviewed direct pushes to the release branch. They can bypass the
+`main` -> release PR diff and leave the release PR description out of sync with
+what is actually published.
 
 Those changes should remain narrow and release-scoped. Larger follow-up work should
 return to `main` and wait for a later release. The release branch is a final review
@@ -80,8 +91,14 @@ where Aphelion translates implementation into operational significance.
 
 ## Automation contract
 
-Release automation should trigger from the release branch after the release PR is
-merged. The automation should be narrow and explicit:
+The desired automation contract is: after a release PR is merged into a release
+branch, GitHub Actions validates the release candidate and publishes the release.
+The repository does not fully implement that contract yet; the current release
+workflow publishes on `v*` tags or manual dispatch. Until automation is updated,
+use this section as the target design and do not assume that merging a release PR
+will publish by itself.
+
+The automation should be narrow and explicit:
 
 - accept only release branches matching the chosen naming scheme, for example
   `release/v*`;
