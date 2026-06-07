@@ -309,6 +309,25 @@ func TestRunEvalJudgeRouteDoesNotRequestReasoning(t *testing.T) {
 	}
 }
 
+func TestRunEvalJudgeRouteRetriesTransientProviderFailure(t *testing.T) {
+	t.Parallel()
+
+	provider := &retryingEvalProvider{
+		errs:    []error{errors.New("openai: status 503: connection timeout")},
+		content: `{"pass":true,"hard_failures":[],"soft_findings":[],"confidence":0.9,"rationale":"ok"}`,
+	}
+	result := runEvalJudgeRoute(context.Background(), EvalOptions{ProviderRetries: 1}, &evalScenarioContext{
+		Scenario:  tokenBudgetRecoveryEvalScenario(),
+		Candidate: "The operation remains active and retry is pending.",
+	}, EvalRoute{Name: "judge", Subject: provider}, nil, nil, nil)
+	if result.ProviderFailure || !result.Pass {
+		t.Fatalf("judge result = %#v", result)
+	}
+	if provider.calls != 2 {
+		t.Fatalf("provider calls = %d, want retry", provider.calls)
+	}
+}
+
 func TestRunEvalSuiteReturnsPartialReportOnCancellation(t *testing.T) {
 	t.Parallel()
 
@@ -531,6 +550,22 @@ type capturingEvalProvider struct {
 
 func (p *capturingEvalProvider) CompleteWithOptions(_ context.Context, _ []agent.Message, _ []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
 	p.opts = opts
+	return &agent.Response{Content: p.content}, nil
+}
+
+type retryingEvalProvider struct {
+	errs    []error
+	content string
+	calls   int
+}
+
+func (p *retryingEvalProvider) CompleteWithOptions(context.Context, []agent.Message, []agent.ToolDef, agent.CompleteOptions) (*agent.Response, error) {
+	p.calls++
+	if len(p.errs) > 0 {
+		err := p.errs[0]
+		p.errs = p.errs[1:]
+		return nil, err
+	}
 	return &agent.Response{Content: p.content}, nil
 }
 

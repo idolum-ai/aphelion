@@ -1268,25 +1268,32 @@ func runEvalJudgeRoute(ctx context.Context, opts EvalOptions, e *evalScenarioCon
 		return local
 	}
 	messages := evalJudgeMessages(e, heuristic, typedHard, soft)
-	resp, err := route.Subject.CompleteWithOptions(ctx, messages, nil, agent.CompleteOptions{
-		Verbosity: agent.VerbosityLow,
-		MaxTokens: 2048,
-	})
-	if err != nil {
-		result.ProviderFailure = true
-		result.Error = redactEvalText(err.Error(), 500)
-		return result
+	for attempt := 0; attempt <= opts.ProviderRetries; attempt++ {
+		resp, err := route.Subject.CompleteWithOptions(ctx, messages, nil, agent.CompleteOptions{
+			Verbosity: agent.VerbosityLow,
+			MaxTokens: 2048,
+		})
+		if err != nil {
+			result.ProviderFailure = true
+			result.Error = redactEvalText(err.Error(), 500)
+			if attempt < opts.ProviderRetries && isTransientProviderEvalError(err) {
+				emitEvalProgress(opts, EvalProgress{Event: "retry", Suite: opts.Suite, Mode: opts.Mode, SubjectMode: opts.Subject, Route: route.Name, ScenarioID: e.Scenario.ID, SampleIndex: e.Sample, Rollouts: opts.Rollouts, Attempt: attempt + 1, Error: redactEvalText(err.Error(), 240)})
+				continue
+			}
+			return result
+		}
+		parsed, err := parseEvalJudgeResponse(resp.Content)
+		if err != nil {
+			result.ProviderFailure = true
+			result.Error = redactEvalText(err.Error(), 500)
+			return result
+		}
+		parsed.Route = route.Name
+		parsed.Provider = route.Provider
+		parsed.Model = route.Model
+		return parsed
 	}
-	parsed, err := parseEvalJudgeResponse(resp.Content)
-	if err != nil {
-		result.ProviderFailure = true
-		result.Error = redactEvalText(err.Error(), 500)
-		return result
-	}
-	parsed.Route = route.Name
-	parsed.Provider = route.Provider
-	parsed.Model = route.Model
-	return parsed
+	return result
 }
 
 func localEvalJudgeResult(heuristic []EvalFinding) EvalJudgeResult {
