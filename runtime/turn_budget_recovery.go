@@ -22,6 +22,7 @@ const (
 	turnBudgetRecoveryDefaultMaxHops = 3
 	turnBudgetRecoveryTimeout        = 10 * time.Minute
 	turnBudgetRecoveryOriginDetail   = "budget_recovery"
+	turnBudgetRecoveryHandoffPrefix  = "Budget recovery handoff:"
 )
 
 func turnResultBudgetRecovery(result *core.TurnResult) (*core.TurnRecovery, bool) {
@@ -50,7 +51,7 @@ func turnBudgetRecoveryHandoffText(recovery *core.TurnRecovery) string {
 	if summary == "" {
 		summary = "The turn exhausted its execution budget before a final response."
 	}
-	return "Budget recovery handoff: " + summary
+	return turnBudgetRecoveryHandoffPrefix + " " + summary
 }
 
 func turnBudgetRecoveryMaxHops(recovery *core.TurnRecovery) int {

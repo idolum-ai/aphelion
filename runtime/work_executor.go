@@ -47,6 +47,8 @@ type WorkResult struct {
 	ThreadID         string
 	TurnID           string
 	Summary          string
+	RecoveryKind     string
+	RecoverySummary  string
 	ProviderFailure  string
 	ProviderEvents   []core.ProviderEvent
 	ChangedFiles     []string
@@ -259,6 +261,12 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 		out.Summary = strings.TrimSpace(result.Text)
 		out.ProviderFailure = strings.TrimSpace(result.ProviderFailure)
 		out.ProviderEvents = append([]core.ProviderEvent(nil), result.ProviderEvents...)
+		if recovery, ok := nativeWorkTurnRecovery(result); ok {
+			out.RecoveryKind = strings.TrimSpace(string(recovery.Kind))
+			out.RecoverySummary = strings.TrimSpace(recovery.Summary)
+			out.CompletionKind = "native_turn_budget_recovery"
+			out.SideEffects = true
+		}
 		if out.ProviderFailure != "" {
 			out.CompletionKind = "native_turn_provider_failed"
 			out.SideEffects = true
@@ -270,7 +278,48 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 	if out.ProviderFailure != "" {
 		return out, nativeWorkProviderFailureError{Failure: out.ProviderFailure}
 	}
+	if out.RecoveryKind != "" {
+		return out, nativeWorkRecoveryError{Kind: out.RecoveryKind, Summary: out.RecoverySummary}
+	}
 	return out, nil
+}
+
+func nativeWorkTurnRecovery(result *core.TurnResult) (*core.TurnRecovery, bool) {
+	if recovery, ok := turnResultBudgetRecovery(result); ok {
+		return recovery, true
+	}
+	if result == nil {
+		return nil, false
+	}
+	return turnBudgetRecoveryFromHandoffText(result.Text)
+}
+
+func turnBudgetRecoveryFromHandoffText(text string) (*core.TurnRecovery, bool) {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, turnBudgetRecoveryHandoffPrefix) {
+		return nil, false
+	}
+	summary := strings.TrimSpace(strings.TrimPrefix(text, turnBudgetRecoveryHandoffPrefix))
+	if idx := strings.Index(summary, "\n"); idx >= 0 {
+		summary = strings.TrimSpace(summary[:idx])
+	}
+	kind := core.TurnRecoveryKind("budget_recovery_handoff")
+	lower := strings.ToLower(summary)
+	switch {
+	case strings.Contains(lower, "token budget"):
+		kind = core.TurnRecoveryTokenBudgetExhausted
+	case strings.Contains(lower, "tool budget"):
+		kind = core.TurnRecoveryToolBudgetExhausted
+	case strings.Contains(lower, "iteration budget"):
+		kind = core.TurnRecoveryIterationBudgetExhausted
+	}
+	return &core.TurnRecovery{
+		Kind:           kind,
+		Recoverable:    true,
+		ReplanRequired: true,
+		Summary:        firstRuntimeWorkNonEmpty(summary, "Budget recovery handoff."),
+		MaxAutoHops:    turnBudgetRecoveryDefaultMaxHops,
+	}, true
 }
 
 type nativeWorkProviderFailureError struct {
@@ -283,6 +332,23 @@ func (e nativeWorkProviderFailureError) Error() string {
 		return "native work turn failed because the inference backend failed"
 	}
 	return "native work turn failed because the inference backend failed: " + failure
+}
+
+type nativeWorkRecoveryError struct {
+	Kind    string
+	Summary string
+}
+
+func (e nativeWorkRecoveryError) Error() string {
+	summary := strings.TrimSpace(e.Summary)
+	if summary == "" {
+		summary = "the turn requested recovery before completing the approved work"
+	}
+	kind := strings.TrimSpace(e.Kind)
+	if kind == "" {
+		return "native work turn did not complete: " + summary
+	}
+	return "native work turn did not complete because it requested " + kind + " recovery: " + summary
 }
 
 type codexWorkExecutor struct {
