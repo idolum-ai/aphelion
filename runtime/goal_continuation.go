@@ -19,11 +19,14 @@ const goalContinuationIDPrefix = "goal-continuation-"
 
 type goalContinuationCandidate struct {
 	ID            string
+	Kind          string
 	Objective     string
 	Summary       string
+	StateSummary  string
 	WhyNow        string
 	BoundedEffect string
 	Basis         string
+	FindingClaim  string
 }
 
 func (r *Runtime) maybeInferGoalContinuationProposal(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, result *turn.Result) (bool, error) {
@@ -77,7 +80,7 @@ func (r *Runtime) maybeInferGoalContinuationProposal(ctx context.Context, key se
 		planState = session.NormalizePlanState(result.PlanState)
 	}
 
-	candidate, ok := goalContinuationCandidateFromState(msg, promptInput, opState, planState, priorContinuation, priorExists)
+	candidate, ok := goalContinuationCandidateFromState(msg, promptInput, opState, planState, priorContinuation, priorExists, result)
 	if !ok {
 		return false, nil
 	}
@@ -93,10 +96,10 @@ func (r *Runtime) maybeInferGoalContinuationProposal(ctx context.Context, key se
 	state.Objective = firstNonEmptyContinuation(candidate.Objective, state.Objective, summarizeContinuationFallback(promptInput))
 	state.Status = session.OperationStatusBlocked
 	state.Stage = "next_phase_proposal"
-	state.Summary = "A prior lease completed only an initial phase; the broader goal still needs an explicit next bounded lease."
+	state.Summary = firstNonEmptyContinuation(candidate.StateSummary, "A prior lease completed only an initial phase; the broader goal still needs an explicit next bounded lease.")
 	state.Proposal = session.OperationProposal{
 		ID:            proposalID,
-		Kind:          "read_only_review",
+		Kind:          firstNonEmptyContinuation(candidate.Kind, "read_only_review"),
 		OperatorTitle: continuationPlanTitleFromText(candidate.Summary),
 		PlanTitle:     continuationPlanTitleFromText(candidate.Objective),
 		Summary:       candidate.Summary,
@@ -106,7 +109,7 @@ func (r *Runtime) maybeInferGoalContinuationProposal(ctx context.Context, key se
 		UpdatedAt:     now,
 	}
 	state.Findings = append(state.Findings, session.OperationFinding{
-		Claim:      "Goal continuation inference found a broader objective after a phase-one lease was consumed.",
+		Claim:      firstNonEmptyContinuation(candidate.FindingClaim, "Goal continuation inference found a broader objective after a phase-one lease was consumed."),
 		Confidence: session.FindingConfidenceHigh,
 		Basis:      candidate.Basis,
 	})
@@ -136,6 +139,7 @@ func goalContinuationCandidateFromState(
 	planState session.PlanState,
 	priorContinuation session.ContinuationState,
 	priorExists bool,
+	result *turn.Result,
 ) (goalContinuationCandidate, bool) {
 	opState = session.NormalizeOperationState(opState)
 	planState = session.NormalizePlanState(planState)
@@ -143,7 +147,10 @@ func goalContinuationCandidateFromState(
 	if !goalContinuationPriorPhaseComplete(msg, opState, priorContinuation, priorExists) {
 		return goalContinuationCandidate{}, false
 	}
-	sourceText := goalContinuationSourceText(promptInput, opState, planState, priorContinuation)
+	sourceText := goalContinuationSourceText(promptInput, opState, planState, priorContinuation, result)
+	if candidate, ok := goalContinuationConcreteFollowUpCandidate(sourceText, opState, planState, priorContinuation); ok {
+		return candidate, true
+	}
 	if !goalContinuationHasEnoughSignals(sourceText, planState) {
 		return goalContinuationCandidate{}, false
 	}
@@ -162,7 +169,9 @@ func goalContinuationCandidateFromState(
 	}
 	return goalContinuationCandidate{
 		Objective:     objective,
+		Kind:          "read_only_review",
 		Summary:       clampContinuationText(nextStep, 160),
+		StateSummary:  "A prior lease completed only an initial phase; the broader goal still needs an explicit next bounded lease.",
 		WhyNow:        clampContinuationText(whyNow, 240),
 		BoundedEffect: boundedEffect,
 		Basis:         basis,
@@ -179,7 +188,7 @@ func goalContinuationPriorPhaseComplete(msg core.InboundMessage, opState session
 	return priorExists && prior.ContinuationLease.Status == session.ContinuationLeaseStatusConsumed
 }
 
-func goalContinuationSourceText(promptInput string, opState session.OperationState, planState session.PlanState, prior session.ContinuationState) string {
+func goalContinuationSourceText(promptInput string, opState session.OperationState, planState session.PlanState, prior session.ContinuationState, result *turn.Result) string {
 	parts := []string{
 		promptInput,
 		opState.Objective,
@@ -199,7 +208,131 @@ func goalContinuationSourceText(promptInput string, opState session.OperationSta
 	for _, step := range planState.Steps {
 		parts = append(parts, step.Step, string(step.Status))
 	}
+	if result != nil {
+		parts = append(parts,
+			result.VisibleReply,
+			result.FloorText,
+			result.ProposalNote,
+		)
+		if result.Turn != nil {
+			parts = append(parts, result.Turn.Text)
+		}
+		resultOp := session.NormalizeOperationState(result.OperationState)
+		parts = append(parts,
+			resultOp.Objective,
+			string(resultOp.Status),
+			resultOp.Stage,
+			resultOp.Summary,
+			resultOp.Proposal.Summary,
+			resultOp.Proposal.WhyNow,
+			resultOp.Proposal.BoundedEffect,
+			resultOp.Work.LastSummary,
+		)
+		for _, phase := range resultOp.PhasePlan.Phases {
+			parts = append(parts,
+				phase.ID,
+				phase.Summary,
+				string(phase.Status),
+				phase.AuthorityClass,
+				phase.WhyNow,
+				phase.BoundedEffect,
+			)
+		}
+		resultPlan := session.NormalizePlanState(result.PlanState)
+		parts = append(parts, resultPlan.Explanation)
+		for _, step := range resultPlan.Steps {
+			parts = append(parts, step.Step, string(step.Status))
+		}
+	}
 	return strings.Join(parts, "\n")
+}
+
+func goalContinuationConcreteFollowUpCandidate(text string, opState session.OperationState, planState session.PlanState, prior session.ContinuationState) (goalContinuationCandidate, bool) {
+	lower := strings.ToLower(text)
+	if !goalContinuationHasBranchPRFollowUpApprovalSegment(lower) {
+		return goalContinuationCandidate{}, false
+	}
+	objective := firstNonEmptyContinuation(
+		opState.Objective,
+		prior.Objective,
+		planState.Explanation,
+		"Publish the completed branch for pull request review.",
+	)
+	basis := "Persisted completion state plus final turn text named a separate bounded branch publication and pull-request follow-up after the prior lease was consumed."
+	if opState.Proposal.ID != "" {
+		basis += " Previous proposal: " + strings.TrimSpace(opState.Proposal.ID) + "."
+	}
+	if prior.ActionProposal.ID != "" {
+		basis += " Previous action proposal: " + strings.TrimSpace(prior.ActionProposal.ID) + "."
+	}
+	return goalContinuationCandidate{
+		Kind:          "commit_push_pr",
+		Objective:     objective,
+		Summary:       "Publish the completed branch and open or update one pull request",
+		StateSummary:  "A prior approved phase completed inside its boundary; a concrete governed follow-up was named and needs explicit approval.",
+		WhyNow:        "The approved local phase completed and the final turn explicitly named branch publication and pull-request review as the next bounded step outside the consumed lease.",
+		BoundedEffect: "Use the already-completed local branch or commit evidence to publish the branch if needed, open or update exactly one pull request for review, and report the PR URL and status. Do not edit files, merge, deploy, restart services, change credentials, change policy or permissions, tag or release, or perform unrelated GitHub effects.",
+		Basis:         basis,
+		FindingClaim:  "Completed phase follow-up inference found a concrete branch publication and pull-request approval that still needs an explicit bounded lease.",
+	}, true
+}
+
+func goalContinuationHasBranchPRFollowUpApprovalSegment(lower string) bool {
+	for _, segment := range strings.FieldsFunc(lower, func(r rune) bool {
+		switch r {
+		case '\n', '\r', '.', ';':
+			return true
+		default:
+			return false
+		}
+	}) {
+		segment = strings.TrimSpace(segment)
+		if goalContinuationHasFollowUpApprovalSignal(segment) && goalContinuationHasBranchPRFollowUpSignal(segment) {
+			return true
+		}
+	}
+	return false
+}
+
+func goalContinuationHasFollowUpApprovalSignal(lower string) bool {
+	for _, needle := range []string{
+		"separate bounded approval",
+		"bounded approval for",
+		"separate approval",
+		"follow-up approval",
+		"follow up approval",
+		"approval for push",
+		"approval for branch",
+		"approval for pr",
+		"approval for pull request",
+		"next useful step",
+		"next step would be",
+		"next useful action",
+	} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func goalContinuationHasBranchPRFollowUpSignal(lower string) bool {
+	if strings.Contains(lower, "push/pr") || strings.Contains(lower, "push + pr") || strings.Contains(lower, "push and pr") {
+		return true
+	}
+	hasPR := strings.Contains(lower, "pull request") ||
+		strings.Contains(lower, "draft pr") ||
+		strings.Contains(lower, "open pr") ||
+		strings.Contains(lower, "update pr") ||
+		strings.Contains(lower, " pr ")
+	if !hasPR {
+		return false
+	}
+	return strings.Contains(lower, "push") ||
+		strings.Contains(lower, "publish") ||
+		strings.Contains(lower, "branch") ||
+		strings.Contains(lower, "open or update") ||
+		strings.Contains(lower, "open/update")
 }
 
 func goalContinuationHasEnoughSignals(text string, planState session.PlanState) bool {

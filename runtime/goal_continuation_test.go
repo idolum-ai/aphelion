@@ -131,6 +131,198 @@ func TestGoalContinuationInfersNextPhaseAfterConsumedPhaseOneLease(t *testing.T)
 	}
 }
 
+func TestGoalContinuationInfersPushPRFollowUpAfterCompletedLocalPhase(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9048, UserID: 0, Scope: telegramDMScopeRef(9048)}
+	now := time.Now().UTC()
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "eval-jobs-semantics-plan",
+		Objective: "Triage and fix eval --jobs concurrency semantics, validate, and commit locally only.",
+		Status:    session.OperationStatusCompleted,
+		Stage:     "completed",
+		Summary:   "Approved eval --jobs semantics phase is complete. Branch work/eval-jobs-semantics-20260608 has local commit 62e7c0f; validation passed; no push, PR, deploy, or restart was performed.",
+		Proposal: session.OperationProposal{
+			ID:            "eval-jobs-semantics-local-phase",
+			Kind:          "commit",
+			Summary:       "Triage and fix eval --jobs semantics, validate, and commit locally",
+			WhyNow:        "Fix a timing-sensitive eval runner test found during live review.",
+			BoundedEffect: "Edit local files, run tests, and create one local commit; stop before push, PR, deploy, or restart.",
+			Status:        session.ProposalStatusApproved,
+			UpdatedAt:     now,
+		},
+		Work: session.WorkOperationMetadata{
+			Executor:    "codex",
+			Commands:    []string{"go test ./runtime -count=1", "go test ./..."},
+			LastSummary: "Runtime and full tests passed; local commit 62e7c0f created.",
+		},
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:         session.TurnAuthorizationKindContinuation,
+		Status:       session.ContinuationStatusIdle,
+		Objective:    "Triage and fix eval --jobs concurrency semantics, validate, and commit locally only.",
+		StageSummary: "Local commit phase completed; stop before push or PR.",
+		ActionProposal: session.ActionProposal{
+			ID:            "aprop-eval-jobs-semantics-local-phase",
+			OperationID:   "eval-jobs-semantics-local-phase",
+			Summary:       "Triage and fix eval --jobs semantics, validate, and commit locally",
+			BoundedEffect: "Edit local files, run tests, and create one local commit; stop before push, PR, deploy, or restart.",
+			Status:        session.ProposalStatusApproved,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-eval-jobs-semantics-local-phase",
+			ProposalID:     "aprop-eval-jobs-semantics-local-phase",
+			Status:         session.ContinuationLeaseStatusConsumed,
+			MaxTurns:       1,
+			RemainingTurns: 0,
+			ConsumedAt:     now,
+		},
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	msg := core.InboundMessage{
+		ChatID:       9048,
+		SenderID:     1001,
+		Text:         approvedContinuationEventText,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
+		MessageID:    43,
+	}
+	result := &turn.Result{
+		VisibleReply: "Recovered cleanly. No more work is needed inside the approved phase.\n\nNext useful step would be a separate bounded approval for push/PR.",
+		Turn:         &core.TurnResult{Text: "Recovered cleanly. Next useful step would be a separate bounded approval for push/PR."},
+	}
+	inferred, err := rt.maybeInferGoalContinuationProposal(context.Background(), key, msg, "Recover: budget hop 3/3", result)
+	if err != nil {
+		t.Fatalf("maybeInferGoalContinuationProposal() err = %v", err)
+	}
+	if !inferred {
+		t.Fatal("maybeInferGoalContinuationProposal() = false, want push/PR follow-up proposal")
+	}
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, msg, msg.Text, result)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want inferred push/PR approval buttons")
+	}
+
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if opState.Status != session.OperationStatusBlocked || opState.Stage != "next_phase_proposal" || opState.Proposal.Status != session.ProposalStatusPending {
+		t.Fatalf("operation state = %#v, want blocked pending follow-up proposal", opState)
+	}
+	if opState.Proposal.Kind != "commit_push_pr" || !strings.Contains(opState.Proposal.Summary, "pull request") {
+		t.Fatalf("proposal = %#v, want commit_push_pr pull-request follow-up", opState.Proposal)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.OperationID != opState.Proposal.ID {
+		t.Fatalf("continuation = %#v, want pending continuation linked to follow-up proposal", cont)
+	}
+	if cont.ActionProposal.RiskClass != "commit_push_pr" || continuationWorkMode(cont) != WorkModeCommit {
+		t.Fatalf("action proposal = %#v, want commit_push_pr commit-mode follow-up", cont.ActionProposal)
+	}
+	for _, want := range []string{"publish_existing_branch_for_review", "create_or_update_pull_request", "report_pr_url"} {
+		if !actionListContains(cont.ActionProposal.AllowedActions, want) {
+			t.Fatalf("allowed actions = %#v, want %q", cont.ActionProposal.AllowedActions, want)
+		}
+	}
+	for _, want := range []string{"additional_file_edits", "merge_pull_request", "deploy_or_restart", "credential_token_output"} {
+		if !actionListContains(cont.ActionProposal.ForbiddenActions, want) {
+			t.Fatalf("forbidden actions = %#v, want %q", cont.ActionProposal.ForbiddenActions, want)
+		}
+	}
+	if strings.Contains(cont.ActionProposal.BoundedEffect, "read-only next-phase planning") || actionListContains(cont.ActionProposal.ForbiddenActions, "push_remote") {
+		t.Fatalf("action proposal = %#v, want concrete follow-up without generic read-only goal sandbox", cont.ActionProposal)
+	}
+	if compilation := continuationAuthorityCompilation(cont); compilation.Invalid() {
+		t.Fatalf("compilation = %#v, want valid follow-up authority", compilation)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 || !strings.Contains(inlineText, "Approve:\nPublish the completed branch") || !strings.Contains(inlineText, "pull request") {
+		t.Fatalf("inline count/text = %d/%q, want push/PR approval prompt", inlineCount, inlineText)
+	}
+}
+
+func TestGoalContinuationDoesNotInferPushPRFromCompletedPhaseWithoutFollowUpSignal(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9049, UserID: 0, Scope: telegramDMScopeRef(9049)}
+	now := time.Now().UTC()
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "eval-jobs-semantics-done",
+		Objective: "Clarify eval --jobs semantics and commit locally only.",
+		Status:    session.OperationStatusCompleted,
+		Stage:     "completed",
+		Summary:   "Local commit completed; no push or PR was performed.",
+		Proposal: session.OperationProposal{
+			ID:            "eval-jobs-local-only",
+			Kind:          "commit",
+			Summary:       "Clarify eval --jobs semantics and commit locally",
+			BoundedEffect: "Stop before push or PR.",
+			Status:        session.ProposalStatusApproved,
+			UpdatedAt:     now,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status: session.ContinuationStatusIdle,
+		ContinuationLease: session.ContinuationLease{
+			Status:         session.ContinuationLeaseStatusConsumed,
+			MaxTurns:       1,
+			RemainingTurns: 0,
+			ConsumedAt:     now,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	inferred, err := rt.maybeInferGoalContinuationProposal(context.Background(), key, core.InboundMessage{
+		ChatID: 9049,
+		Text:   approvedContinuationEventText,
+		Origin: core.InboundOriginTurnAuthorization,
+	}, "completed local-only phase", &turn.Result{VisibleReply: "Recovered cleanly. No more work is needed inside the approved phase. Next useful step would be a separate bounded approval for deployment."})
+	if err != nil {
+		t.Fatalf("maybeInferGoalContinuationProposal() err = %v", err)
+	}
+	if inferred {
+		t.Fatal("maybeInferGoalContinuationProposal() = true, want false without explicit follow-up approval signal")
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no approval prompt", inlineCount)
+	}
+}
+
 func TestGoalContinuationDoesNotInferForNarrowCompletedTask(t *testing.T) {
 	t.Parallel()
 

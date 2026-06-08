@@ -81,9 +81,40 @@ func actionProposalFromOperationProposal(opState session.OperationState, proposa
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
+	actionProposal = applyOperationProposalKindDefaults(actionProposal, proposal)
 	actionProposal = applyOrganicProposalSandbox(actionProposal, opState, proposal)
 	actionProposal = applyGoalContinuationSandbox(actionProposal, opState, proposal)
 	actionProposal = applyContinuationLeaseClassBoundaries(actionProposal)
 	actionProposal.PlanHash = actionProposalHash(actionProposal)
 	return session.NormalizeActionProposal(actionProposal)
+}
+
+func applyOperationProposalKindDefaults(action session.ActionProposal, proposal session.OperationProposal) session.ActionProposal {
+	switch normalizeOrganicProposalSandboxKind(firstNonEmptyContinuation(action.RiskClass, proposal.Kind)) {
+	case "commit_push_pr":
+		action.AllowedActions = append(action.AllowedActions,
+			"review_existing_branch_state",
+			"publish_existing_branch_for_review",
+			"create_or_update_pull_request",
+			"report_pr_url",
+			"report_evidence",
+		)
+		action.ForbiddenActions = append(action.ForbiddenActions,
+			"file_edits",
+			"additional_file_edits",
+			"merge_pull_request",
+			"deploy_or_restart",
+			"restart_service",
+			"credential_token_output",
+			"policy_or_permission_changes",
+			"release_or_tag",
+			"unrelated_github_effects",
+		)
+		action.ValidationPlan = append(action.ValidationPlan,
+			"verify the branch and diff correspond to the completed approved phase",
+			"report the remote branch and pull request URL",
+			"verify no file edits, merge, deploy, restart, release, tag, credential output, or unrelated GitHub effect occurred",
+		)
+	}
+	return session.NormalizeActionProposal(action)
 }
