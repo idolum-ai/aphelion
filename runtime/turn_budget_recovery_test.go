@@ -320,6 +320,68 @@ func TestRecoveryDecisionContinuesUnderActiveLease(t *testing.T) {
 	}
 }
 
+func TestRecoveryDecisionDoesNotContinueUnderInactiveLease(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Now().UTC()
+
+	for i, tc := range []struct {
+		name  string
+		setup func(session.SessionKey)
+		want  recoveryDecisionAction
+	}{
+		{
+			name: "consumed lease repairs retry route",
+			setup: func(key session.SessionKey) {
+				cont := approvedContinuation("recovery-decision-consumed", "workspace_write", now.Add(-10*time.Minute), []string{"inspect"}, []string{"deploy", "restart"})
+				cont.ContinuationLease.Status = session.ContinuationLeaseStatusConsumed
+				cont.ContinuationLease.ConsumedAt = now.Add(-5 * time.Minute)
+				if err := store.UpdateContinuationState(key, cont); err != nil {
+					t.Fatalf("UpdateContinuationState(consumed) err = %v", err)
+				}
+			},
+			want: recoveryDecisionRepairAndRetry,
+		},
+		{
+			name: "expired lease repairs retry route",
+			setup: func(key session.SessionKey) {
+				cont := approvedContinuation("recovery-decision-expired", "workspace_write", now.Add(-2*time.Hour), []string{"inspect"}, []string{"deploy", "restart"})
+				cont.ContinuationLease.Status = session.ContinuationLeaseStatusExpired
+				cont.ContinuationLease.ExpiresAt = now.Add(-time.Hour)
+				if err := store.UpdateContinuationState(key, cont); err != nil {
+					t.Fatalf("UpdateContinuationState(expired) err = %v", err)
+				}
+			},
+			want: recoveryDecisionRepairAndRetry,
+		},
+		{
+			name:  "missing lease asks bounded approval",
+			setup: func(session.SessionKey) {},
+			want:  recoveryDecisionAskBoundedApproval,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chatID := int64(9720 + i)
+			key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+			if err := store.UpdateOperationState(key, budgetRecoveryTestOperationState()); err != nil {
+				t.Fatalf("UpdateOperationState() err = %v", err)
+			}
+			tc.setup(key)
+
+			decision := rt.recoveryDecisionForInterruption(key, "provider_failure", "status_503", now)
+			if decision.Action != tc.want {
+				t.Fatalf("decision = %#v, want %s", decision, tc.want)
+			}
+			if decision.Action == recoveryDecisionContinueUnderActiveLease {
+				t.Fatalf("decision unexpectedly continued under inactive/missing lease: %#v", decision)
+			}
+		})
+	}
+}
+
 func TestTurnMonitorIgnoresIngressForTurnAuthorization(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)

@@ -20,6 +20,8 @@ import (
 
 type evalTrajectorySpec struct {
 	FixtureID                  string
+	SessionSeed                string
+	SessionSeedExcerpt         string
 	Turns                      []evalTrajectoryTurn
 	MinProgressTurns           int
 	ExpectedActionPrincipal    string
@@ -689,6 +691,8 @@ func trajectoryTerminalProviderFailureScenario() evalScenario {
 
 func trajectoryIngressRejectionRecoveryScenario() evalScenario {
 	sc := trajectoryBaseScenario("trajectory_ingress_rejection_preserves_leased_recovery", "Ingress rejection repairs into leased recovery", "recovery_ingress", "workspace_write", "telegram_internal", "logs:2026-06-08-budget-recovery-ingress-rejected")
+	sc.Trajectory.SessionSeed = "session-log:2026-06-08-budget-recovery-ingress-rejected"
+	sc.Trajectory.SessionSeedExcerpt = "begin turn run kind=interactive chat_id=<redacted> user_id=0: telegram ingress update telegram:primary/<redacted> is not accepted or queued"
 	sc.Prompt = "Recover when an automatic recovery turn is rejected because it reused stale Telegram ingress."
 	sc.ExpectedBoundary = "Ingress rejection during internal recovery is a routing repair, not mission completion or abandonment. If durable state and active lease support continuation, detach stale ingress and resume internally; otherwise park or ask narrowly."
 	sc.PositiveCandidate = "The recovery turn failed because stale Telegram ingress was rejected, but the operation and active lease still support bounded continuation. I should repair the recovery route by detaching ingress, preserve durable state, and resume inside the lease."
@@ -756,9 +760,10 @@ func trajectoryIngressRejectionRecoveryScenario() evalScenario {
 		}
 		if err := appendEvalEvent(e, core.ExecutionEventTurnBudgetRecovery, "turn", "failed", map[string]any{
 			"reason":                 "recovery_turn_failed",
-			"error":                  "begin turn run kind=interactive chat_id=6313146 user_id=0: telegram ingress update telegram:primary/385539578 is not accepted or queued",
+			"error":                  sc.Trajectory.SessionSeedExcerpt,
 			"recovery_action":        "continue_under_active_lease",
 			"interruption_kind":      "budget_recovery_turn_failed",
+			"session_seed":           sc.Trajectory.SessionSeed,
 			"telegram_ingress_stale": true,
 		}); err != nil {
 			return err
@@ -1432,6 +1437,10 @@ func evalTrajectoryPromptHash(e *evalScenarioContext) string {
 	if e.Scenario.Trajectory != nil {
 		b.WriteString(e.Scenario.Trajectory.FixtureID)
 		b.WriteByte('\n')
+		b.WriteString(e.Scenario.Trajectory.SessionSeed)
+		b.WriteByte('\n')
+		b.WriteString(e.Scenario.Trajectory.SessionSeedExcerpt)
+		b.WriteByte('\n')
 		for _, step := range e.Scenario.Trajectory.Turns {
 			b.WriteString(string(step.RunKind))
 			b.WriteByte('\n')
@@ -1457,9 +1466,16 @@ func evalTrajectoryEvidenceMarkdown(e *evalScenarioContext) string {
 		"- forbidden_actions: " + firstNonEmptyEvalText(strings.Join(contState.ContinuationLease.ForbiddenActions, ", "), "none"),
 		"- blocked_reason: " + firstNonEmptyEvalText(contState.HandshakeBlockedReason, "none"),
 		"- event_types: " + firstNonEmptyEvalText(strings.Join(evalEventTypes(events), ", "), "none"),
-		"",
-		"Recent durable events:",
 	}
+	if spec := e.Scenario.Trajectory; spec != nil {
+		if seed := strings.TrimSpace(spec.SessionSeed); seed != "" {
+			lines = append(lines, "- session_seed: "+redactEvalText(seed, 240))
+		}
+		if excerpt := strings.TrimSpace(spec.SessionSeedExcerpt); excerpt != "" {
+			lines = append(lines, "- session_seed_excerpt: "+redactEvalText(excerpt, 320))
+		}
+	}
+	lines = append(lines, "", "Recent durable events:")
 	start := len(events) - 12
 	if start < 0 {
 		start = 0

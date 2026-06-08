@@ -103,6 +103,24 @@ func TestTrajectoryEvalScenariosCoverWatchedFailureCandidates(t *testing.T) {
 			t.Fatalf("missing trajectory scenario %s", want)
 		}
 	}
+	seeded := false
+	for _, sc := range trajectoryEvalScenarios() {
+		if sc.Trajectory != nil && strings.TrimSpace(sc.Trajectory.SessionSeed) != "" {
+			seeded = true
+			if strings.Contains(sc.Trajectory.SessionSeedExcerpt, "6313146") || strings.Contains(sc.Trajectory.SessionSeedExcerpt, "385539578") {
+				t.Fatalf("trajectory scenario %s leaked raw live IDs in session seed excerpt: %s", sc.ID, sc.Trajectory.SessionSeedExcerpt)
+			}
+		}
+	}
+	if !seeded {
+		t.Fatal("trajectory suite has no explicit watched-session seeded fixture")
+	}
+	ingress := trajectoryIngressRejectionRecoveryScenario()
+	if ingress.Trajectory == nil ||
+		!strings.Contains(ingress.Trajectory.SessionSeed, "session-log:") ||
+		!strings.Contains(ingress.Trajectory.SessionSeedExcerpt, "not accepted or queued") {
+		t.Fatalf("ingress trajectory seed = %#v, want redacted watched-session source", ingress.Trajectory)
+	}
 }
 
 func TestRunEvalSuiteLocalCanonicalPassesWithTypedEvidence(t *testing.T) {

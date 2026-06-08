@@ -160,14 +160,29 @@ func (r *Runtime) recoveryContinuationState(key session.SessionKey) (session.Con
 	if state, exists, err := r.store.ContinuationStateIfExists(key); err != nil {
 		return session.ContinuationState{}, false, err
 	} else if exists {
-		return session.NormalizeContinuationState(state), true, nil
+		state = session.NormalizeContinuationState(state)
+		return state, recoveryContinuationStatePresent(state), nil
 	}
-	state, err := r.store.ContinuationState(key)
-	if err != nil {
-		return session.ContinuationState{}, false, err
-	}
+	return session.ContinuationState{}, false, nil
+}
+
+func recoveryContinuationStatePresent(state session.ContinuationState) bool {
 	state = session.NormalizeContinuationState(state)
-	return state, state.Active(), nil
+	return strings.TrimSpace(string(state.Status)) != "" ||
+		strings.TrimSpace(state.DecisionID) != "" ||
+		state.DecisionMessageID > 0 ||
+		strings.TrimSpace(state.Objective) != "" ||
+		strings.TrimSpace(state.StageSummary) != "" ||
+		state.RemainingTurns > 0 ||
+		state.ApprovedBy > 0 ||
+		state.ActionProposal.Active() ||
+		strings.TrimSpace(state.ContinuationLease.ID) != "" ||
+		strings.TrimSpace(state.ContinuationLease.ProposalID) != "" ||
+		state.ApprovalBundle.Active() ||
+		strings.TrimSpace(state.HandshakeBlockedReason) != "" ||
+		!state.ParkedAt.IsZero() ||
+		strings.TrimSpace(state.ParkedReason) != "" ||
+		strings.TrimSpace(state.ParkedSource) != ""
 }
 
 func (r *Runtime) recordRecoveryDecision(key session.SessionKey, decision recoveryDecision, at time.Time) {
