@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -65,6 +66,7 @@ type EvalOptions struct {
 	JudgeQuorum     string
 	TraceMode       string
 	ProviderRetries int
+	Jobs            int
 	Progress        func(EvalProgress)
 	Now             time.Time
 	Seed            int64
@@ -98,6 +100,7 @@ type EvalReport struct {
 	TraceMode            string               `json:"trace_mode,omitempty"`
 	Rollouts             int                  `json:"rollouts"`
 	Seed                 int64                `json:"seed"`
+	Jobs                 int                  `json:"jobs,omitempty"`
 	RouteCount           int                  `json:"route_count"`
 	JudgeRouteCount      int                  `json:"judge_route_count,omitempty"`
 	ScenarioCount        int                  `json:"scenario_count"`
@@ -178,6 +181,8 @@ type EvalProgress struct {
 	ScenarioID  string `json:"scenario_id"`
 	SampleIndex int    `json:"sample_index"`
 	Rollouts    int    `json:"rollouts"`
+	JobIndex    int    `json:"job_index,omitempty"`
+	JobCount    int    `json:"job_count,omitempty"`
 	Attempt     int    `json:"attempt,omitempty"`
 	Error       string `json:"error,omitempty"`
 }
@@ -342,6 +347,15 @@ func RunEvalSuite(ctx context.Context, opts EvalOptions) (EvalReport, error) {
 		return EvalReport{}, err
 	}
 	opts.JudgeRoutes = judgeRoutes
+	if opts.Progress != nil && opts.Jobs > 1 {
+		progress := opts.Progress
+		var progressMu sync.Mutex
+		opts.Progress = func(event EvalProgress) {
+			progressMu.Lock()
+			defer progressMu.Unlock()
+			progress(event)
+		}
+	}
 	now := opts.Now.UTC()
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -357,44 +371,175 @@ func RunEvalSuite(ctx context.Context, opts EvalOptions) (EvalReport, error) {
 		TraceMode:        opts.TraceMode,
 		Rollouts:         opts.Rollouts,
 		Seed:             opts.Seed,
+		Jobs:             opts.Jobs,
 		RouteCount:       len(routes),
 		JudgeRouteCount:  len(judgeRoutes),
 		ScenarioCount:    len(scenarios),
 	}
-	rng := rand.New(rand.NewSource(opts.Seed))
-	for _, route := range routes {
-		for _, sc := range scenarios {
-			for sample := 0; sample < opts.Rollouts; sample++ {
-				if err := ctx.Err(); err != nil {
-					finalizeEvalReport(&report)
-					return report, err
-				}
-				emitEvalProgress(opts, EvalProgress{Event: "start", Suite: opts.Suite, Mode: opts.Mode, SubjectMode: opts.Subject, Route: route.Name, ScenarioID: sc.ID, SampleIndex: sample, Rollouts: opts.Rollouts})
-				result, err := runEvalScenario(ctx, opts, route, sc, sample, rng)
-				if err != nil {
-					if ctxErr := ctx.Err(); ctxErr != nil {
-						finalizeEvalReport(&report)
-						return report, ctxErr
-					}
-					result = erroredEvalResult(opts, sc, route, sample, err)
-				}
-				if len(result.HardFailures) > 0 {
-					result.Pass = false
-					report.HardFailureCount += len(result.HardFailures)
-				}
-				if result.ProviderFailure {
-					report.ProviderFailureCount++
-				}
-				if result.Ambiguous {
-					report.AmbiguousCount++
-				}
-				report.Results = append(report.Results, result)
-				emitEvalProgress(opts, EvalProgress{Event: "result", Suite: opts.Suite, Mode: opts.Mode, SubjectMode: opts.Subject, Route: route.Name, ScenarioID: sc.ID, SampleIndex: sample, Rollouts: opts.Rollouts, Error: result.Error})
-			}
+	jobs := buildEvalRunJobs(routes, scenarios, opts.Rollouts, opts.Seed)
+	outcomes := runEvalJobs(ctx, opts, jobs)
+	completed := 0
+	for _, outcome := range outcomes {
+		if !outcome.completed {
+			continue
+		}
+		appendEvalResult(&report, outcome.result)
+		completed++
+	}
+	if completed < len(jobs) {
+		if err := firstEvalJobError(outcomes); err != nil {
+			finalizeEvalReport(&report)
+			return report, err
+		}
+		if err := ctx.Err(); err != nil {
+			finalizeEvalReport(&report)
+			return report, err
 		}
 	}
 	finalizeEvalReport(&report)
 	return report, nil
+}
+
+type evalRunJob struct {
+	index    int
+	route    EvalRoute
+	scenario evalScenario
+	sample   int
+	pressure string
+}
+
+type evalRunJobOutcome struct {
+	index     int
+	result    EvalScenarioResult
+	err       error
+	completed bool
+}
+
+func buildEvalRunJobs(routes []EvalRoute, scenarios []evalScenario, rollouts int, seed int64) []evalRunJob {
+	rng := rand.New(rand.NewSource(seed))
+	jobs := make([]evalRunJob, 0, len(routes)*len(scenarios)*rollouts)
+	for _, route := range routes {
+		for _, sc := range scenarios {
+			for sample := 0; sample < rollouts; sample++ {
+				jobs = append(jobs, evalRunJob{
+					index:    len(jobs),
+					route:    route,
+					scenario: sc,
+					sample:   sample,
+					pressure: chooseEvalPressure(sc, sample, rng),
+				})
+			}
+		}
+	}
+	return jobs
+}
+
+func runEvalJobs(ctx context.Context, opts EvalOptions, jobs []evalRunJob) []evalRunJobOutcome {
+	outcomes := make([]evalRunJobOutcome, len(jobs))
+	if len(jobs) == 0 {
+		return outcomes
+	}
+	if opts.Jobs <= 1 {
+		for _, job := range jobs {
+			outcome := runEvalJob(ctx, opts, job, len(jobs))
+			outcomes[job.index] = outcome
+			if !outcome.completed && outcome.err != nil {
+				break
+			}
+		}
+		return outcomes
+	}
+	workers := opts.Jobs
+	if workers > len(jobs) {
+		workers = len(jobs)
+	}
+	jobCh := make(chan evalRunJob)
+	outcomeCh := make(chan evalRunJobOutcome, len(jobs))
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobCh {
+				outcomeCh <- runEvalJob(ctx, opts, job, len(jobs))
+			}
+		}()
+	}
+	go func() {
+		defer close(jobCh)
+		for _, job := range jobs {
+			if err := ctx.Err(); err != nil {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case jobCh <- job:
+			}
+		}
+	}()
+	go func() {
+		wg.Wait()
+		close(outcomeCh)
+	}()
+	for outcome := range outcomeCh {
+		outcomes[outcome.index] = outcome
+	}
+	return outcomes
+}
+
+func runEvalJob(ctx context.Context, opts EvalOptions, job evalRunJob, jobCount int) evalRunJobOutcome {
+	if err := ctx.Err(); err != nil {
+		return evalRunJobOutcome{index: job.index, err: err}
+	}
+	progress := EvalProgress{
+		Event:       "start",
+		Suite:       opts.Suite,
+		Mode:        opts.Mode,
+		SubjectMode: opts.Subject,
+		Route:       job.route.Name,
+		ScenarioID:  job.scenario.ID,
+		SampleIndex: job.sample,
+		Rollouts:    opts.Rollouts,
+		JobIndex:    job.index,
+		JobCount:    jobCount,
+	}
+	emitEvalProgress(opts, progress)
+	result, err := runEvalScenario(ctx, opts, job.route, job.scenario, job.sample, job.pressure)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return evalRunJobOutcome{index: job.index, err: ctxErr}
+		}
+		result = erroredEvalResult(opts, job.scenario, job.route, job.sample, err)
+	}
+	resultProgress := progress
+	resultProgress.Event = "result"
+	resultProgress.Error = result.Error
+	emitEvalProgress(opts, resultProgress)
+	return evalRunJobOutcome{index: job.index, result: result, completed: true}
+}
+
+func firstEvalJobError(outcomes []evalRunJobOutcome) error {
+	for _, outcome := range outcomes {
+		if outcome.err != nil {
+			return outcome.err
+		}
+	}
+	return nil
+}
+
+func appendEvalResult(report *EvalReport, result EvalScenarioResult) {
+	if len(result.HardFailures) > 0 {
+		result.Pass = false
+		report.HardFailureCount += len(result.HardFailures)
+	}
+	if result.ProviderFailure {
+		report.ProviderFailureCount++
+	}
+	if result.Ambiguous {
+		report.AmbiguousCount++
+	}
+	report.Results = append(report.Results, result)
 }
 
 func finalizeEvalReport(report *EvalReport) {
@@ -891,6 +1036,9 @@ func normalizeEvalOptions(opts EvalOptions) EvalOptions {
 	if opts.ProviderRetries < 0 {
 		opts.ProviderRetries = 0
 	}
+	if opts.Jobs <= 0 {
+		opts.Jobs = 1
+	}
 	return opts
 }
 
@@ -1033,7 +1181,7 @@ func evalScenariosForSuite(suite string) ([]evalScenario, error) {
 	}
 }
 
-func runEvalScenario(ctx context.Context, opts EvalOptions, route EvalRoute, sc evalScenario, sample int, rng *rand.Rand) (EvalScenarioResult, error) {
+func runEvalScenario(ctx context.Context, opts EvalOptions, route EvalRoute, sc evalScenario, sample int, pressure string) (EvalScenarioResult, error) {
 	root := strings.TrimSpace(opts.WorkDir)
 	var err error
 	if root == "" {
@@ -1057,7 +1205,6 @@ func runEvalScenario(ctx context.Context, opts EvalOptions, route EvalRoute, sc 
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	pressure := chooseEvalPressure(sc, sample, rng)
 	key := session.SessionKey{
 		ChatID: evalDefaultChatID + int64(sample),
 		UserID: 0,

@@ -101,6 +101,7 @@ func runEvalRunCommand(args []string, out io.Writer) error {
 	modeFlag := fs.String("mode", aphruntime.EvalModeLocal, "eval mode: local or live")
 	subjectFlag := fs.String("subject", aphruntime.EvalSubjectEval, "eval subject: eval or governor")
 	rolloutsFlag := fs.Int("rollouts", 0, "rollouts per scenario/route")
+	jobsFlag := fs.Int("jobs", 1, "maximum concurrent eval jobs")
 	routesFlag := fs.String("routes", "configured", "live routes: configured or comma-separated provider:model specs")
 	scenarioFlag := fs.String("scenario", "", "comma-separated scenario IDs to run")
 	scoringFlag := fs.String("scoring", aphruntime.EvalScoringDeterministic, "scoring mode: deterministic or judge")
@@ -119,6 +120,9 @@ func runEvalRunCommand(args []string, out io.Writer) error {
 	}
 	if extra, ok := firstPositionalArg(fs.Args()); ok {
 		return fmt.Errorf("unknown argument %q for eval run", extra)
+	}
+	if *jobsFlag < 1 {
+		return fmt.Errorf("eval run requires --jobs >= 1")
 	}
 	mode := strings.ToLower(strings.TrimSpace(*modeFlag))
 	routes, err := evalRoutesForCommand(mode, *routesFlag, *configFlag)
@@ -143,6 +147,7 @@ func runEvalRunCommand(args []string, out io.Writer) error {
 		JudgeQuorum:     *judgeQuorumFlag,
 		TraceMode:       *traceFlag,
 		ProviderRetries: *providerRetriesFlag,
+		Jobs:            *jobsFlag,
 		Progress:        evalProgressReporter(*progressFlag),
 		Seed:            *seedFlag,
 		Now:             time.Now().UTC(),
@@ -571,11 +576,18 @@ func evalProgressReporter(enabled bool) func(aphruntime.EvalProgress) {
 			if progress.Error != "" {
 				status = "error"
 			}
-			fmt.Fprintf(os.Stderr, "eval %s route=%s scenario=%s sample=%d/%d\n", status, progress.Route, progress.ScenarioID, progress.SampleIndex+1, progress.Rollouts)
+			fmt.Fprintf(os.Stderr, "eval %s route=%s scenario=%s sample=%d/%d%s\n", status, progress.Route, progress.ScenarioID, progress.SampleIndex+1, progress.Rollouts, evalProgressJobSuffix(progress))
 		default:
-			fmt.Fprintf(os.Stderr, "eval start route=%s scenario=%s sample=%d/%d subject=%s\n", progress.Route, progress.ScenarioID, progress.SampleIndex+1, progress.Rollouts, progress.SubjectMode)
+			fmt.Fprintf(os.Stderr, "eval start route=%s scenario=%s sample=%d/%d subject=%s%s\n", progress.Route, progress.ScenarioID, progress.SampleIndex+1, progress.Rollouts, progress.SubjectMode, evalProgressJobSuffix(progress))
 		}
 	}
+}
+
+func evalProgressJobSuffix(progress aphruntime.EvalProgress) string {
+	if progress.JobCount <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" job=%d/%d", progress.JobIndex+1, progress.JobCount)
 }
 
 func renderEvalReportHuman(report aphruntime.EvalReport) string {
@@ -585,7 +597,7 @@ func renderEvalReportHuman(report aphruntime.EvalReport) string {
 		status = "fail"
 	}
 	fmt.Fprintf(&b, "Aphelion eval %s: %s\n", report.Suite, status)
-	fmt.Fprintf(&b, "mode=%s subject=%s scoring=%s routes=%d judge_routes=%d scenarios=%d rollouts=%d results=%d hard_failures=%d provider_failures=%d ambiguous=%d hard_failure_rate=%.2f%%\n", report.Mode, report.SubjectMode, report.ScoringMode, report.RouteCount, report.JudgeRouteCount, report.ScenarioCount, report.Rollouts, report.ResultCount, report.HardFailureCount, report.ProviderFailureCount, report.AmbiguousCount, report.HardFailureRate*100)
+	fmt.Fprintf(&b, "mode=%s subject=%s scoring=%s routes=%d judge_routes=%d scenarios=%d rollouts=%d jobs=%d results=%d hard_failures=%d provider_failures=%d ambiguous=%d hard_failure_rate=%.2f%%\n", report.Mode, report.SubjectMode, report.ScoringMode, report.RouteCount, report.JudgeRouteCount, report.ScenarioCount, report.Rollouts, report.Jobs, report.ResultCount, report.HardFailureCount, report.ProviderFailureCount, report.AmbiguousCount, report.HardFailureRate*100)
 	for _, result := range report.Results {
 		mark := "PASS"
 		if !result.Pass {
@@ -620,6 +632,7 @@ func renderEvalReportKV(report aphruntime.EvalReport) string {
 	fmt.Fprintf(&b, "subject_mode=%s\n", report.SubjectMode)
 	fmt.Fprintf(&b, "scenario_revision=%s\n", report.ScenarioRevision)
 	fmt.Fprintf(&b, "scoring_mode=%s\n", report.ScoringMode)
+	fmt.Fprintf(&b, "jobs=%d\n", report.Jobs)
 	fmt.Fprintf(&b, "failed=%t\n", report.Failed)
 	fmt.Fprintf(&b, "hard_failure_count=%d\n", report.HardFailureCount)
 	fmt.Fprintf(&b, "provider_failure_count=%d\n", report.ProviderFailureCount)
@@ -646,7 +659,7 @@ func evalReportFailureError(report aphruntime.EvalReport) error {
 }
 
 func renderEvalCommandHelp(note string) string {
-	lines := []string{"Aphelion eval", "Usage:", "  aphelion eval list [--suite canonical|trajectory] [--format human|kv|json]", "  aphelion eval run [--suite canonical|trajectory] [--mode local|live] [--subject eval|governor] [--rollouts N] [--routes configured|provider:model,...] [--scenario id[,id]] [--scoring deterministic|judge] [--judge-routes configured|provider:model,...] [--judge-quorum pair|single] [--trace redacted|minimal] [--progress] [--format human|kv|json] [--out report.json]", "  aphelion eval compare --before baseline.json --after branch.json [--format markdown|json] [--out impact.md]", "  aphelion eval gate --before base1.json,base2.json --after branch1.json,branch2.json [--format markdown|json] [--out gate.md]", ""}
+	lines := []string{"Aphelion eval", "Usage:", "  aphelion eval list [--suite canonical|trajectory] [--format human|kv|json]", "  aphelion eval run [--suite canonical|trajectory] [--mode local|live] [--subject eval|governor] [--rollouts N] [--jobs N] [--routes configured|provider:model,...] [--scenario id[,id]] [--scoring deterministic|judge] [--judge-routes configured|provider:model,...] [--judge-quorum pair|single] [--trace redacted|minimal] [--progress] [--format human|kv|json] [--out report.json]", "  aphelion eval compare --before baseline.json --after branch.json [--format markdown|json] [--out impact.md]", "  aphelion eval gate --before base1.json,base2.json --after branch1.json,branch2.json [--format markdown|json] [--out gate.md]", ""}
 	if note = strings.TrimSpace(note); note != "" {
 		lines = append([]string{note, ""}, lines...)
 	}

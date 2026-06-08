@@ -72,6 +72,38 @@ func TestEvalRunCommandLocalRendersJSON(t *testing.T) {
 	}
 }
 
+func TestEvalRunCommandSupportsJobsFlag(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"run", "--suite", "canonical", "--mode", "local", "--scenario", "token_budget_recovery_no_dead_end", "--rollouts", "2", "--jobs", "2", "--format", "json"}, &out)
+	if err != nil {
+		t.Fatalf("eval run err = %v\n%s", err, out.String())
+	}
+	var report aphruntime.EvalReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("decode eval report JSON: %v\n%s", err, out.String())
+	}
+	if report.Jobs != 2 || report.ResultCount != 2 {
+		t.Fatalf("report jobs/results = %d/%d, want 2/2", report.Jobs, report.ResultCount)
+	}
+	for i, result := range report.Results {
+		if result.SampleIndex != i {
+			t.Fatalf("result[%d] sample = %d, want stable sample order", i, result.SampleIndex)
+		}
+	}
+}
+
+func TestEvalRunCommandRejectsInvalidJobsFlag(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"run", "--suite", "canonical", "--mode", "local", "--jobs", "0", "--format", "json"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "--jobs >= 1") {
+		t.Fatalf("eval run err = %v, want invalid jobs error", err)
+	}
+}
+
 func TestEvalRunCommandSupportsGovernorSubjectAndScenarioFilter(t *testing.T) {
 	t.Parallel()
 

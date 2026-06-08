@@ -8,6 +8,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -229,6 +230,89 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	}
 	if !evalTestContainsString(byID["trajectory_tool_shape_sandbox_repair"].EventTypes, core.ExecutionEventContinuationOffered) {
 		t.Fatalf("sandbox trajectory missing bounded approval/rescope progress: %#v", byID["trajectory_tool_shape_sandbox_repair"])
+	}
+}
+
+func TestRunEvalSuiteJobsPreservesSerialOrderAndPressure(t *testing.T) {
+	t.Parallel()
+
+	base := EvalOptions{
+		Suite:    EvalSuiteCanonical,
+		Mode:     EvalModeLocal,
+		Rollouts: 3,
+		Seed:     77,
+		Now:      time.Unix(1700000000, 0).UTC(),
+		Routes: []EvalRoute{
+			{Name: "route-b", Provider: "local", Model: "scripted-b"},
+			{Name: "route-a", Provider: "local", Model: "scripted-a"},
+		},
+		ScenarioIDs: []string{
+			"token_budget_recovery_no_dead_end",
+			"stale_approval_rescopes_fresh_request",
+		},
+	}
+	serialOpts := base
+	serialOpts.WorkDir = t.TempDir()
+	serial, err := RunEvalSuite(context.Background(), serialOpts)
+	if err != nil {
+		t.Fatalf("serial RunEvalSuite() err = %v", err)
+	}
+	parallelOpts := base
+	parallelOpts.Jobs = 4
+	parallelOpts.WorkDir = t.TempDir()
+	parallel, err := RunEvalSuite(context.Background(), parallelOpts)
+	if err != nil {
+		t.Fatalf("parallel RunEvalSuite() err = %v", err)
+	}
+	if parallel.Jobs != 4 {
+		t.Fatalf("parallel jobs = %d, want 4", parallel.Jobs)
+	}
+	if len(serial.Results) != len(parallel.Results) {
+		t.Fatalf("result lengths = %d/%d", len(serial.Results), len(parallel.Results))
+	}
+	for i := range serial.Results {
+		got := parallel.Results[i]
+		want := serial.Results[i]
+		if got.Route != want.Route || got.ScenarioID != want.ScenarioID || got.SampleIndex != want.SampleIndex || got.Pressure != want.Pressure {
+			t.Fatalf("result[%d] coordinates = route=%s scenario=%s sample=%d pressure=%s, want route=%s scenario=%s sample=%d pressure=%s", i, got.Route, got.ScenarioID, got.SampleIndex, got.Pressure, want.Route, want.ScenarioID, want.SampleIndex, want.Pressure)
+		}
+	}
+}
+
+func TestRunEvalSuiteJobsBoundsLiveConcurrency(t *testing.T) {
+	t.Parallel()
+
+	provider := &blockingEvalProvider{
+		content: tokenBudgetRecoveryEvalScenario().PositiveCandidate,
+		delay:   25 * time.Millisecond,
+	}
+	report, err := RunEvalSuite(context.Background(), EvalOptions{
+		Suite:       EvalSuiteCanonical,
+		Mode:        EvalModeLive,
+		Subject:     EvalSubjectGovernor,
+		Rollouts:    4,
+		Jobs:        2,
+		WorkDir:     t.TempDir(),
+		ScenarioIDs: []string{"token_budget_recovery_no_dead_end"},
+		Routes: []EvalRoute{{
+			Name:     "blocking",
+			Provider: "test",
+			Model:    "test-model",
+			Subject:  provider,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("RunEvalSuite() err = %v", err)
+	}
+	if report.Failed || report.ResultCount != 4 {
+		t.Fatalf("report = %#v, want four passing results", report)
+	}
+	calls, maxInFlight := provider.stats()
+	if calls != 4 {
+		t.Fatalf("provider calls = %d, want 4", calls)
+	}
+	if maxInFlight != 2 {
+		t.Fatalf("max provider concurrency = %d, want bounded parallelism at 2", maxInFlight)
 	}
 }
 
@@ -995,6 +1079,45 @@ type staticEvalProvider struct {
 
 func (p *staticEvalProvider) CompleteWithOptions(context.Context, []agent.Message, []agent.ToolDef, agent.CompleteOptions) (*agent.Response, error) {
 	return &agent.Response{Content: p.content}, nil
+}
+
+type blockingEvalProvider struct {
+	content string
+	delay   time.Duration
+
+	mu          sync.Mutex
+	calls       int
+	inFlight    int
+	maxInFlight int
+}
+
+func (p *blockingEvalProvider) CompleteWithOptions(ctx context.Context, _ []agent.Message, _ []agent.ToolDef, _ agent.CompleteOptions) (*agent.Response, error) {
+	p.mu.Lock()
+	p.calls++
+	p.inFlight++
+	if p.inFlight > p.maxInFlight {
+		p.maxInFlight = p.inFlight
+	}
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		p.inFlight--
+		p.mu.Unlock()
+	}()
+	timer := time.NewTimer(p.delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timer.C:
+		return &agent.Response{Content: p.content}, nil
+	}
+}
+
+func (p *blockingEvalProvider) stats() (int, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls, p.maxInFlight
 }
 
 type capturingEvalProvider struct {
