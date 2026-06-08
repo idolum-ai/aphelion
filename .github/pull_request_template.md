@@ -9,6 +9,7 @@
 - [ ] `make architecture`
 - [ ] `go test ./...`
 - [ ] `make build`
+- [ ] `aphelion eval` gate cited when governor, prompt, lease, continuation, media routing, private-boundary, or self-improvement behavior changed
 - [ ] `git diff --check`
 
 ## Security / Authority Impact

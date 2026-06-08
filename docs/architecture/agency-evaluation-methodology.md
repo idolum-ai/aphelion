@@ -101,7 +101,7 @@ Each scenario is chosen because it excites one or more agency lines:
 - Pending continuation/release pressure tests lease boundary preservation.
 - Candidate-reply repair tests visible repair without rewriting execution truth.
 
-The repo implements this suite in two modes:
+The repo implements this methodology through complementary surfaces:
 
 - Deterministic checks: prompt goldens, prompt variant assembly, JSON report
   parsing, score aggregation, and exact scanners for forbidden authority claims.
@@ -111,6 +111,12 @@ The repo implements this suite in two modes:
   test suite, exposed through `make live-evals` and the narrower
   `make auto-evals`. The `aphelion agency-eval` command remains a manual
   inspection runner for ad hoc prompt work, not the primary release gate.
+- Canonical governor scenarios: `aphelion eval run` exercises incident-backed
+  scenarios across local or live routes, and `aphelion eval gate` compares
+  baseline and branch reports for hard failures, provider failures, ambiguity,
+  route coverage, and scenario coverage. This is the preferred regression gate
+  for governor, continuation, lease, media-routing, private-boundary, and
+  self-improvement workflow changes.
 
 Secondary prompts follow the same split. Prompt surfaces that affect
 user-visible behavior, memory, authority, proactivity, or durable children need
@@ -119,6 +125,40 @@ behavior, as with Mission Questions or heartbeat reflection, they also need a
 small opt-in live eval with stable fixtures and rubric checks. Exact wording is
 not the gate; malformed output, authority drift, generic memory writes, and
 clear regressions are.
+
+## Canonical Eval Ritual
+
+Use deterministic checks first. Prompt goldens, unit tests, hard-failure
+scanners, and `go test ./...` catch structural breakage without spending
+provider calls.
+
+For changes that materially affect governor behavior, prompt contracts,
+authority, leases, continuation, media routing, private-boundary handling, or
+self-improvement workflows, run the canonical scenarios locally before relying
+on live stochastic evidence:
+
+```sh
+aphelion eval run --suite canonical --mode local --subject governor --format human
+```
+
+When a branch is intended to change model behavior, compare live baseline and
+branch reports with the same suite, routes, seeds, scoring mode, and rollouts,
+then gate the paired reports:
+
+```sh
+aphelion eval gate --before baseline.json --after branch.json --format markdown --out gate.md
+```
+
+Before a release candidate that materially changes agency, authority,
+continuation, prompt behavior, or operator-facing control surfaces, cite a
+current eval gate report in the release PR. Multiple live seeds are preferred
+when the change is meant to prove behavioral improvement rather than only
+prevent regressions.
+
+Hard failures and provider failures block the change until explained or fixed.
+Ambiguity regressions are review blockers unless the PR explains why the prior
+behavior was overfit or the scenario needs repair. Improvements are evidence
+for the change, not proof that future turns cannot fail.
 
 ## Measurement Contract
 
@@ -158,6 +198,8 @@ runtime action, memory writes, leases, or consent.
 - `agency_eval.go`: local CLI/harness, case definitions, prompt variants,
   deterministic hard-failure scanners, judge parsing, score aggregation, and
   human/KV/JSON report rendering.
+- `eval_command.go` and `runtime/eval.go`: canonical local/live scenario runner,
+  report comparison, and baseline-vs-branch stability gate.
 - `agency_eval_test.go`: deterministic tests for prompt stripping, JSON parsing,
   compare deltas, and CLI rendering.
 - `agency_live_eval_test.go`: opt-in OpenAI agency spectrum eval using

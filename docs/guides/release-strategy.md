@@ -120,6 +120,8 @@ Before merging a release PR:
 - [ ] The PR description names the release version and scope.
 - [ ] The PR description includes both evidence and meaning.
 - [ ] Validation is current and cited.
+- [ ] Material agency, authority, continuation, prompt, or operator-control
+      changes cite current eval gate artifacts.
 - [ ] Known risks and operator-facing changes are explicit.
 - [ ] The automation trigger and expected tag/release outcome are clear.
 
