@@ -754,6 +754,112 @@ func TestConsumedWorkPhaseDoesNotCompleteWithoutMatchingWorkEvidence(t *testing.
 	}
 }
 
+func TestConsumedWorkPhaseUsesCompletedBundlePhaseModeEvidence(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	opState := session.OperationState{
+		ID:        "op-mixed-authority-bundle",
+		Objective: "Inspect the branch, then commit the accepted patch.",
+		Status:    session.OperationStatusActive,
+		Stage:     "phase_approval",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-mixed-authority-bundle",
+			CurrentPhaseID: "inspect",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "inspect",
+					Summary:        "Inspect the branch diff",
+					Status:         session.PlanStatusInProgress,
+					AuthorityClass: "read_only",
+					BoundedEffect:  "Read the branch diff and report findings.",
+					AllowedActions: []string{"inspect_code", "report_findings"},
+					LeaseID:        "lease-mixed-authority-bundle",
+				},
+				{
+					ID:             "commit",
+					Summary:        "Commit the accepted patch",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "commit",
+					BoundedEffect:  "Commit and push only the accepted patch.",
+					AllowedActions: []string{"git_commit", "git_push", "report_commit_evidence"},
+					LeaseID:        "lease-mixed-authority-bundle",
+				},
+			},
+		},
+	}
+	inspectProposalID := operationPhaseProposalID(opState, opState.PhasePlan.Phases[0])
+	commitProposalID := operationPhaseProposalID(opState, opState.PhasePlan.Phases[1])
+	opState.Work = session.WorkOperationMetadata{
+		LastOperationID:       "op-mixed-authority-bundle",
+		LastActionProposalID:  "aprop-mixed-authority-bundle",
+		LastActionOperationID: inspectProposalID,
+		LastLeaseID:           "lease-mixed-authority-bundle",
+		LastWorkMode:          string(WorkModeReadOnly),
+		LastCompletedAt:       now,
+		LastExecutorUpdatedAt: now,
+	}
+	state := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusIdle,
+		DecisionID:     "mixed-authority-bundle",
+		Objective:      opState.Objective,
+		StageSummary:   "Inspect the branch diff, then commit the accepted patch",
+		RemainingTurns: 0,
+		ActionProposal: session.ActionProposal{
+			ID:          "aprop-mixed-authority-bundle",
+			OperationID: "mixed-authority-bundle",
+			RiskClass:   "approval_bundle",
+			Status:      session.ProposalStatusApproved,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-mixed-authority-bundle",
+			ProposalID:     "aprop-mixed-authority-bundle",
+			Status:         session.ContinuationLeaseStatusConsumed,
+			MaxTurns:       1,
+			RemainingTurns: 0,
+			AllowedActions: []string{"inspect_code", "git_commit", "git_push", "report_commit_evidence"},
+			ConsumedAt:     now,
+		},
+		ApprovalBundle: session.ContinuationApprovalBundle{
+			ID:             "mixed-authority-bundle",
+			OperationID:    "op-mixed-authority-bundle",
+			PhasePlanID:    "plan-mixed-authority-bundle",
+			Status:         session.ContinuationLeaseStatusActive,
+			CurrentPhaseID: commitProposalID,
+			Phases: []session.ContinuationApprovalBundlePhase{
+				{
+					ID:               inspectProposalID,
+					OperationPhaseID: "inspect",
+					Status:           session.ContinuationLeaseStatusConsumed,
+					AuthorityClass:   "read_only",
+					AllowedActions:   []string{"inspect_code", "report_findings"},
+					ConsumedAt:       now,
+				},
+				{
+					ID:               commitProposalID,
+					OperationPhaseID: "commit",
+					Status:           session.ContinuationLeaseStatusActive,
+					AuthorityClass:   "commit",
+					AllowedActions:   []string{"git_commit", "git_push", "report_commit_evidence"},
+					ActivatedAt:      now,
+				},
+			},
+		},
+	}
+
+	got, completed := operationStateWithConsumedWorkContinuationPhaseCompleted(opState, state, now)
+	if !completed {
+		t.Fatalf("completed = false, want true for matching consumed read_only bundle phase evidence")
+	}
+	if got.PhasePlan.Phases[0].Status != session.PlanStatusCompleted {
+		t.Fatalf("first phase status = %q, want completed", got.PhasePlan.Phases[0].Status)
+	}
+	if got.PhasePlan.Phases[1].Status == session.PlanStatusCompleted {
+		t.Fatalf("second phase status = %q, want not completed by first phase evidence", got.PhasePlan.Phases[1].Status)
+	}
+}
+
 func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
 	t.Parallel()
 

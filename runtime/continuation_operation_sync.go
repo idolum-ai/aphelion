@@ -316,7 +316,7 @@ func operationPhaseHasConsumedWorkCompletionEvidence(opState session.OperationSt
 	if opID := strings.TrimSpace(opState.ID); opID != "" && strings.TrimSpace(work.LastOperationID) != "" && strings.TrimSpace(work.LastOperationID) != opID {
 		return false
 	}
-	if mode := continuationWorkMode(state); mode != "" && strings.TrimSpace(work.LastWorkMode) != "" && strings.TrimSpace(work.LastWorkMode) != string(mode) {
+	if mode := operationPhaseConsumedWorkMode(opState, phase, state); mode != "" && strings.TrimSpace(work.LastWorkMode) != "" && strings.TrimSpace(work.LastWorkMode) != string(mode) {
 		return false
 	}
 	proposalID := operationPhaseProposalID(opState, phase)
@@ -331,6 +331,36 @@ func operationPhaseHasConsumedWorkCompletionEvidence(opState session.OperationSt
 		return false
 	}
 	return true
+}
+
+func operationPhaseConsumedWorkMode(opState session.OperationState, phase session.OperationPhase, state session.ContinuationState) WorkMode {
+	if bundlePhase, ok := operationPhaseConsumedApprovalBundlePhase(opState, phase, state); ok {
+		state.ApprovalBundle.CurrentPhaseID = strings.TrimSpace(bundlePhase.ID)
+		return continuationWorkMode(state)
+	}
+	return continuationWorkMode(state)
+}
+
+func operationPhaseConsumedApprovalBundlePhase(opState session.OperationState, phase session.OperationPhase, state session.ContinuationState) (session.ContinuationApprovalBundlePhase, bool) {
+	opState = session.NormalizeOperationState(opState)
+	phase = normalizeSingleOperationPhase(phase)
+	state = session.NormalizeContinuationState(state)
+	bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle)
+	if len(bundle.Phases) == 0 {
+		return session.ContinuationApprovalBundlePhase{}, false
+	}
+	proposalID := operationPhaseProposalID(opState, phase)
+	phaseID := strings.TrimSpace(phase.ID)
+	for _, bundlePhase := range bundle.Phases {
+		bundlePhase = session.NormalizeContinuationApprovalBundlePhase(bundlePhase)
+		if proposalID != "" && strings.TrimSpace(bundlePhase.ID) == proposalID {
+			return bundlePhase, true
+		}
+		if phaseID != "" && strings.TrimSpace(bundlePhase.OperationPhaseID) == phaseID {
+			return bundlePhase, true
+		}
+	}
+	return session.ContinuationApprovalBundlePhase{}, false
 }
 
 func operationPhaseMatchesConsumedContinuation(opState session.OperationState, phase session.OperationPhase, state session.ContinuationState) bool {
