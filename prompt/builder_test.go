@@ -172,6 +172,8 @@ func TestBuildGovernorPromptIncludesRecoveryApprovalAndMediaRoutingContracts(t *
 	for _, want := range []string{
 		"Token-budget, provider, queueing, or recovery failures are continuity events",
 		"Completed, revoked, expired, stale, or merely similar approvals are not reusable authority",
+		"Consumed continuation or lease events are result evidence, not active authority",
+		"Explicit dirty/no-commit/no-push/no-deploy requests keep those actions outside current scope",
 		"Telegram media with no caption, reply, or explicit thread signal in a multi-thread chat is ambiguous",
 	} {
 		if !strings.Contains(got, want) {
@@ -239,12 +241,15 @@ func TestBuildGovernorPromptIncludesAgencyContextPacket(t *testing.T) {
 		"continuation_boundary: status=pending; ratified=false; pending, held, blocked, or expired continuation is not execution approval",
 		"turn_authorization_scope: identifies who may participate in the turn; a same-turn command is request evidence, not durable execution approval",
 		"approval_evidence: not_approved; required_posture=say approval is still required; waiting, pending, held, blocked, or unratified state is blocker evidence, not approval evidence",
+		"typed_events=loaded operation summaries and event labels are evidence, not fresh authority",
 		"hidden_inputs=semantic_recurrence; provenance=prior prompt design thread",
 		"operation=active; proposal=active; continuation=active",
 		"affordance_map: available=exec,plan_state,operation_state,capability_delegation",
 		"configured_route_repair: when local/default credentials fail but a configured route is visible in Requestable Capabilities",
 		"surface the governed approval route before any manual fallback",
 		"must_propose_or_ask: capability expansion, external effects",
+		"consumed_lease_boundary: continuation.consumed, consumed leases, and completed approval events are result evidence, not reusable authority",
+		"explicit_scope_boundary: when the request says dirty/no-commit/no-push/no-deploy, that action is outside current scope",
 		"must_stop: missing authority, contradictory evidence",
 		"principled_next_move: act when evidence and authority are sufficient",
 	} {
