@@ -40,6 +40,9 @@ func (r *Registry) updateOperation(_ context.Context, input json.RawMessage, key
 	if err != nil {
 		return "", err
 	}
+	if err := validateOperationCompletionEvidence(current, state); err != nil {
+		return "", err
+	}
 	now := time.Now().UTC()
 	if state.Active() {
 		if strings.TrimSpace(state.ID) == "" {

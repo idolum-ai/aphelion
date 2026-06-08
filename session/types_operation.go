@@ -168,6 +168,11 @@ type WorkOperationMetadata struct {
 	ConfiguredExecutor    string           `json:"configured_executor,omitempty"`
 	PreferredExecutor     string           `json:"preferred_executor,omitempty"`
 	FallbackReason        string           `json:"fallback_reason,omitempty"`
+	LastOperationID       string           `json:"last_operation_id,omitempty"`
+	LastActionProposalID  string           `json:"last_action_proposal_id,omitempty"`
+	LastActionOperationID string           `json:"last_action_operation_id,omitempty"`
+	LastLeaseID           string           `json:"last_lease_id,omitempty"`
+	LastWorkMode          string           `json:"last_work_mode,omitempty"`
 	CodexThreadID         string           `json:"codex_thread_id,omitempty"`
 	CodexLastTurnID       string           `json:"codex_last_turn_id,omitempty"`
 	CodexLaneMode         string           `json:"codex_lane_mode,omitempty"`
@@ -549,6 +554,11 @@ func NormalizeWorkOperationMetadata(work WorkOperationMetadata) WorkOperationMet
 	work.ConfiguredExecutor = strings.TrimSpace(work.ConfiguredExecutor)
 	work.PreferredExecutor = strings.TrimSpace(work.PreferredExecutor)
 	work.FallbackReason = strings.TrimSpace(work.FallbackReason)
+	work.LastOperationID = strings.TrimSpace(work.LastOperationID)
+	work.LastActionProposalID = strings.TrimSpace(work.LastActionProposalID)
+	work.LastActionOperationID = strings.TrimSpace(work.LastActionOperationID)
+	work.LastLeaseID = strings.TrimSpace(work.LastLeaseID)
+	work.LastWorkMode = strings.TrimSpace(work.LastWorkMode)
 	work.CodexThreadID = strings.TrimSpace(work.CodexThreadID)
 	work.CodexLastTurnID = strings.TrimSpace(work.CodexLastTurnID)
 	work.CodexLaneMode = strings.TrimSpace(work.CodexLaneMode)

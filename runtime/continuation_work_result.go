@@ -33,6 +33,11 @@ func (r *Runtime) persistWorkResult(key session.SessionKey, req WorkRequest, res
 	opState.Work.ConfiguredExecutor = status.Configured
 	opState.Work.PreferredExecutor = status.Preferred
 	opState.Work.FallbackReason = status.FallbackReason
+	opState.Work.LastOperationID = strings.TrimSpace(req.OperationID)
+	opState.Work.LastActionProposalID = strings.TrimSpace(req.State.ActionProposal.ID)
+	opState.Work.LastActionOperationID = strings.TrimSpace(req.State.ActionProposal.OperationID)
+	opState.Work.LastLeaseID = strings.TrimSpace(req.LeaseID)
+	opState.Work.LastWorkMode = strings.TrimSpace(string(req.Mode))
 	opState.Work.CodexThreadID = firstRuntimeWorkNonEmpty(result.ThreadID, opState.Work.CodexThreadID)
 	opState.Work.CodexLastTurnID = firstRuntimeWorkNonEmpty(result.TurnID, opState.Work.CodexLastTurnID)
 	opState.Work.CodexLaneMode = string(req.Mode)

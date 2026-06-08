@@ -259,6 +259,9 @@ func operationStateWithConsumedWorkContinuationPhaseCompleted(opState session.Op
 		if strings.TrimSpace(phase.LeaseID) != leaseID && !operationPhaseMatchesConsumedContinuation(opState, phase, state) {
 			continue
 		}
+		if !operationPhaseHasConsumedWorkCompletionEvidence(opState, phase, state) {
+			continue
+		}
 		opState.PhasePlan.Phases[i].Status = session.PlanStatusCompleted
 		if opState.PhasePlan.Phases[i].CompletedAt.IsZero() {
 			opState.PhasePlan.Phases[i].CompletedAt = now
@@ -296,6 +299,38 @@ func operationStateWithConsumedWorkContinuationPhaseCompleted(opState session.Op
 	opState.PhasePlan.UpdatedAt = now
 	opState.UpdatedAt = now
 	return session.NormalizeOperationState(opState), true
+}
+
+func operationPhaseHasConsumedWorkCompletionEvidence(opState session.OperationState, phase session.OperationPhase, state session.ContinuationState) bool {
+	opState = session.NormalizeOperationState(opState)
+	phase = normalizeSingleOperationPhase(phase)
+	state = session.NormalizeContinuationState(state)
+	work := session.NormalizeWorkOperationMetadata(opState.Work)
+	if work.LastCompletedAt.IsZero() || strings.TrimSpace(work.LastError) != "" {
+		return false
+	}
+	leaseID := strings.TrimSpace(state.ContinuationLease.ID)
+	if leaseID == "" || strings.TrimSpace(work.LastLeaseID) != leaseID {
+		return false
+	}
+	if opID := strings.TrimSpace(opState.ID); opID != "" && strings.TrimSpace(work.LastOperationID) != "" && strings.TrimSpace(work.LastOperationID) != opID {
+		return false
+	}
+	if mode := continuationWorkMode(state); mode != "" && strings.TrimSpace(work.LastWorkMode) != "" && strings.TrimSpace(work.LastWorkMode) != string(mode) {
+		return false
+	}
+	proposalID := operationPhaseProposalID(opState, phase)
+	if actionOpID := strings.TrimSpace(work.LastActionOperationID); actionOpID != "" && actionOpID != proposalID {
+		return false
+	}
+	actionProposalID := strings.TrimSpace(state.ActionProposal.ID)
+	leaseProposalID := strings.TrimSpace(state.ContinuationLease.ProposalID)
+	if recorded := strings.TrimSpace(work.LastActionProposalID); recorded != "" &&
+		recorded != actionProposalID &&
+		recorded != leaseProposalID {
+		return false
+	}
+	return true
 }
 
 func operationPhaseMatchesConsumedContinuation(opState session.OperationState, phase session.OperationPhase, state session.ContinuationState) bool {

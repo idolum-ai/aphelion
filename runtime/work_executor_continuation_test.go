@@ -690,6 +690,70 @@ func TestNativeWorkExecutorTreatsBudgetRecoveryTurnAsFailed(t *testing.T) {
 	}
 }
 
+func TestConsumedWorkPhaseDoesNotCompleteWithoutMatchingWorkEvidence(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	opState := session.OperationState{
+		ID:        "op-missing-work-evidence",
+		Objective: "Patch and push a branch.",
+		Status:    session.OperationStatusActive,
+		Stage:     "phase_approval",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-missing-work-evidence",
+			CurrentPhaseID: "commit-push",
+			Phases: []session.OperationPhase{{
+				ID:             "commit-push",
+				Summary:        "Commit and push inspected changes",
+				Status:         session.PlanStatusInProgress,
+				AuthorityClass: "commit",
+				BoundedEffect:  "Commit and push only the approved branch changes.",
+				AllowedActions: []string{"git_commit", "git_push", "report_commit_evidence"},
+				LeaseID:        "lease-commit-push",
+			}},
+		},
+		Work: session.WorkOperationMetadata{
+			LastOperationID:       "op-missing-work-evidence",
+			LastLeaseID:           "different-lease",
+			LastWorkMode:          string(WorkModeCommit),
+			LastCompletedAt:       now,
+			LastExecutorUpdatedAt: now,
+		},
+	}
+	proposalID := operationPhaseProposalID(opState, opState.PhasePlan.Phases[0])
+	state := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusIdle,
+		DecisionID:     proposalID,
+		Objective:      opState.Objective,
+		StageSummary:   "Commit and push inspected changes",
+		RemainingTurns: 0,
+		ActionProposal: session.ActionProposal{
+			ID:          "aprop-" + proposalID,
+			OperationID: proposalID,
+			RiskClass:   "commit",
+			Status:      session.ProposalStatusApproved,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-commit-push",
+			ProposalID:     "aprop-" + proposalID,
+			Status:         session.ContinuationLeaseStatusConsumed,
+			MaxTurns:       1,
+			RemainingTurns: 0,
+			AllowedActions: []string{"git_commit", "git_push", "report_commit_evidence"},
+			ConsumedAt:     now,
+		},
+	}
+
+	got, completed := operationStateWithConsumedWorkContinuationPhaseCompleted(opState, state, now)
+	if completed {
+		t.Fatalf("completed = true, want false without matching work evidence")
+	}
+	if got.PhasePlan.Phases[0].Status != session.PlanStatusInProgress {
+		t.Fatalf("phase status = %q, want in_progress", got.PhasePlan.Phases[0].Status)
+	}
+}
+
 func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
 	t.Parallel()
 

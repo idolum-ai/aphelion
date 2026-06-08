@@ -35,6 +35,7 @@ func applyOperationInput(current session.OperationState, in updateOperationInput
 		Status:    session.NormalizeOperationStatus(session.OperationStatus(in.Status)),
 		Stage:     strings.TrimSpace(in.Stage),
 		Summary:   strings.TrimSpace(in.Summary),
+		Work:      current.Work,
 	}
 	if strings.TrimSpace(in.Status) != "" && state.Status == "" {
 		return session.OperationState{}, fmt.Errorf("update_operation status must be idle, active, blocked, completed, or failed")

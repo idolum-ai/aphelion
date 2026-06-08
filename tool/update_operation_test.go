@@ -326,6 +326,158 @@ func TestUpdateOperationToolPersistsDurablePhasePlan(t *testing.T) {
 	}
 }
 
+func TestUpdateOperationRejectsExecutablePhaseCompletionWithoutWorkEvidence(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-evidence-gate",
+		Objective: "Patch the runtime.",
+		Status:    session.OperationStatusActive,
+		Stage:     "execution",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-evidence-gate",
+			CurrentPhaseID: "implementation",
+			Phases: []session.OperationPhase{{
+				ID:             "implementation",
+				Summary:        "Patch runtime files",
+				Status:         session.PlanStatusInProgress,
+				AuthorityClass: "workspace_write",
+				BoundedEffect:  "Edit runtime files and run focused tests.",
+				AllowedActions: []string{"workspace_write", "run_tests"},
+				LeaseID:        "lease-implementation",
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed) err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{"merge":true,"phase_plan":{"phases":[{"id":"implementation","status":"completed"}]}}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "matching successful work evidence") {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v, want work evidence rejection", err)
+	}
+	state, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if state.PhasePlan.Phases[0].Status != session.PlanStatusInProgress {
+		t.Fatalf("phase status = %q, want in_progress after rejected completion", state.PhasePlan.Phases[0].Status)
+	}
+}
+
+func TestUpdateOperationAllowsExecutablePhaseCompletionWithMatchingWorkEvidence(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	now := time.Now().UTC()
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-evidence-gate",
+		Objective: "Patch the runtime.",
+		Status:    session.OperationStatusActive,
+		Stage:     "execution",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-evidence-gate",
+			CurrentPhaseID: "implementation",
+			Phases: []session.OperationPhase{{
+				ID:             "implementation",
+				Summary:        "Patch runtime files",
+				Status:         session.PlanStatusInProgress,
+				AuthorityClass: "workspace_write",
+				BoundedEffect:  "Edit runtime files and run focused tests.",
+				AllowedActions: []string{"workspace_write", "run_tests"},
+				LeaseID:        "lease-implementation",
+			}},
+		},
+		Work: session.WorkOperationMetadata{
+			LastOperationID:       "op-evidence-gate",
+			LastLeaseID:           "lease-implementation",
+			LastWorkMode:          "workspace_write",
+			LastSummary:           "Runtime patch completed with tests.",
+			LastCompletedAt:       now,
+			LastExecutorUpdatedAt: now,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed) err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{"merge":true,"phase_plan":{"phases":[{"id":"implementation","status":"completed"}]}}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v", err)
+	}
+	if !strings.Contains(out, "[OPERATION_UPDATED]") {
+		t.Fatalf("update output = %q, want operation update ack", out)
+	}
+	state, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if state.PhasePlan.Phases[0].Status != session.PlanStatusCompleted {
+		t.Fatalf("phase status = %q, want completed with work evidence", state.PhasePlan.Phases[0].Status)
+	}
+	if state.Work.LastLeaseID != "lease-implementation" {
+		t.Fatalf("work metadata = %#v, want preserved completion evidence", state.Work)
+	}
+}
+
+func TestUpdateOperationAllowsReadOnlyPhaseCompletionWithoutWorkEvidence(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-readonly-evidence-gate",
+		Objective: "Inspect PR readiness.",
+		Status:    session.OperationStatusActive,
+		Stage:     "inspection",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-readonly-evidence-gate",
+			CurrentPhaseID: "inspect",
+			Phases: []session.OperationPhase{{
+				ID:             "inspect",
+				Summary:        "Inspect PR readiness",
+				Status:         session.PlanStatusInProgress,
+				AuthorityClass: "read_only_review",
+				BoundedEffect:  "Inspect local files and report findings.",
+				AllowedActions: []string{"read_only_review", "report_evidence"},
+				LeaseID:        "lease-inspect",
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed) err = %v", err)
+	}
+
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{"merge":true,"phase_plan":{"phases":[{"id":"inspect","status":"completed"}]}}`),
+	); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v", err)
+	}
+	state, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if state.PhasePlan.Phases[0].Status != session.PlanStatusCompleted {
+		t.Fatalf("phase status = %q, want read-only phase completed", state.PhasePlan.Phases[0].Status)
+	}
+}
+
 func TestUpdateOperationToolPersistsTypedPhaseGovernanceMetadata(t *testing.T) {
 	t.Parallel()
 
