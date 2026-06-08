@@ -88,6 +88,9 @@ func TestTrajectoryEvalScenariosCoverWatchedFailureCandidates(t *testing.T) {
 	for _, want := range []string{
 		"trajectory_budget_recovery_resumes_leased_work",
 		"trajectory_terminal_provider_failure_preserves_recovery",
+		"trajectory_ingress_rejection_preserves_leased_recovery",
+		"trajectory_compaction_relatched_goal_without_user_restate",
+		"trajectory_partial_provider_failure_verifies_before_claiming",
 		"trajectory_restart_watchdog_rehydrates_active_phase",
 		"trajectory_completed_continuation_no_rerun",
 		"trajectory_text_approval_requires_typed_lease",
@@ -170,8 +173,8 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	if report.Failed || report.HardFailureCount != 0 {
 		t.Fatalf("trajectory report failed: hard=%d results=%#v", report.HardFailureCount, report.Results)
 	}
-	if report.ScenarioCount != 9 || report.ResultCount != 9 {
-		t.Fatalf("scenario/result count = %d/%d, want 9/9", report.ScenarioCount, report.ResultCount)
+	if report.ScenarioCount != 12 || report.ResultCount != 12 {
+		t.Fatalf("scenario/result count = %d/%d, want 12/12", report.ScenarioCount, report.ResultCount)
 	}
 	for _, result := range report.Results {
 		for _, want := range []string{core.ExecutionEventTurnStarted, core.ExecutionEventDeliveryFinalSent, core.ExecutionEventTurnCompleted} {
@@ -206,6 +209,33 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	for _, want := range []string{core.ExecutionEventProviderAttemptFailed, core.ExecutionEventRecoveryResume, core.ExecutionEventWorkExecutorStarted} {
 		if !evalTestContainsString(providerFailure.EventTypes, want) {
 			t.Fatalf("provider-failure trajectory missing %s evidence: %#v", want, providerFailure)
+		}
+	}
+	ingressRecovery := byID["trajectory_ingress_rejection_preserves_leased_recovery"]
+	if ingressRecovery.OperationStatus != string(session.OperationStatusActive) || ingressRecovery.Continuation != string(session.ContinuationStatusApproved) {
+		t.Fatalf("ingress recovery trajectory state = %#v, want active operation with approved continuation", ingressRecovery)
+	}
+	for _, want := range []string{core.ExecutionEventTurnBudgetRecovery, core.ExecutionEventRecoveryIssued, core.ExecutionEventContinuationResumed} {
+		if !evalTestContainsString(ingressRecovery.EventTypes, want) {
+			t.Fatalf("ingress recovery trajectory missing %s evidence: %#v", want, ingressRecovery)
+		}
+	}
+	compaction := byID["trajectory_compaction_relatched_goal_without_user_restate"]
+	if compaction.OperationStatus != string(session.OperationStatusActive) {
+		t.Fatalf("compaction trajectory state = %#v, want active operation", compaction)
+	}
+	for _, want := range []string{core.ExecutionEventIngressCompacted, core.ExecutionEventRecoveryResume, core.ExecutionEventWorkExecutorStarted} {
+		if !evalTestContainsString(compaction.EventTypes, want) {
+			t.Fatalf("compaction trajectory missing %s evidence: %#v", want, compaction)
+		}
+	}
+	partialProvider := byID["trajectory_partial_provider_failure_verifies_before_claiming"]
+	if partialProvider.OperationStatus != string(session.OperationStatusActive) {
+		t.Fatalf("partial-provider trajectory state = %#v, want active operation", partialProvider)
+	}
+	for _, want := range []string{core.ExecutionEventProviderAttemptFailed, core.ExecutionEventRecoveryIssued, core.ExecutionEventContinuationBlocked} {
+		if !evalTestContainsString(partialProvider.EventTypes, want) {
+			t.Fatalf("partial-provider trajectory missing %s evidence: %#v", want, partialProvider)
 		}
 	}
 	if byID["trajectory_completed_continuation_no_rerun"].Continuation != "approved" {

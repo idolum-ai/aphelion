@@ -98,17 +98,23 @@ func (p *turnDeliveryPort) deliverBudgetRecovery(ctx context.Context, req turn.D
 }
 
 func (p *turnDeliveryPort) deliverBudgetRecoveryBlocked(ctx context.Context, req turn.DeliveryRequest, recovery *core.TurnRecovery, scope string, scopePayload map[string]any, maxHops int, reason string, cause error) (*turn.DeliveryResult, error) {
+	now := time.Now().UTC()
+	decision := p.runtime.recoveryDecisionForInterruption(p.key, "budget_recovery_blocked", reason, now)
 	payload := turnBudgetRecoveryPayload(recovery, scope, scopePayload, 0, maxHops)
 	payload["reason"] = strings.TrimSpace(reason)
+	for key, value := range decision.payload() {
+		payload[key] = value
+	}
 	if cause != nil {
 		payload["error"] = trimError(cause.Error())
 	}
 	if req.Result != nil && req.Result.Turn != nil {
 		appendTokenUsagePayload(payload, req.Result.Turn.TokenUsage)
 	}
-	p.runtime.recordExecutionEvent(p.key, core.ExecutionEventTurnBudgetRecovery, "turn", "blocked", payload, time.Now().UTC())
+	p.runtime.recordExecutionEvent(p.key, core.ExecutionEventTurnBudgetRecovery, "turn", "blocked", payload, now)
+	p.runtime.recordRecoveryDecision(p.key, decision, now)
 
-	text := turnBudgetRecoveryBlockedText(recovery, maxHops, reason)
+	text := turnBudgetRecoveryBlockedText(recovery, maxHops, reason, decision)
 	if p.audit != nil {
 		p.audit.RecordFinalReply(text, nil, "budget_recovery_blocked")
 	}
@@ -170,9 +176,15 @@ func (r *Runtime) runTurnBudgetRecoveryContinuation(ctx context.Context, key ses
 	r.recordExecutionEvent(key, core.ExecutionEventTurnBudgetRecovery, "turn", "resuming", payload, time.Now().UTC())
 	result, err := r.handleInternalContinuation(ctx, actor, recoveryMsg)
 	if err != nil {
+		now := time.Now().UTC()
+		decision := r.recoveryDecisionForInterruption(key, "budget_recovery_turn_failed", "recovery_turn_failed", now)
 		payload["error"] = trimError(err.Error())
-		r.recordExecutionEvent(key, core.ExecutionEventTurnBudgetRecovery, "turn", "failed", payload, time.Now().UTC())
-		r.notifyTurnBudgetRecoveryFailure(ctx, msg, recovery, maxHops, err)
+		for key, value := range decision.payload() {
+			payload[key] = value
+		}
+		r.recordExecutionEvent(key, core.ExecutionEventTurnBudgetRecovery, "turn", "failed", payload, now)
+		r.recordRecoveryDecision(key, decision, now)
+		r.notifyTurnBudgetRecoveryFailure(ctx, msg, recovery, maxHops, err, decision)
 		return err
 	}
 	if result != nil && result.Recovery != nil {
@@ -182,11 +194,11 @@ func (r *Runtime) runTurnBudgetRecoveryContinuation(ctx context.Context, key ses
 	return nil
 }
 
-func (r *Runtime) notifyTurnBudgetRecoveryFailure(ctx context.Context, msg core.InboundMessage, recovery *core.TurnRecovery, maxHops int, err error) {
+func (r *Runtime) notifyTurnBudgetRecoveryFailure(ctx context.Context, msg core.InboundMessage, recovery *core.TurnRecovery, maxHops int, err error, decision recoveryDecision) {
 	if r == nil || r.outbound == nil || msg.ChatID == 0 || r.isShuttingDown() {
 		return
 	}
-	text := turnBudgetRecoveryBlockedText(recovery, maxHops, "recovery_turn_failed")
+	text := turnBudgetRecoveryBlockedText(recovery, maxHops, "recovery_turn_failed", decision)
 	if err != nil {
 		text += "\n\nFailure: " + trimError(err.Error())
 	}
@@ -383,7 +395,7 @@ func renderTurnBudgetRecoveryPrompt(recovery *core.TurnRecovery, scope string, h
 	return card.String()
 }
 
-func turnBudgetRecoveryBlockedText(recovery *core.TurnRecovery, maxHops int, reason string) string {
+func turnBudgetRecoveryBlockedText(recovery *core.TurnRecovery, maxHops int, reason string, decision recoveryDecision) string {
 	label := "execution"
 	if recovery != nil {
 		switch recovery.Kind {
@@ -403,10 +415,17 @@ func turnBudgetRecoveryBlockedText(recovery *core.TurnRecovery, maxHops int, rea
 	case "retry_counter_unavailable":
 		return "I hit the " + label + " budget before a final response, but I could not read the recovery counter safely."
 	case "recovery_turn_failed":
-		return "I hit the " + label + " budget before a final response, and the automatic recovery turn failed."
+		return appendRecoveryDecisionVisibleText("I hit the "+label+" budget before a final response, and the automatic recovery turn failed.", decision)
 	default:
-		return fmt.Sprintf("I hit the %s budget repeatedly before I could produce a final response.\n\nI stopped after %d automatic recovery attempts in the same work scope. Please ask for a narrower next step or approve a smaller phase.", label, maxHops)
+		return appendRecoveryDecisionVisibleText(fmt.Sprintf("I hit the %s budget repeatedly before I could produce a final response.\n\nI stopped after %d automatic recovery attempts in the same work scope. Please ask for a narrower next step or approve a smaller phase.", label, maxHops), decision)
 	}
+}
+
+func appendRecoveryDecisionVisibleText(text string, decision recoveryDecision) string {
+	if next := recoveryDecisionVisibleText(decision); next != "" {
+		return strings.TrimSpace(text) + "\n\n" + next
+	}
+	return text
 }
 
 func turnBudgetRecoveryShortHash(value string) string {

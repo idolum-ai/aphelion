@@ -4,6 +4,8 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -210,6 +212,65 @@ func TestBudgetRecoveryDeliveryBlocksAfterThreeSameScopeAttempts(t *testing.T) {
 	}
 }
 
+func TestBudgetRecoveryFailureIssuesRecoveryDecisionForActiveLease(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.interactiveDMAssembler = &recordingInteractiveDMTurnAssembler{err: errors.New("begin turn run kind=interactive chat_id=9716: telegram ingress update telegram:primary/385539578 is not accepted or queued")}
+
+	key := session.SessionKey{ChatID: 9716, UserID: 0, Scope: telegramDMScopeRef(9716)}
+	msg := core.InboundMessage{
+		ChatID:    9716,
+		SenderID:  1001,
+		Text:      "finish the current phase",
+		MessageID: 46,
+	}
+	opState := budgetRecoveryTestOperationState()
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	cont := approvedContinuation("budget-recovery-active-lease", "workspace_write", time.Now().UTC(), []string{"inspect", "edit_workspace", "run_tests"}, []string{"git_push", "deploy", "restart"})
+	cont.RemainingTurns = 2
+	cont.ContinuationLease.RemainingTurns = 2
+	if err := store.UpdateContinuationState(key, cont); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	recovery := &core.TurnRecovery{
+		Kind:           core.TurnRecoveryTokenBudgetExhausted,
+		Recoverable:    true,
+		ReplanRequired: true,
+		Summary:        "Token budget exhausted before a final response.",
+		MaxAutoHops:    3,
+	}
+	scope, _ := rt.turnBudgetRecoveryScope(key, msg, &turn.Result{OperationState: opState})
+
+	if err := rt.runTurnBudgetRecoveryContinuation(context.Background(), key, msg, principalForBudgetRecoveryTest(1001), recovery, scope, 1, 3); err == nil {
+		t.Fatal("runTurnBudgetRecoveryContinuation() err = nil, want simulated failure")
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want one recovery decision notice", len(sender.sent))
+	}
+	text := sender.sent[0].Text
+	for _, want := range []string{"automatic recovery turn failed", "Durable state still shows active work", "active approved continuation", "continue under the active boundary"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("failure notice missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(strings.ToLower(text), "dead end") {
+		t.Fatalf("failure notice should not dead-end:\n%s", text)
+	}
+
+	events, err := store.LatestExecutionEventsBySession(key, 30)
+	if err != nil {
+		t.Fatalf("LatestExecutionEventsBySession() err = %v", err)
+	}
+	if !budgetRecoveryEventPayloadContains(events, core.ExecutionEventRecoveryIssued, "recovery_action", string(recoveryDecisionContinueUnderActiveLease)) {
+		t.Fatalf("events missing recovery decision action: %#v", events)
+	}
+}
+
 func TestInternalContinuationDetachesStaleTelegramIngress(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "internal recovered"
@@ -235,6 +296,30 @@ func TestInternalContinuationDetachesStaleTelegramIngress(t *testing.T) {
 	}
 }
 
+func TestRecoveryDecisionContinuesUnderActiveLease(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9717, UserID: 0, Scope: telegramDMScopeRef(9717)}
+	if err := store.UpdateOperationState(key, budgetRecoveryTestOperationState()); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	cont := approvedContinuation("recovery-decision-active", "workspace_write", time.Now().UTC(), []string{"inspect", "edit_workspace", "run_tests"}, []string{"deploy", "restart"})
+	if err := store.UpdateContinuationState(key, cont); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	decision := rt.recoveryDecisionForInterruption(key, "provider_failure", "status_503", time.Now().UTC())
+	if decision.Action != recoveryDecisionContinueUnderActiveLease || decision.Reason != "active_operation_and_active_lease" {
+		t.Fatalf("decision = %#v, want continue under active lease", decision)
+	}
+	if got := recoveryDecisionVisibleText(decision); !strings.Contains(got, "continue under the active boundary") || !strings.Contains(got, "inspect") {
+		t.Fatalf("visible decision text = %q", got)
+	}
+}
+
 func TestTurnMonitorIgnoresIngressForTurnAuthorization(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)
@@ -257,6 +342,31 @@ func TestTurnMonitorIgnoresIngressForTurnAuthorization(t *testing.T) {
 		t.Fatalf("monitor ingress = %q/%d, want detached", monitor.ingressSurface, monitor.ingressUpdateID)
 	}
 	monitor.Finish(monitor.Context(), nil)
+}
+
+func budgetRecoveryEventPayloadContains(events []session.ExecutionEvent, eventType string, key string, want string) bool {
+	for _, event := range events {
+		if event.EventType != eventType {
+			continue
+		}
+		payload := map[string]any{}
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			continue
+		}
+		if strings.TrimSpace(key) != "" && strings.TrimSpace(want) == strings.TrimSpace(stringValue(payload[key])) {
+			return true
+		}
+	}
+	return false
+}
+
+func stringValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	default:
+		return ""
+	}
 }
 
 func budgetRecoveryTestOperationState() session.OperationState {

@@ -171,6 +171,7 @@ func TestBuildGovernorPromptIncludesRecoveryApprovalAndMediaRoutingContracts(t *
 	got := BuildGovernorPrompt(GovernorRequest{})
 	for _, want := range []string{
 		"Token-budget, provider, queueing, or recovery failures are continuity events",
+		"Recovery diagnosis must end in one valid action",
 		"Completed, revoked, expired, stale, or merely similar approvals are not reusable authority",
 		"Consumed continuation or lease events are result evidence, not active authority",
 		"Explicit dirty/no-commit/no-push/no-deploy requests keep those actions outside current scope",
