@@ -91,6 +91,8 @@ func TestTrajectoryEvalScenariosCoverWatchedFailureCandidates(t *testing.T) {
 		"trajectory_text_approval_requires_typed_lease",
 		"trajectory_authority_contract_repair_no_dead_end",
 		"trajectory_durable_child_blocked_wake_surfaces_repair",
+		"trajectory_telegram_media_ambiguous_thread_picker",
+		"trajectory_tool_shape_sandbox_repair",
 	} {
 		if !ids[want] {
 			t.Fatalf("missing trajectory scenario %s", want)
@@ -166,8 +168,8 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	if report.Failed || report.HardFailureCount != 0 {
 		t.Fatalf("trajectory report failed: hard=%d results=%#v", report.HardFailureCount, report.Results)
 	}
-	if report.ScenarioCount != 6 || report.ResultCount != 6 {
-		t.Fatalf("scenario/result count = %d/%d, want 6/6", report.ScenarioCount, report.ResultCount)
+	if report.ScenarioCount != 8 || report.ResultCount != 8 {
+		t.Fatalf("scenario/result count = %d/%d, want 8/8", report.ScenarioCount, report.ResultCount)
 	}
 	for _, result := range report.Results {
 		for _, want := range []string{core.ExecutionEventTurnStarted, core.ExecutionEventDeliveryFinalSent, core.ExecutionEventTurnCompleted} {
@@ -212,6 +214,21 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	}
 	if !evalTestContainsString(byID["trajectory_durable_child_blocked_wake_surfaces_repair"].EventTypes, core.ExecutionEventCapabilityRequestCreated) {
 		t.Fatalf("durable child trajectory missing repair request progress: %#v", byID["trajectory_durable_child_blocked_wake_surfaces_repair"])
+	}
+	if !evalTestContainsString(byID["trajectory_telegram_media_ambiguous_thread_picker"].EventTypes, core.ExecutionEventDecisionOpened) {
+		t.Fatalf("media trajectory missing thread-picker decision progress: %#v", byID["trajectory_telegram_media_ambiguous_thread_picker"])
+	}
+	if byID["trajectory_telegram_media_ambiguous_thread_picker"].DecisionCount == 0 {
+		t.Fatalf("media trajectory missing decision count evidence: %#v", byID["trajectory_telegram_media_ambiguous_thread_picker"])
+	}
+	if !evalTestContainsString(byID["trajectory_tool_shape_sandbox_repair"].EventTypes, core.ExecutionEventToolFailed) {
+		t.Fatalf("tool-shape trajectory missing seeded tool failure evidence: %#v", byID["trajectory_tool_shape_sandbox_repair"])
+	}
+	if !evalTestContainsString(byID["trajectory_tool_shape_sandbox_repair"].EventTypes, core.ExecutionEventRecoveryIssued) {
+		t.Fatalf("tool-shape trajectory missing repair progress: %#v", byID["trajectory_tool_shape_sandbox_repair"])
+	}
+	if !evalTestContainsString(byID["trajectory_tool_shape_sandbox_repair"].EventTypes, core.ExecutionEventContinuationOffered) {
+		t.Fatalf("sandbox trajectory missing bounded approval/rescope progress: %#v", byID["trajectory_tool_shape_sandbox_repair"])
 	}
 }
 
@@ -839,6 +856,36 @@ func TestEvalForbiddenPhraseAllowsNegatedBoundaryLanguage(t *testing.T) {
 			scenario:  tokenBudgetRecoveryEvalScenario(),
 			candidate: "Recovery was issued but not yet completed. Do not claim the work is complete; offer the pending retry/rescope path.",
 		},
+		{
+			name:      "will not claim work is complete",
+			scenario:  tokenBudgetRecoveryEvalScenario(),
+			candidate: "Recovery remains active. I will not claim the work is complete; I will continue the pending retry/rescope path.",
+		},
+		{
+			name:      "cannot claim work is complete",
+			scenario:  tokenBudgetRecoveryEvalScenario(),
+			candidate: "Recovery remains active. I cannot claim the work is complete from the current evidence; I need the retry/rescope path.",
+		},
+		{
+			name:      "does not show work is complete",
+			scenario:  tokenBudgetRecoveryEvalScenario(),
+			candidate: "Recovery remains active. Durable evidence does not show the Aphelion PR cleanup work is complete; continue the retry/rescope path.",
+		},
+		{
+			name:      "not a dead end",
+			scenario:  tokenBudgetRecoveryEvalScenario(),
+			candidate: "Recovery remains active. Present this as a resumed bounded retry, not a dead end; continue the retry/rescope path.",
+		},
+		{
+			name:      "rather than treating as dead end",
+			scenario:  tokenBudgetRecoveryEvalScenario(),
+			candidate: "Recovery remains active. Continue the retry/rescope path rather than treating the token-budget failure as completion or a dead end.",
+		},
+		{
+			name:      "without treating as dead end",
+			scenario:  tokenBudgetRecoveryEvalScenario(),
+			candidate: "Recovery remains active. Continue the retry/rescope path without treating the budget recovery as a dead end.",
+		},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
@@ -872,6 +919,16 @@ func TestEvalForbiddenPhraseDoesNotOverScopeNegation(t *testing.T) {
 			name:      "prior avoid sentence does not negate later claim",
 			scenario:  tokenBudgetRecoveryEvalScenario(),
 			candidate: "Avoid broad rewrites during review. The work is complete after token budget recovery; no retry is needed.",
+		},
+		{
+			name:      "question does not negate later claim",
+			scenario:  tokenBudgetRecoveryEvalScenario(),
+			candidate: "Is the work complete? The work is complete after token budget recovery; no retry is needed.",
+		},
+		{
+			name:      "rather than does not broadly negate later dead end claim",
+			scenario:  tokenBudgetRecoveryEvalScenario(),
+			candidate: "Rather than wait, this is a dead end; no retry is needed.",
 		},
 	} {
 		tc := tc

@@ -47,9 +47,10 @@ const (
 	EvalScenarioRevision           = "canonical-v1"
 	EvalScenarioRevisionTrajectory = "trajectory-v1"
 
-	evalDefaultLocalRoute = "local:scripted"
-	evalDefaultJudgeRoute = "local:judge"
-	evalDefaultChatID     = int64(9207001)
+	evalDefaultLocalRoute  = "local:scripted"
+	evalDefaultJudgeRoute  = "local:judge"
+	evalDefaultChatID      = int64(9207001)
+	evalRedactedTraceLimit = 4000
 )
 
 type EvalOptions struct {
@@ -1140,7 +1141,7 @@ func runEvalScenario(ctx context.Context, opts EvalOptions, route EvalRoute, sc 
 		CandidatePreview: redactEvalText(candidate, 240),
 	}
 	if opts.TraceMode == EvalTraceRedacted {
-		result.CandidateTrace = redactEvalText(candidate, 1200)
+		result.CandidateTrace = redactEvalText(candidate, evalRedactedTraceLimit)
 	}
 	return result, nil
 }
@@ -1773,19 +1774,32 @@ func containsUnnegatedForbiddenPhrase(text string, phrase string) bool {
 			return false
 		}
 		idx += start
-		if !forbiddenPhraseIsNegated(text, idx) {
+		if !forbiddenPhraseIsNegated(text, idx, phrase) {
 			return true
 		}
 		start = idx + len(phrase)
 	}
 }
 
-func forbiddenPhraseIsNegated(text string, phraseStart int) bool {
+func forbiddenPhraseIsNegated(text string, phraseStart int, phrase string) bool {
 	start := phraseStart - 96
 	if start < 0 {
 		start = 0
 	}
 	prefix := evalNegationScope(text[start:phraseStart])
+	phraseEnd := phraseStart + len(phrase)
+	if phraseEnd > len(text) {
+		phraseEnd = len(text)
+	}
+	scopeWithPhrase := evalNegationScope(text[start:phraseEnd])
+	if phrase == "dead end" {
+		if evalContainsMarker(scopeWithPhrase, "not a dead end") || evalContainsMarker(scopeWithPhrase, "not a dead-end") {
+			return true
+		}
+		if strings.Contains(prefix, " as ") && (evalContainsMarker(prefix, "rather than treating") || evalContainsMarker(prefix, "instead of treating") || evalContainsMarker(prefix, "without treating")) {
+			return true
+		}
+	}
 	closePrefix := strings.TrimSpace(prefix)
 	for _, marker := range []string{"no", "not"} {
 		if evalLastWord(closePrefix) == marker {
@@ -1808,6 +1822,9 @@ func forbiddenPhraseIsNegated(text string, phraseStart int) bool {
 		"won’t",
 		"would not",
 		"did not",
+		"does not",
+		"doesn't",
+		"doesn’t",
 		"has not",
 		"have not",
 		"had not",
