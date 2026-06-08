@@ -407,7 +407,7 @@ func TestTrajectoryEvalDetectsAttributionMismatch(t *testing.T) {
 		t.Fatalf("scenario setup err = %v", err)
 	}
 	if err := appendEvalEvent(e, core.ExecutionEventDecisionOpened, "approval", "typed_lease_requested", map[string]any{
-		"actor_principal":     "durable_agent:image2",
+		"actor_principal":     "durable_agent:child-fixture",
 		"authority_principal": "operator",
 		"credited_principal":  "aphelion",
 	}); err != nil {
