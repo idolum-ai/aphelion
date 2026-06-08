@@ -295,6 +295,7 @@ type evalScenarioContext struct {
 	Candidate string
 	Events    []session.ExecutionEvent
 	Replies   []string
+	Snapshots []evalTrajectorySnapshot
 }
 
 func ListEvalScenarios(suite string) ([]EvalScenarioInfo, error) {
@@ -1091,6 +1092,9 @@ func runEvalScenario(ctx context.Context, opts EvalOptions, route EvalRoute, sc 
 	typedHard := []EvalFinding(nil)
 	if sc.Score != nil {
 		typedHard = append(typedHard, sc.Score(e)...)
+	}
+	if sc.Trajectory != nil {
+		typedHard = append(typedHard, trajectoryEvalFindings(e)...)
 	}
 	soft := softEvalFindings(candidate)
 	hard := append([]EvalFinding(nil), heuristic...)

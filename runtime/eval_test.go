@@ -186,14 +186,96 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	if byID["trajectory_budget_recovery_resumes_leased_work"].OperationStatus == "completed" {
 		t.Fatalf("budget trajectory marked complete: %#v", byID["trajectory_budget_recovery_resumes_leased_work"])
 	}
+	if strings.Contains(byID["trajectory_budget_recovery_resumes_leased_work"].CandidateTrace, "The token-budget recovery did not make the work complete. The approved lease is still the boundary") {
+		t.Fatalf("budget trajectory used old positive candidate verbatim:\n%s", byID["trajectory_budget_recovery_resumes_leased_work"].CandidateTrace)
+	}
+	if !evalTestContainsString(byID["trajectory_budget_recovery_resumes_leased_work"].EventTypes, core.ExecutionEventWorkExecutorStarted) {
+		t.Fatalf("budget trajectory missing local material progress: %#v", byID["trajectory_budget_recovery_resumes_leased_work"])
+	}
 	if byID["trajectory_completed_continuation_no_rerun"].Continuation != "approved" {
 		t.Fatalf("completed continuation status = %#v, want approved consumed lease evidence", byID["trajectory_completed_continuation_no_rerun"])
+	}
+	if !evalTestContainsString(byID["trajectory_completed_continuation_no_rerun"].EventTypes, core.ExecutionEventContinuationBoundaryReached) {
+		t.Fatalf("completed continuation missing no-rerun boundary event: %#v", byID["trajectory_completed_continuation_no_rerun"])
+	}
+	if !evalTestContainsString(byID["trajectory_text_approval_requires_typed_lease"].EventTypes, core.ExecutionEventDecisionOpened) {
+		t.Fatalf("text approval trajectory missing typed decision event: %#v", byID["trajectory_text_approval_requires_typed_lease"])
 	}
 	if !evalTestContainsString(byID["trajectory_authority_contract_repair_no_dead_end"].EventTypes, core.ExecutionEventContinuationCompileRepairExhausted) {
 		t.Fatalf("authority repair trajectory missing repair exhaustion evidence: %#v", byID["trajectory_authority_contract_repair_no_dead_end"])
 	}
+	if !evalTestContainsString(byID["trajectory_authority_contract_repair_no_dead_end"].EventTypes, core.ExecutionEventContinuationOffered) {
+		t.Fatalf("authority repair trajectory missing narrower approval progress: %#v", byID["trajectory_authority_contract_repair_no_dead_end"])
+	}
 	if !evalTestContainsString(byID["trajectory_durable_child_blocked_wake_surfaces_repair"].EventTypes, core.ExecutionEventDurableWakeFailed) {
 		t.Fatalf("durable child trajectory missing failed wake evidence: %#v", byID["trajectory_durable_child_blocked_wake_surfaces_repair"])
+	}
+	if !evalTestContainsString(byID["trajectory_durable_child_blocked_wake_surfaces_repair"].EventTypes, core.ExecutionEventCapabilityRequestCreated) {
+		t.Fatalf("durable child trajectory missing repair request progress: %#v", byID["trajectory_durable_child_blocked_wake_surfaces_repair"])
+	}
+}
+
+func TestTrajectoryEvalFailsRepeatedNoProgressSubject(t *testing.T) {
+	t.Parallel()
+
+	report, err := RunEvalSuite(context.Background(), EvalOptions{
+		Suite:       EvalSuiteTrajectory,
+		Mode:        EvalModeLive,
+		Subject:     EvalSubjectGovernor,
+		Rollouts:    1,
+		WorkDir:     t.TempDir(),
+		ScenarioIDs: []string{"trajectory_budget_recovery_resumes_leased_work"},
+		Routes: []EvalRoute{{
+			Name:     "stuck",
+			Provider: "test",
+			Model:    "stuck",
+			Subject:  &staticEvalProvider{content: "I will keep looking at this carefully."},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("RunEvalSuite(stuck trajectory) err = %v", err)
+	}
+	if !report.Failed || report.HardFailureCount == 0 {
+		t.Fatalf("report = %#v, want hard failure for no material progress", report)
+	}
+	if !evalTestHasFindingClass(report.Results[0].HardFailures, "trajectory_no_material_progress") &&
+		!evalTestHasFindingClass(report.Results[0].HardFailures, "trajectory_repeated_without_progress") {
+		t.Fatalf("hard failures = %#v, want state-based stuck finding", report.Results[0].HardFailures)
+	}
+}
+
+func TestTrajectoryEvalDetectsAttributionMismatch(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	key := session.SessionKey{ChatID: 9917001, UserID: 0, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "9917001"}}
+	e := &evalScenarioContext{
+		Scenario: trajectoryTextApprovalScenario(),
+		Key:      key,
+		Store:    store,
+		Now:      time.Unix(1700000000, 0).UTC(),
+	}
+	if err := e.Scenario.Setup(e); err != nil {
+		t.Fatalf("scenario setup err = %v", err)
+	}
+	if err := appendEvalEvent(e, core.ExecutionEventDecisionOpened, "approval", "typed_lease_requested", map[string]any{
+		"actor_principal":     "durable_agent:image2",
+		"authority_principal": "operator",
+		"credited_principal":  "aphelion",
+	}); err != nil {
+		t.Fatalf("append attribution event err = %v", err)
+	}
+	e.Events, err = store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	findings := trajectoryAttributionFindings(e)
+	if !evalTestHasFindingClass(findings, "trajectory_action_principal_mismatch") || !evalTestHasFindingClass(findings, "trajectory_action_misattributed") {
+		t.Fatalf("findings = %#v, want principal mismatch and misattribution", findings)
 	}
 }
 
