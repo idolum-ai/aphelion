@@ -36,6 +36,25 @@ func TestEvalListCommandRendersJSON(t *testing.T) {
 	}
 }
 
+func TestEvalListCommandSupportsTrajectorySuite(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	if err := runEvalCommandWithDeps([]string{"list", "--suite", "trajectory", "--format", "json"}, &out); err != nil {
+		t.Fatalf("eval list trajectory err = %v", err)
+	}
+	var decoded struct {
+		Suite     string                        `json:"suite"`
+		Scenarios []aphruntime.EvalScenarioInfo `json:"scenarios"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode trajectory list JSON: %v\n%s", err, out.String())
+	}
+	if decoded.Suite != "trajectory" || len(decoded.Scenarios) != 6 {
+		t.Fatalf("decoded trajectory list = %#v", decoded)
+	}
+}
+
 func TestEvalRunCommandLocalRendersJSON(t *testing.T) {
 	t.Parallel()
 

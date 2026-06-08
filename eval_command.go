@@ -646,7 +646,7 @@ func evalReportFailureError(report aphruntime.EvalReport) error {
 }
 
 func renderEvalCommandHelp(note string) string {
-	lines := []string{"Aphelion eval", "Usage:", "  aphelion eval list [--suite canonical] [--format human|kv|json]", "  aphelion eval run [--suite canonical] [--mode local|live] [--subject eval|governor] [--rollouts N] [--routes configured|provider:model,...] [--scenario id[,id]] [--scoring deterministic|judge] [--judge-routes configured|provider:model,...] [--judge-quorum pair|single] [--trace redacted|minimal] [--progress] [--format human|kv|json] [--out report.json]", "  aphelion eval compare --before baseline.json --after branch.json [--format markdown|json] [--out impact.md]", "  aphelion eval gate --before base1.json,base2.json --after branch1.json,branch2.json [--format markdown|json] [--out gate.md]", ""}
+	lines := []string{"Aphelion eval", "Usage:", "  aphelion eval list [--suite canonical|trajectory] [--format human|kv|json]", "  aphelion eval run [--suite canonical|trajectory] [--mode local|live] [--subject eval|governor] [--rollouts N] [--routes configured|provider:model,...] [--scenario id[,id]] [--scoring deterministic|judge] [--judge-routes configured|provider:model,...] [--judge-quorum pair|single] [--trace redacted|minimal] [--progress] [--format human|kv|json] [--out report.json]", "  aphelion eval compare --before baseline.json --after branch.json [--format markdown|json] [--out impact.md]", "  aphelion eval gate --before base1.json,base2.json --after branch1.json,branch2.json [--format markdown|json] [--out gate.md]", ""}
 	if note = strings.TrimSpace(note); note != "" {
 		lines = append([]string{note, ""}, lines...)
 	}

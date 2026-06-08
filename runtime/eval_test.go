@@ -70,6 +70,34 @@ func TestCanonicalEvalScenariosCoverSearchSpace(t *testing.T) {
 	}
 }
 
+func TestTrajectoryEvalScenariosCoverWatchedFailureCandidates(t *testing.T) {
+	t.Parallel()
+
+	scenarios, err := ListEvalScenarios(EvalSuiteTrajectory)
+	if err != nil {
+		t.Fatalf("ListEvalScenarios(trajectory) err = %v", err)
+	}
+	ids := make(map[string]bool, len(scenarios))
+	for _, sc := range scenarios {
+		ids[sc.ID] = true
+		if len(sc.FailureFixtures) == 0 {
+			t.Fatalf("trajectory scenario %s has no failure fixtures", sc.ID)
+		}
+	}
+	for _, want := range []string{
+		"trajectory_budget_recovery_resumes_leased_work",
+		"trajectory_restart_watchdog_rehydrates_active_phase",
+		"trajectory_completed_continuation_no_rerun",
+		"trajectory_text_approval_requires_typed_lease",
+		"trajectory_authority_contract_repair_no_dead_end",
+		"trajectory_durable_child_blocked_wake_surfaces_repair",
+	} {
+		if !ids[want] {
+			t.Fatalf("missing trajectory scenario %s", want)
+		}
+	}
+}
+
 func TestRunEvalSuiteLocalCanonicalPassesWithTypedEvidence(t *testing.T) {
 	t.Parallel()
 
@@ -115,6 +143,57 @@ func TestRunEvalSuiteLocalCanonicalPassesWithTypedEvidence(t *testing.T) {
 	tailnet := byID["tailnet_private_content_metadata_only"]
 	if tailnet.Pass != true {
 		t.Fatalf("tailnet/private-content result = %#v, want pass", tailnet)
+	}
+}
+
+func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T) {
+	t.Parallel()
+
+	report, err := RunEvalSuite(context.Background(), EvalOptions{
+		Suite:    EvalSuiteTrajectory,
+		Mode:     EvalModeLocal,
+		Subject:  EvalSubjectGovernor,
+		Rollouts: 1,
+		Seed:     42,
+		WorkDir:  t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("RunEvalSuite(trajectory) err = %v", err)
+	}
+	if report.ScenarioRevision != EvalScenarioRevisionTrajectory {
+		t.Fatalf("scenario revision = %s, want %s", report.ScenarioRevision, EvalScenarioRevisionTrajectory)
+	}
+	if report.Failed || report.HardFailureCount != 0 {
+		t.Fatalf("trajectory report failed: hard=%d results=%#v", report.HardFailureCount, report.Results)
+	}
+	if report.ScenarioCount != 6 || report.ResultCount != 6 {
+		t.Fatalf("scenario/result count = %d/%d, want 6/6", report.ScenarioCount, report.ResultCount)
+	}
+	for _, result := range report.Results {
+		for _, want := range []string{core.ExecutionEventTurnStarted, core.ExecutionEventDeliveryFinalSent, core.ExecutionEventTurnCompleted} {
+			if !evalTestContainsString(result.EventTypes, want) {
+				t.Fatalf("result %s event types = %#v, missing %s", result.ScenarioID, result.EventTypes, want)
+			}
+		}
+		if !strings.Contains(result.CandidateTrace, "turn_1_assistant") || !strings.Contains(result.CandidateTrace, "turn_2_assistant") {
+			t.Fatalf("trajectory result %s missing multi-turn transcript:\n%s", result.ScenarioID, result.CandidateTrace)
+		}
+	}
+	byID := map[string]EvalScenarioResult{}
+	for _, result := range report.Results {
+		byID[result.ScenarioID] = result
+	}
+	if byID["trajectory_budget_recovery_resumes_leased_work"].OperationStatus == "completed" {
+		t.Fatalf("budget trajectory marked complete: %#v", byID["trajectory_budget_recovery_resumes_leased_work"])
+	}
+	if byID["trajectory_completed_continuation_no_rerun"].Continuation != "approved" {
+		t.Fatalf("completed continuation status = %#v, want approved consumed lease evidence", byID["trajectory_completed_continuation_no_rerun"])
+	}
+	if !evalTestContainsString(byID["trajectory_authority_contract_repair_no_dead_end"].EventTypes, core.ExecutionEventContinuationCompileRepairExhausted) {
+		t.Fatalf("authority repair trajectory missing repair exhaustion evidence: %#v", byID["trajectory_authority_contract_repair_no_dead_end"])
+	}
+	if !evalTestContainsString(byID["trajectory_durable_child_blocked_wake_surfaces_repair"].EventTypes, core.ExecutionEventDurableWakeFailed) {
+		t.Fatalf("durable child trajectory missing failed wake evidence: %#v", byID["trajectory_durable_child_blocked_wake_surfaces_repair"])
 	}
 }
 
@@ -592,6 +671,24 @@ func TestCanonicalEvalSyntheticFailureFixturesTripHardFailures(t *testing.T) {
 	t.Parallel()
 
 	for _, sc := range canonicalEvalScenarios() {
+		sc := sc
+		for name, candidate := range sc.FailureFixtures {
+			name, candidate := name, candidate
+			t.Run(sc.ID+"/"+name, func(t *testing.T) {
+				t.Parallel()
+				failures := deterministicEvalFailures(sc, candidate)
+				if len(failures) == 0 {
+					t.Fatalf("fixture did not trip hard failure: %q", candidate)
+				}
+			})
+		}
+	}
+}
+
+func TestTrajectoryEvalSyntheticFailureFixturesTripHardFailures(t *testing.T) {
+	t.Parallel()
+
+	for _, sc := range trajectoryEvalScenarios() {
 		sc := sc
 		for name, candidate := range sc.FailureFixtures {
 			name, candidate := name, candidate
