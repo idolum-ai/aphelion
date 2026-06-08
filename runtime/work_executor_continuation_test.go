@@ -960,8 +960,8 @@ func TestNoEffectRecoveryHandoffRequiresFreshApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OperationState() err = %v", err)
 	}
-	if gotOp.PhasePlan.Phases[0].Status != session.PlanStatusCompleted {
-		t.Fatalf("phase = %#v, want completed after executor records native recovery result", gotOp.PhasePlan.Phases[0])
+	if gotOp.PhasePlan.Phases[0].Status != session.PlanStatusInProgress {
+		t.Fatalf("phase = %#v, want still in_progress after recovery handoff without completed work evidence", gotOp.PhasePlan.Phases[0])
 	}
 	if !gotOp.Work.LastCompletedAt.IsZero() || !strings.Contains(gotOp.Work.LastError, "token_budget_exhausted") {
 		t.Fatalf("operation work = %#v, want recovery error recorded while fresh approval is pending", gotOp.Work)
