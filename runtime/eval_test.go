@@ -87,6 +87,7 @@ func TestTrajectoryEvalScenariosCoverWatchedFailureCandidates(t *testing.T) {
 	}
 	for _, want := range []string{
 		"trajectory_budget_recovery_resumes_leased_work",
+		"trajectory_terminal_provider_failure_preserves_recovery",
 		"trajectory_restart_watchdog_rehydrates_active_phase",
 		"trajectory_completed_continuation_no_rerun",
 		"trajectory_text_approval_requires_typed_lease",
@@ -169,8 +170,8 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	if report.Failed || report.HardFailureCount != 0 {
 		t.Fatalf("trajectory report failed: hard=%d results=%#v", report.HardFailureCount, report.Results)
 	}
-	if report.ScenarioCount != 8 || report.ResultCount != 8 {
-		t.Fatalf("scenario/result count = %d/%d, want 8/8", report.ScenarioCount, report.ResultCount)
+	if report.ScenarioCount != 9 || report.ResultCount != 9 {
+		t.Fatalf("scenario/result count = %d/%d, want 9/9", report.ScenarioCount, report.ResultCount)
 	}
 	for _, result := range report.Results {
 		for _, want := range []string{core.ExecutionEventTurnStarted, core.ExecutionEventDeliveryFinalSent, core.ExecutionEventTurnCompleted} {
@@ -194,6 +195,18 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	}
 	if !evalTestContainsString(byID["trajectory_budget_recovery_resumes_leased_work"].EventTypes, core.ExecutionEventWorkExecutorStarted) {
 		t.Fatalf("budget trajectory missing local material progress: %#v", byID["trajectory_budget_recovery_resumes_leased_work"])
+	}
+	providerFailure := byID["trajectory_terminal_provider_failure_preserves_recovery"]
+	if providerFailure.OperationStatus != string(session.OperationStatusActive) || providerFailure.Continuation != string(session.ContinuationStatusApproved) {
+		t.Fatalf("provider-failure trajectory state = %#v, want active operation with approved continuation", providerFailure)
+	}
+	if strings.Contains(providerFailure.CandidateTrace, "The provider failure exhausted this turn, but the durable state still records active leased work") {
+		t.Fatalf("provider-failure trajectory used positive candidate verbatim:\n%s", providerFailure.CandidateTrace)
+	}
+	for _, want := range []string{core.ExecutionEventProviderAttemptFailed, core.ExecutionEventRecoveryResume, core.ExecutionEventWorkExecutorStarted} {
+		if !evalTestContainsString(providerFailure.EventTypes, want) {
+			t.Fatalf("provider-failure trajectory missing %s evidence: %#v", want, providerFailure)
+		}
 	}
 	if byID["trajectory_completed_continuation_no_rerun"].Continuation != "approved" {
 		t.Fatalf("completed continuation status = %#v, want approved consumed lease evidence", byID["trajectory_completed_continuation_no_rerun"])
