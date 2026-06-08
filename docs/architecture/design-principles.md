@@ -122,6 +122,10 @@ when evidence is absent.
 Continuations are valuable when they preserve intent and evidence, not when they
 create ritual approval churn.
 
+Aphelion-shaped self-healing is not "keep trying forever." It should continue
+when durable state and authority support continuation; otherwise it should
+repair, rescope, park, or ask through the right surface.
+
 ### Fail closed, but stay useful
 
 Provider failures, stale callbacks, missing durable children, expired leases,
