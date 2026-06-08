@@ -667,6 +667,7 @@ func renderEvalCommandHelp(note string) string {
 		"Local mode uses deterministic scripted providers and simulated external effects.",
 		"Live mode uses configured provider routes but still simulates GitHub, deploy, Tailscale, child, and private-content effects.",
 		"--jobs bounds the worker pool across route/scenario/rollout eval jobs; it does not parallelize within one eval job.",
+		"Use --jobs > 1 only with concurrency-safe provider routes/clients and stable credentials.",
 	)
 	return strings.Join(lines, "\n")
 }

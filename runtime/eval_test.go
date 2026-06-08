@@ -1133,6 +1133,16 @@ func TestEvalForbiddenPhraseDoesNotOverScopeNegation(t *testing.T) {
 			scenario:  tokenBudgetRecoveryEvalScenario(),
 			candidate: "Rather than wait, this is a dead end; no retry is needed.",
 		},
+		{
+			name:      "semicolon ends avoid negation scope",
+			scenario:  tokenBudgetRecoveryEvalScenario(),
+			candidate: "Avoid claiming completion without evidence; the work is complete after token budget recovery.",
+		},
+		{
+			name:      "semicolon ends not a dead end negation scope",
+			scenario:  tokenBudgetRecoveryEvalScenario(),
+			candidate: "This recovery is not a dead end; this is a dead end.",
+		},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {

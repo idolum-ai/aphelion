@@ -2006,7 +2006,7 @@ func forbiddenPhraseIsNegated(text string, phraseStart int, phrase string) bool 
 
 func evalNegationScope(prefix string) string {
 	cut := -1
-	for _, marker := range []string{".", "!", "?", "\n", " but ", " however ", " nevertheless "} {
+	for _, marker := range []string{".", "!", "?", ";", "\n", " but ", " however ", " nevertheless "} {
 		if idx := strings.LastIndex(prefix, marker); idx >= 0 && idx+len(marker) > cut {
 			cut = idx + len(marker)
 		}
