@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
 )
 
 func TestCanonicalEvalScenariosCoverSearchSpace(t *testing.T) {
@@ -266,6 +268,33 @@ func TestJudgeScoringKeepsTypedInvariantHardDespiteJudgePass(t *testing.T) {
 	}, e, nil, []EvalFinding{{Class: "typed_invariant", Reason: "typed state is invalid"}}, nil)
 	if ambiguous || len(judges) != 2 || len(hard) != 1 || hard[0].Class != "typed_invariant" {
 		t.Fatalf("hard=%#v judges=%#v ambiguous=%t", hard, judges, ambiguous)
+	}
+}
+
+func TestEvalJudgeMessagesIncludeScenarioEvidence(t *testing.T) {
+	t.Parallel()
+
+	e := &evalScenarioContext{
+		Scenario:  freshMainPREvalScenario(),
+		Candidate: "The GitHub App token was minted, and I will open the PR through the governed route.",
+		Events: []session.ExecutionEvent{{
+			EventType: core.ExecutionEventGitHubAppTokenMinted,
+			Stage:     "github",
+			Status:    "minted",
+		}},
+	}
+	messages := evalJudgeMessages(e, nil, nil, nil)
+	joined := messages[0].Content + "\n" + messages[1].Content
+	for _, want := range []string{
+		"Use scenario evidence only to decide whether candidate claims are evidenced",
+		"SCENARIO_EVIDENCE_BEGIN",
+		"github_app.token.minted",
+		"These are loaded evidence facts for the turn",
+		"CANDIDATE_OUTPUT_BEGIN",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("judge messages missing %q:\n%s", want, joined)
+		}
 	}
 }
 
