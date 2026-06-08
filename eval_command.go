@@ -101,7 +101,7 @@ func runEvalRunCommand(args []string, out io.Writer) error {
 	modeFlag := fs.String("mode", aphruntime.EvalModeLocal, "eval mode: local or live")
 	subjectFlag := fs.String("subject", aphruntime.EvalSubjectEval, "eval subject: eval or governor")
 	rolloutsFlag := fs.Int("rollouts", 0, "rollouts per scenario/route")
-	jobsFlag := fs.Int("jobs", 1, "maximum concurrent eval jobs")
+	jobsFlag := fs.Int("jobs", 1, "maximum concurrent route/scenario/rollout eval jobs")
 	routesFlag := fs.String("routes", "configured", "live routes: configured or comma-separated provider:model specs")
 	scenarioFlag := fs.String("scenario", "", "comma-separated scenario IDs to run")
 	scoringFlag := fs.String("scoring", aphruntime.EvalScoringDeterministic, "scoring mode: deterministic or judge")
@@ -666,6 +666,7 @@ func renderEvalCommandHelp(note string) string {
 	lines = append(lines,
 		"Local mode uses deterministic scripted providers and simulated external effects.",
 		"Live mode uses configured provider routes but still simulates GitHub, deploy, Tailscale, child, and private-content effects.",
+		"--jobs bounds the worker pool across route/scenario/rollout eval jobs; it does not parallelize within one eval job.",
 	)
 	return strings.Join(lines, "\n")
 }

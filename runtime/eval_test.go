@@ -341,7 +341,6 @@ func TestRunEvalSuiteJobsPreservesSerialOrderAndPressure(t *testing.T) {
 }
 
 func TestRunEvalSuiteJobsBoundsLiveConcurrency(t *testing.T) {
-	t.Parallel()
 
 	provider := &blockingEvalProvider{
 		content: tokenBudgetRecoveryEvalScenario().PositiveCandidate,
