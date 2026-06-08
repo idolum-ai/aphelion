@@ -409,6 +409,24 @@ func TestGateEvalReportsRequiresPairedStableImprovement(t *testing.T) {
 	}
 }
 
+func TestGateEvalReportsPassesCleanBaselineStability(t *testing.T) {
+	t.Parallel()
+
+	before := evalGateReportFixture(0, 0, 0, "")
+	after := evalGateReportFixture(0, 0, 0, "")
+	gate, err := GateEvalReports([]EvalReport{before}, []EvalReport{after})
+	if err != nil {
+		t.Fatalf("GateEvalReports() err = %v", err)
+	}
+	if !gate.Passed || !gate.StabilityOnly || len(gate.Reasons) != 0 {
+		t.Fatalf("gate = %#v, want clean-baseline stability pass", gate)
+	}
+	markdown := RenderEvalGateMarkdown(gate)
+	if !strings.Contains(markdown, "Eval Stability Gate: pass") || !strings.Contains(markdown, "clean-baseline stability check") {
+		t.Fatalf("gate markdown missing stability note:\n%s", markdown)
+	}
+}
+
 func TestGateEvalReportsFailsProviderOrScenarioRegression(t *testing.T) {
 	t.Parallel()
 

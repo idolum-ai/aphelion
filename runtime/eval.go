@@ -219,6 +219,7 @@ type EvalScenarioDelta struct {
 type EvalGateReport struct {
 	Passed               bool                    `json:"passed"`
 	Reasons              []string                `json:"reasons,omitempty"`
+	StabilityOnly        bool                    `json:"stability_only,omitempty"`
 	PairCount            int                     `json:"pair_count"`
 	Before               EvalComparisonSummary   `json:"before"`
 	After                EvalComparisonSummary   `json:"after"`
@@ -525,7 +526,9 @@ func GateEvalReports(beforeReports []EvalReport, afterReports []EvalReport) (Eva
 			report.Reasons = append(report.Reasons, fmt.Sprintf("pair %d ambiguous results regressed: %d -> %d", i+1, beforeReports[i].AmbiguousCount, afterReports[i].AmbiguousCount))
 		}
 	}
-	if after.HardFailureRate >= before.HardFailureRate {
+	if before.HardFailureCount == 0 {
+		report.StabilityOnly = true
+	} else if after.HardFailureRate >= before.HardFailureRate {
 		report.Reasons = append(report.Reasons, fmt.Sprintf("aggregate hard-failure rate did not improve: %.2f%% -> %.2f%%", before.HardFailureRate*100, after.HardFailureRate*100))
 	}
 	if after.ProviderFailureCount > before.ProviderFailureCount {
@@ -561,6 +564,9 @@ func RenderEvalGateMarkdown(report EvalGateReport) string {
 	fmt.Fprintf(&b, "| Provider failures | %d | %d | %+d |\n", report.Before.ProviderFailureCount, report.After.ProviderFailureCount, report.ProviderFailureDelta)
 	fmt.Fprintf(&b, "| Ambiguous results | %d | %d | %+d |\n\n", report.Before.AmbiguousCount, report.After.AmbiguousCount, report.AmbiguousDelta)
 	fmt.Fprintf(&b, "Context: suite `%s`, subject `%s`, scenario revision `%s`, rollouts `%d`, routes `%d`.\n\n", report.After.Suite, report.After.SubjectMode, report.After.ScenarioRevision, report.After.Rollouts, report.After.RouteCount)
+	if report.StabilityOnly && report.Passed {
+		fmt.Fprintf(&b, "Gate mode: clean-baseline stability check; no hard-failure improvement was available, so the gate required no hard, provider, ambiguous, or scenario regressions.\n\n")
+	}
 	if len(report.Reasons) > 0 {
 		fmt.Fprintf(&b, "### Gate Findings\n\n")
 		for _, reason := range report.Reasons {
