@@ -141,6 +141,9 @@ on live stochastic evidence:
 aphelion eval run --suite canonical --mode local --subject governor --format human
 ```
 
+Use `--jobs > 1` only when every live provider route/client and credential
+source used by the run is concurrency-safe and stable.
+
 When a branch is intended to change model behavior, compare live baseline and
 branch reports with the same suite, routes, seeds, scoring mode, and rollouts,
 then gate the paired reports:

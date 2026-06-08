@@ -666,6 +666,7 @@ func renderEvalCommandHelp(note string) string {
 	lines = append(lines,
 		"Local mode uses deterministic scripted providers and simulated external effects.",
 		"Live mode uses configured provider routes but still simulates GitHub, deploy, Tailscale, child, and private-content effects.",
+		"Use --jobs > 1 only with concurrency-safe provider routes/clients and stable credentials.",
 	)
 	return strings.Join(lines, "\n")
 }
