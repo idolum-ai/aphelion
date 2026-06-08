@@ -55,18 +55,20 @@ const (
 )
 
 type EvalOptions struct {
-	Suite           string
-	Mode            string
-	Subject         string
-	Rollouts        int
-	Routes          []EvalRoute
-	ScenarioIDs     []string
-	Scoring         string
+	Suite       string
+	Mode        string
+	Subject     string
+	Rollouts    int
+	Routes      []EvalRoute
+	ScenarioIDs []string
+	Scoring     string
+	// Jobs bounds the worker pool across route/scenario/rollout eval jobs.
+	// It does not create parallel provider calls within a single eval job.
+	Jobs            int
 	JudgeRoutes     []EvalRoute
 	JudgeQuorum     string
 	TraceMode       string
 	ProviderRetries int
-	Jobs            int
 	Progress        func(EvalProgress)
 	Now             time.Time
 	Seed            int64
@@ -453,31 +455,21 @@ func runEvalJobs(ctx context.Context, opts EvalOptions, jobs []evalRunJob) []eva
 	if workers > len(jobs) {
 		workers = len(jobs)
 	}
-	jobCh := make(chan evalRunJob)
 	outcomeCh := make(chan evalRunJobOutcome, len(jobs))
 	var wg sync.WaitGroup
 	for worker := 0; worker < workers; worker++ {
 		wg.Add(1)
-		go func() {
+		go func(worker int) {
 			defer wg.Done()
-			for job := range jobCh {
+			for index := worker; index < len(jobs); index += workers {
+				if err := ctx.Err(); err != nil {
+					return
+				}
+				job := jobs[index]
 				outcomeCh <- runEvalJob(ctx, opts, job, len(jobs))
 			}
-		}()
+		}(worker)
 	}
-	go func() {
-		defer close(jobCh)
-		for _, job := range jobs {
-			if err := ctx.Err(); err != nil {
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case jobCh <- job:
-			}
-		}
-	}()
 	go func() {
 		wg.Wait()
 		close(outcomeCh)
