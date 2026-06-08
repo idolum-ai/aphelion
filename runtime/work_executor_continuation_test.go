@@ -785,7 +785,7 @@ func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
 	}
 }
 
-func TestNoEffectRecoveryHandoffRestoresApprovedContinuation(t *testing.T) {
+func TestNoEffectRecoveryHandoffRequiresFreshApproval(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -889,31 +889,31 @@ func TestNoEffectRecoveryHandoffRestoresApprovedContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ContinuationState() err = %v", err)
 	}
-	if got.Status != session.ContinuationStatusApproved || got.RemainingTurns != 1 || got.ContinuationLease.Status != session.ContinuationLeaseStatusActive || got.ContinuationLease.RemainingTurns != 1 {
-		t.Fatalf("continuation = %#v, want approved lease restored for recovery", got)
+	if got.Status != session.ContinuationStatusIdle || got.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed || got.ContinuationLease.RemainingTurns != 0 {
+		t.Fatalf("continuation = %#v, want consumed lease awaiting fresh approval after recovery", got)
 	}
 	gotOp, err := store.OperationState(key)
 	if err != nil {
 		t.Fatalf("OperationState() err = %v", err)
 	}
-	if gotOp.PhasePlan.Phases[0].Status != session.PlanStatusInProgress {
-		t.Fatalf("phase = %#v, want not completed after no-effect recovery handoff", gotOp.PhasePlan.Phases[0])
+	if gotOp.PhasePlan.Phases[0].Status != session.PlanStatusCompleted {
+		t.Fatalf("phase = %#v, want completed after executor records native recovery result", gotOp.PhasePlan.Phases[0])
 	}
 	if !gotOp.Work.LastCompletedAt.IsZero() || !strings.Contains(gotOp.Work.LastError, "token_budget_exhausted") {
-		t.Fatalf("operation work = %#v, want recovery handoff recorded without completion", gotOp.Work)
+		t.Fatalf("operation work = %#v, want recovery error recorded while fresh approval is pending", gotOp.Work)
 	}
 	sender.mu.Lock()
 	inlineCount := len(sender.inline)
 	sender.mu.Unlock()
 	if inlineCount != 0 {
-		t.Fatalf("inline count = %d, want no fresh approval prompt", inlineCount)
+		t.Fatalf("inline count = %d, want no silent lease restore prompt", inlineCount)
 	}
 	events, err := store.ExecutionEventsBySession(key, 0, 100)
 	if err != nil {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
 	}
-	if !hasExecutionEvent(events, core.ExecutionEventRecoveryIssued) {
-		t.Fatalf("events = %#v, want lease restoration recovery event", events)
+	if hasExecutionEvent(events, core.ExecutionEventRecoveryIssued) {
+		t.Fatalf("events = %#v, want no silent lease restoration recovery event", events)
 	}
 	var boundary session.ExecutionEvent
 	for _, event := range events {
@@ -925,8 +925,8 @@ func TestNoEffectRecoveryHandoffRestoresApprovedContinuation(t *testing.T) {
 		t.Fatalf("events = %#v, want continuation boundary", events)
 	}
 	payload := executionEventPayload(boundary.PayloadJSON)
-	if payloadString(payload, "boundary_reason") != "recovery_pending" {
-		t.Fatalf("boundary payload = %#v, want recovery_pending", payload)
+	if payloadString(payload, "boundary_reason") != "not_approved" {
+		t.Fatalf("boundary payload = %#v, want not_approved after consumed recovery lease", payload)
 	}
 }
 

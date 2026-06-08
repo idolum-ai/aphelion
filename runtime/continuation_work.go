@@ -400,7 +400,6 @@ func (r *Runtime) runApprovedWorkContinuation(ctx context.Context, actor princip
 	opState, _ := r.store.OperationState(key)
 	opState = session.NormalizeOperationState(opState)
 	req := r.workRequestForContinuation(key, key.ChatID, executionActor, state, opState)
-	priorState := state
 	state = continuationStateAfterLeaseTurnConsumed(state, time.Now().UTC())
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return err
@@ -448,54 +447,11 @@ func (r *Runtime) runApprovedWorkContinuation(ctx context.Context, actor princip
 	if artifact.Ref != "" {
 		payload["artifact_ref"] = artifact.Ref
 	}
-	if restored, restoreErr := r.restoreApprovedContinuationAfterNoEffectRecovery(key, priorState, result, time.Now().UTC()); restoreErr != nil {
-		return restoreErr
-	} else if restored {
-		payload["lease_restored"] = true
-	}
 	r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorSucceeded, "work", "succeeded", payload, time.Now().UTC())
 	if err := r.deliverWorkResult(ctx, key, result, artifact); err != nil {
 		return err
 	}
 	return nil
-}
-
-func (r *Runtime) restoreApprovedContinuationAfterNoEffectRecovery(key session.SessionKey, prior session.ContinuationState, result WorkResult, now time.Time) (bool, error) {
-	if r == nil || r.store == nil || !workResultIsNoEffectRecoveryHandoff(result) {
-		return false, nil
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	now = now.UTC()
-	restored := session.NormalizeContinuationState(prior)
-	if restored.Status != session.ContinuationStatusApproved ||
-		restored.RemainingTurns <= 0 ||
-		!restored.ContinuationLease.ActiveAt(now) {
-		return false, nil
-	}
-	restored.UpdatedAt = now
-	restored.ContinuationLease.UpdatedAt = now
-	if err := r.store.UpdateContinuationState(key, restored); err != nil {
-		return false, err
-	}
-	payload := continuationExecutionPayload(restored)
-	payload["reason"] = "no_effect_recovery_handoff"
-	payload["lease_restored"] = true
-	payload["recovery_kind"] = strings.TrimSpace(string(result.Recovery.Kind))
-	r.recordExecutionEvent(key, core.ExecutionEventRecoveryIssued, "continuation", "lease_restored", payload, now)
-	return true, nil
-}
-
-func workResultIsNoEffectRecoveryHandoff(result WorkResult) bool {
-	if result.Recovery == nil || !result.Recovery.Recoverable || !result.Recovery.ReplanRequired {
-		return false
-	}
-	return !result.SideEffects &&
-		len(result.ChangedFiles) == 0 &&
-		len(result.Commands) == 0 &&
-		len(result.CodexEvents) == 0 &&
-		len(result.ApprovalLog) == 0
 }
 
 func (r *Runtime) warnWorkExecutorFallback(ctx context.Context, key session.SessionKey, status WorkExecutorStatus) error {
