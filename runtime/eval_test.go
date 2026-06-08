@@ -103,23 +103,82 @@ func TestTrajectoryEvalScenariosCoverWatchedFailureCandidates(t *testing.T) {
 			t.Fatalf("missing trajectory scenario %s", want)
 		}
 	}
-	seeded := false
+	seededByID := map[string]evalScenario{}
 	for _, sc := range trajectoryEvalScenarios() {
 		if sc.Trajectory != nil && strings.TrimSpace(sc.Trajectory.SessionSeed) != "" {
-			seeded = true
-			if strings.Contains(sc.Trajectory.SessionSeedExcerpt, "6313146") || strings.Contains(sc.Trajectory.SessionSeedExcerpt, "385539578") {
-				t.Fatalf("trajectory scenario %s leaked raw live IDs in session seed excerpt: %s", sc.ID, sc.Trajectory.SessionSeedExcerpt)
-			}
+			seededByID[sc.ID] = sc
+			assertTrajectorySessionSeedRedacted(t, sc)
 		}
 	}
-	if !seeded {
-		t.Fatal("trajectory suite has no explicit watched-session seeded fixture")
+	if len(seededByID) < 4 {
+		t.Fatalf("trajectory suite has %d explicit watched-session seeded fixtures, want at least 4", len(seededByID))
 	}
-	ingress := trajectoryIngressRejectionRecoveryScenario()
-	if ingress.Trajectory == nil ||
-		!strings.Contains(ingress.Trajectory.SessionSeed, "session-log:") ||
-		!strings.Contains(ingress.Trajectory.SessionSeedExcerpt, "not accepted or queued") {
-		t.Fatalf("ingress trajectory seed = %#v, want redacted watched-session source", ingress.Trajectory)
+	for _, tc := range []struct {
+		id              string
+		seedContains    string
+		excerptContains string
+	}{
+		{
+			id:              "trajectory_budget_recovery_resumes_leased_work",
+			seedContains:    "token-budget-exhausted-before-final-response",
+			excerptContains: "Token budget exhausted before final response",
+		},
+		{
+			id:              "trajectory_terminal_provider_failure_preserves_recovery",
+			seedContains:    "live-eval-provider-timeouts",
+			excerptContains: "provider 503/timeout",
+		},
+		{
+			id:              "trajectory_ingress_rejection_preserves_leased_recovery",
+			seedContains:    "budget-recovery-ingress-rejected",
+			excerptContains: "not accepted or queued",
+		},
+		{
+			id:              "trajectory_compaction_relatched_goal_without_user_restate",
+			seedContains:    "context-compaction-goal-relatch",
+			excerptContains: "relatch from durable summary",
+		},
+	} {
+		sc, ok := seededByID[tc.id]
+		if !ok || sc.Trajectory == nil {
+			t.Fatalf("trajectory scenario %s missing watched-session seed", tc.id)
+		}
+		if !strings.Contains(sc.Trajectory.SessionSeed, "session-log:") ||
+			!strings.Contains(sc.Trajectory.SessionSeed, tc.seedContains) ||
+			!strings.Contains(sc.Trajectory.SessionSeedExcerpt, tc.excerptContains) {
+			t.Fatalf("trajectory scenario %s seed = %#v, want redacted watched-session source", tc.id, sc.Trajectory)
+		}
+	}
+}
+
+func assertTrajectorySessionSeedRedacted(t *testing.T, sc evalScenario) {
+	t.Helper()
+	if sc.Trajectory == nil {
+		return
+	}
+	seedText := sc.Trajectory.SessionSeed + "\n" + sc.Trajectory.SessionSeedExcerpt
+	for _, forbidden := range []string{
+		"6313146",
+		"385539578",
+		"ghp_",
+		"github_pat_",
+		"sk-",
+		"token=",
+		"password=",
+		"/home/",
+		"/Users/",
+		"image2",
+		"idolum-email",
+	} {
+		if strings.Contains(seedText, forbidden) {
+			t.Fatalf("trajectory scenario %s leaked private seed marker %q in %q", sc.ID, forbidden, seedText)
+		}
+	}
+	if strings.Contains(seedText, "chat_id=") && !strings.Contains(seedText, "chat_id=<redacted>") {
+		t.Fatalf("trajectory scenario %s leaked an unredacted chat_id in %q", sc.ID, seedText)
+	}
+	if strings.Contains(seedText, "telegram:primary/") && !strings.Contains(seedText, "telegram:primary/<redacted>") {
+		t.Fatalf("trajectory scenario %s leaked an unredacted Telegram update ID in %q", sc.ID, seedText)
 	}
 }
 
