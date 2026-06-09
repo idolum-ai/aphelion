@@ -22,9 +22,7 @@ func TestOpenRouterCompleteTextAndUsage(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		_ = json.NewEncoder(w).Encode(openRouterResponse{
-			Choices: []struct {
-				Message openRouterResponseMessage `json:"message"`
-			}{
+			Choices: []openRouterChoice{
 				{Message: openRouterResponseMessage{Content: json.RawMessage(`"hello from openrouter"`)}},
 			},
 			Usage: openRouterUsage{
@@ -72,9 +70,7 @@ func TestOpenRouterCompleteMapsToolsAndToolResults(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		_ = json.NewEncoder(w).Encode(openRouterResponse{
-			Choices: []struct {
-				Message openRouterResponseMessage `json:"message"`
-			}{
+			Choices: []openRouterChoice{
 				{
 					Message: openRouterResponseMessage{
 						Content: json.RawMessage(`"done"`),
@@ -141,9 +137,7 @@ func TestOpenRouterCompleteMapsImageMediaParts(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		_ = json.NewEncoder(w).Encode(openRouterResponse{
-			Choices: []struct {
-				Message openRouterResponseMessage `json:"message"`
-			}{
+			Choices: []openRouterChoice{
 				{Message: openRouterResponseMessage{Content: json.RawMessage(`"ok"`)}},
 			},
 		})

@@ -31,6 +31,7 @@ type anthropicStreamDelta struct {
 	Type        string `json:"type,omitempty"`
 	Text        string `json:"text,omitempty"`
 	PartialJSON string `json:"partial_json,omitempty"`
+	StopReason  string `json:"stop_reason,omitempty"`
 }
 
 type anthropicStreamFailure struct {
@@ -54,6 +55,7 @@ type anthropicStreamParser struct {
 	usage       core.TokenUsage
 	blocks      map[int]*anthropicStreamBlock
 	order       []int
+	stopReason  string
 	callbackErr error
 	parseErr    error
 }
@@ -97,6 +99,9 @@ func (p *anthropicStreamParser) consume(event internal.Event) error {
 		p.captureUsage(payload.Message.Usage)
 	case "message_delta":
 		p.captureUsage(payload.Usage)
+		if reason := strings.TrimSpace(payload.Delta.StopReason); reason != "" {
+			p.stopReason = reason
+		}
 	case "content_block_start":
 		block := p.ensureBlock(payload.Index)
 		block.kind = payload.ContentBlock.Type
@@ -164,9 +169,10 @@ func (p *anthropicStreamParser) response() *agent.Response {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
 	return &agent.Response{
-		Content:   content,
-		ToolCalls: append([]agent.ToolCall(nil), p.toolCalls...),
-		Usage:     usage,
+		Content:      content,
+		ToolCalls:    append([]agent.ToolCall(nil), p.toolCalls...),
+		Usage:        usage,
+		FinishReason: strings.TrimSpace(p.stopReason),
 	}
 }
 

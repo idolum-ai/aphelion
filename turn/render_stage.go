@@ -196,16 +196,26 @@ func incompleteFaceRenderFallbackReason(renderedText string, floorText string, p
 	if materialPacketHasSceneConstraints(packet) {
 		return ""
 	}
-	if packet.Kind != core.MaterialPacketKindStatusReport {
-		return ""
-	}
 	if !looksTruncatedSentence(rendered) {
 		return ""
 	}
-	// A deliberately conservative ratio: normal face summaries may be shorter than
-	// the floor, but an operational scene ending mid-sentence at less than two
-	// thirds of the complete floor is safer as deterministic floor fallback.
-	if len([]rune(rendered))*3 >= len([]rune(floor))*2 {
+	renderedRunes := len([]rune(rendered))
+	floorRunes := len([]rune(floor))
+	if packet.Kind == core.MaterialPacketKindStatusReport {
+		// A deliberately conservative ratio: normal face summaries may be shorter than
+		// the floor, but an operational scene ending mid-sentence at less than two
+		// thirds of the complete floor is safer as deterministic floor fallback.
+		if renderedRunes*3 >= floorRunes*2 {
+			return ""
+		}
+		return "partial_face_render"
+	}
+	switch packet.Kind {
+	case core.MaterialPacketKindUnspecified, core.MaterialPacketKindGeneral:
+	default:
+		return ""
+	}
+	if renderedRunes*4 >= floorRunes*3 {
 		return ""
 	}
 	return "partial_face_render"

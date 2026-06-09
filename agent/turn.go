@@ -135,14 +135,44 @@ type ThinkingBlock struct {
 }
 
 type Response struct {
-	Content        string
-	Thinking       string
-	ThinkingMeta   []ThinkingBlock
-	ProviderState  json.RawMessage
-	ToolCalls      []ToolCall
-	Media          []core.Media
-	Usage          core.TokenUsage
-	ProviderEvents []core.ProviderEvent
+	Content          string
+	Thinking         string
+	ThinkingMeta     []ThinkingBlock
+	ProviderState    json.RawMessage
+	ToolCalls        []ToolCall
+	Media            []core.Media
+	Usage            core.TokenUsage
+	ProviderEvents   []core.ProviderEvent
+	FinishReason     string
+	IncompleteReason string
+}
+
+func ResponseOutputLimitHit(resp *Response) bool {
+	if resp == nil {
+		return false
+	}
+	finishReason := strings.ToLower(strings.TrimSpace(resp.FinishReason))
+	incompleteReason := strings.ToLower(strings.TrimSpace(resp.IncompleteReason))
+	if responseReasonIsOutputLimit(finishReason) || responseReasonIsOutputLimit(incompleteReason) {
+		return true
+	}
+	return finishReason == "incomplete" && responseReasonIsOutputLimit(incompleteReason)
+}
+
+func responseReasonIsOutputLimit(reason string) bool {
+	reason = strings.TrimSpace(strings.ToLower(reason))
+	if reason == "" {
+		return false
+	}
+	switch reason {
+	case "length", "max_tokens", "max_output_tokens", "max_completion_tokens", "output_limit", "output_token_limit", "token_limit", "max_output_tokens_exceeded", "num_predict":
+		return true
+	case "stop", "stop_sequence", "end_turn", "tool_calls", "function_call", "content_filter", "safety", "recitation", "error":
+		return false
+	}
+	return (strings.Contains(reason, "max") && strings.Contains(reason, "token")) ||
+		strings.Contains(reason, "output limit") ||
+		strings.Contains(reason, "token limit")
 }
 
 type StreamChunk struct {

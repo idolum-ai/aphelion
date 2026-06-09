@@ -14,7 +14,12 @@ import (
 	"github.com/idolum-ai/aphelion/prompt"
 )
 
-var ErrEmptyRender = errors.New("face renderer returned empty reply")
+var (
+	ErrEmptyRender       = errors.New("face renderer returned empty reply")
+	ErrOutputLimitRender = errors.New("face renderer hit output limit")
+)
+
+const faceRenderOutputLimitMaxTokens = 4096
 
 type ProviderRendererConfig struct {
 	GovernorName  string
@@ -76,20 +81,49 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 	systemBlocks := prompt.BuildFacePromptBlocks(facePrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
 
-	resp, err := r.complete(ctx, []agent.Message{
+	messages := []agent.Message{
 		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
 		{Role: "user", Content: fmt.Sprintf("Speak to the user directly as %s, from the material authorized by %s below. Return only the reply text.", faceName, governorName)},
-	}, nil, mode)
-	if err != nil {
-		return "", err
 	}
 
-	rendered := strings.TrimSpace(resp.Content)
-	if rendered == "" {
-		return "", ErrEmptyRender
+	opts := r.completeOptionsForMode(mode)
+	maxTokens := opts.MaxTokens
+	hardCap := maxInt(faceRenderOutputLimitMaxTokens, maxTokens)
+	canRetryWithOptions := false
+	if _, ok := r.provider.(agent.ProviderWithOptions); ok {
+		canRetryWithOptions = maxTokens > 0
 	}
-	r.recordUsage(resp.Usage)
-	return rendered, nil
+	var totalUsage core.TokenUsage
+	for {
+		resp, err := r.completeWithOptions(ctx, messages, nil, opts)
+		if err != nil {
+			return "", err
+		}
+		if resp == nil {
+			return "", ErrEmptyRender
+		}
+		totalUsage = addTokenUsage(totalUsage, resp.Usage)
+		rendered := strings.TrimSpace(resp.Content)
+		if !agent.ResponseOutputLimitHit(resp) {
+			if rendered == "" {
+				return "", ErrEmptyRender
+			}
+			r.recordUsage(totalUsage)
+			return rendered, nil
+		}
+		if !canRetryWithOptions {
+			return "", fmt.Errorf("%w: provider does not support max token overrides", ErrOutputLimitRender)
+		}
+		next, ok := nextFaceRenderMaxTokens(maxTokens, hardCap)
+		if !ok {
+			return "", fmt.Errorf("%w: max_tokens=%d", ErrOutputLimitRender, maxTokens)
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		maxTokens = next
+		opts.MaxTokens = next
+	}
 }
 
 func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, onChunk func(string) error) (string, error) {
@@ -155,6 +189,9 @@ func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, 
 		return strings.TrimSpace(rendered.String()), err
 	}
 	if resp != nil {
+		if agent.ResponseOutputLimitHit(resp) {
+			return strings.TrimSpace(firstNonEmpty(rendered.String(), resp.Content)), ErrOutputLimitRender
+		}
 		r.recordUsage(resp.Usage)
 	}
 
@@ -226,10 +263,13 @@ func (r *ProviderRenderer) recordUsage(usage core.TokenUsage) {
 }
 
 func (r *ProviderRenderer) complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, mode string) (*agent.Response, error) {
+	return r.completeWithOptions(ctx, messages, tools, r.completeOptionsForMode(mode))
+}
+
+func (r *ProviderRenderer) completeWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
 	if r == nil || r.provider == nil {
 		return nil, fmt.Errorf("provider is nil")
 	}
-	opts := r.completeOptionsForMode(mode)
 	if withOptions, ok := r.provider.(agent.ProviderWithOptions); ok && faceOptionsConfigured(opts) {
 		return withOptions.CompleteWithOptions(ctx, messages, tools, opts)
 	}
@@ -276,6 +316,34 @@ func normalizeFaceVerbosity(verbosity agent.Verbosity) agent.Verbosity {
 
 func faceOptionsConfigured(opts agent.CompleteOptions) bool {
 	return opts.Reasoning.Effort != "" || opts.Reasoning.Summary != "" || opts.Verbosity != "" || opts.MaxTokens > 0
+}
+
+func nextFaceRenderMaxTokens(current int, hardCap int) (int, bool) {
+	if current <= 0 || hardCap <= 0 || current >= hardCap {
+		return current, false
+	}
+	next := current * 2
+	if next < current || next > hardCap {
+		next = hardCap
+	}
+	return next, next > current
+}
+
+func addTokenUsage(dst core.TokenUsage, src core.TokenUsage) core.TokenUsage {
+	dst.InputTokens += src.InputTokens
+	dst.OutputTokens += src.OutputTokens
+	dst.TotalTokens += src.TotalTokens
+	dst.CacheReadTokens += src.CacheReadTokens
+	dst.CacheWriteTokens += src.CacheWriteTokens
+	dst.CacheCreationTokens += src.CacheCreationTokens
+	return dst
+}
+
+func maxInt(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func firstNonEmpty(values ...string) string {

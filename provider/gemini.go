@@ -265,7 +265,8 @@ type geminiResponse struct {
 }
 
 type geminiCandidate struct {
-	Content geminiContent `json:"content"`
+	Content      geminiContent `json:"content"`
+	FinishReason string        `json:"finishReason,omitempty"`
 }
 
 type geminiUsage struct {
@@ -438,9 +439,11 @@ func toGeminiTools(tools []agent.ToolDef) []geminiTool {
 func mapGeminiResponse(res geminiResponse) *agent.Response {
 	resp := &agent.Response{}
 	if len(res.Candidates) > 0 {
-		content := res.Candidates[0].Content
+		candidate := res.Candidates[0]
+		content := candidate.Content
 		resp.ProviderState, _ = json.Marshal(content)
 		resp.Content, resp.ToolCalls, resp.Thinking, resp.ThinkingMeta = mapGeminiContent(content)
+		resp.FinishReason = strings.TrimSpace(candidate.FinishReason)
 	}
 	resp.Usage = mapGeminiUsage(res.Usage)
 	return resp
@@ -517,6 +520,7 @@ type geminiStreamParser struct {
 	toolCalls    []agent.ToolCall
 	usage        core.TokenUsage
 	stateContent geminiContent
+	finishReason string
 	callbackErr  error
 	parseErr     error
 }
@@ -554,7 +558,11 @@ func (p *geminiStreamParser) consume(data string) error {
 	if len(payload.Candidates) == 0 {
 		return p.err()
 	}
-	content := payload.Candidates[0].Content
+	candidate := payload.Candidates[0]
+	if reason := strings.TrimSpace(candidate.FinishReason); reason != "" {
+		p.finishReason = reason
+	}
+	content := candidate.Content
 	p.appendProviderState(content)
 	text, calls, thinking, thinkingMeta := mapGeminiContent(content)
 	if text != "" {
@@ -592,6 +600,7 @@ func (p *geminiStreamParser) response() *agent.Response {
 		ProviderState: append(json.RawMessage(nil), providerState...),
 		ToolCalls:     append([]agent.ToolCall(nil), p.toolCalls...),
 		Usage:         usage,
+		FinishReason:  strings.TrimSpace(p.finishReason),
 	}
 }
 

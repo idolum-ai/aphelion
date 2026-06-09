@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -77,6 +78,41 @@ type streamOptionsProvider struct {
 type optionsProvider struct {
 	stubProvider
 	seenOptions agent.CompleteOptions
+}
+
+type outputLimitOptionsProvider struct {
+	successAt     int
+	seenMaxTokens []int
+}
+
+type streamOutputLimitProvider struct{}
+
+func (s *streamOutputLimitProvider) Complete(context.Context, []agent.Message, []agent.ToolDef) (*agent.Response, error) {
+	return &agent.Response{Content: "partial", FinishReason: "length"}, nil
+}
+
+func (s *streamOutputLimitProvider) StreamWithOptions(_ context.Context, _ []agent.Message, _ []agent.ToolDef, _ agent.CompleteOptions, cb agent.StreamCallback) (*agent.Response, error) {
+	if err := cb(agent.StreamChunk{Type: "text", Text: "partial"}); err != nil {
+		return nil, err
+	}
+	return &agent.Response{Content: "partial", FinishReason: "length"}, nil
+}
+
+func (s *outputLimitOptionsProvider) Complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	return s.CompleteWithOptions(ctx, messages, tools, agent.CompleteOptions{})
+}
+
+func (s *outputLimitOptionsProvider) CompleteWithOptions(_ context.Context, _ []agent.Message, _ []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
+	s.seenMaxTokens = append(s.seenMaxTokens, opts.MaxTokens)
+	usage := core.TokenUsage{
+		InputTokens:  int64(opts.MaxTokens / 2),
+		OutputTokens: int64(opts.MaxTokens),
+		TotalTokens:  int64(opts.MaxTokens + opts.MaxTokens/2),
+	}
+	if opts.MaxTokens >= s.successAt {
+		return &agent.Response{Content: "Complete rendered reply.", FinishReason: "stop", Usage: usage}, nil
+	}
+	return &agent.Response{Content: "Partial rendered reply", FinishReason: "length", Usage: usage}, nil
 }
 
 func (s *optionsProvider) CompleteWithOptions(_ context.Context, messages []agent.Message, _ []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
@@ -369,6 +405,30 @@ func TestProviderRendererRenderStreamUsesOptionsProvider(t *testing.T) {
 	}
 }
 
+func TestProviderRendererRenderStreamDeclinesOutputLimit(t *testing.T) {
+	t.Parallel()
+
+	renderer, err := NewProviderRenderer(&streamOutputLimitProvider{}, ProviderRendererConfig{MaxTokens: 512})
+	if err != nil {
+		t.Fatalf("NewProviderRenderer() err = %v", err)
+	}
+
+	var chunks []string
+	got, err := renderer.RenderStream(context.Background(), RenderRequest{FloorText: "Canonical text"}, func(text string) error {
+		chunks = append(chunks, text)
+		return nil
+	})
+	if !errors.Is(err, ErrOutputLimitRender) {
+		t.Fatalf("RenderStream() err = %v, want ErrOutputLimitRender", err)
+	}
+	if got != "partial" || strings.Join(chunks, "") != "partial" {
+		t.Fatalf("render/chunks = %q/%#v, want partial", got, chunks)
+	}
+	if usage := renderer.ConsumeLastUsage(); usage.TotalTokens != 0 {
+		t.Fatalf("usage = %+v, want no recorded successful usage", usage)
+	}
+}
+
 func TestProviderRendererUsesModeVerbosityDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -450,5 +510,50 @@ func TestProviderRendererPassesConfiguredMaxTokens(t *testing.T) {
 	}
 	if provider.seenOptions.MaxTokens != 512 {
 		t.Fatalf("max tokens = %d, want 512", provider.seenOptions.MaxTokens)
+	}
+}
+
+func TestProviderRendererRetriesOutputLimitWithLargerMaxTokens(t *testing.T) {
+	t.Parallel()
+
+	provider := &outputLimitOptionsProvider{successAt: 1024}
+	renderer, err := NewProviderRenderer(provider, ProviderRendererConfig{MaxTokens: 512})
+	if err != nil {
+		t.Fatalf("NewProviderRenderer() err = %v", err)
+	}
+
+	got, err := renderer.Render(context.Background(), RenderRequest{FloorText: "Canonical text"})
+	if err != nil {
+		t.Fatalf("Render() err = %v", err)
+	}
+	if got != "Complete rendered reply." {
+		t.Fatalf("Render() = %q, want complete render", got)
+	}
+	if !reflect.DeepEqual(provider.seenMaxTokens, []int{512, 1024}) {
+		t.Fatalf("seen max tokens = %#v, want [512 1024]", provider.seenMaxTokens)
+	}
+	if usage := renderer.ConsumeLastUsage(); usage.OutputTokens != 1536 || usage.TotalTokens != 2304 {
+		t.Fatalf("usage = %+v, want accumulated retry usage", usage)
+	}
+}
+
+func TestProviderRendererErrorsWhenOutputLimitPersistsAtRetryCap(t *testing.T) {
+	t.Parallel()
+
+	provider := &outputLimitOptionsProvider{successAt: 8192}
+	renderer, err := NewProviderRenderer(provider, ProviderRendererConfig{MaxTokens: 512})
+	if err != nil {
+		t.Fatalf("NewProviderRenderer() err = %v", err)
+	}
+
+	_, err = renderer.Render(context.Background(), RenderRequest{FloorText: "Canonical text"})
+	if !errors.Is(err, ErrOutputLimitRender) {
+		t.Fatalf("Render() err = %v, want ErrOutputLimitRender", err)
+	}
+	if !reflect.DeepEqual(provider.seenMaxTokens, []int{512, 1024, 2048, 4096}) {
+		t.Fatalf("seen max tokens = %#v, want [512 1024 2048 4096]", provider.seenMaxTokens)
+	}
+	if usage := renderer.ConsumeLastUsage(); usage.TotalTokens != 0 {
+		t.Fatalf("usage = %+v, want no recorded successful usage", usage)
 	}
 }

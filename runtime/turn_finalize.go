@@ -702,10 +702,15 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 				}
 				return 0, "", fmt.Errorf("%s: %w", p.sendErrCtx, err)
 			}
-			p.runtime.recordExecutionEvent(p.key, core.ExecutionEventDeliveryFinalSent, "delivery", "sent", map[string]any{
+			payload := map[string]any{
 				"message_id": outboundID,
 				"kind":       strings.TrimSpace(outboundType),
-			}, time.Now().UTC())
+			}
+			if len(messageIDs) > 0 {
+				payload["message_ids"] = append([]int64(nil), messageIDs...)
+				payload["chunk_count"] = len(messageIDs)
+			}
+			p.runtime.recordExecutionEvent(p.key, core.ExecutionEventDeliveryFinalSent, "delivery", "sent", payload, time.Now().UTC())
 			return outboundID, outboundType, nil
 		},
 		RecordFinal: func(text string, media []core.Media, kind string) {

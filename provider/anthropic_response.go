@@ -59,12 +59,14 @@ func mapAnthropicResponse(res anthropicResponse, summaryMode agent.ReasoningSumm
 		ThinkingMeta: thinkingBlocks,
 		ToolCalls:    toolCalls,
 		Usage:        usage,
+		FinishReason: strings.TrimSpace(res.StopReason),
 	}
 }
 
 type anthropicResponse struct {
-	Content []anthropicContent `json:"content"`
-	Usage   anthropicUsage     `json:"usage"`
+	Content    []anthropicContent `json:"content"`
+	StopReason string             `json:"stop_reason,omitempty"`
+	Usage      anthropicUsage     `json:"usage"`
 }
 
 type anthropicUsage struct {

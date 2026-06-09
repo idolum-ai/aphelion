@@ -24,9 +24,7 @@ func TestOpenAICompleteTextUsageAndReasoning(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		_ = json.NewEncoder(w).Encode(openRouterResponse{
-			Choices: []struct {
-				Message openRouterResponseMessage `json:"message"`
-			}{
+			Choices: []openRouterChoice{
 				{Message: openRouterResponseMessage{Content: json.RawMessage(`"hello from openai"`)}},
 			},
 			Usage: openRouterUsage{PromptTokens: 13, CompletionTokens: 8, TotalTokens: 21},
@@ -76,9 +74,7 @@ func TestOpenAICompleteWithOptionsOverridesMaxTokensInChatRequest(t *testing.T) 
 			t.Fatalf("decode request: %v", err)
 		}
 		_ = json.NewEncoder(w).Encode(openRouterResponse{
-			Choices: []struct {
-				Message openRouterResponseMessage `json:"message"`
-			}{{Message: openRouterResponseMessage{Content: json.RawMessage(`"ok"`)}}},
+			Choices: []openRouterChoice{{Message: openRouterResponseMessage{Content: json.RawMessage(`"ok"`)}}},
 		})
 	})
 
@@ -109,9 +105,7 @@ func TestOpenAICompleteIncludesPriorityServiceTier(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		_ = json.NewEncoder(w).Encode(openRouterResponse{
-			Choices: []struct {
-				Message openRouterResponseMessage `json:"message"`
-			}{{Message: openRouterResponseMessage{Content: json.RawMessage(`"fast"`)}}},
+			Choices: []openRouterChoice{{Message: openRouterResponseMessage{Content: json.RawMessage(`"fast"`)}}},
 		})
 	})
 
@@ -140,9 +134,7 @@ func TestOpenAICompleteMapsTools(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		_ = json.NewEncoder(w).Encode(openRouterResponse{
-			Choices: []struct {
-				Message openRouterResponseMessage `json:"message"`
-			}{
+			Choices: []openRouterChoice{
 				{
 					Message: openRouterResponseMessage{
 						Content: json.RawMessage(`"done"`),

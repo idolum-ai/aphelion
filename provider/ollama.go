@@ -192,6 +192,7 @@ type ollamaMessage struct {
 type ollamaResponse struct {
 	Message         ollamaMessage `json:"message"`
 	Done            bool          `json:"done"`
+	DoneReason      string        `json:"done_reason,omitempty"`
 	PromptEvalCount int64         `json:"prompt_eval_count"`
 	EvalCount       int64         `json:"eval_count"`
 	Error           string        `json:"error,omitempty"`
@@ -266,8 +267,9 @@ func toOllamaTools(tools []agent.ToolDef) []openRouterTool {
 
 func mapOllamaResponse(res ollamaResponse) *agent.Response {
 	resp := &agent.Response{
-		Content:   res.Message.Content,
-		ToolCalls: mapOllamaToolCalls(res.Message.ToolCalls),
+		Content:      res.Message.Content,
+		ToolCalls:    mapOllamaToolCalls(res.Message.ToolCalls),
+		FinishReason: strings.TrimSpace(res.DoneReason),
 		Usage: core.TokenUsage{
 			InputTokens:  res.PromptEvalCount,
 			OutputTokens: res.EvalCount,
@@ -325,6 +327,7 @@ type ollamaStreamParser struct {
 	text        strings.Builder
 	toolCalls   []agent.ToolCall
 	usage       core.TokenUsage
+	doneReason  string
 	callbackErr error
 	parseErr    error
 }
@@ -349,6 +352,9 @@ func (p *ollamaStreamParser) consume(line []byte) error {
 		p.parseErr = fmt.Errorf("ollama: stream error: %s", payload.Error)
 		return p.parseErr
 	}
+	if reason := strings.TrimSpace(payload.DoneReason); reason != "" {
+		p.doneReason = reason
+	}
 	if payload.Message.Content != "" {
 		p.text.WriteString(payload.Message.Content)
 		p.emitText(payload.Message.Content)
@@ -371,9 +377,10 @@ func (p *ollamaStreamParser) response() *agent.Response {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
 	return &agent.Response{
-		Content:   p.text.String(),
-		ToolCalls: append([]agent.ToolCall(nil), p.toolCalls...),
-		Usage:     usage,
+		Content:      p.text.String(),
+		ToolCalls:    append([]agent.ToolCall(nil), p.toolCalls...),
+		Usage:        usage,
+		FinishReason: strings.TrimSpace(p.doneReason),
 	}
 }
 

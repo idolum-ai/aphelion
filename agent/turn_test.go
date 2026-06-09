@@ -67,6 +67,35 @@ type mockTools struct {
 	defsCalled      int
 }
 
+func TestResponseOutputLimitHitClassifiesProviderReasons(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		resp *Response
+		want bool
+	}{
+		{name: "nil", resp: nil},
+		{name: "openai chat length", resp: &Response{FinishReason: "length"}, want: true},
+		{name: "anthropic max tokens", resp: &Response{FinishReason: "max_tokens"}, want: true},
+		{name: "openai responses incomplete details", resp: &Response{FinishReason: "incomplete", IncompleteReason: "max_output_tokens"}, want: true},
+		{name: "gemini uppercase max tokens", resp: &Response{FinishReason: "MAX_TOKENS"}, want: true},
+		{name: "ollama num predict", resp: &Response{FinishReason: "num_predict"}, want: true},
+		{name: "normal stop", resp: &Response{FinishReason: "stop"}},
+		{name: "tool calls", resp: &Response{FinishReason: "tool_calls"}},
+		{name: "safety", resp: &Response{FinishReason: "safety"}},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ResponseOutputLimitHit(tc.resp); got != tc.want {
+				t.Fatalf("ResponseOutputLimitHit(%+v) = %v, want %v", tc.resp, got, tc.want)
+			}
+		})
+	}
+}
+
 func (m *mockTools) Execute(ctx context.Context, name string, input json.RawMessage) (string, error) {
 	m.mu.Lock()
 	m.execCalls = append(m.execCalls, toolInvocation{name: name, input: input})

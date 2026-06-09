@@ -295,7 +295,7 @@ func TestRunRenderStageFallsBackWhenOperationalFaceRenderIsPartial(t *testing.T)
 	}
 }
 
-func TestRunRenderStageDoesNotFallbackForUnclassifiedOperationalText(t *testing.T) {
+func TestRunRenderStageFallsBackWhenGenericFaceRenderIsPartial(t *testing.T) {
 	t.Parallel()
 
 	floorText := strings.Repeat("Service active at PID 100755 and verify-deploy passed. ", 8)
@@ -316,17 +316,17 @@ func TestRunRenderStageDoesNotFallbackForUnclassifiedOperationalText(t *testing.
 			return &FaceRenderResult{Text: renderedText}, nil
 		},
 		Fallback: func(core.MaterialPacket, string, pipeline.FallbackOptions) string {
-			return "unexpected fallback"
+			return "complete generic fallback"
 		},
 	})
 	if err != nil {
 		t.Fatalf("RunRenderStage() err = %v", err)
 	}
-	if got.ReplyText != renderedText {
-		t.Fatalf("ReplyText = %q, want unclassified rendered text", got.ReplyText)
+	if got.ReplyText != "complete generic fallback" {
+		t.Fatalf("ReplyText = %q, want generic floor fallback", got.ReplyText)
 	}
-	if got.FallbackApplied || got.FallbackReason != "" {
-		t.Fatalf("fallback = %v/%q, want none for unclassified material", got.FallbackApplied, got.FallbackReason)
+	if !got.FallbackApplied || got.FallbackReason != "partial_face_render" {
+		t.Fatalf("fallback = %v/%q, want partial_face_render", got.FallbackApplied, got.FallbackReason)
 	}
 }
 
