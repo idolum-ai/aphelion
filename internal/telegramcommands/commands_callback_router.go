@@ -85,6 +85,9 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 	if decisionID, action, ok := decodeContinuationCallbackData(cb.Data); ok {
 		return handleContinuationCallback(ctx, sender, router, cb, decisionID, action)
 	}
+	if recommendationID, candidateID, action, ok := core.DecodeReentryRecommendationCallbackData(cb.Data); ok {
+		return handleReentryRecommendationCallback(ctx, sender, router, cb, recommendationID, candidateID, action)
+	}
 	if action, step, option, ok := decodeDurableWizardCallbackData(cb.Data); ok {
 		return handleDurableWizardCallback(ctx, sender, router, cb, action, step, option)
 	}

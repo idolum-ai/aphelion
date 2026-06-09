@@ -24,6 +24,7 @@ const (
 	ContextClarificationIngressSurface            = telegramContextClarificationIngressSurface
 	MemoryClarificationIngressSurface             = telegramMemoryClarificationIngressSurface
 	MissionClarificationIngressSurface            = telegramMissionClarificationIngressSurface
+	ReentryRecommendationIngressSurface           = telegramReentryRecommendationIngressSurface
 	BusyDecisionResumeIngressSurface              = telegramBusyDecisionResumeIngressSurface
 	ArtifactRetentionDecisionResumeIngressSurface = telegramArtifactRetentionDecisionResumeIngressSurface
 

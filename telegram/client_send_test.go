@@ -180,10 +180,10 @@ func TestSendInlineKeyboardRejectsLongButtonLabels(t *testing.T) {
 	client := NewClient("TOKEN")
 	_, err := client.SendInlineKeyboard(context.Background(), 5, "Choose", [][]InlineButton{
 		{
-			{Text: "Approve this action", CallbackData: "decision:1:approve"},
+			{Text: "Approve this action now", CallbackData: "decision:1:approve"},
 		},
 	}, nil)
-	if err == nil || !strings.Contains(err.Error(), "at most 2 words") {
+	if err == nil || !strings.Contains(err.Error(), "at most 3 words") {
 		t.Fatalf("SendInlineKeyboard() err = %v, want compact button-label rejection", err)
 	}
 }

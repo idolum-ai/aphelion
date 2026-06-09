@@ -64,6 +64,9 @@ const (
 	ExecutionEventTelegramThreadReminderSweep = "telegram.thread_reminder.sweep"
 	ExecutionEventProgressSurface             = "progress.surface"
 	ExecutionEventReplyClaimAdjudicated       = "reply.claim.adjudicated"
+	ExecutionEventReentryRecommendationFailed = "reentry_recommendation.failed"
+	ExecutionEventReentryRecommendationJudged = "reentry_recommendation.judged"
+	ExecutionEventReentryRecommendationShown  = "reentry_recommendation.shown"
 
 	ExecutionEventContinuationOffered                = "continuation.offered"
 	ExecutionEventContinuationBundleNarrowed         = "continuation.bundle.narrowed"

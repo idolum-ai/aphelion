@@ -76,6 +76,9 @@ type commandRouter interface {
 	MissionAskPrompt(ctx context.Context, senderID int64, promptID string) (session.MissionAskPrompt, bool, error)
 	ResolveMissionAskPrompt(ctx context.Context, senderID int64, promptID string, status session.MissionAskStatus, summary string) (session.MissionAskPrompt, error)
 	QueueMissionClarification(ctx context.Context, msg core.InboundMessage, promptID string) error
+	ReentryRecommendation(ctx context.Context, senderID int64, recommendationID string) (session.ReentryRecommendation, bool, error)
+	IgnoreReentryRecommendation(ctx context.Context, senderID int64, recommendationID string) (session.ReentryRecommendation, error)
+	QueueReentryRecommendation(ctx context.Context, msg core.InboundMessage, recommendationID string, candidateID string) (session.ReentryRecommendation, session.ReentryRecommendationCandidate, bool, error)
 }
 
 type commandScopedStatusRouter interface {

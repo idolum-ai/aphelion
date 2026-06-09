@@ -25,6 +25,28 @@ func (s *stubCommandRouter) QueueDoctor(ctx context.Context, msg core.InboundMes
 	return s.queueDoctorErr
 }
 
+func (s *stubCommandRouter) ReentryRecommendation(ctx context.Context, senderID int64, recommendationID string) (session.ReentryRecommendation, bool, error) {
+	_ = ctx
+	_ = senderID
+	_ = recommendationID
+	return session.ReentryRecommendation{}, false, nil
+}
+
+func (s *stubCommandRouter) IgnoreReentryRecommendation(ctx context.Context, senderID int64, recommendationID string) (session.ReentryRecommendation, error) {
+	_ = ctx
+	_ = senderID
+	_ = recommendationID
+	return session.ReentryRecommendation{}, nil
+}
+
+func (s *stubCommandRouter) QueueReentryRecommendation(ctx context.Context, msg core.InboundMessage, recommendationID string, candidateID string) (session.ReentryRecommendation, session.ReentryRecommendationCandidate, bool, error) {
+	_ = ctx
+	_ = msg
+	_ = recommendationID
+	_ = candidateID
+	return session.ReentryRecommendation{}, session.ReentryRecommendationCandidate{}, false, nil
+}
+
 func (s *stubCommandRouter) LatestDoctorReport(ctx context.Context, chatID int64, senderID int64) (session.DoctorReportRecord, bool, error) {
 	_ = ctx
 	s.latestDoctorReportChatID = chatID

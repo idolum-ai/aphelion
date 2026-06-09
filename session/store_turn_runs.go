@@ -661,6 +661,47 @@ func (s *SQLiteStore) LatestTurnRunsByChat(limit int) ([]TurnRun, error) {
 	return runs, nil
 }
 
+func (s *SQLiteStore) LatestTurnRunsBySession(limit int) ([]TurnRun, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	rows, err := s.db.Query(`
+		SELECT
+			tr.id, tr.session_id, tr.chat_id, tr.user_id, tr.scope_kind, tr.scope_id, tr.durable_agent_id, tr.kind, tr.turn_index, tr.status, tr.request_text, tr.started_at, tr.completed_at,
+			tr.last_activity_at, tr.last_tool_name, tr.last_tool_preview, tr.tool_calls_started, tr.tool_calls_finished, tr.total_tool_chars_in, tr.total_assistant_chars_out,
+			tr.provider_input_tokens, tr.provider_output_tokens, tr.provider_cache_read_tokens, tr.provider_cache_write_tokens, tr.last_tool_result_preview, tr.last_tool_error,
+			tr.progress_message_id, tr.error_text, tr.recovery_summary, tr.recovery_logged_at
+		FROM turn_runs tr
+		INNER JOIN (
+			SELECT session_id, MAX(id) AS max_id
+			FROM turn_runs
+			WHERE chat_id != 0
+			GROUP BY session_id
+		) latest
+		ON latest.session_id = tr.session_id AND latest.max_id = tr.id
+		ORDER BY tr.last_activity_at DESC, tr.id DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query latest turn runs by session: %w", err)
+	}
+	defer rows.Close()
+
+	runs := make([]TurnRun, 0, limit)
+	for rows.Next() {
+		run, err := scanTurnRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate latest turn runs by session: %w", err)
+	}
+	return runs, nil
+}
+
 func (s *SQLiteStore) TurnRun(id int64) (*TurnRun, error) {
 	rows, err := s.db.Query(`
 		SELECT

@@ -249,6 +249,21 @@ type stubCommandRouter struct {
 	queueMissionClarificationMsg      *core.InboundMessage
 	queueMissionClarificationID       string
 	queueMissionClarificationErr      error
+	reentryRecommendation             session.ReentryRecommendation
+	reentryRecommendationOK           bool
+	reentryRecommendationErr          error
+	reentryRecommendationSenderID     int64
+	reentryRecommendationID           string
+	ignoreReentryRecommendationErr    error
+	ignoreReentryRecommendationID     string
+	ignoreReentryRecommendationSender int64
+	queueReentryRecommendationMsg     *core.InboundMessage
+	queueReentryRecommendationID      string
+	queueReentryCandidateID           string
+	queueReentryRecommendationReturn  session.ReentryRecommendation
+	queueReentryCandidateReturn       session.ReentryRecommendationCandidate
+	queueReentrySelected              bool
+	queueReentryErr                   error
 	memoryReviewBySource              map[memoryReviewSource]memoryReviewSnapshot
 	memoryReviewErr                   error
 	memoryReviewChatID                int64

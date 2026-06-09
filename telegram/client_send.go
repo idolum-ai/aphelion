@@ -30,6 +30,14 @@ func (c *Client) SendMessage(ctx context.Context, msg core.OutboundMessage) (int
 	if len(msg.Media) > 0 {
 		return c.sendMediaMessage(ctx, msg)
 	}
+	if len(msg.ButtonRows) > 0 {
+		messageID, err := c.SendInlineKeyboard(ctx, msg.ChatID, msg.Text, outboundButtonRowsToTelegram(msg.ButtonRows), msg.ReplyTo)
+		if err != nil {
+			return 0, err
+		}
+		recordOutboundDeliveryMessageID(msg.Delivery, messageID)
+		return messageID, nil
+	}
 	chunks := splitTelegramTextChunks(msg.Text, telegramTextChunkLimit)
 	if len(chunks) == 0 {
 		chunks = []string{""}
@@ -214,12 +222,31 @@ func validateInlineKeyboardRows(rows [][]InlineButton) error {
 			if text == "" {
 				return fmt.Errorf("inline button label is required at row %d button %d", rowIndex, buttonIndex)
 			}
-			if words := strings.Fields(text); len(words) > 2 {
-				return fmt.Errorf("inline button label %q has %d words; Telegram labels must use at most 2 words", text, len(words))
+			if words := strings.Fields(text); len(words) > 3 {
+				return fmt.Errorf("inline button label %q has %d words; Telegram labels must use at most 3 words", text, len(words))
 			}
 		}
 	}
 	return nil
+}
+
+func outboundButtonRowsToTelegram(rows [][]core.OutboundButton) [][]InlineButton {
+	out := make([][]InlineButton, 0, len(rows))
+	for _, row := range rows {
+		if len(row) == 0 {
+			continue
+		}
+		converted := make([]InlineButton, 0, len(row))
+		for _, button := range row {
+			converted = append(converted, InlineButton{
+				Text:         button.Text,
+				CallbackData: button.CallbackData,
+				URL:          button.URL,
+			})
+		}
+		out = append(out, converted)
+	}
+	return out
 }
 
 func (c *Client) sendInlineKeyboardChunk(ctx context.Context, chatID int64, text string, rows [][]InlineButton, replyTo *int64) (int64, error) {

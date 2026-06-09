@@ -63,7 +63,14 @@ type OutboundMessage struct {
 	ReplyTo   *int64
 	ParseMode string
 	Reactions []string
+	ButtonRows [][]OutboundButton
 	Delivery  *OutboundDelivery
+}
+
+type OutboundButton struct {
+	Text         string
+	CallbackData string
+	URL          string
 }
 
 // OutboundDelivery records transport-local delivery details for multi-message

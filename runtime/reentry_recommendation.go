@@ -1,0 +1,578 @@
+//go:build linux
+
+package runtime
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"log"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
+)
+
+const (
+	reentryRecommendationDelay   = 5 * time.Minute
+	reentryRecommendationCadence = time.Minute
+	reentryRecommendationLimit   = 40
+	reentryCandidateLimit        = 3
+)
+
+func (r *Runtime) StartReentryRecommendationLoop(ctx context.Context, logger func(string, ...any)) {
+	if r == nil || r.store == nil || r.outbound == nil {
+		return
+	}
+	if logger == nil {
+		logger = log.Printf
+	}
+	r.startBackgroundLoop("reentry_recommendation", func() {
+		runPeriodic(ctx, reentryRecommendationCadence, func(runCtx context.Context) {
+			if err := r.runReentryRecommendationSweepOnce(runCtx, time.Now().UTC()); err != nil {
+				logger("WARN reentry recommendation sweep failed: %v", err)
+				r.reportOperationalIssue(runCtx, "reentry_recommendation", err)
+			}
+		})
+	})
+}
+
+func (r *Runtime) runReentryRecommendationSweepOnce(ctx context.Context, now time.Time) error {
+	if r == nil || r.store == nil || r.outbound == nil {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	runs, err := r.store.LatestTurnRunsBySession(reentryRecommendationLimit)
+	if err != nil {
+		return err
+	}
+	for _, run := range runs {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if err := r.maybeSurfaceReentryRecommendation(ctx, run, now); err != nil {
+			key := session.SessionKey{ChatID: run.ChatID, UserID: run.UserID, Scope: run.Scope}
+			r.recordExecutionEvent(key, core.ExecutionEventReentryRecommendationFailed, "reentry_recommendation", "failed", map[string]any{
+				"turn_run_id": run.ID,
+				"error":       trimError(err.Error()),
+			}, now)
+			log.Printf("WARN reentry recommendation failed chat_id=%d session_id=%s run_id=%d err=%v", run.ChatID, run.SessionID, run.ID, err)
+		}
+	}
+	return nil
+}
+
+func (r *Runtime) maybeSurfaceReentryRecommendation(ctx context.Context, run session.TurnRun, now time.Time) error {
+	key := session.SessionKey{ChatID: run.ChatID, UserID: run.UserID, Scope: run.Scope}
+	state, ok, reason, err := r.reentryRecommendationState(ctx, key, run, now)
+	if err != nil || !ok {
+		_ = reason
+		return err
+	}
+	candidates := r.reentryRecommendationCandidates(ctx, state)
+	if len(candidates) == 0 {
+		return nil
+	}
+	candidates = r.rankReentryRecommendationCandidates(ctx, state, candidates)
+	if len(candidates) > reentryCandidateLimit {
+		candidates = candidates[:reentryCandidateLimit]
+	}
+	record := session.ReentryRecommendation{
+		ID:                  reentryRecommendationID(state.Fingerprint),
+		Owner:               reentryRecommendationOwner(run),
+		ChatID:              run.ChatID,
+		SessionID:           run.SessionID,
+		Scope:               run.Scope,
+		SourceTurnRunID:     run.ID,
+		TerminalFingerprint: state.Fingerprint,
+		Candidates:          candidates,
+	}
+	record, allowed, reason, err := r.store.CreateReentryRecommendationIfAllowed(record, now)
+	if err != nil || !allowed {
+		_ = reason
+		return err
+	}
+	return r.deliverReentryRecommendation(ctx, key, record, now)
+}
+
+type reentryRecommendationState struct {
+	Key          session.SessionKey
+	Run          session.TurnRun
+	Operation    session.OperationState
+	Plan         session.PlanState
+	Continuation session.ContinuationState
+	Missions     []session.MissionState
+	MemoryNotes  []string
+	Fingerprint  string
+}
+
+func (r *Runtime) reentryRecommendationState(ctx context.Context, key session.SessionKey, run session.TurnRun, now time.Time) (reentryRecommendationState, bool, string, error) {
+	if run.ChatID == 0 {
+		return reentryRecommendationState{}, false, "missing_chat", nil
+	}
+	if run.Kind != session.TurnRunKindInteractive && run.Kind != session.TurnRunKindRecovery {
+		return reentryRecommendationState{}, false, "non_interactive_run", nil
+	}
+	if run.Status == session.TurnRunStatusRunning {
+		return reentryRecommendationState{}, false, "running", nil
+	}
+	terminalAt := run.CompletedAt
+	if terminalAt.IsZero() {
+		terminalAt = run.LastActivityAt
+	}
+	if terminalAt.IsZero() || now.Before(terminalAt.Add(reentryRecommendationDelay)) {
+		return reentryRecommendationState{}, false, "quiet_window", nil
+	}
+	latest, err := r.store.LatestTurnRun(key)
+	if err != nil {
+		return reentryRecommendationState{}, false, "", err
+	}
+	if latest == nil || latest.ID != run.ID || latest.Status == session.TurnRunStatusRunning {
+		return reentryRecommendationState{}, false, "newer_turn", nil
+	}
+
+	continuation, exists, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return reentryRecommendationState{}, false, "", err
+	}
+	continuation = session.NormalizeContinuationState(continuation)
+	if exists && (continuation.Status == session.ContinuationStatusPending || continuation.Status == session.ContinuationStatusApproved || continuation.Active()) {
+		return reentryRecommendationState{}, false, "continuation_active", nil
+	}
+	op, err := r.store.OperationState(key)
+	if err != nil {
+		return reentryRecommendationState{}, false, "", err
+	}
+	op = session.NormalizeOperationState(op)
+	if op.Proposal.Status == session.ProposalStatusPending {
+		return reentryRecommendationState{}, false, "operation_proposal_pending", nil
+	}
+	plan, _ := r.store.PlanState(key)
+	plan = session.NormalizePlanState(plan)
+	missions := r.reentryRecommendationMissions(run)
+	state := reentryRecommendationState{
+		Key:          key,
+		Run:          run,
+		Operation:    op,
+		Plan:         plan,
+		Continuation: continuation,
+		Missions:     missions,
+		MemoryNotes:  r.reentryRecommendationMemoryNotes(now),
+	}
+	state.Fingerprint = r.reentryRecommendationFingerprint(state)
+	return state, true, "", nil
+}
+
+func (r *Runtime) reentryRecommendationMissions(run session.TurnRun) []session.MissionState {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	owner := reentryRecommendationOwner(run)
+	if owner == "" {
+		return nil
+	}
+	out := make([]session.MissionState, 0, 4)
+	for _, status := range []session.MissionStatus{session.MissionStatusBlocked, session.MissionStatusActive, session.MissionStatusCandidate} {
+		missions, err := r.store.Missions(session.MissionFilter{Owner: owner, Status: status, Limit: 4})
+		if err != nil {
+			continue
+		}
+		out = append(out, missions...)
+		if len(out) >= 4 {
+			break
+		}
+	}
+	return out
+}
+
+func (r *Runtime) reentryRecommendationMemoryNotes(now time.Time) []string {
+	if r == nil || r.cfg == nil {
+		return nil
+	}
+	root := strings.TrimSpace(r.cfg.Agent.SharedMemoryRoot)
+	if root == "" {
+		root = strings.TrimSpace(r.cfg.Agent.PromptRoot)
+	}
+	notes := r.loadRecentDailyNotes(root, now)
+	if len(notes) > 2 {
+		return notes[:2]
+	}
+	return notes
+}
+
+func (r *Runtime) reentryRecommendationFingerprint(state reentryRecommendationState) string {
+	op := session.NormalizeOperationState(state.Operation)
+	cont := session.NormalizeContinuationState(state.Continuation)
+	fields := []string{
+		state.Run.SessionID,
+		fmt.Sprintf("run:%d", state.Run.ID),
+		string(state.Run.Kind),
+		string(state.Run.Status),
+		state.Run.CompletedAt.UTC().Format(time.RFC3339Nano),
+		state.Run.ErrorText,
+		op.ID,
+		string(op.Status),
+		op.Stage,
+		op.Proposal.ID,
+		string(op.Proposal.Status),
+		cont.DecisionID,
+		string(cont.Status),
+		cont.ContinuationLease.ID,
+		string(cont.ContinuationLease.Status),
+	}
+	sum := sha256.Sum256([]byte(strings.Join(fields, "\x1f")))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state reentryRecommendationState) []session.ReentryRecommendationCandidate {
+	_ = ctx
+	source := strings.ToLower(reentryRecommendationSourceText(state))
+	candidates := make([]session.ReentryRecommendationCandidate, 0, 4)
+	if reentryLooksReleaseRelated(source) {
+		candidates = append(candidates, session.ReentryRecommendationCandidate{
+			ID:               "c1",
+			Kind:             session.ReentryCandidateReviewReleaseReadiness,
+			Label:            "Release Readiness",
+			Summary:          "Review the completed release-oriented state and propose the next bounded release-readiness edge.",
+			PromptText:       reentryPrompt("Review release readiness from the durable state. If more work is needed, request a fresh bounded approval; do not claim approval or continue under consumed authority."),
+			AuthorityClass:   "read_only",
+			RequiresApproval: true,
+			BasisRefs:        []string{fmt.Sprintf("turn_run:%d", state.Run.ID), "operation_state"},
+		})
+	}
+	op := session.NormalizeOperationState(state.Operation)
+	if op.Active() && (op.Status == session.OperationStatusCompleted || op.Status == session.OperationStatusBlocked || op.Status == session.OperationStatusActive) {
+		kind := session.ReentryCandidateRequestNextLease
+		label := "Next Lease"
+		if op.Status == session.OperationStatusBlocked {
+			label = "Repair Path"
+		}
+		candidates = append(candidates, session.ReentryRecommendationCandidate{
+			ID:               nextReentryCandidateID(candidates),
+			Kind:             kind,
+			Label:            label,
+			Summary:          "Reconstruct the operation state and ask for the smallest next bounded approval if work remains.",
+			PromptText:       reentryPrompt("Re-enter the current operation from durable state. Identify whether work remains; if it does, request exactly one fresh bounded approval for the next phase. Do not reuse consumed or expired authority."),
+			AuthorityClass:   firstNonEmpty(op.PhasePlan.CurrentPhaseID, "operation"),
+			RequiresApproval: true,
+			BasisRefs:        []string{fmt.Sprintf("turn_run:%d", state.Run.ID), "operation_state"},
+		})
+	}
+	if len(state.Missions) > 0 {
+		mission := state.Missions[0]
+		candidates = append(candidates, session.ReentryRecommendationCandidate{
+			ID:               nextReentryCandidateID(candidates),
+			Kind:             session.ReentryCandidateResumeMission,
+			Label:            "Resume Mission",
+			Summary:          clampText(firstNonEmpty(mission.Title, mission.Objective, "Resume the highest-signal mission."), 180),
+			PromptText:       reentryPrompt("Review the selected mission and current durable session state. Ask for a fresh bounded approval if action is needed; otherwise summarize why the mission should remain parked."),
+			AuthorityClass:   "mission_review",
+			RequiresApproval: true,
+			BasisRefs:        []string{"mission:" + mission.ID},
+		})
+	}
+	if len(candidates) == 0 && (op.Active() || len(state.MemoryNotes) > 0 || strings.TrimSpace(state.Run.RequestText) != "") {
+		candidates = append(candidates, session.ReentryRecommendationCandidate{
+			ID:               "c1",
+			Kind:             session.ReentryCandidateClarifyGoal,
+			Label:            "Clarify Goal",
+			Summary:          "Ask the operator for the missing next objective instead of inventing authority.",
+			PromptText:       reentryPrompt("The system is idle and durable state does not support a concrete continuation. Ask one concise clarification question about the next objective."),
+			AuthorityClass:   "clarification",
+			RequiresApproval: false,
+			BasisRefs:        []string{fmt.Sprintf("turn_run:%d", state.Run.ID)},
+		})
+	}
+	return normalizeReentryCandidates(candidates)
+}
+
+func nextReentryCandidateID(existing []session.ReentryRecommendationCandidate) string {
+	return fmt.Sprintf("c%d", len(existing)+1)
+}
+
+func normalizeReentryCandidates(candidates []session.ReentryRecommendationCandidate) []session.ReentryRecommendationCandidate {
+	out := make([]session.ReentryRecommendationCandidate, 0, len(candidates))
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		candidate = session.NormalizeReentryRecommendationCandidate(candidate)
+		if candidate.ID == "" || candidate.Kind == "" || candidate.PromptText == "" {
+			continue
+		}
+		candidate.Label = normalizeReentryButtonLabel(candidate.Label)
+		if candidate.Label == "" {
+			continue
+		}
+		if _, ok := seen[candidate.ID]; ok {
+			continue
+		}
+		seen[candidate.ID] = struct{}{}
+		out = append(out, candidate)
+	}
+	return out
+}
+
+func normalizeReentryButtonLabel(label string) string {
+	label = strings.Join(strings.Fields(strings.TrimSpace(label)), " ")
+	if label == "" {
+		return ""
+	}
+	words := strings.Fields(label)
+	if len(words) > 3 {
+		words = words[:3]
+		label = strings.Join(words, " ")
+	}
+	const maxRunes = 28
+	if len([]rune(label)) > maxRunes {
+		runes := []rune(label)
+		label = strings.TrimSpace(string(runes[:maxRunes-3])) + "..."
+	}
+	return label
+}
+
+func reentryPrompt(instruction string) string {
+	return strings.TrimSpace(instruction) + "\n\nThis came from an idle re-entry recommendation. The button selected a path only; it did not approve execution, grant authority, or renew a consumed lease."
+}
+
+func reentryLooksReleaseRelated(source string) bool {
+	return strings.Contains(source, "release") ||
+		strings.Contains(source, "deploy") ||
+		strings.Contains(source, "reinstall") ||
+		strings.Contains(source, "restart") ||
+		strings.Contains(source, "latest main") ||
+		strings.Contains(source, "service")
+}
+
+func reentryRecommendationSourceText(state reentryRecommendationState) string {
+	parts := []string{
+		state.Run.RequestText,
+		state.Run.ErrorText,
+		state.Operation.Objective,
+		string(state.Operation.Status),
+		state.Operation.Stage,
+		state.Operation.Summary,
+		state.Operation.Proposal.Summary,
+		state.Operation.Proposal.WhyNow,
+		state.Operation.Proposal.BoundedEffect,
+		state.Plan.Explanation,
+		state.Continuation.Objective,
+		state.Continuation.StageSummary,
+		state.Continuation.ActionProposal.Summary,
+		state.Continuation.ActionProposal.WhyNow,
+		state.Continuation.ActionProposal.BoundedEffect,
+	}
+	for _, phase := range state.Operation.PhasePlan.Phases {
+		parts = append(parts, phase.Summary, phase.WhyNow, phase.BoundedEffect, string(phase.Status), phase.AuthorityClass)
+	}
+	for _, mission := range state.Missions {
+		parts = append(parts, mission.Title, mission.Objective, mission.BlockedReason, mission.WaitingFor, mission.NextAllowedAction)
+	}
+	parts = append(parts, state.MemoryNotes...)
+	return strings.Join(parts, "\n")
+}
+
+type reentryJudgeResponse struct {
+	Candidates []struct {
+		ID    string `json:"id"`
+		Label string `json:"label"`
+		Rank  int    `json:"rank"`
+	} `json:"candidates"`
+}
+
+func (r *Runtime) rankReentryRecommendationCandidates(ctx context.Context, state reentryRecommendationState, candidates []session.ReentryRecommendationCandidate) []session.ReentryRecommendationCandidate {
+	candidates = normalizeReentryCandidates(candidates)
+	if len(candidates) <= 1 || r == nil || r.provider == nil {
+		return candidates
+	}
+	payload, _ := json.Marshal(struct {
+		Terminal string                                   `json:"terminal"`
+		Context  string                                   `json:"context"`
+		Options  []session.ReentryRecommendationCandidate `json:"options"`
+	}{
+		Terminal: fmt.Sprintf("turn_run=%d status=%s", state.Run.ID, state.Run.Status),
+		Context:  clampText(reentryRecommendationSourceText(state), 4000),
+		Options:  candidates,
+	})
+	system := "Rank existing Aphelion idle re-entry candidates. You may shorten labels, but do not invent new candidates or authority. Return compact JSON only: {\"candidates\":[{\"id\":\"c1\",\"label\":\"Two Words\",\"rank\":1}]}."
+	resp, err := completeProvider(ctx, r.provider, []agent.Message{
+		{Role: "system", Content: system},
+		{Role: "user", Content: string(payload)},
+	}, nil, nil)
+	if err != nil {
+		r.recordExecutionEvent(state.Key, core.ExecutionEventReentryRecommendationJudged, "reentry_recommendation", "failed", map[string]any{
+			"turn_run_id": state.Run.ID,
+			"error":       trimError(err.Error()),
+		}, time.Now().UTC())
+		return candidates
+	}
+	var parsed reentryJudgeResponse
+	if err := json.Unmarshal([]byte(extractReentryJSON(resp.Content)), &parsed); err != nil {
+		r.recordExecutionEvent(state.Key, core.ExecutionEventReentryRecommendationJudged, "reentry_recommendation", "malformed", map[string]any{
+			"turn_run_id": state.Run.ID,
+		}, time.Now().UTC())
+		return candidates
+	}
+	byID := make(map[string]session.ReentryRecommendationCandidate, len(candidates))
+	for _, candidate := range candidates {
+		byID[candidate.ID] = candidate
+	}
+	type rankedCandidate struct {
+		candidate session.ReentryRecommendationCandidate
+		rank      int
+		index     int
+	}
+	ranked := make([]rankedCandidate, 0, len(candidates))
+	used := map[string]struct{}{}
+	for i, item := range parsed.Candidates {
+		candidate, ok := byID[strings.TrimSpace(item.ID)]
+		if !ok {
+			continue
+		}
+		if label := normalizeReentryButtonLabel(item.Label); label != "" {
+			candidate.Label = label
+		}
+		rank := item.Rank
+		if rank <= 0 {
+			rank = i + 1
+		}
+		ranked = append(ranked, rankedCandidate{candidate: candidate, rank: rank, index: i})
+		used[candidate.ID] = struct{}{}
+	}
+	for i, candidate := range candidates {
+		if _, ok := used[candidate.ID]; ok {
+			continue
+		}
+		ranked = append(ranked, rankedCandidate{candidate: candidate, rank: 100 + i, index: i})
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].rank == ranked[j].rank {
+			return ranked[i].index < ranked[j].index
+		}
+		return ranked[i].rank < ranked[j].rank
+	})
+	out := make([]session.ReentryRecommendationCandidate, 0, len(ranked))
+	for _, item := range ranked {
+		out = append(out, item.candidate)
+	}
+	return normalizeReentryCandidates(out)
+}
+
+func extractReentryJSON(text string) string {
+	text = strings.TrimSpace(text)
+	if strings.HasPrefix(text, "{") && strings.HasSuffix(text, "}") {
+		return text
+	}
+	start := strings.Index(text, "{")
+	end := strings.LastIndex(text, "}")
+	if start >= 0 && end > start {
+		return text[start : end+1]
+	}
+	return text
+}
+
+func (r *Runtime) deliverReentryRecommendation(ctx context.Context, key session.SessionKey, record session.ReentryRecommendation, now time.Time) error {
+	rows := reentryRecommendationButtonRows(record)
+	if len(rows) == 0 {
+		return nil
+	}
+	msg := core.OutboundMessage{
+		ChatID:     record.ChatID,
+		Text:       r.prefixTelegramPresentedText(r.telegramPresentationForMessage(reentryInboundForRecord(record)), "Possible next steps:"),
+		ButtonRows: rows,
+	}
+	messageID, err := r.outbound.SendMessage(ctx, msg)
+	if err != nil {
+		_, _, _ = r.store.MarkReentryRecommendationStale(record.ID, "recommendation delivery failed", now)
+		return nil
+	}
+	if messageID > 0 {
+		updated, _, err := r.store.MarkReentryRecommendationShown(record.ID, messageID, now)
+		if err != nil {
+			return err
+		}
+		record = updated
+		if sess, loadErr := r.store.Load(key); loadErr == nil && sess != nil {
+			if recordErr := r.store.RecordOutbound(key, sess.TurnCount, messageID, "reentry_recommendation"); recordErr != nil {
+				return fmt.Errorf("record reentry recommendation outbound: %w", recordErr)
+			}
+		}
+		if threadID := telegramThreadIDFromScope(record.ChatID, record.Scope); threadID > 0 {
+			if err := r.store.RecordTelegramCallbackMessageThread(record.ChatID, messageID, threadID, "reentry_recommendation", now); err != nil {
+				return fmt.Errorf("record reentry recommendation callback thread: %w", err)
+			}
+		}
+		r.recordExecutionEvent(key, core.ExecutionEventReentryRecommendationShown, "reentry_recommendation", "shown", map[string]any{
+			"recommendation_id": record.ID,
+			"turn_run_id":       record.SourceTurnRunID,
+			"candidate_count":   len(record.Candidates),
+			"message_id":        messageID,
+		}, now)
+	}
+	return nil
+}
+
+func reentryRecommendationButtonRows(record session.ReentryRecommendation) [][]core.OutboundButton {
+	record = session.NormalizeReentryRecommendation(record)
+	row := make([]core.OutboundButton, 0, len(record.Candidates))
+	for _, candidate := range record.Candidates {
+		data := core.EncodeReentryRecommendationCallbackData(record.ID, candidate.ID, core.ReentryRecommendationCallbackSelect)
+		if data == "" {
+			continue
+		}
+		row = append(row, core.OutboundButton{Text: normalizeReentryButtonLabel(candidate.Label), CallbackData: data})
+	}
+	ignore := core.EncodeReentryRecommendationCallbackData(record.ID, "", core.ReentryRecommendationCallbackIgnore)
+	if ignore != "" {
+		row = append(row, core.OutboundButton{Text: "Ignore", CallbackData: ignore})
+	}
+	if len(row) == 0 {
+		return nil
+	}
+	return [][]core.OutboundButton{row}
+}
+
+func reentryRecommendationID(fingerprint string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(fingerprint)))
+	return "reentry-" + hex.EncodeToString(sum[:6])
+}
+
+func reentryRecommendationOwner(run session.TurnRun) string {
+	if run.ChatID == 0 {
+		return ""
+	}
+	return fmt.Sprintf("telegram:%d", run.ChatID)
+}
+
+func reentryInboundForRecord(record session.ReentryRecommendation) core.InboundMessage {
+	return core.InboundMessage{
+		ChatID:           record.ChatID,
+		SenderID:         record.SenderID,
+		TelegramThreadID: telegramThreadIDFromScope(record.ChatID, record.Scope),
+	}
+}
+
+func (r *Runtime) CurrentReentryRecommendationFingerprint(key session.SessionKey) (string, bool, error) {
+	if r == nil || r.store == nil {
+		return "", false, nil
+	}
+	run, err := r.store.LatestTurnRun(key)
+	if err != nil {
+		return "", false, err
+	}
+	if run == nil || run.Status == session.TurnRunStatusRunning {
+		return "", false, nil
+	}
+	state, ok, _, err := r.reentryRecommendationState(context.Background(), key, *run, time.Now().UTC().Add(reentryRecommendationDelay))
+	if err != nil || !ok {
+		return "", ok, err
+	}
+	return state.Fingerprint, true, nil
+}

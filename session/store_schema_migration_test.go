@@ -1289,6 +1289,7 @@ func TestMigratesSchemaV63ToV64TurnRunAccounting(t *testing.T) {
 	if run.RequestText != "old accounted turn" || run.TotalToolCharsIn != 0 || run.ProviderInputTokens != 0 {
 		t.Fatalf("run = %#v, want preserved row with zero accounting defaults", run)
 	}
+	assertSQLiteColumn(t, store.db, "reentry_recommendations", "terminal_fingerprint")
 }
 
 func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {

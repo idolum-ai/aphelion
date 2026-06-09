@@ -296,6 +296,13 @@ func migrateSchemaV63ToV64(tx *sql.Tx) error {
 	return nil
 }
 
+func migrateSchemaV64ToV65(tx *sql.Tx) error {
+	if err := ensureReentryRecommendationTables(tx); err != nil {
+		return fmt.Errorf("migrate schema v64 to v65 ensure reentry recommendations: %w", err)
+	}
+	return nil
+}
+
 func ensureTurnRunAccountingColumns(tx *sql.Tx) error {
 	exists, err := schemaTableExists(tx, "turn_runs")
 	if err != nil {
