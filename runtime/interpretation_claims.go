@@ -53,7 +53,7 @@ func (r *Runtime) interpretCurrentTurnClaims(ctx context.Context, req interpreta
 				"Do not grant authority and do not decide execution. Runtime validators will check claims against leases, grants, operation state, TES, and sandbox policy.",
 				"Return exactly one line: " + interpretationClaimsMarker + `: {"schema_version":"` + interpretationClaimsSchema + `","surface":"...","claims":[...]}`,
 				"Allowed claim intents include reply_execution_claim, pending_media_intent, media_reply_modality, authority_classification, consent_requirement, continuation_goal, and missing_context.",
-				"For final replies, emit reply_execution_claim only when the text claims current-turn completion, tool execution, test execution, or durable-agent lifecycle work. Do not emit it for suggestions, hypotheticals, conceptual discussion, or clearly attributed prior validation.",
+				"For final replies, emit reply_execution_claim when the text claims current-turn completion, tool execution, test execution, durable-agent lifecycle work, active continuation execution, or granted approval/authority. Use risks completion, tool_execution, test_execution, durable_agent, continuation_execution, and approval_granted. Do not emit continuation_execution or approval_granted for explicit parked states such as needing fresh approval before continuing.",
 				"For media turns, emit pending_media_intent for a next-audio transcription instruction, or media_reply_modality for a current audio transcription instruction.",
 				"If no typed claim is present, return an empty claims array.",
 			}, "\n"),

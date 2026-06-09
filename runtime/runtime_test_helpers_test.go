@@ -316,6 +316,7 @@ func fakeInterpretationClaimsReply(raw string) string {
 	}
 	switch strings.TrimSpace(req.Surface) {
 	case "final_reply":
+		text = strings.NewReplacer("\u2018", "'", "\u2019", "'").Replace(text)
 		prior := strings.Contains(text, "prior validation") ||
 			strings.Contains(text, "previous validation") ||
 			strings.Contains(text, "existing validation record") ||
@@ -327,6 +328,13 @@ func fakeInterpretationClaimsReply(raw string) string {
 			strings.Contains(text, "will not pretend") ||
 			strings.Contains(text, "do not have") ||
 			strings.Contains(text, "without current-turn")
+		needsApproval := strings.Contains(text, "need approval") ||
+			strings.Contains(text, "needs approval") ||
+			strings.Contains(text, "fresh approval") ||
+			strings.Contains(text, "bounded approval") ||
+			strings.Contains(text, "before continuing") ||
+			strings.Contains(text, "cannot continue") ||
+			strings.Contains(text, "can't continue")
 		if !prior && !suggestion && !negated {
 			if strings.Contains(text, "done") || strings.Contains(text, "finished") || strings.Contains(text, "completed") || strings.Contains(text, "all set") {
 				addExecutionClaim("completion")
@@ -339,6 +347,19 @@ func fakeInterpretationClaimsReply(raw string) string {
 			}
 			if strings.Contains(text, "durable wake completed") || strings.Contains(text, "woke durable") || strings.Contains(text, "processed pending parent guidance") {
 				addExecutionClaim("durable_agent")
+			}
+			if !needsApproval {
+				if strings.Contains(text, "approved") || strings.Contains(text, "approval is in place") || strings.Contains(text, "authority is in place") {
+					addExecutionClaim("approval_granted")
+				}
+				if strings.Contains(text, "i'll continue") ||
+					strings.Contains(text, "i will continue") ||
+					strings.Contains(text, "i can continue") ||
+					strings.Contains(text, "continue with") ||
+					strings.Contains(text, "start the next phase") ||
+					strings.Contains(text, "begin the next phase") {
+					addExecutionClaim("continuation_execution")
+				}
 			}
 		}
 	case "inbound_media_instruction":

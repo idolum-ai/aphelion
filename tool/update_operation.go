@@ -22,8 +22,8 @@ func (r *Registry) updateOperation(_ context.Context, input json.RawMessage, key
 
 	var in updateOperationInput
 	if len(input) > 0 {
-		if err := json.Unmarshal(input, &in); err != nil {
-			return "", fmt.Errorf("decode update_operation input: %w", err)
+		if err := decodeToolObjectInput(input, &in, "update_operation"); err != nil {
+			return "", err
 		}
 	}
 

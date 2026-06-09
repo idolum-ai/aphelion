@@ -265,6 +265,108 @@ func TestGoalContinuationInfersPushPRFollowUpAfterCompletedLocalPhase(t *testing
 	}
 }
 
+func TestGoalContinuationInfersReleaseReadinessAfterCompletedWalkthrough(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9050, UserID: 0, Scope: telegramDMScopeRef(9050)}
+	now := time.Now().UTC()
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "aphelion-release-process-walkthrough",
+		Objective: "Begin the Aphelion release process from latest main.",
+		Status:    session.OperationStatusCompleted,
+		Stage:     "release_walkthrough_complete",
+		Summary:   "Release process walkthrough completed. No release, tag, deploy, restart, push, or credential action was performed.",
+		Proposal: session.OperationProposal{
+			ID:            "release-process-walkthrough",
+			Kind:          "read_only_review",
+			Summary:       "Walk through release readiness from latest main",
+			WhyNow:        "The operator was preparing to begin the release process.",
+			BoundedEffect: "Inspect and explain release readiness; stop before release effects.",
+			Status:        session.ProposalStatusApproved,
+			UpdatedAt:     now,
+		},
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status: session.ContinuationStatusIdle,
+		ContinuationLease: session.ContinuationLease{
+			Status:         session.ContinuationLeaseStatusConsumed,
+			MaxTurns:       1,
+			RemainingTurns: 0,
+			ConsumedAt:     now,
+		},
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	msg := core.InboundMessage{
+		ChatID:    9050,
+		SenderID:  1001,
+		Text:      "yep, perfect! let's continue",
+		MessageID: 44,
+	}
+	inferred, err := rt.maybeInferGoalContinuationProposal(context.Background(), key, msg, msg.Text, &turn.Result{})
+	if err != nil {
+		t.Fatalf("maybeInferGoalContinuationProposal() err = %v", err)
+	}
+	if !inferred {
+		t.Fatal("maybeInferGoalContinuationProposal() = false, want release readiness proposal")
+	}
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, msg, msg.Text, nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want release readiness approval buttons")
+	}
+
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if opState.Status != session.OperationStatusBlocked || opState.Stage != "next_phase_proposal" || opState.Proposal.Status != session.ProposalStatusPending {
+		t.Fatalf("operation state = %#v, want blocked next_phase_proposal with pending proposal", opState)
+	}
+	if opState.Proposal.Kind != "read_only_review" || !strings.Contains(opState.Proposal.Summary, "release readiness") {
+		t.Fatalf("proposal = %#v, want read-only release readiness proposal", opState.Proposal)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.OperationID != opState.Proposal.ID {
+		t.Fatalf("continuation = %#v, want pending continuation linked to release readiness proposal", cont)
+	}
+	for _, want := range []string{"inspect_readonly_state", "draft_next_phase_plan"} {
+		if !actionListContains(cont.ActionProposal.AllowedActions, want) {
+			t.Fatalf("allowed actions = %#v, want %q", cont.ActionProposal.AllowedActions, want)
+		}
+	}
+	for _, want := range []string{"edit_files", "commit", "deploy", "restart_service", "push_remote"} {
+		if !actionListContains(cont.ActionProposal.ForbiddenActions, want) {
+			t.Fatalf("forbidden actions = %#v, want %q", cont.ActionProposal.ForbiddenActions, want)
+		}
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 || !strings.Contains(inlineText, "release readiness") {
+		t.Fatalf("inline count/text = %d/%q, want release readiness approval prompt", inlineCount, inlineText)
+	}
+}
+
 func TestGoalContinuationDoesNotInferPushPRFromCompletedPhaseWithoutFollowUpSignal(t *testing.T) {
 	t.Parallel()
 

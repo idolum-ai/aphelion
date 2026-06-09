@@ -151,6 +151,9 @@ func goalContinuationCandidateFromState(
 	if candidate, ok := goalContinuationConcreteFollowUpCandidate(sourceText, opState, planState, priorContinuation); ok {
 		return candidate, true
 	}
+	if candidate, ok := goalContinuationReleaseReadinessCandidate(sourceText, opState, planState, priorContinuation); ok {
+		return candidate, true
+	}
 	if !goalContinuationHasEnoughSignals(sourceText, planState) {
 		return goalContinuationCandidate{}, false
 	}
@@ -333,6 +336,49 @@ func goalContinuationHasBranchPRFollowUpSignal(lower string) bool {
 		strings.Contains(lower, "branch") ||
 		strings.Contains(lower, "open or update") ||
 		strings.Contains(lower, "open/update")
+}
+
+func goalContinuationReleaseReadinessCandidate(text string, opState session.OperationState, planState session.PlanState, prior session.ContinuationState) (goalContinuationCandidate, bool) {
+	lower := strings.ToLower(text)
+	if !goalContinuationHasOperatorContinueSignal(lower) || !strings.Contains(lower, "release") {
+		return goalContinuationCandidate{}, false
+	}
+	objective := firstNonEmptyContinuation(
+		opState.Objective,
+		prior.Objective,
+		planState.Explanation,
+		"Prepare Aphelion for release.",
+	)
+	basis := "Persisted operation state shows a completed release-related phase, and the operator asked to continue after completion; no active continuation lease remains."
+	if opState.Proposal.ID != "" {
+		basis += " Previous proposal: " + strings.TrimSpace(opState.Proposal.ID) + "."
+	}
+	return goalContinuationCandidate{
+		Kind:          "read_only_review",
+		Objective:     objective,
+		Summary:       "Run a read-only release readiness check",
+		StateSummary:  "A completed release-related phase needs a fresh bounded read-only follow-up before Aphelion continues.",
+		WhyNow:        "The release-process phase completed and the operator asked to continue; the next bounded readiness pass requires explicit approval instead of reusing consumed authority.",
+		BoundedEffect: "Inspect persisted operation state, local repository status, latest main alignment, tags or release checklist evidence, and recent validation signals; report release readiness and blockers only. Do not edit files, commit, push, tag, publish a release, deploy, restart services, use credentials, or change policy or permissions.",
+		Basis:         basis,
+		FindingClaim:  "Completed release-process follow-up inference found a read-only release readiness pass that needs a fresh bounded approval.",
+	}, true
+}
+
+func goalContinuationHasOperatorContinueSignal(lower string) bool {
+	for _, needle := range []string{
+		"continue",
+		"let's continue",
+		"lets continue",
+		"proceed",
+		"next step",
+		"next phase",
+	} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func goalContinuationHasEnoughSignals(text string, planState session.PlanState) bool {

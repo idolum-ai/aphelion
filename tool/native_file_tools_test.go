@@ -137,6 +137,39 @@ func TestNativeFileToolsHonorApprovedUserProfile(t *testing.T) {
 	}
 }
 
+func TestNativeFileToolsHonorAdminReadonlyPathsForSourceCheckout(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	sourceCheckout := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceCheckout, "AGENTS.md"), []byte("source checkout visible"), 0o600); err != nil {
+		t.Fatalf("write source fixture: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	scope := sandbox.Scope{
+		Principal:        p,
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       filepath.Join(workspace, "prompt"),
+		SharedMemoryRoot: filepath.Join(workspace, "shared"),
+		WorkingRoot:      workspace,
+	}
+
+	_, err := registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(sourceCheckout, "AGENTS.md"))+`","full":true}`), scope, p, session.SessionKey{})
+	if err == nil || !strings.Contains(err.Error(), "outside the read roots") {
+		t.Fatalf("read_file without admin readonly path err = %v, want read-root rejection", err)
+	}
+
+	scope.Profile.ReadonlyPaths = []string{sourceCheckout}
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(sourceCheckout, "AGENTS.md"))+`","full":true}`), scope, p, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("read_file with admin readonly path err = %v", err)
+	}
+	if !strings.Contains(out, "source checkout visible") {
+		t.Fatalf("read_file out = %q, want source checkout content", out)
+	}
+}
+
 func TestReadFileRequiresExplicitWindowOrFull(t *testing.T) {
 	t.Parallel()
 

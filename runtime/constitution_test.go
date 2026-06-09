@@ -318,6 +318,128 @@ func TestApplyTurnConstitutionRepairsUngroundedExecutionClaimWithoutBanner(t *te
 	assertHasEventType(t, events, core.ExecutionEventReplyClaimAdjudicated)
 }
 
+func TestApplyTurnConstitutionRepairsUnsupportedContinuationClaim(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.repairReplyText = "I need a fresh bounded approval before continuing."
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9006, UserID: 0, Scope: telegramDMScopeRef(9006)}
+	auditRecorder := newTurnAuditRecorder(key, "telegram", "admin", "continue")
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		GlobalRoot:       cfg.Agent.PromptRoot,
+		SharedMemoryRoot: cfg.Agent.SharedMemoryRoot,
+		WorkingRoot:      cfg.Agent.ExecRoot,
+	}
+	finalText := rt.applyTurnConstitution(
+		context.Background(),
+		key,
+		scope,
+		"telegram",
+		"admin",
+		"continue",
+		rt.currentFaceRenderer(),
+		prompt.RuntimeAwareness{},
+		core.MaterialPacket{},
+		"",
+		"Approved. I'll continue with a read-only release readiness check.",
+		nil,
+		auditRecorder,
+	)
+	if finalText != "I need a fresh bounded approval before continuing." {
+		t.Fatalf("final text = %q, want fresh approval repair", finalText)
+	}
+	audit := auditRecorder.Snapshot()
+	if !audit.FaceRepairAttempted || !audit.FaceRepairApplied {
+		t.Fatalf("audit face repair = attempted:%t applied:%t, want true/true", audit.FaceRepairAttempted, audit.FaceRepairApplied)
+	}
+	if len(audit.ExecutionClaimFindings) == 0 {
+		t.Fatal("execution findings empty, want continuation surface finding")
+	}
+	if !executionFindingsContainClaim(audit.ExecutionClaimFindings, "continuation_execution") ||
+		!executionFindingsContainClaim(audit.ExecutionClaimFindings, "approval_granted") {
+		t.Fatalf("execution findings = %#v, want continuation and approval claims", audit.ExecutionClaimFindings)
+	}
+	if !containsViolationRule(audit.ConstitutionViolations, constitutionRuleExecutionClaimUngrounded) {
+		t.Fatalf("violations = %#v, want execution claim grounding rule", audit.ConstitutionViolations)
+	}
+}
+
+func TestApplyTurnConstitutionAllowsContinuationClaimWithActiveLease(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.repairReplyText = "I need a fresh bounded approval before continuing."
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9007, UserID: 0, Scope: telegramDMScopeRef(9007)}
+	now := time.Now().UTC()
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		Objective:      "Run the read-only release readiness check.",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:      "aprop-release-readiness",
+			Summary: "Run the read-only release readiness check",
+			Status:  session.ProposalStatusApproved,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-release-readiness",
+			ProposalID:     "aprop-release-readiness",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			AllowedActions: []string{"inspect_status"},
+			ExpiresAt:      now.Add(time.Hour),
+		},
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	auditRecorder := newTurnAuditRecorder(key, "telegram", "admin", "continue")
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		GlobalRoot:       cfg.Agent.PromptRoot,
+		SharedMemoryRoot: cfg.Agent.SharedMemoryRoot,
+		WorkingRoot:      cfg.Agent.ExecRoot,
+	}
+	reply := "Approved. I'll continue with the read-only release readiness check."
+	finalText := rt.applyTurnConstitution(
+		context.Background(),
+		key,
+		scope,
+		"telegram",
+		"admin",
+		"continue",
+		rt.currentFaceRenderer(),
+		prompt.RuntimeAwareness{},
+		core.MaterialPacket{},
+		"",
+		reply,
+		nil,
+		auditRecorder,
+	)
+	if finalText != reply {
+		t.Fatalf("final text = %q, want original reply", finalText)
+	}
+	audit := auditRecorder.Snapshot()
+	if len(audit.ExecutionClaimFindings) != 0 {
+		t.Fatalf("execution findings = %#v, want none with active lease", audit.ExecutionClaimFindings)
+	}
+}
+
 func TestHandleInboundBrokerageConvergesAfterAdaptation(t *testing.T) {
 	t.Parallel()
 
@@ -837,6 +959,16 @@ func TestGroundFinalReplyWithExecutionEvidenceKeepsGroundedTestClaim(t *testing.
 func containsViolationRule(violations []ConstitutionViolation, want string) bool {
 	for _, violation := range violations {
 		if strings.TrimSpace(violation.Rule) == strings.TrimSpace(want) {
+			return true
+		}
+	}
+	return false
+}
+
+func executionFindingsContainClaim(findings []ExecutionClaimFinding, want string) bool {
+	want = strings.TrimSpace(want)
+	for _, finding := range findings {
+		if strings.TrimSpace(finding.ClaimType) == want {
 			return true
 		}
 	}

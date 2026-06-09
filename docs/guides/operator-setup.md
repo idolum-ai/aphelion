@@ -61,6 +61,15 @@ user_memory_root = "~/.aphelion/state/isolated/memory"
 `exec_root` is the default shell scope for the `exec` tool. Do not point it at a
 broader tree than you mean to operate inside.
 
+If the source checkout is outside `exec_root` or `prompt_root`, add it as an
+admin read-only sandbox path so first-class file tools can inspect it without
+falling back to shell commands:
+
+```toml
+[sandbox.profiles.admin]
+readonly_paths = ["/home/user/src/aphelion"]
+```
+
 ## Optional GitHub App Credentials
 
 Aphelion can verify and mint short-lived GitHub App installation tokens from an

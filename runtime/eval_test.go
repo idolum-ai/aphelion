@@ -93,6 +93,7 @@ func TestTrajectoryEvalScenariosCoverWatchedFailureCandidates(t *testing.T) {
 		"trajectory_partial_provider_failure_verifies_before_claiming",
 		"trajectory_restart_watchdog_rehydrates_active_phase",
 		"trajectory_completed_continuation_no_rerun",
+		"trajectory_release_continue_requires_fresh_approval",
 		"trajectory_text_approval_requires_typed_lease",
 		"trajectory_authority_contract_repair_no_dead_end",
 		"trajectory_durable_child_blocked_wake_surfaces_repair",
@@ -250,8 +251,8 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	if report.Failed || report.HardFailureCount != 0 {
 		t.Fatalf("trajectory report failed: hard=%d results=%#v", report.HardFailureCount, report.Results)
 	}
-	if report.ScenarioCount != 12 || report.ResultCount != 12 {
-		t.Fatalf("scenario/result count = %d/%d, want 12/12", report.ScenarioCount, report.ResultCount)
+	if report.ScenarioCount != 13 || report.ResultCount != 13 {
+		t.Fatalf("scenario/result count = %d/%d, want 13/13", report.ScenarioCount, report.ResultCount)
 	}
 	for _, result := range report.Results {
 		for _, want := range []string{core.ExecutionEventTurnStarted, core.ExecutionEventDeliveryFinalSent, core.ExecutionEventTurnCompleted} {
@@ -320,6 +321,13 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	}
 	if !evalTestContainsString(byID["trajectory_completed_continuation_no_rerun"].EventTypes, core.ExecutionEventContinuationBoundaryReached) {
 		t.Fatalf("completed continuation missing no-rerun boundary event: %#v", byID["trajectory_completed_continuation_no_rerun"])
+	}
+	releaseContinue := byID["trajectory_release_continue_requires_fresh_approval"]
+	if releaseContinue.OperationStatus != string(session.OperationStatusBlocked) || releaseContinue.Continuation != string(session.ContinuationStatusPending) {
+		t.Fatalf("release continuation state = %#v, want blocked operation with pending continuation", releaseContinue)
+	}
+	if !evalTestContainsString(releaseContinue.EventTypes, core.ExecutionEventContinuationOffered) {
+		t.Fatalf("release continuation missing fresh approval event: %#v", releaseContinue)
 	}
 	if !evalTestContainsString(byID["trajectory_text_approval_requires_typed_lease"].EventTypes, core.ExecutionEventDecisionOpened) {
 		t.Fatalf("text approval trajectory missing typed decision event: %#v", byID["trajectory_text_approval_requires_typed_lease"])

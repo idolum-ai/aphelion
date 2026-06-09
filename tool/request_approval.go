@@ -27,8 +27,8 @@ func (r *Registry) requestApproval(_ context.Context, input json.RawMessage, key
 	}
 
 	var in requestApprovalInput
-	if err := json.Unmarshal(input, &in); err != nil {
-		return "", fmt.Errorf("decode request_approval input: %w", err)
+	if err := decodeToolObjectInput(input, &in, "request_approval"); err != nil {
+		return "", err
 	}
 	rawAllowedActions := append([]string(nil), in.Phase.AllowedActions...)
 	rawForbiddenActions := append([]string(nil), in.Phase.ForbiddenActions...)

@@ -139,6 +139,101 @@ func TestUpdateOperationToolPersistsAndShowsOperationState(t *testing.T) {
 	}
 }
 
+func TestDurableOperationToolsDecodeStringWrappedObjectInputs(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	updateInput := stringWrappedJSON(t, `{"objective":"Keep continuation state durable.","status":"active","stage":"wrapped-input","summary":"Decoded from a JSON string."}`)
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		updateInput,
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation wrapped) err = %v", err)
+	}
+	if !strings.Contains(out, "[OPERATION_UPDATED]") {
+		t.Fatalf("update_operation output = %q, want updated marker", out)
+	}
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if opState.Stage != "wrapped_input" {
+		t.Fatalf("operation stage = %q, want wrapped_input", opState.Stage)
+	}
+
+	approvalInput := stringWrappedJSON(t, `{"objective":"Ask before the next slice.","phase":{"id":"phase-wrapped-approval","summary":"Run read-only release readiness check","authority_class":"read_only_review","why_now":"The operator asked to continue after completion.","bounded_effect":"Inspect repo state and report release readiness only.","allowed_actions":["inspect_status"],"forbidden_actions":["edit_files","commit","push_remote","deploy"],"validation_plan":["report findings"]}}`)
+	out, err = registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"request_approval",
+		approvalInput,
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(request_approval wrapped) err = %v", err)
+	}
+	if !strings.Contains(out, "[APPROVAL_REQUESTED]") {
+		t.Fatalf("request_approval output = %q, want approval marker", out)
+	}
+	opState, err = store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() after approval err = %v", err)
+	}
+	if opState.Status != session.OperationStatusBlocked || opState.Proposal.Status != session.ProposalStatusPending {
+		t.Fatalf("operation = %#v, want blocked pending proposal", opState)
+	}
+}
+
+func TestDurableOperationToolsRejectStringWrappedNonObjectInputs(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		tool  string
+		input json.RawMessage
+	}{
+		{name: "update array", tool: "update_operation", input: stringWrappedJSON(t, `[]`)},
+		{name: "approval prose", tool: "request_approval", input: stringWrappedJSON(t, `not json`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := registry.ExecuteForSessionPrincipal(
+				context.Background(),
+				principal.Principal{Role: principal.RoleAdmin},
+				key,
+				tc.tool,
+				tc.input,
+			)
+			if err == nil || !strings.Contains(err.Error(), "decode "+tc.tool+" input") {
+				t.Fatalf("%s err = %v, want decode error", tc.tool, err)
+			}
+		})
+	}
+}
+
+func stringWrappedJSON(t *testing.T, raw string) json.RawMessage {
+	t.Helper()
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal wrapped input: %v", err)
+	}
+	return json.RawMessage(encoded)
+}
+
 func TestUpdateOperationAckOmitsEmptyReceivedFieldsLine(t *testing.T) {
 	t.Parallel()
 
