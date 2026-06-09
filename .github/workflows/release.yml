@@ -46,7 +46,7 @@ jobs:
               printf '%s\n' '    print("release_ref="); print("release_tag="); print("release_name="); print(f"notes_path={notes}"); print("should_tag=false")'
               printf '%s\n' '    raise SystemExit(0)'
               printf '%s\n' 'base = ((pr.get("base") or {}).get("ref")) or ""'
-              printf '%s\n' 'm = re.fullmatch(r"release/(v[0-9]+\\.[0-9]+\\.[0-9]+(?:[-.][0-9A-Za-z.-]+)?)", base)'
+              printf '%s\n' 'm = re.fullmatch(r"release/(v[0-9]+\.[0-9]+\.[0-9]+(?:[-.][0-9A-Za-z.-]+)?)", base)'
               printf '%s\n' 'if not m:'
               printf '%s\n' '    raise SystemExit(f"release PR base must match release/vX.Y.Z; got {base!r}")'
               printf '%s\n' 'sha = pr.get("merge_commit_sha") or ""'
@@ -55,7 +55,7 @@ jobs:
               printf '%s\n' 'tag = m.group(1)'
               printf '%s\n' 'title = pr.get("title") or tag'
               printf '%s\n' 'body = pr.get("body") or "_Release PR body was empty._\\n"'
-              printf '%s\n' 'open(notes, "w", encoding="utf-8").write(f"# {tag}\\n\\nSource PR: {title}\\n\\n" + body.rstrip() + "\\n")'
+              printf '%s\n' 'open(notes, "w", encoding="utf-8").write(f"# {tag}\n\nSource PR: {title}\n\n" + body.rstrip() + "\n")'
               printf '%s\n' 'print(f"release_ref={sha}"); print(f"release_tag={tag}"); print(f"release_name={tag}"); print(f"notes_path={notes}"); print("should_tag=true")'
             } > /tmp/resolve-release-pr.py
             python3 /tmp/resolve-release-pr.py "$GITHUB_EVENT_PATH" "$notes_path" >> "$GITHUB_OUTPUT"
