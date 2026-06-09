@@ -14,11 +14,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 type fakeWorkExecutor struct {
+	mu        sync.Mutex
 	name      string
 	ready     bool
 	reason    string
@@ -31,32 +33,52 @@ type fakeWorkExecutor struct {
 }
 
 func (f *fakeWorkExecutor) Name() string {
-	if strings.TrimSpace(f.name) == "" {
-		return "fake"
-	}
-	return f.name
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return fakeWorkExecutorName(f.name)
 }
 
 func (f *fakeWorkExecutor) Available(_ context.Context, req WorkRequest) WorkAvailability {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.lastAvail = req
 	return WorkAvailability{Available: f.ready, Reason: f.reason}
 }
 
 func (f *fakeWorkExecutor) Run(_ context.Context, req WorkRequest) (WorkResult, error) {
+	f.mu.Lock()
 	f.calls++
 	f.lastReq = req
-	if f.runHook != nil {
-		f.runHook(req)
-	}
-	if f.err != nil {
-		return WorkResult{}, f.err
-	}
+	hook := f.runHook
+	err := f.err
 	out := f.result
-	out.ExecutorName = f.Name()
+	name := fakeWorkExecutorName(f.name)
+	f.mu.Unlock()
+
+	if hook != nil {
+		hook(req)
+	}
+	if err != nil {
+		return WorkResult{}, err
+	}
+	out.ExecutorName = name
 	if strings.TrimSpace(out.Summary) == "" {
 		out.Summary = "work complete"
 	}
 	return out, nil
+}
+
+func (f *fakeWorkExecutor) CallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+func fakeWorkExecutorName(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return "fake"
+	}
+	return name
 }
 
 func TestWorkExecutorSelectorAutoCanPreferCodexAndFallBackNative(t *testing.T) {

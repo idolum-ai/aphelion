@@ -18,18 +18,18 @@ func operationStatusIsTerminal(status session.OperationStatus) bool {
 	}
 }
 
-func (r *Runtime) syncOperationProposalStatusFromContinuation(key session.SessionKey, state session.ContinuationState, status session.ProposalStatus) {
+func (r *Runtime) syncOperationProposalStatusFromContinuation(key session.SessionKey, state session.ContinuationState, status session.ProposalStatus) error {
 	if r == nil || r.store == nil || status == "" {
-		return
+		return nil
 	}
 	state = session.NormalizeContinuationState(state)
 	opID := strings.TrimSpace(state.ActionProposal.OperationID)
 	if opID == "" && strings.TrimSpace(state.ActionProposal.ID) == "" && strings.TrimSpace(state.DecisionID) == "" && strings.TrimSpace(state.ContinuationLease.ID) == "" {
-		return
+		return nil
 	}
 	opState, err := r.store.OperationState(key)
 	if err != nil {
-		return
+		return err
 	}
 	opState = session.NormalizeOperationState(opState)
 	planLeaseUpdated := syncOperationPlanLeaseStatusFromContinuation(&opState, state, status)
@@ -46,7 +46,7 @@ func (r *Runtime) syncOperationProposalStatusFromContinuation(key session.Sessio
 		updated = true
 	}
 	if !updated {
-		return
+		return nil
 	}
 	if status == session.ProposalStatusApproved {
 		if planLeaseUpdated && continuationActionIsPlanLeaseApproval(state) {
@@ -64,7 +64,7 @@ func (r *Runtime) syncOperationProposalStatusFromContinuation(key session.Sessio
 		opState.Status = session.OperationStatusBlocked
 	}
 	opState.UpdatedAt = time.Now().UTC()
-	_ = r.store.UpdateOperationState(key, opState)
+	return r.store.UpdateOperationState(key, opState)
 }
 
 func syncOperationPlanLeaseStatusFromContinuation(opState *session.OperationState, state session.ContinuationState, status session.ProposalStatus) bool {

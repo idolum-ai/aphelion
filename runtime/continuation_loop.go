@@ -32,19 +32,11 @@ func (r *Runtime) triggerContinuationLoop(ctx context.Context, key session.Sessi
 	if r == nil {
 		return nil
 	}
-	initial, err := r.ContinuationStateForKey(key)
+	state, ran, loopBudget, err := r.triggerApprovedContinuationOnce(ctx, key)
 	if err != nil {
 		return err
 	}
-	initial = session.NormalizeContinuationState(initial)
-	wasRunnable := initial.Status == session.ContinuationStatusApproved && initial.RemainingTurns > 0
-	loopBudget := continuationLoopBudget(initial)
-
-	state, err := r.triggerApprovedContinuationOnce(ctx, key)
-	if err != nil {
-		return err
-	}
-	if !wasRunnable {
+	if !ran {
 		return nil
 	}
 	turnsRun := 1
@@ -68,9 +60,14 @@ func (r *Runtime) triggerContinuationLoop(ctx context.Context, key session.Sessi
 		if err := r.sendContinuationLoopProgress(ctx, key, state, decision); err != nil {
 			log.Printf("WARN continuation loop progress send failed chat_id=%d err=%v", key.ChatID, err)
 		}
-		state, err = r.triggerApprovedContinuationOnce(ctx, key)
+		state, ran, _, err = r.triggerApprovedContinuationOnce(ctx, key)
 		if err != nil {
 			return err
+		}
+		if !ran {
+			decision = r.continuationLoopDecisionForState(key, state, time.Now().UTC())
+			r.recordContinuationLoopBoundary(key, state, decision, turnsRun)
+			return r.maybeOfferNextOperationPhaseAfterContinuationBoundary(ctx, key, state, decision)
 		}
 		turnsRun++
 		decision = r.continuationLoopDecisionForState(key, state, time.Now().UTC())

@@ -12,6 +12,7 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -211,6 +212,179 @@ func TestTriggerContinuationLoopsWhileApprovedLeaseHasTurns(t *testing.T) {
 	}
 	if !hasExecutionEvent(events, core.ExecutionEventContinuationBoundaryReached) {
 		t.Fatalf("events = %#v, want continuation boundary event after loop exhausts", events)
+	}
+}
+
+func TestConcurrentContinuationReservationsConsumeSingleLeaseTurn(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 8122, UserID: 0, Scope: telegramDMScopeRef(8122)}
+	action := session.ActionProposal{
+		ID:            "aprop-concurrent-reservation",
+		Summary:       "Run one reserved continuation turn.",
+		BoundedEffect: "Consume exactly one approved turn.",
+		Status:        session.ProposalStatusApproved,
+		ExpiresAt:     now.Add(time.Hour),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "concurrent-reservation",
+		Objective:      "Prove one-turn leases cannot be double-spent.",
+		StageSummary:   action.Summary,
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: action,
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-concurrent-reservation",
+			ProposalID:     action.ID,
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ApprovedBy:     1001,
+			ApprovedAt:     now,
+			ExpiresAt:      now.Add(time.Hour),
+			PlanHash:       action.PlanHash,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	type result struct {
+		reserved bool
+		repair   bool
+		err      error
+	}
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, reservation, _, repair, err := rt.reserveApprovedContinuationTurn(key)
+			results <- result{reserved: reservation != nil, repair: repair != nil, err: err}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	reserved := 0
+	for got := range results {
+		if got.err != nil {
+			t.Fatalf("reserveApprovedContinuationTurn() err = %v", got.err)
+		}
+		if got.repair {
+			t.Fatal("reserveApprovedContinuationTurn() repair = true, want no lease repair")
+		}
+		if got.reserved {
+			reserved++
+		}
+	}
+	if reserved != 1 {
+		t.Fatalf("reserved turns = %d, want exactly one reservation for one approved turn", reserved)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusIdle || got.RemainingTurns != 0 || got.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed {
+		t.Fatalf("continuation = %#v, want single consumed idle lease", got)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if got := countEventsByType(events, core.ExecutionEventContinuationConsumed); got != 1 {
+		t.Fatalf("consumed events = %d, want 1", got)
+	}
+}
+
+func TestConcurrentTriggerContinuationExecutesSingleLeaseTurn(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{Text: "continued"}}
+	rt.interactiveDMAssembler = recorder
+
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 8123, UserID: 0, Scope: telegramDMScopeRef(8123)}
+	action := session.ActionProposal{
+		ID:            "aprop-concurrent-trigger",
+		Summary:       "Run one public trigger continuation turn.",
+		BoundedEffect: "Execute exactly one approved turn.",
+		Status:        session.ProposalStatusApproved,
+		ExpiresAt:     now.Add(time.Hour),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "concurrent-trigger",
+		Objective:      "Prove concurrent triggers cannot execute more than the lease allows.",
+		StageSummary:   action.Summary,
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: action,
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-concurrent-trigger",
+			ProposalID:     action.ID,
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ApprovedBy:     1001,
+			ApprovedAt:     now,
+			ExpiresAt:      now.Add(time.Hour),
+			PlanHash:       action.PlanHash,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- rt.TriggerContinuationForKey(context.Background(), key)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("TriggerContinuationForKey() err = %v", err)
+		}
+	}
+	if got := recorder.CallCount(); got != 1 {
+		t.Fatalf("assembler calls = %d, want exactly one executed continuation turn", got)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if got := countEventsByType(events, core.ExecutionEventContinuationConsumed); got != 1 {
+		t.Fatalf("consumed events = %d, want 1", got)
 	}
 }
 

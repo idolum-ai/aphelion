@@ -44,7 +44,9 @@ func (r *Runtime) consumeActiveContinuationLeaseForMaterializedState(ctx context
 	if err := r.store.UpdateContinuationState(key, adopted); err != nil {
 		return false, err
 	}
-	r.syncOperationProposalStatusFromContinuation(key, adopted, session.ProposalStatusApproved)
+	if err := r.syncOperationProposalStatusFromContinuation(key, adopted, session.ProposalStatusApproved); err != nil {
+		return false, err
+	}
 	payload := continuationExecutionPayload(adopted)
 	payload["materialized_from"] = strings.TrimSpace(source)
 	payload["class_scope_reason"] = strings.TrimSpace(decision.Reason)

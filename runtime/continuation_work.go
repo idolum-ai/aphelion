@@ -57,6 +57,12 @@ func (r *Runtime) ApproveContinuationForKey(key session.SessionKey, approverID i
 }
 
 func (r *Runtime) ApproveContinuationBundleForKey(key session.SessionKey, approverID int64, phaseIDs []string) (session.ContinuationState, error) {
+	unlock := r.lockSession(key)
+	defer unlock()
+	return r.approveContinuationBundleForKeyLocked(key, approverID, phaseIDs)
+}
+
+func (r *Runtime) approveContinuationBundleForKeyLocked(key session.SessionKey, approverID int64, phaseIDs []string) (session.ContinuationState, error) {
 	state, err := r.store.ContinuationState(key)
 	if err != nil {
 		return session.ContinuationState{}, err
@@ -102,7 +108,9 @@ func (r *Runtime) ApproveContinuationBundleForKey(key session.SessionKey, approv
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return session.ContinuationState{}, err
 	}
-	r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusApproved)
+	if err := r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusApproved); err != nil {
+		return session.ContinuationState{}, fmt.Errorf("sync approved operation proposal status: %w", err)
+	}
 	payload := continuationExecutionPayload(state)
 	payload["approved_by_user"] = approverID
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationApproved, "continuation", "approved", payload, now)
@@ -255,6 +263,12 @@ func (r *Runtime) RevokeContinuation(chatID int64) (ContinuationRevokeResult, er
 }
 
 func (r *Runtime) RevokeContinuationForKey(key session.SessionKey) (ContinuationRevokeResult, error) {
+	unlock := r.lockSession(key)
+	defer unlock()
+	return r.revokeContinuationForKeyLocked(key)
+}
+
+func (r *Runtime) revokeContinuationForKeyLocked(key session.SessionKey) (ContinuationRevokeResult, error) {
 	state, err := r.store.ContinuationState(key)
 	if err != nil {
 		return ContinuationRevokeResult{}, err
@@ -266,7 +280,9 @@ func (r *Runtime) RevokeContinuationForKey(key session.SessionKey) (Continuation
 		if err := r.store.UpdateContinuationState(key, state); err != nil {
 			return ContinuationRevokeResult{}, err
 		}
-		r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusDenied)
+		if err := r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusDenied); err != nil {
+			return ContinuationRevokeResult{}, fmt.Errorf("sync revoked operation proposal status: %w", err)
+		}
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationRevoked, "continuation", "revoked", continuationExecutionPayload(state), time.Now().UTC())
 	}
 	return ContinuationRevokeResult{State: state, Revoked: revoked, ContinuationLabel: continuationUserFacingPlanLabel(state)}, nil
@@ -287,65 +303,92 @@ func (r *Runtime) TriggerContinuationForKey(ctx context.Context, key session.Ses
 	return r.triggerContinuationLoop(ctx, key)
 }
 
-func (r *Runtime) triggerApprovedContinuationOnce(ctx context.Context, key session.SessionKey) (session.ContinuationState, error) {
-	state, err := r.ContinuationStateForKey(key)
+type approvedContinuationReservation struct {
+	State           session.ContinuationState
+	Actor           principal.Principal
+	ExecutionActor  principal.Principal
+	ApprovedBy      int64
+	EventText       string
+	SandboxRequired bool
+	WorkRequest     *WorkRequest
+	WorkMode        WorkMode
+}
+
+type leaseAccessDeniedRepair struct {
+	Prior    session.ContinuationState
+	Decision session.ContinuationLeaseAccessDecision
+	At       time.Time
+}
+
+func (r *Runtime) triggerApprovedContinuationOnce(ctx context.Context, key session.SessionKey) (session.ContinuationState, bool, int, error) {
+	state, reservation, loopBudget, repair, err := r.reserveApprovedContinuationTurn(key)
+	if repair != nil {
+		r.offerLeaseActionDeniedRepair(context.Background(), key, key.ChatID, repair.Prior, repair.Decision, repair.At)
+	}
 	if err != nil {
-		return session.ContinuationState{}, err
+		return state, false, loopBudget, err
+	}
+	if reservation == nil {
+		return state, false, loopBudget, nil
+	}
+	if err := r.runReservedApprovedContinuation(ctx, key, *reservation); err != nil {
+		return state, true, loopBudget, err
+	}
+	updated, err := r.ContinuationStateForKey(key)
+	if err != nil {
+		return session.ContinuationState{}, true, loopBudget, err
+	}
+	return updated, true, loopBudget, nil
+}
+
+func (r *Runtime) reserveApprovedContinuationTurn(key session.SessionKey) (session.ContinuationState, *approvedContinuationReservation, int, *leaseAccessDeniedRepair, error) {
+	unlock := r.lockSession(key)
+	defer unlock()
+	return r.reserveApprovedContinuationTurnLocked(key)
+}
+
+func (r *Runtime) reserveApprovedContinuationTurnLocked(key session.SessionKey) (session.ContinuationState, *approvedContinuationReservation, int, *leaseAccessDeniedRepair, error) {
+	state, err := r.store.ContinuationState(key)
+	if err != nil {
+		return session.ContinuationState{}, nil, 0, nil, err
 	}
 	if continuationLeaseExpired(state, time.Now().UTC()) {
 		state = continuationStateWithLeaseExpired(state, time.Now().UTC())
 		if err := r.store.UpdateContinuationState(key, state); err != nil {
-			return session.ContinuationState{}, err
+			return session.ContinuationState{}, nil, 0, nil, err
+		}
+		if err := r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusExpired); err != nil {
+			return session.ContinuationState{}, nil, 0, nil, fmt.Errorf("sync expired operation proposal status: %w", err)
 		}
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), time.Now().UTC())
-		return state, nil
+		return state, nil, 0, nil, nil
 	}
 	if continuationActionIsPlanLeaseApproval(state) && !state.ApprovalBundle.Active() {
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "approval_only", continuationExecutionPayload(state), time.Now().UTC())
-		return state, nil
+		return state, nil, 0, nil, nil
 	}
 	if state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), time.Now().UTC())
-		return state, nil
+		return state, nil, 0, nil, nil
 	}
 	if err := r.validateContinuationApprovalBundleFingerprints(key, state); err != nil {
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "stale_bundle", continuationExecutionPayload(state), time.Now().UTC())
-		return state, err
+		return state, nil, 0, nil, err
 	}
 	approverID := state.ApprovedBy
 	if approverID <= 0 {
-		return state, fmt.Errorf("continuation approver is not recorded")
+		return state, nil, 0, nil, fmt.Errorf("continuation approver is not recorded")
 	}
 	actor, ok := r.resolver.ResolveTelegramUser(approverID)
 	if !ok {
-		return state, fmt.Errorf("continuation approver %d is not admitted", approverID)
+		return state, nil, 0, nil, fmt.Errorf("continuation approver %d is not admitted", approverID)
 	}
-	if err := r.runApprovedContinuation(ctx, actor, key, state); err != nil {
-		return state, err
-	}
-	updated, err := r.ContinuationStateForKey(key)
-	if err != nil {
-		return session.ContinuationState{}, err
-	}
-	return updated, nil
-}
-
-func (r *Runtime) runApprovedContinuation(ctx context.Context, actor principal.Principal, key session.SessionKey, state session.ContinuationState) error {
 	state = session.NormalizeContinuationState(state)
-	if state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
-		return nil
-	}
+	loopBudget := continuationLoopBudget(state)
 	if r.shouldRouteContinuationThroughWorkExecutor(state) {
-		return r.runApprovedWorkContinuation(ctx, actor, key, state)
+		return r.reserveApprovedWorkContinuationTurnLocked(key, actor, state, loopBudget)
 	}
-	return r.runApprovedContinuationNative(ctx, actor, key, state)
-}
 
-func (r *Runtime) runApprovedContinuationNative(ctx context.Context, actor principal.Principal, key session.SessionKey, state session.ContinuationState) error {
-	state = session.NormalizeContinuationState(state)
-	if state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
-		return nil
-	}
 	sandboxRequired := continuationRequiresApprovedUserSandbox(state)
 	executionActor := continuationExecutionActor(actor, state)
 	approvedBy := state.ApprovedBy
@@ -355,7 +398,7 @@ func (r *Runtime) runApprovedContinuationNative(ctx context.Context, actor princ
 	continuationEventText := approvedContinuationEventTextForState(state)
 	state = continuationStateAfterLeaseTurnConsumed(state, time.Now().UTC())
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
-		return err
+		return state, nil, loopBudget, nil, err
 	}
 	payload := continuationExecutionPayload(state)
 	payload["approved_by_user"] = approvedBy
@@ -367,9 +410,14 @@ func (r *Runtime) runApprovedContinuationNative(ctx context.Context, actor princ
 		payload["sandboxed_from_role"] = string(actor.Role)
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "consumed", payload, time.Now().UTC())
-	msg := continuationInboundForKey(key, executionActor, continuationEventText, core.InboundOriginTurnAuthorization, string(session.TurnAuthorizationKindContinuation))
-	_, err := r.handleInternalContinuation(ctx, executionActor, msg)
-	return err
+	return state, &approvedContinuationReservation{
+		State:           state,
+		Actor:           actor,
+		ExecutionActor:  executionActor,
+		ApprovedBy:      approvedBy,
+		EventText:       continuationEventText,
+		SandboxRequired: sandboxRequired,
+	}, loopBudget, nil, nil
 }
 
 func (r *Runtime) shouldRouteContinuationThroughWorkExecutor(state session.ContinuationState) bool {
@@ -382,27 +430,27 @@ func (r *Runtime) shouldRouteContinuationThroughWorkExecutor(state session.Conti
 	return continuationWorkMode(state) != ""
 }
 
-func (r *Runtime) runApprovedWorkContinuation(ctx context.Context, actor principal.Principal, key session.SessionKey, state session.ContinuationState) error {
-	if r == nil || r.store == nil || r.workExecutor == nil {
-		return r.runApprovedContinuationNative(ctx, actor, key, state)
-	}
-	state = session.NormalizeContinuationState(state)
+func (r *Runtime) reserveApprovedWorkContinuationTurnLocked(key session.SessionKey, actor principal.Principal, state session.ContinuationState, loopBudget int) (session.ContinuationState, *approvedContinuationReservation, int, *leaseAccessDeniedRepair, error) {
 	mode := continuationWorkMode(state)
 	leaseDecision := continuationWorkModeAccessCheck(state, mode, time.Now().UTC())
 	if !leaseDecision.Allowed {
-		return r.blockContinuationForLeaseAccessDenied(key, state, leaseDecision)
+		blocked, repair, err := r.blockContinuationForLeaseAccessDeniedLocked(key, state, leaseDecision, time.Now().UTC())
+		return blocked, nil, 0, repair, err
 	}
 	executionActor := continuationExecutionActor(actor, state)
 	approvedBy := state.ApprovedBy
 	if approvedBy == 0 {
 		approvedBy = actor.TelegramUserID
 	}
-	opState, _ := r.store.OperationState(key)
+	opState, err := r.store.OperationState(key)
+	if err != nil {
+		return state, nil, loopBudget, nil, err
+	}
 	opState = session.NormalizeOperationState(opState)
 	req := r.workRequestForContinuation(key, key.ChatID, executionActor, state, opState)
 	state = continuationStateAfterLeaseTurnConsumed(state, time.Now().UTC())
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
-		return err
+		return state, nil, loopBudget, nil, err
 	}
 	payload := continuationExecutionPayload(state)
 	payload["approved_by_user"] = approvedBy
@@ -415,10 +463,34 @@ func (r *Runtime) runApprovedWorkContinuation(ctx context.Context, actor princip
 		"lease_id":     strings.TrimSpace(req.LeaseID),
 		"mode":         strings.TrimSpace(string(req.Mode)),
 	}, time.Now().UTC())
+	return state, &approvedContinuationReservation{
+		State:          state,
+		Actor:          actor,
+		ExecutionActor: executionActor,
+		ApprovedBy:     approvedBy,
+		WorkRequest:    &req,
+		WorkMode:       mode,
+	}, loopBudget, nil, nil
+}
+
+func (r *Runtime) runReservedApprovedContinuation(ctx context.Context, key session.SessionKey, reservation approvedContinuationReservation) error {
+	if reservation.WorkRequest != nil {
+		return r.runReservedApprovedWorkContinuation(ctx, key, reservation)
+	}
+	msg := continuationInboundForKey(key, reservation.ExecutionActor, reservation.EventText, core.InboundOriginTurnAuthorization, string(session.TurnAuthorizationKindContinuation))
+	_, err := r.handleInternalContinuation(ctx, reservation.ExecutionActor, msg)
+	return err
+}
+
+func (r *Runtime) runReservedApprovedWorkContinuation(ctx context.Context, key session.SessionKey, reservation approvedContinuationReservation) error {
+	if r == nil || r.store == nil || r.workExecutor == nil || reservation.WorkRequest == nil {
+		return nil
+	}
+	req := *reservation.WorkRequest
 	result, err := r.workExecutor.Run(ctx, req)
 	status := r.workExecutor.Status()
 	if err != nil {
-		artifact := r.persistWorkResult(key, req, result, status, err)
+		artifact := r.persistWorkResultForContinuation(key, req, result, status, err)
 		payload := workResultPayload(req, result, status, err)
 		if artifact.Ref != "" {
 			payload["artifact_ref"] = artifact.Ref
@@ -442,8 +514,8 @@ func (r *Runtime) runApprovedWorkContinuation(ctx context.Context, actor princip
 			log.Printf("WARN send work executor fallback warning failed chat_id=%d err=%v", key.ChatID, err)
 		}
 	}
-	artifact := r.persistWorkResult(key, req, result, status, nil)
-	payload = workResultPayload(req, result, status, nil)
+	artifact := r.persistWorkResultForContinuation(key, req, result, status, nil)
+	payload := workResultPayload(req, result, status, nil)
 	if artifact.Ref != "" {
 		payload["artifact_ref"] = artifact.Ref
 	}
@@ -452,6 +524,12 @@ func (r *Runtime) runApprovedWorkContinuation(ctx context.Context, actor princip
 		return err
 	}
 	return nil
+}
+
+func (r *Runtime) persistWorkResultForContinuation(key session.SessionKey, req WorkRequest, result WorkResult, status WorkExecutorStatus, cause error) session.OperationArtifact {
+	unlock := r.lockSession(key)
+	defer unlock()
+	return r.persistWorkResult(key, req, result, status, cause)
 }
 
 func (r *Runtime) warnWorkExecutorFallback(ctx context.Context, key session.SessionKey, status WorkExecutorStatus) error {
@@ -480,24 +558,34 @@ func workExecutorFallbackWarning(status WorkExecutorStatus) string {
 }
 
 func (r *Runtime) blockContinuationForLeaseAccessDenied(key session.SessionKey, state session.ContinuationState, decision session.ContinuationLeaseAccessDecision) error {
-	if r == nil || r.store == nil {
-		return nil
+	unlock := r.lockSession(key)
+	_, repair, err := r.blockContinuationForLeaseAccessDeniedLocked(key, state, decision, time.Now().UTC())
+	unlock()
+	if repair != nil {
+		r.offerLeaseActionDeniedRepair(context.Background(), key, key.ChatID, repair.Prior, repair.Decision, repair.At)
 	}
-	now := time.Now().UTC()
+	return err
+}
+
+func (r *Runtime) blockContinuationForLeaseAccessDeniedLocked(key session.SessionKey, state session.ContinuationState, decision session.ContinuationLeaseAccessDecision, now time.Time) (session.ContinuationState, *leaseAccessDeniedRepair, error) {
+	if r == nil || r.store == nil {
+		return session.NormalizeContinuationState(state), nil, nil
+	}
 	prior := session.NormalizeContinuationState(state)
 	state = continuationStateWithLeaseRevoked(state, now)
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
-		return err
+		return session.ContinuationState{}, nil, err
 	}
-	r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusDenied)
+	if err := r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusDenied); err != nil {
+		return session.ContinuationState{}, nil, fmt.Errorf("sync denied operation proposal status: %w", err)
+	}
 	payload := continuationExecutionPayload(state)
 	payload["reason"] = "lease_action_denied"
 	payload["lease_action"] = strings.TrimSpace(decision.Action)
 	payload["lease_access_reason"] = strings.TrimSpace(decision.Reason)
 	payload["lease_id"] = strings.TrimSpace(decision.LeaseID)
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", payload, now)
-	r.offerLeaseActionDeniedRepair(context.Background(), key, key.ChatID, prior, decision, now)
-	return nil
+	return state, &leaseAccessDeniedRepair{Prior: prior, Decision: decision, At: now}, nil
 }
 
 func (r *Runtime) workRequestForContinuation(key session.SessionKey, chatID int64, actor principal.Principal, state session.ContinuationState, opState session.OperationState) WorkRequest {

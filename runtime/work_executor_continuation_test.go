@@ -13,6 +13,7 @@ import (
 	"github.com/idolum-ai/aphelion/turn"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -312,6 +313,94 @@ func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	defer sender.mu.Unlock()
 	if len(sender.sent) != 1 || !strings.Contains(sender.sent[0].Text, "patched tests") || !strings.Contains(sender.sent[0].Text, "runtime/work_executor.go") || !strings.Contains(sender.sent[0].Text, "commit_requires_separate_lease") {
 		t.Fatalf("sent = %#v, want visible work executor summary", sender.sent)
+	}
+}
+
+func TestConcurrentWorkContinuationTriggerExecutesSingleLeaseTurn(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{Summary: "patched once"}}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Hour)
+	key := session.SessionKey{ChatID: 8198, UserID: 0, Scope: telegramDMScopeRef(8198)}
+	action := session.ActionProposal{
+		ID:            "aprop-concurrent-work-trigger",
+		Summary:       "Patch one runtime file",
+		BoundedEffect: "Run one bounded workspace-write work executor turn.",
+		RiskClass:     "workspace_write",
+		AllowedActions: []string{
+			"execute_bounded_proposal_once",
+			"workspace_write",
+			"run_tests",
+		},
+		Status:    session.ProposalStatusApproved,
+		ExpiresAt: expiresAt,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "concurrent-work-trigger",
+		Objective:      "Prove concurrent work triggers cannot execute more than the lease allows.",
+		StageSummary:   action.Summary,
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: action,
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-concurrent-work-trigger",
+			ProposalID:     action.ID,
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			AllowedActions: action.AllowedActions,
+			ApprovedBy:     1001,
+			ApprovedAt:     now,
+			ExpiresAt:      expiresAt,
+			PlanHash:       action.PlanHash,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{ID: "op-concurrent-work-trigger", Objective: "Patch once.", Status: session.OperationStatusActive}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- rt.TriggerContinuationForKey(context.Background(), key)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("TriggerContinuationForKey() err = %v", err)
+		}
+	}
+	if got := work.CallCount(); got != 1 {
+		t.Fatalf("work executor calls = %d, want exactly one executed continuation turn", got)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if got := countEventsByType(events, core.ExecutionEventContinuationConsumed); got != 1 {
+		t.Fatalf("consumed events = %d, want 1", got)
 	}
 }
 
