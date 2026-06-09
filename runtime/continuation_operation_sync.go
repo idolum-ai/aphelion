@@ -32,15 +32,19 @@ func (r *Runtime) syncOperationProposalStatusFromContinuation(key session.Sessio
 		return err
 	}
 	opState = session.NormalizeOperationState(opState)
-	planLeaseUpdated := syncOperationPlanLeaseStatusFromContinuation(&opState, state, status)
+	terminalOperation := operationStatusIsTerminal(opState.Status)
+	planLeaseUpdated := false
+	if !terminalOperation {
+		planLeaseUpdated = syncOperationPlanLeaseStatusFromContinuation(&opState, state, status)
+	}
 	updated := planLeaseUpdated
-	if syncOperationBundlePhaseStatusFromContinuation(&opState, state, status) {
+	if !terminalOperation && syncOperationBundlePhaseStatusFromContinuation(&opState, state, status) {
 		updated = true
 	}
-	if syncOperationPhaseStatusFromContinuation(&opState, state, status) {
+	if !terminalOperation && syncOperationPhaseStatusFromContinuation(&opState, state, status) {
 		updated = true
 	}
-	if strings.TrimSpace(opState.Proposal.ID) == opID && opState.Proposal.Status == session.ProposalStatusPending {
+	if strings.TrimSpace(opState.Proposal.ID) == opID && opState.Proposal.Status == session.ProposalStatusPending && operationProposalStatusCanSyncFromContinuation(opState, status) {
 		opState.Proposal.Status = status
 		opState.Proposal.UpdatedAt = time.Now().UTC()
 		updated = true
@@ -48,7 +52,7 @@ func (r *Runtime) syncOperationProposalStatusFromContinuation(key session.Sessio
 	if !updated {
 		return nil
 	}
-	if status == session.ProposalStatusApproved {
+	if !terminalOperation && status == session.ProposalStatusApproved {
 		if planLeaseUpdated && continuationActionIsPlanLeaseApproval(state) {
 			if state.ApprovalBundle.Active() {
 				opState.Status = session.OperationStatusActive
@@ -60,11 +64,23 @@ func (r *Runtime) syncOperationProposalStatusFromContinuation(key session.Sessio
 		} else {
 			opState.Status = session.OperationStatusActive
 		}
-	} else if status == session.ProposalStatusDenied || status == session.ProposalStatusExpired || status == session.ProposalStatusSuperseded {
+	} else if !terminalOperation && (status == session.ProposalStatusDenied || status == session.ProposalStatusExpired || status == session.ProposalStatusSuperseded) {
 		opState.Status = session.OperationStatusBlocked
 	}
 	opState.UpdatedAt = time.Now().UTC()
 	return r.store.UpdateOperationState(key, opState)
+}
+
+func operationProposalStatusCanSyncFromContinuation(opState session.OperationState, status session.ProposalStatus) bool {
+	if !operationStatusIsTerminal(opState.Status) {
+		return true
+	}
+	switch status {
+	case session.ProposalStatusDenied, session.ProposalStatusExpired, session.ProposalStatusSuperseded:
+		return true
+	default:
+		return false
+	}
 }
 
 func syncOperationPlanLeaseStatusFromContinuation(opState *session.OperationState, state session.ContinuationState, status session.ProposalStatus) bool {
@@ -74,6 +90,9 @@ func syncOperationPlanLeaseStatusFromContinuation(opState *session.OperationStat
 	*opState = session.NormalizeOperationState(*opState)
 	state = session.NormalizeContinuationState(state)
 	if !continuationActionIsPlanLeaseApproval(state) {
+		return false
+	}
+	if opState.PlanLease.Status == session.PlanLeaseStatusCompleted {
 		return false
 	}
 	leaseID := strings.TrimSpace(state.ActionProposal.OperationID)
@@ -160,6 +179,9 @@ func syncOperationBundlePhaseStatusFromContinuation(opState *session.OperationSt
 		if !ok {
 			continue
 		}
+		if opState.PhasePlan.Phases[i].Status == session.PlanStatusCompleted {
+			continue
+		}
 		switch status {
 		case session.ProposalStatusApproved:
 			if bundlePhase.Status == session.ContinuationLeaseStatusDeferred {
@@ -211,6 +233,9 @@ func syncOperationPhaseStatusFromContinuation(opState *session.OperationState, s
 			matches = strings.TrimSpace(phase.LeaseID) == leaseID
 		}
 		if !matches {
+			continue
+		}
+		if phase.Status == session.PlanStatusCompleted {
 			continue
 		}
 		switch status {
