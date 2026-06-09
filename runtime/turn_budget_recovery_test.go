@@ -291,6 +291,148 @@ func TestBudgetRecoveryDeliveryBlocksAfterThreeSameScopeAttempts(t *testing.T) {
 	}
 }
 
+func TestContinuationBudgetRecoveryPendingTracksHighestHop(t *testing.T) {
+	type hopEvent struct {
+		hop    int
+		status string
+		at     time.Duration
+	}
+	recovery := &core.TurnRecovery{
+		Kind:           core.TurnRecoveryTokenBudgetExhausted,
+		Recoverable:    true,
+		ReplanRequired: true,
+		Summary:        "Token budget exhausted before a final response.",
+		MaxAutoHops:    3,
+	}
+
+	for i, tc := range []struct {
+		name   string
+		events []hopEvent
+		want   bool
+	}{
+		{
+			name: "higher hop pending survives late lower hop terminal event",
+			events: []hopEvent{
+				{hop: 1, status: "scheduled", at: -5 * time.Second},
+				{hop: 2, status: "scheduled", at: -4 * time.Second},
+				{hop: 2, status: "resuming", at: -3 * time.Second},
+				{hop: 1, status: "resumed", at: -2 * time.Second},
+			},
+			want: true,
+		},
+		{
+			name: "highest hop terminal clears pending",
+			events: []hopEvent{
+				{hop: 2, status: "scheduled", at: -5 * time.Second},
+				{hop: 2, status: "resuming", at: -4 * time.Second},
+				{hop: 2, status: "resumed", at: -3 * time.Second},
+			},
+			want: false,
+		},
+		{
+			name: "lower hop failure does not clear higher hop pending",
+			events: []hopEvent{
+				{hop: 2, status: "resuming", at: -5 * time.Second},
+				{hop: 1, status: "failed", at: -4 * time.Second},
+			},
+			want: true,
+		},
+		{
+			name: "expired pending event is ignored",
+			events: []hopEvent{
+				{hop: 2, status: "resuming", at: -turnBudgetRecoveryTimeout - time.Minute},
+			},
+			want: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, store, provider, sender := buildRuntimeFixtures(t)
+			rt, err := New(cfg, store, provider, nil, sender)
+			if err != nil {
+				t.Fatalf("New() err = %v", err)
+			}
+			now := time.Now().UTC()
+			chatID := int64(9730 + i)
+			key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+			opState := budgetRecoveryTestOperationState()
+			if err := store.UpdateOperationState(key, opState); err != nil {
+				t.Fatalf("UpdateOperationState() err = %v", err)
+			}
+			state := budgetRecoveryApprovedContinuationForTest(now, 2)
+			if err := store.UpdateContinuationState(key, state); err != nil {
+				t.Fatalf("UpdateContinuationState() err = %v", err)
+			}
+			msg := core.InboundMessage{ChatID: key.ChatID, SenderID: 1001}
+			scope, _ := rt.turnBudgetRecoveryScope(key, msg, &turn.Result{OperationState: opState})
+			for _, event := range tc.events {
+				recordBudgetRecoveryHopEventForTest(t, rt, key, recovery, scope, event.hop, event.status, now.Add(event.at))
+			}
+
+			if got := rt.continuationBudgetRecoveryPending(key, state, now); got != tc.want {
+				t.Fatalf("continuationBudgetRecoveryPending() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTriggerContinuationDoesNotConsumeLeaseDuringPendingBudgetRecovery(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{Text: "should not run"}}
+	rt.interactiveDMAssembler = recorder
+
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 9739, UserID: 0, Scope: telegramDMScopeRef(9739)}
+	opState := budgetRecoveryTestOperationState()
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	state := budgetRecoveryApprovedContinuationForTest(now, 1)
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	recovery := &core.TurnRecovery{
+		Kind:           core.TurnRecoveryTokenBudgetExhausted,
+		Recoverable:    true,
+		ReplanRequired: true,
+		Summary:        "Token budget exhausted before a final response.",
+		MaxAutoHops:    3,
+	}
+	msg := core.InboundMessage{ChatID: key.ChatID, SenderID: 1001}
+	scope, _ := rt.turnBudgetRecoveryScope(key, msg, &turn.Result{OperationState: opState})
+	recordBudgetRecoveryHopEventForTest(t, rt, key, recovery, scope, 1, "scheduled", now.Add(-5*time.Second))
+	recordBudgetRecoveryHopEventForTest(t, rt, key, recovery, scope, 2, "scheduled", now.Add(-4*time.Second))
+	recordBudgetRecoveryHopEventForTest(t, rt, key, recovery, scope, 2, "resuming", now.Add(-3*time.Second))
+	recordBudgetRecoveryHopEventForTest(t, rt, key, recovery, scope, 1, "resumed", now.Add(-2*time.Second))
+
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v", err)
+	}
+	if recorder.CallCount() != 0 {
+		t.Fatalf("assembler calls = %d, want no continuation turn while recovery is pending", recorder.CallCount())
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusApproved || got.RemainingTurns != 1 || got.ContinuationLease.Status != session.ContinuationLeaseStatusActive || got.ContinuationLease.RemainingTurns != 1 {
+		t.Fatalf("continuation = %#v, want approved lease unchanged while recovery is pending", got)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if got := countEventsByType(events, core.ExecutionEventContinuationConsumed); got != 0 {
+		t.Fatalf("consumed events = %d, want none while recovery is pending", got)
+	}
+	if !hasContinuationBlockedEventForTest(events, "recovery_pending", "recovery_pending") {
+		t.Fatalf("events = %#v, want recovery_pending continuation blocked event", events)
+	}
+}
+
 func TestBudgetRecoveryFailureIssuesRecoveryDecisionForActiveLease(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)
@@ -534,6 +676,61 @@ func budgetRecoveryTestOperationState() session.OperationState {
 			}},
 		},
 	}
+}
+
+func budgetRecoveryApprovedContinuationForTest(now time.Time, turns int) session.ContinuationState {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if turns <= 0 {
+		turns = 1
+	}
+	action := session.ActionProposal{
+		ID:             "aprop-budget-recovery-hop-gate",
+		Summary:        "Continue the approved budget recovery phase.",
+		BoundedEffect:  "Continue only the active approved phase and report evidence.",
+		RiskClass:      "workspace_write",
+		AllowedActions: []string{"continue_one_turn", "use_existing_authority_only", "report_evidence"},
+		Status:         session.ProposalStatusApproved,
+		ExpiresAt:      now.Add(time.Hour),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	lease := buildContinuationLease(action, turns, now)
+	lease.Status = session.ContinuationLeaseStatusActive
+	lease.RemainingTurns = turns
+	lease.ApprovedBy = 1001
+	lease.ApprovedAt = now
+	return session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusApproved,
+		DecisionID:        "budget-recovery-hop-gate",
+		Objective:         "Continue the approved budget recovery phase.",
+		StageSummary:      action.Summary,
+		RemainingTurns:    turns,
+		ApprovedBy:        1001,
+		ActionProposal:    action,
+		ContinuationLease: lease,
+	}
+}
+
+func recordBudgetRecoveryHopEventForTest(t *testing.T, rt *Runtime, key session.SessionKey, recovery *core.TurnRecovery, scope string, hop int, status string, at time.Time) {
+	t.Helper()
+	rt.recordExecutionEvent(key, core.ExecutionEventTurnBudgetRecovery, "turn", status, turnBudgetRecoveryPayload(recovery, scope, nil, hop, 3), at)
+}
+
+func hasContinuationBlockedEventForTest(events []session.ExecutionEvent, status string, reason string) bool {
+	for _, event := range events {
+		if event.EventType != core.ExecutionEventContinuationBlocked || event.Status != status {
+			continue
+		}
+		payload := executionEventPayload(event.PayloadJSON)
+		if payloadString(payload, "reason") == reason {
+			return true
+		}
+	}
+	return false
 }
 
 func principalForBudgetRecoveryTest(userID int64) principal.Principal {

@@ -411,31 +411,38 @@ func (r *Runtime) reserveApprovedContinuationTurn(key session.SessionKey) (sessi
 }
 
 func (r *Runtime) reserveApprovedContinuationTurnLocked(key session.SessionKey) (session.ContinuationState, *approvedContinuationReservation, int, *leaseAccessDeniedRepair, error) {
+	now := time.Now().UTC()
 	state, err := r.store.ContinuationState(key)
 	if err != nil {
 		return session.ContinuationState{}, nil, 0, nil, err
 	}
-	if continuationLeaseExpired(state, time.Now().UTC()) {
-		state = continuationStateWithLeaseExpired(state, time.Now().UTC())
+	if continuationLeaseExpired(state, now) {
+		state = continuationStateWithLeaseExpired(state, now)
 		if err := r.store.UpdateContinuationState(key, state); err != nil {
 			return session.ContinuationState{}, nil, 0, nil, err
 		}
 		if err := r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusExpired); err != nil {
 			return session.ContinuationState{}, nil, 0, nil, fmt.Errorf("sync expired operation proposal status: %w", err)
 		}
-		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), time.Now().UTC())
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), now)
 		return state, nil, 0, nil, nil
 	}
 	if continuationActionIsPlanLeaseApproval(state) && !state.ApprovalBundle.Active() {
-		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "approval_only", continuationExecutionPayload(state), time.Now().UTC())
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "approval_only", continuationExecutionPayload(state), now)
 		return state, nil, 0, nil, nil
 	}
 	if state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
-		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), time.Now().UTC())
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), now)
+		return state, nil, 0, nil, nil
+	}
+	if r.continuationBudgetRecoveryPending(key, state, now) {
+		payload := continuationExecutionPayload(state)
+		payload["reason"] = "recovery_pending"
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "recovery_pending", payload, now)
 		return state, nil, 0, nil, nil
 	}
 	if err := r.validateContinuationApprovalBundleFingerprints(key, state); err != nil {
-		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "stale_bundle", continuationExecutionPayload(state), time.Now().UTC())
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "stale_bundle", continuationExecutionPayload(state), now)
 		return state, nil, 0, nil, err
 	}
 	approverID := state.ApprovedBy
@@ -459,7 +466,7 @@ func (r *Runtime) reserveApprovedContinuationTurnLocked(key session.SessionKey) 
 		approvedBy = actor.TelegramUserID
 	}
 	continuationEventText := approvedContinuationEventTextForState(state)
-	state = continuationStateAfterLeaseTurnConsumed(state, time.Now().UTC())
+	state = continuationStateAfterLeaseTurnConsumed(state, now)
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return state, nil, loopBudget, nil, err
 	}
@@ -472,7 +479,7 @@ func (r *Runtime) reserveApprovedContinuationTurnLocked(key session.SessionKey) 
 	if executionActor.Role != actor.Role {
 		payload["sandboxed_from_role"] = string(actor.Role)
 	}
-	r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "consumed", payload, time.Now().UTC())
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "consumed", payload, now)
 	return state, &approvedContinuationReservation{
 		State:           state,
 		Actor:           actor,

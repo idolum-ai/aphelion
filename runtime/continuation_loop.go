@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -279,8 +280,12 @@ func (r *Runtime) continuationBudgetRecoveryPending(key session.SessionKey, stat
 	if err != nil {
 		return false
 	}
-	for i := len(events) - 1; i >= 0; i-- {
-		event := events[i]
+	type hopStatus struct {
+		status string
+	}
+	statusByHop := map[int]hopStatus{}
+	highestHop := -1
+	for _, event := range events {
 		if strings.TrimSpace(event.EventType) != core.ExecutionEventTurnBudgetRecovery {
 			continue
 		}
@@ -294,14 +299,61 @@ func (r *Runtime) continuationBudgetRecoveryPending(key session.SessionKey, stat
 		if strings.TrimSpace(fmt.Sprint(payload["recovery_scope"])) != scope {
 			continue
 		}
-		switch strings.TrimSpace(event.Status) {
-		case "scheduled", "resuming":
-			return true
-		default:
-			return false
+		hop := turnBudgetRecoveryPayloadHop(payload)
+		statusByHop[hop] = hopStatus{status: strings.TrimSpace(event.Status)}
+		if hop > highestHop {
+			highestHop = hop
 		}
 	}
-	return false
+	if highestHop < 0 {
+		return false
+	}
+	switch statusByHop[highestHop].status {
+	case "scheduled", "resuming":
+		return true
+	default:
+		return false
+	}
+}
+
+func turnBudgetRecoveryPayloadHop(payload map[string]any) int {
+	if len(payload) == 0 {
+		return 0
+	}
+	value, ok := payload["recovery_hop"]
+	if !ok || value == nil {
+		return 0
+	}
+	switch typed := value.(type) {
+	case int:
+		return nonNegativeRecoveryHop(typed)
+	case int64:
+		return nonNegativeRecoveryHop(int(typed))
+	case float64:
+		return nonNegativeRecoveryHop(int(typed))
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err == nil {
+			return nonNegativeRecoveryHop(int(parsed))
+		}
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(typed))
+		if err == nil {
+			return nonNegativeRecoveryHop(parsed)
+		}
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(fmt.Sprint(value)))
+	if err != nil {
+		return 0
+	}
+	return nonNegativeRecoveryHop(parsed)
+}
+
+func nonNegativeRecoveryHop(hop int) int {
+	if hop < 0 {
+		return 0
+	}
+	return hop
 }
 
 func (r *Runtime) recordContinuationLoopAssessment(key session.SessionKey, state session.ContinuationState, decision continuationLoopDecision, turnsRun int) {
