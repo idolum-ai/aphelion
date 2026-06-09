@@ -382,8 +382,8 @@ func (r *Runtime) sendContinuationLoopProgress(ctx context.Context, key session.
 		label = firstNonEmptyContinuation(state.ActionProposal.Summary, state.StageSummary, "approved continuation")
 	}
 	parts := []string{
-		fmt.Sprintf("Continuing approved lease: %s.", label),
-		fmt.Sprintf("Remaining turns: %d.", state.RemainingTurns),
+		fmt.Sprintf("Continuing approved step: %s.", label),
+		fmt.Sprintf("Approved steps remaining: %d.", state.RemainingTurns),
 	}
 	if status := strings.TrimSpace(decision.Mission.Status); status != "" && status != "not_bound" {
 		parts = append(parts, "Mission: "+status+".")

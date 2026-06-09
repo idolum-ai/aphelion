@@ -925,7 +925,7 @@ func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
 	if got.ActionProposal.ID == prior.ActionProposal.ID || got.ContinuationLease.ID == prior.ContinuationLease.ID {
 		t.Fatalf("fresh ids reused old proposal/lease: proposal=%q lease=%q", got.ActionProposal.ID, got.ContinuationLease.ID)
 	}
-	if got.ActionProposal.BoundedEffect != prior.ActionProposal.BoundedEffect || !strings.Contains(got.ActionProposal.WhyNow, "failed before completion") {
+	if got.ActionProposal.BoundedEffect != prior.ActionProposal.BoundedEffect || !strings.Contains(got.ActionProposal.WhyNow, "approval before retrying") {
 		t.Fatalf("fresh proposal = %#v, want same bounded effect with failure reason", got.ActionProposal)
 	}
 	op, err := store.OperationState(key)
@@ -940,8 +940,11 @@ func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want one retry approval prompt", len(sender.inline))
 	}
-	if !strings.Contains(sender.inline[0].text, "failed before completion") || !strings.Contains(sender.inline[0].text, prior.ActionProposal.BoundedEffect) {
+	if !strings.Contains(sender.inline[0].text, "approval before retrying") || !strings.Contains(sender.inline[0].text, prior.ActionProposal.BoundedEffect) {
 		t.Fatalf("inline text = %q, want retry reason and bounded effect", sender.inline[0].text)
+	}
+	if strings.Contains(sender.inline[0].text, "failed before completion") || strings.Contains(sender.inline[0].text, "fresh lease") {
+		t.Fatalf("inline text leaked internal retry copy: %q", sender.inline[0].text)
 	}
 	events, err := store.ExecutionEventsBySession(key, 0, 50)
 	if err != nil {
@@ -1206,7 +1209,7 @@ func TestTriggerCodingContinuationBudgetRecoveryDoesNotCompleteOperation(t *test
 	if gotCont.ActionProposal.ID == action.ID || gotCont.ContinuationLease.ID == lease.ID {
 		t.Fatalf("fresh ids reused old proposal/lease: proposal=%q lease=%q", gotCont.ActionProposal.ID, gotCont.ContinuationLease.ID)
 	}
-	if !strings.Contains(gotCont.ActionProposal.WhyNow, "failed before completion") {
+	if !strings.Contains(gotCont.ActionProposal.WhyNow, "approval before retrying") {
 		t.Fatalf("fresh proposal why_now = %q, want failure retry reason", gotCont.ActionProposal.WhyNow)
 	}
 	sender.mu.Lock()

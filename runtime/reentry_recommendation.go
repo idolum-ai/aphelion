@@ -242,8 +242,8 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 			ID:               "c1",
 			Kind:             session.ReentryCandidateReviewReleaseReadiness,
 			Label:            "Release Readiness",
-			Summary:          "Review the completed release-oriented state and propose the next bounded release-readiness edge.",
-			PromptText:       reentryPrompt("Review release readiness from the durable state. If more work is needed, request a fresh bounded approval; do not claim approval or continue under consumed authority."),
+			Summary:          "Review the completed release-oriented state and propose the next release-readiness step.",
+			PromptText:       reentryPrompt("Review release readiness from saved state. If more work is needed, ask for approval for the next step before taking action."),
 			AuthorityClass:   "read_only",
 			RequiresApproval: true,
 			BasisRefs:        []string{fmt.Sprintf("turn_run:%d", state.Run.ID), "operation_state"},
@@ -252,7 +252,7 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 	op := session.NormalizeOperationState(state.Operation)
 	if op.Active() && (op.Status == session.OperationStatusCompleted || op.Status == session.OperationStatusBlocked || op.Status == session.OperationStatusActive) {
 		kind := session.ReentryCandidateRequestNextLease
-		label := "Next Lease"
+		label := "Next Step"
 		if op.Status == session.OperationStatusBlocked {
 			label = "Repair Path"
 		}
@@ -260,8 +260,8 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 			ID:               nextReentryCandidateID(candidates),
 			Kind:             kind,
 			Label:            label,
-			Summary:          "Reconstruct the operation state and ask for the smallest next bounded approval if work remains.",
-			PromptText:       reentryPrompt("Re-enter the current operation from durable state. Identify whether work remains; if it does, request exactly one fresh bounded approval for the next phase. Do not reuse consumed or expired authority."),
+			Summary:          "Reconstruct the operation state and ask for the smallest next approval if work remains.",
+			PromptText:       reentryPrompt("Re-enter the current operation from saved state. Identify whether work remains; if it does, ask for approval for the smallest next step."),
 			AuthorityClass:   firstNonEmpty(op.PhasePlan.CurrentPhaseID, "operation"),
 			RequiresApproval: true,
 			BasisRefs:        []string{fmt.Sprintf("turn_run:%d", state.Run.ID), "operation_state"},
@@ -273,7 +273,7 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 			Kind:             session.ReentryCandidateResumeMission,
 			Label:            "Resume Mission",
 			Summary:          "Review the highest-signal mission currently recorded in the mission ledger.",
-			PromptText:       reentryPrompt("Review the selected mission and current durable session state. Ask for a fresh bounded approval if action is needed; otherwise summarize why the mission should remain parked."),
+			PromptText:       reentryPrompt("Review the selected mission and current saved state. Ask for approval if action is needed; otherwise summarize why the mission should remain parked."),
 			AuthorityClass:   "mission_review",
 			RequiresApproval: true,
 			BasisRefs:        []string{"mission"},
@@ -285,7 +285,7 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 			Kind:             session.ReentryCandidateClarifyGoal,
 			Label:            "Clarify Goal",
 			Summary:          "Ask the operator for the missing next objective instead of inventing authority.",
-			PromptText:       reentryPrompt("The system is idle and durable state does not support a concrete continuation. Ask one concise clarification question about the next objective."),
+			PromptText:       reentryPrompt("Saved state does not show a concrete next step. Ask one concise clarification question about the next objective."),
 			AuthorityClass:   "clarification",
 			RequiresApproval: false,
 			BasisRefs:        []string{fmt.Sprintf("turn_run:%d", state.Run.ID)},
@@ -339,7 +339,7 @@ func normalizeReentryButtonLabel(label string) string {
 }
 
 func reentryPrompt(instruction string) string {
-	return strings.TrimSpace(instruction) + "\n\nThis came from an idle re-entry recommendation. The button selected a path only; it did not approve execution, grant authority, or renew a consumed lease."
+	return strings.TrimSpace(instruction) + "\n\nThis suggestion only chose a path. If action is needed, ask before doing it."
 }
 
 func reentryLooksReleaseRelated(source string) bool {
@@ -583,13 +583,13 @@ func reentryRecommendationRankOptions(candidates []session.ReentryRecommendation
 func reentryCandidateRankSummary(kind session.ReentryCandidateKind) string {
 	switch session.NormalizeReentryCandidateKind(kind) {
 	case session.ReentryCandidateContinueOperation:
-		return "continue an operation only if durable state supports a bounded follow-up"
+		return "continue an operation only if saved state supports a clear follow-up"
 	case session.ReentryCandidateRequestNextLease:
-		return "request a fresh bounded lease for the next operation edge"
+		return "ask approval for the next operation step"
 	case session.ReentryCandidateResumeMission:
 		return "review mission state without assuming authority"
 	case session.ReentryCandidateReviewReleaseReadiness:
-		return "review release readiness and identify a bounded next edge"
+		return "review release readiness and identify a clear next step"
 	case session.ReentryCandidateClarifyGoal:
 		return "ask the operator for missing goal context"
 	default:

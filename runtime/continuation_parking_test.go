@@ -71,7 +71,7 @@ func TestParkActiveWorkForRestartRefreshesAndReoffersPendingContinuation(t *test
 	if !parked.ContinuationLease.ExpiresAt.After(before) {
 		t.Fatalf("lease expires_at = %v, want refreshed after %v", parked.ContinuationLease.ExpiresAt, before)
 	}
-	if !strings.Contains(parked.ActionProposal.WhyNow, "Restart/deploy parked") {
+	if !strings.Contains(parked.ActionProposal.WhyNow, "service restarted") {
 		t.Fatalf("why_now = %q, want restart parking reason", parked.ActionProposal.WhyNow)
 	}
 	events, err := store.ExecutionEventsBySession(key, 0, 20)
@@ -97,8 +97,11 @@ func TestParkActiveWorkForRestartRefreshesAndReoffersPendingContinuation(t *test
 	if inlineCount != 1 {
 		t.Fatalf("inline count = %d, want 1", inlineCount)
 	}
-	if !strings.Contains(inlineText, "Keep deploy-safe continuation alive.") || !strings.Contains(inlineText, "Restart/deploy parked") {
+	if !strings.Contains(inlineText, "Keep deploy-safe continuation alive.") || !strings.Contains(inlineText, "service restarted") {
 		t.Fatalf("inline text = %q, want parked continuation context", inlineText)
+	}
+	if strings.Contains(inlineText, "Restart/deploy parked") || strings.Contains(inlineText, "fresh lease") {
+		t.Fatalf("inline text leaked internal restart copy: %q", inlineText)
 	}
 	reoffered, err := store.ContinuationState(key)
 	if err != nil {
@@ -202,8 +205,11 @@ func TestParkActiveWorkForRestartInterruptsRunsAndReoffersApprovedContinuation(t
 	if inlineCount != 1 {
 		t.Fatalf("inline count = %d, want approved continuation reoffer prompt", inlineCount)
 	}
-	if !strings.Contains(inlineText, "confirm again after startup") && !strings.Contains(inlineText, "Restart/deploy parked this approved lease") {
+	if !strings.Contains(inlineText, "service restarted") {
 		t.Fatalf("inline text = %q, want restart confirmation language", inlineText)
+	}
+	if strings.Contains(inlineText, "confirm again after startup") || strings.Contains(inlineText, "Restart/deploy parked") || strings.Contains(inlineText, "approved lease") {
+		t.Fatalf("inline text leaked internal restart copy: %q", inlineText)
 	}
 	reoffered, err := store.ContinuationState(key)
 	if err != nil {

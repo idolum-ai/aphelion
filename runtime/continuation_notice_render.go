@@ -137,24 +137,23 @@ func (r *Runtime) groundContinuationBlockedNoticeWithExecutionEvidence(
 
 func renderContinuationBlockedFallback(state session.ContinuationState, governorName string) string {
 	reason := strings.TrimSpace(state.HandshakeBlockedReason)
-	governorName = continuationBlockedFallbackGovernorName(governorName)
 	switch reason {
 	case "persona_intent_missing":
-		return "I can't continue yet because I did not publish a continuation intent for this turn."
+		return "I need a clearer next step before continuing."
 	case "persona_rationale_missing":
-		return "I can't continue yet because I did not provide a clear continuation rationale."
+		return "I need a clearer reason to continue before taking the next step."
 	case "persona_not_willing":
-		return "I can't continue yet because I chose to hold this thread instead of auto-continuing."
+		return "I am holding here instead of continuing automatically."
 	case "governor_intent_missing":
-		return fmt.Sprintf("I can't continue yet because %s did not publish a continuation intent for this turn.", governorName)
+		return "I need a safer approval path before continuing."
 	case "governor_rationale_missing":
-		return fmt.Sprintf("I can't continue yet because %s did not provide a continuation rationale.", governorName)
+		return "I need a clearer approval reason before continuing."
 	case "governor_not_ratified":
-		return fmt.Sprintf("I can't continue yet because %s did not ratify continuation for this turn.", governorName)
+		return "I need approval before continuing."
 	case "governor_not_willing":
-		return fmt.Sprintf("I can't continue yet because %s explicitly held continuation for this turn.", governorName)
+		return "I am holding here until there is a safer next step."
 	default:
-		return "I can't continue this thread yet because the continuation handshake is still blocked."
+		return "I need a clearer or safer next step before continuing."
 	}
 }
 

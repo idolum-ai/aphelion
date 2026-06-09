@@ -95,7 +95,7 @@ func TestReentryRecommendationRankingPayloadAvoidsPrivateContext(t *testing.T) {
 			ID:          44,
 			Kind:        session.TurnRunKindInteractive,
 			Status:      session.TurnRunStatusCompleted,
-				RequestText: "release Secret Project Night Orchard using fake credential marker for test",
+			RequestText: "release Secret Project Night Orchard using fake credential marker for test",
 			ErrorText:   "failed while reading /home/alice/.aphelion/secrets/app.env for Secret Project Night Orchard",
 		},
 		Operation: session.OperationState{
@@ -125,6 +125,14 @@ func TestReentryRecommendationRankingPayloadAvoidsPrivateContext(t *testing.T) {
 		t.Fatalf("candidates = %#v, want multiple candidates for ranking", candidates)
 	}
 	for _, candidate := range candidates {
+		for _, forbidden := range []string{"grant authority", "consumed lease", "fresh bounded approval", "fresh bounded lease"} {
+			if strings.Contains(candidate.PromptText, forbidden) {
+				t.Fatalf("candidate prompt leaked internal copy %q: %#v", forbidden, candidate)
+			}
+		}
+		if !strings.Contains(candidate.PromptText, "ask before doing it") {
+			t.Fatalf("candidate prompt = %q, want ask-before-action warning", candidate.PromptText)
+		}
 		if candidate.Kind == session.ReentryCandidateResumeMission &&
 			(strings.Contains(candidate.Summary, "Secret Project Night Orchard") || strings.Contains(candidate.Summary, "private codename")) {
 			t.Fatalf("mission candidate summary leaked private mission content: %#v", candidate)
@@ -139,7 +147,7 @@ func TestReentryRecommendationRankingPayloadAvoidsPrivateContext(t *testing.T) {
 	payload := strings.Join(joined, "\n")
 	for _, forbidden := range []string{
 		"Secret Project Night Orchard",
-			"fake credential marker",
+		"fake credential marker",
 		"/home/alice/.aphelion/secrets/app.env",
 		"Daily private note",
 		"Push Secret Project",

@@ -141,11 +141,11 @@ func TestRenderContinuationBlockedNoticeUsesAnonymousGovernorName(t *testing.T) 
 		ChatID: key.ChatID,
 		Text:   "continue",
 	}, state)
-	if !strings.Contains(got, "System did not ratify") {
-		t.Fatalf("blocked notice = %q, want anonymous governor name", got)
+	if !strings.Contains(got, "I need approval before continuing") {
+		t.Fatalf("blocked notice = %q, want humanized approval hold", got)
 	}
-	if strings.Contains(got, "Idolum") {
-		t.Fatalf("blocked notice = %q, want no branded governor name in anonymous profile", got)
+	if strings.Contains(got, "Idolum") || strings.Contains(got, "System did not ratify") {
+		t.Fatalf("blocked notice = %q, want no internal governor name in anonymous profile", got)
 	}
 }
 

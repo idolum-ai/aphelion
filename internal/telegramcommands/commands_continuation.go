@@ -136,29 +136,29 @@ func renderContinuationDecision(state session.ContinuationState, action string) 
 	state = session.NormalizeContinuationState(state)
 	switch normalizeContinuationCallbackAction(action) {
 	case continuationActionApproveLease:
-		return renderContinuationApprovedDecision(state, "Continuation approved.")
+		return renderContinuationApprovedDecision(state, "Approved.")
 	case continuationActionApproveBundleAll:
-		return renderContinuationApprovedDecision(state, "Approval bundle approved: all currently sealed phase tokens are available when each phase becomes current.")
+		return renderContinuationApprovedDecision(state, "Approved. I will use each approved step only when it becomes current.")
 	case continuationActionApproveBundleCurrent:
-		return renderContinuationApprovedDecision(state, "Current phase approved. Later bundled phases were deferred and will need a fresh prompt before use.")
+		return renderContinuationApprovedDecision(state, "Current step approved. Later steps will ask again before I use them.")
 	case continuationActionContinueOnce:
-		return renderContinuationApprovedDecision(state, "Continuing once under your approval.")
+		return renderContinuationApprovedDecision(state, "Approved for one step.")
 	case continuationActionAskEdit:
-		return "Continuation needs edits. I parked this prompt; no continuation was approved or started."
+		return "I parked this request for edits; nothing was approved or started."
 	case continuationActionAskNextLease:
-		return renderContinuationEdgeStatus(state, "Next approval needed.")
+		return renderContinuationEdgeStatus(state, "Next step needs approval.")
 	case continuationActionStatusOnly:
 		if state.Status == session.ContinuationStatusPending {
-			return renderContinuationScopeDetails(state, "Continuation scope details.")
+			return renderContinuationScopeDetails(state, "Scope details.")
 		}
-		return renderContinuationEdgeStatus(state, "Continuation status only.")
+		return renderContinuationEdgeStatus(state, "Current request status.")
 	case continuationActionResumeEdge:
 		if state.Status == session.ContinuationStatusApproved && state.RemainingTurns > 0 {
-			return renderContinuationApprovedDecision(state, "Resuming the approved edge.")
+			return renderContinuationApprovedDecision(state, "Resuming the approved step.")
 		}
-		return renderContinuationEdgeStatus(state, "Resume needs your approval first.")
+		return renderContinuationEdgeStatus(state, "This step needs your approval first.")
 	default:
-		return renderContinuationEdgeStatus(state, "Continuation decision recorded.")
+		return renderContinuationEdgeStatus(state, "Decision recorded.")
 	}
 }
 
@@ -197,10 +197,7 @@ func renderContinuationRefreshAlreadyActiveDecision(state session.ContinuationSt
 func renderContinuationApprovedDecision(state session.ContinuationState, prefix string) string {
 	text := strings.TrimSpace(prefix)
 	if text == "" {
-		text = "Continuation approved."
-	}
-	if state.RemainingTurns > 0 {
-		text += fmt.Sprintf(" Remaining turns: %d.", state.RemainingTurns)
+		text = "Approved."
 	}
 	if state.StageSummary != "" {
 		text += " Next: " + state.StageSummary
@@ -212,7 +209,7 @@ func renderContinuationEdgeStatus(state session.ContinuationState, prefix string
 	state = session.NormalizeContinuationState(state)
 	lines := []string{strings.TrimSpace(prefix)}
 	if lines[0] == "" {
-		lines[0] = "Continuation edge."
+		lines[0] = "Current request."
 	}
 	if state.Status != "" {
 		lines = append(lines, "Status: "+string(state.Status))
@@ -224,10 +221,10 @@ func renderContinuationEdgeStatus(state session.ContinuationState, prefix string
 		lines = append(lines, "Next: "+state.StageSummary)
 	}
 	if state.RemainingTurns > 0 {
-		lines = append(lines, fmt.Sprintf("Remaining turns: %d", state.RemainingTurns))
+		lines = append(lines, fmt.Sprintf("Approval window: %d step(s)", state.RemainingTurns))
 	}
 	if state.HandshakeBlockedReason != "" {
-		lines = append(lines, "Blocked reason: "+state.HandshakeBlockedReason)
+		lines = append(lines, "Why paused: "+continuationBlockedReasonLabel(state.HandshakeBlockedReason))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -244,7 +241,7 @@ func renderContinuationScopeDetails(state session.ContinuationState, prefix stri
 	lease := session.NormalizeContinuationLease(state.ContinuationLease)
 	lines := []string{strings.TrimSpace(prefix)}
 	if lines[0] == "" {
-		lines[0] = "Lease scope details."
+		lines[0] = "Scope details."
 	}
 	if state.Status != "" {
 		lines = append(lines, "Status: "+string(state.Status))
@@ -256,25 +253,25 @@ func renderContinuationScopeDetails(state session.ContinuationState, prefix stri
 		lines = append(lines, "Next: "+state.StageSummary)
 	}
 	if proposal.Summary != "" {
-		lines = append(lines, "Proposal: "+proposal.Summary)
+		lines = append(lines, "Step: "+proposal.Summary)
 	}
 	if proposal.WhyNow != "" {
 		lines = append(lines, "Why now: "+proposal.WhyNow)
 	}
 	if proposal.BoundedEffect != "" {
-		lines = append(lines, "Bounded effect: "+proposal.BoundedEffect)
+		lines = append(lines, "Scope: "+proposal.BoundedEffect)
 	}
 	if allowed := firstNonEmptyContinuationCommandList(proposal.AllowedActions, lease.AllowedActions); len(allowed) > 0 {
-		lines = append(lines, "Allowed actions: "+strings.Join(allowed, ", "))
+		lines = append(lines, "Can do: "+strings.Join(allowed, ", "))
 	}
 	if forbidden := firstNonEmptyContinuationCommandList(proposal.ForbiddenActions, lease.ForbiddenActions); len(forbidden) > 0 {
-		lines = append(lines, "Forbidden actions: "+strings.Join(forbidden, ", "))
+		lines = append(lines, "Stops before: "+strings.Join(forbidden, ", "))
 	}
 	if validation := firstNonEmptyContinuationCommandList(proposal.ValidationPlan, lease.ValidationPlan); len(validation) > 0 {
-		lines = append(lines, "Validation plan: "+strings.Join(validation, "; "))
+		lines = append(lines, "Checks: "+strings.Join(validation, "; "))
 	}
 	if state.RemainingTurns > 0 {
-		lines = append(lines, fmt.Sprintf("Remaining turns: %d", state.RemainingTurns))
+		lines = append(lines, fmt.Sprintf("Approval window: %d step(s)", state.RemainingTurns))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -290,10 +287,10 @@ func renderContinuationApprovalBundleDetails(state session.ContinuationState, pr
 	lines := continuationScopeDetailLines(state, prefix)
 	bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle)
 	if len(bundle.Phases) > 0 {
-		lines = append(lines, "Approval bundle: sealed per-phase tokens, not a blank check.")
-		lines = append(lines, "Approve all: approve the currently sealed tokens; each phase is consumed only when it becomes current.")
-		lines = append(lines, "Approve current: approve only the current token and defer later bundled phases for a fresh prompt.")
-		lines = append(lines, "Stale prompt rule: if the phase plan or authority envelope changes, old buttons cannot approve it.")
+		lines = append(lines, "Grouped approval: each step is still used only when it becomes current.")
+		lines = append(lines, "Approve all: approve the listed steps now; I will spend them one at a time.")
+		lines = append(lines, "Approve current: approve only the current step and ask again for later steps.")
+		lines = append(lines, "Changed plan rule: old buttons cannot approve a changed plan.")
 	}
 	return strings.Join(lines, "\n")
 }
@@ -304,7 +301,7 @@ func continuationScopeDetailLines(state session.ContinuationState, prefix string
 	lease := session.NormalizeContinuationLease(state.ContinuationLease)
 	lines := []string{strings.TrimSpace(prefix)}
 	if lines[0] == "" {
-		lines[0] = "Lease scope details."
+		lines[0] = "Scope details."
 	}
 	if state.Status != "" {
 		lines = append(lines, "Status: "+string(state.Status))
@@ -316,22 +313,22 @@ func continuationScopeDetailLines(state session.ContinuationState, prefix string
 		lines = append(lines, "Next: "+state.StageSummary)
 	}
 	if proposal.Summary != "" {
-		lines = append(lines, "Proposal: "+proposal.Summary)
+		lines = append(lines, "Step: "+proposal.Summary)
 	}
 	if proposal.WhyNow != "" {
 		lines = append(lines, "Why now: "+proposal.WhyNow)
 	}
 	if proposal.BoundedEffect != "" {
-		lines = append(lines, "Bounded effect: "+proposal.BoundedEffect)
+		lines = append(lines, "Scope: "+proposal.BoundedEffect)
 	}
 	if allowed := firstNonEmptyContinuationCommandList(proposal.AllowedActions, lease.AllowedActions); len(allowed) > 0 {
-		lines = append(lines, "Allowed actions: "+strings.Join(allowed, ", "))
+		lines = append(lines, "Can do: "+strings.Join(allowed, ", "))
 	}
 	if forbidden := firstNonEmptyContinuationCommandList(proposal.ForbiddenActions, lease.ForbiddenActions); len(forbidden) > 0 {
-		lines = append(lines, "Forbidden actions: "+strings.Join(forbidden, ", "))
+		lines = append(lines, "Stops before: "+strings.Join(forbidden, ", "))
 	}
 	if validations := firstNonEmptyContinuationCommandList(proposal.ValidationPlan, lease.ValidationPlan); len(validations) > 0 {
-		lines = append(lines, "Validation: "+strings.Join(validations, "; "))
+		lines = append(lines, "Checks: "+strings.Join(validations, "; "))
 	}
 	return lines
 }
@@ -339,13 +336,13 @@ func renderContinuationPlanBudgetDetails(state session.ContinuationState, prefix
 	state = session.NormalizeContinuationState(state)
 	lines := []string{strings.TrimSpace(prefix)}
 	if lines[0] == "" {
-		lines[0] = "Plan budget details."
+		lines[0] = "Plan scope details."
 	}
 	if state.Objective != "" {
 		lines = append(lines, "Goal: "+state.Objective)
 	}
 	if state.RemainingTurns > 0 {
-		lines = append(lines, fmt.Sprintf("Budget remaining: %d turn(s)", state.RemainingTurns))
+		lines = append(lines, fmt.Sprintf("Approved steps remaining: %d", state.RemainingTurns))
 	}
 	bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle)
 	if len(bundle.Phases) > 0 {
@@ -375,6 +372,22 @@ func compactContinuationStops(state session.ContinuationState) []string {
 		Defaults: []string{"anything outside scope", "hard gates", "deploy/restart", "policy or permission changes", "mailbox access or mutation"},
 		Limit:    5,
 	})
+}
+
+func continuationBlockedReasonLabel(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "persona_intent_missing", "persona_rationale_missing":
+		return "the next step needs a clearer request"
+	case "persona_not_willing":
+		return "I chose to stop here instead of continuing automatically"
+	case "governor_intent_missing", "governor_rationale_missing", "governor_not_ratified", "governor_not_willing":
+		return "the next step needs a safer approval path"
+	default:
+		if trimmed := strings.TrimSpace(reason); trimmed != "" {
+			return strings.ReplaceAll(trimmed, "_", " ")
+		}
+		return "the next step is not ready"
+	}
 }
 
 func actionListContainsMain(values []string, want string) bool {

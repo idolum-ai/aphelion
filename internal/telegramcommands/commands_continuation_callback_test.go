@@ -467,8 +467,11 @@ func TestHandleTelegramCommandCallbackContinuationApproveLease(t *testing.T) {
 	if router.triggerContinuationInput != 7 {
 		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)
 	}
-	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Continuation approved") {
+	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Approved.") {
 		t.Fatalf("editInline = %#v, want approval confirmation with approval-window offer", sender.editInline)
+	}
+	if strings.Contains(sender.editInline[0].text, "Continuation approved") || strings.Contains(sender.editInline[0].text, "Remaining turns") {
+		t.Fatalf("editInline = %#v, want humanized approval copy", sender.editInline)
 	}
 }
 
@@ -514,7 +517,7 @@ func TestHandleTelegramCommandCallbackContinuationDetailsKeepsPendingPlanButtons
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline = %#v, want details edit with buttons retained", sender.editInline)
 	}
-	if !strings.Contains(sender.editInline[0].text, "Budget remaining: 3 turn(s)") {
+	if !strings.Contains(sender.editInline[0].text, "Approved steps remaining: 3") {
 		t.Fatalf("details text = %q, want expanded plan details", sender.editInline[0].text)
 	}
 	var labels []string
@@ -555,8 +558,11 @@ func TestHandleTelegramCommandCallbackContinuationApproveDoesNotWaitForTrigger(t
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Continuation approved") {
+	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Approved.") {
 		t.Fatalf("editInline = %#v, want immediate approval confirmation with approval-window offer", sender.editInline)
+	}
+	if strings.Contains(sender.editInline[0].text, "Continuation approved") || strings.Contains(sender.editInline[0].text, "Remaining turns") {
+		t.Fatalf("editInline = %#v, want humanized approval copy", sender.editInline)
 	}
 	waitForStubContinuationTrigger(t, triggerStarted)
 	if router.triggerContinuationInput != 7 {
@@ -603,9 +609,9 @@ func TestHandleTelegramCommandCallbackContinuationStatusOnlyDoesNotMutateOrTrigg
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline = %#v, want status-only no-authority text with buttons", sender.editInline)
 	}
-	if !strings.Contains(sender.editInline[0].text, "Continuation scope details") ||
-		!strings.Contains(sender.editInline[0].text, "Bounded effect: Inspect local state and report only.") ||
-		!strings.Contains(sender.editInline[0].text, "Forbidden actions: edit_files, deploy") {
+	if !strings.Contains(sender.editInline[0].text, "Scope details") ||
+		!strings.Contains(sender.editInline[0].text, "Scope: Inspect local state and report only.") ||
+		!strings.Contains(sender.editInline[0].text, "Stops before: edit_files, deploy") {
 		t.Fatalf("editInline = %#v, want detailed continuation scope text", sender.editInline)
 	}
 	var labels []string
@@ -696,7 +702,7 @@ func TestHandleTelegramCommandCallbackContinuationAskEditParksWithoutTrigger(t *
 	if router.triggerContinuationInput != 0 || router.approveContinuationInput != 0 {
 		t.Fatalf("trigger/approve = %d/%d, want 0/0", router.triggerContinuationInput, router.approveContinuationInput)
 	}
-	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "needs edits") {
+	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "parked this request") {
 		t.Fatalf("editClear = %#v, want ask-edit confirmation", sender.editClear)
 	}
 }
@@ -789,7 +795,7 @@ func TestHandleTelegramCommandCallbackApprovalBundleCurrentCopyAndSelection(t *t
 		t.Fatalf("approveContinuationPhaseIDs = %#v, want %#v", got, want)
 	}
 	waitForStubContinuationTrigger(t, triggerStarted)
-	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Later bundled phases were deferred") {
+	if len(sender.editInline) != 1 || !strings.Contains(sender.editInline[0].text, "Later steps will ask again") {
 		t.Fatalf("editInline = %#v, want current-only deferred copy", sender.editInline)
 	}
 }
@@ -832,7 +838,7 @@ func TestHandleTelegramCommandCallbackApprovalBundleStatusDetailsExplainTokens(t
 		t.Fatalf("editInline = %#v, want details with buttons", sender.editInline)
 	}
 	text := sender.editInline[0].text
-	for _, want := range []string{"sealed per-phase tokens, not a blank check", "Approve all", "Approve current", "old buttons cannot approve"} {
+	for _, want := range []string{"Grouped approval", "Approve all", "Approve current", "old buttons cannot approve"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("details text = %q, missing %q", text, want)
 		}

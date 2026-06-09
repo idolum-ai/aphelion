@@ -127,7 +127,7 @@ func (r *Runtime) offerWorkFailureRetry(ctx context.Context, key session.Session
 	if r.isShuttingDown() || errors.Is(cause, context.Canceled) {
 		return
 	}
-	reason := "The approved work run failed before completion; approve this fresh lease to retry the same bounded action after reviewing the failure evidence."
+	reason := "work_executor_failed_before_completion"
 	if _, sent, refreshErr := r.refreshContinuationProposal(ctx, key, reason, "work_executor_failure", false); refreshErr != nil {
 		log.Printf("WARN refresh continuation after work failure failed chat_id=%d err=%v", chatID, refreshErr)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "retry_offer_failed", map[string]any{

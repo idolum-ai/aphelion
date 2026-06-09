@@ -205,15 +205,15 @@ func recoveryDecisionVisibleText(decision recoveryDecision) string {
 	}
 	switch decision.Action {
 	case recoveryDecisionContinueUnderActiveLease:
-		return "Durable state still shows active work and an active approved continuation. Next action: continue under the active boundary with " + allowed + "; do not mark it complete or start over."
+		return "Saved state still shows this work is approved and in progress. Next action: continue with " + allowed + "; do not mark it complete or start over."
 	case recoveryDecisionRepairAndRetry:
-		return "Durable state still shows active work, but the recovery route is not directly runnable. Next action: repair the recovery route, then retry only the bounded work still supported by evidence."
+		return "Saved state still shows active work, but the retry path needs repair first. Next action: repair the path, then retry only the work still supported by evidence."
 	case recoveryDecisionAskBoundedApproval:
-		return "Durable state still names the objective, but no active runnable approval covers the next step. Next action: ask for one bounded approval instead of broad permission."
+		return "Saved state still names the objective, but the next step needs approval. Next action: ask for approval for one clear step."
 	case recoveryDecisionRescopeRequest:
-		return "Durable state shows a blocker before continuation. Next action: rescope or repair the blocked phase and ask through the bounded approval surface."
+		return "Saved state shows a blocker before the next step. Next action: rescope or repair the blocked step and ask again."
 	case recoveryDecisionPark:
-		return "No runnable recovery path is supported by current durable state. Next action: park the recovery and report the evidence needed to resume."
+		return "Saved state does not show a safe next step. Next action: park this and report what evidence is needed to resume."
 	default:
 		return ""
 	}

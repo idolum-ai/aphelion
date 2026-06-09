@@ -51,8 +51,13 @@ func TestHandleTelegramCommandCallbackReentryRecommendationSelectQueuesScopedWor
 	if router.queueReentryRecommendationMsg.IngressUpdateID != 8081 {
 		t.Fatalf("IngressUpdateID = %d, want callback update", router.queueReentryRecommendationMsg.IngressUpdateID)
 	}
-	if !strings.Contains(router.queueReentryRecommendationMsg.Text, "did not approve or grant authority") {
-		t.Fatalf("queued text = %q, want fresh-authority warning", router.queueReentryRecommendationMsg.Text)
+	if !strings.Contains(router.queueReentryRecommendationMsg.Text, "If action is needed, ask before doing it.") {
+		t.Fatalf("queued text = %q, want ask-before-action warning", router.queueReentryRecommendationMsg.Text)
+	}
+	for _, forbidden := range []string{"grant authority", "consumed lease", "fresh bounded approval"} {
+		if strings.Contains(router.queueReentryRecommendationMsg.Text, forbidden) {
+			t.Fatalf("queued text leaked internal copy %q: %q", forbidden, router.queueReentryRecommendationMsg.Text)
+		}
 	}
 	if len(sender.answers) != 1 || sender.answers[0].text != "Queued." {
 		t.Fatalf("answers = %#v, want queued acknowledgement", sender.answers)
@@ -150,9 +155,9 @@ func testReentryRecommendationRecord() session.ReentryRecommendation {
 			{
 				ID:               "c1",
 				Kind:             session.ReentryCandidateRequestNextLease,
-				Label:            "Next lease",
+				Label:            "Next step",
 				Summary:          "Open a bounded follow-up.",
-				PromptText:       "The operator selected this suggested path. The selection did not approve or grant authority; ask for fresh bounded approval before any write, push, deploy, or restart.",
+				PromptText:       "The operator selected this suggested path. This suggestion only chose a path. If action is needed, ask before doing it.",
 				AuthorityClass:   "commit",
 				RequiresApproval: true,
 			},

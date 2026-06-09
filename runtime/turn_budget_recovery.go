@@ -409,15 +409,15 @@ func turnBudgetRecoveryBlockedText(recovery *core.TurnRecovery, maxHops int, rea
 	}
 	switch strings.TrimSpace(reason) {
 	case "actor_unavailable":
-		return "I hit the " + label + " budget before a final response, but I could not safely resolve the approved operator for an automatic recovery turn."
+		return "I ran out of " + label + " room before I could finish. I could not safely identify who approved the work, so I stopped before continuing."
 	case "runtime_shutting_down":
-		return "I hit the " + label + " budget before a final response, and the service is shutting down before an automatic recovery turn can start."
+		return "I ran out of " + label + " room before I could finish. The service is shutting down, so I stopped before continuing."
 	case "retry_counter_unavailable":
-		return "I hit the " + label + " budget before a final response, but I could not read the recovery counter safely."
+		return "I ran out of " + label + " room before I could finish. I could not verify the retry state safely, so I stopped before continuing."
 	case "recovery_turn_failed":
-		return appendRecoveryDecisionVisibleText("I hit the "+label+" budget before a final response, and the automatic recovery turn failed.", decision)
+		return appendRecoveryDecisionVisibleText("I ran out of "+label+" room before I could finish, and I could not complete the recovery check cleanly.", decision)
 	default:
-		return appendRecoveryDecisionVisibleText(fmt.Sprintf("I hit the %s budget repeatedly before I could produce a final response.\n\nI stopped after %d automatic recovery attempts in the same work scope. Please ask for a narrower next step or approve a smaller phase.", label, maxHops), decision)
+		return appendRecoveryDecisionVisibleText(fmt.Sprintf("I ran out of %s room repeatedly before I could finish.\n\nI stopped after %d recovery attempts. Please ask for a narrower next step or approve a smaller phase.", label, maxHops), decision)
 	}
 }
 

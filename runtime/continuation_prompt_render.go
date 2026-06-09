@@ -232,7 +232,7 @@ func renderContinuationPromptFallback(state session.ContinuationState) string {
 		reasons = appendUniqueContinuationLine(reasons, reason)
 	}
 	if len(reasons) > 0 {
-		lines = append(lines, "", "Why continuing makes sense:", strings.Join(reasons, " "))
+		lines = append(lines, "", "Why this needs approval:", strings.Join(reasons, " "))
 	}
 	proposal := session.NormalizeActionProposal(state.ActionProposal)
 	constraints := strings.TrimSpace(state.GovernorIntent.Constraints)
@@ -245,7 +245,7 @@ func renderContinuationPromptFallback(state session.ContinuationState) string {
 		lines = append(lines, "", "Scope:", scope)
 	}
 	if effect != "" && constraints != "" && !continuationTextEqual(effect, constraints) {
-		lines = append(lines, "", "Bounded effect:", effect)
+		lines = append(lines, "", "Exact step:", effect)
 	}
 	if objective := strings.TrimSpace(state.Objective); objective != "" {
 		lines = append(lines, "", "Objective:", objective)

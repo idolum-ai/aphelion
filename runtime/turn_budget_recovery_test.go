@@ -204,7 +204,7 @@ func TestBudgetRecoveryDeliveryBlocksAfterThreeSameScopeAttempts(t *testing.T) {
 	if len(sender.sent) != 1 {
 		t.Fatalf("sent len = %d, want blocked notice only", len(sender.sent))
 	}
-	if !strings.Contains(sender.sent[0].Text, "stopped after 3 automatic recovery attempts") {
+	if !strings.Contains(sender.sent[0].Text, "stopped after 3 recovery attempts") {
 		t.Fatalf("blocked text = %q", sender.sent[0].Text)
 	}
 	if err := rt.WaitForBackgroundLoops(context.Background()); err != nil {
@@ -253,9 +253,14 @@ func TestBudgetRecoveryFailureIssuesRecoveryDecisionForActiveLease(t *testing.T)
 		t.Fatalf("sent len = %d, want one recovery decision notice", len(sender.sent))
 	}
 	text := sender.sent[0].Text
-	for _, want := range []string{"automatic recovery turn failed", "Durable state still shows active work", "active approved continuation", "continue under the active boundary"} {
+	for _, want := range []string{"could not complete the recovery check cleanly", "Saved state still shows this work is approved", "continue with inspect"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("failure notice missing %q:\n%s", want, text)
+		}
+	}
+	for _, forbidden := range []string{"automatic recovery turn failed", "active approved continuation", "continue under the active boundary"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("failure notice leaked internal copy %q:\n%s", forbidden, text)
 		}
 	}
 	if strings.Contains(strings.ToLower(text), "dead end") {
@@ -315,7 +320,7 @@ func TestRecoveryDecisionContinuesUnderActiveLease(t *testing.T) {
 	if decision.Action != recoveryDecisionContinueUnderActiveLease || decision.Reason != "active_operation_and_active_lease" {
 		t.Fatalf("decision = %#v, want continue under active lease", decision)
 	}
-	if got := recoveryDecisionVisibleText(decision); !strings.Contains(got, "continue under the active boundary") || !strings.Contains(got, "inspect") {
+	if got := recoveryDecisionVisibleText(decision); !strings.Contains(got, "continue with inspect") || !strings.Contains(got, "approved and in progress") {
 		t.Fatalf("visible decision text = %q", got)
 	}
 }

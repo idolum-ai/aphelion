@@ -53,9 +53,9 @@ func (r *Runtime) consumeActiveContinuationLeaseForMaterializedState(ctx context
 	payload["proposed_decision_id"] = strings.TrimSpace(proposed.DecisionID)
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationClassScopedConsumption, "continuation", "approved", payload, now)
 	if r.outbound != nil && msg.ChatID != 0 {
-		text := "Continuing under the active approved lease."
+		text := "Continuing under the active approval."
 		if label := strings.TrimPrefix(continuationUserFacingPlanLabel(adopted), "Plan: "); label != "" {
-			text = "Continuing under the active approved lease: " + label + "."
+			text = "Continuing under the active approval: " + label + "."
 		}
 		text = r.prefixTelegramPresentedText(r.telegramPresentationForMessage(msg), text)
 		if _, err := r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: msg.ChatID, Text: text}); err != nil {

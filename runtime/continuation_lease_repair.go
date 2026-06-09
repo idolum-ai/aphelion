@@ -157,7 +157,7 @@ func continuationStateWithLeaseDenialRepair(prior session.ContinuationState, dec
 	state.ActionProposal.ExpiresAt = now.Add(continuationLeaseDefaultTTL)
 	state.ActionProposal.CreatedAt = now
 	state.ActionProposal.UpdatedAt = now
-	state.ActionProposal.WhyNow = "The prior approved lease was blocked before execution by a lease/action shape mismatch; approve this corrected lease to retry the same bounded work."
+	state.ActionProposal.WhyNow = "The previous approval could not run because the requested action did not match its scope; approve this corrected step to retry the same work."
 	state.ActionProposal.AllowedActions = append(state.ActionProposal.AllowedActions, strings.TrimSpace(decision.Action))
 	state.ActionProposal = applyContinuationLeaseClassBoundaries(state.ActionProposal)
 	state.ActionProposal.PlanHash = actionProposalHash(state.ActionProposal)
