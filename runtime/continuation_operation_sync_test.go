@@ -236,3 +236,97 @@ func TestContinuationOperationSyncPreservesCompletedPlanLease(t *testing.T) {
 		})
 	}
 }
+
+func TestCompletedPhaseDuplicateReconcilerDoesNotCompleteNormalizerSuffixPhase(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	opState := session.NormalizeOperationState(session.OperationState{
+		ID:     "op-duplicate-suffix",
+		Status: session.OperationStatusActive,
+		Stage:  "phase_plan",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-duplicate-suffix",
+			CurrentPhaseID: "fix-tests-2",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "fix-tests",
+					Summary:        "Fix failing tests",
+					Status:         session.PlanStatusCompleted,
+					AuthorityClass: "commit",
+					CompletedAt:    now.Add(-time.Minute),
+				},
+				{
+					ID:             "fix-tests",
+					Summary:        "Fix failing tests",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "commit",
+				},
+			},
+		},
+	})
+	if len(opState.PhasePlan.Phases) != 2 {
+		t.Fatalf("phase count = %d, want 2", len(opState.PhasePlan.Phases))
+	}
+	if got := opState.PhasePlan.Phases[1].ID; got != "fix-tests-2" {
+		t.Fatalf("normalized duplicate phase ID = %q, want fix-tests-2", got)
+	}
+
+	got, reconciled := operationStateWithCompletedPhaseDuplicatesReconciled(opState, now)
+	if reconciled {
+		t.Fatalf("reconciled = true, want false for normalized sibling without explicit duplicate evidence")
+	}
+	if got.PhasePlan.Phases[1].Status != session.PlanStatusPending {
+		t.Fatalf("sibling phase status = %q, want pending", got.PhasePlan.Phases[1].Status)
+	}
+	closed, completed := operationStateWithCompletedPhasePlanClosed(got, now)
+	if completed || closed.Status == session.OperationStatusCompleted {
+		t.Fatalf("closed/completed = %v/%q, want operation left open for unexecuted sibling phase", completed, closed.Status)
+	}
+}
+
+func TestCompletedPhaseDuplicateReconcilerKeepsExplicitSupersessionEvidence(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	opState := session.OperationState{
+		ID:     "op-explicit-supersession",
+		Status: session.OperationStatusActive,
+		Stage:  "phase_plan",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-explicit-supersession",
+			CurrentPhaseID: "old-phase",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "old-phase",
+					Summary:        "Retry stale duplicate work",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "read_only",
+				},
+				{
+					ID:                 "new-phase",
+					Summary:            "Replace stale duplicate work",
+					Status:             session.PlanStatusCompleted,
+					AuthorityClass:     "read_only",
+					CompletedAt:        now.Add(-time.Minute),
+					SupersedesPhaseIDs: []string{"old-phase"},
+					BlockedReasonCode:  "",
+				},
+			},
+		},
+	}
+
+	got, reconciled := operationStateWithCompletedPhaseDuplicatesReconciled(opState, now)
+	if !reconciled {
+		t.Fatal("reconciled = false, want explicit supersession evidence to reconcile")
+	}
+	if got.PhasePlan.Phases[0].Status != session.PlanStatusCompleted {
+		t.Fatalf("old phase status = %q, want completed", got.PhasePlan.Phases[0].Status)
+	}
+	if !got.PhasePlan.Phases[0].StaleAuthority || got.PhasePlan.Phases[0].BlockedReasonCode != "superseded_phase" {
+		t.Fatalf("old phase = %#v, want stale superseded completion", got.PhasePlan.Phases[0])
+	}
+	if got.PhasePlan.Phases[0].LeaseID != "" || got.PhasePlan.Phases[0].CompletedAt.IsZero() {
+		t.Fatalf("old phase = %#v, want no lease and completed timestamp", got.PhasePlan.Phases[0])
+	}
+}

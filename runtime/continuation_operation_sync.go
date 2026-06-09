@@ -535,22 +535,7 @@ func operationPhaseDuplicatesCompletedPhase(opState session.OperationState, cand
 	if completedProposalID != "" && candidateID == completedProposalID {
 		return true
 	}
-	if completedID != "" && strings.Contains(candidateID, completedID) && operationPhaseCoreEquivalent(candidate, completed) {
-		return true
-	}
-	if completedProposalID != "" && strings.Contains(candidateID, completedProposalID) && operationPhaseCoreEquivalent(candidate, completed) {
-		return true
-	}
 	return false
-}
-
-func operationPhaseCoreEquivalent(a session.OperationPhase, b session.OperationPhase) bool {
-	a = normalizeSingleOperationPhase(a)
-	b = normalizeSingleOperationPhase(b)
-	if normalizeOperationPhaseReasonCode(a.Summary) != normalizeOperationPhaseReasonCode(b.Summary) {
-		return false
-	}
-	return strings.TrimSpace(a.AuthorityClass) == strings.TrimSpace(b.AuthorityClass)
 }
 
 func operationStateWithStalePlanLeaseCleared(opState session.OperationState, now time.Time) (session.OperationState, bool) {
