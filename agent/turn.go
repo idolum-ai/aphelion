@@ -192,6 +192,7 @@ type CompleteOptions struct {
 	Observer         TurnObserver
 	ContextBudget    *ContextBudget
 	EmptyRetry       *EmptySuccessRetryState
+	OutputLimitRetry *OutputLimitRetryState
 }
 
 type ProviderFailoverState struct {
@@ -202,6 +203,12 @@ type ProviderFailoverState struct {
 // EmptySuccessRetryState records when a successful provider response was
 // semantically empty and retried with relaxed per-run limits.
 type EmptySuccessRetryState struct {
+	Retries int
+}
+
+// OutputLimitRetryState records when a successful provider response reported
+// output-token exhaustion and was retried with a larger per-run cap.
+type OutputLimitRetryState struct {
 	Retries int
 }
 
@@ -610,6 +617,12 @@ func completeWithRetry(
 		}
 		finishModelRequest(ctx, observer, event, started, resp, err)
 		if err == nil {
+			if retryMaxTokens, ok := nextOutputLimitRetryMaxTokens(resp, opts); ok {
+				markOutputLimitRetried(opts, retryMaxTokens)
+				log.Printf("WARN provider hit output limit; retrying with max_tokens=%d", retryMaxTokens)
+				attempt++
+				continue
+			}
 			if retryMaxTokens, ok := nextEmptySuccessRetryMaxTokens(resp, opts); ok {
 				markEmptySuccessRetried(opts, retryMaxTokens)
 				log.Printf("WARN provider returned empty successful response; retrying with max_tokens=%d", retryMaxTokens)
@@ -650,6 +663,23 @@ func nextEmptySuccessRetryMaxTokens(resp *Response, opts *CompleteOptions) (int,
 	if strings.TrimSpace(resp.Content) != "" || len(resp.ToolCalls) != 0 || len(resp.Media) != 0 {
 		return 0, false
 	}
+	return nextProviderSuccessRetryMaxTokens(opts)
+}
+
+func nextOutputLimitRetryMaxTokens(resp *Response, opts *CompleteOptions) (int, bool) {
+	if resp == nil || opts == nil {
+		return 0, false
+	}
+	if !ResponseOutputLimitHit(resp) || len(resp.ToolCalls) != 0 || len(resp.Media) != 0 {
+		return 0, false
+	}
+	return nextProviderSuccessRetryMaxTokens(opts)
+}
+
+func nextProviderSuccessRetryMaxTokens(opts *CompleteOptions) (int, bool) {
+	if opts == nil {
+		return 0, false
+	}
 	current := opts.MaxTokens
 	if current <= 0 || current < emptySuccessRetryInitialMaxTokens {
 		current = emptySuccessRetryInitialMaxTokens
@@ -669,6 +699,17 @@ func markEmptySuccessRetried(opts *CompleteOptions, maxTokens int) {
 		opts.EmptyRetry = &EmptySuccessRetryState{}
 	}
 	opts.EmptyRetry.Retries++
+	opts.MaxTokens = maxTokens
+}
+
+func markOutputLimitRetried(opts *CompleteOptions, maxTokens int) {
+	if opts == nil {
+		return
+	}
+	if opts.OutputLimitRetry == nil {
+		opts.OutputLimitRetry = &OutputLimitRetryState{}
+	}
+	opts.OutputLimitRetry.Retries++
 	opts.MaxTokens = maxTokens
 }
 

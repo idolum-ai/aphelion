@@ -222,6 +222,89 @@ func TestRunTurnRetriesEmptySuccessfulResponseWithIncreasingTokenBudget(t *testi
 	}
 }
 
+func TestRunTurnRetriesOutputLimitResponseWithIncreasingTokenBudget(t *testing.T) {
+	provider := &mockOptionsProvider{complete: func(ctx context.Context, call int, opts CompleteOptions, messages []Message, tools []ToolDef) (*Response, error) {
+		switch call {
+		case 1, 2:
+			return &Response{
+				Content:      "partial",
+				FinishReason: "max_tokens",
+				Usage:        core.TokenUsage{OutputTokens: int64(opts.MaxTokens)},
+			}, nil
+		default:
+			return &Response{Content: "complete", Usage: core.TokenUsage{OutputTokens: 3}}, nil
+		}
+	}}
+	opts := &CompleteOptions{MaxTokens: 2048}
+
+	result, history, err := RunTurn(context.Background(), provider, nil, defaultBudget(), opts, []Message{{Role: "user", Content: "continue"}})
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "complete" {
+		t.Fatalf("result.Text = %q, want complete", result.Text)
+	}
+	if opts.OutputLimitRetry == nil || opts.OutputLimitRetry.Retries != 2 {
+		t.Fatalf("opts.OutputLimitRetry = %#v, want 2 retries", opts.OutputLimitRetry)
+	}
+	if got := provider.seenMaxTokens(); !reflect.DeepEqual(got, []int{2048, 4096, 8192}) {
+		t.Fatalf("seen MaxTokens = %#v, want [2048 4096 8192]", got)
+	}
+	if len(history) != 2 || history[len(history)-1].Content != "complete" {
+		t.Fatalf("history = %#v, want only final complete assistant reply appended", history)
+	}
+}
+
+func TestRunTurnStopsOutputLimitRetryAtMaxTokenBudget(t *testing.T) {
+	provider := &mockOptionsProvider{complete: func(ctx context.Context, call int, opts CompleteOptions, messages []Message, tools []ToolDef) (*Response, error) {
+		return &Response{
+			Content:      "still partial",
+			FinishReason: "max_tokens",
+			Usage:        core.TokenUsage{OutputTokens: int64(opts.MaxTokens)},
+		}, nil
+	}}
+	opts := &CompleteOptions{MaxTokens: 2048}
+
+	result, history, err := RunTurn(context.Background(), provider, nil, defaultBudget(), opts, []Message{{Role: "user", Content: "continue"}})
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "still partial" {
+		t.Fatalf("result.Text = %q, want capped final response", result.Text)
+	}
+	if got := provider.seenMaxTokens(); !reflect.DeepEqual(got, []int{2048, 4096, 8192}) {
+		t.Fatalf("seen MaxTokens = %#v, want capped retries [2048 4096 8192]", got)
+	}
+	if len(history) != 2 {
+		t.Fatalf("history len = %d, want user plus capped assistant reply", len(history))
+	}
+}
+
+func TestCompleteWithRetryDoesNotRetryOutputLimitToolCalls(t *testing.T) {
+	provider := &mockOptionsProvider{complete: func(ctx context.Context, call int, opts CompleteOptions, messages []Message, tools []ToolDef) (*Response, error) {
+		return &Response{
+			Content:      "partial tool decision",
+			FinishReason: "max_tokens",
+			ToolCalls:    []ToolCall{{Name: "noop", Input: json.RawMessage(`{}`)}},
+		}, nil
+	}}
+	opts := &CompleteOptions{MaxTokens: 2048}
+
+	resp, err := completeWithRetry(context.Background(), provider, []Message{{Role: "user", Content: "use tool"}}, []ToolDef{{Name: "noop"}}, opts)
+	if err != nil {
+		t.Fatalf("completeWithRetry() err = %v", err)
+	}
+	if resp == nil || len(resp.ToolCalls) != 1 {
+		t.Fatalf("resp = %#v, want original tool-call response", resp)
+	}
+	if opts.OutputLimitRetry != nil && opts.OutputLimitRetry.Retries != 0 {
+		t.Fatalf("output-limit retry triggered for tool-call response")
+	}
+	if got := provider.seenMaxTokens(); !reflect.DeepEqual(got, []int{2048}) {
+		t.Fatalf("seen MaxTokens = %#v, want no retry", got)
+	}
+}
+
 func (m *mockOptionsProvider) seenMaxTokens() []int {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -217,6 +217,9 @@ func (c *Client) SendInlineKeyboard(ctx context.Context, chatID int64, text stri
 
 func validateInlineKeyboardRows(rows [][]InlineButton) error {
 	for rowIndex, row := range rows {
+		if len(row) == 0 {
+			return fmt.Errorf("inline keyboard row %d is empty", rowIndex)
+		}
 		for buttonIndex, button := range row {
 			text := strings.TrimSpace(button.Text)
 			if text == "" {
@@ -224,6 +227,17 @@ func validateInlineKeyboardRows(rows [][]InlineButton) error {
 			}
 			if words := strings.Fields(text); len(words) > 3 {
 				return fmt.Errorf("inline button label %q has %d words; Telegram labels must use at most 3 words", text, len(words))
+			}
+			callbackData := strings.TrimSpace(button.CallbackData)
+			url := strings.TrimSpace(button.URL)
+			if callbackData == "" && url == "" {
+				return fmt.Errorf("inline button %q at row %d button %d needs callback data or URL", text, rowIndex, buttonIndex)
+			}
+			if callbackData != "" && url != "" {
+				return fmt.Errorf("inline button %q at row %d button %d cannot use both callback data and URL", text, rowIndex, buttonIndex)
+			}
+			if callbackData != "" && len(callbackData) > core.TelegramCallbackDataMaxBytes {
+				return fmt.Errorf("inline button %q callback data is %d bytes; Telegram limit is %d", text, len(callbackData), core.TelegramCallbackDataMaxBytes)
 			}
 		}
 	}
@@ -308,7 +322,7 @@ func (c *Client) AnswerCallbackQuery(ctx context.Context, callbackQueryID string
 		"callback_query_id": callbackQueryID,
 	}
 	if strings.TrimSpace(text) != "" {
-		body["text"] = strings.TrimSpace(text)
+		body["text"] = truncateTelegramText(strings.TrimSpace(text), telegramCallbackAnswerLimit)
 	}
 
 	var resp telegramOKResponse
@@ -455,6 +469,12 @@ func truncateTelegramText(text string, limit int) string {
 		return "…"
 	}
 	return string(runes[:limit-1]) + "…"
+}
+
+// TextExceedsMessageLimit reports whether text cannot fit in one Telegram text message.
+func TextExceedsMessageLimit(text string) bool {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	return runeCount(text) > telegramTextChunkLimit
 }
 
 func runeCount(text string) int {

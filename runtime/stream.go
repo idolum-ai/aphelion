@@ -139,6 +139,10 @@ func (s *streamEditor) flush(ctx context.Context, done bool) error {
 		return nil
 	}
 
+	if done && telegram.TextExceedsMessageLimit(text) {
+		return s.sendFinalOverflow(ctx, text)
+	}
+
 	if err := s.editExisting(ctx, text, rows, done); err != nil {
 		msgID, sendErr := s.sendInitial(ctx, text)
 		if sendErr != nil {
@@ -205,6 +209,26 @@ func (s *streamEditor) editExisting(ctx context.Context, text string, rows [][]t
 		return s.keyboardClearer.EditMessageTextWithoutInlineKeyboard(ctx, s.chatID, s.messageID, text, "")
 	}
 	return s.editor.EditMessageText(ctx, s.chatID, s.messageID, text, "")
+}
+
+func (s *streamEditor) sendFinalOverflow(ctx context.Context, text string) error {
+	if s == nil {
+		return nil
+	}
+	replyTo := s.messageID
+	msgID, err := s.sender.SendMessage(ctx, core.OutboundMessage{
+		ChatID:  s.chatID,
+		Text:    text,
+		ReplyTo: &replyTo,
+	})
+	if err != nil {
+		return err
+	}
+	if err := s.editExisting(ctx, s.prefixText("Full reply follows below."), nil, true); err != nil {
+		log.Printf("WARN clear oversized stream preview chat_id=%d msg_id=%d err=%v", s.chatID, s.messageID, err)
+	}
+	s.messageID = msgID
+	return nil
 }
 
 func streamStopControlRows(streamID string) [][]telegram.InlineButton {

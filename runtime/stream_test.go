@@ -88,6 +88,56 @@ func TestStreamEditorFinishStoppedClearsControls(t *testing.T) {
 	}
 }
 
+func TestStreamEditorFinishSendsOversizedFinalReply(t *testing.T) {
+	t.Parallel()
+
+	sender := &fakeSender{}
+	editor := &streamEditor{
+		sender:          sender,
+		editor:          sender,
+		keyboardEditor:  sender,
+		keyboardClearer: sender,
+		chatID:          42,
+		interval:        time.Hour,
+		cursor:          "...",
+		controlRows:     streamStopControlRows("stream-3"),
+	}
+
+	if err := editor.OnChunk(context.Background(), "intro"); err != nil {
+		t.Fatalf("OnChunk() err = %v", err)
+	}
+	overflow := "\n\n" + strings.Repeat("full reply ", 450)
+	if err := editor.OnChunk(context.Background(), overflow); err != nil {
+		t.Fatalf("OnChunk(overflow) err = %v", err)
+	}
+	gotID, err := editor.Finish(context.Background())
+	if err != nil {
+		t.Fatalf("Finish() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if gotID != 2 {
+		t.Fatalf("Finish() id = %d, want full follow-up message id 2", gotID)
+	}
+	if len(sender.sent) != 2 {
+		t.Fatalf("sent = %d, want preview plus full follow-up", len(sender.sent))
+	}
+	if got := sender.sent[0].Text; got != "Full reply follows below." {
+		t.Fatalf("preview text = %q, want overflow marker", got)
+	}
+	if sender.sent[1].ReplyTo == nil || *sender.sent[1].ReplyTo != 1 {
+		t.Fatalf("full reply ReplyTo = %#v, want preview message id 1", sender.sent[1].ReplyTo)
+	}
+	wantFull := strings.TrimSpace("intro" + overflow)
+	if sender.sent[1].Text != wantFull {
+		t.Fatalf("full reply length = %d, want preserved length %d", len(sender.sent[1].Text), len(wantFull))
+	}
+	if len(sender.editClear) != 1 || sender.editClear[0].MessageID != 1 {
+		t.Fatalf("editClear = %#v, want preview controls cleared", sender.editClear)
+	}
+}
+
 func TestRuntimeStreamControlLifecycle(t *testing.T) {
 	t.Parallel()
 
