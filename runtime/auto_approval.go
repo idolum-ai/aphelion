@@ -157,6 +157,13 @@ func (r *Runtime) maybeAutoApproveContinuationOffer(ctx context.Context, key ses
 	if state.ActionProposal.AutoApproveEligible != nil && !*state.ActionProposal.AutoApproveEligible {
 		return false, nil
 	}
+	if len(continuationRequiredCapabilityGrantSpecs(state)) > 0 {
+		return false, nil
+	}
+	compilation := continuationAuthorityCompilation(state)
+	if strings.TrimSpace(compilation.Contract.Key) != "" && !compilation.Contract.AutoApprovalAllowed {
+		return false, nil
+	}
 	if inboundRequestsVisibleApprovalButtons(msg.Text) {
 		return false, nil
 	}

@@ -42,7 +42,15 @@ func TestBundledPlanApprovalCreatesRequiredCapabilityGrant(t *testing.T) {
 	} else if _, ok, _ := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github", "telegram:1001", "write"); ok {
 		t.Fatal("grant active before plan approval")
 	}
-	if _, err := rt.ApproveContinuationForKey(key, 1001); err != nil {
+	beforeApproval, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(before approval) err = %v", err)
+	}
+	if beforeApproval.ContinuationLease.ExpiresAt.IsZero() {
+		t.Fatal("continuation lease expiry is zero before approval, want bounded grant expiry source")
+	}
+	approved, err := rt.ApproveContinuationForKey(key, 1001)
+	if err != nil {
 		t.Fatalf("ApproveContinuationForKey() err = %v", err)
 	}
 	grant, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github", "telegram:1001", "write")
@@ -51,6 +59,12 @@ func TestBundledPlanApprovalCreatesRequiredCapabilityGrant(t *testing.T) {
 	}
 	if grant.RequestID != "cap-pr-105" {
 		t.Fatalf("grant.RequestID=%q, want cap-pr-105", grant.RequestID)
+	}
+	if !grant.ExpiresAt.Equal(beforeApproval.ContinuationLease.ExpiresAt) {
+		t.Fatalf("grant expiry = %s, want lease expiry %s", grant.ExpiresAt, beforeApproval.ContinuationLease.ExpiresAt)
+	}
+	if !stringSliceContains(approved.ContinuationLease.CapabilityGrantIDs, grant.GrantID) {
+		t.Fatalf("minted grant ids = %#v, want %q", approved.ContinuationLease.CapabilityGrantIDs, grant.GrantID)
 	}
 	req, ok, err := store.CapabilityRequest("cap-pr-105")
 	if err != nil || !ok || req.ReviewStatus != session.CapabilityReviewStatusApproved {
@@ -131,6 +145,9 @@ func TestRequiredCapabilityPhaseRescopesExternalAccountMetadataApproval(t *testi
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	if _, err := rt.ConfigureAutoApproval(context.Background(), 9141, 1001, "15m all"); err != nil {
+		t.Fatalf("ConfigureAutoApproval() err = %v", err)
+	}
 	key := session.SessionKey{ChatID: 9141, UserID: 0, Scope: telegramDMScopeRef(9141)}
 	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
 		RequestID:      "cap-pr-158",
@@ -204,6 +221,9 @@ func TestRequiredCapabilityPhaseRescopesExternalAccountMetadataApproval(t *testi
 	if cont.ActionProposal.RiskClass != "external_account_action" {
 		t.Fatalf("risk class = %q, want external_account_action", cont.ActionProposal.RiskClass)
 	}
+	if cont.ActionProposal.AutoApproveEligible == nil || *cont.ActionProposal.AutoApproveEligible {
+		t.Fatalf("autoapprove_eligible = %#v, want manual button-backed request", cont.ActionProposal.AutoApproveEligible)
+	}
 	for _, notWant := range []string{"commit", "git_commit", "repo_history_mutation"} {
 		if actionListContains(cont.ActionProposal.AllowedActions, notWant) || actionListContains(cont.ContinuationLease.AllowedActions, notWant) {
 			t.Fatalf("allowed action %q present in action=%#v lease=%#v", notWant, cont.ActionProposal.AllowedActions, cont.ContinuationLease.AllowedActions)
@@ -219,6 +239,16 @@ func TestRequiredCapabilityPhaseRescopesExternalAccountMetadataApproval(t *testi
 	}
 	if len(cont.ContinuationLease.RequiredCapabilityGrants) != 1 || cont.ContinuationLease.RequiredCapabilityGrants[0].RequestID != "cap-pr-158" {
 		t.Fatalf("required grants = %#v, want cap-pr-158 preserved", cont.ContinuationLease.RequiredCapabilityGrants)
+	}
+	if _, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github", "telegram:1001", "write"); err != nil || ok {
+		t.Fatalf("ActiveCapabilityGrant() ok=%t err=%v, want no grant before button approval", ok, err)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(9141, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].UsedCount != 0 {
+		t.Fatalf("autoapproval leases = %#v, want one unused lease", leases)
 	}
 	if compilation := continuationAuthorityCompilation(cont); compilation.Invalid() {
 		t.Fatalf("authority compilation = %#v, want valid rescope", compilation)
@@ -649,5 +679,202 @@ func TestRequiredCapabilityExistingGrantMustCoverAllActions(t *testing.T) {
 	req, ok, err := store.CapabilityRequest("cap-partial-existing")
 	if err != nil || !ok || req.ReviewStatus != session.CapabilityReviewStatusApproved {
 		t.Fatalf("request ok=%t status=%q err=%v, want approved", ok, req.ReviewStatus, err)
+	}
+}
+
+func TestRequiredCapabilityGrantPreservesExplicitSpecExpiry(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9144, UserID: 0, Scope: telegramDMScopeRef(9144)}
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-explicit-expiry",
+		RequestedBy:    "telegram:1001",
+		RequestedFor:   "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github-explicit-expiry",
+		Purpose:        "Update a bounded external account resource.",
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	now := time.Now().UTC()
+	specExpiry := now.Add(7 * time.Minute).UTC()
+	leaseExpiry := now.Add(30 * time.Minute).UTC()
+	state := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-explicit-expiry",
+		Objective:      "Preserve explicit grant expiry.",
+		StageSummary:   "Grant explicitly bounded capability",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-explicit-expiry",
+			OperationID:    "explicit-expiry",
+			Summary:        "Valid authority with explicit grant expiry",
+			RiskClass:      "workspace_write",
+			AllowedActions: []string{"edit_files"},
+			Status:         session.ProposalStatusPending,
+			ExpiresAt:      leaseExpiry,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-explicit-expiry",
+			ProposalID:     "aprop-explicit-expiry",
+			Status:         session.ContinuationLeaseStatusPending,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ExpiresAt:      leaseExpiry,
+			RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+				RequestID:      "cap-explicit-expiry",
+				Kind:           session.CapabilityKindExternalAccount,
+				TargetResource: "github-explicit-expiry",
+				GrantedTo:      "telegram:1001",
+				AllowedActions: []string{"write"},
+				ExpiresAt:      specExpiry,
+			}},
+		},
+	}
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if _, err := rt.ApproveContinuationForKey(key, 1001); err != nil {
+		t.Fatalf("ApproveContinuationForKey() err = %v", err)
+	}
+	grant, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github-explicit-expiry", "telegram:1001", "write")
+	if err != nil || !ok {
+		t.Fatalf("ActiveCapabilityGrant() ok=%t err=%v, want explicit-expiry grant", ok, err)
+	}
+	if !grant.ExpiresAt.Equal(specExpiry) {
+		t.Fatalf("grant expiry = %s, want spec expiry %s", grant.ExpiresAt, specExpiry)
+	}
+}
+
+func TestRevokeContinuationRevokesOnlyMintedRequiredCapabilityGrants(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9145, UserID: 0, Scope: telegramDMScopeRef(9145)}
+	for _, request := range []session.CapabilityRequest{
+		{
+			RequestID:      "cap-revoke-minted",
+			RequestedBy:    "telegram:1001",
+			RequestedFor:   "telegram:1001",
+			Kind:           session.CapabilityKindExternalAccount,
+			TargetResource: "github-revoke-minted",
+			Purpose:        "Minted grant should be revoked with continuation.",
+			ReviewStatus:   session.CapabilityReviewStatusProposed,
+		},
+		{
+			RequestID:      "cap-revoke-existing",
+			RequestedBy:    "telegram:1001",
+			RequestedFor:   "telegram:1001",
+			Kind:           session.CapabilityKindExternalAccount,
+			TargetResource: "github-revoke-existing",
+			Purpose:        "Existing grant should survive continuation revocation.",
+			ReviewStatus:   session.CapabilityReviewStatusProposed,
+		},
+	} {
+		if _, err := store.UpsertCapabilityRequest(request); err != nil {
+			t.Fatalf("UpsertCapabilityRequest(%s) err = %v", request.RequestID, err)
+		}
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-revoke-existing",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github-revoke-existing",
+		AllowedActions: []string{"read", "write"},
+		Status:         session.CapabilityGrantStatusActive,
+		ExpiresAt:      time.Now().UTC().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(existing) err = %v", err)
+	}
+	now := time.Now().UTC()
+	state := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-revoke-minted",
+		Objective:      "Revoke only grants minted by this continuation.",
+		StageSummary:   "Grant one new capability and reuse one existing capability",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-revoke-minted",
+			OperationID:    "revoke-minted",
+			Summary:        "Valid authority with mixed grant provenance",
+			RiskClass:      "workspace_write",
+			AllowedActions: []string{"edit_files"},
+			Status:         session.ProposalStatusPending,
+			ExpiresAt:      now.Add(30 * time.Minute),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-revoke-minted",
+			ProposalID:     "aprop-revoke-minted",
+			Status:         session.ContinuationLeaseStatusPending,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ExpiresAt:      now.Add(30 * time.Minute),
+			RequiredCapabilityGrants: []session.CapabilityGrantSpec{
+				{
+					RequestID:      "cap-revoke-minted",
+					Kind:           session.CapabilityKindExternalAccount,
+					TargetResource: "github-revoke-minted",
+					GrantedTo:      "telegram:1001",
+					AllowedActions: []string{"write"},
+				},
+				{
+					RequestID:      "cap-revoke-existing",
+					Kind:           session.CapabilityKindExternalAccount,
+					TargetResource: "github-revoke-existing",
+					GrantedTo:      "telegram:1001",
+					AllowedActions: []string{"read", "write"},
+				},
+			},
+		},
+	}
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	approved, err := rt.ApproveContinuationForKey(key, 1001)
+	if err != nil {
+		t.Fatalf("ApproveContinuationForKey() err = %v", err)
+	}
+	if len(approved.ContinuationLease.CapabilityGrantIDs) != 1 {
+		t.Fatalf("minted grant ids = %#v, want only newly minted grant", approved.ContinuationLease.CapabilityGrantIDs)
+	}
+	mintedID := approved.ContinuationLease.CapabilityGrantIDs[0]
+	minted, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github-revoke-minted", "telegram:1001", "write")
+	if err != nil || !ok {
+		t.Fatalf("ActiveCapabilityGrant(minted) ok=%t err=%v, want active minted grant", ok, err)
+	}
+	if minted.GrantID != mintedID {
+		t.Fatalf("minted grant id = %q, want recorded id %q", minted.GrantID, mintedID)
+	}
+	if _, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github-revoke-existing", "telegram:1001", "write"); err != nil || !ok {
+		t.Fatalf("ActiveCapabilityGrant(existing before revoke) ok=%t err=%v, want active existing grant", ok, err)
+	}
+	if _, err := rt.RevokeContinuationForKey(key); err != nil {
+		t.Fatalf("RevokeContinuationForKey() err = %v", err)
+	}
+	if _, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github-revoke-minted", "telegram:1001", "write"); err != nil || ok {
+		t.Fatalf("ActiveCapabilityGrant(minted after revoke) ok=%t err=%v, want revoked minted grant", ok, err)
+	}
+	storedMinted, ok, err := store.CapabilityGrant(mintedID)
+	if err != nil || !ok {
+		t.Fatalf("CapabilityGrant(%s) ok=%t err=%v", mintedID, ok, err)
+	}
+	if storedMinted.Status != session.CapabilityGrantStatusRevoked || storedMinted.RevokedAt.IsZero() {
+		t.Fatalf("minted grant = %#v, want revoked with timestamp", storedMinted)
+	}
+	if _, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github-revoke-existing", "telegram:1001", "write"); err != nil || !ok {
+		t.Fatalf("ActiveCapabilityGrant(existing after revoke) ok=%t err=%v, want existing grant still active", ok, err)
 	}
 }

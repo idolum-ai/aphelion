@@ -226,11 +226,14 @@ a visible approval prompt.
 authority. Execution is still gated on the operator pressing the approval button.
 
 Some operation phases also declare `required_capability_grants`. Treat those as
-phase-local dependencies, not ambient permission. When the operator approves the
-phase, Aphelion may approve/create the named bounded capability grant in the
-same approval path, after validating the continuation authority contract and all
-required grant specs. If validation fails, no partial grant should be left
-behind. Existing grants count only if they cover all requested actions.
+phase-local dependencies, not ambient permission. When the operator explicitly
+approves the phase through the button-backed approval path, Aphelion may
+approve/create the named bounded capability grant after validating the
+continuation authority contract and all required grant specs. Approval windows do
+not auto-approve capability grants. If validation fails, no partial grant should
+be left behind. Existing grants count only if they cover all requested actions;
+new grants default to the continuation lease expiry unless the grant spec names
+an explicit expiry.
 
 ## Grant Bounded Automation
 

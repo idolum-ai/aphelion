@@ -179,7 +179,10 @@ capabilities, or auto-renew the lease. Runtime records successful reuse as
 
 A `ContinuationLease` authorizes only continuation under existing authority and
 bounded effect. Any expanded capability still goes through the capability
-request/review/grant lane.
+request/review/grant lane. A button-backed phase approval may approve the named
+required capability grants in the same bounded path, but approval-window
+auto-approval must not mint capability grants, and grant expiry defaults to the
+continuation lease expiry when the grant spec does not provide one.
 
 ## Code Anchors
 

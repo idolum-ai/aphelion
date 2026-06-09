@@ -49,6 +49,7 @@ type ContinuationLease struct {
 	ForbiddenActions         []string                `json:"forbidden_actions,omitempty"`
 	ValidationPlan           []string                `json:"validation_plan,omitempty"`
 	RequiredCapabilityGrants []CapabilityGrantSpec   `json:"required_capability_grants,omitempty"`
+	CapabilityGrantIDs       []string                `json:"capability_grant_ids,omitempty"`
 	ExpiresAt                time.Time               `json:"expires_at,omitempty"`
 	PlanHash                 string                  `json:"plan_hash,omitempty"`
 	CreatedAt                time.Time               `json:"created_at,omitempty"`
@@ -701,6 +702,7 @@ func NormalizeContinuationLease(lease ContinuationLease) ContinuationLease {
 	lease.AllowedActions = sanitizeAllowedActionsAgainstForbidden(lease.AllowedActions, lease.ForbiddenActions)
 	lease.ValidationPlan = normalizeActionStringSlice(lease.ValidationPlan)
 	lease.RequiredCapabilityGrants = NormalizeCapabilityGrantSpecs(lease.RequiredCapabilityGrants)
+	lease.CapabilityGrantIDs = normalizeActionStringSlice(lease.CapabilityGrantIDs)
 	if continuationLeaseClassContradictedByActions(lease.LeaseClass, lease.AllowedActions, lease.ForbiddenActions) {
 		lease.LeaseClass = ""
 		lease.Constraints = nil

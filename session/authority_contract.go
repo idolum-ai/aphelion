@@ -387,6 +387,7 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 			ValidationPlan: []string{
 				"record child agent id, wake count, parent message, and final child state",
 			},
+			AutoApprovalAllowed:    false,
 			RequiresInlineApproval: true,
 		}, true
 	case "capability_grant", "capability_acquisition", "grant_capability", "grant_set", "capability_authority":
@@ -408,6 +409,7 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 			ValidationPlan: []string{
 				"show request id, target resource, allowed actions, and active grant/access-check evidence before invocation",
 			},
+			AutoApprovalAllowed:    false,
 			RequiresInlineApproval: true,
 		}, true
 	case "external_account_action", "github_pr_update", "github_pr_metadata_update", "pull_request_update", "pull_request_metadata_update", "update_pull_request_title", "update_pull_request_body":
@@ -456,5 +458,9 @@ func ApplyAuthorityContractToActionProposal(proposal ActionProposal) ActionPropo
 	proposal.AllowedActions = append(proposal.AllowedActions, compilation.Contract.AllowedActions...)
 	proposal.ForbiddenActions = append(proposal.ForbiddenActions, compilation.Contract.ForbiddenActions...)
 	proposal.ValidationPlan = append(proposal.ValidationPlan, compilation.Contract.ValidationPlan...)
+	if !compilation.Contract.AutoApprovalAllowed {
+		autoApproveEligible := false
+		proposal.AutoApproveEligible = &autoApproveEligible
+	}
 	return SanitizeActionProposalAuthority(NormalizeActionProposal(proposal))
 }

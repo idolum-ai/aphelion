@@ -205,3 +205,76 @@ func TestRuntimeAutoApprovalSkipsManualOnlyContinuation(t *testing.T) {
 		t.Fatalf("continuation state = %#v, want still pending", got)
 	}
 }
+
+func TestRuntimeAutoApprovalSkipsRequiredCapabilityGrantContinuation(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApproval(context.Background(), 99128, 1001, "15m all"); err != nil {
+		t.Fatalf("ConfigureAutoApproval() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 99128, UserID: 0, Scope: telegramDMScopeRef(99128)}
+	now := time.Now().UTC()
+	state := session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-required-grant-auto-skip",
+		RemainingTurns: 1,
+		StageSummary:   "Update PR metadata.",
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-required-grant-auto-skip",
+			RiskClass:      "external_account_action",
+			Summary:        "Update PR metadata.",
+			AllowedActions: []string{"update_pull_request_title"},
+			Status:         session.ProposalStatusPending,
+			ExpiresAt:      now.Add(30 * time.Minute),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-required-grant-auto-skip",
+			ProposalID:     "aprop-required-grant-auto-skip",
+			Status:         session.ContinuationLeaseStatusPending,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ExpiresAt:      now.Add(30 * time.Minute),
+			LeaseClass:     session.ContinuationLeaseClassCapabilityGrant,
+			RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+				RequestID:      "cap-required-grant-auto-skip",
+				Kind:           session.CapabilityKindExternalAccount,
+				TargetResource: "github-auto-skip",
+				GrantedTo:      "telegram:1001",
+				AllowedActions: []string{"write"},
+			}},
+		},
+	}
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	approved, err := rt.maybeAutoApproveContinuationOffer(context.Background(), key, core.InboundMessage{ChatID: 99128}, state, "required_grant")
+	if err != nil {
+		t.Fatalf("maybeAutoApproveContinuationOffer() err = %v", err)
+	}
+	if approved {
+		t.Fatal("maybeAutoApproveContinuationOffer() approved = true, want required capability grant to stay manual")
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(99128, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].UsedCount != 0 {
+		t.Fatalf("autoapproval leases = %#v, want one unused lease", leases)
+	}
+	if _, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github-auto-skip", "telegram:1001", "write"); err != nil || ok {
+		t.Fatalf("ActiveCapabilityGrant() ok=%t err=%v, want no grant", ok, err)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusPending || got.ActionProposal.Status != session.ProposalStatusPending {
+		t.Fatalf("continuation state = %#v, want still pending", got)
+	}
+}

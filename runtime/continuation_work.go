@@ -93,7 +93,8 @@ func (r *Runtime) approveContinuationBundleForKeyLocked(key session.SessionKey, 
 		}
 		return blocked, fmt.Errorf("continuation authority contract invalid: %s", continuationAuthorityContractInvalidReason(compilation))
 	}
-	if err := r.approveRequiredCapabilityGrantsForContinuation(key, state, approverID, now); err != nil {
+	state, err = r.approveRequiredCapabilityGrantsForContinuation(key, state, approverID, now)
+	if err != nil {
 		state.Status = session.ContinuationStatusPending
 		state.ApprovalBundle.Status = session.ContinuationLeaseStatusPending
 		if err := r.store.UpdateContinuationState(key, state); err != nil {
@@ -117,25 +118,30 @@ func (r *Runtime) approveContinuationBundleForKeyLocked(key session.SessionKey, 
 	return state, nil
 }
 
-func (r *Runtime) approveRequiredCapabilityGrantsForContinuation(key session.SessionKey, state session.ContinuationState, approverID int64, now time.Time) error {
+func (r *Runtime) approveRequiredCapabilityGrantsForContinuation(key session.SessionKey, state session.ContinuationState, approverID int64, now time.Time) (session.ContinuationState, error) {
+	state = session.NormalizeContinuationState(state)
 	if r == nil || r.store == nil {
-		return nil
+		return state, nil
 	}
 	specs := continuationRequiredCapabilityGrantSpecs(state)
 	if len(specs) == 0 {
-		return nil
+		return state, nil
 	}
 	resolved, err := r.validateRequiredCapabilityGrantSpecs(specs)
 	if err != nil {
-		return err
+		return state, err
 	}
 	approver := fmt.Sprintf("telegram:%d", approverID)
 	for _, item := range resolved {
-		if err := r.approveResolvedRequiredCapabilityGrant(item, approver, now); err != nil {
-			return err
+		grantID, err := r.approveResolvedRequiredCapabilityGrant(item, approver, continuationRequiredCapabilityGrantExpiry(state, item.spec, now), now)
+		if err != nil {
+			return state, err
+		}
+		if grantID != "" && !stringSliceContains(state.ContinuationLease.CapabilityGrantIDs, grantID) {
+			state.ContinuationLease.CapabilityGrantIDs = append(state.ContinuationLease.CapabilityGrantIDs, grantID)
 		}
 	}
-	return nil
+	return session.NormalizeContinuationState(state), nil
 }
 
 func continuationRequiredCapabilityGrantSpecs(state session.ContinuationState) []session.CapabilityGrantSpec {
@@ -217,21 +223,39 @@ func (r *Runtime) requiredCapabilityGrantActionsCovered(kind session.CapabilityK
 	return true, nil
 }
 
-func (r *Runtime) approveResolvedRequiredCapabilityGrant(item resolvedRequiredCapabilityGrant, approver string, now time.Time) error {
+func continuationRequiredCapabilityGrantExpiry(state session.ContinuationState, spec session.CapabilityGrantSpec, now time.Time) time.Time {
+	spec = session.NormalizeCapabilityGrantSpec(spec)
+	if !spec.ExpiresAt.IsZero() {
+		return spec.ExpiresAt.UTC()
+	}
+	state = session.NormalizeContinuationState(state)
+	if !state.ContinuationLease.ExpiresAt.IsZero() {
+		return state.ContinuationLease.ExpiresAt.UTC()
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return now.UTC().Add(continuationLeaseDefaultTTL)
+}
+
+func (r *Runtime) approveResolvedRequiredCapabilityGrant(item resolvedRequiredCapabilityGrant, approver string, expiresAt time.Time, now time.Time) (string, error) {
 	if item.existing {
-		return nil
+		return "", nil
 	}
 	if item.spec.RequestID != "" && item.request.ReviewStatus != session.CapabilityReviewStatusApproved {
 		if _, err := r.store.AppendCapabilityReview(session.CapabilityReview{ReviewID: fmt.Sprintf("review-%s-%d", safeContinuationIDPart(item.spec.RequestID), now.UnixNano()), RequestID: item.spec.RequestID, Reviewer: approver, ReviewerRole: string(principal.RoleAdmin), Status: session.CapabilityReviewStatusApproved, Rationale: "bundled plan/capability approval", CreatedAt: now}); err != nil {
-			return err
+			return "", err
 		}
 	}
 	grantID := item.spec.GrantID
 	if grantID == "" {
 		grantID = fmt.Sprintf("capg-%s-%d", safeContinuationIDPart(firstNonEmptyContinuation(item.spec.RequestID, string(item.kind)+"-"+item.target)), now.UnixNano())
 	}
-	_, err := r.store.UpsertCapabilityGrant(session.CapabilityGrant{GrantID: grantID, RequestID: item.spec.RequestID, GrantedBy: approver, GrantedTo: item.grantedTo, Kind: item.kind, TargetResource: item.target, AllowedActions: item.actions, Contract: firstNonEmptyContinuation(item.spec.Contract, item.request.Contract), Constraints: firstNonEmptyContinuation(item.spec.Constraints, item.request.Constraints), Status: session.CapabilityGrantStatusActive, GrantedAt: now, ExpiresAt: item.spec.ExpiresAt, CreatedAt: now, UpdatedAt: now})
-	return err
+	_, err := r.store.UpsertCapabilityGrant(session.CapabilityGrant{GrantID: grantID, RequestID: item.spec.RequestID, GrantedBy: approver, GrantedTo: item.grantedTo, Kind: item.kind, TargetResource: item.target, AllowedActions: item.actions, Contract: firstNonEmptyContinuation(item.spec.Contract, item.request.Contract), Constraints: firstNonEmptyContinuation(item.spec.Constraints, item.request.Constraints), Status: session.CapabilityGrantStatusActive, GrantedAt: now, ExpiresAt: expiresAt, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		return "", err
+	}
+	return grantID, nil
 }
 
 func safeContinuationIDPart(raw string) string {
@@ -276,16 +300,55 @@ func (r *Runtime) revokeContinuationForKeyLocked(key session.SessionKey) (Contin
 	state = session.NormalizeContinuationState(state)
 	revoked := state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved
 	if revoked {
-		state = continuationStateWithLeaseRevoked(state, time.Now().UTC())
+		now := time.Now().UTC()
+		state = continuationStateWithLeaseRevoked(state, now)
+		if err := r.revokeContinuationMintedCapabilityGrants(state, now); err != nil {
+			return ContinuationRevokeResult{}, err
+		}
 		if err := r.store.UpdateContinuationState(key, state); err != nil {
 			return ContinuationRevokeResult{}, err
 		}
 		if err := r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusDenied); err != nil {
 			return ContinuationRevokeResult{}, fmt.Errorf("sync revoked operation proposal status: %w", err)
 		}
-		r.recordExecutionEvent(key, core.ExecutionEventContinuationRevoked, "continuation", "revoked", continuationExecutionPayload(state), time.Now().UTC())
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationRevoked, "continuation", "revoked", continuationExecutionPayload(state), now)
 	}
 	return ContinuationRevokeResult{State: state, Revoked: revoked, ContinuationLabel: continuationUserFacingPlanLabel(state)}, nil
+}
+
+func (r *Runtime) revokeContinuationMintedCapabilityGrants(state session.ContinuationState, now time.Time) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	state = session.NormalizeContinuationState(state)
+	for _, grantID := range state.ContinuationLease.CapabilityGrantIDs {
+		grantID = strings.TrimSpace(grantID)
+		if grantID == "" {
+			continue
+		}
+		grant, ok, err := r.store.CapabilityGrant(grantID)
+		if err != nil {
+			return fmt.Errorf("load minted capability grant %q: %w", grantID, err)
+		}
+		if !ok {
+			continue
+		}
+		grant = session.NormalizeCapabilityGrant(grant)
+		if grant.Status == session.CapabilityGrantStatusRevoked {
+			continue
+		}
+		grant.Status = session.CapabilityGrantStatusRevoked
+		grant.RevokedAt = now
+		grant.UpdatedAt = now
+		if _, err := r.store.UpsertCapabilityGrant(grant); err != nil {
+			return fmt.Errorf("revoke minted capability grant %q: %w", grantID, err)
+		}
+	}
+	return nil
 }
 
 func (r *Runtime) TriggerContinuation(ctx context.Context, chatID int64) error {
