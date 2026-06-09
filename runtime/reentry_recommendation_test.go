@@ -83,6 +83,79 @@ func TestReentryRecommendationSweepSurfacesBoundedChoicesAfterTerminalQuietWindo
 	}
 }
 
+func TestReentryRecommendationRankingPayloadAvoidsPrivateContext(t *testing.T) {
+	t.Parallel()
+
+	cfg, _, provider, _ := buildRuntimeFixtures(t)
+	provider.replyText = `{"candidates":[{"id":"c1","label":"Release check","rank":1},{"id":"c2","label":"Mission","rank":2}]}`
+	rt := &Runtime{cfg: cfg, provider: provider}
+	state := reentryRecommendationState{
+		Key: session.SessionKey{ChatID: 7010, UserID: 0},
+		Run: session.TurnRun{
+			ID:          44,
+			Kind:        session.TurnRunKindInteractive,
+			Status:      session.TurnRunStatusCompleted,
+				RequestText: "release Secret Project Night Orchard using fake credential marker for test",
+			ErrorText:   "failed while reading /home/alice/.aphelion/secrets/app.env for Secret Project Night Orchard",
+		},
+		Operation: session.OperationState{
+			ID:        "op-private",
+			Objective: "Ship Secret Project Night Orchard",
+			Status:    session.OperationStatusCompleted,
+			Summary:   "Secret Project Night Orchard release is probably ready.",
+			PhasePlan: session.OperationPhasePlan{
+				CurrentPhaseID: "phase-private",
+				Phases: []session.OperationPhase{
+					{ID: "phase-private", Status: session.PlanStatusCompleted, AuthorityClass: "commit"},
+				},
+			},
+		},
+		Plan: session.PlanState{
+			Explanation: "Private release checklist for Secret Project Night Orchard.",
+			Steps:       []session.PlanStep{{Step: "Push Secret Project Night Orchard", Status: session.PlanStatusCompleted}},
+		},
+		Missions: []session.MissionState{
+			{ID: "mission-secret", Title: "Secret Project Night Orchard", Objective: "Keep the private codename out of prompts.", Status: session.MissionStatusActive},
+		},
+		MemoryNotes: []string{"Daily private note: Secret Project Night Orchard depends on Alice."},
+	}
+
+	candidates := rt.reentryRecommendationCandidates(context.Background(), state)
+	if len(candidates) < 2 {
+		t.Fatalf("candidates = %#v, want multiple candidates for ranking", candidates)
+	}
+	for _, candidate := range candidates {
+		if candidate.Kind == session.ReentryCandidateResumeMission &&
+			(strings.Contains(candidate.Summary, "Secret Project Night Orchard") || strings.Contains(candidate.Summary, "private codename")) {
+			t.Fatalf("mission candidate summary leaked private mission content: %#v", candidate)
+		}
+	}
+	_ = rt.rankReentryRecommendationCandidates(context.Background(), state, candidates)
+
+	var joined []string
+	for _, msg := range provider.lastGovernorMsgs {
+		joined = append(joined, msg.Content)
+	}
+	payload := strings.Join(joined, "\n")
+	for _, forbidden := range []string{
+		"Secret Project Night Orchard",
+			"fake credential marker",
+		"/home/alice/.aphelion/secrets/app.env",
+		"Daily private note",
+		"Push Secret Project",
+		"Keep the private codename",
+	} {
+		if strings.Contains(payload, forbidden) {
+			t.Fatalf("ranking payload leaked %q:\n%s", forbidden, payload)
+		}
+	}
+	for _, want := range []string{"mission_counts", "memory_note_count", "signals", "phase_status_counts"} {
+		if !strings.Contains(payload, want) {
+			t.Fatalf("ranking payload = %q, want structural field %q", payload, want)
+		}
+	}
+}
+
 func testExecutionEventsContain(events []session.ExecutionEvent, eventType string) bool {
 	for _, event := range events {
 		if event.EventType == eventType {

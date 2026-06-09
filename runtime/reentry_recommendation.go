@@ -268,16 +268,15 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 		})
 	}
 	if len(state.Missions) > 0 {
-		mission := state.Missions[0]
 		candidates = append(candidates, session.ReentryRecommendationCandidate{
 			ID:               nextReentryCandidateID(candidates),
 			Kind:             session.ReentryCandidateResumeMission,
 			Label:            "Resume Mission",
-			Summary:          clampText(firstNonEmpty(mission.Title, mission.Objective, "Resume the highest-signal mission."), 180),
+			Summary:          "Review the highest-signal mission currently recorded in the mission ledger.",
 			PromptText:       reentryPrompt("Review the selected mission and current durable session state. Ask for a fresh bounded approval if action is needed; otherwise summarize why the mission should remain parked."),
 			AuthorityClass:   "mission_review",
 			RequiresApproval: true,
-			BasisRefs:        []string{"mission:" + mission.ID},
+			BasisRefs:        []string{"mission"},
 		})
 	}
 	if len(candidates) == 0 && (op.Active() || len(state.MemoryNotes) > 0 || strings.TrimSpace(state.Run.RequestText) != "") {
@@ -321,6 +320,7 @@ func normalizeReentryCandidates(candidates []session.ReentryRecommendationCandid
 }
 
 func normalizeReentryButtonLabel(label string) string {
+	label = redactRuntimeText(label, 64)
 	label = strings.Join(strings.Fields(strings.TrimSpace(label)), " ")
 	if label == "" {
 		return ""
@@ -343,12 +343,7 @@ func reentryPrompt(instruction string) string {
 }
 
 func reentryLooksReleaseRelated(source string) bool {
-	return strings.Contains(source, "release") ||
-		strings.Contains(source, "deploy") ||
-		strings.Contains(source, "reinstall") ||
-		strings.Contains(source, "restart") ||
-		strings.Contains(source, "latest main") ||
-		strings.Contains(source, "service")
+	return len(reentryRecommendationSignalFlags(source)) > 0
 }
 
 func reentryRecommendationSourceText(state reentryRecommendationState) string {
@@ -387,19 +382,72 @@ type reentryJudgeResponse struct {
 	} `json:"candidates"`
 }
 
+type reentryRecommendationRankContext struct {
+	Turn            reentryRecommendationRankTurn         `json:"turn"`
+	Operation       reentryRecommendationRankOperation    `json:"operation,omitempty"`
+	Plan            reentryRecommendationRankPlan         `json:"plan,omitempty"`
+	Continuation    reentryRecommendationRankContinuation `json:"continuation,omitempty"`
+	MissionCounts   map[string]int                        `json:"mission_counts,omitempty"`
+	MemoryNoteCount int                                   `json:"memory_note_count,omitempty"`
+	Signals         []string                              `json:"signals,omitempty"`
+}
+
+type reentryRecommendationRankTurn struct {
+	ID     int64  `json:"id"`
+	Kind   string `json:"kind,omitempty"`
+	Status string `json:"status,omitempty"`
+}
+
+type reentryRecommendationRankOperation struct {
+	Present                bool           `json:"present,omitempty"`
+	Status                 string         `json:"status,omitempty"`
+	HasObjective           bool           `json:"has_objective,omitempty"`
+	ProposalStatus         string         `json:"proposal_status,omitempty"`
+	PhaseCount             int            `json:"phase_count,omitempty"`
+	PhaseStatusCounts      map[string]int `json:"phase_status_counts,omitempty"`
+	CurrentAuthorityClass  string         `json:"current_authority_class,omitempty"`
+	PlanLeaseStatus        string         `json:"plan_lease_status,omitempty"`
+	PlanLeaseLaneCount     int            `json:"plan_lease_lane_count,omitempty"`
+	PlanLeaseTurnsSpent    int            `json:"plan_lease_turns_spent,omitempty"`
+	PlanLeaseCompleted     int            `json:"plan_lease_completed,omitempty"`
+	PlanLeaseBlocked       int            `json:"plan_lease_blocked,omitempty"`
+	PlanLeaseSuggestedNext bool           `json:"plan_lease_suggested_next,omitempty"`
+}
+
+type reentryRecommendationRankPlan struct {
+	StepCount    int            `json:"step_count,omitempty"`
+	StatusCounts map[string]int `json:"status_counts,omitempty"`
+}
+
+type reentryRecommendationRankContinuation struct {
+	Status         string `json:"status,omitempty"`
+	LeaseStatus    string `json:"lease_status,omitempty"`
+	RemainingTurns int    `json:"remaining_turns,omitempty"`
+	HasProposal    bool   `json:"has_proposal,omitempty"`
+}
+
+type reentryRecommendationRankOption struct {
+	ID               string                       `json:"id"`
+	Kind             session.ReentryCandidateKind `json:"kind"`
+	Label            string                       `json:"label"`
+	Summary          string                       `json:"summary,omitempty"`
+	AuthorityClass   string                       `json:"authority_class,omitempty"`
+	RequiresApproval bool                         `json:"requires_approval,omitempty"`
+}
+
 func (r *Runtime) rankReentryRecommendationCandidates(ctx context.Context, state reentryRecommendationState, candidates []session.ReentryRecommendationCandidate) []session.ReentryRecommendationCandidate {
 	candidates = normalizeReentryCandidates(candidates)
 	if len(candidates) <= 1 || r == nil || r.provider == nil {
 		return candidates
 	}
 	payload, _ := json.Marshal(struct {
-		Terminal string                                   `json:"terminal"`
-		Context  string                                   `json:"context"`
-		Options  []session.ReentryRecommendationCandidate `json:"options"`
+		Terminal string                            `json:"terminal"`
+		Context  reentryRecommendationRankContext  `json:"context"`
+		Options  []reentryRecommendationRankOption `json:"options"`
 	}{
 		Terminal: fmt.Sprintf("turn_run=%d status=%s", state.Run.ID, state.Run.Status),
-		Context:  clampText(reentryRecommendationSourceText(state), 4000),
-		Options:  candidates,
+		Context:  reentryRecommendationRankPayloadContext(state),
+		Options:  reentryRecommendationRankOptions(candidates),
 	})
 	system := "Rank existing Aphelion idle re-entry candidates. You may shorten labels, but do not invent new candidates or authority. Return compact JSON only: {\"candidates\":[{\"id\":\"c1\",\"label\":\"Two Words\",\"rank\":1}]}."
 	resp, err := completeProvider(ctx, r.provider, []agent.Message{
@@ -463,6 +511,178 @@ func (r *Runtime) rankReentryRecommendationCandidates(ctx context.Context, state
 		out = append(out, item.candidate)
 	}
 	return normalizeReentryCandidates(out)
+}
+
+func reentryRecommendationRankPayloadContext(state reentryRecommendationState) reentryRecommendationRankContext {
+	op := session.NormalizeOperationState(state.Operation)
+	plan := session.NormalizePlanState(state.Plan)
+	cont := session.NormalizeContinuationState(state.Continuation)
+	source := strings.ToLower(reentryRecommendationSourceText(state))
+
+	payload := reentryRecommendationRankContext{
+		Turn: reentryRecommendationRankTurn{
+			ID:     state.Run.ID,
+			Kind:   string(state.Run.Kind),
+			Status: string(state.Run.Status),
+		},
+		MemoryNoteCount: len(state.MemoryNotes),
+		Signals:         reentryRecommendationSignalFlags(source),
+	}
+	if op.ID != "" || op.Status != "" || op.Proposal.Status != "" || len(op.PhasePlan.Phases) > 0 || op.PlanLease.Status != "" {
+		payload.Operation = reentryRecommendationRankOperation{
+			Present:                true,
+			Status:                 string(op.Status),
+			HasObjective:           strings.TrimSpace(op.Objective) != "",
+			ProposalStatus:         string(op.Proposal.Status),
+			PhaseCount:             len(op.PhasePlan.Phases),
+			PhaseStatusCounts:      reentryPhaseStatusCounts(op.PhasePlan.Phases),
+			CurrentAuthorityClass:  reentryCurrentPhaseAuthorityClass(op.PhasePlan),
+			PlanLeaseStatus:        string(op.PlanLease.Status),
+			PlanLeaseLaneCount:     len(op.PlanLease.Lanes),
+			PlanLeaseTurnsSpent:    op.PlanLease.EvidenceDigest.TurnsSpent,
+			PlanLeaseCompleted:     len(op.PlanLease.EvidenceDigest.Completed),
+			PlanLeaseBlocked:       len(op.PlanLease.EvidenceDigest.Blocked),
+			PlanLeaseSuggestedNext: strings.TrimSpace(op.PlanLease.EvidenceDigest.SuggestedNextLease) != "",
+		}
+	}
+	if len(plan.Steps) > 0 {
+		payload.Plan = reentryRecommendationRankPlan{
+			StepCount:    len(plan.Steps),
+			StatusCounts: reentryPlanStatusCounts(plan.Steps),
+		}
+	}
+	if cont.Status != "" || cont.ContinuationLease.Status != "" || cont.RemainingTurns > 0 || cont.ActionProposal.ID != "" {
+		payload.Continuation = reentryRecommendationRankContinuation{
+			Status:         string(cont.Status),
+			LeaseStatus:    string(cont.ContinuationLease.Status),
+			RemainingTurns: cont.RemainingTurns,
+			HasProposal:    cont.ActionProposal.ID != "",
+		}
+	}
+	if len(state.Missions) > 0 {
+		payload.MissionCounts = reentryMissionStatusCounts(state.Missions)
+	}
+	return payload
+}
+
+func reentryRecommendationRankOptions(candidates []session.ReentryRecommendationCandidate) []reentryRecommendationRankOption {
+	out := make([]reentryRecommendationRankOption, 0, len(candidates))
+	for _, candidate := range normalizeReentryCandidates(candidates) {
+		out = append(out, reentryRecommendationRankOption{
+			ID:               candidate.ID,
+			Kind:             candidate.Kind,
+			Label:            normalizeReentryButtonLabel(candidate.Label),
+			Summary:          reentryCandidateRankSummary(candidate.Kind),
+			AuthorityClass:   candidate.AuthorityClass,
+			RequiresApproval: candidate.RequiresApproval,
+		})
+	}
+	return out
+}
+
+func reentryCandidateRankSummary(kind session.ReentryCandidateKind) string {
+	switch session.NormalizeReentryCandidateKind(kind) {
+	case session.ReentryCandidateContinueOperation:
+		return "continue an operation only if durable state supports a bounded follow-up"
+	case session.ReentryCandidateRequestNextLease:
+		return "request a fresh bounded lease for the next operation edge"
+	case session.ReentryCandidateResumeMission:
+		return "review mission state without assuming authority"
+	case session.ReentryCandidateReviewReleaseReadiness:
+		return "review release readiness and identify a bounded next edge"
+	case session.ReentryCandidateClarifyGoal:
+		return "ask the operator for missing goal context"
+	default:
+		return ""
+	}
+}
+
+func reentryRecommendationSignalFlags(source string) []string {
+	source = strings.ToLower(strings.TrimSpace(source))
+	if source == "" {
+		return nil
+	}
+	checks := []struct {
+		needle string
+		flag   string
+	}{
+		{"release", "release"},
+		{"deploy", "deploy"},
+		{"reinstall", "reinstall"},
+		{"restart", "restart"},
+		{"latest main", "latest_main"},
+		{"service", "service"},
+	}
+	out := make([]string, 0, len(checks))
+	for _, check := range checks {
+		if strings.Contains(source, check.needle) {
+			out = append(out, check.flag)
+		}
+	}
+	return out
+}
+
+func reentryPhaseStatusCounts(phases []session.OperationPhase) map[string]int {
+	counts := make(map[string]int)
+	for _, phase := range phases {
+		status := string(session.NormalizePlanStatus(phase.Status))
+		if status == "" {
+			status = "unknown"
+		}
+		counts[status]++
+	}
+	return emptyMapAsNil(counts)
+}
+
+func reentryPlanStatusCounts(steps []session.PlanStep) map[string]int {
+	counts := make(map[string]int)
+	for _, step := range steps {
+		status := string(session.NormalizePlanStatus(step.Status))
+		if status == "" {
+			status = "unknown"
+		}
+		counts[status]++
+	}
+	return emptyMapAsNil(counts)
+}
+
+func reentryMissionStatusCounts(missions []session.MissionState) map[string]int {
+	counts := make(map[string]int)
+	for _, mission := range missions {
+		status := string(session.NormalizeMissionStatus(mission.Status))
+		if status == "" {
+			status = "unknown"
+		}
+		counts[status]++
+	}
+	return emptyMapAsNil(counts)
+}
+
+func reentryCurrentPhaseAuthorityClass(plan session.OperationPhasePlan) string {
+	if len(plan.Phases) == 0 {
+		return ""
+	}
+	currentPhaseID := strings.TrimSpace(plan.CurrentPhaseID)
+	if currentPhaseID != "" {
+		for _, phase := range plan.Phases {
+			if strings.TrimSpace(phase.ID) == currentPhaseID {
+				return strings.TrimSpace(phase.AuthorityClass)
+			}
+		}
+	}
+	for _, phase := range plan.Phases {
+		if phase.Status == session.PlanStatusInProgress || phase.Status == session.PlanStatusPending {
+			return strings.TrimSpace(phase.AuthorityClass)
+		}
+	}
+	return ""
+}
+
+func emptyMapAsNil(counts map[string]int) map[string]int {
+	if len(counts) == 0 {
+		return nil
+	}
+	return counts
 }
 
 func extractReentryJSON(text string) string {

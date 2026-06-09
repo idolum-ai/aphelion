@@ -474,9 +474,6 @@ func (r *Runtime) interpretFinalReplyExecutionClaims(ctx context.Context, reply 
 	if reply == "" {
 		return nil
 	}
-	if !finalReplyMayContainExecutionClaim(reply) {
-		return nil
-	}
 	claims := r.interpretCurrentTurnClaims(ctx, interpretationRequest{
 		Surface: "final_reply",
 		Text:    reply,
@@ -496,39 +493,6 @@ func (r *Runtime) interpretFinalReplyExecutionClaims(ctx context.Context, reply 
 		out = append(out, core.NormalizeInterpretationClaim(claim))
 	}
 	return out
-}
-
-func finalReplyMayContainExecutionClaim(reply string) bool {
-	lower := strings.ToLower(strings.NewReplacer("\u2018", "'", "\u2019", "'").Replace(reply))
-	for _, needle := range []string{
-		"done",
-		"finished",
-		"completed",
-		"all set",
-		"executed command",
-		"applied the patch",
-		"updated the files",
-		"ran go test",
-		"tests passed",
-		"validation passed",
-		"durable wake completed",
-		"woke durable",
-		"processed pending parent guidance",
-		"approved",
-		"approval is in place",
-		"authority is in place",
-		"i'll continue",
-		"i will continue",
-		"i can continue",
-		"continue with",
-		"start the next phase",
-		"begin the next phase",
-	} {
-		if strings.Contains(lower, needle) {
-			return true
-		}
-	}
-	return false
 }
 
 func executionClaimRisks(risks []string) []string {

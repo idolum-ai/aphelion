@@ -635,6 +635,49 @@ func TestGroundFinalReplyWithExecutionEvidenceAdjudicatesUngroundedSuccessClaimW
 	}
 }
 
+func TestGroundFinalReplyWithExecutionEvidenceAdjudicatesSemanticCompletionClaim(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.interpretationReplyText = interpretationClaimsMarker + `: {"schema_version":"` + interpretationClaimsSchema + `","surface":"final_reply","claims":[{"intent":"reply_execution_claim","scope":"final_reply","risk":["completion"],"confidence":"medium","source":"test_semantic_interpretation"}]}`
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9310, UserID: 0, Scope: telegramDMScopeRef(9310)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{}`,
+			CreatedAt:   now.Add(-20 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventTurnFailed,
+			Stage:       "turn",
+			Status:      "failed",
+			PayloadJSON: `{"error":"tool failed"}`,
+			CreatedAt:   now.Add(-10 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	rewritten, note := rt.groundFinalReplyWithExecutionEvidence(key, "Shipped it. We're good to go.")
+	if strings.TrimSpace(note) == "" {
+		t.Fatalf("note = %q, want non-empty grounding note", note)
+	}
+	if !strings.Contains(strings.ToLower(note), "completion claim is not grounded") {
+		t.Fatalf("note = %q, want completion grounding detail", note)
+	}
+	if rewritten != "Shipped it. We're good to go." {
+		t.Fatalf("rewritten = %q, want unchanged reply for persona repair path", rewritten)
+	}
+}
+
 func TestGroundFinalReplyWithExecutionEvidenceKeepsGroundedSuccessClaim(t *testing.T) {
 	t.Parallel()
 

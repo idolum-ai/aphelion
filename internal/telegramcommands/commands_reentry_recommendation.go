@@ -5,6 +5,7 @@ package telegramcommands
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
@@ -40,9 +41,7 @@ func handleReentryRecommendationCallback(ctx context.Context, sender commandCall
 		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleReentryRecommendationCallback); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 			return true, err
 		}
-		if targetMsg.MessageID != 0 {
-			_ = editCallbackMessageClearingInlineKeyboard(ctx, sender, targetMsg.ChatID, targetMsg.MessageID, "Recommendation is no longer active.")
-		}
+		editReentryRecommendationCallbackMessage(ctx, sender, router, targetMsg.ChatID, targetMsg.MessageID, "reentry_recommendation.stale", "Recommendation is no longer active.")
 		return true, nil
 	}
 	switch action {
@@ -53,9 +52,7 @@ func handleReentryRecommendationCallback(ctx context.Context, sender commandCall
 		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Ignored."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 			return true, err
 		}
-		if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, targetMsg.ChatID, targetMsg.MessageID, "Ignored recommendation."); err != nil {
-			return true, err
-		}
+		editReentryRecommendationCallbackMessage(ctx, sender, router, targetMsg.ChatID, targetMsg.MessageID, "reentry_recommendation.ignore", "Ignored recommendation.")
 		return true, nil
 	case core.ReentryRecommendationCallbackSelect:
 		candidate, ok := record.Candidate(candidateID)
@@ -78,9 +75,7 @@ func handleReentryRecommendationCallback(ctx context.Context, sender commandCall
 			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleReentryRecommendationCallback); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 				return true, err
 			}
-			if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, targetMsg.ChatID, targetMsg.MessageID, "Recommendation is stale. Send a fresh instruction if you still want to continue."); err != nil {
-				return true, err
-			}
+			editReentryRecommendationCallbackMessage(ctx, sender, router, targetMsg.ChatID, targetMsg.MessageID, "reentry_recommendation.select_stale", "Recommendation is stale. Send a fresh instruction if you still want to continue.")
 			return true, nil
 		}
 		if selectedCandidate.ID != "" {
@@ -89,12 +84,20 @@ func handleReentryRecommendationCallback(ctx context.Context, sender commandCall
 		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Queued."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 			return true, err
 		}
-		if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, targetMsg.ChatID, targetMsg.MessageID, fmt.Sprintf("Queued re-entry path: %s.", strings.TrimSpace(candidate.Label))); err != nil {
-			return true, err
-		}
+		editReentryRecommendationCallbackMessage(ctx, sender, router, targetMsg.ChatID, targetMsg.MessageID, "reentry_recommendation.select", fmt.Sprintf("Queued re-entry path: %s.", strings.TrimSpace(candidate.Label)))
 		return true, nil
 	default:
 		return false, nil
+	}
+}
+
+func editReentryRecommendationCallbackMessage(ctx context.Context, sender commandCallbackSender, router commandRouter, chatID int64, messageID int64, callbackKind string, text string) {
+	if messageID == 0 {
+		return
+	}
+	if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
+		recordTelegramCallbackError(router, chatID, callbackKind+".edit", err)
+		log.Printf("WARN reentry recommendation callback message update failed chat_id=%d message_id=%d kind=%s err=%v", chatID, messageID, strings.TrimSpace(callbackKind), err)
 	}
 }
 

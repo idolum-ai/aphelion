@@ -10,7 +10,6 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -2740,20 +2739,6 @@ func sanitizeEvalPathPart(value string) string {
 	return out
 }
 
-var evalSecretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(token|api[_-]?key|secret|password)\s*[:=]\s*[A-Za-z0-9._~+/=-]{8,}`),
-	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9_]{12,}`),
-	regexp.MustCompile(`sk-[A-Za-z0-9_-]{12,}`),
-	regexp.MustCompile(`/home/[^/\s]+/\.aphelion/secrets/[^\s]+`),
-}
-
 func redactEvalText(value string, limit int) string {
-	value = strings.TrimSpace(value)
-	for _, pattern := range evalSecretPatterns {
-		value = pattern.ReplaceAllString(value, "[redacted]")
-	}
-	if limit > 0 && len(value) > limit {
-		value = strings.TrimSpace(value[:limit]) + " [truncated]"
-	}
-	return value
+	return redactRuntimeText(value, limit)
 }

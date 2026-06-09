@@ -4,6 +4,7 @@ package telegramcommands
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -94,6 +95,45 @@ func TestHandleTelegramCommandCallbackReentryRecommendationIgnoreDoesNotQueueWor
 	}
 	if len(sender.editClear) != 1 || sender.editClear[0].text != "Ignored recommendation." {
 		t.Fatalf("editClear = %#v, want ignored edit", sender.editClear)
+	}
+}
+
+func TestHandleTelegramCommandCallbackReentryRecommendationSelectRecordsEditFailureAfterQueue(t *testing.T) {
+	t.Parallel()
+
+	record := testReentryRecommendationRecord()
+	candidate := record.Candidates[0]
+	router := &stubCommandRouter{
+		canRestart:                  true,
+		reentryRecommendation:       record,
+		reentryRecommendationOK:     true,
+		queueReentrySelected:        true,
+		queueReentryCandidateReturn: candidate,
+	}
+	editErr := errors.New("telegram edit failed")
+	sender := &stubCommandSender{editErr: editErr}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:       "cb-reentry-edit-fail",
+		UpdateID: 8082,
+		From:     &telegram.User{ID: 1001, Username: "admin"},
+		Data:     core.EncodeReentryRecommendationCallbackData(record.ID, candidate.ID, core.ReentryRecommendationCallbackSelect),
+		Message:  &telegram.Message{MessageID: 93, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v, want edit failure recorded only", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.queueReentryRecommendationMsg == nil {
+		t.Fatal("queueReentryRecommendationMsg = nil, want queued work despite edit failure")
+	}
+	if len(router.callbackErrorRecords) != 1 {
+		t.Fatalf("callbackErrorRecords = %#v, want one edit diagnostic", router.callbackErrorRecords)
+	}
+	recorded := router.callbackErrorRecords[0]
+	if recorded.callbackKind != "reentry_recommendation.select.edit" || recorded.err != editErr {
+		t.Fatalf("callbackErrorRecords[0] = %#v, want select edit error", recorded)
 	}
 }
 
