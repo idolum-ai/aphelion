@@ -665,15 +665,16 @@ type turnDeliveryPort struct {
 	sessionState interface {
 		session() *session.Session
 	}
-	msg             core.InboundMessage
-	inboundWasVoice bool
-	deliver         bool
-	recordOutbound  bool
-	hooks           turnCommitHooks
-	audit           *turnAuditRecorder
-	sendErrCtx      string
-	recordErrCtx    string
-	deliveryMsgIDs  []int64
+	msg                                   core.InboundMessage
+	inboundWasVoice                       bool
+	deliver                               bool
+	recordOutbound                        bool
+	hooks                                 turnCommitHooks
+	audit                                 *turnAuditRecorder
+	sendErrCtx                            string
+	recordErrCtx                          string
+	deliveryMsgIDs                        []int64
+	deferBudgetRecoveryToWorkFailureRetry bool
 }
 
 func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest) (*turn.DeliveryResult, error) {

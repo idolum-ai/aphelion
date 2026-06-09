@@ -10,6 +10,7 @@ import (
 	"github.com/idolum-ai/aphelion/decision"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/turn"
 	"os"
 	"strings"
 	"testing"
@@ -672,9 +673,10 @@ func TestNativeWorkExecutorTreatsBudgetRecoveryTurnAsFailed(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 	recovery := nativeWorkBudgetRecoveryTestRecovery()
-	rt.interactiveDMAssembler = &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{
 		Text: turnBudgetRecoveryHandoffText(recovery) + "\n\nNo edits/commits/pushes completed.",
 	}}
+	rt.interactiveDMAssembler = recorder
 
 	result, err := nativeWorkExecutor{runtime: rt}.Run(context.Background(), WorkRequest{
 		ChatID: 8195,
@@ -689,6 +691,60 @@ func TestNativeWorkExecutorTreatsBudgetRecoveryTurnAsFailed(t *testing.T) {
 	if !strings.Contains(result.Summary, "No edits/commits/pushes completed") {
 		t.Fatalf("summary = %q, want recovery handoff evidence preserved", result.Summary)
 	}
+	if recorder.input.Msg.OriginDetail != string(session.TurnAuthorizationKindContinuation) {
+		t.Fatalf("work executor origin detail = %q, want continuation provenance", recorder.input.Msg.OriginDetail)
+	}
+	if !recorder.input.DeferBudgetRecoveryToWorkFailureRetry {
+		t.Fatal("work executor input did not request budget recovery deferral to manual retry")
+	}
+	if recorder.input.EventAwareness.TurnAuthorizationKind != string(session.TurnAuthorizationKindContinuation) {
+		t.Fatalf("event awareness turn authorization kind = %q, want continuation", recorder.input.EventAwareness.TurnAuthorizationKind)
+	}
+}
+
+type budgetRecoveryDeliveringAssembler struct {
+	runtime   *Runtime
+	result    *core.TurnResult
+	input     interactiveDMTurnAssemblyInput
+	callCount int
+}
+
+func (a *budgetRecoveryDeliveringAssembler) Run(ctx context.Context, input interactiveDMTurnAssemblyInput) (*core.TurnResult, error) {
+	a.callCount++
+	a.input = input
+	result := a.result
+	if result == nil {
+		result = &core.TurnResult{}
+	}
+	recovery, _ := turnResultBudgetRecovery(result)
+	visible := strings.TrimSpace(result.Text)
+	if visible == "" {
+		visible = turnBudgetRecoveryHandoffText(recovery)
+	}
+	turnResult := &turn.Result{
+		Turn:         result,
+		VisibleReply: visible,
+	}
+	if a.runtime != nil && a.runtime.store != nil {
+		if opState, err := a.runtime.store.OperationState(input.Key); err == nil {
+			turnResult.OperationState = opState
+		}
+	}
+	port := &turnDeliveryPort{
+		runtime:                               a.runtime,
+		key:                                   input.Key,
+		msg:                                   input.Msg,
+		deliver:                               true,
+		recordOutbound:                        true,
+		deferBudgetRecoveryToWorkFailureRetry: input.DeferBudgetRecoveryToWorkFailureRetry,
+	}
+	if _, err := port.Deliver(ctx, turn.DeliveryRequest{
+		Message: core.OutboundMessage{ChatID: input.Msg.ChatID, Text: visible},
+		Result:  turnResult,
+	}); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 func TestConsumedWorkPhaseDoesNotCompleteWithoutMatchingWorkEvidence(t *testing.T) {
@@ -984,15 +1040,20 @@ func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
 		t.Fatalf("operation work = %#v, want failure recorded without completion", op.Work)
 	}
 	sender.mu.Lock()
-	defer sender.mu.Unlock()
-	if len(sender.inline) != 1 {
-		t.Fatalf("inline count = %d, want one retry approval prompt", len(sender.inline))
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[0].text
 	}
-	if !strings.Contains(sender.inline[0].text, "approval before retrying") || !strings.Contains(sender.inline[0].text, prior.ActionProposal.BoundedEffect) {
-		t.Fatalf("inline text = %q, want retry reason and bounded effect", sender.inline[0].text)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one retry approval prompt", inlineCount)
 	}
-	if strings.Contains(sender.inline[0].text, "failed before completion") || strings.Contains(sender.inline[0].text, "fresh lease") {
-		t.Fatalf("inline text leaked internal retry copy: %q", sender.inline[0].text)
+	if !strings.Contains(inlineText, "approval before retrying") || !strings.Contains(inlineText, prior.ActionProposal.BoundedEffect) {
+		t.Fatalf("inline text = %q, want retry reason and bounded effect", inlineText)
+	}
+	if strings.Contains(inlineText, "failed before completion") || strings.Contains(inlineText, "fresh lease") {
+		t.Fatalf("inline text leaked internal retry copy: %q", inlineText)
 	}
 	events, err := store.ExecutionEventsBySession(key, 0, 50)
 	if err != nil {
@@ -1175,8 +1236,9 @@ func TestTriggerCodingContinuationBudgetRecoveryDoesNotCompleteOperation(t *test
 		t.Fatalf("New() err = %v", err)
 	}
 	recovery := nativeWorkBudgetRecoveryTestRecovery()
-	rt.interactiveDMAssembler = &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{
-		Text: turnBudgetRecoveryHandoffText(recovery) + "\n\nNo edits/commits/pushes completed.",
+	rt.interactiveDMAssembler = &budgetRecoveryDeliveringAssembler{runtime: rt, result: &core.TurnResult{
+		Text:     turnBudgetRecoveryHandoffText(recovery) + "\n\nNo edits/commits/pushes completed.",
+		Recovery: recovery,
 	}}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "native"}, []WorkExecutor{nativeWorkExecutor{runtime: rt}})
 
@@ -1275,10 +1337,19 @@ func TestTriggerCodingContinuationBudgetRecoveryDoesNotCompleteOperation(t *test
 	if !strings.Contains(gotCont.ActionProposal.WhyNow, "approval before retrying") {
 		t.Fatalf("fresh proposal why_now = %q, want failure retry reason", gotCont.ActionProposal.WhyNow)
 	}
+	if gotCont.ActionProposal.AutoApproveEligible == nil || *gotCont.ActionProposal.AutoApproveEligible {
+		t.Fatalf("AutoApproveEligible = %#v, want manual-only retry after budget recovery", gotCont.ActionProposal.AutoApproveEligible)
+	}
 	sender.mu.Lock()
-	defer sender.mu.Unlock()
-	if len(sender.inline) != 1 {
-		t.Fatalf("inline count = %d, want one retry approval prompt", len(sender.inline))
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one retry approval prompt", inlineCount)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := rt.WaitForBackgroundLoops(waitCtx); err != nil {
+		t.Fatalf("WaitForBackgroundLoops() err = %v", err)
 	}
 	events, err := store.ExecutionEventsBySession(key, 0, 80)
 	if err != nil {
@@ -1289,6 +1360,16 @@ func TestTriggerCodingContinuationBudgetRecoveryDoesNotCompleteOperation(t *test
 	}
 	if hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
 		t.Fatalf("events = %#v, want no work executor success event", events)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventRecoveryIssued) || !hasExecutionEvent(events, core.ExecutionEventContinuationOffered) {
+		t.Fatalf("events = %#v, want manual retry recovery issue and continuation offer", events)
+	}
+	assertBudgetRecoveryEventStatus(t, events, "deferred")
+	assertNoBudgetRecoveryEventStatus(t, events, "scheduled")
+	assertNoBudgetRecoveryEventStatus(t, events, "resuming")
+	assertNoBudgetRecoveryEventStatus(t, events, "resumed")
+	if !budgetRecoveryEventPayloadContains(events, core.ExecutionEventTurnBudgetRecovery, "reason", "work_executor_retry_path") {
+		t.Fatalf("events = %#v, want deferred budget recovery reason", events)
 	}
 }
 

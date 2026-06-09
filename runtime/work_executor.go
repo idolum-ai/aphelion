@@ -256,7 +256,9 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 		key.Scope = telegramDMScopeRef(key.ChatID)
 	}
 	msg := continuationInboundForKey(key, req.Actor, approvedContinuationEventTextForState(req.State), core.InboundOriginTurnAuthorization, string(session.TurnAuthorizationKindContinuation))
-	result, err := e.runtime.handleInternalContinuation(ctx, req.Actor, msg)
+	result, err := e.runtime.handleInternalContinuationWithOptions(ctx, req.Actor, msg, internalContinuationOptions{
+		DeferBudgetRecoveryToWorkFailureRetry: true,
+	})
 	out := WorkResult{ExecutorName: "native", CompletionKind: "native_turn"}
 	if result != nil {
 		out.Summary = strings.TrimSpace(result.Text)

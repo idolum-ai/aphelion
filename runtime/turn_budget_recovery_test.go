@@ -26,7 +26,15 @@ func TestBudgetRecoveryDeliverySuppressesFinalReplyAndSchedulesInternalContinuat
 	rt.interactiveDMAssembler = recorder
 
 	key := session.SessionKey{ChatID: 9711, UserID: 0, Scope: telegramDMScopeRef(9711)}
-	msg := core.InboundMessage{ChatID: 9711, SenderID: 1001, SenderName: "admin", Text: "finish the current phase", MessageID: 42}
+	msg := core.InboundMessage{
+		ChatID:       9711,
+		SenderID:     1001,
+		SenderName:   "admin",
+		Text:         "finish the current phase",
+		MessageID:    42,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
+	}
 	opState := budgetRecoveryTestOperationState()
 	if err := store.UpdateOperationState(key, opState); err != nil {
 		t.Fatalf("UpdateOperationState() err = %v", err)
@@ -99,6 +107,77 @@ func TestBudgetRecoveryDeliverySuppressesFinalReplyAndSchedulesInternalContinuat
 	assertBudgetRecoveryEventStatus(t, events, "scheduled")
 	assertBudgetRecoveryEventStatus(t, events, "resuming")
 	assertBudgetRecoveryEventStatus(t, events, "resumed")
+}
+
+func TestBudgetRecoveryFromWorkExecutorContinuationDefersToManualRetry(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{Text: "hidden recovery should not run"}}
+	rt.interactiveDMAssembler = recorder
+
+	key := session.SessionKey{ChatID: 9718, UserID: 0, Scope: telegramDMScopeRef(9718)}
+	msg := core.InboundMessage{
+		ChatID:       9718,
+		SenderID:     1001,
+		SenderName:   "admin",
+		Text:         "approved work continuation",
+		MessageID:    47,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
+	}
+	opState := budgetRecoveryTestOperationState()
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	recovery := &core.TurnRecovery{
+		Kind:           core.TurnRecoveryTokenBudgetExhausted,
+		Recoverable:    true,
+		ReplanRequired: true,
+		Summary:        "Token budget exhausted before a final response.",
+		MaxAutoHops:    3,
+	}
+	port := &turnDeliveryPort{runtime: rt, key: key, msg: msg, deliver: true, deferBudgetRecoveryToWorkFailureRetry: true}
+
+	got, err := port.Deliver(context.Background(), turn.DeliveryRequest{
+		Message: core.OutboundMessage{ChatID: msg.ChatID, Text: turnBudgetRecoveryHandoffText(recovery)},
+		Result: &turn.Result{
+			Turn:           &core.TurnResult{Text: turnBudgetRecoveryHandoffText(recovery), Recovery: recovery},
+			VisibleReply:   turnBudgetRecoveryHandoffText(recovery),
+			OperationState: opState,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Deliver() err = %v", err)
+	}
+	if got == nil || got.Kind != "budget_recovery_deferred_to_work_retry" {
+		t.Fatalf("Deliver() = %#v, want budget recovery deferred to work retry", got)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := rt.WaitForBackgroundLoops(waitCtx); err != nil {
+		t.Fatalf("WaitForBackgroundLoops() err = %v", err)
+	}
+	if recorder.callCount != 0 {
+		t.Fatalf("recovery assembler calls = %d, want no hidden recovery turn", recorder.callCount)
+	}
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent = %#v, want no visible budget recovery message from deferred lane", sender.sent)
+	}
+
+	events, err := store.LatestExecutionEventsBySession(key, 20)
+	if err != nil {
+		t.Fatalf("LatestExecutionEventsBySession() err = %v", err)
+	}
+	assertBudgetRecoveryEventStatus(t, events, "deferred")
+	assertNoBudgetRecoveryEventStatus(t, events, "scheduled")
+	assertNoBudgetRecoveryEventStatus(t, events, "resuming")
+	assertNoBudgetRecoveryEventStatus(t, events, "resumed")
+	if !budgetRecoveryEventPayloadContains(events, core.ExecutionEventTurnBudgetRecovery, "reason", "work_executor_retry_path") {
+		t.Fatalf("events = %#v, want deferred recovery reason", events)
+	}
 }
 
 func TestBudgetRecoveryWithStaleTelegramIngressRunsDefaultAssembler(t *testing.T) {

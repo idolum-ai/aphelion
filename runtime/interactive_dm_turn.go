@@ -22,12 +22,13 @@ type interactiveDMTurnAssembler interface {
 }
 
 type interactiveDMTurnAssemblyInput struct {
-	Msg            core.InboundMessage
-	Actor          principal.Principal
-	Key            session.SessionKey
-	Scope          sandbox.Scope
-	Tools          agent.ToolRegistry
-	EventAwareness turn.EventAwareness
+	Msg                                   core.InboundMessage
+	Actor                                 principal.Principal
+	Key                                   session.SessionKey
+	Scope                                 sandbox.Scope
+	Tools                                 agent.ToolRegistry
+	EventAwareness                        turn.EventAwareness
+	DeferBudgetRecoveryToWorkFailureRetry bool
 }
 
 type runtimeInteractiveDMTurnAssembler struct {
@@ -126,17 +127,18 @@ func (r *Runtime) runInteractiveDMTurn(ctx context.Context, input interactiveDMT
 		audit: audit,
 	}
 	machine.Delivery = &turnDeliveryPort{
-		runtime:         r,
-		key:             key,
-		sess:            sess,
-		sessionState:    turnState,
-		msg:             msg,
-		inboundWasVoice: prepared.InboundWasVoice,
-		deliver:         true,
-		recordOutbound:  true,
-		audit:           audit,
-		sendErrCtx:      "send outbound reply",
-		recordErrCtx:    "record outbound reply",
+		runtime:                               r,
+		key:                                   key,
+		sess:                                  sess,
+		sessionState:                          turnState,
+		msg:                                   msg,
+		inboundWasVoice:                       prepared.InboundWasVoice,
+		deliver:                               true,
+		recordOutbound:                        true,
+		audit:                                 audit,
+		sendErrCtx:                            "send outbound reply",
+		recordErrCtx:                          "record outbound reply",
+		deferBudgetRecoveryToWorkFailureRetry: input.DeferBudgetRecoveryToWorkFailureRetry,
 		hooks: turnCommitHooks{
 			QueueReviewEvents: func(result *turn.Result) error {
 				if !shouldGenerateReviewEvent(actor, key) {

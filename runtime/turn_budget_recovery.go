@@ -71,6 +71,18 @@ func (p *turnDeliveryPort) deliverBudgetRecovery(ctx context.Context, req turn.D
 	}
 	maxHops := turnBudgetRecoveryMaxHops(recovery)
 	scope, scopePayload := p.runtime.turnBudgetRecoveryScope(p.key, p.msg, req.Result)
+	if p.deferBudgetRecoveryToWorkFailureRetry {
+		payload := turnBudgetRecoveryPayload(recovery, scope, scopePayload, 0, maxHops)
+		payload["reason"] = "work_executor_retry_path"
+		if req.Result != nil && req.Result.Turn != nil {
+			appendTokenUsagePayload(payload, req.Result.Turn.TokenUsage)
+		}
+		p.runtime.recordExecutionEvent(p.key, core.ExecutionEventTurnBudgetRecovery, "turn", "deferred", payload, time.Now().UTC())
+		if p.audit != nil {
+			p.audit.RecordFinalReply("", nil, "budget_recovery_deferred_to_work_retry")
+		}
+		return &turn.DeliveryResult{Kind: "budget_recovery_deferred_to_work_retry"}, nil
+	}
 	attempts, err := p.runtime.turnBudgetRecoveryScheduledAttempts(p.key, scope)
 	if err != nil {
 		return p.deliverBudgetRecoveryBlocked(ctx, req, recovery, scope, scopePayload, maxHops, "retry_counter_unavailable", err)

@@ -19,12 +19,20 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	return r.handleInteractiveInbound(ctx, msg, nil)
 }
 
+type internalContinuationOptions struct {
+	DeferBudgetRecoveryToWorkFailureRetry bool
+}
+
 func (r *Runtime) handleInternalContinuation(ctx context.Context, actor principal.Principal, msg core.InboundMessage) (result *core.TurnResult, err error) {
+	return r.handleInternalContinuationWithOptions(ctx, actor, msg, internalContinuationOptions{})
+}
+
+func (r *Runtime) handleInternalContinuationWithOptions(ctx context.Context, actor principal.Principal, msg core.InboundMessage, opts internalContinuationOptions) (result *core.TurnResult, err error) {
 	if actor.TelegramUserID <= 0 && strings.TrimSpace(actor.DurableAgentID) == "" {
 		return nil, ErrPrincipalDenied
 	}
 	msg = detachInternalContinuationIngress(msg)
-	return r.handleInteractiveInbound(ctx, msg, &actor)
+	return r.handleInteractiveInboundWithOptions(ctx, msg, &actor, opts)
 }
 
 func detachInternalContinuationIngress(msg core.InboundMessage) core.InboundMessage {
@@ -37,6 +45,10 @@ func detachInternalContinuationIngress(msg core.InboundMessage) core.InboundMess
 }
 
 func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.InboundMessage, forcedActor *principal.Principal) (result *core.TurnResult, err error) {
+	return r.handleInteractiveInboundWithOptions(ctx, msg, forcedActor, internalContinuationOptions{})
+}
+
+func (r *Runtime) handleInteractiveInboundWithOptions(ctx context.Context, msg core.InboundMessage, forcedActor *principal.Principal, opts internalContinuationOptions) (result *core.TurnResult, err error) {
 	if strings.TrimSpace(msg.DurableAgentID) != "" {
 		return r.handleDurableTelegramGroupInbound(ctx, msg)
 	}
@@ -79,12 +91,13 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 		assembler = newInteractiveDMTurnAssembler(r)
 	}
 	return assembler.Run(ctx, interactiveDMTurnAssemblyInput{
-		Msg:            msg,
-		Actor:          actor,
-		Key:            key,
-		Scope:          scope,
-		Tools:          tools,
-		EventAwareness: eventAwareness,
+		Msg:                                   msg,
+		Actor:                                 actor,
+		Key:                                   key,
+		Scope:                                 scope,
+		Tools:                                 tools,
+		EventAwareness:                        eventAwareness,
+		DeferBudgetRecoveryToWorkFailureRetry: opts.DeferBudgetRecoveryToWorkFailureRetry,
 	})
 }
 
