@@ -7,6 +7,7 @@ import (
 	"errors"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/decision"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"os"
@@ -910,6 +911,12 @@ func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
 	if err := store.UpdateOperationState(key, session.OperationState{ID: "op-work-failure-retry", Objective: "Patch the work failure retry.", Status: session.OperationStatusActive}); err != nil {
 		t.Fatalf("UpdateOperationState() err = %v", err)
 	}
+	if _, err := rt.ConfigureAutonomyForKey(context.Background(), key, 1001, "leased 15m all"); err != nil {
+		t.Fatalf("ConfigureAutonomyForKey() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApprovalForKey(context.Background(), key, 1001, "15m all"); err != nil {
+		t.Fatalf("ConfigureAutoApprovalForKey() err = %v", err)
+	}
 
 	err = rt.TriggerContinuation(context.Background(), 8190)
 	if err == nil || !strings.Contains(err.Error(), workErr.Error()) {
@@ -927,6 +934,47 @@ func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
 	}
 	if got.ActionProposal.BoundedEffect != prior.ActionProposal.BoundedEffect || !strings.Contains(got.ActionProposal.WhyNow, "approval before retrying") {
 		t.Fatalf("fresh proposal = %#v, want same bounded effect with failure reason", got.ActionProposal)
+	}
+	if got.ActionProposal.AutoApproveEligible == nil || *got.ActionProposal.AutoApproveEligible {
+		t.Fatalf("AutoApproveEligible = %#v, want explicit manual-only retry", got.ActionProposal.AutoApproveEligible)
+	}
+	if got.ActionProposal.PlanHash == "" || got.ContinuationLease.PlanHash != got.ActionProposal.PlanHash {
+		t.Fatalf("plan hashes proposal=%q lease=%q, want synced manual-only hash", got.ActionProposal.PlanHash, got.ContinuationLease.PlanHash)
+	}
+	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
+	leases, err := store.ActiveOperatorAutoApprovalLeasesForScope(key.ChatID, scopeKind, scopeID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeasesForScope() err = %v", err)
+	}
+	if len(leases) != 0 {
+		t.Fatalf("active auto-approval leases = %#v, want cleared at manual retry barrier", leases)
+	}
+	overrides, err := store.ActiveOperatorAutonomyOverridesForScope(key.ChatID, scopeKind, scopeID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutonomyOverridesForScope() err = %v", err)
+	}
+	if len(overrides) != 0 {
+		t.Fatalf("active autonomy overrides = %#v, want cleared at manual retry barrier", overrides)
+	}
+	resolution, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-after-manual-retry-barrier",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        key.ChatID,
+			SenderID:      1002,
+			ScopeKind:     scopeKind,
+			ScopeID:       scopeID,
+			Prompt:        "Approve retry?",
+			Details:       got.ActionProposal.BoundedEffect,
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if resolution.Choice != "" {
+		t.Fatalf("AutoResolveDecision() = %#v, want no auto-resolution after manual retry barrier", resolution)
 	}
 	op, err := store.OperationState(key)
 	if err != nil {
@@ -953,9 +1001,24 @@ func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
 	if !hasExecutionEvent(events, core.ExecutionEventWorkExecutorFailed) {
 		t.Fatalf("events = %#v, want work executor failure event", events)
 	}
+	if !hasExecutionEventPayload(events, core.ExecutionEventAutoApprovalRevoked, "manual_retry_barrier") {
+		t.Fatalf("events = %#v, want auto-approval revocation for manual retry barrier", events)
+	}
+	if !hasExecutionEventPayload(events, core.ExecutionEventAutoModeRevoked, "manual_retry_barrier") {
+		t.Fatalf("events = %#v, want auto-mode revocation for manual retry barrier", events)
+	}
 	if hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
 		t.Fatalf("events = %#v, want no work executor success event", events)
 	}
+}
+
+func hasExecutionEventPayload(events []session.ExecutionEvent, eventType string, payloadNeedle string) bool {
+	for _, event := range events {
+		if event.EventType == eventType && strings.Contains(event.PayloadJSON, payloadNeedle) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestNoEffectRecoveryHandoffRequiresFreshApproval(t *testing.T) {

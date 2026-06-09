@@ -35,10 +35,25 @@ func (r *Runtime) refreshContinuationProposal(ctx context.Context, key session.S
 	prior = session.NormalizeContinuationState(prior)
 	now := time.Now().UTC()
 	if continuationStateHasFreshPendingLease(prior, now) {
+		if !allowAutoApproval {
+			prior = manualOnlyContinuationRefreshState(prior, now)
+			if err := r.clearApprovalWindowForManualRetryBarrier(key, prior, refreshedFrom, now); err != nil {
+				return session.ContinuationState{}, false, fmt.Errorf("clear approval window for manual retry: %w", err)
+			}
+			if err := r.store.UpdateContinuationState(key, prior); err != nil {
+				return session.ContinuationState{}, false, fmt.Errorf("persist manual-only continuation proposal: %w", err)
+			}
+		}
 		return prior, false, nil
 	}
 
 	state := refreshedContinuationState(prior, reason, refreshedFrom, now)
+	if !allowAutoApproval {
+		state = manualOnlyContinuationRefreshState(state, now)
+		if err := r.clearApprovalWindowForManualRetryBarrier(key, state, refreshedFrom, now); err != nil {
+			return session.ContinuationState{}, false, fmt.Errorf("clear approval window for manual retry: %w", err)
+		}
+	}
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return session.ContinuationState{}, false, fmt.Errorf("persist refreshed continuation proposal: %w", err)
 	}
@@ -61,6 +76,21 @@ func (r *Runtime) refreshContinuationProposal(ctx context.Context, key session.S
 		return state, false, fmt.Errorf("send refreshed continuation approval: %w", err)
 	}
 	return state, true, nil
+}
+
+func manualOnlyContinuationRefreshState(state session.ContinuationState, now time.Time) session.ContinuationState {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	state = session.NormalizeContinuationState(state)
+	manualOnly := false
+	state.ActionProposal.AutoApproveEligible = &manualOnly
+	state.ActionProposal.UpdatedAt = now
+	state.ActionProposal.PlanHash = actionProposalHash(state.ActionProposal)
+	state.ContinuationLease.PlanHash = state.ActionProposal.PlanHash
+	state.ContinuationLease.UpdatedAt = now
+	return session.NormalizeContinuationState(state)
 }
 
 func continuationStateHasFreshPendingLease(state session.ContinuationState, now time.Time) bool {
