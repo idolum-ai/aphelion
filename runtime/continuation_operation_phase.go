@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -252,15 +251,7 @@ func normalizeSingleOperationPhase(phase session.OperationPhase) session.Operati
 }
 
 func operationPhaseProposalID(opState session.OperationState, phase session.OperationPhase) string {
-	opState = session.NormalizeOperationState(opState)
-	phase = normalizeSingleOperationPhase(phase)
-	base := firstNonEmptyContinuation(opState.ID, opState.PhasePlan.ID, "operation")
-	phaseID := firstNonEmptyContinuation(phase.ID, phase.Summary, "phase")
-	id := sanitizeOperationPhaseProposalID("phase-" + base + "-" + phaseID)
-	if len(id) <= 128 {
-		return id
-	}
-	return strings.TrimRight(id[:96], "-_") + "-" + core.ContinuationCallbackAlias(id)
+	return session.OperationPhaseProposalID(opState, phase)
 }
 
 func sanitizeOperationPhaseProposalID(value string) string {

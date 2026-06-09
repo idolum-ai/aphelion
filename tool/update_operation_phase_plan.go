@@ -94,6 +94,9 @@ func parseOperationPhaseInputs(inputs []updateOperationPhaseInput) ([]session.Op
 
 func parseOperationPhaseInput(in updateOperationPhaseInput) (session.OperationPhase, error) {
 	inputID := strings.TrimSpace(in.ID)
+	if strings.TrimSpace(in.LeaseID) != "" {
+		return session.OperationPhase{}, fmt.Errorf("update_operation phase lease_id is runtime-owned and cannot be set by tool input")
+	}
 	phase := session.OperationPhase{
 		ID:                       inputID,
 		Summary:                  strings.TrimSpace(in.Summary),
@@ -109,7 +112,6 @@ func parseOperationPhaseInput(in updateOperationPhaseInput) (session.OperationPh
 		ApprovalSubject:          strings.TrimSpace(in.ApprovalSubject),
 		BlockedReasonCode:        strings.TrimSpace(in.BlockedReasonCode),
 		SupersedesPhaseIDs:       append([]string(nil), in.SupersedesPhaseIDs...),
-		LeaseID:                  strings.TrimSpace(in.LeaseID),
 	}
 	if in.AutoApproveEligible != nil {
 		value := *in.AutoApproveEligible
@@ -178,6 +180,9 @@ func parseCapabilityGrantSpecInputs(inputs []capabilityGrantSpecInput) []session
 
 func mergeOperationPhaseInput(current session.OperationPhase, in updateOperationPhaseInput) (session.OperationPhase, error) {
 	phase := current
+	if strings.TrimSpace(in.LeaseID) != "" {
+		return session.OperationPhase{}, fmt.Errorf("update_operation phase lease_id is runtime-owned and cannot be set by tool input")
+	}
 	if id := strings.TrimSpace(in.ID); id != "" {
 		phase.ID = id
 	}
@@ -242,9 +247,6 @@ func mergeOperationPhaseInput(current session.OperationPhase, in updateOperation
 	}
 	if in.RequiresApproval != nil {
 		phase.RequiresApproval = *in.RequiresApproval
-	}
-	if leaseID := strings.TrimSpace(in.LeaseID); leaseID != "" {
-		phase.LeaseID = leaseID
 	}
 	plan := session.NormalizeOperationState(session.OperationState{PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{phase}}}).PhasePlan
 	if len(plan.Phases) == 0 {
