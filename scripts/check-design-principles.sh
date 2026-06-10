@@ -56,12 +56,12 @@ for phrase in "I need to correct that" "Sending Work evidence" "Operator card:" 
   fi
 done
 
-for symbol in "positiveAuthorityEffectText" "bounded_effect_positive_clause" "operationPhaseApprovalText" "inferOperationGateReasonCode" "operationPhaseIsEscalatedOperatorApproval" "detectExecutionClaims" "textRequestsPendingAudioTranscription" "textRequestsAudioTranscription" "lexical_safety_scanner" "status_line_fallback"; do
-  if rg -nF "$symbol" runtime session --glob '!**/*_test.go' >/dev/null; then
-    echo "runtime source contains retired prose-authority classifier: $symbol" >&2
-    rg -nF "$symbol" runtime session --glob '!**/*_test.go' >&2
-    exit 1
-  fi
+for symbol in "positiveAuthorityEffectText" "bounded_effect_positive_clause" "operationPhaseApprovalText" "inferOperationGateReasonCode" "operationPhaseIsEscalatedOperatorApproval" "detectExecutionClaims" "textRequestsPendingAudioTranscription" "textRequestsAudioTranscription" "lexical_safety_scanner" "status_line_fallback" "goalContinuationSourceIndicatesCompletion"; do
+	if rg -nF "$symbol" runtime session --glob '!**/*_test.go' >/dev/null; then
+		echo "runtime source contains retired prose-authority classifier: $symbol" >&2
+		rg -nF "$symbol" runtime session --glob '!**/*_test.go' >&2
+		exit 1
+	fi
 done
 
 if rg -nF "EXTERNAL_CHANNEL_STATUS" runtime session core durableagent tool telegram --glob '!**/*_test.go' >/dev/null; then
@@ -81,12 +81,17 @@ if ! rg -qF "interpretCurrentTurnClaims" runtime/interpretation_claims.go || ! r
 fi
 
 if ! rg -qF "interpretFinalReplyExecutionClaims" runtime/constitution_runtime.go; then
-  echo "final-reply grounding must use typed interpretation claims before TES validation" >&2
-  exit 1
+	echo "final-reply grounding must use typed interpretation claims before TES validation" >&2
+	exit 1
+fi
+
+if ! rg -qF "interpretGoalContinuationClaims" runtime/goal_continuation.go || ! rg -qF "goal_continuation" runtime/goal_continuation.go; then
+	echo "goal-continuation follow-up inference must use typed interpretation claims" >&2
+	exit 1
 fi
 
 if rg -n "msg\\.Text|normalizeMediaIntentText|containsTranscriptionTerm|containsAudioTerm" runtime/media_intent.go >/dev/null; then
-  echo "media intent routing must not inspect authored text directly" >&2
+	echo "media intent routing must not inspect authored text directly" >&2
   rg -n "msg\\.Text|normalizeMediaIntentText|containsTranscriptionTerm|containsAudioTerm" runtime/media_intent.go >&2
   exit 1
 fi

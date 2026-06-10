@@ -382,30 +382,52 @@ func TestCompleteTurnRun(t *testing.T) {
 		t.Fatalf("CompleteTurnRun() err = %v", err)
 	}
 
-	rows, err := store.db.Query(`
-		SELECT
-			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
-			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started, tool_calls_finished, last_tool_result_preview, last_tool_error,
-			progress_message_id, error_text, recovery_summary, recovery_logged_at
-		FROM turn_runs
-		WHERE id = ?
-	`, run.ID)
+	got, err := store.TurnRun(run.ID)
 	if err != nil {
-		t.Fatalf("query completed turn run: %v", err)
-	}
-	defer rows.Close()
-	if !rows.Next() {
-		t.Fatal("expected completed turn run row")
-	}
-	got, err := scanTurnRun(rows)
-	if err != nil {
-		t.Fatalf("scanTurnRun() err = %v", err)
+		t.Fatalf("TurnRun() err = %v", err)
 	}
 	if got.Status != TurnRunStatusCompleted {
 		t.Fatalf("status = %q, want completed", got.Status)
 	}
 	if got.CompletedAt.IsZero() {
 		t.Fatal("completed_at is zero, want populated timestamp")
+	}
+}
+
+func TestUpdateTurnRunAccounting(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 902, UserID: 0}
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	run, err := store.BeginTurnRun(key, TurnRunKindInteractive, "measure this turn")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if err := store.UpdateTurnRunAccounting(run.ID, 7, []Message{
+		{Role: "tool", Content: "tool output", ContentChars: 11},
+		{Role: "assistant", Content: "visible answer"},
+	}, core.TokenUsage{
+		InputTokens:      100,
+		OutputTokens:     20,
+		CacheReadTokens:  30,
+		CacheWriteTokens: 40,
+	}); err != nil {
+		t.Fatalf("UpdateTurnRunAccounting() err = %v", err)
+	}
+	got, err := store.TurnRun(run.ID)
+	if err != nil {
+		t.Fatalf("TurnRun() err = %v", err)
+	}
+	if got.TurnIndex != 7 || got.TotalToolCharsIn != 11 || got.TotalAssistantCharsOut != int64(len("visible answer")) {
+		t.Fatalf("turn accounting = index:%d tool:%d assistant:%d", got.TurnIndex, got.TotalToolCharsIn, got.TotalAssistantCharsOut)
+	}
+	if got.ProviderInputTokens != 100 || got.ProviderOutputTokens != 20 || got.ProviderCacheReadTokens != 30 || got.ProviderCacheWriteTokens != 40 {
+		t.Fatalf("provider accounting = %#v", got)
 	}
 }
 

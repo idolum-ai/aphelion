@@ -292,6 +292,20 @@ type stubCommandRouter struct {
 	threadSummaryMsg             *core.InboundMessage
 	threadSummaryReturn          string
 	threadSummaryErr             error
+	mediaPickerRecordChatID      int64
+	mediaPickerRecordMessageID   int64
+	mediaPickerRecordInbound     core.InboundMessage
+	mediaPickerRecordErr         error
+	mediaPickerReturn            core.InboundMessage
+	mediaPickerOK                bool
+	mediaPickerErr               error
+	mediaPickerGetChatID         int64
+	mediaPickerGetMessageID      int64
+	mediaPickerMarkChatID        int64
+	mediaPickerMarkMessageID     int64
+	mediaPickerMarkErr           error
+	routeAcceptedMsg             *core.InboundMessage
+	routeAcceptedErr             error
 	promoteThreadChatID          int64
 	promoteThreadSenderID        int64
 	promoteThreadID              int64

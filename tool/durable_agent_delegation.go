@@ -286,6 +286,8 @@ func durableAgentDelegationRequestArtifact(agent core.DurableAgent, record sessi
 	putDurableAgentDelegationMetadata(metadata, "requested_for", record.RequestedFor)
 	putDurableAgentDelegationMetadata(metadata, "review_status", string(record.ReviewStatus))
 	putDurableAgentDelegationMetadata(metadata, "purpose", record.Purpose)
+	putDurableAgentDelegationMetadata(metadata, "contract", record.Contract)
+	putDurableAgentDelegationMetadata(metadata, "constraints", record.Constraints)
 	if plan, ok, err := capabilityUpdatePlanFromContract(record.Contract); err == nil && ok {
 		putDurableAgentDelegationMetadata(metadata, "capability_update_plan", "present")
 		if plan.AgentID != "" {

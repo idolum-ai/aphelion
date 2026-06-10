@@ -27,7 +27,7 @@ func (f *fakeServiceGuard) run(_ context.Context, name string, args ...string) (
 	if name == "systemctl" && reflect.DeepEqual(args, []string{"--user", "list-unit-files", "--no-legend", "--plain"}) {
 		return []byte(f.unitFiles), nil
 	}
-	if name == "systemctl" && reflect.DeepEqual(args, []string{"--user", "show", "aphelion", "-p", "MainPID", "-p", "ExecStart", "--no-pager"}) {
+	if name == "systemctl" && len(args) >= 4 && args[0] == "--user" && args[1] == "show" && args[2] == "aphelion" {
 		return []byte(f.show), nil
 	}
 	if len(args) == 2 && args[0] == "version" && args[1] == "--json" {
@@ -134,5 +134,36 @@ func TestVerifyAphelionServiceGuardFailsOnDuplicatePrimaryUnits(t *testing.T) {
 	want := []string{"aphelion-main-redeploy-1779159152.service", "aphelion-v013-deploy.service"}
 	if !reflect.DeepEqual(report.DuplicateUnitNames, want) {
 		t.Fatalf("duplicates = %#v, want %#v", report.DuplicateUnitNames, want)
+	}
+}
+
+func TestVerifyAphelionServiceGuardSmokeWithFakeSystemdRunner(t *testing.T) {
+	fake := &fakeServiceGuard{
+		unitList:  "aphelion.service loaded active running Aphelion\n",
+		unitFiles: "aphelion.service enabled\n",
+		show:      "LoadState=loaded\nActiveState=active\nSubState=running\nMainPID=123\nExecStart={ path=/tmp/aphelion ; argv[]=/tmp/aphelion }\n",
+		readlinks: map[string]string{"/proc/123/exe": "/tmp/aphelion"},
+		versions:  map[string]string{"/tmp/aphelion": `{"version":"v0.2.2","vcs_revision":"abc123"}`},
+	}
+
+	report, err := verifyAphelionServiceGuard(context.Background(), serviceGuardCheck{
+		ExpectedExecPath: "/tmp/aphelion",
+		ExpectedVersion:  "v0.2.2",
+		ExpectedRevision: "abc123",
+		Runner:           fake.run,
+		Readlink:         fake.readlink,
+	})
+	if err != nil {
+		t.Fatalf("verifyAphelionServiceGuard() err = %v", err)
+	}
+	if report.ActiveState != "active" || report.RunningExecPath != "/tmp/aphelion" || len(report.DuplicateUnitNames) != 0 {
+		t.Fatalf("report = %#v, want active matching smoke report", report)
+	}
+	for _, call := range fake.calls {
+		for _, forbidden := range []string{" restart", " start", " enable", " daemon-reload"} {
+			if strings.Contains(call, forbidden) {
+				t.Fatalf("service guard smoke invoked mutating systemctl command via %q: %#v", call, fake.calls)
+			}
+		}
 	}
 }

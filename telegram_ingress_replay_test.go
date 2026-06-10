@@ -283,8 +283,8 @@ func TestStartupTelegramIngressReplaysEveryTypedWorkSurface(t *testing.T) {
 	defer store.Close()
 
 	surfaces := telegramruntime.StartupWorkSurfaces()
-	if len(surfaces) != 8 {
-		t.Fatalf("startup work surfaces = %#v, want primary, thread summary, doctor, context/memory/mission clarification, busy resume, artifact resume", surfaces)
+	if len(surfaces) != 9 {
+		t.Fatalf("startup work surfaces = %#v, want primary, thread summary, doctor, context/memory/mission/re-entry callback work, busy resume, artifact resume", surfaces)
 	}
 	seenDefinitions := make(map[string]telegramruntime.WorkSurface)
 	for i, workSurface := range surfaces {

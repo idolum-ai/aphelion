@@ -5,6 +5,7 @@ package turn
 import (
 	"context"
 	"strings"
+	"unicode"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
@@ -14,17 +15,19 @@ import (
 
 // RenderStageRequest captures the render-stage decision input for one turn.
 type RenderStageRequest struct {
-	Render            FaceRenderRequest
-	FacePolicy        pipeline.FacePolicy
-	UseMaterialFloor  bool
-	ReplyWithVoice    bool
-	AllowStream       bool
-	Media             []core.Media
-	ToolLog           []string
-	GeneratedMessages []agent.Message
-	InitialReply      string
-	FallbackOptions   pipeline.FallbackOptions
-	SkipRender        bool
+	Render                FaceRenderRequest
+	FacePolicy            pipeline.FacePolicy
+	UseMaterialFloor      bool
+	ReplyWithVoice        bool
+	AllowStream           bool
+	Media                 []core.Media
+	ToolLog               []string
+	GeneratedMessages     []agent.Message
+	InitialReply          string
+	FallbackOptions       pipeline.FallbackOptions
+	SkipRender            bool
+	SkipRenderReason      string
+	ConditionalSkipReason string
 }
 
 // RenderStageCallbacks are runtime-supplied hooks for render execution.
@@ -39,17 +42,42 @@ type RenderStageCallbacks struct {
 }
 
 // RenderStageResult is the output of render-stage orchestration.
+type FaceSkipReason string
+
+const (
+	FaceSkipReasonStructuralSkip       FaceSkipReason = "structural_skip"
+	FaceSkipReasonRenderPolicy         FaceSkipReason = "render_policy"
+	FaceSkipReasonMaterialStatusReport FaceSkipReason = "material_status_report"
+)
+
+func NormalizeFaceSkipReason(reason string) FaceSkipReason {
+	switch FaceSkipReason(strings.TrimSpace(reason)) {
+	case FaceSkipReasonStructuralSkip:
+		return FaceSkipReasonStructuralSkip
+	case FaceSkipReasonRenderPolicy:
+		return FaceSkipReasonRenderPolicy
+	case FaceSkipReasonMaterialStatusReport:
+		return FaceSkipReasonMaterialStatusReport
+	default:
+		return FaceSkipReason(strings.TrimSpace(reason))
+	}
+}
+
+// RenderStageResult is the output of render-stage orchestration.
 type RenderStageResult struct {
-	ReplyText     string
-	Runtime       prompt.RuntimeAwareness
-	Usage         core.TokenUsage
-	Streamed      bool
-	RenderedID    int64
-	RenderedType  string
-	ReplyModality string
-	ShouldRender  bool
-	RenderError   error
-	StreamHandled bool
+	ReplyText       string
+	Runtime         prompt.RuntimeAwareness
+	Usage           core.TokenUsage
+	Streamed        bool
+	RenderedID      int64
+	RenderedType    string
+	ReplyModality   string
+	ShouldRender    bool
+	RenderError     error
+	StreamHandled   bool
+	SkipReason      FaceSkipReason
+	FallbackReason  string
+	FallbackApplied bool
 }
 
 // RunRenderStage applies stream/non-stream/fallback selection for one turn.
@@ -70,6 +98,7 @@ func RunRenderStage(ctx context.Context, req RenderStageRequest, callbacks Rende
 	}
 
 	if req.SkipRender {
+		result.SkipReason = NormalizeFaceSkipReason(firstNonEmpty(strings.TrimSpace(req.SkipRenderReason), string(FaceSkipReasonStructuralSkip)))
 		return result, nil
 	}
 
@@ -86,7 +115,14 @@ func RunRenderStage(ctx context.Context, req RenderStageRequest, callbacks Rende
 		ToolLog:           req.ToolLog,
 		GeneratedMessages: req.GeneratedMessages,
 	})
+	if result.ShouldRender && strings.TrimSpace(req.ConditionalSkipReason) != "" && !req.ReplyWithVoice {
+		result.ShouldRender = false
+		result.SkipReason = NormalizeFaceSkipReason(req.ConditionalSkipReason)
+	}
 	if !result.ShouldRender && !req.ReplyWithVoice {
+		if result.SkipReason == "" {
+			result.SkipReason = FaceSkipReasonRenderPolicy
+		}
 		result.Runtime.DeliveryMode = "floor_fallback"
 		renderReq.Runtime = result.Runtime
 	}
@@ -106,9 +142,7 @@ func RunRenderStage(ctx context.Context, req RenderStageRequest, callbacks Rende
 			result.Usage = addTokenUsage(result.Usage, streamResult.Usage)
 			result.ReplyText = strings.TrimSpace(streamResult.Text)
 			result.ReplyModality = strings.TrimSpace(streamResult.ReplyModality)
-			if result.ReplyText == "" {
-				result.ReplyText = renderStageFallback(callbacks, req.Render.MaterialFloor, req.Render.FloorText, req.FallbackOptions)
-			}
+			applyRenderCompletenessFallback(&result, callbacks, req)
 		}
 	}
 
@@ -125,13 +159,129 @@ func RunRenderStage(ctx context.Context, req RenderStageRequest, callbacks Rende
 			result.ReplyText = strings.TrimSpace(rendered.Text)
 			result.ReplyModality = strings.TrimSpace(rendered.ReplyModality)
 			result.Usage = addTokenUsage(result.Usage, rendered.Usage)
-			if result.ReplyText == "" {
-				result.ReplyText = renderStageFallback(callbacks, req.Render.MaterialFloor, req.Render.FloorText, req.FallbackOptions)
-			}
+			applyRenderCompletenessFallback(&result, callbacks, req)
 		}
 	}
 
 	return result, nil
+}
+
+func applyRenderCompletenessFallback(result *RenderStageResult, callbacks RenderStageCallbacks, req RenderStageRequest) {
+	if result == nil || req.ReplyWithVoice {
+		return
+	}
+	reason := incompleteFaceRenderFallbackReason(result.ReplyText, req.Render.FloorText, req.Render.MaterialFloor)
+	if reason == "" && strings.TrimSpace(result.ReplyText) != "" {
+		return
+	}
+	fallback := renderStageFallback(callbacks, req.Render.MaterialFloor, req.Render.FloorText, req.FallbackOptions)
+	if strings.TrimSpace(fallback) == "" {
+		return
+	}
+	result.ReplyText = fallback
+	result.Runtime.DeliveryMode = "floor_fallback"
+	if reason == "" {
+		reason = "empty_face_render"
+	}
+	result.FallbackReason = reason
+	result.FallbackApplied = true
+}
+
+func incompleteFaceRenderFallbackReason(renderedText string, floorText string, packet core.MaterialPacket) string {
+	rendered := strings.TrimSpace(renderedText)
+	floor := strings.TrimSpace(floorText)
+	if rendered == "" || floor == "" || packet.Empty() {
+		return ""
+	}
+	if materialPacketHasSceneConstraints(packet) {
+		return ""
+	}
+	if !looksTruncatedSentence(rendered) {
+		return ""
+	}
+	renderedRunes := len([]rune(rendered))
+	floorRunes := len([]rune(floor))
+	if packet.Kind == core.MaterialPacketKindStatusReport {
+		// A deliberately conservative ratio: normal face summaries may be shorter than
+		// the floor, but an operational scene ending mid-sentence at less than two
+		// thirds of the complete floor is safer as deterministic floor fallback.
+		if renderedRunes*3 >= floorRunes*2 {
+			return ""
+		}
+		return "partial_face_render"
+	}
+	switch packet.Kind {
+	case core.MaterialPacketKindUnspecified, core.MaterialPacketKindGeneral:
+	default:
+		return ""
+	}
+	if renderedRunes*4 >= floorRunes*3 {
+		return ""
+	}
+	return "partial_face_render"
+}
+
+func materialPacketHasSceneConstraints(packet core.MaterialPacket) bool {
+	for _, constraint := range packet.SceneConstraints {
+		trimmed := strings.TrimSpace(constraint)
+		if trimmed == "" {
+			continue
+		}
+		// Scene constraints can intentionally authorize a short/shaped visible
+		// render. Do not let the generic operational-length heuristic override
+		// that unless the constraint itself asks the face to preserve completeness.
+		lower := strings.ToLower(trimmed)
+		if strings.Contains(lower, "complete") || strings.Contains(lower, "completeness") || strings.Contains(lower, "preserve") || strings.Contains(lower, "full") || strings.Contains(lower, "evidence") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func looksTruncatedSentence(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	last := lastNonSpaceRune(trimmed)
+	if last == 0 {
+		return false
+	}
+	switch last {
+	case '.', '!', '?', '…', '`', ')', ']', '}', '"', '\'':
+		return false
+	case ':', ';':
+		return true
+	default:
+		return unicode.IsLetter(last) || unicode.IsDigit(last)
+	}
+}
+
+func lastNonSpaceRune(text string) rune {
+	for _, r := range reverseRunes(text) {
+		if !unicode.IsSpace(r) {
+			return r
+		}
+	}
+	return 0
+}
+
+func reverseRunes(text string) []rune {
+	runes := []rune(text)
+	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+		runes[i], runes[j] = runes[j], runes[i]
+	}
+	return runes
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func renderStageFallback(callbacks RenderStageCallbacks, packet core.MaterialPacket, floorText string, opts pipeline.FallbackOptions) string {

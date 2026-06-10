@@ -30,24 +30,31 @@ func (c *Client) SendMessage(ctx context.Context, msg core.OutboundMessage) (int
 	if len(msg.Media) > 0 {
 		return c.sendMediaMessage(ctx, msg)
 	}
+	if len(msg.ButtonRows) > 0 {
+		messageID, err := c.SendInlineKeyboard(ctx, msg.ChatID, msg.Text, outboundButtonRowsToTelegram(msg.ButtonRows), msg.ReplyTo)
+		if err != nil {
+			return 0, err
+		}
+		recordOutboundDeliveryMessageID(msg.Delivery, messageID)
+		return messageID, nil
+	}
 	chunks := splitTelegramTextChunks(msg.Text, telegramTextChunkLimit)
 	if len(chunks) == 0 {
 		chunks = []string{""}
 	}
 
 	firstMessageID := int64(0)
-	for i, chunk := range chunks {
-		replyTo := (*int64)(nil)
-		if i == 0 {
-			replyTo = msg.ReplyTo
-		}
+	replyTo := msg.ReplyTo
+	for _, chunk := range chunks {
 		messageID, err := c.sendMessageChunk(ctx, msg.ChatID, chunk, msg.ParseMode, replyTo)
 		if err != nil {
 			return 0, err
 		}
+		recordOutboundDeliveryMessageID(msg.Delivery, messageID)
 		if firstMessageID == 0 {
 			firstMessageID = messageID
 		}
+		replyTo = &messageID
 	}
 	return firstMessageID, nil
 }
@@ -65,21 +72,31 @@ func (c *Client) sendMediaMessage(ctx context.Context, msg core.OutboundMessage)
 		if err != nil {
 			return 0, err
 		}
+		recordOutboundDeliveryMessageID(msg.Delivery, messageID)
 		if firstMessageID == 0 {
 			firstMessageID = messageID
 		}
-		replyTo = nil
+		replyTo = &messageID
 	}
 	for _, chunk := range splitTelegramTextChunks(overflow, telegramTextChunkLimit) {
-		messageID, err := c.sendMessageChunk(ctx, msg.ChatID, chunk, msg.ParseMode, nil)
+		messageID, err := c.sendMessageChunk(ctx, msg.ChatID, chunk, msg.ParseMode, replyTo)
 		if err != nil {
 			return 0, err
 		}
+		recordOutboundDeliveryMessageID(msg.Delivery, messageID)
 		if firstMessageID == 0 {
 			firstMessageID = messageID
 		}
+		replyTo = &messageID
 	}
 	return firstMessageID, nil
+}
+
+func recordOutboundDeliveryMessageID(delivery *core.OutboundDelivery, messageID int64) {
+	if delivery == nil || messageID == 0 {
+		return
+	}
+	delivery.MessageIDs = append(delivery.MessageIDs, messageID)
 }
 
 func (c *Client) SetMyCommands(ctx context.Context, commands []BotCommand) error {
@@ -174,40 +191,76 @@ func (c *Client) SendInlineKeyboard(ctx context.Context, chatID int64, text stri
 	}
 
 	firstMessageID := int64(0)
+	currentReplyTo := replyTo
 	for i, chunk := range chunks {
 		if i == 0 {
-			messageID, err := c.sendInlineKeyboardChunk(ctx, chatID, chunk, rows, replyTo)
+			messageID, err := c.sendInlineKeyboardChunk(ctx, chatID, chunk, rows, currentReplyTo)
 			if err != nil {
 				return 0, err
 			}
 			firstMessageID = messageID
+			currentReplyTo = &messageID
 			continue
 		}
 
-		messageID, err := c.sendMessageChunk(ctx, chatID, chunk, "", nil)
+		messageID, err := c.sendMessageChunk(ctx, chatID, chunk, "", currentReplyTo)
 		if err != nil {
 			return 0, err
 		}
 		if firstMessageID == 0 {
 			firstMessageID = messageID
 		}
+		currentReplyTo = &messageID
 	}
 	return firstMessageID, nil
 }
 
 func validateInlineKeyboardRows(rows [][]InlineButton) error {
 	for rowIndex, row := range rows {
+		if len(row) == 0 {
+			return fmt.Errorf("inline keyboard row %d is empty", rowIndex)
+		}
 		for buttonIndex, button := range row {
 			text := strings.TrimSpace(button.Text)
 			if text == "" {
 				return fmt.Errorf("inline button label is required at row %d button %d", rowIndex, buttonIndex)
 			}
-			if words := strings.Fields(text); len(words) > 2 {
-				return fmt.Errorf("inline button label %q has %d words; Telegram labels must use at most 2 words", text, len(words))
+			if words := strings.Fields(text); len(words) > 3 {
+				return fmt.Errorf("inline button label %q has %d words; Telegram labels must use at most 3 words", text, len(words))
+			}
+			callbackData := strings.TrimSpace(button.CallbackData)
+			url := strings.TrimSpace(button.URL)
+			if callbackData == "" && url == "" {
+				return fmt.Errorf("inline button %q at row %d button %d needs callback data or URL", text, rowIndex, buttonIndex)
+			}
+			if callbackData != "" && url != "" {
+				return fmt.Errorf("inline button %q at row %d button %d cannot use both callback data and URL", text, rowIndex, buttonIndex)
+			}
+			if callbackData != "" && len(callbackData) > core.TelegramCallbackDataMaxBytes {
+				return fmt.Errorf("inline button %q callback data is %d bytes; Telegram limit is %d", text, len(callbackData), core.TelegramCallbackDataMaxBytes)
 			}
 		}
 	}
 	return nil
+}
+
+func outboundButtonRowsToTelegram(rows [][]core.OutboundButton) [][]InlineButton {
+	out := make([][]InlineButton, 0, len(rows))
+	for _, row := range rows {
+		if len(row) == 0 {
+			continue
+		}
+		converted := make([]InlineButton, 0, len(row))
+		for _, button := range row {
+			converted = append(converted, InlineButton{
+				Text:         button.Text,
+				CallbackData: button.CallbackData,
+				URL:          button.URL,
+			})
+		}
+		out = append(out, converted)
+	}
+	return out
 }
 
 func (c *Client) sendInlineKeyboardChunk(ctx context.Context, chatID int64, text string, rows [][]InlineButton, replyTo *int64) (int64, error) {
@@ -269,7 +322,7 @@ func (c *Client) AnswerCallbackQuery(ctx context.Context, callbackQueryID string
 		"callback_query_id": callbackQueryID,
 	}
 	if strings.TrimSpace(text) != "" {
-		body["text"] = strings.TrimSpace(text)
+		body["text"] = truncateTelegramText(strings.TrimSpace(text), telegramCallbackAnswerLimit)
 	}
 
 	var resp telegramOKResponse
@@ -416,6 +469,12 @@ func truncateTelegramText(text string, limit int) string {
 		return "…"
 	}
 	return string(runes[:limit-1]) + "…"
+}
+
+// TextExceedsMessageLimit reports whether text cannot fit in one Telegram text message.
+func TextExceedsMessageLimit(text string) bool {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	return runeCount(text) > telegramTextChunkLimit
 }
 
 func runeCount(text string) int {

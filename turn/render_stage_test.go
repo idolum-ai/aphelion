@@ -5,6 +5,7 @@ package turn
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/idolum-ai/aphelion/core"
@@ -195,5 +196,209 @@ func TestRunRenderStageSkipRenderBypassesCallbacks(t *testing.T) {
 	}
 	if got.Runtime.DeliveryMode != "idolum_render" {
 		t.Fatalf("Runtime.DeliveryMode = %q, want idolum_render", got.Runtime.DeliveryMode)
+	}
+}
+
+func TestRunRenderStageConditionalSkipBypassesCallbacks(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	got, err := RunRenderStage(context.Background(), RenderStageRequest{
+		Render: FaceRenderRequest{
+			LatestUserInput: "deployment status",
+			FloorText:       "PR #140 deployed and verified.",
+			Runtime:         prompt.RuntimeAwareness{},
+		},
+		FacePolicy:            pipeline.FacePolicy{Render: true},
+		InitialReply:          "fallback status",
+		ConditionalSkipReason: string(FaceSkipReasonMaterialStatusReport),
+	}, RenderStageCallbacks{
+		Stream: func(context.Context, FaceRenderRequest) (FaceRenderResult, bool, error) {
+			called = true
+			return FaceRenderResult{}, false, nil
+		},
+		Render: func(context.Context, FaceRenderRequest) (*FaceRenderResult, error) {
+			called = true
+			return &FaceRenderResult{Text: "unexpected"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunRenderStage() err = %v", err)
+	}
+	if called {
+		t.Fatal("render callbacks called for conditional skip path")
+	}
+	if got.ShouldRender {
+		t.Fatal("ShouldRender = true, want false after conditional skip")
+	}
+	if got.SkipReason != FaceSkipReasonMaterialStatusReport {
+		t.Fatalf("SkipReason = %q, want material_status_report", got.SkipReason)
+	}
+	if got.Runtime.DeliveryMode != "floor_fallback" {
+		t.Fatalf("DeliveryMode = %q, want floor_fallback", got.Runtime.DeliveryMode)
+	}
+	if got.ReplyText != "fallback status" {
+		t.Fatalf("ReplyText = %q, want fallback status", got.ReplyText)
+	}
+}
+
+func TestRunRenderStageFallsBackWhenOperationalFaceRenderIsPartial(t *testing.T) {
+	t.Parallel()
+
+	floorText := strings.Join([]string{
+		"Recovery evidence says the reinstall/restart repair did finish successfully.",
+		"Current state:",
+		"- Service active/running: PID `100755`",
+		"- Started: `Fri 2026-06-05 10:55:04 UTC`",
+		"- Executable: `/opt/aphelion/bin/aphelion`",
+		"- Revision: `37928e5ecc7f624a0284df26bf70b7b9ac89ddbd`",
+		"- `verify-deploy --format=kv` passed.",
+		"What likely happened:",
+		"- The direct reinstall used the correct Go environment.",
+		"- `go build` succeeded.",
+	}, "\n")
+	fallbackText := "complete floor fallback"
+
+	got, err := RunRenderStage(context.Background(), RenderStageRequest{
+		Render: FaceRenderRequest{
+			LatestUserInput: "continue",
+			FloorText:       floorText,
+			MaterialFloor: core.MaterialPacket{
+				Kind:  core.MaterialPacketKindStatusReport,
+				Facts: []string{"Service active/running: PID 100755", "verify-deploy passed", "revision 37928e5"},
+			},
+			Runtime: prompt.RuntimeAwareness{},
+		},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		InitialReply:     floorText,
+		FallbackOptions:  pipeline.FallbackOptions{Channel: "telegram"},
+	}, RenderStageCallbacks{
+		Render: func(context.Context, FaceRenderRequest) (*FaceRenderResult, error) {
+			return &FaceRenderResult{Text: "The reinstall repair is clean now.\n\nEvidence:\n- Service is active as PID `100755`\n\nWhat likely happened: the direct"}, nil
+		},
+		Fallback: func(core.MaterialPacket, string, pipeline.FallbackOptions) string {
+			return fallbackText
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunRenderStage() err = %v", err)
+	}
+	if got.ReplyText != fallbackText {
+		t.Fatalf("ReplyText = %q, want floor fallback", got.ReplyText)
+	}
+	if !got.FallbackApplied || got.FallbackReason != "partial_face_render" {
+		t.Fatalf("fallback = %v/%q, want partial_face_render", got.FallbackApplied, got.FallbackReason)
+	}
+	if got.Runtime.DeliveryMode != "floor_fallback" {
+		t.Fatalf("DeliveryMode = %q, want floor_fallback", got.Runtime.DeliveryMode)
+	}
+}
+
+func TestRunRenderStageFallsBackWhenGenericFaceRenderIsPartial(t *testing.T) {
+	t.Parallel()
+
+	floorText := strings.Repeat("Service active at PID 100755 and verify-deploy passed. ", 8)
+	renderedText := "Service active at PID 100755 and verify-deploy"
+	got, err := RunRenderStage(context.Background(), RenderStageRequest{
+		Render: FaceRenderRequest{
+			LatestUserInput: "status",
+			FloorText:       floorText,
+			MaterialFloor: core.MaterialPacket{
+				Facts: []string{"Service active at PID 100755.", "verify-deploy passed."},
+			},
+		},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		InitialReply:     floorText,
+	}, RenderStageCallbacks{
+		Render: func(context.Context, FaceRenderRequest) (*FaceRenderResult, error) {
+			return &FaceRenderResult{Text: renderedText}, nil
+		},
+		Fallback: func(core.MaterialPacket, string, pipeline.FallbackOptions) string {
+			return "complete generic fallback"
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunRenderStage() err = %v", err)
+	}
+	if got.ReplyText != "complete generic fallback" {
+		t.Fatalf("ReplyText = %q, want generic floor fallback", got.ReplyText)
+	}
+	if !got.FallbackApplied || got.FallbackReason != "partial_face_render" {
+		t.Fatalf("fallback = %v/%q, want partial_face_render", got.FallbackApplied, got.FallbackReason)
+	}
+}
+
+func TestRunRenderStageKeepsCompleteOperationalFaceRender(t *testing.T) {
+	t.Parallel()
+
+	floorText := strings.Repeat("Service verified from main. ", 20)
+	renderedText := strings.Repeat("Service verified from main. ", 14) + "Ready."
+	got, err := RunRenderStage(context.Background(), RenderStageRequest{
+		Render: FaceRenderRequest{
+			LatestUserInput: "status",
+			FloorText:       floorText,
+			MaterialFloor:   core.MaterialPacket{Kind: core.MaterialPacketKindStatusReport, Facts: []string{"Service verified from main."}},
+		},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		InitialReply:     floorText,
+	}, RenderStageCallbacks{
+		Render: func(context.Context, FaceRenderRequest) (*FaceRenderResult, error) {
+			return &FaceRenderResult{Text: renderedText}, nil
+		},
+		Fallback: func(core.MaterialPacket, string, pipeline.FallbackOptions) string {
+			return "unexpected fallback"
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunRenderStage() err = %v", err)
+	}
+	if got.ReplyText != renderedText {
+		t.Fatalf("ReplyText = %q, want rendered text", got.ReplyText)
+	}
+	if got.FallbackApplied || got.FallbackReason != "" {
+		t.Fatalf("fallback = %v/%q, want none", got.FallbackApplied, got.FallbackReason)
+	}
+}
+
+func TestRunRenderStageKeepsSceneConstrainedShortOperationalFaceRender(t *testing.T) {
+	t.Parallel()
+
+	floorText := strings.Join([]string{
+		"PR #140 deployed and verified.",
+		"The operator asked for a warm, brief visible reply.",
+	}, "\n")
+	renderedText := "scene-aware face render"
+	got, err := RunRenderStage(context.Background(), RenderStageRequest{
+		Render: FaceRenderRequest{
+			LatestUserInput: "report deploy status",
+			FloorText:       floorText,
+			MaterialFloor: core.MaterialPacket{
+				Kind:             core.MaterialPacketKindStatusReport,
+				Facts:            []string{"PR #140 deployed and verified."},
+				SceneConstraints: []string{"Keep the visible reply warm and brief."},
+			},
+		},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		InitialReply:     floorText,
+	}, RenderStageCallbacks{
+		Render: func(context.Context, FaceRenderRequest) (*FaceRenderResult, error) {
+			return &FaceRenderResult{Text: renderedText}, nil
+		},
+		Fallback: func(core.MaterialPacket, string, pipeline.FallbackOptions) string {
+			return "unexpected fallback"
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunRenderStage() err = %v", err)
+	}
+	if got.ReplyText != renderedText {
+		t.Fatalf("ReplyText = %q, want rendered text", got.ReplyText)
+	}
+	if got.FallbackApplied || got.FallbackReason != "" {
+		t.Fatalf("fallback = %v/%q, want none", got.FallbackApplied, got.FallbackReason)
 	}
 }

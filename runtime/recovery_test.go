@@ -30,9 +30,13 @@ func TestRenderStartupRecoveryRequestIncludesLastToolFinishFacts(t *testing.T) {
 	}})
 
 	for _, needle := range []string{
-		"tool_calls_finished=1",
-		"last_tool_result_preview=stdout:\npartial output",
+		"RecoveryRecord run_id=42",
+		`cause="process_restarted_before_turn_completed"`,
+		"tool_calls_started=2 tool_calls_finished=1",
+		`last_tool_result_hint="stdout:\npartial output"`,
 		`last_tool_error="exit status 1"`,
+		"do_not_assume=turn_completed,external_effect_completed,verification_completed",
+		"safe_options=inspect_current_state,check_turn_run_status,non_mutating_health_check",
 	} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("renderStartupRecoveryRequest() = %q, want substring %q", text, needle)
@@ -78,13 +82,13 @@ func TestRenderStartupRecoveryRequestIncludesMissionEvidenceBeforeRunFacts(t *te
 		"recent_results:",
 		"result_id=result-build",
 		`summary="build completed"`,
-		"- run_id=43",
+		"RecoveryRecord run_id=43",
 	} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("renderStartupRecoveryRequest() = %q, want substring %q", text, needle)
 		}
 	}
-	if strings.Index(text, "Mission handoff/result evidence:") > strings.Index(text, "- run_id=43") {
+	if strings.Index(text, "Mission handoff/result evidence:") > strings.Index(text, "RecoveryRecord run_id=43") {
 		t.Fatalf("renderStartupRecoveryRequest() = %q, want mission evidence before run facts", text)
 	}
 }

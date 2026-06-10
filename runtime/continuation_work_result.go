@@ -17,6 +17,8 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
+var errWorkExecutorNoCompletionEvidence = errors.New("work executor returned no completion evidence")
+
 func (r *Runtime) persistWorkResult(key session.SessionKey, req WorkRequest, result WorkResult, status WorkExecutorStatus, cause error) session.OperationArtifact {
 	if r == nil || r.store == nil {
 		return session.OperationArtifact{}
@@ -33,6 +35,11 @@ func (r *Runtime) persistWorkResult(key session.SessionKey, req WorkRequest, res
 	opState.Work.ConfiguredExecutor = status.Configured
 	opState.Work.PreferredExecutor = status.Preferred
 	opState.Work.FallbackReason = status.FallbackReason
+	opState.Work.LastOperationID = strings.TrimSpace(req.OperationID)
+	opState.Work.LastActionProposalID = strings.TrimSpace(req.State.ActionProposal.ID)
+	opState.Work.LastActionOperationID = strings.TrimSpace(req.State.ActionProposal.OperationID)
+	opState.Work.LastLeaseID = strings.TrimSpace(req.LeaseID)
+	opState.Work.LastWorkMode = strings.TrimSpace(string(req.Mode))
 	opState.Work.CodexThreadID = firstRuntimeWorkNonEmpty(result.ThreadID, opState.Work.CodexThreadID)
 	opState.Work.CodexLastTurnID = firstRuntimeWorkNonEmpty(result.TurnID, opState.Work.CodexLastTurnID)
 	opState.Work.CodexLaneMode = string(req.Mode)
@@ -47,10 +54,17 @@ func (r *Runtime) persistWorkResult(key session.SessionKey, req WorkRequest, res
 	opState.Work.LastError = ""
 	if cause != nil {
 		opState.Work.LastError = cause.Error()
+	} else if result.Recovery != nil {
+		opState.Work.LastError = workResultRecoverySummary(result)
 	}
 	opState.Work.LastExecutorUpdatedAt = time.Now().UTC()
-	if cause == nil {
+	if cause == nil && result.Recovery == nil && workResultHasSubstantiveCompletionEvidence(result) {
 		opState.Work.LastCompletedAt = opState.Work.LastExecutorUpdatedAt
+	} else {
+		opState.Work.LastCompletedAt = time.Time{}
+		if cause == nil && result.Recovery == nil {
+			opState.Work.LastError = errWorkExecutorNoCompletionEvidence.Error()
+		}
 	}
 	artifact := r.writeWorkResultArtifact(key, req, result, status, cause, opState.Work.LastExecutorUpdatedAt)
 	if artifact.Ref != "" {
@@ -60,6 +74,15 @@ func (r *Runtime) persistWorkResult(key session.SessionKey, req WorkRequest, res
 		log.Printf("WARN persist work result failed chat_id=%d err=%v", key.ChatID, err)
 	}
 	return artifact
+}
+
+func workResultHasSubstantiveCompletionEvidence(result WorkResult) bool {
+	return strings.TrimSpace(result.Summary) != "" ||
+		len(result.ChangedFiles) > 0 ||
+		len(result.Commands) > 0 ||
+		len(result.CodexEvents) > 0 ||
+		strings.TrimSpace(result.PatchPreview) != "" ||
+		strings.TrimSpace(result.CommitLaneStatus) != ""
 }
 
 func (r *Runtime) deliverWorkResult(ctx context.Context, key session.SessionKey, result WorkResult, artifact session.OperationArtifact) error {
@@ -120,12 +143,14 @@ func (r *Runtime) offerWorkFailureRetry(ctx context.Context, key session.Session
 	if r.isShuttingDown() || errors.Is(cause, context.Canceled) {
 		return
 	}
-	reason := "The approved work run failed before completion; approve this fresh lease to retry the same bounded action after reviewing the failure evidence."
+	reason := "work_executor_failed_before_completion"
 	if _, sent, refreshErr := r.refreshContinuationProposal(ctx, key, reason, "work_executor_failure", false); refreshErr != nil {
 		log.Printf("WARN refresh continuation after work failure failed chat_id=%d err=%v", chatID, refreshErr)
+		fallbackSent := r.sendWorkFailureRetryFallback(ctx, key, chatID, cause, refreshErr)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "retry_offer_failed", map[string]any{
-			"reason": "work_executor_failure_retry_offer_failed",
-			"error":  trimError(refreshErr.Error()),
+			"reason":        "work_executor_failure_retry_offer_failed",
+			"error":         trimError(refreshErr.Error()),
+			"fallback_sent": fallbackSent,
 		}, time.Now().UTC())
 	} else if sent {
 		r.recordExecutionEvent(key, core.ExecutionEventRecoveryIssued, "work", "retry_offered", map[string]any{
@@ -133,6 +158,29 @@ func (r *Runtime) offerWorkFailureRetry(ctx context.Context, key session.Session
 			"error":  trimError(cause.Error()),
 		}, time.Now().UTC())
 	}
+}
+
+func (r *Runtime) sendWorkFailureRetryFallback(ctx context.Context, key session.SessionKey, chatID int64, cause error, refreshErr error) bool {
+	if r == nil || r.outbound == nil || chatID == 0 {
+		return false
+	}
+	lines := []string{
+		"I could not show the retry approval buttons.",
+		"",
+		"The approved work did not finish cleanly, so the next step needs a fresh manual approval for one bounded retry.",
+	}
+	if cause != nil {
+		lines = append(lines, "", "Work failure: "+trimError(cause.Error()))
+	}
+	if refreshErr != nil {
+		lines = append(lines, "Approval prompt failure: "+trimError(refreshErr.Error()))
+	}
+	text := r.prefixTelegramPresentedText(r.telegramPresentationForKey(key), strings.Join(lines, "\n"))
+	if _, err := r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: chatID, Text: text}); err != nil {
+		log.Printf("WARN send work failure retry fallback failed chat_id=%d err=%v", chatID, err)
+		return false
+	}
+	return true
 }
 
 func appendOperationArtifact(values []session.OperationArtifact, artifact session.OperationArtifact) []session.OperationArtifact {
@@ -227,6 +275,19 @@ func workResultArtifactMarkdown(key session.SessionKey, req WorkRequest, result 
 	}
 	if result.ProviderFailure != "" {
 		fmt.Fprintf(&b, "- provider_failure: %s\n", trimError(result.ProviderFailure))
+	}
+	if result.Recovery != nil {
+		fmt.Fprintf(&b, "- recovery_kind: %s\n", strings.TrimSpace(string(result.Recovery.Kind)))
+		if strings.TrimSpace(result.Recovery.Summary) != "" {
+			fmt.Fprintf(&b, "- recovery_summary: %s\n", trimError(result.Recovery.Summary))
+		}
+	} else {
+		if result.RecoveryKind != "" {
+			fmt.Fprintf(&b, "- recovery_kind: %s\n", strings.TrimSpace(result.RecoveryKind))
+		}
+		if result.RecoverySummary != "" {
+			fmt.Fprintf(&b, "- recovery_summary: %s\n", trimError(result.RecoverySummary))
+		}
 	}
 	if cause != nil {
 		fmt.Fprintf(&b, "- error: %s\n", trimError(cause.Error()))
@@ -351,10 +412,16 @@ func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorSt
 		"active_executor":       strings.TrimSpace(status.Active),
 		"fallback_reason":       strings.TrimSpace(status.FallbackReason),
 		"provider_events_count": len(result.ProviderEvents),
+		"side_effects":          result.SideEffects,
 		"changed_files_count":   len(result.ChangedFiles),
 		"commands_count":        len(result.Commands),
 		"codex_events_count":    len(result.CodexEvents),
 		"approval_events_count": len(result.ApprovalLog),
+	}
+	if result.Recovery != nil {
+		payload["recovery_kind"] = strings.TrimSpace(string(result.Recovery.Kind))
+		payload["recovery_recoverable"] = result.Recovery.Recoverable
+		payload["recovery_replan_required"] = result.Recovery.ReplanRequired
 	}
 	if strings.TrimSpace(result.ThreadID) != "" {
 		payload["thread_id"] = strings.TrimSpace(result.ThreadID)
@@ -365,6 +432,15 @@ func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorSt
 	if strings.TrimSpace(result.CommitLaneStatus) != "" {
 		payload["commit_lane_status"] = strings.TrimSpace(result.CommitLaneStatus)
 	}
+	if strings.TrimSpace(result.CompletionKind) != "" {
+		payload["completion_kind"] = strings.TrimSpace(result.CompletionKind)
+	}
+	if strings.TrimSpace(result.RecoveryKind) != "" {
+		payload["recovery_kind"] = strings.TrimSpace(result.RecoveryKind)
+	}
+	if strings.TrimSpace(result.RecoverySummary) != "" {
+		payload["recovery_summary"] = trimError(result.RecoverySummary)
+	}
 	if strings.TrimSpace(result.ProviderFailure) != "" {
 		payload["provider_failure"] = trimError(result.ProviderFailure)
 	}
@@ -372,6 +448,21 @@ func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorSt
 		payload["error"] = trimError(cause.Error())
 	}
 	return payload
+}
+
+func workResultRecoverySummary(result WorkResult) string {
+	if result.Recovery == nil {
+		return ""
+	}
+	kind := strings.TrimSpace(string(result.Recovery.Kind))
+	if kind == "" {
+		kind = "turn_recovery"
+	}
+	summary := strings.TrimSpace(result.Recovery.Summary)
+	if summary == "" {
+		return "turn recovery handoff: " + kind
+	}
+	return "turn recovery handoff: " + kind + ": " + summary
 }
 
 func actorLabel(actor principal.Principal) string {

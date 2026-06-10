@@ -77,6 +77,11 @@ func applyGoalContinuationSandbox(action session.ActionProposal, opState session
 	if !goalContinuationOperationProposal(opState, proposal) {
 		return action
 	}
+	switch normalizeOrganicProposalSandboxKind(firstNonEmptyContinuation(action.RiskClass, proposal.Kind)) {
+	case "", "read_only_review", "status_check":
+	default:
+		return session.NormalizeActionProposal(action)
+	}
 	action.AllowedActions = append(action.AllowedActions,
 		"inspect_readonly_state",
 		"draft_next_phase_plan",

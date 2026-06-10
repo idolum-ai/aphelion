@@ -103,6 +103,21 @@ func statusAdjudicationNextAction(adjudication core.AdjudicationStatusSnapshot) 
 
 func summarizeExecutionEventPayload(eventType string, eventStatus string, payload map[string]any) string {
 	switch strings.TrimSpace(eventType) {
+	case core.ExecutionEventFaceRenderSkipped:
+		parts := make([]string, 0, 4)
+		if reason := strings.TrimSpace(payloadString(payload, "reason")); reason != "" {
+			parts = append(parts, "reason="+reason)
+		}
+		if fallbackChars, ok := payloadInt64(payload, "fallback_chars"); ok {
+			parts = append(parts, "fallback_chars="+strconv.FormatInt(fallbackChars, 10))
+		}
+		if mediaCount, ok := payloadInt64(payload, "media_count"); ok {
+			parts = append(parts, "media="+strconv.FormatInt(mediaCount, 10))
+		}
+		if len(parts) == 0 {
+			return strings.TrimSpace(eventStatus)
+		}
+		return strings.Join(parts, " ")
 	case core.ExecutionEventReplyClaimAdjudicated:
 		label := firstNonEmpty(payloadString(payload, "operator_label"), executionClaimOperatorLabel(payloadString(payload, "visible_action")))
 		action := strings.TrimSpace(payloadString(payload, "visible_action"))
@@ -126,6 +141,10 @@ func summarizeExecutionEventPayload(eventType string, eventStatus string, payloa
 			parts = append(parts, "findings="+strings.Join(claimTypes, ","))
 		}
 		return strings.Join(parts, " ")
+	case core.ExecutionEventContinuationBundleNarrowed:
+		return continuationBundleNarrowingSummary(payload)
+	case core.ExecutionEventContinuationCompileRepaired, core.ExecutionEventContinuationCompileRepairExhausted, core.ExecutionEventContinuationCompileUnknownReason:
+		return continuationCompileRepairEventSummary(eventType, payload)
 	case core.ExecutionEventToolRegistered:
 		registered := strings.TrimSpace(eventStatus) == "enabled"
 		if value, ok := payloadBool(payload, "registered"); ok {
@@ -164,6 +183,20 @@ func summarizeExecutionEventPayload(eventType string, eventStatus string, payloa
 			parts = append(parts, "status="+status)
 		}
 		return strings.TrimSpace(strings.Join(parts, " "))
+	case core.ExecutionEventProgressSurface:
+		parts := make([]string, 0, 4)
+		if source := strings.TrimSpace(payloadString(payload, "progress_source")); source != "" {
+			parts = append(parts, "source="+source)
+		}
+		if label := strings.TrimSpace(payloadString(payload, "progress_label")); label != "" {
+			parts = append(parts, "label="+truncateStatusDiagnostic(label, 80))
+		}
+		if toolName := strings.TrimSpace(payloadString(payload, "tool")); toolName != "" {
+			parts = append(parts, "tool="+toolName)
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, " ")
+		}
 	}
 	if len(payload) == 0 {
 		return ""
@@ -174,6 +207,33 @@ func summarizeExecutionEventPayload(eventType string, eventStatus string, payloa
 		}
 	}
 	return ""
+}
+
+func continuationCompileRepairEventSummary(eventType string, payload map[string]any) string {
+	parts := make([]string, 0, 5)
+	if kind := strings.TrimSpace(payloadString(payload, "repair_kind")); kind != "" {
+		parts = append(parts, "kind="+kind)
+	}
+	if reason := firstNonEmpty(payloadString(payload, "normalized_reason"), payloadString(payload, "reason")); strings.TrimSpace(reason) != "" {
+		parts = append(parts, "reason="+strings.TrimSpace(reason))
+	}
+	if phaseID := strings.TrimSpace(payloadString(payload, "repair_phase_id")); phaseID != "" {
+		parts = append(parts, "repair_phase="+phaseID)
+	} else if phaseID := strings.TrimSpace(payloadString(payload, "phase_id")); phaseID != "" {
+		parts = append(parts, "phase="+phaseID)
+	}
+	if source := strings.TrimSpace(payloadString(payload, "materialization_source")); source != "" {
+		parts = append(parts, "source="+source)
+	}
+	switch strings.TrimSpace(eventType) {
+	case core.ExecutionEventContinuationCompileRepaired:
+		parts = append([]string{"status=repaired"}, parts...)
+	case core.ExecutionEventContinuationCompileRepairExhausted:
+		parts = append([]string{"status=exhausted"}, parts...)
+	case core.ExecutionEventContinuationCompileUnknownReason:
+		parts = append([]string{"status=unknown_reason"}, parts...)
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
 func minStatusInt(left int, right int) int {

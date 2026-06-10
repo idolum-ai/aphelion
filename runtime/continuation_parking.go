@@ -288,7 +288,7 @@ func (r *Runtime) reofferRestartParkedContinuation(ctx context.Context, key sess
 
 	msg := continuationPromptInboundForKey(key, "restart parked continuation resume", core.InboundOriginTurnAuthorization, "")
 	text := r.renderContinuationPrompt(ctx, key, msg, state)
-	if reason := strings.TrimSpace(state.ParkedReason); reason != "" && !strings.Contains(text, reason) {
+	if reason := continuationVisibleParkedReason(state); reason != "" && !strings.Contains(text, reason) {
 		text = strings.TrimSpace(text) + "\n\nRestart note:\n" + reason
 	}
 	if err := r.sendContinuationApprovalPrompt(ctx, key, msg, state, text); err != nil {
@@ -343,16 +343,24 @@ func restartParkPendingContinuationState(prior session.ContinuationState, reason
 		now = time.Now().UTC()
 	}
 	now = now.UTC()
-	state := refreshedContinuationState(prior, reason, now)
+	state := refreshedContinuationState(prior, reason, "restart_reoffer", now)
 	state = markRestartParkedContinuation(state, reason, source, now)
 	if trimmed := strings.TrimSpace(reason); trimmed != "" {
-		state.ActionProposal.WhyNow = trimmed
+		state.ActionProposal.WhyNow = continuationVisibleRefreshReason(trimmed, "restart_reoffer", prior)
 		state.ActionProposal.UpdatedAt = now
 		state.ActionProposal.PlanHash = actionProposalHash(state.ActionProposal)
 		state.ContinuationLease.PlanHash = state.ActionProposal.PlanHash
 		state.ContinuationLease.UpdatedAt = now
 	}
 	return session.NormalizeContinuationState(state)
+}
+
+func continuationVisibleParkedReason(state session.ContinuationState) string {
+	reason := strings.TrimSpace(state.ParkedReason)
+	if reason == "" {
+		return ""
+	}
+	return continuationVisibleRefreshReason(reason, "restart_reoffer", state)
 }
 
 func restartParkApprovedContinuationState(prior session.ContinuationState, source string, now time.Time) session.ContinuationState {

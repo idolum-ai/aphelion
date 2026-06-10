@@ -10,6 +10,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/internal/telegramcontrol"
+	"github.com/idolum-ai/aphelion/session"
 )
 
 func (c telegramCommandControl) Stop(chatID int64) core.StopResult {
@@ -108,4 +109,16 @@ func (c telegramCommandControl) QueueClarification(ctx context.Context, msg core
 
 func (c telegramCommandControl) QueueMissionClarification(ctx context.Context, msg core.InboundMessage, promptID string) error {
 	return c.controlFacade().QueueMissionClarification(ctx, msg, promptID)
+}
+
+func (c telegramCommandControl) ReentryRecommendation(ctx context.Context, senderID int64, recommendationID string) (session.ReentryRecommendation, bool, error) {
+	return c.controlFacade().ReentryRecommendation(ctx, senderID, recommendationID)
+}
+
+func (c telegramCommandControl) IgnoreReentryRecommendation(ctx context.Context, senderID int64, recommendationID string) (session.ReentryRecommendation, error) {
+	return c.controlFacade().IgnoreReentryRecommendation(ctx, senderID, recommendationID)
+}
+
+func (c telegramCommandControl) QueueReentryRecommendation(ctx context.Context, msg core.InboundMessage, recommendationID string, candidateID string) (session.ReentryRecommendation, session.ReentryRecommendationCandidate, bool, error) {
+	return c.controlFacade().QueueReentryRecommendation(ctx, msg, recommendationID, candidateID)
 }

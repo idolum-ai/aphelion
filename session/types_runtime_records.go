@@ -149,27 +149,34 @@ type DurableAgentBootstrapUpdate struct {
 
 // TurnRun stores machine-authored facts about a turn lifecycle for recovery.
 type TurnRun struct {
-	ID                    int64
-	SessionID             string
-	ChatID                int64
-	UserID                int64
-	Scope                 ScopeRef
-	Kind                  TurnRunKind
-	Status                TurnRunStatus
-	RequestText           string
-	StartedAt             time.Time
-	CompletedAt           time.Time
-	LastActivityAt        time.Time
-	LastToolName          string
-	LastToolPreview       string
-	ToolCallsStarted      int
-	ToolCallsFinished     int
-	LastToolResultPreview string
-	LastToolError         string
-	ProgressMessageID     int64
-	ErrorText             string
-	RecoverySummary       string
-	RecoveryLoggedAt      time.Time
+	ID                       int64
+	SessionID                string
+	ChatID                   int64
+	UserID                   int64
+	Scope                    ScopeRef
+	Kind                     TurnRunKind
+	TurnIndex                int
+	Status                   TurnRunStatus
+	RequestText              string
+	StartedAt                time.Time
+	CompletedAt              time.Time
+	LastActivityAt           time.Time
+	LastToolName             string
+	LastToolPreview          string
+	ToolCallsStarted         int
+	ToolCallsFinished        int
+	TotalToolCharsIn         int64
+	TotalAssistantCharsOut   int64
+	ProviderInputTokens      int64
+	ProviderOutputTokens     int64
+	ProviderCacheReadTokens  int64
+	ProviderCacheWriteTokens int64
+	LastToolResultPreview    string
+	LastToolError            string
+	ProgressMessageID        int64
+	ErrorText                string
+	RecoverySummary          string
+	RecoveryLoggedAt         time.Time
 }
 
 const (

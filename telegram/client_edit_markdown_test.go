@@ -97,10 +97,10 @@ func TestEditMessageTextWithInlineKeyboardRejectsLongButtonLabels(t *testing.T) 
 	client := NewClient("TOKEN")
 	err := client.EditMessageTextWithInlineKeyboard(context.Background(), 5, 42, "Status", "", [][]InlineButton{
 		{
-			{Text: "Open full status", CallbackData: "status:system"},
+			{Text: "Open full status now", CallbackData: "status:system"},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "at most 2 words") {
+	if err == nil || !strings.Contains(err.Error(), "at most 3 words") {
 		t.Fatalf("EditMessageTextWithInlineKeyboard() err = %v, want compact button-label rejection", err)
 	}
 }

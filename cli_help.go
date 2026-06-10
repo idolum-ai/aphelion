@@ -26,7 +26,7 @@ var cliCommandGroups = []struct {
 		"aphelion quickstart [--detect-admin] [--install-service]",
 	}},
 	{Title: "Setup and deploy", Commands: []string{
-		"quickstart", "init", "paths", "park-restart", "verify-deploy", "version",
+		"quickstart", "init", "paths", "park-restart", "status", "verify-deploy", "version",
 	}},
 	{Title: "Repair and maintenance", Commands: []string{
 		"repair-live-state", "repair-capability-grants", "repair-review-redactions", "telegram-threads sanitize", "gc", "forget", "reset",
@@ -35,7 +35,7 @@ var cliCommandGroups = []struct {
 		"import-audit", "import-semantic", "import-codex-sessions",
 	}},
 	{Title: "Governed control", Commands: []string{
-		"authority", "durable-agent", "tailnet", "github-app status", "sandbox-net check", "sandbox-net helper serve", "telegram-child-bot", "agency-eval",
+		"authority", "durable-agent", "tailnet", "github-app status", "sandbox-net check", "sandbox-net helper serve", "telegram-child-bot", "eval", "agency-eval",
 	}},
 }
 
@@ -63,11 +63,14 @@ func renderTopLevelHelp(note string) string {
 	lines = append(lines, "  aphelion --config ~/.aphelion/aphelion.toml")
 	lines = append(lines, "  aphelion --version")
 	lines = append(lines, "  aphelion version --json")
+	lines = append(lines, "  aphelion status --config ~/.aphelion/aphelion.toml")
+	lines = append(lines, "  aphelion status --config ~/.aphelion/aphelion.toml --format=json")
 	lines = append(lines, "  aphelion quickstart --detect-admin --install-service")
 	lines = append(lines, "  aphelion durable-agent list --config ~/.aphelion/aphelion.toml")
 	lines = append(lines, "  aphelion tailnet surfaces --config ~/.aphelion/aphelion.toml")
 	lines = append(lines, "  aphelion github-app status --config ~/.aphelion/aphelion.toml")
 	lines = append(lines, "  aphelion sandbox-net check --config ~/.aphelion/aphelion.toml")
+	lines = append(lines, "  aphelion eval run --suite canonical --mode local --format=json")
 	lines = append(lines, "  sudo aphelion sandbox-net helper serve --allowed-uid $(id -u)")
 	return strings.Join(lines, "\n")
 }

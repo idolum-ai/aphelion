@@ -180,11 +180,49 @@ func TestSendInlineKeyboardRejectsLongButtonLabels(t *testing.T) {
 	client := NewClient("TOKEN")
 	_, err := client.SendInlineKeyboard(context.Background(), 5, "Choose", [][]InlineButton{
 		{
-			{Text: "Approve this action", CallbackData: "decision:1:approve"},
+			{Text: "Approve this action now", CallbackData: "decision:1:approve"},
 		},
 	}, nil)
-	if err == nil || !strings.Contains(err.Error(), "at most 2 words") {
+	if err == nil || !strings.Contains(err.Error(), "at most 3 words") {
 		t.Fatalf("SendInlineKeyboard() err = %v, want compact button-label rejection", err)
+	}
+}
+
+func TestSendInlineKeyboardRejectsInvalidButtonLimits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		button InlineButton
+		want   string
+	}{
+		{
+			name:   "missing action",
+			button: InlineButton{Text: "Approve"},
+			want:   "needs callback data or URL",
+		},
+		{
+			name:   "callback and URL",
+			button: InlineButton{Text: "Approve", CallbackData: "decision:1:approve", URL: "https://example.com"},
+			want:   "cannot use both",
+		},
+		{
+			name:   "oversized callback data",
+			button: InlineButton{Text: "Approve", CallbackData: strings.Repeat("x", core.TelegramCallbackDataMaxBytes+1)},
+			want:   "Telegram limit",
+		},
+	}
+
+	client := NewClient("TOKEN")
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := client.SendInlineKeyboard(context.Background(), 5, "Choose", [][]InlineButton{{tc.button}}, nil)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("SendInlineKeyboard() err = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -239,8 +277,9 @@ func TestSendInlineKeyboardSplitsLongTextIntoFollowUpMessages(t *testing.T) {
 		if _, ok := bodies[i]["reply_markup"]; ok {
 			t.Fatalf("chunk %d unexpectedly includes reply_markup", i+1)
 		}
-		if _, ok := bodies[i]["reply_to_message_id"]; ok {
-			t.Fatalf("chunk %d unexpectedly includes reply_to_message_id", i+1)
+		wantReply := float64(300 + i)
+		if bodies[i]["reply_to_message_id"] != wantReply {
+			t.Fatalf("chunk %d reply_to_message_id = %v, want previous chunk id %.0f", i+1, bodies[i]["reply_to_message_id"], wantReply)
 		}
 	}
 	for i, body := range bodies {
@@ -386,6 +425,41 @@ func TestAnswerCallbackQueryPayload(t *testing.T) {
 	}
 }
 
+func TestAnswerCallbackQueryClampsLongText(t *testing.T) {
+	var requestBody map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/answerCallbackQuery" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(data, &requestBody); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			return encodeJSONResponse(t, telegramOKResponse{Ok: true}), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	if err := client.AnswerCallbackQuery(context.Background(), "cb-1", strings.Repeat("x", telegramCallbackAnswerLimit+25)); err != nil {
+		t.Fatalf("AnswerCallbackQuery() err = %v", err)
+	}
+	text, _ := requestBody["text"].(string)
+	if runeCount(text) > telegramCallbackAnswerLimit {
+		t.Fatalf("callback text length = %d, want <= %d", runeCount(text), telegramCallbackAnswerLimit)
+	}
+	if !strings.HasSuffix(text, "…") {
+		t.Fatalf("callback text = %q, want truncation ellipsis", text)
+	}
+}
+
 func TestGetUpdatesRequestsCallbackQueries(t *testing.T) {
 	var requestBody map[string]interface{}
 	transport := testTransport{
@@ -480,8 +554,9 @@ func TestSendMessageChunksLongReplies(t *testing.T) {
 		t.Fatalf("first chunk reply_to_message_id = %v, want 77", bodies[0]["reply_to_message_id"])
 	}
 	for i := 1; i < len(bodies); i++ {
-		if _, ok := bodies[i]["reply_to_message_id"]; ok {
-			t.Fatalf("chunk %d unexpectedly carried reply_to_message_id", i+1)
+		wantReply := float64(100 + i)
+		if bodies[i]["reply_to_message_id"] != wantReply {
+			t.Fatalf("chunk %d reply_to_message_id = %v, want previous chunk id %.0f", i+1, bodies[i]["reply_to_message_id"], wantReply)
 		}
 	}
 	for i, body := range bodies {

@@ -114,14 +114,17 @@ func (r *Runtime) applyTurnConstitution(
 }
 
 type executionClaimAdjudication struct {
-	Findings           []ExecutionClaimFinding
-	Interpretation     []core.InterpretationClaim
-	LatestTurnSeq      int64
-	LatestStatus       string
-	LatestTerminalAt   string
-	HasToolEvidence    bool
-	HasTestEvidence    bool
-	HasDurableEvidence bool
+	Findings                         []ExecutionClaimFinding
+	Interpretation                   []core.InterpretationClaim
+	LatestTurnSeq                    int64
+	LatestStatus                     string
+	LatestTerminalAt                 string
+	HasToolEvidence                  bool
+	HasTestEvidence                  bool
+	HasDurableEvidence               bool
+	HasActiveContinuationAuthority   bool
+	HasPendingContinuationApproval   bool
+	HasMaterializableOperationFollow bool
 }
 
 func (a executionClaimAdjudication) HasFindings() bool {
@@ -185,6 +188,9 @@ func (a executionClaimAdjudication) WithPrior(prior executionClaimAdjudication) 
 	a.HasToolEvidence = a.HasToolEvidence || prior.HasToolEvidence
 	a.HasTestEvidence = a.HasTestEvidence || prior.HasTestEvidence
 	a.HasDurableEvidence = a.HasDurableEvidence || prior.HasDurableEvidence
+	a.HasActiveContinuationAuthority = a.HasActiveContinuationAuthority || prior.HasActiveContinuationAuthority
+	a.HasPendingContinuationApproval = a.HasPendingContinuationApproval || prior.HasPendingContinuationApproval
+	a.HasMaterializableOperationFollow = a.HasMaterializableOperationFollow || prior.HasMaterializableOperationFollow
 	return a
 }
 
@@ -222,88 +228,137 @@ func (r *Runtime) adjudicateFinalReplyExecutionClaimsWithContext(ctx context.Con
 	}
 	out.Interpretation = claims
 	events, err := r.store.LatestExecutionEventsBySession(key, 300)
-	if err != nil || len(events) == 0 {
-		return out
-	}
-
-	latestTerminal := ""
-	for _, event := range events {
-		eventType := strings.TrimSpace(event.EventType)
-		switch eventType {
-		case core.ExecutionEventTurnStarted:
-			if event.Seq > out.LatestTurnSeq {
-				out.LatestTurnSeq = event.Seq
-				latestTerminal = ""
-				out.LatestTerminalAt = ""
-				out.HasToolEvidence = false
-				out.HasTestEvidence = false
-				out.HasDurableEvidence = false
+	if err == nil && len(events) > 0 {
+		latestTerminal := ""
+		for _, event := range events {
+			eventType := strings.TrimSpace(event.EventType)
+			switch eventType {
+			case core.ExecutionEventTurnStarted:
+				if event.Seq > out.LatestTurnSeq {
+					out.LatestTurnSeq = event.Seq
+					latestTerminal = ""
+					out.LatestTerminalAt = ""
+					out.HasToolEvidence = false
+					out.HasTestEvidence = false
+					out.HasDurableEvidence = false
+				}
+			case core.ExecutionEventTurnCompleted, core.ExecutionEventTurnFailed, core.ExecutionEventTurnInterrupted:
+				if out.LatestTurnSeq == 0 || event.Seq < out.LatestTurnSeq {
+					continue
+				}
+				latestTerminal = eventType
+				out.LatestTerminalAt = event.CreatedAt.UTC().Format(time.RFC3339)
+			case core.ExecutionEventToolStarted, core.ExecutionEventToolSucceeded, core.ExecutionEventToolFailed:
+				if out.LatestTurnSeq == 0 || event.Seq < out.LatestTurnSeq {
+					continue
+				}
+				out.HasToolEvidence = true
+				payload := executionEventPayload(event.PayloadJSON)
+				preview := strings.ToLower(strings.TrimSpace(payloadString(payload, "preview")))
+				resultPreview := strings.ToLower(strings.TrimSpace(payloadString(payload, "result_preview")))
+				if strings.Contains(preview, "go test") ||
+					strings.Contains(preview, "pytest") ||
+					strings.Contains(preview, "npm test") ||
+					strings.Contains(resultPreview, "go test") ||
+					strings.Contains(resultPreview, "pytest") ||
+					strings.Contains(resultPreview, "npm test") {
+					out.HasTestEvidence = true
+				}
+			case core.ExecutionEventDurableWakeStarted,
+				core.ExecutionEventDurableWakeCompleted,
+				core.ExecutionEventDurableWakeFailed,
+				core.ExecutionEventDurableStateAwake,
+				core.ExecutionEventDurableStateDormant,
+				core.ExecutionEventDurablePolicyApplied,
+				core.ExecutionEventDurablePolicyApplyFailed,
+				core.ExecutionEventDurableParentAck:
+				if out.LatestTurnSeq == 0 || event.Seq < out.LatestTurnSeq {
+					continue
+				}
+				out.HasDurableEvidence = true
 			}
-		case core.ExecutionEventTurnCompleted, core.ExecutionEventTurnFailed, core.ExecutionEventTurnInterrupted:
-			if out.LatestTurnSeq == 0 || event.Seq < out.LatestTurnSeq {
-				continue
+		}
+		if out.LatestTurnSeq != 0 {
+			out.LatestStatus = "in_progress"
+			switch latestTerminal {
+			case core.ExecutionEventTurnCompleted:
+				out.LatestStatus = "completed"
+			case core.ExecutionEventTurnFailed:
+				out.LatestStatus = "failed"
+			case core.ExecutionEventTurnInterrupted:
+				out.LatestStatus = "interrupted"
+			case "":
+				out.LatestStatus = "in_progress"
 			}
-			latestTerminal = eventType
-			out.LatestTerminalAt = event.CreatedAt.UTC().Format(time.RFC3339)
-		case core.ExecutionEventToolStarted, core.ExecutionEventToolSucceeded, core.ExecutionEventToolFailed:
-			if out.LatestTurnSeq == 0 || event.Seq < out.LatestTurnSeq {
-				continue
+			if executionClaimsInclude(claims, "completion") && latestTerminal != "" && latestTerminal != core.ExecutionEventTurnCompleted {
+				out.Findings = append(out.Findings, executionClaimFinding("completion", "completion claim is not grounded (turn="+out.LatestStatus+")", out))
 			}
-			out.HasToolEvidence = true
-			payload := executionEventPayload(event.PayloadJSON)
-			preview := strings.ToLower(strings.TrimSpace(payloadString(payload, "preview")))
-			resultPreview := strings.ToLower(strings.TrimSpace(payloadString(payload, "result_preview")))
-			if strings.Contains(preview, "go test") ||
-				strings.Contains(preview, "pytest") ||
-				strings.Contains(preview, "npm test") ||
-				strings.Contains(resultPreview, "go test") ||
-				strings.Contains(resultPreview, "pytest") ||
-				strings.Contains(resultPreview, "npm test") {
-				out.HasTestEvidence = true
+			missingTestEvidence := executionClaimsInclude(claims, "test_execution") && !out.HasTestEvidence
+			if executionClaimsInclude(claims, "tool_execution") && !out.HasToolEvidence && !missingTestEvidence {
+				out.Findings = append(out.Findings, executionClaimFinding("tool_execution", "tool-execution claim has no tool events", out))
 			}
-		case core.ExecutionEventDurableWakeStarted,
-			core.ExecutionEventDurableWakeCompleted,
-			core.ExecutionEventDurableWakeFailed,
-			core.ExecutionEventDurableStateAwake,
-			core.ExecutionEventDurableStateDormant,
-			core.ExecutionEventDurablePolicyApplied,
-			core.ExecutionEventDurablePolicyApplyFailed,
-			core.ExecutionEventDurableParentAck:
-			if out.LatestTurnSeq == 0 || event.Seq < out.LatestTurnSeq {
-				continue
+			if missingTestEvidence {
+				out.Findings = append(out.Findings, executionClaimFinding("test_execution", "test-execution claim has no test-related tool evidence", out))
 			}
-			out.HasDurableEvidence = true
+			if executionClaimsInclude(claims, "durable_agent") && !out.HasDurableEvidence {
+				out.Findings = append(out.Findings, executionClaimFinding("durable_agent", "durable-agent claim has no durable lifecycle events", out))
+			}
 		}
 	}
-	if out.LatestTurnSeq == 0 {
-		return out
+	out = r.adjudicationWithContinuationSurfaceState(key, claims, out, time.Now().UTC())
+	if executionClaimsInclude(claims, "continuation_execution") && !out.HasActiveContinuationAuthority {
+		out.Findings = append(out.Findings, executionClaimFinding("continuation_execution", "continuation claim has no active approved continuation lease", out))
 	}
-
-	out.LatestStatus = "in_progress"
-	switch latestTerminal {
-	case core.ExecutionEventTurnCompleted:
-		out.LatestStatus = "completed"
-	case core.ExecutionEventTurnFailed:
-		out.LatestStatus = "failed"
-	case core.ExecutionEventTurnInterrupted:
-		out.LatestStatus = "interrupted"
-	case "":
-		out.LatestStatus = "in_progress"
+	if executionClaimsInclude(claims, "approval_granted") && !out.HasActiveContinuationAuthority {
+		out.Findings = append(out.Findings, executionClaimFinding("approval_granted", "approval claim has no active approved continuation lease", out))
 	}
-	if executionClaimsInclude(claims, "completion") && latestTerminal != "" && latestTerminal != core.ExecutionEventTurnCompleted {
-		out.Findings = append(out.Findings, executionClaimFinding("completion", "completion claim is not grounded (turn="+out.LatestStatus+")", out))
-	}
-	missingTestEvidence := executionClaimsInclude(claims, "test_execution") && !out.HasTestEvidence
-	if executionClaimsInclude(claims, "tool_execution") && !out.HasToolEvidence && !missingTestEvidence {
-		out.Findings = append(out.Findings, executionClaimFinding("tool_execution", "tool-execution claim has no tool events", out))
-	}
-	if missingTestEvidence {
-		out.Findings = append(out.Findings, executionClaimFinding("test_execution", "test-execution claim has no test-related tool evidence", out))
-	}
-	if executionClaimsInclude(claims, "durable_agent") && !out.HasDurableEvidence {
-		out.Findings = append(out.Findings, executionClaimFinding("durable_agent", "durable-agent claim has no durable lifecycle events", out))
+	if executionClaimsInclude(claims, "approval_request") &&
+		!out.HasPendingContinuationApproval &&
+		!out.HasMaterializableOperationFollow &&
+		!out.HasActiveContinuationAuthority {
+		out.Findings = append(out.Findings, executionClaimFinding("approval_request", "approval-request claim has no pending approval state", out))
 	}
 	return out
+}
+
+func (r *Runtime) adjudicationWithContinuationSurfaceState(key session.SessionKey, claims []core.InterpretationClaim, out executionClaimAdjudication, now time.Time) executionClaimAdjudication {
+	if !executionClaimsInclude(claims, "continuation_execution") &&
+		!executionClaimsInclude(claims, "approval_granted") &&
+		!executionClaimsInclude(claims, "approval_request") {
+		return out
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	if cont, exists, err := r.store.ContinuationStateIfExists(key); err == nil && exists {
+		cont = session.NormalizeContinuationState(cont)
+		if cont.Status == session.ContinuationStatusApproved && cont.ContinuationLease.ActiveAt(now) && cont.RemainingTurns > 0 {
+			out.HasActiveContinuationAuthority = true
+		}
+		if continuationStateHasFreshPendingLease(cont, now) {
+			out.HasPendingContinuationApproval = true
+		}
+	}
+	if opState, err := r.store.OperationState(key); err == nil {
+		opState = session.NormalizeOperationState(opState)
+		if pendingOperationProposalNeedsButton(opState.Proposal) ||
+			pendingOperationPlanLeaseNeedsButton(opState.PlanLease) ||
+			operationHasMaterializablePhaseApproval(opState) {
+			out.HasMaterializableOperationFollow = true
+		}
+	}
+	return out
+}
+
+func operationHasMaterializablePhaseApproval(opState session.OperationState) bool {
+	if _, ok := nextOperationPhaseForApproval(opState); ok {
+		return true
+	}
+	if _, ok := nextOperationPhaseBundleForApproval(opState); ok {
+		return true
+	}
+	return false
 }
 
 func executionClaimFinding(claimType string, detail string, adjudication executionClaimAdjudication) ExecutionClaimFinding {
@@ -317,6 +372,12 @@ func executionClaimFinding(claimType string, detail string, adjudication executi
 		required = "Do not claim durable-agent wake or lifecycle work happened without durable lifecycle events. Remove or qualify the claim. Do not prepend a correction banner."
 	case "completion":
 		required = "Do not claim completion when the latest turn is not completed. State only the observable state if it matters. Do not prepend a correction banner."
+	case "continuation_execution":
+		required = "Do not claim you will continue or begin a next phase unless an active approved continuation lease exists. Ask for a fresh bounded approval instead. Do not prepend a correction banner."
+	case "approval_granted":
+		required = "Do not claim approval or authority is already granted unless an active approved continuation lease exists. Ask for a fresh bounded approval instead. Do not prepend a correction banner."
+	case "approval_request":
+		required = "Do not claim an approval request exists unless pending approval state exists. Ask for a fresh bounded approval or park explicitly. Do not prepend a correction banner."
 	}
 	return ExecutionClaimFinding{
 		Kind:             claimType,
@@ -358,23 +419,26 @@ func (r *Runtime) recordExecutionClaimAdjudication(key session.SessionKey, adjud
 		}
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventReplyClaimAdjudicated, "reply", "adjudicated", map[string]any{
-		"adjudication_kind":     runtimeAdjudication.Kind,
-		"surface":               runtimeAdjudication.Surface,
-		"subject_id":            runtimeAdjudication.SubjectID,
-		"operator_label":        runtimeAdjudication.OperatorLabel,
-		"findings":              runtimeAdjudication.Findings,
-		"evidence_refs":         runtimeAdjudication.EvidenceRefs,
-		"claim_types":           claimTypes,
-		"interpretation_claims": adjudication.Interpretation,
-		"details":               details,
-		"findings_count":        len(adjudication.Findings),
-		"latest_turn_seq":       adjudication.LatestTurnSeq,
-		"latest_turn_status":    strings.TrimSpace(adjudication.LatestStatus),
-		"latest_terminal_at":    strings.TrimSpace(adjudication.LatestTerminalAt),
-		"has_tool_evidence":     adjudication.HasToolEvidence,
-		"has_test_evidence":     adjudication.HasTestEvidence,
-		"has_durable_evidence":  adjudication.HasDurableEvidence,
-		"visible_action":        strings.TrimSpace(visibleAction),
+		"adjudication_kind":                   runtimeAdjudication.Kind,
+		"surface":                             runtimeAdjudication.Surface,
+		"subject_id":                          runtimeAdjudication.SubjectID,
+		"operator_label":                      runtimeAdjudication.OperatorLabel,
+		"findings":                            runtimeAdjudication.Findings,
+		"evidence_refs":                       runtimeAdjudication.EvidenceRefs,
+		"claim_types":                         claimTypes,
+		"interpretation_claims":               adjudication.Interpretation,
+		"details":                             details,
+		"findings_count":                      len(adjudication.Findings),
+		"latest_turn_seq":                     adjudication.LatestTurnSeq,
+		"latest_turn_status":                  strings.TrimSpace(adjudication.LatestStatus),
+		"latest_terminal_at":                  strings.TrimSpace(adjudication.LatestTerminalAt),
+		"has_tool_evidence":                   adjudication.HasToolEvidence,
+		"has_test_evidence":                   adjudication.HasTestEvidence,
+		"has_durable_evidence":                adjudication.HasDurableEvidence,
+		"has_active_continuation_authority":   adjudication.HasActiveContinuationAuthority,
+		"has_pending_continuation_approval":   adjudication.HasPendingContinuationApproval,
+		"has_materializable_operation_follow": adjudication.HasMaterializableOperationFollow,
+		"visible_action":                      strings.TrimSpace(visibleAction),
 	}, time.Now().UTC())
 }
 
@@ -389,7 +453,20 @@ func neutralizeUnsupportedExecutionClaims(reply string, adjudication executionCl
 	if reply == "" || !adjudication.HasFindings() {
 		return reply
 	}
+	if adjudicationHasContinuationSurfaceFinding(adjudication) {
+		return "I need a fresh bounded approval before continuing."
+	}
 	return "I do not have current-turn execution evidence for that claim."
+}
+
+func adjudicationHasContinuationSurfaceFinding(adjudication executionClaimAdjudication) bool {
+	for _, finding := range adjudication.Findings {
+		switch strings.TrimSpace(finding.ClaimType) {
+		case "continuation_execution", "approval_granted", "approval_request":
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runtime) interpretFinalReplyExecutionClaims(ctx context.Context, reply string) []core.InterpretationClaim {
@@ -424,7 +501,7 @@ func executionClaimRisks(risks []string) []string {
 	for _, risk := range risks {
 		risk = strings.TrimSpace(risk)
 		switch risk {
-		case "completion", "tool_execution", "test_execution", "durable_agent":
+		case "completion", "tool_execution", "test_execution", "durable_agent", "continuation_execution", "approval_granted", "approval_request":
 			if _, ok := seen[risk]; ok {
 				continue
 			}

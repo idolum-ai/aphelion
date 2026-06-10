@@ -52,6 +52,7 @@ type maintenanceTurnCoordinator struct {
 	cronJobID             string
 	currentFaceModel      face.Renderer
 	baseGovernorAwareness prompt.RuntimeAwareness
+	lastRunID             int64
 	lastGovernor          *turn.GovernorResult
 }
 
@@ -135,6 +136,7 @@ func (c *maintenanceTurnCoordinator) Execute(ctx context.Context, req turn.Gover
 		return nil, err
 	}
 	ctx = monitor.Context()
+	c.lastRunID = monitor.runID
 	var monitorErr error
 	defer monitor.Finish(ctx, monitorErr)
 
@@ -196,6 +198,13 @@ func (c *maintenanceTurnCoordinator) Execute(ctx context.Context, req turn.Gover
 	return governorResult, nil
 }
 
+func (c *maintenanceTurnCoordinator) turnRunID() int64 {
+	if c == nil {
+		return 0
+	}
+	return c.lastRunID
+}
+
 func (c *maintenanceTurnCoordinator) Render(ctx context.Context, req turn.FaceRenderRequest) (*turn.FaceRenderResult, error) {
 	if c == nil || c.runtime == nil {
 		return nil, fmt.Errorf("maintenance coordinator unavailable")
@@ -207,6 +216,9 @@ func (c *maintenanceTurnCoordinator) Render(ctx context.Context, req turn.FaceRe
 	replyText := pipeline.SerializeFloorFallback(c.lastGovernor.MaterialFloor, c.lastGovernor.FloorText, pipeline.FallbackOptions{
 		Channel: c.requestChannel(),
 	})
+	if maintenanceRunKindSkipsFaceRender(maintenanceRunKind(c.species)) {
+		return &turn.FaceRenderResult{Text: strings.TrimSpace(replyText)}, nil
+	}
 	if c.currentFaceModel == nil || c.runtime.faceBackend == face.BackendFloorFallback {
 		return &turn.FaceRenderResult{Text: strings.TrimSpace(replyText)}, nil
 	}
@@ -319,11 +331,23 @@ func maintenanceRunKind(species maintenanceTurnSpecies) session.TurnRunKind {
 	}
 }
 
+func maintenanceRunKindSkipsFaceRender(kind session.TurnRunKind) bool {
+	switch kind {
+	case session.TurnRunKindHeartbeat, session.TurnRunKindCron, session.TurnRunKindRecovery:
+		return true
+	default:
+		return false
+	}
+}
+
 type maintenanceTurnPersistencePort struct {
-	runtime *Runtime
-	key     session.SessionKey
-	sess    *session.Session
-	errCtx  turnCommitErrorContext
+	runtime     *Runtime
+	key         session.SessionKey
+	sess        *session.Session
+	runIDSource interface {
+		turnRunID() int64
+	}
+	errCtx turnCommitErrorContext
 }
 
 func (p *maintenanceTurnPersistencePort) Persist(ctx context.Context, req turn.CommitRequest) (*turn.CommitResult, error) {
@@ -339,6 +363,7 @@ func (p *maintenanceTurnPersistencePort) Persist(ctx context.Context, req turn.C
 
 	result, err := p.runtime.persistTurn(ctx, turnCommitInput{
 		Key:             p.key,
+		RunID:           p.currentRunID(),
 		RunKind:         req.Request.RunKind,
 		Sess:            p.sess,
 		Prepared:        req.Result.Prepared,
@@ -359,4 +384,11 @@ func (p *maintenanceTurnPersistencePort) Persist(ctx context.Context, req turn.C
 		return nil, err
 	}
 	return &turn.CommitResult{Persisted: result.Committed}, nil
+}
+
+func (p *maintenanceTurnPersistencePort) currentRunID() int64 {
+	if p == nil || p.runIDSource == nil {
+		return 0
+	}
+	return p.runIDSource.turnRunID()
 }

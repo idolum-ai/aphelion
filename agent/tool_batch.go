@@ -50,12 +50,13 @@ func executeToolBatch(
 	ctx context.Context,
 	tools ToolRegistry,
 	calls []ToolCall,
+	availableTools map[string]struct{},
 	loopGuard *toolLoopGuardState,
 	pendingBudget *string,
 	observer TurnObserver,
 ) toolBatchResult {
 	mode := toolBatchModeSerial
-	plan := planParallelToolBatch(tools, calls, loopGuard)
+	plan := planParallelToolBatch(tools, calls, availableTools, loopGuard)
 	if plan.parallel {
 		mode = toolBatchModeParallel
 	}
@@ -71,6 +72,7 @@ func executeToolBatch(
 		ParallelMissedReason:      plan.parallelMissedReason,
 	}
 	if observer != nil {
+		event.ParallelContract = describeParallelBatchContract(event)
 		observer.ToolBatchStarted(ctx, event)
 	}
 	started := time.Now()
@@ -79,18 +81,19 @@ func executeToolBatch(
 	if plan.parallel {
 		result = executeParallelToolBatch(ctx, tools, plan.prepared, loopGuard, pendingBudget)
 	} else {
-		result = executeSerialToolBatch(ctx, tools, calls, loopGuard, pendingBudget)
+		result = executeSerialToolBatch(ctx, tools, calls, availableTools, loopGuard, pendingBudget)
 	}
 
 	if observer != nil {
 		event.Duration = time.Since(started)
 		event.FailedCount = result.failedCount
+		event.ParallelContract = describeParallelBatchContract(event)
 		observer.ToolBatchFinished(ctx, event)
 	}
 	return result
 }
 
-func planParallelToolBatch(tools ToolRegistry, calls []ToolCall, loopGuard *toolLoopGuardState) parallelToolBatchPlan {
+func planParallelToolBatch(tools ToolRegistry, calls []ToolCall, availableTools map[string]struct{}, loopGuard *toolLoopGuardState) parallelToolBatchPlan {
 	plan := parallelToolBatchPlan{}
 	if len(calls) == 0 {
 		plan.parallelBlockedReason = "empty_batch"
@@ -113,6 +116,10 @@ func planParallelToolBatch(tools ToolRegistry, calls []ToolCall, loopGuard *tool
 
 	prepared := make([]preparedToolCall, 0, len(calls))
 	for _, call := range calls {
+		if !toolCallAvailable(call.Name, availableTools) {
+			plan.parallelBlockedReason = "unavailable_tool"
+			return plan
+		}
 		repairedInput, inputErr := repairToolInput(call.Input)
 		if inputErr != nil {
 			plan.parallelBlockedReason = "invalid_tool_input"
@@ -142,6 +149,7 @@ func executeSerialToolBatch(
 	ctx context.Context,
 	tools ToolRegistry,
 	calls []ToolCall,
+	availableTools map[string]struct{},
 	loopGuard *toolLoopGuardState,
 	pendingBudget *string,
 ) toolBatchResult {
@@ -151,9 +159,14 @@ func executeSerialToolBatch(
 	}
 
 	for _, call := range calls {
+		if !toolCallAvailable(call.Name, availableTools) {
+			content := withBudgetWarning(renderToolFailure(toolFailure{OK: false, Code: "TOOL_NOT_AVAILABLE", ShortReason: fmt.Sprintf("tool %s was not advertised for this turn", strings.TrimSpace(call.Name)), RetryHint: "DoNotRetry"}), pendingBudget)
+			result.appendToolMessage(call, content, true)
+			continue
+		}
 		repairedInput, inputErr := repairToolInput(call.Input)
 		if inputErr != nil {
-			content := withBudgetWarning(fmt.Sprintf("tool_error: Invalid tool arguments for %s: %v", call.Name, inputErr), pendingBudget)
+			content := withBudgetWarning(renderToolFailure(toolFailure{OK: false, Code: "SCHEMA_VIOLATION", ShortReason: fmt.Sprintf("invalid tool arguments for %s", call.Name), RetryHint: "Reformulate"}), pendingBudget)
 			result.appendToolMessage(call, content, true)
 			continue
 		}
@@ -161,7 +174,7 @@ func executeSerialToolBatch(
 
 		requestSig, loopBlocked := loopGuard.shouldBlock(call)
 		if loopBlocked {
-			content := withBudgetWarning(fmt.Sprintf("tool_error: no-progress tool loop blocked for %s", call.Name), pendingBudget)
+			content := withBudgetWarning(renderToolFailure(toolFailure{OK: false, Code: "NO_PROGRESS_LOOP", ShortReason: fmt.Sprintf("no-progress tool loop blocked for %s", call.Name), RetryHint: "DoNotRetry"}), pendingBudget)
 			result.appendToolMessage(call, content, true)
 			continue
 		}
@@ -217,6 +230,14 @@ func executeSingleToolCall(ctx context.Context, tools ToolRegistry, prepared pre
 	return toolExecutionResult{call: call, requestSig: prepared.requestSig, output: out, err: toolErr}
 }
 
+func toolCallAvailable(name string, availableTools map[string]struct{}) bool {
+	if len(availableTools) == 0 {
+		return false
+	}
+	_, ok := availableTools[strings.TrimSpace(name)]
+	return ok
+}
+
 func (r *toolBatchResult) appendExecutedToolMessage(executed toolExecutionResult, loopGuard *toolLoopGuardState, pendingBudget *string) {
 	content, failed := toolResultContent(executed.output, executed.err)
 	loopGuard.recordOutcome(executed.requestSig, content, failed)
@@ -239,14 +260,91 @@ func (r *toolBatchResult) appendToolMessage(call ToolCall, content string, faile
 	})
 }
 
+type toolFailure struct {
+	OK          bool   `json:"ok"`
+	Code        string `json:"code"`
+	ShortReason string `json:"short_reason"`
+	RetryHint   string `json:"retry_hint"`
+}
+
 func toolResultContent(output string, err error) (string, bool) {
 	if err == nil {
 		return output, false
 	}
-	if output != "" {
-		return fmt.Sprintf("tool_error: %v\n%s", err, output), true
+	return renderToolFailure(classifyToolFailure(err, output)), true
+}
+
+func classifyToolFailure(err error, output string) toolFailure {
+	failure := toolFailure{
+		OK:          false,
+		Code:        "TOOL_ERROR",
+		ShortReason: shortToolFailureReason(err),
+		RetryHint:   "Reformulate",
 	}
-	return fmt.Sprintf("tool_error: %v", err), true
+	if errors.Is(err, context.Canceled) {
+		failure.Code = "CANCELED"
+		failure.RetryHint = "DoNotRetry"
+		return failure
+	}
+	lower := strings.ToLower(strings.TrimSpace(failure.ShortReason + "\n" + output))
+	switch {
+	case strings.Contains(lower, "authority") || strings.Contains(lower, "approval") || strings.Contains(lower, "grant") || strings.Contains(lower, "permission") || strings.Contains(lower, "denied"):
+		failure.Code = "AUTHORITY_REJECTED"
+		failure.RetryHint = "AskForGrant(scope)"
+	case strings.Contains(lower, "deadline") || strings.Contains(lower, "timeout") || strings.Contains(lower, "timed out"):
+		failure.Code = "TIMEOUT"
+		failure.RetryHint = "RetryOnce"
+	}
+	return failure
+}
+
+func shortToolFailureReason(err error) string {
+	parts := []string{}
+	if err != nil {
+		parts = append(parts, err.Error())
+	}
+	reason := strings.Join(strings.Fields(strings.Join(parts, ": ")), " ")
+	if reason == "" {
+		reason = "tool execution failed"
+	}
+	if len(reason) > 140 {
+		reason = strings.TrimSpace(reason[:139]) + "…"
+	}
+	return reason
+}
+
+func renderToolFailure(failure toolFailure) string {
+	failure.OK = false
+	if strings.TrimSpace(failure.Code) == "" {
+		failure.Code = "TOOL_ERROR"
+	}
+	if strings.TrimSpace(failure.ShortReason) == "" {
+		failure.ShortReason = "tool execution failed"
+	}
+	if strings.TrimSpace(failure.RetryHint) == "" {
+		failure.RetryHint = "Reformulate"
+	}
+	data, err := json.Marshal(failure)
+	if err != nil {
+		return `{"ok":false,"code":"TOOL_ERROR","short_reason":"tool execution failed","retry_hint":"Reformulate"}`
+	}
+	return string(data)
+}
+
+func describeParallelBatchContract(event ToolBatchEvent) string {
+	if event.BatchSize <= 1 {
+		if event.ParallelMissedOpportunity {
+			return "single_call_missed_parallel_opportunity:" + event.ParallelMissedReason
+		}
+		return "single_call"
+	}
+	if event.ParallelEligible && event.Mode == toolBatchModeParallel {
+		return "independent_parallel_batch"
+	}
+	if event.ParallelBlockedReason != "" {
+		return "serial_due_to_" + event.ParallelBlockedReason
+	}
+	return "serial_not_parallel_eligible"
 }
 
 func toolBatchNames(calls []ToolCall) []string {

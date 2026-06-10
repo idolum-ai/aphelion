@@ -46,6 +46,14 @@ admin chat.
 Use `/status` when the question is about active work, pending approvals,
 durable-agent state, or a specific chat.
 
+When you approve a continuation with `Start`, Aphelion may keep going for more
+than one turn if the approved lease has remaining turns and the next phase stays
+inside the same approved authority. You should see compact "continuing approved
+lease" messages before automatic follow-up turns. If work needs a wider action,
+new capability grant, expired/stale lease, deploy/restart boundary, or a mission
+has completed or blocked, Aphelion stops and asks again instead of renewing the
+lease silently.
+
 System health includes provider pressure as a typed projection. A
 `provider_health` line summarizes recent provider failures, retries, failovers,
 and successes across the last few hours, with the latest provider/model/failure
@@ -92,6 +100,12 @@ running turns, it records the observation, cancels any matching in-process turn,
 interrupts those exact turn-run rows and matching Telegram ingress rows, then
 records `watchdog.recovered`. A process restart remains an explicit operator
 action; watchdog recovery should leave unrelated chats and threads alone.
+
+For continuation diagnosis, `/status` and `/health trace` can surface recent
+bundle narrowing, continuation compile repair, class-scoped lease consumption,
+and loop-boundary events. Doctor evidence also includes turn accounting such as
+assistant/tool character ratio and provider input/output/cache token counts so
+context-pressure problems are visible without reading raw logs first.
 
 ## Keep Parallel Requests Apart
 
@@ -212,16 +226,19 @@ a visible approval prompt.
 authority. Execution is still gated on the operator pressing the approval button.
 
 Some operation phases also declare `required_capability_grants`. Treat those as
-phase-local dependencies, not ambient permission. When the operator approves the
-phase, Aphelion may approve/create the named bounded capability grant in the
-same approval path, after validating the continuation authority contract and all
-required grant specs. If validation fails, no partial grant should be left
-behind. Existing grants count only if they cover all requested actions.
+phase-local dependencies, not ambient permission. When the operator explicitly
+approves the phase through the button-backed approval path, Aphelion may
+approve/create the named bounded capability grant after validating the
+continuation authority contract and all required grant specs. Approval windows do
+not auto-approve capability grants. If validation fails, no partial grant should
+be left behind. Existing grants count only if they cover all requested actions;
+new grants default to the continuation lease expiry unless the grant spec names
+an explicit expiry.
 
 ## Grant Bounded Automation
 
 After an approval succeeds, the approved message shows `Approve 15m` and
-`Close`. `Approve 15m` opens a bounded approval window for matching
+`Close`. `Approve 15m` opens a bounded approval window for new approval
 requests in the current chat or side thread. It creates the temporary automation
 gate and the spendable approval grant together, so the operator does not have to
 manage them as separate controls.

@@ -13,6 +13,7 @@ import (
 const defaultPollTimeoutSeconds = 30
 const telegramTextChunkLimit = 3800
 const telegramCaptionLimit = 1024
+const telegramCallbackAnswerLimit = 200
 
 type Client struct {
 	token       string

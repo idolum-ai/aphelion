@@ -71,10 +71,10 @@ func (o *OpenRouter) Complete(ctx context.Context, messages []agent.Message, too
 	return o.CompleteWithOptions(ctx, messages, tools, agent.CompleteOptions{})
 }
 
-func (o *OpenRouter) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, _ agent.CompleteOptions) (*agent.Response, error) {
+func (o *OpenRouter) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
 	reqBody := openRouterRequest{
 		Model:     o.model,
-		MaxTokens: o.maxTokens,
+		MaxTokens: resolveMaxTokens(o.maxTokens, opts),
 		Messages:  toOpenRouterMessages(messages),
 	}
 	if defs := toOpenRouterTools(tools); len(defs) > 0 {
@@ -159,10 +159,13 @@ type openRouterToolCallTarget struct {
 }
 
 type openRouterResponse struct {
-	Choices []struct {
-		Message openRouterResponseMessage `json:"message"`
-	} `json:"choices"`
-	Usage openRouterUsage `json:"usage"`
+	Choices []openRouterChoice `json:"choices"`
+	Usage   openRouterUsage    `json:"usage"`
+}
+
+type openRouterChoice struct {
+	Message      openRouterResponseMessage `json:"message"`
+	FinishReason string                    `json:"finish_reason,omitempty"`
 }
 
 type openRouterResponseMessage struct {
@@ -277,7 +280,9 @@ func toOpenRouterTools(tools []agent.ToolDef) []openRouterTool {
 func mapOpenRouterResponse(res openRouterResponse) *agent.Response {
 	resp := &agent.Response{}
 	if len(res.Choices) > 0 {
-		msg := res.Choices[0].Message
+		choice := res.Choices[0]
+		msg := choice.Message
+		resp.FinishReason = strings.TrimSpace(choice.FinishReason)
 		resp.Content = decodeOpenRouterContent(msg.Content)
 		resp.ToolCalls = make([]agent.ToolCall, 0, len(msg.ToolCalls))
 		for _, call := range msg.ToolCalls {

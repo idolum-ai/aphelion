@@ -532,6 +532,22 @@ func TestPlanEventsRoundTripAndRehydrateFromLatestEvent(t *testing.T) {
 	if events[0].Kind != PlanEventKindToolUpdated {
 		t.Fatalf("plan event kind = %q, want %q", events[0].Kind, PlanEventKindToolUpdated)
 	}
+
+	rawKind := PlanEventKind("agent.phase.transitioned")
+	if err := store.UpdatePlanStateWithEvent(key, state, rawKind); err != nil {
+		t.Fatalf("UpdatePlanStateWithEvent(raw kind) err = %v", err)
+	}
+	events, err = store.PlanEvents(key, 10)
+	if err != nil {
+		t.Fatalf("PlanEvents(raw kind) err = %v", err)
+	}
+	if events[0].Kind != rawKind {
+		t.Fatalf("latest raw plan event kind = %q, want canonical raw %q", events[0].Kind, rawKind)
+	}
+	projected := SemanticPlanEventProjections(events[:1], 5)
+	if len(projected) != 0 {
+		t.Fatalf("unknown raw plan event projections = %#v, want normalized away as tool_updated", projected)
+	}
 	if events[0].PlanState.Explanation != state.Explanation {
 		t.Fatalf("event explanation = %q, want %q", events[0].PlanState.Explanation, state.Explanation)
 	}

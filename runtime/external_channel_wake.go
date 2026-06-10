@@ -429,7 +429,7 @@ func genericExternalChannelReviewSummary(agent core.DurableAgent, adapterName st
 	if block, ok := classifyDurableWakeChildRuntimeBlockErrorText(errorText); ok && block.Reason == "grant_expired" {
 		agentName := durableAgentDisplayName(agent.AgentID)
 		grantLabel := childRuntimeGrantLabel(block, adapterName)
-		return fmt.Sprintf("%s wake paused: %s expired.", agentName, grantLabel)
+		return fmt.Sprintf("%s wake paused: required %s expired.", agentName, grantLabel)
 	}
 	parts := []string{
 		fmt.Sprintf("External-channel wake %s from child %s via adapter %s.", externalChannelReviewStatusPhrase(status), strings.TrimSpace(agent.AgentID), strings.TrimSpace(adapterName)),
@@ -480,10 +480,13 @@ func applyChildRuntimeBlockOperatorMetadata(metadata map[string]string, agent co
 	case "grant_expired":
 		metadata["operator_status"] = "paused"
 		metadata["operator_title"] = agentName + " wake paused"
-		metadata["operator_summary"] = fmt.Sprintf("The %s expired, so %s did not wake.", grantLabel, agentName)
-		metadata["operator_point"] = "Backoff is recorded; no retry loop is running."
-		metadata["operator_action"] = "no_action_unless_work_item"
-		metadata["operator_next_action"] = fmt.Sprintf("Renew the grant only if %s has a concrete parent/user work item.", agentName)
+		metadata["operator_summary"] = fmt.Sprintf("The required %s expired, so %s did not wake.", grantLabel, agentName)
+		metadata["operator_point"] = "Wake is held and backoff is recorded; no retry loop or auto-renewal is running."
+		metadata["operator_action"] = "request_admin_grant_review"
+		metadata["operator_next_action"] = fmt.Sprintf("Approve renewal or replacement of the required %s if %s should wake; otherwise leave it expired.", grantLabel, agentName)
+		metadata["admin_approval_required"] = "true"
+		metadata["wake_hold_reason"] = "required_grant_expired"
+		metadata["grant_scope"] = "required_child_runtime"
 	default:
 		metadata["operator_title"] = agentName + " wake blocked"
 		metadata["operator_summary"] = fmt.Sprintf("%s did not wake because the child runtime blocked access.", agentName)

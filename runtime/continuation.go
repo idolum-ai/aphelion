@@ -31,6 +31,15 @@ const (
 )
 
 func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, result *turn.Result) error {
+	if r == nil {
+		return nil
+	}
+	unlock := r.lockSession(key)
+	defer unlock()
+	return r.offerContinuationApprovalLocked(ctx, key, msg, promptInput, result)
+}
+
+func (r *Runtime) offerContinuationApprovalLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, result *turn.Result) error {
 	if r == nil || r.outbound == nil || r.store == nil {
 		return nil
 	}
@@ -92,6 +101,14 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		}
 		payload["user_visible"] = notify
 		payload["prior_active"] = priorExists && session.NormalizeContinuationState(priorState).Active()
+		if repaired, err := r.repairOrganicContinuationHandshakeCompileBlock(ctx, key, msg, consensus, state, strings.TrimSpace(consensus.BlockedReason), time.Now().UTC()); err != nil {
+			return err
+		} else if repaired {
+			return nil
+		}
+		if _, ok := continuationCompileRepairForReason(consensus.BlockedReason); !ok && strings.TrimSpace(consensus.BlockedReason) != "" {
+			r.recordContinuationCompileUnknownReason(key, consensus.OperationState, state, consensus.BlockedReason, "organic_continuation", notify, time.Now().UTC())
+		}
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", payload, time.Now().UTC())
 		if notify {
 			if err := r.sendContinuationBlockedNotice(ctx, key, msg, state); err != nil {
@@ -101,7 +118,7 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		return nil
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", continuationExecutionPayload(state), time.Now().UTC())
-	if approved, err := r.maybeAutoApproveContinuationOffer(ctx, key, msg, state, "organic_continuation"); approved || err != nil {
+	if approved, err := r.maybeAutoApproveContinuationOfferLocked(ctx, key, msg, state, "organic_continuation"); approved || err != nil {
 		return err
 	}
 

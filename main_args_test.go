@@ -61,6 +61,22 @@ func TestUnknownCommandReturnsGroupedUsageErrorWithSuggestion(t *testing.T) {
 	}
 }
 
+func TestTopLevelHelpListsStandaloneStatus(t *testing.T) {
+	text := renderTopLevelHelp("")
+	for _, want := range []string{"status", "aphelion status --config ~/.aphelion/aphelion.toml", "aphelion status --config ~/.aphelion/aphelion.toml --format=json"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("help text missing %q in %q", want, text)
+		}
+	}
+}
+
+func TestUnknownCommandSuggestsStandaloneStatus(t *testing.T) {
+	text := renderUnknownCommandHelp("stauts")
+	if !strings.Contains(text, "Did you mean: status?") {
+		t.Fatalf("unknown command help = %q, want status suggestion", text)
+	}
+}
+
 func TestTopLevelVersionAliasReturnsVersionOutput(t *testing.T) {
 	oldArgs := os.Args
 	t.Cleanup(func() { os.Args = oldArgs })

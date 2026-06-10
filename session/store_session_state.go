@@ -484,7 +484,7 @@ func recordPlanEventTx(tx *sql.Tx, sessionID string, kind PlanEventKind, state P
 	if _, err := tx.Exec(`
 		INSERT INTO plan_events(session_id, event_kind, plan_state_json, created_at)
 		VALUES (?, ?, ?, ?)
-	`, sessionID, string(kind), encodePlanState(state), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	`, sessionID, strings.TrimSpace(string(kind)), encodePlanState(state), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("insert plan event: %w", err)
 	}
 	return nil

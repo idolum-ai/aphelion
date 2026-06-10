@@ -249,6 +249,21 @@ type stubCommandRouter struct {
 	queueMissionClarificationMsg      *core.InboundMessage
 	queueMissionClarificationID       string
 	queueMissionClarificationErr      error
+	reentryRecommendation             session.ReentryRecommendation
+	reentryRecommendationOK           bool
+	reentryRecommendationErr          error
+	reentryRecommendationSenderID     int64
+	reentryRecommendationID           string
+	ignoreReentryRecommendationErr    error
+	ignoreReentryRecommendationID     string
+	ignoreReentryRecommendationSender int64
+	queueReentryRecommendationMsg     *core.InboundMessage
+	queueReentryRecommendationID      string
+	queueReentryCandidateID           string
+	queueReentryRecommendationReturn  session.ReentryRecommendation
+	queueReentryCandidateReturn       session.ReentryRecommendationCandidate
+	queueReentrySelected              bool
+	queueReentryErr                   error
 	memoryReviewBySource              map[memoryReviewSource]memoryReviewSnapshot
 	memoryReviewErr                   error
 	memoryReviewChatID                int64
@@ -314,6 +329,20 @@ type stubCommandRouter struct {
 	threadSummaryMsg                  *core.InboundMessage
 	threadSummaryReturn               string
 	threadSummaryErr                  error
+	mediaPickerRecordChatID           int64
+	mediaPickerRecordMessageID        int64
+	mediaPickerRecordInbound          core.InboundMessage
+	mediaPickerRecordErr              error
+	mediaPickerReturn                 core.InboundMessage
+	mediaPickerOK                     bool
+	mediaPickerErr                    error
+	mediaPickerGetChatID              int64
+	mediaPickerGetMessageID           int64
+	mediaPickerMarkChatID             int64
+	mediaPickerMarkMessageID          int64
+	mediaPickerMarkErr                error
+	routeAcceptedMsg                  *core.InboundMessage
+	routeAcceptedErr                  error
 	promoteThreadChatID               int64
 	promoteThreadSenderID             int64
 	promoteThreadID                   int64

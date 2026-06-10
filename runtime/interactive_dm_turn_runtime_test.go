@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/idolum-ai/aphelion/core"
@@ -12,16 +13,29 @@ import (
 )
 
 type recordingInteractiveDMTurnAssembler struct {
-	called bool
-	input  interactiveDMTurnAssemblyInput
-	result *core.TurnResult
-	err    error
+	mu        sync.Mutex
+	called    bool
+	callCount int
+	input     interactiveDMTurnAssemblyInput
+	inputs    []interactiveDMTurnAssemblyInput
+	result    *core.TurnResult
+	err       error
 }
 
 func (r *recordingInteractiveDMTurnAssembler) Run(_ context.Context, input interactiveDMTurnAssemblyInput) (*core.TurnResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.called = true
+	r.callCount++
 	r.input = input
+	r.inputs = append(r.inputs, input)
 	return r.result, r.err
+}
+
+func (r *recordingInteractiveDMTurnAssembler) CallCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.callCount
 }
 
 func TestHandleInboundUsesInteractiveDMTurnAssemblerBoundary(t *testing.T) {

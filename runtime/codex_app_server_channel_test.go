@@ -127,6 +127,7 @@ func TestCodexAppServerInstructionsUseReadOnlyContract(t *testing.T) {
 }
 
 func TestCodexAppServerClientRaisesWebsocketReadLimit(t *testing.T) {
+	requireLocalTCPListener(t, "localhost:0")
 	t.Parallel()
 
 	large := strings.Repeat("x", 40*1024)

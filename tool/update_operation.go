@@ -22,8 +22,8 @@ func (r *Registry) updateOperation(_ context.Context, input json.RawMessage, key
 
 	var in updateOperationInput
 	if len(input) > 0 {
-		if err := json.Unmarshal(input, &in); err != nil {
-			return "", fmt.Errorf("decode update_operation input: %w", err)
+		if err := decodeToolObjectInput(input, &in, "update_operation"); err != nil {
+			return "", err
 		}
 	}
 
@@ -38,6 +38,9 @@ func (r *Registry) updateOperation(_ context.Context, input json.RawMessage, key
 
 	state, err := applyOperationInput(current, in)
 	if err != nil {
+		return "", err
+	}
+	if err := validateOperationCompletionEvidence(current, state); err != nil {
 		return "", err
 	}
 	now := time.Now().UTC()
@@ -85,5 +88,5 @@ func (r *Registry) updateOperation(_ context.Context, input json.RawMessage, key
 	if err := r.store.UpdateOperationState(key, state); err != nil {
 		return "", err
 	}
-	return renderOperationState("[OPERATION_UPDATED]", state), nil
+	return renderOperationUpdateAck(state, in), nil
 }

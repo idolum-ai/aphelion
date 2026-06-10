@@ -227,7 +227,7 @@ func TestApprovalWindowOfferRendersIntentSubjectAndLocalExpiry(t *testing.T) {
 	override := session.OperatorAutonomyOverride{ID: "override-offer", ChatID: 99213, ScopeKind: string(key.Scope.Kind), ScopeID: key.Scope.ID, Mode: "leased", Scope: session.OperatorAutoApprovalScopeAll, CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute)}
 
 	text := rt.renderApprovalWindowEnabledForOffer(offer, lease, override, now)
-	for _, want := range []string{"Approval window is active for “Commit the validated compact patch”", "matching requests in this chat or thread until 7:05 AM."} {
+	for _, want := range []string{"Approval window is active for “Commit the validated compact patch”", "new approval requests in this chat or thread until 7:05 AM."} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("approval window text = %q, want %q", text, want)
 		}
@@ -252,7 +252,7 @@ func TestRuntimeApprovalWindowCreatesModeGateAndApprovalGrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnableApprovalWindowForKey() err = %v", err)
 	}
-	if !strings.Contains(text, "Approval window is active for matching requests") || strings.Contains(text, "Status:") || strings.Contains(text, "Details:") {
+	if !strings.Contains(text, "Approval window is active for new approval requests") || strings.Contains(text, "Status:") || strings.Contains(text, "Details:") {
 		t.Fatalf("EnableApprovalWindowForKey() text = %q, want compact active approval window", text)
 	}
 	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)

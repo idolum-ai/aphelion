@@ -150,6 +150,7 @@ type turnCoordinatorExecuteInput struct {
 
 type turnCoordinatorExecuteOutput struct {
 	Sess              *session.Session
+	RunID             int64
 	GovernorResult    *turn.GovernorResult
 	LastFaceAwareness prompt.RuntimeAwareness
 }
@@ -171,8 +172,8 @@ func (r *Runtime) buildTurnCoordinatorGovernorPrompt(input turnCoordinatorExecut
 		GovernorBackend:  input.Exec.Backend,
 		PrincipalRole:    input.PrincipalRole,
 		WorkspaceRoot:    input.Scope.WorkingRoot,
-		ToolManifest:     toolManifest(input.Tools),
-		ToolCapabilities: toolCapabilities(input.Tools),
+		ToolManifest:     toolManifestForRunKind(input.Tools, input.RunKind),
+		ToolCapabilities: toolCapabilitiesForRunKind(input.Tools, input.RunKind),
 		Workspace:        input.PromptContext,
 		Runtime:          governorAwareness,
 		CacheStrategy:    r.promptCacheStrategyForExecution(input.Exec),
@@ -213,12 +214,15 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	if runKind == "" {
 		runKind = session.TurnRunKindInteractive
 	}
+	input.RunKind = runKind
+	input.Tools = toolRegistryForRunKind(input.Tools, runKind)
 
 	progress := r.newToolProgressReporter(input.Key, input.Msg, input.Audit)
 	monitor, err := r.startTurnMonitor(ctx, input.Key, runKind, input.Prepared.LedgerText, progress, input.Audit, input.Msg)
 	if err != nil {
 		return out, err
 	}
+	out.RunID = monitor.runID
 	ctx = monitor.Context()
 	defer monitor.Finish(ctx, monitorErr)
 
@@ -332,7 +336,7 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		"model":         strings.TrimSpace(input.Exec.ModelName),
 		"provider_path": strings.Join(input.Exec.ProviderPath, ","),
 		"history_count": len(history),
-		"tool_count":    len(toolManifest(tools)),
+		"tool_count":    len(toolManifestForRunKind(tools, runKind)),
 	}, perceptionBudget)
 	r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptStarted, "provider", "started", providerAttemptPayload, time.Now().UTC())
 
@@ -342,11 +346,7 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	}
 	runOpts.Observer = monitor
 	runOpts.ContextBudget = r.providerContextBudget()
-	turnResult, outHistory, runErr := agent.RunTurn(ctx, input.Exec.Provider, tools, &agent.Budget{
-		Max:     r.cfg.Agent.MaxIterations,
-		Caution: 0.7,
-		Warning: 0.9,
-	}, runOpts, turnInput)
+	turnResult, outHistory, runErr := agent.RunTurn(ctx, input.Exec.Provider, tools, tokenAwareTurnBudget(r.cfg.Agent.MaxIterations, runOpts), runOpts, turnInput)
 	if runErr != nil {
 		failureKind := core.ProviderFailureKind(runErr)
 		r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptFailed, "provider", "failed", map[string]any{
@@ -390,12 +390,16 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		if turnResult != nil {
 			providerName = providerNameAfterProviderEvents(providerName, turnResult.ProviderEvents)
 		}
-		r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptSucceeded, "provider", "succeeded", map[string]any{
+		payload := map[string]any{
 			"backend":              strings.TrimSpace(input.Exec.Backend),
 			"provider":             providerName,
 			"model":                strings.TrimSpace(input.Exec.ModelName),
 			"provider_duration_ms": durationMillis(time.Since(providerStarted)),
-		}, time.Now().UTC())
+		}
+		if turnResult != nil {
+			appendTokenUsagePayload(payload, turnResult.TokenUsage)
+		}
+		r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptSucceeded, "provider", "succeeded", payload, time.Now().UTC())
 	}
 	if len(outHistory) < len(turnInput) {
 		monitorErr = fmt.Errorf("%s: history shrank from %d to %d", firstNonEmpty(strings.TrimSpace(input.InvalidOutputPrefix), "invalid turn output"), len(turnInput), len(outHistory))

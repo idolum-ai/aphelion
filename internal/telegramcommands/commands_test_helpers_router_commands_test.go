@@ -32,6 +32,48 @@ func (s *stubCommandRouter) QueueDoctor(ctx context.Context, msg core.InboundMes
 	return s.queueDoctorErr
 }
 
+func (s *stubCommandRouter) ReentryRecommendation(ctx context.Context, senderID int64, recommendationID string) (session.ReentryRecommendation, bool, error) {
+	_ = ctx
+	s.reentryRecommendationSenderID = senderID
+	s.reentryRecommendationID = recommendationID
+	if s.reentryRecommendationErr != nil {
+		return session.ReentryRecommendation{}, false, s.reentryRecommendationErr
+	}
+	return s.reentryRecommendation, s.reentryRecommendationOK, nil
+}
+
+func (s *stubCommandRouter) IgnoreReentryRecommendation(ctx context.Context, senderID int64, recommendationID string) (session.ReentryRecommendation, error) {
+	_ = ctx
+	s.ignoreReentryRecommendationSender = senderID
+	s.ignoreReentryRecommendationID = recommendationID
+	if s.ignoreReentryRecommendationErr != nil {
+		return session.ReentryRecommendation{}, s.ignoreReentryRecommendationErr
+	}
+	record := s.reentryRecommendation
+	record.Status = session.ReentryRecommendationStatusIgnored
+	return record, nil
+}
+
+func (s *stubCommandRouter) QueueReentryRecommendation(ctx context.Context, msg core.InboundMessage, recommendationID string, candidateID string) (session.ReentryRecommendation, session.ReentryRecommendationCandidate, bool, error) {
+	_ = ctx
+	copied := msg
+	s.queueReentryRecommendationMsg = &copied
+	s.queueReentryRecommendationID = recommendationID
+	s.queueReentryCandidateID = candidateID
+	if s.queueReentryErr != nil {
+		return session.ReentryRecommendation{}, session.ReentryRecommendationCandidate{}, false, s.queueReentryErr
+	}
+	record := s.queueReentryRecommendationReturn
+	if record.ID == "" {
+		record = s.reentryRecommendation
+	}
+	candidate := s.queueReentryCandidateReturn
+	if candidate.ID == "" {
+		candidate, _ = record.Candidate(candidateID)
+	}
+	return record, candidate, s.queueReentrySelected, nil
+}
+
 func (s *stubCommandRouter) LatestDoctorReport(ctx context.Context, chatID int64, senderID int64) (session.DoctorReportRecord, bool, error) {
 	_ = ctx
 	s.latestDoctorReportChatID = chatID
@@ -305,4 +347,32 @@ func (s *stubCommandRouter) AbsorbTelegramThread(_ context.Context, chatID int64
 		return s.absorbThreadReturn, nil
 	}
 	return "Absorbed thread " + strconv.FormatInt(threadID, 10) + ".", nil
+}
+
+func (s *stubCommandRouter) RecordTelegramMediaThreadPicker(chatID int64, pickerMessageID int64, inbound core.InboundMessage) error {
+	s.mediaPickerRecordChatID = chatID
+	s.mediaPickerRecordMessageID = pickerMessageID
+	s.mediaPickerRecordInbound = inbound
+	return s.mediaPickerRecordErr
+}
+
+func (s *stubCommandRouter) TelegramMediaThreadPicker(chatID int64, pickerMessageID int64) (core.InboundMessage, bool, error) {
+	s.mediaPickerGetChatID = chatID
+	s.mediaPickerGetMessageID = pickerMessageID
+	if s.mediaPickerErr != nil {
+		return core.InboundMessage{}, false, s.mediaPickerErr
+	}
+	return s.mediaPickerReturn, s.mediaPickerOK, nil
+}
+
+func (s *stubCommandRouter) MarkTelegramMediaThreadPickerRouted(chatID int64, pickerMessageID int64) error {
+	s.mediaPickerMarkChatID = chatID
+	s.mediaPickerMarkMessageID = pickerMessageID
+	return s.mediaPickerMarkErr
+}
+
+func (s *stubCommandRouter) RouteAccepted(_ context.Context, msg core.InboundMessage) error {
+	copied := msg
+	s.routeAcceptedMsg = &copied
+	return s.routeAcceptedErr
 }

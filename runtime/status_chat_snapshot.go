@@ -270,25 +270,40 @@ func (r *Runtime) ChatStatusSnapshotForKey(key session.SessionKey, router core.R
 func turnRunStatusSnapshotFromRun(run session.TurnRun) core.TurnRunStatusSnapshot {
 	scope := session.NormalizeScopeRef(run.Scope)
 	return core.TurnRunStatusSnapshot{
-		ID:                    run.ID,
-		SessionID:             strings.TrimSpace(run.SessionID),
-		ChatID:                run.ChatID,
-		ScopeKind:             string(scope.Kind),
-		ScopeID:               scope.ID,
-		DurableAgentID:        scope.DurableAgentID,
-		Kind:                  strings.TrimSpace(string(run.Kind)),
-		Status:                strings.TrimSpace(string(run.Status)),
-		RequestText:           truncateStatusDiagnostic(strings.TrimSpace(run.RequestText), 220),
-		LastActivityAt:        run.LastActivityAt,
-		ProgressMessageID:     run.ProgressMessageID,
-		LastToolName:          strings.TrimSpace(run.LastToolName),
-		LastToolPreview:       truncateStatusDiagnostic(strings.TrimSpace(run.LastToolPreview), 220),
-		LastToolResultPreview: truncateStatusDiagnostic(strings.TrimSpace(run.LastToolResultPreview), 220),
-		LastToolError:         truncateStatusDiagnostic(strings.TrimSpace(run.LastToolError), 220),
-		ErrorText:             truncateStatusDiagnostic(strings.TrimSpace(run.ErrorText), 220),
-		StartedAt:             run.StartedAt,
-		Source:                "operational_current_state_store:turn_runs",
+		ID:                       run.ID,
+		SessionID:                strings.TrimSpace(run.SessionID),
+		ChatID:                   run.ChatID,
+		ScopeKind:                string(scope.Kind),
+		ScopeID:                  scope.ID,
+		DurableAgentID:           scope.DurableAgentID,
+		Kind:                     strings.TrimSpace(string(run.Kind)),
+		TurnIndex:                run.TurnIndex,
+		Status:                   strings.TrimSpace(string(run.Status)),
+		RequestText:              truncateStatusDiagnostic(strings.TrimSpace(run.RequestText), 220),
+		LastActivityAt:           run.LastActivityAt,
+		ProgressMessageID:        run.ProgressMessageID,
+		LastToolName:             strings.TrimSpace(run.LastToolName),
+		LastToolPreview:          truncateStatusDiagnostic(strings.TrimSpace(run.LastToolPreview), 220),
+		LastToolResultPreview:    truncateStatusDiagnostic(strings.TrimSpace(run.LastToolResultPreview), 220),
+		LastToolError:            truncateStatusDiagnostic(strings.TrimSpace(run.LastToolError), 220),
+		ErrorText:                truncateStatusDiagnostic(strings.TrimSpace(run.ErrorText), 220),
+		TotalToolCharsIn:         run.TotalToolCharsIn,
+		TotalAssistantCharsOut:   run.TotalAssistantCharsOut,
+		ProviderInputTokens:      run.ProviderInputTokens,
+		ProviderOutputTokens:     run.ProviderOutputTokens,
+		ProviderCacheReadTokens:  run.ProviderCacheReadTokens,
+		ProviderCacheWriteTokens: run.ProviderCacheWriteTokens,
+		AssistantToolRatio:       assistantToolCharRatio(run.TotalAssistantCharsOut, run.TotalToolCharsIn),
+		StartedAt:                run.StartedAt,
+		Source:                   "operational_current_state_store:turn_runs",
 	}
+}
+
+func assistantToolCharRatio(assistantChars int64, toolChars int64) float64 {
+	if toolChars <= 0 {
+		return 0
+	}
+	return float64(assistantChars) / float64(toolChars)
 }
 
 func continuationStatusSnapshotFromState(key session.SessionKey, state session.ContinuationState, updatedAt time.Time, source string) core.ContinuationStatusSnapshot {

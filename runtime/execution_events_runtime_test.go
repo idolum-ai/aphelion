@@ -58,6 +58,58 @@ func TestRouterAndRuntimeEmitExecutionEvents(t *testing.T) {
 	assertPayloadNonNegativeInt64(t, payloadForEventType(events, core.ExecutionEventTurnCompleted), "turn_duration_ms")
 }
 
+func TestRuntimeRecordsProviderAttemptSucceededTokenCacheTelemetry(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "telemetry ok"
+	provider.responseUsage = core.TokenUsage{
+		InputTokens:         100,
+		OutputTokens:        10,
+		TotalTokens:         110,
+		CacheReadTokens:     64,
+		CacheWriteTokens:    16,
+		CacheCreationTokens: 16,
+	}
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	router := router.NewRouter(rt.AgentFunc())
+	router.SetEventHandler(rt.RouterEventHandler())
+	router.Route(context.Background(), core.InboundMessage{
+		ChatID:     99105,
+		ChatType:   "private",
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  77,
+		Text:       "hello",
+	})
+
+	key := session.SessionKey{ChatID: 99105, UserID: 0, Scope: telegramDMScopeRef(99105)}
+	events, err := store.ExecutionEventsBySession(key, 0, 500)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	payload := payloadForEventType(events, core.ExecutionEventProviderAttemptSucceeded)
+	if got, ok := payload["provider"].(string); !ok || got == "" {
+		t.Fatalf("payload provider = %q/%t, want provider metadata in %#v", got, ok, payload)
+	}
+	for field, want := range map[string]int64{
+		"input_tokens":                100,
+		"output_tokens":               10,
+		"total_tokens":                110,
+		"cache_read_tokens":           64,
+		"cache_write_tokens":          16,
+		"cache_creation_input_tokens": 16,
+	} {
+		if got, ok := payloadInt64(payload, field); !ok || got != want {
+			t.Fatalf("payload[%q] = %d/%t, want %d in %#v", field, got, ok, want, payload)
+		}
+	}
+}
+
 func assertPayloadNonNegativeInt64(t *testing.T, payload map[string]any, key string) {
 	t.Helper()
 	value, ok := payloadInt64(payload, key)

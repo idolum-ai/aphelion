@@ -42,11 +42,12 @@ func mapAnthropicResponse(res anthropicResponse, summaryMode agent.ReasoningSumm
 	summary := summarizeThinking(strings.TrimSpace(thinkingSummary.String()), summaryMode)
 
 	usage := core.TokenUsage{
-		InputTokens:      res.Usage.InputTokens,
-		OutputTokens:     res.Usage.OutputTokens,
-		TotalTokens:      res.Usage.TotalTokens,
-		CacheReadTokens:  res.Usage.CacheReadInputTokens,
-		CacheWriteTokens: res.Usage.CacheCreationInputTokens,
+		InputTokens:         res.Usage.InputTokens,
+		OutputTokens:        res.Usage.OutputTokens,
+		TotalTokens:         res.Usage.TotalTokens,
+		CacheReadTokens:     res.Usage.CacheReadInputTokens,
+		CacheWriteTokens:    res.Usage.CacheCreationInputTokens,
+		CacheCreationTokens: res.Usage.CacheCreationInputTokens,
 	}
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
@@ -58,12 +59,14 @@ func mapAnthropicResponse(res anthropicResponse, summaryMode agent.ReasoningSumm
 		ThinkingMeta: thinkingBlocks,
 		ToolCalls:    toolCalls,
 		Usage:        usage,
+		FinishReason: strings.TrimSpace(res.StopReason),
 	}
 }
 
 type anthropicResponse struct {
-	Content []anthropicContent `json:"content"`
-	Usage   anthropicUsage     `json:"usage"`
+	Content    []anthropicContent `json:"content"`
+	StopReason string             `json:"stop_reason,omitempty"`
+	Usage      anthropicUsage     `json:"usage"`
 }
 
 type anthropicUsage struct {

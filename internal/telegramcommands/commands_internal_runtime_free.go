@@ -191,6 +191,7 @@ const telegramDoctorIngressSurface = "telegram:callback-work:doctor"
 const telegramContextClarificationIngressSurface = "telegram:callback-work:context-clarification"
 const telegramMemoryClarificationIngressSurface = "telegram:callback-work:memory-clarification"
 const telegramMissionClarificationIngressSurface = "telegram:callback-work:mission-clarification"
+const telegramReentryRecommendationIngressSurface = "telegram:callback-work:reentry-recommendation"
 
 var _ = core.TelegramCallbackDataMaxBytes
 

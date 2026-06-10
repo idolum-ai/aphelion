@@ -150,6 +150,7 @@ default_store = ""
 
 [sandbox.profiles.admin]
 mode = "trusted"
+readonly_paths = ["{global_root}"]
 network = "allowlist"
 
 [sandbox.profiles.approved_user]

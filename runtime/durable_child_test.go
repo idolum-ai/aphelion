@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
@@ -96,6 +97,142 @@ func TestDurableChildSandboxAccessMaterializesGrantedRuntimeCapability(t *testin
 	}
 	if !containsBind(access.readonlyBinds, exe, "/usr/local/bin/mail-reader") {
 		t.Fatalf("readonlyBinds = %#v, want executable bind", access.readonlyBinds)
+	}
+}
+
+func TestDurableChildSandboxAccessIgnoresExpiredGrantWithoutRuntimeMaterial(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "mail-config")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(configDir) err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(filepath.Join(root, "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-mail-reader-runtime",
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "mail-reader",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract:       `{"child_runtime":{"readonly_paths":["` + configDir + `"]}}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(runtime) err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-expired-public-web-trial",
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
+		Kind:           session.CapabilityKindPublicWeb,
+		TargetResource: "public job pages",
+		AllowedActions: []string{"fetch", "read"},
+		Status:         session.CapabilityGrantStatusActive,
+		ExpiresAt:      time.Now().UTC().Add(-time.Hour),
+		Contract:       `{"allowed_sources":["public pages"]}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(public_web) err = %v", err)
+	}
+
+	access, err := durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{AgentID: "child-alpha"}, store)
+	if err != nil {
+		t.Fatalf("durableChildSandboxAccessFor() err = %v, want expired non-runtime grant ignored", err)
+	}
+	if !containsString(access.readonlyPaths, configDir) {
+		t.Fatalf("readonlyPaths = %#v, want runtime grant materialized", access.readonlyPaths)
+	}
+}
+
+func TestDurableChildSandboxAccessBlocksExpiredRuntimeGrant(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewSQLiteStore(filepath.Join(root, "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-expired-runtime",
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "mail-reader",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		ExpiresAt:      time.Now().UTC().Add(-time.Hour),
+		Contract:       `{"child_runtime":{"readonly_paths":["/srv/mail"]}}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	_, err = durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{AgentID: "child-alpha"}, store)
+	if err == nil || !strings.Contains(err.Error(), "child_runtime_blocked: grant_expired grant_id=capg-expired-runtime") {
+		t.Fatalf("durableChildSandboxAccessFor() err = %v, want expired child_runtime block", err)
+	}
+}
+
+func TestDurableChildSandboxAccessBlocksStoredExpiredRuntimeGrantWhenNoActiveRuntimeGrant(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewSQLiteStore(filepath.Join(root, "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-stored-expired-runtime",
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "mail-reader",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusExpired,
+		Contract:       `{"child_runtime":{"readonly_paths":["/srv/mail"]}}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	_, err = durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{AgentID: "child-alpha"}, store)
+	if err == nil || !strings.Contains(err.Error(), "child_runtime_blocked: grant_expired grant_id=capg-stored-expired-runtime") {
+		t.Fatalf("durableChildSandboxAccessFor() err = %v, want stored expired child_runtime block", err)
+	}
+}
+
+func TestDurableChildSandboxAccessIgnoresStoredExpiredRuntimeGrantWhenActiveReplacementExists(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "mail-config")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(configDir) err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(filepath.Join(root, "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-stored-expired-runtime",
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "mail-reader",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusExpired,
+		Contract:       `{"child_runtime":{"readonly_paths":["/srv/old-mail"]}}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(expired) err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-active-runtime-replacement",
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "mail-reader",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract:       `{"child_runtime":{"readonly_paths":["` + configDir + `"]}}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(active) err = %v", err)
+	}
+
+	access, err := durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{AgentID: "child-alpha"}, store)
+	if err != nil {
+		t.Fatalf("durableChildSandboxAccessFor() err = %v, want active runtime replacement to win", err)
+	}
+	if !containsString(access.readonlyPaths, configDir) {
+		t.Fatalf("readonlyPaths = %#v, want active runtime replacement materialized", access.readonlyPaths)
 	}
 }
 

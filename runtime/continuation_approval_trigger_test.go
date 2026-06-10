@@ -12,6 +12,7 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -98,7 +99,7 @@ func TestHandleInboundTypedApprovalConsumesPendingContinuation(t *testing.T) {
 	if recorder.input.Msg.Origin != core.InboundOriginTurnAuthorization {
 		t.Fatalf("origin = %q, want turn authorization", recorder.input.Msg.Origin)
 	}
-	if recorder.input.Msg.Text == "approved" || !strings.Contains(recorder.input.Msg.Text, "Next: Run the approved typed continuation") {
+	if recorder.input.Msg.Text == "approved" || !strings.Contains(recorder.input.Msg.Text, "Next:\nRun the approved typed continuation") {
 		t.Fatalf("continuation text = %q, want machine-authored approved step", recorder.input.Msg.Text)
 	}
 	for _, notWant := range []string{"approved_step:", "proposal_id:", "lease_id:", "risk_class:"} {
@@ -123,6 +124,267 @@ func TestHandleInboundTypedApprovalConsumesPendingContinuation(t *testing.T) {
 	}
 	if !hasExecutionEvent(events, core.ExecutionEventContinuationApproved) || !hasExecutionEvent(events, core.ExecutionEventContinuationConsumed) {
 		t.Fatalf("events = %#v, want approved and consumed events", events)
+	}
+}
+
+func TestTriggerContinuationLoopsWhileApprovedLeaseHasTurns(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{Text: "continued"}}
+	rt.interactiveDMAssembler = recorder
+
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 8121, UserID: 0, Scope: telegramDMScopeRef(8121)}
+	action := session.ActionProposal{
+		ID:               "aprop-loop-approved",
+		Summary:          "Run the next approved continuation turn.",
+		BoundedEffect:    "Use only the active approved lease and report evidence.",
+		RiskClass:        "continuation",
+		AllowedActions:   []string{"continue_one_turn", "use_existing_authority_only", "report_evidence"},
+		ForbiddenActions: []string{"expand_authority_without_new_approval"},
+		Status:           session.ProposalStatusApproved,
+		ExpiresAt:        now.Add(time.Hour),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "loop-approved",
+		Objective:      "Finish all approved continuation turns.",
+		StageSummary:   "Run approved follow-up work.",
+		RemainingTurns: 3,
+		ApprovedBy:     1001,
+		ActionProposal: action,
+		ContinuationLease: session.ContinuationLease{
+			ID:               "lease-loop-approved",
+			ProposalID:       action.ID,
+			Status:           session.ContinuationLeaseStatusActive,
+			MaxTurns:         3,
+			RemainingTurns:   3,
+			ApprovedBy:       1001,
+			AllowedActions:   action.AllowedActions,
+			ForbiddenActions: action.ForbiddenActions,
+			ExpiresAt:        now.Add(time.Hour),
+			PlanHash:         action.PlanHash,
+			ApprovedAt:       now,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v", err)
+	}
+	if recorder.callCount != 3 {
+		t.Fatalf("assembler calls = %d, want all 3 approved turns consumed", recorder.callCount)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusIdle || got.RemainingTurns != 0 || got.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed {
+		t.Fatalf("continuation = %#v, want consumed idle continuation", got)
+	}
+	sender.mu.Lock()
+	progressCount := len(sender.sent)
+	sender.mu.Unlock()
+	if progressCount != 2 {
+		t.Fatalf("progress messages = %d, want one compact progress line before each automatic follow-up turn", progressCount)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if got := countEventsByType(events, core.ExecutionEventContinuationConsumed); got != 3 {
+		t.Fatalf("consumed events = %d, want 3", got)
+	}
+	if got := countEventsByType(events, core.ExecutionEventMissionProgressAssessed); got != 3 {
+		t.Fatalf("mission progress assessments = %d, want 3", got)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventContinuationBoundaryReached) {
+		t.Fatalf("events = %#v, want continuation boundary event after loop exhausts", events)
+	}
+}
+
+func TestConcurrentContinuationReservationsConsumeSingleLeaseTurn(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 8122, UserID: 0, Scope: telegramDMScopeRef(8122)}
+	action := session.ActionProposal{
+		ID:            "aprop-concurrent-reservation",
+		Summary:       "Run one reserved continuation turn.",
+		BoundedEffect: "Consume exactly one approved turn.",
+		Status:        session.ProposalStatusApproved,
+		ExpiresAt:     now.Add(time.Hour),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "concurrent-reservation",
+		Objective:      "Prove one-turn leases cannot be double-spent.",
+		StageSummary:   action.Summary,
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: action,
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-concurrent-reservation",
+			ProposalID:     action.ID,
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ApprovedBy:     1001,
+			ApprovedAt:     now,
+			ExpiresAt:      now.Add(time.Hour),
+			PlanHash:       action.PlanHash,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	type result struct {
+		reserved bool
+		repair   bool
+		err      error
+	}
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, reservation, _, repair, err := rt.reserveApprovedContinuationTurn(key)
+			results <- result{reserved: reservation != nil, repair: repair != nil, err: err}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	reserved := 0
+	for got := range results {
+		if got.err != nil {
+			t.Fatalf("reserveApprovedContinuationTurn() err = %v", got.err)
+		}
+		if got.repair {
+			t.Fatal("reserveApprovedContinuationTurn() repair = true, want no lease repair")
+		}
+		if got.reserved {
+			reserved++
+		}
+	}
+	if reserved != 1 {
+		t.Fatalf("reserved turns = %d, want exactly one reservation for one approved turn", reserved)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusIdle || got.RemainingTurns != 0 || got.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed {
+		t.Fatalf("continuation = %#v, want single consumed idle lease", got)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if got := countEventsByType(events, core.ExecutionEventContinuationConsumed); got != 1 {
+		t.Fatalf("consumed events = %d, want 1", got)
+	}
+}
+
+func TestConcurrentTriggerContinuationExecutesSingleLeaseTurn(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{Text: "continued"}}
+	rt.interactiveDMAssembler = recorder
+
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 8123, UserID: 0, Scope: telegramDMScopeRef(8123)}
+	action := session.ActionProposal{
+		ID:            "aprop-concurrent-trigger",
+		Summary:       "Run one public trigger continuation turn.",
+		BoundedEffect: "Execute exactly one approved turn.",
+		Status:        session.ProposalStatusApproved,
+		ExpiresAt:     now.Add(time.Hour),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "concurrent-trigger",
+		Objective:      "Prove concurrent triggers cannot execute more than the lease allows.",
+		StageSummary:   action.Summary,
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: action,
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-concurrent-trigger",
+			ProposalID:     action.ID,
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ApprovedBy:     1001,
+			ApprovedAt:     now,
+			ExpiresAt:      now.Add(time.Hour),
+			PlanHash:       action.PlanHash,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- rt.TriggerContinuationForKey(context.Background(), key)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("TriggerContinuationForKey() err = %v", err)
+		}
+	}
+	if got := recorder.CallCount(); got != 1 {
+		t.Fatalf("assembler calls = %d, want exactly one executed continuation turn", got)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if got := countEventsByType(events, core.ExecutionEventContinuationConsumed); got != 1 {
+		t.Fatalf("consumed events = %d, want 1", got)
 	}
 }
 
@@ -583,8 +845,8 @@ func TestTriggerContinuationUsesMachineAuthoredContinuationEventText(t *testing.
 	for _, want := range []string{
 		approvedContinuationEventText,
 		"Approved work:",
-		"Next: Bundled Phase 4B: one bounded mail-child read-only adapter proof",
-		"Scope: Inspect current email due/backoff state, run at most one bounded read-only proof, then report.",
+		"Next:\nBundled Phase 4B: one bounded mail-child read-only adapter proof",
+		"Scope:\nInspect current email due/backoff state, run at most one bounded read-only proof, then report.",
 	} {
 		if !strings.Contains(last.Content, want) {
 			t.Fatalf("last content = %q, want substring %q", last.Content, want)

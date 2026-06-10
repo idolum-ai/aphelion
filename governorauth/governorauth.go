@@ -360,22 +360,28 @@ func saveCodexAuthFile(path string, tokens CodexTokens, refreshedAt time.Time) e
 		return ErrCodexAuthMalformed
 	}
 
-	if accountID == "" {
-		if existingTokens, ok := payload["tokens"].(map[string]any); ok {
+	tokenPayload := map[string]any{}
+	if existingTokens, ok := payload["tokens"].(map[string]any); ok {
+		for key, value := range existingTokens {
+			tokenPayload[key] = value
+		}
+		if accountID == "" {
 			if existingAccountID, ok := existingTokens["account_id"].(string); ok {
 				accountID = strings.TrimSpace(existingAccountID)
 			}
 		}
 	}
+	if accountID == "" {
+		return ErrCodexAuthIncomplete
+	}
 
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	payload["tokens"] = map[string]any{
-		"access_token":  access,
-		"refresh_token": refresh,
-		"account_id":    accountID,
-	}
+	tokenPayload["access_token"] = access
+	tokenPayload["refresh_token"] = refresh
+	tokenPayload["account_id"] = accountID
+	payload["tokens"] = tokenPayload
 	payload["last_refresh"] = refreshedAt.UTC().Format(time.RFC3339)
 
 	data, err := json.MarshalIndent(payload, "", "  ")
@@ -384,11 +390,58 @@ func saveCodexAuthFile(path string, tokens CodexTokens, refreshedAt time.Time) e
 	}
 	data = append(data, '\n')
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := writeCodexAuthFile(path, data); err != nil {
+		return err
+	}
+	return nil
+}
+
+func writeCodexAuthFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("mkdir codex auth dir: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("write codex auth: %w", err)
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("chmod codex auth dir: %w", err)
+	}
+
+	tmp, err := os.CreateTemp(dir, ".codex-auth-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp codex auth: %w", err)
+	}
+	tmpName := tmp.Name()
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod temp codex auth: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp codex auth: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync temp codex auth: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp codex auth: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("rename codex auth: %w", err)
+	}
+	removeTemp = false
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("chmod codex auth: %w", err)
+	}
+	if dirFile, err := os.Open(dir); err == nil {
+		_ = dirFile.Sync()
+		_ = dirFile.Close()
 	}
 	return nil
 }

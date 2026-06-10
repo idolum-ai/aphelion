@@ -450,22 +450,36 @@ CREATE TABLE review_events (
 CREATE INDEX idx_review_events_target ON review_events(target_chat_id, status, created_at);
 
 CREATE TABLE turn_runs (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id             INTEGER NOT NULL,
-    user_id             INTEGER NOT NULL DEFAULT 0,
-    kind                TEXT NOT NULL,
-    status              TEXT NOT NULL,
-    request_text        TEXT,
-    started_at          TEXT NOT NULL,
-    completed_at        TEXT,
-    last_activity_at    TEXT NOT NULL,
-    last_tool_name      TEXT,
-    last_tool_preview   TEXT,
-    tool_calls_started  INTEGER NOT NULL DEFAULT 0,
-    progress_message_id INTEGER,
-    error_text          TEXT,
-    recovery_summary    TEXT,
-    recovery_logged_at  TEXT
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id                  TEXT NOT NULL,
+    chat_id                     INTEGER NOT NULL DEFAULT 0,
+    user_id                     INTEGER NOT NULL DEFAULT 0,
+    scope_kind                  TEXT NOT NULL DEFAULT '',
+    scope_id                    TEXT NOT NULL DEFAULT '',
+    durable_agent_id            TEXT NOT NULL DEFAULT '',
+    kind                        TEXT NOT NULL,
+    turn_index                  INTEGER NOT NULL DEFAULT 0,
+    status                      TEXT NOT NULL,
+    request_text                TEXT NOT NULL,
+    started_at                  TEXT NOT NULL,
+    completed_at                TEXT,
+    last_activity_at            TEXT NOT NULL,
+    last_tool_name              TEXT,
+    last_tool_preview           TEXT,
+    tool_calls_started          INTEGER NOT NULL DEFAULT 0,
+    tool_calls_finished         INTEGER NOT NULL DEFAULT 0,
+    total_tool_chars_in         INTEGER NOT NULL DEFAULT 0,
+    total_assistant_chars_out   INTEGER NOT NULL DEFAULT 0,
+    provider_input_tokens       INTEGER NOT NULL DEFAULT 0,
+    provider_output_tokens      INTEGER NOT NULL DEFAULT 0,
+    provider_cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+    provider_cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    last_tool_result_preview    TEXT,
+    last_tool_error             TEXT,
+    progress_message_id         INTEGER,
+    error_text                  TEXT,
+    recovery_summary            TEXT,
+    recovery_logged_at          TEXT
 );
 
 CREATE INDEX idx_turn_runs_status ON turn_runs(status, started_at);
@@ -493,7 +507,9 @@ CREATE TABLE compaction_log (
 - **resolved_workspace_root**: records the actual execution root used for that session.
 - **outbound_messages**: keeps a durable mapping between agent turns and Telegram message IDs.
 - **review_events**: creates a one-way, bounded bridge from isolated sessions into the admin DM.
-- **turn_runs**: preserves machine-authored facts about in-flight work, progress artifacts, and recovery state across restarts.
+- **turn_runs**: preserves machine-authored facts about in-flight work,
+  progress artifacts, provider/token accounting, and recovery state across
+  restarts.
 - **compacted flag**: compacted messages remain on disk for audit but can be excluded from active prompt assembly.
 
 ## Session Lifecycle
@@ -538,10 +554,15 @@ Interactive, heartbeat, cron, and recovery turns should also create a structured
 Normal lifecycle:
 
 1. insert `turn_runs.status = "running"` before the governor turn begins
-2. update `last_tool_name`, `last_tool_preview`, and `progress_message_id` as work happens
+2. update `last_tool_name`, `last_tool_preview`, tool counters, provider
+   token/cache counters, assistant/tool character counts, and
+   `progress_message_id` as work happens
 3. mark the row `completed` or `failed` when the turn ends normally
 
 If the process disappears before step 3, the next startup should mark the row `interrupted` and feed it into maintenance recovery analysis.
+These accounting fields support status and doctor projections. They are
+operational current-state hints, not canonical execution history; TES remains
+the canonical record of event order and runtime evidence.
 
 ### Delete / Expire
 

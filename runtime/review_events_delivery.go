@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
@@ -22,6 +23,10 @@ type reviewEventInlineSender interface {
 
 type reviewEventKeyboardClearer interface {
 	EditMessageTextWithoutInlineKeyboard(ctx context.Context, chatID int64, messageID int64, text string, parseMode string) error
+}
+
+type reviewEventDocumentSender interface {
+	SendDocumentMessage(ctx context.Context, chatID int64, media core.Media, caption string, replyTo *int64) (int64, error)
 }
 
 func shouldGenerateReviewEvent(actor principal.Principal, key session.SessionKey) bool {
@@ -80,8 +85,9 @@ func (r *Runtime) deliverReviewEvents(ctx context.Context, key session.SessionKe
 		return err
 	}
 	for _, event := range events {
+		compact := ReviewEventDetailsExpandable(event)
 		text := FormatReviewEventMessage(event)
-		if ReviewEventDetailsExpandable(event) {
+		if compact {
 			text = FormatReviewEventCompactMessage(event)
 		}
 		rows := ReviewEventInlineRows(event)
@@ -127,6 +133,11 @@ func (r *Runtime) deliverReviewEvents(ctx context.Context, key session.SessionKe
 		if err := r.store.MarkReviewDeliveredWithMessage(event.ID, msgID); err != nil {
 			return err
 		}
+		if compact && !ReviewEventDetailsButtonOnly(event) {
+			if _, err := r.sendReviewEventDetailsAttachment(ctx, key.ChatID, msgID, event); err != nil {
+				return err
+			}
+		}
 		if staleEvents, err := r.store.DismissPendingCapabilityReviewEvents(key.ChatID, reviewEventCapabilityRequestID(event), event.ID); err != nil {
 			return err
 		} else if len(staleEvents) > 0 {
@@ -134,6 +145,61 @@ func (r *Runtime) deliverReviewEvents(ctx context.Context, key session.SessionKe
 		}
 	}
 	return nil
+}
+
+func (r *Runtime) sendReviewEventDetailsAttachment(ctx context.Context, chatID int64, replyTo int64, event session.ReviewEvent) (int64, error) {
+	if r.outbound == nil || chatID == 0 || !ReviewEventDetailsExpandable(event) {
+		return 0, nil
+	}
+	sender, ok := r.outbound.(reviewEventDocumentSender)
+	if !ok {
+		return 0, nil
+	}
+	text := strings.TrimSpace(FormatReviewEventDetailsMarkdown(event))
+	if text == "" {
+		return 0, nil
+	}
+	media := core.Media{
+		Type:     "document",
+		Data:     []byte(text),
+		MimeType: "text/markdown; charset=utf-8",
+		Filename: reviewEventDetailsAttachmentFilename(event),
+	}
+	caption := "Full child review details (safe projection)."
+	return sender.SendDocumentMessage(ctx, chatID, media, caption, replyToMessageID(replyTo))
+}
+
+func reviewEventDetailsAttachmentFilename(event session.ReviewEvent) string {
+	meta, _ := parseReviewEventArtifactMetadata(event)
+	parts := []string{"review"}
+	if agent := strings.TrimSpace(meta.AgentID); agent != "" {
+		parts = append([]string{agent}, "review")
+	} else if scope := session.NormalizeScopeRef(event.SourceScope); strings.TrimSpace(scope.DurableAgentID) != "" {
+		parts = append([]string{strings.TrimSpace(scope.DurableAgentID)}, "review")
+	}
+	if !event.CreatedAt.IsZero() {
+		parts = append(parts, event.CreatedAt.UTC().Format("20060102T150405Z"))
+	} else if label := strings.TrimSpace(meta.IntervalLabel); label != "" {
+		parts = append(parts, label)
+	} else if event.ID > 0 {
+		parts = append(parts, fmt.Sprintf("%d", event.ID))
+	}
+	return sanitizeReviewEventAttachmentFilename(strings.Join(parts, "-")) + ".md"
+}
+
+var reviewEventAttachmentFilenameUnsafe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+func sanitizeReviewEventAttachmentFilename(value string) string {
+	value = strings.Trim(strings.ToLower(strings.TrimSpace(value)), ".-_")
+	value = reviewEventAttachmentFilenameUnsafe.ReplaceAllString(value, "-")
+	value = strings.Trim(value, ".-_")
+	if value == "" {
+		value = "review-event-details"
+	}
+	if len(value) > 96 {
+		value = strings.Trim(value[:96], ".-_")
+	}
+	return value
 }
 
 func ReviewEventInlineRows(event session.ReviewEvent) [][]telegram.InlineButton {
@@ -174,12 +240,24 @@ func ReviewEventInlineRowsExpanded(event session.ReviewEvent, expanded bool) [][
 	return rows
 }
 
+func ReviewEventDetailsButtonOnly(event session.ReviewEvent) bool {
+	switch reviewEventMetadataString(event, "request_via") {
+	case "capability_request", "durable_agent.delegation_request":
+		return true
+	default:
+		return false
+	}
+}
+
 func ReviewEventDetailsExpandable(event session.ReviewEvent) bool {
 	if _, ok := core.MissionControlProposalFromMetadataJSON(event.MetadataJSON); ok {
 		return false
 	}
 	if strings.TrimSpace(event.Summary) == "" {
 		return false
+	}
+	if ReviewEventDetailsButtonOnly(event) {
+		return true
 	}
 	scope := session.NormalizeScopeRef(event.SourceScope)
 	return scope.Kind == session.ScopeKindDurableAgent || strings.TrimSpace(scope.DurableAgentID) != "" || strings.TrimSpace(event.SourceRole) == "durable_agent"

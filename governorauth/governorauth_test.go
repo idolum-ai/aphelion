@@ -367,3 +367,204 @@ func TestSaveCodexCLIAuthPreservesUnknownFields(t *testing.T) {
 		t.Fatalf("tokens = %#v, want updated tokens", tokens)
 	}
 }
+
+func TestSaveCodexCLIAuthDoesNotClobberMalformedExistingJSON(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	original := []byte(`{"tokens":`)
+	if err := os.WriteFile(authPath, original, 0o600); err != nil {
+		t.Fatalf("write malformed auth.json: %v", err)
+	}
+
+	err := SaveCodexCLIAuth(authPath, CodexTokens{
+		AccessToken:  "new-access",
+		RefreshToken: "new-refresh",
+		AccountID:    "acct",
+	}, time.Date(2026, time.April, 9, 12, 34, 56, 0, time.UTC))
+	if !errors.Is(err, ErrCodexAuthMalformed) {
+		t.Fatalf("SaveCodexCLIAuth() err = %v, want ErrCodexAuthMalformed", err)
+	}
+	raw, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatalf("read auth.json: %v", err)
+	}
+	if string(raw) != string(original) {
+		t.Fatalf("auth file was clobbered: got %q want %q", string(raw), string(original))
+	}
+}
+
+func TestSaveCodexCLIAuthFallsBackToExistingAccountIDAndPreservesTokenMetadata(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"old","refresh_token":"old","account_id":"acct-existing","metadata":{"device":"laptop"},"scope":"openid"}}`), 0o600); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+
+	refreshedAt := time.Date(2026, time.April, 10, 1, 2, 3, 0, time.UTC)
+	if err := SaveCodexCLIAuth(authPath, CodexTokens{
+		AccessToken:  "fresh-access",
+		RefreshToken: "fresh-refresh",
+	}, refreshedAt); err != nil {
+		t.Fatalf("SaveCodexCLIAuth() err = %v", err)
+	}
+
+	raw, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatalf("read auth.json: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal saved auth: %v", err)
+	}
+	tokens, ok := payload["tokens"].(map[string]any)
+	if !ok {
+		t.Fatalf("tokens = %#v, want object", payload["tokens"])
+	}
+	if tokens["access_token"] != "fresh-access" || tokens["refresh_token"] != "fresh-refresh" || tokens["account_id"] != "acct-existing" {
+		t.Fatalf("tokens = %#v, want refreshed pair with existing account id", tokens)
+	}
+	if tokens["scope"] != "openid" {
+		t.Fatalf("tokens.scope = %#v, want preserved scope", tokens["scope"])
+	}
+	metadata, ok := tokens["metadata"].(map[string]any)
+	if !ok || metadata["device"] != "laptop" {
+		t.Fatalf("tokens.metadata = %#v, want preserved nested metadata", tokens["metadata"])
+	}
+	if payload["last_refresh"] != refreshedAt.Format(time.RFC3339) {
+		t.Fatalf("last_refresh = %#v, want %q", payload["last_refresh"], refreshedAt.Format(time.RFC3339))
+	}
+}
+
+func TestSaveCodexCLIAuthRequiresAccountIDBeforeCreatingFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "missing", "auth.json")
+	err := SaveCodexCLIAuth(authPath, CodexTokens{
+		AccessToken:  "new-access",
+		RefreshToken: "new-refresh",
+	}, time.Date(2026, time.April, 11, 1, 2, 3, 0, time.UTC))
+	if !errors.Is(err, ErrCodexAuthIncomplete) {
+		t.Fatalf("SaveCodexCLIAuth() err = %v, want ErrCodexAuthIncomplete", err)
+	}
+	if _, err := os.Stat(authPath); !os.IsNotExist(err) {
+		t.Fatalf("auth file exists or stat err = %v, want not exist", err)
+	}
+}
+
+func TestSaveCodexCLIAuthDoesNotRewriteExistingFileWhenIncomplete(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	original := []byte(`{"tokens":{"access_token":"old","refresh_token":"old","account_id":"acct"}}`)
+	if err := os.WriteFile(authPath, original, 0o600); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+
+	err := SaveCodexCLIAuth(authPath, CodexTokens{
+		AccessToken: "new-access",
+		AccountID:   "acct",
+	}, time.Date(2026, time.April, 11, 1, 2, 3, 0, time.UTC))
+	if !errors.Is(err, ErrCodexAuthIncomplete) {
+		t.Fatalf("SaveCodexCLIAuth() err = %v, want ErrCodexAuthIncomplete", err)
+	}
+	raw, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatalf("read auth.json: %v", err)
+	}
+	if string(raw) != string(original) {
+		t.Fatalf("auth file changed: got %q want %q", string(raw), string(original))
+	}
+}
+
+func TestSaveCodexCLIAuthCreatesRestrictiveAuthFileModes(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "codex")
+	authPath := filepath.Join(dir, "auth.json")
+	if err := SaveCodexCLIAuth(authPath, CodexTokens{
+		AccessToken:  "new-access",
+		RefreshToken: "new-refresh",
+		AccountID:    "acct",
+	}, time.Date(2026, time.April, 12, 1, 2, 3, 0, time.UTC)); err != nil {
+		t.Fatalf("SaveCodexCLIAuth() err = %v", err)
+	}
+
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat auth dir: %v", err)
+	}
+	if mode := dirInfo.Mode().Perm(); mode != 0o700 {
+		t.Fatalf("auth dir mode = %#o, want 0700", mode)
+	}
+	info, err := os.Stat(authPath)
+	if err != nil {
+		t.Fatalf("stat auth.json: %v", err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("auth file mode = %#o, want 0600", mode)
+	}
+}
+
+func TestSaveCodexCLIAuthTightensExistingPermissiveModes(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "codex")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll auth dir: %v", err)
+	}
+	authPath := filepath.Join(dir, "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"old","refresh_token":"old","account_id":"acct"}}`), 0o644); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+
+	if err := SaveCodexCLIAuth(authPath, CodexTokens{
+		AccessToken:  "new-access",
+		RefreshToken: "new-refresh",
+		AccountID:    "acct",
+	}, time.Date(2026, time.April, 12, 1, 2, 3, 0, time.UTC)); err != nil {
+		t.Fatalf("SaveCodexCLIAuth() err = %v", err)
+	}
+
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat auth dir: %v", err)
+	}
+	if mode := dirInfo.Mode().Perm(); mode != 0o700 {
+		t.Fatalf("auth dir mode = %#o, want tightened 0700", mode)
+	}
+	info, err := os.Stat(authPath)
+	if err != nil {
+		t.Fatalf("stat auth.json: %v", err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("auth file mode = %#o, want tightened 0600", mode)
+	}
+}
+
+func TestSaveCodexCLIAuthLeavesNoTemporaryAuthFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	if err := SaveCodexCLIAuth(authPath, CodexTokens{
+		AccessToken:  "new-access",
+		RefreshToken: "new-refresh",
+		AccountID:    "acct",
+	}, time.Date(2026, time.April, 13, 1, 2, 3, 0, time.UTC)); err != nil {
+		t.Fatalf("SaveCodexCLIAuth() err = %v", err)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(dir, ".codex-auth-*.tmp"))
+	if err != nil {
+		t.Fatalf("Glob temp auth files: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary auth files = %#v, want none", matches)
+	}
+}

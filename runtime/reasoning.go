@@ -11,6 +11,16 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
+const (
+	interactiveRunMaxTokens = 2048
+	heartbeatRunMaxTokens   = 1024
+	cronRunMaxTokens        = 1024
+	recoveryRunMaxTokens    = 1024
+	doctorRunMaxTokens      = 4096
+	faceRenderMaxTokens     = 512
+	compactionMaxTokens     = 512
+)
+
 func reasoningOptionsForRun(cfg *config.Config, kind session.TurnRunKind) *agent.CompleteOptions {
 	if cfg == nil {
 		return nil
@@ -41,6 +51,22 @@ func reasoningOptionsForRun(cfg *config.Config, kind session.TurnRunKind) *agent
 			Effort:  agent.ReasoningEffort(effort),
 			Summary: agent.ReasoningSummaryMode(summary),
 		},
+		MaxTokens: maxTokensForRunKind(kind),
+	}
+}
+
+func maxTokensForRunKind(kind session.TurnRunKind) int {
+	switch kind {
+	case session.TurnRunKindDoctor:
+		return doctorRunMaxTokens
+	case session.TurnRunKindHeartbeat:
+		return heartbeatRunMaxTokens
+	case session.TurnRunKindCron:
+		return cronRunMaxTokens
+	case session.TurnRunKindRecovery:
+		return recoveryRunMaxTokens
+	default:
+		return interactiveRunMaxTokens
 	}
 }
 
@@ -74,4 +100,35 @@ func firstNonEmptyThinking(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func tokenAwareTurnBudget(maxIterations int, opts *agent.CompleteOptions) *agent.Budget {
+	budget := &agent.Budget{
+		Max:     maxIterations,
+		Caution: 0.7,
+		Warning: 0.9,
+	}
+	if opts == nil {
+		return budget
+	}
+	if opts.MaxTokens > 0 {
+		budget.OutputTokenSoftLimit = int64(opts.MaxTokens) * 2
+		budget.OutputTokenHardLimit = int64(opts.MaxTokens) * 3
+	}
+	if opts.ContextBudget != nil && opts.ContextBudget.ContextWindow > 0 {
+		maxRatio := opts.ContextBudget.MaxRatio
+		if maxRatio <= 0 {
+			maxRatio = 0.90
+		}
+		hardRatio := opts.ContextBudget.HardRatio
+		if hardRatio <= 0 {
+			hardRatio = 1.10
+		}
+		if hardRatio < maxRatio {
+			hardRatio = maxRatio
+		}
+		budget.InputTokenSoftLimit = int64(float64(opts.ContextBudget.ContextWindow) * maxRatio * 2)
+		budget.InputTokenHardLimit = int64(float64(opts.ContextBudget.ContextWindow) * hardRatio * 3)
+	}
+	return budget
 }

@@ -40,3 +40,36 @@ func (c CommandControl) QueueMissionClarification(ctx context.Context, msg core.
 	}
 	return c.RouteAccepted(ctx, msg)
 }
+
+func (c CommandControl) ReentryRecommendation(ctx context.Context, senderID int64, recommendationID string) (session.ReentryRecommendation, bool, error) {
+	if c.Runtime == nil {
+		return session.ReentryRecommendation{}, false, fmt.Errorf("Re-entry recommendation is unavailable.")
+	}
+	return c.Runtime.ReentryRecommendation(ctx, senderID, recommendationID)
+}
+
+func (c CommandControl) IgnoreReentryRecommendation(ctx context.Context, senderID int64, recommendationID string) (session.ReentryRecommendation, error) {
+	if c.Runtime == nil {
+		return session.ReentryRecommendation{}, fmt.Errorf("Re-entry recommendation is unavailable.")
+	}
+	return c.Runtime.IgnoreReentryRecommendation(ctx, senderID, recommendationID)
+}
+
+func (c CommandControl) QueueReentryRecommendation(ctx context.Context, msg core.InboundMessage, recommendationID string, candidateID string) (session.ReentryRecommendation, session.ReentryRecommendationCandidate, bool, error) {
+	if c.Runtime == nil {
+		return session.ReentryRecommendation{}, session.ReentryRecommendationCandidate{}, false, fmt.Errorf("Re-entry recommendation is unavailable.")
+	}
+	record, candidate, selected, err := c.Runtime.PrepareReentryRecommendationSelection(ctx, msg.SenderID, recommendationID, candidateID)
+	if err != nil || !selected {
+		return record, candidate, selected, err
+	}
+	msg.IngressSurface = telegramruntime.ReentryRecommendationIngressSurface
+	if err := recordTelegramCallbackWorkAccepted(c.Store, msg, "callback_reentry_recommendation"); err != nil {
+		return record, candidate, false, err
+	}
+	record, candidate, selected, err = c.Runtime.ConfirmReentryRecommendationSelection(ctx, msg.SenderID, recommendationID, candidateID)
+	if err != nil || !selected {
+		return record, candidate, selected, err
+	}
+	return record, candidate, true, c.RouteAccepted(ctx, msg)
+}

@@ -19,7 +19,7 @@ import (
 func (o *OpenAI) completeChat(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
 	reqBody := openAIRequest{
 		Model:               o.model,
-		MaxCompletionTokens: o.maxTokens,
+		MaxCompletionTokens: resolveMaxTokens(o.maxTokens, opts),
 		Messages:            toOpenRouterMessages(messages),
 		ReasoningEffort:     openAIReasoningEffort(opts.Reasoning.Effort),
 		ServiceTier:         o.serviceTier,
@@ -71,7 +71,7 @@ func (o *OpenAI) completeChat(ctx context.Context, messages []agent.Message, too
 func (o *OpenAI) streamChat(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback) (*agent.Response, error) {
 	reqBody := openAIRequest{
 		Model:               o.model,
-		MaxCompletionTokens: o.maxTokens,
+		MaxCompletionTokens: resolveMaxTokens(o.maxTokens, opts),
 		Messages:            toOpenRouterMessages(messages),
 		ReasoningEffort:     openAIReasoningEffort(opts.Reasoning.Effort),
 		ServiceTier:         o.serviceTier,
@@ -138,7 +138,8 @@ type openAIChatStreamEvent struct {
 }
 
 type openAIChatChoice struct {
-	Delta openAIChatDelta `json:"delta"`
+	Delta        openAIChatDelta `json:"delta"`
+	FinishReason string          `json:"finish_reason,omitempty"`
 }
 
 type openAIChatDelta struct {
@@ -149,6 +150,7 @@ type openAIChatStreamParser struct {
 	cb          agent.StreamCallback
 	text        strings.Builder
 	usage       core.TokenUsage
+	finishReason string
 	callbackErr error
 	parseErr    error
 }
@@ -175,6 +177,9 @@ func (p *openAIChatStreamParser) consume(data string) error {
 	}
 	p.captureUsage(payload.Usage)
 	for _, choice := range payload.Choices {
+		if reason := strings.TrimSpace(choice.FinishReason); reason != "" {
+			p.finishReason = reason
+		}
 		if choice.Delta.Content == "" {
 			continue
 		}
@@ -189,7 +194,7 @@ func (p *openAIChatStreamParser) response() *agent.Response {
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
-	return &agent.Response{Content: p.text.String(), Usage: usage}
+	return &agent.Response{Content: p.text.String(), Usage: usage, FinishReason: strings.TrimSpace(p.finishReason)}
 }
 
 func (p *openAIChatStreamParser) err() error {

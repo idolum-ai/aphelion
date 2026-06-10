@@ -316,6 +316,7 @@ func fakeInterpretationClaimsReply(raw string) string {
 	}
 	switch strings.TrimSpace(req.Surface) {
 	case "final_reply":
+		text = strings.NewReplacer("\u2018", "'", "\u2019", "'").Replace(text)
 		prior := strings.Contains(text, "prior validation") ||
 			strings.Contains(text, "previous validation") ||
 			strings.Contains(text, "existing validation record") ||
@@ -327,6 +328,13 @@ func fakeInterpretationClaimsReply(raw string) string {
 			strings.Contains(text, "will not pretend") ||
 			strings.Contains(text, "do not have") ||
 			strings.Contains(text, "without current-turn")
+		needsApproval := strings.Contains(text, "need approval") ||
+			strings.Contains(text, "needs approval") ||
+			strings.Contains(text, "fresh approval") ||
+			strings.Contains(text, "bounded approval") ||
+			strings.Contains(text, "before continuing") ||
+			strings.Contains(text, "cannot continue") ||
+			strings.Contains(text, "can't continue")
 		if !prior && !suggestion && !negated {
 			if strings.Contains(text, "done") || strings.Contains(text, "finished") || strings.Contains(text, "completed") || strings.Contains(text, "all set") {
 				addExecutionClaim("completion")
@@ -339,6 +347,19 @@ func fakeInterpretationClaimsReply(raw string) string {
 			}
 			if strings.Contains(text, "durable wake completed") || strings.Contains(text, "woke durable") || strings.Contains(text, "processed pending parent guidance") {
 				addExecutionClaim("durable_agent")
+			}
+			if !needsApproval {
+				if strings.Contains(text, "approved") || strings.Contains(text, "approval is in place") || strings.Contains(text, "authority is in place") {
+					addExecutionClaim("approval_granted")
+				}
+				if strings.Contains(text, "i'll continue") ||
+					strings.Contains(text, "i will continue") ||
+					strings.Contains(text, "i can continue") ||
+					strings.Contains(text, "continue with") ||
+					strings.Contains(text, "start the next phase") ||
+					strings.Contains(text, "begin the next phase") {
+					addExecutionClaim("continuation_execution")
+				}
 			}
 		}
 	case "inbound_media_instruction":
@@ -365,7 +386,10 @@ type fakeSender struct {
 	sendCount       int
 	sendErr         error
 	sendErrAfter    int
+	inlineErr       error
+	documentErr     error
 	voice           []voiceSend
+	documents       []documentSend
 	actions         []chatAction
 	edits           []messageEdit
 	editClear       []messageEdit
@@ -456,13 +480,20 @@ func (f *fakeSender) SendMessage(_ context.Context, msg core.OutboundMessage) (i
 			return 0, f.sendErr
 		}
 	}
+	messageID := int64(len(f.sent) + 1)
+	if msg.Delivery != nil {
+		msg.Delivery.MessageIDs = append(msg.Delivery.MessageIDs, messageID)
+	}
 	f.sent = append(f.sent, msg)
-	return int64(len(f.sent)), nil
+	return messageID, nil
 }
 
 func (f *fakeSender) SendInlineKeyboard(_ context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.inlineErr != nil {
+		return 0, f.inlineErr
+	}
 	f.inline = append(f.inline, inlineCall{chatID: chatID, text: text, rows: rows, replyTo: replyTo})
 	return int64(len(f.inline)), nil
 }
@@ -585,11 +616,28 @@ type voiceSend struct {
 	ReplyTo *int64
 }
 
+type documentSend struct {
+	ChatID  int64
+	Media   core.Media
+	Caption string
+	ReplyTo *int64
+}
+
 func (f *fakeSender) SendVoiceMessage(_ context.Context, chatID int64, media core.Media, replyTo *int64) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.voice = append(f.voice, voiceSend{ChatID: chatID, Media: media, ReplyTo: replyTo})
 	return int64(len(f.voice)), nil
+}
+
+func (f *fakeSender) SendDocumentMessage(_ context.Context, chatID int64, media core.Media, caption string, replyTo *int64) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.documentErr != nil {
+		return 0, f.documentErr
+	}
+	f.documents = append(f.documents, documentSend{ChatID: chatID, Media: media, Caption: caption, ReplyTo: replyTo})
+	return int64(len(f.documents)), nil
 }
 
 type fakeTranscriber struct {

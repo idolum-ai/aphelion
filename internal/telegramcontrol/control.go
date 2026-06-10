@@ -59,6 +59,10 @@ type Runtime interface {
 	ApplyMissionActionProposalDecision(ctx context.Context, chatID int64, senderID int64, missionID string, choice string) (session.MissionState, bool, error)
 	MissionAskPrompt(ctx context.Context, senderID int64, promptID string) (session.MissionAskPrompt, bool, error)
 	ResolveMissionAskPrompt(ctx context.Context, senderID int64, promptID string, status session.MissionAskStatus, summary string) (session.MissionAskPrompt, error)
+	ReentryRecommendation(ctx context.Context, senderID int64, recommendationID string) (session.ReentryRecommendation, bool, error)
+	IgnoreReentryRecommendation(ctx context.Context, senderID int64, recommendationID string) (session.ReentryRecommendation, error)
+	PrepareReentryRecommendationSelection(ctx context.Context, senderID int64, recommendationID string, candidateID string) (session.ReentryRecommendation, session.ReentryRecommendationCandidate, bool, error)
+	ConfirmReentryRecommendationSelection(ctx context.Context, senderID int64, recommendationID string, candidateID string) (session.ReentryRecommendation, session.ReentryRecommendationCandidate, bool, error)
 
 	ModelSlotStatuses() ([]core.ModelSlotStatus, error)
 	ValidateModelSlotConfig(cfg core.ModelSlotConfig) core.ModelValidation

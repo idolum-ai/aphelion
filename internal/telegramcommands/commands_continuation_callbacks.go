@@ -137,10 +137,15 @@ func handleContinuationCallback(ctx context.Context, sender commandCallbackSende
 		answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.unauthorized", authText)
 		return true, nil
 	}
+	if action == continuationActionContinueOnce {
+		answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.stale", legacyContinueOnceCallbackText)
+		editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.stale", continuationCallbackDisplayText(targetMsg, renderContinuationDecision(state, action)))
+		return true, nil
+	}
 
 	var text string
 	switch action {
-	case continuationActionApproveLease, continuationActionApproveBundleAll, continuationActionApproveBundleCurrent, continuationActionContinueOnce:
+	case continuationActionApproveLease, continuationActionApproveBundleAll, continuationActionApproveBundleCurrent:
 		approverID := int64(0)
 		if cb.From != nil {
 			approverID = cb.From.ID

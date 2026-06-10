@@ -90,8 +90,17 @@ func TestRunTurnInjectsToolErrorForInvalidToolArguments(t *testing.T) {
 				if last.Role != "tool" || last.ToolCallID != "call-1" {
 					t.Fatalf("last tool message = %#v, want recovery tool result", last)
 				}
-				if !strings.Contains(last.Content, "Invalid tool arguments") {
-					t.Fatalf("last tool content = %q, want invalid args recovery error", last.Content)
+				var failure struct {
+					OK          bool   `json:"ok"`
+					Code        string `json:"code"`
+					ShortReason string `json:"short_reason"`
+					RetryHint   string `json:"retry_hint"`
+				}
+				if err := json.Unmarshal([]byte(last.Content), &failure); err != nil {
+					t.Fatalf("decode typed tool failure %q: %v", last.Content, err)
+				}
+				if failure.OK || failure.Code != "SCHEMA_VIOLATION" || !strings.Contains(failure.ShortReason, "invalid tool arguments") || failure.RetryHint != "Reformulate" {
+					t.Fatalf("failure = %#v, want schema violation recovery error", failure)
 				}
 				return &Response{Content: "recovered"}, nil
 			default:
@@ -121,13 +130,23 @@ func TestRunTurnInjectsToolErrorForInvalidToolArguments(t *testing.T) {
 	}
 	found := false
 	for _, msg := range history {
-		if msg.Role == "tool" && strings.Contains(msg.Content, "Invalid tool arguments") {
+		if msg.Role != "tool" {
+			continue
+		}
+		var failure struct {
+			Code        string `json:"code"`
+			ShortReason string `json:"short_reason"`
+		}
+		if err := json.Unmarshal([]byte(msg.Content), &failure); err != nil {
+			continue
+		}
+		if failure.Code == "SCHEMA_VIOLATION" && strings.Contains(failure.ShortReason, "invalid tool arguments") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("history = %#v, want invalid tool argument recovery message", history)
+		t.Fatalf("history = %#v, want typed invalid tool argument recovery message", history)
 	}
 }
 

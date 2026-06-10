@@ -100,27 +100,55 @@ func TestContinuationOperatorTitleFieldsSurviveJSONRoundTrip(t *testing.T) {
 
 func TestContinuationLeaseClassConstraintsRequireExactActions(t *testing.T) {
 	now := time.Date(2026, time.May, 4, 21, 0, 0, 0, time.UTC)
-	lease := NormalizeContinuationLease(ContinuationLease{
-		ID:             "lease-capability",
-		Status:         ContinuationLeaseStatusActive,
-		MaxTurns:       1,
-		RemainingTurns: 1,
-		LeaseClass:     ContinuationLeaseClassCapabilityGrant,
-		AllowedActions: []string{"*"},
-		ExpiresAt:      now.Add(time.Hour),
-	})
+	for _, tc := range []struct {
+		name      string
+		class     ContinuationLeaseClass
+		action    string
+		explicit  string
+		wantKey   string
+		wantValue string
+	}{
+		{
+			name:      "local workspace",
+			class:     ContinuationLeaseClassLocalWorkspace,
+			action:    "workspace_write",
+			explicit:  "workspace_write",
+			wantKey:   "scope",
+			wantValue: "local workspace/repository only",
+		},
+		{
+			name:      "capability grant",
+			class:     ContinuationLeaseClassCapabilityGrant,
+			action:    "grant_set",
+			explicit:  "grant_set",
+			wantKey:   "actions",
+			wantValue: "allowed actions must be explicit; wildcard is insufficient",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lease := NormalizeContinuationLease(ContinuationLease{
+				ID:             "lease-exact-actions",
+				Status:         ContinuationLeaseStatusActive,
+				MaxTurns:       1,
+				RemainingTurns: 1,
+				LeaseClass:     tc.class,
+				AllowedActions: []string{"*"},
+				ExpiresAt:      now.Add(time.Hour),
+			})
 
-	wildcardOnly := CheckContinuationLeaseAction(lease, "grant_set", now)
-	if wildcardOnly.Allowed || wildcardOnly.Reason != "lease_class_requires_explicit_action" {
-		t.Fatalf("wildcard decision = %#v, want explicit-action denial", wildcardOnly)
-	}
-	lease.AllowedActions = append(lease.AllowedActions, "grant_set")
-	explicit := CheckContinuationLeaseAction(lease, "grant-set", now)
-	if !explicit.Allowed || explicit.Reason != "allowed" {
-		t.Fatalf("explicit decision = %#v, want allowed", explicit)
-	}
-	if lease.Constraints["grant"] == "" || lease.Constraints["actions"] == "" {
-		t.Fatalf("constraints = %#v, want capability grant defaults", lease.Constraints)
+			wildcardOnly := CheckContinuationLeaseAction(lease, tc.action, now)
+			if wildcardOnly.Allowed || wildcardOnly.Reason != "lease_class_requires_explicit_action" {
+				t.Fatalf("wildcard decision = %#v, want explicit-action denial", wildcardOnly)
+			}
+			lease.AllowedActions = append(lease.AllowedActions, tc.explicit)
+			explicit := CheckContinuationLeaseAction(lease, tc.action, now)
+			if !explicit.Allowed || explicit.Reason != "allowed" {
+				t.Fatalf("explicit decision = %#v, want allowed", explicit)
+			}
+			if lease.Constraints[tc.wantKey] != tc.wantValue {
+				t.Fatalf("constraints = %#v, want %s=%q", lease.Constraints, tc.wantKey, tc.wantValue)
+			}
+		})
 	}
 }
 

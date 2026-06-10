@@ -322,6 +322,9 @@ Examples:
 - `approved_user` runs should not merely receive warnings; they should receive a different actual manifest
 
 The manifest should make those differences legible to the governor as runtime facts.
+The runtime must enforce the effective run-kind manifest, not only describe it.
+A tool that is absent from the manifest for a heartbeat, cron, recovery,
+durable, or other non-interactive lane should not execute through that lane.
 
 ## Core Interfaces
 
@@ -529,7 +532,22 @@ Later hardening may use native Linux primitives directly or swap to a stronger b
 - `search`
 - `fetch_url`
 
-The native file/search/fetch tools are more constrained and auditable than a shell. They resolve paths through the current sandbox profile, reject hidden/out-of-scope file paths, deny fetches when the profile network policy is `deny`, and enforce isolated `allowlist` fetches against explicit destination records.
+The native file/search/fetch tools are more constrained and auditable than a
+shell. They resolve paths through the current sandbox profile, reject
+hidden/out-of-scope file paths, deny fetches when the profile network policy is
+`deny`, and enforce isolated `allowlist` fetches against explicit destination
+records.
+
+Native read/fetch contracts:
+
+- `read_file` must use a bounded window (`offset` + `limit`) or explicit
+  `full=true`. Full reads remain capped by `max_bytes`.
+- `fetch_url.max_bytes` controls the response bytes read and hashed.
+- `fetch_url.excerpt_bytes` controls the visible excerpt returned to the model,
+  defaults to a small bounded excerpt, and is capped by `max_bytes`.
+- `fetch_url` returns a digest with status, content type, `bytes_read`,
+  `sha256`, truncation status, excerpt size, and bounded excerpt. It must not
+  claim an inaccessible raw-body reference.
 
 ### Later
 

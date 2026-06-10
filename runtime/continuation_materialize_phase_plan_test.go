@@ -111,6 +111,234 @@ func TestMaterializeDurablePhasePlanUsesNextPendingPhase(t *testing.T) {
 	}
 }
 
+func TestContinuationBoundaryDoesNotOfferStalePhaseAfterCompletedOperation(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9049, UserID: 0, Scope: telegramDMScopeRef(9049)}
+	now := time.Now().UTC()
+	consumedLeaseID := "lease-phase-imexx-repo-push-route-repair"
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "imexx-repo-effort-update",
+		Objective: "Commit and push the Imexx repo documentation update.",
+		Status:    session.OperationStatusCompleted,
+		Stage:     "completed",
+		Summary:   "Completed. Pushed existing commit and verified local HEAD matches origin/main.",
+		Proposal: session.OperationProposal{
+			ID:      "phase-imexx-repo-effort-update-phase-imexx-repo-push-route-repair",
+			Summary: "Use approved GitHub route to push existing local commit.",
+			Status:  session.ProposalStatusApproved,
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "imexx-repo-effort-update-plan",
+			Goal:           "Commit and push the Imexx repo documentation update.",
+			CurrentPhaseID: "phase-imexx-repo-push-route-repair",
+			Phases: []session.OperationPhase{
+				{
+					ID:               "phase-imexx-repo-doc-update",
+					Summary:          "Update local documentation/status artifacts.",
+					Status:           session.PlanStatusCompleted,
+					AuthorityClass:   "workspace_write",
+					RequiresApproval: true,
+				},
+				{
+					ID:               "phase-imexx-repo-commit-push",
+					Summary:          "Commit and push the approved repo documentation update to idolum-ai.",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "commit",
+					BoundedEffect:    "Commit validated documentation-only changes and push to the intended repository.",
+					AllowedActions:   []string{"commit", "push_remote"},
+					RequiresApproval: true,
+				},
+				{
+					ID:               "phase-imexx-repo-push-route-repair",
+					Summary:          "Use approved GitHub route to push existing local commit.",
+					Status:           session.PlanStatusInProgress,
+					AuthorityClass:   "commit",
+					BoundedEffect:    "Use approved GitHub credentials to push the existing commit and verify remote status.",
+					AllowedActions:   []string{"commit", "push_remote"},
+					RequiresApproval: true,
+					LeaseID:          consumedLeaseID,
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	consumed := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusIdle,
+		Objective:      "Commit and push the Imexx repo documentation update.",
+		StageSummary:   "Use approved GitHub route to push existing local commit.",
+		RemainingTurns: 0,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-phase-imexx-repo-effort-update-phase-imexx-repo-push-route-repair",
+			OperationID:    "phase-imexx-repo-effort-update-phase-imexx-repo-push-route-repair",
+			Summary:        "Use approved GitHub route to push existing local commit.",
+			RiskClass:      "commit",
+			AllowedActions: []string{"commit", "push_remote"},
+			Status:         session.ProposalStatusApproved,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             consumedLeaseID,
+			ProposalID:     "aprop-phase-imexx-repo-effort-update-phase-imexx-repo-push-route-repair",
+			Status:         session.ContinuationLeaseStatusConsumed,
+			MaxTurns:       1,
+			RemainingTurns: 0,
+			AllowedActions: []string{"commit", "push_remote"},
+			ConsumedAt:     now,
+			ExpiresAt:      now.Add(time.Minute),
+		},
+		UpdatedAt: now,
+	}
+	if err := store.UpdateContinuationState(key, consumed); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	err = rt.maybeOfferNextOperationPhaseAfterContinuationBoundary(context.Background(), key, consumed, continuationLoopDecision{
+		Continue: false,
+		Reason:   "not_approved",
+		Boundary: "no active approved continuation remains",
+		Mission:  missionLoopAssessment{Status: "not_bound", Continue: true},
+	})
+	if err != nil {
+		t.Fatalf("maybeOfferNextOperationPhaseAfterContinuationBoundary() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no stale approval after completed operation", inlineCount)
+	}
+	reloaded, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if reloaded.Status != session.OperationStatusCompleted {
+		t.Fatalf("operation status = %q, want completed; operation=%#v", reloaded.Status, reloaded)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationOffered {
+			t.Fatalf("events = %#v, want no continuation.offered after completed operation", events)
+		}
+	}
+}
+
+func TestMaterializeSinglePhasePlanRecordsNarrowBundleSignal(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9044, UserID: 0, Scope: telegramDMScopeRef(9044)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType: core.ExecutionEventContinuationBundleNarrowed,
+		Stage:     "continuation",
+		Status:    "observed",
+		PayloadJSON: `{
+			"operation_id":"narrow-op",
+			"phase_plan_id":"narrow-plan",
+			"phase_id":"phase-prior-commit",
+			"phase_family":"local_workspace",
+			"phase_category":"mechanical",
+			"materialized_from":"operation_plan_lease",
+			"bundle_width":1,
+			"narrow_streak":1
+		}`,
+		CreatedAt: now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvent(prior narrow) err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "narrow-op",
+		Objective: "Finish a repo-local implementation slice.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "phase_plan",
+		PhasePlan: session.OperationPhasePlan{
+			ID:   "narrow-plan",
+			Goal: "Finish a repo-local implementation slice.",
+			Phases: []session.OperationPhase{{
+				ID:               "phase-implement-local",
+				Summary:          "Implement the local repo patch",
+				Status:           session.PlanStatusPending,
+				AuthorityClass:   "workspace_write",
+				BoundedEffect:    "Edit local files and run focused tests; stop before deploy or external effects.",
+				AllowedActions:   []string{"edit_files", "run_tests"},
+				ForbiddenActions: []string{"deploy", "restart_service", "push_remote"},
+				RequiresApproval: true,
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9044, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want single-phase approval")
+	}
+
+	events, err := store.ExecutionEventsBySession(key, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var narrowed session.ExecutionEvent
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationBundleNarrowed {
+			narrowed = event
+		}
+	}
+	if narrowed.ID == 0 {
+		t.Fatalf("events = %#v, want continuation.bundle.narrowed event", events)
+	}
+	payload := executionEventPayload(narrowed.PayloadJSON)
+	for key, want := range map[string]string{
+		"operation_id":       "narrow-op",
+		"phase_plan_id":      "narrow-plan",
+		"phase_id":           "phase-implement-local",
+		"phase_family":       "local_workspace",
+		"phase_category":     "mechanical",
+		"materialized_from":  "operation_plan_lease",
+		"prior_phase_id":     "phase-prior-commit",
+		"prior_bundle_width": "1",
+	} {
+		if got := payloadString(payload, key); got != want {
+			t.Fatalf("narrow payload %s = %q, want %q; payload=%s", key, got, want, narrowed.PayloadJSON)
+		}
+	}
+	if streak, ok := payloadInt64(payload, "narrow_streak"); !ok || streak != 2 {
+		t.Fatalf("narrow_streak = %d ok=%v, want 2; payload=%s", streak, ok, narrowed.PayloadJSON)
+	}
+	if count, ok := payloadInt64(payload, "consecutive_narrow_count"); !ok || count != 2 {
+		t.Fatalf("consecutive_narrow_count = %d ok=%v, want 2; payload=%s", count, ok, narrowed.PayloadJSON)
+	}
+
+	lines, err := rt.StatusDiagnostics(9044)
+	if err != nil {
+		t.Fatalf("StatusDiagnostics() err = %v", err)
+	}
+	text := strings.Join(lines, "\n")
+	for _, want := range []string{"Approval bundle width", "phase_id=phase-implement-local", "narrow_streak=2"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("StatusDiagnostics() = %q, want %q", text, want)
+		}
+	}
+}
+
 func TestMaterializePhasePlanIgnoresStaleInProgressWhenCurrentPhaseIsPending(t *testing.T) {
 	t.Parallel()
 
@@ -423,7 +651,7 @@ func TestMaterializePlanningOnlyPhaseOffersPlanBudget(t *testing.T) {
 		labels = continuationButtonLabels(sender.inline[0].rows)
 	}
 	sender.mu.Unlock()
-	if !strings.Contains(inlineText, "Approve plan for “Turn child diagnostic failures") || !strings.Contains(inlineText, "Covers Step 1: Turn child diagnostic failures") || strings.Contains(inlineText, "Allowed actions:") {
+	if !strings.Contains(inlineText, "Approve plan:\nTurn child diagnostic failures") || !strings.Contains(inlineText, "Covers:\n- Step 1: Turn child diagnostic failures") || strings.Contains(inlineText, "Allowed actions:") {
 		t.Fatalf("inline text = %q, want compact plan budget prompt", inlineText)
 	}
 	if got, want := labels, []string{"Start", "Details", "Change", "Pause", "Stop"}; !equalStringSlices(got, want) {
@@ -593,6 +821,77 @@ func TestMaterializePlanLeaseUsesAutoApprovalInsteadOfSuppressingPrompt(t *testi
 		t.Fatalf("continuation = %#v, want auto-approved consumed plan lease", cont)
 	}
 	leases, err := store.ActiveOperatorAutoApprovalLeases(9030, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].UsedCount != 1 {
+		t.Fatalf("autoapproval leases = %#v, want one consumed use", leases)
+	}
+}
+
+func TestHandleInboundAutoApprovesPlanLeaseWithoutReentrantSessionLock(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Ready to continue."
+	provider.faceReplyText = "Ready to continue."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutonomy(context.Background(), 9039, 1001, "leased 15m all"); err != nil {
+		t.Fatalf("ConfigureAutonomy() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApproval(context.Background(), 9039, 1001, "15m all"); err != nil {
+		t.Fatalf("ConfigureAutoApproval() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9039, UserID: 0, Scope: telegramDMScopeRef(9039)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "handle-inbound-autoapprove-plan-lease-op",
+		Objective: "Approve a bounded plan envelope from the interactive finalizer.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "plan_lease_proposal",
+		PlanLease: session.OperationPlanLease{
+			ID:         "handle-inbound-autoapprove-plan-lease",
+			Summary:    "Approve bounded local review budget",
+			Status:     session.PlanLeaseStatusProposed,
+			TurnBudget: 1,
+			Lanes: []session.OperationPlanLeaseLane{
+				{ID: "review", Summary: "Review state", AuthorityClass: "read_only_review", ExpectedTurns: 1},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := rt.HandleInbound(context.Background(), core.InboundMessage{ChatID: 9039, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 1})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("HandleInbound() err = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("HandleInbound() timed out; possible reentrant session lock deadlock")
+	}
+
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want autoapproval to consume without manual buttons", inlineCount)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.ActionProposal.Status != session.ProposalStatusApproved || cont.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed {
+		t.Fatalf("continuation = %#v, want auto-approved consumed plan lease", cont)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(9039, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
 	}

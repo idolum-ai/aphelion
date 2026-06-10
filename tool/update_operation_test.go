@@ -36,6 +36,29 @@ func TestDefinitionsIncludeUpdateOperationToolWhenStoreConfigured(t *testing.T) 
 	}
 }
 
+func TestUpdateOperationDefinitionDocumentsEmptyInputInspection(t *testing.T) {
+	t.Parallel()
+
+	store := newToolTestStore(t)
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	var found bool
+	for _, def := range registry.Definitions() {
+		if def.Name != "update_operation" {
+			continue
+		}
+		found = true
+		desc := strings.ToLower(def.Description)
+		for _, want := range []string{"empty input", "inspect", "full persisted operation state", "compact acknowledgement"} {
+			if !strings.Contains(desc, want) {
+				t.Fatalf("description = %q, want guidance containing %q", def.Description, want)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("update_operation definition not found")
+	}
+}
+
 func TestUpdateOperationToolPersistsAndShowsOperationState(t *testing.T) {
 	t.Parallel()
 
@@ -74,8 +97,17 @@ func TestUpdateOperationToolPersistsAndShowsOperationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v", err)
 	}
-	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "Investigate my internet footprint.") {
-		t.Fatalf("update output = %q, want updated operation summary", out)
+	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "received_fields:") {
+		t.Fatalf("update output = %q, want compact update ack", out)
+	}
+	if strings.Contains(out, "applied_fields:") {
+		t.Fatalf("update output = %q, want received_fields naming, not applied_fields", out)
+	}
+	if got, max := len(out), 500; got > max {
+		t.Fatalf("compact update ack length = %d, want <= %d: %q", got, max, out)
+	}
+	if strings.Contains(out, "Browser automation is not currently available") || strings.Contains(out, "A screenshot requires browser automation") {
+		t.Fatalf("update output = %q, want compact ack without full operation echo", out)
 	}
 
 	state, err := store.OperationState(key)
@@ -104,6 +136,128 @@ func TestUpdateOperationToolPersistsAndShowsOperationState(t *testing.T) {
 	}
 	if !strings.Contains(showOut, "[OPERATION]") || !strings.Contains(showOut, "Acquire browser automation") {
 		t.Fatalf("show output = %q, want current operation state", showOut)
+	}
+}
+
+func TestDurableOperationToolsDecodeStringWrappedObjectInputs(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	updateInput := stringWrappedJSON(t, `{"objective":"Keep continuation state durable.","status":"active","stage":"wrapped-input","summary":"Decoded from a JSON string."}`)
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		updateInput,
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation wrapped) err = %v", err)
+	}
+	if !strings.Contains(out, "[OPERATION_UPDATED]") {
+		t.Fatalf("update_operation output = %q, want updated marker", out)
+	}
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if opState.Stage != "wrapped_input" {
+		t.Fatalf("operation stage = %q, want wrapped_input", opState.Stage)
+	}
+
+	approvalInput := stringWrappedJSON(t, `{"objective":"Ask before the next slice.","phase":{"id":"phase-wrapped-approval","summary":"Run read-only release readiness check","authority_class":"read_only_review","why_now":"The operator asked to continue after completion.","bounded_effect":"Inspect repo state and report release readiness only.","allowed_actions":["inspect_status"],"forbidden_actions":["edit_files","commit","push_remote","deploy"],"validation_plan":["report findings"]}}`)
+	out, err = registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"request_approval",
+		approvalInput,
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(request_approval wrapped) err = %v", err)
+	}
+	if !strings.Contains(out, "[APPROVAL_REQUESTED]") {
+		t.Fatalf("request_approval output = %q, want approval marker", out)
+	}
+	opState, err = store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() after approval err = %v", err)
+	}
+	if opState.Status != session.OperationStatusBlocked || opState.Proposal.Status != session.ProposalStatusPending {
+		t.Fatalf("operation = %#v, want blocked pending proposal", opState)
+	}
+}
+
+func TestDurableOperationToolsRejectStringWrappedNonObjectInputs(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		tool  string
+		input json.RawMessage
+	}{
+		{name: "update array", tool: "update_operation", input: stringWrappedJSON(t, `[]`)},
+		{name: "approval prose", tool: "request_approval", input: stringWrappedJSON(t, `not json`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := registry.ExecuteForSessionPrincipal(
+				context.Background(),
+				principal.Principal{Role: principal.RoleAdmin},
+				key,
+				tc.tool,
+				tc.input,
+			)
+			if err == nil || !strings.Contains(err.Error(), "decode "+tc.tool+" input") {
+				t.Fatalf("%s err = %v, want decode error", tc.tool, err)
+			}
+		})
+	}
+}
+
+func stringWrappedJSON(t *testing.T, raw string) json.RawMessage {
+	t.Helper()
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal wrapped input: %v", err)
+	}
+	return json.RawMessage(encoded)
+}
+
+func TestUpdateOperationAckOmitsEmptyReceivedFieldsLine(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{"id":"   ","objective":"\t "}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation whitespace) err = %v", err)
+	}
+	if strings.Contains(out, "received_fields:") {
+		t.Fatalf("update output = %q, want no received_fields line when received fields trim empty/invalid", out)
+	}
+	if strings.Contains(out, "applied_fields:") {
+		t.Fatalf("update output = %q, want no legacy applied_fields line", out)
 	}
 }
 
@@ -162,8 +316,11 @@ func TestUpdateOperationToolMergeAppendsFindingsAndAdvancesProposal(t *testing.T
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(update_operation merge) err = %v", err)
 	}
-	if !strings.Contains(out, "tmp/reddit.png") {
-		t.Fatalf("merge output = %q, want appended artifact", out)
+	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "received_fields:") {
+		t.Fatalf("merge output = %q, want compact update ack", out)
+	}
+	if strings.Contains(out, "tmp/reddit.png") || strings.Contains(out, "Browser automation can be acquired locally") {
+		t.Fatalf("merge output = %q, want compact ack without appended state echo", out)
 	}
 
 	state, err := store.OperationState(key)
@@ -234,8 +391,15 @@ func TestUpdateOperationToolPersistsDurablePhasePlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(update_operation phase_plan) err = %v", err)
 	}
-	if !strings.Contains(out, "phase_plan:") || !strings.Contains(out, "phase-2-implementation") {
-		t.Fatalf("update output = %q, want rendered phase plan", out)
+	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "current_phase: phase-2-implementation") {
+		t.Fatalf("update output = %q, want compact ack with current phase", out)
+	}
+	showOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "update_operation", nil)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(show update_operation) err = %v", err)
+	}
+	if !strings.Contains(showOut, "phase_plan:") || !strings.Contains(showOut, "phase-2-implementation") {
+		t.Fatalf("show output = %q, want rendered phase plan", showOut)
 	}
 
 	state, err := store.OperationState(key)
@@ -254,6 +418,426 @@ func TestUpdateOperationToolPersistsDurablePhasePlan(t *testing.T) {
 	}
 	if !phase.RequiresApproval {
 		t.Fatalf("phase 2 RequiresApproval = false, want default approval gate")
+	}
+}
+
+func TestUpdateOperationRejectsExecutablePhaseCompletionWithoutWorkEvidence(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-evidence-gate",
+		Objective: "Patch the runtime.",
+		Status:    session.OperationStatusActive,
+		Stage:     "execution",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-evidence-gate",
+			CurrentPhaseID: "implementation",
+			Phases: []session.OperationPhase{{
+				ID:             "implementation",
+				Summary:        "Patch runtime files",
+				Status:         session.PlanStatusInProgress,
+				AuthorityClass: "workspace_write",
+				BoundedEffect:  "Edit runtime files and run focused tests.",
+				AllowedActions: []string{"workspace_write", "run_tests"},
+				LeaseID:        "lease-implementation",
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed) err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{"merge":true,"phase_plan":{"phases":[{"id":"implementation","status":"completed"}]}}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "matching successful work evidence") {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v, want work evidence rejection", err)
+	}
+	state, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if state.PhasePlan.Phases[0].Status != session.PlanStatusInProgress {
+		t.Fatalf("phase status = %q, want in_progress after rejected completion", state.PhasePlan.Phases[0].Status)
+	}
+}
+
+func TestUpdateOperationAllowsExecutablePhaseCompletionWithMatchingWorkEvidence(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	now := time.Now().UTC()
+	opState := session.OperationState{
+		ID:        "op-evidence-gate",
+		Objective: "Patch the runtime.",
+		Status:    session.OperationStatusActive,
+		Stage:     "execution",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-evidence-gate",
+			CurrentPhaseID: "implementation",
+			Phases: []session.OperationPhase{{
+				ID:             "implementation",
+				Summary:        "Patch runtime files",
+				Status:         session.PlanStatusInProgress,
+				AuthorityClass: "workspace_write",
+				BoundedEffect:  "Edit runtime files and run focused tests.",
+				AllowedActions: []string{"workspace_write", "run_tests"},
+				LeaseID:        "lease-implementation",
+			}},
+		},
+	}
+	proposalID := session.OperationPhaseProposalID(opState, opState.PhasePlan.Phases[0])
+	opState.Work = session.WorkOperationMetadata{
+		LastOperationID:       "op-evidence-gate",
+		LastActionOperationID: proposalID,
+		LastActionProposalID:  "aprop-" + proposalID,
+		LastLeaseID:           "lease-implementation",
+		LastWorkMode:          "workspace_write",
+		LastSummary:           "Runtime patch completed with tests.",
+		LastCompletedAt:       now,
+		LastExecutorUpdatedAt: now,
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState(seed) err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{"merge":true,"phase_plan":{"phases":[{"id":"implementation","status":"completed"}]}}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v", err)
+	}
+	if !strings.Contains(out, "[OPERATION_UPDATED]") {
+		t.Fatalf("update output = %q, want operation update ack", out)
+	}
+	state, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if state.PhasePlan.Phases[0].Status != session.PlanStatusCompleted {
+		t.Fatalf("phase status = %q, want completed with work evidence", state.PhasePlan.Phases[0].Status)
+	}
+	if state.Work.LastLeaseID != "lease-implementation" {
+		t.Fatalf("work metadata = %#v, want preserved completion evidence", state.Work)
+	}
+}
+
+func TestUpdateOperationRejectsModelAuthoredPhaseLeaseID(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	opState := updateOperationExecutableEvidenceGateState()
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState(seed) err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{"merge":true,"phase_plan":{"phases":[{"id":"implementation","lease_id":"lease-forged"}]}}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "lease_id is runtime-owned") {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v, want runtime-owned lease_id rejection", err)
+	}
+}
+
+func TestUpdateOperationRejectsExecutablePhaseCompletionWithStaleWorkEvidence(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*session.WorkOperationMetadata)
+	}{
+		{
+			name: "work mode mismatch",
+			mutate: func(work *session.WorkOperationMetadata) {
+				work.LastWorkMode = session.AuthorityWorkActionReadOnly
+			},
+		},
+		{
+			name: "phase proposal mismatch",
+			mutate: func(work *session.WorkOperationMetadata) {
+				work.LastActionOperationID = "phase-other-operation"
+			},
+		},
+		{
+			name: "action proposal mismatch",
+			mutate: func(work *session.WorkOperationMetadata) {
+				work.LastActionProposalID = "aprop-other-operation"
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry, store := newDurableAgentToolRegistry(t)
+			key := adminSessionKey()
+			now := time.Now().UTC()
+			opState := updateOperationExecutableEvidenceGateState()
+			work := updateOperationMatchingWorkEvidence(opState, now)
+			tc.mutate(&work)
+			opState.Work = work
+			if err := store.UpdateOperationState(key, opState); err != nil {
+				t.Fatalf("UpdateOperationState(seed) err = %v", err)
+			}
+
+			_, err := registry.ExecuteForSessionPrincipal(
+				context.Background(),
+				principal.Principal{Role: principal.RoleAdmin},
+				key,
+				"update_operation",
+				json.RawMessage(`{"merge":true,"phase_plan":{"phases":[{"id":"implementation","status":"completed"}]}}`),
+			)
+			if err == nil || !strings.Contains(err.Error(), "matching successful work evidence") {
+				t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v, want stale work evidence rejection", err)
+			}
+		})
+	}
+}
+
+func TestUpdateOperationRejectsExecutablePhasePlanRewriteBypass(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	opState := updateOperationExecutableEvidenceGateState()
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState(seed) err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{
+			"status":"completed",
+			"phase_plan":{
+				"phases":[{
+					"id":"harmless-summary",
+					"summary":"Summarize completed findings",
+					"status":"completed",
+					"authority_class":"read_only_review",
+					"allowed_actions":["read_only_review","report_evidence"]
+				}]
+			}
+		}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "cannot remove in-progress executable phase") {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v, want phase rewrite bypass rejection", err)
+	}
+}
+
+func TestUpdateOperationRejectsPendingExecutablePhaseCompletionWithoutWorkEvidence(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	opState := updateOperationPendingExecutableEvidenceGateState()
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState(seed) err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{"merge":true,"phase_plan":{"phases":[{"id":"implementation","status":"completed"}]}}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "matching successful work evidence") {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v, want pending work evidence rejection", err)
+	}
+	state, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if state.PhasePlan.Phases[0].Status != session.PlanStatusPending {
+		t.Fatalf("phase status = %q, want pending after rejected completion", state.PhasePlan.Phases[0].Status)
+	}
+}
+
+func TestUpdateOperationRejectsPendingExecutablePhaseDowngradeCompletionWithoutWorkEvidence(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	opState := updateOperationPendingExecutableEvidenceGateState()
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState(seed) err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{
+			"merge":true,
+			"phase_plan":{"phases":[{
+				"id":"implementation",
+				"status":"completed",
+				"authority_class":"read_only_review",
+				"bounded_effect":"Inspect runtime files and report findings only.",
+				"allowed_actions":["read_only_review","report_evidence"]
+			}]}
+		}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "cannot rewrite executable phase") {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v, want executable downgrade completion rejection", err)
+	}
+	state, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	phase := state.PhasePlan.Phases[0]
+	if phase.Status != session.PlanStatusPending || phase.AuthorityClass != "workspace_write" {
+		t.Fatalf("phase = %#v, want original pending workspace_write phase after rejected downgrade", phase)
+	}
+}
+
+func TestUpdateOperationAllowsReadOnlyPhaseCompletionWithoutWorkEvidence(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-readonly-evidence-gate",
+		Objective: "Inspect PR readiness.",
+		Status:    session.OperationStatusActive,
+		Stage:     "inspection",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-readonly-evidence-gate",
+			CurrentPhaseID: "inspect",
+			Phases: []session.OperationPhase{{
+				ID:             "inspect",
+				Summary:        "Inspect PR readiness",
+				Status:         session.PlanStatusInProgress,
+				AuthorityClass: "read_only_review",
+				BoundedEffect:  "Inspect local files and report findings.",
+				AllowedActions: []string{"read_only_review", "report_evidence"},
+				LeaseID:        "lease-inspect",
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed) err = %v", err)
+	}
+
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{"merge":true,"phase_plan":{"phases":[{"id":"inspect","status":"completed"}]}}`),
+	); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v", err)
+	}
+	state, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if state.PhasePlan.Phases[0].Status != session.PlanStatusCompleted {
+		t.Fatalf("phase status = %q, want read-only phase completed", state.PhasePlan.Phases[0].Status)
+	}
+}
+
+func TestUpdateOperationAllowsReadOnlyPhaseWithWritePatchWordsWithoutWorkEvidence(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-readonly-prose-evidence-gate",
+		Objective: "Inspect PR readiness and write findings.",
+		Status:    session.OperationStatusActive,
+		Stage:     "inspection",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-readonly-prose-evidence-gate",
+			CurrentPhaseID: "inspect",
+			Phases: []session.OperationPhase{{
+				ID:             "inspect",
+				Summary:        "Write patch-readiness findings",
+				Status:         session.PlanStatusInProgress,
+				AuthorityClass: "read_only_review",
+				BoundedEffect:  "Write a patch-readiness note from inspected files only.",
+				AllowedActions: []string{"read_only_review", "report_evidence"},
+				LeaseID:        "lease-inspect",
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed) err = %v", err)
+	}
+
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{"merge":true,"phase_plan":{"phases":[{"id":"inspect","status":"completed"}]}}`),
+	); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v", err)
+	}
+	state, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if state.PhasePlan.Phases[0].Status != session.PlanStatusCompleted {
+		t.Fatalf("phase status = %q, want read-only prose phase completed", state.PhasePlan.Phases[0].Status)
+	}
+}
+
+func updateOperationExecutableEvidenceGateState() session.OperationState {
+	return session.OperationState{
+		ID:        "op-evidence-gate",
+		Objective: "Patch the runtime.",
+		Status:    session.OperationStatusActive,
+		Stage:     "execution",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-evidence-gate",
+			CurrentPhaseID: "implementation",
+			Phases: []session.OperationPhase{{
+				ID:             "implementation",
+				Summary:        "Patch runtime files",
+				Status:         session.PlanStatusInProgress,
+				AuthorityClass: "workspace_write",
+				BoundedEffect:  "Edit runtime files and run focused tests.",
+				AllowedActions: []string{"workspace_write", "run_tests"},
+				LeaseID:        "lease-implementation",
+			}},
+		},
+	}
+}
+
+func updateOperationPendingExecutableEvidenceGateState() session.OperationState {
+	state := updateOperationExecutableEvidenceGateState()
+	state.PhasePlan.Phases[0].Status = session.PlanStatusPending
+	state.PhasePlan.Phases[0].LeaseID = ""
+	return state
+}
+
+func updateOperationMatchingWorkEvidence(opState session.OperationState, now time.Time) session.WorkOperationMetadata {
+	opState = session.NormalizeOperationState(opState)
+	proposalID := session.OperationPhaseProposalID(opState, opState.PhasePlan.Phases[0])
+	return session.WorkOperationMetadata{
+		LastOperationID:       opState.ID,
+		LastActionOperationID: proposalID,
+		LastActionProposalID:  "aprop-" + proposalID,
+		LastLeaseID:           opState.PhasePlan.Phases[0].LeaseID,
+		LastWorkMode:          session.AuthorityWorkActionWorkspaceWrite,
+		LastSummary:           "Runtime patch completed with tests.",
+		LastCompletedAt:       now,
+		LastExecutorUpdatedAt: now,
 	}
 }
 
@@ -300,9 +884,16 @@ func TestUpdateOperationToolPersistsTypedPhaseGovernanceMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(update_operation phase metadata) err = %v", err)
 	}
+	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "current_phase: phase-consent") {
+		t.Fatalf("update output = %q, want compact ack with current phase", out)
+	}
+	showOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "update_operation", nil)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(show update_operation) err = %v", err)
+	}
 	for _, want := range []string{"gate_level: escalated_operator_approval", "gate_reason_code: external_account_auth_status", "approval_subject: operator", "autoapprove_eligible: false", "blocked_reason_code: waiting_for_opt_in", "requires_opt_in: true", "requires_consent: true", "supersedes_phase_ids: phase-old", "stale_authority: true"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("output = %q, want %q", out, want)
+		if !strings.Contains(showOut, want) {
+			t.Fatalf("show output = %q, want %q", showOut, want)
 		}
 	}
 
@@ -397,9 +988,16 @@ func TestUpdateOperationToolPersistsAndRendersPlanLease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(update_operation plan_lease) err = %v", err)
 	}
+	if !strings.Contains(out, "[OPERATION_UPDATED]") || !strings.Contains(out, "received_fields:") {
+		t.Fatalf("update output = %q, want compact ack", out)
+	}
+	showOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "update_operation", nil)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(show update_operation) err = %v", err)
+	}
 	for _, want := range []string{"plan_lease:", "Low-risk coordination lease", "expected_turns: 3", "hard_interrupts:", "policy_or_grant_change", "child_initiation_lanes:", "capability_request", "authority_note: plan lease is a bounded plan envelope, not a capability grant", "evidence_digest:"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("output = %q, want %q", out, want)
+		if !strings.Contains(showOut, want) {
+			t.Fatalf("show output = %q, want %q", showOut, want)
 		}
 	}
 
@@ -451,6 +1049,27 @@ func TestUpdateOperationToolRequiresPlanLeaseLaneAuthorityAndTurns(t *testing.T)
 	)
 	if err == nil || !strings.Contains(err.Error(), "requires authority_class") {
 		t.Fatalf("err = %v, want lane authority validation", err)
+	}
+}
+
+func TestUpdateOperationAckUsesLedgerSnapshotPointer(t *testing.T) {
+	t.Parallel()
+
+	store := newToolTestStore(t)
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	out, err := registry.updateOperation(
+		context.Background(),
+		json.RawMessage(`{"id":"op-ledger","status":"active","stage":"slice-1","summary":"short"}`),
+		adminSessionKey(),
+	)
+	if err != nil {
+		t.Fatalf("updateOperation() err = %v", err)
+	}
+	if !strings.Contains(out, "snapshot: ledger:operations/op-ledger@") {
+		t.Fatalf("update_operation ack = %q, want ledger snapshot pointer", out)
+	}
+	if strings.Contains(out, "summary: short") {
+		t.Fatalf("update_operation ack echoed full summary: %q", out)
 	}
 }
 

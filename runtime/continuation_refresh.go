@@ -22,6 +22,15 @@ func (r *Runtime) RefreshContinuationProposalForKey(ctx context.Context, key ses
 }
 
 func (r *Runtime) refreshContinuationProposal(ctx context.Context, key session.SessionKey, reason string, refreshedFrom string, allowAutoApproval bool) (session.ContinuationState, bool, error) {
+	if r == nil {
+		return session.ContinuationState{}, false, fmt.Errorf("runtime continuation refresh dependencies are unavailable")
+	}
+	unlock := r.lockSession(key)
+	defer unlock()
+	return r.refreshContinuationProposalLocked(ctx, key, reason, refreshedFrom, allowAutoApproval)
+}
+
+func (r *Runtime) refreshContinuationProposalLocked(ctx context.Context, key session.SessionKey, reason string, refreshedFrom string, allowAutoApproval bool) (session.ContinuationState, bool, error) {
 	if r == nil || r.store == nil || r.outbound == nil {
 		return session.ContinuationState{}, false, fmt.Errorf("runtime continuation refresh dependencies are unavailable")
 	}
@@ -35,10 +44,37 @@ func (r *Runtime) refreshContinuationProposal(ctx context.Context, key session.S
 	prior = session.NormalizeContinuationState(prior)
 	now := time.Now().UTC()
 	if continuationStateHasFreshPendingLease(prior, now) {
+		if !allowAutoApproval {
+			prior = manualOnlyContinuationRefreshState(prior, now)
+			barrier, err := r.clearApprovalWindowForManualRetryBarrier(key, prior, refreshedFrom, now)
+			if err != nil {
+				return session.ContinuationState{}, false, fmt.Errorf("clear approval window for manual retry: %w", err)
+			}
+			if err := r.store.UpdateContinuationState(key, prior); err != nil {
+				return session.ContinuationState{}, false, fmt.Errorf("persist manual-only continuation proposal: %w", err)
+			}
+			if barrier.Revoked() {
+				msg := continuationPromptInboundForKey(key, "continuation manual retry", core.InboundOriginTurnAuthorization, "")
+				text := manualRetryBarrierPromptText(r.renderContinuationPrompt(ctx, key, msg, prior), barrier)
+				if err := r.sendContinuationApprovalPrompt(ctx, key, msg, prior, text); err != nil {
+					return prior, false, fmt.Errorf("send refreshed continuation approval: %w", err)
+				}
+				return prior, true, nil
+			}
+		}
 		return prior, false, nil
 	}
 
-	state := refreshedContinuationState(prior, reason, now)
+	state := refreshedContinuationState(prior, reason, refreshedFrom, now)
+	barrier := manualRetryBarrierResult{}
+	if !allowAutoApproval {
+		state = manualOnlyContinuationRefreshState(state, now)
+		var err error
+		barrier, err = r.clearApprovalWindowForManualRetryBarrier(key, state, refreshedFrom, now)
+		if err != nil {
+			return session.ContinuationState{}, false, fmt.Errorf("clear approval window for manual retry: %w", err)
+		}
+	}
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return session.ContinuationState{}, false, fmt.Errorf("persist refreshed continuation proposal: %w", err)
 	}
@@ -53,14 +89,44 @@ func (r *Runtime) refreshContinuationProposal(ctx context.Context, key session.S
 
 	msg := continuationPromptInboundForKey(key, "continuation proposal refresh", core.InboundOriginTurnAuthorization, "")
 	text := r.renderContinuationPrompt(ctx, key, msg, state)
+	if !allowAutoApproval {
+		text = manualRetryBarrierPromptText(text, barrier)
+	}
 	if allowAutoApproval {
-		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, text, "continuation_refresh"); err != nil {
+		if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, text, "continuation_refresh"); err != nil {
 			return state, false, fmt.Errorf("send refreshed continuation approval: %w", err)
 		}
 	} else if err := r.sendContinuationApprovalPrompt(ctx, key, msg, state, text); err != nil {
 		return state, false, fmt.Errorf("send refreshed continuation approval: %w", err)
 	}
 	return state, true, nil
+}
+
+func manualRetryBarrierPromptText(text string, barrier manualRetryBarrierResult) string {
+	text = strings.TrimSpace(text)
+	if !barrier.Revoked() {
+		return text
+	}
+	notice := "Approval window paused for this retry; approve this one step manually."
+	if text == "" {
+		return notice
+	}
+	return text + "\n\n" + notice
+}
+
+func manualOnlyContinuationRefreshState(state session.ContinuationState, now time.Time) session.ContinuationState {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	state = session.NormalizeContinuationState(state)
+	manualOnly := false
+	state.ActionProposal.AutoApproveEligible = &manualOnly
+	state.ActionProposal.UpdatedAt = now
+	state.ActionProposal.PlanHash = actionProposalHash(state.ActionProposal)
+	state.ContinuationLease.PlanHash = state.ActionProposal.PlanHash
+	state.ContinuationLease.UpdatedAt = now
+	return session.NormalizeContinuationState(state)
 }
 
 func continuationStateHasFreshPendingLease(state session.ContinuationState, now time.Time) bool {
@@ -82,7 +148,7 @@ func continuationStateHasFreshPendingLease(state session.ContinuationState, now 
 	return lease.ExpiresAt.IsZero() || lease.ExpiresAt.After(now)
 }
 
-func refreshedContinuationState(prior session.ContinuationState, reason string, now time.Time) session.ContinuationState {
+func refreshedContinuationState(prior session.ContinuationState, reason string, refreshedFrom string, now time.Time) session.ContinuationState {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -97,31 +163,48 @@ func refreshedContinuationState(prior session.ContinuationState, reason string, 
 		turns = 1
 	}
 	state := prior
+	visibleReason := continuationVisibleRefreshReason(reason, refreshedFrom, prior)
 	state.Status = session.ContinuationStatusPending
 	state.DecisionID = decisionID
 	state.RemainingTurns = turns
 	state.ApprovedBy = 0
 	state.HandshakeBlockedReason = ""
 	state.UpdatedAt = now
-	state.ActionProposal = refreshedContinuationActionProposal(prior, decisionID, reason, now)
+	state.ActionProposal = refreshedContinuationActionProposal(prior, decisionID, visibleReason, now)
 	state.ContinuationLease = buildContinuationLease(state.ActionProposal, turns, now)
 	state.PersonaIntent.UpdatedAt = now
 	state.GovernorIntent.UpdatedAt = now
-	if trimmed := strings.TrimSpace(reason); trimmed != "" {
-		state.PersonaIntent.Rationale = trimmed
-		state.GovernorIntent.Rationale = trimmed
-	} else {
-		if strings.TrimSpace(state.PersonaIntent.Rationale) == "" {
-			state.PersonaIntent.Rationale = "The previous approval prompt expired before it could be used."
-		}
-		if strings.TrimSpace(state.GovernorIntent.Rationale) == "" {
-			state.GovernorIntent.Rationale = "A fresh bounded lease is required before continuation authority can be granted."
-		}
-	}
+	state.PersonaIntent.Rationale = visibleReason
+	state.GovernorIntent.Rationale = visibleReason
 	state.PersonaIntent.Decision = session.ContinuationIntentDecisionContinue
 	state.GovernorIntent.Decision = session.ContinuationIntentDecisionContinue
 	state.GovernorIntent.Ratified = true
 	return session.NormalizeContinuationState(state)
+}
+
+func continuationVisibleRefreshReason(reason string, refreshedFrom string, prior session.ContinuationState) string {
+	switch strings.TrimSpace(refreshedFrom) {
+	case "work_executor_failure":
+		return "I need your approval before retrying this step."
+	case "expired_callback":
+		return "This step needs a new approval before I continue."
+	case "operator_requested_next_lease":
+		return "This next step needs your approval before I continue."
+	}
+	lower := strings.ToLower(strings.TrimSpace(refreshedFrom + " " + reason))
+	switch {
+	case strings.Contains(lower, "work") && strings.Contains(lower, "fail"):
+		return "I need your approval before retrying this step."
+	case strings.Contains(lower, "restart") || strings.Contains(lower, "deploy") || strings.Contains(lower, "park"):
+		return "The service restarted, so I need your approval before continuing."
+	case strings.Contains(lower, "expired") || strings.Contains(lower, "stale"):
+		return "This step needs a new approval before I continue."
+	}
+	prior = session.NormalizeContinuationState(prior)
+	if strings.TrimSpace(prior.ActionProposal.WhyNow) != "" || strings.TrimSpace(prior.StageSummary) != "" {
+		return "This step needs your approval before I continue."
+	}
+	return "I need your approval before continuing."
 }
 
 func refreshedContinuationActionProposal(prior session.ContinuationState, decisionID string, reason string, now time.Time) session.ActionProposal {

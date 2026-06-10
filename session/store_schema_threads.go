@@ -74,6 +74,17 @@ func ensureTelegramThreadTables(tx *sql.Tx) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_telegram_threads_created_update ON telegram_threads(chat_id, created_from_update_id) WHERE created_from_update_id > 0`,
 		`CREATE INDEX IF NOT EXISTS idx_telegram_threads_created_message ON telegram_threads(chat_id, created_message_id) WHERE created_message_id > 0`,
 		`CREATE INDEX IF NOT EXISTS idx_telegram_threads_chat_status ON telegram_threads(chat_id, status, updated_at DESC, thread_id DESC)`,
+		`CREATE TABLE IF NOT EXISTS telegram_thread_last_messages (
+			chat_id INTEGER NOT NULL,
+			thread_id INTEGER NOT NULL,
+			message_id INTEGER NOT NULL DEFAULT 0,
+			source TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			PRIMARY KEY(chat_id, thread_id),
+			FOREIGN KEY(chat_id, thread_id) REFERENCES telegram_threads(chat_id, thread_id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_telegram_thread_last_messages_message ON telegram_thread_last_messages(chat_id, message_id)`,
 	} {
 		if _, err := tx.Exec(stmt); err != nil {
 			return fmt.Errorf("ensure telegram thread table: %w", err)
@@ -203,6 +214,27 @@ func ensureTelegramCallbackMessageTables(tx *sql.Tx) error {
 	} {
 		if _, err := tx.Exec(stmt); err != nil {
 			return fmt.Errorf("ensure telegram callback message table: %w", err)
+		}
+	}
+	return nil
+}
+
+func ensureTelegramMediaPickerTables(tx *sql.Tx) error {
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS telegram_media_thread_pickers (
+			chat_id INTEGER NOT NULL,
+			picker_message_id INTEGER NOT NULL,
+			source_message_id INTEGER NOT NULL DEFAULT 0,
+			inbound_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'routed', 'cleared')),
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			PRIMARY KEY(chat_id, picker_message_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_telegram_media_thread_pickers_status ON telegram_media_thread_pickers(chat_id, status, updated_at DESC)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("ensure telegram media thread picker table: %w", err)
 		}
 	}
 	return nil

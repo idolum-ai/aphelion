@@ -25,6 +25,28 @@ func (s *stubCommandRouter) QueueDoctor(ctx context.Context, msg core.InboundMes
 	return s.queueDoctorErr
 }
 
+func (s *stubCommandRouter) ReentryRecommendation(ctx context.Context, senderID int64, recommendationID string) (session.ReentryRecommendation, bool, error) {
+	_ = ctx
+	_ = senderID
+	_ = recommendationID
+	return session.ReentryRecommendation{}, false, nil
+}
+
+func (s *stubCommandRouter) IgnoreReentryRecommendation(ctx context.Context, senderID int64, recommendationID string) (session.ReentryRecommendation, error) {
+	_ = ctx
+	_ = senderID
+	_ = recommendationID
+	return session.ReentryRecommendation{}, nil
+}
+
+func (s *stubCommandRouter) QueueReentryRecommendation(ctx context.Context, msg core.InboundMessage, recommendationID string, candidateID string) (session.ReentryRecommendation, session.ReentryRecommendationCandidate, bool, error) {
+	_ = ctx
+	_ = msg
+	_ = recommendationID
+	_ = candidateID
+	return session.ReentryRecommendation{}, session.ReentryRecommendationCandidate{}, false, nil
+}
+
 func (s *stubCommandRouter) LatestDoctorReport(ctx context.Context, chatID int64, senderID int64) (session.DoctorReportRecord, bool, error) {
 	_ = ctx
 	s.latestDoctorReportChatID = chatID
@@ -298,4 +320,32 @@ func (s *stubCommandRouter) AbsorbTelegramThread(_ context.Context, chatID int64
 		return s.absorbThreadReturn, nil
 	}
 	return "Absorbed thread " + strconv.FormatInt(threadID, 10) + ".", nil
+}
+
+func (s *stubCommandRouter) RecordTelegramMediaThreadPicker(chatID int64, pickerMessageID int64, inbound core.InboundMessage) error {
+	s.mediaPickerRecordChatID = chatID
+	s.mediaPickerRecordMessageID = pickerMessageID
+	s.mediaPickerRecordInbound = inbound
+	return s.mediaPickerRecordErr
+}
+
+func (s *stubCommandRouter) TelegramMediaThreadPicker(chatID int64, pickerMessageID int64) (core.InboundMessage, bool, error) {
+	s.mediaPickerGetChatID = chatID
+	s.mediaPickerGetMessageID = pickerMessageID
+	if s.mediaPickerErr != nil {
+		return core.InboundMessage{}, false, s.mediaPickerErr
+	}
+	return s.mediaPickerReturn, s.mediaPickerOK, nil
+}
+
+func (s *stubCommandRouter) MarkTelegramMediaThreadPickerRouted(chatID int64, pickerMessageID int64) error {
+	s.mediaPickerMarkChatID = chatID
+	s.mediaPickerMarkMessageID = pickerMessageID
+	return s.mediaPickerMarkErr
+}
+
+func (s *stubCommandRouter) RouteAccepted(_ context.Context, msg core.InboundMessage) error {
+	copied := msg
+	s.routeAcceptedMsg = &copied
+	return s.routeAcceptedErr
 }

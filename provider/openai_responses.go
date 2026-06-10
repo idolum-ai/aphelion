@@ -22,7 +22,7 @@ func (o *OpenAI) completeResponses(ctx context.Context, messages []agent.Message
 		Model:           o.model,
 		Instructions:    openAIResponsesInstructions(messages),
 		Input:           openAIResponsesInputItems(messages),
-		MaxOutputTokens: o.maxTokens,
+		MaxOutputTokens: resolveMaxTokens(o.maxTokens, opts),
 		Reasoning:       openAIResponsesReasoning(opts.Reasoning),
 		Text:            openAIResponsesText(opts.Verbosity),
 		ServiceTier:     o.serviceTier,
@@ -78,7 +78,7 @@ func (o *OpenAI) streamResponses(ctx context.Context, messages []agent.Message, 
 		Model:           o.model,
 		Instructions:    openAIResponsesInstructions(messages),
 		Input:           openAIResponsesInputItems(messages),
-		MaxOutputTokens: o.maxTokens,
+		MaxOutputTokens: resolveMaxTokens(o.maxTokens, opts),
 		Reasoning:       openAIResponsesReasoning(opts.Reasoning),
 		Text:            openAIResponsesText(opts.Verbosity),
 		ServiceTier:     o.serviceTier,
@@ -163,11 +163,17 @@ type openAIStreamOptions struct {
 }
 
 type openAIResponsesResponse struct {
-	ID         string                      `json:"id"`
-	OutputText string                      `json:"output_text"`
-	Output     []openAIResponsesOutputItem `json:"output"`
-	Usage      openAIResponsesUsage        `json:"usage"`
-	Error      *openAIStreamFailure        `json:"error,omitempty"`
+	ID                string                           `json:"id"`
+	OutputText        string                           `json:"output_text"`
+	Output            []openAIResponsesOutputItem      `json:"output"`
+	Status            string                           `json:"status,omitempty"`
+	IncompleteDetails openAIResponsesIncompleteDetails `json:"incomplete_details,omitempty"`
+	Usage             openAIResponsesUsage             `json:"usage"`
+	Error             *openAIStreamFailure             `json:"error,omitempty"`
+}
+
+type openAIResponsesIncompleteDetails struct {
+	Reason string `json:"reason,omitempty"`
 }
 
 type openAIResponsesOutputItem struct {
@@ -383,7 +389,10 @@ func openAIResponsesVerbosity(verbosity agent.Verbosity) string {
 }
 
 func mapOpenAIResponsesResponse(res openAIResponsesResponse) *agent.Response {
-	resp := &agent.Response{}
+	resp := &agent.Response{
+		FinishReason:     strings.TrimSpace(res.Status),
+		IncompleteReason: strings.TrimSpace(res.IncompleteDetails.Reason),
+	}
 	var text strings.Builder
 	var thinking strings.Builder
 	for _, item := range res.Output {

@@ -10,7 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 63
+const schemaVersion = 65
 
 type SQLiteStore struct {
 	db     *sql.DB
@@ -370,6 +370,7 @@ func (s *SQLiteStore) init() error {
 			scope_id TEXT NOT NULL DEFAULT '',
 			durable_agent_id TEXT NOT NULL DEFAULT '',
 			kind TEXT NOT NULL,
+			turn_index INTEGER NOT NULL DEFAULT 0,
 			status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed', 'interrupted')),
 			request_text TEXT NOT NULL,
 			started_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -379,6 +380,12 @@ func (s *SQLiteStore) init() error {
 			last_tool_preview TEXT,
 			tool_calls_started INTEGER NOT NULL DEFAULT 0,
 			tool_calls_finished INTEGER NOT NULL DEFAULT 0,
+			total_tool_chars_in INTEGER NOT NULL DEFAULT 0,
+			total_assistant_chars_out INTEGER NOT NULL DEFAULT 0,
+			provider_input_tokens INTEGER NOT NULL DEFAULT 0,
+			provider_output_tokens INTEGER NOT NULL DEFAULT 0,
+			provider_cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+			provider_cache_write_tokens INTEGER NOT NULL DEFAULT 0,
 			last_tool_result_preview TEXT,
 			last_tool_error TEXT,
 			progress_message_id INTEGER,
@@ -722,6 +729,9 @@ func (s *SQLiteStore) init() error {
 	if err := ensureTelegramCallbackMessageTables(tx); err != nil {
 		return err
 	}
+	if err := ensureTelegramMediaPickerTables(tx); err != nil {
+		return err
+	}
 	if err := ensureTelegramAgentMessageTables(tx); err != nil {
 		return err
 	}
@@ -729,6 +739,9 @@ func (s *SQLiteStore) init() error {
 		return err
 	}
 	if err := ensureTelegramThreadReminderTables(tx); err != nil {
+		return err
+	}
+	if err := ensureReentryRecommendationTables(tx); err != nil {
 		return err
 	}
 	for _, stmt := range telegramIngressSchemaStatements() {

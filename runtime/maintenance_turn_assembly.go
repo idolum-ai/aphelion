@@ -123,10 +123,11 @@ func (a *runtimeMaintenanceTurnAssembler) Run(ctx context.Context, input mainten
 	machine := &turn.Machine{
 		Governor: coordinator,
 		Persistence: &maintenanceTurnPersistencePort{
-			runtime: a.runtime,
-			key:     input.Key,
-			sess:    input.Sess,
-			errCtx:  input.ErrContext,
+			runtime:     a.runtime,
+			key:         input.Key,
+			sess:        input.Sess,
+			runIDSource: coordinator,
+			errCtx:      input.ErrContext,
 		},
 		Options: turn.Options{
 			GovernorName: governorName,

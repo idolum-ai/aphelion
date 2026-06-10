@@ -121,6 +121,7 @@ type GovernorDecision struct {
 }
 
 type MaterialPacket struct {
+    Kind             string // "", "general", "status_report", "relational", "creative"
     Facts            []string
     AllowedActions   []string
     Commitments      []string
@@ -131,6 +132,9 @@ type MaterialPacket struct {
 ```
 
 The face takes the governor's material floor and authors the user-visible output.
+`Kind` is a render hint, not authority: `status_report` may allow direct or
+bounded fallback presentation, while relational and creative material should
+remain eligible for ordinary scene authorship.
 
 ```go
 type Face interface {

@@ -236,6 +236,12 @@ Run `make live-evals` or the narrower `make auto-evals` *(opt-in; spend
 provider API calls)* before releases that materially change agency,
 authority, proactive mission, or prompt behavior.
 
+For governor, continuation, lease, media-routing, private-boundary, or
+self-improvement workflow changes, also use the canonical scenario gate:
+produce comparable `aphelion eval run` reports for the baseline and branch,
+then cite `aphelion eval gate --before baseline.json --after branch.json` in
+the PR or release review.
+
 ## Going deeper
 
 For readers who want the design substrate, not just the operator surface:
