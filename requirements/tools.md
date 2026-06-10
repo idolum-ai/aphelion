@@ -310,6 +310,7 @@ At minimum, these run kinds should be distinguished:
 - `default`
 - `heartbeat`
 - `cron`
+- `curiosity`
 - `subagent`
 
 This is the major place where Aphelion should follow OpenClaw more than Hermes.
@@ -318,6 +319,7 @@ Examples:
 
 - `heartbeat` may omit ordinary user-facing messaging tools
 - `cron` should usually get a lighter, narrower tool surface
+- `curiosity` may receive read/retrieval tools only, and runtime must further bind execution to the preselected candidate source and exact input
 - `subagent` runs should inherit stricter ceilings than their parent
 - `approved_user` runs should not merely receive warnings; they should receive a different actual manifest
 

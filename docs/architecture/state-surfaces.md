@@ -76,6 +76,8 @@ Classifications below use the shared truth classes defined in
 | `provider_health` in `/health` | projection | Is recent inference-provider pressure the current explanation for slow, failed, or retried work? |
 | Quick-read and progress render blocks | projection | What compact operator narration should be surfaced now? |
 | `turn_runs` | operational current-state store | What startup recovery/run bookkeeping and accounting hints are available for interrupted or active work? |
+| `curiosity_leases` | operational current-state store | What config-backed read-only curiosity allowance is active, expired, or exhausted for the current period? |
+| `curiosity_observations` | canonical | What silent read-only observations were actually recorded from candidate-bound curiosity looks? |
 
 ## Removed Surface Rule
 
@@ -97,6 +99,14 @@ Turn-run accounting note:
 - Those counters support `/status`, `/health trace`, and doctor diagnosis. They
   do not replace TES as execution-order truth and should not be treated as a
   canonical transcript.
+
+Curiosity note:
+
+- `curiosity_leases` are operational allowance records, not operator approval
+  leases and not capability grants.
+- `curiosity_observations` are typed facts produced by read-only candidate-bound
+  looks. They may feed interior signal pressure, but they do not directly write
+  curated memory, assert completion, or create authority.
 
 Staged identity decision:
 

@@ -25,6 +25,7 @@ type Config struct {
 	Thinking      ThinkingConfig      `toml:"thinking"`
 	Face          FaceConfig          `toml:"face"`
 	Heartbeat     HeartbeatConfig     `toml:"heartbeat"`
+	Curiosity     CuriosityConfig     `toml:"curiosity"`
 	Operator      OperatorConfig      `toml:"operator"`
 	Cron          CronConfig          `toml:"cron"`
 	Nocturne      NocturneConfig      `toml:"nocturne"`
@@ -407,6 +408,19 @@ type HeartbeatActiveHoursConfig struct {
 	Timezone string `toml:"timezone"`
 }
 
+type CuriosityConfig struct {
+	Enabled            bool     `toml:"enabled"`
+	Every              string   `toml:"every"`
+	LeaseTTL           string   `toml:"lease_ttl"`
+	DailyTurnBudget    int      `toml:"daily_turn_budget"`
+	MaxLooksPerTurn    int      `toml:"max_looks_per_turn"`
+	MinSignalIntensity float64  `toml:"min_signal_intensity"`
+	SourceClasses      []string `toml:"source_classes"`
+	WorkspacePaths     []string `toml:"workspace_paths"`
+	MemoryPaths        []string `toml:"memory_paths"`
+	AllowlistedURLs    []string `toml:"allowlisted_urls"`
+}
+
 type OperatorConfig struct {
 	DisplayTimezone string `toml:"display_timezone"`
 }
@@ -740,6 +754,16 @@ func Default() Config {
 			Enabled: false,
 			Every:   "30m",
 			Target:  "last",
+		},
+		Curiosity: CuriosityConfig{
+			Enabled:            false,
+			Every:              "2h",
+			LeaseTTL:           "24h",
+			DailyTurnBudget:    3,
+			MaxLooksPerTurn:    1,
+			MinSignalIntensity: 0.65,
+			SourceClasses:      []string{"session", "memory"},
+			MemoryPaths:        []string{"memory/questions.md", "memory/knowledge.md", "memory/decisions.md"},
 		},
 		Cron: CronConfig{
 			Enabled: false,

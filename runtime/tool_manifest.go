@@ -145,6 +145,8 @@ func toolLaneAllowlist(runKind session.TurnRunKind) map[string]struct{} {
 		names = []string{"read_file", "list_dir", "search", "session_search", "semantic_search", "operation_artifact"}
 	case session.TurnRunKindRecovery:
 		names = []string{"read_file", "operation_artifact"}
+	case session.TurnRunKindCuriosity:
+		names = []string{"read_file", "session_search", "semantic_search", "operation_artifact", "fetch_url"}
 	default:
 		return nil
 	}

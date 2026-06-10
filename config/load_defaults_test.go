@@ -203,6 +203,9 @@ external_manifest_dir = "./external-tools"
 	if !(!cfg.Heartbeat.Enabled && cfg.Heartbeat.Every == "30m" && cfg.Heartbeat.Target == "last") {
 		t.Fatalf("heartbeat defaults = %#v, want disabled 30m last", cfg.Heartbeat)
 	}
+	if cfg.Curiosity.Enabled || cfg.Curiosity.Every != "2h" || cfg.Curiosity.LeaseTTL != "24h" || cfg.Curiosity.DailyTurnBudget != 3 || cfg.Curiosity.MaxLooksPerTurn != 1 || cfg.Curiosity.MinSignalIntensity != 0.65 {
+		t.Fatalf("curiosity defaults = %#v, want disabled bounded read-only lane", cfg.Curiosity)
+	}
 	if cfg.Cron.Enabled || len(cfg.Cron.Jobs) != 0 {
 		t.Fatalf("cron defaults = %#v, want disabled with no jobs", cfg.Cron)
 	}

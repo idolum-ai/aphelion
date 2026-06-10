@@ -16,6 +16,7 @@ const (
 	heartbeatRunMaxTokens   = 1024
 	cronRunMaxTokens        = 1024
 	recoveryRunMaxTokens    = 1024
+	curiosityRunMaxTokens   = 1024
 	doctorRunMaxTokens      = 4096
 	faceRenderMaxTokens     = 512
 	compactionMaxTokens     = 512
@@ -28,7 +29,7 @@ func reasoningOptionsForRun(cfg *config.Config, kind session.TurnRunKind) *agent
 
 	effort := strings.ToLower(strings.TrimSpace(cfg.Thinking.Effort))
 	switch kind {
-	case session.TurnRunKindHeartbeat:
+	case session.TurnRunKindHeartbeat, session.TurnRunKindCuriosity:
 		effort = firstNonEmptyThinking(cfg.Thinking.Defaults.Heartbeat, effort)
 	case session.TurnRunKindCron:
 		effort = firstNonEmptyThinking(cfg.Thinking.Defaults.Cron, effort)
@@ -61,6 +62,8 @@ func maxTokensForRunKind(kind session.TurnRunKind) int {
 		return doctorRunMaxTokens
 	case session.TurnRunKindHeartbeat:
 		return heartbeatRunMaxTokens
+	case session.TurnRunKindCuriosity:
+		return curiosityRunMaxTokens
 	case session.TurnRunKindCron:
 		return cronRunMaxTokens
 	case session.TurnRunKindRecovery:

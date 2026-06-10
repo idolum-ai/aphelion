@@ -310,6 +310,13 @@ func migrateSchemaV65ToV66(tx *sql.Tx) error {
 	return nil
 }
 
+func migrateSchemaV66ToV67(tx *sql.Tx) error {
+	if err := ensureCuriosityTables(tx); err != nil {
+		return fmt.Errorf("migrate schema v66 to v67 ensure curiosity tables: %w", err)
+	}
+	return nil
+}
+
 func ensureTurnRunAccountingColumns(tx *sql.Tx) error {
 	exists, err := schemaTableExists(tx, "turn_runs")
 	if err != nil {

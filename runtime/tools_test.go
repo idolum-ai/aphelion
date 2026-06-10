@@ -53,10 +53,12 @@ func TestToolManifestForRunKindFiltersConservativeLanes(t *testing.T) {
 		{Name: "request_approval"},
 		{Name: "read_file"},
 		{Name: "operation_artifact"},
+		{Name: "session_search"},
+		{Name: "semantic_search"},
 		{Name: "update_operation"},
 	}}
 
-	if got := toolManifestForRunKind(registry, ""); got != "exec, fetch_url, operation_artifact, read_file, request_approval, update_operation" {
+	if got := toolManifestForRunKind(registry, ""); got != "exec, fetch_url, operation_artifact, read_file, request_approval, semantic_search, session_search, update_operation" {
 		t.Fatalf("interactive manifest = %q", got)
 	}
 	heartbeat := toolManifestForRunKind(registry, session.TurnRunKindHeartbeat)
@@ -75,6 +77,17 @@ func TestToolManifestForRunKindFiltersConservativeLanes(t *testing.T) {
 	if !strings.Contains(doctor, "read_file") || !strings.Contains(doctor, "operation_artifact") {
 		t.Fatalf("doctor manifest = %q, want read-only diagnostic subset", doctor)
 	}
+	curiosity := toolManifestForRunKind(registry, session.TurnRunKindCuriosity)
+	for _, forbidden := range []string{"exec", "request_approval", "update_operation"} {
+		if strings.Contains(curiosity, forbidden) {
+			t.Fatalf("curiosity manifest = %q leaked %q", curiosity, forbidden)
+		}
+	}
+	for _, allowed := range []string{"read_file", "fetch_url", "session_search", "semantic_search", "operation_artifact"} {
+		if !strings.Contains(curiosity, allowed) {
+			t.Fatalf("curiosity manifest = %q missing %q", curiosity, allowed)
+		}
+	}
 }
 
 func TestToolLaneAllowlistsByRunKind(t *testing.T) {
@@ -89,6 +102,7 @@ func TestToolLaneAllowlistsByRunKind(t *testing.T) {
 		{runKind: session.TurnRunKindCron, allowed: []string{"update_plan", "update_operation", "operation_artifact", "memory", "session_search", "semantic_search"}, forbidden: []string{"exec", "fetch_url", "read_file", "request_approval"}},
 		{runKind: session.TurnRunKindDoctor, allowed: []string{"read_file", "list_dir", "search", "session_search", "semantic_search", "operation_artifact"}, forbidden: []string{"exec", "fetch_url", "request_approval", "write_file"}},
 		{runKind: session.TurnRunKindRecovery, allowed: []string{"read_file", "operation_artifact"}, forbidden: []string{"exec", "fetch_url", "request_approval", "write_file", "update_operation"}},
+		{runKind: session.TurnRunKindCuriosity, allowed: []string{"read_file", "session_search", "semantic_search", "operation_artifact", "fetch_url"}, forbidden: []string{"exec", "request_approval", "write_file", "update_operation"}},
 	}
 
 	for _, tc := range cases {

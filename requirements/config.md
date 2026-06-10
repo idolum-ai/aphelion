@@ -390,6 +390,18 @@ model_override = ""           # e.g. "claude-haiku-3.5" — overrides the provid
 active_hours = { start = "08:00", end = "24:00", timezone = "America/New_York" }
 target = "last"               # "last" | "none" | specific chat ID
 
+[curiosity]
+enabled = false
+every = "2h"
+lease_ttl = "24h"
+daily_turn_budget = 3
+max_looks_per_turn = 1
+min_signal_intensity = 0.65
+source_classes = ["session", "memory"] # session | memory | workspace | url
+workspace_paths = []
+memory_paths = ["memory/questions.md", "memory/knowledge.md", "memory/decisions.md"]
+allowlisted_urls = []
+
 [cron]
 jobs = []
 

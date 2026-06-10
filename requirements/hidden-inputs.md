@@ -161,6 +161,7 @@ This makes brokerage a real negotiation between two readings of the same latent 
 - temporal pressure as proactive eligibility signal
 - hidden-input convergence gates heartbeat-originated reflective outreach
 - heartbeat hidden-input convergence is backed by durable interior signal pressure with magnitude, decay, dedupe, and surfaced cooldown
+- curiosity can spend a disabled-by-default, read-only standing lease to inspect one candidate source from accumulated interior pressure and record a silent typed observation
 - Idolum brokerage proposals name the hidden input when one is materially shaping the push
 - Idolum (System) ratification may preserve `SIGNAL_JUDGMENT` when Idolum named a hidden input
 - floor sidecar metadata preserves hidden inputs when material
@@ -180,6 +181,7 @@ This makes brokerage a real negotiation between two readings of the same latent 
 - **Provenance is internal discipline, not a user-facing disclaimer.** It shapes behavior; it does not narrate it by default.
 - **Hidden inputs are real inputs.** They must be traceable to actual memory, session history, or environmental state. They cannot be invented.
 - **Interior pressure is advisory.** Accumulated signal magnitude may shape attention and heartbeat outreach, but it does not grant authority, assert completion, or bypass consent.
+- **Curiosity is a governed read, not autonomous work.** Curiosity may re-read allowlisted sources and write typed observations, but it must not deliver user messages, mutate durable memory directly, perform writes, or infer authority from pressure.
 - **The scene should feel grounded.** Generic tone is not enough. Idolum authors from retrieved structure.
 - **Brokerage becomes signal negotiation.** Both layers read the same latent state and their readings should be preserved together.
 
@@ -241,3 +243,4 @@ Later, recovery or heartbeat can surface that interruption from structured machi
 - **TestFloorPreservesHiddenInputsInSidecar**: when hidden inputs shaped the floor, they appear in floor sidecar audit state
 - **TestProvenanceNotExposedToUserByDefault**: hidden input provenance does not appear in the delivered scene unless explicitly surfaced
 - **TestBrokeragePreservesBothSignalReadings**: negotiated brokerage block includes both Idolum's named signal and Aphelion's structural reaction
+- **TestRunCuriosityOnceRecordsSilentObservation**: a curiosity run consumes a bounded read-only lease turn, uses only the selected source, records a typed observation, and sends no Telegram message

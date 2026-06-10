@@ -72,6 +72,9 @@ func validate(cfg *Config) error {
 	if err := validateHeartbeatConfig(cfg.Heartbeat); err != nil {
 		return err
 	}
+	if err := validateCuriosityConfig(cfg.Curiosity); err != nil {
+		return err
+	}
 	if err := validateOperatorConfig(cfg.Operator); err != nil {
 		return err
 	}
