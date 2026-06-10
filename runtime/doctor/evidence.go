@@ -735,6 +735,9 @@ func writeDoctorOperationCompletionEvidence(b *strings.Builder, operation sessio
 			fmt.Sprintf("satisfied=%t", status.Satisfied),
 		}
 		if reason := strings.TrimSpace(status.Reason); reason != "" {
+			if code := strings.TrimSpace(status.ReasonCode); code != "" {
+				parts = append(parts, "reason_code="+strconv.Quote(code))
+			}
 			parts = append(parts, "reason="+strconv.Quote(reason), "repair="+strconv.Quote(operationCompletionEvidenceRepair(status)))
 		}
 		if status.CompletedAt != nil {
@@ -754,10 +757,10 @@ func operationCompletionEvidenceRepair(status session.OperationEvidenceStatus) s
 	if status.Satisfied {
 		return ""
 	}
-	switch strings.TrimSpace(status.Reason) {
-	case "last work ended with an error":
+	switch strings.TrimSpace(status.ReasonCode) {
+	case "last_work_error":
 		return "do not mark the phase complete; inspect the failed work result and retry or rescope"
-	case "last work has no completion timestamp", "last work does not match the operation", "last work does not match the current phase proposal", "last work has no matching action proposal id", "last work lease does not match the current phase lease", "last work mode does not satisfy the phase authority":
+	case "missing_completion_timestamp", "operation_mismatch", "proposal_mismatch", "action_proposal_mismatch", "lease_mismatch", "work_mode_mismatch":
 		return "do not mark the phase complete; continue or retry under a matching active lease, then record fresh work evidence"
 	default:
 		return "do not mark the phase complete until matching work evidence exists"

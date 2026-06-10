@@ -375,6 +375,7 @@ func operationEvidenceStatusFields(state session.OperationState) []core.Operatio
 			Status:         string(status.Status),
 			EvidenceKind:   status.EvidenceKind,
 			Satisfied:      status.Satisfied,
+			ReasonCode:     status.ReasonCode,
 			Reason:         status.Reason,
 			CompletedAt:    status.CompletedAt,
 			WorkMode:       status.WorkMode,

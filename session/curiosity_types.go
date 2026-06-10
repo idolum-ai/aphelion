@@ -23,6 +23,9 @@ const (
 	CuriositySourceMemory    = "memory"
 	CuriositySourceWorkspace = "workspace"
 	CuriositySourceURL       = "url"
+
+	CuriosityLeaseRetention       = 30 * 24 * time.Hour
+	CuriosityObservationRetention = 30 * 24 * time.Hour
 )
 
 type CuriosityLease struct {

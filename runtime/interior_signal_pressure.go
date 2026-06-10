@@ -11,6 +11,9 @@ import (
 
 const (
 	heartbeatSemanticPressureThreshold = 0.60
+	// Reflection support is intentionally enough to meet the support lane once
+	// semantic pressure also crosses; self-sustaining curiosity is blocked at
+	// curiosity candidacy instead of by making heartbeat outreach harder.
 	heartbeatSupportPressureThreshold  = 0.20
 	heartbeatCombinedPressureThreshold = 0.80
 )

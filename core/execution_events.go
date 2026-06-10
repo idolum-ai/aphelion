@@ -60,6 +60,8 @@ const (
 	ExecutionEventFaceRenderFallbackApplied    = "face.render.fallback_applied"
 	ExecutionEventStreamFallbackReconciled     = "stream.fallback.reconciled"
 	ExecutionEventStreamFallbackReconcileFail  = "stream.fallback.reconcile_failed"
+	ExecutionEventPersonaStreamReconciled      = "stream.persona_context.reconciled"
+	ExecutionEventPersonaStreamReconcileFailed = "stream.persona_context.reconcile_failed"
 	ExecutionEventTelegramCallbackFailed       = "telegram.callback.failed"
 	ExecutionEventTelegramThreadReminderSweep  = "telegram.thread_reminder.sweep"
 	ExecutionEventProgressSurface              = "progress.surface"

@@ -16,6 +16,11 @@ const (
 	InteriorSignalDefaultHalfLife     = 12 * time.Hour
 	InteriorSignalDefaultDedupeWindow = 12 * time.Hour
 	InteriorSignalDefaultCooldown     = 6 * time.Hour
+
+	InteriorSignalMinimumIntensity                = 0.005
+	InteriorSignalZeroWeightObservationRetention  = 24 * time.Hour
+	InteriorSignalAppliedObservationRetention     = 30 * 24 * time.Hour
+	InteriorSignalInactiveStateObservationHorizon = 30 * 24 * time.Hour
 )
 
 type InteriorSignalObservationInput struct {
@@ -95,7 +100,7 @@ func NormalizeInteriorSignalObservationInput(input InteriorSignalObservationInpu
 		input.Source = "hidden_input"
 	}
 	if input.SubjectKey == "" {
-		input.SubjectKey = interiorSignalSubjectKey(input.Category, input.Summary)
+		input.SubjectKey = interiorSignalSubjectKey(input.Category, input.Source, input.Evidence, input.SourceFingerprint, input.Summary)
 	}
 	if input.SourceFingerprint == "" {
 		input.SourceFingerprint = interiorSignalFingerprint(input.Category, input.SubjectKey, input.Source, input.Summary, input.Evidence)
@@ -117,15 +122,19 @@ func DecayInteriorSignalIntensity(intensity float64, lastDecayedAt time.Time, no
 	}
 	elapsed := now.Sub(lastDecayedAt)
 	factor := math.Pow(0.5, float64(elapsed)/float64(InteriorSignalDefaultHalfLife))
-	return clampInteriorSignal(intensity * factor)
+	decayed := clampInteriorSignal(intensity * factor)
+	if decayed < InteriorSignalMinimumIntensity {
+		return 0
+	}
+	return decayed
 }
 
 func InteriorSignalInCooldown(state InteriorSignalState, now time.Time) bool {
 	return !state.CooldownUntil.IsZero() && now.Before(state.CooldownUntil)
 }
 
-func interiorSignalSubjectKey(category string, summary string) string {
-	seed := strings.TrimSpace(category + " " + summary)
+func interiorSignalSubjectKey(category string, source string, evidence []RecordReference, sourceFingerprint string, summary string) string {
+	seed := interiorSignalSubjectSeed(category, source, evidence, sourceFingerprint, summary)
 	terms := strings.FieldsFunc(strings.ToLower(seed), func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
 	})
@@ -149,6 +158,45 @@ func interiorSignalSubjectKey(category string, summary string) string {
 	}
 	hash := sha256.Sum256([]byte(seed))
 	return strings.Join(parts, "-") + "-" + hex.EncodeToString(hash[:])[:8]
+}
+
+func interiorSignalSubjectSeed(category string, source string, evidence []RecordReference, sourceFingerprint string, summary string) string {
+	category = normalizeInteriorSignalToken(category)
+	source = normalizeInteriorSignalToken(source)
+	evidence = NormalizeRecordReferences(evidence)
+	for _, ref := range evidence {
+		kind, value, ok := interiorSignalDurableEvidenceIdentity(ref)
+		if !ok {
+			continue
+		}
+		return strings.TrimSpace(category + " " + source + " " + kind + ":" + value)
+	}
+	sourceFingerprint = strings.TrimSpace(sourceFingerprint)
+	if sourceFingerprint != "" {
+		return strings.TrimSpace(category + " " + source + " " + sourceFingerprint)
+	}
+	return strings.TrimSpace(category + " " + summary)
+}
+
+func interiorSignalDurableEvidenceIdentity(ref RecordReference) (string, string, bool) {
+	kind := strings.TrimSpace(ref.Kind)
+	value := strings.TrimSpace(ref.Ref)
+	if kind == "" || value == "" {
+		return "", "", false
+	}
+	switch kind {
+	case "memory_file":
+		if idx := strings.Index(value, ":sha256:"); idx > 0 {
+			value = value[:idx]
+		}
+	case "memory_store":
+	default:
+		return "", "", false
+	}
+	if value == "" {
+		return "", "", false
+	}
+	return kind, value, true
 }
 
 func interiorSignalFingerprint(category, subjectKey, source, summary string, evidence []RecordReference) string {

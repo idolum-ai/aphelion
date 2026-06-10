@@ -650,6 +650,55 @@ func TestHandleTelegramCommandStatusIncludesReadableSummary(t *testing.T) {
 	}
 }
 
+func TestStatusReadableSummaryAppendsOperationEvidenceToModelSummary(t *testing.T) {
+	t.Parallel()
+
+	router := stubCommandRouter{
+		statusReadableSummary: "Chat 7 is blocked on a phase.",
+	}
+	facts := statusReadableFacts{
+		View:  statusViewChat,
+		State: "blocked",
+		OperationEvidence: []core.OperationEvidenceStatus{{
+			PhaseID:      "implementation",
+			Status:       "completed",
+			Satisfied:    false,
+			ReasonCode:   "proposal_mismatch",
+			Reason:       "last work does not match the current phase proposal",
+			EvidenceKind: "work_metadata",
+		}},
+	}
+	summary := statusReadableSummaryText(context.Background(), &router, facts)
+	if !strings.Contains(summary, "Chat 7 is blocked on a phase.") || !strings.Contains(summary, "Operation evidence mismatch 1/1") {
+		t.Fatalf("summary = %q, want model summary plus operation evidence", summary)
+	}
+	input := facts.providerInput()
+	if !strings.Contains(input, "operation_evidence_1=") || !strings.Contains(input, "reason_code=proposal_mismatch") {
+		t.Fatalf("provider input = %q, want operation evidence fact with reason code", input)
+	}
+}
+
+func TestStatusReadableSummaryDoesNotDuplicateOperationEvidence(t *testing.T) {
+	t.Parallel()
+
+	router := stubCommandRouter{
+		statusReadableSummary: "Operation evidence pending 1/1.",
+	}
+	facts := statusReadableFacts{
+		View:  statusViewChat,
+		State: "idle",
+		OperationEvidence: []core.OperationEvidenceStatus{{
+			PhaseID:   "implementation",
+			Status:    "pending",
+			Satisfied: false,
+		}},
+	}
+	summary := statusReadableSummaryText(context.Background(), &router, facts)
+	if strings.Count(strings.ToLower(summary), "operation evidence") != 1 {
+		t.Fatalf("summary = %q, want one operation evidence sentence", summary)
+	}
+}
+
 func TestHandleTelegramCommandStatusRewritesInconsistentReadableSummary(t *testing.T) {
 	t.Parallel()
 

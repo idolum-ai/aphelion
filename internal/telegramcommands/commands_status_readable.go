@@ -21,6 +21,7 @@ func statusReadableSummaryText(ctx context.Context, router commandRouter, facts 
 	if summary == "" {
 		summary = composeStatusReadableSummary(facts)
 	}
+	summary = appendStatusOperationEvidenceSummary(summary, statusOperationEvidenceSummary(facts.OperationEvidence))
 	return compactStatusReadableSummary(summary)
 }
 
@@ -202,4 +203,21 @@ func statusOperationEvidenceSummary(statuses []core.OperationEvidenceStatus) str
 		return fmt.Sprintf("Operation evidence pending %d/%d.", pending, len(statuses))
 	}
 	return ""
+}
+
+func appendStatusOperationEvidenceSummary(summary string, evidence string) string {
+	summary = strings.TrimSpace(summary)
+	evidence = strings.TrimSpace(evidence)
+	if summary == "" || evidence == "" {
+		return firstNonEmptyStatusSummary(summary, evidence)
+	}
+	if strings.Contains(strings.ToLower(summary), "operation evidence") {
+		return summary
+	}
+	reserved := len([]rune(evidence)) + 1
+	budget := statusReadableQuickReadMaxChars - reserved
+	if budget < 80 {
+		budget = 80
+	}
+	return strings.TrimSpace(compactStatusReadableSummaryLimit(summary, budget) + " " + evidence)
 }

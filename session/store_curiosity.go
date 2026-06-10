@@ -60,6 +60,9 @@ func (s *SQLiteStore) EnsureCuriosityLease(lease CuriosityLease, now time.Time) 
 	if err != nil {
 		return CuriosityLease{}, err
 	}
+	if err := pruneCuriosityRecordsTx(tx, now); err != nil {
+		return CuriosityLease{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return CuriosityLease{}, fmt.Errorf("commit curiosity lease tx: %w", err)
 	}
@@ -165,7 +168,12 @@ func (s *SQLiteStore) RecordCuriosityObservation(key SessionKey, input Curiosity
 	}
 	now = now.UTC()
 	evidenceJSON := encodeRecordReferences(input.Evidence)
-	res, err := s.db.Exec(`
+	tx, err := s.db.Begin()
+	if err != nil {
+		return CuriosityObservation{}, fmt.Errorf("begin curiosity observation tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.Exec(`
 		INSERT OR IGNORE INTO curiosity_observations(
 			lease_id, session_id, chat_id, user_id, scope_kind, scope_id, scope_durable_agent_id,
 			candidate_id, source_kind, source_ref, subject_key, summary, evidence_json,
@@ -177,16 +185,28 @@ func (s *SQLiteStore) RecordCuriosityObservation(key SessionKey, input Curiosity
 	if err != nil {
 		return CuriosityObservation{}, fmt.Errorf("insert curiosity observation: %w", err)
 	}
+	var out CuriosityObservation
 	rows, _ := res.RowsAffected()
 	if rows == 0 {
-		row := s.db.QueryRow(curiosityObservationSelectSQL()+`
+		row := tx.QueryRow(curiosityObservationSelectSQL()+`
 			WHERE lease_id = ? AND candidate_id = ? AND content_hash = ?
 		`, input.LeaseID, input.CandidateID, input.ContentHash)
-		return scanCuriosityObservation(row)
+		out, err = scanCuriosityObservation(row)
+	} else {
+		id, _ := res.LastInsertId()
+		row := tx.QueryRow(curiosityObservationSelectSQL()+` WHERE id = ?`, id)
+		out, err = scanCuriosityObservation(row)
 	}
-	id, _ := res.LastInsertId()
-	row := s.db.QueryRow(curiosityObservationSelectSQL()+` WHERE id = ?`, id)
-	return scanCuriosityObservation(row)
+	if err != nil {
+		return CuriosityObservation{}, err
+	}
+	if err := pruneCuriosityRecordsTx(tx, now); err != nil {
+		return CuriosityObservation{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return CuriosityObservation{}, fmt.Errorf("commit curiosity observation tx: %w", err)
+	}
+	return out, nil
 }
 
 func (s *SQLiteStore) CuriosityObservations(limit int) ([]CuriosityObservation, error) {
@@ -236,6 +256,28 @@ func updateCuriosityLeaseStatusTx(tx *sql.Tx, id string, status string, now time
 		WHERE id = ?
 	`, strings.TrimSpace(status), now.UTC().Format(time.RFC3339Nano), strings.TrimSpace(id)); err != nil {
 		return fmt.Errorf("update curiosity lease status: %w", err)
+	}
+	return nil
+}
+
+func pruneCuriosityRecordsTx(tx *sql.Tx, now time.Time) error {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	observationCutoff := now.Add(-CuriosityObservationRetention).Format(time.RFC3339Nano)
+	if _, err := tx.Exec(`
+		DELETE FROM curiosity_observations
+		WHERE observed_at < ?
+	`, observationCutoff); err != nil {
+		return fmt.Errorf("prune curiosity observations: %w", err)
+	}
+	leaseCutoff := now.Add(-CuriosityLeaseRetention).Format(time.RFC3339Nano)
+	if _, err := tx.Exec(`
+		DELETE FROM curiosity_leases
+		WHERE expires_at < ?
+	`, leaseCutoff); err != nil {
+		return fmt.Errorf("prune curiosity leases: %w", err)
 	}
 	return nil
 }

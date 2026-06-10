@@ -62,11 +62,12 @@ func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err erro
 	unlock := r.lockSession(key)
 	defer unlock()
 
-	scope, err := r.scopeForPrincipal(principal.Principal{Role: principal.RoleAdmin})
+	actor := r.curiosityPrincipal()
+	scope, err := r.scopeForPrincipal(actor)
 	if err != nil {
 		return fmt.Errorf("resolve curiosity scope: %w", err)
 	}
-	baseTools := r.toolsForPrincipal(principal.Principal{Role: principal.RoleAdmin}, key)
+	baseTools := r.toolsForPrincipal(actor, key)
 	baseTools = toolRegistryForRunKind(baseTools, session.TurnRunKindCuriosity)
 	if baseTools == nil {
 		r.recordExecutionEvent(key, core.ExecutionEventCuriositySkipped, "curiosity", "skipped", map[string]any{"reason": "tools_unavailable"}, now)
@@ -173,9 +174,9 @@ func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err erro
 		CandidateID: candidate.ID,
 		SourceKind:  candidate.SourceKind,
 		SourceRef:   candidate.SourceRef,
-		SubjectKey:  firstNonEmpty(parsed.SubjectKey, candidate.SubjectKey),
+		SubjectKey:  firstNonEmpty(candidate.SubjectKey, parsed.SubjectKey),
 		Summary:     parsed.Summary,
-		ContentHash: firstNonEmpty(parsed.ContentHash, outputHash),
+		ContentHash: firstNonEmpty(outputHash, parsed.ContentHash),
 		Confidence:  parsed.Confidence,
 		ObservedAt:  now,
 		Evidence:    curiosityEvidence(candidate, outputHash, append([]session.RecordReference(nil), parsed.Evidence...)),
@@ -205,6 +206,20 @@ func curiosityScopeRef() session.ScopeRef {
 
 func curiositySessionKey() session.SessionKey {
 	return session.SessionKey{ChatID: cronSessionChatID(curiositySessionID), UserID: 0, Scope: curiosityScopeRef()}
+}
+
+func (r *Runtime) curiosityPrincipal() principal.Principal {
+	for _, id := range r.cfg.Principals.Telegram.ApprovedUserIDs {
+		if id > 0 {
+			return principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: id}
+		}
+	}
+	for _, id := range r.cfg.Principals.Telegram.AdminUserIDs {
+		if id > 0 {
+			return principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: id}
+		}
+	}
+	return principal.Principal{Role: principal.RoleApprovedUser}
 }
 
 func (r *Runtime) ensureConfiguredCuriosityLease(now time.Time) (session.CuriosityLease, error) {
@@ -245,6 +260,13 @@ func (r *Runtime) curiosityCandidates(tools agent.ToolRegistry, sharedMemoryRoot
 	out := make([]curiosityCandidate, 0, len(states)*2)
 	for _, state := range states {
 		if !isInteriorSignalCategory(state.Category) || state.Intensity < r.cfg.Curiosity.MinSignalIntensity {
+			continue
+		}
+		supported, err := r.curiositySignalHasIndependentSupport(state, now)
+		if err != nil {
+			return nil, err
+		}
+		if !supported {
 			continue
 		}
 		query := firstNonEmpty(state.Summary, state.SubjectKey)
@@ -395,7 +417,7 @@ func parseCuriosityObservation(raw string) (curiosityObservationOutput, error) {
 func (r *Runtime) recordCuriosityInteriorSignal(obs session.CuriosityObservation, candidate curiosityCandidate, now time.Time) error {
 	_, err := r.store.RecordInteriorSignalObservations(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()}, []session.InteriorSignalObservationInput{{
 		Category:          firstNonEmpty(candidate.SignalCategory, hiddenInputSemanticRecurrence),
-		SubjectKey:        obs.SubjectKey,
+		SubjectKey:        firstNonEmpty(candidate.SubjectKey, obs.SubjectKey),
 		Summary:           obs.Summary,
 		Source:            "curiosity",
 		Evidence:          obs.Evidence,
@@ -412,10 +434,26 @@ func curiosityEvidence(candidate curiosityCandidate, outputHash string, refs []s
 		session.RecordReference{Kind: "curiosity_source", Ref: candidate.SourceKind + ":" + candidate.SourceRef, Label: "selected curiosity source"},
 		session.RecordReference{Kind: "curiosity_candidate", Ref: candidate.ID, Label: candidate.ToolName},
 	)
+	if candidate.SourceKind == session.CuriositySourceURL {
+		refs = append(refs, session.RecordReference{Kind: "untrusted_external_source", Ref: candidate.SourceRef, Label: "third-party fetched text"})
+	}
 	if strings.TrimSpace(outputHash) != "" {
 		refs = append(refs, session.RecordReference{Kind: "tool_output", Ref: outputHash, Label: "read-only look"})
 	}
 	return session.NormalizeRecordReferences(refs)
+}
+
+func (r *Runtime) curiositySignalHasIndependentSupport(state session.InteriorSignalState, now time.Time) (bool, error) {
+	weight, err := r.store.InteriorSignalAppliedWeightSinceExcludingSource(
+		session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()},
+		session.InteriorSignalRef{Category: state.Category, SubjectKey: state.SubjectKey},
+		now.Add(-session.InteriorSignalAppliedObservationRetention),
+		"curiosity",
+	)
+	if err != nil {
+		return false, fmt.Errorf("load curiosity independent signal support: %w", err)
+	}
+	return weight > 0, nil
 }
 
 func curiosityCandidatePayload(candidate curiosityCandidate) map[string]any {

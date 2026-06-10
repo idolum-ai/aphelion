@@ -143,17 +143,45 @@ func (f statusReadableFacts) providerInput() string {
 	if delivery := strings.TrimSpace(f.DeliveryStatus); delivery != "" {
 		parts = append(parts, "delivery_status="+delivery)
 	}
+	if evidence := statusOperationEvidenceSummary(f.OperationEvidence); evidence != "" {
+		parts = append(parts, "operation_evidence_summary="+evidence)
+		for i, status := range f.OperationEvidence {
+			parts = append(parts, fmt.Sprintf("operation_evidence_%d=%s", i+1, compactOperationEvidenceStatus(status)))
+		}
+	}
 	return strings.Join(parts, "\n")
 }
 
+func compactOperationEvidenceStatus(status core.OperationEvidenceStatus) string {
+	parts := []string{
+		"phase_id=" + strings.TrimSpace(status.PhaseID),
+		"status=" + strings.TrimSpace(status.Status),
+		fmt.Sprintf("satisfied=%t", status.Satisfied),
+	}
+	if code := strings.TrimSpace(status.ReasonCode); code != "" {
+		parts = append(parts, "reason_code="+code)
+	}
+	if reason := strings.TrimSpace(status.Reason); reason != "" {
+		parts = append(parts, "reason="+reason)
+	}
+	return strings.Join(parts, " ")
+}
+
 func compactStatusReadableSummary(summary string) string {
+	return compactStatusReadableSummaryLimit(summary, statusReadableQuickReadMaxChars)
+}
+
+func compactStatusReadableSummaryLimit(summary string, maxChars int) string {
 	summary = strings.TrimSpace(strings.Join(strings.Fields(summary), " "))
 	if summary == "" {
 		return ""
 	}
+	if maxChars <= 4 {
+		maxChars = statusReadableQuickReadMaxChars
+	}
 	runes := []rune(summary)
-	if len(runes) <= statusReadableQuickReadMaxChars {
+	if len(runes) <= maxChars {
 		return summary
 	}
-	return strings.TrimSpace(string(runes[:statusReadableQuickReadMaxChars-1])) + "..."
+	return strings.TrimSpace(string(runes[:maxChars-1])) + "..."
 }

@@ -41,6 +41,9 @@ func (s *SQLiteStore) RecordInteriorSignalObservations(key SessionKey, inputs []
 	if err := decayInteriorSignalStatesTx(tx, key, now); err != nil {
 		return nil, err
 	}
+	if err := pruneInteriorSignalsTx(tx, sessionID, now); err != nil {
+		return nil, err
+	}
 	for _, input := range normalized {
 		if err := recordInteriorSignalObservationTx(tx, key, sessionID, input, now); err != nil {
 			return nil, err
@@ -71,6 +74,9 @@ func (s *SQLiteStore) InteriorSignalStates(key SessionKey, now time.Time) ([]Int
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err := decayInteriorSignalStatesTx(tx, key, now); err != nil {
+		return nil, err
+	}
+	if err := pruneInteriorSignalsTx(tx, SessionIDForKey(key), now); err != nil {
 		return nil, err
 	}
 	states, err := interiorSignalStatesTx(tx, key)
@@ -168,6 +174,9 @@ func (s *SQLiteStore) MarkInteriorSignalsSurfaced(key SessionKey, refs []Interio
 	if err := decayInteriorSignalStatesTx(tx, key, now); err != nil {
 		return err
 	}
+	if err := pruneInteriorSignalsTx(tx, sessionID, now); err != nil {
+		return err
+	}
 	cooldownUntil := now.Add(InteriorSignalDefaultCooldown).UTC().Format(time.RFC3339Nano)
 	for _, ref := range refs {
 		ref = NormalizeInteriorSignalRef(ref)
@@ -203,10 +212,11 @@ func recordInteriorSignalObservationTx(tx *sql.Tx, key SessionKey, sessionID str
 		FROM interior_signal_observations
 		WHERE session_id = ?
 			AND category = ?
-			AND subject_key = ?
-			AND source_fingerprint = ?
-			AND observed_at >= ?
-	`, sessionID, input.Category, input.SubjectKey, input.SourceFingerprint, threshold).Scan(&existing); err != nil {
+				AND subject_key = ?
+				AND source_fingerprint = ?
+				AND observed_at >= ?
+				AND applied_weight > 0
+		`, sessionID, input.Category, input.SubjectKey, input.SourceFingerprint, threshold).Scan(&existing); err != nil {
 		return fmt.Errorf("check interior signal fingerprint: %w", err)
 	}
 	if existing > 0 {
@@ -279,6 +289,83 @@ func recordInteriorSignalObservationTx(tx *sql.Tx, key SessionKey, sessionID str
 		input.Category, input.SubjectKey, input.Summary, evidenceJSON, intensity, confidence, count,
 		input.ObservedAt.UTC().Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), createdAt.UTC().Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("insert interior signal state: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) InteriorSignalAppliedWeightSinceExcludingSource(key SessionKey, ref InteriorSignalRef, since time.Time, excludedSource string) (float64, error) {
+	if s == nil {
+		return 0, fmt.Errorf("store is nil")
+	}
+	key.Scope = defaultScopeForKey(key)
+	sessionID := SessionIDForKey(key)
+	if sessionID == "" {
+		return 0, nil
+	}
+	ref = NormalizeInteriorSignalRef(ref)
+	if ref.Category == "" || ref.SubjectKey == "" {
+		return 0, nil
+	}
+	args := []any{sessionID, ref.Category, ref.SubjectKey}
+	where := []string{"session_id = ?", "category = ?", "subject_key = ?", "applied_weight > 0"}
+	if !since.IsZero() {
+		where = append(where, "observed_at >= ?")
+		args = append(args, since.UTC().Format(time.RFC3339Nano))
+	}
+	if excludedSource = normalizeInteriorSignalToken(excludedSource); excludedSource != "" {
+		where = append(where, "source != ?")
+		args = append(args, excludedSource)
+	}
+	var total float64
+	if err := s.db.QueryRow(`
+		SELECT COALESCE(SUM(applied_weight), 0)
+		FROM interior_signal_observations
+		WHERE `+strings.Join(where, " AND "), args...).Scan(&total); err != nil {
+		return 0, fmt.Errorf("query interior signal applied weight: %w", err)
+	}
+	return clampInteriorSignal(total), nil
+}
+
+func pruneInteriorSignalsTx(tx *sql.Tx, sessionID string, now time.Time) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	now = now.UTC()
+	zeroCutoff := now.Add(-InteriorSignalZeroWeightObservationRetention).Format(time.RFC3339Nano)
+	appliedCutoff := now.Add(-InteriorSignalAppliedObservationRetention).Format(time.RFC3339Nano)
+	if _, err := tx.Exec(`
+		DELETE FROM interior_signal_observations
+		WHERE session_id = ?
+			AND applied_weight <= 0
+			AND observed_at < ?
+	`, sessionID, zeroCutoff); err != nil {
+		return fmt.Errorf("prune zero-weight interior signal observations: %w", err)
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM interior_signal_observations
+		WHERE session_id = ?
+			AND applied_weight > 0
+			AND observed_at < ?
+	`, sessionID, appliedCutoff); err != nil {
+		return fmt.Errorf("prune applied interior signal observations: %w", err)
+	}
+	stateCutoff := now.Add(-InteriorSignalInactiveStateObservationHorizon).Format(time.RFC3339Nano)
+	if _, err := tx.Exec(`
+		DELETE FROM interior_signal_states
+		WHERE session_id = ?
+			AND intensity <= ?
+			AND NOT EXISTS (
+				SELECT 1
+				FROM interior_signal_observations o
+				WHERE o.session_id = interior_signal_states.session_id
+					AND o.category = interior_signal_states.category
+					AND o.subject_key = interior_signal_states.subject_key
+					AND o.applied_weight > 0
+					AND o.observed_at >= ?
+			)
+	`, sessionID, InteriorSignalMinimumIntensity, stateCutoff); err != nil {
+		return fmt.Errorf("prune inactive interior signal states: %w", err)
 	}
 	return nil
 }

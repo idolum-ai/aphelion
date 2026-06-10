@@ -10,6 +10,7 @@ type OperationEvidenceStatus struct {
 	Status         string
 	EvidenceKind   string
 	Satisfied      bool
+	ReasonCode     string
 	Reason         string
 	CompletedAt    *time.Time
 	WorkMode       string

@@ -109,6 +109,144 @@ func TestInteriorSignalStoreAccumulatesDedupesDecaysAndCooldown(t *testing.T) {
 	}
 }
 
+func TestInteriorSignalDedupeWindowDoesNotSlideOnSuppressedRows(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	key := SessionKey{ChatID: 7102, UserID: 0, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "7102"}}
+	start := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+	obs := InteriorSignalObservationInput{
+		Category:          "semantic_recurrence",
+		SubjectKey:        "stable-question",
+		Summary:           "questions.md keeps carrying the same latent question",
+		Source:            "heartbeat_reflection",
+		SourceFingerprint: "questions-md-same-content",
+		Weight:            0.4,
+		Confidence:        0.7,
+	}
+
+	for i := 0; i < 14; i++ {
+		if _, err := store.RecordInteriorSignalObservations(key, []InteriorSignalObservationInput{obs}, start.Add(time.Duration(i)*time.Hour)); err != nil {
+			t.Fatalf("RecordInteriorSignalObservations(%d) err = %v", i, err)
+		}
+	}
+	states, err := store.InteriorSignalStates(key, start.Add(13*time.Hour))
+	if err != nil {
+		t.Fatalf("InteriorSignalStates() err = %v", err)
+	}
+	state := requireInteriorSignalState(t, states, "semantic_recurrence", "stable-question")
+	if state.ObservationCount != 2 {
+		t.Fatalf("observation count = %d, want second applied observation after dedupe window", state.ObservationCount)
+	}
+
+	observations, err := store.RecentInteriorSignalObservations(key, []InteriorSignalRef{{Category: "semantic_recurrence", SubjectKey: "stable-question"}}, start.Add(-time.Hour), 20)
+	if err != nil {
+		t.Fatalf("RecentInteriorSignalObservations() err = %v", err)
+	}
+	applied := 0
+	for _, observation := range observations {
+		if observation.AppliedWeight > 0 {
+			applied++
+		}
+	}
+	if applied != 2 {
+		t.Fatalf("applied observations = %d, want 2 despite suppressed rows", applied)
+	}
+}
+
+func TestInteriorSignalRetentionPrunesSuppressedObservationsAndInactiveState(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	key := SessionKey{ChatID: 7103, UserID: 0, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "7103"}}
+	start := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	obs := InteriorSignalObservationInput{
+		Category:          "semantic_recurrence",
+		SubjectKey:        "old-signal",
+		Summary:           "old signal",
+		Source:            "test",
+		SourceFingerprint: "same",
+		Weight:            0.1,
+		Confidence:        0.5,
+	}
+	if _, err := store.RecordInteriorSignalObservations(key, []InteriorSignalObservationInput{obs}, start); err != nil {
+		t.Fatalf("RecordInteriorSignalObservations(first) err = %v", err)
+	}
+	if _, err := store.RecordInteriorSignalObservations(key, []InteriorSignalObservationInput{obs}, start.Add(time.Hour)); err != nil {
+		t.Fatalf("RecordInteriorSignalObservations(duplicate) err = %v", err)
+	}
+	later := start.Add(31 * 24 * time.Hour)
+	states, err := store.InteriorSignalStates(key, later)
+	if err != nil {
+		t.Fatalf("InteriorSignalStates(prune) err = %v", err)
+	}
+	for _, state := range states {
+		if state.SubjectKey == "old-signal" {
+			t.Fatalf("state survived retention prune: %#v", state)
+		}
+	}
+	observations, err := store.RecentInteriorSignalObservations(key, []InteriorSignalRef{{Category: "semantic_recurrence", SubjectKey: "old-signal"}}, time.Time{}, 20)
+	if err != nil {
+		t.Fatalf("RecentInteriorSignalObservations() err = %v", err)
+	}
+	if len(observations) != 0 {
+		t.Fatalf("observations survived retention prune: %#v", observations)
+	}
+}
+
+func TestInteriorSignalFallbackSubjectKeyUsesStableEvidenceIdentity(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	first := NormalizeInteriorSignalObservationInput(InteriorSignalObservationInput{
+		Category: "semantic_recurrence",
+		Summary:  "questions wording one",
+		Source:   "heartbeat_reflection",
+		Evidence: []RecordReference{{Kind: "memory_file", Ref: "memory/questions.md:sha256:first"}},
+		Weight:   0.2,
+	}, now)
+	second := NormalizeInteriorSignalObservationInput(InteriorSignalObservationInput{
+		Category: "semantic_recurrence",
+		Summary:  "questions wording two",
+		Source:   "heartbeat_reflection",
+		Evidence: []RecordReference{{Kind: "memory_file", Ref: "memory/questions.md:sha256:second"}},
+		Weight:   0.2,
+	}, now)
+	if first.SubjectKey == "" || first.SubjectKey != second.SubjectKey {
+		t.Fatalf("subject keys = %q/%q, want stable evidence-derived key", first.SubjectKey, second.SubjectKey)
+	}
+
+	interactiveA := NormalizeInteriorSignalObservationInput(InteriorSignalObservationInput{
+		Category:          "semantic_recurrence",
+		Summary:           "first interactive theme",
+		Source:            "interactive_semantic_search",
+		Evidence:          []RecordReference{{Kind: "turn", Ref: "current_user_text"}},
+		SourceFingerprint: "fingerprint-a",
+		Weight:            0.2,
+	}, now)
+	interactiveB := NormalizeInteriorSignalObservationInput(InteriorSignalObservationInput{
+		Category:          "semantic_recurrence",
+		Summary:           "second interactive theme",
+		Source:            "interactive_semantic_search",
+		Evidence:          []RecordReference{{Kind: "turn", Ref: "current_user_text"}},
+		SourceFingerprint: "fingerprint-b",
+		Weight:            0.2,
+	}, now)
+	if interactiveA.SubjectKey == interactiveB.SubjectKey {
+		t.Fatalf("volatile subject key = %q, want source-fingerprint distinction", interactiveA.SubjectKey)
+	}
+}
+
 func TestInteriorSignalTablesMigrateFromV65(t *testing.T) {
 	t.Parallel()
 

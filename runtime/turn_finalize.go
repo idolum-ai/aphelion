@@ -234,7 +234,15 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 	output.StreamedReply = stageResult.Streamed
 	output.OutboundID = stageResult.RenderedID
 	output.OutboundType = stageResult.RenderedType
+	personaContextRewriteApplied := false
+	personaContextStreamID := int64(0)
+	personaContextStreamType := ""
+	if output.StreamedReply && output.OutboundID != 0 {
+		personaContextStreamID = output.OutboundID
+		personaContextStreamType = output.OutboundType
+	}
 	if query, ok := extractPersonaContextRequest(output.ReplyText); ok {
+		personaContextRewriteApplied = true
 		notes := r.fulfillPersonaContextRequest(input.Ctx, input.Scope, firstNonEmpty(strings.TrimSpace(query), strings.TrimSpace(input.PromptInput)), time.Now().UTC())
 		if len(notes) > 0 {
 			renderedReply, usage, renderErr := r.renderFaceWithRequestedContext(input.Ctx, input, stageResult.Runtime, notes)
@@ -252,15 +260,13 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 			output.ReplyText = pipeline.FloorTextOrFallback(input.FloorText)
 		}
 	}
-	if strings.Contains(output.ReplyText, personaContextRequestPrefix) {
+	if containsPersonaContextRequestProtocolLine(output.ReplyText) {
 		if sanitized := suppressVisiblePersonaContextRequestLeak(output.ReplyText); sanitized == "" {
 			output.ReplyText = pipeline.FloorTextOrFallback(input.FloorText)
-			output.StreamedReply = false
-			output.OutboundID = 0
-			output.OutboundType = ""
 		} else {
 			output.ReplyText = sanitized
 		}
+		personaContextRewriteApplied = true
 	}
 
 	output.ReplyText = r.applyTurnConstitution(
@@ -284,6 +290,27 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 		output.ReplyModality = directiveModality
 	}
 	output.ReplyText = enforceVisibleRecurrenceContract(output.ReplyText, stageResult.Runtime)
+
+	if personaContextRewriteApplied && personaContextStreamID != 0 {
+		if err := r.reconcileStreamedFallback(input.Ctx, input.Key, input.Msg, personaContextStreamID, output.ReplyText, "persona_context_request_rewrite"); err != nil {
+			log.Printf("WARN streamed persona context reconciliation failed backend=%s message_id=%d err=%v; forcing normal delivery", r.faceBackend, personaContextStreamID, err)
+			r.recordExecutionEvent(input.Key, core.ExecutionEventPersonaStreamReconcileFailed, "render", "failed", map[string]any{
+				"message_id": personaContextStreamID,
+				"error":      trimError(err.Error()),
+			}, time.Now().UTC())
+			output.StreamedReply = false
+			output.OutboundID = 0
+			output.OutboundType = ""
+		} else {
+			output.StreamedReply = true
+			output.OutboundID = personaContextStreamID
+			output.OutboundType = personaContextStreamType
+			r.recordExecutionEvent(input.Key, core.ExecutionEventPersonaStreamReconciled, "render", "edited", map[string]any{
+				"message_id": output.OutboundID,
+				"text_chars": len([]rune(strings.TrimSpace(output.ReplyText))),
+			}, time.Now().UTC())
+		}
+	}
 
 	if stageResult.FallbackApplied && output.StreamedReply && output.OutboundID != 0 {
 		if err := r.reconcileStreamedFallback(input.Ctx, input.Key, input.Msg, output.OutboundID, output.ReplyText, stageResult.FallbackReason); err != nil {
@@ -362,6 +389,19 @@ func extractPersonaContextRequest(reply string) (string, bool) {
 	return "", false
 }
 
+func containsPersonaContextRequestProtocolLine(reply string) bool {
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return false
+	}
+	for _, line := range strings.Split(reply, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), personaContextRequestPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func suppressVisiblePersonaContextRequestLeak(reply string) string {
 	reply = strings.TrimSpace(reply)
 	if reply == "" {
@@ -373,7 +413,7 @@ func suppressVisiblePersonaContextRequestLeak(reply string) string {
 	lines := strings.Split(reply, "\n")
 	kept := lines[:0]
 	for _, line := range lines {
-		trimmed := strings.TrimSpace(strings.Trim(line, "`"))
+		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, personaContextRequestPrefix) {
 			continue
 		}

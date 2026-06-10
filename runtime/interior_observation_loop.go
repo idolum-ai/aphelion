@@ -68,7 +68,7 @@ func reflectionInteriorSignalInputs(source string, sections map[string]string, b
 		summary := compactSignalText(prefix+": "+line, 180)
 		out = append(out, session.InteriorSignalObservationInput{
 			Category:          category,
-			SubjectKey:        runtimeInteriorSignalSubject(line),
+			SubjectKey:        runtimeInteriorSignalSubject(source + ":" + store),
 			Summary:           summary,
 			Source:            source,
 			Evidence:          evidence,

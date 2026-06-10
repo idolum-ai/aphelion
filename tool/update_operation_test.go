@@ -1260,6 +1260,9 @@ func TestOperationCompletionEvidenceStatusExplainsMismatch(t *testing.T) {
 	if status.Reason != "last work does not match the current phase proposal" {
 		t.Fatalf("status.Reason = %q", status.Reason)
 	}
+	if status.ReasonCode != "proposal_mismatch" {
+		t.Fatalf("status.ReasonCode = %q", status.ReasonCode)
+	}
 	if status.PhaseID != "implementation" || status.EvidenceKind != "work_metadata" {
 		t.Fatalf("status = %#v", status)
 	}
@@ -1286,7 +1289,7 @@ func TestOperationCompletionEvidenceStatusReportsSatisfied(t *testing.T) {
 		t.Fatalf("statuses len = %d, want 1", len(statuses))
 	}
 	status := statuses[0]
-	if !status.Satisfied || status.Reason != "" {
+	if !status.Satisfied || status.Reason != "" || status.ReasonCode != "" {
 		t.Fatalf("status = %#v, want satisfied with no reason", status)
 	}
 	if status.CompletedAt == nil || !status.CompletedAt.Equal(now) {

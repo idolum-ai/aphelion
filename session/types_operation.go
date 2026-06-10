@@ -200,6 +200,7 @@ type OperationEvidenceStatus struct {
 	Status         PlanStatus `json:"status,omitempty"`
 	EvidenceKind   string     `json:"evidence_kind,omitempty"`
 	Satisfied      bool       `json:"satisfied"`
+	ReasonCode     string     `json:"reason_code,omitempty"`
 	Reason         string     `json:"reason,omitempty"`
 	CompletedAt    *time.Time `json:"completed_at,omitempty"`
 	WorkMode       string     `json:"work_mode,omitempty"`

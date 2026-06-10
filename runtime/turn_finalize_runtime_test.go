@@ -11,6 +11,8 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/turn"
@@ -195,6 +197,69 @@ func TestSuppressVisiblePersonaContextRequestLeak(t *testing.T) {
 	}
 	if got := suppressVisiblePersonaContextRequestLeak("Here is the answer.\nPERSONA_CONTEXT_REQUEST: hidden"); strings.Contains(got, personaContextRequestPrefix) {
 		t.Fatalf("suppressVisiblePersonaContextRequestLeak() leaked marker in %q", got)
+	}
+	quoted := "Here is a quoted marker:\n> PERSONA_CONTEXT_REQUEST: example"
+	if got := suppressVisiblePersonaContextRequestLeak(quoted); got != quoted {
+		t.Fatalf("suppressVisiblePersonaContextRequestLeak() = %q, want quoted marker preserved", got)
+	}
+	inline := "The literal PERSONA_CONTEXT_REQUEST: marker is part of the protocol."
+	if got := suppressVisiblePersonaContextRequestLeak(inline); got != inline {
+		t.Fatalf("suppressVisiblePersonaContextRequestLeak() = %q, want inline marker preserved", got)
+	}
+}
+
+func TestRenderTurnReplyReconcilesStreamedPersonaContextLeak(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendProvider
+	rt.streamEditInterval = 0
+	renderer := &streamingCountingFaceRenderer{
+		text:   "Here is the answer.\nPERSONA_CONTEXT_REQUEST: hidden context request",
+		chunks: []string{"Here is the answer.", "\nPERSONA_CONTEXT_REQUEST: hidden context request"},
+	}
+	key := session.SessionKey{ChatID: 917, UserID: 0}
+
+	result, err := rt.renderTurnReply(turnRenderInput{
+		Ctx:              context.Background(),
+		Key:              key,
+		Msg:              core.InboundMessage{ChatID: 917, MessageID: 44},
+		Result:           &core.TurnResult{Text: "Grounded fallback text."},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		AllowStream:      true,
+		ReplyText:        "Grounded fallback text.",
+		FloorText:        "Grounded fallback text.",
+		CurrentFaceModel: renderer,
+		PromptInput:      "continue",
+	})
+	if err != nil {
+		t.Fatalf("renderTurnReply() err = %v", err)
+	}
+	if !result.StreamedReply || result.OutboundID == 0 {
+		t.Fatalf("stream metadata = streamed:%v id:%d, want reconciled existing stream", result.StreamedReply, result.OutboundID)
+	}
+	if strings.Contains(result.ReplyText, personaContextRequestPrefix) {
+		t.Fatalf("ReplyText leaked marker: %q", result.ReplyText)
+	}
+	sender.mu.Lock()
+	if len(sender.editClear) == 0 {
+		sender.mu.Unlock()
+		t.Fatal("editClear empty, want streamed message reconciliation")
+	}
+	edited := sender.editClear[len(sender.editClear)-1].Text
+	sender.mu.Unlock()
+	if strings.Contains(edited, personaContextRequestPrefix) || !strings.Contains(edited, "Here is the answer.") {
+		t.Fatalf("edited text = %q, want sanitized streamed reply", edited)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !testExecutionEventsContain(events, core.ExecutionEventPersonaStreamReconciled) {
+		t.Fatalf("events = %#v, want persona stream reconciliation event", events)
 	}
 }
 

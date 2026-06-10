@@ -175,40 +175,65 @@ func updateOperationPhaseCompletionNeedsWorkEvidence(phase session.OperationPhas
 }
 
 func updateOperationPhaseHasCompletionEvidence(state session.OperationState, phase session.OperationPhase) bool {
-	return updateOperationPhaseCompletionEvidenceReason(state, phase) == ""
+	return updateOperationPhaseCompletionEvidenceReasonCode(state, phase) == ""
 }
 
 func updateOperationPhaseCompletionEvidenceReason(state session.OperationState, phase session.OperationPhase) string {
+	return operationCompletionEvidenceReasonText(updateOperationPhaseCompletionEvidenceReasonCode(state, phase))
+}
+
+func updateOperationPhaseCompletionEvidenceReasonCode(state session.OperationState, phase session.OperationPhase) string {
 	state = session.NormalizeOperationState(state)
 	phase = normalizeToolOperationPhase(phase)
 	work := session.NormalizeWorkOperationMetadata(state.Work)
 	if strings.TrimSpace(work.LastError) != "" {
-		return "last work ended with an error"
+		return "last_work_error"
 	}
 	if work.LastCompletedAt.IsZero() {
-		return "last work has no completion timestamp"
+		return "missing_completion_timestamp"
 	}
 	opID := strings.TrimSpace(state.ID)
 	if opID == "" || strings.TrimSpace(work.LastOperationID) != opID {
-		return "last work does not match the operation"
+		return "operation_mismatch"
 	}
 	leaseID := strings.TrimSpace(phase.LeaseID)
 	if leaseID == "" || strings.TrimSpace(work.LastLeaseID) != leaseID {
-		return "last work lease does not match the current phase lease"
+		return "lease_mismatch"
 	}
 	workMode := strings.TrimSpace(session.OperationPhaseWorkAction(phase))
 	if workMode == "" || strings.TrimSpace(work.LastWorkMode) != workMode {
-		return "last work mode does not satisfy the phase authority"
+		return "work_mode_mismatch"
 	}
 	proposalID := session.OperationPhaseProposalID(state, phase)
 	if proposalID == "" || strings.TrimSpace(work.LastActionOperationID) != proposalID {
-		return "last work does not match the current phase proposal"
+		return "proposal_mismatch"
 	}
 	actionProposalID := strings.TrimSpace(work.LastActionProposalID)
 	if actionProposalID == "" || (actionProposalID != proposalID && actionProposalID != "aprop-"+proposalID) {
-		return "last work has no matching action proposal id"
+		return "action_proposal_mismatch"
 	}
 	return ""
+}
+
+func operationCompletionEvidenceReasonText(code string) string {
+	switch strings.TrimSpace(code) {
+	case "last_work_error":
+		return "last work ended with an error"
+	case "missing_completion_timestamp":
+		return "last work has no completion timestamp"
+	case "operation_mismatch":
+		return "last work does not match the operation"
+	case "lease_mismatch":
+		return "last work lease does not match the current phase lease"
+	case "work_mode_mismatch":
+		return "last work mode does not satisfy the phase authority"
+	case "proposal_mismatch":
+		return "last work does not match the current phase proposal"
+	case "action_proposal_mismatch":
+		return "last work has no matching action proposal id"
+	default:
+		return ""
+	}
 }
 
 // OperationCompletionEvidenceStatus projects executable phase completion evidence
@@ -222,14 +247,15 @@ func OperationCompletionEvidenceStatus(state session.OperationState) []session.O
 		if !updateOperationPhaseCompletionNeedsWorkEvidence(phase) {
 			continue
 		}
-		reason := updateOperationPhaseCompletionEvidenceReason(state, phase)
+		reasonCode := updateOperationPhaseCompletionEvidenceReasonCode(state, phase)
 		statuses = append(statuses, session.OperationEvidenceStatus{
 			PhaseID:        strings.TrimSpace(phase.ID),
 			AuthorityClass: strings.TrimSpace(phase.AuthorityClass),
 			Status:         phase.Status,
 			EvidenceKind:   "work_metadata",
-			Satisfied:      reason == "",
-			Reason:         reason,
+			Satisfied:      reasonCode == "",
+			ReasonCode:     reasonCode,
+			Reason:         operationCompletionEvidenceReasonText(reasonCode),
 			CompletedAt:    completedAtPtr(state.Work.LastCompletedAt),
 			WorkMode:       strings.TrimSpace(state.Work.LastWorkMode),
 			LeaseID:        strings.TrimSpace(state.Work.LastLeaseID),
