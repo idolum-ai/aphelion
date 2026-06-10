@@ -426,6 +426,12 @@ func renderHeartbeatRequest(targetChatID int64, events []session.ReviewEvent, de
 			lines = append(lines, "- "+line)
 		}
 	}
+	if len(hiddenInputs.InteriorSignalTrail) > 0 {
+		lines = append(lines, "Quiet observation trail:")
+		for _, line := range hiddenInputs.InteriorSignalTrail {
+			lines = append(lines, "- "+line)
+		}
+	}
 
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].ID < events[j].ID

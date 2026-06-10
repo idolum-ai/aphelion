@@ -341,6 +341,9 @@ func TestHeartbeatDeliveryTriggersAfterLatentStatePressureAccumulates(t *testing
 	if !strings.Contains(provider.lastGovernorMsgs[len(provider.lastGovernorMsgs)-1].Content, "Interior signal pressure:") {
 		t.Fatalf("heartbeat request missing interior pressure: %q", provider.lastGovernorMsgs[len(provider.lastGovernorMsgs)-1].Content)
 	}
+	if !strings.Contains(provider.lastGovernorMsgs[len(provider.lastGovernorMsgs)-1].Content, "Quiet observation trail:") {
+		t.Fatalf("heartbeat request missing quiet observation trail: %q", provider.lastGovernorMsgs[len(provider.lastGovernorMsgs)-1].Content)
+	}
 }
 
 func TestHeartbeatStaysSilentWithoutConvergingSignals(t *testing.T) {
@@ -479,6 +482,26 @@ func TestHeartbeatReflectionProposesCuratedMemoryFromDailyNotes(t *testing.T) {
 	}
 	if !strings.Contains(maintenance.Messages[1].Content, "Proposed curated memory updates for review:") {
 		t.Fatalf("maintenance reply = %q, want proposal summary", maintenance.Messages[1].Content)
+	}
+
+	observations, err := store.RecentInteriorSignalObservations(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()}, nil, time.Date(2026, time.April, 9, 0, 0, 0, 0, time.UTC), 10)
+	if err != nil {
+		t.Fatalf("RecentInteriorSignalObservations() err = %v", err)
+	}
+	var semantic, unresolved bool
+	for _, observation := range observations {
+		if observation.Source != "heartbeat_reflection_proposed" {
+			continue
+		}
+		if observation.Category == hiddenInputSemanticRecurrence && observation.AppliedWeight == reflectionSemanticWeight {
+			semantic = true
+		}
+		if observation.Category == hiddenInputUnresolvedMemory && observation.AppliedWeight == reflectionUnresolvedWeight {
+			unresolved = true
+		}
+	}
+	if !semantic || !unresolved {
+		t.Fatalf("reflection observations = %#v, want semantic and unresolved pressure records", observations)
 	}
 }
 

@@ -66,6 +66,27 @@ func TestInteriorSignalStoreAccumulatesDedupesDecaysAndCooldown(t *testing.T) {
 		t.Fatalf("new evidence intensity = %.4f, want accumulated pressure", state.Intensity)
 	}
 
+	observations, err := store.RecentInteriorSignalObservations(key, []InteriorSignalRef{{Category: "semantic_recurrence", SubjectKey: "release-workflow"}}, now.Add(30*time.Minute), 10)
+	if err != nil {
+		t.Fatalf("RecentInteriorSignalObservations() err = %v", err)
+	}
+	if len(observations) != 2 {
+		t.Fatalf("recent observations = %d, want duplicate plus new evidence after since", len(observations))
+	}
+	if observations[0].SourceFingerprint != "new-evidence" || observations[1].SourceFingerprint != "same-evidence" {
+		t.Fatalf("recent observation order = %#v, want newest first", observations)
+	}
+	if observations[0].AppliedWeight <= 0 || observations[1].AppliedWeight != 0 {
+		t.Fatalf("applied weights = %.2f/%.2f, want new evidence applied and duplicate suppressed", observations[0].AppliedWeight, observations[1].AppliedWeight)
+	}
+	filtered, err := store.RecentInteriorSignalObservations(key, []InteriorSignalRef{{Category: "semantic_recurrence", SubjectKey: "other"}}, time.Time{}, 10)
+	if err != nil {
+		t.Fatalf("RecentInteriorSignalObservations(filtered) err = %v", err)
+	}
+	if len(filtered) != 0 {
+		t.Fatalf("filtered observations = %#v, want none for unmatched ref", filtered)
+	}
+
 	states, err = store.InteriorSignalStates(key, now.Add(14*time.Hour))
 	if err != nil {
 		t.Fatalf("InteriorSignalStates(decayed) err = %v", err)

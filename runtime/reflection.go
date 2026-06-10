@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -81,6 +82,9 @@ func (r *Runtime) reflectCuratedMemory(
 		if len(proposalIDs) == 0 {
 			return "", nil
 		}
+		if err := r.recordReflectionInteriorSignals("heartbeat_reflection_proposed", sections, reflectionProposalEvidence(proposalIDs), now); err != nil {
+			log.Printf("WARN reflection interior signal write failed: %v", err)
+		}
 		return fmt.Sprintf("Proposed curated memory updates for review: %s", strings.Join(proposalIDs, ", ")), nil
 	}
 
@@ -118,6 +122,9 @@ func (r *Runtime) reflectCuratedMemory(
 
 	if len(updatedStores) == 0 {
 		return "", nil
+	}
+	if err := r.recordReflectionInteriorSignals("heartbeat_reflection_applied", sections, nil, now); err != nil {
+		log.Printf("WARN reflection interior signal write failed: %v", err)
 	}
 	return "Reflected curated memory updates for: " + strings.Join(updatedStores, ", "), nil
 }

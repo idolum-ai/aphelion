@@ -162,6 +162,8 @@ This makes brokerage a real negotiation between two readings of the same latent 
 - hidden-input convergence gates heartbeat-originated reflective outreach
 - heartbeat hidden-input convergence is backed by durable interior signal pressure with magnitude, decay, dedupe, and surfaced cooldown
 - curiosity can spend a disabled-by-default, read-only standing lease to inspect one candidate source from accumulated interior pressure and record a silent typed observation
+- reflection and Nocturne can feed low-weight typed observations back into interior pressure, so quiet maintenance leaves reusable residue instead of only artifacts or summaries
+- heartbeat can include a compact quiet-observation trail when accumulated pressure crosses the outreach threshold
 - Idolum brokerage proposals name the hidden input when one is materially shaping the push
 - Idolum (System) ratification may preserve `SIGNAL_JUDGMENT` when Idolum named a hidden input
 - floor sidecar metadata preserves hidden inputs when material
@@ -182,6 +184,7 @@ This makes brokerage a real negotiation between two readings of the same latent 
 - **Hidden inputs are real inputs.** They must be traceable to actual memory, session history, or environmental state. They cannot be invented.
 - **Interior pressure is advisory.** Accumulated signal magnitude may shape attention and heartbeat outreach, but it does not grant authority, assert completion, or bypass consent.
 - **Curiosity is a governed read, not autonomous work.** Curiosity may re-read allowlisted sources and write typed observations, but it must not deliver user messages, mutate durable memory directly, perform writes, or infer authority from pressure.
+- **Silent maintenance leaves typed residue.** Nocturne, reflection, and curiosity may strengthen future attention only through bounded interior signal observations with source, evidence, confidence, weight, dedupe, and decay.
 - **The scene should feel grounded.** Generic tone is not enough. Idolum authors from retrieved structure.
 - **Brokerage becomes signal negotiation.** Both layers read the same latent state and their readings should be preserved together.
 

@@ -56,6 +56,7 @@ type hiddenInputSet struct {
 	Inputs                 []hiddenInput
 	InteriorSignalStates   []session.InteriorSignalState
 	InteriorSignalLines    []string
+	InteriorSignalTrail    []string
 	OutreachEvaluated      bool
 	OutreachEligible       bool
 	OutreachSignalRefs     []session.InteriorSignalRef
@@ -289,6 +290,9 @@ func (r *Runtime) withInteriorSignalState(key session.SessionKey, inputs hiddenI
 		inputs.OutreachEligible = evaluation.Eligible
 		inputs.OutreachSignalRefs = evaluation.Refs
 		inputs.OutreachEligibilityWhy = evaluation.Reason
+		if evaluation.Eligible {
+			inputs.InteriorSignalTrail = r.interiorSignalObservationTrail(key, evaluation.Refs, now)
+		}
 	}
 	return inputs
 }
@@ -318,6 +322,66 @@ func interiorSignalPressureLines(states []session.InteriorSignalState, now time.
 		}
 	}
 	return lines
+}
+
+func (r *Runtime) interiorSignalObservationTrail(key session.SessionKey, refs []session.InteriorSignalRef, now time.Time) []string {
+	if r == nil || r.store == nil || len(refs) == 0 {
+		return nil
+	}
+	observations, err := r.store.RecentInteriorSignalObservations(key, refs, now.Add(-7*24*time.Hour), 8)
+	if err != nil {
+		logHiddenInputSignalError("load observation trail", err)
+		return nil
+	}
+	lines := make([]string, 0, len(observations))
+	for _, observation := range observations {
+		if observation.AppliedWeight <= 0 {
+			continue
+		}
+		summary := compactSignalText(observation.Summary, 120)
+		if summary == "" {
+			continue
+		}
+		line := fmt.Sprintf("%s:%s source=%s weight=%.2f observed=%s summary=%s",
+			observation.Category,
+			observation.SubjectKey,
+			observation.Source,
+			roundSignalFloat(observation.AppliedWeight),
+			observation.ObservedAt.UTC().Format("2006-01-02"),
+			summary,
+		)
+		if evidence := compactSignalEvidence(observation.Evidence); evidence != "" {
+			line += " evidence=" + evidence
+		}
+		lines = append(lines, line)
+		if len(lines) == 5 {
+			break
+		}
+	}
+	return lines
+}
+
+func compactSignalEvidence(refs []session.RecordReference) string {
+	refs = session.NormalizeRecordReferences(refs)
+	parts := make([]string, 0, minInt(len(refs), 3))
+	for _, ref := range refs {
+		parts = append(parts, ref.Kind+":"+compactSignalText(ref.Ref, 72))
+		if len(parts) == 3 {
+			break
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
+func compactSignalText(value string, maxLen int) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if maxLen <= 0 || len(value) <= maxLen {
+		return value
+	}
+	if maxLen <= 3 {
+		return value[:maxLen]
+	}
+	return value[:maxLen-3] + "..."
 }
 
 func isInteriorSignalCategory(category string) bool {

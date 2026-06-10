@@ -83,6 +83,70 @@ func (s *SQLiteStore) InteriorSignalStates(key SessionKey, now time.Time) ([]Int
 	return states, nil
 }
 
+func (s *SQLiteStore) RecentInteriorSignalObservations(key SessionKey, refs []InteriorSignalRef, since time.Time, limit int) ([]InteriorSignalObservation, error) {
+	if s == nil {
+		return nil, fmt.Errorf("store is nil")
+	}
+	key.Scope = defaultScopeForKey(key)
+	sessionID := SessionIDForKey(key)
+	if sessionID == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 12
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	normalizedRefs := make([]InteriorSignalRef, 0, len(refs))
+	for _, ref := range refs {
+		ref = NormalizeInteriorSignalRef(ref)
+		if ref.Category == "" || ref.SubjectKey == "" {
+			continue
+		}
+		normalizedRefs = append(normalizedRefs, ref)
+	}
+
+	args := []any{sessionID}
+	where := []string{"session_id = ?"}
+	if !since.IsZero() {
+		where = append(where, "observed_at >= ?")
+		args = append(args, since.UTC().Format(time.RFC3339Nano))
+	}
+	if len(normalizedRefs) > 0 {
+		parts := make([]string, 0, len(normalizedRefs))
+		for _, ref := range normalizedRefs {
+			parts = append(parts, "(category = ? AND subject_key = ?)")
+			args = append(args, ref.Category, ref.SubjectKey)
+		}
+		where = append(where, "("+strings.Join(parts, " OR ")+")")
+	}
+	args = append(args, limit)
+
+	rows, err := s.db.Query(interiorSignalObservationSelectSQL()+`
+		WHERE `+strings.Join(where, " AND ")+`
+		ORDER BY observed_at DESC, id DESC
+		LIMIT ?
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query interior signal observations: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]InteriorSignalObservation, 0, limit)
+	for rows.Next() {
+		observation, err := scanInteriorSignalObservation(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, observation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate interior signal observations: %w", err)
+	}
+	return out, nil
+}
+
 func (s *SQLiteStore) MarkInteriorSignalsSurfaced(key SessionKey, refs []InteriorSignalRef, now time.Time) error {
 	if s == nil {
 		return fmt.Errorf("store is nil")
@@ -296,6 +360,63 @@ func interiorSignalStateSelectSQL() string {
 		category, subject_key, summary, evidence_json, intensity, confidence, observation_count,
 		last_observed_at, last_decayed_at, last_surfaced_at, cooldown_until, created_at, updated_at
 		FROM interior_signal_states`
+}
+
+func interiorSignalObservationSelectSQL() string {
+	return `SELECT id, session_id, chat_id, user_id, scope_kind, scope_id, scope_durable_agent_id,
+		category, subject_key, summary, source, evidence_json, source_fingerprint,
+		weight, applied_weight, confidence, observed_at, created_at
+		FROM interior_signal_observations`
+}
+
+func scanInteriorSignalObservation(scanner interface {
+	Scan(dest ...any) error
+}) (InteriorSignalObservation, error) {
+	var observation InteriorSignalObservation
+	var scopeKind, scopeID, scopeDurableAgentID string
+	var evidenceRaw string
+	var observedRaw, createdRaw string
+	if err := scanner.Scan(
+		&observation.ID,
+		&observation.SessionID,
+		&observation.ChatID,
+		&observation.UserID,
+		&scopeKind,
+		&scopeID,
+		&scopeDurableAgentID,
+		&observation.Category,
+		&observation.SubjectKey,
+		&observation.Summary,
+		&observation.Source,
+		&evidenceRaw,
+		&observation.SourceFingerprint,
+		&observation.Weight,
+		&observation.AppliedWeight,
+		&observation.Confidence,
+		&observedRaw,
+		&createdRaw,
+	); err != nil {
+		return InteriorSignalObservation{}, err
+	}
+	evidence, err := decodeInteriorSignalEvidence(evidenceRaw)
+	if err != nil {
+		return InteriorSignalObservation{}, err
+	}
+	observation.Evidence = evidence
+	observation.Scope = ScopeRef{Kind: ScopeKind(scopeKind), ID: scopeID, DurableAgentID: scopeDurableAgentID}
+	observation.Category = normalizeInteriorSignalToken(observation.Category)
+	observation.SubjectKey = normalizeInteriorSignalSubject(observation.SubjectKey)
+	observation.Source = normalizeInteriorSignalToken(observation.Source)
+	observation.Weight = clampInteriorSignal(observation.Weight)
+	observation.AppliedWeight = clampInteriorSignal(observation.AppliedWeight)
+	observation.Confidence = clampInteriorSignal(observation.Confidence)
+	if observation.ObservedAt, err = parseSQLiteTime(observedRaw); err != nil {
+		return InteriorSignalObservation{}, fmt.Errorf("parse interior signal observation observed_at: %w", err)
+	}
+	if observation.CreatedAt, err = parseSQLiteTime(createdRaw); err != nil {
+		return InteriorSignalObservation{}, fmt.Errorf("parse interior signal observation created_at: %w", err)
+	}
+	return observation, nil
 }
 
 func scanInteriorSignalState(scanner interface {

@@ -99,6 +99,9 @@ func (r *Runtime) runNocturneOnce(ctx context.Context, date string, artifactPath
 	if err := os.WriteFile(artifactPath, []byte(body), 0o600); err != nil {
 		return err
 	}
+	if err := r.recordNocturneInteriorSignal(ctx, date, artifactPath, text, time.Now().UTC()); err != nil {
+		log.Printf("WARN nocturne interior signal write failed: %v", err)
+	}
 	key := session.SessionKey{ChatID: cronSessionChatID(nocturneSessionID), UserID: 0, Scope: cronScopeRef(nocturneSessionID)}
 	unlock := r.lockSession(key)
 	defer unlock()
