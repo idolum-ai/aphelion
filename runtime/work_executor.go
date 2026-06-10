@@ -15,16 +15,17 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	runtimecodex "github.com/idolum-ai/aphelion/runtime/codex"
+	runtimecontinuation "github.com/idolum-ai/aphelion/runtime/continuation"
 	"github.com/idolum-ai/aphelion/session"
 )
 
-type WorkMode string
+type WorkMode = runtimecontinuation.WorkMode
 
 const (
-	WorkModeReadOnly       WorkMode = "read_only"
-	WorkModeWorkspaceWrite WorkMode = "workspace_write"
-	WorkModeCommit         WorkMode = "commit"
-	WorkModeDeploy         WorkMode = "deploy"
+	WorkModeReadOnly       = runtimecontinuation.WorkModeReadOnly
+	WorkModeWorkspaceWrite = runtimecontinuation.WorkModeWorkspaceWrite
+	WorkModeCommit         = runtimecontinuation.WorkModeCommit
+	WorkModeDeploy         = runtimecontinuation.WorkModeDeploy
 )
 
 type WorkRequest struct {
