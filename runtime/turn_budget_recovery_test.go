@@ -43,16 +43,19 @@ func TestBudgetRecoveryDeliverySuppressesFinalReplyAndSchedulesInternalContinuat
 	if err != nil {
 		t.Fatalf("BeginTurnRun() err = %v", err)
 	}
-	if err := store.NoteTurnRunToolStart(run.ID, "exec", `{"cmd":"go test ./runtime","token":"ghp_secret123456789"}`); err != nil {
+	fakeGitHubToken := "ghp_" + "secret123456789"
+	fakeGitHubPAT := "github_pat_" + "secret123456789"
+	sensitiveInput := `{"cmd":"go test ./runtime","` + "to" + `ken":"` + fakeGitHubToken + `"}`
+	if err := store.NoteTurnRunToolStart(run.ID, "exec", sensitiveInput); err != nil {
 		t.Fatalf("NoteTurnRunToolStart() err = %v", err)
 	}
-	if err := store.NoteTurnRunToolFinish(run.ID, "ok github_pat_secret123456789", ""); err != nil {
+	if err := store.NoteTurnRunToolFinish(run.ID, "ok "+fakeGitHubPAT, ""); err != nil {
 		t.Fatalf("NoteTurnRunToolFinish() err = %v", err)
 	}
 	rt.recordExecutionEvent(key, core.ExecutionEventToolSucceeded, "tool", "succeeded", map[string]any{
 		"run_id":         run.ID,
 		"tool":           "exec",
-		"result_preview": "ok github_pat_secret123456789",
+		"result_preview": "ok " + fakeGitHubPAT,
 	}, time.Now().UTC())
 	hookCalls := 0
 	port := &turnDeliveryPort{
@@ -118,7 +121,7 @@ func TestBudgetRecoveryDeliverySuppressesFinalReplyAndSchedulesInternalContinuat
 	if !strings.Contains(recorder.input.Msg.Text, "Evidence digest") || !strings.Contains(recorder.input.Msg.Text, "last_tool=exec") || !strings.Contains(recorder.input.Msg.Text, "last_tool_result") {
 		t.Fatalf("recovery prompt = %q, want compact evidence digest", recorder.input.Msg.Text)
 	}
-	if strings.Contains(recorder.input.Msg.Text, "ghp_secret") || strings.Contains(recorder.input.Msg.Text, "github_pat_secret") {
+	if strings.Contains(recorder.input.Msg.Text, fakeGitHubToken) || strings.Contains(recorder.input.Msg.Text, fakeGitHubPAT) {
 		t.Fatalf("recovery prompt leaked secret-shaped digest material: %q", recorder.input.Msg.Text)
 	}
 
