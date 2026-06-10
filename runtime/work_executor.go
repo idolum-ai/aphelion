@@ -259,34 +259,47 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 	result, err := e.runtime.handleInternalContinuationWithOptions(ctx, req.Actor, msg, internalContinuationOptions{
 		DeferBudgetRecoveryToWorkFailureRetry: true,
 	})
-	out := WorkResult{ExecutorName: "native", CompletionKind: "native_turn"}
-	if result != nil {
-		out.Summary = strings.TrimSpace(result.Text)
-		out.ProviderFailure = strings.TrimSpace(result.ProviderFailure)
-		out.ProviderEvents = append([]core.ProviderEvent(nil), result.ProviderEvents...)
-		if recovery, ok := nativeWorkTurnRecovery(result); ok {
-			recoveryCopy := *recovery
-			out.Recovery = &recoveryCopy
-			out.RecoveryKind = strings.TrimSpace(string(recovery.Kind))
-			out.RecoverySummary = strings.TrimSpace(recovery.Summary)
-			out.CompletionKind = "native_turn_budget_recovery"
-			out.SideEffects = true
-		}
-		if out.ProviderFailure != "" {
-			out.CompletionKind = "native_turn_provider_failed"
-			out.SideEffects = true
-		}
-	}
+	out := nativeWorkResultFromTurnResult(result)
 	if err != nil {
 		return out, err
 	}
-	if out.ProviderFailure != "" {
-		return out, nativeWorkProviderFailureError{Failure: out.ProviderFailure}
-	}
-	if out.RecoveryKind != "" {
-		return out, nativeWorkRecoveryError{Kind: out.RecoveryKind, Summary: out.RecoverySummary}
+	if terminalErr := nativeWorkResultTerminalError(out); terminalErr != nil {
+		return out, terminalErr
 	}
 	return out, nil
+}
+
+func nativeWorkResultFromTurnResult(result *core.TurnResult) WorkResult {
+	out := WorkResult{ExecutorName: "native", CompletionKind: "native_turn"}
+	if result == nil {
+		return out
+	}
+	out.Summary = strings.TrimSpace(result.Text)
+	out.ProviderFailure = strings.TrimSpace(result.ProviderFailure)
+	out.ProviderEvents = append([]core.ProviderEvent(nil), result.ProviderEvents...)
+	if recovery, ok := nativeWorkTurnRecovery(result); ok {
+		recoveryCopy := *recovery
+		out.Recovery = &recoveryCopy
+		out.RecoveryKind = strings.TrimSpace(string(recovery.Kind))
+		out.RecoverySummary = strings.TrimSpace(recovery.Summary)
+		out.CompletionKind = "native_turn_budget_recovery"
+		out.SideEffects = true
+	}
+	if out.ProviderFailure != "" {
+		out.CompletionKind = "native_turn_provider_failed"
+		out.SideEffects = true
+	}
+	return out
+}
+
+func nativeWorkResultTerminalError(result WorkResult) error {
+	if result.ProviderFailure != "" {
+		return nativeWorkProviderFailureError{Failure: result.ProviderFailure}
+	}
+	if result.RecoveryKind != "" {
+		return nativeWorkRecoveryError{Kind: result.RecoveryKind, Summary: result.RecoverySummary}
+	}
+	return nil
 }
 
 func nativeWorkTurnRecovery(result *core.TurnResult) (*core.TurnRecovery, bool) {
