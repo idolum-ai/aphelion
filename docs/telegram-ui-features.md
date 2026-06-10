@@ -537,6 +537,41 @@ Offer conditions:
   that active lease instead of showing another prompt. This class-scoped reuse is
   recorded in TES and stops at any authority boundary.
 
+### Re-entry next-step cards
+
+When a chat becomes quiet after a completed interactive or recovery turn,
+Aphelion may send a small `Possible next steps` card. The card is a
+re-entry aid, not a command queue: choosing a candidate selects a path and the
+next turn must still ask for any approval needed before acting.
+
+Current runtime policy is intentionally hard-coded rather than operator
+configurable:
+
+- a completed/latest turn must stay quiet for five minutes before it is
+  eligible;
+- the sweep checks roughly once a minute;
+- at most three candidates are shown;
+- active continuations, pending operation proposals, or newer/running turns
+  suppress the card.
+
+This means active debugging or continued chat traffic resets the quiet window.
+If no card appears, first check whether the session actually reached a latest
+terminal quiet state before treating delivery as broken.
+
+### Interior-pressure heartbeat nudges
+
+Hidden-input recurrence can create durable interior-pressure state. Heartbeat
+uses that state as an advisory signal for whether a short operator-facing nudge
+would be useful, especially when related semantic/support pressure keeps
+recurring. Interior pressure never grants authority, approves work, or bypasses
+normal proposal/capability gates.
+
+The current policy is runtime code, not an external config surface: observation
+dedupe and pressure half-life are twelve hours, surfaced nudges cool down for
+six hours, and heartbeat outreach uses fixed semantic/support/combined
+thresholds. Treat those values as future config candidates, not knobs operators
+can set today.
+
 ### Runtime decision prompts
 
 Decision prompts are shown with inline buttons. Depending on context, users can see:
