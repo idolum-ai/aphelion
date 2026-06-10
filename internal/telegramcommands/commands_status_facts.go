@@ -13,23 +13,24 @@ import (
 const statusReadableQuickReadMaxChars = 320
 
 type statusReadableFacts struct {
-	View           statusView
-	State          string
-	ActiveTurns    int
-	QueuedChats    int
-	QueueDepth     int
-	MaxQueueDepth  int
-	PendingItems   int
-	ActionItems    int
-	BacklogItems   int
-	StaleRunning   int
-	HotChats       int
-	TotalDurables  int
-	ActiveDurables int
-	DegradedAgents int
-	InactiveAgents int
-	CurrentSignal  string
-	DeliveryStatus string
+	View              statusView
+	State             string
+	ActiveTurns       int
+	QueuedChats       int
+	QueueDepth        int
+	MaxQueueDepth     int
+	PendingItems      int
+	ActionItems       int
+	BacklogItems      int
+	StaleRunning      int
+	HotChats          int
+	TotalDurables     int
+	ActiveDurables    int
+	DegradedAgents    int
+	InactiveAgents    int
+	CurrentSignal     string
+	DeliveryStatus    string
+	OperationEvidence []core.OperationEvidenceStatus
 }
 
 func normalizeStatusReadableFactsView(view statusView) statusView {
@@ -42,16 +43,17 @@ func normalizeStatusReadableFactsView(view statusView) statusView {
 func statusReadableFactsFromChat(view statusView, snapshot core.ChatStatusSnapshot) statusReadableFacts {
 	actionable, backlog := face.TelegramStatusPendingItemCounts(snapshot.PendingItems)
 	return statusReadableFacts{
-		View:           normalizeStatusReadableFactsView(view),
-		State:          face.TelegramStatusChatState(snapshot),
-		ActiveTurns:    len(snapshot.ActiveTurnIDs),
-		QueueDepth:     snapshot.QueueDepth,
-		PendingItems:   len(snapshot.PendingItems),
-		ActionItems:    actionable,
-		BacklogItems:   backlog,
-		StaleRunning:   len(snapshot.StaleRunningTurns),
-		CurrentSignal:  face.TelegramStatusChatCurrentSignal(snapshot),
-		DeliveryStatus: strings.TrimSpace(snapshot.DeliveryStatus),
+		View:              normalizeStatusReadableFactsView(view),
+		State:             face.TelegramStatusChatState(snapshot),
+		ActiveTurns:       len(snapshot.ActiveTurnIDs),
+		QueueDepth:        snapshot.QueueDepth,
+		PendingItems:      len(snapshot.PendingItems),
+		ActionItems:       actionable,
+		BacklogItems:      backlog,
+		StaleRunning:      len(snapshot.StaleRunningTurns),
+		CurrentSignal:     face.TelegramStatusChatCurrentSignal(snapshot),
+		DeliveryStatus:    strings.TrimSpace(snapshot.DeliveryStatus),
+		OperationEvidence: append([]core.OperationEvidenceStatus(nil), snapshot.OperationEvidence...),
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tool"
 	"strings"
 	"time"
 )
@@ -96,6 +97,7 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 		}
 
 		if (snapshot.OperationStatus == "" && snapshot.OperationStage == "" && snapshot.OperationSummary == "") ||
+			len(snapshot.OperationEvidence) == 0 ||
 			(snapshot.PlanStepStatus == "" && snapshot.PlanStep == "" && snapshot.PlanTotalSteps == 0) ||
 			(len(snapshot.HiddenInputCategories) == 0 && snapshot.HiddenInputSummary == "") ||
 			(snapshot.DeliveryStatus == "" && snapshot.DeliverySummary == "") {
@@ -106,6 +108,9 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 			if exists {
 				if snapshot.OperationStatus == "" && snapshot.OperationStage == "" && snapshot.OperationSummary == "" {
 					snapshot.OperationStatus, snapshot.OperationStage, snapshot.OperationSummary = operationStatusFields(statusState.OperationState)
+				}
+				if len(snapshot.OperationEvidence) == 0 {
+					snapshot.OperationEvidence = operationEvidenceStatusFields(statusState.OperationState)
 				}
 				if snapshot.PlanStepStatus == "" && snapshot.PlanStep == "" && snapshot.PlanTotalSteps == 0 {
 					snapshot.PlanStepStatus, snapshot.PlanStep = planStatusFields(statusState.PlanState)
@@ -353,6 +358,28 @@ func authorityStatusSnapshotForChat(snapshot core.AuthorityStatusSnapshot, chatI
 	out.Status = "healthy"
 	if out.FindingCount > 0 || out.TruncatedCapabilitySet {
 		out.Status = "needs_attention"
+	}
+	return out
+}
+
+func operationEvidenceStatusFields(state session.OperationState) []core.OperationEvidenceStatus {
+	statuses := tool.OperationCompletionEvidenceStatus(state)
+	if len(statuses) == 0 {
+		return nil
+	}
+	out := make([]core.OperationEvidenceStatus, 0, len(statuses))
+	for _, status := range statuses {
+		out = append(out, core.OperationEvidenceStatus{
+			PhaseID:        status.PhaseID,
+			AuthorityClass: status.AuthorityClass,
+			Status:         string(status.Status),
+			EvidenceKind:   status.EvidenceKind,
+			Satisfied:      status.Satisfied,
+			Reason:         status.Reason,
+			CompletedAt:    status.CompletedAt,
+			WorkMode:       status.WorkMode,
+			LeaseID:        status.LeaseID,
+		})
 	}
 	return out
 }
