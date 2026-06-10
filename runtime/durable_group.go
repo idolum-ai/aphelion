@@ -243,6 +243,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		runtime:         r,
 		key:             key,
 		sess:            sess,
+		runIDSource:     coordinator,
 		msg:             msg,
 		inboundWasVoice: prepared.InboundWasVoice,
 		deliver:         opts.DeliverReply && allowLocalReply,

@@ -665,6 +665,9 @@ type turnDeliveryPort struct {
 	sessionState interface {
 		session() *session.Session
 	}
+	runIDSource interface {
+		turnRunID() int64
+	}
 	msg                                   core.InboundMessage
 	inboundWasVoice                       bool
 	deliver                               bool
@@ -764,6 +767,13 @@ func (p *turnDeliveryPort) currentSession() *session.Session {
 		}
 	}
 	return p.sess
+}
+
+func (p *turnDeliveryPort) currentRunID() int64 {
+	if p == nil || p.runIDSource == nil {
+		return 0
+	}
+	return p.runIDSource.turnRunID()
 }
 
 func (p *turnDeliveryPort) recordOutboundWithContext(_ context.Context, sess *session.Session, key session.SessionKey, outboundID int64, outboundType string) error {

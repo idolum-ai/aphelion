@@ -156,6 +156,7 @@ func (r *Runtime) runInteractiveDMTurnResult(ctx context.Context, input interact
 		key:                                   key,
 		sess:                                  sess,
 		sessionState:                          turnState,
+		runIDSource:                           turnState,
 		msg:                                   msg,
 		inboundWasVoice:                       prepared.InboundWasVoice,
 		deliver:                               true,

@@ -11,6 +11,7 @@ var runtimeSecretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(token|api[_-]?key|secret|password)\s*[:=]\s*[A-Za-z0-9._~+/=-]{8,}`),
 	regexp.MustCompile(`(?i)\b[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)[A-Z0-9_]*=[^\s]+`),
 	regexp.MustCompile(`(?i)authorization\s*[:=]\s*bearer\s+[^\s,;"}]+`),
+	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{12,}`),
 	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9_]{12,}`),
 	regexp.MustCompile(`sk-[A-Za-z0-9_-]{12,}`),
 	regexp.MustCompile(`/home/[^/\s]+/\.aphelion/secrets/[^\s]+`),
