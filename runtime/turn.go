@@ -28,11 +28,19 @@ func (r *Runtime) handleInternalContinuation(ctx context.Context, actor principa
 }
 
 func (r *Runtime) handleInternalContinuationWithOptions(ctx context.Context, actor principal.Principal, msg core.InboundMessage, opts internalContinuationOptions) (result *core.TurnResult, err error) {
+	turnResult, err := r.handleInternalContinuationTurnWithOptions(ctx, actor, msg, opts)
+	if turnResult == nil {
+		return nil, err
+	}
+	return turnResult.Turn, err
+}
+
+func (r *Runtime) handleInternalContinuationTurnWithOptions(ctx context.Context, actor principal.Principal, msg core.InboundMessage, opts internalContinuationOptions) (result *turn.Result, err error) {
 	if actor.TelegramUserID <= 0 && strings.TrimSpace(actor.DurableAgentID) == "" {
 		return nil, ErrPrincipalDenied
 	}
 	msg = detachInternalContinuationIngress(msg)
-	return r.handleInteractiveInboundWithOptions(ctx, msg, &actor, opts)
+	return r.handleInteractiveInboundTurnWithOptions(ctx, msg, &actor, opts)
 }
 
 func detachInternalContinuationIngress(msg core.InboundMessage) core.InboundMessage {
@@ -49,8 +57,17 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 }
 
 func (r *Runtime) handleInteractiveInboundWithOptions(ctx context.Context, msg core.InboundMessage, forcedActor *principal.Principal, opts internalContinuationOptions) (result *core.TurnResult, err error) {
+	turnResult, err := r.handleInteractiveInboundTurnWithOptions(ctx, msg, forcedActor, opts)
+	if turnResult == nil {
+		return nil, err
+	}
+	return turnResult.Turn, err
+}
+
+func (r *Runtime) handleInteractiveInboundTurnWithOptions(ctx context.Context, msg core.InboundMessage, forcedActor *principal.Principal, opts internalContinuationOptions) (result *turn.Result, err error) {
 	if strings.TrimSpace(msg.DurableAgentID) != "" {
-		return r.handleDurableTelegramGroupInbound(ctx, msg)
+		coreResult, err := r.handleDurableTelegramGroupInbound(ctx, msg)
+		return turnResultFromCore(coreResult), err
 	}
 	actor := principal.Principal{}
 	if forcedActor != nil {
@@ -63,7 +80,7 @@ func (r *Runtime) handleInteractiveInboundWithOptions(ctx context.Context, msg c
 		actor = resolved
 	}
 	if handled, result, err := r.maybeHandleTypedContinuationApproval(ctx, msg, actor); handled {
-		return result, err
+		return turnResultFromCore(result), err
 	}
 	stopTyping := r.startChatActionLoop(ctx, msg.ChatID, "typing")
 	defer stopTyping()
@@ -80,7 +97,7 @@ func (r *Runtime) handleInteractiveInboundWithOptions(ctx context.Context, msg c
 		return nil, fmt.Errorf("resolve principal scope: %w", err)
 	}
 	if handled, result, err := r.maybeHandleOperationArtifactRequest(ctx, key, scope, msg); handled {
-		return result, err
+		return turnResultFromCore(result), err
 	}
 	eventAwareness := turn.EventAwareness{Origin: inboundOriginLabel(msg)}
 	if msg.Origin == core.InboundOriginTurnAuthorization {
@@ -90,7 +107,7 @@ func (r *Runtime) handleInteractiveInboundWithOptions(ctx context.Context, msg c
 	if assembler == nil {
 		assembler = newInteractiveDMTurnAssembler(r)
 	}
-	return assembler.Run(ctx, interactiveDMTurnAssemblyInput{
+	input := interactiveDMTurnAssemblyInput{
 		Msg:                                   msg,
 		Actor:                                 actor,
 		Key:                                   key,
@@ -98,7 +115,22 @@ func (r *Runtime) handleInteractiveInboundWithOptions(ctx context.Context, msg c
 		Tools:                                 tools,
 		EventAwareness:                        eventAwareness,
 		DeferBudgetRecoveryToWorkFailureRetry: opts.DeferBudgetRecoveryToWorkFailureRetry,
-	})
+	}
+	if turnAssembler, ok := assembler.(interactiveDMTurnResultAssembler); ok {
+		return turnAssembler.RunTurn(ctx, input)
+	}
+	coreResult, err := assembler.Run(ctx, input)
+	return turnResultFromCore(coreResult), err
+}
+
+func turnResultFromCore(result *core.TurnResult) *turn.Result {
+	if result == nil {
+		return nil
+	}
+	return &turn.Result{
+		Turn:         result,
+		VisibleReply: strings.TrimSpace(result.Text),
+	}
 }
 
 type faceUsageConsumer interface {

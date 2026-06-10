@@ -386,11 +386,13 @@ func turnBudgetRecoveryPayload(recovery *core.TurnRecovery, scope string, scopeP
 func renderTurnBudgetRecoveryPrompt(recovery *core.TurnRecovery, scope string, hop int, maxHops int) string {
 	card := newContinuationApprovalPromptCard("Recover", fmt.Sprintf("budget hop %d/%d", hop, maxHops), 0)
 	card.addListSection("Re-check", []string{
-		"Re-evaluate persisted operation, session, plan, and continuation state before choosing the next action.",
-		"Any tool use from current durable state; do not replay pending calls from the exhausted response.",
+		"Re-latch from persisted operation, continuation, plan, recent execution events, and evidence artifacts.",
+		"Do not rely on transient context from the exhausted response; discard pending tool calls and re-decide from durable state.",
+		"Read the smallest current-state slice needed before acting; avoid broad logs, large artifacts, or repeated full-file sweeps.",
 	})
 	card.addListSection("Still allowed", []string{
 		"Continue only work still needed inside the same objective, phase, authority class, and bounded effect.",
+		"If the same scope keeps exhausting budget, rescope to a smaller next action instead of raw retry.",
 		"Return a compact final response as soon as enough evidence is gathered.",
 	})
 	if recovery != nil {

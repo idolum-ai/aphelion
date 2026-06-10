@@ -82,6 +82,7 @@ type WorkResult struct {
 	Summary          string
 	RecoveryKind     string
 	RecoverySummary  string
+	RecoveryDelivery string
 	ProviderFailure  string
 	ProviderEvents   []core.ProviderEvent
 	Recovery         *core.TurnRecovery
