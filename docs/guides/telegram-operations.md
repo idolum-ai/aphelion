@@ -288,6 +288,24 @@ and grant lists are paged and button-driven; open a surface detail card before
 revoking local registry trust. Telegram revoke records a local Aphelion registry
 event only. It does not mutate live Tailscale policy.
 
+## Watch Re-entry And Heartbeat Nudges
+
+Re-entry `Possible next steps` cards appear only after the current chat has a
+completed latest turn, remains quiet for the runtime quiet window, and has no
+active continuation/proposal gate blocking a recommendation. They are useful
+for resuming work after silence, but they do not authorize the work they name;
+the next turn should still request the smallest required approval.
+
+Heartbeat nudges may also mention recurring interior pressure. Those nudges are
+continuity signals derived from hidden-input recurrence and support pressure.
+They should be read as attention requests, not facts, approval, or permission.
+
+There are no operator config keys for these policies today. Timing, candidate
+count, cooldowns, and thresholds are hard-coded runtime defaults. If live use
+shows nagging, stale pressure, or confusing timing, prefer a small follow-up PR
+that documents the observed issue before turning the values into configurable
+knobs.
+
 ## Service Actions
 
 Admin service actions are exposed through `/health`, `/restart`, and
