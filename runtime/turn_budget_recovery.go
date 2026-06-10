@@ -23,7 +23,14 @@ const (
 	turnBudgetRecoveryTimeout        = 10 * time.Minute
 	turnBudgetRecoveryOriginDetail   = "budget_recovery"
 	turnBudgetRecoveryHandoffPrefix  = "Budget recovery handoff:"
+	turnBudgetRecoveryDigestEvents   = 6
+	turnBudgetRecoveryDigestLines    = 10
 )
+
+type turnBudgetRecoveryDigest struct {
+	RunID int64
+	Lines []string
+}
 
 func turnResultBudgetRecovery(result *core.TurnResult) (*core.TurnRecovery, bool) {
 	if result == nil || result.Recovery == nil {
@@ -99,13 +106,15 @@ func (p *turnDeliveryPort) deliverBudgetRecovery(ctx context.Context, req turn.D
 		return p.deliverBudgetRecoveryBlocked(ctx, req, recovery, scope, scopePayload, maxHops, "runtime_shutting_down", nil)
 	}
 
+	digest := p.runtime.turnBudgetRecoveryDigest(p.key, p.currentRunID())
 	payload := turnBudgetRecoveryPayload(recovery, scope, scopePayload, nextHop, maxHops)
+	appendTurnBudgetRecoveryDigestPayload(payload, digest)
 	appendTokenUsagePayload(payload, req.Result.Turn.TokenUsage)
 	p.runtime.recordExecutionEvent(p.key, core.ExecutionEventTurnBudgetRecovery, "turn", "scheduled", payload, time.Now().UTC())
 	if p.audit != nil {
 		p.audit.RecordFinalReply("", nil, "budget_recovery_scheduled")
 	}
-	p.runtime.scheduleTurnBudgetRecoveryContinuation(p.key, p.msg, actor, recovery, scope, nextHop, maxHops)
+	p.runtime.scheduleTurnBudgetRecoveryContinuation(p.key, p.msg, actor, recovery, scope, nextHop, maxHops, digest)
 	return &turn.DeliveryResult{Kind: "budget_recovery_scheduled"}, nil
 }
 
@@ -156,7 +165,7 @@ func (p *turnDeliveryPort) deliverBudgetRecoveryBlocked(ctx context.Context, req
 	return &turn.DeliveryResult{MessageID: outboundID, Kind: outboundType}, nil
 }
 
-func (r *Runtime) scheduleTurnBudgetRecoveryContinuation(key session.SessionKey, msg core.InboundMessage, actor principal.Principal, recovery *core.TurnRecovery, scope string, hop int, maxHops int) {
+func (r *Runtime) scheduleTurnBudgetRecoveryContinuation(key session.SessionKey, msg core.InboundMessage, actor principal.Principal, recovery *core.TurnRecovery, scope string, hop int, maxHops int, digest turnBudgetRecoveryDigest) {
 	if r == nil {
 		return
 	}
@@ -165,17 +174,17 @@ func (r *Runtime) scheduleTurnBudgetRecoveryContinuation(key session.SessionKey,
 		defer r.backgroundLoopsWG.Done()
 		runCtx, cancel := context.WithTimeout(context.Background(), turnBudgetRecoveryTimeout)
 		defer cancel()
-		if err := r.runTurnBudgetRecoveryContinuation(runCtx, key, msg, actor, recovery, scope, hop, maxHops); err != nil {
+		if err := r.runTurnBudgetRecoveryContinuation(runCtx, key, msg, actor, recovery, scope, hop, maxHops, digest); err != nil {
 			log.Printf("WARN turn budget recovery failed chat_id=%d scope=%s hop=%d err=%v", key.ChatID, scope, hop, err)
 		}
 	}()
 }
 
-func (r *Runtime) runTurnBudgetRecoveryContinuation(ctx context.Context, key session.SessionKey, msg core.InboundMessage, actor principal.Principal, recovery *core.TurnRecovery, scope string, hop int, maxHops int) error {
+func (r *Runtime) runTurnBudgetRecoveryContinuation(ctx context.Context, key session.SessionKey, msg core.InboundMessage, actor principal.Principal, recovery *core.TurnRecovery, scope string, hop int, maxHops int, digest turnBudgetRecoveryDigest) error {
 	if r == nil {
 		return nil
 	}
-	prompt := renderTurnBudgetRecoveryPrompt(recovery, scope, hop, maxHops)
+	prompt := renderTurnBudgetRecoveryPrompt(recovery, scope, hop, maxHops, digest)
 	recoveryMsg := continuationInboundForKey(key, actor, prompt, core.InboundOriginTurnAuthorization, turnBudgetRecoveryOriginDetail)
 	recoveryMsg.ChatType = msg.ChatType
 	recoveryMsg.ChatTitle = msg.ChatTitle
@@ -185,6 +194,7 @@ func (r *Runtime) runTurnBudgetRecoveryContinuation(ctx context.Context, key ses
 	recoveryMsg.Timestamp = time.Now().UTC()
 
 	payload := turnBudgetRecoveryPayload(recovery, scope, nil, hop, maxHops)
+	appendTurnBudgetRecoveryDigestPayload(payload, digest)
 	r.recordExecutionEvent(key, core.ExecutionEventTurnBudgetRecovery, "turn", "resuming", payload, time.Now().UTC())
 	result, err := r.handleInternalContinuation(ctx, actor, recoveryMsg)
 	if err != nil {
@@ -383,14 +393,243 @@ func turnBudgetRecoveryPayload(recovery *core.TurnRecovery, scope string, scopeP
 	return payload
 }
 
-func renderTurnBudgetRecoveryPrompt(recovery *core.TurnRecovery, scope string, hop int, maxHops int) string {
+func appendTurnBudgetRecoveryDigestPayload(payload map[string]any, digest turnBudgetRecoveryDigest) {
+	if payload == nil || len(digest.Lines) == 0 {
+		return
+	}
+	data := map[string]any{
+		"lines": append([]string(nil), digest.Lines...),
+	}
+	if digest.RunID > 0 {
+		data["run_id"] = digest.RunID
+	}
+	payload["recovery_digest"] = data
+}
+
+func (r *Runtime) turnBudgetRecoveryDigest(key session.SessionKey, runID int64) turnBudgetRecoveryDigest {
+	digest := turnBudgetRecoveryDigest{}
+	if r == nil || r.store == nil {
+		return digest
+	}
+	if runID > 0 {
+		if run, err := r.store.TurnRun(runID); err == nil && run != nil {
+			digest.addTurnRun(*run)
+		}
+	}
+	if digest.RunID == 0 {
+		if run, err := r.store.LatestTurnRun(key); err == nil && run != nil {
+			digest.addTurnRun(*run)
+			runID = run.ID
+		}
+	}
+	events, err := r.store.LatestExecutionEventsBySession(key, 40)
+	if err == nil {
+		digest.addEvents(events, runID)
+	}
+	if len(digest.Lines) > turnBudgetRecoveryDigestLines {
+		digest.Lines = digest.Lines[:turnBudgetRecoveryDigestLines]
+	}
+	return digest
+}
+
+func (d *turnBudgetRecoveryDigest) addTurnRun(run session.TurnRun) {
+	if d == nil || run.ID <= 0 {
+		return
+	}
+	d.RunID = run.ID
+	summary := fmt.Sprintf("turn_run=%d kind=%s status=%s tool_calls=%d/%d", run.ID, strings.TrimSpace(string(run.Kind)), strings.TrimSpace(string(run.Status)), run.ToolCallsFinished, run.ToolCallsStarted)
+	metrics := []string{}
+	if run.TotalToolCharsIn > 0 {
+		metrics = append(metrics, fmt.Sprintf("tool_chars=%d", run.TotalToolCharsIn))
+	}
+	if run.TotalAssistantCharsOut > 0 {
+		metrics = append(metrics, fmt.Sprintf("assistant_chars=%d", run.TotalAssistantCharsOut))
+	}
+	if run.ProviderInputTokens > 0 || run.ProviderOutputTokens > 0 {
+		metrics = append(metrics, fmt.Sprintf("tokens=%d/%d", run.ProviderInputTokens, run.ProviderOutputTokens))
+	}
+	if run.ProviderCacheReadTokens > 0 || run.ProviderCacheWriteTokens > 0 {
+		metrics = append(metrics, fmt.Sprintf("cache=%d/%d", run.ProviderCacheReadTokens, run.ProviderCacheWriteTokens))
+	}
+	if len(metrics) > 0 {
+		summary += " " + strings.Join(metrics, " ")
+	}
+	d.addLine(summary, 220)
+	if tool := redactRuntimeText(run.LastToolName, 80); tool != "" {
+		line := "last_tool=" + tool
+		if preview := redactRuntimeText(run.LastToolPreview, 140); preview != "" {
+			line += " input=" + fmt.Sprintf("%q", preview)
+		}
+		d.addLine(line, 240)
+	}
+	if result := redactRuntimeText(run.LastToolResultPreview, 180); result != "" {
+		d.addLine("last_tool_result="+fmt.Sprintf("%q", result), 240)
+	}
+	if errText := redactRuntimeText(run.LastToolError, 180); errText != "" {
+		d.addLine("last_tool_error="+fmt.Sprintf("%q", errText), 240)
+	}
+}
+
+func (d *turnBudgetRecoveryDigest) addEvents(events []session.ExecutionEvent, runID int64) {
+	if d == nil || len(events) == 0 {
+		return
+	}
+	added := 0
+	for i := len(events) - 1; i >= 0; i-- {
+		if added >= turnBudgetRecoveryDigestEvents {
+			break
+		}
+		event := events[i]
+		if !turnBudgetRecoveryDigestEventRelevant(event.EventType) {
+			continue
+		}
+		payload := map[string]any{}
+		if strings.TrimSpace(event.PayloadJSON) != "" {
+			_ = json.Unmarshal([]byte(event.PayloadJSON), &payload)
+		}
+		if runID > 0 {
+			if eventRunID, ok := payloadInt64(payload, "run_id"); ok && eventRunID > 0 && eventRunID != runID {
+				continue
+			}
+		}
+		if line := turnBudgetRecoveryDigestEventLine(event, payload); line != "" {
+			d.addLine(line, 240)
+			added++
+		}
+	}
+}
+
+func (d *turnBudgetRecoveryDigest) addLine(line string, limit int) {
+	if d == nil || len(d.Lines) >= turnBudgetRecoveryDigestLines {
+		return
+	}
+	line = redactRuntimeText(line, limit)
+	if line == "" {
+		return
+	}
+	for _, existing := range d.Lines {
+		if existing == line {
+			return
+		}
+	}
+	d.Lines = append(d.Lines, line)
+}
+
+func turnBudgetRecoveryDigestEventRelevant(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case core.ExecutionEventToolStarted,
+		core.ExecutionEventToolSucceeded,
+		core.ExecutionEventToolFailed,
+		core.ExecutionEventToolBatchStarted,
+		core.ExecutionEventToolBatchCompleted,
+		core.ExecutionEventModelRequestStarted,
+		core.ExecutionEventModelRequestSucceeded,
+		core.ExecutionEventModelRequestFailed,
+		core.ExecutionEventProviderAttemptStarted,
+		core.ExecutionEventProviderAttemptRetried,
+		core.ExecutionEventProviderAttemptSucceeded,
+		core.ExecutionEventProviderAttemptFailed,
+		core.ExecutionEventProviderPartial:
+		return true
+	default:
+		return false
+	}
+}
+
+func turnBudgetRecoveryDigestEventLine(event session.ExecutionEvent, payload map[string]any) string {
+	eventType := strings.TrimSpace(event.EventType)
+	parts := []string{fmt.Sprintf("event#%d %s", event.Seq, eventType)}
+	if status := strings.TrimSpace(event.Status); status != "" {
+		parts = append(parts, "status="+status)
+	}
+	switch eventType {
+	case core.ExecutionEventToolStarted:
+		appendBudgetDigestPayloadPart(&parts, "tool", payloadString(payload, "tool"), 80)
+		appendBudgetDigestPayloadPart(&parts, "input", payloadString(payload, "preview"), 120)
+	case core.ExecutionEventToolSucceeded, core.ExecutionEventToolFailed:
+		appendBudgetDigestPayloadPart(&parts, "tool", payloadString(payload, "tool"), 80)
+		appendBudgetDigestPayloadPart(&parts, "result", payloadString(payload, "result_preview"), 140)
+		appendBudgetDigestPayloadPart(&parts, "error", payloadString(payload, "error"), 140)
+	case core.ExecutionEventToolBatchStarted, core.ExecutionEventToolBatchCompleted:
+		appendBudgetDigestPayloadPart(&parts, "mode", payloadString(payload, "mode"), 40)
+		if size, ok := payloadInt64(payload, "batch_size"); ok && size > 0 {
+			parts = append(parts, fmt.Sprintf("batch_size=%d", size))
+		}
+		if failed, ok := payloadInt64(payload, "failed_count"); ok && failed > 0 {
+			parts = append(parts, fmt.Sprintf("failed=%d", failed))
+		}
+		if tools := payloadStringSlice(payload, "tools"); len(tools) > 0 {
+			appendBudgetDigestPayloadPart(&parts, "tools", strings.Join(tools, ","), 120)
+		}
+	case core.ExecutionEventModelRequestStarted:
+		if attempt, ok := payloadInt64(payload, "attempt"); ok && attempt > 0 {
+			parts = append(parts, fmt.Sprintf("attempt=%d", attempt))
+		}
+		if estimated, ok := payloadInt64(payload, "estimated_input_tokens"); ok && estimated > 0 {
+			parts = append(parts, fmt.Sprintf("estimated_input=%d", estimated))
+		}
+		if history, ok := payloadInt64(payload, "history_count"); ok && history > 0 {
+			parts = append(parts, fmt.Sprintf("history=%d", history))
+		}
+	case core.ExecutionEventModelRequestSucceeded, core.ExecutionEventModelRequestFailed:
+		if attempt, ok := payloadInt64(payload, "attempt"); ok && attempt > 0 {
+			parts = append(parts, fmt.Sprintf("attempt=%d", attempt))
+		}
+		if calls, ok := payloadInt64(payload, "tool_call_count"); ok && calls > 0 {
+			parts = append(parts, fmt.Sprintf("tool_calls=%d", calls))
+		}
+		if out, ok := payloadInt64(payload, "output_chars"); ok && out > 0 {
+			parts = append(parts, fmt.Sprintf("output_chars=%d", out))
+		}
+		appendBudgetDigestPayloadPart(&parts, "failure", payloadString(payload, "failure_kind"), 80)
+		appendBudgetDigestPayloadPart(&parts, "error", payloadString(payload, "error"), 140)
+		appendBudgetDigestTokenParts(&parts, payload)
+	case core.ExecutionEventProviderAttemptStarted, core.ExecutionEventProviderAttemptRetried, core.ExecutionEventProviderAttemptSucceeded, core.ExecutionEventProviderAttemptFailed, core.ExecutionEventProviderPartial:
+		appendBudgetDigestPayloadPart(&parts, "provider", payloadString(payload, "provider"), 80)
+		appendBudgetDigestPayloadPart(&parts, "model", payloadString(payload, "model"), 80)
+		appendBudgetDigestPayloadPart(&parts, "failure", payloadString(payload, "failure_kind"), 80)
+		appendBudgetDigestPayloadPart(&parts, "error", payloadString(payload, "error"), 140)
+		appendBudgetDigestTokenParts(&parts, payload)
+	}
+	return strings.Join(parts, " ")
+}
+
+func appendBudgetDigestPayloadPart(parts *[]string, key string, value string, limit int) {
+	if parts == nil {
+		return
+	}
+	value = redactRuntimeText(value, limit)
+	if value == "" {
+		return
+	}
+	*parts = append(*parts, key+"="+fmt.Sprintf("%q", value))
+}
+
+func appendBudgetDigestTokenParts(parts *[]string, payload map[string]any) {
+	if parts == nil {
+		return
+	}
+	if total, ok := payloadInt64(payload, "total_tokens"); ok && total > 0 {
+		*parts = append(*parts, fmt.Sprintf("total_tokens=%d", total))
+		return
+	}
+	input, inputOK := payloadInt64(payload, "input_tokens")
+	output, outputOK := payloadInt64(payload, "output_tokens")
+	if inputOK || outputOK {
+		*parts = append(*parts, fmt.Sprintf("tokens=%d/%d", input, output))
+	}
+}
+
+func renderTurnBudgetRecoveryPrompt(recovery *core.TurnRecovery, scope string, hop int, maxHops int, digest turnBudgetRecoveryDigest) string {
 	card := newContinuationApprovalPromptCard("Recover", fmt.Sprintf("budget hop %d/%d", hop, maxHops), 0)
 	card.addListSection("Re-check", []string{
-		"Re-evaluate persisted operation, session, plan, and continuation state before choosing the next action.",
-		"Any tool use from current durable state; do not replay pending calls from the exhausted response.",
+		"Re-latch from persisted operation, continuation, plan, recent execution events, and evidence artifacts.",
+		"Do not rely on transient context from the exhausted response; discard pending tool calls and re-decide from durable state.",
+		"Read the smallest current-state slice needed before acting; avoid broad logs, large artifacts, or repeated full-file sweeps.",
 	})
 	card.addListSection("Still allowed", []string{
 		"Continue only work still needed inside the same objective, phase, authority class, and bounded effect.",
+		"If the same scope keeps exhausting budget, rescope to a smaller next action instead of raw retry.",
 		"Return a compact final response as soon as enough evidence is gathered.",
 	})
 	if recovery != nil {
@@ -403,6 +642,9 @@ func renderTurnBudgetRecoveryPrompt(recovery *core.TurnRecovery, scope string, h
 	}
 	if scope = strings.TrimSpace(scope); scope != "" {
 		card.addSection("Scope", scope)
+	}
+	if len(digest.Lines) > 0 {
+		card.addListSectionWithLimit("Evidence digest", digest.Lines, turnBudgetRecoveryDigestLines, 220)
 	}
 	return card.String()
 }

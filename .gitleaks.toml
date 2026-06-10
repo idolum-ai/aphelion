@@ -9,4 +9,6 @@ paths = [
 regexes = [
   '''sk-testSECRETabcdef123456''',
   '''cap-pr-158-sanitize''',
+  '''ghp[_]secret123456789''',
+  '''github[_]pat[_]secret123456789''',
 ]

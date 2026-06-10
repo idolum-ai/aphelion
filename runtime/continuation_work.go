@@ -559,6 +559,25 @@ func (r *Runtime) runReservedApprovedWorkContinuation(ctx context.Context, key s
 	req := *reservation.WorkRequest
 	result, err := r.workExecutor.Run(ctx, req)
 	status := r.workExecutor.Status()
+	if err == nil && workResultBudgetRecoveryScheduled(result) {
+		artifact := r.persistWorkResultForContinuation(key, req, result, status, nil)
+		payload := workResultPayload(req, result, status, nil)
+		if artifact.Ref != "" {
+			payload["artifact_ref"] = artifact.Ref
+		}
+		r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorRecovering, "work", "recovering", payload, time.Now().UTC())
+		return nil
+	}
+	if err == nil && workResultBudgetRecoveryBlocked(result) {
+		cause := nativeWorkRecoveryError{Kind: result.RecoveryKind, Summary: result.RecoverySummary}
+		artifact := r.persistWorkResultForContinuation(key, req, result, status, cause)
+		payload := workResultPayload(req, result, status, cause)
+		if artifact.Ref != "" {
+			payload["artifact_ref"] = artifact.Ref
+		}
+		r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorFailed, "work", "recovery_blocked", payload, time.Now().UTC())
+		return nil
+	}
 	if err == nil && !workResultHasSubstantiveCompletionEvidence(result) {
 		err = errWorkExecutorNoCompletionEvidence
 	}
