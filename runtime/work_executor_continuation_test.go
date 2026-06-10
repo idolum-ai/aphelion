@@ -306,6 +306,9 @@ func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	if op.Work.Executor != "codex" || op.Work.LastSummary != "patched tests" || len(op.Work.ChangedFiles) != 1 {
 		t.Fatalf("operation work metadata = %#v, want codex result persisted", op.Work)
 	}
+	if op.Work.LastCompletedAt.IsZero() || op.Work.LastError != "" {
+		t.Fatalf("operation work completion = %#v, want completed evidence without error", op.Work)
+	}
 	if len(op.Work.CodexEvents) != 2 || op.Work.CodexEvents[0].Kind != "file_change" || op.Work.PatchPreview != "@@ patched" || op.Work.CommitLaneStatus != "commit_requires_separate_lease" {
 		t.Fatalf("operation codex work metadata = %#v, want captured Codex interface evidence", op.Work)
 	}
@@ -1159,6 +1162,98 @@ func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
 	}
 	if !hasExecutionEventPayload(events, core.ExecutionEventAutoModeRevoked, "manual_retry_barrier") {
 		t.Fatalf("events = %#v, want auto-mode revocation for manual retry barrier", events)
+	}
+	if hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
+		t.Fatalf("events = %#v, want no work executor success event", events)
+	}
+}
+
+func TestTriggerCodingContinuationEmptySuccessOffersFreshRetry(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{}, allowEmptyResult: true}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8194, UserID: 0, Scope: telegramDMScopeRef(8194)}
+	prior := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "work-empty-success-retry",
+		Objective:      "Patch the work empty-success retry.",
+		StageSummary:   "Run bounded code work and report.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-work-empty-success-retry",
+			Summary:        "Patch work empty-success retry",
+			WhyNow:         "The prior approved step should run now.",
+			BoundedEffect:  "Edit runtime work executor files and run focused tests.",
+			RiskClass:      "workspace_write",
+			AllowedActions: []string{"workspace_write", "run_tests"},
+			Status:         session.ProposalStatusApproved,
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:work-empty-success-retry",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-work-empty-success-retry",
+			ProposalID:     "aprop-work-empty-success-retry",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			AllowedActions: []string{"workspace_write", "run_tests"},
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:work-empty-success-retry",
+		},
+	}
+	if err := store.UpdateContinuationState(key, prior); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{ID: "op-work-empty-success-retry", Objective: "Patch the work empty-success retry.", Status: session.OperationStatusActive}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	err = rt.TriggerContinuation(context.Background(), 8194)
+	if err == nil || !strings.Contains(err.Error(), errWorkExecutorNoCompletionEvidence.Error()) {
+		t.Fatalf("TriggerContinuation() err = %v, want no-completion-evidence failure", err)
+	}
+	if work.calls != 1 {
+		t.Fatalf("work calls = %d, want one executor attempt", work.calls)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusPending || got.ActionProposal.Status != session.ProposalStatusPending || got.ContinuationLease.Status != session.ContinuationLeaseStatusPending {
+		t.Fatalf("continuation = %#v, want fresh pending retry proposal", got)
+	}
+	if got.ActionProposal.ID == prior.ActionProposal.ID || got.ContinuationLease.ID == prior.ContinuationLease.ID {
+		t.Fatalf("fresh ids reused old proposal/lease: proposal=%q lease=%q", got.ActionProposal.ID, got.ContinuationLease.ID)
+	}
+	op, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if !strings.Contains(op.Work.LastError, errWorkExecutorNoCompletionEvidence.Error()) || !op.Work.LastCompletedAt.IsZero() {
+		t.Fatalf("operation work = %#v, want no-evidence failure without completion", op.Work)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want retry approval prompt", inlineCount)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventWorkExecutorFailed) {
+		t.Fatalf("events = %#v, want work executor failure event", events)
 	}
 	if hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
 		t.Fatalf("events = %#v, want no work executor success event", events)

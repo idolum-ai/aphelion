@@ -16,6 +16,9 @@ func validateOperationCompletionEvidence(current session.OperationState, state s
 	if err := validateCurrentLeasedExecutablePhases(current, state); err != nil {
 		return err
 	}
+	if err := validateCurrentExecutablePhaseCompletions(current, state); err != nil {
+		return err
+	}
 	for _, phase := range state.PhasePlan.Phases {
 		phase = normalizeToolOperationPhase(phase)
 		if phase.Status != session.PlanStatusCompleted ||
@@ -42,6 +45,42 @@ func validateOperationCompletionEvidence(current session.OperationState, state s
 		}
 		if phase.Status != session.PlanStatusCompleted || !updateOperationPhaseHasCompletionEvidence(state, phase) {
 			return fmt.Errorf("update_operation status completed requires executable phase %q to have matching successful work evidence", phase.ID)
+		}
+	}
+	return nil
+}
+
+func validateCurrentExecutablePhaseCompletions(current session.OperationState, state session.OperationState) error {
+	for _, currentPhase := range current.PhasePlan.Phases {
+		currentPhase = normalizeToolOperationPhase(currentPhase)
+		if currentPhase.Status == session.PlanStatusCompleted ||
+			!updateOperationPhaseCompletionNeedsWorkEvidence(currentPhase) {
+			continue
+		}
+		updatedPhase, ok := matchingUpdatedOperationPhase(current, state, currentPhase)
+		if !ok {
+			if state.Status == session.OperationStatusCompleted {
+				return fmt.Errorf("update_operation cannot remove executable phase %q while completing the operation", currentPhase.ID)
+			}
+			continue
+		}
+		switch updatedPhase.Status {
+		case session.PlanStatusCompleted:
+			if !operationPhaseCompletionMaterialMatches(currentPhase, updatedPhase) ||
+				session.OperationPhaseProposalID(current, currentPhase) != session.OperationPhaseProposalID(state, updatedPhase) {
+				return fmt.Errorf("update_operation cannot rewrite executable phase %q while completing it", currentPhase.ID)
+			}
+			if !updateOperationPhaseHasCompletionEvidence(state, currentPhase) {
+				return fmt.Errorf("update_operation phase %q cannot be completed without matching successful work evidence", currentPhase.ID)
+			}
+		case session.PlanStatusPending, session.PlanStatusInProgress:
+			if state.Status == session.OperationStatusCompleted {
+				return fmt.Errorf("update_operation status completed requires executable phase %q to have matching successful work evidence", currentPhase.ID)
+			}
+		default:
+			if state.Status == session.OperationStatusCompleted {
+				return fmt.Errorf("update_operation status completed requires executable phase %q to have matching successful work evidence", currentPhase.ID)
+			}
 		}
 	}
 	return nil

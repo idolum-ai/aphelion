@@ -639,6 +639,74 @@ func TestUpdateOperationRejectsExecutablePhasePlanRewriteBypass(t *testing.T) {
 	}
 }
 
+func TestUpdateOperationRejectsPendingExecutablePhaseCompletionWithoutWorkEvidence(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	opState := updateOperationPendingExecutableEvidenceGateState()
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState(seed) err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{"merge":true,"phase_plan":{"phases":[{"id":"implementation","status":"completed"}]}}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "matching successful work evidence") {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v, want pending work evidence rejection", err)
+	}
+	state, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if state.PhasePlan.Phases[0].Status != session.PlanStatusPending {
+		t.Fatalf("phase status = %q, want pending after rejected completion", state.PhasePlan.Phases[0].Status)
+	}
+}
+
+func TestUpdateOperationRejectsPendingExecutablePhaseDowngradeCompletionWithoutWorkEvidence(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	opState := updateOperationPendingExecutableEvidenceGateState()
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState(seed) err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{
+			"merge":true,
+			"phase_plan":{"phases":[{
+				"id":"implementation",
+				"status":"completed",
+				"authority_class":"read_only_review",
+				"bounded_effect":"Inspect runtime files and report findings only.",
+				"allowed_actions":["read_only_review","report_evidence"]
+			}]}
+		}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "cannot rewrite executable phase") {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v, want executable downgrade completion rejection", err)
+	}
+	state, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	phase := state.PhasePlan.Phases[0]
+	if phase.Status != session.PlanStatusPending || phase.AuthorityClass != "workspace_write" {
+		t.Fatalf("phase = %#v, want original pending workspace_write phase after rejected downgrade", phase)
+	}
+}
+
 func TestUpdateOperationAllowsReadOnlyPhaseCompletionWithoutWorkEvidence(t *testing.T) {
 	t.Parallel()
 
@@ -749,6 +817,13 @@ func updateOperationExecutableEvidenceGateState() session.OperationState {
 			}},
 		},
 	}
+}
+
+func updateOperationPendingExecutableEvidenceGateState() session.OperationState {
+	state := updateOperationExecutableEvidenceGateState()
+	state.PhasePlan.Phases[0].Status = session.PlanStatusPending
+	state.PhasePlan.Phases[0].LeaseID = ""
+	return state
 }
 
 func updateOperationMatchingWorkEvidence(opState session.OperationState, now time.Time) session.WorkOperationMetadata {

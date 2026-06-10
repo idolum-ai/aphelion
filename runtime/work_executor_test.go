@@ -20,16 +20,17 @@ import (
 )
 
 type fakeWorkExecutor struct {
-	mu        sync.Mutex
-	name      string
-	ready     bool
-	reason    string
-	err       error
-	calls     int
-	lastReq   WorkRequest
-	lastAvail WorkRequest
-	result    WorkResult
-	runHook   func(WorkRequest)
+	mu               sync.Mutex
+	name             string
+	ready            bool
+	reason           string
+	err              error
+	calls            int
+	lastReq          WorkRequest
+	lastAvail        WorkRequest
+	result           WorkResult
+	runHook          func(WorkRequest)
+	allowEmptyResult bool
 }
 
 func (f *fakeWorkExecutor) Name() string {
@@ -62,7 +63,7 @@ func (f *fakeWorkExecutor) Run(_ context.Context, req WorkRequest) (WorkResult, 
 		return WorkResult{}, err
 	}
 	out.ExecutorName = name
-	if strings.TrimSpace(out.Summary) == "" {
+	if strings.TrimSpace(out.Summary) == "" && !f.allowEmptyResult {
 		out.Summary = "work complete"
 	}
 	return out, nil

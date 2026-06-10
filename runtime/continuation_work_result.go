@@ -17,6 +17,8 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
+var errWorkExecutorNoCompletionEvidence = errors.New("work executor returned no completion evidence")
+
 func (r *Runtime) persistWorkResult(key session.SessionKey, req WorkRequest, result WorkResult, status WorkExecutorStatus, cause error) session.OperationArtifact {
 	if r == nil || r.store == nil {
 		return session.OperationArtifact{}
@@ -56,8 +58,13 @@ func (r *Runtime) persistWorkResult(key session.SessionKey, req WorkRequest, res
 		opState.Work.LastError = workResultRecoverySummary(result)
 	}
 	opState.Work.LastExecutorUpdatedAt = time.Now().UTC()
-	if cause == nil && result.Recovery == nil {
+	if cause == nil && result.Recovery == nil && workResultHasSubstantiveCompletionEvidence(result) {
 		opState.Work.LastCompletedAt = opState.Work.LastExecutorUpdatedAt
+	} else {
+		opState.Work.LastCompletedAt = time.Time{}
+		if cause == nil && result.Recovery == nil {
+			opState.Work.LastError = errWorkExecutorNoCompletionEvidence.Error()
+		}
 	}
 	artifact := r.writeWorkResultArtifact(key, req, result, status, cause, opState.Work.LastExecutorUpdatedAt)
 	if artifact.Ref != "" {
@@ -67,6 +74,15 @@ func (r *Runtime) persistWorkResult(key session.SessionKey, req WorkRequest, res
 		log.Printf("WARN persist work result failed chat_id=%d err=%v", key.ChatID, err)
 	}
 	return artifact
+}
+
+func workResultHasSubstantiveCompletionEvidence(result WorkResult) bool {
+	return strings.TrimSpace(result.Summary) != "" ||
+		len(result.ChangedFiles) > 0 ||
+		len(result.Commands) > 0 ||
+		len(result.CodexEvents) > 0 ||
+		strings.TrimSpace(result.PatchPreview) != "" ||
+		strings.TrimSpace(result.CommitLaneStatus) != ""
 }
 
 func (r *Runtime) deliverWorkResult(ctx context.Context, key session.SessionKey, result WorkResult, artifact session.OperationArtifact) error {

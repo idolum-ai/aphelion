@@ -559,6 +559,9 @@ func (r *Runtime) runReservedApprovedWorkContinuation(ctx context.Context, key s
 	req := *reservation.WorkRequest
 	result, err := r.workExecutor.Run(ctx, req)
 	status := r.workExecutor.Status()
+	if err == nil && !workResultHasSubstantiveCompletionEvidence(result) {
+		err = errWorkExecutorNoCompletionEvidence
+	}
 	if err != nil {
 		artifact := r.persistWorkResultForContinuation(key, req, result, status, err)
 		payload := workResultPayload(req, result, status, err)
