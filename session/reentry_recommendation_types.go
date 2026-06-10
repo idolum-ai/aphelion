@@ -25,6 +25,8 @@ const (
 	ReentryCandidateRequestNextLease       ReentryCandidateKind = "request_next_lease"
 	ReentryCandidateResumeMission          ReentryCandidateKind = "resume_mission"
 	ReentryCandidateReviewReleaseReadiness ReentryCandidateKind = "review_release_readiness"
+	ReentryCandidateReviewMemoryHealth     ReentryCandidateKind = "review_memory_health"
+	ReentryCandidateReflectWithOperator    ReentryCandidateKind = "reflect_with_operator"
 	ReentryCandidateClarifyGoal            ReentryCandidateKind = "clarify_goal"
 )
 
@@ -105,6 +107,10 @@ func NormalizeReentryCandidateKind(kind ReentryCandidateKind) ReentryCandidateKi
 		return ReentryCandidateResumeMission
 	case ReentryCandidateReviewReleaseReadiness:
 		return ReentryCandidateReviewReleaseReadiness
+	case ReentryCandidateReviewMemoryHealth:
+		return ReentryCandidateReviewMemoryHealth
+	case ReentryCandidateReflectWithOperator:
+		return ReentryCandidateReflectWithOperator
 	case ReentryCandidateClarifyGoal:
 		return ReentryCandidateClarifyGoal
 	default:
