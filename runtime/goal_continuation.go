@@ -15,7 +15,11 @@ import (
 	"github.com/idolum-ai/aphelion/turn"
 )
 
-const goalContinuationIDPrefix = "goal-continuation-"
+const (
+	goalContinuationIDPrefix = "goal-continuation-"
+	goalContinuationIntent   = "continuation_goal"
+	goalContinuationScope    = "goal_continuation"
+)
 
 type goalContinuationCandidate struct {
 	ID            string
@@ -29,8 +33,19 @@ type goalContinuationCandidate struct {
 	FindingClaim  string
 }
 
+type goalContinuationClaims struct {
+	PriorPhaseCompleted      bool
+	RemainingGoalWork        bool
+	BranchPRFollowUp         bool
+	ReleaseReadinessFollowUp bool
+	InterruptedOrFailed      bool
+	DoNotInfer               bool
+	ProposeReadOnlyNextPhase bool
+	ProposeCommitPushPR      bool
+	ProposeReleaseReadiness  bool
+}
+
 func (r *Runtime) maybeInferGoalContinuationProposal(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, result *turn.Result) (bool, error) {
-	_ = ctx
 	if r == nil || r.store == nil || msg.ChatID == 0 {
 		return false, nil
 	}
@@ -80,7 +95,9 @@ func (r *Runtime) maybeInferGoalContinuationProposal(ctx context.Context, key se
 		planState = session.NormalizePlanState(result.PlanState)
 	}
 
-	candidate, ok := goalContinuationCandidateFromState(msg, promptInput, opState, planState, priorContinuation, priorExists, result)
+	sourceText := goalContinuationSourceText(promptInput, opState, planState, priorContinuation, result)
+	claims := r.interpretGoalContinuationClaims(ctx, sourceText)
+	candidate, ok := goalContinuationCandidateFromState(promptInput, opState, planState, priorContinuation, priorExists, claims)
 	if !ok {
 		return false, nil
 	}
@@ -132,29 +149,83 @@ func (r *Runtime) maybeInferGoalContinuationProposal(ctx context.Context, key se
 	return true, nil
 }
 
+func (r *Runtime) interpretGoalContinuationClaims(ctx context.Context, sourceText string) goalContinuationClaims {
+	if r == nil {
+		return goalContinuationClaims{}
+	}
+	claims := r.interpretCurrentTurnClaims(ctx, interpretationRequest{
+		Surface: goalContinuationScope,
+		Text:    sourceText,
+	})
+	return goalContinuationClaimsFromInterpretation(claims)
+}
+
+func goalContinuationClaimsFromInterpretation(claims []core.InterpretationClaim) goalContinuationClaims {
+	var out goalContinuationClaims
+	for _, claim := range interpretationClaimsWithIntent(claims, goalContinuationIntent) {
+		claim = core.NormalizeInterpretationClaim(claim)
+		if claim.Scope != "" && claim.Scope != goalContinuationScope {
+			continue
+		}
+		if claim.ProposedNextAction == "do_not_infer" {
+			out.DoNotInfer = true
+		}
+		for _, risk := range claim.Risk {
+			if risk == "interrupted_or_failed" {
+				out.InterruptedOrFailed = true
+			}
+		}
+		if claim.Confidence != "high" {
+			continue
+		}
+		switch claim.ProposedNextAction {
+		case "propose_read_only_next_phase":
+			out.ProposeReadOnlyNextPhase = true
+		case "propose_commit_push_pr":
+			out.ProposeCommitPushPR = true
+		case "propose_release_readiness":
+			out.ProposeReleaseReadiness = true
+		}
+		for _, risk := range claim.Risk {
+			switch risk {
+			case "prior_phase_completed":
+				out.PriorPhaseCompleted = true
+			case "remaining_goal_work":
+				out.RemainingGoalWork = true
+			case "branch_pr_followup":
+				out.BranchPRFollowUp = true
+			case "release_readiness_followup":
+				out.ReleaseReadinessFollowUp = true
+			}
+		}
+	}
+	return out
+}
+
 func goalContinuationCandidateFromState(
-	msg core.InboundMessage,
 	promptInput string,
 	opState session.OperationState,
 	planState session.PlanState,
 	priorContinuation session.ContinuationState,
 	priorExists bool,
-	result *turn.Result,
+	claims goalContinuationClaims,
 ) (goalContinuationCandidate, bool) {
 	opState = session.NormalizeOperationState(opState)
 	planState = session.NormalizePlanState(planState)
 	priorContinuation = session.NormalizeContinuationState(priorContinuation)
-	sourceText := goalContinuationSourceText(promptInput, opState, planState, priorContinuation, result)
-	if !goalContinuationPriorPhaseComplete(opState, priorContinuation, priorExists, sourceText) {
+	if claims.DoNotInfer || claims.InterruptedOrFailed {
 		return goalContinuationCandidate{}, false
 	}
-	if candidate, ok := goalContinuationConcreteFollowUpCandidate(sourceText, opState, planState, priorContinuation); ok {
+	if !goalContinuationPriorPhaseComplete(opState, priorContinuation, priorExists, claims) {
+		return goalContinuationCandidate{}, false
+	}
+	if candidate, ok := goalContinuationConcreteFollowUpCandidate(opState, planState, priorContinuation, claims); ok {
 		return candidate, true
 	}
-	if candidate, ok := goalContinuationReleaseReadinessCandidate(sourceText, opState, planState, priorContinuation); ok {
+	if candidate, ok := goalContinuationReleaseReadinessCandidate(opState, planState, priorContinuation, claims); ok {
 		return candidate, true
 	}
-	if !goalContinuationHasEnoughSignals(sourceText, planState) {
+	if !goalContinuationSupportsReadOnlyNextPhase(claims, planState) {
 		return goalContinuationCandidate{}, false
 	}
 	objective := firstNonEmptyContinuation(
@@ -166,7 +237,7 @@ func goalContinuationCandidateFromState(
 	nextStep := goalContinuationNextStep(objective, planState, opState)
 	whyNow := "The prior approved lease appears to have completed a contract, probe, read-only review, or first smoke test, but the durable goal still needs phased follow-through."
 	boundedEffect := "Review persisted operation, plan, prior lease result, and local evidence; produce the broader phased plan and exactly one next safe live smoke test proposal; do not edit files, use secrets or credentials, touch external accounts, deploy, restart, commit, or push."
-	basis := "Persisted operation/plan/continuation state contained both broad-goal language and phase-one completion language; no explicit continuation contract was required."
+	basis := "Typed interpretation claim continuation_goal identified remaining goal work and proposed a read-only next-phase approval; persisted operation/plan/continuation state supplied the bounded proposal context."
 	if opState.Proposal.ID != "" {
 		basis += " Previous proposal: " + strings.TrimSpace(opState.Proposal.ID) + "."
 	}
@@ -181,7 +252,7 @@ func goalContinuationCandidateFromState(
 	}, true
 }
 
-func goalContinuationPriorPhaseComplete(opState session.OperationState, prior session.ContinuationState, priorExists bool, sourceText string) bool {
+func goalContinuationPriorPhaseComplete(opState session.OperationState, prior session.ContinuationState, priorExists bool, claims goalContinuationClaims) bool {
 	if opState.Status == session.OperationStatusCompleted {
 		return true
 	}
@@ -191,7 +262,7 @@ func goalContinuationPriorPhaseComplete(opState session.OperationState, prior se
 	if goalContinuationHasSuccessfulWorkEvidence(opState, prior) {
 		return true
 	}
-	return goalContinuationSourceIndicatesCompletion(sourceText)
+	return claims.PriorPhaseCompleted
 }
 
 func goalContinuationHasSuccessfulWorkEvidence(opState session.OperationState, prior session.ContinuationState) bool {
@@ -203,43 +274,6 @@ func goalContinuationHasSuccessfulWorkEvidence(opState session.OperationState, p
 	}
 	leaseID := strings.TrimSpace(prior.ContinuationLease.ID)
 	return leaseID != "" && strings.TrimSpace(work.LastLeaseID) == leaseID
-}
-
-func goalContinuationSourceIndicatesCompletion(text string) bool {
-	lower := strings.ToLower(text)
-	for _, needle := range []string{
-		"budget",
-		"interrupted",
-		"failed before completion",
-		"failure",
-		"could not complete",
-		"did not complete",
-		"not complete",
-		"not completed",
-		"ran out of",
-		"token exhausted",
-		"token budget",
-		"provider failed",
-		"retry",
-	} {
-		if strings.Contains(lower, needle) {
-			return false
-		}
-	}
-	for _, needle := range []string{
-		"completed cleanly",
-		"completed inside",
-		"phase completed",
-		"work completed",
-		"no more work is needed inside the approved phase",
-		"approved phase completed",
-		"done inside the approved phase",
-	} {
-		if strings.Contains(lower, needle) {
-			return true
-		}
-	}
-	return false
 }
 
 func goalContinuationSourceText(promptInput string, opState session.OperationState, planState session.PlanState, prior session.ContinuationState, result *turn.Result) string {
@@ -301,9 +335,8 @@ func goalContinuationSourceText(promptInput string, opState session.OperationSta
 	return strings.Join(parts, "\n")
 }
 
-func goalContinuationConcreteFollowUpCandidate(text string, opState session.OperationState, planState session.PlanState, prior session.ContinuationState) (goalContinuationCandidate, bool) {
-	lower := strings.ToLower(text)
-	if !goalContinuationHasBranchPRFollowUpApprovalSegment(lower) {
+func goalContinuationConcreteFollowUpCandidate(opState session.OperationState, planState session.PlanState, prior session.ContinuationState, claims goalContinuationClaims) (goalContinuationCandidate, bool) {
+	if !claims.BranchPRFollowUp || !claims.ProposeCommitPushPR {
 		return goalContinuationCandidate{}, false
 	}
 	objective := firstNonEmptyContinuation(
@@ -312,7 +345,7 @@ func goalContinuationConcreteFollowUpCandidate(text string, opState session.Oper
 		planState.Explanation,
 		"Publish the completed branch for pull request review.",
 	)
-	basis := "Persisted completion state plus final turn text named a separate bounded branch publication and pull-request follow-up after the prior lease was consumed."
+	basis := "Typed interpretation claim continuation_goal identified a completed prior phase and a separate branch publication / pull-request follow-up after the prior lease was consumed."
 	if opState.Proposal.ID != "" {
 		basis += " Previous proposal: " + strings.TrimSpace(opState.Proposal.ID) + "."
 	}
@@ -331,67 +364,8 @@ func goalContinuationConcreteFollowUpCandidate(text string, opState session.Oper
 	}, true
 }
 
-func goalContinuationHasBranchPRFollowUpApprovalSegment(lower string) bool {
-	for _, segment := range strings.FieldsFunc(lower, func(r rune) bool {
-		switch r {
-		case '\n', '\r', '.', ';':
-			return true
-		default:
-			return false
-		}
-	}) {
-		segment = strings.TrimSpace(segment)
-		if goalContinuationHasFollowUpApprovalSignal(segment) && goalContinuationHasBranchPRFollowUpSignal(segment) {
-			return true
-		}
-	}
-	return false
-}
-
-func goalContinuationHasFollowUpApprovalSignal(lower string) bool {
-	for _, needle := range []string{
-		"separate bounded approval",
-		"bounded approval for",
-		"separate approval",
-		"follow-up approval",
-		"follow up approval",
-		"approval for push",
-		"approval for branch",
-		"approval for pr",
-		"approval for pull request",
-		"next useful step",
-		"next step would be",
-		"next useful action",
-	} {
-		if strings.Contains(lower, needle) {
-			return true
-		}
-	}
-	return false
-}
-
-func goalContinuationHasBranchPRFollowUpSignal(lower string) bool {
-	if strings.Contains(lower, "push/pr") || strings.Contains(lower, "push + pr") || strings.Contains(lower, "push and pr") {
-		return true
-	}
-	hasPR := strings.Contains(lower, "pull request") ||
-		strings.Contains(lower, "draft pr") ||
-		strings.Contains(lower, "open pr") ||
-		strings.Contains(lower, "update pr") ||
-		strings.Contains(lower, " pr ")
-	if !hasPR {
-		return false
-	}
-	return strings.Contains(lower, "push") ||
-		strings.Contains(lower, "publish") ||
-		strings.Contains(lower, "branch") ||
-		strings.Contains(lower, "open or update") ||
-		strings.Contains(lower, "open/update")
-}
-
-func goalContinuationReleaseReadinessCandidate(text string, opState session.OperationState, planState session.PlanState, prior session.ContinuationState) (goalContinuationCandidate, bool) {
-	lower := strings.ToLower(text)
-	if !goalContinuationHasOperatorContinueSignal(lower) || !strings.Contains(lower, "release") {
+func goalContinuationReleaseReadinessCandidate(opState session.OperationState, planState session.PlanState, prior session.ContinuationState, claims goalContinuationClaims) (goalContinuationCandidate, bool) {
+	if !claims.ReleaseReadinessFollowUp || !claims.ProposeReleaseReadiness {
 		return goalContinuationCandidate{}, false
 	}
 	objective := firstNonEmptyContinuation(
@@ -400,7 +374,7 @@ func goalContinuationReleaseReadinessCandidate(text string, opState session.Oper
 		planState.Explanation,
 		"Prepare Aphelion for release.",
 	)
-	basis := "Persisted operation state shows a completed release-related phase, and the operator asked to continue after completion; no active continuation lease remains."
+	basis := "Typed interpretation claim continuation_goal identified a completed release-related phase and proposed a fresh read-only release-readiness follow-up; no active continuation lease remains."
 	if opState.Proposal.ID != "" {
 		basis += " Previous proposal: " + strings.TrimSpace(opState.Proposal.ID) + "."
 	}
@@ -416,77 +390,20 @@ func goalContinuationReleaseReadinessCandidate(text string, opState session.Oper
 	}, true
 }
 
-func goalContinuationHasOperatorContinueSignal(lower string) bool {
-	for _, needle := range []string{
-		"continue",
-		"let's continue",
-		"lets continue",
-		"proceed",
-		"next step",
-		"next phase",
-	} {
-		if strings.Contains(lower, needle) {
-			return true
-		}
+func goalContinuationSupportsReadOnlyNextPhase(claims goalContinuationClaims, planState session.PlanState) bool {
+	if !claims.ProposeReadOnlyNextPhase {
+		return false
 	}
-	return false
+	if claims.RemainingGoalWork {
+		return true
+	}
+	return goalContinuationPlanHasRemainingWork(planState)
 }
 
-func goalContinuationHasEnoughSignals(text string, planState session.PlanState) bool {
-	signals := 0
-	if goalContinuationLooksBroad(text) {
-		signals++
-	}
-	if goalContinuationLooksLikePhaseOne(text) {
-		signals++
-	}
-	if goalContinuationHasRemainingWork(text, planState) {
-		signals++
-	}
-	return signals >= 2
-}
-
-func goalContinuationLooksBroad(text string) bool {
-	lower := strings.ToLower(text)
-	for _, needle := range []string{
-		"goal", "make ", "build ", "enable ", "agent", "integration", "bridge", "inbox",
-		"external account", "proton", "lighthouse", "live feature", "workflow",
-		"tailnet", "tailscale", "durable", "sandbox", "production",
-	} {
-		if strings.Contains(lower, needle) {
-			return true
-		}
-	}
-	return false
-}
-
-func goalContinuationLooksLikePhaseOne(text string) bool {
-	lower := strings.ToLower(text)
-	for _, needle := range []string{
-		"contract", "architecture", "read-only", "readonly", "minimal", "first",
-		"phase one", "phase-one", "phase 1", "probe", "smoke", "initial", "one simple",
-		"first slice", "first pass", "first version", "v0",
-	} {
-		if strings.Contains(lower, needle) {
-			return true
-		}
-	}
-	return false
-}
-
-func goalContinuationHasRemainingWork(text string, planState session.PlanState) bool {
+func goalContinuationPlanHasRemainingWork(planState session.PlanState) bool {
 	planState = session.NormalizePlanState(planState)
 	for _, step := range planState.Steps {
 		if step.Status == session.PlanStatusPending || step.Status == session.PlanStatusInProgress {
-			return true
-		}
-	}
-	lower := strings.ToLower(text)
-	for _, needle := range []string{
-		"broader goal remains", "still needs", "next phase", "next bounded", "follow-through",
-		"remaining", "not complete", "not done", "needs phased", "later explicit lease",
-	} {
-		if strings.Contains(lower, needle) {
 			return true
 		}
 	}

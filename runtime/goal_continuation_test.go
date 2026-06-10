@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ func TestGoalContinuationInfersNextPhaseAfterConsumedPhaseOneLease(t *testing.T)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	provider.interpretationReplyText = goalContinuationTestClaimsReply(t, []string{"prior_phase_completed", "remaining_goal_work"}, "propose_read_only_next_phase", "high")
 	key := session.SessionKey{ChatID: 9041, UserID: 0, Scope: telegramDMScopeRef(9041)}
 	now := time.Now().UTC()
 	if err := store.UpdateOperationState(key, session.OperationState{
@@ -139,6 +141,7 @@ func TestGoalContinuationInfersPushPRFollowUpAfterCompletedLocalPhase(t *testing
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	provider.interpretationReplyText = goalContinuationTestClaimsReply(t, []string{"prior_phase_completed", "branch_pr_followup"}, "propose_commit_push_pr", "high")
 	key := session.SessionKey{ChatID: 9048, UserID: 0, Scope: telegramDMScopeRef(9048)}
 	now := time.Now().UTC()
 	if err := store.UpdateOperationState(key, session.OperationState{
@@ -265,6 +268,88 @@ func TestGoalContinuationInfersPushPRFollowUpAfterCompletedLocalPhase(t *testing
 	}
 }
 
+func TestGoalContinuationRequiresHighConfidenceTypedFollowUpClaim(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name                string
+		interpretationReply string
+	}{
+		{
+			name:                "missing_claim",
+			interpretationReply: "",
+		},
+		{
+			name:                "low_confidence_claim",
+			interpretationReply: goalContinuationTestClaimsReply(t, []string{"prior_phase_completed", "branch_pr_followup"}, "propose_commit_push_pr", "medium"),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, store, provider, sender := buildRuntimeFixtures(t)
+			provider.interpretationReplyText = tc.interpretationReply
+			rt, err := New(cfg, store, provider, nil, sender)
+			if err != nil {
+				t.Fatalf("New() err = %v", err)
+			}
+			key := session.SessionKey{ChatID: 9061, UserID: 0, Scope: telegramDMScopeRef(9061)}
+			now := time.Now().UTC()
+			if err := store.UpdateOperationState(key, session.OperationState{
+				ID:        "eval-jobs-semantics-plan",
+				Objective: "Triage and fix eval --jobs concurrency semantics, validate, and commit locally only.",
+				Status:    session.OperationStatusCompleted,
+				Stage:     "completed",
+				Summary:   "Approved eval --jobs semantics phase is complete. Branch work/eval-jobs-semantics-20260608 has local commit 62e7c0f; validation passed; no push, PR, deploy, or restart was performed.",
+				Proposal: session.OperationProposal{
+					ID:            "eval-jobs-semantics-local-phase",
+					Kind:          "commit",
+					Summary:       "Triage and fix eval --jobs semantics, validate, and commit locally",
+					BoundedEffect: "Edit local files, run tests, and create one local commit; stop before push, PR, deploy, or restart.",
+					Status:        session.ProposalStatusApproved,
+					UpdatedAt:     now,
+				},
+			}); err != nil {
+				t.Fatalf("UpdateOperationState() err = %v", err)
+			}
+			if err := store.UpdateContinuationState(key, session.ContinuationState{
+				Status: session.ContinuationStatusIdle,
+				ContinuationLease: session.ContinuationLease{
+					Status:         session.ContinuationLeaseStatusConsumed,
+					MaxTurns:       1,
+					RemainingTurns: 0,
+					ConsumedAt:     now,
+				},
+			}); err != nil {
+				t.Fatalf("UpdateContinuationState() err = %v", err)
+			}
+			result := &turn.Result{
+				VisibleReply: "Recovered cleanly. No more work is needed inside the approved phase. Next useful step would be a separate bounded approval for push/PR.",
+				Turn:         &core.TurnResult{Text: "Recovered cleanly. Next useful step would be a separate bounded approval for push/PR."},
+			}
+			inferred, err := rt.maybeInferGoalContinuationProposal(context.Background(), key, core.InboundMessage{
+				ChatID:       key.ChatID,
+				SenderID:     1001,
+				Text:         approvedContinuationEventText,
+				Origin:       core.InboundOriginTurnAuthorization,
+				OriginDetail: string(session.TurnAuthorizationKindContinuation),
+				MessageID:    61,
+			}, "Recover: budget hop 3/3", result)
+			if err != nil {
+				t.Fatalf("maybeInferGoalContinuationProposal() err = %v", err)
+			}
+			if inferred {
+				t.Fatal("maybeInferGoalContinuationProposal() = true, want false without high-confidence typed follow-up claim")
+			}
+			sender.mu.Lock()
+			inlineCount := len(sender.inline)
+			sender.mu.Unlock()
+			if inlineCount != 0 {
+				t.Fatalf("inline count = %d, want no follow-up approval prompt", inlineCount)
+			}
+		})
+	}
+}
+
 func TestGoalContinuationDoesNotInferFollowUpFromConsumedInterruptedLease(t *testing.T) {
 	t.Parallel()
 
@@ -352,6 +437,7 @@ func TestGoalContinuationInfersReleaseReadinessAfterCompletedWalkthrough(t *test
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	provider.interpretationReplyText = goalContinuationTestClaimsReply(t, []string{"prior_phase_completed", "release_readiness_followup"}, "propose_release_readiness", "high")
 	key := session.SessionKey{ChatID: 9050, UserID: 0, Scope: telegramDMScopeRef(9050)}
 	now := time.Now().UTC()
 	if err := store.UpdateOperationState(key, session.OperationState{
@@ -630,6 +716,7 @@ func TestGoalContinuationInfersWithPendingPlanStepAsRemainingWork(t *testing.T) 
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	provider.interpretationReplyText = goalContinuationTestClaimsReply(t, []string{"prior_phase_completed", "remaining_goal_work"}, "propose_read_only_next_phase", "high")
 	key := session.SessionKey{ChatID: 9045, UserID: 0, Scope: telegramDMScopeRef(9045)}
 	if err := store.UpdateOperationState(key, session.OperationState{
 		ID:        "lighthouse-mini-agent",
@@ -758,4 +845,25 @@ func TestGoalContinuationDoesNotInferWhenDurablePhasePlanCompleted(t *testing.T)
 	if inferred {
 		t.Fatal("maybeInferGoalContinuationProposal() = true, want false because durable phase plan is complete")
 	}
+}
+
+func goalContinuationTestClaimsReply(t *testing.T, risks []string, nextAction string, confidence string) string {
+	t.Helper()
+	contract := interpretationClaimsContract{
+		SchemaVersion: interpretationClaimsSchema,
+		Surface:       goalContinuationScope,
+		Claims: []core.InterpretationClaim{{
+			Intent:             goalContinuationIntent,
+			Scope:              goalContinuationScope,
+			Risk:               risks,
+			Confidence:         confidence,
+			Source:             "test_goal_continuation_interpretation",
+			ProposedNextAction: nextAction,
+		}},
+	}
+	raw, err := json.Marshal(contract)
+	if err != nil {
+		t.Fatalf("marshal goal continuation claims: %v", err)
+	}
+	return interpretationClaimsMarker + ": " + string(raw)
 }
