@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -705,7 +706,7 @@ func (r *Runtime) deliverReentryRecommendation(ctx context.Context, key session.
 	}
 	msg := core.OutboundMessage{
 		ChatID:     record.ChatID,
-		Text:       r.prefixTelegramPresentedText(r.telegramPresentationForMessage(reentryInboundForRecord(record)), "Possible next steps:"),
+		Text:       r.prefixTelegramPresentedText(r.telegramPresentationForMessage(reentryInboundForRecord(record)), reentryRecommendationMessageText(record)),
 		ButtonRows: rows,
 	}
 	messageID, err := r.outbound.SendMessage(ctx, msg)
@@ -739,15 +740,41 @@ func (r *Runtime) deliverReentryRecommendation(ctx context.Context, key session.
 	return nil
 }
 
-func reentryRecommendationButtonRows(record session.ReentryRecommendation) [][]core.OutboundButton {
+func reentryRecommendationMessageText(record session.ReentryRecommendation) string {
 	record = session.NormalizeReentryRecommendation(record)
-	row := make([]core.OutboundButton, 0, len(record.Candidates))
+	lines := []string{"Possible next steps:"}
+	index := 1
 	for _, candidate := range record.Candidates {
-		data := core.EncodeReentryRecommendationCallbackData(record.ID, candidate.ID, core.ReentryRecommendationCallbackSelect)
-		if data == "" {
+		label := normalizeReentryRecommendationBodyLabel(candidate.Label)
+		if label == "" {
 			continue
 		}
-		row = append(row, core.OutboundButton{Text: normalizeReentryButtonLabel(candidate.Label), CallbackData: data})
+		lines = append(lines, fmt.Sprintf("%d. %s", index, label))
+		index++
+	}
+	return strings.Join(lines, "\n")
+}
+
+func normalizeReentryRecommendationBodyLabel(label string) string {
+	label = strings.Join(strings.Fields(strings.TrimSpace(label)), " ")
+	label = strings.Trim(label, " .\t\n\r")
+	if label == "" {
+		return ""
+	}
+	return label
+}
+
+func reentryRecommendationButtonRows(record session.ReentryRecommendation) [][]core.OutboundButton {
+	record = session.NormalizeReentryRecommendation(record)
+	row := make([]core.OutboundButton, 0, len(record.Candidates)+1)
+	index := 1
+	for _, candidate := range record.Candidates {
+		data := core.EncodeReentryRecommendationCallbackData(record.ID, candidate.ID, core.ReentryRecommendationCallbackSelect)
+		if data == "" || normalizeReentryRecommendationBodyLabel(candidate.Label) == "" {
+			continue
+		}
+		row = append(row, core.OutboundButton{Text: strconv.Itoa(index), CallbackData: data})
+		index++
 	}
 	ignore := core.EncodeReentryRecommendationCallbackData(record.ID, "", core.ReentryRecommendationCallbackIgnore)
 	if ignore != "" {
