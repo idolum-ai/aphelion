@@ -190,6 +190,22 @@ type WorkOperationMetadata struct {
 	LastExecutorUpdatedAt time.Time        `json:"last_executor_updated_at,omitempty"`
 }
 
+// OperationEvidenceStatus is a read-only projection of whether operation completion
+// can be justified from typed work evidence. It is intentionally separate from the
+// mutable phase state so status/doctor-style surfaces can explain evidence drift
+// before a model-authored update attempts to close an operation.
+type OperationEvidenceStatus struct {
+	PhaseID        string     `json:"phase_id,omitempty"`
+	AuthorityClass string     `json:"authority_class,omitempty"`
+	Status         PlanStatus `json:"status,omitempty"`
+	EvidenceKind   string     `json:"evidence_kind,omitempty"`
+	Satisfied      bool       `json:"satisfied"`
+	Reason         string     `json:"reason,omitempty"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	WorkMode       string     `json:"work_mode,omitempty"`
+	LeaseID        string     `json:"lease_id,omitempty"`
+}
+
 type OperationState struct {
 	ID        string                `json:"id,omitempty"`
 	Objective string                `json:"objective,omitempty"`

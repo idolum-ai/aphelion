@@ -5,6 +5,7 @@ package tool
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -174,33 +175,75 @@ func updateOperationPhaseCompletionNeedsWorkEvidence(phase session.OperationPhas
 }
 
 func updateOperationPhaseHasCompletionEvidence(state session.OperationState, phase session.OperationPhase) bool {
+	return updateOperationPhaseCompletionEvidenceReason(state, phase) == ""
+}
+
+func updateOperationPhaseCompletionEvidenceReason(state session.OperationState, phase session.OperationPhase) string {
 	state = session.NormalizeOperationState(state)
 	phase = normalizeToolOperationPhase(phase)
 	work := session.NormalizeWorkOperationMetadata(state.Work)
-	if work.LastCompletedAt.IsZero() || strings.TrimSpace(work.LastError) != "" {
-		return false
+	if strings.TrimSpace(work.LastError) != "" {
+		return "last work ended with an error"
+	}
+	if work.LastCompletedAt.IsZero() {
+		return "last work has no completion timestamp"
 	}
 	opID := strings.TrimSpace(state.ID)
 	if opID == "" || strings.TrimSpace(work.LastOperationID) != opID {
-		return false
+		return "last work does not match the operation"
 	}
 	leaseID := strings.TrimSpace(phase.LeaseID)
 	if leaseID == "" || strings.TrimSpace(work.LastLeaseID) != leaseID {
-		return false
+		return "last work lease does not match the current phase lease"
 	}
 	workMode := strings.TrimSpace(session.OperationPhaseWorkAction(phase))
 	if workMode == "" || strings.TrimSpace(work.LastWorkMode) != workMode {
-		return false
+		return "last work mode does not satisfy the phase authority"
 	}
 	proposalID := session.OperationPhaseProposalID(state, phase)
 	if proposalID == "" || strings.TrimSpace(work.LastActionOperationID) != proposalID {
-		return false
+		return "last work does not match the current phase proposal"
 	}
 	actionProposalID := strings.TrimSpace(work.LastActionProposalID)
 	if actionProposalID == "" || (actionProposalID != proposalID && actionProposalID != "aprop-"+proposalID) {
-		return false
+		return "last work has no matching action proposal id"
 	}
-	return true
+	return ""
+}
+
+// OperationCompletionEvidenceStatus projects executable phase completion evidence
+// without mutating operation state. Status and doctor surfaces can use this to
+// explain why real work evidence does or does not justify operation closure.
+func OperationCompletionEvidenceStatus(state session.OperationState) []session.OperationEvidenceStatus {
+	state = session.NormalizeOperationState(state)
+	statuses := make([]session.OperationEvidenceStatus, 0, len(state.PhasePlan.Phases))
+	for _, phase := range state.PhasePlan.Phases {
+		phase = normalizeToolOperationPhase(phase)
+		if !updateOperationPhaseCompletionNeedsWorkEvidence(phase) {
+			continue
+		}
+		reason := updateOperationPhaseCompletionEvidenceReason(state, phase)
+		statuses = append(statuses, session.OperationEvidenceStatus{
+			PhaseID:        strings.TrimSpace(phase.ID),
+			AuthorityClass: strings.TrimSpace(phase.AuthorityClass),
+			Status:         phase.Status,
+			EvidenceKind:   "work_metadata",
+			Satisfied:      reason == "",
+			Reason:         reason,
+			CompletedAt:    completedAtPtr(state.Work.LastCompletedAt),
+			WorkMode:       strings.TrimSpace(state.Work.LastWorkMode),
+			LeaseID:        strings.TrimSpace(state.Work.LastLeaseID),
+		})
+	}
+	return statuses
+}
+
+func completedAtPtr(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	t = t.UTC()
+	return &t
 }
 
 func normalizeToolOperationPhase(phase session.OperationPhase) session.OperationPhase {
