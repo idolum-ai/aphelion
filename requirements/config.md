@@ -402,6 +402,10 @@ workspace_paths = []
 memory_paths = ["memory/questions.md", "memory/knowledge.md", "memory/decisions.md"]
 allowlisted_urls = []
 
+Curiosity persistence is introduced with session schema version 67. Roll out the
+matching binary with the migration: stale binaries that only understand schema
+66 will refuse to start or wake against an upgraded database.
+
 [cron]
 jobs = []
 
