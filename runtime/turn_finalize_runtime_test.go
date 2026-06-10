@@ -184,6 +184,20 @@ func TestExtractPersonaContextRequest(t *testing.T) {
 	}
 }
 
+func TestSuppressVisiblePersonaContextRequestLeak(t *testing.T) {
+	t.Parallel()
+
+	if got := suppressVisiblePersonaContextRequestLeak("PERSONA_CONTEXT_REQUEST: PR #197 review findings text/artifacts"); got != "" {
+		t.Fatalf("suppressVisiblePersonaContextRequestLeak() = %q, want empty fallback trigger", got)
+	}
+	if got := suppressVisiblePersonaContextRequestLeak("Here is the answer."); got != "Here is the answer." {
+		t.Fatalf("suppressVisiblePersonaContextRequestLeak() = %q, want normal reply", got)
+	}
+	if got := suppressVisiblePersonaContextRequestLeak("Here is the answer.\nPERSONA_CONTEXT_REQUEST: hidden"); strings.Contains(got, personaContextRequestPrefix) {
+		t.Fatalf("suppressVisiblePersonaContextRequestLeak() leaked marker in %q", got)
+	}
+}
+
 func TestEnforceVisibleRecurrenceContractDoesNotDuplicatePriorThreadMention(t *testing.T) {
 	t.Parallel()
 

@@ -252,6 +252,16 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 			output.ReplyText = pipeline.FloorTextOrFallback(input.FloorText)
 		}
 	}
+	if strings.Contains(output.ReplyText, personaContextRequestPrefix) {
+		if sanitized := suppressVisiblePersonaContextRequestLeak(output.ReplyText); sanitized == "" {
+			output.ReplyText = pipeline.FloorTextOrFallback(input.FloorText)
+			output.StreamedReply = false
+			output.OutboundID = 0
+			output.OutboundType = ""
+		} else {
+			output.ReplyText = sanitized
+		}
+	}
 
 	output.ReplyText = r.applyTurnConstitution(
 		input.Ctx,
@@ -350,6 +360,26 @@ func extractPersonaContextRequest(reply string) (string, bool) {
 		return strings.TrimSpace(strings.TrimPrefix(line, personaContextRequestPrefix)), true
 	}
 	return "", false
+}
+
+func suppressVisiblePersonaContextRequestLeak(reply string) string {
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return ""
+	}
+	if _, ok := extractPersonaContextRequest(reply); ok {
+		return ""
+	}
+	lines := strings.Split(reply, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(strings.Trim(line, "`"))
+		if strings.HasPrefix(trimmed, personaContextRequestPrefix) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
 func (r *Runtime) personaContextRequestEligible(input turnRenderInput) bool {
