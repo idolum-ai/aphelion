@@ -11,9 +11,19 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
-func (r *Runtime) clearApprovalWindowForManualRetryBarrier(key session.SessionKey, state session.ContinuationState, source string, now time.Time) error {
+type manualRetryBarrierResult struct {
+	RevokedAutoApprovalLeases int
+	RevokedAutonomyOverrides  int
+}
+
+func (result manualRetryBarrierResult) Revoked() bool {
+	return result.RevokedAutoApprovalLeases > 0 || result.RevokedAutonomyOverrides > 0
+}
+
+func (r *Runtime) clearApprovalWindowForManualRetryBarrier(key session.SessionKey, state session.ContinuationState, source string, now time.Time) (manualRetryBarrierResult, error) {
+	result := manualRetryBarrierResult{}
 	if r == nil || r.store == nil || key.ChatID == 0 {
-		return nil
+		return result, nil
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -22,19 +32,20 @@ func (r *Runtime) clearApprovalWindowForManualRetryBarrier(key session.SessionKe
 	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
 	leases, err := r.store.ActiveOperatorAutoApprovalLeasesForScope(key.ChatID, scopeKind, scopeID, now)
 	if err != nil {
-		return err
+		return result, err
 	}
 	overrides, err := r.store.ActiveOperatorAutonomyOverridesForScope(key.ChatID, scopeKind, scopeID, now)
 	if err != nil {
-		return err
+		return result, err
 	}
 	adminIDs := manualRetryBarrierAdminIDs(leases, overrides)
 	for _, adminID := range adminIDs {
 		revokedLeases, err := r.store.RevokeOperatorAutoApprovalLeasesForScope(key.ChatID, adminID, scopeKind, scopeID, now)
 		if err != nil {
-			return err
+			return result, err
 		}
 		if len(revokedLeases) > 0 {
+			result.RevokedAutoApprovalLeases += len(revokedLeases)
 			payload := operatorAutoApprovalRevokedEventPayload(revokedLeases, now)
 			addManualRetryBarrierPayload(payload, state, source)
 			r.recordOperatorAutoApprovalEvent(
@@ -47,9 +58,10 @@ func (r *Runtime) clearApprovalWindowForManualRetryBarrier(key session.SessionKe
 		}
 		revokedOverrides, err := r.store.RevokeOperatorAutonomyOverridesForScope(key.ChatID, adminID, scopeKind, scopeID, now)
 		if err != nil {
-			return err
+			return result, err
 		}
 		if len(revokedOverrides) > 0 {
+			result.RevokedAutonomyOverrides += len(revokedOverrides)
 			payload := operatorAutoModeRevokedEventPayload(revokedOverrides, now)
 			addManualRetryBarrierPayload(payload, state, source)
 			r.recordOperatorAutoModeEvent(
@@ -61,7 +73,7 @@ func (r *Runtime) clearApprovalWindowForManualRetryBarrier(key session.SessionKe
 			)
 		}
 	}
-	return nil
+	return result, nil
 }
 
 func manualRetryBarrierAdminIDs(leases []session.OperatorAutoApprovalLease, overrides []session.OperatorAutonomyOverride) []int64 {

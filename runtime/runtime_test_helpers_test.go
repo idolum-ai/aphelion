@@ -386,6 +386,7 @@ type fakeSender struct {
 	sendCount       int
 	sendErr         error
 	sendErrAfter    int
+	inlineErr       error
 	documentErr     error
 	voice           []voiceSend
 	documents       []documentSend
@@ -490,6 +491,9 @@ func (f *fakeSender) SendMessage(_ context.Context, msg core.OutboundMessage) (i
 func (f *fakeSender) SendInlineKeyboard(_ context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.inlineErr != nil {
+		return 0, f.inlineErr
+	}
 	f.inline = append(f.inline, inlineCall{chatID: chatID, text: text, rows: rows, replyTo: replyTo})
 	return int64(len(f.inline)), nil
 }

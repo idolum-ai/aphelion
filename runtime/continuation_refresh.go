@@ -37,20 +37,32 @@ func (r *Runtime) refreshContinuationProposal(ctx context.Context, key session.S
 	if continuationStateHasFreshPendingLease(prior, now) {
 		if !allowAutoApproval {
 			prior = manualOnlyContinuationRefreshState(prior, now)
-			if err := r.clearApprovalWindowForManualRetryBarrier(key, prior, refreshedFrom, now); err != nil {
+			barrier, err := r.clearApprovalWindowForManualRetryBarrier(key, prior, refreshedFrom, now)
+			if err != nil {
 				return session.ContinuationState{}, false, fmt.Errorf("clear approval window for manual retry: %w", err)
 			}
 			if err := r.store.UpdateContinuationState(key, prior); err != nil {
 				return session.ContinuationState{}, false, fmt.Errorf("persist manual-only continuation proposal: %w", err)
+			}
+			if barrier.Revoked() {
+				msg := continuationPromptInboundForKey(key, "continuation manual retry", core.InboundOriginTurnAuthorization, "")
+				text := manualRetryBarrierPromptText(r.renderContinuationPrompt(ctx, key, msg, prior), barrier)
+				if err := r.sendContinuationApprovalPrompt(ctx, key, msg, prior, text); err != nil {
+					return prior, false, fmt.Errorf("send refreshed continuation approval: %w", err)
+				}
+				return prior, true, nil
 			}
 		}
 		return prior, false, nil
 	}
 
 	state := refreshedContinuationState(prior, reason, refreshedFrom, now)
+	barrier := manualRetryBarrierResult{}
 	if !allowAutoApproval {
 		state = manualOnlyContinuationRefreshState(state, now)
-		if err := r.clearApprovalWindowForManualRetryBarrier(key, state, refreshedFrom, now); err != nil {
+		var err error
+		barrier, err = r.clearApprovalWindowForManualRetryBarrier(key, state, refreshedFrom, now)
+		if err != nil {
 			return session.ContinuationState{}, false, fmt.Errorf("clear approval window for manual retry: %w", err)
 		}
 	}
@@ -68,6 +80,9 @@ func (r *Runtime) refreshContinuationProposal(ctx context.Context, key session.S
 
 	msg := continuationPromptInboundForKey(key, "continuation proposal refresh", core.InboundOriginTurnAuthorization, "")
 	text := r.renderContinuationPrompt(ctx, key, msg, state)
+	if !allowAutoApproval {
+		text = manualRetryBarrierPromptText(text, barrier)
+	}
 	if allowAutoApproval {
 		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, text, "continuation_refresh"); err != nil {
 			return state, false, fmt.Errorf("send refreshed continuation approval: %w", err)
@@ -76,6 +91,18 @@ func (r *Runtime) refreshContinuationProposal(ctx context.Context, key session.S
 		return state, false, fmt.Errorf("send refreshed continuation approval: %w", err)
 	}
 	return state, true, nil
+}
+
+func manualRetryBarrierPromptText(text string, barrier manualRetryBarrierResult) string {
+	text = strings.TrimSpace(text)
+	if !barrier.Revoked() {
+		return text
+	}
+	notice := "Approval window paused for this retry; approve this one step manually."
+	if text == "" {
+		return notice
+	}
+	return text + "\n\n" + notice
 }
 
 func manualOnlyContinuationRefreshState(state session.ContinuationState, now time.Time) session.ContinuationState {

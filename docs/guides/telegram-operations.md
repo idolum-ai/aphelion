@@ -238,7 +238,7 @@ an explicit expiry.
 ## Grant Bounded Automation
 
 After an approval succeeds, the approved message shows `Approve 15m` and
-`Close`. `Approve 15m` opens a bounded approval window for matching
+`Close`. `Approve 15m` opens a bounded approval window for new approval
 requests in the current chat or side thread. It creates the temporary automation
 gate and the spendable approval grant together, so the operator does not have to
 manage them as separate controls.

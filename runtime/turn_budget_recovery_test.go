@@ -608,6 +608,30 @@ func TestRecoveryDecisionDoesNotContinueUnderInactiveLease(t *testing.T) {
 	}
 }
 
+func TestRecoveryDecisionParksActiveLeaseWithoutOperationWithSpecificCopy(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 9735, UserID: 0, Scope: telegramDMScopeRef(9735)}
+	cont := approvedContinuation("recovery-decision-orphan-lease", "workspace_write", now, []string{"inspect", "edit_workspace"}, []string{"deploy", "restart"})
+	cont.RemainingTurns = 1
+	cont.ContinuationLease.RemainingTurns = 1
+	if err := store.UpdateContinuationState(key, cont); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	decision := rt.recoveryDecisionForInterruption(key, "provider_failure", "status_503", now)
+	if decision.Action != recoveryDecisionPark || decision.Reason != "active_lease_without_operation" {
+		t.Fatalf("decision = %#v, want parked active lease without operation", decision)
+	}
+	if got := recoveryDecisionVisibleText(decision); !strings.Contains(got, "approval exists") || !strings.Contains(got, "cannot find the durable operation") {
+		t.Fatalf("visible decision text = %q, want specific orphan-lease copy", got)
+	}
+}
+
 func TestTurnMonitorIgnoresIngressForTurnAuthorization(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)

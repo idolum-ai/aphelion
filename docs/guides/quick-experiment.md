@@ -99,7 +99,7 @@ session without clearing memory.
 When you approve a request, the approved Telegram message offers an
 `Approve 15m` button. Use it when you want less approval friction for the bounded
 task already in front of you. The window opens the temporary automation gate and the
-matching approval grant together, scoped to the current chat or side thread.
+approval grant for new approval requests, scoped to the current chat or side thread.
 
 The active window then offers `Double time` and `Cancel approvals`. Use
 `/health` after changing approval windows when you want the service state visible.

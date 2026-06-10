@@ -88,7 +88,7 @@ Current command surface:
 - Approval windows
   - Admin-only inline controls shown after an approval succeeds.
   - The approved message offers `Approve 15m` and `Close`.
-  - `Approve 15m` opens the temporary automation gate and matching approval grant together for the current chat or side thread.
+  - `Approve 15m` opens the temporary automation gate and approval grant for new approval requests in the current chat or side thread.
   - Active windows offer `Double time` and `Cancel approvals`.
   - Each `Double time` press doubles the current window duration within the configured live-override ceiling. `Cancel approvals` revokes both records.
   - If config is tightened later, live mode overrides outside the new ceiling are ignored and `/health diagnose` reports the precedence block.
@@ -288,8 +288,8 @@ mission state.
 Approval-window buttons keep automation contextual to the request that was just
 approved:
 
-- `Approve 15m` creates a temporary automation gate and matching approval
-  grant for the current chat or side thread.
+- `Approve 15m` creates a temporary automation gate and approval
+  grant for new approval requests in the current chat or side thread.
 - `Close` removes the offer buttons without changing runtime state.
 - `Double time` doubles the current approval window within the configured
   live-override ceiling.

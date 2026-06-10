@@ -14,6 +14,7 @@ import (
 
 const continuationCallbackPrefix = core.ContinuationCallbackPrefix
 const staleContinuationCallbackText = "This continuation prompt is no longer active. Use the newest prompt."
+const legacyContinueOnceCallbackText = "This one-step approval button is from an older prompt. Use the newest prompt."
 const continuationCallbackFailureText = "Continuation action failed. Check /health diagnose for details."
 
 const (
@@ -142,7 +143,7 @@ func renderContinuationDecision(state session.ContinuationState, action string) 
 	case continuationActionApproveBundleCurrent:
 		return renderContinuationApprovedDecision(state, "Current step approved. Later steps will ask again before I use them.")
 	case continuationActionContinueOnce:
-		return renderContinuationApprovedDecision(state, "Approved for one step.")
+		return renderContinuationEdgeStatus(state, "Use the newest approval prompt.")
 	case continuationActionAskEdit:
 		return "I parked this request for edits; nothing was approved or started."
 	case continuationActionAskNextLease:

@@ -265,6 +265,85 @@ func TestGoalContinuationInfersPushPRFollowUpAfterCompletedLocalPhase(t *testing
 	}
 }
 
+func TestGoalContinuationDoesNotInferFollowUpFromConsumedInterruptedLease(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9052, UserID: 0, Scope: telegramDMScopeRef(9052)}
+	now := time.Now().UTC()
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "interrupted-local-phase",
+		Objective: "Patch local retry behavior and publish a PR.",
+		Status:    session.OperationStatusActive,
+		Stage:     "budget_interrupted",
+		Summary:   "The approved local phase was interrupted by token budget exhaustion.",
+		Proposal: session.OperationProposal{
+			ID:            "interrupted-local-phase-proposal",
+			Kind:          "workspace_write",
+			Summary:       "Patch local retry behavior",
+			WhyNow:        "The retry behavior needs local code changes.",
+			BoundedEffect: "Edit local code and run focused tests. Stop before push or PR.",
+			Status:        session.ProposalStatusApproved,
+			UpdatedAt:     now,
+		},
+		Work: session.WorkOperationMetadata{
+			LastLeaseID: "lease-interrupted-local-phase",
+			LastError:   "token budget exhausted before final response",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status: session.ContinuationStatusIdle,
+		ActionProposal: session.ActionProposal{
+			ID:            "aprop-interrupted-local-phase",
+			OperationID:   "interrupted-local-phase-proposal",
+			Summary:       "Patch local retry behavior",
+			BoundedEffect: "Edit local code and run focused tests. Stop before push or PR.",
+			Status:        session.ProposalStatusApproved,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-interrupted-local-phase",
+			ProposalID:     "aprop-interrupted-local-phase",
+			Status:         session.ContinuationLeaseStatusConsumed,
+			MaxTurns:       1,
+			RemainingTurns: 0,
+			ConsumedAt:     now,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	result := &turn.Result{
+		VisibleReply: "Token budget interrupted the approved phase before completion. Next useful step would be a separate bounded approval for push/PR after retry evidence exists.",
+		Turn:         &core.TurnResult{Text: "Token budget interrupted the phase. Next useful step would be a separate bounded approval for push/PR."},
+	}
+	inferred, err := rt.maybeInferGoalContinuationProposal(context.Background(), key, core.InboundMessage{
+		ChatID:       key.ChatID,
+		SenderID:     1001,
+		Text:         approvedContinuationEventText,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
+		MessageID:    44,
+	}, "Recover: budget hop 3/3", result)
+	if err != nil {
+		t.Fatalf("maybeInferGoalContinuationProposal() err = %v", err)
+	}
+	if inferred {
+		t.Fatal("maybeInferGoalContinuationProposal() = true, want false for interrupted consumed lease")
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no follow-up approval prompt", inlineCount)
+	}
+}
+
 func TestGoalContinuationInfersReleaseReadinessAfterCompletedWalkthrough(t *testing.T) {
 	t.Parallel()
 

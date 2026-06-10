@@ -65,6 +65,36 @@ func TestHandleTelegramCommandCallbackContinuationApprove(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandCallbackContinueOnceFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{continuationState: session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-continue-once",
+		RemainingTurns: 3,
+		StageSummary:   "Run a bounded multi-step lease.",
+	}, canRestart: true}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-continue-once",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
+		Data:    encodeContinuationCallbackData("decision-continue-once", continuationActionContinueOnce),
+		Message: &telegram.Message{MessageID: 194, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.approveContinuationInput != 0 || router.triggerContinuationInput != 0 {
+		t.Fatalf("approve/trigger = %d/%d, want 0/0 for legacy continue_once", router.approveContinuationInput, router.triggerContinuationInput)
+	}
+	if len(sender.answers) != 1 || sender.answers[0].text != legacyContinueOnceCallbackText {
+		t.Fatalf("answers = %#v, want legacy continue_once stale answer", sender.answers)
+	}
+}
+
 func TestHandleTelegramCommandCallbackContinuationApproveContinuesWhenEditFails(t *testing.T) {
 	t.Parallel()
 

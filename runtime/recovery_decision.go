@@ -129,6 +129,9 @@ func (r *Runtime) recoveryDecisionForInterruption(key session.SessionKey, interr
 	case opExists && strings.TrimSpace(opState.Objective) != "":
 		decision.Action = recoveryDecisionAskBoundedApproval
 		decision.Reason = "known_objective_needs_bounded_approval"
+	case leaseActive:
+		decision.Action = recoveryDecisionPark
+		decision.Reason = "active_lease_without_operation"
 	default:
 		decision.Action = recoveryDecisionPark
 		decision.Reason = "no_recoverable_operation"
@@ -213,6 +216,9 @@ func recoveryDecisionVisibleText(decision recoveryDecision) string {
 	case recoveryDecisionRescopeRequest:
 		return "Saved state shows a blocker before the next step. Next action: rescope or repair the blocked step and ask again."
 	case recoveryDecisionPark:
+		if decision.Reason == "active_lease_without_operation" {
+			return "Saved approval exists, but I cannot find the durable operation it belongs to. Next action: ask for one fresh bounded step before continuing."
+		}
 		return "Saved state does not show a safe next step. Next action: park this and report what evidence is needed to resume."
 	default:
 		return ""

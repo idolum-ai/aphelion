@@ -284,7 +284,7 @@ func (r *Runtime) approvalWindowMaxDuration() time.Duration {
 }
 
 func (r *Runtime) renderApprovalWindowEnabled(lease session.OperatorAutoApprovalLease, override session.OperatorAutonomyOverride, now time.Time) string {
-	return renderApprovalWindowActiveLine("active", lease, override, now, r.approvalWindowDisplayLocation(), "matching requests", "")
+	return renderApprovalWindowActiveLine("active", lease, override, now, r.approvalWindowDisplayLocation(), "new approval requests", "")
 }
 
 func (r *Runtime) renderApprovalWindowEnabledForOffer(offer session.ApprovalWindowOffer, lease session.OperatorAutoApprovalLease, override session.OperatorAutonomyOverride, now time.Time) string {
@@ -293,7 +293,7 @@ func (r *Runtime) renderApprovalWindowEnabledForOffer(offer session.ApprovalWind
 
 func (r *Runtime) renderApprovalWindowDoubled(lease session.OperatorAutoApprovalLease, override session.OperatorAutonomyOverride, now time.Time, previousDuration time.Duration, doubledDuration time.Duration) string {
 	detail := "extended from " + roundDuration(previousDuration) + " to " + roundDuration(doubledDuration)
-	return renderApprovalWindowActiveLine("extended", lease, override, now, r.approvalWindowDisplayLocation(), "matching requests", detail)
+	return renderApprovalWindowActiveLine("extended", lease, override, now, r.approvalWindowDisplayLocation(), "new approval requests", detail)
 }
 
 func (r *Runtime) renderApprovalWindowDoubledForOffer(offer session.ApprovalWindowOffer, lease session.OperatorAutoApprovalLease, override session.OperatorAutonomyOverride, now time.Time, previousDuration time.Duration, doubledDuration time.Duration) string {
@@ -313,7 +313,7 @@ func renderApprovalWindowActiveLine(state string, lease session.OperatorAutoAppr
 	}
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
-		subject = "matching requests"
+		subject = "new approval requests"
 	}
 	verb := "is active"
 	if state == "extended" {
@@ -323,10 +323,10 @@ func renderApprovalWindowActiveLine(state string, lease session.OperatorAutoAppr
 	if d := strings.TrimSpace(detail); d != "" {
 		tail = " (" + d + ")" + tail
 	}
-	if strings.EqualFold(subject, "matching requests") {
-		return "Approval window " + verb + " for matching requests in this chat or thread" + tail
+	if strings.EqualFold(subject, "matching requests") || strings.EqualFold(subject, "new approval requests") {
+		return "Approval window " + verb + " for new approval requests in this chat or thread" + tail
 	}
-	return "Approval window " + verb + " for “" + subject + "” and matching requests in this chat or thread" + tail
+	return "Approval window " + verb + " for “" + subject + "” and new approval requests in this chat or thread" + tail
 }
 
 func (r *Runtime) approvalWindowDisplayLocation() *time.Location {
@@ -374,7 +374,7 @@ func sameLocalDate(a time.Time, b time.Time) bool {
 func (r *Runtime) approvalWindowOfferSubject(offer session.ApprovalWindowOffer) string {
 	offer = session.NormalizeApprovalWindowOffer(offer)
 	if r == nil || r.store == nil {
-		return "matching requests"
+		return "new approval requests"
 	}
 	if offer.SourceKind == session.ApprovalWindowOfferSourceContinuation {
 		if states, err := r.store.ContinuationStates(); err == nil {
@@ -400,7 +400,7 @@ func (r *Runtime) approvalWindowOfferSubject(offer session.ApprovalWindowOffer) 
 			}
 		}
 	}
-	return "matching requests"
+	return "new approval requests"
 }
 
 func approvalWindowContinuationMatchesOffer(state session.ContinuationState, offer session.ApprovalWindowOffer) bool {

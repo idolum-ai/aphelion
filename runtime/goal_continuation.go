@@ -144,10 +144,10 @@ func goalContinuationCandidateFromState(
 	opState = session.NormalizeOperationState(opState)
 	planState = session.NormalizePlanState(planState)
 	priorContinuation = session.NormalizeContinuationState(priorContinuation)
-	if !goalContinuationPriorPhaseComplete(msg, opState, priorContinuation, priorExists) {
+	sourceText := goalContinuationSourceText(promptInput, opState, planState, priorContinuation, result)
+	if !goalContinuationPriorPhaseComplete(opState, priorContinuation, priorExists, sourceText) {
 		return goalContinuationCandidate{}, false
 	}
-	sourceText := goalContinuationSourceText(promptInput, opState, planState, priorContinuation, result)
 	if candidate, ok := goalContinuationConcreteFollowUpCandidate(sourceText, opState, planState, priorContinuation); ok {
 		return candidate, true
 	}
@@ -181,14 +181,65 @@ func goalContinuationCandidateFromState(
 	}, true
 }
 
-func goalContinuationPriorPhaseComplete(msg core.InboundMessage, opState session.OperationState, prior session.ContinuationState, priorExists bool) bool {
+func goalContinuationPriorPhaseComplete(opState session.OperationState, prior session.ContinuationState, priorExists bool, sourceText string) bool {
 	if opState.Status == session.OperationStatusCompleted {
 		return true
 	}
-	if msg.Origin == core.InboundOriginTurnAuthorization && priorExists && prior.ContinuationLease.Status == session.ContinuationLeaseStatusConsumed {
+	if !priorExists || prior.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed {
+		return false
+	}
+	if goalContinuationHasSuccessfulWorkEvidence(opState, prior) {
 		return true
 	}
-	return priorExists && prior.ContinuationLease.Status == session.ContinuationLeaseStatusConsumed
+	return goalContinuationSourceIndicatesCompletion(sourceText)
+}
+
+func goalContinuationHasSuccessfulWorkEvidence(opState session.OperationState, prior session.ContinuationState) bool {
+	opState = session.NormalizeOperationState(opState)
+	prior = session.NormalizeContinuationState(prior)
+	work := opState.Work
+	if work.LastCompletedAt.IsZero() || strings.TrimSpace(work.LastError) != "" {
+		return false
+	}
+	leaseID := strings.TrimSpace(prior.ContinuationLease.ID)
+	return leaseID != "" && strings.TrimSpace(work.LastLeaseID) == leaseID
+}
+
+func goalContinuationSourceIndicatesCompletion(text string) bool {
+	lower := strings.ToLower(text)
+	for _, needle := range []string{
+		"budget",
+		"interrupted",
+		"failed before completion",
+		"failure",
+		"could not complete",
+		"did not complete",
+		"not complete",
+		"not completed",
+		"ran out of",
+		"token exhausted",
+		"token budget",
+		"provider failed",
+		"retry",
+	} {
+		if strings.Contains(lower, needle) {
+			return false
+		}
+	}
+	for _, needle := range []string{
+		"completed cleanly",
+		"completed inside",
+		"phase completed",
+		"work completed",
+		"no more work is needed inside the approved phase",
+		"approved phase completed",
+		"done inside the approved phase",
+	} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func goalContinuationSourceText(promptInput string, opState session.OperationState, planState session.PlanState, prior session.ContinuationState, result *turn.Result) string {

@@ -1141,6 +1141,9 @@ func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
 	if !strings.Contains(inlineText, "approval before retrying") || !strings.Contains(inlineText, prior.ActionProposal.BoundedEffect) {
 		t.Fatalf("inline text = %q, want retry reason and bounded effect", inlineText)
 	}
+	if !strings.Contains(inlineText, "Approval window paused for this retry; approve this one step manually.") {
+		t.Fatalf("inline text = %q, want visible manual retry barrier notice", inlineText)
+	}
 	if strings.Contains(inlineText, "failed before completion") || strings.Contains(inlineText, "fresh lease") {
 		t.Fatalf("inline text leaked internal retry copy: %q", inlineText)
 	}
@@ -1159,6 +1162,76 @@ func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
 	}
 	if hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
 		t.Fatalf("events = %#v, want no work executor success event", events)
+	}
+}
+
+func TestWorkFailureRetryFallbackSendsPlainNoticeWhenInlinePromptFails(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	sender.inlineErr = errors.New("telegram inline keyboard failed")
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8191, UserID: 0, Scope: telegramDMScopeRef(8191)}
+	now := time.Now().UTC()
+	state := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "work-failure-inline-fallback",
+		Objective:      "Patch retry fallback.",
+		StageSummary:   "Retry the bounded work manually.",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-work-failure-inline-fallback",
+			Summary:        "Patch retry fallback",
+			WhyNow:         "A prior run failed and needs manual approval before retrying.",
+			BoundedEffect:  "Edit runtime retry fallback only.",
+			RiskClass:      "workspace_write",
+			AllowedActions: []string{"workspace_write"},
+			Status:         session.ProposalStatusPending,
+			ExpiresAt:      now.Add(time.Hour),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-work-failure-inline-fallback",
+			ProposalID:     "aprop-work-failure-inline-fallback",
+			Status:         session.ContinuationLeaseStatusPending,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			AllowedActions: []string{"workspace_write"},
+			ExpiresAt:      now.Add(time.Hour),
+		},
+	}
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutonomyForKey(context.Background(), key, 1001, "leased 15m all"); err != nil {
+		t.Fatalf("ConfigureAutonomyForKey() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApprovalForKey(context.Background(), key, 1001, "15m all"); err != nil {
+		t.Fatalf("ConfigureAutoApprovalForKey() err = %v", err)
+	}
+
+	workErr := errors.New("codex failed before completion")
+	rt.offerWorkFailureRetry(context.Background(), key, key.ChatID, workErr)
+
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sent := append([]core.OutboundMessage(nil), sender.sent...)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want failed inline prompt not recorded", inlineCount)
+	}
+	if len(sent) != 1 || !strings.Contains(sent[0].Text, "I could not show the retry approval buttons.") || !strings.Contains(sent[0].Text, "fresh manual approval") {
+		t.Fatalf("sent = %#v, want plain fallback retry notice", sent)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEventPayload(events, core.ExecutionEventContinuationBlocked, `"fallback_sent":true`) {
+		t.Fatalf("events = %#v, want retry_offer_failed event with fallback_sent=true", events)
 	}
 }
 

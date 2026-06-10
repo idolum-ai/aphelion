@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +43,48 @@ func TestContinuationClassScopeAllowsSameActiveLeaseClassAndActions(t *testing.T
 	decision := continuationClassScopeDecisionForMaterializedState(prior, proposed, now)
 	if !decision.Allowed {
 		t.Fatalf("decision = %#v, want allowed within active lease class and action scope", decision)
+	}
+}
+
+func TestContinuationClassScopeRejectsLocalWorkspaceWildcardOnlyLease(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	prior := session.ContinuationState{
+		Status:         session.ContinuationStatusApproved,
+		RemainingTurns: 2,
+		ContinuationLease: session.ContinuationLease{
+			ID:               "lease-class-scope-wildcard",
+			Status:           session.ContinuationLeaseStatusActive,
+			LeaseClass:       session.ContinuationLeaseClassLocalWorkspace,
+			RemainingTurns:   2,
+			AllowedActions:   []string{"*"},
+			ForbiddenActions: []string{"deploy"},
+			ExpiresAt:        now.Add(time.Hour),
+		},
+	}
+	proposed := session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			RiskClass:      "workspace_write",
+			AllowedActions: []string{"workspace_write"},
+			BoundedEffect:  "Patch local repo code and run focused tests.",
+		},
+		ContinuationLease: session.ContinuationLease{
+			LeaseClass: session.ContinuationLeaseClassLocalWorkspace,
+		},
+	}
+
+	decision := continuationClassScopeDecisionForMaterializedState(prior, proposed, now)
+	if decision.Allowed || decision.FailedDimension != "allowed_actions" || !strings.Contains(decision.Reason, "workspace_write") {
+		t.Fatalf("decision = %#v, want local workspace wildcard-only lease rejected", decision)
+	}
+
+	prior.ContinuationLease.AllowedActions = append(prior.ContinuationLease.AllowedActions, "workspace_write")
+	decision = continuationClassScopeDecisionForMaterializedState(prior, proposed, now)
+	if !decision.Allowed {
+		t.Fatalf("decision = %#v, want explicit local workspace action allowed", decision)
 	}
 }
 

@@ -130,9 +130,11 @@ func (r *Runtime) offerWorkFailureRetry(ctx context.Context, key session.Session
 	reason := "work_executor_failed_before_completion"
 	if _, sent, refreshErr := r.refreshContinuationProposal(ctx, key, reason, "work_executor_failure", false); refreshErr != nil {
 		log.Printf("WARN refresh continuation after work failure failed chat_id=%d err=%v", chatID, refreshErr)
+		fallbackSent := r.sendWorkFailureRetryFallback(ctx, key, chatID, cause, refreshErr)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "retry_offer_failed", map[string]any{
-			"reason": "work_executor_failure_retry_offer_failed",
-			"error":  trimError(refreshErr.Error()),
+			"reason":        "work_executor_failure_retry_offer_failed",
+			"error":         trimError(refreshErr.Error()),
+			"fallback_sent": fallbackSent,
 		}, time.Now().UTC())
 	} else if sent {
 		r.recordExecutionEvent(key, core.ExecutionEventRecoveryIssued, "work", "retry_offered", map[string]any{
@@ -140,6 +142,29 @@ func (r *Runtime) offerWorkFailureRetry(ctx context.Context, key session.Session
 			"error":  trimError(cause.Error()),
 		}, time.Now().UTC())
 	}
+}
+
+func (r *Runtime) sendWorkFailureRetryFallback(ctx context.Context, key session.SessionKey, chatID int64, cause error, refreshErr error) bool {
+	if r == nil || r.outbound == nil || chatID == 0 {
+		return false
+	}
+	lines := []string{
+		"I could not show the retry approval buttons.",
+		"",
+		"The approved work did not finish cleanly, so the next step needs a fresh manual approval for one bounded retry.",
+	}
+	if cause != nil {
+		lines = append(lines, "", "Work failure: "+trimError(cause.Error()))
+	}
+	if refreshErr != nil {
+		lines = append(lines, "Approval prompt failure: "+trimError(refreshErr.Error()))
+	}
+	text := r.prefixTelegramPresentedText(r.telegramPresentationForKey(key), strings.Join(lines, "\n"))
+	if _, err := r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: chatID, Text: text}); err != nil {
+		log.Printf("WARN send work failure retry fallback failed chat_id=%d err=%v", chatID, err)
+		return false
+	}
+	return true
 }
 
 func appendOperationArtifact(values []session.OperationArtifact, artifact session.OperationArtifact) []session.OperationArtifact {

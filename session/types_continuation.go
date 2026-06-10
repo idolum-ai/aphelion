@@ -330,7 +330,7 @@ func normalizeContinuationLeaseConstraints(class ContinuationLeaseClass, constra
 
 func continuationLeaseClassRequiresExactActions(class ContinuationLeaseClass) bool {
 	switch NormalizeContinuationLeaseClass(class) {
-	case ContinuationLeaseClassDataAccess, ContinuationLeaseClassChildWake, ContinuationLeaseClassCapabilityGrant, ContinuationLeaseClassDeployRestart:
+	case ContinuationLeaseClassLocalWorkspace, ContinuationLeaseClassDataAccess, ContinuationLeaseClassChildWake, ContinuationLeaseClassCapabilityGrant, ContinuationLeaseClassDeployRestart:
 		return true
 	default:
 		return false
