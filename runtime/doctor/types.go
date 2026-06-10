@@ -47,6 +47,7 @@ type DiagnosticInput struct {
 	Actor         principal.Principal
 	Key           session.SessionKey
 	Session       *session.Session
+	Operation     session.OperationState
 	Scope         sandbox.Scope
 	PromptContext *workspace.PromptContext
 	Exec          pipeline.TurnExecutionContract

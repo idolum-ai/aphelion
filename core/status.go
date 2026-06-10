@@ -4,6 +4,18 @@ package core
 
 import "time"
 
+type OperationEvidenceStatus struct {
+	PhaseID        string
+	AuthorityClass string
+	Status         string
+	EvidenceKind   string
+	Satisfied      bool
+	Reason         string
+	CompletedAt    *time.Time
+	WorkMode       string
+	LeaseID        string
+}
+
 type PendingItemKind string
 
 const (
@@ -366,6 +378,7 @@ type ChatStatusSnapshot struct {
 	OperationStatus                 string
 	OperationStage                  string
 	OperationSummary                string
+	OperationEvidence               []OperationEvidenceStatus
 	PlanStepStatus                  string
 	PlanStep                        string
 	PlanCompletedSteps              int

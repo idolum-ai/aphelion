@@ -89,11 +89,12 @@ const (
 	ExecutionEventMissionProgressAssessed   = "mission.progress.assessed"
 	ExecutionEventMissionCompletionDeclared = "mission.completion.declared"
 
-	ExecutionEventWorkExecutorSelected  = "work.executor.selected"
-	ExecutionEventWorkExecutorFallback  = "work.executor.fallback"
-	ExecutionEventWorkExecutorStarted   = "work.executor.started"
-	ExecutionEventWorkExecutorSucceeded = "work.executor.succeeded"
-	ExecutionEventWorkExecutorFailed    = "work.executor.failed"
+	ExecutionEventWorkExecutorSelected   = "work.executor.selected"
+	ExecutionEventWorkExecutorFallback   = "work.executor.fallback"
+	ExecutionEventWorkExecutorStarted    = "work.executor.started"
+	ExecutionEventWorkExecutorRecovering = "work.executor.recovering"
+	ExecutionEventWorkExecutorSucceeded  = "work.executor.succeeded"
+	ExecutionEventWorkExecutorFailed     = "work.executor.failed"
 
 	ExecutionEventDecisionOpened   = "decision.opened"
 	ExecutionEventDecisionResolved = "decision.resolved"

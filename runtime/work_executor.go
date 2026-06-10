@@ -15,16 +15,17 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	runtimecodex "github.com/idolum-ai/aphelion/runtime/codex"
+	runtimecontinuation "github.com/idolum-ai/aphelion/runtime/continuation"
 	"github.com/idolum-ai/aphelion/session"
 )
 
-type WorkMode string
+type WorkMode = runtimecontinuation.WorkMode
 
 const (
-	WorkModeReadOnly       WorkMode = "read_only"
-	WorkModeWorkspaceWrite WorkMode = "workspace_write"
-	WorkModeCommit         WorkMode = "commit"
-	WorkModeDeploy         WorkMode = "deploy"
+	WorkModeReadOnly       = runtimecontinuation.WorkModeReadOnly
+	WorkModeWorkspaceWrite = runtimecontinuation.WorkModeWorkspaceWrite
+	WorkModeCommit         = runtimecontinuation.WorkModeCommit
+	WorkModeDeploy         = runtimecontinuation.WorkModeDeploy
 )
 
 type WorkRequest struct {
@@ -49,6 +50,7 @@ type WorkResult struct {
 	Summary          string
 	RecoveryKind     string
 	RecoverySummary  string
+	RecoveryDelivery string
 	ProviderFailure  string
 	ProviderEvents   []core.ProviderEvent
 	Recovery         *core.TurnRecovery
@@ -256,17 +258,57 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 		key.Scope = telegramDMScopeRef(key.ChatID)
 	}
 	msg := continuationInboundForKey(key, req.Actor, approvedContinuationEventTextForState(req.State), core.InboundOriginTurnAuthorization, string(session.TurnAuthorizationKindContinuation))
-	result, err := e.runtime.handleInternalContinuationWithOptions(ctx, req.Actor, msg, internalContinuationOptions{
-		DeferBudgetRecoveryToWorkFailureRetry: true,
-	})
-	out := nativeWorkResultFromTurnResult(result)
+	result, err := e.runtime.handleInternalContinuationTurnWithOptions(ctx, req.Actor, msg, internalContinuationOptions{})
+	out := WorkResult{ExecutorName: "native", CompletionKind: "native_turn"}
+	if result != nil {
+		out.RecoveryDelivery = strings.TrimSpace(result.Delivery.Kind)
+		if result.Turn != nil {
+			out.Summary = strings.TrimSpace(result.Turn.Text)
+			out.ProviderFailure = strings.TrimSpace(result.Turn.ProviderFailure)
+			out.ProviderEvents = append([]core.ProviderEvent(nil), result.Turn.ProviderEvents...)
+		}
+		if recovery, ok := nativeWorkTurnRecovery(result.Turn); ok {
+			recoveryCopy := *recovery
+			out.Recovery = &recoveryCopy
+			out.RecoveryKind = strings.TrimSpace(string(recovery.Kind))
+			out.RecoverySummary = strings.TrimSpace(recovery.Summary)
+			out.CompletionKind = "native_turn_budget_recovery"
+			out.SideEffects = true
+			switch out.RecoveryDelivery {
+			case "budget_recovery_scheduled":
+				out.CompletionKind = "native_turn_budget_recovery_scheduled"
+			case "budget_recovery_blocked":
+				out.CompletionKind = "native_turn_budget_recovery_blocked"
+			case "budget_recovery_deferred_to_work_retry":
+				out.CompletionKind = "native_turn_budget_recovery_deferred"
+			}
+		}
+		if out.ProviderFailure != "" {
+			out.CompletionKind = "native_turn_provider_failed"
+			out.SideEffects = true
+		}
+	}
 	if err != nil {
 		return out, err
 	}
-	if terminalErr := nativeWorkResultTerminalError(out); terminalErr != nil {
-		return out, terminalErr
+	if out.ProviderFailure != "" {
+		return out, nativeWorkProviderFailureError{Failure: out.ProviderFailure}
+	}
+	if workResultBudgetRecoveryScheduled(out) || workResultBudgetRecoveryBlocked(out) {
+		return out, nil
+	}
+	if out.RecoveryKind != "" {
+		return out, nativeWorkRecoveryError{Kind: out.RecoveryKind, Summary: out.RecoverySummary}
 	}
 	return out, nil
+}
+
+func workResultBudgetRecoveryScheduled(result WorkResult) bool {
+	return strings.TrimSpace(result.CompletionKind) == "native_turn_budget_recovery_scheduled"
+}
+
+func workResultBudgetRecoveryBlocked(result WorkResult) bool {
+	return strings.TrimSpace(result.CompletionKind) == "native_turn_budget_recovery_blocked"
 }
 
 func nativeWorkResultFromTurnResult(result *core.TurnResult) WorkResult {
@@ -290,16 +332,6 @@ func nativeWorkResultFromTurnResult(result *core.TurnResult) WorkResult {
 		out.SideEffects = true
 	}
 	return out
-}
-
-func nativeWorkResultTerminalError(result WorkResult) error {
-	if result.ProviderFailure != "" {
-		return nativeWorkProviderFailureError{Failure: result.ProviderFailure}
-	}
-	if result.RecoveryKind != "" {
-		return nativeWorkRecoveryError{Kind: result.RecoveryKind, Summary: result.RecoverySummary}
-	}
-	return nil
 }
 
 func nativeWorkTurnRecovery(result *core.TurnResult) (*core.TurnRecovery, bool) {
@@ -555,4 +587,17 @@ func firstRuntimeWorkNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func nativeWorkResultTerminalError(result WorkResult) error {
+	if result.ProviderFailure != "" {
+		return nativeWorkProviderFailureError{Failure: result.ProviderFailure}
+	}
+	if workResultBudgetRecoveryScheduled(result) || workResultBudgetRecoveryBlocked(result) {
+		return nil
+	}
+	if result.RecoveryKind != "" {
+		return nativeWorkRecoveryError{Kind: result.RecoveryKind, Summary: result.RecoverySummary}
+	}
+	return nil
 }

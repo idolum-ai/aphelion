@@ -438,6 +438,9 @@ func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorSt
 	if strings.TrimSpace(result.RecoveryKind) != "" {
 		payload["recovery_kind"] = strings.TrimSpace(result.RecoveryKind)
 	}
+	if strings.TrimSpace(result.RecoveryDelivery) != "" {
+		payload["recovery_delivery"] = strings.TrimSpace(result.RecoveryDelivery)
+	}
 	if strings.TrimSpace(result.RecoverySummary) != "" {
 		payload["recovery_summary"] = trimError(result.RecoverySummary)
 	}

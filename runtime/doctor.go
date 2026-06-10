@@ -124,11 +124,16 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 	exec := r.executionForTurn(prepared)
 	r.applyModelSlotExecution(&exec, core.ModelSlotDoctor)
 	surfaceDoctorProgress(ctx, progress, "Collecting session, memory, log, and runtime evidence")
+	var operation session.OperationState
+	if _, opState, exists, err := r.store.PlanAndOperationStateIfExists(key); err == nil && exists {
+		operation = opState
+	}
 	packet := doctorRuntime.BuildDiagnosticPacket(ctx, doctor.DiagnosticInput{
 		Message:       msg,
 		Actor:         actor,
 		Key:           key,
 		Session:       sess,
+		Operation:     operation,
 		Scope:         scope,
 		PromptContext: promptContext,
 		Exec:          exec,

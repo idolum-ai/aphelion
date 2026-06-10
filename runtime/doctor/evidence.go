@@ -17,6 +17,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tool"
 	"github.com/idolum-ai/aphelion/workspace"
 )
 
@@ -717,4 +718,48 @@ func RedactText(text string) string {
 		out = re.ReplaceAllString(out, `${1}<redacted>${2}`)
 	}
 	return out
+}
+
+func writeDoctorOperationCompletionEvidence(b *strings.Builder, operation session.OperationState) {
+	statuses := tool.OperationCompletionEvidenceStatus(operation)
+	if len(statuses) == 0 {
+		WriteLine(b, "operation_completion_evidence: none")
+		return
+	}
+	for _, status := range statuses {
+		parts := []string{
+			"- phase_id=" + strconv.Quote(strings.TrimSpace(status.PhaseID)),
+			"authority=" + strconv.Quote(strings.TrimSpace(status.AuthorityClass)),
+			"status=" + strconv.Quote(string(status.Status)),
+			"evidence_kind=" + strconv.Quote(strings.TrimSpace(status.EvidenceKind)),
+			fmt.Sprintf("satisfied=%t", status.Satisfied),
+		}
+		if reason := strings.TrimSpace(status.Reason); reason != "" {
+			parts = append(parts, "reason="+strconv.Quote(reason), "repair="+strconv.Quote(operationCompletionEvidenceRepair(status)))
+		}
+		if status.CompletedAt != nil {
+			parts = append(parts, "completed_at="+strconv.Quote(status.CompletedAt.UTC().Format(time.RFC3339)))
+		}
+		if mode := strings.TrimSpace(status.WorkMode); mode != "" {
+			parts = append(parts, "work_mode="+strconv.Quote(mode))
+		}
+		if lease := strings.TrimSpace(status.LeaseID); lease != "" {
+			parts = append(parts, "lease_id="+strconv.Quote(lease))
+		}
+		WriteLine(b, strings.Join(parts, " "))
+	}
+}
+
+func operationCompletionEvidenceRepair(status session.OperationEvidenceStatus) string {
+	if status.Satisfied {
+		return ""
+	}
+	switch strings.TrimSpace(status.Reason) {
+	case "last work ended with an error":
+		return "do not mark the phase complete; inspect the failed work result and retry or rescope"
+	case "last work has no completion timestamp", "last work does not match the operation", "last work does not match the current phase proposal", "last work has no matching action proposal id", "last work lease does not match the current phase lease", "last work mode does not satisfy the phase authority":
+		return "do not mark the phase complete; continue or retry under a matching active lease, then record fresh work evidence"
+	default:
+		return "do not mark the phase complete until matching work evidence exists"
+	}
 }

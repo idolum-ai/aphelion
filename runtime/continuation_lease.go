@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	runtimecontinuation "github.com/idolum-ai/aphelion/runtime/continuation"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -464,24 +465,7 @@ func continuationApprovalBundleWithPhaseSubsetApproved(bundle session.Continuati
 }
 
 func currentContinuationBundlePhase(bundle session.ContinuationApprovalBundle) (session.ContinuationApprovalBundlePhase, bool) {
-	bundle = session.NormalizeContinuationApprovalBundle(bundle)
-	if len(bundle.Phases) == 0 {
-		return session.ContinuationApprovalBundlePhase{}, false
-	}
-	currentID := strings.TrimSpace(bundle.CurrentPhaseID)
-	if currentID != "" {
-		for _, phase := range bundle.Phases {
-			if strings.TrimSpace(phase.ID) == currentID {
-				return phase, true
-			}
-		}
-	}
-	for _, phase := range bundle.Phases {
-		if phase.Status == session.ContinuationLeaseStatusActive || phase.Status == session.ContinuationLeaseStatusPending || phase.Status == "" {
-			return phase, true
-		}
-	}
-	return bundle.Phases[0], true
+	return runtimecontinuation.CurrentBundlePhase(bundle)
 }
 
 func continuationApprovalBundleAfterTurnConsumed(bundle session.ContinuationApprovalBundle, now time.Time) session.ContinuationApprovalBundle {

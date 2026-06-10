@@ -1235,3 +1235,61 @@ func TestRequestApprovalToolRejectsInvalidAuthorityContract(t *testing.T) {
 		t.Fatalf("err = %v, want authority contract diagnostic", err)
 	}
 }
+
+func TestOperationCompletionEvidenceStatusExplainsMismatch(t *testing.T) {
+	t.Parallel()
+
+	state := updateOperationExecutableEvidenceGateState()
+	state.Work = session.WorkOperationMetadata{
+		LastOperationID:       state.ID,
+		LastActionOperationID: "different-proposal",
+		LastActionProposalID:  "aprop-different-proposal",
+		LastLeaseID:           state.PhasePlan.Phases[0].LeaseID,
+		LastWorkMode:          session.OperationPhaseWorkAction(state.PhasePlan.Phases[0]),
+		LastCompletedAt:       time.Now().UTC(),
+	}
+
+	statuses := OperationCompletionEvidenceStatus(state)
+	if len(statuses) != 1 {
+		t.Fatalf("statuses len = %d, want 1", len(statuses))
+	}
+	status := statuses[0]
+	if status.Satisfied {
+		t.Fatalf("status.Satisfied = true, want false")
+	}
+	if status.Reason != "last work does not match the current phase proposal" {
+		t.Fatalf("status.Reason = %q", status.Reason)
+	}
+	if status.PhaseID != "implementation" || status.EvidenceKind != "work_metadata" {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestOperationCompletionEvidenceStatusReportsSatisfied(t *testing.T) {
+	t.Parallel()
+
+	state := updateOperationExecutableEvidenceGateState()
+	phase := state.PhasePlan.Phases[0]
+	proposalID := session.OperationPhaseProposalID(state, phase)
+	now := time.Now().UTC()
+	state.Work = session.WorkOperationMetadata{
+		LastOperationID:       state.ID,
+		LastActionOperationID: proposalID,
+		LastActionProposalID:  "aprop-" + proposalID,
+		LastLeaseID:           phase.LeaseID,
+		LastWorkMode:          session.OperationPhaseWorkAction(phase),
+		LastCompletedAt:       now,
+	}
+
+	statuses := OperationCompletionEvidenceStatus(state)
+	if len(statuses) != 1 {
+		t.Fatalf("statuses len = %d, want 1", len(statuses))
+	}
+	status := statuses[0]
+	if !status.Satisfied || status.Reason != "" {
+		t.Fatalf("status = %#v, want satisfied with no reason", status)
+	}
+	if status.CompletedAt == nil || !status.CompletedAt.Equal(now) {
+		t.Fatalf("CompletedAt = %#v, want %s", status.CompletedAt, now)
+	}
+}

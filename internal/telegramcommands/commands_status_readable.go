@@ -5,6 +5,8 @@ package telegramcommands
 import (
 	"context"
 	"fmt"
+
+	"github.com/idolum-ai/aphelion/core"
 	"strings"
 )
 
@@ -67,7 +69,11 @@ func groundStatusReadableSummary(facts statusReadableFacts, summary string) stri
 func composeStatusReadableSummary(facts statusReadableFacts) string {
 	switch normalizeStatusReadableFactsView(facts.View) {
 	case statusViewChat, statusViewPending, statusViewChatTarget:
-		return fmt.Sprintf("Chat is %s; action items %d; backlog items %d; signal %s.", statusSummaryStateDisplay(facts.State), facts.ActionItems, facts.BacklogItems, firstNonEmptyStatusSummary(facts.CurrentSignal, "unknown"))
+		summary := fmt.Sprintf("Chat is %s; action items %d; backlog items %d; signal %s.", statusSummaryStateDisplay(facts.State), facts.ActionItems, facts.BacklogItems, firstNonEmptyStatusSummary(facts.CurrentSignal, "unknown"))
+		if evidence := statusOperationEvidenceSummary(facts.OperationEvidence); evidence != "" {
+			summary += " " + evidence
+		}
+		return summary
 	case statusViewSystem:
 		return fmt.Sprintf("System has %d active turn(s), %d queued chat(s), and %d pending item(s).", facts.ActiveTurns, facts.QueuedChats, facts.PendingItems)
 	case statusViewHotChats:
@@ -159,4 +165,41 @@ func statusViewSupportsReadableSummary(view statusView) bool {
 	default:
 		return false
 	}
+}
+
+func statusOperationEvidenceSummary(statuses []core.OperationEvidenceStatus) string {
+	if len(statuses) == 0 {
+		return ""
+	}
+	satisfied := 0
+	mismatched := 0
+	pending := 0
+	var reason string
+	for _, status := range statuses {
+		if status.Satisfied {
+			satisfied++
+			continue
+		}
+		if status.Status == "completed" {
+			mismatched++
+			if reason == "" {
+				reason = strings.TrimSpace(status.Reason)
+			}
+			continue
+		}
+		pending++
+	}
+	if mismatched > 0 {
+		if reason != "" {
+			return fmt.Sprintf("Operation evidence mismatch %d/%d: %s.", mismatched, len(statuses), reason)
+		}
+		return fmt.Sprintf("Operation evidence mismatch %d/%d.", mismatched, len(statuses))
+	}
+	if satisfied > 0 && pending == 0 {
+		return fmt.Sprintf("Operation evidence satisfied %d/%d.", satisfied, len(statuses))
+	}
+	if pending > 0 {
+		return fmt.Sprintf("Operation evidence pending %d/%d.", pending, len(statuses))
+	}
+	return ""
 }
