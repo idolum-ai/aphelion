@@ -303,6 +303,13 @@ func migrateSchemaV64ToV65(tx *sql.Tx) error {
 	return nil
 }
 
+func migrateSchemaV65ToV66(tx *sql.Tx) error {
+	if err := ensureInteriorSignalTables(tx); err != nil {
+		return fmt.Errorf("migrate schema v65 to v66 ensure interior signals: %w", err)
+	}
+	return nil
+}
+
 func ensureTurnRunAccountingColumns(tx *sql.Tx) error {
 	exists, err := schemaTableExists(tx, "turn_runs")
 	if err != nil {

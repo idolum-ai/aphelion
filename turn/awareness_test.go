@@ -14,14 +14,17 @@ import (
 
 func TestApplyHiddenInputAwareness(t *testing.T) {
 	categories := []string{"x", "y"}
+	signals := []string{"x intensity=0.7"}
 	base := prompt.RuntimeAwareness{
 		HiddenInputCategories: []string{"old"},
+		InteriorSignals:       []string{"old"},
 		OperationFindings:     []string{"old"},
 	}
 	aw := ApplyHiddenInputAwareness(base, HiddenInputAwareness{
 		Active:            true,
 		Categories:        categories,
 		ProvenanceSummary: "  provenance summary  ",
+		InteriorSignals:   signals,
 	})
 
 	if !aw.HiddenInputsActive {
@@ -33,10 +36,17 @@ func TestApplyHiddenInputAwareness(t *testing.T) {
 	if got, want := aw.ProvenanceSummary, "provenance summary"; got != want {
 		t.Fatalf("ProvenanceSummary = %q, want %q", got, want)
 	}
+	if got, want := aw.InteriorSignals, signals; !reflect.DeepEqual(got, want) {
+		t.Fatalf("InteriorSignals = %#v, want %#v", got, want)
+	}
 
 	categories[0] = "mutated"
+	signals[0] = "mutated"
 	if got, want := aw.HiddenInputCategories[0], "x"; got != want {
 		t.Fatalf("HiddenInputCategories[0] = %q, want %q", got, want)
+	}
+	if got, want := aw.InteriorSignals[0], "x intensity=0.7"; got != want {
+		t.Fatalf("InteriorSignals[0] = %q, want %q", got, want)
 	}
 }
 

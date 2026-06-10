@@ -86,6 +86,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		return fmt.Errorf("load workspace prompt context: %w", err)
 	}
 	hiddenInputs := r.assembleHeartbeatHiddenInputs(ctx, scope, now, deliver, events)
+	hiddenInputs = r.withInteriorSignalState(maintenanceKey, hiddenInputs, now, true)
 	hiddenInputAwareness := hiddenInputs.toTurnAwareness()
 	governorAwareness := turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "system", pipeline.TurnExecutionContract{}), hiddenInputAwareness)
 	governorPrompt := prompt.GovernorRequest{
@@ -243,6 +244,9 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	if err := r.store.RecordOutbound(adminKey, adminSession.TurnCount, msgID, "heartbeat"); err != nil {
 		return fmt.Errorf("record heartbeat outbound: %w", err)
 	}
+	if err := r.store.MarkInteriorSignalsSurfaced(maintenanceKey, hiddenInputs.OutreachSignalRefs, now); err != nil {
+		return fmt.Errorf("mark heartbeat interior signals surfaced: %w", err)
+	}
 
 	ids := make([]int64, 0, len(events))
 	for _, event := range events {
@@ -395,6 +399,9 @@ func renderHeartbeatRequest(targetChatID int64, events []session.ReviewEvent, de
 		fmt.Sprintf("Delivery allowed this turn: %t", deliver),
 		fmt.Sprintf("Reflective outreach eligible this turn: %t", hiddenInputs.ReflectiveOutreachEligible()),
 	}
+	if reason := strings.TrimSpace(hiddenInputs.OutreachEligibilityWhy); reason != "" {
+		lines = append(lines, "Reflective outreach reason: "+reason)
+	}
 	if len(events) == 0 {
 		lines = append(lines,
 			"There are no pending review events this turn.",
@@ -411,6 +418,12 @@ func renderHeartbeatRequest(targetChatID int64, events []session.ReviewEvent, de
 		lines = append(lines, fmt.Sprintf("Hidden input categories: %s", strings.Join(hiddenInputs.Categories(), ", ")))
 		if summary := hiddenInputs.ProvenanceSummary(); summary != "" {
 			lines = append(lines, "Hidden input provenance: "+summary)
+		}
+	}
+	if len(hiddenInputs.InteriorSignalLines) > 0 {
+		lines = append(lines, "Interior signal pressure:")
+		for _, line := range hiddenInputs.InteriorSignalLines {
+			lines = append(lines, "- "+line)
 		}
 	}
 

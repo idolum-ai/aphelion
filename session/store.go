@@ -10,7 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 65
+const schemaVersion = 66
 
 type SQLiteStore struct {
 	db     *sql.DB
@@ -742,6 +742,9 @@ func (s *SQLiteStore) init() error {
 		return err
 	}
 	if err := ensureReentryRecommendationTables(tx); err != nil {
+		return err
+	}
+	if err := ensureInteriorSignalTables(tx); err != nil {
 		return err
 	}
 	for _, stmt := range telegramIngressSchemaStatements() {

@@ -97,6 +97,7 @@ func (r *Runtime) assembleInteractiveLikeTurn(ctx context.Context, input interac
 
 	hiddenInputs := r.assembleInteractiveHiddenInputs(ctx, input.Key, input.Scope, now, prepared.LedgerText, sess.LastFloorMetadata)
 	hiddenInputs.addCoreAll(prepared.ArtifactDecisionInputs)
+	hiddenInputs = r.withInteriorSignalState(input.Key, hiddenInputs, now, false)
 	planEvents, _ := r.store.PlanEvents(input.Key, 20)
 	baseGovernorAwareness := turn.ApplyContinuationAwareness(
 		turn.ApplyOperationAwareness(

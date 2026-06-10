@@ -953,6 +953,7 @@ func fullRuntimeAwarenessFixture() RuntimeAwareness {
 		HiddenInputsActive:         true,
 		HiddenInputCategories:      []string{"semantic recurrence"},
 		ProvenanceSummary:          "prior work",
+		InteriorSignals:            []string{"semantic_recurrence:prior-work intensity=0.72 trend=rising evidence=3"},
 		PlanActive:                 true,
 		PlanSummary:                "finish performance work",
 		PlanEvents:                 []string{"plan updated"},

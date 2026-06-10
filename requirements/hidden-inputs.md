@@ -160,6 +160,7 @@ This makes brokerage a real negotiation between two readings of the same latent 
 - unresolved memory state as proactive eligibility signal
 - temporal pressure as proactive eligibility signal
 - hidden-input convergence gates heartbeat-originated reflective outreach
+- heartbeat hidden-input convergence is backed by durable interior signal pressure with magnitude, decay, dedupe, and surfaced cooldown
 - Idolum brokerage proposals name the hidden input when one is materially shaping the push
 - Idolum (System) ratification may preserve `SIGNAL_JUDGMENT` when Idolum named a hidden input
 - floor sidecar metadata preserves hidden inputs when material
@@ -170,7 +171,7 @@ This makes brokerage a real negotiation between two readings of the same latent 
 - automated latent signal extraction across session history
 - cross-session semantic clustering for recurrence detection
 - user-visible provenance surface by request
-- hidden input weighting and decay model
+- broader tuning of signal weights, half-life, and thresholds from live session evidence
 
 ## Decisions
 
@@ -178,6 +179,7 @@ This makes brokerage a real negotiation between two readings of the same latent 
 - **Idolum must name its signal.** A push without a grounded cause is noise.
 - **Provenance is internal discipline, not a user-facing disclaimer.** It shapes behavior; it does not narrate it by default.
 - **Hidden inputs are real inputs.** They must be traceable to actual memory, session history, or environmental state. They cannot be invented.
+- **Interior pressure is advisory.** Accumulated signal magnitude may shape attention and heartbeat outreach, but it does not grant authority, assert completion, or bypass consent.
 - **The scene should feel grounded.** Generic tone is not enough. Idolum authors from retrieved structure.
 - **Brokerage becomes signal negotiation.** Both layers read the same latent state and their readings should be preserved together.
 
