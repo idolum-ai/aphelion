@@ -22,6 +22,15 @@ func (r *Runtime) RefreshContinuationProposalForKey(ctx context.Context, key ses
 }
 
 func (r *Runtime) refreshContinuationProposal(ctx context.Context, key session.SessionKey, reason string, refreshedFrom string, allowAutoApproval bool) (session.ContinuationState, bool, error) {
+	if r == nil {
+		return session.ContinuationState{}, false, fmt.Errorf("runtime continuation refresh dependencies are unavailable")
+	}
+	unlock := r.lockSession(key)
+	defer unlock()
+	return r.refreshContinuationProposalLocked(ctx, key, reason, refreshedFrom, allowAutoApproval)
+}
+
+func (r *Runtime) refreshContinuationProposalLocked(ctx context.Context, key session.SessionKey, reason string, refreshedFrom string, allowAutoApproval bool) (session.ContinuationState, bool, error) {
 	if r == nil || r.store == nil || r.outbound == nil {
 		return session.ContinuationState{}, false, fmt.Errorf("runtime continuation refresh dependencies are unavailable")
 	}
@@ -84,7 +93,7 @@ func (r *Runtime) refreshContinuationProposal(ctx context.Context, key session.S
 		text = manualRetryBarrierPromptText(text, barrier)
 	}
 	if allowAutoApproval {
-		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, text, "continuation_refresh"); err != nil {
+		if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, text, "continuation_refresh"); err != nil {
 			return state, false, fmt.Errorf("send refreshed continuation approval: %w", err)
 		}
 	} else if err := r.sendContinuationApprovalPrompt(ctx, key, msg, state, text); err != nil {

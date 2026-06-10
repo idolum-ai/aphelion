@@ -17,7 +17,16 @@ func (r *Runtime) MaterializeRequestedApproval(ctx context.Context, key session.
 	return r.materializePendingOperationProposalApproval(ctx, key, msg, promptInput, nil)
 }
 
-func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, _ *turn.Result) (bool, error) {
+func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, result *turn.Result) (bool, error) {
+	if r == nil {
+		return false, nil
+	}
+	unlock := r.lockSession(key)
+	defer unlock()
+	return r.materializePendingOperationProposalApprovalLocked(ctx, key, msg, promptInput, result)
+}
+
+func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, _ *turn.Result) (bool, error) {
 	if r == nil || r.store == nil || r.outbound == nil || msg.ChatID == 0 {
 		return false, nil
 	}
@@ -130,7 +139,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		payload["phase_id"] = strings.TrimSpace(phase.ID)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
 		r.recordContinuationBundleNarrowing(key, opState, []session.OperationPhase{phase}, state, "operation_phase_required_capability", now)
-		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_required_capability"); err != nil {
+		if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_required_capability"); err != nil {
 			return false, fmt.Errorf("send required-capability operation phase continuation approval: %w", err)
 		}
 		return true, nil
@@ -165,7 +174,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		payload["plan_lease_id"] = strings.TrimSpace(opState.PlanLease.ID)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
 		r.recordContinuationBundleNarrowing(key, opState, operationPlanLeasePhasesFromOperation(opState, opState.PlanLease), state, "operation_plan_lease", now)
-		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_plan_lease"); err != nil {
+		if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_plan_lease"); err != nil {
 			return false, fmt.Errorf("send operation plan lease continuation approval: %w", err)
 		}
 		return true, nil
@@ -202,7 +211,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 			payload["synthesized_from_phase_plan"] = true
 			r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
 			r.recordContinuationBundleNarrowing(key, opState, operationPlanLeasePhasesFromOperation(opState, opState.PlanLease), state, "operation_plan_lease", now)
-			if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_plan_lease"); err != nil {
+			if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_plan_lease"); err != nil {
 				return false, fmt.Errorf("send synthesized operation plan lease continuation approval: %w", err)
 			}
 			return true, nil
@@ -240,7 +249,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		payload["phase_plan_id"] = strings.TrimSpace(opState.PhasePlan.ID)
 		payload["bundle_phase_count"] = len(bundle)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
-		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_bundle"); err != nil {
+		if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_bundle"); err != nil {
 			return false, fmt.Errorf("send operation phase bundle continuation approval: %w", err)
 		}
 		return true, nil
@@ -298,7 +307,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		payload["phase_id"] = strings.TrimSpace(phase.ID)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
 		r.recordContinuationBundleNarrowing(key, opState, []session.OperationPhase{phase}, state, "operation_phase_plan", now)
-		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_plan"); err != nil {
+		if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_plan"); err != nil {
 			return false, fmt.Errorf("send operation phase continuation approval: %w", err)
 		}
 		return true, nil
@@ -338,7 +347,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	payload := continuationExecutionPayload(state)
 	payload["materialized_from"] = "operation_proposal"
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
-	if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_proposal"); err != nil {
+	if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_proposal"); err != nil {
 		return false, fmt.Errorf("send operation proposal continuation approval: %w", err)
 	}
 	return true, nil

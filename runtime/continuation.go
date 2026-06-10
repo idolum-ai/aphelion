@@ -31,6 +31,15 @@ const (
 )
 
 func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, result *turn.Result) error {
+	if r == nil {
+		return nil
+	}
+	unlock := r.lockSession(key)
+	defer unlock()
+	return r.offerContinuationApprovalLocked(ctx, key, msg, promptInput, result)
+}
+
+func (r *Runtime) offerContinuationApprovalLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, result *turn.Result) error {
 	if r == nil || r.outbound == nil || r.store == nil {
 		return nil
 	}
@@ -109,7 +118,7 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		return nil
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", continuationExecutionPayload(state), time.Now().UTC())
-	if approved, err := r.maybeAutoApproveContinuationOffer(ctx, key, msg, state, "organic_continuation"); approved || err != nil {
+	if approved, err := r.maybeAutoApproveContinuationOfferLocked(ctx, key, msg, state, "organic_continuation"); approved || err != nil {
 		return err
 	}
 

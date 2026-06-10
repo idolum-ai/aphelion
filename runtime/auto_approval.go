@@ -150,8 +150,23 @@ func (r *Runtime) AutoResolveDecision(ctx context.Context, pending decision.Pend
 }
 
 func (r *Runtime) maybeAutoApproveContinuationOffer(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState, source string) (bool, error) {
+	return r.maybeAutoApproveContinuationOfferWith(ctx, key, msg, state, source, func(approverID int64) (session.ContinuationState, error) {
+		return r.ApproveContinuationForKey(key, approverID)
+	})
+}
+
+func (r *Runtime) maybeAutoApproveContinuationOfferLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState, source string) (bool, error) {
+	return r.maybeAutoApproveContinuationOfferWith(ctx, key, msg, state, source, func(approverID int64) (session.ContinuationState, error) {
+		return r.approveContinuationBundleForKeyLocked(key, approverID, nil)
+	})
+}
+
+func (r *Runtime) maybeAutoApproveContinuationOfferWith(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState, source string, approve func(int64) (session.ContinuationState, error)) (bool, error) {
 	state = session.NormalizeContinuationState(state)
 	if state.Status != session.ContinuationStatusPending || state.RemainingTurns <= 0 {
+		return false, nil
+	}
+	if approve == nil {
 		return false, nil
 	}
 	if state.ActionProposal.AutoApproveEligible != nil && !*state.ActionProposal.AutoApproveEligible {
@@ -183,7 +198,7 @@ func (r *Runtime) maybeAutoApproveContinuationOffer(ctx context.Context, key ses
 	if err != nil || !ok {
 		return false, err
 	}
-	approved, err := r.ApproveContinuationForKey(key, lease.AdminUserID)
+	approved, err := approve(lease.AdminUserID)
 	if err != nil {
 		return true, err
 	}

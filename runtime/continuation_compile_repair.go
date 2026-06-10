@@ -532,7 +532,7 @@ func (r *Runtime) materializeCompileRepairPhaseApproval(ctx context.Context, key
 	payload["phase_id"] = strings.TrimSpace(repairPhase.ID)
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
 	r.recordContinuationBundleNarrowing(key, opState, []session.OperationPhase{repairPhase}, state, "continuation_compile_repair", now)
-	if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "continuation_compile_repair"); err != nil {
+	if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "continuation_compile_repair"); err != nil {
 		return opState, err
 	}
 	return opState, nil

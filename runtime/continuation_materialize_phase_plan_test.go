@@ -828,3 +828,74 @@ func TestMaterializePlanLeaseUsesAutoApprovalInsteadOfSuppressingPrompt(t *testi
 		t.Fatalf("autoapproval leases = %#v, want one consumed use", leases)
 	}
 }
+
+func TestHandleInboundAutoApprovesPlanLeaseWithoutReentrantSessionLock(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Ready to continue."
+	provider.faceReplyText = "Ready to continue."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutonomy(context.Background(), 9039, 1001, "leased 15m all"); err != nil {
+		t.Fatalf("ConfigureAutonomy() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApproval(context.Background(), 9039, 1001, "15m all"); err != nil {
+		t.Fatalf("ConfigureAutoApproval() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9039, UserID: 0, Scope: telegramDMScopeRef(9039)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "handle-inbound-autoapprove-plan-lease-op",
+		Objective: "Approve a bounded plan envelope from the interactive finalizer.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "plan_lease_proposal",
+		PlanLease: session.OperationPlanLease{
+			ID:         "handle-inbound-autoapprove-plan-lease",
+			Summary:    "Approve bounded local review budget",
+			Status:     session.PlanLeaseStatusProposed,
+			TurnBudget: 1,
+			Lanes: []session.OperationPlanLeaseLane{
+				{ID: "review", Summary: "Review state", AuthorityClass: "read_only_review", ExpectedTurns: 1},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := rt.HandleInbound(context.Background(), core.InboundMessage{ChatID: 9039, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 1})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("HandleInbound() err = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("HandleInbound() timed out; possible reentrant session lock deadlock")
+	}
+
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want autoapproval to consume without manual buttons", inlineCount)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.ActionProposal.Status != session.ProposalStatusApproved || cont.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed {
+		t.Fatalf("continuation = %#v, want auto-approved consumed plan lease", cont)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(9039, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].UsedCount != 1 {
+		t.Fatalf("autoapproval leases = %#v, want one consumed use", leases)
+	}
+}

@@ -171,7 +171,7 @@ func (r *Runtime) runInteractiveDMTurn(ctx context.Context, input interactiveDMT
 			},
 			PostReplyContinuationUI: func(postCtx context.Context, result *turn.Result) error {
 				ledgerText := interactivePreparedLedgerText(prepared.LedgerText, result)
-				materialized, err := r.materializePendingOperationProposalApproval(postCtx, key, msg, ledgerText, result)
+				materialized, err := r.materializePendingOperationProposalApprovalLocked(postCtx, key, msg, ledgerText, result)
 				if err != nil || materialized {
 					return err
 				}
@@ -180,7 +180,7 @@ func (r *Runtime) runInteractiveDMTurn(ctx context.Context, input interactiveDMT
 					return err
 				}
 				if inferred {
-					_, err := r.materializePendingOperationProposalApproval(postCtx, key, msg, ledgerText, result)
+					_, err := r.materializePendingOperationProposalApprovalLocked(postCtx, key, msg, ledgerText, result)
 					return err
 				}
 				goalInferred, err := r.maybeInferGoalContinuationProposal(postCtx, key, msg, ledgerText, result)
@@ -188,10 +188,10 @@ func (r *Runtime) runInteractiveDMTurn(ctx context.Context, input interactiveDMT
 					return err
 				}
 				if goalInferred {
-					_, err := r.materializePendingOperationProposalApproval(postCtx, key, msg, ledgerText, result)
+					_, err := r.materializePendingOperationProposalApprovalLocked(postCtx, key, msg, ledgerText, result)
 					return err
 				}
-				if err := r.offerContinuationApproval(postCtx, key, msg, ledgerText, result); err != nil {
+				if err := r.offerContinuationApprovalLocked(postCtx, key, msg, ledgerText, result); err != nil {
 					return err
 				}
 				return r.maybeOfferMissionAsk(postCtx, key, msg, ledgerText, result)

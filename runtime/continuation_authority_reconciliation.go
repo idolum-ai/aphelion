@@ -173,7 +173,7 @@ func (r *Runtime) materializeReconciledAuthorityApproval(ctx context.Context, ke
 	payload["materialized_from"] = firstNonEmptyContinuation(source, "authority_reconciliation")
 	payload["reconciled_from_invalid_authority_contract"] = true
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
-	if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), firstNonEmptyContinuation(source, "authority_reconciliation")); err != nil {
+	if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), firstNonEmptyContinuation(source, "authority_reconciliation")); err != nil {
 		return opState, err
 	}
 	return opState, nil

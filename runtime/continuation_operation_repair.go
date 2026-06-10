@@ -13,10 +13,19 @@ import (
 )
 
 func (r *Runtime) sendMaterializedContinuationApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState, text string, source string) error {
+	if r == nil {
+		return nil
+	}
+	unlock := r.lockSession(key)
+	defer unlock()
+	return r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, text, source)
+}
+
+func (r *Runtime) sendMaterializedContinuationApprovalLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState, text string, source string) error {
 	if _, blocked, err := r.blockInvalidContinuationAuthorityContract(ctx, key, msg, state, source, time.Now().UTC(), false); blocked || err != nil {
 		return err
 	}
-	if approved, err := r.maybeAutoApproveContinuationOffer(ctx, key, msg, state, source); approved || err != nil {
+	if approved, err := r.maybeAutoApproveContinuationOfferLocked(ctx, key, msg, state, source); approved || err != nil {
 		return err
 	}
 	return r.sendContinuationApprovalPrompt(ctx, key, msg, state, text)

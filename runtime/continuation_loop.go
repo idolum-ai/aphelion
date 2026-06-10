@@ -83,6 +83,12 @@ func (r *Runtime) maybeOfferNextOperationPhaseAfterContinuationBoundary(ctx cont
 	if !continuationBoundaryCanOfferNextOperationPhase(state, decision) {
 		return nil
 	}
+	unlock := r.lockSession(key)
+	defer unlock()
+	return r.maybeOfferNextOperationPhaseAfterContinuationBoundaryLocked(ctx, key, state, decision)
+}
+
+func (r *Runtime) maybeOfferNextOperationPhaseAfterContinuationBoundaryLocked(ctx context.Context, key session.SessionKey, state session.ContinuationState, decision continuationLoopDecision) error {
 	now := time.Now().UTC()
 	opState, err := r.store.OperationState(key)
 	if err != nil {
@@ -107,7 +113,7 @@ func (r *Runtime) maybeOfferNextOperationPhaseAfterContinuationBoundary(ctx cont
 		Text:     prompt,
 		Origin:   core.InboundOriginTurnAuthorization,
 	}
-	_, err = r.materializePendingOperationProposalApproval(ctx, key, msg, prompt, nil)
+	_, err = r.materializePendingOperationProposalApprovalLocked(ctx, key, msg, prompt, nil)
 	return err
 }
 
