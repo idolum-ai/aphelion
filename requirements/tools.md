@@ -320,6 +320,7 @@ Examples:
 - `heartbeat` may omit ordinary user-facing messaging tools
 - `cron` should usually get a lighter, narrower tool surface
 - `curiosity` may receive read/retrieval tools only, and runtime must further bind execution to the preselected candidate source and exact input
+- `curiosity` should execute through a non-admin approved-user read principal, not ambient admin reach; URL fetches keep the non-admin private/special-IP rejection path and record untrusted-source provenance
 - `subagent` runs should inherit stricter ceilings than their parent
 - `approved_user` runs should not merely receive warnings; they should receive a different actual manifest
 

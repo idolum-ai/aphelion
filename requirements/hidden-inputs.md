@@ -162,6 +162,11 @@ This makes brokerage a real negotiation between two readings of the same latent 
 - hidden-input convergence gates heartbeat-originated reflective outreach
 - heartbeat hidden-input convergence is backed by durable interior signal pressure with magnitude, decay, dedupe, and surfaced cooldown
 - curiosity can spend a disabled-by-default, read-only standing lease to inspect one candidate source from accumulated interior pressure and record a silent typed observation
+- interior signal dedupe counts only applied observations, so suppressed zero-weight rows remain auditable without indefinitely refreshing the dedupe window
+- interior signal retention prunes zero-weight observations sooner than applied observations, drops inactive near-zero state after the applied-evidence horizon, and floors tiny decayed pressure to zero
+- curiosity retention prunes old observations and expired/exhausted allowance records after the retention horizon; curiosity lease status remains an allowance state, not last-run outcome
+- durable memory/workspace evidence should anchor stable subject identity; volatile turn text should use source fingerprints so wording drift does not reset accumulated pressure unnecessarily
+- curiosity-originated observations may feed pressure, but curiosity eligibility requires independent non-curiosity support so the quiet read loop cannot sustain itself
 - reflection and Nocturne can feed low-weight typed observations back into interior pressure, so quiet maintenance leaves reusable residue instead of only artifacts or summaries
 - heartbeat can include a compact quiet-observation trail when accumulated pressure crosses the outreach threshold
 - Idolum brokerage proposals name the hidden input when one is materially shaping the push
@@ -184,6 +189,8 @@ This makes brokerage a real negotiation between two readings of the same latent 
 - **Hidden inputs are real inputs.** They must be traceable to actual memory, session history, or environmental state. They cannot be invented.
 - **Interior pressure is advisory.** Accumulated signal magnitude may shape attention and heartbeat outreach, but it does not grant authority, assert completion, or bypass consent.
 - **Curiosity is a governed read, not autonomous work.** Curiosity may re-read allowlisted sources and write typed observations, but it must not deliver user messages, mutate durable memory directly, perform writes, or infer authority from pressure.
+- **Curiosity evidence is runtime-owned.** The runtime binds the selected source, subject key, and input, and runtime-computed content identity wins over model-supplied hashes or labels.
+- **External curiosity evidence is untrusted.** Third-party URL text may become bounded observation evidence only with explicit untrusted-source provenance; it must not be treated as instruction-bearing memory.
 - **Silent maintenance leaves typed residue.** Nocturne, reflection, and curiosity may strengthen future attention only through bounded interior signal observations with source, evidence, confidence, weight, dedupe, and decay.
 - **The scene should feel grounded.** Generic tone is not enough. Idolum authors from retrieved structure.
 - **Brokerage becomes signal negotiation.** Both layers read the same latent state and their readings should be preserved together.
@@ -247,3 +254,7 @@ Later, recovery or heartbeat can surface that interruption from structured machi
 - **TestProvenanceNotExposedToUserByDefault**: hidden input provenance does not appear in the delivered scene unless explicitly surfaced
 - **TestBrokeragePreservesBothSignalReadings**: negotiated brokerage block includes both Idolum's named signal and Aphelion's structural reaction
 - **TestRunCuriosityOnceRecordsSilentObservation**: a curiosity run consumes a bounded read-only lease turn, uses only the selected source, records a typed observation, and sends no Telegram message
+- **TestInteriorSignalDedupedFingerprintReappliesAfterWindow**: suppressed duplicate observations do not keep the dedupe window alive forever
+- **TestInteriorSignalRetentionPrunesSuppressedObservationsAndInactiveState**: zero-weight rows and near-zero inactive state do not grow indefinitely
+- **TestCuriosityObservationUsesRuntimeHashAndSubject**: model-supplied hashes or subject labels cannot defeat runtime dedupe and subject binding
+- **TestCuriosityRequiresIndependentSignalSupport**: curiosity-originated pressure alone cannot make another curiosity look eligible

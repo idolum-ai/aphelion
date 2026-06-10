@@ -104,9 +104,15 @@ Curiosity note:
 
 - `curiosity_leases` are operational allowance records, not operator approval
   leases and not capability grants.
+- `curiosity_leases.status` describes only the current allowance envelope
+  (`active`, `expired`, or `exhausted`). It is not a per-look success or
+  completion state.
 - `curiosity_observations` are typed facts produced by read-only candidate-bound
   looks. They may feed interior signal pressure, but they do not directly write
   curated memory, assert completion, or create authority.
+- Whether the latest curiosity look succeeded, failed, or produced useful
+  evidence must be derived from `curiosity_observations` plus execution events,
+  not inferred from the lease status.
 
 Staged identity decision:
 
