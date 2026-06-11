@@ -1,5 +1,7 @@
 # Aphelion Design Principles
 
+For a less poetic translation of the same architecture into systems/security vocabulary, see [Aphelion, in boring words](aphelion-in-boring-words.md).
+
 _Status: normative design direction._
 
 Aphelion is a governed outpost for personal agents. It is built for distance:
