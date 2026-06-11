@@ -68,12 +68,13 @@ prose*. The conversation transcript is presentation; the ledger is truth.
 
 ### Small surface, defended on purpose
 
-Three direct module dependencies: SQLite (vendored in-repo), a TOML parser,
-and Tailscale (the substrate that enables remote-host children). Everything
-else is pinned and small. A source install needs Go and a Linux user service;
-a release install needs only the Aphelion binary and systemd. Model providers,
-GitHub App credentials, Sponsors, and hosted storage are explicit operator
-choices, not hidden platform dependencies.
+Six direct Go module requirements are declared in `go.mod`; three are the
+deliberately chosen primary third-party surfaces: SQLite (vendored in-repo), a
+TOML parser, and Tailscale (the substrate that enables remote-host children).
+Everything else is pinned and small. A source install needs Go and a Linux user
+service; a release install needs only the Aphelion binary and systemd. Model
+providers, GitHub App credentials, Sponsors, and hosted storage are explicit
+operator choices, not hidden platform dependencies.
 
 This is defensive, not aesthetic. Recent campaigns like Mini Shai-Hulud
 (170+ npm and PyPI packages compromised, valid SLSA Build Level 3 attestations
