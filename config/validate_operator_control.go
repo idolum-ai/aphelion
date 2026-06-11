@@ -4,6 +4,8 @@ package config
 
 import (
 	"fmt"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -32,6 +34,88 @@ func validateHeartbeatConfig(cfg HeartbeatConfig) error {
 		if _, err := time.LoadLocation(strings.TrimSpace(cfg.ActiveHours.Timezone)); err != nil {
 			return fmt.Errorf("heartbeat.active_hours.timezone must be a valid IANA timezone: %w", err)
 		}
+	}
+	return nil
+}
+
+func validateCuriosityConfig(cfg CuriosityConfig) error {
+	if strings.TrimSpace(cfg.Every) == "" {
+		return fmt.Errorf("curiosity.every is required")
+	}
+	if cadence, err := time.ParseDuration(strings.TrimSpace(cfg.Every)); err != nil {
+		return fmt.Errorf("curiosity.every must be a valid duration: %w", err)
+	} else if cadence <= 0 {
+		return fmt.Errorf("curiosity.every must be positive")
+	}
+	if strings.TrimSpace(cfg.LeaseTTL) == "" {
+		return fmt.Errorf("curiosity.lease_ttl is required")
+	}
+	if ttl, err := time.ParseDuration(strings.TrimSpace(cfg.LeaseTTL)); err != nil {
+		return fmt.Errorf("curiosity.lease_ttl must be a valid duration: %w", err)
+	} else if ttl <= 0 {
+		return fmt.Errorf("curiosity.lease_ttl must be positive")
+	}
+	if cfg.DailyTurnBudget < 0 {
+		return fmt.Errorf("curiosity.daily_turn_budget must be >= 0")
+	}
+	if cfg.Enabled && cfg.DailyTurnBudget <= 0 {
+		return fmt.Errorf("curiosity.daily_turn_budget must be > 0 when curiosity is enabled")
+	}
+	if cfg.MaxLooksPerTurn < 0 {
+		return fmt.Errorf("curiosity.max_looks_per_turn must be >= 0")
+	}
+	if cfg.Enabled && cfg.MaxLooksPerTurn <= 0 {
+		return fmt.Errorf("curiosity.max_looks_per_turn must be > 0 when curiosity is enabled")
+	}
+	if cfg.MinSignalIntensity <= 0 || cfg.MinSignalIntensity > 1 {
+		return fmt.Errorf("curiosity.min_signal_intensity must be > 0 and <= 1")
+	}
+	for i, source := range cfg.SourceClasses {
+		switch strings.ToLower(strings.TrimSpace(source)) {
+		case "session", "memory", "workspace", "url":
+		default:
+			return fmt.Errorf("curiosity.source_classes[%d] must be one of session|memory|workspace|url", i)
+		}
+	}
+	for i, path := range cfg.WorkspacePaths {
+		if err := validateCuriosityRelativePath(path); err != nil {
+			return fmt.Errorf("curiosity.workspace_paths[%d]: %w", i, err)
+		}
+	}
+	for i, path := range cfg.MemoryPaths {
+		if err := validateCuriosityRelativePath(path); err != nil {
+			return fmt.Errorf("curiosity.memory_paths[%d]: %w", i, err)
+		}
+	}
+	for i, raw := range cfg.AllowlistedURLs {
+		parsed, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || parsed == nil {
+			return fmt.Errorf("curiosity.allowlisted_urls[%d] must be a valid URL", i)
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return fmt.Errorf("curiosity.allowlisted_urls[%d] must use http or https", i)
+		}
+		if parsed.User != nil {
+			return fmt.Errorf("curiosity.allowlisted_urls[%d] must not include embedded credentials", i)
+		}
+		if strings.TrimSpace(parsed.Host) == "" {
+			return fmt.Errorf("curiosity.allowlisted_urls[%d] must include a host", i)
+		}
+	}
+	return nil
+}
+
+func validateCuriosityRelativePath(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("path is required")
+	}
+	if filepath.IsAbs(path) {
+		return fmt.Errorf("path must be relative")
+	}
+	clean := filepath.Clean(path)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path must stay inside the configured root")
 	}
 	return nil
 }

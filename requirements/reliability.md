@@ -531,6 +531,10 @@ The system should treat:
 
 as a delivery envelope, not just a convenience transport.
 
+If streamed provisional text is later rewritten because it exposed an internal
+protocol marker, the runtime should edit the existing streamed message when
+possible and record the reconciliation result in the execution-event ledger.
+
 If the stream fails mid-turn:
 
 - the system should either finalize a truthful truncated reply or restart delivery via a non-streamed send

@@ -487,6 +487,7 @@ At minimum, status snapshots should surface:
 - latest persisted turn-run state (status/kind/last activity/last tool/error)
 - persisted operation + plan sidecar status (`operation`, `plan_step`, `plan_progress`)
 - hidden-input carryover state from floor metadata (categories + provenance summary)
+- operation completion evidence with typed reason codes, so readable status summaries can explain missing evidence without matching exact prose
 - delivery-path status (in-flight, delivered, persisted-not-delivered, delivery-failed)
 - detached/outstanding work counters (decisions, continuations, recovery, stale runs)
 - stale running turn indicators
@@ -874,6 +875,12 @@ As the LLM streams tokens, we progressively edit a single Telegram message:
 3. **Stream complete** → final `editMessageText` without cursor
 
 This gives a "typing in real time" feel. The cursor makes it obvious the message is still generating.
+
+If a streamed reply exposes an internal persona-context request marker, the
+runtime must reconcile the already-sent stream by editing it to the sanitized or
+fallback visible reply when possible. Successful and failed reconciliations
+should be recorded as typed execution events so the visible transcript and
+ledger do not diverge silently.
 
 ```go
 type StreamEditor struct {

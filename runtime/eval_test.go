@@ -410,10 +410,13 @@ func TestRunEvalSuiteJobsPreservesSerialOrderAndPressure(t *testing.T) {
 func TestRunEvalSuiteJobsBoundsLiveConcurrency(t *testing.T) {
 
 	provider := &blockingEvalProvider{
-		content: tokenBudgetRecoveryEvalScenario().PositiveCandidate,
-		delay:   25 * time.Millisecond,
+		content:       tokenBudgetRecoveryEvalScenario().PositiveCandidate,
+		barrierTarget: 2,
+		release:       make(chan struct{}),
 	}
-	report, err := RunEvalSuite(context.Background(), EvalOptions{
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	report, err := RunEvalSuite(ctx, EvalOptions{
 		Suite:       EvalSuiteCanonical,
 		Mode:        EvalModeLive,
 		Subject:     EvalSubjectGovernor,
@@ -433,6 +436,9 @@ func TestRunEvalSuiteJobsBoundsLiveConcurrency(t *testing.T) {
 	}
 	if report.Failed || report.ResultCount != 4 {
 		t.Fatalf("report = %#v, want four passing results", report)
+	}
+	if report.Jobs != 2 {
+		t.Fatalf("report jobs = %d, want 2", report.Jobs)
 	}
 	calls, maxInFlight := provider.stats()
 	if calls != 4 {
@@ -1219,8 +1225,11 @@ func (p *staticEvalProvider) CompleteWithOptions(context.Context, []agent.Messag
 }
 
 type blockingEvalProvider struct {
-	content string
-	delay   time.Duration
+	content       string
+	delay         time.Duration
+	barrierTarget int
+	release       chan struct{}
+	releaseOnce   sync.Once
 
 	mu          sync.Mutex
 	calls       int
@@ -1235,20 +1244,32 @@ func (p *blockingEvalProvider) CompleteWithOptions(ctx context.Context, _ []agen
 	if p.inFlight > p.maxInFlight {
 		p.maxInFlight = p.inFlight
 	}
+	if p.barrierTarget > 0 && p.release != nil && p.inFlight >= p.barrierTarget {
+		p.releaseOnce.Do(func() { close(p.release) })
+	}
 	p.mu.Unlock()
 	defer func() {
 		p.mu.Lock()
 		p.inFlight--
 		p.mu.Unlock()
 	}()
-	timer := time.NewTimer(p.delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-timer.C:
-		return &agent.Response{Content: p.content}, nil
+	if p.barrierTarget > 0 && p.release != nil {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-p.release:
+		}
 	}
+	if p.delay > 0 {
+		timer := time.NewTimer(p.delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return &agent.Response{Content: p.content}, nil
 }
 
 func (p *blockingEvalProvider) stats() (int, int) {

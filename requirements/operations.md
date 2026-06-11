@@ -58,6 +58,8 @@ Operational implications:
 - operation sidecars cannot silently rewrite canonical execution history;
 - projections must source-attribute canonical and operational data and must not
   invent execution history.
+- operation completion evidence should expose typed reason codes for missing
+  evidence, so status/doctor projections do not depend on matching exact prose.
 
 ## Core Rule
 

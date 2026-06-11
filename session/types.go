@@ -8,6 +8,7 @@ const (
 	TurnRunKindCron        TurnRunKind = "cron"
 	TurnRunKindRecovery    TurnRunKind = "recovery"
 	TurnRunKindDoctor      TurnRunKind = "doctor"
+	TurnRunKindCuriosity   TurnRunKind = "curiosity"
 )
 
 const (
@@ -24,6 +25,7 @@ const (
 	ScopeKindHeartbeat      ScopeKind = "heartbeat"
 	ScopeKindCron           ScopeKind = "cron"
 	ScopeKindRecovery       ScopeKind = "recovery"
+	ScopeKindCuriosity      ScopeKind = "curiosity"
 	ScopeKindDurableAgent   ScopeKind = "durable_agent"
 )
 

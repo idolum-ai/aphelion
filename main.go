@@ -324,6 +324,7 @@ func run() error {
 	rt.StartStaleTurnWatchdogLoop(ctx, log.Printf)
 	rt.StartReentryRecommendationLoop(ctx, log.Printf)
 	rt.StartHeartbeatLoop(ctx, log.Printf)
+	rt.StartCuriosityLoop(ctx, log.Printf)
 	rt.StartDurableWakeLoop(ctx, log.Printf)
 	rt.StartCronLoop(ctx, log.Printf)
 	rt.StartNocturneLoop(ctx, log.Printf)

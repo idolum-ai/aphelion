@@ -49,11 +49,20 @@ func TestReentryRecommendationSweepSurfacesBoundedChoicesAfterTerminalQuietWindo
 	}
 	card := sender.sent[0]
 	sender.mu.Unlock()
-	if strings.TrimSpace(card.Text) != "Possible next steps:" {
-		t.Fatalf("card text = %q, want compact prompt", card.Text)
+	if !strings.Contains(card.Text, "Possible next steps:\n1. Review whether the latest release work is safe to deploy") {
+		t.Fatalf("card text = %q, want value-articulated numbered suggestions in body", card.Text)
 	}
-	if len(card.ButtonRows) != 1 || len(card.ButtonRows[0]) < 2 || len(card.ButtonRows[0]) > 4 {
+	if len(card.ButtonRows) != 1 || len(card.ButtonRows[0]) != 4 {
 		t.Fatalf("button rows = %#v, want up to three candidates plus Ignore", card.ButtonRows)
+	}
+	if got := card.ButtonRows[0][0].Text; got != "1" {
+		t.Fatalf("first button = %q, want numeric selector", got)
+	}
+	if got := card.ButtonRows[0][1].Text; got != "2" {
+		t.Fatalf("second button = %q, want numeric selector", got)
+	}
+	if !strings.Contains(card.Text, "Pause and choose whether work, repair, or conversation would help most") {
+		t.Fatalf("card text = %q, want reflective wellbeing option", card.Text)
 	}
 	if got := card.ButtonRows[0][len(card.ButtonRows[0])-1].Text; got != "Ignore" {
 		t.Fatalf("last button = %q, want Ignore", got)

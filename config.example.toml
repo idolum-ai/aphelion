@@ -299,6 +299,18 @@ start = ""
 end = ""
 timezone = ""
 
+[curiosity]
+enabled = false
+every = "2h"
+lease_ttl = "24h"
+daily_turn_budget = 3
+max_looks_per_turn = 1
+min_signal_intensity = 0.65
+source_classes = ["session", "memory"]
+workspace_paths = []
+memory_paths = ["memory/questions.md", "memory/knowledge.md", "memory/decisions.md"]
+allowlisted_urls = []
+
 [operator]
 # IANA timezone used for compact admin-facing timestamps, e.g. America/New_York.
 display_timezone = ""

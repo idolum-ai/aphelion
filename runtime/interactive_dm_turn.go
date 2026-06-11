@@ -21,6 +21,10 @@ type interactiveDMTurnAssembler interface {
 	Run(ctx context.Context, input interactiveDMTurnAssemblyInput) (*core.TurnResult, error)
 }
 
+type interactiveDMTurnResultAssembler interface {
+	RunTurn(ctx context.Context, input interactiveDMTurnAssemblyInput) (*turn.Result, error)
+}
+
 type interactiveDMTurnAssemblyInput struct {
 	Msg                                   core.InboundMessage
 	Actor                                 principal.Principal
@@ -46,7 +50,28 @@ func (a *runtimeInteractiveDMTurnAssembler) Run(ctx context.Context, input inter
 	return a.runtime.runInteractiveDMTurn(ctx, input)
 }
 
+func (a *runtimeInteractiveDMTurnAssembler) RunTurn(ctx context.Context, input interactiveDMTurnAssemblyInput) (*turn.Result, error) {
+	if a == nil || a.runtime == nil {
+		return nil, fmt.Errorf("interactive dm turn assembler unavailable")
+	}
+	return a.runtime.runInteractiveDMTurnResult(ctx, input)
+}
+
 func (r *Runtime) runInteractiveDMTurn(ctx context.Context, input interactiveDMTurnAssemblyInput) (*core.TurnResult, error) {
+	turnResult, err := r.runInteractiveDMTurnResult(ctx, input)
+	if err != nil && (turnResult == nil || !turnResult.Commit.Persisted) {
+		return nil, err
+	}
+	if turnResult == nil || turnResult.Turn == nil {
+		return nil, fmt.Errorf("interactive turn did not return a result")
+	}
+	if err != nil {
+		return turnResult.Turn, err
+	}
+	return turnResult.Turn, nil
+}
+
+func (r *Runtime) runInteractiveDMTurnResult(ctx context.Context, input interactiveDMTurnAssemblyInput) (*turn.Result, error) {
 	assembled, err := r.assembleInteractiveLikeTurn(ctx, interactiveLikeAssemblyInput{
 		Scope:                input.Scope,
 		Key:                  input.Key,
@@ -131,6 +156,7 @@ func (r *Runtime) runInteractiveDMTurn(ctx context.Context, input interactiveDMT
 		key:                                   key,
 		sess:                                  sess,
 		sessionState:                          turnState,
+		runIDSource:                           turnState,
 		msg:                                   msg,
 		inboundWasVoice:                       prepared.InboundWasVoice,
 		deliver:                               true,
@@ -215,8 +241,5 @@ func (r *Runtime) runInteractiveDMTurn(ctx context.Context, input interactiveDMT
 	if turnResult == nil || turnResult.Turn == nil {
 		return nil, fmt.Errorf("interactive turn did not return a result")
 	}
-	if err != nil {
-		return turnResult.Turn, err
-	}
-	return turnResult.Turn, nil
+	return turnResult, err
 }

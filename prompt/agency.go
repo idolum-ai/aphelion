@@ -179,6 +179,9 @@ func agencyEvidencePosture(aw RuntimeAwareness) string {
 	if provenance := strings.TrimSpace(aw.ProvenanceSummary); provenance != "" {
 		parts = append(parts, "provenance="+provenance)
 	}
+	if signals := formatAwarenessList(aw.InteriorSignals); signals != "" {
+		parts = append(parts, "interior_signal_pressure="+signals)
+	}
 	if aw.FallbackActive {
 		parts = append(parts, "provider_fallback=active")
 	}

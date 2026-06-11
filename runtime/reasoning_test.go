@@ -32,6 +32,9 @@ func TestReasoningOptionsForRunDefaultsByKind(t *testing.T) {
 	if got := reasoningOptionsForRun(cfg, session.TurnRunKindHeartbeat); got.Reasoning.Effort != agent.ReasoningEffortLow {
 		t.Fatalf("heartbeat effort = %q, want low", got.Reasoning.Effort)
 	}
+	if got := reasoningOptionsForRun(cfg, session.TurnRunKindCuriosity); got.Reasoning.Effort != agent.ReasoningEffortLow {
+		t.Fatalf("curiosity effort = %q, want low", got.Reasoning.Effort)
+	}
 	if got := reasoningOptionsForRun(cfg, session.TurnRunKindCron); got.Reasoning.Effort != agent.ReasoningEffortLow {
 		t.Fatalf("cron effort = %q, want low", got.Reasoning.Effort)
 	}

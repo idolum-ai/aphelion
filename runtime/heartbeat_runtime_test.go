@@ -236,7 +236,7 @@ func TestHeartbeatDeliveryFaceFailureUsesSerializedFloorFallback(t *testing.T) {
 	}
 }
 
-func TestHeartbeatDeliveryCanTriggerFromLatentStateWithoutReviewEvents(t *testing.T) {
+func TestHeartbeatDeliveryTriggersAfterLatentStatePressureAccumulates(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -274,8 +274,33 @@ func TestHeartbeatDeliveryCanTriggerFromLatentStateWithoutReviewEvents(t *testin
 	}
 
 	sender.mu.Lock()
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent len after first latent tick = %d, want 0 below pressure threshold", len(sender.sent))
+	}
+	sender.mu.Unlock()
+
+	if err := rt.runHeartbeatOnce(context.Background(), time.Date(2026, time.April, 9, 12, 30, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("runHeartbeatOnce(unchanged latent tick) err = %v", err)
+	}
+	sender.mu.Lock()
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent len after unchanged latent tick = %d, want 0 with duplicate evidence suppressed", len(sender.sent))
+	}
+	sender.mu.Unlock()
+
+	if err := os.WriteFile(filepath.Join(cfg.Agent.SharedMemoryRoot, "memory", "questions.md"), []byte("# questions.md\n\n- Should deployment readiness become a first-class heartbeat concern?\n- Should deployment readiness be surfaced before the release window closes?"), 0o600); err != nil {
+		t.Fatalf("update questions.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(noteDir, "2026-04-09.md"), []byte("Deployment readiness still feels unresolved. The release window keeps circling back to it."), 0o600); err != nil {
+		t.Fatalf("update today note: %v", err)
+	}
+	if err := rt.runHeartbeatOnce(context.Background(), time.Date(2026, time.April, 9, 13, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("runHeartbeatOnce(second latent tick) err = %v", err)
+	}
+
+	sender.mu.Lock()
 	if len(sender.sent) != 1 {
-		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+		t.Fatalf("sent len after accumulated latent pressure = %d, want 1", len(sender.sent))
 	}
 	if sender.sent[0].ChatID != 1001 || sender.sent[0].Text != "latent heartbeat floor" {
 		t.Fatalf("sent = %#v, want latent heartbeat floor to admin", sender.sent[0])
@@ -312,6 +337,12 @@ func TestHeartbeatDeliveryCanTriggerFromLatentStateWithoutReviewEvents(t *testin
 	}
 	if !strings.Contains(provider.lastGovernorMsgs[len(provider.lastGovernorMsgs)-1].Content, "There are no pending review events this turn.") {
 		t.Fatalf("heartbeat request missing latent-state-only marker: %q", provider.lastGovernorMsgs[len(provider.lastGovernorMsgs)-1].Content)
+	}
+	if !strings.Contains(provider.lastGovernorMsgs[len(provider.lastGovernorMsgs)-1].Content, "Interior signal pressure:") {
+		t.Fatalf("heartbeat request missing interior pressure: %q", provider.lastGovernorMsgs[len(provider.lastGovernorMsgs)-1].Content)
+	}
+	if !strings.Contains(provider.lastGovernorMsgs[len(provider.lastGovernorMsgs)-1].Content, "Quiet observation trail:") {
+		t.Fatalf("heartbeat request missing quiet observation trail: %q", provider.lastGovernorMsgs[len(provider.lastGovernorMsgs)-1].Content)
 	}
 }
 
@@ -451,6 +482,26 @@ func TestHeartbeatReflectionProposesCuratedMemoryFromDailyNotes(t *testing.T) {
 	}
 	if !strings.Contains(maintenance.Messages[1].Content, "Proposed curated memory updates for review:") {
 		t.Fatalf("maintenance reply = %q, want proposal summary", maintenance.Messages[1].Content)
+	}
+
+	observations, err := store.RecentInteriorSignalObservations(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()}, nil, time.Date(2026, time.April, 9, 0, 0, 0, 0, time.UTC), 10)
+	if err != nil {
+		t.Fatalf("RecentInteriorSignalObservations() err = %v", err)
+	}
+	var semantic, unresolved bool
+	for _, observation := range observations {
+		if observation.Source != "heartbeat_reflection_proposed" {
+			continue
+		}
+		if observation.Category == hiddenInputSemanticRecurrence && observation.AppliedWeight == reflectionSemanticWeight {
+			semantic = true
+		}
+		if observation.Category == hiddenInputUnresolvedMemory && observation.AppliedWeight == reflectionUnresolvedWeight {
+			unresolved = true
+		}
+	}
+	if !semantic || !unresolved {
+		t.Fatalf("reflection observations = %#v, want semantic and unresolved pressure records", observations)
 	}
 }
 

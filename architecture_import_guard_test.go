@@ -119,6 +119,7 @@ func TestArchitectureImportBoundaries(t *testing.T) {
 		assertLayerImportBoundaries(t, pkg)
 		assertCredentialAndBackendMembraneBoundaries(t, pkg)
 		assertMediaMembraneBoundary(t, pkg)
+		assertRuntimeContinuationLeafBoundary(t, pkg)
 		assertDurableAgentDoesNotOwnToolAuthority(t, pkg)
 	}
 }
@@ -303,6 +304,29 @@ func assertMediaMembraneBoundary(t *testing.T, pkg architecturePackage) {
 		"session",
 		"telegram",
 		"provider",
+		"internal/telegramcommands",
+		"internal/telegramcontrol",
+		"internal/telegramdecision",
+		"internal/telegramruntime",
+	})
+}
+
+func assertRuntimeContinuationLeafBoundary(t *testing.T, pkg architecturePackage) {
+	t.Helper()
+	if !isPackageOrSubpackage(pkg, "runtime/continuation") {
+		return
+	}
+	assertDoesNotImportAny(t, pkg, []string{
+		"runtime",
+		"runtime/codex",
+		"runtime/doctor",
+		"runtime/mission",
+		"config",
+		"provider",
+		"openai",
+		"tool",
+		"tool/sandbox",
+		"telegram",
 		"internal/telegramcommands",
 		"internal/telegramcontrol",
 		"internal/telegramdecision",

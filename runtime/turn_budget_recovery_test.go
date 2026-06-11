@@ -39,12 +39,31 @@ func TestBudgetRecoveryDeliverySuppressesFinalReplyAndSchedulesInternalContinuat
 	if err := store.UpdateOperationState(key, opState); err != nil {
 		t.Fatalf("UpdateOperationState() err = %v", err)
 	}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "finish the current phase")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	fakeGitHubToken := "ghp_" + "secret123456789"
+	fakeGitHubPAT := "github_pat_" + "secret123456789"
+	sensitiveInput := `{"cmd":"go test ./runtime","` + "to" + `ken":"` + fakeGitHubToken + `"}`
+	if err := store.NoteTurnRunToolStart(run.ID, "exec", sensitiveInput); err != nil {
+		t.Fatalf("NoteTurnRunToolStart() err = %v", err)
+	}
+	if err := store.NoteTurnRunToolFinish(run.ID, "ok "+fakeGitHubPAT, ""); err != nil {
+		t.Fatalf("NoteTurnRunToolFinish() err = %v", err)
+	}
+	rt.recordExecutionEvent(key, core.ExecutionEventToolSucceeded, "tool", "succeeded", map[string]any{
+		"run_id":         run.ID,
+		"tool":           "exec",
+		"result_preview": "ok " + fakeGitHubPAT,
+	}, time.Now().UTC())
 	hookCalls := 0
 	port := &turnDeliveryPort{
-		runtime: rt,
-		key:     key,
-		msg:     msg,
-		deliver: true,
+		runtime:     rt,
+		key:         key,
+		msg:         msg,
+		runIDSource: staticTurnRunIDSource(run.ID),
+		deliver:     true,
 		hooks: turnCommitHooks{
 			QueueReviewEvents: func(*turn.Result) error {
 				hookCalls++
@@ -96,8 +115,14 @@ func TestBudgetRecoveryDeliverySuppressesFinalReplyAndSchedulesInternalContinuat
 	if recorder.input.Msg.Origin != core.InboundOriginTurnAuthorization || recorder.input.Msg.OriginDetail != turnBudgetRecoveryOriginDetail {
 		t.Fatalf("recovery origin = %q/%q, want turn authorization budget recovery", recorder.input.Msg.Origin, recorder.input.Msg.OriginDetail)
 	}
-	if !strings.Contains(recorder.input.Msg.Text, "do not replay pending calls") {
+	if !strings.Contains(recorder.input.Msg.Text, "discard pending tool calls") || !strings.Contains(recorder.input.Msg.Text, "Re-latch from persisted operation") {
 		t.Fatalf("recovery prompt = %q, want re-decision instruction", recorder.input.Msg.Text)
+	}
+	if !strings.Contains(recorder.input.Msg.Text, "Evidence digest") || !strings.Contains(recorder.input.Msg.Text, "last_tool=exec") || !strings.Contains(recorder.input.Msg.Text, "last_tool_result") {
+		t.Fatalf("recovery prompt = %q, want compact evidence digest", recorder.input.Msg.Text)
+	}
+	if strings.Contains(recorder.input.Msg.Text, fakeGitHubToken) || strings.Contains(recorder.input.Msg.Text, fakeGitHubPAT) {
+		t.Fatalf("recovery prompt leaked secret-shaped digest material: %q", recorder.input.Msg.Text)
 	}
 
 	events, err := store.LatestExecutionEventsBySession(key, 20)
@@ -107,6 +132,62 @@ func TestBudgetRecoveryDeliverySuppressesFinalReplyAndSchedulesInternalContinuat
 	assertBudgetRecoveryEventStatus(t, events, "scheduled")
 	assertBudgetRecoveryEventStatus(t, events, "resuming")
 	assertBudgetRecoveryEventStatus(t, events, "resumed")
+	if !scheduledBudgetRecoveryEventHasDigest(events, run.ID) {
+		t.Fatalf("events = %#v, want scheduled recovery event with digest for run %d", events, run.ID)
+	}
+}
+
+type staticTurnRunIDSource int64
+
+func (s staticTurnRunIDSource) turnRunID() int64 {
+	return int64(s)
+}
+
+func TestTurnBudgetRecoveryDigestIsBoundedAndRunScoped(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9719, UserID: 0, Scope: telegramDMScopeRef(9719)}
+	target, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "target run")
+	if err != nil {
+		t.Fatalf("BeginTurnRun(target) err = %v", err)
+	}
+	other, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "other run")
+	if err != nil {
+		t.Fatalf("BeginTurnRun(other) err = %v", err)
+	}
+	if err := store.NoteTurnRunToolStart(target.ID, "exec", `{"cmd":"go test ./runtime"}`); err != nil {
+		t.Fatalf("NoteTurnRunToolStart() err = %v", err)
+	}
+	for i := 0; i < turnBudgetRecoveryDigestLines+5; i++ {
+		rt.recordExecutionEvent(key, core.ExecutionEventToolSucceeded, "tool", "succeeded", map[string]any{
+			"run_id":         target.ID,
+			"tool":           "exec",
+			"result_preview": "target evidence",
+		}, time.Now().UTC())
+	}
+	rt.recordExecutionEvent(key, core.ExecutionEventToolSucceeded, "tool", "succeeded", map[string]any{
+		"run_id":         other.ID,
+		"tool":           "exec",
+		"result_preview": "other run should not appear",
+	}, time.Now().UTC())
+
+	digest := rt.turnBudgetRecoveryDigest(key, target.ID)
+	if digest.RunID != target.ID {
+		t.Fatalf("digest.RunID = %d, want %d", digest.RunID, target.ID)
+	}
+	if len(digest.Lines) == 0 || len(digest.Lines) > turnBudgetRecoveryDigestLines {
+		t.Fatalf("digest lines len = %d, want 1..%d: %#v", len(digest.Lines), turnBudgetRecoveryDigestLines, digest.Lines)
+	}
+	joined := strings.Join(digest.Lines, "\n")
+	if strings.Contains(joined, "other run should not appear") {
+		t.Fatalf("digest included another run's evidence: %#v", digest.Lines)
+	}
+	if !strings.Contains(joined, "target evidence") || !strings.Contains(joined, "turn_run=") {
+		t.Fatalf("digest = %#v, want target evidence and run summary", digest.Lines)
+	}
 }
 
 func TestBudgetRecoveryFromWorkExecutorContinuationDefersToManualRetry(t *testing.T) {
@@ -467,7 +548,7 @@ func TestBudgetRecoveryFailureIssuesRecoveryDecisionForActiveLease(t *testing.T)
 	}
 	scope, _ := rt.turnBudgetRecoveryScope(key, msg, &turn.Result{OperationState: opState})
 
-	if err := rt.runTurnBudgetRecoveryContinuation(context.Background(), key, msg, principalForBudgetRecoveryTest(1001), recovery, scope, 1, 3); err == nil {
+	if err := rt.runTurnBudgetRecoveryContinuation(context.Background(), key, msg, principalForBudgetRecoveryTest(1001), recovery, scope, 1, 3, turnBudgetRecoveryDigest{}); err == nil {
 		t.Fatal("runTurnBudgetRecoveryContinuation() err = nil, want simulated failure")
 	}
 	if len(sender.sent) != 1 {
@@ -666,6 +747,35 @@ func budgetRecoveryEventPayloadContains(events []session.ExecutionEvent, eventTy
 			continue
 		}
 		if strings.TrimSpace(key) != "" && strings.TrimSpace(want) == strings.TrimSpace(stringValue(payload[key])) {
+			return true
+		}
+	}
+	return false
+}
+
+func scheduledBudgetRecoveryEventHasDigest(events []session.ExecutionEvent, runID int64) bool {
+	for _, event := range events {
+		if event.EventType != core.ExecutionEventTurnBudgetRecovery || event.Status != "scheduled" {
+			continue
+		}
+		payload := map[string]any{}
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			continue
+		}
+		raw, ok := payload["recovery_digest"].(map[string]any)
+		if !ok {
+			continue
+		}
+		gotRunID, ok := payloadInt64(raw, "run_id")
+		if !ok || gotRunID != runID {
+			continue
+		}
+		lines := payloadStringSlice(raw, "lines")
+		if len(lines) == 0 {
+			continue
+		}
+		joined := strings.Join(lines, "\n")
+		if strings.Contains(joined, "last_tool") && !strings.Contains(joined, "ghp_secret") && !strings.Contains(joined, "github_pat_secret") {
 			return true
 		}
 	}

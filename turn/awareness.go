@@ -16,6 +16,7 @@ type HiddenInputAwareness struct {
 	Active            bool
 	Categories        []string
 	ProvenanceSummary string
+	InteriorSignals   []string
 }
 
 // EventAwareness captures the explicit origin of the inbound event.
@@ -46,6 +47,7 @@ func ApplyHiddenInputAwareness(aw prompt.RuntimeAwareness, input HiddenInputAwar
 	aw.HiddenInputsActive = input.Active
 	aw.HiddenInputCategories = append([]string(nil), input.Categories...)
 	aw.ProvenanceSummary = strings.TrimSpace(input.ProvenanceSummary)
+	aw.InteriorSignals = append([]string(nil), input.InteriorSignals...)
 	return aw
 }
 

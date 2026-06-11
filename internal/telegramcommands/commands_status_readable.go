@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/idolum-ai/aphelion/core"
 )
 
 func statusReadableSummaryText(ctx context.Context, router commandRouter, facts statusReadableFacts) string {
@@ -19,6 +21,7 @@ func statusReadableSummaryText(ctx context.Context, router commandRouter, facts 
 	if summary == "" {
 		summary = composeStatusReadableSummary(facts)
 	}
+	summary = appendStatusOperationEvidenceSummary(summary, statusOperationEvidenceSummary(facts.OperationEvidence))
 	return compactStatusReadableSummary(summary)
 }
 
@@ -159,4 +162,55 @@ func statusViewSupportsReadableSummary(view statusView) bool {
 	default:
 		return false
 	}
+}
+
+func statusOperationEvidenceSummary(statuses []core.OperationEvidenceStatus) string {
+	if len(statuses) == 0 {
+		return ""
+	}
+	satisfied := 0
+	mismatched := 0
+	pending := 0
+	var reason string
+	for _, status := range statuses {
+		if status.Satisfied {
+			satisfied++
+			continue
+		}
+		if status.Status == "completed" {
+			mismatched++
+			if reason == "" {
+				reason = strings.TrimSpace(status.Reason)
+			}
+			continue
+		}
+		pending++
+	}
+	if mismatched > 0 {
+		if reason != "" {
+			return fmt.Sprintf("Operation evidence mismatch %d/%d: %s.", mismatched, len(statuses), reason)
+		}
+		return fmt.Sprintf("Operation evidence mismatch %d/%d.", mismatched, len(statuses))
+	}
+	if satisfied > 0 && pending == 0 {
+		return fmt.Sprintf("Operation evidence satisfied %d/%d.", satisfied, len(statuses))
+	}
+	if pending > 0 {
+		return fmt.Sprintf("Operation evidence pending %d/%d.", pending, len(statuses))
+	}
+	return ""
+}
+
+func appendStatusOperationEvidenceSummary(summary string, evidence string) string {
+	summary = strings.TrimSpace(summary)
+	evidence = strings.TrimSpace(evidence)
+	if summary == "" || evidence == "" {
+		return firstNonEmptyStatusSummary(summary, evidence)
+	}
+	reserved := len([]rune(evidence)) + 1
+	budget := statusReadableQuickReadMaxChars - reserved
+	if budget < 80 {
+		budget = 80
+	}
+	return strings.TrimSpace(compactStatusReadableSummaryLimit(summary, budget) + " " + evidence)
 }

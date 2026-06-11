@@ -470,6 +470,7 @@ func (r *Runtime) runDurableWakeConversation(
 		runtime:         r,
 		key:             key,
 		sess:            sess,
+		runIDSource:     coordinator,
 		msg:             plan.Inbound,
 		inboundWasVoice: prepared.InboundWasVoice,
 		deliver:         false,

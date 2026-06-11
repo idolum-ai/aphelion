@@ -20,6 +20,7 @@ func TestReasoningOptionsForRunAppliesMaxTokenCaps(t *testing.T) {
 		{session.TurnRunKindHeartbeat, heartbeatRunMaxTokens},
 		{session.TurnRunKindCron, cronRunMaxTokens},
 		{session.TurnRunKindRecovery, recoveryRunMaxTokens},
+		{session.TurnRunKindCuriosity, curiosityRunMaxTokens},
 		{session.TurnRunKindDoctor, doctorRunMaxTokens},
 	}
 	for _, tc := range cases {

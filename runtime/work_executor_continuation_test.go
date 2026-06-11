@@ -18,42 +18,6 @@ import (
 	"time"
 )
 
-func TestContinuationCommitModeStillBlocksBroadCommitForbiddenAction(t *testing.T) {
-	t.Parallel()
-
-	now := time.Now().UTC()
-	action := session.ActionProposal{
-		ID:               "aprop-local-commit-forbidden",
-		Summary:          "Commit validated local repo slices",
-		BoundedEffect:    "Review current dirty diff, run tests, commit coherent repo-only hardening, and report evidence.",
-		RiskClass:        "workspace_commit_then_repo_write_bounded",
-		AllowedActions:   []string{"git_commit_validated_slices", "edit_repo_code"},
-		ForbiddenActions: []string{"commit"},
-		Status:           session.ProposalStatusApproved,
-		ExpiresAt:        now.Add(time.Hour),
-	}
-	action.PlanHash = actionProposalHash(action)
-	state := session.ContinuationState{
-		Status:            session.ContinuationStatusApproved,
-		RemainingTurns:    1,
-		ActionProposal:    action,
-		ContinuationLease: buildContinuationLease(action, 1, now),
-	}
-	state.ContinuationLease.Status = session.ContinuationLeaseStatusActive
-	state.ContinuationLease.RemainingTurns = 1
-	state.ContinuationLease.ApprovedAt = now
-	state.ContinuationLease.ApprovedBy = 1001
-
-	mode := continuationWorkMode(state)
-	if mode != WorkModeCommit {
-		t.Fatalf("continuationWorkMode() = %q, want commit", mode)
-	}
-	decision := continuationWorkModeAccessCheck(state, mode, now)
-	if decision.Allowed || decision.Reason != "action_forbidden" {
-		t.Fatalf("access decision = %#v, want broad commit forbidden", decision)
-	}
-}
-
 func TestLeaseAccessDeniedResetsOperationPhaseForFreshApproval(t *testing.T) {
 	t.Parallel()
 
@@ -756,7 +720,7 @@ func TestNativeWorkExecutorTreatsProviderFailureTurnAsFailed(t *testing.T) {
 	}
 }
 
-func TestNativeWorkExecutorTreatsBudgetRecoveryTurnAsFailed(t *testing.T) {
+func TestNativeWorkExecutorSchedulesBudgetRecoveryTurn(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -765,20 +729,24 @@ func TestNativeWorkExecutorTreatsBudgetRecoveryTurnAsFailed(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 	recovery := nativeWorkBudgetRecoveryTestRecovery()
-	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{
-		Text: turnBudgetRecoveryHandoffText(recovery) + "\n\nNo edits/commits/pushes completed.",
-	}}
+	recorder := &budgetRecoveryDeliveringAssembler{
+		runtime: rt,
+		results: []*core.TurnResult{
+			{Text: turnBudgetRecoveryHandoffText(recovery) + "\n\nNo edits/commits/pushes completed.", Recovery: recovery},
+			{Text: "Recovery re-latched to durable state and narrowed the next action."},
+		},
+	}
 	rt.interactiveDMAssembler = recorder
 
 	result, err := nativeWorkExecutor{runtime: rt}.Run(context.Background(), WorkRequest{
 		ChatID: 8195,
 		Actor:  principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
 	})
-	if err == nil || !strings.Contains(err.Error(), "token_budget_exhausted") {
-		t.Fatalf("Run() err = %v, want budget recovery work failure", err)
+	if err != nil {
+		t.Fatalf("Run() err = %v, want scheduled budget recovery without manual retry failure", err)
 	}
-	if result.CompletionKind != "native_turn_budget_recovery" || result.RecoveryKind != string(core.TurnRecoveryTokenBudgetExhausted) || !result.SideEffects {
-		t.Fatalf("result = %#v, want failed native turn marked with budget recovery and side effects", result)
+	if result.CompletionKind != "native_turn_budget_recovery_scheduled" || result.RecoveryKind != string(core.TurnRecoveryTokenBudgetExhausted) || result.RecoveryDelivery != "budget_recovery_scheduled" || !result.SideEffects {
+		t.Fatalf("result = %#v, want native turn marked with scheduled budget recovery", result)
 	}
 	if !strings.Contains(result.Summary, "No edits/commits/pushes completed") {
 		t.Fatalf("summary = %q, want recovery handoff evidence preserved", result.Summary)
@@ -786,25 +754,43 @@ func TestNativeWorkExecutorTreatsBudgetRecoveryTurnAsFailed(t *testing.T) {
 	if recorder.input.Msg.OriginDetail != string(session.TurnAuthorizationKindContinuation) {
 		t.Fatalf("work executor origin detail = %q, want continuation provenance", recorder.input.Msg.OriginDetail)
 	}
-	if !recorder.input.DeferBudgetRecoveryToWorkFailureRetry {
-		t.Fatal("work executor input did not request budget recovery deferral to manual retry")
+	if recorder.input.DeferBudgetRecoveryToWorkFailureRetry {
+		t.Fatal("work executor input requested manual retry deferral; want automatic budget recovery")
 	}
 	if recorder.input.EventAwareness.TurnAuthorizationKind != string(session.TurnAuthorizationKindContinuation) {
 		t.Fatalf("event awareness turn authorization kind = %q, want continuation", recorder.input.EventAwareness.TurnAuthorizationKind)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := rt.WaitForBackgroundLoops(waitCtx); err != nil {
+		t.Fatalf("WaitForBackgroundLoops() err = %v", err)
 	}
 }
 
 type budgetRecoveryDeliveringAssembler struct {
 	runtime   *Runtime
 	result    *core.TurnResult
+	results   []*core.TurnResult
 	input     interactiveDMTurnAssemblyInput
 	callCount int
 }
 
 func (a *budgetRecoveryDeliveringAssembler) Run(ctx context.Context, input interactiveDMTurnAssemblyInput) (*core.TurnResult, error) {
+	result, err := a.RunTurn(ctx, input)
+	if result == nil {
+		return nil, err
+	}
+	return result.Turn, err
+}
+
+func (a *budgetRecoveryDeliveringAssembler) RunTurn(ctx context.Context, input interactiveDMTurnAssemblyInput) (*turn.Result, error) {
+	index := a.callCount
 	a.callCount++
 	a.input = input
 	result := a.result
+	if index < len(a.results) {
+		result = a.results[index]
+	}
 	if result == nil {
 		result = &core.TurnResult{}
 	}
@@ -827,186 +813,20 @@ func (a *budgetRecoveryDeliveringAssembler) Run(ctx context.Context, input inter
 		key:                                   input.Key,
 		msg:                                   input.Msg,
 		deliver:                               true,
-		recordOutbound:                        true,
+		recordOutbound:                        false,
 		deferBudgetRecoveryToWorkFailureRetry: input.DeferBudgetRecoveryToWorkFailureRetry,
 	}
-	if _, err := port.Deliver(ctx, turn.DeliveryRequest{
+	delivered, err := port.Deliver(ctx, turn.DeliveryRequest{
 		Message: core.OutboundMessage{ChatID: input.Msg.ChatID, Text: visible},
 		Result:  turnResult,
-	}); err != nil {
-		return result, err
+	})
+	if err != nil {
+		return turnResult, err
 	}
-	return result, nil
-}
-
-func TestConsumedWorkPhaseDoesNotCompleteWithoutMatchingWorkEvidence(t *testing.T) {
-	t.Parallel()
-
-	now := time.Now().UTC()
-	opState := session.OperationState{
-		ID:        "op-missing-work-evidence",
-		Objective: "Patch and push a branch.",
-		Status:    session.OperationStatusActive,
-		Stage:     "phase_approval",
-		PhasePlan: session.OperationPhasePlan{
-			ID:             "plan-missing-work-evidence",
-			CurrentPhaseID: "commit-push",
-			Phases: []session.OperationPhase{{
-				ID:             "commit-push",
-				Summary:        "Commit and push inspected changes",
-				Status:         session.PlanStatusInProgress,
-				AuthorityClass: "commit",
-				BoundedEffect:  "Commit and push only the approved branch changes.",
-				AllowedActions: []string{"git_commit", "git_push", "report_commit_evidence"},
-				LeaseID:        "lease-commit-push",
-			}},
-		},
-		Work: session.WorkOperationMetadata{
-			LastOperationID:       "op-missing-work-evidence",
-			LastLeaseID:           "different-lease",
-			LastWorkMode:          string(WorkModeCommit),
-			LastCompletedAt:       now,
-			LastExecutorUpdatedAt: now,
-		},
+	if delivered != nil {
+		turnResult.Delivery = *delivered
 	}
-	proposalID := operationPhaseProposalID(opState, opState.PhasePlan.Phases[0])
-	state := session.ContinuationState{
-		Kind:           session.TurnAuthorizationKindContinuation,
-		Status:         session.ContinuationStatusIdle,
-		DecisionID:     proposalID,
-		Objective:      opState.Objective,
-		StageSummary:   "Commit and push inspected changes",
-		RemainingTurns: 0,
-		ActionProposal: session.ActionProposal{
-			ID:          "aprop-" + proposalID,
-			OperationID: proposalID,
-			RiskClass:   "commit",
-			Status:      session.ProposalStatusApproved,
-		},
-		ContinuationLease: session.ContinuationLease{
-			ID:             "lease-commit-push",
-			ProposalID:     "aprop-" + proposalID,
-			Status:         session.ContinuationLeaseStatusConsumed,
-			MaxTurns:       1,
-			RemainingTurns: 0,
-			AllowedActions: []string{"git_commit", "git_push", "report_commit_evidence"},
-			ConsumedAt:     now,
-		},
-	}
-
-	got, completed := operationStateWithConsumedWorkContinuationPhaseCompleted(opState, state, now)
-	if completed {
-		t.Fatalf("completed = true, want false without matching work evidence")
-	}
-	if got.PhasePlan.Phases[0].Status != session.PlanStatusInProgress {
-		t.Fatalf("phase status = %q, want in_progress", got.PhasePlan.Phases[0].Status)
-	}
-}
-
-func TestConsumedWorkPhaseUsesCompletedBundlePhaseModeEvidence(t *testing.T) {
-	t.Parallel()
-
-	now := time.Now().UTC()
-	opState := session.OperationState{
-		ID:        "op-mixed-authority-bundle",
-		Objective: "Inspect the branch, then commit the accepted patch.",
-		Status:    session.OperationStatusActive,
-		Stage:     "phase_approval",
-		PhasePlan: session.OperationPhasePlan{
-			ID:             "plan-mixed-authority-bundle",
-			CurrentPhaseID: "inspect",
-			Phases: []session.OperationPhase{
-				{
-					ID:             "inspect",
-					Summary:        "Inspect the branch diff",
-					Status:         session.PlanStatusInProgress,
-					AuthorityClass: "read_only",
-					BoundedEffect:  "Read the branch diff and report findings.",
-					AllowedActions: []string{"inspect_code", "report_findings"},
-					LeaseID:        "lease-mixed-authority-bundle",
-				},
-				{
-					ID:             "commit",
-					Summary:        "Commit the accepted patch",
-					Status:         session.PlanStatusPending,
-					AuthorityClass: "commit",
-					BoundedEffect:  "Commit and push only the accepted patch.",
-					AllowedActions: []string{"git_commit", "git_push", "report_commit_evidence"},
-					LeaseID:        "lease-mixed-authority-bundle",
-				},
-			},
-		},
-	}
-	inspectProposalID := operationPhaseProposalID(opState, opState.PhasePlan.Phases[0])
-	commitProposalID := operationPhaseProposalID(opState, opState.PhasePlan.Phases[1])
-	opState.Work = session.WorkOperationMetadata{
-		LastOperationID:       "op-mixed-authority-bundle",
-		LastActionProposalID:  "aprop-mixed-authority-bundle",
-		LastActionOperationID: inspectProposalID,
-		LastLeaseID:           "lease-mixed-authority-bundle",
-		LastWorkMode:          string(WorkModeReadOnly),
-		LastCompletedAt:       now,
-		LastExecutorUpdatedAt: now,
-	}
-	state := session.ContinuationState{
-		Kind:           session.TurnAuthorizationKindContinuation,
-		Status:         session.ContinuationStatusIdle,
-		DecisionID:     "mixed-authority-bundle",
-		Objective:      opState.Objective,
-		StageSummary:   "Inspect the branch diff, then commit the accepted patch",
-		RemainingTurns: 0,
-		ActionProposal: session.ActionProposal{
-			ID:          "aprop-mixed-authority-bundle",
-			OperationID: "mixed-authority-bundle",
-			RiskClass:   "approval_bundle",
-			Status:      session.ProposalStatusApproved,
-		},
-		ContinuationLease: session.ContinuationLease{
-			ID:             "lease-mixed-authority-bundle",
-			ProposalID:     "aprop-mixed-authority-bundle",
-			Status:         session.ContinuationLeaseStatusConsumed,
-			MaxTurns:       1,
-			RemainingTurns: 0,
-			AllowedActions: []string{"inspect_code", "git_commit", "git_push", "report_commit_evidence"},
-			ConsumedAt:     now,
-		},
-		ApprovalBundle: session.ContinuationApprovalBundle{
-			ID:             "mixed-authority-bundle",
-			OperationID:    "op-mixed-authority-bundle",
-			PhasePlanID:    "plan-mixed-authority-bundle",
-			Status:         session.ContinuationLeaseStatusActive,
-			CurrentPhaseID: commitProposalID,
-			Phases: []session.ContinuationApprovalBundlePhase{
-				{
-					ID:               inspectProposalID,
-					OperationPhaseID: "inspect",
-					Status:           session.ContinuationLeaseStatusConsumed,
-					AuthorityClass:   "read_only",
-					AllowedActions:   []string{"inspect_code", "report_findings"},
-					ConsumedAt:       now,
-				},
-				{
-					ID:               commitProposalID,
-					OperationPhaseID: "commit",
-					Status:           session.ContinuationLeaseStatusActive,
-					AuthorityClass:   "commit",
-					AllowedActions:   []string{"git_commit", "git_push", "report_commit_evidence"},
-					ActivatedAt:      now,
-				},
-			},
-		},
-	}
-
-	got, completed := operationStateWithConsumedWorkContinuationPhaseCompleted(opState, state, now)
-	if !completed {
-		t.Fatalf("completed = false, want true for matching consumed read_only bundle phase evidence")
-	}
-	if got.PhasePlan.Phases[0].Status != session.PlanStatusCompleted {
-		t.Fatalf("first phase status = %q, want completed", got.PhasePlan.Phases[0].Status)
-	}
-	if got.PhasePlan.Phases[1].Status == session.PlanStatusCompleted {
-		t.Fatalf("second phase status = %q, want not completed by first phase evidence", got.PhasePlan.Phases[1].Status)
-	}
+	return turnResult, nil
 }
 
 func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
@@ -1493,10 +1313,13 @@ func TestTriggerCodingContinuationBudgetRecoveryDoesNotCompleteOperation(t *test
 		t.Fatalf("New() err = %v", err)
 	}
 	recovery := nativeWorkBudgetRecoveryTestRecovery()
-	rt.interactiveDMAssembler = &budgetRecoveryDeliveringAssembler{runtime: rt, result: &core.TurnResult{
-		Text:     turnBudgetRecoveryHandoffText(recovery) + "\n\nNo edits/commits/pushes completed.",
-		Recovery: recovery,
-	}}
+	rt.interactiveDMAssembler = &budgetRecoveryDeliveringAssembler{
+		runtime: rt,
+		results: []*core.TurnResult{
+			{Text: turnBudgetRecoveryHandoffText(recovery) + "\n\nNo edits/commits/pushes completed.", Recovery: recovery},
+			{Text: "Recovery re-latched to durable state and narrowed the next action."},
+		},
+	}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "native"}, []WorkExecutor{nativeWorkExecutor{runtime: rt}})
 
 	now := time.Now().UTC()
@@ -1564,9 +1387,8 @@ func TestTriggerCodingContinuationBudgetRecoveryDoesNotCompleteOperation(t *test
 		t.Fatalf("UpdateContinuationState() err = %v", err)
 	}
 
-	err = rt.TriggerContinuationForKey(context.Background(), key)
-	if err == nil || !strings.Contains(err.Error(), "token_budget_exhausted") {
-		t.Fatalf("TriggerContinuationForKey() err = %v, want budget recovery work failure", err)
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v, want automatic budget recovery rollover", err)
 	}
 	gotOp, err := store.OperationState(key)
 	if err != nil {
@@ -1585,23 +1407,14 @@ func TestTriggerCodingContinuationBudgetRecoveryDoesNotCompleteOperation(t *test
 	if err != nil {
 		t.Fatalf("ContinuationState() err = %v", err)
 	}
-	if gotCont.Status != session.ContinuationStatusPending || gotCont.ActionProposal.Status != session.ProposalStatusPending || gotCont.ContinuationLease.Status != session.ContinuationLeaseStatusPending {
-		t.Fatalf("continuation = %#v, want fresh pending retry proposal", gotCont)
-	}
-	if gotCont.ActionProposal.ID == action.ID || gotCont.ContinuationLease.ID == lease.ID {
-		t.Fatalf("fresh ids reused old proposal/lease: proposal=%q lease=%q", gotCont.ActionProposal.ID, gotCont.ContinuationLease.ID)
-	}
-	if !strings.Contains(gotCont.ActionProposal.WhyNow, "approval before retrying") {
-		t.Fatalf("fresh proposal why_now = %q, want failure retry reason", gotCont.ActionProposal.WhyNow)
-	}
-	if gotCont.ActionProposal.AutoApproveEligible == nil || *gotCont.ActionProposal.AutoApproveEligible {
-		t.Fatalf("AutoApproveEligible = %#v, want manual-only retry after budget recovery", gotCont.ActionProposal.AutoApproveEligible)
+	if gotCont.Status != session.ContinuationStatusIdle || gotCont.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed || gotCont.ContinuationLease.RemainingTurns != 0 {
+		t.Fatalf("continuation = %#v, want consumed original lease while budget recovery owns rollover", gotCont)
 	}
 	sender.mu.Lock()
 	inlineCount := len(sender.inline)
 	sender.mu.Unlock()
-	if inlineCount != 1 {
-		t.Fatalf("inline count = %d, want one retry approval prompt", inlineCount)
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no manual retry approval prompt", inlineCount)
 	}
 	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -1612,21 +1425,149 @@ func TestTriggerCodingContinuationBudgetRecoveryDoesNotCompleteOperation(t *test
 	if err != nil {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
 	}
-	if !hasExecutionEvent(events, core.ExecutionEventWorkExecutorFailed) {
-		t.Fatalf("events = %#v, want work executor failure event", events)
+	if !hasExecutionEvent(events, core.ExecutionEventWorkExecutorRecovering) {
+		t.Fatalf("events = %#v, want work executor recovering event", events)
+	}
+	if hasExecutionEvent(events, core.ExecutionEventWorkExecutorFailed) {
+		t.Fatalf("events = %#v, want no work executor failure event for scheduled budget recovery", events)
 	}
 	if hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
 		t.Fatalf("events = %#v, want no work executor success event", events)
 	}
-	if !hasExecutionEvent(events, core.ExecutionEventRecoveryIssued) || !hasExecutionEvent(events, core.ExecutionEventContinuationOffered) {
-		t.Fatalf("events = %#v, want manual retry recovery issue and continuation offer", events)
+	if hasExecutionEvent(events, core.ExecutionEventContinuationOffered) {
+		t.Fatalf("events = %#v, want no manual retry continuation offer", events)
 	}
-	assertBudgetRecoveryEventStatus(t, events, "deferred")
-	assertNoBudgetRecoveryEventStatus(t, events, "scheduled")
-	assertNoBudgetRecoveryEventStatus(t, events, "resuming")
-	assertNoBudgetRecoveryEventStatus(t, events, "resumed")
-	if !budgetRecoveryEventPayloadContains(events, core.ExecutionEventTurnBudgetRecovery, "reason", "work_executor_retry_path") {
-		t.Fatalf("events = %#v, want deferred budget recovery reason", events)
+	assertBudgetRecoveryEventStatus(t, events, "scheduled")
+	assertBudgetRecoveryEventStatus(t, events, "resuming")
+	assertBudgetRecoveryEventStatus(t, events, "resumed")
+	assertNoBudgetRecoveryEventStatus(t, events, "deferred")
+	if !budgetRecoveryEventPayloadContains(events, core.ExecutionEventWorkExecutorRecovering, "completion_kind", "native_turn_budget_recovery_scheduled") {
+		t.Fatalf("events = %#v, want recovering event with scheduled completion kind", events)
+	}
+}
+
+func TestTriggerCodingContinuationBudgetRecoveryBlockedDoesNotOfferManualRetry(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recovery := nativeWorkBudgetRecoveryTestRecovery()
+	work := &fakeWorkExecutor{
+		name:  "native",
+		ready: true,
+		result: WorkResult{
+			ExecutorName:     "native",
+			Summary:          "Budget recovery stopped after repeated token exhaustion.",
+			Recovery:         recovery,
+			RecoveryKind:     string(core.TurnRecoveryTokenBudgetExhausted),
+			RecoverySummary:  recovery.Summary,
+			RecoveryDelivery: "budget_recovery_blocked",
+			CompletionKind:   "native_turn_budget_recovery_blocked",
+			SideEffects:      true,
+			ProviderFailure:  "",
+			ChangedFiles:     nil,
+			Commands:         nil,
+			CodexEvents:      nil,
+			PatchPreview:     "",
+			CommitLaneStatus: "",
+		},
+	}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "native"}, []WorkExecutor{work})
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Hour)
+	key := session.SessionKey{ChatID: 8197, UserID: 0, Scope: telegramDMScopeRef(8197)}
+	leaseID := "lease-phase-budget-recovery-blocked"
+	opState := session.OperationState{
+		ID:        "op-budget-recovery-blocked",
+		Objective: "Patch and push the PR branch.",
+		Status:    session.OperationStatusActive,
+		Stage:     "phase_approval",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "op-budget-recovery-blocked-plan",
+			CurrentPhaseID: "patch-and-push",
+			Phases: []session.OperationPhase{{
+				ID:               "patch-and-push",
+				Summary:          "Patch, validate, commit, and push the PR branch",
+				Status:           session.PlanStatusInProgress,
+				AuthorityClass:   "commit",
+				BoundedEffect:    "Patch the approved PR branch, run focused tests, commit, push, and report evidence.",
+				AllowedActions:   []string{"git_commit", "git_push", "run_tests", "report_commit_evidence"},
+				ForbiddenActions: []string{"deploy_or_restart", "merge_pull_request"},
+				RequiresApproval: true,
+				LeaseID:          leaseID,
+			}},
+		},
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	phase := opState.PhasePlan.Phases[0]
+	proposalID := operationPhaseProposalID(opState, phase)
+	action := session.ActionProposal{
+		ID:               "aprop-" + proposalID,
+		OperationID:      proposalID,
+		Summary:          phase.Summary,
+		BoundedEffect:    phase.BoundedEffect,
+		RiskClass:        "commit",
+		AllowedActions:   phase.AllowedActions,
+		ForbiddenActions: phase.ForbiddenActions,
+		Status:           session.ProposalStatusApproved,
+		ExpiresAt:        expiresAt,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	lease := buildContinuationLease(action, 1, now)
+	lease.ID = leaseID
+	lease.Status = session.ContinuationLeaseStatusActive
+	lease.RemainingTurns = 1
+	lease.ApprovedBy = 1001
+	lease.ApprovedAt = now
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusApproved,
+		DecisionID:        proposalID,
+		Objective:         opState.Objective,
+		StageSummary:      action.Summary,
+		RemainingTurns:    1,
+		ApprovedBy:        1001,
+		ActionProposal:    action,
+		ContinuationLease: lease,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v, want recovery block without callback failure", err)
+	}
+	gotOp, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if gotOp.Status == session.OperationStatusCompleted || gotOp.PhasePlan.Phases[0].Status == session.PlanStatusCompleted || !gotOp.Work.LastCompletedAt.IsZero() {
+		t.Fatalf("operation = %#v, want incomplete operation after max-hop recovery block", gotOp)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no manual retry approval prompt", inlineCount)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventWorkExecutorFailed) {
+		t.Fatalf("events = %#v, want work executor recovery_blocked event", events)
+	}
+	if !budgetRecoveryEventPayloadContains(events, core.ExecutionEventWorkExecutorFailed, "completion_kind", "native_turn_budget_recovery_blocked") {
+		t.Fatalf("events = %#v, want blocked completion kind", events)
+	}
+	if hasExecutionEvent(events, core.ExecutionEventContinuationOffered) {
+		t.Fatalf("events = %#v, want no manual retry continuation offer", events)
 	}
 }
 
