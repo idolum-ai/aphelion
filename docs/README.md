@@ -44,3 +44,4 @@ package ownership map, and any requirements doc for the behavior they are
 changing. Prompt or agency changes should also read the
 [agency evaluation methodology](architecture/agency-evaluation-methodology.md)
 before updating prompt contracts or eval expectations.
+- [Aphelion, in boring words](architecture/aphelion-in-boring-words.md) — plain-English map from Aphelion terminology to systems/security concepts.

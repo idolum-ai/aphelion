@@ -1,5 +1,7 @@
 # Aphelion
 
+For a plain-English map from Aphelion terminology to familiar systems/security concepts, start with [Aphelion, in boring words](docs/architecture/aphelion-in-boring-words.md).
+
 Aphelion is a personal AI harness built for distance. It runs as a Linux
 service on a machine you control and gives you a Telegram operator surface.
 Every action passes through explicit consent on its way to a typed audit
