@@ -444,11 +444,12 @@ func curiosityEvidence(candidate curiosityCandidate, outputHash string, refs []s
 }
 
 func (r *Runtime) curiositySignalHasIndependentSupport(state session.InteriorSignalState, now time.Time) (bool, error) {
-	weight, err := r.store.InteriorSignalAppliedWeightSinceExcludingSource(
+	weight, err := r.store.InteriorSignalDecayedAppliedWeightSinceExcludingSource(
 		session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()},
 		session.InteriorSignalRef{Category: state.Category, SubjectKey: state.SubjectKey},
 		now.Add(-session.InteriorSignalAppliedObservationRetention),
 		"curiosity",
+		now,
 	)
 	if err != nil {
 		return false, fmt.Errorf("load curiosity independent signal support: %w", err)

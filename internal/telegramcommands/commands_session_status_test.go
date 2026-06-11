@@ -676,13 +676,16 @@ func TestStatusReadableSummaryAppendsOperationEvidenceToModelSummary(t *testing.
 	if !strings.Contains(input, "operation_evidence_1=") || !strings.Contains(input, "reason_code=proposal_mismatch") {
 		t.Fatalf("provider input = %q, want operation evidence fact with reason code", input)
 	}
+	if strings.Contains(input, "operation_evidence_summary=") {
+		t.Fatalf("provider input = %q, want typed evidence facts without canonical prose summary", input)
+	}
 }
 
-func TestStatusReadableSummaryDoesNotDuplicateOperationEvidence(t *testing.T) {
+func TestStatusReadableSummaryDoesNotSuppressCanonicalOperationEvidence(t *testing.T) {
 	t.Parallel()
 
 	router := stubCommandRouter{
-		statusReadableSummary: "Operation evidence pending 1/1.",
+		statusReadableSummary: "Operation evidence is discussed elsewhere in the panel.",
 	}
 	facts := statusReadableFacts{
 		View:  statusViewChat,
@@ -694,8 +697,8 @@ func TestStatusReadableSummaryDoesNotDuplicateOperationEvidence(t *testing.T) {
 		}},
 	}
 	summary := statusReadableSummaryText(context.Background(), &router, facts)
-	if strings.Count(strings.ToLower(summary), "operation evidence") != 1 {
-		t.Fatalf("summary = %q, want one operation evidence sentence", summary)
+	if !strings.Contains(summary, router.statusReadableSummary) || !strings.Contains(summary, "Operation evidence pending 1/1.") {
+		t.Fatalf("summary = %q, want model text plus canonical operation evidence suffix", summary)
 	}
 }
 

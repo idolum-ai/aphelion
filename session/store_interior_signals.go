@@ -326,6 +326,62 @@ func (s *SQLiteStore) InteriorSignalAppliedWeightSinceExcludingSource(key Sessio
 	return clampInteriorSignal(total), nil
 }
 
+func (s *SQLiteStore) InteriorSignalDecayedAppliedWeightSinceExcludingSource(key SessionKey, ref InteriorSignalRef, since time.Time, excludedSource string, now time.Time) (float64, error) {
+	if s == nil {
+		return 0, fmt.Errorf("store is nil")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	key.Scope = defaultScopeForKey(key)
+	sessionID := SessionIDForKey(key)
+	if sessionID == "" {
+		return 0, nil
+	}
+	ref = NormalizeInteriorSignalRef(ref)
+	if ref.Category == "" || ref.SubjectKey == "" {
+		return 0, nil
+	}
+	args := []any{sessionID, ref.Category, ref.SubjectKey}
+	where := []string{"session_id = ?", "category = ?", "subject_key = ?", "applied_weight > 0"}
+	if !since.IsZero() {
+		where = append(where, "observed_at >= ?")
+		args = append(args, since.UTC().Format(time.RFC3339Nano))
+	}
+	if excludedSource = normalizeInteriorSignalToken(excludedSource); excludedSource != "" {
+		where = append(where, "source != ?")
+		args = append(args, excludedSource)
+	}
+	rows, err := s.db.Query(`
+		SELECT applied_weight, observed_at
+		FROM interior_signal_observations
+		WHERE `+strings.Join(where, " AND "), args...)
+	if err != nil {
+		return 0, fmt.Errorf("query decayed interior signal applied weight: %w", err)
+	}
+	defer rows.Close()
+
+	var total float64
+	for rows.Next() {
+		var (
+			weight        float64
+			observedAtRaw string
+		)
+		if err := rows.Scan(&weight, &observedAtRaw); err != nil {
+			return 0, fmt.Errorf("scan decayed interior signal applied weight: %w", err)
+		}
+		observedAt, err := parseSQLiteTime(observedAtRaw)
+		if err != nil {
+			return 0, fmt.Errorf("parse decayed interior signal observed_at: %w", err)
+		}
+		total += DecayInteriorSignalIntensity(weight, observedAt, now)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate decayed interior signal applied weight: %w", err)
+	}
+	return clampInteriorSignal(total), nil
+}
+
 func pruneInteriorSignalsTx(tx *sql.Tx, sessionID string, now time.Time) error {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {

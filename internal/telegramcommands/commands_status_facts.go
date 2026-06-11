@@ -143,8 +143,7 @@ func (f statusReadableFacts) providerInput() string {
 	if delivery := strings.TrimSpace(f.DeliveryStatus); delivery != "" {
 		parts = append(parts, "delivery_status="+delivery)
 	}
-	if evidence := statusOperationEvidenceSummary(f.OperationEvidence); evidence != "" {
-		parts = append(parts, "operation_evidence_summary="+evidence)
+	if len(f.OperationEvidence) > 0 {
 		for i, status := range f.OperationEvidence {
 			parts = append(parts, fmt.Sprintf("operation_evidence_%d=%s", i+1, compactOperationEvidenceStatus(status)))
 		}

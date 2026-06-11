@@ -166,7 +166,7 @@ This makes brokerage a real negotiation between two readings of the same latent 
 - interior signal retention prunes zero-weight observations sooner than applied observations, drops inactive near-zero state after the applied-evidence horizon, and floors tiny decayed pressure to zero
 - curiosity retention prunes old observations and expired/exhausted allowance records after the retention horizon; curiosity lease status remains an allowance state, not last-run outcome
 - durable memory/workspace evidence should anchor stable subject identity; volatile turn text should use source fingerprints so wording drift does not reset accumulated pressure unnecessarily
-- curiosity-originated observations may feed pressure, but curiosity eligibility requires independent non-curiosity support so the quiet read loop cannot sustain itself
+- curiosity-originated observations may feed pressure, but curiosity eligibility requires current decayed independent non-curiosity support so the quiet read loop cannot sustain itself from stale residue
 - reflection and Nocturne can feed low-weight typed observations back into interior pressure, so quiet maintenance leaves reusable residue instead of only artifacts or summaries
 - heartbeat can include a compact quiet-observation trail when accumulated pressure crosses the outreach threshold
 - Idolum brokerage proposals name the hidden input when one is materially shaping the push

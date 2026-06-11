@@ -184,6 +184,53 @@ func TestCuriosityCandidatesRequireNonCuriositySupport(t *testing.T) {
 	}
 }
 
+func TestCuriosityCandidatesRequireCurrentIndependentSupport(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Curiosity.Enabled = true
+	cfg.Curiosity.MinSignalIntensity = 0.5
+	cfg.Curiosity.SourceClasses = []string{session.CuriositySourceWorkspace}
+	cfg.Curiosity.WorkspacePaths = []string{"README.md"}
+
+	rt, err := New(cfg, store, provider, &curiosityRecordingTools{}, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: heartbeatSessionChatID, Scope: heartbeatScopeRef()}
+	_, err = store.RecordInteriorSignalObservations(key, []session.InteriorSignalObservationInput{
+		{
+			Category:          hiddenInputSemanticRecurrence,
+			SubjectKey:        "stale-seed",
+			Summary:           "old non-curiosity support",
+			Source:            "heartbeat_reflection",
+			SourceFingerprint: "old-support",
+			Weight:            0.8,
+			Confidence:        0.9,
+			ObservedAt:        now.Add(-10 * 24 * time.Hour),
+		},
+		{
+			Category:          hiddenInputSemanticRecurrence,
+			SubjectKey:        "stale-seed",
+			Summary:           "fresh curiosity pressure",
+			Source:            "curiosity",
+			SourceFingerprint: "fresh-curiosity",
+			Weight:            0.8,
+			Confidence:        0.9,
+			ObservedAt:        now,
+		},
+	}, now)
+	if err != nil {
+		t.Fatalf("RecordInteriorSignalObservations() err = %v", err)
+	}
+	candidates, err := rt.curiosityCandidates(&curiosityRecordingTools{}, "", now)
+	if err != nil {
+		t.Fatalf("curiosityCandidates() err = %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("candidates = %#v, want stale non-curiosity support decayed out", candidates)
+	}
+}
+
 func TestCuriosityURLEvidenceTagsThirdPartyText(t *testing.T) {
 	refs := curiosityEvidence(curiosityCandidate{
 		ID:         "candidate-url",

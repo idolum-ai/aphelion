@@ -159,6 +159,67 @@ func TestInteriorSignalDedupeWindowDoesNotSlideOnSuppressedRows(t *testing.T) {
 	}
 }
 
+func TestInteriorSignalDecayedAppliedWeightExcludesSourceAndStaleSupport(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	key := SessionKey{ChatID: 7105, UserID: 0, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "7105"}}
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	inputs := []InteriorSignalObservationInput{
+		{
+			Category:          "semantic_recurrence",
+			SubjectKey:        "release-workflow",
+			Summary:           "old release support",
+			Source:            "heartbeat_reflection",
+			SourceFingerprint: "old",
+			Weight:            0.8,
+			ObservedAt:        now.Add(-10 * 24 * time.Hour),
+		},
+		{
+			Category:          "semantic_recurrence",
+			SubjectKey:        "release-workflow",
+			Summary:           "recent release support one",
+			Source:            "heartbeat_reflection",
+			SourceFingerprint: "recent-1",
+			Weight:            0.25,
+			ObservedAt:        now,
+		},
+		{
+			Category:          "semantic_recurrence",
+			SubjectKey:        "release-workflow",
+			Summary:           "recent release support two",
+			Source:            "nocturne",
+			SourceFingerprint: "recent-2",
+			Weight:            0.25,
+			ObservedAt:        now,
+		},
+		{
+			Category:          "semantic_recurrence",
+			SubjectKey:        "release-workflow",
+			Summary:           "curiosity should not self-support",
+			Source:            "curiosity",
+			SourceFingerprint: "curiosity",
+			Weight:            0.8,
+			ObservedAt:        now,
+		},
+	}
+	if _, err := store.RecordInteriorSignalObservations(key, inputs, now); err != nil {
+		t.Fatalf("RecordInteriorSignalObservations() err = %v", err)
+	}
+	weight, err := store.InteriorSignalDecayedAppliedWeightSinceExcludingSource(key, InteriorSignalRef{Category: "semantic_recurrence", SubjectKey: "release-workflow"}, now.Add(-InteriorSignalAppliedObservationRetention), "curiosity", now)
+	if err != nil {
+		t.Fatalf("InteriorSignalDecayedAppliedWeightSinceExcludingSource() err = %v", err)
+	}
+	if weight < 0.49 || weight > 0.51 {
+		t.Fatalf("decayed independent weight = %.4f, want recent non-curiosity support only", weight)
+	}
+}
+
 func TestInteriorSignalRetentionPrunesSuppressedObservationsAndInactiveState(t *testing.T) {
 	t.Parallel()
 

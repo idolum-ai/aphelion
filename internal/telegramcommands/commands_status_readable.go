@@ -5,9 +5,9 @@ package telegramcommands
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
-	"strings"
 )
 
 func statusReadableSummaryText(ctx context.Context, router commandRouter, facts statusReadableFacts) string {
@@ -70,11 +70,7 @@ func groundStatusReadableSummary(facts statusReadableFacts, summary string) stri
 func composeStatusReadableSummary(facts statusReadableFacts) string {
 	switch normalizeStatusReadableFactsView(facts.View) {
 	case statusViewChat, statusViewPending, statusViewChatTarget:
-		summary := fmt.Sprintf("Chat is %s; action items %d; backlog items %d; signal %s.", statusSummaryStateDisplay(facts.State), facts.ActionItems, facts.BacklogItems, firstNonEmptyStatusSummary(facts.CurrentSignal, "unknown"))
-		if evidence := statusOperationEvidenceSummary(facts.OperationEvidence); evidence != "" {
-			summary += " " + evidence
-		}
-		return summary
+		return fmt.Sprintf("Chat is %s; action items %d; backlog items %d; signal %s.", statusSummaryStateDisplay(facts.State), facts.ActionItems, facts.BacklogItems, firstNonEmptyStatusSummary(facts.CurrentSignal, "unknown"))
 	case statusViewSystem:
 		return fmt.Sprintf("System has %d active turn(s), %d queued chat(s), and %d pending item(s).", facts.ActiveTurns, facts.QueuedChats, facts.PendingItems)
 	case statusViewHotChats:
@@ -210,9 +206,6 @@ func appendStatusOperationEvidenceSummary(summary string, evidence string) strin
 	evidence = strings.TrimSpace(evidence)
 	if summary == "" || evidence == "" {
 		return firstNonEmptyStatusSummary(summary, evidence)
-	}
-	if strings.Contains(strings.ToLower(summary), "operation evidence") {
-		return summary
 	}
 	reserved := len([]rune(evidence)) + 1
 	budget := statusReadableQuickReadMaxChars - reserved
