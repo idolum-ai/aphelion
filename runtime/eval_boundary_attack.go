@@ -254,7 +254,7 @@ func evalBoundaryAttackInputForTurn(ctx context.Context, opts EvalOptions, e *ev
 			return local, err
 		}
 		resp, err := provider.CompleteWithOptions(ctx, messages, nil, agent.CompleteOptions{
-			Reasoning: agent.ReasoningConfig{Effort: agent.ReasoningEffortLow, Summary: agent.ReasoningSummaryAuto},
+			Reasoning: agent.ReasoningConfig{Effort: agent.ReasoningEffortNone, Summary: agent.ReasoningSummaryNone},
 			Verbosity: agent.VerbosityLow,
 			MaxTokens: 1024,
 		})
