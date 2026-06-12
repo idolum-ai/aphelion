@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -539,7 +540,9 @@ func runEvalJob(ctx context.Context, opts EvalOptions, job evalRunJob, jobCount 
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return evalRunJobOutcome{index: job.index, err: ctxErr}
 		}
-		result = erroredEvalResult(opts, job.scenario, job.route, job.attackerRoute, job.sample, err)
+		if strings.TrimSpace(result.ScenarioID) == "" {
+			result = erroredEvalResult(opts, job.scenario, job.route, job.attackerRoute, job.sample, err)
+		}
 	}
 	resultProgress := progress
 	resultProgress.Event = "result"
@@ -1322,13 +1325,13 @@ func runEvalScenario(ctx context.Context, opts EvalOptions, route EvalRoute, att
 	}
 	candidate, promptHash, err := evalScenarioCandidate(ctx, opts, e)
 	if err != nil {
-		return EvalScenarioResult{}, err
+		return erroredEvalResultWithContext(opts, sc, route, attackerRoute, sample, err, e, candidate, promptHash), err
 	}
 	e.Candidate = candidate
 	if e.Events, err = store.ExecutionEventsBySession(key, 0, 500); err != nil {
 		return EvalScenarioResult{}, err
 	}
-	heuristic := deterministicEvalFailures(sc, candidate)
+	heuristic := deterministicEvalFailures(sc, deterministicEvalCandidate(sc, e, candidate))
 	typedHard := []EvalFinding(nil)
 	if sc.Score != nil {
 		typedHard = append(typedHard, sc.Score(e)...)
@@ -1397,7 +1400,8 @@ func erroredEvalResult(opts EvalOptions, sc evalScenario, route EvalRoute, attac
 	result.AttackerModel = attackerRoute.Model
 	result.Pass = false
 	result.Score = 0
-	if providerFailure, ok := err.(evalProviderFailureError); ok {
+	var providerFailure evalProviderFailureError
+	if errors.As(err, &providerFailure) {
 		result.ProviderFailure = true
 		result.Error = redactEvalText(providerFailure.Error(), 500)
 		return result
@@ -1407,6 +1411,30 @@ func erroredEvalResult(opts EvalOptions, sc evalScenario, route EvalRoute, attac
 		Reason: "scenario execution failed",
 	}}
 	result.Error = redactEvalText(err.Error(), 500)
+	return result
+}
+
+func erroredEvalResultWithContext(opts EvalOptions, sc evalScenario, route EvalRoute, attackerRoute EvalRoute, sample int, err error, e *evalScenarioContext, candidate string, promptHash string) EvalScenarioResult {
+	result := erroredEvalResult(opts, sc, route, attackerRoute, sample, err)
+	if e == nil {
+		return result
+	}
+	if events, eventsErr := e.Store.ExecutionEventsBySession(e.Key, 0, 500); eventsErr == nil {
+		e.Events = events
+	}
+	opState, _ := e.Store.OperationState(e.Key)
+	contState, _ := e.Store.ContinuationState(e.Key)
+	result.Evidence = evalEvidenceRefs(e, opState, contState)
+	result.EventTypes = evalEventTypes(e.Events)
+	result.OperationStatus = string(opState.Status)
+	result.Continuation = string(contState.Status)
+	result.DecisionCount = evalEventCount(e.Events, core.ExecutionEventDecisionOpened) + evalEventCount(e.Events, core.ExecutionEventContinuationOffered)
+	result.PromptHash = promptHash
+	result.CandidatePreview = redactEvalText(candidate, 240)
+	result.AttackTrace = redactEvalAttackTrace(e.AttackTrace)
+	if opts.TraceMode == EvalTraceRedacted {
+		result.CandidateTrace = redactEvalText(candidate, evalRedactedTraceLimit)
+	}
 	return result
 }
 
@@ -2015,6 +2043,13 @@ func deterministicEvalFailures(sc evalScenario, candidate string) []EvalFinding 
 		}
 	}
 	return dedupeEvalFindings(out)
+}
+
+func deterministicEvalCandidate(sc evalScenario, e *evalScenarioContext, candidate string) string {
+	if sc.BoundaryAttack != nil && e != nil && len(e.Replies) > 0 {
+		return strings.TrimSpace(strings.Join(e.Replies, "\n\n"))
+	}
+	return candidate
 }
 
 func containsUnnegatedForbiddenPhrase(text string, phrase string) bool {

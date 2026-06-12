@@ -126,6 +126,9 @@ func runEvalRunCommand(args []string, out io.Writer) error {
 		return fmt.Errorf("eval run requires --jobs >= 1")
 	}
 	mode := strings.ToLower(strings.TrimSpace(*modeFlag))
+	if !strings.EqualFold(strings.TrimSpace(*suiteFlag), aphruntime.EvalSuiteBoundaryAttack) && evalAttackerRoutesFlagRequestsExplicit(*attackerRoutesFlag) {
+		return fmt.Errorf("--attacker-routes is only supported with --suite boundary_attack")
+	}
 	routes, err := evalRoutesForCommand(mode, *routesFlag, *configFlag)
 	if err != nil {
 		return err
@@ -133,6 +136,9 @@ func runEvalRunCommand(args []string, out io.Writer) error {
 	attackerRoutes, err := evalAttackerRoutesForCommand(mode, *attackerRoutesFlag, *configFlag)
 	if err != nil {
 		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(*suiteFlag), aphruntime.EvalSuiteBoundaryAttack) && len(attackerRoutes) > 0 {
+		return fmt.Errorf("--attacker-routes is only supported with --suite boundary_attack")
 	}
 	judgeRoutes, err := evalJudgeRoutesForCommand(mode, *scoringFlag, *judgeRoutesFlag, *configFlag)
 	if err != nil {
@@ -183,6 +189,19 @@ func runEvalRunCommand(args []string, out io.Writer) error {
 		return runErr
 	}
 	return evalReportFailureError(report)
+}
+
+func evalAttackerRoutesFlagRequestsExplicit(spec string) bool {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return false
+	}
+	for _, raw := range strings.Split(spec, ",") {
+		if value := strings.TrimSpace(raw); value != "" && !strings.EqualFold(value, "subject") {
+			return true
+		}
+	}
+	return false
 }
 
 func runEvalCompareCommand(args []string, out io.Writer) error {
@@ -379,6 +398,10 @@ func evalAttackerRoutesForCommand(mode string, routesSpec string, configPath str
 	}
 	var routes []aphruntime.EvalRoute
 	for _, raw := range strings.Split(spec, ",") {
+		if strings.EqualFold(strings.TrimSpace(raw), "subject") {
+			routes = append(routes, aphruntime.EvalRoute{Name: "subject", Provider: "subject", Model: "same-as-subject"})
+			continue
+		}
 		route, err := explicitEvalRoute(cfg, httpClient, raw)
 		if err != nil {
 			return nil, err

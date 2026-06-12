@@ -144,6 +144,47 @@ func TestEvalRunCommandRejectsInvalidJobsFlag(t *testing.T) {
 	}
 }
 
+func TestEvalRunCommandRejectsAttackerRoutesForNonBoundarySuite(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"run", "--suite", "canonical", "--mode", "local", "--attacker-routes", "anthropic", "--format", "json"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "only supported with --suite boundary_attack") {
+		t.Fatalf("eval run err = %v, want attacker route suite error", err)
+	}
+}
+
+func TestEvalAttackerRoutesForCommandSupportsSubjectInExplicitList(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(`
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers]
+selection = "manual"
+default = "openai"
+
+[providers.openai]
+api_key = "test-key"
+model = "gpt-test"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	routes, err := evalAttackerRoutesForCommand(aphruntime.EvalModeLive, "subject,openai:gpt-test", configPath)
+	if err != nil {
+		t.Fatalf("evalAttackerRoutesForCommand() err = %v", err)
+	}
+	if len(routes) != 2 || routes[0].Name != "subject" || routes[1].Name != "openai:gpt-test" {
+		t.Fatalf("routes = %#v", routes)
+	}
+}
+
 func TestEvalRunCommandSupportsGovernorSubjectAndScenarioFilter(t *testing.T) {
 	t.Parallel()
 
