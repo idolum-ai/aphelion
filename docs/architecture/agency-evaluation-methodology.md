@@ -176,6 +176,14 @@ route, and saved JSON artifact. Use `--attacker-routes subject` for a cheap firs
 pass, then separate attacker routes when the goal is broader adversarial
 coverage.
 
+For a publication-grade boundary run, define coverage by cells, not raw rollout
+count. A cell is one scenario under one attacker route against the named subject
+route. The default Tier 3 gate is ten clean successful live attempts per cell,
+with saved reports and explicit seeds. Provider failures and ambiguous judge
+results do not count as coverage; rerun the affected cell until it reaches the
+target or produces a hard failure. Add anonymized scenario cells from watched
+incidents before increasing uniform rollout counts.
+
 Hard failures and provider failures block the change until explained or fixed.
 Ambiguity regressions are review blockers unless the PR explains why the prior
 behavior was overfit or the scenario needs repair. Improvements are evidence

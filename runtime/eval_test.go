@@ -161,8 +161,8 @@ func TestBoundaryAttackEvalScenariosCoverBountyClasses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListEvalScenarios(boundary_attack) err = %v", err)
 	}
-	if len(scenarios) != 6 {
-		t.Fatalf("boundary_attack scenario count = %d, want 6", len(scenarios))
+	if len(scenarios) != 10 {
+		t.Fatalf("boundary_attack scenario count = %d, want 10", len(scenarios))
 	}
 	bountyClasses := map[string]bool{}
 	for _, sc := range boundaryAttackEvalScenarios() {
@@ -179,6 +179,59 @@ func TestBoundaryAttackEvalScenariosCoverBountyClasses(t *testing.T) {
 			t.Fatalf("boundary_attack missing bounty class %s", want)
 		}
 	}
+}
+
+func TestBoundaryAttackScenariosStayPublishSafe(t *testing.T) {
+	t.Parallel()
+
+	forbidden := []string{
+		"/home/",
+		"/tmp/prompt",
+		"sadasant",
+		"gmail",
+		"6313146",
+		"385539578",
+		"ghp_",
+		"github_pat_",
+		"sk-",
+		"-----BEGIN",
+	}
+	for _, sc := range boundaryAttackEvalScenarios() {
+		sc := sc
+		t.Run(sc.ID, func(t *testing.T) {
+			t.Parallel()
+			lower := strings.ToLower(boundaryScenarioPublishText(sc))
+			for _, needle := range forbidden {
+				if strings.Contains(lower, strings.ToLower(needle)) {
+					t.Fatalf("boundary scenario contains private/publish-unsafe marker %q", needle)
+				}
+			}
+		})
+	}
+}
+
+func boundaryScenarioPublishText(sc evalScenario) string {
+	var parts []string
+	parts = append(parts,
+		sc.ID,
+		sc.Name,
+		sc.Domain,
+		sc.AuthorityClass,
+		sc.TransportSurface,
+		sc.Prompt,
+		sc.ExpectedBoundary,
+		sc.PositiveCandidate,
+	)
+	if sc.BoundaryAttack != nil {
+		parts = append(parts, sc.BoundaryAttack.BountyClass, sc.BoundaryAttack.FixtureID)
+		for _, turn := range sc.BoundaryAttack.Turns {
+			parts = append(parts, turn.Surface, turn.ScriptedInput, turn.Strategy)
+		}
+	}
+	for name, fixture := range sc.FailureFixtures {
+		parts = append(parts, name, fixture)
+	}
+	return strings.Join(parts, "\n")
 }
 
 func TestBoundaryAttackLocalRunRecordsAttackTrace(t *testing.T) {
@@ -1192,6 +1245,24 @@ func TestTrajectoryEvalSyntheticFailureFixturesTripHardFailures(t *testing.T) {
 	t.Parallel()
 
 	for _, sc := range trajectoryEvalScenarios() {
+		sc := sc
+		for name, candidate := range sc.FailureFixtures {
+			name, candidate := name, candidate
+			t.Run(sc.ID+"/"+name, func(t *testing.T) {
+				t.Parallel()
+				failures := deterministicEvalFailures(sc, candidate)
+				if len(failures) == 0 {
+					t.Fatalf("fixture did not trip hard failure: %q", candidate)
+				}
+			})
+		}
+	}
+}
+
+func TestBoundaryAttackEvalSyntheticFailureFixturesTripHardFailures(t *testing.T) {
+	t.Parallel()
+
+	for _, sc := range boundaryAttackEvalScenarios() {
 		sc := sc
 		for name, candidate := range sc.FailureFixtures {
 			name, candidate := name, candidate

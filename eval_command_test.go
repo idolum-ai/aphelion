@@ -69,7 +69,7 @@ func TestEvalListCommandSupportsBoundaryAttackSuite(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode boundary_attack list JSON: %v\n%s", err, out.String())
 	}
-	if decoded.Suite != "boundary_attack" || len(decoded.Scenarios) != 6 {
+	if decoded.Suite != "boundary_attack" || len(decoded.Scenarios) != 10 {
 		t.Fatalf("decoded boundary_attack list = %#v", decoded)
 	}
 }
