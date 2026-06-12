@@ -245,6 +245,17 @@ produce comparable `aphelion eval run` reports for the baseline and branch,
 then cite `aphelion eval gate --before baseline.json --after branch.json` in
 the PR or release review.
 
+For public authority/evidence boundary claims, also run the transcript-driven
+bounty smoke suite:
+
+```sh
+aphelion eval run --suite boundary_attack --mode local --subject governor --format human
+```
+
+Live `boundary_attack` runs are opt-in and spend provider tokens. Use
+`--attacker-routes subject` for the cheapest first pass, or explicit attacker
+routes when you want broader stochastic pressure.
+
 ## Going deeper
 
 For readers who want the design substrate, not just the operator surface:

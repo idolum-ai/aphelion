@@ -103,6 +103,7 @@ func runEvalRunCommand(args []string, out io.Writer) error {
 	rolloutsFlag := fs.Int("rollouts", 0, "rollouts per scenario/route")
 	jobsFlag := fs.Int("jobs", 1, "maximum concurrent route/scenario/rollout eval jobs")
 	routesFlag := fs.String("routes", "configured", "live routes: configured or comma-separated provider:model specs")
+	attackerRoutesFlag := fs.String("attacker-routes", "subject", "boundary_attack attacker routes: subject, configured, or comma-separated provider:model specs")
 	scenarioFlag := fs.String("scenario", "", "comma-separated scenario IDs to run")
 	scoringFlag := fs.String("scoring", aphruntime.EvalScoringDeterministic, "scoring mode: deterministic or judge")
 	judgeRoutesFlag := fs.String("judge-routes", "configured", "judge routes: configured or comma-separated provider:model specs")
@@ -129,6 +130,10 @@ func runEvalRunCommand(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	attackerRoutes, err := evalAttackerRoutesForCommand(mode, *attackerRoutesFlag, *configFlag)
+	if err != nil {
+		return err
+	}
 	judgeRoutes, err := evalJudgeRoutesForCommand(mode, *scoringFlag, *judgeRoutesFlag, *configFlag)
 	if err != nil {
 		return err
@@ -141,6 +146,7 @@ func runEvalRunCommand(args []string, out io.Writer) error {
 		Subject:         *subjectFlag,
 		Rollouts:        *rolloutsFlag,
 		Routes:          routes,
+		AttackerRoutes:  attackerRoutes,
 		ScenarioIDs:     splitEvalCSV(*scenarioFlag),
 		Scoring:         *scoringFlag,
 		JudgeRoutes:     judgeRoutes,
@@ -346,6 +352,41 @@ func evalJudgeRoutesForCommand(mode string, scoring string, routesSpec string, c
 	}
 	if len(routes) == 0 {
 		return nil, fmt.Errorf("no live eval judge routes selected")
+	}
+	return routes, nil
+}
+
+func evalAttackerRoutesForCommand(mode string, routesSpec string, configPath string) ([]aphruntime.EvalRoute, error) {
+	spec := strings.TrimSpace(routesSpec)
+	if spec == "" || strings.EqualFold(spec, "subject") {
+		return nil, nil
+	}
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode != aphruntime.EvalModeLive {
+		return nil, fmt.Errorf("explicit eval attacker routes require live mode; use --attacker-routes subject for local mode")
+	}
+	cfgPath, err := config.ResolveConfigPath(configPath)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return nil, err
+	}
+	httpClient := &http.Client{Timeout: 90 * time.Second}
+	if strings.EqualFold(spec, "configured") {
+		return configuredEvalRoutes(cfg, httpClient)
+	}
+	var routes []aphruntime.EvalRoute
+	for _, raw := range strings.Split(spec, ",") {
+		route, err := explicitEvalRoute(cfg, httpClient, raw)
+		if err != nil {
+			return nil, err
+		}
+		routes = append(routes, route)
+	}
+	if len(routes) == 0 {
+		return nil, fmt.Errorf("no live attacker routes selected")
 	}
 	return routes, nil
 }
@@ -597,13 +638,19 @@ func renderEvalReportHuman(report aphruntime.EvalReport) string {
 		status = "fail"
 	}
 	fmt.Fprintf(&b, "Aphelion eval %s: %s\n", report.Suite, status)
-	fmt.Fprintf(&b, "mode=%s subject=%s scoring=%s routes=%d judge_routes=%d scenarios=%d rollouts=%d jobs=%d results=%d hard_failures=%d provider_failures=%d ambiguous=%d hard_failure_rate=%.2f%%\n", report.Mode, report.SubjectMode, report.ScoringMode, report.RouteCount, report.JudgeRouteCount, report.ScenarioCount, report.Rollouts, report.Jobs, report.ResultCount, report.HardFailureCount, report.ProviderFailureCount, report.AmbiguousCount, report.HardFailureRate*100)
+	fmt.Fprintf(&b, "mode=%s subject=%s scoring=%s routes=%d attacker_routes=%d judge_routes=%d scenarios=%d rollouts=%d jobs=%d results=%d hard_failures=%d provider_failures=%d ambiguous=%d hard_failure_rate=%.2f%%\n", report.Mode, report.SubjectMode, report.ScoringMode, report.RouteCount, report.AttackerRouteCount, report.JudgeRouteCount, report.ScenarioCount, report.Rollouts, report.Jobs, report.ResultCount, report.HardFailureCount, report.ProviderFailureCount, report.AmbiguousCount, report.HardFailureRate*100)
 	for _, result := range report.Results {
 		mark := "PASS"
 		if !result.Pass {
 			mark = "FAIL"
 		}
 		fmt.Fprintf(&b, "- %s %s route=%s score=%d", mark, result.ScenarioID, result.Route, result.Score)
+		if result.AttackerRoute != "" {
+			fmt.Fprintf(&b, " attacker=%s", result.AttackerRoute)
+		}
+		if result.BountyClass != "" {
+			fmt.Fprintf(&b, " bounty=%s", result.BountyClass)
+		}
 		if len(result.HardFailures) > 0 {
 			classes := make([]string, 0, len(result.HardFailures))
 			for _, finding := range result.HardFailures {
@@ -633,6 +680,7 @@ func renderEvalReportKV(report aphruntime.EvalReport) string {
 	fmt.Fprintf(&b, "scenario_revision=%s\n", report.ScenarioRevision)
 	fmt.Fprintf(&b, "scoring_mode=%s\n", report.ScoringMode)
 	fmt.Fprintf(&b, "jobs=%d\n", report.Jobs)
+	fmt.Fprintf(&b, "attacker_route_count=%d\n", report.AttackerRouteCount)
 	fmt.Fprintf(&b, "failed=%t\n", report.Failed)
 	fmt.Fprintf(&b, "hard_failure_count=%d\n", report.HardFailureCount)
 	fmt.Fprintf(&b, "provider_failure_count=%d\n", report.ProviderFailureCount)
@@ -643,6 +691,8 @@ func renderEvalReportKV(report aphruntime.EvalReport) string {
 		prefix := "result." + strconv.Itoa(i) + "."
 		fmt.Fprintf(&b, "%sscenario_id=%s\n", prefix, result.ScenarioID)
 		fmt.Fprintf(&b, "%sroute=%s\n", prefix, result.Route)
+		fmt.Fprintf(&b, "%sattacker_route=%s\n", prefix, result.AttackerRoute)
+		fmt.Fprintf(&b, "%sbounty_class=%s\n", prefix, result.BountyClass)
 		fmt.Fprintf(&b, "%spass=%t\n", prefix, result.Pass)
 		fmt.Fprintf(&b, "%sscore=%d\n", prefix, result.Score)
 		fmt.Fprintf(&b, "%sprovider_failure=%t\n", prefix, result.ProviderFailure)
@@ -659,13 +709,14 @@ func evalReportFailureError(report aphruntime.EvalReport) error {
 }
 
 func renderEvalCommandHelp(note string) string {
-	lines := []string{"Aphelion eval", "Usage:", "  aphelion eval list [--suite canonical|trajectory] [--format human|kv|json]", "  aphelion eval run [--suite canonical|trajectory] [--mode local|live] [--subject eval|governor] [--rollouts N] [--jobs N] [--routes configured|provider:model,...] [--scenario id[,id]] [--scoring deterministic|judge] [--judge-routes configured|provider:model,...] [--judge-quorum pair|single] [--trace redacted|minimal] [--progress] [--format human|kv|json] [--out report.json]", "  aphelion eval compare --before baseline.json --after branch.json [--format markdown|json] [--out impact.md]", "  aphelion eval gate --before base1.json,base2.json --after branch1.json,branch2.json [--format markdown|json] [--out gate.md]", ""}
+	lines := []string{"Aphelion eval", "Usage:", "  aphelion eval list [--suite canonical|trajectory|boundary_attack] [--format human|kv|json]", "  aphelion eval run [--suite canonical|trajectory|boundary_attack] [--mode local|live] [--subject eval|governor] [--rollouts N] [--jobs N] [--routes configured|provider:model,...] [--attacker-routes subject|configured|provider:model,...] [--scenario id[,id]] [--scoring deterministic|judge] [--judge-routes configured|provider:model,...] [--judge-quorum pair|single] [--trace redacted|minimal] [--progress] [--format human|kv|json] [--out report.json]", "  aphelion eval compare --before baseline.json --after branch.json [--format markdown|json] [--out impact.md]", "  aphelion eval gate --before base1.json,base2.json --after branch1.json,branch2.json [--format markdown|json] [--out gate.md]", ""}
 	if note = strings.TrimSpace(note); note != "" {
 		lines = append([]string{note, ""}, lines...)
 	}
 	lines = append(lines,
 		"Local mode uses deterministic scripted providers and simulated external effects.",
 		"Live mode uses configured provider routes but still simulates GitHub, deploy, Tailscale, child, and private-content effects.",
+		"boundary_attack adds transcript-driven attacker turns; --attacker-routes subject reuses the subject route without multiplying jobs.",
 		"--jobs bounds the worker pool across route/scenario/rollout eval jobs; it does not parallelize within one eval job.",
 		"Use --jobs > 1 only with concurrency-safe provider routes/clients and stable credentials.",
 	)

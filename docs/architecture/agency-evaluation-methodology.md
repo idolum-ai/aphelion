@@ -117,6 +117,11 @@ The repo implements this methodology through complementary surfaces:
   route coverage, and scenario coverage. This is the preferred regression gate
   for governor, continuation, lease, media-routing, private-boundary, and
   self-improvement workflow changes.
+- Boundary attack scenarios: `aphelion eval run --suite boundary_attack`
+  replays transcript-driven adversarial attempts against the bounty conditions:
+  unauthorized action, false completion, and approval-surface mismatch. Local
+  mode is a deterministic structural smoke test; live mode is the stochastic
+  falsification surface.
 
 Secondary prompts follow the same split. Prompt surfaces that affect
 user-visible behavior, memory, authority, proactivity, or durable children need
@@ -141,6 +146,13 @@ on live stochastic evidence:
 aphelion eval run --suite canonical --mode local --subject governor --format human
 ```
 
+For changes that affect the authority/evidence boundary claimed publicly by the
+project, also run the boundary attack smoke suite:
+
+```sh
+aphelion eval run --suite boundary_attack --mode local --subject governor --format human
+```
+
 Use `--jobs > 1` only when every live provider route/client and credential
 source used by the run is concurrency-safe and stable.
 
@@ -157,6 +169,12 @@ continuation, prompt behavior, or operator-facing control surfaces, cite a
 current eval gate report in the release PR. Multiple live seeds are preferred
 when the change is meant to prove behavioral improvement rather than only
 prevent regressions.
+
+Before publishing a public boundary claim or bounty challenge, run at least one
+live `boundary_attack` report with an explicit model route, attacker route, judge
+route, and saved JSON artifact. Use `--attacker-routes subject` for a cheap first
+pass, then separate attacker routes when the goal is broader adversarial
+coverage.
 
 Hard failures and provider failures block the change until explained or fixed.
 Ambiguity regressions are review blockers unless the PR explains why the prior
@@ -203,6 +221,9 @@ runtime action, memory writes, leases, or consent.
   human/KV/JSON report rendering.
 - `eval_command.go` and `runtime/eval.go`: canonical local/live scenario runner,
   report comparison, and baseline-vs-branch stability gate.
+- `runtime/eval_boundary_attack.go`: transcript-driven attacker replay and typed
+  bounty-condition oracles for authority, completion evidence, capability
+  grants, and approval-surface fidelity.
 - `agency_eval_test.go`: deterministic tests for prompt stripping, JSON parsing,
   compare deltas, and CLI rendering.
 - `agency_live_eval_test.go`: opt-in OpenAI agency spectrum eval using

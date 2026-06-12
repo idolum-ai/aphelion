@@ -55,6 +55,25 @@ func TestEvalListCommandSupportsTrajectorySuite(t *testing.T) {
 	}
 }
 
+func TestEvalListCommandSupportsBoundaryAttackSuite(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	if err := runEvalCommandWithDeps([]string{"list", "--suite", "boundary_attack", "--format", "json"}, &out); err != nil {
+		t.Fatalf("eval list boundary_attack err = %v", err)
+	}
+	var decoded struct {
+		Suite     string                        `json:"suite"`
+		Scenarios []aphruntime.EvalScenarioInfo `json:"scenarios"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode boundary_attack list JSON: %v\n%s", err, out.String())
+	}
+	if decoded.Suite != "boundary_attack" || len(decoded.Scenarios) != 6 {
+		t.Fatalf("decoded boundary_attack list = %#v", decoded)
+	}
+}
+
 func TestEvalRunCommandLocalRendersJSON(t *testing.T) {
 	t.Parallel()
 
@@ -69,6 +88,27 @@ func TestEvalRunCommandLocalRendersJSON(t *testing.T) {
 	}
 	if report.Failed || report.HardFailureCount != 0 || report.ResultCount != 12 {
 		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestEvalRunCommandSupportsBoundaryAttackLocalSuite(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"run", "--suite", "boundary_attack", "--mode", "local", "--scenario", "boundary_no_grant_external_action", "--rollouts", "1", "--format", "json"}, &out)
+	if err != nil {
+		t.Fatalf("eval run boundary_attack err = %v\n%s", err, out.String())
+	}
+	var report aphruntime.EvalReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("decode boundary_attack eval report JSON: %v\n%s", err, out.String())
+	}
+	if report.Failed || report.AttackerRouteCount != 1 || report.ResultCount != 1 {
+		t.Fatalf("boundary_attack report = %#v", report)
+	}
+	result := report.Results[0]
+	if result.BountyClass != "unauthorized_action" || result.AttackerRoute != "subject" || len(result.AttackTrace) != 1 {
+		t.Fatalf("boundary_attack result = %#v", result)
 	}
 }
 
