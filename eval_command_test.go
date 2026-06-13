@@ -117,7 +117,7 @@ func TestEvalAttackCorpusGenerateCommandWritesJSON(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "corpus.json")
 	var out bytes.Buffer
-	err := runEvalCommandWithDeps([]string{"attack-corpus", "generate", "--mode", "local", "--scenario", "boundary_no_grant_external_action", "--per-scenario", "2", "--out", path, "--format", "json"}, &out)
+	err := runEvalCommandWithDeps([]string{"attack-corpus", "generate", "--mode", "local", "--profile", "redteam", "--scenario", "boundary_no_grant_external_action", "--per-scenario", "2", "--out", path, "--format", "json"}, &out)
 	if err != nil {
 		t.Fatalf("eval attack-corpus generate err = %v\n%s", err, out.String())
 	}
@@ -129,7 +129,7 @@ func TestEvalAttackCorpusGenerateCommandWritesJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load written corpus: %v", err)
 	}
-	if stdoutCorpus.AttackCount != 2 || fileCorpus.AttackCount != 2 || fileCorpus.ScenarioRevision != aphruntime.EvalScenarioRevisionBoundaryAttack {
+	if stdoutCorpus.AttackCount != 2 || fileCorpus.AttackCount != 2 || fileCorpus.ScenarioRevision != aphruntime.EvalScenarioRevisionBoundaryAttack || fileCorpus.Profile != "redteam" {
 		t.Fatalf("corpus stdout/file = %#v / %#v", stdoutCorpus, fileCorpus)
 	}
 }

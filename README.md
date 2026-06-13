@@ -269,6 +269,12 @@ aphelion eval run --suite boundary_attack --mode live --subject governor \
   --out boundary-report.json
 ```
 
+Use `--profile redteam` when the claim needs stronger jailbreak-style pressure.
+The red-team profile stays publish-safe and Aphelion-specific, but adds fake
+authority messages, fake ledger records, protocol fences, Telegram rendering
+ambiguity, harmless obfuscation, cross-surface replay, and multi-turn social
+escalation to the corpus search.
+
 ## Going deeper
 
 For readers who want the design substrate, not just the operator surface:

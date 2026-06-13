@@ -216,6 +216,13 @@ Corpus replay is deterministic attacker input. It does not call attacker
 providers, so it is suitable for repeated branch comparisons, gate checks, and
 top-ups after a provider failure in the subject route.
 
+For stronger boundary-wager validation, generate the corpus with
+`--profile redteam`. That profile keeps the public safety rules but deliberately
+adds adversarial promptcraft around fake authority messages, fake ledger or
+approval records, protocol fences, Telegram display ambiguity, harmless
+orthographic obfuscation, cross-surface replay, and social escalation. Treat it
+as the expensive publication-grade funnel, not as a CI default.
+
 Hard failures and provider failures block the change until explained or fixed.
 Ambiguity regressions are review blockers unless the PR explains why the prior
 behavior was overfit or the scenario needs repair. Improvements are evidence

@@ -251,6 +251,7 @@ func runEvalAttackCorpusGenerateCommand(args []string, out io.Writer) error {
 	configFlag := fs.String("config", "", "path to config.toml for live mode")
 	suiteFlag := fs.String("suite", aphruntime.EvalSuiteBoundaryAttack, "eval suite; only boundary_attack is supported")
 	modeFlag := fs.String("mode", aphruntime.EvalModeLocal, "generation mode: local or live")
+	profileFlag := fs.String("profile", "boundary", "attack profile: boundary or redteam")
 	attackerRoutesFlag := fs.String("attacker-routes", "configured", "live attacker routes: configured or comma-separated provider:model specs")
 	scenarioFlag := fs.String("scenario", "", "comma-separated scenario IDs to generate")
 	perScenarioFlag := fs.Int("per-scenario", 3, "selected attack cases per scenario after dedupe/ranking")
@@ -294,6 +295,7 @@ func runEvalAttackCorpusGenerateCommand(args []string, out io.Writer) error {
 	corpus, err := aphruntime.GenerateEvalAttackCorpus(ctx, aphruntime.EvalAttackCorpusOptions{
 		Suite:           *suiteFlag,
 		Mode:            mode,
+		Profile:         *profileFlag,
 		AttackerRoutes:  attackerRoutes,
 		ScenarioIDs:     splitEvalCSV(*scenarioFlag),
 		PerScenario:     *perScenarioFlag,
@@ -322,6 +324,8 @@ func runEvalAttackCorpusGenerateCommand(args []string, out io.Writer) error {
 	case "kv":
 		fmt.Fprintf(out, "path=%s\n", path)
 		fmt.Fprintf(out, "suite=%s\n", corpus.Suite)
+		fmt.Fprintf(out, "profile=%s\n", corpus.Profile)
+		fmt.Fprintf(out, "generator_version=%s\n", corpus.GeneratorVersion)
 		fmt.Fprintf(out, "scenario_revision=%s\n", corpus.ScenarioRevision)
 		fmt.Fprintf(out, "scenario_count=%d\n", corpus.ScenarioCount)
 		fmt.Fprintf(out, "attack_count=%d\n", corpus.AttackCount)
@@ -331,6 +335,7 @@ func runEvalAttackCorpusGenerateCommand(args []string, out io.Writer) error {
 	default:
 		fmt.Fprintf(out, "Generated %s attack corpus\n", corpus.Suite)
 		fmt.Fprintf(out, "- Path: %s\n", path)
+		fmt.Fprintf(out, "- Profile: %s\n", corpus.Profile)
 		fmt.Fprintf(out, "- Scenarios: %d\n", corpus.ScenarioCount)
 		fmt.Fprintf(out, "- Attacks: %d\n", corpus.AttackCount)
 		fmt.Fprintf(out, "- Duplicates: %d\n", corpus.DuplicateCount)
@@ -918,7 +923,7 @@ func evalReportFailureError(report aphruntime.EvalReport) error {
 }
 
 func renderEvalCommandHelp(note string) string {
-	lines := []string{"Aphelion eval", "Usage:", "  aphelion eval list [--suite canonical|trajectory|boundary_attack] [--format human|kv|json]", "  aphelion eval run [--suite canonical|trajectory|boundary_attack] [--mode local|live] [--subject eval|governor] [--rollouts N] [--jobs N] [--routes configured|provider:model,...] [--attacker-routes subject|configured|provider:model,...] [--attack-corpus corpus.json] [--max-attacks-per-scenario N] [--scenario id[,id]] [--scoring deterministic|judge] [--judge-routes configured|provider:model,...] [--judge-quorum pair|single] [--trace redacted|minimal] [--progress] [--format human|kv|json] [--out report.json]", "  aphelion eval attack-corpus generate [--mode local|live] [--attacker-routes configured|provider:model,...] [--scenario id[,id]] [--per-scenario N] [--jobs N] [--progress] [--out corpus.json]", "  aphelion eval compare --before baseline.json --after branch.json [--format markdown|json] [--out impact.md]", "  aphelion eval gate --before base1.json,base2.json --after branch1.json,branch2.json [--format markdown|json] [--out gate.md]", ""}
+	lines := []string{"Aphelion eval", "Usage:", "  aphelion eval list [--suite canonical|trajectory|boundary_attack] [--format human|kv|json]", "  aphelion eval run [--suite canonical|trajectory|boundary_attack] [--mode local|live] [--subject eval|governor] [--rollouts N] [--jobs N] [--routes configured|provider:model,...] [--attacker-routes subject|configured|provider:model,...] [--attack-corpus corpus.json] [--max-attacks-per-scenario N] [--scenario id[,id]] [--scoring deterministic|judge] [--judge-routes configured|provider:model,...] [--judge-quorum pair|single] [--trace redacted|minimal] [--progress] [--format human|kv|json] [--out report.json]", "  aphelion eval attack-corpus generate [--mode local|live] [--profile boundary|redteam] [--attacker-routes configured|provider:model,...] [--scenario id[,id]] [--per-scenario N] [--jobs N] [--progress] [--out corpus.json]", "  aphelion eval compare --before baseline.json --after branch.json [--format markdown|json] [--out impact.md]", "  aphelion eval gate --before base1.json,base2.json --after branch1.json,branch2.json [--format markdown|json] [--out gate.md]", ""}
 	if note = strings.TrimSpace(note); note != "" {
 		lines = append([]string{note, ""}, lines...)
 	}
