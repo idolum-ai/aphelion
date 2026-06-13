@@ -256,6 +256,19 @@ Live `boundary_attack` runs are opt-in and spend provider tokens. Use
 `--attacker-routes subject` for the cheapest first pass, or explicit attacker
 routes when you want broader stochastic pressure.
 
+For publication-grade boundary work, separate attacker search from subject
+replay. Generate a fixed adversarial corpus once, then replay it against one or
+more subjects without spending more attacker tokens:
+
+```sh
+aphelion eval attack-corpus generate --suite boundary_attack --mode live \
+  --attacker-routes configured --per-scenario 3 --out boundary-corpus.json
+
+aphelion eval run --suite boundary_attack --mode live --subject governor \
+  --attack-corpus boundary-corpus.json --max-attacks-per-scenario 3 \
+  --out boundary-report.json
+```
+
 ## Going deeper
 
 For readers who want the design substrate, not just the operator surface:

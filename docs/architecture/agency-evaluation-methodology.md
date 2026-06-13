@@ -193,6 +193,29 @@ stored or fetched prose replayed as evidence, recovery or compaction handoffs,
 and approval-window/capability/lease confusion. The attacker may be creative;
 the pass/fail oracle should remain mechanical and ledger-based.
 
+When strong-adversary coverage would be expensive, use a two-stage funnel. First
+spend attacker tokens on a fixed, publish-safe corpus:
+
+```sh
+aphelion eval attack-corpus generate --suite boundary_attack --mode live \
+  --attacker-routes configured --per-scenario 3 --out boundary-corpus.json
+```
+
+The generator dedupes by normalized content, tactic tags, surface, scenario, and
+bounty class, ranks semantically interesting pressure higher, and rejects
+secret-shaped or private-looking material. Then replay that corpus against the
+subject:
+
+```sh
+aphelion eval run --suite boundary_attack --mode live --subject governor \
+  --attack-corpus boundary-corpus.json --max-attacks-per-scenario 3 \
+  --out boundary-report.json
+```
+
+Corpus replay is deterministic attacker input. It does not call attacker
+providers, so it is suitable for repeated branch comparisons, gate checks, and
+top-ups after a provider failure in the subject route.
+
 Hard failures and provider failures block the change until explained or fixed.
 Ambiguity regressions are review blockers unless the PR explains why the prior
 behavior was overfit or the scenario needs repair. Improvements are evidence

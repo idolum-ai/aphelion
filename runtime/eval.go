@@ -64,8 +64,12 @@ type EvalOptions struct {
 	Rollouts       int
 	Routes         []EvalRoute
 	AttackerRoutes []EvalRoute
-	ScenarioIDs    []string
-	Scoring        string
+	AttackCorpus   *EvalAttackCorpus
+	// MaxAttacksPerScenario caps fixed attack-corpus replay cases per scenario.
+	// Zero means replay every matching case in the corpus.
+	MaxAttacksPerScenario int
+	ScenarioIDs           []string
+	Scoring               string
 	// Jobs bounds the worker pool across route/scenario/rollout eval jobs.
 	// It does not create parallel provider calls within a single eval job.
 	Jobs            int
@@ -327,6 +331,7 @@ type evalScenarioContext struct {
 	Replies          []string
 	Snapshots        []evalTrajectorySnapshot
 	AttackTrace      []EvalAttackTurn
+	AttackCase       *EvalAttackCorpusCase
 	ApprovalSurfaces []evalBoundaryApprovalSurface
 }
 
@@ -363,6 +368,12 @@ func RunEvalSuite(ctx context.Context, opts EvalOptions) (EvalReport, error) {
 	scenarios, err = filterEvalScenarios(scenarios, opts.ScenarioIDs)
 	if err != nil {
 		return EvalReport{}, err
+	}
+	if err := validateEvalAttackCorpusForRun(opts, scenarios); err != nil {
+		return EvalReport{}, err
+	}
+	if opts.AttackCorpus != nil {
+		opts.Rollouts = evalAttackCorpusEffectiveRollouts(opts.AttackCorpus, scenarios, opts.MaxAttacksPerScenario)
 	}
 	routes, err := normalizeEvalRoutes(opts)
 	if err != nil {
@@ -408,7 +419,7 @@ func RunEvalSuite(ctx context.Context, opts EvalOptions) (EvalReport, error) {
 		JudgeRouteCount:    len(judgeRoutes),
 		ScenarioCount:      len(scenarios),
 	}
-	jobs := buildEvalRunJobs(routes, attackerRoutes, scenarios, opts.Rollouts, opts.Seed)
+	jobs := buildEvalRunJobs(routes, attackerRoutes, scenarios, opts.Rollouts, opts.Seed, opts.AttackCorpus, opts.MaxAttacksPerScenario)
 	outcomes := runEvalJobs(ctx, opts, jobs)
 	completed := 0
 	for _, outcome := range outcomes {
@@ -439,6 +450,7 @@ type evalRunJob struct {
 	scenario      evalScenario
 	sample        int
 	pressure      string
+	attackCase    *EvalAttackCorpusCase
 }
 
 type evalRunJobOutcome struct {
@@ -448,11 +460,36 @@ type evalRunJobOutcome struct {
 	completed bool
 }
 
-func buildEvalRunJobs(routes []EvalRoute, attackerRoutes []EvalRoute, scenarios []evalScenario, rollouts int, seed int64) []evalRunJob {
+func buildEvalRunJobs(routes []EvalRoute, attackerRoutes []EvalRoute, scenarios []evalScenario, rollouts int, seed int64, corpus *EvalAttackCorpus, maxAttacksPerScenario int) []evalRunJob {
 	rng := rand.New(rand.NewSource(seed))
 	attackers := attackerRoutes
 	if len(attackers) == 0 {
 		attackers = []EvalRoute{{}}
+	}
+	if corpus != nil {
+		attacker := EvalRoute{Name: evalAttackCorpusRouteName, Provider: "corpus", Model: strings.TrimSpace(corpus.ScenarioRevision)}
+		if len(attackers) > 0 && strings.TrimSpace(attackers[0].Name) != "" {
+			attacker = attackers[0]
+		}
+		jobs := make([]evalRunJob, 0)
+		for _, route := range routes {
+			for _, sc := range scenarios {
+				cases := evalAttackCorpusCasesForScenario(corpus, sc.ID, maxAttacksPerScenario)
+				for sample := range cases {
+					attackCase := cases[sample]
+					jobs = append(jobs, evalRunJob{
+						index:         len(jobs),
+						route:         route,
+						attackerRoute: attacker,
+						scenario:      sc,
+						sample:        sample,
+						pressure:      strings.Join(attackCase.TacticTags, ","),
+						attackCase:    &attackCase,
+					})
+				}
+			}
+		}
+		return jobs
 	}
 	jobs := make([]evalRunJob, 0, len(routes)*len(attackers)*len(scenarios)*rollouts)
 	for _, route := range routes {
@@ -535,7 +572,7 @@ func runEvalJob(ctx context.Context, opts EvalOptions, job evalRunJob, jobCount 
 		JobCount:    jobCount,
 	}
 	emitEvalProgress(opts, progress)
-	result, err := runEvalScenario(ctx, opts, job.route, job.attackerRoute, job.scenario, job.sample, job.pressure)
+	result, err := runEvalScenarioWithAttackCase(ctx, opts, job.route, job.attackerRoute, job.scenario, job.sample, job.pressure, job.attackCase)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return evalRunJobOutcome{index: job.index, err: ctxErr}
@@ -1095,6 +1132,9 @@ func normalizeEvalOptions(opts EvalOptions) EvalOptions {
 	if opts.Jobs <= 0 {
 		opts.Jobs = 1
 	}
+	if opts.MaxAttacksPerScenario < 0 {
+		opts.MaxAttacksPerScenario = 0
+	}
 	return opts
 }
 
@@ -1226,6 +1266,9 @@ func normalizeEvalAttackerRoutes(opts EvalOptions, subjectRoutes []EvalRoute) ([
 	if strings.ToLower(strings.TrimSpace(opts.Suite)) != EvalSuiteBoundaryAttack {
 		return nil, nil
 	}
+	if opts.AttackCorpus != nil {
+		return []EvalRoute{{Name: evalAttackCorpusRouteName, Provider: "corpus", Model: strings.TrimSpace(opts.AttackCorpus.ScenarioRevision)}}, nil
+	}
 	if len(opts.AttackerRoutes) == 0 {
 		return []EvalRoute{{Name: evalDefaultAttackerRoute, Provider: "subject", Model: "same-as-subject"}}, nil
 	}
@@ -1276,6 +1319,10 @@ func evalScenariosForSuite(suite string) ([]evalScenario, error) {
 }
 
 func runEvalScenario(ctx context.Context, opts EvalOptions, route EvalRoute, attackerRoute EvalRoute, sc evalScenario, sample int, pressure string) (EvalScenarioResult, error) {
+	return runEvalScenarioWithAttackCase(ctx, opts, route, attackerRoute, sc, sample, pressure, nil)
+}
+
+func runEvalScenarioWithAttackCase(ctx context.Context, opts EvalOptions, route EvalRoute, attackerRoute EvalRoute, sc evalScenario, sample int, pressure string, attackCase *EvalAttackCorpusCase) (EvalScenarioResult, error) {
 	root := strings.TrimSpace(opts.WorkDir)
 	var err error
 	if root == "" {
@@ -1314,6 +1361,7 @@ func runEvalScenario(ctx context.Context, opts EvalOptions, route EvalRoute, att
 		AttackerRoute: attackerRoute,
 		Sample:        sample,
 		Pressure:      pressure,
+		AttackCase:    attackCase,
 	}
 	if sc.Setup != nil {
 		if err := sc.Setup(e); err != nil {

@@ -246,6 +246,9 @@ func evalBoundaryAttackInputForTurn(ctx context.Context, opts EvalOptions, e *ev
 		Strategy:          strings.TrimSpace(step.Strategy),
 		TargetBountyClass: boundaryAttackBountyClass(e.Scenario),
 	}
+	if attack, ok, err := evalBoundaryAttackCorpusInputForTurn(e, turnIndex, local); ok || err != nil {
+		return attack, err
+	}
 	provider := evalBoundaryAttackProvider(e)
 	if provider == nil {
 		return local, nil
@@ -282,6 +285,26 @@ func evalBoundaryAttackInputForTurn(ctx context.Context, opts EvalOptions, e *ev
 		}
 	}
 	return local, nil
+}
+
+func evalBoundaryAttackCorpusInputForTurn(e *evalScenarioContext, turnIndex int, fallback evalBoundaryAttackInput) (evalBoundaryAttackInput, bool, error) {
+	if e == nil || e.AttackCase == nil {
+		return evalBoundaryAttackInput{}, false, nil
+	}
+	if turnIndex < 0 || turnIndex >= len(e.AttackCase.Turns) {
+		return fallback, true, fmt.Errorf("attack corpus case %s missing turn %d", strings.TrimSpace(e.AttackCase.ID), turnIndex+1)
+	}
+	turn := e.AttackCase.Turns[turnIndex]
+	content := strings.TrimSpace(turn.Content)
+	if content == "" {
+		return fallback, true, fmt.Errorf("attack corpus case %s turn %d has empty content", strings.TrimSpace(e.AttackCase.ID), turnIndex+1)
+	}
+	return evalBoundaryAttackInput{
+		Surface:           firstNonEmptyEvalText(turn.Surface, fallback.Surface),
+		Content:           content,
+		Strategy:          firstNonEmptyEvalText(turn.Strategy, e.AttackCase.Strategy, fallback.Strategy),
+		TargetBountyClass: firstNonEmptyEvalText(turn.TargetBountyClass, e.AttackCase.BountyClass, fallback.TargetBountyClass),
+	}, true, nil
 }
 
 func evalBoundaryAttackProvider(e *evalScenarioContext) agent.ProviderWithOptions {
@@ -410,6 +433,12 @@ func evalBoundaryAttackPromptHash(e *evalScenarioContext) string {
 	b.WriteByte('\n')
 	b.WriteString(e.AttackerRoute.Name)
 	b.WriteByte('\n')
+	if e.AttackCase != nil {
+		b.WriteString(e.AttackCase.ID)
+		b.WriteByte('\n')
+		b.WriteString(e.AttackCase.NoveltyKey)
+		b.WriteByte('\n')
+	}
 	b.WriteString(e.Scenario.ExpectedBoundary)
 	sum := sha256.Sum256([]byte(b.String()))
 	return fmt.Sprintf("sha256:%x", sum[:])
