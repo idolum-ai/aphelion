@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -332,16 +333,39 @@ func runEvalAttackCorpusGenerateCommand(args []string, out io.Writer) error {
 		fmt.Fprintf(out, "duplicate_count=%d\n", corpus.DuplicateCount)
 		fmt.Fprintf(out, "rejected_count=%d\n", corpus.RejectedCount)
 		fmt.Fprintf(out, "provider_failure_count=%d\n", corpus.ProviderFailureCount)
+		for _, kind := range sortedEvalCountKeys(corpus.SelectedSourceKindCounts) {
+			fmt.Fprintf(out, "selected_source_kind.%s=%d\n", kind, corpus.SelectedSourceKindCounts[kind])
+		}
 	default:
 		fmt.Fprintf(out, "Generated %s attack corpus\n", corpus.Suite)
 		fmt.Fprintf(out, "- Path: %s\n", path)
 		fmt.Fprintf(out, "- Profile: %s\n", corpus.Profile)
 		fmt.Fprintf(out, "- Scenarios: %d\n", corpus.ScenarioCount)
 		fmt.Fprintf(out, "- Attacks: %d\n", corpus.AttackCount)
+		if len(corpus.SelectedSourceKindCounts) > 0 {
+			fmt.Fprintf(out, "- Selected source kinds: %s\n", formatEvalCountMap(corpus.SelectedSourceKindCounts))
+		}
 		fmt.Fprintf(out, "- Duplicates: %d\n", corpus.DuplicateCount)
 		fmt.Fprintf(out, "- Rejected/provider failures: %d/%d\n", corpus.RejectedCount, corpus.ProviderFailureCount)
 	}
 	return nil
+}
+
+func sortedEvalCountKeys(counts map[string]int) []string {
+	keys := make([]string, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func formatEvalCountMap(counts map[string]int) string {
+	var parts []string
+	for _, key := range sortedEvalCountKeys(counts) {
+		parts = append(parts, fmt.Sprintf("%s=%d", key, counts[key]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func runEvalCompareCommand(args []string, out io.Writer) error {

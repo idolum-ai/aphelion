@@ -203,8 +203,12 @@ aphelion eval attack-corpus generate --suite boundary_attack --mode live \
 
 The generator dedupes by normalized content, tactic tags, surface, scenario, and
 bounty class, ranks semantically interesting pressure higher, and rejects
-secret-shaped or private-looking material. Then replay that corpus against the
-subject:
+secret-shaped or private-looking material. Live generation ranks
+provider-generated attacks first; local mutators are kept as an underfill
+fallback so paid attacker calls are not crowded out by canned strings. The
+corpus records per-scenario definition hashes and selected source-kind counts,
+and replay rejects a corpus when a scenario definition has drifted. Then replay
+that corpus against the subject:
 
 ```sh
 aphelion eval run --suite boundary_attack --mode live --subject governor \

@@ -40,20 +40,22 @@ type EvalAttackCorpusOptions struct {
 }
 
 type EvalAttackCorpus struct {
-	GeneratedAt          string                 `json:"generated_at"`
-	Suite                string                 `json:"suite"`
-	Profile              string                 `json:"profile"`
-	GeneratorVersion     string                 `json:"generator_version,omitempty"`
-	ScenarioRevision     string                 `json:"scenario_revision"`
-	Seed                 int64                  `json:"seed"`
-	PerScenario          int                    `json:"per_scenario"`
-	SourceRoutes         []string               `json:"source_routes,omitempty"`
-	ScenarioCount        int                    `json:"scenario_count"`
-	AttackCount          int                    `json:"attack_count"`
-	DuplicateCount       int                    `json:"duplicate_count"`
-	RejectedCount        int                    `json:"rejected_count"`
-	ProviderFailureCount int                    `json:"provider_failure_count,omitempty"`
-	Attacks              []EvalAttackCorpusCase `json:"attacks"`
+	GeneratedAt              string                 `json:"generated_at"`
+	Suite                    string                 `json:"suite"`
+	Profile                  string                 `json:"profile"`
+	GeneratorVersion         string                 `json:"generator_version,omitempty"`
+	ScenarioRevision         string                 `json:"scenario_revision"`
+	ScenarioDefinitionHashes map[string]string      `json:"scenario_definition_hashes,omitempty"`
+	Seed                     int64                  `json:"seed"`
+	PerScenario              int                    `json:"per_scenario"`
+	SourceRoutes             []string               `json:"source_routes,omitempty"`
+	SelectedSourceKindCounts map[string]int         `json:"selected_source_kind_counts,omitempty"`
+	ScenarioCount            int                    `json:"scenario_count"`
+	AttackCount              int                    `json:"attack_count"`
+	DuplicateCount           int                    `json:"duplicate_count"`
+	RejectedCount            int                    `json:"rejected_count"`
+	ProviderFailureCount     int                    `json:"provider_failure_count,omitempty"`
+	Attacks                  []EvalAttackCorpusCase `json:"attacks"`
 }
 
 type EvalAttackCorpusCase struct {
@@ -69,6 +71,7 @@ type EvalAttackCorpusCase struct {
 	RankScore         int                    `json:"rank_score"`
 	Turns             []EvalAttackCorpusTurn `json:"turns"`
 	ScenarioRevision  string                 `json:"scenario_revision,omitempty"`
+	ScenarioHash      string                 `json:"scenario_hash,omitempty"`
 	TargetDescription string                 `json:"target_description,omitempty"`
 }
 
@@ -137,25 +140,30 @@ func GenerateEvalAttackCorpus(ctx context.Context, opts EvalAttackCorpusOptions)
 		now = time.Now().UTC()
 	}
 	corpus := EvalAttackCorpus{
-		GeneratedAt:      now.Format(time.RFC3339),
-		Suite:            opts.Suite,
-		Profile:          opts.Profile,
-		GeneratorVersion: evalAttackCorpusGeneratorVersion,
-		ScenarioRevision: evalScenarioRevisionForSuite(opts.Suite),
-		Seed:             opts.Seed,
-		PerScenario:      opts.PerScenario,
-		ScenarioCount:    len(scenarios),
+		GeneratedAt:              now.Format(time.RFC3339),
+		Suite:                    opts.Suite,
+		Profile:                  opts.Profile,
+		GeneratorVersion:         evalAttackCorpusGeneratorVersion,
+		ScenarioRevision:         evalScenarioRevisionForSuite(opts.Suite),
+		ScenarioDefinitionHashes: map[string]string{},
+		Seed:                     opts.Seed,
+		PerScenario:              opts.PerScenario,
+		ScenarioCount:            len(scenarios),
+	}
+	for _, sc := range scenarios {
+		corpus.ScenarioDefinitionHashes[sc.ID] = evalScenarioDefinitionHash(sc)
 	}
 	for _, route := range opts.AttackerRoutes {
 		corpus.SourceRoutes = append(corpus.SourceRoutes, firstNonEmptyEvalText(route.Name, route.Provider))
 	}
 	sort.Strings(corpus.SourceRoutes)
 
-	var candidates []EvalAttackCorpusCase
+	var localCandidates []EvalAttackCorpusCase
 	for _, sc := range scenarios {
-		candidates = append(candidates, evalAttackCorpusLocalCases(sc, opts.Seed, opts.Profile)...)
+		localCandidates = append(localCandidates, evalAttackCorpusLocalCases(sc, opts.Seed, opts.Profile)...)
 	}
 
+	var providerCandidates []EvalAttackCorpusCase
 	providerOutcomes := runEvalAttackCorpusGenerationJobs(ctx, opts, buildEvalAttackCorpusGenerationJobs(opts.AttackerRoutes, scenarios, opts.PerScenario))
 	for _, outcome := range providerOutcomes {
 		if outcome.err != nil {
@@ -171,12 +179,19 @@ func GenerateEvalAttackCorpus(ctx context.Context, opts EvalAttackCorpusOptions)
 			continue
 		}
 		if outcome.ok {
-			candidates = append(candidates, outcome.attack)
+			providerCandidates = append(providerCandidates, outcome.attack)
 		}
 	}
 
-	selected, duplicates, rejected := finalizeEvalAttackCorpusCases(candidates, opts.PerScenario, corpus.ScenarioRevision)
+	var selected []EvalAttackCorpusCase
+	var duplicates, rejected int
+	if opts.Mode == EvalModeLive {
+		selected, duplicates, rejected = finalizeEvalAttackCorpusCasesWithFallback(providerCandidates, localCandidates, opts.PerScenario, corpus.ScenarioRevision)
+	} else {
+		selected, duplicates, rejected = finalizeEvalAttackCorpusCases(localCandidates, opts.PerScenario, corpus.ScenarioRevision)
+	}
 	corpus.Attacks = selected
+	corpus.SelectedSourceKindCounts = evalAttackCorpusSelectedSourceKindCounts(selected)
 	corpus.DuplicateCount = duplicates
 	corpus.RejectedCount += rejected
 	corpus.AttackCount = len(selected)
@@ -351,6 +366,7 @@ func generateEvalAttackCorpusProviderCase(ctx context.Context, opts EvalAttackCo
 			parsed.SourceRoute = firstNonEmptyEvalText(route.Name, route.Provider)
 			parsed.SourceKind = "provider"
 			parsed.Seed = opts.Seed + int64(sample)
+			parsed.ScenarioHash = evalScenarioDefinitionHash(sc)
 			parsed.TargetDescription = sc.ExpectedBoundary
 			parsed.Strategy = firstNonEmptyEvalText(parsed.Strategy, "provider-generated boundary attack")
 			parsed.TacticTags = mergeEvalAttackTacticTags(parsed.TacticTags, evalAttackTacticTagsForCase(sc, parsed)...)
@@ -514,6 +530,7 @@ func evalAttackCorpusLocalCases(sc evalScenario, seed int64, profile string) []E
 			Seed:              seed,
 			Strategy:          evalAttackCorpusLocalStrategy(sc, variant.name),
 			TacticTags:        append([]string(nil), variant.tags...),
+			ScenarioHash:      evalScenarioDefinitionHash(sc),
 			TargetDescription: sc.ExpectedBoundary,
 		}
 		for idx, turn := range sc.BoundaryAttack.Turns {
@@ -620,18 +637,23 @@ func evalAttackCorpusLocalContent(sc evalScenario, turn evalBoundaryAttackTurn, 
 }
 
 func finalizeEvalAttackCorpusCases(candidates []EvalAttackCorpusCase, perScenario int, revision string) ([]EvalAttackCorpusCase, int, int) {
+	return finalizeEvalAttackCorpusCasesWithFallback(candidates, nil, perScenario, revision)
+}
+
+func finalizeEvalAttackCorpusCasesWithFallback(primary []EvalAttackCorpusCase, fallback []EvalAttackCorpusCase, perScenario int, revision string) ([]EvalAttackCorpusCase, int, int) {
 	if perScenario <= 0 {
 		perScenario = 3
 	}
 	seen := map[string]bool{}
 	duplicates := 0
 	rejected := 0
-	byScenario := map[string][]EvalAttackCorpusCase{}
-	for _, attack := range candidates {
+	primaryByScenario := map[string][]EvalAttackCorpusCase{}
+	fallbackByScenario := map[string][]EvalAttackCorpusCase{}
+	add := func(attack EvalAttackCorpusCase, byScenario map[string][]EvalAttackCorpusCase) {
 		attack = normalizeEvalAttackCorpusCase(attack, revision)
 		if !evalAttackCorpusCasePublishSafe(attack) || len(attack.Turns) == 0 {
 			rejected++
-			continue
+			return
 		}
 		key := attack.NoveltyKey
 		if key == "" {
@@ -639,31 +661,73 @@ func finalizeEvalAttackCorpusCases(candidates []EvalAttackCorpusCase, perScenari
 		}
 		if seen[key] {
 			duplicates++
-			continue
+			return
 		}
 		seen[key] = true
 		byScenario[attack.ScenarioID] = append(byScenario[attack.ScenarioID], attack)
 	}
+	for _, attack := range primary {
+		add(attack, primaryByScenario)
+	}
+	for _, attack := range fallback {
+		add(attack, fallbackByScenario)
+	}
 	var scenarioIDs []string
-	for scenarioID := range byScenario {
+	scenarioSeen := map[string]bool{}
+	for scenarioID := range primaryByScenario {
+		scenarioSeen[scenarioID] = true
 		scenarioIDs = append(scenarioIDs, scenarioID)
+	}
+	for scenarioID := range fallbackByScenario {
+		if !scenarioSeen[scenarioID] {
+			scenarioIDs = append(scenarioIDs, scenarioID)
+		}
 	}
 	sort.Strings(scenarioIDs)
 	var out []EvalAttackCorpusCase
 	for _, scenarioID := range scenarioIDs {
-		cases := byScenario[scenarioID]
-		sort.SliceStable(cases, func(i, j int) bool {
-			if cases[i].RankScore != cases[j].RankScore {
-				return cases[i].RankScore > cases[j].RankScore
-			}
-			return cases[i].ID < cases[j].ID
-		})
-		if len(cases) > perScenario {
-			cases = cases[:perScenario]
+		primaryCases := sortedEvalAttackCorpusCases(primaryByScenario[scenarioID])
+		fallbackCases := sortedEvalAttackCorpusCases(fallbackByScenario[scenarioID])
+		if len(primaryCases) > perScenario {
+			primaryCases = primaryCases[:perScenario]
 		}
-		out = append(out, cases...)
+		selected := append([]EvalAttackCorpusCase(nil), primaryCases...)
+		if len(selected) < perScenario {
+			need := perScenario - len(selected)
+			if len(fallbackCases) > need {
+				fallbackCases = fallbackCases[:need]
+			}
+			selected = append(selected, fallbackCases...)
+		}
+		out = append(out, selected...)
 	}
 	return out, duplicates, rejected
+}
+
+func sortedEvalAttackCorpusCases(cases []EvalAttackCorpusCase) []EvalAttackCorpusCase {
+	out := append([]EvalAttackCorpusCase(nil), cases...)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].RankScore != out[j].RankScore {
+			return out[i].RankScore > out[j].RankScore
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+func evalAttackCorpusSelectedSourceKindCounts(attacks []EvalAttackCorpusCase) map[string]int {
+	if len(attacks) == 0 {
+		return nil
+	}
+	counts := map[string]int{}
+	for _, attack := range attacks {
+		kind := strings.TrimSpace(attack.SourceKind)
+		if kind == "" {
+			kind = "unknown"
+		}
+		counts[kind]++
+	}
+	return counts
 }
 
 func normalizeEvalAttackCorpusCase(attack EvalAttackCorpusCase, revision string) EvalAttackCorpusCase {
@@ -674,6 +738,7 @@ func normalizeEvalAttackCorpusCase(attack EvalAttackCorpusCase, revision string)
 	attack.Strategy = strings.TrimSpace(attack.Strategy)
 	attack.TacticTags = cleanEvalAttackTacticTags(attack.TacticTags)
 	attack.ScenarioRevision = firstNonEmptyEvalText(attack.ScenarioRevision, revision)
+	attack.ScenarioHash = strings.TrimSpace(attack.ScenarioHash)
 	for i := range attack.Turns {
 		attack.Turns[i].Surface = firstNonEmptyEvalText(attack.Turns[i].Surface, "telegram_dm")
 		attack.Turns[i].Content = strings.TrimSpace(attack.Turns[i].Content)
@@ -925,6 +990,49 @@ func evalAttackCorpusContainsLongEncodedBlob(text string) bool {
 	return false
 }
 
+func evalScenarioDefinitionHash(sc evalScenario) string {
+	var parts []string
+	parts = append(parts,
+		sc.ID,
+		sc.Name,
+		sc.Domain,
+		sc.AuthorityClass,
+		sc.TransportSurface,
+		sc.Prompt,
+		sc.ExpectedBoundary,
+		sc.PositiveCandidate,
+		strings.Join(sc.PressureVariants, "\x00"),
+		strings.Join(sc.ForbiddenPhrases, "\x00"),
+	)
+	for _, group := range sc.RequiredAnyPhrases {
+		parts = append(parts, "required:"+strings.Join(group, "\x00"))
+	}
+	for _, rule := range sc.PrecedenceRules {
+		parts = append(parts,
+			"precedence:"+strings.Join(rule.FirstAny, "\x00"),
+			strings.Join(rule.ThenAny, "\x00"),
+			rule.Class,
+			rule.Reason,
+		)
+	}
+	if sc.BoundaryAttack != nil {
+		parts = append(parts, "boundary", sc.BoundaryAttack.BountyClass, sc.BoundaryAttack.FixtureID)
+		for _, turn := range sc.BoundaryAttack.Turns {
+			parts = append(parts, turn.Surface, turn.ScriptedInput, turn.Strategy)
+		}
+	}
+	fixtureNames := make([]string, 0, len(sc.FailureFixtures))
+	for name := range sc.FailureFixtures {
+		fixtureNames = append(fixtureNames, name)
+	}
+	sort.Strings(fixtureNames)
+	for _, name := range fixtureNames {
+		parts = append(parts, "fixture:"+name, sc.FailureFixtures[name])
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x1f")))
+	return fmt.Sprintf("sha256:%x", sum[:])
+}
+
 func evalBoundaryAttackTurnSurface(sc evalScenario, turnIndex int) string {
 	if sc.BoundaryAttack == nil || turnIndex < 0 || turnIndex >= len(sc.BoundaryAttack.Turns) {
 		return "telegram_dm"
@@ -982,8 +1090,17 @@ func validateEvalAttackCorpusForRun(opts EvalOptions, scenarios []evalScenario) 
 		return fmt.Errorf("attack corpus scenario revision %q does not match current %q", opts.AttackCorpus.ScenarioRevision, evalScenarioRevisionForSuite(EvalSuiteBoundaryAttack))
 	}
 	for _, sc := range scenarios {
+		currentHash := evalScenarioDefinitionHash(sc)
+		if got := strings.TrimSpace(opts.AttackCorpus.ScenarioDefinitionHashes[sc.ID]); got != "" && got != currentHash {
+			return fmt.Errorf("attack corpus scenario %s definition hash %q does not match current %q", sc.ID, got, currentHash)
+		}
 		if len(evalAttackCorpusCasesForScenario(opts.AttackCorpus, sc.ID, opts.MaxAttacksPerScenario)) == 0 {
 			return fmt.Errorf("attack corpus has no replay cases for scenario %s", sc.ID)
+		}
+		for _, attack := range evalAttackCorpusCasesForScenario(opts.AttackCorpus, sc.ID, opts.MaxAttacksPerScenario) {
+			if got := strings.TrimSpace(attack.ScenarioHash); got != "" && got != currentHash {
+				return fmt.Errorf("attack corpus case %s scenario %s hash %q does not match current %q", strings.TrimSpace(attack.ID), sc.ID, got, currentHash)
+			}
 		}
 	}
 	return nil
@@ -1002,5 +1119,8 @@ func LoadEvalAttackCorpus(path string) (*EvalAttackCorpus, error) {
 		corpus.Attacks[i] = normalizeEvalAttackCorpusCase(corpus.Attacks[i], corpus.ScenarioRevision)
 	}
 	corpus.AttackCount = len(corpus.Attacks)
+	if len(corpus.SelectedSourceKindCounts) == 0 {
+		corpus.SelectedSourceKindCounts = evalAttackCorpusSelectedSourceKindCounts(corpus.Attacks)
+	}
 	return &corpus, nil
 }

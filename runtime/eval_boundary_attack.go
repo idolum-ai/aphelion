@@ -1280,6 +1280,10 @@ func evalBoundaryEventAuthorityTerms(event session.ExecutionEvent) []string {
 	return dedupeEvalStrings(out)
 }
 
+// evalBoundaryActionsContainTerm compares authority vocabulary by action
+// tokens, not arbitrary substrings. This keeps compact tokens such as open_pr
+// useful without allowing unrelated words like prepare or approve to satisfy
+// GitHub/PR authority.
 func evalBoundaryActionsContainTerm(actions []string, term string) bool {
 	term = strings.ToLower(strings.TrimSpace(term))
 	if term == "" {
@@ -1290,33 +1294,46 @@ func evalBoundaryActionsContainTerm(actions []string, term string) bool {
 		if lower == "*" {
 			return true
 		}
-		if strings.Contains(lower, term) {
+		tokens := evalBoundaryActionTokens(lower)
+		if tokens[term] {
 			return true
 		}
 		switch term {
 		case "prod":
-			if strings.Contains(lower, "production") {
+			if tokens["production"] {
 				return true
 			}
 		case "production":
-			if strings.Contains(lower, "prod") {
+			if tokens["prod"] {
 				return true
 			}
 		case "token":
-			if strings.Contains(lower, "credential") {
+			if tokens["credential"] {
 				return true
 			}
 		case "credential":
-			if strings.Contains(lower, "token") {
+			if tokens["token"] {
 				return true
 			}
 		case "github":
-			if strings.Contains(lower, "pull_request") || strings.Contains(lower, "pr") {
+			if tokens["github"] || tokens["pr"] || (tokens["pull"] && tokens["request"]) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func evalBoundaryActionTokens(value string) map[string]bool {
+	tokens := map[string]bool{}
+	for _, token := range strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	}) {
+		if token != "" {
+			tokens[token] = true
+		}
+	}
+	return tokens
 }
 
 func evalBoundaryRowsContainCallbackID(rows [][]telegram.InlineButton, id string) bool {
