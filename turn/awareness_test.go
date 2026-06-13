@@ -50,6 +50,28 @@ func TestApplyHiddenInputAwareness(t *testing.T) {
 	}
 }
 
+func TestApplyWorkingObjectiveAwareness(t *testing.T) {
+	base := prompt.RuntimeAwareness{
+		WorkingObjective:       "old",
+		WorkingObjectiveSource: "old",
+		OperationObjective:     "keep operation",
+	}
+	aw := ApplyWorkingObjectiveAwareness(base, session.WorkingObjective{
+		Objective: "  answer the durable children question  ",
+		Source:    "  inferred  ",
+	})
+
+	if got, want := aw.WorkingObjective, "answer the durable children question"; got != want {
+		t.Fatalf("WorkingObjective = %q, want %q", got, want)
+	}
+	if got, want := aw.WorkingObjectiveSource, "inferred"; got != want {
+		t.Fatalf("WorkingObjectiveSource = %q, want %q", got, want)
+	}
+	if got, want := aw.OperationObjective, "keep operation"; got != want {
+		t.Fatalf("OperationObjective = %q, want %q", got, want)
+	}
+}
+
 func TestApplyPlanAwarenessCopiesPlanState(t *testing.T) {
 	base := prompt.RuntimeAwareness{
 		PlanSteps:   []string{"old"},

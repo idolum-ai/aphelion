@@ -72,10 +72,14 @@ func (r *Runtime) runInteractiveDMTurn(ctx context.Context, input interactiveDMT
 }
 
 func (r *Runtime) runInteractiveDMTurnResult(ctx context.Context, input interactiveDMTurnAssemblyInput) (*turn.Result, error) {
+	msg := input.Msg
+	key := input.Key
+	r.recordWorkingObjectiveForInbound(key, msg)
+
 	assembled, err := r.assembleInteractiveLikeTurn(ctx, interactiveLikeAssemblyInput{
 		Scope:                input.Scope,
-		Key:                  input.Key,
-		Msg:                  input.Msg,
+		Key:                  key,
+		Msg:                  msg,
 		RunKind:              session.TurnRunKindInteractive,
 		Channel:              "telegram",
 		PrincipalRole:        string(input.Actor.Role),
@@ -101,9 +105,6 @@ func (r *Runtime) runInteractiveDMTurnResult(ctx context.Context, input interact
 	machine := assembled.Machine
 	defer r.emitTurnAudit(audit)
 
-	msg := input.Msg
-	key := input.Key
-	r.recordWorkingObjectiveForInbound(key, msg)
 	actor := input.Actor
 
 	sess.ChatType = "dm"

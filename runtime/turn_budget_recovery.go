@@ -282,15 +282,14 @@ func (r *Runtime) turnBudgetRecoveryScheduledAttempts(key session.SessionKey, sc
 func (r *Runtime) turnBudgetRecoveryScope(key session.SessionKey, msg core.InboundMessage, result *turn.Result) (string, map[string]any) {
 	opState := session.OperationState{}
 	if result != nil {
-		opState = result.OperationState
+		opState = session.NormalizeOperationState(result.OperationState)
 	}
-	if !opState.Active() && r != nil && r.store != nil {
+	if !operationStateRecoverableForBudgetRecovery(opState) && r != nil && r.store != nil {
 		if _, stored, exists, err := r.store.PlanAndOperationStateIfExists(key); err == nil && exists {
-			opState = stored
+			opState = session.NormalizeOperationState(stored)
 		}
 	}
-	opState = session.NormalizeOperationState(opState)
-	if opState.Active() {
+	if operationStateRecoverableForBudgetRecovery(opState) {
 		if phase, index, ok := currentOperationPhaseForBudgetRecovery(opState); ok {
 			fingerprint := operationPhaseFingerprint(opState, phase, index)
 			scope := "operation:" + firstNonEmptyContinuation(opState.ID, turnBudgetRecoveryShortHash(opState.Objective)) +
@@ -350,6 +349,50 @@ func (r *Runtime) turnBudgetRecoveryScope(key session.SessionKey, msg core.Inbou
 	}
 }
 
+func operationStateRecoverableForBudgetRecovery(opState session.OperationState) bool {
+	opState = session.NormalizeOperationState(opState)
+	if !opState.Active() {
+		return false
+	}
+	switch opState.Status {
+	case session.OperationStatusActive, session.OperationStatusBlocked:
+		return true
+	case session.OperationStatusCompleted, session.OperationStatusFailed, session.OperationStatusIdle:
+		return false
+	case "":
+		if _, _, ok := currentOperationPhaseForBudgetRecovery(opState); ok {
+			return true
+		}
+		return operationProposalRecoverableForBudgetRecovery(opState.Proposal)
+	default:
+		return false
+	}
+}
+
+func operationProposalRecoverableForBudgetRecovery(proposal session.OperationProposal) bool {
+	if !proposal.Active() {
+		return false
+	}
+	switch proposal.Status {
+	case "", session.ProposalStatusPending, session.ProposalStatusApproved:
+		return true
+	default:
+		return false
+	}
+}
+
+func operationPhaseRecoverableForBudgetRecovery(phase session.OperationPhase) bool {
+	if strings.TrimSpace(phase.ID) == "" && strings.TrimSpace(phase.Summary) == "" {
+		return false
+	}
+	switch phase.Status {
+	case "", session.PlanStatusPending, session.PlanStatusInProgress:
+		return true
+	default:
+		return false
+	}
+}
+
 func currentOperationPhaseForBudgetRecovery(opState session.OperationState) (session.OperationPhase, int, bool) {
 	opState = session.NormalizeOperationState(opState)
 	plan := opState.PhasePlan
@@ -359,13 +402,16 @@ func currentOperationPhaseForBudgetRecovery(opState session.OperationState) (ses
 	if currentID := strings.TrimSpace(plan.CurrentPhaseID); currentID != "" {
 		for i, phase := range plan.Phases {
 			if strings.TrimSpace(phase.ID) == currentID {
-				return phase, i, true
+				if operationPhaseRecoverableForBudgetRecovery(phase) {
+					return phase, i, true
+				}
+				break
 			}
 		}
 	}
 	for _, status := range []session.PlanStatus{session.PlanStatusInProgress, session.PlanStatusPending, ""} {
 		for i, phase := range plan.Phases {
-			if phase.Status == status {
+			if phase.Status == status && operationPhaseRecoverableForBudgetRecovery(phase) {
 				return phase, i, true
 			}
 		}
@@ -623,7 +669,8 @@ func appendBudgetDigestTokenParts(parts *[]string, payload map[string]any) {
 func renderTurnBudgetRecoveryPrompt(recovery *core.TurnRecovery, scope string, hop int, maxHops int, digest turnBudgetRecoveryDigest) string {
 	card := newContinuationApprovalPromptCard("Recover", fmt.Sprintf("budget hop %d/%d", hop, maxHops), 0)
 	card.addListSection("Re-check", []string{
-		"Re-latch from persisted operation, continuation, plan, recent execution events, and evidence artifacts.",
+		"Reconcile the current input and working objective against persisted operation, continuation, plan, recent execution events, and evidence artifacts.",
+		"Treat completed or failed operations as background evidence only; do not recover into terminal work.",
 		"Do not rely on transient context from the exhausted response; discard pending tool calls and re-decide from durable state.",
 		"Read the smallest current-state slice needed before acting; avoid broad logs, large artifacts, or repeated full-file sweeps.",
 	})

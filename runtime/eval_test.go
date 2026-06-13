@@ -89,6 +89,7 @@ func TestTrajectoryEvalScenariosCoverWatchedFailureCandidates(t *testing.T) {
 	}
 	for _, want := range []string{
 		"trajectory_budget_recovery_resumes_leased_work",
+		"trajectory_recovery_active_conversation_over_stale_thread_context",
 		"trajectory_terminal_provider_failure_preserves_recovery",
 		"trajectory_ingress_rejection_preserves_leased_recovery",
 		"trajectory_compaction_relatched_goal_without_user_restate",
@@ -1187,8 +1188,9 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	if report.Failed || report.HardFailureCount != 0 {
 		t.Fatalf("trajectory report failed: hard=%d results=%#v", report.HardFailureCount, report.Results)
 	}
-	if report.ScenarioCount != 13 || report.ResultCount != 13 {
-		t.Fatalf("scenario/result count = %d/%d, want 13/13", report.ScenarioCount, report.ResultCount)
+	wantCount := len(trajectoryEvalScenarios())
+	if report.ScenarioCount != wantCount || report.ResultCount != wantCount {
+		t.Fatalf("scenario/result count = %d/%d, want %d/%d", report.ScenarioCount, report.ResultCount, wantCount, wantCount)
 	}
 	for _, result := range report.Results {
 		for _, want := range []string{core.ExecutionEventTurnStarted, core.ExecutionEventDeliveryFinalSent, core.ExecutionEventTurnCompleted} {

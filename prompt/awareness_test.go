@@ -11,15 +11,18 @@ func TestRuntimeAwarenessRendersSharedSectionsBeforeRoleDelta(t *testing.T) {
 	t.Parallel()
 
 	got := renderGovernorRuntimeAwarenessBlock(RuntimeAwareness{
-		SessionKind:           "interactive",
-		RunKind:               "interactive",
-		Channel:               "telegram",
-		EventOrigin:           "message",
-		ActiveProvider:        "openai",
-		HiddenInputsActive:    true,
-		HiddenInputCategories: []string{"semantic_recurrence"},
-		GovernorProvider:      "openai",
-		GovernorModel:         "gpt-5.5",
+		SessionKind:            "interactive",
+		RunKind:                "interactive",
+		Channel:                "telegram",
+		EventOrigin:            "message",
+		ActiveProvider:         "openai",
+		HiddenInputsActive:     true,
+		HiddenInputCategories:  []string{"semantic_recurrence"},
+		WorkingObjective:       "answer durable children question",
+		WorkingObjectiveSource: "inferred",
+		OperationObjective:     "stale completed thread operation",
+		GovernorProvider:       "openai",
+		GovernorModel:          "gpt-5.5",
 	})
 
 	assertSectionOrder(t, got, []string{
@@ -28,6 +31,9 @@ func TestRuntimeAwarenessRendersSharedSectionsBeforeRoleDelta(t *testing.T) {
 		"- session_kind: interactive",
 		"### Shared Turn State",
 		"- active_provider: openai",
+		"- working_objective: answer durable children question",
+		"- working_objective_source: inferred",
+		"- operation_objective: stale completed thread operation",
 		"### Governor Delta",
 		"- governor_provider: openai",
 	})

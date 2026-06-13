@@ -50,7 +50,7 @@ func TestEvalListCommandSupportsTrajectorySuite(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode trajectory list JSON: %v\n%s", err, out.String())
 	}
-	if decoded.Suite != "trajectory" || len(decoded.Scenarios) != 13 {
+	if decoded.Suite != "trajectory" || len(decoded.Scenarios) != 14 {
 		t.Fatalf("decoded trajectory list = %#v", decoded)
 	}
 }
