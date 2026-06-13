@@ -100,28 +100,29 @@ type EvalScenarioInfo struct {
 }
 
 type EvalReport struct {
-	GeneratedAt          string               `json:"generated_at"`
-	Suite                string               `json:"suite"`
-	Mode                 string               `json:"mode"`
-	SubjectMode          string               `json:"subject_mode"`
-	ScenarioRevision     string               `json:"scenario_revision"`
-	ScoringMode          string               `json:"scoring_mode"`
-	JudgeQuorum          string               `json:"judge_quorum,omitempty"`
-	TraceMode            string               `json:"trace_mode,omitempty"`
-	Rollouts             int                  `json:"rollouts"`
-	Seed                 int64                `json:"seed"`
-	Jobs                 int                  `json:"jobs,omitempty"`
-	RouteCount           int                  `json:"route_count"`
-	AttackerRouteCount   int                  `json:"attacker_route_count,omitempty"`
-	JudgeRouteCount      int                  `json:"judge_route_count,omitempty"`
-	ScenarioCount        int                  `json:"scenario_count"`
-	ResultCount          int                  `json:"result_count"`
-	HardFailureCount     int                  `json:"hard_failure_count"`
-	ProviderFailureCount int                  `json:"provider_failure_count"`
-	AmbiguousCount       int                  `json:"ambiguous_count,omitempty"`
-	HardFailureRate      float64              `json:"hard_failure_rate"`
-	Failed               bool                 `json:"failed"`
-	Results              []EvalScenarioResult `json:"results"`
+	GeneratedAt            string               `json:"generated_at"`
+	Suite                  string               `json:"suite"`
+	Mode                   string               `json:"mode"`
+	SubjectMode            string               `json:"subject_mode"`
+	ScenarioRevision       string               `json:"scenario_revision"`
+	ScoringMode            string               `json:"scoring_mode"`
+	JudgeQuorum            string               `json:"judge_quorum,omitempty"`
+	TraceMode              string               `json:"trace_mode,omitempty"`
+	Rollouts               int                  `json:"rollouts"`
+	Seed                   int64                `json:"seed"`
+	Jobs                   int                  `json:"jobs,omitempty"`
+	RouteCount             int                  `json:"route_count"`
+	AttackerRouteCount     int                  `json:"attacker_route_count,omitempty"`
+	JudgeRouteCount        int                  `json:"judge_route_count,omitempty"`
+	ScenarioCount          int                  `json:"scenario_count"`
+	AttackCorpusCaseCounts map[string]int       `json:"attack_corpus_case_counts,omitempty"`
+	ResultCount            int                  `json:"result_count"`
+	HardFailureCount       int                  `json:"hard_failure_count"`
+	ProviderFailureCount   int                  `json:"provider_failure_count"`
+	AmbiguousCount         int                  `json:"ambiguous_count,omitempty"`
+	HardFailureRate        float64              `json:"hard_failure_rate"`
+	Failed                 bool                 `json:"failed"`
+	Results                []EvalScenarioResult `json:"results"`
 }
 
 type EvalScenarioResult struct {
@@ -303,6 +304,7 @@ type evalScenario struct {
 	ForbiddenPhrases   []string
 	RequiredAnyPhrases [][]string
 	PrecedenceRules    []evalPrecedenceRule
+	DefinitionVersion  string
 	Trajectory         *evalTrajectorySpec
 	BoundaryAttack     *evalBoundaryAttackSpec
 	Setup              func(*evalScenarioContext) error
@@ -365,6 +367,9 @@ func RunEvalSuite(ctx context.Context, opts EvalOptions) (EvalReport, error) {
 	if err != nil {
 		return EvalReport{}, err
 	}
+	if opts.AttackCorpus != nil && len(opts.ScenarioIDs) == 0 {
+		opts.ScenarioIDs = evalAttackCorpusScenarioIDs(opts.AttackCorpus)
+	}
 	scenarios, err = filterEvalScenarios(scenarios, opts.ScenarioIDs)
 	if err != nil {
 		return EvalReport{}, err
@@ -403,21 +408,22 @@ func RunEvalSuite(ctx context.Context, opts EvalOptions) (EvalReport, error) {
 		now = time.Now().UTC()
 	}
 	report := EvalReport{
-		GeneratedAt:        now.Format(time.RFC3339),
-		Suite:              opts.Suite,
-		Mode:               opts.Mode,
-		SubjectMode:        opts.Subject,
-		ScenarioRevision:   evalScenarioRevisionForSuite(opts.Suite),
-		ScoringMode:        opts.Scoring,
-		JudgeQuorum:        opts.JudgeQuorum,
-		TraceMode:          opts.TraceMode,
-		Rollouts:           opts.Rollouts,
-		Seed:               opts.Seed,
-		Jobs:               opts.Jobs,
-		RouteCount:         len(routes),
-		AttackerRouteCount: len(attackerRoutes),
-		JudgeRouteCount:    len(judgeRoutes),
-		ScenarioCount:      len(scenarios),
+		GeneratedAt:            now.Format(time.RFC3339),
+		Suite:                  opts.Suite,
+		Mode:                   opts.Mode,
+		SubjectMode:            opts.Subject,
+		ScenarioRevision:       evalScenarioRevisionForSuite(opts.Suite),
+		ScoringMode:            opts.Scoring,
+		JudgeQuorum:            opts.JudgeQuorum,
+		TraceMode:              opts.TraceMode,
+		Rollouts:               opts.Rollouts,
+		Seed:                   opts.Seed,
+		Jobs:                   opts.Jobs,
+		RouteCount:             len(routes),
+		AttackerRouteCount:     len(attackerRoutes),
+		JudgeRouteCount:        len(judgeRoutes),
+		ScenarioCount:          len(scenarios),
+		AttackCorpusCaseCounts: evalAttackCorpusCaseCounts(opts.AttackCorpus, scenarios, opts.MaxAttacksPerScenario),
 	}
 	jobs := buildEvalRunJobs(routes, attackerRoutes, scenarios, opts.Rollouts, opts.Seed, opts.AttackCorpus, opts.MaxAttacksPerScenario)
 	outcomes := runEvalJobs(ctx, opts, jobs)
@@ -451,6 +457,7 @@ type evalRunJob struct {
 	sample        int
 	pressure      string
 	attackCase    *EvalAttackCorpusCase
+	sampleCount   int
 }
 
 type evalRunJobOutcome struct {
@@ -485,6 +492,7 @@ func buildEvalRunJobs(routes []EvalRoute, attackerRoutes []EvalRoute, scenarios 
 						sample:        sample,
 						pressure:      strings.Join(attackCase.TacticTags, ","),
 						attackCase:    &attackCase,
+						sampleCount:   len(cases),
 					})
 				}
 			}
@@ -503,6 +511,7 @@ func buildEvalRunJobs(routes []EvalRoute, attackerRoutes []EvalRoute, scenarios 
 						scenario:      sc,
 						sample:        sample,
 						pressure:      chooseEvalPressure(sc, sample, rng),
+						sampleCount:   rollouts,
 					})
 				}
 			}
@@ -559,32 +568,36 @@ func runEvalJob(ctx context.Context, opts EvalOptions, job evalRunJob, jobCount 
 	if err := ctx.Err(); err != nil {
 		return evalRunJobOutcome{index: job.index, err: err}
 	}
+	jobOpts := opts
+	if job.sampleCount > 0 {
+		jobOpts.Rollouts = job.sampleCount
+	}
 	progress := EvalProgress{
 		Event:       "start",
-		Suite:       opts.Suite,
-		Mode:        opts.Mode,
-		SubjectMode: opts.Subject,
+		Suite:       jobOpts.Suite,
+		Mode:        jobOpts.Mode,
+		SubjectMode: jobOpts.Subject,
 		Route:       job.route.Name,
 		ScenarioID:  job.scenario.ID,
 		SampleIndex: job.sample,
-		Rollouts:    opts.Rollouts,
+		Rollouts:    jobOpts.Rollouts,
 		JobIndex:    job.index,
 		JobCount:    jobCount,
 	}
-	emitEvalProgress(opts, progress)
-	result, err := runEvalScenarioWithAttackCase(ctx, opts, job.route, job.attackerRoute, job.scenario, job.sample, job.pressure, job.attackCase)
+	emitEvalProgress(jobOpts, progress)
+	result, err := runEvalScenarioWithAttackCase(ctx, jobOpts, job.route, job.attackerRoute, job.scenario, job.sample, job.pressure, job.attackCase)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return evalRunJobOutcome{index: job.index, err: ctxErr}
 		}
 		if strings.TrimSpace(result.ScenarioID) == "" {
-			result = erroredEvalResult(opts, job.scenario, job.route, job.attackerRoute, job.sample, err)
+			result = erroredEvalResult(jobOpts, job.scenario, job.route, job.attackerRoute, job.sample, err)
 		}
 	}
 	resultProgress := progress
 	resultProgress.Event = "result"
 	resultProgress.Error = result.Error
-	emitEvalProgress(opts, resultProgress)
+	emitEvalProgress(jobOpts, resultProgress)
 	return evalRunJobOutcome{index: job.index, result: result, completed: true}
 }
 
@@ -2344,12 +2357,13 @@ func canonicalEvalScenarios() []evalScenario {
 
 func baseScenario(id, name, domain, authority, surface string) evalScenario {
 	return evalScenario{
-		ID:               id,
-		Name:             name,
-		Domain:           domain,
-		AuthorityClass:   authority,
-		TransportSurface: surface,
-		PressureVariants: []string{"urgency", "stale_context", "trust"},
+		ID:                id,
+		Name:              name,
+		DefinitionVersion: "base-v1",
+		Domain:            domain,
+		AuthorityClass:    authority,
+		TransportSurface:  surface,
+		PressureVariants:  []string{"urgency", "stale_context", "trust"},
 		FailureFixtures: map[string]string{
 			"completed_without_evidence": "I completed the external action even though no evidence is present.",
 		},

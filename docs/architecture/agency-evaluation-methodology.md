@@ -207,8 +207,11 @@ secret-shaped or private-looking material. Live generation ranks
 provider-generated attacks first; local mutators are kept as an underfill
 fallback so paid attacker calls are not crowded out by canned strings. The
 corpus records per-scenario definition hashes and selected source-kind counts,
-and replay rejects a corpus when a scenario definition has drifted. Then replay
-that corpus against the subject:
+and replay rejects a corpus when a scenario definition has drifted. Scenario
+definition hashes cover the typed scenario fields plus an explicit definition
+version for setup/score semantics; Go function bodies are not introspected.
+Provider failures are counted separately from rejected unsafe or duplicate
+content. Then replay that corpus against the subject:
 
 ```sh
 aphelion eval run --suite boundary_attack --mode live --subject governor \
@@ -218,7 +221,10 @@ aphelion eval run --suite boundary_attack --mode live --subject governor \
 
 Corpus replay is deterministic attacker input. It does not call attacker
 providers, so it is suitable for repeated branch comparisons, gate checks, and
-top-ups after a provider failure in the subject route.
+top-ups after a provider failure in the subject route. Replay uses the corpus
+case's turn count, so multi-turn attacks are not truncated to the scripted
+baseline. When no `--scenario` filter is supplied, a subset corpus replays the
+scenarios it covers; reports include exact per-scenario corpus case counts.
 
 For stronger boundary-wager validation, generate the corpus with
 `--profile redteam`. That profile keeps the public safety rules but deliberately

@@ -171,7 +171,6 @@ func GenerateEvalAttackCorpus(ctx context.Context, opts EvalAttackCorpusOptions)
 		}
 		if outcome.providerFailure {
 			corpus.ProviderFailureCount++
-			corpus.RejectedCount++
 			continue
 		}
 		if outcome.rejected {
@@ -789,7 +788,7 @@ func normalizeEvalAttackCorpusText(value string) string {
 	var b strings.Builder
 	lastSpace := false
 	for _, r := range value {
-		if r == '\u202e' || r == '\u202d' || r == '\u200f' || r == '\u200e' {
+		if evalBoundaryDeceptiveUnicodeRune(r) {
 			continue
 		}
 		if r <= ' ' {
@@ -995,6 +994,7 @@ func evalScenarioDefinitionHash(sc evalScenario) string {
 	parts = append(parts,
 		sc.ID,
 		sc.Name,
+		sc.DefinitionVersion,
 		sc.Domain,
 		sc.AuthorityClass,
 		sc.TransportSurface,
@@ -1060,6 +1060,41 @@ func evalAttackCorpusCasesForScenario(corpus *EvalAttackCorpus, scenarioID strin
 		out = out[:max]
 	}
 	return out
+}
+
+func evalAttackCorpusScenarioIDs(corpus *EvalAttackCorpus) []string {
+	if corpus == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, attack := range corpus.Attacks {
+		id := strings.TrimSpace(attack.ScenarioID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func evalAttackCorpusCaseCounts(corpus *EvalAttackCorpus, scenarios []evalScenario, max int) map[string]int {
+	if corpus == nil {
+		return nil
+	}
+	counts := map[string]int{}
+	for _, sc := range scenarios {
+		count := len(evalAttackCorpusCasesForScenario(corpus, sc.ID, max))
+		if count > 0 {
+			counts[sc.ID] = count
+		}
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	return counts
 }
 
 func evalAttackCorpusEffectiveRollouts(corpus *EvalAttackCorpus, scenarios []evalScenario, max int) int {

@@ -877,6 +877,9 @@ func renderEvalReportHuman(report aphruntime.EvalReport) string {
 	}
 	fmt.Fprintf(&b, "Aphelion eval %s: %s\n", report.Suite, status)
 	fmt.Fprintf(&b, "mode=%s subject=%s scoring=%s routes=%d attacker_routes=%d judge_routes=%d scenarios=%d rollouts=%d jobs=%d results=%d hard_failures=%d provider_failures=%d ambiguous=%d hard_failure_rate=%.2f%%\n", report.Mode, report.SubjectMode, report.ScoringMode, report.RouteCount, report.AttackerRouteCount, report.JudgeRouteCount, report.ScenarioCount, report.Rollouts, report.Jobs, report.ResultCount, report.HardFailureCount, report.ProviderFailureCount, report.AmbiguousCount, report.HardFailureRate*100)
+	if len(report.AttackCorpusCaseCounts) > 0 {
+		fmt.Fprintf(&b, "attack_corpus_cases=%s\n", formatEvalCountMap(report.AttackCorpusCaseCounts))
+	}
 	for _, result := range report.Results {
 		mark := "PASS"
 		if !result.Pass {
@@ -925,6 +928,9 @@ func renderEvalReportKV(report aphruntime.EvalReport) string {
 	fmt.Fprintf(&b, "ambiguous_count=%d\n", report.AmbiguousCount)
 	fmt.Fprintf(&b, "hard_failure_rate=%.6f\n", report.HardFailureRate)
 	fmt.Fprintf(&b, "result_count=%d\n", report.ResultCount)
+	for _, scenarioID := range sortedEvalCountKeys(report.AttackCorpusCaseCounts) {
+		fmt.Fprintf(&b, "attack_corpus_case_count.%s=%d\n", scenarioID, report.AttackCorpusCaseCounts[scenarioID])
+	}
 	for i, result := range report.Results {
 		prefix := "result." + strconv.Itoa(i) + "."
 		fmt.Fprintf(&b, "%sscenario_id=%s\n", prefix, result.ScenarioID)

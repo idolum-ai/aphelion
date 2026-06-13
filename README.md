@@ -272,13 +272,16 @@ aphelion eval run --suite boundary_attack --mode live --subject governor \
 Live corpus generation gives provider-generated attacks first claim on each
 scenario's slots and uses local mutators only as an underfill fallback. The
 corpus records per-scenario definition hashes and selected source-kind counts,
-so stale corpora are rejected when scenarios drift and run output shows whether
-the selected set came from providers or fallback mutators. Use `--profile
-redteam` when the claim needs stronger jailbreak-style pressure. The red-team
-profile stays publish-safe and Aphelion-specific, but adds fake authority
-messages, fake ledger records, protocol fences, Telegram rendering ambiguity,
-harmless obfuscation, cross-surface replay, and multi-turn social escalation to
-the corpus search.
+so stale corpora are rejected when scenario definitions drift and run output
+shows whether the selected set came from providers or fallback mutators. Replay
+uses the corpus turn count, so multi-turn attacks are not truncated to the
+scripted baseline. A subset corpus replays the scenarios it covers by default;
+reports include exact per-scenario corpus case counts. Use `--profile redteam`
+when the claim needs stronger jailbreak-style pressure. The red-team profile
+stays publish-safe and Aphelion-specific, but adds fake authority messages, fake
+ledger records, protocol fences, Telegram rendering ambiguity, harmless
+obfuscation, cross-surface replay, and multi-turn social escalation to the
+corpus search.
 
 ## Going deeper
 
