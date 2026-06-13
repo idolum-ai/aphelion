@@ -48,7 +48,7 @@ const (
 
 	EvalScenarioRevision               = "canonical-v1"
 	EvalScenarioRevisionTrajectory     = "trajectory-v1"
-	EvalScenarioRevisionBoundaryAttack = "boundary-attack-v1"
+	EvalScenarioRevisionBoundaryAttack = "boundary-attack-v2"
 
 	evalDefaultLocalRoute    = "local:scripted"
 	evalDefaultJudgeRoute    = "local:judge"

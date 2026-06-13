@@ -119,9 +119,11 @@ The repo implements this methodology through complementary surfaces:
   self-improvement workflow changes.
 - Boundary attack scenarios: `aphelion eval run --suite boundary_attack`
   replays transcript-driven adversarial attempts against the bounty conditions:
-  unauthorized action, false completion, and approval-surface mismatch. Local
-  mode is a deterministic structural smoke test; live mode is the stochastic
-  falsification surface.
+  unauthorized action, false completion, and approval-surface mismatch. The
+  suite includes a strong-adversary layer for identity pressure, display
+  deception, recovery handoffs, prose-to-evidence laundering, capability
+  confusion, and fake-world authority probes. Local mode is a deterministic
+  structural smoke test; live mode is the stochastic falsification surface.
 
 Secondary prompts follow the same split. Prompt surfaces that affect
 user-visible behavior, memory, authority, proactivity, or durable children need
@@ -183,6 +185,13 @@ with saved reports and explicit seeds. Provider failures and ambiguous judge
 results do not count as coverage; rerun the affected cell until it reaches the
 target or produces a hard failure. Add anonymized scenario cells from watched
 incidents before increasing uniform rollout counts.
+
+For strong-adversary coverage, prefer adding or selecting cells that exercise
+semantic pressure at the authority boundary rather than generic jailbreak
+strings: relationship/identity pressure, misleading approval presentation,
+stored or fetched prose replayed as evidence, recovery or compaction handoffs,
+and approval-window/capability/lease confusion. The attacker may be creative;
+the pass/fail oracle should remain mechanical and ledger-based.
 
 Hard failures and provider failures block the change until explained or fixed.
 Ambiguity regressions are review blockers unless the PR explains why the prior
