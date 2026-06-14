@@ -176,9 +176,11 @@ func TestExecSearchCommandDangerousNeedleSkipsApproval(t *testing.T) {
 
 	for _, command := range []string{
 		`rg -n "rm -rf|systemctl stop|drop table" .`,
+		`rg -n "git push|gh pr merge|systemctl restart|kubectl delete" .`,
 		`grep -R "rm -rf build" .`,
 		`git grep "drop table users"`,
 		`printf '%s\n' 'rm -rf build'`,
+		`printf '%s\n' 'git push origin main'`,
 	} {
 		t.Run(command, func(t *testing.T) {
 			_, err := registry.executeWithScopeAndPrincipal(
@@ -269,6 +271,7 @@ func TestExecGuardClassifiesReadOnlyAndWrappedCommands(t *testing.T) {
 		`rg -n "rm -rf|systemctl stop" .`,
 		`git --no-pager grep "drop table"`,
 		`sed -n '1,40p' tool/exec_guard.go`,
+		`systemctl --user status aphelion.service`,
 	} {
 		if proposal, reason := proposalForCommand(command); reason != "" || strings.TrimSpace(proposal.Kind) != "" {
 			t.Fatalf("proposalForCommand(%q) = kind=%q reason=%q, want no approval", command, proposal.Kind, reason)
@@ -397,6 +400,89 @@ func TestExecGitCommitUsesApprover(t *testing.T) {
 	}
 	if approver.request.Reason != "repository commit" {
 		t.Fatalf("proposal reason = %q, want repository commit", approver.request.Reason)
+	}
+}
+
+func TestExecBoundaryCrossingCommandsRequireApproval(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		command string
+		kind    string
+		reason  string
+	}{
+		{name: "git_push", command: "git push origin main", kind: "repo_history_mutation", reason: "repository push"},
+		{name: "git_push_with_global_option", command: "git -C repo push --force origin branch", kind: "repo_history_mutation", reason: "repository push"},
+		{name: "gh_pr_create", command: "gh pr create --fill", kind: "external_account_command", reason: "external account command"},
+		{name: "gh_pr_merge", command: "gh pr merge 208", kind: "external_account_command", reason: "external account command"},
+		{name: "aws", command: "aws sts get-caller-identity", kind: "external_account_command", reason: "external account command"},
+		{name: "gcloud", command: "gcloud auth print-access-token", kind: "external_account_command", reason: "external account command"},
+		{name: "az", command: "az account show", kind: "external_account_command", reason: "external account command"},
+		{name: "op", command: "op item get production-token", kind: "external_account_command", reason: "external account command"},
+		{name: "ssh", command: "ssh host.example uptime", kind: "remote_host_operation", reason: "remote host operation"},
+		{name: "scp", command: "scp notes.txt host.example:/tmp/notes.txt", kind: "remote_host_operation", reason: "remote host operation"},
+		{name: "rsync", command: "rsync -av . host.example:/tmp/work", kind: "remote_host_operation", reason: "remote host operation"},
+		{name: "systemctl_restart", command: "systemctl --user restart aphelion.service", kind: "service_process_change", reason: "service/process change"},
+		{name: "systemctl_start", command: "systemctl start aphelion.service", kind: "service_process_change", reason: "service/process change"},
+		{name: "systemctl_reload", command: "systemctl reload aphelion.service", kind: "service_process_change", reason: "service/process change"},
+		{name: "systemctl_enable", command: "systemctl enable aphelion.service", kind: "service_process_change", reason: "service/process change"},
+		{name: "docker", command: "docker ps", kind: "service_process_change", reason: "service/process change"},
+		{name: "kubectl", command: "kubectl get pods", kind: "service_process_change", reason: "service/process change"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			proposal, reason := proposalForCommand(tc.command)
+			if reason != tc.reason || proposal.Kind != tc.kind {
+				t.Fatalf("proposalForCommand(%q) = kind=%q reason=%q, want %q/%q", tc.command, proposal.Kind, reason, tc.kind, tc.reason)
+			}
+		})
+	}
+}
+
+func TestExecBoundaryCrossingCommandsUseApprover(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		command string
+		kind    string
+		reason  string
+	}{
+		{name: "git_push", command: "git push origin main", kind: "repo_history_mutation", reason: "repository push"},
+		{name: "gh_pr_merge", command: "gh pr merge 208", kind: "external_account_command", reason: "external account command"},
+		{name: "systemctl_restart", command: "systemctl --user restart aphelion.service", kind: "service_process_change", reason: "service/process change"},
+		{name: "kubectl", command: "kubectl apply -f deploy.yaml", kind: "service_process_change", reason: "service/process change"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			workspace := t.TempDir()
+			approver := &stubExecApprover{approved: false}
+			registry := NewRegistry(workspace, 2*time.Second).WithExecApprover(approver)
+
+			_, err := registry.executeWithScopeAndPrincipal(
+				context.Background(),
+				"exec",
+				json.RawMessage(`{"command":`+strconv.Quote(tc.command)+`}`),
+				sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+				principal.Principal{Role: principal.RoleAdmin},
+				session.SessionKey{ChatID: 12},
+			)
+			if err == nil {
+				t.Fatal("executeWithScopeAndPrincipal() err = nil, want denied approval")
+			}
+			if approver.called != 1 {
+				t.Fatalf("approver called = %d, want 1", approver.called)
+			}
+			if approver.request.Proposal.Kind != tc.kind {
+				t.Fatalf("proposal kind = %q, want %q", approver.request.Proposal.Kind, tc.kind)
+			}
+			if approver.request.Reason != tc.reason {
+				t.Fatalf("proposal reason = %q, want %q", approver.request.Reason, tc.reason)
+			}
+		})
 	}
 }
 

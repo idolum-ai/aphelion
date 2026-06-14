@@ -89,6 +89,9 @@ func execProposalIsHeuristicConfirmation(proposal session.OperationProposal) boo
 		"remote_shell_execution",
 		"capability_acquisition",
 		"external_operation",
+		"external_account_command",
+		"remote_host_operation",
+		"service_process_change",
 		"repo_history_mutation",
 		"workspace_escape":
 		return true
@@ -102,7 +105,7 @@ func proposalStatusSummary(proposal session.OperationProposal) string {
 	if summary == "" {
 		summary = "bounded operational proposal"
 	}
-	if proposal.Kind == "repo_history_mutation" {
+	if proposal.Kind == "repo_history_mutation" && repoHistoryProposalIsCommit(proposal) {
 		switch proposal.Status {
 		case session.ProposalStatusApproved:
 			return "Repository commit approval granted: " + summary
@@ -124,6 +127,10 @@ func proposalStatusSummary(proposal session.OperationProposal) string {
 	default:
 		return "Waiting on proposal approval: " + summary
 	}
+}
+
+func repoHistoryProposalIsCommit(proposal session.OperationProposal) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(proposal.Summary)), "commit")
 }
 
 func execApprovalDeniedError(reason string, decision ExecApprovalDecision) error {
