@@ -427,8 +427,34 @@ func TestExecBoundaryCrossingCommandsRequireApproval(t *testing.T) {
 		{name: "systemctl_start", command: "systemctl start aphelion.service", kind: "service_process_change", reason: "service/process change"},
 		{name: "systemctl_reload", command: "systemctl reload aphelion.service", kind: "service_process_change", reason: "service/process change"},
 		{name: "systemctl_enable", command: "systemctl enable aphelion.service", kind: "service_process_change", reason: "service/process change"},
+		{name: "systemctl_daemon_reload", command: "systemctl --user daemon-reload", kind: "service_process_change", reason: "service/process change"},
 		{name: "docker", command: "docker ps", kind: "service_process_change", reason: "service/process change"},
 		{name: "kubectl", command: "kubectl get pods", kind: "service_process_change", reason: "service/process change"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			proposal, reason := proposalForCommand(tc.command)
+			if reason != tc.reason || proposal.Kind != tc.kind {
+				t.Fatalf("proposalForCommand(%q) = kind=%q reason=%q, want %q/%q", tc.command, proposal.Kind, reason, tc.kind, tc.reason)
+			}
+		})
+	}
+}
+
+func TestExecInterruptionCommandKindsStaySpecific(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		command string
+		kind    string
+		reason  string
+	}{
+		{name: "systemctl_stop", command: "systemctl --user stop aphelion.service", kind: "service_interruption_command", reason: "stop or disable system service"},
+		{name: "systemctl_disable", command: "systemctl disable aphelion.service", kind: "service_interruption_command", reason: "stop or disable system service"},
+		{name: "systemctl_mask", command: "systemctl mask aphelion.service", kind: "service_interruption_command", reason: "stop or disable system service"},
+		{name: "kill_all", command: "kill -9 -1", kind: "process_interruption_command", reason: "kill all processes"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

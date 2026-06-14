@@ -193,9 +193,6 @@ func proposalForCommandSegment(segment string) (session.OperationProposal, strin
 	if readOnlyInspectionCommand(cmd, tokens[cmdIdx+1:]) {
 		return session.OperationProposal{}, ""
 	}
-	if proposal, reason := boundaryProposalForCommand(segment); reason != "" {
-		return proposal, reason
-	}
 	lower := strings.ToLower(strings.TrimSpace(unquotedShellContent(segment)))
 	for _, pattern := range capabilityAcquisitionPatterns {
 		if pattern.re.MatchString(lower) {
@@ -223,6 +220,9 @@ func proposalForCommandSegment(segment string) (session.OperationProposal, strin
 		if pattern.re.MatchString(lower) {
 			return pattern.proposal, pattern.reason
 		}
+	}
+	if proposal, reason := boundaryProposalForCommand(segment); reason != "" {
+		return proposal, reason
 	}
 	if strings.Contains(lower, "delete from") && !strings.Contains(lower, " where ") {
 		return session.OperationProposal{
