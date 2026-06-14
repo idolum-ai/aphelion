@@ -95,6 +95,8 @@ func normalizeTelegramIngressUpdateStatus(status TelegramIngressUpdateStatus) Te
 	switch TelegramIngressUpdateStatus(strings.TrimSpace(string(status))) {
 	case TelegramIngressUpdateAccepted:
 		return TelegramIngressUpdateAccepted
+	case TelegramIngressUpdateParked:
+		return TelegramIngressUpdateParked
 	case TelegramIngressUpdateQueued:
 		return TelegramIngressUpdateQueued
 	case TelegramIngressUpdateRunning:

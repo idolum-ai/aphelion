@@ -225,6 +225,8 @@ func ensureTelegramMediaPickerTables(tx *sql.Tx) error {
 			chat_id INTEGER NOT NULL,
 			picker_message_id INTEGER NOT NULL,
 			source_message_id INTEGER NOT NULL DEFAULT 0,
+			source_ingress_surface TEXT NOT NULL DEFAULT '',
+			source_ingress_update_id INTEGER NOT NULL DEFAULT 0,
 			inbound_json TEXT NOT NULL DEFAULT '{}',
 			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'routed', 'cleared')),
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -235,6 +237,25 @@ func ensureTelegramMediaPickerTables(tx *sql.Tx) error {
 	} {
 		if _, err := tx.Exec(stmt); err != nil {
 			return fmt.Errorf("ensure telegram media thread picker table: %w", err)
+		}
+	}
+	return nil
+}
+
+func ensureTelegramMediaPickerSourceIngressColumns(tx *sql.Tx) error {
+	exists, err := schemaTableExists(tx, "telegram_media_thread_pickers")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	for _, column := range []schemaColumnMigration{
+		{table: "telegram_media_thread_pickers", column: "source_ingress_surface", statement: `ALTER TABLE telegram_media_thread_pickers ADD COLUMN source_ingress_surface TEXT NOT NULL DEFAULT ''`},
+		{table: "telegram_media_thread_pickers", column: "source_ingress_update_id", statement: `ALTER TABLE telegram_media_thread_pickers ADD COLUMN source_ingress_update_id INTEGER NOT NULL DEFAULT 0`},
+	} {
+		if err := addSchemaColumnIfMissing(tx, column); err != nil {
+			return err
 		}
 	}
 	return nil
