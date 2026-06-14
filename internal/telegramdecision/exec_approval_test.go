@@ -624,6 +624,30 @@ func TestTelegramExecApproverRepositoryCommitTimeoutExplainsNestedGate(t *testin
 	}
 }
 
+func TestTelegramExecApproverRepositoryPushDenialIsNotCommitFlavored(t *testing.T) {
+	t.Parallel()
+
+	text := deniedExecApprovalText(toolpkg.ExecApprovalRequest{
+		Principal:  principal.Principal{Role: principal.RoleAdmin},
+		SessionKey: session.SessionKey{ChatID: 7},
+		Command:    "git push origin main",
+		Reason:     "repository push",
+		Proposal: session.OperationProposal{
+			Kind:          "repo_history_mutation",
+			Summary:       "Push git history to a remote",
+			WhyNow:        "This command publishes local repository history to a remote.",
+			BoundedEffect: "Push repository history for this command once.",
+			Status:        session.ProposalStatusPending,
+		},
+	}, decision.Result{Choice: "deny"})
+	if strings.Contains(text, "Repository commit blocked") || strings.Contains(text, "git commit") || strings.Contains(text, "repository_commit") {
+		t.Fatalf("denied push text = %q, want generic proposal denial without commit copy", text)
+	}
+	if text != "Proposal denied." {
+		t.Fatalf("denied push text = %q, want generic proposal denial", text)
+	}
+}
+
 func TestTelegramExecApproverTimesOutToDeny(t *testing.T) {
 	t.Parallel()
 
