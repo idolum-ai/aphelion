@@ -34,16 +34,19 @@ func TestMaybeAskTelegramMediaThreadPickerPersistsAndPaginates(t *testing.T) {
 		t.Fatalf("recorded inbound = %#v, want source media inbound", router.mediaPickerRecordInbound)
 	}
 	rows := sender.inline[0].rows
-	if len(rows) != 8 {
-		t.Fatalf("rows = %d, want 8 (6 threads + nav + new)", len(rows))
+	if len(rows) != 9 {
+		t.Fatalf("rows = %d, want 9 (main + 6 threads + nav + new)", len(rows))
 	}
-	if got := rows[0][0].CallbackData; got != "mtpick:thread:101" {
+	if got := rows[0][0].CallbackData; got != "mtpick:main" {
+		t.Fatalf("main callback = %q", got)
+	}
+	if got := rows[1][0].CallbackData; got != "mtpick:thread:101" {
 		t.Fatalf("first callback = %q", got)
 	}
-	if got := rows[6][0].CallbackData; got != "mtpick:page:1" {
+	if got := rows[7][0].CallbackData; got != "mtpick:page:1" {
 		t.Fatalf("next callback = %q", got)
 	}
-	if got := rows[7][0].CallbackData; got != "mtpick:new" {
+	if got := rows[8][0].CallbackData; got != "mtpick:new" {
 		t.Fatalf("new callback = %q", got)
 	}
 }
@@ -64,11 +67,42 @@ func TestMediaThreadPickerCallbackPaginates(t *testing.T) {
 		t.Fatalf("editInline calls = %d, want 1", len(sender.editInline))
 	}
 	rows := sender.editInline[0].rows
-	if got := rows[0][0].CallbackData; got != "mtpick:thread:107" {
+	if got := rows[0][0].CallbackData; got != "mtpick:main" {
+		t.Fatalf("main callback = %q", got)
+	}
+	if got := rows[1][0].CallbackData; got != "mtpick:thread:107" {
 		t.Fatalf("page first callback = %q", got)
 	}
-	if got := rows[1][0].CallbackData; got != "mtpick:page:0" {
+	if got := rows[2][0].CallbackData; got != "mtpick:page:0" {
 		t.Fatalf("prev callback = %q", got)
+	}
+}
+
+func TestMediaThreadPickerCallbackRoutesMainChat(t *testing.T) {
+	sender := &stubCommandSender{}
+	inbound := mediaPickerTestInbound()
+	inbound.TelegramThreadID = 102
+	router := &stubCommandRouter{threadsReturn: mediaPickerTestThreads(3), mediaPickerReturn: inbound, mediaPickerOK: true}
+	cb := mediaPickerCallback("mtpick:main", inbound.ChatID, 77)
+
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, cb)
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want main chat callback handled")
+	}
+	if router.mediaPickerGetMessageID != 77 {
+		t.Fatalf("picker get message = %d, want 77", router.mediaPickerGetMessageID)
+	}
+	if router.routeAcceptedMsg == nil || router.routeAcceptedMsg.TelegramThreadID != 0 || len(router.routeAcceptedMsg.Artifacts) != 1 {
+		t.Fatalf("routed msg = %#v, want media in main chat", router.routeAcceptedMsg)
+	}
+	if router.mediaPickerMarkMessageID != 77 {
+		t.Fatalf("mark routed message = %d, want 77", router.mediaPickerMarkMessageID)
+	}
+	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "main chat") {
+		t.Fatalf("editClear = %#v, want routed-to-main-chat text", sender.editClear)
 	}
 }
 

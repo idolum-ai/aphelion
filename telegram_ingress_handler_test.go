@@ -37,8 +37,11 @@ func TestHandleTelegramIngressMessagePromptsMediaBeforeRetention(t *testing.T) {
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline calls = %d, want 1 media picker prompt", len(sender.inline))
 	}
-	if !strings.Contains(sender.inline[0].text, "Which open thread") {
+	if !strings.Contains(sender.inline[0].text, "Which chat or thread") {
 		t.Fatalf("picker text = %q, want media thread prompt", sender.inline[0].text)
+	}
+	if len(sender.inline[0].rows) == 0 || len(sender.inline[0].rows[0]) == 0 || sender.inline[0].rows[0][0].Text != "Main chat" {
+		t.Fatalf("picker rows = %#v, want explicit Main chat target first", sender.inline[0].rows)
 	}
 	if router.mediaPickerRecordChatID != msg.ChatID || router.mediaPickerRecordMessageID != 1 {
 		t.Fatalf("recorded picker = %d/%d, want %d/1", router.mediaPickerRecordChatID, router.mediaPickerRecordMessageID, msg.ChatID)
