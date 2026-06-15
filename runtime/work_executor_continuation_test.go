@@ -291,7 +291,10 @@ func TestConcurrentWorkContinuationTriggerExecutesSingleLeaseTurn(t *testing.T) 
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{Summary: "patched once"}}
+	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+		Summary:      "patched once",
+		ChangedFiles: []string{"runtime/continuation_work.go"},
+	}}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
 
 	now := time.Now().UTC()
@@ -379,7 +382,10 @@ func TestConsumedWorkPhaseOffersNextPhaseApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{Summary: "committed and pushed"}}
+	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+		Summary:  "committed and pushed",
+		Commands: []string{"git commit -m planning-improvements", "git push origin planning-improvements"},
+	}}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
 
 	now := time.Now().UTC()
@@ -1618,7 +1624,10 @@ func TestTriggerCodingContinuationAllowsCompoundWorkspaceRiskClass(t *testing.T)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true}
+	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+		Summary:      "patched child runner",
+		ChangedFiles: []string{"runtime/durable_child.go"},
+	}}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
 
 	expiresAt := time.Now().UTC().Add(time.Hour)
@@ -1686,7 +1695,10 @@ func TestTriggerCodingContinuationWarnsWhenFallingBackToNative(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 	codex := &fakeWorkExecutor{name: "codex", ready: false, reason: "app-server unreachable"}
-	native := &fakeWorkExecutor{name: "native", ready: true, result: WorkResult{Summary: "native completed"}}
+	native := &fakeWorkExecutor{name: "native", ready: true, result: WorkResult{
+		Summary:      "native completed",
+		ChangedFiles: []string{"runtime/work_executor.go"},
+	}}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex", "native"}}, []WorkExecutor{codex, native})
 
 	expiresAt := time.Now().UTC().Add(time.Hour)

@@ -242,5 +242,6 @@ func (r *Runtime) runInteractiveDMTurnResult(ctx context.Context, input interact
 	if turnResult == nil || turnResult.Turn == nil {
 		return nil, fmt.Errorf("interactive turn did not return a result")
 	}
+	turnResult.RunID = turnState.turnRunID()
 	return turnResult, err
 }

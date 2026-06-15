@@ -340,6 +340,33 @@ func TestAuthorityContractMapsExternalAccountStatusCheckAliasToReadOnlyDataAcces
 	}
 }
 
+func TestAuthorityContractMapsPullRequestCreationAliasesToExternalAccountAction(t *testing.T) {
+	for _, token := range []string{
+		"external_account_pr_create",
+		"github_pr_create",
+		"github_pr_open",
+		"pull_request_create",
+		"pull_request_open",
+		"open_pull_request",
+		"create_github_pr",
+	} {
+		contract, ok := AuthorityContractForToken(token)
+		if !ok {
+			t.Fatalf("AuthorityContractForToken(%q) ok = false, want true", token)
+		}
+		if contract.Key != "external_account_action" ||
+			contract.LeaseClass != ContinuationLeaseClassCapabilityGrant ||
+			contract.WorkAction != AuthorityWorkActionReadOnly ||
+			!contract.ExternalEffectsAllowed {
+			t.Fatalf("contract for %q = %#v, want external-account capability action", token, contract)
+		}
+		claim, ok := AuthorityInterpretationClaimFor("", []string{token}, "")
+		if !ok || claim.AuthorityClass != "external_account_action" {
+			t.Fatalf("AuthorityInterpretationClaimFor(%q) = %#v ok=%t, want external_account_action", token, claim, ok)
+		}
+	}
+}
+
 func TestAuthorityContractCompilerRejectsCommitAllowedButBroadCommitForbidden(t *testing.T) {
 	compilation := CompileActionProposalAuthorityContract(ActionProposal{
 		RiskClass:        "workspace_commit_then_repo_write_bounded",

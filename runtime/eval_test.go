@@ -101,6 +101,7 @@ func TestTrajectoryEvalScenariosCoverWatchedFailureCandidates(t *testing.T) {
 		"trajectory_authority_contract_repair_no_dead_end",
 		"trajectory_durable_child_blocked_wake_surfaces_repair",
 		"trajectory_telegram_media_ambiguous_thread_picker",
+		"trajectory_external_account_pr_grant_failure_requests_approval",
 		"trajectory_tool_shape_sandbox_repair",
 	} {
 		if !ids[want] {
@@ -1287,6 +1288,14 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	}
 	if byID["trajectory_telegram_media_ambiguous_thread_picker"].DecisionCount == 0 {
 		t.Fatalf("media trajectory missing decision count evidence: %#v", byID["trajectory_telegram_media_ambiguous_thread_picker"])
+	}
+	prGrantFailure := byID["trajectory_external_account_pr_grant_failure_requests_approval"]
+	if prGrantFailure.OperationStatus != string(session.OperationStatusBlocked) || prGrantFailure.Continuation != string(session.ContinuationStatusPending) {
+		t.Fatalf("PR grant-failure trajectory state = %#v, want blocked operation with pending continuation", prGrantFailure)
+	}
+	if !evalTestContainsString(prGrantFailure.EventTypes, core.ExecutionEventCapabilityRequestCreated) ||
+		!evalTestContainsString(prGrantFailure.EventTypes, core.ExecutionEventContinuationOffered) {
+		t.Fatalf("PR grant-failure trajectory missing typed approval/grant repair evidence: %#v", prGrantFailure)
 	}
 	if !evalTestContainsString(byID["trajectory_tool_shape_sandbox_repair"].EventTypes, core.ExecutionEventToolFailed) {
 		t.Fatalf("tool-shape trajectory missing seeded tool failure evidence: %#v", byID["trajectory_tool_shape_sandbox_repair"])
