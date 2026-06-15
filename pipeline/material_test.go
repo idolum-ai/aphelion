@@ -77,6 +77,25 @@ func TestParseMaterialPacketQuarantinesLegacyContinuityProse(t *testing.T) {
 	}
 }
 
+func TestParseMaterialPacketQuarantinesUnknownContinuityProse(t *testing.T) {
+	t.Parallel()
+
+	packet, err := ParseMaterialPacket(strings.Join([]string{
+		"CONTINUITY_CONTEXT:",
+		"- This is prose-shaped continuity and should not become presentation copy.",
+	}, "\n"))
+	if err != nil {
+		t.Fatalf("ParseMaterialPacket() err = %v", err)
+	}
+	got := packet.ContinuityContext[0]
+	if got.Kind != core.MaterialContinuityKindEvidence ||
+		got.Visibility != core.MaterialContinuityVisibilityInternal ||
+		got.EvidenceRef != "legacy_continuity_context_prose" ||
+		!strings.Contains(got.Reason, "quarantined") {
+		t.Fatalf("ContinuityContext = %#v, want unknown prose quarantined as internal evidence", got)
+	}
+}
+
 func TestParseMaterialPacketParsesHandoffContinuityKind(t *testing.T) {
 	t.Parallel()
 

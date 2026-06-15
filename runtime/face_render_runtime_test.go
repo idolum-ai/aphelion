@@ -362,6 +362,20 @@ func TestFaceSkipPayloadContainsOnlyDecisionFields(t *testing.T) {
 	}
 }
 
+func TestFallbackOptionsWithPromptIntentWiresContinuityQuestion(t *testing.T) {
+	t.Parallel()
+
+	opts := fallbackOptionsWithPromptIntent(pipeline.FallbackOptions{Channel: "telegram"}, "where were we?")
+	if opts.UserIntent != pipeline.IntentContinuityQuestion {
+		t.Fatalf("UserIntent = %q, want continuity_question", opts.UserIntent)
+	}
+
+	preserved := fallbackOptionsWithPromptIntent(pipeline.FallbackOptions{UserIntent: pipeline.IntentContinuityQuestion}, "run tests")
+	if preserved.UserIntent != pipeline.IntentContinuityQuestion {
+		t.Fatalf("UserIntent = %q, want explicitly supplied intent preserved", preserved.UserIntent)
+	}
+}
+
 func TestShouldRecordFaceSkipEventAllowsZeroSessionKey(t *testing.T) {
 	t.Parallel()
 

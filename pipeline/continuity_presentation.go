@@ -2,7 +2,11 @@
 
 package pipeline
 
-import "github.com/idolum-ai/aphelion/core"
+import (
+	"strings"
+
+	"github.com/idolum-ai/aphelion/core"
+)
 
 type Intent string
 
@@ -33,6 +37,36 @@ func ContinuityPresentationPolicy(ctx []core.MaterialContinuityContext, userInte
 		decision.Background = append(decision.Background, item)
 	}
 	return decision
+}
+
+func InferFallbackUserIntent(text string) Intent {
+	normalized := normalizeContinuityIntentText(text)
+	if normalized == "" {
+		return IntentUnspecified
+	}
+	for _, phrase := range []string{
+		"where were we",
+		"where did we leave off",
+		"where we left off",
+		"what were we doing",
+		"what was happening",
+		"catch me up",
+		"bring me up to speed",
+		"remind me where",
+		"what did you recover from",
+		"what happened before",
+		"what is the context",
+		"what's the context",
+	} {
+		if strings.Contains(normalized, phrase) {
+			return IntentContinuityQuestion
+		}
+	}
+	return IntentUnspecified
+}
+
+func normalizeContinuityIntentText(text string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(text))), " ")
 }
 
 func continuityContextIsVisible(item core.MaterialContinuityContext, userIntent Intent) bool {

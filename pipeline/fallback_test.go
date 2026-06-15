@@ -85,6 +85,18 @@ func TestSerializeFloorFallbackTelegramFlattensSingleNote(t *testing.T) {
 	}
 }
 
+func TestSerializeFloorFallbackDoesNotLeakSceneConstraintsOnlyFloor(t *testing.T) {
+	t.Parallel()
+
+	packet := core.MaterialPacket{
+		SceneConstraints: []string{"Keep internal recovery mechanics out of the visible headline."},
+	}
+	got := SerializeFloorFallback(packet, packet.Text(), FallbackOptions{Channel: "telegram"})
+	if got != "(no response)" {
+		t.Fatalf("SerializeFloorFallback() = %q, want no public response for scene-constraints-only floor", got)
+	}
+}
+
 func TestSerializeFloorFallbackOmitsContinuityContext(t *testing.T) {
 	t.Parallel()
 
@@ -157,6 +169,23 @@ func TestSerializeFloorFallbackSurfacesMustSurfaceContinuityBlocker(t *testing.T
 	}
 }
 
+func TestSerializeFloorFallbackSurfacesMustSurfaceContinuityWithoutReason(t *testing.T) {
+	t.Parallel()
+
+	packet := core.MaterialPacket{
+		Kind: core.MaterialPacketKindStatusReport,
+		ContinuityContext: []core.MaterialContinuityContext{{
+			Kind:        core.MaterialContinuityKindWarning,
+			Visibility:  core.MaterialContinuityVisibilityMustSurface,
+			EvidenceRef: "continuation:missing_approval",
+		}},
+	}
+	got := SerializeFloorFallback(packet, packet.Text(), FallbackOptions{Channel: "telegram"})
+	if !strings.Contains(got, "Continuity requires attention before proceeding.") {
+		t.Fatalf("fallback omitted generic must-surface blocker: %q", got)
+	}
+}
+
 func TestSerializeFloorFallbackDoesNotLeakInternalOnlyFloor(t *testing.T) {
 	t.Parallel()
 
@@ -212,5 +241,22 @@ func TestContinuityPresentationPolicySeparatesMaterialFromVisibility(t *testing.
 	continuityQuestion := ContinuityPresentationPolicy(ctx[:1], IntentContinuityQuestion)
 	if len(continuityQuestion.Visible) != 1 || len(continuityQuestion.Background) != 0 {
 		t.Fatalf("continuity question decision = %#v, want internal continuity visible on explicit continuity intent", continuityQuestion)
+	}
+}
+
+func TestInferFallbackUserIntentDetectsContinuityQuestions(t *testing.T) {
+	t.Parallel()
+
+	for _, text := range []string{
+		"Where were we?",
+		"Can you catch me up on this?",
+		"What did you recover from?",
+	} {
+		if got := InferFallbackUserIntent(text); got != IntentContinuityQuestion {
+			t.Fatalf("InferFallbackUserIntent(%q) = %q, want continuity_question", text, got)
+		}
+	}
+	if got := InferFallbackUserIntent("please run the tests"); got != IntentUnspecified {
+		t.Fatalf("InferFallbackUserIntent(non-continuity) = %q, want unspecified", got)
 	}
 }

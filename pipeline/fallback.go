@@ -120,7 +120,17 @@ func visibleContinuityFallbackItems(items []core.MaterialContinuityContext, user
 }
 
 func continuityFallbackText(item core.MaterialContinuityContext) string {
-	return strings.TrimSpace(item.Reason)
+	if reason := strings.TrimSpace(item.Reason); reason != "" {
+		return reason
+	}
+	switch item.Visibility {
+	case core.MaterialContinuityVisibilityMustSurface:
+		return "Continuity requires attention before proceeding."
+	case core.MaterialContinuityVisibilityUserRelevant, core.MaterialContinuityVisibilityInternal:
+		return "Continuity context is available."
+	default:
+		return ""
+	}
 }
 
 func uniqueFallbackItems(items []string, seen map[string]struct{}) []string {

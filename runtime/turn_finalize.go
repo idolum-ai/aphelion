@@ -57,6 +57,7 @@ type turnRenderResult struct {
 }
 
 func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, error) {
+	input.FallbackOpts = fallbackOptionsWithPromptIntent(input.FallbackOpts, input.PromptInput)
 	output := turnRenderResult{ReplyText: strings.TrimSpace(input.ReplyText)}
 	if input.Result == nil {
 		return output, nil
