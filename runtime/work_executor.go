@@ -386,6 +386,7 @@ func (r *Runtime) attachNativeWorkTurnEvidence(key session.SessionKey, result *W
 			}
 		case core.ExecutionEventToolFailed:
 			result.ToolFailures++
+			discardStartedExecPreviewForToolEvent(event, startedExecPreviews)
 			failure := toolFailureSummaryFromEvent(event)
 			if failure == "" {
 				continue
@@ -409,17 +410,8 @@ func successfulExecCommandFromToolEvent(event session.ExecutionEvent, startedExe
 		return ""
 	}
 	preview := workPayloadString(payload, "preview")
-	if preview == "" {
-		eventKey := workToolEventKey(payload)
-		previews := startedExecPreviews[eventKey]
-		if len(previews) > 0 {
-			preview = previews[0]
-			if len(previews) == 1 {
-				delete(startedExecPreviews, eventKey)
-			} else {
-				startedExecPreviews[eventKey] = previews[1:]
-			}
-		}
+	if fallback := popStartedExecPreview(payload, startedExecPreviews); preview == "" {
+		preview = fallback
 	}
 	if preview == "" {
 		return ""
@@ -429,6 +421,35 @@ func successfulExecCommandFromToolEvent(event session.ExecutionEvent, startedExe
 		return ""
 	}
 	return firstRuntimeWorkNonEmpty(workPayloadString(input, "cmd"), workPayloadString(input, "command"))
+}
+
+func discardStartedExecPreviewForToolEvent(event session.ExecutionEvent, startedExecPreviews map[string][]string) {
+	payload := map[string]any{}
+	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+		return
+	}
+	if !strings.EqualFold(workPayloadString(payload, "tool"), "exec") {
+		return
+	}
+	_ = popStartedExecPreview(payload, startedExecPreviews)
+}
+
+func popStartedExecPreview(payload map[string]any, startedExecPreviews map[string][]string) string {
+	if len(startedExecPreviews) == 0 {
+		return ""
+	}
+	eventKey := workToolEventKey(payload)
+	previews := startedExecPreviews[eventKey]
+	if len(previews) == 0 {
+		return ""
+	}
+	preview := previews[0]
+	if len(previews) == 1 {
+		delete(startedExecPreviews, eventKey)
+	} else {
+		startedExecPreviews[eventKey] = previews[1:]
+	}
+	return preview
 }
 
 func workToolEventKey(payload map[string]any) string {

@@ -146,6 +146,95 @@ func TestContinuationExecAuthorityAllowsExternalAccountStatusCheckOnly(t *testin
 	}
 }
 
+func TestContinuationExecAuthorityBoundaryKindsAllowAndDeny(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	tests := []struct {
+		name           string
+		command        string
+		allowRiskClass string
+		allowActions   []string
+		wantAction     string
+	}{
+		{
+			name:           "git push",
+			command:        "git push origin fix/continuation-authority-envelope",
+			allowRiskClass: "deploy",
+			allowActions:   []string{"git_push", "report_release_result"},
+			wantAction:     "git_push",
+		},
+		{
+			name:           "remote host",
+			command:        "ssh aphelion.example uptime",
+			allowRiskClass: "remote_host_operation",
+			allowActions:   []string{"remote_host_operation", "report_remote_status"},
+			wantAction:     "remote_host_operation",
+		},
+		{
+			name:           "service process",
+			command:        "systemctl --user restart aphelion.service",
+			allowRiskClass: "deploy",
+			allowActions:   []string{"restart_service", "post_restart_verification"},
+			wantAction:     "restart_service",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			allowed := ContinuationExecAuthorityDecisionForCommand(
+				continuationExecAuthorityTestState(tt.allowRiskClass, tt.allowActions, false, now),
+				tt.command,
+				now,
+			)
+			if !allowed.Active || !allowed.Boundary || !allowed.Allowed {
+				t.Fatalf("allowed decision = %#v, want boundary command allowed by explicit envelope action", allowed)
+			}
+			if allowed.RequiredAction != tt.wantAction {
+				t.Fatalf("required action = %q, want %q", allowed.RequiredAction, tt.wantAction)
+			}
+
+			denied := ContinuationExecAuthorityDecisionForCommand(
+				continuationExecAuthorityTestState("read_only_review", []string{"read_only", "inspect_code", "report_findings"}, false, now),
+				tt.command,
+				now,
+			)
+			if !denied.Active || !denied.Boundary || denied.Allowed {
+				t.Fatalf("denied decision = %#v, want boundary command denied by ordinary read-only envelope", denied)
+			}
+		})
+	}
+}
+
+func continuationExecAuthorityTestState(riskClass string, allowedActions []string, capabilityGrant bool, now time.Time) session.ContinuationState {
+	lease := session.ContinuationLease{
+		ID:             "lease-" + strings.ReplaceAll(riskClass, "_", "-"),
+		ProposalID:     "aprop-" + strings.ReplaceAll(riskClass, "_", "-"),
+		Status:         session.ContinuationLeaseStatusActive,
+		RemainingTurns: 1,
+		AllowedActions: append([]string(nil), allowedActions...),
+		ExpiresAt:      now.Add(time.Hour),
+	}
+	if capabilityGrant {
+		lease.LeaseClass = session.ContinuationLeaseClassCapabilityGrant
+		lease.CapabilityGrantIDs = []string{"capg-" + strings.ReplaceAll(riskClass, "_", "-")}
+	}
+	return session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             lease.ProposalID,
+			RiskClass:      riskClass,
+			AllowedActions: append([]string(nil), allowedActions...),
+			Status:         session.ProposalStatusApproved,
+		},
+		ContinuationLease: lease,
+	}
+}
+
 func setFakeBubblewrapRunner(t *testing.T, registry *Registry) {
 	t.Helper()
 

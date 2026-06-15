@@ -399,6 +399,64 @@ func TestAttachNativeWorkTurnEvidencePairsStartedExecCommandWithSucceededEvent(t
 	}
 }
 
+func TestAttachNativeWorkTurnEvidenceConsumesFailedExecPreviewBeforeSucceededFallback(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8822, UserID: 0, Scope: telegramDMScopeRef(8822)}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "run two exec commands")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	failedCommand := "gh pr create --base release/v0.2.5 --head stale --title stale --body stale"
+	succeededCommand := "gh pr create --base release/v0.2.5 --head main --title final --body final"
+	failedPreview := fmt.Sprintf(`{"command":%q}`, failedCommand)
+	succeededPreview := fmt.Sprintf(`{"command":%q}`, succeededCommand)
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventToolStarted,
+			Stage:       "tool",
+			Status:      "started",
+			PayloadJSON: fmt.Sprintf(`{"run_id":%d,"tool":"exec","preview":%q}`, run.ID, failedPreview),
+			CreatedAt:   now,
+		},
+		{
+			EventType:   core.ExecutionEventToolStarted,
+			Stage:       "tool",
+			Status:      "started",
+			PayloadJSON: fmt.Sprintf(`{"run_id":%d,"tool":"exec","preview":%q}`, run.ID, succeededPreview),
+			CreatedAt:   now.Add(time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventToolFailed,
+			Stage:       "tool",
+			Status:      "failed",
+			PayloadJSON: fmt.Sprintf(`{"run_id":%d,"tool":"exec","error":"command failed with exit code 1"}`, run.ID),
+			CreatedAt:   now.Add(2 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventToolSucceeded,
+			Stage:       "tool",
+			Status:      "succeeded",
+			PayloadJSON: fmt.Sprintf(`{"run_id":%d,"tool":"exec","result_preview":"PR_URL\nhttps://github.com/idolum-ai/aphelion/pull/215"}`, run.ID),
+			CreatedAt:   now.Add(3 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	result := WorkResult{TurnRunID: run.ID}
+	rt.attachNativeWorkTurnEvidence(key, &result)
+	if len(result.Commands) != 1 || result.Commands[0] != succeededCommand {
+		t.Fatalf("commands = %#v, want successful exec paired with second started preview", result.Commands)
+	}
+}
+
 func TestDoctorRuntimeConfigReportsWorkExecutorStatus(t *testing.T) {
 	t.Parallel()
 
