@@ -257,6 +257,9 @@ func saveSessionInTx(tx *sql.Tx, session *Session, newMessages []Message, now ti
 	if err := upsertArtifactIndexRecords(tx, session); err != nil {
 		return err
 	}
+	if err := upsertSessionEvidenceSnapshotsTx(tx, session, now); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -283,7 +286,7 @@ func insertSessionMessages(tx *sql.Tx, session *Session, newMessages []Message, 
 		actorRole := strings.TrimSpace(msg.ActorRole)
 		eventOrigin := strings.TrimSpace(msg.EventOrigin)
 		eventOriginDetail := strings.TrimSpace(msg.EventOriginDetail)
-		_, err := tx.Exec(`
+		res, err := tx.Exec(`
 				INSERT INTO messages(
 					session_id, chat_id, user_id, actor_user_id, actor_role, event_origin, event_origin_detail, role, content, floor_content, floor_metadata, tool_calls, tool_id, tool_name, thinking,
 					created_at, turn_index, content_chars, compacted
@@ -295,6 +298,14 @@ func insertSessionMessages(tx *sql.Tx, session *Session, newMessages []Message, 
 		)
 		if err != nil {
 			return fmt.Errorf("insert message: %w", err)
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return fmt.Errorf("message last insert id: %w", err)
+		}
+		msg.ID = id
+		if _, err := upsertEvidenceObjectTx(tx, messageEvidenceInput(msg, session.Scope)); err != nil {
+			return fmt.Errorf("write message evidence: %w", err)
 		}
 	}
 	return nil

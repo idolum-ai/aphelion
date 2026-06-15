@@ -10,7 +10,9 @@ to outbound delivery.*
 Current interactive turn order:
 
 1. Runtime shell resolves principal/scope, starts chat actions, and holds session lock.
-2. Runtime interactive-DM assembler builds one-turn coordinator/ports from shared interactive-like assembly.
+2. Runtime interactive-DM assembler builds one-turn coordinator/ports from
+   shared interactive-like assembly, including scoped evidence hydration when
+   active work or recovery pressure needs source-fact fidelity.
 3. `turn.Machine` runs proposal/governor/face stages according to policy.
 4. `turn` persists transcript + sidecars.
 5. `turn` performs outbound delivery semantics.
@@ -29,6 +31,7 @@ Code anchors:
 - [`runtime/turn.go`](../../runtime/turn.go)
 - [`runtime/interactive_dm_turn.go`](../../runtime/interactive_dm_turn.go)
 - [`runtime/interactive_like_assembly.go`](../../runtime/interactive_like_assembly.go)
+- [`runtime/evidence_hydration.go`](../../runtime/evidence_hydration.go)
 - [`runtime/turn_coordinator_common.go`](../../runtime/turn_coordinator_common.go)
 - [`runtime/turn_coordinator_interactive.go`](../../runtime/turn_coordinator_interactive.go)
 - [`turn/engine.go`](../../turn/engine.go)

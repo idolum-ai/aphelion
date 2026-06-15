@@ -241,7 +241,7 @@ func execApprovalDecisionFromResult(result decision.Result, approved bool) toolp
 }
 
 func deniedExecApprovalText(req toolpkg.ExecApprovalRequest, result decision.Result) string {
-	if req.Proposal.Kind == "repo_history_mutation" || req.Reason == "repository commit" || decisionprojection.ExecCommandClass(req.Command) == decisionprojection.ExecCommandClassGitCommit {
+	if req.Reason == "repository commit" || decisionprojection.ExecCommandClass(req.Command) == decisionprojection.ExecCommandClassGitCommit {
 		lines := []string{
 			"Repository commit blocked.",
 			"gate: repository_commit",

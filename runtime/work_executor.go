@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	runtimecodex "github.com/idolum-ai/aphelion/runtime/codex"
 	runtimecontinuation "github.com/idolum-ai/aphelion/runtime/continuation"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 )
 
 type WorkMode = runtimecontinuation.WorkMode
@@ -45,6 +47,7 @@ type WorkRequest struct {
 
 type WorkResult struct {
 	ExecutorName     string
+	TurnRunID        int64
 	ThreadID         string
 	TurnID           string
 	Summary          string
@@ -62,6 +65,10 @@ type WorkResult struct {
 	ApprovalLog      []runtimecodex.ApprovalDecision
 	CompletionKind   string
 	SideEffects      bool
+	ToolSuccesses    int
+	ToolFailures     int
+	ToolFailure      string
+	ToolFailureTexts []string
 }
 
 type WorkAvailability struct {
@@ -250,6 +257,7 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 	if e.runtime == nil {
 		return WorkResult{}, fmt.Errorf("runtime unavailable")
 	}
+	ctx = toolpkg.WithContinuationExecAuthority(ctx, req.State)
 	key := req.Key
 	if key.ChatID == 0 {
 		key.ChatID = req.ChatID
@@ -261,6 +269,7 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 	result, err := e.runtime.handleInternalContinuationTurnWithOptions(ctx, req.Actor, msg, internalContinuationOptions{})
 	out := WorkResult{ExecutorName: "native", CompletionKind: "native_turn"}
 	if result != nil {
+		out.TurnRunID = result.RunID
 		out.RecoveryDelivery = strings.TrimSpace(result.Delivery.Kind)
 		if result.Turn != nil {
 			out.Summary = strings.TrimSpace(result.Turn.Text)
@@ -288,6 +297,7 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 			out.SideEffects = true
 		}
 	}
+	e.runtime.attachNativeWorkTurnEvidence(key, &out)
 	if err != nil {
 		return out, err
 	}
@@ -332,6 +342,155 @@ func nativeWorkResultFromTurnResult(result *core.TurnResult) WorkResult {
 		out.SideEffects = true
 	}
 	return out
+}
+
+func (r *Runtime) attachNativeWorkTurnEvidence(key session.SessionKey, result *WorkResult) {
+	if r == nil || r.store == nil || result == nil || result.TurnRunID <= 0 {
+		return
+	}
+	if run, err := r.store.TurnRun(result.TurnRunID); err == nil && run != nil {
+		if failure := strings.TrimSpace(run.LastToolError); failure != "" {
+			result.ToolFailureTexts = appendUniqueRuntimeWorkString(result.ToolFailureTexts, failure)
+			if strings.TrimSpace(result.ToolFailure) == "" {
+				result.ToolFailure = failure
+			}
+		}
+	}
+	events, err := r.store.ExecutionEventsByTurnRun(key, result.TurnRunID, 500)
+	if err != nil {
+		return
+	}
+	startedExecPreviews := map[string][]string{}
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) != core.ExecutionEventToolStarted {
+			continue
+		}
+		payload := map[string]any{}
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			continue
+		}
+		if !strings.EqualFold(workPayloadString(payload, "tool"), "exec") {
+			continue
+		}
+		if preview := workPayloadString(payload, "preview"); preview != "" {
+			eventKey := workToolEventKey(payload)
+			startedExecPreviews[eventKey] = append(startedExecPreviews[eventKey], preview)
+		}
+	}
+	for _, event := range events {
+		switch strings.TrimSpace(event.EventType) {
+		case core.ExecutionEventToolSucceeded:
+			result.ToolSuccesses++
+			if cmd := successfulExecCommandFromToolEvent(event, startedExecPreviews); cmd != "" {
+				result.Commands = appendUniqueRuntimeWorkString(result.Commands, cmd)
+			}
+		case core.ExecutionEventToolFailed:
+			result.ToolFailures++
+			discardStartedExecPreviewForToolEvent(event, startedExecPreviews)
+			failure := toolFailureSummaryFromEvent(event)
+			if failure == "" {
+				continue
+			}
+			result.ToolFailureTexts = appendUniqueRuntimeWorkString(result.ToolFailureTexts, failure)
+			if strings.TrimSpace(result.ToolFailure) == "" ||
+				(!workResultFailureTextInvalidatesMaterialCompletion(result.ToolFailure) &&
+					workResultFailureTextInvalidatesMaterialCompletion(failure)) {
+				result.ToolFailure = failure
+			}
+		}
+	}
+}
+
+func successfulExecCommandFromToolEvent(event session.ExecutionEvent, startedExecPreviews map[string][]string) string {
+	payload := map[string]any{}
+	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+		return ""
+	}
+	if !strings.EqualFold(workPayloadString(payload, "tool"), "exec") {
+		return ""
+	}
+	preview := workPayloadString(payload, "preview")
+	if fallback := popStartedExecPreview(payload, startedExecPreviews); preview == "" {
+		preview = fallback
+	}
+	if preview == "" {
+		return ""
+	}
+	input := map[string]any{}
+	if err := json.Unmarshal([]byte(preview), &input); err != nil {
+		return ""
+	}
+	return firstRuntimeWorkNonEmpty(workPayloadString(input, "cmd"), workPayloadString(input, "command"))
+}
+
+func discardStartedExecPreviewForToolEvent(event session.ExecutionEvent, startedExecPreviews map[string][]string) {
+	payload := map[string]any{}
+	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+		return
+	}
+	if !strings.EqualFold(workPayloadString(payload, "tool"), "exec") {
+		return
+	}
+	_ = popStartedExecPreview(payload, startedExecPreviews)
+}
+
+func popStartedExecPreview(payload map[string]any, startedExecPreviews map[string][]string) string {
+	if len(startedExecPreviews) == 0 {
+		return ""
+	}
+	eventKey := workToolEventKey(payload)
+	previews := startedExecPreviews[eventKey]
+	if len(previews) == 0 {
+		return ""
+	}
+	preview := previews[0]
+	if len(previews) == 1 {
+		delete(startedExecPreviews, eventKey)
+	} else {
+		startedExecPreviews[eventKey] = previews[1:]
+	}
+	return preview
+}
+
+func workToolEventKey(payload map[string]any) string {
+	runID := workPayloadString(payload, "run_id")
+	toolName := strings.ToLower(workPayloadString(payload, "tool"))
+	return runID + "\x00" + toolName
+}
+
+func toolFailureSummaryFromEvent(event session.ExecutionEvent) string {
+	payload := map[string]any{}
+	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+		return ""
+	}
+	return trimError(firstRuntimeWorkNonEmpty(
+		workPayloadString(payload, "error"),
+		workPayloadString(payload, "result_preview"),
+	))
+}
+
+func workPayloadString(payload map[string]any, key string) string {
+	if payload == nil {
+		return ""
+	}
+	value, ok := payload[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func appendUniqueRuntimeWorkString(values []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return values
+	}
+	for _, existing := range values {
+		if strings.TrimSpace(existing) == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func nativeWorkTurnRecovery(result *core.TurnResult) (*core.TurnRecovery, bool) {

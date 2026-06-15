@@ -24,6 +24,7 @@ func RunResetCommand(args []string) error               { return runResetCommand
 func RunImportAuditCommand(args []string) error         { return runImportAuditCommand(args) }
 func RunImportSemanticCommand(args []string) error      { return runImportSemanticCommand(args) }
 func RunImportCodexSessionsCommand(args []string) error { return runImportCodexSessionsCommand(args) }
+func RunEvidenceCommand(args []string) error            { return runEvidenceCommand(args) }
 
 func ClearSharedDynamicMemory(cfg *config.Config) (int, error) { return clearSharedDynamicMemory(cfg) }
 func ArchiveColdDailyNotes(cfg *config.Config, now time.Time) (int, error) {

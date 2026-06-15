@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -408,17 +409,5 @@ func (c *Client) WorkEvents() []session.WorkCodexEvent {
 func AppServerCommandAllowed(command string) bool { return codexAppServerCommandAllowed(command) }
 
 func codexAppServerCommandAllowed(command string) bool {
-	compact := strings.Join(strings.Fields(strings.TrimSpace(command)), " ")
-	allowedExact := map[string]struct{}{
-		"hostname":                    {},
-		"sw_vers":                     {},
-		"uname -m":                    {},
-		"uptime":                      {},
-		"df -h /":                     {},
-		"df -g /":                     {},
-		"ps -A -o comm= -r | head -5": {},
-		"ps -A -o comm= -m | head -5": {},
-	}
-	_, ok := allowedExact[compact]
-	return ok
+	return commandeffect.AppServerStatusCommandAllowed(command)
 }

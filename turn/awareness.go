@@ -51,6 +51,15 @@ func ApplyHiddenInputAwareness(aw prompt.RuntimeAwareness, input HiddenInputAwar
 	return aw
 }
 
+// ApplyWorkingObjectiveAwareness composes the active conversational objective
+// into runtime awareness before persisted plans or operation snapshots.
+func ApplyWorkingObjectiveAwareness(aw prompt.RuntimeAwareness, state session.WorkingObjective) prompt.RuntimeAwareness {
+	state = session.NormalizeWorkingObjective(state)
+	aw.WorkingObjective = state.Objective
+	aw.WorkingObjectiveSource = state.Source
+	return aw
+}
+
 // ApplyPlanAwareness composes plan-state fields from the operational
 // current-state store into runtime awareness.
 func ApplyPlanAwareness(aw prompt.RuntimeAwareness, state session.PlanState) prompt.RuntimeAwareness {

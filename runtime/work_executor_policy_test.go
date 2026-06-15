@@ -126,6 +126,85 @@ func TestWorkResultHasSubstantiveCompletionEvidence(t *testing.T) {
 	}
 }
 
+func TestWorkResultCompletionEvidenceForRequestRequiresMaterialEvidenceForAuthorityWork(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	readOnlyReq := WorkRequest{
+		Mode: WorkModeReadOnly,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{RiskClass: "read_only_review", Status: session.ProposalStatusApproved},
+			ContinuationLease: session.ContinuationLease{
+				ID:             "lease-read-only",
+				Status:         session.ContinuationLeaseStatusActive,
+				AllowedActions: []string{"read_only"},
+				ExpiresAt:      now.Add(time.Hour),
+			},
+		},
+	}
+	if !workResultHasSubstantiveCompletionEvidenceForRequest(readOnlyReq, WorkResult{Summary: "Read-only inspection completed."}) {
+		t.Fatal("read-only summary-only result should remain valid completion evidence")
+	}
+
+	writeReq := readOnlyReq
+	writeReq.Mode = WorkModeWorkspaceWrite
+	writeReq.State.ActionProposal.RiskClass = "workspace_write"
+	writeReq.State.ContinuationLease.AllowedActions = []string{"workspace_write", "edit_files"}
+	if workResultHasSubstantiveCompletionEvidenceForRequest(writeReq, WorkResult{Summary: "Patched it."}) {
+		t.Fatal("workspace-write summary-only result completed, want material evidence required")
+	}
+	if !workResultHasSubstantiveCompletionEvidenceForRequest(writeReq, WorkResult{Commands: []string{"sed -i 's/a/b/' runtime/example.go"}}) {
+		t.Fatal("workspace-write mutating command should count as material completion evidence")
+	}
+
+	grantReq := readOnlyReq
+	grantReq.Mode = WorkModeReadOnly
+	grantReq.State.ActionProposal.RiskClass = "external_account_pr_create"
+	grantReq.State.ActionProposal.AllowedActions = []string{"github_pr_create", "report_pr_link"}
+	grantReq.State.ContinuationLease.LeaseClass = session.ContinuationLeaseClassCapabilityGrant
+	grantReq.State.ContinuationLease.RequiredCapabilityGrants = []session.CapabilityGrantSpec{{
+		RequestID:      "cap-release-pr",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github",
+		GrantedTo:      "telegram:1001",
+		AllowedActions: []string{"write"},
+	}}
+	if workResultHasSubstantiveCompletionEvidenceForRequest(grantReq, WorkResult{Summary: "I opened the PR."}) {
+		t.Fatal("external-account summary-only result completed, want material evidence required")
+	}
+	if workResultHasSubstantiveCompletionEvidenceForRequest(grantReq, WorkResult{Commands: []string{"gh auth status"}}) {
+		t.Fatal("external-account status check completed mutation phase, want actual external-account effect evidence")
+	}
+	if !workResultHasSubstantiveCompletionEvidenceForRequest(grantReq, WorkResult{Commands: []string{"gh pr create --base release/v0.2.5 --head main --fill"}}) {
+		t.Fatal("successful GitHub PR creation command should count as material external-account evidence")
+	}
+	if !workResultHasSubstantiveCompletionEvidenceForRequest(grantReq, WorkResult{
+		Commands:      []string{"gh pr create --base release/v0.2.5 --head main --fill"},
+		ToolSuccesses: 1,
+		ToolFailures:  1,
+		ToolFailure:   "exec failed: ls missing-follow-up",
+	}) {
+		t.Fatal("successful material action plus incidental later failure should remain completion evidence")
+	}
+	if workResultHasSubstantiveCompletionEvidenceForRequest(grantReq, WorkResult{
+		Commands:         []string{"gh pr create --base release/v0.2.5 --head main --fill"},
+		ToolSuccesses:    1,
+		ToolFailures:     2,
+		ToolFailure:      "exec failed: ls missing-follow-up",
+		ToolFailureTexts: []string{"exec failed: ls missing-follow-up", "AUTHORITY_REJECTED: AskForGrant"},
+	}) {
+		t.Fatal("later authority rejection should invalidate material completion even when first failure was incidental")
+	}
+	if workResultHasSubstantiveCompletionEvidenceForRequest(grantReq, WorkResult{
+		Summary:      "I drafted the PR body but could not create the PR.",
+		Commands:     []string{"gh pr create --base release/v0.2.5 --head main --fill"},
+		ToolFailures: 1,
+		ToolFailure:  "AUTHORITY_REJECTED: AskForGrant",
+	}) {
+		t.Fatal("failed authority/tool evidence completed external-account phase, want blocked/retry path")
+	}
+}
+
 func TestConsumedWorkPhaseDoesNotCompleteWithoutMatchingWorkEvidence(t *testing.T) {
 	t.Parallel()
 

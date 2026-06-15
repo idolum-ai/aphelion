@@ -99,12 +99,16 @@ func (r *Runtime) assembleInteractiveLikeTurn(ctx context.Context, input interac
 	hiddenInputs.addCoreAll(prepared.ArtifactDecisionInputs)
 	hiddenInputs = r.withInteriorSignalState(input.Key, hiddenInputs, now, false)
 	planEvents, _ := r.store.PlanEvents(input.Key, 20)
+	workingObjective, _ := r.store.WorkingObjective(input.Key)
 	baseGovernorAwareness := turn.ApplyContinuationAwareness(
 		turn.ApplyOperationAwareness(
 			turn.ApplyPlanAwarenessWithEvents(
-				turn.ApplyEventAwareness(
-					turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(input.Scope, runKind, channel, exec), hiddenInputs.toTurnAwareness()),
-					input.EventAwareness,
+				turn.ApplyWorkingObjectiveAwareness(
+					turn.ApplyEventAwareness(
+						turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(input.Scope, runKind, channel, exec), hiddenInputs.toTurnAwareness()),
+						input.EventAwareness,
+					),
+					workingObjective,
 				),
 				sess.PlanState,
 				planEvents,
@@ -113,6 +117,7 @@ func (r *Runtime) assembleInteractiveLikeTurn(ctx context.Context, input interac
 		),
 		sess.ContinuationState,
 	)
+	baseGovernorAwareness = r.applyEvidenceHydrationAwareness(ctx, baseGovernorAwareness, input.Key, runKind, prepared.LedgerText, sess, now)
 	baseGovernorAwareness = r.applyReplyModalityAwareness(baseGovernorAwareness, prepared)
 	if useMaterialFloor {
 		baseGovernorAwareness.ArtifactMode = "floor"

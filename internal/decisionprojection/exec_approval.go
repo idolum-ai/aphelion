@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -83,6 +84,31 @@ func ExecCommandClass(command string) string {
 		return ExecCommandClassFocusedTests
 	case containsAny(lower, "gofmt ", "go fmt", "go mod tidy", "git add", "apply_patch"):
 		return ExecCommandClassRepoEdit
+	}
+
+	switch effect := commandeffect.Classify(command); effect.Kind {
+	case commandeffect.KindReadOnlyInspection:
+		if effect.ReadOnlyAllowed() {
+			return ExecCommandClassRepoRead
+		}
+	case commandeffect.KindValidation:
+		return ExecCommandClassFocusedTests
+	case commandeffect.KindWorkspaceMutation:
+		return ExecCommandClassRepoEdit
+	case commandeffect.KindRepoHistory:
+		if effect.Reason == commandeffect.ReasonGitCommit {
+			return ExecCommandClassGitCommit
+		}
+		if effect.Reason == commandeffect.ReasonGitPush {
+			return ExecCommandClassRemoteMutation
+		}
+		return ExecCommandClassStateMutation
+	case commandeffect.KindExternal, commandeffect.KindExternalAccount, commandeffect.KindRemoteHost, commandeffect.KindCredential:
+		return ExecCommandClassRemoteMutation
+	case commandeffect.KindService:
+		return ExecCommandClassDeployRestart
+	case commandeffect.KindDatabase, commandeffect.KindHighImpactStorage:
+		return ExecCommandClassStateMutation
 	}
 
 	segments := commandSegments(command)

@@ -1292,6 +1292,49 @@ func TestMigratesSchemaV63ToV64TurnRunAccounting(t *testing.T) {
 	assertSQLiteColumn(t, store.db, "reentry_recommendations", "terminal_fingerprint")
 }
 
+func TestMigratesSchemaV67ToV68MediaPickerSourceIngressColumns(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v67.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v67 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (67)`,
+		`CREATE TABLE telegram_media_thread_pickers (
+			chat_id INTEGER NOT NULL,
+			picker_message_id INTEGER NOT NULL,
+			source_message_id INTEGER NOT NULL DEFAULT 0,
+			inbound_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'routed', 'cleared')),
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			PRIMARY KEY(chat_id, picker_message_id)
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v67 fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v67 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v67) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteColumn(t, store.db, "telegram_media_thread_pickers", "source_ingress_surface")
+	assertSQLiteColumn(t, store.db, "telegram_media_thread_pickers", "source_ingress_update_id")
+}
+
 func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {
 	t.Helper()
 	rows, err := db.Query(`PRAGMA table_info(` + tableName + `)`)

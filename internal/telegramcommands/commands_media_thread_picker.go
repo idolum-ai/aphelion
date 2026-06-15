@@ -88,6 +88,23 @@ func handleTelegramMediaThreadPickerCallback(ctx context.Context, sender command
 		}
 	}
 	switch parts[1] {
+	case "main":
+		msg, ok, err := picker.TelegramMediaThreadPicker(chatID, messageID)
+		if err != nil {
+			return true, err
+		}
+		if !ok {
+			return true, sender.AnswerCallbackQuery(ctx, cb.ID, "Original media message is unavailable.")
+		}
+		msg.TelegramThreadID = 0
+		if err := picker.RouteAccepted(ctx, msg); err != nil {
+			return true, err
+		}
+		if err := picker.MarkTelegramMediaThreadPickerRouted(chatID, messageID); err != nil {
+			return true, err
+		}
+		_ = sender.AnswerCallbackQuery(ctx, cb.ID, "Sent to main chat.")
+		return true, editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, "Media routed to main chat.")
 	case "page":
 		page := 0
 		if len(parts) > 2 {
@@ -157,8 +174,10 @@ func renderMediaThreadPicker(msg core.InboundMessage, open []session.TelegramThr
 	if end > len(open) {
 		end = len(open)
 	}
-	text := "Which open thread should process this media?"
-	rows := [][]telegram.InlineButton{}
+	text := "Which chat or thread should process this media?"
+	rows := [][]telegram.InlineButton{{
+		{Text: "Main chat", CallbackData: mediaThreadPickPrefix + "main"},
+	}}
 	for _, th := range open[start:end] {
 		label := fmt.Sprintf("Thread %d", th.DisplaySlot)
 		if strings.TrimSpace(th.ArchivedDisplayName) != "" {

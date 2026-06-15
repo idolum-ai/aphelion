@@ -317,6 +317,13 @@ func migrateSchemaV66ToV67(tx *sql.Tx) error {
 	return nil
 }
 
+func migrateSchemaV67ToV68(tx *sql.Tx) error {
+	if err := ensureTelegramMediaPickerSourceIngressColumns(tx); err != nil {
+		return fmt.Errorf("migrate schema v67 to v68 ensure media picker source ingress columns: %w", err)
+	}
+	return nil
+}
+
 func ensureTurnRunAccountingColumns(tx *sql.Tx) error {
 	exists, err := schemaTableExists(tx, "turn_runs")
 	if err != nil {

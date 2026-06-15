@@ -578,7 +578,7 @@ func (r *Runtime) runReservedApprovedWorkContinuation(ctx context.Context, key s
 		r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorFailed, "work", "recovery_blocked", payload, time.Now().UTC())
 		return nil
 	}
-	if err == nil && !workResultHasSubstantiveCompletionEvidence(result) {
+	if err == nil && result.Recovery == nil && !workResultHasSubstantiveCompletionEvidenceForRequest(req, result) {
 		err = errWorkExecutorNoCompletionEvidence
 	}
 	if err != nil {

@@ -5,9 +5,11 @@ package runtime
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	runtimecodex "github.com/idolum-ai/aphelion/runtime/codex"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 )
 
 func codexWorkThreadStartParams(req WorkRequest) map[string]any {
@@ -112,6 +114,9 @@ func codexWorkApprovalHandler(req WorkRequest) runtimecodex.ApprovalHandler {
 }
 
 func codexWorkCommandAllowed(req WorkRequest, command string) bool {
+	if decision := toolpkg.ContinuationExecAuthorityDecisionForCommand(req.State, command, time.Now().UTC()); decision.Active && decision.Boundary {
+		return decision.Allowed
+	}
 	return runtimecodex.CommandAllowed(runtimecodex.WorkMode(req.Mode), req.RepoRoot, req.Workdir, command)
 }
 

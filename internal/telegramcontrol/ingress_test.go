@@ -98,6 +98,64 @@ func TestRouteAcceptedDropsClosedTelegramThreadIngress(t *testing.T) {
 	}
 }
 
+func TestRouteAcceptedQueuesParkedMediaPickerIngress(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "control-media-picker-ingress.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 6, 14, 20, 25, 37, 0, time.UTC)
+	if _, err := store.RecordTelegramIngressAccepted(session.TelegramIngressUpdateRecord{
+		Surface:     telegramruntime.PrimaryIngressSurface,
+		UpdateID:    9001,
+		UpdateKind:  "message",
+		ChatID:      7001,
+		SenderID:    42,
+		MessageID:   501,
+		SessionID:   "telegram_dm:7001",
+		Status:      session.TelegramIngressUpdateAccepted,
+		InboundJSON: `{"MessageID":501}`,
+		AcceptedAt:  now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("RecordTelegramIngressAccepted() err = %v", err)
+	}
+	if _, err := store.MarkTelegramIngressParked(telegramruntime.PrimaryIngressSurface, 9001, session.TelegramIngressParkReasonMediaThreadPicker, now.Add(time.Second)); err != nil {
+		t.Fatalf("MarkTelegramIngressParked() err = %v", err)
+	}
+
+	ingress := &recordingIngressRouter{}
+	control := CommandControl{Store: store, Ingress: ingress}
+	msg := core.InboundMessage{
+		ChatID:          7001,
+		ChatType:        "private",
+		SenderID:        42,
+		MessageID:       501,
+		IngressSurface:  telegramruntime.PrimaryIngressSurface,
+		IngressUpdateID: 9001,
+		Artifacts:       []core.Artifact{{ID: "telegram:document:file-id"}},
+	}
+	if err := control.RouteAccepted(context.Background(), msg); err != nil {
+		t.Fatalf("RouteAccepted() err = %v", err)
+	}
+	if len(ingress.enqueued) != 1 {
+		t.Fatalf("enqueued = %#v, want routed media message queued once", ingress.enqueued)
+	}
+	if ingress.enqueued[0].IngressSurface != telegramruntime.PrimaryIngressSurface || ingress.enqueued[0].IngressUpdateID != 9001 {
+		t.Fatalf("enqueued[0] = %#v, want original ingress identity", ingress.enqueued[0])
+	}
+	record, ok, err := store.TelegramIngressUpdate(telegramruntime.PrimaryIngressSurface, 9001)
+	if err != nil || !ok {
+		t.Fatalf("TelegramIngressUpdate() ok=%v err=%v", ok, err)
+	}
+	if record.Status != session.TelegramIngressUpdateQueued || record.QueuedAt.IsZero() {
+		t.Fatalf("record = %#v, want parked media ingress queued", record)
+	}
+}
+
 func TestQueueClarificationRecordsRecoverableCallbackWork(t *testing.T) {
 	t.Parallel()
 

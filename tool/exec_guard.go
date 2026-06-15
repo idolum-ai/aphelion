@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -192,14 +193,6 @@ func proposalForCommandSegment(segment string) (session.OperationProposal, strin
 	if readOnlyInspectionCommand(cmd, tokens[cmdIdx+1:]) {
 		return session.OperationProposal{}, ""
 	}
-	if cmd == "git" && gitArgsContainCommit(shellTokenTexts(tokens[cmdIdx+1:])) {
-		return session.OperationProposal{
-			Kind:          "repo_history_mutation",
-			Summary:       "Create a local git commit",
-			WhyNow:        "Saving this work as a commit gives us a clean review and rollback point before continuing.",
-			BoundedEffect: "Create or amend one local git commit for the current operation. This approval will not push to any remote.",
-		}, "repository commit"
-	}
 	lower := strings.ToLower(strings.TrimSpace(unquotedShellContent(segment)))
 	for _, pattern := range capabilityAcquisitionPatterns {
 		if pattern.re.MatchString(lower) {
@@ -228,6 +221,9 @@ func proposalForCommandSegment(segment string) (session.OperationProposal, strin
 			return pattern.proposal, pattern.reason
 		}
 	}
+	if proposal, reason := boundaryProposalForCommand(segment); reason != "" {
+		return proposal, reason
+	}
 	if strings.Contains(lower, "delete from") && !strings.Contains(lower, " where ") {
 		return session.OperationProposal{
 			Kind:          "possible_database_delete_command",
@@ -239,22 +235,53 @@ func proposalForCommandSegment(segment string) (session.OperationProposal, strin
 	return session.OperationProposal{}, ""
 }
 
-func gitArgsContainCommit(args []string) bool {
-	for i := 0; i < len(args); i++ {
-		token := trimShellishToken(args[i])
-		if token == "" || token == "--" {
-			continue
-		}
-		if gitGlobalOptionConsumesValue(token) {
-			i++
-			continue
-		}
-		if gitGlobalOptionHasInlineValue(token) || strings.HasPrefix(token, "-") {
-			continue
-		}
-		return token == "commit"
+func boundaryProposalForCommand(command string) (session.OperationProposal, string) {
+	boundary, ok := commandeffect.BoundaryForCommand(command)
+	if !ok {
+		return session.OperationProposal{}, ""
 	}
-	return false
+	switch boundary.Kind {
+	case commandeffect.BoundaryGitCommit:
+		return session.OperationProposal{
+			Kind:          "repo_history_mutation",
+			Summary:       "Create a local git commit",
+			WhyNow:        "Saving this work as a commit gives us a clean review and rollback point before continuing.",
+			BoundedEffect: "Create or amend one local git commit for the current operation. This approval will not push to any remote.",
+		}, "repository commit"
+	case commandeffect.BoundaryGitPush:
+		return session.OperationProposal{
+			Kind:          "repo_history_mutation",
+			Summary:       "Push git history to a remote",
+			WhyNow:        "This command publishes local repository history to a remote.",
+			BoundedEffect: "Push repository history for this command once. It does not approve unrelated commits, deploys, restarts, releases, or account changes.",
+		}, "repository push"
+	case commandeffect.BoundaryExternalAccount:
+		return session.OperationProposal{
+			Kind:          "external_account_command",
+			Summary:       "Use external account command",
+			WhyNow:        "This command uses an external-account CLI or credential-bearing account surface.",
+			BoundedEffect: "Run this external-account command once. It does not approve unrelated pushes, deploys, restarts, credentials, or account changes.",
+		}, "external account command"
+	case commandeffect.BoundaryRemoteHostOperation:
+		return session.OperationProposal{
+			Kind:          "remote_host_operation",
+			Summary:       "Use remote host access",
+			WhyNow:        "This command reaches a remote host or synchronizes data across a remote boundary.",
+			BoundedEffect: "Run this remote-access command once. It does not approve unrelated deploys, restarts, credentials, or account changes.",
+		}, "remote host operation"
+	case commandeffect.BoundaryServiceProcessChange:
+		return serviceProcessChangeProposal(), "service/process change"
+	}
+	return session.OperationProposal{}, ""
+}
+
+func serviceProcessChangeProposal() session.OperationProposal {
+	return session.OperationProposal{
+		Kind:          "service_process_change",
+		Summary:       "Approve service or process change",
+		WhyNow:        "This command can change a local service, process, container, or cluster state.",
+		BoundedEffect: "Run this service/process command once. It does not approve unrelated deploys, repository pushes, credentials, or account changes.",
+	}
 }
 
 func gitGlobalOptionConsumesValue(token string) bool {

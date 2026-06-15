@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
@@ -58,7 +59,7 @@ func (r *Runtime) persistWorkResult(key session.SessionKey, req WorkRequest, res
 		opState.Work.LastError = workResultRecoverySummary(result)
 	}
 	opState.Work.LastExecutorUpdatedAt = time.Now().UTC()
-	if cause == nil && result.Recovery == nil && workResultHasSubstantiveCompletionEvidence(result) {
+	if cause == nil && result.Recovery == nil && workResultHasSubstantiveCompletionEvidenceForRequest(req, result) {
 		opState.Work.LastCompletedAt = opState.Work.LastExecutorUpdatedAt
 	} else {
 		opState.Work.LastCompletedAt = time.Time{}
@@ -83,6 +84,161 @@ func workResultHasSubstantiveCompletionEvidence(result WorkResult) bool {
 		len(result.CodexEvents) > 0 ||
 		strings.TrimSpace(result.PatchPreview) != "" ||
 		strings.TrimSpace(result.CommitLaneStatus) != ""
+}
+
+func workResultHasSubstantiveCompletionEvidenceForRequest(req WorkRequest, result WorkResult) bool {
+	if workRequestRequiresMaterialCompletionEvidence(req) {
+		if !workResultHasMaterialCompletionEvidence(req, result) {
+			return false
+		}
+		return !workResultFailureInvalidatesMaterialCompletion(result)
+	}
+	if workResultHasFailedToolEvidence(result) {
+		return false
+	}
+	return workResultHasSubstantiveCompletionEvidence(result)
+}
+
+func workResultHasFailedToolEvidence(result WorkResult) bool {
+	return result.ToolFailures > 0 || strings.TrimSpace(result.ToolFailure) != ""
+}
+
+func workResultFailureInvalidatesMaterialCompletion(result WorkResult) bool {
+	for _, failure := range append([]string{result.ToolFailure}, result.ToolFailureTexts...) {
+		if workResultFailureTextInvalidatesMaterialCompletion(failure) {
+			return true
+		}
+	}
+	return false
+}
+
+func workResultFailureTextInvalidatesMaterialCompletion(failure string) bool {
+	failure = strings.ToLower(strings.TrimSpace(failure))
+	if failure == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"authority_rejected",
+		"approval required",
+		"authorization required",
+		"permission denied",
+		"not authorized",
+		"unauthorized",
+		"no active grant",
+		"grant required",
+		"capability required",
+	} {
+		if strings.Contains(failure, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func workRequestRequiresMaterialCompletionEvidence(req WorkRequest) bool {
+	if workModeRank(req.Mode) > workModeRank(WorkModeReadOnly) {
+		return true
+	}
+	state := session.NormalizeContinuationState(req.State)
+	if len(state.ContinuationLease.RequiredCapabilityGrants) > 0 {
+		return true
+	}
+	if session.InferContinuationLeaseClass(state.ActionProposal.RiskClass, state.ActionProposal.AllowedActions, state.ActionProposal.BoundedEffect) == session.ContinuationLeaseClassCapabilityGrant {
+		return true
+	}
+	if class := session.InferContinuationLeaseClass(string(state.ContinuationLease.LeaseClass), state.ContinuationLease.AllowedActions, ""); class == session.ContinuationLeaseClassCapabilityGrant {
+		return true
+	}
+	if phase, ok := currentContinuationBundlePhase(state.ApprovalBundle); ok {
+		if len(phase.RequiredCapabilityGrants) > 0 {
+			return true
+		}
+		if session.InferContinuationLeaseClass(phase.AuthorityClass, phase.AllowedActions, phase.BoundedEffect) == session.ContinuationLeaseClassCapabilityGrant {
+			return true
+		}
+	}
+	return false
+}
+
+func workResultHasMaterialCompletionEvidence(req WorkRequest, result WorkResult) bool {
+	if len(result.ChangedFiles) > 0 ||
+		len(result.CodexEvents) > 0 ||
+		strings.TrimSpace(result.PatchPreview) != "" ||
+		strings.TrimSpace(result.CommitLaneStatus) != "" {
+		return true
+	}
+	for _, command := range result.Commands {
+		effect := commandeffect.Classify(command)
+		if workCommandEffectCompletesRequest(req, command, effect) {
+			return true
+		}
+	}
+	return false
+}
+
+func workCommandEffectCompletesRequest(req WorkRequest, command string, effect commandeffect.Effect) bool {
+	if !effect.SideEffects && effect.Kind == commandeffect.KindReadOnlyInspection {
+		return false
+	}
+	switch req.Mode {
+	case WorkModeDeploy:
+		return effect.Kind == commandeffect.KindService ||
+			effect.Kind == commandeffect.KindRemoteHost ||
+			effect.Kind == commandeffect.KindBuildArtifact ||
+			effect.Kind == commandeffect.KindRepoHistory ||
+			effect.Kind == commandeffect.KindExternalAccount
+	case WorkModeCommit:
+		return effect.Kind == commandeffect.KindRepoHistory
+	case WorkModeWorkspaceWrite:
+		return effect.Kind == commandeffect.KindWorkspaceMutation ||
+			effect.Kind == commandeffect.KindBuildArtifact ||
+			effect.Kind == commandeffect.KindValidation
+	case WorkModeReadOnly, "":
+		state := session.NormalizeContinuationState(req.State)
+		if session.InferContinuationLeaseClass(state.ActionProposal.RiskClass, state.ActionProposal.AllowedActions, state.ActionProposal.BoundedEffect) == session.ContinuationLeaseClassCapabilityGrant ||
+			len(state.ContinuationLease.RequiredCapabilityGrants) > 0 {
+			return workExternalAccountCommandCompletesRequest(state, command, effect)
+		}
+		return effect.Kind != commandeffect.KindUnknown
+	default:
+		return effect.Kind != commandeffect.KindUnknown
+	}
+}
+
+func workExternalAccountCommandCompletesRequest(state session.ContinuationState, command string, effect commandeffect.Effect) bool {
+	switch effect.Kind {
+	case commandeffect.KindExternalAccount, commandeffect.KindCredential, commandeffect.KindCapability:
+	default:
+		return false
+	}
+	allowed := append([]string(nil), state.ActionProposal.AllowedActions...)
+	allowed = append(allowed, state.ContinuationLease.AllowedActions...)
+	if phase, ok := currentContinuationBundlePhase(state.ApprovalBundle); ok {
+		allowed = append(allowed, phase.AllowedActions...)
+	}
+	commandToken := normalizeContinuationAuthorityAction(command)
+	for _, action := range allowed {
+		switch normalizeContinuationAuthorityAction(action) {
+		case "github_pr_create", "github_pr_open", "pull_request_create", "pull_request_open", "open_pull_request", "create_github_pr":
+			if strings.Contains(commandToken, "gh_pr_create") ||
+				strings.Contains(commandToken, "gh_pr_open") ||
+				strings.Contains(commandToken, "pull_request_create") ||
+				strings.Contains(commandToken, "create_github_pr") {
+				return true
+			}
+		case "github_pr_update", "github_pr_metadata_update", "pull_request_update", "pull_request_metadata_update", "update_pull_request_title", "update_pull_request_body":
+			if strings.Contains(commandToken, "gh_pr_edit") ||
+				strings.Contains(commandToken, "pull_request_update") ||
+				strings.Contains(commandToken, "update_pull_request") {
+				return true
+			}
+		default:
+			if normalizeContinuationAuthorityAction(action) == "invoke_active_capability_grant" {
+				return effect.Kind == commandeffect.KindExternalAccount && strings.Contains(commandToken, "gh_")
+			}
+		}
+	}
+	return false
 }
 
 func (r *Runtime) deliverWorkResult(ctx context.Context, key session.SessionKey, result WorkResult, artifact session.OperationArtifact) error {
@@ -251,6 +407,10 @@ func workResultArtifactMarkdown(key session.SessionKey, req WorkRequest, result 
 		len(result.CodexEvents) == 0 &&
 		strings.TrimSpace(result.PatchPreview) == "" &&
 		len(result.ApprovalLog) == 0 &&
+		result.TurnRunID == 0 &&
+		result.ToolSuccesses == 0 &&
+		result.ToolFailures == 0 &&
+		strings.TrimSpace(result.ToolFailure) == "" &&
 		cause == nil {
 		return ""
 	}
@@ -275,6 +435,18 @@ func workResultArtifactMarkdown(key session.SessionKey, req WorkRequest, result 
 	}
 	if result.ProviderFailure != "" {
 		fmt.Fprintf(&b, "- provider_failure: %s\n", trimError(result.ProviderFailure))
+	}
+	if result.TurnRunID != 0 {
+		fmt.Fprintf(&b, "- turn_run_id: %d\n", result.TurnRunID)
+	}
+	if result.ToolSuccesses > 0 {
+		fmt.Fprintf(&b, "- tool_successes: %d\n", result.ToolSuccesses)
+	}
+	if result.ToolFailures > 0 {
+		fmt.Fprintf(&b, "- tool_failures: %d\n", result.ToolFailures)
+	}
+	if result.ToolFailure != "" {
+		fmt.Fprintf(&b, "- tool_failure: %s\n", trimError(result.ToolFailure))
 	}
 	if result.Recovery != nil {
 		fmt.Fprintf(&b, "- recovery_kind: %s\n", strings.TrimSpace(string(result.Recovery.Kind)))
@@ -417,6 +589,9 @@ func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorSt
 		"commands_count":        len(result.Commands),
 		"codex_events_count":    len(result.CodexEvents),
 		"approval_events_count": len(result.ApprovalLog),
+		"turn_run_id":           result.TurnRunID,
+		"tool_successes":        result.ToolSuccesses,
+		"tool_failures":         result.ToolFailures,
 	}
 	if result.Recovery != nil {
 		payload["recovery_kind"] = strings.TrimSpace(string(result.Recovery.Kind))
@@ -446,6 +621,12 @@ func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorSt
 	}
 	if strings.TrimSpace(result.ProviderFailure) != "" {
 		payload["provider_failure"] = trimError(result.ProviderFailure)
+	}
+	if strings.TrimSpace(result.ToolFailure) != "" {
+		payload["tool_failure"] = trimError(result.ToolFailure)
+	}
+	if len(result.ToolFailureTexts) > 0 {
+		payload["tool_failure_texts"] = result.ToolFailureTexts
 	}
 	if cause != nil {
 		payload["error"] = trimError(cause.Error())

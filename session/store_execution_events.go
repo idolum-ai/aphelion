@@ -145,6 +145,11 @@ func appendExecutionEventsTx(tx *sql.Tx, key SessionKey, inputs []ExecutionEvent
 		})
 		nextSeq++
 	}
+	for _, event := range events {
+		if _, err := upsertEvidenceObjectTx(tx, executionEventEvidenceInput(event)); err != nil {
+			return nil, fmt.Errorf("write execution event evidence seq=%d: %w", event.Seq, err)
+		}
+	}
 	return events, nil
 }
 

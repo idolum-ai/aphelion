@@ -190,6 +190,19 @@ func (r *Registry) Definitions() []agent.ToolDef {
 				"required": ["query"]
 			}`),
 		},
+		{
+			Name:        "evidence_hydrate",
+			Description: "Retrieve canonical evidence objects for the current session or operation. Use this before relying on prior summaries during continuation, recovery, or long-horizon work; it is read-only and returns evidence IDs, source kinds, status, hashes, and bounded digests.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"query": {"type": "string", "description": "Current objective, question, or context pressure to hydrate evidence for"},
+					"operation_id": {"type": "string", "description": "Optional operation id to prioritize matching operation evidence"},
+					"required_evidence_ids": {"type": "array", "items": {"type": "string"}, "description": "Evidence ids that must be included or reported missing"},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Maximum evidence objects to return"}
+				}
+			}`),
+		},
 	}...)
 	if def, ok := r.codexImageGenerationToolDefinition(); ok {
 		defs = append(defs, def)

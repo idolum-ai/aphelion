@@ -77,6 +77,7 @@ type WorkRequest struct {
 
 type WorkResult struct {
 	ExecutorName     string
+	TurnRunID        int64
 	ThreadID         string
 	TurnID           string
 	Summary          string
@@ -94,4 +95,8 @@ type WorkResult struct {
 	ApprovalLog      []ApprovalDecision
 	CompletionKind   string
 	SideEffects      bool
+	ToolSuccesses    int
+	ToolFailures     int
+	ToolFailure      string
+	ToolFailureTexts []string
 }

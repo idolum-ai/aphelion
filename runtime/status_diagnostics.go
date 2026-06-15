@@ -45,6 +45,19 @@ func (r *Runtime) StatusDiagnostics(chatID int64) ([]string, error) {
 	if perception := chatSnapshot.LatestPerceptionBudget; perception != nil {
 		lines = append(lines, "Perception budget: "+summarizePerceptionBudgetStatus(*perception)+".")
 	}
+	if stats, err := r.store.EvidenceLedgerStatsForChat(chatID); err == nil && (stats.ObjectCount > 0 || stats.HydrationRunCount > 0) {
+		line := fmt.Sprintf("Evidence ledger: %d objects", stats.ObjectCount)
+		if stats.HydrationRunCount > 0 {
+			line += fmt.Sprintf(", %d hydration runs", stats.HydrationRunCount)
+		}
+		if stats.LatestSourceKind != "" {
+			line += ", latest source " + stats.LatestSourceKind
+		}
+		if !stats.LatestObservedAt.IsZero() {
+			line += " at " + stats.LatestObservedAt.UTC().Format(time.RFC3339)
+		}
+		lines = append(lines, line+".")
+	}
 	if continuation := chatSnapshot.Continuation; continuation != nil {
 		status := strings.ToLower(strings.TrimSpace(continuation.Status))
 		if status == "pending" || status == "approved" || status == "revoked" {

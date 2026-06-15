@@ -266,3 +266,65 @@ func TestAssembleInteractiveLikeTurnSpeciesOverrides(t *testing.T) {
 		t.Fatalf("durable prepared text = %q, want transformed text %q", durableAssembled.Prepared.UserText, durablePrepared.Text)
 	}
 }
+
+func TestAssembleInteractiveLikeTurnIncludesWorkingObjectiveBesideTerminalOperation(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	admin, ok := rt.resolver.ResolveTelegramUser(1001)
+	if !ok {
+		t.Fatal("ResolveTelegramUser(1001) = false, want true")
+	}
+	dmScope, err := rt.scopeForPrincipal(admin)
+	if err != nil {
+		t.Fatalf("scopeForPrincipal() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9025, UserID: 0, Scope: telegramDMScopeRef(9025)}
+	if err := store.UpdateWorkingObjective(key, session.WorkingObjective{
+		Objective: "current durable children resource-separation question",
+		Source:    "inferred",
+	}); err != nil {
+		t.Fatalf("UpdateWorkingObjective() err = %v", err)
+	}
+	stale := budgetRecoveryTestOperationState()
+	stale.ID = "stale-side-thread-operation"
+	stale.Objective = "Document old Imexx SSH recall context."
+	stale.Status = session.OperationStatusCompleted
+	stale.Stage = "completed"
+	stale.PhasePlan.Phases[0].Status = session.PlanStatusCompleted
+	if err := store.UpdateOperationState(key, stale); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	assembled, err := rt.assembleInteractiveLikeTurn(context.Background(), interactiveLikeAssemblyInput{
+		Scope:                dmScope,
+		Key:                  key,
+		Msg:                  core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, SenderName: "admin", Text: "what do durable children need here?", MessageID: 31},
+		Channel:              "telegram",
+		RunKind:              session.TurnRunKindInteractive,
+		PrincipalRole:        string(admin.Role),
+		AuditChannel:         "telegram",
+		EventAwareness:       turn.EventAwareness{Origin: string(core.InboundOriginUser)},
+		PromptContextErrHint: "load workspace prompt context",
+		PolicyReason:         "mapped from pipeline interactive face policy",
+	})
+	if err != nil {
+		t.Fatalf("assembleInteractiveLikeTurn() err = %v", err)
+	}
+	aw := assembled.BaseGovernorAwareness
+	if got, want := aw.WorkingObjective, "current durable children resource-separation question"; got != want {
+		t.Fatalf("WorkingObjective = %q, want %q", got, want)
+	}
+	if got, want := aw.WorkingObjectiveSource, "inferred"; got != want {
+		t.Fatalf("WorkingObjectiveSource = %q, want %q", got, want)
+	}
+	if got, want := aw.OperationStatus, string(session.OperationStatusCompleted); got != want {
+		t.Fatalf("OperationStatus = %q, want %q", got, want)
+	}
+	if got, want := aw.OperationObjective, "Document old Imexx SSH recall context."; got != want {
+		t.Fatalf("OperationObjective = %q, want %q", got, want)
+	}
+}

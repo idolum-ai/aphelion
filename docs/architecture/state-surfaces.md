@@ -22,6 +22,10 @@ Aphelion state is intentionally multi-surface.
   diagnosis: operational current-state store.
 - Execution event timeline (`execution_events`) for ingress/turn/tool/delivery
   truth: canonical.
+- Universal evidence ledger (`evidence_objects`, `evidence_links`, and
+  `evidence_hydration_runs`) for immutable source snapshots and audited context
+  hydration: canonical for evidence-object identity, source provenance, payload
+  hash, and hydration history.
 - Telegram ingress offset, accepted-update, and poison-update ledgers:
   operational current-state stores for transport recovery.
 - Telegram work-surface registry in code for startup replay of primary messages,
@@ -48,6 +52,9 @@ Classifications below use the shared truth classes defined in
 | Surface / Store | Classification | Canonical Question |
 | --- | --- | --- |
 | `session.execution_events` | canonical | What happened in runtime, in what order? |
+| `session.evidence_objects` | canonical | Which immutable source evidence snapshots are available for rehydration, and what source/status/hash do they carry? |
+| `session.evidence_links` | canonical | Which evidence objects were explicitly linked, by what relation and source? |
+| `session.evidence_hydration_runs` | canonical | Which evidence objects were selected or reported missing for a hydration request? |
 | `session.messages` | canonical | What scene text was recorded for the session? |
 | `messages.floor_content` | canonical | What floor text was captured alongside scene text at message-record time? |
 | `messages.floor_metadata` | canonical | What floor metadata/artifact references were captured alongside scene text at message-record time? |
@@ -99,6 +106,20 @@ Turn-run accounting note:
 - Those counters support `/status`, `/health trace`, and doctor diagnosis. They
   do not replace TES as execution-order truth and should not be treated as a
   canonical transcript.
+
+Universal evidence ledger note:
+
+- `evidence_objects` are immutable snapshots keyed by source kind and source ref.
+  Mutable operational stores may produce multiple evidence snapshots over time;
+  the evidence object itself is not updated after insertion.
+- `evidence_hydration_runs` records deterministic evidence selection for a
+  current session or operation, including missing required evidence IDs and
+  fallback use.
+- Hydration preserves the active session boundary by default. A known evidence
+  ID from another session is a gap, not ambient recall.
+- Startup migration seeds only current session snapshots. Explicit historical
+  backfill can record the current value of mutable JSON stores, but it must not
+  pretend intermediate states were recovered.
 
 Curiosity note:
 

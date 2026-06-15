@@ -23,7 +23,8 @@ treats the audit log, not the conversation, as the source of truth.**
 | Continuation lease | Expiring, turn-metered, non-self-renewing authorization token | OAuth access tokens; Chubby-style leases |
 | Approval bundle phases | Per-phase step-up authorization, no blank checks | Step-up auth, separation of duties |
 | Work modes (`read_only < workspace_write < commit < deploy`) | Ranked privilege classes; requests are checked against the strongest granted class | Protection rings, RBAC tiers |
-| Execution-events ledger | Append-only event log as system of record | Event sourcing, WORM audit logs |
+| Execution-events ledger | Append-only event log as execution-order record | Event sourcing, WORM audit logs |
+| Universal evidence ledger | Immutable typed source snapshots plus audited context hydration | Evidence stores, provenance graphs, content-addressed audit trails |
 | `/status`, `/health trace`, doctor | Read models projected from the event log, with source attribution | CQRS projections |
 | Evidence-gated completion | State transitions to "done" require matching evidence records, not model assertions | CI gates: no green checks, no merge |
 | Typed claims | Model output affects state only through parsed, schema-validated structures; prose is presentation | "Parse, don't validate"; control/data plane separation |
@@ -77,10 +78,13 @@ to do it.
 
 Every meaningful action — message ingress, turn execution, tool call,
 delivery, authorization, recovery — is appended to an execution-events
-ledger as a typed row. Operator-facing status surfaces are projections of
-that ledger with source attribution, not summaries of the conversation.
-This is event sourcing, applied to agent operations, with one sharp
-corollary:
+ledger as a typed row. Those rows, plus transcript messages, operation state,
+capability records, curiosity observations, and artifacts, are indexed as
+immutable evidence objects with source kind, epistemic status, bounded digest,
+and a runtime-computed payload hash. Operator-facing status surfaces are
+projections of that evidence with source attribution, not summaries of the
+conversation. This is event sourcing plus provenance indexing, applied to agent
+operations, with one sharp corollary:
 
 **The agent is not allowed to declare its own work complete.** A phase
 transitions to "done" only when the ledger contains matching evidence — the
@@ -89,6 +93,11 @@ error. A model saying "I finished" with no evidence row is treated exactly
 like a build claiming success with no artifacts: rejected, with a typed
 reason code. This single rule eliminates the most common agent failure
 mode in production — confident, plausible, false completion reports.
+
+For long-horizon work, the same ledger is the context-fidelity substrate. A
+future turn can ask the runtime to hydrate the relevant evidence IDs for the
+current operation instead of reasoning from a chain of increasingly compressed
+conversation summaries.
 
 ### 4. Model output is untrusted input
 
@@ -127,11 +136,12 @@ always answer "why did you do that?"
 
 ### 6. Supply chain as a runtime safety property
 
-Three direct dependencies: a vendored SQLite driver, a TOML parser, and
+Six direct Go module requirements, of which three are the deliberately chosen
+primary third-party surfaces: a vendored SQLite driver, a TOML parser, and
 Tailscale. Channels, tools, and providers are compiled in, not loaded as
 plugins. For a process that holds your credentials and acts autonomously,
-dependency surface is attack surface — the same logic that motivates
-distroless images and SLSA, applied to a personal agent.
+dependency surface is attack surface — the same logic that motivates distroless
+images and SLSA, applied to a personal agent.
 
 ### 7. The repo audits itself
 

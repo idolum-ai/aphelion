@@ -34,41 +34,41 @@ func (s *SQLiteStore) RecordTelegramIngressAccepted(record TelegramIngressUpdate
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(surface, update_id) DO UPDATE SET
 			update_kind = CASE
-				WHEN telegram_ingress_updates.status IN ('running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.update_kind
+				WHEN telegram_ingress_updates.status IN ('parked', 'running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.update_kind
 				ELSE excluded.update_kind
 			END,
 			chat_id = CASE
-				WHEN telegram_ingress_updates.status IN ('running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.chat_id
+				WHEN telegram_ingress_updates.status IN ('parked', 'running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.chat_id
 				ELSE excluded.chat_id
 			END,
 			sender_id = CASE
-				WHEN telegram_ingress_updates.status IN ('running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.sender_id
+				WHEN telegram_ingress_updates.status IN ('parked', 'running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.sender_id
 				ELSE excluded.sender_id
 			END,
 			message_id = CASE
-				WHEN telegram_ingress_updates.status IN ('running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.message_id
+				WHEN telegram_ingress_updates.status IN ('parked', 'running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.message_id
 				ELSE excluded.message_id
 			END,
 			session_id = CASE
-				WHEN telegram_ingress_updates.status IN ('running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.session_id
+				WHEN telegram_ingress_updates.status IN ('parked', 'running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.session_id
 				ELSE excluded.session_id
 			END,
 			inbound_json = CASE
-				WHEN telegram_ingress_updates.status IN ('running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.inbound_json
+				WHEN telegram_ingress_updates.status IN ('parked', 'running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.inbound_json
 				WHEN excluded.inbound_json != '' THEN excluded.inbound_json
 				ELSE telegram_ingress_updates.inbound_json
 			END,
 			payload_json = CASE
-				WHEN telegram_ingress_updates.status IN ('running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.payload_json
+				WHEN telegram_ingress_updates.status IN ('parked', 'running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.payload_json
 				WHEN excluded.payload_json != '' THEN excluded.payload_json
 				ELSE telegram_ingress_updates.payload_json
 			END,
 			status = CASE
-				WHEN telegram_ingress_updates.status IN ('queued', 'running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.status
+				WHEN telegram_ingress_updates.status IN ('parked', 'queued', 'running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.status
 				ELSE excluded.status
 			END,
 			updated_at = CASE
-				WHEN telegram_ingress_updates.status IN ('running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.updated_at
+				WHEN telegram_ingress_updates.status IN ('parked', 'running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN telegram_ingress_updates.updated_at
 				ELSE excluded.updated_at
 			END
 	`,
@@ -101,6 +101,68 @@ func (s *SQLiteStore) RecordTelegramIngressAccepted(record TelegramIngressUpdate
 		return TelegramIngressTransitionResult{}, fmt.Errorf("telegram ingress update %s/%d missing after accept", record.Surface, record.UpdateID)
 	}
 	return telegramIngressTransitionResult(stored, true), nil
+}
+
+func (s *SQLiteStore) MarkTelegramIngressParked(surface string, updateID int64, reason string, parkedAt time.Time) (TelegramIngressTransitionResult, error) {
+	surface = strings.TrimSpace(surface)
+	if surface == "" || updateID <= 0 {
+		return TelegramIngressTransitionResult{}, nil
+	}
+	if parkedAt.IsZero() {
+		parkedAt = time.Now().UTC()
+	}
+	if err := markTelegramIngressParkedExec(s.db, surface, updateID, reason, parkedAt); err != nil {
+		return TelegramIngressTransitionResult{}, err
+	}
+	stored, ok, err := s.TelegramIngressUpdate(surface, updateID)
+	if err != nil {
+		return TelegramIngressTransitionResult{}, err
+	}
+	return telegramIngressTransitionResult(stored, ok), nil
+}
+
+func markTelegramIngressParkedExec(exec telegramIngressExecutor, surface string, updateID int64, reason string, parkedAt time.Time) error {
+	if exec == nil {
+		return nil
+	}
+	surface = strings.TrimSpace(surface)
+	if surface == "" || updateID <= 0 {
+		return nil
+	}
+	if parkedAt.IsZero() {
+		parkedAt = time.Now().UTC()
+	}
+	parkedRaw := parkedAt.UTC().Format(time.RFC3339Nano)
+	reason = clampStoreText(reason, 2000)
+	_, err := exec.Exec(`
+		UPDATE telegram_ingress_updates
+		SET
+			status = CASE
+				WHEN status IN ('queued', 'running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN status
+				ELSE ?
+			END,
+			error_text = CASE
+				WHEN status IN ('queued', 'running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN error_text
+				WHEN ? != '' THEN ?
+				ELSE error_text
+			END,
+			updated_at = CASE
+				WHEN status IN ('queued', 'running', 'completed', 'failed', 'dropped', 'interrupted', 'skipped') THEN updated_at
+				ELSE ?
+			END
+		WHERE surface = ? AND update_id = ?
+	`,
+		string(TelegramIngressUpdateParked),
+		reason,
+		reason,
+		parkedRaw,
+		surface,
+		updateID,
+	)
+	if err != nil {
+		return fmt.Errorf("mark telegram ingress parked: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) MarkTelegramIngressQueued(surface string, updateID int64, queuedAt time.Time) (TelegramIngressTransitionResult, error) {
@@ -187,7 +249,7 @@ func (s *SQLiteStore) DropPendingTelegramIngressForTelegramThread(chatID int64, 
 	return dropPendingTelegramIngressForTelegramThreadExec(s.db, chatID, threadID, reason, completedAt)
 }
 
-type telegramIngressDropExecutor interface {
+type telegramIngressExecutor interface {
 	Exec(query string, args ...any) (sql.Result, error)
 }
 
@@ -195,7 +257,7 @@ func dropPendingTelegramIngressForTelegramThreadTx(tx *sql.Tx, chatID int64, thr
 	return dropPendingTelegramIngressForTelegramThreadExec(tx, chatID, threadID, reason, completedAt)
 }
 
-func dropPendingTelegramIngressForTelegramThreadExec(exec telegramIngressDropExecutor, chatID int64, threadID int64, reason string, completedAt time.Time) (int, error) {
+func dropPendingTelegramIngressForTelegramThreadExec(exec telegramIngressExecutor, chatID int64, threadID int64, reason string, completedAt time.Time) (int, error) {
 	if exec == nil || chatID == 0 || threadID <= 0 {
 		return 0, nil
 	}
@@ -293,6 +355,86 @@ func (s *SQLiteStore) MarkTelegramIngressDroppedIfDispatchable(surface string, u
 		return TelegramIngressTransitionResult{}, err
 	}
 	return telegramIngressTransitionResult(stored, ok), nil
+}
+
+func markTelegramIngressDroppedIfParkedExec(exec telegramIngressExecutor, surface string, updateID int64, reason string, completedAt time.Time) error {
+	if exec == nil {
+		return nil
+	}
+	surface = strings.TrimSpace(surface)
+	if surface == "" || updateID <= 0 {
+		return nil
+	}
+	if completedAt.IsZero() {
+		completedAt = time.Now().UTC()
+	}
+	completedRaw := completedAt.UTC().Format(time.RFC3339Nano)
+	reason = clampStoreText(reason, 2000)
+	_, err := exec.Exec(`
+		UPDATE telegram_ingress_updates
+		SET
+			status = ?,
+			error_text = CASE
+				WHEN ? != '' THEN ?
+				ELSE error_text
+			END,
+			completed_at = COALESCE(completed_at, ?),
+			updated_at = ?
+		WHERE surface = ? AND update_id = ? AND status = ?
+	`,
+		string(TelegramIngressUpdateDropped),
+		reason,
+		reason,
+		completedRaw,
+		completedRaw,
+		surface,
+		updateID,
+		string(TelegramIngressUpdateParked),
+	)
+	if err != nil {
+		return fmt.Errorf("mark parked telegram ingress dropped: %w", err)
+	}
+	return nil
+}
+
+func dropParkedTelegramIngressForMediaMessageExec(exec telegramIngressExecutor, chatID int64, messageID int64, reason string, completedAt time.Time) error {
+	if exec == nil || chatID == 0 || messageID <= 0 {
+		return nil
+	}
+	if completedAt.IsZero() {
+		completedAt = time.Now().UTC()
+	}
+	completedRaw := completedAt.UTC().Format(time.RFC3339Nano)
+	reason = clampStoreText(reason, 2000)
+	_, err := exec.Exec(`
+		UPDATE telegram_ingress_updates
+		SET
+			status = ?,
+			error_text = CASE
+				WHEN ? != '' THEN ?
+				ELSE error_text
+			END,
+			completed_at = COALESCE(completed_at, ?),
+			updated_at = ?
+		WHERE chat_id = ?
+			AND message_id = ?
+			AND status = ?
+			AND error_text = ?
+	`,
+		string(TelegramIngressUpdateDropped),
+		reason,
+		reason,
+		completedRaw,
+		completedRaw,
+		chatID,
+		messageID,
+		string(TelegramIngressUpdateParked),
+		TelegramIngressParkReasonMediaThreadPicker,
+	)
+	if err != nil {
+		return fmt.Errorf("drop parked telegram ingress for media message: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) RecordTelegramIngressTerminal(record TelegramIngressUpdateRecord) error {
@@ -446,7 +588,7 @@ func (s *SQLiteStore) RecentTelegramIngressUpdates(limit int) ([]TelegramIngress
 			accepted_at, queued_at, started_at, completed_at, updated_at
 		FROM telegram_ingress_updates
 		ORDER BY
-			CASE WHEN status IN ('accepted', 'queued', 'running') THEN 0 ELSE 1 END,
+			CASE WHEN status IN ('accepted', 'parked', 'queued', 'running') THEN 0 ELSE 1 END,
 			updated_at DESC,
 			update_id DESC
 		LIMIT ?

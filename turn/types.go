@@ -53,6 +53,7 @@ type Request struct {
 // The embedded policy, commit, and delivery fields keep orchestration choices
 // inspectable in tests and runtime adapters.
 type Result struct {
+	RunID           int64
 	Turn            *core.TurnResult
 	Prepared        pipeline.TurnPrepareContract
 	OutHistory      []agent.Message

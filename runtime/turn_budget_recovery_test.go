@@ -115,7 +115,7 @@ func TestBudgetRecoveryDeliverySuppressesFinalReplyAndSchedulesInternalContinuat
 	if recorder.input.Msg.Origin != core.InboundOriginTurnAuthorization || recorder.input.Msg.OriginDetail != turnBudgetRecoveryOriginDetail {
 		t.Fatalf("recovery origin = %q/%q, want turn authorization budget recovery", recorder.input.Msg.Origin, recorder.input.Msg.OriginDetail)
 	}
-	if !strings.Contains(recorder.input.Msg.Text, "discard pending tool calls") || !strings.Contains(recorder.input.Msg.Text, "Re-latch from persisted operation") {
+	if !strings.Contains(recorder.input.Msg.Text, "discard pending tool calls") || !strings.Contains(recorder.input.Msg.Text, "Reconcile the current input and working objective") {
 		t.Fatalf("recovery prompt = %q, want re-decision instruction", recorder.input.Msg.Text)
 	}
 	if !strings.Contains(recorder.input.Msg.Text, "Evidence digest") || !strings.Contains(recorder.input.Msg.Text, "last_tool=exec") || !strings.Contains(recorder.input.Msg.Text, "last_tool_result") {
@@ -321,6 +321,90 @@ func TestBudgetRecoveryWithStaleTelegramIngressRunsDefaultAssembler(t *testing.T
 	assertBudgetRecoveryEventStatus(t, events, "resuming")
 	assertBudgetRecoveryEventStatus(t, events, "resumed")
 	assertNoBudgetRecoveryEventStatus(t, events, "failed")
+}
+
+func TestBudgetRecoveryScopeIgnoresTerminalStoredOperation(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9744, UserID: 0, Scope: telegramDMScopeRef(9744)}
+	msg := core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "how should durable children separate resources?", MessageID: 51}
+	stale := budgetRecoveryTestOperationState()
+	stale.ID = "stale-imexx-operation"
+	stale.Objective = "Document stale thread work."
+	stale.Status = session.OperationStatusCompleted
+	stale.Stage = "completed"
+	stale.PhasePlan.CurrentPhaseID = "phase-implementation"
+	stale.PhasePlan.Phases[0].Status = session.PlanStatusCompleted
+	if err := store.UpdateOperationState(key, stale); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	scope, payload := rt.turnBudgetRecoveryScope(key, msg, nil)
+	if !strings.HasPrefix(scope, "request:") {
+		t.Fatalf("scope = %q, want request scope for terminal stored operation", scope)
+	}
+	if _, ok := payload["operation_id"]; ok {
+		t.Fatalf("payload = %#v, want no terminal operation payload", payload)
+	}
+}
+
+func TestBudgetRecoveryScopeUsesActiveStoredOperationWhenResultIsTerminal(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9745, UserID: 0, Scope: telegramDMScopeRef(9745)}
+	msg := core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "finish the current phase", MessageID: 52}
+	stored := budgetRecoveryTestOperationState()
+	stored.ID = "active-stored-operation"
+	if err := store.UpdateOperationState(key, stored); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	result := budgetRecoveryTestOperationState()
+	result.ID = "terminal-result-operation"
+	result.Status = session.OperationStatusCompleted
+	result.PhasePlan.Phases[0].Status = session.PlanStatusCompleted
+
+	scope, payload := rt.turnBudgetRecoveryScope(key, msg, &turn.Result{OperationState: result})
+	if !strings.Contains(scope, "operation:active-stored-operation") {
+		t.Fatalf("scope = %q, want active stored operation", scope)
+	}
+	if got, want := payload["operation_id"], "active-stored-operation"; got != want {
+		t.Fatalf("operation_id = %#v, want %q", got, want)
+	}
+}
+
+func TestBudgetRecoveryCurrentPhaseFallsThroughWhenCompleted(t *testing.T) {
+	opState := budgetRecoveryTestOperationState()
+	opState.PhasePlan.CurrentPhaseID = "phase-completed"
+	opState.PhasePlan.Phases = []session.OperationPhase{
+		{
+			ID:             "phase-completed",
+			Summary:        "Completed stale phase.",
+			Status:         session.PlanStatusCompleted,
+			AuthorityClass: "read_only_review",
+		},
+		{
+			ID:             "phase-next",
+			Summary:        "Continue current live request.",
+			Status:         session.PlanStatusPending,
+			AuthorityClass: "read_only_review",
+		},
+	}
+
+	phase, index, ok := currentOperationPhaseForBudgetRecovery(opState)
+	if !ok {
+		t.Fatal("currentOperationPhaseForBudgetRecovery() ok = false, want true")
+	}
+	if index != 1 || phase.ID != "phase-next" {
+		t.Fatalf("phase = (%q, %d), want phase-next at index 1", phase.ID, index)
+	}
 }
 
 func TestBudgetRecoveryDeliveryBlocksAfterThreeSameScopeAttempts(t *testing.T) {

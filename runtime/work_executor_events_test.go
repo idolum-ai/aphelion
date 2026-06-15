@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/coder/websocket"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
@@ -341,6 +342,118 @@ func TestCodexWorkResultDerivesEvidenceAndCommitLane(t *testing.T) {
 	}
 	if !strings.Contains(result.PatchPreview, "@@ diff") || result.CommitLaneStatus != "commit_requires_separate_lease" {
 		t.Fatalf("result = %#v, want patch preview and separate commit lane", result)
+	}
+}
+
+func TestAttachNativeWorkTurnEvidencePairsStartedExecCommandWithSucceededEvent(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8821, UserID: 0, Scope: telegramDMScopeRef(8821)}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "create release PR")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	command := "gh pr create --base release/v0.2.5 --head main --title test --body test"
+	preview := fmt.Sprintf(`{"command":%q}`, command)
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventToolStarted,
+			Stage:       "tool",
+			Status:      "started",
+			PayloadJSON: fmt.Sprintf(`{"run_id":%d,"tool":"exec","preview":%q}`, run.ID, preview),
+			CreatedAt:   time.Now().UTC(),
+		},
+		{
+			EventType:   core.ExecutionEventToolSucceeded,
+			Stage:       "tool",
+			Status:      "succeeded",
+			PayloadJSON: fmt.Sprintf(`{"run_id":%d,"tool":"exec","result_preview":"PR_URL\nhttps://github.com/idolum-ai/aphelion/pull/215"}`, run.ID),
+			CreatedAt:   time.Now().UTC().Add(time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventToolFailed,
+			Stage:       "tool",
+			Status:      "failed",
+			PayloadJSON: fmt.Sprintf(`{"run_id":%d,"tool":"update_operation","error":"update_operation cannot rewrite in-progress executable phase \"open-release-pr-after-fix\" while its lease is active"}`, run.ID),
+			CreatedAt:   time.Now().UTC().Add(2 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	result := WorkResult{TurnRunID: run.ID}
+	rt.attachNativeWorkTurnEvidence(key, &result)
+	if len(result.Commands) != 1 || result.Commands[0] != command {
+		t.Fatalf("commands = %#v, want successful exec command recovered from started event", result.Commands)
+	}
+	if result.ToolSuccesses != 1 || result.ToolFailures != 1 {
+		t.Fatalf("tool counts = %d/%d, want one success and one incidental bookkeeping failure", result.ToolSuccesses, result.ToolFailures)
+	}
+	if !strings.Contains(result.ToolFailure, "update_operation cannot rewrite") {
+		t.Fatalf("tool failure = %q, want update_operation failure retained", result.ToolFailure)
+	}
+}
+
+func TestAttachNativeWorkTurnEvidenceConsumesFailedExecPreviewBeforeSucceededFallback(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8822, UserID: 0, Scope: telegramDMScopeRef(8822)}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "run two exec commands")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	failedCommand := "gh pr create --base release/v0.2.5 --head stale --title stale --body stale"
+	succeededCommand := "gh pr create --base release/v0.2.5 --head main --title final --body final"
+	failedPreview := fmt.Sprintf(`{"command":%q}`, failedCommand)
+	succeededPreview := fmt.Sprintf(`{"command":%q}`, succeededCommand)
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventToolStarted,
+			Stage:       "tool",
+			Status:      "started",
+			PayloadJSON: fmt.Sprintf(`{"run_id":%d,"tool":"exec","preview":%q}`, run.ID, failedPreview),
+			CreatedAt:   now,
+		},
+		{
+			EventType:   core.ExecutionEventToolStarted,
+			Stage:       "tool",
+			Status:      "started",
+			PayloadJSON: fmt.Sprintf(`{"run_id":%d,"tool":"exec","preview":%q}`, run.ID, succeededPreview),
+			CreatedAt:   now.Add(time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventToolFailed,
+			Stage:       "tool",
+			Status:      "failed",
+			PayloadJSON: fmt.Sprintf(`{"run_id":%d,"tool":"exec","error":"command failed with exit code 1"}`, run.ID),
+			CreatedAt:   now.Add(2 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventToolSucceeded,
+			Stage:       "tool",
+			Status:      "succeeded",
+			PayloadJSON: fmt.Sprintf(`{"run_id":%d,"tool":"exec","result_preview":"PR_URL\nhttps://github.com/idolum-ai/aphelion/pull/215"}`, run.ID),
+			CreatedAt:   now.Add(3 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	result := WorkResult{TurnRunID: run.ID}
+	rt.attachNativeWorkTurnEvidence(key, &result)
+	if len(result.Commands) != 1 || result.Commands[0] != succeededCommand {
+		t.Fatalf("commands = %#v, want successful exec paired with second started preview", result.Commands)
 	}
 }
 

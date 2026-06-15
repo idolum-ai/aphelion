@@ -291,7 +291,10 @@ func TestConcurrentWorkContinuationTriggerExecutesSingleLeaseTurn(t *testing.T) 
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{Summary: "patched once"}}
+	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+		Summary:      "patched once",
+		ChangedFiles: []string{"runtime/continuation_work.go"},
+	}}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
 
 	now := time.Now().UTC()
@@ -379,7 +382,10 @@ func TestConsumedWorkPhaseOffersNextPhaseApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{Summary: "committed and pushed"}}
+	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+		Summary:  "committed and pushed",
+		Commands: []string{"git commit -m planning-improvements", "git push origin planning-improvements"},
+	}}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
 
 	now := time.Now().UTC()
@@ -751,27 +757,36 @@ func TestNativeWorkExecutorSchedulesBudgetRecoveryTurn(t *testing.T) {
 	if !strings.Contains(result.Summary, "No edits/commits/pushes completed") {
 		t.Fatalf("summary = %q, want recovery handoff evidence preserved", result.Summary)
 	}
-	if recorder.input.Msg.OriginDetail != string(session.TurnAuthorizationKindContinuation) {
-		t.Fatalf("work executor origin detail = %q, want continuation provenance", recorder.input.Msg.OriginDetail)
+	inputs := recorder.Inputs()
+	if len(inputs) == 0 {
+		t.Fatal("work executor calls = 0, want initial continuation call")
 	}
-	if recorder.input.DeferBudgetRecoveryToWorkFailureRetry {
+	firstInput := inputs[0]
+	if firstInput.Msg.OriginDetail != string(session.TurnAuthorizationKindContinuation) {
+		t.Fatalf("work executor origin detail = %q, want continuation provenance", firstInput.Msg.OriginDetail)
+	}
+	if firstInput.DeferBudgetRecoveryToWorkFailureRetry {
 		t.Fatal("work executor input requested manual retry deferral; want automatic budget recovery")
 	}
-	if recorder.input.EventAwareness.TurnAuthorizationKind != string(session.TurnAuthorizationKindContinuation) {
-		t.Fatalf("event awareness turn authorization kind = %q, want continuation", recorder.input.EventAwareness.TurnAuthorizationKind)
+	if firstInput.EventAwareness.TurnAuthorizationKind != string(session.TurnAuthorizationKindContinuation) {
+		t.Fatalf("event awareness turn authorization kind = %q, want continuation", firstInput.EventAwareness.TurnAuthorizationKind)
 	}
 	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := rt.WaitForBackgroundLoops(waitCtx); err != nil {
 		t.Fatalf("WaitForBackgroundLoops() err = %v", err)
 	}
+	if !recorder.HasOriginDetail(turnBudgetRecoveryOriginDetail) {
+		t.Fatalf("recorded inputs = %#v, want scheduled budget recovery turn", recorder.Inputs())
+	}
 }
 
 type budgetRecoveryDeliveringAssembler struct {
+	mu        sync.Mutex
 	runtime   *Runtime
 	result    *core.TurnResult
 	results   []*core.TurnResult
-	input     interactiveDMTurnAssemblyInput
+	inputs    []interactiveDMTurnAssemblyInput
 	callCount int
 }
 
@@ -784,9 +799,12 @@ func (a *budgetRecoveryDeliveringAssembler) Run(ctx context.Context, input inter
 }
 
 func (a *budgetRecoveryDeliveringAssembler) RunTurn(ctx context.Context, input interactiveDMTurnAssemblyInput) (*turn.Result, error) {
+	a.mu.Lock()
 	index := a.callCount
 	a.callCount++
-	a.input = input
+	a.inputs = append(a.inputs, input)
+	a.mu.Unlock()
+
 	result := a.result
 	if index < len(a.results) {
 		result = a.results[index]
@@ -827,6 +845,23 @@ func (a *budgetRecoveryDeliveringAssembler) RunTurn(ctx context.Context, input i
 		turnResult.Delivery = *delivered
 	}
 	return turnResult, nil
+}
+
+func (a *budgetRecoveryDeliveringAssembler) Inputs() []interactiveDMTurnAssemblyInput {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]interactiveDMTurnAssemblyInput(nil), a.inputs...)
+}
+
+func (a *budgetRecoveryDeliveringAssembler) HasOriginDetail(originDetail string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, input := range a.inputs {
+		if input.Msg.OriginDetail == originDetail {
+			return true
+		}
+	}
+	return false
 }
 
 func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
@@ -1589,7 +1624,10 @@ func TestTriggerCodingContinuationAllowsCompoundWorkspaceRiskClass(t *testing.T)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true}
+	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+		Summary:      "patched child runner",
+		ChangedFiles: []string{"runtime/durable_child.go"},
+	}}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
 
 	expiresAt := time.Now().UTC().Add(time.Hour)
@@ -1657,7 +1695,10 @@ func TestTriggerCodingContinuationWarnsWhenFallingBackToNative(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 	codex := &fakeWorkExecutor{name: "codex", ready: false, reason: "app-server unreachable"}
-	native := &fakeWorkExecutor{name: "native", ready: true, result: WorkResult{Summary: "native completed"}}
+	native := &fakeWorkExecutor{name: "native", ready: true, result: WorkResult{
+		Summary:      "native completed",
+		ChangedFiles: []string{"runtime/work_executor.go"},
+	}}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex", "native"}}, []WorkExecutor{codex, native})
 
 	expiresAt := time.Now().UTC().Add(time.Hour)

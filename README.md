@@ -68,12 +68,13 @@ prose*. The conversation transcript is presentation; the ledger is truth.
 
 ### Small surface, defended on purpose
 
-Three direct module dependencies: SQLite (vendored in-repo), a TOML parser,
-and Tailscale (the substrate that enables remote-host children). Everything
-else is pinned and small. A source install needs Go and a Linux user service;
-a release install needs only the Aphelion binary and systemd. Model providers,
-GitHub App credentials, Sponsors, and hosted storage are explicit operator
-choices, not hidden platform dependencies.
+Six direct Go module requirements are declared in `go.mod`; three are the
+deliberately chosen primary third-party surfaces: SQLite (vendored in-repo), a
+TOML parser, and Tailscale (the substrate that enables remote-host children).
+Everything else is pinned and small. A source install needs Go and a Linux user
+service; a release install needs only the Aphelion binary and systemd. Model
+providers, GitHub App credentials, Sponsors, and hosted storage are explicit
+operator choices, not hidden platform dependencies.
 
 This is defensive, not aesthetic. Recent campaigns like Mini Shai-Hulud
 (170+ npm and PyPI packages compromised, valid SLSA Build Level 3 attestations
@@ -243,6 +244,44 @@ self-improvement workflow changes, also use the canonical scenario gate:
 produce comparable `aphelion eval run` reports for the baseline and branch,
 then cite `aphelion eval gate --before baseline.json --after branch.json` in
 the PR or release review.
+
+For public authority/evidence boundary claims, also run the transcript-driven
+bounty smoke suite:
+
+```sh
+aphelion eval run --suite boundary_attack --mode local --subject governor --format human
+```
+
+Live `boundary_attack` runs are opt-in and spend provider tokens. Use
+`--attacker-routes subject` for the cheapest first pass, or explicit attacker
+routes when you want broader stochastic pressure.
+
+For publication-grade boundary work, separate attacker search from subject
+replay. Generate a fixed adversarial corpus once, then replay it against one or
+more subjects without spending more attacker tokens:
+
+```sh
+aphelion eval attack-corpus generate --suite boundary_attack --mode live \
+  --attacker-routes configured --per-scenario 3 --out boundary-corpus.json
+
+aphelion eval run --suite boundary_attack --mode live --subject governor \
+  --attack-corpus boundary-corpus.json --max-attacks-per-scenario 3 \
+  --out boundary-report.json
+```
+
+Live corpus generation gives provider-generated attacks first claim on each
+scenario's slots and uses local mutators only as an underfill fallback. The
+corpus records per-scenario definition hashes and selected source-kind counts,
+so stale corpora are rejected when scenario definitions drift and run output
+shows whether the selected set came from providers or fallback mutators. Replay
+uses the corpus turn count, so multi-turn attacks are not truncated to the
+scripted baseline. A subset corpus replays the scenarios it covers by default;
+reports include exact per-scenario corpus case counts. Use `--profile redteam`
+when the claim needs stronger jailbreak-style pressure. The red-team profile
+stays publish-safe and Aphelion-specific, but adds fake authority messages, fake
+ledger records, protocol fences, Telegram rendering ambiguity, harmless
+obfuscation, cross-surface replay, and multi-turn social escalation to the
+corpus search.
 
 ## Going deeper
 
