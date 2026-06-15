@@ -350,7 +350,7 @@ func TestFaceSkipPayloadContainsOnlyDecisionFields(t *testing.T) {
 		FaceAwareness:    prompt.RuntimeAwareness{ReplyModalityDefault: "text"},
 	}, "fallback")
 
-	for _, key := range []string{"reason", "kind", "media_count", "facts", "allowed_actions", "commitments", "refusals", "notes", "fallback_chars"} {
+	for _, key := range []string{"reason", "kind", "media_count", "facts", "allowed_actions", "commitments", "refusals", "continuity_context", "notes", "fallback_chars"} {
 		if _, ok := payload[key]; !ok {
 			t.Fatalf("payload missing %q: %#v", key, payload)
 		}
@@ -410,7 +410,7 @@ func TestRenderTurnReplyDoesNotSkipFaceForVoiceModality(t *testing.T) {
 	}
 }
 
-func TestRenderTurnReplyFoldsSuccessfulRecoveryIntoTaskOutcome(t *testing.T) {
+func TestRenderTurnReplyKeepsContinuityContextOutOfFallback(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, _ := buildRuntimeFixtures(t)
@@ -422,10 +422,11 @@ func TestRenderTurnReplyFoldsSuccessfulRecoveryIntoTaskOutcome(t *testing.T) {
 	packet := core.MaterialPacket{
 		Kind: core.MaterialPacketKindStatusReport,
 		Facts: []string{
-			"Recovered and completed the clean replacement release-PR route.",
+			"Completed the clean replacement release-PR route.",
 			"Pushed `release/v0.2.5` with `--force-with-lease`.",
 		},
-		Commitments: []string{"Stopped before merge/publication."},
+		ContinuityContext: []string{"Recovery hop completed after token budget exhaustion."},
+		Commitments:       []string{"Stopped before merge/publication."},
 	}
 	floorText := packet.Text()
 	result, err := rt.renderTurnReply(turnRenderInput{
@@ -444,8 +445,10 @@ func TestRenderTurnReplyFoldsSuccessfulRecoveryIntoTaskOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderTurnReply() err = %v", err)
 	}
-	if strings.Contains(strings.ToLower(result.ReplyText), "recovered") {
-		t.Fatalf("ReplyText kept recovery as visible material: %q", result.ReplyText)
+	for _, blocked := range []string{"Recovery hop", "CONTINUITY_CONTEXT"} {
+		if strings.Contains(result.ReplyText, blocked) {
+			t.Fatalf("ReplyText leaked continuity context %q: %q", blocked, result.ReplyText)
+		}
 	}
 	for _, want := range []string{
 		"Completed the clean replacement release-PR route.",

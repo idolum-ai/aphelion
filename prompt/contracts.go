@@ -362,9 +362,12 @@ func renderMaterialFloorContractBlock(aw RuntimeAwareness) string {
 		"- <things the system will not do or cannot claim>",
 		"SCENE_CONSTRAINTS:",
 		"- <constraints the visible face must respect when staging the reply>",
+		"CONTINUITY_CONTEXT:",
+		"- <internal continuity, rollover, or recovery mechanics that may guide delivery but are not user-material facts>",
 		"NOTES:",
 		"- <optional bounded notes that matter for delivery>",
-		"When continuity repair succeeded and no user choice depends on the repair itself, make FACTS about the achieved work and boundary; carry repair mechanics only as delivery context when relevant.",
+		"When internal continuity repair succeeded and no user choice depends on the repair itself, make FACTS about achieved work and boundary, and put the repair mechanics only in CONTINUITY_CONTEXT.",
+		"When recovery failed, blocked work, changed available choices, or requires approval, put that user-material consequence in FACTS or ALLOWED_ACTIONS.",
 		"Do not write the final user-facing reply text here.",
 	}, "\n")
 }

@@ -61,15 +61,16 @@ func faceSkipPayload(reason string, input turnRenderInput, fallbackText string) 
 		mediaCount = len(input.Result.Media)
 	}
 	return map[string]any{
-		"reason":          strings.TrimSpace(reason),
-		"kind":            strings.TrimSpace(string(packet.Kind)),
-		"media_count":     mediaCount,
-		"facts":           len(nonBlankMaterialItems(packet.Facts)),
-		"allowed_actions": len(nonBlankMaterialItems(packet.AllowedActions)),
-		"commitments":     len(nonBlankMaterialItems(packet.Commitments)),
-		"refusals":        len(nonBlankMaterialItems(packet.Refusals)),
-		"notes":           len(nonBlankMaterialItems(packet.Notes)),
-		"fallback_chars":  len(strings.TrimSpace(fallbackText)),
+		"reason":             strings.TrimSpace(reason),
+		"kind":               strings.TrimSpace(string(packet.Kind)),
+		"media_count":        mediaCount,
+		"facts":              len(nonBlankMaterialItems(packet.Facts)),
+		"allowed_actions":    len(nonBlankMaterialItems(packet.AllowedActions)),
+		"commitments":        len(nonBlankMaterialItems(packet.Commitments)),
+		"refusals":           len(nonBlankMaterialItems(packet.Refusals)),
+		"continuity_context": len(nonBlankMaterialItems(packet.ContinuityContext)),
+		"notes":              len(nonBlankMaterialItems(packet.Notes)),
+		"fallback_chars":     len(strings.TrimSpace(fallbackText)),
 	}
 }
 

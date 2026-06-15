@@ -24,6 +24,8 @@ func TestParseMaterialPacketParsesStructuredSections(t *testing.T) {
 		"- Avoid unsupported claims.",
 		"SCENE_CONSTRAINTS:",
 		"- Sound direct and grounded.",
+		"CONTINUITY_CONTEXT:",
+		"- Budget recovery completed before delivery.",
 		"NOTES:",
 		"- Show the highest-confidence action first.",
 	}, "\n"))
@@ -38,6 +40,12 @@ func TestParseMaterialPacketParsesStructuredSections(t *testing.T) {
 	}
 	if packet.SceneConstraints[0] != "Sound direct and grounded." {
 		t.Fatalf("SceneConstraints = %#v, want parsed constraint", packet.SceneConstraints)
+	}
+	if packet.ContinuityContext[0] != "Budget recovery completed before delivery." {
+		t.Fatalf("ContinuityContext = %#v, want parsed continuity context", packet.ContinuityContext)
+	}
+	if !strings.Contains(packet.Text(), "CONTINUITY_CONTEXT:") {
+		t.Fatalf("packet.Text() = %q, want continuity context preserved in canonical floor", packet.Text())
 	}
 }
 

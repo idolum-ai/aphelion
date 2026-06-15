@@ -42,6 +42,9 @@ func SerializeFloorFallback(packet core.MaterialPacket, floorText string, opts F
 
 	sections := fallbackSections(packet)
 	if len(sections) == 0 {
+		if hasInternalOnlyMaterial(packet) {
+			return FloorTextOrFallback("")
+		}
 		return FloorTextOrFallback(trimmedFloor)
 	}
 	if opts.Voice {
@@ -68,6 +71,19 @@ func fallbackSections(packet core.MaterialPacket) []fallbackSection {
 		out = append(out, section)
 	}
 	return out
+}
+
+func hasInternalOnlyMaterial(packet core.MaterialPacket) bool {
+	return hasNonBlankMaterialItem(packet.SceneConstraints) || hasNonBlankMaterialItem(packet.ContinuityContext)
+}
+
+func hasNonBlankMaterialItem(items []string) bool {
+	for _, item := range items {
+		if strings.TrimSpace(item) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func uniqueFallbackItems(items []string, seen map[string]struct{}) []string {
@@ -261,6 +277,7 @@ func isPlainTextFloorPacket(packet core.MaterialPacket, floorText string) bool {
 		len(packet.Commitments) == 0 &&
 		len(packet.Refusals) == 0 &&
 		len(packet.SceneConstraints) == 0 &&
+		len(packet.ContinuityContext) == 0 &&
 		len(packet.Notes) == 1 &&
 		strings.TrimSpace(packet.Notes[0]) == strings.TrimSpace(floorText)
 }

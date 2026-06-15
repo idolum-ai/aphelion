@@ -83,6 +83,10 @@ func ParseMaterialPacket(text string) (core.MaterialPacket, error) {
 			current = "scene_constraints"
 			recognized++
 			continue
+		case "continuity_context":
+			current = "continuity_context"
+			recognized++
+			continue
 		case "notes":
 			current = "notes"
 			recognized++
@@ -91,7 +95,7 @@ func ParseMaterialPacket(text string) (core.MaterialPacket, error) {
 
 		item := ParseMaterialItem(line)
 		if item == "" {
-			if current == "notes" || current == "kind" {
+			if current == "notes" || current == "continuity_context" || current == "kind" {
 				item = line
 			} else {
 				continue
@@ -110,6 +114,8 @@ func ParseMaterialPacket(text string) (core.MaterialPacket, error) {
 			packet.Refusals = append(packet.Refusals, item)
 		case "scene_constraints":
 			packet.SceneConstraints = append(packet.SceneConstraints, item)
+		case "continuity_context":
+			packet.ContinuityContext = append(packet.ContinuityContext, item)
 		case "notes":
 			packet.Notes = append(packet.Notes, item)
 		}
@@ -148,6 +154,8 @@ func NormalizeMaterialHeading(line string) string {
 		return "refusals"
 	case "SCENE_CONSTRAINTS", "SCENE CONSTRAINTS":
 		return "scene_constraints"
+	case "CONTINUITY_CONTEXT", "CONTINUITY CONTEXT", "INTERNAL_CONTINUITY", "INTERNAL CONTINUITY":
+		return "continuity_context"
 	case "NOTES":
 		return "notes"
 	default:

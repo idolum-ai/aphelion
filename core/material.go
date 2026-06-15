@@ -15,13 +15,14 @@ const (
 )
 
 type MaterialPacket struct {
-	Kind             MaterialPacketKind
-	Facts            []string
-	AllowedActions   []string
-	Commitments      []string
-	Refusals         []string
-	SceneConstraints []string
-	Notes            []string
+	Kind              MaterialPacketKind
+	Facts             []string
+	AllowedActions    []string
+	Commitments       []string
+	Refusals          []string
+	SceneConstraints  []string
+	ContinuityContext []string
+	Notes             []string
 }
 
 func NormalizeMaterialPacketKind(kind string) MaterialPacketKind {
@@ -50,6 +51,7 @@ func (m MaterialPacket) Empty() bool {
 		len(m.Commitments) == 0 &&
 		len(m.Refusals) == 0 &&
 		len(m.SceneConstraints) == 0 &&
+		len(m.ContinuityContext) == 0 &&
 		len(m.Notes) == 0
 }
 
@@ -63,6 +65,7 @@ func (m MaterialPacket) Text() string {
 		{title: "COMMITMENTS", items: m.Commitments},
 		{title: "REFUSALS", items: m.Refusals},
 		{title: "SCENE_CONSTRAINTS", items: m.SceneConstraints},
+		{title: "CONTINUITY_CONTEXT", items: m.ContinuityContext},
 		{title: "NOTES", items: m.Notes},
 	}
 

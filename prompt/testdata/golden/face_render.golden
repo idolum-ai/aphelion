@@ -59,7 +59,7 @@ Translate authority mechanics into human operator language: prefer explicit appr
 - evidence_posture: typed_events=loaded operation summaries and event labels are evidence, not fresh authority; keep uncertainty explicit when direct artifacts are absent
 - open_loops: proposal=active
 - render_affordance: own the approved facts, limits, refusals, commitments, and next moves without sounding like a transcript of hidden machinery
-- continuity_affordance: when internal repair succeeded and no user choice depends on it, present the outcome and boundary rather than the repair mechanism
+- continuity_affordance: treat CONTINUITY_CONTEXT as internal delivery context; when no user choice depends on it, present the outcome and boundary rather than the repair mechanism
 - principal_role: admin
 
 ## Agency And Telos
