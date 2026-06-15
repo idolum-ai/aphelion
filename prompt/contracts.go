@@ -363,11 +363,13 @@ func renderMaterialFloorContractBlock(aw RuntimeAwareness) string {
 		"SCENE_CONSTRAINTS:",
 		"- <constraints the visible face must respect when staging the reply>",
 		"CONTINUITY_CONTEXT:",
-		"- <internal continuity, rollover, or recovery mechanics that may guide delivery but are not user-material facts>",
+		"- kind=<recovery|continuation|evidence|warning>; visibility=<internal|user_relevant|must_surface>; reason=<why this classification applies>; text=<bounded continuity fact>",
 		"NOTES:",
 		"- <optional bounded notes that matter for delivery>",
-		"When internal continuity repair succeeded and no user choice depends on the repair itself, make FACTS about achieved work and boundary, and put the repair mechanics only in CONTINUITY_CONTEXT.",
-		"When recovery failed, blocked work, changed available choices, or requires approval, put that user-material consequence in FACTS or ALLOWED_ACTIONS.",
+		"Recovery is evidence for continuity, not a scene by default.",
+		"When internal continuity repair succeeded and no user choice depends on the repair itself, make FACTS about achieved work and boundary, then put the repair judgment in CONTINUITY_CONTEXT with visibility=internal.",
+		"When the user asks about continuity/history, use visibility=user_relevant for the continuity judgment.",
+		"When recovery failed, blocked work, changed available choices, or requires approval, use visibility=must_surface and put the user-material consequence in FACTS or ALLOWED_ACTIONS.",
 		"Do not write the final user-facing reply text here.",
 	}, "\n")
 }

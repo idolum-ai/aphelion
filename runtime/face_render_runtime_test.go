@@ -425,8 +425,13 @@ func TestRenderTurnReplyKeepsContinuityContextOutOfFallback(t *testing.T) {
 			"Completed the clean replacement release-PR route.",
 			"Pushed `release/v0.2.5` with `--force-with-lease`.",
 		},
-		ContinuityContext: []string{"Recovery hop completed after token budget exhaustion."},
-		Commitments:       []string{"Stopped before merge/publication."},
+		ContinuityContext: []core.MaterialContinuityContext{{
+			Kind:       core.MaterialContinuityKindRecovery,
+			Visibility: core.MaterialContinuityVisibilityInternal,
+			Reason:     "token budget rollover succeeded",
+			Text:       "Recovery hop completed after token budget exhaustion.",
+		}},
+		Commitments: []string{"Stopped before merge/publication."},
 	}
 	floorText := packet.Text()
 	result, err := rt.renderTurnReply(turnRenderInput{

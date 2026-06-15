@@ -690,7 +690,10 @@ func TestBuildGovernorPromptIncludesMaterialFloorContractForInteractiveSceneTurn
 	if !strings.Contains(got, "CONTINUITY_CONTEXT:") {
 		t.Fatalf("prompt missing continuity context material section: %q", got)
 	}
-	if !strings.Contains(got, "put the repair mechanics only in CONTINUITY_CONTEXT") {
+	if !strings.Contains(got, "Recovery is evidence for continuity, not a scene by default.") {
+		t.Fatalf("prompt missing continuity judgment boundary: %q", got)
+	}
+	if !strings.Contains(got, "visibility=must_surface") {
 		t.Fatalf("prompt missing typed continuity context instruction: %q", got)
 	}
 }
@@ -724,7 +727,7 @@ func TestBuildFacePromptOmitsToolDefinitions(t *testing.T) {
 	if !strings.Contains(got, "These wants are negotiable signals, not permission grants") {
 		t.Fatalf("face prompt missing telos authorization boundary: %q", got)
 	}
-	if !strings.Contains(got, "treat CONTINUITY_CONTEXT as internal delivery context") {
+	if !strings.Contains(got, "apply CONTINUITY_CONTEXT.visibility") {
 		t.Fatalf("face prompt missing continuity presentation boundary: %q", got)
 	}
 }

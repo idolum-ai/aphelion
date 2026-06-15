@@ -54,6 +54,16 @@ func nonBlankMaterialItems(items []string) []string {
 	return out
 }
 
+func nonBlankContinuityContextItems(items []core.MaterialContinuityContext) []core.MaterialContinuityContext {
+	out := make([]core.MaterialContinuityContext, 0, len(items))
+	for _, item := range items {
+		if !item.Empty() {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 func faceSkipPayload(reason string, input turnRenderInput, fallbackText string) map[string]any {
 	packet := input.MaterialFloor
 	mediaCount := 0
@@ -68,7 +78,7 @@ func faceSkipPayload(reason string, input turnRenderInput, fallbackText string) 
 		"allowed_actions":    len(nonBlankMaterialItems(packet.AllowedActions)),
 		"commitments":        len(nonBlankMaterialItems(packet.Commitments)),
 		"refusals":           len(nonBlankMaterialItems(packet.Refusals)),
-		"continuity_context": len(nonBlankMaterialItems(packet.ContinuityContext)),
+		"continuity_context": len(nonBlankContinuityContextItems(packet.ContinuityContext)),
 		"notes":              len(nonBlankMaterialItems(packet.Notes)),
 		"fallback_chars":     len(strings.TrimSpace(fallbackText)),
 	}

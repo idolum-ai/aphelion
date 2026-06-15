@@ -94,8 +94,13 @@ func TestSerializeFloorFallbackOmitsContinuityContext(t *testing.T) {
 			"Completed the clean replacement release-PR route.",
 			"Pushed `release/v0.2.5` with `--force-with-lease`.",
 		},
-		ContinuityContext: []string{"Recovery hop completed after token budget exhaustion."},
-		Commitments:       []string{"Stopped before merge/publication."},
+		ContinuityContext: []core.MaterialContinuityContext{{
+			Kind:       core.MaterialContinuityKindRecovery,
+			Visibility: core.MaterialContinuityVisibilityInternal,
+			Reason:     "token budget rollover succeeded",
+			Text:       "Recovery hop completed after token budget exhaustion.",
+		}},
+		Commitments: []string{"Stopped before merge/publication."},
 	}
 	got := SerializeFloorFallback(packet, packet.Text(), FallbackOptions{Channel: "telegram"})
 	for _, blocked := range []string{"Recovery hop", "CONTINUITY_CONTEXT"} {
@@ -127,15 +132,64 @@ func TestSerializeFloorFallbackKeepsUserRelevantRecoveryFacts(t *testing.T) {
 	}
 }
 
+func TestSerializeFloorFallbackSurfacesMustSurfaceContinuityBlocker(t *testing.T) {
+	t.Parallel()
+
+	packet := core.MaterialPacket{
+		Kind: core.MaterialPacketKindStatusReport,
+		ContinuityContext: []core.MaterialContinuityContext{{
+			Kind:       core.MaterialContinuityKindWarning,
+			Visibility: core.MaterialContinuityVisibilityMustSurface,
+			Reason:     "approval window expired before the continuation could run",
+			Text:       "The prior approval expired before the next action could run, so fresh approval is required.",
+		}},
+		AllowedActions: []string{"Ask for a fresh bounded approval before retrying."},
+	}
+	got := SerializeFloorFallback(packet, packet.Text(), FallbackOptions{Channel: "telegram"})
+	for _, want := range []string{
+		"Continuity:",
+		"The prior approval expired before the next action could run, so fresh approval is required.",
+		"Ask for a fresh bounded approval before retrying.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("fallback missing %q: %q", want, got)
+		}
+	}
+}
+
 func TestSerializeFloorFallbackDoesNotLeakInternalOnlyFloor(t *testing.T) {
 	t.Parallel()
 
 	packet := core.MaterialPacket{
-		Kind:              core.MaterialPacketKindStatusReport,
-		ContinuityContext: []string{"Recovery hop completed after token budget exhaustion."},
+		Kind: core.MaterialPacketKindStatusReport,
+		ContinuityContext: []core.MaterialContinuityContext{{
+			Kind:       core.MaterialContinuityKindRecovery,
+			Visibility: core.MaterialContinuityVisibilityInternal,
+			Reason:     "token budget rollover succeeded",
+			Text:       "Recovery hop completed after token budget exhaustion.",
+		}},
 	}
 	got := SerializeFloorFallback(packet, packet.Text(), FallbackOptions{Channel: "telegram"})
 	if got != "(no response)" {
 		t.Fatalf("SerializeFloorFallback() = %q, want no public response for internal-only floor", got)
+	}
+}
+
+func TestSerializeFloorFallbackSurfacesUserRelevantContinuityRecap(t *testing.T) {
+	t.Parallel()
+
+	packet := core.MaterialPacket{
+		Kind: core.MaterialPacketKindStatusReport,
+		ContinuityContext: []core.MaterialContinuityContext{{
+			Kind:       core.MaterialContinuityKindContinuation,
+			Visibility: core.MaterialContinuityVisibilityUserRelevant,
+			Reason:     "the user asked where the work stood",
+			Text:       "We were preparing the release fix PR and had stopped before merge or publication.",
+		}},
+	}
+	got := SerializeFloorFallback(packet, packet.Text(), FallbackOptions{Channel: "telegram"})
+	if !strings.Contains(got, "Continuity:") ||
+		!strings.Contains(got, "We were preparing the release fix PR and had stopped before merge or publication.") {
+		t.Fatalf("fallback omitted user-relevant continuity recap: %q", got)
 	}
 }

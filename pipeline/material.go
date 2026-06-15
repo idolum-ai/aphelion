@@ -115,7 +115,7 @@ func ParseMaterialPacket(text string) (core.MaterialPacket, error) {
 		case "scene_constraints":
 			packet.SceneConstraints = append(packet.SceneConstraints, item)
 		case "continuity_context":
-			packet.ContinuityContext = append(packet.ContinuityContext, item)
+			packet.ContinuityContext = append(packet.ContinuityContext, parseMaterialContinuityContextItem(item))
 		case "notes":
 			packet.Notes = append(packet.Notes, item)
 		}
@@ -180,4 +180,61 @@ func ParseMaterialItem(line string) string {
 		}
 	}
 	return strings.TrimSpace(line[dot+2:])
+}
+
+func parseMaterialContinuityContextItem(item string) core.MaterialContinuityContext {
+	trimmed := strings.TrimSpace(item)
+	if trimmed == "" {
+		return core.MaterialContinuityContext{}
+	}
+	fields := make(map[string]string)
+	for _, rawPart := range strings.Split(trimmed, ";") {
+		part := strings.TrimSpace(rawPart)
+		if part == "" {
+			continue
+		}
+		key, value, ok := cutMaterialKeyValue(part)
+		if !ok {
+			continue
+		}
+		fields[normalizeMaterialKey(key)] = strings.TrimSpace(value)
+	}
+	if len(fields) == 0 {
+		return core.MaterialContinuityContext{
+			Visibility: core.MaterialContinuityVisibilityInternal,
+			Text:       trimmed,
+		}
+	}
+	return core.MaterialContinuityContext{
+		Kind:       core.NormalizeMaterialContinuityKind(fields["kind"]),
+		Visibility: core.NormalizeMaterialContinuityVisibility(fields["visibility"]),
+		Reason:     firstNonEmptyMaterialField(fields["reason"], fields["why"]),
+		Text:       firstNonEmptyMaterialField(fields["text"], fields["summary"], fields["detail"]),
+	}
+}
+
+func cutMaterialKeyValue(part string) (string, string, bool) {
+	if key, value, ok := strings.Cut(part, "="); ok {
+		return key, value, true
+	}
+	if key, value, ok := strings.Cut(part, ":"); ok {
+		return key, value, true
+	}
+	return "", "", false
+}
+
+func normalizeMaterialKey(key string) string {
+	key = strings.ToLower(strings.TrimSpace(key))
+	key = strings.ReplaceAll(key, "-", "_")
+	key = strings.ReplaceAll(key, " ", "_")
+	return key
+}
+
+func firstNonEmptyMaterialField(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
