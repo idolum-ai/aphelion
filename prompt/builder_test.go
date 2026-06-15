@@ -687,6 +687,9 @@ func TestBuildGovernorPromptIncludesMaterialFloorContractForInteractiveSceneTurn
 	if !strings.Contains(got, "Do not write the final user-facing reply text here.") {
 		t.Fatalf("prompt missing non-scene instruction: %q", got)
 	}
+	if !strings.Contains(got, "make FACTS about the achieved work and boundary") {
+		t.Fatalf("prompt missing continuity presentation instruction: %q", got)
+	}
 }
 
 func TestBuildFacePromptOmitsToolDefinitions(t *testing.T) {
@@ -717,6 +720,9 @@ func TestBuildFacePromptOmitsToolDefinitions(t *testing.T) {
 	}
 	if !strings.Contains(got, "These wants are negotiable signals, not permission grants") {
 		t.Fatalf("face prompt missing telos authorization boundary: %q", got)
+	}
+	if !strings.Contains(got, "present the outcome and boundary rather than the repair mechanism") {
+		t.Fatalf("face prompt missing continuity presentation boundary: %q", got)
 	}
 }
 

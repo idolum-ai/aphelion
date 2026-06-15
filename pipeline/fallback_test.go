@@ -84,3 +84,48 @@ func TestSerializeFloorFallbackTelegramFlattensSingleNote(t *testing.T) {
 		t.Fatalf("SerializeFloorFallback() = %q, want %q", got, want)
 	}
 }
+
+func TestShapeInternalContinuityForPresentationFoldsRecoveryIntoOutcome(t *testing.T) {
+	t.Parallel()
+
+	packet, floorText, changed := ShapeInternalContinuityForPresentation(core.MaterialPacket{
+		Kind: core.MaterialPacketKindStatusReport,
+		Facts: []string{
+			"Recovered and completed the clean replacement release-PR route.",
+			"Pushed `release/v0.2.5` with `--force-with-lease`.",
+		},
+		Commitments: []string{"Stopped before merge/publication."},
+	}, "original floor")
+	if !changed {
+		t.Fatal("ShapeInternalContinuityForPresentation() changed = false, want true")
+	}
+	got := SerializeFloorFallback(packet, floorText, FallbackOptions{Channel: "telegram"})
+	if strings.Contains(strings.ToLower(got), "recovered") {
+		t.Fatalf("fallback kept recovery headline: %q", got)
+	}
+	for _, want := range []string{
+		"Completed the clean replacement release-PR route.",
+		"Pushed `release/v0.2.5` with `--force-with-lease`.",
+		"Stopped before merge/publication.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("fallback missing %q: %q", want, got)
+		}
+	}
+	if len(packet.SceneConstraints) == 0 || !strings.Contains(packet.SceneConstraints[0], "task outcome") {
+		t.Fatalf("scene constraints = %#v, want internal continuity presentation constraint", packet.SceneConstraints)
+	}
+}
+
+func TestShapeInternalContinuityForPresentationLeavesUserRelevantRecovery(t *testing.T) {
+	t.Parallel()
+
+	packet := core.MaterialPacket{
+		Kind:  core.MaterialPacketKindStatusReport,
+		Facts: []string{"I ran out of token room before finishing, so I need one narrower approved step."},
+	}
+	shaped, floorText, changed := ShapeInternalContinuityForPresentation(packet, packet.Text())
+	if changed {
+		t.Fatalf("changed = true for user-relevant recovery; shaped=%#v floor=%q", shaped, floorText)
+	}
+}

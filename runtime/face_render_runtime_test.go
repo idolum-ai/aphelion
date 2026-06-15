@@ -410,6 +410,54 @@ func TestRenderTurnReplyDoesNotSkipFaceForVoiceModality(t *testing.T) {
 	}
 }
 
+func TestRenderTurnReplyFoldsSuccessfulRecoveryIntoTaskOutcome(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, _ := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, &fakeSender{})
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendFloorFallback
+	packet := core.MaterialPacket{
+		Kind: core.MaterialPacketKindStatusReport,
+		Facts: []string{
+			"Recovered and completed the clean replacement release-PR route.",
+			"Pushed `release/v0.2.5` with `--force-with-lease`.",
+		},
+		Commitments: []string{"Stopped before merge/publication."},
+	}
+	floorText := packet.Text()
+	result, err := rt.renderTurnReply(turnRenderInput{
+		Ctx:              context.Background(),
+		Key:              session.SessionKey{ChatID: 907, UserID: 0},
+		Result:           &core.TurnResult{Text: floorText},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		ReplyText:        pipeline.SerializeFloorFallback(packet, floorText, pipeline.FallbackOptions{Channel: "telegram"}),
+		FloorText:        floorText,
+		MaterialFloor:    packet,
+		FallbackOpts:     pipeline.FallbackOptions{Channel: "telegram"},
+		FaceAwareness:    prompt.RuntimeAwareness{},
+		PromptInput:      "continue",
+	})
+	if err != nil {
+		t.Fatalf("renderTurnReply() err = %v", err)
+	}
+	if strings.Contains(strings.ToLower(result.ReplyText), "recovered") {
+		t.Fatalf("ReplyText kept recovery as visible material: %q", result.ReplyText)
+	}
+	for _, want := range []string{
+		"Completed the clean replacement release-PR route.",
+		"Pushed `release/v0.2.5` with `--force-with-lease`.",
+		"Stopped before merge/publication.",
+	} {
+		if !strings.Contains(result.ReplyText, want) {
+			t.Fatalf("ReplyText missing %q: %q", want, result.ReplyText)
+		}
+	}
+}
+
 func TestRenderTurnReplyFallsBackWhenFaceRenderReturnsPartialOperationalReply(t *testing.T) {
 	t.Parallel()
 

@@ -101,6 +101,7 @@ func renderFaceOutcomeContractBlock(mode string, faceName string) string {
 			"- The answer preserves all material facts, limits, refusals, and next moves without adding unapproved work.",
 			"- The tone matches the user's real need and the weight of the situation.",
 			"- Ledger terms are translated into ordinary operator language unless the user already used the term.",
+			"- Successful continuity repair is background context when no user decision depends on it; lead with the task outcome, respected boundary, and next useful move.",
 			"## Output",
 			"- Return the final user-visible message only, usually as short prose unless structure genuinely helps.",
 			"- If runtime says prior context exists but the available evidence is too vague to identify it, return exactly `PERSONA_CONTEXT_REQUEST: <short query>` and no other text.",
@@ -363,6 +364,7 @@ func renderMaterialFloorContractBlock(aw RuntimeAwareness) string {
 		"- <constraints the visible face must respect when staging the reply>",
 		"NOTES:",
 		"- <optional bounded notes that matter for delivery>",
+		"When continuity repair succeeded and no user choice depends on the repair itself, make FACTS about the achieved work and boundary; carry repair mechanics only as delivery context when relevant.",
 		"Do not write the final user-facing reply text here.",
 	}, "\n")
 }
