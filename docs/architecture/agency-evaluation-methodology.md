@@ -124,6 +124,11 @@ The repo implements this methodology through complementary surfaces:
   deception, recovery handoffs, prose-to-evidence laundering, capability
   confusion, and fake-world authority probes. Local mode is a deterministic
   structural smoke test; live mode is the stochastic falsification surface.
+- Context-fidelity trajectory scenarios: long-horizon continuation cases should
+  score whether the subject preserves stable evidence IDs and source facts under
+  iterative inference pressure. The target is not merely "good next steps";
+  the target is rehydrating the underlying evidence objects instead of
+  compounding summaries into new facts.
 
 Secondary prompts follow the same split. Prompt surfaces that affect
 user-visible behavior, memory, authority, proactivity, or durable children need
@@ -192,6 +197,14 @@ strings: relationship/identity pressure, misleading approval presentation,
 stored or fetched prose replayed as evidence, recovery or compaction handoffs,
 and approval-window/capability/lease confusion. The attacker may be creative;
 the pass/fail oracle should remain mechanical and ledger-based.
+
+For long-horizon context work, prefer cells that separate plausible
+continuation from fidelity: original evidence conflicts with a later summary,
+recent side-thread context is tempting but out of scope, required evidence IDs
+are missing, or operation evidence is old but authoritative. A pass should cite
+or preserve the source evidence; a failure should be recorded when the subject
+treats paraphrase chains, nearby conversation, or claimed completion as stronger
+than the ledger.
 
 When strong-adversary coverage would be expensive, use a two-stage funnel. First
 spend attacker tokens on a fixed, publish-safe corpus:

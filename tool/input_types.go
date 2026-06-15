@@ -33,6 +33,13 @@ type sessionSearchInput struct {
 	Scope string `json:"scope,omitempty"`
 }
 
+type evidenceHydrateInput struct {
+	Query               string   `json:"query"`
+	OperationID         string   `json:"operation_id,omitempty"`
+	RequiredEvidenceIDs []string `json:"required_evidence_ids,omitempty"`
+	Limit               int      `json:"limit,omitempty"`
+}
+
 type semanticSearchInput struct {
 	Query string `json:"query"`
 	Limit int    `json:"limit,omitempty"`

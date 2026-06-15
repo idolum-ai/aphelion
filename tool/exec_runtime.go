@@ -91,6 +91,8 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.memory(ctx, input, scope)
 	case "session_search":
 		return r.sessionSearch(ctx, input, p, key)
+	case "evidence_hydrate":
+		return r.evidenceHydrate(ctx, input, key)
 	case "update_operation":
 		return r.updateOperation(ctx, input, key)
 	case "request_approval":

@@ -70,6 +70,12 @@ records. User-facing messages and buttons are projections of those records.
 
 The ledger is the source of truth. Text is presentation.
 
+Long-running work should keep stable evidence objects for source facts instead
+of carrying only compressed summaries forward. Conversation can navigate the
+work, but old facts should be rehydrated from typed evidence IDs, source kinds,
+epistemic status, and runtime-computed hashes when continuation or recovery
+depends on fidelity.
+
 ### Text is presentation, not authority
 
 Persona language can be alive, concise, and flexible. The runtime must not
@@ -127,6 +133,10 @@ create ritual approval churn.
 Aphelion-shaped self-healing is not "keep trying forever." It should continue
 when durable state and authority support continuation; otherwise it should
 repair, rescope, park, or ask through the right surface.
+
+Preserving continuity means preserving the original evidence trail, not just the
+latest interpretation of that trail. A model-authored summary can help navigate;
+it must not become the canonical fact merely because it is recent.
 
 ### Fail closed, but stay useful
 

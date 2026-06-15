@@ -965,6 +965,7 @@ func fullRuntimeAwarenessFixture() RuntimeAwareness {
 		OperationStage:             "r3",
 		OperationSummary:           "shared awareness factoring",
 		OperationDigest:            []string{"tool output compacted"},
+		EvidenceContext:            []string{"ev:operation_state:abc source=operation_state status=projection"},
 		ProposalActive:             true,
 		ProposalKind:               "deploy",
 		ProposalStatus:             "pending",

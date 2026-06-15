@@ -52,6 +52,9 @@ func (r *Runtime) BuildDiagnosticPacket(ctx context.Context, input DiagnosticInp
 		WriteLine(&b, "perception_budget: unavailable")
 	}
 
+	WriteSection(&b, "Evidence Ledger")
+	r.writeDoctorEvidenceLedger(&b, input.Key)
+
 	WriteSection(&b, "Autonomy")
 	r.writeDoctorAutonomyStatus(&b, input.Key, input.Message.SenderID, now)
 

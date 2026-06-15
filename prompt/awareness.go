@@ -44,6 +44,7 @@ type RuntimeAwareness struct {
 	HiddenInputsActive         bool
 	HiddenInputCategories      []string
 	ProvenanceSummary          string
+	EvidenceContext            []string
 	InteriorSignals            []string
 	WorkingObjective           string
 	WorkingObjectiveSource     string
@@ -114,6 +115,7 @@ var sharedTurnAwarenessFields = []awarenessField{
 	boolAwarenessField("hidden_inputs_active", func(aw RuntimeAwareness) bool { return aw.HiddenInputsActive }),
 	listAwarenessField("hidden_input_categories", func(aw RuntimeAwareness) []string { return aw.HiddenInputCategories }),
 	stringAwarenessField("provenance_summary", func(aw RuntimeAwareness) string { return aw.ProvenanceSummary }),
+	listAwarenessField("evidence_context", func(aw RuntimeAwareness) []string { return aw.EvidenceContext }),
 	listAwarenessField("interior_signal_pressure", func(aw RuntimeAwareness) []string { return aw.InteriorSignals }),
 	stringAwarenessField("working_objective", func(aw RuntimeAwareness) string { return aw.WorkingObjective }),
 	stringAwarenessField("working_objective_source", func(aw RuntimeAwareness) string { return aw.WorkingObjectiveSource }),

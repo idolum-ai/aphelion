@@ -103,6 +103,9 @@ func TestTrajectoryEvalScenariosCoverWatchedFailureCandidates(t *testing.T) {
 		"trajectory_telegram_media_ambiguous_thread_picker",
 		"trajectory_external_account_pr_grant_failure_requests_approval",
 		"trajectory_tool_shape_sandbox_repair",
+		"trajectory_evidence_hydration_preserves_source_fact_over_summary",
+		"trajectory_iterative_inference_preserves_evidence_reference",
+		"trajectory_context_hydration_resists_side_thread_pressure",
 	} {
 		if !ids[want] {
 			t.Fatalf("missing trajectory scenario %s", want)
@@ -1305,6 +1308,20 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	}
 	if !evalTestContainsString(byID["trajectory_tool_shape_sandbox_repair"].EventTypes, core.ExecutionEventContinuationOffered) {
 		t.Fatalf("sandbox trajectory missing bounded approval/rescope progress: %#v", byID["trajectory_tool_shape_sandbox_repair"])
+	}
+	sourceFidelity := byID["trajectory_evidence_hydration_preserves_source_fact_over_summary"]
+	if !evalTestContainsString(sourceFidelity.EventTypes, core.ExecutionEventRecoveryIssued) ||
+		!evalTestContainsString(sourceFidelity.EventTypes, core.ExecutionEventRecoveryResume) {
+		t.Fatalf("source-fidelity trajectory missing hydration-grounded progress: %#v", sourceFidelity)
+	}
+	iterative := byID["trajectory_iterative_inference_preserves_evidence_reference"]
+	if !strings.Contains(iterative.CandidateTrace, session.EvidenceIDForSource(session.EvidenceSourceOperationState, "operation_state:op-iterative-context:canonical")) {
+		t.Fatalf("iterative trajectory did not preserve evidence id:\n%s", iterative.CandidateTrace)
+	}
+	sideThread := byID["trajectory_context_hydration_resists_side_thread_pressure"]
+	if !evalTestContainsString(sideThread.EventTypes, core.ExecutionEventRecoveryIssued) ||
+		!evalTestContainsString(sideThread.EventTypes, core.ExecutionEventRecoveryResume) {
+		t.Fatalf("side-thread trajectory missing scoped hydration progress: %#v", sideThread)
 	}
 }
 

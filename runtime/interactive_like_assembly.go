@@ -117,6 +117,7 @@ func (r *Runtime) assembleInteractiveLikeTurn(ctx context.Context, input interac
 		),
 		sess.ContinuationState,
 	)
+	baseGovernorAwareness = r.applyEvidenceHydrationAwareness(ctx, baseGovernorAwareness, input.Key, runKind, prepared.LedgerText, sess, now)
 	baseGovernorAwareness = r.applyReplyModalityAwareness(baseGovernorAwareness, prepared)
 	if useMaterialFloor {
 		baseGovernorAwareness.ArtifactMode = "floor"

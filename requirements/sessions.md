@@ -31,6 +31,8 @@ The key rule is:
 Interrupted execution follows the same pattern:
 
 - TES execution events = canonical machine-authored source of truth
+- evidence objects = canonical immutable source snapshots for rehydrating
+  long-running context
 - structured turn-run facts = operational startup recovery hints, not status truth
 - governor recovery analysis = maintenance interpretation layered on top
 
@@ -46,6 +48,11 @@ Session requirements align to that contract as follows:
 
 - canonical:
   - `session.execution_events` for execution-sequence truth
+  - `session.evidence_objects` for immutable source snapshots used by
+    continuation, recovery, status, and diagnosis hydration
+  - `session.evidence_links` for typed relationships between evidence objects
+  - `session.evidence_hydration_runs` for audited evidence selection and gap
+    reporting
   - `session.messages` for scene transcript truth
   - `messages.floor_content` and `messages.floor_metadata` for recorded floor
     payloads

@@ -47,6 +47,9 @@ Operation protocol fields participate in the shared four-class surface taxonomy:
   surfaces for mutable declared work state.
 - execution sequencing and tool/delivery evidence remains `canonical` in TES
   (`session.execution_events`), not in operation sidecars.
+- source facts relevant to operation continuation should be available as
+  immutable evidence objects (`session.evidence_objects`) and selected through
+  audited hydration runs instead of copied forward only as prose summaries.
 - user-visible rendering of operation state (`/status`, `/health trace`, quick-read) is
   a `projection`.
 - removed surfaces must be deleted or rejected instead of being consulted by
@@ -56,6 +59,9 @@ Operational implications:
 
 - operation sidecars can describe intent, stage, and pending gates;
 - operation sidecars cannot silently rewrite canonical execution history;
+- operation sidecars can produce projection evidence snapshots, but those
+  snapshots do not become completion evidence unless runtime-owned execution
+  events support them;
 - projections must source-attribute canonical and operational data and must not
   invent execution history.
 - operation completion evidence should expose typed reason codes for missing
