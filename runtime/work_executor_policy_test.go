@@ -178,6 +178,14 @@ func TestWorkResultCompletionEvidenceForRequestRequiresMaterialEvidenceForAuthor
 	if !workResultHasSubstantiveCompletionEvidenceForRequest(grantReq, WorkResult{Commands: []string{"gh pr create --base release/v0.2.5 --head main --fill"}}) {
 		t.Fatal("successful GitHub PR creation command should count as material external-account evidence")
 	}
+	if !workResultHasSubstantiveCompletionEvidenceForRequest(grantReq, WorkResult{
+		Commands:      []string{"gh pr create --base release/v0.2.5 --head main --fill"},
+		ToolSuccesses: 1,
+		ToolFailures:  1,
+		ToolFailure:   "exec failed: ls missing-follow-up",
+	}) {
+		t.Fatal("successful material action plus incidental later failure should remain completion evidence")
+	}
 	if workResultHasSubstantiveCompletionEvidenceForRequest(grantReq, WorkResult{
 		Summary:      "I drafted the PR body but could not create the PR.",
 		Commands:     []string{"gh pr create --base release/v0.2.5 --head main --fill"},

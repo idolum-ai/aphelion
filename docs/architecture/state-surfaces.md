@@ -117,8 +117,9 @@ Universal evidence ledger note:
   fallback use.
 - Hydration preserves the active session boundary by default. A known evidence
   ID from another session is a gap, not ambient recall.
-- Schema backfill can only record the current value of historical mutable JSON
-  stores. It must not pretend intermediate states were recovered.
+- Startup migration seeds only current session snapshots. Explicit historical
+  backfill can record the current value of mutable JSON stores, but it must not
+  pretend intermediate states were recovered.
 
 Curiosity note:
 

@@ -42,8 +42,10 @@ The ledger does not replace existing stores; it indexes them as evidence.
 - Model-authored assistant text remains claimed evidence unless another
   privileged component attests it.
 
-Backfill from historical mutable JSON is a best-effort current snapshot, not a
-claim that every historical intermediate state is recoverable.
+Startup migration creates the ledger tables and seeds current session snapshots
+only. Explicit historical backfill is available as a maintenance action; it is a
+best-effort current snapshot of mutable JSON, not a claim that every historical
+intermediate state is recoverable.
 
 ## Hydration
 

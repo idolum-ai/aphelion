@@ -53,6 +53,24 @@ func TestEvidenceWriteThroughFromSessionTurnAndExecution(t *testing.T) {
 	}
 }
 
+func TestTurnRunLifecycleDoesNotFailWhenEvidenceWriteFails(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	if _, err := store.db.Exec(`DROP TABLE evidence_objects`); err != nil {
+		t.Fatalf("drop evidence_objects: %v", err)
+	}
+	run, err := store.BeginTurnRun(SessionKey{ChatID: 99114, UserID: 1001}, TurnRunKindInteractive, "keep turn lifecycle alive")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v, want evidence failure logged only", err)
+	}
+	if err := store.CompleteTurnRun(run.ID, TurnRunStatusCompleted, ""); err != nil {
+		t.Fatalf("CompleteTurnRun() err = %v, want evidence failure logged only", err)
+	}
+}
+
 func TestEvidenceObjectsAreImmutableBySourceID(t *testing.T) {
 	t.Parallel()
 
@@ -212,7 +230,7 @@ func TestEvidenceHydrationPrefersOperationEvidenceOverRecentDrift(t *testing.T) 
 	}
 }
 
-func TestMigratesSchemaV68ToV69EvidenceLedgerBackfill(t *testing.T) {
+func TestMigratesSchemaV68ToV69CreatesLedgerAndCurrentSnapshots(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "sessions-v68.db")
@@ -294,7 +312,124 @@ func TestMigratesSchemaV68ToV69EvidenceLedgerBackfill(t *testing.T) {
 	for _, object := range objects {
 		seen[object.SourceKind] = true
 	}
-	if !seen[EvidenceSourceExecutionEvent] || !seen[EvidenceSourceOperationState] {
-		t.Fatalf("backfilled sources = %#v, want execution and operation evidence", seen)
+	if !seen[EvidenceSourceOperationState] {
+		t.Fatalf("migration backfilled sources = %#v, want current operation evidence", seen)
 	}
+	if seen[EvidenceSourceExecutionEvent] {
+		t.Fatalf("migration backfilled historical execution events at boot; sources = %#v", seen)
+	}
+	if err := store.BackfillEvidenceLedger(); err != nil {
+		t.Fatalf("BackfillEvidenceLedger() err = %v", err)
+	}
+	afterBackfill, err := store.EvidenceObjectsBySession(key, 20)
+	if err != nil {
+		t.Fatalf("EvidenceObjectsBySession(after backfill) err = %v", err)
+	}
+	seen = map[string]bool{}
+	for _, object := range afterBackfill {
+		seen[object.SourceKind] = true
+	}
+	if !seen[EvidenceSourceExecutionEvent] || !seen[EvidenceSourceOperationState] {
+		t.Fatalf("manual backfilled sources = %#v, want execution and operation evidence", seen)
+	}
+	countBefore := countEvidenceObjectsForTest(t, store.db)
+	if err := store.BackfillEvidenceLedger(); err != nil {
+		t.Fatalf("BackfillEvidenceLedger(second) err = %v", err)
+	}
+	if countAfter := countEvidenceObjectsForTest(t, store.db); countAfter != countBefore {
+		t.Fatalf("BackfillEvidenceLedger(second) count = %d, want unchanged %d", countAfter, countBefore)
+	}
+}
+
+func TestBackfillEvidenceLedgerSkipsIncompleteHistoricalSourceTables(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "partial-source.db"))
+	if err != nil {
+		t.Fatalf("open partial source db: %v", err)
+	}
+	defer db.Close()
+
+	for _, stmt := range []string{
+		`CREATE TABLE artifact_index (
+			session_id TEXT NOT NULL,
+			turn_index INTEGER NOT NULL,
+			artifact_id TEXT NOT NULL,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO artifact_index(session_id, turn_index, artifact_id) VALUES ('telegram_dm:99105/user:1001', 1, 'artifact-1')`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create partial source fixture: %v", err)
+		}
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin partial source tx: %v", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	if err := backfillEvidenceLedgerTx(tx); err != nil {
+		t.Fatalf("backfillEvidenceLedgerTx() err = %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit partial source tx: %v", err)
+	}
+	if got := countEvidenceObjectsForTest(t, db); got != 0 {
+		t.Fatalf("evidence object count = %d, want incomplete source skipped", got)
+	}
+}
+
+func TestEvidenceHydrationLimitIsServerSideBounded(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 99106, UserID: 1001}
+	for i := 0; i < maxEvidenceHydrationLimit+10; i++ {
+		if _, err := store.UpsertEvidenceObject(EvidenceObjectInput{
+			SourceKind:      EvidenceSourceMessage,
+			SourceRef:       "messages:limit-test:" + time.Now().Add(time.Duration(i)*time.Nanosecond).Format(time.RFC3339Nano),
+			SessionID:       SessionIDForKey(key),
+			ChatID:          key.ChatID,
+			UserID:          key.UserID,
+			Scope:           defaultScopeForKey(key),
+			EpistemicStatus: EvidenceStatusObserved,
+			Summary:         "bounded hydration limit",
+			PayloadJSON:     `{"topic":"bounded hydration limit"}`,
+			ObservedAt:      time.Now().UTC().Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("UpsertEvidenceObject(%d) err = %v", i, err)
+		}
+	}
+	result, err := store.HydrateEvidence(EvidenceHydrationQuery{
+		Key:   key,
+		Query: "bounded hydration limit",
+		Limit: maxEvidenceHydrationLimit + 1000,
+	})
+	if err != nil {
+		t.Fatalf("HydrateEvidence() err = %v", err)
+	}
+	if len(result.Selected) != maxEvidenceHydrationLimit {
+		t.Fatalf("selected = %d, want server-side cap %d", len(result.Selected), maxEvidenceHydrationLimit)
+	}
+	runs, err := store.EvidenceHydrationRunsBySession(key, 1)
+	if err != nil {
+		t.Fatalf("EvidenceHydrationRunsBySession() err = %v", err)
+	}
+	if len(runs) != 1 || len(runs[0].SelectedEvidenceIDs) != maxEvidenceHydrationLimit {
+		t.Fatalf("recorded run selected IDs = %#v, want capped ordered selection", runs)
+	}
+}
+
+func countEvidenceObjectsForTest(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM evidence_objects`).Scan(&count); err != nil {
+		t.Fatalf("count evidence objects: %v", err)
+	}
+	return count
 }

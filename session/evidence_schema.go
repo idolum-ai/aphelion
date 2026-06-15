@@ -88,8 +88,10 @@ func migrateSchemaV68ToV69(tx *sql.Tx) error {
 	if err := ensureEvidenceLedgerTables(tx); err != nil {
 		return err
 	}
-	if err := backfillEvidenceLedgerTx(tx); err != nil {
-		return fmt.Errorf("backfill universal evidence ledger: %w", err)
+	// Keep boot migration bounded. Historical backfill is available through
+	// BackfillEvidenceLedger, but startup only records current durable snapshots.
+	if err := backfillSessionStateEvidenceTx(tx); err != nil {
+		return fmt.Errorf("backfill current session evidence snapshots: %w", err)
 	}
 	return nil
 }

@@ -87,17 +87,43 @@ func workResultHasSubstantiveCompletionEvidence(result WorkResult) bool {
 }
 
 func workResultHasSubstantiveCompletionEvidenceForRequest(req WorkRequest, result WorkResult) bool {
+	if workRequestRequiresMaterialCompletionEvidence(req) {
+		if !workResultHasMaterialCompletionEvidence(req, result) {
+			return false
+		}
+		return !workResultFailureInvalidatesMaterialCompletion(result)
+	}
 	if workResultHasFailedToolEvidence(result) {
 		return false
-	}
-	if workRequestRequiresMaterialCompletionEvidence(req) {
-		return workResultHasMaterialCompletionEvidence(req, result)
 	}
 	return workResultHasSubstantiveCompletionEvidence(result)
 }
 
 func workResultHasFailedToolEvidence(result WorkResult) bool {
 	return result.ToolFailures > 0 || strings.TrimSpace(result.ToolFailure) != ""
+}
+
+func workResultFailureInvalidatesMaterialCompletion(result WorkResult) bool {
+	failure := strings.ToLower(strings.TrimSpace(result.ToolFailure))
+	if failure == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"authority_rejected",
+		"approval required",
+		"authorization required",
+		"permission denied",
+		"not authorized",
+		"unauthorized",
+		"no active grant",
+		"grant required",
+		"capability required",
+	} {
+		if strings.Contains(failure, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func workRequestRequiresMaterialCompletionEvidence(req WorkRequest) bool {

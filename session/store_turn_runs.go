@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -51,7 +52,7 @@ func (s *SQLiteStore) BeginTurnRun(key SessionKey, kind TurnRunKind, requestText
 		LastActivityAt: now,
 	}
 	if _, err := s.UpsertEvidenceObject(turnRunEvidenceInput(*run)); err != nil {
-		return nil, fmt.Errorf("write begin turn run evidence: %w", err)
+		log.Printf("WARN write begin turn run evidence failed run_id=%d session_id=%s err=%v", run.ID, run.SessionID, err)
 	}
 	return run, nil
 }
@@ -150,7 +151,7 @@ func (s *SQLiteStore) BeginTurnRunForTelegramIngress(key SessionKey, kind TurnRu
 		LastActivityAt: now,
 	}
 	if _, err := upsertEvidenceObjectTx(tx, turnRunEvidenceInput(*run)); err != nil {
-		return nil, fmt.Errorf("write telegram ingress turn run evidence: %w", err)
+		log.Printf("WARN write telegram ingress turn run evidence failed run_id=%d session_id=%s err=%v", run.ID, run.SessionID, err)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit telegram ingress turn run tx: %w", err)
@@ -323,7 +324,7 @@ func (s *SQLiteStore) CompleteTurnRun(id int64, status TurnRunStatus, errorText 
 	}
 	if rows, _ := result.RowsAffected(); rows > 0 {
 		if err := s.upsertTurnRunEvidenceForID(id); err != nil {
-			return err
+			log.Printf("WARN write complete turn run evidence failed run_id=%d status=%s err=%v", id, status, err)
 		}
 		return nil
 	}

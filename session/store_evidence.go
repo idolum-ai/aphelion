@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+const (
+	defaultEvidenceHydrationLimit = 16
+	maxEvidenceHydrationLimit     = 50
+)
+
 func EvidenceIDForSource(sourceKind, sourceRef string) string {
 	sourceKind = evidenceToken(sourceKind)
 	if sourceKind == "" {
@@ -183,9 +188,7 @@ func (s *SQLiteStore) HydrateEvidence(query EvidenceHydrationQuery) (EvidenceHyd
 	if query.Now.IsZero() {
 		query.Now = time.Now().UTC()
 	}
-	if query.Limit <= 0 {
-		query.Limit = 16
-	}
+	query.Limit = boundedEvidenceHydrationLimit(query.Limit)
 	sessionID := strings.TrimSpace(query.SessionID)
 	if sessionID == "" {
 		sessionID = SessionIDForKey(query.Key)
@@ -385,16 +388,16 @@ func appendEvidenceHydrationRunTx(tx *sql.Tx, input EvidenceHydrationRunInput) (
 			strings.TrimSpace(input.OperationID),
 			strings.TrimSpace(input.Query),
 			input.CreatedAt.Format(time.RFC3339Nano),
-			strings.Join(normalizeStringSet(input.SelectedEvidenceIDs), ","),
-			strings.Join(normalizeStringSet(input.MissingEvidenceIDs), ","),
+			strings.Join(normalizeStringList(input.SelectedEvidenceIDs), ","),
+			strings.Join(normalizeStringList(input.MissingEvidenceIDs), ","),
 		}, "\x00")
 		sum := sha256.Sum256([]byte(seed))
 		input.ID = "hydr:" + hex.EncodeToString(sum[:])[:20]
 	}
 	input.Mode = firstEvidenceValue(evidenceToken(input.Mode), "deterministic")
 	input.Status = firstEvidenceValue(evidenceToken(input.Status), "completed")
-	selectedJSON := encodeStringList(normalizeStringSet(input.SelectedEvidenceIDs))
-	missingJSON := encodeStringList(normalizeStringSet(input.MissingEvidenceIDs))
+	selectedJSON := encodeStringList(input.SelectedEvidenceIDs)
+	missingJSON := encodeStringList(input.MissingEvidenceIDs)
 	if _, err := tx.Exec(`
 		INSERT OR IGNORE INTO evidence_hydration_runs(
 			run_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, operation_id, query_text, mode, status,
@@ -696,11 +699,11 @@ func evidenceObjectIDs(objects []EvidenceObject) []string {
 			out = append(out, obj.ID)
 		}
 	}
-	return normalizeStringSet(out)
+	return normalizeStringList(out)
 }
 
 func encodeStringList(values []string) string {
-	values = normalizeStringSet(values)
+	values = normalizeStringList(values)
 	raw, err := json.Marshal(values)
 	if err != nil {
 		return "[]"
@@ -713,7 +716,34 @@ func decodeStringList(raw string) []string {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &values); err != nil {
 		return nil
 	}
-	return normalizeStringSet(values)
+	return normalizeStringList(values)
+}
+
+func boundedEvidenceHydrationLimit(limit int) int {
+	if limit <= 0 {
+		return defaultEvidenceHydrationLimit
+	}
+	if limit > maxEvidenceHydrationLimit {
+		return maxEvidenceHydrationLimit
+	}
+	return limit
+}
+
+func normalizeStringList(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func normalizeStringSet(values []string) []string {

@@ -4,6 +4,7 @@ package session
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -239,6 +240,9 @@ func schemaColumnsExist(tx *sql.Tx, tableName string, columns ...string) (bool, 
 func backfillEvidenceQueryTx(tx *sql.Tx, query string) error {
 	rows, err := tx.Query(query)
 	if err != nil {
+		if isEvidenceBackfillSchemaDriftError(err) {
+			return nil
+		}
 		return err
 	}
 	defer rows.Close()
@@ -298,7 +302,7 @@ func scanEvidenceBackfillInput(rows *sql.Rows) (EvidenceObjectInput, error) {
 	input.Digest = nullToString(digest)
 	input.PayloadJSON = nullToString(payloadJSON)
 	if raw := strings.TrimSpace(nullToString(observedRaw)); raw != "" {
-		input.ObservedAt = mustParseSQLiteTime(raw)
+		input.ObservedAt = parseEvidenceBackfillTime(raw)
 	}
 	return input, nil
 }
@@ -309,6 +313,18 @@ func backfillSessionStateEvidenceTx(tx *sql.Tx) error {
 		return err
 	}
 	if !exists {
+		return nil
+	}
+	required := []string{
+		"session_id", "chat_id", "user_id", "scope_kind", "scope_id", "durable_agent_id",
+		"plan_state_json", "operation_state_json", "continuation_state_json", "working_objective_json",
+		"updated_at", "turn_count", "last_provider", "last_model", "last_error",
+	}
+	ok, err := schemaColumnsExist(tx, "sessions", required...)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		return nil
 	}
 	rows, err := tx.Query(`
@@ -338,13 +354,24 @@ func backfillSessionStateEvidenceTx(tx *sql.Tx) error {
 		if err := rows.Scan(&sessionID, &chatID, &userID, &scopeKind, &scopeID, &durableAgentID, &planJSON, &opJSON, &continuationJSON, &workingObjectiveJSON, &updatedRaw, &turnCount, &lastProvider, &lastModel, &lastError); err != nil {
 			return fmt.Errorf("scan session evidence snapshot: %w", err)
 		}
-		observed := mustParseSQLiteTime(updatedRaw)
+		observed := parseEvidenceBackfillTime(updatedRaw)
 		scope := ScopeRef{Kind: ScopeKind(scopeKind), ID: scopeID, DurableAgentID: durableAgentID}
+		sessionPayload := map[string]any{
+			"turn_count":             turnCount,
+			"working_objective_json": workingObjectiveJSON,
+			"last_provider":          nullToString(lastProvider),
+			"last_model":             nullToString(lastModel),
+			"last_error":             nullToString(lastError),
+		}
+		sessionPayloadJSON, err := json.Marshal(sessionPayload)
+		if err != nil {
+			return fmt.Errorf("marshal session evidence snapshot: %w", err)
+		}
 		snapshots := []EvidenceObjectInput{
 			sessionStateEvidenceInput(sessionID, chatID, userID, scope, "plan_state", EvidenceSourcePlanState, planJSON, observed),
 			sessionStateEvidenceInput(sessionID, chatID, userID, scope, "operation_state", EvidenceSourceOperationState, opJSON, observed),
 			sessionStateEvidenceInput(sessionID, chatID, userID, scope, "continuation_state", EvidenceSourceContinuationState, continuationJSON, observed),
-			sessionStateEvidenceInput(sessionID, chatID, userID, scope, "session_state", EvidenceSourceSessionState, fmt.Sprintf(`{"turn_count":%d,"working_objective_json":%q,"last_provider":%q,"last_model":%q,"last_error":%q}`, turnCount, workingObjectiveJSON, nullToString(lastProvider), nullToString(lastModel), nullToString(lastError)), observed),
+			sessionStateEvidenceInput(sessionID, chatID, userID, scope, "session_state", EvidenceSourceSessionState, string(sessionPayloadJSON), observed),
 		}
 		for _, snapshot := range snapshots {
 			if _, err := upsertEvidenceObjectTx(tx, snapshot); err != nil {
@@ -356,6 +383,22 @@ func backfillSessionStateEvidenceTx(tx *sql.Tx) error {
 		return fmt.Errorf("iterate session evidence snapshots: %w", err)
 	}
 	return nil
+}
+
+func parseEvidenceBackfillTime(raw string) time.Time {
+	t, err := parseSQLiteTime(raw)
+	if err != nil {
+		return time.Unix(0, 0).UTC()
+	}
+	return t
+}
+
+func isEvidenceBackfillSchemaDriftError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no such column") || strings.Contains(msg, "no such table")
 }
 
 func sessionStateEvidenceInput(sessionID string, chatID int64, userID int64, scope ScopeRef, label string, sourceKind string, payload string, observed time.Time) EvidenceObjectInput {
