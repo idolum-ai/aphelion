@@ -60,7 +60,7 @@ func TestMaterialFloorProtocolInvariants(t *testing.T) {
 		"SCENE_CONSTRAINTS:",
 		"- Do not leak this to degraded delivery.",
 		"CONTINUITY_CONTEXT:",
-		"- kind=recovery; visibility=internal; reason=budget rollover finished; text=Budget recovery completed before this reply.",
+		"- kind=recovery; visibility=internal; reason=budget rollover finished; evidence_ref=execution_event:budget_recovery_resumed",
 	}, "\n"), true)
 	if !structured {
 		t.Fatal("structured = false, want material contract packet")

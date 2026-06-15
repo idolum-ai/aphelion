@@ -11,8 +11,9 @@ import (
 
 // FallbackOptions controls floor-fallback serialization details.
 type FallbackOptions struct {
-	Channel string
-	Voice   bool
+	Channel    string
+	Voice      bool
+	UserIntent Intent
 }
 
 type fallbackSectionKind string
@@ -41,7 +42,7 @@ func SerializeFloorFallback(packet core.MaterialPacket, floorText string, opts F
 		return FloorTextOrFallback(trimmedFloor)
 	}
 
-	sections := fallbackSections(packet)
+	sections := fallbackSections(packet, opts.UserIntent)
 	if len(sections) == 0 {
 		if hasInternalOnlyMaterial(packet) {
 			return FloorTextOrFallback("")
@@ -54,11 +55,11 @@ func SerializeFloorFallback(packet core.MaterialPacket, floorText string, opts F
 	return serializeTextFallback(sections, trimmedFloor, opts)
 }
 
-func fallbackSections(packet core.MaterialPacket) []fallbackSection {
+func fallbackSections(packet core.MaterialPacket, userIntent Intent) []fallbackSection {
 	seen := make(map[string]struct{})
 	sections := []fallbackSection{
 		{Kind: fallbackFacts, Items: uniqueFallbackItems(packet.Facts, seen)},
-		{Kind: fallbackContinuity, Items: visibleContinuityFallbackItems(packet.ContinuityContext, seen)},
+		{Kind: fallbackContinuity, Items: visibleContinuityFallbackItems(packet.ContinuityContext, userIntent, seen)},
 		{Kind: fallbackAllowed, Items: uniqueFallbackItems(packet.AllowedActions, seen)},
 		{Kind: fallbackCommitments, Items: uniqueFallbackItems(packet.Commitments, seen)},
 		{Kind: fallbackRefusals, Items: uniqueFallbackItems(packet.Refusals, seen)},
@@ -97,15 +98,10 @@ func hasNonBlankContinuityItem(items []core.MaterialContinuityContext) bool {
 	return false
 }
 
-func visibleContinuityFallbackItems(items []core.MaterialContinuityContext, seen map[string]struct{}) []string {
+func visibleContinuityFallbackItems(items []core.MaterialContinuityContext, userIntent Intent, seen map[string]struct{}) []string {
+	decision := ContinuityPresentationPolicy(items, userIntent)
 	out := make([]string, 0, len(items))
-	for _, item := range items {
-		item = item.Normalized()
-		switch item.Visibility {
-		case core.MaterialContinuityVisibilityUserRelevant, core.MaterialContinuityVisibilityMustSurface:
-		default:
-			continue
-		}
+	for _, item := range decision.Visible {
 		text := continuityFallbackText(item)
 		if text == "" {
 			continue
@@ -124,9 +120,6 @@ func visibleContinuityFallbackItems(items []core.MaterialContinuityContext, seen
 }
 
 func continuityFallbackText(item core.MaterialContinuityContext) string {
-	if text := strings.TrimSpace(item.Text); text != "" {
-		return text
-	}
 	return strings.TrimSpace(item.Reason)
 }
 

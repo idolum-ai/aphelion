@@ -25,7 +25,7 @@ func TestParseMaterialPacketParsesStructuredSections(t *testing.T) {
 		"SCENE_CONSTRAINTS:",
 		"- Sound direct and grounded.",
 		"CONTINUITY_CONTEXT:",
-		"- kind=recovery; visibility=internal; reason=token rollover finished; text=Budget recovery completed before delivery.",
+		"- kind=recovery; visibility=internal; reason=token rollover finished; evidence_ref=execution_event:budget_recovery_resumed",
 		"NOTES:",
 		"- Show the highest-confidence action first.",
 	}, "\n"))
@@ -47,7 +47,7 @@ func TestParseMaterialPacketParsesStructuredSections(t *testing.T) {
 	if got := packet.ContinuityContext[0].Visibility; got != core.MaterialContinuityVisibilityInternal {
 		t.Fatalf("ContinuityContext[0].Visibility = %q, want internal", got)
 	}
-	if packet.ContinuityContext[0].Reason != "token rollover finished" || packet.ContinuityContext[0].Text != "Budget recovery completed before delivery." {
+	if packet.ContinuityContext[0].Reason != "token rollover finished" || packet.ContinuityContext[0].EvidenceRef != "execution_event:budget_recovery_resumed" {
 		t.Fatalf("ContinuityContext = %#v, want parsed continuity context", packet.ContinuityContext)
 	}
 	if !strings.Contains(packet.Text(), "CONTINUITY_CONTEXT:") {
@@ -55,21 +55,46 @@ func TestParseMaterialPacketParsesStructuredSections(t *testing.T) {
 	}
 }
 
-func TestParseMaterialPacketDefaultsPlainContinuityContextToInternal(t *testing.T) {
+func TestParseMaterialPacketQuarantinesLegacyContinuityProse(t *testing.T) {
 	t.Parallel()
 
 	packet, err := ParseMaterialPacket(strings.Join([]string{
 		"CONTINUITY_CONTEXT:",
-		"- Legacy recovery sentence from an older governor.",
+		"- Recovered cleanly. Completed the release PR preparation.",
 	}, "\n"))
 	if err != nil {
 		t.Fatalf("ParseMaterialPacket() err = %v", err)
 	}
+	if got := packet.ContinuityContext[0].Kind; got != core.MaterialContinuityKindRecovery {
+		t.Fatalf("Kind = %q, want legacy recovery quarantine", got)
+	}
 	if got := packet.ContinuityContext[0].Visibility; got != core.MaterialContinuityVisibilityInternal {
 		t.Fatalf("Visibility = %q, want internal fail-closed default", got)
 	}
-	if packet.ContinuityContext[0].Text != "Legacy recovery sentence from an older governor." {
-		t.Fatalf("ContinuityContext = %#v, want preserved legacy text", packet.ContinuityContext)
+	if packet.ContinuityContext[0].EvidenceRef != "legacy_recovery_prose" ||
+		!strings.Contains(packet.ContinuityContext[0].Reason, "legacy recovery prose") {
+		t.Fatalf("ContinuityContext = %#v, want legacy recovery prose quarantined", packet.ContinuityContext)
+	}
+}
+
+func TestParseMaterialPacketParsesHandoffContinuityKind(t *testing.T) {
+	t.Parallel()
+
+	packet, err := ParseMaterialPacket(strings.Join([]string{
+		"CONTINUITY_CONTEXT:",
+		"- kind=handoff; visibility=user_relevant; reason=thread handoff is relevant to the current question; evidence_ref=thread:3",
+	}, "\n"))
+	if err != nil {
+		t.Fatalf("ParseMaterialPacket() err = %v", err)
+	}
+	if got := packet.ContinuityContext[0].Kind; got != core.MaterialContinuityKindHandoff {
+		t.Fatalf("Kind = %q, want handoff", got)
+	}
+	if got := packet.ContinuityContext[0].Visibility; got != core.MaterialContinuityVisibilityUserRelevant {
+		t.Fatalf("Visibility = %q, want user_relevant", got)
+	}
+	if got := packet.ContinuityContext[0].EvidenceRef; got != "thread:3" {
+		t.Fatalf("EvidenceRef = %q, want thread:3", got)
 	}
 }
 

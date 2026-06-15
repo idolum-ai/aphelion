@@ -20,6 +20,7 @@ const (
 	MaterialContinuityKindContinuation MaterialContinuityKind = "continuation"
 	MaterialContinuityKindEvidence     MaterialContinuityKind = "evidence"
 	MaterialContinuityKindWarning      MaterialContinuityKind = "warning"
+	MaterialContinuityKindHandoff      MaterialContinuityKind = "handoff"
 
 	MaterialContinuityVisibilityInternal     MaterialContinuityVisibility = "internal"
 	MaterialContinuityVisibilityUserRelevant MaterialContinuityVisibility = "user_relevant"
@@ -38,10 +39,10 @@ type MaterialPacket struct {
 }
 
 type MaterialContinuityContext struct {
-	Kind       MaterialContinuityKind
-	Visibility MaterialContinuityVisibility
-	Reason     string
-	Text       string
+	Kind        MaterialContinuityKind
+	Visibility  MaterialContinuityVisibility
+	Reason      string
+	EvidenceRef string
 }
 
 func NormalizeMaterialPacketKind(kind string) MaterialPacketKind {
@@ -73,12 +74,14 @@ func NormalizeMaterialContinuityKind(kind string) MaterialContinuityKind {
 		return MaterialContinuityKindUnspecified
 	case "recovery", "repair", "budget_recovery", "rollover":
 		return MaterialContinuityKindRecovery
-	case "continuation", "resume", "resumption", "handoff":
+	case "continuation", "resume", "resumption":
 		return MaterialContinuityKindContinuation
 	case "evidence", "continuity_evidence", "state_evidence":
 		return MaterialContinuityKindEvidence
 	case "warning", "blocker", "blocked", "stale", "approval_required":
 		return MaterialContinuityKindWarning
+	case "handoff", "transfer", "handover":
+		return MaterialContinuityKindHandoff
 	default:
 		return MaterialContinuityKindUnspecified
 	}
@@ -114,14 +117,14 @@ func (c MaterialContinuityContext) Empty() bool {
 	return c.Kind == "" &&
 		c.Visibility == "" &&
 		strings.TrimSpace(c.Reason) == "" &&
-		strings.TrimSpace(c.Text) == ""
+		strings.TrimSpace(c.EvidenceRef) == ""
 }
 
 func (c MaterialContinuityContext) Normalized() MaterialContinuityContext {
 	c.Kind = NormalizeMaterialContinuityKind(string(c.Kind))
 	c.Visibility = NormalizeMaterialContinuityVisibility(string(c.Visibility))
 	c.Reason = strings.TrimSpace(c.Reason)
-	c.Text = strings.TrimSpace(c.Text)
+	c.EvidenceRef = strings.TrimSpace(c.EvidenceRef)
 	return c
 }
 
@@ -198,8 +201,8 @@ func renderMaterialContinuityItem(item MaterialContinuityContext) string {
 	if item.Reason != "" {
 		parts = append(parts, "reason="+item.Reason)
 	}
-	if item.Text != "" {
-		parts = append(parts, "text="+item.Text)
+	if item.EvidenceRef != "" {
+		parts = append(parts, "evidence_ref="+item.EvidenceRef)
 	}
 	return strings.Join(parts, "; ")
 }

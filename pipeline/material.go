@@ -200,17 +200,53 @@ func parseMaterialContinuityContextItem(item string) core.MaterialContinuityCont
 		fields[normalizeMaterialKey(key)] = strings.TrimSpace(value)
 	}
 	if len(fields) == 0 {
+		if legacy, ok := shapeLegacyContinuityStrings(trimmed); ok {
+			return legacy
+		}
 		return core.MaterialContinuityContext{
-			Visibility: core.MaterialContinuityVisibilityInternal,
-			Text:       trimmed,
+			Kind:        core.MaterialContinuityKindEvidence,
+			Visibility:  core.MaterialContinuityVisibilityInternal,
+			Reason:      "legacy continuity prose quarantined for compatibility",
+			EvidenceRef: "legacy_continuity_context_prose",
 		}
 	}
 	return core.MaterialContinuityContext{
-		Kind:       core.NormalizeMaterialContinuityKind(fields["kind"]),
-		Visibility: core.NormalizeMaterialContinuityVisibility(fields["visibility"]),
-		Reason:     firstNonEmptyMaterialField(fields["reason"], fields["why"]),
-		Text:       firstNonEmptyMaterialField(fields["text"], fields["summary"], fields["detail"]),
+		Kind:        core.NormalizeMaterialContinuityKind(fields["kind"]),
+		Visibility:  core.NormalizeMaterialContinuityVisibility(fields["visibility"]),
+		Reason:      firstNonEmptyMaterialField(fields["reason"], fields["why"], fields["text"], fields["summary"], fields["detail"]),
+		EvidenceRef: firstNonEmptyMaterialField(fields["evidence_ref"], fields["evidence"], fields["ref"]),
 	}
+}
+
+// shapeLegacyContinuityStrings quarantines older prose-shaped recovery lines.
+// New material floors should use typed continuity fields and visibility policy.
+func shapeLegacyContinuityStrings(text string) (core.MaterialContinuityContext, bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return core.MaterialContinuityContext{}, false
+	}
+	lower := strings.ToLower(trimmed)
+	for _, marker := range []string{
+		"recovered cleanly",
+		"recovered and completed",
+		"recovered and ",
+		"recovery completed",
+		"recovery evidence",
+		"continuity repair completed",
+		"continuity repair succeeded",
+		"budget recovery completed",
+		"budget recovery finished",
+	} {
+		if strings.HasPrefix(lower, marker) {
+			return core.MaterialContinuityContext{
+				Kind:        core.MaterialContinuityKindRecovery,
+				Visibility:  core.MaterialContinuityVisibilityInternal,
+				Reason:      "legacy recovery prose quarantined for compatibility",
+				EvidenceRef: "legacy_recovery_prose",
+			}, true
+		}
+	}
+	return core.MaterialContinuityContext{}, false
 }
 
 func cutMaterialKeyValue(part string) (string, string, bool) {

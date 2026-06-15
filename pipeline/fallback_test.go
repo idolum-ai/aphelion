@@ -95,10 +95,10 @@ func TestSerializeFloorFallbackOmitsContinuityContext(t *testing.T) {
 			"Pushed `release/v0.2.5` with `--force-with-lease`.",
 		},
 		ContinuityContext: []core.MaterialContinuityContext{{
-			Kind:       core.MaterialContinuityKindRecovery,
-			Visibility: core.MaterialContinuityVisibilityInternal,
-			Reason:     "token budget rollover succeeded",
-			Text:       "Recovery hop completed after token budget exhaustion.",
+			Kind:        core.MaterialContinuityKindRecovery,
+			Visibility:  core.MaterialContinuityVisibilityInternal,
+			Reason:      "token budget rollover succeeded",
+			EvidenceRef: "execution_event:budget_recovery_resumed",
 		}},
 		Commitments: []string{"Stopped before merge/publication."},
 	}
@@ -138,10 +138,10 @@ func TestSerializeFloorFallbackSurfacesMustSurfaceContinuityBlocker(t *testing.T
 	packet := core.MaterialPacket{
 		Kind: core.MaterialPacketKindStatusReport,
 		ContinuityContext: []core.MaterialContinuityContext{{
-			Kind:       core.MaterialContinuityKindWarning,
-			Visibility: core.MaterialContinuityVisibilityMustSurface,
-			Reason:     "approval window expired before the continuation could run",
-			Text:       "The prior approval expired before the next action could run, so fresh approval is required.",
+			Kind:        core.MaterialContinuityKindWarning,
+			Visibility:  core.MaterialContinuityVisibilityMustSurface,
+			Reason:      "The prior approval expired before the next action could run, so fresh approval is required.",
+			EvidenceRef: "continuation:lease_expired",
 		}},
 		AllowedActions: []string{"Ask for a fresh bounded approval before retrying."},
 	}
@@ -163,10 +163,10 @@ func TestSerializeFloorFallbackDoesNotLeakInternalOnlyFloor(t *testing.T) {
 	packet := core.MaterialPacket{
 		Kind: core.MaterialPacketKindStatusReport,
 		ContinuityContext: []core.MaterialContinuityContext{{
-			Kind:       core.MaterialContinuityKindRecovery,
-			Visibility: core.MaterialContinuityVisibilityInternal,
-			Reason:     "token budget rollover succeeded",
-			Text:       "Recovery hop completed after token budget exhaustion.",
+			Kind:        core.MaterialContinuityKindRecovery,
+			Visibility:  core.MaterialContinuityVisibilityInternal,
+			Reason:      "token budget rollover succeeded",
+			EvidenceRef: "execution_event:budget_recovery_resumed",
 		}},
 	}
 	got := SerializeFloorFallback(packet, packet.Text(), FallbackOptions{Channel: "telegram"})
@@ -181,15 +181,36 @@ func TestSerializeFloorFallbackSurfacesUserRelevantContinuityRecap(t *testing.T)
 	packet := core.MaterialPacket{
 		Kind: core.MaterialPacketKindStatusReport,
 		ContinuityContext: []core.MaterialContinuityContext{{
-			Kind:       core.MaterialContinuityKindContinuation,
-			Visibility: core.MaterialContinuityVisibilityUserRelevant,
-			Reason:     "the user asked where the work stood",
-			Text:       "We were preparing the release fix PR and had stopped before merge or publication.",
+			Kind:        core.MaterialContinuityKindContinuation,
+			Visibility:  core.MaterialContinuityVisibilityInternal,
+			Reason:      "We were preparing the release fix PR and had stopped before merge or publication.",
+			EvidenceRef: "operation:release_fix_pr",
 		}},
 	}
-	got := SerializeFloorFallback(packet, packet.Text(), FallbackOptions{Channel: "telegram"})
+	got := SerializeFloorFallback(packet, packet.Text(), FallbackOptions{Channel: "telegram", UserIntent: IntentContinuityQuestion})
 	if !strings.Contains(got, "Continuity:") ||
 		!strings.Contains(got, "We were preparing the release fix PR and had stopped before merge or publication.") {
 		t.Fatalf("fallback omitted user-relevant continuity recap: %q", got)
+	}
+}
+
+func TestContinuityPresentationPolicySeparatesMaterialFromVisibility(t *testing.T) {
+	t.Parallel()
+
+	ctx := []core.MaterialContinuityContext{
+		{Kind: core.MaterialContinuityKindRecovery, Visibility: core.MaterialContinuityVisibilityInternal, Reason: "recovery completed", EvidenceRef: "event:recovery"},
+		{Kind: core.MaterialContinuityKindWarning, Visibility: core.MaterialContinuityVisibilityMustSurface, Reason: "approval is stale", EvidenceRef: "lease:expired"},
+	}
+	decision := ContinuityPresentationPolicy(ctx, IntentUnspecified)
+	if len(decision.Background) != 1 || decision.Background[0].Kind != core.MaterialContinuityKindRecovery {
+		t.Fatalf("Background = %#v, want internal recovery kept in background", decision.Background)
+	}
+	if len(decision.Visible) != 1 || decision.Visible[0].Kind != core.MaterialContinuityKindWarning {
+		t.Fatalf("Visible = %#v, want must-surface warning", decision.Visible)
+	}
+
+	continuityQuestion := ContinuityPresentationPolicy(ctx[:1], IntentContinuityQuestion)
+	if len(continuityQuestion.Visible) != 1 || len(continuityQuestion.Background) != 0 {
+		t.Fatalf("continuity question decision = %#v, want internal continuity visible on explicit continuity intent", continuityQuestion)
 	}
 }

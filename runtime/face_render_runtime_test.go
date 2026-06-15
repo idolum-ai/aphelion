@@ -426,10 +426,10 @@ func TestRenderTurnReplyKeepsContinuityContextOutOfFallback(t *testing.T) {
 			"Pushed `release/v0.2.5` with `--force-with-lease`.",
 		},
 		ContinuityContext: []core.MaterialContinuityContext{{
-			Kind:       core.MaterialContinuityKindRecovery,
-			Visibility: core.MaterialContinuityVisibilityInternal,
-			Reason:     "token budget rollover succeeded",
-			Text:       "Recovery hop completed after token budget exhaustion.",
+			Kind:        core.MaterialContinuityKindRecovery,
+			Visibility:  core.MaterialContinuityVisibilityInternal,
+			Reason:      "token budget rollover succeeded",
+			EvidenceRef: "execution_event:budget_recovery_resumed",
 		}},
 		Commitments: []string{"Stopped before merge/publication."},
 	}

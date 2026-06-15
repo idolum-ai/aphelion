@@ -693,6 +693,9 @@ func TestBuildGovernorPromptIncludesMaterialFloorContractForInteractiveSceneTurn
 	if !strings.Contains(got, "Recovery is evidence for continuity, not a scene by default.") {
 		t.Fatalf("prompt missing continuity judgment boundary: %q", got)
 	}
+	if !strings.Contains(got, "Continuity is material evidence; visibility is a separate judgment.") {
+		t.Fatalf("prompt missing material/visibility separation: %q", got)
+	}
 	if !strings.Contains(got, "visibility=must_surface") {
 		t.Fatalf("prompt missing typed continuity context instruction: %q", got)
 	}
