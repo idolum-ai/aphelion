@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
@@ -381,8 +382,14 @@ func (r *Runtime) attachNativeWorkTurnEvidence(key session.SessionKey, result *W
 		switch strings.TrimSpace(event.EventType) {
 		case core.ExecutionEventToolSucceeded:
 			result.ToolSuccesses++
+			if execEffectPayloadHasSideEffects(event) {
+				result.SideEffects = true
+			}
 			if cmd := successfulExecCommandFromToolEvent(event, startedExecPreviews); cmd != "" {
 				result.Commands = appendUniqueRuntimeWorkString(result.Commands, cmd)
+				if commandeffect.Classify(cmd).SideEffects {
+					result.SideEffects = true
+				}
 			}
 		case core.ExecutionEventToolFailed:
 			result.ToolFailures++
@@ -409,6 +416,10 @@ func successfulExecCommandFromToolEvent(event session.ExecutionEvent, startedExe
 	if !strings.EqualFold(workPayloadString(payload, "tool"), "exec") {
 		return ""
 	}
+	if cmd := execEffectPayloadCommand(payload); cmd != "" {
+		_ = popStartedExecPreview(payload, startedExecPreviews)
+		return cmd
+	}
 	preview := workPayloadString(payload, "preview")
 	if fallback := popStartedExecPreview(payload, startedExecPreviews); preview == "" {
 		preview = fallback
@@ -421,6 +432,46 @@ func successfulExecCommandFromToolEvent(event session.ExecutionEvent, startedExe
 		return ""
 	}
 	return firstRuntimeWorkNonEmpty(workPayloadString(input, "cmd"), workPayloadString(input, "command"))
+}
+
+func execEffectPayloadHasSideEffects(event session.ExecutionEvent) bool {
+	payload := map[string]any{}
+	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+		return false
+	}
+	effect := execEffectPayloadMap(payload)
+	if len(effect) == 0 {
+		return false
+	}
+	return workPayloadBool(effect, "side_effects")
+}
+
+func execEffectPayloadCommand(payload map[string]any) string {
+	effect := execEffectPayloadMap(payload)
+	if len(effect) == 0 {
+		return ""
+	}
+	return workPayloadString(effect, "command")
+}
+
+func execEffectPayloadMap(payload map[string]any) map[string]any {
+	if payload == nil {
+		return nil
+	}
+	raw := payload["exec_effect"]
+	if raw == nil {
+		return nil
+	}
+	if effect, ok := raw.(map[string]any); ok {
+		return effect
+	}
+	if encoded, ok := raw.(string); ok && strings.TrimSpace(encoded) != "" {
+		effect := map[string]any{}
+		if err := json.Unmarshal([]byte(encoded), &effect); err == nil {
+			return effect
+		}
+	}
+	return nil
 }
 
 func discardStartedExecPreviewForToolEvent(event session.ExecutionEvent, startedExecPreviews map[string][]string) {
@@ -478,6 +529,29 @@ func workPayloadString(payload map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func workPayloadBool(payload map[string]any, key string) bool {
+	if payload == nil {
+		return false
+	}
+	value, ok := payload[key]
+	if !ok || value == nil {
+		return false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "1", "yes":
+			return true
+		default:
+			return false
+		}
+	default:
+		return strings.EqualFold(strings.TrimSpace(fmt.Sprint(value)), "true")
+	}
 }
 
 func appendUniqueRuntimeWorkString(values []string, value string) []string {

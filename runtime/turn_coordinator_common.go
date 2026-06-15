@@ -249,12 +249,22 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	systemPrompt := promptState.SystemPrompt
 	input.Sess.SystemPrompt = systemPrompt
 
-	sess, history, maybeErr := r.maybeCompactSession(ctx, input.Key, input.Sess, systemBlocks, input.Prepared.UserText, brokerage.IdolumNote)
+	sess, history, compacted, maybeErr := r.maybeCompactSession(ctx, input.Key, input.Sess, systemBlocks, input.Prepared.UserText, brokerage.IdolumNote)
 	if maybeErr != nil {
 		monitorErr = fmt.Errorf("maybe compact session: %w", maybeErr)
 		return out, monitorErr
 	}
 	out.Sess = sess
+	if compacted {
+		var awarenessChanged bool
+		baseGovernorAwareness, awarenessChanged = applyCompactionContinuityAwareness(baseGovernorAwareness, sess)
+		if awarenessChanged {
+			promptState = r.buildTurnCoordinatorGovernorPrompt(input, baseGovernorAwareness, brokerage)
+			systemBlocks = promptState.SystemBlocks
+			systemPrompt = promptState.SystemPrompt
+			sess.SystemPrompt = systemPrompt
+		}
+	}
 
 	requestFaceNote := input.RequestFaceNote
 	if requestFaceNote != nil {

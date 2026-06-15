@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -35,11 +36,15 @@ func (m *turnMonitor) ToolStarted(ctx context.Context, name string, input json.R
 		m.toolStarts[toolDurationKey(name, input)] = append(m.toolStarts[toolDurationKey(name, input)], startedAt)
 		m.toolStartsMu.Unlock()
 	}
-	m.runtime.recordExecutionEvent(m.key, core.ExecutionEventToolStarted, "tool", "started", map[string]any{
+	payload := map[string]any{
 		"run_id":  m.runID,
 		"tool":    strings.TrimSpace(name),
 		"preview": preview,
-	}, startedAt)
+	}
+	if effect := execEffectPayload(name, input); len(effect) > 0 {
+		payload["exec_effect"] = effect
+	}
+	m.runtime.recordExecutionEvent(m.key, core.ExecutionEventToolStarted, "tool", "started", payload, startedAt)
 	if m.progress != nil {
 		m.progress.ToolStarted(ctx, name, input)
 	}
@@ -86,17 +91,52 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 		}
 		m.toolStartsMu.Unlock()
 	}
-	m.runtime.recordExecutionEvent(m.key, eventType, "tool", status, map[string]any{
+	payload := map[string]any{
 		"run_id":           m.runID,
 		"tool":             strings.TrimSpace(name),
 		"preview":          preview,
 		"result_preview":   resultPreview,
 		"error":            errorText,
 		"tool_duration_ms": toolDurationMS,
-	}, time.Now().UTC())
+	}
+	if effect := execEffectPayload(name, input); len(effect) > 0 {
+		payload["exec_effect"] = effect
+	}
+	m.runtime.recordExecutionEvent(m.key, eventType, "tool", status, payload, time.Now().UTC())
 	if m.progress != nil {
 		m.progress.ToolFinished(ctx, name, err)
 	}
+}
+
+func execEffectPayload(name string, input json.RawMessage) map[string]any {
+	if !strings.EqualFold(strings.TrimSpace(name), "exec") || len(input) == 0 {
+		return nil
+	}
+	payload := map[string]any{}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return nil
+	}
+	command := firstNonEmpty(payloadString(payload, "command"), payloadString(payload, "cmd"))
+	if command == "" {
+		return nil
+	}
+	effect := commandeffect.Classify(command)
+	out := map[string]any{
+		"command":      command,
+		"kind":         string(effect.Kind),
+		"reason":       strings.TrimSpace(effect.Reason),
+		"side_effects": effect.SideEffects,
+	}
+	if workdir := payloadString(payload, "workdir"); workdir != "" {
+		out["workdir"] = workdir
+	}
+	if effect.Command != "" {
+		out["command_root"] = effect.Command
+	}
+	if effect.GitSubcommand != "" {
+		out["git_subcommand"] = effect.GitSubcommand
+	}
+	return out
 }
 
 func (m *turnMonitor) ModelRequestStarted(ctx context.Context, event agent.ModelRequestEvent) {

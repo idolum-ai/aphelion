@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -62,7 +63,7 @@ func TestHandleInboundCompactsLongSessionBeforeGovernorTurn(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	cfg.Sessions.MaxContextRatio = 0.40
 	cfg.Sessions.CompactionRatio = 0.20
-	cfg.Governor.Codex.ContextWindow = 120
+	cfg.Governor.Codex.ContextWindow = 4000
 	provider.replyText = "fresh reply"
 	provider.compactionReplyText = "Compacted summary of the earlier conversation."
 
@@ -127,6 +128,22 @@ func TestHandleInboundCompactsLongSessionBeforeGovernorTurn(t *testing.T) {
 	}
 	if !foundSummary {
 		t.Fatal("compaction summary message not found in reloaded session")
+	}
+	provider.mu.Lock()
+	seenGovernorSystems := append([]string(nil), provider.seenGovernorSystem...)
+	lastGovernorMsgs := append([]agent.Message(nil), provider.lastGovernorMsgs...)
+	provider.mu.Unlock()
+	joinedSystems := strings.Join(seenGovernorSystems, "\n\n---\n\n")
+	if !strings.Contains(joinedSystems, "session_compaction_summary") ||
+		!strings.Contains(joinedSystems, "epistemic_status=claimed") ||
+		!strings.Contains(joinedSystems, "Compacted summary of the earlier conversation.") {
+		t.Fatalf("governor systems = %q, want compaction summary as awareness evidence context", joinedSystems)
+	}
+	for _, msg := range lastGovernorMsgs {
+		if msg.Role != "assistant" || !strings.Contains(msg.Content, "Compacted summary of the earlier conversation.") {
+			continue
+		}
+		t.Fatalf("compaction summary replayed as assistant history: %#v", msg)
 	}
 }
 

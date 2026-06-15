@@ -399,6 +399,58 @@ func TestAttachNativeWorkTurnEvidencePairsStartedExecCommandWithSucceededEvent(t
 	}
 }
 
+func TestAttachNativeWorkTurnEvidenceUsesTypedExecEffectWhenPreviewIsTruncated(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8824, UserID: 0, Scope: telegramDMScopeRef(8824)}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "commit and push")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	command := "cd /workspace/project && git commit -m evidence && git push origin main"
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType: core.ExecutionEventToolStarted,
+			Stage:     "tool",
+			Status:    "started",
+			PayloadJSON: fmt.Sprintf(
+				`{"run_id":%d,"tool":"exec","preview":"{\"command\":\"cd /workspace/project && git commit...","exec_effect":{"command":%q,"kind":"remote_mutation","side_effects":true,"workdir":"/workspace/project"}}`,
+				run.ID,
+				command,
+			),
+			CreatedAt: now,
+		},
+		{
+			EventType: core.ExecutionEventToolSucceeded,
+			Stage:     "tool",
+			Status:    "succeeded",
+			PayloadJSON: fmt.Sprintf(
+				`{"run_id":%d,"tool":"exec","result_preview":"stdout:\n[main abc123] evidence\n\nstderr:\nTo github.com:test/repo.git","exec_effect":{"command":%q,"kind":"remote_mutation","side_effects":true,"workdir":"/workspace/project"}}`,
+				run.ID,
+				command,
+			),
+			CreatedAt: now.Add(time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	result := WorkResult{TurnRunID: run.ID}
+	rt.attachNativeWorkTurnEvidence(key, &result)
+	if len(result.Commands) != 1 || result.Commands[0] != command {
+		t.Fatalf("commands = %#v, want typed exec-effect command", result.Commands)
+	}
+	if !result.SideEffects {
+		t.Fatal("SideEffects = false, want typed exec-effect side effect retained")
+	}
+}
+
 func TestAttachNativeWorkTurnEvidenceConsumesFailedExecPreviewBeforeSucceededFallback(t *testing.T) {
 	t.Parallel()
 

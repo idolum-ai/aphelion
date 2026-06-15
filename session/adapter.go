@@ -14,7 +14,7 @@ import (
 func ToAgentHistory(messages []Message) ([]agent.Message, error) {
 	out := make([]agent.Message, 0, len(messages))
 	for _, msg := range messages {
-		if msg.Compacted {
+		if msg.Compacted || messageIsSyntheticContinuitySummary(msg) {
 			continue
 		}
 
@@ -32,6 +32,17 @@ func ToAgentHistory(messages []Message) ([]agent.Message, error) {
 		out = append(out, entry)
 	}
 	return repairAgentHistory(out), nil
+}
+
+func messageIsSyntheticContinuitySummary(msg Message) bool {
+	origin := strings.ToLower(strings.TrimSpace(msg.EventOrigin))
+	detail := strings.ToLower(strings.TrimSpace(msg.EventOriginDetail))
+	switch origin {
+	case "continuity", "session_compaction", "compaction":
+		return detail == "compaction_summary" || detail == "summary" || detail == "context_summary"
+	default:
+		return false
+	}
 }
 
 // NewMessagesForTurn converts user input + generated assistant/tool messages into persisted rows.

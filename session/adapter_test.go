@@ -32,6 +32,25 @@ func TestToAgentHistorySkipsCompactedAndParsesToolCalls(t *testing.T) {
 	}
 }
 
+func TestToAgentHistorySkipsSyntheticContinuitySummaries(t *testing.T) {
+	t.Parallel()
+
+	history, err := ToAgentHistory([]Message{
+		{ID: 1, Role: "user", Content: "continue imexx", EventOrigin: "user"},
+		{ID: 2, Role: "assistant", Content: "Operation: aphelion-release-readiness-review, phase release.", EventOrigin: "continuity", EventOriginDetail: "compaction_summary"},
+		{ID: 3, Role: "assistant", Content: "Imexx current state is ready for review."},
+	})
+	if err != nil {
+		t.Fatalf("ToAgentHistory() err = %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("history len = %d, want 2", len(history))
+	}
+	if history[0].Content != "continue imexx" || history[1].Content != "Imexx current state is ready for review." {
+		t.Fatalf("history = %#v, want synthetic continuity summary skipped", history)
+	}
+}
+
 func TestNewMessagesForTurn(t *testing.T) {
 	t.Parallel()
 
