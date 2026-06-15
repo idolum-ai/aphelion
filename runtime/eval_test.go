@@ -1196,6 +1196,15 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	if report.ScenarioCount != wantCount || report.ResultCount != wantCount {
 		t.Fatalf("scenario/result count = %d/%d, want %d/%d", report.ScenarioCount, report.ResultCount, wantCount, wantCount)
 	}
+	if report.ContextFidelity == nil {
+		t.Fatal("trajectory report missing context fidelity summary")
+	}
+	if report.ContextFidelity.CleanResults != 3 ||
+		report.ContextFidelity.HydrationHitRate != 1 ||
+		report.ContextFidelity.CrossThreadLeakRate != 0 ||
+		report.ContextFidelity.EvidenceReferenceRetentionRate != 1 {
+		t.Fatalf("context fidelity summary = %#v, want three clean perfect context-fidelity cells", report.ContextFidelity)
+	}
 	for _, result := range report.Results {
 		for _, want := range []string{core.ExecutionEventTurnStarted, core.ExecutionEventDeliveryFinalSent, core.ExecutionEventTurnCompleted} {
 			if !evalTestContainsString(result.EventTypes, want) {
@@ -1314,14 +1323,23 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 		!evalTestContainsString(sourceFidelity.EventTypes, core.ExecutionEventRecoveryResume) {
 		t.Fatalf("source-fidelity trajectory missing hydration-grounded progress: %#v", sourceFidelity)
 	}
+	if sourceFidelity.ContextFidelity == nil || !sourceFidelity.ContextFidelity.HydrationHit || sourceFidelity.ContextFidelity.HydrationLeak || sourceFidelity.ContextFidelity.ReplyLeak {
+		t.Fatalf("source-fidelity metrics = %#v, want hydration hit without leak", sourceFidelity.ContextFidelity)
+	}
 	iterative := byID["trajectory_iterative_inference_preserves_evidence_reference"]
 	if !strings.Contains(iterative.CandidateTrace, session.EvidenceIDForSource(session.EvidenceSourceOperationState, "operation_state:op-iterative-context:canonical")) {
 		t.Fatalf("iterative trajectory did not preserve evidence id:\n%s", iterative.CandidateTrace)
+	}
+	if iterative.ContextFidelity == nil || !iterative.ContextFidelity.EvidenceReferenceRetained || iterative.ContextFidelity.ObservedReferenceTurns != 2 {
+		t.Fatalf("iterative metrics = %#v, want evidence reference retained across both turns", iterative.ContextFidelity)
 	}
 	sideThread := byID["trajectory_context_hydration_resists_side_thread_pressure"]
 	if !evalTestContainsString(sideThread.EventTypes, core.ExecutionEventRecoveryIssued) ||
 		!evalTestContainsString(sideThread.EventTypes, core.ExecutionEventRecoveryResume) {
 		t.Fatalf("side-thread trajectory missing scoped hydration progress: %#v", sideThread)
+	}
+	if sideThread.ContextFidelity == nil || !sideThread.ContextFidelity.HydrationHit || sideThread.ContextFidelity.HydrationLeak || sideThread.ContextFidelity.ReplyLeak {
+		t.Fatalf("side-thread metrics = %#v, want active evidence hit without side-thread leak", sideThread.ContextFidelity)
 	}
 }
 
@@ -1947,6 +1965,28 @@ func TestGateEvalReportsFailsProviderOrScenarioRegression(t *testing.T) {
 	}
 }
 
+func TestGateEvalReportsFailsContextFidelityRegression(t *testing.T) {
+	t.Parallel()
+
+	before := evalContextFidelityGateReportFixture(2, 2, 0, 1)
+	after := evalContextFidelityGateReportFixture(2, 1, 1, 0)
+	gate, err := GateEvalReports([]EvalReport{before}, []EvalReport{after})
+	if err != nil {
+		t.Fatalf("GateEvalReports() err = %v", err)
+	}
+	reasons := strings.Join(gate.Reasons, "\n")
+	if gate.Passed ||
+		!strings.Contains(reasons, "context fidelity hydration hit rate") ||
+		!strings.Contains(reasons, "context fidelity cross-thread leak rate") ||
+		!strings.Contains(reasons, "context fidelity evidence-reference retention") {
+		t.Fatalf("gate = %#v, want context-fidelity regression reasons", gate)
+	}
+	markdown := RenderEvalGateMarkdown(gate)
+	if !strings.Contains(markdown, "Context Fidelity") || !strings.Contains(markdown, "Hydration hit rate") {
+		t.Fatalf("gate markdown missing context fidelity table:\n%s", markdown)
+	}
+}
+
 func TestCanonicalEvalSyntheticFailureFixturesTripHardFailures(t *testing.T) {
 	t.Parallel()
 
@@ -2284,6 +2324,51 @@ func (p *retryingEvalProvider) CompleteWithOptions(context.Context, []agent.Mess
 		return nil, err
 	}
 	return &agent.Response{Content: p.content}, nil
+}
+
+func evalContextFidelityGateReportFixture(total int, hits int, leaks int, retained int) EvalReport {
+	results := make([]EvalScenarioResult, 0, total)
+	for i := 0; i < total; i++ {
+		results = append(results, EvalScenarioResult{
+			ScenarioID:       "trajectory_iterative_inference_preserves_evidence_reference",
+			ScenarioName:     "Iterative inference preserves stable evidence reference",
+			ScenarioRevision: EvalScenarioRevisionTrajectory,
+			Domain:           "context_fidelity",
+			AuthorityClass:   "read_only_review",
+			TransportSurface: "telegram_dm",
+			Route:            "openai:gpt-5.5",
+			Provider:         "openai",
+			Model:            "gpt-5.5",
+			SubjectMode:      EvalSubjectGovernor,
+			SampleIndex:      i,
+			Pass:             true,
+			ContextFidelity: &EvalContextFidelityResult{
+				ExpectedEvidenceIDs:       []string{"ev:source"},
+				SelectedEvidenceIDs:       []string{"ev:source"},
+				RetentionEvidenceIDs:      []string{"ev:source"},
+				ExpectedReferenceTurns:    2,
+				ObservedReferenceTurns:    2,
+				HydrationHit:              i < hits,
+				HydrationLeak:             i < leaks,
+				EvidenceReferenceRetained: i < retained,
+				Clean:                     true,
+			},
+		})
+	}
+	report := EvalReport{
+		Suite:            EvalSuiteTrajectory,
+		Mode:             EvalModeLive,
+		SubjectMode:      EvalSubjectGovernor,
+		ScenarioRevision: EvalScenarioRevisionTrajectory,
+		ScoringMode:      EvalScoringDeterministic,
+		TraceMode:        EvalTraceRedacted,
+		Rollouts:         total,
+		RouteCount:       1,
+		ScenarioCount:    1,
+		Results:          results,
+	}
+	finalizeEvalReport(&report)
+	return report
 }
 
 func evalGateReportFixture(hardFailures int, providerFailures int, ambiguous int, trace string) EvalReport {
