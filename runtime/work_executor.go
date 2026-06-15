@@ -67,6 +67,7 @@ type WorkResult struct {
 	ToolSuccesses    int
 	ToolFailures     int
 	ToolFailure      string
+	ToolFailureTexts []string
 }
 
 type WorkAvailability struct {
@@ -346,8 +347,11 @@ func (r *Runtime) attachNativeWorkTurnEvidence(key session.SessionKey, result *W
 		return
 	}
 	if run, err := r.store.TurnRun(result.TurnRunID); err == nil && run != nil {
-		if strings.TrimSpace(run.LastToolError) != "" && strings.TrimSpace(result.ToolFailure) == "" {
-			result.ToolFailure = strings.TrimSpace(run.LastToolError)
+		if failure := strings.TrimSpace(run.LastToolError); failure != "" {
+			result.ToolFailureTexts = appendUniqueRuntimeWorkString(result.ToolFailureTexts, failure)
+			if strings.TrimSpace(result.ToolFailure) == "" {
+				result.ToolFailure = failure
+			}
 		}
 	}
 	events, err := r.store.ExecutionEventsByTurnRun(key, result.TurnRunID, 500)
@@ -363,8 +367,15 @@ func (r *Runtime) attachNativeWorkTurnEvidence(key session.SessionKey, result *W
 			}
 		case core.ExecutionEventToolFailed:
 			result.ToolFailures++
-			if strings.TrimSpace(result.ToolFailure) == "" {
-				result.ToolFailure = toolFailureSummaryFromEvent(event)
+			failure := toolFailureSummaryFromEvent(event)
+			if failure == "" {
+				continue
+			}
+			result.ToolFailureTexts = appendUniqueRuntimeWorkString(result.ToolFailureTexts, failure)
+			if strings.TrimSpace(result.ToolFailure) == "" ||
+				(!workResultFailureTextInvalidatesMaterialCompletion(result.ToolFailure) &&
+					workResultFailureTextInvalidatesMaterialCompletion(failure)) {
+				result.ToolFailure = failure
 			}
 		}
 	}

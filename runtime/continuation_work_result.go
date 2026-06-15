@@ -104,7 +104,16 @@ func workResultHasFailedToolEvidence(result WorkResult) bool {
 }
 
 func workResultFailureInvalidatesMaterialCompletion(result WorkResult) bool {
-	failure := strings.ToLower(strings.TrimSpace(result.ToolFailure))
+	for _, failure := range append([]string{result.ToolFailure}, result.ToolFailureTexts...) {
+		if workResultFailureTextInvalidatesMaterialCompletion(failure) {
+			return true
+		}
+	}
+	return false
+}
+
+func workResultFailureTextInvalidatesMaterialCompletion(failure string) bool {
+	failure = strings.ToLower(strings.TrimSpace(failure))
 	if failure == "" {
 		return false
 	}
@@ -615,6 +624,9 @@ func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorSt
 	}
 	if strings.TrimSpace(result.ToolFailure) != "" {
 		payload["tool_failure"] = trimError(result.ToolFailure)
+	}
+	if len(result.ToolFailureTexts) > 0 {
+		payload["tool_failure_texts"] = result.ToolFailureTexts
 	}
 	if cause != nil {
 		payload["error"] = trimError(cause.Error())

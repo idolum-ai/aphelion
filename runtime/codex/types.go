@@ -98,4 +98,5 @@ type WorkResult struct {
 	ToolSuccesses    int
 	ToolFailures     int
 	ToolFailure      string
+	ToolFailureTexts []string
 }
