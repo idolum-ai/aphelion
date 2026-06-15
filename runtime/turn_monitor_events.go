@@ -46,13 +46,14 @@ func (m *turnMonitor) ToolStarted(ctx context.Context, name string, input json.R
 }
 
 func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.RawMessage, output string, err error) {
+	preview := toolInputPreview(input)
 	resultPreview := truncatePreview(strings.TrimSpace(output), 220)
 	errorText := ""
 	if err != nil {
 		errorText = trimError(err.Error())
 	}
 	if m.audit != nil {
-		m.audit.ToolFinished(name, toolInputPreview(input), resultPreview, errorText)
+		m.audit.ToolFinished(name, preview, resultPreview, errorText)
 	}
 	if m.runID != 0 {
 		if storeErr := m.runtime.store.NoteTurnRunToolFinish(m.runID, resultPreview, errorText); storeErr != nil {
@@ -88,6 +89,7 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 	m.runtime.recordExecutionEvent(m.key, eventType, "tool", status, map[string]any{
 		"run_id":           m.runID,
 		"tool":             strings.TrimSpace(name),
+		"preview":          preview,
 		"result_preview":   resultPreview,
 		"error":            errorText,
 		"tool_duration_ms": toolDurationMS,

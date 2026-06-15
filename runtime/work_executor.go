@@ -18,6 +18,7 @@ import (
 	runtimecodex "github.com/idolum-ai/aphelion/runtime/codex"
 	runtimecontinuation "github.com/idolum-ai/aphelion/runtime/continuation"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 )
 
 type WorkMode = runtimecontinuation.WorkMode
@@ -256,6 +257,7 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 	if e.runtime == nil {
 		return WorkResult{}, fmt.Errorf("runtime unavailable")
 	}
+	ctx = toolpkg.WithContinuationExecAuthority(ctx, req.State)
 	key := req.Key
 	if key.ChatID == 0 {
 		key.ChatID = req.ChatID
@@ -358,11 +360,28 @@ func (r *Runtime) attachNativeWorkTurnEvidence(key session.SessionKey, result *W
 	if err != nil {
 		return
 	}
+	startedExecPreviews := map[string][]string{}
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) != core.ExecutionEventToolStarted {
+			continue
+		}
+		payload := map[string]any{}
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			continue
+		}
+		if !strings.EqualFold(workPayloadString(payload, "tool"), "exec") {
+			continue
+		}
+		if preview := workPayloadString(payload, "preview"); preview != "" {
+			eventKey := workToolEventKey(payload)
+			startedExecPreviews[eventKey] = append(startedExecPreviews[eventKey], preview)
+		}
+	}
 	for _, event := range events {
 		switch strings.TrimSpace(event.EventType) {
 		case core.ExecutionEventToolSucceeded:
 			result.ToolSuccesses++
-			if cmd := successfulExecCommandFromToolEvent(event); cmd != "" {
+			if cmd := successfulExecCommandFromToolEvent(event, startedExecPreviews); cmd != "" {
 				result.Commands = appendUniqueRuntimeWorkString(result.Commands, cmd)
 			}
 		case core.ExecutionEventToolFailed:
@@ -381,7 +400,7 @@ func (r *Runtime) attachNativeWorkTurnEvidence(key session.SessionKey, result *W
 	}
 }
 
-func successfulExecCommandFromToolEvent(event session.ExecutionEvent) string {
+func successfulExecCommandFromToolEvent(event session.ExecutionEvent, startedExecPreviews map[string][]string) string {
 	payload := map[string]any{}
 	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
 		return ""
@@ -391,6 +410,18 @@ func successfulExecCommandFromToolEvent(event session.ExecutionEvent) string {
 	}
 	preview := workPayloadString(payload, "preview")
 	if preview == "" {
+		eventKey := workToolEventKey(payload)
+		previews := startedExecPreviews[eventKey]
+		if len(previews) > 0 {
+			preview = previews[0]
+			if len(previews) == 1 {
+				delete(startedExecPreviews, eventKey)
+			} else {
+				startedExecPreviews[eventKey] = previews[1:]
+			}
+		}
+	}
+	if preview == "" {
 		return ""
 	}
 	input := map[string]any{}
@@ -398,6 +429,12 @@ func successfulExecCommandFromToolEvent(event session.ExecutionEvent) string {
 		return ""
 	}
 	return firstRuntimeWorkNonEmpty(workPayloadString(input, "cmd"), workPayloadString(input, "command"))
+}
+
+func workToolEventKey(payload map[string]any) string {
+	runID := workPayloadString(payload, "run_id")
+	toolName := strings.ToLower(workPayloadString(payload, "tool"))
+	return runID + "\x00" + toolName
 }
 
 func toolFailureSummaryFromEvent(event session.ExecutionEvent) string {

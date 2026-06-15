@@ -210,6 +210,9 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 		}
 	}
 	if proposal, reason := proposalForCommand(in.Command); reason != "" {
+		if err := r.validateContinuationExecAuthority(ctx, in.Command); err != nil {
+			return "", err
+		}
 		if r.execApprover == nil {
 			return "", fmt.Errorf("command requires an approved proposal: %s", reason)
 		}
@@ -271,6 +274,15 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 	}
 
 	return out, fmt.Errorf("run command: %w", err)
+}
+
+func (r *Registry) validateContinuationExecAuthority(ctx context.Context, command string) error {
+	state, ok := ContinuationExecAuthorityFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	decision := ContinuationExecAuthorityDecisionForCommand(state, command, time.Now().UTC())
+	return ContinuationExecAuthorityError(decision)
 }
 
 func (r *Registry) runCommand(ctx context.Context, scope sandbox.Scope, command string, workdir string) (string, string, error) {
