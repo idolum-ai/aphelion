@@ -1381,7 +1381,7 @@ func evalContextReplyLeakTerms(replies []string, terms []string) []string {
 		if term == "" {
 			continue
 		}
-		if strings.Contains(lower, term) {
+		if containsUnnegatedForbiddenPhrase(lower, term) {
 			out = append(out, term)
 		}
 	}
