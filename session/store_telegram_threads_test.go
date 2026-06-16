@@ -87,6 +87,39 @@ func TestTelegramCallbackMessageProjectionSupportsDefaultChatCards(t *testing.T)
 	}
 }
 
+func TestListTelegramCallbackMessagesForThreadScopesByThreadID(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	if err := store.RecordTelegramCallbackMessage(1001, 9001, 0, "continuation", now); err != nil {
+		t.Fatalf("RecordTelegramCallbackMessage(default) err = %v", err)
+	}
+	if err := store.RecordTelegramCallbackMessage(1001, 9002, 2, "continuation", now.Add(time.Second)); err != nil {
+		t.Fatalf("RecordTelegramCallbackMessage(thread 2) err = %v", err)
+	}
+	if err := store.RecordTelegramCallbackMessage(1001, 9003, 3, "continuation", now.Add(2*time.Second)); err != nil {
+		t.Fatalf("RecordTelegramCallbackMessage(thread 3) err = %v", err)
+	}
+
+	threadTwo, err := store.ListTelegramCallbackMessagesForThread(1001, 2, "continuation", now.Add(-time.Minute), 10)
+	if err != nil {
+		t.Fatalf("ListTelegramCallbackMessagesForThread(thread 2) err = %v", err)
+	}
+	if len(threadTwo) != 1 || threadTwo[0].MessageID != 9002 || threadTwo[0].ThreadID != 2 {
+		t.Fatalf("threadTwo = %#v, want only thread 2 callback", threadTwo)
+	}
+	defaultChat, err := store.ListTelegramCallbackMessagesForThread(1001, 0, "continuation", now.Add(-time.Minute), 10)
+	if err != nil {
+		t.Fatalf("ListTelegramCallbackMessagesForThread(default) err = %v", err)
+	}
+	if len(defaultChat) != 1 || defaultChat[0].MessageID != 9001 || defaultChat[0].ThreadID != 0 {
+		t.Fatalf("defaultChat = %#v, want only default-chat callback", defaultChat)
+	}
+}
+
 func TestTelegramThreadClosePreservesTranscriptAndMarksClosed(t *testing.T) {
 	t.Parallel()
 

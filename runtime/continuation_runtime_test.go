@@ -118,12 +118,15 @@ func TestRetireStaleContinuationApprovalCardsMarksProjectionRetired(t *testing.T
 
 	now := time.Now().UTC()
 	if err := store.RecordTelegramCallbackMessage(3001, 55, 7, continuationCallbackSurface, now); err != nil {
-		t.Fatalf("RecordTelegramCallbackMessage() err = %v", err)
+		t.Fatalf("RecordTelegramCallbackMessage(thread 7) err = %v", err)
+	}
+	if err := store.RecordTelegramCallbackMessage(3001, 56, 8, continuationCallbackSurface, now); err != nil {
+		t.Fatalf("RecordTelegramCallbackMessage(thread 8) err = %v", err)
 	}
 	sender := &fakeSender{}
 	rt := &Runtime{store: store, outbound: sender}
 	key := session.SessionKey{ChatID: 3001, Scope: session.TelegramThreadScopeRef(3001, 7)}
-	rt.retireStaleContinuationApprovalCards(context.Background(), key, 3001, 0, "lease_consumed", now.Add(time.Second))
+	rt.retireStaleContinuationApprovalCards(context.Background(), key, 3001, 7, 0, "lease_consumed", now.Add(time.Second))
 
 	sender.mu.Lock()
 	editClear := append([]messageEdit(nil), sender.editClear...)
@@ -131,12 +134,19 @@ func TestRetireStaleContinuationApprovalCardsMarksProjectionRetired(t *testing.T
 	if len(editClear) != 1 || editClear[0].MessageID != 55 || editClear[0].Text != retiredContinuationCardText {
 		t.Fatalf("editClear = %#v, want card 55 retired", editClear)
 	}
-	active, err := store.ListTelegramCallbackMessages(3001, continuationCallbackSurface, now.Add(-time.Minute), 10)
+	active, err := store.ListTelegramCallbackMessagesForThread(3001, 7, continuationCallbackSurface, now.Add(-time.Minute), 10)
 	if err != nil {
-		t.Fatalf("ListTelegramCallbackMessages(active) err = %v", err)
+		t.Fatalf("ListTelegramCallbackMessagesForThread(active thread 7) err = %v", err)
 	}
 	if len(active) != 0 {
-		t.Fatalf("active records = %#v, want none", active)
+		t.Fatalf("active thread 7 records = %#v, want none", active)
+	}
+	other, err := store.ListTelegramCallbackMessagesForThread(3001, 8, continuationCallbackSurface, now.Add(-time.Minute), 10)
+	if err != nil {
+		t.Fatalf("ListTelegramCallbackMessagesForThread(active thread 8) err = %v", err)
+	}
+	if len(other) != 1 || other[0].MessageID != 56 || other[0].ThreadID != 8 {
+		t.Fatalf("active thread 8 records = %#v, want untouched thread 8 card", other)
 	}
 	retired, err := store.ListTelegramCallbackMessages(3001, continuationCallbackRetiredSurface, now.Add(-time.Minute), 10)
 	if err != nil {

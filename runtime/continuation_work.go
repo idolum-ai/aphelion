@@ -393,11 +393,11 @@ func (r *Runtime) triggerApprovedContinuationOnce(ctx context.Context, key sessi
 	}
 	if reservation == nil {
 		if !session.NormalizeContinuationState(state).Active() {
-			r.retireStaleContinuationApprovalCards(ctx, key, key.ChatID, 0, "continuation_inactive", time.Now().UTC())
+			r.retireStaleContinuationApprovalCards(ctx, key, key.ChatID, continuationCallbackThreadIDForKey(key), 0, "continuation_inactive", time.Now().UTC())
 		}
 		return state, false, loopBudget, nil
 	}
-	r.retireStaleContinuationApprovalCards(ctx, key, key.ChatID, 0, "lease_consumed", time.Now().UTC())
+	r.retireStaleContinuationApprovalCards(ctx, key, key.ChatID, continuationCallbackThreadIDForKey(key), 0, "lease_consumed", time.Now().UTC())
 	if err := r.runReservedApprovedContinuation(ctx, key, *reservation); err != nil {
 		return state, true, loopBudget, err
 	}

@@ -83,6 +83,17 @@ func (s *SQLiteStore) MarkTelegramCallbackMessageSurface(chatID int64, messageID
 }
 
 func (s *SQLiteStore) ListTelegramCallbackMessages(chatID int64, surface string, since time.Time, limit int) ([]TelegramCallbackMessage, error) {
+	return s.listTelegramCallbackMessages(chatID, nil, surface, since, limit)
+}
+
+func (s *SQLiteStore) ListTelegramCallbackMessagesForThread(chatID int64, threadID int64, surface string, since time.Time, limit int) ([]TelegramCallbackMessage, error) {
+	if threadID < 0 {
+		threadID = 0
+	}
+	return s.listTelegramCallbackMessages(chatID, &threadID, surface, since, limit)
+}
+
+func (s *SQLiteStore) listTelegramCallbackMessages(chatID int64, threadID *int64, surface string, since time.Time, limit int) ([]TelegramCallbackMessage, error) {
 	if chatID == 0 {
 		return nil, nil
 	}
@@ -92,6 +103,10 @@ func (s *SQLiteStore) ListTelegramCallbackMessages(chatID int64, surface string,
 	surface = strings.TrimSpace(surface)
 	args := []any{chatID}
 	where := "WHERE chat_id = ?"
+	if threadID != nil {
+		where += " AND thread_id = ?"
+		args = append(args, *threadID)
+	}
 	if surface != "" {
 		where += " AND surface = ?"
 		args = append(args, surface)

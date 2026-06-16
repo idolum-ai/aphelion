@@ -90,7 +90,7 @@ func (r *Runtime) offerContinuationApprovalLocked(ctx context.Context, key sessi
 			payload["user_visible"] = false
 			payload["prior_active"] = priorExists && session.NormalizeContinuationState(priorState).Active()
 			r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "closed", payload, time.Now().UTC())
-			r.retireStaleContinuationApprovalCards(ctx, key, msg.ChatID, 0, "operation_completed", time.Now().UTC())
+			r.retireStaleContinuationApprovalCards(ctx, key, msg.ChatID, continuationCallbackThreadIDForMessage(key, msg), 0, "operation_completed", time.Now().UTC())
 			return nil
 		}
 		if missingTypedWork {
@@ -98,7 +98,7 @@ func (r *Runtime) offerContinuationApprovalLocked(ctx context.Context, key sessi
 			payload["user_visible"] = false
 			payload["prior_active"] = priorExists && session.NormalizeContinuationState(priorState).Active()
 			r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "closed", payload, time.Now().UTC())
-			r.retireStaleContinuationApprovalCards(ctx, key, msg.ChatID, 0, "no_typed_remaining_work", time.Now().UTC())
+			r.retireStaleContinuationApprovalCards(ctx, key, msg.ChatID, continuationCallbackThreadIDForMessage(key, msg), 0, "no_typed_remaining_work", time.Now().UTC())
 			return nil
 		}
 		payload["user_visible"] = notify
@@ -113,7 +113,7 @@ func (r *Runtime) offerContinuationApprovalLocked(ctx context.Context, key sessi
 		}
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", payload, time.Now().UTC())
 		if priorExists && session.NormalizeContinuationState(priorState).Active() {
-			r.retireStaleContinuationApprovalCards(ctx, key, msg.ChatID, 0, "continuation_blocked", time.Now().UTC())
+			r.retireStaleContinuationApprovalCards(ctx, key, msg.ChatID, continuationCallbackThreadIDForMessage(key, msg), 0, "continuation_blocked", time.Now().UTC())
 		}
 		if notify {
 			if err := r.sendContinuationBlockedNotice(ctx, key, msg, state); err != nil {
