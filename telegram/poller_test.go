@@ -340,6 +340,71 @@ func TestPollerHonorsGetUpdatesRetryAfter(t *testing.T) {
 	}
 }
 
+func TestPollerCapsGetUpdatesRetryAfterAtMaxBackoff(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().Unix()
+	call := 0
+	var delays []time.Duration
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			call++
+			if call == 1 {
+				return encodeHTTPJSONResponse(t, http.StatusTooManyRequests, getUpdatesResponse{
+					Ok:          false,
+					Description: "Too Many Requests: retry after 60",
+					Parameters:  telegramResponseParameters{RetryAfter: 60},
+				}), nil
+			}
+			return encodeJSONResponse(t, getUpdatesResponse{
+				Ok: true,
+				Result: []Update{{
+					UpdateID: 23,
+					Message: &Message{
+						MessageID: 47,
+						Chat:      &Chat{ID: 100, Type: "private"},
+						From:      &User{ID: 7, Username: "alice"},
+						Text:      "after capped retry-after",
+						Date:      now,
+					},
+				}},
+			}), nil
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var handled []core.InboundMessage
+	poller := NewPoller(client, func(_ context.Context, msg core.InboundMessage) error {
+		handled = append(handled, msg)
+		cancel()
+		return nil
+	},
+		withPollerRetryBackoff(time.Second, 3*time.Second),
+		withPollerRetrySleep(func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			return nil
+		}),
+	)
+
+	if err := poller.Run(ctx); err != nil {
+		t.Fatalf("Poller.Run() err = %v, want nil after capped retry-after", err)
+	}
+	if call != 2 {
+		t.Fatalf("getUpdates calls = %d, want 2", call)
+	}
+	if len(delays) != 1 || delays[0] != 3*time.Second {
+		t.Fatalf("retry delays = %#v, want [3s]", delays)
+	}
+	if len(handled) != 1 || handled[0].Text != "after capped retry-after" {
+		t.Fatalf("handled = %#v, want successful update after capped retry-after", handled)
+	}
+}
+
 func TestPollerRetryBackoffIsBoundedAndResetsAfterSuccess(t *testing.T) {
 	t.Parallel()
 

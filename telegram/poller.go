@@ -153,7 +153,7 @@ func (p *Poller) Run(ctx context.Context) error {
 				return nil
 			}
 			if retryableTelegramPollError(err) {
-				delay := telegramPollRetryDelay(err, retryDelay)
+				delay := telegramPollRetryDelay(err, retryDelay, p.pollRetryMax)
 				log.Printf("WARN telegram getUpdates transient failure; retrying after %s err=%v", delay, err)
 				if sleepErr := p.pollRetrySleep(ctx, delay); sleepErr != nil {
 					if ctx.Err() != nil {
@@ -412,8 +412,11 @@ func retryableTelegramPollError(err error) bool {
 	return telegramPollErrorHasRetryableMarker(lower)
 }
 
-func telegramPollRetryDelay(err error, fallback time.Duration) time.Duration {
+func telegramPollRetryDelay(err error, fallback time.Duration, max time.Duration) time.Duration {
 	if retryAfter := telegramPollRetryAfter(err); retryAfter > 0 {
+		if max > 0 && retryAfter > max {
+			return max
+		}
 		return retryAfter
 	}
 	return fallback
