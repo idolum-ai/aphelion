@@ -174,6 +174,13 @@ func (s *stubCommandRouter) ClearTelegramThreadCallbackMessage(chatID int64, mes
 	return s.threadCallbackClearErr
 }
 
+func (s *stubCommandRouter) RetireTelegramCallbackMessage(chatID int64, messageID int64, surface string) error {
+	s.callbackRetireChatID = chatID
+	s.callbackRetireMessageID = messageID
+	s.callbackRetireSurface = surface
+	return s.callbackRetireErr
+}
+
 func (s *stubCommandRouter) StartTelegramThreadTarget(_ context.Context, msg core.InboundMessage, text string) (core.InboundMessage, session.TelegramThread, error) {
 	copied := msg
 	s.threadStartMsg = &copied

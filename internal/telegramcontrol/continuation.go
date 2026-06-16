@@ -83,6 +83,13 @@ func (c CommandControl) RecordTelegramCallbackError(chatID int64, callbackKind s
 	c.Runtime.RecordTelegramCallbackError(chatID, callbackKind, err)
 }
 
+func (c CommandControl) RetireTelegramCallbackMessage(chatID int64, messageID int64, surface string) error {
+	if c.Store == nil {
+		return nil
+	}
+	return c.Store.MarkTelegramCallbackMessageSurface(chatID, messageID, surface, time.Now().UTC())
+}
+
 func (c CommandControl) ToggleProgressView(ctx context.Context, chatID int64, senderID int64, runID int64, details bool) (bool, string, error) {
 	if c.Runtime == nil {
 		return false, "", nil

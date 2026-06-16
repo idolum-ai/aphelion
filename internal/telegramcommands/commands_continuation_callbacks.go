@@ -55,28 +55,53 @@ func answerContinuationCallback(ctx context.Context, sender commandCallbackSende
 	log.Printf("WARN continuation callback answer failed chat_id=%d callback_id=%s kind=%s err=%v", chatID, strings.TrimSpace(cb.ID), strings.TrimSpace(callbackKind), err)
 }
 
-func editContinuationCallbackMessage(ctx context.Context, sender commandCallbackSender, router commandRouter, chatID int64, messageID int64, callbackKind string, text string) {
+func editContinuationCallbackMessage(ctx context.Context, sender commandCallbackSender, router commandRouter, chatID int64, messageID int64, callbackKind string, text string) error {
 	if messageID == 0 {
-		return
+		return nil
 	}
 	if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
 		recordTelegramCallbackError(router, chatID, callbackKind+".edit", err)
 		log.Printf("WARN continuation callback message update failed chat_id=%d message_id=%d kind=%s err=%v", chatID, messageID, strings.TrimSpace(callbackKind), err)
+		return err
 	}
+	return nil
 }
 
-func editContinuationCallbackMessageWithInlineKeyboard(ctx context.Context, sender commandCallbackSender, router commandRouter, chatID int64, messageID int64, callbackKind string, text string, rows [][]telegram.InlineButton) {
+func editContinuationCallbackMessageWithInlineKeyboard(ctx context.Context, sender commandCallbackSender, router commandRouter, chatID int64, messageID int64, callbackKind string, text string, rows [][]telegram.InlineButton) error {
 	if messageID == 0 {
-		return
+		return nil
 	}
 	if len(rows) == 0 {
-		editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, callbackKind, text)
-		return
+		return editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, callbackKind, text)
 	}
 	if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, text, "", rows); err != nil {
 		recordTelegramCallbackError(router, chatID, callbackKind+".edit", err)
 		log.Printf("WARN continuation callback message update failed chat_id=%d message_id=%d kind=%s err=%v", chatID, messageID, strings.TrimSpace(callbackKind), err)
+		return err
 	}
+	return nil
+}
+
+func editHandledContinuationCallbackMessage(ctx context.Context, sender commandCallbackSender, router commandRouter, chatID int64, messageID int64, callbackKind string, text string) {
+	err := editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, callbackKind, text)
+	if err == nil || telegramCallbackMessageNotModifiedError(err) {
+		retireTelegramCallbackProjection(router, chatID, messageID, continuationCallbackRetiredSurface)
+	}
+}
+
+func editHandledContinuationCallbackMessageWithInlineKeyboard(ctx context.Context, sender commandCallbackSender, router commandRouter, chatID int64, messageID int64, callbackKind string, text string, rows [][]telegram.InlineButton) {
+	err := editContinuationCallbackMessageWithInlineKeyboard(ctx, sender, router, chatID, messageID, callbackKind, text, rows)
+	if err == nil || telegramCallbackMessageNotModifiedError(err) {
+		retireTelegramCallbackProjection(router, chatID, messageID, continuationCallbackRetiredSurface)
+	}
+}
+
+func telegramCallbackMessageNotModifiedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	value := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(value, "message is not modified") || strings.Contains(value, "not modified")
 }
 
 func continuationCallbackDisplayText(msg core.InboundMessage, text string) string {
@@ -131,15 +156,19 @@ func handleContinuationCallback(ctx context.Context, sender commandCallbackSende
 	}
 	if !continuationCallbackMatchesState(state, decisionID, action) {
 		answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.stale", staleContinuationCallbackText)
+		editHandledContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.stale", continuationCallbackDisplayText(targetMsg, staleContinuationCallbackText))
 		return true, nil
 	}
 	if authText := continuationCallbackAuthorizationFailure(router, cb, chatID, messageID, state); authText != "" {
 		answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.unauthorized", authText)
+		if authText == staleContinuationCallbackText {
+			editHandledContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.stale", continuationCallbackDisplayText(targetMsg, authText))
+		}
 		return true, nil
 	}
 	if action == continuationActionContinueOnce {
 		answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.stale", legacyContinueOnceCallbackText)
-		editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.stale", continuationCallbackDisplayText(targetMsg, renderContinuationDecision(state, action)))
+		editHandledContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.stale", continuationCallbackDisplayText(targetMsg, renderContinuationDecision(state, action)))
 		return true, nil
 	}
 
@@ -173,18 +202,18 @@ func handleContinuationCallback(ctx context.Context, sender commandCallbackSende
 					log.Printf("WARN continuation refresh callback failed chat_id=%d err=%v", chatID, refreshErr)
 				} else if refreshed {
 					answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.approve", "That continuation request expired, so I sent a fresh approval prompt.")
-					editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", continuationCallbackDisplayText(targetMsg, renderContinuationRefreshedDecision(refreshedState)))
+					editHandledContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", continuationCallbackDisplayText(targetMsg, renderContinuationRefreshedDecision(refreshedState)))
 					return true, nil
 				} else if refreshedState.Status == session.ContinuationStatusPending {
 					answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.approve", "A fresh continuation prompt is already active. Use the newest prompt.")
-					editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", continuationCallbackDisplayText(targetMsg, renderContinuationRefreshAlreadyActiveDecision(refreshedState)))
+					editHandledContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", continuationCallbackDisplayText(targetMsg, renderContinuationRefreshAlreadyActiveDecision(refreshedState)))
 					return true, nil
 				}
 			}
 			recordTelegramCallbackError(router, chatID, "continuation.approve", err)
 			log.Printf("WARN continuation approve callback failed chat_id=%d approver_id=%d err=%v", chatID, approverID, err)
 			answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.approve", continuationCallbackErrorText(err))
-			editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", continuationCallbackDisplayText(targetMsg, renderContinuationCallbackError(state, err)))
+			editHandledContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", continuationCallbackDisplayText(targetMsg, renderContinuationCallbackError(state, err)))
 			return true, nil
 		}
 		answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.approve", "")
@@ -194,16 +223,16 @@ func handleContinuationCallback(ctx context.Context, sender commandCallbackSende
 			return true, offerErr
 		}
 		if len(rows) > 0 {
-			editContinuationCallbackMessageWithInlineKeyboard(ctx, sender, router, chatID, messageID, "continuation.approve", continuationCallbackDisplayText(targetMsg, text), rows)
+			editHandledContinuationCallbackMessageWithInlineKeyboard(ctx, sender, router, chatID, messageID, "continuation.approve", continuationCallbackDisplayText(targetMsg, text), rows)
 		} else {
-			editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", continuationCallbackDisplayText(targetMsg, text))
+			editHandledContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", continuationCallbackDisplayText(targetMsg, text))
 		}
 		triggerContinuationAfterCallback(sender, router, targetMsg, messageID, "continuation.trigger", state)
 		return true, nil
 	case continuationActionResumeEdge:
 		answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.resume", "")
 		text = renderContinuationDecision(state, action)
-		editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.resume", continuationCallbackDisplayText(targetMsg, text))
+		editHandledContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.resume", continuationCallbackDisplayText(targetMsg, text))
 		if state.Status == session.ContinuationStatusApproved && state.RemainingTurns > 0 {
 			triggerContinuationAfterCallback(sender, router, targetMsg, messageID, "continuation.resume", state)
 		}
@@ -218,11 +247,11 @@ func handleContinuationCallback(ctx context.Context, sender commandCallbackSende
 		if err != nil {
 			recordTelegramCallbackError(router, chatID, "continuation.ask_edit", err)
 			log.Printf("WARN continuation ask-edit callback failed chat_id=%d err=%v", chatID, err)
-			editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.ask_edit", continuationCallbackDisplayText(targetMsg, renderContinuationCallbackError(state, err)))
+			editHandledContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.ask_edit", continuationCallbackDisplayText(targetMsg, renderContinuationCallbackError(state, err)))
 			return true, nil
 		}
 		text = renderContinuationDecision(state, action)
-		editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.ask_edit", continuationCallbackDisplayText(targetMsg, text))
+		editHandledContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.ask_edit", continuationCallbackDisplayText(targetMsg, text))
 		return true, nil
 	case continuationActionStop, continuationActionStopPark:
 		answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.stop", "")
@@ -235,7 +264,7 @@ func handleContinuationCallback(ctx context.Context, sender commandCallbackSende
 		if err != nil {
 			recordTelegramCallbackError(router, chatID, "continuation.stop", err)
 			log.Printf("WARN continuation stop callback failed chat_id=%d err=%v", chatID, err)
-			editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.stop", continuationCallbackDisplayText(targetMsg, renderContinuationCallbackError(state, err)))
+			editHandledContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.stop", continuationCallbackDisplayText(targetMsg, renderContinuationCallbackError(state, err)))
 			return true, nil
 		}
 		if action == continuationActionStopPark {
@@ -243,7 +272,7 @@ func handleContinuationCallback(ctx context.Context, sender commandCallbackSende
 		} else {
 			text = face.RenderTelegramStop(stopped)
 		}
-		editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.stop", continuationCallbackDisplayText(targetMsg, text))
+		editHandledContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.stop", continuationCallbackDisplayText(targetMsg, text))
 		return true, nil
 	case continuationActionAskNextLease:
 		answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.refresh", "")
@@ -251,7 +280,7 @@ func handleContinuationCallback(ctx context.Context, sender commandCallbackSende
 		if refreshErr != nil {
 			recordTelegramCallbackError(router, chatID, "continuation.refresh", refreshErr)
 			log.Printf("WARN continuation refresh callback failed chat_id=%d err=%v", chatID, refreshErr)
-			editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.refresh", continuationCallbackDisplayText(targetMsg, renderContinuationCallbackError(state, refreshErr)))
+			editHandledContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.refresh", continuationCallbackDisplayText(targetMsg, renderContinuationCallbackError(state, refreshErr)))
 			return true, nil
 		}
 		if refreshed {
@@ -261,7 +290,7 @@ func handleContinuationCallback(ctx context.Context, sender commandCallbackSende
 		} else {
 			text = renderContinuationDecision(state, action)
 		}
-		editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.refresh", continuationCallbackDisplayText(targetMsg, text))
+		editHandledContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.refresh", continuationCallbackDisplayText(targetMsg, text))
 		return true, nil
 	case continuationActionStatusOnly:
 		answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.status", "")

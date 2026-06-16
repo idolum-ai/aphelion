@@ -79,6 +79,13 @@ func (c ThreadController) ClearTelegramThreadCallbackMessage(chatID int64, messa
 	return c.Store.ClearTelegramCallbackMessageThread(chatID, messageID, surface, time.Now().UTC())
 }
 
+func (c ThreadController) RetireTelegramCallbackMessage(chatID int64, messageID int64, surface string) error {
+	if c.Store == nil {
+		return nil
+	}
+	return c.Store.MarkTelegramCallbackMessageSurface(chatID, messageID, surface, time.Now().UTC())
+}
+
 func (c ThreadController) RecordTelegramThreadReminderMessage(chatID int64, threadID int64, messageID int64, summary string, summaryKind string, sourceLastActivityAt time.Time, createdBySenderID int64) error {
 	if c.Store == nil || chatID == 0 || threadID <= 0 || messageID <= 0 {
 		return nil

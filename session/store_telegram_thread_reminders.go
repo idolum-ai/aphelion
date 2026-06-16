@@ -50,7 +50,7 @@ func (s *SQLiteStore) RecordTelegramThreadReminder(chatID int64, threadID int64,
 		return TelegramThreadReminder{}, fmt.Errorf("begin telegram thread reminder record: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := recordTelegramCallbackMessageThreadTx(tx, chatID, messageID, threadID, "thread_reminder", at); err != nil {
+	if err := recordTelegramCallbackMessageTx(tx, chatID, messageID, threadID, "thread_reminder", at); err != nil {
 		return TelegramThreadReminder{}, err
 	}
 	if _, err := tx.Exec(`

@@ -304,6 +304,10 @@ type stubCommandRouter struct {
 	threadCallbackClearMessageID      int64
 	threadCallbackClearSurface        string
 	threadCallbackClearErr            error
+	callbackRetireChatID              int64
+	callbackRetireMessageID           int64
+	callbackRetireSurface             string
+	callbackRetireErr                 error
 	threadStartMsg                    *core.InboundMessage
 	threadStartText                   string
 	threadStartReturn                 session.TelegramThread

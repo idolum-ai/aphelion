@@ -63,6 +63,7 @@ const (
 	ExecutionEventPersonaStreamReconciled      = "stream.persona_context.reconciled"
 	ExecutionEventPersonaStreamReconcileFailed = "stream.persona_context.reconcile_failed"
 	ExecutionEventTelegramCallbackFailed       = "telegram.callback.failed"
+	ExecutionEventTelegramCallbackRetired      = "telegram.callback.retired"
 	ExecutionEventTelegramThreadReminderSweep  = "telegram.thread_reminder.sweep"
 	ExecutionEventProgressSurface              = "progress.surface"
 	ExecutionEventReplyClaimAdjudicated        = "reply.claim.adjudicated"
