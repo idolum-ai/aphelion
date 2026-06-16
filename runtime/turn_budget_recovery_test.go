@@ -202,13 +202,14 @@ func TestTurnBudgetRecoveryDigestEventLinePrefersToolOutputDigest(t *testing.T) 
 		"result_preview": "preview-only",
 		"result_digest": map[string]any{
 			"sha256":        "sha256:abc123",
+			"evidence_ref":  "ev:tool_output:abc",
 			"bytes":         24000,
 			"lines":         80,
 			"omitted_bytes": 12000,
 		},
 	})
 
-	if !strings.Contains(line, "result_digest=") || !strings.Contains(line, "sha256:abc123") || !strings.Contains(line, "omitted_bytes=12000") {
+	if !strings.Contains(line, "result_digest=") || !strings.Contains(line, "sha256:abc123") || !strings.Contains(line, "evidence_ref=ev:tool_output:abc") || !strings.Contains(line, "omitted_bytes=12000") {
 		t.Fatalf("digest line = %q, want compact typed output digest", line)
 	}
 	if strings.Contains(line, "preview-only") {

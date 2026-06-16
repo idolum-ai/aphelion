@@ -15,6 +15,7 @@ type ToolOutputDigest struct {
 	Bytes        int    `json:"bytes"`
 	Lines        int    `json:"lines"`
 	SHA256       string `json:"sha256"`
+	EvidenceRef  string `json:"evidence_ref,omitempty"`
 	Head         string `json:"head"`
 	Tail         string `json:"tail"`
 	HeadBytes    int    `json:"head_bytes"`
@@ -66,6 +67,9 @@ func (d ToolOutputDigest) Render() string {
 	fmt.Fprintf(&b, "bytes: %d\n", d.Bytes)
 	fmt.Fprintf(&b, "lines: %d\n", d.Lines)
 	fmt.Fprintf(&b, "sha256: %s\n", d.SHA256)
+	if strings.TrimSpace(d.EvidenceRef) != "" {
+		fmt.Fprintf(&b, "evidence_ref: %s\n", strings.TrimSpace(d.EvidenceRef))
+	}
 	fmt.Fprintf(&b, "head_bytes: %d\n", d.HeadBytes)
 	fmt.Fprintf(&b, "tail_bytes: %d\n", d.TailBytes)
 	fmt.Fprintf(&b, "omitted_bytes: %d\n", d.OmittedBytes)
@@ -90,6 +94,7 @@ func (d ToolOutputDigest) Payload() map[string]any {
 		"bytes":         d.Bytes,
 		"lines":         d.Lines,
 		"sha256":        d.SHA256,
+		"evidence_ref":  strings.TrimSpace(d.EvidenceRef),
 		"head":          d.Head,
 		"tail":          d.Tail,
 		"head_bytes":    d.HeadBytes,

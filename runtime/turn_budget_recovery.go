@@ -678,6 +678,9 @@ func turnBudgetRecoveryDigestSummary(digest map[string]any) string {
 	if value := payloadString(digest, "sha256"); value != "" {
 		parts = append(parts, "sha256="+value)
 	}
+	if value := payloadString(digest, "evidence_ref"); value != "" {
+		parts = append(parts, "evidence_ref="+value)
+	}
 	if value := payloadString(digest, "bytes"); value != "" {
 		parts = append(parts, "bytes="+value)
 	}

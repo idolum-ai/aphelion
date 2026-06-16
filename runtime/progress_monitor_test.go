@@ -107,6 +107,29 @@ func TestTurnMonitorRecordsLargeToolOutputDigest(t *testing.T) {
 	if !strings.Contains(payloadString(digest, "head"), "HEAD important") || !strings.Contains(payloadString(digest, "tail"), "TAIL important") {
 		t.Fatalf("result_digest = %#v, want head and tail evidence", digest)
 	}
+	evidenceRef := payloadString(digest, "evidence_ref")
+	if evidenceRef == "" {
+		t.Fatalf("result_digest = %#v, want evidence_ref for retained full output", digest)
+	}
+	obj, ok, err := store.EvidenceObject(evidenceRef)
+	if err != nil || !ok {
+		t.Fatalf("EvidenceObject(%q) ok=%t err=%v", evidenceRef, ok, err)
+	}
+	if obj.SourceKind != session.EvidenceSourceToolOutput || obj.EpistemicStatus != session.EvidenceStatusAttested {
+		t.Fatalf("evidence object = %#v, want attested tool output", obj)
+	}
+	evidencePayload := payloadMapFromJSON(obj.PayloadJSON)
+	if !strings.Contains(payloadString(evidencePayload, "output"), "HEAD important") ||
+		!strings.Contains(payloadString(evidencePayload, "output"), "middle output") ||
+		!strings.Contains(payloadString(evidencePayload, "output"), "TAIL important") {
+		t.Fatalf("tool output evidence payload = %#v, want full retained output", evidencePayload)
+	}
+}
+
+func payloadMapFromJSON(raw string) map[string]any {
+	payload := map[string]any{}
+	_ = json.Unmarshal([]byte(raw), &payload)
+	return payload
 }
 
 func TestTurnMonitorRecordsModelAndToolBatchEvents(t *testing.T) {

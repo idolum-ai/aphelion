@@ -37,6 +37,9 @@ type evidenceHydrateInput struct {
 	Query               string   `json:"query"`
 	OperationID         string   `json:"operation_id,omitempty"`
 	RequiredEvidenceIDs []string `json:"required_evidence_ids,omitempty"`
+	IncludePayloadIDs   []string `json:"include_payload_ids,omitempty"`
+	PayloadOffset       int      `json:"payload_offset,omitempty"`
+	PayloadLimit        int      `json:"payload_limit,omitempty"`
 	Limit               int      `json:"limit,omitempty"`
 }
 

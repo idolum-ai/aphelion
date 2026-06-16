@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -100,6 +101,9 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 		"tool_duration_ms": toolDurationMS,
 	}
 	if digest, ok := agent.BuildToolOutputDigest(output, agent.DefaultToolOutputDigestInlineLimit); ok {
+		if ref := m.recordLargeToolOutputEvidence(name, preview, output, digest, time.Now().UTC()); ref != "" {
+			digest.EvidenceRef = ref
+		}
 		payload["result_digest"] = digest.Payload()
 	}
 	if effect := execEffectPayload(name, input); len(effect) > 0 {
@@ -109,6 +113,59 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 	if m.progress != nil {
 		m.progress.ToolFinished(ctx, name, err)
 	}
+}
+
+func (m *turnMonitor) recordLargeToolOutputEvidence(name string, inputPreview string, output string, digest agent.ToolOutputDigest, observedAt time.Time) string {
+	if m == nil || m.runtime == nil || m.runtime.store == nil || strings.TrimSpace(output) == "" {
+		return ""
+	}
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
+	}
+	toolName := strings.TrimSpace(name)
+	sourceRef := fmt.Sprintf("tool_output:%d:%s:%s", m.runID, toolName, strings.TrimPrefix(strings.TrimSpace(digest.SHA256), "sha256:"))
+	payloadRaw, err := json.Marshal(map[string]any{
+		"run_id":         m.runID,
+		"tool":           toolName,
+		"input_preview":  inputPreview,
+		"output":         output,
+		"bytes":          digest.Bytes,
+		"lines":          digest.Lines,
+		"sha256":         digest.SHA256,
+		"head":           digest.Head,
+		"tail":           digest.Tail,
+		"head_bytes":     digest.HeadBytes,
+		"tail_bytes":     digest.TailBytes,
+		"omitted_bytes":  digest.OmittedBytes,
+		"omitted_lines":  digest.OmittedLines,
+		"retention_note": "full large tool output retained in evidence payload; prompt-facing material remains digest-bounded",
+	})
+	if err != nil {
+		log.Printf("WARN marshal large tool output evidence failed run_id=%d tool=%s err=%v", m.runID, toolName, err)
+		return ""
+	}
+	obj, err := m.runtime.store.UpsertEvidenceObject(session.EvidenceObjectInput{
+		EvidenceType:    session.EvidenceSourceToolOutput,
+		SourceKind:      session.EvidenceSourceToolOutput,
+		SourceRef:       sourceRef,
+		SourceID:        fmt.Sprintf("%d", m.runID),
+		SessionID:       session.SessionIDForKey(m.key),
+		ChatID:          m.key.ChatID,
+		UserID:          m.key.UserID,
+		Scope:           m.key.Scope,
+		EpistemicStatus: session.EvidenceStatusAttested,
+		RedactionClass:  session.EvidenceRedactionNone,
+		SubjectKey:      toolName,
+		Summary:         fmt.Sprintf("large tool output tool=%s bytes=%d lines=%d sha256=%s", toolName, digest.Bytes, digest.Lines, digest.SHA256),
+		Digest:          digest.Render(),
+		PayloadJSON:     string(payloadRaw),
+		ObservedAt:      observedAt,
+	})
+	if err != nil {
+		log.Printf("WARN record large tool output evidence failed run_id=%d tool=%s err=%v", m.runID, toolName, err)
+		return ""
+	}
+	return obj.ID
 }
 
 func execEffectPayload(name string, input json.RawMessage) map[string]any {

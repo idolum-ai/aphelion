@@ -192,13 +192,16 @@ func (r *Registry) Definitions() []agent.ToolDef {
 		},
 		{
 			Name:        "evidence_hydrate",
-			Description: "Retrieve canonical evidence objects for the current session or operation. Use this before relying on prior summaries during continuation, recovery, or long-horizon work; it is read-only and returns evidence IDs, source kinds, status, hashes, and bounded digests.",
+			Description: "Retrieve canonical evidence objects for the current session or operation. Use this before relying on prior summaries during continuation, recovery, or long-horizon work; it is read-only and returns evidence IDs, source kinds, status, hashes, and bounded digests. When a digest names an evidence ID, explicitly request that ID with include_payload_ids and a bounded payload window to inspect omitted source content.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"query": {"type": "string", "description": "Current objective, question, or context pressure to hydrate evidence for"},
 					"operation_id": {"type": "string", "description": "Optional operation id to prioritize matching operation evidence"},
 					"required_evidence_ids": {"type": "array", "items": {"type": "string"}, "description": "Evidence ids that must be included or reported missing"},
+					"include_payload_ids": {"type": "array", "items": {"type": "string"}, "description": "Explicit selected evidence ids whose payload should be returned as a bounded byte window"},
+					"payload_offset": {"type": "integer", "minimum": 0, "description": "Byte offset for included payload windows"},
+					"payload_limit": {"type": "integer", "minimum": 1, "maximum": 12000, "description": "Maximum bytes per included payload window"},
 					"limit": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Maximum evidence objects to return"}
 				}
 			}`),
