@@ -153,8 +153,21 @@ func TestOperationPhaseBundleSubsetFingerprintsValidateAgainstOriginalPlan(t *te
 		t.Fatalf("validateContinuationApprovalBundleFingerprints() err = %v, want subset bundle accepted against unchanged original plan", err)
 	}
 
-	opState.PhasePlan.Phases[1].BoundedEffect = "Select workflows and write a local artifact."
-	if err := store.UpdateOperationState(key, opState); err != nil {
+	unselectedChanged := opState
+	unselectedChanged.PhasePlan.Phases = append([]session.OperationPhase(nil), opState.PhasePlan.Phases...)
+	unselectedChanged.PhasePlan.Phases[3].AuthorityClass = "external_account_action"
+	unselectedChanged.PhasePlan.Phases[3].BoundedEffect = "Write the dossier and publish it externally."
+	if err := store.UpdateOperationState(key, unselectedChanged); err != nil {
+		t.Fatalf("UpdateOperationState(unselected changed) err = %v", err)
+	}
+	if err := rt.validateContinuationApprovalBundleFingerprints(key, state); err != nil {
+		t.Fatalf("validateContinuationApprovalBundleFingerprints() err = %v, want unselected phase drift ignored by selected-phase approval", err)
+	}
+
+	selectedChanged := unselectedChanged
+	selectedChanged.PhasePlan.Phases = append([]session.OperationPhase(nil), unselectedChanged.PhasePlan.Phases...)
+	selectedChanged.PhasePlan.Phases[1].BoundedEffect = "Select workflows and write a local artifact."
+	if err := store.UpdateOperationState(key, selectedChanged); err != nil {
 		t.Fatalf("UpdateOperationState(changed) err = %v", err)
 	}
 	if err := rt.validateContinuationApprovalBundleFingerprints(key, state); err == nil {
