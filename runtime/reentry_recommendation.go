@@ -88,6 +88,14 @@ func (r *Runtime) maybeSurfaceReentryRecommendation(ctx context.Context, run ses
 	if len(candidates) == 0 {
 		return nil
 	}
+	r.recordReentryRecommendationJudgment(key, "deterministic_ranked", map[string]any{
+		"recommendation_id":    reentryRecommendationID(state.Fingerprint),
+		"turn_run_id":          state.Run.ID,
+		"terminal_fingerprint": state.Fingerprint,
+		"candidate_count":      len(candidates),
+		"candidate_order":      reentryRecommendationCandidateIDs(candidates),
+		"candidates":           reentryRecommendationAuditCandidates(candidates),
+	}, now)
 	candidates = r.rankReentryRecommendationCandidates(ctx, state, candidates)
 	if len(candidates) > reentryCandidateLimit {
 		candidates = candidates[:reentryCandidateLimit]
@@ -1104,16 +1112,19 @@ func (r *Runtime) rankReentryRecommendationCandidates(ctx context.Context, state
 		{Role: "user", Content: string(payload)},
 	}, nil, nil)
 	if err != nil {
-		r.recordExecutionEvent(state.Key, core.ExecutionEventReentryRecommendationJudged, "reentry_recommendation", "failed", map[string]any{
-			"turn_run_id": state.Run.ID,
-			"error":       trimError(err.Error()),
+		r.recordReentryRecommendationJudgment(state.Key, "provider_failed", map[string]any{
+			"turn_run_id":     state.Run.ID,
+			"candidate_order": reentryRecommendationCandidateIDs(candidates),
+			"error":           trimError(err.Error()),
 		}, time.Now().UTC())
 		return candidates
 	}
 	var parsed reentryJudgeResponse
 	if err := json.Unmarshal([]byte(extractReentryJSON(resp.Content)), &parsed); err != nil {
-		r.recordExecutionEvent(state.Key, core.ExecutionEventReentryRecommendationJudged, "reentry_recommendation", "malformed", map[string]any{
-			"turn_run_id": state.Run.ID,
+		r.recordReentryRecommendationJudgment(state.Key, "provider_malformed", map[string]any{
+			"turn_run_id":     state.Run.ID,
+			"candidate_order": reentryRecommendationCandidateIDs(candidates),
+			"response":        truncatePreview(resp.Content, 220),
 		}, time.Now().UTC())
 		return candidates
 	}
@@ -1128,9 +1139,14 @@ func (r *Runtime) rankReentryRecommendationCandidates(ctx context.Context, state
 	}
 	ranked := make([]rankedCandidate, 0, len(candidates))
 	used := map[string]struct{}{}
+	ignoredIDs := make([]string, 0)
 	for i, item := range parsed.Candidates {
-		candidate, ok := byID[strings.TrimSpace(item.ID)]
+		id := strings.TrimSpace(item.ID)
+		candidate, ok := byID[id]
 		if !ok {
+			if id != "" {
+				ignoredIDs = append(ignoredIDs, id)
+			}
 			continue
 		}
 		// The judge ranks candidates, but labels come from the local content contract.
@@ -1159,7 +1175,14 @@ func (r *Runtime) rankReentryRecommendationCandidates(ctx context.Context, state
 	for _, item := range ranked {
 		out = append(out, item.candidate)
 	}
-	return normalizeReentryCandidates(out)
+	out = normalizeReentryCandidates(out)
+	r.recordReentryRecommendationJudgment(state.Key, "provider_ranked", map[string]any{
+		"turn_run_id":            state.Run.ID,
+		"provider_candidate_ids": reentryRecommendationJudgeCandidateIDs(parsed),
+		"ignored_candidate_ids":  ignoredIDs,
+		"ranked_order":           reentryRecommendationCandidateIDs(out),
+	}, time.Now().UTC())
+	return out
 }
 
 func reentryRecommendationRankPayloadContext(state reentryRecommendationState) reentryRecommendationRankContext {
@@ -1232,6 +1255,63 @@ func reentryRecommendationRankOptions(candidates []session.ReentryRecommendation
 			SourceKind:       candidate.SourceKind,
 			Scores:           candidate.Scores,
 		})
+	}
+	return out
+}
+
+func (r *Runtime) recordReentryRecommendationJudgment(key session.SessionKey, status string, payload map[string]any, at time.Time) {
+	if r == nil || r.store == nil {
+		return
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventReentryRecommendationJudged, "reentry_recommendation", status, payload, at)
+}
+
+func reentryRecommendationAuditCandidates(candidates []session.ReentryRecommendationCandidate) []map[string]any {
+	candidates = normalizeReentryCandidates(candidates)
+	out := make([]map[string]any, 0, len(candidates))
+	for index, candidate := range candidates {
+		item := map[string]any{
+			"id":                candidate.ID,
+			"rank":              index + 1,
+			"kind":              string(candidate.Kind),
+			"label":             normalizeReentryCandidateLabel(candidate.Label),
+			"source_kind":       strings.TrimSpace(candidate.SourceKind),
+			"source_ref":        strings.TrimSpace(candidate.SourceRef),
+			"authority_class":   strings.TrimSpace(candidate.AuthorityClass),
+			"requires_approval": candidate.RequiresApproval,
+			"weighted_score":    reentryCandidateWeightedScore(candidate),
+		}
+		if len(candidate.EvidenceRefs) > 0 {
+			item["evidence_refs"] = append([]string(nil), candidate.EvidenceRefs...)
+		}
+		if len(candidate.Scores) > 0 {
+			item["scores"] = candidate.Scores
+		}
+		if reason := strings.TrimSpace(candidate.JudgmentReason); reason != "" {
+			item["judgment_reason"] = truncatePreview(reason, 220)
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func reentryRecommendationCandidateIDs(candidates []session.ReentryRecommendationCandidate) []string {
+	candidates = normalizeReentryCandidates(candidates)
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if id := strings.TrimSpace(candidate.ID); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func reentryRecommendationJudgeCandidateIDs(parsed reentryJudgeResponse) []string {
+	out := make([]string, 0, len(parsed.Candidates))
+	for _, candidate := range parsed.Candidates {
+		if id := strings.TrimSpace(candidate.ID); id != "" {
+			out = append(out, id)
+		}
 	}
 	return out
 }
@@ -1393,6 +1473,8 @@ func (r *Runtime) deliverReentryRecommendation(ctx context.Context, key session.
 			"recommendation_id": record.ID,
 			"turn_run_id":       record.SourceTurnRunID,
 			"candidate_count":   len(record.Candidates),
+			"candidate_order":   reentryRecommendationCandidateIDs(record.Candidates),
+			"candidates":        reentryRecommendationAuditCandidates(record.Candidates),
 			"message_id":        messageID,
 		}, now)
 		r.markReentryInteriorSignalsSurfaced(key, record, now)

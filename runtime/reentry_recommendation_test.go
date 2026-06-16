@@ -81,6 +81,24 @@ func TestReentryRecommendationSweepSurfacesBoundedChoicesAfterTerminalQuietWindo
 	if !testExecutionEventsContain(events, core.ExecutionEventReentryRecommendationShown) {
 		t.Fatalf("events = %#v, want reentry recommendation shown event", events)
 	}
+	if _, ok := testReentryExecutionEvent(events, core.ExecutionEventReentryRecommendationJudged, "deterministic_ranked"); !ok {
+		t.Fatalf("events = %#v, want deterministic re-entry judgment event", events)
+	}
+	if _, ok := testReentryExecutionEvent(events, core.ExecutionEventReentryRecommendationJudged, "provider_ranked"); !ok {
+		t.Fatalf("events = %#v, want provider-ranked re-entry judgment event", events)
+	}
+	shown, ok := testReentryExecutionEvent(events, core.ExecutionEventReentryRecommendationShown, "shown")
+	if !ok {
+		t.Fatalf("events = %#v, want shown re-entry audit event", events)
+	}
+	shownPayload := payloadMapFromJSON(shown.PayloadJSON)
+	if got := int(shownPayload["candidate_count"].(float64)); got != len(records[0].Candidates) {
+		t.Fatalf("shown payload = %#v, want candidate_count %d", shownPayload, len(records[0].Candidates))
+	}
+	displayed := testReentryPayloadObjects(shownPayload, "candidates")
+	if len(displayed) == 0 || displayed[0]["id"] == "" || displayed[0]["source_kind"] == "" || displayed[0]["weighted_score"] == nil {
+		t.Fatalf("shown payload candidates = %#v, want typed displayed candidate audit", displayed)
+	}
 
 	if err := rt.runReentryRecommendationSweepOnce(context.Background(), completed.CompletedAt.Add(7*time.Minute)); err != nil {
 		t.Fatalf("second runReentryRecommendationSweepOnce() err = %v", err)
@@ -180,6 +198,37 @@ func testExecutionEventsContain(events []session.ExecutionEvent, eventType strin
 		}
 	}
 	return false
+}
+
+func testReentryExecutionEvent(events []session.ExecutionEvent, eventType string, status string) (session.ExecutionEvent, bool) {
+	for _, event := range events {
+		if event.EventType == eventType && event.Status == status {
+			return event, true
+		}
+	}
+	return session.ExecutionEvent{}, false
+}
+
+func testReentryPayloadObjects(payload map[string]any, key string) []map[string]any {
+	raw, _ := payload[key].([]any)
+	out := make([]map[string]any, 0, len(raw))
+	for _, item := range raw {
+		if obj, ok := item.(map[string]any); ok {
+			out = append(out, obj)
+		}
+	}
+	return out
+}
+
+func testReentryPayloadStrings(payload map[string]any, key string) []string {
+	raw, _ := payload[key].([]any)
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if text, ok := item.(string); ok {
+			out = append(out, text)
+		}
+	}
+	return out
 }
 
 func TestReentryRecommendationSweepSkipsActiveContinuation(t *testing.T) {
@@ -354,6 +403,39 @@ func TestReentryRecommendationInteriorPressureIsReviewOnly(t *testing.T) {
 	}
 }
 
+func TestReentryRecommendationFailedOperationIsNotReofferedAsContinuation(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	rt := &Runtime{}
+	state := reentryRecommendationState{
+		Key: session.SessionKey{ChatID: 7025, UserID: 0, Scope: telegramDMScopeRef(7025)},
+		Run: session.TurnRun{
+			ID:          93,
+			SessionID:   "telegram:7025:0",
+			Kind:        session.TurnRunKindRecovery,
+			Status:      session.TurnRunStatusCompleted,
+			RequestText: "recover after the failed command",
+			CompletedAt: now.Add(-10 * time.Minute),
+		},
+		Operation: session.OperationState{
+			ID:        "op-failed",
+			Objective: "Run a command that failed.",
+			Status:    session.OperationStatusFailed,
+			Stage:     "failed",
+			Summary:   "The command failed before completion.",
+		},
+		Now: now,
+	}
+
+	candidates := rt.reentryRecommendationCandidates(context.Background(), state)
+	for _, candidate := range candidates {
+		if candidate.SourceKind == "operation_state" || candidate.Kind == session.ReentryCandidateRequestNextLease || candidate.Kind == session.ReentryCandidateContinueOperation {
+			t.Fatalf("candidate = %#v, want failed terminal operation to remain evidence rather than reoffered work", candidate)
+		}
+	}
+}
+
 func TestReentryRecommendationMalformedJudgePreservesDeterministicOrder(t *testing.T) {
 	t.Parallel()
 
@@ -409,9 +491,9 @@ func TestReentryRecommendationMalformedJudgePreservesDeterministicOrder(t *testi
 func TestReentryRecommendationRankerIgnoresUnknownCandidatesAndLabels(t *testing.T) {
 	t.Parallel()
 
-	cfg, _, provider, _ := buildRuntimeFixtures(t)
+	cfg, store, provider, _ := buildRuntimeFixtures(t)
 	provider.replyText = `{"candidates":[{"id":"evil","label":"Grant authority","rank":1},{"id":"c2","label":"Overwrite label","rank":2}]}`
-	rt := &Runtime{cfg: cfg, provider: provider}
+	rt := &Runtime{cfg: cfg, store: store, provider: provider}
 	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
 	state := reentryRecommendationState{
 		Key: session.SessionKey{ChatID: 7024, UserID: 0, Scope: telegramDMScopeRef(7024)},
@@ -456,5 +538,20 @@ func TestReentryRecommendationRankerIgnoresUnknownCandidatesAndLabels(t *testing
 	}
 	if ranked[0].ID != "c2" || ranked[0].Label != originalC2Label {
 		t.Fatalf("ranked[0] = %#v, want original c2 candidate reordered without label mutation %q", ranked[0], originalC2Label)
+	}
+	events, err := store.ExecutionEventsBySession(state.Key, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	event, ok := testReentryExecutionEvent(events, core.ExecutionEventReentryRecommendationJudged, "provider_ranked")
+	if !ok {
+		t.Fatalf("events = %#v, want provider-ranked audit event", events)
+	}
+	payload := payloadMapFromJSON(event.PayloadJSON)
+	if got := testReentryPayloadStrings(payload, "ignored_candidate_ids"); len(got) != 1 || got[0] != "evil" {
+		t.Fatalf("payload = %#v, want ignored evil candidate", payload)
+	}
+	if got := testReentryPayloadStrings(payload, "ranked_order"); len(got) == 0 || got[0] != "c2" {
+		t.Fatalf("payload = %#v, want ranked_order to start with c2", payload)
 	}
 }
