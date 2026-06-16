@@ -186,6 +186,198 @@ func TestMaterializedInvalidAuthorityContractRoutesToRepairPhaseApproval(t *test
 	}
 }
 
+func TestMaterializedStaleRepairDoesNotOutrankFreshWorkingObjective(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9050, UserID: 0, Scope: telegramDMScopeRef(9050)}
+	if err := store.UpdateWorkingObjective(key, session.WorkingObjective{
+		Objective:  "Resume Imexx work by generating the compact Spanish executive PDF report.",
+		Source:     "inbound_user_text",
+		Confidence: "high",
+		CreatedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("UpdateWorkingObjective() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "aphelion-pr-220-review",
+		Objective: "Review Aphelion PR #220 read-only and report findings in chat.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "phase_plan",
+		Summary:   "Stale PR #220 review operation still has a repairable phase.",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "aphelion-pr-220-review",
+			Goal:           "Review Aphelion PR #220 read-only and report findings in chat.",
+			CurrentPhaseID: "phase-rebuild-pr-220-intent",
+			Phases: []session.OperationPhase{
+				{
+					ID:               "phase-rebuild-pr-220-intent",
+					Summary:          "Rebuild governor continuation intent for Inspect PR #220 metadata/diff/checks read-only and report review findings in chat.",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "workspace_write",
+					BoundedEffect:    "Only repair the stale PR #220 continuation contract.",
+					AllowedActions:   []string{"deploy"},
+					ForbiddenActions: []string{"deploy"},
+					RequiresApproval: true,
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{
+		ChatID: 9050, SenderID: 1001, SenderName: "admin", MessageID: 1,
+		Text: "merged the PR with the fix. Can we continue with this?\n\nReply context:\nidolum_bot: Still blocked on the same file-write issue; no PDF exists yet and nothing was attached.",
+	}, "merged the PR with the fix. Can we continue with this?", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[inlineCount-1].text
+	}
+	sender.mu.Unlock()
+	if materialized || inlineCount != 0 {
+		t.Fatalf("materialized=%v inline=%d text=%q, want stale PR repair suppressed by fresh Imexx working objective", materialized, inlineCount, inlineText)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var suppressed session.ExecutionEvent
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationCompileRepaired {
+			t.Fatalf("events = %#v, want no stale PR continuation.compile_repaired event", events)
+		}
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationCandidateSuppressed {
+			suppressed = event
+		}
+	}
+	if suppressed.ID == 0 {
+		t.Fatalf("events = %#v, want typed suppressed continuation candidate event", events)
+	}
+	payload := executionEventPayload(suppressed.PayloadJSON)
+	if payloadString(payload, "reason") != "stale_vs_working_objective" || !strings.Contains(payloadString(payload, "working_objective"), "Imexx") {
+		t.Fatalf("suppressed payload = %#v, want stale working-objective reason", payload)
+	}
+}
+
+func TestMaterializedCandidateMatchingWorkingObjectiveStillSurfaces(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9051, UserID: 0, Scope: telegramDMScopeRef(9051)}
+	if err := store.UpdateWorkingObjective(key, session.WorkingObjective{
+		Objective:  "Generate the compact Spanish PDF report for Imexx.",
+		Source:     "inbound_user_text",
+		Confidence: "high",
+		CreatedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("UpdateWorkingObjective() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "imexx-pdf-report",
+		Objective: "Generate the compact Spanish PDF report for Imexx.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "imexx-pdf-plan",
+			Goal:           "Generate the compact Spanish PDF report for Imexx.",
+			CurrentPhaseID: "phase-write-imexx-pdf",
+			Phases: []session.OperationPhase{{
+				ID:               "phase-write-imexx-pdf",
+				Summary:          "Write and validate the compact Imexx PDF report.",
+				Status:           session.PlanStatusPending,
+				AuthorityClass:   "workspace_write",
+				BoundedEffect:    "Write report source and validate the generated PDF only.",
+				AllowedActions:   []string{"write_report_source", "compile_pdf", "validate_pdf"},
+				ForbiddenActions: []string{"deploy", "restart_service"},
+				RequiresApproval: true,
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9051, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want matching working objective to allow approval")
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[inlineCount-1].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 || !strings.Contains(inlineText, "Imexx") {
+		t.Fatalf("inline count/text = %d/%q, want Imexx approval prompt", inlineCount, inlineText)
+	}
+}
+
+func TestMaterializedCandidateIgnoresLowConfidenceWorkingObjective(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9052, UserID: 0, Scope: telegramDMScopeRef(9052)}
+	if err := store.UpdateWorkingObjective(key, session.WorkingObjective{
+		Objective:  "Resume Imexx PDF generation.",
+		Source:     "inferred",
+		Confidence: "medium",
+		CreatedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("UpdateWorkingObjective() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "aphelion-pr-220-review",
+		Objective: "Review Aphelion PR #220.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "aphelion-pr-220-review",
+			Goal:           "Review Aphelion PR #220.",
+			CurrentPhaseID: "phase-read-pr",
+			Phases: []session.OperationPhase{{
+				ID:               "phase-read-pr",
+				Summary:          "Inspect PR #220 diff and checks.",
+				Status:           session.PlanStatusPending,
+				AuthorityClass:   "read_only_review",
+				BoundedEffect:    "Read PR metadata and report findings.",
+				AllowedActions:   []string{"inspect_pr", "report_findings"},
+				ForbiddenActions: []string{"post_pr_comment", "commit", "push"},
+				RequiresApproval: true,
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9052, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want low-confidence working objective not to suppress approval")
+	}
+}
+
 func TestMaterializedBundleAuthorityContradictionRoutesToRepairPhaseApproval(t *testing.T) {
 	t.Parallel()
 

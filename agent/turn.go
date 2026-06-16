@@ -670,10 +670,25 @@ func nextOutputLimitRetryMaxTokens(resp *Response, opts *CompleteOptions) (int, 
 	if resp == nil || opts == nil {
 		return 0, false
 	}
-	if !ResponseOutputLimitHit(resp) || len(resp.ToolCalls) != 0 || len(resp.Media) != 0 {
+	if !ResponseOutputLimitHit(resp) || len(resp.Media) != 0 {
+		return 0, false
+	}
+	if len(resp.ToolCalls) != 0 && !outputLimitedToolCallsNeedRetry(resp.ToolCalls) {
 		return 0, false
 	}
 	return nextProviderSuccessRetryMaxTokens(opts)
+}
+
+func outputLimitedToolCallsNeedRetry(calls []ToolCall) bool {
+	if len(calls) == 0 {
+		return true
+	}
+	for _, call := range calls {
+		if _, err := repairToolInput(call.Input); err != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func nextProviderSuccessRetryMaxTokens(opts *CompleteOptions) (int, bool) {

@@ -76,6 +76,7 @@ const (
 	ExecutionEventCuriosityFailed              = "curiosity.failed"
 
 	ExecutionEventContinuationOffered                = "continuation.offered"
+	ExecutionEventContinuationCandidateSuppressed    = "continuation.candidate_suppressed"
 	ExecutionEventContinuationBundleNarrowed         = "continuation.bundle.narrowed"
 	ExecutionEventContinuationCompileRepaired        = "continuation.compile_repaired"
 	ExecutionEventContinuationCompileRepairExhausted = "continuation.compile_repair_exhausted"

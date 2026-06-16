@@ -305,6 +305,121 @@ func TestCompleteWithRetryDoesNotRetryOutputLimitToolCalls(t *testing.T) {
 	}
 }
 
+func TestRunTurnRetriesOutputLimitedInvalidToolCallBeforeExecution(t *testing.T) {
+	provider := &mockOptionsProvider{complete: func(ctx context.Context, call int, opts CompleteOptions, messages []Message, tools []ToolDef) (*Response, error) {
+		switch call {
+		case 1:
+			return &Response{
+				FinishReason: "max_tokens",
+				Usage:        core.TokenUsage{OutputTokens: int64(opts.MaxTokens)},
+				ToolCalls: []ToolCall{{
+					ID:    "truncated-write",
+					Name:  "write_file",
+					Input: json.RawMessage(`"{\"path\":\"reports/imexx.typ\",\"content\":\"line one"`),
+				}},
+			}, nil
+		case 2:
+			if opts.MaxTokens != 4096 || len(messages) != 1 {
+				return &Response{Content: "invalid tool call was fed back instead of retried cleanly"}, nil
+			}
+			return &Response{
+				ToolCalls: []ToolCall{{
+					ID:    "valid-write",
+					Name:  "write_file",
+					Input: json.RawMessage(`"{\"path\":\"reports/imexx.typ\",\"content\":\"line one\\nline two\\n\"}"`),
+				}},
+			}, nil
+		default:
+			return &Response{Content: "done"}, nil
+		}
+	}}
+	tools := &mockTools{
+		exec: func(_ context.Context, name string, input json.RawMessage) (string, error) {
+			if name != "write_file" {
+				t.Fatalf("tool name = %q, want write_file", name)
+			}
+			if string(input) != `{"content":"line one\nline two\n","path":"reports/imexx.typ"}` {
+				t.Fatalf("tool input = %s, want repaired valid JSON object", string(input))
+			}
+			return "written", nil
+		},
+	}
+	opts := &CompleteOptions{MaxTokens: 2048}
+
+	result, history, err := RunTurn(context.Background(), provider, tools, defaultBudget(), opts, []Message{{Role: "user", Content: "write the report"}})
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "done" {
+		t.Fatalf("result.Text = %q, want done after clean retry", result.Text)
+	}
+	if got := provider.seenMaxTokens(); !reflect.DeepEqual(got, []int{2048, 4096, 4096}) {
+		t.Fatalf("seen MaxTokens = %#v, want retry before execution then normal follow-up [2048 4096 4096]", got)
+	}
+	tools.mu.Lock()
+	execCalls := append([]toolInvocation(nil), tools.execCalls...)
+	tools.mu.Unlock()
+	if len(execCalls) != 1 || execCalls[0].name != "write_file" {
+		t.Fatalf("exec calls = %#v, want only the repaired retry tool call executed", execCalls)
+	}
+	for _, msg := range history {
+		if msg.Role == "tool" && strings.Contains(msg.Content, "SCHEMA_VIOLATION") {
+			t.Fatalf("history contains schema violation from truncated tool call: %#v", history)
+		}
+	}
+}
+
+func TestRunTurnRetriesOutputLimitedMixedToolBatchBeforeExecutingAnyCall(t *testing.T) {
+	provider := &mockOptionsProvider{complete: func(ctx context.Context, call int, opts CompleteOptions, messages []Message, tools []ToolDef) (*Response, error) {
+		switch call {
+		case 1:
+			return &Response{
+				FinishReason: "max_tokens",
+				Usage:        core.TokenUsage{OutputTokens: int64(opts.MaxTokens)},
+				ToolCalls: []ToolCall{
+					{ID: "valid-read", Name: "read_file", Input: json.RawMessage(`{"path":"README.md"}`)},
+					{ID: "truncated-write", Name: "write_file", Input: json.RawMessage(`"{\"path\":\"reports/imexx.typ\",\"content\":\"line one"`)},
+				},
+			}, nil
+		case 2:
+			if len(messages) != 1 {
+				return &Response{Content: "partial batch was fed back"}, nil
+			}
+			return &Response{Content: "recovered"}, nil
+		default:
+			t.Fatalf("unexpected call %d", call)
+			return nil, nil
+		}
+	}}
+	tools := &mockTools{
+		exec: func(_ context.Context, name string, input json.RawMessage) (string, error) {
+			t.Fatalf("tool %s should not execute from mixed batch before output-limit retry; input=%s", name, string(input))
+			return "", nil
+		},
+	}
+	opts := &CompleteOptions{MaxTokens: 2048}
+
+	result, history, err := RunTurn(context.Background(), provider, tools, defaultBudget(), opts, []Message{{Role: "user", Content: "write the report"}})
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "recovered" {
+		t.Fatalf("result.Text = %q, want recovered after clean retry", result.Text)
+	}
+	if got := provider.seenMaxTokens(); !reflect.DeepEqual(got, []int{2048, 4096}) {
+		t.Fatalf("seen MaxTokens = %#v, want retry [2048 4096]", got)
+	}
+	tools.mu.Lock()
+	execCalls := append([]toolInvocation(nil), tools.execCalls...)
+	tools.mu.Unlock()
+	if len(execCalls) != 0 {
+		t.Fatalf("exec calls = %#v, want no partial batch execution", execCalls)
+	}
+	if len(history) != 2 || history[len(history)-1].Content != "recovered" {
+		t.Fatalf("history = %#v, want only clean retry response appended", history)
+	}
+}
+
 func (m *mockOptionsProvider) seenMaxTokens() []int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
