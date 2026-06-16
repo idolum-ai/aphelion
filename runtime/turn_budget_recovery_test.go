@@ -137,6 +137,134 @@ func TestBudgetRecoveryDeliverySuppressesFinalReplyAndSchedulesInternalContinuat
 	}
 }
 
+func TestBudgetRecoveryResumedWorkEvidenceClosesConsumedPhaseAndOffersNext(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9728, UserID: 0, Scope: telegramDMScopeRef(9728)}
+	now := time.Now().UTC()
+	leaseID := "lease-recovery-completes-phase"
+	opState := session.OperationState{
+		ID:        "op-recovery-completes-phase",
+		Objective: "Build the approved local artifact, then validate it.",
+		Status:    session.OperationStatusActive,
+		Stage:     "execution",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-recovery-completes-phase",
+			Goal:           "Build the approved local artifact, then validate it.",
+			CurrentPhaseID: "phase-build-artifact",
+			Phases: []session.OperationPhase{
+				{
+					ID:               "phase-build-artifact",
+					Summary:          "Build the approved local artifact",
+					Status:           session.PlanStatusInProgress,
+					AuthorityClass:   "workspace_write",
+					BoundedEffect:    "Write and compile only the local artifact.",
+					AllowedActions:   []string{"write_file", "compile_artifact"},
+					ForbiddenActions: []string{"commit", "push_remote", "deploy"},
+					LeaseID:          leaseID,
+				},
+				{
+					ID:               "phase-validate-artifact",
+					Summary:          "Validate the local artifact output",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "read_only_review",
+					BoundedEffect:    "Inspect generated artifact metadata and report status.",
+					AllowedActions:   []string{"inspect_artifact", "report_findings"},
+					ForbiddenActions: []string{"edit_files", "commit", "push_remote", "deploy"},
+				},
+			},
+		},
+	}
+	proposalID := operationPhaseProposalID(opState, opState.PhasePlan.Phases[0])
+	action := session.ActionProposal{
+		ID:               "aprop-" + proposalID,
+		OperationID:      proposalID,
+		Summary:          opState.PhasePlan.Phases[0].Summary,
+		BoundedEffect:    opState.PhasePlan.Phases[0].BoundedEffect,
+		RiskClass:        "workspace_write",
+		AllowedActions:   opState.PhasePlan.Phases[0].AllowedActions,
+		ForbiddenActions: opState.PhasePlan.Phases[0].ForbiddenActions,
+		Status:           session.ProposalStatusApproved,
+		ExpiresAt:        now.Add(time.Hour),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	lease := buildContinuationLease(action, 1, now)
+	lease.ID = leaseID
+	lease.Status = session.ContinuationLeaseStatusConsumed
+	lease.RemainingTurns = 0
+	lease.ApprovedBy = 1001
+	lease.ApprovedAt = now.Add(-time.Minute)
+	lease.ConsumedAt = now
+	lease.ExpiresAt = now.Add(time.Hour)
+	consumed := session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusIdle,
+		Objective:         opState.Objective,
+		StageSummary:      action.Summary,
+		RemainingTurns:    0,
+		ActionProposal:    action,
+		ContinuationLease: lease,
+		UpdatedAt:         now,
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, consumed); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	rt.interactiveDMAssembler = &recoveryWorkEvidenceAssembler{
+		runtime:           rt,
+		operationID:       opState.ID,
+		leaseID:           leaseID,
+		actionProposalID:  action.ID,
+		actionOperationID: proposalID,
+		workMode:          WorkModeWorkspaceWrite,
+		summary:           "Wrote and compiled the local artifact after budget recovery.",
+		changedFiles:      []string{"reports/artifact.typ", "reports/artifact.pdf"},
+	}
+
+	recovery := &core.TurnRecovery{
+		Kind:           core.TurnRecoveryTokenBudgetExhausted,
+		Recoverable:    true,
+		ReplanRequired: true,
+		Summary:        "Token budget exhausted before final response.",
+		MaxAutoHops:    3,
+	}
+	scope := "operation:op-recovery-completes-phase:phase:phase-build-artifact:authority:workspace_write:fingerprint:sha256:test"
+	err = rt.runTurnBudgetRecoveryContinuation(context.Background(), key, core.InboundMessage{
+		ChatID:       key.ChatID,
+		SenderID:     1001,
+		MessageID:    77,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
+	}, principalForBudgetRecoveryTest(1001), recovery, scope, 1, 3, turnBudgetRecoveryDigest{})
+	if err != nil {
+		t.Fatalf("runTurnBudgetRecoveryContinuation() err = %v", err)
+	}
+
+	got, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if got.PhasePlan.Phases[0].Status != session.PlanStatusCompleted {
+		t.Fatalf("first phase status = %q, want completed from recovery work evidence", got.PhasePlan.Phases[0].Status)
+	}
+	if got.PhasePlan.Phases[1].Status != session.PlanStatusPending {
+		t.Fatalf("second phase status = %q, want pending next phase", got.PhasePlan.Phases[1].Status)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount == 0 {
+		t.Fatal("inline count = 0, want next bounded approval after recovery completed consumed phase")
+	}
+}
+
 type staticTurnRunIDSource int64
 
 func (s staticTurnRunIDSource) turnRunID() int64 {
@@ -980,6 +1108,38 @@ func hasContinuationBlockedEventForTest(events []session.ExecutionEvent, status 
 
 func principalForBudgetRecoveryTest(userID int64) principal.Principal {
 	return principal.Principal{TelegramUserID: userID, Role: principal.RoleAdmin}
+}
+
+type recoveryWorkEvidenceAssembler struct {
+	runtime           *Runtime
+	operationID       string
+	leaseID           string
+	actionProposalID  string
+	actionOperationID string
+	workMode          WorkMode
+	summary           string
+	changedFiles      []string
+}
+
+func (a *recoveryWorkEvidenceAssembler) Run(_ context.Context, input interactiveDMTurnAssemblyInput) (*core.TurnResult, error) {
+	if a.runtime != nil && a.runtime.store != nil {
+		opState, err := a.runtime.store.OperationState(input.Key)
+		if err == nil {
+			now := time.Now().UTC()
+			opState.Work.LastOperationID = strings.TrimSpace(a.operationID)
+			opState.Work.LastActionProposalID = strings.TrimSpace(a.actionProposalID)
+			opState.Work.LastActionOperationID = strings.TrimSpace(a.actionOperationID)
+			opState.Work.LastLeaseID = strings.TrimSpace(a.leaseID)
+			opState.Work.LastWorkMode = strings.TrimSpace(string(a.workMode))
+			opState.Work.LastSummary = strings.TrimSpace(a.summary)
+			opState.Work.LastCompletedAt = now
+			opState.Work.LastExecutorUpdatedAt = now
+			opState.Work.LastError = ""
+			opState.Work.ChangedFiles = append([]string(nil), a.changedFiles...)
+			_ = a.runtime.store.UpdateOperationState(input.Key, opState)
+		}
+	}
+	return &core.TurnResult{Text: firstNonEmptyContinuation(a.summary, "Recovery work completed.")}, nil
 }
 
 func assertBudgetRecoveryEventStatus(t *testing.T, events []session.ExecutionEvent, status string) {
