@@ -8,6 +8,7 @@ import (
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
+	"strings"
 	"testing"
 	"time"
 )
@@ -72,6 +73,40 @@ func TestTurnMonitorToolAndTurnDurationsAreLedgered(t *testing.T) {
 	}
 	assertPayloadNonNegativeInt64(t, payloadForEventType(events, core.ExecutionEventToolSucceeded), "tool_duration_ms")
 	assertPayloadNonNegativeInt64(t, payloadForEventType(events, core.ExecutionEventTurnCompleted), "turn_duration_ms")
+}
+
+func TestTurnMonitorRecordsLargeToolOutputDigest(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9913, UserID: 0, Scope: telegramDMScopeRef(9913)}
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "large output test", nil, nil, core.InboundMessage{})
+	if err != nil {
+		t.Fatalf("startTurnMonitor() err = %v", err)
+	}
+	output := "HEAD important\n" + strings.Repeat("middle output\n", 2000) + "TAIL important\n"
+	monitor.ToolStarted(context.Background(), "exec", json.RawMessage(`{"command":"large"}`))
+	monitor.ToolFinished(context.Background(), "exec", json.RawMessage(`{"command":"large"}`), output, nil)
+	monitor.Finish(context.Background(), nil)
+
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	payload := payloadForEventType(events, core.ExecutionEventToolSucceeded)
+	digest, ok := payloadMap(payload, "result_digest")
+	if !ok {
+		t.Fatalf("tool succeeded payload = %#v, want result_digest", payload)
+	}
+	if payloadString(digest, "sha256") == "" || payloadString(digest, "omitted_bytes") == "" {
+		t.Fatalf("result_digest = %#v, want sha256 and omitted metadata", digest)
+	}
+	if !strings.Contains(payloadString(digest, "head"), "HEAD important") || !strings.Contains(payloadString(digest, "tail"), "TAIL important") {
+		t.Fatalf("result_digest = %#v, want head and tail evidence", digest)
+	}
 }
 
 func TestTurnMonitorRecordsModelAndToolBatchEvents(t *testing.T) {

@@ -594,7 +594,11 @@ func turnBudgetRecoveryDigestEventLine(event session.ExecutionEvent, payload map
 		appendBudgetDigestPayloadPart(&parts, "input", payloadString(payload, "preview"), 120)
 	case core.ExecutionEventToolSucceeded, core.ExecutionEventToolFailed:
 		appendBudgetDigestPayloadPart(&parts, "tool", payloadString(payload, "tool"), 80)
-		appendBudgetDigestPayloadPart(&parts, "result", payloadString(payload, "result_preview"), 140)
+		if digest, ok := payloadMap(payload, "result_digest"); ok {
+			appendBudgetDigestPayloadPart(&parts, "result_digest", turnBudgetRecoveryDigestSummary(digest), 180)
+		} else {
+			appendBudgetDigestPayloadPart(&parts, "result", payloadString(payload, "result_preview"), 140)
+		}
 		appendBudgetDigestPayloadPart(&parts, "error", payloadString(payload, "error"), 140)
 	case core.ExecutionEventToolBatchStarted, core.ExecutionEventToolBatchCompleted:
 		appendBudgetDigestPayloadPart(&parts, "mode", payloadString(payload, "mode"), 40)
@@ -649,6 +653,41 @@ func appendBudgetDigestPayloadPart(parts *[]string, key string, value string, li
 		return
 	}
 	*parts = append(*parts, key+"="+fmt.Sprintf("%q", value))
+}
+
+func payloadMap(payload map[string]any, key string) (map[string]any, bool) {
+	if len(payload) == 0 {
+		return nil, false
+	}
+	raw, ok := payload[strings.TrimSpace(key)]
+	if !ok || raw == nil {
+		return nil, false
+	}
+	typed, ok := raw.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	return typed, true
+}
+
+func turnBudgetRecoveryDigestSummary(digest map[string]any) string {
+	if len(digest) == 0 {
+		return ""
+	}
+	parts := []string{}
+	if value := payloadString(digest, "sha256"); value != "" {
+		parts = append(parts, "sha256="+value)
+	}
+	if value := payloadString(digest, "bytes"); value != "" {
+		parts = append(parts, "bytes="+value)
+	}
+	if value := payloadString(digest, "lines"); value != "" {
+		parts = append(parts, "lines="+value)
+	}
+	if value := payloadString(digest, "omitted_bytes"); value != "" {
+		parts = append(parts, "omitted_bytes="+value)
+	}
+	return strings.Join(parts, " ")
 }
 
 func appendBudgetDigestTokenParts(parts *[]string, payload map[string]any) {

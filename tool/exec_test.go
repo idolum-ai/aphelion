@@ -305,6 +305,22 @@ func TestExecAcceptsJSONStringWrappedObjectInput(t *testing.T) {
 	}
 }
 
+func TestExecAcceptsJSONStringWrappedObjectInputWithEscapedNewline(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	registry := NewRegistry(workspace, 2*time.Second)
+	wrapped := stringWrappedJSON(t, `{"command":"printf 'ok\n'"}`)
+
+	out, err := registry.Execute(context.Background(), "exec", wrapped)
+	if err != nil {
+		t.Fatalf("Execute() err = %v", err)
+	}
+	if !strings.Contains(out, "ok") {
+		t.Fatalf("output = %q, want command output", out)
+	}
+}
+
 func TestExecDangerousCommandRequiresApproval(t *testing.T) {
 	t.Parallel()
 

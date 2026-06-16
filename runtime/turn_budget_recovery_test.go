@@ -190,6 +190,32 @@ func TestTurnBudgetRecoveryDigestIsBoundedAndRunScoped(t *testing.T) {
 	}
 }
 
+func TestTurnBudgetRecoveryDigestEventLinePrefersToolOutputDigest(t *testing.T) {
+	t.Parallel()
+
+	line := turnBudgetRecoveryDigestEventLine(session.ExecutionEvent{
+		Seq:       7,
+		EventType: core.ExecutionEventToolSucceeded,
+		Status:    "succeeded",
+	}, map[string]any{
+		"tool":           "exec",
+		"result_preview": "preview-only",
+		"result_digest": map[string]any{
+			"sha256":        "sha256:abc123",
+			"bytes":         24000,
+			"lines":         80,
+			"omitted_bytes": 12000,
+		},
+	})
+
+	if !strings.Contains(line, "result_digest=") || !strings.Contains(line, "sha256:abc123") || !strings.Contains(line, "omitted_bytes=12000") {
+		t.Fatalf("digest line = %q, want compact typed output digest", line)
+	}
+	if strings.Contains(line, "preview-only") {
+		t.Fatalf("digest line = %q, want digest metadata instead of lossy preview", line)
+	}
+}
+
 func TestBudgetRecoveryFromWorkExecutorContinuationDefersToManualRetry(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)

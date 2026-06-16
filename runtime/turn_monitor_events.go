@@ -99,6 +99,9 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 		"error":            errorText,
 		"tool_duration_ms": toolDurationMS,
 	}
+	if digest, ok := agent.BuildToolOutputDigest(output, agent.DefaultToolOutputDigestInlineLimit); ok {
+		payload["result_digest"] = digest.Payload()
+	}
 	if effect := execEffectPayload(name, input); len(effect) > 0 {
 		payload["exec_effect"] = effect
 	}

@@ -269,7 +269,7 @@ type toolFailure struct {
 
 func toolResultContent(output string, err error) (string, bool) {
 	if err == nil {
-		return output, false
+		return FormatToolOutputForHistory(output, DefaultToolOutputDigestInlineLimit), false
 	}
 	return renderToolFailure(classifyToolFailure(err, output)), true
 }

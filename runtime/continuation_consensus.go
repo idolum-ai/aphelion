@@ -39,6 +39,9 @@ func shouldNotifyContinuationBlocked(priorState session.ContinuationState, prior
 }
 
 func continuationConsensusShouldCloseQuietly(consensus continuationConsensus) bool {
+	if continuationPlanHasOpenStep(consensus.PlanState) {
+		return false
+	}
 	opState := session.NormalizeOperationState(consensus.OperationState)
 	return opState.Status == session.OperationStatusCompleted
 }
@@ -46,13 +49,13 @@ func continuationConsensusShouldCloseQuietly(consensus continuationConsensus) bo
 func continuationConsensusHasTypedRemainingWork(consensus continuationConsensus) bool {
 	planState := session.NormalizePlanState(consensus.PlanState)
 	opState := session.NormalizeOperationState(consensus.OperationState)
-	if opState.Status == session.OperationStatusCompleted || opState.Status == session.OperationStatusFailed {
-		return false
-	}
 	for _, step := range planState.Steps {
 		if (step.Status == session.PlanStatusInProgress || step.Status == session.PlanStatusPending) && organicProposalConcreteStateStep(step.Step) {
 			return true
 		}
+	}
+	if operationStateTerminalForContinuation(opState) {
+		return false
 	}
 	if pendingOperationProposalNeedsButton(opState.Proposal) || pendingOperationPlanLeaseNeedsButton(opState.PlanLease) {
 		return true
@@ -160,12 +163,19 @@ func summarizeContinuationPlan(planState session.PlanState, operationState sessi
 	planState = session.NormalizePlanState(planState)
 	operationState = session.NormalizeOperationState(operationState)
 
-	objective = firstNonEmptyContinuation(
-		operationState.Objective,
-		operationState.Summary,
-		planState.Explanation,
-		summarizeContinuationFallback(promptInput),
-	)
+	if operationStateTerminalForContinuation(operationState) {
+		objective = firstNonEmptyContinuation(
+			planState.Explanation,
+			summarizeContinuationFallback(promptInput),
+		)
+	} else {
+		objective = firstNonEmptyContinuation(
+			operationState.Objective,
+			operationState.Summary,
+			planState.Explanation,
+			summarizeContinuationFallback(promptInput),
+		)
+	}
 	nextStep = continuationNextStep(planState, operationState)
 	if nextStep == "" {
 		nextStep = "Resume the next bounded step from this thread."
@@ -173,11 +183,32 @@ func summarizeContinuationPlan(planState session.PlanState, operationState sessi
 	return objective, nextStep
 }
 
+func continuationPlanHasOpenStep(planState session.PlanState) bool {
+	planState = session.NormalizePlanState(planState)
+	for _, step := range planState.Steps {
+		if strings.TrimSpace(step.Step) == "" {
+			continue
+		}
+		if step.Status == session.PlanStatusInProgress || step.Status == session.PlanStatusPending {
+			return true
+		}
+	}
+	return false
+}
+
+func operationStateTerminalForContinuation(operationState session.OperationState) bool {
+	operationState = session.NormalizeOperationState(operationState)
+	return operationState.Status == session.OperationStatusCompleted || operationState.Status == session.OperationStatusFailed
+}
+
 func continuationNextStep(planState session.PlanState, operationState session.OperationState) string {
 	for _, step := range planState.Steps {
 		if step.Status == session.PlanStatusInProgress || step.Status == session.PlanStatusPending {
 			return step.Step
 		}
+	}
+	if operationStateTerminalForContinuation(operationState) {
+		return ""
 	}
 	if strings.TrimSpace(operationState.Proposal.Summary) != "" {
 		return operationState.Proposal.Summary
