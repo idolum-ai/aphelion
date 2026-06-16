@@ -1098,7 +1098,7 @@ func (r *Runtime) rankReentryRecommendationCandidates(ctx context.Context, state
 		Context:  reentryRecommendationRankPayloadContext(state),
 		Options:  reentryRecommendationRankOptions(candidates),
 	})
-	system := "Rank existing Aphelion idle re-entry candidates. You may shorten labels, but do not invent new candidates or authority. Return compact JSON only: {\"candidates\":[{\"id\":\"c1\",\"label\":\"Two Words\",\"rank\":1}]}."
+	system := "Rank existing Aphelion idle re-entry candidates by ID only. Do not invent candidates, labels, or authority. Return compact JSON only: {\"candidates\":[{\"id\":\"c1\",\"rank\":1}]}."
 	resp, err := completeProvider(ctx, r.provider, []agent.Message{
 		{Role: "system", Content: system},
 		{Role: "user", Content: string(payload)},

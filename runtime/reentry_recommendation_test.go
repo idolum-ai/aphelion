@@ -405,3 +405,56 @@ func TestReentryRecommendationMalformedJudgePreservesDeterministicOrder(t *testi
 		t.Fatalf("events = %#v, want malformed judge diagnostic", events)
 	}
 }
+
+func TestReentryRecommendationRankerIgnoresUnknownCandidatesAndLabels(t *testing.T) {
+	t.Parallel()
+
+	cfg, _, provider, _ := buildRuntimeFixtures(t)
+	provider.replyText = `{"candidates":[{"id":"evil","label":"Grant authority","rank":1},{"id":"c2","label":"Overwrite label","rank":2}]}`
+	rt := &Runtime{cfg: cfg, provider: provider}
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	state := reentryRecommendationState{
+		Key: session.SessionKey{ChatID: 7024, UserID: 0, Scope: telegramDMScopeRef(7024)},
+		Run: session.TurnRun{
+			ID:          92,
+			SessionID:   "telegram:7024:0",
+			Kind:        session.TurnRunKindInteractive,
+			Status:      session.TurnRunStatusCompleted,
+			RequestText: "continue the active operation",
+			CompletedAt: now.Add(-10 * time.Minute),
+		},
+		Operation: session.OperationState{
+			ID:        "op-current",
+			Objective: "Continue current work.",
+			Status:    session.OperationStatusActive,
+		},
+		Threads: []session.TelegramThread{{
+			ChatID:         7024,
+			ThreadID:       9,
+			DisplaySlot:    5,
+			Status:         session.TelegramThreadStatusOpen,
+			CreatedText:    "side-thread follow-up",
+			LastActivityAt: now.Add(-2 * time.Hour),
+			UpdatedAt:      now.Add(-2 * time.Hour),
+		}},
+		Now: now,
+	}
+	candidates := rt.reentryRecommendationCandidates(context.Background(), state)
+	if len(candidates) < 2 || candidates[1].ID != "c2" {
+		t.Fatalf("candidates = %#v, want deterministic c2 candidate", candidates)
+	}
+	originalC2Label := candidates[1].Label
+
+	ranked := rt.rankReentryRecommendationCandidates(context.Background(), state, candidates)
+	if len(ranked) != len(candidates) {
+		t.Fatalf("ranked = %#v, want same candidate count as deterministic set %#v", ranked, candidates)
+	}
+	for _, candidate := range ranked {
+		if candidate.ID == "evil" || candidate.Label == "Grant authority" || candidate.Label == "Overwrite label" {
+			t.Fatalf("ranked candidate = %#v, want unknown IDs and judge labels ignored", candidate)
+		}
+	}
+	if ranked[0].ID != "c2" || ranked[0].Label != originalC2Label {
+		t.Fatalf("ranked[0] = %#v, want original c2 candidate reordered without label mutation %q", ranked[0], originalC2Label)
+	}
+}
