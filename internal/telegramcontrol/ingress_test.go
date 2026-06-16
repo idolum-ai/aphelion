@@ -4,6 +4,7 @@ package telegramcontrol
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -200,6 +201,9 @@ type reentryQueueRuntime struct {
 	sawAcceptedBeforeConfirm bool
 	prepareRecord            session.ReentryRecommendation
 	prepareCandidate         session.ReentryRecommendationCandidate
+	confirmReject            bool
+	confirmErr               error
+	confirmUpdateID          int64
 }
 
 func (r *reentryQueueRuntime) PrepareReentryRecommendationSelection(ctx context.Context, senderID int64, recommendationID string, candidateID string) (session.ReentryRecommendation, session.ReentryRecommendationCandidate, bool, error) {
@@ -215,8 +219,18 @@ func (r *reentryQueueRuntime) ConfirmReentryRecommendationSelection(ctx context.
 	_ = senderID
 	_ = recommendationID
 	_ = candidateID
-	record, ok, err := r.store.TelegramIngressUpdate(telegramruntime.ReentryRecommendationIngressSurface, 889)
+	updateID := r.confirmUpdateID
+	if updateID <= 0 {
+		updateID = 889
+	}
+	record, ok, err := r.store.TelegramIngressUpdate(telegramruntime.ReentryRecommendationIngressSurface, updateID)
 	r.sawAcceptedBeforeConfirm = err == nil && ok && record.Status == session.TelegramIngressUpdateAccepted
+	if r.confirmErr != nil {
+		return r.prepareRecord, r.prepareCandidate, false, r.confirmErr
+	}
+	if r.confirmReject {
+		return r.prepareRecord, r.prepareCandidate, false, nil
+	}
 	return r.prepareRecord, r.prepareCandidate, true, nil
 }
 
@@ -279,6 +293,133 @@ func TestQueueReentryRecommendationAcceptsCallbackWorkBeforeSelecting(t *testing
 	}
 	if stored.Status != session.TelegramIngressUpdateQueued || stored.UpdateKind != "callback_reentry_recommendation" {
 		t.Fatalf("record = %#v, want queued reentry callback work", stored)
+	}
+}
+
+func TestQueueReentryRecommendationDropsAcceptedCallbackWorkWhenSelectionIsStale(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "reentry-stale-ingress.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	candidate := session.ReentryRecommendationCandidate{
+		ID:         "c1",
+		Kind:       session.ReentryCandidateRequestNextLease,
+		Label:      "Next lease",
+		PromptText: "Ask for fresh approval.",
+	}
+	record := session.ReentryRecommendation{
+		ID:        "reentry-stale",
+		Owner:     "telegram:9101",
+		ChatID:    9101,
+		SessionID: "telegram:9101:0",
+		Scope:     session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "9101"},
+		Status:    session.ReentryRecommendationStatusShown,
+		Candidates: []session.ReentryRecommendationCandidate{
+			candidate,
+		},
+	}
+	runtime := &reentryQueueRuntime{store: store, prepareRecord: record, prepareCandidate: candidate, confirmReject: true, confirmUpdateID: 890}
+	ingress := &recordingIngressRouter{}
+	control := CommandControl{Store: store, Ingress: ingress, Runtime: runtime}
+	msg := core.InboundMessage{
+		ChatID:          9101,
+		ChatType:        "private",
+		SenderID:        42,
+		MessageID:       502,
+		Text:            "Ask for fresh approval.",
+		IngressUpdateID: 890,
+	}
+	_, _, selected, err := control.QueueReentryRecommendation(context.Background(), msg, record.ID, candidate.ID)
+	if err != nil {
+		t.Fatalf("QueueReentryRecommendation() err = %v", err)
+	}
+	if selected {
+		t.Fatal("selected = true, want stale selection rejected")
+	}
+	if len(ingress.enqueued) != 0 {
+		t.Fatalf("enqueued = %#v, want no stale reentry turn", ingress.enqueued)
+	}
+	stored, ok, err := store.TelegramIngressUpdate(telegramruntime.ReentryRecommendationIngressSurface, 890)
+	if err != nil || !ok {
+		t.Fatalf("TelegramIngressUpdate() ok=%v err=%v", ok, err)
+	}
+	if stored.Status != session.TelegramIngressUpdateDropped || stored.ErrorText != "reentry_recommendation_not_selected" {
+		t.Fatalf("record = %#v, want dropped stale reentry callback work", stored)
+	}
+	pending, err := store.PendingTelegramIngressUpdates(telegramruntime.ReentryRecommendationIngressSurface, 10)
+	if err != nil {
+		t.Fatalf("PendingTelegramIngressUpdates() err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending = %#v, want stale accepted callback work absent from replay", pending)
+	}
+}
+
+func TestQueueReentryRecommendationDropsAcceptedCallbackWorkWhenSelectionConfirmFails(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "reentry-confirm-fails-ingress.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	confirmErr := errors.New("confirm failed")
+	candidate := session.ReentryRecommendationCandidate{
+		ID:         "c1",
+		Kind:       session.ReentryCandidateRequestNextLease,
+		Label:      "Next lease",
+		PromptText: "Ask for fresh approval.",
+	}
+	record := session.ReentryRecommendation{
+		ID:        "reentry-confirm-fails",
+		Owner:     "telegram:9101",
+		ChatID:    9101,
+		SessionID: "telegram:9101:0",
+		Scope:     session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "9101"},
+		Status:    session.ReentryRecommendationStatusShown,
+		Candidates: []session.ReentryRecommendationCandidate{
+			candidate,
+		},
+	}
+	runtime := &reentryQueueRuntime{store: store, prepareRecord: record, prepareCandidate: candidate, confirmErr: confirmErr, confirmUpdateID: 891}
+	ingress := &recordingIngressRouter{}
+	control := CommandControl{Store: store, Ingress: ingress, Runtime: runtime}
+	msg := core.InboundMessage{
+		ChatID:          9101,
+		ChatType:        "private",
+		SenderID:        42,
+		MessageID:       503,
+		Text:            "Ask for fresh approval.",
+		IngressUpdateID: 891,
+	}
+	_, _, selected, err := control.QueueReentryRecommendation(context.Background(), msg, record.ID, candidate.ID)
+	if !errors.Is(err, confirmErr) {
+		t.Fatalf("QueueReentryRecommendation() err = %v, want confirm error", err)
+	}
+	if selected {
+		t.Fatal("selected = true, want failed confirmation rejected")
+	}
+	if len(ingress.enqueued) != 0 {
+		t.Fatalf("enqueued = %#v, want no failed-confirm reentry turn", ingress.enqueued)
+	}
+	stored, ok, err := store.TelegramIngressUpdate(telegramruntime.ReentryRecommendationIngressSurface, 891)
+	if err != nil || !ok {
+		t.Fatalf("TelegramIngressUpdate() ok=%v err=%v", ok, err)
+	}
+	if stored.Status != session.TelegramIngressUpdateDropped || stored.ErrorText != "reentry_recommendation_selection_failed" {
+		t.Fatalf("record = %#v, want dropped failed-confirm callback work", stored)
+	}
+	pending, err := store.PendingTelegramIngressUpdates(telegramruntime.ReentryRecommendationIngressSurface, 10)
+	if err != nil {
+		t.Fatalf("PendingTelegramIngressUpdates() err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending = %#v, want failed-confirm callback work absent from replay", pending)
 	}
 }
 

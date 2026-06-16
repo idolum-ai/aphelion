@@ -4,6 +4,7 @@ package telegramcontrol
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/idolum-ai/aphelion/core"
@@ -68,8 +69,15 @@ func (c CommandControl) QueueReentryRecommendation(ctx context.Context, msg core
 		return record, candidate, false, err
 	}
 	record, candidate, selected, err = c.Runtime.ConfirmReentryRecommendationSelection(ctx, msg.SenderID, recommendationID, candidateID)
-	if err != nil || !selected {
-		return record, candidate, selected, err
+	if err != nil {
+		dropErr := dropTelegramCallbackWorkIfDispatchable(c.Store, msg, "reentry_recommendation_selection_failed")
+		return record, candidate, false, errors.Join(err, dropErr)
+	}
+	if !selected {
+		if dropErr := dropTelegramCallbackWorkIfDispatchable(c.Store, msg, "reentry_recommendation_not_selected"); dropErr != nil {
+			return record, candidate, false, dropErr
+		}
+		return record, candidate, false, nil
 	}
 	return record, candidate, true, c.RouteAccepted(ctx, msg)
 }
