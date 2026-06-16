@@ -296,6 +296,12 @@ active continuation/proposal gate blocking a recommendation. They are useful
 for resuming work after silence, but they do not authorize the work they name;
 the next turn should still request the smallest required approval.
 
+The candidates are typed paths, not prose guesses. Runtime weighs the current
+operation, missions, same-chat threads, interior-pressure signals, memory, and
+hydrated evidence refs, then presents at most three short choices. A selected
+candidate carries its source and evidence refs into the next turn as context,
+but the normal authority and evidence gates still decide what can happen.
+
 Heartbeat nudges may also mention recurring interior pressure. Those nudges are
 continuity signals derived from hidden-input recurrence and support pressure.
 They should be read as attention requests, not facts, approval, or permission.

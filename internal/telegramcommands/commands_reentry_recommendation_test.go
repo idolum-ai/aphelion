@@ -142,6 +142,32 @@ func TestHandleTelegramCommandCallbackReentryRecommendationSelectRecordsEditFail
 	}
 }
 
+func TestReentryRecommendationSelectionPromptIncludesTypedProvenance(t *testing.T) {
+	t.Parallel()
+
+	candidate := session.ReentryRecommendationCandidate{
+		Label:            "Review current operation",
+		PromptText:       "The operator selected this suggested path. This suggestion only chose a path. If action is needed, ask before doing it.",
+		SourceKind:       "operation_state",
+		SourceRef:        "op-release",
+		EvidenceRefs:     []string{"ev-turn", "ev-op"},
+		JudgmentReason:   "Current operation has the strongest durable evidence.",
+		RequiresApproval: true,
+	}
+
+	prompt := reentryRecommendationSelectionPrompt(session.ReentryRecommendation{ID: "reentry-test"}, candidate)
+	for _, want := range []string{
+		"Candidate source: operation_state op-release",
+		"Evidence refs: ev-turn, ev-op",
+		"Judgment reason: Current operation has the strongest durable evidence.",
+		"This suggestion only chose a path",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt = %q, want %q", prompt, want)
+		}
+	}
+}
+
 func testReentryRecommendationRecord() session.ReentryRecommendation {
 	return session.ReentryRecommendation{
 		ID:        "reentry-test",

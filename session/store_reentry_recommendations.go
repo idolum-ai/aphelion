@@ -90,6 +90,26 @@ func reentryRecommendationAllowedTx(tx *sql.Tx, record ReentryRecommendation) (b
 	return true, "", nil
 }
 
+func (s *SQLiteStore) ReentryRecommendationTerminalFingerprintExists(sessionID string, fingerprint string) (bool, error) {
+	if s == nil {
+		return false, fmt.Errorf("store is nil")
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	fingerprint = strings.TrimSpace(fingerprint)
+	if sessionID == "" || fingerprint == "" {
+		return false, nil
+	}
+	var existing int
+	if err := s.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM reentry_recommendations
+		WHERE session_id = ? AND terminal_fingerprint = ?
+	`, sessionID, fingerprint).Scan(&existing); err != nil {
+		return false, fmt.Errorf("check reentry recommendation fingerprint: %w", err)
+	}
+	return existing > 0, nil
+}
+
 func (s *SQLiteStore) ReentryRecommendation(id string) (ReentryRecommendation, bool, error) {
 	if s == nil {
 		return ReentryRecommendation{}, false, fmt.Errorf("store is nil")

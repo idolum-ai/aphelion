@@ -224,3 +224,184 @@ func TestReentryRecommendationSweepSkipsActiveContinuation(t *testing.T) {
 		t.Fatalf("sent = %#v, want no idle recommendation while continuation is approved", sender.sent)
 	}
 }
+
+func TestReentryRecommendationDeterministicRankingPrefersCurrentOperationOverStaleThread(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	rt := &Runtime{}
+	state := reentryRecommendationState{
+		Key: session.SessionKey{ChatID: 7020, UserID: 0, Scope: telegramDMScopeRef(7020)},
+		Run: session.TurnRun{
+			ID:          88,
+			SessionID:   "telegram:7020:0",
+			Kind:        session.TurnRunKindInteractive,
+			Status:      session.TurnRunStatusCompleted,
+			RequestText: "continue the active release operation",
+			CompletedAt: now.Add(-10 * time.Minute),
+		},
+		Operation: session.OperationState{
+			ID:        "op-current",
+			Objective: "Patch the current release blocker.",
+			Status:    session.OperationStatusActive,
+			Stage:     "working",
+			PhasePlan: session.OperationPhasePlan{
+				CurrentPhaseID: "patch",
+				Phases: []session.OperationPhase{{
+					ID:             "patch",
+					Summary:        "Patch the current release blocker.",
+					Status:         session.PlanStatusInProgress,
+					AuthorityClass: "commit",
+				}},
+			},
+		},
+		Threads: []session.TelegramThread{{
+			ChatID:         7020,
+			ThreadID:       4,
+			DisplaySlot:    2,
+			Status:         session.TelegramThreadStatusOpen,
+			CreatedText:    "old release context that should not beat active work",
+			LastActivityAt: now.Add(-45 * 24 * time.Hour),
+			UpdatedAt:      now.Add(-45 * 24 * time.Hour),
+		}},
+		Now: now,
+	}
+
+	candidates := rt.reentryRecommendationCandidates(context.Background(), state)
+	if len(candidates) == 0 {
+		t.Fatal("candidates empty, want current-operation recommendation")
+	}
+	if got := candidates[0].SourceKind; got != "operation_state" {
+		t.Fatalf("first source kind = %q, want operation_state; candidates=%#v", got, candidates)
+	}
+}
+
+func TestReentryRecommendationWhereWereWeCanSurfaceThread(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	rt := &Runtime{}
+	state := reentryRecommendationState{
+		Key: session.SessionKey{ChatID: 7021, UserID: 0, Scope: telegramDMScopeRef(7021)},
+		Run: session.TurnRun{
+			ID:          89,
+			SessionID:   "telegram:7021:0",
+			Kind:        session.TurnRunKindInteractive,
+			Status:      session.TurnRunStatusCompleted,
+			RequestText: "where were we with compiler cache drift?",
+			CompletedAt: now.Add(-10 * time.Minute),
+		},
+		Threads: []session.TelegramThread{{
+			ChatID:         7021,
+			ThreadID:       7,
+			DisplaySlot:    3,
+			Status:         session.TelegramThreadStatusOpen,
+			CreatedText:    "compiler cache drift investigation",
+			AbsorbSummary:  "The thread was tracking compiler cache drift and remaining checks.",
+			LastActivityAt: now.Add(-36 * time.Hour),
+			UpdatedAt:      now.Add(-36 * time.Hour),
+		}},
+		Now: now,
+	}
+
+	candidates := rt.reentryRecommendationCandidates(context.Background(), state)
+	if len(candidates) == 0 {
+		t.Fatal("candidates empty, want thread resurfacing recommendation")
+	}
+	if got := candidates[0].SourceKind; got != "telegram_thread" {
+		t.Fatalf("first source kind = %q, want telegram_thread; candidates=%#v", got, candidates)
+	}
+	if !strings.Contains(candidates[0].PromptText, "Thread 3") {
+		t.Fatalf("prompt = %q, want display-slot-specific thread review", candidates[0].PromptText)
+	}
+}
+
+func TestReentryRecommendationInteriorPressureIsReviewOnly(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	rt := &Runtime{}
+	state := reentryRecommendationState{
+		Key: session.SessionKey{ChatID: 7022, UserID: 0, Scope: telegramDMScopeRef(7022)},
+		Run: session.TurnRun{
+			ID:          90,
+			SessionID:   "telegram:7022:0",
+			Kind:        session.TurnRunKindInteractive,
+			Status:      session.TurnRunStatusCompleted,
+			CompletedAt: now.Add(-10 * time.Minute),
+		},
+		Signals: []session.InteriorSignalState{{
+			SessionID:      "telegram:7022:0",
+			Category:       "semantic_recurrence",
+			SubjectKey:     "cache-loop",
+			Summary:        "Cache loop pressure keeps recurring.",
+			Intensity:      0.92,
+			LastObservedAt: now.Add(-time.Hour),
+		}},
+		Now: now,
+	}
+
+	candidates := rt.reentryRecommendationCandidates(context.Background(), state)
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %#v, want only the interior-pressure candidate", candidates)
+	}
+	candidate := candidates[0]
+	if candidate.SourceKind != "interior_signal" || candidate.AuthorityClass != "read_only" || !candidate.RequiresApproval {
+		t.Fatalf("candidate = %#v, want read-only approval-gated interior signal review", candidate)
+	}
+	if !strings.Contains(candidate.PromptText, "ask approval before making changes") {
+		t.Fatalf("prompt = %q, want review-only warning", candidate.PromptText)
+	}
+}
+
+func TestReentryRecommendationMalformedJudgePreservesDeterministicOrder(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, _ := buildRuntimeFixtures(t)
+	provider.replyText = "not json"
+	rt := &Runtime{cfg: cfg, store: store, provider: provider}
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	state := reentryRecommendationState{
+		Key: session.SessionKey{ChatID: 7023, UserID: 0, Scope: telegramDMScopeRef(7023)},
+		Run: session.TurnRun{
+			ID:          91,
+			SessionID:   "telegram:7023:0",
+			Kind:        session.TurnRunKindInteractive,
+			Status:      session.TurnRunStatusCompleted,
+			RequestText: "continue the active operation",
+			CompletedAt: now.Add(-10 * time.Minute),
+		},
+		Operation: session.OperationState{
+			ID:        "op-current",
+			Objective: "Continue current work.",
+			Status:    session.OperationStatusActive,
+		},
+		Threads: []session.TelegramThread{{
+			ChatID:         7023,
+			ThreadID:       8,
+			DisplaySlot:    4,
+			Status:         session.TelegramThreadStatusOpen,
+			CreatedText:    "other thread",
+			LastActivityAt: now.Add(-2 * time.Hour),
+			UpdatedAt:      now.Add(-2 * time.Hour),
+		}},
+		Now: now,
+	}
+	candidates := rt.reentryRecommendationCandidates(context.Background(), state)
+	if len(candidates) < 2 {
+		t.Fatalf("candidates = %#v, want multiple candidates", candidates)
+	}
+	firstBefore := candidates[0].ID
+
+	ranked := rt.rankReentryRecommendationCandidates(context.Background(), state, candidates)
+	if len(ranked) == 0 || ranked[0].ID != firstBefore {
+		t.Fatalf("ranked = %#v, want malformed judge to preserve deterministic first %q", ranked, firstBefore)
+	}
+	events, err := store.ExecutionEventsBySession(state.Key, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !testExecutionEventsContain(events, core.ExecutionEventReentryRecommendationJudged) {
+		t.Fatalf("events = %#v, want malformed judge diagnostic", events)
+	}
+}
