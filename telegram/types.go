@@ -5,9 +5,10 @@ package telegram
 import "encoding/json"
 
 type getUpdatesResponse struct {
-	Ok          bool     `json:"ok"`
-	Description string   `json:"description"`
-	Result      []Update `json:"result"`
+	Ok          bool                       `json:"ok"`
+	Description string                     `json:"description"`
+	Result      []Update                   `json:"result"`
+	Parameters  telegramResponseParameters `json:"parameters,omitempty"`
 }
 
 type sendMessageResponse struct {
@@ -45,6 +46,10 @@ type InlineButton struct {
 type telegramOKResponse struct {
 	Ok          bool   `json:"ok"`
 	Description string `json:"description"`
+}
+
+type telegramResponseParameters struct {
+	RetryAfter int `json:"retry_after,omitempty"`
 }
 
 type getFileResponse struct {

@@ -5,6 +5,8 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 )
 
 func (c *Client) GetUpdates(ctx context.Context, offset int64, timeoutSeconds int) ([]Update, error) {
@@ -21,9 +23,35 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64, timeoutSeconds in
 		return nil, err
 	}
 	if !resp.Ok {
-		return nil, fmt.Errorf("telegram getUpdates failed: %s", resp.Description)
+		return nil, telegramGetUpdatesError{
+			description: strings.TrimSpace(resp.Description),
+			retryAfter:  time.Duration(resp.Parameters.RetryAfter) * time.Second,
+		}
 	}
 	return resp.Result, nil
+}
+
+type telegramGetUpdatesError struct {
+	description string
+	retryAfter  time.Duration
+}
+
+func (e telegramGetUpdatesError) Error() string {
+	description := strings.TrimSpace(e.description)
+	if description == "" {
+		description = "unknown telegram error"
+	}
+	if e.retryAfter > 0 {
+		return fmt.Sprintf("telegram getUpdates failed: %s (retry_after=%s)", description, e.retryAfter)
+	}
+	return "telegram getUpdates failed: " + description
+}
+
+func (e telegramGetUpdatesError) RetryAfterDelay() time.Duration {
+	if e.retryAfter <= 0 {
+		return 0
+	}
+	return e.retryAfter
 }
 
 func (c *Client) GetMe(ctx context.Context) (*User, error) {

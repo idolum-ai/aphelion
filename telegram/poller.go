@@ -153,8 +153,9 @@ func (p *Poller) Run(ctx context.Context) error {
 				return nil
 			}
 			if retryableTelegramPollError(err) {
-				log.Printf("WARN telegram getUpdates transient failure; retrying after %s err=%v", retryDelay, err)
-				if sleepErr := p.pollRetrySleep(ctx, retryDelay); sleepErr != nil {
+				delay := telegramPollRetryDelay(err, retryDelay)
+				log.Printf("WARN telegram getUpdates transient failure; retrying after %s err=%v", delay, err)
+				if sleepErr := p.pollRetrySleep(ctx, delay); sleepErr != nil {
 					if ctx.Err() != nil {
 						return nil
 					}
@@ -362,6 +363,10 @@ type temporaryLike interface {
 	Temporary() bool
 }
 
+type retryAfterLike interface {
+	RetryAfterDelay() time.Duration
+}
+
 func retryableTelegramPollError(err error) bool {
 	if err == nil {
 		return false
@@ -401,7 +406,25 @@ func retryableTelegramPollError(err error) bool {
 	if telegramPollErrorHasNonRetryableMarker(lower) {
 		return false
 	}
+	if telegramPollRetryAfter(err) > 0 {
+		return true
+	}
 	return telegramPollErrorHasRetryableMarker(lower)
+}
+
+func telegramPollRetryDelay(err error, fallback time.Duration) time.Duration {
+	if retryAfter := telegramPollRetryAfter(err); retryAfter > 0 {
+		return retryAfter
+	}
+	return fallback
+}
+
+func telegramPollRetryAfter(err error) time.Duration {
+	var retryAfter retryAfterLike
+	if errors.As(err, &retryAfter) {
+		return retryAfter.RetryAfterDelay()
+	}
+	return 0
 }
 
 func telegramPollErrorHasNonRetryableMarker(lower string) bool {

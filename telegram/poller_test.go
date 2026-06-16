@@ -275,6 +275,71 @@ func TestPollerRetriesGetUpdatesServerError(t *testing.T) {
 	}
 }
 
+func TestPollerHonorsGetUpdatesRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().Unix()
+	call := 0
+	var delays []time.Duration
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			call++
+			if call == 1 {
+				return encodeHTTPJSONResponse(t, http.StatusTooManyRequests, getUpdatesResponse{
+					Ok:          false,
+					Description: "Too Many Requests: retry after 7",
+					Parameters:  telegramResponseParameters{RetryAfter: 7},
+				}), nil
+			}
+			return encodeJSONResponse(t, getUpdatesResponse{
+				Ok: true,
+				Result: []Update{{
+					UpdateID: 22,
+					Message: &Message{
+						MessageID: 46,
+						Chat:      &Chat{ID: 100, Type: "private"},
+						From:      &User{ID: 7, Username: "alice"},
+						Text:      "after retry-after",
+						Date:      now,
+					},
+				}},
+			}), nil
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var handled []core.InboundMessage
+	poller := NewPoller(client, func(_ context.Context, msg core.InboundMessage) error {
+		handled = append(handled, msg)
+		cancel()
+		return nil
+	},
+		withPollerRetryBackoff(time.Second, 30*time.Second),
+		withPollerRetrySleep(func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			return nil
+		}),
+	)
+
+	if err := poller.Run(ctx); err != nil {
+		t.Fatalf("Poller.Run() err = %v, want nil after retry-after", err)
+	}
+	if call != 2 {
+		t.Fatalf("getUpdates calls = %d, want 2", call)
+	}
+	if len(delays) != 1 || delays[0] != 7*time.Second {
+		t.Fatalf("retry delays = %#v, want [7s]", delays)
+	}
+	if len(handled) != 1 || handled[0].Text != "after retry-after" {
+		t.Fatalf("handled = %#v, want successful update after retry-after", handled)
+	}
+}
+
 func TestPollerRetryBackoffIsBoundedAndResetsAfterSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -387,6 +452,18 @@ func TestPollerDoesNotRetryNonRetryableGetUpdatesAPIError(t *testing.T) {
 	}
 	if call != 1 {
 		t.Fatalf("getUpdates calls = %d, want 1", call)
+	}
+}
+
+func TestPollerRetryAfterDoesNotOverrideNonRetryableMarker(t *testing.T) {
+	t.Parallel()
+
+	err := telegramGetUpdatesError{
+		description: "Unauthorized",
+		retryAfter:  7 * time.Second,
+	}
+	if retryableTelegramPollError(err) {
+		t.Fatal("retryableTelegramPollError() = true for Unauthorized with retry_after, want false")
 	}
 }
 
