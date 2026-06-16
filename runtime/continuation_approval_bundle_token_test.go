@@ -152,6 +152,14 @@ func TestOperationPhaseBundleSubsetFingerprintsValidateAgainstOriginalPlan(t *te
 	if err := rt.validateContinuationApprovalBundleFingerprints(key, state); err != nil {
 		t.Fatalf("validateContinuationApprovalBundleFingerprints() err = %v, want subset bundle accepted against unchanged original plan", err)
 	}
+
+	opState.PhasePlan.Phases[1].BoundedEffect = "Select workflows and write a local artifact."
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState(changed) err = %v", err)
+	}
+	if err := rt.validateContinuationApprovalBundleFingerprints(key, state); err == nil {
+		t.Fatal("validateContinuationApprovalBundleFingerprints() err = nil, want selected phase authority change to stale the approval")
+	}
 }
 
 func TestOperationPhaseBundleSubsetPhaseFingerprintsUseOriginalPlanIndex(t *testing.T) {

@@ -86,6 +86,9 @@ func (r *Runtime) approveContinuationBundleForKeyLocked(key session.SessionKey, 
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), now)
 		return state, err
 	}
+	if state, err = r.refreshContinuationApprovalBundleFingerprint(key, state); err != nil {
+		return session.ContinuationState{}, err
+	}
 	if compilation := continuationAuthorityCompilation(state); compilation.Invalid() {
 		blocked, _, blockErr := r.blockInvalidContinuationAuthorityContract(context.Background(), key, core.InboundMessage{ChatID: key.ChatID}, state, "approval", now, false)
 		if blockErr != nil {

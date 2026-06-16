@@ -213,7 +213,34 @@ func (r *Runtime) runTurnBudgetRecoveryContinuation(ctx context.Context, key ses
 		payload["result_recovery_kind"] = string(result.Recovery.Kind)
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventTurnBudgetRecovery, "turn", "resumed", payload, time.Now().UTC())
+	if result == nil || result.Recovery == nil {
+		return r.reconcileConsumedContinuationAfterBudgetRecovery(ctx, key)
+	}
 	return nil
+}
+
+func (r *Runtime) reconcileConsumedContinuationAfterBudgetRecovery(ctx context.Context, key session.SessionKey) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	state, err := r.store.ContinuationState(key)
+	if err != nil {
+		return nil
+	}
+	state = session.NormalizeContinuationState(state)
+	now := time.Now().UTC()
+	decision := continuationLoopDecision{
+		Continue: false,
+		Reason:   "not_approved",
+		Boundary: "budget recovery resumed; no active approved continuation remains",
+		Mission:  r.assessContinuationLoopMission(key, state, now),
+	}
+	if !continuationBoundaryCanOfferNextOperationPhase(state, decision) {
+		return nil
+	}
+	r.recordContinuationLoopAssessment(key, state, decision, 1)
+	r.recordContinuationLoopBoundary(key, state, decision, 1)
+	return r.maybeOfferNextOperationPhaseAfterContinuationBoundary(ctx, key, state, decision)
 }
 
 func (r *Runtime) notifyTurnBudgetRecoveryFailure(ctx context.Context, msg core.InboundMessage, recovery *core.TurnRecovery, maxHops int, err error, decision recoveryDecision) {

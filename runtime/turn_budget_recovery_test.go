@@ -174,6 +174,7 @@ func TestBudgetRecoveryResumedWorkEvidenceClosesConsumedPhaseAndOffersNext(t *te
 					BoundedEffect:    "Inspect generated artifact metadata and report status.",
 					AllowedActions:   []string{"inspect_artifact", "report_findings"},
 					ForbiddenActions: []string{"edit_files", "commit", "push_remote", "deploy"},
+					RequiresApproval: true,
 				},
 			},
 		},

@@ -116,7 +116,7 @@ func continuationApprovalBundlePhasesFromOperation(opState session.OperationStat
 			ID:                       id,
 			OperationPhaseID:         firstNonEmptyContinuation(phase.ID, fmt.Sprintf("phase-%d", i+1)),
 			Index:                    phaseIndex,
-			PhaseFingerprint:         operationPhaseFingerprint(opState, phase, i),
+			PhaseFingerprint:         operationPhaseFingerprint(opState, phase, phaseIndex-1),
 			OperatorTitle:            firstNonEmptyContinuation(phase.OperatorTitle, phase.PlanTitle, continuationPlanTitleFromText(phase.Summary)),
 			PlanTitle:                firstNonEmptyContinuation(phase.PlanTitle, phase.OperatorTitle, continuationPlanTitleFromText(phase.Summary)),
 			Summary:                  strings.TrimSpace(phase.Summary),
@@ -154,9 +154,6 @@ func (r *Runtime) validateContinuationApprovalBundleFingerprints(key session.Ses
 		return fmt.Errorf("approval bundle phase plan changed: %w", core.ErrContinuationStale)
 	}
 	planPhases := opState.PhasePlan.Phases
-	if got := operationPhasePlanFingerprint(opState, planPhases); got != "" && strings.TrimSpace(bundle.PlanFingerprint) != "" && got != strings.TrimSpace(bundle.PlanFingerprint) {
-		return fmt.Errorf("approval bundle plan fingerprint changed: %w", core.ErrContinuationStale)
-	}
 	byOperationPhaseID := make(map[string]session.OperationPhase, len(planPhases))
 	byOperationPhaseIndex := make(map[string]int, len(planPhases))
 	for i, phase := range planPhases {
@@ -168,9 +165,10 @@ func (r *Runtime) validateContinuationApprovalBundleFingerprints(key session.Ses
 		byOperationPhaseID[id] = phase
 		byOperationPhaseIndex[id] = i
 	}
+	selectedPhases := make([]session.OperationPhase, 0, len(bundle.Phases))
 	for _, token := range bundle.Phases {
 		token = session.NormalizeContinuationApprovalBundlePhase(token)
-		if token.Status == session.ContinuationLeaseStatusDeferred || token.Status == session.ContinuationLeaseStatusConsumed || strings.TrimSpace(token.PhaseFingerprint) == "" {
+		if token.Status == session.ContinuationLeaseStatusDeferred {
 			continue
 		}
 		phaseID := strings.TrimSpace(token.OperationPhaseID)
@@ -178,18 +176,78 @@ func (r *Runtime) validateContinuationApprovalBundleFingerprints(key session.Ses
 		if !ok {
 			return fmt.Errorf("approval bundle phase missing: %w", core.ErrContinuationStale)
 		}
+		selectedPhases = append(selectedPhases, phase)
+		if token.Status == session.ContinuationLeaseStatusConsumed || strings.TrimSpace(token.PhaseFingerprint) == "" {
+			continue
+		}
 		if !continuationApprovalBundlePhaseMatchesOperation(opState, token, phase, byOperationPhaseIndex[phaseID]) {
 			return fmt.Errorf("approval bundle phase fingerprint changed: %w", core.ErrContinuationStale)
 		}
 	}
+	if got := operationPhasePlanFingerprint(opState, selectedPhases); got != "" && strings.TrimSpace(bundle.PlanFingerprint) != "" && got != strings.TrimSpace(bundle.PlanFingerprint) {
+		return fmt.Errorf("approval bundle plan fingerprint changed: %w", core.ErrContinuationStale)
+	}
 	return nil
+}
+
+func (r *Runtime) refreshContinuationApprovalBundleFingerprint(key session.SessionKey, state session.ContinuationState) (session.ContinuationState, error) {
+	state = session.NormalizeContinuationState(state)
+	bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle)
+	if !bundle.Active() || len(bundle.Phases) == 0 {
+		return state, nil
+	}
+	opState, err := r.store.OperationState(key)
+	if err != nil {
+		return state, err
+	}
+	opState = session.NormalizeOperationState(opState)
+	byOperationPhaseID := make(map[string]session.OperationPhase, len(opState.PhasePlan.Phases))
+	byOperationPhaseIndex := make(map[string]int, len(opState.PhasePlan.Phases))
+	for i, phase := range opState.PhasePlan.Phases {
+		phase = normalizeSingleOperationPhase(phase)
+		id := strings.TrimSpace(phase.ID)
+		if id == "" {
+			id = fmt.Sprintf("phase-%d", i+1)
+		}
+		byOperationPhaseID[id] = phase
+		byOperationPhaseIndex[id] = i
+	}
+	selectedPhases := make([]session.OperationPhase, 0, len(bundle.Phases))
+	for i := range bundle.Phases {
+		if bundle.Phases[i].Status == session.ContinuationLeaseStatusDeferred {
+			continue
+		}
+		phaseID := strings.TrimSpace(bundle.Phases[i].OperationPhaseID)
+		phase, ok := byOperationPhaseID[phaseID]
+		if !ok {
+			continue
+		}
+		selectedPhases = append(selectedPhases, phase)
+		bundle.Phases[i].PhaseFingerprint = operationPhaseFingerprint(opState, phase, byOperationPhaseIndex[phaseID])
+	}
+	if len(selectedPhases) > 0 {
+		bundle.PlanFingerprint = operationPhasePlanFingerprint(opState, selectedPhases)
+	}
+	state.ApprovalBundle = session.NormalizeContinuationApprovalBundle(bundle)
+	return session.NormalizeContinuationState(state), nil
 }
 
 func operationPhasePlanFingerprint(opState session.OperationState, phases []session.OperationPhase) string {
 	opState = session.NormalizeOperationState(opState)
+	planIndexes := make(map[string]int, len(opState.PhasePlan.Phases))
+	for i, phase := range opState.PhasePlan.Phases {
+		if id := strings.TrimSpace(phase.ID); id != "" {
+			planIndexes[id] = i
+		}
+	}
 	entries := make([]string, 0, len(phases))
 	for i, phase := range phases {
-		entries = append(entries, operationPhaseFingerprint(opState, phase, i))
+		phase = normalizeSingleOperationPhase(phase)
+		index := i
+		if planIndex, ok := planIndexes[strings.TrimSpace(phase.ID)]; ok {
+			index = planIndex
+		}
+		entries = append(entries, operationPhaseFingerprint(opState, phase, index))
 	}
 	return stableOperationBundleFingerprint(map[string]any{
 		"operation_id":  strings.TrimSpace(opState.ID),
