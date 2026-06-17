@@ -314,6 +314,66 @@ func TestEvalLocalModeDoesNotRequireConfigOrRoutes(t *testing.T) {
 	}
 }
 
+func TestEvalModelBakeoffCommandLocalGovernorRendersJSON(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"model-bakeoff", "--role", "governor", "--mode", "local", "--suites", "canonical", "--scenario", "token_budget_recovery_no_dead_end", "--rollouts", "1", "--format", "json"}, &out)
+	if err != nil {
+		t.Fatalf("eval model-bakeoff err = %v\n%s", err, out.String())
+	}
+	var report evalModelBakeoffReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("decode model bakeoff JSON: %v\n%s", err, out.String())
+	}
+	if report.Role != "governor" || report.RoleStatus != "runnable" || report.ResultCount != 1 || len(report.Routes) != 1 || len(report.SuiteReports) != 1 {
+		t.Fatalf("report = %#v", report)
+	}
+	if report.Routes[0].PassRate != 1 || report.Routes[0].EstimatedPromptTokens == 0 {
+		t.Fatalf("route summary = %#v, want pass and cost evidence", report.Routes[0])
+	}
+	if len(report.RoleReadiness) < 4 {
+		t.Fatalf("role readiness = %#v, want scaffolded non-governor roles included", report.RoleReadiness)
+	}
+}
+
+func TestEvalModelBakeoffCommandSupportsMultipleLocalRoutes(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"model-bakeoff", "--role", "governor", "--mode", "local", "--routes", "local:a,local:b", "--suites", "canonical", "--scenario", "token_budget_recovery_no_dead_end", "--rollouts", "1", "--format", "json"}, &out)
+	if err != nil {
+		t.Fatalf("eval model-bakeoff err = %v\n%s", err, out.String())
+	}
+	var report evalModelBakeoffReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("decode model bakeoff JSON: %v\n%s", err, out.String())
+	}
+	if len(report.Routes) != 2 || report.Routes[0].Route != "local:a" || report.Routes[1].Route != "local:b" {
+		t.Fatalf("routes = %#v, want stable local route aggregation", report.Routes)
+	}
+}
+
+func TestEvalModelBakeoffCommandRejectsScaffoldedRole(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"model-bakeoff", "--role", "persona", "--mode", "local", "--format", "json"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "not runnable") {
+		t.Fatalf("eval model-bakeoff err = %v, want scaffolded role error", err)
+	}
+}
+
+func TestEvalModelBakeoffCommandRejectsAttackCorpusForMixedSuites(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"model-bakeoff", "--role", "governor", "--mode", "local", "--suites", "canonical,boundary_attack", "--attack-corpus", filepath.Join(t.TempDir(), "corpus.json"), "--format", "json"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "requires --suites boundary_attack") {
+		t.Fatalf("eval model-bakeoff err = %v, want attack corpus suite error", err)
+	}
+}
+
 func TestEvalGateCommandRendersMarkdown(t *testing.T) {
 	t.Parallel()
 

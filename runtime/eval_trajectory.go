@@ -175,6 +175,7 @@ func (g *evalTrajectoryGovernor) Execute(ctx context.Context, req turn.GovernorR
 			if err == nil {
 				content = strings.TrimSpace(resp.Content)
 				usage = resp.Usage
+				evalRecordProviderUsage(g.e, usage)
 				break
 			}
 			lastErr = fmt.Errorf("live trajectory eval provider %s: %w", g.e.Route.Name, err)

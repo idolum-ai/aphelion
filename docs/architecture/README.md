@@ -36,6 +36,7 @@ These invariants are normative for architecture and requirements alignment:
 - [design-principles.md](design-principles.md): project-level design principles for Aphelion as a governed, locally operable outpost.
 - [influences-and-departures.md](influences-and-departures.md): attribution ledger for nearby systems, theory, and the points where Aphelion deliberately diverges.
 - [agency-evaluation-methodology.md](agency-evaluation-methodology.md): grounded behavioral methodology for measuring agency prompt quality, drift, and hard authority failures.
+- [per-role-model-evaluation.md](per-role-model-evaluation.md): draft methodology for evidence-backed model bakeoffs and per-role cost/quality frontiers.
 - [principle-debt.md](principle-debt.md): active implementation gaps against the design principles.
 - [package-ownership.md](package-ownership.md): runtime/turn/pipeline ownership boundaries.
 - [memory-perception-budget.md](memory-perception-budget.md): memory as governed perception under context scarcity, with posture-specific layer accounting.

@@ -48,6 +48,8 @@ func runEvalCommandWithDeps(args []string, out io.Writer) error {
 		return runEvalListCommand(args[1:], out)
 	case "run":
 		return runEvalRunCommand(args[1:], out)
+	case "model-bakeoff":
+		return runEvalModelBakeoffCommand(args[1:], out)
 	case "attack-corpus":
 		return runEvalAttackCorpusCommand(args[1:], out)
 	case "compare":
@@ -953,13 +955,14 @@ func evalReportFailureError(report aphruntime.EvalReport) error {
 }
 
 func renderEvalCommandHelp(note string) string {
-	lines := []string{"Aphelion eval", "Usage:", "  aphelion eval list [--suite canonical|trajectory|boundary_attack] [--format human|kv|json]", "  aphelion eval run [--suite canonical|trajectory|boundary_attack] [--mode local|live] [--subject eval|governor] [--rollouts N] [--jobs N] [--routes configured|provider:model,...] [--attacker-routes subject|configured|provider:model,...] [--attack-corpus corpus.json] [--max-attacks-per-scenario N] [--scenario id[,id]] [--scoring deterministic|judge] [--judge-routes configured|provider:model,...] [--judge-quorum pair|single] [--trace redacted|minimal] [--progress] [--format human|kv|json] [--out report.json]", "  aphelion eval attack-corpus generate [--mode local|live] [--profile boundary|redteam] [--attacker-routes configured|provider:model,...] [--scenario id[,id]] [--per-scenario N] [--jobs N] [--progress] [--out corpus.json]", "  aphelion eval compare --before baseline.json --after branch.json [--format markdown|json] [--out impact.md]", "  aphelion eval gate --before base1.json,base2.json --after branch1.json,branch2.json [--format markdown|json] [--out gate.md]", ""}
+	lines := []string{"Aphelion eval", "Usage:", "  aphelion eval list [--suite canonical|trajectory|boundary_attack] [--format human|kv|json]", "  aphelion eval run [--suite canonical|trajectory|boundary_attack] [--mode local|live] [--subject eval|governor] [--rollouts N] [--jobs N] [--routes configured|provider:model,...] [--attacker-routes subject|configured|provider:model,...] [--attack-corpus corpus.json] [--max-attacks-per-scenario N] [--scenario id[,id]] [--scoring deterministic|judge] [--judge-routes configured|provider:model,...] [--judge-quorum pair|single] [--trace redacted|minimal] [--progress] [--format human|kv|json] [--out report.json]", "  aphelion eval model-bakeoff [--role governor] [--suites canonical,trajectory,boundary_attack] [--mode local|live] [--routes configured|provider:model,...] [--rollouts N] [--jobs N] [--format human|markdown|json] [--out report.json]", "  aphelion eval attack-corpus generate [--mode local|live] [--profile boundary|redteam] [--attacker-routes configured|provider:model,...] [--scenario id[,id]] [--per-scenario N] [--jobs N] [--progress] [--out corpus.json]", "  aphelion eval compare --before baseline.json --after branch.json [--format markdown|json] [--out impact.md]", "  aphelion eval gate --before base1.json,base2.json --after branch1.json,branch2.json [--format markdown|json] [--out gate.md]", ""}
 	if note = strings.TrimSpace(note); note != "" {
 		lines = append([]string{note, ""}, lines...)
 	}
 	lines = append(lines,
 		"Local mode uses deterministic scripted providers and simulated external effects.",
 		"Live mode uses configured provider routes but still simulates GitHub, deploy, Tailscale, child, and private-content effects.",
+		"model-bakeoff reports evidence for per-role model selection; v1 is runnable for governor and changes no model-slot config.",
 		"boundary_attack adds transcript-driven attacker turns; --attacker-routes subject reuses the subject route without multiplying jobs.",
 		"attack-corpus generate spends attacker tokens once; eval run --attack-corpus replays fixed attacks without attacker-provider calls.",
 		"--jobs bounds the worker pool across route/scenario/rollout eval jobs; it does not parallelize within one eval job.",

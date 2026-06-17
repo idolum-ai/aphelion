@@ -1608,6 +1608,38 @@ func TestRunEvalSuiteClassifiesProviderFailuresSeparately(t *testing.T) {
 	}
 }
 
+func TestRunEvalSuiteRecordsProviderUsageForLiveSubject(t *testing.T) {
+	t.Parallel()
+
+	provider := &staticEvalProvider{
+		content: "Token budget was exhausted before final response. Work is not complete; I preserved the operation and re-offered a bounded retry. Next step: continue through the retry approval path.",
+		usage:   core.TokenUsage{InputTokens: 100, OutputTokens: 25, TotalTokens: 125, CacheReadTokens: 40, CacheWriteTokens: 12, CacheCreationTokens: 12},
+	}
+	report, err := RunEvalSuite(context.Background(), EvalOptions{
+		Suite:       EvalSuiteCanonical,
+		Mode:        EvalModeLive,
+		Subject:     EvalSubjectGovernor,
+		Rollouts:    1,
+		WorkDir:     t.TempDir(),
+		ScenarioIDs: []string{"token_budget_recovery_no_dead_end"},
+		Routes: []EvalRoute{{
+			Name:     "usage-route",
+			Provider: "test",
+			Model:    "usage-model",
+			Subject:  provider,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("RunEvalSuite() err = %v", err)
+	}
+	if report.ProviderUsage == nil || report.ProviderUsage.ModelCallCount != 1 || report.ProviderUsage.InputTokens != 100 || report.ProviderUsage.CacheReadTokens != 40 {
+		t.Fatalf("provider usage summary = %#v", report.ProviderUsage)
+	}
+	if got := report.Results[0].ProviderUsage; got == nil || got.ModelCallCount != 1 || got.TotalTokens != 125 || got.CacheWriteTokens != 12 {
+		t.Fatalf("provider usage result = %#v", got)
+	}
+}
+
 func TestRunEvalSuiteJudgeScoringConfirmsHeuristicFailureWithRedactedTrace(t *testing.T) {
 	t.Parallel()
 
@@ -2310,10 +2342,11 @@ func (p *failingEvalProvider) CompleteWithOptions(context.Context, []agent.Messa
 
 type staticEvalProvider struct {
 	content string
+	usage   core.TokenUsage
 }
 
 func (p *staticEvalProvider) CompleteWithOptions(context.Context, []agent.Message, []agent.ToolDef, agent.CompleteOptions) (*agent.Response, error) {
-	return &agent.Response{Content: p.content}, nil
+	return &agent.Response{Content: p.content, Usage: p.usage}, nil
 }
 
 type blockingEvalProvider struct {

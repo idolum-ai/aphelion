@@ -137,6 +137,12 @@ The repo implements this methodology through complementary surfaces:
   accretion before a paid run. Small live canaries and production token/cache
   telemetry remain the source of truth for actual OpenAI/Anthropic cache
   discounts.
+- Per-role model bakeoffs: `aphelion eval model-bakeoff` wraps the runnable
+  governor suites and reports route frontiers for quality, context fidelity,
+  deterministic cost shape, provider-reported usage, provider failures, and
+  elapsed time. This is evidence for model selection, not a config mutator.
+  Non-governor roles remain scaffolded until their quality oracles are
+  calibrated.
 
 Secondary prompts follow the same split. Prompt surfaces that affect
 user-visible behavior, memory, authority, proactivity, or durable children need
@@ -178,6 +184,19 @@ then gate the paired reports:
 ```sh
 aphelion eval gate --before baseline.json --after branch.json --format markdown --out gate.md
 ```
+
+When the question is "which model should this role use?", run a bakeoff instead
+of hand-editing the model map:
+
+```sh
+aphelion eval model-bakeoff --role governor --mode live \
+  --routes openai:gpt-5.5,openai:gpt-5.4,anthropic:claude-sonnet-4-6 \
+  --suites canonical,trajectory,boundary_attack --rollouts 3 --out governor-bakeoff.json
+```
+
+Treat the result as a frontier: cheapest acceptable route, not globally best
+model. A route-local winner still needs a full-system validation pass before it
+becomes a live default.
 
 Before a release candidate that materially changes agency, authority,
 continuation, prompt behavior, or operator-facing control surfaces, cite a

@@ -141,6 +141,7 @@ turn intimacy into hidden authorization.
 | Face provider uses persona recipe. | `runtime_recipes.json` sets `persona_model=gpt-5.5`; face provider chain maps this to OpenAI GPT 5.5 and configured fallbacks. | Keep, but add clearer status projection if missing. |
 | Governor effort is separately configurable. | Live recipe sets `governor_effort=xhigh`; applies to interactive and recovery. | Keep, but evaluate whether `xhigh` should remain live default after prompt review. |
 | Face calls pass invisible provider options. | `face.ProviderRenderer` forwards reasoning effort/summary and mode-derived verbosity to providers that support options. Render defaults to medium verbosity; proposal, brokerage, and repair default to low. | Keep invisible. This is not an operator-facing personality control. |
+| Model defaults are hypotheses until measured. | `aphelion eval model-bakeoff --role governor` can compare configured or explicit routes across the runnable governor suites and report quality/cost/usage frontiers. | Use bakeoff evidence before changing governor defaults; do not promote persona/doctor/child defaults from uncalibrated prose judges. |
 
 ## Immediate Review Questions
 
@@ -157,6 +158,7 @@ turn intimacy into hidden authorization.
 ## Suggested Next Pass
 
 1. Run `make live-evals` before releases that materially change agency, authority, or face ownership prompts; run `make auto-evals` for narrower auto/proactive prompt changes. Set `APHELION_LIVE_EVAL_REPORT=/tmp/aphelion-live-evals.json` when you want persisted JSON reports for comparison.
-2. Add tests that assert model/provider paths for governor, face, heartbeat, recovery, and durable child wake.
-3. Review `memory/dreams.md` and decide what should be promoted into `memory/telos.md`, `memory/relationships.md`, or `memory/projects.md`.
-4. Add a first-class desire/proposal journal only if self-initiated creative time becomes frequent enough to need typed status tracking.
+2. Run `aphelion eval model-bakeoff --role governor --mode live` when changing governor model defaults or comparing provider routes. Treat the output as evidence for a frontier, not as an automatic config change.
+3. Add tests that assert model/provider paths for governor, face, heartbeat, recovery, and durable child wake.
+4. Review `memory/dreams.md` and decide what should be promoted into `memory/telos.md`, `memory/relationships.md`, or `memory/projects.md`.
+5. Add a first-class desire/proposal journal only if self-initiated creative time becomes frequent enough to need typed status tracking.

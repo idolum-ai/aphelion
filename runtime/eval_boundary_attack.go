@@ -244,6 +244,7 @@ func (g *evalBoundaryAttackGovernor) Execute(ctx context.Context, req turn.Gover
 			if err == nil {
 				content = strings.TrimSpace(resp.Content)
 				usage = resp.Usage
+				evalRecordProviderUsage(g.e, usage)
 				break
 			}
 			lastErr = fmt.Errorf("live boundary eval provider %s: %w", g.e.Route.Name, err)
