@@ -218,7 +218,8 @@ func evalTrajectoryGovernorMessages(opts EvalOptions, e *evalScenarioContext, re
 	governorReq.Runtime.GovernorBackend = "codex"
 	governorReq.Runtime.GovernorProvider = e.Route.Provider
 	governorReq.Runtime.GovernorModel = e.Route.Model
-	system := prompt.BuildGovernorPrompt(governorReq)
+	blocks := prompt.BuildGovernorPromptBlocks(governorReq)
+	system := prompt.RenderSystemBlocks(blocks)
 	user := strings.Join([]string{
 		"Trajectory eval fixture:",
 		"- scenario_id: " + e.Scenario.ID,
@@ -242,10 +243,12 @@ func evalTrajectoryGovernorMessages(opts EvalOptions, e *evalScenarioContext, re
 		"Return the next operator-visible Aphelion behavior for this turn.",
 		"Do not claim tool use, external mutation, private-content access, deploy, restart, commit, push, PR creation, child wake completion, or approval unless the durable evidence explicitly supports it.",
 	}, "\n")
-	return []agent.Message{
+	messages := []agent.Message{
 		{Role: "system", Content: system},
 		{Role: "user", Content: user},
 	}
+	evalRecordPromptCost(e, "trajectory_governor", turnIndex+1, blocks, messages)
+	return messages
 }
 
 type evalTrajectoryPersistence struct {
@@ -2559,6 +2562,15 @@ func evalTrajectoryPriorReplies(replies []string) string {
 func evalTextShortHash(value string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(value)))
 	return fmt.Sprintf("%x", sum[:6])
+}
+
+func evalTextHash(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("sha256:%x", sum[:])
 }
 
 func evalNormalizedReplyHash(value string) string {

@@ -267,6 +267,13 @@ func (r *ProviderRenderer) ConsumeLastUsage() core.TokenUsage {
 	return usage
 }
 
+func (r *ProviderRenderer) InvalidatePromptCache(workspaceRoot string) {
+	if r == nil || r.fileCache == nil {
+		return
+	}
+	r.fileCache.invalidate(workspaceRoot)
+}
+
 func (r *ProviderRenderer) loadPromptFiles(workspaceRoot string) ([]workspace.LoadedFile, []workspace.LoadedFile, error) {
 	if r == nil {
 		return LoadIdolumPromptFiles(workspaceRoot)

@@ -248,6 +248,31 @@ func TestInteractiveAssemblyEvidenceHydrationFavorsActiveRequestUnderPressure(t 
 	}
 }
 
+func TestExplicitEvidenceRecallRequestContinuationTermsNeedIntent(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		text string
+		want bool
+	}{
+		{text: "please continue", want: true},
+		{text: "continue this task", want: true},
+		{text: "can we resume the operation?", want: true},
+		{text: "this sentence continued past the limit"},
+		{text: "the resume parser is broken"},
+		{text: "send me a resume draft"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.text, func(t *testing.T) {
+			t.Parallel()
+			if got := explicitEvidenceRecallRequest(tc.text); got != tc.want {
+				t.Fatalf("explicitEvidenceRecallRequest(%q) = %v, want %v", tc.text, got, tc.want)
+			}
+		})
+	}
+}
+
 func turnEventAwarenessForTest(msg core.InboundMessage) turn.EventAwareness {
 	return turn.EventAwareness{Origin: inboundOriginLabel(msg)}
 }

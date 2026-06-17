@@ -162,6 +162,9 @@ Runtime decrements budget from actual provider usage when available and from est
 - Unit tests for future admission classes and digest schema normalization.
 - Golden prompt tests showing large tool results become digest refs, not raw dumps.
 - Runtime tests that budget exhaustion creates typed blocker/status, not silent truncation.
+- Eval cost-fidelity reports that track estimated prompt tokens, model-call
+  count, cache-eligible stable prefixes, and stable-prefix hash stability before
+  paid provider canaries.
 - Telemetry checks: prompt estimated tokens, actual provider input tokens, cache-read ratio, digest token savings, and retry count.
 - Regression tests that execution-event evidence remains accessible through status/doctor even when omitted from prompt.
 

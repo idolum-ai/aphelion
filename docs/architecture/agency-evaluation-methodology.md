@@ -129,6 +129,14 @@ The repo implements this methodology through complementary surfaces:
   iterative inference pressure. The target is not merely "good next steps";
   the target is rehydrating the underlying evidence objects instead of
   compounding summaries into new facts.
+- Cost-fidelity metrics: local evals record deterministic prompt-cost evidence
+  while assembling the real governor prompt: estimated prompt tokens,
+  model-call count, stable-prefix hash stability, cache-eligible prefix count,
+  and dynamic-lookback omissions. These metrics do not claim real provider
+  billing discounts; they ratchet the cache preconditions and catch prompt
+  accretion before a paid run. Small live canaries and production token/cache
+  telemetry remain the source of truth for actual OpenAI/Anthropic cache
+  discounts.
 
 Secondary prompts follow the same split. Prompt surfaces that affect
 user-visible behavior, memory, authority, proactivity, or durable children need
@@ -298,7 +306,8 @@ runtime action, memory writes, leases, or consent.
   deterministic hard-failure scanners, judge parsing, score aggregation, and
   human/KV/JSON report rendering.
 - `eval_command.go` and `runtime/eval.go`: canonical local/live scenario runner,
-  report comparison, and baseline-vs-branch stability gate.
+  report comparison, context/cost fidelity summaries, and baseline-vs-branch
+  stability gate.
 - `runtime/eval_boundary_attack.go`: transcript-driven attacker replay and typed
   bounty-condition oracles for authority, completion evidence, capability
   grants, and approval-surface fidelity.

@@ -127,6 +127,7 @@ type EvalReport struct {
 	AmbiguousCount         int                         `json:"ambiguous_count,omitempty"`
 	HardFailureRate        float64                     `json:"hard_failure_rate"`
 	ContextFidelity        *EvalContextFidelitySummary `json:"context_fidelity_summary,omitempty"`
+	CostFidelity           *EvalCostFidelitySummary    `json:"cost_fidelity_summary,omitempty"`
 	Failed                 bool                        `json:"failed"`
 	Results                []EvalScenarioResult        `json:"results"`
 }
@@ -167,6 +168,7 @@ type EvalScenarioResult struct {
 	CandidateTrace   string                     `json:"candidate_trace,omitempty"`
 	AttackTrace      []EvalAttackTurn           `json:"attack_trace,omitempty"`
 	ContextFidelity  *EvalContextFidelityResult `json:"context_fidelity,omitempty"`
+	CostFidelity     *EvalCostFidelityResult    `json:"cost_fidelity,omitempty"`
 	Error            string                     `json:"error,omitempty"`
 }
 
@@ -208,6 +210,42 @@ type EvalContextFidelityCell struct {
 	HydrationHitRate               float64 `json:"hydration_hit_rate"`
 	CrossThreadLeakRate            float64 `json:"cross_thread_leak_rate"`
 	EvidenceReferenceRetentionRate float64 `json:"evidence_reference_retention_rate,omitempty"`
+}
+
+type EvalCostFidelityResult struct {
+	PromptCount              int  `json:"prompt_count"`
+	ModelCallCount           int  `json:"model_call_count"`
+	EstimatedPromptTokens    int  `json:"estimated_prompt_tokens"`
+	MaxPromptTokens          int  `json:"max_prompt_tokens"`
+	CacheEligiblePromptCount int  `json:"cache_eligible_prompt_count,omitempty"`
+	StablePrefixHashCount    int  `json:"stable_prefix_hash_count,omitempty"`
+	StablePrefixStable       bool `json:"stable_prefix_stable"`
+	DynamicLookbackOmissions int  `json:"dynamic_lookback_omissions,omitempty"`
+	Clean                    bool `json:"clean"`
+}
+
+type EvalCostFidelitySummary struct {
+	TotalResults              int                    `json:"total_results"`
+	CleanResults              int                    `json:"clean_results"`
+	PromptCount               int                    `json:"prompt_count"`
+	ModelCallCount            int                    `json:"model_call_count"`
+	EstimatedPromptTokens     int                    `json:"estimated_prompt_tokens"`
+	MaxPromptTokens           int                    `json:"max_prompt_tokens"`
+	CacheEligiblePromptCount  int                    `json:"cache_eligible_prompt_count,omitempty"`
+	StablePrefixStableCount   int                    `json:"stable_prefix_stable_count"`
+	StablePrefixStabilityRate float64                `json:"stable_prefix_stability_rate"`
+	DynamicLookbackOmissions  int                    `json:"dynamic_lookback_omissions,omitempty"`
+	Cells                     []EvalCostFidelityCell `json:"cells,omitempty"`
+}
+
+type EvalCostFidelityCell struct {
+	Route                     string  `json:"route"`
+	ScenarioID                string  `json:"scenario_id"`
+	CleanResults              int     `json:"clean_results"`
+	EstimatedPromptTokens     int     `json:"estimated_prompt_tokens"`
+	MaxPromptTokens           int     `json:"max_prompt_tokens"`
+	ModelCallCount            int     `json:"model_call_count"`
+	StablePrefixStabilityRate float64 `json:"stable_prefix_stability_rate"`
 }
 
 type EvalAttackTurn struct {
@@ -283,6 +321,7 @@ type EvalComparisonSummary struct {
 	AmbiguousCount       int                         `json:"ambiguous_count,omitempty"`
 	HardFailureRate      float64                     `json:"hard_failure_rate"`
 	ContextFidelity      *EvalContextFidelitySummary `json:"context_fidelity_summary,omitempty"`
+	CostFidelity         *EvalCostFidelitySummary    `json:"cost_fidelity_summary,omitempty"`
 }
 
 type EvalScenarioDelta struct {
@@ -392,6 +431,16 @@ type evalScenarioContext struct {
 	AttackTrace      []EvalAttackTurn
 	AttackCase       *EvalAttackCorpusCase
 	ApprovalSurfaces []evalBoundaryApprovalSurface
+	PromptCosts      []evalPromptCostObservation
+}
+
+type evalPromptCostObservation struct {
+	Lane                string
+	TurnIndex           int
+	EstimatedTokens     int
+	StablePrefixHash    string
+	StablePrefixTokens  int
+	DynamicOmissionSeen bool
 }
 
 func ListEvalScenarios(suite string) ([]EvalScenarioInfo, error) {
@@ -685,6 +734,7 @@ func finalizeEvalReport(report *EvalReport) {
 	report.ResultCount = len(report.Results)
 	report.HardFailureRate = evalRate(report.HardFailureCount, report.ResultCount)
 	report.ContextFidelity = evalContextFidelitySummary(report.Results)
+	report.CostFidelity = evalCostFidelitySummary(report.Results)
 	report.Failed = report.HardFailureCount > 0
 }
 
@@ -754,6 +804,7 @@ func RenderEvalComparisonMarkdown(comparison EvalComparison) string {
 	fmt.Fprintf(&b, "| Provider failures | %d | %d | %+d |\n", comparison.Before.ProviderFailureCount, comparison.After.ProviderFailureCount, comparison.After.ProviderFailureCount-comparison.Before.ProviderFailureCount)
 	fmt.Fprintf(&b, "| Ambiguous results | %d | %d | %+d |\n\n", comparison.Before.AmbiguousCount, comparison.After.AmbiguousCount, comparison.After.AmbiguousCount-comparison.Before.AmbiguousCount)
 	renderEvalContextFidelityComparisonTable(&b, comparison.Before.ContextFidelity, comparison.After.ContextFidelity)
+	renderEvalCostFidelityComparisonTable(&b, comparison.Before.CostFidelity, comparison.After.CostFidelity)
 	fmt.Fprintf(&b, "Context: suite `%s`, subject `%s -> %s`, scenario revision `%s -> %s`, rollouts `%d -> %d`, routes `%d -> %d`.\n\n", comparison.After.Suite, comparison.Before.SubjectMode, comparison.After.SubjectMode, comparison.Before.ScenarioRevision, comparison.After.ScenarioRevision, comparison.Before.Rollouts, comparison.After.Rollouts, comparison.Before.RouteCount, comparison.After.RouteCount)
 	fmt.Fprintf(&b, "### Scenario Deltas\n\n")
 	fmt.Fprintf(&b, "| Scenario | Baseline hard | Branch hard | Delta rate | Provider failures | Ambiguous |\n")
@@ -848,6 +899,7 @@ func GateEvalReports(beforeReports []EvalReport, afterReports []EvalReport) (Eva
 		}
 	}
 	report.Reasons = append(report.Reasons, evalContextFidelityGateReasons(before.ContextFidelity, after.ContextFidelity)...)
+	report.Reasons = append(report.Reasons, evalCostFidelityGateReasons(before.CostFidelity, after.CostFidelity)...)
 	report.RepresentativeTraces = representativeEvalTraces(before, after)
 	report.Reasons = dedupeEvalStrings(report.Reasons)
 	report.Passed = len(report.Reasons) == 0
@@ -870,6 +922,7 @@ func RenderEvalGateMarkdown(report EvalGateReport) string {
 	fmt.Fprintf(&b, "| Provider failures | %d | %d | %+d |\n", report.Before.ProviderFailureCount, report.After.ProviderFailureCount, report.ProviderFailureDelta)
 	fmt.Fprintf(&b, "| Ambiguous results | %d | %d | %+d |\n\n", report.Before.AmbiguousCount, report.After.AmbiguousCount, report.AmbiguousDelta)
 	renderEvalContextFidelityComparisonTable(&b, report.Before.ContextFidelity, report.After.ContextFidelity)
+	renderEvalCostFidelityComparisonTable(&b, report.Before.CostFidelity, report.After.CostFidelity)
 	fmt.Fprintf(&b, "Context: suite `%s`, subject `%s`, scenario revision `%s`, rollouts `%d`, routes `%d`.\n\n", report.After.Suite, report.After.SubjectMode, report.After.ScenarioRevision, report.After.Rollouts, report.After.RouteCount)
 	if report.StabilityOnly && report.Passed {
 		fmt.Fprintf(&b, "Gate mode: clean-baseline stability check; no hard-failure improvement was available, so the gate required no hard, provider, ambiguous, or scenario regressions.\n\n")
@@ -915,6 +968,20 @@ func renderEvalContextFidelityComparisonTable(b *strings.Builder, before *EvalCo
 	fmt.Fprintf(b, "| Evidence-reference retention | %.2f%% | %.2f%% | %+.2f%% |\n\n", evalContextRetentionRate(before)*100, evalContextRetentionRate(after)*100, (evalContextRetentionRate(after)-evalContextRetentionRate(before))*100)
 }
 
+func renderEvalCostFidelityComparisonTable(b *strings.Builder, before *EvalCostFidelitySummary, after *EvalCostFidelitySummary) {
+	if before == nil && after == nil {
+		return
+	}
+	fmt.Fprintf(b, "### Cost Fidelity\n\n")
+	fmt.Fprintf(b, "| Metric | Baseline | Branch | Delta |\n")
+	fmt.Fprintf(b, "| --- | ---: | ---: | ---: |\n")
+	fmt.Fprintf(b, "| Clean samples | %d | %d | %+d |\n", evalCostCleanResults(before), evalCostCleanResults(after), evalCostCleanResults(after)-evalCostCleanResults(before))
+	fmt.Fprintf(b, "| Estimated prompt tokens | %d | %d | %+d |\n", evalCostEstimatedPromptTokens(before), evalCostEstimatedPromptTokens(after), evalCostEstimatedPromptTokens(after)-evalCostEstimatedPromptTokens(before))
+	fmt.Fprintf(b, "| Max prompt tokens | %d | %d | %+d |\n", evalCostMaxPromptTokens(before), evalCostMaxPromptTokens(after), evalCostMaxPromptTokens(after)-evalCostMaxPromptTokens(before))
+	fmt.Fprintf(b, "| Model calls | %d | %d | %+d |\n", evalCostModelCallCount(before), evalCostModelCallCount(after), evalCostModelCallCount(after)-evalCostModelCallCount(before))
+	fmt.Fprintf(b, "| Stable-prefix stability | %.2f%% | %.2f%% | %+.2f%% |\n\n", evalCostStablePrefixRate(before)*100, evalCostStablePrefixRate(after)*100, (evalCostStablePrefixRate(after)-evalCostStablePrefixRate(before))*100)
+}
+
 func evalContextCleanResults(summary *EvalContextFidelitySummary) int {
 	if summary == nil {
 		return 0
@@ -941,6 +1008,41 @@ func evalContextRetentionRate(summary *EvalContextFidelitySummary) float64 {
 		return 0
 	}
 	return summary.EvidenceReferenceRetentionRate
+}
+
+func evalCostCleanResults(summary *EvalCostFidelitySummary) int {
+	if summary == nil {
+		return 0
+	}
+	return summary.CleanResults
+}
+
+func evalCostEstimatedPromptTokens(summary *EvalCostFidelitySummary) int {
+	if summary == nil {
+		return 0
+	}
+	return summary.EstimatedPromptTokens
+}
+
+func evalCostMaxPromptTokens(summary *EvalCostFidelitySummary) int {
+	if summary == nil {
+		return 0
+	}
+	return summary.MaxPromptTokens
+}
+
+func evalCostModelCallCount(summary *EvalCostFidelitySummary) int {
+	if summary == nil {
+		return 0
+	}
+	return summary.ModelCallCount
+}
+
+func evalCostStablePrefixRate(summary *EvalCostFidelitySummary) float64 {
+	if summary == nil {
+		return 0
+	}
+	return summary.StablePrefixStabilityRate
 }
 
 func evalContextFidelityGateReasons(before *EvalContextFidelitySummary, after *EvalContextFidelitySummary) []string {
@@ -987,6 +1089,26 @@ func evalContextFidelityGateReasons(before *EvalContextFidelitySummary, after *E
 	return reasons
 }
 
+func evalCostFidelityGateReasons(before *EvalCostFidelitySummary, after *EvalCostFidelitySummary) []string {
+	if after == nil || before == nil || before.CleanResults == 0 || after.CleanResults == 0 {
+		return nil
+	}
+	var reasons []string
+	if after.EstimatedPromptTokens > before.EstimatedPromptTokens {
+		reasons = append(reasons, fmt.Sprintf("cost fidelity estimated prompt tokens regressed: %d -> %d", before.EstimatedPromptTokens, after.EstimatedPromptTokens))
+	}
+	if after.MaxPromptTokens > before.MaxPromptTokens {
+		reasons = append(reasons, fmt.Sprintf("cost fidelity max prompt tokens regressed: %d -> %d", before.MaxPromptTokens, after.MaxPromptTokens))
+	}
+	if after.ModelCallCount > before.ModelCallCount {
+		reasons = append(reasons, fmt.Sprintf("cost fidelity model calls regressed: %d -> %d", before.ModelCallCount, after.ModelCallCount))
+	}
+	if after.StablePrefixStabilityRate < before.StablePrefixStabilityRate {
+		reasons = append(reasons, fmt.Sprintf("cost fidelity stable-prefix stability regressed: %.2f%% -> %.2f%%", before.StablePrefixStabilityRate*100, after.StablePrefixStabilityRate*100))
+	}
+	return reasons
+}
+
 type evalScenarioStats struct {
 	results               int
 	hardFailures          int
@@ -1011,6 +1133,7 @@ func evalComparisonSummary(report EvalReport) EvalComparisonSummary {
 		AmbiguousCount:       report.AmbiguousCount,
 		HardFailureRate:      report.HardFailureRate,
 		ContextFidelity:      report.ContextFidelity,
+		CostFidelity:         report.CostFidelity,
 	}
 }
 
@@ -1342,6 +1465,152 @@ func evalContextFidelitySummary(results []EvalScenarioResult) *EvalContextFideli
 			out.EvidenceReferenceRetentionRate = evalRate(cell.retained, cell.retention)
 		}
 		summary.Cells = append(summary.Cells, out)
+	}
+	return &summary
+}
+
+func evalRecordPromptCost(e *evalScenarioContext, lane string, turnIndex int, blocks []agent.SystemBlock, messages []agent.Message) {
+	if e == nil || len(messages) == 0 {
+		return
+	}
+	estimated := 0
+	omission := false
+	for _, msg := range messages {
+		estimated += estimateAgentMessageTokens(msg)
+		if strings.Contains(msg.Content, "Cache-aware lookback omitted older dynamic files this turn") {
+			omission = true
+		}
+	}
+	stablePrefix := evalStablePromptPrefix(blocks, messages)
+	e.PromptCosts = append(e.PromptCosts, evalPromptCostObservation{
+		Lane:                strings.TrimSpace(lane),
+		TurnIndex:           turnIndex,
+		EstimatedTokens:     estimated,
+		StablePrefixHash:    evalTextHash(stablePrefix),
+		StablePrefixTokens:  estimateTextTokens(stablePrefix),
+		DynamicOmissionSeen: omission,
+	})
+}
+
+func evalStablePromptPrefix(blocks []agent.SystemBlock, messages []agent.Message) string {
+	if len(blocks) > 0 {
+		lastBreakpoint := -1
+		for i, block := range blocks {
+			if block.CacheBreakpoint {
+				lastBreakpoint = i
+			}
+		}
+		if lastBreakpoint >= 0 {
+			return prompt.RenderSystemBlocks(blocks[:lastBreakpoint+1])
+		}
+	}
+	for _, msg := range messages {
+		if strings.TrimSpace(msg.Role) == "system" {
+			return strings.TrimSpace(msg.Content)
+		}
+	}
+	return ""
+}
+
+func evalCostFidelityResult(e *evalScenarioContext, providerFailure bool) *EvalCostFidelityResult {
+	if e == nil || len(e.PromptCosts) == 0 {
+		return nil
+	}
+	hashes := map[string]bool{}
+	result := EvalCostFidelityResult{
+		PromptCount:    len(e.PromptCosts),
+		ModelCallCount: len(e.PromptCosts),
+		Clean:          !providerFailure,
+	}
+	for _, observation := range e.PromptCosts {
+		result.EstimatedPromptTokens += observation.EstimatedTokens
+		if observation.EstimatedTokens > result.MaxPromptTokens {
+			result.MaxPromptTokens = observation.EstimatedTokens
+		}
+		if observation.StablePrefixTokens >= 1024 {
+			result.CacheEligiblePromptCount++
+		}
+		if strings.TrimSpace(observation.StablePrefixHash) != "" {
+			hashes[observation.StablePrefixHash] = true
+		}
+		if observation.DynamicOmissionSeen {
+			result.DynamicLookbackOmissions++
+		}
+	}
+	result.StablePrefixHashCount = len(hashes)
+	result.StablePrefixStable = result.StablePrefixHashCount <= 1
+	return &result
+}
+
+func evalCostFidelitySummary(results []EvalScenarioResult) *EvalCostFidelitySummary {
+	type cellStats struct {
+		clean          int
+		stable         int
+		promptTokens   int
+		maxPrompt      int
+		modelCallCount int
+	}
+	summary := EvalCostFidelitySummary{}
+	cells := map[string]*cellStats{}
+	for _, result := range results {
+		metrics := result.CostFidelity
+		if metrics == nil {
+			continue
+		}
+		summary.TotalResults++
+		if !metrics.Clean {
+			continue
+		}
+		summary.CleanResults++
+		summary.PromptCount += metrics.PromptCount
+		summary.ModelCallCount += metrics.ModelCallCount
+		summary.EstimatedPromptTokens += metrics.EstimatedPromptTokens
+		if metrics.MaxPromptTokens > summary.MaxPromptTokens {
+			summary.MaxPromptTokens = metrics.MaxPromptTokens
+		}
+		summary.CacheEligiblePromptCount += metrics.CacheEligiblePromptCount
+		if metrics.StablePrefixStable {
+			summary.StablePrefixStableCount++
+		}
+		summary.DynamicLookbackOmissions += metrics.DynamicLookbackOmissions
+
+		key := result.Route + "\x00" + result.ScenarioID
+		cell := cells[key]
+		if cell == nil {
+			cell = &cellStats{}
+			cells[key] = cell
+		}
+		cell.clean++
+		cell.promptTokens += metrics.EstimatedPromptTokens
+		if metrics.MaxPromptTokens > cell.maxPrompt {
+			cell.maxPrompt = metrics.MaxPromptTokens
+		}
+		cell.modelCallCount += metrics.ModelCallCount
+		if metrics.StablePrefixStable {
+			cell.stable++
+		}
+	}
+	if summary.TotalResults == 0 {
+		return nil
+	}
+	summary.StablePrefixStabilityRate = evalRate(summary.StablePrefixStableCount, summary.CleanResults)
+	cellKeys := make([]string, 0, len(cells))
+	for key := range cells {
+		cellKeys = append(cellKeys, key)
+	}
+	sort.Strings(cellKeys)
+	for _, key := range cellKeys {
+		parts := strings.SplitN(key, "\x00", 2)
+		cell := cells[key]
+		summary.Cells = append(summary.Cells, EvalCostFidelityCell{
+			Route:                     parts[0],
+			ScenarioID:                parts[1],
+			CleanResults:              cell.clean,
+			EstimatedPromptTokens:     cell.promptTokens,
+			MaxPromptTokens:           cell.maxPrompt,
+			ModelCallCount:            cell.modelCallCount,
+			StablePrefixStabilityRate: evalRate(cell.stable, cell.clean),
+		})
 	}
 	return &summary
 }
@@ -1805,6 +2074,7 @@ func runEvalScenarioWithAttackCase(ctx context.Context, opts EvalOptions, route 
 		CandidatePreview: redactEvalText(candidate, 240),
 		AttackTrace:      redactEvalAttackTrace(e.AttackTrace),
 		ContextFidelity:  evalContextFidelityResult(e, false),
+		CostFidelity:     evalCostFidelityResult(e, false),
 	}
 	if opts.TraceMode == EvalTraceRedacted {
 		result.CandidateTrace = redactEvalText(candidate, evalRedactedTraceLimit)
@@ -1852,6 +2122,7 @@ func erroredEvalResultWithContext(opts EvalOptions, sc evalScenario, route EvalR
 	result.CandidatePreview = redactEvalText(candidate, 240)
 	result.AttackTrace = redactEvalAttackTrace(e.AttackTrace)
 	result.ContextFidelity = evalContextFidelityResult(e, result.ProviderFailure)
+	result.CostFidelity = evalCostFidelityResult(e, result.ProviderFailure)
 	if opts.TraceMode == EvalTraceRedacted {
 		result.CandidateTrace = redactEvalText(candidate, evalRedactedTraceLimit)
 	}
@@ -2272,12 +2543,14 @@ func evalSubjectMessages(e *evalScenarioContext) ([]agent.Message, string, error
 		{Role: "system", Content: system},
 		{Role: "user", Content: user},
 	}
+	evalRecordPromptCost(e, "eval_subject", 1, nil, messages)
 	return messages, evalPromptHash(messages), nil
 }
 
 func governorSubjectMessages(e *evalScenarioContext) ([]agent.Message, string, error) {
 	req := evalGovernorPromptRequest(e)
-	system := prompt.BuildGovernorPrompt(req)
+	blocks := prompt.BuildGovernorPromptBlocks(req)
+	system := prompt.RenderSystemBlocks(blocks)
 	user := strings.Join([]string{
 		"User request:",
 		e.Scenario.Prompt,
@@ -2292,6 +2565,7 @@ func governorSubjectMessages(e *evalScenarioContext) ([]agent.Message, string, e
 		{Role: "system", Content: system},
 		{Role: "user", Content: user},
 	}
+	evalRecordPromptCost(e, "governor_subject", 1, blocks, messages)
 	return messages, evalPromptHash(messages), nil
 }
 

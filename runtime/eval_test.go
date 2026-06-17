@@ -1564,6 +1564,12 @@ func TestRunEvalSuiteGovernorSubjectRecordsPromptHashesAndFiltersScenarios(t *te
 	if result := report.Results[0]; result.SubjectMode != EvalSubjectGovernor || !strings.HasPrefix(result.PromptHash, "sha256:") {
 		t.Fatalf("result subject/hash = %s/%s", result.SubjectMode, result.PromptHash)
 	}
+	if report.CostFidelity == nil || report.CostFidelity.EstimatedPromptTokens == 0 || report.CostFidelity.ModelCallCount != 1 || report.CostFidelity.StablePrefixStabilityRate != 1 {
+		t.Fatalf("cost fidelity = %#v, want one stable measured prompt", report.CostFidelity)
+	}
+	if result := report.Results[0]; result.CostFidelity == nil || result.CostFidelity.EstimatedPromptTokens == 0 || !result.CostFidelity.StablePrefixStable {
+		t.Fatalf("result cost fidelity = %#v, want stable prompt metrics", result.CostFidelity)
+	}
 	if len(progressEvents) < 2 || progressEvents[0].Event != "start" || progressEvents[len(progressEvents)-1].Event != "result" {
 		t.Fatalf("progress events = %#v, want start/result", progressEvents)
 	}
@@ -2028,6 +2034,29 @@ func TestGateEvalReportsFailsContextFidelityRegression(t *testing.T) {
 	}
 }
 
+func TestGateEvalReportsFailsCostFidelityRegression(t *testing.T) {
+	t.Parallel()
+
+	before := evalCostFidelityGateReportFixture(2400, 1200, 2, 2)
+	after := evalCostFidelityGateReportFixture(3200, 1800, 3, 1)
+	gate, err := GateEvalReports([]EvalReport{before}, []EvalReport{after})
+	if err != nil {
+		t.Fatalf("GateEvalReports() err = %v", err)
+	}
+	reasons := strings.Join(gate.Reasons, "\n")
+	if gate.Passed ||
+		!strings.Contains(reasons, "cost fidelity estimated prompt tokens") ||
+		!strings.Contains(reasons, "cost fidelity max prompt tokens") ||
+		!strings.Contains(reasons, "cost fidelity model calls") ||
+		!strings.Contains(reasons, "cost fidelity stable-prefix stability") {
+		t.Fatalf("gate = %#v, want cost-fidelity regression reasons", gate)
+	}
+	markdown := RenderEvalGateMarkdown(gate)
+	if !strings.Contains(markdown, "Cost Fidelity") || !strings.Contains(markdown, "Estimated prompt tokens") {
+		t.Fatalf("gate markdown missing cost fidelity table:\n%s", markdown)
+	}
+}
+
 func TestCanonicalEvalSyntheticFailureFixturesTripHardFailures(t *testing.T) {
 	t.Parallel()
 
@@ -2404,6 +2433,55 @@ func evalContextFidelityGateReportFixture(total int, hits int, leaks int, retain
 		ScoringMode:      EvalScoringDeterministic,
 		TraceMode:        EvalTraceRedacted,
 		Rollouts:         total,
+		RouteCount:       1,
+		ScenarioCount:    1,
+		Results:          results,
+	}
+	finalizeEvalReport(&report)
+	return report
+}
+
+func evalCostFidelityGateReportFixture(promptTokens int, maxPromptTokens int, modelCalls int, stablePrefixes int) EvalReport {
+	cleanResults := 2
+	results := make([]EvalScenarioResult, 0, cleanResults)
+	for i := 0; i < cleanResults; i++ {
+		stable := i < stablePrefixes
+		calls := modelCalls / cleanResults
+		if i < modelCalls%cleanResults {
+			calls++
+		}
+		results = append(results, EvalScenarioResult{
+			ScenarioID:       "token_budget_recovery_no_dead_end",
+			ScenarioName:     "Token budget recovery does not dead-end",
+			ScenarioRevision: EvalScenarioRevision,
+			Domain:           "continuation",
+			AuthorityClass:   "read_only_review",
+			TransportSurface: "telegram_dm",
+			Route:            "local:scripted",
+			Provider:         "local",
+			Model:            "scripted",
+			SubjectMode:      EvalSubjectGovernor,
+			SampleIndex:      i,
+			Pass:             true,
+			CostFidelity: &EvalCostFidelityResult{
+				PromptCount:           calls,
+				ModelCallCount:        calls,
+				EstimatedPromptTokens: promptTokens / cleanResults,
+				MaxPromptTokens:       maxPromptTokens,
+				StablePrefixStable:    stable,
+				Clean:                 true,
+			},
+		})
+	}
+	report := EvalReport{
+		Suite:            EvalSuiteCanonical,
+		Mode:             EvalModeLive,
+		SubjectMode:      EvalSubjectGovernor,
+		ScenarioRevision: EvalScenarioRevision,
+		ScoringMode:      EvalScoringDeterministic,
+		TraceMode:        EvalTraceRedacted,
+		Rollouts:         1,
+		Seed:             7,
 		RouteCount:       1,
 		ScenarioCount:    1,
 		Results:          results,

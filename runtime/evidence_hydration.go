@@ -122,11 +122,48 @@ func explicitEvidenceRecallRequest(text string) bool {
 		"show evidence",
 		"from the evidence",
 		"hydrate evidence",
-		"continue",
-		"resume",
 	} {
 		if strings.Contains(text, needle) {
 			return true
+		}
+	}
+	for _, term := range []string{"continue", "resume"} {
+		if explicitEvidenceRecallContinuationTerm(text, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func explicitEvidenceRecallContinuationTerm(text string, term string) bool {
+	words := strings.FieldsFunc(text, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '_'
+	})
+	for i, word := range words {
+		if word != term {
+			continue
+		}
+		if term == "continue" {
+			return true
+		}
+		if len(words) == 1 {
+			return true
+		}
+		if i+1 < len(words) {
+			next := words[i+1]
+			if (next == "the" || next == "a" || next == "an") && i+2 < len(words) {
+				next = words[i+2]
+			}
+			switch next {
+			case "this", "that", "it", "work", "task", "thread", "context", "conversation", "operation", "goal", "phase":
+				return true
+			}
+		}
+		if i > 0 {
+			switch words[i-1] {
+			case "please", "now", "can", "could", "lets", "let", "to":
+				return true
+			}
 		}
 	}
 	return false
