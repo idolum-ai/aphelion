@@ -55,7 +55,7 @@ func recipeStatePath(cfg *config.Config) string {
 func defaultRuntimeRecipeState(cfg *config.Config) runtimeRecipeState {
 	state := runtimeRecipeState{
 		PersonaModel:   personaModelSonnet,
-		GovernorEffort: governorEffortMedium,
+		GovernorEffort: governorEffortHigh,
 	}
 	if cfg == nil {
 		return state
@@ -147,7 +147,7 @@ func (r *Runtime) currentRecipeSnapshot() recipeSnapshot {
 		return recipeSnapshot{
 			PersonaModel:   personaModelSonnet,
 			PersonaEffort:  personaEffortSonnet,
-			GovernorEffort: governorEffortMedium,
+			GovernorEffort: governorEffortHigh,
 		}
 	}
 	r.recipeMu.Lock()

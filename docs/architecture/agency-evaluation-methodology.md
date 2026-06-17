@@ -200,6 +200,10 @@ model. Large live bakeoffs estimate provider-call volume before execution and
 require `--confirm-live-cost`; a route-local winner still needs a full-system
 validation pass before it becomes a live default.
 
+Model defaults are therefore release artifacts backed by reports. Fresh installs
+may encode the current frontier, but existing `/model` overrides and runtime
+recipes remain operator-owned state and must not be silently rewritten.
+
 When testing reasoning effort, do not start with the full suite. First run the
 focused `challenge` slice against one model with `--efforts low,medium,high`.
 That slice concentrates authority ambiguity, stale continuation, context

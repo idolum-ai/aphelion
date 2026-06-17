@@ -8,10 +8,13 @@ import (
 )
 
 const (
-	ModelSlotPersona      = "persona"
-	ModelSlotGovernor     = "governor"
-	ModelSlotDoctor       = "doctor"
-	ModelSlotChildDefault = "child_default"
+	ModelSlotPersona        = "persona"
+	ModelSlotGovernor       = "governor"
+	ModelSlotDoctor         = "doctor"
+	ModelSlotChildDefault   = "child_default"
+	ModelSlotStatusReadable = "status"
+	ModelSlotHeartbeat      = "heartbeat"
+	ModelSlotCuriosity      = "curiosity"
 
 	ModelProviderOpenAI     = "openai"
 	ModelProviderAnthropic  = "anthropic"
@@ -37,6 +40,9 @@ var modelSlots = []string{
 	ModelSlotGovernor,
 	ModelSlotDoctor,
 	ModelSlotChildDefault,
+	ModelSlotStatusReadable,
+	ModelSlotHeartbeat,
+	ModelSlotCuriosity,
 }
 
 type ModelFallback struct {
@@ -126,6 +132,12 @@ func NormalizeModelSlot(slot string) string {
 		return ModelSlotDoctor
 	case ModelSlotChildDefault, "child", "children", "durable_child", "child-default":
 		return ModelSlotChildDefault
+	case ModelSlotStatusReadable, "summary", "status_readable", "readable_status":
+		return ModelSlotStatusReadable
+	case ModelSlotHeartbeat, "reflection":
+		return ModelSlotHeartbeat
+	case ModelSlotCuriosity:
+		return ModelSlotCuriosity
 	default:
 		return ""
 	}
@@ -212,7 +224,7 @@ func ValidateModelSlotConfig(cfg ModelSlotConfig, usesTools bool) ModelValidatio
 	normalized := NormalizeModelSlotConfig(cfg)
 	result := ModelValidation{Config: normalized}
 	if normalized.Slot == "" {
-		result.Error = "model slot must be one of persona, governor, doctor, child_default"
+		result.Error = "model slot must be one of persona, governor, doctor, child_default, status, heartbeat, curiosity"
 		return result
 	}
 	if normalized.Provider == "" {
@@ -325,7 +337,7 @@ func validateResolvedModelTransport(cfg ModelSlotConfig, resolved string, usesTo
 
 func ModelSlotUsesTools(slot string) bool {
 	switch NormalizeModelSlot(slot) {
-	case ModelSlotGovernor, ModelSlotDoctor, ModelSlotChildDefault:
+	case ModelSlotGovernor, ModelSlotDoctor, ModelSlotChildDefault, ModelSlotHeartbeat, ModelSlotCuriosity:
 		return true
 	default:
 		return false

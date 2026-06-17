@@ -24,7 +24,7 @@ import (
 const curiositySessionID = "admin-curiosity"
 
 func (r *Runtime) StartCuriosityLoop(ctx context.Context, logger func(string, ...any)) {
-	if r == nil || r.store == nil || r.provider == nil || !r.cfg.Curiosity.Enabled {
+	if r == nil || r.store == nil || !r.cfg.Curiosity.Enabled {
 		return
 	}
 	if logger == nil {
@@ -51,7 +51,7 @@ func (r *Runtime) StartCuriosityLoop(ctx context.Context, logger func(string, ..
 }
 
 func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err error) {
-	if r == nil || r.store == nil || r.provider == nil || !r.cfg.Curiosity.Enabled {
+	if r == nil || r.store == nil || !r.cfg.Curiosity.Enabled {
 		return nil
 	}
 	if now.IsZero() {
@@ -119,13 +119,20 @@ func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err erro
 		copy.Observer = monitor
 		opts = &copy
 	}
+	provider := r.provider
+	if slotProvider, _, ok := r.modelSlotProviderIncludingDefault(core.ModelSlotCuriosity); ok {
+		provider = slotProvider
+	}
+	if provider == nil {
+		return fmt.Errorf("curiosity provider unavailable")
+	}
 	r.recordExecutionEvent(key, core.ExecutionEventCuriosityStarted, "curiosity", "started", map[string]any{
 		"lease_id":     lease.ID,
 		"candidate_id": candidate.ID,
 		"source_kind":  candidate.SourceKind,
 		"source_ref":   candidate.SourceRef,
 	}, now)
-	result, _, runErr := agent.RunTurn(monitor.Context(), r.provider, tools, curiosityBudget(r.cfg.Curiosity), opts, []agent.Message{
+	result, _, runErr := agent.RunTurn(monitor.Context(), provider, tools, curiosityBudget(r.cfg.Curiosity), opts, []agent.Message{
 		{Role: "system", Content: curiositySystemPrompt()},
 		{Role: "user", Content: requestText},
 	})

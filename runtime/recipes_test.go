@@ -37,6 +37,28 @@ func TestRuntimeRecipeStateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRuntimeRecipeStatePreservesExistingXHigh(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Sessions.DBPath = filepath.Join(t.TempDir(), "state", "sessions.db")
+	path := recipeStatePath(&cfg)
+	existing := runtimeRecipeState{
+		PersonaModel:   personaModelGPT55,
+		GovernorEffort: governorEffortXHigh,
+	}
+	if err := saveRuntimeRecipeState(path, existing, nil); err != nil {
+		t.Fatalf("saveRuntimeRecipeState() err = %v", err)
+	}
+	got, err := loadRuntimeRecipeState(path, &cfg)
+	if err != nil {
+		t.Fatalf("loadRuntimeRecipeState() err = %v", err)
+	}
+	if got.GovernorEffort != governorEffortXHigh {
+		t.Fatalf("governor effort = %q, want preserved xhigh", got.GovernorEffort)
+	}
+}
+
 func TestRuntimeReasoningOverrideAppliesOnlyInteractiveAndRecovery(t *testing.T) {
 	t.Parallel()
 

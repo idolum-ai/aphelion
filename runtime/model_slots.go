@@ -187,6 +187,10 @@ func (r *Runtime) defaultModelSlot(slot string) core.ModelSlotConfig {
 		governor := r.defaultGovernorModelSlot()
 		governor.Slot = core.ModelSlotDoctor
 		return governor
+	case core.ModelSlotStatusReadable:
+		return r.defaultCheapModelSlot(slot, false)
+	case core.ModelSlotHeartbeat, core.ModelSlotCuriosity:
+		return r.defaultCheapModelSlot(slot, true)
 	case core.ModelSlotChildDefault:
 		providerName := r.nativeProviderName()
 		return core.NormalizeModelSlotConfig(core.ModelSlotConfig{
@@ -199,6 +203,58 @@ func (r *Runtime) defaultModelSlot(slot string) core.ModelSlotConfig {
 	default:
 		return r.defaultGovernorModelSlot()
 	}
+}
+
+func (r *Runtime) defaultCheapModelSlot(slot string, usesTools bool) core.ModelSlotConfig {
+	if r == nil {
+		return core.ModelSlotConfig{Slot: slot, Transport: core.ModelTransportAuto}
+	}
+	if cfg, ok := r.configuredCheapModelSlot(slot, usesTools); ok {
+		return cfg
+	}
+	cfg := r.defaultGovernorModelSlot()
+	cfg.Slot = slot
+	cfg.Effort = string(agent.ReasoningEffortLow)
+	return core.NormalizeModelSlotConfig(cfg)
+}
+
+func (r *Runtime) configuredCheapModelSlot(slot string, usesTools bool) (core.ModelSlotConfig, bool) {
+	if r == nil || r.cfg == nil {
+		return core.ModelSlotConfig{}, false
+	}
+	candidates := []core.ModelSlotConfig{
+		{
+			Slot:      slot,
+			Provider:  core.ModelProviderOpenAI,
+			Model:     "gpt-5.4-mini",
+			Effort:    string(agent.ReasoningEffortLow),
+			Transport: core.ModelTransportAuto,
+		},
+		{
+			Slot:      slot,
+			Provider:  core.ModelProviderAnthropic,
+			Model:     "claude-haiku-4-5-20251001",
+			Effort:    string(agent.ReasoningEffortLow),
+			Transport: core.ModelTransportAuto,
+		},
+		{
+			Slot:      slot,
+			Provider:  core.ModelProviderOpenRouter,
+			Model:     "anthropic/claude-haiku-4-5-20251001",
+			Effort:    string(agent.ReasoningEffortLow),
+			Transport: core.ModelTransportAuto,
+		},
+	}
+	for _, candidate := range candidates {
+		if !r.modelProviderConfigured(candidate.Provider) {
+			continue
+		}
+		validation := core.ValidateModelSlotConfig(candidate, usesTools)
+		if validation.Valid {
+			return validation.Config, true
+		}
+	}
+	return core.ModelSlotConfig{}, false
 }
 
 func (r *Runtime) defaultGovernorModelSlot() core.ModelSlotConfig {
@@ -263,6 +319,18 @@ func (r *Runtime) modelSlotProvider(slot string) (agent.Provider, core.ModelSlot
 	if err != nil || status.Source != "override" || !status.Validation.Valid {
 		return nil, status, false
 	}
+	return r.providerForModelSlotStatus(status)
+}
+
+func (r *Runtime) modelSlotProviderIncludingDefault(slot string) (agent.Provider, core.ModelSlotStatus, bool) {
+	status, err := r.EffectiveModelSlot(slot)
+	if err != nil || !status.Validation.Valid {
+		return nil, status, false
+	}
+	return r.providerForModelSlotStatus(status)
+}
+
+func (r *Runtime) providerForModelSlotStatus(status core.ModelSlotStatus) (agent.Provider, core.ModelSlotStatus, bool) {
 	provider, err := r.cachedProviderForModelSlot(status.Effective)
 	if err != nil {
 		r.recordModelConfigEvent(core.ExecutionEventModelConfigRejected, "provider_build_failed", map[string]any{
@@ -451,6 +519,21 @@ func (r *Runtime) applyModelSlotExecution(exec *pipeline.TurnExecutionContract, 
 	exec.ProviderPath = modelSlotProviderPath(status.Effective)
 }
 
+func (r *Runtime) applyModelSlotExecutionIncludingDefault(exec *pipeline.TurnExecutionContract, slot string) {
+	if exec == nil {
+		return
+	}
+	provider, status, ok := r.modelSlotProviderIncludingDefault(slot)
+	if !ok {
+		return
+	}
+	exec.Provider = provider
+	exec.Backend = status.Effective.Provider
+	exec.ProviderName = status.Effective.Provider
+	exec.ModelName = status.Effective.Model
+	exec.ProviderPath = modelSlotProviderPath(status.Effective)
+}
+
 func modelSlotProviderPath(cfg core.ModelSlotConfig) []string {
 	cfg = core.NormalizeModelSlotConfig(cfg)
 	out := []string{cfg.Provider}
@@ -480,6 +563,12 @@ func (r *Runtime) invalidateModelSlotCaches(slot string) {
 		r.faceModelsMu.Lock()
 		r.faceModels = make(map[string]face.Renderer)
 		r.faceModelsMu.Unlock()
+	}
+	if core.NormalizeModelSlot(slot) == core.ModelSlotStatusReadable {
+		r.statusReadableMu.Lock()
+		r.statusReadableProvider = nil
+		r.statusReadableReady = false
+		r.statusReadableMu.Unlock()
 	}
 }
 

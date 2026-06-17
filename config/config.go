@@ -738,13 +738,13 @@ func Default() Config {
 			},
 		},
 		Thinking: ThinkingConfig{
-			Effort:  "medium",
+			Effort:  "high",
 			Summary: "auto",
 			Defaults: ThinkingDefaultsConfig{
-				Default:   "medium",
+				Default:   "high",
 				Heartbeat: "low",
 				Cron:      "low",
-				Recovery:  "medium",
+				Recovery:  "high",
 			},
 		},
 		Face: FaceConfig{

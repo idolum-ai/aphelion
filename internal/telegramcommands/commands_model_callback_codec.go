@@ -120,6 +120,12 @@ func modelSlotToken(slot string) string {
 		return "d"
 	case core.ModelSlotChildDefault:
 		return "c"
+	case core.ModelSlotStatusReadable:
+		return "s"
+	case core.ModelSlotHeartbeat:
+		return "h"
+	case core.ModelSlotCuriosity:
+		return "u"
 	default:
 		return ""
 	}
@@ -135,6 +141,12 @@ func decodeModelSlotToken(token string) string {
 		return core.ModelSlotDoctor
 	case "c":
 		return core.ModelSlotChildDefault
+	case "s":
+		return core.ModelSlotStatusReadable
+	case "h":
+		return core.ModelSlotHeartbeat
+	case "u":
+		return core.ModelSlotCuriosity
 	default:
 		return ""
 	}

@@ -277,14 +277,14 @@ aggressive_writes = "propose"
 auto_accept_low_risk = false
 
 [thinking]
-effort = "medium"
+effort = "high"
 summary = "auto"
 
 [thinking.defaults]
-default = "medium"
+default = "high"
 heartbeat = "low"
 cron = "low"
-recovery = "medium"
+recovery = "high"
 
 [face]
 backend = "provider"

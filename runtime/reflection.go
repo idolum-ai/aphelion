@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
 	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
@@ -60,7 +61,14 @@ func (r *Runtime) reflectCuratedMemory(
 		{Role: "system", Content: prompt.RenderSystemBlocks(systemBlocks), SystemBlocks: systemBlocks},
 		{Role: "user", Content: renderReflectionRequest(input)},
 	}
-	result, _, err := agent.RunTurn(ctx, r.provider, nil, &agent.Budget{
+	provider := r.provider
+	if slotProvider, _, ok := r.modelSlotProviderIncludingDefault(core.ModelSlotHeartbeat); ok {
+		provider = slotProvider
+	}
+	if provider == nil {
+		return "", fmt.Errorf("heartbeat reflection provider unavailable")
+	}
+	result, _, err := agent.RunTurn(ctx, provider, nil, &agent.Budget{
 		Max:     2,
 		Caution: 0.8,
 		Warning: 0.9,

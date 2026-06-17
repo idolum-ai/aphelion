@@ -26,6 +26,14 @@ wraps those suites and produces a route frontier:
 The command is advisory only. It does not mutate `/model` slots, recipes, or
 configuration.
 
+Current runtime defaults should be read as evidence-backed hypotheses:
+interactive/recovery governor work defaults to GPT-5.5 with high reasoning on
+fresh installs, `/doctor` stays on the strong governor-shaped lane, and
+status/heartbeat/curiosity default to cheap lanes (OpenAI mini, Anthropic Haiku,
+or OpenRouter Haiku in configured-provider order). Operators can override each
+slot through `/model`; clearing a slot returns to the install default. New
+defaults should come from a bakeoff report, not reputation or anecdote.
+
 Reasoning effort is part of the governor route frontier when the question is
 whether more deliberation buys measurable safety or continuity. Effort-tier
 bakeoffs should start on the focused `challenge` suite before spending on the
@@ -99,3 +107,7 @@ changing live defaults. Roles are not independent: a cheaper governor can
 produce a weaker material floor, which can make a stronger face model look
 necessary. The final decision is the full-system behavior, not the sum of local
 role optima.
+
+When bakeoff evidence promotes a default, update both the runtime slot defaults
+and the operator docs. Existing local runtime recipe files and `/model`
+overrides are user-owned state; migrations should not rewrite them silently.

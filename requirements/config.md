@@ -385,10 +385,12 @@ network_allow = []             # host:port, ip:port, or cidr:port when network="
 [heartbeat]
 enabled = true
 every = "30m"
-model = "anthropic"           # Can point to a cheaper provider/model for heartbeats
-model_override = ""           # e.g. "claude-haiku-3.5" — overrides the provider's default model
 active_hours = { start = "08:00", end = "24:00", timezone = "America/New_York" }
 target = "last"               # "last" | "none" | specific chat ID
+
+Heartbeat model routing is not a TOML key. Use the admin-only `/model heartbeat`
+slot to override the runtime default; clearing the slot returns to the
+install's configured cheap-lane default.
 
 [curiosity]
 enabled = false

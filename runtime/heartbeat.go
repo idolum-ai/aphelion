@@ -88,7 +88,9 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	hiddenInputs := r.assembleHeartbeatHiddenInputs(ctx, scope, now, deliver, events)
 	hiddenInputs = r.withInteriorSignalState(maintenanceKey, hiddenInputs, now, true)
 	hiddenInputAwareness := hiddenInputs.toTurnAwareness()
-	governorAwareness := turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "system", pipeline.TurnExecutionContract{}), hiddenInputAwareness)
+	exec := r.executionForTurn(pipeline.TurnPrepareContract{})
+	r.applyModelSlotExecutionIncludingDefault(&exec, core.ModelSlotHeartbeat)
+	governorAwareness := turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "system", exec), hiddenInputAwareness)
 	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    r.governorName(),
 		GovernorBackend: r.governorBackend,
@@ -142,7 +144,8 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		UserText:   requestText,
 		LedgerText: requestText,
 	}
-	exec := r.executionForTurn(prepared)
+	exec = r.executionForTurn(prepared)
+	r.applyModelSlotExecutionIncludingDefault(&exec, core.ModelSlotHeartbeat)
 	governorAwareness = turn.ApplyHiddenInputAwareness(
 		r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "system", exec),
 		hiddenInputAwareness,

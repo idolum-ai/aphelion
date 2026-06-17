@@ -3,9 +3,41 @@
 package core
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestModelSlotNamesIncludeCheapRuntimeLanes(t *testing.T) {
+	t.Parallel()
+
+	got := ModelSlotNames()
+	want := []string{
+		ModelSlotPersona,
+		ModelSlotGovernor,
+		ModelSlotDoctor,
+		ModelSlotChildDefault,
+		ModelSlotStatusReadable,
+		ModelSlotHeartbeat,
+		ModelSlotCuriosity,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ModelSlotNames() = %#v, want %#v", got, want)
+	}
+}
+
+func TestModelSlotUsesToolsForMaintenanceLanes(t *testing.T) {
+	t.Parallel()
+
+	if ModelSlotUsesTools(ModelSlotStatusReadable) {
+		t.Fatal("status uses tools = true, want false")
+	}
+	for _, slot := range []string{ModelSlotHeartbeat, ModelSlotCuriosity} {
+		if !ModelSlotUsesTools(slot) {
+			t.Fatalf("%s uses tools = false, want true", slot)
+		}
+	}
+}
 
 func TestValidateModelSlotConfigRoutesOpenAIGPT5ToolsWithEffortToResponses(t *testing.T) {
 	t.Parallel()

@@ -191,11 +191,11 @@ external_manifest_dir = "./external-tools"
 	if cfg.Memory.WritePolicy.DirectUserWrites != "apply" || cfg.Memory.WritePolicy.ReflectionWrites != "propose" || cfg.Memory.WritePolicy.AggressiveWrites != "propose" || cfg.Memory.WritePolicy.AutoAcceptLowRisk {
 		t.Fatalf("memory.write_policy defaults = %#v, want apply/propose/propose/manual", cfg.Memory.WritePolicy)
 	}
-	if cfg.Thinking.Effort != "medium" || cfg.Thinking.Summary != "auto" {
-		t.Fatalf("thinking defaults = %#v, want medium/auto", cfg.Thinking)
+	if cfg.Thinking.Effort != "high" || cfg.Thinking.Summary != "auto" {
+		t.Fatalf("thinking defaults = %#v, want high/auto", cfg.Thinking)
 	}
-	if cfg.Thinking.Defaults.Default != "medium" || cfg.Thinking.Defaults.Heartbeat != "low" || cfg.Thinking.Defaults.Cron != "low" || cfg.Thinking.Defaults.Recovery != "medium" {
-		t.Fatalf("thinking.defaults = %#v, want medium/low/low/medium", cfg.Thinking.Defaults)
+	if cfg.Thinking.Defaults.Default != "high" || cfg.Thinking.Defaults.Heartbeat != "low" || cfg.Thinking.Defaults.Cron != "low" || cfg.Thinking.Defaults.Recovery != "high" {
+		t.Fatalf("thinking.defaults = %#v, want high/low/low/high", cfg.Thinking.Defaults)
 	}
 	if cfg.Face.Backend != "provider" {
 		t.Fatalf("face.backend = %q, want provider", cfg.Face.Backend)
