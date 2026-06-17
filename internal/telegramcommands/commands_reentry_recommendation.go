@@ -84,11 +84,29 @@ func handleReentryRecommendationCallback(ctx context.Context, sender commandCall
 		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Queued."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 			return true, err
 		}
-		editReentryRecommendationCallbackMessage(ctx, sender, router, targetMsg.ChatID, targetMsg.MessageID, "reentry_recommendation.select", fmt.Sprintf("Queued re-entry path: %s.", strings.TrimSpace(candidate.Label)))
+		editReentryRecommendationCallbackMessage(ctx, sender, router, targetMsg.ChatID, targetMsg.MessageID, "reentry_recommendation.select", fmt.Sprintf("Queued re-entry path: %s.", neutralizeReentryRecommendationCallbackLabel(candidate.Label)))
 		return true, nil
 	default:
 		return false, nil
 	}
+}
+
+func neutralizeReentryRecommendationCallbackLabel(label string) string {
+	label = strings.Join(strings.Fields(strings.TrimSpace(label)), " ")
+	label = strings.Trim(label, " .\t\n\r")
+	if label == "" {
+		return "selected path"
+	}
+	replacer := strings.NewReplacer(
+		"`", "'",
+		"**", "''",
+		"*", "'",
+		"[", "",
+		"]", "",
+		"(", " - ",
+		")", "",
+	)
+	return replacer.Replace(label)
 }
 
 func editReentryRecommendationCallbackMessage(ctx context.Context, sender commandCallbackSender, router commandRouter, chatID int64, messageID int64, callbackKind string, text string) {

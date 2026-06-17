@@ -235,6 +235,10 @@ func TestReentryRecommendationDoesNotTreatServiceRestartAsRelease(t *testing.T) 
 	if !strings.Contains(candidates[0].Label, "Rebuild, reinstall, and restart the service") {
 		t.Fatalf("first label = %q, want concrete operation subject", candidates[0].Label)
 	}
+	if !strings.Contains(candidates[0].PromptText, "Take the next safe non-boundary step now") ||
+		!strings.Contains(candidates[0].PromptText, "ask for that exact bounded approval before acting") {
+		t.Fatalf("first prompt = %q, want imperative non-boundary action plus bounded approval fallback", candidates[0].PromptText)
+	}
 }
 
 func TestReentryRecommendationSuppressesPureFallbackCard(t *testing.T) {
@@ -338,6 +342,30 @@ func TestReentryRecommendationIgnoredCandidateDampensSameSemanticKey(t *testing.
 	})
 	if len(candidates) != 0 {
 		t.Fatalf("candidates = %#v, want ignored semantic opportunity dampened", candidates)
+	}
+}
+
+func TestReentryRecommendationMessageTextNeutralizesMarkdownLikeLabels(t *testing.T) {
+	t.Parallel()
+
+	text := reentryRecommendationMessageText(session.ReentryRecommendation{
+		ID: "reentry-markdown",
+		Candidates: []session.ReentryRecommendationCandidate{{
+			ID:         "c1",
+			Kind:       session.ReentryCandidateReflectWithOperator,
+			Label:      "Thread 2: [release](https://example.invalid) **bold** `code`",
+			PromptText: "Review the thread.",
+		}},
+	})
+	for _, forbidden := range []string{"[release](", "**bold**", "`code`"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("message text = %q, want markdown marker %q neutralized", text, forbidden)
+		}
+	}
+	for _, want := range []string{"release - https://example.invalid", "''bold''", "'code'"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("message text = %q, want neutralized marker %q", text, want)
+		}
 	}
 }
 

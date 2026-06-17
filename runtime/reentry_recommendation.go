@@ -415,7 +415,7 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 			Kind:             kind,
 			Label:            reentryConcreteLabel(labelPrefix, subject),
 			Summary:          reentryConcreteSummary("Reconstruct the operation state and choose the smallest useful next approval.", subject),
-			PromptText:       reentryPromptForCandidate("Continue the selected operation path: " + subject + ". Use saved state and evidence refs to name the next bounded action. If authority is required, ask for that exact approval before acting."),
+			PromptText:       reentryPromptForCandidate("Continue the selected operation path: " + subject + ". Take the next safe non-boundary step now. If boundary authority is required, ask for that exact bounded approval before acting."),
 			IntentClass:      intentClass,
 			TemporalFit:      reentryOperationTemporalFit(op),
 			WhyNow:           "current operation state is the nearest durable work surface",
@@ -1858,7 +1858,24 @@ func normalizeReentryRecommendationBodyLabel(label string) string {
 	if label == "" {
 		return ""
 	}
-	return label
+	return neutralizeReentryTelegramMarkdown(label)
+}
+
+func neutralizeReentryTelegramMarkdown(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer(
+		"`", "'",
+		"**", "''",
+		"*", "'",
+		"[", "",
+		"]", "",
+		"(", " - ",
+		")", "",
+	)
+	return replacer.Replace(text)
 }
 
 func reentryRecommendationButtonRows(record session.ReentryRecommendation) [][]core.OutboundButton {
