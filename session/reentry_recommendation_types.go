@@ -34,6 +34,7 @@ type ReentryRecommendationCandidate struct {
 	ID               string               `json:"id"`
 	Kind             ReentryCandidateKind `json:"kind"`
 	Label            string               `json:"label"`
+	BodyText         string               `json:"body_text,omitempty"`
 	Summary          string               `json:"summary,omitempty"`
 	PromptText       string               `json:"prompt_text"`
 	IntentClass      string               `json:"intent_class,omitempty"`
@@ -131,6 +132,7 @@ func NormalizeReentryRecommendationCandidate(candidate ReentryRecommendationCand
 	candidate.ID = strings.TrimSpace(candidate.ID)
 	candidate.Kind = NormalizeReentryCandidateKind(candidate.Kind)
 	candidate.Label = strings.TrimSpace(candidate.Label)
+	candidate.BodyText = strings.TrimSpace(candidate.BodyText)
 	candidate.Summary = strings.TrimSpace(candidate.Summary)
 	candidate.PromptText = strings.TrimSpace(candidate.PromptText)
 	candidate.IntentClass = strings.TrimSpace(candidate.IntentClass)

@@ -24,6 +24,7 @@ const (
 	reentryRecommendationCadence = time.Minute
 	reentryRecommendationLimit   = 96
 	reentryCandidateLimit        = 3
+	reentryBodyTextRuneLimit     = 700
 	reentryIgnoredDampeningTTL   = 12 * time.Hour
 	reentryStaleDampeningTTL     = 6 * time.Hour
 )
@@ -375,6 +376,7 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 			ID:               "c1",
 			Kind:             session.ReentryCandidateReviewReleaseReadiness,
 			Label:            reentryConcreteLabel("Check release", subject),
+			BodyText:         reentryConcreteBodyText("Check release", reentryOperationBodySubject(op)),
 			Summary:          reentryConcreteSummary("Review release-oriented state and identify whether a deploy/release proposal is actually warranted.", subject),
 			PromptText:       reentryPromptForCandidate("Review the selected release path from saved state: " + subject + ". If release, deploy, or restart action is needed, ask for the exact bounded approval before acting."),
 			IntentClass:      "review_release_readiness",
@@ -414,6 +416,7 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 			ID:               nextReentryCandidateID(candidates),
 			Kind:             kind,
 			Label:            reentryConcreteLabel(labelPrefix, subject),
+			BodyText:         reentryConcreteBodyText(labelPrefix, reentryOperationBodySubject(op)),
 			Summary:          reentryConcreteSummary("Reconstruct the operation state and choose the smallest useful next approval.", subject),
 			PromptText:       reentryPromptForCandidate("Continue the selected operation path: " + subject + ". Take the next safe non-boundary step now. If boundary authority is required, ask for that exact bounded approval before acting."),
 			IntentClass:      intentClass,
@@ -443,6 +446,7 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 			ID:               nextReentryCandidateID(candidates),
 			Kind:             session.ReentryCandidateResumeMission,
 			Label:            reentryMissionCandidateLabel(mission),
+			BodyText:         reentryMissionCandidateBodyText(mission),
 			Summary:          reentryConcreteSummary("Review the selected mission without turning memory into hidden authority.", subject),
 			PromptText:       reentryPromptForCandidate("Review the selected mission path: " + subject + ". Decide whether it deserves attention now; if action is needed, ask for the smallest bounded approval, otherwise say why it remains parked."),
 			IntentClass:      "resume_mission",
@@ -479,6 +483,7 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 			ID:               nextReentryCandidateID(candidates),
 			Kind:             session.ReentryCandidateReflectWithOperator,
 			Label:            reentryThreadCandidateLabel(displaySlot, subject),
+			BodyText:         reentryThreadCandidateBodyText(displaySlot, reentryThreadBodySubject(thread)),
 			Summary:          reentryConcreteSummary("Review an open same-chat side thread as a possible resurfacing path.", subject),
 			PromptText:       reentryPromptForCandidate(fmt.Sprintf("Review Thread %d from saved state: %s. Explain whether it deserves attention now or should remain parked; do not absorb, close, or act without approval.", displaySlot, subject)),
 			IntentClass:      "revisit_thread",
@@ -511,6 +516,7 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 			ID:               nextReentryCandidateID(candidates),
 			Kind:             session.ReentryCandidateReviewMemoryHealth,
 			Label:            reentryConcreteLabel("Inspect pressure", subject),
+			BodyText:         reentryConcreteBodyText("Inspect pressure", reentrySignalBodySubject(signal)),
 			Summary:          reentryConcreteSummary("Inspect accumulated interior pressure as a low-authority attention signal.", subject),
 			PromptText:       reentryPromptForCandidate("Inspect the selected recurring pressure signal: " + subject + ". Explain whether it should influence the next step now; ask approval before making changes."),
 			IntentClass:      "inspect_pressure",
@@ -542,6 +548,7 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 			ID:               nextReentryCandidateID(candidates),
 			Kind:             session.ReentryCandidateReviewMemoryHealth,
 			Label:            "Inspect memory: recent continuity notes",
+			BodyText:         "Inspect memory: recent continuity notes",
 			Summary:          "Check memory and continuity notes for stale, noisy, or unresolved state before starting more work.",
 			PromptText:       reentryPromptForCandidate("Inspect memory and continuity health from saved state. Summarize whether anything looks stale, noisy, or unresolved; ask approval before making changes."),
 			IntentClass:      "inspect_memory_health",
@@ -570,6 +577,7 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 			ID:               nextReentryCandidateID(candidates),
 			Kind:             session.ReentryCandidateClarifyGoal,
 			Label:            "Repair evidence context before choosing a path",
+			BodyText:         "Repair evidence context before choosing a path",
 			Summary:          "Hydration found gaps or fallback state; ask a concise clarification instead of pretending context is complete.",
 			PromptText:       reentryPromptForCandidate("Evidence context is incomplete or fallback-only. Ask one concise clarification question before choosing a work path."),
 			IntentClass:      "repair_context",
@@ -598,6 +606,7 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 			ID:               nextReentryCandidateID(candidates),
 			Kind:             session.ReentryCandidateReflectWithOperator,
 			Label:            "Ask: choose useful path",
+			BodyText:         "Ask: choose useful path",
 			Summary:          "Offer a reflective reorientation option so productivity and system wellbeing stay connected.",
 			PromptText:       reentryPromptForCandidate("Ask the operator whether the next move should be work, repair, conversation, or rest; do not start external actions without approval."),
 			IntentClass:      "clarify_goal",
@@ -626,6 +635,7 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 			ID:               "c1",
 			Kind:             session.ReentryCandidateClarifyGoal,
 			Label:            "Ask what would be genuinely useful next",
+			BodyText:         "Ask what would be genuinely useful next",
 			Summary:          "Ask the operator for the missing next objective instead of inventing authority.",
 			PromptText:       reentryPromptForCandidate("Saved state does not show a concrete next step. Ask one concise clarification question about the next objective."),
 			IntentClass:      "clarify_goal",
@@ -893,6 +903,14 @@ func reentryOperationSourceRef(op session.OperationState) string {
 }
 
 func reentryOperationSubject(op session.OperationState) string {
+	return reentryVisibleSubject(reentryOperationSubjectRaw(op), "current operation")
+}
+
+func reentryOperationBodySubject(op session.OperationState) string {
+	return reentryBodySubject(reentryOperationSubjectRaw(op), "current operation")
+}
+
+func reentryOperationSubjectRaw(op session.OperationState) string {
 	op = session.NormalizeOperationState(op)
 	phase, ok := reentryCurrentOperationPhase(op.PhasePlan)
 	values := []string{
@@ -915,7 +933,7 @@ func reentryOperationSubject(op session.OperationState) string {
 			phase.ID,
 		}, values...)
 	}
-	return reentryVisibleSubject(firstNonEmpty(values...), "current operation")
+	return firstNonEmpty(values...)
 }
 
 func reentryCurrentOperationPhase(plan session.OperationPhasePlan) (session.OperationPhase, bool) {
@@ -1012,8 +1030,28 @@ func reentryMissionCandidateLabel(mission session.MissionState) string {
 	}
 }
 
+func reentryMissionCandidateBodyText(mission session.MissionState) string {
+	subject := reentryMissionBodySubject(mission)
+	switch session.NormalizeMissionStatus(mission.Status) {
+	case session.MissionStatusBlocked:
+		return reentryConcreteBodyText("Unblock mission", subject)
+	case session.MissionStatusActive:
+		return reentryConcreteBodyText("Resume mission", subject)
+	default:
+		return reentryConcreteBodyText("Review mission", subject)
+	}
+}
+
 func reentryMissionSubject(mission session.MissionState) string {
-	return reentryVisibleSubject(firstNonEmpty(mission.Title, mission.NextAllowedAction, mission.Objective, mission.WaitingFor, mission.BlockedReason, mission.ID), "remembered mission")
+	return reentryVisibleSubject(reentryMissionSubjectRaw(mission), "remembered mission")
+}
+
+func reentryMissionBodySubject(mission session.MissionState) string {
+	return reentryBodySubject(reentryMissionSubjectRaw(mission), "remembered mission")
+}
+
+func reentryMissionSubjectRaw(mission session.MissionState) string {
+	return firstNonEmpty(mission.Title, mission.NextAllowedAction, mission.Objective, mission.WaitingFor, mission.BlockedReason, mission.ID)
 }
 
 func reentryMissionTemporalFit(mission session.MissionState) string {
@@ -1106,12 +1144,25 @@ func reentryThreadDisplaySlot(thread session.TelegramThread) int64 {
 }
 
 func reentryThreadSubject(thread session.TelegramThread) string {
-	return reentryVisibleSubject(firstNonEmpty(thread.AbsorbSummary, thread.CreatedText, thread.ArchivedDisplayName), "open side thread")
+	return reentryVisibleSubject(reentryThreadSubjectRaw(thread), "open side thread")
+}
+
+func reentryThreadBodySubject(thread session.TelegramThread) string {
+	return reentryBodySubject(reentryThreadSubjectRaw(thread), "open side thread")
+}
+
+func reentryThreadSubjectRaw(thread session.TelegramThread) string {
+	return firstNonEmpty(thread.AbsorbSummary, thread.CreatedText, thread.ArchivedDisplayName)
 }
 
 func reentryThreadCandidateLabel(displaySlot int64, subject string) string {
 	subject = reentryVisibleSubject(subject, "open side thread")
 	return truncatePreview(fmt.Sprintf("Thread %d: %s", displaySlot, subject), 80)
+}
+
+func reentryThreadCandidateBodyText(displaySlot int64, subject string) string {
+	subject = reentryBodySubject(subject, "open side thread")
+	return reentryBoundRecommendationBodyText(fmt.Sprintf("Thread %d: %s", displaySlot, subject))
 }
 
 func reentryThreadTemporalFit(thread session.TelegramThread, now time.Time) string {
@@ -1127,7 +1178,15 @@ func reentrySignalRelevanceScore(signal session.InteriorSignalState) float64 {
 }
 
 func reentrySignalSubject(signal session.InteriorSignalState) string {
-	return reentryVisibleSubject(firstNonEmpty(signal.Summary, signal.SubjectKey, signal.Category), "recurring pressure")
+	return reentryVisibleSubject(reentrySignalSubjectRaw(signal), "recurring pressure")
+}
+
+func reentrySignalBodySubject(signal session.InteriorSignalState) string {
+	return reentryBodySubject(reentrySignalSubjectRaw(signal), "recurring pressure")
+}
+
+func reentrySignalSubjectRaw(signal session.InteriorSignalState) string {
+	return firstNonEmpty(signal.Summary, signal.SubjectKey, signal.Category)
 }
 
 func reentrySignalResurfacingScore(signal session.InteriorSignalState) float64 {
@@ -1228,6 +1287,9 @@ func normalizeReentryCandidates(candidates []session.ReentryRecommendationCandid
 		if candidate.Label == "" {
 			continue
 		}
+		if candidate.BodyText != "" {
+			candidate.BodyText = reentryBoundRecommendationBodyText(candidate.BodyText)
+		}
 		if candidate.DampeningKey == "" {
 			candidate.DampeningKey = reentryCandidateDampeningKey(candidate)
 		}
@@ -1249,6 +1311,15 @@ func reentryVisibleSubject(subject string, fallback string) string {
 	return truncatePreview(subject, 72)
 }
 
+func reentryBodySubject(subject string, fallback string) string {
+	subject = strings.Join(strings.Fields(strings.TrimSpace(subject)), " ")
+	subject = strings.Trim(subject, " .\t\n\r")
+	if subject == "" {
+		subject = fallback
+	}
+	return reentryBoundRecommendationBodyText(subject)
+}
+
 func reentryConcreteLabel(prefix string, subject string) string {
 	prefix = strings.TrimSpace(prefix)
 	subject = reentryVisibleSubject(subject, "saved state")
@@ -1256,6 +1327,39 @@ func reentryConcreteLabel(prefix string, subject string) string {
 		return subject
 	}
 	return truncatePreview(prefix+": "+subject, 80)
+}
+
+func reentryConcreteBodyText(prefix string, subject string) string {
+	prefix = strings.TrimSpace(prefix)
+	subject = reentryBodySubject(subject, "saved state")
+	if prefix == "" {
+		return subject
+	}
+	return reentryBoundRecommendationBodyText(prefix + ": " + subject)
+}
+
+func reentryBoundRecommendationBodyText(text string) string {
+	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	text = strings.Trim(text, " .\t\n\r")
+	text = redactRuntimeText(text, 0)
+	if text == "" {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= reentryBodyTextRuneLimit {
+		return text
+	}
+	cut := reentryBodyTextRuneLimit - len(" [truncated]")
+	if cut < 1 {
+		cut = reentryBodyTextRuneLimit
+	}
+	for cut > 1 && runes[cut-1] != ' ' {
+		cut--
+	}
+	if cut <= 1 {
+		cut = reentryBodyTextRuneLimit - len(" [truncated]")
+	}
+	return strings.TrimSpace(string(runes[:cut])) + " [truncated]"
 }
 
 func reentryConcreteSummary(base string, subject string) string {
@@ -1603,6 +1707,7 @@ func reentryRecommendationAuditCandidates(candidates []session.ReentryRecommenda
 			"rank":              index + 1,
 			"kind":              string(candidate.Kind),
 			"label":             normalizeReentryCandidateLabel(candidate.Label),
+			"display_text":      reentryRecommendationCandidateBodyLine(candidate),
 			"intent_class":      strings.TrimSpace(candidate.IntentClass),
 			"temporal_fit":      strings.TrimSpace(candidate.TemporalFit),
 			"why_now":           strings.TrimSpace(candidate.WhyNow),
@@ -1842,7 +1947,7 @@ func reentryRecommendationMessageText(record session.ReentryRecommendation) stri
 	lines := []string{"Possible next steps:"}
 	index := 1
 	for _, candidate := range record.Candidates {
-		label := normalizeReentryRecommendationBodyLabel(candidate.Label)
+		label := reentryRecommendationCandidateBodyLine(candidate)
 		if label == "" {
 			continue
 		}
@@ -1852,13 +1957,22 @@ func reentryRecommendationMessageText(record session.ReentryRecommendation) stri
 	return strings.Join(lines, "\n")
 }
 
+func reentryRecommendationCandidateBodyLine(candidate session.ReentryRecommendationCandidate) string {
+	candidate = session.NormalizeReentryRecommendationCandidate(candidate)
+	body := strings.TrimSpace(candidate.BodyText)
+	if body == "" {
+		body = candidate.Label
+	}
+	return normalizeReentryRecommendationBodyLabel(body)
+}
+
 func normalizeReentryRecommendationBodyLabel(label string) string {
 	label = strings.Join(strings.Fields(strings.TrimSpace(label)), " ")
 	label = strings.Trim(label, " .\t\n\r")
 	if label == "" {
 		return ""
 	}
-	return neutralizeReentryTelegramMarkdown(label)
+	return neutralizeReentryTelegramMarkdown(reentryBoundRecommendationBodyText(label))
 }
 
 func neutralizeReentryTelegramMarkdown(text string) string {

@@ -118,6 +118,108 @@ func TestReentryRecommendationSweepSurfacesBoundedChoicesAfterTerminalQuietWindo
 	}
 }
 
+func TestReentryRecommendationCandidatesUseReadableBodyTextForNumberedCards(t *testing.T) {
+	t.Parallel()
+
+	longSubject := "Update the XPVENTA reconstruction packet/ERD/data-flow draft using the verified table lineage, join cardinality, ingestion notes, and unresolved export constraints"
+	rt := &Runtime{}
+	state := reentryRecommendationState{
+		Run: session.TurnRun{
+			ID:          42,
+			ChatID:      7002,
+			RequestText: "check the release path and continue the reconstruction packet",
+		},
+		Operation: session.OperationState{
+			ID:     "op-xpventa",
+			Status: session.OperationStatusActive,
+			PhasePlan: session.OperationPhasePlan{
+				CurrentPhaseID: "phase-xpventa",
+				Phases: []session.OperationPhase{{
+					ID:            "phase-xpventa",
+					OperatorTitle: longSubject,
+					Status:        session.PlanStatusInProgress,
+				}},
+			},
+		},
+	}
+
+	candidates := rt.reentryRecommendationCandidates(context.Background(), state)
+	if len(candidates) == 0 {
+		t.Fatal("reentryRecommendationCandidates() returned no candidates")
+	}
+	var picked session.ReentryRecommendationCandidate
+	for _, candidate := range candidates {
+		if strings.Contains(candidate.BodyText, longSubject) {
+			picked = candidate
+			break
+		}
+	}
+	if picked.ID == "" {
+		t.Fatalf("candidates = %#v, want readable body text preserving long operation subject", candidates)
+	}
+	if strings.Contains(picked.BodyText, "...") {
+		t.Fatalf("body text = %q, want no compact-label ellipsis", picked.BodyText)
+	}
+	if len([]rune(picked.Label)) > 90 {
+		t.Fatalf("label = %q, want compact label preserved separately", picked.Label)
+	}
+
+	record := session.ReentryRecommendation{
+		ID:         "reentry-readable-body",
+		ChatID:     7002,
+		SessionID:  "telegram_dm:7002",
+		Status:     session.ReentryRecommendationStatusPending,
+		Candidates: []session.ReentryRecommendationCandidate{picked},
+	}
+	text := reentryRecommendationMessageText(record)
+	if !strings.Contains(text, longSubject) {
+		t.Fatalf("message text = %q, want full readable body subject", text)
+	}
+	rows := reentryRecommendationButtonRows(record)
+	if len(rows) != 1 || len(rows[0]) < 2 || rows[0][0].Text != "1" || rows[0][1].Text != "Ignore" {
+		t.Fatalf("button rows = %#v, want numeric selector plus Ignore", rows)
+	}
+}
+
+func TestReentryRecommendationMessageTextFallsBackAndRedactsBodyText(t *testing.T) {
+	t.Parallel()
+
+	secretName := "api" + "_key"
+	secretValue := "abcdefghi" + "123456"
+	record := session.ReentryRecommendation{
+		ID:        "reentry-body-redaction",
+		ChatID:    7003,
+		SessionID: "telegram_dm:7003",
+		Status:    session.ReentryRecommendationStatusPending,
+		Candidates: []session.ReentryRecommendationCandidate{
+			{
+				ID:         "c1",
+				Kind:       session.ReentryCandidateClarifyGoal,
+				Label:      "Compact fallback label",
+				BodyText:   "Rotate " + secretName + "=" + secretValue + " before sharing the recommendation",
+				PromptText: "Ask for the next objective.",
+			},
+			{
+				ID:         "c2",
+				Kind:       session.ReentryCandidateReflectWithOperator,
+				Label:      "Use fallback label when body text is absent",
+				PromptText: "Ask what would be useful next.",
+			},
+		},
+	}
+
+	text := reentryRecommendationMessageText(record)
+	if strings.Contains(text, secretValue) || strings.Contains(strings.ToLower(text), secretName+"=") {
+		t.Fatalf("message text = %q, want secret redacted", text)
+	}
+	if !strings.Contains(text, "1. Rotate redacted before sharing the recommendation") {
+		t.Fatalf("message text = %q, want redacted body text displayed", text)
+	}
+	if !strings.Contains(text, "2. Use fallback label when body text is absent") {
+		t.Fatalf("message text = %q, want label fallback for old records", text)
+	}
+}
+
 func TestReentryRecommendationRankingPayloadAvoidsPrivateContext(t *testing.T) {
 	t.Parallel()
 
