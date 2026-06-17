@@ -17,21 +17,22 @@ import (
 )
 
 type evalModelBakeoffReport struct {
-	GeneratedAt   string                         `json:"generated_at"`
-	Role          string                         `json:"role"`
-	RoleStatus    string                         `json:"role_status"`
-	QualityOracle string                         `json:"quality_oracle"`
-	Mode          string                         `json:"mode"`
-	Suites        []string                       `json:"suites"`
-	Rollouts      int                            `json:"rollouts"`
-	Jobs          int                            `json:"jobs"`
-	RouteCount    int                            `json:"route_count"`
-	ScenarioCount int                            `json:"scenario_count"`
-	ResultCount   int                            `json:"result_count"`
-	Routes        []evalModelBakeoffRouteSummary `json:"routes"`
-	RoleReadiness []evalModelBakeoffReadiness    `json:"role_readiness"`
-	SuiteReports  []aphruntime.EvalReport        `json:"suite_reports,omitempty"`
-	Notes         []string                       `json:"notes,omitempty"`
+	GeneratedAt      string                            `json:"generated_at"`
+	Role             string                            `json:"role"`
+	RoleStatus       string                            `json:"role_status"`
+	QualityOracle    string                            `json:"quality_oracle"`
+	Mode             string                            `json:"mode"`
+	Suites           []string                          `json:"suites"`
+	Rollouts         int                               `json:"rollouts"`
+	Jobs             int                               `json:"jobs"`
+	RouteCount       int                               `json:"route_count"`
+	ScenarioCount    int                               `json:"scenario_count"`
+	ResultCount      int                               `json:"result_count"`
+	Routes           []evalModelBakeoffRouteSummary    `json:"routes"`
+	LiveCostEstimate *evalModelBakeoffLiveCostEstimate `json:"live_cost_estimate,omitempty"`
+	RoleReadiness    []evalModelBakeoffReadiness       `json:"role_readiness"`
+	SuiteReports     []aphruntime.EvalReport           `json:"suite_reports,omitempty"`
+	Notes            []string                          `json:"notes,omitempty"`
 }
 
 type evalModelBakeoffReadiness struct {
@@ -73,6 +74,17 @@ type evalModelBakeoffRouteSummary struct {
 	ProviderCacheCreationTokens    int64   `json:"provider_cache_creation_tokens,omitempty"`
 }
 
+type evalModelBakeoffLiveCostEstimate struct {
+	ProviderCalls        int      `json:"provider_calls"`
+	SubjectCalls         int      `json:"subject_calls"`
+	AttackerCalls        int      `json:"attacker_calls,omitempty"`
+	JudgeCalls           int      `json:"judge_calls,omitempty"`
+	Threshold            int      `json:"threshold,omitempty"`
+	ConfirmationRequired bool     `json:"confirmation_required,omitempty"`
+	Confirmed            bool     `json:"confirmed,omitempty"`
+	Notes                []string `json:"notes,omitempty"`
+}
+
 func runEvalModelBakeoffCommand(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("eval model-bakeoff", flag.ContinueOnError)
 	configFlag := fs.String("config", "", "path to config.toml for live mode")
@@ -92,6 +104,8 @@ func runEvalModelBakeoffCommand(args []string, out io.Writer) error {
 	judgeQuorumFlag := fs.String("judge-quorum", aphruntime.EvalJudgeQuorumPair, "judge quorum: pair or single")
 	traceFlag := fs.String("trace", aphruntime.EvalTraceRedacted, "trace mode: redacted or minimal")
 	providerRetriesFlag := fs.Int("provider-retries", 0, "retries for transient provider failures")
+	confirmLiveCostFlag := fs.Bool("confirm-live-cost", false, "confirm large live bakeoff provider-call estimates")
+	liveCostThresholdFlag := fs.Int("live-cost-threshold", 50, "estimated live provider-call threshold requiring --confirm-live-cost; 0 disables the guard")
 	progressFlag := fs.Bool("progress", false, "emit route/scenario/sample progress to stderr")
 	formatFlag := fs.String("format", "human", "output format: human, markdown, or json")
 	jsonFlag := fs.Bool("json", false, "emit JSON output")
@@ -109,6 +123,9 @@ func runEvalModelBakeoffCommand(args []string, out io.Writer) error {
 	}
 	if *maxAttacksPerScenarioFlag < 0 {
 		return fmt.Errorf("eval model-bakeoff requires --max-attacks-per-scenario >= 0")
+	}
+	if *liveCostThresholdFlag < 0 {
+		return fmt.Errorf("eval model-bakeoff requires --live-cost-threshold >= 0")
 	}
 	role, readiness, err := evalModelBakeoffRoleReadiness(*roleFlag)
 	if err != nil {
@@ -154,6 +171,34 @@ func runEvalModelBakeoffCommand(args []string, out io.Writer) error {
 		return err
 	}
 
+	liveCostEstimate, err := estimateEvalModelBakeoffLiveCost(evalModelBakeoffLiveCostInputs{
+		Mode:                  mode,
+		Suites:                suites,
+		ScenarioIDs:           splitEvalCSV(*scenarioFlag),
+		Rollouts:              *rolloutsFlag,
+		Routes:                routes,
+		AttackerRoutes:        attackerRoutes,
+		AttackCorpus:          attackCorpus,
+		MaxAttacksPerScenario: *maxAttacksPerScenarioFlag,
+		Scoring:               *scoringFlag,
+		JudgeRoutes:           judgeRoutes,
+		ProviderRetries:       *providerRetriesFlag,
+		Threshold:             *liveCostThresholdFlag,
+		Confirmed:             *confirmLiveCostFlag,
+	})
+	if err != nil {
+		return err
+	}
+	if liveCostEstimate != nil && liveCostEstimate.ConfirmationRequired && !liveCostEstimate.Confirmed {
+		return fmt.Errorf("live model bakeoff estimates %d provider calls (subject=%d attacker=%d judge=%d), above --live-cost-threshold=%d; rerun with --confirm-live-cost to continue",
+			liveCostEstimate.ProviderCalls,
+			liveCostEstimate.SubjectCalls,
+			liveCostEstimate.AttackerCalls,
+			liveCostEstimate.JudgeCalls,
+			liveCostEstimate.Threshold,
+		)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), *timeoutFlag)
 	defer cancel()
 
@@ -189,7 +234,7 @@ func runEvalModelBakeoffCommand(args []string, out io.Writer) error {
 		reports = append(reports, report)
 	}
 
-	report := buildEvalModelBakeoffReport(role, readiness, mode, suites, *rolloutsFlag, *jobsFlag, reports)
+	report := buildEvalModelBakeoffReport(role, readiness, mode, suites, *rolloutsFlag, *jobsFlag, reports, liveCostEstimate)
 	format := normalizeEvalModelBakeoffFormat(*formatFlag, *jsonFlag)
 	rendered, err := renderEvalModelBakeoffReport(report, format)
 	if err != nil {
@@ -351,18 +396,184 @@ func evalModelBakeoffMaxAttacksForSuite(suite string, n int) int {
 	return n
 }
 
-func buildEvalModelBakeoffReport(role string, readiness evalModelBakeoffReadiness, mode string, suites []string, rollouts int, jobs int, reports []aphruntime.EvalReport) evalModelBakeoffReport {
+type evalModelBakeoffLiveCostInputs struct {
+	Mode                  string
+	Suites                []string
+	ScenarioIDs           []string
+	Rollouts              int
+	Routes                []aphruntime.EvalRoute
+	AttackerRoutes        []aphruntime.EvalRoute
+	AttackCorpus          *aphruntime.EvalAttackCorpus
+	MaxAttacksPerScenario int
+	Scoring               string
+	JudgeRoutes           []aphruntime.EvalRoute
+	ProviderRetries       int
+	Threshold             int
+	Confirmed             bool
+}
+
+func estimateEvalModelBakeoffLiveCost(inputs evalModelBakeoffLiveCostInputs) (*evalModelBakeoffLiveCostEstimate, error) {
+	if !strings.EqualFold(strings.TrimSpace(inputs.Mode), aphruntime.EvalModeLive) {
+		return nil, nil
+	}
+	rollouts := inputs.Rollouts
+	if rollouts <= 0 {
+		rollouts = 5
+	}
+	estimate := &evalModelBakeoffLiveCostEstimate{
+		Threshold: inputs.Threshold,
+		Confirmed: inputs.Confirmed,
+		Notes: []string{
+			"provider_calls estimates live model calls before transient retry attempts",
+			"subject, attacker, and judge calls are separated because provider_usage reports only subject-route usage",
+		},
+	}
+	if inputs.ProviderRetries > 0 {
+		estimate.Notes = append(estimate.Notes, fmt.Sprintf("provider retries can add up to %d additional attempt(s) per failed provider call", inputs.ProviderRetries))
+	}
+	resultRuns := 0
+	for _, suite := range inputs.Suites {
+		scenarioIDs, err := evalModelBakeoffSelectedScenarioIDs(suite, inputs.ScenarioIDs)
+		if err != nil {
+			return nil, err
+		}
+		if len(scenarioIDs) == 0 {
+			continue
+		}
+		if strings.EqualFold(suite, aphruntime.EvalSuiteBoundaryAttack) {
+			subject, attacker, results := evalModelBakeoffBoundaryAttackCallEstimate(scenarioIDs, rollouts, len(inputs.Routes), inputs.AttackerRoutes, inputs.AttackCorpus, inputs.MaxAttacksPerScenario)
+			estimate.SubjectCalls += subject
+			estimate.AttackerCalls += attacker
+			resultRuns += results
+			continue
+		}
+		results := len(inputs.Routes) * len(scenarioIDs) * rollouts
+		estimate.SubjectCalls += results
+		resultRuns += results
+	}
+	if strings.EqualFold(strings.TrimSpace(inputs.Scoring), aphruntime.EvalScoringJudge) && len(inputs.JudgeRoutes) > 0 {
+		estimate.JudgeCalls = resultRuns * len(inputs.JudgeRoutes)
+	}
+	estimate.ProviderCalls = estimate.SubjectCalls + estimate.AttackerCalls + estimate.JudgeCalls
+	estimate.ConfirmationRequired = inputs.Threshold > 0 && estimate.ProviderCalls > inputs.Threshold
+	return estimate, nil
+}
+
+func evalModelBakeoffSelectedScenarioIDs(suite string, selected []string) ([]string, error) {
+	infos, err := aphruntime.ListEvalScenarios(suite)
+	if err != nil {
+		return nil, err
+	}
+	if len(selected) == 0 {
+		out := make([]string, 0, len(infos))
+		for _, info := range infos {
+			out = append(out, info.ID)
+		}
+		return out, nil
+	}
+	wanted := make(map[string]bool, len(selected))
+	for _, raw := range selected {
+		id := strings.TrimSpace(raw)
+		if id != "" {
+			wanted[id] = true
+		}
+	}
+	if len(wanted) == 0 {
+		out := make([]string, 0, len(infos))
+		for _, info := range infos {
+			out = append(out, info.ID)
+		}
+		return out, nil
+	}
+	var out []string
+	for _, info := range infos {
+		if wanted[info.ID] {
+			out = append(out, info.ID)
+			delete(wanted, info.ID)
+		}
+	}
+	if len(wanted) > 0 {
+		missing := make([]string, 0, len(wanted))
+		for id := range wanted {
+			missing = append(missing, id)
+		}
+		sort.Strings(missing)
+		return nil, fmt.Errorf("unknown eval scenario(s): %s", strings.Join(missing, ", "))
+	}
+	return out, nil
+}
+
+func evalModelBakeoffBoundaryAttackCallEstimate(scenarioIDs []string, rollouts int, routeCount int, attackerRoutes []aphruntime.EvalRoute, corpus *aphruntime.EvalAttackCorpus, maxAttacksPerScenario int) (int, int, int) {
+	if routeCount <= 0 || len(scenarioIDs) == 0 {
+		return 0, 0, 0
+	}
+	if corpus != nil {
+		cases, turns := evalModelBakeoffAttackCorpusCounts(corpus, scenarioIDs, maxAttacksPerScenario)
+		return routeCount * turns, 0, routeCount * cases
+	}
+	attackerCount := len(attackerRoutes)
+	if attackerCount <= 0 {
+		attackerCount = 1
+	}
+	const builtInBoundaryAttackTurnEstimate = 2
+	results := routeCount * attackerCount * len(scenarioIDs) * rollouts
+	calls := results * builtInBoundaryAttackTurnEstimate
+	return calls, calls, results
+}
+
+func evalModelBakeoffAttackCorpusCounts(corpus *aphruntime.EvalAttackCorpus, scenarioIDs []string, maxAttacksPerScenario int) (int, int) {
+	if corpus == nil {
+		return 0, 0
+	}
+	wanted := map[string]bool{}
+	for _, id := range scenarioIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			wanted[id] = true
+		}
+	}
+	turnCountsByScenario := map[string][]int{}
+	for _, attack := range corpus.Attacks {
+		id := strings.TrimSpace(attack.ScenarioID)
+		if id == "" || !wanted[id] {
+			continue
+		}
+		turns := len(attack.Turns)
+		if turns <= 0 {
+			turns = 1
+		}
+		turnCountsByScenario[id] = append(turnCountsByScenario[id], turns)
+	}
+	total := 0
+	cases := 0
+	for _, id := range scenarioIDs {
+		id = strings.TrimSpace(id)
+		turnCounts := turnCountsByScenario[id]
+		if maxAttacksPerScenario > 0 && len(turnCounts) > maxAttacksPerScenario {
+			sort.Sort(sort.Reverse(sort.IntSlice(turnCounts)))
+			turnCounts = turnCounts[:maxAttacksPerScenario]
+		}
+		cases += len(turnCounts)
+		for _, turns := range turnCounts {
+			total += turns
+		}
+	}
+	return cases, total
+}
+
+func buildEvalModelBakeoffReport(role string, readiness evalModelBakeoffReadiness, mode string, suites []string, rollouts int, jobs int, reports []aphruntime.EvalReport, liveCostEstimate *evalModelBakeoffLiveCostEstimate) evalModelBakeoffReport {
 	report := evalModelBakeoffReport{
-		GeneratedAt:   time.Now().UTC().Format(time.RFC3339Nano),
-		Role:          role,
-		RoleStatus:    readiness.Status,
-		QualityOracle: readiness.QualityOracle,
-		Mode:          mode,
-		Suites:        append([]string(nil), suites...),
-		Rollouts:      rollouts,
-		Jobs:          jobs,
-		RoleReadiness: evalModelBakeoffRoleReadinesses(),
-		SuiteReports:  reports,
+		GeneratedAt:      time.Now().UTC().Format(time.RFC3339Nano),
+		Role:             role,
+		RoleStatus:       readiness.Status,
+		QualityOracle:    readiness.QualityOracle,
+		Mode:             mode,
+		Suites:           append([]string(nil), suites...),
+		Rollouts:         rollouts,
+		Jobs:             jobs,
+		LiveCostEstimate: liveCostEstimate,
+		RoleReadiness:    evalModelBakeoffRoleReadinesses(),
+		SuiteReports:     reports,
 		Notes: []string{
 			"model bakeoff reports evidence only; it does not mutate runtime model-slot configuration",
 			"provider_usage excludes attacker and judge overhead; use suite_reports for judge/provider failure details",
@@ -511,6 +722,16 @@ func renderEvalModelBakeoffHuman(report evalModelBakeoffReport) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Aphelion model bakeoff: %s (%s)\n", report.Role, report.RoleStatus)
 	fmt.Fprintf(&b, "mode=%s suites=%s routes=%d results=%d oracle=%s\n", report.Mode, strings.Join(report.Suites, ","), report.RouteCount, report.ResultCount, report.QualityOracle)
+	if estimate := report.LiveCostEstimate; estimate != nil {
+		fmt.Fprintf(&b, "live_cost_estimate provider_calls=%d subject=%d attacker=%d judge=%d threshold=%d confirmed=%t\n",
+			estimate.ProviderCalls,
+			estimate.SubjectCalls,
+			estimate.AttackerCalls,
+			estimate.JudgeCalls,
+			estimate.Threshold,
+			estimate.Confirmed,
+		)
+	}
 	for _, route := range report.Routes {
 		fmt.Fprintf(&b, "- %s pass=%.2f%% results=%d hard=%d provider_failures=%d ambiguous=%d est_prompt=%d provider_tokens=%d cache_read=%d duration_ms=%d\n",
 			route.Route,
@@ -535,6 +756,16 @@ func renderEvalModelBakeoffMarkdown(report evalModelBakeoffReport) string {
 	fmt.Fprintf(&b, "- Mode: `%s`\n", report.Mode)
 	fmt.Fprintf(&b, "- Suites: `%s`\n", strings.Join(report.Suites, "`, `"))
 	fmt.Fprintf(&b, "- Quality oracle: %s\n\n", report.QualityOracle)
+	if estimate := report.LiveCostEstimate; estimate != nil {
+		fmt.Fprintf(&b, "- Live cost estimate: `%d` provider calls (`%d` subject, `%d` attacker, `%d` judge), threshold `%d`, confirmed `%t`\n\n",
+			estimate.ProviderCalls,
+			estimate.SubjectCalls,
+			estimate.AttackerCalls,
+			estimate.JudgeCalls,
+			estimate.Threshold,
+			estimate.Confirmed,
+		)
+	}
 	b.WriteString("## Route Frontier\n\n")
 	b.WriteString("| Route | Pass | Results | Hard | Provider failures | Ambiguous | Est prompt | Provider tokens | Cache read | Duration ms |\n")
 	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")

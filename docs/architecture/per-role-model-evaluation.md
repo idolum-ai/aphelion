@@ -58,8 +58,13 @@ Use live bakeoffs when the question is provider/model choice:
 aphelion eval model-bakeoff --role governor --mode live \
   --routes openai:gpt-5.5,openai:gpt-5.4,anthropic:claude-sonnet-4-6 \
   --suites canonical,trajectory,boundary_attack --rollouts 3 --jobs 1 \
-  --out governor-bakeoff.json
+  --confirm-live-cost --out governor-bakeoff.json
 ```
+
+Live bakeoffs estimate subject, attacker, and judge provider-call counts before
+running. Sweeps above the default live threshold must pass
+`--confirm-live-cost`; lower `--live-cost-threshold` for dry-run checks, or set
+it to `0` only when an outer budget guard already exists.
 
 If a route wins locally for a role, validate the chosen mix end-to-end before
 changing live defaults. Roles are not independent: a cheaper governor can

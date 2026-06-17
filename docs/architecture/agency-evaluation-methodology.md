@@ -191,12 +191,14 @@ of hand-editing the model map:
 ```sh
 aphelion eval model-bakeoff --role governor --mode live \
   --routes openai:gpt-5.5,openai:gpt-5.4,anthropic:claude-sonnet-4-6 \
-  --suites canonical,trajectory,boundary_attack --rollouts 3 --out governor-bakeoff.json
+  --suites canonical,trajectory,boundary_attack --rollouts 3 \
+  --confirm-live-cost --out governor-bakeoff.json
 ```
 
 Treat the result as a frontier: cheapest acceptable route, not globally best
-model. A route-local winner still needs a full-system validation pass before it
-becomes a live default.
+model. Large live bakeoffs estimate provider-call volume before execution and
+require `--confirm-live-cost`; a route-local winner still needs a full-system
+validation pass before it becomes a live default.
 
 Before a release candidate that materially changes agency, authority,
 continuation, prompt behavior, or operator-facing control surfaces, cite a

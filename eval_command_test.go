@@ -374,6 +374,62 @@ func TestEvalModelBakeoffCommandRejectsAttackCorpusForMixedSuites(t *testing.T) 
 	}
 }
 
+func TestEvalModelBakeoffLiveCostEstimateCountsSubjectAttackerAndJudgeCalls(t *testing.T) {
+	t.Parallel()
+
+	estimate, err := estimateEvalModelBakeoffLiveCost(evalModelBakeoffLiveCostInputs{
+		Mode:        aphruntime.EvalModeLive,
+		Suites:      []string{aphruntime.EvalSuiteBoundaryAttack},
+		ScenarioIDs: []string{"boundary_no_grant_external_action"},
+		Rollouts:    2,
+		Routes: []aphruntime.EvalRoute{
+			{Name: "openai:a", Provider: "openai", Model: "a"},
+			{Name: "openai:b", Provider: "openai", Model: "b"},
+		},
+		AttackerRoutes: []aphruntime.EvalRoute{{Name: "subject", Provider: "subject", Model: "same-as-subject"}},
+		Scoring:        aphruntime.EvalScoringJudge,
+		JudgeRoutes: []aphruntime.EvalRoute{
+			{Name: "openai:judge-a", Provider: "openai", Model: "judge-a"},
+			{Name: "openai:judge-b", Provider: "openai", Model: "judge-b"},
+		},
+		Threshold: 10,
+	})
+	if err != nil {
+		t.Fatalf("estimate err = %v", err)
+	}
+	if estimate.SubjectCalls != 8 || estimate.AttackerCalls != 8 || estimate.JudgeCalls != 8 || estimate.ProviderCalls != 24 {
+		t.Fatalf("estimate = %#v, want subject=8 attacker=8 judge=8 total=24", estimate)
+	}
+	if !estimate.ConfirmationRequired {
+		t.Fatalf("estimate = %#v, want confirmation required", estimate)
+	}
+}
+
+func TestEvalModelBakeoffCommandRequiresConfirmationForLargeLiveSweep(t *testing.T) {
+	t.Parallel()
+
+	configPath := writeEvalCommandOpenAITestConfig(t)
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{
+		"model-bakeoff",
+		"--role", "governor",
+		"--mode", "live",
+		"--config", configPath,
+		"--routes", "openai:gpt-test",
+		"--suites", "canonical",
+		"--scenario", "token_budget_recovery_no_dead_end",
+		"--rollouts", "2",
+		"--live-cost-threshold", "1",
+		"--format", "json",
+	}, &out)
+	if err == nil || !strings.Contains(err.Error(), "--confirm-live-cost") {
+		t.Fatalf("eval model-bakeoff err = %v, want live cost confirmation error", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("output = %q, want no live report before confirmation", out.String())
+	}
+}
+
 func TestEvalGateCommandRendersMarkdown(t *testing.T) {
 	t.Parallel()
 
@@ -441,6 +497,30 @@ func TestEvalCompareCommandRendersMarkdown(t *testing.T) {
 	if !strings.Contains(out.String(), "Measured Impact") || !strings.Contains(out.String(), "token_budget_recovery_no_dead_end") {
 		t.Fatalf("compare output missing expected content:\n%s", out.String())
 	}
+}
+
+func writeEvalCommandOpenAITestConfig(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(`
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers]
+selection = "manual"
+default = "openai"
+
+[providers.openai]
+api_key = "test-key"
+model = "gpt-test"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return configPath
 }
 
 func writeEvalReportFixture(t *testing.T, path string, report aphruntime.EvalReport) {
