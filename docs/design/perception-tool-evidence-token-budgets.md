@@ -61,8 +61,12 @@ not canonical execution history.
 ### Stable prompt prefix and evidence admission
 
 Stable governance/persona prompt material should appear before volatile runtime
-awareness so provider prompt caches can hit. Volatile objective, evidence,
-signals, delivery mode, latest user text, and channel facts belong late.
+awareness so provider prompt caches can hit. Anthropic receives explicit cache
+breakpoints; the official OpenAI API uses automatic exact-prefix prompt caching
+for long prompts, so it benefits from the same stable-prefix/dynamic-tail layout
+without an OpenAI-specific transport cache-control field. Volatile objective,
+evidence, signals, delivery mode, latest user text, and channel facts belong
+late.
 
 The evidence ledger is cheap-to-write and hydrate-on-demand. Ordinary turns carry
 a compact evidence-ledger pointer plus the `evidence_hydrate` affordance; selected

@@ -208,10 +208,7 @@ func (r *Runtime) promptCacheStrategyForExecution(exec pipeline.TurnExecutionCon
 	if r == nil || r.cfg == nil {
 		return ""
 	}
-	if strings.EqualFold(strings.TrimSpace(exec.ProviderName), "anthropic") {
-		return r.cfg.Providers.Anthropic.CacheStrategy
-	}
-	return ""
+	return promptCacheStrategyForProviderConfig(r.cfg, exec.ProviderName)
 }
 
 func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordinatorExecuteInput) (turnCoordinatorExecuteOutput, error) {

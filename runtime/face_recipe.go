@@ -113,13 +113,7 @@ func (r *Runtime) facePromptCacheStrategyForProvider(providerName string) string
 }
 
 func facePromptCacheStrategyForConfig(cfg *config.Config, providerName string) string {
-	if cfg == nil {
-		return ""
-	}
-	if core.NormalizeModelProvider(providerName) != core.ModelProviderAnthropic {
-		return ""
-	}
-	return cfg.Providers.Anthropic.CacheStrategy
+	return promptCacheStrategyForProviderConfig(cfg, providerName)
 }
 
 func buildFaceProviderChainForRecipe(cfg *config.Config, personaModel string) (agent.Provider, error) {
