@@ -26,6 +26,13 @@ wraps those suites and produces a route frontier:
 The command is advisory only. It does not mutate `/model` slots, recipes, or
 configuration.
 
+Reasoning effort is part of the governor route frontier when the question is
+whether more deliberation buys measurable safety or continuity. Effort-tier
+bakeoffs should start on the focused `challenge` suite before spending on the
+full model matrix; the challenge slice is composed from existing authority,
+continuation, context-fidelity, recovery, and boundary-attack scenarios where
+shallow pattern matching is most likely to fail.
+
 ## Runnable And Scaffolded Roles
 
 Only a role with a validated quality oracle should be runnable in the bakeoff
@@ -65,6 +72,20 @@ Live bakeoffs estimate subject, attacker, and judge provider-call counts before
 running. Sweeps above the default live threshold must pass
 `--confirm-live-cost`; lower `--live-cost-threshold` for dry-run checks, or set
 it to `0` only when an outer budget guard already exists.
+
+Use effort-tier bakeoffs before comparing expensive route matrices:
+
+```sh
+aphelion eval model-bakeoff --role governor --mode live \
+  --routes openai:gpt-5.5 --efforts low,medium,high \
+  --suites challenge --rollouts 3 --jobs 1 \
+  --confirm-live-cost --out governor-effort-challenge.json
+```
+
+If `high` does not materially beat `low` on `challenge`, do not pay for a full
+high-effort matrix. If it does separate, compare the chosen effort against
+Haiku, Sonnet, and Opus on the same challenge slice before validating the final
+frontier on the full suites.
 
 If a route wins locally for a role, validate the chosen mix end-to-end before
 changing live defaults. Roles are not independent: a cheaper governor can

@@ -74,6 +74,25 @@ func TestEvalListCommandSupportsBoundaryAttackSuite(t *testing.T) {
 	}
 }
 
+func TestEvalListCommandSupportsChallengeSuite(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	if err := runEvalCommandWithDeps([]string{"list", "--suite", "challenge", "--format", "json"}, &out); err != nil {
+		t.Fatalf("eval list challenge err = %v", err)
+	}
+	var decoded struct {
+		Suite     string                        `json:"suite"`
+		Scenarios []aphruntime.EvalScenarioInfo `json:"scenarios"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode challenge list JSON: %v\n%s", err, out.String())
+	}
+	if decoded.Suite != "challenge" || len(decoded.Scenarios) != 16 {
+		t.Fatalf("decoded challenge list = %#v", decoded)
+	}
+}
+
 func TestEvalRunCommandLocalRendersJSON(t *testing.T) {
 	t.Parallel()
 
@@ -351,6 +370,46 @@ func TestEvalModelBakeoffCommandSupportsMultipleLocalRoutes(t *testing.T) {
 	}
 	if len(report.Routes) != 2 || report.Routes[0].Route != "local:a" || report.Routes[1].Route != "local:b" {
 		t.Fatalf("routes = %#v, want stable local route aggregation", report.Routes)
+	}
+}
+
+func TestEvalModelBakeoffCommandExpandsLocalRoutesByEffort(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"model-bakeoff", "--role", "governor", "--mode", "local", "--routes", "local:gpt-test", "--efforts", "low,medium,hard", "--suites", "canonical", "--scenario", "token_budget_recovery_no_dead_end", "--rollouts", "1", "--format", "json"}, &out)
+	if err != nil {
+		t.Fatalf("eval model-bakeoff err = %v\n%s", err, out.String())
+	}
+	var report evalModelBakeoffReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("decode model bakeoff JSON: %v\n%s", err, out.String())
+	}
+	if len(report.Routes) != 3 {
+		t.Fatalf("routes = %#v, want three effort-expanded routes", report.Routes)
+	}
+	got := map[string]string{}
+	for _, route := range report.Routes {
+		got[route.Route] = route.Effort
+	}
+	for route, effort := range map[string]string{
+		"local:gpt-test@low":    "low",
+		"local:gpt-test@medium": "medium",
+		"local:gpt-test@high":   "high",
+	} {
+		if got[route] != effort {
+			t.Fatalf("routes = %#v, want %s/%s", report.Routes, route, effort)
+		}
+	}
+}
+
+func TestEvalModelBakeoffCommandRejectsInvalidEffort(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"model-bakeoff", "--role", "governor", "--mode", "local", "--routes", "local:gpt-test", "--efforts", "tiny", "--suites", "canonical", "--scenario", "token_budget_recovery_no_dead_end", "--rollouts", "1", "--format", "json"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "unsupported eval model-bakeoff effort") {
+		t.Fatalf("eval model-bakeoff err = %v, want invalid effort error", err)
 	}
 }
 

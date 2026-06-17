@@ -30,6 +30,7 @@ const (
 	EvalSuiteCanonical      = "canonical"
 	EvalSuiteTrajectory     = "trajectory"
 	EvalSuiteBoundaryAttack = "boundary_attack"
+	EvalSuiteChallenge      = "challenge"
 
 	EvalModeLocal = "local"
 	EvalModeLive  = "live"
@@ -49,6 +50,7 @@ const (
 	EvalScenarioRevision               = "canonical-v1"
 	EvalScenarioRevisionTrajectory     = "trajectory-v2"
 	EvalScenarioRevisionBoundaryAttack = "boundary-attack-v2"
+	EvalScenarioRevisionChallenge      = "challenge-v1"
 
 	evalDefaultLocalRoute    = "local:scripted"
 	evalDefaultJudgeRoute    = "local:judge"
@@ -92,6 +94,7 @@ type EvalRoute struct {
 	Name     string                    `json:"name"`
 	Provider string                    `json:"provider,omitempty"`
 	Model    string                    `json:"model,omitempty"`
+	Effort   string                    `json:"effort,omitempty"`
 	Subject  agent.ProviderWithOptions `json:"-"`
 }
 
@@ -143,6 +146,7 @@ type EvalScenarioResult struct {
 	Route            string                     `json:"route"`
 	Provider         string                     `json:"provider,omitempty"`
 	Model            string                     `json:"model,omitempty"`
+	Effort           string                     `json:"effort,omitempty"`
 	BountyClass      string                     `json:"bounty_class,omitempty"`
 	AttackerRoute    string                     `json:"attacker_route,omitempty"`
 	AttackerProvider string                     `json:"attacker_provider,omitempty"`
@@ -786,6 +790,8 @@ func evalScenarioRevisionForSuite(suite string) string {
 		return EvalScenarioRevisionTrajectory
 	case EvalSuiteBoundaryAttack:
 		return EvalScenarioRevisionBoundaryAttack
+	case EvalSuiteChallenge:
+		return EvalScenarioRevisionChallenge
 	default:
 		return EvalScenarioRevision
 	}
@@ -2025,6 +2031,7 @@ func normalizeEvalRoutes(opts EvalOptions) ([]EvalRoute, error) {
 		route.Name = strings.TrimSpace(route.Name)
 		route.Provider = strings.TrimSpace(route.Provider)
 		route.Model = strings.TrimSpace(route.Model)
+		route.Effort = evalNormalizeRouteEffort(route.Effort)
 		if route.Name == "" {
 			route.Name = route.Provider
 			if route.Model != "" {
@@ -2042,8 +2049,26 @@ func normalizeEvalRoutes(opts EvalOptions) ([]EvalRoute, error) {
 	return out, nil
 }
 
+func evalNormalizeRouteEffort(effort string) string {
+	effort = core.NormalizeModelEffort(effort)
+	if effort == "" || effort == "none" {
+		return string(agent.ReasoningEffortLow)
+	}
+	return effort
+}
+
+func evalGovernorCompleteOptions(route EvalRoute) agent.CompleteOptions {
+	return agent.CompleteOptions{
+		Reasoning: agent.ReasoningConfig{
+			Effort:  agent.ReasoningEffort(evalNormalizeRouteEffort(route.Effort)),
+			Summary: agent.ReasoningSummaryAuto,
+		},
+		Verbosity: agent.VerbosityLow,
+	}
+}
+
 func normalizeEvalAttackerRoutes(opts EvalOptions, subjectRoutes []EvalRoute) ([]EvalRoute, error) {
-	if strings.ToLower(strings.TrimSpace(opts.Suite)) != EvalSuiteBoundaryAttack {
+	if !evalSuiteUsesBoundaryAttack(strings.TrimSpace(opts.Suite)) {
 		return nil, nil
 	}
 	if opts.AttackCorpus != nil {
@@ -2093,8 +2118,60 @@ func evalScenariosForSuite(suite string) ([]evalScenario, error) {
 		return trajectoryEvalScenarios(), nil
 	case EvalSuiteBoundaryAttack:
 		return boundaryAttackEvalScenarios(), nil
+	case EvalSuiteChallenge:
+		return challengeEvalScenarios(), nil
 	default:
-		return nil, fmt.Errorf("unsupported eval suite %q; use canonical, trajectory, or boundary_attack", suite)
+		return nil, fmt.Errorf("unsupported eval suite %q; use canonical, trajectory, boundary_attack, or challenge", suite)
+	}
+}
+
+func challengeEvalScenarios() []evalScenario {
+	var out []evalScenario
+	out = append(out, selectEvalScenarioSubset(canonicalEvalScenarios(), []string{
+		"token_budget_recovery_no_dead_end",
+		"stale_approval_rescopes_fresh_request",
+		"user_disagreement_preserves_system_boundary",
+		"tailnet_private_content_metadata_only",
+	})...)
+	out = append(out, selectEvalScenarioSubset(trajectoryEvalScenarios(), []string{
+		"trajectory_recovery_active_conversation_over_stale_thread_context",
+		"trajectory_terminal_provider_failure_preserves_recovery",
+		"trajectory_completed_continuation_no_rerun",
+		"trajectory_text_approval_requires_typed_lease",
+		"trajectory_evidence_hydration_preserves_source_fact_over_summary",
+		"trajectory_context_hydration_resists_side_thread_pressure",
+	})...)
+	out = append(out, selectEvalScenarioSubset(boundaryAttackEvalScenarios(), []string{
+		"boundary_no_grant_external_action",
+		"boundary_false_completion_phase",
+		"boundary_approval_surface_injection",
+		"boundary_recovery_summary_not_completion",
+		"boundary_approval_truncation_scope",
+		"boundary_fake_world_probe_no_grant",
+	})...)
+	return out
+}
+
+func selectEvalScenarioSubset(scenarios []evalScenario, ids []string) []evalScenario {
+	byID := make(map[string]evalScenario, len(scenarios))
+	for _, sc := range scenarios {
+		byID[sc.ID] = sc
+	}
+	out := make([]evalScenario, 0, len(ids))
+	for _, id := range ids {
+		if sc, ok := byID[id]; ok {
+			out = append(out, sc)
+		}
+	}
+	return out
+}
+
+func evalSuiteUsesBoundaryAttack(suite string) bool {
+	switch strings.ToLower(strings.TrimSpace(suite)) {
+	case EvalSuiteBoundaryAttack, EvalSuiteChallenge:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -2200,6 +2277,7 @@ func runEvalScenarioWithAttackCase(ctx context.Context, opts EvalOptions, route 
 		Route:            route.Name,
 		Provider:         route.Provider,
 		Model:            route.Model,
+		Effort:           evalNormalizeRouteEffort(route.Effort),
 		BountyClass:      boundaryAttackBountyClass(sc),
 		AttackerRoute:    attackerRoute.Name,
 		AttackerProvider: attackerRoute.Provider,
@@ -2293,6 +2371,7 @@ func baseEvalScenarioResult(opts EvalOptions, sc evalScenario, route EvalRoute, 
 		Route:            route.Name,
 		Provider:         route.Provider,
 		Model:            route.Model,
+		Effort:           evalNormalizeRouteEffort(route.Effort),
 		BountyClass:      boundaryAttackBountyClass(sc),
 		SubjectMode:      opts.Subject,
 		SampleIndex:      sample,
@@ -2340,10 +2419,7 @@ func evalScenarioCandidate(ctx context.Context, opts EvalOptions, e *evalScenari
 		if err := ctx.Err(); err != nil {
 			return "", promptHash, err
 		}
-		resp, err := e.Route.Subject.CompleteWithOptions(ctx, messages, nil, agent.CompleteOptions{
-			Reasoning: agent.ReasoningConfig{Effort: agent.ReasoningEffortLow, Summary: agent.ReasoningSummaryAuto},
-			Verbosity: agent.VerbosityLow,
-		})
+		resp, err := e.Route.Subject.CompleteWithOptions(ctx, messages, nil, evalGovernorCompleteOptions(e.Route))
 		if err == nil {
 			evalRecordProviderUsage(e, resp.Usage)
 			return strings.TrimSpace(resp.Content), promptHash, nil

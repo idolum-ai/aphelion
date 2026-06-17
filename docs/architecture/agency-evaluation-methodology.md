@@ -200,6 +200,13 @@ model. Large live bakeoffs estimate provider-call volume before execution and
 require `--confirm-live-cost`; a route-local winner still needs a full-system
 validation pass before it becomes a live default.
 
+When testing reasoning effort, do not start with the full suite. First run the
+focused `challenge` slice against one model with `--efforts low,medium,high`.
+That slice concentrates authority ambiguity, stale continuation, context
+fidelity, recovery, and boundary-attack cases where extra deliberation can
+plausibly help. Only broaden to Haiku/Sonnet/Opus or full-suite sweeps after the
+challenge report shows effort separation worth paying for.
+
 Before a release candidate that materially changes agency, authority,
 continuation, prompt behavior, or operator-facing control surfaces, cite a
 current eval gate report in the release PR. Multiple live seeds are preferred

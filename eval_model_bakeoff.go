@@ -46,6 +46,7 @@ type evalModelBakeoffRouteSummary struct {
 	Route                          string  `json:"route"`
 	Provider                       string  `json:"provider,omitempty"`
 	Model                          string  `json:"model,omitempty"`
+	Effort                         string  `json:"effort,omitempty"`
 	ResultCount                    int     `json:"result_count"`
 	PassCount                      int     `json:"pass_count"`
 	PassRate                       float64 `json:"pass_rate"`
@@ -95,6 +96,7 @@ func runEvalModelBakeoffCommand(args []string, out io.Writer) error {
 	rolloutsFlag := fs.Int("rollouts", 0, "rollouts per scenario/route")
 	jobsFlag := fs.Int("jobs", 1, "maximum concurrent route/scenario/rollout eval jobs")
 	routesFlag := fs.String("routes", "configured", "live routes: configured or comma-separated provider:model specs; local mode also accepts comma-separated route labels")
+	effortsFlag := fs.String("efforts", "", "optional comma-separated governor reasoning efforts: low, medium, high, xhigh; hard aliases high")
 	attackerRoutesFlag := fs.String("attacker-routes", "subject", "boundary_attack attacker routes: subject, configured, or comma-separated provider:model specs")
 	attackCorpusFlag := fs.String("attack-corpus", "", "boundary_attack JSON attack corpus path to replay")
 	maxAttacksPerScenarioFlag := fs.Int("max-attacks-per-scenario", 0, "maximum attack-corpus replay cases per scenario; 0 means all")
@@ -152,6 +154,11 @@ func runEvalModelBakeoffCommand(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	efforts, err := evalModelBakeoffEffortsForCommand(*effortsFlag)
+	if err != nil {
+		return err
+	}
+	routes = evalModelBakeoffExpandRoutesByEffort(mode, routes, efforts)
 	var attackCorpus *aphruntime.EvalAttackCorpus
 	if attackCorpusPath != "" {
 		attackCorpus, err = aphruntime.LoadEvalAttackCorpus(attackCorpusPath)
@@ -314,6 +321,8 @@ func normalizeEvalModelBakeoffSuites(suites []string) []string {
 			suite = aphruntime.EvalSuiteTrajectory
 		case aphruntime.EvalSuiteBoundaryAttack:
 			suite = aphruntime.EvalSuiteBoundaryAttack
+		case aphruntime.EvalSuiteChallenge:
+			suite = aphruntime.EvalSuiteChallenge
 		default:
 			suite = strings.ToLower(strings.TrimSpace(suite))
 		}
@@ -362,9 +371,65 @@ func evalModelBakeoffRoutesForCommand(mode string, routesSpec string, configPath
 	return routes, nil
 }
 
+func evalModelBakeoffEffortsForCommand(spec string) ([]string, error) {
+	values := splitEvalCSV(spec)
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, raw := range values {
+		effort, err := evalModelBakeoffNormalizeEffort(raw)
+		if err != nil {
+			return nil, err
+		}
+		if seen[effort] {
+			continue
+		}
+		seen[effort] = true
+		out = append(out, effort)
+	}
+	return out, nil
+}
+
+func evalModelBakeoffNormalizeEffort(raw string) (string, error) {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	if value == "hard" {
+		value = "high"
+	}
+	switch value {
+	case "low", "medium", "high", "xhigh":
+		return value, nil
+	default:
+		return "", fmt.Errorf("unsupported eval model-bakeoff effort %q; use low, medium, high, or xhigh", raw)
+	}
+}
+
+func evalModelBakeoffExpandRoutesByEffort(mode string, routes []aphruntime.EvalRoute, efforts []string) []aphruntime.EvalRoute {
+	if len(efforts) == 0 {
+		return routes
+	}
+	if len(routes) == 0 && strings.EqualFold(strings.TrimSpace(mode), aphruntime.EvalModeLocal) {
+		routes = []aphruntime.EvalRoute{{Name: "local:scripted", Provider: "local", Model: "scripted"}}
+	}
+	out := make([]aphruntime.EvalRoute, 0, len(routes)*len(efforts))
+	for _, route := range routes {
+		baseName := strings.TrimSpace(route.Name)
+		for _, effort := range efforts {
+			expanded := route
+			expanded.Effort = effort
+			if baseName != "" {
+				expanded.Name = baseName + "@" + effort
+			}
+			out = append(out, expanded)
+		}
+	}
+	return out
+}
+
 func evalModelBakeoffIncludesBoundaryAttack(suites []string) bool {
 	for _, suite := range suites {
-		if strings.EqualFold(suite, aphruntime.EvalSuiteBoundaryAttack) {
+		if strings.EqualFold(suite, aphruntime.EvalSuiteBoundaryAttack) || strings.EqualFold(suite, aphruntime.EvalSuiteChallenge) {
 			return true
 		}
 	}
@@ -447,6 +512,13 @@ func estimateEvalModelBakeoffLiveCost(inputs evalModelBakeoffLiveCostInputs) (*e
 			resultRuns += results
 			continue
 		}
+		if strings.EqualFold(suite, aphruntime.EvalSuiteChallenge) {
+			subject, attacker, results := evalModelBakeoffChallengeCallEstimate(scenarioIDs, rollouts, len(inputs.Routes), inputs.AttackerRoutes)
+			estimate.SubjectCalls += subject
+			estimate.AttackerCalls += attacker
+			resultRuns += results
+			continue
+		}
 		results := len(inputs.Routes) * len(scenarioIDs) * rollouts
 		estimate.SubjectCalls += results
 		resultRuns += results
@@ -521,6 +593,26 @@ func evalModelBakeoffBoundaryAttackCallEstimate(scenarioIDs []string, rollouts i
 	return calls, calls, results
 }
 
+func evalModelBakeoffChallengeCallEstimate(scenarioIDs []string, rollouts int, routeCount int, attackerRoutes []aphruntime.EvalRoute) (int, int, int) {
+	if routeCount <= 0 || len(scenarioIDs) == 0 {
+		return 0, 0, 0
+	}
+	var boundaryIDs []string
+	nonBoundary := 0
+	for _, id := range scenarioIDs {
+		if strings.HasPrefix(strings.TrimSpace(id), "boundary_") {
+			boundaryIDs = append(boundaryIDs, id)
+		} else {
+			nonBoundary++
+		}
+	}
+	subject, attacker, boundaryResults := evalModelBakeoffBoundaryAttackCallEstimate(boundaryIDs, rollouts, routeCount, attackerRoutes, nil, 0)
+	const nonBoundaryChallengeTurnEstimate = 2
+	nonBoundaryResults := routeCount * nonBoundary * rollouts
+	subject += nonBoundaryResults * nonBoundaryChallengeTurnEstimate
+	return subject, attacker, boundaryResults + nonBoundaryResults
+}
+
 func evalModelBakeoffAttackCorpusCounts(corpus *aphruntime.EvalAttackCorpus, scenarioIDs []string, maxAttacksPerScenario int) (int, int) {
 	if corpus == nil {
 		return 0, 0
@@ -591,6 +683,7 @@ func buildEvalModelBakeoffReport(role string, readiness evalModelBakeoffReadines
 					Route:    result.Route,
 					Provider: result.Provider,
 					Model:    result.Model,
+					Effort:   result.Effort,
 				}}
 				routeStats[result.Route] = acc
 			}
@@ -733,8 +826,9 @@ func renderEvalModelBakeoffHuman(report evalModelBakeoffReport) string {
 		)
 	}
 	for _, route := range report.Routes {
-		fmt.Fprintf(&b, "- %s pass=%.2f%% results=%d hard=%d provider_failures=%d ambiguous=%d est_prompt=%d provider_tokens=%d cache_read=%d duration_ms=%d\n",
+		fmt.Fprintf(&b, "- %s effort=%s pass=%.2f%% results=%d hard=%d provider_failures=%d ambiguous=%d est_prompt=%d provider_tokens=%d cache_read=%d duration_ms=%d\n",
 			route.Route,
+			firstNonEmptyEvalModelBakeoff(route.Effort, "low"),
 			route.PassRate*100,
 			route.ResultCount,
 			route.HardFailureCount,
@@ -767,11 +861,12 @@ func renderEvalModelBakeoffMarkdown(report evalModelBakeoffReport) string {
 		)
 	}
 	b.WriteString("## Route Frontier\n\n")
-	b.WriteString("| Route | Pass | Results | Hard | Provider failures | Ambiguous | Est prompt | Provider tokens | Cache read | Duration ms |\n")
-	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| Route | Effort | Pass | Results | Hard | Provider failures | Ambiguous | Est prompt | Provider tokens | Cache read | Duration ms |\n")
+	b.WriteString("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, route := range report.Routes {
-		fmt.Fprintf(&b, "| `%s` | %.2f%% | %d | %d | %d | %d | %d | %d | %d | %d |\n",
+		fmt.Fprintf(&b, "| `%s` | `%s` | %.2f%% | %d | %d | %d | %d | %d | %d | %d | %d |\n",
 			route.Route,
+			firstNonEmptyEvalModelBakeoff(route.Effort, "low"),
 			route.PassRate*100,
 			route.ResultCount,
 			route.HardFailureCount,

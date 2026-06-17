@@ -187,6 +187,46 @@ func TestBoundaryAttackEvalScenariosCoverBountyClasses(t *testing.T) {
 	}
 }
 
+func TestChallengeEvalScenariosFocusEffortDiscrimination(t *testing.T) {
+	t.Parallel()
+
+	scenarios, err := ListEvalScenarios(EvalSuiteChallenge)
+	if err != nil {
+		t.Fatalf("ListEvalScenarios(challenge) err = %v", err)
+	}
+	if len(scenarios) != 16 {
+		t.Fatalf("challenge scenario count = %d, want 16", len(scenarios))
+	}
+	ids := make(map[string]bool, len(scenarios))
+	domains := make(map[string]bool, len(scenarios))
+	for _, sc := range scenarios {
+		ids[sc.ID] = true
+		domains[sc.Domain] = true
+		if len(sc.FailureFixtures) == 0 {
+			t.Fatalf("challenge scenario %s missing failure fixtures", sc.ID)
+		}
+	}
+	for _, want := range []string{
+		"token_budget_recovery_no_dead_end",
+		"stale_approval_rescopes_fresh_request",
+		"trajectory_recovery_active_conversation_over_stale_thread_context",
+		"trajectory_text_approval_requires_typed_lease",
+		"trajectory_context_hydration_resists_side_thread_pressure",
+		"boundary_false_completion_phase",
+		"boundary_approval_surface_injection",
+		"boundary_fake_world_probe_no_grant",
+	} {
+		if !ids[want] {
+			t.Fatalf("challenge suite missing %s", want)
+		}
+	}
+	for _, want := range []string{"budget_recovery", "context_recovery", "context_fidelity", "completion_evidence", "approval_surface", "authority_boundary"} {
+		if !domains[want] {
+			t.Fatalf("challenge suite missing domain %s", want)
+		}
+	}
+}
+
 func TestBoundaryAttackScenariosStayPublishSafe(t *testing.T) {
 	t.Parallel()
 
@@ -1637,6 +1677,38 @@ func TestRunEvalSuiteRecordsProviderUsageForLiveSubject(t *testing.T) {
 	}
 	if got := report.Results[0].ProviderUsage; got == nil || got.ModelCallCount != 1 || got.TotalTokens != 125 || got.CacheWriteTokens != 12 {
 		t.Fatalf("provider usage result = %#v", got)
+	}
+}
+
+func TestRunEvalSuiteGovernorSubjectUsesRouteEffort(t *testing.T) {
+	t.Parallel()
+
+	provider := &capturingEvalProvider{
+		content: "Token budget was exhausted before final response. Work is not complete; I preserved the operation and re-offered a bounded retry. Next step: continue through the retry approval path.",
+	}
+	report, err := RunEvalSuite(context.Background(), EvalOptions{
+		Suite:       EvalSuiteCanonical,
+		Mode:        EvalModeLive,
+		Subject:     EvalSubjectGovernor,
+		Rollouts:    1,
+		WorkDir:     t.TempDir(),
+		ScenarioIDs: []string{"token_budget_recovery_no_dead_end"},
+		Routes: []EvalRoute{{
+			Name:     "effort-route@high",
+			Provider: "test",
+			Model:    "effort-model",
+			Effort:   string(agent.ReasoningEffortHigh),
+			Subject:  provider,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("RunEvalSuite() err = %v", err)
+	}
+	if provider.opts.Reasoning.Effort != agent.ReasoningEffortHigh || provider.opts.Reasoning.Summary != agent.ReasoningSummaryAuto {
+		t.Fatalf("provider reasoning = %#v, want high/auto", provider.opts.Reasoning)
+	}
+	if got := report.Results[0]; got.Route != "effort-route@high" || got.Effort != string(agent.ReasoningEffortHigh) {
+		t.Fatalf("result route/effort = %s/%s, want effort-route@high/high", got.Route, got.Effort)
 	}
 }
 

@@ -237,10 +237,7 @@ func (g *evalBoundaryAttackGovernor) Execute(ctx context.Context, req turn.Gover
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			resp, err := g.e.Route.Subject.CompleteWithOptions(ctx, messages, nil, agent.CompleteOptions{
-				Reasoning: agent.ReasoningConfig{Effort: agent.ReasoningEffortLow, Summary: agent.ReasoningSummaryAuto},
-				Verbosity: agent.VerbosityLow,
-			})
+			resp, err := g.e.Route.Subject.CompleteWithOptions(ctx, messages, nil, evalGovernorCompleteOptions(g.e.Route))
 			if err == nil {
 				content = strings.TrimSpace(resp.Content)
 				usage = resp.Usage
