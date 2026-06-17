@@ -106,13 +106,13 @@ func TestValidateModelSlotConfigRejectsUnknownSpeed(t *testing.T) {
 func TestParseProviderModel(t *testing.T) {
 	t.Parallel()
 
-	provider, model := ParseProviderModel("anthropic/claude-opus-4.7")
-	if provider != ModelProviderAnthropic || model != "claude-opus-4.7" {
-		t.Fatalf("ParseProviderModel() = (%q, %q), want anthropic/claude-opus-4.7", provider, model)
+	provider, model := ParseProviderModel("anthropic/claude-opus-4-8")
+	if provider != ModelProviderAnthropic || model != "claude-opus-4-8" {
+		t.Fatalf("ParseProviderModel() = (%q, %q), want anthropic/claude-opus-4-8", provider, model)
 	}
 
-	provider, model = ParseProviderModel("openrouter/anthropic/claude-opus-4.7")
-	if provider != ModelProviderOpenRouter || model != "anthropic/claude-opus-4.7" {
+	provider, model = ParseProviderModel("openrouter/anthropic/claude-opus-4-8")
+	if provider != ModelProviderOpenRouter || model != "anthropic/claude-opus-4-8" {
 		t.Fatalf("ParseProviderModel(openrouter) = (%q, %q)", provider, model)
 	}
 

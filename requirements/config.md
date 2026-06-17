@@ -126,15 +126,15 @@ chars_per_token = 4              # Rough estimate; actual usage from provider re
 
 [providers.anthropic]
 api_key = ""
-model = "claude-sonnet-4-6"     # Current flagship: claude-opus-4-6 (1M ctx), claude-sonnet-4-6 (1M ctx), claude-haiku-4-5 (200K ctx)
-max_tokens = 64000               # Sonnet 4.6 max output: 64K. Opus 4.6: 128K.
-context_window = 1000000         # Opus 4.6 and Sonnet 4.6: 1M tokens. Haiku 4.5: 200K.
+model = "claude-sonnet-4-6"     # Current accessible tiers: claude-opus-4-8 (1M ctx), claude-sonnet-4-6 (1M ctx), claude-haiku-4-5-20251001 (200K ctx)
+max_tokens = 64000               # Sonnet 4.6 max output: 64K. Opus 4.8 supports adaptive thinking.
+context_window = 1000000         # Opus 4.8 and Sonnet 4.6: 1M tokens. Haiku 4.5: 200K.
 anthropic_version = "2023-06-01"
 
 # Cache strategy (see providers.md for full architecture)
 cache_strategy = "hybrid"        # "auto" | "explicit" | "hybrid" | "off"
 cache_ttl = "1h"                 # "5m" (1.25x write cost) or "1h" (2x write cost, 10x cheaper reads)
-min_cache_tokens = 2048          # Minimum cacheable prefix. Opus 4.6/4.5: 4096, Sonnet 4.6: 2048, Haiku 4.5: 4096
+min_cache_tokens = 2048          # Minimum cacheable prefix. Opus 4.8/4.5: 4096, Sonnet 4.6: 2048, Haiku 4.5: 4096
 
 # Cache-TTL pruning: trim old tool results after TTL to shrink re-cache writes
 cache_ttl_pruning = true

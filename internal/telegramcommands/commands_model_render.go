@@ -114,7 +114,7 @@ func renderModelSlotRows(status core.ModelSlotStatus) [][]telegram.InlineButton 
 	rows := [][]telegram.InlineButton{
 		{
 			{Text: "Sonnet", CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "sonnet")},
-			{Text: "Opus 4.7", CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "opus47")},
+			{Text: "Opus 4.8", CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "opus48")},
 			{Text: modelGPT55PresetLabel(slot), CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "gpt55")},
 		},
 		effortRow,

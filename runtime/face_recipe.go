@@ -298,7 +298,7 @@ func faceModelForProvider(providerName, personaModel string) string {
 			return ""
 		}
 	}
-	if model == personaModelSonnet || model == personaModelOpus46 || model == personaModelOpus47 {
+	if model == personaModelSonnet || model == personaModelOpus48 {
 		switch provider {
 		case "anthropic":
 			return model

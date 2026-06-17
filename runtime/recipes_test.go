@@ -18,10 +18,14 @@ func TestRuntimeRecipeStateRoundTrip(t *testing.T) {
 	cfg.Sessions.DBPath = filepath.Join(t.TempDir(), "state", "sessions.db")
 	path := recipeStatePath(&cfg)
 	want := runtimeRecipeState{
+		PersonaModel:   personaModelOpus48,
+		GovernorEffort: governorEffortHigh,
+	}
+	legacy := runtimeRecipeState{
 		PersonaModel:   personaModelOpus46,
 		GovernorEffort: governorEffortHigh,
 	}
-	if err := saveRuntimeRecipeState(path, want, nil); err != nil {
+	if err := saveRuntimeRecipeState(path, legacy, nil); err != nil {
 		t.Fatalf("saveRuntimeRecipeState() err = %v", err)
 	}
 	got, err := loadRuntimeRecipeState(path, &cfg)

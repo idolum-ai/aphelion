@@ -25,7 +25,7 @@ func TestRuntimeModelSlotOverrideRoutesGovernorExecution(t *testing.T) {
 	status, err := rt.SetModelSlotOverride(core.ModelSlotConfig{
 		Slot:      core.ModelSlotGovernor,
 		Provider:  core.ModelProviderAnthropic,
-		Model:     "claude-opus-4.7",
+		Model:     "claude-opus-4-8",
 		Effort:    "high",
 		Transport: core.ModelTransportAuto,
 	}, "test", "route governor")
@@ -43,8 +43,8 @@ func TestRuntimeModelSlotOverrideRoutesGovernorExecution(t *testing.T) {
 	if exec.Provider == provider {
 		t.Fatal("exec provider still uses original native provider, want slot provider")
 	}
-	if exec.ProviderName != core.ModelProviderAnthropic || exec.ModelName != "claude-opus-4.7" {
-		t.Fatalf("provider/model = %s/%s, want anthropic/claude-opus-4.7", exec.ProviderName, exec.ModelName)
+	if exec.ProviderName != core.ModelProviderAnthropic || exec.ModelName != "claude-opus-4-8" {
+		t.Fatalf("provider/model = %s/%s, want anthropic/claude-opus-4-8", exec.ProviderName, exec.ModelName)
 	}
 	opts := rt.reasoningOptionsForRun(session.TurnRunKindInteractive)
 	if opts == nil || opts.Reasoning.Effort != agent.ReasoningEffortHigh {
@@ -71,7 +71,7 @@ func TestRuntimeModelSlotOverrideDoesNotMutateRecipeDefault(t *testing.T) {
 	if _, err := rt.SetModelSlotOverride(core.ModelSlotConfig{
 		Slot:      core.ModelSlotGovernor,
 		Provider:  core.ModelProviderAnthropic,
-		Model:     "claude-opus-4.7",
+		Model:     "claude-opus-4-8",
 		Effort:    "xhigh",
 		Transport: core.ModelTransportAuto,
 	}, "test", "temporary investigation"); err != nil {

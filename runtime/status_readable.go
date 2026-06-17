@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	statusReadableModelAnthropic  = "claude-haiku-4-5"
+	statusReadableModelAnthropic  = "claude-haiku-4-5-20251001"
 	statusReadableModelOpenAI     = "gpt-5.4"
-	statusReadableModelOpenRouter = "anthropic/claude-haiku-4-5"
+	statusReadableModelOpenRouter = "anthropic/claude-haiku-4-5-20251001"
 	statusReadableModelGemini     = "gemini-3.1-flash"
 	statusReadableInputMaxChars   = 2600
 	statusReadableOutputMaxChars  = 320

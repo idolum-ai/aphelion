@@ -84,8 +84,15 @@ aphelion eval model-bakeoff --role governor --mode live \
 
 If `high` does not materially beat `low` on `challenge`, do not pay for a full
 high-effort matrix. If it does separate, compare the chosen effort against
-Haiku, Sonnet, and Opus on the same challenge slice before validating the final
-frontier on the full suites.
+the current accessible Anthropic tier trio on the same challenge slice before
+validating the final frontier on the full suites:
+
+```sh
+aphelion eval model-bakeoff --role governor --mode live \
+  --routes anthropic:claude-haiku-4-5-20251001,anthropic:claude-sonnet-4-6,anthropic:claude-opus-4-8 \
+  --suites challenge --rollouts 3 --jobs 1 \
+  --confirm-live-cost --out governor-anthropic-challenge.json
+```
 
 If a route wins locally for a role, validate the chosen mix end-to-end before
 changing live defaults. Roles are not independent: a cheaper governor can

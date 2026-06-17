@@ -33,7 +33,7 @@ func TestModelSlotOverrideRoundTripAndSupersede(t *testing.T) {
 
 	second, err := store.SetModelSlotOverride(ModelSlotOverrideRecord{
 		Slot:           core.ModelSlotGovernor,
-		Config:         core.ModelSlotConfig{Slot: core.ModelSlotGovernor, Provider: core.ModelProviderAnthropic, Model: "claude-opus-4.7", Effort: "xhigh", Transport: "auto"},
+		Config:         core.ModelSlotConfig{Slot: core.ModelSlotGovernor, Provider: core.ModelProviderAnthropic, Model: "claude-opus-4-8", Effort: "xhigh", Transport: "auto"},
 		PreviousConfig: first.Config,
 		CreatedBy:      "telegram:1001",
 		Reason:         "second override",
@@ -50,7 +50,7 @@ func TestModelSlotOverrideRoundTripAndSupersede(t *testing.T) {
 	if !ok {
 		t.Fatal("ActiveModelSlotOverride() ok = false")
 	}
-	if active.ID != second.ID || active.Config.Model != "claude-opus-4.7" {
+	if active.ID != second.ID || active.Config.Model != "claude-opus-4-8" {
 		t.Fatalf("active = %#v, want second override", active)
 	}
 	history, err := store.ModelSlotOverrideHistory(core.ModelSlotGovernor, 10)

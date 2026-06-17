@@ -186,11 +186,11 @@ func modelPresetConfig(status core.ModelSlotStatus, preset string) (core.ModelSl
 		if effort == "" {
 			effort = "medium"
 		}
-	case "opus47":
+	case "opus48", "opus47":
 		cfg.Provider = core.ModelProviderAnthropic
-		cfg.Model = "claude-opus-4.7"
+		cfg.Model = "claude-opus-4-8"
 		if effort == "" {
-			effort = "xhigh"
+			effort = "high"
 		}
 	case "gpt55":
 		if slot == core.ModelSlotDoctor {

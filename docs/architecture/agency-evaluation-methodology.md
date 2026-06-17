@@ -206,6 +206,9 @@ That slice concentrates authority ambiguity, stale continuation, context
 fidelity, recovery, and boundary-attack cases where extra deliberation can
 plausibly help. Only broaden to Haiku/Sonnet/Opus or full-suite sweeps after the
 challenge report shows effort separation worth paying for.
+Use the current accessible Anthropic tier trio for that broadened challenge
+slice: `anthropic:claude-haiku-4-5-20251001`,
+`anthropic:claude-sonnet-4-6`, and `anthropic:claude-opus-4-8`.
 
 Before a release candidate that materially changes agency, authority,
 continuation, prompt behavior, or operator-facing control surfaces, cite a
