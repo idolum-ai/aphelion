@@ -333,13 +333,14 @@ func anthropicThinkingModeForModel(model string) anthropicThinkingMode {
 	switch {
 	case strings.HasPrefix(value, "claude-fable-5"),
 		strings.HasPrefix(value, "claude-mythos-5"),
+		strings.HasPrefix(value, "claude-sonnet-4-6"),
+		strings.HasPrefix(value, "claude-opus-4-5"),
+		strings.HasPrefix(value, "claude-opus-4-6"),
 		strings.HasPrefix(value, "claude-opus-4-7"),
 		strings.HasPrefix(value, "claude-opus-4-8"):
 		return anthropicThinkingAdaptive
 	case strings.HasPrefix(value, "claude-opus-"):
-		if strings.HasPrefix(value, "claude-opus-4-1") ||
-			strings.HasPrefix(value, "claude-opus-4-5") ||
-			strings.HasPrefix(value, "claude-opus-4-6") {
+		if strings.HasPrefix(value, "claude-opus-4-1") {
 			return anthropicThinkingManual
 		}
 		return anthropicThinkingAdaptive

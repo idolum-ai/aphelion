@@ -548,6 +548,54 @@ func TestAnthropicCompleteWithAdaptiveThinkingNormalizesOpusDotVersion(t *testin
 	}
 }
 
+func TestAnthropicCompleteWithAdaptiveThinkingForFourSixFamily(t *testing.T) {
+	for _, model := range []string{
+		"claude-sonnet-4-6",
+		"claude-opus-4-6",
+		"claude-opus-4-5",
+	} {
+		t.Run(model, func(t *testing.T) {
+			var seen anthropicRequest
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				_ = json.NewEncoder(w).Encode(anthropicResponse{
+					Content: []anthropicContent{{Type: "text", Text: "ok"}},
+				})
+			})
+
+			client, err := NewAnthropic(AnthropicOptions{
+				APIKey:     "test-key",
+				Model:      model,
+				MaxTokens:  4096,
+				HTTPClient: &http.Client{Transport: &testTransport{handler: handler}},
+			})
+			if err != nil {
+				t.Fatalf("new client: %v", err)
+			}
+
+			_, err = client.CompleteWithOptions(context.Background(), []agent.Message{{Role: "user", Content: "think"}}, nil, agent.CompleteOptions{
+				Reasoning: agent.ReasoningConfig{
+					Effort: agent.ReasoningEffortMedium,
+				},
+			})
+			if err != nil {
+				t.Fatalf("CompleteWithOptions() err = %v", err)
+			}
+			if seen.Thinking == nil || seen.Thinking.Type != "adaptive" {
+				t.Fatalf("thinking request = %#v, want adaptive", seen.Thinking)
+			}
+			if seen.Thinking.BudgetTokens != 0 {
+				t.Fatalf("budget_tokens = %d, want omitted", seen.Thinking.BudgetTokens)
+			}
+			if seen.OutputConfig == nil || seen.OutputConfig.Effort != "medium" {
+				t.Fatalf("output_config = %#v, want medium effort", seen.OutputConfig)
+			}
+		})
+	}
+}
+
 func TestAnthropicCompleteWithNoReasoningOmitsAdaptiveThinking(t *testing.T) {
 	var seen anthropicRequest
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
