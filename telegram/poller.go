@@ -5,9 +5,12 @@ package telegram
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
+	"net"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/idolum-ai/aphelion/config"
@@ -25,6 +28,9 @@ type Poller struct {
 	client             *Client
 	handler            UpdateHandler
 	pollTimeoutSeconds int
+	pollRetryInitial   time.Duration
+	pollRetryMax       time.Duration
+	pollRetrySleep     func(context.Context, time.Duration) error
 	resolver           *principal.Resolver
 	media              config.TelegramMediaConfig
 	durableGroups      map[int64]durableGroupRoute
@@ -40,6 +46,9 @@ func NewPoller(client *Client, handler UpdateHandler, opts ...PollerOption) *Pol
 		client:             client,
 		handler:            handler,
 		pollTimeoutSeconds: defaultPollTimeoutSeconds,
+		pollRetryInitial:   time.Second,
+		pollRetryMax:       30 * time.Second,
+		pollRetrySleep:     sleepPollRetry,
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -97,10 +106,33 @@ func WithIngressSurface(surface string) PollerOption {
 	}
 }
 
+func withPollerRetryBackoff(initial time.Duration, max time.Duration) PollerOption {
+	return func(p *Poller) {
+		if initial > 0 {
+			p.pollRetryInitial = initial
+		}
+		if max > 0 {
+			p.pollRetryMax = max
+		}
+		if p.pollRetryMax < p.pollRetryInitial {
+			p.pollRetryMax = p.pollRetryInitial
+		}
+	}
+}
+
+func withPollerRetrySleep(sleep func(context.Context, time.Duration) error) PollerOption {
+	return func(p *Poller) {
+		if sleep != nil {
+			p.pollRetrySleep = sleep
+		}
+	}
+}
+
 func (p *Poller) Run(ctx context.Context) error {
 	if p.client == nil || p.handler == nil {
 		return errors.New("poller client and handler are required")
 	}
+	p.normalizePollRetryPolicy()
 
 	offset := int64(0)
 	if p.checkpoint != nil {
@@ -110,6 +142,7 @@ func (p *Poller) Run(ctx context.Context) error {
 		}
 		offset = next
 	}
+	retryDelay := p.pollRetryInitial
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil
@@ -119,8 +152,21 @@ func (p *Poller) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
+			if retryableTelegramPollError(err) {
+				delay := telegramPollRetryDelay(err, retryDelay, p.pollRetryMax)
+				log.Printf("WARN telegram getUpdates transient failure; retrying after %s err=%v", delay, err)
+				if sleepErr := p.pollRetrySleep(ctx, delay); sleepErr != nil {
+					if ctx.Err() != nil {
+						return nil
+					}
+					return sleepErr
+				}
+				retryDelay = nextPollRetryDelay(retryDelay, p.pollRetryMax)
+				continue
+			}
 			return err
 		}
+		retryDelay = p.pollRetryInitial
 
 		for _, upd := range updates {
 			state, err := p.updateState(ctx, upd.UpdateID)
@@ -264,6 +310,179 @@ func (p *Poller) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (p *Poller) normalizePollRetryPolicy() {
+	if p.pollRetryInitial <= 0 {
+		p.pollRetryInitial = time.Second
+	}
+	if p.pollRetryMax <= 0 {
+		p.pollRetryMax = 30 * time.Second
+	}
+	if p.pollRetryMax < p.pollRetryInitial {
+		p.pollRetryMax = p.pollRetryInitial
+	}
+	if p.pollRetrySleep == nil {
+		p.pollRetrySleep = sleepPollRetry
+	}
+}
+
+func sleepPollRetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func nextPollRetryDelay(current time.Duration, max time.Duration) time.Duration {
+	if current <= 0 {
+		current = time.Second
+	}
+	if max <= 0 {
+		max = 30 * time.Second
+	}
+	next := current * 2
+	if next < current || next > max {
+		return max
+	}
+	return next
+}
+
+type timeoutLike interface {
+	Timeout() bool
+}
+
+type temporaryLike interface {
+	Temporary() bool
+}
+
+type retryAfterLike interface {
+	RetryAfterDelay() time.Duration
+}
+
+func retryableTelegramPollError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNABORTED) ||
+		errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ETIMEDOUT) ||
+		errors.Is(err, syscall.ENETUNREACH) ||
+		errors.Is(err, syscall.EHOSTUNREACH) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary()) {
+		return true
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && (dnsErr.IsTimeout || dnsErr.IsTemporary) {
+		return true
+	}
+	var timeoutErr timeoutLike
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return true
+	}
+	var temporaryErr temporaryLike
+	if errors.As(err, &temporaryErr) && temporaryErr.Temporary() {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	if telegramPollErrorHasNonRetryableMarker(lower) {
+		return false
+	}
+	if telegramPollRetryAfter(err) > 0 {
+		return true
+	}
+	return telegramPollErrorHasRetryableMarker(lower)
+}
+
+func telegramPollRetryDelay(err error, fallback time.Duration, max time.Duration) time.Duration {
+	if retryAfter := telegramPollRetryAfter(err); retryAfter > 0 {
+		if max > 0 && retryAfter > max {
+			return max
+		}
+		return retryAfter
+	}
+	return fallback
+}
+
+func telegramPollRetryAfter(err error) time.Duration {
+	var retryAfter retryAfterLike
+	if errors.As(err, &retryAfter) {
+		return retryAfter.RetryAfterDelay()
+	}
+	return 0
+}
+
+func telegramPollErrorHasNonRetryableMarker(lower string) bool {
+	markers := []string{
+		"unauthorized",
+		"forbidden",
+		"unexpected status 401",
+		"unexpected status 403",
+		"unexpected status 404",
+		"unexpected status 409",
+		"conflict:",
+		"terminated by other getupdates request",
+		"webhook is active",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func telegramPollErrorHasRetryableMarker(lower string) bool {
+	markers := []string{
+		"unexpected status 429",
+		"unexpected status 500",
+		"unexpected status 502",
+		"unexpected status 503",
+		"unexpected status 504",
+		"too many requests",
+		"internal server error",
+		"bad gateway",
+		"service unavailable",
+		"gateway timeout",
+		"connection reset by peer",
+		"connection refused",
+		"connection timed out",
+		"connection aborted",
+		"broken pipe",
+		"unexpected eof",
+		"server closed idle connection",
+		"tls handshake timeout",
+		"i/o timeout",
+		"timeout awaiting response headers",
+		"temporary failure in name resolution",
+		"no such host",
+		"network is unreachable",
+		"host is unreachable",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Poller) bindIngressUpdate(msg core.InboundMessage, updateID int64) core.InboundMessage {

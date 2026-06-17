@@ -13,6 +13,7 @@ import (
 )
 
 const continuationCallbackPrefix = core.ContinuationCallbackPrefix
+const continuationCallbackRetiredSurface = "continuation_retired"
 const staleContinuationCallbackText = "This continuation prompt is no longer active. Use the newest prompt."
 const legacyContinueOnceCallbackText = "This one-step approval button is from an older prompt. Use the newest prompt."
 const continuationCallbackFailureText = "Continuation action failed. Check /health diagnose for details."

@@ -23,6 +23,10 @@ type telegramCallbackErrorRecorder interface {
 	RecordTelegramCallbackError(chatID int64, callbackKind string, err error)
 }
 
+type telegramCallbackProjectionRetirer interface {
+	RetireTelegramCallbackMessage(chatID int64, messageID int64, surface string) error
+}
+
 type telegramCallbackThreadResolver interface {
 	TelegramThreadForReplyMessage(chatID int64, replyMessageID int64) (session.TelegramThread, bool, error)
 }
@@ -62,6 +66,19 @@ func recordTelegramCallbackError(router commandRouter, chatID int64, callbackKin
 	}
 	if recorder, ok := router.(telegramCallbackErrorRecorder); ok {
 		recorder.RecordTelegramCallbackError(chatID, callbackKind, err)
+	}
+}
+
+func retireTelegramCallbackProjection(router commandRouter, chatID int64, messageID int64, surface string) {
+	if chatID == 0 || messageID <= 0 {
+		return
+	}
+	retirer, ok := router.(telegramCallbackProjectionRetirer)
+	if !ok {
+		return
+	}
+	if err := retirer.RetireTelegramCallbackMessage(chatID, messageID, surface); err != nil {
+		recordTelegramCallbackError(router, chatID, "telegram.callback.retire", err)
 	}
 }
 

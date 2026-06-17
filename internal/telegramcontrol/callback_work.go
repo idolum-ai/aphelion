@@ -36,6 +36,18 @@ func recordTelegramCallbackWorkAccepted(store *session.SQLiteStore, msg core.Inb
 	return err
 }
 
+func dropTelegramCallbackWorkIfDispatchable(store *session.SQLiteStore, msg core.InboundMessage, reason string) error {
+	if store == nil || strings.TrimSpace(msg.IngressSurface) == "" || msg.IngressUpdateID <= 0 {
+		return nil
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "callback_work_not_dispatchable"
+	}
+	_, err := store.MarkTelegramIngressDroppedIfDispatchable(msg.IngressSurface, msg.IngressUpdateID, reason, time.Now().UTC())
+	return err
+}
+
 func ensureTelegramCallbackWorkQueued(store *session.SQLiteStore, msg core.InboundMessage, updateKind string) (bool, error) {
 	surface := strings.TrimSpace(msg.IngressSurface)
 	if store == nil || surface == "" || msg.IngressUpdateID <= 0 {

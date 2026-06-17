@@ -83,6 +83,10 @@ func ParseMaterialPacket(text string) (core.MaterialPacket, error) {
 			current = "scene_constraints"
 			recognized++
 			continue
+		case "continuity_context":
+			current = "continuity_context"
+			recognized++
+			continue
 		case "notes":
 			current = "notes"
 			recognized++
@@ -91,7 +95,7 @@ func ParseMaterialPacket(text string) (core.MaterialPacket, error) {
 
 		item := ParseMaterialItem(line)
 		if item == "" {
-			if current == "notes" || current == "kind" {
+			if current == "notes" || current == "continuity_context" || current == "kind" {
 				item = line
 			} else {
 				continue
@@ -110,6 +114,8 @@ func ParseMaterialPacket(text string) (core.MaterialPacket, error) {
 			packet.Refusals = append(packet.Refusals, item)
 		case "scene_constraints":
 			packet.SceneConstraints = append(packet.SceneConstraints, item)
+		case "continuity_context":
+			packet.ContinuityContext = append(packet.ContinuityContext, parseMaterialContinuityContextItem(item))
 		case "notes":
 			packet.Notes = append(packet.Notes, item)
 		}
@@ -148,6 +154,8 @@ func NormalizeMaterialHeading(line string) string {
 		return "refusals"
 	case "SCENE_CONSTRAINTS", "SCENE CONSTRAINTS":
 		return "scene_constraints"
+	case "CONTINUITY_CONTEXT", "CONTINUITY CONTEXT", "INTERNAL_CONTINUITY", "INTERNAL CONTINUITY":
+		return "continuity_context"
 	case "NOTES":
 		return "notes"
 	default:
@@ -172,4 +180,97 @@ func ParseMaterialItem(line string) string {
 		}
 	}
 	return strings.TrimSpace(line[dot+2:])
+}
+
+func parseMaterialContinuityContextItem(item string) core.MaterialContinuityContext {
+	trimmed := strings.TrimSpace(item)
+	if trimmed == "" {
+		return core.MaterialContinuityContext{}
+	}
+	fields := make(map[string]string)
+	for _, rawPart := range strings.Split(trimmed, ";") {
+		part := strings.TrimSpace(rawPart)
+		if part == "" {
+			continue
+		}
+		key, value, ok := cutMaterialKeyValue(part)
+		if !ok {
+			continue
+		}
+		fields[normalizeMaterialKey(key)] = strings.TrimSpace(value)
+	}
+	if len(fields) == 0 {
+		if legacy, ok := shapeLegacyContinuityStrings(trimmed); ok {
+			return legacy
+		}
+		return core.MaterialContinuityContext{
+			Kind:        core.MaterialContinuityKindEvidence,
+			Visibility:  core.MaterialContinuityVisibilityInternal,
+			Reason:      "legacy continuity prose quarantined for compatibility",
+			EvidenceRef: "legacy_continuity_context_prose",
+		}
+	}
+	return core.MaterialContinuityContext{
+		Kind:        core.NormalizeMaterialContinuityKind(fields["kind"]),
+		Visibility:  core.NormalizeMaterialContinuityVisibility(fields["visibility"]),
+		Reason:      firstNonEmptyMaterialField(fields["reason"], fields["why"], fields["text"], fields["summary"], fields["detail"]),
+		EvidenceRef: firstNonEmptyMaterialField(fields["evidence_ref"], fields["evidence"], fields["ref"]),
+	}
+}
+
+// shapeLegacyContinuityStrings quarantines older prose-shaped recovery lines.
+// New material floors should use typed continuity fields and visibility policy.
+func shapeLegacyContinuityStrings(text string) (core.MaterialContinuityContext, bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return core.MaterialContinuityContext{}, false
+	}
+	lower := strings.ToLower(trimmed)
+	for _, marker := range []string{
+		"recovered cleanly",
+		"recovered and completed",
+		"recovered and ",
+		"recovery completed",
+		"recovery evidence",
+		"continuity repair completed",
+		"continuity repair succeeded",
+		"budget recovery completed",
+		"budget recovery finished",
+	} {
+		if strings.HasPrefix(lower, marker) {
+			return core.MaterialContinuityContext{
+				Kind:        core.MaterialContinuityKindRecovery,
+				Visibility:  core.MaterialContinuityVisibilityInternal,
+				Reason:      "legacy recovery prose quarantined for compatibility",
+				EvidenceRef: "legacy_recovery_prose",
+			}, true
+		}
+	}
+	return core.MaterialContinuityContext{}, false
+}
+
+func cutMaterialKeyValue(part string) (string, string, bool) {
+	if key, value, ok := strings.Cut(part, "="); ok {
+		return key, value, true
+	}
+	if key, value, ok := strings.Cut(part, ":"); ok {
+		return key, value, true
+	}
+	return "", "", false
+}
+
+func normalizeMaterialKey(key string) string {
+	key = strings.ToLower(strings.TrimSpace(key))
+	key = strings.ReplaceAll(key, "-", "_")
+	key = strings.ReplaceAll(key, " ", "_")
+	return key
+}
+
+func firstNonEmptyMaterialField(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

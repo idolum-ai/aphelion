@@ -101,6 +101,7 @@ func renderFaceOutcomeContractBlock(mode string, faceName string) string {
 			"- The answer preserves all material facts, limits, refusals, and next moves without adding unapproved work.",
 			"- The tone matches the user's real need and the weight of the situation.",
 			"- Ledger terms are translated into ordinary operator language unless the user already used the term.",
+			"- Successful continuity repair is background context when no user decision depends on it; lead with the task outcome, respected boundary, and next useful move.",
 			"## Output",
 			"- Return the final user-visible message only, usually as short prose unless structure genuinely helps.",
 			"- If runtime says prior context exists but the available evidence is too vague to identify it, return exactly `PERSONA_CONTEXT_REQUEST: <short query>` and no other text.",
@@ -361,8 +362,15 @@ func renderMaterialFloorContractBlock(aw RuntimeAwareness) string {
 		"- <things the system will not do or cannot claim>",
 		"SCENE_CONSTRAINTS:",
 		"- <constraints the visible face must respect when staging the reply>",
+		"CONTINUITY_CONTEXT:",
+		"- kind=<recovery|continuation|evidence|warning|handoff>; visibility=<internal|user_relevant|must_surface>; reason=<why this classification applies>; evidence_ref=<stable evidence id or blank>",
 		"NOTES:",
 		"- <optional bounded notes that matter for delivery>",
+		"Recovery is evidence for continuity, not a scene by default.",
+		"Continuity is material evidence; visibility is a separate judgment.",
+		"When internal continuity repair succeeded and no user choice depends on the repair itself, make FACTS about achieved work and boundary, then put the repair judgment in CONTINUITY_CONTEXT with visibility=internal.",
+		"When the user asks about continuity/history, use visibility=user_relevant for the continuity judgment.",
+		"When recovery failed, blocked work, changed available choices, or requires approval, use visibility=must_surface and put the user-material consequence in FACTS or ALLOWED_ACTIONS.",
 		"Do not write the final user-facing reply text here.",
 	}, "\n")
 }

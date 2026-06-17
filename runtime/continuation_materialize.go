@@ -92,6 +92,10 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 	if operationStatusIsTerminal(opState.Status) {
 		return false, nil
 	}
+	if viability := r.operationContinuationCandidateViability(key, opState, now); !viability.Live {
+		r.recordSuppressedOperationContinuationCandidate(key, opState, viability, now)
+		return false, nil
+	}
 	if phase, ok := nextOperationPhaseForApproval(opState); ok && len(phase.RequiredCapabilityGrants) > 0 {
 		now := time.Now().UTC()
 		if reason := operationPhaseApprovalBlockedReason(phase); reason != "" {

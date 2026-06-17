@@ -63,6 +63,9 @@ func TestHandleTelegramCommandCallbackContinuationApprove(t *testing.T) {
 	if !commandRowsContain(sender.editInline[0].rows, "Approve 15m", encodeApprovalWindowCallbackData("offer-test", approvalWindowActionEnable15)) {
 		t.Fatalf("editInline rows = %#v, want approval-window offer", sender.editInline[0].rows)
 	}
+	if router.callbackRetireChatID != 7 || router.callbackRetireMessageID != 93 || router.callbackRetireSurface != continuationCallbackRetiredSurface {
+		t.Fatalf("retired callback projection = chat:%d msg:%d surface:%q, want 7/93/%s", router.callbackRetireChatID, router.callbackRetireMessageID, router.callbackRetireSurface, continuationCallbackRetiredSurface)
+	}
 }
 
 func TestHandleTelegramCommandCallbackContinueOnceFailsClosed(t *testing.T) {
@@ -92,6 +95,9 @@ func TestHandleTelegramCommandCallbackContinueOnceFailsClosed(t *testing.T) {
 	}
 	if len(sender.answers) != 1 || sender.answers[0].text != legacyContinueOnceCallbackText {
 		t.Fatalf("answers = %#v, want legacy continue_once stale answer", sender.answers)
+	}
+	if router.callbackRetireChatID != 7 || router.callbackRetireMessageID != 194 || router.callbackRetireSurface != continuationCallbackRetiredSurface {
+		t.Fatalf("retired callback projection = chat:%d msg:%d surface:%q, want 7/194/%s", router.callbackRetireChatID, router.callbackRetireMessageID, router.callbackRetireSurface, continuationCallbackRetiredSurface)
 	}
 }
 
@@ -127,6 +133,9 @@ func TestHandleTelegramCommandCallbackContinuationApproveContinuesWhenEditFails(
 	}
 	if len(sender.editClear) != 0 {
 		t.Fatalf("editClear count = %d, want no keyboard-clearing edit", len(sender.editClear))
+	}
+	if router.callbackRetireChatID != 7 || router.callbackRetireMessageID != 193 || router.callbackRetireSurface != continuationCallbackRetiredSurface {
+		t.Fatalf("retired callback projection = chat:%d msg:%d surface:%q, want 7/193/%s", router.callbackRetireChatID, router.callbackRetireMessageID, router.callbackRetireSurface, continuationCallbackRetiredSurface)
 	}
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline count = %d, want 1 approval-window offer edit", len(sender.editInline))
@@ -341,6 +350,12 @@ func TestHandleTelegramCommandCallbackContinuationRejectsStaleDecisionID(t *test
 	if len(sender.edits) != 0 {
 		t.Fatalf("edits count = %d, want 0 for stale callback", len(sender.edits))
 	}
+	if len(sender.editClear) != 1 || sender.editClear[0].messageID != 196 || sender.editClear[0].text != staleContinuationCallbackText {
+		t.Fatalf("editClear = %#v, want stale continuation card retired", sender.editClear)
+	}
+	if router.callbackRetireChatID != 7 || router.callbackRetireMessageID != 196 || router.callbackRetireSurface != continuationCallbackRetiredSurface {
+		t.Fatalf("retired callback projection = chat:%d msg:%d surface:%q, want 7/196/%s", router.callbackRetireChatID, router.callbackRetireMessageID, router.callbackRetireSurface, continuationCallbackRetiredSurface)
+	}
 }
 
 func TestHandleTelegramCommandCallbackContinuationRejectsUnauthorizedActor(t *testing.T) {
@@ -404,6 +419,12 @@ func TestHandleTelegramCommandCallbackContinuationRejectsWrongPromptMessage(t *t
 	}
 	if len(sender.answers) != 1 || sender.answers[0].text != staleContinuationCallbackText {
 		t.Fatalf("answers = %#v, want stale callback answer", sender.answers)
+	}
+	if len(sender.editClear) != 1 || sender.editClear[0].messageID != 199 || sender.editClear[0].text != staleContinuationCallbackText {
+		t.Fatalf("editClear = %#v, want wrong prompt card retired", sender.editClear)
+	}
+	if router.callbackRetireChatID != 7 || router.callbackRetireMessageID != 199 || router.callbackRetireSurface != continuationCallbackRetiredSurface {
+		t.Fatalf("retired callback projection = chat:%d msg:%d surface:%q, want 7/199/%s", router.callbackRetireChatID, router.callbackRetireMessageID, router.callbackRetireSurface, continuationCallbackRetiredSurface)
 	}
 }
 

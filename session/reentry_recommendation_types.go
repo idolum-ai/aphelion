@@ -39,6 +39,11 @@ type ReentryRecommendationCandidate struct {
 	AuthorityClass   string               `json:"authority_class,omitempty"`
 	RequiresApproval bool                 `json:"requires_approval,omitempty"`
 	BasisRefs        []string             `json:"basis_refs,omitempty"`
+	SourceKind       string               `json:"source_kind,omitempty"`
+	SourceRef        string               `json:"source_ref,omitempty"`
+	EvidenceRefs     []string             `json:"evidence_refs,omitempty"`
+	Scores           map[string]float64   `json:"scores,omitempty"`
+	JudgmentReason   string               `json:"judgment_reason,omitempty"`
 }
 
 type ReentryRecommendation struct {
@@ -126,7 +131,36 @@ func NormalizeReentryRecommendationCandidate(candidate ReentryRecommendationCand
 	candidate.PromptText = strings.TrimSpace(candidate.PromptText)
 	candidate.AuthorityClass = strings.TrimSpace(candidate.AuthorityClass)
 	candidate.BasisRefs = normalizeMissionStringSlice(candidate.BasisRefs)
+	candidate.SourceKind = strings.TrimSpace(candidate.SourceKind)
+	candidate.SourceRef = strings.TrimSpace(candidate.SourceRef)
+	candidate.EvidenceRefs = normalizeMissionStringSlice(candidate.EvidenceRefs)
+	candidate.Scores = normalizeReentryCandidateScores(candidate.Scores)
+	candidate.JudgmentReason = strings.TrimSpace(candidate.JudgmentReason)
 	return candidate
+}
+
+func normalizeReentryCandidateScores(scores map[string]float64) map[string]float64 {
+	if len(scores) == 0 {
+		return nil
+	}
+	out := make(map[string]float64, len(scores))
+	for key, value := range scores {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if value < 0 {
+			value = 0
+		}
+		if value > 5 {
+			value = 5
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func NormalizeReentryRecommendation(record ReentryRecommendation) ReentryRecommendation {

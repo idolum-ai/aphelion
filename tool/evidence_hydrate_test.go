@@ -5,6 +5,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -63,6 +64,63 @@ func TestEvidenceHydrateToolReturnsCurrentSessionEvidence(t *testing.T) {
 	}
 	if len(runs) != 1 || runs[0].Status != "completed" {
 		t.Fatalf("hydration runs = %#v, want one completed run", runs)
+	}
+}
+
+func TestEvidenceHydrateToolReturnsExplicitPayloadWindow(t *testing.T) {
+	t.Parallel()
+
+	store := newToolEvidenceStore(t)
+	key := session.SessionKey{
+		ChatID: 2004,
+		UserID: 42,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "2004"},
+	}
+	output := "HEAD important\n" + strings.Repeat("middle retained line\n", 20) + "TAIL important\n"
+	payload, err := json.Marshal(map[string]any{
+		"tool":   "exec",
+		"output": output,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	object, err := store.UpsertEvidenceObject(session.EvidenceObjectInput{
+		SourceKind:      session.EvidenceSourceToolOutput,
+		SourceRef:       "tool_output:run:exec:sha",
+		SessionID:       session.SessionIDForKey(key),
+		ChatID:          key.ChatID,
+		UserID:          key.UserID,
+		Scope:           key.Scope,
+		EpistemicStatus: session.EvidenceStatusAttested,
+		SubjectKey:      "exec",
+		Summary:         "Large exec output",
+		Digest:          "sha256:abc omitted middle",
+		PayloadJSON:     string(payload),
+		ObservedAt:      time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("UpsertEvidenceObject() err = %v", err)
+	}
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	input := fmt.Sprintf(`{"query":"inspect retained tool output","required_evidence_ids":[%q],"include_payload_ids":[%q],"payload_offset":15,"payload_limit":80}`, object.ID, object.ID)
+	out, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"evidence_hydrate",
+		json.RawMessage(input),
+		sandbox.Scope{WorkingRoot: t.TempDir()},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 42},
+		key,
+	)
+	if err != nil {
+		t.Fatalf("execute evidence_hydrate err = %v", err)
+	}
+	for _, want := range []string{object.ID, "payload_window: offset=15", "next_offset=95", "middle retained line"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output = %q, want %q", out, want)
+		}
+	}
+	if strings.Contains(out, "HEAD important") || strings.Contains(out, "TAIL important") {
+		t.Fatalf("output = %q, want bounded payload window only", out)
 	}
 }
 

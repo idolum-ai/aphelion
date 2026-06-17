@@ -48,8 +48,8 @@ func (s *SQLiteStore) Compact(key SessionKey, summary string, keepFromTurn int) 
 	if summary != "" {
 		_, err := tx.Exec(`
 			INSERT INTO messages(
-				session_id, chat_id, user_id, role, content, created_at, turn_index, content_chars, compacted
-			) VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?, 0)
+				session_id, chat_id, user_id, actor_role, event_origin, event_origin_detail, role, content, created_at, turn_index, content_chars, compacted
+			) VALUES (?, ?, ?, 'runtime', 'continuity', 'compaction_summary', 'assistant', ?, ?, ?, ?, 0)
 		`, sessionID, key.ChatID, key.UserID, summary, time.Now().UTC().Format(time.RFC3339Nano), keepFromTurn, len(summary))
 		if err != nil {
 			return fmt.Errorf("insert compaction summary: %w", err)

@@ -53,6 +53,71 @@ func TestSemanticEngineSearchFindsCuratedMemory(t *testing.T) {
 	}
 }
 
+func TestSemanticDocumentUpsertReturnsCanonicalIDOnConflict(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	engine := NewSemanticEngine(SemanticOptions{
+		Enabled: true,
+		DBPath:  filepath.Join(root, "semantic.db"),
+	})
+	db, err := engine.ensureDB()
+	if err != nil {
+		t.Fatalf("ensureDB() err = %v", err)
+	}
+	defer db.Close()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("Begin() err = %v", err)
+	}
+	firstID, err := upsertSemanticDocumentTx(tx, SemanticDocument{
+		Scope:            "shared",
+		SourcePath:       "memory/knowledge.md",
+		SourceKind:       "knowledge",
+		ProvenanceSource: "native",
+		ImportState:      SemanticImportStateApproved,
+		Checksum:         "first",
+	})
+	if err != nil {
+		t.Fatalf("first upsert err = %v", err)
+	}
+	secondID, err := upsertSemanticDocumentTx(tx, SemanticDocument{
+		Scope:            "shared",
+		SourcePath:       "memory/decisions.md",
+		SourceKind:       "decision",
+		ProvenanceSource: "native",
+		ImportState:      SemanticImportStateApproved,
+		Checksum:         "second",
+	})
+	if err != nil {
+		t.Fatalf("second upsert err = %v", err)
+	}
+	if secondID == firstID {
+		t.Fatalf("secondID = firstID = %d, want distinct documents", firstID)
+	}
+	conflictID, err := upsertSemanticDocumentTx(tx, SemanticDocument{
+		Scope:            "shared",
+		SourcePath:       "memory/knowledge.md",
+		SourceKind:       "knowledge",
+		ProvenanceSource: "native",
+		ImportState:      SemanticImportStateApproved,
+		Checksum:         "updated",
+	})
+	if err != nil {
+		t.Fatalf("conflict upsert err = %v", err)
+	}
+	if conflictID != firstID {
+		t.Fatalf("conflictID = %d, want canonical first document id %d", conflictID, firstID)
+	}
+	if err := replaceSemanticChunksTx(tx, conflictID, []semanticChunkDraft{{ordinal: 1, text: "updated durable memory"}}); err != nil {
+		t.Fatalf("replaceSemanticChunksTx() err = %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit() err = %v", err)
+	}
+}
+
 func TestSemanticEngineStripsMemoryInstrumentation(t *testing.T) {
 	t.Parallel()
 

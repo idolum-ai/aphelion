@@ -26,6 +26,7 @@ const (
 	EvidenceSourceTelegramIngress      = "telegram_ingress"
 	EvidenceSourceTelegramMediaPicker  = "telegram_media_picker"
 	EvidenceSourceArtifact             = "artifact"
+	EvidenceSourceToolOutput           = "tool_output"
 )
 
 const (

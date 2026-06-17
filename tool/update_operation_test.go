@@ -532,6 +532,113 @@ func TestUpdateOperationAllowsExecutablePhaseCompletionWithMatchingWorkEvidence(
 	}
 }
 
+func TestUpdateOperationCompletionIgnoresStaleSupersededExecutablePhase(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	now := time.Now().UTC()
+	opState := session.OperationState{
+		ID:        "op-superseded-evidence-gate",
+		Objective: "Commit and push the accepted recovery package.",
+		Status:    session.OperationStatusActive,
+		Stage:     "execution",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-superseded-evidence-gate",
+			CurrentPhaseID: "whitespace-fix-commit-push",
+			Phases: []session.OperationPhase{
+				{
+					ID:                "stage-scan-before-commit-push",
+					Summary:           "Stage and scan repo-safe files before commit/push.",
+					Status:            session.PlanStatusPending,
+					AuthorityClass:    "workspace_write",
+					BoundedEffect:     "Stage and scan files only.",
+					AllowedActions:    []string{"edit_workspace", "run_checks"},
+					StaleAuthority:    true,
+					BlockedReasonCode: "superseded_phase",
+				},
+				{
+					ID:                 "whitespace-fix-commit-push",
+					Summary:            "Fix whitespace, re-scan, commit, and push.",
+					Status:             session.PlanStatusInProgress,
+					AuthorityClass:     "workspace_write_commit_push",
+					BoundedEffect:      "Fix two whitespace-only issues, re-scan, commit, and push.",
+					AllowedActions:     []string{"edit_workspace", "run_checks", "git_commit", "git_push"},
+					LeaseID:            "lease-whitespace-fix-commit-push",
+					SupersedesPhaseIDs: []string{"stage-scan-before-commit-push"},
+				},
+			},
+		},
+	}
+	proposalID := session.OperationPhaseProposalID(opState, opState.PhasePlan.Phases[1])
+	opState.Work = session.WorkOperationMetadata{
+		LastOperationID:       opState.ID,
+		LastActionOperationID: proposalID,
+		LastActionProposalID:  "aprop-" + proposalID,
+		LastLeaseID:           "lease-whitespace-fix-commit-push",
+		LastWorkMode:          session.OperationPhaseWorkAction(opState.PhasePlan.Phases[1]),
+		LastSummary:           "Committed and pushed the accepted recovery package.",
+		LastCompletedAt:       now,
+		LastExecutorUpdatedAt: now,
+		Commands:              []string{"git commit -m evidence", "git push origin main"},
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState(seed) err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{"merge":true,"status":"completed","phase_plan":{"phases":[{"id":"whitespace-fix-commit-push","status":"completed"}]}}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation) err = %v", err)
+	}
+	state, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if state.Status != session.OperationStatusCompleted {
+		t.Fatalf("status = %q, want completed", state.Status)
+	}
+	if !state.PhasePlan.Phases[0].StaleAuthority || state.PhasePlan.Phases[0].Status == session.PlanStatusCompleted {
+		t.Fatalf("stale phase = %#v, want stale non-completed non-blocking phase", state.PhasePlan.Phases[0])
+	}
+	if state.PhasePlan.Phases[1].Status != session.PlanStatusCompleted {
+		t.Fatalf("active phase = %#v, want completed", state.PhasePlan.Phases[1])
+	}
+}
+
+func TestUpdateOperationRejectsModelMarkedStalePhaseCompletionWithoutSupersedingEvidence(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	opState := updateOperationExecutableEvidenceGateState()
+	opState.PhasePlan.Phases[0].StaleAuthority = true
+	opState.PhasePlan.Phases[0].BlockedReasonCode = "stale_authority"
+	opState.Work = session.WorkOperationMetadata{}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState(seed) err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{"merge":true,"status":"completed","phase_plan":{"phases":[{"id":"implementation","status":"completed"}]}}`),
+	)
+	if err == nil {
+		t.Fatal("ExecuteForSessionPrincipal(update_operation) err = nil, want stale flag without superseding evidence rejected")
+	}
+	if !strings.Contains(err.Error(), "matching successful work evidence") {
+		t.Fatalf("err = %v, want work evidence rejection", err)
+	}
+}
+
 func TestUpdateOperationRejectsModelAuthoredPhaseLeaseID(t *testing.T) {
 	t.Parallel()
 

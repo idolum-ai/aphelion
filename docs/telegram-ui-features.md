@@ -544,6 +544,17 @@ Aphelion may send a small `Possible next steps` card. The card is a
 re-entry aid, not a command queue: choosing a candidate selects a path and the
 next turn must still ask for any approval needed before acting.
 
+Candidates are generated as typed advisory paths over the latest durable state:
+current operation/proposal state, mission state, same-chat open threads,
+interior-pressure signals, recent memory notes, and hydrated evidence refs.
+Runtime scores those paths with a deterministic policy over relevance-now,
+operator-intent fit, evidence strength, resurfacing value, authority cost,
+staleness risk, and cross-thread risk; an LLM ranker may reorder the
+already-generated candidate list by ID, but it cannot create candidates,
+labels, or authority. Candidate provenance and evidence refs are carried into
+the selected turn so the face can explain why a path was offered without
+treating the card as permission.
+
 Current runtime policy is intentionally hard-coded rather than operator
 configurable:
 

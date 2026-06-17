@@ -11,14 +11,16 @@ import (
 
 // FallbackOptions controls floor-fallback serialization details.
 type FallbackOptions struct {
-	Channel string
-	Voice   bool
+	Channel    string
+	Voice      bool
+	UserIntent Intent
 }
 
 type fallbackSectionKind string
 
 const (
 	fallbackFacts       fallbackSectionKind = "facts"
+	fallbackContinuity  fallbackSectionKind = "continuity"
 	fallbackAllowed     fallbackSectionKind = "allowed"
 	fallbackCommitments fallbackSectionKind = "commitments"
 	fallbackRefusals    fallbackSectionKind = "refusals"
@@ -40,8 +42,11 @@ func SerializeFloorFallback(packet core.MaterialPacket, floorText string, opts F
 		return FloorTextOrFallback(trimmedFloor)
 	}
 
-	sections := fallbackSections(packet)
+	sections := fallbackSections(packet, opts.UserIntent)
 	if len(sections) == 0 {
+		if hasInternalOnlyMaterial(packet) {
+			return FloorTextOrFallback("")
+		}
 		return FloorTextOrFallback(trimmedFloor)
 	}
 	if opts.Voice {
@@ -50,10 +55,11 @@ func SerializeFloorFallback(packet core.MaterialPacket, floorText string, opts F
 	return serializeTextFallback(sections, trimmedFloor, opts)
 }
 
-func fallbackSections(packet core.MaterialPacket) []fallbackSection {
+func fallbackSections(packet core.MaterialPacket, userIntent Intent) []fallbackSection {
 	seen := make(map[string]struct{})
 	sections := []fallbackSection{
 		{Kind: fallbackFacts, Items: uniqueFallbackItems(packet.Facts, seen)},
+		{Kind: fallbackContinuity, Items: visibleContinuityFallbackItems(packet.ContinuityContext, userIntent, seen)},
 		{Kind: fallbackAllowed, Items: uniqueFallbackItems(packet.AllowedActions, seen)},
 		{Kind: fallbackCommitments, Items: uniqueFallbackItems(packet.Commitments, seen)},
 		{Kind: fallbackRefusals, Items: uniqueFallbackItems(packet.Refusals, seen)},
@@ -68,6 +74,63 @@ func fallbackSections(packet core.MaterialPacket) []fallbackSection {
 		out = append(out, section)
 	}
 	return out
+}
+
+func hasInternalOnlyMaterial(packet core.MaterialPacket) bool {
+	return hasNonBlankMaterialItem(packet.SceneConstraints) || hasNonBlankContinuityItem(packet.ContinuityContext)
+}
+
+func hasNonBlankMaterialItem(items []string) bool {
+	for _, item := range items {
+		if strings.TrimSpace(item) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasNonBlankContinuityItem(items []core.MaterialContinuityContext) bool {
+	for _, item := range items {
+		if !item.Empty() {
+			return true
+		}
+	}
+	return false
+}
+
+func visibleContinuityFallbackItems(items []core.MaterialContinuityContext, userIntent Intent, seen map[string]struct{}) []string {
+	decision := ContinuityPresentationPolicy(items, userIntent)
+	out := make([]string, 0, len(items))
+	for _, item := range decision.Visible {
+		text := continuityFallbackText(item)
+		if text == "" {
+			continue
+		}
+		key := normalizeFallbackKey(text)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, text)
+	}
+	return out
+}
+
+func continuityFallbackText(item core.MaterialContinuityContext) string {
+	if reason := strings.TrimSpace(item.Reason); reason != "" {
+		return reason
+	}
+	switch item.Visibility {
+	case core.MaterialContinuityVisibilityMustSurface:
+		return "Continuity requires attention before proceeding."
+	case core.MaterialContinuityVisibilityUserRelevant, core.MaterialContinuityVisibilityInternal:
+		return "Continuity context is available."
+	default:
+		return ""
+	}
 }
 
 func uniqueFallbackItems(items []string, seen map[string]struct{}) []string {
@@ -133,6 +196,8 @@ func fallbackTextTitle(kind fallbackSectionKind, opts FallbackOptions) string {
 		switch kind {
 		case fallbackFacts:
 			return "What matters"
+		case fallbackContinuity:
+			return "Continuity"
 		case fallbackAllowed:
 			return "Next"
 		case fallbackCommitments:
@@ -146,6 +211,8 @@ func fallbackTextTitle(kind fallbackSectionKind, opts FallbackOptions) string {
 		switch kind {
 		case fallbackFacts:
 			return "What matters"
+		case fallbackContinuity:
+			return "Continuity"
 		case fallbackAllowed:
 			return "Next"
 		case fallbackCommitments:
@@ -178,6 +245,8 @@ func renderVoiceSection(section fallbackSection) string {
 	switch section.Kind {
 	case fallbackFacts:
 		return "Here's what matters: " + voiceList(section.Items)
+	case fallbackContinuity:
+		return "Continuity: " + voiceList(section.Items)
 	case fallbackAllowed:
 		return "Next, I can " + voiceActionList(section.Items)
 	case fallbackCommitments:
@@ -261,6 +330,7 @@ func isPlainTextFloorPacket(packet core.MaterialPacket, floorText string) bool {
 		len(packet.Commitments) == 0 &&
 		len(packet.Refusals) == 0 &&
 		len(packet.SceneConstraints) == 0 &&
+		len(packet.ContinuityContext) == 0 &&
 		len(packet.Notes) == 1 &&
 		strings.TrimSpace(packet.Notes[0]) == strings.TrimSpace(floorText)
 }

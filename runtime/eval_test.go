@@ -90,6 +90,7 @@ func TestTrajectoryEvalScenariosCoverWatchedFailureCandidates(t *testing.T) {
 	for _, want := range []string{
 		"trajectory_budget_recovery_resumes_leased_work",
 		"trajectory_recovery_active_conversation_over_stale_thread_context",
+		"trajectory_stale_repair_candidate_suppressed_by_working_objective",
 		"trajectory_terminal_provider_failure_preserves_recovery",
 		"trajectory_ingress_rejection_preserves_leased_recovery",
 		"trajectory_compaction_relatched_goal_without_user_restate",
@@ -1260,6 +1261,13 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	}
 	if !evalTestContainsString(byID["trajectory_budget_recovery_resumes_leased_work"].EventTypes, core.ExecutionEventWorkExecutorStarted) {
 		t.Fatalf("budget trajectory missing local material progress: %#v", byID["trajectory_budget_recovery_resumes_leased_work"])
+	}
+	staleRepair := byID["trajectory_stale_repair_candidate_suppressed_by_working_objective"]
+	if !evalTestContainsString(staleRepair.EventTypes, core.ExecutionEventContinuationCandidateSuppressed) {
+		t.Fatalf("stale-repair trajectory missing suppression evidence: %#v", staleRepair)
+	}
+	if evalTestContainsString(staleRepair.EventTypes, core.ExecutionEventContinuationOffered) {
+		t.Fatalf("stale-repair trajectory offered stale approval: %#v", staleRepair)
 	}
 	providerFailure := byID["trajectory_terminal_provider_failure_preserves_recovery"]
 	if providerFailure.OperationStatus != string(session.OperationStatusActive) || providerFailure.Continuation != string(session.ContinuationStatusApproved) {

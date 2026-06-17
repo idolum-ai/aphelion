@@ -149,7 +149,7 @@ func upsertSemanticDocumentTx(tx *sql.Tx, doc SemanticDocument) (int64, error) {
 
 	now := utcTimestamp(time.Now().UTC())
 	mtime := nullableTimestamp(doc.MTime)
-	result, err := tx.Exec(`
+	_, err := tx.Exec(`
 		INSERT INTO semantic_documents (
 			scope, principal_id, source_path, source_kind, source_class, provenance_source,
 			import_state, checksum, mtime, metadata_json, created_at, updated_at
@@ -179,9 +179,6 @@ func upsertSemanticDocumentTx(tx *sql.Tx, doc SemanticDocument) (int64, error) {
 	)
 	if err != nil {
 		return 0, fmt.Errorf("upsert semantic document %s: %w", sourcePath, err)
-	}
-	if id, err := result.LastInsertId(); err == nil && id > 0 {
-		return id, nil
 	}
 
 	var id int64

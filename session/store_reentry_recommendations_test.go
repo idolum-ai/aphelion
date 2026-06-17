@@ -36,6 +36,15 @@ func TestReentryRecommendationStoreDedupeAndTransitions(t *testing.T) {
 				PromptText:       "Ask for fresh approval before continuing.",
 				AuthorityClass:   "commit",
 				RequiresApproval: true,
+				SourceKind:       " operation_state ",
+				SourceRef:        " op-release ",
+				EvidenceRefs:     []string{" ev-turn ", "", "ev-turn", "ev-op"},
+				Scores: map[string]float64{
+					" relevance_now ": 9,
+					"staleness_risk":  -2,
+					"":                4,
+				},
+				JudgmentReason: " Durable operation evidence. ",
 			},
 		},
 	}
@@ -48,6 +57,31 @@ func TestReentryRecommendationStoreDedupeAndTransitions(t *testing.T) {
 	}
 	if created.Status != ReentryRecommendationStatusPending || created.CreatedAt.IsZero() {
 		t.Fatalf("created = %#v, want pending timestamped recommendation", created)
+	}
+	if got := created.Candidates[0].SourceKind; got != "operation_state" {
+		t.Fatalf("SourceKind = %q, want normalized operation_state", got)
+	}
+	if got := created.Candidates[0].SourceRef; got != "op-release" {
+		t.Fatalf("SourceRef = %q, want normalized op-release", got)
+	}
+	if got := created.Candidates[0].EvidenceRefs; len(got) != 2 || got[0] != "ev-turn" || got[1] != "ev-op" {
+		t.Fatalf("EvidenceRefs = %#v, want trimmed/deduped refs", got)
+	}
+	if got := created.Candidates[0].Scores["relevance_now"]; got != 5 {
+		t.Fatalf("relevance_now score = %v, want clamped 5", got)
+	}
+	if got := created.Candidates[0].Scores["staleness_risk"]; got != 0 {
+		t.Fatalf("staleness_risk score = %v, want clamped 0", got)
+	}
+	if got := created.Candidates[0].JudgmentReason; got != "Durable operation evidence." {
+		t.Fatalf("JudgmentReason = %q, want trimmed reason", got)
+	}
+	exists, err := store.ReentryRecommendationTerminalFingerprintExists(record.SessionID, record.TerminalFingerprint)
+	if err != nil {
+		t.Fatalf("ReentryRecommendationTerminalFingerprintExists() err = %v", err)
+	}
+	if !exists {
+		t.Fatal("ReentryRecommendationTerminalFingerprintExists() = false, want true")
 	}
 
 	duplicate := record

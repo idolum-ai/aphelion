@@ -63,6 +63,7 @@ const (
 	ExecutionEventPersonaStreamReconciled      = "stream.persona_context.reconciled"
 	ExecutionEventPersonaStreamReconcileFailed = "stream.persona_context.reconcile_failed"
 	ExecutionEventTelegramCallbackFailed       = "telegram.callback.failed"
+	ExecutionEventTelegramCallbackRetired      = "telegram.callback.retired"
 	ExecutionEventTelegramThreadReminderSweep  = "telegram.thread_reminder.sweep"
 	ExecutionEventProgressSurface              = "progress.surface"
 	ExecutionEventReplyClaimAdjudicated        = "reply.claim.adjudicated"
@@ -76,6 +77,7 @@ const (
 	ExecutionEventCuriosityFailed              = "curiosity.failed"
 
 	ExecutionEventContinuationOffered                = "continuation.offered"
+	ExecutionEventContinuationCandidateSuppressed    = "continuation.candidate_suppressed"
 	ExecutionEventContinuationBundleNarrowed         = "continuation.bundle.narrowed"
 	ExecutionEventContinuationCompileRepaired        = "continuation.compile_repaired"
 	ExecutionEventContinuationCompileRepairExhausted = "continuation.compile_repair_exhausted"

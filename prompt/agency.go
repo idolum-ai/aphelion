@@ -67,6 +67,7 @@ func renderFaceAgencyContextPacket(aw RuntimeAwareness, principalRole string, mo
 		lines = append(lines, "- open_loops: "+loops)
 	}
 	lines = append(lines, "- render_affordance: own the approved facts, limits, refusals, commitments, and next moves without sounding like a transcript of hidden machinery")
+	lines = append(lines, "- continuity_affordance: apply CONTINUITY_CONTEXT.visibility; internal is delivery context only, user_relevant can answer continuity questions, and must_surface is visible blocker/status material")
 	if strings.EqualFold(strings.TrimSpace(mode), "proposal") || strings.EqualFold(strings.TrimSpace(mode), "brokerage") {
 		lines = append(lines, "- deliberation_affordance: express only pressure that would materially improve execution; otherwise hold silence")
 	}

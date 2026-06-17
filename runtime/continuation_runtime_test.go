@@ -67,6 +67,96 @@ func TestSendContinuationApprovalPromptRecordsThreadCallbackMessage(t *testing.T
 	}
 }
 
+func TestSendContinuationApprovalPromptRecordsDefaultChatAndRetiresPriorCard(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	sender := &fakeSender{}
+	rt := &Runtime{store: store, outbound: sender}
+	key := session.SessionKey{ChatID: 2001, Scope: telegramDMScopeRef(2001)}
+	msg := core.InboundMessage{ChatID: 2001, SenderID: 1001, MessageID: 401}
+	first := session.ContinuationState{Status: session.ContinuationStatusPending, DecisionID: "decision-first", RemainingTurns: 1}
+	if err := rt.sendContinuationApprovalPrompt(context.Background(), key, msg, first, "Continue first?"); err != nil {
+		t.Fatalf("sendContinuationApprovalPrompt(first) err = %v", err)
+	}
+	second := session.ContinuationState{Status: session.ContinuationStatusPending, DecisionID: "decision-second", RemainingTurns: 1}
+	if err := rt.sendContinuationApprovalPrompt(context.Background(), key, msg, second, "Continue second?"); err != nil {
+		t.Fatalf("sendContinuationApprovalPrompt(second) err = %v", err)
+	}
+	sender.mu.Lock()
+	inline := append([]inlineCall(nil), sender.inline...)
+	editClear := append([]messageEdit(nil), sender.editClear...)
+	sender.mu.Unlock()
+	if len(inline) != 2 {
+		t.Fatalf("inline = %#v, want two continuation prompts", inline)
+	}
+	if len(editClear) != 1 || editClear[0].MessageID != 1 || editClear[0].Text != retiredContinuationCardText {
+		t.Fatalf("editClear = %#v, want first card retired", editClear)
+	}
+	records, err := store.ListTelegramCallbackMessages(2001, continuationCallbackSurface, time.Now().Add(-time.Hour), 10)
+	if err != nil {
+		t.Fatalf("ListTelegramCallbackMessages() err = %v", err)
+	}
+	if len(records) != 1 || records[0].MessageID != 2 || records[0].ThreadID != 0 {
+		t.Fatalf("active continuation records = %#v, want only second default-chat card", records)
+	}
+}
+
+func TestRetireStaleContinuationApprovalCardsMarksProjectionRetired(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	now := time.Now().UTC()
+	if err := store.RecordTelegramCallbackMessage(3001, 55, 7, continuationCallbackSurface, now); err != nil {
+		t.Fatalf("RecordTelegramCallbackMessage(thread 7) err = %v", err)
+	}
+	if err := store.RecordTelegramCallbackMessage(3001, 56, 8, continuationCallbackSurface, now); err != nil {
+		t.Fatalf("RecordTelegramCallbackMessage(thread 8) err = %v", err)
+	}
+	sender := &fakeSender{}
+	rt := &Runtime{store: store, outbound: sender}
+	key := session.SessionKey{ChatID: 3001, Scope: session.TelegramThreadScopeRef(3001, 7)}
+	rt.retireStaleContinuationApprovalCards(context.Background(), key, 3001, 7, 0, "lease_consumed", now.Add(time.Second))
+
+	sender.mu.Lock()
+	editClear := append([]messageEdit(nil), sender.editClear...)
+	sender.mu.Unlock()
+	if len(editClear) != 1 || editClear[0].MessageID != 55 || editClear[0].Text != retiredContinuationCardText {
+		t.Fatalf("editClear = %#v, want card 55 retired", editClear)
+	}
+	active, err := store.ListTelegramCallbackMessagesForThread(3001, 7, continuationCallbackSurface, now.Add(-time.Minute), 10)
+	if err != nil {
+		t.Fatalf("ListTelegramCallbackMessagesForThread(active thread 7) err = %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active thread 7 records = %#v, want none", active)
+	}
+	other, err := store.ListTelegramCallbackMessagesForThread(3001, 8, continuationCallbackSurface, now.Add(-time.Minute), 10)
+	if err != nil {
+		t.Fatalf("ListTelegramCallbackMessagesForThread(active thread 8) err = %v", err)
+	}
+	if len(other) != 1 || other[0].MessageID != 56 || other[0].ThreadID != 8 {
+		t.Fatalf("active thread 8 records = %#v, want untouched thread 8 card", other)
+	}
+	retired, err := store.ListTelegramCallbackMessages(3001, continuationCallbackRetiredSurface, now.Add(-time.Minute), 10)
+	if err != nil {
+		t.Fatalf("ListTelegramCallbackMessages(retired) err = %v", err)
+	}
+	if len(retired) != 1 || retired[0].MessageID != 55 || retired[0].ThreadID != 7 {
+		t.Fatalf("retired records = %#v, want thread projection preserved as retired", retired)
+	}
+}
+
 func TestContinuationOperatorCardDoesNotMayDeleteNegatedReview(t *testing.T) {
 	t.Parallel()
 

@@ -81,6 +81,9 @@ func (c telegramCommandControl) TriggerContinuationForMessage(ctx context.Contex
 func (c telegramCommandControl) RecordTelegramCallbackError(chatID int64, callbackKind string, err error) {
 	c.controlFacade().RecordTelegramCallbackError(chatID, callbackKind, err)
 }
+func (c telegramCommandControl) RetireTelegramCallbackMessage(chatID int64, messageID int64, surface string) error {
+	return c.controlFacade().RetireTelegramCallbackMessage(chatID, messageID, surface)
+}
 func (c telegramCommandControl) ToggleProgressView(ctx context.Context, chatID int64, senderID int64, runID int64, details bool) (bool, string, error) {
 	return c.controlFacade().ToggleProgressView(ctx, chatID, senderID, runID, details)
 }

@@ -89,9 +89,10 @@ func (r *Runtime) renderTurnCoordinatorFace(ctx context.Context, input turnCoord
 	r.markSessionTurnPhase(input.Key, "render", "authoring visible scene from governor floor")
 	gov := input.LastGovernor
 	mediaOnlyReply := len(gov.Turn.Media) > 0 && strings.TrimSpace(gov.Turn.Text) == ""
+	fallbackOptions := fallbackOptionsWithPromptIntent(input.FallbackOptions, input.PromptInput)
 	replyText := ""
 	if !mediaOnlyReply {
-		replyText = pipeline.SerializeFloorFallback(gov.MaterialFloor, gov.FloorText, input.FallbackOptions)
+		replyText = pipeline.SerializeFloorFallback(gov.MaterialFloor, gov.FloorText, fallbackOptions)
 	}
 	faceAwareness := input.LastFaceAwareness
 	if strings.TrimSpace(faceAwareness.DeliveryMode) == "" {
@@ -113,7 +114,7 @@ func (r *Runtime) renderTurnCoordinatorFace(ctx context.Context, input turnCoord
 		ReplyText:        replyText,
 		FloorText:        gov.FloorText,
 		MaterialFloor:    gov.MaterialFloor,
-		FallbackOpts:     input.FallbackOptions,
+		FallbackOpts:     fallbackOptions,
 		FaceAwareness:    faceAwareness,
 		CurrentFaceModel: input.CurrentFaceModel,
 		ReplyWithVoice:   input.ReplyWithVoice,
@@ -121,6 +122,13 @@ func (r *Runtime) renderTurnCoordinatorFace(ctx context.Context, input turnCoord
 		PromptInput:      input.PromptInput,
 		Audit:            input.Audit,
 	})
+}
+
+func fallbackOptionsWithPromptIntent(opts pipeline.FallbackOptions, promptInput string) pipeline.FallbackOptions {
+	if opts.UserIntent == "" {
+		opts.UserIntent = pipeline.InferFallbackUserIntent(promptInput)
+	}
+	return opts
 }
 
 type turnCoordinatorExecuteInput struct {
@@ -241,12 +249,22 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	systemPrompt := promptState.SystemPrompt
 	input.Sess.SystemPrompt = systemPrompt
 
-	sess, history, maybeErr := r.maybeCompactSession(ctx, input.Key, input.Sess, systemBlocks, input.Prepared.UserText, brokerage.IdolumNote)
+	sess, history, compacted, maybeErr := r.maybeCompactSession(ctx, input.Key, input.Sess, systemBlocks, input.Prepared.UserText, brokerage.IdolumNote)
 	if maybeErr != nil {
 		monitorErr = fmt.Errorf("maybe compact session: %w", maybeErr)
 		return out, monitorErr
 	}
 	out.Sess = sess
+	if compacted {
+		var awarenessChanged bool
+		baseGovernorAwareness, awarenessChanged = applyCompactionContinuityAwareness(baseGovernorAwareness, sess)
+		if awarenessChanged {
+			promptState = r.buildTurnCoordinatorGovernorPrompt(input, baseGovernorAwareness, brokerage)
+			systemBlocks = promptState.SystemBlocks
+			systemPrompt = promptState.SystemPrompt
+			sess.SystemPrompt = systemPrompt
+		}
+	}
 
 	requestFaceNote := input.RequestFaceNote
 	if requestFaceNote != nil {

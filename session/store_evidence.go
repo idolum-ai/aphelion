@@ -607,7 +607,7 @@ func scoreEvidenceCandidates(candidates []evidenceCandidate, query EvidenceHydra
 		switch obj.SourceKind {
 		case EvidenceSourceOperationState, EvidenceSourceContinuationState, EvidenceSourcePlanState:
 			score += 4
-		case EvidenceSourceExecutionEvent, EvidenceSourceTurnRun:
+		case EvidenceSourceExecutionEvent, EvidenceSourceTurnRun, EvidenceSourceToolOutput:
 			score += 3
 		case EvidenceSourceCapabilityGrant, EvidenceSourceCapabilityInvocation, EvidenceSourceCapabilityRequest:
 			score += 2.5

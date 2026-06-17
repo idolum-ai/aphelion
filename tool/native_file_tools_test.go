@@ -82,6 +82,45 @@ func TestNativeFileToolsStayInsideScopedRoots(t *testing.T) {
 	}
 }
 
+func TestWriteFileAcceptsJSONStringWrappedObjectInputWithEscapedNewline(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	registry := NewRegistry(workspace, 2*time.Second)
+	input := stringWrappedJSON(t, `{"path":"reports/one.txt","content":"line one\nline two\n","create_dirs":true}`)
+
+	out, err := registry.Execute(context.Background(), "write_file", input)
+	if err != nil {
+		t.Fatalf("Execute(write_file) err = %v", err)
+	}
+	if !strings.Contains(out, "write_file_ok") {
+		t.Fatalf("write_file out = %q, want success marker", out)
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, "reports", "one.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile() err = %v", err)
+	}
+	if string(data) != "line one\nline two\n" {
+		t.Fatalf("written content = %q, want newline-preserving content", string(data))
+	}
+}
+
+func TestWriteFileRejectsTruncatedStringWrappedObjectBeforeExecution(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	registry := NewRegistry(workspace, 2*time.Second)
+	input := json.RawMessage(`"{\"path\":\"reports/one.txt\",\"content\":\"line one"`)
+
+	_, err := registry.Execute(context.Background(), "write_file", input)
+	if err == nil || !strings.Contains(err.Error(), "invalid tool arguments") {
+		t.Fatalf("Execute(write_file) err = %v, want invalid tool arguments", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, "reports", "one.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("truncated input created file, stat err = %v", statErr)
+	}
+}
+
 func TestNativeFileToolsHonorApprovedUserProfile(t *testing.T) {
 	t.Parallel()
 

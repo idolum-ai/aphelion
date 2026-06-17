@@ -670,10 +670,25 @@ func nextOutputLimitRetryMaxTokens(resp *Response, opts *CompleteOptions) (int, 
 	if resp == nil || opts == nil {
 		return 0, false
 	}
-	if !ResponseOutputLimitHit(resp) || len(resp.ToolCalls) != 0 || len(resp.Media) != 0 {
+	if !ResponseOutputLimitHit(resp) || len(resp.Media) != 0 {
+		return 0, false
+	}
+	if len(resp.ToolCalls) != 0 && !outputLimitedToolCallsNeedRetry(resp.ToolCalls) {
 		return 0, false
 	}
 	return nextProviderSuccessRetryMaxTokens(opts)
+}
+
+func outputLimitedToolCallsNeedRetry(calls []ToolCall) bool {
+	if len(calls) == 0 {
+		return true
+	}
+	for _, call := range calls {
+		if _, err := repairToolInput(call.Input); err != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func nextProviderSuccessRetryMaxTokens(opts *CompleteOptions) (int, bool) {
@@ -923,8 +938,14 @@ func repairToolInput(input json.RawMessage) (json.RawMessage, error) {
 		var wrapped string
 		if err := json.Unmarshal(trimmed, &wrapped); err == nil {
 			unwrapped := strings.TrimSpace(wrapped)
-			if unwrapped != "" && json.Valid([]byte(unwrapped)) {
-				return compactJSON(json.RawMessage(unwrapped))
+			if unwrapped != "" {
+				switch unwrapped[0] {
+				case '{', '[':
+					if !json.Valid([]byte(unwrapped)) {
+						return nil, fmt.Errorf("input is a JSON-string-wrapped structured value with invalid JSON")
+					}
+					return compactJSON(json.RawMessage(unwrapped))
+				}
 			}
 		}
 		return compactJSON(json.RawMessage(trimmed))

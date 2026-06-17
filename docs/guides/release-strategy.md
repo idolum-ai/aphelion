@@ -15,16 +15,44 @@ notes, release automation, and final review converge.
 ## Branch model
 
 1. Identify the last published release tag, for example `v0.2.2`.
-2. Create the next release branch from that tag, not from `main`:
+2. Find the commit on `main` whose tree matches that tag, when one exists:
+
+   ```bash
+   previous=v0.2.2
+   tree=$(git rev-parse "$previous^{tree}")
+   git rev-list main | while read -r commit; do
+     if [ "$(git rev-parse "$commit^{tree}")" = "$tree" ]; then
+       git log --oneline -1 "$commit"
+       break
+     fi
+   done
+   ```
+
+   Prefer this commit as the release-branch starting point. It preserves the exact
+   previous-release content while keeping the release PR anchored in `main` history.
+   That makes the next `main` -> release PR reviewable and avoids conflicts caused
+   only by old release-line ancestry.
+
+3. Create the next release branch from that tree-equivalent `main` commit:
+
+   ```bash
+   git checkout -b release/v0.2.3 <tree-equivalent-main-commit>
+   ```
+
+   If no tree-equivalent `main` commit exists, create the branch from the previous
+   release tag instead, then explicitly check mergeability before opening the PR:
 
    ```bash
    git checkout -b release/v0.2.3 v0.2.2
+   git merge --no-commit --no-ff main
+   git merge --abort
    ```
 
-   Starting from the previous release tag makes the branch represent exactly the
-   release line being advanced.
+   Broad conflicts at this point are a topology warning, not a cue for blind
+   hand-resolution. Prefer reconstructing a clean release branch or documenting the
+   exceptional release-only ancestry before proceeding.
 
-3. Open a pull request from `main` into the release branch:
+4. Open a pull request from `main` into the release branch:
 
    ```text
    base: release/v0.2.3
@@ -34,9 +62,9 @@ notes, release automation, and final review converge.
    This PR is the release review surface. It should show the complete delta from
    the last release to the proposed release.
 
-4. Review and approve the release PR.
-5. Merge the release PR into the release branch.
-6. After the merge, `.github/workflows/release.yml` publishes the release from
+5. Review and approve the release PR.
+6. Merge the release PR into the release branch.
+7. After the merge, `.github/workflows/release.yml` publishes the release from
    the release PR merge commit. It derives the release tag from the release branch
    name, refuses to overwrite an existing tag, builds release artifacts, creates
    the tag, and publishes the GitHub Release using the release PR body as the
@@ -115,7 +143,9 @@ integration branch; the release branch remains the publication gate.
 
 Before merging a release PR:
 
-- [ ] The release branch was created from the previous release tag.
+- [ ] The release branch was created from the `main` commit whose tree matches
+      the previous release tag, or the tag-based fallback was checked for
+      mergeability and documented.
 - [ ] The PR base is the release branch and the compare branch is `main`.
 - [ ] The PR description names the release version and scope.
 - [ ] The PR description includes both evidence and meaning.

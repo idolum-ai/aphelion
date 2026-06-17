@@ -23,7 +23,7 @@ func validateOperationCompletionEvidence(current session.OperationState, state s
 	for _, phase := range state.PhasePlan.Phases {
 		phase = normalizeToolOperationPhase(phase)
 		if phase.Status != session.PlanStatusCompleted ||
-			!updateOperationPhaseCompletionNeedsWorkEvidence(phase) ||
+			!updateOperationPhaseCompletionNeedsWorkEvidenceInState(state, phase) ||
 			operationPhaseAlreadyCompleted(current, phase) {
 			continue
 		}
@@ -40,7 +40,7 @@ func validateOperationCompletionEvidence(current session.OperationState, state s
 	}
 	for _, phase := range phases {
 		phase = normalizeToolOperationPhase(phase)
-		if !updateOperationPhaseCompletionNeedsWorkEvidence(phase) ||
+		if !updateOperationPhaseCompletionNeedsWorkEvidenceInState(state, phase) ||
 			operationPhaseAlreadyCompleted(current, phase) {
 			continue
 		}
@@ -55,7 +55,7 @@ func validateCurrentExecutablePhaseCompletions(current session.OperationState, s
 	for _, currentPhase := range current.PhasePlan.Phases {
 		currentPhase = normalizeToolOperationPhase(currentPhase)
 		if currentPhase.Status == session.PlanStatusCompleted ||
-			!updateOperationPhaseCompletionNeedsWorkEvidence(currentPhase) {
+			!updateOperationPhaseCompletionNeedsWorkEvidenceInState(state, currentPhase) {
 			continue
 		}
 		updatedPhase, ok := matchingUpdatedOperationPhase(current, state, currentPhase)
@@ -92,7 +92,7 @@ func validateCurrentLeasedExecutablePhases(current session.OperationState, state
 		currentPhase = normalizeToolOperationPhase(currentPhase)
 		if currentPhase.Status != session.PlanStatusInProgress ||
 			strings.TrimSpace(currentPhase.LeaseID) == "" ||
-			!updateOperationPhaseCompletionNeedsWorkEvidence(currentPhase) {
+			!updateOperationPhaseCompletionNeedsWorkEvidenceInState(state, currentPhase) {
 			continue
 		}
 		updatedPhase, ok := matchingUpdatedOperationPhase(current, state, currentPhase)
@@ -171,7 +171,69 @@ func operationPhaseAlreadyCompleted(current session.OperationState, phase sessio
 }
 
 func updateOperationPhaseCompletionNeedsWorkEvidence(phase session.OperationPhase) bool {
+	phase = normalizeToolOperationPhase(phase)
 	return session.OperationPhaseRequiresWorkEvidence(phase)
+}
+
+func updateOperationPhaseCompletionNeedsWorkEvidenceInState(state session.OperationState, phase session.OperationPhase) bool {
+	phase = normalizeToolOperationPhase(phase)
+	if updateOperationPhaseIsStaleNonBlocking(state, phase) {
+		return false
+	}
+	return updateOperationPhaseCompletionNeedsWorkEvidence(phase)
+}
+
+func updateOperationPhaseIsStaleNonBlocking(state session.OperationState, phase session.OperationPhase) bool {
+	state = session.NormalizeOperationState(state)
+	phase = normalizeToolOperationPhase(phase)
+	stale := phase.StaleAuthority
+	switch strings.TrimSpace(phase.BlockedReasonCode) {
+	case "superseded_phase", "stale_phase", "stale_authority":
+		stale = true
+	}
+	if !stale {
+		return false
+	}
+	return updateOperationPhaseCoveredByCompletedSuperseder(state, phase)
+}
+
+func updateOperationPhaseCoveredByCompletedSuperseder(state session.OperationState, phase session.OperationPhase) bool {
+	phase = normalizeToolOperationPhase(phase)
+	phaseID := strings.TrimSpace(phase.ID)
+	if phaseID == "" {
+		return false
+	}
+	phaseNeedsEvidence := updateOperationPhaseCompletionNeedsWorkEvidence(phase)
+	for _, candidate := range state.PhasePlan.Phases {
+		candidate = normalizeToolOperationPhase(candidate)
+		if strings.TrimSpace(candidate.ID) == phaseID || candidate.Status != session.PlanStatusCompleted {
+			continue
+		}
+		if !operationStringSliceContains(candidate.SupersedesPhaseIDs, phaseID) {
+			continue
+		}
+		candidateNeedsEvidence := updateOperationPhaseCompletionNeedsWorkEvidence(candidate)
+		if candidateNeedsEvidence && updateOperationPhaseHasCompletionEvidence(state, candidate) {
+			return true
+		}
+		if !phaseNeedsEvidence && !candidateNeedsEvidence {
+			return true
+		}
+	}
+	return false
+}
+
+func operationStringSliceContains(values []string, target string) bool {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return false
+	}
+	for _, value := range values {
+		if strings.TrimSpace(value) == target {
+			return true
+		}
+	}
+	return false
 }
 
 func updateOperationPhaseHasCompletionEvidence(state session.OperationState, phase session.OperationPhase) bool {
@@ -244,7 +306,7 @@ func OperationCompletionEvidenceStatus(state session.OperationState) []session.O
 	statuses := make([]session.OperationEvidenceStatus, 0, len(state.PhasePlan.Phases))
 	for _, phase := range state.PhasePlan.Phases {
 		phase = normalizeToolOperationPhase(phase)
-		if !updateOperationPhaseCompletionNeedsWorkEvidence(phase) {
+		if !updateOperationPhaseCompletionNeedsWorkEvidenceInState(state, phase) {
 			continue
 		}
 		reasonCode := updateOperationPhaseCompletionEvidenceReasonCode(state, phase)
@@ -287,5 +349,21 @@ func updateOperationStateWithCurrentIDsForValidation(current session.OperationSt
 	if strings.TrimSpace(state.PhasePlan.ID) == "" {
 		state.PhasePlan.ID = strings.TrimSpace(current.PhasePlan.ID)
 	}
+	for i, phase := range state.PhasePlan.Phases {
+		currentPhase, ok := matchingUpdatedOperationPhase(state, current, phase)
+		if !ok {
+			continue
+		}
+		state.PhasePlan.Phases[i] = updateOperationPhaseWithRuntimeOwnedFields(currentPhase, phase)
+	}
 	return session.NormalizeOperationState(state)
+}
+
+func updateOperationPhaseWithRuntimeOwnedFields(current session.OperationPhase, updated session.OperationPhase) session.OperationPhase {
+	current = normalizeToolOperationPhase(current)
+	updated = normalizeToolOperationPhase(updated)
+	if strings.TrimSpace(updated.LeaseID) == "" {
+		updated.LeaseID = strings.TrimSpace(current.LeaseID)
+	}
+	return updated
 }

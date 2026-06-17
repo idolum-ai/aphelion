@@ -109,6 +109,19 @@ func TestCompactMarksOldMessagesAndResetsCacheState(t *testing.T) {
 	if reloaded.CompactionLog[0].Strategy != "summarize" {
 		t.Fatalf("compaction strategy = %q, want summarize", reloaded.CompactionLog[0].Strategy)
 	}
+	foundSummary := false
+	for _, msg := range reloaded.Messages {
+		if msg.Content != "summary block" {
+			continue
+		}
+		foundSummary = true
+		if msg.ActorRole != "runtime" || msg.EventOrigin != "continuity" || msg.EventOriginDetail != "compaction_summary" {
+			t.Fatalf("compaction summary provenance = (%q,%q,%q), want runtime/continuity/compaction_summary", msg.ActorRole, msg.EventOrigin, msg.EventOriginDetail)
+		}
+	}
+	if !foundSummary {
+		t.Fatal("compaction summary message not reloaded")
+	}
 	if reloaded.CacheState.LastWriteBlock != 0 || reloaded.CacheState.BlocksSinceWrite != 0 || reloaded.CacheState.HitRate != 0 || reloaded.CacheState.ConsecutiveMisses != 0 {
 		t.Fatalf("cache state after compact = %#v, want reset", reloaded.CacheState)
 	}

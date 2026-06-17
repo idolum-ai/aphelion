@@ -8,7 +8,9 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"net/http"
+	"net/url"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -149,6 +151,384 @@ func TestPollerContinuesAfterCallbackHandlerError(t *testing.T) {
 	}
 	if len(checkpoint.ops) < 2 || checkpoint.ops[0] != "failure" || checkpoint.ops[1] != "save" {
 		t.Fatalf("checkpoint ops = %#v, want callback failure ledgered before offset save", checkpoint.ops)
+	}
+}
+
+func TestPollerRetriesTransientGetUpdatesTransportError(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().Unix()
+	call := 0
+	var delays []time.Duration
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/getUpdates" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			call++
+			if call == 1 {
+				return nil, &url.Error{Op: "Post", URL: req.URL.String(), Err: syscall.ECONNRESET}
+			}
+			return encodeJSONResponse(t, getUpdatesResponse{
+				Ok: true,
+				Result: []Update{{
+					UpdateID: 20,
+					Message: &Message{
+						MessageID: 44,
+						Chat:      &Chat{ID: 100, Type: "private"},
+						From:      &User{ID: 7, Username: "alice"},
+						Text:      "after retry",
+						Date:      now,
+					},
+				}},
+			}), nil
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var handled []core.InboundMessage
+	poller := NewPoller(client, func(_ context.Context, msg core.InboundMessage) error {
+		handled = append(handled, msg)
+		cancel()
+		return nil
+	},
+		WithPollerTimeout(1),
+		withPollerRetryBackoff(time.Second, 30*time.Second),
+		withPollerRetrySleep(func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			return nil
+		}),
+	)
+
+	if err := poller.Run(ctx); err != nil {
+		t.Fatalf("Poller.Run() err = %v, want nil after retry", err)
+	}
+	if call != 2 {
+		t.Fatalf("getUpdates calls = %d, want 2", call)
+	}
+	if len(delays) != 1 || delays[0] != time.Second {
+		t.Fatalf("retry delays = %#v, want [1s]", delays)
+	}
+	if len(handled) != 1 || handled[0].Text != "after retry" {
+		t.Fatalf("handled = %#v, want successful update after retry", handled)
+	}
+}
+
+func TestPollerRetriesGetUpdatesServerError(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().Unix()
+	call := 0
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			call++
+			if call == 1 {
+				return encodeHTTPJSONResponse(t, http.StatusInternalServerError, getUpdatesResponse{
+					Ok:          false,
+					Description: "Internal Server Error",
+				}), nil
+			}
+			return encodeJSONResponse(t, getUpdatesResponse{
+				Ok: true,
+				Result: []Update{{
+					UpdateID: 21,
+					Message: &Message{
+						MessageID: 45,
+						Chat:      &Chat{ID: 100, Type: "private"},
+						From:      &User{ID: 7, Username: "alice"},
+						Text:      "after server retry",
+						Date:      now,
+					},
+				}},
+			}), nil
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var handled []core.InboundMessage
+	poller := NewPoller(client, func(_ context.Context, msg core.InboundMessage) error {
+		handled = append(handled, msg)
+		cancel()
+		return nil
+	}, withPollerRetryBackoff(time.Second, 30*time.Second), withPollerRetrySleep(func(context.Context, time.Duration) error {
+		return nil
+	}))
+
+	if err := poller.Run(ctx); err != nil {
+		t.Fatalf("Poller.Run() err = %v, want nil after retry", err)
+	}
+	if call != 2 {
+		t.Fatalf("getUpdates calls = %d, want 2", call)
+	}
+	if len(handled) != 1 || handled[0].Text != "after server retry" {
+		t.Fatalf("handled = %#v, want successful update after server retry", handled)
+	}
+}
+
+func TestPollerHonorsGetUpdatesRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().Unix()
+	call := 0
+	var delays []time.Duration
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			call++
+			if call == 1 {
+				return encodeHTTPJSONResponse(t, http.StatusTooManyRequests, getUpdatesResponse{
+					Ok:          false,
+					Description: "Too Many Requests: retry after 7",
+					Parameters:  telegramResponseParameters{RetryAfter: 7},
+				}), nil
+			}
+			return encodeJSONResponse(t, getUpdatesResponse{
+				Ok: true,
+				Result: []Update{{
+					UpdateID: 22,
+					Message: &Message{
+						MessageID: 46,
+						Chat:      &Chat{ID: 100, Type: "private"},
+						From:      &User{ID: 7, Username: "alice"},
+						Text:      "after retry-after",
+						Date:      now,
+					},
+				}},
+			}), nil
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var handled []core.InboundMessage
+	poller := NewPoller(client, func(_ context.Context, msg core.InboundMessage) error {
+		handled = append(handled, msg)
+		cancel()
+		return nil
+	},
+		withPollerRetryBackoff(time.Second, 30*time.Second),
+		withPollerRetrySleep(func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			return nil
+		}),
+	)
+
+	if err := poller.Run(ctx); err != nil {
+		t.Fatalf("Poller.Run() err = %v, want nil after retry-after", err)
+	}
+	if call != 2 {
+		t.Fatalf("getUpdates calls = %d, want 2", call)
+	}
+	if len(delays) != 1 || delays[0] != 7*time.Second {
+		t.Fatalf("retry delays = %#v, want [7s]", delays)
+	}
+	if len(handled) != 1 || handled[0].Text != "after retry-after" {
+		t.Fatalf("handled = %#v, want successful update after retry-after", handled)
+	}
+}
+
+func TestPollerCapsGetUpdatesRetryAfterAtMaxBackoff(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().Unix()
+	call := 0
+	var delays []time.Duration
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			call++
+			if call == 1 {
+				return encodeHTTPJSONResponse(t, http.StatusTooManyRequests, getUpdatesResponse{
+					Ok:          false,
+					Description: "Too Many Requests: retry after 60",
+					Parameters:  telegramResponseParameters{RetryAfter: 60},
+				}), nil
+			}
+			return encodeJSONResponse(t, getUpdatesResponse{
+				Ok: true,
+				Result: []Update{{
+					UpdateID: 23,
+					Message: &Message{
+						MessageID: 47,
+						Chat:      &Chat{ID: 100, Type: "private"},
+						From:      &User{ID: 7, Username: "alice"},
+						Text:      "after capped retry-after",
+						Date:      now,
+					},
+				}},
+			}), nil
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var handled []core.InboundMessage
+	poller := NewPoller(client, func(_ context.Context, msg core.InboundMessage) error {
+		handled = append(handled, msg)
+		cancel()
+		return nil
+	},
+		withPollerRetryBackoff(time.Second, 3*time.Second),
+		withPollerRetrySleep(func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			return nil
+		}),
+	)
+
+	if err := poller.Run(ctx); err != nil {
+		t.Fatalf("Poller.Run() err = %v, want nil after capped retry-after", err)
+	}
+	if call != 2 {
+		t.Fatalf("getUpdates calls = %d, want 2", call)
+	}
+	if len(delays) != 1 || delays[0] != 3*time.Second {
+		t.Fatalf("retry delays = %#v, want [3s]", delays)
+	}
+	if len(handled) != 1 || handled[0].Text != "after capped retry-after" {
+		t.Fatalf("handled = %#v, want successful update after capped retry-after", handled)
+	}
+}
+
+func TestPollerRetryBackoffIsBoundedAndResetsAfterSuccess(t *testing.T) {
+	t.Parallel()
+
+	call := 0
+	var delays []time.Duration
+	var cancel context.CancelFunc
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			call++
+			if call == 3 {
+				return encodeJSONResponse(t, getUpdatesResponse{Ok: true}), nil
+			}
+			return nil, &url.Error{Op: "Post", URL: req.URL.String(), Err: syscall.ECONNRESET}
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	ctx, cancelFn := context.WithCancel(context.Background())
+	cancel = cancelFn
+	defer cancel()
+
+	poller := NewPoller(client, func(_ context.Context, _ core.InboundMessage) error {
+		t.Fatal("handler should not run for empty polls")
+		return nil
+	},
+		WithPollerTimeout(1),
+		withPollerRetryBackoff(time.Second, 2*time.Second),
+		withPollerRetrySleep(func(ctx context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			if len(delays) == 4 {
+				cancel()
+				return ctx.Err()
+			}
+			return nil
+		}),
+	)
+
+	if err := poller.Run(ctx); err != nil {
+		t.Fatalf("Poller.Run() err = %v, want nil after cancellation", err)
+	}
+	want := []time.Duration{time.Second, 2 * time.Second, time.Second, 2 * time.Second}
+	if len(delays) != len(want) {
+		t.Fatalf("retry delays = %#v, want %#v", delays, want)
+	}
+	for i := range want {
+		if delays[i] != want[i] {
+			t.Fatalf("retry delays = %#v, want %#v", delays, want)
+		}
+	}
+}
+
+func TestPollerCancelDuringTransientGetUpdatesBackoffStopsCleanly(t *testing.T) {
+	t.Parallel()
+
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			return nil, &url.Error{Op: "Post", URL: req.URL.String(), Err: syscall.ECONNRESET}
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	poller := NewPoller(client, func(_ context.Context, _ core.InboundMessage) error {
+		t.Fatal("handler should not run when polling never succeeds")
+		return nil
+	}, withPollerRetrySleep(func(ctx context.Context, _ time.Duration) error {
+		cancel()
+		return ctx.Err()
+	}))
+
+	if err := poller.Run(ctx); err != nil {
+		t.Fatalf("Poller.Run() err = %v, want nil for cancellation during backoff", err)
+	}
+}
+
+func TestPollerDoesNotRetryNonRetryableGetUpdatesAPIError(t *testing.T) {
+	t.Parallel()
+
+	call := 0
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			call++
+			return encodeHTTPJSONResponse(t, http.StatusUnauthorized, getUpdatesResponse{
+				Ok:          false,
+				Description: "Unauthorized",
+			}), nil
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	poller := NewPoller(client, func(_ context.Context, _ core.InboundMessage) error {
+		t.Fatal("handler should not run for unauthorized polling")
+		return nil
+	}, withPollerRetrySleep(func(context.Context, time.Duration) error {
+		t.Fatal("sleep should not run for non-retryable polling errors")
+		return nil
+	}))
+
+	err := poller.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "Unauthorized") {
+		t.Fatalf("Poller.Run() err = %v, want Unauthorized", err)
+	}
+	if call != 1 {
+		t.Fatalf("getUpdates calls = %d, want 1", call)
+	}
+}
+
+func TestPollerRetryAfterDoesNotOverrideNonRetryableMarker(t *testing.T) {
+	t.Parallel()
+
+	err := telegramGetUpdatesError{
+		description: "Unauthorized",
+		retryAfter:  7 * time.Second,
+	}
+	if retryableTelegramPollError(err) {
+		t.Fatal("retryableTelegramPollError() = true for Unauthorized with retry_after, want false")
 	}
 }
 
@@ -388,6 +768,56 @@ func TestPollerDoesNotHandleOrAdvanceOffsetWhenAcceptedRecordFails(t *testing.T)
 	}
 	if handled {
 		t.Fatal("handler ran after accepted record failure")
+	}
+	if len(checkpoint.saved) != 0 {
+		t.Fatalf("saved offsets = %#v, want none", checkpoint.saved)
+	}
+}
+
+func TestPollerRetryDoesNotSwallowAcceptedRecordFailure(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().Unix()
+	call := 0
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			call++
+			if call == 1 {
+				return nil, &url.Error{Op: "Post", URL: req.URL.String(), Err: syscall.ECONNRESET}
+			}
+			return encodeJSONResponse(t, getUpdatesResponse{
+				Ok: true,
+				Result: []Update{{
+					UpdateID: 89,
+					Message: &Message{
+						MessageID: 202,
+						Chat:      &Chat{ID: 7002, Type: "private"},
+						From:      &User{ID: 10, Username: "bob"},
+						Text:      "must not enter memory only",
+						Date:      now,
+					},
+				}},
+			}), nil
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	checkpoint := &testPollerCheckpoint{acceptErr: errors.New("sqlite unavailable")}
+	poller := NewPoller(client, func(_ context.Context, _ core.InboundMessage) error {
+		t.Fatal("handler should not run after accepted record failure")
+		return nil
+	}, WithCheckpoint(checkpoint), withPollerRetrySleep(func(context.Context, time.Duration) error {
+		return nil
+	}))
+
+	err := poller.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "sqlite unavailable") {
+		t.Fatalf("Poller.Run() err = %v, want accepted record failure", err)
+	}
+	if call != 2 {
+		t.Fatalf("getUpdates calls = %d, want transient retry then successful poll", call)
 	}
 	if len(checkpoint.saved) != 0 {
 		t.Fatalf("saved offsets = %#v, want none", checkpoint.saved)

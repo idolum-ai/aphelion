@@ -86,6 +86,9 @@ func (r *Runtime) approveContinuationBundleForKeyLocked(key session.SessionKey, 
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), now)
 		return state, err
 	}
+	if state, err = r.refreshContinuationApprovalBundleFingerprint(key, state); err != nil {
+		return session.ContinuationState{}, err
+	}
 	if compilation := continuationAuthorityCompilation(state); compilation.Invalid() {
 		blocked, _, blockErr := r.blockInvalidContinuationAuthorityContract(context.Background(), key, core.InboundMessage{ChatID: key.ChatID}, state, "approval", now, false)
 		if blockErr != nil {
@@ -392,8 +395,12 @@ func (r *Runtime) triggerApprovedContinuationOnce(ctx context.Context, key sessi
 		return state, false, loopBudget, err
 	}
 	if reservation == nil {
+		if !session.NormalizeContinuationState(state).Active() {
+			r.retireStaleContinuationApprovalCards(ctx, key, key.ChatID, continuationCallbackThreadIDForKey(key), 0, "continuation_inactive", time.Now().UTC())
+		}
 		return state, false, loopBudget, nil
 	}
+	r.retireStaleContinuationApprovalCards(ctx, key, key.ChatID, continuationCallbackThreadIDForKey(key), 0, "lease_consumed", time.Now().UTC())
 	if err := r.runReservedApprovedContinuation(ctx, key, *reservation); err != nil {
 		return state, true, loopBudget, err
 	}

@@ -59,17 +59,22 @@ func TestMaterialFloorProtocolInvariants(t *testing.T) {
 		"- Report the grounded finding.",
 		"SCENE_CONSTRAINTS:",
 		"- Do not leak this to degraded delivery.",
+		"CONTINUITY_CONTEXT:",
+		"- kind=recovery; visibility=internal; reason=budget rollover finished; evidence_ref=execution_event:budget_recovery_resumed",
 	}, "\n"), true)
 	if !structured {
 		t.Fatal("structured = false, want material contract packet")
 	}
-	if !strings.Contains(floorText, "SCENE_CONSTRAINTS") {
-		t.Fatalf("floorText = %q, want full internal material floor including scene constraints", floorText)
+	if !strings.Contains(floorText, "SCENE_CONSTRAINTS") || !strings.Contains(floorText, "CONTINUITY_CONTEXT") {
+		t.Fatalf("floorText = %q, want full internal material floor including internal sections", floorText)
 	}
 
 	fallback := SerializeFloorFallback(packet, floorText, FallbackOptions{Channel: "telegram"})
-	if strings.Contains(fallback, "Do not leak this to degraded delivery") || strings.Contains(fallback, "SCENE_CONSTRAINTS") {
-		t.Fatalf("fallback leaked scene constraints: %q", fallback)
+	if strings.Contains(fallback, "Do not leak this to degraded delivery") ||
+		strings.Contains(fallback, "Budget recovery completed") ||
+		strings.Contains(fallback, "SCENE_CONSTRAINTS") ||
+		strings.Contains(fallback, "CONTINUITY_CONTEXT") {
+		t.Fatalf("fallback leaked internal material floor sections: %q", fallback)
 	}
 	if !strings.Contains(fallback, "What matters:") || !strings.Contains(fallback, "Next:") {
 		t.Fatalf("fallback = %q, want public facts/actions sections", fallback)

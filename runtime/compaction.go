@@ -10,6 +10,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
+	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -33,18 +34,18 @@ func (r *Runtime) maybeCompactSession(
 	systemBlocks []agent.SystemBlock,
 	userText string,
 	idolumProposal string,
-) (*session.Session, []agent.Message, error) {
+) (*session.Session, []agent.Message, bool, error) {
 	history, err := session.ToAgentHistory(sess.Messages)
 	if err != nil {
-		return nil, nil, fmt.Errorf("assemble history: %w", err)
+		return nil, nil, false, fmt.Errorf("assemble history: %w", err)
 	}
 	if !r.shouldCompact(systemBlocks, history, userText, idolumProposal) {
-		return sess, history, nil
+		return sess, history, false, nil
 	}
 
 	keepFromTurn, ok := r.compactionBoundary(sess, systemBlocks, userText, idolumProposal)
 	if !ok {
-		return sess, history, nil
+		return sess, history, false, nil
 	}
 
 	summary := ""
@@ -56,18 +57,59 @@ func (r *Runtime) maybeCompactSession(
 	}
 
 	if err := r.store.Compact(key, summary, keepFromTurn); err != nil {
-		return nil, nil, fmt.Errorf("compact session: %w", err)
+		return nil, nil, false, fmt.Errorf("compact session: %w", err)
 	}
 
 	reloaded, err := r.store.Load(key)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reload compacted session: %w", err)
+		return nil, nil, false, fmt.Errorf("reload compacted session: %w", err)
 	}
 	history, err = session.ToAgentHistory(reloaded.Messages)
 	if err != nil {
-		return nil, nil, fmt.Errorf("assemble compacted history: %w", err)
+		return nil, nil, false, fmt.Errorf("assemble compacted history: %w", err)
 	}
-	return reloaded, history, nil
+	return reloaded, history, true, nil
+}
+
+func applyCompactionContinuityAwareness(aw prompt.RuntimeAwareness, sess *session.Session) (prompt.RuntimeAwareness, bool) {
+	if !sessionNeedsCompactionContinuityAwareness(sess) {
+		return aw, false
+	}
+	summary := latestSessionCompactionSummary(sess)
+	if summary == "" {
+		return aw, false
+	}
+	line := "session_compaction_summary source=compaction_log status=continuity epistemic_status=claimed summary=" + compactEvidenceText(summary, 240)
+	beforeEvidence := len(aw.EvidenceContext)
+	aw.EvidenceContext = appendUniqueRuntimeWorkString(aw.EvidenceContext, line)
+	changed := len(aw.EvidenceContext) != beforeEvidence
+	if strings.TrimSpace(aw.ProvenanceSummary) == "" {
+		aw.ProvenanceSummary = "session compaction summary is available from compaction_log"
+		changed = true
+	}
+	return aw, changed
+}
+
+func sessionNeedsCompactionContinuityAwareness(sess *session.Session) bool {
+	if sess == nil {
+		return false
+	}
+	if sess.OperationState.Active() || sess.ContinuationState.Active() {
+		return false
+	}
+	return true
+}
+
+func latestSessionCompactionSummary(sess *session.Session) string {
+	if sess == nil {
+		return ""
+	}
+	for i := len(sess.CompactionLog) - 1; i >= 0; i-- {
+		if summary := strings.TrimSpace(sess.CompactionLog[i].Summary); summary != "" {
+			return summary
+		}
+	}
+	return ""
 }
 
 func (r *Runtime) shouldCompact(systemBlocks []agent.SystemBlock, history []agent.Message, userText string, idolumProposal string) bool {

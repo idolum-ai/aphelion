@@ -350,7 +350,7 @@ func TestFaceSkipPayloadContainsOnlyDecisionFields(t *testing.T) {
 		FaceAwareness:    prompt.RuntimeAwareness{ReplyModalityDefault: "text"},
 	}, "fallback")
 
-	for _, key := range []string{"reason", "kind", "media_count", "facts", "allowed_actions", "commitments", "refusals", "notes", "fallback_chars"} {
+	for _, key := range []string{"reason", "kind", "media_count", "facts", "allowed_actions", "commitments", "refusals", "continuity_context", "notes", "fallback_chars"} {
 		if _, ok := payload[key]; !ok {
 			t.Fatalf("payload missing %q: %#v", key, payload)
 		}
@@ -359,6 +359,20 @@ func TestFaceSkipPayloadContainsOnlyDecisionFields(t *testing.T) {
 		if _, ok := payload[key]; ok {
 			t.Fatalf("payload contains non-decision field %q: %#v", key, payload)
 		}
+	}
+}
+
+func TestFallbackOptionsWithPromptIntentWiresContinuityQuestion(t *testing.T) {
+	t.Parallel()
+
+	opts := fallbackOptionsWithPromptIntent(pipeline.FallbackOptions{Channel: "telegram"}, "where were we?")
+	if opts.UserIntent != pipeline.IntentContinuityQuestion {
+		t.Fatalf("UserIntent = %q, want continuity_question", opts.UserIntent)
+	}
+
+	preserved := fallbackOptionsWithPromptIntent(pipeline.FallbackOptions{UserIntent: pipeline.IntentContinuityQuestion}, "run tests")
+	if preserved.UserIntent != pipeline.IntentContinuityQuestion {
+		t.Fatalf("UserIntent = %q, want explicitly supplied intent preserved", preserved.UserIntent)
 	}
 }
 
@@ -407,6 +421,62 @@ func TestRenderTurnReplyDoesNotSkipFaceForVoiceModality(t *testing.T) {
 	}
 	if result.ReplyText != "voice-shaped face render" {
 		t.Fatalf("ReplyText = %q, want face-rendered voice text", result.ReplyText)
+	}
+}
+
+func TestRenderTurnReplyKeepsContinuityContextOutOfFallback(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, _ := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, &fakeSender{})
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendFloorFallback
+	packet := core.MaterialPacket{
+		Kind: core.MaterialPacketKindStatusReport,
+		Facts: []string{
+			"Completed the clean replacement release-PR route.",
+			"Pushed `release/v0.2.5` with `--force-with-lease`.",
+		},
+		ContinuityContext: []core.MaterialContinuityContext{{
+			Kind:        core.MaterialContinuityKindRecovery,
+			Visibility:  core.MaterialContinuityVisibilityInternal,
+			Reason:      "token budget rollover succeeded",
+			EvidenceRef: "execution_event:budget_recovery_resumed",
+		}},
+		Commitments: []string{"Stopped before merge/publication."},
+	}
+	floorText := packet.Text()
+	result, err := rt.renderTurnReply(turnRenderInput{
+		Ctx:              context.Background(),
+		Key:              session.SessionKey{ChatID: 907, UserID: 0},
+		Result:           &core.TurnResult{Text: floorText},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		UseMaterialFloor: true,
+		ReplyText:        pipeline.SerializeFloorFallback(packet, floorText, pipeline.FallbackOptions{Channel: "telegram"}),
+		FloorText:        floorText,
+		MaterialFloor:    packet,
+		FallbackOpts:     pipeline.FallbackOptions{Channel: "telegram"},
+		FaceAwareness:    prompt.RuntimeAwareness{},
+		PromptInput:      "continue",
+	})
+	if err != nil {
+		t.Fatalf("renderTurnReply() err = %v", err)
+	}
+	for _, blocked := range []string{"Recovery hop", "CONTINUITY_CONTEXT"} {
+		if strings.Contains(result.ReplyText, blocked) {
+			t.Fatalf("ReplyText leaked continuity context %q: %q", blocked, result.ReplyText)
+		}
+	}
+	for _, want := range []string{
+		"Completed the clean replacement release-PR route.",
+		"Pushed `release/v0.2.5` with `--force-with-lease`.",
+		"Stopped before merge/publication.",
+	} {
+		if !strings.Contains(result.ReplyText, want) {
+			t.Fatalf("ReplyText missing %q: %q", want, result.ReplyText)
+		}
 	}
 }
 

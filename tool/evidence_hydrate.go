@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -37,10 +38,38 @@ func (r *Registry) evidenceHydrate(_ context.Context, input json.RawMessage, key
 	if err != nil {
 		return "", err
 	}
-	return renderEvidenceHydrateResult(result), nil
+	return renderEvidenceHydrateResult(result, evidenceHydrateRenderOptions{
+		IncludePayloadIDs: in.IncludePayloadIDs,
+		PayloadOffset:     in.PayloadOffset,
+		PayloadLimit:      in.PayloadLimit,
+	}), nil
 }
 
-func renderEvidenceHydrateResult(result session.EvidenceHydrationResult) string {
+const (
+	defaultEvidenceHydratePayloadLimit = 4000
+	maxEvidenceHydratePayloadLimit     = 12000
+)
+
+type evidenceHydrateRenderOptions struct {
+	IncludePayloadIDs []string
+	PayloadOffset     int
+	PayloadLimit      int
+}
+
+func renderEvidenceHydrateResult(result session.EvidenceHydrationResult, opts evidenceHydrateRenderOptions) string {
+	includePayload := normalizedEvidenceHydratePayloadIDSet(opts.IncludePayloadIDs)
+	payloadOffset := opts.PayloadOffset
+	if payloadOffset < 0 {
+		payloadOffset = 0
+	}
+	payloadLimit := opts.PayloadLimit
+	if payloadLimit <= 0 {
+		payloadLimit = defaultEvidenceHydratePayloadLimit
+	}
+	if payloadLimit > maxEvidenceHydratePayloadLimit {
+		payloadLimit = maxEvidenceHydratePayloadLimit
+	}
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "[EVIDENCE_HYDRATION]\n")
 	fmt.Fprintf(&b, "run_id: %s\n", firstNonEmpty(result.RunID, "-"))
@@ -65,9 +94,91 @@ func renderEvidenceHydrateResult(result session.EvidenceHydrationResult) string 
 		if strings.TrimSpace(obj.Digest) != "" {
 			fmt.Fprintf(&b, "   digest: %s\n", clampToolOutputLine(obj.Digest, 500))
 		}
+		if _, ok := includePayload[obj.ID]; ok {
+			renderEvidencePayloadWindow(&b, obj, payloadOffset, payloadLimit)
+		}
 	}
 	b.WriteString("\n[/EVIDENCE_HYDRATION]")
 	return b.String()
+}
+
+func normalizedEvidenceHydratePayloadIDSet(ids []string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			out[id] = struct{}{}
+		}
+	}
+	return out
+}
+
+func renderEvidencePayloadWindow(b *strings.Builder, obj session.EvidenceObject, offset int, limit int) {
+	if b == nil {
+		return
+	}
+	payload := strings.TrimSpace(obj.PayloadJSON)
+	if payload == "" {
+		payload = "{}"
+	}
+	content := evidencePayloadPreferredWindowContent(payload)
+	window, nextOffset, truncated := evidencePayloadWindow(content, offset, limit)
+	fmt.Fprintf(b, "   payload_window: offset=%d bytes=%d total_bytes=%d", offset, len(window), len(content))
+	if truncated {
+		fmt.Fprintf(b, " next_offset=%d", nextOffset)
+	}
+	fmt.Fprintf(b, "\n")
+	if window == "" {
+		fmt.Fprintf(b, "   payload_text: <empty>\n")
+		return
+	}
+	for _, line := range strings.Split(window, "\n") {
+		fmt.Fprintf(b, "   payload_text: %s\n", line)
+	}
+}
+
+func evidencePayloadPreferredWindowContent(payload string) string {
+	decoded := map[string]any{}
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		return payload
+	}
+	if output, ok := decoded["output"].(string); ok {
+		return output
+	}
+	keys := make([]string, 0, len(decoded))
+	for key := range decoded {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	normalized := map[string]any{}
+	for _, key := range keys {
+		normalized[key] = decoded[key]
+	}
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		return payload
+	}
+	return string(raw)
+}
+
+func evidencePayloadWindow(content string, offset int, limit int) (string, int, bool) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = defaultEvidenceHydratePayloadLimit
+	}
+	if limit > maxEvidenceHydratePayloadLimit {
+		limit = maxEvidenceHydratePayloadLimit
+	}
+	if offset >= len(content) {
+		return "", len(content), false
+	}
+	end := offset + limit
+	if end >= len(content) {
+		return strings.ToValidUTF8(content[offset:], "�"), len(content), false
+	}
+	return strings.ToValidUTF8(content[offset:end], "�"), end, true
 }
 
 func clampToolOutputLine(value string, max int) string {
