@@ -36,6 +36,9 @@ type ReentryRecommendationCandidate struct {
 	Label            string               `json:"label"`
 	Summary          string               `json:"summary,omitempty"`
 	PromptText       string               `json:"prompt_text"`
+	IntentClass      string               `json:"intent_class,omitempty"`
+	TemporalFit      string               `json:"temporal_fit,omitempty"`
+	WhyNow           string               `json:"why_now,omitempty"`
 	AuthorityClass   string               `json:"authority_class,omitempty"`
 	RequiresApproval bool                 `json:"requires_approval,omitempty"`
 	BasisRefs        []string             `json:"basis_refs,omitempty"`
@@ -44,6 +47,7 @@ type ReentryRecommendationCandidate struct {
 	EvidenceRefs     []string             `json:"evidence_refs,omitempty"`
 	Scores           map[string]float64   `json:"scores,omitempty"`
 	JudgmentReason   string               `json:"judgment_reason,omitempty"`
+	DampeningKey     string               `json:"dampening_key,omitempty"`
 }
 
 type ReentryRecommendation struct {
@@ -129,6 +133,9 @@ func NormalizeReentryRecommendationCandidate(candidate ReentryRecommendationCand
 	candidate.Label = strings.TrimSpace(candidate.Label)
 	candidate.Summary = strings.TrimSpace(candidate.Summary)
 	candidate.PromptText = strings.TrimSpace(candidate.PromptText)
+	candidate.IntentClass = strings.TrimSpace(candidate.IntentClass)
+	candidate.TemporalFit = strings.TrimSpace(candidate.TemporalFit)
+	candidate.WhyNow = strings.TrimSpace(candidate.WhyNow)
 	candidate.AuthorityClass = strings.TrimSpace(candidate.AuthorityClass)
 	candidate.BasisRefs = normalizeMissionStringSlice(candidate.BasisRefs)
 	candidate.SourceKind = strings.TrimSpace(candidate.SourceKind)
@@ -136,6 +143,7 @@ func NormalizeReentryRecommendationCandidate(candidate ReentryRecommendationCand
 	candidate.EvidenceRefs = normalizeMissionStringSlice(candidate.EvidenceRefs)
 	candidate.Scores = normalizeReentryCandidateScores(candidate.Scores)
 	candidate.JudgmentReason = strings.TrimSpace(candidate.JudgmentReason)
+	candidate.DampeningKey = strings.TrimSpace(candidate.DampeningKey)
 	return candidate
 }
 

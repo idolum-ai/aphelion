@@ -542,19 +542,21 @@ Offer conditions:
 
 When a chat becomes quiet after a completed interactive or recovery turn,
 Aphelion may send a small `Possible next steps` card. The card is a
-re-entry aid, not a command queue: choosing a candidate selects a path and the
-next turn must still ask for any approval needed before acting.
+re-entry aid, not a command queue: choosing a candidate selects a concrete path
+and the next turn must still ask for any approval needed before acting.
 
-Candidates are generated as typed advisory paths over the latest durable state:
-current operation/proposal state, mission state, same-chat open threads,
-interior-pressure signals, recent memory notes, and hydrated evidence refs.
-Runtime scores those paths with a deterministic policy over relevance-now,
-operator-intent fit, evidence strength, resurfacing value, authority cost,
-staleness risk, and cross-thread risk; an LLM ranker may reorder the
-already-generated candidate list by ID, but it cannot create candidates,
-labels, or authority. Candidate provenance and evidence refs are carried into
-the selected turn so the face can explain why a path was offered without
-treating the card as permission.
+Candidates are generated as typed advisory opportunities over the latest
+durable state: current operation/proposal state, mission state, same-chat open
+threads, interior-pressure signals, recent memory notes, and hydrated evidence
+refs. Labels are rendered from typed state, for example `Repair: release
+workflow escaping`, instead of generic "review whether work deserves
+attention" templates. Runtime scores those paths with a deterministic policy
+over relevance-now, operator-intent fit, evidence strength, resurfacing value,
+authority cost, staleness risk, and cross-thread risk; an LLM ranker may
+reorder the already-generated candidate list by ID, but it cannot create
+candidates, labels, or authority. Candidate provenance, intent, timing, why-now
+reason, and evidence refs are carried into the selected turn so the face can
+explain why a path was offered without treating the card as permission.
 
 Current runtime policy is intentionally hard-coded rather than operator
 configurable:
@@ -564,7 +566,11 @@ configurable:
 - the sweep checks roughly once a minute;
 - at most three candidates are shown;
 - active continuations, pending operation proposals, or newer/running turns
-  suppress the card.
+  suppress the card;
+- cards whose only candidates are generic fallback/reorientation prompts are
+  suppressed rather than shown;
+- ignored/stale candidates dampen the same semantic opportunity for a short
+  cooldown so repeated cards do not become nagging.
 
 This means active debugging or continued chat traffic resets the quiet window.
 If no card appears, first check whether the session actually reached a latest

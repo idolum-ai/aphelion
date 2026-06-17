@@ -110,11 +110,20 @@ func reentryRecommendationSelectionPrompt(record session.ReentryRecommendation, 
 	if summary := strings.TrimSpace(candidate.Summary); summary != "" {
 		parts = append(parts, "Candidate summary: "+summary)
 	}
+	if intentClass := strings.TrimSpace(candidate.IntentClass); intentClass != "" {
+		parts = append(parts, "Candidate intent: "+intentClass)
+	}
+	if temporalFit := strings.TrimSpace(candidate.TemporalFit); temporalFit != "" {
+		parts = append(parts, "Candidate timing: "+temporalFit)
+	}
 	if candidate.SourceKind != "" || candidate.SourceRef != "" {
 		parts = append(parts, fmt.Sprintf("Candidate source: %s %s", strings.TrimSpace(candidate.SourceKind), strings.TrimSpace(candidate.SourceRef)))
 	}
 	if len(candidate.EvidenceRefs) > 0 {
 		parts = append(parts, "Evidence refs: "+strings.Join(candidate.EvidenceRefs, ", "))
+	}
+	if whyNow := strings.TrimSpace(candidate.WhyNow); whyNow != "" {
+		parts = append(parts, "Why now: "+whyNow)
 	}
 	if reason := strings.TrimSpace(candidate.JudgmentReason); reason != "" {
 		parts = append(parts, "Judgment reason: "+reason)

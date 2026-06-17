@@ -21,14 +21,22 @@ func TestReentryRecommendationSweepSurfacesBoundedChoicesAfterTerminalQuietWindo
 	key := session.SessionKey{ChatID: 7001, UserID: 0}
 	if err := store.UpdateOperationState(key, session.OperationState{
 		ID:        "op-release",
-		Objective: "Rebuild, reinstall, and restart the service from latest main.",
+		Objective: "Prepare release v0.2.7.",
 		Status:    session.OperationStatusCompleted,
 		Stage:     "completed",
-		Summary:   "Latest main was rebuilt, reinstalled, and restarted.",
+		Summary:   "Release workflow escaping was validated.",
+		PhasePlan: session.OperationPhasePlan{
+			CurrentPhaseID: "validate-release-workflow",
+			Phases: []session.OperationPhase{{
+				ID:      "validate-release-workflow",
+				Summary: "Validate release workflow escaping",
+				Status:  session.PlanStatusCompleted,
+			}},
+		},
 	}); err != nil {
 		t.Fatalf("UpdateOperationState() err = %v", err)
 	}
-	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "checkout main, pull, rebuild, reinstall, restart the service")
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "review the release workflow before publishing")
 	if err != nil {
 		t.Fatalf("BeginTurnRun() err = %v", err)
 	}
@@ -49,20 +57,20 @@ func TestReentryRecommendationSweepSurfacesBoundedChoicesAfterTerminalQuietWindo
 	}
 	card := sender.sent[0]
 	sender.mu.Unlock()
-	if !strings.Contains(card.Text, "Possible next steps:\n1. Review whether the latest release work is safe to deploy") {
-		t.Fatalf("card text = %q, want value-articulated numbered suggestions in body", card.Text)
+	if !strings.Contains(card.Text, "Possible next steps:\n1. Check release: Validate release workflow escaping") {
+		t.Fatalf("card text = %q, want concrete release suggestion in body", card.Text)
 	}
-	if len(card.ButtonRows) != 1 || len(card.ButtonRows[0]) != 4 {
-		t.Fatalf("button rows = %#v, want up to three candidates plus Ignore", card.ButtonRows)
+	if strings.Contains(card.Text, "Ask: choose useful path") || strings.Contains(card.Text, "Pause and choose") {
+		t.Fatalf("card text = %q, want no generic fallback padding when concrete candidates exist", card.Text)
+	}
+	if len(card.ButtonRows) != 1 || len(card.ButtonRows[0]) != 3 {
+		t.Fatalf("button rows = %#v, want concrete candidates plus Ignore", card.ButtonRows)
 	}
 	if got := card.ButtonRows[0][0].Text; got != "1" {
 		t.Fatalf("first button = %q, want numeric selector", got)
 	}
 	if got := card.ButtonRows[0][1].Text; got != "2" {
 		t.Fatalf("second button = %q, want numeric selector", got)
-	}
-	if !strings.Contains(card.Text, "Pause and choose whether work, repair, or conversation would help most") {
-		t.Fatalf("card text = %q, want reflective wellbeing option", card.Text)
 	}
 	if got := card.ButtonRows[0][len(card.ButtonRows[0])-1].Text; got != "Ignore" {
 		t.Fatalf("last button = %q, want Ignore", got)
@@ -96,7 +104,7 @@ func TestReentryRecommendationSweepSurfacesBoundedChoicesAfterTerminalQuietWindo
 		t.Fatalf("shown payload = %#v, want candidate_count %d", shownPayload, len(records[0].Candidates))
 	}
 	displayed := testReentryPayloadObjects(shownPayload, "candidates")
-	if len(displayed) == 0 || displayed[0]["id"] == "" || displayed[0]["source_kind"] == "" || displayed[0]["weighted_score"] == nil {
+	if len(displayed) == 0 || displayed[0]["id"] == "" || displayed[0]["source_kind"] == "" || displayed[0]["weighted_score"] == nil || displayed[0]["intent_class"] == "" || displayed[0]["why_now"] == "" {
 		t.Fatalf("shown payload candidates = %#v, want typed displayed candidate audit", displayed)
 	}
 
@@ -157,12 +165,11 @@ func TestReentryRecommendationRankingPayloadAvoidsPrivateContext(t *testing.T) {
 				t.Fatalf("candidate prompt leaked internal copy %q: %#v", forbidden, candidate)
 			}
 		}
-		if !strings.Contains(candidate.PromptText, "ask before doing it") {
-			t.Fatalf("candidate prompt = %q, want ask-before-action warning", candidate.PromptText)
+		if candidate.RequiresApproval && !strings.Contains(strings.ToLower(candidate.PromptText), "ask") {
+			t.Fatalf("candidate prompt = %q, want approval-gated candidate to ask before action", candidate.PromptText)
 		}
-		if candidate.Kind == session.ReentryCandidateResumeMission &&
-			(strings.Contains(candidate.Summary, "Secret Project Night Orchard") || strings.Contains(candidate.Summary, "private codename")) {
-			t.Fatalf("mission candidate summary leaked private mission content: %#v", candidate)
+		if candidate.IntentClass == "" || candidate.TemporalFit == "" || candidate.WhyNow == "" {
+			t.Fatalf("candidate = %#v, want typed intent/timing/why-now fields", candidate)
 		}
 	}
 	_ = rt.rankReentryRecommendationCandidates(context.Background(), state, candidates)
@@ -188,6 +195,149 @@ func TestReentryRecommendationRankingPayloadAvoidsPrivateContext(t *testing.T) {
 		if !strings.Contains(payload, want) {
 			t.Fatalf("ranking payload = %q, want structural field %q", payload, want)
 		}
+	}
+}
+
+func TestReentryRecommendationDoesNotTreatServiceRestartAsRelease(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	rt := &Runtime{}
+	state := reentryRecommendationState{
+		Key: session.SessionKey{ChatID: 7011, UserID: 0, Scope: telegramDMScopeRef(7011)},
+		Run: session.TurnRun{
+			ID:          45,
+			SessionID:   "telegram:7011:0",
+			Kind:        session.TurnRunKindInteractive,
+			Status:      session.TurnRunStatusCompleted,
+			RequestText: "checkout main, pull, rebuild, reinstall, restart the service",
+			CompletedAt: now.Add(-10 * time.Minute),
+		},
+		Operation: session.OperationState{
+			ID:        "op-service-restart",
+			Objective: "Rebuild, reinstall, and restart the service from latest main.",
+			Status:    session.OperationStatusCompleted,
+			Stage:     "completed",
+			Summary:   "Latest main was rebuilt, reinstalled, and restarted.",
+		},
+		Now: now,
+	}
+
+	candidates := rt.reentryRecommendationCandidates(context.Background(), state)
+	if len(candidates) == 0 {
+		t.Fatal("candidates empty, want concrete operation follow-up")
+	}
+	for _, candidate := range candidates {
+		if candidate.Kind == session.ReentryCandidateReviewReleaseReadiness {
+			t.Fatalf("candidate = %#v, want service/restart wording not to become release readiness", candidate)
+		}
+	}
+	if !strings.Contains(candidates[0].Label, "Rebuild, reinstall, and restart the service") {
+		t.Fatalf("first label = %q, want concrete operation subject", candidates[0].Label)
+	}
+}
+
+func TestReentryRecommendationSuppressesPureFallbackCard(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt := &Runtime{cfg: cfg, store: store, provider: provider, outbound: sender}
+	key := session.SessionKey{ChatID: 7012, UserID: 0}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "thanks")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if err := store.CompleteTurnRun(run.ID, session.TurnRunStatusCompleted, ""); err != nil {
+		t.Fatalf("CompleteTurnRun() err = %v", err)
+	}
+	completed, err := store.TurnRun(run.ID)
+	if err != nil {
+		t.Fatalf("TurnRun() err = %v", err)
+	}
+
+	if err := rt.runReentryRecommendationSweepOnce(context.Background(), completed.CompletedAt.Add(6*time.Minute)); err != nil {
+		t.Fatalf("runReentryRecommendationSweepOnce() err = %v", err)
+	}
+	sender.mu.Lock()
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent = %#v, want no card for pure fallback", sender.sent)
+	}
+	sender.mu.Unlock()
+	records, err := store.ReentryRecommendations(session.ReentryRecommendationFilter{SessionID: run.SessionID, Limit: 10})
+	if err != nil {
+		t.Fatalf("ReentryRecommendations() err = %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("records = %#v, want no persisted recommendation for pure fallback", records)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if _, ok := testReentryExecutionEvent(events, core.ExecutionEventReentryRecommendationJudged, "suppressed_low_value"); !ok {
+		t.Fatalf("events = %#v, want low-value suppression audit", events)
+	}
+}
+
+func TestReentryRecommendationIgnoredCandidateDampensSameSemanticKey(t *testing.T) {
+	t.Parallel()
+
+	_, store, _, _ := buildRuntimeFixtures(t)
+	rt := &Runtime{store: store}
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 7013, UserID: 0}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "continue current work")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	candidate := session.ReentryRecommendationCandidate{
+		ID:             "c1",
+		Kind:           session.ReentryCandidateRequestNextLease,
+		Label:          "Continue: current work",
+		PromptText:     "Continue current work.",
+		IntentClass:    "continue_operation",
+		TemporalFit:    "now",
+		WhyNow:         "current operation state is nearest",
+		SourceKind:     "operation_state",
+		SourceRef:      "op-damped",
+		DampeningKey:   "continue_operation:request_next_lease:operation_state:op-damped",
+		JudgmentReason: "test",
+	}
+	created, allowed, reason, err := store.CreateReentryRecommendationIfAllowed(session.ReentryRecommendation{
+		ID:                  "reentry-dampened",
+		Owner:               reentryRecommendationOwner(*run),
+		ChatID:              run.ChatID,
+		SessionID:           run.SessionID,
+		SourceTurnRunID:     run.ID,
+		TerminalFingerprint: "sha256:prior",
+		Candidates:          []session.ReentryRecommendationCandidate{candidate},
+	}, now)
+	if err != nil || !allowed {
+		t.Fatalf("CreateReentryRecommendationIfAllowed() allowed=%v reason=%q err=%v", allowed, reason, err)
+	}
+	if _, ok, err := store.MarkReentryRecommendationIgnored(created.ID, "operator ignored test candidate", now.Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("MarkReentryRecommendationIgnored() ok=%v err=%v", ok, err)
+	}
+
+	candidates := rt.reentryRecommendationCandidates(context.Background(), reentryRecommendationState{
+		Key: key,
+		Run: session.TurnRun{
+			ID:          run.ID + 1,
+			SessionID:   run.SessionID,
+			Kind:        session.TurnRunKindInteractive,
+			Status:      session.TurnRunStatusCompleted,
+			RequestText: "continue current work",
+			CompletedAt: now.Add(2 * time.Minute),
+		},
+		Operation: session.OperationState{
+			ID:        "op-damped",
+			Objective: "Continue current work.",
+			Status:    session.OperationStatusActive,
+		},
+		Now: now.Add(2 * time.Minute),
+	})
+	if len(candidates) != 0 {
+		t.Fatalf("candidates = %#v, want ignored semantic opportunity dampened", candidates)
 	}
 }
 

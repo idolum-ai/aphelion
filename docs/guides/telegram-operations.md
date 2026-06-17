@@ -298,9 +298,17 @@ the next turn should still request the smallest required approval.
 
 The candidates are typed paths, not prose guesses. Runtime weighs the current
 operation, missions, same-chat threads, interior-pressure signals, memory, and
-hydrated evidence refs, then presents at most three short choices. A selected
-candidate carries its source and evidence refs into the next turn as context,
-but the normal authority and evidence gates still decide what can happen.
+hydrated evidence refs, then presents at most three short choices only when at
+least one concrete opportunity exists. Labels are rendered from typed state, so
+they should name the path being resumed or repaired instead of asking you to
+reconsider work in general. A selected candidate carries its source, intent,
+timing, why-now reason, and evidence refs into the next turn as context, but the
+normal authority and evidence gates still decide what can happen.
+
+Ignoring a card dampens the same semantic opportunity for a short cooldown, and
+stale cards are penalized before they can resurface. Pure fallback cards such
+as "ask what would be useful next" are suppressed; Aphelion should stay quiet
+when it cannot name a useful path from durable state.
 
 Heartbeat nudges may also mention recurring interior pressure. Those nudges are
 continuity signals derived from hidden-input recurrence and support pressure.
