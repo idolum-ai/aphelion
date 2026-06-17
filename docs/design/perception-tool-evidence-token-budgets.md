@@ -58,6 +58,19 @@ evidence can project:
 These fields are accounting and diagnosis projections, not billing authority and
 not canonical execution history.
 
+### Stable prompt prefix and evidence admission
+
+Stable governance/persona prompt material should appear before volatile runtime
+awareness so provider prompt caches can hit. Volatile objective, evidence,
+signals, delivery mode, latest user text, and channel facts belong late.
+
+The evidence ledger is cheap-to-write and hydrate-on-demand. Ordinary turns carry
+a compact evidence-ledger pointer plus the `evidence_hydrate` affordance; selected
+evidence is pushed automatically only when typed recovery, continuation,
+active-operation, or explicit recall pressure requires source-fact
+fidelity. This keeps the ledger canonical without turning every prompt into an
+audit replay.
+
 ## Proposed remaining shape
 
 ### 1. Tool evidence admission

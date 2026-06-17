@@ -71,14 +71,23 @@ repair affordance, not evidence that the old facts were recovered.
 
 ## Runtime Use
 
-Interactive-like turn assembly should include a compact evidence hydration block
-when there is active work, a current request, or continuation/recovery pressure.
-This block should contain evidence IDs, source kind, epistemic status, subject,
-payload hash, and bounded summary/digest.
+Interactive-like turn assembly should always include a tiny evidence-ledger
+pointer so the model knows canonical evidence exists and can pull it through the
+read-only hydration tool. Full selected evidence is not pushed into every
+ordinary prompt. Automatic hydration runs when typed state or request pressure
+needs source-fact fidelity: recovery, continuation, active-operation, or
+an explicit request to restore prior context. Hydration blocks contain evidence
+IDs, source kind, epistemic status, subject, payload hash, and bounded
+summary/digest.
 
 The model also receives a read-only `evidence_hydrate` tool. Use it when a turn
 needs to ground a continuation or recovery decision in older source facts rather
 than relying on a summary chain.
+
+Cost should scale with change. Writing evidence to the ledger is cheap and
+canonical; prompt admission is a projection. Repeated turns should carry stable
+evidence references and hydrate only the evidence needed for the current
+judgment.
 
 ## Evaluation
 

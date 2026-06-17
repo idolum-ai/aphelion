@@ -327,23 +327,17 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 	}
 	intro = append(intro, renderFaceOutcomeContractBlock(mode, faceName))
 	parts = append(parts, agent.SystemBlock{Text: strings.Join(intro, "\n\n")})
-	parts = append(parts, agent.SystemBlock{
-		Text: strings.Join([]string{
-			renderFaceAwarenessBlock(req.Runtime),
-			renderFaceAgencyContextPacket(req.Runtime, principalRole, mode),
-		}, "\n\n"),
-	})
-	if modality := renderReplyModalityControlBlock(req.Runtime, mode); modality != "" {
-		parts = append(parts, agent.SystemBlock{Text: modality})
-	}
 	parts = append(parts, agent.SystemBlock{Text: renderFaceAgencyTelosBlock(mode, faceName)})
-	parts = append(parts, agent.SystemBlock{Text: renderFaceRouteContractBlock(mode, scene)})
 
 	if len(req.StableFiles) > 0 {
 		parts = append(parts, agent.SystemBlock{
 			Text: renderFileSection("Stable Face Files", req.StableFiles),
 		})
 	}
+	markStableCacheBreakpoints(parts, maxStableCacheBreakpoints)
+
+	parts = append(parts, agent.SystemBlock{Text: renderFaceRouteContractBlock(mode, scene)})
+
 	if len(req.DynamicFiles) > 0 {
 		shapedDynamic, omittedDynamic := shapeDynamicFilesForPromptCache(req.DynamicFiles, req.CacheStrategy, req.CacheLookback)
 		lines := []string{
@@ -354,12 +348,18 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 			lines = append(lines, omitted)
 		}
 		lines = append(lines, renderFiles(shapedDynamic)...)
-		markStableCacheBreakpoints(parts, maxStableCacheBreakpoints)
 		parts = append(parts, agent.SystemBlock{
 			Text: strings.Join(lines, "\n\n"),
 		})
-	} else {
-		markStableCacheBreakpoints(parts, maxStableCacheBreakpoints)
+	}
+	parts = append(parts, agent.SystemBlock{
+		Text: strings.Join([]string{
+			renderFaceAwarenessBlock(req.Runtime),
+			renderFaceAgencyContextPacket(req.Runtime, principalRole, mode),
+		}, "\n\n"),
+	})
+	if modality := renderReplyModalityControlBlock(req.Runtime, mode); modality != "" {
+		parts = append(parts, agent.SystemBlock{Text: modality})
 	}
 	if len(req.ContextNotes) > 0 {
 		lines := []string{

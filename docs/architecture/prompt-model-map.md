@@ -80,6 +80,12 @@ The governor and face prompt builders already render this shape through
 contract blocks. Smaller runtime prompts should follow the same style directly
 instead of accumulating prose instructions.
 
+Prompt cost should scale with changed material, not wall-clock turns. Stable
+governor and face files form the provider-cacheable prefix; volatile awareness,
+delivery mode, evidence pointers/hydration, latest user text, and channel facts
+belong late. Stable prompt files may be fingerprint-cached by runtime/renderer
+assembly, while dynamic files remain reload-every-turn.
+
 ## Workspace Prompt File Map
 
 | File | Live size | Loaded into | Placement | Intended purpose | Review notes |

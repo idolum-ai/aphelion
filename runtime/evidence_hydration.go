@@ -18,11 +18,15 @@ func (r *Runtime) applyEvidenceHydrationAwareness(ctx context.Context, aw prompt
 	if r == nil || r.store == nil || sess == nil {
 		return aw
 	}
+	operationID := strings.TrimSpace(sess.OperationState.ID)
+	aw.EvidenceContext = append(aw.EvidenceContext, renderEvidenceLedgerPointerLine(key, operationID, runKind))
+	if !shouldHydrateEvidenceForTurn(runKind, requestText, sess) {
+		return aw
+	}
 	if err := ctx.Err(); err != nil {
 		aw.EvidenceContext = append(aw.EvidenceContext, "evidence hydration skipped: "+err.Error())
 		return aw
 	}
-	operationID := strings.TrimSpace(sess.OperationState.ID)
 	query := strings.TrimSpace(requestText)
 	if operationID != "" {
 		query = strings.TrimSpace(query + " operation_id:" + operationID)
@@ -40,6 +44,92 @@ func (r *Runtime) applyEvidenceHydrationAwareness(ctx context.Context, aw prompt
 	}
 	aw.EvidenceContext = append(aw.EvidenceContext, renderEvidenceHydrationResultLines(result, runKind)...)
 	return aw
+}
+
+func renderEvidenceLedgerPointerLine(key session.SessionKey, operationID string, runKind session.TurnRunKind) string {
+	parts := []string{
+		"evidence_ledger=available",
+		"scope=" + session.SessionIDForKey(key),
+		"run_kind=" + strings.TrimSpace(string(runKind)),
+		"tool=evidence_hydrate",
+	}
+	if operationID = strings.TrimSpace(operationID); operationID != "" {
+		parts = append(parts, "operation_id="+operationID)
+	}
+	return strings.Join(parts, " ")
+}
+
+func shouldHydrateEvidenceForTurn(runKind session.TurnRunKind, requestText string, sess *session.Session) bool {
+	if runKind == session.TurnRunKindRecovery {
+		return true
+	}
+	if sess == nil {
+		return explicitEvidenceRecallRequest(requestText)
+	}
+	if continuationHydrationPressure(sess.ContinuationState) {
+		return true
+	}
+	if operationHydrationPressure(sess.OperationState) {
+		return true
+	}
+	return explicitEvidenceRecallRequest(requestText)
+}
+
+func continuationHydrationPressure(state session.ContinuationState) bool {
+	state = session.NormalizeTurnAuthorizationState(state)
+	switch state.Status {
+	case session.TurnAuthorizationStatusPending, session.TurnAuthorizationStatusApproved:
+		return true
+	}
+	switch state.ContinuationLease.Status {
+	case session.ContinuationLeaseStatusActive, session.ContinuationLeaseStatusDeferred, session.ContinuationLeaseStatusConsumed:
+		return true
+	}
+	switch state.ApprovalBundle.Status {
+	case session.ContinuationLeaseStatusActive, session.ContinuationLeaseStatusDeferred, session.ContinuationLeaseStatusConsumed:
+		return true
+	}
+	return strings.TrimSpace(state.ParkedReason) != "" || strings.TrimSpace(state.HandshakeBlockedReason) != ""
+}
+
+func operationHydrationPressure(state session.OperationState) bool {
+	state = session.NormalizeOperationState(state)
+	if !state.Active() {
+		return false
+	}
+	switch state.Status {
+	case session.OperationStatusActive, session.OperationStatusBlocked:
+		return true
+	default:
+		return state.PhasePlan.Active() || state.PlanLease.Active()
+	}
+}
+
+func explicitEvidenceRecallRequest(text string) bool {
+	text = strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(text)), " "))
+	if text == "" {
+		return false
+	}
+	for _, needle := range []string{
+		"where were we",
+		"what were we doing",
+		"recover context",
+		"restore context",
+		"prior context",
+		"previous context",
+		"what happened",
+		"what changed",
+		"show evidence",
+		"from the evidence",
+		"hydrate evidence",
+		"continue",
+		"resume",
+	} {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func renderEvidenceHydrationResultLines(result session.EvidenceHydrationResult, runKind session.TurnRunKind) []string {

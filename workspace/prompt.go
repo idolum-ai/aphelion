@@ -35,10 +35,36 @@ type LoadedFile struct {
 	Truncated bool
 }
 
+type PromptFileFingerprint struct {
+	Path            string
+	Size            int64
+	ModTimeUnixNano int64
+}
+
 type PromptContext struct {
 	Workspace string
 	Stable    []LoadedFile
 	Dynamic   []LoadedFile
+}
+
+func PromptFileFingerprints(workspaceRoot string, names []string) ([]PromptFileFingerprint, error) {
+	seen := make(map[string]struct{})
+	out := make([]PromptFileFingerprint, 0, len(names))
+	for _, name := range names {
+		fingerprint, ok, err := promptFileFingerprint(workspaceRoot, name)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		if _, exists := seen[fingerprint.Path]; exists {
+			continue
+		}
+		seen[fingerprint.Path] = struct{}{}
+		out = append(out, fingerprint)
+	}
+	return out, nil
 }
 
 func LoadPromptContext(cfg config.AgentConfig, now time.Time) (*PromptContext, error) {
@@ -212,6 +238,51 @@ func loadOne(
 		Dynamic:   dynamic,
 		Truncated: truncated,
 	}, nil
+}
+
+func promptFileFingerprint(workspaceRoot string, name string) (PromptFileFingerprint, bool, error) {
+	name = filepath.ToSlash(strings.TrimSpace(name))
+	if name == "" {
+		return PromptFileFingerprint{}, false, nil
+	}
+	path, displayPath, err := resolveWorkspacePath(workspaceRoot, name)
+	if err != nil {
+		return PromptFileFingerprint{}, false, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) && strings.EqualFold(name, memoryFileName) {
+			altPath, altDisplay, altErr := resolveWorkspacePath(workspaceRoot, memoryAltFileName)
+			if altErr != nil {
+				return PromptFileFingerprint{}, false, altErr
+			}
+			info, err = os.Stat(altPath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return PromptFileFingerprint{}, false, nil
+				}
+				return PromptFileFingerprint{}, false, fmt.Errorf("stat workspace file %s: %w", altDisplay, err)
+			}
+			path = altPath
+			displayPath = altDisplay
+		} else if os.IsNotExist(err) {
+			return PromptFileFingerprint{}, false, nil
+		} else {
+			return PromptFileFingerprint{}, false, fmt.Errorf("stat workspace file %s: %w", displayPath, err)
+		}
+	}
+	if info.IsDir() {
+		return PromptFileFingerprint{}, false, nil
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return PromptFileFingerprint{}, false, fmt.Errorf("resolve workspace file %s: %w", displayPath, err)
+	}
+	return PromptFileFingerprint{
+		Path:            filepath.ToSlash(absPath),
+		Size:            info.Size(),
+		ModTimeUnixNano: info.ModTime().UnixNano(),
+	}, true, nil
 }
 
 func selectPromptContent(displayPath string, raw string, limit int) (string, bool) {

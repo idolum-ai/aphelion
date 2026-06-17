@@ -109,7 +109,7 @@ func cacheAwarePromptLookbackEnabled(strategy string) bool {
 
 func cacheLookbackAlwaysKeep(path string) bool {
 	switch normalizePromptCachePath(path) {
-	case "memory.md", "heartbeat.md", "skills.md":
+	case "memory.md", "heartbeat.md", "skills.md", "questions-to-idolum.md":
 		return true
 	default:
 		return false

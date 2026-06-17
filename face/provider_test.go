@@ -198,6 +198,51 @@ func TestProviderRendererLoadsIdolumFiles(t *testing.T) {
 	}
 }
 
+func TestProviderRendererPropagatesCacheAwareDynamicLookback(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "IDOLUM.md"), []byte("stable persona"), 0o600); err != nil {
+		t.Fatalf("write IDOLUM.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "QUESTIONS-TO-IDOLUM.md"), []byte("required questions"), 0o600); err != nil {
+		t.Fatalf("write QUESTIONS-TO-IDOLUM.md: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "memory"), 0o700); err != nil {
+		t.Fatalf("mkdir memory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "memory", "dreams.md"), []byte("old dream context"), 0o600); err != nil {
+		t.Fatalf("write dreams: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "memory", "telos.md"), []byte("fresh telos context"), 0o600); err != nil {
+		t.Fatalf("write telos: %v", err)
+	}
+
+	provider := &stubProvider{reply: "Rendered reply"}
+	renderer, err := NewProviderRenderer(provider, ProviderRendererConfig{
+		GovernorName:  "Gov",
+		FaceName:      "Idolum",
+		WorkspaceRoot: root,
+		CacheStrategy: "hybrid",
+		CacheLookback: 1,
+	})
+	if err != nil {
+		t.Fatalf("NewProviderRenderer() err = %v", err)
+	}
+	if _, err := renderer.Render(context.Background(), RenderRequest{FloorText: "done", LatestUserInput: "what changed"}); err != nil {
+		t.Fatalf("Render() err = %v", err)
+	}
+	if !strings.Contains(provider.lastPrompt, "required questions") || !strings.Contains(provider.lastPrompt, "fresh telos context") {
+		t.Fatalf("system prompt missing kept dynamic context: %q", provider.lastPrompt)
+	}
+	if strings.Contains(provider.lastPrompt, "old dream context") {
+		t.Fatalf("system prompt included omitted dynamic context: %q", provider.lastPrompt)
+	}
+	if !strings.Contains(provider.lastPrompt, "Cache-aware lookback omitted older dynamic files this turn: memory/dreams.md") {
+		t.Fatalf("system prompt missing dynamic omission notice: %q", provider.lastPrompt)
+	}
+}
+
 func TestProviderRendererProposalLoadsIdolumFiles(t *testing.T) {
 	t.Parallel()
 

@@ -103,6 +103,7 @@ type Runtime struct {
 	operationalAlertWindow time.Duration
 	sessionMu              sync.Mutex
 	sessionLocks           map[string]*sessionLock
+	promptStableCache      *promptStableContextCache
 	statusReadableMu       sync.Mutex
 	statusReadableProvider agent.Provider
 	statusReadableReady    bool
@@ -264,12 +265,17 @@ func New(
 	default:
 		return nil, fmt.Errorf("unsupported face backend: %q", cfg.Face.Backend)
 	}
+	initialFaceProviderName := ""
+	if chain := config.EffectiveProviderChain(cfg); len(chain) > 0 {
+		initialFaceProviderName = chain[0]
+	}
 
 	faceModel, err := newFaceRenderer(faceProvider, face.ProviderRendererConfig{
 		GovernorName:  config.EffectiveGovernorName(cfg, prompt.DefaultGovernorName),
 		FaceName:      config.EffectiveFaceName(cfg, face.DefaultFaceName),
 		Channel:       "telegram",
 		WorkspaceRoot: cfg.Agent.PromptRoot,
+		CacheStrategy: facePromptCacheStrategyForConfig(cfg, initialFaceProviderName),
 		MaxTokens:     faceRenderMaxTokens,
 	})
 	if err != nil {
@@ -423,6 +429,7 @@ func New(
 		operationalAlertClock:  time.Now,
 		operationalAlertWindow: 10 * time.Minute,
 		sessionLocks:           make(map[string]*sessionLock),
+		promptStableCache:      newPromptStableContextCache(),
 		activeTurnCancels:      make(map[int64]*activeTurnRun),
 	}
 	if rt.workExecutor != nil {

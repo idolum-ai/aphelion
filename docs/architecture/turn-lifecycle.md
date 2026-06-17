@@ -11,8 +11,10 @@ Current interactive turn order:
 
 1. Runtime shell resolves principal/scope, starts chat actions, and holds session lock.
 2. Runtime interactive-DM assembler builds one-turn coordinator/ports from
-   shared interactive-like assembly, including scoped evidence hydration when
-   active work or recovery pressure needs source-fact fidelity.
+   shared interactive-like assembly. Stable prompt files are fingerprint-cached;
+   dynamic files are reloaded every turn. Evidence enters ordinary prompts as a
+   ledger pointer and hydrates selected source facts only under recovery,
+   continuation, active-operation, or explicit recall pressure.
 3. `turn.Machine` runs proposal/governor/face stages according to policy.
 4. `turn` persists transcript + sidecars.
 5. `turn` performs outbound delivery semantics.

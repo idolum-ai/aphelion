@@ -13,6 +13,78 @@ import (
 	"github.com/idolum-ai/aphelion/turn"
 )
 
+func TestInteractiveAssemblyOrdinaryTurnUsesEvidencePointerOnly(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	admin, ok := rt.resolver.ResolveTelegramUser(1001)
+	if !ok {
+		t.Fatal("ResolveTelegramUser(1001) = false, want true")
+	}
+	scope, err := rt.scopeForPrincipal(admin)
+	if err != nil {
+		t.Fatalf("scopeForPrincipal() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 99200, UserID: 1001, Scope: telegramDMScopeRef(99200)}
+	if _, err := store.UpsertEvidenceObject(session.EvidenceObjectInput{
+		SourceKind:      session.EvidenceSourceOperationState,
+		SourceRef:       "operation_state:ordinary",
+		SessionID:       session.SessionIDForKey(key),
+		ChatID:          key.ChatID,
+		UserID:          key.UserID,
+		Scope:           key.Scope,
+		EpistemicStatus: session.EvidenceStatusProjection,
+		SubjectKey:      "ordinary evidence",
+		Summary:         "This evidence should stay pull-recall only on ordinary turns.",
+		PayloadJSON:     `{"topic":"ordinary"}`,
+		ObservedAt:      time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("UpsertEvidenceObject() err = %v", err)
+	}
+
+	msg := core.InboundMessage{
+		ChatID:     key.ChatID,
+		SenderID:   key.UserID,
+		SenderName: "admin",
+		Text:       "hello there",
+		MessageID:  41,
+	}
+	assembled, err := rt.assembleInteractiveLikeTurn(context.Background(), interactiveLikeAssemblyInput{
+		Scope:                scope,
+		Key:                  key,
+		Msg:                  msg,
+		Channel:              "telegram",
+		RunKind:              session.TurnRunKindInteractive,
+		PrincipalRole:        string(admin.Role),
+		AuditChannel:         "telegram",
+		EventAwareness:       turnEventAwarenessForTest(msg),
+		PromptContextErrHint: "load workspace prompt context",
+		PolicyReason:         "mapped from pipeline interactive face policy",
+	})
+	if err != nil {
+		t.Fatalf("assembleInteractiveLikeTurn() err = %v", err)
+	}
+	joined := strings.Join(assembled.BaseGovernorAwareness.EvidenceContext, "\n")
+	if !strings.Contains(joined, "evidence_ledger=available") || !strings.Contains(joined, "tool=evidence_hydrate") {
+		t.Fatalf("evidence context = %q, want pointer to evidence hydrate tool", joined)
+	}
+	if strings.Contains(joined, "hydration_run=") || strings.Contains(joined, "ordinary evidence") {
+		t.Fatalf("ordinary turn should not inject selected evidence: %q", joined)
+	}
+	stats, err := store.EvidenceLedgerStatsForChat(key.ChatID)
+	if err != nil {
+		t.Fatalf("EvidenceLedgerStatsForChat() err = %v", err)
+	}
+	if stats.HydrationRunCount != 0 {
+		t.Fatalf("hydration runs = %d, want 0 for ordinary pointer-only turn", stats.HydrationRunCount)
+	}
+}
+
 func TestInteractiveAssemblyHydratesCurrentSessionEvidenceWithoutThreadLeak(t *testing.T) {
 	t.Parallel()
 

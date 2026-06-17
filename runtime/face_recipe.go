@@ -81,7 +81,11 @@ func (r *Runtime) buildFaceRendererForRecipe(recipe string) (face.Renderer, erro
 	if err != nil {
 		return nil, err
 	}
-	return r.newFaceRendererForProvider(provider, core.ModelSlotConfig{})
+	providerName, modelName := r.defaultPersonaProviderModel(recipe)
+	return r.newFaceRendererForProvider(provider, core.ModelSlotConfig{
+		Provider: providerName,
+		Model:    modelName,
+	})
 }
 
 func (r *Runtime) newFaceRendererForProvider(provider agent.Provider, slot core.ModelSlotConfig) (face.Renderer, error) {
@@ -95,9 +99,27 @@ func (r *Runtime) newFaceRendererForProvider(provider agent.Provider, slot core.
 		FaceName:      r.faceName(),
 		Channel:       "telegram",
 		WorkspaceRoot: r.cfg.Agent.PromptRoot,
+		CacheStrategy: r.facePromptCacheStrategyForProvider(slot.Provider),
 		Reasoning:     reasoning,
 		MaxTokens:     faceRenderMaxTokens,
 	})
+}
+
+func (r *Runtime) facePromptCacheStrategyForProvider(providerName string) string {
+	if r == nil || r.cfg == nil {
+		return ""
+	}
+	return facePromptCacheStrategyForConfig(r.cfg, providerName)
+}
+
+func facePromptCacheStrategyForConfig(cfg *config.Config, providerName string) string {
+	if cfg == nil {
+		return ""
+	}
+	if core.NormalizeModelProvider(providerName) != core.ModelProviderAnthropic {
+		return ""
+	}
+	return cfg.Providers.Anthropic.CacheStrategy
 }
 
 func buildFaceProviderChainForRecipe(cfg *config.Config, personaModel string) (agent.Provider, error) {
