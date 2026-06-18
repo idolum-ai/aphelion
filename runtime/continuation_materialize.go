@@ -89,6 +89,18 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 			}
 		}
 	}
+	if repaired, ok, err := r.repairTerminalContinuationProjection(ctx, key, msg, opState, priorContinuation, priorContinuationExists, now, "materialization_repair", true); err != nil {
+		return false, err
+	} else if ok {
+		priorContinuation = repaired
+		priorContinuationExists = true
+	}
+	if repaired, ok, err := r.repairSupersededContinuationProjection(ctx, key, msg, opState, priorContinuation, priorContinuationExists, now, "materialization_repair"); err != nil {
+		return false, err
+	} else if ok {
+		priorContinuation = repaired
+		priorContinuationExists = true
+	}
 	if operationStatusIsTerminal(opState.Status) {
 		return false, nil
 	}

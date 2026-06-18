@@ -68,6 +68,21 @@ func (r *Runtime) approveContinuationBundleForKeyLocked(key session.SessionKey, 
 		return session.ContinuationState{}, err
 	}
 	state = session.NormalizeContinuationState(state)
+	now := time.Now().UTC()
+	if opState, opErr := r.store.OperationState(key); opErr == nil {
+		if repaired, ok, repairErr := r.repairTerminalContinuationProjection(context.Background(), key, core.InboundMessage{ChatID: key.ChatID}, opState, state, true, now, "approval", false); repairErr != nil {
+			return session.ContinuationState{}, repairErr
+		} else if ok {
+			return repaired, fmt.Errorf("continuation approval stale: %w", core.ErrContinuationStale)
+		}
+		if repaired, ok, repairErr := r.repairSupersededContinuationProjection(context.Background(), key, core.InboundMessage{ChatID: key.ChatID}, opState, state, true, now, "approval"); repairErr != nil {
+			return session.ContinuationState{}, repairErr
+		} else if ok {
+			return repaired, fmt.Errorf("continuation approval superseded: %w", core.ErrContinuationStale)
+		}
+	} else {
+		return session.ContinuationState{}, opErr
+	}
 	if state.Status != session.ContinuationStatusPending {
 		return state, core.ErrContinuationNotPending
 	}
@@ -77,7 +92,6 @@ func (r *Runtime) approveContinuationBundleForKeyLocked(key session.SessionKey, 
 	if err := r.validateContinuationApprovalBundleFingerprints(key, state); err != nil {
 		return state, err
 	}
-	now := time.Now().UTC()
 	state, err = continuationStateWithLeaseApprovedForBundlePhases(state, approverID, phaseIDs, now)
 	if err != nil {
 		if updateErr := r.store.UpdateContinuationState(key, state); updateErr != nil {
@@ -422,6 +436,23 @@ func (r *Runtime) reserveApprovedContinuationTurnLocked(key session.SessionKey) 
 	state, err := r.store.ContinuationState(key)
 	if err != nil {
 		return session.ContinuationState{}, nil, 0, nil, err
+	}
+	state = session.NormalizeContinuationState(state)
+	if opState, opErr := r.store.OperationState(key); opErr == nil {
+		if repaired, ok, repairErr := r.repairTerminalContinuationProjection(context.Background(), key, core.InboundMessage{ChatID: key.ChatID}, opState, state, true, now, "continuation_reservation", false); repairErr != nil {
+			return session.ContinuationState{}, nil, 0, nil, repairErr
+		} else if ok {
+			r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "terminal_operation", continuationExecutionPayload(repaired), now)
+			return repaired, nil, 0, nil, nil
+		}
+		if repaired, ok, repairErr := r.repairSupersededContinuationProjection(context.Background(), key, core.InboundMessage{ChatID: key.ChatID}, opState, state, true, now, "continuation_reservation"); repairErr != nil {
+			return session.ContinuationState{}, nil, 0, nil, repairErr
+		} else if ok {
+			r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "superseded", continuationExecutionPayload(repaired), now)
+			return repaired, nil, 0, nil, nil
+		}
+	} else {
+		return session.ContinuationState{}, nil, 0, nil, opErr
 	}
 	if continuationLeaseExpired(state, now) {
 		state = continuationStateWithLeaseExpired(state, now)

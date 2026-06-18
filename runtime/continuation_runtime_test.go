@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
@@ -157,6 +158,264 @@ func TestRetireStaleContinuationApprovalCardsMarksProjectionRetired(t *testing.T
 	}
 }
 
+func TestMaterializeSupersedingOperationRetiresPriorContinuationCard(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 3011, UserID: 0, Scope: telegramDMScopeRef(3011)}
+	now := time.Now().UTC()
+	oldOp := supersessionOldPhaseOperation()
+	if err := store.UpdateOperationState(key, oldOp); err != nil {
+		t.Fatalf("UpdateOperationState(old) err = %v", err)
+	}
+	oldState := continuationStateFromOperationPhase(oldOp, oldOp.PhasePlan.Phases[0], "continue old phase", now)
+	if err := store.UpdateContinuationState(key, oldState); err != nil {
+		t.Fatalf("UpdateContinuationState(old) err = %v", err)
+	}
+	msg := core.InboundMessage{ChatID: 3011, SenderID: 1001, MessageID: 1}
+	if err := rt.sendContinuationApprovalPrompt(context.Background(), key, msg, oldState, "Continue old phase?"); err != nil {
+		t.Fatalf("sendContinuationApprovalPrompt(old) err = %v", err)
+	}
+
+	if err := store.UpdateOperationState(key, supersessionNewBookOperation()); err != nil {
+		t.Fatalf("UpdateOperationState(new) err = %v", err)
+	}
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, msg, "new book objective", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want new operation approval")
+	}
+
+	active, err := store.ListTelegramCallbackMessages(3011, continuationCallbackSurface, now.Add(-time.Minute), 10)
+	if err != nil {
+		t.Fatalf("ListTelegramCallbackMessages(active) err = %v", err)
+	}
+	if len(active) != 1 || active[0].MessageID != 2 {
+		t.Fatalf("active continuation cards = %#v, want only new card", active)
+	}
+	retired, err := store.ListTelegramCallbackMessages(3011, continuationCallbackRetiredSurface, now.Add(-time.Minute), 10)
+	if err != nil {
+		t.Fatalf("ListTelegramCallbackMessages(retired) err = %v", err)
+	}
+	if len(retired) != 1 || retired[0].MessageID != 1 {
+		t.Fatalf("retired continuation cards = %#v, want old card retired", retired)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.DecisionID == oldState.DecisionID || cont.HandshakeBlockedReason == continuationSupersededByOperationReason {
+		t.Fatalf("continuation = %#v, want fresh new approval state replacing old projection", cont)
+	}
+	if !strings.Contains(cont.StageSummary, "Book Phase A") {
+		t.Fatalf("StageSummary = %q, want new book phase", cont.StageSummary)
+	}
+}
+
+func TestApproveSupersededContinuationRevokesWithoutGrantingLease(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 3012, UserID: 0, Scope: telegramDMScopeRef(3012)}
+	now := time.Now().UTC()
+	oldOp := supersessionOldPhaseOperation()
+	oldState := continuationStateFromOperationPhase(oldOp, oldOp.PhasePlan.Phases[0], "continue old phase", now)
+	if err := store.UpdateOperationState(key, supersessionNewBookOperation()); err != nil {
+		t.Fatalf("UpdateOperationState(new) err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, oldState); err != nil {
+		t.Fatalf("UpdateContinuationState(old) err = %v", err)
+	}
+
+	got, err := rt.ApproveContinuationForKey(key, 1001)
+	if !errors.Is(err, core.ErrContinuationStale) {
+		t.Fatalf("ApproveContinuationForKey() err = %v, want ErrContinuationStale", err)
+	}
+	if got.Status != session.ContinuationStatusRevoked ||
+		got.ActionProposal.Status != session.ProposalStatusSuperseded ||
+		got.ContinuationLease.Status != session.ContinuationLeaseStatusRevoked ||
+		got.ContinuationLease.RemainingTurns != 0 ||
+		got.HandshakeBlockedReason != continuationSupersededByOperationReason {
+		t.Fatalf("approved stale continuation = %#v, want revoked superseded projection", got)
+	}
+}
+
+func TestReserveSupersededApprovedContinuationDoesNotExecute(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 3013, UserID: 0, Scope: telegramDMScopeRef(3013)}
+	now := time.Now().UTC()
+	oldOp := supersessionOldPhaseOperation()
+	oldState := continuationStateFromOperationPhase(oldOp, oldOp.PhasePlan.Phases[0], "continue old phase", now)
+	approved, err := continuationStateWithLeaseApproved(oldState, 1001, now)
+	if err != nil {
+		t.Fatalf("continuationStateWithLeaseApproved() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, supersessionNewBookOperation()); err != nil {
+		t.Fatalf("UpdateOperationState(new) err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, approved); err != nil {
+		t.Fatalf("UpdateContinuationState(approved old) err = %v", err)
+	}
+
+	got, reservation, _, _, err := rt.reserveApprovedContinuationTurn(key)
+	if err != nil {
+		t.Fatalf("reserveApprovedContinuationTurn() err = %v", err)
+	}
+	if reservation != nil {
+		t.Fatalf("reservation = %#v, want nil for superseded continuation", reservation)
+	}
+	if got.Status != session.ContinuationStatusRevoked || got.HandshakeBlockedReason != continuationSupersededByOperationReason {
+		t.Fatalf("reserved state = %#v, want revoked superseded projection", got)
+	}
+}
+
+func TestApproveTerminalContinuationRevokesWithoutGrantingLease(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 3015, UserID: 0, Scope: telegramDMScopeRef(3015)}
+	now := time.Now().UTC()
+	opState := supersessionCompletedOperation()
+	stalePhase := opState.PhasePlan.Phases[0]
+	stalePhase.Status = session.PlanStatusPending
+	state := continuationStateFromOperationPhase(opState, stalePhase, "continue completed phase", now)
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState(completed) err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState(stale pending) err = %v", err)
+	}
+
+	got, err := rt.ApproveContinuationForKey(key, 1001)
+	if !errors.Is(err, core.ErrContinuationStale) {
+		t.Fatalf("ApproveContinuationForKey() err = %v, want ErrContinuationStale", err)
+	}
+	if got.Status != session.ContinuationStatusRevoked ||
+		got.ActionProposal.Status != session.ProposalStatusSuperseded ||
+		got.ContinuationLease.Status != session.ContinuationLeaseStatusRevoked ||
+		got.HandshakeBlockedReason != "stale_completed_operation" {
+		t.Fatalf("approved terminal continuation = %#v, want revoked stale completed approval", got)
+	}
+	reloaded, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if reloaded.Status != session.OperationStatusCompleted {
+		t.Fatalf("operation status = %q, want completed terminal state preserved", reloaded.Status)
+	}
+}
+
+func TestReserveTerminalApprovedContinuationDoesNotExecute(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 3016, UserID: 0, Scope: telegramDMScopeRef(3016)}
+	now := time.Now().UTC()
+	opState := supersessionCompletedOperation()
+	stalePhase := opState.PhasePlan.Phases[0]
+	stalePhase.Status = session.PlanStatusPending
+	state := continuationStateFromOperationPhase(opState, stalePhase, "continue completed phase", now)
+	approved, err := continuationStateWithLeaseApproved(state, 1001, now)
+	if err != nil {
+		t.Fatalf("continuationStateWithLeaseApproved() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState(completed) err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, approved); err != nil {
+		t.Fatalf("UpdateContinuationState(stale approved) err = %v", err)
+	}
+
+	got, reservation, _, _, err := rt.reserveApprovedContinuationTurn(key)
+	if err != nil {
+		t.Fatalf("reserveApprovedContinuationTurn() err = %v", err)
+	}
+	if reservation != nil {
+		t.Fatalf("reservation = %#v, want nil for terminal operation continuation", reservation)
+	}
+	if got.Status != session.ContinuationStatusRevoked ||
+		got.ContinuationLease.Status != session.ContinuationLeaseStatusRevoked ||
+		got.HandshakeBlockedReason != "stale_completed_operation" {
+		t.Fatalf("reserved terminal continuation = %#v, want revoked stale completed approval", got)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if got := countEventsByType(events, core.ExecutionEventContinuationConsumed); got != 0 {
+		t.Fatalf("consumed events = %d, want 0", got)
+	}
+}
+
+func TestStartupRepairRetiresSupersededContinuationCard(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 3014, UserID: 0, Scope: telegramDMScopeRef(3014)}
+	now := time.Now().UTC()
+	oldOp := supersessionOldPhaseOperation()
+	oldState := continuationStateFromOperationPhase(oldOp, oldOp.PhasePlan.Phases[0], "continue old phase", now)
+	if err := store.UpdateOperationState(key, supersessionNewBookOperation()); err != nil {
+		t.Fatalf("UpdateOperationState(new) err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, oldState); err != nil {
+		t.Fatalf("UpdateContinuationState(old) err = %v", err)
+	}
+	if err := store.RecordTelegramCallbackMessage(3014, 77, 0, continuationCallbackSurface, now); err != nil {
+		t.Fatalf("RecordTelegramCallbackMessage() err = %v", err)
+	}
+
+	repaired, err := rt.repairInvalidPendingContinuationApprovals(context.Background(), now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("repairInvalidPendingContinuationApprovals() err = %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired = %d, want 1", repaired)
+	}
+	active, err := store.ListTelegramCallbackMessages(3014, continuationCallbackSurface, now.Add(-time.Minute), 10)
+	if err != nil {
+		t.Fatalf("ListTelegramCallbackMessages(active) err = %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active continuation cards = %#v, want none", active)
+	}
+	retired, err := store.ListTelegramCallbackMessages(3014, continuationCallbackRetiredSurface, now.Add(-time.Minute), 10)
+	if err != nil {
+		t.Fatalf("ListTelegramCallbackMessages(retired) err = %v", err)
+	}
+	if len(retired) != 1 || retired[0].MessageID != 77 {
+		t.Fatalf("retired continuation cards = %#v, want card 77 retired", retired)
+	}
+}
+
 func TestContinuationOperatorCardDoesNotMayDeleteNegatedReview(t *testing.T) {
 	t.Parallel()
 
@@ -226,6 +485,95 @@ func TestRenderContinuationPromptFallbackDedupesAndKeepsCompact(t *testing.T) {
 	if !strings.Contains(text, "Should I continue for 1 more turn") {
 		t.Fatalf("fallback = %q, want continuation question", text)
 	}
+}
+
+func supersessionOldPhaseOperation() session.OperationState {
+	return session.NormalizeOperationState(session.OperationState{
+		ID:        "imexx-reconstruction-packet",
+		Objective: "Publish the curated XPVENTA reconstruction work.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "phase_approval",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "imexx-reconstruction-packet",
+			Goal:           "Publish the curated XPVENTA reconstruction work.",
+			CurrentPhaseID: "phase-f-roadmap-backlog",
+			Phases: []session.OperationPhase{{
+				ID:               "phase-f-roadmap-backlog",
+				Summary:          "Phase F: generate XPVENTA rebuild roadmap and MVP backlog from the committed reconstruction packet.",
+				Status:           session.PlanStatusPending,
+				AuthorityClass:   "workspace_write",
+				WhyNow:           "Phase E is complete and planning artifacts are next.",
+				BoundedEffect:    "Write roadmap/backlog Markdown under imexx/reports and stop before commit.",
+				AllowedActions:   []string{"read_local_reports", "write_local_markdown_reports"},
+				ForbiddenActions: []string{"commit", "push", "deploy", "restart"},
+				RequiresApproval: true,
+			}},
+		},
+	})
+}
+
+func supersessionNewBookOperation() session.OperationState {
+	return session.NormalizeOperationState(session.OperationState{
+		ID:        "imexx-xpventa-didactic-book",
+		Objective: "Build a didactic Spanish book for Angel/IMEX.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "approval_request",
+		Summary:   "Button-backed approval requested: Book Phase A.",
+		Proposal: session.OperationProposal{
+			ID:            "proposal-book-phase-a",
+			Kind:          "workspace_write",
+			Summary:       "Book Phase A: draft the Spanish didactic book outline/TOC and style contract.",
+			WhyNow:        "The operator reframed the work from rebuild to didactic book.",
+			BoundedEffect: "Write one local Markdown outline under imexx/reports and stop before commit.",
+			Status:        session.ProposalStatusPending,
+			UpdatedAt:     time.Now().UTC(),
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "imexx-xpventa-didactic-book",
+			Goal:           "Build a didactic Spanish book for Angel/IMEX.",
+			CurrentPhaseID: "book-phase-a-outline-style",
+			Phases: []session.OperationPhase{{
+				ID:               "book-phase-a-outline-style",
+				Summary:          "Book Phase A: draft the Spanish didactic book outline/TOC and style contract.",
+				Status:           session.PlanStatusPending,
+				AuthorityClass:   "workspace_write",
+				WhyNow:           "The operator reframed the work from rebuild to didactic book.",
+				BoundedEffect:    "Write one local Markdown outline under imexx/reports and stop before commit.",
+				AllowedActions:   []string{"read_local_reports", "write_local_markdown_outline"},
+				ForbiddenActions: []string{"commit", "push", "deploy", "restart"},
+				RequiresApproval: true,
+			}},
+		},
+		UpdatedAt: time.Now().UTC(),
+	})
+}
+
+func supersessionCompletedOperation() session.OperationState {
+	now := time.Now().UTC()
+	return session.NormalizeOperationState(session.OperationState{
+		ID:        "completed-supersession-op",
+		Objective: "Finish the completed slice.",
+		Status:    session.OperationStatusCompleted,
+		Stage:     "completed",
+		Summary:   "The slice is already completed with evidence.",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "completed-supersession-plan",
+			Goal:           "Finish the completed slice.",
+			CurrentPhaseID: "phase-done",
+			Phases: []session.OperationPhase{{
+				ID:               "phase-done",
+				Summary:          "Completed phase",
+				Status:           session.PlanStatusCompleted,
+				AuthorityClass:   "workspace_write",
+				BoundedEffect:    "Write a local artifact and stop before commit.",
+				AllowedActions:   []string{"write_local_markdown_reports"},
+				ForbiddenActions: []string{"commit", "push", "deploy", "restart"},
+				LeaseID:          "lease-phase-done",
+				CompletedAt:      now,
+			}},
+		},
+		UpdatedAt: now,
+	})
 }
 
 func TestRawContinuationAuthorityRepairDetectsPersistedDeployContradiction(t *testing.T) {
