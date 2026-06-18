@@ -1648,7 +1648,32 @@ func TestWorkspaceOutcomeVerificationRejectsFutureCandidatePath(t *testing.T) {
 	}
 }
 
-func TestWorkOutcomeVerificationTargetRequiresWorkspaceCandidates(t *testing.T) {
+func TestWorkOutcomeResolutionWorkspaceCandidateIsVerificationOfferable(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	req := WorkRequest{
+		Mode:    WorkModeWorkspaceWrite,
+		Workdir: workdir,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-phase-f", OperationID: "phase-f"},
+			ContinuationLease: session.ContinuationLease{
+				ID: "lease-phase-f",
+			},
+		},
+	}
+	_, decision := (*Runtime)(nil).resolveWorkOutcomeAfterMissingEvidence(context.Background(), session.SessionKey{ChatID: 8299}, req, WorkResult{
+		Summary:     "Phase F is complete. Generated reports/phase-f-roadmap.md.",
+		SideEffects: true,
+	}, time.Now().Add(-time.Minute), time.Now())
+	if decision.Kind != workOutcomeResolutionVerificationOfferable ||
+		decision.VerificationTarget == nil ||
+		!stringSliceContains(decision.VerificationTarget.CandidatePaths, "reports/phase-f-roadmap.md") {
+		t.Fatalf("resolution decision = %#v, want verification-offerable workspace candidate", decision)
+	}
+}
+
+func TestWorkOutcomeResolutionWorkspaceRequiresCandidateEvidence(t *testing.T) {
 	t.Parallel()
 
 	req := WorkRequest{
@@ -1661,16 +1686,27 @@ func TestWorkOutcomeVerificationTargetRequiresWorkspaceCandidates(t *testing.T) 
 			},
 		},
 	}
-	target := (*Runtime)(nil).workOutcomeVerificationTarget(session.SessionKey{ChatID: 8299}, req, WorkResult{
+	got, decision := (*Runtime)(nil).resolveWorkOutcomeAfterMissingEvidence(context.Background(), session.SessionKey{ChatID: 8300}, req, WorkResult{
 		Summary:     "Phase F is complete.",
 		SideEffects: true,
-	}, session.OperationArtifact{}, workOutcomeReconciliation{Reason: "side_effects_outcome_unverified"}, time.Now().Add(-time.Minute), time.Now())
-	if target != nil {
-		t.Fatalf("target = %#v, want nil without candidate paths", target)
+	}, time.Now().Add(-time.Minute), time.Now())
+	if decision.Kind != workOutcomeResolutionBlockedUnverified || decision.VerificationTarget != nil || !decision.blocksRetry() {
+		t.Fatalf("resolution decision = %#v result=%#v, want blocked without verification target", decision, got)
 	}
 }
 
-func TestWorkOutcomeReconciliationRejectsStaleCommitHash(t *testing.T) {
+func TestWorkOutcomeResolutionWithoutSideEffectsIsNone(t *testing.T) {
+	t.Parallel()
+
+	got, decision := (*Runtime)(nil).resolveWorkOutcomeAfterMissingEvidence(context.Background(), session.SessionKey{ChatID: 8301}, WorkRequest{Mode: WorkModeWorkspaceWrite}, WorkResult{
+		Summary: "No material completion evidence.",
+	}, time.Now().Add(-time.Minute), time.Now())
+	if decision.Kind != workOutcomeResolutionNone || decision.blocksRetry() {
+		t.Fatalf("resolution decision = %#v result=%#v, want none", decision, got)
+	}
+}
+
+func TestWorkOutcomeResolutionRejectsStaleCommitHash(t *testing.T) {
 	t.Parallel()
 
 	repo := initWorkOutcomeGitRepo(t)
@@ -1687,9 +1723,34 @@ func TestWorkOutcomeReconciliationRejectsStaleCommitHash(t *testing.T) {
 		State:   approvedCommitContinuationState("stale-commit", time.Now().UTC().Add(time.Hour)),
 	}
 	windowStart := time.Now().UTC().Add(time.Hour)
-	got, decision := (*Runtime)(nil).reconcileWorkOutcomeAfterMissingEvidence(context.Background(), session.SessionKey{ChatID: 8296}, req, result, windowStart, windowStart.Add(time.Minute))
-	if decision.Reconciled || !decision.BlockRetry || !errors.Is(decision.Err, errWorkExecutorOutcomeUnverified) {
-		t.Fatalf("reconciliation decision = %#v result=%#v, want stale commit blocked", decision, got)
+	got, decision := (*Runtime)(nil).resolveWorkOutcomeAfterMissingEvidence(context.Background(), session.SessionKey{ChatID: 8296}, req, result, windowStart, windowStart.Add(time.Minute))
+	if decision.Kind != workOutcomeResolutionBlockedUnverified || !decision.blocksRetry() || !errors.Is(decision.Err, errWorkExecutorOutcomeUnverified) {
+		t.Fatalf("resolution decision = %#v result=%#v, want stale commit blocked", decision, got)
+	}
+}
+
+func TestWorkOutcomeResolutionAutoVerifiesLocalCommit(t *testing.T) {
+	t.Parallel()
+
+	repo := initWorkOutcomeGitRepo(t)
+	short := commitWorkOutcomeFile(t, repo, "packet.md", "packet\n", "Add XPVENTA reconstruction packet artifacts")
+	result := WorkResult{
+		Summary:       "Wrapper completed commit " + short + ".",
+		Commands:      []string{"./commit-wrapper"},
+		SideEffects:   true,
+		ToolSuccesses: 1,
+	}
+	req := WorkRequest{
+		Mode:    WorkModeCommit,
+		Workdir: repo,
+		State:   approvedCommitContinuationState("verified-commit", time.Now().UTC().Add(time.Hour)),
+	}
+	got, decision := (*Runtime)(nil).resolveWorkOutcomeAfterMissingEvidence(context.Background(), session.SessionKey{ChatID: 8302}, req, result, time.Now().UTC().Add(-time.Minute), time.Now().UTC())
+	if decision.Kind != workOutcomeResolutionAutoVerified || decision.blocksRetry() {
+		t.Fatalf("resolution decision = %#v result=%#v, want auto-verified commit", decision, got)
+	}
+	if !strings.Contains(got.CommitLaneStatus, "reconciled_local_git_commit") || !stringSliceContains(got.ChangedFiles, "packet.md") {
+		t.Fatalf("resolved result = %#v, want commit evidence", got)
 	}
 }
 

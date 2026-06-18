@@ -17,14 +17,23 @@ import (
 
 var errWorkExecutorOutcomeUnverified = errors.New("work executor side effects require verification before retry")
 
-const workOutcomeReconciliationCommitClockTolerance = 5 * time.Second
+const workOutcomeCommitClockTolerance = 5 * time.Second
 
-type workOutcomeReconciliation struct {
-	Reconciled bool
-	BlockRetry bool
-	Reason     string
-	Err        error
-	Payload    map[string]any
+type workOutcomeResolutionKind string
+
+const (
+	workOutcomeResolutionNone                  workOutcomeResolutionKind = "none"
+	workOutcomeResolutionAutoVerified          workOutcomeResolutionKind = "auto_verified"
+	workOutcomeResolutionVerificationOfferable workOutcomeResolutionKind = "verification_offerable"
+	workOutcomeResolutionBlockedUnverified     workOutcomeResolutionKind = "blocked_unverified"
+)
+
+type workOutcomeResolution struct {
+	Kind               workOutcomeResolutionKind
+	Reason             string
+	Err                error
+	Payload            map[string]any
+	VerificationTarget *session.ContinuationVerificationTarget
 }
 
 type reconciledGitCommit struct {
@@ -35,16 +44,16 @@ type reconciledGitCommit struct {
 	Files     []string
 }
 
-func (r *Runtime) reconcileWorkOutcomeAfterMissingEvidence(ctx context.Context, _ session.SessionKey, req WorkRequest, result WorkResult, windowStart time.Time, windowEnd time.Time) (WorkResult, workOutcomeReconciliation) {
+func (r *Runtime) resolveWorkOutcomeAfterMissingEvidence(ctx context.Context, _ session.SessionKey, req WorkRequest, result WorkResult, windowStart time.Time, windowEnd time.Time) (WorkResult, workOutcomeResolution) {
 	if !workResultHasOutcomeSideEffectSignal(result) {
-		return result, workOutcomeReconciliation{}
+		return result, workOutcomeResolution{Kind: workOutcomeResolutionNone}
 	}
 	if req.Mode == WorkModeCommit {
 		if commit, ok := reconcileLocalGitCommitOutcome(ctx, req, result, windowStart, windowEnd); ok {
 			result = workResultWithReconciledGitCommit(result, commit)
-			return result, workOutcomeReconciliation{
-				Reconciled: true,
-				Reason:     "local_git_commit_verified",
+			return result, workOutcomeResolution{
+				Kind:   workOutcomeResolutionAutoVerified,
+				Reason: "local_git_commit_verified",
 				Payload: map[string]any{
 					"reason":       "local_git_commit_verified",
 					"commit":       commit.ShortHash,
@@ -56,18 +65,47 @@ func (r *Runtime) reconcileWorkOutcomeAfterMissingEvidence(ctx context.Context, 
 			}
 		}
 	}
-	return result, workOutcomeReconciliation{
-		BlockRetry: true,
-		Reason:     "side_effects_outcome_unverified",
-		Err:        errWorkExecutorOutcomeUnverified,
-		Payload: map[string]any{
-			"reason":         "side_effects_outcome_unverified",
-			"mode":           strings.TrimSpace(string(req.Mode)),
-			"commands_count": len(result.Commands),
-			"side_effects":   result.SideEffects,
-			"tool_successes": result.ToolSuccesses,
-		},
+	payload := workOutcomeUnverifiedPayload(req, result)
+	if req.Mode == WorkModeWorkspaceWrite {
+		if target := workOutcomeVerificationTargetForResult(req, result, "side_effects_outcome_unverified", windowStart, windowEnd); target != nil {
+			return result, workOutcomeResolution{
+				Kind:               workOutcomeResolutionVerificationOfferable,
+				Reason:             "side_effects_outcome_unverified",
+				Err:                errWorkExecutorOutcomeUnverified,
+				Payload:            payload,
+				VerificationTarget: target,
+			}
+		}
 	}
+	return result, workOutcomeResolution{
+		Kind:    workOutcomeResolutionBlockedUnverified,
+		Reason:  "side_effects_outcome_unverified",
+		Err:     errWorkExecutorOutcomeUnverified,
+		Payload: payload,
+	}
+}
+
+func workOutcomeUnverifiedPayload(req WorkRequest, result WorkResult) map[string]any {
+	return map[string]any{
+		"reason":         "side_effects_outcome_unverified",
+		"mode":           strings.TrimSpace(string(req.Mode)),
+		"commands_count": len(result.Commands),
+		"side_effects":   result.SideEffects,
+		"tool_successes": result.ToolSuccesses,
+	}
+}
+
+func (r workOutcomeResolution) blocksRetry() bool {
+	switch r.Kind {
+	case workOutcomeResolutionVerificationOfferable, workOutcomeResolutionBlockedUnverified:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r workOutcomeResolution) VerificationOfferable() bool {
+	return r.Kind == workOutcomeResolutionVerificationOfferable && r.VerificationTarget != nil
 }
 
 func workResultHasOutcomeSideEffectSignal(result WorkResult) bool {
@@ -110,8 +148,8 @@ func reconciledGitCommitWithinWindow(commit reconciledGitCommit, windowStart tim
 	if commit.Committed.IsZero() || windowStart.IsZero() || windowEnd.IsZero() {
 		return true
 	}
-	start := windowStart.UTC().Add(-workOutcomeReconciliationCommitClockTolerance)
-	end := windowEnd.UTC().Add(workOutcomeReconciliationCommitClockTolerance)
+	start := windowStart.UTC().Add(-workOutcomeCommitClockTolerance)
+	end := windowEnd.UTC().Add(workOutcomeCommitClockTolerance)
 	committed := commit.Committed.UTC()
 	return !committed.Before(start) && !committed.After(end)
 }

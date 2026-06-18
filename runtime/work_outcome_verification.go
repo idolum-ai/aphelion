@@ -29,7 +29,7 @@ type workOutcomeVerificationResult struct {
 	ChangedFiles []string
 }
 
-func (r *Runtime) offerWorkOutcomeVerificationApproval(ctx context.Context, key session.SessionKey, req WorkRequest, result WorkResult, status WorkExecutorStatus, cause error, artifact session.OperationArtifact, reconciliation workOutcomeReconciliation, windowStart time.Time, windowEnd time.Time) error {
+func (r *Runtime) offerWorkOutcomeVerificationApproval(ctx context.Context, key session.SessionKey, req WorkRequest, result WorkResult, status WorkExecutorStatus, cause error, artifact session.OperationArtifact, resolution workOutcomeResolution) error {
 	if r == nil || r.store == nil {
 		if cause != nil {
 			return cause
@@ -37,12 +37,17 @@ func (r *Runtime) offerWorkOutcomeVerificationApproval(ctx context.Context, key 
 		return nil
 	}
 	now := time.Now().UTC()
-	target := r.workOutcomeVerificationTarget(key, req, result, artifact, reconciliation, windowStart, windowEnd)
+	target := session.NormalizeContinuationVerificationTarget(resolution.VerificationTarget)
 	if target == nil {
 		if cause != nil {
 			return cause
 		}
 		return nil
+	}
+	if artifact.Ref != "" {
+		copyTarget := *target
+		copyTarget.EvidenceRefs = appendUniqueRuntimeString(copyTarget.EvidenceRefs, artifact.Ref)
+		target = session.NormalizeContinuationVerificationTarget(&copyTarget)
 	}
 	state := workOutcomeVerificationContinuationState(req, *target, now)
 	unlock := r.lockSession(key)
@@ -51,7 +56,7 @@ func (r *Runtime) offerWorkOutcomeVerificationApproval(ctx context.Context, key 
 		return fmt.Errorf("persist work outcome verification continuation: %w", err)
 	}
 	payload := workResultPayload(req, result, status, cause)
-	for k, v := range reconciliation.Payload {
+	for k, v := range resolution.Payload {
 		payload[k] = v
 	}
 	payload["reason"] = "work_outcome_verification_required"
@@ -67,17 +72,14 @@ func (r *Runtime) offerWorkOutcomeVerificationApproval(ctx context.Context, key 
 	return r.sendContinuationApprovalPrompt(ctx, key, msg, state, r.renderContinuationPrompt(ctx, key, msg, state))
 }
 
-func (r *Runtime) workOutcomeVerificationTarget(_ session.SessionKey, req WorkRequest, result WorkResult, artifact session.OperationArtifact, reconciliation workOutcomeReconciliation, windowStart time.Time, windowEnd time.Time) *session.ContinuationVerificationTarget {
-	if req.Mode != WorkModeWorkspaceWrite {
-		return nil
-	}
+func workOutcomeVerificationTargetForResult(req WorkRequest, result WorkResult, reason string, windowStart time.Time, windowEnd time.Time) *session.ContinuationVerificationTarget {
 	candidates := candidatePathsForWorkOutcome(req, result)
 	if len(candidates) == 0 {
 		return nil
 	}
 	opState := session.NormalizeOperationState(req.Operation)
 	phaseID := workOutcomeVerificationPhaseID(opState, req.State)
-	reason := strings.TrimSpace(reconciliation.Reason)
+	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		reason = "side_effects_outcome_unverified"
 	}
@@ -96,9 +98,6 @@ func (r *Runtime) workOutcomeVerificationTarget(_ session.SessionKey, req WorkRe
 		WindowEnd:                 windowEnd,
 		ClaimedSummary:            strings.TrimSpace(result.Summary),
 		CandidatePaths:            candidates,
-	}
-	if artifact.Ref != "" {
-		target.EvidenceRefs = []string{artifact.Ref}
 	}
 	return session.NormalizeContinuationVerificationTarget(target)
 }

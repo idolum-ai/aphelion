@@ -253,9 +253,9 @@ func TestWorkOutcomeReconciliationBlocksUnverifiedExternalAccountSideEffects(t *
 	}
 
 	now := time.Now().UTC()
-	got, decision := (*Runtime)(nil).reconcileWorkOutcomeAfterMissingEvidence(context.Background(), session.SessionKey{ChatID: 1}, req, result, now, now)
-	if decision.Reconciled || !decision.BlockRetry || !errors.Is(decision.Err, errWorkExecutorOutcomeUnverified) {
-		t.Fatalf("reconciliation decision = %#v result=%#v, want blocked unverified outcome", decision, got)
+	got, decision := (*Runtime)(nil).resolveWorkOutcomeAfterMissingEvidence(context.Background(), session.SessionKey{ChatID: 1}, req, result, now, now)
+	if decision.Kind != workOutcomeResolutionBlockedUnverified || !decision.blocksRetry() || !errors.Is(decision.Err, errWorkExecutorOutcomeUnverified) {
+		t.Fatalf("resolution decision = %#v result=%#v, want blocked unverified outcome", decision, got)
 	}
 }
 
