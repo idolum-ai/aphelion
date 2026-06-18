@@ -86,7 +86,7 @@ external_manifest_dir = "./external-tools"
 	if cfg.Work.Executor != "auto" || !reflect.DeepEqual(cfg.Work.AutoOrder, []string{"native", "codex"}) {
 		t.Fatalf("work executor defaults = %#v, want auto native->codex", cfg.Work)
 	}
-	if cfg.Autonomy.DefaultMode != "ask_first" || cfg.Autonomy.Ceiling != "leased" || !cfg.Autonomy.AllowLiveOverrides || cfg.Autonomy.MaxOverrideDuration != "4h" {
+	if cfg.Autonomy.DefaultMode != "ask_first" || cfg.Autonomy.Ceiling != "leased" || !cfg.Autonomy.AllowLiveOverrides || cfg.Autonomy.MaxOverrideDuration != "4h" || cfg.Autonomy.DefaultApprovalWindow != "off" {
 		t.Fatalf("autonomy defaults = %#v, want ask_first default with leased live override ceiling", cfg.Autonomy)
 	}
 	if cfg.Governor.NativeProvider != "anthropic" || cfg.Providers.Default != "anthropic" {
@@ -468,6 +468,7 @@ default_mode = "review-only"
 ceiling = "leased"
 allow_live_overrides = true
 max_override_duration = "3h"
+default_approval_window = "30m"
 
 [sessions]
 db_path = "~/tmp/sessions.db"
@@ -648,11 +649,11 @@ elevenlabs_voice_id = "voice-123"
 	if !cfg.OpenAI.VectorStores.Enabled || cfg.OpenAI.VectorStores.DefaultStore != "vs_default" {
 		t.Fatalf("openai.vector_stores = %#v, want enabled/vs_default", cfg.OpenAI.VectorStores)
 	}
-	if cfg.Autonomy.DefaultMode != "review_only" || cfg.Autonomy.Ceiling != "leased" || !cfg.Autonomy.AllowLiveOverrides || cfg.Autonomy.MaxOverrideDuration != "3h" {
+	if cfg.Autonomy.DefaultMode != "review_only" || cfg.Autonomy.Ceiling != "leased" || !cfg.Autonomy.AllowLiveOverrides || cfg.Autonomy.MaxOverrideDuration != "3h" || cfg.Autonomy.DefaultApprovalWindow != "30m" {
 		t.Fatalf("autonomy = %#v, want normalized review_only/leased with live overrides", cfg.Autonomy)
 	}
 	policy := EffectiveAutonomyPolicy(cfg)
-	if policy.DefaultMode != "review_only" || policy.Ceiling != "leased" || !policy.AllowLiveOverrides || policy.MaxOverrideDuration != 3*time.Hour {
+	if policy.DefaultMode != "review_only" || policy.Ceiling != "leased" || !policy.AllowLiveOverrides || policy.MaxOverrideDuration != 3*time.Hour || !policy.DefaultApprovalWindow.Enabled || policy.DefaultApprovalWindow.Duration != 30*time.Minute {
 		t.Fatalf("EffectiveAutonomyPolicy = %#v, want parsed policy", policy)
 	}
 	if cfg.Agent.MaxIterations != 77 || cfg.Agent.ToolTimeout != 9 {

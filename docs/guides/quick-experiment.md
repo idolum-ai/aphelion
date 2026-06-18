@@ -97,9 +97,12 @@ session without clearing memory.
 ## Temporary Approval Windows
 
 When you approve a request, the approved Telegram message offers an
-`Approve 15m` button. Use it when you want less approval friction for the bounded
+`Approve 15m` button by default. Use it when you want less approval friction for the bounded
 task already in front of you. The window opens the temporary automation gate and the
 approval grant for new approval requests, scoped to the current chat or side thread.
+If `[autonomy].default_approval_window` is set to a duration such as `15m` or
+`30m`, eligible admin-owned requests can open the same finite window lazily; the
+setting remains off by default.
 
 The active window then offers `Double time` and `Cancel approvals`. Use
 `/health` after changing approval windows when you want the service state visible.

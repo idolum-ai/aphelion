@@ -80,6 +80,9 @@ func EffectiveAutonomyPolicy(cfg *Config) AutonomyPolicy {
 		Ceiling:             "leased",
 		AllowLiveOverrides:  true,
 		MaxOverrideDuration: 4 * time.Hour,
+		DefaultApprovalWindow: AutonomyDefaultApprovalWindowPolicy{
+			Raw: "off",
+		},
 	}
 	if cfg == nil {
 		return policy
@@ -90,7 +93,47 @@ func EffectiveAutonomyPolicy(cfg *Config) AutonomyPolicy {
 	if parsed, err := time.ParseDuration(strings.TrimSpace(cfg.Autonomy.MaxOverrideDuration)); err == nil && parsed > 0 {
 		policy.MaxOverrideDuration = parsed
 	}
+	if parsed, err := parseAutonomyDefaultApprovalWindow(cfg.Autonomy.DefaultApprovalWindow); err == nil {
+		policy.DefaultApprovalWindow = parsed
+	}
 	return policy
+}
+
+func NormalizeAutonomyDefaultApprovalWindow(value string) string {
+	trimmed := strings.TrimSpace(value)
+	lower := strings.ToLower(trimmed)
+	switch lower {
+	case "", "off", "false", "no", "disabled", "disable":
+		return "off"
+	case "always", "on", "true", "enabled", "enable":
+		return "always"
+	default:
+		return lower
+	}
+}
+
+func parseAutonomyDefaultApprovalWindow(value string) (AutonomyDefaultApprovalWindowPolicy, error) {
+	normalized := NormalizeAutonomyDefaultApprovalWindow(value)
+	switch normalized {
+	case "off":
+		return AutonomyDefaultApprovalWindowPolicy{Raw: "off"}, nil
+	case "always":
+		return AutonomyDefaultApprovalWindowPolicy{
+			Enabled:  true,
+			Always:   true,
+			Duration: 15 * time.Minute,
+			Raw:      "always",
+		}, nil
+	}
+	duration, err := time.ParseDuration(normalized)
+	if err != nil {
+		return AutonomyDefaultApprovalWindowPolicy{}, err
+	}
+	return AutonomyDefaultApprovalWindowPolicy{
+		Enabled:  true,
+		Duration: duration,
+		Raw:      normalized,
+	}, nil
 }
 
 func validateMemoryWritePolicy(policy MemoryWritePolicyConfig) error {
@@ -131,6 +174,25 @@ func validateAutonomyConfig(policy AutonomyConfig) error {
 	}
 	if policy.AllowLiveOverrides && duration > 24*time.Hour {
 		return fmt.Errorf("autonomy.max_override_duration must be <= 24h when live overrides are enabled")
+	}
+	defaultWindow, err := parseAutonomyDefaultApprovalWindow(policy.DefaultApprovalWindow)
+	if err != nil {
+		return fmt.Errorf("autonomy.default_approval_window must be off, always, or a valid duration: %w", err)
+	}
+	if defaultWindow.Enabled {
+		if !policy.AllowLiveOverrides {
+			return fmt.Errorf("autonomy.default_approval_window requires autonomy.allow_live_overrides=true")
+		}
+		leasedRank, _ := AutonomyModeRank("leased")
+		if ceilingRank < leasedRank {
+			return fmt.Errorf("autonomy.default_approval_window requires autonomy.ceiling to allow leased mode")
+		}
+		if defaultWindow.Duration < time.Minute {
+			return fmt.Errorf("autonomy.default_approval_window must be at least 1m")
+		}
+		if defaultWindow.Duration > duration {
+			return fmt.Errorf("autonomy.default_approval_window must be <= autonomy.max_override_duration")
+		}
 	}
 	return nil
 }

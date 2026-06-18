@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadRejectsAutonomyDefaultAboveCeiling(t *testing.T) {
@@ -83,6 +84,84 @@ max_override_duration = "25h"
 	}
 	if !strings.Contains(err.Error(), "autonomy.max_override_duration must be <= 24h") {
 		t.Fatalf("Load() err = %v, want autonomy max duration validation", err)
+	}
+}
+
+func TestLoadRejectsInvalidDefaultApprovalWindow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "too short",
+			raw:  "ceiling = \"leased\"\nallow_live_overrides = true\nmax_override_duration = \"4h\"\ndefault_approval_window = \"30s\"",
+			want: "autonomy.default_approval_window must be at least 1m",
+		},
+		{
+			name: "over max override duration",
+			raw:  "ceiling = \"leased\"\nallow_live_overrides = true\nmax_override_duration = \"15m\"\ndefault_approval_window = \"30m\"",
+			want: "autonomy.default_approval_window must be <= autonomy.max_override_duration",
+		},
+		{
+			name: "live overrides disabled",
+			raw:  "ceiling = \"leased\"\nallow_live_overrides = false\nmax_override_duration = \"4h\"\ndefault_approval_window = \"15m\"",
+			want: "autonomy.default_approval_window requires autonomy.allow_live_overrides=true",
+		},
+		{
+			name: "ceiling below leased",
+			raw:  "ceiling = \"ask_first\"\nallow_live_overrides = true\nmax_override_duration = \"4h\"\ndefault_approval_window = \"15m\"",
+			want: "autonomy.default_approval_window requires autonomy.ceiling to allow leased mode",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.toml")
+			raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[agent]
+prompt_root = "./agent"
+exec_root = "./workspace"
+shared_memory_root = "./agent"
+
+[autonomy]
+default_mode = "ask_first"
+` + tt.raw + "\n"
+			if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			_, err := Load(configPath)
+			if err == nil {
+				t.Fatal("Load() err = nil, want default approval window validation error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Load() err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestEffectiveAutonomyPolicyParsesAlwaysDefaultApprovalWindow(t *testing.T) {
+	t.Parallel()
+
+	cfg := Default()
+	cfg.Autonomy.DefaultApprovalWindow = "always"
+	policy := EffectiveAutonomyPolicy(&cfg)
+	if !policy.DefaultApprovalWindow.Enabled || !policy.DefaultApprovalWindow.Always || policy.DefaultApprovalWindow.Duration != 15*time.Minute {
+		t.Fatalf("DefaultApprovalWindow = %#v, want always with finite 15m duration", policy.DefaultApprovalWindow)
 	}
 }
 

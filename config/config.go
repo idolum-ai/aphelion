@@ -204,17 +204,26 @@ type WorkConfig struct {
 }
 
 type AutonomyConfig struct {
-	DefaultMode         string `toml:"default_mode"`
-	Ceiling             string `toml:"ceiling"`
-	AllowLiveOverrides  bool   `toml:"allow_live_overrides"`
-	MaxOverrideDuration string `toml:"max_override_duration"`
+	DefaultMode           string `toml:"default_mode"`
+	Ceiling               string `toml:"ceiling"`
+	AllowLiveOverrides    bool   `toml:"allow_live_overrides"`
+	MaxOverrideDuration   string `toml:"max_override_duration"`
+	DefaultApprovalWindow string `toml:"default_approval_window"`
+}
+
+type AutonomyDefaultApprovalWindowPolicy struct {
+	Enabled  bool
+	Always   bool
+	Duration time.Duration
+	Raw      string
 }
 
 type AutonomyPolicy struct {
-	DefaultMode         string
-	Ceiling             string
-	AllowLiveOverrides  bool
-	MaxOverrideDuration time.Duration
+	DefaultMode           string
+	Ceiling               string
+	AllowLiveOverrides    bool
+	MaxOverrideDuration   time.Duration
+	DefaultApprovalWindow AutonomyDefaultApprovalWindowPolicy
 }
 
 type WorkCodexConfig struct {
@@ -613,10 +622,11 @@ func Default() Config {
 			AutoOrder: []string{"native", "codex"},
 		},
 		Autonomy: AutonomyConfig{
-			DefaultMode:         "ask_first",
-			Ceiling:             "leased",
-			AllowLiveOverrides:  true,
-			MaxOverrideDuration: "4h",
+			DefaultMode:           "ask_first",
+			Ceiling:               "leased",
+			AllowLiveOverrides:    true,
+			MaxOverrideDuration:   "4h",
+			DefaultApprovalWindow: "off",
 		},
 		Sessions: SessionsConfig{
 			DBPath:             "~/.aphelion/state/sessions.db",

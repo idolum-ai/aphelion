@@ -238,10 +238,16 @@ an explicit expiry.
 ## Grant Bounded Automation
 
 After an approval succeeds, the approved message shows `Approve 15m` and
-`Close`. `Approve 15m` opens a bounded approval window for new approval
+`Close` by default. The approve label follows `[autonomy].default_approval_window`
+when configured to another finite duration. `Approve <duration>` opens a bounded approval window for new approval
 requests in the current chat or side thread. It creates the temporary automation
 gate and the spendable approval grant together, so the operator does not have to
 manage them as separate controls.
+
+`[autonomy].default_approval_window` is off by default. When set to a duration
+such as `15m` or `30m`, eligible admin-owned approval requests lazily open the
+same finite window. `always` means rolling finite 15-minute windows, not
+non-expiring authority.
 
 An active window shows `Double time` and `Cancel approvals`. Each `Double time`
 press doubles the current window duration within the configured live-override

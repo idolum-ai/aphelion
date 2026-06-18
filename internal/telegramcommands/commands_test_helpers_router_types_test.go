@@ -132,6 +132,7 @@ type stubCommandRouter struct {
 	approvalWindowOfferSource         string
 	approvalWindowMessage             *core.InboundMessage
 	approvalWindowDuration            time.Duration
+	defaultApprovalWindowDuration     time.Duration
 	approvalWindowReturn              string
 	approvalWindowActive              bool
 	approvalWindowCanceled            bool

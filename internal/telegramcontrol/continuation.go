@@ -144,6 +144,13 @@ func (c CommandControl) EnableApprovalWindowForMessageResult(ctx context.Context
 	return c.Runtime.EnableApprovalWindowForKeyResult(ctx, SessionKeyForMessage(msg), msg.SenderID, duration)
 }
 
+func (c CommandControl) DefaultApprovalWindowDuration() time.Duration {
+	if c.Runtime == nil {
+		return 15 * time.Minute
+	}
+	return c.Runtime.DefaultApprovalWindowDuration()
+}
+
 func (c CommandControl) DoubleApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage) (string, error) {
 	if c.Runtime == nil {
 		return "Approval windows are unavailable.", nil

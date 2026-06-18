@@ -26,17 +26,25 @@ const (
 )
 
 func ApprovalWindowOfferRows(offerID string) [][]telegram.InlineButton {
+	return ApprovalWindowOfferRowsForDuration(offerID, approvalWindowCallbackDuration)
+}
+
+func ApprovalWindowOfferRowsForDuration(offerID string, duration time.Duration) [][]telegram.InlineButton {
 	offerID = strings.TrimSpace(offerID)
 	if offerID == "" {
 		return nil
 	}
 	return [][]telegram.InlineButton{{
-		{Text: "Approve 15m", CallbackData: encodeApprovalWindowCallbackData(offerID, approvalWindowActionEnable15)},
+		{Text: approvalWindowEnableLabel(duration), CallbackData: encodeApprovalWindowCallbackData(offerID, approvalWindowActionEnable15)},
 		{Text: "Close", CallbackData: encodeApprovalWindowCallbackData(offerID, approvalWindowActionClose)},
 	}}
 }
 
 func ApprovalWindowEmbeddedOfferRows(offer session.ApprovalWindowOffer) [][]telegram.InlineButton {
+	return ApprovalWindowEmbeddedOfferRowsForDuration(offer, approvalWindowCallbackDuration)
+}
+
+func ApprovalWindowEmbeddedOfferRowsForDuration(offer session.ApprovalWindowOffer, duration time.Duration) [][]telegram.InlineButton {
 	offer = session.NormalizeApprovalWindowOffer(offer)
 	if offer.ID == "" || !offer.ClosedAt.IsZero() || !offer.UsedAt.IsZero() {
 		return nil
@@ -44,7 +52,7 @@ func ApprovalWindowEmbeddedOfferRows(offer session.ApprovalWindowOffer) [][]tele
 	// Embedded rows share a card with another authority surface, so they only
 	// expose actions that preserve the source card's existing controls.
 	return [][]telegram.InlineButton{{
-		{Text: "Approve 15m", CallbackData: encodeApprovalWindowCallbackData(offer.ID, approvalWindowActionEnable15Compound)},
+		{Text: approvalWindowEnableLabel(duration), CallbackData: encodeApprovalWindowCallbackData(offer.ID, approvalWindowActionEnable15Compound)},
 	}}
 }
 
@@ -60,6 +68,10 @@ func ApprovalWindowActiveRows(offerID string) [][]telegram.InlineButton {
 }
 
 func ApprovalWindowRowsForOffer(offer session.ApprovalWindowOffer) [][]telegram.InlineButton {
+	return ApprovalWindowRowsForOfferForDuration(offer, approvalWindowCallbackDuration)
+}
+
+func ApprovalWindowRowsForOfferForDuration(offer session.ApprovalWindowOffer, duration time.Duration) [][]telegram.InlineButton {
 	offer = session.NormalizeApprovalWindowOffer(offer)
 	if offer.ID == "" || !offer.ClosedAt.IsZero() {
 		return nil
@@ -67,10 +79,14 @@ func ApprovalWindowRowsForOffer(offer session.ApprovalWindowOffer) [][]telegram.
 	if !offer.UsedAt.IsZero() {
 		return nil
 	}
-	return ApprovalWindowOfferRows(offer.ID)
+	return ApprovalWindowOfferRowsForDuration(offer.ID, duration)
 }
 
 func ApprovalWindowRowsForLiveOffer(offer session.ApprovalWindowOffer) [][]telegram.InlineButton {
+	return ApprovalWindowRowsForLiveOfferForDuration(offer, approvalWindowCallbackDuration)
+}
+
+func ApprovalWindowRowsForLiveOfferForDuration(offer session.ApprovalWindowOffer, duration time.Duration) [][]telegram.InlineButton {
 	offer = session.NormalizeApprovalWindowOffer(offer)
 	if offer.ID == "" || !offer.ClosedAt.IsZero() {
 		return nil
@@ -81,7 +97,7 @@ func ApprovalWindowRowsForLiveOffer(offer session.ApprovalWindowOffer) [][]teleg
 		}
 		return nil
 	}
-	return ApprovalWindowOfferRows(offer.ID)
+	return ApprovalWindowOfferRowsForDuration(offer.ID, duration)
 }
 
 func approvalWindowOfferRowsForSource(ctx context.Context, router commandRouter, msg core.InboundMessage, sourceKind string, sourceID string, sourceDecisionKind string) ([][]telegram.InlineButton, error) {
@@ -93,7 +109,36 @@ func approvalWindowOfferRowsForSource(ctx context.Context, router commandRouter,
 	if err != nil || !created {
 		return nil, err
 	}
-	return ApprovalWindowRowsForLiveOffer(offer), nil
+	return ApprovalWindowRowsForLiveOfferForDuration(offer, approvalWindowDurationFromRouter(router)), nil
+}
+
+func approvalWindowDurationFromRouter(router commandRouter) time.Duration {
+	if durations, ok := router.(approvalWindowDurationRouter); ok {
+		if duration := durations.DefaultApprovalWindowDuration(); duration > 0 {
+			return duration
+		}
+	}
+	return approvalWindowCallbackDuration
+}
+
+func approvalWindowEnableLabel(duration time.Duration) string {
+	if duration <= 0 {
+		duration = approvalWindowCallbackDuration
+	}
+	return "Approve " + approvalWindowLabelDuration(duration)
+}
+
+func approvalWindowLabelDuration(duration time.Duration) string {
+	if duration <= 0 {
+		duration = approvalWindowCallbackDuration
+	}
+	if duration%time.Hour == 0 {
+		return fmt.Sprintf("%dh", int(duration/time.Hour))
+	}
+	if duration%time.Minute == 0 {
+		return fmt.Sprintf("%dm", int(duration/time.Minute))
+	}
+	return duration.Truncate(time.Second).String()
 }
 
 func encodeApprovalWindowCallbackData(offerID string, action string) string {
@@ -176,10 +221,11 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 
 	var text string
 	var rows [][]telegram.InlineButton
+	duration := approvalWindowDurationFromRouter(router)
 	switch action {
 	case approvalWindowActionEnable15:
 		var result core.ApprovalWindowEnableResult
-		result, err = approvals.EnableApprovalWindowOfferResult(ctx, offerID, senderID, approvalWindowCallbackDuration)
+		result, err = approvals.EnableApprovalWindowOfferResult(ctx, offerID, senderID, duration)
 		text = result.Text
 		if err == nil && result.Active {
 			rows = ApprovalWindowActiveRows(offerID)
@@ -191,7 +237,7 @@ func handleApprovalWindowCallback(ctx context.Context, sender commandCallbackSen
 			break
 		}
 		var result core.ApprovalWindowEnableResult
-		result, err = approvals.EnableApprovalWindowOfferResult(ctx, offerID, senderID, approvalWindowCallbackDuration)
+		result, err = approvals.EnableApprovalWindowOfferResult(ctx, offerID, senderID, duration)
 		text = result.Text
 		if err == nil && result.Active {
 			text += compound.note

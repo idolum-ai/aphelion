@@ -31,6 +31,7 @@ type Runtime interface {
 	CreateApprovalWindowOfferForKey(ctx context.Context, key session.SessionKey, senderID int64, sourceKind string, sourceID string, sourceDecisionKind string) (session.ApprovalWindowOffer, bool, error)
 	EnableApprovalWindowForKey(ctx context.Context, key session.SessionKey, senderID int64, duration time.Duration) (string, error)
 	EnableApprovalWindowForKeyResult(ctx context.Context, key session.SessionKey, senderID int64, duration time.Duration) (core.ApprovalWindowEnableResult, error)
+	DefaultApprovalWindowDuration() time.Duration
 	DoubleApprovalWindowForKey(ctx context.Context, key session.SessionKey, senderID int64) (string, error)
 	CancelApprovalWindowForKey(ctx context.Context, key session.SessionKey, senderID int64) (string, error)
 	CancelApprovalWindowForKeyResult(ctx context.Context, key session.SessionKey, senderID int64) (core.ApprovalWindowCancelResult, error)

@@ -21,6 +21,7 @@ const (
 
 type operatorAutoApprovalRequest struct {
 	ChatID          int64
+	AdminUserID     int64
 	TargetScopeKind string
 	TargetScopeID   string
 	Kind            string
@@ -135,6 +136,7 @@ func (r *Runtime) AutoResolveDecision(ctx context.Context, pending decision.Pend
 	}
 	lease, ok, err := r.consumeOperatorAutoApproval(ctx, operatorAutoApprovalRequest{
 		ChatID:          pending.ChatID,
+		AdminUserID:     pending.SenderID,
 		TargetScopeKind: firstNonEmptyContinuation(pending.ScopeKind, string(session.ScopeKindTelegramDM)),
 		TargetScopeID:   firstNonEmptyContinuation(pending.ScopeID, fmt.Sprint(pending.ChatID)),
 		Kind:            "decision:" + strings.TrimSpace(string(pending.Kind)),
@@ -185,6 +187,7 @@ func (r *Runtime) maybeAutoApproveContinuationOfferWith(ctx context.Context, key
 	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
 	lease, ok, err := r.consumeOperatorAutoApproval(ctx, operatorAutoApprovalRequest{
 		ChatID:          key.ChatID,
+		AdminUserID:     msg.SenderID,
 		TargetScopeKind: scopeKind,
 		TargetScopeID:   scopeID,
 		Kind:            "continuation:" + strings.TrimSpace(source),
@@ -273,6 +276,9 @@ func (r *Runtime) consumeOperatorAutoApproval(ctx context.Context, req operatorA
 		return session.OperatorAutoApprovalLease{}, false, nil
 	}
 	now := time.Now().UTC()
+	if err := r.ensureDefaultApprovalWindowForRequest(ctx, req, now); err != nil {
+		return session.OperatorAutoApprovalLease{}, false, err
+	}
 	gate, ok, err := r.operatorAutoModeGateForScope(req.ChatID, req.TargetScopeKind, req.TargetScopeID, 0, now)
 	if err != nil || !ok {
 		return session.OperatorAutoApprovalLease{}, false, err

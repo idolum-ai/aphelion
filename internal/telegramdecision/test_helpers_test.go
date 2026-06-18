@@ -243,6 +243,10 @@ func (e execApprovalWindowOfferer) CreateApprovalWindowOfferForKey(_ context.Con
 	return offer, true, nil
 }
 
+func (e execApprovalWindowOfferer) DefaultApprovalWindowDuration() time.Duration {
+	return 15 * time.Minute
+}
+
 type testingT interface {
 	Helper()
 	Fatalf(format string, args ...any)

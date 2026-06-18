@@ -194,6 +194,9 @@ default_mode = "ask_first"
 ceiling = "leased"
 allow_live_overrides = true
 max_override_duration = "4h"
+# Off by default. Set to "15m", "30m", or "always" to lazily open finite
+# approval windows for eligible admin-owned requests in the current chat/thread.
+default_approval_window = "off"
 
 [sessions]
 db_path = "~/.aphelion/state/sessions.db"

@@ -106,6 +106,10 @@ type approvalWindowRouter interface {
 	CloseApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) error
 }
 
+type approvalWindowDurationRouter interface {
+	DefaultApprovalWindowDuration() time.Duration
+}
+
 type commandScopedMemoryRouter interface {
 	MemoryReviewSnapshotForMessage(ctx context.Context, msg core.InboundMessage, source memoryReviewSource) (memoryReviewSnapshot, error)
 }

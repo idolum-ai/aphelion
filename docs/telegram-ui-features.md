@@ -88,10 +88,11 @@ Current command surface:
   - OpenAI slots may expose `Fast`, which requests OpenAI's priority service tier. Other providers keep provider-default speed behavior.
 - Approval windows
   - Admin-only inline controls shown after an approval succeeds.
-  - The approved message offers `Approve 15m` and `Close`.
-  - `Approve 15m` opens the temporary automation gate and approval grant for new approval requests in the current chat or side thread.
+  - The approved message offers `Approve 15m` and `Close` by default; the approve label follows `[autonomy].default_approval_window` when configured to another finite duration.
+  - `Approve <duration>` opens the temporary automation gate and approval grant for new approval requests in the current chat or side thread.
   - Active windows offer `Double time` and `Cancel approvals`.
   - Each `Double time` press doubles the current window duration within the configured live-override ceiling. `Cancel approvals` revokes both records.
+  - `[autonomy].default_approval_window` is off by default. Set it to a duration such as `15m` or `30m`, or `always` for rolling finite 15-minute windows, to lazily open the same typed rows for eligible admin-owned requests without tapping the button first.
   - If config is tightened later, live mode overrides outside the new ceiling are ignored and `/health diagnose` reports the precedence block.
 - `/stop`
   - Stops active work in the current chat and drops queued follow-up work.
@@ -289,13 +290,16 @@ mission state.
 Approval-window buttons keep automation contextual to the request that was just
 approved:
 
-- `Approve 15m` creates a temporary automation gate and approval
+- `Approve <duration>` creates a temporary automation gate and approval
   grant for new approval requests in the current chat or side thread.
 - `Close` removes the offer buttons without changing runtime state.
 - `Double time` doubles the current approval window within the configured
   live-override ceiling.
 - `Cancel approvals` revokes both the approval grant and its matching temporary
   automation gate.
+- `[autonomy].default_approval_window` can make this window open lazily for
+  eligible admin-owned requests. It is off by default; `always` means rolling
+  finite 15-minute windows rather than non-expiring authority.
 
 Duration, scope, live-override ceiling, admin checks, and spendability remain
 typed runtime checks, not UI convention.

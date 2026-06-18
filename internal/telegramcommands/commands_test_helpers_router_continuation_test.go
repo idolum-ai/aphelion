@@ -343,6 +343,13 @@ func (s *stubCommandRouter) EnableApprovalWindowOffer(_ context.Context, offerID
 	return result.Text, err
 }
 
+func (s *stubCommandRouter) DefaultApprovalWindowDuration() time.Duration {
+	if s.defaultApprovalWindowDuration > 0 {
+		return s.defaultApprovalWindowDuration
+	}
+	return approvalWindowCallbackDuration
+}
+
 func (s *stubCommandRouter) EnableApprovalWindowOfferResult(_ context.Context, offerID string, senderID int64, duration time.Duration) (core.ApprovalWindowEnableResult, error) {
 	s.approvalWindowAction = approvalWindowActionEnable15
 	s.approvalWindowOfferID = offerID

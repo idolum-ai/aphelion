@@ -335,6 +335,11 @@ default_mode = "ask_first"
 ceiling = "leased"
 allow_live_overrides = true
 max_override_duration = "4h"
+# Off by default. Set to "15m", "30m", or "always" to lazily open finite
+# approval-window lease/override rows for eligible admin-owned requests in the
+# current chat/thread. "always" means rolling finite 15m windows, not
+# non-expiring authority.
+default_approval_window = "off"
 
 # Context management thresholds — push close to the provider's actual limit.
 # These are in tokens. Compaction kicks in when the assembled prompt exceeds max_context_tokens.

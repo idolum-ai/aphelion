@@ -47,6 +47,7 @@ func EditDecisionMessageClearingInlineKeyboard(ctx context.Context, sender Decis
 
 type ApprovalWindowOfferer interface {
 	CreateApprovalWindowOfferForKey(ctx context.Context, key session.SessionKey, adminUserID int64, sourceKind string, sourceID string, sourceDecisionKind string) (session.ApprovalWindowOffer, bool, error)
+	DefaultApprovalWindowDuration() time.Duration
 }
 
 type ExecApprover struct {
@@ -455,7 +456,7 @@ func (a *ExecApprover) approvalWindowOfferRows(ctx context.Context, key session.
 	if err != nil || !created {
 		return nil, err
 	}
-	return telegramcommands.ApprovalWindowRowsForLiveOffer(offer), nil
+	return telegramcommands.ApprovalWindowRowsForLiveOfferForDuration(offer, a.approvalWindows.DefaultApprovalWindowDuration()), nil
 }
 
 func appendTelegramRows(base [][]telegram.InlineButton, extra [][]telegram.InlineButton) [][]telegram.InlineButton {
