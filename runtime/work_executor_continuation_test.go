@@ -12,6 +12,8 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/turn"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -1115,6 +1117,177 @@ func TestTriggerCodingContinuationEmptySuccessOffersFreshRetry(t *testing.T) {
 	}
 }
 
+func TestTriggerCommitContinuationReconcilesLocalCommitBeforeRetry(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	repo := initWorkOutcomeGitRepo(t)
+	work := &fakeWorkExecutor{
+		name:  "native",
+		ready: true,
+		resultHook: func(req WorkRequest) WorkResult {
+			short := commitWorkOutcomeFile(t, req.Workdir, "packet.md", "packet\n", "Add XPVENTA reconstruction packet artifacts")
+			return WorkResult{
+				Summary:       "Wrapper completed commit " + short + ".",
+				Commands:      []string{"./commit-wrapper"},
+				SideEffects:   true,
+				ToolSuccesses: 1,
+			}
+		},
+	}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "native"}, []WorkExecutor{work})
+
+	key := session.SessionKey{ChatID: 8294, UserID: 0, Scope: telegramDMScopeRef(8294)}
+	state := approvedCommitContinuationState("reconcile-commit", time.Now().UTC().Add(time.Hour))
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-reconcile-commit",
+		Objective: "Commit the XPVENTA reconstruction packet artifacts.",
+		Status:    session.OperationStatusActive,
+		Work: session.WorkOperationMetadata{
+			RepoRoot: repo,
+			Workdir:  repo,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v", err)
+	}
+	op, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if op.Work.LastCompletedAt.IsZero() || op.Work.LastError != "" {
+		t.Fatalf("operation work = %#v, want reconciled completion without error", op.Work)
+	}
+	if !strings.Contains(op.Work.CommitLaneStatus, "reconciled_local_git_commit") || !stringSliceContains(op.Work.ChangedFiles, "packet.md") {
+		t.Fatalf("operation work evidence = %#v, want reconciled commit evidence", op.Work)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusIdle || cont.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed {
+		t.Fatalf("continuation = %#v, want consumed idle without retry proposal", cont)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no retry approval prompt", inlineCount)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if hasExecutionEvent(events, core.ExecutionEventRecoveryIssued) || hasExecutionEvent(events, core.ExecutionEventContinuationOffered) {
+		t.Fatalf("events = %#v, want no retry/recovery offer after reconciliation", events)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
+		t.Fatalf("events = %#v, want work executor success after reconciliation", events)
+	}
+}
+
+func TestTriggerCommitContinuationBlocksUnverifiedSideEffectsWithoutRetry(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	repo := initWorkOutcomeGitRepo(t)
+	work := &fakeWorkExecutor{name: "native", ready: true, result: WorkResult{
+		Summary:       "Commit wrapper ran, but no commit identity was reported.",
+		Commands:      []string{"./commit-wrapper"},
+		SideEffects:   true,
+		ToolSuccesses: 1,
+	}}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "native"}, []WorkExecutor{work})
+
+	key := session.SessionKey{ChatID: 8295, UserID: 0, Scope: telegramDMScopeRef(8295)}
+	state := approvedCommitContinuationState("unverified-commit", time.Now().UTC().Add(time.Hour))
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-unverified-commit",
+		Objective: "Commit the XPVENTA reconstruction packet artifacts.",
+		Status:    session.OperationStatusActive,
+		Work: session.WorkOperationMetadata{
+			RepoRoot: repo,
+			Workdir:  repo,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	err = rt.TriggerContinuationForKey(context.Background(), key)
+	if err == nil || !strings.Contains(err.Error(), errWorkExecutorOutcomeUnverified.Error()) {
+		t.Fatalf("TriggerContinuationForKey() err = %v, want unverified side-effect error", err)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status == session.ContinuationStatusPending || cont.ActionProposal.Status == session.ProposalStatusPending {
+		t.Fatalf("continuation = %#v, want no fresh retry proposal after unverified side effects", cont)
+	}
+	op, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if !strings.Contains(op.Work.LastError, errWorkExecutorOutcomeUnverified.Error()) || !op.Work.LastCompletedAt.IsZero() {
+		t.Fatalf("operation work = %#v, want unverified side-effect failure without completion", op.Work)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no duplicate retry prompt", inlineCount)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if hasExecutionEvent(events, core.ExecutionEventRecoveryIssued) || hasExecutionEvent(events, core.ExecutionEventContinuationOffered) {
+		t.Fatalf("events = %#v, want no recovery/retry offer after unverified side effects", events)
+	}
+	if !hasExecutionEventPayload(events, core.ExecutionEventContinuationBlocked, "side_effects_outcome_unverified") {
+		t.Fatalf("events = %#v, want blocked event with unverified outcome reason", events)
+	}
+	if hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
+		t.Fatalf("events = %#v, want no work executor success event", events)
+	}
+}
+
+func TestWorkOutcomeReconciliationRejectsStaleCommitHash(t *testing.T) {
+	t.Parallel()
+
+	repo := initWorkOutcomeGitRepo(t)
+	short := commitWorkOutcomeFile(t, repo, "packet.md", "packet\n", "Add XPVENTA reconstruction packet artifacts")
+	result := WorkResult{
+		Summary:       "Wrapper completed commit " + short + ".",
+		Commands:      []string{"./commit-wrapper"},
+		SideEffects:   true,
+		ToolSuccesses: 1,
+	}
+	req := WorkRequest{
+		Mode:    WorkModeCommit,
+		Workdir: repo,
+		State:   approvedCommitContinuationState("stale-commit", time.Now().UTC().Add(time.Hour)),
+	}
+	windowStart := time.Now().UTC().Add(time.Hour)
+	got, decision := (*Runtime)(nil).reconcileWorkOutcomeAfterMissingEvidence(context.Background(), session.SessionKey{ChatID: 8296}, req, result, windowStart, windowStart.Add(time.Minute))
+	if decision.Reconciled || !decision.BlockRetry || !errors.Is(decision.Err, errWorkExecutorOutcomeUnverified) {
+		t.Fatalf("reconciliation decision = %#v result=%#v, want stale commit blocked", decision, got)
+	}
+}
+
 func TestWorkFailureRetryFallbackSendsPlainNoticeWhenInlinePromptFails(t *testing.T) {
 	t.Parallel()
 
@@ -1836,4 +2009,80 @@ func TestTriggerCodingContinuationStoresFullWorkEvidenceArtifact(t *testing.T) {
 	if !strings.Contains(sender.sent[0].Text, "Full evidence artifact:") || !strings.Contains(sender.sent[0].Text, op.Artifacts[0].Ref) {
 		t.Fatalf("telegram text = %q, want artifact reference", sender.sent[0].Text)
 	}
+}
+
+func approvedCommitContinuationState(id string, expiresAt time.Time) session.ContinuationState {
+	now := expiresAt.Add(-time.Hour)
+	action := session.ActionProposal{
+		ID:             "aprop-" + id,
+		Summary:        "Commit approved repository changes",
+		WhyNow:         "The approved commit phase should run now.",
+		BoundedEffect:  "Commit only the approved local repository changes and report commit evidence.",
+		RiskClass:      "commit",
+		AllowedActions: []string{"git_commit", "report_commit_evidence"},
+		Status:         session.ProposalStatusApproved,
+		ExpiresAt:      expiresAt,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	return session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     id,
+		Objective:      "Commit approved repository changes.",
+		StageSummary:   action.Summary,
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: action,
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-" + id,
+			ProposalID:     action.ID,
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			AllowedActions: action.AllowedActions,
+			ApprovedBy:     1001,
+			ApprovedAt:     now,
+			ExpiresAt:      expiresAt,
+			PlanHash:       action.PlanHash,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+	}
+}
+
+func initWorkOutcomeGitRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	runWorkOutcomeGit(t, repo, "init")
+	runWorkOutcomeGit(t, repo, "config", "user.email", "aphelion-test@example.com")
+	runWorkOutcomeGit(t, repo, "config", "user.name", "Aphelion Test")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(seed) err = %v", err)
+	}
+	runWorkOutcomeGit(t, repo, "add", "README.md")
+	runWorkOutcomeGit(t, repo, "commit", "-m", "seed")
+	return repo
+}
+
+func commitWorkOutcomeFile(t *testing.T, repo string, name string, body string, message string) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s) err = %v", name, err)
+	}
+	runWorkOutcomeGit(t, repo, "add", name)
+	runWorkOutcomeGit(t, repo, "commit", "-m", message)
+	return strings.TrimSpace(runWorkOutcomeGit(t, repo, "rev-parse", "--short", "HEAD"))
+}
+
+func runWorkOutcomeGit(t *testing.T, repo string, args ...string) string {
+	t.Helper()
+	cmdArgs := append([]string{"-C", repo}, args...)
+	cmd := exec.Command("git", cmdArgs...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s err = %v output=%s", strings.Join(args, " "), err, string(out))
+	}
+	return string(out)
 }

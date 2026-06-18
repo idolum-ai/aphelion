@@ -564,7 +564,9 @@ func (r *Runtime) runReservedApprovedWorkContinuation(ctx context.Context, key s
 		return nil
 	}
 	req := *reservation.WorkRequest
+	workStartedAt := time.Now().UTC()
 	result, err := r.workExecutor.Run(ctx, req)
+	workFinishedAt := time.Now().UTC()
 	status := r.workExecutor.Status()
 	if err == nil && workResultBudgetRecoveryScheduled(result) {
 		artifact := r.persistWorkResultForContinuation(key, req, result, status, nil)
@@ -586,7 +588,29 @@ func (r *Runtime) runReservedApprovedWorkContinuation(ctx context.Context, key s
 		return nil
 	}
 	if err == nil && result.Recovery == nil && !workResultHasSubstantiveCompletionEvidenceForRequest(req, result) {
-		err = errWorkExecutorNoCompletionEvidence
+		reconciled, reconciliation := r.reconcileWorkOutcomeAfterMissingEvidence(ctx, key, req, result, workStartedAt, workFinishedAt)
+		result = reconciled
+		if reconciliation.Reconciled {
+			// The reconciled result carries typed evidence; let the normal success path persist and record it once.
+		} else if reconciliation.BlockRetry {
+			cause := reconciliation.Err
+			if cause == nil {
+				cause = errWorkExecutorOutcomeUnverified
+			}
+			artifact := r.persistWorkResultForContinuation(key, req, result, status, cause)
+			payload := workResultPayload(req, result, status, cause)
+			for k, v := range reconciliation.Payload {
+				payload[k] = v
+			}
+			if artifact.Ref != "" {
+				payload["artifact_ref"] = artifact.Ref
+			}
+			r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorFailed, "work", "outcome_unverified", payload, time.Now().UTC())
+			r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "outcome_unverified", payload, time.Now().UTC())
+			return cause
+		} else {
+			err = errWorkExecutorNoCompletionEvidence
+		}
 	}
 	if err != nil {
 		artifact := r.persistWorkResultForContinuation(key, req, result, status, err)

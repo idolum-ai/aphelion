@@ -71,22 +71,58 @@ func Classify(command string) Effect {
 	if commandHasHighImpactStorageMarker(lower) {
 		return Effect{Kind: KindHighImpactStorage, Reason: "high-impact storage command", SideEffects: true}
 	}
-	if commandHasRedirection(lower) {
-		return Effect{Kind: KindBuildArtifact, Reason: "shell redirection", SideEffects: true}
-	}
 	segments := commandSegments(command)
 	if len(segments) == 0 {
 		return Effect{Kind: KindUnknown, Reason: "unclassified command", SideEffects: true}
 	}
-	out := Effect{Kind: KindReadOnlyInspection, Reason: "read-only inspection"}
+	var out Effect
+	if commandHasRedirection(lower) {
+		out = Effect{Kind: KindBuildArtifact, Reason: "shell redirection", SideEffects: true}
+	} else {
+		out = Effect{Kind: KindReadOnlyInspection, Reason: "read-only inspection"}
+	}
 	for _, segment := range segments {
 		effect := classifySegment(segment)
-		if effect.SideEffects || effect.Kind != KindReadOnlyInspection {
-			return effect
+		if effectDominates(effect, out) {
+			out = effect
 		}
-		out = effect
 	}
 	return out
+}
+
+func effectDominates(candidate Effect, current Effect) bool {
+	return effectRank(candidate.Kind) > effectRank(current.Kind)
+}
+
+func effectRank(kind Kind) int {
+	switch kind {
+	case KindReadOnlyInspection:
+		return 0
+	case KindValidation:
+		return 20
+	case KindBuildArtifact:
+		return 30
+	case KindWorkspaceMutation:
+		return 40
+	case KindUnknown:
+		return 45
+	case KindRepoHistory:
+		return 50
+	case KindExternal:
+		return 60
+	case KindExternalAccount, KindCredential, KindCapability:
+		return 70
+	case KindRemoteHost:
+		return 80
+	case KindService:
+		return 90
+	case KindDatabase:
+		return 100
+	case KindHighImpactStorage:
+		return 110
+	default:
+		return 10
+	}
 }
 
 func BoundaryForCommand(command string) (Boundary, bool) {
@@ -149,6 +185,8 @@ func classifySegment(segment string) Effect {
 	}
 	lowerSegment := strings.ToLower(strings.Join(tokenTexts(tokens[idx:]), " "))
 	switch cmd {
+	case "set", "printf", "echo", "true", "false", "test":
+		return Effect{Kind: KindReadOnlyInspection, Reason: cmd + " shell builtin", Command: cmd}
 	case "git":
 		return classifyGitCommand(args)
 	case "rg", "grep", "egrep", "fgrep", "cat", "nl", "head", "tail", "less", "more", "wc", "pwd", "ls", "find":

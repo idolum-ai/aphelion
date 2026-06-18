@@ -29,6 +29,7 @@ type fakeWorkExecutor struct {
 	lastReq          WorkRequest
 	lastAvail        WorkRequest
 	result           WorkResult
+	resultHook       func(WorkRequest) WorkResult
 	runHook          func(WorkRequest)
 	allowEmptyResult bool
 }
@@ -51,6 +52,7 @@ func (f *fakeWorkExecutor) Run(_ context.Context, req WorkRequest) (WorkResult, 
 	f.calls++
 	f.lastReq = req
 	hook := f.runHook
+	resultHook := f.resultHook
 	err := f.err
 	out := f.result
 	name := fakeWorkExecutorName(f.name)
@@ -58,6 +60,9 @@ func (f *fakeWorkExecutor) Run(_ context.Context, req WorkRequest) (WorkResult, 
 
 	if hook != nil {
 		hook(req)
+	}
+	if resultHook != nil {
+		out = resultHook(req)
 	}
 	if err != nil {
 		return WorkResult{}, err

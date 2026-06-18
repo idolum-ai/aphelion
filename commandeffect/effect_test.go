@@ -37,6 +37,38 @@ func TestBoundaryForCommandClassifiesBoundaryCommands(t *testing.T) {
 	}
 }
 
+func TestClassifyCompoundScriptPrefersStrongEffectOverRedirection(t *testing.T) {
+	t.Parallel()
+
+	command := `set -euo pipefail
+git commit -m "Add XPVENTA reconstruction packet artifacts" >/tmp/imexx_commit.out
+cat /tmp/imexx_commit.out
+printf '\nCOMMIT\n'; git rev-parse --short HEAD
+printf '\nSTATUS_AFTER\n'; git status --short`
+	effect := Classify(command)
+	if effect.Kind != KindRepoHistory || effect.Reason != ReasonGitCommit {
+		t.Fatalf("Classify(compound commit script) = %#v, want git commit repo-history effect", effect)
+	}
+}
+
+func TestClassifyRedirectionRemainsFallbackSideEffect(t *testing.T) {
+	t.Parallel()
+
+	effect := Classify("cat README.md > out.txt")
+	if effect.Kind != KindBuildArtifact || effect.Reason != "shell redirection" || !effect.SideEffects {
+		t.Fatalf("Classify(read-only redirection) = %#v, want build artifact side-effect fallback", effect)
+	}
+}
+
+func TestClassifyUnknownSegmentStaysConservativeAgainstLowRiskLaterSegments(t *testing.T) {
+	t.Parallel()
+
+	effect := Classify("custom-wrapper --maybe-mutates; go test ./...")
+	if effect.Kind != KindUnknown || !effect.SideEffects {
+		t.Fatalf("Classify(unknown then validation) = %#v, want conservative unknown side effect", effect)
+	}
+}
+
 func TestBoundaryForCommandIgnoresQuotedAndSearchText(t *testing.T) {
 	t.Parallel()
 

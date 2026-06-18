@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -157,6 +158,18 @@ func TestWorkResultCompletionEvidenceForRequestRequiresMaterialEvidenceForAuthor
 		t.Fatal("workspace-write mutating command should count as material completion evidence")
 	}
 
+	commitReq := readOnlyReq
+	commitReq.Mode = WorkModeCommit
+	commitReq.State.ActionProposal.RiskClass = "commit"
+	commitReq.State.ContinuationLease.AllowedActions = []string{"git_commit", "report_commit_evidence"}
+	compoundCommit := `set -euo pipefail
+git commit -m "Add XPVENTA reconstruction packet artifacts" >/tmp/imexx_commit.out
+cat /tmp/imexx_commit.out
+printf '\nCOMMIT\n'; git rev-parse --short HEAD`
+	if !workResultHasSubstantiveCompletionEvidenceForRequest(commitReq, WorkResult{Commands: []string{compoundCommit}}) {
+		t.Fatal("commit-mode redirected git commit script should count as material completion evidence")
+	}
+
 	grantReq := readOnlyReq
 	grantReq.Mode = WorkModeReadOnly
 	grantReq.State.ActionProposal.RiskClass = "external_account_pr_create"
@@ -202,6 +215,47 @@ func TestWorkResultCompletionEvidenceForRequestRequiresMaterialEvidenceForAuthor
 		ToolFailure:  "AUTHORITY_REJECTED: AskForGrant",
 	}) {
 		t.Fatal("failed authority/tool evidence completed external-account phase, want blocked/retry path")
+	}
+}
+
+func TestWorkOutcomeReconciliationBlocksUnverifiedExternalAccountSideEffects(t *testing.T) {
+	t.Parallel()
+
+	req := WorkRequest{
+		Mode:    WorkModeReadOnly,
+		Workdir: t.TempDir(),
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{
+				RiskClass:      "external_account_pr_create",
+				AllowedActions: []string{"github_pr_create", "report_pr_link"},
+				Status:         session.ProposalStatusApproved,
+			},
+			ContinuationLease: session.ContinuationLease{
+				ID:         "lease-external-unverified",
+				Status:     session.ContinuationLeaseStatusActive,
+				LeaseClass: session.ContinuationLeaseClassCapabilityGrant,
+				RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+					RequestID:      "cap-release-pr",
+					Kind:           session.CapabilityKindExternalAccount,
+					TargetResource: "github",
+					GrantedTo:      "telegram:1001",
+					AllowedActions: []string{"write"},
+				}},
+				ExpiresAt: time.Now().UTC().Add(time.Hour),
+			},
+		},
+	}
+	result := WorkResult{
+		Summary:       "A GitHub wrapper ran, but no PR URL or typed external-account evidence was captured.",
+		Commands:      []string{"custom-gh-wrapper --create-pr"},
+		SideEffects:   true,
+		ToolSuccesses: 1,
+	}
+
+	now := time.Now().UTC()
+	got, decision := (*Runtime)(nil).reconcileWorkOutcomeAfterMissingEvidence(context.Background(), session.SessionKey{ChatID: 1}, req, result, now, now)
+	if decision.Reconciled || !decision.BlockRetry || !errors.Is(decision.Err, errWorkExecutorOutcomeUnverified) {
+		t.Fatalf("reconciliation decision = %#v result=%#v, want blocked unverified outcome", decision, got)
 	}
 }
 
