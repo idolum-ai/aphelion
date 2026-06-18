@@ -115,29 +115,48 @@ type ContinuationIntent struct {
 }
 
 type TurnAuthorizationState struct {
-	Kind                   TurnAuthorizationKind      `json:"kind,omitempty"`
-	Status                 TurnAuthorizationStatus    `json:"status,omitempty"`
-	DecisionID             string                     `json:"decision_id,omitempty"`
-	DecisionMessageID      int64                      `json:"decision_message_id,omitempty"`
-	Objective              string                     `json:"objective,omitempty"`
-	StageSummary           string                     `json:"stage_summary,omitempty"`
-	RemainingTurns         int                        `json:"remaining_turns,omitempty"`
-	ApprovedBy             int64                      `json:"approved_by,omitempty"`
-	PersonaIntent          ContinuationIntent         `json:"persona_intent,omitempty"`
-	GovernorIntent         ContinuationIntent         `json:"governor_intent,omitempty"`
-	ActionProposal         ActionProposal             `json:"action_proposal,omitempty"`
-	ContinuationLease      ContinuationLease          `json:"continuation_lease,omitempty"`
-	ApprovalBundle         ContinuationApprovalBundle `json:"approval_bundle,omitempty"`
-	HandshakeBlockedReason string                     `json:"handshake_blocked_reason,omitempty"`
-	ParkedAt               time.Time                  `json:"parked_at,omitempty"`
-	ParkedReason           string                     `json:"parked_reason,omitempty"`
-	ParkedSource           string                     `json:"parked_source,omitempty"`
-	UpdatedAt              time.Time                  `json:"updated_at,omitempty"`
+	Kind                   TurnAuthorizationKind           `json:"kind,omitempty"`
+	Status                 TurnAuthorizationStatus         `json:"status,omitempty"`
+	DecisionID             string                          `json:"decision_id,omitempty"`
+	DecisionMessageID      int64                           `json:"decision_message_id,omitempty"`
+	Objective              string                          `json:"objective,omitempty"`
+	StageSummary           string                          `json:"stage_summary,omitempty"`
+	RemainingTurns         int                             `json:"remaining_turns,omitempty"`
+	ApprovedBy             int64                           `json:"approved_by,omitempty"`
+	PersonaIntent          ContinuationIntent              `json:"persona_intent,omitempty"`
+	GovernorIntent         ContinuationIntent              `json:"governor_intent,omitempty"`
+	ActionProposal         ActionProposal                  `json:"action_proposal,omitempty"`
+	ContinuationLease      ContinuationLease               `json:"continuation_lease,omitempty"`
+	ApprovalBundle         ContinuationApprovalBundle      `json:"approval_bundle,omitempty"`
+	VerificationTarget     *ContinuationVerificationTarget `json:"verification_target,omitempty"`
+	HandshakeBlockedReason string                          `json:"handshake_blocked_reason,omitempty"`
+	ParkedAt               time.Time                       `json:"parked_at,omitempty"`
+	ParkedReason           string                          `json:"parked_reason,omitempty"`
+	ParkedSource           string                          `json:"parked_source,omitempty"`
+	UpdatedAt              time.Time                       `json:"updated_at,omitempty"`
 }
 
 type ContinuationStatus = TurnAuthorizationStatus
 
 type ContinuationState = TurnAuthorizationState
+
+type ContinuationVerificationTarget struct {
+	Kind                      string    `json:"kind,omitempty"`
+	ReasonCode                string    `json:"reason_code,omitempty"`
+	OperationID               string    `json:"operation_id,omitempty"`
+	PhaseID                   string    `json:"phase_id,omitempty"`
+	OriginalLeaseID           string    `json:"original_lease_id,omitempty"`
+	OriginalActionProposalID  string    `json:"original_action_proposal_id,omitempty"`
+	OriginalActionOperationID string    `json:"original_action_operation_id,omitempty"`
+	OriginalWorkMode          string    `json:"original_work_mode,omitempty"`
+	RepoRoot                  string    `json:"repo_root,omitempty"`
+	Workdir                   string    `json:"workdir,omitempty"`
+	WindowStart               time.Time `json:"window_start,omitempty"`
+	WindowEnd                 time.Time `json:"window_end,omitempty"`
+	ClaimedSummary            string    `json:"claimed_summary,omitempty"`
+	CandidatePaths            []string  `json:"candidate_paths,omitempty"`
+	EvidenceRefs              []string  `json:"evidence_refs,omitempty"`
+}
 
 func (l OperatorAutoApprovalLease) ActiveAt(now time.Time) bool {
 	lease := NormalizeOperatorAutoApprovalLease(l)
@@ -171,6 +190,7 @@ func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthoriza
 	state.ActionProposal = NormalizeActionProposal(state.ActionProposal)
 	state.ContinuationLease = NormalizeContinuationLease(state.ContinuationLease)
 	state.ApprovalBundle = NormalizeContinuationApprovalBundle(state.ApprovalBundle)
+	state.VerificationTarget = NormalizeContinuationVerificationTarget(state.VerificationTarget)
 	state.HandshakeBlockedReason = normalizeContinuationStage(state.HandshakeBlockedReason)
 	if !state.ParkedAt.IsZero() {
 		state.ParkedAt = state.ParkedAt.UTC()
@@ -195,6 +215,74 @@ func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthoriza
 		state.UpdatedAt = time.Now().UTC()
 	}
 	return state
+}
+
+func NormalizeContinuationVerificationTarget(target *ContinuationVerificationTarget) *ContinuationVerificationTarget {
+	if target == nil {
+		return nil
+	}
+	normalized := *target
+	normalized.Kind = normalizeEnumValue(normalized.Kind)
+	normalized.ReasonCode = normalizeEnumValue(normalized.ReasonCode)
+	normalized.OperationID = strings.TrimSpace(normalized.OperationID)
+	normalized.PhaseID = strings.TrimSpace(normalized.PhaseID)
+	normalized.OriginalLeaseID = strings.TrimSpace(normalized.OriginalLeaseID)
+	normalized.OriginalActionProposalID = strings.TrimSpace(normalized.OriginalActionProposalID)
+	normalized.OriginalActionOperationID = strings.TrimSpace(normalized.OriginalActionOperationID)
+	normalized.OriginalWorkMode = normalizeEnumValue(normalized.OriginalWorkMode)
+	normalized.RepoRoot = strings.TrimSpace(normalized.RepoRoot)
+	normalized.Workdir = strings.TrimSpace(normalized.Workdir)
+	if !normalized.WindowStart.IsZero() {
+		normalized.WindowStart = normalized.WindowStart.UTC()
+	}
+	if !normalized.WindowEnd.IsZero() {
+		normalized.WindowEnd = normalized.WindowEnd.UTC()
+	}
+	normalized.ClaimedSummary = strings.TrimSpace(normalized.ClaimedSummary)
+	normalized.CandidatePaths = normalizeStringSlicePreserveCase(normalized.CandidatePaths)
+	normalized.EvidenceRefs = normalizeStringSlicePreserveCase(normalized.EvidenceRefs)
+	if normalized.Kind == "" &&
+		normalized.ReasonCode == "" &&
+		normalized.OperationID == "" &&
+		normalized.PhaseID == "" &&
+		normalized.OriginalLeaseID == "" &&
+		normalized.OriginalActionProposalID == "" &&
+		normalized.OriginalActionOperationID == "" &&
+		normalized.OriginalWorkMode == "" &&
+		normalized.RepoRoot == "" &&
+		normalized.Workdir == "" &&
+		normalized.WindowStart.IsZero() &&
+		normalized.WindowEnd.IsZero() &&
+		normalized.ClaimedSummary == "" &&
+		len(normalized.CandidatePaths) == 0 &&
+		len(normalized.EvidenceRefs) == 0 {
+		return nil
+	}
+	return &normalized
+}
+
+func normalizeStringSlicePreserveCase(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func NormalizeContinuationState(state ContinuationState) ContinuationState {

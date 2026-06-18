@@ -560,7 +560,13 @@ func (r *Runtime) runReservedApprovedContinuation(ctx context.Context, key sessi
 }
 
 func (r *Runtime) runReservedApprovedWorkContinuation(ctx context.Context, key session.SessionKey, reservation approvedContinuationReservation) error {
-	if r == nil || r.store == nil || r.workExecutor == nil || reservation.WorkRequest == nil {
+	if r == nil || r.store == nil || reservation.WorkRequest == nil {
+		return nil
+	}
+	if reservation.State.VerificationTarget != nil {
+		return r.runReservedWorkOutcomeVerification(ctx, key, reservation)
+	}
+	if r.workExecutor == nil {
 		return nil
 	}
 	req := *reservation.WorkRequest
@@ -607,7 +613,7 @@ func (r *Runtime) runReservedApprovedWorkContinuation(ctx context.Context, key s
 			}
 			r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorFailed, "work", "outcome_unverified", payload, time.Now().UTC())
 			r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "outcome_unverified", payload, time.Now().UTC())
-			return cause
+			return r.offerWorkOutcomeVerificationApproval(ctx, key, req, result, status, cause, artifact, reconciliation, workStartedAt, workFinishedAt)
 		} else {
 			err = errWorkExecutorNoCompletionEvidence
 		}
