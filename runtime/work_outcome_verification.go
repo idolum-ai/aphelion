@@ -68,6 +68,13 @@ func (r *Runtime) offerWorkOutcomeVerificationApproval(ctx context.Context, key 
 }
 
 func (r *Runtime) workOutcomeVerificationTarget(_ session.SessionKey, req WorkRequest, result WorkResult, artifact session.OperationArtifact, reconciliation workOutcomeReconciliation, windowStart time.Time, windowEnd time.Time) *session.ContinuationVerificationTarget {
+	if req.Mode != WorkModeWorkspaceWrite {
+		return nil
+	}
+	candidates := candidatePathsForWorkOutcome(req, result)
+	if len(candidates) == 0 {
+		return nil
+	}
 	opState := session.NormalizeOperationState(req.Operation)
 	phaseID := workOutcomeVerificationPhaseID(opState, req.State)
 	reason := strings.TrimSpace(reconciliation.Reason)
@@ -88,7 +95,7 @@ func (r *Runtime) workOutcomeVerificationTarget(_ session.SessionKey, req WorkRe
 		WindowStart:               windowStart,
 		WindowEnd:                 windowEnd,
 		ClaimedSummary:            strings.TrimSpace(result.Summary),
-		CandidatePaths:            candidatePathsForWorkOutcome(req, result),
+		CandidatePaths:            candidates,
 	}
 	if artifact.Ref != "" {
 		target.EvidenceRefs = []string{artifact.Ref}
@@ -296,11 +303,11 @@ func verifyWorkspaceWriteOutcome(target session.ContinuationVerificationTarget) 
 		if !ok {
 			continue
 		}
-		info, err := os.Stat(full)
+		info, err := os.Lstat(full)
 		if err != nil || info.IsDir() {
 			continue
 		}
-		if !verificationModTimeMatchesWindow(info.ModTime(), target.WindowStart) {
+		if !verificationModTimeMatchesWindow(info.ModTime(), target.WindowStart, target.WindowEnd) {
 			continue
 		}
 		verified = appendUniqueRuntimeString(verified, rel)
@@ -343,11 +350,18 @@ func safeWorkspaceVerificationPath(base string, candidate string) (string, strin
 	return filepath.ToSlash(rel), fullAbs, true
 }
 
-func verificationModTimeMatchesWindow(modTime time.Time, windowStart time.Time) bool {
+func verificationModTimeMatchesWindow(modTime time.Time, windowStart time.Time, windowEnd time.Time) bool {
 	if modTime.IsZero() || windowStart.IsZero() {
 		return true
 	}
-	return !modTime.UTC().Before(windowStart.UTC().Add(-workOutcomeVerificationClockSlack))
+	modTime = modTime.UTC()
+	if modTime.Before(windowStart.UTC().Add(-workOutcomeVerificationClockSlack)) {
+		return false
+	}
+	if !windowEnd.IsZero() && modTime.After(windowEnd.UTC().Add(workOutcomeVerificationClockSlack)) {
+		return false
+	}
+	return true
 }
 
 func workOutcomeVerificationPhaseID(opState session.OperationState, state session.ContinuationState) string {

@@ -1194,7 +1194,7 @@ func TestTriggerCommitContinuationReconcilesLocalCommitBeforeRetry(t *testing.T)
 	}
 }
 
-func TestTriggerCommitContinuationOffersVerificationForUnverifiedSideEffects(t *testing.T) {
+func TestTriggerCommitContinuationBlocksUnverifiedSideEffectsWithoutRetry(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -1226,18 +1226,16 @@ func TestTriggerCommitContinuationOffersVerificationForUnverifiedSideEffects(t *
 		t.Fatalf("UpdateOperationState() err = %v", err)
 	}
 
-	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
-		t.Fatalf("TriggerContinuationForKey() err = %v, want bounded verification approval", err)
+	err = rt.TriggerContinuationForKey(context.Background(), key)
+	if err == nil || !strings.Contains(err.Error(), errWorkExecutorOutcomeUnverified.Error()) {
+		t.Fatalf("TriggerContinuationForKey() err = %v, want unverified side-effect error", err)
 	}
 	cont, err := store.ContinuationState(key)
 	if err != nil {
 		t.Fatalf("ContinuationState() err = %v", err)
 	}
-	if cont.Status != session.ContinuationStatusPending ||
-		cont.ActionProposal.Status != session.ProposalStatusPending ||
-		cont.VerificationTarget == nil ||
-		cont.VerificationTarget.OriginalWorkMode != string(WorkModeCommit) {
-		t.Fatalf("continuation = %#v, want fresh bounded verification proposal after unverified side effects", cont)
+	if cont.Status == session.ContinuationStatusPending || cont.ActionProposal.Status == session.ProposalStatusPending || cont.VerificationTarget != nil {
+		t.Fatalf("continuation = %#v, want no verification proposal after unverifiable commit side effects", cont)
 	}
 	op, err := store.OperationState(key)
 	if err != nil {
@@ -1249,8 +1247,8 @@ func TestTriggerCommitContinuationOffersVerificationForUnverifiedSideEffects(t *
 	sender.mu.Lock()
 	inlineCount := len(sender.inline)
 	sender.mu.Unlock()
-	if inlineCount != 1 {
-		t.Fatalf("inline count = %d, want one verification prompt", inlineCount)
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no verification prompt", inlineCount)
 	}
 	events, err := store.ExecutionEventsBySession(key, 0, 50)
 	if err != nil {
@@ -1259,8 +1257,8 @@ func TestTriggerCommitContinuationOffersVerificationForUnverifiedSideEffects(t *
 	if hasExecutionEvent(events, core.ExecutionEventRecoveryIssued) {
 		t.Fatalf("events = %#v, want no retry recovery offer after unverified side effects", events)
 	}
-	if !hasExecutionEvent(events, core.ExecutionEventWorkOutcomeVerificationOffered) {
-		t.Fatalf("events = %#v, want work outcome verification offer", events)
+	if hasExecutionEvent(events, core.ExecutionEventWorkOutcomeVerificationOffered) {
+		t.Fatalf("events = %#v, want no work outcome verification offer for unverifiable commit", events)
 	}
 	if !hasExecutionEventPayload(events, core.ExecutionEventContinuationBlocked, "side_effects_outcome_unverified") {
 		t.Fatalf("events = %#v, want blocked event with unverified outcome reason", events)
@@ -1616,10 +1614,59 @@ func TestWorkspaceOutcomeVerificationRejectsStaleCandidatePath(t *testing.T) {
 		OriginalWorkMode: string(WorkModeWorkspaceWrite),
 		Workdir:          workdir,
 		WindowStart:      time.Now().UTC().Add(-time.Minute),
+		WindowEnd:        time.Now().UTC(),
 		CandidatePaths:   []string{"reports/stale.md"},
 	})
 	if result.Verified || len(result.ChangedFiles) != 0 {
 		t.Fatalf("verification result = %#v, want stale candidate rejected", result)
+	}
+}
+
+func TestWorkspaceOutcomeVerificationRejectsFutureCandidatePath(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	path := filepath.Join(workdir, "reports", "future.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll(report dir) err = %v", err)
+	}
+	if err := os.WriteFile(path, []byte("future\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(future) err = %v", err)
+	}
+	if err := os.Chtimes(path, time.Now().Add(2*time.Hour), time.Now().Add(2*time.Hour)); err != nil {
+		t.Fatalf("Chtimes(future) err = %v", err)
+	}
+	result := verifyWorkspaceWriteOutcome(session.ContinuationVerificationTarget{
+		OriginalWorkMode: string(WorkModeWorkspaceWrite),
+		Workdir:          workdir,
+		WindowStart:      time.Now().UTC().Add(-time.Minute),
+		WindowEnd:        time.Now().UTC(),
+		CandidatePaths:   []string{"reports/future.md"},
+	})
+	if result.Verified || len(result.ChangedFiles) != 0 {
+		t.Fatalf("verification result = %#v, want future candidate rejected", result)
+	}
+}
+
+func TestWorkOutcomeVerificationTargetRequiresWorkspaceCandidates(t *testing.T) {
+	t.Parallel()
+
+	req := WorkRequest{
+		Mode:    WorkModeWorkspaceWrite,
+		Workdir: t.TempDir(),
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-phase-f", OperationID: "phase-f"},
+			ContinuationLease: session.ContinuationLease{
+				ID: "lease-phase-f",
+			},
+		},
+	}
+	target := (*Runtime)(nil).workOutcomeVerificationTarget(session.SessionKey{ChatID: 8299}, req, WorkResult{
+		Summary:     "Phase F is complete.",
+		SideEffects: true,
+	}, session.OperationArtifact{}, workOutcomeReconciliation{Reason: "side_effects_outcome_unverified"}, time.Now().Add(-time.Minute), time.Now())
+	if target != nil {
+		t.Fatalf("target = %#v, want nil without candidate paths", target)
 	}
 }
 
