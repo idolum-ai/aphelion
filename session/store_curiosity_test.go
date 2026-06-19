@@ -4,6 +4,7 @@ package session
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -86,6 +87,75 @@ func TestCuriosityObservationDedupesByLeaseCandidateAndContentHash(t *testing.T)
 	}
 	if len(observations) != 1 {
 		t.Fatalf("observations = %d, want 1", len(observations))
+	}
+}
+
+func TestStrandedCuriosityObservationsClearAfterPressureHandoff(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	key := SessionKey{ChatID: -2004, Scope: ScopeRef{Kind: ScopeKindCuriosity, ID: "admin-curiosity"}}
+	obs, err := store.RecordCuriosityObservation(key, CuriosityObservationInput{
+		LeaseID:     "lease-1",
+		CandidateID: "candidate-1",
+		SourceKind:  CuriositySourceWorkspace,
+		SourceRef:   "README.md",
+		SubjectKey:  "release-work",
+		Summary:     "README still mentions the release checklist.",
+		ContentHash: "sha256:abc",
+		Confidence:  0.8,
+		ObservedAt:  now,
+	}, now)
+	if err != nil {
+		t.Fatalf("RecordCuriosityObservation() err = %v", err)
+	}
+	stranded, err := store.StrandedCuriosityObservations(10)
+	if err != nil {
+		t.Fatalf("StrandedCuriosityObservations() err = %v", err)
+	}
+	if len(stranded) != 1 || stranded[0].ID != obs.ID {
+		t.Fatalf("stranded = %#v, want observation %d", stranded, obs.ID)
+	}
+
+	fingerprint := CuriosityPressureFingerprint(obs.LeaseID, obs.CandidateID, obs.ContentHash)
+	_, err = store.RecordInteriorSignalObservations(SessionKey{ChatID: -2005, Scope: ScopeRef{Kind: ScopeKindHeartbeat, ID: "heartbeat"}}, []InteriorSignalObservationInput{{
+		Category:          "semantic_recurrence",
+		SubjectKey:        obs.SubjectKey,
+		Summary:           obs.Summary,
+		Source:            "curiosity",
+		SourceFingerprint: fingerprint,
+		Weight:            0.2,
+		Confidence:        0.8,
+		ObservedAt:        now,
+	}}, now)
+	if err != nil {
+		t.Fatalf("RecordInteriorSignalObservations() err = %v", err)
+	}
+	stranded, err = store.StrandedCuriosityObservations(10)
+	if err != nil {
+		t.Fatalf("StrandedCuriosityObservations(after) err = %v", err)
+	}
+	if len(stranded) != 0 {
+		t.Fatalf("stranded after pressure handoff = %#v, want none", stranded)
+	}
+}
+
+func TestSafeCuriosityURLSourceRefRedactsQueryValues(t *testing.T) {
+	raw := "https://Example.COM/feed/releases?token=secret-value&Topic=Release&token=other"
+	ref := SafeCuriosityURLSourceRef(raw)
+	for _, forbidden := range []string{"secret-value", "Release", "other", "Example.COM"} {
+		if strings.Contains(ref, forbidden) {
+			t.Fatalf("safe URL ref = %q, leaked %q", ref, forbidden)
+		}
+	}
+	for _, want := range []string{"url:https://example.com/feed/releases", "query_keys=token,topic", "sha256:"} {
+		if !strings.Contains(ref, want) {
+			t.Fatalf("safe URL ref = %q, want %q", ref, want)
+		}
 	}
 }
 

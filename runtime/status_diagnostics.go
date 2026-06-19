@@ -58,6 +58,10 @@ func (r *Runtime) StatusDiagnostics(chatID int64) ([]string, error) {
 		}
 		lines = append(lines, line+".")
 	}
+	if stranded, err := r.store.StrandedCuriosityObservations(5); err == nil && len(stranded) > 0 {
+		latest := stranded[0]
+		lines = append(lines, fmt.Sprintf("Curiosity pressure handoff: stranded observation_id=%d source=%s subject=%s pressure_fingerprint=%s.", latest.ID, strings.TrimSpace(latest.SourceKind), strings.TrimSpace(latest.SubjectKey), session.CuriosityPressureFingerprint(latest.LeaseID, latest.CandidateID, latest.ContentHash)))
+	}
 	if continuation := chatSnapshot.Continuation; continuation != nil {
 		status := strings.ToLower(strings.TrimSpace(continuation.Status))
 		if status == "pending" || status == "approved" || status == "revoked" {

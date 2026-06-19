@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -140,6 +142,9 @@ func NormalizeCuriosityObservationInput(input CuriosityObservationInput, now tim
 	input.CandidateID = strings.TrimSpace(input.CandidateID)
 	input.SourceKind = normalizeCuriosityToken(input.SourceKind)
 	input.SourceRef = strings.TrimSpace(input.SourceRef)
+	if input.SourceKind == CuriositySourceURL {
+		input.SourceRef = SafeCuriosityURLSourceRef(input.SourceRef)
+	}
 	input.SubjectKey = normalizeCuriositySubject(input.SubjectKey)
 	input.Summary = strings.TrimSpace(input.Summary)
 	input.Evidence = NormalizeRecordReferences(input.Evidence)
@@ -157,6 +162,62 @@ func NormalizeCuriosityObservationInput(input CuriosityObservationInput, now tim
 		input.ContentHash = "sha256:" + shortCuriosityHash(input.SourceKind, input.SourceRef, input.Summary)
 	}
 	return input
+}
+
+func SafeCuriositySourceRef(sourceKind string, sourceRef string) string {
+	sourceKind = normalizeCuriosityToken(sourceKind)
+	sourceRef = strings.TrimSpace(sourceRef)
+	if sourceKind == CuriositySourceURL {
+		return SafeCuriosityURLSourceRef(sourceRef)
+	}
+	return sourceRef
+}
+
+func SafeCuriosityURLSourceRef(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return "url:invalid;hash=" + curiosityURLIdentityHash(rawURL)
+	}
+	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	if scheme == "" {
+		scheme = "https"
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if port := strings.TrimSpace(parsed.Port()); port != "" {
+		host += ":" + port
+	}
+	path := parsed.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	keys := make([]string, 0, len(parsed.Query()))
+	seen := make(map[string]struct{}, len(parsed.Query()))
+	for key := range parsed.Query() {
+		key = strings.ToLower(strings.TrimSpace(key))
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	ref := "url:" + scheme + "://" + host + path
+	if len(keys) > 0 {
+		ref += ";query_keys=" + strings.Join(keys, ",")
+	}
+	return ref + ";hash=" + curiosityURLIdentityHash(rawURL)
+}
+
+func CuriosityPressureFingerprint(leaseID string, candidateID string, contentHash string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{"curiosity", strings.TrimSpace(leaseID), strings.TrimSpace(candidateID), strings.TrimSpace(contentHash)}, "\x1f")))
+	return "sha256:" + hex.EncodeToString(sum[:])[:16]
 }
 
 func CuriosityLeaseID(periodStart string, allowedSourceKinds []string, allowedSourceRefs []string) string {
@@ -234,4 +295,9 @@ func clampCuriosityConfidence(value float64) float64 {
 func shortCuriosityHash(parts ...string) string {
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(sum[:])
+}
+
+func curiosityURLIdentityHash(rawURL string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(rawURL)))
+	return "sha256:" + hex.EncodeToString(sum[:])[:16]
 }

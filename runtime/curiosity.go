@@ -192,18 +192,11 @@ func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err erro
 		finishErr = err
 		return fmt.Errorf("record curiosity observation: %w", err)
 	}
-	if err := r.recordCuriosityInteriorSignal(obs, candidate, now); err != nil {
-		log.Printf("WARN curiosity interior signal write failed: %v", err)
+	if err := r.recordCuriosityPressureHandoff(key, obs, candidate, now); err != nil {
+		finishErr = err
+		log.Printf("WARN curiosity pressure handoff failed: %v", err)
+		return err
 	}
-	r.recordExecutionEvent(key, core.ExecutionEventCuriosityObservationRecorded, "curiosity", "recorded", map[string]any{
-		"lease_id":       lease.ID,
-		"observation_id": obs.ID,
-		"candidate_id":   candidate.ID,
-		"source_kind":    candidate.SourceKind,
-		"source_ref":     candidate.SourceRef,
-		"subject_key":    obs.SubjectKey,
-		"confidence":     obs.Confidence,
-	}, time.Now().UTC())
 	return nil
 }
 
@@ -317,7 +310,7 @@ func (r *Runtime) curiosityCandidates(tools agent.ToolRegistry, sharedMemoryRoot
 				if rawURL == "" {
 					continue
 				}
-				out = append(out, newCuriosityCandidate(state, session.CuriositySourceURL, rawURL, "fetch_url", map[string]any{
+				out = append(out, newCuriosityCandidate(state, session.CuriositySourceURL, session.SafeCuriosityURLSourceRef(rawURL), "fetch_url", map[string]any{
 					"url":           rawURL,
 					"max_bytes":     131072,
 					"excerpt_bytes": 4096,
@@ -428,7 +421,7 @@ func (r *Runtime) recordCuriosityInteriorSignal(obs session.CuriosityObservation
 		Summary:           obs.Summary,
 		Source:            "curiosity",
 		Evidence:          obs.Evidence,
-		SourceFingerprint: shortRuntimeHash("curiosity", obs.LeaseID, obs.CandidateID, obs.ContentHash),
+		SourceFingerprint: session.CuriosityPressureFingerprint(obs.LeaseID, obs.CandidateID, obs.ContentHash),
 		Weight:            0.20,
 		Confidence:        obs.Confidence,
 		ObservedAt:        now,
@@ -437,6 +430,7 @@ func (r *Runtime) recordCuriosityInteriorSignal(obs session.CuriosityObservation
 }
 
 func curiosityEvidence(candidate curiosityCandidate, outputHash string, refs []session.RecordReference) []session.RecordReference {
+	refs = sanitizeCuriosityEvidenceRefs(candidate, refs)
 	refs = append(refs,
 		session.RecordReference{Kind: "curiosity_source", Ref: candidate.SourceKind + ":" + candidate.SourceRef, Label: "selected curiosity source"},
 		session.RecordReference{Kind: "curiosity_candidate", Ref: candidate.ID, Label: candidate.ToolName},
@@ -448,6 +442,54 @@ func curiosityEvidence(candidate curiosityCandidate, outputHash string, refs []s
 		refs = append(refs, session.RecordReference{Kind: "tool_output", Ref: outputHash, Label: "read-only look"})
 	}
 	return session.NormalizeRecordReferences(refs)
+}
+
+func (r *Runtime) recordCuriosityPressureHandoff(key session.SessionKey, obs session.CuriosityObservation, candidate curiosityCandidate, now time.Time) error {
+	if err := r.recordCuriosityInteriorSignal(obs, candidate, now); err != nil {
+		r.recordExecutionEvent(key, core.ExecutionEventCuriosityFailed, "curiosity", "pressure_handoff_failed", map[string]any{
+			"observation_id":       obs.ID,
+			"lease_id":             obs.LeaseID,
+			"candidate_id":         obs.CandidateID,
+			"pressure_fingerprint": session.CuriosityPressureFingerprint(obs.LeaseID, obs.CandidateID, obs.ContentHash),
+			"error":                trimError(err.Error()),
+		}, time.Now().UTC())
+		return fmt.Errorf("record curiosity pressure handoff: %w", err)
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventCuriosityObservationRecorded, "curiosity", "recorded", map[string]any{
+		"lease_id":              obs.LeaseID,
+		"observation_id":        obs.ID,
+		"candidate_id":          obs.CandidateID,
+		"source_kind":           obs.SourceKind,
+		"source_ref":            obs.SourceRef,
+		"subject_key":           obs.SubjectKey,
+		"confidence":            obs.Confidence,
+		"pressure_fingerprint":  session.CuriosityPressureFingerprint(obs.LeaseID, obs.CandidateID, obs.ContentHash),
+		"pressure_handoff":      "applied",
+		"pressure_source_kind":  "interior_signal",
+		"pressure_source_scope": string(heartbeatScopeRef().Kind),
+	}, time.Now().UTC())
+	return nil
+}
+
+func sanitizeCuriosityEvidenceRefs(candidate curiosityCandidate, refs []session.RecordReference) []session.RecordReference {
+	if candidate.SourceKind != session.CuriositySourceURL {
+		return refs
+	}
+	out := make([]session.RecordReference, 0, len(refs))
+	for _, ref := range refs {
+		ref.Ref = sanitizeCuriosityURLRecordRef(ref.Ref)
+		out = append(out, ref)
+	}
+	return out
+}
+
+func sanitizeCuriosityURLRecordRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	lower := strings.ToLower(ref)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return session.SafeCuriosityURLSourceRef(ref)
+	}
+	return ref
 }
 
 func (r *Runtime) curiositySignalHasIndependentSupport(state session.InteriorSignalState, now time.Time) (bool, error) {
@@ -535,7 +577,11 @@ func curiosityAllowedSourceRefs(cfg config.CuriosityConfig, kinds []string) []st
 		refs = append(refs, cfg.WorkspacePaths...)
 	}
 	if allowed[session.CuriositySourceURL] {
-		refs = append(refs, cfg.AllowlistedURLs...)
+		for _, rawURL := range cfg.AllowlistedURLs {
+			if ref := session.SafeCuriosityURLSourceRef(rawURL); ref != "" {
+				refs = append(refs, ref)
+			}
+		}
 	}
 	sort.Strings(refs)
 	return refs

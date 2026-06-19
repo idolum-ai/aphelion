@@ -131,6 +131,13 @@ Curiosity note:
 - `curiosity_observations` are typed facts produced by read-only candidate-bound
   looks. They may feed interior signal pressure, but they do not directly write
   curated memory, assert completion, or create authority.
+- Curiosity pressure handoff is reconciled by the runtime-owned pressure
+  fingerprint. An observation without a matching `interior_signal_observations`
+  row from source `curiosity` is stranded and should surface in diagnostics
+  instead of being treated as applied pressure.
+- URL curiosity source refs are durable identities, not fetch targets. Durable
+  source/evidence refs use a canonical host/path/query-key identity plus a hash;
+  raw URL query values stay in config or the selected tool input only.
 - Whether the latest curiosity look succeeded, failed, or produced useful
   evidence must be derived from `curiosity_observations` plus execution events,
   not inferred from the lease status.

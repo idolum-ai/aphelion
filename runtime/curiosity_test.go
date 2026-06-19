@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -235,11 +237,122 @@ func TestCuriosityURLEvidenceTagsThirdPartyText(t *testing.T) {
 	refs := curiosityEvidence(curiosityCandidate{
 		ID:         "candidate-url",
 		SourceKind: session.CuriositySourceURL,
-		SourceRef:  "https://example.com/feed",
+		SourceRef:  session.SafeCuriosityURLSourceRef("https://example.com/feed"),
 		ToolName:   "fetch_url",
-	}, "sha256:tool", nil)
-	if !recordRefsContain(refs, "untrusted_external_source", "https://example.com/feed") {
+	}, "sha256:tool", []session.RecordReference{{Kind: "source", Ref: "https://example.com/feed?token=secret"}})
+	safeRef := session.SafeCuriosityURLSourceRef("https://example.com/feed")
+	if !recordRefsContain(refs, "untrusted_external_source", safeRef) {
 		t.Fatalf("evidence = %#v, want untrusted external provenance", refs)
+	}
+	for _, ref := range refs {
+		if strings.Contains(ref.Ref, "secret") {
+			t.Fatalf("evidence ref leaked URL query value: %#v", refs)
+		}
+	}
+}
+
+func TestCuriosityURLCandidateUsesSafeSourceIdentity(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Curiosity.Enabled = true
+	cfg.Curiosity.MinSignalIntensity = 0.5
+	cfg.Curiosity.SourceClasses = []string{session.CuriositySourceURL}
+	rawURL := "https://Example.com/feed/releases?token=secret-value&topic=Release"
+	cfg.Curiosity.AllowlistedURLs = []string{rawURL}
+
+	rt, err := New(cfg, store, provider, &curiosityRecordingTools{}, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	_, err = store.RecordInteriorSignalObservations(session.SessionKey{ChatID: heartbeatSessionChatID, Scope: heartbeatScopeRef()}, []session.InteriorSignalObservationInput{{
+		Category:   hiddenInputSemanticRecurrence,
+		SubjectKey: "release-v023",
+		Summary:    "Release v0.2.3 keeps recurring in recent work.",
+		Source:     "test",
+		Weight:     0.8,
+		Confidence: 0.9,
+		ObservedAt: now,
+	}}, now)
+	if err != nil {
+		t.Fatalf("RecordInteriorSignalObservations() err = %v", err)
+	}
+	candidates, err := rt.curiosityCandidates(&curiosityRecordingTools{}, "", now)
+	if err != nil {
+		t.Fatalf("curiosityCandidates() err = %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %#v, want one URL candidate", candidates)
+	}
+	candidate := candidates[0]
+	if strings.Contains(candidate.SourceRef, "secret-value") || strings.Contains(candidate.SourceRef, "Release") || strings.Contains(candidate.SourceRef, "Example.com") {
+		t.Fatalf("candidate source ref = %q, leaked raw URL identity", candidate.SourceRef)
+	}
+	if !strings.Contains(candidate.SourceRef, "query_keys=token,topic") || !strings.Contains(candidate.SourceRef, "sha256:") {
+		t.Fatalf("candidate source ref = %q, want canonical URL identity", candidate.SourceRef)
+	}
+	var toolInput map[string]any
+	if err := json.Unmarshal(candidate.ToolInput, &toolInput); err != nil {
+		t.Fatalf("decode candidate tool input: %v", err)
+	}
+	if toolInput["url"] != rawURL {
+		t.Fatalf("candidate tool input url = %#v, want private fetch target preserved", toolInput["url"])
+	}
+	allowedRefs := curiosityAllowedSourceRefs(cfg.Curiosity, []string{session.CuriositySourceURL})
+	if len(allowedRefs) != 1 || allowedRefs[0] != candidate.SourceRef {
+		t.Fatalf("allowed refs = %#v, want safe candidate source ref %q", allowedRefs, candidate.SourceRef)
+	}
+}
+
+func TestCuriosityPressureHandoffFailureDoesNotRecordObservationRecorded(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, &curiosityRecordingTools{}, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	key := curiositySessionKey()
+	obs, err := store.RecordCuriosityObservation(key, session.CuriosityObservationInput{
+		LeaseID:     "lease-1",
+		CandidateID: "candidate-1",
+		SourceKind:  session.CuriositySourceWorkspace,
+		SourceRef:   "README.md",
+		SubjectKey:  "release-work",
+		Summary:     "README still mentions the release checklist.",
+		ContentHash: "sha256:abc",
+		Confidence:  0.8,
+		ObservedAt:  now,
+	}, now)
+	if err != nil {
+		t.Fatalf("RecordCuriosityObservation() err = %v", err)
+	}
+	db, err := sql.Open("sqlite3", store.DBPath())
+	if err != nil {
+		t.Fatalf("open sqlite side connection: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`DROP TABLE interior_signal_observations`); err != nil {
+		t.Fatalf("drop interior_signal_observations: %v", err)
+	}
+	err = rt.recordCuriosityPressureHandoff(key, obs, curiosityCandidate{
+		ID:             obs.CandidateID,
+		SourceKind:     obs.SourceKind,
+		SourceRef:      obs.SourceRef,
+		SubjectKey:     obs.SubjectKey,
+		SignalCategory: hiddenInputSemanticRecurrence,
+		ToolName:       "read_file",
+	}, now)
+	if err == nil {
+		t.Fatal("recordCuriosityPressureHandoff() err = nil, want pressure write failure")
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if testExecutionEventsContain(events, core.ExecutionEventCuriosityObservationRecorded) {
+		t.Fatalf("events = %#v, should not record observation_recorded after pressure failure", events)
+	}
+	if !testExecutionEventsContain(events, core.ExecutionEventCuriosityFailed) {
+		t.Fatalf("events = %#v, want curiosity failed event for pressure handoff", events)
 	}
 }
 
@@ -292,7 +405,7 @@ type curiosityToolCall struct {
 }
 
 func (t *curiosityRecordingTools) Definitions() []agent.ToolDef {
-	return []agent.ToolDef{{Name: "read_file"}, {Name: "exec"}}
+	return []agent.ToolDef{{Name: "read_file"}, {Name: "fetch_url"}, {Name: "exec"}}
 }
 
 func (t *curiosityRecordingTools) Execute(_ context.Context, _ string, _ json.RawMessage) (string, error) {
