@@ -15,7 +15,8 @@ type EffectAttemptStatus string
 
 const (
 	EffectAttemptStatusAttempted  EffectAttemptStatus = "attempted"
-	EffectAttemptStatusSucceeded  EffectAttemptStatus = "succeeded"
+	EffectAttemptStatusExecuted   EffectAttemptStatus = "executed"
+	EffectAttemptStatusSucceeded  EffectAttemptStatus = EffectAttemptStatusExecuted
 	EffectAttemptStatusFailed     EffectAttemptStatus = "failed"
 	EffectAttemptStatusUncertain  EffectAttemptStatus = "uncertain"
 	EffectAttemptStatusVerified   EffectAttemptStatus = "verified"
@@ -128,7 +129,9 @@ func NormalizeEffectAttemptInput(input EffectAttemptInput) EffectAttemptInput {
 
 func NormalizeEffectAttemptStatus(status EffectAttemptStatus) EffectAttemptStatus {
 	switch EffectAttemptStatus(strings.TrimSpace(string(status))) {
-	case EffectAttemptStatusSucceeded,
+	case "succeeded":
+		return EffectAttemptStatusExecuted
+	case EffectAttemptStatusExecuted,
 		EffectAttemptStatusFailed,
 		EffectAttemptStatusUncertain,
 		EffectAttemptStatusVerified,
@@ -151,7 +154,7 @@ func EffectAttemptStatusTerminal(status EffectAttemptStatus) bool {
 
 func EffectAttemptStatusRetryBlocking(status EffectAttemptStatus) bool {
 	switch NormalizeEffectAttemptStatus(status) {
-	case EffectAttemptStatusAttempted, EffectAttemptStatusSucceeded, EffectAttemptStatusUncertain:
+	case EffectAttemptStatusAttempted, EffectAttemptStatusExecuted, EffectAttemptStatusUncertain:
 		return true
 	default:
 		return false
@@ -168,7 +171,7 @@ func EffectAttemptHasSideEffects(attempt EffectAttempt) bool {
 
 func effectAttemptStatusCompleted(status EffectAttemptStatus) bool {
 	switch NormalizeEffectAttemptStatus(status) {
-	case EffectAttemptStatusSucceeded, EffectAttemptStatusFailed, EffectAttemptStatusUncertain, EffectAttemptStatusVerified, EffectAttemptStatusRejected, EffectAttemptStatusSuperseded:
+	case EffectAttemptStatusExecuted, EffectAttemptStatusFailed, EffectAttemptStatusUncertain, EffectAttemptStatusVerified, EffectAttemptStatusRejected, EffectAttemptStatusSuperseded:
 		return true
 	default:
 		return false

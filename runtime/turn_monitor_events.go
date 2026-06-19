@@ -110,7 +110,7 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 	if effect := execEffectPayload(name, input); len(effect) > 0 {
 		payload["exec_effect"] = effect
 	}
-	statusForAttempt := session.EffectAttemptStatusSucceeded
+	statusForAttempt := session.EffectAttemptStatusExecuted
 	if err != nil {
 		statusForAttempt = session.EffectAttemptStatusFailed
 	}

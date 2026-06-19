@@ -6,18 +6,26 @@ lifecycle, not as prose recovered from a transcript.
 An effect attempt is the runtime-owned fact that a side effect may have happened:
 
 ```text
-attempted -> succeeded | failed | uncertain -> verified | rejected | superseded
+attempted -> executed | failed | uncertain -> verified | rejected | superseded
 ```
 
 This is retry safety, not universal exactly-once execution. Aphelion may not
 know whether a mutation succeeded, but it must durably know that it may have
 happened and must verify or ask before retrying it.
 
+`executed` means only that the executor returned without an error for the
+side-effecting command. It is still retry-blocking until a verifier or explicit
+resolution promotes it to `verified`, `rejected`, or `superseded`. Older
+`succeeded` rows are normalized to `executed` when read.
+
 ## Boundary
 
 - `commandeffect` classifies the command effect.
 - `effectauth` decides whether current authority permits the effect.
 - `session.effect_attempts` records the attempt lifecycle and evidence refs.
+- Tool monitors write an `attempted` row when side-effecting `exec` starts, so a
+  crash between dispatch and finish still leaves durable evidence that the
+  mutation may have happened.
 - Runtime completion and retry decisions consult effect attempts before
   projection fields such as `WorkResult.Commands`, patch previews, summaries, or
   raw `exec_effect` event payloads.

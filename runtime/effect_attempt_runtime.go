@@ -5,6 +5,7 @@ package runtime
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -14,13 +15,29 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
-func (r *Runtime) recordWorkResultEffectAttempts(key session.SessionKey, req WorkRequest, result WorkResult, cause error, startedAt time.Time, completedAt time.Time) []session.EffectAttempt {
+type effectAttemptRecordError struct {
+	Cause error
+}
+
+func (e effectAttemptRecordError) Error() string {
+	if e.Cause == nil {
+		return "effect attempt ledger write failed"
+	}
+	return "effect attempt ledger write failed: " + e.Cause.Error()
+}
+
+func (e effectAttemptRecordError) Unwrap() error {
+	return e.Cause
+}
+
+func (r *Runtime) recordWorkResultEffectAttempts(key session.SessionKey, req WorkRequest, result WorkResult, cause error, startedAt time.Time, completedAt time.Time) ([]session.EffectAttempt, error) {
 	if r == nil || r.store == nil {
-		return nil
+		return nil, nil
 	}
 	if completedAt.IsZero() {
 		completedAt = time.Now().UTC()
 	}
+	existingByCommandHash := r.effectAttemptIDsByTurnCommandHash(key, result.TurnRunID)
 	phaseID := effectAttemptPhaseID(req)
 	commands := append([]string(nil), result.Commands...)
 	for _, event := range result.CodexEvents {
@@ -31,6 +48,7 @@ func (r *Runtime) recordWorkResultEffectAttempts(key session.SessionKey, req Wor
 		}
 	}
 	var attempts []session.EffectAttempt
+	var writeErr error
 	for _, command := range commands {
 		rawCommand := strings.TrimSpace(command)
 		command = commandeffect.NormalizeCommand(rawCommand)
@@ -41,7 +59,7 @@ func (r *Runtime) recordWorkResultEffectAttempts(key session.SessionKey, req Wor
 		if !effect.SideEffects {
 			continue
 		}
-		status := session.EffectAttemptStatusSucceeded
+		status := session.EffectAttemptStatusExecuted
 		errorText := ""
 		if cause != nil {
 			status = session.EffectAttemptStatusUncertain
@@ -51,8 +69,14 @@ func (r *Runtime) recordWorkResultEffectAttempts(key session.SessionKey, req Wor
 		if boundary, ok := commandeffect.BoundaryForCommand(rawCommand); ok {
 			boundaryKind = string(boundary.Kind)
 		}
+		attemptID := workEffectAttemptID(key, req, command)
+		if result.TurnRunID > 0 {
+			if existingID := strings.TrimSpace(existingByCommandHash[session.EffectAttemptCommandHash(command)]); existingID != "" {
+				attemptID = existingID
+			}
+		}
 		attempt, err := r.store.UpsertEffectAttempt(session.EffectAttemptInput{
-			AttemptID:    workEffectAttemptID(key, req, command),
+			AttemptID:    attemptID,
 			Key:          key,
 			TurnRunID:    result.TurnRunID,
 			OperationID:  firstNonEmptyContinuation(req.OperationID, req.Operation.ID),
@@ -76,11 +100,40 @@ func (r *Runtime) recordWorkResultEffectAttempts(key session.SessionKey, req Wor
 		})
 		if err != nil {
 			log.Printf("WARN record work effect attempt failed chat_id=%d command=%q err=%v", key.ChatID, command, err)
+			writeErr = errors.Join(writeErr, err)
 			continue
 		}
 		attempts = append(attempts, attempt)
 	}
-	return attempts
+	if writeErr != nil {
+		return attempts, effectAttemptRecordError{Cause: writeErr}
+	}
+	return attempts, nil
+}
+
+func (r *Runtime) effectAttemptIDsByTurnCommandHash(key session.SessionKey, turnRunID int64) map[string]string {
+	if r == nil || r.store == nil || turnRunID <= 0 {
+		return nil
+	}
+	existing, err := r.store.EffectAttemptsByTurnRun(key, turnRunID)
+	if err != nil {
+		log.Printf("WARN read turn effect attempts failed chat_id=%d turn_run_id=%d err=%v", key.ChatID, turnRunID, err)
+		return nil
+	}
+	out := make(map[string]string, len(existing))
+	for _, attempt := range existing {
+		if strings.TrimSpace(attempt.AttemptID) == "" || !session.EffectAttemptHasSideEffects(attempt) {
+			continue
+		}
+		hash := strings.TrimSpace(attempt.CommandHash)
+		if hash == "" {
+			hash = session.EffectAttemptCommandHash(attempt.Command)
+		}
+		if hash != "" {
+			out[hash] = attempt.AttemptID
+		}
+	}
+	return out
 }
 
 func (r *Runtime) attachEffectAttemptsToWorkResult(key session.SessionKey, req WorkRequest, result *WorkResult) {

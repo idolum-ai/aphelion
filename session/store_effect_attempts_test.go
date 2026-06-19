@@ -36,7 +36,7 @@ func TestEffectAttemptUpsertIsIdempotentAndDedupeEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertEffectAttempt(first) err = %v", err)
 	}
-	input.Status = EffectAttemptStatusSucceeded
+	input.Status = EffectAttemptStatusExecuted
 	input.EvidenceRefs = []string{"turn_run:11", "execution_event:2"}
 	input.CompletedAt = now.Add(time.Second)
 	second, err := store.UpsertEffectAttempt(input)
@@ -46,8 +46,8 @@ func TestEffectAttemptUpsertIsIdempotentAndDedupeEvidence(t *testing.T) {
 	if first.AttemptID != second.AttemptID {
 		t.Fatalf("attempt id changed from %q to %q", first.AttemptID, second.AttemptID)
 	}
-	if second.Status != EffectAttemptStatusSucceeded || second.CompletedAt.IsZero() {
-		t.Fatalf("attempt = %#v, want succeeded with completion timestamp", second)
+	if second.Status != EffectAttemptStatusExecuted || second.CompletedAt.IsZero() {
+		t.Fatalf("attempt = %#v, want executed with completion timestamp", second)
 	}
 	if len(second.EvidenceRefs) != 2 {
 		t.Fatalf("evidence refs = %#v, want deduped two refs", second.EvidenceRefs)
@@ -82,7 +82,7 @@ func TestEffectAttemptTerminalStatusIsSticky(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertEffectAttempt(verified) err = %v", err)
 	}
-	input.Status = EffectAttemptStatusSucceeded
+	input.Status = EffectAttemptStatusExecuted
 	input.ErrorText = "late replay"
 	got, err := store.UpsertEffectAttempt(input)
 	if err != nil {

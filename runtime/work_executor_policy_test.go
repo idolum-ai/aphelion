@@ -4,7 +4,9 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -288,7 +290,10 @@ func TestRecordWorkResultEffectAttemptClassifiesRedirectedCommit(t *testing.T) {
 	command := `set -euo pipefail
 git commit -m "Add evidence" >/tmp/out
 cat /tmp/out`
-	attempts := rt.recordWorkResultEffectAttempts(key, req, WorkResult{ExecutorName: "native", Commands: []string{command}}, nil, now, now.Add(time.Second))
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, WorkResult{ExecutorName: "native", Commands: []string{command}}, nil, now, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = %v", err)
+	}
 	if len(attempts) != 1 {
 		t.Fatalf("attempts = %#v, want one redirected commit attempt", attempts)
 	}
@@ -297,6 +302,100 @@ cat /tmp/out`
 	}
 	if attempts[0].PhaseID != "phase-commit" || attempts[0].LeaseID != "lease-effect-commit" {
 		t.Fatalf("attempt scope = phase %q lease %q, want phase/lease context", attempts[0].PhaseID, attempts[0].LeaseID)
+	}
+}
+
+func TestExecEffectAttemptIsWrittenAheadOnToolStart(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7004, UserID: 0, Scope: telegramDMScopeRef(7004)}
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "run command", nil, nil, core.InboundMessage{})
+	if err != nil {
+		t.Fatalf("startTurnMonitor() err = %v", err)
+	}
+	defer monitor.Finish(context.Background(), context.Canceled)
+
+	command := "git push origin main"
+	monitor.ToolStarted(context.Background(), "exec", json.RawMessage(fmt.Sprintf(`{"cmd":%q}`, command)))
+
+	attempts, err := store.EffectAttemptsByTurnRun(key, monitor.runID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsByTurnRun() err = %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one write-ahead attempt", attempts)
+	}
+	if attempts[0].Status != session.EffectAttemptStatusAttempted || attempts[0].CompletedAt.IsZero() == false {
+		t.Fatalf("attempt = %#v, want attempted without completion", attempts[0])
+	}
+}
+
+func TestWorkResultEffectAttemptConvergesWithMonitorStartRow(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7005, UserID: 0, Scope: telegramDMScopeRef(7005)}
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "run command", nil, nil, core.InboundMessage{})
+	if err != nil {
+		t.Fatalf("startTurnMonitor() err = %v", err)
+	}
+	defer monitor.Finish(context.Background(), nil)
+
+	command := "gh pr create --base main --head fix/effect-attempt-ledger --fill"
+	monitor.ToolStarted(context.Background(), "exec", json.RawMessage(fmt.Sprintf(`{"command":%q}`, command)))
+	before, err := store.EffectAttemptsByTurnRun(key, monitor.runID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsByTurnRun(before) err = %v", err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("before attempts = %#v, want one monitor attempt", before)
+	}
+
+	req := WorkRequest{
+		OperationID: "op-effect-converge",
+		Mode:        WorkModeCommit,
+		LeaseID:     "lease-effect-converge",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-converge", RiskClass: "commit"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-converge",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-effect-converge",
+				LeaseID: "lease-effect-converge",
+			}}},
+		},
+	}
+	now := time.Now().UTC()
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, WorkResult{ExecutorName: "native", TurnRunID: monitor.runID, Commands: []string{command}}, nil, now, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one projected attempt", attempts)
+	}
+	if attempts[0].AttemptID != before[0].AttemptID {
+		t.Fatalf("attempt id = %s, want monitor id %s", attempts[0].AttemptID, before[0].AttemptID)
+	}
+	after, err := store.EffectAttemptsByTurnRun(key, monitor.runID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsByTurnRun(after) err = %v", err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("after attempts = %#v, want one converged row", after)
+	}
+	if after[0].OperationID != "op-effect-converge" || after[0].PhaseID != "phase-effect-converge" || after[0].Status != session.EffectAttemptStatusExecuted {
+		t.Fatalf("after attempt = %#v, want work metadata and executed status", after[0])
 	}
 }
 

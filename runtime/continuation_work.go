@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -605,7 +606,10 @@ func (r *Runtime) runReservedApprovedWorkContinuation(ctx context.Context, key s
 	result, err := r.workExecutor.Run(ctx, req)
 	workFinishedAt := time.Now().UTC()
 	status := r.workExecutor.Status()
-	r.recordWorkResultEffectAttempts(key, req, result, err, workStartedAt, workFinishedAt)
+	_, effectRecordErr := r.recordWorkResultEffectAttempts(key, req, result, err, workStartedAt, workFinishedAt)
+	if effectRecordErr != nil && err == nil {
+		err = effectRecordErr
+	}
 	r.attachEffectAttemptsToWorkResult(key, req, &result)
 	if err == nil && workResultBudgetRecoveryScheduled(result) {
 		artifact := r.persistWorkResultForContinuation(key, req, result, status, nil)
@@ -665,6 +669,11 @@ func (r *Runtime) runReservedApprovedWorkContinuation(ctx context.Context, key s
 			payload["artifact_ref"] = artifact.Ref
 		}
 		r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorFailed, "work", "failed", payload, time.Now().UTC())
+		var effectWriteErr effectAttemptRecordError
+		if errors.As(err, &effectWriteErr) {
+			r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "effect_attempt_record_failed", payload, time.Now().UTC())
+			return err
+		}
 		if unresolved := r.unresolvedEffectAttemptsForRequest(key, req); len(unresolved) > 0 {
 			payload["effect_attempts_unresolved"] = len(unresolved)
 			r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "effect_attempt_unresolved", payload, time.Now().UTC())
