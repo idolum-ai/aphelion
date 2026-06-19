@@ -5,6 +5,7 @@ package runtime
 import (
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
@@ -63,7 +64,7 @@ func recoveryRequestExplicitlySelectsCandidate(request string, candidate string)
 	if recoveryRequestNegatesResumeIntent(lower) || !recoveryRequestHasResumeIntent(lower) {
 		return false
 	}
-	return continuationCandidateTextMatchesWorkingObjective(candidate, request)
+	return recoverySelectionTextMatchesCandidate(request, candidate)
 }
 
 func recoveryRequestHasResumeIntent(lower string) bool {
@@ -95,6 +96,117 @@ func recoveryRequestNegatesResumeIntent(lower string) bool {
 		}
 	}
 	return false
+}
+
+func recoverySelectionTextMatchesCandidate(request string, candidate string) bool {
+	requestTokens := recoverySelectionTokens(request)
+	if len(requestTokens) == 0 {
+		return false
+	}
+	candidateTokens := recoverySelectionTokens(candidate)
+	if len(candidateTokens) == 0 {
+		return false
+	}
+	for token := range requestTokens {
+		if _, ok := candidateTokens[token]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func recoverySelectionTokens(text string) map[string]struct{} {
+	words := recoverySelectionWords(text)
+	tokens := map[string]struct{}{}
+	add := func(token string) {
+		token = strings.TrimSpace(strings.ToLower(token))
+		if token != "" {
+			tokens[token] = struct{}{}
+		}
+	}
+	for i, word := range words {
+		if recoverySelectionWordSignificant(word) {
+			add(word)
+		}
+		if i > 0 && recoverySelectionWordsFormIdentifier(words[i-1], word) {
+			add(words[i-1] + ":" + word)
+		}
+	}
+	return tokens
+}
+
+func recoverySelectionWords(text string) []string {
+	var words []string
+	var b strings.Builder
+	flush := func() {
+		word := strings.ToLower(strings.TrimSpace(b.String()))
+		b.Reset()
+		if word != "" {
+			words = append(words, word)
+		}
+	}
+	for _, r := range text {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(unicode.ToLower(r))
+			continue
+		}
+		flush()
+	}
+	flush()
+	return words
+}
+
+func recoverySelectionWordSignificant(word string) bool {
+	word = strings.ToLower(strings.TrimSpace(word))
+	if word == "" || recoverySelectionStopword(word) {
+		return false
+	}
+	if len(word) >= 4 || recoverySelectionIdentifierWord(word) {
+		return true
+	}
+	return false
+}
+
+func recoverySelectionWordsFormIdentifier(left string, right string) bool {
+	left = strings.ToLower(strings.TrimSpace(left))
+	right = strings.ToLower(strings.TrimSpace(right))
+	if left == "" || right == "" {
+		return false
+	}
+	if (left == "pr" || left == "issue" || left == "gh") && recoverySelectionHasDigit(right) {
+		return true
+	}
+	return false
+}
+
+func recoverySelectionIdentifierWord(word string) bool {
+	switch strings.ToLower(strings.TrimSpace(word)) {
+	case "pr", "gh":
+		return false
+	default:
+		return recoverySelectionHasDigit(word)
+	}
+}
+
+func recoverySelectionHasDigit(word string) bool {
+	for _, r := range word {
+		if unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
+}
+
+func recoverySelectionStopword(word string) bool {
+	if continuationCandidateStopword(word) {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(word)) {
+	case "now", "old", "back", "that", "this", "there", "here", "please":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *Runtime) recordSuppressedRecoveryCandidate(key session.SessionKey, opState session.OperationState, decision recoveryCandidateArbitration, surface string, now time.Time) {

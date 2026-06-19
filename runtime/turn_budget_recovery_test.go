@@ -545,7 +545,7 @@ func TestBudgetRecoveryScopeUsesCurrentRequestWhenStoredOperationConflictsWithWo
 
 	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
 	key := session.SessionKey{ChatID: 9746, UserID: 0, Scope: telegramDMScopeRef(9746)}
-	msg := core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "The Imexx PDF still is not visible. Stay on the file delivery task.", MessageID: 53}
+	msg := core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "The Imexx PDF still is not visible. Stay on the file delivery task.", MessageID: 53, Timestamp: now}
 	stale := budgetRecoveryTestOperationState()
 	stale.ID = "stale-pr-review"
 	stale.Objective = "Review PR #220 and repair the stale Aphelion continuation prompt."
@@ -581,6 +581,16 @@ func TestBudgetRecoveryScopeUsesCurrentRequestWhenStoredOperationConflictsWithWo
 	if got, want := payload["working_objective"], "Deliver the Imexx PDF file in the active conversation."; got != want {
 		t.Fatalf("payload working_objective = %#v, want %q", got, want)
 	}
+	events, err := store.LatestExecutionEventsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("LatestExecutionEventsBySession() err = %v", err)
+	}
+	if !budgetRecoveryEventPayloadContains(events, core.ExecutionEventRecoveryCandidateSuppressed, "surface", "budget_recovery") {
+		t.Fatalf("events = %#v, want unified budget recovery suppression event", events)
+	}
+	if !budgetRecoveryEventPayloadContains(events, core.ExecutionEventRecoveryCandidateSuppressed, "reason", recoveryCandidateReasonStaleVsWorkingObjective) {
+		t.Fatalf("events = %#v, want stale working-objective suppression reason", events)
+	}
 }
 
 func TestBudgetRecoveryScopeAllowsExplicitResumeOfStoredOperation(t *testing.T) {
@@ -592,7 +602,7 @@ func TestBudgetRecoveryScopeAllowsExplicitResumeOfStoredOperation(t *testing.T) 
 
 	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
 	key := session.SessionKey{ChatID: 9747, UserID: 0, Scope: telegramDMScopeRef(9747)}
-	msg := core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "Resume PR 220 review now.", MessageID: 54}
+	msg := core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "Resume PR 220 review now.", MessageID: 54, Timestamp: now}
 	stored := budgetRecoveryTestOperationState()
 	stored.ID = "stale-pr-review"
 	stored.Objective = "Review PR 220 and repair the stale Aphelion continuation prompt."
@@ -636,7 +646,7 @@ func TestBudgetRecoveryScopeDoesNotTreatNegatedResumeAsExplicitSelection(t *test
 
 	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
 	key := session.SessionKey{ChatID: 9748, UserID: 0, Scope: telegramDMScopeRef(9748)}
-	msg := core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "Do not continue PR 220; stay on the Imexx PDF.", MessageID: 55}
+	msg := core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "Do not continue PR 220; stay on the Imexx PDF.", MessageID: 55, Timestamp: now}
 	stored := budgetRecoveryTestOperationState()
 	stored.ID = "stale-pr-review"
 	stored.Objective = "Review PR 220 and repair the stale Aphelion continuation prompt."

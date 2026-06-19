@@ -44,12 +44,15 @@ func (r *Runtime) operationContinuationCandidateViability(key session.SessionKey
 	}
 	return continuationCandidateViability{
 		Live:               false,
-		Reason:             "stale_vs_working_objective",
+		Reason:             recoveryCandidateReasonStaleVsWorkingObjective,
 		WorkingObjective:   working.Objective,
 		CandidateObjective: firstNonEmptyContinuation(opState.Objective, opState.Summary, opState.PhasePlan.Goal, opState.Proposal.Summary),
 	}
 }
 
+// Working objectives are allowed to suppress stale durable candidates only while
+// they are fresh, high-confidence current intent. Older objectives become
+// background evidence again so the operator is not trapped by stale suppression.
 func workingObjectiveCanSuppressContinuationCandidate(working session.WorkingObjective, now time.Time) bool {
 	if strings.TrimSpace(working.Objective) == "" {
 		return false

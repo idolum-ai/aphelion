@@ -317,7 +317,9 @@ func (r *Runtime) turnBudgetRecoveryScope(key session.SessionKey, msg core.Inbou
 		}
 	}
 	if operationStateRecoverableForBudgetRecovery(opState) {
-		if decision := r.operationRecoveryCandidateArbitration(key, msg, opState, turnBudgetRecoveryArbitrationTime(msg)); !decision.Live {
+		arbitrationAt := turnBudgetRecoveryArbitrationTime(msg)
+		if decision := r.operationRecoveryCandidateArbitration(key, msg, opState, arbitrationAt); !decision.Live {
+			r.recordSuppressedRecoveryCandidate(key, opState, decision, "budget_recovery", arbitrationAt)
 			scope, payload := turnBudgetRecoveryRequestScope(key, msg)
 			payload["recovery_arbitration"] = "use_current_request"
 			for field, value := range recoveryCandidateSuppressedPayload(opState, decision, "budget_recovery") {
