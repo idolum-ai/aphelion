@@ -90,6 +90,41 @@ func TestAuthorizeCommandAllowsGitPushOnlyWhenEnvelopeAllowsGitPush(t *testing.T
 	}
 }
 
+func TestRepoPublicationEnvelopeDoesNotAuthorizeExternalAccountMutation(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	state := testContinuationState("repo_publication", []string{"git_push", "report_push_evidence"}, false, now)
+	state.ContinuationLease.LeaseClass = session.ContinuationLeaseClassRepoPublication
+
+	push := AuthorizeCommand(CommandRequest{
+		State:   state,
+		Command: "git push origin release/v0.2.9",
+		Now:     now,
+	})
+	if !push.Active || !push.Boundary || !push.Allowed {
+		t.Fatalf("push decision = %#v, want git push allowed by repo-publication envelope", push)
+	}
+	if push.RequiredAction != "git_push" {
+		t.Fatalf("push required action = %q, want git_push", push.RequiredAction)
+	}
+
+	pr := AuthorizeCommand(CommandRequest{
+		State:   state,
+		Command: "gh pr create --base main --head release/v0.2.9 --title test --body test",
+		Now:     now,
+	})
+	if !pr.Active || !pr.Boundary || pr.Allowed {
+		t.Fatalf("pr decision = %#v, want external-account command rejected by repo-publication envelope", pr)
+	}
+	if pr.RequiredAction != "github_pr_create" {
+		t.Fatalf("pr required action = %q, want github_pr_create", pr.RequiredAction)
+	}
+	if pr.Reason != "external_effect_missing_capability_grant" {
+		t.Fatalf("pr reason = %q, want external_effect_missing_capability_grant", pr.Reason)
+	}
+}
+
 func TestAuthorizeWorkModeCommandFallsBackWithoutActiveEnvelope(t *testing.T) {
 	t.Parallel()
 

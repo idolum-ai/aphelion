@@ -464,6 +464,33 @@ func TestAuthorityContractCompilerRejectsPushProseForbiddenGitPush(t *testing.T)
 	}
 }
 
+func TestAuthorityContractCompilerPushNegationIsClauseScoped(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+		want bool
+	}{
+		{name: "negated same clause", text: "Do not push the release branch to origin.", want: false},
+		{name: "without same clause", text: "Commit locally without pushing the release branch to origin.", want: false},
+		{name: "separate semicolon clause", text: "Do not commit yet; push the release branch to origin.", want: true},
+		{name: "separate sentence", text: "Do not commit yet. Push the release branch to origin.", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proposal := ReconcileActionProposalAuthority(ActionProposal{
+				RiskClass:        "commit",
+				Summary:          tc.text,
+				BoundedEffect:    "Act only on the stated repository step.",
+				AllowedActions:   []string{"git_commit"},
+				ForbiddenActions: []string{"deploy", "restart_service"},
+			})
+			got := actionListMatches(proposal.AllowedActions, "git_push")
+			if got != tc.want {
+				t.Fatalf("allowed_actions = %#v, git_push=%v want %v", proposal.AllowedActions, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAuthorityContractCompilerDoesNotInferFigurativePush(t *testing.T) {
 	for _, tc := range []struct {
 		name          string

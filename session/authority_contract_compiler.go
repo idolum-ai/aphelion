@@ -14,6 +14,8 @@ const (
 	AuthorityContractCompilationStatusInvalid AuthorityContractCompilationStatus = "invalid"
 )
 
+const authorityClauseBoundaryToken = "\x00authority_clause_boundary"
+
 type AuthorityContradictionSeverity string
 
 const (
@@ -323,14 +325,8 @@ func authorityTextImpliesGitPush(text string) bool {
 		if authorityPushMentionNegated(tokens, i) {
 			continue
 		}
-		start := i - 8
-		if start < 0 {
-			start = 0
-		}
-		end := i + 9
-		if end > len(tokens) {
-			end = len(tokens)
-		}
+		start := authorityClauseBoundedWindowStart(tokens, i, 8)
+		end := authorityClauseBoundedWindowEnd(tokens, i, 8)
 		for j := start; j < end; j++ {
 			if j == i {
 				continue
@@ -344,10 +340,7 @@ func authorityTextImpliesGitPush(text string) bool {
 }
 
 func authorityPushMentionNegated(tokens []string, idx int) bool {
-	start := idx - 4
-	if start < 0 {
-		start = 0
-	}
+	start := authorityClauseBoundedWindowStart(tokens, idx, 4)
 	for i := start; i < idx; i++ {
 		switch tokens[i] {
 		case "no", "not", "without", "never", "avoid", "avoids", "forbid", "forbidden", "forbids", "prohibit", "prohibited", "deny", "denies":
@@ -355,6 +348,38 @@ func authorityPushMentionNegated(tokens []string, idx int) bool {
 		}
 	}
 	return false
+}
+
+func authorityClauseBoundedWindowStart(tokens []string, idx int, width int) int {
+	if width < 0 {
+		width = 0
+	}
+	start := idx - width
+	if start < 0 {
+		start = 0
+	}
+	for i := idx - 1; i >= start; i-- {
+		if tokens[i] == authorityClauseBoundaryToken {
+			return i + 1
+		}
+	}
+	return start
+}
+
+func authorityClauseBoundedWindowEnd(tokens []string, idx int, width int) int {
+	if width < 0 {
+		width = 0
+	}
+	end := idx + width + 1
+	if end > len(tokens) {
+		end = len(tokens)
+	}
+	for i := idx + 1; i < end; i++ {
+		if tokens[i] == authorityClauseBoundaryToken {
+			return i
+		}
+	}
+	return end
 }
 
 func authorityTextTokens(text string) []string {
@@ -373,6 +398,12 @@ func authorityTextTokens(text string) []string {
 			continue
 		}
 		flush()
+		switch r {
+		case '.', ';', ':', '!', '?', '\n', '\r':
+			if len(out) == 0 || out[len(out)-1] != authorityClauseBoundaryToken {
+				out = append(out, authorityClauseBoundaryToken)
+			}
+		}
 	}
 	flush()
 	return out
