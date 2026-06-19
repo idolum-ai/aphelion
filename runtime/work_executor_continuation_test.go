@@ -543,10 +543,10 @@ func TestStartupRepairRevokesStaleDuplicateCompletedPhaseApproval(t *testing.T) 
 
 	now := time.Now().UTC()
 	key := session.SessionKey{ChatID: 8193, UserID: 0, Scope: telegramDMScopeRef(8193)}
-	duplicateID := "phase-stale-duplicate-op-commit-push"
+	duplicateID := "phase-stale-duplicate-op-commit"
 	opState := session.OperationState{
 		ID:        "stale-duplicate-op",
-		Objective: "Commit and push the branch, then review the result.",
+		Objective: "Commit the branch, then review the result.",
 		Status:    session.OperationStatusBlocked,
 		Stage:     "plan_lease_approval",
 		PhasePlan: session.OperationPhasePlan{
@@ -555,19 +555,19 @@ func TestStartupRepairRevokesStaleDuplicateCompletedPhaseApproval(t *testing.T) 
 			CurrentPhaseID: duplicateID,
 			Phases: []session.OperationPhase{
 				{
-					ID:             "commit-push",
-					Summary:        "Commit and push inspected planning changes",
+					ID:             "commit",
+					Summary:        "Commit inspected planning changes",
 					Status:         session.PlanStatusCompleted,
 					AuthorityClass: "commit",
 					CompletedAt:    now.Add(-10 * time.Minute),
 				},
 				{
 					ID:               duplicateID,
-					Summary:          "Commit and push inspected planning changes",
+					Summary:          "Commit inspected planning changes",
 					Status:           session.PlanStatusPending,
 					AuthorityClass:   "commit",
-					BoundedEffect:    "Re-offered duplicate of already completed commit/push work.",
-					AllowedActions:   []string{"git_commit", "git_push", "report_commit_evidence"},
+					BoundedEffect:    "Re-offered duplicate of already completed commit work.",
+					AllowedActions:   []string{"git_commit", "report_commit_evidence"},
 					ForbiddenActions: []string{"deploy_or_restart"},
 					RequiresApproval: true,
 				},

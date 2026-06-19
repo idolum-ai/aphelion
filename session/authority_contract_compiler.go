@@ -2,7 +2,10 @@
 
 package session
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 type AuthorityContractCompilationStatus string
 
@@ -16,6 +19,8 @@ type AuthorityContradictionSeverity string
 const (
 	AuthorityContradictionSeverityInvalid AuthorityContradictionSeverity = "invalid"
 )
+
+const AuthorityContradictionReasonProposalRequiresForbiddenGitPush = "proposal_requires_forbidden_git_push"
 
 type AuthorityContradiction struct {
 	AllowedAction   string                         `json:"allowed_action,omitempty"`
@@ -36,6 +41,7 @@ type AuthorityContractCompilation struct {
 }
 
 func CompileActionProposalAuthorityContract(proposal ActionProposal) AuthorityContractCompilation {
+	proposal = ReconcileActionProposalAuthority(proposal)
 	riskClass := normalizeEnumValue(proposal.RiskClass)
 	boundedEffect := strings.TrimSpace(proposal.BoundedEffect)
 	allowedActions := normalizeActionStringSlice(proposal.AllowedActions)
@@ -53,12 +59,21 @@ func CompileActionProposalAuthorityContract(proposal ActionProposal) AuthorityCo
 	} else {
 		compilation.WorkAction = strongestAuthorityWorkActionForAllowedActions(compilation.AllowedActions)
 	}
-	compilation.Contradictions = authorityContractContradictions(compilation.AllowedActions, compilation.ForbiddenActions)
+	compilation.Contradictions = append(proposalGitPushContradictions(proposal), authorityContractContradictions(compilation.AllowedActions, compilation.ForbiddenActions)...)
 	if len(compilation.Contradictions) > 0 {
 		compilation.Status = AuthorityContractCompilationStatusInvalid
 		compilation.SuggestedRepair = "request_fresh_narrower_proposal"
 	}
 	return normalizeAuthorityContractCompilation(compilation)
+}
+
+func ReconcileActionProposalAuthority(proposal ActionProposal) ActionProposal {
+	proposal.AllowedActions = normalizeActionStringSlice(proposal.AllowedActions)
+	proposal.ForbiddenActions = normalizeActionStringSlice(proposal.ForbiddenActions)
+	if actionProposalRequiresGitPush(proposal) && !actionProposalForbidsGitPush(proposal.ForbiddenActions) {
+		proposal.AllowedActions = normalizeActionStringSlice(append(proposal.AllowedActions, "git_push"))
+	}
+	return proposal
 }
 
 func authorityContractForCompilation(riskClass string, allowedActions []string, forbiddenActions []string, boundedEffect string) (AuthorityContract, bool) {
@@ -182,6 +197,17 @@ func authorityContractContradictions(allowedActions []string, forbiddenActions [
 	return out
 }
 
+func proposalGitPushContradictions(proposal ActionProposal) []AuthorityContradiction {
+	if !actionProposalRequiresGitPush(proposal) {
+		return nil
+	}
+	forbidden := firstActionProposalGitPushForbiddenAction(proposal.ForbiddenActions)
+	if forbidden == "" {
+		return nil
+	}
+	return []AuthorityContradiction{authorityContradiction("git_push", forbidden, AuthorityWorkActionCommit, AuthorityContradictionReasonProposalRequiresForbiddenGitPush)}
+}
+
 func authorityContradiction(allowedAction string, forbiddenAction string, workAction string, reason string) AuthorityContradiction {
 	return AuthorityContradiction{
 		AllowedAction:   strings.TrimSpace(allowedAction),
@@ -211,9 +237,9 @@ func authorityWorkActionForAllowedToken(value string) string {
 		return strings.TrimSpace(contract.WorkAction)
 	}
 	switch token {
-	case "deploy", "live_deploy", "run_deploy", "system_change", "restart", "restart_service", "service_restart", "restart_aphelion_service", "systemctl_restart", "install_user_service", "make_install_user_service", "run_verify_deploy", "git_push", "push_remote":
+	case "deploy", "live_deploy", "run_deploy", "system_change", "restart", "restart_service", "service_restart", "restart_aphelion_service", "systemctl_restart", "install_user_service", "make_install_user_service", "run_verify_deploy":
 		return AuthorityWorkActionDeploy
-	case "commit", "git_commit", "repo_history_mutation", "git_commit_validated_slices", "workspace_commit", "workspace_commit_then_repo_write_bounded":
+	case "commit", "git_commit", "repo_history_mutation", "git_commit_validated_slices", "workspace_commit", "workspace_commit_then_repo_write_bounded", "git_push", "push_remote":
 		return AuthorityWorkActionCommit
 	case "workspace_write", "workspace", "code", "code_change", "code_changes", "repo_edit", "edit", "edit_files", "patch", "patch_code", "run_tests", "test", "tests", "focused_tests", "git_diff_check", "edit_repo_code", "run_go_tests", "git_status", "git_diff":
 		return AuthorityWorkActionWorkspaceWrite
@@ -221,9 +247,9 @@ func authorityWorkActionForAllowedToken(value string) string {
 		return AuthorityWorkActionReadOnly
 	default:
 		switch {
-		case strings.HasPrefix(token, "deploy"), strings.HasPrefix(token, "live_deploy"), strings.HasPrefix(token, "run_deploy"), strings.HasPrefix(token, "system_change"), strings.HasPrefix(token, "restart"), strings.HasPrefix(token, "service_restart"), strings.HasPrefix(token, "git_push"), strings.HasPrefix(token, "push_remote"):
+		case strings.HasPrefix(token, "deploy"), strings.HasPrefix(token, "live_deploy"), strings.HasPrefix(token, "run_deploy"), strings.HasPrefix(token, "system_change"), strings.HasPrefix(token, "restart"), strings.HasPrefix(token, "service_restart"):
 			return AuthorityWorkActionDeploy
-		case strings.HasPrefix(token, "commit"), strings.HasPrefix(token, "git_commit"), strings.HasPrefix(token, "repo_history_mutation"), strings.HasPrefix(token, "workspace_commit"):
+		case strings.HasPrefix(token, "commit"), strings.HasPrefix(token, "git_commit"), strings.HasPrefix(token, "repo_history_mutation"), strings.HasPrefix(token, "workspace_commit"), strings.HasPrefix(token, "git_push"), strings.HasPrefix(token, "push_remote"):
 			return AuthorityWorkActionCommit
 		case strings.HasPrefix(token, "workspace_write"), strings.HasPrefix(token, "workspace"), strings.HasPrefix(token, "code_change"), strings.HasPrefix(token, "edit_files"), strings.HasPrefix(token, "patch"), strings.HasPrefix(token, "run_tests"):
 			return AuthorityWorkActionWorkspaceWrite
@@ -232,6 +258,121 @@ func authorityWorkActionForAllowedToken(value string) string {
 		default:
 			return ""
 		}
+	}
+}
+
+func actionProposalRequiresGitPush(proposal ActionProposal) bool {
+	for _, action := range proposal.AllowedActions {
+		if authorityTokenImpliesGitPush(action) {
+			return true
+		}
+	}
+	return authorityTextImpliesGitPush(strings.Join([]string{
+		proposal.OperatorTitle,
+		proposal.PlanTitle,
+		proposal.Summary,
+		proposal.WhyNow,
+		proposal.BoundedEffect,
+	}, "\n"))
+}
+
+func actionProposalForbidsGitPush(actions []string) bool {
+	return firstActionProposalGitPushForbiddenAction(actions) != ""
+}
+
+func firstActionProposalGitPushForbiddenAction(actions []string) string {
+	for _, action := range actions {
+		if authorityTokenImpliesGitPush(action) {
+			return strings.TrimSpace(action)
+		}
+	}
+	return ""
+}
+
+func authorityTokenImpliesGitPush(value string) bool {
+	token := normalizeAuthorityMatchText(value)
+	switch token {
+	case "git_push", "push_remote", "push_branch", "push_branches", "push_to_origin", "push_to_remote", "push_main_to_origin", "push_current_branch", "push_existing_commit", "git_push_to_pr_branch", "push_pr_branch":
+		return true
+	}
+	if strings.HasPrefix(token, "git_push") || strings.HasPrefix(token, "push_remote") {
+		return true
+	}
+	if strings.Contains(token, "push") {
+		for _, marker := range []string{"origin", "remote", "branch", "repo", "repository", "github", "upstream"} {
+			if strings.Contains(token, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func authorityTextImpliesGitPush(text string) bool {
+	tokens := authorityTextTokens(text)
+	for i, token := range tokens {
+		if token == "git" && i+1 < len(tokens) && isAuthorityPushVerb(tokens[i+1]) {
+			return true
+		}
+		if !isAuthorityPushVerb(token) {
+			continue
+		}
+		start := i - 8
+		if start < 0 {
+			start = 0
+		}
+		end := i + 9
+		if end > len(tokens) {
+			end = len(tokens)
+		}
+		for j := start; j < end; j++ {
+			if j == i {
+				continue
+			}
+			if isAuthorityGitPushContextToken(tokens[j]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func authorityTextTokens(text string) []string {
+	out := []string{}
+	var b strings.Builder
+	flush := func() {
+		if b.Len() == 0 {
+			return
+		}
+		out = append(out, b.String())
+		b.Reset()
+	}
+	for _, r := range strings.ToLower(text) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			continue
+		}
+		flush()
+	}
+	flush()
+	return out
+}
+
+func isAuthorityPushVerb(token string) bool {
+	switch token {
+	case "push", "pushes", "pushed", "pushing":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAuthorityGitPushContextToken(token string) bool {
+	switch token {
+	case "git", "repo", "repos", "repository", "repositories", "origin", "remote", "remotes", "branch", "branches", "github", "upstream":
+		return true
+	default:
+		return false
 	}
 }
 

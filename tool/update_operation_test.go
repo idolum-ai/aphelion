@@ -1343,6 +1343,42 @@ func TestRequestApprovalToolRejectsInvalidAuthorityContract(t *testing.T) {
 	}
 }
 
+func TestRequestApprovalToolRejectsPushProseWhenGitPushForbidden(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"request_approval",
+		json.RawMessage(`{
+			"objective":"Bundle and publish the XPVENTA book artifacts.",
+			"phase":{
+				"id":"book-bundle-commit-push-v2",
+				"summary":"Bundle XPVENTA book artifacts, commit them, and push to the imex repository.",
+				"authority_class":"commit",
+				"why_now":"The operator approved the release packaging path.",
+				"bounded_effect":"Bundle the approved artifacts, create one local commit, and push the current main branch to origin.",
+				"allowed_actions":["inspect_git_status","git_commit_book_artifacts","push_main_to_origin"],
+				"forbidden_actions":["git_push","deploy","restart_service"],
+				"validation_plan":["report commit hash and remote head"]
+			}
+		}`),
+	)
+	if err == nil {
+		t.Fatal("ExecuteForSessionPrincipal(request_approval) err = nil, want push/prose contradiction")
+	}
+	if !strings.Contains(err.Error(), "request_approval authority contract invalid") || !strings.Contains(err.Error(), session.AuthorityContradictionReasonProposalRequiresForbiddenGitPush) {
+		t.Fatalf("err = %v, want proposal_requires_forbidden_git_push diagnostic", err)
+	}
+}
+
 func TestOperationCompletionEvidenceStatusExplainsMismatch(t *testing.T) {
 	t.Parallel()
 

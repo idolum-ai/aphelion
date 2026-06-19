@@ -62,6 +62,9 @@ func (r *Registry) requestApproval(_ context.Context, input json.RawMessage, key
 		ValidationPlan:   append([]string(nil), phase.ValidationPlan...),
 		Status:           session.ProposalStatusPending,
 	}
+	proposal = session.ReconcileActionProposalAuthority(proposal)
+	phase.AllowedActions = append([]string(nil), proposal.AllowedActions...)
+	phase.ForbiddenActions = append([]string(nil), proposal.ForbiddenActions...)
 	compilation := session.CompileActionProposalAuthorityContract(proposal)
 	if compilation.Invalid() {
 		return "", fmt.Errorf("request_approval authority contract invalid: %s", session.AuthorityContractCompilationSummary(compilation))

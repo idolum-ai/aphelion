@@ -410,3 +410,53 @@ func TestAuthorityContractCompilerAllowsSpecificCommitAndDeployGuardrails(t *tes
 		t.Fatalf("deploy compilation = %#v, want valid with deploy guardrails", deploy)
 	}
 }
+
+func TestAuthorityContractCompilerCanonicalizesRepoPushProse(t *testing.T) {
+	proposal := ReconcileActionProposalAuthority(ActionProposal{
+		RiskClass:        "commit",
+		Summary:          "Bundle artifacts, commit them, and push to the imex repository.",
+		BoundedEffect:    "Commit validated local changes and push the current branch to origin.",
+		AllowedActions:   []string{"git_commit"},
+		ForbiddenActions: []string{"deploy", "restart_service"},
+	})
+	if !actionListMatches(proposal.AllowedActions, "git_push") {
+		t.Fatalf("allowed_actions = %#v, want canonical git_push", proposal.AllowedActions)
+	}
+
+	compilation := CompileActionProposalAuthorityContract(proposal)
+	if !compilation.Valid() {
+		t.Fatalf("compilation = %#v, want valid commit/push authority", compilation)
+	}
+	if compilation.WorkAction != AuthorityWorkActionCommit || !actionListMatches(compilation.AllowedActions, "git_push") {
+		t.Fatalf("compilation = %#v, want commit work action with git_push allowed", compilation)
+	}
+}
+
+func TestAuthorityContractCompilerRejectsPushProseForbiddenGitPush(t *testing.T) {
+	compilation := CompileActionProposalAuthorityContract(ActionProposal{
+		RiskClass:        "commit",
+		Summary:          "Bundle artifacts, commit them, and push to the imex repository.",
+		BoundedEffect:    "Commit validated local changes and push the current branch to origin.",
+		AllowedActions:   []string{"git_commit", "push_main_to_origin"},
+		ForbiddenActions: []string{"git_push", "deploy", "restart_service"},
+	})
+	if compilation.Valid() {
+		t.Fatalf("compilation = %#v, want invalid push/prose contradiction", compilation)
+	}
+	if len(compilation.Contradictions) == 0 || compilation.Contradictions[0].Reason != AuthorityContradictionReasonProposalRequiresForbiddenGitPush {
+		t.Fatalf("contradictions = %#v, want proposal_requires_forbidden_git_push", compilation.Contradictions)
+	}
+}
+
+func TestAuthorityContractCompilerDoesNotInferFigurativePush(t *testing.T) {
+	proposal := ReconcileActionProposalAuthority(ActionProposal{
+		RiskClass:        "read_only_review",
+		Summary:          "Push through the confusing issue and report what you find.",
+		BoundedEffect:    "Read status only and summarize the next investigative step.",
+		AllowedActions:   []string{"inspect_status"},
+		ForbiddenActions: []string{"git_push", "deploy", "restart_service"},
+	})
+	if actionListMatches(proposal.AllowedActions, "git_push") {
+		t.Fatalf("allowed_actions = %#v, did not want figurative push to add git_push", proposal.AllowedActions)
+	}
+}

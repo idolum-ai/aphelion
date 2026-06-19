@@ -111,6 +111,39 @@ func TestMaterializeDurablePhasePlanUsesNextPendingPhase(t *testing.T) {
 	}
 }
 
+func TestContinuationStateFromOperationPhaseCanonicalizesRepoPushAuthority(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	cont := continuationStateFromOperationPhase(session.OperationState{
+		ID:        "repo-push-op",
+		Objective: "Bundle and publish the approved artifacts.",
+		PhasePlan: session.OperationPhasePlan{
+			ID:   "repo-push-plan",
+			Goal: "Bundle and publish the approved artifacts.",
+		},
+	}, session.OperationPhase{
+		ID:               "bundle-commit-push",
+		Summary:          "Bundle artifacts, commit them, and push to the imex repository.",
+		Status:           session.PlanStatusPending,
+		AuthorityClass:   "commit",
+		BoundedEffect:    "Create one local commit and push the current branch to origin.",
+		AllowedActions:   []string{"inspect_git_status", "git_commit_book_artifacts", "push_main_to_origin"},
+		ForbiddenActions: []string{"deploy", "restart_service"},
+		RequiresApproval: true,
+	}, "continue", now)
+
+	if !actionListContains(cont.ActionProposal.AllowedActions, "git_push") {
+		t.Fatalf("action allowed_actions = %#v, want canonical git_push", cont.ActionProposal.AllowedActions)
+	}
+	if !actionListContains(cont.ContinuationLease.AllowedActions, "git_push") {
+		t.Fatalf("lease allowed_actions = %#v, want canonical git_push", cont.ContinuationLease.AllowedActions)
+	}
+	if compilation := session.CompileContinuationAuthorityContract(cont); !compilation.Valid() {
+		t.Fatalf("continuation authority = %#v, want valid commit/push envelope", compilation)
+	}
+}
+
 func TestContinuationBoundaryDoesNotOfferStalePhaseAfterCompletedOperation(t *testing.T) {
 	t.Parallel()
 

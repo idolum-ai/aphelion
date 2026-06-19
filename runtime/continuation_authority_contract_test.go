@@ -186,6 +186,40 @@ func TestMaterializedInvalidAuthorityContractRoutesToRepairPhaseApproval(t *test
 	}
 }
 
+func TestInvalidAuthorityReconciliationDoesNotStripRequiredGitPush(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	state := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "push-prose-forbidden-git-push",
+		Objective:      "Bundle and publish the approved artifacts.",
+		StageSummary:   "Bundle artifacts, commit them, and push to the imex repository.",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:               "aprop-push-prose-forbidden-git-push",
+			Summary:          "Bundle artifacts, commit them, and push to the imex repository.",
+			BoundedEffect:    "Create one local commit and push the current branch to origin.",
+			RiskClass:        "commit",
+			AllowedActions:   []string{"git_commit", "push_main_to_origin"},
+			ForbiddenActions: []string{"git_push", "deploy", "restart_service"},
+			Status:           session.ProposalStatusPending,
+			ExpiresAt:        now.Add(time.Hour),
+		},
+	}
+	state.ContinuationLease = buildContinuationLease(state.ActionProposal, 1, now)
+
+	compilation := session.CompileContinuationAuthorityContract(state)
+	if compilation.Valid() {
+		t.Fatalf("compilation = %#v, want invalid push/prose contradiction", compilation)
+	}
+	var rt Runtime
+	if reconciled, ok := rt.reconciledContinuationStateFromInvalidAuthority(state, compilation, now); ok {
+		t.Fatalf("reconciled = %#v, want no unsafe non-push repair", reconciled)
+	}
+}
+
 func TestMaterializedStaleRepairDoesNotOutrankFreshWorkingObjective(t *testing.T) {
 	t.Parallel()
 

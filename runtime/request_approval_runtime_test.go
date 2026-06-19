@@ -75,10 +75,10 @@ func TestRequestApprovalToolMaterializesVisibleContinuationWithCapabilityDepende
 			"objective":"Make approval cards first-class.",
 			"phase":{
 				"id":"phase-request-approval-runtime",
-				"summary":"Push Imexx process scaffold",
+				"summary":"Prepare Imexx process scaffold",
 				"authority_class":"workspace_write",
-				"why_now":"The operator approved a narrow repo push phase that depends on GitHub access.",
-				"bounded_effect":"Push only the non-secret Imexx process scaffold and stop before deploy, restart, or unrelated external effects.",
+				"why_now":"The operator approved a narrow scaffold-preparation phase that depends on GitHub access metadata.",
+				"bounded_effect":"Prepare only the non-secret Imexx process scaffold and stop before commit, deploy, restart, or unrelated external effects.",
 				"allowed_actions":["edit_files","run_tests"],
 				"forbidden_actions":["commit","deploy","restart_service","external_send_or_contact"],
 				"validation_plan":["request_approval materializes visible buttons"],
@@ -123,7 +123,7 @@ func TestRequestApprovalToolMaterializesVisibleContinuationWithCapabilityDepende
 	if inlineCount != 1 {
 		t.Fatalf("inline count = %d, want one approval card", inlineCount)
 	}
-	for _, want := range []string{"Push Imexx process scaffold", "external_account", "github:imexx/processes", "cap-imexx-github-runtime", "contents:write"} {
+	for _, want := range []string{"Prepare Imexx process scaffold", "external_account", "github:imexx/processes", "cap-imexx-github-runtime", "contents:write"} {
 		if !strings.Contains(inlineText, want) {
 			t.Fatalf("inline text = %q, want %q", inlineText, want)
 		}

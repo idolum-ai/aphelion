@@ -590,8 +590,6 @@ func authorityActionIsDeployRestartGrant(action string) bool {
 		"live_deploy",
 		"run_deploy",
 		"system_change",
-		"git_push",
-		"push_remote",
 		"prepare_release_handoff",
 		"run_explicit_release_step",
 		"post_restart_verification",
