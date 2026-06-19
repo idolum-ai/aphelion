@@ -305,6 +305,38 @@ func TestRunCuriosityOnceRefusesAmbiguousPrincipal(t *testing.T) {
 	}
 }
 
+func TestStartCuriosityLoopReportsAmbiguousPrincipalAtStartup(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Curiosity.Enabled = true
+	cfg.Curiosity.Every = "1h"
+	cfg.Curiosity.LeaseTTL = "24h"
+	cfg.Curiosity.DailyTurnBudget = 1
+	cfg.Curiosity.MaxLooksPerTurn = 1
+	cfg.Curiosity.SourceClasses = []string{session.CuriositySourceWorkspace}
+	cfg.Curiosity.WorkspacePaths = []string{"README.md"}
+
+	rt, err := New(cfg, store, provider, &curiosityRecordingTools{}, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	var logs []string
+	rt.StartCuriosityLoop(context.Background(), func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+
+	if len(logs) != 1 || !strings.Contains(logs[0], "principal ambiguity") {
+		t.Fatalf("logs = %#v, want startup principal ambiguity warning", logs)
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want operational warning", len(sender.sent))
+	}
+	if !strings.Contains(sender.sent[0].Text, "Component: curiosity") || !strings.Contains(sender.sent[0].Text, "requires exactly one admin principal") {
+		t.Fatalf("sent text = %q, want curiosity operational issue", sender.sent[0].Text)
+	}
+}
+
 func TestCuriosityCandidatesRequireNonCuriositySupport(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	cfg.Curiosity.Enabled = true

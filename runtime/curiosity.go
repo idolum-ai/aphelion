@@ -24,8 +24,19 @@ import (
 const curiositySessionID = "admin-curiosity"
 
 const (
-	curiositySchedulerEventLimit = 300
-	curiosityFailureBackoff      = 4 * time.Hour
+	curiositySchedulerEventLimit           = 300
+	curiosityFailureBackoff                = 4 * time.Hour
+	curiositySignalIntensityScore          = 100
+	curiosityCandidateAttemptPenalty       = 45
+	curiositySourceAttemptPenalty          = 20
+	curiosityCandidateObservationPenalty   = 35
+	curiositySourceObservationPenalty      = 15
+	curiosityCandidateRecencyPenalty       = 25
+	curiositySourceRecencyPenalty          = 15
+	curiosityCandidateRecencyWindow        = 2 * time.Hour
+	curiositySourceRecencyWindow           = 2 * time.Hour
+	curiosityRecentFailureMaxPenalty       = 120
+	curiositySelectionPolicyIntensityFirst = "intensity_attempt_cooldown_novelty_source_diversity"
 )
 
 func (r *Runtime) StartCuriosityLoop(ctx context.Context, logger func(string, ...any)) {
@@ -43,6 +54,11 @@ func (r *Runtime) StartCuriosityLoop(ctx context.Context, logger func(string, ..
 		} else {
 			r.reportOperationalIssue(ctx, "curiosity", fmt.Errorf("invalid curiosity cadence %q", r.cfg.Curiosity.Every))
 		}
+		return
+	}
+	if _, err := r.curiosityPrincipal(); err != nil {
+		logger("WARN curiosity disabled due to principal ambiguity: %v", err)
+		r.reportOperationalIssue(ctx, "curiosity", err)
 		return
 	}
 	r.startBackgroundLoop("curiosity", func() {
@@ -118,7 +134,7 @@ func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err erro
 		return nil
 	}
 	selectedPayload := curiosityCandidatePayload(candidate)
-	selectedPayload["selection_policy"] = "intensity_attempt_cooldown_novelty_source_diversity"
+	selectedPayload["selection_policy"] = curiositySelectionPolicyIntensityFirst
 	r.recordExecutionEvent(key, core.ExecutionEventCuriositySelected, "curiosity", "selected", selectedPayload, now)
 
 	requestText := renderCuriosityRequest(candidate)
@@ -469,26 +485,30 @@ func (r *Runtime) curiositySelectionHistory(key session.SessionKey) (curiositySe
 }
 
 func curiosityCandidateSelectionScore(candidate curiosityCandidate, history curiositySelectionHistory, now time.Time) float64 {
-	score := candidate.SignalIntensity * 100
+	// These weights are deliberate scheduler policy, not a derived formula:
+	// prefer strong current pressure, but rotate away from recently attempted,
+	// failed, or already-observed candidates so curiosity behaves like saccades
+	// instead of staring at the same stable source forever.
+	score := candidate.SignalIntensity * curiositySignalIntensityScore
 	sourceKey := curiositySourceKey(candidate.SourceKind, candidate.SourceRef)
 	attempts := history.candidateAttempts[candidate.ID]
 	sourceAttempts := history.sourceAttempts[sourceKey]
-	score -= float64(attempts) * 45
-	score -= float64(sourceAttempts) * 20
+	score -= float64(attempts) * curiosityCandidateAttemptPenalty
+	score -= float64(sourceAttempts) * curiositySourceAttemptPenalty
 	if _, ok := history.candidateObservations[candidate.ID]; ok {
-		score -= 35
+		score -= curiosityCandidateObservationPenalty
 	}
 	if _, ok := history.sourceObservations[sourceKey]; ok {
-		score -= 15
+		score -= curiositySourceObservationPenalty
 	}
 	if last := history.candidateLastAttempt[candidate.ID]; !last.IsZero() {
-		score -= recencyPenalty(now.Sub(last), 25, 2*time.Hour)
+		score -= recencyPenalty(now.Sub(last), curiosityCandidateRecencyPenalty, curiosityCandidateRecencyWindow)
 	}
 	if last := history.sourceLastAttempt[sourceKey]; !last.IsZero() {
-		score -= recencyPenalty(now.Sub(last), 15, 2*time.Hour)
+		score -= recencyPenalty(now.Sub(last), curiositySourceRecencyPenalty, curiositySourceRecencyWindow)
 	}
 	if last := history.candidateLastFailure[candidate.ID]; !last.IsZero() {
-		score -= recencyPenalty(now.Sub(last), 120, curiosityFailureBackoff)
+		score -= recencyPenalty(now.Sub(last), curiosityRecentFailureMaxPenalty, curiosityFailureBackoff)
 	}
 	return score
 }
@@ -514,7 +534,7 @@ func curiositySourceKey(kind string, ref string) string {
 
 func maxTime(left time.Time, right time.Time) time.Time {
 	if right.IsZero() {
-		return left
+		return left.UTC()
 	}
 	if left.IsZero() || right.After(left) {
 		return right.UTC()
