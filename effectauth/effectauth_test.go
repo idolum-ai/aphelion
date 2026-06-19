@@ -90,6 +90,70 @@ func TestAuthorizeCommandAllowsGitPushOnlyWhenEnvelopeAllowsGitPush(t *testing.T
 	}
 }
 
+func TestAuthorizeCommandInvalidAuthorityContractFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	state := testInvalidAuthorityContractState(now)
+	decision := AuthorizeCommand(CommandRequest{
+		State:   state,
+		Command: "git push origin release/v0.2.9",
+		Now:     now,
+	})
+	if !decision.Active || !decision.Boundary || decision.Allowed {
+		t.Fatalf("decision = %#v, want active boundary denial for invalid authority contract", decision)
+	}
+	if decision.Reason != reasonInvalidAuthorityContract {
+		t.Fatalf("reason = %q, want %q", decision.Reason, reasonInvalidAuthorityContract)
+	}
+	if decision.RequiredAction != "git_push" {
+		t.Fatalf("required action = %q, want git_push", decision.RequiredAction)
+	}
+	if err := DecisionError(decision); err == nil || !strings.Contains(err.Error(), reasonInvalidAuthorityContract) {
+		t.Fatalf("DecisionError = %v, want invalid authority contract error", err)
+	}
+}
+
+func TestAuthorizeWorkModeCommandDoesNotFallbackForInvalidAuthorityContract(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	decision := AuthorizeWorkModeCommand(WorkModeRequest{
+		State:    testInvalidAuthorityContractState(now),
+		Mode:     WorkModeWorkspaceWrite,
+		RepoRoot: "/repo",
+		Workdir:  "/repo",
+		Command:  "touch generated.txt",
+		Now:      now,
+	})
+	if !decision.Active || decision.Boundary || decision.Allowed {
+		t.Fatalf("decision = %#v, want invalid contract to block before work-mode fallback", decision)
+	}
+	if decision.Reason != reasonInvalidAuthorityContract {
+		t.Fatalf("reason = %q, want %q", decision.Reason, reasonInvalidAuthorityContract)
+	}
+}
+
+func TestDecisionErrorRejectsInvalidAuthorityContractWithoutBoundary(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	decision := AuthorizeCommand(CommandRequest{
+		State:   testInvalidAuthorityContractState(now),
+		Command: "git status --short",
+		Now:     now,
+	})
+	if !decision.Active || decision.Boundary || decision.Allowed {
+		t.Fatalf("decision = %#v, want invalid contract denial without boundary metadata", decision)
+	}
+	if decision.Reason != reasonInvalidAuthorityContract {
+		t.Fatalf("reason = %q, want %q", decision.Reason, reasonInvalidAuthorityContract)
+	}
+	if err := DecisionError(decision); err == nil || !strings.Contains(err.Error(), reasonInvalidAuthorityContract) {
+		t.Fatalf("DecisionError = %v, want invalid authority contract error", err)
+	}
+}
+
 func TestRepoPublicationEnvelopeDoesNotAuthorizeExternalAccountMutation(t *testing.T) {
 	t.Parallel()
 
@@ -122,6 +186,95 @@ func TestRepoPublicationEnvelopeDoesNotAuthorizeExternalAccountMutation(t *testi
 	}
 	if pr.Reason != "external_effect_missing_capability_grant" {
 		t.Fatalf("pr reason = %q, want external_effect_missing_capability_grant", pr.Reason)
+	}
+}
+
+func TestAuthorizeCommandRejectsExternalAccountWhenContractDisallowsExternalEffects(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	decision := AuthorizeCommand(CommandRequest{
+		State:   testContinuationState("read_only_review", []string{"read_only", "inspect_code", "report_findings"}, false, now),
+		Command: "gh pr create --base main --head fix --title test --body test",
+		Now:     now,
+	})
+	if !decision.Active || !decision.Boundary || decision.Allowed {
+		t.Fatalf("decision = %#v, want external-account command rejected by contract", decision)
+	}
+	if decision.Reason != "external_effect_not_allowed_by_contract" {
+		t.Fatalf("reason = %q, want external_effect_not_allowed_by_contract", decision.Reason)
+	}
+}
+
+func TestAuthorizeCommandAllowsExternalAccountStatusCheckOnly(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	state := testContinuationState("external_account_status_check", []string{"external_account_status_check", "report_release_status"}, false, now)
+	state.ContinuationLease.LeaseClass = session.ContinuationLeaseClassDataAccess
+	decision := AuthorizeCommand(CommandRequest{
+		State:   state,
+		Command: "gh auth status",
+		Now:     now,
+	})
+	if !decision.Active || !decision.Boundary || !decision.Allowed {
+		t.Fatalf("decision = %#v, want external-account status allowed", decision)
+	}
+	if decision.RequiredAction != "external_account_status_check" {
+		t.Fatalf("required action = %q, want external_account_status_check", decision.RequiredAction)
+	}
+}
+
+func TestAuthorizeCommandBoundaryKindsAllowAndDeny(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	for _, tt := range []struct {
+		name           string
+		command        string
+		allowRiskClass string
+		allowActions   []string
+		wantAction     string
+	}{
+		{
+			name:           "remote host",
+			command:        "ssh aphelion.example uptime",
+			allowRiskClass: "remote_host_operation",
+			allowActions:   []string{"remote_host_operation", "report_remote_status"},
+			wantAction:     "remote_host_operation",
+		},
+		{
+			name:           "service process",
+			command:        "systemctl --user restart aphelion.service",
+			allowRiskClass: "deploy",
+			allowActions:   []string{"restart_service", "post_restart_verification"},
+			wantAction:     "restart_service",
+		},
+	} {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			allowed := AuthorizeCommand(CommandRequest{
+				State:   testContinuationState(tt.allowRiskClass, tt.allowActions, false, now),
+				Command: tt.command,
+				Now:     now,
+			})
+			if !allowed.Active || !allowed.Boundary || !allowed.Allowed {
+				t.Fatalf("allowed decision = %#v, want boundary command allowed by explicit envelope action", allowed)
+			}
+			if allowed.RequiredAction != tt.wantAction {
+				t.Fatalf("required action = %q, want %q", allowed.RequiredAction, tt.wantAction)
+			}
+
+			denied := AuthorizeCommand(CommandRequest{
+				State:   testContinuationState("read_only_review", []string{"read_only", "inspect_code", "report_findings"}, false, now),
+				Command: tt.command,
+				Now:     now,
+			})
+			if !denied.Active || !denied.Boundary || denied.Allowed {
+				t.Fatalf("denied decision = %#v, want boundary command denied by read-only envelope", denied)
+			}
+		})
 	}
 }
 
@@ -158,6 +311,23 @@ func TestAuthorizeWorkModeCommandFallsBackWithoutActiveEnvelope(t *testing.T) {
 	}
 }
 
+func TestAuthorizeWorkModeCommandRejectsWorkdirOutsideRepoRoot(t *testing.T) {
+	t.Parallel()
+
+	decision := AuthorizeWorkModeCommand(WorkModeRequest{
+		Mode:     WorkModeWorkspaceWrite,
+		RepoRoot: "/repo",
+		Workdir:  "/tmp/outside",
+		Command:  "touch generated.txt",
+	})
+	if decision.Allowed {
+		t.Fatalf("decision = %#v, want workdir outside repo root rejected", decision)
+	}
+	if decision.Reason != "workdir_outside_repo_root" {
+		t.Fatalf("reason = %q, want workdir_outside_repo_root", decision.Reason)
+	}
+}
+
 func TestAuthorizeWorkModeCommandActiveEnvelopeOverridesFallback(t *testing.T) {
 	t.Parallel()
 
@@ -173,6 +343,14 @@ func TestAuthorizeWorkModeCommandActiveEnvelopeOverridesFallback(t *testing.T) {
 	if !decision.Active || !decision.Boundary || decision.Allowed {
 		t.Fatalf("decision = %#v, want active read-only envelope to reject deploy-mode external account command", decision)
 	}
+}
+
+func testInvalidAuthorityContractState(now time.Time) session.ContinuationState {
+	state := testContinuationState("commit", []string{"git_push", "report_push_evidence"}, false, now)
+	state.ActionProposal.ForbiddenActions = []string{"git_push"}
+	state.ContinuationLease.LeaseClass = session.ContinuationLeaseClassRepoPublication
+	state.ContinuationLease.ForbiddenActions = []string{"git_push"}
+	return state
 }
 
 func testContinuationState(riskClass string, allowedActions []string, capabilityGrant bool, now time.Time) session.ContinuationState {

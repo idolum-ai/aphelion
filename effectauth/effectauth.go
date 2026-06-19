@@ -21,6 +21,8 @@ const (
 	WorkModeDeploy         WorkMode = "deploy"
 )
 
+const reasonInvalidAuthorityContract = "invalid_authority_contract"
+
 // Decision records the canonical effect-authorization result for a command.
 // It is intentionally evidence-shaped: callers can use the same record for
 // enforcement, projections, and audit without re-deriving authority.
@@ -64,9 +66,18 @@ func AuthorizeCommand(req CommandRequest) Decision {
 	if !decision.Active {
 		return decision
 	}
+	invalidContract := decision.Reason == reasonInvalidAuthorityContract
 	effect := commandeffect.Classify(req.Command)
 	decision.EffectKind = string(effect.Kind)
 	boundary, boundaryOK := commandeffect.BoundaryForCommand(req.Command)
+	if invalidContract {
+		if boundaryOK {
+			decision.Boundary = true
+			decision.BoundaryKind = string(boundary.Kind)
+			decision.RequiredAction = boundaryRequiredAction(boundary.Kind, req.Command)
+		}
+		return decision
+	}
 	if !boundaryOK {
 		if effect.ReadOnlyAllowed() {
 			decision.Allowed = true
@@ -96,6 +107,9 @@ func AuthorizeWorkModeCommand(req WorkModeRequest) Decision {
 		Command: req.Command,
 		Now:     now,
 	})
+	if decision.Active && decision.Reason == reasonInvalidAuthorityContract {
+		return decision
+	}
 	if decision.Active && decision.Boundary {
 		return decision
 	}
@@ -103,6 +117,16 @@ func AuthorizeWorkModeCommand(req WorkModeRequest) Decision {
 }
 
 func DecisionError(decision Decision) error {
+	if decision.Active && !decision.Allowed && decision.Reason == reasonInvalidAuthorityContract {
+		return fmt.Errorf("command exceeds active continuation authority: boundary=%s required_action=%s reason=%s lease_id=%s proposal_id=%s phase_id=%s",
+			strings.TrimSpace(decision.BoundaryKind),
+			strings.TrimSpace(decision.RequiredAction),
+			strings.TrimSpace(decision.Reason),
+			strings.TrimSpace(decision.LeaseID),
+			strings.TrimSpace(decision.ProposalID),
+			strings.TrimSpace(decision.PhaseID),
+		)
+	}
 	if !decision.Active || !decision.Boundary || decision.Allowed {
 		return nil
 	}
@@ -140,7 +164,7 @@ func decisionBase(state session.ContinuationState, now time.Time) Decision {
 	decision.ExternalEffectsAllowed = compilation.Contract.ExternalEffectsAllowed
 	if compilation.Invalid() {
 		decision.Active = true
-		decision.Reason = "invalid_authority_contract"
+		decision.Reason = reasonInvalidAuthorityContract
 		return decision
 	}
 	decision.Active = true
