@@ -296,6 +296,7 @@ func NormalizeContinuationLeaseClass(class ContinuationLeaseClass) ContinuationL
 	value := normalizeEnumValue(string(class))
 	switch ContinuationLeaseClass(value) {
 	case ContinuationLeaseClassLocalWorkspace,
+		ContinuationLeaseClassRepoPublication,
 		ContinuationLeaseClassDataAccess,
 		ContinuationLeaseClassChildWake,
 		ContinuationLeaseClassCapabilityGrant,
@@ -318,6 +319,8 @@ func ContinuationLeaseClassLabel(class ContinuationLeaseClass) string {
 	switch NormalizeContinuationLeaseClass(class) {
 	case ContinuationLeaseClassLocalWorkspace:
 		return "local workspace"
+	case ContinuationLeaseClassRepoPublication:
+		return "repo publication"
 	case ContinuationLeaseClassDataAccess:
 		return "data access"
 	case ContinuationLeaseClassChildWake:
@@ -335,6 +338,8 @@ func ContinuationLeaseClassBoundary(class ContinuationLeaseClass) string {
 	switch NormalizeContinuationLeaseClass(class) {
 	case ContinuationLeaseClassLocalWorkspace:
 		return "local repo/workspace work only; no repository history, deploy, restart, credentials, or external effects unless separately granted"
+	case ContinuationLeaseClassRepoPublication:
+		return "remote repository publication only; push requires explicit git_push authority and does not grant PR metadata, deploy, restart, or credential access"
 	case ContinuationLeaseClassDataAccess:
 		return "read exactly the approved resource descriptors; no silent broad ingestion, retention, or external-account access"
 	case ContinuationLeaseClassChildWake:
@@ -356,6 +361,13 @@ func DefaultContinuationLeaseConstraints(class ContinuationLeaseClass) map[strin
 			"history":     "commit requires explicit lease authority; push requires separate lease",
 			"externality": "no deploy, restart, credentials, purchases, public contact, or external accounts",
 			"validation":  "focused tests or diff checks before report",
+		}
+	case ContinuationLeaseClassRepoPublication:
+		return map[string]string{
+			"scope":       "remote repository publication only",
+			"history":     "push exactly the approved ref/branch; no unrelated history rewrite",
+			"externality": "no PR metadata mutation, deploy, restart, credentials, purchases, public contact, or external accounts",
+			"validation":  "record local commit/ref evidence before push and remote ref evidence after push",
 		}
 	case ContinuationLeaseClassDataAccess:
 		return map[string]string{
@@ -418,7 +430,7 @@ func normalizeContinuationLeaseConstraints(class ContinuationLeaseClass, constra
 
 func continuationLeaseClassRequiresExactActions(class ContinuationLeaseClass) bool {
 	switch NormalizeContinuationLeaseClass(class) {
-	case ContinuationLeaseClassLocalWorkspace, ContinuationLeaseClassDataAccess, ContinuationLeaseClassChildWake, ContinuationLeaseClassCapabilityGrant, ContinuationLeaseClassDeployRestart:
+	case ContinuationLeaseClassLocalWorkspace, ContinuationLeaseClassRepoPublication, ContinuationLeaseClassDataAccess, ContinuationLeaseClassChildWake, ContinuationLeaseClassCapabilityGrant, ContinuationLeaseClassDeployRestart:
 		return true
 	default:
 		return false

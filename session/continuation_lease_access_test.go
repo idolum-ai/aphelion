@@ -117,6 +117,14 @@ func TestContinuationLeaseClassConstraintsRequireExactActions(t *testing.T) {
 			wantValue: "local workspace/repository only",
 		},
 		{
+			name:      "repo publication",
+			class:     ContinuationLeaseClassRepoPublication,
+			action:    "git_push",
+			explicit:  "git_push",
+			wantKey:   "scope",
+			wantValue: "remote repository publication only",
+		},
+		{
 			name:      "capability grant",
 			class:     ContinuationLeaseClassCapabilityGrant,
 			action:    "grant_set",
@@ -166,6 +174,7 @@ func TestContinuationLeaseClassInferenceAndBoundaries(t *testing.T) {
 		{name: "deploy", risk: "deploy", actions: []string{"service_restart"}, effect: "restart and verify", want: ContinuationLeaseClassDeployRestart},
 		{name: "workspace", risk: "workspace_write", actions: []string{"focused_tests"}, effect: "patch locally", want: ContinuationLeaseClassLocalWorkspace},
 		{name: "local commit", risk: "workspace_commit_then_repo_write_bounded", actions: []string{"git_commit_validated_slices"}, effect: "commit validated local slices", want: ContinuationLeaseClassLocalWorkspace},
+		{name: "repo publication", risk: "commit", actions: []string{"git_commit", "git_push"}, effect: "commit and push current branch", want: ContinuationLeaseClassRepoPublication},
 		{name: "private data intake", risk: "private_data_intake", actions: nil, effect: "process resource-owner preferences after opt-in", want: ContinuationLeaseClassDataAccess},
 		{name: "email and public web read", risk: "external_account_email_read_public_web_read", actions: nil, effect: "read the approved mailbox and public links after profile approval", want: ContinuationLeaseClassDataAccess},
 	}
@@ -430,6 +439,13 @@ func TestAuthorityContractCompilerCanonicalizesRepoPushProse(t *testing.T) {
 	if compilation.WorkAction != AuthorityWorkActionCommit || !actionListMatches(compilation.AllowedActions, "git_push") {
 		t.Fatalf("compilation = %#v, want commit work action with git_push allowed", compilation)
 	}
+	if compilation.Contract.LeaseClass != ContinuationLeaseClassRepoPublication {
+		t.Fatalf("lease class = %q, want repo publication", compilation.Contract.LeaseClass)
+	}
+	claim, ok := AuthorityInterpretationClaimFor("commit", proposal.AllowedActions, proposal.BoundedEffect)
+	if !ok || claim.AuthorityClass != "repo_publication" {
+		t.Fatalf("authority claim = %#v ok=%v, want repo_publication", claim, ok)
+	}
 }
 
 func TestAuthorityContractCompilerRejectsPushProseForbiddenGitPush(t *testing.T) {
@@ -449,14 +465,43 @@ func TestAuthorityContractCompilerRejectsPushProseForbiddenGitPush(t *testing.T)
 }
 
 func TestAuthorityContractCompilerDoesNotInferFigurativePush(t *testing.T) {
-	proposal := ReconcileActionProposalAuthority(ActionProposal{
-		RiskClass:        "read_only_review",
-		Summary:          "Push through the confusing issue and report what you find.",
-		BoundedEffect:    "Read status only and summarize the next investigative step.",
-		AllowedActions:   []string{"inspect_status"},
-		ForbiddenActions: []string{"git_push", "deploy", "restart_service"},
-	})
-	if actionListMatches(proposal.AllowedActions, "git_push") {
-		t.Fatalf("allowed_actions = %#v, did not want figurative push to add git_push", proposal.AllowedActions)
+	for _, tc := range []struct {
+		name          string
+		summary       string
+		boundedEffect string
+	}{
+		{
+			name:          "push through issue",
+			summary:       "Push through the confusing issue and report what you find.",
+			boundedEffect: "Read status only and summarize the next investigative step.",
+		},
+		{
+			name:          "push for signoff",
+			summary:       "Push for sign-off on the review plan.",
+			boundedEffect: "Draft the local review plan and stop before repository publication.",
+		},
+		{
+			name:          "push changes through review",
+			summary:       "Push the changes through review.",
+			boundedEffect: "Inspect the branch status and recommend a review path without pushing to a remote.",
+		},
+		{
+			name:          "push product direction",
+			summary:       "Push the product direction forward.",
+			boundedEffect: "Summarize the next product decision and stop.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proposal := ReconcileActionProposalAuthority(ActionProposal{
+				RiskClass:        "read_only_review",
+				Summary:          tc.summary,
+				BoundedEffect:    tc.boundedEffect,
+				AllowedActions:   []string{"inspect_status"},
+				ForbiddenActions: []string{"git_push", "deploy", "restart_service"},
+			})
+			if actionListMatches(proposal.AllowedActions, "git_push") {
+				t.Fatalf("allowed_actions = %#v, did not want figurative push to add git_push", proposal.AllowedActions)
+			}
+		})
 	}
 }

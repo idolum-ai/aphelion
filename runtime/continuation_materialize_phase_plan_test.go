@@ -139,6 +139,9 @@ func TestContinuationStateFromOperationPhaseCanonicalizesRepoPushAuthority(t *te
 	if !actionListContains(cont.ContinuationLease.AllowedActions, "git_push") {
 		t.Fatalf("lease allowed_actions = %#v, want canonical git_push", cont.ContinuationLease.AllowedActions)
 	}
+	if cont.ContinuationLease.LeaseClass != session.ContinuationLeaseClassRepoPublication {
+		t.Fatalf("lease class = %q, want repo publication", cont.ContinuationLease.LeaseClass)
+	}
 	if compilation := session.CompileContinuationAuthorityContract(cont); !compilation.Valid() {
 		t.Fatalf("continuation authority = %#v, want valid commit/push envelope", compilation)
 	}

@@ -239,7 +239,7 @@ func authorityWorkActionForAllowedToken(value string) string {
 	switch token {
 	case "deploy", "live_deploy", "run_deploy", "system_change", "restart", "restart_service", "service_restart", "restart_aphelion_service", "systemctl_restart", "install_user_service", "make_install_user_service", "run_verify_deploy":
 		return AuthorityWorkActionDeploy
-	case "commit", "git_commit", "repo_history_mutation", "git_commit_validated_slices", "workspace_commit", "workspace_commit_then_repo_write_bounded", "git_push", "push_remote":
+	case "commit", "git_commit", "repo_history_mutation", "git_commit_validated_slices", "workspace_commit", "workspace_commit_then_repo_write_bounded", "git_push", "push_remote", "repo_publication", "remote_repo_mutation":
 		return AuthorityWorkActionCommit
 	case "workspace_write", "workspace", "code", "code_change", "code_changes", "repo_edit", "edit", "edit_files", "patch", "patch_code", "run_tests", "test", "tests", "focused_tests", "git_diff_check", "edit_repo_code", "run_go_tests", "git_status", "git_diff":
 		return AuthorityWorkActionWorkspaceWrite
@@ -249,7 +249,7 @@ func authorityWorkActionForAllowedToken(value string) string {
 		switch {
 		case strings.HasPrefix(token, "deploy"), strings.HasPrefix(token, "live_deploy"), strings.HasPrefix(token, "run_deploy"), strings.HasPrefix(token, "system_change"), strings.HasPrefix(token, "restart"), strings.HasPrefix(token, "service_restart"):
 			return AuthorityWorkActionDeploy
-		case strings.HasPrefix(token, "commit"), strings.HasPrefix(token, "git_commit"), strings.HasPrefix(token, "repo_history_mutation"), strings.HasPrefix(token, "workspace_commit"), strings.HasPrefix(token, "git_push"), strings.HasPrefix(token, "push_remote"):
+		case strings.HasPrefix(token, "commit"), strings.HasPrefix(token, "git_commit"), strings.HasPrefix(token, "repo_history_mutation"), strings.HasPrefix(token, "workspace_commit"), strings.HasPrefix(token, "git_push"), strings.HasPrefix(token, "push_remote"), strings.HasPrefix(token, "repo_publication"), strings.HasPrefix(token, "remote_repo_mutation"):
 			return AuthorityWorkActionCommit
 		case strings.HasPrefix(token, "workspace_write"), strings.HasPrefix(token, "workspace"), strings.HasPrefix(token, "code_change"), strings.HasPrefix(token, "edit_files"), strings.HasPrefix(token, "patch"), strings.HasPrefix(token, "run_tests"):
 			return AuthorityWorkActionWorkspaceWrite
@@ -312,9 +312,15 @@ func authorityTextImpliesGitPush(text string) bool {
 	tokens := authorityTextTokens(text)
 	for i, token := range tokens {
 		if token == "git" && i+1 < len(tokens) && isAuthorityPushVerb(tokens[i+1]) {
+			if authorityPushMentionNegated(tokens, i) || authorityPushMentionNegated(tokens, i+1) {
+				continue
+			}
 			return true
 		}
 		if !isAuthorityPushVerb(token) {
+			continue
+		}
+		if authorityPushMentionNegated(tokens, i) {
 			continue
 		}
 		start := i - 8
@@ -332,6 +338,20 @@ func authorityTextImpliesGitPush(text string) bool {
 			if isAuthorityGitPushContextToken(tokens[j]) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func authorityPushMentionNegated(tokens []string, idx int) bool {
+	start := idx - 4
+	if start < 0 {
+		start = 0
+	}
+	for i := start; i < idx; i++ {
+		switch tokens[i] {
+		case "no", "not", "without", "never", "avoid", "avoids", "forbid", "forbidden", "forbids", "prohibit", "prohibited", "deny", "denies":
+			return true
 		}
 	}
 	return false

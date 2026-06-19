@@ -375,6 +375,8 @@ func planBudgetHumanAuthority(authority string) string {
 		return "local workspace"
 	case "workspace_commit_then_repo_write_bounded", "git_commit", "commit":
 		return "local commit"
+	case "repo_publication", "remote_repo_mutation", "git_push", "push_remote":
+		return "remote publication"
 	case "public_web_read", "public_profile_metadata_read", "public_account_content_read":
 		return "public read"
 	case "external_account_auth_status", "external_account_status_check", "read_only_auth_status_check", "credential_metadata", "token_health_check":

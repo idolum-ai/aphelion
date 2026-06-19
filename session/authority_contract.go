@@ -31,6 +31,9 @@ type AuthorityContract struct {
 
 func AuthorityContractFor(riskClass string, allowedActions []string, boundedEffect string) (AuthorityContract, bool) {
 	_ = boundedEffect
+	if actionListImpliesRepoPublication(allowedActions) && !authorityRiskClassShouldDominateRepoPublication(riskClass) {
+		return AuthorityContractForToken("repo_publication")
+	}
 	if contract, ok := AuthorityContractForToken(riskClass); ok {
 		return contract, true
 	}
@@ -43,6 +46,9 @@ func AuthorityContractFor(riskClass string, allowedActions []string, boundedEffe
 
 func AuthorityInterpretationClaimFor(riskClass string, allowedActions []string, boundedEffect string) (core.InterpretationClaim, bool) {
 	_ = boundedEffect
+	if actionListImpliesRepoPublication(allowedActions) && !authorityRiskClassShouldDominateRepoPublication(riskClass) {
+		return authorityInterpretationClaim("repo_publication", "structured_authority_fields"), true
+	}
 	if contract, ok := AuthorityContractForToken(riskClass); ok {
 		return authorityInterpretationClaim(contract.Key, "risk_class"), true
 	}
@@ -117,7 +123,8 @@ func authorityClassificationPriority() []authorityClassificationGroup {
 			"scout_public_opportunities",
 		}},
 		{Key: "data_access", Tokens: []string{"data_access", "file_access", "read_file", "read_image", "consume_attachment", "artifact_read", "network_access", "external_account_auth_status", "external_account_status_check", "read_only_auth_status_check", "credential_state_check", "credential_metadata", "credential_metadata_check", "token_health_check", "run_external_account_auth_status_or_identity_check"}},
-		{Key: "commit", Tokens: []string{"commit", "git_commit", "git_commit_validated_slices", "repo_history_mutation", "workspace_commit", "workspace_commit_then_repo_write_bounded", "git_push", "push_remote"}},
+		{Key: "repo_publication", Tokens: []string{"repo_publication", "remote_repo_mutation", "git_push", "push_remote"}},
+		{Key: "commit", Tokens: []string{"commit", "git_commit", "git_commit_validated_slices", "repo_history_mutation", "workspace_commit", "workspace_commit_then_repo_write_bounded"}},
 		{Key: "workspace_write", Tokens: []string{"workspace_write", "workspace", "code", "code_change", "code_changes", "repo_edit", "edit", "edit_files", "patch", "run_tests", "test", "tests", "focused_tests", "git_diff_check"}},
 		{Key: "read_only_review", Tokens: []string{"read_only", "read_only_review", "status_check", "inspect_readonly_state", "read_only_child_adapter_environment_inspection"}},
 	}
@@ -161,6 +168,27 @@ func normalizeAuthorityMatchText(text string) string {
 		text = strings.ReplaceAll(text, "__", "_")
 	}
 	return strings.Trim(text, "_")
+}
+
+func authorityRiskClassShouldDominateRepoPublication(riskClass string) bool {
+	key := normalizeAuthorityMatchText(riskClass)
+	switch key {
+	case "deploy", "live_deploy", "run_deploy", "system_change", "restart", "service_restart", "restart_aphelion_service", "systemctl_restart", "install_user_service", "make_install_user_service", "run_verify_deploy",
+		"capability_grant", "capability_acquisition", "grant_capability", "grant_set", "capability_authority",
+		"external_account_action", "external_account_pr_create", "github_pr_create", "github_pr_open", "github_pr_update", "github_pr_metadata_update", "pull_request_create", "pull_request_open", "pull_request_update", "pull_request_metadata_update", "open_pull_request", "create_github_pr", "update_pull_request_title", "update_pull_request_body":
+		return true
+	default:
+		return false
+	}
+}
+
+func actionListImpliesRepoPublication(actions []string) bool {
+	for _, action := range actions {
+		if authorityTokenImpliesGitPush(action) {
+			return true
+		}
+	}
+	return false
 }
 
 func AuthorityContractForToken(token string) (AuthorityContract, bool) {
@@ -306,7 +334,7 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 			AutoApprovalAllowed:    true,
 			RequiresInlineApproval: true,
 		}, true
-	case "commit", "git_commit", "git_commit_validated_slices", "repo_history_mutation", "git_push", "push_remote":
+	case "commit", "git_commit", "git_commit_validated_slices", "repo_history_mutation":
 		return AuthorityContract{
 			Key:        "commit",
 			LeaseClass: ContinuationLeaseClassLocalWorkspace,
@@ -329,6 +357,35 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 			},
 			AutoApprovalAllowed:    true,
 			RequiresInlineApproval: true,
+		}, true
+	case "repo_publication", "remote_repo_mutation", "git_push", "push_remote":
+		return AuthorityContract{
+			Key:        "repo_publication",
+			LeaseClass: ContinuationLeaseClassRepoPublication,
+			WorkAction: AuthorityWorkActionCommit,
+			AllowedActions: []string{
+				AuthorityWorkActionCommit,
+				"git_push",
+				"push_remote",
+				"report_push_evidence",
+			},
+			ForbiddenActions: []string{
+				"deploy",
+				"restart_service",
+				"github_pr_create",
+				"github_pr_update",
+				"external_account_action",
+				"credential_token_output",
+				"external_effect_without_separate_grant",
+			},
+			ValidationPlan: []string{
+				"verify intended local ref/commit before push",
+				"push only the approved branch/ref to the approved remote",
+				"record remote ref evidence after push and stop before PR metadata, deploy, restart, credentials, or unrelated external effects",
+			},
+			AutoApprovalAllowed:    true,
+			RequiresInlineApproval: true,
+			ExternalEffectsAllowed: true,
 		}, true
 	case "deploy", "live_deploy", "run_deploy", "system_change", "restart", "restart_service", "service_restart", "restart_aphelion_service", "systemctl_restart", "install_user_service", "make_install_user_service", "run_verify_deploy":
 		return AuthorityContract{

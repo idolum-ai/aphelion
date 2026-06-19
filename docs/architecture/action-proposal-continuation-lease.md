@@ -171,6 +171,11 @@ lease instead of re-prompting. Reuse is conservative:
 - required capability grants must already be covered by the active lease;
 - local-workspace leases cannot adopt proposed external effects.
 
+Remote repository publication is its own lease class. A local-workspace or local
+commit lease cannot absorb `git_push` work by class reuse; the push must be
+present as explicit typed `git_push` authority inside a repo-publication lease
+or a stronger explicitly-approved release/deploy lease.
+
 This is approval-friction reduction only. It does not create authority, grant
 capabilities, or auto-renew the lease. Runtime records successful reuse as
 `continuation.class_scoped_consumption`.

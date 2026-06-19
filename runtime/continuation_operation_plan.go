@@ -511,6 +511,8 @@ func operationPhaseApprovalFamily(phase session.OperationPhase) string {
 	switch class {
 	case session.ContinuationLeaseClassLocalWorkspace:
 		return "local_workspace"
+	case session.ContinuationLeaseClassRepoPublication:
+		return "repo_publication"
 	case session.ContinuationLeaseClassDataAccess:
 		return "data_access"
 	case session.ContinuationLeaseClassChildWake:
@@ -656,7 +658,7 @@ func operationPhaseFreshGateCanJoinPlanBudget(phase session.OperationPhase) bool
 	}
 	class := session.InferContinuationLeaseClass(phase.AuthorityClass, phase.AllowedActions, phase.BoundedEffect)
 	switch class {
-	case session.ContinuationLeaseClassLocalWorkspace, session.ContinuationLeaseClassDataAccess, session.ContinuationLeaseClassChildWake:
+	case session.ContinuationLeaseClassLocalWorkspace, session.ContinuationLeaseClassRepoPublication, session.ContinuationLeaseClassDataAccess, session.ContinuationLeaseClassChildWake:
 		return true
 	default:
 		return false
