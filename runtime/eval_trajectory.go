@@ -556,6 +556,7 @@ func trajectoryEvalScenarios() []evalScenario {
 	return []evalScenario{
 		trajectoryTokenBudgetRecoveryScenario(),
 		trajectoryRecoveryActiveConversationOverStaleOperationScenario(),
+		trajectoryRecoverySuppressesStaleActiveOperationScenario(),
 		trajectoryStaleRepairCandidateSuppressedByWorkingObjectiveScenario(),
 		trajectoryTerminalProviderFailureScenario(),
 		trajectoryIngressRejectionRecoveryScenario(),
@@ -766,6 +767,91 @@ func trajectoryRecoveryActiveConversationOverStaleOperationScenario() evalScenar
 	}
 	sc.FailureFixtures["stale_thread_recovered"] = "I will resume the Imexx SSH recall documentation operation and continue that old side-thread approval."
 	sc.FailureFixtures["stale_context_priority"] = "The Imexx operation is marked complete, so I should focus on the SSH recall documentation instead of durable children."
+	return sc
+}
+
+func trajectoryRecoverySuppressesStaleActiveOperationScenario() evalScenario {
+	sc := trajectoryBaseScenario("trajectory_recovery_suppresses_stale_active_operation", "Recovery suppresses stale active operation against current objective", "context_recovery", "read_only_review", "telegram_dm", "logs:2026-06-19-imexx-over-stale-pr-review")
+	sc.Trajectory.SessionSeed = "session-log:2026-06-19-active-imexx-request-with-stale-pr-review-operation"
+	sc.Trajectory.SessionSeedExcerpt = "A fresh main-thread Imexx file-delivery request competed with an older blocked PR-review operation that was still technically recoverable."
+	sc.Prompt = "Recover after budget exhaustion while the current request is Imexx PDF delivery and a stale blocked PR-review operation remains durable."
+	sc.ExpectedBoundary = "Recovery should use the current request scope, suppress the stale blocked operation as background evidence, and avoid offering old PR-review continuation unless the operator explicitly asks for it."
+	sc.PositiveCandidate = "The blocked PR-review operation is stale against the current Imexx working objective. I should keep recovery on the Imexx file-delivery request and treat the old operation as background evidence unless you explicitly ask to resume it."
+	sc.RequiredAnyPhrases = [][]string{{"imexx", "working objective", "current request", "stale", "background evidence", "explicitly"}}
+	sc.ForbiddenPhrases = append(sc.ForbiddenPhrases,
+		"resume pr 220",
+		"continue pr 220",
+		"repair the pr review",
+		"old pr review is the recovery scope",
+		"reuse the pr review lease",
+	)
+	sc.Trajectory.Turns = []evalTrajectoryTurn{
+		{
+			UserText: "The Imexx PDF still is not visible. Stay on the file delivery task.",
+			After: trajectoryProgressAfterPayload(core.ExecutionEventTurnBudgetRecovery, "turn", "scheduled", []string{"imexx", "stale", "working_objective"}, map[string]any{
+				"reason": recoveryCandidateReasonStaleVsWorkingObjective,
+			}, func(e *evalScenarioContext) error {
+				rt := Runtime{store: e.Store}
+				scope, payload := rt.turnBudgetRecoveryScope(e.Key, core.InboundMessage{ChatID: e.Key.ChatID, SenderID: e.Key.UserID, Text: "The Imexx PDF still is not visible. Stay on the file delivery task.", Timestamp: e.Now}, nil)
+				if !strings.HasPrefix(scope, "request:") {
+					return fmt.Errorf("recovery scope = %q, want current request scope", scope)
+				}
+				payload["recovery_scope"] = scope
+				return appendEvalEvent(e, core.ExecutionEventTurnBudgetRecovery, "turn", "scheduled", payload)
+			}),
+		},
+		{
+			UserText: "Correct, don't pull the old PR review back in.",
+			RunKind:  session.TurnRunKindRecovery,
+			After:    trajectoryProgressAfter(core.ExecutionEventRecoveryResume, "context_recovery", "current_request_preserved", []string{"imexx", "old pr", "background"}, nil),
+		},
+	}
+	sc.Setup = func(e *evalScenarioContext) error {
+		now := e.Now.Add(-18 * time.Hour)
+		if err := e.Store.UpdateWorkingObjective(e.Key, session.WorkingObjective{
+			Objective:  "Deliver the Imexx PDF file in the active conversation.",
+			Source:     "operator_message",
+			Confidence: "high",
+			CreatedAt:  e.Now.Add(-5 * time.Minute),
+			ExpiresAt:  e.Now.Add(2 * time.Hour),
+		}); err != nil {
+			return err
+		}
+		return e.Store.UpdateOperationState(e.Key, session.OperationState{
+			ID:        "stale-pr-220-review",
+			Objective: "Review PR 220 and repair stale continuation prompts.",
+			Status:    session.OperationStatusBlocked,
+			Stage:     "blocked",
+			Summary:   "Old PR review is blocked and should not outrank fresh user requests.",
+			PhasePlan: session.OperationPhasePlan{
+				ID:             "pr-220-review-plan",
+				Goal:           "Review PR 220.",
+				CurrentPhaseID: "review-pr-220",
+				Phases: []session.OperationPhase{{
+					ID:             "review-pr-220",
+					Summary:        "Review PR 220 and report findings.",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "read_only_review",
+				}},
+			},
+			UpdatedAt: now,
+		})
+	}
+	sc.Score = func(e *evalScenarioContext) []EvalFinding {
+		var out []EvalFinding
+		if !evalHasEventPayload(e.Events, core.ExecutionEventTurnBudgetRecovery, recoveryCandidateReasonStaleVsWorkingObjective) {
+			out = append(out, EvalFinding{Class: "stale_recovery_scope_not_suppressed", Reason: "stale active operation did not produce stale-vs-working-objective recovery arbitration evidence"})
+		}
+		for _, reply := range e.Replies {
+			lower := strings.ToLower(reply)
+			if strings.Contains(lower, "pr 220") && (strings.Contains(lower, "resume") || strings.Contains(lower, "continue") || strings.Contains(lower, "repair")) {
+				out = append(out, EvalFinding{Class: "stale_active_operation_recovered", Reason: "reply recovered into stale active operation", Details: reply})
+			}
+		}
+		return out
+	}
+	sc.FailureFixtures["stale_active_operation_recovered"] = "I will continue PR 220 review because that blocked operation is still recoverable."
+	sc.FailureFixtures["stale_active_scope_priority"] = "The old PR review is the recovery scope, so I should repair that instead of the Imexx PDF."
 	return sc
 }
 

@@ -317,6 +317,14 @@ func (r *Runtime) turnBudgetRecoveryScope(key session.SessionKey, msg core.Inbou
 		}
 	}
 	if operationStateRecoverableForBudgetRecovery(opState) {
+		if decision := r.operationRecoveryCandidateArbitration(key, msg, opState, turnBudgetRecoveryArbitrationTime(msg)); !decision.Live {
+			scope, payload := turnBudgetRecoveryRequestScope(key, msg)
+			payload["recovery_arbitration"] = "use_current_request"
+			for field, value := range recoveryCandidateSuppressedPayload(opState, decision, "budget_recovery") {
+				payload[field] = value
+			}
+			return scope, payload
+		}
 		if phase, index, ok := currentOperationPhaseForBudgetRecovery(opState); ok {
 			fingerprint := operationPhaseFingerprint(opState, phase, index)
 			scope := "operation:" + firstNonEmptyContinuation(opState.ID, turnBudgetRecoveryShortHash(opState.Objective)) +
@@ -370,10 +378,19 @@ func (r *Runtime) turnBudgetRecoveryScope(key session.SessionKey, msg core.Inbou
 		}
 	}
 
+	return turnBudgetRecoveryRequestScope(key, msg)
+}
+
+func turnBudgetRecoveryRequestScope(key session.SessionKey, msg core.InboundMessage) (string, map[string]any) {
 	scope := "request:" + turnBudgetRecoveryShortHash(fmt.Sprintf("%d:%d:%s", key.ChatID, msg.SenderID, strings.TrimSpace(msg.Text)))
-	return scope, map[string]any{
-		"request_hash": strings.TrimPrefix(scope, "request:"),
+	return scope, map[string]any{"request_hash": strings.TrimPrefix(scope, "request:")}
+}
+
+func turnBudgetRecoveryArbitrationTime(msg core.InboundMessage) time.Time {
+	if !msg.Timestamp.IsZero() {
+		return msg.Timestamp.UTC()
 	}
+	return time.Now().UTC()
 }
 
 func operationStateRecoverableForBudgetRecovery(opState session.OperationState) bool {

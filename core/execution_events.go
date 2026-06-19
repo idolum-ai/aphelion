@@ -70,6 +70,7 @@ const (
 	ExecutionEventReentryRecommendationFailed  = "reentry_recommendation.failed"
 	ExecutionEventReentryRecommendationJudged  = "reentry_recommendation.judged"
 	ExecutionEventReentryRecommendationShown   = "reentry_recommendation.shown"
+	ExecutionEventRecoveryCandidateSuppressed  = "recovery.candidate_suppressed"
 	ExecutionEventCuriositySkipped             = "curiosity.skipped"
 	ExecutionEventCuriositySelected            = "curiosity.selected"
 	ExecutionEventCuriosityStarted             = "curiosity.started"

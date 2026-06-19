@@ -605,6 +605,122 @@ func TestReentryRecommendationDeterministicRankingPrefersCurrentOperationOverSta
 	}
 }
 
+func TestReentryRecommendationSuppressesOperationConflictingWithWorkingObjective(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 7022, UserID: 0, Scope: telegramDMScopeRef(7022)}
+	if err := store.UpdateWorkingObjective(key, session.WorkingObjective{
+		Objective:  "Deliver the Imexx PDF file in the active conversation.",
+		Source:     "operator_message",
+		Confidence: "high",
+		CreatedAt:  now,
+		ExpiresAt:  now.Add(2 * time.Hour),
+	}); err != nil {
+		t.Fatalf("UpdateWorkingObjective() err = %v", err)
+	}
+	state := reentryRecommendationState{
+		Key: key,
+		Run: session.TurnRun{
+			ID:          90,
+			SessionID:   "telegram:7022:0",
+			Kind:        session.TurnRunKindRecovery,
+			Status:      session.TurnRunStatusCompleted,
+			RequestText: "The Imexx PDF still is not visible. Stay on the file delivery task.",
+			CompletedAt: now.Add(-10 * time.Minute),
+		},
+		Operation: session.OperationState{
+			ID:        "stale-pr-review",
+			Objective: "Review PR 220 and repair the stale Aphelion continuation prompt.",
+			Status:    session.OperationStatusBlocked,
+			Stage:     "blocked",
+			PhasePlan: session.OperationPhasePlan{
+				CurrentPhaseID: "review-pr-220",
+				Phases: []session.OperationPhase{{
+					ID:             "review-pr-220",
+					Summary:        "Review PR 220 and report findings.",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "read_only_review",
+				}},
+			},
+		},
+		Now: now,
+	}
+
+	candidates := rt.reentryRecommendationCandidates(context.Background(), state)
+	for _, candidate := range candidates {
+		if candidate.SourceKind == "operation_state" {
+			t.Fatalf("candidates = %#v, want stale operation candidate suppressed", candidates)
+		}
+	}
+	events, err := store.LatestExecutionEventsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("LatestExecutionEventsBySession() err = %v", err)
+	}
+	if !budgetRecoveryEventPayloadContains(events, core.ExecutionEventRecoveryCandidateSuppressed, "reason", recoveryCandidateReasonStaleVsWorkingObjective) {
+		t.Fatalf("events = %#v, want stale recovery candidate suppression event", events)
+	}
+}
+
+func TestReentryRecommendationAllowsExplicitResumeOfOperation(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 7023, UserID: 0, Scope: telegramDMScopeRef(7023)}
+	if err := store.UpdateWorkingObjective(key, session.WorkingObjective{
+		Objective:  "Deliver the Imexx PDF file in the active conversation.",
+		Source:     "operator_message",
+		Confidence: "high",
+		CreatedAt:  now,
+		ExpiresAt:  now.Add(2 * time.Hour),
+	}); err != nil {
+		t.Fatalf("UpdateWorkingObjective() err = %v", err)
+	}
+	state := reentryRecommendationState{
+		Key: key,
+		Run: session.TurnRun{
+			ID:          91,
+			SessionID:   "telegram:7023:0",
+			Kind:        session.TurnRunKindRecovery,
+			Status:      session.TurnRunStatusCompleted,
+			RequestText: "Resume PR 220 review now.",
+			CompletedAt: now.Add(-10 * time.Minute),
+		},
+		Operation: session.OperationState{
+			ID:        "stale-pr-review",
+			Objective: "Review PR 220 and repair the stale Aphelion continuation prompt.",
+			Status:    session.OperationStatusBlocked,
+			Stage:     "blocked",
+			PhasePlan: session.OperationPhasePlan{
+				CurrentPhaseID: "review-pr-220",
+				Phases: []session.OperationPhase{{
+					ID:             "review-pr-220",
+					Summary:        "Review PR 220 and report findings.",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "read_only_review",
+				}},
+			},
+		},
+		Now: now,
+	}
+
+	candidates := rt.reentryRecommendationCandidates(context.Background(), state)
+	for _, candidate := range candidates {
+		if candidate.SourceKind == "operation_state" && candidate.SourceRef == "stale-pr-review" {
+			return
+		}
+	}
+	t.Fatalf("candidates = %#v, want explicit resume to keep operation candidate", candidates)
+}
+
 func TestReentryRecommendationWhereWereWeCanSurfaceThread(t *testing.T) {
 	t.Parallel()
 

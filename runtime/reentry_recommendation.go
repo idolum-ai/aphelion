@@ -401,44 +401,49 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 		})
 	}
 	if op.Active() && (op.Status == session.OperationStatusCompleted || op.Status == session.OperationStatusBlocked || op.Status == session.OperationStatusActive) {
-		kind := session.ReentryCandidateRequestNextLease
-		intentClass := "continue_operation"
-		labelPrefix := "Continue"
-		if op.Status == session.OperationStatusBlocked {
-			intentClass = "repair_blocker"
-			labelPrefix = "Repair"
-		} else if op.Status == session.OperationStatusCompleted {
-			intentClass = "follow_up_operation"
-			labelPrefix = "Follow up"
+		decision := r.operationRecoveryCandidateArbitration(state.Key, core.InboundMessage{Text: state.Run.RequestText}, op, state.Now)
+		if !decision.Live {
+			r.recordSuppressedRecoveryCandidate(state.Key, op, decision, "reentry_recommendation", state.Now)
+		} else {
+			kind := session.ReentryCandidateRequestNextLease
+			intentClass := "continue_operation"
+			labelPrefix := "Continue"
+			if op.Status == session.OperationStatusBlocked {
+				intentClass = "repair_blocker"
+				labelPrefix = "Repair"
+			} else if op.Status == session.OperationStatusCompleted {
+				intentClass = "follow_up_operation"
+				labelPrefix = "Follow up"
+			}
+			subject := reentryOperationSubject(op)
+			candidates = append(candidates, session.ReentryRecommendationCandidate{
+				ID:               nextReentryCandidateID(candidates),
+				Kind:             kind,
+				Label:            reentryConcreteLabel(labelPrefix, subject),
+				BodyText:         reentryConcreteBodyText(labelPrefix, reentryOperationBodySubject(op)),
+				Summary:          reentryConcreteSummary("Reconstruct the operation state and choose the smallest useful next approval.", subject),
+				PromptText:       reentryPromptForCandidate("Continue the selected operation path: " + subject + ". Take the next safe non-boundary step now. If boundary authority is required, ask for that exact bounded approval before acting."),
+				IntentClass:      intentClass,
+				TemporalFit:      reentryOperationTemporalFit(op),
+				WhyNow:           "current operation state is the nearest durable work surface",
+				AuthorityClass:   firstNonEmpty(op.PhasePlan.CurrentPhaseID, "operation"),
+				RequiresApproval: true,
+				BasisRefs:        []string{fmt.Sprintf("turn_run:%d", state.Run.ID), "operation_state"},
+				SourceKind:       "operation_state",
+				SourceRef:        reentryOperationSourceRef(op),
+				EvidenceRefs:     reentryEvidenceRefs(state.Evidence),
+				Scores: reentryCandidateScores(map[string]float64{
+					"relevance_now":     reentryOperationRelevanceScore(op),
+					"user_intent_fit":   4.5,
+					"evidence_strength": reentryEvidenceStrengthScore(state.Evidence),
+					"resurfacing_value": 1.0,
+					"authority_cost":    reentryOperationAuthorityCost(op),
+					"staleness_risk":    reentryOperationStalenessRisk(op),
+					"cross_thread_risk": 0.0,
+				}),
+				JudgmentReason: "Current operation state is the nearest durable work surface; ask only for the smallest bounded next lease.",
+			})
 		}
-		subject := reentryOperationSubject(op)
-		candidates = append(candidates, session.ReentryRecommendationCandidate{
-			ID:               nextReentryCandidateID(candidates),
-			Kind:             kind,
-			Label:            reentryConcreteLabel(labelPrefix, subject),
-			BodyText:         reentryConcreteBodyText(labelPrefix, reentryOperationBodySubject(op)),
-			Summary:          reentryConcreteSummary("Reconstruct the operation state and choose the smallest useful next approval.", subject),
-			PromptText:       reentryPromptForCandidate("Continue the selected operation path: " + subject + ". Take the next safe non-boundary step now. If boundary authority is required, ask for that exact bounded approval before acting."),
-			IntentClass:      intentClass,
-			TemporalFit:      reentryOperationTemporalFit(op),
-			WhyNow:           "current operation state is the nearest durable work surface",
-			AuthorityClass:   firstNonEmpty(op.PhasePlan.CurrentPhaseID, "operation"),
-			RequiresApproval: true,
-			BasisRefs:        []string{fmt.Sprintf("turn_run:%d", state.Run.ID), "operation_state"},
-			SourceKind:       "operation_state",
-			SourceRef:        reentryOperationSourceRef(op),
-			EvidenceRefs:     reentryEvidenceRefs(state.Evidence),
-			Scores: reentryCandidateScores(map[string]float64{
-				"relevance_now":     reentryOperationRelevanceScore(op),
-				"user_intent_fit":   4.5,
-				"evidence_strength": reentryEvidenceStrengthScore(state.Evidence),
-				"resurfacing_value": 1.0,
-				"authority_cost":    reentryOperationAuthorityCost(op),
-				"staleness_risk":    reentryOperationStalenessRisk(op),
-				"cross_thread_risk": 0.0,
-			}),
-			JudgmentReason: "Current operation state is the nearest durable work surface; ask only for the smallest bounded next lease.",
-		})
 	}
 	for _, mission := range state.Missions {
 		subject := reentryMissionSubject(mission)
