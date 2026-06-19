@@ -5,7 +5,6 @@ package session
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"math"
 	"strings"
 	"time"
@@ -164,15 +163,7 @@ func CuriosityLeaseID(periodStart string, allowedSourceKinds []string, allowedSo
 	if periodStart == "" {
 		periodStart = time.Now().UTC().Format("2006-01-02")
 	}
-	payload, _ := json.Marshal(struct {
-		Kinds []string `json:"kinds"`
-		Refs  []string `json:"refs"`
-	}{
-		Kinds: normalizeCuriosityTokens(allowedSourceKinds),
-		Refs:  normalizeCuriosityRefs(allowedSourceRefs),
-	})
-	sum := sha256.Sum256(payload)
-	return "curiosity-" + periodStart + "-" + hex.EncodeToString(sum[:])[:12]
+	return "curiosity-" + periodStart
 }
 
 func normalizeCuriosityToken(value string) string {

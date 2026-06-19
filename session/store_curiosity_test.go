@@ -51,6 +51,18 @@ func TestCuriosityLeaseConsumptionIsBounded(t *testing.T) {
 	}
 }
 
+func TestCuriosityLeaseIDIgnoresAuthorityEnvelopeForDailySpend(t *testing.T) {
+	period := "2026-06-10"
+	first := CuriosityLeaseID(period, []string{CuriositySourceWorkspace}, []string{"README.md"})
+	second := CuriosityLeaseID(period, []string{CuriositySourceWorkspace, CuriositySourceURL}, []string{"README.md", "https://example.com/feed"})
+	if first != second {
+		t.Fatalf("CuriosityLeaseID changed with authority envelope: %q vs %q", first, second)
+	}
+	if first != "curiosity-"+period {
+		t.Fatalf("CuriosityLeaseID = %q, want lane/day stable ID", first)
+	}
+}
+
 func TestCuriosityObservationDedupesByLeaseCandidateAndContentHash(t *testing.T) {
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
 	if err != nil {

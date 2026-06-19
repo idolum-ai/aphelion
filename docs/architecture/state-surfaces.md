@@ -128,6 +128,8 @@ Curiosity note:
 - `curiosity_leases.status` describes only the current allowance envelope
   (`active`, `expired`, or `exhausted`). It is not a per-look success or
   completion state.
+- Curiosity daily spend is scoped to the lane/day. Config allowlist changes may
+  update the active lease envelope, but they do not create fresh same-day spend.
 - `curiosity_observations` are typed facts produced by read-only candidate-bound
   looks. They may feed interior signal pressure, but they do not directly write
   curated memory, assert completion, or create authority.

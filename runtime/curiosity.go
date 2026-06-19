@@ -23,6 +23,11 @@ import (
 
 const curiositySessionID = "admin-curiosity"
 
+const (
+	curiositySchedulerEventLimit = 300
+	curiosityFailureBackoff      = 4 * time.Hour
+)
+
 func (r *Runtime) StartCuriosityLoop(ctx context.Context, logger func(string, ...any)) {
 	if r == nil || r.store == nil || !r.cfg.Curiosity.Enabled {
 		return
@@ -62,7 +67,14 @@ func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err erro
 	unlock := r.lockSession(key)
 	defer unlock()
 
-	actor := r.curiosityPrincipal()
+	actor, err := r.curiosityPrincipal()
+	if err != nil {
+		r.recordExecutionEvent(key, core.ExecutionEventCuriositySkipped, "curiosity", "skipped", map[string]any{
+			"reason": "principal_ambiguous",
+			"error":  trimError(err.Error()),
+		}, now)
+		return nil
+	}
 	scope, err := r.scopeForPrincipal(actor)
 	if err != nil {
 		return fmt.Errorf("resolve curiosity scope: %w", err)
@@ -86,8 +98,10 @@ func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err erro
 		r.recordExecutionEvent(key, core.ExecutionEventCuriositySkipped, "curiosity", "skipped", map[string]any{"reason": "no_candidate"}, now)
 		return nil
 	}
-	candidate := candidates[0]
-	r.recordExecutionEvent(key, core.ExecutionEventCuriositySelected, "curiosity", "selected", curiosityCandidatePayload(candidate), now)
+	candidate, err := r.selectCuriosityCandidate(candidates, key, now)
+	if err != nil {
+		return err
+	}
 
 	lease, ok, err := r.store.ConsumeCuriosityLeaseTurn(lease.ID, now)
 	if err != nil {
@@ -103,6 +117,9 @@ func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err erro
 		}, now)
 		return nil
 	}
+	selectedPayload := curiosityCandidatePayload(candidate)
+	selectedPayload["selection_policy"] = "intensity_attempt_cooldown_novelty_source_diversity"
+	r.recordExecutionEvent(key, core.ExecutionEventCuriositySelected, "curiosity", "selected", selectedPayload, now)
 
 	requestText := renderCuriosityRequest(candidate)
 	monitor, err := r.startTurnMonitor(ctx, key, session.TurnRunKindCuriosity, requestText, nil, nil, core.InboundMessage{})
@@ -147,6 +164,11 @@ func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err erro
 	}
 	if result == nil {
 		finishErr = fmt.Errorf("curiosity turn returned no result")
+		r.recordExecutionEvent(key, core.ExecutionEventCuriosityFailed, "curiosity", "failed", map[string]any{
+			"lease_id":     lease.ID,
+			"candidate_id": candidate.ID,
+			"error":        trimError(finishErr.Error()),
+		}, time.Now().UTC())
 		return finishErr
 	}
 	if result.ProviderFailure != "" || result.Recovery != nil {
@@ -215,18 +237,18 @@ func curiositySessionKey() session.SessionKey {
 	return session.SessionKey{ChatID: cronSessionChatID(curiositySessionID), UserID: 0, Scope: curiosityScopeRef()}
 }
 
-func (r *Runtime) curiosityPrincipal() principal.Principal {
-	for _, id := range r.cfg.Principals.Telegram.ApprovedUserIDs {
-		if id > 0 {
-			return principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: id}
-		}
+func (r *Runtime) curiosityPrincipal() (principal.Principal, error) {
+	if r == nil || r.cfg == nil {
+		return principal.Principal{}, fmt.Errorf("curiosity principal config unavailable")
 	}
-	for _, id := range r.cfg.Principals.Telegram.AdminUserIDs {
-		if id > 0 {
-			return principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: id}
-		}
+	if approved := uniquePositiveIDs(r.cfg.Principals.Telegram.ApprovedUserIDs); len(approved) > 0 {
+		return principal.Principal{}, fmt.Errorf("curiosity requires exactly one admin principal and no approved-user principals")
 	}
-	return principal.Principal{Role: principal.RoleApprovedUser}
+	admins := uniquePositiveIDs(r.cfg.Principals.Telegram.AdminUserIDs)
+	if len(admins) != 1 {
+		return principal.Principal{}, fmt.Errorf("curiosity requires exactly one admin principal, found %d", len(admins))
+	}
+	return principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: admins[0]}, nil
 }
 
 func (r *Runtime) ensureConfiguredCuriosityLease(now time.Time) (session.CuriosityLease, error) {
@@ -345,6 +367,159 @@ func (r *Runtime) curiosityCandidates(tools agent.ToolRegistry, sharedMemoryRoot
 		out = out[:12]
 	}
 	return out, nil
+}
+
+func (r *Runtime) selectCuriosityCandidate(candidates []curiosityCandidate, key session.SessionKey, now time.Time) (curiosityCandidate, error) {
+	if len(candidates) == 0 {
+		return curiosityCandidate{}, fmt.Errorf("select curiosity candidate: no candidates")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	history, err := r.curiositySelectionHistory(key)
+	if err != nil {
+		return curiosityCandidate{}, err
+	}
+	best := candidates[0]
+	bestScore := curiosityCandidateSelectionScore(best, history, now)
+	for _, candidate := range candidates[1:] {
+		score := curiosityCandidateSelectionScore(candidate, history, now)
+		if score > bestScore {
+			best = candidate
+			bestScore = score
+		}
+	}
+	return best, nil
+}
+
+type curiositySelectionHistory struct {
+	candidateAttempts     map[string]int
+	candidateLastAttempt  map[string]time.Time
+	candidateLastFailure  map[string]time.Time
+	candidateObservations map[string]time.Time
+	sourceAttempts        map[string]int
+	sourceLastAttempt     map[string]time.Time
+	sourceObservations    map[string]time.Time
+}
+
+func (r *Runtime) curiositySelectionHistory(key session.SessionKey) (curiositySelectionHistory, error) {
+	history := curiositySelectionHistory{
+		candidateAttempts:     make(map[string]int),
+		candidateLastAttempt:  make(map[string]time.Time),
+		candidateLastFailure:  make(map[string]time.Time),
+		candidateObservations: make(map[string]time.Time),
+		sourceAttempts:        make(map[string]int),
+		sourceLastAttempt:     make(map[string]time.Time),
+		sourceObservations:    make(map[string]time.Time),
+	}
+	if r == nil || r.store == nil {
+		return history, nil
+	}
+	events, err := r.store.LatestExecutionEventsBySession(key, curiositySchedulerEventLimit)
+	if err != nil {
+		return history, fmt.Errorf("load curiosity scheduler events: %w", err)
+	}
+	for _, event := range events {
+		switch event.EventType {
+		case core.ExecutionEventCuriositySelected:
+			payload := executionEventPayload(event.PayloadJSON)
+			candidateID := payloadString(payload, "candidate_id")
+			if candidateID == "" {
+				continue
+			}
+			sourceKey := curiositySourceKey(payloadString(payload, "source_kind"), payloadString(payload, "source_ref"))
+			history.candidateAttempts[candidateID]++
+			history.candidateLastAttempt[candidateID] = maxTime(history.candidateLastAttempt[candidateID], event.CreatedAt)
+			if sourceKey != "" {
+				history.sourceAttempts[sourceKey]++
+				history.sourceLastAttempt[sourceKey] = maxTime(history.sourceLastAttempt[sourceKey], event.CreatedAt)
+			}
+		case core.ExecutionEventCuriosityFailed:
+			payload := executionEventPayload(event.PayloadJSON)
+			candidateID := payloadString(payload, "candidate_id")
+			if candidateID != "" {
+				history.candidateLastFailure[candidateID] = maxTime(history.candidateLastFailure[candidateID], event.CreatedAt)
+			}
+		case core.ExecutionEventCuriositySkipped:
+			payload := executionEventPayload(event.PayloadJSON)
+			reason := payloadString(payload, "reason")
+			if reason != "candidate_tool_not_used" {
+				continue
+			}
+			candidateID := payloadString(payload, "candidate_id")
+			if candidateID != "" {
+				history.candidateLastFailure[candidateID] = maxTime(history.candidateLastFailure[candidateID], event.CreatedAt)
+			}
+		}
+	}
+	observations, err := r.store.CuriosityObservations(curiositySchedulerEventLimit)
+	if err != nil {
+		return history, fmt.Errorf("load curiosity scheduler observations: %w", err)
+	}
+	for _, obs := range observations {
+		if obs.CandidateID != "" {
+			history.candidateObservations[obs.CandidateID] = maxTime(history.candidateObservations[obs.CandidateID], obs.ObservedAt)
+		}
+		if sourceKey := curiositySourceKey(obs.SourceKind, obs.SourceRef); sourceKey != "" {
+			history.sourceObservations[sourceKey] = maxTime(history.sourceObservations[sourceKey], obs.ObservedAt)
+		}
+	}
+	return history, nil
+}
+
+func curiosityCandidateSelectionScore(candidate curiosityCandidate, history curiositySelectionHistory, now time.Time) float64 {
+	score := candidate.SignalIntensity * 100
+	sourceKey := curiositySourceKey(candidate.SourceKind, candidate.SourceRef)
+	attempts := history.candidateAttempts[candidate.ID]
+	sourceAttempts := history.sourceAttempts[sourceKey]
+	score -= float64(attempts) * 45
+	score -= float64(sourceAttempts) * 20
+	if _, ok := history.candidateObservations[candidate.ID]; ok {
+		score -= 35
+	}
+	if _, ok := history.sourceObservations[sourceKey]; ok {
+		score -= 15
+	}
+	if last := history.candidateLastAttempt[candidate.ID]; !last.IsZero() {
+		score -= recencyPenalty(now.Sub(last), 25, 2*time.Hour)
+	}
+	if last := history.sourceLastAttempt[sourceKey]; !last.IsZero() {
+		score -= recencyPenalty(now.Sub(last), 15, 2*time.Hour)
+	}
+	if last := history.candidateLastFailure[candidate.ID]; !last.IsZero() {
+		score -= recencyPenalty(now.Sub(last), 120, curiosityFailureBackoff)
+	}
+	return score
+}
+
+func recencyPenalty(age time.Duration, max float64, window time.Duration) float64 {
+	if age < 0 {
+		age = 0
+	}
+	if window <= 0 || age >= window {
+		return 0
+	}
+	return max * (1 - float64(age)/float64(window))
+}
+
+func curiositySourceKey(kind string, ref string) string {
+	kind = strings.TrimSpace(kind)
+	ref = strings.TrimSpace(ref)
+	if kind == "" || ref == "" {
+		return ""
+	}
+	return kind + "\x00" + ref
+}
+
+func maxTime(left time.Time, right time.Time) time.Time {
+	if right.IsZero() {
+		return left
+	}
+	if left.IsZero() || right.After(left) {
+		return right.UTC()
+	}
+	return left.UTC()
 }
 
 func curiosityMemoryToolPath(sharedMemoryRoot string, rel string) string {
