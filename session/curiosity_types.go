@@ -212,7 +212,7 @@ func SafeCuriosityURLSourceRef(rawURL string) string {
 	if len(keys) > 0 {
 		ref += ";query_keys=" + strings.Join(keys, ",")
 	}
-	return ref + ";hash=" + curiosityURLIdentityHash(rawURL)
+	return ref + ";hash=" + curiosityURLIdentityHash(ref)
 }
 
 func CuriosityPressureFingerprint(leaseID string, candidateID string, contentHash string) string {

@@ -159,6 +159,19 @@ func TestSafeCuriosityURLSourceRefRedactsQueryValues(t *testing.T) {
 	}
 }
 
+func TestSafeCuriosityURLSourceRefIgnoresQueryValueRotation(t *testing.T) {
+	first := SafeCuriosityURLSourceRef("https://example.com/feed/releases?token=first-secret&topic=Release")
+	second := SafeCuriosityURLSourceRef("https://example.com/feed/releases?topic=Other&token=second-secret")
+	if first != second {
+		t.Fatalf("safe URL refs differ after query value rotation:\nfirst:  %s\nsecond: %s", first, second)
+	}
+	for _, forbidden := range []string{"first-secret", "second-secret", "Release", "Other"} {
+		if strings.Contains(first, forbidden) || strings.Contains(second, forbidden) {
+			t.Fatalf("safe URL refs leaked rotated query value %q: %q / %q", forbidden, first, second)
+		}
+	}
+}
+
 func TestCuriosityRetentionPrunesOldLeasesAndObservations(t *testing.T) {
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
 	if err != nil {

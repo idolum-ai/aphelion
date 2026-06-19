@@ -134,7 +134,9 @@ Curiosity note:
 - Curiosity pressure handoff is reconciled by the runtime-owned pressure
   fingerprint. An observation without a matching `interior_signal_observations`
   row from source `curiosity` is stranded and should surface in diagnostics
-  instead of being treated as applied pressure.
+  instead of being treated as applied pressure. Current behavior is detection,
+  not automatic replay: a future repair actor may re-apply stranded pressure
+  idempotently, but ordinary diagnostics must not hide the gap.
 - URL curiosity source refs are durable identities, not fetch targets. Durable
   source/evidence refs use a canonical host/path/query-key identity plus a hash;
   raw URL query values stay in config or the selected tool input only.
