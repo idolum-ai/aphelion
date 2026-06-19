@@ -101,8 +101,10 @@ When you approve a request, the approved Telegram message offers an
 task already in front of you. The window opens the temporary automation gate and the
 approval grant for new approval requests, scoped to the current chat or side thread.
 If `[autonomy].default_approval_window` is set to a duration such as `15m` or
-`30m`, eligible admin-owned requests can open the same finite window lazily; the
-setting remains off by default.
+`30m`, the first approval-window prompt is hidden by opening the same finite
+window from local config. The normal `Approve <duration>` prompt can appear
+again after that baseline expires. Use `always` only when you want rolling
+finite 15-minute windows. The setting remains off by default.
 
 The active window then offers `Double time` and `Cancel approvals`. Use
 `/health` after changing approval windows when you want the service state visible.

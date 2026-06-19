@@ -154,6 +154,143 @@ func TestRuntimeDefaultApprovalWindowOpensFiniteRowsForAdminRequest(t *testing.T
 	assertOperatorWindowDuration(t, overrides[0].CreatedAt, overrides[0].ExpiresAt, 30*time.Minute)
 }
 
+func TestRuntimeDefaultApprovalWindowFiniteDoesNotReopenAfterBaselineExpires(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.DefaultApprovalWindow = "15m"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Now().UTC()
+	scopeKind, scopeID := operatorAutoDefaultScope(99294)
+	if _, err := store.CreateOperatorAutoApprovalLease(session.OperatorAutoApprovalLease{
+		ID:          "lease-default-finite-expired",
+		AdminUserID: 1001,
+		ChatID:      99294,
+		ScopeKind:   scopeKind,
+		ScopeID:     scopeID,
+		Scope:       session.OperatorAutoApprovalScopeAll,
+		Reason:      defaultApprovalWindowReason,
+		CreatedAt:   now.Add(-30 * time.Minute),
+		ExpiresAt:   now.Add(-15 * time.Minute),
+		UpdatedAt:   now.Add(-15 * time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutoApprovalLease(expired) err = %v", err)
+	}
+	if _, err := store.CreateOperatorAutonomyOverride(session.OperatorAutonomyOverride{
+		ID:          "override-default-finite-expired",
+		AdminUserID: 1001,
+		ChatID:      99294,
+		ScopeKind:   scopeKind,
+		ScopeID:     scopeID,
+		Mode:        "leased",
+		Scope:       session.OperatorAutoApprovalScopeAll,
+		Reason:      defaultApprovalWindowReason,
+		CreatedAt:   now.Add(-30 * time.Minute),
+		ExpiresAt:   now.Add(-15 * time.Minute),
+		UpdatedAt:   now.Add(-15 * time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutonomyOverride(expired) err = %v", err)
+	}
+
+	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-default-window-expired",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        99294,
+			SenderID:      1001,
+			Prompt:        "Approve this proposal?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if result.Choice != "" {
+		t.Fatalf("auto resolution = %#v, want finite default baseline not to renew after expiry", result)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(99294, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 0 {
+		t.Fatalf("leases = %#v, want no renewed finite default lease", leases)
+	}
+}
+
+func TestRuntimeDefaultApprovalWindowAlwaysReopensAfterBaselineExpires(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.DefaultApprovalWindow = "always"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Now().UTC()
+	scopeKind, scopeID := operatorAutoDefaultScope(99295)
+	if _, err := store.CreateOperatorAutoApprovalLease(session.OperatorAutoApprovalLease{
+		ID:          "lease-default-always-expired",
+		AdminUserID: 1001,
+		ChatID:      99295,
+		ScopeKind:   scopeKind,
+		ScopeID:     scopeID,
+		Scope:       session.OperatorAutoApprovalScopeAll,
+		Reason:      defaultApprovalWindowReason,
+		CreatedAt:   now.Add(-30 * time.Minute),
+		ExpiresAt:   now.Add(-15 * time.Minute),
+		UpdatedAt:   now.Add(-15 * time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutoApprovalLease(expired) err = %v", err)
+	}
+	if _, err := store.CreateOperatorAutonomyOverride(session.OperatorAutonomyOverride{
+		ID:          "override-default-always-expired",
+		AdminUserID: 1001,
+		ChatID:      99295,
+		ScopeKind:   scopeKind,
+		ScopeID:     scopeID,
+		Mode:        "leased",
+		Scope:       session.OperatorAutoApprovalScopeAll,
+		Reason:      defaultApprovalWindowReason,
+		CreatedAt:   now.Add(-30 * time.Minute),
+		ExpiresAt:   now.Add(-15 * time.Minute),
+		UpdatedAt:   now.Add(-15 * time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutonomyOverride(expired) err = %v", err)
+	}
+
+	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-default-window-always-expired",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        99295,
+			SenderID:      1001,
+			Prompt:        "Approve this proposal?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if result.Choice != "approve" {
+		t.Fatalf("auto resolution = %#v, want always default window to renew", result)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(99295, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].Reason != defaultApprovalWindowReason || leases[0].UsedCount != 1 {
+		t.Fatalf("leases = %#v, want renewed used default lease", leases)
+	}
+	assertOperatorWindowDuration(t, leases[0].CreatedAt, leases[0].ExpiresAt, 15*time.Minute)
+}
+
 func TestRuntimeDefaultApprovalWindowOffDoesNotResolve(t *testing.T) {
 	t.Parallel()
 

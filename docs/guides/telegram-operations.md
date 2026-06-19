@@ -245,9 +245,11 @@ gate and the spendable approval grant together, so the operator does not have to
 manage them as separate controls.
 
 `[autonomy].default_approval_window` is off by default. When set to a duration
-such as `15m` or `30m`, eligible admin-owned approval requests lazily open the
-same finite window. `always` means rolling finite 15-minute windows, not
-non-expiring authority.
+such as `15m` or `30m`, the first approval-window prompt is hidden by opening
+the same finite typed rows for eligible admin-owned approval requests. After
+that baseline window expires, later messages can show the normal
+`Approve <duration>` prompt again. `always` means rolling finite 15-minute
+windows, not non-expiring authority.
 
 An active window shows `Double time` and `Cancel approvals`. Each `Double time`
 press doubles the current window duration within the configured live-override

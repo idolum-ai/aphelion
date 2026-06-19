@@ -458,6 +458,142 @@ func TestRuntimeApprovalWindowOfferNonAdminDoesNotConsumeOffer(t *testing.T) {
 	}
 }
 
+func TestRuntimeDefaultApprovalWindowSuppressesInitialApprovalWindowOffer(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.DefaultApprovalWindow = "15m"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	chatID := int64(99324)
+	key := session.SessionKey{ChatID: chatID, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "99324"}}
+	offer, created, err := rt.CreateApprovalWindowOfferForKey(context.Background(), key, 1001, session.ApprovalWindowOfferSourceDecision, "decision-default-hidden", string(decision.KindProposalApproval))
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOfferForKey() err = %v", err)
+	}
+	if created || offer.ID != "" {
+		t.Fatalf("CreateApprovalWindowOfferForKey() = %#v created=%v, want no visible approval-window offer", offer, created)
+	}
+	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
+	now := time.Now().UTC()
+	leases, err := store.ActiveOperatorAutoApprovalLeasesForScope(chatID, scopeKind, scopeID, now)
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeasesForScope() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].Reason != defaultApprovalWindowReason || leases[0].UsedCount != 0 {
+		t.Fatalf("leases = %#v, want one unspent default baseline lease", leases)
+	}
+	assertOperatorWindowDuration(t, leases[0].CreatedAt, leases[0].ExpiresAt, 15*time.Minute)
+	overrides, err := store.ActiveOperatorAutonomyOverridesForScope(chatID, scopeKind, scopeID, now)
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutonomyOverridesForScope() err = %v", err)
+	}
+	if len(overrides) != 1 || overrides[0].Reason != defaultApprovalWindowReason || overrides[0].Mode != "leased" {
+		t.Fatalf("overrides = %#v, want one default baseline override", overrides)
+	}
+	if existing, ok, err := store.ActiveApprovalWindowOfferForSource(chatID, session.ApprovalWindowOfferSourceDecision, "decision-default-hidden", now); err != nil || ok {
+		t.Fatalf("ActiveApprovalWindowOfferForSource() = %#v ok=%v err=%v, want no card offer", existing, ok, err)
+	}
+}
+
+func TestRuntimeDefaultApprovalWindowSuppressesExistingUnusedApprovalWindowOffer(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.DefaultApprovalWindow = "15m"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	chatID := int64(99325)
+	key := session.SessionKey{ChatID: chatID, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "99325"}}
+	now := time.Now().UTC()
+	created, err := store.CreateApprovalWindowOffer(session.ApprovalWindowOffer{
+		ID:                 "offer-default-hidden-existing",
+		ChatID:             chatID,
+		AdminUserID:        1001,
+		SessionID:          session.SessionIDForKey(key),
+		ScopeKind:          string(session.ScopeKindTelegramDM),
+		ScopeID:            "99325",
+		SourceKind:         session.ApprovalWindowOfferSourceDecision,
+		SourceID:           "decision-default-existing",
+		SourceDecisionKind: string(decision.KindProposalApproval),
+		CreatedAt:          now.Add(-time.Minute),
+		ExpiresAt:          now.Add(time.Hour),
+		UpdatedAt:          now.Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOffer() err = %v", err)
+	}
+	offer, ok, err := rt.CreateApprovalWindowOfferForKey(context.Background(), key, 1001, session.ApprovalWindowOfferSourceDecision, created.SourceID, string(decision.KindProposalApproval))
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOfferForKey() err = %v", err)
+	}
+	if ok || offer.ID != "" {
+		t.Fatalf("CreateApprovalWindowOfferForKey() = %#v ok=%v, want suppressed existing unused offer", offer, ok)
+	}
+	stored, ok, err := store.ApprovalWindowOffer(created.ID)
+	if err != nil || !ok {
+		t.Fatalf("ApprovalWindowOffer() ok=%v err=%v", ok, err)
+	}
+	if stored.ClosedAt.IsZero() {
+		t.Fatalf("stored.ClosedAt is zero; want unused offer closed when default baseline suppresses it")
+	}
+}
+
+func TestRuntimeDefaultApprovalWindowExpiredBaselineAllowsApprovalWindowOffer(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.DefaultApprovalWindow = "15m"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	chatID := int64(99326)
+	key := session.SessionKey{ChatID: chatID, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "99326"}}
+	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
+	now := time.Now().UTC()
+	if _, err := store.CreateOperatorAutoApprovalLease(session.OperatorAutoApprovalLease{
+		ID:          "lease-default-expired-baseline",
+		AdminUserID: 1001,
+		ChatID:      chatID,
+		ScopeKind:   scopeKind,
+		ScopeID:     scopeID,
+		Scope:       session.OperatorAutoApprovalScopeAll,
+		Reason:      defaultApprovalWindowReason,
+		CreatedAt:   now.Add(-30 * time.Minute),
+		ExpiresAt:   now.Add(-15 * time.Minute),
+		UpdatedAt:   now.Add(-15 * time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutoApprovalLease(expired) err = %v", err)
+	}
+	if _, err := store.CreateOperatorAutonomyOverride(session.OperatorAutonomyOverride{
+		ID:          "override-default-expired-baseline",
+		AdminUserID: 1001,
+		ChatID:      chatID,
+		ScopeKind:   scopeKind,
+		ScopeID:     scopeID,
+		Mode:        "leased",
+		Scope:       session.OperatorAutoApprovalScopeAll,
+		Reason:      defaultApprovalWindowReason,
+		CreatedAt:   now.Add(-30 * time.Minute),
+		ExpiresAt:   now.Add(-15 * time.Minute),
+		UpdatedAt:   now.Add(-15 * time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutonomyOverride(expired) err = %v", err)
+	}
+	offer, created, err := rt.CreateApprovalWindowOfferForKey(context.Background(), key, 1001, session.ApprovalWindowOfferSourceDecision, "decision-after-default-expired", string(decision.KindProposalApproval))
+	if err != nil {
+		t.Fatalf("CreateApprovalWindowOfferForKey() err = %v", err)
+	}
+	if !created || offer.ID == "" {
+		t.Fatalf("CreateApprovalWindowOfferForKey() = %#v created=%v, want visible approval-window offer after baseline expiry", offer, created)
+	}
+}
+
 func TestRuntimeApprovalWindowOfferDuplicateTapDoesNotOpenSecondWindow(t *testing.T) {
 	t.Parallel()
 

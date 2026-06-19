@@ -43,6 +43,18 @@ func (r *Runtime) CreateApprovalWindowOfferForKey(ctx context.Context, key sessi
 	if existing, ok, err := r.store.ActiveApprovalWindowOfferForSource(key.ChatID, sourceKind, sourceID, now); err != nil {
 		return session.ApprovalWindowOffer{}, false, err
 	} else if ok {
+		if existing.UsedAt.IsZero() {
+			suppress, suppressErr := r.suppressInitialDefaultApprovalWindowOffer(key.ChatID, adminUserID, scopeKind, scopeID, sourceKind, now)
+			if suppressErr != nil {
+				return session.ApprovalWindowOffer{}, false, suppressErr
+			}
+			if suppress {
+				if _, _, closeErr := r.store.CloseUnusedApprovalWindowOffer(existing.ID, now); closeErr != nil {
+					return session.ApprovalWindowOffer{}, false, closeErr
+				}
+				return session.ApprovalWindowOffer{}, false, nil
+			}
+		}
 		if !existing.UsedAt.IsZero() {
 			if existing.OpenedLeaseID == "" && existing.OpenedOverrideID == "" {
 				if approvalWindowOfferClaimStillOpening(existing, now) {
@@ -59,6 +71,13 @@ func (r *Runtime) CreateApprovalWindowOfferForKey(ctx context.Context, key sessi
 		} else {
 			return existing, true, nil
 		}
+	}
+	suppress, err := r.suppressInitialDefaultApprovalWindowOffer(key.ChatID, adminUserID, scopeKind, scopeID, sourceKind, now)
+	if err != nil {
+		return session.ApprovalWindowOffer{}, false, err
+	}
+	if suppress {
+		return session.ApprovalWindowOffer{}, false, nil
 	}
 	offer := session.ApprovalWindowOffer{
 		ID:                 newApprovalWindowOfferID(key.ChatID, now),

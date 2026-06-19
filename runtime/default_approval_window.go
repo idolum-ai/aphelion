@@ -13,6 +13,7 @@ import (
 )
 
 const defaultApprovalWindowReason = "default approval window"
+const defaultApprovalWindowEventSource = "default_approval_window"
 
 func (r *Runtime) DefaultApprovalWindowDuration() time.Duration {
 	policy := config.EffectiveAutonomyPolicy(nil).DefaultApprovalWindow
@@ -62,12 +63,87 @@ func (r *Runtime) ensureDefaultApprovalWindowForRequest(ctx context.Context, req
 			(overrideOK && strings.TrimSpace(override.Reason) != defaultApprovalWindowReason) {
 			return nil
 		}
+		return r.openDefaultApprovalWindowForScope(req.ChatID, adminUserID, scopeKind, scopeID, strings.TrimSpace(req.Kind), policy.Duration, now)
 	}
-	expiresAt := now.Add(policy.Duration)
+	if !policy.Always {
+		if _, ok, err := r.store.LatestOperatorAutoApprovalLeaseForScopeAndReason(req.ChatID, adminUserID, scopeKind, scopeID, defaultApprovalWindowReason); err != nil {
+			return err
+		} else if ok {
+			return nil
+		}
+	}
+	return r.openDefaultApprovalWindowForScope(req.ChatID, adminUserID, scopeKind, scopeID, strings.TrimSpace(req.Kind), policy.Duration, now)
+}
+
+func (r *Runtime) suppressInitialDefaultApprovalWindowOffer(chatID int64, adminUserID int64, scopeKind string, scopeID string, sourceKind string, now time.Time) (bool, error) {
+	if r == nil || r.store == nil || r.cfg == nil || chatID == 0 {
+		return false, nil
+	}
+	policy := config.EffectiveAutonomyPolicy(r.cfg).DefaultApprovalWindow
+	if !policy.Enabled {
+		return false, nil
+	}
+	if adminUserID <= 0 || !r.IsTelegramAdmin(adminUserID) {
+		return false, nil
+	}
+	scopeKind = strings.TrimSpace(scopeKind)
+	scopeID = strings.TrimSpace(scopeID)
+	if scopeKind == "" || scopeID == "" {
+		scopeKind, scopeID = operatorAutoDefaultScope(chatID)
+	}
+	if err := r.validateApprovalWindowDuration(policy.Duration); err != nil {
+		return false, err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	lease, leaseOK, err := r.activeOperatorAutoApprovalLeaseForAdminAndScope(chatID, scopeKind, scopeID, adminUserID, now)
+	if err != nil {
+		return false, err
+	}
+	override, overrideOK, err := r.activeOperatorAutonomyOverrideForAdminAndScope(chatID, scopeKind, scopeID, adminUserID, now)
+	if err != nil {
+		return false, err
+	}
+	if leaseOK && overrideOK {
+		return strings.TrimSpace(lease.Reason) == defaultApprovalWindowReason && strings.TrimSpace(override.Reason) == defaultApprovalWindowReason, nil
+	}
+	if leaseOK || overrideOK {
+		if (leaseOK && strings.TrimSpace(lease.Reason) == defaultApprovalWindowReason) ||
+			(overrideOK && strings.TrimSpace(override.Reason) == defaultApprovalWindowReason) {
+			return true, r.openDefaultApprovalWindowForScope(chatID, adminUserID, scopeKind, scopeID, strings.TrimSpace(sourceKind), policy.Duration, now)
+		}
+		return false, nil
+	}
+	if _, ok, err := r.store.LatestOperatorAutoApprovalLeaseForScopeAndReason(chatID, adminUserID, scopeKind, scopeID, defaultApprovalWindowReason); err != nil {
+		return false, err
+	} else if ok && !policy.Always {
+		return false, nil
+	}
+	return true, r.openDefaultApprovalWindowForScope(chatID, adminUserID, scopeKind, scopeID, strings.TrimSpace(sourceKind), policy.Duration, now)
+}
+
+func (r *Runtime) openDefaultApprovalWindowForScope(chatID int64, adminUserID int64, scopeKind string, scopeID string, requestKind string, duration time.Duration, now time.Time) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	if duration <= 0 {
+		duration = approvalWindowDefaultDuration
+	}
+	if err := r.validateApprovalWindowDuration(duration); err != nil {
+		return err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	scopeKind = strings.TrimSpace(scopeKind)
+	scopeID = strings.TrimSpace(scopeID)
+	expiresAt := now.Add(duration)
 	createdOverrideInput := session.OperatorAutonomyOverride{
-		ID:          newOperatorAutonomyOverrideID(req.ChatID, adminUserID, now),
+		ID:          newOperatorAutonomyOverrideID(chatID, adminUserID, now),
 		AdminUserID: adminUserID,
-		ChatID:      req.ChatID,
+		ChatID:      chatID,
 		ScopeKind:   scopeKind,
 		ScopeID:     scopeID,
 		Mode:        "leased",
@@ -78,9 +154,9 @@ func (r *Runtime) ensureDefaultApprovalWindowForRequest(ctx context.Context, req
 		UpdatedAt:   now,
 	}
 	createdLeaseInput := session.OperatorAutoApprovalLease{
-		ID:          newOperatorAutoApprovalLeaseID(req.ChatID, adminUserID, now),
+		ID:          newOperatorAutoApprovalLeaseID(chatID, adminUserID, now),
 		AdminUserID: adminUserID,
-		ChatID:      req.ChatID,
+		ChatID:      chatID,
 		ScopeKind:   scopeKind,
 		ScopeID:     scopeID,
 		Scope:       session.OperatorAutoApprovalScopeAll,
@@ -90,29 +166,29 @@ func (r *Runtime) ensureDefaultApprovalWindowForRequest(ctx context.Context, req
 		ExpiresAt:   expiresAt,
 		UpdatedAt:   now,
 	}
-	if _, err := r.store.RevokeOperatorAutonomyOverridesForScope(req.ChatID, adminUserID, scopeKind, scopeID, now); err != nil {
+	if _, err := r.store.RevokeOperatorAutonomyOverridesForScope(chatID, adminUserID, scopeKind, scopeID, now); err != nil {
 		return err
 	}
 	createdOverride, err := r.store.CreateOperatorAutonomyOverride(createdOverrideInput)
 	if err != nil {
 		return err
 	}
-	r.recordOperatorAutoModeEvent(req.ChatID, core.ExecutionEventAutoModeEnabled, "active", createdOverride, map[string]any{
-		"source":           "default_approval_window",
-		"request_kind":     strings.TrimSpace(req.Kind),
-		"duration_seconds": int64(policy.Duration / time.Second),
+	r.recordOperatorAutoModeEvent(chatID, core.ExecutionEventAutoModeEnabled, "active", createdOverride, map[string]any{
+		"source":           defaultApprovalWindowEventSource,
+		"request_kind":     strings.TrimSpace(requestKind),
+		"duration_seconds": int64(duration / time.Second),
 	})
-	if _, err := r.store.RevokeOperatorAutoApprovalLeasesForScope(req.ChatID, adminUserID, scopeKind, scopeID, now); err != nil {
+	if _, err := r.store.RevokeOperatorAutoApprovalLeasesForScope(chatID, adminUserID, scopeKind, scopeID, now); err != nil {
 		return err
 	}
 	createdLease, err := r.store.CreateOperatorAutoApprovalLease(createdLeaseInput)
 	if err != nil {
 		return err
 	}
-	r.recordOperatorAutoApprovalEvent(req.ChatID, core.ExecutionEventAutoApprovalGranted, "active", createdLease, map[string]any{
-		"source":           "default_approval_window",
-		"request_kind":     strings.TrimSpace(req.Kind),
-		"duration_seconds": int64(policy.Duration / time.Second),
+	r.recordOperatorAutoApprovalEvent(chatID, core.ExecutionEventAutoApprovalGranted, "active", createdLease, map[string]any{
+		"source":           defaultApprovalWindowEventSource,
+		"request_kind":     strings.TrimSpace(requestKind),
+		"duration_seconds": int64(duration / time.Second),
 	})
 	return nil
 }

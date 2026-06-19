@@ -92,7 +92,7 @@ Current command surface:
   - `Approve <duration>` opens the temporary automation gate and approval grant for new approval requests in the current chat or side thread.
   - Active windows offer `Double time` and `Cancel approvals`.
   - Each `Double time` press doubles the current window duration within the configured live-override ceiling. `Cancel approvals` revokes both records.
-  - `[autonomy].default_approval_window` is off by default. Set it to a duration such as `15m` or `30m`, or `always` for rolling finite 15-minute windows, to lazily open the same typed rows for eligible admin-owned requests without tapping the button first.
+  - `[autonomy].default_approval_window` is off by default. Set it to a duration such as `15m` or `30m` to hide the first approval-window prompt by opening the same finite typed rows for eligible admin-owned requests. Once that baseline window expires, later messages can show the normal `Approve <duration>` prompt again. Set it to `always` for rolling finite 15-minute windows.
   - If config is tightened later, live mode overrides outside the new ceiling are ignored and `/health diagnose` reports the precedence block.
 - `/stop`
   - Stops active work in the current chat and drops queued follow-up work.
@@ -297,9 +297,11 @@ approved:
   live-override ceiling.
 - `Cancel approvals` revokes both the approval grant and its matching temporary
   automation gate.
-- `[autonomy].default_approval_window` can make this window open lazily for
-  eligible admin-owned requests. It is off by default; `always` means rolling
-  finite 15-minute windows rather than non-expiring authority.
+- `[autonomy].default_approval_window` can hide the first approval-window prompt
+  by opening the same finite rows for eligible admin-owned requests. It is off
+  by default; after that baseline expires, later messages can show the normal
+  `Approve <duration>` prompt again. `always` means rolling finite 15-minute
+  windows rather than non-expiring authority.
 
 Duration, scope, live-override ceiling, admin checks, and spendability remain
 typed runtime checks, not UI convention.
