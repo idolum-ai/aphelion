@@ -1335,6 +1335,40 @@ func TestMigratesSchemaV67ToV68MediaPickerSourceIngressColumns(t *testing.T) {
 	assertSQLiteColumn(t, store.db, "telegram_media_thread_pickers", "source_ingress_update_id")
 }
 
+func TestMigratesSchemaV69ToV70EffectAttempts(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v69.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v69 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (69)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v69 fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v69 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v69) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteColumn(t, store.db, "effect_attempts", "attempt_id")
+	assertSQLiteColumn(t, store.db, "effect_attempts", "subject_json")
+	assertSQLiteColumn(t, store.db, "effect_attempts", "evidence_refs_json")
+}
+
 func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {
 	t.Helper()
 	rows, err := db.Query(`PRAGMA table_info(` + tableName + `)`)

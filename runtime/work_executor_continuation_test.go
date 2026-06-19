@@ -1192,6 +1192,13 @@ func TestTriggerCommitContinuationReconcilesLocalCommitBeforeRetry(t *testing.T)
 	if !hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
 		t.Fatalf("events = %#v, want work executor success after reconciliation", events)
 	}
+	attempts, err := store.EffectAttemptsForWork(key, "op-reconcile-commit", "", "lease-reconcile-commit", state.ActionProposal.ID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsForWork() err = %v", err)
+	}
+	if len(attempts) == 0 || attempts[0].Status != session.EffectAttemptStatusVerified {
+		t.Fatalf("effect attempts = %#v, want verified commit attempt", attempts)
+	}
 }
 
 func TestTriggerCommitContinuationBlocksUnverifiedSideEffectsWithoutRetry(t *testing.T) {
@@ -1265,6 +1272,13 @@ func TestTriggerCommitContinuationBlocksUnverifiedSideEffectsWithoutRetry(t *tes
 	}
 	if hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
 		t.Fatalf("events = %#v, want no work executor success event", events)
+	}
+	attempts, err := store.EffectAttemptsForWork(key, "op-unverified-commit", "", "lease-unverified-commit", state.ActionProposal.ID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsForWork() err = %v", err)
+	}
+	if len(attempts) == 0 || attempts[0].Status != session.EffectAttemptStatusUncertain {
+		t.Fatalf("effect attempts = %#v, want uncertain unresolved commit attempt", attempts)
 	}
 }
 

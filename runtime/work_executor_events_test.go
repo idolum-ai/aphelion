@@ -387,7 +387,7 @@ func TestAttachNativeWorkTurnEvidencePairsStartedExecCommandWithSucceededEvent(t
 	}
 
 	result := WorkResult{TurnRunID: run.ID}
-	rt.attachNativeWorkTurnEvidence(key, &result)
+	rt.attachNativeWorkTurnEvidence(key, WorkRequest{}, &result)
 	if len(result.Commands) != 1 || result.Commands[0] != command {
 		t.Fatalf("commands = %#v, want successful exec command recovered from started event", result.Commands)
 	}
@@ -442,7 +442,7 @@ func TestAttachNativeWorkTurnEvidenceUsesTypedExecEffectWhenPreviewIsTruncated(t
 	}
 
 	result := WorkResult{TurnRunID: run.ID}
-	rt.attachNativeWorkTurnEvidence(key, &result)
+	rt.attachNativeWorkTurnEvidence(key, WorkRequest{}, &result)
 	if len(result.Commands) != 1 || result.Commands[0] != command {
 		t.Fatalf("commands = %#v, want typed exec-effect command", result.Commands)
 	}
@@ -503,7 +503,7 @@ func TestAttachNativeWorkTurnEvidenceConsumesFailedExecPreviewBeforeSucceededFal
 	}
 
 	result := WorkResult{TurnRunID: run.ID}
-	rt.attachNativeWorkTurnEvidence(key, &result)
+	rt.attachNativeWorkTurnEvidence(key, WorkRequest{}, &result)
 	if len(result.Commands) != 1 || result.Commands[0] != succeededCommand {
 		t.Fatalf("commands = %#v, want successful exec paired with second started preview", result.Commands)
 	}

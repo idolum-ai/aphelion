@@ -45,6 +45,7 @@ func (m *turnMonitor) ToolStarted(ctx context.Context, name string, input json.R
 	if effect := execEffectPayload(name, input); len(effect) > 0 {
 		payload["exec_effect"] = effect
 	}
+	m.recordExecEffectAttempt(name, input, session.EffectAttemptStatusAttempted, "", startedAt)
 	m.runtime.recordExecutionEvent(m.key, core.ExecutionEventToolStarted, "tool", "started", payload, startedAt)
 	if m.progress != nil {
 		m.progress.ToolStarted(ctx, name, input)
@@ -109,9 +110,59 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 	if effect := execEffectPayload(name, input); len(effect) > 0 {
 		payload["exec_effect"] = effect
 	}
+	statusForAttempt := session.EffectAttemptStatusSucceeded
+	if err != nil {
+		statusForAttempt = session.EffectAttemptStatusFailed
+	}
+	m.recordExecEffectAttempt(name, input, statusForAttempt, errorText, time.Now().UTC())
 	m.runtime.recordExecutionEvent(m.key, eventType, "tool", status, payload, time.Now().UTC())
 	if m.progress != nil {
 		m.progress.ToolFinished(ctx, name, err)
+	}
+}
+
+func (m *turnMonitor) recordExecEffectAttempt(name string, input json.RawMessage, status session.EffectAttemptStatus, errorText string, observedAt time.Time) {
+	if m == nil || m.runtime == nil || m.runtime.store == nil || m.runID == 0 {
+		return
+	}
+	effect := execEffectPayload(name, input)
+	if len(effect) == 0 {
+		return
+	}
+	command := workPayloadString(effect, "command")
+	if command == "" {
+		return
+	}
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
+	}
+	boundaryKind := ""
+	if boundary, ok := commandeffect.BoundaryForCommand(command); ok {
+		boundaryKind = string(boundary.Kind)
+	}
+	subject := effectAttemptSubjectJSON(command)
+	completedAt := time.Time{}
+	if session.NormalizeEffectAttemptStatus(status) != session.EffectAttemptStatusAttempted {
+		completedAt = observedAt
+	}
+	if _, err := m.runtime.store.UpsertEffectAttempt(session.EffectAttemptInput{
+		Key:          m.key,
+		TurnRunID:    m.runID,
+		Executor:     "turn",
+		Tool:         strings.TrimSpace(name),
+		Command:      command,
+		EffectKind:   workPayloadString(effect, "kind"),
+		EffectReason: workPayloadString(effect, "reason"),
+		BoundaryKind: boundaryKind,
+		SubjectJSON:  subject,
+		Status:       status,
+		ErrorText:    errorText,
+		EvidenceRefs: []string{fmt.Sprintf("turn_run:%d", m.runID)},
+		StartedAt:    observedAt,
+		CompletedAt:  completedAt,
+		UpdatedAt:    observedAt,
+	}); err != nil {
+		log.Printf("WARN record exec effect attempt failed run_id=%d tool=%s err=%v", m.runID, name, err)
 	}
 }
 

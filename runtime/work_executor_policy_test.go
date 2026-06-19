@@ -259,6 +259,47 @@ func TestWorkOutcomeReconciliationBlocksUnverifiedExternalAccountSideEffects(t *
 	}
 }
 
+func TestRecordWorkResultEffectAttemptClassifiesRedirectedCommit(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7003, UserID: 0, Scope: telegramDMScopeRef(7003)}
+	now := time.Now().UTC()
+	req := WorkRequest{
+		OperationID: "op-effect-commit",
+		Mode:        WorkModeCommit,
+		LeaseID:     "lease-effect-commit",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-commit", RiskClass: "commit"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-commit",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-commit",
+				LeaseID: "lease-effect-commit",
+			}}},
+		},
+	}
+	command := `set -euo pipefail
+git commit -m "Add evidence" >/tmp/out
+cat /tmp/out`
+	attempts := rt.recordWorkResultEffectAttempts(key, req, WorkResult{ExecutorName: "native", Commands: []string{command}}, nil, now, now.Add(time.Second))
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one redirected commit attempt", attempts)
+	}
+	if attempts[0].EffectKind != "repo_or_history_mutation" || attempts[0].EffectReason != "git commit" {
+		t.Fatalf("attempt = %#v, want repo-history git commit effect", attempts[0])
+	}
+	if attempts[0].PhaseID != "phase-commit" || attempts[0].LeaseID != "lease-effect-commit" {
+		t.Fatalf("attempt scope = phase %q lease %q, want phase/lease context", attempts[0].PhaseID, attempts[0].LeaseID)
+	}
+}
+
 func TestConsumedWorkPhaseDoesNotCompleteWithoutMatchingWorkEvidence(t *testing.T) {
 	t.Parallel()
 

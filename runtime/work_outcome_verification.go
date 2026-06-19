@@ -339,6 +339,7 @@ func (r *Runtime) persistInconclusiveWorkOutcome(key session.SessionKey, target 
 	if err := r.store.UpdateOperationState(key, opState); err != nil {
 		return fmt.Errorf("persist inconclusive work outcome: %w", err)
 	}
+	r.markEffectAttemptsForVerificationTarget(key, target, session.EffectAttemptStatusUncertain, "work outcome verification inconclusive: "+firstNonEmptyContinuation(verdict.ReasonCode, "verification_inconclusive"), now)
 	return nil
 }
 
@@ -362,11 +363,55 @@ func (r *Runtime) persistVerifiedWorkOutcome(key session.SessionKey, target sess
 	opState.Work.LastError = ""
 	opState.Work.LastCompletedAt = now
 	opState.Work.LastExecutorUpdatedAt = now
+	r.markEffectAttemptsForVerificationTarget(key, target, session.EffectAttemptStatusVerified, "", now)
 	opState, _ = operationStateWithVerifiedWorkOutcomePhaseCompleted(opState, target, now)
 	if err := r.store.UpdateOperationState(key, opState); err != nil {
 		return fmt.Errorf("persist verified work outcome: %w", err)
 	}
 	return nil
+}
+
+func (r *Runtime) markEffectAttemptsForVerificationTarget(key session.SessionKey, target session.ContinuationVerificationTarget, status session.EffectAttemptStatus, errorText string, now time.Time) {
+	if r == nil || r.store == nil {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	attempts, err := r.store.EffectAttemptsForWork(key, target.OperationID, target.PhaseID, target.OriginalLeaseID, target.OriginalActionProposalID)
+	if err != nil {
+		return
+	}
+	for _, attempt := range attempts {
+		if !session.EffectAttemptHasSideEffects(attempt) {
+			continue
+		}
+		if _, err := r.store.UpsertEffectAttempt(session.EffectAttemptInput{
+			AttemptID:    attempt.AttemptID,
+			Key:          key,
+			TurnRunID:    attempt.TurnRunID,
+			OperationID:  attempt.OperationID,
+			PhaseID:      attempt.PhaseID,
+			LeaseID:      attempt.LeaseID,
+			ProposalID:   attempt.ProposalID,
+			WorkMode:     attempt.WorkMode,
+			Executor:     attempt.Executor,
+			Tool:         attempt.Tool,
+			Command:      attempt.Command,
+			EffectKind:   attempt.EffectKind,
+			EffectReason: attempt.EffectReason,
+			BoundaryKind: attempt.BoundaryKind,
+			SubjectJSON:  attempt.SubjectJSON,
+			Status:       status,
+			ErrorText:    errorText,
+			EvidenceRefs: append(attempt.EvidenceRefs, "verification:"+target.ReasonCode),
+			StartedAt:    attempt.StartedAt,
+			CompletedAt:  now,
+			UpdatedAt:    now,
+		}); err != nil {
+			continue
+		}
+	}
 }
 
 func operationStateWithVerifiedWorkOutcomePhaseCompleted(opState session.OperationState, target session.ContinuationVerificationTarget, now time.Time) (session.OperationState, bool) {

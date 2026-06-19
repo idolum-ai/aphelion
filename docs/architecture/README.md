@@ -48,6 +48,7 @@ These invariants are normative for architecture and requirements alignment:
 - [durable-children.md](durable-children.md): bounded child topology and adapters.
 - [thread-native-durable-work.md](thread-native-durable-work.md): exploratory direction for making threads the operator-facing durable work primitive while keeping authority typed.
 - [universal-evidence-ledger.md](universal-evidence-ledger.md): immutable typed evidence objects, audited hydration, and long-horizon context-fidelity invariants.
+- [effect-attempt-ledger.md](effect-attempt-ledger.md): durable side-effect attempt lifecycle for retry-safe completion and verification.
 - [state-surfaces.md](state-surfaces.md): transcript, sidecars, and operational state.
 - [transparent-execution-sequence.md](transparent-execution-sequence.md): canonical execution timeline and projection/fallback precedence.
 - [external-tools-pilot.md](external-tools-pilot.md): current external-tool lifecycle, execution-mode semantics, and bundled `browse_page` pilot.

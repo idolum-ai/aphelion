@@ -298,7 +298,7 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 			out.SideEffects = true
 		}
 	}
-	e.runtime.attachNativeWorkTurnEvidence(key, &out)
+	e.runtime.attachNativeWorkTurnEvidence(key, req, &out)
 	if err != nil {
 		return out, err
 	}
@@ -345,10 +345,11 @@ func nativeWorkResultFromTurnResult(result *core.TurnResult) WorkResult {
 	return out
 }
 
-func (r *Runtime) attachNativeWorkTurnEvidence(key session.SessionKey, result *WorkResult) {
+func (r *Runtime) attachNativeWorkTurnEvidence(key session.SessionKey, req WorkRequest, result *WorkResult) {
 	if r == nil || r.store == nil || result == nil || result.TurnRunID <= 0 {
 		return
 	}
+	r.attachEffectAttemptsToWorkResult(key, req, result)
 	if run, err := r.store.TurnRun(result.TurnRunID); err == nil && run != nil {
 		if failure := strings.TrimSpace(run.LastToolError); failure != "" {
 			result.ToolFailureTexts = appendUniqueRuntimeWorkString(result.ToolFailureTexts, failure)
