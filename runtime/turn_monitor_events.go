@@ -102,9 +102,12 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 		"tool_duration_ms": toolDurationMS,
 	}
 	if digest, ok := agent.BuildToolOutputDigest(output, agent.DefaultToolOutputDigestInlineLimit); ok {
-		if ref := m.recordLargeToolOutputEvidence(name, preview, output, digest, time.Now().UTC()); ref != "" {
+		safe := redactLargeToolOutputEvidence(preview, output, digest)
+		if ref := m.recordLargeToolOutputEvidence(name, safe, time.Now().UTC()); ref != "" {
 			digest.EvidenceRef = ref
 		}
+		digest.Head = safe.Digest.Head
+		digest.Tail = safe.Digest.Tail
 		payload["result_digest"] = digest.Payload()
 	}
 	if effect := execEffectPayload(name, input); len(effect) > 0 {
@@ -166,30 +169,74 @@ func (m *turnMonitor) recordExecEffectAttempt(name string, input json.RawMessage
 	}
 }
 
-func (m *turnMonitor) recordLargeToolOutputEvidence(name string, inputPreview string, output string, digest agent.ToolOutputDigest, observedAt time.Time) string {
-	if m == nil || m.runtime == nil || m.runtime.store == nil || strings.TrimSpace(output) == "" {
+type largeToolOutputEvidenceRedaction struct {
+	InputPreview   session.EvidenceTextRedaction
+	Output         session.EvidenceTextRedaction
+	Digest         agent.ToolOutputDigest
+	RedactionClass string
+	RedactedKinds  []string
+}
+
+func redactLargeToolOutputEvidence(inputPreview string, output string, digest agent.ToolOutputDigest) largeToolOutputEvidenceRedaction {
+	redactedOutput := session.RedactEvidenceText(output)
+	redactedInput := session.RedactEvidenceText(inputPreview)
+	redactedHead := session.RedactEvidenceText(digest.Head)
+	redactedTail := session.RedactEvidenceText(digest.Tail)
+	redactedKinds := append([]string(nil), redactedOutput.Kinds...)
+	for _, kind := range redactedInput.Kinds {
+		redactedKinds = appendUniqueRuntimeString(redactedKinds, kind)
+	}
+	for _, kind := range redactedHead.Kinds {
+		redactedKinds = appendUniqueRuntimeString(redactedKinds, kind)
+	}
+	for _, kind := range redactedTail.Kinds {
+		redactedKinds = appendUniqueRuntimeString(redactedKinds, kind)
+	}
+	safeDigest := digest
+	safeDigest.Head = redactedHead.Text
+	safeDigest.Tail = redactedTail.Text
+	return largeToolOutputEvidenceRedaction{
+		InputPreview:   redactedInput,
+		Output:         redactedOutput,
+		Digest:         safeDigest,
+		RedactionClass: session.EvidenceRedactionClassForRedactions(redactedOutput, redactedInput, redactedHead, redactedTail),
+		RedactedKinds:  redactedKinds,
+	}
+}
+
+func (m *turnMonitor) recordLargeToolOutputEvidence(name string, safe largeToolOutputEvidenceRedaction, observedAt time.Time) string {
+	if m == nil || m.runtime == nil || m.runtime.store == nil || strings.TrimSpace(safe.Output.Text) == "" {
 		return ""
 	}
 	if observedAt.IsZero() {
 		observedAt = time.Now().UTC()
 	}
 	toolName := strings.TrimSpace(name)
+	digest := safe.Digest
+	retentionNote := "large tool output retained in evidence payload; prompt-facing material remains digest-bounded"
+	if safe.RedactionClass == session.EvidenceRedactionSecret {
+		retentionNote = "credential-bearing large tool output retained only as redacted ordinary evidence; payload hydration is withheld"
+	} else if safe.RedactionClass != session.EvidenceRedactionNone {
+		retentionNote = "redacted large tool output retained in evidence payload; raw secret values are not retained in ordinary evidence"
+	}
 	sourceRef := fmt.Sprintf("tool_output:%d:%s:%s", m.runID, toolName, strings.TrimPrefix(strings.TrimSpace(digest.SHA256), "sha256:"))
 	payloadRaw, err := json.Marshal(map[string]any{
-		"run_id":         m.runID,
-		"tool":           toolName,
-		"input_preview":  inputPreview,
-		"output":         output,
-		"bytes":          digest.Bytes,
-		"lines":          digest.Lines,
-		"sha256":         digest.SHA256,
-		"head":           digest.Head,
-		"tail":           digest.Tail,
-		"head_bytes":     digest.HeadBytes,
-		"tail_bytes":     digest.TailBytes,
-		"omitted_bytes":  digest.OmittedBytes,
-		"omitted_lines":  digest.OmittedLines,
-		"retention_note": "full large tool output retained in evidence payload; prompt-facing material remains digest-bounded",
+		"run_id":          m.runID,
+		"tool":            toolName,
+		"input_preview":   safe.InputPreview.Text,
+		"output":          safe.Output.Text,
+		"bytes":           digest.Bytes,
+		"lines":           digest.Lines,
+		"sha256":          digest.SHA256,
+		"head":            safe.Digest.Head,
+		"tail":            safe.Digest.Tail,
+		"head_bytes":      digest.HeadBytes,
+		"tail_bytes":      digest.TailBytes,
+		"omitted_bytes":   digest.OmittedBytes,
+		"omitted_lines":   digest.OmittedLines,
+		"redaction_class": safe.RedactionClass,
+		"redacted_kinds":  safe.RedactedKinds,
+		"retention_note":  retentionNote,
 	})
 	if err != nil {
 		log.Printf("WARN marshal large tool output evidence failed run_id=%d tool=%s err=%v", m.runID, toolName, err)
@@ -205,10 +252,10 @@ func (m *turnMonitor) recordLargeToolOutputEvidence(name string, inputPreview st
 		UserID:          m.key.UserID,
 		Scope:           m.key.Scope,
 		EpistemicStatus: session.EvidenceStatusAttested,
-		RedactionClass:  session.EvidenceRedactionNone,
+		RedactionClass:  safe.RedactionClass,
 		SubjectKey:      toolName,
 		Summary:         fmt.Sprintf("large tool output tool=%s bytes=%d lines=%d sha256=%s", toolName, digest.Bytes, digest.Lines, digest.SHA256),
-		Digest:          digest.Render(),
+		Digest:          safe.Digest.Render(),
 		PayloadJSON:     string(payloadRaw),
 		ObservedAt:      observedAt,
 	})

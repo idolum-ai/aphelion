@@ -25,6 +25,15 @@ or recorded:
 - canonical JSON payload and runtime-computed payload hash
 - observed timestamp
 
+Evidence payloads are ordinary model-retrievable material only after passing the
+evidence redaction policy. Tool-output evidence may preserve the original output
+hash, byte counts, and bounded digest while storing only redacted payload text.
+Detected credential-bearing material is marked with a non-hydratable redaction
+class. Stable redaction fingerprints can show that two observations carried the
+same secret-shaped value without exposing the value itself. This deterministic
+scrubber is a conservative membrane for recognized credential shapes, not a proof
+that arbitrary tool output contains no secrets.
+
 The source row may remain mutable when it is an operational current-state store.
 The evidence object is not mutable. If a later state changes, it writes a new
 source ref and therefore a new evidence object.
@@ -64,6 +73,12 @@ Hydration must preserve the active session boundary by default. A known evidence
 ID from another session is reported missing rather than rehydrated. Cross-scope
 hydration is a separate explicit mode for future typed review surfaces; it must
 not be ambient model recall.
+
+Hydration must also respect redaction class. Redacted payloads may be windowed as
+redacted text. Credential-bearing, operator-only, or non-hydratable payloads must
+return summary/digest metadata and a withheld-payload marker, not raw payload
+text. A future protected raw-artifact store may add explicit operator retrieval,
+but ordinary `evidence_hydrate` is not that capability.
 
 If no candidate matches, hydration may fall back to the latest low-authority
 state snapshots, but the fallback must be labeled as fallback. A fallback is a

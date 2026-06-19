@@ -117,17 +117,31 @@ func renderEvidencePayloadWindow(b *strings.Builder, obj session.EvidenceObject,
 	if b == nil {
 		return
 	}
+	if !session.EvidencePayloadHydrationAllowed(obj.RedactionClass) {
+		fmt.Fprintf(b, "   payload_withheld: redaction_class=%s\n", firstNonEmpty(obj.RedactionClass, "unknown"))
+		return
+	}
 	payload := strings.TrimSpace(obj.PayloadJSON)
 	if payload == "" {
 		payload = "{}"
 	}
 	content := evidencePayloadPreferredWindowContent(payload)
+	redacted := session.RedactEvidenceText(content)
+	renderRedactionClass := session.EvidenceRedactionClassForRedactions(redacted)
+	if !session.EvidencePayloadHydrationAllowed(renderRedactionClass) {
+		fmt.Fprintf(b, "   payload_withheld: redaction_class=%s\n", renderRedactionClass)
+		return
+	}
+	content = redacted.Text
 	window, nextOffset, truncated := evidencePayloadWindow(content, offset, limit)
 	fmt.Fprintf(b, "   payload_window: offset=%d bytes=%d total_bytes=%d", offset, len(window), len(content))
 	if truncated {
 		fmt.Fprintf(b, " next_offset=%d", nextOffset)
 	}
 	fmt.Fprintf(b, "\n")
+	if redacted.Redacted {
+		fmt.Fprintf(b, "   payload_redaction: %s\n", session.EvidenceRedactionRedacted)
+	}
 	if window == "" {
 		fmt.Fprintf(b, "   payload_text: <empty>\n")
 		return

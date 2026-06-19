@@ -5,11 +5,53 @@ package session
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 )
+
+func TestRedactEvidenceTextReplacesSecretValuesWithStableMarkers(t *testing.T) {
+	t.Parallel()
+
+	jwt := strings.Join([]string{
+		"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+		"eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+		"signaturesecret",
+	}, ".")
+	raw := `Authorization: Bearer bearer-secret-value
+OPENAI_API_KEY=sk-env-secret-value
+password='p@ssw0rd!with-punctuation'
+postgres://user:connection-password@example.test/db
+` + jwt + `
+-----BEGIN PRIVATE KEY-----
+abc123privatekeymaterial
+-----END PRIVATE KEY-----
+{"password":"pw-secret-value","url":"https://example.test/callback?X-Amz-Signature=signed-secret-value&ok=1"}
+github_pat_1234567890abcdef`
+
+	redacted := RedactEvidenceText(raw)
+	if !redacted.Redacted {
+		t.Fatal("Redacted = false, want true")
+	}
+	for _, secret := range []string{"bearer-secret-value", "sk-env-secret-value", "p@ssw0rd!with-punctuation", "connection-password", "signaturesecret", "abc123privatekeymaterial", "pw-secret-value", "signed-secret-value", "github_pat_1234567890abcdef"} {
+		if strings.Contains(redacted.Text, secret) {
+			t.Fatalf("redacted text leaked %q: %s", secret, redacted.Text)
+		}
+	}
+	for _, want := range []string{"<redacted:bearer:", "<redacted:api_key:", "<redacted:password:", "<redacted:connection_password:", "<redacted:jwt:", "<redacted:private_key:", "<redacted:url_query:", "<redacted:github_token:"} {
+		if !strings.Contains(redacted.Text, want) {
+			t.Fatalf("redacted text = %q, want marker %q", redacted.Text, want)
+		}
+	}
+	if class := EvidenceRedactionClassForRedactions(redacted); class != EvidenceRedactionSecret {
+		t.Fatalf("redaction class = %q, want %q", class, EvidenceRedactionSecret)
+	}
+	if again := RedactEvidenceText(raw); again.Text != redacted.Text {
+		t.Fatalf("redaction is not stable:\nfirst: %s\nagain: %s", redacted.Text, again.Text)
+	}
+}
 
 func TestEvidenceWriteThroughFromSessionTurnAndExecution(t *testing.T) {
 	t.Parallel()
