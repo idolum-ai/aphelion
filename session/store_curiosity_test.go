@@ -52,6 +52,123 @@ func TestCuriosityLeaseConsumptionIsBounded(t *testing.T) {
 	}
 }
 
+func TestCuriosityLeaseIDIgnoresAuthorityEnvelopeForDailySpend(t *testing.T) {
+	period := "2026-06-10"
+	first := CuriosityLeaseID(period, []string{CuriositySourceWorkspace}, []string{"README.md"})
+	second := CuriosityLeaseID(period, []string{CuriositySourceWorkspace, CuriositySourceURL}, []string{"README.md", "https://example.com/feed"})
+	if first != second {
+		t.Fatalf("CuriosityLeaseID changed with authority envelope: %q vs %q", first, second)
+	}
+	if first != "curiosity-"+period {
+		t.Fatalf("CuriosityLeaseID = %q, want lane/day stable ID", first)
+	}
+}
+
+func TestCuriosityLeaseEnvelopeNarrowingPreservesSpend(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	leaseID := CuriosityLeaseID("2026-06-10", nil, nil)
+	initial, err := store.EnsureCuriosityLease(CuriosityLease{
+		ID:                 leaseID,
+		Status:             CuriosityLeaseStatusActive,
+		Scope:              ScopeRef{Kind: ScopeKindCuriosity, ID: "admin-curiosity"},
+		AllowedSourceKinds: []string{CuriositySourceWorkspace, CuriositySourceMemory},
+		AllowedSourceRefs:  []string{"README.md", "memory/questions.md"},
+		DailyTurnBudget:    3,
+		MaxLooksPerTurn:    1,
+		PeriodStart:        "2026-06-10",
+		ApprovedBy:         "config:curiosity",
+		ExpiresAt:          now.Add(12 * time.Hour),
+	}, now)
+	if err != nil {
+		t.Fatalf("EnsureCuriosityLease(initial) err = %v", err)
+	}
+	if _, ok, err := store.ConsumeCuriosityLeaseTurn(initial.ID, now.Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("ConsumeCuriosityLeaseTurn() ok=%v err=%v", ok, err)
+	}
+
+	narrowed, err := store.EnsureCuriosityLease(CuriosityLease{
+		ID:                 leaseID,
+		Status:             CuriosityLeaseStatusActive,
+		Scope:              ScopeRef{Kind: ScopeKindCuriosity, ID: "admin-curiosity"},
+		AllowedSourceKinds: []string{CuriositySourceWorkspace},
+		AllowedSourceRefs:  []string{"README.md"},
+		DailyTurnBudget:    3,
+		MaxLooksPerTurn:    1,
+		PeriodStart:        "2026-06-10",
+		ApprovedBy:         "config:curiosity",
+		ExpiresAt:          now.Add(12 * time.Hour),
+	}, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("EnsureCuriosityLease(narrowed) err = %v", err)
+	}
+	if narrowed.TurnsUsed != 1 {
+		t.Fatalf("turns_used = %d, want preserved spend after envelope narrowing", narrowed.TurnsUsed)
+	}
+	if containsCuriosityTestString(narrowed.AllowedSourceKinds, CuriositySourceMemory) || containsCuriosityTestString(narrowed.AllowedSourceRefs, "memory/questions.md") {
+		t.Fatalf("narrowed lease kept old authority envelope: %#v %#v", narrowed.AllowedSourceKinds, narrowed.AllowedSourceRefs)
+	}
+	if !containsCuriosityTestString(narrowed.AllowedSourceKinds, CuriositySourceWorkspace) || !containsCuriosityTestString(narrowed.AllowedSourceRefs, "README.md") {
+		t.Fatalf("narrowed lease lost intended authority envelope: %#v %#v", narrowed.AllowedSourceKinds, narrowed.AllowedSourceRefs)
+	}
+}
+
+func TestCuriosityLeaseConfigEditDoesNotReactivateExhaustedSpend(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	leaseID := CuriosityLeaseID("2026-06-10", nil, nil)
+	lease, err := store.EnsureCuriosityLease(CuriosityLease{
+		ID:                 leaseID,
+		Status:             CuriosityLeaseStatusActive,
+		Scope:              ScopeRef{Kind: ScopeKindCuriosity, ID: "admin-curiosity"},
+		AllowedSourceKinds: []string{CuriositySourceWorkspace},
+		AllowedSourceRefs:  []string{"README.md"},
+		DailyTurnBudget:    1,
+		MaxLooksPerTurn:    1,
+		PeriodStart:        "2026-06-10",
+		ApprovedBy:         "config:curiosity",
+		ExpiresAt:          now.Add(12 * time.Hour),
+	}, now)
+	if err != nil {
+		t.Fatalf("EnsureCuriosityLease(initial) err = %v", err)
+	}
+	if _, ok, err := store.ConsumeCuriosityLeaseTurn(lease.ID, now.Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("ConsumeCuriosityLeaseTurn() ok=%v err=%v", ok, err)
+	}
+
+	edited, err := store.EnsureCuriosityLease(CuriosityLease{
+		ID:                 leaseID,
+		Status:             CuriosityLeaseStatusActive,
+		Scope:              ScopeRef{Kind: ScopeKindCuriosity, ID: "admin-curiosity"},
+		AllowedSourceKinds: []string{CuriositySourceWorkspace, CuriositySourceURL},
+		AllowedSourceRefs:  []string{"README.md", "https://example.com/feed"},
+		DailyTurnBudget:    1,
+		MaxLooksPerTurn:    1,
+		PeriodStart:        "2026-06-10",
+		ApprovedBy:         "config:curiosity",
+		ExpiresAt:          now.Add(12 * time.Hour),
+	}, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("EnsureCuriosityLease(edited) err = %v", err)
+	}
+	if edited.Status != CuriosityLeaseStatusExhausted || edited.TurnsUsed != 1 {
+		t.Fatalf("edited lease = %#v, want exhausted spend preserved after config edit", edited)
+	}
+	if _, ok, err := store.ConsumeCuriosityLeaseTurn(leaseID, now.Add(3*time.Minute)); err != nil || ok {
+		t.Fatalf("ConsumeCuriosityLeaseTurn(after edit) ok=%v err=%v, want exhausted", ok, err)
+	}
+}
+
 func TestCuriosityObservationDedupesByLeaseCandidateAndContentHash(t *testing.T) {
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
 	if err != nil {
@@ -239,4 +356,13 @@ func TestCuriosityRetentionPrunesOldLeasesAndObservations(t *testing.T) {
 	if leaseCount != 0 {
 		t.Fatalf("old lease count = %d, want pruned", leaseCount)
 	}
+}
+
+func containsCuriosityTestString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
