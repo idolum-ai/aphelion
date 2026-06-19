@@ -193,6 +193,152 @@ func (r *Runtime) runReservedWorkOutcomeVerification(ctx context.Context, key se
 		return nil
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventWorkOutcomeVerificationInconclusive, "work", "inconclusive", payload, now)
+	return r.offerInconclusiveWorkOutcomeReconciliation(ctx, key, reservation, *target, result, payload, now)
+}
+
+func (r *Runtime) offerInconclusiveWorkOutcomeReconciliation(ctx context.Context, key session.SessionKey, reservation approvedContinuationReservation, target session.ContinuationVerificationTarget, verdict workOutcomeVerificationResult, payload map[string]any, now time.Time) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	state := workOutcomeReconciliationContinuationState(reservation.State, target, verdict, now)
+	unlock := r.lockSession(key)
+	if err := r.persistInconclusiveWorkOutcome(key, target, verdict, state, now); err != nil {
+		unlock()
+		return err
+	}
+	if err := r.store.UpdateContinuationState(key, state); err != nil {
+		unlock()
+		return fmt.Errorf("persist work outcome reconciliation continuation: %w", err)
+	}
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload["reason"] = "work_outcome_reconciliation_required"
+	payload["reconciliation_reason"] = verdict.ReasonCode
+	payload["verification_target"] = target.ReasonCode
+	payload["verification_candidate_paths"] = target.CandidatePaths
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending_reconciliation", payload, now)
+	unlock()
+	msg := core.InboundMessage{ChatID: key.ChatID, SenderID: reservation.ApprovedBy, TelegramThreadID: continuationCallbackThreadIDForKey(key)}
+	return r.sendContinuationApprovalPrompt(ctx, key, msg, state, renderInconclusiveWorkOutcomeReconciliationPrompt(state, verdict))
+}
+
+func workOutcomeReconciliationContinuationState(prior session.ContinuationState, target session.ContinuationVerificationTarget, verdict workOutcomeVerificationResult, now time.Time) session.ContinuationState {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	prior = session.NormalizeContinuationState(prior)
+	if normalizedTarget := session.NormalizeContinuationVerificationTarget(&target); normalizedTarget != nil {
+		target = *normalizedTarget
+	}
+	phaseLabel := firstNonEmptyContinuation(target.PhaseID, target.OriginalActionOperationID, target.OperationID, "prior work")
+	reason := strings.TrimSpace(verdict.ReasonCode)
+	if reason == "" {
+		reason = "verification_inconclusive"
+	}
+	decisionID := "reconcile-" + sanitizeOperationPhaseProposalID(firstNonEmptyContinuation(phaseLabel, newContinuationDecisionID()))
+	if len(decisionID) > 96 {
+		decisionID = decisionID[:96]
+	}
+	candidates := strings.Join(target.CandidatePaths, ", ")
+	if candidates == "" {
+		candidates = "the recorded work artifact and typed ledger evidence"
+	}
+	summary := "Reconcile verification outcome for " + phaseLabel
+	bounded := "Read-only outcome reconciliation only. Inspect the bounded candidate evidence (" + candidates + "), the operation ledger, and workspace state needed to determine whether the prior work can be verified or must be redone. Do not write files, rerun mutation, commit, push, deploy, restart, contact external accounts, or grant capabilities."
+	auto := false
+	action := session.ActionProposal{
+		ID:                  "aprop-" + decisionID,
+		OperationID:         decisionID,
+		OperatorTitle:       "Reconcile prior outcome",
+		PlanTitle:           "Reconcile prior outcome",
+		Summary:             summary,
+		WhyNow:              "The deterministic artifact check was inconclusive (" + reason + "), so the runtime needs a bounded read-only reconciliation before moving to the next phase.",
+		BoundedEffect:       bounded,
+		RiskClass:           workOutcomeVerificationRiskClass,
+		AllowedActions:      []string{"read_workspace_evidence", "inspect_operation_ledger", "compare_candidate_artifacts", "report_verification_result", "propose_next_bounded_phase"},
+		ForbiddenActions:    []string{"write_files", "rerun_side_effecting_work", "commit", "push_remote", "deploy", "restart_service", "external_account_action", "credential_access", "grant_capability"},
+		ValidationPlan:      []string{"inspect only existing bounded evidence", "report whether the prior outcome is verified, unverifiable, or needs rerun", "propose the next bounded phase without claiming completion unless evidence is present"},
+		AutoApproveEligible: &auto,
+		ExpiresAt:           now.Add(continuationLeaseDefaultTTL),
+		Status:              session.ProposalStatusPending,
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	}
+	action = applyContinuationLeaseClassBoundaries(action)
+	action.PlanHash = actionProposalHash(action)
+	state := session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusPending,
+		DecisionID:        decisionID,
+		Objective:         firstNonEmptyContinuation(prior.Objective, "Reconcile prior work outcome before continuing."),
+		StageSummary:      summary,
+		RemainingTurns:    1,
+		ActionProposal:    session.NormalizeActionProposal(action),
+		PersonaIntent:     session.ContinuationIntent{Decision: session.ContinuationIntentDecisionContinue, Rationale: action.WhyNow, NextStep: summary, Confidence: "high", UpdatedAt: now},
+		GovernorIntent:    session.ContinuationIntent{Decision: session.ContinuationIntentDecisionContinue, Rationale: action.WhyNow, NextStep: summary, Constraints: bounded, Confidence: "high", Ratified: true, UpdatedAt: now},
+		ApprovedBy:        0,
+		DecisionMessageID: 0,
+		UpdatedAt:         now,
+	}
+	state.ContinuationLease = buildContinuationLease(state.ActionProposal, 1, now)
+	return session.NormalizeContinuationState(state)
+}
+
+func renderInconclusiveWorkOutcomeReconciliationPrompt(state session.ContinuationState, verdict workOutcomeVerificationResult) string {
+	state = session.NormalizeContinuationState(state)
+	reason := strings.TrimSpace(verdict.ReasonCode)
+	if reason == "" {
+		reason = "verification_inconclusive"
+	}
+	card := newContinuationApprovalPromptCard("Approve", state.ActionProposal.Summary, state.RemainingTurns)
+	card.addSection("Why", "The approved verification could not prove the prior work outcome: "+reason+".")
+	card.addSection("Scope", state.ActionProposal.BoundedEffect)
+	card.addListSection("Covers", continuationApprovalPromptIncludedLines(state))
+	card.addListSection("Stops before", continuationApprovalPromptStops(state))
+	return card.String()
+}
+
+func (r *Runtime) persistInconclusiveWorkOutcome(key session.SessionKey, target session.ContinuationVerificationTarget, verdict workOutcomeVerificationResult, state session.ContinuationState, now time.Time) error {
+	opState, err := r.store.OperationState(key)
+	if err != nil {
+		return fmt.Errorf("read operation for inconclusive work outcome: %w", err)
+	}
+	opState = session.NormalizeOperationState(opState)
+	state = session.NormalizeContinuationState(state)
+	opState.Work.LastOperationID = firstNonEmptyContinuation(target.OperationID, opState.ID)
+	opState.Work.LastActionProposalID = strings.TrimSpace(target.OriginalActionProposalID)
+	opState.Work.LastActionOperationID = strings.TrimSpace(target.OriginalActionOperationID)
+	opState.Work.LastLeaseID = strings.TrimSpace(target.OriginalLeaseID)
+	opState.Work.LastWorkMode = strings.TrimSpace(target.OriginalWorkMode)
+	opState.Work.RepoRoot = firstNonEmptyContinuation(target.RepoRoot, opState.Work.RepoRoot)
+	opState.Work.Workdir = firstNonEmptyContinuation(target.Workdir, opState.Work.Workdir)
+	opState.Work.LastSummary = strings.TrimSpace(verdict.Summary)
+	opState.Work.LastError = "work outcome verification inconclusive: " + firstNonEmptyContinuation(verdict.ReasonCode, "verification_inconclusive")
+	opState.Work.LastCompletedAt = time.Time{}
+	opState.Work.LastExecutorUpdatedAt = now
+	opState.Status = session.OperationStatusActive
+	opState.Stage = "verification_inconclusive"
+	opState.Proposal = session.OperationProposal{
+		ID:            strings.TrimSpace(state.ActionProposal.OperationID),
+		Kind:          strings.TrimSpace(state.ActionProposal.RiskClass),
+		OperatorTitle: strings.TrimSpace(state.ActionProposal.OperatorTitle),
+		PlanTitle:     strings.TrimSpace(state.ActionProposal.PlanTitle),
+		Summary:       strings.TrimSpace(state.ActionProposal.Summary),
+		WhyNow:        strings.TrimSpace(state.ActionProposal.WhyNow),
+		BoundedEffect: strings.TrimSpace(state.ActionProposal.BoundedEffect),
+		Status:        session.ProposalStatusPending,
+		UpdatedAt:     now,
+	}
+	opState.UpdatedAt = now
+	if err := r.store.UpdateOperationState(key, opState); err != nil {
+		return fmt.Errorf("persist inconclusive work outcome: %w", err)
+	}
 	return nil
 }
 

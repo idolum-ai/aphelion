@@ -1440,6 +1440,189 @@ PY`},
 	}
 }
 
+func TestInconclusiveWorkspaceWriteVerificationSurfacesReconciliationApproval(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	workdir := t.TempDir()
+	work := &fakeWorkExecutor{
+		name:  "native",
+		ready: true,
+		resultHook: func(req WorkRequest) WorkResult {
+			outPath := filepath.Join(req.Workdir, "reports", "phase-f-roadmap.md")
+			if err := os.MkdirAll(filepath.Dir(outPath), 0o700); err != nil {
+				t.Fatalf("MkdirAll(report dir) err = %v", err)
+			}
+			if err := os.WriteFile(outPath, []byte("# Phase F\n\nroadmap\n"), 0o600); err != nil {
+				t.Fatalf("WriteFile(report) err = %v", err)
+			}
+			return WorkResult{
+				Summary: "Phase F is complete. Generated reports/phase-f-roadmap.md.",
+				Commands: []string{`python3 - <<'PY'
+from pathlib import Path
+Path("reports/phase-f-roadmap.md").write_text("# Phase F\n\nroadmap\n")
+PY`},
+				SideEffects:   true,
+				ToolSuccesses: 1,
+			}
+		},
+	}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "native"}, []WorkExecutor{work})
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Hour)
+	key := session.SessionKey{ChatID: 8297, UserID: 0, Scope: telegramDMScopeRef(8297)}
+	opState := session.OperationState{
+		ID:        "verification-inconclusive-op",
+		Objective: "Generate Phase F artifacts, verify them if needed, then continue to Phase G.",
+		Status:    session.OperationStatusActive,
+		Stage:     "phase_approval",
+		Work: session.WorkOperationMetadata{
+			RepoRoot: workdir,
+			Workdir:  workdir,
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "verification-inconclusive-plan",
+			Goal:           "Exercise inconclusive verification flow.",
+			CurrentPhaseID: "phase-f",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-f",
+					Summary:        "Phase F: generate roadmap artifact",
+					Status:         session.PlanStatusInProgress,
+					AuthorityClass: "workspace_write",
+					BoundedEffect:  "Write roadmap artifact under reports and report local evidence.",
+					AllowedActions: []string{"write_local_markdown_reports", "validate_artifact_paths_and_sizes", "workspace_write"},
+					LeaseID:        "lease-phase-f",
+				},
+				{
+					ID:               "phase-g",
+					Summary:          "Phase G: prepare implementation slice",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "read_only_review",
+					BoundedEffect:    "Read the verified roadmap and propose the first implementation slice.",
+					AllowedActions:   []string{"read_verified_phase_f_artifacts", "draft_first_slice_plan"},
+					RequiresApproval: true,
+					GateLevel:        operationGateLevelNormalApproval,
+					GateReasonCode:   "read_only_review",
+					ApprovalSubject:  "operator",
+				},
+			},
+		},
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	proposalID := operationPhaseProposalID(opState, opState.PhasePlan.Phases[0])
+	action := session.ActionProposal{
+		ID:             "aprop-" + proposalID,
+		OperationID:    proposalID,
+		Summary:        opState.PhasePlan.Phases[0].Summary,
+		BoundedEffect:  opState.PhasePlan.Phases[0].BoundedEffect,
+		RiskClass:      "workspace_write",
+		AllowedActions: opState.PhasePlan.Phases[0].AllowedActions,
+		Status:         session.ProposalStatusApproved,
+		ExpiresAt:      expiresAt,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	lease := buildContinuationLease(action, 1, now)
+	lease.ID = "lease-phase-f"
+	lease.Status = session.ContinuationLeaseStatusActive
+	lease.RemainingTurns = 1
+	lease.ApprovedBy = 1001
+	lease.ApprovedAt = now
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusApproved,
+		DecisionID:        proposalID,
+		Objective:         opState.Objective,
+		StageSummary:      action.Summary,
+		RemainingTurns:    1,
+		ApprovedBy:        1001,
+		ActionProposal:    action,
+		ContinuationLease: lease,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v", err)
+	}
+	gotCont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if gotCont.Status != session.ContinuationStatusPending || gotCont.VerificationTarget == nil {
+		t.Fatalf("continuation = %#v, want pending verification target", gotCont)
+	}
+	candidate := filepath.Join(workdir, "reports", "phase-f-roadmap.md")
+	if err := os.Remove(candidate); err != nil {
+		t.Fatalf("Remove(candidate) err = %v", err)
+	}
+
+	approved, err := continuationStateWithLeaseApproved(gotCont, 1001, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("continuationStateWithLeaseApproved() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, approved); err != nil {
+		t.Fatalf("UpdateContinuationState(approved verification) err = %v", err)
+	}
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey(inconclusive verification) err = %v", err)
+	}
+
+	gotOp, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState(after verification) err = %v", err)
+	}
+	if gotOp.PhasePlan.Phases[0].Status != session.PlanStatusInProgress {
+		t.Fatalf("phase F status after inconclusive verification = %q, want in_progress", gotOp.PhasePlan.Phases[0].Status)
+	}
+	if gotOp.Work.LastCompletedAt.IsZero() == false || !strings.Contains(gotOp.Work.LastError, "candidate_artifacts_not_verified") {
+		t.Fatalf("operation work after inconclusive verification = %#v, want no completion and typed verification error", gotOp.Work)
+	}
+	if gotOp.Stage != "verification_inconclusive" ||
+		gotOp.Proposal.Status != session.ProposalStatusPending ||
+		!strings.Contains(strings.ToLower(gotOp.Proposal.Summary), "reconcile") {
+		t.Fatalf("operation projection after inconclusive verification = stage %q proposal %#v, want pending reconciliation projection", gotOp.Stage, gotOp.Proposal)
+	}
+	nextCont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(after inconclusive verification) err = %v", err)
+	}
+	if nextCont.Status != session.ContinuationStatusPending ||
+		nextCont.ActionProposal.Status != session.ProposalStatusPending ||
+		nextCont.VerificationTarget != nil ||
+		!strings.Contains(strings.ToLower(nextCont.ActionProposal.Summary), "reconcile") ||
+		!strings.Contains(nextCont.ActionProposal.BoundedEffect, "reports/phase-f-roadmap.md") {
+		t.Fatalf("continuation after inconclusive verification = %#v, want pending read-only reconciliation approval", nextCont)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[inlineCount-1].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 2 || !strings.Contains(strings.ToLower(inlineText), "could not prove") || !strings.Contains(strings.ToLower(inlineText), "reconcile") {
+		t.Fatalf("inline count/text = %d/%q, want visible reconciliation approval after inconclusive verification", inlineCount, inlineText)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEventPayload(events, core.ExecutionEventWorkOutcomeVerificationInconclusive, "candidate_artifacts_not_verified") {
+		t.Fatalf("events = %#v, want inconclusive verification event", events)
+	}
+	if !hasExecutionEventPayload(events, core.ExecutionEventContinuationOffered, "work_outcome_reconciliation_required") {
+		t.Fatalf("events = %#v, want visible reconciliation continuation offer", events)
+	}
+}
+
 func TestVerifiedConsumedWorkspacePhaseOffersNextPhaseApproval(t *testing.T) {
 	t.Parallel()
 
