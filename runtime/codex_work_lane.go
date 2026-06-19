@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/aphelion/effectauth"
 	runtimecodex "github.com/idolum-ai/aphelion/runtime/codex"
 	"github.com/idolum-ai/aphelion/session"
-	toolpkg "github.com/idolum-ai/aphelion/tool"
 )
 
 func codexWorkThreadStartParams(req WorkRequest) map[string]any {
@@ -114,10 +114,14 @@ func codexWorkApprovalHandler(req WorkRequest) runtimecodex.ApprovalHandler {
 }
 
 func codexWorkCommandAllowed(req WorkRequest, command string) bool {
-	if decision := toolpkg.ContinuationExecAuthorityDecisionForCommand(req.State, command, time.Now().UTC()); decision.Active && decision.Boundary {
-		return decision.Allowed
-	}
-	return runtimecodex.CommandAllowed(runtimecodex.WorkMode(req.Mode), req.RepoRoot, req.Workdir, command)
+	return effectauth.AuthorizeWorkModeCommand(effectauth.WorkModeRequest{
+		State:    req.State,
+		Mode:     effectauth.WorkMode(req.Mode),
+		RepoRoot: req.RepoRoot,
+		Workdir:  req.Workdir,
+		Command:  command,
+		Now:      time.Now().UTC(),
+	}).Allowed
 }
 
 func codexApprovalLogHasSideEffects(log []runtimecodex.ApprovalDecision) bool {

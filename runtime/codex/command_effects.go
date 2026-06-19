@@ -3,34 +3,19 @@
 package codex
 
 import (
-	"path/filepath"
 	"strings"
 
 	"github.com/idolum-ai/aphelion/commandeffect"
+	"github.com/idolum-ai/aphelion/effectauth"
 )
 
 func CommandAllowed(mode WorkMode, repoRoot string, workdir string, command string) bool {
-	compact := commandeffect.NormalizeCommand(command)
-	if compact == "" {
-		return false
-	}
-	effect := commandeffect.Classify(compact)
-	if mode == WorkModeReadOnly {
-		return effect.ReadOnlyAllowed()
-	}
-	if effect.Kind == commandeffect.KindRepoHistory && effect.Reason == commandeffect.ReasonGitPush {
-		return false
-	}
-	if effect.Kind == commandeffect.KindService && mode != WorkModeDeploy {
-		return false
-	}
-	if effect.Kind == commandeffect.KindRepoHistory && effect.Reason == commandeffect.ReasonGitCommit && mode != WorkModeCommit && mode != WorkModeDeploy {
-		return false
-	}
-	if effect.Kind == commandeffect.KindHighImpactStorage {
-		return false
-	}
-	return commandWithinWorkRoot(repoRoot, workdir)
+	return effectauth.AuthorizeWorkModeCommand(effectauth.WorkModeRequest{
+		Mode:     effectauth.WorkMode(mode),
+		RepoRoot: repoRoot,
+		Workdir:  workdir,
+		Command:  command,
+	}).Allowed
 }
 
 func ApprovalLogHasSideEffects(log []ApprovalDecision) bool {
@@ -54,17 +39,4 @@ func ApprovalLogHasSideEffects(log []ApprovalDecision) bool {
 
 func ApprovedCommandHasSideEffects(command string) bool {
 	return commandeffect.Classify(command).SideEffects
-}
-
-func commandWithinWorkRoot(root string, workdir string) bool {
-	root = strings.TrimSpace(root)
-	workdir = strings.TrimSpace(workdir)
-	if root == "" || workdir == "" {
-		return true
-	}
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(workdir))
-	if err != nil {
-		return false
-	}
-	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, "../"))
 }

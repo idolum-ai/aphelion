@@ -176,6 +176,19 @@ refuse to own. Their boundaries are enforced by `architecture_import_guard_test.
   this package is only material; a higher approved grant/lease decides whether it
   may be used.
 
+### `effectauth`: command-effect authorization membrane
+
+- Owns the canonical decision that combines a classified command effect, active
+  continuation envelope, capability-grant coverage, and work-mode fallback into
+  an allow/deny result.
+- May depend on `commandeffect` for classification and `session` for typed lease,
+  proposal, grant, and authority-contract records.
+- Must not own command parsing heuristics, tool execution, provider routing,
+  Telegram UX, continuation mutation, or durable storage writes.
+- The invariant is: an approval can activate or narrow existing authority, but it
+  must never widen the active continuation envelope. Classification says what an
+  effect is; `effectauth` says whether this principal may perform it now.
+
 ### `governorauth`: governor auth material membrane
 
 - Owns resolving, loading, validating, and saving governor backend auth material
