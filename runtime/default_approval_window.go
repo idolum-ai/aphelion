@@ -123,6 +123,53 @@ func (r *Runtime) suppressInitialDefaultApprovalWindowOffer(chatID int64, adminU
 	return true, r.openDefaultApprovalWindowForScope(chatID, adminUserID, scopeKind, scopeID, strings.TrimSpace(sourceKind), policy.Duration, now)
 }
 
+func (r *Runtime) SuppressPostApprovalDefaultWindowOfferForKey(ctx context.Context, key session.SessionKey, adminUserID int64, sourceKind string, sourceID string, sourceDecisionKind string) (bool, error) {
+	_ = ctx
+	_ = sourceID
+	_ = sourceDecisionKind
+	if r == nil || r.store == nil || r.cfg == nil || key.ChatID == 0 {
+		return false, nil
+	}
+	policy := config.EffectiveAutonomyPolicy(r.cfg).DefaultApprovalWindow
+	if !policy.Enabled {
+		return false, nil
+	}
+	if adminUserID <= 0 || !r.IsTelegramAdmin(adminUserID) {
+		return false, nil
+	}
+	scope := session.NormalizeScopeRef(key.Scope)
+	if scope.IsZero() {
+		scope = telegramDMScopeRef(key.ChatID)
+	}
+	scopeKind, scopeID := session.OperatorAutoScopeForRef(scope)
+	if strings.TrimSpace(scopeKind) == "" || strings.TrimSpace(scopeID) == "" {
+		scopeKind, scopeID = operatorAutoDefaultScope(key.ChatID)
+	}
+	if err := r.validateApprovalWindowDuration(policy.Duration); err != nil {
+		return false, err
+	}
+	now := time.Now().UTC()
+	lease, leaseOK, err := r.activeOperatorAutoApprovalLeaseForAdminAndScope(key.ChatID, scopeKind, scopeID, adminUserID, now)
+	if err != nil {
+		return false, err
+	}
+	override, overrideOK, err := r.activeOperatorAutonomyOverrideForAdminAndScope(key.ChatID, scopeKind, scopeID, adminUserID, now)
+	if err != nil {
+		return false, err
+	}
+	if leaseOK && overrideOK {
+		return true, nil
+	}
+	if leaseOK || overrideOK {
+		if (leaseOK && strings.TrimSpace(lease.Reason) != defaultApprovalWindowReason) ||
+			(overrideOK && strings.TrimSpace(override.Reason) != defaultApprovalWindowReason) {
+			return true, nil
+		}
+		return true, r.openDefaultApprovalWindowForScope(key.ChatID, adminUserID, scopeKind, scopeID, strings.TrimSpace(sourceKind), policy.Duration, now)
+	}
+	return true, r.openDefaultApprovalWindowForScope(key.ChatID, adminUserID, scopeKind, scopeID, strings.TrimSpace(sourceKind), policy.Duration, now)
+}
+
 func (r *Runtime) openDefaultApprovalWindowForScope(chatID int64, adminUserID int64, scopeKind string, scopeID string, requestKind string, duration time.Duration, now time.Time) error {
 	if r == nil || r.store == nil {
 		return nil

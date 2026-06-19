@@ -68,6 +68,55 @@ func TestHandleTelegramCommandCallbackContinuationApprove(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandCallbackContinuationApproveSuppressesPostApprovalDefaultWindowRows(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	triggerStarted := make(chan struct{})
+	router := stubCommandRouter{
+		continuationState: session.ContinuationState{
+			Status:         session.ContinuationStatusPending,
+			DecisionID:     "decision-default-window",
+			RemainingTurns: 1,
+			StageSummary:   "Verify the next bounded step.",
+		},
+		canRestart:                        true,
+		triggerContinuationStarted:        triggerStarted,
+		suppressPostApprovalDefaultWindow: true,
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-continue-default-window",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
+		Data:    encodeContinuationCallbackData("decision-default-window", continuationActionApproveLease),
+		Message: &telegram.Message{MessageID: 94, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	waitForStubContinuationTrigger(t, triggerStarted)
+	if router.suppressPostApprovalSource != session.ApprovalWindowOfferSourceContinuation+":decision-default-window:continuation" {
+		t.Fatalf("suppress source = %q, want continuation decision source", router.suppressPostApprovalSource)
+	}
+	if router.approvalWindowOfferSource != "" {
+		t.Fatalf("approvalWindowOfferSource = %q, want no visible approval-window offer", router.approvalWindowOfferSource)
+	}
+	if len(sender.editInline) != 0 {
+		t.Fatalf("editInline count = %d, want no post-approval buttons", len(sender.editInline))
+	}
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits count = %d, want no ordinary text edit", len(sender.edits))
+	}
+	if len(sender.editClear) != 1 {
+		t.Fatalf("editClear count = %d, want approved edit with keyboard cleared", len(sender.editClear))
+	}
+	if !strings.Contains(sender.editClear[0].text, "Approved. Next: Verify the next bounded step.") {
+		t.Fatalf("plain edit text = %q, want approved next-step text", sender.editClear[0].text)
+	}
+}
+
 func TestHandleTelegramCommandCallbackContinueOnceFailsClosed(t *testing.T) {
 	t.Parallel()
 

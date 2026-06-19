@@ -110,6 +110,10 @@ type approvalWindowDurationRouter interface {
 	DefaultApprovalWindowDuration() time.Duration
 }
 
+type postApprovalDefaultWindowSuppressor interface {
+	SuppressPostApprovalDefaultWindowOfferForMessage(ctx context.Context, msg core.InboundMessage, sourceKind string, sourceID string, sourceDecisionKind string) (bool, error)
+}
+
 type commandScopedMemoryRouter interface {
 	MemoryReviewSnapshotForMessage(ctx context.Context, msg core.InboundMessage, source memoryReviewSource) (memoryReviewSnapshot, error)
 }

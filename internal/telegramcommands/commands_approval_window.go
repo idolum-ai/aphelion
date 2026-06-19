@@ -112,6 +112,16 @@ func approvalWindowOfferRowsForSource(ctx context.Context, router commandRouter,
 	return ApprovalWindowRowsForLiveOfferForDuration(offer, approvalWindowDurationFromRouter(router)), nil
 }
 
+func postApprovalWindowOfferRowsForSource(ctx context.Context, router commandRouter, msg core.InboundMessage, sourceKind string, sourceID string, sourceDecisionKind string) ([][]telegram.InlineButton, error) {
+	if suppressor, ok := router.(postApprovalDefaultWindowSuppressor); ok {
+		suppress, err := suppressor.SuppressPostApprovalDefaultWindowOfferForMessage(ctx, msg, sourceKind, sourceID, sourceDecisionKind)
+		if err != nil || suppress {
+			return nil, err
+		}
+	}
+	return approvalWindowOfferRowsForSource(ctx, router, msg, sourceKind, sourceID, sourceDecisionKind)
+}
+
 func approvalWindowDurationFromRouter(router commandRouter) time.Duration {
 	if durations, ok := router.(approvalWindowDurationRouter); ok {
 		if duration := durations.DefaultApprovalWindowDuration(); duration > 0 {

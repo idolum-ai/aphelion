@@ -224,6 +224,16 @@ func (s *stubCommandRouter) CreateApprovalWindowOfferForMessage(_ context.Contex
 	return session.ApprovalWindowOffer{ID: offerID, ChatID: msg.ChatID, SourceKind: sourceKind, SourceID: sourceID, SourceDecisionKind: sourceDecisionKind}, true, nil
 }
 
+func (s *stubCommandRouter) SuppressPostApprovalDefaultWindowOfferForMessage(_ context.Context, msg core.InboundMessage, sourceKind string, sourceID string, sourceDecisionKind string) (bool, error) {
+	copied := msg
+	s.suppressPostApprovalMessage = &copied
+	s.suppressPostApprovalSource = sourceKind + ":" + sourceID + ":" + sourceDecisionKind
+	if s.suppressPostApprovalErr != nil {
+		return false, s.suppressPostApprovalErr
+	}
+	return s.suppressPostApprovalDefaultWindow, nil
+}
+
 func (s *stubCommandRouter) EnableApprovalWindowForMessage(_ context.Context, msg core.InboundMessage, duration time.Duration) (string, error) {
 	result, err := s.EnableApprovalWindowForMessageResult(context.Background(), msg, duration)
 	return result.Text, err

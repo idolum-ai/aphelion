@@ -29,6 +29,7 @@ type Runtime interface {
 	AutoApprovalStatus(ctx context.Context, chatID int64, senderID int64) (string, error)
 	AutoApprovalStatusForKey(ctx context.Context, key session.SessionKey, senderID int64) (string, error)
 	CreateApprovalWindowOfferForKey(ctx context.Context, key session.SessionKey, senderID int64, sourceKind string, sourceID string, sourceDecisionKind string) (session.ApprovalWindowOffer, bool, error)
+	SuppressPostApprovalDefaultWindowOfferForKey(ctx context.Context, key session.SessionKey, senderID int64, sourceKind string, sourceID string, sourceDecisionKind string) (bool, error)
 	EnableApprovalWindowForKey(ctx context.Context, key session.SessionKey, senderID int64, duration time.Duration) (string, error)
 	EnableApprovalWindowForKeyResult(ctx context.Context, key session.SessionKey, senderID int64, duration time.Duration) (core.ApprovalWindowEnableResult, error)
 	DefaultApprovalWindowDuration() time.Duration

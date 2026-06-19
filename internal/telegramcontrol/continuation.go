@@ -132,6 +132,13 @@ func (c CommandControl) CreateApprovalWindowOfferForMessage(ctx context.Context,
 	return c.Runtime.CreateApprovalWindowOfferForKey(ctx, SessionKeyForMessage(msg), msg.SenderID, sourceKind, sourceID, sourceDecisionKind)
 }
 
+func (c CommandControl) SuppressPostApprovalDefaultWindowOfferForMessage(ctx context.Context, msg core.InboundMessage, sourceKind string, sourceID string, sourceDecisionKind string) (bool, error) {
+	if c.Runtime == nil {
+		return false, nil
+	}
+	return c.Runtime.SuppressPostApprovalDefaultWindowOfferForKey(ctx, SessionKeyForMessage(msg), msg.SenderID, sourceKind, sourceID, sourceDecisionKind)
+}
+
 func (c CommandControl) EnableApprovalWindowForMessage(ctx context.Context, msg core.InboundMessage, duration time.Duration) (string, error) {
 	result, err := c.EnableApprovalWindowForMessageResult(ctx, msg, duration)
 	return result.Text, err

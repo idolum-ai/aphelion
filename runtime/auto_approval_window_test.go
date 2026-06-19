@@ -594,6 +594,76 @@ func TestRuntimeDefaultApprovalWindowExpiredBaselineAllowsApprovalWindowOffer(t 
 	}
 }
 
+func TestRuntimeDefaultApprovalWindowSuppressesPostApprovalOfferAfterBaselineExpiry(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.DefaultApprovalWindow = "15m"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	chatID := int64(99327)
+	key := session.SessionKey{ChatID: chatID, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "99327"}}
+	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
+	now := time.Now().UTC()
+	if _, err := store.CreateOperatorAutoApprovalLease(session.OperatorAutoApprovalLease{
+		ID:          "lease-default-expired-post-approval",
+		AdminUserID: 1001,
+		ChatID:      chatID,
+		ScopeKind:   scopeKind,
+		ScopeID:     scopeID,
+		Scope:       session.OperatorAutoApprovalScopeAll,
+		Reason:      defaultApprovalWindowReason,
+		CreatedAt:   now.Add(-30 * time.Minute),
+		ExpiresAt:   now.Add(-15 * time.Minute),
+		UpdatedAt:   now.Add(-15 * time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutoApprovalLease(expired) err = %v", err)
+	}
+	if _, err := store.CreateOperatorAutonomyOverride(session.OperatorAutonomyOverride{
+		ID:          "override-default-expired-post-approval",
+		AdminUserID: 1001,
+		ChatID:      chatID,
+		ScopeKind:   scopeKind,
+		ScopeID:     scopeID,
+		Mode:        "leased",
+		Scope:       session.OperatorAutoApprovalScopeAll,
+		Reason:      defaultApprovalWindowReason,
+		CreatedAt:   now.Add(-30 * time.Minute),
+		ExpiresAt:   now.Add(-15 * time.Minute),
+		UpdatedAt:   now.Add(-15 * time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutonomyOverride(expired) err = %v", err)
+	}
+
+	suppress, err := rt.SuppressPostApprovalDefaultWindowOfferForKey(context.Background(), key, 1001, session.ApprovalWindowOfferSourceContinuation, "decision-post-approval", "continuation")
+	if err != nil {
+		t.Fatalf("SuppressPostApprovalDefaultWindowOfferForKey() err = %v", err)
+	}
+	if !suppress {
+		t.Fatal("suppress = false, want post-approval approval-window row hidden")
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeasesForScope(chatID, scopeKind, scopeID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeasesForScope() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].Reason != defaultApprovalWindowReason || leases[0].UsedCount != 0 {
+		t.Fatalf("leases = %#v, want fresh unspent default approval window", leases)
+	}
+	assertOperatorWindowDuration(t, leases[0].CreatedAt, leases[0].ExpiresAt, 15*time.Minute)
+	overrides, err := store.ActiveOperatorAutonomyOverridesForScope(chatID, scopeKind, scopeID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutonomyOverridesForScope() err = %v", err)
+	}
+	if len(overrides) != 1 || overrides[0].Reason != defaultApprovalWindowReason || overrides[0].Mode != "leased" {
+		t.Fatalf("overrides = %#v, want fresh default autonomy override", overrides)
+	}
+	if offer, ok, err := store.ActiveApprovalWindowOfferForSource(chatID, session.ApprovalWindowOfferSourceContinuation, "decision-post-approval", time.Now().UTC()); err != nil || ok {
+		t.Fatalf("ActiveApprovalWindowOfferForSource() = %#v ok=%v err=%v, want no visible post-approval offer", offer, ok, err)
+	}
+}
+
 func TestRuntimeApprovalWindowOfferDuplicateTapDoesNotOpenSecondWindow(t *testing.T) {
 	t.Parallel()
 
