@@ -36,17 +36,18 @@ func (r *Runtime) operationRecoveryCandidateArbitration(key session.SessionKey, 
 	}
 	working = session.NormalizeWorkingObjective(working)
 	if !workingObjectiveCanSuppressContinuationCandidate(working, now) {
-		working = requestWorkingObjectiveForRecoveryArbitration(msg.Text, now)
+		working = requestWorkingObjectiveForRecoveryArbitration(msg.Text, recoveryRequestTimestamp(msg), now)
 		if !workingObjectiveCanSuppressContinuationCandidate(working, now) {
 			return decision
 		}
 	}
 	opState = session.NormalizeOperationState(opState)
 	candidate := operationContinuationCandidateText(opState)
-	if continuationCandidateTextMatchesWorkingObjective(candidate, working.Objective) {
+	requestNegatesResume := recoveryRequestNegatesResumeIntent(strings.ToLower(msg.Text))
+	if !requestNegatesResume && continuationCandidateTextMatchesWorkingObjective(candidate, working.Objective) {
 		return decision
 	}
-	if recoveryRequestExplicitlySelectsCandidate(msg.Text, candidate) {
+	if !requestNegatesResume && recoveryRequestExplicitlySelectsCandidate(msg.Text, candidate) {
 		return decision
 	}
 	return recoveryCandidateArbitration{
@@ -58,7 +59,17 @@ func (r *Runtime) operationRecoveryCandidateArbitration(key session.SessionKey, 
 	}
 }
 
-func requestWorkingObjectiveForRecoveryArbitration(request string, now time.Time) session.WorkingObjective {
+func recoveryRequestTimestamp(msg core.InboundMessage) time.Time {
+	if !msg.Timestamp.IsZero() {
+		return msg.Timestamp.UTC()
+	}
+	if !msg.IngressQueuedAt.IsZero() {
+		return msg.IngressQueuedAt.UTC()
+	}
+	return time.Time{}
+}
+
+func requestWorkingObjectiveForRecoveryArbitration(request string, requestAt time.Time, now time.Time) session.WorkingObjective {
 	request = strings.TrimSpace(request)
 	if request == "" {
 		return session.WorkingObjective{}
@@ -70,12 +81,19 @@ func requestWorkingObjectiveForRecoveryArbitration(request string, now time.Time
 		now = time.Now().UTC()
 	}
 	now = now.UTC()
+	if requestAt.IsZero() {
+		requestAt = now
+	}
+	requestAt = requestAt.UTC()
+	if now.Sub(requestAt) > continuationCandidateWorkingObjectiveFreshness {
+		return session.WorkingObjective{}
+	}
 	return session.WorkingObjective{
 		Objective:  request,
 		Source:     "operator_message",
 		Confidence: "high",
-		CreatedAt:  now,
-		ExpiresAt:  now.Add(continuationCandidateWorkingObjectiveFreshness),
+		CreatedAt:  requestAt,
+		ExpiresAt:  requestAt.Add(continuationCandidateWorkingObjectiveFreshness),
 	}
 }
 

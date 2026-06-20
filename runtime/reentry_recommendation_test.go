@@ -708,6 +708,89 @@ func TestReentryRecommendationSuppressesOperationConflictingWithFreshRequestWith
 	}
 }
 
+func TestReentryRecommendationNegatedResumeDoesNotKeepStaleOperationLive(t *testing.T) {
+	_, store, _, _ := buildRuntimeFixtures(t)
+	rt := &Runtime{store: store}
+
+	now := time.Date(2026, 6, 20, 11, 45, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 7026, UserID: 0, Scope: telegramDMScopeRef(7026)}
+	state := reentryRecommendationState{
+		Key: key,
+		Run: session.TurnRun{
+			ID:          94,
+			SessionID:   "telegram:7026:0",
+			Kind:        session.TurnRunKindInteractive,
+			Status:      session.TurnRunStatusCompleted,
+			RequestText: "Don't resume the bug scout. Stay on the XPVENTA PDF.",
+			CompletedAt: now.Add(-10 * time.Minute),
+		},
+		Operation: session.OperationState{
+			ID:        "daily-review-bug-scout-refactor",
+			Objective: "Refactor the daily review bug scout and run its tests.",
+			Status:    session.OperationStatusActive,
+			Stage:     "working",
+			PhasePlan: session.OperationPhasePlan{
+				CurrentPhaseID: "bug-scout-phase-a-refactor-and-test-v2",
+				Phases: []session.OperationPhase{{
+					ID:      "bug-scout-phase-a-refactor-and-test-v2",
+					Summary: "Refactor the daily review bug scout and run tests.",
+					Status:  session.PlanStatusInProgress,
+				}},
+			},
+		},
+		Now: now,
+	}
+
+	candidates := rt.reentryRecommendationCandidates(context.Background(), state)
+	for _, candidate := range candidates {
+		if candidate.SourceKind == "operation_state" && candidate.SourceRef == "daily-review-bug-scout-refactor" {
+			t.Fatalf("candidates = %#v, want negated resume request to suppress overlapping stale operation", candidates)
+		}
+	}
+}
+
+func TestReentryRecommendationDoesNotMintOldRequestAsFreshObjective(t *testing.T) {
+	_, store, _, _ := buildRuntimeFixtures(t)
+	rt := &Runtime{store: store}
+
+	now := time.Date(2026, 6, 20, 20, 0, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 7027, UserID: 0, Scope: telegramDMScopeRef(7027)}
+	state := reentryRecommendationState{
+		Key: key,
+		Run: session.TurnRun{
+			ID:          95,
+			SessionID:   "telegram:7027:0",
+			Kind:        session.TurnRunKindInteractive,
+			Status:      session.TurnRunStatusCompleted,
+			RequestText: "Thread 3 still did not send the XPVENTA PDF. Stay on file delivery.",
+			CompletedAt: now.Add(-8 * time.Hour),
+		},
+		Operation: session.OperationState{
+			ID:        "daily-review-bug-scout-refactor",
+			Objective: "Refactor the daily review bug scout and run its tests.",
+			Status:    session.OperationStatusActive,
+			Stage:     "working",
+			PhasePlan: session.OperationPhasePlan{
+				CurrentPhaseID: "bug-scout-phase-a-refactor-and-test-v2",
+				Phases: []session.OperationPhase{{
+					ID:      "bug-scout-phase-a-refactor-and-test-v2",
+					Summary: "Refactor the daily review bug scout and run tests.",
+					Status:  session.PlanStatusInProgress,
+				}},
+			},
+		},
+		Now: now,
+	}
+
+	candidates := rt.reentryRecommendationCandidates(context.Background(), state)
+	for _, candidate := range candidates {
+		if candidate.SourceKind == "operation_state" && candidate.SourceRef == "daily-review-bug-scout-refactor" {
+			return
+		}
+	}
+	t.Fatalf("candidates = %#v, want old request not to suppress current operation after freshness window", candidates)
+}
+
 func TestReentryRecommendationAllowsExplicitResumeOfOperation(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)

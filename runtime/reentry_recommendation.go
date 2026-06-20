@@ -401,7 +401,7 @@ func (r *Runtime) reentryRecommendationCandidates(ctx context.Context, state ree
 		})
 	}
 	if op.Active() && (op.Status == session.OperationStatusCompleted || op.Status == session.OperationStatusBlocked || op.Status == session.OperationStatusActive) {
-		decision := r.operationRecoveryCandidateArbitration(state.Key, core.InboundMessage{Text: state.Run.RequestText}, op, state.Now)
+		decision := r.operationRecoveryCandidateArbitration(state.Key, core.InboundMessage{Text: state.Run.RequestText, Timestamp: reentryRunTerminalAt(state.Run)}, op, state.Now)
 		if !decision.Live {
 			r.recordSuppressedRecoveryCandidate(state.Key, op, decision, "reentry_recommendation", state.Now)
 		} else {
@@ -684,6 +684,16 @@ func rankReentryCandidatesDeterministically(candidates []session.ReentryRecommen
 		return left > right
 	})
 	return candidates
+}
+
+func reentryRunTerminalAt(run session.TurnRun) time.Time {
+	if !run.CompletedAt.IsZero() {
+		return run.CompletedAt.UTC()
+	}
+	if !run.LastActivityAt.IsZero() {
+		return run.LastActivityAt.UTC()
+	}
+	return time.Time{}
 }
 
 func reentryCandidateWeightedScore(candidate session.ReentryRecommendationCandidate) float64 {

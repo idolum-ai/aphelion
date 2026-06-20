@@ -179,6 +179,21 @@ func appendPlanEffect(effects []Effect, effect Effect) []Effect {
 		if len(effects) == 0 {
 			return append(effects, effect)
 		}
+		if effect.Action != "" || effect.Target != "" || effect.Subject != "" {
+			for i, existing := range effects {
+				if existing.Kind == KindReadOnlyInspection && !existing.SideEffects &&
+					existing.Action == "" && existing.Target == "" && existing.Subject == "" {
+					effects[i] = effect
+					return effects
+				}
+				if existing.Kind == effect.Kind && existing.Action == effect.Action &&
+					existing.Target == effect.Target && existing.Subject == effect.Subject &&
+					existing.Command == effect.Command {
+					return effects
+				}
+			}
+			return append(effects, effect)
+		}
 		return effects
 	}
 	if effect.SideEffects {
@@ -342,6 +357,11 @@ func classifySegment(segment string) Effect {
 			return fileMetadataReadEffect(cmd, target)
 		}
 		return Effect{Kind: KindReadOnlyInspection, Reason: cmd + " shell builtin", Command: cmd}
+	case "[":
+		if target := testFileMetadataTarget(args); target != "" {
+			return fileMetadataReadEffect(cmd, target)
+		}
+		return Effect{Kind: KindReadOnlyInspection, Reason: cmd + " shell builtin", Command: cmd}
 	case "git":
 		return classifyGitCommand(args)
 	case "rg", "grep", "egrep", "fgrep", "cat", "nl", "head", "tail", "less", "more", "wc", "pwd", "find":
@@ -350,7 +370,7 @@ func classifySegment(segment string) Effect {
 		}
 		return Effect{Kind: KindReadOnlyInspection, Reason: cmd + " inspection", Command: cmd}
 	case "ls":
-		if target := commandPathTarget(args); target != "" {
+		if target := lsFileMetadataTarget(args); target != "" {
 			return fileMetadataReadEffect(cmd, target)
 		}
 		return Effect{Kind: KindReadOnlyInspection, Reason: cmd + " inspection", Command: cmd}
@@ -416,14 +436,29 @@ func fileMetadataReadEffect(cmd string, target string) Effect {
 	}
 }
 
-func commandPathTarget(args []shellToken) string {
+func lsFileMetadataTarget(args []shellToken) string {
 	var targets []string
-	for _, arg := range args {
-		token := strings.TrimSpace(arg.Text)
-		if token == "" || token == "--" {
+	endOptions := false
+	for i := 0; i < len(args); i++ {
+		token := strings.TrimSpace(args[i].Text)
+		if token == "" {
 			continue
 		}
-		if strings.HasPrefix(token, "-") {
+		if endOptions {
+			targets = append(targets, trimShellToken(token))
+			continue
+		}
+		if token == "--" {
+			endOptions = true
+			continue
+		}
+		if lsOptionConsumesValue(token) {
+			if !shortOptionHasInlineOperand(token, 'I') && !longOptionHasInlineOperand(token) && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(token, "-") && token != "-" {
 			continue
 		}
 		targets = append(targets, trimShellToken(token))
@@ -436,18 +471,27 @@ func commandPathTarget(args []shellToken) string {
 
 func statFileMetadataTarget(args []shellToken) string {
 	var targets []string
+	endOptions := false
 	for i := 0; i < len(args); i++ {
 		token := strings.TrimSpace(args[i].Text)
-		if token == "" || token == "--" {
+		if token == "" {
+			continue
+		}
+		if endOptions {
+			targets = append(targets, trimShellToken(token))
+			continue
+		}
+		if token == "--" {
+			endOptions = true
 			continue
 		}
 		if statOptionConsumesValue(token) {
-			if !strings.Contains(token, "=") && i+1 < len(args) {
+			if !shortOptionHasInlineOperand(token, 'c') && !longOptionHasInlineOperand(token) && i+1 < len(args) {
 				i++
 			}
 			continue
 		}
-		if strings.HasPrefix(token, "-") {
+		if strings.HasPrefix(token, "-") && token != "-" {
 			continue
 		}
 		targets = append(targets, trimShellToken(token))
@@ -458,23 +502,63 @@ func statFileMetadataTarget(args []shellToken) string {
 	return strings.Join(targets, " ")
 }
 
+func lsOptionConsumesValue(token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "-I" || token == "--ignore" || strings.HasPrefix(token, "--ignore=") ||
+		token == "--hide" || strings.HasPrefix(token, "--hide=") ||
+		token == "--quoting-style" || strings.HasPrefix(token, "--quoting-style=") ||
+		token == "--sort" || strings.HasPrefix(token, "--sort=") ||
+		token == "--time" || strings.HasPrefix(token, "--time=") ||
+		token == "--time-style" || strings.HasPrefix(token, "--time-style=") ||
+		token == "--block-size" || strings.HasPrefix(token, "--block-size=") {
+		return true
+	}
+	if strings.HasPrefix(token, "-") && !strings.HasPrefix(token, "--") {
+		return strings.Contains(token[1:], "I")
+	}
+	return false
+}
+
 func statOptionConsumesValue(token string) bool {
 	token = strings.TrimSpace(token)
-	return token == "-c" ||
+	if token == "-c" ||
 		token == "--format" ||
 		strings.HasPrefix(token, "--format=") ||
 		token == "--printf" ||
-		strings.HasPrefix(token, "--printf=")
+		strings.HasPrefix(token, "--printf=") {
+		return true
+	}
+	if strings.HasPrefix(token, "-") && !strings.HasPrefix(token, "--") {
+		return strings.Contains(token[1:], "c")
+	}
+	return false
+}
+
+func shortOptionHasInlineOperand(token string, option byte) bool {
+	if !strings.HasPrefix(token, "-") || strings.HasPrefix(token, "--") {
+		return false
+	}
+	body := token[1:]
+	idx := strings.IndexByte(body, option)
+	return idx >= 0 && idx < len(body)-1
+}
+
+func longOptionHasInlineOperand(token string) bool {
+	return strings.HasPrefix(token, "--") && strings.Contains(token, "=")
 }
 
 func testFileMetadataTarget(args []shellToken) string {
-	if len(args) < 2 {
+	idx := 0
+	for idx < len(args) && strings.TrimSpace(args[idx].Text) == "!" {
+		idx++
+	}
+	if idx+1 >= len(args) {
 		return ""
 	}
-	op := strings.TrimSpace(args[0].Text)
+	op := strings.TrimSpace(args[idx].Text)
 	switch op {
 	case "-a", "-b", "-c", "-d", "-e", "-f", "-g", "-h", "-k", "-L", "-O", "-p", "-r", "-S", "-s", "-u", "-w", "-x":
-		return trimShellToken(args[1].Text)
+		return trimShellToken(args[idx+1].Text)
 	default:
 		return ""
 	}

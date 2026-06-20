@@ -85,6 +85,34 @@ func TestPlanCommandFileMetadataCommandsProduceTargetedMetadataEffect(t *testing
 			command: `ls -l /tmp/not-actually-a-secret-token-report.txt`,
 			target:  "/tmp/not-actually-a-secret-token-report.txt",
 		},
+		{
+			command: `pwd && ls -l /secret/file`,
+			target:  "/secret/file",
+		},
+		{
+			command: `echo checking && stat /secret/file`,
+			target:  "/secret/file",
+		},
+		{
+			command: `ls -I '*.tmp' /secret/file`,
+			target:  "/secret/file",
+		},
+		{
+			command: `stat -Lc '%F' /secret/file`,
+			target:  "/secret/file",
+		},
+		{
+			command: `ls -- -leading-dash`,
+			target:  "-leading-dash",
+		},
+		{
+			command: `[ -f /secret/file ]`,
+			target:  "/secret/file",
+		},
+		{
+			command: `test ! -f /secret/file`,
+			target:  "/secret/file",
+		},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
 			t.Parallel()
