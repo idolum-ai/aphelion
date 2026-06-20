@@ -67,7 +67,11 @@ func AuthorizeCommand(req CommandRequest) Decision {
 		return decision
 	}
 	invalidContract := decision.Reason == reasonInvalidAuthorityContract
+	plan := commandeffect.PlanCommand(req.Command)
 	effect := commandeffect.Classify(req.Command)
+	if len(plan.Effects) == 1 {
+		effect = plan.Effects[0]
+	}
 	decision.EffectKind = string(effect.Kind)
 	boundary, boundaryOK := commandeffect.BoundaryForCommand(req.Command)
 	if invalidContract {
@@ -78,25 +82,34 @@ func AuthorizeCommand(req CommandRequest) Decision {
 		}
 		return decision
 	}
+	if plan.Dynamic {
+		decision.Reason = "dynamic_effect_plan_unbounded"
+		decision.EffectKind = string(commandeffect.KindUnknown)
+		return decision
+	}
+	if plan.MultipleAuthorities {
+		decision.Reason = "effect_plan_requires_split"
+		decision.EffectKind = string(commandeffect.KindUnknown)
+		return decision
+	}
 	if !boundaryOK {
 		if effect.ReadOnlyAllowed() {
 			decision.Allowed = true
 			decision.Reason = "read_only_effect"
 			return decision
 		}
-		decision.Allowed = true
-		decision.Reason = "non_boundary_effect"
-		return decision
+		return decisionForNonBoundaryEffect(state, decision, effect)
 	}
 	decision.Boundary = true
 	decision.BoundaryKind = string(boundary.Kind)
 	decision.RequiredAction = boundaryRequiredAction(boundary.Kind, req.Command)
-	return decisionForBoundary(state, decision, boundary.Kind, req.Command)
+	return decisionForBoundary(state, decision, boundary, req.Command)
 }
 
 // AuthorizeWorkModeCommand applies the same continuation-envelope decision used
 // by tools and falls back to the generic work-mode policy only when there is no
-// active boundary-crossing continuation decision.
+// active continuation envelope. Boundary status affects projection, not whether
+// the parent envelope constrains execution.
 func AuthorizeWorkModeCommand(req WorkModeRequest) Decision {
 	now := req.Now
 	if now.IsZero() {
@@ -107,17 +120,14 @@ func AuthorizeWorkModeCommand(req WorkModeRequest) Decision {
 		Command: req.Command,
 		Now:     now,
 	})
-	if decision.Active && decision.Reason == reasonInvalidAuthorityContract {
-		return decision
-	}
-	if decision.Active && decision.Boundary {
+	if decision.Active {
 		return decision
 	}
 	return authorizeByWorkMode(req)
 }
 
 func DecisionError(decision Decision) error {
-	if decision.Active && !decision.Allowed && decision.Reason == reasonInvalidAuthorityContract {
+	if decision.Active && !decision.Allowed {
 		return fmt.Errorf("command exceeds active continuation authority: boundary=%s required_action=%s reason=%s lease_id=%s proposal_id=%s phase_id=%s",
 			strings.TrimSpace(decision.BoundaryKind),
 			strings.TrimSpace(decision.RequiredAction),
@@ -171,8 +181,9 @@ func decisionBase(state session.ContinuationState, now time.Time) Decision {
 	return decision
 }
 
-func decisionForBoundary(state session.ContinuationState, decision Decision, kind commandeffect.BoundaryKind, command string) Decision {
-	switch kind {
+func decisionForBoundary(state session.ContinuationState, decision Decision, boundary commandeffect.Boundary, command string) Decision {
+	effect := boundary.Effect
+	switch boundary.Kind {
 	case commandeffect.BoundaryExternalAccount:
 		if externalAccountStatusCommand(command) {
 			return decisionRequireAnyAction(state, decision, []string{
@@ -192,19 +203,117 @@ func decisionForBoundary(state session.ContinuationState, decision Decision, kin
 			decision.Reason = "external_effect_missing_capability_grant"
 			return decision
 		}
-		return decisionRequireAnyAction(state, decision, externalAccountMutationActions(command))
+		return decisionRequireAnyAction(state, decision, exactEffectActions(effect, externalAccountMutationActions(command)...))
 	case commandeffect.BoundaryGitCommit:
-		return decisionRequireAnyAction(state, decision, []string{"git_commit", "commit", "repo_history_mutation"})
+		return decisionRequireAnyAction(state, decision, exactEffectActions(effect, "git_commit", "commit"))
 	case commandeffect.BoundaryGitPush:
-		return decisionRequireAnyAction(state, decision, []string{"git_push", "push_remote", "deploy", "run_deploy"})
+		return decisionRequireRepoPublicationPush(state, decision)
 	case commandeffect.BoundaryRemoteHostOperation:
-		return decisionRequireAnyAction(state, decision, []string{"remote_host_operation", "ssh", "scp", "rsync", "deploy", "run_deploy"})
+		return decisionRequireAnyAction(state, decision, exactEffectActions(effect))
 	case commandeffect.BoundaryServiceProcessChange:
-		return decisionRequireAnyAction(state, decision, []string{"service_process_change", "restart_service", "service_restart", "systemctl_restart", "deploy", "run_deploy"})
+		return decisionRequireAnyAction(state, decision, exactEffectActions(effect, serviceEffectAliases(effect)...))
 	default:
 		decision.Reason = "unhandled_boundary_effect"
 		return decision
 	}
+}
+
+func decisionForNonBoundaryEffect(state session.ContinuationState, decision Decision, effect commandeffect.Effect) Decision {
+	actions := nonBoundaryEffectActions(effect)
+	if len(actions) == 0 {
+		decision.Reason = "effect_not_represented_in_continuation_envelope"
+		return decision
+	}
+	switch effect.Kind {
+	case commandeffect.KindExternal:
+		if !decision.ExternalEffectsAllowed {
+			decision.Reason = "external_effect_not_allowed_by_contract"
+			return decision
+		}
+	case commandeffect.KindUnknown:
+		decision.Reason = "unknown_effect_requires_split_or_typed_executor"
+		return decision
+	}
+	return decisionRequireAnyAction(state, decision, actions)
+}
+
+func nonBoundaryEffectActions(effect commandeffect.Effect) []string {
+	if exact := exactEffectActions(effect); len(exact) > 0 {
+		return exact
+	}
+	switch effect.Kind {
+	case commandeffect.KindValidation:
+		return []string{"run_tests", "validate", "validation_execution", "run_validation"}
+	case commandeffect.KindBuildArtifact:
+		return []string{"build_artifact", "generate_artifact", "write_artifact", "run_build", "build"}
+	case commandeffect.KindWorkspaceMutation:
+		return []string{"workspace_write", "edit_workspace", "edit_files", "write_files", "apply_patch", "patch"}
+	case commandeffect.KindRepoHistory:
+		return nil
+	case commandeffect.KindExternal:
+		return []string{"external_network_contact", "network_contact", "fetch_remote", "git_fetch"}
+	case commandeffect.KindCapability:
+		return []string{"capability_acquisition", "install_dependency", "package_install"}
+	case commandeffect.KindCredential:
+		return []string{"credential_or_config_effect", "credential_metadata", "token_health_check"}
+	case commandeffect.KindDatabase:
+		return []string{"database_mutation", "state_mutation"}
+	case commandeffect.KindHighImpactStorage:
+		return []string{"high_impact_storage"}
+	default:
+		return nil
+	}
+}
+
+func exactEffectActions(effect commandeffect.Effect, aliases ...string) []string {
+	var actions []string
+	if action := normalizeAuthorityAction(effect.Action); action != "" {
+		actions = append(actions, action)
+	}
+	for _, alias := range aliases {
+		if alias = normalizeAuthorityAction(alias); alias != "" {
+			actions = append(actions, alias)
+		}
+	}
+	return dedupeAuthorityActions(actions)
+}
+
+func serviceEffectAliases(effect commandeffect.Effect) []string {
+	switch normalizeAuthorityAction(effect.Action) {
+	case "systemctl_restart":
+		return []string{"restart_service", "service_restart"}
+	case "systemctl_reload":
+		return []string{"reload_service", "service_reload"}
+	case "systemctl_start":
+		return []string{"start_service", "service_start"}
+	case "systemctl_stop":
+		return []string{"stop_service", "service_stop"}
+	default:
+		return nil
+	}
+}
+
+func dedupeAuthorityActions(actions []string) []string {
+	out := actions[:0]
+	seen := map[string]bool{}
+	for _, action := range actions {
+		action = normalizeAuthorityAction(action)
+		if action == "" || seen[action] {
+			continue
+		}
+		seen[action] = true
+		out = append(out, action)
+	}
+	return out
+}
+
+func decisionRequireRepoPublicationPush(state session.ContinuationState, decision Decision) Decision {
+	decision.RequiredAction = "git_push"
+	if !repoPublicationAuthorityClassAllowed(state) {
+		decision.Reason = "repo_publication_class_required"
+		return decision
+	}
+	return decisionRequireAnyAction(state, decision, []string{"git_push", "push_remote"})
 }
 
 func decisionRequireAnyAction(state session.ContinuationState, decision Decision, actions []string) Decision {
@@ -225,6 +334,30 @@ func decisionRequireAnyAction(state session.ContinuationState, decision Decision
 	}
 	decision.Reason = "action_not_allowed_by_continuation_envelope"
 	return decision
+}
+
+func repoPublicationAuthorityClassAllowed(state session.ContinuationState) bool {
+	for _, candidate := range authorityClassTokens(state) {
+		if normalizeAuthorityAction(candidate) == "repo_publication" {
+			return true
+		}
+	}
+	return false
+}
+
+func authorityClassTokens(state session.ContinuationState) []string {
+	state = session.NormalizeContinuationState(state)
+	values := []string{
+		strings.TrimSpace(state.ActionProposal.RiskClass),
+		strings.TrimSpace(string(state.ContinuationLease.LeaseClass)),
+	}
+	if phase, ok := session.CurrentContinuationApprovalBundlePhase(state.ApprovalBundle); ok {
+		values = append(values, strings.TrimSpace(phase.AuthorityClass))
+	}
+	if compilation := session.CompileContinuationAuthorityContract(state); compilation.Valid() {
+		values = append(values, strings.TrimSpace(compilation.Contract.Key))
+	}
+	return values
 }
 
 func authorityActionAllowed(state session.ContinuationState, action string) bool {

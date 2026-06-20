@@ -637,6 +637,7 @@ func (e nativeWorkRecoveryError) Error() string {
 
 type codexWorkExecutor struct {
 	address                  string
+	runtime                  *Runtime
 	check                    func(context.Context, string) error
 	rpcTimeout               time.Duration
 	firstNotificationTimeout time.Duration
@@ -688,7 +689,7 @@ func (e codexWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResult
 	if strings.TrimSpace(e.address) == "" {
 		return WorkResult{}, fmt.Errorf("codex app-server address not configured")
 	}
-	client := runtimecodex.NewClient(e.address, codexWorkApprovalHandler(req))
+	client := runtimecodex.NewClient(e.address, codexWorkApprovalHandler(req, e.runtime))
 	defer client.Close(websocket.StatusNormalClosure, "done")
 	if err := e.withRPCTimeout(ctx, client.Connect); err != nil {
 		return WorkResult{}, err

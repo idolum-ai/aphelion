@@ -52,7 +52,7 @@ func effectAttemptSubjectJSON(command string) string {
 	if err != nil {
 		return "{}"
 	}
-	return string(raw)
+	return session.RedactEvidenceText(string(raw)).Text
 }
 
 func gitPushSubject(tokens []string) (string, string) {

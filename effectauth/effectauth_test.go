@@ -68,8 +68,10 @@ func TestAuthorizeCommandAllowsGitPushOnlyWhenEnvelopeAllowsGitPush(t *testing.T
 	t.Parallel()
 
 	now := time.Now().UTC()
+	state := testContinuationState("repo_publication", []string{"git_push", "report_release_result"}, false, now)
+	state.ContinuationLease.LeaseClass = session.ContinuationLeaseClassRepoPublication
 	allowed := AuthorizeCommand(CommandRequest{
-		State:   testContinuationState("deploy", []string{"git_push", "report_release_result"}, false, now),
+		State:   state,
 		Command: "git push origin release/v0.2.9",
 		Now:     now,
 	})
@@ -240,8 +242,8 @@ func TestAuthorizeCommandBoundaryKindsAllowAndDeny(t *testing.T) {
 			name:           "remote host",
 			command:        "ssh aphelion.example uptime",
 			allowRiskClass: "remote_host_operation",
-			allowActions:   []string{"remote_host_operation", "report_remote_status"},
-			wantAction:     "remote_host_operation",
+			allowActions:   []string{"ssh", "report_remote_status"},
+			wantAction:     "ssh",
 		},
 		{
 			name:           "service process",
@@ -342,6 +344,128 @@ func TestAuthorizeWorkModeCommandActiveEnvelopeOverridesFallback(t *testing.T) {
 	})
 	if !decision.Active || !decision.Boundary || decision.Allowed {
 		t.Fatalf("decision = %#v, want active read-only envelope to reject deploy-mode external account command", decision)
+	}
+}
+
+func TestAuthorizeCommandActiveEnvelopeRejectsUnboundedAndNonBoundarySideEffects(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	state := testContinuationState("read_only_review", []string{"read_only", "inspect_code", "report_findings"}, false, now)
+	for _, command := range []string{
+		"touch generated.txt",
+		"cat README.md > generated.txt",
+		"curl -X POST https://example.com/hook",
+		"sqlite3 state.db 'delete from runs'",
+		"eval 'git push origin main'",
+		`echo "$(git push origin main)"`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			decision := AuthorizeCommand(CommandRequest{State: state, Command: command, Now: now})
+			if !decision.Active {
+				t.Fatalf("decision = %#v, want active continuation envelope", decision)
+			}
+			if decision.Allowed {
+				t.Fatalf("decision = %#v, want active envelope to deny non-read-only or dynamically unbounded side effect", decision)
+			}
+		})
+	}
+}
+
+func TestAuthorizeCommandRequiresEveryCompoundEffect(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name    string
+		state   session.ContinuationState
+		command string
+	}{
+		{
+			name:    "external account approval does not cover preceding push",
+			state:   testContinuationState("external_account_pr_create", []string{"github_pr_create", "report_pr_link"}, true, now),
+			command: "git push origin main && gh pr create --fill",
+		},
+		{
+			name:    "service approval does not cover preceding push",
+			state:   testContinuationState("deploy", []string{"restart_service", "post_restart_verification"}, false, now),
+			command: "git push origin main && systemctl --user restart aphelion.service",
+		},
+		{
+			name:    "repo publication approval does not cover pull request metadata",
+			state:   testContinuationState("repo_publication", []string{"git_push", "report_push_evidence"}, false, now),
+			command: "git push origin main && gh pr create --fill",
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if strings.TrimSpace(tc.state.ActionProposal.RiskClass) == "repo_publication" {
+				tc.state.ContinuationLease.LeaseClass = session.ContinuationLeaseClassRepoPublication
+			}
+			decision := AuthorizeCommand(CommandRequest{State: tc.state, Command: tc.command, Now: now})
+			if !decision.Active {
+				t.Fatalf("decision = %#v, want active continuation envelope", decision)
+			}
+			if decision.Allowed {
+				t.Fatalf("decision = %#v, want compound command denied until every effect is independently authorized", decision)
+			}
+		})
+	}
+}
+
+func TestAuthorizeCommandDeployClassDoesNotAuthorizeRepoPublication(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	state := testContinuationState("deploy", []string{"deploy", "run_deploy", "restart_service", "run_verify_deploy"}, false, now)
+	state.ContinuationLease.LeaseClass = session.ContinuationLeaseClassDeployRestart
+	decision := AuthorizeCommand(CommandRequest{
+		State:   state,
+		Command: "git push origin release/v0.2.9",
+		Now:     now,
+	})
+	if !decision.Active || !decision.Boundary {
+		t.Fatalf("decision = %#v, want active git-push boundary decision", decision)
+	}
+	if decision.Allowed {
+		t.Fatalf("decision = %#v, want deploy/restart authority to deny repository publication without repo_publication + git_push", decision)
+	}
+}
+
+func TestAuthorizeCommandRequiresExactEffectAction(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	commitState := testContinuationState("commit", []string{"git_commit", "report_commit_evidence"}, false, now)
+	for _, command := range []string{
+		"git reset --hard HEAD~1",
+		"git clean -fd",
+		"git branch -D stale",
+	} {
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			decision := AuthorizeCommand(CommandRequest{State: commitState, Command: command, Now: now})
+			if !decision.Active || decision.Allowed {
+				t.Fatalf("decision = %#v, want git_commit authority to deny distinct repo-history action", decision)
+			}
+		})
+	}
+
+	sshState := testContinuationState("remote_host_operation", []string{"scp", "report_remote_status"}, false, now)
+	ssh := AuthorizeCommand(CommandRequest{State: sshState, Command: "ssh aphelion.example uptime", Now: now})
+	if !ssh.Active || ssh.Allowed {
+		t.Fatalf("decision = %#v, want scp action not to authorize ssh action", ssh)
+	}
+
+	serviceState := testContinuationState("deploy", []string{"systemctl_enable", "post_enable_check"}, false, now)
+	restart := AuthorizeCommand(CommandRequest{State: serviceState, Command: "systemctl restart aphelion.service", Now: now})
+	if !restart.Active || restart.Allowed {
+		t.Fatalf("decision = %#v, want systemctl_enable not to authorize systemctl_restart", restart)
 	}
 }
 

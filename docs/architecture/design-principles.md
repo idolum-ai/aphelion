@@ -113,6 +113,12 @@ gates, and stop conditions.
 
 The boundary should be readable by the operator and enforceable by the runtime.
 
+Raw shell is an execution transport, not an authority model. When a shell
+command contains multiple side-effecting atoms, dynamic execution, executable
+identity changes, or a single invocation whose effects cannot be bounded, the
+runtime should reject it until a typed operation or confinement contract can
+represent the effect truthfully.
+
 ### Consent is real
 
 Operator approval, admin authority, resource-owner consent, third-party opt-in,

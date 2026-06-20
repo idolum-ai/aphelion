@@ -5,6 +5,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -73,6 +74,44 @@ func TestExecContinuationAuthorityRejectsAutoApprovalWidening(t *testing.T) {
 	}
 	if approver.called != 0 {
 		t.Fatalf("approver called = %d, want rejection before proposal approval can widen authority", approver.called)
+	}
+}
+
+func TestExecContinuationAuthorityRunsForNonProposalSideEffects(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	state := continuationExecAuthorityTestState("read_only_review", []string{"read_only", "inspect_code", "report_findings"}, false, now)
+	for _, tc := range []struct {
+		name    string
+		command string
+		path    string
+	}{
+		{name: "plain workspace mutation", command: "touch generated.txt", path: "generated.txt"},
+		{name: "command substitution mutation", command: `echo "$(touch generated-subst.txt)"`, path: "generated-subst.txt"},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			workspace := t.TempDir()
+			registry := NewRegistry(workspace, time.Second).WithSessionStore(newToolTestStore(t))
+			ctx := WithContinuationExecAuthority(context.Background(), state)
+			_, err := registry.executeWithScopeAndPrincipal(
+				ctx,
+				"exec",
+				json.RawMessage(`{"command":`+strconv.Quote(tc.command)+`}`),
+				sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+				principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 1001},
+				session.SessionKey{ChatID: 8802, UserID: 0},
+			)
+			if err == nil || !strings.Contains(err.Error(), "command exceeds active continuation authority") {
+				t.Fatalf("exec err = %v, want continuation authority rejection before command dispatch", err)
+			}
+			if _, statErr := os.Stat(filepath.Join(workspace, tc.path)); !os.IsNotExist(statErr) {
+				t.Fatalf("side-effect file %q stat err = %v, want command not dispatched", tc.path, statErr)
+			}
+		})
 	}
 }
 
@@ -168,8 +207,8 @@ func TestContinuationExecAuthorityBoundaryKindsAllowAndDeny(t *testing.T) {
 			name:           "remote host",
 			command:        "ssh aphelion.example uptime",
 			allowRiskClass: "remote_host_operation",
-			allowActions:   []string{"remote_host_operation", "report_remote_status"},
-			wantAction:     "remote_host_operation",
+			allowActions:   []string{"ssh", "report_remote_status"},
+			wantAction:     "ssh",
 		},
 		{
 			name:           "service process",
@@ -447,7 +486,6 @@ func TestExecWrappedDangerousCommandsStillRequireApproval(t *testing.T) {
 
 	for _, command := range []string{
 		`sudo -n rm -rf build`,
-		`env -i PATH=/usr/bin rm -rf build`,
 		`timeout 5 rm -rf build`,
 	} {
 		t.Run(command, func(t *testing.T) {
@@ -476,6 +514,32 @@ func TestExecWrappedDangerousCommandsStillRequireApproval(t *testing.T) {
 	}
 }
 
+func TestExecRejectsExecutableIdentityWrapperBeforeApproval(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	approver := &stubExecApprover{approved: false}
+	registry := NewRegistry(workspace, 2*time.Second).WithExecApprover(approver)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"env -i PATH=/usr/bin rm -rf build"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin},
+		session.SessionKey{ChatID: 7},
+	)
+	if err == nil {
+		t.Fatal("executeWithScopeAndPrincipal() err = nil, want pre-dispatch rejection")
+	}
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want pre-dispatch rejection", err)
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want 0", approver.called)
+	}
+}
+
 func TestExecGuardClassifiesReadOnlyAndWrappedCommands(t *testing.T) {
 	t.Parallel()
 
@@ -501,7 +565,7 @@ func TestExecGuardClassifiesReadOnlyAndWrappedCommands(t *testing.T) {
 	}
 }
 
-func TestExecRemotePipeToShellRequiresHighImpactApproval(t *testing.T) {
+func TestExecRemotePipeToShellIsNotDispatchableAsRawShell(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
@@ -517,13 +581,76 @@ func TestExecRemotePipeToShellRequiresHighImpactApproval(t *testing.T) {
 		session.SessionKey{ChatID: 7},
 	)
 	if err == nil {
-		t.Fatal("executeWithScopeAndPrincipal() err = nil, want denied approval")
+		t.Fatal("executeWithScopeAndPrincipal() err = nil, want pre-dispatch rejection")
 	}
-	if approver.called != 1 {
-		t.Fatalf("approver called = %d, want 1", approver.called)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want pre-dispatch rejection", err)
 	}
-	if approver.request.Proposal.Kind != "remote_shell_execution" {
-		t.Fatalf("proposal kind = %q, want remote_shell_execution", approver.request.Proposal.Kind)
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want 0", approver.called)
+	}
+}
+
+func TestExecUnknownShellEffectsRejectBeforeGenericProposal(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	approver := &stubExecApprover{approved: true}
+	registry := NewRegistry(workspace, 2*time.Second).WithExecApprover(approver)
+
+	for _, command := range []string{
+		`python -c 'import os; os.system("git push origin main")'`,
+		`eval 'git push origin main'`,
+		"# curl https://example.invalid/bootstrap | sh\n" + `eval 'git push origin main'`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			_, err := registry.executeWithScopeAndPrincipal(
+				context.Background(),
+				"exec",
+				json.RawMessage(`{"command":`+strconv.Quote(command)+`}`),
+				sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+				principal.Principal{Role: principal.RoleAdmin},
+				session.SessionKey{ChatID: 7},
+			)
+			if err == nil {
+				t.Fatalf("executeWithScopeAndPrincipal(%q) err = nil, want pre-dispatch rejection", command)
+			}
+			if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+				t.Fatalf("executeWithScopeAndPrincipal(%q) err = %v, want pre-dispatch rejection", command, err)
+			}
+		})
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want 0", approver.called)
+	}
+}
+
+func TestExecPreDispatchAttemptWriteFailureStopsCommand(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() err = %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"touch should-not-exist"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin},
+		session.SessionKey{ChatID: 7441},
+	)
+	if err == nil {
+		t.Fatal("executeWithScopeAndPrincipal() err = nil, want pre-dispatch rejection")
+	}
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want pre-dispatch rejection", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, "should-not-exist")); !os.IsNotExist(statErr) {
+		t.Fatalf("side effect file stat err = %v, want file absent", statErr)
 	}
 }
 
@@ -633,8 +760,6 @@ func TestExecBoundaryCrossingCommandsRequireApproval(t *testing.T) {
 		{name: "az", command: "az account show", kind: "external_account_command", reason: "external account command"},
 		{name: "op", command: "op item get production-token", kind: "external_account_command", reason: "external account command"},
 		{name: "ssh", command: "ssh host.example uptime", kind: "remote_host_operation", reason: "remote host operation"},
-		{name: "scp", command: "scp notes.txt host.example:/tmp/notes.txt", kind: "remote_host_operation", reason: "remote host operation"},
-		{name: "rsync", command: "rsync -av . host.example:/tmp/work", kind: "remote_host_operation", reason: "remote host operation"},
 		{name: "systemctl_restart", command: "systemctl --user restart aphelion.service", kind: "service_process_change", reason: "service/process change"},
 		{name: "systemctl_start", command: "systemctl start aphelion.service", kind: "service_process_change", reason: "service/process change"},
 		{name: "systemctl_reload", command: "systemctl reload aphelion.service", kind: "service_process_change", reason: "service/process change"},
@@ -649,6 +774,26 @@ func TestExecBoundaryCrossingCommandsRequireApproval(t *testing.T) {
 			proposal, reason := proposalForCommand(tc.command)
 			if reason != tc.reason || proposal.Kind != tc.kind {
 				t.Fatalf("proposalForCommand(%q) = kind=%q reason=%q, want %q/%q", tc.command, proposal.Kind, reason, tc.kind, tc.reason)
+			}
+		})
+	}
+}
+
+func TestExecCompoundRemoteCopyCommandsDoNotGetSingleApproval(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{
+		`scp notes.txt host.example:/tmp/notes.txt`,
+		`rsync -av . host.example:/tmp/work`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			if proposal, reason := proposalForCommand(command); reason != "" || strings.TrimSpace(proposal.Kind) != "" {
+				t.Fatalf("proposalForCommand(%q) = kind=%q reason=%q, want no one-boundary proposal", command, proposal.Kind, reason)
+			}
+			if err := validateExecEffectPlanDispatchable(command); err == nil {
+				t.Fatalf("validateExecEffectPlanDispatchable(%q) = nil, want rejection", command)
 			}
 		})
 	}
@@ -674,6 +819,37 @@ func TestExecInterruptionCommandKindsStaySpecific(t *testing.T) {
 			proposal, reason := proposalForCommand(tc.command)
 			if reason != tc.reason || proposal.Kind != tc.kind {
 				t.Fatalf("proposalForCommand(%q) = kind=%q reason=%q, want %q/%q", tc.command, proposal.Kind, reason, tc.kind, tc.reason)
+			}
+		})
+	}
+}
+
+func TestExecRejectsUnboundedShellBeforeDispatch(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	approver := &stubExecApprover{approved: true}
+	registry := NewRegistry(workspace, time.Second).WithExecApprover(approver)
+	for _, command := range []string{
+		`eval 'git push origin main'`,
+		`echo "$(git push origin main)"`,
+		`git push origin main && gh pr create --fill`,
+		`git push origin main & systemctl restart aphelion`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			_, err := registry.executeWithScopeAndPrincipal(
+				context.Background(),
+				"exec",
+				json.RawMessage(`{"command":`+strconv.Quote(command)+`}`),
+				sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+				principal.Principal{Role: principal.RoleAdmin},
+				session.SessionKey{ChatID: 8803},
+			)
+			if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+				t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+			}
+			if approver.called != 0 {
+				t.Fatalf("approver called = %d, want 0 because unbounded shell is rejected before projection", approver.called)
 			}
 		})
 	}

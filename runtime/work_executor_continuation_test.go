@@ -28,7 +28,7 @@ func TestLeaseAccessDeniedResetsOperationPhaseForFreshApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true}
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
 
 	expiresAt := time.Now().UTC().Add(time.Hour)
@@ -117,7 +117,7 @@ func TestMetadataPreflightContinuationRunsReadOnlyDespiteWorkspaceWriteDiagnosti
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true}
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
 
 	expiresAt := time.Now().UTC().Add(time.Hour)
@@ -183,7 +183,7 @@ func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store, result: WorkResult{
 		Summary:      "patched tests",
 		ChangedFiles: []string{"runtime/work_executor.go"},
 		Commands:     []string{"go test ./runtime"},
@@ -293,7 +293,7 @@ func TestConcurrentWorkContinuationTriggerExecutesSingleLeaseTurn(t *testing.T) 
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store, result: WorkResult{
 		Summary:      "patched once",
 		ChangedFiles: []string{"runtime/continuation_work.go"},
 	}}
@@ -384,7 +384,7 @@ func TestConsumedWorkPhaseOffersNextPhaseApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store, result: WorkResult{
 		Summary:  "committed and pushed",
 		Commands: []string{"git commit -m planning-improvements", "git push origin planning-improvements"},
 	}}
@@ -875,7 +875,7 @@ func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 	workErr := errors.New("codex stream failed after partial response")
-	work := &fakeWorkExecutor{name: "codex", ready: true, err: workErr}
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store, err: workErr}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
 
 	expiresAt := time.Now().UTC().Add(time.Hour)
@@ -1033,7 +1033,7 @@ func TestTriggerCodingContinuationEmptySuccessOffersFreshRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{}, allowEmptyResult: true}
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store, result: WorkResult{}, allowEmptyResult: true}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
 
 	expiresAt := time.Now().UTC().Add(time.Hour)
@@ -1125,8 +1125,9 @@ func TestTriggerCommitContinuationReconcilesLocalCommitBeforeRetry(t *testing.T)
 	}
 	repo := initWorkOutcomeGitRepo(t)
 	work := &fakeWorkExecutor{
-		name:  "native",
-		ready: true,
+		name:         "native",
+		ready:        true,
+		attemptStore: store,
 		resultHook: func(req WorkRequest) WorkResult {
 			short := commitWorkOutcomeFile(t, req.Workdir, "packet.md", "packet\n", "Add XPVENTA reconstruction packet artifacts")
 			return WorkResult{
@@ -1208,7 +1209,7 @@ func TestTriggerCommitContinuationBlocksUnverifiedSideEffectsWithoutRetry(t *tes
 		t.Fatalf("New() err = %v", err)
 	}
 	repo := initWorkOutcomeGitRepo(t)
-	work := &fakeWorkExecutor{name: "native", ready: true, result: WorkResult{
+	work := &fakeWorkExecutor{name: "native", ready: true, attemptStore: store, result: WorkResult{
 		Summary:       "Commit wrapper ran, but no commit identity was reported.",
 		Commands:      []string{"./commit-wrapper"},
 		SideEffects:   true,
@@ -1290,8 +1291,9 @@ func TestUnverifiedWorkspaceWriteOffersVerificationThenCanResumeNextPhase(t *tes
 	}
 	workdir := t.TempDir()
 	work := &fakeWorkExecutor{
-		name:  "native",
-		ready: true,
+		name:         "native",
+		ready:        true,
+		attemptStore: store,
 		resultHook: func(req WorkRequest) WorkResult {
 			outPath := filepath.Join(req.Workdir, "reports", "phase-f-roadmap.md")
 			if err := os.MkdirAll(filepath.Dir(outPath), 0o700); err != nil {
@@ -1462,8 +1464,9 @@ func TestInconclusiveWorkspaceWriteVerificationSurfacesReconciliationApproval(t 
 	}
 	workdir := t.TempDir()
 	work := &fakeWorkExecutor{
-		name:  "native",
-		ready: true,
+		name:         "native",
+		ready:        true,
+		attemptStore: store,
 		resultHook: func(req WorkRequest) WorkResult {
 			outPath := filepath.Join(req.Workdir, "reports", "phase-f-roadmap.md")
 			if err := os.MkdirAll(filepath.Dir(outPath), 0o700); err != nil {
@@ -2460,7 +2463,7 @@ func TestTriggerCodingContinuationAllowsCompoundWorkspaceRiskClass(t *testing.T)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store, result: WorkResult{
 		Summary:      "patched child runner",
 		ChangedFiles: []string{"runtime/durable_child.go"},
 	}}
@@ -2531,7 +2534,7 @@ func TestTriggerCodingContinuationWarnsWhenFallingBackToNative(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 	codex := &fakeWorkExecutor{name: "codex", ready: false, reason: "app-server unreachable"}
-	native := &fakeWorkExecutor{name: "native", ready: true, result: WorkResult{
+	native := &fakeWorkExecutor{name: "native", ready: true, attemptStore: store, result: WorkResult{
 		Summary:      "native completed",
 		ChangedFiles: []string{"runtime/work_executor.go"},
 	}}
@@ -2599,7 +2602,7 @@ func TestTriggerCodingContinuationStoresFullWorkEvidenceArtifact(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 	longSummary := "full tool evidence " + strings.Repeat("line-with-important-output ", 120)
-	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store, result: WorkResult{
 		Summary:      longSummary,
 		ChangedFiles: []string{"runtime/runtime.go"},
 		Commands:     []string{"go test ./runtime"},

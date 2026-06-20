@@ -437,6 +437,10 @@ func New(
 			native.runtime = rt
 			rt.workExecutor.executors["native"] = native
 		}
+		if codex, ok := rt.workExecutor.executors["codex"].(codexWorkExecutor); ok {
+			codex.runtime = rt
+			rt.workExecutor.executors["codex"] = codex
+		}
 	}
 	rt.staleTurnSweep = func(activityCutoff time.Time, limit int) ([]session.TurnRun, error) {
 		unmatchedToolCutoff := time.Now().UTC().Add(-rt.unmatchedToolStaleThreshold())

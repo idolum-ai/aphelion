@@ -38,6 +38,9 @@ func (r *Runtime) recordWorkResultEffectAttempts(key session.SessionKey, req Wor
 		completedAt = time.Now().UTC()
 	}
 	existingByCommandHash := r.effectAttemptIDsByTurnCommandHash(key, result.TurnRunID)
+	if len(existingByCommandHash) == 0 {
+		existingByCommandHash = r.effectAttemptIDsByWorkCommandHash(key, req)
+	}
 	phaseID := effectAttemptPhaseID(req)
 	commands := append([]string(nil), result.Commands...)
 	for _, event := range result.CodexEvents {
@@ -51,7 +54,7 @@ func (r *Runtime) recordWorkResultEffectAttempts(key session.SessionKey, req Wor
 	var writeErr error
 	for _, command := range commands {
 		rawCommand := strings.TrimSpace(command)
-		command = commandeffect.NormalizeCommand(rawCommand)
+		command = redactRuntimeEvidenceText(commandeffect.NormalizeCommand(rawCommand))
 		if rawCommand == "" {
 			continue
 		}
@@ -63,18 +66,26 @@ func (r *Runtime) recordWorkResultEffectAttempts(key session.SessionKey, req Wor
 		errorText := ""
 		if cause != nil {
 			status = session.EffectAttemptStatusUncertain
-			errorText = trimError(cause.Error())
+			errorText = redactRuntimeEvidenceText(trimError(cause.Error()))
 		}
 		boundaryKind := ""
 		if boundary, ok := commandeffect.BoundaryForCommand(rawCommand); ok {
 			boundaryKind = string(boundary.Kind)
 		}
 		attemptID := workEffectAttemptID(key, req, command)
-		if result.TurnRunID > 0 {
-			if existingID := strings.TrimSpace(existingByCommandHash[session.EffectAttemptCommandHash(command)]); existingID != "" {
-				attemptID = existingID
-			}
+		commandHash := session.EffectAttemptCommandHash(command)
+		var existingID string
+		if queue := existingByCommandHash[commandHash]; len(queue) > 0 {
+			existingID = strings.TrimSpace(queue[0])
+			existingByCommandHash[commandHash] = queue[1:]
 		}
+		if existingID == "" {
+			err := fmt.Errorf("missing pre-dispatch effect attempt for command_hash=%s", commandHash)
+			log.Printf("WARN record work effect attempt refused first-write-after-result chat_id=%d command_hash=%s", key.ChatID, commandHash)
+			writeErr = errors.Join(writeErr, err)
+			continue
+		}
+		attemptID = existingID
 		attempt, err := r.store.UpsertEffectAttempt(session.EffectAttemptInput{
 			AttemptID:    attemptID,
 			Key:          key,
@@ -99,7 +110,7 @@ func (r *Runtime) recordWorkResultEffectAttempts(key session.SessionKey, req Wor
 			UpdatedAt:    completedAt,
 		})
 		if err != nil {
-			log.Printf("WARN record work effect attempt failed chat_id=%d command=%q err=%v", key.ChatID, command, err)
+			log.Printf("WARN record work effect attempt failed chat_id=%d command_hash=%s err=%v", key.ChatID, session.EffectAttemptCommandHash(command), err)
 			writeErr = errors.Join(writeErr, err)
 			continue
 		}
@@ -111,16 +122,16 @@ func (r *Runtime) recordWorkResultEffectAttempts(key session.SessionKey, req Wor
 	return attempts, nil
 }
 
-func (r *Runtime) effectAttemptIDsByTurnCommandHash(key session.SessionKey, turnRunID int64) map[string]string {
-	if r == nil || r.store == nil || turnRunID <= 0 {
+func (r *Runtime) effectAttemptIDsByWorkCommandHash(key session.SessionKey, req WorkRequest) map[string][]string {
+	if r == nil || r.store == nil {
 		return nil
 	}
-	existing, err := r.store.EffectAttemptsByTurnRun(key, turnRunID)
+	existing, err := r.store.EffectAttemptsForWork(key, firstNonEmptyContinuation(req.OperationID, req.Operation.ID), effectAttemptPhaseID(req), req.LeaseID, req.State.ActionProposal.ID)
 	if err != nil {
-		log.Printf("WARN read turn effect attempts failed chat_id=%d turn_run_id=%d err=%v", key.ChatID, turnRunID, err)
+		log.Printf("WARN read work effect attempts failed chat_id=%d err=%v", key.ChatID, err)
 		return nil
 	}
-	out := make(map[string]string, len(existing))
+	out := make(map[string][]string, len(existing))
 	for _, attempt := range existing {
 		if strings.TrimSpace(attempt.AttemptID) == "" || !session.EffectAttemptHasSideEffects(attempt) {
 			continue
@@ -130,7 +141,32 @@ func (r *Runtime) effectAttemptIDsByTurnCommandHash(key session.SessionKey, turn
 			hash = session.EffectAttemptCommandHash(attempt.Command)
 		}
 		if hash != "" {
-			out[hash] = attempt.AttemptID
+			out[hash] = append(out[hash], attempt.AttemptID)
+		}
+	}
+	return out
+}
+
+func (r *Runtime) effectAttemptIDsByTurnCommandHash(key session.SessionKey, turnRunID int64) map[string][]string {
+	if r == nil || r.store == nil || turnRunID <= 0 {
+		return nil
+	}
+	existing, err := r.store.EffectAttemptsByTurnRun(key, turnRunID)
+	if err != nil {
+		log.Printf("WARN read turn effect attempts failed chat_id=%d turn_run_id=%d err=%v", key.ChatID, turnRunID, err)
+		return nil
+	}
+	out := make(map[string][]string, len(existing))
+	for _, attempt := range existing {
+		if strings.TrimSpace(attempt.AttemptID) == "" || !session.EffectAttemptHasSideEffects(attempt) {
+			continue
+		}
+		hash := strings.TrimSpace(attempt.CommandHash)
+		if hash == "" {
+			hash = session.EffectAttemptCommandHash(attempt.Command)
+		}
+		if hash != "" {
+			out[hash] = append(out[hash], attempt.AttemptID)
 		}
 	}
 	return out
@@ -186,6 +222,7 @@ func (r *Runtime) markEffectAttemptsForRequest(key session.SessionKey, req WorkR
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	errorText = redactRuntimeEvidenceText(trimError(errorText))
 	attempts, err := r.store.EffectAttemptsForWork(key, firstNonEmptyContinuation(req.OperationID, req.Operation.ID), effectAttemptPhaseID(req), req.LeaseID, req.State.ActionProposal.ID)
 	if err != nil {
 		log.Printf("WARN read effect attempts for mark failed chat_id=%d err=%v", key.ChatID, err)

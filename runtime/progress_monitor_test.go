@@ -5,12 +5,15 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"github.com/idolum-ai/aphelion/agent"
-	"github.com/idolum-ai/aphelion/core"
-	"github.com/idolum-ai/aphelion/session"
+	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 )
 
 func TestStartTurnMonitorRunActivityHeartbeatUpdatesLastActivity(t *testing.T) {
@@ -73,6 +76,126 @@ func TestTurnMonitorToolAndTurnDurationsAreLedgered(t *testing.T) {
 	}
 	assertPayloadNonNegativeInt64(t, payloadForEventType(events, core.ExecutionEventToolSucceeded), "tool_duration_ms")
 	assertPayloadNonNegativeInt64(t, payloadForEventType(events, core.ExecutionEventTurnCompleted), "turn_duration_ms")
+}
+
+func TestTurnMonitorMarksSideEffectingExecErrorsUncertain(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9915, UserID: 0, Scope: telegramDMScopeRef(9915)}
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "side effect uncertainty", nil, nil, core.InboundMessage{})
+	if err != nil {
+		t.Fatalf("startTurnMonitor() err = %v", err)
+	}
+	input := json.RawMessage(`{"command":"sh -c 'touch did-run && false'"}`)
+	monitor.ToolStarted(context.Background(), "exec", input)
+	monitor.ToolFinished(context.Background(), "exec", input, "", errors.New("command failed with exit code 1"))
+	monitor.Finish(context.Background(), nil)
+
+	attempts, err := store.EffectAttemptsByTurnRun(key, monitor.runID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsByTurnRun() err = %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one side-effect attempt", attempts)
+	}
+	if attempts[0].Status != session.EffectAttemptStatusUncertain {
+		t.Fatalf("attempt status = %q, want uncertain because a process error is not a rollback certificate", attempts[0].Status)
+	}
+}
+
+func TestTurnMonitorMarksPreDispatchExecDenialsRejected(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9917, UserID: 0, Scope: telegramDMScopeRef(9917)}
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "pre-dispatch rejection", nil, nil, core.InboundMessage{})
+	if err != nil {
+		t.Fatalf("startTurnMonitor() err = %v", err)
+	}
+	input := json.RawMessage(`{"command":"git push origin main"}`)
+	monitor.ToolStarted(context.Background(), "exec", input)
+	monitor.ToolFinished(context.Background(), "exec", input, "", toolpkg.ErrExecRejectedBeforeDispatch)
+	monitor.Finish(context.Background(), nil)
+
+	attempts, err := store.EffectAttemptsByTurnRun(key, monitor.runID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsByTurnRun() err = %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one side-effect attempt", attempts)
+	}
+	if attempts[0].Status != session.EffectAttemptStatusRejected {
+		t.Fatalf("attempt status = %q, want rejected because dispatch never started", attempts[0].Status)
+	}
+}
+
+func TestTurnMonitorRedactsCredentialBearingExecMetadata(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9916, UserID: 0, Scope: telegramDMScopeRef(9916)}
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "command metadata sensitivity", nil, nil, core.InboundMessage{})
+	if err != nil {
+		t.Fatalf("startTurnMonitor() err = %v", err)
+	}
+	command := strings.Join([]string{
+		`curl -H '`,
+		"Author",
+		`ization: `,
+		"Bearer",
+		` command-secret-value' 'https://example.test/hook?access_token=query-secret-value'`,
+	}, "")
+	inputBytes, err := json.Marshal(map[string]string{"command": command})
+	if err != nil {
+		t.Fatalf("marshal tool input: %v", err)
+	}
+	input := json.RawMessage(inputBytes)
+	monitor.ToolStarted(context.Background(), "exec", input)
+	monitor.ToolFinished(context.Background(), "exec", input, "ok", nil)
+	monitor.Finish(context.Background(), nil)
+
+	events, err := store.ExecutionEventsByTurnRun(key, monitor.runID, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsByTurnRun() err = %v", err)
+	}
+	attempts, err := store.EffectAttemptsByTurnRun(key, monitor.runID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsByTurnRun() err = %v", err)
+	}
+	var combined strings.Builder
+	for _, event := range events {
+		combined.WriteString(event.PayloadJSON)
+		combined.WriteString("\n")
+	}
+	for _, attempt := range attempts {
+		combined.WriteString(attempt.Command)
+		combined.WriteString("\n")
+		combined.WriteString(attempt.SubjectJSON)
+		combined.WriteString("\n")
+		combined.WriteString(attempt.ErrorText)
+		combined.WriteString("\n")
+	}
+	got := combined.String()
+	for _, secret := range []string{"command-secret-value", "query-secret-value"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("execution metadata leaked %q:\n%s", secret, got)
+		}
+	}
+	for _, want := range []string{"<redacted:bearer:", "<redacted:url_query:"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("execution metadata = %s, want redaction marker %q", got, want)
+		}
+	}
 }
 
 func TestTurnMonitorRecordsLargeToolOutputDigest(t *testing.T) {

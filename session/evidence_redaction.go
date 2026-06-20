@@ -25,11 +25,11 @@ type evidenceSensitivePattern struct {
 var evidenceSensitivePatterns = []evidenceSensitivePattern{
 	{regexp.MustCompile(`(?is)()(-----BEGIN (?:[A-Z0-9 ]*PRIVATE KEY|OPENSSH PRIVATE KEY)-----.*?-----END (?:[A-Z0-9 ]*PRIVATE KEY|OPENSSH PRIVATE KEY)-----)()`), "private_key"},
 	{regexp.MustCompile(`(?i)(Authorization\s*[:=]\s*Bearer\s+)([^\s,;"}]+)()`), "bearer"},
+	{regexp.MustCompile(`(?i)([?&](?:access_token|refresh_token|token|api_key|apikey|signature|sig|x-amz-signature|x-amz-credential|awsaccesskeyid)=)([^&#\s]+)()`), "url_query"},
 	{regexp.MustCompile(`(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|AUTHORIZATION|COOKIE)[A-Z0-9_]*\s*=\s*)([^\s,"'}]+)()`), ""},
 	{regexp.MustCompile(`(?i)("(?:bot_token|telegram_bot_token|api_key|openai_api_key|elevenlabs_api_key|access_token|refresh_token|secret|password|token|authorization|cookie)"\s*:\s*")([^"]*)(")`), ""},
 	{regexp.MustCompile(`(?i)\b((?:token|api[_-]?key|secret|password|passwd|authorization|cookie)\s*[:=]\s*["'])([^"']{4,})(["'])`), ""},
 	{regexp.MustCompile(`(?i)\b((?:token|api[_-]?key|secret|password|passwd|authorization|cookie)\s*[:=]\s*)([^\s,"'}]{8,})()`), ""},
-	{regexp.MustCompile(`(?i)([?&](?:access_token|refresh_token|token|api_key|apikey|signature|sig|x-amz-signature|x-amz-credential|awsaccesskeyid)=)([^&#\s]+)()`), "url_query"},
 	{regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://[^/\s:@]+:)([^@\s]+)(@[^\s]+)`), "connection_password"},
 	{regexp.MustCompile(`()(AKIA[0-9A-Z]{16})()`), "aws_access_key"},
 	{regexp.MustCompile(`()([A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})()`), "jwt"},

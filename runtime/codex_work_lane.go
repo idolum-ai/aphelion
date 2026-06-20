@@ -4,9 +4,13 @@ package runtime
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/effectauth"
 	runtimecodex "github.com/idolum-ai/aphelion/runtime/codex"
 	"github.com/idolum-ai/aphelion/session"
@@ -86,26 +90,55 @@ func codexWorkCWD(req WorkRequest) string {
 	return "/"
 }
 
-func codexWorkApprovalHandler(req WorkRequest) runtimecodex.ApprovalHandler {
+func codexWorkApprovalHandler(req WorkRequest, runtimes ...*Runtime) runtimecodex.ApprovalHandler {
+	var rt *Runtime
+	if len(runtimes) > 0 {
+		rt = runtimes[0]
+	}
+	ordinal := 0
+	var ordinalMu sync.Mutex
+	nextOrdinal := func() int {
+		ordinalMu.Lock()
+		defer ordinalMu.Unlock()
+		ordinal++
+		return ordinal
+	}
 	return func(method string, params map[string]any) runtimecodex.ApprovalDecision {
 		decision := runtimecodex.ApprovalDecision{Method: method, Decision: "cancel"}
 		switch method {
 		case "item/commandExecution/requestApproval":
 			decision.Command = runtimecodex.StringField(params, "command")
 			decision.Reason = runtimecodex.StringField(params, "reason")
-			if codexWorkCommandAllowed(req, decision.Command) {
-				decision.Decision = "accept"
-			} else {
+			auth := codexWorkCommandAuthority(req, decision.Command)
+			if !auth.Allowed {
 				decision.Decision = "decline"
+				return decision
 			}
+			approvalOrdinal := nextOrdinal()
+			if rt != nil {
+				if err := rt.recordCodexCommandApprovalAttempt(req, decision.Command, auth, params, approvalOrdinal, time.Now().UTC()); err != nil {
+					decision.Decision = "decline"
+					decision.Reason = firstNonEmptyContinuation(decision.Reason, "effect attempt ledger write failed")
+					return decision
+				}
+			}
+			decision.Decision = "accept"
 		case "item/fileChange/requestApproval":
 			decision.Reason = runtimecodex.StringField(params, "reason")
-			switch req.Mode {
-			case WorkModeWorkspaceWrite, WorkModeCommit, WorkModeDeploy:
-				decision.Decision = "accept"
-			default:
+			auth := codexWorkFileChangeAuthority(req, params)
+			if !auth.Allowed {
 				decision.Decision = "cancel"
+				return decision
 			}
+			approvalOrdinal := nextOrdinal()
+			if rt != nil {
+				if err := rt.recordCodexFileChangeApprovalAttempt(req, params, auth, approvalOrdinal, time.Now().UTC()); err != nil {
+					decision.Decision = "cancel"
+					decision.Reason = firstNonEmptyContinuation(decision.Reason, "effect attempt ledger write failed")
+					return decision
+				}
+			}
+			decision.Decision = "accept"
 		default:
 			decision.Decision = "cancel"
 		}
@@ -113,7 +146,142 @@ func codexWorkApprovalHandler(req WorkRequest) runtimecodex.ApprovalHandler {
 	}
 }
 
+func codexWorkFileChangeAllowed(req WorkRequest, params map[string]any) bool {
+	return codexWorkFileChangeAuthority(req, params).Allowed
+}
+
+func codexWorkFileChangeAuthority(req WorkRequest, params map[string]any) effectauth.Decision {
+	switch req.Mode {
+	case WorkModeWorkspaceWrite, WorkModeCommit, WorkModeDeploy:
+	default:
+		return effectauth.Decision{Allowed: false, Reason: "file_change_requires_write_mode"}
+	}
+	if !codexFileChangePathsWithinScope(req, params) {
+		return effectauth.Decision{Allowed: false, Reason: "file_change_path_outside_scope"}
+	}
+	return effectauth.AuthorizeWorkModeCommand(effectauth.WorkModeRequest{
+		State:    req.State,
+		Mode:     effectauth.WorkMode(req.Mode),
+		RepoRoot: req.RepoRoot,
+		Workdir:  req.Workdir,
+		Command:  "touch .aphelion-file-change",
+		Now:      time.Now().UTC(),
+	})
+}
+
+func codexFileChangePathsWithinScope(req WorkRequest, params map[string]any) bool {
+	paths := codexFileChangePaths(params)
+	if len(paths) == 0 {
+		return false
+	}
+	root := firstNonEmptyContinuation(strings.TrimSpace(req.Workdir), strings.TrimSpace(req.RepoRoot))
+	cleanRoot := filepath.Clean(root)
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return false
+		}
+		absPath := path
+		if filepath.IsAbs(path) {
+			if root == "" {
+				return false
+			}
+			rel, err := filepath.Rel(cleanRoot, filepath.Clean(path))
+			if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+				return false
+			}
+		} else {
+			clean := filepath.Clean(path)
+			if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+				return false
+			}
+			if root != "" {
+				absPath = filepath.Join(cleanRoot, clean)
+			}
+		}
+		if root != "" {
+			if !codexPathResolvedBeneathRoot(cleanRoot, absPath) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func codexPathResolvedBeneathRoot(cleanRoot string, absPath string) bool {
+	cleanRoot = filepath.Clean(cleanRoot)
+	cleanPath := filepath.Clean(absPath)
+	rootResolved, err := filepath.EvalSymlinks(cleanRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			rel, relErr := filepath.Rel(cleanRoot, cleanPath)
+			return relErr == nil && rel != ".." && !strings.HasPrefix(rel, "../")
+		}
+		return false
+	}
+	existing := cleanPath
+	var suffix []string
+	for {
+		resolved, err := filepath.EvalSymlinks(existing)
+		if err == nil {
+			candidate := filepath.Clean(resolved)
+			for i := len(suffix) - 1; i >= 0; i-- {
+				candidate = filepath.Join(candidate, suffix[i])
+			}
+			rel, relErr := filepath.Rel(filepath.Clean(rootResolved), filepath.Clean(candidate))
+			return relErr == nil && rel != ".." && !strings.HasPrefix(rel, "../")
+		}
+		if !os.IsNotExist(err) {
+			return false
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return false
+		}
+		suffix = append(suffix, filepath.Base(existing))
+		existing = parent
+	}
+}
+
+func codexFileChangePaths(params map[string]any) []string {
+	var out []string
+	for _, key := range []string{"path", "file", "file_path", "relative_path"} {
+		if value := runtimecodex.StringField(params, key); value != "" {
+			out = append(out, value)
+		}
+	}
+	for _, key := range []string{"paths", "files"} {
+		switch value := params[key].(type) {
+		case []string:
+			out = append(out, value...)
+		case []any:
+			for _, item := range value {
+				if text, ok := item.(string); ok {
+					out = append(out, text)
+				}
+			}
+		}
+	}
+	return out
+}
+
 func codexWorkCommandAllowed(req WorkRequest, command string) bool {
+	return codexWorkCommandAuthority(req, command).Allowed
+}
+
+func codexWorkCommandAuthority(req WorkRequest, command string) effectauth.Decision {
+	plan := commandeffect.PlanCommand(command)
+	if plan.Dynamic {
+		return effectauth.Decision{Allowed: false, Reason: "dynamic_effect_plan_unbounded", EffectKind: string(commandeffect.KindUnknown)}
+	}
+	if plan.MultipleAuthorities {
+		return effectauth.Decision{Allowed: false, Reason: "effect_plan_requires_split", EffectKind: string(commandeffect.KindUnknown)}
+	}
+	for _, effect := range plan.Effects {
+		if effect.SideEffects && effect.Kind == commandeffect.KindUnknown {
+			return effectauth.Decision{Allowed: false, Reason: "unknown_effect_requires_split_or_typed_executor", EffectKind: string(effect.Kind)}
+		}
+	}
 	return effectauth.AuthorizeWorkModeCommand(effectauth.WorkModeRequest{
 		State:    req.State,
 		Mode:     effectauth.WorkMode(req.Mode),
@@ -121,7 +289,7 @@ func codexWorkCommandAllowed(req WorkRequest, command string) bool {
 		Workdir:  req.Workdir,
 		Command:  command,
 		Now:      time.Now().UTC(),
-	}).Allowed
+	})
 }
 
 func codexApprovalLogHasSideEffects(log []runtimecodex.ApprovalDecision) bool {

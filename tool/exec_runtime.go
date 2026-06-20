@@ -14,10 +14,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
+
+var ErrExecRejectedBeforeDispatch = errors.New("exec rejected before dispatch")
 
 func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessage) (string, error) {
 	return r.executeWithRoot(ctx, name, input, r.workspace)
@@ -213,12 +216,15 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 			return "", err
 		}
 	}
+	if err := r.validateContinuationExecAuthority(ctx, in.Command); err != nil {
+		return "", preDispatchExecError(err)
+	}
+	if err := validateExecEffectPlanDispatchable(in.Command); err != nil {
+		return "", preDispatchExecError(err)
+	}
 	if proposal, reason := proposalForCommand(in.Command); reason != "" {
-		if err := r.validateContinuationExecAuthority(ctx, in.Command); err != nil {
-			return "", err
-		}
 		if r.execApprover == nil {
-			return "", fmt.Errorf("command requires an approved proposal: %s", reason)
+			return "", preDispatchExecError(fmt.Errorf("command requires an approved proposal: %s", reason))
 		}
 		if err := r.persistExecProposalState(key, proposal, session.ProposalStatusPending); err != nil {
 			return "", err
@@ -236,7 +242,7 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 			if persistErr := r.persistExecProposalState(key, proposal, session.ProposalStatusExpired); persistErr != nil {
 				return "", persistErr
 			}
-			return "", err
+			return "", preDispatchExecError(err)
 		}
 		if !decision.Approved {
 			status := session.ProposalStatusDenied
@@ -246,11 +252,14 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 			if err := r.persistExecProposalState(key, proposal, status); err != nil {
 				return "", err
 			}
-			return "", execApprovalDeniedError(reason, decision)
+			return "", preDispatchExecError(execApprovalDeniedError(reason, decision))
 		}
 		if err := r.persistExecProposalState(key, proposal, session.ProposalStatusApproved); err != nil {
 			return "", err
 		}
+	}
+	if err := r.recordExecPreDispatchAttempt(key, "exec", in.Command); err != nil {
+		return "", preDispatchExecError(err)
 	}
 
 	timeout := r.timeout
@@ -278,6 +287,87 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 	}
 
 	return out, fmt.Errorf("run command: %w", err)
+}
+
+func (r *Registry) recordExecPreDispatchAttempt(key session.SessionKey, toolName string, command string) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	rawCommand := strings.TrimSpace(command)
+	if rawCommand == "" {
+		return nil
+	}
+	effect := commandeffect.Classify(rawCommand)
+	if !effect.SideEffects {
+		return nil
+	}
+	safeCommand := session.RedactEvidenceText(commandeffect.NormalizeCommand(rawCommand)).Text
+	boundaryKind := ""
+	if boundary, ok := commandeffect.BoundaryForCommand(rawCommand); ok {
+		boundaryKind = string(boundary.Kind)
+	}
+	now := time.Now().UTC()
+	_, err := r.store.UpsertEffectAttempt(session.EffectAttemptInput{
+		AttemptID:    execPreDispatchAttemptID(key, strings.TrimSpace(toolName), safeCommand),
+		Key:          key,
+		Executor:     "tool",
+		Tool:         strings.TrimSpace(toolName),
+		Command:      safeCommand,
+		EffectKind:   string(effect.Kind),
+		EffectReason: effect.Reason,
+		BoundaryKind: boundaryKind,
+		SubjectJSON:  session.RedactEvidenceText(execEffectAttemptSubjectJSON(rawCommand)).Text,
+		Status:       session.EffectAttemptStatusAttempted,
+		EvidenceRefs: []string{"exec_pre_dispatch"},
+		StartedAt:    now,
+		UpdatedAt:    now,
+	})
+	if err != nil {
+		return fmt.Errorf("record exec effect attempt before dispatch: %w", err)
+	}
+	return nil
+}
+
+func execPreDispatchAttemptID(key session.SessionKey, toolName string, command string) string {
+	return session.EffectAttemptID(session.SessionIDForKey(key), 0, "exec_pre_dispatch:"+strings.TrimSpace(toolName), command)
+}
+
+func execEffectAttemptSubjectJSON(command string) string {
+	payload := map[string]any{
+		"kind":         "exec_command",
+		"command_hash": session.EffectAttemptCommandHash(command),
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
+func validateExecEffectPlanDispatchable(command string) error {
+	plan := commandeffect.PlanCommand(command)
+	if plan.Dynamic {
+		return fmt.Errorf("dynamic shell command is not dispatchable through raw exec: %s", strings.TrimSpace(plan.DynamicReason))
+	}
+	if plan.MultipleAuthorities {
+		return fmt.Errorf("multi-effect shell command must be split before execution")
+	}
+	for _, effect := range plan.Effects {
+		if effect.SideEffects && effect.Kind == commandeffect.KindUnknown {
+			return fmt.Errorf("unknown shell command effect is not dispatchable through raw exec: %s", strings.TrimSpace(effect.Reason))
+		}
+	}
+	return nil
+}
+
+func preDispatchExecError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		return err
+	}
+	return fmt.Errorf("%w: %v", ErrExecRejectedBeforeDispatch, err)
 }
 
 func (r *Registry) validateContinuationExecAuthority(ctx context.Context, command string) error {

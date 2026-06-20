@@ -15,11 +15,12 @@ import (
 	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 )
 
 func (m *turnMonitor) ToolStarted(ctx context.Context, name string, input json.RawMessage) {
 	startedAt := time.Now().UTC()
-	preview := toolInputPreview(input)
+	preview := safeToolInputPreview(input)
 	if m.audit != nil {
 		m.audit.ToolStarted(name, preview)
 	}
@@ -53,11 +54,11 @@ func (m *turnMonitor) ToolStarted(ctx context.Context, name string, input json.R
 }
 
 func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.RawMessage, output string, err error) {
-	preview := toolInputPreview(input)
-	resultPreview := truncatePreview(strings.TrimSpace(output), 220)
+	preview := safeToolInputPreview(input)
+	resultPreview := redactRuntimeEvidenceText(truncatePreview(strings.TrimSpace(output), 220))
 	errorText := ""
 	if err != nil {
-		errorText = trimError(err.Error())
+		errorText = redactRuntimeEvidenceText(trimError(err.Error()))
 	}
 	if m.audit != nil {
 		m.audit.ToolFinished(name, preview, resultPreview, errorText)
@@ -114,7 +115,11 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 		payload["exec_effect"] = effect
 	}
 	statusForAttempt := session.EffectAttemptStatusExecuted
-	if err != nil {
+	if err != nil && errors.Is(err, toolpkg.ErrExecRejectedBeforeDispatch) {
+		statusForAttempt = session.EffectAttemptStatusRejected
+	} else if err != nil && execEffectHasSideEffects(name, input) {
+		statusForAttempt = session.EffectAttemptStatusUncertain
+	} else if err != nil {
 		statusForAttempt = session.EffectAttemptStatusFailed
 	}
 	m.recordExecEffectAttempt(name, input, statusForAttempt, errorText, time.Now().UTC())
@@ -132,23 +137,25 @@ func (m *turnMonitor) recordExecEffectAttempt(name string, input json.RawMessage
 	if len(effect) == 0 {
 		return
 	}
-	command := workPayloadString(effect, "command")
-	if command == "" {
+	rawCommand := execRawCommand(name, input)
+	if rawCommand == "" {
 		return
 	}
+	command := redactRuntimeEvidenceText(commandeffect.NormalizeCommand(rawCommand))
 	if observedAt.IsZero() {
 		observedAt = time.Now().UTC()
 	}
 	boundaryKind := ""
-	if boundary, ok := commandeffect.BoundaryForCommand(command); ok {
+	if boundary, ok := commandeffect.BoundaryForCommand(rawCommand); ok {
 		boundaryKind = string(boundary.Kind)
 	}
-	subject := effectAttemptSubjectJSON(command)
+	subject := effectAttemptSubjectJSON(rawCommand)
 	completedAt := time.Time{}
 	if session.NormalizeEffectAttemptStatus(status) != session.EffectAttemptStatusAttempted {
 		completedAt = observedAt
 	}
 	if _, err := m.runtime.store.UpsertEffectAttempt(session.EffectAttemptInput{
+		AttemptID:    session.EffectAttemptID(session.SessionIDForKey(m.key), 0, "exec_pre_dispatch:"+strings.TrimSpace(name), command),
 		Key:          m.key,
 		TurnRunID:    m.runID,
 		Executor:     "turn",
@@ -267,26 +274,19 @@ func (m *turnMonitor) recordLargeToolOutputEvidence(name string, safe largeToolO
 }
 
 func execEffectPayload(name string, input json.RawMessage) map[string]any {
-	if !strings.EqualFold(strings.TrimSpace(name), "exec") || len(input) == 0 {
-		return nil
-	}
-	payload := map[string]any{}
-	if err := json.Unmarshal(input, &payload); err != nil {
-		return nil
-	}
-	command := firstNonEmpty(payloadString(payload, "command"), payloadString(payload, "cmd"))
+	command := execRawCommand(name, input)
 	if command == "" {
 		return nil
 	}
 	effect := commandeffect.Classify(command)
 	out := map[string]any{
-		"command":      command,
+		"command":      redactRuntimeEvidenceText(command),
 		"kind":         string(effect.Kind),
 		"reason":       strings.TrimSpace(effect.Reason),
 		"side_effects": effect.SideEffects,
 	}
-	if workdir := payloadString(payload, "workdir"); workdir != "" {
-		out["workdir"] = workdir
+	if workdir := execPayloadString(name, input, "workdir"); workdir != "" {
+		out["workdir"] = redactRuntimeEvidenceText(workdir)
 	}
 	if effect.Command != "" {
 		out["command_root"] = effect.Command
@@ -295,6 +295,47 @@ func execEffectPayload(name string, input json.RawMessage) map[string]any {
 		out["git_subcommand"] = effect.GitSubcommand
 	}
 	return out
+}
+
+func execRawCommand(name string, input json.RawMessage) string {
+	if !strings.EqualFold(strings.TrimSpace(name), "exec") || len(input) == 0 {
+		return ""
+	}
+	payload := map[string]any{}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return ""
+	}
+	return firstNonEmpty(payloadString(payload, "command"), payloadString(payload, "cmd"))
+}
+
+func execPayloadString(name string, input json.RawMessage, field string) string {
+	if !strings.EqualFold(strings.TrimSpace(name), "exec") || len(input) == 0 {
+		return ""
+	}
+	payload := map[string]any{}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return ""
+	}
+	return payloadString(payload, field)
+}
+
+func execEffectHasSideEffects(name string, input json.RawMessage) bool {
+	command := execRawCommand(name, input)
+	if command == "" {
+		return false
+	}
+	return commandeffect.Classify(command).SideEffects
+}
+
+func safeToolInputPreview(input json.RawMessage) string {
+	return redactRuntimeEvidenceText(toolInputPreview(input))
+}
+
+func redactRuntimeEvidenceText(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return value
+	}
+	return session.RedactEvidenceText(value).Text
 }
 
 func (m *turnMonitor) ModelRequestStarted(ctx context.Context, event agent.ModelRequestEvent) {

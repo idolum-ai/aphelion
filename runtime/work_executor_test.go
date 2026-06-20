@@ -7,12 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/coder/websocket"
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/runtime/codex"
 	"github.com/idolum-ai/aphelion/session"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -32,6 +36,7 @@ type fakeWorkExecutor struct {
 	resultHook       func(WorkRequest) WorkResult
 	runHook          func(WorkRequest)
 	allowEmptyResult bool
+	attemptStore     *session.SQLiteStore
 }
 
 func (f *fakeWorkExecutor) Name() string {
@@ -68,6 +73,9 @@ func (f *fakeWorkExecutor) Run(_ context.Context, req WorkRequest) (WorkResult, 
 		return WorkResult{}, err
 	}
 	out.ExecutorName = name
+	if f.attemptStore != nil {
+		seedFakeWorkExecutorAttempts(f.attemptStore, req, out, name)
+	}
 	if strings.TrimSpace(out.Summary) == "" && !f.allowEmptyResult {
 		out.Summary = "work complete"
 	}
@@ -85,6 +93,57 @@ func fakeWorkExecutorName(name string) string {
 		return "fake"
 	}
 	return name
+}
+
+func seedFakeWorkExecutorAttempts(store *session.SQLiteStore, req WorkRequest, result WorkResult, executorName string) {
+	if store == nil {
+		return
+	}
+	key := workRequestEffectAttemptKey(req)
+	now := time.Now().UTC()
+	commands := append([]string(nil), result.Commands...)
+	for _, event := range result.CodexEvents {
+		if strings.TrimSpace(event.Command) != "" {
+			commands = appendUniqueRuntimeString(commands, event.Command)
+		} else if event.Kind == "command" && strings.TrimSpace(event.Subject) != "" {
+			commands = appendUniqueRuntimeString(commands, event.Subject)
+		}
+	}
+	for i, command := range commands {
+		raw := strings.TrimSpace(command)
+		if raw == "" {
+			continue
+		}
+		effect := commandeffect.Classify(raw)
+		if !effect.SideEffects {
+			continue
+		}
+		boundaryKind := ""
+		if boundary, ok := commandeffect.BoundaryForCommand(raw); ok {
+			boundaryKind = string(boundary.Kind)
+		}
+		safeCommand := redactRuntimeEvidenceText(commandeffect.NormalizeCommand(raw))
+		_, _ = store.UpsertEffectAttempt(session.EffectAttemptInput{
+			AttemptID:    workEffectAttemptID(key, req, safeCommand) + "-" + strconv.Itoa(i),
+			Key:          key,
+			OperationID:  firstNonEmptyContinuation(req.OperationID, req.Operation.ID),
+			PhaseID:      effectAttemptPhaseID(req),
+			LeaseID:      req.LeaseID,
+			ProposalID:   req.State.ActionProposal.ID,
+			WorkMode:     string(req.Mode),
+			Executor:     fakeWorkExecutorName(executorName),
+			Tool:         "fake_work_executor",
+			Command:      safeCommand,
+			EffectKind:   string(effect.Kind),
+			EffectReason: effect.Reason,
+			BoundaryKind: boundaryKind,
+			SubjectJSON:  effectAttemptSubjectJSON(raw),
+			Status:       session.EffectAttemptStatusAttempted,
+			EvidenceRefs: []string{"fake_work_executor_pre_dispatch"},
+			StartedAt:    now,
+			UpdatedAt:    now,
+		})
+	}
 }
 
 func TestWorkExecutorSelectorAutoCanPreferCodexAndFallBackNative(t *testing.T) {
@@ -320,6 +379,263 @@ func TestCodexWorkReadOnlyModeAllowsOnlyReadOnlyCommandTaxonomy(t *testing.T) {
 		if codexWorkCommandAllowed(req, command) {
 			t.Fatalf("codexWorkCommandAllowed(read_only %q) = true, want false", command)
 		}
+	}
+}
+
+func TestCodexWorkFileChangeApprovalRespectsActiveContinuationEnvelope(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	req := WorkRequest{
+		Mode: WorkModeWorkspaceWrite,
+		State: session.ContinuationState{
+			Kind:           session.TurnAuthorizationKindContinuation,
+			Status:         session.ContinuationStatusApproved,
+			RemainingTurns: 1,
+			ApprovedBy:     1001,
+			ActionProposal: session.ActionProposal{
+				ID:             "aprop-read-only-file-change",
+				RiskClass:      "read_only_review",
+				AllowedActions: []string{"read_only", "inspect_code", "report_findings"},
+				Status:         session.ProposalStatusApproved,
+			},
+			ContinuationLease: session.ContinuationLease{
+				ID:             "lease-read-only-file-change",
+				ProposalID:     "aprop-read-only-file-change",
+				Status:         session.ContinuationLeaseStatusActive,
+				RemainingTurns: 1,
+				AllowedActions: []string{"read_only", "inspect_code", "report_findings"},
+				ExpiresAt:      now.Add(time.Hour),
+			},
+		},
+	}
+	decision := codexWorkApprovalHandler(req)("item/fileChange/requestApproval", map[string]any{
+		"path":   "runtime/work_executor.go",
+		"reason": "apply patch",
+	})
+	if decision.Decision == "accept" {
+		t.Fatalf("file change decision = %#v, want active read-only continuation envelope to reject workspace mutation despite workspace-write mode", decision)
+	}
+}
+
+func TestCodexWorkFileChangeApprovalRequiresScopedPath(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	req := WorkRequest{
+		Mode:     WorkModeWorkspaceWrite,
+		RepoRoot: "/repo",
+		Workdir:  "/repo",
+		State: session.ContinuationState{
+			Kind:           session.TurnAuthorizationKindContinuation,
+			Status:         session.ContinuationStatusApproved,
+			RemainingTurns: 1,
+			ApprovedBy:     1001,
+			ActionProposal: session.ActionProposal{
+				ID:             "aprop-write-file-change",
+				RiskClass:      "workspace_write",
+				AllowedActions: []string{"workspace_write", "edit_files"},
+				Status:         session.ProposalStatusApproved,
+			},
+			ContinuationLease: session.ContinuationLease{
+				ID:             "lease-write-file-change",
+				ProposalID:     "aprop-write-file-change",
+				Status:         session.ContinuationLeaseStatusActive,
+				RemainingTurns: 1,
+				AllowedActions: []string{"workspace_write", "edit_files"},
+				ExpiresAt:      now.Add(time.Hour),
+			},
+		},
+	}
+	inside := codexWorkApprovalHandler(req)("item/fileChange/requestApproval", map[string]any{
+		"path":   "runtime/work_executor.go",
+		"reason": "apply patch",
+	})
+	if inside.Decision != "accept" {
+		t.Fatalf("inside file change decision = %#v, want accept", inside)
+	}
+	outside := codexWorkApprovalHandler(req)("item/fileChange/requestApproval", map[string]any{
+		"path":   "../outside/secret.txt",
+		"reason": "apply patch",
+	})
+	if outside.Decision == "accept" {
+		t.Fatalf("outside file change decision = %#v, want reject", outside)
+	}
+	missing := codexWorkApprovalHandler(req)("item/fileChange/requestApproval", map[string]any{
+		"reason": "apply patch",
+	})
+	if missing.Decision == "accept" {
+		t.Fatalf("missing-path file change decision = %#v, want reject", missing)
+	}
+}
+
+func TestCodexWorkFileChangeApprovalRejectsMissingLeafUnderSymlinkEscape(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Fatalf("Symlink() err = %v", err)
+	}
+	now := time.Now().UTC()
+	req := WorkRequest{
+		Mode:     WorkModeWorkspaceWrite,
+		RepoRoot: root,
+		Workdir:  root,
+		State: session.ContinuationState{
+			Kind:           session.TurnAuthorizationKindContinuation,
+			Status:         session.ContinuationStatusApproved,
+			RemainingTurns: 1,
+			ApprovedBy:     1001,
+			ActionProposal: session.ActionProposal{
+				ID:             "aprop-write-file-change-symlink",
+				RiskClass:      "workspace_write",
+				AllowedActions: []string{"workspace_write", "edit_files"},
+				Status:         session.ProposalStatusApproved,
+			},
+			ContinuationLease: session.ContinuationLease{
+				ID:             "lease-write-file-change-symlink",
+				ProposalID:     "aprop-write-file-change-symlink",
+				Status:         session.ContinuationLeaseStatusActive,
+				RemainingTurns: 1,
+				AllowedActions: []string{"workspace_write", "edit_files"},
+				ExpiresAt:      now.Add(time.Hour),
+			},
+		},
+	}
+	decision := codexWorkApprovalHandler(req)("item/fileChange/requestApproval", map[string]any{
+		"path":   "link/new.txt",
+		"reason": "apply patch",
+	})
+	if decision.Decision == "accept" {
+		t.Fatalf("decision = %#v, want missing leaf under symlink escape rejected", decision)
+	}
+}
+
+func TestCodexCommandApprovalPersistsAttemptBeforeAccept(t *testing.T) {
+	t.Parallel()
+
+	_, store, _, _ := buildRuntimeFixtures(t)
+	rt := &Runtime{store: store}
+	key := session.SessionKey{ChatID: 7401, UserID: 0, Scope: telegramDMScopeRef(7401)}
+	req := WorkRequest{
+		OperationID: "op-codex-command-attempt",
+		Mode:        WorkModeWorkspaceWrite,
+		LeaseID:     "lease-codex-command-attempt",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{
+				ID:             "aprop-codex-command-attempt",
+				RiskClass:      "workspace_write",
+				AllowedActions: []string{"workspace_write", "run_tests"},
+				Status:         session.ProposalStatusApproved,
+			},
+			ContinuationLease: session.ContinuationLease{
+				ID:             "lease-codex-command-attempt",
+				ProposalID:     "aprop-codex-command-attempt",
+				Status:         session.ContinuationLeaseStatusActive,
+				RemainingTurns: 1,
+				AllowedActions: []string{"workspace_write", "run_tests"},
+				ExpiresAt:      time.Now().UTC().Add(time.Hour),
+			},
+		},
+	}
+
+	handler := codexWorkApprovalHandler(req, rt)
+	first := handler("item/commandExecution/requestApproval", map[string]any{
+		"command": "go test ./runtime",
+		"item_id": "cmd-1",
+	})
+	second := handler("item/commandExecution/requestApproval", map[string]any{
+		"command": "go test ./runtime",
+		"item_id": "cmd-2",
+	})
+	if first.Decision != "accept" || second.Decision != "accept" {
+		t.Fatalf("decisions = %#v %#v, want both accepted after attempt persistence", first, second)
+	}
+	attempts, err := store.EffectAttemptsForWork(key, "op-codex-command-attempt", "", "lease-codex-command-attempt", "aprop-codex-command-attempt")
+	if err != nil {
+		t.Fatalf("EffectAttemptsForWork() err = %v", err)
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("attempts = %#v, want distinct attempts for distinct provider approvals", attempts)
+	}
+	ids := map[string]bool{}
+	for _, attempt := range attempts {
+		ids[attempt.AttemptID] = true
+		if attempt.Status != session.EffectAttemptStatusAttempted || attempt.Tool != "codex_command_approval" || attempt.Command != "go test ./runtime" {
+			t.Fatalf("attempt = %#v, want attempted Codex command write-ahead row", attempt)
+		}
+	}
+	if len(ids) != 2 {
+		t.Fatalf("attempt ids = %#v, want distinct occurrence identities", attempts)
+	}
+}
+
+func TestCodexCommandApprovalDeclinesWhenAttemptWriteFails(t *testing.T) {
+	t.Parallel()
+
+	rt := &Runtime{}
+	req := WorkRequest{Mode: WorkModeWorkspaceWrite}
+	decision := codexWorkApprovalHandler(req, rt)("item/commandExecution/requestApproval", map[string]any{
+		"command": "go test ./runtime",
+		"item_id": "cmd-store-missing",
+	})
+	if decision.Decision == "accept" {
+		t.Fatalf("decision = %#v, want decline when write-ahead attempt cannot persist", decision)
+	}
+}
+
+func TestCodexFileChangeApprovalPersistsAttemptFingerprintBeforeAccept(t *testing.T) {
+	t.Parallel()
+
+	_, store, _, _ := buildRuntimeFixtures(t)
+	rt := &Runtime{store: store}
+	key := session.SessionKey{ChatID: 7402, UserID: 0, Scope: telegramDMScopeRef(7402)}
+	req := WorkRequest{
+		OperationID: "op-codex-file-attempt",
+		Mode:        WorkModeWorkspaceWrite,
+		LeaseID:     "lease-codex-file-attempt",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{
+				ID:             "aprop-codex-file-attempt",
+				RiskClass:      "workspace_write",
+				AllowedActions: []string{"workspace_write", "edit_files"},
+				Status:         session.ProposalStatusApproved,
+			},
+			ContinuationLease: session.ContinuationLease{
+				ID:             "lease-codex-file-attempt",
+				ProposalID:     "aprop-codex-file-attempt",
+				Status:         session.ContinuationLeaseStatusActive,
+				RemainingTurns: 1,
+				AllowedActions: []string{"workspace_write", "edit_files"},
+				ExpiresAt:      time.Now().UTC().Add(time.Hour),
+			},
+		},
+	}
+	params := map[string]any{
+		"path":    "runtime/work_executor.go",
+		"patch":   "@@ raw patch body should not be stored verbatim",
+		"item_id": "file-1",
+	}
+	decision := codexWorkApprovalHandler(req, rt)("item/fileChange/requestApproval", params)
+	if decision.Decision != "accept" {
+		t.Fatalf("decision = %#v, want accept after file-change attempt persistence", decision)
+	}
+	attempts, err := store.EffectAttemptsForWork(key, "op-codex-file-attempt", "", "lease-codex-file-attempt", "aprop-codex-file-attempt")
+	if err != nil {
+		t.Fatalf("EffectAttemptsForWork() err = %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one file-change attempt", attempts)
+	}
+	attempt := attempts[0]
+	if attempt.Status != session.EffectAttemptStatusAttempted || attempt.Tool != "codex_file_change_approval" || attempt.EffectKind != string(commandeffect.KindWorkspaceMutation) {
+		t.Fatalf("attempt = %#v, want attempted Codex file-change row", attempt)
+	}
+	if !strings.Contains(attempt.SubjectJSON, "patch_hash") || strings.Contains(attempt.SubjectJSON, "raw patch body") {
+		t.Fatalf("subject_json = %q, want fingerprinted patch subject without raw patch", attempt.SubjectJSON)
 	}
 }
 

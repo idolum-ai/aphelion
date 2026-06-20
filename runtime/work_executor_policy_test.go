@@ -164,12 +164,16 @@ func TestWorkResultCompletionEvidenceForRequestRequiresMaterialEvidenceForAuthor
 	commitReq.Mode = WorkModeCommit
 	commitReq.State.ActionProposal.RiskClass = "commit"
 	commitReq.State.ContinuationLease.AllowedActions = []string{"git_commit", "report_commit_evidence"}
+	plainCommit := `git commit -m "Add XPVENTA reconstruction packet artifacts"`
+	if !workResultHasSubstantiveCompletionEvidenceForRequest(commitReq, WorkResult{Commands: []string{plainCommit}}) {
+		t.Fatal("commit-mode git commit command should count as material completion evidence")
+	}
 	compoundCommit := `set -euo pipefail
 git commit -m "Add XPVENTA reconstruction packet artifacts" >/tmp/imexx_commit.out
 cat /tmp/imexx_commit.out
 printf '\nCOMMIT\n'; git rev-parse --short HEAD`
-	if !workResultHasSubstantiveCompletionEvidenceForRequest(commitReq, WorkResult{Commands: []string{compoundCommit}}) {
-		t.Fatal("commit-mode redirected git commit script should count as material completion evidence")
+	if workResultHasSubstantiveCompletionEvidenceForRequest(commitReq, WorkResult{Commands: []string{compoundCommit}}) {
+		t.Fatal("commit-mode redirected shell script completed from result evidence, want effect-plan/verification path")
 	}
 
 	grantReq := readOnlyReq
@@ -261,7 +265,7 @@ func TestWorkOutcomeReconciliationBlocksUnverifiedExternalAccountSideEffects(t *
 	}
 }
 
-func TestRecordWorkResultEffectAttemptClassifiesRedirectedCommit(t *testing.T) {
+func TestRecordWorkResultEffectAttemptRefusesFirstWriteAfterResult(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -287,21 +291,13 @@ func TestRecordWorkResultEffectAttemptClassifiesRedirectedCommit(t *testing.T) {
 			}}},
 		},
 	}
-	command := `set -euo pipefail
-git commit -m "Add evidence" >/tmp/out
-cat /tmp/out`
+	command := `git commit -m "Add evidence"`
 	attempts, err := rt.recordWorkResultEffectAttempts(key, req, WorkResult{ExecutorName: "native", Commands: []string{command}}, nil, now, now.Add(time.Second))
-	if err != nil {
-		t.Fatalf("recordWorkResultEffectAttempts() err = %v", err)
+	if err == nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = nil attempts=%#v, want missing pre-dispatch attempt rejection", attempts)
 	}
-	if len(attempts) != 1 {
-		t.Fatalf("attempts = %#v, want one redirected commit attempt", attempts)
-	}
-	if attempts[0].EffectKind != "repo_or_history_mutation" || attempts[0].EffectReason != "git commit" {
-		t.Fatalf("attempt = %#v, want repo-history git commit effect", attempts[0])
-	}
-	if attempts[0].PhaseID != "phase-commit" || attempts[0].LeaseID != "lease-effect-commit" {
-		t.Fatalf("attempt scope = phase %q lease %q, want phase/lease context", attempts[0].PhaseID, attempts[0].LeaseID)
+	if len(attempts) != 0 {
+		t.Fatalf("attempts = %#v, want no first write after result", attempts)
 	}
 }
 
@@ -396,6 +392,75 @@ func TestWorkResultEffectAttemptConvergesWithMonitorStartRow(t *testing.T) {
 	}
 	if after[0].OperationID != "op-effect-converge" || after[0].PhaseID != "phase-effect-converge" || after[0].Status != session.EffectAttemptStatusExecuted {
 		t.Fatalf("after attempt = %#v, want work metadata and executed status", after[0])
+	}
+}
+
+func TestWorkResultEffectAttemptsAdvanceDuplicateCommandOccurrences(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7006, UserID: 0, Scope: telegramDMScopeRef(7006)}
+	req := WorkRequest{
+		OperationID: "op-effect-duplicates",
+		Mode:        WorkModeWorkspaceWrite,
+		LeaseID:     "lease-effect-duplicates",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-duplicates", RiskClass: "workspace_write"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-duplicates",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-effect-duplicates",
+				LeaseID: "lease-effect-duplicates",
+			}}},
+		},
+	}
+	command := "touch generated.txt"
+	now := time.Now().UTC()
+	for i, id := range []string{"eff-duplicate-1", "eff-duplicate-2"} {
+		if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+			AttemptID:    id,
+			Key:          key,
+			OperationID:  req.OperationID,
+			PhaseID:      "phase-effect-duplicates",
+			LeaseID:      req.LeaseID,
+			ProposalID:   req.State.ActionProposal.ID,
+			WorkMode:     string(req.Mode),
+			Executor:     "codex",
+			Tool:         "codex_command_approval",
+			Command:      command,
+			EffectKind:   "workspace_mutation",
+			EffectReason: "touch filesystem mutation",
+			Status:       session.EffectAttemptStatusAttempted,
+			StartedAt:    now.Add(time.Duration(i) * time.Second),
+			UpdatedAt:    now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("UpsertEffectAttempt(%s) err = %v", id, err)
+		}
+	}
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, WorkResult{ExecutorName: "codex", Commands: []string{command, command}}, nil, now, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = %v", err)
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("attempts = %#v, want both duplicate command occurrences advanced", attempts)
+	}
+	if attempts[0].AttemptID != "eff-duplicate-1" || attempts[1].AttemptID != "eff-duplicate-2" {
+		t.Fatalf("attempt ids = %q, %q; want FIFO by started_at", attempts[0].AttemptID, attempts[1].AttemptID)
+	}
+	got, err := store.EffectAttemptsForWork(key, req.OperationID, "phase-effect-duplicates", req.LeaseID, req.State.ActionProposal.ID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsForWork() err = %v", err)
+	}
+	for _, attempt := range got {
+		if attempt.Status != session.EffectAttemptStatusExecuted {
+			t.Fatalf("attempt = %#v, want every duplicate attempt executed", attempt)
+		}
 	}
 }
 

@@ -61,7 +61,7 @@ func (s *SQLiteStore) EffectAttemptsForWork(key SessionKey, operationID string, 
 			AND (? = '' OR phase_id = ?)
 			AND (? = '' OR lease_id = ?)
 			AND (? = '' OR proposal_id = ?)
-		ORDER BY updated_at DESC, attempt_id ASC
+		ORDER BY started_at ASC, attempt_id ASC
 	`, SessionIDForKey(key), strings.TrimSpace(operationID), strings.TrimSpace(operationID), strings.TrimSpace(phaseID), strings.TrimSpace(phaseID), strings.TrimSpace(leaseID), strings.TrimSpace(leaseID), strings.TrimSpace(proposalID), strings.TrimSpace(proposalID))
 	if err != nil {
 		return nil, fmt.Errorf("query effect attempts for work: %w", err)

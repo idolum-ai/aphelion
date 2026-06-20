@@ -37,6 +37,10 @@ type Effect struct {
 	Reason        string
 	Command       string
 	GitSubcommand string
+	Action        string
+	Provider      string
+	Target        string
+	Subject       string
 	SideEffects   bool
 }
 
@@ -59,35 +63,159 @@ type Boundary struct {
 	Effect Effect
 }
 
+type EffectPlan struct {
+	Command             string
+	Effects             []Effect
+	Dynamic             bool
+	DynamicReason       string
+	MultipleAuthorities bool
+}
+
 func Classify(command string) Effect {
-	compact := NormalizeCommand(command)
-	if compact == "" {
-		return Effect{Kind: KindUnknown, Reason: "empty command", SideEffects: true}
+	plan := PlanCommand(command)
+	if plan.Dynamic {
+		return Effect{Kind: KindUnknown, Reason: plan.DynamicReason, SideEffects: true}
 	}
-	if AppServerStatusCommandAllowed(compact) {
-		return Effect{Kind: KindReadOnlyInspection, Reason: "status inspection"}
+	if plan.MultipleAuthorities {
+		return Effect{Kind: KindUnknown, Reason: "multiple authority effects require effect plan", SideEffects: true}
 	}
-	lower := strings.ToLower(compact)
-	if commandHasHighImpactStorageMarker(lower) {
-		return Effect{Kind: KindHighImpactStorage, Reason: "high-impact storage command", SideEffects: true}
-	}
-	segments := commandSegments(command)
-	if len(segments) == 0 {
-		return Effect{Kind: KindUnknown, Reason: "unclassified command", SideEffects: true}
-	}
-	var out Effect
-	if commandHasRedirection(lower) {
-		out = Effect{Kind: KindBuildArtifact, Reason: "shell redirection", SideEffects: true}
-	} else {
-		out = Effect{Kind: KindReadOnlyInspection, Reason: "read-only inspection"}
-	}
-	for _, segment := range segments {
-		effect := classifySegment(segment)
+	out := Effect{Kind: KindReadOnlyInspection, Reason: "read-only inspection"}
+	for _, effect := range plan.Effects {
 		if effectDominates(effect, out) {
 			out = effect
 		}
 	}
 	return out
+}
+
+func PlanCommand(command string) EffectPlan {
+	compact := NormalizeCommand(command)
+	if compact == "" {
+		return EffectPlan{
+			Command: compact,
+			Effects: []Effect{{Kind: KindUnknown, Reason: "empty command", SideEffects: true}},
+		}
+	}
+	if AppServerStatusCommandAllowed(compact) {
+		return EffectPlan{
+			Command: compact,
+			Effects: []Effect{{Kind: KindReadOnlyInspection, Reason: "status inspection"}},
+		}
+	}
+	if reason := executableResolutionDynamicReason(command); reason != "" {
+		return EffectPlan{
+			Command:       compact,
+			Effects:       []Effect{{Kind: KindUnknown, Reason: reason, SideEffects: true}},
+			Dynamic:       true,
+			DynamicReason: reason,
+		}
+	}
+	if reason := dynamicShellExecutionReason(command); reason != "" {
+		return EffectPlan{
+			Command:       compact,
+			Effects:       []Effect{{Kind: KindUnknown, Reason: reason, SideEffects: true}},
+			Dynamic:       true,
+			DynamicReason: reason,
+		}
+	}
+	lower := strings.ToLower(compact)
+	if commandHasHighImpactStorageMarker(lower) {
+		return EffectPlan{
+			Command: compact,
+			Effects: []Effect{{Kind: KindHighImpactStorage, Reason: "high-impact storage command", SideEffects: true}},
+		}
+	}
+	segments := commandSegments(command)
+	if len(segments) == 0 {
+		return EffectPlan{
+			Command: compact,
+			Effects: []Effect{{Kind: KindUnknown, Reason: "unclassified command", SideEffects: true}},
+		}
+	}
+	var effects []Effect
+	if commandHasRedirection(lower) {
+		effects = append(effects, Effect{Kind: KindBuildArtifact, Reason: "shell redirection", SideEffects: true})
+	}
+	for _, segment := range segments {
+		effect := classifySegment(segment)
+		effects = appendPlanEffect(effects, effect)
+		for _, extra := range additionalSegmentEffects(segment, effect) {
+			effects = appendPlanEffect(effects, extra)
+		}
+	}
+	if len(effects) == 0 {
+		effects = append(effects, Effect{Kind: KindReadOnlyInspection, Reason: "read-only inspection"})
+	}
+	if reason := dynamicEffectReason(effects); reason != "" {
+		return EffectPlan{
+			Command:       compact,
+			Effects:       effects,
+			Dynamic:       true,
+			DynamicReason: reason,
+		}
+	}
+	return EffectPlan{
+		Command:             compact,
+		Effects:             effects,
+		MultipleAuthorities: planHasMultipleAuthorityEffects(effects),
+	}
+}
+
+func dynamicEffectReason(effects []Effect) string {
+	for _, effect := range effects {
+		reason := strings.TrimSpace(effect.Reason)
+		if strings.Contains(reason, "dynamic shell execution") {
+			return reason
+		}
+		if strings.Contains(reason, "transport override") {
+			return reason
+		}
+	}
+	return ""
+}
+
+func appendPlanEffect(effects []Effect, effect Effect) []Effect {
+	if effect.Kind == KindReadOnlyInspection && !effect.SideEffects {
+		if len(effects) == 0 {
+			return append(effects, effect)
+		}
+		return effects
+	}
+	if effect.SideEffects {
+		return append(effects, effect)
+	}
+	for i, existing := range effects {
+		if existing.Kind == effect.Kind && existing.Reason == effect.Reason && existing.Command == effect.Command && existing.GitSubcommand == effect.GitSubcommand {
+			if effectDominates(effect, existing) {
+				effects[i] = effect
+			}
+			return effects
+		}
+	}
+	return append(effects, effect)
+}
+
+func planHasMultipleAuthorityEffects(effects []Effect) bool {
+	count := 0
+	for _, effect := range effects {
+		if !effect.SideEffects || !effectCountsAsIndependentAuthority(effect) {
+			continue
+		}
+		count++
+		if count > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func effectCountsAsIndependentAuthority(effect Effect) bool {
+	switch effect.Kind {
+	case KindReadOnlyInspection:
+		return false
+	default:
+		return effect.SideEffects
+	}
 }
 
 func effectDominates(candidate Effect, current Effect) bool {
@@ -126,6 +254,10 @@ func effectRank(kind Kind) int {
 }
 
 func BoundaryForCommand(command string) (Boundary, bool) {
+	plan := PlanCommand(command)
+	if plan.Dynamic || plan.MultipleAuthorities {
+		return Boundary{}, false
+	}
 	effect := Classify(command)
 	switch effect.Kind {
 	case KindRepoHistory:
@@ -142,6 +274,10 @@ func BoundaryForCommand(command string) (Boundary, bool) {
 				Reason:        ReasonExternalAccount,
 				Command:       effect.Command,
 				GitSubcommand: effect.GitSubcommand,
+				Action:        effect.Action,
+				Provider:      effect.Provider,
+				Target:        effect.Target,
+				Subject:       effect.Subject,
 				SideEffects:   effect.SideEffects,
 			}}, true
 		}
@@ -150,6 +286,10 @@ func BoundaryForCommand(command string) (Boundary, bool) {
 			Kind:        effect.Kind,
 			Reason:      ReasonRemoteHostOperation,
 			Command:     effect.Command,
+			Action:      effect.Action,
+			Provider:    effect.Provider,
+			Target:      effect.Target,
+			Subject:     effect.Subject,
 			SideEffects: effect.SideEffects,
 		}}, true
 	case KindService:
@@ -157,6 +297,10 @@ func BoundaryForCommand(command string) (Boundary, bool) {
 			Kind:        effect.Kind,
 			Reason:      ReasonServiceProcessChange,
 			Command:     effect.Command,
+			Action:      effect.Action,
+			Provider:    effect.Provider,
+			Target:      effect.Target,
+			Subject:     effect.Subject,
 			SideEffects: effect.SideEffects,
 		}}, true
 	}
@@ -176,6 +320,10 @@ func classifySegment(segment string) Effect {
 	if idx < 0 || idx >= len(tokens) {
 		return Effect{Kind: KindUnknown, Reason: "unclassified wrapper", SideEffects: true}
 	}
+	rawCmd := trimShellToken(tokens[idx].Text)
+	if strings.Contains(rawCmd, "/") {
+		return Effect{Kind: KindUnknown, Reason: "path-qualified executable", Command: rawCmd, SideEffects: true}
+	}
 	cmd := normalizeCommandToken(tokens[idx].Text)
 	args := tokens[idx+1:]
 	if cmd == "sh" || cmd == "bash" {
@@ -185,12 +333,14 @@ func classifySegment(segment string) Effect {
 	}
 	lowerSegment := strings.ToLower(strings.Join(tokenTexts(tokens[idx:]), " "))
 	switch cmd {
+	case "eval", "source":
+		return Effect{Kind: KindUnknown, Reason: cmd + " dynamic shell execution", Command: cmd, SideEffects: true}
 	case "set", "printf", "echo", "true", "false", "test":
 		return Effect{Kind: KindReadOnlyInspection, Reason: cmd + " shell builtin", Command: cmd}
 	case "git":
 		return classifyGitCommand(args)
 	case "rg", "grep", "egrep", "fgrep", "cat", "nl", "head", "tail", "less", "more", "wc", "pwd", "ls", "find":
-		if cmd == "find" && (tokensContain(args, "-delete") || tokensContain(args, "-exec") || tokensContain(args, "-ok")) {
+		if cmd == "find" && findArgsMutateOrExecute(args) {
 			return Effect{Kind: KindWorkspaceMutation, Reason: "find mutation", Command: cmd, SideEffects: true}
 		}
 		return Effect{Kind: KindReadOnlyInspection, Reason: cmd + " inspection", Command: cmd}
@@ -198,25 +348,30 @@ func classifySegment(segment string) Effect {
 		if tokensContain(args, "-i") || tokensContainPrefix(args, "-i") {
 			return Effect{Kind: KindWorkspaceMutation, Reason: "sed in-place edit", Command: cmd, SideEffects: true}
 		}
+		if sedArgsExecuteCommands(args) {
+			return Effect{Kind: KindUnknown, Reason: "sed command execution", Command: cmd, SideEffects: true}
+		}
 		return Effect{Kind: KindReadOnlyInspection, Reason: "sed inspection", Command: cmd}
 	case "go":
 		return classifyGoCommand(args)
 	case "npm", "pnpm", "yarn", "make", "pytest", "python", "python3", "uv", "pip", "pip3", "cargo", "playwright", "npx":
 		return classifyBuildTestPackageCommand(cmd, args)
 	case "curl", "wget":
-		return Effect{Kind: KindExternal, Reason: cmd + " external contact", Command: cmd, SideEffects: true}
+		return Effect{Kind: KindExternal, Reason: cmd + " external contact", Command: cmd, Action: "external_contact", Provider: cmd, SideEffects: true}
 	case "ssh", "scp", "rsync":
-		return Effect{Kind: KindRemoteHost, Reason: ReasonRemoteHostOperation, Command: cmd, SideEffects: true}
+		return Effect{Kind: KindRemoteHost, Reason: ReasonRemoteHostOperation, Command: cmd, Action: cmd, Provider: cmd, SideEffects: true}
 	case "rm", "mv", "cp", "mkdir", "touch", "chmod", "chown", "ln", "tee", "apply_patch":
 		return Effect{Kind: KindWorkspaceMutation, Reason: cmd + " filesystem mutation", Command: cmd, SideEffects: true}
 	case "systemctl":
 		if systemctlArgsLookReadOnly(args) {
 			return Effect{Kind: KindReadOnlyInspection, Reason: "systemctl inspection", Command: cmd}
 		}
-		return Effect{Kind: KindService, Reason: ReasonServiceProcessChange, Command: cmd, SideEffects: true}
+		return Effect{Kind: KindService, Reason: ReasonServiceProcessChange, Command: cmd, Action: systemctlAction(args), Provider: cmd, SideEffects: true}
 	case "service", "launchctl", "kill", "pkill", "docker", "docker-compose", "kubectl":
-		return Effect{Kind: KindService, Reason: ReasonServiceProcessChange, Command: cmd, SideEffects: true}
-	case "ps", "df", "du", "uname", "hostname", "uptime", "date", "whoami", "id", "env", "printenv":
+		return Effect{Kind: KindService, Reason: ReasonServiceProcessChange, Command: cmd, Action: cmd, Provider: cmd, SideEffects: true}
+	case "xargs":
+		return Effect{Kind: KindUnknown, Reason: "xargs dynamic shell execution", Command: cmd, SideEffects: true}
+	case "ps", "df", "du", "uname", "hostname", "uptime", "date", "whoami", "id", "env", "printenv", "sleep":
 		return Effect{Kind: KindReadOnlyInspection, Reason: cmd + " status inspection", Command: cmd}
 	case "sqlite3", "psql", "mysql":
 		if sqlLooksMutating(lowerSegment) {
@@ -225,9 +380,9 @@ func classifySegment(segment string) Effect {
 		return Effect{Kind: KindUnknown, Reason: cmd + " database command", Command: cmd, SideEffects: true}
 	case "gh", "aws", "gcloud", "az", "op":
 		if commandContainsAny(lowerSegment, " login", " logout", " auth ", " configure", " token", " secret") {
-			return Effect{Kind: KindCredential, Reason: cmd + " credential/config effect", Command: cmd, SideEffects: true}
+			return Effect{Kind: KindCredential, Reason: cmd + " credential/config effect", Command: cmd, Action: "credential_config", Provider: cmd, SideEffects: true}
 		}
-		return Effect{Kind: KindExternalAccount, Reason: ReasonExternalAccount, Command: cmd, SideEffects: true}
+		return Effect{Kind: KindExternalAccount, Reason: ReasonExternalAccount, Command: cmd, Action: externalAccountAction(cmd, args), Provider: cmd, SideEffects: true}
 	default:
 		if sqlLooksMutating(lowerSegment) {
 			return Effect{Kind: KindDatabase, Reason: "database mutation", Command: cmd, SideEffects: true}
@@ -237,18 +392,31 @@ func classifySegment(segment string) Effect {
 }
 
 func classifyGitCommand(args []shellToken) Effect {
+	if gitArgsOverrideTransport(args) {
+		return Effect{Kind: KindUnknown, Reason: "git transport override", Command: "git", SideEffects: true}
+	}
 	subcmd := firstGitSubcommand(args)
 	switch subcmd {
-	case "status", "diff", "log", "show", "grep", "rev-parse", "cat-file", "branch", "describe", "ls-files", "show-ref", "remote":
+	case "status", "diff", "log", "show", "grep", "rev-parse", "cat-file", "describe", "ls-files", "show-ref":
 		return Effect{Kind: KindReadOnlyInspection, Reason: "git " + subcmd + " inspection", Command: "git", GitSubcommand: subcmd}
+	case "branch":
+		if gitBranchArgsLookReadOnly(args) {
+			return Effect{Kind: KindReadOnlyInspection, Reason: "git branch inspection", Command: "git", GitSubcommand: subcmd}
+		}
+		return Effect{Kind: KindRepoHistory, Reason: "git branch mutation", Command: "git", GitSubcommand: subcmd, Action: "git_branch", Provider: "git", SideEffects: true}
+	case "remote":
+		if gitRemoteArgsLookReadOnly(args) {
+			return Effect{Kind: KindReadOnlyInspection, Reason: "git remote inspection", Command: "git", GitSubcommand: subcmd}
+		}
+		return Effect{Kind: KindRepoHistory, Reason: "git remote mutation", Command: "git", GitSubcommand: subcmd, Action: "git_remote", Provider: "git", SideEffects: true}
 	case "fetch", "pull", "clone", "ls-remote", "submodule":
-		return Effect{Kind: KindExternal, Reason: "git " + subcmd, Command: "git", GitSubcommand: subcmd, SideEffects: true}
+		return Effect{Kind: KindExternal, Reason: "git " + subcmd, Command: "git", GitSubcommand: subcmd, Action: subcmd, Provider: "git", SideEffects: true}
 	case "commit":
-		return Effect{Kind: KindRepoHistory, Reason: ReasonGitCommit, Command: "git", GitSubcommand: subcmd, SideEffects: true}
+		return Effect{Kind: KindRepoHistory, Reason: ReasonGitCommit, Command: "git", GitSubcommand: subcmd, Action: "git_commit", Provider: "git", SideEffects: true}
 	case "push":
-		return Effect{Kind: KindRepoHistory, Reason: ReasonGitPush, Command: "git", GitSubcommand: subcmd, SideEffects: true}
+		return Effect{Kind: KindRepoHistory, Reason: ReasonGitPush, Command: "git", GitSubcommand: subcmd, Action: "git_push", Provider: "git", SideEffects: true}
 	case "add", "checkout", "cherry-pick", "clean", "merge", "mv", "rebase", "reset", "restore", "revert", "rm", "switch", "stash", "tag", "worktree":
-		return Effect{Kind: KindRepoHistory, Reason: "git " + subcmd, Command: "git", GitSubcommand: subcmd, SideEffects: true}
+		return Effect{Kind: KindRepoHistory, Reason: "git " + subcmd, Command: "git", GitSubcommand: subcmd, Action: "git_" + subcmd, Provider: "git", SideEffects: true}
 	case "":
 		return Effect{Kind: KindUnknown, Reason: "git command without subcommand", Command: "git", SideEffects: true}
 	default:
@@ -268,11 +436,49 @@ func classifyGoCommand(args []shellToken) Effect {
 		return Effect{Kind: KindBuildArtifact, Reason: "go " + subcmd, Command: "go", SideEffects: true}
 	case "install", "get", "mod", "work":
 		return Effect{Kind: KindCapability, Reason: "go " + subcmd, Command: "go", SideEffects: true}
-	case "version", "env", "list":
+	case "env":
+		if tokensContain(args[1:], "-w") || tokensContain(args[1:], "-u") {
+			return Effect{Kind: KindCredential, Reason: "go env mutation", Command: "go", SideEffects: true}
+		}
+		return Effect{Kind: KindReadOnlyInspection, Reason: "go env inspection", Command: "go"}
+	case "version", "list":
 		return Effect{Kind: KindReadOnlyInspection, Reason: "go " + subcmd + " inspection", Command: "go"}
 	default:
 		return Effect{Kind: KindUnknown, Reason: "go " + subcmd + " unclassified", Command: "go", SideEffects: true}
 	}
+}
+
+func additionalSegmentEffects(segment string, base Effect) []Effect {
+	tokens := shellTokens(segment)
+	if len(tokens) == 0 {
+		return nil
+	}
+	idx := commandTokenIndex(tokens)
+	if idx < 0 || idx >= len(tokens) {
+		return nil
+	}
+	cmd := normalizeCommandToken(tokens[idx].Text)
+	args := tokens[idx+1:]
+	switch cmd {
+	case "curl":
+		if tokensContain(args, "-o") || tokensContainPrefix(args, "--output") || tokensContainPrefix(args, "-o") {
+			return []Effect{{Kind: KindBuildArtifact, Reason: "curl output file", Command: cmd, Action: "write_output_file", Provider: cmd, SideEffects: true}}
+		}
+	case "wget":
+		if tokensContain(args, "-O") || tokensContainPrefix(args, "--output-document") || tokensContainPrefix(args, "-O") {
+			return []Effect{{Kind: KindBuildArtifact, Reason: "wget output file", Command: cmd, Action: "write_output_file", Provider: cmd, SideEffects: true}}
+		}
+	case "git":
+		subcmd := firstGitSubcommand(args)
+		switch subcmd {
+		case "pull", "clone":
+			return []Effect{{Kind: KindRepoHistory, Reason: "git " + subcmd + " workspace/repository mutation", Command: cmd, GitSubcommand: subcmd, Action: "repo_worktree_update", Provider: "git", SideEffects: true}}
+		}
+	case "scp", "rsync":
+		return []Effect{{Kind: KindWorkspaceMutation, Reason: cmd + " local file mutation", Command: cmd, Action: "remote_copy_local_write", Provider: cmd, SideEffects: true}}
+	}
+	_ = base
+	return nil
 }
 
 func classifyBuildTestPackageCommand(cmd string, args []shellToken) Effect {
@@ -324,6 +530,33 @@ func classifyBuildTestPackageCommand(cmd string, args []shellToken) Effect {
 		}
 	}
 	return Effect{Kind: KindUnknown, Reason: cmd + " unclassified", Command: cmd, SideEffects: true}
+}
+
+func externalAccountAction(cmd string, args []shellToken) string {
+	switch cmd {
+	case "gh":
+		values := tokenTexts(args)
+		for i := 0; i < len(values); i++ {
+			token := strings.ToLower(trimShellToken(values[i]))
+			if token != "pr" || i+1 >= len(values) {
+				continue
+			}
+			switch strings.ToLower(trimShellToken(values[i+1])) {
+			case "create", "new":
+				return "github_pr_create"
+			case "merge":
+				return "github_pr_merge"
+			case "edit":
+				return "github_pr_update"
+			}
+		}
+	case "aws":
+		values := tokenTexts(args)
+		if len(values) >= 2 {
+			return "aws_" + normalizeCommandToken(values[0]) + "_" + normalizeCommandToken(values[1])
+		}
+	}
+	return cmd + "_external_account_action"
 }
 
 func AppServerStatusCommandAllowed(command string) bool {
@@ -397,7 +630,12 @@ func commandSegments(command string) []string {
 				skipNext = true
 				continue
 			}
-			b.WriteRune(r)
+			if i+1 < len(command) && command[i+1] == '>' || i > 0 && command[i-1] == '>' {
+				b.WriteRune(r)
+				continue
+			}
+			flush()
+			continue
 		case '(', ')':
 			flush()
 		default:
@@ -567,11 +805,229 @@ func shellCommandStringArg(tokens []shellToken) string {
 		if token == "" {
 			continue
 		}
-		if token == "-c" && i+1 < len(tokens) {
+		if shellOptionEnablesCommandString(token) && i+1 < len(tokens) {
 			return strings.TrimSpace(tokens[i+1].Text)
 		}
 	}
 	return ""
+}
+
+func shellOptionEnablesCommandString(token string) bool {
+	if token == "-c" {
+		return true
+	}
+	if strings.HasPrefix(token, "-") && !strings.HasPrefix(token, "--") {
+		return strings.Contains(token[1:], "c")
+	}
+	return false
+}
+
+func executableResolutionDynamicReason(command string) string {
+	segments := commandSegments(command)
+	if len(segments) == 0 {
+		segments = []string{command}
+	}
+	for _, segment := range segments {
+		tokens := shellTokens(segment)
+		limit := commandTokenIndex(tokens)
+		if limit < 0 {
+			limit = len(tokens)
+		}
+		for i, token := range tokens {
+			if i >= limit {
+				break
+			}
+			value := strings.TrimSpace(token.Text)
+			if value == "" {
+				continue
+			}
+			switch normalizeCommandToken(value) {
+			case "env", "sudo", "command", "nohup", "nice", "stdbuf", "exec", "time", "timeout":
+				continue
+			}
+			idx := strings.Index(value, "=")
+			if idx <= 0 || strings.HasPrefix(value, "-") {
+				continue
+			}
+			key := strings.ToUpper(strings.TrimSpace(value[:idx]))
+			switch key {
+			case "PATH", "BASH_ENV", "ENV", "SHELLOPTS", "GIT_EXEC_PATH", "GIT_SSH", "GIT_SSH_COMMAND", "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "PYTHONPATH", "NODE_OPTIONS":
+				return "environment-sensitive executable resolution"
+			default:
+				continue
+			}
+		}
+	}
+	return ""
+}
+
+func gitArgsOverrideTransport(args []shellToken) bool {
+	values := tokenTexts(args)
+	for i := 0; i < len(values); i++ {
+		token := strings.ToLower(trimShellToken(values[i]))
+		switch {
+		case token == "-c" && i+1 < len(values):
+			i++
+			if gitConfigKeyExecutesPrograms(strings.ToLower(trimShellToken(values[i]))) {
+				return true
+			}
+		case strings.HasPrefix(token, "-ccore.sshcommand="),
+			strings.HasPrefix(token, "--config=core.sshcommand="),
+			strings.HasPrefix(token, "-cdiff.external="),
+			strings.HasPrefix(token, "--config=diff.external="),
+			strings.HasPrefix(token, "-ccore.fsmonitor="),
+			strings.HasPrefix(token, "--config=core.fsmonitor="),
+			strings.HasPrefix(token, "-ccore.hookspath="),
+			strings.HasPrefix(token, "--config=core.hookspath="):
+			return true
+		}
+	}
+	return false
+}
+
+func gitConfigKeyExecutesPrograms(config string) bool {
+	config = strings.TrimSpace(strings.ToLower(config))
+	for _, prefix := range []string{
+		"core.sshcommand=",
+		"diff.external=",
+		"core.fsmonitor=",
+		"core.hookspath=",
+		"core.pager=",
+		"alias.",
+	} {
+		if strings.HasPrefix(config, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func dynamicShellExecutionReason(command string) string {
+	var quote rune
+	escaped := false
+	for i := 0; i < len(command); i++ {
+		ch := command[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && quote != '\'' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if rune(ch) == quote {
+				quote = 0
+			}
+			if quote == '\'' {
+				continue
+			}
+		} else if ch == '\'' || ch == '"' {
+			quote = rune(ch)
+			continue
+		}
+		if quote == '\'' {
+			continue
+		}
+		if ch == '`' {
+			return "command substitution"
+		}
+		if ch == '$' && i+1 < len(command) && command[i+1] == '(' {
+			return "command substitution"
+		}
+		if ch == '<' && i+1 < len(command) && command[i+1] == '(' {
+			return "process substitution"
+		}
+	}
+	return ""
+}
+
+func gitBranchArgsLookReadOnly(args []shellToken) bool {
+	for _, arg := range args[1:] {
+		token := strings.ToLower(trimShellToken(arg.Text))
+		switch token {
+		case "-d", "-D", "-m", "-M", "-c", "-C", "--delete", "--move", "--copy", "--set-upstream-to", "--unset-upstream":
+			return false
+		}
+		if strings.HasPrefix(token, "--delete=") || strings.HasPrefix(token, "--move=") || strings.HasPrefix(token, "--copy=") || strings.HasPrefix(token, "--set-upstream-to=") {
+			return false
+		}
+	}
+	return true
+}
+
+func findArgsMutateOrExecute(args []shellToken) bool {
+	for _, arg := range args {
+		token := strings.ToLower(trimShellToken(arg.Text))
+		switch {
+		case token == "-delete" || token == "-exec" || token == "-execdir" || token == "-ok" || token == "-okdir":
+			return true
+		case token == "-fprint" || token == "-fprintf" || token == "-fls":
+			return true
+		}
+	}
+	return false
+}
+
+func sedArgsExecuteCommands(args []shellToken) bool {
+	for _, arg := range args {
+		text := strings.TrimSpace(arg.Text)
+		if text == "" {
+			continue
+		}
+		option := strings.ToLower(trimShellToken(text))
+		if option == "-f" || strings.HasPrefix(option, "-f") || option == "--file" || strings.HasPrefix(option, "--file=") {
+			return true
+		}
+		if strings.HasPrefix(text, "-") {
+			continue
+		}
+		lower := strings.ToLower(text)
+		for _, line := range strings.Split(lower, "\n") {
+			line = strings.TrimSpace(line)
+			if sedLineExecutesCommand(line) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func sedLineExecutesCommand(line string) bool {
+	if line == "e" || strings.HasPrefix(line, "e ") {
+		return true
+	}
+	if len(line) > 1 && line[0] >= '0' && line[0] <= '9' {
+		rest := strings.TrimLeft(line, "0123456789")
+		if rest == "e" || strings.HasPrefix(rest, "e ") {
+			return true
+		}
+	}
+	if strings.Contains(line, ";e ") || strings.Contains(line, "; e ") || strings.HasSuffix(line, ";e") || strings.HasSuffix(line, "; e") {
+		return true
+	}
+	if strings.Contains(line, "/e") || strings.Contains(line, "/eg") || strings.Contains(line, "/ge") {
+		return true
+	}
+	return false
+}
+
+func gitRemoteArgsLookReadOnly(args []shellToken) bool {
+	sub := ""
+	for _, arg := range args[1:] {
+		token := strings.ToLower(trimShellToken(arg.Text))
+		if token == "" || strings.HasPrefix(token, "-") {
+			continue
+		}
+		sub = token
+		break
+	}
+	switch sub {
+	case "", "show", "get-url", "show-origin":
+		return true
+	default:
+		return false
+	}
 }
 
 func firstGitSubcommand(args []shellToken) string {
@@ -668,12 +1124,45 @@ func systemctlArgsLookReadOnly(args []shellToken) bool {
 	return false
 }
 
+func systemctlAction(args []shellToken) string {
+	for _, arg := range args {
+		token := strings.ToLower(strings.TrimSpace(arg.Text))
+		if token == "" || strings.HasPrefix(token, "-") {
+			continue
+		}
+		return "systemctl_" + normalizeCommandToken(token)
+	}
+	return "systemctl"
+}
+
 func commandHasRedirection(command string) bool {
-	return strings.Contains(command, " >") ||
-		strings.Contains(command, "> ") ||
-		strings.Contains(command, ">>") ||
-		strings.Contains(command, " 2>") ||
-		strings.Contains(command, "1>")
+	var quote rune
+	escaped := false
+	for i := 0; i < len(command); i++ {
+		ch := command[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && quote != '\'' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if rune(ch) == quote {
+				quote = 0
+			}
+			continue
+		}
+		if ch == '\'' || ch == '"' {
+			quote = rune(ch)
+			continue
+		}
+		if ch == '>' {
+			return true
+		}
+	}
+	return false
 }
 
 func commandHasHighImpactStorageMarker(command string) bool {
