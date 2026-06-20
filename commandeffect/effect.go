@@ -335,15 +335,30 @@ func classifySegment(segment string) Effect {
 	switch cmd {
 	case "eval", "source":
 		return Effect{Kind: KindUnknown, Reason: cmd + " dynamic shell execution", Command: cmd, SideEffects: true}
-	case "set", "printf", "echo", "true", "false", "test":
+	case "set", "printf", "echo", "true", "false":
+		return Effect{Kind: KindReadOnlyInspection, Reason: cmd + " shell builtin", Command: cmd}
+	case "test":
+		if target := testFileMetadataTarget(args); target != "" {
+			return fileMetadataReadEffect(cmd, target)
+		}
 		return Effect{Kind: KindReadOnlyInspection, Reason: cmd + " shell builtin", Command: cmd}
 	case "git":
 		return classifyGitCommand(args)
-	case "rg", "grep", "egrep", "fgrep", "cat", "nl", "head", "tail", "less", "more", "wc", "pwd", "ls", "find":
+	case "rg", "grep", "egrep", "fgrep", "cat", "nl", "head", "tail", "less", "more", "wc", "pwd", "find":
 		if cmd == "find" && findArgsMutateOrExecute(args) {
 			return Effect{Kind: KindWorkspaceMutation, Reason: "find mutation", Command: cmd, SideEffects: true}
 		}
 		return Effect{Kind: KindReadOnlyInspection, Reason: cmd + " inspection", Command: cmd}
+	case "ls":
+		if target := commandPathTarget(args); target != "" {
+			return fileMetadataReadEffect(cmd, target)
+		}
+		return Effect{Kind: KindReadOnlyInspection, Reason: cmd + " inspection", Command: cmd}
+	case "stat":
+		if target := statFileMetadataTarget(args); target != "" {
+			return fileMetadataReadEffect(cmd, target)
+		}
+		return Effect{Kind: KindReadOnlyInspection, Reason: cmd + " metadata inspection", Command: cmd}
 	case "sed":
 		if tokensContain(args, "-i") || tokensContainPrefix(args, "-i") {
 			return Effect{Kind: KindWorkspaceMutation, Reason: "sed in-place edit", Command: cmd, SideEffects: true}
@@ -388,6 +403,80 @@ func classifySegment(segment string) Effect {
 			return Effect{Kind: KindDatabase, Reason: "database mutation", Command: cmd, SideEffects: true}
 		}
 		return Effect{Kind: KindUnknown, Reason: cmd + " unclassified", Command: cmd, SideEffects: true}
+	}
+}
+
+func fileMetadataReadEffect(cmd string, target string) Effect {
+	return Effect{
+		Kind:    KindReadOnlyInspection,
+		Reason:  cmd + " file metadata read",
+		Command: cmd,
+		Action:  "file_metadata_read",
+		Target:  strings.TrimSpace(target),
+	}
+}
+
+func commandPathTarget(args []shellToken) string {
+	var targets []string
+	for _, arg := range args {
+		token := strings.TrimSpace(arg.Text)
+		if token == "" || token == "--" {
+			continue
+		}
+		if strings.HasPrefix(token, "-") {
+			continue
+		}
+		targets = append(targets, trimShellToken(token))
+	}
+	if len(targets) == 0 {
+		return ""
+	}
+	return strings.Join(targets, " ")
+}
+
+func statFileMetadataTarget(args []shellToken) string {
+	var targets []string
+	for i := 0; i < len(args); i++ {
+		token := strings.TrimSpace(args[i].Text)
+		if token == "" || token == "--" {
+			continue
+		}
+		if statOptionConsumesValue(token) {
+			if !strings.Contains(token, "=") && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(token, "-") {
+			continue
+		}
+		targets = append(targets, trimShellToken(token))
+	}
+	if len(targets) == 0 {
+		return ""
+	}
+	return strings.Join(targets, " ")
+}
+
+func statOptionConsumesValue(token string) bool {
+	token = strings.TrimSpace(token)
+	return token == "-c" ||
+		token == "--format" ||
+		strings.HasPrefix(token, "--format=") ||
+		token == "--printf" ||
+		strings.HasPrefix(token, "--printf=")
+}
+
+func testFileMetadataTarget(args []shellToken) string {
+	if len(args) < 2 {
+		return ""
+	}
+	op := strings.TrimSpace(args[0].Text)
+	switch op {
+	case "-a", "-b", "-c", "-d", "-e", "-f", "-g", "-h", "-k", "-L", "-O", "-p", "-r", "-S", "-s", "-u", "-w", "-x":
+		return trimShellToken(args[1].Text)
+	default:
+		return ""
 	}
 }
 

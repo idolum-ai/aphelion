@@ -140,7 +140,7 @@ func continuationCandidateMeaningfulTokens(text string) map[string]struct{} {
 
 func continuationCandidateStopword(token string) bool {
 	switch token {
-	case "about", "action", "approval", "approve", "bounded", "chat", "check", "continue", "continuation", "current", "draft", "evidence", "finding", "findings", "fresh", "generate", "inspect", "local", "metadata", "next", "objective", "operation", "phase", "plan", "proposal", "report", "request", "resume", "review", "state", "step", "work":
+	case "about", "action", "active", "approval", "approve", "bounded", "chat", "check", "continue", "continuation", "current", "draft", "evidence", "finding", "findings", "fresh", "generate", "inspect", "local", "metadata", "next", "objective", "operation", "phase", "plan", "proposal", "report", "request", "resume", "review", "state", "step", "work":
 		return true
 	default:
 		return false

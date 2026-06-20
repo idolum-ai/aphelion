@@ -36,7 +36,10 @@ func (r *Runtime) operationRecoveryCandidateArbitration(key session.SessionKey, 
 	}
 	working = session.NormalizeWorkingObjective(working)
 	if !workingObjectiveCanSuppressContinuationCandidate(working, now) {
-		return decision
+		working = requestWorkingObjectiveForRecoveryArbitration(msg.Text, now)
+		if !workingObjectiveCanSuppressContinuationCandidate(working, now) {
+			return decision
+		}
 	}
 	opState = session.NormalizeOperationState(opState)
 	candidate := operationContinuationCandidateText(opState)
@@ -52,6 +55,27 @@ func (r *Runtime) operationRecoveryCandidateArbitration(key session.SessionKey, 
 		WorkingObjective:   working.Objective,
 		CandidateObjective: firstNonEmptyContinuation(opState.Objective, opState.Summary, opState.PhasePlan.Goal, opState.Proposal.Summary),
 		RequestText:        strings.TrimSpace(msg.Text),
+	}
+}
+
+func requestWorkingObjectiveForRecoveryArbitration(request string, now time.Time) session.WorkingObjective {
+	request = strings.TrimSpace(request)
+	if request == "" {
+		return session.WorkingObjective{}
+	}
+	if len(continuationCandidateMeaningfulTokens(request)) == 0 {
+		return session.WorkingObjective{}
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	return session.WorkingObjective{
+		Objective:  request,
+		Source:     "operator_message",
+		Confidence: "high",
+		CreatedAt:  now,
+		ExpiresAt:  now.Add(continuationCandidateWorkingObjectiveFreshness),
 	}
 }
 
