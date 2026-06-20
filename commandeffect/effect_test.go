@@ -62,6 +62,48 @@ func TestClassifyRedirectionRemainsFallbackSideEffect(t *testing.T) {
 	}
 }
 
+func TestPlanCommandFileMetadataCommandsProduceTargetedMetadataEffect(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		command string
+		target  string
+	}{
+		{
+			command: `stat -c '%F %s %a' /home/alice/secrets/host-oauth-client.json`,
+			target:  "/home/alice/secrets/host-oauth-client.json",
+		},
+		{
+			command: `ls -l /home/alice/.aphelion/secrets/host-oauth-client.json`,
+			target:  "/home/alice/.aphelion/secrets/host-oauth-client.json",
+		},
+		{
+			command: `test -f /home/alice/secrets/host-oauth-client.json`,
+			target:  "/home/alice/secrets/host-oauth-client.json",
+		},
+		{
+			command: `ls -l /tmp/not-actually-a-secret-token-report.txt`,
+			target:  "/tmp/not-actually-a-secret-token-report.txt",
+		},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			t.Parallel()
+
+			plan := PlanCommand(tc.command)
+			if plan.Dynamic || plan.MultipleAuthorities || len(plan.Effects) != 1 {
+				t.Fatalf("PlanCommand(%q) = %#v, want one targeted file-metadata effect", tc.command, plan)
+			}
+			effect := plan.Effects[0]
+			if effect.Kind != KindReadOnlyInspection || effect.Action != "file_metadata_read" || effect.Target != tc.target || effect.SideEffects {
+				t.Fatalf("PlanCommand(%q) effect = %#v, want read-only file_metadata_read target %q", tc.command, effect, tc.target)
+			}
+			if effect.Kind == KindCredential || effect.Action == "credential_metadata" {
+				t.Fatalf("PlanCommand(%q) effect = %#v, must not infer credential authority from path text alone", tc.command, effect)
+			}
+		})
+	}
+}
+
 func TestClassifyUnknownSegmentStaysConservativeAgainstLowRiskLaterSegments(t *testing.T) {
 	t.Parallel()
 

@@ -666,6 +666,48 @@ func TestReentryRecommendationSuppressesOperationConflictingWithWorkingObjective
 	}
 }
 
+func TestReentryRecommendationSuppressesOperationConflictingWithFreshRequestWithoutWorkingObjective(t *testing.T) {
+	_, store, _, _ := buildRuntimeFixtures(t)
+	rt := &Runtime{store: store}
+
+	now := time.Date(2026, 6, 20, 11, 30, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 7024, UserID: 0, Scope: telegramDMScopeRef(7024)}
+	state := reentryRecommendationState{
+		Key: key,
+		Run: session.TurnRun{
+			ID:          92,
+			SessionID:   "telegram:7024:0",
+			Kind:        session.TurnRunKindInteractive,
+			Status:      session.TurnRunStatusCompleted,
+			RequestText: "Thread 3 still did not send the XPVENTA PDF. Stay on file delivery and figure out why the PDF is not visible.",
+			CompletedAt: now.Add(-10 * time.Minute),
+		},
+		Operation: session.OperationState{
+			ID:        "daily-review-bug-scout-refactor",
+			Objective: "Refactor the daily review bug scout and run its tests.",
+			Status:    session.OperationStatusActive,
+			Stage:     "working",
+			PhasePlan: session.OperationPhasePlan{
+				CurrentPhaseID: "bug-scout-phase-a-refactor-and-test-v2",
+				Phases: []session.OperationPhase{{
+					ID:             "bug-scout-phase-a-refactor-and-test-v2",
+					Summary:        "Refactor the daily review bug scout and run tests.",
+					Status:         session.PlanStatusInProgress,
+					AuthorityClass: "workspace_write",
+				}},
+			},
+		},
+		Now: now,
+	}
+
+	candidates := rt.reentryRecommendationCandidates(context.Background(), state)
+	for _, candidate := range candidates {
+		if candidate.SourceKind == "operation_state" && candidate.SourceRef == "daily-review-bug-scout-refactor" {
+			t.Fatalf("candidates = %#v, want fresh incompatible request to suppress stale active operation even without a persisted working objective", candidates)
+		}
+	}
+}
+
 func TestReentryRecommendationAllowsExplicitResumeOfOperation(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)
