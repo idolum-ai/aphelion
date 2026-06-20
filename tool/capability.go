@@ -149,14 +149,44 @@ func (r *Registry) capabilityRequestSubmit(in capabilityInput, actor principal.P
 	}); err != nil {
 		return "", err
 	}
+	reviewTarget := capabilityRequestReviewTarget(in, key)
 	reviewEventID := int64(0)
-	if in.ReviewTargetChatID > 0 {
-		reviewEventID, err = r.queueCapabilityRequestReviewEvent(record, in, actor, key)
+	if reviewTarget.ChatID != 0 {
+		in.ReviewTargetChatID = reviewTarget.ChatID
+		reviewEventID, err = r.queueCapabilityRequestReviewEvent(record, in, actor, key, reviewTarget)
 		if err != nil {
 			return "", err
 		}
 	}
 	return renderCapabilityRequestWithReviewEvent("[CAPABILITY_REQUEST]", record, reviewEventID), nil
+}
+
+type capabilityReviewTarget struct {
+	ChatID int64
+	Scope  session.ScopeRef
+}
+
+func capabilityRequestReviewTarget(in capabilityInput, key session.SessionKey) capabilityReviewTarget {
+	if in.ReviewTargetChatID != 0 {
+		id := fmt.Sprintf("%d", in.ReviewTargetChatID)
+		return capabilityReviewTarget{
+			ChatID: in.ReviewTargetChatID,
+			Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: id},
+		}
+	}
+	if key.ChatID == 0 {
+		return capabilityReviewTarget{}
+	}
+	scope := session.NormalizeScopeRef(key.Scope)
+	switch scope.Kind {
+	case session.ScopeKindTelegramDM, session.ScopeKindTelegramGroup, session.ScopeKindTelegramThread:
+		if scope.ID == "" {
+			scope.ID = fmt.Sprintf("%d", key.ChatID)
+		}
+		return capabilityReviewTarget{ChatID: key.ChatID, Scope: scope}
+	default:
+		return capabilityReviewTarget{}
+	}
 }
 
 func (r *Registry) capabilityRequestShow(in capabilityInput, actor principal.Principal) (string, error) {

@@ -388,6 +388,152 @@ func TestCapabilityRequestCanQueueReviewEvent(t *testing.T) {
 	}
 }
 
+func TestCapabilityRequestDefaultsReviewEventToCurrentTelegramChat(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_request", json.RawMessage(`{
+		"action":"request_submit",
+		"request_id":"cap-secret-metadata",
+		"kind":"file_access",
+		"target_resource":"/home/example/secrets/oauth-client.json",
+		"purpose":"metadata-only credential-readiness check after explicit operator request",
+		"risk_class":"sensitive",
+		"contract":{"allowed":"existence and redacted metadata only","forbidden":"raw secret output or credential use"},
+		"constraints":{"read_mode":"metadata_only_redacted"}
+	}`))
+	if err != nil {
+		t.Fatalf("capability_request request_submit without explicit review target err = %v", err)
+	}
+	if !strings.Contains(out, "request_id: cap-secret-metadata") || !strings.Contains(out, "review_event_id:") {
+		t.Fatalf("request_submit output = %q, want defaulted review event id", out)
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("pending review events len = %d, want 1", len(events))
+	}
+	event := events[0]
+	if event.TargetAdminChatID != 1001 || event.TargetScope.Kind != session.ScopeKindTelegramDM || event.TargetScope.ID != "1001" {
+		t.Fatalf("target = chat:%d scope:%#v, want current telegram chat", event.TargetAdminChatID, event.TargetScope)
+	}
+	if !strings.Contains(event.MetadataJSON, `"request_id":"cap-secret-metadata"`) ||
+		!strings.Contains(event.MetadataJSON, `"target_resource":"/home/example/secrets/oauth-client.json"`) {
+		t.Fatalf("MetadataJSON = %q, want defaulted review event metadata", event.MetadataJSON)
+	}
+}
+
+func TestCapabilityRequestDefaultsReviewEventPreservesCurrentTelegramScope(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		key       session.SessionKey
+		wantScope session.ScopeRef
+	}{
+		{
+			name: "group",
+			key: session.SessionKey{
+				ChatID: -100200,
+				UserID: 1001,
+				Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramGroup, ID: "-100200"},
+			},
+			wantScope: session.ScopeRef{Kind: session.ScopeKindTelegramGroup, ID: "-100200"},
+		},
+		{
+			name: "thread",
+			key: session.SessionKey{
+				ChatID: -100200,
+				UserID: 1001,
+				Scope:  session.TelegramThreadScopeRef(-100200, 42),
+			},
+			wantScope: session.ScopeRef{Kind: session.ScopeKindTelegramThread, ID: "-100200:42"},
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			registry, store := newDurableAgentToolRegistry(t)
+			admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+			requestID := "cap-default-" + tc.name
+			out, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, tc.key, "capability_request", json.RawMessage(`{
+				"action":"request_submit",
+				"request_id":"`+requestID+`",
+				"kind":"file_access",
+				"target_resource":"/home/example/secrets/oauth-client.json",
+				"purpose":"metadata-only credential-readiness check after explicit operator request",
+				"risk_class":"sensitive",
+				"contract":{"allowed":"existence and redacted metadata only"},
+				"constraints":{"read_mode":"metadata_only_redacted"}
+			}`))
+			if err != nil {
+				t.Fatalf("capability_request request_submit err = %v", err)
+			}
+			if !strings.Contains(out, "review_event_id:") {
+				t.Fatalf("request_submit output = %q, want defaulted review event id", out)
+			}
+
+			events, err := store.PendingReviewEvents(tc.key.ChatID, 10)
+			if err != nil {
+				t.Fatalf("PendingReviewEvents(%d) err = %v", tc.key.ChatID, err)
+			}
+			if len(events) != 1 {
+				t.Fatalf("pending review events len = %d, want 1", len(events))
+			}
+			event := events[0]
+			if event.TargetAdminChatID != tc.key.ChatID {
+				t.Fatalf("TargetAdminChatID = %d, want %d", event.TargetAdminChatID, tc.key.ChatID)
+			}
+			if event.TargetScope.Kind != tc.wantScope.Kind || event.TargetScope.ID != tc.wantScope.ID {
+				t.Fatalf("TargetScope = %#v, want %#v", event.TargetScope, tc.wantScope)
+			}
+			wantSessionID := session.SessionIDFromParts(tc.key.ChatID, 0, tc.wantScope)
+			if event.TargetSessionID != wantSessionID {
+				t.Fatalf("TargetSessionID = %q, want %q", event.TargetSessionID, wantSessionID)
+			}
+		})
+	}
+}
+
+func TestCapabilityRequestWithoutTelegramScopeRemainsLedgerOnly(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := session.SessionKey{Scope: session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "child", DurableAgentID: "child"}}
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_request", json.RawMessage(`{
+		"action":"request_submit",
+		"request_id":"cap-headless",
+		"kind":"generic_delegation",
+		"target_resource":"headless-worker",
+		"purpose":"record a ledger-only capability request",
+		"risk_class":"low",
+		"contract":{"allowed":"record only"},
+		"constraints":{"review_surface":"external"}
+	}`))
+	if err != nil {
+		t.Fatalf("capability_request request_submit without telegram scope err = %v", err)
+	}
+	if strings.Contains(out, "review_event_id:") {
+		t.Fatalf("request_submit output = %q, did not want default review event without telegram scope", out)
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("pending review events len = %d, want 0", len(events))
+	}
+}
+
 func TestCapabilityGrantEnablesRegisteredToolWithoutRemovedExposureTable(t *testing.T) {
 	t.Parallel()
 

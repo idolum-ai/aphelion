@@ -412,7 +412,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 						"contract": {"type": "object", "description": "Proposed behavior contract, escalation rules, attribution, or success criteria"},
 						"constraints": {"type": "object", "description": "Proposed boundaries such as max spend, paths, domains, accounts, retention, model/message limits, or review cadence"},
 						"capability_update_plan": {"type": "object", "description": "Optional concrete update plan to embed in the reviewable contract. For durable children this can include agent_id, policy_patch, policy_overrides, provisioning, attestation, grant_actions, reason, and notes."},
-						"review_target_chat_id": {"type": "integer", "description": "Optional Telegram chat id to queue a pending review event for this request"},
+						"review_target_chat_id": {"type": "integer", "description": "Optional Telegram chat id to queue a pending review event for this request; defaults to the current Telegram chat/scope when submitted from a Telegram-scoped turn"},
 						"review_summary": {"type": "string", "description": "Optional concise summary for the queued review event"},
 						"limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Optional list limit"}
 				},
