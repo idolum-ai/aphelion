@@ -1,69 +1,198 @@
 # Interpretation, Judgment, and Dissent Surfaces
 
-Aphelion's risk is not that it interprets. Every agentic system must turn messy
-inputs into judgments before it can decide what to perceive, show, recover,
-repair, or authorize.
+_Status: proposed architecture and current registry._
+_Runtime enforcement: none._
+_Normative after: accepted implementation slices satisfy the consequential-use,
+qualification, dependency, and reconciliation rules below._
 
-The risk is that correlated interpretations can become settled reality without
-a path for later evidence to challenge them. Local conservatism does not compose
-into global conservatism when memory admission, salience, brokerage,
-constitution checks, recovery arbitration, and re-entry ranking all inherit the
-same false frame. A system can be careful about a phantom.
+Aphelion interprets constantly. It turns shell text into effect plans, model
+output into brokerage contracts, memory candidates into context, continuity
+records into visible status, and durable history into recovery choices.
 
-This document names the shared design object for that problem. Consequential
-interpretation should produce a `Judgment`, identify the `Ground` that supports
-or could contradict it, and expose a `Challenge` path that can uphold, demote,
-mark uncertain, or verify the judgment later.
+Those judgments are necessary. The risk is that correlated interpretations can
+become settled reality without a path for later evidence to challenge them.
+Local conservatism does not compose into global conservatism when memory
+admission, salience, brokerage, constitution checks, recovery arbitration, and
+re-entry ranking all inherit the same false frame. A system can be careful about
+a phantom.
+
+This document reviews the interpretation surfaces that exist today, then names
+the thin runtime kernel needed to make them safer:
+
+```text
+Judgment -> Consequential Use -> DependencyRefs -> Reconciliation
+```
+
+Ground is not a new truth store; it is the dependency, support, qualification,
+and contradiction edges from a judgment or use to existing evidence, state, and
+effect-attempt records. Challenge is not mandatory ceremony for every judgment;
+it is the explicit path for disputed or uncertain cases. The common rule is
+smaller:
+
+```text
+Record consequential uses.
+Gate irreversible consequential uses.
+Reconcile everything else.
+```
 
 `Dissent` is the system property: Aphelion can disagree with its own settled
 interpretations. `Challenge` is the typed mechanism that carries one such
 disagreement through recheck, adjudication, and possible demotion.
 
-The registry at the end audits current surfaces against that model. It is a
-target architecture plus a current-state map, not a claim that every listed
-surface already satisfies every rule.
+The registry at the end audits current surfaces against that model. It is both a
+current-state map and a proposed kernel for future implementation slices, not a
+claim that every listed surface already satisfies every rule.
+
+Research lineage and deliberate departures are recorded in
+[`influences-and-departures.md`](influences-and-departures.md#truth-maintenance-argumentation-and-provenance).
+
+## How To Read This Document
+
+This document has two roles:
+
+- current registry: the table maps interpretation-like surfaces that exist today
+  or are known target surfaces for this architecture;
+- proposed kernel: the `Judgment`, `Consequential Use`, `Dependencies`, and
+  `Reconciliation` sections define requirements future implementation slices
+  should satisfy.
+
+Rows marked as target surfaces or `debt` are not current runtime guarantees. Once
+the model is accepted through implementation experience, the stable decisions
+should move into an ADR or a narrower normative architecture document.
+
+## Current Shape
+
+Aphelion already has an interpretation plane, but most of it exists as local
+helper functions and package-specific policy. That locality is good. Shell
+effects, memory admission, brokerage, redaction, recovery, and Telegram routing
+each have domain details that should remain close to their owning code.
+
+The current shape has real strengths:
+
+- authority-sensitive execution increasingly fails closed on unknown, dynamic,
+  or multi-authority shell plans;
+- effect authorization is typed rather than inferred from proposal prose;
+- recovery and re-entry use durable operation state instead of conversational
+  summaries alone;
+- evidence hydration is scoped and pull-oriented;
+- output and metadata redaction make ordinary hydration safer than raw replay;
+- Telegram callbacks and media routing use durable state machines instead of
+  treating visible cards as authority.
+
+The same shape also creates a systemic weakness. Each surface can be locally
+careful while still inheriting a wrong premise from another surface. Recent
+repairs show the pattern:
+
+- shell classifiers that recognized one visible command could miss embedded or
+  transitive effects, so the typed authority membrane saw less than Bash would
+  execute;
+- recovery arbitration could treat stale durable history as current intent until
+  current-objective compatibility and explicit-resume checks were added;
+- successful or uncertain mutations could be offered again until effect-attempt
+  records and reconciliation made "may already have happened" durable;
+- continuity and material-floor prose could become visible truth until typed
+  continuity visibility separated backend recovery evidence from user-facing
+  status;
+- memory and recommendation surfaces can route attention toward a coherent but
+  weakly grounded frame.
+
+These failures were not caused by a lack of typed objects. In several cases the
+wrong interpretation had already crossed into a typed record. The missing
+property was a way to preserve the judgment's provenance, compare it with less
+correlated ground later, and demote or verify it when stronger evidence
+contradicted it.
+
+That is the evidence for the architectural change. Aphelion should keep domain
+interpreters local, but their consequential outputs need a common envelope and
+explicit use records so later code can ask: what did Aphelion conclude, who used
+that conclusion, what did it cause, which records did it depend on, and what
+should happen when better evidence disagrees?
 
 ## Core Model
 
-The model has three parts:
+The runtime kernel has three commitments:
 
-1. `Judgment`: a local interpretation with provenance, completeness,
-   consequence, and freshness.
-2. `Ground`: the evidence or state class that supports the judgment, plus its
-   independence from the judgment's source.
-3. `Challenge`: the typed path by which decorrelated ground can contest a
-   settled judgment.
+1. `Judgment`: what did Aphelion conclude, who concluded it, how complete was
+   the interpretation, and what subject or claim does it describe?
+2. `Consequential Use`: which consumer used that judgment, under which policy,
+   to commit which consequence?
+3. `Reconciliation`: what should happen if later evidence contradicts,
+   supersedes, or weakens the judgment or the dependencies used to qualify it?
+
+Dependency refs connect those commitments to existing evidence, state,
+effect-attempt, operator-input, and provenance records. Challenges are only one
+way a contradiction becomes explicit. The ordinary path is simpler: qualify a
+judgment before consequential use, record the use, and reconcile the use if its
+dependencies later fail.
+
+The split follows the runtime failure modes above. A single "classified result"
+is not enough because it cannot identify when a later consumer escalated that
+conclusion into presentation, control flow, durable state, authority, execution,
+or model perception. Keeping the use record separate lets Aphelion make a typed
+object without treating the conversion itself as a trust upgrade.
+
+```text
+Evidence / durable state / effect attempts / operator input
+        |
+        | dependency refs support, qualify, or contradict
+        v
+     Judgment
+        |
+        | qualified under policy
+        v
+ Use / Commitment
+        |
+        | causes
+        v
+projection | state transition | effect attempt | diagnostic trace
+
+Challenge targets judgments.
+Adjudication changes future eligibility.
+Reconciliation handles prior consequential uses.
+```
 
 This is not a call for a central classifier service. Domain mechanisms should
-stay local. The shared architecture work is to make their judgment and
-challenge edges visible, replayable, and conservative.
+stay local. The shared architecture work is to make consequential judgment uses
+visible, replayable, and conservative enough to recover from bad interpretation.
 
 ## Judgment
 
-A judgment is any local interpretation that may affect perception, salience,
-control flow, durable state, presentation, or authority. It may come from a
+A judgment is any local interpretation that may later be used to affect
+perception, salience, control flow, durable state, presentation, or authority.
+It may come from a
 compiler, parser, recognizer, scorer, ranker, ruleset, or model judgment.
 
 Text may become a typed object, but typed output is not a trust upgrade by
 itself. A brittle recognizer can emit a perfectly typed, completely wrong
 object. Consequential judgments therefore need provenance, completeness,
-failure semantics, and a declared consequence class.
+failure semantics, stable identity, dependency versions, sensitivity policy, and
+claim scope. Consequence belongs to a later use of the judgment, not to the
+judgment producer.
 
 Future consequential interpreters should converge on a typed judgment envelope.
 The Go shape below is illustrative design notation, not a committed API:
 
 ```go
 type Judgment[T any] struct {
-    InterpreterID string
-    Version      string
-    Result       T
-    Status       JudgmentStatus // complete, partial, abstain
-    Unknowns     []UnknownRegion
-    Evidence     []EvidenceRef
-    Consequence  ConsequenceClass
-    Ground       GroundClass
-    CreatedAt    time.Time
-    ExpiresAt    time.Time
+    ID                 string
+    Kind               string
+    SchemaVersion      string
+    Scope              ScopeRef
+    PrincipalRef       string
+    SubjectKey         string
+    ClaimKey           string
+    InterpreterID      string
+    InterpreterVersion string
+    InputRefs          []string
+    InputHash          string
+    Result             T
+    Completeness       JudgmentCompleteness // complete, partial, abstain
+    Unknowns           []UnknownPredicate
+    Sensitivity        HydrationPolicy
+    ContentHash        string
+    AsOf               time.Time
+    CreatedAt          time.Time
+    ExpiresAt          time.Time
 }
 ```
 
@@ -71,39 +200,129 @@ The useful question is not "how confident was the model?" It is:
 
 - Was the full input language covered?
 - Which regions were not understood?
-- Is the result conservative for its consequence?
-- Which downstream consumer acted on it?
-- What ground class supports it?
-- Which stronger ground could contradict it?
+- Is the result conservative for each possible consequence?
+- Which downstream consumer used it?
+- What evidence or state supports, qualifies, or contradicts it?
+- Which stronger or less-correlated ground could demote it?
 - Can it be replayed under a newer interpreter version?
 
-`Status` and `Unknowns` are coupled: a complete judgment should have no unknown
-regions; a partial judgment should name them; an abstention should explain why
-no result was safe to produce.
+`Completeness` and `Unknowns` are coupled: a complete judgment should have no
+unknown predicates; a partial judgment should name them; an abstention should
+explain why no result was safe to produce. Completeness is separate from
+epistemic status, current eligibility, challenge status, lifecycle state,
+expiration, and supersession.
 
-## Ground
+## Dependencies
 
-Aphelion does not have absolute ground truth. It can still preserve useful
-differences in ground strength:
+Aphelion does not have absolute ground truth. It can still preserve explicit
+support, qualification, and contradiction relations over existing evidence and
+state references:
 
-1. explicit current operator input;
-2. current durable state with lineage and version;
-3. immutable evidence object with provenance and content hash;
-4. effect-attempt record or verified execution outcome;
-5. fresh tool observation;
-6. model-authored summary or material floor;
-7. heuristic judgment;
-8. stale recovered context.
+- evidence A supports judgment J for claim C;
+- evidence B contradicts judgment J for claim C;
+- state version C qualifies judgment J until superseded.
 
-Ground strength and source independence are separate axes. A strong record from
-the same interpretive source may be useful as continuity, but it is weak
+These relations should reuse the evidence ledger, effect-attempt ledger, durable
+state, and operator input records rather than create a second evidence ontology.
+The same record can be strong support for one claim and weak support for
+another: current operator input is strong support for present intent or consent,
+but weak support for whether a remote deployment succeeded; an effect-attempt
+record is strong support for "this may already have happened," but not for "this
+completed successfully."
+
+Dependency strength should therefore be computed as a profile, not a scalar
+rank:
+
+- authenticity;
+- integrity;
+- directness;
+- freshness;
+- scope compatibility;
+- verification status;
+- claim compatibility;
+- source lineage;
+- shared fault domains.
+
+Dependency strength and source independence are separate axes. A strong record
+from the same interpretive source may be useful as continuity, but it is weak
 corroboration for dissent. A weaker but decorrelated observation can be more
 useful for challenging a shared false frame.
 
-The ordering is contextual, not a universal proof calculus. A fresh tool
-observation can be wrong; a user message can be ambiguous. The rule is that a
-lower-ground judgment must not silently overrule a higher-ground contradiction,
-and a same-source judgment must not be treated as independent corroboration.
+Source independence should be derived from provenance, not self-declared by the
+interpreter being checked. Relevant fault domains include source observation,
+retrieval result, model call, model family, prompt/material floor, parser
+version, interpreter version, memory summary, environment, and sensor. Two
+judgments from the same parser over independent observations share parser risk
+but not source risk; two different models reading the same stale summary remain
+correlated through that summary.
+
+The rule is that a judgment must not silently overrule a stronger contradiction
+for the same claim, and a same-source judgment must not be treated as independent
+corroboration.
+
+## Consequential Use
+
+A `Use` records the moment a downstream consumer relies on one or more judgments
+to commit Aphelion to a consequence. This is where consequence belongs.
+
+A shell effect judgment can be used by several consumers:
+
+- proposal rendering, with a presentation consequence;
+- authorization, with an authority consequence;
+- effect-attempt persistence, with an execution consequence;
+- diagnostics, with an observational consequence.
+
+The judgment may be identical, but the consumer and consequence are different.
+A harmless presentation judgment must not be reusable for dispatch without a
+durable use record showing that it was qualified under the dispatch policy.
+
+The Go shape below is illustrative design notation, not a committed API:
+
+```go
+type JudgmentUse struct {
+    ID                 string
+    JudgmentIDs        []string
+    ConsumerID         string
+    Consequence        ConsequenceClass
+    PolicyRef          string
+    GroundSnapshotHash string
+    EligibilityVersion string
+    ResultRef          string
+    UsedAt             time.Time
+}
+```
+
+For authority-sensitive state changes, a use record should be committed
+atomically with the local state transition or local effect-attempt ledger entry
+that records intent to act. It cannot be atomic with an external side effect
+such as shell dispatch, Telegram delivery, repository publication, deployment,
+or a remote API call. Qualification alone is not a reusable certificate. At use
+time, the consumer must compare against the judgment lifecycle version,
+dependency or ground snapshot, policy version, and operation or continuation
+generation. If any changed before local commitment, the use fails and is
+recomputed. Recompute must have a bounded retry or time budget; after that, the
+surface should park, ask, or escalate rather than spin indefinitely. If the
+action already crossed the dispatch boundary, later challenge triggers
+reconciliation instead.
+
+A use is consequential if it commits Aphelion to something another turn,
+subsystem, or operator may rely on. Record and qualify uses that cross:
+
+- durable state;
+- external effects;
+- authority, lease, grant, or approval decisions;
+- operator-visible presentation of status, completion, recovery, next action, or
+  authority;
+- model context admission that can shape future recovery, completion, or
+  authority-bearing reasoning.
+
+Pre-commit decorrelation is required only for consequential uses that are
+irreversible or externally costly. This includes external mutation, public or
+operator-visible messages that cannot be unsent, deployment, repository
+publication, and other actions where post-facto reconciliation can only
+forward-correct. Reversible or low-cost consequential uses should still be
+recorded and reconcilable, but they do not all need a synchronous decorrelation
+gate.
 
 ## Challenge
 
@@ -115,9 +334,9 @@ The face proposes how a turn should move. The governor ratifies, adapts, or
 rejects that pressure. The negotiated artifact preserves both sides instead of
 collapsing them into a single summary.
 
-That pattern should be mapped onto settled beliefs:
+That pattern should be mapped onto settled judgments and their uses:
 
-`settled judgment -> challenge -> evidence recheck -> uphold | demote | mark uncertain | verify`
+`settled judgment -> qualification -> use -> later challenge -> adjudication -> reconciliation`
 
 The face or another local surface may initiate dissent, but the face should not
 adjudicate it alone. Dissent is useful only when it can appeal to ground that is
@@ -125,29 +344,47 @@ less correlated with the challenged judgment: current durable state, immutable
 evidence, effect-attempt records, fresh tool observations, timestamps, operation
 lineage, or explicit operator input.
 
-The design object is a typed challenge record. The Go shape below is
-illustrative design notation, not a committed API:
+Challenge events are optional machinery for disputed or uncertain cases. The
+common runtime path is qualification and reconciliation. The lifecycle has
+separate mechanisms:
+
+- qualification: checks whether a judgment is eligible for one specific use and
+  consequence before commitment;
+- invalidation or supersession: handles deterministic state changes such as a
+  newer operation version, expired lease, replaced objective, or changed phase
+  fingerprint;
+- challenge and adjudication: handles conflicting ground, uncertain provenance,
+  or disputed interpretation;
+- reconciliation: handles consequences already produced by a judgment that was
+  later demoted, contradicted, expired, or superseded.
+
+The design object is an append-only challenge stream, not one mutable record
+that contains both the initial disagreement and the final decision. The Go shape
+below is illustrative design notation, not a committed API:
 
 ```go
-type BeliefChallenge struct {
+type JudgmentChallengeEvent struct {
+    ID               string
+    ChallengeID      string
+    EventKind        string // challenge_opened, ground_attached, adjudication_recorded, operational_response_recorded
     SubjectRef       string
-    ChallengedKind   string
+    JudgmentID       string
     ChallengedBy     string
     Reason           string
     EvidenceRefs     []string
     Unknowns         []string
     Adjudicator      string // typed_ruleset, operator, eval_replay, model_advisory
-    Decision         ChallengeDecision // upheld, demoted, contradicted, uncertain, needs_verification
-    DecisionGround   GroundClass
+    Disposition      EpistemicDisposition // supported, contradicted, unresolved
+    Eligibility      FutureEligibility // eligible, suspended, superseded, expired
+    Response         OperationalResponse // none, recompute, block, verify, retract, compensate, escalate
     DecisionEvidence []string
     CreatedAt        time.Time
 }
 ```
 
-This is a design direction, not an implementation requirement for this PR. The
-important architectural move is to name dissent as a first-class path. Without
-it, every registry entry can become locally careful while the system remains
-globally unable to challenge a coherent false premise.
+The important architectural move is to name dissent as a first-class path.
+Without it, every registry entry can become locally careful while the system
+remains globally unable to challenge a coherent false premise.
 
 Challenge decisions that affect authority, durable state, recovery priority, or
 operator-visible completion must be adjudicated by typed rules over decorrelated
@@ -157,8 +394,8 @@ be the authority that demotes or upholds another model-shaped judgment.
 
 Some challenge boundaries are mandatory. A model-authored or heuristic judgment
 about to feed an authority-bearing, durable-state, recovery-selection, or
-completion decision must be checked against at least one decorrelated ground
-source before it acts, whether or not any surface "noticed" a conflict.
+completion use must be qualified against at least one decorrelated ground source
+before it acts, whether or not any surface "noticed" a conflict.
 
 Decorrelated ground is not merely a second record. A judgment is not
 independently corroborated by another artifact that shares the same model call,
@@ -167,10 +404,52 @@ evidence chain. The decorrelation decision is itself a judgment and should use
 typed rules where it affects authority, durable state, recovery priority, or
 completion.
 
+The default must be direction-aware:
+
+- use qualification: if decorrelated support cannot be established for the
+  consequence, block or suspend the use;
+- challenge admission: if the challenge has no minimum ground, reject,
+  deduplicate, rate-limit, or ask for stronger evidence;
+- demotion eligibility: if a serious contradiction exists but decorrelation
+  cannot be established cleanly, do not silently uphold the settled judgment;
+  lower eligibility, mark uncertain, or require verification according to the
+  consequence.
+
+In other words, "fail closed" for action prevents unsafe use. "Fail closed" for
+challenge must not mean preserving a possible false frame merely because the
+system cannot prove independence.
+
+Challenges also have an admission policy. Untrusted content or a model should
+not be able to create an epistemic denial of service by repeatedly manufacturing
+unsupported contradictions. Consequential challenge paths need idempotency,
+deduplication, minimum ground requirements, budgets or rate limits, rules for
+whether pending challenges suspend future use, and operator escalation
+thresholds.
+
+Reconciliation is consequence-specific. A projection can be edited or retracted.
+A recovery choice can be recomputed. A durable state transition can be
+superseded. An external mutation, Telegram message, repository publication, or
+deployment usually cannot be undone by demoting the judgment that authorized it.
+For irreversible or externally visible effects, reconciliation means
+forward-correction: verify the actual state, record the contradiction, notify or
+escalate to the operator, compensate when a domain-specific compensation exists,
+and prevent blind retry. It must never erase the prior use or the effect attempt
+that may already have happened.
+
 ## Rules
 
 - No non-structural judgment may silently acquire greater consequence by being
-  converted into a typed object.
+  converted into a typed object or reused by a higher-consequence consumer.
+- Consequence belongs to `Use`: every consequential consumer must qualify the
+  judgment under its own policy and record the commitment it made.
+- A use is consequential when it commits Aphelion to something another turn,
+  subsystem, or operator may rely on.
+- Authority-sensitive uses must be committed atomically with the local state
+  transition or local effect-attempt ledger entry they produce; external effects
+  are handled through write-ahead attempts and later reconciliation.
+- Irreversible or externally costly consequential uses require a pre-commit
+  decorrelation gate; reversible consequential uses may rely on recording and
+  reconciliation.
 - More information may narrow a judgment. Missing information may only preserve
   or increase restrictions.
 - A partial interpretation must expose its unknown regions or abstain before it
@@ -180,17 +459,23 @@ completion.
 - Presentation judgments may render an existing record, but they must not own
   the truth behind it.
 - A settled judgment that later conflicts with stronger ground must have a
-  demotion or verification path.
+  demotion or verification path; demotion changes future eligibility and
+  triggers reconciliation of prior uses rather than rewriting history.
 - Model-authored or heuristic judgments that drive authority, durable state,
-  recovery selection, or completion must cross a mandatory challenge boundary
-  against decorrelated ground.
+  recovery selection, or completion must be qualified against decorrelated ground
+  before use.
 - Challenge decisions that affect authority, durable state, recovery priority,
   or completion must be ruleset-, operator-, or replay-adjudicated, not decided
   by another unconstrained model judgment.
 - Correlated judgments must not be counted as independent evidence.
-- Eval oracles are development evidence, not runtime enforcement.
-- Centralize the judgment contract, challenge contract, registry,
-  observability, and replay harness; keep domain mechanisms local.
+- Eval oracles are release-gate evidence, not runtime enforcement.
+- Qualification compare-and-swap must have bounded retry, timeout, or escalation
+  behavior.
+- Centralize the judgment, consequential-use, dependency, reconciliation,
+  registry, observability, and replay contracts; keep domain mechanisms local.
+
+This does not make Aphelion impossible to fool. It makes consequential capture
+visible, bounded, and recoverable.
 
 Monotonicity and demotion operate at different levels. Monotonicity governs
 interpretation inside the current frame: partial parsing and missing
@@ -234,19 +519,21 @@ multi-axis profile:
 | --- | --- |
 | Input trust | `typed trusted`, `typed untrusted`, `bounded text`, `free text`, `model output`, `external payload` |
 | Mechanism | `compiler`, `parser`, `recognizer`, `ruleset`, `scorer`, `ranker`, `model judgment` |
-| Consequence | `presentation`, `salience`, `perception`, `control flow`, `durable state`, `authority narrowing`, `authority granting` |
+| Use consequence | `presentation`, `salience`, `perception`, `control flow`, `durable state`, `authority narrowing`, `authority granting` |
 | Failure semantics | `fail closed`, `conservative upper bound`, `abstain`, `defer`, `fallback`, `silent default` |
-| Ground class | `operator assertion`, `current durable state`, `typed evidence`, `effect attempt`, `fresh observation`, `model summary`, `heuristic judgment`, `stale context` |
+| Dependency profile | authenticity, integrity, directness, freshness, scope compatibility, verification status, claim compatibility, source lineage, shared fault domains |
 | Dissent path | `none`, `local repair`, `typed challenge`, `verification required`, `operator disambiguation`, `eval replay` |
 | Assurance | `examples`, `unit tests`, `adversarial corpus`, `fuzz/property tests`, `shadow evaluation`, `production calibration` |
 | Lifecycle | `experimental`, `canary`, `production`, `deprecated` |
-| Compliance | `satisfies`, `partial`, `debt`, `not applicable` |
+| Local compliance | `satisfies`, `partial`, `debt`, `not applicable` |
+| End-to-end readiness | `ready`, `blocked by dependency`, `shadow only`, `unassessed` |
+| Dependencies | stable surface IDs once the registry becomes machine-readable |
 
 `projection` remains a state-surface truth class in
 [`state-surfaces.md`](state-surfaces.md). Do not reuse it as an interpretation
 maturity label.
 
-## Current Compliance
+## Current Local Compliance
 
 Rows marked `satisfies` already have an appropriate challenge, verification,
 or non-authority boundary for their consequence. Rows marked `partial` have a
@@ -256,10 +543,31 @@ is treated as a production example of this architecture. Rows marked
 `not applicable` do not make settled judgments consequential enough to require
 a demotion path.
 
+Use `partial` when the surface has an implemented local guard that bounds its
+own consequence, even if it does not yet participate in the general challenge
+model. Use `debt` when the surface is broad enough to shape perception,
+authority, recovery, or completion across other surfaces and lacks a typed
+challenge or demotion path. In short: `partial` means "locally bounded but not
+yet integrated"; `debt` means "can shape the frame other surfaces inherit."
+
+The `Local compliance` column in the current table does not prove the
+end-to-end path is ready. A surface may satisfy its local contract while still
+depending on an upstream interpretation marked `partial` or `debt`. That
+dependency must be visible before the pipeline can be called ready.
+
 The registry is hand-maintained today. Architecture review should require new
 consequential interpreters to add or update a row. Future work can make anchor
 existence and missing-surface detection more mechanical; until then,
 completeness is review-enforced rather than fully CI-proven.
+
+This registry is seeded, not exhaustive. It should be replaced with a
+machine-readable registry once implementation begins, with stable `SurfaceID`,
+owner, code anchors, input and output judgment kinds, consumers, consequence
+classes, dependencies, challenge adapter, assurance evidence, lifecycle status,
+local compliance, and end-to-end readiness. Markdown should eventually be
+generated from that registry. CI can then verify anchor existence, unique IDs,
+and owners for consequential judgment kinds without pretending to prove semantic
+completeness.
 
 ## Current Registry
 
@@ -267,12 +575,14 @@ The registry describes edges:
 
 `raw source -> interpreter -> judgment -> consumer -> consequence -> trace`
 
-| Surface | Code anchors | Input trust | Mechanism | Consequence | Ground class | Dissent path | Compliance | Failure semantics / assurance |
+| Surface | Code anchors | Input trust | Mechanism | Use consequence | Dependency profile | Dissent path | Local compliance | Failure semantics / assurance |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Shell effect planner | [`commandeffect/effect.go`](../../commandeffect/effect.go) | bounded text/free shell string | parser + ruleset | authority narrowing, control flow, durable effect-attempt state | bounded text + typed plan; later effect attempt or fresh observation outranks it | verification required when outcome/effect evidence contradicts plan; eval replay for parser drift | partial | fail closed or conservative upper bound for unknown, dynamic, or multi-authority plans; unit tests + adversarial corpus; production restricted-shell gate |
 | Effect authorization | [`effectauth/effectauth.go`](../../effectauth/effectauth.go) | typed trusted envelope + command judgment | compiler/ruleset | authority narrowing/denial | current durable envelope, grant, lease, and command judgment | local repair/block for invalid contracts; operator disambiguation for missing authority | satisfies | fail closed for invalid active envelopes and disallowed effects; unit tests; production authority membrane |
 | Exec approval presentation | [`tool/exec_guard.go`](../../tool/exec_guard.go) | bounded text | recognizer | presentation and operator review salience | typed effect decision should outrank presentation text | none as authority; projection should be regenerated from typed decision | not applicable | defer to typed effect decisions; proposal text is not authority; unit tests; production presentation helper |
 | Authority contract compilation | [`session/authority_contract.go`](../../session/authority_contract.go), [`session/authority_contract_compiler.go`](../../session/authority_contract_compiler.go), [`session/types_continuation.go`](../../session/types_continuation.go) | typed trusted fields plus bounded effect text | compiler with limited recognizers | authority narrowing/grant constraints | current durable proposal, phase, envelope, and exact action tokens | typed repair/block when prose and actions contradict; operator disambiguation for unsafe repair | satisfies | fail closed on contradictions; exact actions required for sensitive lease classes; unit tests; production |
+| Dependency decorrelation adjudication | target surface; no current code anchor | judgment metadata, evidence refs, interpreter versions, lineage | ruleset | qualification and demotion gating for authority, durable state, recovery, and completion | compares source independence across model call, material floor, memory summary, parser output, interpreter version, and upstream evidence chain | mandatory typed challenge boundary; operator or eval replay when rules cannot decide | debt | use qualification blocks when support independence cannot be established; challenge/demotion marks uncertain or requires verification when serious contradiction cannot be decorrelated cleanly; needs unit tests, incident fixtures, and replay corpus before production use |
+| Judgment use and commitment | target surface; no current code anchor | qualified judgment IDs, policy refs, ground snapshots, operation generations | compiler/ruleset | records presentation, state, authority, execution, and diagnostic commitments | qualified judgment plus ground snapshot and policy version | later challenge must locate and reconcile affected uses | debt | must compare-and-swap before local commitment; authority-sensitive use must be atomic with local state transition or local effect-attempt ledger entry; external effects rely on write-ahead attempts and reconciliation |
 | Brokerage execution contract parsing | [`pipeline/brokerage.go`](../../pipeline/brokerage.go), [`runtime/brokerage.go`](../../runtime/brokerage.go), [`turn/brokerage_stage.go`](../../turn/brokerage_stage.go) | model output and bounded text | parser + convergence loop | control flow: inspect/question/answer, plan seeding, governor awareness | model-authored pressure + governor ratification; lower ground than typed evidence | local argumentation preserves disagreement; not yet a general settled-belief demotion path | partial | fallback, adapt, reject, or stable-contract stop; unit tests; production but not authority-granting |
 | Memory context governor | [`memory/context_governor.go`](../../memory/context_governor.go), [`memory/perception_budget.go`](../../memory/perception_budget.go) | free text + typed context requests | scorer/ruleset | perception and salience: lean/normal/deep/doctor recall and layer admission | heuristic judgment over memory and request text | typed challenge needed when recalled memory conflicts with current evidence or operator request | debt | conservative budget cap and suppression records; unit tests; production calibration needed |
 | Evidence hydration selection | [`session/store_evidence.go`](../../session/store_evidence.go) | typed evidence metadata + query text | scorer/ruleset | perception and durable hydration trace | typed evidence metadata and scoped query | can provide decorrelated ground for challenges; missing evidence records trigger fallback | partial | record missing evidence and fallback use; do not cross session scope silently; unit tests + trajectory evals; production |
@@ -287,8 +597,464 @@ The registry describes edges:
 | Telegram media and callback routing | [`telegram/client_media.go`](../../telegram/client_media.go), [`internal/telegramcommands`](../../internal/telegramcommands), [`internal/telegramdecision`](../../internal/telegramdecision) | external Telegram payloads | parser + ruleset | control flow and presentation: route media, callbacks, review decisions | external payload + durable callback/projection state | stale callbacks fail closed; operator disambiguation for ambiguous routing | satisfies | durable accepted/parked/terminal state; unit/integration tests; production |
 | Outbound media classification | [`runtime/outbound_media.go`](../../runtime/outbound_media.go) | reply paths and MIME hints | recognizer/ruleset | presentation only | file containment + MIME/path hints | none as authority; unsafe/unsupported media is dropped | not applicable | drop unsafe/unsupported media; containment is structural; unit tests; production |
 | Operation phase gates | [`runtime/operation_phase_gate.go`](../../runtime/operation_phase_gate.go), [`runtime/continuation_operation_contract.go`](../../runtime/continuation_operation_contract.go) | typed phase state plus reason codes | compiler/ruleset | authority narrowing and presentation: approval gate level/reason | durable phase state + authority reason codes | repair/block events become challenge evidence for stale or contradictory phase authority | partial | conservative gate on missing or contradictory phase authority; unit tests; production |
-| Boundary attack and trajectory eval oracles | [`runtime/eval_boundary_attack.go`](../../runtime/eval_boundary_attack.go), [`runtime/eval_trajectory.go`](../../runtime/eval_trajectory.go) | synthetic/live transcripts and execution events | recognizer + oracle rules | evaluation evidence only | replayed trace/eval fixture, not runtime truth | eval replay can challenge release claims and classifier versions | satisfies | conservative findings; not runtime enforcement; deterministic and stochastic evals; release gate candidate |
+| Boundary attack, trajectory, and scenario-generator eval oracles | [`runtime/eval_boundary_attack.go`](../../runtime/eval_boundary_attack.go), [`runtime/eval_trajectory.go`](../../runtime/eval_trajectory.go) | synthetic/live transcripts, scenario generator output, execution events | recognizer + oracle rules | release-gate evidence only | replayed trace/eval fixture, not runtime truth; generator assumptions are lower ground than external benchmark traces and incidents | eval replay can challenge release claims and classifier versions; generator blind spots require benchmark adapters and incident-derived fixtures | partial | conservative findings; not runtime enforcement; deterministic and stochastic evals; release gate candidate; generator coverage remains audited debt |
 | Model/role routing | [`docs/architecture/prompt-model-map.md`](prompt-model-map.md), runtime model-slot code | typed route/slot config | ruleset | cost/quality selection only | operator config + documented defaults | operator override and bakeoff replay | not applicable | fallback chain; unit tests + live bakeoffs; production |
+
+Seed rows still needed before this can become a complete interpretation map:
+
+- effect-outcome verification and reconciliation;
+- tool-input parsing and repair;
+- capability-grant and principal matching;
+- path and sandbox containment;
+- provider error and retry classification;
+- operation completion and objective derivation;
+- continuation supersession and projection validity.
+
+End-to-end readiness examples:
+
+| Slice | Local status | End-to-end readiness | Dependency note |
+| --- | --- | --- | --- |
+| Shell execution | shell planner and effect authorization are locally bounded | blocked by dependency | needs one immutable effect judgment ID and plan hash consumed by proposal rendering, authorization, use record, and effect-attempt persistence |
+| Recovery/re-entry | arbitration and recommendation surfaces are locally bounded | blocked by dependency | needs shared consequential-use contract, current-intent judgment, operation judgment, and dependency decorrelation adjudication |
+| Evidence hydration | scoped hydration is locally bounded | shadow only for judgment demotion | needs salience judgments and use records before recalled memory can participate in demotion logic |
+
+## Implementation Payoff
+
+If the consequential-use architecture is implemented, it should simplify
+several parts of the current system. The goal is not to add a new central
+classifier. The goal is to replace repeated local substitutes for provenance,
+completeness, use tracking, and contradiction handling with one contract that local
+interpreters can emit and consumers can inspect.
+
+Before:
+
+```text
+                 command text
+                      |
+        +-------------+-------------+
+        |             |             |
+ shell planner   proposal text   effect auth
+        |             |             |
+  local labels   local matcher   reparses command
+        |             |             |
+        +------+------+-------------+
+               |
+        effect attempt
+               |
+        outcome evidence
+```
+
+After:
+
+```text
+                 command text
+                      |
+              effect judgment
+       {effects, unknowns, ground refs, version}
+                      |
+        +-------------+-------------+
+        |             |             |
+ proposal view   effect auth   attempt ledger
+        |             |             |
+ projection use  authority use execution use
+        |             |             |
+        +-------------+-------------+
+                      |
+      effect attempt / projection / diagnostic
+                      |
+    outcome evidence challenges judgment and reconciles uses
+```
+
+The same shape applies outside shell execution. Today, recovery, memory,
+continuity, and recommendations each carry local fragments of "why this
+matters" and "what could contradict it." The target architecture turns those
+fragments into reusable judgment records.
+
+```text
+Before:
+
+operator request
+      |
+working objective      old operation       memory recall
+      |                     |                   |
+local matcher          local viability      local scorer
+      |                     |                   |
+      +---------- competing conclusions --------+
+                         |
+                 recovery or next step
+
+After:
+
+operator request     old operation     memory recall
+      |                    |                |
+ intent judgment   operation judgment  salience judgment
+      |                    |                |
+      +--------- qualification/use ---------+
+                         |
+              recovery commitment recorded
+                         |
+          current, stale, ambiguous, or verify
+```
+
+Concrete before/after examples:
+
+| Area | Before | After |
+| --- | --- | --- |
+| Shell effects | Planner, proposal rendering, authorization, and attempt persistence each inspect command text. | One effect judgment carries effects, unknowns, ground, and version; each consumer records its own use under presentation, authority, or execution policy. |
+| Recovery | Budget recovery, re-entry, and continuation viability each decide stale-versus-current with local matchers. | A shared consequential-use contract plus local adapters compares current intent, operation lineage, freshness, and explicit resume support, then records the chosen recovery use. |
+| Continuity | Material-floor or recovery prose can require presentation-specific quarantine. | Continuity arrives as a visibility judgment with evidence refs and a contradiction path. |
+| Memory | Admission and hydration explain little about why recalled material entered context. | Hydration records the salience judgment, the perception use, dependency profile, scope, and stronger facts that could demote it. |
+| Redaction | Output, command metadata, errors, and artifacts need separate safety membranes. | Evidence safety becomes a judgment attached to every persisted or hydratable artifact. |
+| Evals | A trajectory can fail without showing which interpretation moved the system. | Replay compares stored judgments and uses across interpreter versions and reports consequence changes. |
+
+Concrete cleanup targets:
+
+- Shell planning, proposal rendering, effect authorization, and effect-attempt
+  persistence can consume the same effect judgment and record separate uses
+  instead of reparsing command text at each layer.
+- Recovery arbitration, budget recovery, and re-entry recommendations can share
+  one stale-versus-current consequential-use contract and reusable typed predicates
+  instead of carrying separate token overlap, freshness, and explicit-resume
+  rules.
+- Material-floor, continuity, and constitution repair paths can stop converting
+  prose into special cases and instead attach visibility and contradiction
+  decisions to typed judgments.
+- Evidence hydration and memory admission can expose why a recalled object was
+  admitted, which perception use consumed it, what ground it rests on, and which
+  current facts could demote it.
+- Eval oracles can replay stored judgments against newer interpreter versions
+  and report changed uses and consequences, rather than only reporting pass/fail
+  outputs.
+- Operator-facing diagnostics can answer "which judgment caused this?" and
+  "which use committed it?" and "what could contradict it?" without
+  reconstructing the answer from scattered events.
+
+This is also a deletion plan. Successful implementation should remove
+duplicated matcher logic, ad hoc reason strings, presentation-driven authority
+checks, and one-off "stale versus current" policies where a shared judgment or
+challenge record can carry the same fact more truthfully.
+
+## Operator Experience
+
+The payoff should be visible to the operator. The user should not experience the
+architecture as more ceremony. They should experience it as fewer stale prompts,
+clearer blockers, better recovery, and more precise explanations when Aphelion
+refuses to act.
+
+Golden path: approve bounded work.
+
+```text
+Before:
+
+User: bundle artifacts, commit, and push
+Aphelion: proposes a phase
+User: approves
+Aphelion: asks for more approval or stalls on a local mismatch
+User: cannot tell which fact blocked the run
+
+After:
+
+User: bundle artifacts, commit, and push
+Aphelion: proposes one typed plan with repo publication authority
+User: approves
+Aphelion: records authority and execution uses, then effect attempts before dispatch
+Aphelion: completes or asks for verification with named evidence
+User sees: result, or a blocker tied to the exact judgment that failed
+```
+
+Why better: the proposal, authorization, attempt ledger, and completion check
+come from the same judgment chain, while use records separate presentation,
+authority, and execution consequences. The operator no longer has to infer
+whether a visible card, a prose objective, and the typed authority envelope
+disagree.
+
+Golden path: recover after interruption.
+
+```text
+Before:
+
+Provider budget ends
+Recovery scans durable history
+An older active operation can look more recoverable than the current request
+The next turn resumes yesterday's work or asks a generic "continue?"
+
+After:
+
+Provider budget ends
+Recovery emits a candidate judgment
+Current request and working objective provide stronger ground
+Qualification records why the recovery use is compatible or blocked
+The next turn resumes compatible work or asks a typed disambiguation question
+```
+
+Why better: durable history remains evidence, not authority. The operator sees a
+recovery path only when it is compatible with current intent or explicitly
+selected.
+
+Golden path: hydrate evidence under pressure.
+
+```text
+Before:
+
+Long history accumulates
+Summary or memory recall enters context because it seems relevant
+The model inherits a stale premise and repeats it confidently
+
+After:
+
+Long history accumulates
+Hydration emits a salience judgment with ground and scope
+Aphelion records the perception use before adding it to context
+Contradictory current evidence can challenge the recalled premise
+Aphelion either uses the evidence, marks it uncertain, or asks for verification
+```
+
+Why better: memory helps without silently becoming equal to current operator
+input, verified execution, or immutable evidence.
+
+Edge case: stale approval card.
+
+```text
+Before:
+
+Old card remains visible
+Operator taps it after the operation moved on
+Callback path may reject the UI event, but related authority can remain unclear
+
+After:
+
+Callback carries projection and authority fingerprints
+Current durable state challenges the stale projection
+Aphelion terminalizes the callback and points to the superseding operation
+```
+
+Expected experience: "That approval is stale; the current operation is X." The
+system should not ask the operator to guess whether the button still matters.
+
+Edge case: correlated false premise.
+
+```text
+Before:
+
+Memory summary says phase F is done
+Recommendation ranker suggests phase G
+Recovery sees phase G as next
+All three agree because they inherited the same false summary
+
+After:
+
+Phase-completion judgment cites model summary ground
+Effect-attempt ledger has no verified completion
+Qualification blocks the phase-G authority use and opens a challenge
+Aphelion asks to verify phase F or marks phase G blocked
+```
+
+Expected experience: Aphelion does not sound less confident merely because it is
+confused. It names the missing stronger ground.
+
+Edge case: ambiguous operator intent.
+
+```text
+Before:
+
+User: do not resume the scout, finish the PDF
+Token overlap sees "scout" and keeps the scout operation live
+
+After:
+
+Intent judgment records negation and target objective
+Recovery candidate judgment is challenged by current operator input
+Scout is suppressed; PDF remains current
+```
+
+Expected experience: negation and recency are not taste signals. They are ground
+for suppressing the wrong continuation.
+
+Edge case: unsafe command interpretation.
+
+```text
+Before:
+
+Command text has one visible safe label but hidden execution behavior
+Proposal describes the visible label
+The shell executes the hidden behavior
+
+After:
+
+Effect judgment exposes unknown, dynamic, or multi-authority regions
+Authorization operates on the conservative upper bound
+Aphelion rejects or asks for a split typed operation
+```
+
+Expected experience: the operator sees a refusal or split request that explains
+which part could not be bounded, not a misleading approval card.
+
+These flows are the user-facing test of the design. A correct implementation
+should reduce generic "continue?" prompts, stale approval cards, unexplained
+silence, repeated plans, and confident answers grounded only in inherited model
+state. It should replace them with specific next actions: complete, verify,
+ask, suppress, demote, or block.
+
+## Rollout Sequence
+
+Do not build a universal judgment framework first. Two vertical slices should
+teach the abstraction what it actually needs:
+
+1. Registry and shadow traces. Assign stable surface IDs and emit
+   diagnostic-only judgment envelopes. No runtime decision changes.
+2. Shell effect interpretation. The planner creates one immutable
+   `EffectJudgment`; proposal rendering, authorization, effect-attempt
+   persistence, diagnostics, and replay consume its ID and hash. Authorization
+   records a `JudgmentUse`; dispatch atomically records the use and local
+   effect-attempt ledger entry. No consumer reparses the command.
+3. Recovery arbitration. Candidate compatibility and current-intent judgments
+   receive the same envelope, but a different domain policy. This tests
+   staleness, supersession, correlation, and challenge without shell semantics.
+4. Challenge and adjudication events. Introduce qualification, invalidation,
+   challenge admission, adjudication, and dependency propagation.
+5. Reconciliation. Add consequence-specific handlers for projections, current
+   state, recovery choices, and external effects.
+6. Memory and hydration. Run in shadow mode first. These surfaces are high
+   volume and can generate challenge storms, so calibrate precision and operator
+   burden before enforcement.
+
+Persist only consequential judgments, consequential uses, or records required
+for replay. Local intermediate calculations should remain local; otherwise the
+interpretation plane becomes a log of every fleeting calculation rather than a
+governed commitment surface.
+
+Persist `Use` records only when a consumer commits a consequence that future code
+may need to audit, challenge, or reconcile: authority, durable state, execution,
+recovery selection, completion, evidence hydration, or operator-visible
+projection. Low-consequence scoring, ranking, formatting, and local helper
+calculations can remain unpersisted when they do not cross a consequence
+boundary. The registry includes some `not applicable` rows to preserve this
+boundary; implementation should not make every helper pay the full judgment/use
+cost merely for symmetry.
+
+## Evaluation Model
+
+Prefer adapting existing benchmarks before inventing a new benchmark. Suites
+such as MemoryArena, EMemBench, EvoMemBench, WebArena, OSWorld, tau-bench, and
+SWE-bench-style tasks provide realism, comparability, and long-horizon pressure
+that a local toy environment will not capture on its own.
+
+Those benchmarks should be instrumented with Aphelion-specific traces:
+
+- which judgments were emitted;
+- which ground each judgment cited;
+- whether the ground was decorrelated from the challenged judgment;
+- which consumers acted on each judgment;
+- whether a challenge fired, was skipped, or was adjudicated;
+- whether a judgment was upheld, demoted, marked uncertain, or verified.
+
+Existing benchmarks are not enough by themselves. They usually measure task
+completion, memory utility, tool use, or environment success. They do not
+directly assert Aphelion-specific invariants such as "correlated judgments are
+not independent ground" or "fresh operator intent outranks stale durable
+history." For those invariants, Aphelion also needs a small deterministic
+judgment game with a hidden world, several imperfect interpreters, and a limited
+set of actions.
+
+One minimal game:
+
+1. The world contains hidden facts, observations, a current objective, a stale
+   objective, a small evidence ledger, one possible mutation, one visible
+   projection, and one operator message.
+2. Interpreters emit judgments about intent, relevance, authority, completion,
+   evidence salience, and projection visibility. Some interpreters share a
+   correlated false premise; others read decorrelated ground.
+3. Consumers qualify judgments for uses: proposal rendering, recovery choice,
+   evidence hydration, approval request, dispatch, or diagnostic trace.
+4. The agent can act by asking, verifying, suppressing, recovering, hydrating,
+   proposing approval, executing, demoting a prior judgment, or reconciling a
+   prior use.
+5. The transition system records every judgment consumed, every use committed,
+   every challenge triggered, every adjudication, every reconciliation response,
+   every effect, and every user-visible projection.
+6. The scenario generator enumerates combinations of stale/current intent,
+   terminal/active operations, missing evidence, contradictory evidence,
+   correlated model summaries, and valid or invalid authority envelopes.
+
+The expected behavior is not only task completion. The gate should measure:
+
+- false authority: an action executes from a judgment that lacked sufficient
+  ground, skipped mandatory qualification, or lacked a use record;
+- false suppression: current work is suppressed by stale or correlated history;
+- demotion latency: how many steps pass before contradictory ground demotes a
+  bad judgment;
+- challenge precision and recall: whether challenges fire when required without
+  blocking unrelated local judgments;
+- recovery quality: whether the system resumes compatible work, asks on
+  ambiguity, and refuses stale authority;
+- context fidelity: whether hydration uses the evidence needed to resolve the
+  conflict rather than reinforcing the same correlated premise;
+- operator burden: how many questions or approvals are needed to reach the
+  desired outcome or a correct blocker.
+
+Hard safety properties should be explicit:
+
+- no high-consequence use without qualification;
+- no correlated supports counted as independent ground;
+- no suspended, expired, or superseded judgment used for a new consequence;
+- no model-only adjudication of authority-bearing conflict;
+- no prior effect attempt erased by later demotion;
+- no uncertain mutation automatically retried.
+
+Liveness properties should be explicit too:
+
+- decorrelated contradiction eventually changes eligibility;
+- inconclusive verification eventually yields another bounded surface;
+- a false challenge cannot stall the system forever;
+- repeated qualification compare-and-swap conflicts eventually park, ask, or
+  escalate instead of recomputing forever;
+- recovery converges on current compatible intent;
+- operator burden remains bounded.
+
+The game should include adversarial fixtures, but it should also enumerate the
+benign cases where no challenge is necessary. That lets implementation changes
+optimize for fewer steps to correct outcomes without hiding the blocker and
+degradation cases this design is meant to expose.
+
+The deterministic game is not ground truth. Its scenario generator is another
+interpretation surface, built by the same project that builds the runtime, and
+can inherit the same blind spots. Treat it as release-gate evidence, not runtime
+authority. Its assumptions should be versioned, replayable, and challenged by:
+
+- incident-derived fixtures from live failures;
+- adapters for external benchmarks and trajectories;
+- mutation tests that perturb stale/current state, dependency profiles, and
+  interpreter outputs;
+- held-out scenarios reviewed separately from the implementation under test.
+
+The evaluation stack should be layered:
+
+- benchmark adapters: first choice for ecological validity and comparison
+  against existing agent and memory work;
+- deterministic game: release-time gate for Aphelion-specific invariants,
+  transition coverage, and regression debugging, not runtime enforcement;
+- stochastic replay: provider-backed rollouts over longer histories, noisy
+  summaries, context pressure, and model disagreement to measure whether
+  challenges fire too often, too late, or in the wrong place;
+- shadow production metrics: non-authorizing telemetry for challenge rate,
+  demotion latency, false challenge suppressions, hydration hit rate, stale
+  recovery suppressions, operator burden, and model disagreement.
+
+Existing benchmarks should provide realism and external pressure. The
+deterministic harness should provide proof-shaped regression coverage for the
+architecture's safety laws, while remaining honest that its generator is another
+audited judgment surface. Stochastic replay and shadow metrics should calibrate
+judgment quality, taste, cost, and operator burden under realistic uncertainty.
+
+Scoring should be lexicographic:
+
+1. hard safety violations, which must remain zero;
+2. epistemic and liveness quality, including false suppression, challenge recall,
+   and demotion latency;
+3. efficiency, including tokens, steps, hydration calls, and operator questions.
+
+Do not use a weighted aggregate that lets lower cost compensate for false
+authority or erased side-effect history.
 
 ## Review Checklist
 
@@ -296,21 +1062,29 @@ When a PR adds or changes interpretation-like behavior, reviewers should ask:
 
 1. What raw source is interpreted?
 2. What judgment is produced, and does it carry enough provenance?
-3. What consumer acts on the judgment?
-4. What consequence class can the judgment affect?
-5. What happens to unknown, partial, stale, or contradictory input?
-6. Can a non-structural judgment become more consequential after conversion to
+3. What ground supports, qualifies, or contradicts the judgment?
+4. What consumer uses the judgment, under which policy, to commit which
+   consequence?
+5. If the use commits durable state or execution intent, is it recorded
+   atomically with the local state transition or local effect-attempt ledger
+   entry?
+6. What happens to unknown, partial, stale, or contradictory input?
+7. Can a non-structural judgment become more consequential after conversion to
    a typed object?
-7. What ground class supports the judgment?
-8. What stronger ground could contradict or demote it?
+8. What stronger or less-correlated ground could contradict or demote it?
 9. Are correlated judgments being counted as independent evidence?
 10. If a challenge is possible, what adjudicates it: typed rules, operator
     disambiguation, eval replay, or model-advisory text?
-11. Which tests cover false positives, false negatives, partial parsing,
+11. Is the decorrelation decision itself registered, tested, and replayable?
+12. What reconciles prior uses if the judgment is later demoted, contradicted,
+    expired, or superseded?
+13. What is the retry, timeout, or escalation bound for qualification
+    compare-and-swap conflicts?
+14. Which tests cover false positives, false negatives, partial parsing,
     stale-state composition, downstream consumer behavior, and later
     contradiction?
-12. Is the judgment replayable under a new interpreter version?
+15. Is the judgment replayable under a new interpreter version?
 
 Local mechanisms should stay local. The shared architecture work is to make the
-judgment and challenge edges visible, replayable, and conservative enough that
-Aphelion can challenge its own perceived reality later.
+judgment, use, and challenge edges visible, replayable, and conservative enough
+that Aphelion can challenge its own perceived reality later.
