@@ -126,12 +126,18 @@ func grantToolInvoke(t *testing.T, store *session.SQLiteStore, toolName string, 
 func grantAuthorityUseLease(t *testing.T, store *session.SQLiteStore, key session.SessionKey) {
 	t.Helper()
 
+	grantAuthorityUseLeaseWithID(t, store, key, "lease-authority-use-"+session.SessionIDForKey(key))
+}
+
+func grantAuthorityUseLeaseWithID(t *testing.T, store *session.SQLiteStore, key session.SessionKey, leaseID string) {
+	t.Helper()
+
 	now := time.Now().UTC()
 	if err := store.UpdateContinuationState(key, session.ContinuationState{
 		Status:         session.ContinuationStatusApproved,
 		RemainingTurns: 1,
 		ContinuationLease: session.ContinuationLease{
-			ID:             "lease-authority-use-" + session.SessionIDForKey(key),
+			ID:             leaseID,
 			Status:         session.ContinuationLeaseStatusActive,
 			MaxTurns:       1,
 			RemainingTurns: 1,

@@ -125,9 +125,9 @@ func (r *Registry) authorityUseRefForGrant(ctx context.Context, toolName string,
 	}
 	sessionID := session.SessionIDForKey(key)
 	if contextRef, ok := AuthorityUseRefFromContext(ctx); ok {
-		contextRef = authorityUseRefForSession(contextRef, sessionID)
-		if strings.TrimSpace(contextRef.SessionID) != sessionID {
-			return ref, fmt.Errorf("tool %q authority evidence belongs to session %q, not %q", strings.TrimSpace(toolName), strings.TrimSpace(contextRef.SessionID), sessionID)
+		contextRef, err := r.validateContextAuthorityUseRef(toolName, key, sessionID, contextRef, time.Now().UTC())
+		if err != nil {
+			return ref, err
 		}
 		if authorityUseRefHasLeaseEvidence(contextRef) {
 			return contextRef, nil
@@ -165,13 +165,95 @@ func (r *Registry) authorityUseRefForGrant(ctx context.Context, toolName string,
 	return session.NormalizeAuthorityUseRef(ref), nil
 }
 
-func authorityUseRefForSession(ref session.AuthorityUseRef, sessionID string) session.AuthorityUseRef {
+func (r *Registry) validateContextAuthorityUseRef(toolName string, key session.SessionKey, sessionID string, ref session.AuthorityUseRef, now time.Time) (session.AuthorityUseRef, error) {
 	ref = session.NormalizeAuthorityUseRef(ref)
 	sessionID = strings.TrimSpace(sessionID)
-	if ref.SessionID == "" {
-		ref.SessionID = sessionID
+	if strings.TrimSpace(ref.SessionID) == "" {
+		return session.AuthorityUseRef{}, fmt.Errorf("tool %q authority evidence must include a session_id", strings.TrimSpace(toolName))
 	}
-	return session.NormalizeAuthorityUseRef(ref)
+	if ref.SessionID != sessionID {
+		return session.AuthorityUseRef{}, fmt.Errorf("tool %q authority evidence belongs to session %q, not %q", strings.TrimSpace(toolName), strings.TrimSpace(ref.SessionID), sessionID)
+	}
+	if strings.TrimSpace(ref.AuthoritySource) == "" {
+		return session.AuthorityUseRef{}, fmt.Errorf("tool %q authority evidence must include an authority_source", strings.TrimSpace(toolName))
+	}
+	sources := strings.Split(ref.AuthoritySource, "+")
+	validated := session.AuthorityUseRef{SessionID: sessionID, TurnRunID: ref.TurnRunID}
+	validatedSources := make([]string, 0, len(sources))
+	seen := map[string]struct{}{}
+	for _, source := range sources {
+		source = strings.TrimSpace(source)
+		if source == "" {
+			continue
+		}
+		if _, ok := seen[source]; ok {
+			continue
+		}
+		seen[source] = struct{}{}
+		switch source {
+		case "continuation_lease":
+			if strings.TrimSpace(ref.ContinuationLeaseID) == "" {
+				return session.AuthorityUseRef{}, fmt.Errorf("tool %q continuation authority evidence is missing continuation_lease_id", strings.TrimSpace(toolName))
+			}
+			if err := r.validateContinuationAuthorityUseRef(key, ref.ContinuationLeaseID, now); err != nil {
+				return session.AuthorityUseRef{}, err
+			}
+			validated.ContinuationLeaseID = ref.ContinuationLeaseID
+			validatedSources = append(validatedSources, source)
+		case "operation_plan_lease":
+			if strings.TrimSpace(ref.OperationPlanLeaseID) == "" {
+				return session.AuthorityUseRef{}, fmt.Errorf("tool %q operation-plan authority evidence is missing operation_plan_lease_id", strings.TrimSpace(toolName))
+			}
+			if err := r.validateOperationPlanAuthorityUseRef(key, ref.OperationPlanLeaseID, now); err != nil {
+				return session.AuthorityUseRef{}, err
+			}
+			validated.OperationPlanLeaseID = ref.OperationPlanLeaseID
+			validatedSources = append(validatedSources, source)
+		default:
+			return session.AuthorityUseRef{}, fmt.Errorf("tool %q authority evidence has unsupported authority_source %q", strings.TrimSpace(toolName), source)
+		}
+	}
+	if len(validatedSources) == 0 {
+		return session.AuthorityUseRef{}, fmt.Errorf("tool %q authority evidence must include active continuation or operation plan lease evidence", strings.TrimSpace(toolName))
+	}
+	validated.AuthoritySource = strings.Join(validatedSources, "+")
+	return session.NormalizeAuthorityUseRef(validated), nil
+}
+
+func (r *Registry) validateContinuationAuthorityUseRef(key session.SessionKey, leaseID string, now time.Time) error {
+	state, exists, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return fmt.Errorf("load continuation lease evidence: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("continuation lease evidence %q is not durable for this session", strings.TrimSpace(leaseID))
+	}
+	lease := session.NormalizeContinuationLease(state.ContinuationLease)
+	if strings.TrimSpace(lease.ID) != strings.TrimSpace(leaseID) {
+		return fmt.Errorf("continuation lease evidence %q does not match current session lease", strings.TrimSpace(leaseID))
+	}
+	if !lease.ActiveAt(now) {
+		return fmt.Errorf("continuation lease evidence %q is not active", strings.TrimSpace(leaseID))
+	}
+	return nil
+}
+
+func (r *Registry) validateOperationPlanAuthorityUseRef(key session.SessionKey, leaseID string, now time.Time) error {
+	_, operation, exists, err := r.store.PlanAndOperationStateIfExists(key)
+	if err != nil {
+		return fmt.Errorf("load operation plan lease evidence: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("operation plan lease evidence %q is not durable for this session", strings.TrimSpace(leaseID))
+	}
+	lease := session.NormalizeOperationPlanLease(operation.PlanLease)
+	if strings.TrimSpace(lease.ID) != strings.TrimSpace(leaseID) {
+		return fmt.Errorf("operation plan lease evidence %q does not match current session lease", strings.TrimSpace(leaseID))
+	}
+	if !operationPlanLeaseUsableForGrantUse(lease, now) {
+		return fmt.Errorf("operation plan lease evidence %q is not active", strings.TrimSpace(leaseID))
+	}
+	return nil
 }
 
 func authorityUseRefHasLeaseEvidence(ref session.AuthorityUseRef) bool {

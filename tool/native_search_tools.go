@@ -32,7 +32,7 @@ func (r *Registry) searchFiles(ctx context.Context, input json.RawMessage, scope
 	}
 	limit := clampNativeLimit(in.Limit, defaultNativeSearchLimit, maxNativeSearchLimit)
 	maxBytes := clampNativeLimit(in.MaxBytes, defaultNativeSearchMaxBytes, maxNativeSearchMaxBytes)
-	roots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathRead)
+	roots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathRead, "search")
 	if err != nil {
 		return "", err
 	}

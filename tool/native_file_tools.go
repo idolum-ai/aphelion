@@ -224,7 +224,7 @@ func (r *Registry) writeFile(ctx context.Context, input json.RawMessage, scope s
 	if err != nil {
 		return "", err
 	}
-	writeRoots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathWrite)
+	writeRoots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathWrite, "write_file")
 	if err != nil {
 		return "", err
 	}
@@ -272,7 +272,7 @@ func (r *Registry) listDir(ctx context.Context, input json.RawMessage, scope san
 		pathRaw = "."
 	}
 	limit := clampNativeLimit(in.Limit, defaultNativeListLimit, maxNativeListLimit)
-	path, err := r.resolveNativeReadToolPath(ctx, scope, p, key, pathRaw)
+	path, err := r.resolveNativeReadToolPathForOperation(ctx, scope, p, key, pathRaw, "list_dir")
 	if err != nil {
 		return "", err
 	}
