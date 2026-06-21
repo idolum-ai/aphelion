@@ -42,6 +42,13 @@ Monitored Tensions.
   keep package ownership, capability boundaries, authority gates, evidence
   paths, and recovery surfaces explicit as the system grows. This is not a
   mandate to delete capabilities; it is a mandate to prevent platform gravity.
+- **Execution-authority continuity:** Durable children, operation-plan work,
+  recovery, scheduled continuations, and ordinary interactive turns can enter
+  shared execution machinery. Their lease/grant/resource authority must survive
+  that crossing without becoming either lost or self-asserted. The current
+  point-of-use gate is covered by the conformance matrix in
+  [`execution-authority-continuity.md`](execution-authority-continuity.md); the
+  longer-term pressure is to avoid drifting into per-species authority copies.
 
 ## Machine-Checked Paths
 
