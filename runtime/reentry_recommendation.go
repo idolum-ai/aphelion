@@ -1922,6 +1922,9 @@ func (r *Runtime) deliverReentryRecommendation(ctx context.Context, key session.
 				return fmt.Errorf("record reentry recommendation callback thread: %w", err)
 			}
 		}
+		if err := r.recordReentryRecommendationJudgmentUse(key, record, messageID, now); err != nil {
+			return err
+		}
 		r.recordExecutionEvent(key, core.ExecutionEventReentryRecommendationShown, "reentry_recommendation", "shown", map[string]any{
 			"recommendation_id": record.ID,
 			"turn_run_id":       record.SourceTurnRunID,
@@ -1933,6 +1936,42 @@ func (r *Runtime) deliverReentryRecommendation(ctx context.Context, key session.
 		r.markReentryInteriorSignalsSurfaced(key, record, now)
 	}
 	return nil
+}
+
+func (r *Runtime) recordReentryRecommendationJudgmentUse(key session.SessionKey, record session.ReentryRecommendation, messageID int64, now time.Time) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	record = session.NormalizeReentryRecommendation(record)
+	var deps []session.JudgmentDependencyRef
+	deps = append(deps, session.JudgmentDependencyRef{Kind: "reentry_recommendation", Ref: record.ID, Role: "subject"})
+	for _, candidate := range record.Candidates {
+		deps = append(deps, session.JudgmentDependencyRef{Kind: "reentry_candidate", Ref: candidate.ID, Role: "presented", Scope: string(candidate.Kind)})
+		if strings.TrimSpace(candidate.SourceKind) != "" && strings.TrimSpace(candidate.SourceRef) != "" {
+			deps = append(deps, session.JudgmentDependencyRef{Kind: candidate.SourceKind, Ref: candidate.SourceRef, Role: "support"})
+		}
+	}
+	if record.SourceTurnRunID > 0 {
+		deps = append(deps, session.JudgmentDependencyRef{Kind: "turn_run", Ref: strconv.FormatInt(record.SourceTurnRunID, 10), Role: "support"})
+	}
+	resultRef := session.JudgmentUseRef("telegram_message", strconv.FormatInt(messageID, 10))
+	_, err := r.store.UpsertJudgmentUse(session.JudgmentUseInput{
+		Key:                  key,
+		TurnRunID:            record.SourceTurnRunID,
+		ConsumerID:           "runtime.reentry_recommendation.presentation",
+		Consequence:          session.JudgmentUseConsequencePresentation,
+		JudgmentRefs:         []string{session.JudgmentUseRef("reentry_recommendation", record.ID)},
+		DependencyRefs:       deps,
+		PolicyRef:            "reentry_recommendation_presentation_v1",
+		ResultRef:            resultRef,
+		Irreversible:         false,
+		QualificationStatus:  session.JudgmentUseQualificationQualified,
+		ReconciliationStatus: session.JudgmentUseReconciliationNotRequired,
+		Reason:               "reentry recommendation presented to operator",
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	})
+	return err
 }
 
 func (r *Runtime) markReentryInteriorSignalsSurfaced(key session.SessionKey, record session.ReentryRecommendation, now time.Time) {

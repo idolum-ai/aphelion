@@ -115,6 +115,43 @@ func TestExecContinuationAuthorityRunsForNonProposalSideEffects(t *testing.T) {
 	}
 }
 
+func TestExecRecordsJudgmentUseBeforeDispatch(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8812, UserID: 1001}
+	registry := NewRegistry(workspace, time.Second).WithSessionStore(store)
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"touch committed.txt"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if err != nil {
+		t.Fatalf("exec err = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, "committed.txt")); statErr != nil {
+		t.Fatalf("committed file stat err = %v", statErr)
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 1 {
+		t.Fatalf("judgment uses = %#v, want one exec dispatch use", uses)
+	}
+	use := uses[0]
+	if use.ConsumerID != "tool.exec.dispatch" || use.Consequence != session.JudgmentUseConsequenceExecution || !use.Irreversible {
+		t.Fatalf("use = %#v, want irreversible exec dispatch use", use)
+	}
+	if use.ResultRef == "" || !strings.HasPrefix(use.ResultRef, "effect_attempt:") {
+		t.Fatalf("result ref = %q, want effect attempt ref", use.ResultRef)
+	}
+}
+
 func TestContinuationExecAuthorityAllowsExternalAccountPRCreateWithGrant(t *testing.T) {
 	t.Parallel()
 

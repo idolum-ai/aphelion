@@ -271,7 +271,50 @@ func (s *SQLiteStore) HydrateEvidence(query EvidenceHydrationQuery) (EvidenceHyd
 		return result, err
 	}
 	result.RunID = runID
+	if err := s.recordEvidenceHydrationJudgmentUse(query, result); err != nil {
+		return result, err
+	}
 	return result, nil
+}
+
+func (s *SQLiteStore) recordEvidenceHydrationJudgmentUse(query EvidenceHydrationQuery, result EvidenceHydrationResult) error {
+	if s == nil || s.db == nil || strings.TrimSpace(result.RunID) == "" {
+		return nil
+	}
+	var deps []JudgmentDependencyRef
+	for _, obj := range result.Selected {
+		deps = append(deps, JudgmentDependencyRef{Kind: "evidence_object", Ref: obj.ID, Role: "admitted", Hash: obj.PayloadHash})
+	}
+	for _, id := range result.MissingEvidenceIDs {
+		deps = append(deps, JudgmentDependencyRef{Kind: "evidence_object", Ref: id, Role: "missing"})
+	}
+	if strings.TrimSpace(query.OperationID) != "" {
+		deps = append(deps, JudgmentDependencyRef{Kind: "operation", Ref: strings.TrimSpace(query.OperationID), Role: "scope"})
+	}
+	status := JudgmentUseQualificationQualified
+	reason := "evidence admitted into model context"
+	if len(result.Selected) == 0 {
+		status = JudgmentUseQualificationBlocked
+		reason = "no evidence admitted into model context"
+	}
+	_, err := s.UpsertJudgmentUse(JudgmentUseInput{
+		Key:                  query.Key,
+		SessionID:            result.SessionID,
+		OperationID:          strings.TrimSpace(query.OperationID),
+		ConsumerID:           "tool.evidence_hydrate.model_context",
+		Consequence:          JudgmentUseConsequenceModelContextAdmission,
+		JudgmentRefs:         []string{JudgmentUseRef("evidence_hydration", result.RunID)},
+		DependencyRefs:       deps,
+		PolicyRef:            "evidence_hydration_selection_v1",
+		ResultRef:            JudgmentUseRef("evidence_hydration", result.RunID),
+		Irreversible:         false,
+		QualificationStatus:  status,
+		ReconciliationStatus: JudgmentUseReconciliationNotRequired,
+		Reason:               reason,
+		CreatedAt:            result.CreatedAt,
+		UpdatedAt:            result.CreatedAt,
+	})
+	return err
 }
 
 func evidenceObjectAllowedForHydration(obj EvidenceObject, query EvidenceHydrationQuery, sessionID string) bool {

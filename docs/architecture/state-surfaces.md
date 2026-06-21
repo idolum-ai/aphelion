@@ -26,6 +26,10 @@ Aphelion state is intentionally multi-surface.
   `evidence_hydration_runs`) for immutable source snapshots and audited context
   hydration: canonical for evidence-object identity, source provenance, payload
   hash, and hydration history.
+- Judgment-use ledger (`judgment_uses`) for consequential commitment traces:
+  canonical for which local judgment refs were used by a consumer to commit
+  execution, model-context admission, recovery/re-entry, presentation, or other
+  auditable consequences.
 - Telegram ingress offset, accepted-update, and poison-update ledgers:
   operational current-state stores for transport recovery.
 - Telegram work-surface registry in code for startup replay of primary messages,
@@ -55,6 +59,7 @@ Classifications below use the shared truth classes defined in
 | `session.evidence_objects` | canonical | Which immutable source evidence snapshots are available for rehydration, and what source/status/hash do they carry? |
 | `session.evidence_links` | canonical | Which evidence objects were explicitly linked, by what relation and source? |
 | `session.evidence_hydration_runs` | canonical | Which evidence objects were selected or reported missing for a hydration request? |
+| `session.judgment_uses` | canonical | Which judgment refs were used, by which consumer and policy, to commit an auditable consequence? |
 | `session.messages` | canonical | What scene text was recorded for the session? |
 | `messages.floor_content` | canonical | What floor text was captured alongside scene text at message-record time? |
 | `messages.floor_metadata` | canonical | What floor metadata/artifact references were captured alongside scene text at message-record time? |
@@ -120,6 +125,16 @@ Universal evidence ledger note:
 - Startup migration seeds only current session snapshots. Explicit historical
   backfill can record the current value of mutable JSON stores, but it must not
   pretend intermediate states were recovered.
+
+Judgment-use ledger note:
+
+- `judgment_uses` records consequential uses of local interpretation outputs.
+  It is a commitment/audit ledger over existing evidence, effect-attempt,
+  hydration, and presentation records, not a universal belief store.
+- The first implemented slice records shell/Codex execution uses, evidence
+  hydration model-context admission, and re-entry presentation. General
+  challenge/adjudication and consequence-specific reconciliation workers remain
+  future implementation work.
 
 Curiosity note:
 

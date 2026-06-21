@@ -82,6 +82,32 @@ func TestReentryRecommendationSweepSurfacesBoundedChoicesAfterTerminalQuietWindo
 	if len(records) != 1 || records[0].Status != session.ReentryRecommendationStatusShown {
 		t.Fatalf("records = %#v, want one shown recommendation", records)
 	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	var use session.JudgmentUse
+	for _, candidate := range uses {
+		if candidate.ConsumerID == "runtime.reentry_recommendation.presentation" {
+			use = candidate
+			break
+		}
+	}
+	if use.ID == "" {
+		t.Fatalf("judgment uses = %#v, want reentry presentation use", uses)
+	}
+	if use.ConsumerID != "runtime.reentry_recommendation.presentation" || use.Consequence != session.JudgmentUseConsequencePresentation {
+		t.Fatalf("use = %#v, want reentry presentation use", use)
+	}
+	var sawCandidate bool
+	for _, dep := range use.DependencyRefs {
+		if dep.Kind == "reentry_candidate" {
+			sawCandidate = true
+		}
+	}
+	if !sawCandidate {
+		t.Fatalf("dependency refs = %#v, want presented reentry candidate refs", use.DependencyRefs)
+	}
 	events, err := store.ExecutionEventsBySession(key, 0, 100)
 	if err != nil {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)

@@ -570,6 +570,18 @@ func TestCodexCommandApprovalPersistsAttemptBeforeAccept(t *testing.T) {
 	if len(ids) != 2 {
 		t.Fatalf("attempt ids = %#v, want distinct occurrence identities", attempts)
 	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 2 {
+		t.Fatalf("judgment uses = %#v, want one execution use per approved command", uses)
+	}
+	for _, use := range uses {
+		if use.ConsumerID != "runtime.codex.command_approval" || use.Consequence != session.JudgmentUseConsequenceExecution || !use.Irreversible {
+			t.Fatalf("use = %#v, want irreversible Codex command approval use", use)
+		}
+	}
 }
 
 func TestCodexCommandApprovalDeclinesWhenAttemptWriteFails(t *testing.T) {
@@ -636,6 +648,29 @@ func TestCodexFileChangeApprovalPersistsAttemptFingerprintBeforeAccept(t *testin
 	}
 	if !strings.Contains(attempt.SubjectJSON, "patch_hash") || strings.Contains(attempt.SubjectJSON, "raw patch body") {
 		t.Fatalf("subject_json = %q, want fingerprinted patch subject without raw patch", attempt.SubjectJSON)
+	}
+	uses, err := store.JudgmentUsesByResultRef(session.JudgmentUseRef("effect_attempt", attempt.AttemptID), 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesByResultRef() err = %v", err)
+	}
+	if len(uses) != 1 {
+		t.Fatalf("judgment uses = %#v, want one file-change execution use", uses)
+	}
+	use := uses[0]
+	if use.ConsumerID != "runtime.codex.file_change_approval" || use.Consequence != session.JudgmentUseConsequenceExecution {
+		t.Fatalf("use = %#v, want Codex file-change execution use", use)
+	}
+	var sawPath, sawFingerprint bool
+	for _, dep := range use.DependencyRefs {
+		if dep.Kind == "file_path" && dep.Ref == "runtime/work_executor.go" {
+			sawPath = true
+		}
+		if dep.Kind == "file_change_fingerprint" {
+			sawFingerprint = true
+		}
+	}
+	if !sawPath || !sawFingerprint {
+		t.Fatalf("dependency refs = %#v, want file path and patch fingerprint", use.DependencyRefs)
 	}
 }
 

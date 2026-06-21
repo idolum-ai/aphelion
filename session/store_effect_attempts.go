@@ -204,7 +204,25 @@ func upsertEffectAttemptTx(tx *sql.Tx, input EffectAttemptInput) (EffectAttempt,
 	if !ok {
 		return EffectAttempt{}, fmt.Errorf("effect attempt %s disappeared after upsert", input.AttemptID)
 	}
+	if err := markEffectAttemptJudgmentUsesTx(tx, attempt, input.UpdatedAt); err != nil {
+		return EffectAttempt{}, err
+	}
 	return attempt, nil
+}
+
+func markEffectAttemptJudgmentUsesTx(tx *sql.Tx, attempt EffectAttempt, at time.Time) error {
+	resultRef := JudgmentUseRef("effect_attempt", attempt.AttemptID)
+	if resultRef == "" {
+		return nil
+	}
+	switch NormalizeEffectAttemptStatus(attempt.Status) {
+	case EffectAttemptStatusUncertain:
+		return markJudgmentUsesForResultRefReconciliationTx(tx, resultRef, JudgmentUseReconciliationPending, "effect attempt outcome uncertain", at)
+	case EffectAttemptStatusVerified, EffectAttemptStatusRejected, EffectAttemptStatusSuperseded, EffectAttemptStatusFailed:
+		return markJudgmentUsesForResultRefReconciliationTx(tx, resultRef, JudgmentUseReconciliationReconciled, "effect attempt outcome resolved", at)
+	default:
+		return nil
+	}
 }
 
 func effectAttemptByIDTx(tx *sql.Tx, attemptID string) (EffectAttempt, bool, error) {

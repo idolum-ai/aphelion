@@ -1,7 +1,9 @@
 # Interpretation, Judgment, and Dissent Surfaces
 
-_Status: proposed architecture and current registry._
-_Runtime enforcement: none._
+_Status: proposed architecture, current registry, and first implemented slice._
+_Runtime enforcement: `judgment_uses` records consequential uses for shell/Codex
+execution, evidence hydration, and re-entry presentation. General challenge and
+adjudication are not implemented._
 _Normative after: accepted implementation slices satisfy the consequential-use,
 qualification, dependency, and reconciliation rules below._
 
@@ -40,8 +42,9 @@ interpretations. `Challenge` is the typed mechanism that carries one such
 disagreement through recheck, adjudication, and possible demotion.
 
 The registry at the end audits current surfaces against that model. It is both a
-current-state map and a proposed kernel for future implementation slices, not a
-claim that every listed surface already satisfies every rule.
+current-state map and a proposed kernel for future implementation slices. The
+implemented slice records use commitments over existing ledgers; it does not
+yet make every listed surface satisfy every rule.
 
 Research lineage and deliberate departures are recorded in
 [`influences-and-departures.md`](influences-and-departures.md#truth-maintenance-argumentation-and-provenance).
@@ -54,11 +57,13 @@ This document has two roles:
   or are known target surfaces for this architecture;
 - proposed kernel: the `Judgment`, `Consequential Use`, `Dependencies`, and
   `Reconciliation` sections define requirements future implementation slices
-  should satisfy.
+  should satisfy;
+- implemented slice: `session.judgment_uses` records selected consequential
+  commitments without introducing a universal judgment table.
 
-Rows marked as target surfaces or `debt` are not current runtime guarantees. Once
-the model is accepted through implementation experience, the stable decisions
-should move into an ADR or a narrower normative architecture document.
+Rows marked as target surfaces or `debt` are not current runtime guarantees.
+Once the model is accepted through implementation experience, the stable
+decisions should move into an ADR or a narrower normative architecture document.
 
 ## Current Shape
 
@@ -897,11 +902,13 @@ ask, suppress, demote, or block.
 
 ## Rollout Sequence
 
-Do not build a universal judgment framework first. Two vertical slices should
-teach the abstraction what it actually needs:
+Do not build a universal judgment framework first. The first implemented slice
+records `JudgmentUse` commitments over existing shell/Codex effect attempts,
+evidence hydration runs, and re-entry presentation. Further vertical slices
+should teach the abstraction what it actually needs:
 
-1. Registry and shadow traces. Assign stable surface IDs and emit
-   diagnostic-only judgment envelopes. No runtime decision changes.
+1. Registry and commitment traces. Assign stable surface IDs and record durable
+   `judgment_uses` where consumers cross a consequence boundary.
 2. Shell effect interpretation. The planner creates one immutable
    `EffectJudgment`; proposal rendering, authorization, effect-attempt
    persistence, diagnostics, and replay consume its ID and hash. Authorization

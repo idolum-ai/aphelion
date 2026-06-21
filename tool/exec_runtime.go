@@ -307,8 +307,9 @@ func (r *Registry) recordExecPreDispatchAttempt(key session.SessionKey, toolName
 		boundaryKind = string(boundary.Kind)
 	}
 	now := time.Now().UTC()
-	_, err := r.store.UpsertEffectAttempt(session.EffectAttemptInput{
-		AttemptID:    execPreDispatchAttemptID(key, strings.TrimSpace(toolName), safeCommand),
+	attemptID := execPreDispatchAttemptID(key, strings.TrimSpace(toolName), safeCommand)
+	attemptInput := session.EffectAttemptInput{
+		AttemptID:    attemptID,
 		Key:          key,
 		Executor:     "tool",
 		Tool:         strings.TrimSpace(toolName),
@@ -321,9 +322,25 @@ func (r *Registry) recordExecPreDispatchAttempt(key session.SessionKey, toolName
 		EvidenceRefs: []string{"exec_pre_dispatch"},
 		StartedAt:    now,
 		UpdatedAt:    now,
-	})
+	}
+	useInput := session.JudgmentUseInput{
+		Key:                  key,
+		ConsumerID:           "tool.exec.dispatch",
+		Consequence:          session.JudgmentUseConsequenceExecution,
+		JudgmentRefs:         execJudgmentRefs(rawCommand, effect.Kind, effect.Reason),
+		DependencyRefs:       execJudgmentDependencyRefs(rawCommand, effect.Kind, effect.Reason, boundaryKind),
+		PolicyRef:            "exec_pre_dispatch_v1",
+		ResultRef:            session.JudgmentUseRef("effect_attempt", attemptID),
+		Irreversible:         true,
+		QualificationStatus:  session.JudgmentUseQualificationQualified,
+		ReconciliationStatus: session.JudgmentUseReconciliationNotRequired,
+		Reason:               "exec effect plan qualified before dispatch",
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}
+	_, _, err := r.store.UpsertEffectAttemptWithJudgmentUse(attemptInput, useInput)
 	if err != nil {
-		return fmt.Errorf("record exec effect attempt before dispatch: %w", err)
+		return fmt.Errorf("record exec judgment use and effect attempt before dispatch: %w", err)
 	}
 	return nil
 }
@@ -342,6 +359,28 @@ func execEffectAttemptSubjectJSON(command string) string {
 		return "{}"
 	}
 	return string(raw)
+}
+
+func execJudgmentRefs(command string, kind commandeffect.Kind, reason string) []string {
+	normalized := commandeffect.NormalizeCommand(command)
+	return []string{
+		session.JudgmentUseHashRef("effect_plan", strings.Join([]string{normalized, string(kind), strings.TrimSpace(reason)}, "\x00")),
+		session.JudgmentUseHashRef("command_effect", strings.Join([]string{normalized, string(kind)}, "\x00")),
+	}
+}
+
+func execJudgmentDependencyRefs(command string, kind commandeffect.Kind, reason string, boundaryKind string) []session.JudgmentDependencyRef {
+	refs := []session.JudgmentDependencyRef{
+		{Kind: "command_hash", Ref: session.EffectAttemptCommandHash(command), Role: "subject"},
+		{Kind: "effect_kind", Ref: string(kind), Role: "qualifies"},
+	}
+	if strings.TrimSpace(reason) != "" {
+		refs = append(refs, session.JudgmentDependencyRef{Kind: "effect_reason", Ref: strings.TrimSpace(reason), Role: "qualifies"})
+	}
+	if strings.TrimSpace(boundaryKind) != "" {
+		refs = append(refs, session.JudgmentDependencyRef{Kind: "boundary_kind", Ref: strings.TrimSpace(boundaryKind), Role: "qualifies"})
+	}
+	return refs
 }
 
 func validateExecEffectPlanDispatchable(command string) error {

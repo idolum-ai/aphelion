@@ -37,8 +37,9 @@ func (r *Runtime) recordCodexCommandApprovalAttempt(req WorkRequest, command str
 	if boundary, ok := commandeffect.BoundaryForCommand(command); ok {
 		boundaryKind = string(boundary.Kind)
 	}
-	_, err := r.store.UpsertEffectAttempt(session.EffectAttemptInput{
-		AttemptID:           codexApprovalAttemptID(key, req, "command", command, params, ordinal),
+	attemptID := codexApprovalAttemptID(key, req, "command", command, params, ordinal)
+	attemptInput := session.EffectAttemptInput{
+		AttemptID:           attemptID,
 		Key:                 key,
 		OperationID:         firstNonEmptyContinuation(req.OperationID, req.Operation.ID),
 		PhaseID:             effectAttemptPhaseID(req),
@@ -57,7 +58,9 @@ func (r *Runtime) recordCodexCommandApprovalAttempt(req WorkRequest, command str
 		EvidenceRefs:        codexApprovalEvidenceRefs(params),
 		StartedAt:           now,
 		UpdatedAt:           now,
-	})
+	}
+	useInput := codexApprovalJudgmentUseInput(req, key, attemptID, "runtime.codex.command_approval", command, effect.Kind, effect.Reason, boundaryKind, decision, params, now)
+	_, _, err := r.store.UpsertEffectAttemptWithJudgmentUse(attemptInput, useInput)
 	if err != nil {
 		return err
 	}
@@ -76,8 +79,9 @@ func (r *Runtime) recordCodexFileChangeApprovalAttempt(req WorkRequest, params m
 	fingerprint := codexFileChangeFingerprint(params, paths)
 	command := "codex file_change " + fingerprint
 	subject := codexFileChangeSubjectJSON(params, paths, fingerprint)
-	_, err := r.store.UpsertEffectAttempt(session.EffectAttemptInput{
-		AttemptID:           codexApprovalAttemptID(key, req, "file_change", command, params, ordinal),
+	attemptID := codexApprovalAttemptID(key, req, "file_change", command, params, ordinal)
+	attemptInput := session.EffectAttemptInput{
+		AttemptID:           attemptID,
 		Key:                 key,
 		OperationID:         firstNonEmptyContinuation(req.OperationID, req.Operation.ID),
 		PhaseID:             effectAttemptPhaseID(req),
@@ -95,7 +99,13 @@ func (r *Runtime) recordCodexFileChangeApprovalAttempt(req WorkRequest, params m
 		EvidenceRefs:        codexApprovalEvidenceRefs(params),
 		StartedAt:           now,
 		UpdatedAt:           now,
-	})
+	}
+	useInput := codexApprovalJudgmentUseInput(req, key, attemptID, "runtime.codex.file_change_approval", command, commandeffect.KindWorkspaceMutation, "codex file change approval", "", decision, params, now)
+	useInput.DependencyRefs = append(useInput.DependencyRefs, session.JudgmentDependencyRef{Kind: "file_change_fingerprint", Ref: fingerprint, Role: "subject"})
+	for _, path := range paths {
+		useInput.DependencyRefs = append(useInput.DependencyRefs, session.JudgmentDependencyRef{Kind: "file_path", Ref: path, Role: "subject"})
+	}
+	_, _, err := r.store.UpsertEffectAttemptWithJudgmentUse(attemptInput, useInput)
 	if err != nil {
 		return err
 	}
@@ -143,6 +153,48 @@ func codexApprovalEvidenceRefs(params map[string]any) []string {
 		}
 	}
 	return refs
+}
+
+func codexApprovalJudgmentUseInput(req WorkRequest, key session.SessionKey, attemptID string, consumerID string, command string, kind commandeffect.Kind, reason string, boundaryKind string, decision effectauth.Decision, params map[string]any, now time.Time) session.JudgmentUseInput {
+	normalized := commandeffect.NormalizeCommand(command)
+	refs := []session.JudgmentDependencyRef{
+		{Kind: "command_hash", Ref: session.EffectAttemptCommandHash(command), Role: "subject"},
+		{Kind: "effect_kind", Ref: string(kind), Role: "qualifies"},
+	}
+	if strings.TrimSpace(reason) != "" {
+		refs = append(refs, session.JudgmentDependencyRef{Kind: "effect_reason", Ref: strings.TrimSpace(reason), Role: "qualifies"})
+	}
+	if strings.TrimSpace(boundaryKind) != "" {
+		refs = append(refs, session.JudgmentDependencyRef{Kind: "boundary_kind", Ref: strings.TrimSpace(boundaryKind), Role: "qualifies"})
+	}
+	for _, ref := range codexApprovalEvidenceRefs(params) {
+		refs = append(refs, session.JudgmentDependencyRef{Kind: "provider_event", Ref: ref, Role: "support"})
+	}
+	if req.LeaseID != "" {
+		refs = append(refs, session.JudgmentDependencyRef{Kind: "lease", Ref: req.LeaseID, Role: "qualifies"})
+	}
+	if req.State.ActionProposal.ID != "" {
+		refs = append(refs, session.JudgmentDependencyRef{Kind: "proposal", Ref: req.State.ActionProposal.ID, Role: "qualifies"})
+	}
+	return session.JudgmentUseInput{
+		Key:                  key,
+		OperationID:          firstNonEmptyContinuation(req.OperationID, req.Operation.ID),
+		PhaseID:              effectAttemptPhaseID(req),
+		LeaseID:              req.LeaseID,
+		ProposalID:           req.State.ActionProposal.ID,
+		ConsumerID:           consumerID,
+		Consequence:          session.JudgmentUseConsequenceExecution,
+		JudgmentRefs:         []string{session.JudgmentUseHashRef("codex_effect_plan", strings.Join([]string{normalized, string(kind), strings.TrimSpace(reason)}, "\x00"))},
+		DependencyRefs:       refs,
+		PolicyRef:            "codex_approval_write_ahead_v1",
+		ResultRef:            session.JudgmentUseRef("effect_attempt", attemptID),
+		Irreversible:         true,
+		QualificationStatus:  session.JudgmentUseQualificationQualified,
+		ReconciliationStatus: session.JudgmentUseReconciliationNotRequired,
+		Reason:               strings.TrimSpace(decision.Reason),
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}
 }
 
 func codexFileChangeFingerprint(params map[string]any, paths []string) string {

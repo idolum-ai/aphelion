@@ -151,6 +151,57 @@ func TestEvidenceObjectsAreImmutableBySourceID(t *testing.T) {
 	}
 }
 
+func TestEvidenceHydrationRecordsModelContextAdmissionUse(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	key := SessionKey{ChatID: 99150, UserID: 1001}
+	obj, err := store.UpsertEvidenceObject(EvidenceObjectInput{
+		SourceKind:      EvidenceSourceExecutionEvent,
+		SourceRef:       "event:hydrate-use",
+		SessionID:       SessionIDForKey(key),
+		ChatID:          key.ChatID,
+		UserID:          key.UserID,
+		Scope:           defaultScopeForKey(key),
+		EpistemicStatus: EvidenceStatusAttested,
+		Summary:         "release validation passed",
+		PayloadJSON:     `{"output":"go test ./... passed"}`,
+	})
+	if err != nil {
+		t.Fatalf("UpsertEvidenceObject() err = %v", err)
+	}
+	result, err := store.HydrateEvidence(EvidenceHydrationQuery{
+		Key:                 key,
+		OperationID:         "op-hydration-use",
+		Query:               "release validation",
+		RequiredEvidenceIDs: []string{obj.ID, "ev:missing"},
+		Limit:               4,
+		Now:                 time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("HydrateEvidence() err = %v", err)
+	}
+	uses, err := store.JudgmentUsesByResultRef(JudgmentUseRef("evidence_hydration", result.RunID), 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesByResultRef() err = %v", err)
+	}
+	if len(uses) != 1 {
+		t.Fatalf("uses = %#v, want one model context admission use", uses)
+	}
+	use := uses[0]
+	if use.Consequence != JudgmentUseConsequenceModelContextAdmission || use.QualificationStatus != JudgmentUseQualificationQualified {
+		t.Fatalf("use = %#v, want qualified model context admission", use)
+	}
+	roles := map[string]string{}
+	for _, dep := range use.DependencyRefs {
+		roles[dep.Ref] = dep.Role
+	}
+	if roles[obj.ID] != "admitted" || roles["ev:missing"] != "missing" {
+		t.Fatalf("dependency roles = %#v, want admitted selected evidence and missing required evidence", roles)
+	}
+}
+
 func TestEvidenceHydrationReportsMissingRequiredEvidence(t *testing.T) {
 	t.Parallel()
 
