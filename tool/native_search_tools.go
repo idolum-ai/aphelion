@@ -12,10 +12,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
-func (r *Registry) searchFiles(ctx context.Context, input json.RawMessage, scope sandbox.Scope) (string, error) {
+func (r *Registry) searchFiles(ctx context.Context, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
 	var in searchFilesInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", fmt.Errorf("decode search input: %w", err)
@@ -30,13 +32,17 @@ func (r *Registry) searchFiles(ctx context.Context, input json.RawMessage, scope
 	}
 	limit := clampNativeLimit(in.Limit, defaultNativeSearchLimit, maxNativeSearchLimit)
 	maxBytes := clampNativeLimit(in.MaxBytes, defaultNativeSearchMaxBytes, maxNativeSearchMaxBytes)
-	root, err := resolveNativeToolPath(scope, pathRaw, nativePathRead)
+	roots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathRead)
+	if err != nil {
+		return "", err
+	}
+	root, err := resolveNativeToolPathWithReadRoots(scope, pathRaw, nativePathRead, roots)
 	if err != nil {
 		return "", err
 	}
 	matches := make([]string, 0, limit)
 	needle := strings.ToLower(query)
-	err = walkSearchRoot(ctx, root, maxBytes, limit, needle, &matches, scope)
+	err = walkSearchRoot(ctx, root, maxBytes, limit, needle, &matches, scope, roots)
 	if err != nil {
 		return "", err
 	}
@@ -55,7 +61,7 @@ func (r *Registry) searchFiles(ctx context.Context, input json.RawMessage, scope
 	return b.String(), nil
 }
 
-func walkSearchRoot(ctx context.Context, root string, maxBytes, limit int, needle string, matches *[]string, scope sandbox.Scope) error {
+func walkSearchRoot(ctx context.Context, root string, maxBytes, limit int, needle string, matches *[]string, scope sandbox.Scope, extraReadRoots []string) error {
 	info, err := os.Stat(root)
 	if err != nil {
 		return fmt.Errorf("search stat %q: %w", root, err)
@@ -79,7 +85,7 @@ func walkSearchRoot(ctx context.Context, root string, maxBytes, limit int, needl
 		default:
 		}
 		if path != root {
-			resolved, err := resolveNativeToolPath(scope, path, nativePathRead)
+			resolved, err := resolveNativeToolPathWithReadRoots(scope, path, nativePathRead, extraReadRoots)
 			if err != nil {
 				if d.IsDir() {
 					return filepath.SkipDir

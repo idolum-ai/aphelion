@@ -258,13 +258,16 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 	if e.runtime == nil {
 		return WorkResult{}, fmt.Errorf("runtime unavailable")
 	}
-	ctx = toolpkg.WithContinuationExecAuthority(ctx, req.State)
 	key := req.Key
 	if key.ChatID == 0 {
 		key.ChatID = req.ChatID
 	}
 	if key.ChatID != 0 && strings.TrimSpace(string(key.Scope.Kind)) == "" && strings.TrimSpace(key.Scope.ID) == "" {
 		key.Scope = telegramDMScopeRef(key.ChatID)
+	}
+	ctx = toolpkg.WithContinuationExecAuthority(ctx, req.State)
+	if useRef, ok := workRequestAuthorityUseRef(req, key, time.Now().UTC()); ok {
+		ctx = toolpkg.WithAuthorityUseRef(ctx, useRef)
 	}
 	msg := continuationInboundForKey(key, req.Actor, approvedContinuationEventTextForState(req.State), core.InboundOriginTurnAuthorization, string(session.TurnAuthorizationKindContinuation))
 	result, err := e.runtime.handleInternalContinuationTurnWithOptions(ctx, req.Actor, msg, internalContinuationOptions{})
@@ -312,6 +315,51 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 		return out, nativeWorkRecoveryError{Kind: out.RecoveryKind, Summary: out.RecoverySummary}
 	}
 	return out, nil
+}
+
+func workRequestAuthorityUseRef(req WorkRequest, key session.SessionKey, now time.Time) (session.AuthorityUseRef, bool) {
+	if key.ChatID == 0 && key.UserID == 0 && key.Scope.IsZero() {
+		return session.AuthorityUseRef{}, false
+	}
+	ref := session.AuthorityUseRef{SessionID: session.SessionIDForKey(key)}
+	sources := make([]string, 0, 2)
+
+	lease := session.NormalizeContinuationLease(req.State.ContinuationLease)
+	if strings.TrimSpace(lease.ID) == "" {
+		lease.ID = strings.TrimSpace(req.LeaseID)
+	}
+	if strings.TrimSpace(lease.ID) != "" && lease.ActiveAt(now) {
+		ref.ContinuationLeaseID = lease.ID
+		sources = append(sources, "continuation_lease")
+	}
+
+	planLease := session.NormalizeOperationPlanLease(req.Operation.PlanLease)
+	if workRequestOperationPlanLeaseUsable(planLease, now) {
+		ref.OperationPlanLeaseID = planLease.ID
+		sources = append(sources, "operation_plan_lease")
+	}
+
+	if len(sources) == 0 {
+		return session.AuthorityUseRef{}, false
+	}
+	ref.AuthoritySource = strings.Join(sources, "+")
+	return session.NormalizeAuthorityUseRef(ref), true
+}
+
+func workRequestOperationPlanLeaseUsable(lease session.OperationPlanLease, now time.Time) bool {
+	lease = session.NormalizeOperationPlanLease(lease)
+	if strings.TrimSpace(lease.ID) == "" || lease.RemainingTurns <= 0 {
+		return false
+	}
+	if !lease.ExpiresAt.IsZero() && !lease.ExpiresAt.After(now.UTC()) {
+		return false
+	}
+	switch lease.Status {
+	case session.PlanLeaseStatusApproved, session.PlanLeaseStatusActive:
+		return true
+	default:
+		return false
+	}
 }
 
 func workResultBudgetRecoveryScheduled(result WorkResult) bool {

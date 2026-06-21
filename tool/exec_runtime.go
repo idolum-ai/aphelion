@@ -76,7 +76,7 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	if err != nil {
 		return "", err
 	}
-	authorityGrant, authorityManaged, err := r.requireAuthorityToolAccess(name, p, key, input)
+	authorityGrant, authorityManaged, err := r.requireAuthorityToolAccess(ctx, name, p, key, input)
 	if err != nil {
 		return "", err
 	}
@@ -85,13 +85,13 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	case "exec":
 		return r.exec(ctx, input, scope, p, key)
 	case "read_file":
-		return r.readFile(ctx, input, scope)
+		return r.readFile(ctx, input, scope, p, key)
 	case "write_file":
-		return r.writeFile(ctx, input, scope)
+		return r.writeFile(ctx, input, scope, p, key)
 	case "list_dir":
-		return r.listDir(ctx, input, scope)
+		return r.listDir(ctx, input, scope, p, key)
 	case "search":
-		return r.searchFiles(ctx, input, scope)
+		return r.searchFiles(ctx, input, scope, p, key)
 	case "fetch_url":
 		return r.fetchURL(ctx, input, scope, p)
 	case "memory":

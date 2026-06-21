@@ -15,6 +15,8 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
@@ -148,7 +150,7 @@ func nativeFileToolDefinitions() []agent.ToolDef {
 	}
 }
 
-func (r *Registry) readFile(_ context.Context, input json.RawMessage, scope sandbox.Scope) (string, error) {
+func (r *Registry) readFile(ctx context.Context, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
 	var in readFileInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", fmt.Errorf("decode read_file input: %w", err)
@@ -177,7 +179,7 @@ func (r *Registry) readFile(_ context.Context, input json.RawMessage, scope sand
 		}
 	}
 	maxBytes := clampNativeLimit(in.MaxBytes, defaultNativeReadMaxBytes, maxNativeReadBytes)
-	path, err := resolveNativeToolPath(scope, in.Path, nativePathRead)
+	path, err := r.resolveNativeReadToolPath(ctx, scope, p, key, in.Path)
 	if err != nil {
 		return "", err
 	}
@@ -210,7 +212,7 @@ func (r *Registry) readFile(_ context.Context, input json.RawMessage, scope sand
 	return b.String(), nil
 }
 
-func (r *Registry) writeFile(_ context.Context, input json.RawMessage, scope sandbox.Scope) (string, error) {
+func (r *Registry) writeFile(ctx context.Context, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
 	var in writeFileInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", fmt.Errorf("decode write_file input: %w", err)
@@ -218,20 +220,24 @@ func (r *Registry) writeFile(_ context.Context, input json.RawMessage, scope san
 	if strings.TrimSpace(in.Path) == "" {
 		return "", fmt.Errorf("write_file path is required")
 	}
-	path, err := resolveNativeToolPath(scope, in.Path, nativePathWrite)
+	path, err := r.resolveNativeWriteToolPath(ctx, scope, p, key, in.Path)
+	if err != nil {
+		return "", err
+	}
+	writeRoots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathWrite)
 	if err != nil {
 		return "", err
 	}
 	parent := filepath.Dir(path)
 	if in.CreateDirs {
-		if err := validateNativeWriteParentForCreate(scope, parent); err != nil {
+		if err := validateNativeWriteParentForCreate(scope, parent, writeRoots); err != nil {
 			return "", err
 		}
 		if err := os.MkdirAll(parent, 0o755); err != nil {
 			return "", fmt.Errorf("write_file create parent %q: %w", parent, err)
 		}
 	}
-	if err := validateNativeWriteParent(scope, parent); err != nil {
+	if err := validateNativeWriteParent(scope, parent, writeRoots); err != nil {
 		return "", err
 	}
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
@@ -256,7 +262,7 @@ func (r *Registry) writeFile(_ context.Context, input json.RawMessage, scope san
 	return fmt.Sprintf("write_file_ok path=%s bytes=%d append=%t", path, len([]byte(in.Content)), in.Append), nil
 }
 
-func (r *Registry) listDir(_ context.Context, input json.RawMessage, scope sandbox.Scope) (string, error) {
+func (r *Registry) listDir(ctx context.Context, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
 	var in listDirInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", fmt.Errorf("decode list_dir input: %w", err)
@@ -266,7 +272,7 @@ func (r *Registry) listDir(_ context.Context, input json.RawMessage, scope sandb
 		pathRaw = "."
 	}
 	limit := clampNativeLimit(in.Limit, defaultNativeListLimit, maxNativeListLimit)
-	path, err := resolveNativeToolPath(scope, pathRaw, nativePathRead)
+	path, err := r.resolveNativeReadToolPath(ctx, scope, p, key, pathRaw)
 	if err != nil {
 		return "", err
 	}

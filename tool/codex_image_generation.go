@@ -50,7 +50,7 @@ func (r *Registry) codexImageGenerationAccessAllowed(p principal.Principal) (boo
 	return ok, err
 }
 
-func (r *Registry) requireCodexImageGenerationAccess(p principal.Principal, key session.SessionKey) (session.CapabilityGrant, session.AuthorityUseRef, error) {
+func (r *Registry) requireCodexImageGenerationAccess(ctx context.Context, p principal.Principal, key session.SessionKey) (session.CapabilityGrant, session.AuthorityUseRef, error) {
 	if r == nil || r.store == nil {
 		return session.CapabilityGrant{}, session.AuthorityUseRef{}, fmt.Errorf("%s requires transcript store", codexImageGenerationToolName)
 	}
@@ -64,7 +64,7 @@ func (r *Registry) requireCodexImageGenerationAccess(p principal.Principal, key 
 	if !ok {
 		return session.CapabilityGrant{}, session.AuthorityUseRef{}, fmt.Errorf("tool %q is not granted to principal %q", codexImageGenerationToolName, toolAuthorityPrincipalDisplay(p))
 	}
-	useRef, err := r.authorityUseRefForGrant(codexImageGenerationToolName, key)
+	useRef, err := r.authorityUseRefForGrant(ctx, codexImageGenerationToolName, key)
 	if err != nil {
 		if recordErr := r.recordCodexImageGenerationInvocation(grant, p, useRef, "blocked", err.Error()); recordErr != nil {
 			return grant, useRef, errors.Join(err, recordErr)
@@ -75,7 +75,7 @@ func (r *Registry) requireCodexImageGenerationAccess(p principal.Principal, key 
 }
 
 func (r *Registry) codexImageGeneration(ctx context.Context, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
-	grant, useRef, err := r.requireCodexImageGenerationAccess(p, key)
+	grant, useRef, err := r.requireCodexImageGenerationAccess(ctx, p, key)
 	if err != nil {
 		return codexImageGenerationBlocker("blocked", err.Error(), grant.GrantID), err
 	}

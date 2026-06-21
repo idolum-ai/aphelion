@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -45,7 +46,7 @@ func (r *Registry) toolAuthorityAccessAllowed(toolName string, p principal.Princ
 	return allowedByGrant, nil
 }
 
-func (r *Registry) requireAuthorityToolAccess(name string, p principal.Principal, key session.SessionKey, input json.RawMessage) (session.CapabilityGrant, bool, error) {
+func (r *Registry) requireAuthorityToolAccess(ctx context.Context, name string, p principal.Principal, key session.SessionKey, input json.RawMessage) (session.CapabilityGrant, bool, error) {
 	name = strings.TrimSpace(name)
 	if !r.authorityManagedTool(name) {
 		return session.CapabilityGrant{}, false, nil
@@ -69,7 +70,7 @@ func (r *Registry) requireAuthorityToolAccess(name string, p principal.Principal
 	}
 	if allowedByGrant {
 		principalID := toolAuthorityPrincipalDisplay(p)
-		useRef, useRefErr := r.authorityUseRefForGrant(name, key)
+		useRef, useRefErr := r.authorityUseRefForGrant(ctx, name, key)
 		if useRefErr != nil {
 			if _, recordErr := r.store.RecordCapabilityInvocation(capabilityInvocationWithAuthorityUseRef(session.CapabilityInvocation{
 				GrantID:   grant.GrantID,
@@ -117,12 +118,23 @@ func capabilityInvocationWithAuthorityUseRef(invocation session.CapabilityInvoca
 	return invocation
 }
 
-func (r *Registry) authorityUseRefForGrant(toolName string, key session.SessionKey) (session.AuthorityUseRef, error) {
+func (r *Registry) authorityUseRefForGrant(ctx context.Context, toolName string, key session.SessionKey) (session.AuthorityUseRef, error) {
 	ref := session.AuthorityUseRef{}
 	if !toolSessionKeyHasIdentity(key) {
 		return ref, fmt.Errorf("tool %q requires active turn lease evidence", strings.TrimSpace(toolName))
 	}
-	ref.SessionID = session.SessionIDForKey(key)
+	sessionID := session.SessionIDForKey(key)
+	if contextRef, ok := AuthorityUseRefFromContext(ctx); ok {
+		contextRef = authorityUseRefForSession(contextRef, sessionID)
+		if strings.TrimSpace(contextRef.SessionID) != sessionID {
+			return ref, fmt.Errorf("tool %q authority evidence belongs to session %q, not %q", strings.TrimSpace(toolName), strings.TrimSpace(contextRef.SessionID), sessionID)
+		}
+		if authorityUseRefHasLeaseEvidence(contextRef) {
+			return contextRef, nil
+		}
+	}
+
+	ref.SessionID = sessionID
 	now := time.Now().UTC()
 	sources := []string{}
 
@@ -151,6 +163,23 @@ func (r *Registry) authorityUseRefForGrant(toolName string, key session.SessionK
 	}
 	ref.AuthoritySource = strings.Join(sources, "+")
 	return session.NormalizeAuthorityUseRef(ref), nil
+}
+
+func authorityUseRefForSession(ref session.AuthorityUseRef, sessionID string) session.AuthorityUseRef {
+	ref = session.NormalizeAuthorityUseRef(ref)
+	sessionID = strings.TrimSpace(sessionID)
+	if ref.SessionID == "" {
+		ref.SessionID = sessionID
+	}
+	return session.NormalizeAuthorityUseRef(ref)
+}
+
+func authorityUseRefHasLeaseEvidence(ref session.AuthorityUseRef) bool {
+	ref = session.NormalizeAuthorityUseRef(ref)
+	if strings.TrimSpace(ref.AuthoritySource) == "" {
+		return false
+	}
+	return strings.TrimSpace(ref.ContinuationLeaseID) != "" || strings.TrimSpace(ref.OperationPlanLeaseID) != ""
 }
 
 func operationPlanLeaseUsableForGrantUse(lease session.OperationPlanLease, now time.Time) bool {

@@ -257,7 +257,7 @@ type webSearchOutput struct {
 }
 
 func (r *Registry) webSearch(ctx context.Context, input json.RawMessage, _ sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
-	grant, useRef, err := r.requireWebSearchAccess(p, key, input)
+	grant, useRef, err := r.requireWebSearchAccess(ctx, p, key, input)
 	if err != nil {
 		return renderWebSearchBlocker(err.Error(), grant.GrantID), err
 	}
@@ -359,7 +359,7 @@ func (r *Registry) webSearch(ctx context.Context, input json.RawMessage, _ sandb
 	return marshalWebSearchOutput(out), lastErr
 }
 
-func (r *Registry) requireWebSearchAccess(p principal.Principal, key session.SessionKey, input json.RawMessage) (session.CapabilityGrant, session.AuthorityUseRef, error) {
+func (r *Registry) requireWebSearchAccess(ctx context.Context, p principal.Principal, key session.SessionKey, input json.RawMessage) (session.CapabilityGrant, session.AuthorityUseRef, error) {
 	if r == nil || r.store == nil {
 		return session.CapabilityGrant{}, session.AuthorityUseRef{}, fmt.Errorf("%s requires transcript store", webSearchToolName)
 	}
@@ -373,7 +373,7 @@ func (r *Registry) requireWebSearchAccess(p principal.Principal, key session.Ses
 	if !ok {
 		return session.CapabilityGrant{}, session.AuthorityUseRef{}, fmt.Errorf("tool %q is not granted to principal %q", webSearchToolName, toolAuthorityPrincipalDisplay(p))
 	}
-	useRef, err := r.authorityUseRefForGrant(webSearchToolName, key)
+	useRef, err := r.authorityUseRefForGrant(ctx, webSearchToolName, key)
 	if err != nil {
 		if recordErr := r.recordWebSearchInvocation(grant, p, useRef, "blocked", err.Error()); recordErr != nil {
 			return grant, useRef, errors.Join(err, recordErr)
