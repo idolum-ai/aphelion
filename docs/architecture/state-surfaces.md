@@ -52,6 +52,7 @@ Classifications below use the shared truth classes defined in
 | Surface / Store | Classification | Canonical Question |
 | --- | --- | --- |
 | `session.execution_events` | canonical | What happened in runtime, in what order? |
+| `session.execution_run_authority` | canonical | Which durable turn run was admitted under which principal, session, execution species, and single causal lease? |
 | `session.evidence_objects` | canonical | Which immutable source evidence snapshots are available for rehydration, and what source/status/hash do they carry? |
 | `session.evidence_links` | canonical | Which evidence objects were explicitly linked, by what relation and source? |
 | `session.evidence_hydration_runs` | canonical | Which evidence objects were selected or reported missing for a hydration request? |

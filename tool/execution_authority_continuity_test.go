@@ -18,6 +18,7 @@ func TestExecutionAuthorityContinuityToolBoundaryMatrix(t *testing.T) {
 
 	type expectedInvocation struct {
 		status               string
+		turnRunID            int64
 		authoritySource      string
 		continuationLeaseID  string
 		operationPlanLeaseID string
@@ -31,12 +32,14 @@ func TestExecutionAuthorityContinuityToolBoundaryMatrix(t *testing.T) {
 		invocation *expectedInvocation
 	}{
 		{
-			name:      "interactive durable fallback uses current continuation lease",
+			name:      "interactive context uses durable run authority bound to continuation lease",
 			species:   "interactive",
 			grantActs: []string{"invoke"},
 			setup: func(t *testing.T, store *session.SQLiteStore, key session.SessionKey) context.Context {
+				actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 				grantAuthorityUseLeaseWithID(t, store, key, "lease-matrix-continuation")
-				return context.Background()
+				ctx, _ := contextWithContinuationRunAuthority(t, store, key, actor, "lease-matrix-continuation", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "interactive")
+				return ctx
 			},
 			invocation: &expectedInvocation{
 				status:              "allowed",
@@ -49,12 +52,10 @@ func TestExecutionAuthorityContinuityToolBoundaryMatrix(t *testing.T) {
 			species:   "native_continuation",
 			grantActs: []string{"invoke"},
 			setup: func(t *testing.T, store *session.SQLiteStore, key session.SessionKey) context.Context {
+				actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 				grantAuthorityUseLeaseWithID(t, store, key, "lease-matrix-context")
-				return WithAuthorityUseRef(context.Background(), session.AuthorityUseRef{
-					SessionID:           session.SessionIDForKey(key),
-					ContinuationLeaseID: "lease-matrix-context",
-					AuthoritySource:     "continuation_lease",
-				})
+				ctx, _ := contextWithContinuationRunAuthority(t, store, key, actor, "lease-matrix-context", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_continuation")
+				return ctx
 			},
 			invocation: &expectedInvocation{
 				status:              "allowed",
@@ -67,12 +68,10 @@ func TestExecutionAuthorityContinuityToolBoundaryMatrix(t *testing.T) {
 			species:   "operation_plan_continuation",
 			grantActs: []string{"invoke"},
 			setup: func(t *testing.T, store *session.SQLiteStore, key session.SessionKey) context.Context {
+				actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 				grantOperationPlanLeaseWithID(t, store, key, "plan-lease-matrix")
-				return WithAuthorityUseRef(context.Background(), session.AuthorityUseRef{
-					SessionID:            session.SessionIDForKey(key),
-					OperationPlanLeaseID: "plan-lease-matrix",
-					AuthoritySource:      "operation_plan_lease",
-				})
+				ctx, _ := contextWithOperationPlanRunAuthority(t, store, key, actor, "plan-lease-matrix", session.PlanLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "operation_plan_continuation")
+				return ctx
 			},
 			invocation: &expectedInvocation{
 				status:               "allowed",
@@ -86,9 +85,8 @@ func TestExecutionAuthorityContinuityToolBoundaryMatrix(t *testing.T) {
 			grantActs: []string{"invoke"},
 			setup: func(t *testing.T, store *session.SQLiteStore, key session.SessionKey) context.Context {
 				return WithAuthorityUseRef(context.Background(), session.AuthorityUseRef{
-					SessionID:           session.SessionIDForKey(key),
-					ContinuationLeaseID: "lease-fabricated-matrix",
-					AuthoritySource:     "continuation_lease",
+					SessionID: session.SessionIDForKey(key),
+					TurnRunID: 999999,
 				})
 			},
 			wantErr: "not durable",
@@ -101,11 +99,12 @@ func TestExecutionAuthorityContinuityToolBoundaryMatrix(t *testing.T) {
 			species:   "remote_child",
 			grantActs: []string{"invoke"},
 			setup: func(t *testing.T, store *session.SQLiteStore, key session.SessionKey) context.Context {
+				actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 				grantAuthorityUseLeaseWithID(t, store, key, "lease-session-matrix")
+				_, turnRunID := contextWithContinuationRunAuthority(t, store, key, actor, "lease-session-matrix", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "remote_child")
 				return WithAuthorityUseRef(context.Background(), session.AuthorityUseRef{
-					SessionID:           "telegram_dm:9999",
-					ContinuationLeaseID: "lease-session-matrix",
-					AuthoritySource:     "continuation_lease",
+					SessionID: "telegram_dm:9999",
+					TurnRunID: turnRunID,
 				})
 			},
 			wantErr: "authority evidence belongs to session",
@@ -118,17 +117,15 @@ func TestExecutionAuthorityContinuityToolBoundaryMatrix(t *testing.T) {
 			species:   "maintenance_recovery",
 			grantActs: []string{"invoke"},
 			setup: func(t *testing.T, store *session.SQLiteStore, key session.SessionKey) context.Context {
+				actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 				storeContinuationLeaseForMatrix(t, store, key, session.ContinuationLease{
 					ID:             "lease-expired-matrix",
 					Status:         session.ContinuationLeaseStatusActive,
 					RemainingTurns: 1,
 					ExpiresAt:      time.Now().UTC().Add(-time.Minute),
 				})
-				return WithAuthorityUseRef(context.Background(), session.AuthorityUseRef{
-					SessionID:           session.SessionIDForKey(key),
-					ContinuationLeaseID: "lease-expired-matrix",
-					AuthoritySource:     "continuation_lease",
-				})
+				ctx, _ := contextWithContinuationRunAuthority(t, store, key, actor, "lease-expired-matrix", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(-time.Minute), "maintenance_recovery")
+				return ctx
 			},
 			wantErr: "not active",
 			invocation: &expectedInvocation{
@@ -140,17 +137,15 @@ func TestExecutionAuthorityContinuityToolBoundaryMatrix(t *testing.T) {
 			species:   "scheduled_continuation",
 			grantActs: []string{"invoke"},
 			setup: func(t *testing.T, store *session.SQLiteStore, key session.SessionKey) context.Context {
+				actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 				storeContinuationLeaseForMatrix(t, store, key, session.ContinuationLease{
 					ID:             "lease-exhausted-matrix",
 					Status:         session.ContinuationLeaseStatusActive,
 					RemainingTurns: 0,
 					ExpiresAt:      time.Now().UTC().Add(time.Hour),
 				})
-				return WithAuthorityUseRef(context.Background(), session.AuthorityUseRef{
-					SessionID:           session.SessionIDForKey(key),
-					ContinuationLeaseID: "lease-exhausted-matrix",
-					AuthoritySource:     "continuation_lease",
-				})
+				ctx, _ := contextWithContinuationRunAuthority(t, store, key, actor, "lease-exhausted-matrix", session.ContinuationLeaseStatusActive, 0, time.Now().UTC().Add(time.Hour), "scheduled_continuation")
+				return ctx
 			},
 			wantErr: "not active",
 			invocation: &expectedInvocation{
@@ -162,17 +157,15 @@ func TestExecutionAuthorityContinuityToolBoundaryMatrix(t *testing.T) {
 			species:   "operation_plan_continuation",
 			grantActs: []string{"invoke"},
 			setup: func(t *testing.T, store *session.SQLiteStore, key session.SessionKey) context.Context {
+				actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 				storeOperationPlanLeaseForMatrix(t, store, key, session.OperationPlanLease{
 					ID:             "plan-lease-revoked-matrix",
 					Status:         session.PlanLeaseStatusRevoked,
 					RemainingTurns: 1,
 					ExpiresAt:      time.Now().UTC().Add(time.Hour),
 				})
-				return WithAuthorityUseRef(context.Background(), session.AuthorityUseRef{
-					SessionID:            session.SessionIDForKey(key),
-					OperationPlanLeaseID: "plan-lease-revoked-matrix",
-					AuthoritySource:      "operation_plan_lease",
-				})
+				ctx, _ := contextWithOperationPlanRunAuthority(t, store, key, actor, "plan-lease-revoked-matrix", session.PlanLeaseStatusRevoked, 1, time.Now().UTC().Add(time.Hour), "operation_plan_continuation")
+				return ctx
 			},
 			wantErr: "not active",
 			invocation: &expectedInvocation{
@@ -184,13 +177,10 @@ func TestExecutionAuthorityContinuityToolBoundaryMatrix(t *testing.T) {
 			species:   "restart_revalidation",
 			grantActs: []string{"invoke"},
 			setup: func(t *testing.T, store *session.SQLiteStore, key session.SessionKey) context.Context {
+				actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 				leaseID := "lease-restart-revalidated-matrix"
 				grantAuthorityUseLeaseWithID(t, store, key, leaseID)
-				ctx := WithAuthorityUseRef(context.Background(), session.AuthorityUseRef{
-					SessionID:           session.SessionIDForKey(key),
-					ContinuationLeaseID: leaseID,
-					AuthoritySource:     "continuation_lease",
-				})
+				ctx, _ := contextWithContinuationRunAuthority(t, store, key, actor, leaseID, session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "restart_revalidation")
 				storeContinuationLeaseForMatrix(t, store, key, session.ContinuationLease{
 					ID:             leaseID,
 					Status:         session.ContinuationLeaseStatusRevoked,
@@ -209,12 +199,10 @@ func TestExecutionAuthorityContinuityToolBoundaryMatrix(t *testing.T) {
 			species:   "native_continuation",
 			grantActs: []string{"inspect"},
 			setup: func(t *testing.T, store *session.SQLiteStore, key session.SessionKey) context.Context {
+				actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 				grantAuthorityUseLeaseWithID(t, store, key, "lease-action-mismatch-matrix")
-				return WithAuthorityUseRef(context.Background(), session.AuthorityUseRef{
-					SessionID:           session.SessionIDForKey(key),
-					ContinuationLeaseID: "lease-action-mismatch-matrix",
-					AuthoritySource:     "continuation_lease",
-				})
+				ctx, _ := contextWithContinuationRunAuthority(t, store, key, actor, "lease-action-mismatch-matrix", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_continuation")
+				return ctx
 			},
 			wantErr: "not granted",
 		},
@@ -275,6 +263,9 @@ func TestExecutionAuthorityContinuityToolBoundaryMatrix(t *testing.T) {
 			if got.Status != tc.invocation.status {
 				t.Fatalf("%s invocation status = %q, want %q", tc.species, got.Status, tc.invocation.status)
 			}
+			if tc.invocation.status == "allowed" && got.TurnRunID <= 0 {
+				t.Fatalf("%s invocation turn_run_id = %d, want durable run authority", tc.species, got.TurnRunID)
+			}
 			if tc.invocation.authoritySource != "" && got.AuthoritySource != tc.invocation.authoritySource {
 				t.Fatalf("%s authority source = %q, want %q", tc.species, got.AuthoritySource, tc.invocation.authoritySource)
 			}
@@ -286,6 +277,38 @@ func TestExecutionAuthorityContinuityToolBoundaryMatrix(t *testing.T) {
 			}
 		})
 	}
+}
+
+func contextWithOperationPlanRunAuthority(t *testing.T, store *session.SQLiteStore, key session.SessionKey, actor principal.Principal, leaseID string, status session.PlanLeaseStatus, remainingTurns int, expiresAt time.Time, species string) (context.Context, int64) {
+	t.Helper()
+
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "operation-plan authority continuity test")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if species == "" {
+		species = "test"
+	}
+	_, err = store.UpsertExecutionRunAuthority(session.ExecutionRunAuthority{
+		TurnRunID:            run.ID,
+		SessionID:            run.SessionID,
+		ChatID:               run.ChatID,
+		UserID:               run.UserID,
+		Scope:                run.Scope,
+		Principal:            toolAuthorityCanonicalPrincipal(actor),
+		PrincipalRole:        string(actor.Role),
+		ExecutionSpecies:     species,
+		LeaseKind:            session.ExecutionAuthorityLeaseKindOperationPlan,
+		OperationPlanLeaseID: leaseID,
+		LeaseStatus:          string(status),
+		LeaseRemainingTurns:  remainingTurns,
+		LeaseExpiresAt:       expiresAt,
+		AdmittedAt:           time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("UpsertExecutionRunAuthority(operation plan) err = %v", err)
+	}
+	return WithAuthorityUseRef(context.Background(), session.AuthorityUseRef{SessionID: run.SessionID, TurnRunID: run.ID}), run.ID
 }
 
 func grantOperationPlanLeaseWithID(t *testing.T, store *session.SQLiteStore, key session.SessionKey, leaseID string) {

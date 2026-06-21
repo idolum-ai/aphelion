@@ -324,6 +324,45 @@ func migrateSchemaV67ToV68(tx *sql.Tx) error {
 	return nil
 }
 
+func migrateSchemaV70ToV71(tx *sql.Tx) error {
+	if err := ensureExecutionRunAuthorityTables(tx); err != nil {
+		return fmt.Errorf("migrate schema v70 to v71 ensure execution run authority tables: %w", err)
+	}
+	return nil
+}
+
+func ensureExecutionRunAuthorityTables(tx *sql.Tx) error {
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS execution_run_authority (
+			turn_run_id INTEGER PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			principal TEXT NOT NULL DEFAULT '',
+			principal_role TEXT NOT NULL DEFAULT '',
+			execution_species TEXT NOT NULL DEFAULT '',
+			lease_kind TEXT NOT NULL CHECK(lease_kind IN ('continuation_lease', 'operation_plan_lease')),
+			continuation_lease_id TEXT NOT NULL DEFAULT '',
+			operation_plan_lease_id TEXT NOT NULL DEFAULT '',
+			lease_status TEXT NOT NULL DEFAULT '',
+			lease_remaining_turns INTEGER NOT NULL DEFAULT 0,
+			lease_expires_at TEXT,
+			admitted_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (turn_run_id) REFERENCES turn_runs(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_run_authority_session ON execution_run_authority(session_id, admitted_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_run_authority_lease ON execution_run_authority(lease_kind, continuation_lease_id, operation_plan_lease_id)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func ensureTurnRunAccountingColumns(tx *sql.Tx) error {
 	exists, err := schemaTableExists(tx, "turn_runs")
 	if err != nil {

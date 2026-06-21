@@ -109,7 +109,7 @@ func (r *Registry) nativeFileAccessGrantRoots(ctx context.Context, scope sandbox
 	if r == nil || r.store == nil || !toolSessionKeyHasIdentity(key) {
 		return nil, nil
 	}
-	useRef, err := r.authorityUseRefForGrant(ctx, "file_access", key)
+	useRef, err := r.authorityUseRefForGrant(ctx, "file_access", key, p)
 	if err != nil {
 		return nil, nil
 	}

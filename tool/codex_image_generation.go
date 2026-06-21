@@ -64,7 +64,7 @@ func (r *Registry) requireCodexImageGenerationAccess(ctx context.Context, p prin
 	if !ok {
 		return session.CapabilityGrant{}, session.AuthorityUseRef{}, fmt.Errorf("tool %q is not granted to principal %q", codexImageGenerationToolName, toolAuthorityPrincipalDisplay(p))
 	}
-	useRef, err := r.authorityUseRefForGrant(ctx, codexImageGenerationToolName, key)
+	useRef, err := r.authorityUseRefForGrant(ctx, codexImageGenerationToolName, key, p)
 	if err != nil {
 		if recordErr := r.recordCodexImageGenerationInvocation(grant, p, useRef, "blocked", err.Error()); recordErr != nil {
 			return grant, useRef, errors.Join(err, recordErr)

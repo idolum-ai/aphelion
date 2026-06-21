@@ -373,7 +373,7 @@ func (r *Registry) requireWebSearchAccess(ctx context.Context, p principal.Princ
 	if !ok {
 		return session.CapabilityGrant{}, session.AuthorityUseRef{}, fmt.Errorf("tool %q is not granted to principal %q", webSearchToolName, toolAuthorityPrincipalDisplay(p))
 	}
-	useRef, err := r.authorityUseRefForGrant(ctx, webSearchToolName, key)
+	useRef, err := r.authorityUseRefForGrant(ctx, webSearchToolName, key, p)
 	if err != nil {
 		if recordErr := r.recordWebSearchInvocation(grant, p, useRef, "blocked", err.Error()); recordErr != nil {
 			return grant, useRef, errors.Join(err, recordErr)

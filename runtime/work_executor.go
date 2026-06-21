@@ -266,8 +266,8 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 		key.Scope = telegramDMScopeRef(key.ChatID)
 	}
 	ctx = toolpkg.WithContinuationExecAuthority(ctx, req.State)
-	if useRef, ok := workRequestAuthorityUseRef(req, key, time.Now().UTC()); ok {
-		ctx = toolpkg.WithAuthorityUseRef(ctx, useRef)
+	if admission, ok := workRequestAuthorityAdmission(req, key, time.Now().UTC()); ok {
+		ctx = toolpkg.WithExecutionAuthorityAdmission(ctx, admission)
 	}
 	msg := continuationInboundForKey(key, req.Actor, approvedContinuationEventTextForState(req.State), core.InboundOriginTurnAuthorization, string(session.TurnAuthorizationKindContinuation))
 	result, err := e.runtime.handleInternalContinuationTurnWithOptions(ctx, req.Actor, msg, internalContinuationOptions{})
@@ -317,33 +317,48 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 	return out, nil
 }
 
-func workRequestAuthorityUseRef(req WorkRequest, key session.SessionKey, now time.Time) (session.AuthorityUseRef, bool) {
+func workRequestAuthorityAdmission(req WorkRequest, key session.SessionKey, now time.Time) (session.ExecutionRunAuthority, bool) {
 	if key.ChatID == 0 && key.UserID == 0 && key.Scope.IsZero() {
-		return session.AuthorityUseRef{}, false
+		return session.ExecutionRunAuthority{}, false
 	}
-	ref := session.AuthorityUseRef{SessionID: session.SessionIDForKey(key)}
-	sources := make([]string, 0, 2)
+	sessionID := session.SessionIDForKey(key)
 
 	lease := session.NormalizeContinuationLease(req.State.ContinuationLease)
 	if strings.TrimSpace(lease.ID) == "" {
 		lease.ID = strings.TrimSpace(req.LeaseID)
 	}
-	if strings.TrimSpace(lease.ID) != "" && lease.ActiveAt(now) {
-		ref.ContinuationLeaseID = lease.ID
-		sources = append(sources, "continuation_lease")
-	}
+	continuationActive := strings.TrimSpace(lease.ID) != "" && lease.ActiveAt(now)
 
 	planLease := session.NormalizeOperationPlanLease(req.Operation.PlanLease)
-	if workRequestOperationPlanLeaseUsable(planLease, now) {
-		ref.OperationPlanLeaseID = planLease.ID
-		sources = append(sources, "operation_plan_lease")
+	planActive := workRequestOperationPlanLeaseUsable(planLease, now)
+	if continuationActive == planActive {
+		return session.ExecutionRunAuthority{}, false
 	}
-
-	if len(sources) == 0 {
-		return session.AuthorityUseRef{}, false
+	record := session.ExecutionRunAuthority{
+		SessionID:        sessionID,
+		ChatID:           key.ChatID,
+		UserID:           key.UserID,
+		Scope:            key.Scope,
+		Principal:        runtimeExecutionPrincipalID(req.Actor),
+		PrincipalRole:    string(req.Actor.Role),
+		ExecutionSpecies: "native_continuation",
+		AdmittedAt:       now.UTC(),
 	}
-	ref.AuthoritySource = strings.Join(sources, "+")
-	return session.NormalizeAuthorityUseRef(ref), true
+	if continuationActive {
+		record.LeaseKind = session.ExecutionAuthorityLeaseKindContinuation
+		record.ContinuationLeaseID = lease.ID
+		record.LeaseStatus = string(lease.Status)
+		record.LeaseRemainingTurns = lease.RemainingTurns
+		record.LeaseExpiresAt = lease.ExpiresAt
+		return session.NormalizeExecutionRunAuthority(record), true
+	}
+	record.ExecutionSpecies = "operation_plan_continuation"
+	record.LeaseKind = session.ExecutionAuthorityLeaseKindOperationPlan
+	record.OperationPlanLeaseID = planLease.ID
+	record.LeaseStatus = string(planLease.Status)
+	record.LeaseRemainingTurns = planLease.RemainingTurns
+	record.LeaseExpiresAt = planLease.ExpiresAt
+	return session.NormalizeExecutionRunAuthority(record), true
 }
 
 func workRequestOperationPlanLeaseUsable(lease session.OperationPlanLease, now time.Time) bool {
@@ -360,6 +375,26 @@ func workRequestOperationPlanLeaseUsable(lease session.OperationPlanLease, now t
 	default:
 		return false
 	}
+}
+
+func runtimeExecutionPrincipalID(actor principal.Principal) string {
+	switch actor.Role {
+	case principal.RoleDurableAgent:
+		if id := strings.TrimSpace(actor.DurableAgentID); id != "" {
+			return "durable_agent:" + id
+		}
+	case principal.RoleAdmin, principal.RoleApprovedUser:
+		if actor.TelegramUserID > 0 {
+			return fmt.Sprintf("telegram:%d", actor.TelegramUserID)
+		}
+		if actor.Role == principal.RoleAdmin {
+			return "admin"
+		}
+	}
+	if actor.TelegramUserID > 0 {
+		return fmt.Sprintf("telegram:%d", actor.TelegramUserID)
+	}
+	return strings.TrimSpace(string(actor.Role))
 }
 
 func workResultBudgetRecoveryScheduled(result WorkResult) bool {

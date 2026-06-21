@@ -73,11 +73,11 @@ func TestWebSearchBlocksWithoutLeaseEvidence(t *testing.T) {
 	}
 	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 	out, err := registry.executeWithScopeAndPrincipal(context.Background(), webSearchToolName, json.RawMessage(`{"query":"aphelion"}`), sandbox.Scope{WorkingRoot: registry.workspace}, actor, adminSessionKey())
-	if err == nil || !strings.Contains(err.Error(), "requires active continuation or operation plan lease evidence") {
-		t.Fatalf("err = %v output=%s, want lease blocker", err, out)
+	if err == nil || !strings.Contains(err.Error(), "requires durable run authority evidence") {
+		t.Fatalf("err = %v output=%s, want durable run authority blocker", err, out)
 	}
-	if !strings.Contains(out, `"status": "blocked"`) || !strings.Contains(out, "lease evidence") {
-		t.Fatalf("output = %s, want structured lease blocker", out)
+	if !strings.Contains(out, `"status": "blocked"`) || !strings.Contains(out, "durable run authority") {
+		t.Fatalf("output = %s, want structured durable run authority blocker", out)
 	}
 }
 
@@ -89,6 +89,7 @@ func TestWebSearchHostedSuccessNormalizesUntrustedResults(t *testing.T) {
 	registry.WithWebSearchOptions(WebSearchOptions{Enabled: true, ProviderOrder: []string{"openai_hosted"}})
 	registry.SetWebSearchProviders(provider)
 	grantToolInvoke(t, store, webSearchToolName, "telegram:1001")
+	grantAuthorityUseLease(t, store, adminSessionKey())
 	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 	out, err := registry.executeWithScopeAndPrincipal(context.Background(), webSearchToolName, json.RawMessage(`{"query":"aphelion web search","count":1}`), sandbox.Scope{WorkingRoot: registry.workspace}, actor, adminSessionKey())
 	if err != nil {

@@ -135,7 +135,7 @@ func (r *Registry) remoteHost(ctx context.Context, input json.RawMessage, p prin
 	in.Model = strings.TrimSpace(in.Model)
 	in.Sandbox = normalizeRemoteHostSandbox(in.Sandbox)
 
-	access, err := r.requireRemoteHostAccess(p, key, in, input)
+	access, err := r.requireRemoteHostAccess(ctx, p, key, in, input)
 	if err != nil {
 		grantID := ""
 		if strings.TrimSpace(access.Grant.GrantID) != "" {
@@ -203,7 +203,7 @@ func (r *Registry) remoteHost(ctx context.Context, input json.RawMessage, p prin
 	}), nil
 }
 
-func (r *Registry) requireRemoteHostAccess(p principal.Principal, key session.SessionKey, in remoteHostInput, raw json.RawMessage) (remoteHostGrantAccess, error) {
+func (r *Registry) requireRemoteHostAccess(ctx context.Context, p principal.Principal, key session.SessionKey, in remoteHostInput, raw json.RawMessage) (remoteHostGrantAccess, error) {
 	access := remoteHostGrantAccess{}
 	if p.Role != principal.RoleDurableAgent {
 		return access, fmt.Errorf("remote_host is available only to durable agents")
@@ -215,7 +215,14 @@ func (r *Registry) requireRemoteHostAccess(p principal.Principal, key session.Se
 		}
 		if ok {
 			access.Grant = grant
-			access.Ref = remoteHostAuthorityUseRef(key)
+			ref, refErr := r.authorityUseRefForGrant(ctx, remoteHostToolName, key, p)
+			if refErr != nil {
+				if recordErr := r.recordRemoteHostInvocation(grant, p, session.AuthorityUseRef{}, firstNonEmpty(in.Action, "invoke"), "blocked", refErr.Error()); recordErr != nil {
+					return access, errors.Join(refErr, recordErr)
+				}
+				return access, refErr
+			}
+			access.Ref = ref
 			if recordErr := r.recordRemoteHostInvocation(grant, p, access.Ref, firstNonEmpty(in.Action, "invoke"), "blocked", "remote_host action must be one of check, ssh_exec, or codex_exec"); recordErr != nil {
 				return access, errors.Join(fmt.Errorf("remote_host action must be one of check, ssh_exec, or codex_exec"), recordErr)
 			}
@@ -236,16 +243,29 @@ func (r *Registry) requireRemoteHostAccess(p principal.Principal, key session.Se
 		if evidence, evidenceOK, evidenceErr := r.remoteHostEvidenceGrant(p, in.Host); evidenceErr != nil {
 			return access, evidenceErr
 		} else if evidenceOK {
-			ref := remoteHostAuthorityUseRef(key)
+			ref, refErr := r.authorityUseRefForGrant(ctx, remoteHostToolName, key, p)
 			reason := fmt.Sprintf("remote_host action %q is not granted to principal %q for tailnet_host:%s", in.Action, toolAuthorityPrincipalDisplay(p), in.Host)
+			if refErr != nil {
+				reason = refErr.Error()
+			}
 			if recordErr := r.recordRemoteHostInvocation(evidence, p, ref, in.Action, "blocked", reason); recordErr != nil {
 				return access, errors.Join(fmt.Errorf("%s", reason), recordErr)
+			}
+			if refErr != nil {
+				return access, refErr
 			}
 		}
 		return access, fmt.Errorf("remote_host action %q is not granted to principal %q for tailnet_host:%s", in.Action, toolAuthorityPrincipalDisplay(p), in.Host)
 	}
 	access.Grant = grant
-	access.Ref = remoteHostAuthorityUseRef(key)
+	ref, refErr := r.authorityUseRefForGrant(ctx, remoteHostToolName, key, p)
+	if refErr != nil {
+		if recordErr := r.recordRemoteHostInvocation(grant, p, session.AuthorityUseRef{}, in.Action, "blocked", refErr.Error()); recordErr != nil {
+			return access, errors.Join(refErr, recordErr)
+		}
+		return access, refErr
+	}
+	access.Ref = ref
 	scopes, hasScope, err := remoteHostContractScopesFromGrant(grant)
 	if err != nil {
 		if recordErr := r.recordRemoteHostInvocation(grant, p, access.Ref, in.Action, "blocked", err.Error()); recordErr != nil {
@@ -313,14 +333,6 @@ func remoteHostPrincipalCandidates(p principal.Principal) []string {
 		out = append(out, candidate)
 	}
 	return out
-}
-
-func remoteHostAuthorityUseRef(key session.SessionKey) session.AuthorityUseRef {
-	ref := session.AuthorityUseRef{AuthoritySource: "capability_grant"}
-	if toolSessionKeyHasIdentity(key) {
-		ref.SessionID = session.SessionIDForKey(key)
-	}
-	return session.NormalizeAuthorityUseRef(ref)
 }
 
 func remoteHostTargetResource(host string) string {

@@ -39,12 +39,12 @@ type fakeWorkExecutor struct {
 	attemptStore     *session.SQLiteStore
 }
 
-func TestWorkRequestAuthorityUseRefCarriesContinuationLease(t *testing.T) {
+func TestWorkRequestAuthorityAdmissionCarriesContinuationLease(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.June, 21, 12, 0, 0, 0, time.UTC)
 	key := session.SessionKey{ChatID: 9191, UserID: 1001, Scope: telegramDMScopeRef(9191)}
-	ref, ok := workRequestAuthorityUseRef(WorkRequest{
+	admission, ok := workRequestAuthorityAdmission(WorkRequest{
 		Key: key,
 		State: session.ContinuationState{
 			ContinuationLease: session.ContinuationLease{
@@ -56,19 +56,19 @@ func TestWorkRequestAuthorityUseRefCarriesContinuationLease(t *testing.T) {
 		},
 	}, key, now)
 	if !ok {
-		t.Fatal("workRequestAuthorityUseRef() ok=false, want active continuation lease evidence")
+		t.Fatal("workRequestAuthorityAdmission() ok=false, want active continuation lease evidence")
 	}
-	if ref.SessionID != session.SessionIDForKey(key) || ref.ContinuationLeaseID != "lease-capability-work" || ref.AuthoritySource != "continuation_lease" {
-		t.Fatalf("ref = %#v, want session-bound continuation lease evidence", ref)
+	if admission.SessionID != session.SessionIDForKey(key) || admission.ContinuationLeaseID != "lease-capability-work" || admission.LeaseKind != session.ExecutionAuthorityLeaseKindContinuation {
+		t.Fatalf("admission = %#v, want session-bound continuation lease evidence", admission)
 	}
 }
 
-func TestWorkRequestAuthorityUseRefCarriesOperationPlanLease(t *testing.T) {
+func TestWorkRequestAuthorityAdmissionCarriesOperationPlanLease(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.June, 21, 12, 0, 0, 0, time.UTC)
 	key := session.SessionKey{ChatID: 9192, UserID: 1001, Scope: telegramDMScopeRef(9192)}
-	ref, ok := workRequestAuthorityUseRef(WorkRequest{
+	admission, ok := workRequestAuthorityAdmission(WorkRequest{
 		Key: key,
 		Operation: session.OperationState{
 			PlanLease: session.OperationPlanLease{
@@ -80,10 +80,39 @@ func TestWorkRequestAuthorityUseRefCarriesOperationPlanLease(t *testing.T) {
 		},
 	}, key, now)
 	if !ok {
-		t.Fatal("workRequestAuthorityUseRef() ok=false, want active operation plan lease evidence")
+		t.Fatal("workRequestAuthorityAdmission() ok=false, want active operation plan lease evidence")
 	}
-	if ref.SessionID != session.SessionIDForKey(key) || ref.OperationPlanLeaseID != "oplease-capability-work" || ref.AuthoritySource != "operation_plan_lease" {
-		t.Fatalf("ref = %#v, want session-bound operation plan lease evidence", ref)
+	if admission.SessionID != session.SessionIDForKey(key) || admission.OperationPlanLeaseID != "oplease-capability-work" || admission.LeaseKind != session.ExecutionAuthorityLeaseKindOperationPlan {
+		t.Fatalf("admission = %#v, want session-bound operation plan lease evidence", admission)
+	}
+}
+
+func TestWorkRequestAuthorityAdmissionRejectsAmbiguousLeaseKinds(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.June, 21, 12, 0, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 9193, UserID: 1001, Scope: telegramDMScopeRef(9193)}
+	_, ok := workRequestAuthorityAdmission(WorkRequest{
+		Key: key,
+		State: session.ContinuationState{
+			ContinuationLease: session.ContinuationLease{
+				ID:             "lease-capability-work",
+				Status:         session.ContinuationLeaseStatusActive,
+				RemainingTurns: 1,
+				ExpiresAt:      now.Add(time.Hour),
+			},
+		},
+		Operation: session.OperationState{
+			PlanLease: session.OperationPlanLease{
+				ID:             "oplease-capability-work",
+				Status:         session.PlanLeaseStatusApproved,
+				RemainingTurns: 1,
+				ExpiresAt:      now.Add(time.Hour),
+			},
+		},
+	}, key, now)
+	if ok {
+		t.Fatal("workRequestAuthorityAdmission() ok=true, want ambiguous lease kinds rejected")
 	}
 }
 

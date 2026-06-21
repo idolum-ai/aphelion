@@ -14,7 +14,7 @@ import (
 	toolpkg "github.com/idolum-ai/aphelion/tool"
 )
 
-func TestNativeWorkExecutorCarriesAuthorityUseRefIntoInternalTurn(t *testing.T) {
+func TestNativeWorkExecutorCarriesAuthorityAdmissionIntoInternalTurn(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, _, sender := buildRuntimeFixtures(t)
@@ -33,13 +33,6 @@ func TestNativeWorkExecutorCarriesAuthorityUseRefIntoInternalTurn(t *testing.T) 
 		ID:        "op-native-authority-continuity",
 		Objective: "Exercise native work continuity.",
 		Status:    session.OperationStatusActive,
-		PlanLease: session.OperationPlanLease{
-			ID:             "plan-lease-native-authority-continuity",
-			Status:         session.PlanLeaseStatusActive,
-			TurnBudget:     1,
-			RemainingTurns: 1,
-			ExpiresAt:      now.Add(time.Hour),
-		},
 	}
 
 	_, err = nativeWorkExecutor{runtime: rt}.Run(context.Background(), WorkRequest{
@@ -55,21 +48,18 @@ func TestNativeWorkExecutorCarriesAuthorityUseRefIntoInternalTurn(t *testing.T) 
 	if !recorder.called {
 		t.Fatal("internal continuation assembler was not called")
 	}
-	ref, ok := toolpkg.AuthorityUseRefFromContext(recorder.ctx)
+	admission, ok := toolpkg.ExecutionAuthorityAdmissionFromContext(recorder.ctx)
 	if !ok {
-		t.Fatal("AuthorityUseRefFromContext() ok=false, want native work to carry authority-use ref")
+		t.Fatal("ExecutionAuthorityAdmissionFromContext() ok=false, want native work to carry authority admission")
 	}
-	if ref.SessionID != session.SessionIDForKey(key) {
-		t.Fatalf("ref.SessionID = %q, want %q", ref.SessionID, session.SessionIDForKey(key))
+	if admission.SessionID != session.SessionIDForKey(key) {
+		t.Fatalf("admission.SessionID = %q, want %q", admission.SessionID, session.SessionIDForKey(key))
 	}
-	if ref.ContinuationLeaseID != "lease-native-authority-continuity" {
-		t.Fatalf("ref.ContinuationLeaseID = %q, want native continuation lease", ref.ContinuationLeaseID)
+	if admission.TurnRunID != 0 {
+		t.Fatalf("admission.TurnRunID = %d, want pre-turn admission without run identity", admission.TurnRunID)
 	}
-	if ref.OperationPlanLeaseID != "plan-lease-native-authority-continuity" {
-		t.Fatalf("ref.OperationPlanLeaseID = %q, want operation plan lease", ref.OperationPlanLeaseID)
-	}
-	if ref.AuthoritySource != "continuation_lease+operation_plan_lease" {
-		t.Fatalf("ref.AuthoritySource = %q, want both lease sources", ref.AuthoritySource)
+	if admission.ContinuationLeaseID != "lease-native-authority-continuity" || admission.LeaseKind != session.ExecutionAuthorityLeaseKindContinuation {
+		t.Fatalf("admission = %#v, want native continuation lease", admission)
 	}
 }
 

@@ -70,11 +70,27 @@ func (r *Registry) executeWithRoot(ctx context.Context, name string, input json.
 	}, principal.Principal{}, session.SessionKey{})
 }
 
-func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
-	var err error
+func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (out string, err error) {
 	input, err = normalizeToolInput(input)
 	if err != nil {
 		return "", err
+	}
+	var directRunID int64
+	if ctx, directRunID, err = r.ensureDirectInvocationAuthorityContext(ctx, name, p, key); err != nil {
+		return "", err
+	}
+	if directRunID > 0 && r.store != nil {
+		defer func() {
+			status := session.TurnRunStatusCompleted
+			errText := ""
+			if err != nil {
+				status = session.TurnRunStatusFailed
+				errText = err.Error()
+			}
+			if completeErr := r.store.CompleteTurnRun(directRunID, status, errText); completeErr != nil && err == nil {
+				err = completeErr
+			}
+		}()
 	}
 	authorityGrant, authorityManaged, err := r.requireAuthorityToolAccess(ctx, name, p, key, input)
 	if err != nil {
