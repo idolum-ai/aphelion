@@ -34,7 +34,8 @@ The execution-authority spine is:
 5. Capability grants are checked for principal, kind, resource, and exact action.
 6. Resource authority is compiled for the concrete operation.
 7. Invocation evidence records grant, principal, action, session, authority
-   source, and lease IDs.
+   source, lease IDs, and the operation outcome when the invocation crosses a
+   capability or `file_access` grant.
 
 Context may carry an authority-use reference, but it may not manufacture
 authority. Durable state remains canonical.
@@ -51,10 +52,10 @@ For native file access, the effective authority is:
 
 This is not a blanket widening of native sandbox roots. A `file_access` grant may
 add a temporary operation-specific root only after the lease and grant are
-validated. Hidden paths remain hidden. Symlink grant roots are rejected so the
-authority boundary cannot be retargeted after approval. Missing approved write
-roots may be materialized only when the requested path remains under the granted
-root.
+validated. Hidden paths remain hidden. Grant roots containing symlink components
+are rejected so the authority boundary cannot be retargeted after approval.
+Missing approved write roots may be materialized only when the requested path
+remains under the granted root.
 
 Narrow file actions stay narrow:
 
@@ -78,10 +79,16 @@ currently do not expose capability-managed tools at all; their continuity test i
 that they remain scoped protocol or presentation paths until a future change
 explicitly adds a point-of-use gate.
 
+This is boundary-level conformance, not proof that every execution species has a
+full end-to-end tool flow. Rows marked as non-tool or protocol coverage must not
+be cited as evidence that a child, recovery, or scheduled path can invoke a
+parent tool safely. They only certify that the current implementation either
+reaches the shared point-of-use gate or does not expose that authority surface.
+
 | Species | Entry shape | Authority transport | Point-of-use gate | Current automated coverage |
 | --- | --- | --- | --- | --- |
 | Interactive tool invocation | User turn through ordinary tool registry | Durable session lookup or explicit context reference | `Registry.authorityUseRefForGrant` plus capability invocation audit | Covered by `TestExecutionAuthorityContinuityToolBoundaryMatrix` durable-fallback row |
-| Native continuation | Runtime work executor invoking an internal continuation turn | `AuthorityUseRef` in context | Context reference revalidated against current continuation lease | Covered by continuation-context rows, native file grant tests, and `TestNativeWorkExecutorCarriesAuthorityUseRefIntoInternalTurn` |
+| Native continuation | Runtime work executor invoking an internal continuation turn | `AuthorityUseRef` in context | Context reference revalidated against current continuation lease | Covered by continuation-context rows, native file grant tests, and `TestNativeWorkExecutorCarriesAuthorityUseRefIntoInternalTurn`; full native-work-to-tool restart flow remains debt |
 | Operation-plan continuation | Runtime work executor under active plan lease | `AuthorityUseRef` in context | Context reference revalidated against current operation-plan lease | Covered by operation-plan context rows and `TestNativeWorkExecutorCarriesAuthorityUseRefIntoInternalTurn` |
 | Durable group child | Durable child enters parent runtime/group turn path | Durable-agent scope, child adapter context, no parent tool registry by default | If tools are ever exposed, same lease and grant gate before tool/resource use | Covered by `TestDurableGroupTurnDoesNotExposeParentToolAuthorityByDefault`; group turns currently expose no parent tools |
 | Remote child | Remote child reports/requests work through parent control plane | Signed child protocol plus review artifacts/parent conversation sync | If parent-side tools are ever exposed, same lease and grant gate before tool/resource use | Covered by remote child protocol tests; remote child currently uploads review artifacts rather than invoking parent tools |
@@ -109,7 +116,7 @@ boundary where it invokes a capability-managed tool or resource:
 | Resource path outside effective grant/sandbox policy | Invocation blocked |
 | Symlink grant root or hidden path | Invocation blocked |
 | Approved missing write root with create operation | Invocation allowed only under that grant root |
-| Restart between approval and invocation | Invocation revalidates durable state before acting |
+| Restart between approval and invocation | Invocation revalidates durable state before acting; current file-access coverage reopens the store at the tool boundary |
 | Species does not expose tools | No parent/admin tool authority is available by resemblance |
 
 ## Current Test Anchors
@@ -122,9 +129,10 @@ boundary where it invokes a capability-managed tool or resource:
 - [`durableagent/remote_child_test.go`](../../durableagent/remote_child_test.go)
 
 The first anchor is the conformance matrix seed. The others cover concrete
-regressions around context lease evidence, native file grants, runtime
-propagation into native work execution, durable group non-tool exposure,
-scheduled job scoping, and remote child review-artifact protocol behavior.
+regressions around context lease evidence, native file grants, grant-backed file
+operation audit rows, runtime propagation into native work execution, durable
+group non-tool exposure, scheduled job scoping, and remote child review-artifact
+protocol behavior.
 
 ## Remaining Integration Debt
 
@@ -133,6 +141,18 @@ shared tool/file-access boundary. It does not yet expose one canonical
 execution-authority envelope type that binds principal, session/scope, run,
 lease kind, grant, action, resource, expiry, and source across every execution
 species.
+
+Native file access is still pathname-based after authorization. The current
+guard rejects symlink components in approved grant roots and revalidates
+containment before use, but validation and filesystem operations are not one
+descriptor-relative transaction. Child-controlled or otherwise adversarial
+workspaces should not be treated as fully hardened until native file access uses
+no-follow, beneath-root descriptor traversal for read, write, list, and search.
+
+The matrix also remains incomplete as end-to-end execution-species proof. A
+complete durable-child path test should cover approved child request, durable
+lease, native work execution, internal turn, real tool or file operation,
+persisted invocation evidence, store restart, and revalidation or denial.
 
 Until that envelope exists, new execution species must either:
 

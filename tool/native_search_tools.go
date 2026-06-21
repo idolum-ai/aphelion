@@ -17,7 +17,7 @@ import (
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
-func (r *Registry) searchFiles(ctx context.Context, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
+func (r *Registry) searchFiles(ctx context.Context, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (out string, err error) {
 	var in searchFilesInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", fmt.Errorf("decode search input: %w", err)
@@ -36,13 +36,19 @@ func (r *Registry) searchFiles(ctx context.Context, input json.RawMessage, scope
 	if err != nil {
 		return "", err
 	}
-	root, err := resolveNativeToolPathWithReadRoots(scope, pathRaw, nativePathRead, roots)
+	root, err := resolveNativeToolPathWithReadRoots(scope, pathRaw, nativePathRead, nativeFileAccessGrantRootPaths(roots))
 	if err != nil {
 		return "", err
 	}
+	audit, auditOK := nativeFileAccessGrantRootForPath(root, roots)
+	defer func() {
+		if auditOK {
+			err = r.recordNativeFileAccessInvocation(audit, p, "search", err)
+		}
+	}()
 	matches := make([]string, 0, limit)
 	needle := strings.ToLower(query)
-	err = walkSearchRoot(ctx, root, maxBytes, limit, needle, &matches, scope, roots)
+	err = walkSearchRoot(ctx, root, maxBytes, limit, needle, &matches, scope, nativeFileAccessGrantRootPaths(roots))
 	if err != nil {
 		return "", err
 	}

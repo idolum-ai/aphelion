@@ -35,7 +35,7 @@ func (r *Registry) resolveNativeReadToolPathForOperation(ctx context.Context, sc
 	if err != nil {
 		return "", err
 	}
-	return resolveNativeToolPathWithReadRoots(scope, raw, nativePathRead, roots)
+	return resolveNativeToolPathWithReadRoots(scope, raw, nativePathRead, nativeFileAccessGrantRootPaths(roots))
 }
 
 func (r *Registry) resolveNativeWriteToolPath(ctx context.Context, scope sandbox.Scope, p principal.Principal, key session.SessionKey, raw string) (string, error) {
@@ -43,7 +43,7 @@ func (r *Registry) resolveNativeWriteToolPath(ctx context.Context, scope sandbox
 	if err != nil {
 		return "", err
 	}
-	return resolveNativeToolPathWithExtraRoots(scope, raw, nativePathWrite, roots)
+	return resolveNativeToolPathWithExtraRoots(scope, raw, nativePathWrite, nativeFileAccessGrantRootPaths(roots))
 }
 
 func resolveNativeToolPathWithExtraRoots(scope sandbox.Scope, raw string, access nativePathAccess, extraRoots []string) (string, error) {
@@ -98,16 +98,24 @@ func resolveNativeToolPathWithExtraRoots(scope sandbox.Scope, raw string, access
 	return target, nil
 }
 
-func (r *Registry) nativeFileAccessGrantRoots(ctx context.Context, scope sandbox.Scope, p principal.Principal, key session.SessionKey, access nativePathAccess, operation string) ([]string, error) {
+type nativeFileAccessGrantRoot struct {
+	Root      string
+	Grant     session.CapabilityGrant
+	UseRef    session.AuthorityUseRef
+	Operation string
+}
+
+func (r *Registry) nativeFileAccessGrantRoots(ctx context.Context, scope sandbox.Scope, p principal.Principal, key session.SessionKey, access nativePathAccess, operation string) ([]nativeFileAccessGrantRoot, error) {
 	if r == nil || r.store == nil || !toolSessionKeyHasIdentity(key) {
 		return nil, nil
 	}
-	if _, err := r.authorityUseRefForGrant(ctx, "file_access", key); err != nil {
+	useRef, err := r.authorityUseRefForGrant(ctx, "file_access", key)
+	if err != nil {
 		return nil, nil
 	}
 
 	now := time.Now().UTC()
-	roots := make([]string, 0)
+	roots := make([]nativeFileAccessGrantRoot, 0)
 	seen := make(map[string]struct{})
 	for _, principalID := range nativeFileAccessPrincipalIDs(p) {
 		grants, err := r.store.CapabilityGrants(200, session.CapabilityGrantStatusActive, session.CapabilityKindFileAccess, principalID)
@@ -130,10 +138,58 @@ func (r *Registry) nativeFileAccessGrantRoots(ctx context.Context, scope sandbox
 				continue
 			}
 			seen[root] = struct{}{}
-			roots = append(roots, root)
+			roots = append(roots, nativeFileAccessGrantRoot{
+				Root:      root,
+				Grant:     grant,
+				UseRef:    useRef,
+				Operation: normalizeToolFileAccessOperation(operation),
+			})
 		}
 	}
-	return normalizeNativeRootsAllowEmpty(roots)
+	for i := range roots {
+		root, err := filepath.Abs(filepath.Clean(roots[i].Root))
+		if err != nil {
+			return nil, fmt.Errorf("resolve file_access root %q: %w", roots[i].Root, err)
+		}
+		roots[i].Root = root
+	}
+	return roots, nil
+}
+
+func nativeFileAccessGrantRootPaths(roots []nativeFileAccessGrantRoot) []string {
+	if len(roots) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(roots))
+	for _, root := range roots {
+		if strings.TrimSpace(root.Root) != "" {
+			out = append(out, root.Root)
+		}
+	}
+	return out
+}
+
+func nativeFileAccessGrantRootForPath(path string, roots []nativeFileAccessGrantRoot) (nativeFileAccessGrantRoot, bool) {
+	path = strings.TrimSpace(path)
+	if path == "" || len(roots) == 0 {
+		return nativeFileAccessGrantRoot{}, false
+	}
+	path, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return nativeFileAccessGrantRoot{}, false
+	}
+	var best nativeFileAccessGrantRoot
+	bestLen := -1
+	for _, root := range roots {
+		if !pathWithinAnyRoot(path, []string{root.Root}) {
+			continue
+		}
+		if l := len(root.Root); l > bestLen {
+			best = root
+			bestLen = l
+		}
+	}
+	return best, bestLen >= 0
 }
 
 func nativeFileAccessPrincipalIDs(p principal.Principal) []string {
@@ -225,10 +281,10 @@ func nativeCapabilityFileAccessRoot(scope sandbox.Scope, value string) (string, 
 	if err != nil {
 		return "", err
 	}
-	if info, err := os.Lstat(root); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("file_access target_resource %q must not be a symlink", value)
-	} else if err != nil && !os.IsNotExist(err) {
+	if symlink, err := nativeFirstSymlinkPathComponent(root); err != nil {
 		return "", err
+	} else if symlink != "" {
+		return "", fmt.Errorf("file_access target_resource %q must not contain symlink component %q", value, symlink)
 	}
 	if realRoot, err := filepath.EvalSymlinks(root); err == nil {
 		realRoot, err = filepath.Abs(filepath.Clean(realRoot))
@@ -238,6 +294,42 @@ func nativeCapabilityFileAccessRoot(scope sandbox.Scope, value string) (string, 
 		root = realRoot
 	}
 	return root, nil
+}
+
+func nativeFirstSymlinkPathComponent(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", nil
+	}
+	path, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("path %q is not absolute", path)
+	}
+	trimmed := strings.TrimPrefix(path, string(filepath.Separator))
+	if trimmed == "" {
+		return "", nil
+	}
+	current := string(filepath.Separator)
+	for _, part := range strings.Split(trimmed, string(filepath.Separator)) {
+		if part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return current, nil
+		}
+	}
+	return "", nil
 }
 
 func validateNativeWriteParent(scope sandbox.Scope, parent string, extraWriteRoots []string) error {

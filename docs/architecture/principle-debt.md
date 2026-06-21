@@ -49,6 +49,12 @@ Monitored Tensions.
   point-of-use gate is covered by the conformance matrix in
   [`execution-authority-continuity.md`](execution-authority-continuity.md); the
   longer-term pressure is to avoid drifting into per-species authority copies.
+- **Descriptor-relative file authority:** Native file access currently validates
+  pathnames and then uses ordinary filesystem APIs. Symlink components in grant
+  roots are rejected, but the remaining check/use race is a temporal authority
+  seam for child-controlled workspaces. The repair path is no-follow,
+  beneath-root descriptor traversal for read, write, list, and search before
+  treating file grants as high-trust secret-bearing substrate.
 
 ## Machine-Checked Paths
 

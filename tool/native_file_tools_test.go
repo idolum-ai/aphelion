@@ -309,6 +309,15 @@ func TestNativeFileToolsUseActiveFileAccessGrantAsReadRoot(t *testing.T) {
 	if data, err := os.ReadFile(filepath.Join(target, "config", "created.txt")); err != nil || string(data) != "created under approved child slot" {
 		t.Fatalf("created file data = %q err=%v, want approved child slot write", string(data), err)
 	}
+
+	assertNativeFileAccessInvocations(t, store, "capg-child-runtime-read", map[string]string{
+		"list_dir":  "lease-child-runtime-read",
+		"read_file": "lease-child-runtime-read",
+		"search":    "lease-child-runtime-read",
+	})
+	assertNativeFileAccessInvocations(t, store, "capg-child-runtime-write", map[string]string{
+		"write_file": "lease-child-runtime-read",
+	})
 }
 
 func TestNativeFileAccessGrantKeepsNarrowActionsNarrow(t *testing.T) {
@@ -435,6 +444,144 @@ func TestNativeFileAccessGrantRejectsSymlinkRootRetarget(t *testing.T) {
 	}
 }
 
+func TestNativeFileAccessGrantRejectsAncestorSymlinkRetarget(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	workspace := t.TempDir()
+	linkParent := filepath.Join(workspace, "link-parent")
+	safeParent := t.TempDir()
+	otherParent := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(safeParent, "slot"), 0o755); err != nil {
+		t.Fatalf("mkdir safe slot: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(otherParent, "slot"), 0o755); err != nil {
+		t.Fatalf("mkdir other slot: %v", err)
+	}
+	otherSecret := filepath.Join(otherParent, "slot", "secret.txt")
+	if err := os.WriteFile(otherSecret, []byte("retargeted ancestor\n"), 0o600); err != nil {
+		t.Fatalf("write retarget fixture: %v", err)
+	}
+	if err := os.Symlink(safeParent, linkParent); err != nil {
+		t.Fatalf("symlink safe parent: %v", err)
+	}
+
+	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	grantAuthorityUseLeaseWithID(t, store, key, "lease-ancestor-symlink-file-access")
+	ctx := WithAuthorityUseRef(context.Background(), session.AuthorityUseRef{
+		SessionID:           session.SessionIDForKey(key),
+		ContinuationLeaseID: "lease-ancestor-symlink-file-access",
+		AuthoritySource:     "continuation_lease",
+	})
+	scope := sandbox.Scope{
+		Principal:        p,
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       filepath.Join(workspace, "global"),
+		SharedMemoryRoot: filepath.Join(workspace, "shared"),
+		WorkingRoot:      workspace,
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-ancestor-symlink-root",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindFileAccess,
+		TargetResource: filepath.Join(linkParent, "slot"),
+		AllowedActions: []string{"read_file"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(ancestor symlink) err = %v", err)
+	}
+	if err := os.Remove(linkParent); err != nil {
+		t.Fatalf("remove ancestor symlink: %v", err)
+	}
+	if err := os.Symlink(otherParent, linkParent); err != nil {
+		t.Fatalf("retarget ancestor symlink: %v", err)
+	}
+
+	_, err := registry.executeWithScopeAndPrincipal(ctx, "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(otherSecret)+`","full":true}`), scope, p, key)
+	if err == nil || !strings.Contains(err.Error(), "outside the read roots") {
+		t.Fatalf("read_file retargeted ancestor symlink grant err = %v, want read-root rejection", err)
+	}
+	invocations, err := store.CapabilityInvocationsByGrant("capg-ancestor-symlink-root", 10)
+	if err != nil {
+		t.Fatalf("CapabilityInvocationsByGrant(ancestor symlink) err = %v", err)
+	}
+	if len(invocations) != 0 {
+		t.Fatalf("ancestor symlink invocations = %#v, want none because no grant root was authorized", invocations)
+	}
+}
+
+func TestNativeFileAccessGrantRevalidatesAfterStoreReopen(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	workspace := t.TempDir()
+	target := t.TempDir()
+	targetFile := filepath.Join(target, "note.txt")
+	if err := os.WriteFile(targetFile, []byte("lease-bound\n"), 0o600); err != nil {
+		t.Fatalf("write target fixture: %v", err)
+	}
+	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	leaseID := "lease-file-access-reopen"
+	grantAuthorityUseLeaseWithID(t, store, key, leaseID)
+	ctx := WithAuthorityUseRef(context.Background(), session.AuthorityUseRef{
+		SessionID:           session.SessionIDForKey(key),
+		ContinuationLeaseID: leaseID,
+		AuthoritySource:     "continuation_lease",
+	})
+	scope := sandbox.Scope{
+		Principal:        p,
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       filepath.Join(workspace, "global"),
+		SharedMemoryRoot: filepath.Join(workspace, "shared"),
+		WorkingRoot:      workspace,
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-file-access-reopen",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindFileAccess,
+		TargetResource: target,
+		AllowedActions: []string{"read_file"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(reopen) err = %v", err)
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(ctx, "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(targetFile)+`","full":true}`), scope, p, key)
+	if err != nil {
+		t.Fatalf("read_file before reopen err = %v", err)
+	}
+	if !strings.Contains(out, "lease-bound") {
+		t.Fatalf("read_file before reopen out = %q, want fixture content", out)
+	}
+	dbPath := store.DBPath()
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store before reopen: %v", err)
+	}
+	reopened, err := session.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen) err = %v", err)
+	}
+	defer reopened.Close()
+	storeContinuationLeaseForMatrix(t, reopened, key, session.ContinuationLease{
+		ID:             leaseID,
+		Status:         session.ContinuationLeaseStatusRevoked,
+		RemainingTurns: 1,
+		ExpiresAt:      time.Now().UTC().Add(time.Hour),
+	})
+	reopenedRegistry := NewRegistry(registry.workspace, 2*time.Second).WithSessionStore(reopened)
+	_, err = reopenedRegistry.executeWithScopeAndPrincipal(ctx, "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(targetFile)+`","full":true}`), scope, p, key)
+	if err == nil || !strings.Contains(err.Error(), "outside the read roots") {
+		t.Fatalf("read_file after reopened revocation err = %v, want read-root rejection", err)
+	}
+	assertNativeFileAccessInvocations(t, reopened, "capg-file-access-reopen", map[string]string{
+		"read_file": leaseID,
+	})
+}
+
 func TestNativeFileAccessWriteGrantCanCreateGrantedRoot(t *testing.T) {
 	t.Parallel()
 
@@ -537,6 +684,37 @@ func TestNativeFileAccessGrantDoesNotBypassHiddenPaths(t *testing.T) {
 	_, err = registry.executeWithScopeAndPrincipal(ctx, "write_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(secretRoot, "created.txt"))+`","content":"hidden","create_dirs":true}`), scope, p, key)
 	if err == nil || !strings.Contains(err.Error(), "hidden by the sandbox profile") {
 		t.Fatalf("write_file hidden grant err = %v, want hidden-path rejection", err)
+	}
+}
+
+func assertNativeFileAccessInvocations(t *testing.T, store *session.SQLiteStore, grantID string, want map[string]string) {
+	t.Helper()
+
+	invocations, err := store.CapabilityInvocationsByGrant(grantID, len(want)+5)
+	if err != nil {
+		t.Fatalf("CapabilityInvocationsByGrant(%s) err = %v", grantID, err)
+	}
+	seen := make(map[string]session.CapabilityInvocation, len(invocations))
+	for _, invocation := range invocations {
+		seen[invocation.Action] = invocation
+	}
+	for action, leaseID := range want {
+		invocation, ok := seen[action]
+		if !ok {
+			t.Fatalf("grant %s missing invocation action %s; got %#v", grantID, action, invocations)
+		}
+		if invocation.Status != "succeeded" {
+			t.Fatalf("grant %s action %s status = %q, want succeeded", grantID, action, invocation.Status)
+		}
+		if invocation.AuthoritySource != "continuation_lease" {
+			t.Fatalf("grant %s action %s authority source = %q, want continuation_lease", grantID, action, invocation.AuthoritySource)
+		}
+		if invocation.ContinuationLeaseID != leaseID {
+			t.Fatalf("grant %s action %s continuation lease = %q, want %q", grantID, action, invocation.ContinuationLeaseID, leaseID)
+		}
+		if invocation.SessionID != session.SessionIDForKey(adminSessionKey()) {
+			t.Fatalf("grant %s action %s session = %q, want admin session", grantID, action, invocation.SessionID)
+		}
 	}
 }
 
