@@ -75,23 +75,6 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	if err != nil {
 		return "", err
 	}
-	var directRunID int64
-	if ctx, directRunID, err = r.ensureDirectInvocationAuthorityContext(ctx, name, p, key); err != nil {
-		return "", err
-	}
-	if directRunID > 0 && r.store != nil {
-		defer func() {
-			status := session.TurnRunStatusCompleted
-			errText := ""
-			if err != nil {
-				status = session.TurnRunStatusFailed
-				errText = err.Error()
-			}
-			if completeErr := r.store.CompleteTurnRun(directRunID, status, errText); completeErr != nil && err == nil {
-				err = completeErr
-			}
-		}()
-	}
 	authorityGrant, authorityManaged, err := r.requireAuthorityToolAccess(ctx, name, p, key, input)
 	if err != nil {
 		return "", err
@@ -163,7 +146,19 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 						return "", err
 					}
 				}
-				return r.externalExecutor.Execute(ctx, manifest, input, scope, r.runner, r.maxOutputBytes, access)
+				out, err := r.externalExecutor.Execute(ctx, manifest, input, scope, r.runner, r.maxOutputBytes, access)
+				if authorityManaged {
+					status := "completed"
+					errText := ""
+					if err != nil {
+						status = "failed"
+						errText = err.Error()
+					}
+					if recordErr := r.recordAuthorityManagedToolOutcome(ctx, name, p, key, authorityGrant, status, errText); recordErr != nil && err == nil {
+						err = recordErr
+					}
+				}
+				return out, err
 			}
 			if err := validateExternalProcessPolicy(manifest); err != nil {
 				return "", err

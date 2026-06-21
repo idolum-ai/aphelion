@@ -91,9 +91,9 @@ func TestRemoteHostCheckRunsHarmlessCommand(t *testing.T) {
 		Principal: "durable_agent:child-alpha",
 		Actions:   []string{"check"},
 	})
-	grantAuthorityUseLease(t, store, adminSessionKey())
 	child := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"}
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"check","host":"mac-mini","user":"daniel","timeout_sec":30}`))
+	ctx := authorityRunContextForPrincipal(t, store, adminSessionKey(), child)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"check","host":"mac-mini","user":"daniel","timeout_sec":30}`))
 	if err != nil {
 		t.Fatalf("remote_host check err = %v output=%s", err, out)
 	}
@@ -119,9 +119,9 @@ func TestRemoteHostSSHExecUsesOpenSSHAndRecordsEvidence(t *testing.T) {
 		Principal: "durable_agent:child-alpha",
 		Actions:   []string{"ssh_exec", "codex_exec"},
 	})
-	grantAuthorityUseLease(t, store, adminSessionKey())
 	child := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"}
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"ssh_exec","host":"mac-mini","user":"daniel","workdir":"/Users/daniel/Code/aphelion","command":"git status --short","port":2222,"timeout_sec":60}`))
+	ctx := authorityRunContextForPrincipal(t, store, adminSessionKey(), child)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"ssh_exec","host":"mac-mini","user":"daniel","workdir":"/Users/daniel/Code/aphelion","command":"git status --short","port":2222,"timeout_sec":60}`))
 	if err != nil {
 		t.Fatalf("remote_host ssh_exec err = %v output=%s", err, out)
 	}
@@ -158,9 +158,9 @@ func TestRemoteHostCodexExecBuildsRemoteCodexCommand(t *testing.T) {
 		Principal: "durable_agent:child-alpha",
 		Actions:   []string{"ssh_exec", "codex_exec"},
 	})
-	grantAuthorityUseLease(t, store, adminSessionKey())
 	child := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"}
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"codex_exec","host":"mac-mini","user":"daniel","workdir":"/Users/daniel/Code/project","prompt":"review the repo","sandbox":"workspace-write","codex_home":"/Users/daniel/.codex","model":"gpt-5.2"}`))
+	ctx := authorityRunContextForPrincipal(t, store, adminSessionKey(), child)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"codex_exec","host":"mac-mini","user":"daniel","workdir":"/Users/daniel/Code/project","prompt":"review the repo","sandbox":"workspace-write","codex_home":"/Users/daniel/.codex","model":"gpt-5.2"}`))
 	if err != nil {
 		t.Fatalf("remote_host codex_exec err = %v output=%s", err, out)
 	}
@@ -186,17 +186,17 @@ func TestRemoteHostDeniesContractViolationsAndRecordsBlocked(t *testing.T) {
 		Principal: "durable_agent:child-alpha",
 		Actions:   []string{"ssh_exec", "codex_exec"},
 	})
-	grantAuthorityUseLease(t, store, adminSessionKey())
 	child := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"}
-	_, err := registry.ExecuteForSessionPrincipal(context.Background(), child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"ssh_exec","host":"mac-mini","user":"root","workdir":"/Users/daniel/Code/aphelion","command":"pwd"}`))
+	ctx := authorityRunContextForPrincipal(t, store, adminSessionKey(), child)
+	_, err := registry.ExecuteForSessionPrincipal(ctx, child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"ssh_exec","host":"mac-mini","user":"root","workdir":"/Users/daniel/Code/aphelion","command":"pwd"}`))
 	if err == nil || !strings.Contains(err.Error(), "user") {
 		t.Fatalf("wrong user err = %v, want user block", err)
 	}
-	_, err = registry.ExecuteForSessionPrincipal(context.Background(), child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"ssh_exec","host":"mac-mini","user":"daniel","workdir":"/Users/daniel/Secrets","command":"pwd"}`))
+	_, err = registry.ExecuteForSessionPrincipal(ctx, child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"ssh_exec","host":"mac-mini","user":"daniel","workdir":"/Users/daniel/Secrets","command":"pwd"}`))
 	if err == nil || !strings.Contains(err.Error(), "outside") {
 		t.Fatalf("wrong workdir err = %v, want outside block", err)
 	}
-	_, err = registry.ExecuteForSessionPrincipal(context.Background(), child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"codex_exec","host":"mac-mini","user":"daniel","workdir":"/Users/daniel/Code/aphelion","prompt":"write","sandbox":"danger-full-access"}`))
+	_, err = registry.ExecuteForSessionPrincipal(ctx, child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"codex_exec","host":"mac-mini","user":"daniel","workdir":"/Users/daniel/Code/aphelion","prompt":"write","sandbox":"danger-full-access"}`))
 	if err == nil || !strings.Contains(err.Error(), "sandbox") {
 		t.Fatalf("wrong sandbox err = %v, want sandbox block", err)
 	}
@@ -239,13 +239,13 @@ func TestRemoteHostToolInvocationScopeConstrainsSelectors(t *testing.T) {
 			}
 		}`,
 	})
-	grantAuthorityUseLease(t, store, adminSessionKey())
 	child := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"}
-	_, err := registry.ExecuteForSessionPrincipal(context.Background(), child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"codex_exec","host":"mac-mini","user":"daniel","workdir":"/Users/daniel/Code/other","prompt":"review","sandbox":"read-only","codex_home":"/Users/daniel/.codex"}`))
+	ctx := authorityRunContextForPrincipal(t, store, adminSessionKey(), child)
+	_, err := registry.ExecuteForSessionPrincipal(ctx, child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"codex_exec","host":"mac-mini","user":"daniel","workdir":"/Users/daniel/Code/other","prompt":"review","sandbox":"read-only","codex_home":"/Users/daniel/.codex"}`))
 	if err == nil || !strings.Contains(err.Error(), "selector") {
 		t.Fatalf("wrong tool_invocation selector err = %v, want selector block", err)
 	}
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"codex_exec","host":"mac-mini","user":"daniel","workdir":"/Users/daniel/Code/aphelion","prompt":"review","sandbox":"read-only","codex_home":"/Users/daniel/.codex"}`))
+	out, err := registry.ExecuteForSessionPrincipal(ctx, child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"codex_exec","host":"mac-mini","user":"daniel","workdir":"/Users/daniel/Code/aphelion","prompt":"review","sandbox":"read-only","codex_home":"/Users/daniel/.codex"}`))
 	if err != nil {
 		t.Fatalf("allowed selector err = %v output=%s", err, out)
 	}
@@ -300,9 +300,9 @@ func TestRemoteHostRecordsFailedInvocation(t *testing.T) {
 		Principal: "durable_agent:child-alpha",
 		Actions:   []string{"ssh_exec"},
 	})
-	grantAuthorityUseLease(t, store, adminSessionKey())
 	child := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"}
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"ssh_exec","host":"mac-mini","user":"daniel","workdir":"/Users/daniel/Code/aphelion","command":"pwd"}`))
+	ctx := authorityRunContextForPrincipal(t, store, adminSessionKey(), child)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, child, adminSessionKey(), remoteHostToolName, json.RawMessage(`{"action":"ssh_exec","host":"mac-mini","user":"daniel","workdir":"/Users/daniel/Code/aphelion","command":"pwd"}`))
 	if err == nil {
 		t.Fatal("remote_host failed runner err = nil, want error")
 	}

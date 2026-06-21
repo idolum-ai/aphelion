@@ -249,7 +249,7 @@ func TestNativeFileToolsUseActiveFileAccessGrantAsReadRoot(t *testing.T) {
 	}
 
 	grantAuthorityUseLeaseWithID(t, store, key, "lease-child-runtime-read")
-	ctx := context.Background()
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-child-runtime-read", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
 	out, err := registry.executeWithScopeAndPrincipal(ctx, "list_dir", json.RawMessage(`{"path":"`+filepath.ToSlash(target)+`"}`), scope, p, key)
 	if err != nil {
 		t.Fatalf("list_dir with file_access grant err = %v", err)
@@ -328,7 +328,7 @@ func TestNativeFileAccessGrantKeepsNarrowActionsNarrow(t *testing.T) {
 	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 	key := adminSessionKey()
 	grantAuthorityUseLeaseWithID(t, store, key, "lease-narrow-file-access")
-	ctx := context.Background()
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-narrow-file-access", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
 	scope := sandbox.Scope{
 		Principal:        p,
 		Profile:          sandbox.DefaultProfiles().Admin,
@@ -401,7 +401,7 @@ func TestNativeFileAccessGrantRejectsSymlinkRootRetarget(t *testing.T) {
 	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 	key := adminSessionKey()
 	grantAuthorityUseLeaseWithID(t, store, key, "lease-symlink-file-access")
-	ctx := context.Background()
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-symlink-file-access", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
 	scope := sandbox.Scope{
 		Principal:        p,
 		Profile:          sandbox.DefaultProfiles().Admin,
@@ -457,7 +457,7 @@ func TestNativeFileAccessGrantRejectsAncestorSymlinkRetarget(t *testing.T) {
 	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 	key := adminSessionKey()
 	grantAuthorityUseLeaseWithID(t, store, key, "lease-ancestor-symlink-file-access")
-	ctx := context.Background()
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-ancestor-symlink-file-access", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
 	scope := sandbox.Scope{
 		Principal:        p,
 		Profile:          sandbox.DefaultProfiles().Admin,
@@ -510,7 +510,7 @@ func TestNativeFileAccessGrantRevalidatesAfterStoreReopen(t *testing.T) {
 	key := adminSessionKey()
 	leaseID := "lease-file-access-reopen"
 	grantAuthorityUseLeaseWithID(t, store, key, leaseID)
-	ctx := context.Background()
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, leaseID, session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
 	scope := sandbox.Scope{
 		Principal:        p,
 		Profile:          sandbox.DefaultProfiles().Admin,
@@ -572,7 +572,7 @@ func TestNativeFileAccessWriteGrantCanCreateGrantedRoot(t *testing.T) {
 	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 	key := adminSessionKey()
 	grantAuthorityUseLeaseWithID(t, store, key, "lease-create-file-access-root")
-	ctx := context.Background()
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-create-file-access-root", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
 	scope := sandbox.Scope{
 		Principal:        p,
 		Profile:          sandbox.DefaultProfiles().Admin,
@@ -636,7 +636,7 @@ func TestNativeFileAccessGrantDoesNotBypassHiddenPaths(t *testing.T) {
 		t.Fatalf("UpsertCapabilityGrant(hidden file_access) err = %v", err)
 	}
 	grantAuthorityUseLeaseWithID(t, store, key, "lease-hidden-read")
-	ctx := context.Background()
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-hidden-read", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
 	_, err := registry.executeWithScopeAndPrincipal(ctx, "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(secretPath)+`","full":true}`), scope, p, key)
 	if err == nil || !strings.Contains(err.Error(), "hidden by the sandbox profile") {
 		t.Fatalf("read_file hidden grant err = %v, want hidden-path rejection", err)

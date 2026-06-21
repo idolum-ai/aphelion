@@ -4,6 +4,7 @@ package tool
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -69,6 +70,47 @@ func TestAuthorityManagedToolRequiresTurnLeaseEvidence(t *testing.T) {
 	}
 	if len(invocations) < 2 || invocations[0].Status != "allowed" || invocations[0].ContinuationLeaseID == "" || invocations[0].SessionID == "" || invocations[0].TurnRunID <= 0 {
 		t.Fatalf("allowed invocations = %#v, want run-authority-backed allowed invocation", invocations)
+	}
+}
+
+func TestAuthorityManagedToolDoesNotMintRunAuthorityFromAmbientSessionLease(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	manifest := ExternalToolManifest{
+		Name:      "leased_tool",
+		Owner:     "child-alpha",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+	}
+	if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest}); err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "leased_tool", ImplementationRef: "external:leased_tool", Registered: true}); err != nil {
+		t.Fatalf("UpsertRegisteredTool() err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-no-ambient-tool",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "leased_tool",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+
+	key := adminSessionKey()
+	grantAuthorityUseLeaseWithID(t, store, key, "lease-ambient-not-causal")
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	_, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "leased_tool", json.RawMessage(`{}`))
+	if err == nil || !strings.Contains(err.Error(), "requires durable run authority evidence") {
+		t.Fatalf("ExecuteForSessionPrincipal() err = %v, want durable run authority blocker", err)
+	}
+	if run, err := store.LatestTurnRun(key); err == nil {
+		t.Fatalf("LatestTurnRun() = %#v, want no synthetic run authority admission", run)
+	} else if err != sql.ErrNoRows {
+		t.Fatalf("LatestTurnRun() err = %v, want sql.ErrNoRows", err)
 	}
 }
 
@@ -323,6 +365,58 @@ func TestAuthorityManagedToolRejectsMismatchedContextLeaseEvidence(t *testing.T)
 	_, _, err := registry.requireAuthorityToolAccess(ctx, "leased_tool", actor, key, json.RawMessage(`{}`))
 	if err == nil || !strings.Contains(err.Error(), "authority evidence belongs to session") {
 		t.Fatalf("requireAuthorityToolAccess(mismatch) err = %v, want session mismatch", err)
+	}
+}
+
+func TestAuthorityManagedToolRejectsTerminalRunAuthorityReplay(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []session.TurnRunStatus{
+		session.TurnRunStatusCompleted,
+		session.TurnRunStatusFailed,
+		session.TurnRunStatusInterrupted,
+	} {
+		status := status
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
+
+			registry, store := newDurableAgentToolRegistry(t)
+			manifest := ExternalToolManifest{
+				Name:      "leased_tool",
+				Owner:     "child-alpha",
+				Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+			}
+			if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest}); err != nil {
+				t.Fatalf("WithExternalToolManifests() err = %v", err)
+			}
+			if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "leased_tool", ImplementationRef: "external:leased_tool", Registered: true}); err != nil {
+				t.Fatalf("UpsertRegisteredTool() err = %v", err)
+			}
+			if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+				GrantID:        "capg-terminal-tool-" + string(status),
+				GrantedBy:      "telegram:1001",
+				GrantedTo:      "telegram:1001",
+				Kind:           session.CapabilityKindTool,
+				TargetResource: "leased_tool",
+				AllowedActions: []string{"invoke"},
+				Status:         session.CapabilityGrantStatusActive,
+			}); err != nil {
+				t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+			}
+
+			key := adminSessionKey()
+			actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+			grantAuthorityUseLeaseWithID(t, store, key, "lease-terminal-"+string(status))
+			ctx, turnRunID := contextWithContinuationRunAuthority(t, store, key, actor, "lease-terminal-"+string(status), session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "terminal_replay")
+			if err := store.CompleteTurnRun(turnRunID, status, "terminal replay regression"); err != nil {
+				t.Fatalf("CompleteTurnRun() err = %v", err)
+			}
+
+			_, _, err := registry.requireAuthorityToolAccess(ctx, "leased_tool", actor, key, json.RawMessage(`{}`))
+			if err == nil || !strings.Contains(err.Error(), "execution authority turn run") || !strings.Contains(err.Error(), string(status)) {
+				t.Fatalf("requireAuthorityToolAccess() err = %v, want terminal run replay denial", err)
+			}
+		})
 	}
 }
 

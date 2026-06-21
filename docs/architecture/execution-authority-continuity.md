@@ -97,7 +97,7 @@ reaches the shared point-of-use gate or does not expose that authority surface.
 
 | Species | Entry shape | Authority transport | Point-of-use gate | Current automated coverage |
 | --- | --- | --- | --- | --- |
-| Interactive tool invocation | User turn through ordinary tool registry | Direct invocation admission creates durable run authority when exactly one lease is current | Run authority is reloaded and current lease/grant/action are checked before invocation | Covered by `TestExecutionAuthorityContinuityToolBoundaryMatrix` and direct tool tests |
+| Interactive tool invocation | User turn through ordinary tool registry | Turn admission creates durable run authority before tool execution; direct tool APIs must receive an existing run identity and do not search the session for leases | Run authority is reloaded and current lease/grant/action are checked before invocation | Covered by `TestExecutionAuthorityContinuityToolBoundaryMatrix`, `TestAuthorityManagedToolDoesNotMintRunAuthorityFromAmbientSessionLease`, and direct tool tests |
 | Native continuation | Runtime work executor invoking an internal continuation turn | Pending admission crosses the executor boundary; turn monitor commits `execution_run_authority`; downstream context carries run identity only | Run authority is reloaded and current continuation lease compatibility is checked before invocation | Covered by continuation-context rows, native file grant tests, and `TestNativeWorkExecutorCarriesAuthorityAdmissionIntoInternalTurn`; full native-work-to-tool restart flow remains monitored debt |
 | Operation-plan continuation | Runtime work executor under active plan lease | Pending admission crosses the executor boundary; turn monitor commits `execution_run_authority`; downstream context carries run identity only | Run authority is reloaded and current operation-plan lease compatibility is checked before invocation | Covered by operation-plan context rows and native work admission tests |
 | Durable group child | Durable child enters parent runtime/group turn path | Durable-agent scope, child adapter context, no parent tool registry by default | If tools are ever exposed, same lease and grant gate before tool/resource use | Covered by `TestDurableGroupTurnDoesNotExposeParentToolAuthorityByDefault`; group turns currently expose no parent tools |
@@ -116,7 +116,9 @@ boundary where it invokes a capability-managed tool or resource:
 | Current continuation run authority, matching grant/action/resource | Invocation allowed and audit records turn run + session + continuation lease |
 | Current operation-plan run authority, matching grant/action/resource | Invocation allowed and audit records turn run + session + operation-plan lease |
 | Missing run authority | Invocation blocked |
+| Ambient active lease but no admitted run authority | Invocation blocked and no synthetic turn run is created |
 | Fabricated run ID | Invocation blocked |
+| Terminal turn run authority | Invocation blocked |
 | Wrong session | Invocation blocked |
 | Expired lease | Invocation blocked |
 | Exhausted lease | Invocation blocked |
@@ -149,7 +151,20 @@ review-artifact protocol behavior.
 The current implementation has a canonical durable run-authority record for
 authority-sensitive tool and file-access invocation paths. Context no longer
 serves as authority evidence by itself: callers must present a durable run ID,
-and the tool boundary reloads and revalidates that run.
+and the tool boundary reloads and revalidates that run. Generic tool execution
+does not mint run authority by searching for any compatible lease in the current
+session. A lease becomes causal authority only at an explicit runtime admission
+boundary, and one running turn cannot share the same lease binding with another
+running turn. The run-authority row is immutable after admission; an exactly
+identical write is idempotent, but changing principal, session, lease, species,
+or the admission snapshot is rejected.
+
+Capability-managed tool evidence separates the authorization decision from the
+execution outcome. A successful point-of-use check records `allowed`; an
+executor result records `completed` or `failed` with the same durable run,
+session, lease, grant, action, and resource context. A turn whose authority
+binding fails during admission is terminalized as failed instead of being left
+as a running turn.
 
 Native file access is still pathname-based after authorization. The current
 guard rejects symlink components in approved grant roots and revalidates

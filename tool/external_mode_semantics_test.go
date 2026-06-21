@@ -49,7 +49,10 @@ func TestExternalContainerAndWorkspaceRunnerModesAreNotProcessExecutable(t *test
 			}
 			grantToolInvoke(t, store, toolName, "telegram:1001")
 
-			_, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), toolName, json.RawMessage(`{"url":"https://example.com"}`))
+			actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+			key := adminSessionKey()
+			ctx := authorityRunContextForPrincipal(t, store, key, actor)
+			_, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, toolName, json.RawMessage(`{"url":"https://example.com"}`))
 			if err == nil {
 				t.Fatal("ExecuteForSessionPrincipal() err = nil, want non-executable error")
 			}

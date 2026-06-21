@@ -110,6 +110,49 @@ func TestNativeWorkExecutorDoesNotTransportStaleLeaseEvidence(t *testing.T) {
 	}
 }
 
+func TestStartTurnMonitorFailsRunWhenAuthorityBindingFails(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, &fakeProvider{}, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9303, UserID: 1001, Scope: telegramDMScopeRef(9303)}
+	ctx := toolpkg.WithExecutionAuthorityAdmission(context.Background(), session.ExecutionRunAuthority{
+		Principal:           "telegram:1001",
+		PrincipalRole:       string(principal.RoleAdmin),
+		ExecutionSpecies:    "native_continuation",
+		LeaseKind:           session.ExecutionAuthorityLeaseKindContinuation,
+		ContinuationLeaseID: "missing-authority-lease",
+		LeaseStatus:         string(session.ContinuationLeaseStatusActive),
+		LeaseRemainingTurns: 1,
+		LeaseExpiresAt:      time.Now().UTC().Add(time.Hour),
+	})
+
+	monitor, err := rt.startTurnMonitor(ctx, key, session.TurnRunKindInteractive, "bind missing authority", nil, nil, core.InboundMessage{ChatID: key.ChatID, SenderID: 1001})
+	if err == nil {
+		t.Fatal("startTurnMonitor() err = nil, want authority binding failure")
+	}
+	if monitor != nil {
+		t.Fatalf("startTurnMonitor() monitor = %#v, want nil on authority binding failure", monitor)
+	}
+	if !strings.Contains(err.Error(), "not durable for run authority") {
+		t.Fatalf("startTurnMonitor() err = %v, want missing lease binding failure", err)
+	}
+	run, err := store.LatestTurnRun(key)
+	if err != nil {
+		t.Fatalf("LatestTurnRun() err = %v", err)
+	}
+	if run == nil || run.Status != session.TurnRunStatusFailed {
+		t.Fatalf("latest run = %#v, want failed admission run", run)
+	}
+	if !strings.Contains(run.ErrorText, "missing-authority-lease") {
+		t.Fatalf("run error = %q, want authority binding reason", run.ErrorText)
+	}
+}
+
 func TestDurableGroupTurnDoesNotExposeParentToolAuthorityByDefault(t *testing.T) {
 	t.Parallel()
 

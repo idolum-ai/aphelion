@@ -132,6 +132,9 @@ func (r *Runtime) startTurnMonitor(ctx context.Context, key session.SessionKey, 
 	monitor.runID = run.ID
 	turnCtx, err = r.bindExecutionRunAuthority(turnCtx, key, run)
 	if err != nil {
+		if completeErr := r.store.CompleteTurnRun(run.ID, session.TurnRunStatusFailed, err.Error()); completeErr != nil {
+			err = fmt.Errorf("%w; complete failed turn run: %v", err, completeErr)
+		}
 		cancelTurn()
 		return nil, err
 	}

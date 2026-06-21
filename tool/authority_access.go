@@ -24,39 +24,6 @@ func (r *Registry) authorityManagedTool(name string) bool {
 	return ok
 }
 
-func (r *Registry) ensureDirectInvocationAuthorityContext(ctx context.Context, name string, p principal.Principal, key session.SessionKey) (context.Context, int64, error) {
-	if r == nil || r.store == nil || !toolSessionKeyHasIdentity(key) {
-		return ctx, 0, nil
-	}
-	if _, ok := AuthorityUseRefFromContext(ctx); ok {
-		return ctx, 0, nil
-	}
-	if _, ok := ExecutionAuthorityAdmissionFromContext(ctx); ok {
-		return ctx, 0, nil
-	}
-	if !r.authorityManagedTool(name) && !nativeFileAccessToolName(name) && name != codexImageGenerationToolName && name != webSearchToolName && name != remoteHostToolName {
-		return ctx, 0, nil
-	}
-	now := time.Now().UTC()
-	admission, ok, err := r.directInvocationAuthorityAdmission(name, p, key, now)
-	if err != nil || !ok {
-		return ctx, 0, err
-	}
-	run, err := r.store.BeginTurnRun(key, session.TurnRunKindInteractive, "direct authority invocation: "+strings.TrimSpace(name))
-	if err != nil {
-		return ctx, 0, err
-	}
-	admission.TurnRunID = run.ID
-	admission.SessionID = run.SessionID
-	admission.ChatID = run.ChatID
-	admission.UserID = run.UserID
-	admission.Scope = run.Scope
-	if _, err := r.store.UpsertExecutionRunAuthority(admission); err != nil {
-		return ctx, 0, err
-	}
-	return WithAuthorityUseRef(ctx, session.AuthorityUseRef{SessionID: run.SessionID, TurnRunID: run.ID}), run.ID, nil
-}
-
 func nativeFileAccessToolName(name string) bool {
 	switch strings.TrimSpace(name) {
 	case "read_file", "write_file", "list_dir", "search":
@@ -64,87 +31,6 @@ func nativeFileAccessToolName(name string) bool {
 	default:
 		return false
 	}
-}
-
-func (r *Registry) directInvocationAuthorityAdmission(name string, p principal.Principal, key session.SessionKey, now time.Time) (session.ExecutionRunAuthority, bool, error) {
-	sessionID := session.SessionIDForKey(key)
-	continuation, continuationOK, err := r.directContinuationAuthorityAdmission(key, p, sessionID, now)
-	if err != nil {
-		return session.ExecutionRunAuthority{}, false, err
-	}
-	operation, operationOK, err := r.directOperationPlanAuthorityAdmission(key, p, sessionID, now)
-	if err != nil {
-		return session.ExecutionRunAuthority{}, false, err
-	}
-	if continuationOK == operationOK {
-		if continuationOK {
-			return session.ExecutionRunAuthority{}, false, fmt.Errorf("tool %q has ambiguous continuation and operation-plan run authority", strings.TrimSpace(name))
-		}
-		return session.ExecutionRunAuthority{}, false, nil
-	}
-	if continuationOK {
-		return continuation, true, nil
-	}
-	return operation, true, nil
-}
-
-func (r *Registry) directContinuationAuthorityAdmission(key session.SessionKey, p principal.Principal, sessionID string, now time.Time) (session.ExecutionRunAuthority, bool, error) {
-	state, exists, err := r.store.ContinuationStateIfExists(key)
-	if err != nil {
-		return session.ExecutionRunAuthority{}, false, err
-	}
-	if !exists {
-		return session.ExecutionRunAuthority{}, false, nil
-	}
-	lease := session.NormalizeContinuationLease(state.ContinuationLease)
-	if strings.TrimSpace(lease.ID) == "" || !lease.ActiveAt(now) {
-		return session.ExecutionRunAuthority{}, false, nil
-	}
-	return session.NormalizeExecutionRunAuthority(session.ExecutionRunAuthority{
-		SessionID:            sessionID,
-		ChatID:               key.ChatID,
-		UserID:               key.UserID,
-		Scope:                key.Scope,
-		Principal:            toolAuthorityCanonicalPrincipal(p),
-		PrincipalRole:        string(p.Role),
-		ExecutionSpecies:     "direct_tool_invocation",
-		LeaseKind:            session.ExecutionAuthorityLeaseKindContinuation,
-		ContinuationLeaseID:  lease.ID,
-		LeaseStatus:          string(lease.Status),
-		LeaseRemainingTurns:  lease.RemainingTurns,
-		LeaseExpiresAt:       lease.ExpiresAt,
-		AdmittedAt:           now,
-		OperationPlanLeaseID: "",
-	}), true, nil
-}
-
-func (r *Registry) directOperationPlanAuthorityAdmission(key session.SessionKey, p principal.Principal, sessionID string, now time.Time) (session.ExecutionRunAuthority, bool, error) {
-	_, operation, exists, err := r.store.PlanAndOperationStateIfExists(key)
-	if err != nil {
-		return session.ExecutionRunAuthority{}, false, err
-	}
-	if !exists {
-		return session.ExecutionRunAuthority{}, false, nil
-	}
-	lease := session.NormalizeOperationPlanLease(operation.PlanLease)
-	if !operationPlanLeaseUsableForGrantUse(lease, now) {
-		return session.ExecutionRunAuthority{}, false, nil
-	}
-	return session.NormalizeExecutionRunAuthority(session.ExecutionRunAuthority{
-		SessionID:            sessionID,
-		ChatID:               key.ChatID,
-		UserID:               key.UserID,
-		Scope:                key.Scope,
-		Principal:            toolAuthorityCanonicalPrincipal(p),
-		PrincipalRole:        string(p.Role),
-		ExecutionSpecies:     "direct_tool_invocation",
-		LeaseKind:            session.ExecutionAuthorityLeaseKindOperationPlan,
-		OperationPlanLeaseID: lease.ID,
-		LeaseStatus:          string(lease.Status),
-		LeaseRemainingTurns:  lease.RemainingTurns,
-		LeaseExpiresAt:       lease.ExpiresAt,
-		AdmittedAt:           now,
-	}), true, nil
 }
 
 func (r *Registry) toolAuthorityAccessAllowed(toolName string, p principal.Principal) (bool, error) {
@@ -241,6 +127,24 @@ func capabilityInvocationWithAuthorityUseRef(invocation session.CapabilityInvoca
 	return invocation
 }
 
+func (r *Registry) recordAuthorityManagedToolOutcome(ctx context.Context, name string, p principal.Principal, key session.SessionKey, grant session.CapabilityGrant, status string, errText string) error {
+	if r == nil || r.store == nil || strings.TrimSpace(grant.GrantID) == "" {
+		return nil
+	}
+	ref, err := r.authorityUseRefForGrant(ctx, name, key, p)
+	if err != nil {
+		return err
+	}
+	_, err = r.store.RecordCapabilityInvocation(capabilityInvocationWithAuthorityUseRef(session.CapabilityInvocation{
+		GrantID:   grant.GrantID,
+		Principal: toolAuthorityPrincipalDisplay(p),
+		Action:    "invoke",
+		Status:    strings.TrimSpace(status),
+		ErrorText: strings.TrimSpace(errText),
+	}, ref))
+	return err
+}
+
 func (r *Registry) authorityUseRefForGrant(ctx context.Context, toolName string, key session.SessionKey, p principal.Principal) (session.AuthorityUseRef, error) {
 	ref := session.AuthorityUseRef{}
 	if !toolSessionKeyHasIdentity(key) {
@@ -280,6 +184,16 @@ func (r *Registry) validateContextAuthorityUseRef(toolName string, key session.S
 	}
 	if record.SessionID != sessionID {
 		return session.AuthorityUseRef{}, fmt.Errorf("tool %q execution run authority belongs to session %q, not %q", strings.TrimSpace(toolName), record.SessionID, sessionID)
+	}
+	run, err := r.store.TurnRun(record.TurnRunID)
+	if err != nil {
+		return session.AuthorityUseRef{}, fmt.Errorf("load execution authority turn run: %w", err)
+	}
+	if run.SessionID != sessionID {
+		return session.AuthorityUseRef{}, fmt.Errorf("tool %q execution authority turn run belongs to session %q, not %q", strings.TrimSpace(toolName), run.SessionID, sessionID)
+	}
+	if run.Status != session.TurnRunStatusRunning {
+		return session.AuthorityUseRef{}, fmt.Errorf("tool %q execution authority turn run %d is %s", strings.TrimSpace(toolName), run.ID, run.Status)
 	}
 	if !executionRunAuthorityPrincipalMatches(record, p) {
 		return session.AuthorityUseRef{}, fmt.Errorf("tool %q execution run authority principal %q does not match %q", strings.TrimSpace(toolName), record.Principal, toolAuthorityPrincipalDisplay(p))

@@ -61,8 +61,8 @@ func (r *Registry) queueCapabilityRequestReviewEvent(record session.CapabilityRe
 		SourceScope:       sourceScope,
 		TargetAdminChatID: target.ChatID,
 		TargetScope:       target.Scope,
-		Summary:      summary,
-		MetadataJSON: string(raw),
+		Summary:           summary,
+		MetadataJSON:      string(raw),
 	})
 	if err != nil {
 		return 0, err

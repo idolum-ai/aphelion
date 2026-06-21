@@ -3,7 +3,6 @@
 package tool
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -45,7 +44,10 @@ func TestExternalProcessExecutorRunsManifestBackedTool(t *testing.T) {
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err != nil {
 		t.Fatalf("Execute() err = %v", err)
 	}
@@ -92,7 +94,9 @@ fi
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:42")
 
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, adminSessionKey(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	key := adminSessionKey()
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal() err = %v", err)
 	}
@@ -128,7 +132,10 @@ func TestExternalProcessExecutorRejectsInvalidInputAgainstSchema(t *testing.T) {
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 
-	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{"goal":"summarize"}`))
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	_, err = registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"goal":"summarize"}`))
 	if err == nil {
 		t.Fatal("Execute() err = nil, want input-schema rejection")
 	}
@@ -164,12 +171,28 @@ func TestExternalProcessExecutorRejectsInvalidOutputAgainstSchema(t *testing.T) 
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 
-	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	_, err = registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err == nil {
 		t.Fatal("Execute() err = nil, want output-schema rejection")
 	}
 	if !strings.Contains(err.Error(), "output.summary must be a string") {
 		t.Fatalf("err = %v, want output-schema rejection", err)
+	}
+	invocations, err := store.CapabilityInvocationsByGrant("grant:browse_page:telegram:1001", 10)
+	if err != nil {
+		t.Fatalf("CapabilityInvocationsByGrant() err = %v", err)
+	}
+	if len(invocations) < 2 {
+		t.Fatalf("invocations = %#v, want authorization and execution outcome rows", invocations)
+	}
+	if invocations[0].Status != "failed" || !strings.Contains(invocations[0].ErrorText, "output.summary must be a string") {
+		t.Fatalf("latest invocation = %#v, want failed execution outcome", invocations[0])
+	}
+	if invocations[1].Status != "allowed" || invocations[1].ErrorText != "" {
+		t.Fatalf("previous invocation = %#v, want allowed authorization decision", invocations[1])
 	}
 }
 

@@ -45,7 +45,8 @@ func TestExternalToolAuthorityEndToEndLifecycleFlow(t *testing.T) {
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err != nil {
 		t.Fatalf("browse_page invoke err = %v", err)
 	}
@@ -81,7 +82,8 @@ func TestExternalToolAuthorityRollbackAndUninstallRetireExecutionSurface(t *test
 		t.Fatalf("register err = %v", err)
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:1001")
-	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`)); err != nil {
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	if _, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`)); err != nil {
 		t.Fatalf("browse_page before rollback err = %v", err)
 	}
 
@@ -202,7 +204,8 @@ func TestExternalToolTenantCapabilityRequestCarriesThroughToInvocation(t *testin
 		}
 	}
 
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), tenant, tenantKey, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	ctx := authorityRunContextForPrincipal(t, store, tenantKey, tenant)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, tenant, tenantKey, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err != nil {
 		t.Fatalf("tenant browse_page invoke err = %v", err)
 	}
@@ -276,7 +279,8 @@ func TestExternalToolAuthorityLifecycleNegativeGates(t *testing.T) {
 			t.Fatalf("ungranted invoke err = %v, want grant gate", err)
 		}
 		grantToolInvoke(t, store, "browse_page", "telegram:1001")
-		if _, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`)); err != nil {
+		ctx := authorityRunContextForPrincipal(t, store, key, actor)
+		if _, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`)); err != nil {
 			t.Fatalf("granted invoke err = %v", err)
 		}
 	})

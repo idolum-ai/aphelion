@@ -36,6 +36,19 @@ func (s *SQLiteStore) UpsertExecutionRunAuthority(record ExecutionRunAuthority) 
 	default:
 		return ExecutionRunAuthority{}, fmt.Errorf("execution run authority lease_kind is required")
 	}
+	if existing, ok, err := s.ExecutionRunAuthority(record.TurnRunID); err != nil {
+		return ExecutionRunAuthority{}, err
+	} else if ok {
+		if executionRunAuthoritySame(existing, record) {
+			return existing, nil
+		}
+		return ExecutionRunAuthority{}, fmt.Errorf("execution run authority %d is immutable", record.TurnRunID)
+	}
+	if holder, ok, err := s.runningExecutionRunAuthorityForLease(record); err != nil {
+		return ExecutionRunAuthority{}, err
+	} else if ok && holder != record.TurnRunID {
+		return ExecutionRunAuthority{}, fmt.Errorf("execution run authority lease %q is already bound to running turn run %d", executionRunAuthorityLeaseID(record), holder)
+	}
 	leaseExpiresAt := nullableTimeRFC3339(record.LeaseExpiresAt)
 	if _, err := s.db.Exec(`
 		INSERT INTO execution_run_authority(
@@ -44,23 +57,6 @@ func (s *SQLiteStore) UpsertExecutionRunAuthority(record ExecutionRunAuthority) 
 			continuation_lease_id, operation_plan_lease_id, lease_status, lease_remaining_turns,
 			lease_expires_at, admitted_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(turn_run_id) DO UPDATE SET
-			session_id = excluded.session_id,
-			chat_id = excluded.chat_id,
-			user_id = excluded.user_id,
-			scope_kind = excluded.scope_kind,
-			scope_id = excluded.scope_id,
-			durable_agent_id = excluded.durable_agent_id,
-			principal = excluded.principal,
-			principal_role = excluded.principal_role,
-			execution_species = excluded.execution_species,
-			lease_kind = excluded.lease_kind,
-			continuation_lease_id = excluded.continuation_lease_id,
-			operation_plan_lease_id = excluded.operation_plan_lease_id,
-			lease_status = excluded.lease_status,
-			lease_remaining_turns = excluded.lease_remaining_turns,
-			lease_expires_at = excluded.lease_expires_at,
-			admitted_at = excluded.admitted_at
 	`,
 		record.TurnRunID,
 		record.SessionID,
@@ -90,6 +86,77 @@ func (s *SQLiteStore) UpsertExecutionRunAuthority(record ExecutionRunAuthority) 
 		return ExecutionRunAuthority{}, fmt.Errorf("execution run authority %d not found after upsert", record.TurnRunID)
 	}
 	return stored, nil
+}
+
+func (s *SQLiteStore) runningExecutionRunAuthorityForLease(record ExecutionRunAuthority) (int64, bool, error) {
+	leaseID := executionRunAuthorityLeaseID(record)
+	if leaseID == "" {
+		return 0, false, nil
+	}
+	query := `
+		SELECT era.turn_run_id
+		FROM execution_run_authority era
+		JOIN turn_runs tr ON tr.id = era.turn_run_id
+		WHERE era.lease_kind = ?
+			AND tr.status = ?
+			AND `
+	args := []any{record.LeaseKind, string(TurnRunStatusRunning)}
+	switch record.LeaseKind {
+	case ExecutionAuthorityLeaseKindContinuation:
+		query += `era.continuation_lease_id = ?`
+	case ExecutionAuthorityLeaseKindOperationPlan:
+		query += `era.operation_plan_lease_id = ?`
+	default:
+		return 0, false, nil
+	}
+	query += ` LIMIT 1`
+	args = append(args, leaseID)
+	var turnRunID int64
+	if err := s.db.QueryRow(query, args...).Scan(&turnRunID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	return turnRunID, true, nil
+}
+
+func executionRunAuthorityLeaseID(record ExecutionRunAuthority) string {
+	switch record.LeaseKind {
+	case ExecutionAuthorityLeaseKindContinuation:
+		return strings.TrimSpace(record.ContinuationLeaseID)
+	case ExecutionAuthorityLeaseKindOperationPlan:
+		return strings.TrimSpace(record.OperationPlanLeaseID)
+	default:
+		return ""
+	}
+}
+
+func executionRunAuthoritySame(left ExecutionRunAuthority, right ExecutionRunAuthority) bool {
+	left = NormalizeExecutionRunAuthority(left)
+	right = NormalizeExecutionRunAuthority(right)
+	return left.TurnRunID == right.TurnRunID &&
+		left.SessionID == right.SessionID &&
+		left.ChatID == right.ChatID &&
+		left.UserID == right.UserID &&
+		left.Scope == right.Scope &&
+		left.Principal == right.Principal &&
+		left.PrincipalRole == right.PrincipalRole &&
+		left.ExecutionSpecies == right.ExecutionSpecies &&
+		left.LeaseKind == right.LeaseKind &&
+		left.ContinuationLeaseID == right.ContinuationLeaseID &&
+		left.OperationPlanLeaseID == right.OperationPlanLeaseID &&
+		left.LeaseStatus == right.LeaseStatus &&
+		left.LeaseRemainingTurns == right.LeaseRemainingTurns &&
+		sameOptionalTime(left.LeaseExpiresAt, right.LeaseExpiresAt) &&
+		sameOptionalTime(left.AdmittedAt, right.AdmittedAt)
+}
+
+func sameOptionalTime(left time.Time, right time.Time) bool {
+	if left.IsZero() || right.IsZero() {
+		return left.IsZero() && right.IsZero()
+	}
+	return left.UTC().Equal(right.UTC())
 }
 
 func (s *SQLiteStore) ExecutionRunAuthority(turnRunID int64) (ExecutionRunAuthority, bool, error) {

@@ -147,7 +147,9 @@ func TestToolAuthorityInstallShowMarksExternalToolStaleOnFingerprintDrift(t *tes
 		}
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:1001")
-	beforeOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	beforeOut, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err != nil {
 		t.Fatalf("browse_page before drift err = %v", err)
 	}
@@ -166,7 +168,7 @@ func TestToolAuthorityInstallShowMarksExternalToolStaleOnFingerprintDrift(t *tes
 			t.Fatalf("install_show after drift output = %q, want %q", showOut, needle)
 		}
 	}
-	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	_, err = registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err == nil || !strings.Contains(err.Error(), "external tool \"browse_page\" is stale: workspace_drift:") {
 		t.Fatalf("browse_page after drift err = %v, want stale drift rejection", err)
 	}
@@ -428,7 +430,8 @@ func TestToolAuthorityProcessPolicyCeilingsBlockInstallProbeAndInvoke(t *testing
 		t.Fatalf("UpsertRegisteredTool() err = %v", err)
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:1001")
-	_, err = registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	_, err = registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err == nil || !strings.Contains(err.Error(), "policy_violation: process-mode network=\"allowlist\" requires constraints.network_targets") {
 		t.Fatalf("browse_page invoke err = %v, want governed policy violation", err)
 	}
