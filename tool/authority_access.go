@@ -55,27 +55,35 @@ func (r *Registry) toolAuthorityAccessAllowed(toolName string, p principal.Princ
 	return allowedByGrant, nil
 }
 
-func (r *Registry) requireAuthorityToolAccess(ctx context.Context, name string, p principal.Principal, key session.SessionKey, input json.RawMessage) (session.CapabilityGrant, bool, error) {
+type authorityInvocationPermit struct {
+	InvocationID int64
+	Grant        session.CapabilityGrant
+	Principal    string
+	Action       string
+	UseRef       session.AuthorityUseRef
+}
+
+func (r *Registry) requireAuthorityToolAccess(ctx context.Context, name string, p principal.Principal, key session.SessionKey, input json.RawMessage) (session.CapabilityGrant, *authorityInvocationPermit, bool, error) {
 	name = strings.TrimSpace(name)
 	if !r.authorityManagedTool(name) {
-		return session.CapabilityGrant{}, false, nil
+		return session.CapabilityGrant{}, nil, false, nil
 	}
 	if r.store == nil {
-		return session.CapabilityGrant{}, false, fmt.Errorf("%s requires transcript store", name)
+		return session.CapabilityGrant{}, nil, false, fmt.Errorf("%s requires transcript store", name)
 	}
 	registered, ok, err := r.store.RegisteredTool(name)
 	if err != nil {
-		return session.CapabilityGrant{}, false, err
+		return session.CapabilityGrant{}, nil, false, err
 	}
 	if !ok || !registered.Registered {
-		return session.CapabilityGrant{}, false, fmt.Errorf("tool %q is not registered", name)
+		return session.CapabilityGrant{}, nil, false, fmt.Errorf("tool %q is not registered", name)
 	}
 	if len(toolAuthorityPrincipalKeys(p)) == 0 {
-		return session.CapabilityGrant{}, false, fmt.Errorf("tool %q is not granted to principal %q", name, toolAuthorityPrincipalDisplay(p))
+		return session.CapabilityGrant{}, nil, false, fmt.Errorf("tool %q is not granted to principal %q", name, toolAuthorityPrincipalDisplay(p))
 	}
 	grant, allowedByGrant, err := r.capabilityGrantAllowsAuthorityToolAccess(name, p)
 	if err != nil {
-		return session.CapabilityGrant{}, false, err
+		return session.CapabilityGrant{}, nil, false, err
 	}
 	if allowedByGrant {
 		principalID := toolAuthorityPrincipalDisplay(p)
@@ -88,9 +96,9 @@ func (r *Registry) requireAuthorityToolAccess(ctx context.Context, name string, 
 				Status:    "blocked",
 				ErrorText: useRefErr.Error(),
 			}, useRef)); recordErr != nil {
-				return session.CapabilityGrant{}, false, recordErr
+				return session.CapabilityGrant{}, nil, false, recordErr
 			}
-			return session.CapabilityGrant{}, false, useRefErr
+			return session.CapabilityGrant{}, nil, false, useRefErr
 		}
 		if err := validateCapabilityToolInvocationInput(grant, input); err != nil {
 			if _, recordErr := r.store.RecordCapabilityInvocation(capabilityInvocationWithAuthorityUseRef(session.CapabilityInvocation{
@@ -100,21 +108,28 @@ func (r *Registry) requireAuthorityToolAccess(ctx context.Context, name string, 
 				Status:    "blocked",
 				ErrorText: err.Error(),
 			}, useRef)); recordErr != nil {
-				return session.CapabilityGrant{}, false, recordErr
+				return session.CapabilityGrant{}, nil, false, recordErr
 			}
-			return session.CapabilityGrant{}, false, err
+			return session.CapabilityGrant{}, nil, false, err
 		}
-		if _, err := r.store.RecordCapabilityInvocation(capabilityInvocationWithAuthorityUseRef(session.CapabilityInvocation{
+		invocation, err := r.store.RecordCapabilityInvocation(capabilityInvocationWithAuthorityUseRef(session.CapabilityInvocation{
 			GrantID:   grant.GrantID,
 			Principal: principalID,
 			Action:    "invoke",
 			Status:    "allowed",
-		}, useRef)); err != nil {
-			return session.CapabilityGrant{}, false, err
+		}, useRef))
+		if err != nil {
+			return session.CapabilityGrant{}, nil, false, err
 		}
-		return grant, true, nil
+		return grant, &authorityInvocationPermit{
+			InvocationID: invocation.InvocationID,
+			Grant:        grant,
+			Principal:    principalID,
+			Action:       "invoke",
+			UseRef:       useRef,
+		}, true, nil
 	}
-	return session.CapabilityGrant{}, false, fmt.Errorf("tool %q is not granted to principal %q", name, toolAuthorityPrincipalDisplay(p))
+	return session.CapabilityGrant{}, nil, false, fmt.Errorf("tool %q is not granted to principal %q", name, toolAuthorityPrincipalDisplay(p))
 }
 
 func capabilityInvocationWithAuthorityUseRef(invocation session.CapabilityInvocation, ref session.AuthorityUseRef) session.CapabilityInvocation {
@@ -127,21 +142,11 @@ func capabilityInvocationWithAuthorityUseRef(invocation session.CapabilityInvoca
 	return invocation
 }
 
-func (r *Registry) recordAuthorityManagedToolOutcome(ctx context.Context, name string, p principal.Principal, key session.SessionKey, grant session.CapabilityGrant, status string, errText string) error {
-	if r == nil || r.store == nil || strings.TrimSpace(grant.GrantID) == "" {
+func (r *Registry) recordAuthorityManagedToolOutcome(permit *authorityInvocationPermit, status string, errText string) error {
+	if r == nil || r.store == nil || permit == nil || permit.InvocationID <= 0 {
 		return nil
 	}
-	ref, err := r.authorityUseRefForGrant(ctx, name, key, p)
-	if err != nil {
-		return err
-	}
-	_, err = r.store.RecordCapabilityInvocation(capabilityInvocationWithAuthorityUseRef(session.CapabilityInvocation{
-		GrantID:   grant.GrantID,
-		Principal: toolAuthorityPrincipalDisplay(p),
-		Action:    "invoke",
-		Status:    strings.TrimSpace(status),
-		ErrorText: strings.TrimSpace(errText),
-	}, ref))
+	_, err := r.store.CompleteCapabilityInvocation(permit.InvocationID, strings.TrimSpace(status), strings.TrimSpace(errText), time.Now().UTC())
 	return err
 }
 

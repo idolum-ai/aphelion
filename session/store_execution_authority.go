@@ -36,7 +36,12 @@ func (s *SQLiteStore) UpsertExecutionRunAuthority(record ExecutionRunAuthority) 
 	default:
 		return ExecutionRunAuthority{}, fmt.Errorf("execution run authority lease_kind is required")
 	}
-	if existing, ok, err := s.ExecutionRunAuthority(record.TurnRunID); err != nil {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return ExecutionRunAuthority{}, fmt.Errorf("begin execution run authority tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if existing, ok, err := executionRunAuthorityTx(tx, record.TurnRunID); err != nil {
 		return ExecutionRunAuthority{}, err
 	} else if ok {
 		if executionRunAuthoritySame(existing, record) {
@@ -44,13 +49,18 @@ func (s *SQLiteStore) UpsertExecutionRunAuthority(record ExecutionRunAuthority) 
 		}
 		return ExecutionRunAuthority{}, fmt.Errorf("execution run authority %d is immutable", record.TurnRunID)
 	}
-	if holder, ok, err := s.runningExecutionRunAuthorityForLease(record); err != nil {
+	if holder, ok, err := runningExecutionRunAuthorityForLeaseTx(tx, record); err != nil {
 		return ExecutionRunAuthority{}, err
 	} else if ok && holder != record.TurnRunID {
 		return ExecutionRunAuthority{}, fmt.Errorf("execution run authority lease %q is already bound to running turn run %d", executionRunAuthorityLeaseID(record), holder)
 	}
+	if holder, ok, err := priorExecutionRunAuthorityForSingleTurnLeaseTx(tx, record); err != nil {
+		return ExecutionRunAuthority{}, err
+	} else if ok && holder != record.TurnRunID {
+		return ExecutionRunAuthority{}, fmt.Errorf("execution run authority lease %q was already claimed by turn run %d", executionRunAuthorityLeaseID(record), holder)
+	}
 	leaseExpiresAt := nullableTimeRFC3339(record.LeaseExpiresAt)
-	if _, err := s.db.Exec(`
+	if _, err := tx.Exec(`
 		INSERT INTO execution_run_authority(
 			turn_run_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
 			principal, principal_role, execution_species, lease_kind,
@@ -78,6 +88,9 @@ func (s *SQLiteStore) UpsertExecutionRunAuthority(record ExecutionRunAuthority) 
 	); err != nil {
 		return ExecutionRunAuthority{}, fmt.Errorf("upsert execution run authority: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return ExecutionRunAuthority{}, fmt.Errorf("commit execution run authority tx: %w", err)
+	}
 	stored, ok, err := s.ExecutionRunAuthority(record.TurnRunID)
 	if err != nil {
 		return ExecutionRunAuthority{}, err
@@ -89,6 +102,12 @@ func (s *SQLiteStore) UpsertExecutionRunAuthority(record ExecutionRunAuthority) 
 }
 
 func (s *SQLiteStore) runningExecutionRunAuthorityForLease(record ExecutionRunAuthority) (int64, bool, error) {
+	return runningExecutionRunAuthorityForLeaseTx(s.db, record)
+}
+
+func runningExecutionRunAuthorityForLeaseTx(queryer interface {
+	QueryRow(query string, args ...any) *sql.Row
+}, record ExecutionRunAuthority) (int64, bool, error) {
 	leaseID := executionRunAuthorityLeaseID(record)
 	if leaseID == "" {
 		return 0, false, nil
@@ -112,7 +131,43 @@ func (s *SQLiteStore) runningExecutionRunAuthorityForLease(record ExecutionRunAu
 	query += ` LIMIT 1`
 	args = append(args, leaseID)
 	var turnRunID int64
-	if err := s.db.QueryRow(query, args...).Scan(&turnRunID); err != nil {
+	if err := queryer.QueryRow(query, args...).Scan(&turnRunID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	return turnRunID, true, nil
+}
+
+func priorExecutionRunAuthorityForSingleTurnLeaseTx(queryer interface {
+	QueryRow(query string, args ...any) *sql.Row
+}, record ExecutionRunAuthority) (int64, bool, error) {
+	if record.LeaseRemainingTurns > 1 {
+		return 0, false, nil
+	}
+	leaseID := executionRunAuthorityLeaseID(record)
+	if leaseID == "" {
+		return 0, false, nil
+	}
+	query := `
+		SELECT turn_run_id
+		FROM execution_run_authority
+		WHERE lease_kind = ?
+			AND `
+	args := []any{record.LeaseKind}
+	switch record.LeaseKind {
+	case ExecutionAuthorityLeaseKindContinuation:
+		query += `continuation_lease_id = ?`
+	case ExecutionAuthorityLeaseKindOperationPlan:
+		query += `operation_plan_lease_id = ?`
+	default:
+		return 0, false, nil
+	}
+	query += ` LIMIT 1`
+	args = append(args, leaseID)
+	var turnRunID int64
+	if err := queryer.QueryRow(query, args...).Scan(&turnRunID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, false, nil
 		}
@@ -163,7 +218,16 @@ func (s *SQLiteStore) ExecutionRunAuthority(turnRunID int64) (ExecutionRunAuthor
 	if turnRunID <= 0 {
 		return ExecutionRunAuthority{}, false, nil
 	}
-	row := s.db.QueryRow(`
+	return executionRunAuthorityTx(s.db, turnRunID)
+}
+
+func executionRunAuthorityTx(queryer interface {
+	QueryRow(query string, args ...any) *sql.Row
+}, turnRunID int64) (ExecutionRunAuthority, bool, error) {
+	if turnRunID <= 0 {
+		return ExecutionRunAuthority{}, false, nil
+	}
+	row := queryer.QueryRow(`
 		SELECT
 			turn_run_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
 			principal, principal_role, execution_species, lease_kind,

@@ -4,6 +4,8 @@ package session
 
 import (
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -73,6 +75,75 @@ func TestExecutionRunAuthorityRejectsSecondRunningConsumerForLease(t *testing.T)
 	recordB := testExecutionRunAuthorityRecord(runB, "lease-single-consumer")
 	if _, err := store.UpsertExecutionRunAuthority(recordB); err == nil || !strings.Contains(err.Error(), "already bound to running turn run") {
 		t.Fatalf("UpsertExecutionRunAuthority(second) err = %v, want running lease binding rejection", err)
+	}
+}
+
+func TestExecutionRunAuthorityClaimsSingleTurnLeaseConcurrently(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 9103, UserID: 1001}
+	runA, err := store.BeginTurnRun(key, TurnRunKindInteractive, "first concurrent run")
+	if err != nil {
+		t.Fatalf("BeginTurnRun(first) err = %v", err)
+	}
+	runB, err := store.BeginTurnRun(key, TurnRunKindInteractive, "second concurrent run")
+	if err != nil {
+		t.Fatalf("BeginTurnRun(second) err = %v", err)
+	}
+
+	start := make(chan struct{})
+	var successes atomic.Int32
+	var failures atomic.Int32
+	var wg sync.WaitGroup
+	for _, run := range []*TurnRun{runA, runB} {
+		run := run
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if _, err := store.UpsertExecutionRunAuthority(testExecutionRunAuthorityRecord(run, "lease-concurrent-single-consumer")); err != nil {
+				failures.Add(1)
+				return
+			}
+			successes.Add(1)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if successes.Load() != 1 || failures.Load() != 1 {
+		t.Fatalf("concurrent claims successes=%d failures=%d, want exactly one winner", successes.Load(), failures.Load())
+	}
+}
+
+func TestExecutionRunAuthorityRejectsDelayedStaleSingleTurnAdmission(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 9104, UserID: 1001}
+	runA, err := store.BeginTurnRun(key, TurnRunKindInteractive, "first delayed run")
+	if err != nil {
+		t.Fatalf("BeginTurnRun(first) err = %v", err)
+	}
+	runB, err := store.BeginTurnRun(key, TurnRunKindInteractive, "stale delayed run")
+	if err != nil {
+		t.Fatalf("BeginTurnRun(second) err = %v", err)
+	}
+	recordA := testExecutionRunAuthorityRecord(runA, "lease-delayed-single-consumer")
+	recordB := testExecutionRunAuthorityRecord(runB, "lease-delayed-single-consumer")
+	if _, err := store.UpsertExecutionRunAuthority(recordA); err != nil {
+		t.Fatalf("UpsertExecutionRunAuthority(first) err = %v", err)
+	}
+	if err := store.CompleteTurnRun(runA.ID, TurnRunStatusCompleted, "lease consumed by first run"); err != nil {
+		t.Fatalf("CompleteTurnRun(first) err = %v", err)
+	}
+	if _, err := store.UpsertExecutionRunAuthority(recordB); err == nil || !strings.Contains(err.Error(), "already claimed") {
+		t.Fatalf("UpsertExecutionRunAuthority(stale delayed) err = %v, want prior claim rejection", err)
 	}
 }
 

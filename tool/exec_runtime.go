@@ -75,7 +75,7 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	if err != nil {
 		return "", err
 	}
-	authorityGrant, authorityManaged, err := r.requireAuthorityToolAccess(ctx, name, p, key, input)
+	authorityGrant, authorityPermit, authorityManaged, err := r.requireAuthorityToolAccess(ctx, name, p, key, input)
 	if err != nil {
 		return "", err
 	}
@@ -154,7 +154,7 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 						status = "failed"
 						errText = err.Error()
 					}
-					if recordErr := r.recordAuthorityManagedToolOutcome(ctx, name, p, key, authorityGrant, status, errText); recordErr != nil && err == nil {
+					if recordErr := r.recordAuthorityManagedToolOutcome(authorityPermit, status, errText); recordErr != nil && err == nil {
 						err = recordErr
 					}
 				}

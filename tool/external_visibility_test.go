@@ -235,7 +235,7 @@ print(json.dumps({'summary':'ok','action':payload.get('action'),'username':paylo
 	if err != nil {
 		t.Fatalf("CapabilityGrant() err = %v", err)
 	}
-	if !ok || grant.InvocationCount != 3 || grant.FailureCount != 1 {
-		t.Fatalf("grant counters = %#v ok=%t, want allowed decision, completed outcome, and blocked attempt recorded", grant, ok)
+	if !ok || grant.InvocationCount != 2 || grant.FailureCount != 1 {
+		t.Fatalf("grant counters = %#v ok=%t, want one successful invocation and one blocked attempt", grant, ok)
 	}
 }

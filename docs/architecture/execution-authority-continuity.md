@@ -28,7 +28,9 @@ The execution-authority spine is:
    operation-plan lease.
 2. Runtime admits that work into `session.execution_run_authority`, binding the
    turn run to exactly one causal lease kind and ID, the principal, session,
-   execution species, and the lease state observed at admission.
+   execution species, and the lease state observed at admission. Admission is a
+   transactional claim: another running run cannot claim the same lease, and a
+   single-turn lease cannot be rebound later from a stale admission snapshot.
 3. Runtime context may carry only the durable run identity
    (`session_id + turn_run_id`). It must not carry a reconstructible assertion
    such as "this lease ID authorizes me."
@@ -38,8 +40,8 @@ The execution-authority spine is:
 5. Capability grants are checked for principal, kind, resource, and exact action.
 6. Resource authority is compiled for the concrete operation.
 7. Invocation evidence records grant, principal, action, session, turn run,
-   authority source, lease IDs, and the operation outcome when the invocation
-   crosses a capability or `file_access` grant.
+   authority source, lease IDs, the authorization decision, and the operation
+   outcome when the invocation crosses a capability or `file_access` grant.
 
 Context may select durable run authority, but it may not manufacture authority.
 Durable state remains canonical.
@@ -159,12 +161,15 @@ running turn. The run-authority row is immutable after admission; an exactly
 identical write is idempotent, but changing principal, session, lease, species,
 or the admission snapshot is rejected.
 
-Capability-managed tool evidence separates the authorization decision from the
-execution outcome. A successful point-of-use check records `allowed`; an
-executor result records `completed` or `failed` with the same durable run,
-session, lease, grant, action, and resource context. A turn whose authority
-binding fails during admission is terminalized as failed instead of being left
-as a running turn.
+Capability-managed external tool evidence separates the authorization decision
+from the execution outcome without splitting one logical invocation into two
+unlinked rows. A successful point-of-use check records `status=allowed` and
+`outcome_status=pending`; the executor finalizes that same invocation ID as
+`completed` or `failed` through the original permit. Outcome finalization does
+not reauthorize after the external effect has already run, so authority changes
+during execution do not turn a successful side effect into an ambiguous failed
+call. A turn whose authority binding fails during admission is terminalized as
+failed instead of being left as a running turn.
 
 Native file access is still pathname-based after authorization. The current
 guard rejects symlink components in approved grant roots and revalidates

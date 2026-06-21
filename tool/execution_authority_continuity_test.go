@@ -240,7 +240,7 @@ func TestExecutionAuthorityContinuityToolBoundaryMatrix(t *testing.T) {
 			actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 			key := adminSessionKey()
 			ctx := tc.setup(t, store, key)
-			_, _, err := registry.requireAuthorityToolAccess(ctx, "leased_tool", actor, key, json.RawMessage(`{}`))
+			_, _, _, err := registry.requireAuthorityToolAccess(ctx, "leased_tool", actor, key, json.RawMessage(`{}`))
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("%s requireAuthorityToolAccess() err = %v, want %q", tc.species, err, tc.wantErr)

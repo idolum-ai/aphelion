@@ -446,6 +446,13 @@ func (s *SQLiteStore) RecordCapabilityInvocation(invocation CapabilityInvocation
 	if invocation.Status == "" {
 		invocation.Status = "succeeded"
 	}
+	if invocation.OutcomeStatus == "" {
+		if invocation.Status == "allowed" {
+			invocation.OutcomeStatus = "pending"
+		} else {
+			invocation.OutcomeStatus = invocation.Status
+		}
+	}
 	createdAt := nonZeroTimeOrNow(invocation.CreatedAt, time.Now().UTC()).UTC()
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -454,30 +461,33 @@ func (s *SQLiteStore) RecordCapabilityInvocation(invocation CapabilityInvocation
 	defer func() { _ = tx.Rollback() }()
 	res, err := tx.Exec(`
 		INSERT INTO capability_invocations(
-			grant_id, principal, action, status, error_text,
+			grant_id, principal, action, status, error_text, outcome_status, outcome_error_text,
 			session_id, turn_run_id, continuation_lease_id, operation_plan_lease_id, authority_source,
-			created_at
+			created_at, completed_at
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		invocation.GrantID,
 		invocation.Principal,
 		invocation.Action,
 		invocation.Status,
 		invocation.ErrorText,
+		invocation.OutcomeStatus,
+		invocation.OutcomeErrorText,
 		invocation.SessionID,
 		invocation.TurnRunID,
 		invocation.ContinuationLeaseID,
 		invocation.OperationPlanLeaseID,
 		invocation.AuthoritySource,
 		createdAt.Format(time.RFC3339Nano),
+		nullableTimeRFC3339(invocation.CompletedAt),
 	)
 	if err != nil {
 		return CapabilityInvocation{}, fmt.Errorf("record capability invocation: %w", err)
 	}
 	failureIncrement := 0
 	lastFailureAt := any(nil)
-	if invocation.Status == "failed" || invocation.Status == "blocked" {
+	if invocation.Status == "failed" || invocation.Status == "blocked" || invocation.OutcomeStatus == "failed" {
 		failureIncrement = 1
 		lastFailureAt = createdAt.Format(time.RFC3339Nano)
 	}
@@ -501,14 +511,92 @@ func (s *SQLiteStore) RecordCapabilityInvocation(invocation CapabilityInvocation
 	return invocation, nil
 }
 
+func (s *SQLiteStore) CompleteCapabilityInvocation(invocationID int64, outcomeStatus string, outcomeErrorText string, completedAt time.Time) (CapabilityInvocation, error) {
+	if invocationID <= 0 {
+		return CapabilityInvocation{}, fmt.Errorf("capability invocation id is required")
+	}
+	outcomeStatus = normalizeEnumValue(outcomeStatus)
+	if outcomeStatus == "" {
+		outcomeStatus = "succeeded"
+	}
+	outcomeErrorText = strings.TrimSpace(outcomeErrorText)
+	completedAt = nonZeroTimeOrNow(completedAt, time.Now().UTC()).UTC()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return CapabilityInvocation{}, fmt.Errorf("begin capability invocation completion tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var (
+		grantID      string
+		priorOutcome string
+	)
+	if err := tx.QueryRow(`
+		SELECT grant_id, outcome_status
+		FROM capability_invocations
+		WHERE id = ?
+	`, invocationID).Scan(&grantID, &priorOutcome); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return CapabilityInvocation{}, fmt.Errorf("capability invocation %d not found", invocationID)
+		}
+		return CapabilityInvocation{}, fmt.Errorf("load capability invocation completion target: %w", err)
+	}
+	if priorOutcome != "" && priorOutcome != "pending" {
+		return CapabilityInvocation{}, fmt.Errorf("capability invocation %d already has outcome %q", invocationID, priorOutcome)
+	}
+	if _, err := tx.Exec(`
+		UPDATE capability_invocations
+		SET outcome_status = ?, outcome_error_text = ?, completed_at = ?
+		WHERE id = ?
+	`, outcomeStatus, outcomeErrorText, completedAt.Format(time.RFC3339Nano), invocationID); err != nil {
+		return CapabilityInvocation{}, fmt.Errorf("complete capability invocation: %w", err)
+	}
+	failureIncrement := 0
+	lastFailureAt := any(nil)
+	if outcomeStatus == "failed" {
+		failureIncrement = 1
+		lastFailureAt = completedAt.Format(time.RFC3339Nano)
+	}
+	if _, err := tx.Exec(`
+		UPDATE capability_grants
+		SET failure_count = failure_count + ?,
+			last_failure_at = COALESCE(?, last_failure_at),
+			updated_at = ?
+		WHERE grant_id = ?
+	`, failureIncrement, lastFailureAt, completedAt.Format(time.RFC3339Nano), grantID); err != nil {
+		return CapabilityInvocation{}, fmt.Errorf("update capability grant invocation outcome counters: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return CapabilityInvocation{}, fmt.Errorf("commit capability invocation completion tx: %w", err)
+	}
+	return s.CapabilityInvocation(invocationID)
+}
+
+func (s *SQLiteStore) CapabilityInvocation(invocationID int64) (CapabilityInvocation, error) {
+	if invocationID <= 0 {
+		return CapabilityInvocation{}, fmt.Errorf("capability invocation id is required")
+	}
+	row := s.db.QueryRow(`
+		SELECT id, grant_id, principal, action, status, error_text, outcome_status, outcome_error_text,
+			session_id, turn_run_id, continuation_lease_id, operation_plan_lease_id, authority_source,
+			created_at, completed_at
+		FROM capability_invocations
+		WHERE id = ?
+	`, invocationID)
+	invocation, err := scanCapabilityInvocation(row)
+	if err != nil {
+		return CapabilityInvocation{}, err
+	}
+	return invocation, nil
+}
+
 func (s *SQLiteStore) CapabilityInvocations(limit int) ([]CapabilityInvocation, error) {
 	if limit <= 0 || limit > 5000 {
 		limit = 500
 	}
 	rows, err := s.db.Query(`
-		SELECT id, grant_id, principal, action, status, error_text,
+		SELECT id, grant_id, principal, action, status, error_text, outcome_status, outcome_error_text,
 			session_id, turn_run_id, continuation_lease_id, operation_plan_lease_id, authority_source,
-			created_at
+			created_at, completed_at
 		FROM capability_invocations
 		ORDER BY created_at DESC, id DESC
 		LIMIT ?
@@ -529,9 +617,9 @@ func (s *SQLiteStore) CapabilityInvocationsByGrant(grantID string, limit int) ([
 		limit = 50
 	}
 	rows, err := s.db.Query(`
-		SELECT id, grant_id, principal, action, status, error_text,
+		SELECT id, grant_id, principal, action, status, error_text, outcome_status, outcome_error_text,
 			session_id, turn_run_id, continuation_lease_id, operation_plan_lease_id, authority_source,
-			created_at
+			created_at, completed_at
 		FROM capability_invocations
 		WHERE grant_id = ?
 		ORDER BY created_at DESC, id DESC
@@ -623,15 +711,18 @@ func scanCapabilityInvocationRows(rows *sql.Rows) ([]CapabilityInvocation, error
 
 func scanCapabilityInvocation(scanner interface{ Scan(dest ...any) error }) (CapabilityInvocation, error) {
 	var (
-		invocation  CapabilityInvocation
-		createdRaw  string
-		statusRaw   string
-		actionRaw   string
-		sourceRaw   string
-		errorText   string
-		sessionID   string
-		leaseID     string
-		planLeaseID string
+		invocation      CapabilityInvocation
+		createdRaw      string
+		completedRaw    sql.NullString
+		statusRaw       string
+		outcomeRaw      string
+		actionRaw       string
+		sourceRaw       string
+		errorText       string
+		outcomeErrorRaw string
+		sessionID       string
+		leaseID         string
+		planLeaseID     string
 	)
 	if err := scanner.Scan(
 		&invocation.InvocationID,
@@ -640,12 +731,15 @@ func scanCapabilityInvocation(scanner interface{ Scan(dest ...any) error }) (Cap
 		&actionRaw,
 		&statusRaw,
 		&errorText,
+		&outcomeRaw,
+		&outcomeErrorRaw,
 		&sessionID,
 		&invocation.TurnRunID,
 		&leaseID,
 		&planLeaseID,
 		&sourceRaw,
 		&createdRaw,
+		&completedRaw,
 	); err != nil {
 		return CapabilityInvocation{}, err
 	}
@@ -656,11 +750,20 @@ func scanCapabilityInvocation(scanner interface{ Scan(dest ...any) error }) (Cap
 	invocation.Action = actionRaw
 	invocation.Status = statusRaw
 	invocation.ErrorText = errorText
+	invocation.OutcomeStatus = outcomeRaw
+	invocation.OutcomeErrorText = outcomeErrorRaw
 	invocation.SessionID = sessionID
 	invocation.ContinuationLeaseID = leaseID
 	invocation.OperationPlanLeaseID = planLeaseID
 	invocation.AuthoritySource = sourceRaw
 	invocation.CreatedAt = createdAt
+	if completedRaw.Valid && strings.TrimSpace(completedRaw.String) != "" {
+		completedAt, err := parseSQLiteTime(completedRaw.String)
+		if err != nil {
+			return CapabilityInvocation{}, fmt.Errorf("parse capability invocation completed_at: %w", err)
+		}
+		invocation.CompletedAt = completedAt
+	}
 	return NormalizeCapabilityInvocation(invocation), nil
 }
 

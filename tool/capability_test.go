@@ -591,8 +591,8 @@ func TestCapabilityGrantEnablesRegisteredToolWithoutRemovedExposureTable(t *test
 	if err != nil {
 		t.Fatalf("CapabilityGrant() err = %v", err)
 	}
-	if !ok || grant.InvocationCount != 2 {
-		t.Fatalf("CapabilityGrant invocation count = %#v ok=%t, want authorization and outcome invocations", grant, ok)
+	if !ok || grant.InvocationCount != 1 {
+		t.Fatalf("CapabilityGrant invocation count = %#v ok=%t, want one logical invocation", grant, ok)
 	}
 }
 

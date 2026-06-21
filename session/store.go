@@ -10,7 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 71
+const schemaVersion = 72
 
 type SQLiteStore struct {
 	db     *sql.DB
@@ -280,12 +280,15 @@ func (s *SQLiteStore) init() error {
 			action TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT '',
 			error_text TEXT NOT NULL DEFAULT '',
+			outcome_status TEXT NOT NULL DEFAULT '',
+			outcome_error_text TEXT NOT NULL DEFAULT '',
 			session_id TEXT NOT NULL DEFAULT '',
 			turn_run_id INTEGER NOT NULL DEFAULT 0,
 			continuation_lease_id TEXT NOT NULL DEFAULT '',
 			operation_plan_lease_id TEXT NOT NULL DEFAULT '',
 			authority_source TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			completed_at TEXT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_capability_invocations_grant ON capability_invocations(grant_id, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_capability_invocations_authority_session ON capability_invocations(session_id, created_at DESC)`,

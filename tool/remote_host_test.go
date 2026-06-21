@@ -140,8 +140,8 @@ func TestRemoteHostSSHExecUsesOpenSSHAndRecordsEvidence(t *testing.T) {
 		t.Fatalf("output = %s, want trimmed stdout", out)
 	}
 	invocations := capabilityInvocationsForGrant(t, store, grant.GrantID, 4)
-	if len(invocations) < 2 || invocations[0].Status != "completed" || invocations[1].Status != "allowed" {
-		t.Fatalf("invocations = %#v, want completed after allowed", invocations)
+	if len(invocations) != 1 || invocations[0].Status != "allowed" || invocations[0].OutcomeStatus != "completed" {
+		t.Fatalf("invocations = %#v, want one allowed invocation with completed outcome", invocations)
 	}
 	if invocations[0].AuthoritySource != "continuation_lease" || invocations[0].SessionID == "" || invocations[0].TurnRunID <= 0 {
 		t.Fatalf("invocation authority refs = %#v, want run-authority evidence", invocations[0])
@@ -250,8 +250,8 @@ func TestRemoteHostToolInvocationScopeConstrainsSelectors(t *testing.T) {
 		t.Fatalf("allowed selector err = %v output=%s", err, out)
 	}
 	invocations := capabilityInvocationsForGrant(t, store, grant.GrantID, 10)
-	if len(invocations) < 3 || invocations[0].Status != "completed" || invocations[1].Status != "allowed" || invocations[2].Status != "blocked" {
-		t.Fatalf("invocations = %#v, want completed, allowed, blocked", invocations)
+	if len(invocations) != 2 || invocations[0].Status != "allowed" || invocations[0].OutcomeStatus != "completed" || invocations[1].Status != "blocked" {
+		t.Fatalf("invocations = %#v, want allowed/completed then blocked", invocations)
 	}
 }
 
@@ -310,8 +310,8 @@ func TestRemoteHostRecordsFailedInvocation(t *testing.T) {
 		t.Fatalf("failed output = %s, want host trust setup blocker", out)
 	}
 	invocations := capabilityInvocationsForGrant(t, store, grant.GrantID, 4)
-	if len(invocations) < 2 || invocations[0].Status != "failed" || invocations[1].Status != "allowed" {
-		t.Fatalf("invocations = %#v, want failed after allowed", invocations)
+	if len(invocations) != 1 || invocations[0].Status != "allowed" || invocations[0].OutcomeStatus != "failed" {
+		t.Fatalf("invocations = %#v, want one allowed invocation with failed outcome", invocations)
 	}
 }
 

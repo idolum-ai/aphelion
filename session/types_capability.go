@@ -105,12 +105,15 @@ type CapabilityInvocation struct {
 	Action               string    `json:"action,omitempty"`
 	Status               string    `json:"status,omitempty"`
 	ErrorText            string    `json:"error_text,omitempty"`
+	OutcomeStatus        string    `json:"outcome_status,omitempty"`
+	OutcomeErrorText     string    `json:"outcome_error_text,omitempty"`
 	SessionID            string    `json:"session_id,omitempty"`
 	TurnRunID            int64     `json:"turn_run_id,omitempty"`
 	ContinuationLeaseID  string    `json:"continuation_lease_id,omitempty"`
 	OperationPlanLeaseID string    `json:"operation_plan_lease_id,omitempty"`
 	AuthoritySource      string    `json:"authority_source,omitempty"`
 	CreatedAt            time.Time `json:"created_at,omitempty"`
+	CompletedAt          time.Time `json:"completed_at,omitempty"`
 }
 
 type AuthorityUseRef struct {
@@ -363,6 +366,8 @@ func NormalizeCapabilityInvocation(invocation CapabilityInvocation) CapabilityIn
 	invocation.Action = normalizeEnumValue(invocation.Action)
 	invocation.Status = normalizeEnumValue(invocation.Status)
 	invocation.ErrorText = strings.TrimSpace(invocation.ErrorText)
+	invocation.OutcomeStatus = normalizeEnumValue(invocation.OutcomeStatus)
+	invocation.OutcomeErrorText = strings.TrimSpace(invocation.OutcomeErrorText)
 	ref := NormalizeAuthorityUseRef(AuthorityUseRef{
 		SessionID:            invocation.SessionID,
 		TurnRunID:            invocation.TurnRunID,
@@ -377,6 +382,9 @@ func NormalizeCapabilityInvocation(invocation CapabilityInvocation) CapabilityIn
 	invocation.AuthoritySource = ref.AuthoritySource
 	if invocation.CreatedAt.IsZero() && invocation.GrantID != "" {
 		invocation.CreatedAt = time.Now().UTC()
+	}
+	if !invocation.CompletedAt.IsZero() {
+		invocation.CompletedAt = invocation.CompletedAt.UTC()
 	}
 	return invocation
 }

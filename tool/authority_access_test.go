@@ -43,7 +43,7 @@ func TestAuthorityManagedToolRequiresTurnLeaseEvidence(t *testing.T) {
 
 	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 	key := adminSessionKey()
-	_, _, err := registry.requireAuthorityToolAccess(context.Background(), "leased_tool", actor, key, json.RawMessage(`{}`))
+	_, _, _, err := registry.requireAuthorityToolAccess(context.Background(), "leased_tool", actor, key, json.RawMessage(`{}`))
 	if err == nil || !strings.Contains(err.Error(), "requires durable run authority evidence") {
 		t.Fatalf("requireAuthorityToolAccess() err = %v, want missing durable run authority", err)
 	}
@@ -57,12 +57,15 @@ func TestAuthorityManagedToolRequiresTurnLeaseEvidence(t *testing.T) {
 
 	grantAuthorityUseLease(t, store, key)
 	ctx, _ := contextWithContinuationRunAuthority(t, store, key, actor, "lease-authority-use-"+session.SessionIDForKey(key), session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "test")
-	grant, managed, err := registry.requireAuthorityToolAccess(ctx, "leased_tool", actor, key, json.RawMessage(`{}`))
+	grant, permit, managed, err := registry.requireAuthorityToolAccess(ctx, "leased_tool", actor, key, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("requireAuthorityToolAccess(with run authority) err = %v", err)
 	}
 	if !managed || grant.GrantID != "capg-leased-tool" {
 		t.Fatalf("grant=%#v managed=%t, want capg-leased-tool managed", grant, managed)
+	}
+	if permit == nil || permit.InvocationID <= 0 {
+		t.Fatalf("permit = %#v, want durable invocation permit", permit)
 	}
 	invocations, err = store.CapabilityInvocationsByGrant("capg-leased-tool", 10)
 	if err != nil {
@@ -145,12 +148,15 @@ func TestAuthorityManagedToolUsesContextLeaseEvidence(t *testing.T) {
 	key := adminSessionKey()
 	grantAuthorityUseLeaseWithID(t, store, key, "lease-context-tool")
 	ctx, turnRunID := contextWithContinuationRunAuthority(t, store, key, actor, "lease-context-tool", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_continuation")
-	grant, managed, err := registry.requireAuthorityToolAccess(ctx, "leased_tool", actor, key, json.RawMessage(`{}`))
+	grant, permit, managed, err := registry.requireAuthorityToolAccess(ctx, "leased_tool", actor, key, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("requireAuthorityToolAccess(context run authority) err = %v", err)
 	}
 	if !managed || grant.GrantID != "capg-context-tool" {
 		t.Fatalf("grant=%#v managed=%t, want capg-context-tool managed", grant, managed)
+	}
+	if permit == nil || permit.InvocationID <= 0 {
+		t.Fatalf("permit = %#v, want durable invocation permit", permit)
 	}
 	invocations, err := store.CapabilityInvocationsByGrant("capg-context-tool", 10)
 	if err != nil {
@@ -194,7 +200,7 @@ func TestAuthorityManagedToolRejectsFabricatedContextLeaseEvidence(t *testing.T)
 		SessionID: session.SessionIDForKey(key),
 		TurnRunID: 999999,
 	})
-	_, _, err := registry.requireAuthorityToolAccess(ctx, "leased_tool", actor, key, json.RawMessage(`{}`))
+	_, _, _, err := registry.requireAuthorityToolAccess(ctx, "leased_tool", actor, key, json.RawMessage(`{}`))
 	if err == nil || !strings.Contains(err.Error(), "not durable") {
 		t.Fatalf("requireAuthorityToolAccess(fabricated) err = %v, want fabricated run-authority rejection", err)
 	}
@@ -319,7 +325,7 @@ func TestAuthorityManagedToolRejectsInvalidContextLeaseEvidence(t *testing.T) {
 				_, turnRunID := contextWithContinuationRunAuthority(t, store, key, actor, tc.lease.ID, tc.lease.Status, tc.lease.RemainingTurns, tc.lease.ExpiresAt, "test")
 				ref.TurnRunID = turnRunID
 			}
-			_, _, err := registry.requireAuthorityToolAccess(WithAuthorityUseRef(context.Background(), ref), "leased_tool", actor, key, json.RawMessage(`{}`))
+			_, _, _, err := registry.requireAuthorityToolAccess(WithAuthorityUseRef(context.Background(), ref), "leased_tool", actor, key, json.RawMessage(`{}`))
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("requireAuthorityToolAccess(%s) err = %v, want %q", tc.name, err, tc.wantErr)
 			}
@@ -362,7 +368,7 @@ func TestAuthorityManagedToolRejectsMismatchedContextLeaseEvidence(t *testing.T)
 		SessionID: "telegram_dm:9999",
 		TurnRunID: turnRunID,
 	})
-	_, _, err := registry.requireAuthorityToolAccess(ctx, "leased_tool", actor, key, json.RawMessage(`{}`))
+	_, _, _, err := registry.requireAuthorityToolAccess(ctx, "leased_tool", actor, key, json.RawMessage(`{}`))
 	if err == nil || !strings.Contains(err.Error(), "authority evidence belongs to session") {
 		t.Fatalf("requireAuthorityToolAccess(mismatch) err = %v, want session mismatch", err)
 	}
@@ -412,7 +418,7 @@ func TestAuthorityManagedToolRejectsTerminalRunAuthorityReplay(t *testing.T) {
 				t.Fatalf("CompleteTurnRun() err = %v", err)
 			}
 
-			_, _, err := registry.requireAuthorityToolAccess(ctx, "leased_tool", actor, key, json.RawMessage(`{}`))
+			_, _, _, err := registry.requireAuthorityToolAccess(ctx, "leased_tool", actor, key, json.RawMessage(`{}`))
 			if err == nil || !strings.Contains(err.Error(), "execution authority turn run") || !strings.Contains(err.Error(), string(status)) {
 				t.Fatalf("requireAuthorityToolAccess() err = %v, want terminal run replay denial", err)
 			}
