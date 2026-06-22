@@ -44,9 +44,10 @@ interpretations. `Challenge` is the typed mechanism that carries one such
 disagreement through recheck, adjudication, and possible demotion.
 
 The registry at the end audits current surfaces against that model. It is a
-current-state map over an implemented kernel. The kernel is real, but many
-domain surfaces still need adapters before every listed row satisfies every
-rule.
+current-state map over an implemented kernel. A row may claim `satisfies` only
+when its consumer boundary is wired to a resolvable runtime call site; an
+implemented helper with no live consumer is still an experiment, not an
+architecture guarantee.
 
 Research lineage and deliberate departures are recorded in
 [`influences-and-departures.md`](influences-and-departures.md#truth-maintenance-argumentation-and-provenance).
@@ -62,7 +63,8 @@ This document has two roles:
   commitments, and `session.judgment_challenge_events` records append-only
   challenge/adjudication events;
 - current registry: rows show whether each surface satisfies the current
-  judgment/use/challenge boundary or is non-consequential.
+  judgment/use/challenge boundary, is wired to a consumer, or is
+  non-consequential.
 
 Once the model is accepted through implementation experience, the stable
 decisions should move into an ADR or a narrower normative architecture document.
@@ -533,6 +535,7 @@ multi-axis profile:
 | Assurance | `examples`, `unit tests`, `adversarial corpus`, `fuzz/property tests`, `shadow evaluation`, `production calibration` |
 | Lifecycle | `experimental`, `canary`, `production`, `deprecated` |
 | Local compliance | `satisfies`, `not applicable` |
+| Runtime wiring | `wired`, `not applicable` |
 | End-to-end readiness | `ready`, `blocked by dependency`, `shadow only`, `unassessed` |
 | Dependencies | stable surface IDs from `interpretation-surfaces.json` |
 
@@ -543,22 +546,30 @@ maturity label.
 ## Current Local Compliance
 
 Rows marked `satisfies` already have an appropriate challenge, verification,
-or non-authority boundary for their consequence. Rows marked `not applicable`
-do not make settled judgments consequential enough to require a demotion path.
-Older drafts used `partial` and `debt` while the registry was being seeded; the
-machine-readable registry rejects those broad statuses now.
+or non-authority boundary for their consequence, and the machine-readable
+registry must also mark them `wired`. Rows marked `not applicable` do not make
+settled judgments consequential enough to require a demotion path and must be
+`not_applicable` for wiring as well. Older drafts used `partial` and `debt`
+while the registry was being seeded; the machine-readable registry rejects
+those broad statuses now.
+
+Implemented-but-unconsumed code must not be marked `satisfies`. The failure mode
+this document is meant to prevent is a typed object claiming authority-class
+consequence because it exists, while no consumer actually consults it.
 
 The `Local compliance` column still does not prove that every downstream
 pipeline is semantically perfect. It means the interpretation surface has a
-registered owner, code anchor, consequence class, consumer boundary, and dissent
-adapter strong enough for its declared consequence.
+registered owner, code anchor, consequence class, consumer boundary, consumer
+anchor, and dissent adapter strong enough for its declared consequence.
 
 The registry is now backed by
 [`interpretation-surfaces.json`](interpretation-surfaces.json). Architecture
 checks verify stable surface IDs, owner fields, code anchors, challenge adapters,
-and that no registry row remains in a broad `partial` or `debt` state. The
-Markdown table below is the readable view; the JSON file is the mechanical
-source of truth for review and CI.
+status/wiring consistency, and that every declared consumer resolves to a
+non-test Go declaration rather than a leftover string literal. Challenge
+adapters must use a registered adapter token. The checks also reject broad
+`partial` or `debt` states. The Markdown table below is the readable view; the
+JSON file is the mechanical source of truth for review and CI.
 
 ## Current Registry
 
@@ -572,7 +583,7 @@ The registry describes edges:
 | Effect authorization | [`effectauth/effectauth.go`](../../effectauth/effectauth.go) | typed trusted envelope + command judgment | compiler/ruleset | authority narrowing/denial | current durable envelope, grant, lease, and shell effect plan judgment | local repair/block for invalid contracts; operator disambiguation for missing authority | satisfies | plan-aware authorization consumes the recorded effect plan in exec; command wrapper remains for compatibility; fail closed for invalid active envelopes and disallowed effects; unit tests; production authority membrane |
 | Exec approval presentation | [`tool/exec_guard.go`](../../tool/exec_guard.go) | bounded text | recognizer | presentation and operator review salience | typed effect decision should outrank presentation text | none as authority; projection should be regenerated from typed decision | not applicable | defer to typed effect decisions; proposal text is not authority; unit tests; production presentation helper |
 | Authority contract compilation | [`session/authority_contract.go`](../../session/authority_contract.go), [`session/authority_contract_compiler.go`](../../session/authority_contract_compiler.go), [`session/types_continuation.go`](../../session/types_continuation.go) | typed trusted fields plus bounded effect text | compiler with limited recognizers | authority narrowing/grant constraints | current durable proposal, phase, envelope, and exact action tokens | typed repair/block when prose and actions contradict; operator disambiguation for unsafe repair | satisfies | fail closed on contradictions; exact actions required for sensitive lease classes; unit tests; production |
-| Dependency decorrelation adjudication | [`session/judgment_decorrelation.go`](../../session/judgment_decorrelation.go) | judgment metadata, evidence refs, interpreter versions, lineage | ruleset | qualification and demotion gating for authority, durable state, recovery, and completion | compares source independence across model call, material floor, memory summary, parser output, interpreter version, and upstream evidence chain | mandatory typed challenge boundary; operator or eval replay when rules cannot decide | satisfies | deterministic rules reject shared upstream fault domains and dependency refs; unit tests cover correlated and decorrelated ground |
+| Dependency decorrelation adjudication | [`session/judgment_decorrelation.go`](../../session/judgment_decorrelation.go), [`tool/exec_runtime.go`](../../tool/exec_runtime.go) | judgment metadata, evidence refs, interpreter versions, lineage | ruleset | irreversible exec qualification for authority/execution use | compares source independence across model call, material floor, memory summary, parser output, interpreter version, and upstream evidence chain | irreversible exec blocks when support is missing, unresolved, or correlated; broader demotion adapters should reuse the same contract before claiming compliance | satisfies | deterministic rules reject missing provenance, unresolved upstream refs, shared fault domains, direct dependency refs, and transitive judgment dependencies; exec irreversible qualification consumes the decision before recording a use; unit tests cover correlated, decorrelated, missing, and transitive ground |
 | Judgment use and commitment | [`session/types_judgment.go`](../../session/types_judgment.go), [`session/store_judgments.go`](../../session/store_judgments.go), [`session/types_judgment_use.go`](../../session/types_judgment_use.go), [`session/store_judgment_uses.go`](../../session/store_judgment_uses.go), [`tool/exec_runtime.go`](../../tool/exec_runtime.go), [`runtime/reentry_recommendation.go`](../../runtime/reentry_recommendation.go), [`runtime/recovery_candidate_arbitration.go`](../../runtime/recovery_candidate_arbitration.go), [`runtime/brokerage.go`](../../runtime/brokerage.go) | persisted judgment IDs, policy refs, dependency snapshots, operation/run generations | compiler/ruleset | records selected presentation, control-flow, model-context, recovery-selection, execution, and diagnostic commitments | persisted judgment plus dependency snapshot and invocation/run identity | append-only challenge events can locate dependent uses and mark them pending reconciliation | satisfies | insert-only immutable judgment and use commitments; exec dispatch writes judgment use and effect attempt before dispatch; irreversible exec requires approved proposal or active continuation ground; unit tests cover immutable replay, contradiction events, and use reconciliation |
 | Brokerage execution contract parsing | [`pipeline/brokerage.go`](../../pipeline/brokerage.go), [`runtime/brokerage.go`](../../runtime/brokerage.go), [`turn/brokerage_stage.go`](../../turn/brokerage_stage.go) | model output and bounded text | parser + convergence loop | control flow: inspect/question/answer, plan seeding, governor awareness | model-authored pressure + governor ratification; lower ground than typed evidence | local argumentation preserves disagreement; final brokerage contract is recorded as a control-flow judgment/use | satisfies | fallback, adapt, reject, or stable-contract stop; durable control-flow judgment/use recorded after convergence; unit tests; production but not authority-granting |
 | Memory context governor | [`memory/context_governor.go`](../../memory/context_governor.go), [`memory/perception_budget.go`](../../memory/perception_budget.go), [`runtime/interpretation_judgments.go`](../../runtime/interpretation_judgments.go) | free text + typed context requests | scorer/ruleset | perception and salience: lean/normal/deep/doctor recall and layer admission | heuristic judgment over memory and request text | typed challenge when recalled memory conflicts with current evidence or operator request | satisfies | perception budget and adaptive recall admissions record model-context judgments/uses; conservative budget cap and suppression records; unit tests; production |

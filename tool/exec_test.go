@@ -246,14 +246,65 @@ func TestExecIrreversibleUseRequiresApprovedProposalGround(t *testing.T) {
 	if len(use.JudgmentRefs) == 0 || use.JudgmentRefs[0] != session.JudgmentRef(judgments[0].ID) {
 		t.Fatalf("judgment refs = %#v, want shell effect judgment ref %q", use.JudgmentRefs, session.JudgmentRef(judgments[0].ID))
 	}
-	var sawProposal bool
+	var sawProposal, sawDecorrelated bool
 	for _, dep := range use.DependencyRefs {
 		if dep.Kind == "operation_proposal" && dep.Role == "qualifies" {
 			sawProposal = true
 		}
+		if dep.Kind == "decorrelation_decision" && dep.Role == "qualifies" && dep.Scope == "decorrelated" {
+			sawDecorrelated = true
+		}
 	}
-	if !sawProposal {
-		t.Fatalf("dependency refs = %#v, want approved proposal qualification ref", use.DependencyRefs)
+	if !sawProposal || !sawDecorrelated {
+		t.Fatalf("dependency refs = %#v, want approved proposal and decorrelation qualification refs", use.DependencyRefs)
+	}
+}
+
+func TestExecIrreversibleUseRejectsCorrelatedQualificationGround(t *testing.T) {
+	t.Parallel()
+
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8816, UserID: 1001}
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	ctx := WithToolInvocationRef(context.Background(), ToolInvocationRef{TurnRunID: 90, InvocationID: "push-correlated-ground"})
+	now := time.Now().UTC()
+	shellJudgment, err := store.RecordJudgment(session.JudgmentInput{
+		Key:                key,
+		TurnRunID:          90,
+		Kind:               "shell_effect_plan",
+		SubjectKey:         "exec:" + session.EffectAttemptCommandHash("git push origin main"),
+		ClaimKey:           "command_effect_plan",
+		InterpreterID:      "commandeffect.plan_command",
+		InputRefs:          []string{session.JudgmentUseRef("command_hash", session.EffectAttemptCommandHash("git push origin main"))},
+		InputHash:          session.EffectAttemptCommandHash("git push origin main"),
+		ResultJSON:         `{"effect":"git_push"}`,
+		DependencyRefs:     []session.JudgmentDependencyRef{{Kind: "operation_proposal", Ref: "proposal-correlated", Role: "support"}},
+		SourceFaultDomains: []string{"operation_proposal"},
+		AsOf:               now,
+		CreatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("RecordJudgment() err = %v", err)
+	}
+	err = registry.recordExecPreDispatchAttempt(
+		ctx,
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"exec",
+		"git push origin main",
+		shellJudgment,
+		commandeffect.PlanCommand("git push origin main"),
+		"proposal-correlated",
+	)
+	if err == nil || !strings.Contains(err.Error(), "not decorrelated") {
+		t.Fatalf("recordExecPreDispatchAttempt() err = %v, want correlated qualification rejection", err)
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 0 {
+		t.Fatalf("judgment uses = %#v, want no use for correlated qualification ground", uses)
 	}
 }
 

@@ -2,7 +2,30 @@
 
 package session
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestDecorrelatedGroundForJudgmentRejectsMissingProvenance(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		challenged JudgmentGroundProfile
+		support    JudgmentGroundProfile
+	}{
+		{name: "both empty"},
+		{name: "support empty", challenged: JudgmentGroundProfile{SourceFaultDomains: []string{"shell_text"}}},
+		{name: "challenged empty", support: JudgmentGroundProfile{SourceFaultDomains: []string{"operation_proposal"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decision := DecorrelatedGroundForJudgment(tc.challenged, tc.support)
+			if decision.Decorrelated || decision.Reason != "insufficient tracked provenance" {
+				t.Fatalf("decision = %#v, want insufficient tracked provenance rejection", decision)
+			}
+		})
+	}
+}
 
 func TestDecorrelatedGroundForJudgmentRejectsSharedUpstream(t *testing.T) {
 	challenged := JudgmentGroundProfile{
@@ -45,5 +68,108 @@ func TestDecorrelatedGroundForJudgmentAcceptsIndependentGround(t *testing.T) {
 	decision := DecorrelatedGroundForJudgment(challenged, support)
 	if !decision.Decorrelated {
 		t.Fatalf("decision = %#v, want independent effect-attempt ground", decision)
+	}
+}
+
+func TestJudgmentGroundProfileRejectsTransitiveSharedAncestor(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	key := SessionKey{ChatID: 1001, UserID: 2002}
+	now := time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
+	ancestor, err := store.RecordJudgment(JudgmentInput{
+		Key:                key,
+		Kind:               "operator_request",
+		SubjectKey:         "request:shared",
+		ClaimKey:           "current_operator_intent",
+		InterpreterID:      "runtime.request_parser",
+		InputRefs:          []string{"message:shared"},
+		ResultJSON:         `{"intent":"shared"}`,
+		DependencyRefs:     []JudgmentDependencyRef{{Kind: "operator_message", Ref: "msg-shared", Role: "source"}},
+		SourceFaultDomains: []string{"operator_message"},
+		AsOf:               now,
+		CreatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("RecordJudgment(ancestor) err = %v", err)
+	}
+	challenged, err := store.RecordJudgment(JudgmentInput{
+		Key:                key,
+		Kind:               "shell_effect_plan",
+		SubjectKey:         "exec:push",
+		ClaimKey:           "command_effect_plan",
+		InterpreterID:      "commandeffect.plan_command",
+		InputRefs:          []string{JudgmentRef(ancestor.ID)},
+		ResultJSON:         `{"effect":"git_push"}`,
+		DependencyRefs:     []JudgmentDependencyRef{{Kind: "judgment", Ref: ancestor.ID, Role: "support"}},
+		SourceFaultDomains: []string{"shell_text"},
+		AsOf:               now,
+		CreatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("RecordJudgment(challenged) err = %v", err)
+	}
+	support, err := store.RecordJudgment(JudgmentInput{
+		Key:                key,
+		Kind:               "approval_ground",
+		SubjectKey:         "approval:push",
+		ClaimKey:           "operator_approved_push",
+		InterpreterID:      "runtime.approval_parser",
+		InputRefs:          []string{JudgmentRef(ancestor.ID)},
+		ResultJSON:         `{"approved":true}`,
+		DependencyRefs:     []JudgmentDependencyRef{{Kind: "judgment", Ref: ancestor.ID, Role: "support"}},
+		SourceFaultDomains: []string{"approval_event"},
+		AsOf:               now,
+		CreatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("RecordJudgment(support) err = %v", err)
+	}
+	challengedProfile, err := store.JudgmentGroundProfile(challenged.ID, 4)
+	if err != nil {
+		t.Fatalf("JudgmentGroundProfile(challenged) err = %v", err)
+	}
+	supportProfile, err := store.JudgmentGroundProfile(support.ID, 4)
+	if err != nil {
+		t.Fatalf("JudgmentGroundProfile(support) err = %v", err)
+	}
+	decision := DecorrelatedGroundForJudgment(challengedProfile, supportProfile)
+	if decision.Decorrelated {
+		t.Fatalf("decision = %#v, want shared transitive ancestor to be correlated", decision)
+	}
+}
+
+func TestJudgmentGroundProfileRejectsUnresolvedAncestor(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	key := SessionKey{ChatID: 1001, UserID: 2002}
+	now := time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
+	judgment, err := store.RecordJudgment(JudgmentInput{
+		Key:                key,
+		Kind:               "shell_effect_plan",
+		SubjectKey:         "exec:push",
+		ClaimKey:           "command_effect_plan",
+		InterpreterID:      "commandeffect.plan_command",
+		ResultJSON:         `{"effect":"git_push"}`,
+		DependencyRefs:     []JudgmentDependencyRef{{Kind: "judgment", Ref: "missing-judgment", Role: "support"}},
+		SourceFaultDomains: []string{"shell_text"},
+		AsOf:               now,
+		CreatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("RecordJudgment() err = %v", err)
+	}
+	profile, err := store.JudgmentGroundProfile(judgment.ID, 4)
+	if err != nil {
+		t.Fatalf("JudgmentGroundProfile() err = %v", err)
+	}
+	decision := DecorrelatedGroundForJudgment(profile, JudgmentGroundProfile{SourceFaultDomains: []string{"operation_proposal"}})
+	if decision.Decorrelated || decision.Reason != "unresolved upstream provenance" {
+		t.Fatalf("decision = %#v, want unresolved provenance rejection", decision)
 	}
 }

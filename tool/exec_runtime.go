@@ -391,7 +391,7 @@ func (r *Registry) recordExecPreDispatchAttempt(ctx context.Context, p principal
 		UpdatedAt:    now,
 	}
 	irreversible := execEffectRequiresPreCommitQualification(effect.Kind, effect.Reason, boundaryKind)
-	qualification, qualificationReason, qualificationDeps, err := r.qualifyExecJudgmentUse(ctx, p, key, rawCommand, plan, irreversible, approvedProposalID)
+	qualification, qualificationReason, qualificationDeps, err := r.qualifyExecJudgmentUse(ctx, p, key, rawCommand, plan, shellJudgment, irreversible, approvedProposalID)
 	if err != nil {
 		return err
 	}
@@ -582,22 +582,83 @@ func execEffectRequiresPreCommitQualification(kind commandeffect.Kind, reason st
 	}
 }
 
-func (r *Registry) qualifyExecJudgmentUse(ctx context.Context, _ principal.Principal, _ session.SessionKey, command string, plan commandeffect.EffectPlan, irreversible bool, approvedProposalID string) (session.JudgmentUseQualificationStatus, string, []session.JudgmentDependencyRef, error) {
+func (r *Registry) qualifyExecJudgmentUse(ctx context.Context, _ principal.Principal, _ session.SessionKey, command string, plan commandeffect.EffectPlan, shellJudgment session.Judgment, irreversible bool, approvedProposalID string) (session.JudgmentUseQualificationStatus, string, []session.JudgmentDependencyRef, error) {
 	if !irreversible {
 		return session.JudgmentUseQualificationQualified, "exec effect plan recorded before dispatch", nil, nil
 	}
+	challenged, err := r.execJudgmentGroundProfile(shellJudgment)
+	if err != nil {
+		return session.JudgmentUseQualificationBlocked, "irreversible exec qualification ground unavailable", nil, err
+	}
 	if strings.TrimSpace(approvedProposalID) != "" {
-		refs := []session.JudgmentDependencyRef{{Kind: "operation_proposal", Ref: strings.TrimSpace(approvedProposalID), Role: "qualifies"}}
-		return session.JudgmentUseQualificationQualified, "irreversible exec qualified by approved operation proposal", refs, nil
+		supportRef := strings.TrimSpace(approvedProposalID)
+		support := execQualificationSupportProfile("operation_proposal", supportRef)
+		decision := session.DecorrelatedGroundForJudgment(challenged, support)
+		refs := execQualificationDecorrelatedRefs("operation_proposal", supportRef, shellJudgment, decision)
+		if decision.Decorrelated {
+			return session.JudgmentUseQualificationQualified, "irreversible exec qualified by decorrelated approved operation proposal", refs, nil
+		}
+		return session.JudgmentUseQualificationBlocked, "irreversible exec operation proposal ground is not decorrelated: " + decision.Reason, refs, fmt.Errorf("irreversible exec operation proposal ground is not decorrelated: %s", decision.Reason)
 	}
 	if state, ok := ContinuationExecAuthorityFromContext(ctx); ok {
 		decision := ContinuationExecAuthorityDecisionForPlan(state, command, plan, time.Now().UTC())
 		if decision.Allowed {
-			refs := []session.JudgmentDependencyRef{{Kind: "continuation_authority", Ref: firstNonEmptyString(state.ContinuationLease.ID, state.ActionProposal.ID, state.ActionProposal.OperationID), Role: "qualifies"}}
-			return session.JudgmentUseQualificationQualified, "irreversible exec qualified by active continuation authority", refs, nil
+			supportRef := firstNonEmptyString(state.ContinuationLease.ID, state.ActionProposal.ID, state.ActionProposal.OperationID)
+			if supportRef == "" {
+				return session.JudgmentUseQualificationBlocked, "irreversible exec continuation authority lacks stable support ref", nil, fmt.Errorf("irreversible exec continuation authority lacks stable support ref")
+			}
+			support := execQualificationSupportProfile("continuation_authority", supportRef)
+			decorrelation := session.DecorrelatedGroundForJudgment(challenged, support)
+			refs := execQualificationDecorrelatedRefs("continuation_authority", supportRef, shellJudgment, decorrelation)
+			if decorrelation.Decorrelated {
+				return session.JudgmentUseQualificationQualified, "irreversible exec qualified by decorrelated active continuation authority", refs, nil
+			}
+			return session.JudgmentUseQualificationBlocked, "irreversible exec continuation authority ground is not decorrelated: " + decorrelation.Reason, refs, fmt.Errorf("irreversible exec continuation authority ground is not decorrelated: %s", decorrelation.Reason)
 		}
 	}
 	return session.JudgmentUseQualificationBlocked, "irreversible exec lacks decorrelated qualification ground", nil, fmt.Errorf("irreversible exec lacks approved proposal or active continuation authority")
+}
+
+func (r *Registry) execJudgmentGroundProfile(judgment session.Judgment) (session.JudgmentGroundProfile, error) {
+	if strings.TrimSpace(judgment.ID) != "" && r != nil && r.store != nil {
+		return r.store.JudgmentGroundProfile(judgment.ID, 0)
+	}
+	return session.JudgmentGroundProfileForJudgment(judgment), nil
+}
+
+func execQualificationSupportProfile(kind string, ref string) session.JudgmentGroundProfile {
+	kind = strings.TrimSpace(kind)
+	ref = strings.TrimSpace(ref)
+	return session.JudgmentGroundProfile{
+		DependencyRefs:      []session.JudgmentDependencyRef{{Kind: kind, Ref: ref, Role: "qualifies"}},
+		SourceFaultDomains:  []string{kind},
+		ExternalEvidenceRef: session.JudgmentUseRef(kind, ref),
+	}
+}
+
+func execQualificationDecorrelatedRefs(kind string, ref string, shellJudgment session.Judgment, decision session.JudgmentDecorrelatedGroundDecision) []session.JudgmentDependencyRef {
+	status := "not_decorrelated"
+	if decision.Decorrelated {
+		status = "decorrelated"
+	}
+	seed := strings.Join([]string{
+		strings.TrimSpace(shellJudgment.ID),
+		strings.TrimSpace(kind),
+		strings.TrimSpace(ref),
+		status,
+		strings.TrimSpace(decision.Reason),
+		strings.Join(decision.Shared, "|"),
+	}, "\x00")
+	refs := []session.JudgmentDependencyRef{
+		{Kind: kind, Ref: strings.TrimSpace(ref), Role: "qualifies"},
+		{Kind: "decorrelation_decision", Ref: session.JudgmentUseHashRef("decorrelation", seed), Role: "qualifies", Scope: status},
+	}
+	for _, shared := range decision.Shared {
+		if strings.TrimSpace(shared) != "" {
+			refs = append(refs, session.JudgmentDependencyRef{Kind: "decorrelation_shared", Ref: strings.TrimSpace(shared), Role: "blocks"})
+		}
+	}
+	return refs
 }
 
 func firstNonEmptyString(values ...string) string {

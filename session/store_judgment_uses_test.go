@@ -121,3 +121,124 @@ func TestEffectAttemptWithJudgmentUseIsAtomicAndReconcilesStatus(t *testing.T) {
 		t.Fatalf("reason = %q, want uncertain marker", uses[0].Reason)
 	}
 }
+
+func TestJudgmentUsesByJudgmentRefUsesExactJSONMembership(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	key := SessionKey{ChatID: 7103, UserID: 1001}
+	now := time.Now().UTC()
+	exact := recordTestJudgmentUse(t, store, key, "exact", JudgmentRef("abc"), now)
+	prefix := recordTestJudgmentUse(t, store, key, "prefix", JudgmentRef("abc2"), now)
+	percent := recordTestJudgmentUse(t, store, key, "percent", JudgmentRef("abc%"), now)
+	percentLookalike := recordTestJudgmentUse(t, store, key, "percent-lookalike", JudgmentRef("abcZZ"), now)
+	underscore := recordTestJudgmentUse(t, store, key, "underscore", JudgmentRef("slot_1"), now)
+	underscoreLookalike := recordTestJudgmentUse(t, store, key, "underscore-lookalike", JudgmentRef("slotA1"), now)
+
+	assertJudgmentUseQueryIDs(t, store, "abc", []string{exact.ID})
+	assertJudgmentUseQueryIDs(t, store, "abc2", []string{prefix.ID})
+	assertJudgmentUseQueryIDs(t, store, "abc%", []string{percent.ID})
+	assertJudgmentUseQueryIDs(t, store, "abcZZ", []string{percentLookalike.ID})
+	assertJudgmentUseQueryIDs(t, store, "slot_1", []string{underscore.ID})
+	assertJudgmentUseQueryIDs(t, store, "slotA1", []string{underscoreLookalike.ID})
+}
+
+func TestMarkJudgmentUsesForJudgmentReconciliationUsesExactJSONMembership(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	key := SessionKey{ChatID: 7104, UserID: 1001}
+	now := time.Now().UTC()
+	exact := recordTestJudgmentUse(t, store, key, "exact", JudgmentRef("abc"), now)
+	prefix := recordTestJudgmentUse(t, store, key, "prefix", JudgmentRef("abc2"), now)
+	percent := recordTestJudgmentUse(t, store, key, "percent", JudgmentRef("abc%"), now)
+	percentLookalike := recordTestJudgmentUse(t, store, key, "percent-lookalike", JudgmentRef("abcZZ"), now)
+	underscore := recordTestJudgmentUse(t, store, key, "underscore", JudgmentRef("slot_1"), now)
+	underscoreLookalike := recordTestJudgmentUse(t, store, key, "underscore-lookalike", JudgmentRef("slotA1"), now)
+
+	if err := store.MarkJudgmentUsesForJudgmentReconciliation("abc", JudgmentUseReconciliationPending, "exact abc", now.Add(time.Second)); err != nil {
+		t.Fatalf("MarkJudgmentUsesForJudgmentReconciliation(abc) err = %v", err)
+	}
+	assertJudgmentUseReconciliationStatus(t, store, key, map[string]JudgmentUseReconciliationStatus{
+		exact.ID:               JudgmentUseReconciliationPending,
+		prefix.ID:              JudgmentUseReconciliationNotRequired,
+		percent.ID:             JudgmentUseReconciliationNotRequired,
+		percentLookalike.ID:    JudgmentUseReconciliationNotRequired,
+		underscore.ID:          JudgmentUseReconciliationNotRequired,
+		underscoreLookalike.ID: JudgmentUseReconciliationNotRequired,
+	})
+
+	if err := store.MarkJudgmentUsesForJudgmentReconciliation("abc%", JudgmentUseReconciliationPending, "exact percent", now.Add(2*time.Second)); err != nil {
+		t.Fatalf("MarkJudgmentUsesForJudgmentReconciliation(abc%%) err = %v", err)
+	}
+	if err := store.MarkJudgmentUsesForJudgmentReconciliation("slot_1", JudgmentUseReconciliationPending, "exact underscore", now.Add(3*time.Second)); err != nil {
+		t.Fatalf("MarkJudgmentUsesForJudgmentReconciliation(slot_1) err = %v", err)
+	}
+	assertJudgmentUseReconciliationStatus(t, store, key, map[string]JudgmentUseReconciliationStatus{
+		exact.ID:               JudgmentUseReconciliationPending,
+		prefix.ID:              JudgmentUseReconciliationNotRequired,
+		percent.ID:             JudgmentUseReconciliationPending,
+		percentLookalike.ID:    JudgmentUseReconciliationNotRequired,
+		underscore.ID:          JudgmentUseReconciliationPending,
+		underscoreLookalike.ID: JudgmentUseReconciliationNotRequired,
+	})
+}
+
+func recordTestJudgmentUse(t *testing.T, store *SQLiteStore, key SessionKey, suffix string, judgmentRef string, now time.Time) JudgmentUse {
+	t.Helper()
+	use, err := store.RecordJudgmentUseCommitment(JudgmentUseInput{
+		Key:                  key,
+		ConsumerID:           "test." + suffix,
+		Consequence:          JudgmentUseConsequenceDiagnostic,
+		JudgmentRefs:         []string{judgmentRef},
+		PolicyRef:            "test_policy_v1",
+		ResultRef:            JudgmentUseRef("test_result", suffix),
+		QualificationStatus:  JudgmentUseQualificationQualified,
+		ReconciliationStatus: JudgmentUseReconciliationNotRequired,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	})
+	if err != nil {
+		t.Fatalf("RecordJudgmentUseCommitment(%s) err = %v", suffix, err)
+	}
+	return use
+}
+
+func assertJudgmentUseQueryIDs(t *testing.T, store *SQLiteStore, judgmentID string, want []string) {
+	t.Helper()
+	uses, err := store.JudgmentUsesByJudgmentRef(judgmentID, 20)
+	if err != nil {
+		t.Fatalf("JudgmentUsesByJudgmentRef(%q) err = %v", judgmentID, err)
+	}
+	got := make(map[string]struct{}, len(uses))
+	for _, use := range uses {
+		got[use.ID] = struct{}{}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("JudgmentUsesByJudgmentRef(%q) ids = %#v, want %#v", judgmentID, got, want)
+	}
+	for _, id := range want {
+		if _, ok := got[id]; !ok {
+			t.Fatalf("JudgmentUsesByJudgmentRef(%q) ids = %#v, missing %q", judgmentID, got, id)
+		}
+	}
+}
+
+func assertJudgmentUseReconciliationStatus(t *testing.T, store *SQLiteStore, key SessionKey, want map[string]JudgmentUseReconciliationStatus) {
+	t.Helper()
+	uses, err := store.JudgmentUsesBySession(key, 20)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	got := make(map[string]JudgmentUseReconciliationStatus, len(uses))
+	for _, use := range uses {
+		got[use.ID] = use.ReconciliationStatus
+	}
+	for id, status := range want {
+		if got[id] != status {
+			t.Fatalf("use %s reconciliation status = %q, want %q (all statuses %#v)", id, got[id], status, got)
+		}
+	}
+}

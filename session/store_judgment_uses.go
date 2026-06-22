@@ -125,11 +125,15 @@ func (s *SQLiteStore) JudgmentUsesByJudgmentRef(judgmentID string, limit int) ([
 	}
 	rows, err := s.db.Query(`
 		SELECT `+judgmentUseColumns()+`
-		FROM judgment_uses
-		WHERE judgment_refs_json LIKE ?
+		FROM judgment_uses AS ju
+		WHERE EXISTS (
+			SELECT 1
+			FROM json_each(ju.judgment_refs_json)
+			WHERE value = ?
+		)
 		ORDER BY updated_at DESC, use_id DESC
 		LIMIT ?
-	`, "%"+ref+"%", limit)
+	`, ref, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query judgment uses by judgment ref: %w", err)
 	}
@@ -218,8 +222,12 @@ func markJudgmentUsesForJudgmentRefReconciliationTx(tx *sql.Tx, judgmentRef stri
 			WHEN reason = '' THEN ?
 			ELSE reason || '; ' || ?
 		END, updated_at = ?
-		WHERE judgment_refs_json LIKE ?
-	`, string(status), strings.TrimSpace(reason), strings.TrimSpace(reason), at.UTC().Format(time.RFC3339Nano), "%"+judgmentRef+"%"); err != nil {
+		WHERE EXISTS (
+			SELECT 1
+			FROM json_each(judgment_uses.judgment_refs_json)
+			WHERE value = ?
+		)
+	`, string(status), strings.TrimSpace(reason), strings.TrimSpace(reason), at.UTC().Format(time.RFC3339Nano), judgmentRef); err != nil {
 		return fmt.Errorf("mark judgment uses by judgment ref reconciliation: %w", err)
 	}
 	return nil
