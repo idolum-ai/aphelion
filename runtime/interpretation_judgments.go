@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/interpretation"
 	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/session"
@@ -52,7 +53,8 @@ func (r *Runtime) recordRuntimeJudgmentUse(key session.SessionKey, input runtime
 	if err != nil {
 		return session.Judgment{}, session.JudgmentUse{}, fmt.Errorf("encode %s judgment result: %w", input.Kind, err)
 	}
-	judgment, err := r.store.RecordJudgment(session.JudgmentInput{
+	service := interpretation.NewService(r.store)
+	judgmentInput := session.JudgmentInput{
 		Key:                key,
 		TurnRunID:          input.TurnRunID,
 		OperationID:        strings.TrimSpace(input.OperationID),
@@ -72,17 +74,13 @@ func (r *Runtime) recordRuntimeJudgmentUse(key session.SessionKey, input runtime
 		Sensitivity:        firstNonEmpty(strings.TrimSpace(input.Sensitivity), "interpretation_metadata"),
 		AsOf:               now,
 		CreatedAt:          now,
-	})
-	if err != nil {
-		return session.Judgment{}, session.JudgmentUse{}, err
 	}
-	use, err := r.store.RecordJudgmentUseCommitment(session.JudgmentUseInput{
+	useInput := session.JudgmentUseInput{
 		Key:                  key,
 		TurnRunID:            input.TurnRunID,
 		OperationID:          strings.TrimSpace(input.OperationID),
 		ConsumerID:           input.ConsumerID,
 		Consequence:          input.Consequence,
-		JudgmentRefs:         []string{session.JudgmentRef(judgment.ID)},
 		DependencyRefs:       input.DependencyRefs,
 		PolicyRef:            input.PolicyRef,
 		ResultRef:            input.ResultRef,
@@ -92,11 +90,8 @@ func (r *Runtime) recordRuntimeJudgmentUse(key session.SessionKey, input runtime
 		Reason:               input.Reason,
 		CreatedAt:            now,
 		UpdatedAt:            now,
-	})
-	if err != nil {
-		return judgment, session.JudgmentUse{}, err
 	}
-	return judgment, use, nil
+	return service.RecordJudgmentAndUse(judgmentInput, useInput)
 }
 
 func runtimeJudgmentHash(refs []string, raw []byte) string {

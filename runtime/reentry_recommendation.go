@@ -16,6 +16,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/interpretation"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -1963,7 +1964,8 @@ func (r *Runtime) recordReentryRecommendationJudgmentUse(key session.SessionKey,
 		judgmentRefs = append([]string{session.JudgmentRef(judgment.ID)}, judgmentRefs...)
 	}
 	resultRef := session.JudgmentUseRef("telegram_message", strconv.FormatInt(messageID, 10))
-	_, err = r.store.RecordJudgmentUseCommitment(session.JudgmentUseInput{
+	service := interpretation.NewService(r.store)
+	_, err = service.RecordUse(session.JudgmentUseInput{
 		Key:                  key,
 		TurnRunID:            record.SourceTurnRunID,
 		ConsumerID:           session.ConsumerRuntimeReentryPresentation,
@@ -2001,7 +2003,8 @@ func (r *Runtime) recordReentryRecommendationSelectionJudgment(key session.Sessi
 	if len(record.Candidates) == 0 {
 		completeness = session.JudgmentCompletenessAbstain
 	}
-	return r.store.RecordJudgment(session.JudgmentInput{
+	service := interpretation.NewService(r.store)
+	return service.RecordJudgment(session.JudgmentInput{
 		Key:                key,
 		TurnRunID:          record.SourceTurnRunID,
 		Kind:               session.JudgmentKindReentryRecommendation,

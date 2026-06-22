@@ -1,8 +1,10 @@
 # Interpretation, Judgment, and Dissent Surfaces
 
 _Status: implemented kernel and current registry._
-_Runtime enforcement: `judgments` records selected durable interpretations;
-`judgment_uses` records consequential uses for shell/Codex execution, evidence
+_Runtime enforcement: `interpretation.Service` is the central in-process
+contract for consequential interpretation writes; `judgments` records selected
+durable interpretations; `judgment_uses` records consequential uses for
+shell/Codex execution, evidence
 hydration, perception budget, adaptive recall, re-entry, recovery arbitration,
 budget recovery, material floor, constitution repair, curiosity selection, and
 brokerage control flow; challenge events and use reconciliation are persisted._
@@ -160,9 +162,44 @@ Adjudication changes future eligibility.
 Reconciliation handles prior consequential uses.
 ```
 
-This is not a call for a central classifier service. Domain mechanisms should
-stay local. The shared architecture work is to make consequential judgment uses
-visible, replayable, and conservative enough to recover from bad interpretation.
+This is not a call for a central semantic classifier. Domain mechanisms should
+stay local. The implemented central surface is `interpretation.Service`: an
+in-process contract that validates and persists consequential judgments, uses,
+effect-attempt commitments, challenges, and decorrelation decisions over the
+existing `session` ledger. It owns the write path, not the meaning of shell,
+memory, brokerage, recovery, or path languages.
+
+## Central Interpretation Service
+
+`interpretation.Service` is the central service boundary for this kernel. It is
+not an HTTP service, not a plugin registry, and not a universal classifier. It
+has one purpose: consequential interpretation writes must pass through one
+contract before they can become durable state, execution attempts, model-context
+admission, recovery selection, or authority-looking presentation.
+
+The service enforces cross-domain invariants that local classifiers should not
+reimplement:
+
+- complete judgments cannot carry unknown predicates;
+- partial judgments must name typed unknowns;
+- consequential uses must cite judgments, dependency refs, policy, result, and
+  qualification state;
+- effect attempts and execution uses are committed through the same local
+  transaction;
+- irreversible uses can call the shared decorrelation qualification path before
+  local commitment;
+- challenge events and reconciliation updates remain append-only/durable.
+
+Local packages still own local meaning. `commandeffect` understands shell
+effect plans; `runtime` understands recovery and brokerage context; `memory`
+understands recall; `pipeline` understands material and constitution parsing.
+Those packages produce domain judgments, then call `interpretation.Service` to
+make their consequential use visible and auditable.
+
+Architecture checks reject production callers that bypass the service and write
+raw judgment/use/effect-attempt-use records directly, except inside `session`
+itself. Storage-owned structural paths such as evidence hydration remain
+documented exceptions because they are already inside the durable ledger owner.
 
 ## Judgment
 
@@ -480,7 +517,8 @@ that may already have happened.
 - Eval oracles are release-gate evidence, not runtime enforcement.
 - Qualification compare-and-swap must have bounded retry, timeout, or escalation
   behavior.
-- Centralize the judgment, consequential-use, dependency, reconciliation,
+- Centralize consequential interpretation writes through `interpretation.Service`
+  and centralize the judgment, consequential-use, dependency, reconciliation,
   registry, observability, and replay contracts; keep domain mechanisms local.
 
 This does not make Aphelion impossible to fool. It makes consequential capture

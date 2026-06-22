@@ -12,6 +12,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/effectauth"
+	"github.com/idolum-ai/aphelion/interpretation"
 	runtimecodex "github.com/idolum-ai/aphelion/runtime/codex"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -64,7 +65,7 @@ func (r *Runtime) recordCodexCommandApprovalAttempt(req WorkRequest, command str
 		return err
 	}
 	useInput := codexApprovalJudgmentUseInput(req, key, attemptID, "runtime.codex.command_approval", command, effect.Kind, effect.Reason, boundaryKind, decision, params, judgment.ID, now)
-	_, _, err = r.store.UpsertEffectAttemptWithJudgmentUse(attemptInput, useInput)
+	_, _, err = interpretation.NewService(r.store).RecordEffectAttemptWithUse(attemptInput, useInput)
 	if err != nil {
 		return err
 	}
@@ -113,7 +114,7 @@ func (r *Runtime) recordCodexFileChangeApprovalAttempt(req WorkRequest, params m
 	for _, path := range paths {
 		useInput.DependencyRefs = append(useInput.DependencyRefs, session.JudgmentDependencyRef{Kind: "file_path", Ref: path, Role: "subject"})
 	}
-	_, _, err = r.store.UpsertEffectAttemptWithJudgmentUse(attemptInput, useInput)
+	_, _, err = interpretation.NewService(r.store).RecordEffectAttemptWithUse(attemptInput, useInput)
 	if err != nil {
 		return err
 	}
@@ -187,7 +188,7 @@ func (r *Runtime) recordCodexCommandPlanJudgment(req WorkRequest, key session.Se
 		return session.Judgment{}, err
 	}
 	deps := codexApprovalJudgmentDependencyRefs(req, command, effect.Kind, effect.Reason, boundaryKind, params)
-	return r.store.RecordJudgment(session.JudgmentInput{
+	return interpretation.NewService(r.store).RecordJudgment(session.JudgmentInput{
 		Key:                key,
 		OperationID:        firstNonEmptyContinuation(req.OperationID, req.Operation.ID),
 		Kind:               "codex_command_effect_plan",
@@ -232,7 +233,7 @@ func (r *Runtime) recordCodexFileChangePlanJudgment(req WorkRequest, key session
 	for _, ref := range codexApprovalEvidenceRefs(params) {
 		deps = append(deps, session.JudgmentDependencyRef{Kind: "provider_event", Ref: ref, Role: "support"})
 	}
-	return r.store.RecordJudgment(session.JudgmentInput{
+	return interpretation.NewService(r.store).RecordJudgment(session.JudgmentInput{
 		Key:                key,
 		OperationID:        firstNonEmptyContinuation(req.OperationID, req.Operation.ID),
 		Kind:               "codex_file_change_plan",

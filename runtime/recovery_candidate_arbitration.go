@@ -12,6 +12,7 @@ import (
 	"unicode"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/interpretation"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -299,7 +300,8 @@ func (r *Runtime) recordRecoveryCandidateArbitrationJudgmentUse(key session.Sess
 	}
 	deps := recoveryCandidateArbitrationDependencyRefs(opState, decision, surface)
 	subject := recoveryCandidateArbitrationSubjectKey(opState, decision, surface)
-	judgment, err := r.store.RecordJudgment(session.JudgmentInput{
+	service := interpretation.NewService(r.store)
+	judgmentInput := session.JudgmentInput{
 		Key:                key,
 		OperationID:        strings.TrimSpace(opState.ID),
 		Kind:               session.JudgmentKindRecoveryCandidateArbitration,
@@ -317,20 +319,17 @@ func (r *Runtime) recordRecoveryCandidateArbitrationJudgmentUse(key session.Sess
 		Sensitivity:        "recovery_metadata",
 		AsOf:               now,
 		CreatedAt:          now,
-	})
+	}
+	judgment, err := service.RecordJudgment(judgmentInput)
 	if err != nil {
 		return err
 	}
-	judgmentRefs := []string{session.JudgmentRef(judgment.ID)}
-	if strings.TrimSpace(opState.ID) != "" {
-		judgmentRefs = append(judgmentRefs, session.JudgmentUseRef("operation_state", opState.ID))
-	}
-	_, err = r.store.RecordJudgmentUseCommitment(session.JudgmentUseInput{
+	useInput := session.JudgmentUseInput{
 		Key:                  key,
 		OperationID:          strings.TrimSpace(opState.ID),
 		ConsumerID:           session.ConsumerRuntimeRecoveryCandidate,
 		Consequence:          session.JudgmentUseConsequenceRecoverySelection,
-		JudgmentRefs:         judgmentRefs,
+		JudgmentRefs:         []string{session.JudgmentRef(judgment.ID)},
 		DependencyRefs:       deps,
 		PolicyRef:            "recovery_candidate_arbitration_v1",
 		ResultRef:            session.JudgmentUseHashRef("recovery_candidate", subject+"|"+surface),
@@ -340,7 +339,11 @@ func (r *Runtime) recordRecoveryCandidateArbitrationJudgmentUse(key session.Sess
 		Reason:               "stale recovery candidate suppressed in favor of current intent",
 		CreatedAt:            now,
 		UpdatedAt:            now,
-	})
+	}
+	if strings.TrimSpace(opState.ID) != "" {
+		useInput.JudgmentRefs = append(useInput.JudgmentRefs, session.JudgmentUseRef("operation_state", opState.ID))
+	}
+	_, err = service.RecordUse(useInput)
 	return err
 }
 

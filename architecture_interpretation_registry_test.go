@@ -133,6 +133,102 @@ func TestArchitectureInterpretationSurfaceRegistryIsComplete(t *testing.T) {
 	}
 }
 
+func TestArchitectureConsequentialJudgmentWritesUseCentralService(t *testing.T) {
+	t.Parallel()
+
+	rawStoreMethods := map[string]struct{}{
+		"RecordJudgment":                     {},
+		"RecordJudgmentUseCommitment":        {},
+		"UpsertEffectAttemptWithJudgmentUse": {},
+	}
+	for _, path := range repoGoFiles(t, false) {
+		if strings.HasPrefix(path, "session"+string(filepath.Separator)) ||
+			strings.HasPrefix(path, "interpretation"+string(filepath.Separator)) {
+			continue
+		}
+		fileSet := token.NewFileSet()
+		file, err := parser.ParseFile(fileSet, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			serviceVars := interpretationServiceVars(fn.Body)
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				selector, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				if _, ok := rawStoreMethods[selector.Sel.Name]; !ok {
+					return true
+				}
+				if interpretationServiceReceiver(selector.X, serviceVars) {
+					return true
+				}
+				pos := fileSet.Position(selector.Pos())
+				t.Fatalf("%s calls %s directly at %s; use interpretation.Service so consequential judgment writes share one contract", path, selector.Sel.Name, pos)
+				return false
+			})
+		}
+	}
+}
+
+func interpretationServiceVars(body *ast.BlockStmt) map[string]struct{} {
+	vars := make(map[string]struct{})
+	ast.Inspect(body, func(node ast.Node) bool {
+		switch stmt := node.(type) {
+		case *ast.AssignStmt:
+			for i, rhs := range stmt.Rhs {
+				if !interpretationNewServiceCall(rhs) || i >= len(stmt.Lhs) {
+					continue
+				}
+				if ident, ok := stmt.Lhs[i].(*ast.Ident); ok {
+					vars[ident.Name] = struct{}{}
+				}
+			}
+		case *ast.ValueSpec:
+			for i, rhs := range stmt.Values {
+				if !interpretationNewServiceCall(rhs) || i >= len(stmt.Names) {
+					continue
+				}
+				vars[stmt.Names[i].Name] = struct{}{}
+			}
+		}
+		return true
+	})
+	return vars
+}
+
+func interpretationNewServiceCall(expr ast.Expr) bool {
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "NewService" {
+		return false
+	}
+	pkg, ok := selector.X.(*ast.Ident)
+	return ok && pkg.Name == "interpretation"
+}
+
+func interpretationServiceReceiver(expr ast.Expr, serviceVars map[string]struct{}) bool {
+	switch value := expr.(type) {
+	case *ast.Ident:
+		_, ok := serviceVars[value.Name]
+		return ok
+	default:
+		return interpretationNewServiceCall(value)
+	}
+}
+
 type interpretationRuntimeFacts struct {
 	ProducedJudgmentKinds map[string]struct{}
 	ConsumedConsumerIDs   map[string]struct{}

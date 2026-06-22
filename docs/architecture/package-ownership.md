@@ -139,6 +139,11 @@ Code anchors:
 
 - `session` owns durable storage records and persistence APIs. It should not
   import orchestration packages.
+- `interpretation` owns the central judgment/use service contract over
+  `session` records. It validates and records consequential interpretation
+  commitments, but it must not own domain classification logic or import
+  runtime, tool, pipeline, memory, effect classification, transport, or durable
+  child packages.
 - `telegram` owns Telegram wire/client behavior. It should not import runtime,
   turn, or pipeline orchestration.
 - `tool` owns bounded tool implementations and sandbox integration. It should

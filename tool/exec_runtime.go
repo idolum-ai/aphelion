@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/commandeffect"
+	"github.com/idolum-ai/aphelion/interpretation"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -336,7 +337,7 @@ func (r *Registry) recordShellEffectJudgment(ctx context.Context, key session.Se
 	if err != nil {
 		return session.Judgment{}, plan, fmt.Errorf("encode shell effect judgment: %w", err)
 	}
-	judgment, err := r.store.RecordJudgment(session.JudgmentInput{
+	judgment, err := interpretation.NewService(r.store).RecordJudgment(session.JudgmentInput{
 		Key:                key,
 		TurnRunID:          invocationRef.TurnRunID,
 		Kind:               session.JudgmentKindShellEffectPlan,
@@ -430,7 +431,7 @@ func (r *Registry) recordExecPreDispatchAttempt(ctx context.Context, p principal
 		CreatedAt:            now,
 		UpdatedAt:            now,
 	}
-	_, _, err = r.store.UpsertEffectAttemptWithJudgmentUse(attemptInput, useInput)
+	_, _, err = interpretation.NewService(r.store).RecordEffectAttemptWithUse(attemptInput, useInput)
 	if err != nil {
 		return fmt.Errorf("record exec judgment use and effect attempt before dispatch: %w", err)
 	}
@@ -594,12 +595,15 @@ func (r *Registry) qualifyExecJudgmentUse(ctx context.Context, _ principal.Princ
 			return session.JudgmentUseQualificationBlocked, "irreversible exec approval ground is incomplete", refs, fmt.Errorf("irreversible exec approval ground requires approved operator decision")
 		}
 		support := execQualificationSupportProfile(approvalGround)
-		decision := session.DecorrelatedGroundForJudgment(challenged, support)
-		refs := execQualificationDecorrelatedRefs(approvalGround, shellJudgment, decision)
-		if decision.Decorrelated {
-			return session.JudgmentUseQualificationQualified, "irreversible exec qualified by decorrelated operator approval", refs, nil
-		}
-		return session.JudgmentUseQualificationBlocked, "irreversible exec operator approval ground is not decorrelated: " + decision.Reason, refs, fmt.Errorf("irreversible exec operator approval ground is not decorrelated: %s", decision.Reason)
+		qualification, qualifyErr := interpretation.NewService(r.store).QualifyDecorrelatedUse(interpretation.DecorrelatedQualificationInput{
+			Irreversible: true,
+			Challenged:   challenged,
+			Support:      support,
+			Qualified:    "irreversible exec qualified by decorrelated operator approval",
+			Blocked:      "irreversible exec operator approval ground is not decorrelated",
+		})
+		refs := execQualificationDecorrelatedRefs(approvalGround, shellJudgment, qualification.Decorrelated)
+		return qualification.Status, qualification.Reason, refs, qualifyErr
 	}
 	if state, ok := ContinuationExecAuthorityFromContext(ctx); ok {
 		decision := ContinuationExecAuthorityDecisionForPlan(state, command, plan, time.Now().UTC())
@@ -615,12 +619,15 @@ func (r *Registry) qualifyExecJudgmentUse(ctx context.Context, _ principal.Princ
 				return session.JudgmentUseQualificationBlocked, "irreversible exec continuation authority lacks operator-approved support ref", refs, fmt.Errorf("irreversible exec continuation authority lacks operator-approved support ref")
 			}
 			support := execQualificationSupportProfile(ground)
-			decorrelation := session.DecorrelatedGroundForJudgment(challenged, support)
-			refs := execQualificationDecorrelatedRefs(ground, shellJudgment, decorrelation)
-			if decorrelation.Decorrelated {
-				return session.JudgmentUseQualificationQualified, "irreversible exec qualified by decorrelated active continuation authority", refs, nil
-			}
-			return session.JudgmentUseQualificationBlocked, "irreversible exec continuation authority ground is not decorrelated: " + decorrelation.Reason, refs, fmt.Errorf("irreversible exec continuation authority ground is not decorrelated: %s", decorrelation.Reason)
+			qualification, qualifyErr := interpretation.NewService(r.store).QualifyDecorrelatedUse(interpretation.DecorrelatedQualificationInput{
+				Irreversible: true,
+				Challenged:   challenged,
+				Support:      support,
+				Qualified:    "irreversible exec qualified by decorrelated active continuation authority",
+				Blocked:      "irreversible exec continuation authority ground is not decorrelated",
+			})
+			refs := execQualificationDecorrelatedRefs(ground, shellJudgment, qualification.Decorrelated)
+			return qualification.Status, qualification.Reason, refs, qualifyErr
 		}
 	}
 	return session.JudgmentUseQualificationBlocked, "irreversible exec lacks decorrelated qualification ground", nil, fmt.Errorf("irreversible exec lacks approved proposal or active continuation authority")

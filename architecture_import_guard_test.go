@@ -227,6 +227,18 @@ func assertLayerImportBoundaries(t *testing.T, pkg architecturePackage) {
 			"turn",
 			"pipeline",
 		})
+	case aphelionModulePath + "/interpretation":
+		assertDoesNotImportAny(t, pkg, []string{
+			"runtime",
+			"turn",
+			"pipeline",
+			"telegram",
+			"tool",
+			"memory",
+			"commandeffect",
+			"effectauth",
+			"durableagent",
+		})
 	}
 }
 
