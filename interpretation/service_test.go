@@ -128,6 +128,16 @@ func TestServiceRejectsUnknownStateValues(t *testing.T) {
 	if _, err := service.RecordJudgment(invalidJudgment); err == nil || !strings.Contains(err.Error(), "invalid completeness") {
 		t.Fatalf("RecordJudgment(invalid completeness) err = %v, want invalid completeness", err)
 	}
+	invalidJudgment = testJudgmentInput(key, now)
+	invalidJudgment.Completeness = "com!plete"
+	if _, err := service.RecordJudgment(invalidJudgment); err == nil || !strings.Contains(err.Error(), "invalid completeness") {
+		t.Fatalf("RecordJudgment(punctuated completeness) err = %v, want invalid completeness", err)
+	}
+	invalidJudgment = testJudgmentInput(key, now)
+	invalidJudgment.Completeness = "Complete"
+	if _, err := service.RecordJudgment(invalidJudgment); err == nil || !strings.Contains(err.Error(), "invalid completeness") {
+		t.Fatalf("RecordJudgment(mixed-case completeness) err = %v, want invalid completeness", err)
+	}
 
 	for _, tc := range []struct {
 		name   string
@@ -245,6 +255,11 @@ func TestServiceRecordJudgmentAndUseIsAtomicAndBindsRefs(t *testing.T) {
 	}
 	if !stringSliceContains(use.JudgmentRefs, session.JudgmentUseRef("operation_state", "op-1")) {
 		t.Fatalf("use judgment refs = %#v, want preserved operation state ref", use.JudgmentRefs)
+	}
+
+	mismatchedKeyUse := testUseInput(session.SessionKey{ChatID: 99160, UserID: 1001}, now)
+	if _, _, err := service.RecordJudgmentAndUse(testJudgmentInput(key, now), mismatchedKeyUse); err == nil || !strings.Contains(err.Error(), "key does not match") {
+		t.Fatalf("RecordJudgmentAndUse(mismatched key) err = %v, want key mismatch", err)
 	}
 
 	explicitIDUse := testUseInput(key, now)

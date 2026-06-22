@@ -57,6 +57,9 @@ func (s Service) RecordJudgmentAndUse(judgmentInput session.JudgmentInput, useIn
 	if strings.TrimSpace(useInput.ID) != "" {
 		return session.Judgment{}, session.JudgmentUse{}, fmt.Errorf("judgment/use commitment id is service-managed")
 	}
+	if useInput.Key != (session.SessionKey{}) && useInput.Key != judgmentInput.Key {
+		return session.Judgment{}, session.JudgmentUse{}, fmt.Errorf("judgment use key does not match judgment key")
+	}
 	judgmentInput, err := validateJudgmentInput(judgmentInput)
 	if err != nil {
 		return session.Judgment{}, session.JudgmentUse{}, err
@@ -377,22 +380,5 @@ func validateEffectAttemptStateValues(input session.EffectAttemptInput) error {
 }
 
 func stateToken(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" {
-		return ""
-	}
-	var b strings.Builder
-	for _, r := range value {
-		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r)
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == '_' || r == '-' || r == '.' || r == ':':
-			b.WriteRune(r)
-		case r == ' ' || r == '/' || r == '\\':
-			b.WriteRune('_')
-		}
-	}
-	return strings.Trim(b.String(), "_")
+	return strings.TrimSpace(value)
 }

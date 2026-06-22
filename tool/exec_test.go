@@ -167,6 +167,27 @@ func TestExecRecordsJudgmentUseBeforeDispatch(t *testing.T) {
 	}
 }
 
+func TestExecSideEffectFailsClosedWithoutInterpretationStore(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	registry := NewRegistry(workspace, time.Second)
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"mkdir out"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 1001},
+		session.SessionKey{ChatID: 88021, UserID: 1001},
+	)
+	if err == nil || !strings.Contains(err.Error(), "interpretation store unavailable") {
+		t.Fatalf("exec err = %v, want interpretation store unavailable", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, "out")); !os.IsNotExist(statErr) {
+		t.Fatalf("side-effect directory stat err = %v, want command not dispatched", statErr)
+	}
+}
+
 func TestExecRecordsDistinctJudgmentUsesForRepeatedInvocations(t *testing.T) {
 	t.Parallel()
 
