@@ -15,6 +15,7 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 )
 
 var turnRunActivityHeartbeatInterval = 30 * time.Second
@@ -129,6 +130,15 @@ func (r *Runtime) startTurnMonitor(ctx context.Context, key session.SessionKey, 
 		return nil, fmt.Errorf("begin turn run kind=%s chat_id=%d user_id=%d: %w", kind, key.ChatID, key.UserID, err)
 	}
 	monitor.runID = run.ID
+	turnCtx, err = r.bindExecutionRunAuthority(turnCtx, key, run)
+	if err != nil {
+		if completeErr := r.store.CompleteTurnRun(run.ID, session.TurnRunStatusFailed, err.Error()); completeErr != nil {
+			err = fmt.Errorf("%w; complete failed turn run: %v", err, completeErr)
+		}
+		cancelTurn()
+		return nil, err
+	}
+	monitor.ctx = turnCtx
 	r.registerActiveTurn(run.ID, cancelTurn)
 	payload := map[string]any{
 		"run_id":       run.ID,
@@ -150,6 +160,103 @@ func (r *Runtime) startTurnMonitor(ctx context.Context, key session.SessionKey, 
 	}
 	monitor.startRunActivityHeartbeat()
 	return monitor, nil
+}
+
+func (r *Runtime) bindExecutionRunAuthority(ctx context.Context, key session.SessionKey, run *session.TurnRun) (context.Context, error) {
+	if r == nil || r.store == nil || run == nil {
+		return ctx, nil
+	}
+	admission, ok := toolpkg.ExecutionAuthorityAdmissionFromContext(ctx)
+	if !ok {
+		return ctx, nil
+	}
+	admission.TurnRunID = run.ID
+	admission.SessionID = run.SessionID
+	admission.ChatID = run.ChatID
+	admission.UserID = run.UserID
+	admission.Scope = run.Scope
+	now := time.Now().UTC()
+	switch admission.LeaseKind {
+	case session.ExecutionAuthorityLeaseKindContinuation:
+		if err := r.validateExecutionRunContinuationAuthority(key, admission, now); err != nil {
+			return ctx, err
+		}
+	case session.ExecutionAuthorityLeaseKindOperationPlan:
+		if err := r.validateExecutionRunOperationPlanAuthority(key, admission.OperationPlanLeaseID, now); err != nil {
+			return ctx, err
+		}
+	default:
+		return ctx, fmt.Errorf("execution run authority admission has unsupported lease kind %q", admission.LeaseKind)
+	}
+	stored, err := r.store.UpsertExecutionRunAuthority(admission)
+	if err != nil {
+		return ctx, err
+	}
+	ref := session.AuthorityUseRef{
+		SessionID: stored.SessionID,
+		TurnRunID: stored.TurnRunID,
+	}
+	return toolpkg.WithAuthorityUseRef(ctx, ref), nil
+}
+
+func (r *Runtime) validateExecutionRunContinuationAuthority(key session.SessionKey, admission session.ExecutionRunAuthority, now time.Time) error {
+	leaseID := strings.TrimSpace(admission.ContinuationLeaseID)
+	state, exists, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return fmt.Errorf("load continuation lease for run authority: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("continuation lease %q is not durable for run authority", strings.TrimSpace(leaseID))
+	}
+	lease := session.NormalizeContinuationLease(state.ContinuationLease)
+	if strings.TrimSpace(lease.ID) != strings.TrimSpace(leaseID) {
+		return fmt.Errorf("continuation lease %q does not match current session lease", strings.TrimSpace(leaseID))
+	}
+	if executionRunContinuationLeaseValid(lease, admission, now) {
+		return nil
+	}
+	return fmt.Errorf("continuation lease %q is not active for run authority", strings.TrimSpace(leaseID))
+}
+
+func executionRunContinuationLeaseValid(lease session.ContinuationLease, admission session.ExecutionRunAuthority, now time.Time) bool {
+	lease = session.NormalizeContinuationLease(lease)
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if !lease.ExpiresAt.IsZero() && !lease.ExpiresAt.After(now.UTC()) {
+		return false
+	}
+	if lease.ActiveAt(now) {
+		return true
+	}
+	if lease.Status != session.ContinuationLeaseStatusConsumed {
+		return false
+	}
+	if session.ContinuationLeaseStatus(admission.LeaseStatus) != session.ContinuationLeaseStatusActive || admission.LeaseRemainingTurns <= 0 {
+		return false
+	}
+	if strings.TrimSpace(admission.ContinuationLeaseID) == "" || strings.TrimSpace(admission.ContinuationLeaseID) != strings.TrimSpace(lease.ID) {
+		return false
+	}
+	return true
+}
+
+func (r *Runtime) validateExecutionRunOperationPlanAuthority(key session.SessionKey, leaseID string, now time.Time) error {
+	_, operation, exists, err := r.store.PlanAndOperationStateIfExists(key)
+	if err != nil {
+		return fmt.Errorf("load operation plan lease for run authority: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("operation plan lease %q is not durable for run authority", strings.TrimSpace(leaseID))
+	}
+	lease := session.NormalizeOperationPlanLease(operation.PlanLease)
+	if strings.TrimSpace(lease.ID) != strings.TrimSpace(leaseID) {
+		return fmt.Errorf("operation plan lease %q does not match current session lease", strings.TrimSpace(leaseID))
+	}
+	if !workRequestOperationPlanLeaseUsable(lease, now) {
+		return fmt.Errorf("operation plan lease %q is not active for run authority", strings.TrimSpace(leaseID))
+	}
+	return nil
 }
 
 func (m *turnMonitor) Context() context.Context {

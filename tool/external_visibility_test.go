@@ -98,7 +98,8 @@ func TestExternalToolRequiresRegistrationAndGrantAtInvocation(t *testing.T) {
 		t.Fatalf("ungranted browse_page err = %v, want not granted", err)
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:1001")
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err != nil {
 		t.Fatalf("granted browse_page err = %v", err)
 	}
@@ -210,15 +211,15 @@ print(json.dumps({'summary':'ok','action':payload.get('action'),'username':paylo
 
 	actor := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-public-feed"}
 	key := adminSessionKey()
-	grantAuthorityUseLease(t, store, key)
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, manifest.Name, json.RawMessage(`{"action":"public_profile_metadata_read","username":"example_handle"}`))
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, manifest.Name, json.RawMessage(`{"action":"public_profile_metadata_read","username":"example_handle"}`))
 	if err != nil {
 		t.Fatalf("allowed scoped invoke err = %v", err)
 	}
 	if !strings.Contains(out, `"summary": "ok"`) && !strings.Contains(out, `"summary":"ok"`) {
 		t.Fatalf("allowed scoped invoke output = %q, want script output", out)
 	}
-	_, err = registry.ExecuteForSessionPrincipal(context.Background(), actor, key, manifest.Name, json.RawMessage(`{"action":"public_profile_metadata_read","username":"other"}`))
+	_, err = registry.ExecuteForSessionPrincipal(ctx, actor, key, manifest.Name, json.RawMessage(`{"action":"public_profile_metadata_read","username":"other"}`))
 	if err == nil || !strings.Contains(err.Error(), "selector") || !strings.Contains(err.Error(), "not allowed") {
 		t.Fatalf("blocked scoped invoke err = %v, want selector not allowed", err)
 	}
@@ -235,6 +236,6 @@ print(json.dumps({'summary':'ok','action':payload.get('action'),'username':paylo
 		t.Fatalf("CapabilityGrant() err = %v", err)
 	}
 	if !ok || grant.InvocationCount != 2 || grant.FailureCount != 1 {
-		t.Fatalf("grant counters = %#v ok=%t, want allowed + blocked attempt recorded", grant, ok)
+		t.Fatalf("grant counters = %#v ok=%t, want one successful invocation and one blocked attempt", grant, ok)
 	}
 }

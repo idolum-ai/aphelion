@@ -41,6 +41,7 @@ These invariants are normative for architecture and requirements alignment:
 - [package-ownership.md](package-ownership.md): runtime/turn/pipeline ownership boundaries.
 - [memory-perception-budget.md](memory-perception-budget.md): memory as governed perception under context scarcity, with posture-specific layer accounting.
 - [turn-lifecycle.md](turn-lifecycle.md): stage order across interactive, maintenance, and durable-child turns.
+- [execution-authority-continuity.md](execution-authority-continuity.md): horizontal lease/grant/resource continuity contract across execution species.
 - [action-proposal-continuation-lease.md](action-proposal-continuation-lease.md): typed bounded action proposals and consumable continuation leases.
 - [constitution-and-delivery.md](constitution-and-delivery.md): floor/scene and commit/delivery invariants.
 - [operator-presentation-contract.md](operator-presentation-contract.md): human Telegram/CLI presentation contract for status, rationale, next action, details, and evidence.

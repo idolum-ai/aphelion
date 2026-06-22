@@ -3,7 +3,6 @@
 package tool
 
 import (
-	"context"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -150,7 +149,10 @@ func TestRegistryExecuteExternalManifestReturnsCleanNonExecutableError(t *testin
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 
-	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	_, err = registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err == nil {
 		t.Fatal("ExecuteForSessionPrincipal() err = nil, want non-executable error")
 	}

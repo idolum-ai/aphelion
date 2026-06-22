@@ -577,7 +577,10 @@ func TestCapabilityGrantEnablesRegisteredToolWithoutRemovedExposureTable(t *test
 	if !toolDefExists(defs, "browse_page") {
 		t.Fatalf("DefinitionsForPrincipal() missing grant-authorized browse_page: %#v", defs)
 	}
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{}`))
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(browse_page) err = %v", err)
 	}
@@ -589,7 +592,7 @@ func TestCapabilityGrantEnablesRegisteredToolWithoutRemovedExposureTable(t *test
 		t.Fatalf("CapabilityGrant() err = %v", err)
 	}
 	if !ok || grant.InvocationCount != 1 {
-		t.Fatalf("CapabilityGrant invocation count = %#v ok=%t, want one runtime invocation", grant, ok)
+		t.Fatalf("CapabilityGrant invocation count = %#v ok=%t, want one logical invocation", grant, ok)
 	}
 }
 

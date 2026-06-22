@@ -15,6 +15,8 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
@@ -148,7 +150,7 @@ func nativeFileToolDefinitions() []agent.ToolDef {
 	}
 }
 
-func (r *Registry) readFile(_ context.Context, input json.RawMessage, scope sandbox.Scope) (string, error) {
+func (r *Registry) readFile(ctx context.Context, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (out string, err error) {
 	var in readFileInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", fmt.Errorf("decode read_file input: %w", err)
@@ -177,10 +179,20 @@ func (r *Registry) readFile(_ context.Context, input json.RawMessage, scope sand
 		}
 	}
 	maxBytes := clampNativeLimit(in.MaxBytes, defaultNativeReadMaxBytes, maxNativeReadBytes)
-	path, err := resolveNativeToolPath(scope, in.Path, nativePathRead)
+	roots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathRead, "read_file")
 	if err != nil {
 		return "", err
 	}
+	path, err := resolveNativeToolPathWithReadRoots(scope, in.Path, nativePathRead, nativeFileAccessGrantRootPaths(roots))
+	if err != nil {
+		return "", err
+	}
+	audit, auditOK := nativeFileAccessGrantRootForPath(path, roots)
+	defer func() {
+		if auditOK {
+			err = r.recordNativeFileAccessInvocation(audit, p, "read_file", err)
+		}
+	}()
 	info, err := os.Stat(path)
 	if err != nil {
 		return "", fmt.Errorf("read_file stat %q: %w", in.Path, err)
@@ -210,7 +222,7 @@ func (r *Registry) readFile(_ context.Context, input json.RawMessage, scope sand
 	return b.String(), nil
 }
 
-func (r *Registry) writeFile(_ context.Context, input json.RawMessage, scope sandbox.Scope) (string, error) {
+func (r *Registry) writeFile(ctx context.Context, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (out string, err error) {
 	var in writeFileInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", fmt.Errorf("decode write_file input: %w", err)
@@ -218,20 +230,38 @@ func (r *Registry) writeFile(_ context.Context, input json.RawMessage, scope san
 	if strings.TrimSpace(in.Path) == "" {
 		return "", fmt.Errorf("write_file path is required")
 	}
-	path, err := resolveNativeToolPath(scope, in.Path, nativePathWrite)
+	writeGrantRoots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathWrite, "write_file")
 	if err != nil {
 		return "", err
 	}
+	writeRoots := nativeFileAccessGrantRootPaths(writeGrantRoots)
+	path, err := resolveNativeToolPathWithExtraRoots(scope, in.Path, nativePathWrite, writeRoots)
+	if err != nil {
+		return "", err
+	}
+	audit, auditOK := nativeFileAccessGrantRootForPath(path, writeGrantRoots)
+	defer func() {
+		if auditOK {
+			err = r.recordNativeFileAccessInvocation(audit, p, "write_file", err)
+		}
+	}()
+	if auditOK {
+		if symlink, err := nativeFirstSymlinkPathComponent(filepath.Dir(path)); err != nil {
+			return "", err
+		} else if symlink != "" {
+			return "", fmt.Errorf("write_file path %q contains symlink component %q", in.Path, symlink)
+		}
+	}
 	parent := filepath.Dir(path)
 	if in.CreateDirs {
-		if err := validateNativeWriteParentForCreate(scope, parent); err != nil {
+		if err := validateNativeWriteParentForCreate(scope, parent, writeRoots); err != nil {
 			return "", err
 		}
 		if err := os.MkdirAll(parent, 0o755); err != nil {
 			return "", fmt.Errorf("write_file create parent %q: %w", parent, err)
 		}
 	}
-	if err := validateNativeWriteParent(scope, parent); err != nil {
+	if err := validateNativeWriteParent(scope, parent, writeRoots); err != nil {
 		return "", err
 	}
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
@@ -256,7 +286,7 @@ func (r *Registry) writeFile(_ context.Context, input json.RawMessage, scope san
 	return fmt.Sprintf("write_file_ok path=%s bytes=%d append=%t", path, len([]byte(in.Content)), in.Append), nil
 }
 
-func (r *Registry) listDir(_ context.Context, input json.RawMessage, scope sandbox.Scope) (string, error) {
+func (r *Registry) listDir(ctx context.Context, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (out string, err error) {
 	var in listDirInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", fmt.Errorf("decode list_dir input: %w", err)
@@ -266,10 +296,20 @@ func (r *Registry) listDir(_ context.Context, input json.RawMessage, scope sandb
 		pathRaw = "."
 	}
 	limit := clampNativeLimit(in.Limit, defaultNativeListLimit, maxNativeListLimit)
-	path, err := resolveNativeToolPath(scope, pathRaw, nativePathRead)
+	roots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathRead, "list_dir")
 	if err != nil {
 		return "", err
 	}
+	path, err := resolveNativeToolPathWithReadRoots(scope, pathRaw, nativePathRead, nativeFileAccessGrantRootPaths(roots))
+	if err != nil {
+		return "", err
+	}
+	audit, auditOK := nativeFileAccessGrantRootForPath(path, roots)
+	defer func() {
+		if auditOK {
+			err = r.recordNativeFileAccessInvocation(audit, p, "list_dir", err)
+		}
+	}()
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return "", fmt.Errorf("list_dir read %q: %w", pathRaw, err)
@@ -303,6 +343,33 @@ func (r *Registry) listDir(_ context.Context, input json.RawMessage, scope sandb
 	}
 	b.WriteString("[/LIST_DIR]")
 	return b.String(), nil
+}
+
+func (r *Registry) recordNativeFileAccessInvocation(root nativeFileAccessGrantRoot, p principal.Principal, action string, operationErr error) error {
+	if r == nil || r.store == nil || strings.TrimSpace(root.Grant.GrantID) == "" {
+		return operationErr
+	}
+	status := "succeeded"
+	errorText := ""
+	if operationErr != nil {
+		status = "failed"
+		errorText = operationErr.Error()
+	}
+	principalID := strings.TrimSpace(root.Grant.GrantedTo)
+	if principalID == "" {
+		principalID = toolAuthorityPrincipalDisplay(p)
+	}
+	_, recordErr := r.store.RecordCapabilityInvocation(capabilityInvocationWithAuthorityUseRef(session.CapabilityInvocation{
+		GrantID:   root.Grant.GrantID,
+		Principal: principalID,
+		Action:    normalizeToolFileAccessOperation(action),
+		Status:    status,
+		ErrorText: errorText,
+	}, root.UseRef))
+	if recordErr != nil && operationErr == nil {
+		return recordErr
+	}
+	return operationErr
 }
 
 func readBoundedFileWindow(path string, offset, limit, maxBytes int) ([]byte, int, bool, error) {

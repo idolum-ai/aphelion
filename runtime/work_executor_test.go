@@ -39,6 +39,83 @@ type fakeWorkExecutor struct {
 	attemptStore     *session.SQLiteStore
 }
 
+func TestWorkRequestAuthorityAdmissionCarriesContinuationLease(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.June, 21, 12, 0, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 9191, UserID: 1001, Scope: telegramDMScopeRef(9191)}
+	admission, ok := workRequestAuthorityAdmission(WorkRequest{
+		Key: key,
+		State: session.ContinuationState{
+			ContinuationLease: session.ContinuationLease{
+				ID:             "lease-capability-work",
+				Status:         session.ContinuationLeaseStatusActive,
+				RemainingTurns: 1,
+				ExpiresAt:      now.Add(time.Hour),
+			},
+		},
+	}, key, now)
+	if !ok {
+		t.Fatal("workRequestAuthorityAdmission() ok=false, want active continuation lease evidence")
+	}
+	if admission.SessionID != session.SessionIDForKey(key) || admission.ContinuationLeaseID != "lease-capability-work" || admission.LeaseKind != session.ExecutionAuthorityLeaseKindContinuation {
+		t.Fatalf("admission = %#v, want session-bound continuation lease evidence", admission)
+	}
+}
+
+func TestWorkRequestAuthorityAdmissionCarriesOperationPlanLease(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.June, 21, 12, 0, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 9192, UserID: 1001, Scope: telegramDMScopeRef(9192)}
+	admission, ok := workRequestAuthorityAdmission(WorkRequest{
+		Key: key,
+		Operation: session.OperationState{
+			PlanLease: session.OperationPlanLease{
+				ID:             "oplease-capability-work",
+				Status:         session.PlanLeaseStatusApproved,
+				RemainingTurns: 1,
+				ExpiresAt:      now.Add(time.Hour),
+			},
+		},
+	}, key, now)
+	if !ok {
+		t.Fatal("workRequestAuthorityAdmission() ok=false, want active operation plan lease evidence")
+	}
+	if admission.SessionID != session.SessionIDForKey(key) || admission.OperationPlanLeaseID != "oplease-capability-work" || admission.LeaseKind != session.ExecutionAuthorityLeaseKindOperationPlan {
+		t.Fatalf("admission = %#v, want session-bound operation plan lease evidence", admission)
+	}
+}
+
+func TestWorkRequestAuthorityAdmissionRejectsAmbiguousLeaseKinds(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.June, 21, 12, 0, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 9193, UserID: 1001, Scope: telegramDMScopeRef(9193)}
+	_, ok := workRequestAuthorityAdmission(WorkRequest{
+		Key: key,
+		State: session.ContinuationState{
+			ContinuationLease: session.ContinuationLease{
+				ID:             "lease-capability-work",
+				Status:         session.ContinuationLeaseStatusActive,
+				RemainingTurns: 1,
+				ExpiresAt:      now.Add(time.Hour),
+			},
+		},
+		Operation: session.OperationState{
+			PlanLease: session.OperationPlanLease{
+				ID:             "oplease-capability-work",
+				Status:         session.PlanLeaseStatusApproved,
+				RemainingTurns: 1,
+				ExpiresAt:      now.Add(time.Hour),
+			},
+		},
+	}, key, now)
+	if ok {
+		t.Fatal("workRequestAuthorityAdmission() ok=true, want ambiguous lease kinds rejected")
+	}
+}
+
 func (f *fakeWorkExecutor) Name() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

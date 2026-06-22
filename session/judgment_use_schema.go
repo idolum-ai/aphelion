@@ -52,6 +52,6 @@ func judgmentUseSchemaStatements() []string {
 	}
 }
 
-func migrateSchemaV70ToV71(tx *sql.Tx) error {
+func migrateSchemaV72ToV73(tx *sql.Tx) error {
 	return ensureJudgmentUseTables(tx)
 }

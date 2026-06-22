@@ -73,11 +73,11 @@ func TestWebSearchBlocksWithoutLeaseEvidence(t *testing.T) {
 	}
 	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 	out, err := registry.executeWithScopeAndPrincipal(context.Background(), webSearchToolName, json.RawMessage(`{"query":"aphelion"}`), sandbox.Scope{WorkingRoot: registry.workspace}, actor, adminSessionKey())
-	if err == nil || !strings.Contains(err.Error(), "requires active continuation or operation plan lease evidence") {
-		t.Fatalf("err = %v output=%s, want lease blocker", err, out)
+	if err == nil || !strings.Contains(err.Error(), "requires durable run authority evidence") {
+		t.Fatalf("err = %v output=%s, want durable run authority blocker", err, out)
 	}
-	if !strings.Contains(out, `"status": "blocked"`) || !strings.Contains(out, "lease evidence") {
-		t.Fatalf("output = %s, want structured lease blocker", out)
+	if !strings.Contains(out, `"status": "blocked"`) || !strings.Contains(out, "durable run authority") {
+		t.Fatalf("output = %s, want structured durable run authority blocker", out)
 	}
 }
 
@@ -90,7 +90,8 @@ func TestWebSearchHostedSuccessNormalizesUntrustedResults(t *testing.T) {
 	registry.SetWebSearchProviders(provider)
 	grantToolInvoke(t, store, webSearchToolName, "telegram:1001")
 	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
-	out, err := registry.executeWithScopeAndPrincipal(context.Background(), webSearchToolName, json.RawMessage(`{"query":"aphelion web search","count":1}`), sandbox.Scope{WorkingRoot: registry.workspace}, actor, adminSessionKey())
+	ctx := authorityRunContextForPrincipal(t, store, adminSessionKey(), actor)
+	out, err := registry.executeWithScopeAndPrincipal(ctx, webSearchToolName, json.RawMessage(`{"query":"aphelion web search","count":1}`), sandbox.Scope{WorkingRoot: registry.workspace}, actor, adminSessionKey())
 	if err != nil {
 		t.Fatalf("web_search err = %v output=%s", err, out)
 	}
@@ -117,9 +118,9 @@ func TestWebSearchFallbackRequiresAttemptBudget(t *testing.T) {
 	registry.WithWebSearchOptions(WebSearchOptions{Enabled: true, ProviderOrder: []string{"openai_hosted", "brave"}})
 	registry.SetWebSearchProviders(hosted, brave)
 	grantWebSearchInvoke(t, store, "telegram:1001", `{"web_search":{"providers":["openai_hosted","brave"],"max_provider_attempts_per_invocation":2,"max_count":5}}`)
-	grantAuthorityUseLease(t, store, adminSessionKey())
 	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
-	out, err := registry.executeWithScopeAndPrincipal(context.Background(), webSearchToolName, json.RawMessage(`{"query":"fallback please"}`), sandbox.Scope{WorkingRoot: registry.workspace}, actor, adminSessionKey())
+	ctx := authorityRunContextForPrincipal(t, store, adminSessionKey(), actor)
+	out, err := registry.executeWithScopeAndPrincipal(ctx, webSearchToolName, json.RawMessage(`{"query":"fallback please"}`), sandbox.Scope{WorkingRoot: registry.workspace}, actor, adminSessionKey())
 	if err != nil {
 		t.Fatalf("web_search fallback err = %v output=%s", err, out)
 	}
@@ -188,15 +189,15 @@ func TestWebSearchConstraintsLimitCountAndAllowedFields(t *testing.T) {
 	registry.SetWebSearchProviders(&fakeWebSearchProvider{name: "openai_hosted", result: WebSearchResult{Results: []WebSearchResultItem{{Title: "Result", URL: "https://example.com"}}}})
 	constraints := `{"tool_invocation":{"actions":{"invoke":{"allowed_fields":["query","count"]}}},"web_search":{"providers":["openai_hosted"],"max_count":2,"default_count":1,"max_provider_attempts_per_invocation":1}}`
 	grantWebSearchInvoke(t, store, "telegram:1001", constraints)
-	grantAuthorityUseLease(t, store, adminSessionKey())
 	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	ctx := authorityRunContextForPrincipal(t, store, adminSessionKey(), actor)
 
-	out, err := registry.executeWithScopeAndPrincipal(context.Background(), webSearchToolName, json.RawMessage(`{"query":"too many","count":3}`), sandbox.Scope{WorkingRoot: registry.workspace}, actor, adminSessionKey())
+	out, err := registry.executeWithScopeAndPrincipal(ctx, webSearchToolName, json.RawMessage(`{"query":"too many","count":3}`), sandbox.Scope{WorkingRoot: registry.workspace}, actor, adminSessionKey())
 	if err == nil || !strings.Contains(err.Error(), "exceeds max_count") {
 		t.Fatalf("count err = %v output=%s, want max_count blocker", err, out)
 	}
 
-	out, err = registry.executeWithScopeAndPrincipal(context.Background(), webSearchToolName, json.RawMessage(`{"query":"extra field","provider_policy":"openai_hosted"}`), sandbox.Scope{WorkingRoot: registry.workspace}, actor, adminSessionKey())
+	out, err = registry.executeWithScopeAndPrincipal(ctx, webSearchToolName, json.RawMessage(`{"query":"extra field","provider_policy":"openai_hosted"}`), sandbox.Scope{WorkingRoot: registry.workspace}, actor, adminSessionKey())
 	if err == nil || !strings.Contains(err.Error(), `input field "provider_policy" is not allowed`) {
 		t.Fatalf("field err = %v output=%s, want allowed_fields blocker", err, out)
 	}

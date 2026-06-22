@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
@@ -45,12 +46,118 @@ func TestExternalProcessExecutorRunsManifestBackedTool(t *testing.T) {
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err != nil {
 		t.Fatalf("Execute() err = %v", err)
 	}
 	if out != `{"summary":"ok","seen":true}` {
 		t.Fatalf("out = %q, want structured json output", out)
+	}
+	invocations, err := store.CapabilityInvocationsByGrant("grant:browse_page:telegram:1001", 10)
+	if err != nil {
+		t.Fatalf("CapabilityInvocationsByGrant() err = %v", err)
+	}
+	if len(invocations) != 1 {
+		t.Fatalf("invocations = %#v, want one invocation row", invocations)
+	}
+	if invocations[0].Status != "allowed" || invocations[0].OutcomeStatus != "completed" || invocations[0].CompletedAt.IsZero() {
+		t.Fatalf("invocation = %#v, want allowed decision with completed outcome", invocations[0])
+	}
+	grant, ok, err := store.CapabilityGrant("grant:browse_page:telegram:1001")
+	if err != nil {
+		t.Fatalf("CapabilityGrant() err = %v", err)
+	}
+	if !ok || grant.InvocationCount != 1 || grant.FailureCount != 0 {
+		t.Fatalf("grant counters = %#v ok=%t, want one successful logical invocation", grant, ok)
+	}
+}
+
+func TestExternalProcessOutcomeFinalizesOriginalPermitAfterAuthorityRevocation(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(registry.workspace, "run.sh"), []byte("#!/usr/bin/env bash\necho '{}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh) err = %v", err)
+	}
+	executor := &blockingExternalExecutor{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		output:  `{"summary":"ok"}`,
+	}
+	registry.WithExternalToolExecutor(executor)
+	manifest := ExternalToolManifest{
+		Name:      "browse_page",
+		Owner:     "child-alpha",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+		IO:        ExternalToolManifestIO{OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`)},
+	}
+	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest})
+	if err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	seedVerifiedExternalToolLifecycle(t, registry, store, manifest, sandbox.Scope{WorkingRoot: registry.workspace})
+	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
+		t.Fatalf("UpsertRegisteredTool() err = %v", err)
+	}
+	grantToolInvoke(t, store, "browse_page", "telegram:1001")
+
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+		errCh <- err
+	}()
+	<-executor.started
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status: session.ContinuationStatusRevoked,
+		ContinuationLease: session.ContinuationLease{
+			ID:             "revoked-while-external-runs",
+			Status:         session.ContinuationLeaseStatusRevoked,
+			RemainingTurns: 0,
+			RevokedAt:      time.Now().UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState(revoke) err = %v", err)
+	}
+	close(executor.release)
+	if err := <-errCh; err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal() err = %v, want outcome finalized without reauthorization", err)
+	}
+	invocations, err := store.CapabilityInvocationsByGrant("grant:browse_page:telegram:1001", 10)
+	if err != nil {
+		t.Fatalf("CapabilityInvocationsByGrant() err = %v", err)
+	}
+	if len(invocations) != 1 || invocations[0].Status != "allowed" || invocations[0].OutcomeStatus != "completed" {
+		t.Fatalf("invocations = %#v, want one allowed invocation finalized as completed", invocations)
+	}
+}
+
+type blockingExternalExecutor struct {
+	started chan struct{}
+	release chan struct{}
+	output  string
+	err     error
+}
+
+func (e *blockingExternalExecutor) Supports(ExternalToolManifest) bool {
+	return true
+}
+
+func (e *blockingExternalExecutor) Execute(ctx context.Context, manifest ExternalToolManifest, input json.RawMessage, scope sandbox.Scope, runner *sandbox.Runner, maxOutputBytes int, access ExternalToolExecutionAccess) (string, error) {
+	close(e.started)
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-e.release:
+		return e.output, e.err
 	}
 }
 
@@ -92,7 +199,9 @@ fi
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:42")
 
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, adminSessionKey(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	key := adminSessionKey()
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal() err = %v", err)
 	}
@@ -128,7 +237,10 @@ func TestExternalProcessExecutorRejectsInvalidInputAgainstSchema(t *testing.T) {
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 
-	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{"goal":"summarize"}`))
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	_, err = registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"goal":"summarize"}`))
 	if err == nil {
 		t.Fatal("Execute() err = nil, want input-schema rejection")
 	}
@@ -164,12 +276,25 @@ func TestExternalProcessExecutorRejectsInvalidOutputAgainstSchema(t *testing.T) 
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 
-	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	_, err = registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err == nil {
 		t.Fatal("Execute() err = nil, want output-schema rejection")
 	}
 	if !strings.Contains(err.Error(), "output.summary must be a string") {
 		t.Fatalf("err = %v, want output-schema rejection", err)
+	}
+	invocations, err := store.CapabilityInvocationsByGrant("grant:browse_page:telegram:1001", 10)
+	if err != nil {
+		t.Fatalf("CapabilityInvocationsByGrant() err = %v", err)
+	}
+	if len(invocations) != 1 {
+		t.Fatalf("invocations = %#v, want one invocation row", invocations)
+	}
+	if invocations[0].Status != "allowed" || invocations[0].OutcomeStatus != "failed" || !strings.Contains(invocations[0].OutcomeErrorText, "output.summary must be a string") {
+		t.Fatalf("invocation = %#v, want allowed decision with failed execution outcome", invocations[0])
 	}
 }
 

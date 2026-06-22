@@ -119,6 +119,114 @@ func TestRemoteChildRunnerRunOnceSyncsExecutesAndUploadsPendingReviewArtifacts(t
 	}
 }
 
+func TestRemoteChildRunnerUploadsOnlyCurrentAgentReviewArtifacts(t *testing.T) {
+	t.Parallel()
+
+	parentStore := newTestSQLiteStore(t)
+	defer parentStore.Close()
+	agent := testRemoteDurableAgent()
+	if err := parentStore.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("parent UpsertDurableAgent() err = %v", err)
+	}
+
+	childStore, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "child.db"))
+	if err != nil {
+		t.Fatalf("child NewSQLiteStore() err = %v", err)
+	}
+	defer childStore.Close()
+
+	bootstrapPath := filepath.Join(t.TempDir(), "remote-bootstrap.json")
+	bootstrap := core.DurableAgentRemoteBootstrap{
+		ReviewTargetChatID: agent.ReviewTargetChatID,
+		AgentID:            agent.AgentID,
+		ParentAgentID:      "house",
+		ChannelKind:        agent.ChannelKind,
+		ParentControlURL:   "https://house.example",
+		EnrollmentToken:    "enroll-token-1",
+		ProtocolVersion:    core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:       testDurableAgentBootstrapLLM(),
+		BootstrapCeiling:   agent.BootstrapCeiling,
+		LocalStorageRoots: []string{
+			filepath.Join(t.TempDir(), "work"),
+			filepath.Join(t.TempDir(), "memory"),
+		},
+		SecretScopes:  []string{"telegram_bot"},
+		NetworkPolicy: "restricted",
+	}
+	if err := WriteRemoteBootstrap(bootstrapPath, bootstrap); err != nil {
+		t.Fatalf("WriteRemoteBootstrap() err = %v", err)
+	}
+
+	runner := NewRemoteChildRunner(
+		childStore,
+		NewRemoteRuntime(childStore, func(b core.DurableAgentRemoteBootstrap) (RemoteControlClient, error) {
+			client, err := NewHTTPClient(b)
+			if err != nil {
+				return nil, err
+			}
+			client.Client = &http.Client{Transport: handlerRoundTripper{handler: NewHTTPHandler(parentStore).Handler()}}
+			return client, nil
+		}),
+		RemoteChildExecutorFunc(func(ctx context.Context, bootstrap core.DurableAgentRemoteBootstrap, agent core.DurableAgent, msg core.InboundMessage) error {
+			childRuntime := NewRuntime(childStore)
+			other := core.DurableAgent{
+				AgentID:            "other-remote-child",
+				ReviewTargetChatID: agent.ReviewTargetChatID,
+				ChannelKind:        agent.ChannelKind,
+				BootstrapLLM:       testDurableAgentBootstrapLLM(),
+				Status:             "active",
+			}
+			if err := childStore.UpsertDurableAgent(other); err != nil {
+				return err
+			}
+			if _, err := childRuntime.QueueReviewArtifact(agent, core.DurableReviewArtifact{
+				Summary:       "Current remote child asks for parent review.",
+				IntervalLabel: "current child",
+				LocalActions:  []string{"Prepared scoped current-child artifact."},
+			}); err != nil {
+				return err
+			}
+			_, err := childRuntime.QueueReviewArtifact(other, core.DurableReviewArtifact{
+				Summary:       "Other child artifact should stay local.",
+				IntervalLabel: "other child",
+				LocalActions:  []string{"Prepared cross-child artifact."},
+			})
+			return err
+		}),
+	)
+
+	result, err := runner.RunOnce(context.Background(), bootstrapPath, core.InboundMessage{
+		ChatID:         -100123,
+		ChatType:       "group",
+		SenderID:       77,
+		SenderName:     "Aunt May",
+		Text:           "Can you report?",
+		MessageID:      23,
+		DurableAgentID: agent.AgentID,
+		Timestamp:      time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("RunOnce() err = %v", err)
+	}
+	if result.UploadedReviewArtifacts != 1 {
+		t.Fatalf("UploadedReviewArtifacts = %d, want only current child artifact uploaded", result.UploadedReviewArtifacts)
+	}
+	parentEvents, err := parentStore.PendingReviewEvents(agent.ReviewTargetChatID, 10)
+	if err != nil {
+		t.Fatalf("parent PendingReviewEvents() err = %v", err)
+	}
+	if len(parentEvents) != 1 || !strings.Contains(parentEvents[0].Summary, "Current remote child") {
+		t.Fatalf("parent events = %#v, want only current child artifact", parentEvents)
+	}
+	childPending, err := childStore.PendingReviewEvents(agent.ReviewTargetChatID, 10)
+	if err != nil {
+		t.Fatalf("child PendingReviewEvents() err = %v", err)
+	}
+	if len(childPending) != 1 || !strings.Contains(childPending[0].Summary, "Other child artifact") {
+		t.Fatalf("child pending events = %#v, want other child artifact retained locally", childPending)
+	}
+}
+
 func TestRemoteChildRunnerProcessesAndAcknowledgesParentConversation(t *testing.T) {
 	t.Parallel()
 

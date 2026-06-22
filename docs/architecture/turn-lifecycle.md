@@ -67,13 +67,17 @@ Code anchors:
 ## Durable Child Species
 
 Durable Telegram group child turns share the same engine with runtime-owned
-child adapter context and policy hooks.
+child adapter context and policy hooks. When child work crosses into generic
+runtime execution, authority must remain continuous through the same point-of-use
+lease and grant validation used by other execution species; see
+[`execution-authority-continuity.md`](execution-authority-continuity.md).
 
 Code anchors:
 
 - [`runtime/durable_group.go`](../../runtime/durable_group.go)
 - [`runtime/turn_coordinator_common.go`](../../runtime/turn_coordinator_common.go)
 - [`runtime/turn_coordinator_durable.go`](../../runtime/turn_coordinator_durable.go)
+- [`tool/execution_authority_continuity_test.go`](../../tool/execution_authority_continuity_test.go)
 
 Related requirements:
 
