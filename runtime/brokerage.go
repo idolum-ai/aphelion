@@ -102,7 +102,7 @@ func (r *Runtime) recordBrokerageControlFlowJudgment(key session.SessionKey, bro
 	}
 	judgment, err := r.store.RecordJudgment(session.JudgmentInput{
 		Key:                key,
-		Kind:               "brokerage_control_flow",
+		Kind:               session.JudgmentKindBrokerageControlFlow,
 		SchemaVersion:      "v1",
 		SubjectKey:         "brokerage:" + brokerageControlFlowHash(brokerage),
 		ClaimKey:           "turn_control_flow_contract",
@@ -126,7 +126,7 @@ func (r *Runtime) recordBrokerageControlFlowJudgment(key session.SessionKey, bro
 	}
 	_, err = r.store.RecordJudgmentUseCommitment(session.JudgmentUseInput{
 		Key:                  key,
-		ConsumerID:           "runtime.brokerage.control_flow",
+		ConsumerID:           session.ConsumerRuntimeBrokerageControlFlow,
 		Consequence:          session.JudgmentUseConsequenceControlFlow,
 		JudgmentRefs:         []string{session.JudgmentRef(judgment.ID)},
 		DependencyRefs:       judgment.DependencyRefs,

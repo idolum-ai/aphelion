@@ -128,7 +128,7 @@ func (r *Runtime) recordPerceptionBudgetJudgmentUse(key session.SessionKey, runI
 		}
 	}
 	_, _, err := r.recordRuntimeJudgmentUse(key, runtimeJudgmentUseInput{
-		Kind:               "perception_budget_contract",
+		Kind:               session.JudgmentKindPerceptionBudgetContract,
 		SubjectKey:         "turn_run:" + strconv.FormatInt(runID, 10) + ":perception_budget",
 		ClaimKey:           "model_context_layer_admission",
 		InterpreterID:      "runtime.perception_budget",
@@ -139,7 +139,7 @@ func (r *Runtime) recordPerceptionBudgetJudgmentUse(key session.SessionKey, runI
 		SourceFaultDomains: []string{"prompt_assembly", "memory_governor", "runtime_perception_budget_v1"},
 		Sensitivity:        "perception_metadata",
 		TurnRunID:          runID,
-		ConsumerID:         "runtime.perception_budget.context_admission",
+		ConsumerID:         session.ConsumerRuntimePerceptionBudgetAdmission,
 		Consequence:        session.JudgmentUseConsequenceModelContextAdmission,
 		PolicyRef:          "perception_budget_contract_v1",
 		ResultRef:          session.JudgmentUseRef("turn_run_perception", strconv.FormatInt(runID, 10)),
@@ -170,7 +170,7 @@ func (r *Runtime) recordAdaptiveRecallJudgmentUse(key session.SessionKey, runID 
 		}
 	}
 	_, _, err := r.recordRuntimeJudgmentUse(key, runtimeJudgmentUseInput{
-		Kind:               "adaptive_recall_selection",
+		Kind:               session.JudgmentKindAdaptiveRecallSelection,
 		SubjectKey:         "turn_run:" + strconv.FormatInt(runID, 10) + ":adaptive_recall",
 		ClaimKey:           "semantic_memory_recall_admission",
 		InterpreterID:      "runtime.aggressive_memory_prefetch",
@@ -181,7 +181,7 @@ func (r *Runtime) recordAdaptiveRecallJudgmentUse(key session.SessionKey, runID 
 		SourceFaultDomains: []string{"semantic_memory", "memory_governor", "runtime_aggressive_recall_v1"},
 		Sensitivity:        "perception_metadata",
 		TurnRunID:          runID,
-		ConsumerID:         "runtime.aggressive_memory.context_admission",
+		ConsumerID:         session.ConsumerRuntimeAdaptiveRecallAdmission,
 		Consequence:        session.JudgmentUseConsequenceModelContextAdmission,
 		PolicyRef:          "adaptive_recall_selection_v1",
 		ResultRef:          session.JudgmentUseRef("turn_run_recall", strconv.FormatInt(runID, 10)),
@@ -206,7 +206,7 @@ func (r *Runtime) recordMaterialFloorJudgmentUse(key session.SessionKey, runID i
 		unknowns = append(unknowns, session.UnknownPredicate{Kind: "unstructured_material_floor", Reason: "governor output did not parse as structured material packet"})
 	}
 	_, _, err := r.recordRuntimeJudgmentUse(key, runtimeJudgmentUseInput{
-		Kind:               "material_floor_interpretation",
+		Kind:               session.JudgmentKindMaterialFloorInterpretation,
 		SubjectKey:         "turn_run:" + strconv.FormatInt(runID, 10) + ":material_floor",
 		ClaimKey:           "material_floor_visibility",
 		InterpreterID:      "runtime.material_floor",
@@ -218,7 +218,7 @@ func (r *Runtime) recordMaterialFloorJudgmentUse(key session.SessionKey, runID i
 		SourceFaultDomains: []string{"governor_model_output", "pipeline_material_parser_v1"},
 		Sensitivity:        "presentation_metadata",
 		TurnRunID:          runID,
-		ConsumerID:         "runtime.material_floor.presentation",
+		ConsumerID:         session.ConsumerRuntimeMaterialFloorPresentation,
 		Consequence:        session.JudgmentUseConsequencePresentation,
 		PolicyRef:          "material_floor_visibility_v1",
 		ResultRef:          session.JudgmentUseRef("turn_run_material_floor", strconv.FormatInt(runID, 10)),
@@ -240,7 +240,7 @@ func (r *Runtime) recordConstitutionJudgmentUse(key session.SessionKey, runID in
 		deps = append(deps, session.JudgmentDependencyRef{Kind: "constitution_rule", Ref: strings.TrimSpace(violation.Rule), Role: "violation", Scope: strings.TrimSpace(violation.Surface)})
 	}
 	_, _, err := r.recordRuntimeJudgmentUse(key, runtimeJudgmentUseInput{
-		Kind:               "constitution_violation_check",
+		Kind:               session.JudgmentKindConstitutionViolationCheck,
 		SubjectKey:         "turn_run:" + strconv.FormatInt(runID, 10) + ":constitution:" + runtimeJudgmentShortHash(surface, fmt.Sprint(violations)),
 		ClaimKey:           "visible_reply_constitution",
 		InterpreterID:      "runtime.constitution_gate",
@@ -251,7 +251,7 @@ func (r *Runtime) recordConstitutionJudgmentUse(key session.SessionKey, runID in
 		SourceFaultDomains: []string{"visible_reply_text", "pipeline_constitution_rules_v1"},
 		Sensitivity:        "presentation_metadata",
 		TurnRunID:          runID,
-		ConsumerID:         "runtime.constitution.repair",
+		ConsumerID:         session.ConsumerRuntimeConstitutionRepair,
 		Consequence:        session.JudgmentUseConsequencePresentation,
 		PolicyRef:          "constitution_visible_reply_v1",
 		ResultRef:          session.JudgmentUseHashRef("constitution_violation", fmt.Sprintf("%d:%s:%v", runID, surface, violations)),
@@ -282,7 +282,7 @@ func (r *Runtime) recordBudgetRecoveryScopeJudgmentUse(key session.SessionKey, m
 		deps = append(deps, session.JudgmentDependencyRef{Kind: "operation_state", Ref: id, Role: "candidate"})
 	}
 	_, _, err := r.recordRuntimeJudgmentUse(key, runtimeJudgmentUseInput{
-		Kind:               "budget_recovery_scope_selection",
+		Kind:               session.JudgmentKindBudgetRecoveryScope,
 		SubjectKey:         "budget_recovery:" + runtimeJudgmentShortHash(session.SessionIDForKey(key), scope, msg.Text),
 		ClaimKey:           "budget_recovery_scope",
 		InterpreterID:      "runtime.turn_budget_recovery_scope",
@@ -293,7 +293,7 @@ func (r *Runtime) recordBudgetRecoveryScopeJudgmentUse(key session.SessionKey, m
 		SourceFaultDomains: []string{"turn_recovery_state", "operation_state", "operator_message", "runtime_budget_recovery_scope_v1"},
 		Sensitivity:        "recovery_metadata",
 		OperationID:        strings.TrimSpace(opState.ID),
-		ConsumerID:         "runtime.budget_recovery.scope",
+		ConsumerID:         session.ConsumerRuntimeBudgetRecoveryScope,
 		Consequence:        session.JudgmentUseConsequenceRecoverySelection,
 		PolicyRef:          "budget_recovery_scope_v1",
 		ResultRef:          session.JudgmentUseHashRef("budget_recovery_scope", session.SessionIDForKey(key)+"|"+scope),
@@ -317,7 +317,7 @@ func (r *Runtime) recordCuriositySelectionJudgmentUse(key session.SessionKey, le
 		deps = append(deps, session.JudgmentDependencyRef{Kind: "curiosity_source", Ref: candidate.SourceRef, Role: "support", Scope: candidate.SourceKind})
 	}
 	_, _, err := r.recordRuntimeJudgmentUse(key, runtimeJudgmentUseInput{
-		Kind:               "curiosity_candidate_selection",
+		Kind:               session.JudgmentKindCuriosityCandidateSelection,
 		SubjectKey:         "curiosity_candidate:" + candidate.ID,
 		ClaimKey:           "curiosity_salience_selection",
 		InterpreterID:      "runtime.curiosity_selection",
@@ -327,7 +327,7 @@ func (r *Runtime) recordCuriositySelectionJudgmentUse(key session.SessionKey, le
 		DependencyRefs:     deps,
 		SourceFaultDomains: []string{"interior_signal_state", "curiosity_history", "runtime_curiosity_selection_v1"},
 		Sensitivity:        "curiosity_metadata",
-		ConsumerID:         "runtime.curiosity.selection",
+		ConsumerID:         session.ConsumerRuntimeCuriositySelection,
 		Consequence:        session.JudgmentUseConsequenceModelContextAdmission,
 		PolicyRef:          "curiosity_candidate_selection_v1",
 		ResultRef:          session.JudgmentUseRef("curiosity_candidate", candidate.ID),

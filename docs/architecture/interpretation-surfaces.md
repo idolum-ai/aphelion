@@ -536,6 +536,7 @@ multi-axis profile:
 | Lifecycle | `experimental`, `canary`, `production`, `deprecated` |
 | Local compliance | `satisfies`, `not applicable` |
 | Runtime wiring | `wired`, `not applicable` |
+| Readiness tier | `registered`, `emitted`, `consumed`, `reconcilable`, `not_applicable` |
 | End-to-end readiness | `ready`, `blocked by dependency`, `shadow only`, `unassessed` |
 | Dependencies | stable surface IDs from `interpretation-surfaces.json` |
 
@@ -553,28 +554,46 @@ settled judgments consequential enough to require a demotion path and must be
 while the registry was being seeded; the machine-readable registry rejects
 those broad statuses now.
 
-Implemented-but-unconsumed code must not be marked `satisfies`. The failure mode
+Implemented-but-unconsumed code must not be marked complete. The failure mode
 this document is meant to prevent is a typed object claiming authority-class
 consequence because it exists, while no consumer actually consults it.
 
 The `Local compliance` column still does not prove that every downstream
 pipeline is semantically perfect. It means the interpretation surface has a
 registered owner, code anchor, consequence class, consumer boundary, consumer
-anchor, and dissent adapter strong enough for its declared consequence.
+anchor, and dissent adapter strong enough for its declared consequence. The
+machine-readable readiness fields say how much of the judgment substrate is
+actually proven:
+
+- `registered`: the surface is named, owned, anchored, and has a declared
+  consequence.
+- `emitted`: production code records the declared judgment kind.
+- `consumed`: production code records a `JudgmentUse` for the declared consumer.
+- `reconcilable`: behavior tests exercise the challenge or reconciliation path
+  named by the registry.
+- `structural`: the surface is a typed compiler, validator, or deterministic
+  policy boundary rather than a judgment producer; its anchors and tests carry
+  the proof instead of `RecordJudgment` calls.
 
 The registry is now backed by
 [`interpretation-surfaces.json`](interpretation-surfaces.json). Architecture
 checks verify stable surface IDs, owner fields, code anchors, challenge adapters,
-status/wiring consistency, and that every declared consumer resolves to a
-non-test Go declaration rather than a leftover string literal. Challenge
-adapters must use a registered adapter token. The checks also reject broad
-`partial` or `debt` states. The Markdown table below is the readable view; the
-JSON file is the mechanical source of truth for review and CI.
+status/wiring consistency, readiness tiers, and that every declared consumer
+resolves to a non-test Go declaration rather than a leftover string literal.
+For rows marked `emitted`, the gate scans production Go for the declared
+`JudgmentInput.Kind`. For rows marked `consumed`, it scans production Go for the
+declared `JudgmentUseInput.ConsumerID`. Rows marked `reconcilable` must name
+behavior-test anchors that still resolve. Challenge adapters must use a
+registered adapter token. The checks also reject broad `partial` or `debt`
+states. The Markdown table below is the readable view; the JSON file is the
+mechanical source of truth for review and CI.
 
-This is a drift gate, not a reachability proof. A declaration anchor proves that
-the named adapter still exists; behavior tests must still prove that the adapter
-is called on the intended runtime path, emits the declared judgment, and records
-the expected use.
+This is a drift gate and a producer/consumer coverage gate, not a complete
+semantic proof. A declaration anchor proves that the named adapter still exists;
+the AST scan proves declared emitted/consumed tokens are present in production
+call sites; behavior tests must still prove that the adapter is called on the
+intended runtime path, emits the declared judgment, records the expected use,
+and reconciles contradictions under real state.
 
 ## Current Registry
 

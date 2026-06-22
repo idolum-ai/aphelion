@@ -1966,7 +1966,7 @@ func (r *Runtime) recordReentryRecommendationJudgmentUse(key session.SessionKey,
 	_, err = r.store.RecordJudgmentUseCommitment(session.JudgmentUseInput{
 		Key:                  key,
 		TurnRunID:            record.SourceTurnRunID,
-		ConsumerID:           "runtime.reentry_recommendation.presentation",
+		ConsumerID:           session.ConsumerRuntimeReentryPresentation,
 		Consequence:          session.JudgmentUseConsequencePresentation,
 		JudgmentRefs:         judgmentRefs,
 		DependencyRefs:       deps,
@@ -2004,7 +2004,7 @@ func (r *Runtime) recordReentryRecommendationSelectionJudgment(key session.Sessi
 	return r.store.RecordJudgment(session.JudgmentInput{
 		Key:                key,
 		TurnRunID:          record.SourceTurnRunID,
-		Kind:               "reentry_recommendation_selection",
+		Kind:               session.JudgmentKindReentryRecommendation,
 		SchemaVersion:      "v1",
 		SubjectKey:         "reentry_recommendation:" + record.ID,
 		ClaimKey:           "operator_reentry_candidates",

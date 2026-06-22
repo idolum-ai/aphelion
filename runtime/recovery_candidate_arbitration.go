@@ -302,7 +302,7 @@ func (r *Runtime) recordRecoveryCandidateArbitrationJudgmentUse(key session.Sess
 	judgment, err := r.store.RecordJudgment(session.JudgmentInput{
 		Key:                key,
 		OperationID:        strings.TrimSpace(opState.ID),
-		Kind:               "recovery_candidate_arbitration",
+		Kind:               session.JudgmentKindRecoveryCandidateArbitration,
 		SchemaVersion:      "v1",
 		SubjectKey:         subject,
 		ClaimKey:           "recovery_candidate_eligibility",
@@ -328,7 +328,7 @@ func (r *Runtime) recordRecoveryCandidateArbitrationJudgmentUse(key session.Sess
 	_, err = r.store.RecordJudgmentUseCommitment(session.JudgmentUseInput{
 		Key:                  key,
 		OperationID:          strings.TrimSpace(opState.ID),
-		ConsumerID:           "runtime.recovery_candidate_arbitration",
+		ConsumerID:           session.ConsumerRuntimeRecoveryCandidate,
 		Consequence:          session.JudgmentUseConsequenceRecoverySelection,
 		JudgmentRefs:         judgmentRefs,
 		DependencyRefs:       deps,

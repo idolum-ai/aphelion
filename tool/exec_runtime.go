@@ -339,7 +339,7 @@ func (r *Registry) recordShellEffectJudgment(ctx context.Context, key session.Se
 	judgment, err := r.store.RecordJudgment(session.JudgmentInput{
 		Key:                key,
 		TurnRunID:          invocationRef.TurnRunID,
-		Kind:               "shell_effect_plan",
+		Kind:               session.JudgmentKindShellEffectPlan,
 		SchemaVersion:      "v1",
 		SubjectKey:         "exec:" + commandHash,
 		ClaimKey:           "command_effect_plan",
@@ -417,7 +417,7 @@ func (r *Registry) recordExecPreDispatchAttempt(ctx context.Context, p principal
 	useInput := session.JudgmentUseInput{
 		Key:                  key,
 		TurnRunID:            invocationRef.TurnRunID,
-		ConsumerID:           "tool.exec.dispatch",
+		ConsumerID:           session.ConsumerToolExecDispatch,
 		Consequence:          session.JudgmentUseConsequenceExecution,
 		JudgmentRefs:         execJudgmentRefs(rawCommand, effect.Kind, effect.Reason, shellJudgment),
 		DependencyRefs:       append(execJudgmentDependencyRefs(rawCommand, effect.Kind, effect.Reason, boundaryKind, invocationRef, shellJudgment), qualificationDeps...),
