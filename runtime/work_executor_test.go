@@ -658,6 +658,25 @@ func TestCodexCommandApprovalPersistsAttemptBeforeAccept(t *testing.T) {
 		if use.ConsumerID != "runtime.codex.command_approval" || use.Consequence != session.JudgmentUseConsequenceExecution || !use.Irreversible {
 			t.Fatalf("use = %#v, want irreversible Codex command approval use", use)
 		}
+		if len(use.JudgmentRefs) == 0 || !strings.HasPrefix(use.JudgmentRefs[0], "judgment:") {
+			t.Fatalf("judgment refs = %#v, want concrete Codex command judgment ref first", use.JudgmentRefs)
+		}
+	}
+	judgments, err := store.JudgmentsByKind(key, "codex_command_effect_plan", 10)
+	if err != nil {
+		t.Fatalf("JudgmentsByKind(codex_command_effect_plan) err = %v", err)
+	}
+	if len(judgments) != 2 {
+		t.Fatalf("judgments = %#v, want one command effect-plan judgment per approved command", judgments)
+	}
+	judgmentRefs := map[string]bool{}
+	for _, judgment := range judgments {
+		judgmentRefs[session.JudgmentRef(judgment.ID)] = true
+	}
+	for _, use := range uses {
+		if !judgmentRefs[use.JudgmentRefs[0]] {
+			t.Fatalf("use judgment refs = %#v, judgments = %#v, want use to reference persisted command judgment", use.JudgmentRefs, judgments)
+		}
 	}
 }
 
@@ -736,6 +755,16 @@ func TestCodexFileChangeApprovalPersistsAttemptFingerprintBeforeAccept(t *testin
 	use := uses[0]
 	if use.ConsumerID != "runtime.codex.file_change_approval" || use.Consequence != session.JudgmentUseConsequenceExecution {
 		t.Fatalf("use = %#v, want Codex file-change execution use", use)
+	}
+	if len(use.JudgmentRefs) == 0 || !strings.HasPrefix(use.JudgmentRefs[0], "judgment:") {
+		t.Fatalf("judgment refs = %#v, want concrete Codex file-change judgment ref first", use.JudgmentRefs)
+	}
+	judgments, err := store.JudgmentsByKind(key, "codex_file_change_plan", 10)
+	if err != nil {
+		t.Fatalf("JudgmentsByKind(codex_file_change_plan) err = %v", err)
+	}
+	if len(judgments) != 1 || use.JudgmentRefs[0] != session.JudgmentRef(judgments[0].ID) {
+		t.Fatalf("judgments = %#v, use refs = %#v, want file-change use to reference persisted judgment", judgments, use.JudgmentRefs)
 	}
 	var sawPath, sawFingerprint bool
 	for _, dep := range use.DependencyRefs {

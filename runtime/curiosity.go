@@ -135,6 +135,9 @@ func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err erro
 	}
 	selectedPayload := curiosityCandidatePayload(candidate)
 	selectedPayload["selection_policy"] = curiositySelectionPolicyIntensityFirst
+	if err := r.recordCuriositySelectionJudgmentUse(key, lease, candidate, now); err != nil {
+		return fmt.Errorf("record curiosity selection judgment: %w", err)
+	}
 	r.recordExecutionEvent(key, core.ExecutionEventCuriositySelected, "curiosity", "selected", selectedPayload, now)
 
 	requestText := renderCuriosityRequest(candidate)

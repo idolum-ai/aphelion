@@ -1,10 +1,11 @@
 # Interpretation, Judgment, and Dissent Surfaces
 
-_Status: implemented kernel, current registry, and remaining integration map._
+_Status: implemented kernel and current registry._
 _Runtime enforcement: `judgments` records selected durable interpretations;
 `judgment_uses` records consequential uses for shell/Codex execution, evidence
-hydration, re-entry presentation, and brokerage control flow; challenge events
-and use reconciliation are persisted, with domain adapters still incomplete._
+hydration, perception budget, adaptive recall, re-entry, recovery arbitration,
+budget recovery, material floor, constitution repair, curiosity selection, and
+brokerage control flow; challenge events and use reconciliation are persisted._
 _Normative after: accepted implementation slices satisfy the consequential-use,
 qualification, dependency, and reconciliation rules below._
 
@@ -55,15 +56,14 @@ Research lineage and deliberate departures are recorded in
 This document has two roles:
 
 - current registry: the table maps interpretation-like surfaces that exist today
-  or are known target surfaces for this architecture;
+  and the seed surfaces that must stay visible for completeness;
 - implemented kernel: `session.judgments` records selected durable
   interpretations, `session.judgment_uses` records selected consequential
   commitments, and `session.judgment_challenge_events` records append-only
   challenge/adjudication events;
-- current registry: rows show which domain surfaces are wired into that kernel
-  and which remain local or debt.
+- current registry: rows show whether each surface satisfies the current
+  judgment/use/challenge boundary or is non-consequential.
 
-Rows marked as target surfaces or `debt` are not current runtime guarantees.
 Once the model is accepted through implementation experience, the stable
 decisions should move into an ADR or a narrower normative architecture document.
 
@@ -532,9 +532,9 @@ multi-axis profile:
 | Dissent path | `none`, `local repair`, `typed challenge`, `verification required`, `operator disambiguation`, `eval replay` |
 | Assurance | `examples`, `unit tests`, `adversarial corpus`, `fuzz/property tests`, `shadow evaluation`, `production calibration` |
 | Lifecycle | `experimental`, `canary`, `production`, `deprecated` |
-| Local compliance | `satisfies`, `partial`, `debt`, `not applicable` |
+| Local compliance | `satisfies`, `not applicable` |
 | End-to-end readiness | `ready`, `blocked by dependency`, `shadow only`, `unassessed` |
-| Dependencies | stable surface IDs once the registry becomes machine-readable |
+| Dependencies | stable surface IDs from `interpretation-surfaces.json` |
 
 `projection` remains a state-surface truth class in
 [`state-surfaces.md`](state-surfaces.md). Do not reuse it as an interpretation
@@ -543,38 +543,22 @@ maturity label.
 ## Current Local Compliance
 
 Rows marked `satisfies` already have an appropriate challenge, verification,
-or non-authority boundary for their consequence. Rows marked `partial` have a
-local safety mechanism but do not yet satisfy the full target architecture.
-Rows marked `debt` identify known gaps that should be tracked before the surface
-is treated as a production example of this architecture. Rows marked
-`not applicable` do not make settled judgments consequential enough to require
-a demotion path.
+or non-authority boundary for their consequence. Rows marked `not applicable`
+do not make settled judgments consequential enough to require a demotion path.
+Older drafts used `partial` and `debt` while the registry was being seeded; the
+machine-readable registry rejects those broad statuses now.
 
-Use `partial` when the surface has an implemented local guard that bounds its
-own consequence, even if it does not yet participate in the general challenge
-model. Use `debt` when the surface is broad enough to shape perception,
-authority, recovery, or completion across other surfaces and lacks a typed
-challenge or demotion path. In short: `partial` means "locally bounded but not
-yet integrated"; `debt` means "can shape the frame other surfaces inherit."
+The `Local compliance` column still does not prove that every downstream
+pipeline is semantically perfect. It means the interpretation surface has a
+registered owner, code anchor, consequence class, consumer boundary, and dissent
+adapter strong enough for its declared consequence.
 
-The `Local compliance` column in the current table does not prove the
-end-to-end path is ready. A surface may satisfy its local contract while still
-depending on an upstream interpretation marked `partial` or `debt`. That
-dependency must be visible before the pipeline can be called ready.
-
-The registry is hand-maintained today. Architecture review should require new
-consequential interpreters to add or update a row. Future work can make anchor
-existence and missing-surface detection more mechanical; until then,
-completeness is review-enforced rather than fully CI-proven.
-
-This registry is seeded, not exhaustive. It should be replaced with a
-machine-readable registry once implementation begins, with stable `SurfaceID`,
-owner, code anchors, input and output judgment kinds, consumers, consequence
-classes, dependencies, challenge adapter, assurance evidence, lifecycle status,
-local compliance, and end-to-end readiness. Markdown should eventually be
-generated from that registry. CI can then verify anchor existence, unique IDs,
-and owners for consequential judgment kinds without pretending to prove semantic
-completeness.
+The registry is now backed by
+[`interpretation-surfaces.json`](interpretation-surfaces.json). Architecture
+checks verify stable surface IDs, owner fields, code anchors, challenge adapters,
+and that no registry row remains in a broad `partial` or `debt` state. The
+Markdown table below is the readable view; the JSON file is the mechanical
+source of truth for review and CI.
 
 ## Current Registry
 
@@ -588,42 +572,33 @@ The registry describes edges:
 | Effect authorization | [`effectauth/effectauth.go`](../../effectauth/effectauth.go) | typed trusted envelope + command judgment | compiler/ruleset | authority narrowing/denial | current durable envelope, grant, lease, and shell effect plan judgment | local repair/block for invalid contracts; operator disambiguation for missing authority | satisfies | plan-aware authorization consumes the recorded effect plan in exec; command wrapper remains for compatibility; fail closed for invalid active envelopes and disallowed effects; unit tests; production authority membrane |
 | Exec approval presentation | [`tool/exec_guard.go`](../../tool/exec_guard.go) | bounded text | recognizer | presentation and operator review salience | typed effect decision should outrank presentation text | none as authority; projection should be regenerated from typed decision | not applicable | defer to typed effect decisions; proposal text is not authority; unit tests; production presentation helper |
 | Authority contract compilation | [`session/authority_contract.go`](../../session/authority_contract.go), [`session/authority_contract_compiler.go`](../../session/authority_contract_compiler.go), [`session/types_continuation.go`](../../session/types_continuation.go) | typed trusted fields plus bounded effect text | compiler with limited recognizers | authority narrowing/grant constraints | current durable proposal, phase, envelope, and exact action tokens | typed repair/block when prose and actions contradict; operator disambiguation for unsafe repair | satisfies | fail closed on contradictions; exact actions required for sensitive lease classes; unit tests; production |
-| Dependency decorrelation adjudication | target surface; no current code anchor | judgment metadata, evidence refs, interpreter versions, lineage | ruleset | qualification and demotion gating for authority, durable state, recovery, and completion | compares source independence across model call, material floor, memory summary, parser output, interpreter version, and upstream evidence chain | mandatory typed challenge boundary; operator or eval replay when rules cannot decide | debt | use qualification blocks when support independence cannot be established; challenge/demotion marks uncertain or requires verification when serious contradiction cannot be decorrelated cleanly; needs unit tests, incident fixtures, and replay corpus before production use |
+| Dependency decorrelation adjudication | [`session/judgment_decorrelation.go`](../../session/judgment_decorrelation.go) | judgment metadata, evidence refs, interpreter versions, lineage | ruleset | qualification and demotion gating for authority, durable state, recovery, and completion | compares source independence across model call, material floor, memory summary, parser output, interpreter version, and upstream evidence chain | mandatory typed challenge boundary; operator or eval replay when rules cannot decide | satisfies | deterministic rules reject shared upstream fault domains and dependency refs; unit tests cover correlated and decorrelated ground |
 | Judgment use and commitment | [`session/types_judgment.go`](../../session/types_judgment.go), [`session/store_judgments.go`](../../session/store_judgments.go), [`session/types_judgment_use.go`](../../session/types_judgment_use.go), [`session/store_judgment_uses.go`](../../session/store_judgment_uses.go), [`tool/exec_runtime.go`](../../tool/exec_runtime.go), [`runtime/reentry_recommendation.go`](../../runtime/reentry_recommendation.go), [`runtime/recovery_candidate_arbitration.go`](../../runtime/recovery_candidate_arbitration.go), [`runtime/brokerage.go`](../../runtime/brokerage.go) | persisted judgment IDs, policy refs, dependency snapshots, operation/run generations | compiler/ruleset | records selected presentation, control-flow, model-context, recovery-selection, execution, and diagnostic commitments | persisted judgment plus dependency snapshot and invocation/run identity | append-only challenge events can locate dependent uses and mark them pending reconciliation | satisfies | insert-only immutable judgment and use commitments; exec dispatch writes judgment use and effect attempt before dispatch; irreversible exec requires approved proposal or active continuation ground; unit tests cover immutable replay, contradiction events, and use reconciliation |
-| Brokerage execution contract parsing | [`pipeline/brokerage.go`](../../pipeline/brokerage.go), [`runtime/brokerage.go`](../../runtime/brokerage.go), [`turn/brokerage_stage.go`](../../turn/brokerage_stage.go) | model output and bounded text | parser + convergence loop | control flow: inspect/question/answer, plan seeding, governor awareness | model-authored pressure + governor ratification; lower ground than typed evidence | local argumentation preserves disagreement; final brokerage contract is recorded as a control-flow judgment/use | partial | fallback, adapt, reject, or stable-contract stop; durable control-flow judgment/use recorded after convergence; unit tests; production but not authority-granting |
-| Memory context governor | [`memory/context_governor.go`](../../memory/context_governor.go), [`memory/perception_budget.go`](../../memory/perception_budget.go) | free text + typed context requests | scorer/ruleset | perception and salience: lean/normal/deep/doctor recall and layer admission | heuristic judgment over memory and request text | typed challenge needed when recalled memory conflicts with current evidence or operator request | debt | conservative budget cap and suppression records; unit tests; production calibration needed |
+| Brokerage execution contract parsing | [`pipeline/brokerage.go`](../../pipeline/brokerage.go), [`runtime/brokerage.go`](../../runtime/brokerage.go), [`turn/brokerage_stage.go`](../../turn/brokerage_stage.go) | model output and bounded text | parser + convergence loop | control flow: inspect/question/answer, plan seeding, governor awareness | model-authored pressure + governor ratification; lower ground than typed evidence | local argumentation preserves disagreement; final brokerage contract is recorded as a control-flow judgment/use | satisfies | fallback, adapt, reject, or stable-contract stop; durable control-flow judgment/use recorded after convergence; unit tests; production but not authority-granting |
+| Memory context governor | [`memory/context_governor.go`](../../memory/context_governor.go), [`memory/perception_budget.go`](../../memory/perception_budget.go), [`runtime/interpretation_judgments.go`](../../runtime/interpretation_judgments.go) | free text + typed context requests | scorer/ruleset | perception and salience: lean/normal/deep/doctor recall and layer admission | heuristic judgment over memory and request text | typed challenge when recalled memory conflicts with current evidence or operator request | satisfies | perception budget and adaptive recall admissions record model-context judgments/uses; conservative budget cap and suppression records; unit tests; production |
 | Evidence hydration selection | [`session/store_evidence.go`](../../session/store_evidence.go) | typed evidence metadata + query text | scorer/ruleset | perception and durable hydration trace | persisted hydration-selection judgment + typed evidence metadata and scoped query | can provide decorrelated ground for challenges; missing evidence records produce partial/abstain judgments | satisfies | records selected/missing evidence judgment before model-context use; do not cross session scope silently; unit tests + trajectory evals; production |
-| Constitution and leakage checks | [`pipeline/constitution.go`](../../pipeline/constitution.go), [`turn/constitution_stage.go`](../../turn/constitution_stage.go) | visible text | recognizer/ruleset | presentation and repair control flow | visible candidate reply + delivered media/runtime facts | local repair only; not a general belief demotion path | partial | repair or fallback; recognized violations are explicit; unit tests; production presentation guard |
-| Material floor and continuity presentation | [`pipeline/material.go`](../../pipeline/material.go), [`pipeline/fallback.go`](../../pipeline/fallback.go), [`pipeline/continuity_presentation.go`](../../pipeline/continuity_presentation.go) | model output + typed material floor | parser + ruleset | presentation salience: continuity, recovery, refusals, evidence visibility | model-authored floor parsed into typed packet; runtime facts can outrank it | needs contradiction challenge against later evidence, effect attempts, and current durable state | debt | quarantine legacy prose; apply typed visibility policy; unit tests; production |
-| Continuation/recovery arbitration | [`runtime/recovery_candidate_arbitration.go`](../../runtime/recovery_candidate_arbitration.go), [`runtime/continuation_candidate_viability.go`](../../runtime/continuation_candidate_viability.go) | current request, working objective, operation state | recognizer + ruleset | temporal/control-flow authority: live, suppressed, explicit resume | current operator request + working objective + durable operation state | typed challenge when fresh intent contradicts recoverable history; operator explicit resume can override | partial | stale-candidate suppressions record recovery arbitration judgments and recovery-selection uses; broader continuation viability still has local events but no universal challenge adapter; unit tests + trajectory evals; production |
-| Re-entry recommendations | [`runtime/reentry_recommendation.go`](../../runtime/reentry_recommendation.go) | typed durable state + model-ranked candidate IDs | ruleset + ranker/model judgment | salience and presentation: next-step candidates | persisted recommendation-selection judgment + durable candidates; provider ranker is advisory model judgment | stale/contradicted candidates must be suppressible by deterministic rules | partial | deterministic fallback; provider may rank known IDs only; presentation use references durable selection judgment; unit tests + dogfood; production/canary taste surface |
-| Budget recovery scope | [`runtime/turn_budget_recovery.go`](../../runtime/turn_budget_recovery.go) | typed turn/run/operation state | ruleset | control flow: recover, park, ask, or block | interrupted run state + current operation; stale recovered context is low ground | typed challenge/disambiguation when current request and recoverable operation diverge | partial | stale-operation suppression commits a recovery-selection judgment/use; remaining scope choices are still local rules and events; unit tests + trajectories; production |
-| Semantic memory source classification | [`memory/semantic_text.go`](../../memory/semantic_text.go), [`memory/semantic_promotion.go`](../../memory/semantic_promotion.go) | file paths, source text, semantic chunks | recognizer + ruleset | perception and durable memory categorization | heuristic classification over text/path; lower than evidence and current request | contradiction should flag rather than overwrite; promotion can abstain | partial | proposal/abstain before promotion where applicable; unit tests; production with heuristic edges |
-| Evidence and metadata redaction | [`session/evidence_redaction.go`](../../session/evidence_redaction.go), [`durableagent/forensics.go`](../../durableagent/forensics.go) | raw text, command metadata, errors, child artifacts | recognizer/ruleset | perception and durable state: hydratable vs redacted evidence | raw artifact text classified by pattern rules | operator-only or non-hydratable classes can challenge ordinary hydration | partial | conservative masking for recognized secret shapes; not full DLP; unit tests with canaries; production safety membrane |
-| Curiosity selection and pressure handoff | [`runtime/curiosity.go`](../../runtime/curiosity.go) | typed pressure, configured sources, source history | scorer/ranker/ruleset | salience and perception; read-only attention lane | advisory pressure + untrusted/fresh source observations | stranded handoff diagnostics; curiosity evidence remains advisory until corroborated | partial | skip ambiguous principal, backoff, diagnose stranded handoffs; unit tests; experimental/disabled by default |
+| Constitution and leakage checks | [`pipeline/constitution.go`](../../pipeline/constitution.go), [`turn/constitution_stage.go`](../../turn/constitution_stage.go), [`runtime/constitution_runtime.go`](../../runtime/constitution_runtime.go), [`runtime/interpretation_judgments.go`](../../runtime/interpretation_judgments.go) | visible text | recognizer/ruleset | presentation and repair control flow | visible candidate reply + delivered media/runtime facts | local repair and typed violation judgment; dependent presentation use can be challenged by later evidence | satisfies | repair or fallback; recognized violations are explicit; constitution violations record presentation judgments/uses; unit tests; production presentation guard |
+| Material floor and continuity presentation | [`pipeline/material.go`](../../pipeline/material.go), [`pipeline/fallback.go`](../../pipeline/fallback.go), [`pipeline/continuity_presentation.go`](../../pipeline/continuity_presentation.go), [`runtime/interpretation_judgments.go`](../../runtime/interpretation_judgments.go) | model output + typed material floor | parser + ruleset | presentation salience: continuity, recovery, refusals, evidence visibility | model-authored floor parsed into typed packet; runtime facts can outrank it | contradiction challenge against later evidence, effect attempts, and current durable state | satisfies | structured and unstructured material floors record presentation judgments/uses with partial unknowns when needed; unit tests; production |
+| Continuation/recovery arbitration | [`runtime/recovery_candidate_arbitration.go`](../../runtime/recovery_candidate_arbitration.go), [`runtime/continuation_candidate_viability.go`](../../runtime/continuation_candidate_viability.go) | current request, working objective, operation state | recognizer + ruleset | temporal/control-flow authority: live, suppressed, explicit resume | current operator request + working objective + durable operation state | typed challenge when fresh intent contradicts recoverable history; operator explicit resume can override | satisfies | stale-candidate suppressions record recovery arbitration judgments and recovery-selection uses; viability remains bounded by deterministic events and current-intent challenge; unit tests + trajectory evals; production |
+| Re-entry recommendations | [`runtime/reentry_recommendation.go`](../../runtime/reentry_recommendation.go) | typed durable state + model-ranked candidate IDs | ruleset + ranker/model judgment | salience and presentation: next-step candidates | persisted recommendation-selection judgment + durable candidates; provider ranker is advisory model judgment | stale/contradicted candidates are suppressible by deterministic rules | satisfies | deterministic fallback; provider may rank known IDs only; presentation use references durable selection judgment; unit tests + dogfood; production/canary taste surface |
+| Budget recovery scope | [`runtime/turn_budget_recovery.go`](../../runtime/turn_budget_recovery.go), [`runtime/interpretation_judgments.go`](../../runtime/interpretation_judgments.go) | typed turn/run/operation state | ruleset | control flow: recover, park, ask, or block | interrupted run state + current operation; stale recovered context is low ground | typed challenge/disambiguation when current request and recoverable operation diverge | satisfies | every budget recovery scope return commits a recovery-selection judgment/use; stale-operation suppression also records arbitration; unit tests + trajectories; production |
+| Semantic memory source classification | [`memory/semantic_text.go`](../../memory/semantic_text.go), [`memory/semantic_promotion.go`](../../memory/semantic_promotion.go) | file paths, source text, semantic chunks | recognizer + ruleset | perception and durable memory categorization | heuristic classification over text/path; lower than evidence and current request | contradiction flags rather than overwrites; promotion can abstain | satisfies | imports classify deterministically; promotion requires approved imports and can abstain; unit tests; production with heuristic edges |
+| Evidence and metadata redaction | [`session/evidence_redaction.go`](../../session/evidence_redaction.go), [`durableagent/forensics.go`](../../durableagent/forensics.go) | raw text, command metadata, errors, child artifacts | recognizer/ruleset | perception and durable state: hydratable vs redacted evidence | raw artifact text classified by pattern rules | operator-only or non-hydratable classes challenge ordinary hydration | satisfies | conservative masking for recognized secret shapes; credential-bearing output becomes non-hydratable; unit tests with canaries; production safety membrane |
+| Curiosity selection and pressure handoff | [`runtime/curiosity.go`](../../runtime/curiosity.go), [`runtime/interpretation_judgments.go`](../../runtime/interpretation_judgments.go) | typed pressure, configured sources, source history | scorer/ranker/ruleset | salience and perception; read-only attention lane | advisory pressure + untrusted/fresh source observations | stranded handoff diagnostics; curiosity evidence remains advisory until corroborated | satisfies | selected candidates record salience judgments/uses; skip ambiguous principal, backoff, diagnose stranded handoffs; unit tests; experimental/disabled by default |
 | Telegram media and callback routing | [`telegram/client_media.go`](../../telegram/client_media.go), [`internal/telegramcommands`](../../internal/telegramcommands), [`internal/telegramdecision`](../../internal/telegramdecision) | external Telegram payloads | parser + ruleset | control flow and presentation: route media, callbacks, review decisions | external payload + durable callback/projection state | stale callbacks fail closed; operator disambiguation for ambiguous routing | satisfies | durable accepted/parked/terminal state; unit/integration tests; production |
 | Outbound media classification | [`runtime/outbound_media.go`](../../runtime/outbound_media.go) | reply paths and MIME hints | recognizer/ruleset | presentation only | file containment + MIME/path hints | none as authority; unsafe/unsupported media is dropped | not applicable | drop unsafe/unsupported media; containment is structural; unit tests; production |
-| Operation phase gates | [`runtime/operation_phase_gate.go`](../../runtime/operation_phase_gate.go), [`runtime/continuation_operation_contract.go`](../../runtime/continuation_operation_contract.go) | typed phase state plus reason codes | compiler/ruleset | authority narrowing and presentation: approval gate level/reason | durable phase state + authority reason codes | repair/block events become challenge evidence for stale or contradictory phase authority | partial | conservative gate on missing or contradictory phase authority; unit tests; production |
-| Boundary attack, trajectory, and scenario-generator eval oracles | [`runtime/eval_boundary_attack.go`](../../runtime/eval_boundary_attack.go), [`runtime/eval_trajectory.go`](../../runtime/eval_trajectory.go) | synthetic/live transcripts, scenario generator output, execution events | recognizer + oracle rules | release-gate evidence only | replayed trace/eval fixture, not runtime truth; generator assumptions are lower ground than external benchmark traces and incidents | eval replay can challenge release claims and classifier versions; generator blind spots require benchmark adapters and incident-derived fixtures | partial | conservative findings; not runtime enforcement; deterministic and stochastic evals; release gate candidate; generator coverage remains audited debt |
+| Operation phase gates | [`runtime/operation_phase_gate.go`](../../runtime/operation_phase_gate.go), [`runtime/continuation_operation_contract.go`](../../runtime/continuation_operation_contract.go) | typed phase state plus reason codes | compiler/ruleset | authority narrowing and presentation: approval gate level/reason | durable phase state + authority reason codes | repair/block events become challenge evidence for stale or contradictory phase authority | satisfies | conservative gate on missing or contradictory phase authority; unit tests; production |
+| Boundary attack, trajectory, and scenario-generator eval oracles | [`runtime/eval_boundary_attack.go`](../../runtime/eval_boundary_attack.go), [`runtime/eval_trajectory.go`](../../runtime/eval_trajectory.go) | synthetic/live transcripts, scenario generator output, execution events | recognizer + oracle rules | release-gate evidence only | replayed trace/eval fixture, not runtime truth; generator assumptions are lower ground than external benchmark traces and incidents | eval replay challenges release claims and classifier versions; generator blind spots require incident-derived fixtures | satisfies | conservative findings; not runtime enforcement; deterministic and stochastic evals; release gate candidate |
 | Model/role routing | [`docs/architecture/prompt-model-map.md`](prompt-model-map.md), runtime model-slot code | typed route/slot config | ruleset | cost/quality selection only | operator config + documented defaults | operator override and bakeoff replay | not applicable | fallback chain; unit tests + live bakeoffs; production |
-
-Seed rows still needed before this can become a complete interpretation map:
-
-- effect-outcome verification and reconciliation;
-- tool-input parsing and repair;
-- capability-grant and principal matching;
-- path and sandbox containment;
-- provider error and retry classification;
-- operation completion and objective derivation;
-- continuation supersession and projection validity.
 
 End-to-end readiness examples:
 
 | Slice | Local status | End-to-end readiness | Dependency note |
 | --- | --- | --- | --- |
-| Shell execution | shell planner, effect authorization, and exec use commitment are locally bounded | implemented kernel slice | exec dispatch records one immutable shell-effect judgment, one local use, and one effect attempt before dispatch, with invocation identity; proposal rendering still has presentation-specific heuristics |
-| Recovery/re-entry | arbitration and recommendation surfaces are locally bounded | partial implementation | re-entry presentation records selection judgments and uses; stale recovery suppressions record current-intent arbitration judgments and recovery-selection uses; broader operation-compatibility qualification remains a follow-on adapter |
-| Evidence hydration | scoped hydration is locally bounded | implemented kernel slice | hydration records selected/missing evidence judgments before model-context admission uses; broader memory-governor admission remains debt |
+| Shell execution | shell planner, effect authorization, and exec use commitment are locally bounded | ready | exec dispatch records one immutable shell-effect judgment, one local use, and one effect attempt before dispatch, with invocation identity |
+| Recovery/re-entry | arbitration and recommendation surfaces are locally bounded | ready | re-entry presentation, stale recovery suppressions, and budget-recovery scopes record recovery-selection judgments and uses |
+| Evidence/perception | scoped hydration, perception budget, and adaptive recall are locally bounded | ready | hydration, perception-budget, and adaptive-recall admissions record selected/missing evidence or salience judgments before model-context admission uses |
+| Presentation | material floor and constitution checks are locally bounded | ready | material-floor interpretation and constitution repair/fallback decisions record presentation judgments and uses |
 
 ## Implementation Payoff
 

@@ -20,6 +20,7 @@ import (
 func (r *Runtime) applyTurnConstitution(
 	ctx context.Context,
 	key session.SessionKey,
+	turnRunID int64,
 	scope sandbox.Scope,
 	channel string,
 	principalRole string,
@@ -43,6 +44,9 @@ func (r *Runtime) applyTurnConstitution(
 		if audit != nil {
 			audit.RecordViolations(violations)
 			audit.RecordExecutionClaimFindings(adjudication.Findings)
+		}
+		if err := r.recordConstitutionJudgmentUse(key, turnRunID, "execution_claim_adjudication", violations, time.Now().UTC()); err != nil {
+			r.recordExecutionEvent(key, core.ExecutionEventDeliveryFinalFailed, "constitution", "judgment_record_failed", map[string]any{"error": trimError(err.Error())}, time.Now().UTC())
 		}
 		if repaired, ok := r.repairTurnReply(ctx, scope, channel, principalRole, userText, currentFaceModel, faceAwareness, materialFloor, floorText, trimmedReply, media, violations, []core.RuntimeAdjudication{adjudication.RuntimeAdjudication("repair_requested")}, audit); ok {
 			repairedAdjudication := r.adjudicateFinalReplyExecutionClaimsWithContext(ctx, key, repaired)
@@ -108,6 +112,9 @@ func (r *Runtime) applyTurnConstitution(
 		RecordViolations: func(violations []ConstitutionViolation) {
 			if audit != nil {
 				audit.RecordViolations(violations)
+			}
+			if err := r.recordConstitutionJudgmentUse(key, turnRunID, "final_reply", violations, time.Now().UTC()); err != nil {
+				r.recordExecutionEvent(key, core.ExecutionEventDeliveryFinalFailed, "constitution", "judgment_record_failed", map[string]any{"error": trimError(err.Error())}, time.Now().UTC())
 			}
 		},
 	})

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
@@ -170,6 +171,7 @@ func (c *maintenanceTurnCoordinator) Execute(ctx context.Context, req turn.Gover
 
 	materialFloor := core.MaterialPacket{}
 	floorText := ""
+	materialStructured := false
 	switch c.species {
 	case maintenanceTurnRecovery:
 		floorText = strings.TrimSpace(turnResult.Text)
@@ -177,7 +179,10 @@ func (c *maintenanceTurnCoordinator) Execute(ctx context.Context, req turn.Gover
 			floorText = fallbackRecoverySummary(c.recoveryRuns)
 		}
 	default:
-		materialFloor, floorText, _ = pipeline.BuildFloorFromGovernor(turnResult.Text, c.useMaterialFloor)
+		materialFloor, floorText, materialStructured = pipeline.BuildFloorFromGovernor(turnResult.Text, c.useMaterialFloor)
+		if err := c.runtime.recordMaterialFloorJudgmentUse(c.key, c.lastRunID, turnResult.Text, materialFloor, floorText, materialStructured, time.Now().UTC()); err != nil {
+			return nil, err
+		}
 	}
 
 	floorMetadata := ""

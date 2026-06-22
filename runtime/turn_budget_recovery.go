@@ -306,11 +306,16 @@ func (r *Runtime) turnBudgetRecoveryScheduledAttempts(key session.SessionKey, sc
 	return count, nil
 }
 
-func (r *Runtime) turnBudgetRecoveryScope(key session.SessionKey, msg core.InboundMessage, result *turn.Result) (string, map[string]any) {
+func (r *Runtime) turnBudgetRecoveryScope(key session.SessionKey, msg core.InboundMessage, result *turn.Result) (scope string, payload map[string]any) {
 	opState := session.OperationState{}
 	if result != nil {
 		opState = session.NormalizeOperationState(result.OperationState)
 	}
+	defer func() {
+		if err := r.recordBudgetRecoveryScopeJudgmentUse(key, msg, opState, scope, payload, time.Now().UTC()); err != nil {
+			log.Printf("WARN record budget recovery scope judgment failed chat_id=%d err=%v", key.ChatID, err)
+		}
+	}()
 	if !operationStateRecoverableForBudgetRecovery(opState) && r != nil && r.store != nil {
 		if _, stored, exists, err := r.store.PlanAndOperationStateIfExists(key); err == nil && exists {
 			opState = session.NormalizeOperationState(stored)

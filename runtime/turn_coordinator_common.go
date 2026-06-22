@@ -67,6 +67,7 @@ type turnCoordinatorRenderInput struct {
 	Scope                 sandbox.Scope
 	Msg                   core.InboundMessage
 	Key                   session.SessionKey
+	RunID                 int64
 	Channel               string
 	PrincipalRole         string
 	LastGovernor          *turn.GovernorResult
@@ -102,6 +103,7 @@ func (r *Runtime) renderTurnCoordinatorFace(ctx context.Context, input turnCoord
 		Ctx:              ctx,
 		Scope:            input.Scope,
 		Key:              input.Key,
+		TurnRunID:        input.RunID,
 		Msg:              input.Msg,
 		Channel:          input.Channel,
 		PrincipalRole:    input.PrincipalRole,
@@ -322,7 +324,7 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		systemCount = 0
 	}
 	extraSystemMessages := append([]agent.Message(nil), input.ExtraSystemMessages...)
-	if recall := r.maybeAggressivePrefetchSystemMessage(ctx, input.Scope, runKind, input.Prepared.LedgerText, time.Now().UTC()); strings.TrimSpace(recall) != "" {
+	if recall := r.maybeAggressivePrefetchSystemMessage(ctx, input.Key, monitor.runID, input.Scope, runKind, input.Prepared.LedgerText, time.Now().UTC()); strings.TrimSpace(recall) != "" {
 		extraSystemMessages = append(extraSystemMessages, agent.Message{Role: "system", Content: recall})
 	}
 
@@ -348,6 +350,9 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		UserText:      input.Prepared.UserText,
 		ArtifactRefs:  input.Prepared.ArtifactRefs,
 	})
+	if err := r.recordPerceptionBudgetJudgmentUse(input.Key, monitor.runID, perceptionBudget, time.Now().UTC()); err != nil {
+		return turnCoordinatorExecuteOutput{}, err
+	}
 	providerAttemptPayload := mergePerceptionBudgetPayload(map[string]any{
 		"backend":       strings.TrimSpace(input.Exec.Backend),
 		"provider":      strings.TrimSpace(input.Exec.ProviderName),
@@ -438,8 +443,12 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	mediaOnlyReply := len(turnResult.Media) > 0 && strings.TrimSpace(turnResult.Text) == ""
 	materialFloor := core.MaterialPacket{}
 	floorText := ""
+	materialStructured := false
 	if !mediaOnlyReply {
-		materialFloor, floorText, _ = pipeline.BuildFloorFromGovernor(turnResult.Text, input.UseMaterialFloor)
+		materialFloor, floorText, materialStructured = pipeline.BuildFloorFromGovernor(turnResult.Text, input.UseMaterialFloor)
+		if err := r.recordMaterialFloorJudgmentUse(input.Key, monitor.runID, turnResult.Text, materialFloor, floorText, materialStructured, time.Now().UTC()); err != nil {
+			return turnCoordinatorExecuteOutput{}, err
+		}
 	}
 	floorMetadataState := input.HiddenInputs.Metadata()
 	floorMetadataState.Artifacts = append(floorMetadataState.Artifacts, input.Prepared.ArtifactRefs...)

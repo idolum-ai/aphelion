@@ -26,6 +26,7 @@ type turnRenderInput struct {
 	Ctx              context.Context
 	Scope            sandbox.Scope
 	Key              session.SessionKey
+	TurnRunID        int64
 	Msg              core.InboundMessage
 	Channel          string
 	PrincipalRole    string
@@ -273,6 +274,7 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 	output.ReplyText = r.applyTurnConstitution(
 		input.Ctx,
 		input.Key,
+		input.TurnRunID,
 		input.Scope,
 		input.Channel,
 		input.PrincipalRole,

@@ -114,6 +114,7 @@ func (c *durableGroupTurnCoordinator) Render(ctx context.Context, req turn.FaceR
 		Scope:                 c.scope,
 		Msg:                   c.msg,
 		Key:                   c.key,
+		RunID:                 c.lastRunID,
 		Channel:               c.requestChannel(),
 		PrincipalRole:         c.principalRoleOrLiveRole(),
 		LastGovernor:          c.lastGovernor,

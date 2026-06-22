@@ -268,6 +268,7 @@ func TestApplyTurnConstitutionRepairsUngroundedExecutionClaimWithoutBanner(t *te
 	finalText := rt.applyTurnConstitution(
 		context.Background(),
 		key,
+		0,
 		scope,
 		"telegram",
 		"admin",
@@ -340,6 +341,7 @@ func TestApplyTurnConstitutionRepairsUnsupportedContinuationClaim(t *testing.T) 
 	finalText := rt.applyTurnConstitution(
 		context.Background(),
 		key,
+		0,
 		scope,
 		"telegram",
 		"admin",
@@ -419,6 +421,7 @@ func TestApplyTurnConstitutionAllowsContinuationClaimWithActiveLease(t *testing.
 	finalText := rt.applyTurnConstitution(
 		context.Background(),
 		key,
+		0,
 		scope,
 		"telegram",
 		"admin",

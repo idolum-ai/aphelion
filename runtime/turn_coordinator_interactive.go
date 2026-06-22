@@ -111,6 +111,7 @@ func (c *interactiveTurnCoordinator) Render(ctx context.Context, req turn.FaceRe
 		Scope:                 c.scope,
 		Msg:                   c.msg,
 		Key:                   c.key,
+		RunID:                 c.state.turnRunID(),
 		Channel:               c.requestChannel(),
 		PrincipalRole:         c.principalRoleOrActor(),
 		LastGovernor:          c.state.governor(),

@@ -68,7 +68,7 @@ func (r *Runtime) aggressiveFlushEnabled() bool {
 	return r.cfg.Memory.Aggressive.FlushOnSessionBoundary
 }
 
-func (r *Runtime) maybeAggressivePrefetchSystemMessage(ctx context.Context, scope sandbox.Scope, runKind session.TurnRunKind, query string, now time.Time) string {
+func (r *Runtime) maybeAggressivePrefetchSystemMessage(ctx context.Context, key session.SessionKey, runID int64, scope sandbox.Scope, runKind session.TurnRunKind, query string, now time.Time) string {
 	if !r.aggressivePrefetchEnabled() {
 		return ""
 	}
@@ -91,6 +91,10 @@ func (r *Runtime) maybeAggressivePrefetchSystemMessage(ctx context.Context, scop
 		Now:         now,
 	})
 	if err != nil || len(hits) == 0 {
+		return ""
+	}
+	if err := r.recordAdaptiveRecallJudgmentUse(key, runID, plan, hits, now); err != nil {
+		log.Printf("WARN record adaptive recall judgment failed chat_id=%d run_id=%d err=%v", key.ChatID, runID, err)
 		return ""
 	}
 	return renderAggressiveRecallBlock(hits, plan)
