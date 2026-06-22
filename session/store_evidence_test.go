@@ -193,6 +193,16 @@ func TestEvidenceHydrationRecordsModelContextAdmissionUse(t *testing.T) {
 	if use.Consequence != JudgmentUseConsequenceModelContextAdmission || use.QualificationStatus != JudgmentUseQualificationQualified {
 		t.Fatalf("use = %#v, want qualified model context admission", use)
 	}
+	judgments, err := store.JudgmentsByKind(key, "evidence_hydration_selection", 10)
+	if err != nil {
+		t.Fatalf("JudgmentsByKind(evidence_hydration_selection) err = %v", err)
+	}
+	if len(judgments) != 1 {
+		t.Fatalf("evidence hydration judgments = %#v, want one selection judgment", judgments)
+	}
+	if len(use.JudgmentRefs) == 0 || use.JudgmentRefs[0] != JudgmentRef(judgments[0].ID) {
+		t.Fatalf("judgment refs = %#v, want evidence hydration judgment ref %q", use.JudgmentRefs, JudgmentRef(judgments[0].ID))
+	}
 	roles := map[string]string{}
 	for _, dep := range use.DependencyRefs {
 		roles[dep.Ref] = dep.Role

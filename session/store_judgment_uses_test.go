@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestJudgmentUseUpsertIsIdempotentAndQueryable(t *testing.T) {
+func TestJudgmentUseCommitmentIsImmutableAndQueryable(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSQLiteStore(t)
@@ -33,21 +33,25 @@ func TestJudgmentUseUpsertIsIdempotentAndQueryable(t *testing.T) {
 		CreatedAt:            now,
 		UpdatedAt:            now,
 	}
-	first, err := store.UpsertJudgmentUse(input)
+	first, err := store.RecordJudgmentUseCommitment(input)
 	if err != nil {
-		t.Fatalf("UpsertJudgmentUse(first) err = %v", err)
+		t.Fatalf("RecordJudgmentUseCommitment(first) err = %v", err)
 	}
-	input.ReconciliationStatus = JudgmentUseReconciliationPending
-	input.Reason = "verification required"
-	second, err := store.UpsertJudgmentUse(input)
+	input.Reason = "same commitment replay"
+	second, err := store.RecordJudgmentUseCommitment(input)
 	if err != nil {
-		t.Fatalf("UpsertJudgmentUse(second) err = %v", err)
+		t.Fatalf("RecordJudgmentUseCommitment(replay) err = %v", err)
 	}
 	if first.ID != second.ID {
 		t.Fatalf("judgment use id changed from %q to %q", first.ID, second.ID)
 	}
-	if second.ReconciliationStatus != JudgmentUseReconciliationPending {
-		t.Fatalf("reconciliation status = %q, want pending", second.ReconciliationStatus)
+	input.ID = first.ID
+	input.PolicyRef = "different_policy_v2"
+	if _, err := store.RecordJudgmentUseCommitment(input); err == nil || !strings.Contains(err.Error(), "immutable commitment mismatch") {
+		t.Fatalf("RecordJudgmentUseCommitment(mutated) err = %v, want immutable mismatch", err)
+	}
+	if err := store.MarkJudgmentUsesForResultRefReconciliation(JudgmentUseRef("effect_attempt", "eff-test"), JudgmentUseReconciliationPending, "verification required", now.Add(time.Second)); err != nil {
+		t.Fatalf("MarkJudgmentUsesForResultRefReconciliation() err = %v", err)
 	}
 	uses, err := store.JudgmentUsesByResultRef(JudgmentUseRef("effect_attempt", "eff-test"), 10)
 	if err != nil {
@@ -55,6 +59,9 @@ func TestJudgmentUseUpsertIsIdempotentAndQueryable(t *testing.T) {
 	}
 	if len(uses) != 1 || uses[0].ID != first.ID {
 		t.Fatalf("uses = %#v, want single upserted record", uses)
+	}
+	if uses[0].ReconciliationStatus != JudgmentUseReconciliationPending {
+		t.Fatalf("reconciliation status = %q, want pending", uses[0].ReconciliationStatus)
 	}
 }
 

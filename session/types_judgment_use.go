@@ -22,6 +22,7 @@ const (
 	JudgmentUseConsequenceCompletion            JudgmentUseConsequence = "completion"
 	JudgmentUseConsequenceDurableState          JudgmentUseConsequence = "durable_state"
 	JudgmentUseConsequenceDiagnostic            JudgmentUseConsequence = "diagnostic"
+	JudgmentUseConsequenceControlFlow           JudgmentUseConsequence = "control_flow"
 )
 
 type JudgmentUseQualificationStatus string
@@ -176,7 +177,8 @@ func NormalizeJudgmentUseConsequence(value JudgmentUseConsequence) JudgmentUseCo
 		JudgmentUseConsequenceRecoverySelection,
 		JudgmentUseConsequenceCompletion,
 		JudgmentUseConsequenceDurableState,
-		JudgmentUseConsequenceDiagnostic:
+		JudgmentUseConsequenceDiagnostic,
+		JudgmentUseConsequenceControlFlow:
 		return JudgmentUseConsequence(judgmentUseToken(string(value)))
 	default:
 		return ""
@@ -222,6 +224,11 @@ func JudgmentUseDependencySnapshot(judgmentRefs []string, dependencyRefs []Judgm
 func judgmentUseID(input JudgmentUseInput) string {
 	seed := strings.Join([]string{
 		input.SessionID,
+		fmt.Sprintf("%d", input.TurnRunID),
+		input.OperationID,
+		input.PhaseID,
+		input.LeaseID,
+		input.ProposalID,
 		input.ConsumerID,
 		string(input.Consequence),
 		input.ResultRef,

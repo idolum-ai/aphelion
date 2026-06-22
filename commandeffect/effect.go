@@ -270,10 +270,23 @@ func effectRank(kind Kind) int {
 
 func BoundaryForCommand(command string) (Boundary, bool) {
 	plan := PlanCommand(command)
+	return BoundaryForPlan(plan)
+}
+
+func BoundaryForPlan(plan EffectPlan) (Boundary, bool) {
 	if plan.Dynamic || plan.MultipleAuthorities {
 		return Boundary{}, false
 	}
-	effect := Classify(command)
+	effect := Effect{Kind: KindReadOnlyInspection, Reason: "read-only inspection"}
+	if len(plan.Effects) == 1 {
+		effect = plan.Effects[0]
+	} else {
+		for _, candidate := range plan.Effects {
+			if effectDominates(candidate, effect) {
+				effect = candidate
+			}
+		}
+	}
 	switch effect.Kind {
 	case KindRepoHistory:
 		switch effect.Reason {

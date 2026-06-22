@@ -47,6 +47,13 @@ type CommandRequest struct {
 	Now     time.Time
 }
 
+type PlanRequest struct {
+	State   session.ContinuationState
+	Command string
+	Plan    commandeffect.EffectPlan
+	Now     time.Time
+}
+
 type WorkModeRequest struct {
 	State    session.ContinuationState
 	Mode     WorkMode
@@ -57,6 +64,16 @@ type WorkModeRequest struct {
 }
 
 func AuthorizeCommand(req CommandRequest) Decision {
+	plan := commandeffect.PlanCommand(req.Command)
+	return AuthorizePlan(PlanRequest{
+		State:   req.State,
+		Command: req.Command,
+		Plan:    plan,
+		Now:     req.Now,
+	})
+}
+
+func AuthorizePlan(req PlanRequest) Decision {
 	now := req.Now
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -67,13 +84,18 @@ func AuthorizeCommand(req CommandRequest) Decision {
 		return decision
 	}
 	invalidContract := decision.Reason == reasonInvalidAuthorityContract
-	plan := commandeffect.PlanCommand(req.Command)
-	effect := commandeffect.Classify(req.Command)
+	plan := req.Plan
+	if strings.TrimSpace(plan.Command) == "" && len(plan.Effects) == 0 {
+		plan = commandeffect.PlanCommand(req.Command)
+	}
+	effect := commandeffect.Effect{Kind: commandeffect.KindReadOnlyInspection, Reason: "read-only inspection"}
 	if len(plan.Effects) == 1 {
 		effect = plan.Effects[0]
+	} else if plan.Dynamic || plan.MultipleAuthorities {
+		effect = commandeffect.Effect{Kind: commandeffect.KindUnknown, Reason: "effect plan requires typed handling", SideEffects: true}
 	}
 	decision.EffectKind = string(effect.Kind)
-	boundary, boundaryOK := commandeffect.BoundaryForCommand(req.Command)
+	boundary, boundaryOK := commandeffect.BoundaryForPlan(plan)
 	if invalidContract {
 		if boundaryOK {
 			decision.Boundary = true

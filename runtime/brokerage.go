@@ -4,6 +4,9 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -71,6 +74,85 @@ func parseBrokerageRatification(text string) (turnBrokerage, error) {
 		RatifiedExecutionContract: &contract,
 		RatifiedSteps:             append([]string(nil), parsed.RatifiedSteps...),
 	}, nil
+}
+
+func (r *Runtime) recordBrokerageControlFlowJudgment(key session.SessionKey, brokerage turnBrokerage, now time.Time) error {
+	if r == nil || r.store == nil || strings.TrimSpace(brokerage.IdolumNote) == "" {
+		return nil
+	}
+	payload := map[string]any{
+		"phase":                        brokerage.Phase,
+		"ratification":                 brokerage.Ratification,
+		"signal_judgment":              brokerage.SignalJudgment,
+		"suggested_execution_contract": brokerage.SuggestedExecutionContract,
+		"ratified_execution_contract":  brokerage.RatifiedExecutionContract,
+		"ratified_steps":               brokerage.RatifiedSteps,
+		"proposal_fingerprint":         brokerageProposalFingerprint(brokerage),
+		"contract_fingerprint":         brokerageContractFingerprint(brokerage),
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode brokerage control-flow judgment: %w", err)
+	}
+	completeness := session.JudgmentCompletenessComplete
+	var unknowns []session.UnknownPredicate
+	if strings.TrimSpace(brokerage.Ratification) == "" || brokerage.RatifiedExecutionContract == nil {
+		completeness = session.JudgmentCompletenessPartial
+		unknowns = append(unknowns, session.UnknownPredicate{Kind: "incomplete_brokerage_contract", Reason: "brokerage did not produce a complete ratified execution contract"})
+	}
+	judgment, err := r.store.RecordJudgment(session.JudgmentInput{
+		Key:                key,
+		Kind:               "brokerage_control_flow",
+		SchemaVersion:      "v1",
+		SubjectKey:         "brokerage:" + brokerageControlFlowHash(brokerage),
+		ClaimKey:           "turn_control_flow_contract",
+		InterpreterID:      "runtime.brokerage_convergence",
+		InterpreterVersion: "v1",
+		InputRefs:          []string{session.JudgmentUseHashRef("brokerage_note", brokerage.IdolumNote)},
+		InputHash:          brokerageControlFlowHash(brokerage),
+		ResultJSON:         string(raw),
+		Completeness:       completeness,
+		Unknowns:           unknowns,
+		DependencyRefs: []session.JudgmentDependencyRef{
+			{Kind: "brokerage_proposal", Ref: session.JudgmentUseHashRef("text", brokerage.IdolumNote), Role: "support"},
+		},
+		SourceFaultDomains: []string{"model_brokerage", "pipeline_brokerage_parser_v1"},
+		Sensitivity:        "brokerage_metadata",
+		AsOf:               now,
+		CreatedAt:          now,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = r.store.RecordJudgmentUseCommitment(session.JudgmentUseInput{
+		Key:                  key,
+		ConsumerID:           "runtime.brokerage.control_flow",
+		Consequence:          session.JudgmentUseConsequenceControlFlow,
+		JudgmentRefs:         []string{session.JudgmentRef(judgment.ID)},
+		DependencyRefs:       judgment.DependencyRefs,
+		PolicyRef:            "brokerage_control_flow_v1",
+		ResultRef:            session.JudgmentUseHashRef("brokerage_control_flow", brokerageControlFlowHash(brokerage)),
+		Irreversible:         false,
+		QualificationStatus:  session.JudgmentUseQualificationQualified,
+		ReconciliationStatus: session.JudgmentUseReconciliationNotRequired,
+		Reason:               "brokerage control-flow contract selected",
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	})
+	return err
+}
+
+func brokerageControlFlowHash(brokerage turnBrokerage) string {
+	seed := strings.Join([]string{
+		brokerage.IdolumNote,
+		brokerage.Ratification,
+		brokerage.SignalJudgment,
+		brokerageProposalFingerprint(brokerage),
+		brokerageContractFingerprint(brokerage),
+		strings.Join(brokerage.RatifiedSteps, "\x00"),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(seed))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func (r *Runtime) ratifyTurnBrokerage(

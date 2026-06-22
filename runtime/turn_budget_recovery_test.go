@@ -591,6 +591,26 @@ func TestBudgetRecoveryScopeUsesCurrentRequestWhenStoredOperationConflictsWithWo
 	if !budgetRecoveryEventPayloadContains(events, core.ExecutionEventRecoveryCandidateSuppressed, "reason", recoveryCandidateReasonStaleVsWorkingObjective) {
 		t.Fatalf("events = %#v, want stale working-objective suppression reason", events)
 	}
+	judgments, err := store.JudgmentsByKind(key, "recovery_candidate_arbitration", 10)
+	if err != nil {
+		t.Fatalf("JudgmentsByKind(recovery_candidate_arbitration) err = %v", err)
+	}
+	if len(judgments) != 1 {
+		t.Fatalf("judgments len = %d, want 1: %#v", len(judgments), judgments)
+	}
+	if judgments[0].OperationID != "stale-pr-review" || judgments[0].Completeness != session.JudgmentCompletenessComplete {
+		t.Fatalf("judgment = %#v, want complete stale-pr-review arbitration", judgments[0])
+	}
+	uses, err := store.JudgmentUsesByJudgmentRef(judgments[0].ID, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesByJudgmentRef() err = %v", err)
+	}
+	if len(uses) != 1 {
+		t.Fatalf("uses len = %d, want 1: %#v", len(uses), uses)
+	}
+	if uses[0].Consequence != session.JudgmentUseConsequenceRecoverySelection || uses[0].ConsumerID != "runtime.recovery_candidate_arbitration" {
+		t.Fatalf("use = %#v, want recovery-selection arbitration use", uses[0])
+	}
 }
 
 func TestBudgetRecoveryScopeAllowsExplicitResumeOfStoredOperation(t *testing.T) {

@@ -45,6 +45,10 @@ type toolObserver interface {
 	ToolFinished(ctx context.Context, name string, input json.RawMessage, output string, err error)
 }
 
+type toolInvocationContextBinder interface {
+	ToolInvocationContext(ctx context.Context, name string, input json.RawMessage) context.Context
+}
+
 type observedToolRegistry struct {
 	base     agent.ToolRegistry
 	observer toolObserver
@@ -58,6 +62,9 @@ func (o *observedToolRegistry) Definitions() []agent.ToolDef {
 }
 
 func (o *observedToolRegistry) Execute(ctx context.Context, name string, input json.RawMessage) (string, error) {
+	if binder, ok := o.observer.(toolInvocationContextBinder); ok {
+		ctx = binder.ToolInvocationContext(ctx, name, input)
+	}
 	if o.observer != nil {
 		o.observer.ToolStarted(ctx, name, input)
 	}
@@ -85,11 +92,32 @@ type turnMonitor struct {
 	startedAt                time.Time
 	toolStartsMu             sync.Mutex
 	toolStarts               map[string][]time.Time
+	toolInvocationSeq        int64
 	ctx                      context.Context
 	cancelTurn               context.CancelFunc
 	stopRunActivityHeartbeat context.CancelFunc
 	ingressSurface           string
 	ingressUpdateID          int64
+}
+
+func (m *turnMonitor) ToolInvocationContext(ctx context.Context, _ string, _ json.RawMessage) context.Context {
+	if m == nil || m.runID <= 0 {
+		if ctx == nil {
+			return context.Background()
+		}
+		return ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.toolStartsMu.Lock()
+	m.toolInvocationSeq++
+	ordinal := m.toolInvocationSeq
+	m.toolStartsMu.Unlock()
+	return toolpkg.WithToolInvocationRef(ctx, toolpkg.ToolInvocationRef{
+		TurnRunID:    m.runID,
+		InvocationID: fmt.Sprintf("turn:%d:tool:%d", m.runID, ordinal),
+	})
 }
 
 func (r *Runtime) startTurnMonitor(ctx context.Context, key session.SessionKey, kind session.TurnRunKind, requestText string, progress *toolProgressReporter, audit *turnAuditRecorder, msg core.InboundMessage) (*turnMonitor, error) {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/effectauth"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -35,6 +36,15 @@ func ContinuationExecAuthorityDecisionForCommand(state session.ContinuationState
 	return effectauth.AuthorizeCommand(effectauth.CommandRequest{
 		State:   state,
 		Command: command,
+		Now:     now,
+	})
+}
+
+func ContinuationExecAuthorityDecisionForPlan(state session.ContinuationState, command string, plan commandeffect.EffectPlan, now time.Time) ContinuationExecAuthorityDecision {
+	return effectauth.AuthorizePlan(effectauth.PlanRequest{
+		State:   state,
+		Command: command,
+		Plan:    plan,
 		Now:     now,
 	})
 }

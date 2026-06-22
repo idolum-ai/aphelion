@@ -46,7 +46,7 @@ func (m *turnMonitor) ToolStarted(ctx context.Context, name string, input json.R
 	if effect := execEffectPayload(name, input); len(effect) > 0 {
 		payload["exec_effect"] = effect
 	}
-	m.recordExecEffectAttempt(name, input, session.EffectAttemptStatusAttempted, "", startedAt)
+	m.recordExecEffectAttempt(ctx, name, input, session.EffectAttemptStatusAttempted, "", startedAt)
 	m.runtime.recordExecutionEvent(m.key, core.ExecutionEventToolStarted, "tool", "started", payload, startedAt)
 	if m.progress != nil {
 		m.progress.ToolStarted(ctx, name, input)
@@ -122,14 +122,14 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 	} else if err != nil {
 		statusForAttempt = session.EffectAttemptStatusFailed
 	}
-	m.recordExecEffectAttempt(name, input, statusForAttempt, errorText, time.Now().UTC())
+	m.recordExecEffectAttempt(ctx, name, input, statusForAttempt, errorText, time.Now().UTC())
 	m.runtime.recordExecutionEvent(m.key, eventType, "tool", status, payload, time.Now().UTC())
 	if m.progress != nil {
 		m.progress.ToolFinished(ctx, name, err)
 	}
 }
 
-func (m *turnMonitor) recordExecEffectAttempt(name string, input json.RawMessage, status session.EffectAttemptStatus, errorText string, observedAt time.Time) {
+func (m *turnMonitor) recordExecEffectAttempt(ctx context.Context, name string, input json.RawMessage, status session.EffectAttemptStatus, errorText string, observedAt time.Time) {
 	if m == nil || m.runtime == nil || m.runtime.store == nil || m.runID == 0 {
 		return
 	}
@@ -145,6 +145,10 @@ func (m *turnMonitor) recordExecEffectAttempt(name string, input json.RawMessage
 	if observedAt.IsZero() {
 		observedAt = time.Now().UTC()
 	}
+	invocationRef := toolpkg.ToolInvocationRef{TurnRunID: m.runID, InvocationID: fmt.Sprintf("turn:%d:tool:observed", m.runID)}
+	if ref, ok := toolpkg.ToolInvocationRefFromContext(ctx); ok {
+		invocationRef = ref
+	}
 	boundaryKind := ""
 	if boundary, ok := commandeffect.BoundaryForCommand(rawCommand); ok {
 		boundaryKind = string(boundary.Kind)
@@ -155,9 +159,9 @@ func (m *turnMonitor) recordExecEffectAttempt(name string, input json.RawMessage
 		completedAt = observedAt
 	}
 	if _, err := m.runtime.store.UpsertEffectAttempt(session.EffectAttemptInput{
-		AttemptID:    session.EffectAttemptID(session.SessionIDForKey(m.key), 0, "exec_pre_dispatch:"+strings.TrimSpace(name), command),
+		AttemptID:    session.EffectAttemptID(session.SessionIDForKey(m.key), invocationRef.TurnRunID, strings.Join([]string{"exec_pre_dispatch", strings.TrimSpace(name), strings.TrimSpace(invocationRef.InvocationID)}, ":"), command),
 		Key:          m.key,
-		TurnRunID:    m.runID,
+		TurnRunID:    invocationRef.TurnRunID,
 		Executor:     "turn",
 		Tool:         strings.TrimSpace(name),
 		Command:      command,

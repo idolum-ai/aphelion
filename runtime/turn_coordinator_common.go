@@ -297,6 +297,9 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		)
 		extraUsage = addTokenUsage(extraUsage, usage)
 		brokerage = updated
+		if err := r.recordBrokerageControlFlowJudgment(input.Key, brokerage, time.Now().UTC()); err != nil {
+			return turnCoordinatorExecuteOutput{}, err
+		}
 		if brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.Ratification) == "accept" {
 			sess.PlanState = maybeSeedPlanFromBrokerage(sess.PlanState, brokerage)
 		}

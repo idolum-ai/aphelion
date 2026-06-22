@@ -3,6 +3,10 @@
 package runtime
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"log"
 	"strings"
 	"time"
 	"unicode"
@@ -260,6 +264,9 @@ func (r *Runtime) recordSuppressedRecoveryCandidate(key session.SessionKey, opSt
 	}
 	opState = session.NormalizeOperationState(opState)
 	r.recordExecutionEvent(key, core.ExecutionEventRecoveryCandidateSuppressed, "recovery", "suppressed", recoveryCandidateSuppressedPayload(opState, decision, surface), now.UTC())
+	if err := r.recordRecoveryCandidateArbitrationJudgmentUse(key, opState, decision, surface, now.UTC()); err != nil {
+		log.Printf("WARN record recovery candidate arbitration judgment failed chat_id=%d err=%v", key.ChatID, err)
+	}
 }
 
 func recoveryCandidateSuppressedPayload(opState session.OperationState, decision recoveryCandidateArbitration, surface string) map[string]any {
@@ -273,4 +280,124 @@ func recoveryCandidateSuppressedPayload(opState session.OperationState, decision
 		"candidate_objective": strings.TrimSpace(decision.CandidateObjective),
 		"request_text":        strings.TrimSpace(decision.RequestText),
 	}
+}
+
+func (r *Runtime) recordRecoveryCandidateArbitrationJudgmentUse(key session.SessionKey, opState session.OperationState, decision recoveryCandidateArbitration, surface string, now time.Time) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	opState = session.NormalizeOperationState(opState)
+	surface = strings.TrimSpace(surface)
+	payload := recoveryCandidateSuppressedPayload(opState, decision, surface)
+	payload["live"] = decision.Live
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	deps := recoveryCandidateArbitrationDependencyRefs(opState, decision, surface)
+	subject := recoveryCandidateArbitrationSubjectKey(opState, decision, surface)
+	judgment, err := r.store.RecordJudgment(session.JudgmentInput{
+		Key:                key,
+		OperationID:        strings.TrimSpace(opState.ID),
+		Kind:               "recovery_candidate_arbitration",
+		SchemaVersion:      "v1",
+		SubjectKey:         subject,
+		ClaimKey:           "recovery_candidate_eligibility",
+		InterpreterID:      "runtime.recovery_candidate_arbitration",
+		InterpreterVersion: "v1",
+		InputRefs:          recoveryCandidateArbitrationInputRefs(opState, decision),
+		InputHash:          recoveryCandidateArbitrationHash(opState, decision, surface),
+		ResultJSON:         string(raw),
+		Completeness:       session.JudgmentCompletenessComplete,
+		DependencyRefs:     deps,
+		SourceFaultDomains: []string{"operation_state", "working_objective", "operator_message", "runtime_recovery_arbitration_v1"},
+		Sensitivity:        "recovery_metadata",
+		AsOf:               now,
+		CreatedAt:          now,
+	})
+	if err != nil {
+		return err
+	}
+	judgmentRefs := []string{session.JudgmentRef(judgment.ID)}
+	if strings.TrimSpace(opState.ID) != "" {
+		judgmentRefs = append(judgmentRefs, session.JudgmentUseRef("operation_state", opState.ID))
+	}
+	_, err = r.store.RecordJudgmentUseCommitment(session.JudgmentUseInput{
+		Key:                  key,
+		OperationID:          strings.TrimSpace(opState.ID),
+		ConsumerID:           "runtime.recovery_candidate_arbitration",
+		Consequence:          session.JudgmentUseConsequenceRecoverySelection,
+		JudgmentRefs:         judgmentRefs,
+		DependencyRefs:       deps,
+		PolicyRef:            "recovery_candidate_arbitration_v1",
+		ResultRef:            session.JudgmentUseHashRef("recovery_candidate", subject+"|"+surface),
+		Irreversible:         false,
+		QualificationStatus:  session.JudgmentUseQualificationQualified,
+		ReconciliationStatus: session.JudgmentUseReconciliationNotRequired,
+		Reason:               "stale recovery candidate suppressed in favor of current intent",
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	})
+	return err
+}
+
+func recoveryCandidateArbitrationDependencyRefs(opState session.OperationState, decision recoveryCandidateArbitration, surface string) []session.JudgmentDependencyRef {
+	var deps []session.JudgmentDependencyRef
+	if id := strings.TrimSpace(opState.ID); id != "" {
+		deps = append(deps, session.JudgmentDependencyRef{Kind: "operation_state", Ref: id, Role: "candidate"})
+	} else if objective := strings.TrimSpace(opState.Objective); objective != "" {
+		deps = append(deps, session.JudgmentDependencyRef{Kind: "operation_state", Ref: recoveryCandidateShortHash(objective), Role: "candidate"})
+	}
+	if working := strings.TrimSpace(decision.WorkingObjective); working != "" {
+		deps = append(deps, session.JudgmentDependencyRef{Kind: "working_objective", Ref: recoveryCandidateShortHash(working), Role: "current_intent"})
+	}
+	if request := strings.TrimSpace(decision.RequestText); request != "" {
+		deps = append(deps, session.JudgmentDependencyRef{Kind: "operator_message", Ref: recoveryCandidateShortHash(request), Role: "request"})
+	}
+	if surface = strings.TrimSpace(surface); surface != "" {
+		deps = append(deps, session.JudgmentDependencyRef{Kind: "recovery_surface", Ref: surface, Role: "consumer"})
+	}
+	return deps
+}
+
+func recoveryCandidateArbitrationInputRefs(opState session.OperationState, decision recoveryCandidateArbitration) []string {
+	var refs []string
+	if id := strings.TrimSpace(opState.ID); id != "" {
+		refs = append(refs, session.JudgmentUseRef("operation_state", id))
+	}
+	if working := strings.TrimSpace(decision.WorkingObjective); working != "" {
+		refs = append(refs, session.JudgmentUseHashRef("working_objective", working))
+	}
+	if request := strings.TrimSpace(decision.RequestText); request != "" {
+		refs = append(refs, session.JudgmentUseHashRef("operator_message", request))
+	}
+	return refs
+}
+
+func recoveryCandidateArbitrationSubjectKey(opState session.OperationState, decision recoveryCandidateArbitration, surface string) string {
+	parts := []string{"recovery_candidate", strings.TrimSpace(surface), strings.TrimSpace(opState.ID), strings.TrimSpace(opState.Objective), strings.TrimSpace(decision.WorkingObjective), strings.TrimSpace(decision.RequestText)}
+	return "recovery_candidate:" + recoveryCandidateShortHash(strings.Join(parts, "\x00"))
+}
+
+func recoveryCandidateArbitrationHash(opState session.OperationState, decision recoveryCandidateArbitration, surface string) string {
+	seed := strings.Join([]string{
+		strings.TrimSpace(surface),
+		strings.TrimSpace(opState.ID),
+		strings.TrimSpace(opState.Objective),
+		strings.TrimSpace(string(opState.Status)),
+		strings.TrimSpace(decision.Reason),
+		strings.TrimSpace(decision.WorkingObjective),
+		strings.TrimSpace(decision.CandidateObjective),
+		strings.TrimSpace(decision.RequestText),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(seed))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func recoveryCandidateShortHash(seed string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(seed)))
+	return hex.EncodeToString(sum[:])[:24]
 }
