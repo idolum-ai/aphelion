@@ -304,6 +304,10 @@ func codexApprovalJudgmentUseInput(req WorkRequest, key session.SessionKey, atte
 	if req.State.ActionProposal.ID != "" {
 		refs = append(refs, session.JudgmentDependencyRef{Kind: "proposal", Ref: req.State.ActionProposal.ID, Role: "qualifies"})
 	}
+	// Codex approvals are recorded inside the provider approval callback after
+	// effectauth has accepted the concrete provider request. Raw exec performs
+	// an additional local decorrelation gate because Aphelion is about to
+	// dispatch shell directly from an operator proposal.
 	return session.JudgmentUseInput{
 		Key:                  key,
 		OperationID:          firstNonEmptyContinuation(req.OperationID, req.Operation.ID),

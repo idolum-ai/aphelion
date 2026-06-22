@@ -381,7 +381,7 @@ func (r *Registry) recordExecPreDispatchAttempt(ctx context.Context, p principal
 	if rawCommand == "" {
 		return nil
 	}
-	effect := shellEffectPlanRepresentativeEffect(plan)
+	effect := commandeffect.RepresentativeEffect(plan)
 	if !effect.SideEffects {
 		return nil
 	}
@@ -504,28 +504,6 @@ func shellEffectPlanUnknowns(plan commandeffect.EffectPlan) []session.UnknownPre
 		}
 	}
 	return unknowns
-}
-
-func shellEffectPlanRepresentativeEffect(plan commandeffect.EffectPlan) commandeffect.Effect {
-	if plan.Dynamic {
-		return commandeffect.Effect{Kind: commandeffect.KindUnknown, Reason: plan.DynamicReason, SideEffects: true}
-	}
-	if plan.MultipleAuthorities {
-		return commandeffect.Effect{Kind: commandeffect.KindUnknown, Reason: "multiple authority effects require effect plan", SideEffects: true}
-	}
-	if len(plan.Effects) == 1 {
-		return plan.Effects[0]
-	}
-	out := commandeffect.Effect{Kind: commandeffect.KindReadOnlyInspection, Reason: "read-only inspection"}
-	for _, effect := range plan.Effects {
-		if effect.SideEffects {
-			return effect
-		}
-		if out.Action == "" && (effect.Action != "" || effect.Target != "" || effect.Subject != "") {
-			out = effect
-		}
-	}
-	return out
 }
 
 func execEffectAttemptEvidenceRefs(judgment session.Judgment) []string {

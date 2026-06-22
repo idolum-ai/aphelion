@@ -213,6 +213,14 @@ func proposalForCommandSegment(segment string) (session.OperationProposal, strin
 	if cmd == "systemctl" && shellTokensContainAny(tokens[cmdIdx+1:], "stop", "disable", "mask") {
 		return destructiveMutationPatterns[6].proposal, destructiveMutationPatterns[6].reason
 	}
+	rawLower := strings.ToLower(strings.TrimSpace(segment))
+	for _, pattern := range destructiveMutationPatterns {
+		if pattern.reason == "sql drop" || pattern.reason == "sql truncate" {
+			if pattern.re.MatchString(rawLower) {
+				return pattern.proposal, pattern.reason
+			}
+		}
+	}
 	for _, pattern := range destructiveMutationPatterns {
 		if pattern.reason == "pipe remote content to shell" {
 			continue
@@ -224,7 +232,7 @@ func proposalForCommandSegment(segment string) (session.OperationProposal, strin
 	if proposal, reason := boundaryProposalForCommand(segment); reason != "" {
 		return proposal, reason
 	}
-	if strings.Contains(lower, "delete from") && !strings.Contains(lower, " where ") {
+	if strings.Contains(rawLower, "delete from") && !strings.Contains(rawLower, " where ") {
 		return session.OperationProposal{
 			Kind:          "possible_database_delete_command",
 			Summary:       "Approve command with possible database delete pattern",

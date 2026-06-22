@@ -207,6 +207,122 @@ func TestExecRecordsDistinctJudgmentUsesForRepeatedInvocations(t *testing.T) {
 	}
 }
 
+func TestExecPreDispatchUsesCanonicalRepresentativeEffectForAudit(t *testing.T) {
+	t.Parallel()
+
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 88131, UserID: 1001}
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	command := "synthetic workspace write plus high impact storage"
+	ctx := WithToolInvocationRef(context.Background(), ToolInvocationRef{TurnRunID: 78, InvocationID: "mixed-impact"})
+	now := time.Now().UTC()
+	judgment, err := store.RecordJudgment(session.JudgmentInput{
+		Key:                key,
+		TurnRunID:          78,
+		Kind:               session.JudgmentKindShellEffectPlan,
+		SubjectKey:         "exec:" + session.EffectAttemptCommandHash(command),
+		ClaimKey:           "command_effect_plan",
+		InterpreterID:      "commandeffect.plan_command",
+		InputRefs:          []string{session.JudgmentUseRef("command_hash", session.EffectAttemptCommandHash(command))},
+		InputHash:          session.EffectAttemptCommandHash(command),
+		ResultJSON:         `{"effects":["workspace_mutation","high_impact_storage"]}`,
+		DependencyRefs:     []session.JudgmentDependencyRef{{Kind: "command_hash", Ref: session.EffectAttemptCommandHash(command), Role: "subject"}},
+		SourceFaultDomains: []string{"shell_text", "commandeffect_plan_v1"},
+		AsOf:               now,
+		CreatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("RecordJudgment() err = %v", err)
+	}
+	plan := commandeffect.EffectPlan{
+		Command: command,
+		Effects: []commandeffect.Effect{
+			{Kind: commandeffect.KindWorkspaceMutation, Reason: "workspace write", Command: "touch out", SideEffects: true},
+			{Kind: commandeffect.KindHighImpactStorage, Reason: "high-impact storage command", Command: "dd of=/dev/sda", SideEffects: true},
+		},
+	}
+	if got := commandeffect.RepresentativeEffect(plan); got.Kind != commandeffect.KindHighImpactStorage {
+		t.Fatalf("RepresentativeEffect() = %#v, want high-impact storage", got)
+	}
+	if err := registry.recordExecPreDispatchAttempt(
+		ctx,
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"exec",
+		command,
+		judgment,
+		plan,
+		execQualificationGround{Kind: "operator_approval", ProposalID: "proposal-mixed-impact", DecisionID: "decision-mixed-impact", Choice: "approve"},
+	); err != nil {
+		t.Fatalf("recordExecPreDispatchAttempt() err = %v", err)
+	}
+	attempts, err := store.EffectAttemptsByTurnRun(key, 78)
+	if err != nil {
+		t.Fatalf("EffectAttemptsByTurnRun() err = %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one pre-dispatch attempt", attempts)
+	}
+	if attempts[0].EffectKind != string(commandeffect.KindHighImpactStorage) {
+		t.Fatalf("attempt effect kind = %q, want canonical representative %q", attempts[0].EffectKind, commandeffect.KindHighImpactStorage)
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 1 {
+		t.Fatalf("judgment uses = %#v, want one execution use", uses)
+	}
+	use := uses[0]
+	if !use.Irreversible || use.QualificationStatus != session.JudgmentUseQualificationQualified {
+		t.Fatalf("use = %#v, want high-impact representative to require and record qualified irreversible use", use)
+	}
+	var sawHighImpact bool
+	for _, dep := range use.DependencyRefs {
+		if dep.Kind == "effect_kind" && dep.Ref == string(commandeffect.KindHighImpactStorage) {
+			sawHighImpact = true
+		}
+	}
+	if !sawHighImpact {
+		t.Fatalf("dependency refs = %#v, want high-impact effect kind qualification", use.DependencyRefs)
+	}
+}
+
+func TestIrreversibleRawExecEffectsHaveProposalGround(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{
+		"git push origin main",
+		"gh pr create --fill",
+		"ssh production.example uptime",
+		"systemctl restart aphelion",
+		"curl https://example.invalid",
+		"python -m pip install example-package",
+		"dd if=/dev/zero of=/tmp/disk.img bs=1 count=0",
+		"psql -c 'drop table users'",
+	} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			plan := commandeffect.PlanCommand(command)
+			if err := validateExecEffectPlanDispatchable(plan); err != nil {
+				t.Fatalf("PlanCommand(%q) produced non-dispatchable plan: %v", command, err)
+			}
+			effect := commandeffect.RepresentativeEffect(plan)
+			boundaryKind := ""
+			if boundary, ok := commandeffect.BoundaryForPlan(plan); ok {
+				boundaryKind = string(boundary.Kind)
+			}
+			if !execEffectRequiresPreCommitQualification(effect.Kind, effect.Reason, boundaryKind) {
+				t.Fatalf("command %q representative effect = %#v boundary=%q, want irreversible effect for this regression case", command, effect, boundaryKind)
+			}
+			proposal, reason := proposalForCommand(command)
+			if reason == "" || strings.TrimSpace(proposal.ID) != "" || strings.TrimSpace(proposal.Kind) == "" {
+				t.Fatalf("proposalForCommand(%q) = proposal=%#v reason=%q, want fresh operator proposal ground", command, proposal, reason)
+			}
+		})
+	}
+}
+
 func TestExecIrreversibleUseRequiresApprovedProposalGround(t *testing.T) {
 	t.Parallel()
 
