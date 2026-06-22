@@ -38,7 +38,11 @@ func TestRegistryDefinitionsHaveValidJSONParameters(t *testing.T) {
 func (s *stubExecApprover) ConfirmExec(_ context.Context, req ExecApprovalRequest) (ExecApprovalDecision, error) {
 	s.called++
 	s.request = req
-	return ExecApprovalDecision{Approved: s.approved}, nil
+	choice := "deny"
+	if s.approved {
+		choice = "approve"
+	}
+	return ExecApprovalDecision{Approved: s.approved, DecisionID: "decision-stub-exec", Choice: choice}, nil
 }
 
 func TestExecContinuationAuthorityRejectsAutoApprovalWidening(t *testing.T) {
@@ -246,17 +250,20 @@ func TestExecIrreversibleUseRequiresApprovedProposalGround(t *testing.T) {
 	if len(use.JudgmentRefs) == 0 || use.JudgmentRefs[0] != session.JudgmentRef(judgments[0].ID) {
 		t.Fatalf("judgment refs = %#v, want shell effect judgment ref %q", use.JudgmentRefs, session.JudgmentRef(judgments[0].ID))
 	}
-	var sawProposal, sawDecorrelated bool
+	var sawProposal, sawOperatorDecision, sawDecorrelated bool
 	for _, dep := range use.DependencyRefs {
 		if dep.Kind == "operation_proposal" && dep.Role == "qualifies" {
 			sawProposal = true
+		}
+		if dep.Kind == "operator_decision" && dep.Role == "qualifies" && dep.Scope == "approve" {
+			sawOperatorDecision = true
 		}
 		if dep.Kind == "decorrelation_decision" && dep.Role == "qualifies" && dep.Scope == "decorrelated" {
 			sawDecorrelated = true
 		}
 	}
-	if !sawProposal || !sawDecorrelated {
-		t.Fatalf("dependency refs = %#v, want approved proposal and decorrelation qualification refs", use.DependencyRefs)
+	if !sawProposal || !sawOperatorDecision || !sawDecorrelated {
+		t.Fatalf("dependency refs = %#v, want approved proposal, operator decision, and decorrelation qualification refs", use.DependencyRefs)
 	}
 }
 
@@ -294,7 +301,7 @@ func TestExecIrreversibleUseRejectsCorrelatedQualificationGround(t *testing.T) {
 		"git push origin main",
 		shellJudgment,
 		commandeffect.PlanCommand("git push origin main"),
-		"proposal-correlated",
+		execQualificationGround{Kind: "operator_approval", ProposalID: "proposal-correlated", DecisionID: "decision-correlated", Choice: "approve"},
 	)
 	if err == nil || !strings.Contains(err.Error(), "not decorrelated") {
 		t.Fatalf("recordExecPreDispatchAttempt() err = %v, want correlated qualification rejection", err)
@@ -305,6 +312,71 @@ func TestExecIrreversibleUseRejectsCorrelatedQualificationGround(t *testing.T) {
 	}
 	if len(uses) != 0 {
 		t.Fatalf("judgment uses = %#v, want no use for correlated qualification ground", uses)
+	}
+}
+
+func TestExecIrreversibleUseRejectsApprovalWithoutDecisionGround(t *testing.T) {
+	t.Parallel()
+
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8817, UserID: 1001}
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	ctx := WithToolInvocationRef(context.Background(), ToolInvocationRef{TurnRunID: 91, InvocationID: "push-incomplete-approval-ground"})
+	judgment, plan, err := registry.recordShellEffectJudgment(ctx, key, "git push origin main")
+	if err != nil {
+		t.Fatalf("recordShellEffectJudgment() err = %v", err)
+	}
+	err = registry.recordExecPreDispatchAttempt(
+		ctx,
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"exec",
+		"git push origin main",
+		judgment,
+		plan,
+		execQualificationGround{Kind: "operator_approval", ProposalID: "proposal-incomplete", Choice: "approve"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "approved operator decision") {
+		t.Fatalf("recordExecPreDispatchAttempt() err = %v, want incomplete approval ground rejection", err)
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 0 {
+		t.Fatalf("judgment uses = %#v, want no use for incomplete approval ground", uses)
+	}
+}
+
+func TestExecIrreversibleUseRejectsContinuationWithoutOperatorApprovalGround(t *testing.T) {
+	t.Parallel()
+
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8818, UserID: 1001}
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	ctx := WithToolInvocationRef(context.Background(), ToolInvocationRef{TurnRunID: 92, InvocationID: "push-continuation-without-approver"})
+	now := time.Now().UTC()
+	state := continuationExecAuthorityTestState("repo_publication", []string{"git_push", "report_push_evidence"}, false, now)
+	state.ContinuationLease.LeaseClass = session.ContinuationLeaseClassRepoPublication
+	state.ApprovedBy = 0
+	state.ContinuationLease.ApprovedBy = 0
+	ctx = WithContinuationExecAuthority(ctx, state)
+	judgment, plan, err := registry.recordShellEffectJudgment(ctx, key, "git push origin main")
+	if err != nil {
+		t.Fatalf("recordShellEffectJudgment() err = %v", err)
+	}
+	err = registry.recordExecPreDispatchAttempt(
+		ctx,
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"exec",
+		"git push origin main",
+		judgment,
+		plan,
+		execQualificationGround{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "operator-approved support ref") {
+		t.Fatalf("recordExecPreDispatchAttempt() err = %v, want missing continuation approver ground rejection", err)
 	}
 }
 
@@ -327,7 +399,7 @@ func TestExecIrreversibleUseWithoutGroundIsRejectedBeforeCommitment(t *testing.T
 		"git push origin main",
 		judgment,
 		plan,
-		"",
+		execQualificationGround{},
 	)
 	if err == nil {
 		t.Fatal("recordExecPreDispatchAttempt() err = nil, want ungrounded irreversible use rejected")

@@ -353,6 +353,7 @@ func TestAuthorizeCommandActiveEnvelopeRejectsUnboundedAndNonBoundarySideEffects
 	now := time.Now().UTC()
 	state := testContinuationState("read_only_review", []string{"read_only", "inspect_code", "report_findings"}, false, now)
 	for _, command := range []string{
+		"git status --short && mkdir out",
 		"touch generated.txt",
 		"cat README.md > generated.txt",
 		"curl -X POST https://example.com/hook",

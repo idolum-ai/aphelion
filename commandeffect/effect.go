@@ -73,19 +73,7 @@ type EffectPlan struct {
 
 func Classify(command string) Effect {
 	plan := PlanCommand(command)
-	if plan.Dynamic {
-		return Effect{Kind: KindUnknown, Reason: plan.DynamicReason, SideEffects: true}
-	}
-	if plan.MultipleAuthorities {
-		return Effect{Kind: KindUnknown, Reason: "multiple authority effects require effect plan", SideEffects: true}
-	}
-	out := Effect{Kind: KindReadOnlyInspection, Reason: "read-only inspection"}
-	for _, effect := range plan.Effects {
-		if effectDominates(effect, out) {
-			out = effect
-		}
-	}
-	return out
+	return RepresentativeEffect(plan)
 }
 
 func PlanCommand(command string) EffectPlan {
@@ -277,16 +265,7 @@ func BoundaryForPlan(plan EffectPlan) (Boundary, bool) {
 	if plan.Dynamic || plan.MultipleAuthorities {
 		return Boundary{}, false
 	}
-	effect := Effect{Kind: KindReadOnlyInspection, Reason: "read-only inspection"}
-	if len(plan.Effects) == 1 {
-		effect = plan.Effects[0]
-	} else {
-		for _, candidate := range plan.Effects {
-			if effectDominates(candidate, effect) {
-				effect = candidate
-			}
-		}
-	}
+	effect := RepresentativeEffect(plan)
 	switch effect.Kind {
 	case KindRepoHistory:
 		switch effect.Reason {
@@ -333,6 +312,22 @@ func BoundaryForPlan(plan EffectPlan) (Boundary, bool) {
 		}}, true
 	}
 	return Boundary{}, false
+}
+
+func RepresentativeEffect(plan EffectPlan) Effect {
+	if plan.Dynamic {
+		return Effect{Kind: KindUnknown, Reason: plan.DynamicReason, SideEffects: true}
+	}
+	if plan.MultipleAuthorities {
+		return Effect{Kind: KindUnknown, Reason: "multiple authority effects require effect plan", SideEffects: true}
+	}
+	out := Effect{Kind: KindReadOnlyInspection, Reason: "read-only inspection"}
+	for _, effect := range plan.Effects {
+		if effectDominates(effect, out) {
+			out = effect
+		}
+	}
+	return out
 }
 
 func NormalizeCommand(command string) string {

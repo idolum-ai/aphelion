@@ -178,7 +178,7 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 		return "", fmt.Errorf("exec command is required")
 	}
 
-	approvedProposalID := ""
+	approvalGround := execQualificationGround{}
 	workdir, escaped, err := resolveWorkdirForExec(scope.WorkingRoot, in.Workdir)
 	if err != nil {
 		return "", err
@@ -230,7 +230,12 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 		if err := r.persistExecProposalState(key, proposal, session.ProposalStatusApproved); err != nil {
 			return "", err
 		}
-		approvedProposalID = proposal.ID
+		approvalGround = execQualificationGround{
+			Kind:       "operator_approval",
+			ProposalID: proposal.ID,
+			DecisionID: decision.DecisionID,
+			Choice:     decision.Choice,
+		}
 	}
 	shellJudgment, plan, err := r.recordShellEffectJudgment(ctx, key, in.Command)
 	if err != nil {
@@ -280,9 +285,14 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 		if err := r.persistExecProposalState(key, proposal, session.ProposalStatusApproved); err != nil {
 			return "", err
 		}
-		approvedProposalID = proposal.ID
+		approvalGround = execQualificationGround{
+			Kind:       "operator_approval",
+			ProposalID: proposal.ID,
+			DecisionID: decision.DecisionID,
+			Choice:     decision.Choice,
+		}
 	}
-	if err := r.recordExecPreDispatchAttempt(ctx, p, key, "exec", in.Command, shellJudgment, plan, approvedProposalID); err != nil {
+	if err := r.recordExecPreDispatchAttempt(ctx, p, key, "exec", in.Command, shellJudgment, plan, approvalGround); err != nil {
 		return "", preDispatchExecError(err)
 	}
 
@@ -354,7 +364,16 @@ func (r *Registry) recordShellEffectJudgment(ctx context.Context, key session.Se
 	return judgment, plan, nil
 }
 
-func (r *Registry) recordExecPreDispatchAttempt(ctx context.Context, p principal.Principal, key session.SessionKey, toolName string, command string, shellJudgment session.Judgment, plan commandeffect.EffectPlan, approvedProposalID string) error {
+type execQualificationGround struct {
+	Kind       string
+	ProposalID string
+	DecisionID string
+	Choice     string
+	LeaseID    string
+	ApprovedBy int64
+}
+
+func (r *Registry) recordExecPreDispatchAttempt(ctx context.Context, p principal.Principal, key session.SessionKey, toolName string, command string, shellJudgment session.Judgment, plan commandeffect.EffectPlan, approvalGround execQualificationGround) error {
 	if r == nil || r.store == nil {
 		return nil
 	}
@@ -391,7 +410,7 @@ func (r *Registry) recordExecPreDispatchAttempt(ctx context.Context, p principal
 		UpdatedAt:    now,
 	}
 	irreversible := execEffectRequiresPreCommitQualification(effect.Kind, effect.Reason, boundaryKind)
-	qualification, qualificationReason, qualificationDeps, err := r.qualifyExecJudgmentUse(ctx, p, key, rawCommand, plan, shellJudgment, irreversible, approvedProposalID)
+	qualification, qualificationReason, qualificationDeps, err := r.qualifyExecJudgmentUse(ctx, p, key, rawCommand, plan, shellJudgment, irreversible, approvalGround)
 	if err != nil {
 		return err
 	}
@@ -582,7 +601,7 @@ func execEffectRequiresPreCommitQualification(kind commandeffect.Kind, reason st
 	}
 }
 
-func (r *Registry) qualifyExecJudgmentUse(ctx context.Context, _ principal.Principal, _ session.SessionKey, command string, plan commandeffect.EffectPlan, shellJudgment session.Judgment, irreversible bool, approvedProposalID string) (session.JudgmentUseQualificationStatus, string, []session.JudgmentDependencyRef, error) {
+func (r *Registry) qualifyExecJudgmentUse(ctx context.Context, _ principal.Principal, _ session.SessionKey, command string, plan commandeffect.EffectPlan, shellJudgment session.Judgment, irreversible bool, approvalGround execQualificationGround) (session.JudgmentUseQualificationStatus, string, []session.JudgmentDependencyRef, error) {
 	if !irreversible {
 		return session.JudgmentUseQualificationQualified, "exec effect plan recorded before dispatch", nil, nil
 	}
@@ -590,26 +609,36 @@ func (r *Registry) qualifyExecJudgmentUse(ctx context.Context, _ principal.Princ
 	if err != nil {
 		return session.JudgmentUseQualificationBlocked, "irreversible exec qualification ground unavailable", nil, err
 	}
-	if strings.TrimSpace(approvedProposalID) != "" {
-		supportRef := strings.TrimSpace(approvedProposalID)
-		support := execQualificationSupportProfile("operation_proposal", supportRef)
-		decision := session.DecorrelatedGroundForJudgment(challenged, support)
-		refs := execQualificationDecorrelatedRefs("operation_proposal", supportRef, shellJudgment, decision)
-		if decision.Decorrelated {
-			return session.JudgmentUseQualificationQualified, "irreversible exec qualified by decorrelated approved operation proposal", refs, nil
+	if strings.TrimSpace(approvalGround.ProposalID) != "" || strings.TrimSpace(approvalGround.DecisionID) != "" {
+		approvalGround.Kind = "operator_approval"
+		if strings.TrimSpace(approvalGround.ProposalID) == "" || strings.TrimSpace(approvalGround.DecisionID) == "" || strings.TrimSpace(approvalGround.Choice) != "approve" {
+			refs := execQualificationGroundRefs(approvalGround, "blocks")
+			return session.JudgmentUseQualificationBlocked, "irreversible exec approval ground is incomplete", refs, fmt.Errorf("irreversible exec approval ground requires approved operator decision")
 		}
-		return session.JudgmentUseQualificationBlocked, "irreversible exec operation proposal ground is not decorrelated: " + decision.Reason, refs, fmt.Errorf("irreversible exec operation proposal ground is not decorrelated: %s", decision.Reason)
+		support := execQualificationSupportProfile(approvalGround)
+		decision := session.DecorrelatedGroundForJudgment(challenged, support)
+		refs := execQualificationDecorrelatedRefs(approvalGround, shellJudgment, decision)
+		if decision.Decorrelated {
+			return session.JudgmentUseQualificationQualified, "irreversible exec qualified by decorrelated operator approval", refs, nil
+		}
+		return session.JudgmentUseQualificationBlocked, "irreversible exec operator approval ground is not decorrelated: " + decision.Reason, refs, fmt.Errorf("irreversible exec operator approval ground is not decorrelated: %s", decision.Reason)
 	}
 	if state, ok := ContinuationExecAuthorityFromContext(ctx); ok {
 		decision := ContinuationExecAuthorityDecisionForPlan(state, command, plan, time.Now().UTC())
 		if decision.Allowed {
-			supportRef := firstNonEmptyString(state.ContinuationLease.ID, state.ActionProposal.ID, state.ActionProposal.OperationID)
-			if supportRef == "" {
-				return session.JudgmentUseQualificationBlocked, "irreversible exec continuation authority lacks stable support ref", nil, fmt.Errorf("irreversible exec continuation authority lacks stable support ref")
+			ground := execQualificationGround{
+				Kind:       "continuation_authority",
+				LeaseID:    strings.TrimSpace(state.ContinuationLease.ID),
+				ProposalID: strings.TrimSpace(firstNonEmptyString(state.ActionProposal.ID, state.ActionProposal.OperationID, state.ContinuationLease.ProposalID)),
+				ApprovedBy: firstNonZeroInt64(state.ContinuationLease.ApprovedBy, state.ApprovedBy),
 			}
-			support := execQualificationSupportProfile("continuation_authority", supportRef)
+			if ground.LeaseID == "" || ground.ApprovedBy == 0 {
+				refs := execQualificationGroundRefs(ground, "blocks")
+				return session.JudgmentUseQualificationBlocked, "irreversible exec continuation authority lacks operator-approved support ref", refs, fmt.Errorf("irreversible exec continuation authority lacks operator-approved support ref")
+			}
+			support := execQualificationSupportProfile(ground)
 			decorrelation := session.DecorrelatedGroundForJudgment(challenged, support)
-			refs := execQualificationDecorrelatedRefs("continuation_authority", supportRef, shellJudgment, decorrelation)
+			refs := execQualificationDecorrelatedRefs(ground, shellJudgment, decorrelation)
 			if decorrelation.Decorrelated {
 				return session.JudgmentUseQualificationQualified, "irreversible exec qualified by decorrelated active continuation authority", refs, nil
 			}
@@ -626,39 +655,92 @@ func (r *Registry) execJudgmentGroundProfile(judgment session.Judgment) (session
 	return session.JudgmentGroundProfileForJudgment(judgment), nil
 }
 
-func execQualificationSupportProfile(kind string, ref string) session.JudgmentGroundProfile {
-	kind = strings.TrimSpace(kind)
-	ref = strings.TrimSpace(ref)
+func execQualificationSupportProfile(ground execQualificationGround) session.JudgmentGroundProfile {
+	ground = normalizeExecQualificationGround(ground)
+	refs := execQualificationGroundRefs(ground, "qualifies")
+	sourceDomains := []string{ground.Kind}
+	switch ground.Kind {
+	case "operator_approval":
+		sourceDomains = append(sourceDomains, "operator_approval_event")
+	case "continuation_authority":
+		sourceDomains = append(sourceDomains, "operator_approved_continuation")
+	}
+	externalRef := ""
+	if ground.DecisionID != "" {
+		externalRef = session.JudgmentUseRef("operator_decision", ground.DecisionID)
+	} else if ground.LeaseID != "" {
+		externalRef = session.JudgmentUseRef("continuation_lease", ground.LeaseID)
+	}
 	return session.JudgmentGroundProfile{
-		DependencyRefs:      []session.JudgmentDependencyRef{{Kind: kind, Ref: ref, Role: "qualifies"}},
-		SourceFaultDomains:  []string{kind},
-		ExternalEvidenceRef: session.JudgmentUseRef(kind, ref),
+		DependencyRefs:      refs,
+		SourceFaultDomains:  sourceDomains,
+		ExternalEvidenceRef: externalRef,
 	}
 }
 
-func execQualificationDecorrelatedRefs(kind string, ref string, shellJudgment session.Judgment, decision session.JudgmentDecorrelatedGroundDecision) []session.JudgmentDependencyRef {
+func execQualificationDecorrelatedRefs(ground execQualificationGround, shellJudgment session.Judgment, decision session.JudgmentDecorrelatedGroundDecision) []session.JudgmentDependencyRef {
+	ground = normalizeExecQualificationGround(ground)
 	status := "not_decorrelated"
 	if decision.Decorrelated {
 		status = "decorrelated"
 	}
 	seed := strings.Join([]string{
 		strings.TrimSpace(shellJudgment.ID),
-		strings.TrimSpace(kind),
-		strings.TrimSpace(ref),
+		strings.TrimSpace(ground.Kind),
+		strings.TrimSpace(ground.ProposalID),
+		strings.TrimSpace(ground.DecisionID),
+		strings.TrimSpace(ground.LeaseID),
+		fmt.Sprint(ground.ApprovedBy),
 		status,
 		strings.TrimSpace(decision.Reason),
 		strings.Join(decision.Shared, "|"),
 	}, "\x00")
-	refs := []session.JudgmentDependencyRef{
-		{Kind: kind, Ref: strings.TrimSpace(ref), Role: "qualifies"},
-		{Kind: "decorrelation_decision", Ref: session.JudgmentUseHashRef("decorrelation", seed), Role: "qualifies", Scope: status},
-	}
+	refs := append(execQualificationGroundRefs(ground, "qualifies"),
+		session.JudgmentDependencyRef{Kind: "decorrelation_decision", Ref: session.JudgmentUseHashRef("decorrelation", seed), Role: "qualifies", Scope: status},
+	)
 	for _, shared := range decision.Shared {
 		if strings.TrimSpace(shared) != "" {
 			refs = append(refs, session.JudgmentDependencyRef{Kind: "decorrelation_shared", Ref: strings.TrimSpace(shared), Role: "blocks"})
 		}
 	}
 	return refs
+}
+
+func normalizeExecQualificationGround(ground execQualificationGround) execQualificationGround {
+	ground.Kind = strings.TrimSpace(ground.Kind)
+	ground.ProposalID = strings.TrimSpace(ground.ProposalID)
+	ground.DecisionID = strings.TrimSpace(ground.DecisionID)
+	ground.Choice = strings.TrimSpace(ground.Choice)
+	ground.LeaseID = strings.TrimSpace(ground.LeaseID)
+	return ground
+}
+
+func execQualificationGroundRefs(ground execQualificationGround, role string) []session.JudgmentDependencyRef {
+	ground = normalizeExecQualificationGround(ground)
+	role = strings.TrimSpace(role)
+	var refs []session.JudgmentDependencyRef
+	if ground.ProposalID != "" {
+		refs = append(refs, session.JudgmentDependencyRef{Kind: "operation_proposal", Ref: ground.ProposalID, Role: role})
+	}
+	if ground.DecisionID != "" {
+		refs = append(refs, session.JudgmentDependencyRef{Kind: "operator_decision", Ref: ground.DecisionID, Role: role, Scope: ground.Choice})
+	}
+	if ground.LeaseID != "" {
+		refs = append(refs, session.JudgmentDependencyRef{Kind: "continuation_lease", Ref: ground.LeaseID, Role: role})
+	}
+	if ground.ApprovedBy != 0 {
+		refs = append(refs, session.JudgmentDependencyRef{Kind: "operator_approver", Ref: fmt.Sprint(ground.ApprovedBy), Role: role})
+	}
+	return refs
+}
+
+func firstNonZeroInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func firstNonEmptyString(values ...string) string {

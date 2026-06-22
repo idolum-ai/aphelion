@@ -88,12 +88,7 @@ func AuthorizePlan(req PlanRequest) Decision {
 	if strings.TrimSpace(plan.Command) == "" && len(plan.Effects) == 0 {
 		plan = commandeffect.PlanCommand(req.Command)
 	}
-	effect := commandeffect.Effect{Kind: commandeffect.KindReadOnlyInspection, Reason: "read-only inspection"}
-	if len(plan.Effects) == 1 {
-		effect = plan.Effects[0]
-	} else if plan.Dynamic || plan.MultipleAuthorities {
-		effect = commandeffect.Effect{Kind: commandeffect.KindUnknown, Reason: "effect plan requires typed handling", SideEffects: true}
-	}
+	effect := commandeffect.RepresentativeEffect(plan)
 	decision.EffectKind = string(effect.Kind)
 	boundary, boundaryOK := commandeffect.BoundaryForPlan(plan)
 	if invalidContract {
