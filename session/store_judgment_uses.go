@@ -32,6 +32,43 @@ func (s *SQLiteStore) RecordJudgmentUseCommitment(input JudgmentUseInput) (Judgm
 	return use, nil
 }
 
+func (s *SQLiteStore) RecordJudgmentWithUse(judgmentInput JudgmentInput, useInput JudgmentUseInput) (Judgment, JudgmentUse, error) {
+	if s == nil || s.db == nil {
+		return Judgment{}, JudgmentUse{}, fmt.Errorf("judgment store unavailable")
+	}
+	judgmentInput, err := NormalizeJudgmentInput(judgmentInput)
+	if err != nil {
+		return Judgment{}, JudgmentUse{}, err
+	}
+	if useInput.Key == (SessionKey{}) {
+		useInput.Key = judgmentInput.Key
+	}
+	if strings.TrimSpace(useInput.SessionID) == "" {
+		useInput.SessionID = judgmentInput.SessionID
+	} else if strings.TrimSpace(useInput.SessionID) != judgmentInput.SessionID {
+		return Judgment{}, JudgmentUse{}, fmt.Errorf("judgment use session_id %q does not match judgment session_id %q", strings.TrimSpace(useInput.SessionID), judgmentInput.SessionID)
+	}
+	useInput.JudgmentRefs = ensureJudgmentUseRef(useInput.JudgmentRefs, JudgmentRef(judgmentInput.ID))
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Judgment{}, JudgmentUse{}, fmt.Errorf("begin judgment/use tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	judgment, err := recordJudgmentTx(tx, judgmentInput)
+	if err != nil {
+		return Judgment{}, JudgmentUse{}, err
+	}
+	useInput.JudgmentRefs = ensureJudgmentUseRef(useInput.JudgmentRefs, JudgmentRef(judgment.ID))
+	use, err := recordJudgmentUseCommitmentTx(tx, useInput)
+	if err != nil {
+		return Judgment{}, JudgmentUse{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Judgment{}, JudgmentUse{}, fmt.Errorf("commit judgment/use tx: %w", err)
+	}
+	return judgment, use, nil
+}
+
 func (s *SQLiteStore) UpsertJudgmentUse(input JudgmentUseInput) (JudgmentUse, error) {
 	return s.RecordJudgmentUseCommitment(input)
 }
@@ -64,6 +101,20 @@ func (s *SQLiteStore) UpsertEffectAttemptWithJudgmentUse(attemptInput EffectAtte
 		return EffectAttempt{}, JudgmentUse{}, fmt.Errorf("commit effect attempt judgment use tx: %w", err)
 	}
 	return attempt, use, nil
+}
+
+func ensureJudgmentUseRef(refs []string, required string) []string {
+	required = strings.TrimSpace(required)
+	refs = normalizeStringList(refs)
+	if required == "" {
+		return refs
+	}
+	for _, ref := range refs {
+		if ref == required {
+			return refs
+		}
+	}
+	return append(refs, required)
 }
 
 func (s *SQLiteStore) JudgmentUsesBySession(key SessionKey, limit int) ([]JudgmentUse, error) {

@@ -160,11 +160,7 @@ func TestArchitectureConsequentialJudgmentWritesUseCentralService(t *testing.T) 
 			}
 			serviceVars := interpretationServiceVars(fn.Body)
 			ast.Inspect(fn.Body, func(node ast.Node) bool {
-				call, ok := node.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				selector, ok := call.Fun.(*ast.SelectorExpr)
+				selector, ok := node.(*ast.SelectorExpr)
 				if !ok {
 					return true
 				}

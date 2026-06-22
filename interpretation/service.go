@@ -12,6 +12,7 @@ import (
 
 type Store interface {
 	RecordJudgment(session.JudgmentInput) (session.Judgment, error)
+	RecordJudgmentWithUse(session.JudgmentInput, session.JudgmentUseInput) (session.Judgment, session.JudgmentUse, error)
 	RecordJudgmentUseCommitment(session.JudgmentUseInput) (session.JudgmentUse, error)
 	UpsertEffectAttemptWithJudgmentUse(session.EffectAttemptInput, session.JudgmentUseInput) (session.EffectAttempt, session.JudgmentUse, error)
 	AppendJudgmentChallengeEvent(session.JudgmentChallengeEventInput) (session.JudgmentChallengeEvent, error)
@@ -50,16 +51,24 @@ func (s Service) RecordUse(input session.JudgmentUseInput) (session.JudgmentUse,
 }
 
 func (s Service) RecordJudgmentAndUse(judgmentInput session.JudgmentInput, useInput session.JudgmentUseInput) (session.Judgment, session.JudgmentUse, error) {
-	judgment, err := s.RecordJudgment(judgmentInput)
+	if s.store == nil {
+		return session.Judgment{}, session.JudgmentUse{}, fmt.Errorf("interpretation store unavailable")
+	}
+	if strings.TrimSpace(useInput.ID) != "" {
+		return session.Judgment{}, session.JudgmentUse{}, fmt.Errorf("judgment/use commitment id is service-managed")
+	}
+	judgmentInput, err := validateJudgmentInput(judgmentInput)
 	if err != nil {
 		return session.Judgment{}, session.JudgmentUse{}, err
 	}
-	if len(useInput.JudgmentRefs) == 0 && strings.TrimSpace(judgment.ID) != "" {
-		useInput.JudgmentRefs = []string{session.JudgmentRef(judgment.ID)}
-	}
-	use, err := s.RecordUse(useInput)
+	useInput = bindUseToJudgmentInput(judgmentInput, useInput)
+	useInput, err = validateJudgmentUseInput(useInput)
 	if err != nil {
-		return judgment, session.JudgmentUse{}, err
+		return session.Judgment{}, session.JudgmentUse{}, err
+	}
+	judgment, use, err := s.store.RecordJudgmentWithUse(judgmentInput, useInput)
+	if err != nil {
+		return session.Judgment{}, session.JudgmentUse{}, err
 	}
 	return judgment, use, nil
 }
@@ -68,7 +77,14 @@ func (s Service) RecordEffectAttemptWithUse(attemptInput session.EffectAttemptIn
 	if s.store == nil {
 		return session.EffectAttempt{}, session.JudgmentUse{}, fmt.Errorf("interpretation store unavailable")
 	}
-	useInput, err := validateJudgmentUseInput(useInput)
+	if strings.TrimSpace(useInput.ID) != "" {
+		return session.EffectAttempt{}, session.JudgmentUse{}, fmt.Errorf("effect-attempt judgment use id is service-managed")
+	}
+	attemptInput, useInput, err := validateEffectAttemptUseInputs(attemptInput, useInput)
+	if err != nil {
+		return session.EffectAttempt{}, session.JudgmentUse{}, err
+	}
+	useInput, err = validateJudgmentUseInput(useInput)
 	if err != nil {
 		return session.EffectAttempt{}, session.JudgmentUse{}, err
 	}
@@ -79,12 +95,18 @@ func (s Service) AppendChallengeEvent(input session.JudgmentChallengeEventInput)
 	if s.store == nil {
 		return session.JudgmentChallengeEvent{}, fmt.Errorf("interpretation store unavailable")
 	}
+	if err := validateChallengeEventStateValues(input); err != nil {
+		return session.JudgmentChallengeEvent{}, err
+	}
 	return s.store.AppendJudgmentChallengeEvent(input)
 }
 
 func (s Service) MarkUsesForJudgmentReconciliation(judgmentID string, status session.JudgmentUseReconciliationStatus, reason string, at time.Time) error {
 	if s.store == nil {
 		return fmt.Errorf("interpretation store unavailable")
+	}
+	if err := validateReconciliationStatus(status); err != nil {
+		return err
 	}
 	return s.store.MarkJudgmentUsesForJudgmentReconciliation(judgmentID, status, reason, at)
 }
@@ -144,6 +166,9 @@ func (s Service) QualifyDecorrelatedUse(input DecorrelatedQualificationInput) (Q
 }
 
 func validateJudgmentInput(input session.JudgmentInput) (session.JudgmentInput, error) {
+	if err := validateJudgmentStateValues(input); err != nil {
+		return session.JudgmentInput{}, err
+	}
 	input, err := session.NormalizeJudgmentInput(input)
 	if err != nil {
 		return session.JudgmentInput{}, err
@@ -171,6 +196,9 @@ func validateJudgmentInput(input session.JudgmentInput) (session.JudgmentInput, 
 }
 
 func validateJudgmentUseInput(input session.JudgmentUseInput) (session.JudgmentUseInput, error) {
+	if err := validateJudgmentUseStateValues(input); err != nil {
+		return session.JudgmentUseInput{}, err
+	}
 	input, err := session.NormalizeJudgmentUseInput(input)
 	if err != nil {
 		return session.JudgmentUseInput{}, err
@@ -185,4 +213,186 @@ func validateJudgmentUseInput(input session.JudgmentUseInput) (session.JudgmentU
 		return session.JudgmentUseInput{}, fmt.Errorf("judgment use %s requires result_ref through interpretation service", input.ConsumerID)
 	}
 	return input, nil
+}
+
+func bindUseToJudgmentInput(judgmentInput session.JudgmentInput, useInput session.JudgmentUseInput) session.JudgmentUseInput {
+	if useInput.Key == (session.SessionKey{}) {
+		useInput.Key = judgmentInput.Key
+	}
+	if strings.TrimSpace(useInput.SessionID) == "" {
+		useInput.SessionID = judgmentInput.SessionID
+	}
+	required := session.JudgmentRef(judgmentInput.ID)
+	if required == "" {
+		return useInput
+	}
+	for _, ref := range useInput.JudgmentRefs {
+		if strings.TrimSpace(ref) == required {
+			return useInput
+		}
+	}
+	useInput.JudgmentRefs = append(useInput.JudgmentRefs, required)
+	return useInput
+}
+
+func validateEffectAttemptUseInputs(attemptInput session.EffectAttemptInput, useInput session.JudgmentUseInput) (session.EffectAttemptInput, session.JudgmentUseInput, error) {
+	if err := validateEffectAttemptStateValues(attemptInput); err != nil {
+		return session.EffectAttemptInput{}, session.JudgmentUseInput{}, err
+	}
+	attemptInput = session.NormalizeEffectAttemptInput(attemptInput)
+	expectedRef := session.JudgmentUseRef("effect_attempt", attemptInput.AttemptID)
+	if got := strings.TrimSpace(useInput.ResultRef); got != "" && got != expectedRef {
+		return session.EffectAttemptInput{}, session.JudgmentUseInput{}, fmt.Errorf("judgment use result_ref %q does not match effect attempt %q", got, expectedRef)
+	}
+	useInput.ResultRef = expectedRef
+	if useInput.Key == (session.SessionKey{}) {
+		useInput.Key = attemptInput.Key
+	}
+	sessionID := session.SessionIDForKey(attemptInput.Key)
+	if strings.TrimSpace(useInput.SessionID) == "" {
+		useInput.SessionID = sessionID
+	} else if strings.TrimSpace(useInput.SessionID) != sessionID {
+		return session.EffectAttemptInput{}, session.JudgmentUseInput{}, fmt.Errorf("judgment use session_id %q does not match effect attempt session_id %q", strings.TrimSpace(useInput.SessionID), sessionID)
+	}
+	return attemptInput, useInput, nil
+}
+
+func validateJudgmentStateValues(input session.JudgmentInput) error {
+	if raw := stateToken(string(input.Completeness)); raw != "" {
+		switch session.JudgmentCompleteness(raw) {
+		case session.JudgmentCompletenessComplete, session.JudgmentCompletenessPartial, session.JudgmentCompletenessAbstain:
+		default:
+			return fmt.Errorf("judgment %s has invalid completeness %q", input.Kind, input.Completeness)
+		}
+	}
+	return nil
+}
+
+func validateJudgmentUseStateValues(input session.JudgmentUseInput) error {
+	if raw := stateToken(string(input.Consequence)); raw != "" {
+		switch session.JudgmentUseConsequence(raw) {
+		case session.JudgmentUseConsequenceAuthority,
+			session.JudgmentUseConsequenceExecution,
+			session.JudgmentUseConsequencePresentation,
+			session.JudgmentUseConsequenceModelContextAdmission,
+			session.JudgmentUseConsequenceRecoverySelection,
+			session.JudgmentUseConsequenceCompletion,
+			session.JudgmentUseConsequenceDurableState,
+			session.JudgmentUseConsequenceDiagnostic,
+			session.JudgmentUseConsequenceControlFlow:
+		default:
+			return fmt.Errorf("judgment use %s has invalid consequence %q", input.ConsumerID, input.Consequence)
+		}
+	}
+	if raw := stateToken(string(input.QualificationStatus)); raw != "" {
+		switch session.JudgmentUseQualificationStatus(raw) {
+		case session.JudgmentUseQualificationQualified,
+			session.JudgmentUseQualificationBlocked,
+			session.JudgmentUseQualificationSuspended,
+			session.JudgmentUseQualificationRejected,
+			session.JudgmentUseQualificationNeedsVerification:
+		default:
+			return fmt.Errorf("judgment use %s has invalid qualification_status %q", input.ConsumerID, input.QualificationStatus)
+		}
+	}
+	return validateReconciliationStatus(input.ReconciliationStatus)
+}
+
+func validateReconciliationStatus(status session.JudgmentUseReconciliationStatus) error {
+	if raw := stateToken(string(status)); raw != "" {
+		switch session.JudgmentUseReconciliationStatus(raw) {
+		case session.JudgmentUseReconciliationNotRequired,
+			session.JudgmentUseReconciliationPending,
+			session.JudgmentUseReconciliationReconciled,
+			session.JudgmentUseReconciliationEscalated:
+		default:
+			return fmt.Errorf("judgment use has invalid reconciliation_status %q", status)
+		}
+	}
+	return nil
+}
+
+func validateChallengeEventStateValues(input session.JudgmentChallengeEventInput) error {
+	if raw := stateToken(string(input.EventKind)); raw != "" {
+		switch session.JudgmentChallengeEventKind(raw) {
+		case session.JudgmentChallengeOpened,
+			session.JudgmentChallengeGroundAttached,
+			session.JudgmentChallengeAdjudicationRecorded,
+			session.JudgmentChallengeOperationalResponseRecorded:
+		default:
+			return fmt.Errorf("judgment challenge event has invalid event_kind %q", input.EventKind)
+		}
+	}
+	if raw := stateToken(string(input.Disposition)); raw != "" {
+		switch session.JudgmentChallengeDisposition(raw) {
+		case session.JudgmentChallengeSupported,
+			session.JudgmentChallengeContradicted,
+			session.JudgmentChallengeUnresolved:
+		default:
+			return fmt.Errorf("judgment challenge event has invalid disposition %q", input.Disposition)
+		}
+	}
+	if raw := stateToken(string(input.EligibilityStatus)); raw != "" {
+		switch session.JudgmentEligibilityStatus(raw) {
+		case session.JudgmentEligibilityEligible,
+			session.JudgmentEligibilitySuspended,
+			session.JudgmentEligibilitySuperseded,
+			session.JudgmentEligibilityExpired:
+		default:
+			return fmt.Errorf("judgment challenge event has invalid eligibility_status %q", input.EligibilityStatus)
+		}
+	}
+	if raw := stateToken(string(input.OperationalResponse)); raw != "" {
+		switch session.JudgmentOperationalResponse(raw) {
+		case session.JudgmentOperationalResponseNone,
+			session.JudgmentOperationalResponseRecompute,
+			session.JudgmentOperationalResponseBlock,
+			session.JudgmentOperationalResponseVerify,
+			session.JudgmentOperationalResponseRetract,
+			session.JudgmentOperationalResponseForwardCorrect,
+			session.JudgmentOperationalResponseEscalate:
+		default:
+			return fmt.Errorf("judgment challenge event has invalid operational_response %q", input.OperationalResponse)
+		}
+	}
+	return nil
+}
+
+func validateEffectAttemptStateValues(input session.EffectAttemptInput) error {
+	if raw := strings.TrimSpace(string(input.Status)); raw != "" {
+		switch session.EffectAttemptStatus(raw) {
+		case "succeeded",
+			session.EffectAttemptStatusAttempted,
+			session.EffectAttemptStatusExecuted,
+			session.EffectAttemptStatusFailed,
+			session.EffectAttemptStatusUncertain,
+			session.EffectAttemptStatusVerified,
+			session.EffectAttemptStatusRejected,
+			session.EffectAttemptStatusSuperseded:
+		default:
+			return fmt.Errorf("effect attempt %s has invalid status %q", input.AttemptID, input.Status)
+		}
+	}
+	return nil
+}
+
+func stateToken(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '_' || r == '-' || r == '.' || r == ':':
+			b.WriteRune(r)
+		case r == ' ' || r == '/' || r == '\\':
+			b.WriteRune('_')
+		}
+	}
+	return strings.Trim(b.String(), "_")
 }

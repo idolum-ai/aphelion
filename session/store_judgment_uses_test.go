@@ -122,6 +122,60 @@ func TestEffectAttemptWithJudgmentUseIsAtomicAndReconcilesStatus(t *testing.T) {
 	}
 }
 
+func TestRecordJudgmentWithUseIsAtomicAndBindsJudgmentRef(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	key := SessionKey{ChatID: 7108, UserID: 1001}
+	now := time.Now().UTC()
+	judgmentInput := JudgmentInput{
+		Key:                key,
+		Kind:               "test_judgment",
+		SchemaVersion:      "v1",
+		SubjectKey:         "test:atomic",
+		ClaimKey:           "test_claim",
+		InterpreterID:      "session.test",
+		InterpreterVersion: "v1",
+		InputRefs:          []string{JudgmentUseRef("input", "one")},
+		ResultJSON:         `{"ok":true}`,
+		Completeness:       JudgmentCompletenessComplete,
+		DependencyRefs:     []JudgmentDependencyRef{{Kind: "input", Ref: "one", Role: "subject"}},
+		SourceFaultDomains: []string{"test"},
+		CreatedAt:          now,
+		AsOf:               now,
+	}
+	badUse := JudgmentUseInput{
+		Key:                  key,
+		ConsumerID:           "",
+		Consequence:          JudgmentUseConsequenceExecution,
+		DependencyRefs:       []JudgmentDependencyRef{{Kind: "input", Ref: "one", Role: "qualifies"}},
+		PolicyRef:            "test_policy_v1",
+		ResultRef:            JudgmentUseRef("result", "bad"),
+		QualificationStatus:  JudgmentUseQualificationQualified,
+		ReconciliationStatus: JudgmentUseReconciliationNotRequired,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}
+	if _, _, err := store.RecordJudgmentWithUse(judgmentInput, badUse); err == nil || !strings.Contains(err.Error(), "requires consumer_id") {
+		t.Fatalf("RecordJudgmentWithUse(invalid use) err = %v, want consumer_id rejection", err)
+	}
+	if judgments, err := store.JudgmentsBySession(key, 10); err != nil || len(judgments) != 0 {
+		t.Fatalf("judgments after failed RecordJudgmentWithUse = %#v, %v; want none", judgments, err)
+	}
+
+	goodUse := badUse
+	goodUse.ConsumerID = "test.consumer"
+	goodUse.ResultRef = JudgmentUseRef("result", "one")
+	judgment, use, err := store.RecordJudgmentWithUse(judgmentInput, goodUse)
+	if err != nil {
+		t.Fatalf("RecordJudgmentWithUse(valid) err = %v", err)
+	}
+	if !stringListContains(use.JudgmentRefs, JudgmentRef(judgment.ID)) {
+		t.Fatalf("use refs = %#v, want judgment ref %q", use.JudgmentRefs, JudgmentRef(judgment.ID))
+	}
+}
+
 func TestJudgmentUsesByJudgmentRefUsesExactJSONMembership(t *testing.T) {
 	t.Parallel()
 
@@ -241,4 +295,13 @@ func assertJudgmentUseReconciliationStatus(t *testing.T, store *SQLiteStore, key
 			t.Fatalf("use %s reconciliation status = %q, want %q (all statuses %#v)", id, got[id], status, got)
 		}
 	}
+}
+
+func stringListContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
