@@ -12,7 +12,6 @@ import (
 	"unicode"
 
 	"github.com/idolum-ai/aphelion/core"
-	"github.com/idolum-ai/aphelion/interpretation"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -300,7 +299,7 @@ func (r *Runtime) recordRecoveryCandidateArbitrationJudgmentUse(key session.Sess
 	}
 	deps := recoveryCandidateArbitrationDependencyRefs(opState, decision, surface)
 	subject := recoveryCandidateArbitrationSubjectKey(opState, decision, surface)
-	service := interpretation.NewService(r.store)
+	service := r.interpretationService()
 	judgmentInput := session.JudgmentInput{
 		Key:                key,
 		OperationID:        strings.TrimSpace(opState.ID),

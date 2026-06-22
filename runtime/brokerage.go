@@ -13,7 +13,6 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
-	"github.com/idolum-ai/aphelion/interpretation"
 	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
@@ -101,7 +100,7 @@ func (r *Runtime) recordBrokerageControlFlowJudgment(key session.SessionKey, bro
 		completeness = session.JudgmentCompletenessPartial
 		unknowns = append(unknowns, session.UnknownPredicate{Kind: "incomplete_brokerage_contract", Reason: "brokerage did not produce a complete ratified execution contract"})
 	}
-	service := interpretation.NewService(r.store)
+	service := r.interpretationService()
 	deps := []session.JudgmentDependencyRef{
 		{Kind: "brokerage_proposal", Ref: session.JudgmentUseHashRef("text", brokerage.IdolumNote), Role: "support"},
 	}

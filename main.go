@@ -23,6 +23,7 @@ import (
 	"github.com/idolum-ai/aphelion/internal/telegramcontrol"
 	"github.com/idolum-ai/aphelion/internal/telegramdecision"
 	"github.com/idolum-ai/aphelion/internal/telegramruntime"
+	"github.com/idolum-ai/aphelion/interpretation"
 	"github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/openai"
 	"github.com/idolum-ai/aphelion/principal"
@@ -152,9 +153,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	interpretationService := interpretation.NewService(store)
 	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).
 		WithUserAgent(config.EffectiveUserAgent(cfg, tool.DefaultNativeFetchUserAgent)).
 		WithSessionStore(store).
+		WithInterpretationService(interpretationService).
 		WithWebSearchOptions(tool.WebSearchOptionsFromConfig(cfg.Tools.WebSearch)).
 		WithConfiguredCapabilityVisibility(configuredCapabilityVisibilityFromConfig(cfg)).
 		WithRemoteHostSSH(cfg.Tailscale.SSHPath, remoteHostSSHTimeoutFromConfig(cfg))
@@ -208,7 +211,7 @@ func run() error {
 
 	tgOutbound := telegramruntime.NewUIClient(tgClient)
 
-	rt, err := runtime.New(cfg, store, llm, tools, tgOutbound)
+	rt, err := runtime.NewWithInterpretationService(cfg, store, &interpretationService, llm, tools, tgOutbound)
 	if err != nil {
 		return err
 	}

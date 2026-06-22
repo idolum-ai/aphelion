@@ -14,6 +14,7 @@ import (
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/durableagent"
+	"github.com/idolum-ai/aphelion/interpretation"
 	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
@@ -31,6 +32,7 @@ type Registry struct {
 	sandbox                         *sandbox.Resolver
 	runner                          *sandbox.Runner
 	store                           *session.SQLiteStore
+	interpret                       *interpretation.Service
 	fileStore                       memstore.FileStore
 	filePurpose                     string
 	retrievalStore                  memstore.RetrievalStore
@@ -84,7 +86,26 @@ func (r *Registry) WithUserAgent(userAgent string) *Registry {
 
 func (r *Registry) WithSessionStore(store *session.SQLiteStore) *Registry {
 	r.store = store
+	service := interpretation.NewService(store)
+	r.interpret = &service
 	return r
+}
+
+func (r *Registry) WithInterpretationService(service interpretation.Service) *Registry {
+	if r != nil {
+		r.interpret = &service
+	}
+	return r
+}
+
+func (r *Registry) interpretationService() interpretation.Service {
+	if r == nil {
+		return interpretation.Service{}
+	}
+	if r.interpret != nil {
+		return *r.interpret
+	}
+	return interpretation.NewService(r.store)
 }
 
 func (r *Registry) WithCapabilityGrantObserver(observer func(context.Context, session.SessionKey, session.CapabilityGrant)) *Registry {

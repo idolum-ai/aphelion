@@ -337,7 +337,7 @@ func (r *Registry) recordShellEffectJudgment(ctx context.Context, key session.Se
 	if err != nil {
 		return session.Judgment{}, plan, fmt.Errorf("encode shell effect judgment: %w", err)
 	}
-	judgment, err := interpretation.NewService(r.store).RecordJudgment(session.JudgmentInput{
+	judgment, err := r.interpretationService().RecordJudgment(session.JudgmentInput{
 		Key:                key,
 		TurnRunID:          invocationRef.TurnRunID,
 		Kind:               session.JudgmentKindShellEffectPlan,
@@ -431,7 +431,7 @@ func (r *Registry) recordExecPreDispatchAttempt(ctx context.Context, p principal
 		CreatedAt:            now,
 		UpdatedAt:            now,
 	}
-	_, _, err = interpretation.NewService(r.store).RecordEffectAttemptWithUse(attemptInput, useInput)
+	_, _, err = r.interpretationService().RecordEffectAttemptWithUse(attemptInput, useInput)
 	if err != nil {
 		return fmt.Errorf("record exec judgment use and effect attempt before dispatch: %w", err)
 	}
@@ -595,7 +595,7 @@ func (r *Registry) qualifyExecJudgmentUse(ctx context.Context, _ principal.Princ
 			return session.JudgmentUseQualificationBlocked, "irreversible exec approval ground is incomplete", refs, fmt.Errorf("irreversible exec approval ground requires approved operator decision")
 		}
 		support := execQualificationSupportProfile(approvalGround)
-		qualification, qualifyErr := interpretation.NewService(r.store).QualifyDecorrelatedUse(interpretation.DecorrelatedQualificationInput{
+		qualification, qualifyErr := r.interpretationService().QualifyDecorrelatedUse(interpretation.DecorrelatedQualificationInput{
 			Irreversible: true,
 			Challenged:   challenged,
 			Support:      support,
@@ -619,7 +619,7 @@ func (r *Registry) qualifyExecJudgmentUse(ctx context.Context, _ principal.Princ
 				return session.JudgmentUseQualificationBlocked, "irreversible exec continuation authority lacks operator-approved support ref", refs, fmt.Errorf("irreversible exec continuation authority lacks operator-approved support ref")
 			}
 			support := execQualificationSupportProfile(ground)
-			qualification, qualifyErr := interpretation.NewService(r.store).QualifyDecorrelatedUse(interpretation.DecorrelatedQualificationInput{
+			qualification, qualifyErr := r.interpretationService().QualifyDecorrelatedUse(interpretation.DecorrelatedQualificationInput{
 				Irreversible: true,
 				Challenged:   challenged,
 				Support:      support,

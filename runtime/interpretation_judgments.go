@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
-	"github.com/idolum-ai/aphelion/interpretation"
 	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/session"
@@ -53,7 +52,7 @@ func (r *Runtime) recordRuntimeJudgmentUse(key session.SessionKey, input runtime
 	if err != nil {
 		return session.Judgment{}, session.JudgmentUse{}, fmt.Errorf("encode %s judgment result: %w", input.Kind, err)
 	}
-	service := interpretation.NewService(r.store)
+	service := r.interpretationService()
 	judgmentInput := session.JudgmentInput{
 		Key:                key,
 		TurnRunID:          input.TurnRunID,

@@ -27,10 +27,6 @@ func NewService(store Store) Service {
 	return Service{store: store}
 }
 
-func (s Service) Available() bool {
-	return s.store != nil
-}
-
 func (s Service) RecordJudgment(input session.JudgmentInput) (session.Judgment, error) {
 	if s.store == nil {
 		return session.Judgment{}, fmt.Errorf("interpretation store unavailable")

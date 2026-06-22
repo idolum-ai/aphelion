@@ -182,6 +182,9 @@ reimplement:
 
 - complete judgments cannot carry unknown predicates;
 - partial judgments must name typed unknowns;
+- abstaining judgments still must cite dependency refs and source fault domains,
+  because abstention is itself a consequential interpretation, not absence of
+  provenance;
 - consequential uses must cite judgments, dependency refs, policy, result, and
   qualification state;
 - effect attempts and execution uses are committed through the same local

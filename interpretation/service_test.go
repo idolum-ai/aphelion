@@ -83,6 +83,68 @@ func TestServiceRejectsInvalidCompletenessAndMissingGround(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "dependency refs") {
 		t.Fatalf("RecordUse(missing deps) err = %v, want dependency rejection", err)
 	}
+
+	if _, err := service.RecordUse(session.JudgmentUseInput{
+		Key:                  key,
+		ConsumerID:           "test.consumer",
+		Consequence:          session.JudgmentUseConsequenceDiagnostic,
+		JudgmentRefs:         []string{session.JudgmentUseRef("judgment", "j_test")},
+		DependencyRefs:       []session.JudgmentDependencyRef{{Kind: "test_input", Ref: "one", Role: "qualifies"}},
+		ResultRef:            session.JudgmentUseRef("test_result", "missing-policy"),
+		QualificationStatus:  session.JudgmentUseQualificationQualified,
+		ReconciliationStatus: session.JudgmentUseReconciliationNotRequired,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}); err == nil || !strings.Contains(err.Error(), "policy_ref") {
+		t.Fatalf("RecordUse(missing policy) err = %v, want policy_ref rejection", err)
+	}
+
+	if _, err := service.RecordUse(session.JudgmentUseInput{
+		Key:                  key,
+		ConsumerID:           "test.consumer",
+		Consequence:          session.JudgmentUseConsequenceDiagnostic,
+		JudgmentRefs:         []string{session.JudgmentUseRef("judgment", "j_test")},
+		DependencyRefs:       []session.JudgmentDependencyRef{{Kind: "test_input", Ref: "one", Role: "qualifies"}},
+		PolicyRef:            "test_policy_v1",
+		QualificationStatus:  session.JudgmentUseQualificationQualified,
+		ReconciliationStatus: session.JudgmentUseReconciliationNotRequired,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}); err == nil || !strings.Contains(err.Error(), "result_ref") {
+		t.Fatalf("RecordUse(missing result) err = %v, want result_ref rejection", err)
+	}
+}
+
+func TestServiceNilStoreFailsClosedForDurableWrites(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(nil)
+	key := session.SessionKey{ChatID: 99104, UserID: 1001}
+	now := time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
+	want := "interpretation store unavailable"
+
+	if _, err := service.RecordJudgment(testJudgmentInput(key, now)); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("RecordJudgment(nil store) err = %v, want %q", err, want)
+	}
+	useInput := testUseInput(key, now)
+	if _, err := service.RecordUse(useInput); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("RecordUse(nil store) err = %v, want %q", err, want)
+	}
+	if _, _, err := service.RecordJudgmentAndUse(testJudgmentInput(key, now), useInput); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("RecordJudgmentAndUse(nil store) err = %v, want %q", err, want)
+	}
+	if _, _, err := service.RecordEffectAttemptWithUse(session.EffectAttemptInput{}, useInput); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("RecordEffectAttemptWithUse(nil store) err = %v, want %q", err, want)
+	}
+	if _, err := service.AppendChallengeEvent(session.JudgmentChallengeEventInput{}); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("AppendChallengeEvent(nil store) err = %v, want %q", err, want)
+	}
+	if err := service.MarkUsesForJudgmentReconciliation("j", session.JudgmentUseReconciliationPending, "test", now); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("MarkUsesForJudgmentReconciliation(nil store) err = %v, want %q", err, want)
+	}
+	if _, err := service.JudgmentGroundProfile("j", 1); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("JudgmentGroundProfile(nil store) err = %v, want %q", err, want)
+	}
 }
 
 func TestServiceRecordsEffectAttemptWithUseAtomically(t *testing.T) {
@@ -199,5 +261,21 @@ func testJudgmentInput(key session.SessionKey, now time.Time) session.JudgmentIn
 		Sensitivity:        "test_metadata",
 		AsOf:               now,
 		CreatedAt:          now,
+	}
+}
+
+func testUseInput(key session.SessionKey, now time.Time) session.JudgmentUseInput {
+	return session.JudgmentUseInput{
+		Key:                  key,
+		ConsumerID:           "test.consumer",
+		Consequence:          session.JudgmentUseConsequenceDiagnostic,
+		JudgmentRefs:         []string{session.JudgmentUseRef("judgment", "j_test")},
+		DependencyRefs:       []session.JudgmentDependencyRef{{Kind: "test_input", Ref: "one", Role: "qualifies"}},
+		PolicyRef:            "test_policy_v1",
+		ResultRef:            session.JudgmentUseRef("test_result", "one"),
+		QualificationStatus:  session.JudgmentUseQualificationQualified,
+		ReconciliationStatus: session.JudgmentUseReconciliationNotRequired,
+		CreatedAt:            now,
+		UpdatedAt:            now,
 	}
 }

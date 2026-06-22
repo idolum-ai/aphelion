@@ -137,9 +137,11 @@ func TestArchitectureConsequentialJudgmentWritesUseCentralService(t *testing.T) 
 	t.Parallel()
 
 	rawStoreMethods := map[string]struct{}{
-		"RecordJudgment":                     {},
-		"RecordJudgmentUseCommitment":        {},
-		"UpsertEffectAttemptWithJudgmentUse": {},
+		"RecordJudgment":                            {},
+		"RecordJudgmentUseCommitment":               {},
+		"UpsertEffectAttemptWithJudgmentUse":        {},
+		"AppendJudgmentChallengeEvent":              {},
+		"MarkJudgmentUsesForJudgmentReconciliation": {},
 	}
 	for _, path := range repoGoFiles(t, false) {
 		if strings.HasPrefix(path, "session"+string(filepath.Separator)) ||
@@ -212,7 +214,13 @@ func interpretationNewServiceCall(expr ast.Expr) bool {
 		return false
 	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || selector.Sel.Name != "NewService" {
+	if !ok {
+		return false
+	}
+	if selector.Sel.Name == "interpretationService" {
+		return true
+	}
+	if selector.Sel.Name != "NewService" {
 		return false
 	}
 	pkg, ok := selector.X.(*ast.Ident)

@@ -23,6 +23,7 @@ import (
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/governorauth"
 	"github.com/idolum-ai/aphelion/governorbackend"
+	"github.com/idolum-ai/aphelion/interpretation"
 	"github.com/idolum-ai/aphelion/media"
 	"github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/principal"
@@ -55,6 +56,7 @@ type Runtime struct {
 	native       agent.Provider
 	tools        agent.ToolRegistry
 	outbound     OutboundSender
+	interpret    *interpretation.Service
 	resolver     *principal.Resolver
 	inbound      inboundArtifactFetcher
 	workExecutor *WorkExecutorSelector
@@ -209,6 +211,17 @@ func New(
 	tools agent.ToolRegistry,
 	outbound OutboundSender,
 ) (*Runtime, error) {
+	return NewWithInterpretationService(cfg, store, nil, provider, tools, outbound)
+}
+
+func NewWithInterpretationService(
+	cfg *config.Config,
+	store *session.SQLiteStore,
+	interpretService *interpretation.Service,
+	provider agent.Provider,
+	tools agent.ToolRegistry,
+	outbound OutboundSender,
+) (*Runtime, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
@@ -217,6 +230,10 @@ func New(
 	}
 	if outbound == nil {
 		return nil, fmt.Errorf("outbound sender is nil")
+	}
+	if interpretService == nil {
+		service := interpretation.NewService(store)
+		interpretService = &service
 	}
 	cfg = normalizeRuntimeConfig(cfg)
 
@@ -371,13 +388,14 @@ func New(
 	}
 
 	rt := &Runtime{
-		cfg:      cfg,
-		store:    store,
-		provider: activeProvider,
-		native:   provider,
-		tools:    tools,
-		outbound: outbound,
-		inbound:  inbound,
+		cfg:       cfg,
+		store:     store,
+		provider:  activeProvider,
+		native:    provider,
+		tools:     tools,
+		outbound:  outbound,
+		interpret: interpretService,
+		inbound:   inbound,
 		resolver: principal.NewResolver(
 			cfg.Principals.Telegram.AdminUserIDs,
 			cfg.Principals.Telegram.ApprovedUserIDs,
