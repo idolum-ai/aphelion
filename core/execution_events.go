@@ -146,6 +146,8 @@ const (
 	ExecutionEventDurableWakeSkipped        = "durable.wake.skipped"
 	ExecutionEventDurableWakeCompleted      = "durable.wake.completed"
 	ExecutionEventDurableWakeFailed         = "durable.wake.failed"
+	ExecutionEventDurableChildTaskQueued    = "durable.child_task.queued"
+	ExecutionEventDurableChildTaskResult    = "durable.child_task.result"
 	ExecutionEventDurableStateAwake         = "durable.state.awake"
 	ExecutionEventDurableStateDormant       = "durable.state.dormant"
 	ExecutionEventDurablePolicyApplied      = "durable.policy.applied"

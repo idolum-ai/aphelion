@@ -1437,6 +1437,41 @@ func TestMigratesSchemaV74ToV75NextActions(t *testing.T) {
 	assertSQLiteColumn(t, store.db, "next_action_records", "operator_projection")
 }
 
+func TestMigratesSchemaV75ToV76ChildTasks(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v75.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v75 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (75)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v75 fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v75 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v75) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteColumn(t, store.db, "child_task_packets", "packet_id")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "task_lease_id")
+	assertSQLiteColumn(t, store.db, "child_task_results", "result_id")
+	assertSQLiteColumn(t, store.db, "child_task_results", "next_state")
+}
+
 func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {
 	t.Helper()
 	rows, err := db.Query(`PRAGMA table_info(` + tableName + `)`)

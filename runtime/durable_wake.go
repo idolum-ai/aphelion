@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -263,6 +264,13 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		"audit_channel":  strings.TrimSpace(plan.AuditChannel),
 		"task_packet_id": taskPacketID,
 	}, now.UTC())
+	if err := r.recordDurableWakeTaskPacket(key, agent, plan, taskPacketID, now.UTC()); err != nil {
+		wrappedErr := fmt.Errorf("record durable wake task packet: %w", err)
+		if finalizeErr := finalizeDurableWakeFailure(plan, "", wrappedErr); finalizeErr != nil {
+			return fmt.Errorf("%w (and failed to record wake failure: %v)", wrappedErr, finalizeErr)
+		}
+		return wrappedErr
+	}
 
 	unlock := r.lockSession(key)
 	defer unlock()
@@ -311,6 +319,9 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 			"agent_id": strings.TrimSpace(agent.AgentID),
 			"error":    trimError(err.Error()),
 		}, time.Now().UTC())
+		if _, resultErr := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, session.ChildTaskResultFailed, turnSummary, err, time.Now().UTC()); resultErr != nil {
+			return fmt.Errorf("run durable wake turn: %w (and failed to record child task result: %v)", err, resultErr)
+		}
 		if markErr := r.markDurableAgentPolicyApplyFailure(agent, err); markErr != nil {
 			return fmt.Errorf("run durable wake turn: %w (and failed to record apply failure: %v)", err, markErr)
 		}
@@ -326,6 +337,9 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 			"agent_id": strings.TrimSpace(agent.AgentID),
 			"error":    trimError(inferenceErr.Error()),
 		}, time.Now().UTC())
+		if _, resultErr := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, session.ChildTaskResultFailed, turnSummary, inferenceErr, time.Now().UTC()); resultErr != nil {
+			return fmt.Errorf("%w (and failed to record child task result: %v)", inferenceErr, resultErr)
+		}
 		if markErr := r.markDurableAgentPolicyApplyFailure(agent, inferenceErr); markErr != nil {
 			return fmt.Errorf("%w (and failed to record apply failure: %v)", inferenceErr, markErr)
 		}
@@ -340,6 +354,9 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 			"error":    trimError(err.Error()),
 		}, time.Now().UTC())
 		wrappedErr := fmt.Errorf("record durable wake applied policy: %w", err)
+		if _, resultErr := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, session.ChildTaskResultFailed, turnSummary, wrappedErr, time.Now().UTC()); resultErr != nil {
+			return fmt.Errorf("%w (and failed to record child task result: %v)", wrappedErr, resultErr)
+		}
 		if finalizeErr := finalizeDurableWakeFailure(plan, turnSummary, wrappedErr); finalizeErr != nil {
 			return fmt.Errorf("%w (and failed to record wake failure: %v)", wrappedErr, finalizeErr)
 		}
@@ -357,22 +374,21 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 			}
 		}
 	}
+	resultStatus, _ := durableWakeChildTaskStatusFromSummary(turnSummary)
+	result, err := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, resultStatus, turnSummary, nil, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("record durable wake child task result: %w", err)
+	}
 	r.recordExecutionEvent(key, core.ExecutionEventDurableWakeCompleted, "durable", "completed", map[string]any{
 		"agent_id":        strings.TrimSpace(agent.AgentID),
 		"summary":         truncatePreview(strings.TrimSpace(turnSummary), 220),
 		"task_packet_id":  taskPacketID,
-		"typed_result_id": durableWakeResultID(agent.AgentID, taskPacketID),
+		"typed_result_id": result.ResultID,
+		"typed_status":    string(result.Status),
 		"next_action":     "review child result or continue the bounded task",
 	}, time.Now().UTC())
-	if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
-		Key:         key,
-		Owner:       "durable_wake",
-		SubjectKind: "task_packet",
-		SubjectRef:  taskPacketID,
-		Reason:      "durable_wake_completed",
-		ResolvedAt:  time.Now().UTC(),
-	}); err != nil {
-		return fmt.Errorf("resolve durable wake next action: %w", err)
+	if err := r.materializeDurableWakeChildTaskNextState(key, result, taskPacketID, time.Now().UTC()); err != nil {
+		return fmt.Errorf("materialize durable wake child task next state: %w", err)
 	}
 	return nil
 }
@@ -383,8 +399,137 @@ func durableWakeTaskPacketID(agentID string, messageID int64, at time.Time) stri
 }
 
 func durableWakeResultID(agentID string, taskPacketID string) string {
-	seed := strings.Join([]string{strings.TrimSpace(agentID), strings.TrimSpace(taskPacketID), "result"}, ":")
-	return "child_result:" + session.EffectAttemptCommandHash(seed)[7:23]
+	return session.ChildTaskResultID(agentID, taskPacketID)
+}
+
+func (r *Runtime) recordDurableWakeTaskPacket(key session.SessionKey, agent core.DurableAgent, plan durableWakeTurnPlan, taskPacketID string, now time.Time) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	taskPacketID = strings.TrimSpace(taskPacketID)
+	if taskPacketID == "" {
+		return nil
+	}
+	inputRaw, _ := json.Marshal(map[string]any{
+		"channel":         firstNonEmpty(strings.TrimSpace(plan.Channel), "durable_wake"),
+		"audit_channel":   strings.TrimSpace(plan.AuditChannel),
+		"inbound_id":      plan.Inbound.MessageID,
+		"inbound_preview": truncatePreview(strings.TrimSpace(plan.Inbound.Text), 220),
+	})
+	_, err := r.store.RecordChildTaskPacket(session.ChildTaskPacketInput{
+		PacketID:  taskPacketID,
+		AgentID:   strings.TrimSpace(agent.AgentID),
+		Key:       key,
+		TaskKind:  "durable_wake",
+		InputJSON: string(inputRaw),
+		CreatedAt: now,
+	})
+	return err
+}
+
+func (r *Runtime) recordDurableWakeChildTaskResult(key session.SessionKey, agent core.DurableAgent, taskPacketID string, status session.ChildTaskResultStatus, summary string, cause error, now time.Time) (session.ChildTaskResult, error) {
+	if r == nil || r.store == nil {
+		return session.ChildTaskResult{}, nil
+	}
+	taskPacketID = strings.TrimSpace(taskPacketID)
+	if taskPacketID == "" {
+		return session.ChildTaskResult{}, nil
+	}
+	blockerKind := ""
+	if parsedStatus, parsedBlocker := durableWakeChildTaskStatusFromSummary(summary); status == "" {
+		status = parsedStatus
+		blockerKind = parsedBlocker
+	} else if parsedStatus != "" && parsedStatus != session.ChildTaskResultCompleted {
+		status = parsedStatus
+		blockerKind = parsedBlocker
+	}
+	if cause != nil {
+		status = session.ChildTaskResultFailed
+		blockerKind = "wake_failed"
+	}
+	if status == "" {
+		status = session.ChildTaskResultCompleted
+	}
+	errorText := ""
+	if cause != nil {
+		errorText = trimError(cause.Error())
+	}
+	result, err := r.store.RecordChildTaskResult(session.ChildTaskResultInput{
+		ResultID:     durableWakeResultID(agent.AgentID, taskPacketID),
+		PacketID:     taskPacketID,
+		AgentID:      strings.TrimSpace(agent.AgentID),
+		Key:          key,
+		Status:       status,
+		Summary:      truncatePreview(strings.TrimSpace(summary), 500),
+		BlockerKind:  blockerKind,
+		ErrorText:    errorText,
+		EvidenceRefs: []string{"task_packet:" + taskPacketID},
+		CreatedAt:    now,
+	})
+	if err != nil {
+		return session.ChildTaskResult{}, err
+	}
+	return result, nil
+}
+
+func (r *Runtime) materializeDurableWakeChildTaskNextState(key session.SessionKey, result session.ChildTaskResult, taskPacketID string, now time.Time) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+		Key:         key,
+		Owner:       "durable_wake",
+		SubjectKind: "task_packet",
+		SubjectRef:  taskPacketID,
+		Reason:      "durable_child_task_result",
+		ResolvedAt:  now,
+	}); err != nil {
+		return err
+	}
+	if result.Status == session.ChildTaskResultCompleted {
+		return nil
+	}
+	nextAction := "repair the child task blocker before retrying"
+	requiredAuthority := ""
+	if result.Status == session.ChildTaskResultBlocked {
+		nextAction = "approve or repair the bounded authority the child task reported as blocked"
+		requiredAuthority = result.BlockerKind
+	}
+	_, err := r.store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "durable_wake",
+		State:              result.NextState,
+		SubjectKind:        "child_task_result",
+		SubjectRef:         result.ResultID,
+		CausalRefs:         []string{"task_packet:" + taskPacketID, "child_task_result:" + result.ResultID},
+		NextAction:         nextAction,
+		RequiredAuthority:  requiredAuthority,
+		ResourceBlocker:    result.BlockerKind,
+		RetryPolicy:        "retry_after_blocker_resolution",
+		OperatorProjection: firstNonEmpty(strings.TrimSpace(result.Summary), nextAction),
+		CreatedAt:          now,
+	})
+	return err
+}
+
+func durableWakeChildTaskStatusFromSummary(summary string) (session.ChildTaskResultStatus, string) {
+	for _, line := range strings.Split(summary, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(strings.ToLower(line), "review_status:") {
+			continue
+		}
+		status := strings.TrimSpace(line[len("review_status:"):])
+		status = strings.Trim(strings.ToLower(status), " .")
+		switch status {
+		case "completed", "complete", "update":
+			return session.ChildTaskResultCompleted, ""
+		case "blocked", "needs_review":
+			return session.ChildTaskResultBlocked, "child_reported_" + strings.ReplaceAll(status, " ", "_")
+		case "failed", "failure":
+			return session.ChildTaskResultFailed, "child_reported_failed"
+		}
+	}
+	return session.ChildTaskResultCompleted, ""
 }
 
 func durableTurnInferenceUnavailable(result *turn.Result, summary string) bool {

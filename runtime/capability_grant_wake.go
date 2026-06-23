@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -84,6 +85,30 @@ func (r *Runtime) queueCapabilityGrantWake(ctx context.Context, agentID string, 
 		return fmt.Errorf("save durable agent capability grant wake queue: %w", err)
 	}
 	key := r.durableAgentExecutionKey(agentID)
+	inputRaw, _ := json.Marshal(map[string]any{
+		"grant_id":        grant.GrantID,
+		"request_id":      grant.RequestID,
+		"kind":            string(grant.Kind),
+		"target_resource": grant.TargetResource,
+		"allowed_actions": grant.AllowedActions,
+	})
+	if _, err := r.store.RecordChildTaskPacket(session.ChildTaskPacketInput{
+		PacketID:       taskPacketID,
+		TaskLeaseID:    session.ChildTaskLeaseID(taskPacketID),
+		AgentID:        agentID,
+		Key:            key,
+		TaskKind:       "capability_grant_wake",
+		AuthorityKind:  "capability_grant",
+		AuthorityID:    grant.GrantID,
+		GrantID:        grant.GrantID,
+		RequestID:      grant.RequestID,
+		TargetResource: grant.TargetResource,
+		RequiredAction: capabilityGrantWakeRequiredAction(grant),
+		InputJSON:      string(inputRaw),
+		CreatedAt:      now,
+	}); err != nil {
+		return fmt.Errorf("record capability grant child task packet: %w", err)
+	}
 	r.recordExecutionEvent(key, core.ExecutionEventCapabilityGrantWakeQueued, "capability", "wake_queued", map[string]any{
 		"agent_id":        agentID,
 		"grant_id":        grant.GrantID,
@@ -210,4 +235,17 @@ func capabilityGrantTaskPacketID(agentID string, grant session.CapabilityGrant) 
 		strings.TrimSpace(grant.TargetResource),
 	}, ":")
 	return "grant_task:" + strings.TrimPrefix(session.EffectAttemptCommandHash(seed), "sha256:")[:16]
+}
+
+func capabilityGrantWakeRequiredAction(grant session.CapabilityGrant) string {
+	actions := session.NormalizeCapabilityActions(grant.AllowedActions)
+	for _, action := range actions {
+		if action == "invoke" {
+			return action
+		}
+	}
+	if len(actions) > 0 {
+		return actions[0]
+	}
+	return "invoke"
 }
