@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -170,6 +171,40 @@ func TestHandleInboundProjectsSensitiveToolOutputBeforeModelContext(t *testing.T
 	}
 	if !containsString(modelProjection.SensitivityProvenance, "pattern:github_token") {
 		t.Fatalf("model projection provenance = %#v, want github token pattern", modelProjection.SensitivityProvenance)
+	}
+	if modelProjection.ProjectedText == operatorProjection.ProjectedText {
+		t.Fatalf("model/operator projections should differ by audience, both = %q", modelProjection.ProjectedText)
+	}
+	if provider.lastToolOutput != modelProjection.ProjectedText {
+		t.Fatalf("model-facing output = %q, want model projection %q", provider.lastToolOutput, modelProjection.ProjectedText)
+	}
+	events, err := store.ExecutionEventsByTurnRun(key, run.ID, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsByTurnRun() err = %v", err)
+	}
+	var succeededPayload map[string]any
+	for _, event := range events {
+		if event.EventType != core.ExecutionEventToolSucceeded {
+			continue
+		}
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &succeededPayload); err != nil {
+			t.Fatalf("tool succeeded payload json: %v", err)
+		}
+		break
+	}
+	if succeededPayload == nil {
+		t.Fatalf("events = %#v, want tool.succeeded event", events)
+	}
+	if succeededPayload["result_preview"] != modelProjection.ProjectedText {
+		t.Fatalf("result_preview = %#v, want model projection %q", succeededPayload["result_preview"], modelProjection.ProjectedText)
+	}
+	if succeededPayload["operator_result_preview"] != operatorProjection.ProjectedText {
+		t.Fatalf("operator_result_preview = %#v, want operator projection %q", succeededPayload["operator_result_preview"], operatorProjection.ProjectedText)
+	}
+	for _, leaked := range []string{secret, "/workspace/credential-slot"} {
+		if strings.Contains(succeededPayload["result_preview"].(string), leaked) || strings.Contains(succeededPayload["operator_result_preview"].(string), leaked) {
+			t.Fatalf("tool succeeded projection previews leaked %q: %#v", leaked, succeededPayload)
+		}
 	}
 }
 

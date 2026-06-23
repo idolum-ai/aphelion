@@ -69,28 +69,31 @@ func (m *turnMonitor) ProjectToolOutput(ctx context.Context, name string, input 
 }
 
 func (m *turnMonitor) ToolFinishedWithProjection(ctx context.Context, name string, input json.RawMessage, rawOutput string, projectedOutput string, err error, projectionRecorded bool) {
-	output := projectedOutput
+	modelOutput := projectedOutput
+	operatorOutput := projectedOutput
 	if strings.TrimSpace(rawOutput) != "" {
 		if !projectionRecorded && strings.TrimSpace(projectedOutput) == strings.TrimSpace(rawOutput) {
 			if record, ok := m.recordToolOutputProjection(ctx, name, session.ExposureAudienceModelPreview, session.ExposurePurposeToolResultModelContext, rawOutput, time.Now().UTC()); ok {
-				output = record.ProjectedText
+				modelOutput = record.ProjectedText
+				operatorOutput = record.ProjectedText
 			}
 		}
 		if record, ok := m.recordToolOutputProjection(ctx, name, session.ExposureAudienceOperator, session.ExposurePurposeToolResultPreview, rawOutput, time.Now().UTC()); ok {
-			output = record.ProjectedText
+			operatorOutput = record.ProjectedText
 		}
 	}
 	preview := safeToolInputPreview(input)
-	resultPreview := redactRuntimeEvidenceText(truncatePreview(strings.TrimSpace(output), 220))
+	resultPreview := redactRuntimeEvidenceText(truncatePreview(strings.TrimSpace(modelOutput), 220))
+	operatorResultPreview := redactRuntimeEvidenceText(truncatePreview(strings.TrimSpace(operatorOutput), 220))
 	errorText := ""
 	if err != nil {
 		errorText = redactRuntimeEvidenceText(trimError(err.Error()))
 	}
 	if m.audit != nil {
-		m.audit.ToolFinished(name, preview, resultPreview, errorText)
+		m.audit.ToolFinished(name, preview, operatorResultPreview, errorText)
 	}
 	if m.runID != 0 {
-		if storeErr := m.runtime.store.NoteTurnRunToolFinish(m.runID, resultPreview, errorText); storeErr != nil {
+		if storeErr := m.runtime.store.NoteTurnRunToolFinish(m.runID, operatorResultPreview, errorText); storeErr != nil {
 			if m.runtime.expectedShutdownNoise(ctx, storeErr) {
 				log.Printf("INFO suppressing expected shutdown tool-finish note failure id=%d tool=%s err=%v", m.runID, name, storeErr)
 			} else {
@@ -127,6 +130,9 @@ func (m *turnMonitor) ToolFinishedWithProjection(ctx context.Context, name strin
 		"result_preview":   resultPreview,
 		"error":            errorText,
 		"tool_duration_ms": toolDurationMS,
+	}
+	if operatorResultPreview != resultPreview {
+		payload["operator_result_preview"] = operatorResultPreview
 	}
 	if digest, ok := agent.BuildToolOutputDigest(rawOutput, agent.DefaultToolOutputDigestInlineLimit); ok {
 		safe := redactLargeToolOutputEvidence(preview, rawOutput, digest)

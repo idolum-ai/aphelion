@@ -259,7 +259,7 @@ func protectedToolOutputEvidenceInput(input ExposureProjectionInput, scope Scope
 		UserID:          input.Key.UserID,
 		Scope:           scope,
 		EpistemicStatus: EvidenceStatusAttested,
-		RedactionClass:  projection.Sensitivity,
+		RedactionClass:  EvidenceRedactionBlocked,
 		SubjectKey:      strings.TrimSpace(input.ToolName),
 		Summary:         fmt.Sprintf("protected tool output tool=%s bytes=%d hash=%s", input.ToolName, len(input.RawText), projection.SourceHash),
 		Digest:          clampStoreText(digest, 1000),

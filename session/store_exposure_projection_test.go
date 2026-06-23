@@ -4,6 +4,7 @@ package session
 
 import (
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -64,8 +65,8 @@ func TestRecordExposureProjectionStoresStructuredPolicyAndProtectedEvidence(t *t
 	if err != nil || !ok {
 		t.Fatalf("EvidenceObject(%s) ok=%t err=%v", record.ProtectedEvidenceRef, ok, err)
 	}
-	if protected.SourceKind != EvidenceSourceToolOutput || protected.RedactionClass != EvidenceRedactionSecret {
-		t.Fatalf("protected evidence = %#v, want credential-bearing tool output", protected)
+	if protected.SourceKind != EvidenceSourceToolOutput || protected.RedactionClass != EvidenceRedactionBlocked {
+		t.Fatalf("protected evidence = %#v, want non-hydratable tool output", protected)
 	}
 	if !strings.Contains(protected.PayloadJSON, "github_pat_1234567890abcdef") {
 		t.Fatalf("protected evidence payload does not retain raw source fact: %s", protected.PayloadJSON)
@@ -97,6 +98,84 @@ func TestRecordExposureProjectionStoresStructuredPolicyAndProtectedEvidence(t *t
 		if strings.Contains(payload, leaked) {
 			t.Fatalf("event payload leaked %q: %s", leaked, payload)
 		}
+	}
+}
+
+func TestRecordExposureProjectionStoresLargeRawOutputAsNonHydratableProtectedEvidence(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 99202, UserID: 1001}
+	run, err := store.BeginTurnRun(key, TurnRunKindInteractive, "inspect large tool output")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	raw := strings.Repeat("ordinary diagnostic output with no credentials\n", 90)
+	record, err := store.RecordExposureProjection(ExposureProjectionInput{
+		Key:          key,
+		TurnRunID:    run.ID,
+		InvocationID: "turn:projection-test:tool:large",
+		ToolName:     "exec",
+		Audience:     ExposureAudienceModelPreview,
+		Purpose:      ExposurePurposeToolResultModelContext,
+		RawText:      raw,
+		CreatedAt:    time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("RecordExposureProjection() err = %v", err)
+	}
+	if record.ProjectionKind != ExposureProjectionDigest || record.Sensitivity != EvidenceRedactionDigest {
+		t.Fatalf("projection kind/sensitivity = %s/%s, want digest/digest", record.ProjectionKind, record.Sensitivity)
+	}
+	if record.ProtectedEvidenceRef == "" {
+		t.Fatalf("protected evidence ref is empty for digest projection")
+	}
+	protected, ok, err := store.EvidenceObject(record.ProtectedEvidenceRef)
+	if err != nil || !ok {
+		t.Fatalf("EvidenceObject(%s) ok=%t err=%v", record.ProtectedEvidenceRef, ok, err)
+	}
+	if protected.RedactionClass != EvidenceRedactionBlocked {
+		t.Fatalf("protected redaction class = %q, want non_hydratable", protected.RedactionClass)
+	}
+	var protectedPayload map[string]any
+	if err := json.Unmarshal([]byte(protected.PayloadJSON), &protectedPayload); err != nil {
+		t.Fatalf("protected payload json: %v", err)
+	}
+	if protectedPayload["output"] != raw {
+		t.Fatalf("protected evidence should retain raw large output behind non-hydratable class")
+	}
+	if EvidencePayloadHydrationAllowed(protected.RedactionClass) {
+		t.Fatalf("protected evidence redaction class %q should not hydrate", protected.RedactionClass)
+	}
+
+	hydrated, err := store.HydrateEvidence(EvidenceHydrationQuery{
+		Key:                 key,
+		Query:               "ordinary hydration for large output",
+		RequiredEvidenceIDs: []string{record.ProtectedEvidenceRef},
+		Limit:               10,
+	})
+	if err != nil {
+		t.Fatalf("HydrateEvidence() err = %v", err)
+	}
+	if len(hydrated.MissingEvidenceIDs) != 0 {
+		t.Fatalf("missing evidence = %#v, want required protected metadata selected with payload withheld", hydrated.MissingEvidenceIDs)
+	}
+	hydratedProtected := EvidenceObject{}
+	for _, obj := range hydrated.Selected {
+		if obj.ID == record.ProtectedEvidenceRef {
+			hydratedProtected = obj
+		}
+		if strings.Contains(obj.PayloadJSON, raw) {
+			t.Fatalf("ordinary hydration leaked full raw output from %s", obj.ID)
+		}
+	}
+	if hydratedProtected.ID == "" {
+		t.Fatalf("ordinary hydration did not return protected metadata for required evidence %s", record.ProtectedEvidenceRef)
+	}
+	if strings.TrimSpace(hydratedProtected.PayloadJSON) != "{}" {
+		t.Fatalf("protected hydration payload = %s, want withheld empty payload", hydratedProtected.PayloadJSON)
 	}
 }
 
