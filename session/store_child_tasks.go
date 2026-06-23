@@ -55,8 +55,9 @@ func recordChildTaskPacketTx(tx *sql.Tx, input ChildTaskPacketInput) (ChildTaskP
 			packet_id, task_lease_id, agent_id, session_id, chat_id, user_id,
 			scope_kind, scope_id, durable_agent_id, task_kind, status, authority_kind,
 			authority_id, grant_id, request_id, target_resource, required_action,
-			input_json, result_id, created_at, updated_at, terminal_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, NULL)
+			input_json, active_attempt_id, lease_generation, fencing_token, result_id,
+			created_at, updated_at, terminal_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0, '', '', ?, ?, NULL)
 	`, input.PacketID, input.TaskLeaseID, input.AgentID, sessionID, input.Key.ChatID, input.Key.UserID,
 		string(scope.Kind), scope.ID, scope.DurableAgentID, input.TaskKind, string(input.Status), input.AuthorityKind,
 		input.AuthorityID, input.GrantID, input.RequestID, input.TargetResource, input.RequiredAction,
@@ -95,6 +96,78 @@ func recordChildTaskPacketTx(tx *sql.Tx, input ChildTaskPacketInput) (ChildTaskP
 	return packet, nil
 }
 
+func (s *SQLiteStore) ClaimChildTaskAttempt(input ChildTaskAttemptClaimInput) (ChildTaskPacket, error) {
+	if s == nil || s.db == nil {
+		return ChildTaskPacket{}, fmt.Errorf("child task store unavailable")
+	}
+	input = NormalizeChildTaskAttemptClaimInput(input)
+	if input.PacketID == "" {
+		return ChildTaskPacket{}, fmt.Errorf("child task attempt packet_id is required")
+	}
+	if input.AttemptID == "" {
+		return ChildTaskPacket{}, fmt.Errorf("child task attempt_id is required")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return ChildTaskPacket{}, fmt.Errorf("begin child task attempt tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	packet, err := claimChildTaskAttemptTx(tx, input)
+	if err != nil {
+		return ChildTaskPacket{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ChildTaskPacket{}, fmt.Errorf("commit child task attempt tx: %w", err)
+	}
+	return packet, nil
+}
+
+func claimChildTaskAttemptTx(tx *sql.Tx, input ChildTaskAttemptClaimInput) (ChildTaskPacket, error) {
+	input = NormalizeChildTaskAttemptClaimInput(input)
+	packet, ok, err := childTaskPacketByIDTx(tx, input.PacketID)
+	if err != nil {
+		return ChildTaskPacket{}, err
+	}
+	if !ok {
+		return ChildTaskPacket{}, fmt.Errorf("child task packet %s not found", input.PacketID)
+	}
+	if ChildTaskPacketStatusTerminal(packet.Status) {
+		return ChildTaskPacket{}, fmt.Errorf("child task packet %s is terminal (%s); explicit reopen required before claiming another attempt", input.PacketID, packet.Status)
+	}
+	if packet.ActiveAttemptID == input.AttemptID && packet.LeaseGeneration > 0 && packet.FencingToken != "" {
+		return packet, nil
+	}
+	nextGeneration := packet.LeaseGeneration + 1
+	if nextGeneration <= 0 {
+		nextGeneration = 1
+	}
+	fencingToken := ChildTaskFencingToken(input.PacketID, input.AttemptID, nextGeneration)
+	if fencingToken == "" {
+		return ChildTaskPacket{}, fmt.Errorf("child task attempt fence could not be generated for packet %s", input.PacketID)
+	}
+	claimedAt := input.ClaimedAt.UTC()
+	if _, err := tx.Exec(`
+		UPDATE child_task_packets
+		SET status = ?, active_attempt_id = ?, lease_generation = ?, fencing_token = ?, updated_at = ?, terminal_at = NULL
+		WHERE packet_id = ?
+			AND status NOT IN (?, ?, ?, ?, ?)
+	`, string(ChildTaskPacketInProgress), input.AttemptID, nextGeneration, fencingToken, claimedAt.Format(time.RFC3339Nano), input.PacketID,
+		string(ChildTaskPacketCompleted), string(ChildTaskPacketBlocked), string(ChildTaskPacketFailed), string(ChildTaskPacketRevoked), string(ChildTaskPacketExpired)); err != nil {
+		return ChildTaskPacket{}, fmt.Errorf("claim child task attempt %s/%s: %w", input.PacketID, input.AttemptID, err)
+	}
+	claimed, ok, err := childTaskPacketByIDTx(tx, input.PacketID)
+	if err != nil {
+		return ChildTaskPacket{}, err
+	}
+	if !ok {
+		return ChildTaskPacket{}, fmt.Errorf("child task packet %s not found after attempt claim", input.PacketID)
+	}
+	if claimed.ActiveAttemptID != input.AttemptID || claimed.LeaseGeneration != nextGeneration || claimed.FencingToken != fencingToken {
+		return ChildTaskPacket{}, fmt.Errorf("child task attempt claim for packet %s lost fence ownership", input.PacketID)
+	}
+	return claimed, nil
+}
+
 func (s *SQLiteStore) RecordChildTaskResult(input ChildTaskResultInput) (ChildTaskResult, error) {
 	if s == nil || s.db == nil {
 		return ChildTaskResult{}, fmt.Errorf("child task store unavailable")
@@ -114,7 +187,7 @@ func (s *SQLiteStore) RecordChildTaskResult(input ChildTaskResultInput) (ChildTa
 		return ChildTaskResult{}, fmt.Errorf("begin child task result tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err := recordChildTaskResultTx(tx, input)
+	result, _, err := recordChildTaskResultTx(tx, input)
 	if err != nil {
 		return ChildTaskResult{}, err
 	}
@@ -124,19 +197,79 @@ func (s *SQLiteStore) RecordChildTaskResult(input ChildTaskResultInput) (ChildTa
 	return result, nil
 }
 
-func recordChildTaskResultTx(tx *sql.Tx, input ChildTaskResultInput) (ChildTaskResult, error) {
-	input = NormalizeChildTaskResultInput(input)
-	if existing, ok, err := childTaskResultByIDTx(tx, input.ResultID); err != nil {
-		return ChildTaskResult{}, err
-	} else if ok {
-		return existing, nil
+func (s *SQLiteStore) RecordChildTaskResultAndAdvance(input ChildTaskResultInput, nextAction *NextActionInput, resolvedAt time.Time) (ChildTaskResult, error) {
+	if s == nil || s.db == nil {
+		return ChildTaskResult{}, fmt.Errorf("child task store unavailable")
 	}
-	packet, ok, err := childTaskPacketByIDTx(tx, input.PacketID)
+	input = NormalizeChildTaskResultInput(input)
+	if resolvedAt.IsZero() {
+		resolvedAt = input.CreatedAt
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return ChildTaskResult{}, fmt.Errorf("begin child task result advancement tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, created, err := recordChildTaskResultTx(tx, input)
 	if err != nil {
 		return ChildTaskResult{}, err
 	}
+	if created {
+		if nextAction == nil {
+			if err := resolveNextActionTx(tx, NextActionResolutionInput{
+				Key:         input.Key,
+				Owner:       "child_task",
+				SubjectKind: "task_packet",
+				SubjectRef:  input.PacketID,
+				Reason:      "durable_child_task_result",
+				ResolvedAt:  resolvedAt,
+			}); err != nil {
+				return ChildTaskResult{}, err
+			}
+		} else {
+			next := *nextAction
+			next.Key = input.Key
+			next.SubjectKind = "task_packet"
+			next.SubjectRef = input.PacketID
+			if next.CreatedAt.IsZero() {
+				next.CreatedAt = resolvedAt
+			}
+			if _, err := recordNextActionTx(tx, next); err != nil {
+				return ChildTaskResult{}, err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return ChildTaskResult{}, fmt.Errorf("commit child task result advancement tx: %w", err)
+	}
+	return result, nil
+}
+
+func recordChildTaskResultTx(tx *sql.Tx, input ChildTaskResultInput) (ChildTaskResult, bool, error) {
+	input = NormalizeChildTaskResultInput(input)
+	if existing, ok, err := childTaskResultByIDTx(tx, input.ResultID); err != nil {
+		return ChildTaskResult{}, false, err
+	} else if ok {
+		return existing, false, nil
+	}
+	packet, ok, err := childTaskPacketByIDTx(tx, input.PacketID)
+	if err != nil {
+		return ChildTaskResult{}, false, err
+	}
 	if !ok {
-		return ChildTaskResult{}, fmt.Errorf("child task packet %s not found", input.PacketID)
+		return ChildTaskResult{}, false, fmt.Errorf("child task packet %s not found", input.PacketID)
+	}
+	if ChildTaskPacketStatusTerminal(packet.Status) {
+		return ChildTaskResult{}, false, fmt.Errorf("child task packet %s is terminal (%s); stale result for attempt %s rejected", input.PacketID, packet.Status, input.AttemptID)
+	}
+	if input.AttemptID == "" || input.AttemptID != packet.ActiveAttemptID {
+		return ChildTaskResult{}, false, fmt.Errorf("child task result attempt %s does not own active packet attempt %s", input.AttemptID, packet.ActiveAttemptID)
+	}
+	if input.LeaseGeneration <= 0 || input.LeaseGeneration != packet.LeaseGeneration {
+		return ChildTaskResult{}, false, fmt.Errorf("child task result attempt %s has stale generation %d; active generation is %d", input.AttemptID, input.LeaseGeneration, packet.LeaseGeneration)
+	}
+	if input.FencingToken == "" || input.FencingToken != packet.FencingToken {
+		return ChildTaskResult{}, false, fmt.Errorf("child task result attempt %s failed fencing token check", input.AttemptID)
 	}
 	if input.AgentID == "" {
 		input.AgentID = packet.AgentID
@@ -149,14 +282,16 @@ func recordChildTaskResultTx(tx *sql.Tx, input ChildTaskResultInput) (ChildTaskR
 	evidenceRefs := encodeStringList(input.EvidenceRefs)
 	if _, err := tx.Exec(`
 		INSERT INTO child_task_results(
-			result_id, packet_id, attempt_id, task_lease_id, agent_id, session_id, status,
+			result_id, packet_id, attempt_id, lease_generation, fencing_token,
+			task_lease_id, agent_id, session_id, status,
 			result_kind, summary, blocker_kind, error_text, evidence_refs_json,
 			next_state, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, input.ResultID, input.PacketID, input.AttemptID, input.TaskLeaseID, input.AgentID, sessionID, string(input.Status),
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, input.ResultID, input.PacketID, input.AttemptID, input.LeaseGeneration, input.FencingToken,
+		input.TaskLeaseID, input.AgentID, sessionID, string(input.Status),
 		input.ResultKind, input.Summary, input.BlockerKind, input.ErrorText, evidenceRefs,
 		string(input.NextState), createdAt.Format(time.RFC3339Nano)); err != nil {
-		return ChildTaskResult{}, fmt.Errorf("insert child task result %s: %w", input.ResultID, err)
+		return ChildTaskResult{}, false, fmt.Errorf("insert child task result %s: %w", input.ResultID, err)
 	}
 	packetStatus := childTaskPacketStatusForResult(input.Status)
 	if input.Status == ChildTaskResultUpdate {
@@ -164,29 +299,49 @@ func recordChildTaskResultTx(tx *sql.Tx, input ChildTaskResultInput) (ChildTaskR
 			UPDATE child_task_packets
 			SET status = ?, result_id = ?, updated_at = ?, terminal_at = NULL
 			WHERE packet_id = ?
-		`, string(packetStatus), input.ResultID, createdAt.Format(time.RFC3339Nano), input.PacketID); err != nil {
-			return ChildTaskResult{}, fmt.Errorf("update child task packet nonterminal state: %w", err)
+				AND active_attempt_id = ?
+				AND lease_generation = ?
+				AND fencing_token = ?
+				AND status NOT IN (?, ?, ?, ?, ?)
+		`, string(packetStatus), input.ResultID, createdAt.Format(time.RFC3339Nano), input.PacketID,
+			input.AttemptID, input.LeaseGeneration, input.FencingToken,
+			string(ChildTaskPacketCompleted), string(ChildTaskPacketBlocked), string(ChildTaskPacketFailed), string(ChildTaskPacketRevoked), string(ChildTaskPacketExpired)); err != nil {
+			return ChildTaskResult{}, false, fmt.Errorf("update child task packet nonterminal state: %w", err)
 		}
 	} else {
 		if _, err := tx.Exec(`
 			UPDATE child_task_packets
 			SET status = ?, result_id = ?, updated_at = ?, terminal_at = ?
 			WHERE packet_id = ?
-		`, string(packetStatus), input.ResultID, createdAt.Format(time.RFC3339Nano), createdAt.Format(time.RFC3339Nano), input.PacketID); err != nil {
-			return ChildTaskResult{}, fmt.Errorf("update child task packet terminal state: %w", err)
+				AND active_attempt_id = ?
+				AND lease_generation = ?
+				AND fencing_token = ?
+				AND status NOT IN (?, ?, ?, ?, ?)
+		`, string(packetStatus), input.ResultID, createdAt.Format(time.RFC3339Nano), createdAt.Format(time.RFC3339Nano), input.PacketID,
+			input.AttemptID, input.LeaseGeneration, input.FencingToken,
+			string(ChildTaskPacketCompleted), string(ChildTaskPacketBlocked), string(ChildTaskPacketFailed), string(ChildTaskPacketRevoked), string(ChildTaskPacketExpired)); err != nil {
+			return ChildTaskResult{}, false, fmt.Errorf("update child task packet terminal state: %w", err)
 		}
 	}
+	updatedPacket, ok, err := childTaskPacketByIDTx(tx, input.PacketID)
+	if err != nil {
+		return ChildTaskResult{}, false, err
+	}
+	if !ok || updatedPacket.ResultID != input.ResultID {
+		return ChildTaskResult{}, false, fmt.Errorf("child task packet %s did not accept result %s", input.PacketID, input.ResultID)
+	}
 	payloadRaw, _ := json.Marshal(map[string]any{
-		"result_id":     input.ResultID,
-		"packet_id":     input.PacketID,
-		"attempt_id":    input.AttemptID,
-		"task_lease_id": input.TaskLeaseID,
-		"agent_id":      input.AgentID,
-		"status":        string(input.Status),
-		"result_kind":   input.ResultKind,
-		"blocker_kind":  input.BlockerKind,
-		"evidence_refs": input.EvidenceRefs,
-		"next_state":    string(input.NextState),
+		"result_id":        input.ResultID,
+		"packet_id":        input.PacketID,
+		"attempt_id":       input.AttemptID,
+		"lease_generation": input.LeaseGeneration,
+		"task_lease_id":    input.TaskLeaseID,
+		"agent_id":         input.AgentID,
+		"status":           string(input.Status),
+		"result_kind":      input.ResultKind,
+		"blocker_kind":     input.BlockerKind,
+		"evidence_refs":    input.EvidenceRefs,
+		"next_state":       string(input.NextState),
 	})
 	if _, err := appendExecutionEventsTx(tx, input.Key, []ExecutionEventInput{{
 		EventType:   core.ExecutionEventDurableChildTaskResult,
@@ -195,16 +350,16 @@ func recordChildTaskResultTx(tx *sql.Tx, input ChildTaskResultInput) (ChildTaskR
 		PayloadJSON: string(payloadRaw),
 		CreatedAt:   createdAt,
 	}}); err != nil {
-		return ChildTaskResult{}, fmt.Errorf("append child task result event: %w", err)
+		return ChildTaskResult{}, false, fmt.Errorf("append child task result event: %w", err)
 	}
 	result, ok, err := childTaskResultByIDTx(tx, input.ResultID)
 	if err != nil {
-		return ChildTaskResult{}, err
+		return ChildTaskResult{}, false, err
 	}
 	if !ok {
-		return ChildTaskResult{}, fmt.Errorf("child task result %s not found after insert", input.ResultID)
+		return ChildTaskResult{}, false, fmt.Errorf("child task result %s not found after insert", input.ResultID)
 	}
-	return result, nil
+	return result, true, nil
 }
 
 func (s *SQLiteStore) ChildTaskPacket(packetID string) (ChildTaskPacket, bool, error) {
@@ -262,14 +417,16 @@ func childTaskPacketSelectSQL() string {
 		SELECT packet_id, task_lease_id, agent_id, session_id, chat_id, user_id,
 			scope_kind, scope_id, durable_agent_id, task_kind, status, authority_kind,
 			authority_id, grant_id, request_id, target_resource, required_action,
-			input_json, result_id, created_at, updated_at, terminal_at
+			input_json, active_attempt_id, lease_generation, fencing_token, result_id,
+			created_at, updated_at, terminal_at
 		FROM child_task_packets
 	`
 }
 
 func childTaskResultSelectSQL() string {
 	return `
-		SELECT result_id, packet_id, attempt_id, task_lease_id, agent_id, session_id, status,
+		SELECT result_id, packet_id, attempt_id, lease_generation, fencing_token,
+			task_lease_id, agent_id, session_id, status,
 			result_kind, summary, blocker_kind, error_text, evidence_refs_json,
 			next_state, created_at
 		FROM child_task_results
@@ -306,6 +463,9 @@ func scanChildTaskPacket(scanner interface{ Scan(dest ...any) error }) (ChildTas
 		&packet.TargetResource,
 		&packet.RequiredAction,
 		&packet.InputJSON,
+		&packet.ActiveAttemptID,
+		&packet.LeaseGeneration,
+		&packet.FencingToken,
 		&packet.ResultID,
 		&createdAtRaw,
 		&updatedAtRaw,
@@ -351,6 +511,8 @@ func scanChildTaskResult(scanner interface{ Scan(dest ...any) error }) (ChildTas
 		&result.ResultID,
 		&result.PacketID,
 		&result.AttemptID,
+		&result.LeaseGeneration,
+		&result.FencingToken,
 		&result.TaskLeaseID,
 		&result.AgentID,
 		&result.SessionID,

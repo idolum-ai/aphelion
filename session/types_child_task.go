@@ -31,26 +31,29 @@ const (
 )
 
 type ChildTaskPacket struct {
-	PacketID       string
-	TaskLeaseID    string
-	AgentID        string
-	SessionID      string
-	ChatID         int64
-	UserID         int64
-	Scope          ScopeRef
-	TaskKind       string
-	Status         ChildTaskPacketStatus
-	AuthorityKind  string
-	AuthorityID    string
-	GrantID        string
-	RequestID      string
-	TargetResource string
-	RequiredAction string
-	InputJSON      string
-	ResultID       string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	TerminalAt     time.Time
+	PacketID        string
+	TaskLeaseID     string
+	AgentID         string
+	SessionID       string
+	ChatID          int64
+	UserID          int64
+	Scope           ScopeRef
+	TaskKind        string
+	Status          ChildTaskPacketStatus
+	AuthorityKind   string
+	AuthorityID     string
+	GrantID         string
+	RequestID       string
+	TargetResource  string
+	RequiredAction  string
+	InputJSON       string
+	ActiveAttemptID string
+	LeaseGeneration int64
+	FencingToken    string
+	ResultID        string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	TerminalAt      time.Time
 }
 
 type ChildTaskPacketInput struct {
@@ -70,38 +73,50 @@ type ChildTaskPacketInput struct {
 	CreatedAt      time.Time
 }
 
+type ChildTaskAttemptClaimInput struct {
+	PacketID  string
+	AttemptID string
+	AgentID   string
+	Key       SessionKey
+	ClaimedAt time.Time
+}
+
 type ChildTaskResult struct {
-	ResultID     string
-	PacketID     string
-	AttemptID    string
-	TaskLeaseID  string
-	AgentID      string
-	SessionID    string
-	Status       ChildTaskResultStatus
-	ResultKind   string
-	Summary      string
-	BlockerKind  string
-	ErrorText    string
-	EvidenceRefs []string
-	NextState    NextActionState
-	CreatedAt    time.Time
+	ResultID        string
+	PacketID        string
+	AttemptID       string
+	LeaseGeneration int64
+	FencingToken    string
+	TaskLeaseID     string
+	AgentID         string
+	SessionID       string
+	Status          ChildTaskResultStatus
+	ResultKind      string
+	Summary         string
+	BlockerKind     string
+	ErrorText       string
+	EvidenceRefs    []string
+	NextState       NextActionState
+	CreatedAt       time.Time
 }
 
 type ChildTaskResultInput struct {
-	ResultID     string
-	PacketID     string
-	AttemptID    string
-	TaskLeaseID  string
-	AgentID      string
-	Key          SessionKey
-	Status       ChildTaskResultStatus
-	ResultKind   string
-	Summary      string
-	BlockerKind  string
-	ErrorText    string
-	EvidenceRefs []string
-	NextState    NextActionState
-	CreatedAt    time.Time
+	ResultID        string
+	PacketID        string
+	AttemptID       string
+	LeaseGeneration int64
+	FencingToken    string
+	TaskLeaseID     string
+	AgentID         string
+	Key             SessionKey
+	Status          ChildTaskResultStatus
+	ResultKind      string
+	Summary         string
+	BlockerKind     string
+	ErrorText       string
+	EvidenceRefs    []string
+	NextState       NextActionState
+	CreatedAt       time.Time
 }
 
 func NormalizeChildTaskPacketInput(input ChildTaskPacketInput) ChildTaskPacketInput {
@@ -134,10 +149,26 @@ func NormalizeChildTaskPacketInput(input ChildTaskPacketInput) ChildTaskPacketIn
 	return input
 }
 
+func NormalizeChildTaskAttemptClaimInput(input ChildTaskAttemptClaimInput) ChildTaskAttemptClaimInput {
+	input.PacketID = strings.TrimSpace(input.PacketID)
+	input.AttemptID = strings.TrimSpace(input.AttemptID)
+	input.AgentID = strings.TrimSpace(input.AgentID)
+	if input.ClaimedAt.IsZero() {
+		input.ClaimedAt = time.Now().UTC()
+	} else {
+		input.ClaimedAt = input.ClaimedAt.UTC()
+	}
+	if input.AttemptID == "" && input.PacketID != "" {
+		input.AttemptID = ChildTaskAttemptID(input.PacketID, input.ClaimedAt.Format(time.RFC3339Nano))
+	}
+	return input
+}
+
 func NormalizeChildTaskResultInput(input ChildTaskResultInput) ChildTaskResultInput {
 	input.ResultID = strings.TrimSpace(input.ResultID)
 	input.PacketID = strings.TrimSpace(input.PacketID)
 	input.AttemptID = strings.TrimSpace(input.AttemptID)
+	input.FencingToken = strings.TrimSpace(input.FencingToken)
 	input.TaskLeaseID = strings.TrimSpace(input.TaskLeaseID)
 	input.AgentID = strings.TrimSpace(input.AgentID)
 	input.Status = NormalizeChildTaskResultStatus(input.Status)
@@ -235,6 +266,30 @@ func ChildTaskResultID(agentID string, packetID string, attemptID string) string
 	seed := strings.Join([]string{strings.TrimSpace(agentID), strings.TrimSpace(packetID), strings.TrimSpace(attemptID), "result"}, ":")
 	sum := sha256.Sum256([]byte(seed))
 	return "child_result:" + hex.EncodeToString(sum[:8])
+}
+
+func ChildTaskFencingToken(packetID string, attemptID string, leaseGeneration int64) string {
+	packetID = strings.TrimSpace(packetID)
+	attemptID = strings.TrimSpace(attemptID)
+	if packetID == "" || attemptID == "" || leaseGeneration <= 0 {
+		return ""
+	}
+	seed := strings.Join([]string{packetID, attemptID, "generation", time.Unix(leaseGeneration, 0).UTC().Format(time.RFC3339Nano)}, "\x00")
+	sum := sha256.Sum256([]byte(seed))
+	return "child_fence:" + hex.EncodeToString(sum[:16])
+}
+
+func ChildTaskPacketStatusTerminal(status ChildTaskPacketStatus) bool {
+	switch NormalizeChildTaskPacketStatus(status) {
+	case ChildTaskPacketCompleted,
+		ChildTaskPacketBlocked,
+		ChildTaskPacketFailed,
+		ChildTaskPacketRevoked,
+		ChildTaskPacketExpired:
+		return true
+	default:
+		return false
+	}
 }
 
 func childTaskPacketStatusForResult(status ChildTaskResultStatus) ChildTaskPacketStatus {

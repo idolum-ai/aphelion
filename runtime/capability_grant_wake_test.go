@@ -122,7 +122,7 @@ func TestQueueCapabilityGrantWakeAddsParentConversation(t *testing.T) {
 func TestCapabilityGrantWakeRepeatedAttemptsRecordDistinctResults(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	_ = sender
-	provider.replyText = "Grant incorporated on this attempt.\nREVIEW_STATUS: completed"
+	provider.replyText = "Grant incorporated on this attempt, but more work remains.\nREVIEW_STATUS: update"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
@@ -167,8 +167,8 @@ func TestCapabilityGrantWakeRepeatedAttemptsRecordDistinctResults(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ChildTaskPacket(first) err = %v", err)
 	}
-	if !ok || firstPacket.Status != session.ChildTaskPacketCompleted || firstPacket.ResultID == "" {
-		t.Fatalf("first packet = %#v ok=%t, want completed packet", firstPacket, ok)
+	if !ok || firstPacket.Status != session.ChildTaskPacketInProgress || firstPacket.ResultID == "" {
+		t.Fatalf("first packet = %#v ok=%t, want in-progress packet", firstPacket, ok)
 	}
 	firstResult, ok, err := store.ChildTaskResult(firstPacket.ResultID)
 	if err != nil {
@@ -179,6 +179,7 @@ func TestCapabilityGrantWakeRepeatedAttemptsRecordDistinctResults(t *testing.T) 
 	}
 
 	time.Sleep(time.Millisecond)
+	provider.replyText = "Grant incorporated on retry.\nREVIEW_STATUS: completed"
 	if err := rt.queueCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
 		t.Fatalf("queueCapabilityGrantWake(second) err = %v", err)
 	}
@@ -191,6 +192,9 @@ func TestCapabilityGrantWakeRepeatedAttemptsRecordDistinctResults(t *testing.T) 
 	}
 	if !ok || secondPacket.PacketID != firstPacket.PacketID || secondPacket.ResultID == "" || secondPacket.ResultID == firstPacket.ResultID {
 		t.Fatalf("second packet = %#v first = %#v ok=%t, want same packet with new result", secondPacket, firstPacket, ok)
+	}
+	if secondPacket.Status != session.ChildTaskPacketCompleted {
+		t.Fatalf("second packet status = %s, want completed", secondPacket.Status)
 	}
 	secondResult, ok, err := store.ChildTaskResult(secondPacket.ResultID)
 	if err != nil {
@@ -393,12 +397,12 @@ func TestCapabilityGrantWakeBlockedResultCreatesTypedNextState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenNextActionsBySession() err = %v", err)
 	}
-	if len(open) != 1 || open[0].SubjectKind != "child_task_result" || open[0].SubjectRef != result.ResultID || open[0].State != session.NextActionBlockedNeedsAuthority {
+	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionBlockedNeedsAuthority {
 		t.Fatalf("open next actions after blocked child task = %#v, want one typed blocker next state", open)
 	}
 }
 
-func TestCapabilityGrantWakeUpdateResultKeepsTaskNonterminal(t *testing.T) {
+func TestCapabilityGrantWakeUpdateThenCompletionResolvesPacketContinuation(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	_ = sender
 	provider.replyText = "I incorporated the grant but still need another bounded pass.\nREVIEW_STATUS: update"
@@ -459,7 +463,7 @@ func TestCapabilityGrantWakeUpdateResultKeepsTaskNonterminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenNextActionsBySession() err = %v", err)
 	}
-	if len(open) != 1 || open[0].SubjectKind != "child_task_result" || open[0].SubjectRef != result.ResultID || open[0].State != session.NextActionWaitingForChild || open[0].RetryPolicy != "continue_after_child_update" {
+	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionWaitingForChild || open[0].RetryPolicy != "continue_after_child_update" {
 		t.Fatalf("open next actions after update child task = %#v, want one bounded continuation", open)
 	}
 	events, err := store.ExecutionEventsBySession(rt.durableAgentExecutionKey(agent.AgentID), 0, 80)
@@ -468,6 +472,102 @@ func TestCapabilityGrantWakeUpdateResultKeepsTaskNonterminal(t *testing.T) {
 	}
 	assertEventPayloadJoin(t, events, core.ExecutionEventDurableWakeCompleted, taskPacketID, result.AttemptID)
 	assertEventPayloadJoin(t, events, core.ExecutionEventDurableChildTaskResult, taskPacketID, result.AttemptID)
+
+	time.Sleep(time.Millisecond)
+	provider.replyText = "The grant task is now complete.\nREVIEW_STATUS: completed"
+	if err := rt.queueCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("queueCapabilityGrantWake(completion) err = %v", err)
+	}
+	if err := rt.runCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("runCapabilityGrantWake(completion) err = %v", err)
+	}
+	completedPacket, ok, err := store.ChildTaskPacket(taskPacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(completed) err = %v", err)
+	}
+	if !ok || completedPacket.Status != session.ChildTaskPacketCompleted || completedPacket.ResultID == result.ResultID || completedPacket.TerminalAt.IsZero() {
+		t.Fatalf("completed packet = %#v ok=%t, want terminal packet with new result", completedPacket, ok)
+	}
+	completedResult, ok, err := store.ChildTaskResult(completedPacket.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskResult(completed) err = %v", err)
+	}
+	if !ok || completedResult.Status != session.ChildTaskResultCompleted || completedResult.AttemptID == result.AttemptID {
+		t.Fatalf("completed result = %#v ok=%t update = %#v, want distinct terminal attempt", completedResult, ok, result)
+	}
+	open, err = store.OpenNextActionsBySession(rt.durableAgentExecutionKey(agent.AgentID), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(completion) err = %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open next actions after update completion = %#v, want none", open)
+	}
+}
+
+func TestCapabilityGrantWakeFailureCreatesPacketRepairNextAction(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	_ = sender
+	provider.err = context.DeadlineExceeded
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "child-failure",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "manual_channel",
+		WakeupMode:         "manual",
+		Status:             "active",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Handle failed grant wake tests.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	grant := session.CapabilityGrant{
+		GrantID:        "capg-child-failure",
+		RequestID:      "cap-child-failure",
+		GrantedTo:      "durable_agent:child-failure",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "codex",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+	}
+	if err := rt.queueCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("queueCapabilityGrantWake() err = %v", err)
+	}
+	if err := rt.runCapabilityGrantWake(context.Background(), agent.AgentID, grant); err == nil {
+		t.Fatal("runCapabilityGrantWake() err = nil, want provider failure")
+	}
+	taskPacketID := capabilityGrantTaskPacketID(agent.AgentID, grant)
+	packet, ok, err := store.ChildTaskPacket(taskPacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket() err = %v", err)
+	}
+	if !ok || packet.Status != session.ChildTaskPacketFailed || packet.ResultID == "" || packet.TerminalAt.IsZero() {
+		t.Fatalf("failed packet = %#v ok=%t, want terminal failed packet", packet, ok)
+	}
+	result, ok, err := store.ChildTaskResult(packet.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskResult() err = %v", err)
+	}
+	if !ok || result.Status != session.ChildTaskResultFailed || result.NextState != session.NextActionBlockedNeedsResourceRepair || result.ErrorText == "" {
+		t.Fatalf("failed result = %#v ok=%t, want resource repair failed result", result, ok)
+	}
+	open, err := store.OpenNextActionsBySession(rt.durableAgentExecutionKey(agent.AgentID), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionBlockedNeedsResourceRepair {
+		t.Fatalf("open next actions after failed child task = %#v, want packet repair next state", open)
+	}
 }
 
 func recordRepresentativeManagedInvocationForTest(store *session.SQLiteStore, kind session.CapabilityKind, target string, principal string, action string, sessionID string) (session.CapabilityInvocation, error) {
