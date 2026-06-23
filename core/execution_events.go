@@ -50,6 +50,9 @@ const (
 	ExecutionEventCapabilityGrantWakeFailed = "capability.grant.wake_failed"
 	ExecutionEventCapabilityUpdateApplied   = "capability.update_plan.applied"
 	ExecutionEventCapabilityInvocation      = "capability.invocation"
+	ExecutionEventWorkflowNextState         = "workflow.next_state"
+	ExecutionEventResourcePreflight         = "resource.preflight"
+	ExecutionEventPersistenceLatency        = "persistence.latency_classified"
 
 	ExecutionEventDeliveryProgressSent         = "delivery.progress.sent"
 	ExecutionEventDeliveryProgressEdited       = "delivery.progress.edited"

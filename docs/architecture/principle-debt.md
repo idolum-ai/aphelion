@@ -37,7 +37,12 @@ Status values:
   point-of-use authority spine, but some end-to-end workflows still stop safely
   without deterministically producing the next durable operator-legible state.
   Approval, resource denial, uncertain effects, child reports, and phase
-  supersession can require manual reconstruction of the next action.
+  supersession can require manual reconstruction of the next action. The first
+  implementation slice now records `next_action_records` and matching
+  `workflow.next_state` events for approvals, uncertain effects, resource
+  preflight failures, child wakes, and supersession; the debt remains active
+  until all execution species emit those records through their real transition
+  paths and operator projections consume them consistently.
 - **Exit gate:** After every operator decision or execution attempt, exactly one
   durable typed next-state record exists. The state vocabulary may include
   ready, blocked, verification, waiting, retry, supersession, cancellation, and
@@ -56,7 +61,11 @@ Status values:
   may run; it does not answer whether the resulting bytes, paths, config
   metadata, or diagnostic text may be shown to a given audience. Some output
   paths still rely on size-bounded previews or source-local redaction rather
-  than one audience-aware exposure projection policy.
+  than one audience-aware exposure projection policy. The first implementation
+  slice projects ordinary turn-run tool previews through an audience-aware
+  policy and redacts secret-adjacent path/config metadata; the debt remains
+  active until evidence hydration, logs, operator UI, external delivery, and
+  privileged artifact access share the same projection contract.
 - **Exit gate:** Every tool-result exposure path records or consumes a typed
   sensitivity/provenance judgment and renders an audience-specific projection:
   redacted view, digest, withheld marker, protected artifact reference, or

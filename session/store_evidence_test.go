@@ -53,6 +53,29 @@ github_pat_1234567890abcdef`
 	}
 }
 
+func TestProjectToolResultForAudienceAnnotatesSensitiveAndLargePreviews(t *testing.T) {
+	t.Parallel()
+
+	sensitive := "token: example-redaction-canary-value\npath: /workspace/credential-slot"
+	projected := ProjectToolResultForAudience(sensitive, ExposureAudienceModelPreview)
+	if projected.Projection != "redacted" || projected.PolicyRef == "" {
+		t.Fatalf("projection = %#v, want redacted projection with policy", projected)
+	}
+	for _, leaked := range []string{"example-redaction-canary-value", "/workspace/credential-slot"} {
+		if strings.Contains(projected.Text, leaked) {
+			t.Fatalf("projection leaked %q: %s", leaked, projected.Text)
+		}
+	}
+	if !strings.Contains(projected.Text, "[EXPOSURE_PROJECTION]") || !strings.Contains(projected.Text, "credential_metadata") {
+		t.Fatalf("projection text = %q, want exposure header with sensitivity", projected.Text)
+	}
+
+	large := ProjectToolResultForAudience(strings.Repeat("repair detail\n", 300), ExposureAudienceModelPreview)
+	if large.Projection != "digest" || !strings.Contains(large.Text, "compact_current_state") {
+		t.Fatalf("large projection = %#v, want compact digest", large)
+	}
+}
+
 func TestEvidenceWriteThroughFromSessionTurnAndExecution(t *testing.T) {
 	t.Parallel()
 

@@ -10,7 +10,7 @@
       "evidence redaction",
       "command effect planning"
     ],
-    "current_status": "partial",
+    "current_status": "partial_implemented",
     "always_on_anchors": [
       "session/store_evidence_test.go#TestRedactEvidenceTextReplacesSecretValuesWithStableMarkers"
     ],
@@ -31,7 +31,7 @@
       "universal evidence ledger",
       "evidence hydration"
     ],
-    "current_status": "partial",
+    "current_status": "partial_implemented",
     "always_on_anchors": [
       "tool/evidence_hydrate_test.go#TestEvidenceHydrateToolWithholdsCredentialBearingPayloadWindow"
     ],
@@ -52,7 +52,7 @@
       "turn run records",
       "tool result digest"
     ],
-    "current_status": "debt",
+    "current_status": "implemented_first_slice",
     "always_on_anchors": [
       "agent/turn_test.go#TestToolFailureClassifiesFromOutputWithoutEchoingIt"
     ],
@@ -73,7 +73,7 @@
       "durable child forensic redaction",
       "configured capability visibility"
     ],
-    "current_status": "partial",
+    "current_status": "implemented_first_slice",
     "always_on_anchors": [
       "durableagent/runtime_test.go#TestQueueReviewArtifactRedactsSecretLikeMetadataIntoForensicSidecar"
     ],
@@ -94,7 +94,7 @@
       "action proposal continuation lease",
       "operator presentation contract"
     ],
-    "current_status": "partial",
+    "current_status": "implemented_first_slice",
     "always_on_anchors": [
       "runtime/request_approval_runtime_test.go#TestRequestApprovalToolMaterializesVisibleContinuationWithCapabilityDependency"
     ],
@@ -115,7 +115,7 @@
       "capability delegation lane",
       "durable wake"
     ],
-    "current_status": "partial",
+    "current_status": "implemented_first_slice",
     "always_on_anchors": [
       "runtime/capability_grant_wake_test.go#TestQueueCapabilityGrantWakeAddsParentConversation"
     ],
@@ -136,7 +136,7 @@
       "effect-attempt ledger",
       "work outcome verification"
     ],
-    "current_status": "partial",
+    "current_status": "implemented_first_slice",
     "always_on_anchors": [
       "runtime/work_executor_continuation_test.go#TestUnverifiedWorkspaceWriteOffersVerificationThenCanResumeNextPhase"
     ],
@@ -157,7 +157,7 @@
       "effect-attempt ledger",
       "continuation recovery"
     ],
-    "current_status": "partial",
+    "current_status": "implemented_first_slice",
     "always_on_anchors": [
       "runtime/work_executor_continuation_test.go#TestInconclusiveWorkspaceWriteVerificationSurfacesReconciliationApproval"
     ],
@@ -241,7 +241,7 @@
       "effectauth",
       "continuation authority contract"
     ],
-    "current_status": "partial",
+    "current_status": "partial_implemented",
     "always_on_anchors": [
       "tool/exec_test.go#TestExecContinuationAuthorityRejectsAutoApprovalWidening"
     ],
@@ -262,7 +262,7 @@
       "continuation supersession",
       "operation phase plan"
     ],
-    "current_status": "partial",
+    "current_status": "implemented_first_slice",
     "always_on_anchors": [
       "runtime/continuation_authority_contract_test.go#TestMaterializedInvalidAuthorityContractReconcilesToFreshApproval"
     ],
@@ -325,7 +325,7 @@
       "native file authority",
       "resource preflight"
     ],
-    "current_status": "debt",
+    "current_status": "implemented_first_slice",
     "always_on_anchors": [
       "tool/native_file_tools_test.go#TestWriteFileCreateDirsValidatesSymlinkAncestorBeforeMkdir"
     ],
@@ -366,7 +366,7 @@
       "durable child product contract",
       "durable wake"
     ],
-    "current_status": "debt",
+    "current_status": "partial_implemented",
     "always_on_anchors": [
       "runtime/durable_wake_parent_conversation_test.go#TestRunDurableAgentChildWakeProcessesPendingParentBeforeExternalCadence"
     ],
@@ -387,7 +387,7 @@
       "durable child product contract",
       "operator presentation contract"
     ],
-    "current_status": "debt",
+    "current_status": "partial_implemented",
     "always_on_anchors": [
       "runtime/external_channel_wake_test.go#TestGenericExternalChannelWakeOutcomePrefersTypedContract"
     ],
@@ -408,7 +408,7 @@
       "memory perception budget",
       "context preflight"
     ],
-    "current_status": "partial",
+    "current_status": "implemented_first_slice",
     "always_on_anchors": [
       "agent/turn_test.go#TestRunTurnStopsToolLoopOnTokenBudgetExhaustion"
     ],
@@ -427,7 +427,7 @@
       "status command",
       "deploy verification"
     ],
-    "current_status": "partial",
+    "current_status": "implemented_first_slice",
     "always_on_anchors": [
       "internal/standalonecli/status_command_test.go#TestRunStatusCommandKVDegradesWhenBuildRevisionUnknown"
     ],
@@ -445,7 +445,7 @@
     "existing_contracts": [
       "transparent execution sequence"
     ],
-    "current_status": "unassessed",
+    "current_status": "implemented_first_slice",
     "always_on_anchors": [
       "runtime/eval_test.go#TestRunEvalSuiteJobsPreservesSerialOrderAndPressure"
     ],

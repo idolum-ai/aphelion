@@ -252,10 +252,12 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 	if key.Scope.Kind == "" {
 		key.Scope = durableAgentScopeRef(agent)
 	}
+	taskPacketID := durableWakeTaskPacketID(agent.AgentID, plan.Inbound.MessageID, now)
 	r.recordExecutionEvent(key, core.ExecutionEventDurableWakeStarted, "durable", "started", map[string]any{
-		"agent_id":      strings.TrimSpace(agent.AgentID),
-		"channel":       firstNonEmpty(strings.TrimSpace(plan.Channel), "durable_wake"),
-		"audit_channel": strings.TrimSpace(plan.AuditChannel),
+		"agent_id":       strings.TrimSpace(agent.AgentID),
+		"channel":        firstNonEmpty(strings.TrimSpace(plan.Channel), "durable_wake"),
+		"audit_channel":  strings.TrimSpace(plan.AuditChannel),
+		"task_packet_id": taskPacketID,
 	}, now.UTC())
 
 	unlock := r.lockSession(key)
@@ -352,10 +354,23 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		}
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventDurableWakeCompleted, "durable", "completed", map[string]any{
-		"agent_id": strings.TrimSpace(agent.AgentID),
-		"summary":  truncatePreview(strings.TrimSpace(turnSummary), 220),
+		"agent_id":        strings.TrimSpace(agent.AgentID),
+		"summary":         truncatePreview(strings.TrimSpace(turnSummary), 220),
+		"task_packet_id":  taskPacketID,
+		"typed_result_id": durableWakeResultID(agent.AgentID, taskPacketID, time.Now().UTC()),
+		"next_action":     "review child result or continue the bounded task",
 	}, time.Now().UTC())
 	return nil
+}
+
+func durableWakeTaskPacketID(agentID string, messageID int64, at time.Time) string {
+	seed := strings.Join([]string{strings.TrimSpace(agentID), fmt.Sprintf("%d", messageID), at.UTC().Format(time.RFC3339Nano)}, ":")
+	return "child_task:" + session.EffectAttemptCommandHash(seed)[7:23]
+}
+
+func durableWakeResultID(agentID string, taskPacketID string, at time.Time) string {
+	seed := strings.Join([]string{strings.TrimSpace(agentID), strings.TrimSpace(taskPacketID), at.UTC().Format(time.RFC3339Nano)}, ":")
+	return "child_result:" + session.EffectAttemptCommandHash(seed)[7:23]
 }
 
 func durableTurnInferenceUnavailable(result *turn.Result, summary string) bool {

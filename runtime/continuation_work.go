@@ -133,6 +133,18 @@ func (r *Runtime) approveContinuationBundleForKeyLocked(key session.SessionKey, 
 	payload := continuationExecutionPayload(state)
 	payload["approved_by_user"] = approverID
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationApproved, "continuation", "approved", payload, now)
+	_, _ = r.store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "continuation",
+		State:              session.NextActionReadyToExecute,
+		SubjectKind:        "continuation_lease",
+		SubjectRef:         firstNonEmptyContinuation(state.ContinuationLease.ID, state.ApprovalBundle.ID, state.ActionProposal.ID),
+		CausalRefs:         []string{"continuation:" + firstNonEmptyContinuation(state.ContinuationLease.ID, state.ApprovalBundle.ID), "proposal:" + state.ActionProposal.ID},
+		NextAction:         "execute the approved continuation turn",
+		RequiredAuthority:  firstNonEmptyContinuation(string(state.ContinuationLease.LeaseClass), state.ActionProposal.RiskClass),
+		OperatorProjection: "The continuation is approved and ready for one bounded execution turn.",
+		CreatedAt:          now,
+	})
 	return state, nil
 }
 

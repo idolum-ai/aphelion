@@ -66,6 +66,18 @@ func (r *Runtime) repairSupersededContinuationProjection(
 			RequiredBehavior: "Do not execute old approval buttons after the durable operation or phase projection changes.",
 		}},
 	}, now)
+	_, _ = r.store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "continuation",
+		State:              session.NextActionSuperseded,
+		SubjectKind:        "phase",
+		SubjectRef:         firstNonEmptyContinuation(state.ApprovalBundle.CurrentPhaseID, state.ActionProposal.ID),
+		CausalRefs:         continuationRepairEvidenceRefs(opState, repaired),
+		NextAction:         "retire the stale continuation and use the current operation state",
+		RetryPolicy:        "do_not_execute_superseded_projection",
+		OperatorProjection: "The prior approval was superseded by newer operation state and must not execute.",
+		CreatedAt:          now,
+	})
 	chatID := msg.ChatID
 	if chatID == 0 {
 		chatID = key.ChatID

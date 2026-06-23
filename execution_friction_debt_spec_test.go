@@ -14,6 +14,7 @@ import (
 	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 )
 
 func TestExecutionFrictionDebtSpecOutputExposure(t *testing.T) {
@@ -41,21 +42,21 @@ func TestExecutionFrictionDebtSpecOutputExposure(t *testing.T) {
 		t.Fatalf("TurnRun() err = %v", err)
 	}
 
-	redacted := session.RedactEvidenceText(rawPreview)
+	redacted := session.ProjectToolResultForAudience(rawPreview, session.ExposureAudienceModelPreview)
 	projections := []frictionExposureProjection{
 		{
 			Name:      "redacted evidence projection",
 			Audience:  "model",
 			Value:     redacted.Text,
 			Ordinary:  true,
-			PolicyRef: "session.RedactEvidenceText",
+			PolicyRef: redacted.PolicyRef,
 		},
 		{
 			Name:      "persisted turn-run result preview",
 			Audience:  "model",
 			Value:     gotRun.LastToolResultPreview,
 			Ordinary:  true,
-			PolicyRef: "",
+			PolicyRef: exposurePolicyRefFromPreview(gotRun.LastToolResultPreview),
 		},
 	}
 	assertOrdinaryExposureUsesSafeProductionProjection(t, projections, []string{canary, metadataPath})
@@ -107,6 +108,18 @@ func TestExecutionFrictionDebtSpecApprovedContinuationNextState(t *testing.T) {
 
 	store := newExecutionFrictionStore(t)
 	key := session.SessionKey{ChatID: 57006, UserID: 1001}
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "continuation",
+		State:              session.NextActionReadyToExecute,
+		SubjectKind:        "continuation_lease",
+		SubjectRef:         "lease-friction",
+		NextAction:         "execute the approved continuation turn",
+		RequiredAuthority:  "workspace_write",
+		OperatorProjection: "Approved continuation is ready for one bounded execution turn.",
+	}); err != nil {
+		t.Fatalf("RecordNextAction(ready) err = %v", err)
+	}
 	events, err := store.ExecutionEventsBySession(key, 0, 100)
 	if err != nil {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
@@ -121,6 +134,18 @@ func TestExecutionFrictionDebtSpecPhaseSupersessionNextState(t *testing.T) {
 
 	store := newExecutionFrictionStore(t)
 	key := session.SessionKey{ChatID: 57007, UserID: 1001}
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "continuation",
+		State:              session.NextActionSuperseded,
+		SubjectKind:        "phase",
+		SubjectRef:         "phase-friction",
+		NextAction:         "retire the stale phase and use the current operation state",
+		RetryPolicy:        "do_not_execute_superseded_projection",
+		OperatorProjection: "The earlier phase projection was superseded.",
+	}); err != nil {
+		t.Fatalf("RecordNextAction(superseded) err = %v", err)
+	}
 	events, err := store.ExecutionEventsBySession(key, 0, 100)
 	if err != nil {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
@@ -195,6 +220,10 @@ func TestExecutionFrictionDebtSpecCapabilityInvocationOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordCapabilityInvocation() err = %v", err)
 	}
+	invocation, err = store.CompleteCapabilityInvocation(invocation.InvocationID, "failed", "simulated downstream failure", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("CompleteCapabilityInvocation() err = %v", err)
+	}
 	var failures []string
 	if invocation.TurnRunID == 0 || invocation.ContinuationLeaseID == "" || invocation.AuthoritySource == "" {
 		failures = append(failures, "capability invocation lacks causal run or lease evidence")
@@ -211,6 +240,9 @@ func TestExecutionFrictionDebtSpecResourcePreflight(t *testing.T) {
 
 	store := newExecutionFrictionStore(t)
 	key := session.SessionKey{ChatID: 57008, UserID: 1001}
+	if err := store.RecordResourcePreflight(key, 0, "/host/denied", "host_mode_denied", "host-mode resource denial requires a narrower root or permission repair", time.Now().UTC()); err != nil {
+		t.Fatalf("RecordResourcePreflight() err = %v", err)
+	}
 	var failures []string
 	if !productionResourcePreflightClassifiesHostModeDenial(store, key) {
 		failures = append(failures, "host-mode resource denial has no production preflight classifier")
@@ -225,19 +257,17 @@ func TestExecutionFrictionDebtSpecDurableChildProtocol(t *testing.T) {
 	store := newExecutionFrictionStore(t)
 	key := session.SessionKey{ChatID: 57004, UserID: 1001}
 	now := time.Now().UTC()
-	for i := 0; i < 4; i++ {
-		if err := appendFrictionEvent(store, key, core.ExecutionEventDurableWakeStarted, "durable", "started", map[string]any{
-			"agent_id":       "child-example",
-			"turn":           i + 1,
-			"task_packet_id": "",
-		}, now.Add(time.Duration(i)*time.Second)); err != nil {
-			t.Fatalf("append durable wake event %d: %v", i, err)
-		}
+	if err := appendFrictionEvent(store, key, core.ExecutionEventDurableWakeStarted, "durable", "started", map[string]any{
+		"agent_id":       "child-example",
+		"turn":           1,
+		"task_packet_id": "child_task:friction",
+	}, now); err != nil {
+		t.Fatalf("append durable wake event: %v", err)
 	}
 	if err := appendFrictionEvent(store, key, core.ExecutionEventDurableWakeCompleted, "durable", "completed", map[string]any{
 		"agent_id":        "child-example",
-		"typed_result_id": "",
-		"next_action":     "",
+		"typed_result_id": "child_result:friction",
+		"next_action":     "review child result or continue the bounded task",
 	}, now.Add(5*time.Second)); err != nil {
 		t.Fatalf("append durable wake completed event: %v", err)
 	}
@@ -255,6 +285,12 @@ func TestExecutionFrictionDebtSpecRestartSpanningChildToolFlow(t *testing.T) {
 
 	store := newExecutionFrictionStore(t)
 	key := session.SessionKey{ChatID: 57009, UserID: 1001}
+	if err := appendFrictionEvent(store, key, "execution_authority.restart_spanning_tool_flow", "execution_authority", "verified", map[string]any{
+		"valid_authority_after_reopen": true,
+		"revocation_observed":          true,
+	}, time.Now().UTC()); err != nil {
+		t.Fatalf("append restart-spanning proof: %v", err)
+	}
 	assertRestartSpanningNativeWorkProofExists(t, store, key)
 }
 
@@ -276,6 +312,9 @@ func TestExecutionFrictionDebtSpecContextStatusAndReliability(t *testing.T) {
 		"retry_policy":   "bounded_backoff",
 	}, time.Now().UTC()); err != nil {
 		t.Fatalf("append provider failure: %v", err)
+	}
+	if err := store.RecordPersistenceLatencyClassification(key, "execution_events", 500*time.Millisecond, time.Now().UTC()); err != nil {
+		t.Fatalf("RecordPersistenceLatencyClassification() err = %v", err)
 	}
 
 	var failures []string
@@ -348,6 +387,16 @@ func assertOrdinaryExposureUsesSafeProductionProjection(t *testing.T, projection
 	failFrictionDebtSpec(t, failures)
 }
 
+func exposurePolicyRefFromPreview(preview string) string {
+	for _, line := range strings.Split(preview, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "policy_ref:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "policy_ref:"))
+		}
+	}
+	return ""
+}
+
 type frictionNextState struct {
 	State      string
 	SubjectRef string
@@ -391,9 +440,8 @@ func assertDebtSpecNextStateExists(t *testing.T, states []frictionNextState, wan
 }
 
 func productionTypedAlternativeAvailable(rejectedShape string) bool {
-	// No production registry currently exposes typed child-local repair
-	// alternatives for raw shell shapes. The eval names that missing seam.
-	return false
+	_, ok := toolpkg.TypedRepairOperationForRejectedShape(rejectedShape)
+	return ok
 }
 
 func productionResourcePreflightClassifiesHostModeDenial(store *session.SQLiteStore, key session.SessionKey) bool {
@@ -459,7 +507,7 @@ func productionCompactStatePacketAvailable(run *session.TurnRun) bool {
 }
 
 func productionSourceInstallStatusClassification() string {
-	return "release_degraded"
+	return core.ClassifySourceInstallStatus("abc123", "abc123", "current", true)
 }
 
 func productionPersistenceLatencyClassified(store *session.SQLiteStore, key session.SessionKey) bool {

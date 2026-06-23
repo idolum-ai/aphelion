@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/principal"
@@ -181,10 +182,12 @@ func (r *Registry) readFile(ctx context.Context, input json.RawMessage, scope sa
 	maxBytes := clampNativeLimit(in.MaxBytes, defaultNativeReadMaxBytes, maxNativeReadBytes)
 	roots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathRead, "read_file")
 	if err != nil {
+		r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 		return "", err
 	}
 	path, err := resolveNativeToolPathWithReadRoots(scope, in.Path, nativePathRead, nativeFileAccessGrantRootPaths(roots))
 	if err != nil {
+		r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 		return "", err
 	}
 	audit, auditOK := nativeFileAccessGrantRootForPath(path, roots)
@@ -232,11 +235,13 @@ func (r *Registry) writeFile(ctx context.Context, input json.RawMessage, scope s
 	}
 	writeGrantRoots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathWrite, "write_file")
 	if err != nil {
+		r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 		return "", err
 	}
 	writeRoots := nativeFileAccessGrantRootPaths(writeGrantRoots)
 	path, err := resolveNativeToolPathWithExtraRoots(scope, in.Path, nativePathWrite, writeRoots)
 	if err != nil {
+		r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 		return "", err
 	}
 	audit, auditOK := nativeFileAccessGrantRootForPath(path, writeGrantRoots)
@@ -247,14 +252,18 @@ func (r *Registry) writeFile(ctx context.Context, input json.RawMessage, scope s
 	}()
 	if auditOK {
 		if symlink, err := nativeFirstSymlinkPathComponent(filepath.Dir(path)); err != nil {
+			r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 			return "", err
 		} else if symlink != "" {
-			return "", fmt.Errorf("write_file path %q contains symlink component %q", in.Path, symlink)
+			err := fmt.Errorf("write_file path %q contains symlink component %q", in.Path, symlink)
+			r.recordNativeResourcePreflight(ctx, key, in.Path, err)
+			return "", err
 		}
 	}
 	parent := filepath.Dir(path)
 	if in.CreateDirs {
 		if err := validateNativeWriteParentForCreate(scope, parent, writeRoots); err != nil {
+			r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 			return "", err
 		}
 		if err := os.MkdirAll(parent, 0o755); err != nil {
@@ -262,6 +271,7 @@ func (r *Registry) writeFile(ctx context.Context, input json.RawMessage, scope s
 		}
 	}
 	if err := validateNativeWriteParent(scope, parent, writeRoots); err != nil {
+		r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 		return "", err
 	}
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
@@ -298,10 +308,12 @@ func (r *Registry) listDir(ctx context.Context, input json.RawMessage, scope san
 	limit := clampNativeLimit(in.Limit, defaultNativeListLimit, maxNativeListLimit)
 	roots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathRead, "list_dir")
 	if err != nil {
+		r.recordNativeResourcePreflight(ctx, key, pathRaw, err)
 		return "", err
 	}
 	path, err := resolveNativeToolPathWithReadRoots(scope, pathRaw, nativePathRead, nativeFileAccessGrantRootPaths(roots))
 	if err != nil {
+		r.recordNativeResourcePreflight(ctx, key, pathRaw, err)
 		return "", err
 	}
 	audit, auditOK := nativeFileAccessGrantRootForPath(path, roots)
@@ -370,6 +382,27 @@ func (r *Registry) recordNativeFileAccessInvocation(root nativeFileAccessGrantRo
 		return recordErr
 	}
 	return operationErr
+}
+
+func (r *Registry) recordNativeResourcePreflight(ctx context.Context, key session.SessionKey, resource string, cause error) {
+	if r == nil || r.store == nil || cause == nil || !toolSessionKeyHasIdentity(key) {
+		return
+	}
+	reason := "resource_denied"
+	lower := strings.ToLower(cause.Error())
+	switch {
+	case strings.Contains(lower, "sandbox") || strings.Contains(lower, "outside") || strings.Contains(lower, "root"):
+		reason = "host_mode_denied"
+	case strings.Contains(lower, "permission"):
+		reason = "host_permission_denied"
+	case strings.Contains(lower, "symlink"):
+		reason = "path_symlink_denied"
+	}
+	turnRunID := int64(0)
+	if ref, ok := ToolInvocationRefFromContext(ctx); ok {
+		turnRunID = ref.TurnRunID
+	}
+	_ = r.store.RecordResourcePreflight(key, turnRunID, resource, reason, cause.Error(), time.Now().UTC())
 }
 
 func readBoundedFileWindow(path string, offset, limit, maxBytes int) ([]byte, int, bool, error) {

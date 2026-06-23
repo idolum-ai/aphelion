@@ -101,6 +101,56 @@ func TestRunStatusCommandJSONDegradedForDuplicateUnits(t *testing.T) {
 	}
 }
 
+func TestRunStatusCommandDoesNotDegradeVerifiedSourceInstallForStaleReleaseMetadata(t *testing.T) {
+	configPath := writeMinimalStatusConfig(t)
+	metaPath := filepath.Join(t.TempDir(), "release.json")
+	if err := os.WriteFile(metaPath, []byte(`{"latest_version":"v0.3.0","installed_version":"v0.2.0","checked_at":"2026-06-04T14:38:27Z","source":"test"}`), 0o600); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
+		execPath = resolved
+	}
+	build := versionInfo{Version: "v0.2.0", VCSRevision: "abc123", VCSModified: "false"}
+	fake := statusFakeService{
+		show:      "MainPID=123\nExecStart={ path=" + execPath + " ; argv[]=" + execPath + " --config " + configPath + " }\n",
+		unitList:  "aphelion.service loaded active running Aphelion\n",
+		unitFiles: "aphelion.service enabled\n",
+		readlinks: map[string]string{"/proc/123/exe": execPath},
+	}
+
+	out, err := captureStandaloneStdout(t, func() error {
+		return runStatusCommandWithOptions([]string{"--config", configPath, "--format=json"}, statusCommandOptions{
+			Runner:       fake.run,
+			Readlink:     fake.readlink,
+			BuildVersion: build,
+			ExecVersion: func(ctx context.Context, path string) (versionInfo, error) {
+				return build, nil
+			},
+			MetadataPath: metaPath,
+		})
+	})
+	if err != nil {
+		t.Fatalf("runStatusCommand(source metadata) err = %v", err)
+	}
+	var got statusSnapshot
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("json.Unmarshal(status) err = %v; output=%q", err, out)
+	}
+	if got.Status != "ready" || got.NextAction != "none" {
+		t.Fatalf("status=%q next=%q service=%#v issues=%#v, want ready/none despite stale release metadata", got.Status, got.NextAction, got.Service, got.IssueRecords)
+	}
+	if got.Release.SourceStatus != "source_verified_release_metadata_stale" {
+		t.Fatalf("release source status = %q, want source_verified_release_metadata_stale", got.Release.SourceStatus)
+	}
+	if statusIssueCodePresent(got.IssueRecords, "release_update_available") {
+		t.Fatalf("issue records = %#v, should not degrade verified source install for stale release metadata", got.IssueRecords)
+	}
+}
+
 func TestRunStatusCommandRejectsHumanFormat(t *testing.T) {
 	configPath := writeMinimalStatusConfig(t)
 	if err := runStatusCommandWithOptions([]string{"--config", configPath, "--format=human"}, statusCommandOptions{}); err == nil {

@@ -185,6 +185,9 @@ func (s *SQLiteStore) NoteTurnRunToolFinish(id int64, resultPreview string, tool
 	if id == 0 {
 		return fmt.Errorf("turn run id is required")
 	}
+	if strings.TrimSpace(resultPreview) != "" {
+		resultPreview = ProjectToolResultForAudience(resultPreview, ExposureAudienceModelPreview).Text
+	}
 
 	_, err := s.db.Exec(`
 		UPDATE turn_runs

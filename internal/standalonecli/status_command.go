@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/config"
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/internal/releaseinfo"
 )
 
@@ -25,6 +26,7 @@ type statusCommandOptions struct {
 	Readlink     func(string) (string, error)
 	ExecVersion  func(context.Context, string) (versionInfo, error)
 	MetadataPath string
+	BuildVersion versionInfo
 }
 
 type statusSnapshot struct {
@@ -52,6 +54,7 @@ type statusReleaseInfo struct {
 	Notice           string `json:"notice,omitempty"`
 	MetadataStatus   string `json:"metadata_status"`
 	MetadataError    string `json:"metadata_error,omitempty"`
+	SourceStatus     string `json:"source_status,omitempty"`
 }
 
 type statusIssue struct {
@@ -110,6 +113,7 @@ func runStatusCommandWithOptions(args []string, opts statusCommandOptions) error
 		Readlink:     opts.Readlink,
 		ExecVersion:  opts.ExecVersion,
 		MetadataPath: opts.MetadataPath,
+		BuildVersion: opts.BuildVersion,
 	})
 	if err != nil {
 		return err
@@ -176,6 +180,9 @@ func buildStatusSnapshot(ctx context.Context, opts statusCommandOptions) (status
 		}
 	}
 	version := readVersionInfo()
+	if statusVersionInfoPresent(opts.BuildVersion) {
+		version = opts.BuildVersion
+	}
 	current := releaseinfo.Current{Version: version.Version, Revision: version.VCSRevision, Modified: version.VCSModified}
 	if current.Version == "" && current.Revision == "" && current.Modified == "" {
 		current = releaseinfo.CurrentBuild()
@@ -277,11 +284,18 @@ func buildStatusSnapshot(ctx context.Context, opts statusCommandOptions) (status
 	if strings.TrimSpace(s.Service.MainPID) == "" || strings.TrimSpace(s.Service.MainPID) == "0" {
 		appendStatusIssue(&s, "service_not_running", "aphelion service is not running")
 	}
-	if s.Release.UpdateAvailable {
+	s.Release.SourceStatus = core.ClassifySourceInstallStatus(s.Service.RunningRevision, s.Service.ExpectedRevision, s.Release.MetadataStatus, s.Release.UpdateAvailable)
+	if s.Release.UpdateAvailable && s.Release.SourceStatus != "source_verified_release_metadata_stale" {
 		appendStatusIssue(&s, "release_update_available", "newer release available in cached metadata")
 	}
 	finalizeStatusSnapshot(&s)
 	return s, nil
+}
+
+func statusVersionInfoPresent(info versionInfo) bool {
+	return strings.TrimSpace(info.Version) != "" ||
+		strings.TrimSpace(info.VCSRevision) != "" ||
+		strings.TrimSpace(info.VCSModified) != ""
 }
 
 func readDurableChildrenSummary(dbPath string) statusDurableChildrenInfo {
@@ -354,6 +368,7 @@ func renderStatusKV(out *os.File, s statusSnapshot) {
 	fmt.Fprintf(out, "release_installed_version: %s\n", firstNonEmpty(s.Release.InstalledVersion, "unknown"))
 	fmt.Fprintf(out, "release_latest_version: %s\n", firstNonEmpty(s.Release.LatestVersion, "unknown"))
 	fmt.Fprintf(out, "release_update_available: %t\n", s.Release.UpdateAvailable)
+	fmt.Fprintf(out, "release_source_status: %s\n", firstNonEmpty(s.Release.SourceStatus, "unknown"))
 	fmt.Fprintf(out, "durable_children_metadata_path: %s\n", firstNonEmpty(s.DurableChildren.MetadataPath, "unknown"))
 	fmt.Fprintf(out, "durable_children_status: %s\n", firstNonEmpty(s.DurableChildren.Status, "unknown"))
 	fmt.Fprintf(out, "durable_children_total: %d\n", s.DurableChildren.TotalCount)

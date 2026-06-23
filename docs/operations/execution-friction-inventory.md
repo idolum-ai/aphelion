@@ -6,7 +6,8 @@ This note records issues observed during a recent live source-install cycle and
 follow-on durable-child repair attempt. The service remained up, but operator
 experience and durable-child execution exposed several safety and workflow
 gaps. The goal is to preserve the problem classes as reviewable release debt
-before choosing fixes.
+and to track the first implementation slice that turns the map into runtime
+state.
 
 This document belongs under operations because it is an incident-shaped
 hypothesis map. The canonical contracts remain in architecture and requirements
@@ -15,15 +16,20 @@ documents; this inventory points back to those contracts where possible.
 The executable traceability map lives in
 [`execution-friction-test-surface.json`](execution-friction-test-surface.json).
 Each observed problem has one manifest row with existing contracts,
-always-on test anchors, opt-in scenario-spec anchors, current status, and the ideal
-invariant. Always-on anchors are traceability to nearby implemented contracts;
+always-on test anchors, opt-in scenario-spec anchors, current status, and the
+ideal invariant. Always-on anchors are traceability to nearby implemented contracts;
 they are not a claim that the incident has a direct regression test unless the
 linked test says so. Opt-in executable debt specs can be run with
 `APHELION_RUN_FRICTION_EVALS=1 go test ./... -run ExecutionFrictionDebtSpec` to
-audit the full surface. Some specs exercise existing production seams; others
-pin an acceptance condition for a seam that does not exist yet. A failure means
-an ideal next-state, exposure, or authority outcome is still missing; it is not
-expected to be a passing release gate until the debt is paid.
+audit the full surface. The current slice exercises production seams for
+audience-aware tool-result projection, durable workflow next-state records,
+uncertain-effect verification state, resource preflight classification, typed
+repair-operation registration, durable-child wake/task identifiers, source-status
+classification, and persistence-latency classification. The restart-spanning
+child/native-work-to-tool flow and the complete compact child task protocol are
+still acceptance-level specifications rather than full end-to-end runtime
+reproductions. A failure means an ideal next-state, exposure, or authority
+outcome is still missing.
 
 ## Evidence Window
 
@@ -115,9 +121,11 @@ operator approval
   -> verification or next bounded step
 ```
 
-Each boundary keeps its own current point-of-use checks. The missing property is
-that every nonterminal stop should deterministically create one typed next
-durable state. The incident examples include `ready_to_execute`,
+Each boundary keeps its own current point-of-use checks. This PR introduces the
+first durable next-action ledger for that handoff: `next_action_records` and a
+matching `workflow.next_state` execution event. The intended property is that
+every nonterminal stop should deterministically create one typed next durable
+state. The incident examples include `ready_to_execute`,
 `blocked_needs_authority`, `blocked_needs_resource_repair`,
 `needs_verification`, `waiting_for_child`, `waiting_for_operator`,
 `scheduled_retry`, `external_dependency`, `superseded`, `cancelled`, and
@@ -134,12 +142,15 @@ The observations separate into four interacting planes:
 
 - **Authority plane:** comparatively mature. Execution-authority continuity,
   continuation leases, grants, and point-of-use checks are implemented contracts.
-- **Workflow plane:** incomplete causal closure after approvals, failures,
-  uncertainty, child wakes, and repairs.
+- **Workflow plane:** now has a first-slice next-action ledger for approvals,
+  uncertain effects, supersession, child wakes, and resource blockers. Full
+  execution-species conformance remains active debt.
 - **Presentation plane:** incomplete or inconsistent projection of the exact next
-  action when the system stops safely.
-- **Exposure plane:** under-modeled audience-specific information authority for
-  tool results, logs, evidence, and model context.
+  action when the system stops safely; compact tool-result projections and
+  durable-child task/result identifiers are the first slice.
+- **Exposure plane:** now projects ordinary turn-run tool previews through an
+  audience-aware policy. Other output, evidence, log, and privileged hydration
+  routes still need the same projection model.
 
 ## Diagnostic Matrix
 
@@ -179,15 +190,23 @@ The desired shape is:
 - redacted view, digest, withheld marker, or protected artifact reference;
 - auditable privileged hydration when justified.
 
-## Questions For Follow-Up
+## Implementation Slice And Remaining Work
 
-- Should output sensitivity require audience-specific exposure projection
-  independent of command effect classification?
-- Should approval consumption deterministically enqueue the next bounded
-  executable, blocker, terminal state, or verification surface?
-- Should durable children have a compact "perform one local materialization
-  task and report typed result" protocol?
-- Should child-local configuration slots be modeled as typed resources that reconcile
-  Aphelion grants, sandbox roots, and host filesystem permissions?
-- Should source installs suppress stale release-metadata degradation when the
-  running binary matches the checkout?
+- Tool-result previews now pass through `ProjectToolResultForAudience` before
+  they are stored on turn runs. The first projection covers model-preview
+  exposure; canonical evidence hydration, logs, operator UI, and protected
+  artifact access still need the same explicit audience model.
+- Approvals, uncertain effects, resource preflight failures, child wake
+  materialization, and supersession can now record typed next-action rows. The
+  remaining work is to ensure every execution species emits those rows through
+  its real transition path instead of relying on nearby boundary tests.
+- Raw shell remains deliberately hard to widen. The new typed repair-operation
+  registry gives rejected child-repair shapes named alternatives, but execution
+  support for those alternatives is still future work.
+- Durable wake events now carry task-packet and result identifiers. The compact
+  child protocol is not complete until a real child-local repair can converge
+  through one task packet, one typed result or blocker, and a restart-spanning
+  native-work-to-tool flow.
+- Source status now distinguishes a verified source checkout from stale release
+  metadata. Persistence latency is classified as an operational amplifier, not
+  as the causal root of the authority/workflow loop.

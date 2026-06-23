@@ -36,6 +36,7 @@ var evidenceSensitivePatterns = []evidenceSensitivePattern{
 	{regexp.MustCompile(`()(github_pat_[A-Za-z0-9_]{12,})()`), "github_token"},
 	{regexp.MustCompile(`()(gh[pousr]_[A-Za-z0-9_]{12,})()`), "github_token"},
 	{regexp.MustCompile(`()(sk-[A-Za-z0-9_-]{12,})()`), "api_key"},
+	{regexp.MustCompile(`(?i)\b((?:path|file|config|metadata|root)\s*:\s*)(/[^\s,"'}]*(?:credential|credentials|secret|token|key|auth)[^\s,"'}]*)()`), "credential_metadata"},
 }
 
 func RedactEvidenceText(value string) EvidenceTextRedaction {
@@ -80,6 +81,78 @@ func EvidenceRedactionClassForRedactions(redactions ...EvidenceTextRedaction) st
 		return EvidenceRedactionRedacted
 	}
 	return EvidenceRedactionNone
+}
+
+type ExposureAudience string
+
+const (
+	ExposureAudienceModelPreview ExposureAudience = "model_preview"
+	ExposureAudienceOperator     ExposureAudience = "operator"
+)
+
+type ToolResultProjection struct {
+	Audience     ExposureAudience
+	Projection   string
+	Sensitivity  string
+	PolicyRef    string
+	ProtectedRef string
+	Text         string
+}
+
+func ProjectToolResultForAudience(value string, audience ExposureAudience) ToolResultProjection {
+	audience = ExposureAudience(strings.TrimSpace(string(audience)))
+	if audience == "" {
+		audience = ExposureAudienceModelPreview
+	}
+	redacted := RedactEvidenceText(value)
+	class := EvidenceRedactionClassForRedactions(redacted)
+	projection := "plain"
+	if redacted.Redacted {
+		projection = "redacted"
+	}
+	text := redacted.Text
+	if len(text) > 1800 {
+		text = "compact_current_state:\n" + strings.TrimSpace(text[:1700]) + "\n<truncated:projection>"
+		projection = "digest"
+		if class == EvidenceRedactionNone {
+			class = EvidenceRedactionDigest
+		}
+	}
+	if strings.TrimSpace(text) == "" && strings.TrimSpace(value) != "" {
+		text = "<withheld:empty_projection>"
+		projection = "withheld"
+		if class == EvidenceRedactionNone {
+			class = EvidenceRedactionBlocked
+		}
+	}
+	policyRef := "session.ProjectToolResultForAudience/v1"
+	rendered := text
+	if projection != "plain" {
+		rendered = renderToolResultProjectionHeader(audience, projection, class, policyRef, text)
+	}
+	return ToolResultProjection{
+		Audience:    audience,
+		Projection:  projection,
+		Sensitivity: class,
+		PolicyRef:   policyRef,
+		Text:        rendered,
+	}
+}
+
+func renderToolResultProjectionHeader(audience ExposureAudience, projection string, sensitivity string, policyRef string, text string) string {
+	var b strings.Builder
+	b.WriteString("[EXPOSURE_PROJECTION]\n")
+	b.WriteString("audience: ")
+	b.WriteString(strings.TrimSpace(string(audience)))
+	b.WriteString("\nprojection: ")
+	b.WriteString(strings.TrimSpace(projection))
+	b.WriteString("\nsensitivity: ")
+	b.WriteString(strings.TrimSpace(sensitivity))
+	b.WriteString("\npolicy_ref: ")
+	b.WriteString(strings.TrimSpace(policyRef))
+	b.WriteString("\n[/EXPOSURE_PROJECTION]\n")
+	b.WriteString(text)
+	return b.String()
 }
 
 func evidenceRedactionKindIsCredentialBearing(kind string) bool {
