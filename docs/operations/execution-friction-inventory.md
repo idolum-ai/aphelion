@@ -12,13 +12,18 @@ This document belongs under operations because it is an incident-shaped
 hypothesis map. The canonical contracts remain in architecture and requirements
 documents; this inventory points back to those contracts where possible.
 
-The executable coverage map lives in
+The executable traceability map lives in
 [`execution-friction-test-surface.json`](execution-friction-test-surface.json).
 Each observed problem has one manifest row with existing contracts,
-always-on test anchors, opt-in debt-eval anchors, current status, and the ideal
-invariant. Always-on tests keep CI mergeable. Opt-in debt evals can be run with
-`APHELION_RUN_FRICTION_EVALS=1 go test ./... -run ExecutionFrictionDebtEval` to
-audit the full surface without pretending every ideal state is implemented.
+always-on test anchors, opt-in scenario-spec anchors, current status, and the ideal
+invariant. Always-on anchors are traceability to nearby implemented contracts;
+they are not a claim that the incident has a direct regression test unless the
+linked test says so. Opt-in executable debt specs can be run with
+`APHELION_RUN_FRICTION_EVALS=1 go test ./... -run ExecutionFrictionDebtSpec` to
+audit the full surface. Some specs exercise existing production seams; others
+pin an acceptance condition for a seam that does not exist yet. A failure means
+an ideal next-state, exposure, or authority outcome is still missing; it is not
+expected to be a passing release gate until the debt is paid.
 
 ## Evidence Window
 
@@ -34,7 +39,8 @@ audit the full surface without pretending every ideal state is implemented.
 ## Observed Problems
 
 1. A command classified as read-only produced model-visible output containing
-   sensitive-looking material without requesting approval first.
+   sensitive-looking material without an audience-appropriate exposure
+   projection.
 2. Tool output sensitivity was not independently gated from command authority;
    a read-only command could still expose sensitive output.
 3. Some persisted `result_preview` fields contained sensitive-looking words and
@@ -110,9 +116,13 @@ operator approval
 ```
 
 Each boundary keeps its own current point-of-use checks. The missing property is
-that every nonterminal stop should deterministically create one next durable
-state: `ready_to_execute`, `blocked_needs_authority`,
-`blocked_needs_resource_repair`, `needs_verification`, or `terminal`.
+that every nonterminal stop should deterministically create one typed next
+durable state. The incident examples include `ready_to_execute`,
+`blocked_needs_authority`, `blocked_needs_resource_repair`,
+`needs_verification`, `waiting_for_child`, `waiting_for_operator`,
+`scheduled_retry`, `external_dependency`, `superseded`, `cancelled`, and
+`terminal`; this list is a starting vocabulary, not a repository-wide state
+machine.
 
 That next-state record should carry causal IDs, owner, exact next operation,
 required authority, retry semantics, verifier where applicable, and the operator

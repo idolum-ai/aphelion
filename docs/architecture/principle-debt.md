@@ -39,11 +39,11 @@ Status values:
   Approval, resource denial, uncertain effects, child reports, and phase
   supersession can require manual reconstruction of the next action.
 - **Exit gate:** After every operator decision or execution attempt, exactly one
-  durable next-state record exists: `ready_to_execute`,
-  `blocked_needs_authority`, `blocked_needs_resource_repair`,
-  `needs_verification`, or `terminal`. The record names causal IDs, owner,
-  exact next operation, required authority, retry semantics, verifier when
-  applicable, and the operator projection to render.
+  durable typed next-state record exists. The state vocabulary may include
+  ready, blocked, verification, waiting, retry, supersession, cancellation, and
+  terminal variants, but each record must name causal IDs, owner, exact next
+  operation or blocker, required authority when applicable, retry semantics,
+  verifier when applicable, and the operator projection to render.
 
 ### PD-2026-06-output-exposure
 
