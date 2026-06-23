@@ -710,6 +710,154 @@ func TestNativeFileAccessGrantDoesNotBypassHiddenPaths(t *testing.T) {
 	}
 }
 
+func TestNativeSearchSkipsHiddenDescendantsAndReportsPartial(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	hiddenDir := filepath.Join(workspace, ".secrets")
+	publicDir := filepath.Join(workspace, "public")
+	hiddenFile := filepath.Join(publicDir, "hidden.txt")
+	if err := os.MkdirAll(hiddenDir, 0o755); err != nil {
+		t.Fatalf("mkdir hidden dir: %v", err)
+	}
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatalf("mkdir public dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hiddenDir, "secret.txt"), []byte("needle hidden secret\n"), 0o600); err != nil {
+		t.Fatalf("write hidden secret: %v", err)
+	}
+	if err := os.WriteFile(hiddenFile, []byte("needle hidden file\n"), 0o600); err != nil {
+		t.Fatalf("write hidden file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicDir, "visible.txt"), []byte("needle visible\n"), 0o600); err != nil {
+		t.Fatalf("write visible file: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	profile := sandbox.DefaultProfiles().Admin
+	profile.HiddenPaths = append(profile.HiddenPaths, hiddenDir, hiddenFile)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          profile,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "search", json.RawMessage(`{"path":".","query":"needle","limit":10}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("search err = %v", err)
+	}
+	if !strings.Contains(out, "visible.txt") || !strings.Contains(out, "needle visible") {
+		t.Fatalf("search out = %q, want visible public match", out)
+	}
+	for _, forbidden := range []string{".secrets", "secret.txt", "hidden.txt", "needle hidden"} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("search out = %q, exposed hidden marker %q", out, forbidden)
+		}
+	}
+	if !strings.Contains(out, "partial: true") || !strings.Contains(out, "skipped_count: 2") || !strings.Contains(out, "skipped_reasons: hidden_policy=2") {
+		t.Fatalf("search out = %q, want hidden skips reported as partial", out)
+	}
+
+	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"public/hidden.txt","full":true}`), scope, scope.Principal, session.SessionKey{})
+	if err == nil || !strings.Contains(err.Error(), "hidden by the sandbox profile") {
+		t.Fatalf("read_file hidden descendant err = %v, want hidden-path rejection", err)
+	}
+}
+
+func TestNativeListDirSkipsHiddenChildrenAndReportsPartial(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	hiddenDir := filepath.Join(workspace, ".secrets")
+	publicDir := filepath.Join(workspace, "public")
+	hiddenFile := filepath.Join(publicDir, "hidden.txt")
+	if err := os.MkdirAll(hiddenDir, 0o755); err != nil {
+		t.Fatalf("mkdir hidden dir: %v", err)
+	}
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatalf("mkdir public dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hiddenDir, "secret.txt"), []byte("secret\n"), 0o600); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+	if err := os.WriteFile(hiddenFile, []byte("hidden\n"), 0o600); err != nil {
+		t.Fatalf("write hidden file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicDir, "visible.txt"), []byte("visible\n"), 0o600); err != nil {
+		t.Fatalf("write visible file: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	profile := sandbox.DefaultProfiles().Admin
+	profile.HiddenPaths = append(profile.HiddenPaths, hiddenDir, hiddenFile)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          profile,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	rootOut, err := registry.executeWithScopeAndPrincipal(context.Background(), "list_dir", json.RawMessage(`{"path":"."}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("list_dir root err = %v", err)
+	}
+	if !strings.Contains(rootOut, "- public dir") {
+		t.Fatalf("list_dir root out = %q, want public entry", rootOut)
+	}
+	if strings.Contains(rootOut, ".secrets") || strings.Contains(rootOut, "secret.txt") {
+		t.Fatalf("list_dir root out = %q, exposed hidden child", rootOut)
+	}
+	if !strings.Contains(rootOut, "partial: true") || !strings.Contains(rootOut, "skipped_count: 1") || !strings.Contains(rootOut, "skipped_reasons: hidden_policy=1") {
+		t.Fatalf("list_dir root out = %q, want hidden child skip evidence", rootOut)
+	}
+
+	publicOut, err := registry.executeWithScopeAndPrincipal(context.Background(), "list_dir", json.RawMessage(`{"path":"public"}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("list_dir public err = %v", err)
+	}
+	if !strings.Contains(publicOut, "- visible.txt file") {
+		t.Fatalf("list_dir public out = %q, want visible file", publicOut)
+	}
+	if strings.Contains(publicOut, "hidden.txt") {
+		t.Fatalf("list_dir public out = %q, exposed hidden file", publicOut)
+	}
+	if !strings.Contains(publicOut, "partial: true") || !strings.Contains(publicOut, "skipped_count: 1") || !strings.Contains(publicOut, "skipped_reasons: hidden_policy=1") {
+		t.Fatalf("list_dir public out = %q, want hidden file skip evidence", publicOut)
+	}
+}
+
+func TestNativeSearchReportsPartialForDescriptorOpenFailure(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "visible.txt"), []byte("ordinary text\n"), 0o600); err != nil {
+		t.Fatalf("write visible file: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(workspace, "missing-target"), filepath.Join(workspace, "race-link")); err != nil {
+		t.Fatalf("create race symlink: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "search", json.RawMessage(`{"path":".","query":"needle","limit":10}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("search err = %v", err)
+	}
+	if strings.Contains(out, "race-link") {
+		t.Fatalf("search out = %q, exposed skipped descriptor-open failure path", out)
+	}
+	if !strings.Contains(out, "matches: 0") || !strings.Contains(out, "partial: true") || !strings.Contains(out, "skipped_count: 1") || !strings.Contains(out, "skipped_reasons: open_failed=1") {
+		t.Fatalf("search out = %q, want partial descriptor-open failure evidence", out)
+	}
+}
+
 func TestNativeFileAccessToolsRejectComponentSwapEscapes(t *testing.T) {
 	registry, store := newDurableAgentToolRegistry(t)
 	workspace := t.TempDir()

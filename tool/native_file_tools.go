@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -291,6 +292,10 @@ func (r *Registry) listDir(ctx context.Context, input json.RawMessage, scope san
 	if err != nil {
 		return "", r.recordNativeResourcePreflight(ctx, key, pathRaw, err)
 	}
+	hidden, err := nativeHiddenPathsForAuthorityRoot(scope, target)
+	if err != nil {
+		return "", r.recordNativeResourcePreflight(ctx, key, pathRaw, err)
+	}
 	audit, auditOK := nativeFileAccessGrantRootForPath(target.Path, roots)
 	defer func() {
 		if auditOK {
@@ -306,20 +311,27 @@ func (r *Registry) listDir(ctx context.Context, input json.RawMessage, scope san
 	if err != nil {
 		return "", r.recordNativeResourcePreflight(ctx, key, pathRaw, fmt.Errorf("list_dir read %q: %w", pathRaw, err))
 	}
-	var b strings.Builder
-	b.WriteString("[LIST_DIR]\n")
-	fmt.Fprintf(&b, "path: %s\nentries: %d", target.Path, len(entries))
-	if len(entries) > limit {
-		fmt.Fprintf(&b, "\ntruncated: true")
-	}
-	b.WriteString("\n")
-	for i, entry := range entries {
-		if i >= limit {
-			break
+	var skips nativeTraversalSkips
+	lines := make([]string, 0, min(limit, len(entries)))
+	visibleEntries := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "" || name == "." || name == ".." || strings.Contains(name, "/") || strings.Contains(name, "\x00") {
+			skips.record("invalid_name")
+			continue
+		}
+		childPath := filepath.Join(target.Path, name)
+		if nativePathHiddenByTraversalPolicy(childPath, hidden) {
+			skips.record("hidden_policy")
+			continue
 		}
 		info, err := entry.Info()
 		if err != nil {
-			fmt.Fprintf(&b, "- %s unknown\n", entry.Name())
+			skips.record("stat_failed")
+			continue
+		}
+		visibleEntries++
+		if len(lines) >= limit {
 			continue
 		}
 		kind := "file"
@@ -328,7 +340,20 @@ func (r *Registry) listDir(ctx context.Context, input json.RawMessage, scope san
 		} else if info.Mode()&os.ModeSymlink != 0 {
 			kind = "symlink"
 		}
-		fmt.Fprintf(&b, "- %s %s bytes=%d\n", entry.Name(), kind, info.Size())
+		lines = append(lines, fmt.Sprintf("- %s %s bytes=%d\n", name, kind, info.Size()))
+	}
+	var b strings.Builder
+	b.WriteString("[LIST_DIR]\n")
+	fmt.Fprintf(&b, "path: %s\nentries: %d\npartial: %t\nskipped_count: %d", target.Path, visibleEntries, skips.partial(), skips.skippedCount())
+	if summary := skips.summary(); summary != "" {
+		fmt.Fprintf(&b, "\nskipped_reasons: %s", summary)
+	}
+	if visibleEntries > limit {
+		fmt.Fprintf(&b, "\ntruncated: true")
+	}
+	b.WriteString("\n")
+	for _, line := range lines {
+		b.WriteString(line)
 	}
 	b.WriteString("[/LIST_DIR]")
 	return b.String(), nil

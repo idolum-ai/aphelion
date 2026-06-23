@@ -478,7 +478,7 @@ func nativeHiddenPaths(scope sandbox.Scope) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return normalizeNativeRoots(hidden)
+	return normalizeNativeRootsAllowEmpty(hidden)
 }
 
 func nativeScopedPaths(values []string, scope sandbox.Scope) ([]string, error) {

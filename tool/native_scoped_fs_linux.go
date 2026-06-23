@@ -56,7 +56,11 @@ func resolveNativeScopedTarget(scope sandbox.Scope, raw string, access nativePat
 	if !pathWithinAnyRoot(target, allowed) {
 		return nativeScopedTarget{}, fmt.Errorf("path %q is outside the %s roots for this sandbox profile", raw, access)
 	}
-	if hidden, _ := nativeHiddenPaths(scope); pathWithinAnyRoot(target, hidden) {
+	hidden, err := nativeHiddenPaths(scope)
+	if err != nil {
+		return nativeScopedTarget{}, err
+	}
+	if pathWithinAnyRoot(target, hidden) {
 		return nativeScopedTarget{}, fmt.Errorf("path %q is hidden by the sandbox profile", raw)
 	}
 	root, ok := nativeBestContainingRoot(target, allowed)
@@ -131,6 +135,68 @@ func nativeOpenScopedListDir(target nativeScopedTarget) (*os.File, error) {
 		return nil, err
 	}
 	return file, nil
+}
+
+func nativeHiddenPathsForAuthorityRoot(scope sandbox.Scope, target nativeScopedTarget) ([]string, error) {
+	hidden, err := nativeHiddenPaths(scope)
+	if err != nil {
+		return nil, err
+	}
+	if len(hidden) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(hidden))
+	for _, root := range hidden {
+		if pathWithinAnyRoot(root, []string{target.Root}) || pathWithinAnyRoot(target.Root, []string{root}) {
+			out = append(out, root)
+		}
+	}
+	return out, nil
+}
+
+func nativePathHiddenByTraversalPolicy(path string, hidden []string) bool {
+	return len(hidden) > 0 && pathWithinAnyRoot(path, hidden)
+}
+
+type nativeTraversalSkips struct {
+	count   int
+	reasons map[string]int
+}
+
+func (s *nativeTraversalSkips) record(reason string) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "unknown"
+	}
+	if s.reasons == nil {
+		s.reasons = make(map[string]int)
+	}
+	s.count++
+	s.reasons[reason]++
+}
+
+func (s nativeTraversalSkips) partial() bool {
+	return s.count > 0
+}
+
+func (s nativeTraversalSkips) skippedCount() int {
+	return s.count
+}
+
+func (s nativeTraversalSkips) summary() string {
+	if len(s.reasons) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(s.reasons))
+	for key := range s.reasons {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", key, s.reasons[key]))
+	}
+	return strings.Join(parts, ",")
 }
 
 func nativeOpenScopedWriteFile(target nativeScopedTarget, createDirs, appendFile bool) (*os.File, error) {
