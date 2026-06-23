@@ -29,11 +29,11 @@ type shellRejectionAlternative struct {
 	Reason             string
 }
 
-func (r *Registry) recordRejectedShellAlternative(ctx context.Context, key session.SessionKey, command string, rawWorkdir string, plan commandeffect.EffectPlan, judgment session.Judgment, cause error) error {
+func (r *Registry) recordRejectedShellAlternative(ctx context.Context, key session.SessionKey, command string, rawWorkdir string, workingRoot string, plan commandeffect.EffectPlan, judgment session.Judgment, cause error) error {
 	if cause == nil {
 		return nil
 	}
-	alt := typedAlternativeForRejectedShell(command, rawWorkdir, plan, cause)
+	alt := typedAlternativeForRejectedShell(command, rawWorkdir, workingRoot, plan, cause)
 	outErr := rejectedShellAlternativeError(cause, alt)
 	if r == nil || r.store == nil || !toolSessionKeyHasIdentity(key) {
 		return outErr
@@ -75,11 +75,14 @@ func (r *Registry) recordRejectedShellAlternative(ctx context.Context, key sessi
 	return outErr
 }
 
-func typedAlternativeForRejectedShell(command string, rawWorkdir string, plan commandeffect.EffectPlan, cause error) shellRejectionAlternative {
+func typedAlternativeForRejectedShell(command string, rawWorkdir string, workingRoot string, plan commandeffect.EffectPlan, cause error) shellRejectionAlternative {
+	if plan.Dynamic {
+		return genericRejectedShellAlternative(command, plan, cause)
+	}
 	if plan.MultipleAuthorities {
 		return splitEffectPlanAlternative(command, plan, cause)
 	}
-	if alt, ok := nativeFileAlternative(command, cause); ok {
+	if alt, ok := nativeFileAlternative(command, rawWorkdir, workingRoot, cause); ok {
 		return alt
 	}
 	if alt, ok := canonicalExecAlternative(command, rawWorkdir, cause); ok {
@@ -98,24 +101,25 @@ func rejectedShellAlternativeError(cause error, alt shellRejectionAlternative) e
 	return fmt.Errorf("%w; typed alternative: %s", cause, alt.OperatorProjection)
 }
 
-func nativeFileAlternative(command string, cause error) (shellRejectionAlternative, bool) {
+func nativeFileAlternative(command string, rawWorkdir string, workingRoot string, cause error) (shellRejectionAlternative, bool) {
 	cmd, args, ok := firstShellCommand(command)
 	if !ok {
 		return shellRejectionAlternative{}, false
 	}
 	switch cmd {
-	case "cat", "nl", "head", "tail", "sed":
-		path := lastPathLikeArg(args)
-		if path == "" {
+	case "cat":
+		paths := nonOptionArgs(args)
+		if len(paths) == 0 {
 			return shellRejectionAlternative{}, false
 		}
-		input := map[string]any{"path": path}
-		if cmd == "head" || cmd == "sed" {
-			input["offset"] = 0
-			input["limit"] = 120
-		} else {
-			input["full"] = true
+		if hasShellOptions(args) || len(paths) != 1 {
+			return lossyNativeReadSuggestion(cmd, paths, rawWorkdir, workingRoot, cause), true
 		}
+		path, ok := nativeAlternativePath(paths[0], rawWorkdir, workingRoot)
+		if !ok {
+			return nativeWorkdirRewriteRequired(cmd, cause), true
+		}
+		input := map[string]any{"path": path, "full": true}
 		return shellRejectionAlternative{
 			State:              session.NextActionReadyToExecute,
 			OperationKind:      "native_file_read",
@@ -127,10 +131,24 @@ func nativeFileAlternative(command string, cause error) (shellRejectionAlternati
 			OperatorProjection: fmt.Sprintf("Raw shell was rejected. Recommended next action: inspect with read_file for %s.", shellAlternativeDisplay(path)),
 			Reason:             shellRejectionReasonFromError(cause),
 		}, true
-	case "ls", "find":
-		path := lastPathLikeArg(args)
-		if path == "" {
-			path = "."
+	case "nl", "head", "tail", "sed":
+		paths := nonOptionArgs(args)
+		if len(paths) == 0 {
+			return shellRejectionAlternative{}, false
+		}
+		return lossyNativeReadSuggestion(cmd, paths, rawWorkdir, workingRoot, cause), true
+	case "ls":
+		paths := nonOptionArgs(args)
+		if hasShellOptions(args) || len(paths) > 1 {
+			return lossyNativeListSuggestion(cmd, paths, rawWorkdir, workingRoot, cause), true
+		}
+		path := "."
+		if len(paths) == 1 {
+			path = paths[0]
+		}
+		path, ok := nativeAlternativePath(path, rawWorkdir, workingRoot)
+		if !ok {
+			return nativeWorkdirRewriteRequired(cmd, cause), true
 		}
 		return shellRejectionAlternative{
 			State:              session.NextActionReadyToExecute,
@@ -143,6 +161,26 @@ func nativeFileAlternative(command string, cause error) (shellRejectionAlternati
 			OperatorProjection: fmt.Sprintf("Raw shell was rejected. Recommended next action: inspect with list_dir for %s.", shellAlternativeDisplay(path)),
 			Reason:             shellRejectionReasonFromError(cause),
 		}, true
+	case "find":
+		path := findPathArg(args)
+		if path == "" {
+			path = "."
+		}
+		path, ok := nativeAlternativePath(path, rawWorkdir, workingRoot)
+		if !ok {
+			return nativeWorkdirRewriteRequired(cmd, cause), true
+		}
+		return shellRejectionAlternative{
+			State:              session.NextActionWaitingForOperator,
+			OperationKind:      "native_directory_list",
+			OperationTool:      "list_dir",
+			OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"path": path, "limit": 100, "lossy_reason": "find predicates are not represented by list_dir"})),
+			NextAction:         "replace the find command with a typed search/list plan before execution",
+			RequiredAuthority:  "file_read",
+			RetryPolicy:        "operator_confirm_lossy_native_suggestion",
+			OperatorProjection: fmt.Sprintf("Raw shell was rejected. list_dir for %s is only a lossy inspection suggestion; rewrite find predicates as typed operations before execution.", shellAlternativeDisplay(path)),
+			Reason:             shellRejectionReasonFromError(cause),
+		}, true
 	case "rg", "grep", "egrep", "fgrep":
 		query, path := searchArgs(args)
 		if query == "" {
@@ -151,20 +189,110 @@ func nativeFileAlternative(command string, cause error) (shellRejectionAlternati
 		if path == "" {
 			path = "."
 		}
+		path, ok := nativeAlternativePath(path, rawWorkdir, workingRoot)
+		if !ok {
+			return nativeWorkdirRewriteRequired(cmd, cause), true
+		}
 		return shellRejectionAlternative{
-			State:              session.NextActionReadyToExecute,
+			State:              session.NextActionWaitingForOperator,
 			OperationKind:      "native_text_search",
 			OperationTool:      "search",
-			OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"query": query, "path": path, "limit": 50})),
-			NextAction:         "search through the scoped native search tool",
+			OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"query": query, "path": path, "limit": 50, "lossy_reason": "shell search options and regex semantics are not fully represented"})),
+			NextAction:         "rewrite the shell search as a typed search operation before execution",
 			RequiredAuthority:  "file_read",
-			RetryPolicy:        "use_structured_tool_not_raw_shell",
-			OperatorProjection: "Raw shell was rejected. Recommended next action: inspect with the native search tool.",
+			RetryPolicy:        "operator_confirm_lossy_native_suggestion",
+			OperatorProjection: "Raw shell was rejected. Native search is only a lossy inspection suggestion; rewrite shell search options as a typed operation before execution.",
 			Reason:             shellRejectionReasonFromError(cause),
 		}, true
 	default:
 		return shellRejectionAlternative{}, false
 	}
+}
+
+func lossyNativeReadSuggestion(cmd string, paths []string, rawWorkdir string, workingRoot string, cause error) shellRejectionAlternative {
+	resolved := make([]string, 0, len(paths))
+	for _, path := range paths {
+		next, ok := nativeAlternativePath(path, rawWorkdir, workingRoot)
+		if !ok {
+			return nativeWorkdirRewriteRequired(cmd, cause)
+		}
+		resolved = append(resolved, next)
+	}
+	return shellRejectionAlternative{
+		State:              session.NextActionWaitingForOperator,
+		OperationKind:      "native_file_read",
+		OperationTool:      "read_file",
+		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"paths": resolved, "lossy_reason": cmd + " semantics are not exactly represented by one read_file call"})),
+		NextAction:         "rewrite the shell file read as exact typed file operation(s) before execution",
+		RequiredAuthority:  "file_read",
+		RetryPolicy:        "operator_confirm_lossy_native_suggestion",
+		OperatorProjection: fmt.Sprintf("Raw shell was rejected. read_file is only a lossy inspection suggestion for %s; rewrite the command as exact typed file operation(s) before execution.", cmd),
+		Reason:             shellRejectionReasonFromError(cause),
+	}
+}
+
+func lossyNativeListSuggestion(cmd string, paths []string, rawWorkdir string, workingRoot string, cause error) shellRejectionAlternative {
+	resolved := make([]string, 0, len(paths))
+	for _, path := range paths {
+		next, ok := nativeAlternativePath(path, rawWorkdir, workingRoot)
+		if !ok {
+			return nativeWorkdirRewriteRequired(cmd, cause)
+		}
+		resolved = append(resolved, next)
+	}
+	if len(resolved) == 0 {
+		next, ok := nativeAlternativePath(".", rawWorkdir, workingRoot)
+		if !ok {
+			return nativeWorkdirRewriteRequired(cmd, cause)
+		}
+		resolved = append(resolved, next)
+	}
+	return shellRejectionAlternative{
+		State:              session.NextActionWaitingForOperator,
+		OperationKind:      "native_directory_list",
+		OperationTool:      "list_dir",
+		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"paths": resolved, "lossy_reason": cmd + " options are not exactly represented by one list_dir call"})),
+		NextAction:         "rewrite the shell directory listing as exact typed operation(s) before execution",
+		RequiredAuthority:  "file_read",
+		RetryPolicy:        "operator_confirm_lossy_native_suggestion",
+		OperatorProjection: fmt.Sprintf("Raw shell was rejected. list_dir is only a lossy inspection suggestion for %s; rewrite the command as exact typed operation(s) before execution.", cmd),
+		Reason:             shellRejectionReasonFromError(cause),
+	}
+}
+
+func nativeWorkdirRewriteRequired(cmd string, cause error) shellRejectionAlternative {
+	return shellRejectionAlternative{
+		State:              session.NextActionWaitingForOperator,
+		OperationKind:      "typed_operation_required",
+		OperationTool:      "update_operation",
+		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"reason": "workdir_not_representable_for_native_alternative", "command": cmd})),
+		NextAction:         "rewrite the rejected shell with an explicit typed operation and scoped path",
+		RequiredAuthority:  "typed_operation_required",
+		RetryPolicy:        "do_not_execute_native_guess",
+		OperatorProjection: "Raw shell was rejected, and its workdir/path semantics could not be represented safely. Rewrite it as an explicit typed operation before execution.",
+		Reason:             shellRejectionReasonFromError(cause),
+	}
+}
+
+func nativeAlternativePath(path string, rawWorkdir string, workingRoot string) (string, bool) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", false
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path), true
+	}
+	if strings.TrimSpace(rawWorkdir) == "" {
+		return path, true
+	}
+	if strings.TrimSpace(workingRoot) == "" {
+		return "", false
+	}
+	workdir, escaped, err := resolveWorkdirForExec(workingRoot, rawWorkdir)
+	if err != nil || escaped {
+		return "", false
+	}
+	return filepath.Clean(filepath.Join(workdir, path)), true
 }
 
 func canonicalExecAlternative(command string, rawWorkdir string, cause error) (shellRejectionAlternative, bool) {
@@ -182,11 +310,17 @@ func canonicalExecAlternative(command string, rawWorkdir string, cause error) (s
 			return shellRejectionAlternative{}, false
 		}
 		canonical = canonicalShellCommand(cmd, args)
+		if err := validateExecEffectPlanDispatchable(commandeffect.PlanCommand(canonical)); err != nil {
+			return shellRejectionAlternative{}, false
+		}
 		operationKind = "confined_git_inspection"
 		requiredAuthority = "read_only_inspection"
 	case "go", "make", "pytest", "npm", "pnpm", "yarn", "cargo":
 		candidate := canonicalShellCommand(cmd, args)
 		plan := commandeffect.PlanCommand(candidate)
+		if err := validateExecEffectPlanDispatchable(plan); err != nil {
+			return shellRejectionAlternative{}, false
+		}
 		effect := commandeffect.RepresentativeEffect(plan)
 		if effect.Kind != commandeffect.KindValidation {
 			return shellRejectionAlternative{}, false
@@ -445,6 +579,38 @@ func searchArgs(args []shellToken) (string, string) {
 		path = values[len(values)-1]
 	}
 	return query, path
+}
+
+func findPathArg(args []shellToken) string {
+	for _, arg := range args {
+		text := strings.TrimSpace(strings.Trim(arg.Text, `"'`))
+		if text == "" || text == "--" {
+			continue
+		}
+		if strings.HasPrefix(text, "-") || text == "(" || text == ")" || text == "!" || text == "," {
+			return ""
+		}
+		return text
+	}
+	return ""
+}
+
+func hasShellOptions(args []shellToken) bool {
+	endOptions := false
+	for _, arg := range args {
+		text := strings.TrimSpace(arg.Text)
+		if text == "" {
+			continue
+		}
+		if !endOptions && text == "--" {
+			endOptions = true
+			continue
+		}
+		if !endOptions && strings.HasPrefix(text, "-") && text != "-" {
+			return true
+		}
+	}
+	return false
 }
 
 func nonOptionArgs(args []shellToken) []string {

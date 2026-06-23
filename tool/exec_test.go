@@ -1124,7 +1124,7 @@ func TestExecRejectedPathQualifiedReadOffersNativeFileNextAction(t *testing.T) {
 	}
 }
 
-func TestExecRejectedDynamicVerificationOffersCanonicalExecNextAction(t *testing.T) {
+func TestExecRejectedDynamicVerificationRequiresTypedRewrite(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
@@ -1148,15 +1148,127 @@ func TestExecRejectedDynamicVerificationOffersCanonicalExecNextAction(t *testing
 		t.Fatalf("OpenNextActionsBySession() err = %v", err)
 	}
 	if len(open) != 1 {
-		t.Fatalf("open next actions = %#v, want one verification alternative", open)
+		t.Fatalf("open next actions = %#v, want one typed rewrite action", open)
 	}
 	action := open[0]
-	if action.OperationKind != "confined_verification_exec" || action.OperationTool != "exec" || action.RequiredAuthority != "validation_execution" || action.Verifier != "confined_validation_command" {
-		t.Fatalf("next action operation = %#v, want confined verification exec", action)
+	if action.State != session.NextActionWaitingForOperator || action.OperationKind != "typed_operation_required" || action.OperationTool != "update_operation" || action.RequiredAuthority != "typed_operation_required" {
+		t.Fatalf("next action operation = %#v, want waiting typed rewrite for dynamic command", action)
 	}
 	input := mustNextActionInputMap(t, action)
-	if input["command"] != "go test ./..." {
-		t.Fatalf("operation input = %#v, want canonical go test command", input)
+	if input["reason"] != "dynamic_shell" {
+		t.Fatalf("operation input = %#v, want dynamic_shell reason", input)
+	}
+}
+
+func TestExecRejectedNativeReadPreservesNonRootWorkdir(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	subdir := filepath.Join(workspace, "subdir")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("mkdir subdir fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subdir, "foo.txt"), []byte("from subdir\n"), 0o600); err != nil {
+		t.Fatalf("write subdir fixture: %v", err)
+	}
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8845, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"/bin/cat foo.txt","workdir":"subdir"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one native read alternative", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionReadyToExecute || action.OperationKind != "native_file_read" || action.OperationTool != "read_file" {
+		t.Fatalf("next action = %#v, want exact ready native read", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	wantPath := filepath.Join(subdir, "foo.txt")
+	if input["path"] != wantPath || input["full"] != true {
+		t.Fatalf("operation input = %#v, want read_file path %q full=true", input, wantPath)
+	}
+}
+
+func TestExecRejectedFindNameStaysLossyWaitingSuggestion(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8846, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"/usr/bin/find . -name '*.go'"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one lossy find suggestion", open)
+	}
+	action := open[0]
+	if action.State == session.NextActionReadyToExecute || action.OperationKind != "native_directory_list" || action.OperationTool != "list_dir" {
+		t.Fatalf("next action = %#v, want non-ready lossy directory-list suggestion", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["path"] == "*.go" || input["path"] == "'*.go'" || input["lossy_reason"] == "" {
+		t.Fatalf("operation input = %#v, want find path not name operand and lossy reason", input)
+	}
+}
+
+func TestExecRejectedCanonicalCandidateMustBeDispatchable(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8847, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"command git -c core.sshCommand=ssh status"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one typed rewrite action", open)
+	}
+	action := open[0]
+	if action.State == session.NextActionReadyToExecute || action.OperationKind == "confined_git_inspection" || action.OperationTool == "exec" {
+		t.Fatalf("next action = %#v, want non-ready typed rewrite for nondispatchable canonical candidate", action)
 	}
 }
 

@@ -251,7 +251,7 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 				return "", preDispatchExecError(fmt.Errorf("%w (and failed to record shell effect judgment: %v)", err, recordErr))
 			}
 		}
-		return "", preDispatchExecError(r.recordRejectedShellAlternative(ctx, key, in.Command, in.Workdir, plan, shellJudgment, err))
+		return "", preDispatchExecError(r.recordRejectedShellAlternative(ctx, key, in.Command, in.Workdir, scope.WorkingRoot, plan, shellJudgment, err))
 	}
 	if proposal, reason := proposalForCommand(in.Command); reason != "" {
 		if r.execApprover == nil {
