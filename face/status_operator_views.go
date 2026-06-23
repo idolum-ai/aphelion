@@ -255,6 +255,10 @@ func operatorProviderHealthDetail(health core.ProviderHealthSnapshot) string {
 	if status == "" {
 		status = "healthy"
 	}
+	if status == "healthy" && health.RecentFailures == 0 && health.RecentRetries == 0 && health.RecentFailovers == 0 && health.LastFailureAt.IsZero() &&
+		(statusClassCurrentOrEmpty(health.StatusClass) && failureClassNoneOrEmpty(health.FailureClass) && retryPolicyNoneOrEmpty(health.RetryPolicy)) {
+		return ""
+	}
 	line := fmt.Sprintf("provider health: %s, failures %d, retries %d, failovers %d", status, health.RecentFailures, health.RecentRetries, health.RecentFailovers)
 	if reason := strings.TrimSpace(health.LastFailureReason); reason != "" {
 		line += ", latest failure " + truncateStatusField(reason, 90)
@@ -276,6 +280,10 @@ func operatorPersistenceHealthDetail(health core.PersistenceHealthSnapshot) stri
 	if status == "" {
 		status = "healthy"
 	}
+	if status == "healthy" && health.RecentSlow == 0 && health.LastEventAt.IsZero() &&
+		(statusClassCurrentOrEmpty(health.StatusClass) && failureClassNoneOrEmpty(health.FailureClass) && retryPolicyNoneOrEmpty(health.RetryPolicy)) {
+		return ""
+	}
 	line := fmt.Sprintf("persistence health: %s, slow writes %d", status, health.RecentSlow)
 	if component := strings.TrimSpace(health.LastComponent); component != "" {
 		line += ", latest " + truncateStatusField(component, 80)
@@ -290,6 +298,21 @@ func operatorPersistenceHealthDetail(health core.PersistenceHealthSnapshot) stri
 		line += ", next " + truncateStatusField(next, 90)
 	}
 	return line
+}
+
+func statusClassCurrentOrEmpty(value string) bool {
+	value = strings.TrimSpace(value)
+	return value == "" || value == core.StatusClassCurrent
+}
+
+func failureClassNoneOrEmpty(value string) bool {
+	value = strings.TrimSpace(value)
+	return value == "" || value == core.ReliabilityFailureNone
+}
+
+func retryPolicyNoneOrEmpty(value string) bool {
+	value = strings.TrimSpace(value)
+	return value == "" || value == core.ReliabilityRetryNone
 }
 
 func operatorAuthorityStatusDetail(snapshot core.AuthorityStatusSnapshot) string {

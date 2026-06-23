@@ -2,7 +2,10 @@
 
 package core
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestClassifySourceInstallStatusSeparatesVerifiedSourceFromStaleReleaseMetadata(t *testing.T) {
 	tests := []struct {
@@ -79,5 +82,44 @@ func TestClassifySourceInstallReliabilityCarriesOperatorPolicy(t *testing.T) {
 	}
 	if got.NextAction == "" || got.NextAction == "none" {
 		t.Fatalf("next action = %q, want operator-legible action", got.NextAction)
+	}
+}
+
+func TestHealthyReliabilityClassificationsAreCurrentAndQuiet(t *testing.T) {
+	tests := []struct {
+		name string
+		got  StatusReliabilityClassification
+	}{
+		{
+			name: "source install current",
+			got: ClassifySourceInstallReliability(SourceInstallStatusInput{
+				CurrentRevision:  "abc123",
+				RunningRevision:  "abc123",
+				ExpectedRevision: "abc123",
+				MetadataStatus:   "present",
+			}),
+		},
+		{
+			name: "provider current",
+			got:  ClassifyProviderReliability("", ""),
+		},
+		{
+			name: "transport current",
+			got:  ClassifyTransportReliability("telegram:primary", ""),
+		},
+		{
+			name: "persistence current",
+			got:  ClassifyPersistenceLatency("execution_events:turn_started", PersistenceLatencySlowThreshold-time.Millisecond),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got.StatusClass != StatusClassCurrent {
+				t.Fatalf("status class = %q, want current: %#v", tt.got.StatusClass, tt.got)
+			}
+			if tt.got.FailureClass != ReliabilityFailureNone || tt.got.RetryPolicy != ReliabilityRetryNone || tt.got.NextAction != "none" {
+				t.Fatalf("classification = %#v, want no failure, no retry, no next action", tt.got)
+			}
+		})
 	}
 }

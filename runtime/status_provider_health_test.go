@@ -63,6 +63,29 @@ func TestSystemStatusSnapshotProjectsProviderHealth(t *testing.T) {
 	}
 }
 
+func TestSystemStatusSnapshotHealthyProviderHealthIsCurrentAndQuiet(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	snapshot, err := rt.SystemStatusSnapshot(core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("SystemStatusSnapshot() err = %v", err)
+	}
+	if snapshot.ProviderHealth.Status != "healthy" {
+		t.Fatalf("provider health status = %q, want healthy", snapshot.ProviderHealth.Status)
+	}
+	if snapshot.ProviderHealth.StatusClass != core.StatusClassCurrent ||
+		snapshot.ProviderHealth.FailureClass != core.ReliabilityFailureNone ||
+		snapshot.ProviderHealth.RetryPolicy != core.ReliabilityRetryNone ||
+		snapshot.ProviderHealth.NextAction != "none" {
+		t.Fatalf("provider health classification = %#v, want quiet current classification", snapshot.ProviderHealth)
+	}
+}
+
 func TestDoctorProviderHealthIncludesRecentProviderPressure(t *testing.T) {
 	t.Parallel()
 

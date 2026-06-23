@@ -25,7 +25,7 @@ func persistenceHealthFromExecutionEvents(events []session.ExecutionEvent, now t
 		GeneratedAt:  now,
 		Window:       persistenceHealthWindow,
 		Status:       "healthy",
-		StatusClass:  core.StatusClassOperationalTension,
+		StatusClass:  core.StatusClassCurrent,
 		FailureClass: core.ReliabilityFailureNone,
 		RetryPolicy:  core.ReliabilityRetryNone,
 		NextAction:   "none",

@@ -20,7 +20,7 @@ func TestSystemStatusSnapshotProjectsPersistenceHealth(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 	key := session.SessionKey{ChatID: 7801, UserID: 0, Scope: telegramDMScopeRef(7801)}
-	if err := store.RecordPersistenceLatencyClassification(key, "execution_events:mission_assessment", 150*time.Millisecond, time.Now().UTC()); err != nil {
+	if err := store.RecordPersistenceLatencyClassification(key, "execution_events:mission_assessment", 300*time.Millisecond, time.Now().UTC()); err != nil {
 		t.Fatalf("RecordPersistenceLatencyClassification() err = %v", err)
 	}
 
@@ -40,6 +40,34 @@ func TestSystemStatusSnapshotProjectsPersistenceHealth(t *testing.T) {
 	}
 }
 
+func TestSystemStatusSnapshotNormalPersistenceLatencyIsCurrentAndQuiet(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7803, UserID: 0, Scope: telegramDMScopeRef(7803)}
+	if err := store.RecordPersistenceLatencyClassification(key, "execution_events:turn_started", core.PersistenceLatencySlowThreshold-time.Millisecond, time.Now().UTC()); err != nil {
+		t.Fatalf("RecordPersistenceLatencyClassification() err = %v", err)
+	}
+
+	snapshot, err := rt.SystemStatusSnapshot(core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("SystemStatusSnapshot() err = %v", err)
+	}
+	if snapshot.PersistenceHealth.Status != "healthy" || snapshot.PersistenceHealth.RecentSlow != 0 {
+		t.Fatalf("persistence health = %#v, want healthy with no slow writes", snapshot.PersistenceHealth)
+	}
+	if snapshot.PersistenceHealth.StatusClass != core.StatusClassCurrent ||
+		snapshot.PersistenceHealth.FailureClass != core.ReliabilityFailureNone ||
+		snapshot.PersistenceHealth.RetryPolicy != core.ReliabilityRetryNone ||
+		snapshot.PersistenceHealth.NextAction != "none" {
+		t.Fatalf("persistence health classification = %#v, want quiet current classification", snapshot.PersistenceHealth)
+	}
+}
+
 func TestDoctorPersistenceHealthIncludesSlowWriteClassification(t *testing.T) {
 	t.Parallel()
 
@@ -50,7 +78,7 @@ func TestDoctorPersistenceHealthIncludesSlowWriteClassification(t *testing.T) {
 	}
 	key := session.SessionKey{ChatID: 7802, UserID: 0, Scope: telegramDMScopeRef(7802)}
 	now := time.Now().UTC()
-	if err := store.RecordPersistenceLatencyClassification(key, "execution_events:background_recommendation", 125*time.Millisecond, now); err != nil {
+	if err := store.RecordPersistenceLatencyClassification(key, "execution_events:background_recommendation", 300*time.Millisecond, now); err != nil {
 		t.Fatalf("RecordPersistenceLatencyClassification() err = %v", err)
 	}
 

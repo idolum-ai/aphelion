@@ -654,6 +654,43 @@ func TestRenderTelegramStatusSystemIncludesPersistenceHealth(t *testing.T) {
 	}
 }
 
+func TestRenderTelegramStatusSystemOmitsQuietHealthyReliabilityLines(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	out := RenderTelegramStatusSystem(core.SystemStatusSnapshot{
+		ProviderHealth: core.ProviderHealthSnapshot{
+			GeneratedAt:  now,
+			Window:       4 * time.Hour,
+			Status:       "healthy",
+			StatusClass:  core.StatusClassCurrent,
+			FailureClass: core.ReliabilityFailureNone,
+			RetryPolicy:  core.ReliabilityRetryNone,
+			NextAction:   "none",
+		},
+		PersistenceHealth: core.PersistenceHealthSnapshot{
+			GeneratedAt:  now,
+			Window:       4 * time.Hour,
+			Status:       "healthy",
+			StatusClass:  core.StatusClassCurrent,
+			FailureClass: core.ReliabilityFailureNone,
+			RetryPolicy:  core.ReliabilityRetryNone,
+			NextAction:   "none",
+		},
+	}, "opus", "high")
+	for _, forbidden := range []string{
+		"provider_health",
+		"persistence_health",
+		"next=",
+		"retry=retry_after",
+		"retry=batch_or_backpressure",
+	} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("RenderTelegramStatusSystem() = %q, should not contain noisy healthy reliability surface %q", out, forbidden)
+		}
+	}
+}
+
 func TestRenderTelegramStatusDurablesShowsEmptyState(t *testing.T) {
 	t.Parallel()
 

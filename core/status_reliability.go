@@ -8,6 +8,7 @@ import (
 )
 
 const (
+	StatusClassCurrent            = "current"
 	StatusClassOperationalTension = "operational_tension"
 	StatusClassPrincipleDebt      = "principle_debt"
 
@@ -32,7 +33,9 @@ const (
 	ReliabilityRetryBatchBackpressure = "batch_or_backpressure"
 	ReliabilityRetryInvestigate       = "investigate_before_retry"
 
-	PersistenceLatencySlowThreshold = 100 * time.Millisecond
+	// PersistenceLatencySlowThreshold matches the prior slow_write operational
+	// threshold so routine SQLite jitter does not become a noisy repair surface.
+	PersistenceLatencySlowThreshold = 250 * time.Millisecond
 )
 
 type StatusReliabilityClassification struct {
@@ -102,7 +105,7 @@ func ClassifySourceInstallReliability(input SourceInstallStatusInput) StatusReli
 		)
 	}
 	return reliabilityClassification(
-		StatusClassOperationalTension,
+		StatusClassCurrent,
 		"release_status_current",
 		ReliabilityFailureNone,
 		ReliabilityRetryNone,
@@ -114,7 +117,7 @@ func ClassifyProviderReliability(failureKind string, errorText string) StatusRel
 	combined := strings.ToLower(strings.TrimSpace(failureKind + " " + errorText))
 	switch {
 	case strings.TrimSpace(combined) == "":
-		return reliabilityClassification(StatusClassOperationalTension, "provider_status_current", ReliabilityFailureNone, ReliabilityRetryNone, "none")
+		return reliabilityClassification(StatusClassCurrent, "provider_status_current", ReliabilityFailureNone, ReliabilityRetryNone, "none")
 	case containsReliabilityAny(combined, "context window", "context length", "context_budget", "token limit", "too many tokens", "request too large", "max_tokens", "maximum context"):
 		return reliabilityClassification(
 			StatusClassOperationalTension,
@@ -155,7 +158,7 @@ func ClassifyTransportReliability(surface string, errorText string) StatusReliab
 	surfaceToken := normalizeReliabilityToken(firstNonEmptyReliability(surface, "transport"))
 	switch {
 	case errorText == "":
-		return reliabilityClassification(StatusClassOperationalTension, surfaceToken+"_status_current", ReliabilityFailureNone, ReliabilityRetryNone, "none")
+		return reliabilityClassification(StatusClassCurrent, surfaceToken+"_status_current", ReliabilityFailureNone, ReliabilityRetryNone, "none")
 	case containsReliabilityAny(errorText, "token", "unauthorized", "forbidden", "permission", "chat not found", "bot was blocked", "bad request"):
 		return reliabilityClassification(
 			StatusClassOperationalTension,
@@ -185,7 +188,7 @@ func ClassifyTransportReliability(surface string, errorText string) StatusReliab
 
 func ClassifyPersistenceLatency(component string, latency time.Duration) StatusReliabilityClassification {
 	if latency < PersistenceLatencySlowThreshold {
-		return reliabilityClassification(StatusClassOperationalTension, "persistence_latency_normal", ReliabilityFailureNone, ReliabilityRetryNone, "none")
+		return reliabilityClassification(StatusClassCurrent, "persistence_latency_normal", ReliabilityFailureNone, ReliabilityRetryNone, "none")
 	}
 	component = strings.TrimSpace(component)
 	if component == "" {

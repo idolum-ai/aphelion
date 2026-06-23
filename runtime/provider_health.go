@@ -27,7 +27,7 @@ func providerHealthFromExecutionEvents(events []session.ExecutionEvent, now time
 		GeneratedAt:  now,
 		Window:       window,
 		Status:       "healthy",
-		StatusClass:  core.StatusClassOperationalTension,
+		StatusClass:  core.StatusClassCurrent,
 		FailureClass: core.ReliabilityFailureNone,
 		RetryPolicy:  core.ReliabilityRetryNone,
 		NextAction:   "none",

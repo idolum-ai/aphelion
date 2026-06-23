@@ -89,6 +89,9 @@ func renderProviderHealthLine(health core.ProviderHealthSnapshot) string {
 	if status == "" {
 		status = "healthy"
 	}
+	if status == "healthy" && health.RecentFailures == 0 && health.RecentRetries == 0 && health.RecentFailovers == 0 && health.LastFailureAt.IsZero() && currentOrNoneHealthClass(health.StatusClass, health.FailureClass, health.RetryPolicy) {
+		return ""
+	}
 	line := fmt.Sprintf("provider_health status=%s failures=%d retries=%d failovers=%d successes=%d", status, health.RecentFailures, health.RecentRetries, health.RecentFailovers, health.RecentSuccesses)
 	if statusClass := strings.TrimSpace(health.StatusClass); statusClass != "" {
 		line += " class=" + statusClass
@@ -134,6 +137,9 @@ func renderPersistenceHealthLine(health core.PersistenceHealthSnapshot) string {
 	if status == "" {
 		status = "healthy"
 	}
+	if status == "healthy" && health.RecentSlow == 0 && health.LastEventAt.IsZero() && currentOrNoneHealthClass(health.StatusClass, health.FailureClass, health.RetryPolicy) {
+		return ""
+	}
 	line := fmt.Sprintf("persistence_health status=%s slow_writes=%d", status, health.RecentSlow)
 	if statusClass := strings.TrimSpace(health.StatusClass); statusClass != "" {
 		line += " class=" + statusClass
@@ -160,6 +166,15 @@ func renderPersistenceHealthLine(health core.PersistenceHealthSnapshot) string {
 		line += " next=" + quoteStatusField(truncateStatusField(nextAction, 100))
 	}
 	return line
+}
+
+func currentOrNoneHealthClass(statusClass string, failureClass string, retryPolicy string) bool {
+	statusClass = strings.TrimSpace(statusClass)
+	failureClass = strings.TrimSpace(failureClass)
+	retryPolicy = strings.TrimSpace(retryPolicy)
+	return (statusClass == "" || statusClass == core.StatusClassCurrent) &&
+		(failureClass == "" || failureClass == core.ReliabilityFailureNone) &&
+		(retryPolicy == "" || retryPolicy == core.ReliabilityRetryNone)
 }
 
 func renderTelegramIngressUpdateBlock(updates []core.TelegramIngressUpdateSnapshot) []string {
