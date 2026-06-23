@@ -37,6 +37,16 @@ func recordExposureProjectionTx(tx *sql.Tx, input ExposureProjectionInput) (Expo
 	sessionID := SessionIDForKey(input.Key)
 	scope := defaultScopeForKey(input.Key)
 	projection := ProjectToolResultForPurpose(input.RawText, input.Audience, input.Purpose)
+	if input.ForceProtectedEvidence && strings.TrimSpace(input.RawText) != "" {
+		projection.ProjectionKind = ExposureProjectionProtectedRef
+		projection.Projection = string(ExposureProjectionProtectedRef)
+		projection.Text = renderProtectedToolOutputProjection(input.Audience)
+		projection.ProjectedBytes = len(projection.Text)
+		projection.SensitivityProvenance = appendUniqueEvidenceString(projection.SensitivityProvenance, "policy:forced_protected_evidence")
+		if projection.Sensitivity == "" || projection.Sensitivity == EvidenceRedactionNone || projection.Sensitivity == EvidenceRedactionDigest {
+			projection.Sensitivity = EvidenceRedactionBlocked
+		}
+	}
 	sourceHash := projection.SourceHash
 	if input.ProjectionID == "" {
 		input.ProjectionID = ExposureProjectionID(sessionID, input.SourceRef, input.Audience, input.Purpose, sourceHash)
@@ -48,7 +58,7 @@ func recordExposureProjectionTx(tx *sql.Tx, input ExposureProjectionInput) (Expo
 	}
 
 	protectedRef := ""
-	if exposureProjectionNeedsProtectedEvidence(projection, input.RawText) {
+	if input.ForceProtectedEvidence || exposureProjectionNeedsProtectedEvidence(projection, input.RawText) {
 		obj, err := upsertEvidenceObjectTx(tx, protectedToolOutputEvidenceInput(input, scope, projection))
 		if err != nil {
 			return ExposureProjectionRecord{}, fmt.Errorf("write protected tool output evidence: %w", err)

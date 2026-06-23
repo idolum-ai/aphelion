@@ -14,8 +14,10 @@ type ExposurePurpose string
 type ExposureProjectionKind string
 
 const (
-	ExposurePurposeToolResultModelContext ExposurePurpose = "tool_result_model_context"
-	ExposurePurposeToolResultPreview      ExposurePurpose = "tool_result_preview"
+	ExposurePurposeToolResultModelContext  ExposurePurpose = "tool_result_model_context"
+	ExposurePurposeToolResultPreview       ExposurePurpose = "tool_result_preview"
+	ExposurePurposeToolFailureModelContext ExposurePurpose = "tool_failure_model_context"
+	ExposurePurposeToolFailurePreview      ExposurePurpose = "tool_failure_preview"
 )
 
 const (
@@ -29,17 +31,18 @@ const (
 const ExposureProjectionPolicyToolOutputV1 = "session.exposure_projection.tool_output/v1"
 
 type ExposureProjectionInput struct {
-	ProjectionID string
-	Key          SessionKey
-	TurnRunID    int64
-	InvocationID string
-	ToolName     string
-	Audience     ExposureAudience
-	Purpose      ExposurePurpose
-	SourceKind   string
-	SourceRef    string
-	RawText      string
-	CreatedAt    time.Time
+	ProjectionID           string
+	Key                    SessionKey
+	TurnRunID              int64
+	InvocationID           string
+	ToolName               string
+	Audience               ExposureAudience
+	Purpose                ExposurePurpose
+	SourceKind             string
+	SourceRef              string
+	RawText                string
+	ForceProtectedEvidence bool
+	CreatedAt              time.Time
 }
 
 type ExposureProjectionRecord struct {
@@ -108,7 +111,7 @@ func normalizeExposureAudience(audience ExposureAudience) ExposureAudience {
 func normalizeExposurePurpose(purpose ExposurePurpose) ExposurePurpose {
 	purpose = ExposurePurpose(normalizeEnumValue(string(purpose)))
 	switch purpose {
-	case ExposurePurposeToolResultModelContext, ExposurePurposeToolResultPreview:
+	case ExposurePurposeToolResultModelContext, ExposurePurposeToolResultPreview, ExposurePurposeToolFailureModelContext, ExposurePurposeToolFailurePreview:
 		return purpose
 	default:
 		return ExposurePurposeToolResultPreview

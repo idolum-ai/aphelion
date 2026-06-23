@@ -57,21 +57,24 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 	m.ToolFinishedWithProjection(ctx, name, input, output, output, err, false)
 }
 
-func (m *turnMonitor) ProjectToolOutput(ctx context.Context, name string, input json.RawMessage, output string, err error) (string, bool) {
+func (m *turnMonitor) ProjectToolOutput(ctx context.Context, name string, input json.RawMessage, output string, err error) toolOutputProjection {
+	if err != nil {
+		return m.projectToolFailure(ctx, name, output, err, time.Now().UTC())
+	}
 	if strings.TrimSpace(output) == "" {
-		return output, false
+		return toolOutputProjection{Output: output}
 	}
 	record, ok := m.recordToolOutputProjection(ctx, name, session.ExposureAudienceModelPreview, session.ExposurePurposeToolResultModelContext, output, time.Now().UTC())
 	if !ok {
-		return session.ProjectToolResultForPurpose(output, session.ExposureAudienceModelPreview, session.ExposurePurposeToolResultModelContext).Text, false
+		return toolOutputProjection{Output: session.ProjectToolResultForPurpose(output, session.ExposureAudienceModelPreview, session.ExposurePurposeToolResultModelContext).Text}
 	}
-	return record.ProjectedText, true
+	return toolOutputProjection{Output: record.ProjectedText, Recorded: true}
 }
 
 func (m *turnMonitor) ToolFinishedWithProjection(ctx context.Context, name string, input json.RawMessage, rawOutput string, projectedOutput string, err error, projectionRecorded bool) {
 	modelOutput := projectedOutput
 	operatorOutput := projectedOutput
-	if strings.TrimSpace(rawOutput) != "" {
+	if err == nil && strings.TrimSpace(rawOutput) != "" {
 		if !projectionRecorded && strings.TrimSpace(projectedOutput) == strings.TrimSpace(rawOutput) {
 			if record, ok := m.recordToolOutputProjection(ctx, name, session.ExposureAudienceModelPreview, session.ExposurePurposeToolResultModelContext, rawOutput, time.Now().UTC()); ok {
 				modelOutput = record.ProjectedText
@@ -134,6 +137,11 @@ func (m *turnMonitor) ToolFinishedWithProjection(ctx context.Context, name strin
 	if operatorResultPreview != resultPreview {
 		payload["operator_result_preview"] = operatorResultPreview
 	}
+	if err != nil {
+		if failureProjection, ok := projectedToolFailurePayload(projectedOutput); ok {
+			payload["failure_projection"] = failureProjection
+		}
+	}
 	if digest, ok := agent.BuildToolOutputDigest(rawOutput, agent.DefaultToolOutputDigestInlineLimit); ok {
 		safe := redactLargeToolOutputEvidence(preview, rawOutput, digest)
 		if ref := m.recordLargeToolOutputEvidence(name, safe, time.Now().UTC()); ref != "" {
@@ -161,7 +169,38 @@ func (m *turnMonitor) ToolFinishedWithProjection(ctx context.Context, name strin
 	}
 }
 
+func (m *turnMonitor) projectToolFailure(ctx context.Context, name string, rawOutput string, rawErr error, at time.Time) toolOutputProjection {
+	failureClass, retryPolicy := classifyProjectedToolFailure(rawErr, rawOutput)
+	protectedRef := ""
+	recorded := false
+	rawDetails := rawToolFailureDetails(rawOutput, rawErr)
+	if strings.TrimSpace(rawDetails) != "" {
+		if record, ok := m.recordToolExposureProjection(ctx, name, session.ExposureAudienceModelPreview, session.ExposurePurposeToolFailureModelContext, rawDetails, failureSourceRef(ctx, m.runID, name), true, at); ok {
+			protectedRef = record.ProtectedEvidenceRef
+			recorded = true
+		}
+	}
+	summary := safeToolFailureSummary(failureClass, protectedRef)
+	projected := projectedToolFailure{
+		OK:                   false,
+		SafeSummary:          summary,
+		FailureClass:         failureClass,
+		RetryPolicy:          retryPolicy,
+		PolicyRef:            session.ExposureProjectionPolicyToolOutputV1,
+		ProtectedEvidenceRef: protectedRef,
+	}
+	return toolOutputProjection{
+		Output:   renderProjectedToolFailure(projected),
+		Err:      projectedToolFailureError{safe: summary, raw: rawErr},
+		Recorded: recorded,
+	}
+}
+
 func (m *turnMonitor) recordToolOutputProjection(ctx context.Context, name string, audience session.ExposureAudience, purpose session.ExposurePurpose, output string, at time.Time) (session.ExposureProjectionRecord, bool) {
+	return m.recordToolExposureProjection(ctx, name, audience, purpose, output, "", false, at)
+}
+
+func (m *turnMonitor) recordToolExposureProjection(ctx context.Context, name string, audience session.ExposureAudience, purpose session.ExposurePurpose, output string, sourceRef string, forceProtected bool, at time.Time) (session.ExposureProjectionRecord, bool) {
 	if m == nil || m.runtime == nil || m.runtime.store == nil || strings.TrimSpace(output) == "" {
 		return session.ExposureProjectionRecord{}, false
 	}
@@ -176,20 +215,58 @@ func (m *turnMonitor) recordToolOutputProjection(ctx context.Context, name strin
 		invocationRef.TurnRunID = m.runID
 	}
 	record, err := m.runtime.store.RecordExposureProjection(session.ExposureProjectionInput{
-		Key:          m.key,
-		TurnRunID:    invocationRef.TurnRunID,
-		InvocationID: invocationRef.InvocationID,
-		ToolName:     strings.TrimSpace(name),
-		Audience:     audience,
-		Purpose:      purpose,
-		RawText:      output,
-		CreatedAt:    at,
+		Key:                    m.key,
+		TurnRunID:              invocationRef.TurnRunID,
+		InvocationID:           invocationRef.InvocationID,
+		ToolName:               strings.TrimSpace(name),
+		Audience:               audience,
+		Purpose:                purpose,
+		SourceRef:              sourceRef,
+		RawText:                output,
+		ForceProtectedEvidence: forceProtected,
+		CreatedAt:              at,
 	})
 	if err != nil {
 		log.Printf("WARN record exposure projection failed run_id=%d tool=%s audience=%s purpose=%s err=%v", m.runID, strings.TrimSpace(name), audience, purpose, err)
 		return session.ExposureProjectionRecord{}, false
 	}
 	return record, true
+}
+
+func rawToolFailureDetails(output string, err error) string {
+	payload := map[string]any{}
+	if strings.TrimSpace(output) != "" {
+		payload["output"] = output
+	}
+	if err != nil && strings.TrimSpace(err.Error()) != "" {
+		payload["error"] = err.Error()
+	}
+	if len(payload) == 0 {
+		return ""
+	}
+	raw, marshalErr := json.Marshal(payload)
+	if marshalErr != nil {
+		return strings.TrimSpace(output + "\n" + errorString(err))
+	}
+	return string(raw)
+}
+
+func failureSourceRef(ctx context.Context, runID int64, name string) string {
+	invocationID := ""
+	if ref, ok := toolpkg.ToolInvocationRefFromContext(ctx); ok {
+		invocationID = ref.InvocationID
+		if ref.TurnRunID > 0 {
+			runID = ref.TurnRunID
+		}
+	}
+	parts := []string{"tool_failure", strings.TrimSpace(name)}
+	if runID > 0 {
+		parts = append(parts, fmt.Sprintf("%d", runID))
+	}
+	if strings.TrimSpace(invocationID) != "" {
+		parts = append(parts, strings.TrimSpace(invocationID))
+	}
+	return strings.Join(parts, ":")
 }
 
 func (m *turnMonitor) recordExecEffectAttempt(ctx context.Context, name string, input json.RawMessage, status session.EffectAttemptStatus, errorText string, observedAt time.Time) {

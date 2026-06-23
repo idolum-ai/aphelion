@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/idolum-ai/aphelion/agent"
@@ -155,6 +156,7 @@ type principalRecordingTools struct {
 	supportsPrincipal        bool
 	lastPrincipal            principal.Principal
 	output                   string
+	err                      error
 }
 
 func (t *principalRecordingTools) Definitions() []agent.ToolDef {
@@ -164,7 +166,10 @@ func (t *principalRecordingTools) Definitions() []agent.ToolDef {
 func (t *principalRecordingTools) Execute(_ context.Context, _ string, _ json.RawMessage) (string, error) {
 	t.executeCalls++
 	if strings.TrimSpace(t.output) != "" {
-		return t.output, nil
+		return t.output, t.err
+	}
+	if t.err != nil {
+		return "", t.err
 	}
 	return "direct execution", nil
 }
@@ -173,9 +178,16 @@ func (t *principalRecordingTools) ExecuteForPrincipal(_ context.Context, p princ
 	t.executeForPrincipalCalls++
 	t.lastPrincipal = p
 	if strings.TrimSpace(t.output) != "" {
-		return t.output, nil
+		return t.output, t.err
+	}
+	if t.err != nil {
+		return "", t.err
 	}
 	return "principal execution", nil
+}
+
+func newPrincipalRecordingToolError(message string) error {
+	return errors.New(message)
 }
 
 func (t *principalRecordingTools) SupportsPrincipal(_ principal.Principal) bool {
