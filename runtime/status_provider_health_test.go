@@ -123,3 +123,64 @@ func TestDoctorProviderHealthIncludesRecentProviderPressure(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeAndDoctorProviderHealthUseTypedWindowUnderEventVolume(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7703, UserID: 0, Scope: telegramDMScopeRef(7703)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType:   core.ExecutionEventProviderAttemptFailed,
+		Stage:       "provider",
+		Status:      "failed",
+		PayloadJSON: `{"provider":"openrouter","model":"openrouter/test","error":"rate limit 429"}`,
+		CreatedAt:   now.Add(-2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvent(provider) err = %v", err)
+	}
+	noisy := make([]session.ExecutionEventInput, 0, 600)
+	for i := 0; i < 600; i++ {
+		noisy = append(noisy, session.ExecutionEventInput{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{}`,
+			CreatedAt:   now.Add(-time.Minute).Add(time.Duration(i) * time.Millisecond),
+		})
+	}
+	if _, err := store.AppendExecutionEvents(key, noisy); err != nil {
+		t.Fatalf("AppendExecutionEvents(noisy) err = %v", err)
+	}
+
+	snapshot, err := rt.SystemStatusSnapshot(core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("SystemStatusSnapshot() err = %v", err)
+	}
+	if snapshot.ProviderHealth.Status != "degraded" || snapshot.ProviderHealth.RecentFailures != 1 {
+		t.Fatalf("provider health = %#v, want degraded with one recent failure despite noisy events", snapshot.ProviderHealth)
+	}
+	if snapshot.ProviderHealth.FailureClass != core.ReliabilityFailureProviderTransient ||
+		snapshot.ProviderHealth.RetryPolicy != core.ReliabilityRetryBackoffOrFailover {
+		t.Fatalf("provider classification = %#v, want transient/backoff classification", snapshot.ProviderHealth)
+	}
+
+	var b strings.Builder
+	rt.writeDoctorProviderHealth(&b, now)
+	report := b.String()
+	for _, want := range []string{
+		`provider_health_status="degraded"`,
+		`provider_health_failures="1"`,
+		`provider_health_status_class="` + snapshot.ProviderHealth.StatusClass + `"`,
+		`provider_health_failure_class="` + snapshot.ProviderHealth.FailureClass + `"`,
+		`provider_health_retry_policy="` + snapshot.ProviderHealth.RetryPolicy + `"`,
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("provider health report = %s, want %s", report, want)
+		}
+	}
+}

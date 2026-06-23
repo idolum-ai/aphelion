@@ -112,11 +112,26 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 	if err != nil {
 		return core.SystemStatusSnapshot{}, err
 	}
+	providerEvents, err := r.store.ExecutionEventsByTypes([]string{
+		core.ExecutionEventProviderAttemptFailed,
+		core.ExecutionEventProviderAttemptRetried,
+		core.ExecutionEventProviderFailoverEngaged,
+		core.ExecutionEventProviderAttemptSucceeded,
+	}, now.Add(-providerHealthWindow), 200)
+	if err != nil {
+		return core.SystemStatusSnapshot{}, err
+	}
+	persistenceEvents, err := r.store.ExecutionEventsByTypes([]string{
+		core.ExecutionEventPersistenceLatency,
+	}, now.Add(-persistenceHealthWindow), 200)
+	if err != nil {
+		return core.SystemStatusSnapshot{}, err
+	}
 	snapshot.RecentExecution = summarizeExecutionEvents(recentEvents, 20)
 	snapshot.LatestPerceptionBudgetByChat = latestPerceptionBudgetByChatFromExecutionEvents(recentEvents)
 	snapshot.RestartHealth = restartHealthWithLatestWatchdogEvent(snapshot.RestartHealth, recentEvents)
-	snapshot.ProviderHealth = providerHealthFromExecutionEvents(recentEvents, now)
-	snapshot.PersistenceHealth = persistenceHealthFromExecutionEvents(recentEvents, now)
+	snapshot.ProviderHealth = providerHealthFromExecutionEvents(providerEvents, now)
+	snapshot.PersistenceHealth = persistenceHealthFromExecutionEvents(persistenceEvents, now)
 	snapshot.RecentAdjudications = statusAdjudicationsFromExecutionEvents(recentEvents, 12)
 	activeByChat, queueByChat := liveRouterSignalsFromExecutionEvents(recentEvents)
 	latestFromEvents := latestTurnSnapshotsByChatFromExecutionEvents(recentEvents)

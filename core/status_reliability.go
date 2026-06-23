@@ -50,24 +50,40 @@ type SourceInstallStatusInput struct {
 	CurrentRevision  string
 	RunningRevision  string
 	ExpectedRevision string
+	LatestVersion    string
+	LatestRevision   string
 	MetadataStatus   string
 	UpdateAvailable  bool
 }
 
+type SourceInstallReliabilitySnapshot struct {
+	ServiceConsistency StatusReliabilityClassification
+	ReleaseFreshness   StatusReliabilityClassification
+	Overall            StatusReliabilityClassification
+}
+
+func ClassifySourceInstallReliabilityAxes(input SourceInstallStatusInput) SourceInstallReliabilitySnapshot {
+	service := classifySourceServiceConsistency(input)
+	freshness := classifyReleaseFreshness(input)
+	overall := freshness
+	if service.FailureClass != ReliabilityFailureNone {
+		overall = service
+	}
+	return SourceInstallReliabilitySnapshot{
+		ServiceConsistency: service,
+		ReleaseFreshness:   freshness,
+		Overall:            overall,
+	}
+}
+
 func ClassifySourceInstallReliability(input SourceInstallStatusInput) StatusReliabilityClassification {
+	return ClassifySourceInstallReliabilityAxes(input).Overall
+}
+
+func classifySourceServiceConsistency(input SourceInstallStatusInput) StatusReliabilityClassification {
 	currentRevision := strings.TrimSpace(input.CurrentRevision)
 	runningRevision := strings.TrimSpace(input.RunningRevision)
 	expectedRevision := strings.TrimSpace(input.ExpectedRevision)
-	metadataStatus := strings.TrimSpace(input.MetadataStatus)
-	if metadataStatus != "" && metadataStatus != "present" && metadataStatus != "current" && metadataStatus != "ok" {
-		return reliabilityClassification(
-			StatusClassOperationalTension,
-			"release_metadata_"+normalizeReliabilityToken(metadataStatus),
-			ReliabilityFailureReleaseMetadata,
-			ReliabilityRetryRefreshMetadata,
-			"refresh cached release metadata or inspect the release metadata path",
-		)
-	}
 	if runningRevision != "" && expectedRevision != "" && runningRevision != expectedRevision {
 		return reliabilityClassification(
 			StatusClassOperationalTension,
@@ -86,22 +102,43 @@ func ClassifySourceInstallReliability(input SourceInstallStatusInput) StatusReli
 			"restart Aphelion so the running service revision matches the current source revision",
 		)
 	}
-	if input.UpdateAvailable && runningRevision != "" && expectedRevision != "" && runningRevision == expectedRevision {
-		return reliabilityClassification(
-			StatusClassOperationalTension,
-			"source_verified_release_metadata_stale",
-			ReliabilityFailureReleaseFreshness,
-			ReliabilityRetryRefreshMetadata,
-			"refresh release metadata; the running service already matches the expected source revision",
-		)
-	}
+	return reliabilityClassification(
+		StatusClassCurrent,
+		"source_service_consistent",
+		ReliabilityFailureNone,
+		ReliabilityRetryNone,
+		"none",
+	)
+}
+
+func classifyReleaseFreshness(input SourceInstallStatusInput) StatusReliabilityClassification {
+	metadataStatus := strings.TrimSpace(input.MetadataStatus)
 	if input.UpdateAvailable {
+		updateTarget := firstNonEmptyReliability(input.LatestRevision, input.LatestVersion)
+		if updateTarget == "" {
+			return reliabilityClassification(
+				StatusClassOperationalTension,
+				"release_metadata_update_target_missing",
+				ReliabilityFailureReleaseMetadata,
+				ReliabilityRetryRefreshMetadata,
+				"refresh cached release metadata so update availability has an explicit latest version or revision",
+			)
+		}
 		return reliabilityClassification(
 			StatusClassOperationalTension,
 			"release_update_available",
 			ReliabilityFailureReleaseFreshness,
 			ReliabilityRetryReinstallService,
 			"install the newer release or refresh metadata if this is a source checkout",
+		)
+	}
+	if metadataStatus != "" && metadataStatus != "present" && metadataStatus != "current" && metadataStatus != "ok" {
+		return reliabilityClassification(
+			StatusClassOperationalTension,
+			"release_metadata_"+normalizeReliabilityToken(metadataStatus),
+			ReliabilityFailureReleaseMetadata,
+			ReliabilityRetryRefreshMetadata,
+			"refresh cached release metadata or inspect the release metadata path",
 		)
 	}
 	return reliabilityClassification(

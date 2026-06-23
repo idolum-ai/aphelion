@@ -587,9 +587,10 @@ func writeDoctorReleaseMetadata(b *strings.Builder) {
 	if metaErr != nil || noticeErr != nil {
 		metadataStatus = "unreadable"
 	}
-	classification := core.ClassifySourceInstallReliability(core.SourceInstallStatusInput{
+	classification := core.ClassifySourceInstallReliabilityAxes(core.SourceInstallStatusInput{
 		CurrentRevision: current.Revision,
 		RunningRevision: current.Revision,
+		LatestVersion:   strings.TrimSpace(meta.LatestVersion),
 		MetadataStatus:  metadataStatus,
 		UpdateAvailable: notice.Available,
 	})
@@ -599,11 +600,21 @@ func writeDoctorReleaseMetadata(b *strings.Builder) {
 	WriteKV(b, "release_metadata_status", metadataStatus)
 	WriteKV(b, "release_installed_version", strings.TrimSpace(meta.InstalledVersion))
 	WriteKV(b, "release_latest_version", strings.TrimSpace(meta.LatestVersion))
-	WriteKV(b, "release_source_status", classification.Condition)
-	WriteKV(b, "release_status_class", classification.StatusClass)
-	WriteKV(b, "release_failure_class", classification.FailureClass)
-	WriteKV(b, "release_retry_policy", classification.RetryPolicy)
-	WriteKV(b, "release_next_action", classification.NextAction)
+	WriteKV(b, "release_source_status", classification.Overall.Condition)
+	WriteKV(b, "release_status_class", classification.Overall.StatusClass)
+	WriteKV(b, "release_failure_class", classification.Overall.FailureClass)
+	WriteKV(b, "release_retry_policy", classification.Overall.RetryPolicy)
+	WriteKV(b, "release_next_action", classification.Overall.NextAction)
+	WriteKV(b, "source_service_status", classification.ServiceConsistency.Condition)
+	WriteKV(b, "source_service_status_class", classification.ServiceConsistency.StatusClass)
+	WriteKV(b, "source_service_failure_class", classification.ServiceConsistency.FailureClass)
+	WriteKV(b, "source_service_retry_policy", classification.ServiceConsistency.RetryPolicy)
+	WriteKV(b, "source_service_next_action", classification.ServiceConsistency.NextAction)
+	WriteKV(b, "release_freshness_status", classification.ReleaseFreshness.Condition)
+	WriteKV(b, "release_freshness_status_class", classification.ReleaseFreshness.StatusClass)
+	WriteKV(b, "release_freshness_failure_class", classification.ReleaseFreshness.FailureClass)
+	WriteKV(b, "release_freshness_retry_policy", classification.ReleaseFreshness.RetryPolicy)
+	WriteKV(b, "release_freshness_next_action", classification.ReleaseFreshness.NextAction)
 	if metaErr != nil {
 		WriteKV(b, "release_metadata_error", metaErr.Error())
 		return
