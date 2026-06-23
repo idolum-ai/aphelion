@@ -1070,6 +1070,141 @@ func TestExecUnknownShellEffectsRejectBeforeGenericProposal(t *testing.T) {
 	}
 }
 
+func TestExecRejectedPathQualifiedReadOffersNativeFileNextAction(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatalf("write README fixture: %v", err)
+	}
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8841, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+	ctx := WithToolInvocationRef(context.Background(), ToolInvocationRef{TurnRunID: 411, InvocationID: "path-read"})
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		ctx,
+		"exec",
+		json.RawMessage(`{"command":"/bin/cat README.md"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one shell-rejection alternative", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionReadyToExecute || action.SubjectKind != "shell_rejection" || action.TurnRunID != 411 {
+		t.Fatalf("next action = %#v, want ready shell rejection tied to turn 411", action)
+	}
+	if action.OperationKind != "native_file_read" || action.OperationTool != "read_file" || action.RequiredAuthority != "file_read" {
+		t.Fatalf("next action operation = %#v, want native read_file alternative", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["path"] != "README.md" || input["full"] != true {
+		t.Fatalf("operation input = %#v, want read_file README.md full=true", input)
+	}
+	judgments, err := store.JudgmentsByKind(key, "shell_effect_plan", 10)
+	if err != nil {
+		t.Fatalf("JudgmentsByKind(shell_effect_plan) err = %v", err)
+	}
+	if len(judgments) != 1 {
+		t.Fatalf("shell effect judgments = %#v, want one rejected-shell judgment", judgments)
+	}
+	if !stringSliceContainsForTest(action.CausalRefs, session.JudgmentRef(judgments[0].ID)) {
+		t.Fatalf("causal refs = %#v, want shell judgment ref %q", action.CausalRefs, session.JudgmentRef(judgments[0].ID))
+	}
+}
+
+func TestExecRejectedDynamicVerificationOffersCanonicalExecNextAction(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8842, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"env PATH=./bin:$PATH go test ./..."}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one verification alternative", open)
+	}
+	action := open[0]
+	if action.OperationKind != "confined_verification_exec" || action.OperationTool != "exec" || action.RequiredAuthority != "validation_execution" || action.Verifier != "confined_validation_command" {
+		t.Fatalf("next action operation = %#v, want confined verification exec", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["command"] != "go test ./..." {
+		t.Fatalf("operation input = %#v, want canonical go test command", input)
+	}
+}
+
+func TestExecRejectedMultiAuthorityShellRecordsSplitPlanNextAction(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	approver := &stubExecApprover{approved: true}
+	key := session.SessionKey{ChatID: 8843, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store).WithExecApprover(approver)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"git push origin main && gh pr create --fill"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want raw multi-effect shell rejected before proposal approval", approver.called)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one split-plan alternative", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionBlockedNeedsAuthority || action.OperationKind != "split_effect_plan" || action.OperationTool != "update_operation" || action.RequiredAuthority != "split_effect_plan" {
+		t.Fatalf("next action = %#v, want split effect plan blocker", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	rawSteps, ok := input["steps"].([]any)
+	if !ok || len(rawSteps) != 2 {
+		t.Fatalf("operation input = %#v, want two split steps", input)
+	}
+	first, _ := rawSteps[0].(map[string]any)
+	second, _ := rawSteps[1].(map[string]any)
+	if first["required_authority"] != "git_push" || second["required_authority"] != "github_pr_create" {
+		t.Fatalf("split steps = %#v / %#v, want git_push then github_pr_create authorities", first, second)
+	}
+}
+
 func TestExecPreDispatchAttemptWriteFailureStopsCommand(t *testing.T) {
 	t.Parallel()
 
@@ -1662,4 +1797,22 @@ func TestExecuteForAdminRejectsEscapedWorkdirWithoutApproval(t *testing.T) {
 	if !strings.Contains(err.Error(), "approved proposal") {
 		t.Fatalf("err = %v, want approval requirement", err)
 	}
+}
+
+func mustNextActionInputMap(t *testing.T, action session.NextActionRecord) map[string]any {
+	t.Helper()
+	var input map[string]any
+	if err := json.Unmarshal([]byte(action.OperationInputJSON), &input); err != nil {
+		t.Fatalf("unmarshal operation input %q: %v", action.OperationInputJSON, err)
+	}
+	return input
+}
+
+func stringSliceContainsForTest(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

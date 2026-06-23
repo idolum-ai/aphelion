@@ -3,6 +3,7 @@
 package session
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -38,6 +39,11 @@ func (s *SQLiteStore) RecordNextAction(input NextActionInput) (NextActionRecord,
 
 func recordNextActionTx(tx *sql.Tx, input NextActionInput) (NextActionRecord, error) {
 	input = NormalizeNextActionInput(input)
+	operationInputJSON, err := normalizeNextActionOperationInputJSON(input.OperationInputJSON)
+	if err != nil {
+		return NextActionRecord{}, err
+	}
+	input.OperationInputJSON = operationInputJSON
 	scope := defaultScopeForKey(input.Key)
 	sessionID := SessionIDForKey(input.Key)
 	createdAt := input.CreatedAt.UTC()
@@ -65,15 +71,16 @@ func recordNextActionTx(tx *sql.Tx, input NextActionInput) (NextActionRecord, er
 			record_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
 			turn_run_id, owner, state, subject_kind, subject_ref, causal_refs_json,
 			next_action, required_authority, resource_blocker, verifier, retry_policy,
-			operator_projection, created_at, resolved_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+			operation_kind, operation_tool, operation_input_json, operator_projection, created_at, resolved_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
 	`, input.RecordID, sessionID, input.Key.ChatID, input.Key.UserID, string(scope.Kind), scope.ID, scope.DurableAgentID,
 		input.TurnRunID, input.Owner, string(input.State), input.SubjectKind, input.SubjectRef, causalRefs,
 		input.NextAction, input.RequiredAuthority, input.ResourceBlocker, input.Verifier, input.RetryPolicy,
+		input.OperationKind, input.OperationTool, input.OperationInputJSON,
 		input.OperatorProjection, createdAt.Format(time.RFC3339Nano)); err != nil {
 		return NextActionRecord{}, fmt.Errorf("insert next action %s: %w", input.RecordID, err)
 	}
-	payloadRaw, _ := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"record_id":           input.RecordID,
 		"turn_run_id":         input.TurnRunID,
 		"owner":               input.Owner,
@@ -87,7 +94,11 @@ func recordNextActionTx(tx *sql.Tx, input NextActionInput) (NextActionRecord, er
 		"verifier":            input.Verifier,
 		"retry_policy":        input.RetryPolicy,
 		"operator_projection": input.OperatorProjection,
-	})
+	}
+	if operation := nextActionOperationPayload(input); len(operation) > 0 {
+		payload["operation"] = operation
+	}
+	payloadRaw, _ := json.Marshal(payload)
 	if _, err := appendExecutionEventsTx(tx, input.Key, []ExecutionEventInput{{
 		EventType:   core.ExecutionEventWorkflowNextState,
 		Stage:       input.SubjectKind,
@@ -114,6 +125,9 @@ func recordNextActionTx(tx *sql.Tx, input NextActionInput) (NextActionRecord, er
 		ResourceBlocker:    input.ResourceBlocker,
 		Verifier:           input.Verifier,
 		RetryPolicy:        input.RetryPolicy,
+		OperationKind:      input.OperationKind,
+		OperationTool:      input.OperationTool,
+		OperationInputJSON: input.OperationInputJSON,
 		OperatorProjection: input.OperatorProjection,
 		CreatedAt:          createdAt,
 	}, nil
@@ -190,7 +204,7 @@ func (s *SQLiteStore) OpenNextActionsBySession(key SessionKey, limit int) ([]Nex
 		SELECT record_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
 			turn_run_id, owner, state, subject_kind, subject_ref, causal_refs_json,
 			next_action, required_authority, resource_blocker, verifier, retry_policy,
-			operator_projection, created_at, resolved_at
+			operation_kind, operation_tool, operation_input_json, operator_projection, created_at, resolved_at
 		FROM next_action_records
 		WHERE session_id = ? AND resolved_at IS NULL
 		ORDER BY created_at DESC, record_id DESC
@@ -212,7 +226,7 @@ func nextActionByRecordIDTx(tx *sql.Tx, recordID string) (NextActionRecord, bool
 		SELECT record_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
 			turn_run_id, owner, state, subject_kind, subject_ref, causal_refs_json,
 			next_action, required_authority, resource_blocker, verifier, retry_policy,
-			operator_projection, created_at, resolved_at
+			operation_kind, operation_tool, operation_input_json, operator_projection, created_at, resolved_at
 		FROM next_action_records
 		WHERE record_id = ?
 	`, recordID)
@@ -276,6 +290,7 @@ func (s *SQLiteStore) RecordResourcePreflight(key SessionKey, turnRunID int64, r
 		NextAction:         "repair the resource boundary before retrying",
 		ResourceBlocker:    reason,
 		RetryPolicy:        "retry_after_resource_repair",
+		OperationKind:      "resource_repair",
 		OperatorProjection: message,
 		CreatedAt:          at,
 	}); err != nil {
@@ -350,7 +365,7 @@ func scanNextActionRecord(scanner interface{ Scan(dest ...any) error }) (NextAct
 		&record.RecordID, &record.SessionID, &record.ChatID, &record.UserID, &scopeKindRaw, &scopeIDRaw, &durableAgentIDRaw,
 		&record.TurnRunID, &record.Owner, &stateRaw, &record.SubjectKind, &record.SubjectRef, &causalRefsRaw,
 		&record.NextAction, &record.RequiredAuthority, &record.ResourceBlocker, &record.Verifier, &record.RetryPolicy,
-		&record.OperatorProjection, &createdAtRaw, &resolvedAtRaw,
+		&record.OperationKind, &record.OperationTool, &record.OperationInputJSON, &record.OperatorProjection, &createdAtRaw, &resolvedAtRaw,
 	); err != nil {
 		return NextActionRecord{}, fmt.Errorf("scan next action: %w", err)
 	}
@@ -373,4 +388,38 @@ func scanNextActionRecord(scanner interface{ Scan(dest ...any) error }) (NextAct
 		}
 	}
 	return record, nil
+}
+
+func normalizeNextActionOperationInputJSON(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	if !json.Valid([]byte(raw)) {
+		return "", fmt.Errorf("next action operation input must be valid JSON")
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, []byte(raw)); err != nil {
+		return "", fmt.Errorf("compact next action operation input: %w", err)
+	}
+	return compact.String(), nil
+}
+
+func nextActionOperationPayload(input NextActionInput) map[string]any {
+	operation := map[string]any{}
+	if input.OperationKind != "" {
+		operation["kind"] = input.OperationKind
+	}
+	if input.OperationTool != "" {
+		operation["tool"] = input.OperationTool
+	}
+	if strings.TrimSpace(input.OperationInputJSON) != "" {
+		var payload any
+		if err := json.Unmarshal([]byte(input.OperationInputJSON), &payload); err == nil {
+			operation["input"] = payload
+		} else {
+			operation["input_json"] = input.OperationInputJSON
+		}
+	}
+	return operation
 }
