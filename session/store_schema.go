@@ -40,6 +40,8 @@ const schemaVersion72 = 72
 const schemaVersion73 = 73
 const schemaVersion74 = 74
 const schemaVersion75 = 75
+const schemaVersion76 = 76
+const schemaVersion77 = 77
 
 var migratableSchemaVersions = map[int]struct{}{
 	schemaVersion43: {},
@@ -75,6 +77,7 @@ var migratableSchemaVersions = map[int]struct{}{
 	schemaVersion73: {},
 	schemaVersion74: {},
 	schemaVersion75: {},
+	schemaVersion76: {},
 }
 
 func existingUserTableCount(tx *sql.Tx) (int, error) {
@@ -407,10 +410,19 @@ func migrateCurrentSchemaVersion(tx *sql.Tx, currentVersion int) (int, error) {
 		if err := migrateSchemaV75ToV76(tx); err != nil {
 			return 0, err
 		}
-		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion); err != nil {
-			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion, err)
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion76); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion76, err)
 		}
-		version = schemaVersion
+		version = schemaVersion76
+	}
+	if version == schemaVersion76 {
+		if err := migrateSchemaV76ToV77(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion77); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion77, err)
+		}
+		version = schemaVersion77
 	}
 	return version, nil
 }

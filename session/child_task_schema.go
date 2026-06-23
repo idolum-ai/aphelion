@@ -33,12 +33,10 @@ func ensureChildTaskTables(tx *sql.Tx) error {
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 			terminal_at TEXT
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_child_task_packets_agent_status ON child_task_packets(agent_id, status, updated_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_child_task_packets_authority ON child_task_packets(authority_kind, authority_id, updated_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_child_task_packets_session ON child_task_packets(session_id, updated_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS child_task_results (
 			result_id TEXT PRIMARY KEY,
 			packet_id TEXT NOT NULL,
+			attempt_id TEXT NOT NULL DEFAULT '',
 			task_lease_id TEXT NOT NULL DEFAULT '',
 			agent_id TEXT NOT NULL DEFAULT '',
 			session_id TEXT NOT NULL DEFAULT '',
@@ -52,7 +50,20 @@ func ensureChildTaskTables(tx *sql.Tx) error {
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			FOREIGN KEY (packet_id) REFERENCES child_task_packets(packet_id) ON DELETE CASCADE
 		)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("ensure child task tables: %w", err)
+		}
+	}
+	if err := ensureChildTaskResultAttemptColumns(tx); err != nil {
+		return err
+	}
+	for _, stmt := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_child_task_packets_agent_status ON child_task_packets(agent_id, status, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_child_task_packets_authority ON child_task_packets(authority_kind, authority_id, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_child_task_packets_session ON child_task_packets(session_id, updated_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_child_task_results_packet ON child_task_results(packet_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_child_task_results_packet_attempt ON child_task_results(packet_id, attempt_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_child_task_results_agent ON child_task_results(agent_id, created_at DESC)`,
 	} {
 		if _, err := tx.Exec(stmt); err != nil {
@@ -62,6 +73,36 @@ func ensureChildTaskTables(tx *sql.Tx) error {
 	return nil
 }
 
+func ensureChildTaskResultAttemptColumns(tx *sql.Tx) error {
+	exists, err := schemaTableExists(tx, "child_task_results")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	if err := addSchemaColumnIfMissing(tx, schemaColumnMigration{
+		table:     "child_task_results",
+		column:    "attempt_id",
+		statement: `ALTER TABLE child_task_results ADD COLUMN attempt_id TEXT NOT NULL DEFAULT ''`,
+	}); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		UPDATE child_task_results
+		SET attempt_id = 'child_attempt:' || substr(result_id, instr(result_id, ':') + 1)
+		WHERE attempt_id = ''
+	`); err != nil {
+		return fmt.Errorf("backfill child task result attempt ids: %w", err)
+	}
+	return nil
+}
+
 func migrateSchemaV75ToV76(tx *sql.Tx) error {
+	// Schema 76 is reserved for concurrent hardening branches; child tasks own 77.
+	return nil
+}
+
+func migrateSchemaV76ToV77(tx *sql.Tx) error {
 	return ensureChildTaskTables(tx)
 }

@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -106,7 +107,7 @@ func TestQueueCapabilityGrantWakeAddsParentConversation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChildTaskResult() err = %v", err)
 	}
-	if !ok || result.Status != session.ChildTaskResultCompleted || result.NextState != session.NextActionTerminal {
+	if !ok || result.AttemptID == "" || result.PacketID != wantTaskPacketID || result.Status != session.ChildTaskResultCompleted || result.NextState != session.NextActionTerminal {
 		t.Fatalf("child task result = %#v ok=%t, want completed terminal result", result, ok)
 	}
 	events, err = store.ExecutionEventsBySession(rt.durableAgentExecutionKey("child-alpha"), 0, 80)
@@ -116,6 +117,103 @@ func TestQueueCapabilityGrantWakeAddsParentConversation(t *testing.T) {
 	assertHasEventType(t, events, core.ExecutionEventDurableWakeCompleted)
 	assertHasEventType(t, events, core.ExecutionEventDurableChildTaskQueued)
 	assertHasEventType(t, events, core.ExecutionEventDurableChildTaskResult)
+}
+
+func TestCapabilityGrantWakeRepeatedAttemptsRecordDistinctResults(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	_ = sender
+	provider.replyText = "Grant incorporated on this attempt.\nREVIEW_STATUS: completed"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "child-retry",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "manual_channel",
+		WakeupMode:         "manual",
+		Status:             "active",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Handle repeated grant wake attempts.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	grant := session.CapabilityGrant{
+		GrantID:        "capg-child-retry",
+		RequestID:      "cap-child-retry",
+		GrantedTo:      "durable_agent:child-retry",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "codex",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+	}
+	taskPacketID := capabilityGrantTaskPacketID(agent.AgentID, grant)
+
+	if err := rt.queueCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("queueCapabilityGrantWake(first) err = %v", err)
+	}
+	if err := rt.runCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("runCapabilityGrantWake(first) err = %v", err)
+	}
+	firstPacket, ok, err := store.ChildTaskPacket(taskPacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(first) err = %v", err)
+	}
+	if !ok || firstPacket.Status != session.ChildTaskPacketCompleted || firstPacket.ResultID == "" {
+		t.Fatalf("first packet = %#v ok=%t, want completed packet", firstPacket, ok)
+	}
+	firstResult, ok, err := store.ChildTaskResult(firstPacket.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskResult(first) err = %v", err)
+	}
+	if !ok || firstResult.AttemptID == "" || firstResult.PacketID != taskPacketID {
+		t.Fatalf("first result = %#v ok=%t, want attempt-linked result", firstResult, ok)
+	}
+
+	time.Sleep(time.Millisecond)
+	if err := rt.queueCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("queueCapabilityGrantWake(second) err = %v", err)
+	}
+	if err := rt.runCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("runCapabilityGrantWake(second) err = %v", err)
+	}
+	secondPacket, ok, err := store.ChildTaskPacket(taskPacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(second) err = %v", err)
+	}
+	if !ok || secondPacket.PacketID != firstPacket.PacketID || secondPacket.ResultID == "" || secondPacket.ResultID == firstPacket.ResultID {
+		t.Fatalf("second packet = %#v first = %#v ok=%t, want same packet with new result", secondPacket, firstPacket, ok)
+	}
+	secondResult, ok, err := store.ChildTaskResult(secondPacket.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskResult(second) err = %v", err)
+	}
+	if !ok || secondResult.PacketID != taskPacketID || secondResult.AttemptID == "" || secondResult.AttemptID == firstResult.AttemptID || secondResult.ResultID == firstResult.ResultID {
+		t.Fatalf("second result = %#v first = %#v ok=%t, want distinct attempt/result", secondResult, firstResult, ok)
+	}
+	if _, ok, err := store.ChildTaskResult(firstResult.ResultID); err != nil || !ok {
+		t.Fatalf("ChildTaskResult(first after retry) ok=%t err=%v, want first result retained", ok, err)
+	}
+
+	events, err := store.ExecutionEventsBySession(rt.durableAgentExecutionKey(agent.AgentID), 0, 120)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	assertEventPayloadJoin(t, events, core.ExecutionEventDurableChildTaskQueued, taskPacketID, "")
+	assertEventPayloadJoin(t, events, core.ExecutionEventDurableWakeStarted, taskPacketID, firstResult.AttemptID)
+	assertEventPayloadJoin(t, events, core.ExecutionEventDurableWakeCompleted, taskPacketID, firstResult.AttemptID)
+	assertEventPayloadJoin(t, events, core.ExecutionEventDurableChildTaskResult, taskPacketID, firstResult.AttemptID)
+	assertEventPayloadJoin(t, events, core.ExecutionEventDurableWakeStarted, taskPacketID, secondResult.AttemptID)
+	assertEventPayloadJoin(t, events, core.ExecutionEventDurableWakeCompleted, taskPacketID, secondResult.AttemptID)
+	assertEventPayloadJoin(t, events, core.ExecutionEventDurableChildTaskResult, taskPacketID, secondResult.AttemptID)
 }
 
 func TestCapabilityGrantWakeRestartSpanningTaskProtocolAndAuthorityFailClosed(t *testing.T) {
@@ -300,6 +398,78 @@ func TestCapabilityGrantWakeBlockedResultCreatesTypedNextState(t *testing.T) {
 	}
 }
 
+func TestCapabilityGrantWakeUpdateResultKeepsTaskNonterminal(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	_ = sender
+	provider.replyText = "I incorporated the grant but still need another bounded pass.\nREVIEW_STATUS: update"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "child-update",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "manual_channel",
+		WakeupMode:         "manual",
+		Status:             "active",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Handle nonterminal update wake tests.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	grant := session.CapabilityGrant{
+		GrantID:        "capg-child-update",
+		RequestID:      "cap-child-update",
+		GrantedTo:      "durable_agent:child-update",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "codex",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+	}
+	if err := rt.queueCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("queueCapabilityGrantWake() err = %v", err)
+	}
+	if err := rt.runCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("runCapabilityGrantWake() err = %v", err)
+	}
+	taskPacketID := capabilityGrantTaskPacketID(agent.AgentID, grant)
+	packet, ok, err := store.ChildTaskPacket(taskPacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket() err = %v", err)
+	}
+	if !ok || packet.Status != session.ChildTaskPacketInProgress || packet.ResultID == "" || !packet.TerminalAt.IsZero() {
+		t.Fatalf("update packet = %#v ok=%t, want in-progress nonterminal packet", packet, ok)
+	}
+	result, ok, err := store.ChildTaskResult(packet.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskResult() err = %v", err)
+	}
+	if !ok || result.Status != session.ChildTaskResultUpdate || result.NextState != session.NextActionWaitingForChild || result.AttemptID == "" {
+		t.Fatalf("update result = %#v ok=%t, want waiting child update", result, ok)
+	}
+	open, err := store.OpenNextActionsBySession(rt.durableAgentExecutionKey(agent.AgentID), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].SubjectKind != "child_task_result" || open[0].SubjectRef != result.ResultID || open[0].State != session.NextActionWaitingForChild || open[0].RetryPolicy != "continue_after_child_update" {
+		t.Fatalf("open next actions after update child task = %#v, want one bounded continuation", open)
+	}
+	events, err := store.ExecutionEventsBySession(rt.durableAgentExecutionKey(agent.AgentID), 0, 80)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession(update) err = %v", err)
+	}
+	assertEventPayloadJoin(t, events, core.ExecutionEventDurableWakeCompleted, taskPacketID, result.AttemptID)
+	assertEventPayloadJoin(t, events, core.ExecutionEventDurableChildTaskResult, taskPacketID, result.AttemptID)
+}
+
 func recordRepresentativeManagedInvocationForTest(store *session.SQLiteStore, kind session.CapabilityKind, target string, principal string, action string, sessionID string) (session.CapabilityInvocation, error) {
 	grant, ok, err := store.ActiveCapabilityGrant(kind, target, principal, action)
 	if err != nil {
@@ -319,6 +489,34 @@ func recordRepresentativeManagedInvocationForTest(store *session.SQLiteStore, ki
 		CreatedAt:       time.Now().UTC(),
 		CompletedAt:     time.Now().UTC(),
 	})
+}
+
+func assertEventPayloadJoin(t *testing.T, events []session.ExecutionEvent, eventType string, packetID string, attemptID string) {
+	t.Helper()
+	for _, event := range events {
+		if event.EventType != eventType {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			t.Fatalf("decode %s payload %q: %v", eventType, event.PayloadJSON, err)
+		}
+		eventPacketID, _ := payload["task_packet_id"].(string)
+		if eventPacketID == "" {
+			eventPacketID, _ = payload["packet_id"].(string)
+		}
+		if eventPacketID != packetID {
+			continue
+		}
+		if attemptID == "" {
+			return
+		}
+		eventAttemptID, _ := payload["attempt_id"].(string)
+		if eventAttemptID == attemptID {
+			return
+		}
+	}
+	t.Fatalf("missing %s payload join packet_id=%q attempt_id=%q in events %#v", eventType, packetID, attemptID, events)
 }
 
 func TestCapabilityGrantWakeFailureMarksGrantFailedAndReports(t *testing.T) {

@@ -58,7 +58,7 @@ func TestChildTaskPacketAndResultRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordChildTaskResult() err = %v", err)
 	}
-	if result.ResultID == "" || result.Status != ChildTaskResultCompleted || result.NextState != NextActionTerminal {
+	if result.ResultID == "" || result.AttemptID == "" || result.Status != ChildTaskResultCompleted || result.NextState != NextActionTerminal {
 		t.Fatalf("result = %#v, want completed terminal child result", result)
 	}
 
@@ -76,6 +76,79 @@ func TestChildTaskPacketAndResultRoundTrip(t *testing.T) {
 	}
 	if !sessionTestHasExecutionEvent(events, core.ExecutionEventDurableChildTaskQueued) || !sessionTestHasExecutionEvent(events, core.ExecutionEventDurableChildTaskResult) {
 		t.Fatalf("child task events = %#v, want queued and result events", events)
+	}
+}
+
+func TestChildTaskResultAttemptsDoNotCollapse(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 7702, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindDurableAgent, ID: "child-retry", DurableAgentID: "child-retry"}}
+	now := time.Now().UTC().Round(0)
+	packet, err := store.RecordChildTaskPacket(ChildTaskPacketInput{
+		PacketID:  "child_task:retry",
+		AgentID:   "child-retry",
+		Key:       key,
+		TaskKind:  "durable_wake",
+		InputJSON: `{"reason":"retry"}`,
+		CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskPacket() err = %v", err)
+	}
+
+	firstAttemptID := ChildTaskAttemptID(packet.PacketID, "attempt-1")
+	update, err := store.RecordChildTaskResult(ChildTaskResultInput{
+		PacketID:  packet.PacketID,
+		AttemptID: firstAttemptID,
+		AgentID:   "child-retry",
+		Key:       key,
+		Status:    ChildTaskResultUpdate,
+		Summary:   "Still working through the bounded task.",
+		CreatedAt: now.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskResult(update) err = %v", err)
+	}
+	if update.AttemptID != firstAttemptID || update.Status != ChildTaskResultUpdate || update.NextState != NextActionWaitingForChild {
+		t.Fatalf("update result = %#v, want nonterminal first attempt", update)
+	}
+	inProgress, ok, err := store.ChildTaskPacket(packet.PacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(in progress) err = %v", err)
+	}
+	if !ok || inProgress.Status != ChildTaskPacketInProgress || inProgress.ResultID != update.ResultID || !inProgress.TerminalAt.IsZero() {
+		t.Fatalf("in-progress packet = %#v ok=%t, want nonterminal update state", inProgress, ok)
+	}
+
+	secondAttemptID := ChildTaskAttemptID(packet.PacketID, "attempt-2")
+	completed, err := store.RecordChildTaskResult(ChildTaskResultInput{
+		PacketID:     packet.PacketID,
+		AttemptID:    secondAttemptID,
+		AgentID:      "child-retry",
+		Key:          key,
+		Status:       ChildTaskResultCompleted,
+		Summary:      "Completed on retry.",
+		EvidenceRefs: []string{"child_task_result:" + update.ResultID},
+		CreatedAt:    now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskResult(completed) err = %v", err)
+	}
+	if completed.ResultID == update.ResultID || completed.AttemptID == update.AttemptID {
+		t.Fatalf("completed result = %#v update = %#v, want distinct attempt identity", completed, update)
+	}
+	if _, ok, err := store.ChildTaskResult(update.ResultID); err != nil || !ok {
+		t.Fatalf("ChildTaskResult(update) ok=%t err=%v, want first attempt retained", ok, err)
+	}
+	terminal, ok, err := store.ChildTaskPacket(packet.PacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(terminal) err = %v", err)
+	}
+	if !ok || terminal.Status != ChildTaskPacketCompleted || terminal.ResultID != completed.ResultID || terminal.TerminalAt.IsZero() {
+		t.Fatalf("terminal packet = %#v ok=%t, want completed second attempt linked", terminal, ok)
 	}
 }
 

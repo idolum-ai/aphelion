@@ -27,6 +27,7 @@ const (
 	ChildTaskResultCompleted ChildTaskResultStatus = "completed"
 	ChildTaskResultBlocked   ChildTaskResultStatus = "blocked"
 	ChildTaskResultFailed    ChildTaskResultStatus = "failed"
+	ChildTaskResultUpdate    ChildTaskResultStatus = "update"
 )
 
 type ChildTaskPacket struct {
@@ -72,6 +73,7 @@ type ChildTaskPacketInput struct {
 type ChildTaskResult struct {
 	ResultID     string
 	PacketID     string
+	AttemptID    string
 	TaskLeaseID  string
 	AgentID      string
 	SessionID    string
@@ -88,6 +90,7 @@ type ChildTaskResult struct {
 type ChildTaskResultInput struct {
 	ResultID     string
 	PacketID     string
+	AttemptID    string
 	TaskLeaseID  string
 	AgentID      string
 	Key          SessionKey
@@ -134,6 +137,7 @@ func NormalizeChildTaskPacketInput(input ChildTaskPacketInput) ChildTaskPacketIn
 func NormalizeChildTaskResultInput(input ChildTaskResultInput) ChildTaskResultInput {
 	input.ResultID = strings.TrimSpace(input.ResultID)
 	input.PacketID = strings.TrimSpace(input.PacketID)
+	input.AttemptID = strings.TrimSpace(input.AttemptID)
 	input.TaskLeaseID = strings.TrimSpace(input.TaskLeaseID)
 	input.AgentID = strings.TrimSpace(input.AgentID)
 	input.Status = NormalizeChildTaskResultStatus(input.Status)
@@ -146,11 +150,19 @@ func NormalizeChildTaskResultInput(input ChildTaskResultInput) ChildTaskResultIn
 	if nextStateProvided {
 		input.NextState = NormalizeNextActionState(input.NextState)
 	}
+	if input.CreatedAt.IsZero() {
+		input.CreatedAt = time.Now().UTC()
+	} else {
+		input.CreatedAt = input.CreatedAt.UTC()
+	}
 	if input.TaskLeaseID == "" && input.PacketID != "" {
 		input.TaskLeaseID = ChildTaskLeaseID(input.PacketID)
 	}
+	if input.AttemptID == "" && input.PacketID != "" {
+		input.AttemptID = ChildTaskAttemptID(input.PacketID, input.CreatedAt.Format(time.RFC3339Nano))
+	}
 	if input.ResultID == "" && input.AgentID != "" && input.PacketID != "" {
-		input.ResultID = ChildTaskResultID(input.AgentID, input.PacketID)
+		input.ResultID = ChildTaskResultID(input.AgentID, input.PacketID, input.AttemptID)
 	}
 	if input.Status == "" {
 		input.Status = ChildTaskResultBlocked
@@ -161,17 +173,14 @@ func NormalizeChildTaskResultInput(input ChildTaskResultInput) ChildTaskResultIn
 			input.ResultKind = "completion"
 		case ChildTaskResultBlocked:
 			input.ResultKind = "blocker"
+		case ChildTaskResultUpdate:
+			input.ResultKind = "update"
 		default:
 			input.ResultKind = "result"
 		}
 	}
 	if !nextStateProvided {
 		input.NextState = childTaskNextStateForResult(input.Status)
-	}
-	if input.CreatedAt.IsZero() {
-		input.CreatedAt = time.Now().UTC()
-	} else {
-		input.CreatedAt = input.CreatedAt.UTC()
 	}
 	return input
 }
@@ -195,7 +204,8 @@ func NormalizeChildTaskResultStatus(status ChildTaskResultStatus) ChildTaskResul
 	switch ChildTaskResultStatus(normalizeEnumValue(string(status))) {
 	case ChildTaskResultCompleted,
 		ChildTaskResultBlocked,
-		ChildTaskResultFailed:
+		ChildTaskResultFailed,
+		ChildTaskResultUpdate:
 		return ChildTaskResultStatus(normalizeEnumValue(string(status)))
 	default:
 		return ""
@@ -211,8 +221,18 @@ func ChildTaskLeaseID(packetID string) string {
 	return "child_task_lease:" + hex.EncodeToString(sum[:8])
 }
 
-func ChildTaskResultID(agentID string, packetID string) string {
-	seed := strings.Join([]string{strings.TrimSpace(agentID), strings.TrimSpace(packetID), "result"}, ":")
+func ChildTaskAttemptID(packetID string, attemptSeed string) string {
+	packetID = strings.TrimSpace(packetID)
+	attemptSeed = strings.TrimSpace(attemptSeed)
+	if packetID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("child_task_attempt\x00" + packetID + "\x00" + attemptSeed))
+	return "child_attempt:" + hex.EncodeToString(sum[:8])
+}
+
+func ChildTaskResultID(agentID string, packetID string, attemptID string) string {
+	seed := strings.Join([]string{strings.TrimSpace(agentID), strings.TrimSpace(packetID), strings.TrimSpace(attemptID), "result"}, ":")
 	sum := sha256.Sum256([]byte(seed))
 	return "child_result:" + hex.EncodeToString(sum[:8])
 }
@@ -223,6 +243,8 @@ func childTaskPacketStatusForResult(status ChildTaskResultStatus) ChildTaskPacke
 		return ChildTaskPacketCompleted
 	case ChildTaskResultFailed:
 		return ChildTaskPacketFailed
+	case ChildTaskResultUpdate:
+		return ChildTaskPacketInProgress
 	default:
 		return ChildTaskPacketBlocked
 	}
@@ -234,6 +256,8 @@ func childTaskNextStateForResult(status ChildTaskResultStatus) NextActionState {
 		return NextActionTerminal
 	case ChildTaskResultFailed:
 		return NextActionBlockedNeedsResourceRepair
+	case ChildTaskResultUpdate:
+		return NextActionWaitingForChild
 	default:
 		return NextActionBlockedNeedsAuthority
 	}

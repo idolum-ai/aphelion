@@ -106,6 +106,9 @@ func (s *SQLiteStore) RecordChildTaskResult(input ChildTaskResultInput) (ChildTa
 	if input.PacketID == "" {
 		return ChildTaskResult{}, fmt.Errorf("child task result packet_id is required")
 	}
+	if input.AttemptID == "" {
+		return ChildTaskResult{}, fmt.Errorf("child task result attempt_id is required")
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return ChildTaskResult{}, fmt.Errorf("begin child task result tx: %w", err)
@@ -146,26 +149,37 @@ func recordChildTaskResultTx(tx *sql.Tx, input ChildTaskResultInput) (ChildTaskR
 	evidenceRefs := encodeStringList(input.EvidenceRefs)
 	if _, err := tx.Exec(`
 		INSERT INTO child_task_results(
-			result_id, packet_id, task_lease_id, agent_id, session_id, status,
+			result_id, packet_id, attempt_id, task_lease_id, agent_id, session_id, status,
 			result_kind, summary, blocker_kind, error_text, evidence_refs_json,
 			next_state, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, input.ResultID, input.PacketID, input.TaskLeaseID, input.AgentID, sessionID, string(input.Status),
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, input.ResultID, input.PacketID, input.AttemptID, input.TaskLeaseID, input.AgentID, sessionID, string(input.Status),
 		input.ResultKind, input.Summary, input.BlockerKind, input.ErrorText, evidenceRefs,
 		string(input.NextState), createdAt.Format(time.RFC3339Nano)); err != nil {
 		return ChildTaskResult{}, fmt.Errorf("insert child task result %s: %w", input.ResultID, err)
 	}
 	packetStatus := childTaskPacketStatusForResult(input.Status)
-	if _, err := tx.Exec(`
-		UPDATE child_task_packets
-		SET status = ?, result_id = ?, updated_at = ?, terminal_at = ?
-		WHERE packet_id = ?
-	`, string(packetStatus), input.ResultID, createdAt.Format(time.RFC3339Nano), createdAt.Format(time.RFC3339Nano), input.PacketID); err != nil {
-		return ChildTaskResult{}, fmt.Errorf("update child task packet terminal state: %w", err)
+	if input.Status == ChildTaskResultUpdate {
+		if _, err := tx.Exec(`
+			UPDATE child_task_packets
+			SET status = ?, result_id = ?, updated_at = ?, terminal_at = NULL
+			WHERE packet_id = ?
+		`, string(packetStatus), input.ResultID, createdAt.Format(time.RFC3339Nano), input.PacketID); err != nil {
+			return ChildTaskResult{}, fmt.Errorf("update child task packet nonterminal state: %w", err)
+		}
+	} else {
+		if _, err := tx.Exec(`
+			UPDATE child_task_packets
+			SET status = ?, result_id = ?, updated_at = ?, terminal_at = ?
+			WHERE packet_id = ?
+		`, string(packetStatus), input.ResultID, createdAt.Format(time.RFC3339Nano), createdAt.Format(time.RFC3339Nano), input.PacketID); err != nil {
+			return ChildTaskResult{}, fmt.Errorf("update child task packet terminal state: %w", err)
+		}
 	}
 	payloadRaw, _ := json.Marshal(map[string]any{
 		"result_id":     input.ResultID,
 		"packet_id":     input.PacketID,
+		"attempt_id":    input.AttemptID,
 		"task_lease_id": input.TaskLeaseID,
 		"agent_id":      input.AgentID,
 		"status":        string(input.Status),
@@ -255,7 +269,7 @@ func childTaskPacketSelectSQL() string {
 
 func childTaskResultSelectSQL() string {
 	return `
-		SELECT result_id, packet_id, task_lease_id, agent_id, session_id, status,
+		SELECT result_id, packet_id, attempt_id, task_lease_id, agent_id, session_id, status,
 			result_kind, summary, blocker_kind, error_text, evidence_refs_json,
 			next_state, created_at
 		FROM child_task_results
@@ -336,6 +350,7 @@ func scanChildTaskResult(scanner interface{ Scan(dest ...any) error }) (ChildTas
 	if err := scanner.Scan(
 		&result.ResultID,
 		&result.PacketID,
+		&result.AttemptID,
 		&result.TaskLeaseID,
 		&result.AgentID,
 		&result.SessionID,
