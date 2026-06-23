@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -25,6 +26,7 @@ import (
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
+	"golang.org/x/sys/unix"
 )
 
 func TestNativeFileToolsStayInsideScopedRoots(t *testing.T) {
@@ -940,6 +942,50 @@ func TestWriteFileCreateDirsValidatesSymlinkAncestorBeforeMkdir(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(outside, "newdir")); !os.IsNotExist(statErr) {
 		t.Fatalf("outside newdir stat err = %v, want directory not created", statErr)
+	}
+}
+
+func TestWriteFileRejectsFIFOWithoutWriting(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	fifo := filepath.Join(workspace, "pipe")
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatalf("mkfifo fixture: %v", err)
+	}
+	readFD, err := unix.Open(fifo, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("open fifo reader: %v", err)
+	}
+	defer unix.Close(readFD)
+
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "write_file", json.RawMessage(`{"path":"pipe","content":"must not reach fifo"}`), scope, scope.Principal, session.SessionKey{})
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("write_file fifo err = %v, want regular-file rejection", err)
+	}
+	info, err := os.Lstat(fifo)
+	if err != nil {
+		t.Fatalf("lstat fifo after rejected write: %v", err)
+	}
+	if info.Mode()&os.ModeNamedPipe == 0 {
+		t.Fatalf("fifo mode after rejected write = %s, want named pipe", info.Mode())
+	}
+	buf := make([]byte, 64)
+	n, readErr := unix.Read(readFD, buf)
+	if n > 0 {
+		t.Fatalf("fifo received %q, want no write side effect", string(buf[:n]))
+	}
+	if readErr != nil && !errors.Is(readErr, unix.EAGAIN) {
+		t.Fatalf("fifo read err = %v, want empty fifo or EAGAIN", readErr)
 	}
 }
 

@@ -153,13 +153,7 @@ func nativeOpenScopedWriteFile(target nativeScopedTarget, createDirs, appendFile
 	}
 	defer unix.Close(parentFD)
 
-	flags := unix.O_CREAT | unix.O_WRONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
-	if appendFile {
-		flags |= unix.O_APPEND
-	} else {
-		flags |= unix.O_TRUNC
-	}
-	fd, err := nativeOpenChildNoFollow(parentFD, base, flags, 0o600)
+	fd, err := nativeOpenWritableRegularChild(parentFD, base, target.Path, appendFile)
 	if err != nil {
 		return nil, nativeScopedOpenError("write_file open", target.Path, err)
 	}
@@ -168,6 +162,43 @@ func nativeOpenScopedWriteFile(target nativeScopedTarget, createDirs, appendFile
 		return nil, err
 	}
 	return file, nil
+}
+
+func nativeOpenWritableRegularChild(parentFD int, base string, displayPath string, appendFile bool) (int, error) {
+	flags := unix.O_WRONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
+	if appendFile {
+		flags |= unix.O_APPEND
+	}
+	fd, err := nativeOpenChildNoFollow(parentFD, base, flags, 0)
+	if errors.Is(err, unix.ENOENT) {
+		fd, err = nativeOpenChildNoFollow(parentFD, base, flags|unix.O_CREAT|unix.O_EXCL, 0o600)
+		if errors.Is(err, unix.EEXIST) {
+			fd, err = nativeOpenChildNoFollow(parentFD, base, flags, 0)
+		}
+	}
+	if err != nil {
+		return -1, err
+	}
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		_ = unix.Close(fd)
+		return -1, fmt.Errorf("stat scoped write target %s: %w", displayPath, err)
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG {
+		_ = unix.Close(fd)
+		return -1, fmt.Errorf("write_file target %s is not a regular file", displayPath)
+	}
+	if !appendFile {
+		if err := unix.Ftruncate(fd, 0); err != nil {
+			_ = unix.Close(fd)
+			return -1, fmt.Errorf("truncate scoped write target %s: %w", displayPath, err)
+		}
+		if _, err := unix.Seek(fd, 0, io.SeekStart); err != nil {
+			_ = unix.Close(fd)
+			return -1, fmt.Errorf("seek scoped write target %s: %w", displayPath, err)
+		}
+	}
+	return fd, nil
 }
 
 func nativeOpenRootNoFollow(root string, create bool) (int, error) {
