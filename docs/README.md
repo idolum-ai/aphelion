@@ -29,6 +29,9 @@ architecture and requirements docs define the deeper contracts.
 - [Execution Friction Inventory](operations/execution-friction-inventory.md):
   draft operations inventory for approval, child-work, exposure, and recovery
   friction observed during live source-install work.
+- [Execution Friction Test Surface](operations/execution-friction-test-surface.json):
+  machine-checked map from each inventory observation to always-on tests,
+  opt-in debt evals, contracts, and ideal invariants.
 - [Requirements Index](../requirements/INDEX.md): component behavior specs.
 - [Public Release Provenance](public-release.md): canonical source and private-history boundary.
 - [Release Strategy](guides/release-strategy.md): release branch, review, notes, and automation plan.

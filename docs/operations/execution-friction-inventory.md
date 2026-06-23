@@ -12,6 +12,14 @@ This document belongs under operations because it is an incident-shaped
 hypothesis map. The canonical contracts remain in architecture and requirements
 documents; this inventory points back to those contracts where possible.
 
+The executable coverage map lives in
+[`execution-friction-test-surface.json`](execution-friction-test-surface.json).
+Each observed problem has one manifest row with existing contracts,
+always-on test anchors, opt-in debt-eval anchors, current status, and the ideal
+invariant. Always-on tests keep CI mergeable. Opt-in debt evals can be run with
+`APHELION_RUN_FRICTION_EVALS=1 go test ./... -run ExecutionFrictionDebtEval` to
+audit the full surface without pretending every ideal state is implemented.
+
 ## Evidence Window
 
 - Evidence sources: user-service journal, turn-run records, execution events,
