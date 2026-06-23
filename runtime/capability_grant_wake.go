@@ -67,7 +67,13 @@ func (r *Runtime) queueCapabilityGrantWake(ctx context.Context, agentID string, 
 		return fmt.Errorf("parse durable agent continuity for capability grant wake: %w", err)
 	}
 	now := time.Now().UTC()
-	continuity = continuity.WithConversationMessage("parent", capabilityGrantWakeMessage(*agent, grant), now)
+	taskPacketID := capabilityGrantTaskPacketID(agentID, grant)
+	continuity = continuity.WithConversationMessages(core.DurableAgentConversationMessage{
+		MessageID: taskPacketID,
+		Role:      "parent",
+		Text:      capabilityGrantWakeMessage(*agent, grant),
+		CreatedAt: now,
+	})
 	raw, err := continuity.Marshal()
 	if err != nil {
 		return fmt.Errorf("marshal durable agent continuity for capability grant wake: %w", err)
@@ -78,7 +84,6 @@ func (r *Runtime) queueCapabilityGrantWake(ctx context.Context, agentID string, 
 		return fmt.Errorf("save durable agent capability grant wake queue: %w", err)
 	}
 	key := r.durableAgentExecutionKey(agentID)
-	taskPacketID := "grant_task:" + strings.TrimPrefix(session.EffectAttemptCommandHash(strings.Join([]string{agentID, grant.GrantID, now.Format(time.RFC3339Nano)}, ":")), "sha256:")[:16]
 	r.recordExecutionEvent(key, core.ExecutionEventCapabilityGrantWakeQueued, "capability", "wake_queued", map[string]any{
 		"agent_id":        agentID,
 		"grant_id":        grant.GrantID,
@@ -88,18 +93,20 @@ func (r *Runtime) queueCapabilityGrantWake(ctx context.Context, agentID string, 
 		"allowed_actions": grant.AllowedActions,
 		"task_packet_id":  taskPacketID,
 	}, now)
-	_, _ = r.store.RecordNextAction(session.NextActionInput{
+	if _, err := r.store.RecordNextAction(session.NextActionInput{
 		Key:                key,
 		Owner:              "capability_grant_wake",
 		State:              session.NextActionWaitingForChild,
-		SubjectKind:        "capability_grant",
-		SubjectRef:         grant.GrantID,
+		SubjectKind:        "task_packet",
+		SubjectRef:         taskPacketID,
 		CausalRefs:         []string{"capability_grant:" + grant.GrantID, "task_packet:" + taskPacketID},
 		NextAction:         "wake the child with the compact grant task packet",
 		RequiredAuthority:  string(grant.Kind),
 		OperatorProjection: "The grant was activated; the child has one compact task packet to incorporate it and report the typed result.",
 		CreatedAt:          now,
-	})
+	}); err != nil {
+		return fmt.Errorf("record capability grant wake next action: %w", err)
+	}
 	return nil
 }
 
@@ -192,4 +199,15 @@ func capabilityGrantWakeMessage(agent core.DurableAgent, grant session.Capabilit
 		"If you cannot wake cleanly, ask the operator to repair the runtime and issue a fresh grant.",
 	}
 	return strings.Join(parts, "\n")
+}
+
+func capabilityGrantTaskPacketID(agentID string, grant session.CapabilityGrant) string {
+	seed := strings.Join([]string{
+		strings.TrimSpace(agentID),
+		strings.TrimSpace(grant.GrantID),
+		strings.TrimSpace(grant.RequestID),
+		string(grant.Kind),
+		strings.TrimSpace(grant.TargetResource),
+	}, ":")
+	return "grant_task:" + strings.TrimPrefix(session.EffectAttemptCommandHash(seed), "sha256:")[:16]
 }

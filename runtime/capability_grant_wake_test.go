@@ -15,8 +15,8 @@ import (
 
 func TestQueueCapabilityGrantWakeAddsParentConversation(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	_ = provider
 	_ = sender
+	provider.replyText = "Grant incorporated.\nREVIEW_STATUS: completed"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
@@ -60,11 +60,38 @@ func TestQueueCapabilityGrantWakeAddsParentConversation(t *testing.T) {
 	if len(pending) != 1 || !strings.Contains(pending[0].Text, "Capability grant activated") || !strings.Contains(pending[0].Text, "capg-child-alpha") {
 		t.Fatalf("pending parent conversation = %#v, want capability grant wake message", pending)
 	}
+	wantTaskPacketID := capabilityGrantTaskPacketID("child-alpha", grant)
+	if pending[0].MessageID != wantTaskPacketID {
+		t.Fatalf("pending message id = %q, want stable task packet id %q", pending[0].MessageID, wantTaskPacketID)
+	}
+	open, err := store.OpenNextActionsBySession(rt.durableAgentExecutionKey("child-alpha"), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(queue) err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionWaitingForChild || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != wantTaskPacketID {
+		t.Fatalf("open next actions after queue = %#v, want one waiting_for_child task packet", open)
+	}
 	events, err := store.ExecutionEventsBySession(rt.durableAgentExecutionKey("child-alpha"), 0, 20)
 	if err != nil {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
 	}
 	assertHasEventType(t, events, core.ExecutionEventCapabilityGrantWakeQueued)
+
+	if err := rt.runCapabilityGrantWake(context.Background(), "child-alpha", grant); err != nil {
+		t.Fatalf("runCapabilityGrantWake() err = %v", err)
+	}
+	open, err = store.OpenNextActionsBySession(rt.durableAgentExecutionKey("child-alpha"), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(completed) err = %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open next actions after wake completion = %#v, want closed waiting_for_child", open)
+	}
+	events, err = store.ExecutionEventsBySession(rt.durableAgentExecutionKey("child-alpha"), 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession(completed) err = %v", err)
+	}
+	assertHasEventType(t, events, core.ExecutionEventDurableWakeCompleted)
 }
 
 func TestCapabilityGrantWakeFailureMarksGrantFailedAndReports(t *testing.T) {

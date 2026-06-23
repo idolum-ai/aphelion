@@ -60,12 +60,14 @@ func prepareDurableParentConversationWakePlan(rt *Runtime, agent core.DurableAge
 		ChatID: durableWakeSyntheticChatID(agent.AgentID),
 		Scope:  durableAgentScopeRef(agent),
 	}
+	taskPacketID := durableWakeTaskPacketIDForPending(agent.AgentID, pending, now)
 	return &durableWakeTurnPlan{
 		Channel:         "durable_parent_conversation",
 		AuditChannel:    "durable_parent_conversation",
 		Key:             key,
 		SessionChatType: durableParentConversationChatType,
 		SessionUserName: "parent",
+		TaskPacketID:    taskPacketID,
 		Inbound: core.InboundMessage{
 			ChatID:         key.ChatID,
 			ChatType:       durableParentConversationChatType,
@@ -103,6 +105,21 @@ func prepareDurableParentConversationWakePlan(rt *Runtime, agent core.DurableAge
 			return strings.Join(lines, "\n")
 		},
 	}, nil
+}
+
+func durableWakeTaskPacketIDForPending(agentID string, pending []core.DurableAgentConversationMessage, now time.Time) string {
+	ids := core.DurableAgentConversationMessageIDs(pending)
+	if len(ids) == 1 && strings.TrimSpace(ids[0]) != "" {
+		return strings.TrimSpace(ids[0])
+	}
+	parts := []string{strings.TrimSpace(agentID)}
+	for _, id := range ids {
+		parts = append(parts, strings.TrimSpace(id))
+	}
+	if len(parts) > 1 {
+		return "child_task:" + session.EffectAttemptCommandHash(strings.Join(parts, ":"))[7:23]
+	}
+	return durableWakeTaskPacketID(agentID, durableWakeMessageID(now), now)
 }
 
 func durableParentConversationWakePrompt(agent core.DurableAgent, messages []core.DurableAgentConversationMessage) string {

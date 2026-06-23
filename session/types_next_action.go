@@ -65,6 +65,15 @@ type NextActionInput struct {
 	CreatedAt          time.Time
 }
 
+type NextActionResolutionInput struct {
+	Key         SessionKey
+	Owner       string
+	SubjectKind string
+	SubjectRef  string
+	Reason      string
+	ResolvedAt  time.Time
+}
+
 func NormalizeNextActionInput(input NextActionInput) NextActionInput {
 	input.RecordID = strings.TrimSpace(input.RecordID)
 	input.Owner = strings.TrimSpace(input.Owner)
@@ -98,6 +107,29 @@ func NormalizeNextActionInput(input NextActionInput) NextActionInput {
 	}
 	if input.RecordID == "" {
 		input.RecordID = NextActionRecordID(SessionIDForKey(input.Key), input.SubjectKind, input.SubjectRef, input.State, input.CreatedAt)
+	}
+	return input
+}
+
+func NormalizeNextActionResolutionInput(input NextActionResolutionInput) NextActionResolutionInput {
+	input.Owner = strings.TrimSpace(input.Owner)
+	input.SubjectKind = normalizeEnumValue(input.SubjectKind)
+	input.SubjectRef = strings.TrimSpace(input.SubjectRef)
+	input.Reason = normalizeEnumValue(input.Reason)
+	if input.Owner == "" {
+		input.Owner = "runtime"
+	}
+	if input.SubjectKind == "" {
+		input.SubjectKind = "workflow"
+	}
+	if input.SubjectRef == "" {
+		input.SubjectRef = input.SubjectKind
+	}
+	if input.Reason == "" {
+		input.Reason = "resolved"
+	}
+	if input.ResolvedAt.IsZero() {
+		input.ResolvedAt = time.Now().UTC()
 	}
 	return input
 }

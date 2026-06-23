@@ -603,6 +603,54 @@ func TestNativeFileAccessWriteGrantCanCreateGrantedRoot(t *testing.T) {
 	}
 }
 
+func TestNativeWriteFileHostPermissionFailureCreatesRepairNextAction(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("permission-denied fixture is not meaningful as root")
+	}
+
+	registry, store := newDurableAgentToolRegistry(t)
+	workspace := t.TempDir()
+	target := t.TempDir()
+	if err := os.Chmod(target, 0o500); err != nil {
+		t.Fatalf("chmod target readonly: %v", err)
+	}
+	defer func() { _ = os.Chmod(target, 0o700) }()
+	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	grantAuthorityUseLeaseWithID(t, store, key, "lease-host-permission-write")
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-host-permission-write", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
+	scope := sandbox.Scope{
+		Principal:        p,
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       filepath.Join(workspace, "global"),
+		SharedMemoryRoot: filepath.Join(workspace, "shared"),
+		WorkingRoot:      workspace,
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-host-permission-write",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindFileAccess,
+		TargetResource: target,
+		AllowedActions: []string{"write"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(host permission) err = %v", err)
+	}
+	_, err := registry.executeWithScopeAndPrincipal(ctx, "write_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(target, "blocked.txt"))+`","content":"no"}`), scope, p, key)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "permission") {
+		t.Fatalf("write_file host permission err = %v, want permission denial", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsResourceRepair || open[0].ResourceBlocker != "host_permission_denied" {
+		t.Fatalf("open next actions = %#v, want host_permission_denied repair", open)
+	}
+}
+
 func TestNativeFileAccessGrantDoesNotBypassHiddenPaths(t *testing.T) {
 	t.Parallel()
 

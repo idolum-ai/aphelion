@@ -182,13 +182,11 @@ func (r *Registry) readFile(ctx context.Context, input json.RawMessage, scope sa
 	maxBytes := clampNativeLimit(in.MaxBytes, defaultNativeReadMaxBytes, maxNativeReadBytes)
 	roots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathRead, "read_file")
 	if err != nil {
-		r.recordNativeResourcePreflight(ctx, key, in.Path, err)
-		return "", err
+		return "", r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 	}
 	path, err := resolveNativeToolPathWithReadRoots(scope, in.Path, nativePathRead, nativeFileAccessGrantRootPaths(roots))
 	if err != nil {
-		r.recordNativeResourcePreflight(ctx, key, in.Path, err)
-		return "", err
+		return "", r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 	}
 	audit, auditOK := nativeFileAccessGrantRootForPath(path, roots)
 	defer func() {
@@ -198,14 +196,14 @@ func (r *Registry) readFile(ctx context.Context, input json.RawMessage, scope sa
 	}()
 	info, err := os.Stat(path)
 	if err != nil {
-		return "", fmt.Errorf("read_file stat %q: %w", in.Path, err)
+		return "", r.recordNativeResourcePreflight(ctx, key, in.Path, fmt.Errorf("read_file stat %q: %w", in.Path, err))
 	}
 	if info.IsDir() {
 		return "", fmt.Errorf("read_file path %q is a directory", in.Path)
 	}
 	data, lines, truncated, err := readBoundedFileWindow(path, offset, limit, maxBytes)
 	if err != nil {
-		return "", err
+		return "", r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 	}
 	if bytes.Contains(data, []byte{0}) {
 		return "", fmt.Errorf("read_file path %q appears to be binary", in.Path)
@@ -235,14 +233,12 @@ func (r *Registry) writeFile(ctx context.Context, input json.RawMessage, scope s
 	}
 	writeGrantRoots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathWrite, "write_file")
 	if err != nil {
-		r.recordNativeResourcePreflight(ctx, key, in.Path, err)
-		return "", err
+		return "", r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 	}
 	writeRoots := nativeFileAccessGrantRootPaths(writeGrantRoots)
 	path, err := resolveNativeToolPathWithExtraRoots(scope, in.Path, nativePathWrite, writeRoots)
 	if err != nil {
-		r.recordNativeResourcePreflight(ctx, key, in.Path, err)
-		return "", err
+		return "", r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 	}
 	audit, auditOK := nativeFileAccessGrantRootForPath(path, writeGrantRoots)
 	defer func() {
@@ -252,32 +248,28 @@ func (r *Registry) writeFile(ctx context.Context, input json.RawMessage, scope s
 	}()
 	if auditOK {
 		if symlink, err := nativeFirstSymlinkPathComponent(filepath.Dir(path)); err != nil {
-			r.recordNativeResourcePreflight(ctx, key, in.Path, err)
-			return "", err
+			return "", r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 		} else if symlink != "" {
 			err := fmt.Errorf("write_file path %q contains symlink component %q", in.Path, symlink)
-			r.recordNativeResourcePreflight(ctx, key, in.Path, err)
-			return "", err
+			return "", r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 		}
 	}
 	parent := filepath.Dir(path)
 	if in.CreateDirs {
 		if err := validateNativeWriteParentForCreate(scope, parent, writeRoots); err != nil {
-			r.recordNativeResourcePreflight(ctx, key, in.Path, err)
-			return "", err
+			return "", r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 		}
 		if err := os.MkdirAll(parent, 0o755); err != nil {
-			return "", fmt.Errorf("write_file create parent %q: %w", parent, err)
+			return "", r.recordNativeResourcePreflight(ctx, key, in.Path, fmt.Errorf("write_file create parent %q: %w", parent, err))
 		}
 	}
 	if err := validateNativeWriteParent(scope, parent, writeRoots); err != nil {
-		r.recordNativeResourcePreflight(ctx, key, in.Path, err)
-		return "", err
+		return "", r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 	}
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
 		return "", fmt.Errorf("write_file path %q is a directory", in.Path)
 	} else if err != nil && !os.IsNotExist(err) {
-		return "", fmt.Errorf("write_file stat %q: %w", in.Path, err)
+		return "", r.recordNativeResourcePreflight(ctx, key, in.Path, fmt.Errorf("write_file stat %q: %w", in.Path, err))
 	}
 	flags := os.O_CREATE | os.O_WRONLY
 	if in.Append {
@@ -287,11 +279,11 @@ func (r *Registry) writeFile(ctx context.Context, input json.RawMessage, scope s
 	}
 	file, err := os.OpenFile(path, flags, 0o600)
 	if err != nil {
-		return "", fmt.Errorf("write_file open %q: %w", in.Path, err)
+		return "", r.recordNativeResourcePreflight(ctx, key, in.Path, fmt.Errorf("write_file open %q: %w", in.Path, err))
 	}
 	defer file.Close()
 	if _, err := file.WriteString(in.Content); err != nil {
-		return "", fmt.Errorf("write_file write %q: %w", in.Path, err)
+		return "", r.recordNativeResourcePreflight(ctx, key, in.Path, fmt.Errorf("write_file write %q: %w", in.Path, err))
 	}
 	return fmt.Sprintf("write_file_ok path=%s bytes=%d append=%t", path, len([]byte(in.Content)), in.Append), nil
 }
@@ -308,13 +300,11 @@ func (r *Registry) listDir(ctx context.Context, input json.RawMessage, scope san
 	limit := clampNativeLimit(in.Limit, defaultNativeListLimit, maxNativeListLimit)
 	roots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathRead, "list_dir")
 	if err != nil {
-		r.recordNativeResourcePreflight(ctx, key, pathRaw, err)
-		return "", err
+		return "", r.recordNativeResourcePreflight(ctx, key, pathRaw, err)
 	}
 	path, err := resolveNativeToolPathWithReadRoots(scope, pathRaw, nativePathRead, nativeFileAccessGrantRootPaths(roots))
 	if err != nil {
-		r.recordNativeResourcePreflight(ctx, key, pathRaw, err)
-		return "", err
+		return "", r.recordNativeResourcePreflight(ctx, key, pathRaw, err)
 	}
 	audit, auditOK := nativeFileAccessGrantRootForPath(path, roots)
 	defer func() {
@@ -324,7 +314,7 @@ func (r *Registry) listDir(ctx context.Context, input json.RawMessage, scope san
 	}()
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		return "", fmt.Errorf("list_dir read %q: %w", pathRaw, err)
+		return "", r.recordNativeResourcePreflight(ctx, key, pathRaw, fmt.Errorf("list_dir read %q: %w", pathRaw, err))
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Name() < entries[j].Name()
@@ -384,9 +374,9 @@ func (r *Registry) recordNativeFileAccessInvocation(root nativeFileAccessGrantRo
 	return operationErr
 }
 
-func (r *Registry) recordNativeResourcePreflight(ctx context.Context, key session.SessionKey, resource string, cause error) {
+func (r *Registry) recordNativeResourcePreflight(ctx context.Context, key session.SessionKey, resource string, cause error) error {
 	if r == nil || r.store == nil || cause == nil || !toolSessionKeyHasIdentity(key) {
-		return
+		return cause
 	}
 	reason := "resource_denied"
 	lower := strings.ToLower(cause.Error())
@@ -402,7 +392,10 @@ func (r *Registry) recordNativeResourcePreflight(ctx context.Context, key sessio
 	if ref, ok := ToolInvocationRefFromContext(ctx); ok {
 		turnRunID = ref.TurnRunID
 	}
-	_ = r.store.RecordResourcePreflight(key, turnRunID, resource, reason, cause.Error(), time.Now().UTC())
+	if err := r.store.RecordResourcePreflight(key, turnRunID, resource, reason, cause.Error(), time.Now().UTC()); err != nil {
+		return fmt.Errorf("%w (and failed to record native resource preflight: %v)", cause, err)
+	}
+	return cause
 }
 
 func readBoundedFileWindow(path string, offset, limit, maxBytes int) ([]byte, int, bool, error) {

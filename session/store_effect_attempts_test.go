@@ -92,3 +92,96 @@ func TestEffectAttemptTerminalStatusIsSticky(t *testing.T) {
 		t.Fatalf("attempt = %#v, want verified terminal status preserved", got)
 	}
 }
+
+func TestUncertainEffectAttemptNextActionReplayIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	key := SessionKey{ChatID: 7003, UserID: 1001}
+	now := time.Date(2026, 6, 23, 10, 0, 0, 0, time.UTC)
+	input := EffectAttemptInput{
+		AttemptID:   "attempt-uncertain-replay",
+		Key:         key,
+		TurnRunID:   13,
+		OperationID: "op-effect",
+		PhaseID:     "phase-a",
+		LeaseID:     "lease-a",
+		Executor:    "exec",
+		Tool:        "exec",
+		Command:     "git push origin main",
+		EffectKind:  "external_account_command",
+		Status:      EffectAttemptStatusUncertain,
+		ErrorText:   "timeout after side effect",
+		StartedAt:   now,
+		UpdatedAt:   now,
+	}
+	if _, err := store.UpsertEffectAttempt(input); err != nil {
+		t.Fatalf("UpsertEffectAttempt(first) err = %v", err)
+	}
+	if _, err := store.UpsertEffectAttempt(input); err != nil {
+		t.Fatalf("UpsertEffectAttempt(exact replay) err = %v", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != NextActionNeedsVerification || open[0].SubjectRef != input.AttemptID {
+		t.Fatalf("open next actions = %#v, want one needs_verification action for attempt", open)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	nextStateEvents := 0
+	for _, event := range events {
+		if event.EventType == "workflow.next_state" {
+			nextStateEvents++
+		}
+	}
+	if nextStateEvents != 1 {
+		t.Fatalf("workflow.next_state event count = %d, want exactly one for exact replay", nextStateEvents)
+	}
+}
+
+func TestUncertainEffectAttemptNextActionClosesWhenResolved(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	key := SessionKey{ChatID: 7004, UserID: 1001}
+	now := time.Date(2026, 6, 23, 11, 0, 0, 0, time.UTC)
+	input := EffectAttemptInput{
+		AttemptID:   "attempt-uncertain-verified",
+		Key:         key,
+		TurnRunID:   14,
+		OperationID: "op-effect",
+		PhaseID:     "phase-a",
+		LeaseID:     "lease-a",
+		Executor:    "exec",
+		Tool:        "exec",
+		Command:     "git push origin main",
+		EffectKind:  "external_account_command",
+		Status:      EffectAttemptStatusUncertain,
+		ErrorText:   "timeout after side effect",
+		StartedAt:   now,
+		UpdatedAt:   now,
+	}
+	if _, err := store.UpsertEffectAttempt(input); err != nil {
+		t.Fatalf("UpsertEffectAttempt(uncertain) err = %v", err)
+	}
+	input.Status = EffectAttemptStatusVerified
+	input.ErrorText = ""
+	input.CompletedAt = now.Add(time.Minute)
+	input.UpdatedAt = now.Add(time.Minute)
+	if _, err := store.UpsertEffectAttempt(input); err != nil {
+		t.Fatalf("UpsertEffectAttempt(verified) err = %v", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open next actions = %#v, want verification action closed after verified", open)
+	}
+}

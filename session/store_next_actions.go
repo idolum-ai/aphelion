@@ -5,6 +5,7 @@ package session
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -42,6 +43,11 @@ func recordNextActionTx(tx *sql.Tx, input NextActionInput) (NextActionRecord, er
 	createdAt := input.CreatedAt.UTC()
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
+	}
+	if existing, ok, err := nextActionByRecordIDTx(tx, input.RecordID); err != nil {
+		return NextActionRecord{}, err
+	} else if ok {
+		return existing, nil
 	}
 	if _, err := tx.Exec(`
 		UPDATE next_action_records
@@ -113,6 +119,66 @@ func recordNextActionTx(tx *sql.Tx, input NextActionInput) (NextActionRecord, er
 	}, nil
 }
 
+func (s *SQLiteStore) ResolveNextAction(input NextActionResolutionInput) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	input = NormalizeNextActionResolutionInput(input)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin next action resolution tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := resolveNextActionTx(tx, input); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit next action resolution tx: %w", err)
+	}
+	return nil
+}
+
+func resolveNextActionTx(tx *sql.Tx, input NextActionResolutionInput) error {
+	input = NormalizeNextActionResolutionInput(input)
+	sessionID := SessionIDForKey(input.Key)
+	resolvedAt := input.ResolvedAt.UTC()
+	if resolvedAt.IsZero() {
+		resolvedAt = time.Now().UTC()
+	}
+	result, err := tx.Exec(`
+		UPDATE next_action_records
+		SET resolved_at = ?
+		WHERE session_id = ?
+			AND subject_kind = ?
+			AND subject_ref = ?
+			AND resolved_at IS NULL
+	`, resolvedAt.Format(time.RFC3339Nano), sessionID, input.SubjectKind, input.SubjectRef)
+	if err != nil {
+		return fmt.Errorf("resolve next action %s/%s: %w", input.SubjectKind, input.SubjectRef, err)
+	}
+	changed, _ := result.RowsAffected()
+	if changed == 0 {
+		return nil
+	}
+	payloadRaw, _ := json.Marshal(map[string]any{
+		"owner":        input.Owner,
+		"state":        string(NextActionTerminal),
+		"subject_kind": input.SubjectKind,
+		"subject_ref":  input.SubjectRef,
+		"reason":       input.Reason,
+	})
+	if _, err := appendExecutionEventsTx(tx, input.Key, []ExecutionEventInput{{
+		EventType:   core.ExecutionEventWorkflowNextState,
+		Stage:       input.SubjectKind,
+		Status:      string(NextActionTerminal),
+		PayloadJSON: string(payloadRaw),
+		CreatedAt:   resolvedAt,
+	}}); err != nil {
+		return fmt.Errorf("append next action resolution event: %w", err)
+	}
+	return nil
+}
+
 func (s *SQLiteStore) OpenNextActionsBySession(key SessionKey, limit int) ([]NextActionRecord, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
@@ -135,6 +201,29 @@ func (s *SQLiteStore) OpenNextActionsBySession(key SessionKey, limit int) ([]Nex
 	}
 	defer rows.Close()
 	return scanNextActionRows(rows)
+}
+
+func nextActionByRecordIDTx(tx *sql.Tx, recordID string) (NextActionRecord, bool, error) {
+	recordID = strings.TrimSpace(recordID)
+	if recordID == "" {
+		return NextActionRecord{}, false, nil
+	}
+	row := tx.QueryRow(`
+		SELECT record_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
+			turn_run_id, owner, state, subject_kind, subject_ref, causal_refs_json,
+			next_action, required_authority, resource_blocker, verifier, retry_policy,
+			operator_projection, created_at, resolved_at
+		FROM next_action_records
+		WHERE record_id = ?
+	`, recordID)
+	record, err := scanNextActionRecord(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return NextActionRecord{}, false, nil
+	}
+	if err != nil {
+		return NextActionRecord{}, false, err
+	}
+	return record, true, nil
 }
 
 func (s *SQLiteStore) RecordResourcePreflight(key SessionKey, turnRunID int64, resource string, reason string, message string, at time.Time) error {

@@ -133,19 +133,71 @@ func (r *Runtime) approveContinuationBundleForKeyLocked(key session.SessionKey, 
 	payload := continuationExecutionPayload(state)
 	payload["approved_by_user"] = approverID
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationApproved, "continuation", "approved", payload, now)
-	_, _ = r.store.RecordNextAction(session.NextActionInput{
+	if continuationStateReadyForNextAction(state) {
+		if err := r.recordContinuationReadyNextAction(key, state, now); err != nil {
+			return session.ContinuationState{}, err
+		}
+	}
+	return state, nil
+}
+
+func continuationReadyNextActionSubject(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
+	return firstNonEmptyContinuation(state.ContinuationLease.ID, state.ApprovalBundle.ID, state.ActionProposal.ID)
+}
+
+func continuationStateReadyForNextAction(state session.ContinuationState) bool {
+	state = session.NormalizeContinuationState(state)
+	return state.Status == session.ContinuationStatusApproved &&
+		(state.ContinuationLease.Active() || state.ApprovalBundle.Active()) &&
+		continuationReadyNextActionSubject(state) != ""
+}
+
+func (r *Runtime) recordContinuationReadyNextAction(key session.SessionKey, state session.ContinuationState, now time.Time) error {
+	if r == nil || r.store == nil {
+		return fmt.Errorf("runtime store unavailable")
+	}
+	subject := continuationReadyNextActionSubject(state)
+	if subject == "" {
+		return nil
+	}
+	_, err := r.store.RecordNextAction(session.NextActionInput{
 		Key:                key,
 		Owner:              "continuation",
 		State:              session.NextActionReadyToExecute,
 		SubjectKind:        "continuation_lease",
-		SubjectRef:         firstNonEmptyContinuation(state.ContinuationLease.ID, state.ApprovalBundle.ID, state.ActionProposal.ID),
+		SubjectRef:         subject,
 		CausalRefs:         []string{"continuation:" + firstNonEmptyContinuation(state.ContinuationLease.ID, state.ApprovalBundle.ID), "proposal:" + state.ActionProposal.ID},
 		NextAction:         "execute the approved continuation turn",
 		RequiredAuthority:  firstNonEmptyContinuation(string(state.ContinuationLease.LeaseClass), state.ActionProposal.RiskClass),
 		OperatorProjection: "The continuation is approved and ready for one bounded execution turn.",
 		CreatedAt:          now,
 	})
-	return state, nil
+	if err != nil {
+		return fmt.Errorf("record continuation ready next action: %w", err)
+	}
+	return nil
+}
+
+func (r *Runtime) resolveContinuationReadyNextAction(key session.SessionKey, state session.ContinuationState, reason string, at time.Time) error {
+	if r == nil || r.store == nil {
+		return fmt.Errorf("runtime store unavailable")
+	}
+	subject := continuationReadyNextActionSubject(state)
+	if subject == "" {
+		return nil
+	}
+	if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+		Key:         key,
+		Owner:       "continuation",
+		SubjectKind: "continuation_lease",
+		SubjectRef:  subject,
+		Reason:      reason,
+		ResolvedAt:  at,
+	}); err != nil {
+		return fmt.Errorf("resolve continuation ready next action: %w", err)
+	}
+	return nil
 }
 
 func (r *Runtime) approveRequiredCapabilityGrantsForContinuation(key session.SessionKey, state session.ContinuationState, approverID int64, now time.Time) (session.ContinuationState, error) {
@@ -517,6 +569,7 @@ func (r *Runtime) reserveApprovedContinuationTurnLocked(key session.SessionKey) 
 		approvedBy = actor.TelegramUserID
 	}
 	continuationEventText := approvedContinuationEventTextForState(state)
+	approvedState := state
 	state = continuationStateAfterLeaseTurnConsumed(state, now)
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return state, nil, loopBudget, nil, err
@@ -531,6 +584,9 @@ func (r *Runtime) reserveApprovedContinuationTurnLocked(key session.SessionKey) 
 		payload["sandboxed_from_role"] = string(actor.Role)
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "consumed", payload, now)
+	if err := r.resolveContinuationReadyNextAction(key, approvedState, "continuation_lease_consumed", now); err != nil {
+		return state, nil, loopBudget, nil, err
+	}
 	return state, &approvedContinuationReservation{
 		State:           state,
 		Actor:           actor,
@@ -569,7 +625,9 @@ func (r *Runtime) reserveApprovedWorkContinuationTurnLocked(key session.SessionK
 	}
 	opState = session.NormalizeOperationState(opState)
 	req := r.workRequestForContinuation(key, key.ChatID, executionActor, state, opState)
-	state = continuationStateAfterLeaseTurnConsumed(state, time.Now().UTC())
+	consumeAt := time.Now().UTC()
+	approvedState := state
+	state = continuationStateAfterLeaseTurnConsumed(state, consumeAt)
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return state, nil, loopBudget, nil, err
 	}
@@ -578,7 +636,10 @@ func (r *Runtime) reserveApprovedWorkContinuationTurnLocked(key session.SessionK
 	payload["execution_principal_role"] = string(executionActor.Role)
 	payload["work_executor_requested"] = true
 	payload["work_mode"] = string(req.Mode)
-	r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "consumed", payload, time.Now().UTC())
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "consumed", payload, consumeAt)
+	if err := r.resolveContinuationReadyNextAction(key, approvedState, "continuation_lease_consumed", consumeAt); err != nil {
+		return state, nil, loopBudget, nil, err
+	}
 	r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorStarted, "work", "started", map[string]any{
 		"operation_id": strings.TrimSpace(req.OperationID),
 		"lease_id":     strings.TrimSpace(req.LeaseID),

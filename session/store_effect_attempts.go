@@ -214,7 +214,21 @@ func upsertEffectAttemptTx(tx *sql.Tx, input EffectAttemptInput) (EffectAttempt,
 }
 
 func maybeRecordEffectAttemptNextActionTx(tx *sql.Tx, key SessionKey, attempt EffectAttempt) error {
-	if NormalizeEffectAttemptStatus(attempt.Status) != EffectAttemptStatusUncertain || !EffectAttemptHasSideEffects(attempt) {
+	if !EffectAttemptHasSideEffects(attempt) {
+		return nil
+	}
+	switch NormalizeEffectAttemptStatus(attempt.Status) {
+	case EffectAttemptStatusUncertain:
+	case EffectAttemptStatusVerified, EffectAttemptStatusRejected, EffectAttemptStatusSuperseded, EffectAttemptStatusFailed:
+		return resolveNextActionTx(tx, NextActionResolutionInput{
+			Key:         key,
+			Owner:       "effect_attempt",
+			SubjectKind: "effect_attempt",
+			SubjectRef:  attempt.AttemptID,
+			Reason:      "effect_attempt_outcome_resolved",
+			ResolvedAt:  attempt.UpdatedAt,
+		})
+	default:
 		return nil
 	}
 	_, err := recordNextActionTx(tx, NextActionInput{

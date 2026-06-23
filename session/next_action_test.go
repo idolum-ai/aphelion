@@ -84,3 +84,40 @@ func TestRecordResourcePreflightCreatesRepairNextAction(t *testing.T) {
 		t.Fatalf("resource next action = %#v, want blocked resource repair tied to turn 42", open[0])
 	}
 }
+
+func TestResolveNextActionClosesOpenAction(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	key := SessionKey{ChatID: 91003, UserID: 1001}
+	if _, err := store.RecordNextAction(NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              NextActionWaitingForChild,
+		SubjectKind:        "task_packet",
+		SubjectRef:         "task-a",
+		NextAction:         "wait for child",
+		OperatorProjection: "Waiting.",
+	}); err != nil {
+		t.Fatalf("RecordNextAction() err = %v", err)
+	}
+	if err := store.ResolveNextAction(NextActionResolutionInput{
+		Key:         key,
+		Owner:       "test",
+		SubjectKind: "task_packet",
+		SubjectRef:  "task-a",
+		Reason:      "child_completed",
+	}); err != nil {
+		t.Fatalf("ResolveNextAction() err = %v", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open next actions = %#v, want resolved action closed", open)
+	}
+}

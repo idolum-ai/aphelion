@@ -34,13 +34,11 @@ func (r *Registry) searchFiles(ctx context.Context, input json.RawMessage, scope
 	maxBytes := clampNativeLimit(in.MaxBytes, defaultNativeSearchMaxBytes, maxNativeSearchMaxBytes)
 	roots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathRead, "search")
 	if err != nil {
-		r.recordNativeResourcePreflight(ctx, key, pathRaw, err)
-		return "", err
+		return "", r.recordNativeResourcePreflight(ctx, key, pathRaw, err)
 	}
 	root, err := resolveNativeToolPathWithReadRoots(scope, pathRaw, nativePathRead, nativeFileAccessGrantRootPaths(roots))
 	if err != nil {
-		r.recordNativeResourcePreflight(ctx, key, pathRaw, err)
-		return "", err
+		return "", r.recordNativeResourcePreflight(ctx, key, pathRaw, err)
 	}
 	audit, auditOK := nativeFileAccessGrantRootForPath(root, roots)
 	defer func() {
@@ -52,7 +50,7 @@ func (r *Registry) searchFiles(ctx context.Context, input json.RawMessage, scope
 	needle := strings.ToLower(query)
 	err = walkSearchRoot(ctx, root, maxBytes, limit, needle, &matches, scope, nativeFileAccessGrantRootPaths(roots))
 	if err != nil {
-		return "", err
+		return "", r.recordNativeResourcePreflight(ctx, key, pathRaw, err)
 	}
 	var b strings.Builder
 	b.WriteString("[SEARCH]\n")
