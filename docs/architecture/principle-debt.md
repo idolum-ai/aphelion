@@ -26,10 +26,45 @@ Status values:
 
 ## Active Debt
 
-None.
+### PD-2026-06-causal-closure
 
-`None.` means no known uncontained principle violation is being carried here.
-Temporary architecture seams belong in the root
+- **Principle:** Fail closed, but stay useful; Short paths to truth; Continuity
+  over productivity theater.
+- **Status:** active.
+- **Surface:** Approval, continuation, capability grant, durable-child wake,
+  tool execution, uncertain outcome, and operator projection handoff.
+- **Why it exists:** Execution-authority continuity is implemented as a
+  point-of-use authority spine, but some end-to-end workflows still stop safely
+  without deterministically producing the next durable operator-legible state.
+  Approval, resource denial, uncertain effects, child reports, and phase
+  supersession can require manual reconstruction of the next action.
+- **Exit gate:** After every operator decision or execution attempt, exactly one
+  durable next-state record exists: `ready_to_execute`,
+  `blocked_needs_authority`, `blocked_needs_resource_repair`,
+  `needs_verification`, or `terminal`. The record names causal IDs, owner,
+  exact next operation, required authority, retry semantics, verifier when
+  applicable, and the operator projection to render.
+
+### PD-2026-06-output-exposure
+
+- **Principle:** Authority before capability; Ledger, not vibes; Operational
+  legibility.
+- **Status:** active.
+- **Surface:** Tool result previews, evidence hydration, logs, operator
+  projections, and model context.
+- **Why it exists:** Command effect authorization answers whether an operation
+  may run; it does not answer whether the resulting bytes, paths, config
+  metadata, or diagnostic text may be shown to a given audience. Some output
+  paths still rely on size-bounded previews or source-local redaction rather
+  than one audience-aware exposure projection policy.
+- **Exit gate:** Every tool-result exposure path records or consumes a typed
+  sensitivity/provenance judgment and renders an audience-specific projection:
+  redacted view, digest, withheld marker, protected artifact reference, or
+  privileged hydration with audit evidence.
+
+When this section has no entries, write `None.` to mean no known uncontained
+principle violation is being carried here. Temporary architecture seams belong
+in the root
 [`ARCHITECTURE_WAIVERS.md`](../../ARCHITECTURE_WAIVERS.md) ledger; broader
 pressure that needs watchfulness but not immediate remediation belongs under
 Monitored Tensions.

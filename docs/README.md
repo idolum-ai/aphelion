@@ -26,6 +26,9 @@ architecture and requirements docs define the deeper contracts.
 - [Architecture Map](architecture/README.md): package shape, truth surfaces, and
   canonical diagrams.
 - [Design Principles](architecture/design-principles.md): normative direction.
+- [Execution Friction Inventory](operations/execution-friction-inventory.md):
+  draft operations inventory for approval, child-work, exposure, and recovery
+  friction observed during live source-install work.
 - [Requirements Index](../requirements/INDEX.md): component behavior specs.
 - [Public Release Provenance](public-release.md): canonical source and private-history boundary.
 - [Release Strategy](guides/release-strategy.md): release branch, review, notes, and automation plan.
