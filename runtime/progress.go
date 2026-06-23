@@ -45,6 +45,11 @@ type toolObserver interface {
 	ToolFinished(ctx context.Context, name string, input json.RawMessage, output string, err error)
 }
 
+type toolOutputProjectionObserver interface {
+	ProjectToolOutput(ctx context.Context, name string, input json.RawMessage, output string, err error) (string, bool)
+	ToolFinishedWithProjection(ctx context.Context, name string, input json.RawMessage, rawOutput string, projectedOutput string, err error, projectionRecorded bool)
+}
+
 type toolInvocationContextBinder interface {
 	ToolInvocationContext(ctx context.Context, name string, input json.RawMessage) context.Context
 }
@@ -70,6 +75,14 @@ func (o *observedToolRegistry) Execute(ctx context.Context, name string, input j
 	}
 	out, err := o.base.Execute(ctx, name, input)
 	if o.observer != nil {
+		if projector, ok := o.observer.(toolOutputProjectionObserver); ok {
+			projected, recorded := projector.ProjectToolOutput(ctx, name, input, out, err)
+			projector.ToolFinishedWithProjection(ctx, name, input, out, projected, err, recorded)
+			if err != nil {
+				return out, err
+			}
+			return projected, err
+		}
 		o.observer.ToolFinished(ctx, name, input, out, err)
 	}
 	return out, err

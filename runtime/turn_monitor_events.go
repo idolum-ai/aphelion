@@ -54,6 +54,32 @@ func (m *turnMonitor) ToolStarted(ctx context.Context, name string, input json.R
 }
 
 func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.RawMessage, output string, err error) {
+	m.ToolFinishedWithProjection(ctx, name, input, output, output, err, false)
+}
+
+func (m *turnMonitor) ProjectToolOutput(ctx context.Context, name string, input json.RawMessage, output string, err error) (string, bool) {
+	if strings.TrimSpace(output) == "" {
+		return output, false
+	}
+	record, ok := m.recordToolOutputProjection(ctx, name, session.ExposureAudienceModelPreview, session.ExposurePurposeToolResultModelContext, output, time.Now().UTC())
+	if !ok {
+		return session.ProjectToolResultForPurpose(output, session.ExposureAudienceModelPreview, session.ExposurePurposeToolResultModelContext).Text, false
+	}
+	return record.ProjectedText, true
+}
+
+func (m *turnMonitor) ToolFinishedWithProjection(ctx context.Context, name string, input json.RawMessage, rawOutput string, projectedOutput string, err error, projectionRecorded bool) {
+	output := projectedOutput
+	if strings.TrimSpace(rawOutput) != "" {
+		if !projectionRecorded && strings.TrimSpace(projectedOutput) == strings.TrimSpace(rawOutput) {
+			if record, ok := m.recordToolOutputProjection(ctx, name, session.ExposureAudienceModelPreview, session.ExposurePurposeToolResultModelContext, rawOutput, time.Now().UTC()); ok {
+				output = record.ProjectedText
+			}
+		}
+		if record, ok := m.recordToolOutputProjection(ctx, name, session.ExposureAudienceOperator, session.ExposurePurposeToolResultPreview, rawOutput, time.Now().UTC()); ok {
+			output = record.ProjectedText
+		}
+	}
 	preview := safeToolInputPreview(input)
 	resultPreview := redactRuntimeEvidenceText(truncatePreview(strings.TrimSpace(output), 220))
 	errorText := ""
@@ -102,8 +128,8 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 		"error":            errorText,
 		"tool_duration_ms": toolDurationMS,
 	}
-	if digest, ok := agent.BuildToolOutputDigest(output, agent.DefaultToolOutputDigestInlineLimit); ok {
-		safe := redactLargeToolOutputEvidence(preview, output, digest)
+	if digest, ok := agent.BuildToolOutputDigest(rawOutput, agent.DefaultToolOutputDigestInlineLimit); ok {
+		safe := redactLargeToolOutputEvidence(preview, rawOutput, digest)
 		if ref := m.recordLargeToolOutputEvidence(name, safe, time.Now().UTC()); ref != "" {
 			digest.EvidenceRef = ref
 		}
@@ -127,6 +153,37 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 	if m.progress != nil {
 		m.progress.ToolFinished(ctx, name, err)
 	}
+}
+
+func (m *turnMonitor) recordToolOutputProjection(ctx context.Context, name string, audience session.ExposureAudience, purpose session.ExposurePurpose, output string, at time.Time) (session.ExposureProjectionRecord, bool) {
+	if m == nil || m.runtime == nil || m.runtime.store == nil || strings.TrimSpace(output) == "" {
+		return session.ExposureProjectionRecord{}, false
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	invocationRef := toolpkg.ToolInvocationRef{TurnRunID: m.runID, InvocationID: fmt.Sprintf("turn:%d:tool:observed", m.runID)}
+	if ref, ok := toolpkg.ToolInvocationRefFromContext(ctx); ok {
+		invocationRef = ref
+	}
+	if invocationRef.TurnRunID <= 0 {
+		invocationRef.TurnRunID = m.runID
+	}
+	record, err := m.runtime.store.RecordExposureProjection(session.ExposureProjectionInput{
+		Key:          m.key,
+		TurnRunID:    invocationRef.TurnRunID,
+		InvocationID: invocationRef.InvocationID,
+		ToolName:     strings.TrimSpace(name),
+		Audience:     audience,
+		Purpose:      purpose,
+		RawText:      output,
+		CreatedAt:    at,
+	})
+	if err != nil {
+		log.Printf("WARN record exposure projection failed run_id=%d tool=%s audience=%s purpose=%s err=%v", m.runID, strings.TrimSpace(name), audience, purpose, err)
+		return session.ExposureProjectionRecord{}, false
+	}
+	return record, true
 }
 
 func (m *turnMonitor) recordExecEffectAttempt(ctx context.Context, name string, input json.RawMessage, status session.EffectAttemptStatus, errorText string, observedAt time.Time) {

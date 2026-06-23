@@ -105,6 +105,74 @@ func TestHandleInboundApprovedUserUsesPrincipalAwareToolsWhenSupported(t *testin
 	}
 }
 
+func TestHandleInboundProjectsSensitiveToolOutputBeforeModelContext(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	provider := &toolRequestingProvider{}
+	secret := "github_pat_1234567890abcdef"
+	tools := &principalRecordingTools{
+		defs:              []agent.ToolDef{testExecToolDef()},
+		supportsPrincipal: true,
+		output:            "stdout:\n" + secret + "\npath: /workspace/credential-slot\n",
+	}
+
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendFloorFallback
+
+	key := session.SessionKey{ChatID: 504, UserID: 0}
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     key.ChatID,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "run sensitive output probe",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if strings.Contains(provider.lastToolOutput, secret) || strings.Contains(provider.lastToolOutput, "/workspace/credential-slot") {
+		t.Fatalf("model-facing tool output leaked raw protected material: %q", provider.lastToolOutput)
+	}
+	if strings.Contains(provider.lastToolOutput, "[EXPOSURE_PROJECTION]") || strings.Contains(provider.lastToolOutput, "policy_ref:") {
+		t.Fatalf("model-facing tool output carried in-band exposure header: %q", provider.lastToolOutput)
+	}
+	if !strings.Contains(provider.lastToolOutput, "tool_output_protected") {
+		t.Fatalf("model-facing tool output = %q, want protected projection marker", provider.lastToolOutput)
+	}
+
+	run, err := store.LatestTurnRun(key)
+	if err != nil {
+		t.Fatalf("LatestTurnRun() err = %v", err)
+	}
+	projections, err := store.ExposureProjectionsByTurnRun(key, run.ID, 10)
+	if err != nil {
+		t.Fatalf("ExposureProjectionsByTurnRun() err = %v", err)
+	}
+	var modelProjection session.ExposureProjectionRecord
+	var operatorProjection session.ExposureProjectionRecord
+	for _, projection := range projections {
+		switch projection.Audience {
+		case session.ExposureAudienceModelPreview:
+			modelProjection = projection
+		case session.ExposureAudienceOperator:
+			operatorProjection = projection
+		}
+	}
+	if modelProjection.ProjectionKind != session.ExposureProjectionProtectedRef || modelProjection.ProtectedEvidenceRef == "" {
+		t.Fatalf("model projection = %#v, want protected_ref with evidence ref", modelProjection)
+	}
+	if operatorProjection.ProjectionKind != session.ExposureProjectionProtectedRef || operatorProjection.ProtectedEvidenceRef == "" {
+		t.Fatalf("operator projection = %#v, want protected_ref with evidence ref", operatorProjection)
+	}
+	if !containsString(modelProjection.SensitivityProvenance, "pattern:github_token") {
+		t.Fatalf("model projection provenance = %#v, want github token pattern", modelProjection.SensitivityProvenance)
+	}
+}
+
 func TestHandleInboundAdminCanManageDurableAgentThroughConversationTool(t *testing.T) {
 	t.Parallel()
 
