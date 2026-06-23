@@ -171,12 +171,16 @@ during execution do not turn a successful side effect into an ambiguous failed
 call. A turn whose authority binding fails during admission is terminalized as
 failed instead of being left as a running turn.
 
-Native file access is still pathname-based after authorization. The current
-guard rejects symlink components in approved grant roots and revalidates
-containment before use, but validation and filesystem operations are not one
-descriptor-relative transaction. Child-controlled or otherwise adversarial
-workspaces should not be treated as fully hardened until native file access uses
-no-follow, beneath-root descriptor traversal for read, write, list, and search.
+Linux native file access now compiles the requested path against the sandbox and
+active `file_access` roots, then opens the selected root and target through
+no-follow descriptor-relative traversal. Read, write, list, and search use
+`openat2` beneath/no-symlink resolution when the kernel supports it and a
+component-by-component `openat` fallback otherwise. Symlink root or ancestor
+retargeting and ordinary pathname check/use races fail closed at point of use.
+The remaining limits are platform-specific: this guarantee is the Linux native
+tool path, and it does not try to assign authority provenance to hard links or
+to directory objects that are moved while an already-open descriptor remains
+valid.
 
 The matrix still distinguishes boundary-level conformance from real end-to-end
 execution-species proof. A complete durable-child path test should cover

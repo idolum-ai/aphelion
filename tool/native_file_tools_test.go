@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -707,6 +708,159 @@ func TestNativeFileAccessGrantDoesNotBypassHiddenPaths(t *testing.T) {
 	}
 }
 
+func TestNativeFileAccessToolsRejectComponentSwapEscapes(t *testing.T) {
+	registry, store := newDurableAgentToolRegistry(t)
+	workspace := t.TempDir()
+	approvedRoot := filepath.Join(t.TempDir(), "approved")
+	if err := os.MkdirAll(approvedRoot, 0o755); err != nil {
+		t.Fatalf("mkdir approved root: %v", err)
+	}
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "leaf.txt"), []byte("outside-marker read\n"), 0o600); err != nil {
+		t.Fatalf("write outside leaf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "outside-marker.txt"), []byte("outside-marker list\n"), 0o600); err != nil {
+		t.Fatalf("write outside marker: %v", err)
+	}
+
+	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	grantAuthorityUseLeaseWithID(t, store, key, "lease-component-swap-file-access")
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-component-swap-file-access", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
+	scope := sandbox.Scope{
+		Principal:        p,
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       filepath.Join(workspace, "global"),
+		SharedMemoryRoot: filepath.Join(workspace, "shared"),
+		WorkingRoot:      workspace,
+	}
+	for _, grant := range []session.CapabilityGrant{
+		{
+			GrantID:        "capg-component-swap-read",
+			GrantedBy:      "telegram:1001",
+			GrantedTo:      "telegram:1001",
+			Kind:           session.CapabilityKindFileAccess,
+			TargetResource: approvedRoot,
+			AllowedActions: []string{"read"},
+			Status:         session.CapabilityGrantStatusActive,
+		},
+		{
+			GrantID:        "capg-component-swap-write",
+			GrantedBy:      "telegram:1001",
+			GrantedTo:      "telegram:1001",
+			Kind:           session.CapabilityKindFileAccess,
+			TargetResource: approvedRoot,
+			AllowedActions: []string{"write"},
+			Status:         session.CapabilityGrantStatusActive,
+		},
+	} {
+		if _, err := store.UpsertCapabilityGrant(grant); err != nil {
+			t.Fatalf("UpsertCapabilityGrant(%s) err = %v", grant.GrantID, err)
+		}
+	}
+
+	victim := filepath.Join(approvedRoot, "swap")
+	installNativeSwapSafeDir(t, victim)
+	var stop atomic.Bool
+	var mutatorWG sync.WaitGroup
+	mutatorWG.Add(1)
+	go func() {
+		defer mutatorWG.Done()
+		for !stop.Load() {
+			_ = os.RemoveAll(victim)
+			_ = os.MkdirAll(victim, 0o755)
+			_ = os.WriteFile(filepath.Join(victim, "leaf.txt"), []byte("safe-marker read\n"), 0o600)
+			_ = os.RemoveAll(victim)
+			_ = os.Symlink(outside, victim)
+			_ = os.Remove(victim)
+			_ = os.WriteFile(victim, []byte("component is a file\n"), 0o600)
+		}
+	}()
+	t.Cleanup(func() {
+		stop.Store(true)
+		mutatorWG.Wait()
+	})
+
+	errCh := make(chan error, 4)
+	var opsWG sync.WaitGroup
+	runUntil := time.Now().Add(750 * time.Millisecond)
+	readInput := nativeJSON(t, map[string]any{"path": filepath.Join(victim, "leaf.txt"), "full": true})
+	listInput := nativeJSON(t, map[string]any{"path": victim})
+	searchInput := nativeJSON(t, map[string]any{"path": victim, "query": "outside-marker", "limit": 5})
+	writeInput := nativeJSON(t, map[string]any{"path": filepath.Join(victim, "created.txt"), "content": "safe write\n", "create_dirs": true})
+	runOp := func(fn func() error) {
+		defer opsWG.Done()
+		for time.Now().Before(runUntil) {
+			if err := fn(); err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}
+	opsWG.Add(4)
+	go runOp(func() error {
+		out, _ := registry.executeWithScopeAndPrincipal(ctx, "read_file", readInput, scope, p, key)
+		if strings.Contains(out, "outside-marker") {
+			return fmt.Errorf("read_file escaped granted root: %s", out)
+		}
+		return nil
+	})
+	go runOp(func() error {
+		out, _ := registry.executeWithScopeAndPrincipal(ctx, "list_dir", listInput, scope, p, key)
+		if strings.Contains(out, "outside-marker") {
+			return fmt.Errorf("list_dir escaped granted root: %s", out)
+		}
+		return nil
+	})
+	go runOp(func() error {
+		out, _ := registry.executeWithScopeAndPrincipal(ctx, "search", searchInput, scope, p, key)
+		if strings.Contains(out, "outside-marker") && !strings.Contains(out, "matches: 0") {
+			return fmt.Errorf("search escaped granted root: %s", out)
+		}
+		return nil
+	})
+	go runOp(func() error {
+		_, _ = registry.executeWithScopeAndPrincipal(ctx, "write_file", writeInput, scope, p, key)
+		if data, err := os.ReadFile(filepath.Join(outside, "created.txt")); err == nil {
+			return fmt.Errorf("write_file escaped granted root and wrote outside content %q", string(data))
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("stat outside write target: %w", err)
+		}
+		return nil
+	})
+	opsWG.Wait()
+	stop.Store(true)
+	mutatorWG.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func installNativeSwapSafeDir(t *testing.T, victim string) {
+	t.Helper()
+	if err := os.RemoveAll(victim); err != nil {
+		t.Fatalf("remove swap victim: %v", err)
+	}
+	if err := os.MkdirAll(victim, 0o755); err != nil {
+		t.Fatalf("mkdir swap victim: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(victim, "leaf.txt"), []byte("safe-marker read\n"), 0o600); err != nil {
+		t.Fatalf("write swap victim leaf: %v", err)
+	}
+}
+
+func nativeJSON(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal native tool input: %v", err)
+	}
+	return raw
+}
+
 func assertNativeFileAccessInvocations(t *testing.T, store *session.SQLiteStore, grantID string, want map[string]string) {
 	t.Helper()
 
@@ -781,8 +935,8 @@ func TestWriteFileCreateDirsValidatesSymlinkAncestorBeforeMkdir(t *testing.T) {
 	}
 
 	_, err := registry.executeWithScopeAndPrincipal(context.Background(), "write_file", json.RawMessage(`{"path":"link/newdir/file.txt","content":"nope","create_dirs":true}`), scope, scope.Principal, session.SessionKey{})
-	if err == nil || !strings.Contains(err.Error(), "outside writable sandbox roots") {
-		t.Fatalf("write_file err = %v, want pre-mkdir writable-root rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "refused non-directory or symlink component") {
+		t.Fatalf("write_file err = %v, want descriptor-scoped symlink rejection", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(outside, "newdir")); !os.IsNotExist(statErr) {
 		t.Fatalf("outside newdir stat err = %v, want directory not created", statErr)
