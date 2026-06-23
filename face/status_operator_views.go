@@ -121,6 +121,9 @@ func operatorSystemStatusDetails(snapshot core.SystemStatusSnapshot, personaEffo
 	if provider := operatorProviderHealthDetail(snapshot.ProviderHealth); provider != "" {
 		details = append(details, provider)
 	}
+	if persistence := operatorPersistenceHealthDetail(snapshot.PersistenceHealth); persistence != "" {
+		details = append(details, persistence)
+	}
 	if snapshot.ReleaseNotice.Available {
 		details = append(details, fmt.Sprintf("update available: %s -> %s", firstNonEmpty(snapshot.ReleaseNotice.CurrentVersion, "unknown"), snapshot.ReleaseNotice.LatestVersion))
 	}
@@ -255,6 +258,36 @@ func operatorProviderHealthDetail(health core.ProviderHealthSnapshot) string {
 	line := fmt.Sprintf("provider health: %s, failures %d, retries %d, failovers %d", status, health.RecentFailures, health.RecentRetries, health.RecentFailovers)
 	if reason := strings.TrimSpace(health.LastFailureReason); reason != "" {
 		line += ", latest failure " + truncateStatusField(reason, 90)
+	}
+	if retry := strings.TrimSpace(health.RetryPolicy); retry != "" && retry != core.ReliabilityRetryNone {
+		line += ", retry " + retry
+	}
+	if next := strings.TrimSpace(health.NextAction); next != "" && next != "none" {
+		line += ", next " + truncateStatusField(next, 90)
+	}
+	return line
+}
+
+func operatorPersistenceHealthDetail(health core.PersistenceHealthSnapshot) string {
+	status := strings.TrimSpace(health.Status)
+	if status == "" && health.GeneratedAt.IsZero() && health.RecentSlow == 0 {
+		return ""
+	}
+	if status == "" {
+		status = "healthy"
+	}
+	line := fmt.Sprintf("persistence health: %s, slow writes %d", status, health.RecentSlow)
+	if component := strings.TrimSpace(health.LastComponent); component != "" {
+		line += ", latest " + truncateStatusField(component, 80)
+	}
+	if health.LastLatency > 0 {
+		line += fmt.Sprintf(" %dms", health.LastLatency.Milliseconds())
+	}
+	if retry := strings.TrimSpace(health.RetryPolicy); retry != "" && retry != core.ReliabilityRetryNone {
+		line += ", policy " + retry
+	}
+	if next := strings.TrimSpace(health.NextAction); next != "" && next != "none" {
+		line += ", next " + truncateStatusField(next, 90)
 	}
 	return line
 }

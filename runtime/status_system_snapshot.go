@@ -91,15 +91,20 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		return core.SystemStatusSnapshot{}, err
 	}
 	for _, failure := range telegramFailures {
+		classification := core.ClassifyTransportReliability(failure.Surface, failure.ErrorText)
 		snapshot.TelegramIngress = append(snapshot.TelegramIngress, core.TelegramIngressFailureSnapshot{
-			Surface:    strings.TrimSpace(failure.Surface),
-			UpdateID:   failure.UpdateID,
-			UpdateKind: strings.TrimSpace(failure.UpdateKind),
-			ChatID:     failure.ChatID,
-			SenderID:   failure.SenderID,
-			MessageID:  failure.MessageID,
-			ErrorText:  strings.TrimSpace(failure.ErrorText),
-			CreatedAt:  failure.CreatedAt,
+			Surface:      strings.TrimSpace(failure.Surface),
+			UpdateID:     failure.UpdateID,
+			UpdateKind:   strings.TrimSpace(failure.UpdateKind),
+			ChatID:       failure.ChatID,
+			SenderID:     failure.SenderID,
+			MessageID:    failure.MessageID,
+			ErrorText:    strings.TrimSpace(failure.ErrorText),
+			StatusClass:  classification.StatusClass,
+			FailureClass: classification.FailureClass,
+			RetryPolicy:  classification.RetryPolicy,
+			NextAction:   classification.NextAction,
+			CreatedAt:    failure.CreatedAt,
 		})
 	}
 
@@ -111,6 +116,7 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 	snapshot.LatestPerceptionBudgetByChat = latestPerceptionBudgetByChatFromExecutionEvents(recentEvents)
 	snapshot.RestartHealth = restartHealthWithLatestWatchdogEvent(snapshot.RestartHealth, recentEvents)
 	snapshot.ProviderHealth = providerHealthFromExecutionEvents(recentEvents, now)
+	snapshot.PersistenceHealth = persistenceHealthFromExecutionEvents(recentEvents, now)
 	snapshot.RecentAdjudications = statusAdjudicationsFromExecutionEvents(recentEvents, 12)
 	activeByChat, queueByChat := liveRouterSignalsFromExecutionEvents(recentEvents)
 	latestFromEvents := latestTurnSnapshotsByChatFromExecutionEvents(recentEvents)

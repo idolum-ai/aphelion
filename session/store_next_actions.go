@@ -298,22 +298,20 @@ func (s *SQLiteStore) RecordPersistenceLatencyClassification(key SessionKey, com
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
-	classification := "normal"
-	retryPolicy := "none"
-	if latency >= 250*time.Millisecond {
-		classification = "slow_write"
-		retryPolicy = "batch_or_backpressure"
-	}
+	classification := core.ClassifyPersistenceLatency(component, latency)
 	payloadRaw, _ := json.Marshal(map[string]any{
 		"component":      component,
 		"latency_ms":     latency.Milliseconds(),
-		"classification": classification,
-		"retry_policy":   retryPolicy,
+		"classification": classification.Condition,
+		"status_class":   classification.StatusClass,
+		"failure_class":  classification.FailureClass,
+		"retry_policy":   classification.RetryPolicy,
+		"next_action":    classification.NextAction,
 	})
 	_, err := s.AppendExecutionEvent(key, ExecutionEventInput{
 		EventType:   core.ExecutionEventPersistenceLatency,
 		Stage:       "persistence",
-		Status:      classification,
+		Status:      classification.Condition,
 		PayloadJSON: string(payloadRaw),
 		CreatedAt:   at,
 	})

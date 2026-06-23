@@ -22,12 +22,12 @@ func TestClassifySourceInstallStatusSeparatesVerifiedSourceFromStaleReleaseMetad
 			want:             "source_verified_release_metadata_stale",
 		},
 		{
-			name:             "mismatched revision with update available remains update available",
+			name:             "mismatched revision reports install revision mismatch",
 			runningRevision:  "abc123",
 			expectedRevision: "def456",
 			metadataStatus:   "present",
 			updateAvailable:  true,
-			want:             "release_update_available",
+			want:             "source_install_revision_mismatch",
 		},
 		{
 			name:             "no update available is current",
@@ -54,5 +54,30 @@ func TestClassifySourceInstallStatusSeparatesVerifiedSourceFromStaleReleaseMetad
 				t.Fatalf("ClassifySourceInstallStatus() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestClassifySourceInstallReliabilityCarriesOperatorPolicy(t *testing.T) {
+	got := ClassifySourceInstallReliability(SourceInstallStatusInput{
+		CurrentRevision:  "abc123",
+		RunningRevision:  "abc123",
+		ExpectedRevision: "abc123",
+		MetadataStatus:   "present",
+		UpdateAvailable:  true,
+	})
+	if got.Condition != "source_verified_release_metadata_stale" {
+		t.Fatalf("condition = %q, want stale source metadata", got.Condition)
+	}
+	if got.StatusClass != StatusClassOperationalTension {
+		t.Fatalf("status class = %q, want operational tension", got.StatusClass)
+	}
+	if got.FailureClass != ReliabilityFailureReleaseFreshness {
+		t.Fatalf("failure class = %q, want release freshness", got.FailureClass)
+	}
+	if got.RetryPolicy != ReliabilityRetryRefreshMetadata {
+		t.Fatalf("retry policy = %q, want metadata refresh", got.RetryPolicy)
+	}
+	if got.NextAction == "" || got.NextAction == "none" {
+		t.Fatalf("next action = %q, want operator-legible action", got.NextAction)
 	}
 }

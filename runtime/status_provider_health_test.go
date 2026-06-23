@@ -53,6 +53,14 @@ func TestSystemStatusSnapshotProjectsProviderHealth(t *testing.T) {
 	if snapshot.ProviderHealth.LastFailureProvider != "openrouter" || !strings.Contains(snapshot.ProviderHealth.LastFailureError, "context window") {
 		t.Fatalf("last provider failure = %#v, want openrouter context-window evidence", snapshot.ProviderHealth)
 	}
+	if snapshot.ProviderHealth.StatusClass != core.StatusClassOperationalTension ||
+		snapshot.ProviderHealth.FailureClass != core.ReliabilityFailureProviderRequestShape ||
+		snapshot.ProviderHealth.RetryPolicy != core.ReliabilityRetryRescopeRequest {
+		t.Fatalf("provider classification = %#v, want operational request-shape rescope", snapshot.ProviderHealth)
+	}
+	if !strings.Contains(snapshot.ProviderHealth.NextAction, "rescope") {
+		t.Fatalf("provider next action = %q, want rescope guidance", snapshot.ProviderHealth.NextAction)
+	}
 }
 
 func TestDoctorProviderHealthIncludesRecentProviderPressure(t *testing.T) {
@@ -81,6 +89,9 @@ func TestDoctorProviderHealthIncludesRecentProviderPressure(t *testing.T) {
 	for _, want := range []string{
 		`provider_health_status="degraded"`,
 		`provider_health_failures="1"`,
+		`provider_health_status_class="operational_tension"`,
+		`provider_health_failure_class="provider_configuration"`,
+		`provider_health_retry_policy="retry_after_config_repair"`,
 		`provider_health_last_failure_provider="openrouter"`,
 		`provider_health_last_failure_reason="quota exceeded"`,
 	} {

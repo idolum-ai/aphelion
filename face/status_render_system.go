@@ -24,6 +24,9 @@ func RenderTelegramStatusSystem(snapshot core.SystemStatusSnapshot, personaEffor
 	if providerLine := renderProviderHealthLine(snapshot.ProviderHealth); providerLine != "" {
 		lines = append(lines, providerLine)
 	}
+	if persistenceLine := renderPersistenceHealthLine(snapshot.PersistenceHealth); persistenceLine != "" {
+		lines = append(lines, persistenceLine)
+	}
 	if snapshot.TotalQueuedMessages > 0 {
 		line := fmt.Sprintf("router_health queued_messages=%d max_queue_depth=%d", snapshot.TotalQueuedMessages, snapshot.MaxQueueDepth)
 		if snapshot.MaxQueueDepthChatID != 0 {
@@ -87,6 +90,18 @@ func renderProviderHealthLine(health core.ProviderHealthSnapshot) string {
 		status = "healthy"
 	}
 	line := fmt.Sprintf("provider_health status=%s failures=%d retries=%d failovers=%d successes=%d", status, health.RecentFailures, health.RecentRetries, health.RecentFailovers, health.RecentSuccesses)
+	if statusClass := strings.TrimSpace(health.StatusClass); statusClass != "" {
+		line += " class=" + statusClass
+	}
+	if failureClass := strings.TrimSpace(health.FailureClass); failureClass != "" {
+		line += " failure=" + failureClass
+	}
+	if retryPolicy := strings.TrimSpace(health.RetryPolicy); retryPolicy != "" {
+		line += " retry=" + retryPolicy
+	}
+	if nextAction := strings.TrimSpace(health.NextAction); nextAction != "" && nextAction != "none" {
+		line += " next=" + quoteStatusField(truncateStatusField(nextAction, 100))
+	}
 	if health.Window > 0 {
 		line += " window=" + health.Window.Truncate(time.Second).String()
 	}
@@ -107,6 +122,42 @@ func renderProviderHealthLine(health core.ProviderHealthSnapshot) string {
 	}
 	if !health.LastSuccessAt.IsZero() {
 		line += " last_success_at=" + formatStatusTime(health.LastSuccessAt)
+	}
+	return line
+}
+
+func renderPersistenceHealthLine(health core.PersistenceHealthSnapshot) string {
+	status := strings.TrimSpace(health.Status)
+	if status == "" && health.GeneratedAt.IsZero() && health.RecentSlow == 0 {
+		return ""
+	}
+	if status == "" {
+		status = "healthy"
+	}
+	line := fmt.Sprintf("persistence_health status=%s slow_writes=%d", status, health.RecentSlow)
+	if statusClass := strings.TrimSpace(health.StatusClass); statusClass != "" {
+		line += " class=" + statusClass
+	}
+	if failureClass := strings.TrimSpace(health.FailureClass); failureClass != "" {
+		line += " failure=" + failureClass
+	}
+	if retryPolicy := strings.TrimSpace(health.RetryPolicy); retryPolicy != "" {
+		line += " retry=" + retryPolicy
+	}
+	if health.Window > 0 {
+		line += " window=" + health.Window.Truncate(time.Second).String()
+	}
+	if !health.LastEventAt.IsZero() {
+		line += " last_at=" + formatStatusTime(health.LastEventAt)
+	}
+	if component := strings.TrimSpace(health.LastComponent); component != "" {
+		line += " component=" + quoteStatusField(truncateStatusField(component, 80))
+	}
+	if health.LastLatency > 0 {
+		line += fmt.Sprintf(" latency_ms=%d", health.LastLatency.Milliseconds())
+	}
+	if nextAction := strings.TrimSpace(health.NextAction); nextAction != "" && nextAction != "none" {
+		line += " next=" + quoteStatusField(truncateStatusField(nextAction, 100))
 	}
 	return line
 }
@@ -169,6 +220,18 @@ func renderTelegramIngressFailureBlock(failures []core.TelegramIngressFailureSna
 		)
 		if !failure.CreatedAt.IsZero() {
 			line += " at=" + formatStatusTime(failure.CreatedAt)
+		}
+		if statusClass := strings.TrimSpace(failure.StatusClass); statusClass != "" {
+			line += " class=" + statusClass
+		}
+		if failureClass := strings.TrimSpace(failure.FailureClass); failureClass != "" {
+			line += " failure=" + failureClass
+		}
+		if retryPolicy := strings.TrimSpace(failure.RetryPolicy); retryPolicy != "" {
+			line += " retry=" + retryPolicy
+		}
+		if nextAction := strings.TrimSpace(failure.NextAction); nextAction != "" {
+			line += " next=" + quoteStatusField(truncateStatusField(nextAction, 100))
 		}
 		if errText := strings.TrimSpace(failure.ErrorText); errText != "" {
 			line += " error=" + quoteStatusField(truncateStatusField(errText, 120))

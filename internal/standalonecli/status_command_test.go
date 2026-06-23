@@ -50,6 +50,7 @@ func TestRunStatusCommandKVDegradesWhenBuildRevisionUnknown(t *testing.T) {
 		"service_main_pid: 123",
 		"service_running_exec: " + execPath,
 		"service_binary_matches: false",
+		"release_status_class: operational_tension",
 		"release_installed_version: v0.2.2",
 		"next_action: run doctor",
 		"running service binary does not match expected binary",
@@ -145,6 +146,15 @@ func TestRunStatusCommandDoesNotDegradeVerifiedSourceInstallForStaleReleaseMetad
 	}
 	if got.Release.SourceStatus != "source_verified_release_metadata_stale" {
 		t.Fatalf("release source status = %q, want source_verified_release_metadata_stale", got.Release.SourceStatus)
+	}
+	if got.Release.CurrentRevision != "abc123" || got.Release.RunningRevision != "abc123" || got.Release.ExpectedRevision != "abc123" {
+		t.Fatalf("release revisions = current %q running %q expected %q, want abc123/abc123/abc123", got.Release.CurrentRevision, got.Release.RunningRevision, got.Release.ExpectedRevision)
+	}
+	if got.Release.StatusClass != "operational_tension" || got.Release.FailureClass != "release_freshness" || got.Release.RetryPolicy != "refresh_release_metadata" {
+		t.Fatalf("release classification = %#v, want operational release freshness metadata refresh", got.Release)
+	}
+	if !strings.Contains(got.Release.NextAction, "refresh release metadata") {
+		t.Fatalf("release next action = %q, want metadata refresh guidance", got.Release.NextAction)
 	}
 	if statusIssueCodePresent(got.IssueRecords, "release_update_available") {
 		t.Fatalf("issue records = %#v, should not degrade verified source install for stale release metadata", got.IssueRecords)

@@ -1,0 +1,72 @@
+//go:build linux
+
+package runtime
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
+)
+
+func TestSystemStatusSnapshotProjectsPersistenceHealth(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7801, UserID: 0, Scope: telegramDMScopeRef(7801)}
+	if err := store.RecordPersistenceLatencyClassification(key, "execution_events:mission_assessment", 150*time.Millisecond, time.Now().UTC()); err != nil {
+		t.Fatalf("RecordPersistenceLatencyClassification() err = %v", err)
+	}
+
+	snapshot, err := rt.SystemStatusSnapshot(core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("SystemStatusSnapshot() err = %v", err)
+	}
+	if snapshot.PersistenceHealth.Status != "degraded" || snapshot.PersistenceHealth.RecentSlow != 1 {
+		t.Fatalf("persistence health = %#v, want one degraded slow-write classification", snapshot.PersistenceHealth)
+	}
+	if snapshot.PersistenceHealth.FailureClass != core.ReliabilityFailurePersistenceLatency ||
+		snapshot.PersistenceHealth.RetryPolicy != core.ReliabilityRetryBatchBackpressure {
+		t.Fatalf("persistence classification = %#v, want latency with batching/backpressure", snapshot.PersistenceHealth)
+	}
+	if !strings.Contains(snapshot.PersistenceHealth.NextAction, "batching") {
+		t.Fatalf("persistence next action = %q, want batching guidance", snapshot.PersistenceHealth.NextAction)
+	}
+}
+
+func TestDoctorPersistenceHealthIncludesSlowWriteClassification(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7802, UserID: 0, Scope: telegramDMScopeRef(7802)}
+	now := time.Now().UTC()
+	if err := store.RecordPersistenceLatencyClassification(key, "execution_events:background_recommendation", 125*time.Millisecond, now); err != nil {
+		t.Fatalf("RecordPersistenceLatencyClassification() err = %v", err)
+	}
+
+	var b strings.Builder
+	rt.writeDoctorPersistenceHealth(&b, now.Add(time.Second))
+	report := b.String()
+	for _, want := range []string{
+		`persistence_health_status="degraded"`,
+		`persistence_health_slow_writes="1"`,
+		`persistence_health_status_class="operational_tension"`,
+		`persistence_health_failure_class="persistence_latency"`,
+		`persistence_health_retry_policy="batch_or_backpressure"`,
+		`persistence_health_last_component="execution_events:background_recommendation"`,
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("persistence health report = %s, want %s", report, want)
+		}
+	}
+}
