@@ -116,7 +116,11 @@ func TestRecordNextActionPersistsStructuredOperationPayload(t *testing.T) {
 		t.Fatalf("open next actions = %#v, want one", open)
 	}
 	got := open[0]
-	if got.OperationKind != "native_file_read" || got.OperationTool != "read_file" || got.OperationInputJSON != `{"path":"README.md","full":true}` {
+	var gotInput map[string]any
+	if err := json.Unmarshal([]byte(got.OperationInputJSON), &gotInput); err != nil {
+		t.Fatalf("unmarshal stored operation input: %v", err)
+	}
+	if got.OperationKind != "native_file_read" || got.OperationTool != "read_file" || gotInput["path"] != "README.md" || gotInput["full"] != true {
 		t.Fatalf("operation payload = kind=%q tool=%q input=%s", got.OperationKind, got.OperationTool, got.OperationInputJSON)
 	}
 	events, err := store.ExecutionEventsBySession(key, 0, 10)

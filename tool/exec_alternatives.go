@@ -120,11 +120,11 @@ func nativeFileAlternative(command string, cause error) (shellRejectionAlternati
 			State:              session.NextActionReadyToExecute,
 			OperationKind:      "native_file_read",
 			OperationTool:      "read_file",
-			OperationInputJSON: mustJSON(input),
+			OperationInputJSON: mustJSON(recommendedShellAlternativeInput(input)),
 			NextAction:         "read the file through the scoped native file tool",
 			RequiredAuthority:  "file_read",
 			RetryPolicy:        "use_structured_tool_not_raw_shell",
-			OperatorProjection: fmt.Sprintf("Raw shell was rejected, but this can be inspected with read_file for %s.", path),
+			OperatorProjection: fmt.Sprintf("Raw shell was rejected. Recommended next action: inspect with read_file for %s.", shellAlternativeDisplay(path)),
 			Reason:             shellRejectionReasonFromError(cause),
 		}, true
 	case "ls", "find":
@@ -136,11 +136,11 @@ func nativeFileAlternative(command string, cause error) (shellRejectionAlternati
 			State:              session.NextActionReadyToExecute,
 			OperationKind:      "native_directory_list",
 			OperationTool:      "list_dir",
-			OperationInputJSON: mustJSON(map[string]any{"path": path, "limit": 100}),
+			OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"path": path, "limit": 100})),
 			NextAction:         "list the directory through the scoped native file tool",
 			RequiredAuthority:  "file_read",
 			RetryPolicy:        "use_structured_tool_not_raw_shell",
-			OperatorProjection: fmt.Sprintf("Raw shell was rejected, but this can be inspected with list_dir for %s.", path),
+			OperatorProjection: fmt.Sprintf("Raw shell was rejected. Recommended next action: inspect with list_dir for %s.", shellAlternativeDisplay(path)),
 			Reason:             shellRejectionReasonFromError(cause),
 		}, true
 	case "rg", "grep", "egrep", "fgrep":
@@ -155,11 +155,11 @@ func nativeFileAlternative(command string, cause error) (shellRejectionAlternati
 			State:              session.NextActionReadyToExecute,
 			OperationKind:      "native_text_search",
 			OperationTool:      "search",
-			OperationInputJSON: mustJSON(map[string]any{"query": query, "path": path, "limit": 50}),
+			OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"query": query, "path": path, "limit": 50})),
 			NextAction:         "search through the scoped native search tool",
 			RequiredAuthority:  "file_read",
 			RetryPolicy:        "use_structured_tool_not_raw_shell",
-			OperatorProjection: "Raw shell was rejected, but this can be inspected with the native search tool.",
+			OperatorProjection: "Raw shell was rejected. Recommended next action: inspect with the native search tool.",
 			Reason:             shellRejectionReasonFromError(cause),
 		}, true
 	default:
@@ -209,12 +209,12 @@ func canonicalExecAlternative(command string, rawWorkdir string, cause error) (s
 		State:              session.NextActionReadyToExecute,
 		OperationKind:      operationKind,
 		OperationTool:      "exec",
-		OperationInputJSON: mustJSON(input),
+		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(input)),
 		NextAction:         "run the canonical confined command instead of the rejected raw shell shape",
 		RequiredAuthority:  requiredAuthority,
 		Verifier:           verifier,
 		RetryPolicy:        "use_canonical_confined_exec",
-		OperatorProjection: fmt.Sprintf("Raw shell was rejected, but the bounded alternative is %s.", canonical),
+		OperatorProjection: fmt.Sprintf("Raw shell was rejected. Recommended bounded alternative: %s.", shellAlternativeDisplay(canonical)),
 		Reason:             shellRejectionReasonFromError(cause),
 	}, true
 }
@@ -229,9 +229,11 @@ func splitEffectPlanAlternative(command string, plan commandeffect.EffectPlan, c
 		}
 		segmentPlan := commandeffect.PlanCommand(segment)
 		effect := commandeffect.RepresentativeEffect(segmentPlan)
+		normalizedSegment := commandeffect.NormalizeCommand(segment)
 		steps = append(steps, map[string]any{
 			"ordinal":            len(steps) + 1,
-			"command":            session.RedactEvidenceText(commandeffect.NormalizeCommand(segment)).Text,
+			"command_hash":       session.EffectAttemptCommandHash(normalizedSegment),
+			"command_preview":    session.RedactEvidenceText(normalizedSegment).Text,
 			"effect_kind":        string(effect.Kind),
 			"effect_reason":      strings.TrimSpace(effect.Reason),
 			"required_authority": requiredAuthorityForEffect(effect),
@@ -251,7 +253,7 @@ func splitEffectPlanAlternative(command string, plan commandeffect.EffectPlan, c
 		State:              session.NextActionBlockedNeedsAuthority,
 		OperationKind:      "split_effect_plan",
 		OperationTool:      "update_operation",
-		OperationInputJSON: mustJSON(map[string]any{"reason": shellRejectionReason(plan, cause), "steps": steps}),
+		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"reason": shellRejectionReason(plan, cause), "steps": steps})),
 		NextAction:         "split the compound shell into separate typed effect steps before execution",
 		RequiredAuthority:  "split_effect_plan",
 		RetryPolicy:        "do_not_retry_raw_compound_shell",
@@ -270,7 +272,7 @@ func repairOperationAlternative(command string, plan commandeffect.EffectPlan, c
 		State:              session.NextActionWaitingForOperator,
 		OperationKind:      "typed_repair_operation",
 		OperationTool:      "update_operation",
-		OperationInputJSON: mustJSON(map[string]any{"repair_operation_id": op.ID, "required_action": op.RequiredAction, "required_resource": op.RequiredResource, "rejected_shape": op.RejectedShape}),
+		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"repair_operation_id": op.ID, "required_action": op.RequiredAction, "required_resource": op.RequiredResource, "rejected_shape": op.RejectedShape})),
 		NextAction:         op.Summary,
 		RequiredAuthority:  op.RequiredAction,
 		ResourceBlocker:    op.RequiredResource,
@@ -292,7 +294,7 @@ func genericRejectedShellAlternative(command string, plan commandeffect.EffectPl
 		State:              session.NextActionWaitingForOperator,
 		OperationKind:      "typed_operation_required",
 		OperationTool:      "update_operation",
-		OperationInputJSON: mustJSON(map[string]any{"reason": shellRejectionReason(plan, cause), "steps": steps}),
+		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"reason": shellRejectionReason(plan, cause), "steps": steps})),
 		NextAction:         "replace the rejected shell with a typed operation or split plan",
 		RequiredAuthority:  "typed_operation_required",
 		RetryPolicy:        "do_not_retry_unbounded_raw_shell",
@@ -509,6 +511,20 @@ func mustJSON(value any) string {
 		return "{}"
 	}
 	return string(raw)
+}
+
+func recommendedShellAlternativeInput(input map[string]any) map[string]any {
+	out := make(map[string]any, len(input)+2)
+	for key, value := range input {
+		out[key] = value
+	}
+	out["recommendation_only"] = true
+	out["authority_model"] = "existing_tool_or_lease_membrane_required"
+	return out
+}
+
+func shellAlternativeDisplay(value string) string {
+	return session.RedactEvidenceText(strings.TrimSpace(value)).Text
 }
 
 func cleanAlternativePath(path string) string {

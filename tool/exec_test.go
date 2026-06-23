@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/idolum-ai/aphelion/commandeffect"
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -1159,6 +1160,72 @@ func TestExecRejectedDynamicVerificationOffersCanonicalExecNextAction(t *testing
 	}
 }
 
+func TestExecRejectedShellAlternativeRedactsCommandDerivedPayloads(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8844, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+	command := `/usr/bin/rg "Authorization: Bearer bearer-secret-value OPENAI_API_KEY=sk-rejected-secret-value" "https://user:credential-password@example.test/repo?api_key=query-secret-value"`
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":`+strconv.Quote(command)+`}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one redacted shell alternative", open)
+	}
+	action := open[0]
+	if action.OperationKind != "native_text_search" || action.OperationTool != "search" || action.SubjectRef == "" {
+		t.Fatalf("next action = %#v, want native search recommendation with command hash subject", action)
+	}
+	recordText := strings.Join([]string{
+		action.OperationInputJSON,
+		action.OperatorProjection,
+		action.NextAction,
+		action.SubjectRef,
+		strings.Join(action.CausalRefs, "\n"),
+	}, "\n")
+	assertNoShellAlternativeSecrets(t, recordText)
+	for _, want := range []string{"redacted:bearer:", "redacted:api_key:", "redacted:connection_password:", "redacted:url_query:", `"query_fingerprint":"sha256:`, `"path_fingerprint":"sha256:`, `"recommendation_only":true`} {
+		if !strings.Contains(action.OperationInputJSON, want) {
+			t.Fatalf("operation input = %s, want %q", action.OperationInputJSON, want)
+		}
+	}
+
+	events, err := store.ExecutionEventsBySession(key, 0, 10)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	workflowPayload := ""
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventWorkflowNextState {
+			workflowPayload += event.PayloadJSON + "\n"
+		}
+	}
+	if workflowPayload == "" {
+		t.Fatalf("events = %#v, want workflow next-state event", events)
+	}
+	assertNoShellAlternativeSecrets(t, workflowPayload)
+	for _, want := range []string{"redacted:bearer:", "redacted:api_key:", "redacted:connection_password:", "redacted:url_query:", `"query_fingerprint":"sha256:`, `"path_fingerprint":"sha256:`} {
+		if !strings.Contains(workflowPayload, want) {
+			t.Fatalf("workflow payload = %s, want %q", workflowPayload, want)
+		}
+	}
+}
+
 func TestExecRejectedMultiAuthorityShellRecordsSplitPlanNextAction(t *testing.T) {
 	t.Parallel()
 
@@ -1806,6 +1873,15 @@ func mustNextActionInputMap(t *testing.T, action session.NextActionRecord) map[s
 		t.Fatalf("unmarshal operation input %q: %v", action.OperationInputJSON, err)
 	}
 	return input
+}
+
+func assertNoShellAlternativeSecrets(t *testing.T, text string) {
+	t.Helper()
+	for _, forbidden := range []string{"bearer-secret-value", "sk-rejected-secret-value", "credential-password", "query-secret-value"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("stored shell alternative leaked %q:\n%s", forbidden, text)
+		}
+	}
 }
 
 func stringSliceContainsForTest(values []string, want string) bool {

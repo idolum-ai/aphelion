@@ -44,6 +44,8 @@ func recordNextActionTx(tx *sql.Tx, input NextActionInput) (NextActionRecord, er
 		return NextActionRecord{}, err
 	}
 	input.OperationInputJSON = operationInputJSON
+	input.NextAction = RedactEvidenceText(input.NextAction).Text
+	input.OperatorProjection = RedactEvidenceText(input.OperatorProjection).Text
 	scope := defaultScopeForKey(input.Key)
 	sessionID := SessionIDForKey(input.Key)
 	createdAt := input.CreatedAt.UTC()
@@ -398,11 +400,61 @@ func normalizeNextActionOperationInputJSON(raw string) (string, error) {
 	if !json.Valid([]byte(raw)) {
 		return "", fmt.Errorf("next action operation input must be valid JSON")
 	}
+	var payload any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "", fmt.Errorf("decode next action operation input: %w", err)
+	}
+	sanitized, err := json.Marshal(redactNextActionOperationPayload(payload))
+	if err != nil {
+		return "", fmt.Errorf("redact next action operation input: %w", err)
+	}
 	var compact bytes.Buffer
-	if err := json.Compact(&compact, []byte(raw)); err != nil {
+	if err := json.Compact(&compact, sanitized); err != nil {
 		return "", fmt.Errorf("compact next action operation input: %w", err)
 	}
 	return compact.String(), nil
+}
+
+func redactNextActionOperationPayload(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, child := range v {
+			out[key] = redactNextActionOperationPayload(child)
+			text, ok := child.(string)
+			if !ok || !nextActionOperationFingerprintField(key) {
+				continue
+			}
+			redacted := RedactEvidenceText(text)
+			if !redacted.Redacted {
+				continue
+			}
+			fingerprintKey := normalizeEnumValue(key) + "_fingerprint"
+			if _, exists := v[fingerprintKey]; !exists {
+				out[fingerprintKey] = EffectAttemptCommandHash(text)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, child := range v {
+			out = append(out, redactNextActionOperationPayload(child))
+		}
+		return out
+	case string:
+		return RedactEvidenceText(v).Text
+	default:
+		return value
+	}
+}
+
+func nextActionOperationFingerprintField(field string) bool {
+	switch normalizeEnumValue(field) {
+	case "command", "command_preview", "path", "query", "snippet", "shell", "rejected_shell", "workdir", "url":
+		return true
+	default:
+		return false
+	}
 }
 
 func nextActionOperationPayload(input NextActionInput) map[string]any {
