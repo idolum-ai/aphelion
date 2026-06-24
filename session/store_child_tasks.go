@@ -694,11 +694,21 @@ func (s *SQLiteStore) PendingChildTaskOutcomeIntents(limit int) ([]ChildTaskOutc
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	rows, err := s.db.Query(childTaskOutcomeIntentSelectSQL()+`
-		WHERE status IN (?, ?)
-			AND (next_attempt_at = '' OR next_attempt_at <= ?)
+		WHERE (
+				(status IN (?, ?) AND (next_attempt_at = '' OR next_attempt_at <= ?))
+				OR (status = ? AND lease_expires_at != '' AND lease_expires_at <= ?)
+			)
+			AND NOT EXISTS (
+				SELECT 1
+				FROM child_task_outcome_intents predecessor
+				WHERE predecessor.result_id = child_task_outcome_intents.result_id
+					AND predecessor.sequence < child_task_outcome_intents.sequence
+					AND predecessor.status != ?
+			)
 		ORDER BY updated_at ASC, sequence ASC, intent_id ASC
 		LIMIT ?
-	`, string(ChildTaskOutcomeIntentPending), string(ChildTaskOutcomeIntentRetryable), now, limit)
+	`, string(ChildTaskOutcomeIntentPending), string(ChildTaskOutcomeIntentRetryable), now,
+		string(ChildTaskOutcomeIntentApplying), now, string(ChildTaskOutcomeIntentApplied), limit)
 	if err != nil {
 		return nil, fmt.Errorf("query pending child task outcome intents: %w", err)
 	}

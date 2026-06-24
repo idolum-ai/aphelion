@@ -160,7 +160,7 @@ func TestDurableWakeCommitsChildOutcomeBeforeFinalizeFailure(t *testing.T) {
 
 	err = rt.pollDurableWakeAgents(context.Background(), time.Now().UTC())
 	if err != nil {
-		t.Fatalf("pollDurableWakeAgents() err = %v, want committed outcome with retryable finalizer intent", err)
+		t.Fatalf("pollDurableWakeAgents() err = %v, want committed outcome with non-durable finalizer warning", err)
 	}
 	if !adapter.finalized {
 		t.Fatal("adapter finalize was not called")
@@ -200,8 +200,13 @@ func TestDurableWakeCommitsChildOutcomeBeforeFinalizeFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChildTaskOutcomeIntentsForResult() err = %v", err)
 	}
-	if len(intents) == 0 || intents[0].Status != session.ChildTaskOutcomeIntentRetryable {
-		t.Fatalf("intents = %#v, want retryable post-outcome finalizer intent", intents)
+	for _, intent := range intents {
+		if intent.Kind == session.ChildTaskOutcomeIntentGenericFinalize {
+			t.Fatalf("intents = %#v, want no restart-irreparable generic finalizer intent", intents)
+		}
+	}
+	if len(intents) != 1 || intents[0].Kind != session.ChildTaskOutcomeIntentPolicyApplied || intents[0].Status != session.ChildTaskOutcomeIntentApplied {
+		t.Fatalf("intents = %#v, want applied durable policy intent only", intents)
 	}
 }
 
@@ -302,6 +307,21 @@ func TestDurableWakeScheduledReviewIntentRepairsAfterStoreReopen(t *testing.T) {
 	if result.ResultID == "" {
 		t.Fatal("CommitChildTaskOutcome() returned empty result id")
 	}
+	intents, err := store.ChildTaskOutcomeIntentsForResult(result.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskOutcomeIntentsForResult(before reopen) err = %v", err)
+	}
+	if len(intents) != 1 {
+		t.Fatalf("intents before reopen = %#v, want one scheduled-review intent", intents)
+	}
+	if _, ok, err := store.ClaimChildTaskOutcomeIntent(session.ChildTaskOutcomeIntentClaimInput{
+		IntentID:       intents[0].IntentID,
+		LeaseOwner:     "test_worker:crashed_after_claim",
+		ClaimedAt:      time.Now().UTC().Add(-2 * time.Second),
+		LeaseExpiresAt: time.Now().UTC().Add(-time.Second),
+	}); err != nil || !ok {
+		t.Fatalf("ClaimChildTaskOutcomeIntent(crashed) ok=%t err=%v", ok, err)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close() err = %v", err)
 	}
@@ -324,12 +344,137 @@ func TestDurableWakeScheduledReviewIntentRepairsAfterStoreReopen(t *testing.T) {
 	if len(events) != 1 || !strings.Contains(events[0].Summary, "Restarted handler applied") {
 		t.Fatalf("PendingReviewEvents() = %#v, want replayed scheduled review artifact", events)
 	}
-	intents, err := reopened.ChildTaskOutcomeIntentsForResult(result.ResultID)
+	intents, err = reopened.ChildTaskOutcomeIntentsForResult(result.ResultID)
 	if err != nil {
 		t.Fatalf("ChildTaskOutcomeIntentsForResult() err = %v", err)
 	}
 	if len(intents) != 1 || intents[0].Status != session.ChildTaskOutcomeIntentApplied {
 		t.Fatalf("intents = %#v, want applied scheduled review intent after restart", intents)
+	}
+	if err := rt.applyScheduledReviewOutcomeIntent(intents[0]); err != nil {
+		t.Fatalf("applyScheduledReviewOutcomeIntent(replay) err = %v", err)
+	}
+	events, err = reopened.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents(after replay) err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("PendingReviewEvents(after replay) = %#v, want idempotent single artifact", events)
+	}
+	state, err := reopened.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if len(continuity.ReviewRefs) != 1 || continuity.ReviewRefs[0].ReviewEventID != events[0].ID {
+		t.Fatalf("continuity review refs = %#v, want one idempotent review ref for event %d", continuity.ReviewRefs, events[0].ID)
+	}
+}
+
+func TestDurableWakeFailedOutcomeRecordsPolicyFailureAfterStoreReopen(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	_ = provider
+	_ = sender
+	agent := core.DurableAgent{
+		AgentID:            "idolum-policy-failure-restart",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "test_adapter",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Verify failed outcome policy state is repairable.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: durableWakeSyntheticChatID(agent.AgentID), Scope: durableAgentScopeRef(agent)}
+	now := time.Date(2026, 6, 24, 1, 20, 0, 0, time.UTC)
+	packet, err := store.RecordChildTaskPacket(session.ChildTaskPacketInput{
+		PacketID:  "child_task:policy_failure_restart",
+		AgentID:   agent.AgentID,
+		Key:       key,
+		TaskKind:  "durable_wake",
+		InputJSON: `{}`,
+		CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskPacket() err = %v", err)
+	}
+	claim, err := store.ClaimChildTaskAttempt(session.ChildTaskAttemptClaimInput{
+		PacketID:       packet.PacketID,
+		AttemptID:      "child_attempt:policy_failure_restart",
+		LeaseOwner:     "test_worker:policy_failure_restart",
+		AgentID:        agent.AgentID,
+		Key:            key,
+		ClaimedAt:      now.Add(time.Second),
+		LeaseExpiresAt: now.Add(10 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("ClaimChildTaskAttempt() err = %v", err)
+	}
+	wakeErr := errors.New("provider failed after child admission")
+	result, err := store.CommitChildTaskOutcome(session.ChildTaskOutcomeCommitInput{
+		Result: session.NormalizeChildTaskResultInput(session.ChildTaskResultInput{
+			PacketID:        packet.PacketID,
+			AttemptID:       claim.ActiveAttemptID,
+			LeaseOwner:      claim.LeaseOwner,
+			LeaseGeneration: claim.LeaseGeneration,
+			FencingToken:    claim.FencingToken,
+			AgentID:         agent.AgentID,
+			Key:             key,
+			Status:          session.ChildTaskResultFailed,
+			NextState:       session.NextActionBlockedNeedsResourceRepair,
+			Summary:         "Child wake failed before model completion.",
+			ErrorText:       wakeErr.Error(),
+			CreatedAt:       now.Add(2 * time.Second),
+		}),
+		OutcomeIntents: durableWakeOutcomeIntentInputs(agent, durableWakeTurnPlan{}, nil, session.ChildTaskResultFailed, "Child wake failed before model completion.", wakeErr, now.Add(2*time.Second)),
+		ResolvedAt:     now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("CommitChildTaskOutcome() err = %v", err)
+	}
+	if result.ResultID == "" {
+		t.Fatal("CommitChildTaskOutcome() returned empty result id")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() err = %v", err)
+	}
+	reopened, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen) err = %v", err)
+	}
+	defer reopened.Close()
+	rt, err := New(cfg, reopened, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New(reopened) err = %v", err)
+	}
+	if err := rt.processPendingDurableWakeOutcomeIntents(context.Background(), 100); err != nil {
+		t.Fatalf("processPendingDurableWakeOutcomeIntents() err = %v", err)
+	}
+	state, err := reopened.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	if state.LastApplyStatus != "failed" || !strings.Contains(state.LastApplyError, "provider failed") {
+		t.Fatalf("DurableAgentState() = %#v, want recovered policy failure marker", state)
+	}
+	intents, err := reopened.ChildTaskOutcomeIntentsForResult(result.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskOutcomeIntentsForResult() err = %v", err)
+	}
+	if len(intents) != 1 || intents[0].Kind != session.ChildTaskOutcomeIntentPolicyApplyFailed || intents[0].Status != session.ChildTaskOutcomeIntentApplied {
+		t.Fatalf("intents = %#v, want applied policy failure intent", intents)
 	}
 }
 

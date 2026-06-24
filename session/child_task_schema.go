@@ -201,5 +201,29 @@ func migrateSchemaV79ToV80(tx *sql.Tx) error {
 }
 
 func migrateSchemaV80ToV81(tx *sql.Tx) error {
-	return ensureChildTaskTables(tx)
+	if err := ensureChildTaskTables(tx); err != nil {
+		return err
+	}
+	return ensureReviewEventIdempotencyKey(tx)
+}
+
+func ensureReviewEventIdempotencyKey(tx *sql.Tx) error {
+	exists, err := schemaTableExists(tx, "review_events")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	if err := addSchemaColumnIfMissing(tx, schemaColumnMigration{
+		table:     "review_events",
+		column:    "idempotency_key",
+		statement: `ALTER TABLE review_events ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''`,
+	}); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_review_events_idempotency_key ON review_events(idempotency_key) WHERE idempotency_key != ''`); err != nil {
+		return fmt.Errorf("ensure review event idempotency index: %w", err)
+	}
+	return nil
 }

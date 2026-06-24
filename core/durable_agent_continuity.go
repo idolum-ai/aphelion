@@ -143,6 +143,13 @@ func (s DurableAgentContinuityState) Marshal() (string, error) {
 
 func (s DurableAgentContinuityState) WithReviewArtifact(reviewEventID int64, artifact DurableReviewArtifact, at time.Time) DurableAgentContinuityState {
 	s = NormalizeDurableAgentContinuityState(s)
+	if reviewEventID > 0 {
+		for _, ref := range s.ReviewRefs {
+			if ref.ReviewEventID == reviewEventID {
+				return s
+			}
+		}
+	}
 	at = at.UTC()
 	summary := normalizeDurableAgentText(artifact.Summary)
 	source := normalizeDurableAgentText(artifact.Metadata["sender_name"])

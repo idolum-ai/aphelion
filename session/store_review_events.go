@@ -36,22 +36,37 @@ func (s *SQLiteStore) InsertReviewEvent(event ReviewEvent) (int64, error) {
 	if strings.TrimSpace(event.TargetSessionID) == "" {
 		event.TargetSessionID = SessionIDFromParts(event.TargetAdminChatID, 0, event.TargetScope)
 	}
+	event.IdempotencyKey = strings.TrimSpace(event.IdempotencyKey)
+	if event.IdempotencyKey != "" {
+		if id, ok, err := s.reviewEventIDByIdempotencyKey(event.IdempotencyKey); err != nil {
+			return 0, err
+		} else if ok {
+			return id, nil
+		}
+	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	res, err := s.db.Exec(`
 		INSERT INTO review_events(
 			source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
 			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
-			turn_from, turn_to, summary, metadata_json, status, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			turn_from, turn_to, summary, metadata_json, idempotency_key, status, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		nullableString(event.SourceSessionID), event.SourceChatID, event.SourceUserID, event.SourceRole,
 		string(event.SourceScope.Kind), event.SourceScope.ID, event.SourceScope.DurableAgentID,
 		nullableString(event.TargetSessionID), event.TargetAdminChatID,
 		string(event.TargetScope.Kind), event.TargetScope.ID, event.TargetScope.DurableAgentID,
-		event.TurnFrom, event.TurnTo, event.Summary, nullableString(event.MetadataJSON), status, now,
+		event.TurnFrom, event.TurnTo, event.Summary, nullableString(event.MetadataJSON), event.IdempotencyKey, status, now,
 	)
 	if err != nil {
+		if event.IdempotencyKey != "" && strings.Contains(strings.ToLower(err.Error()), "unique") {
+			if id, ok, lookupErr := s.reviewEventIDByIdempotencyKey(event.IdempotencyKey); lookupErr != nil {
+				return 0, lookupErr
+			} else if ok {
+				return id, nil
+			}
+		}
 		return 0, fmt.Errorf("enqueue review event: %w", err)
 	}
 	id, err := res.LastInsertId()
@@ -59,6 +74,21 @@ func (s *SQLiteStore) InsertReviewEvent(event ReviewEvent) (int64, error) {
 		return 0, fmt.Errorf("review event last insert id: %w", err)
 	}
 	return id, nil
+}
+
+func (s *SQLiteStore) reviewEventIDByIdempotencyKey(key string) (int64, bool, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return 0, false, nil
+	}
+	var id int64
+	if err := s.db.QueryRow(`SELECT id FROM review_events WHERE idempotency_key = ?`, key).Scan(&id); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("lookup review event by idempotency key: %w", err)
+	}
+	return id, true, nil
 }
 
 func (s *SQLiteStore) EnqueueReviewEvent(event ReviewEvent) error {
@@ -78,7 +108,7 @@ func (s *SQLiteStore) PendingReviewEvents(targetChatID int64, limit int) ([]Revi
 		SELECT
 			id, source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
 			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
-			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at, delivery_message_id
+			turn_from, turn_to, summary, metadata_json, idempotency_key, status, created_at, delivered_at, delivery_message_id
 		FROM review_events
 		WHERE target_chat_id = ? AND status = 'pending'
 		ORDER BY created_at ASC, id ASC
@@ -112,7 +142,7 @@ func (s *SQLiteStore) PendingReviewEventsAll(limit int) ([]ReviewEvent, error) {
 		SELECT
 			id, source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
 			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
-			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at, delivery_message_id
+			turn_from, turn_to, summary, metadata_json, idempotency_key, status, created_at, delivered_at, delivery_message_id
 		FROM review_events
 		WHERE status = 'pending'
 		ORDER BY created_at ASC, id ASC
@@ -145,7 +175,7 @@ func (s *SQLiteStore) ReviewEventsWithRedactedSummary(limit int) ([]ReviewEvent,
 		SELECT
 			id, source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
 			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
-			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at, delivery_message_id
+			turn_from, turn_to, summary, metadata_json, idempotency_key, status, created_at, delivered_at, delivery_message_id
 		FROM review_events
 		WHERE summary LIKE ? OR metadata_json LIKE ?
 		ORDER BY created_at ASC, id ASC
@@ -259,7 +289,7 @@ func (s *SQLiteStore) DismissPendingCapabilityReviewEvents(targetChatID int64, r
 		SELECT
 			id, source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
 			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
-			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at, delivery_message_id
+			turn_from, turn_to, summary, metadata_json, idempotency_key, status, created_at, delivered_at, delivery_message_id
 		FROM review_events
 		WHERE target_chat_id = ? AND source_role = 'capability_request' AND status IN ('pending', 'delivered') AND id != ? AND metadata_json LIKE ?
 		ORDER BY created_at ASC, id ASC
@@ -317,7 +347,7 @@ func (s *SQLiteStore) ReviewEventByID(id int64) (*ReviewEvent, error) {
 		SELECT
 			id, source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
 			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
-			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at, delivery_message_id
+			turn_from, turn_to, summary, metadata_json, idempotency_key, status, created_at, delivered_at, delivery_message_id
 		FROM review_events
 		WHERE id = ?
 	`, id)
@@ -358,7 +388,7 @@ func scanReviewEvent(scanner interface{ Scan(dest ...any) error }) (ReviewEvent,
 	if err := scanner.Scan(
 		&event.ID, &sourceSessionID, &event.SourceChatID, &event.SourceUserID, &event.SourceRole, &sourceScopeKind, &sourceScopeID, &sourceAgentID,
 		&targetSessionID, &targetChatIDRaw, &targetScopeKind, &targetScopeID, &targetAgentID,
-		&turnFromRaw, &turnToRaw, &event.Summary, &metadataJSON, &event.Status, &createdAtRaw, &deliveredAtRaw, &deliveryMessageIDRaw,
+		&turnFromRaw, &turnToRaw, &event.Summary, &metadataJSON, &event.IdempotencyKey, &event.Status, &createdAtRaw, &deliveredAtRaw, &deliveryMessageIDRaw,
 	); err != nil {
 		return ReviewEvent{}, fmt.Errorf("scan review event: %w", err)
 	}

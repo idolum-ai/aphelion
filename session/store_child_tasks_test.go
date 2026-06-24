@@ -861,6 +861,113 @@ func TestChildTaskOutcomeIntentClaimRetryAndResultScopedLookup(t *testing.T) {
 	}
 }
 
+func TestPendingChildTaskOutcomeIntentsIncludesExpiredApplyingAndBlocksSuccessors(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 7720, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindDurableAgent, ID: "child-sequence", DurableAgentID: "child-sequence"}}
+	now := time.Now().UTC().Round(0)
+	packet, err := store.RecordChildTaskPacket(ChildTaskPacketInput{
+		PacketID:  "child_task:sequence",
+		AgentID:   "child-sequence",
+		Key:       key,
+		TaskKind:  "durable_wake",
+		InputJSON: `{}`,
+		CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskPacket() err = %v", err)
+	}
+	claim := claimChildTaskAttemptForTest(t, store, key, packet.PacketID, "child_attempt:sequence", now.Add(time.Second))
+	result, err := store.CommitChildTaskOutcome(ChildTaskOutcomeCommitInput{
+		Result: NormalizeChildTaskResultInput(ChildTaskResultInput{
+			PacketID:        packet.PacketID,
+			AttemptID:       claim.ActiveAttemptID,
+			LeaseOwner:      claim.LeaseOwner,
+			LeaseGeneration: claim.LeaseGeneration,
+			FencingToken:    claim.FencingToken,
+			AgentID:         "child-sequence",
+			Key:             key,
+			Status:          ChildTaskResultCompleted,
+			Summary:         "done",
+			CreatedAt:       now.Add(2 * time.Second),
+		}),
+		OutcomeIntents: []ChildTaskOutcomeIntentInput{
+			{
+				Kind:        ChildTaskOutcomeIntentScheduledReview,
+				Sequence:    10,
+				PayloadJSON: `{"agent_id":"child-sequence"}`,
+				ResultRef:   "scheduled_review:child-sequence",
+			},
+			{
+				Kind:        ChildTaskOutcomeIntentPolicyApplied,
+				Sequence:    20,
+				PayloadJSON: `{"agent_id":"child-sequence"}`,
+				ResultRef:   "durable_policy_applied:child-sequence",
+			},
+		},
+		ResolvedAt: now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("CommitChildTaskOutcome() err = %v", err)
+	}
+	intents, err := store.ChildTaskOutcomeIntentsForResult(result.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskOutcomeIntentsForResult() err = %v", err)
+	}
+	if len(intents) != 2 {
+		t.Fatalf("intents = %#v, want two ordered intents", intents)
+	}
+	first := intents[0]
+	claimed, ok, err := store.ClaimChildTaskOutcomeIntent(ChildTaskOutcomeIntentClaimInput{
+		IntentID:       first.IntentID,
+		LeaseOwner:     "worker:crash",
+		ClaimedAt:      time.Now().UTC().Add(-2 * time.Second),
+		LeaseExpiresAt: time.Now().UTC().Add(-time.Second),
+	})
+	if err != nil || !ok {
+		t.Fatalf("ClaimChildTaskOutcomeIntent(first) intent=%#v ok=%t err=%v", claimed, ok, err)
+	}
+	pending, err := store.PendingChildTaskOutcomeIntents(10)
+	if err != nil {
+		t.Fatalf("PendingChildTaskOutcomeIntents(expired applying) err = %v", err)
+	}
+	if len(pending) != 1 || pending[0].IntentID != first.IntentID {
+		t.Fatalf("pending expired applying = %#v, want only expired first intent", pending)
+	}
+	claimed, ok, err = store.ClaimChildTaskOutcomeIntent(ChildTaskOutcomeIntentClaimInput{
+		IntentID:       first.IntentID,
+		LeaseOwner:     "worker:reclaim",
+		ClaimedAt:      time.Now().UTC(),
+		LeaseExpiresAt: time.Now().UTC().Add(10 * time.Second),
+	})
+	if err != nil || !ok || claimed.LeaseOwner != "worker:reclaim" {
+		t.Fatalf("ClaimChildTaskOutcomeIntent(expired applying) intent=%#v ok=%t err=%v, want reclaimed", claimed, ok, err)
+	}
+	if err := store.RetryChildTaskOutcomeIntent(ChildTaskOutcomeIntentRetryInput{
+		IntentID:        claimed.IntentID,
+		LeaseOwner:      claimed.LeaseOwner,
+		LeaseGeneration: claimed.LeaseGeneration,
+		FencingToken:    claimed.FencingToken,
+		LastError:       "transient",
+		AttemptedAt:     now.Add(6 * time.Second),
+		NextAttemptAt:   now.Add(30 * time.Second),
+	}); err != nil {
+		t.Fatalf("RetryChildTaskOutcomeIntent() err = %v", err)
+	}
+	pending, err = store.PendingChildTaskOutcomeIntents(10)
+	if err != nil {
+		t.Fatalf("PendingChildTaskOutcomeIntents(after retry) err = %v", err)
+	}
+	for _, intent := range pending {
+		if intent.ResultID == result.ResultID {
+			t.Fatalf("pending after sequence-10 retry includes blocked successor: %#v", pending)
+		}
+	}
+}
+
 func claimChildTaskAttemptForTest(t *testing.T, store *SQLiteStore, key SessionKey, packetID string, attemptID string, at time.Time) ChildTaskPacket {
 	t.Helper()
 	return claimChildTaskAttemptWithLeaseForTest(t, store, key, packetID, attemptID, "test_worker:"+attemptID, at, at.Add(10*time.Minute))

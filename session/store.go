@@ -167,6 +167,7 @@ func (s *SQLiteStore) init() error {
 			turn_to INTEGER,
 			summary TEXT NOT NULL,
 			metadata_json TEXT,
+			idempotency_key TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'delivered', 'dismissed')),
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			delivered_at TEXT,
@@ -794,6 +795,9 @@ func (s *SQLiteStore) init() error {
 		return err
 	}
 	if err := ensureChildTaskTables(tx); err != nil {
+		return err
+	}
+	if err := ensureReviewEventIdempotencyKey(tx); err != nil {
 		return err
 	}
 	for _, stmt := range telegramIngressSchemaStatements() {

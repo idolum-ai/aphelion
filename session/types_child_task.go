@@ -160,6 +160,7 @@ const (
 	ChildTaskOutcomeIntentScheduledReview       ChildTaskOutcomeIntentKind = "scheduled_review"
 	ChildTaskOutcomeIntentGenericFinalize       ChildTaskOutcomeIntentKind = "generic_finalize"
 	ChildTaskOutcomeIntentPolicyApplied         ChildTaskOutcomeIntentKind = "policy_applied"
+	ChildTaskOutcomeIntentPolicyApplyFailed     ChildTaskOutcomeIntentKind = "policy_apply_failed"
 )
 
 type ChildTaskOutcomeIntentStatus string

@@ -547,12 +547,12 @@ func (r *Runtime) applyScheduledReviewOutcomeIntent(intent session.ChildTaskOutc
 	status := firstNonEmpty(strings.TrimSpace(payload.Status), "completed")
 	if status != "completed" {
 		cause := errors.New(firstNonEmpty(strings.TrimSpace(payload.Error), "scheduled review wake failed"))
-		return r.recordScheduledReviewFailure(*agent, payload.Config, payload.ReviewDate, payload.TurnSummary, cause, now, status)
+		return r.recordScheduledReviewFailureWithIdempotencyKey(*agent, payload.Config, payload.ReviewDate, payload.TurnSummary, cause, now, status, intent.IdempotencyKey)
 	}
 	reviewStart, _ := time.Parse(time.RFC3339, payload.WindowStart)
 	reviewEnd, _ := time.Parse(time.RFC3339, payload.WindowEnd)
 	artifact := scheduledReviewSuccessArtifact(*agent, payload.Config, payload.ReviewDate, reviewStart, reviewEnd, payload.TranscriptPath, payload.MessageCount, payload.TurnSummary)
-	if _, err := durableagent.NewRuntime(r.store).QueueReviewArtifact(*agent, artifact); err != nil {
+	if _, err := durableagent.NewRuntime(r.store).QueueReviewArtifactWithIdempotencyKey(*agent, artifact, intent.IdempotencyKey); err != nil {
 		return fmt.Errorf("queue scheduled review artifact: %w", err)
 	}
 	if err := r.recordScheduledReviewSuccess(agentID, payload.ReviewDate, now); err != nil {
@@ -593,6 +593,10 @@ func scheduledReviewSuccessArtifact(agent core.DurableAgent, cfg scheduledReview
 }
 
 func (r *Runtime) recordScheduledReviewFailure(agent core.DurableAgent, cfg scheduledReviewConfig, reviewDate string, turnSummary string, cause error, now time.Time, status string) error {
+	return r.recordScheduledReviewFailureWithIdempotencyKey(agent, cfg, reviewDate, turnSummary, cause, now, status, "")
+}
+
+func (r *Runtime) recordScheduledReviewFailureWithIdempotencyKey(agent core.DurableAgent, cfg scheduledReviewConfig, reviewDate string, turnSummary string, cause error, now time.Time, status string, idempotencyKey string) error {
 	if r == nil || r.store == nil {
 		return nil
 	}
@@ -613,7 +617,7 @@ func (r *Runtime) recordScheduledReviewFailure(agent core.DurableAgent, cfg sche
 		return err
 	}
 	artifact := scheduledReviewFailureArtifact(agent, cfg, reviewDate, turnSummary, cause, updated, status)
-	if _, err := durableagent.NewRuntime(r.store).QueueReviewArtifact(agent, artifact); err != nil {
+	if _, err := durableagent.NewRuntime(r.store).QueueReviewArtifactWithIdempotencyKey(agent, artifact, idempotencyKey); err != nil {
 		return fmt.Errorf("queue scheduled review failure artifact: %w", err)
 	}
 	return nil
