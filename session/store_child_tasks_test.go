@@ -4,6 +4,8 @@ package session
 
 import (
 	"encoding/json"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -680,6 +682,182 @@ func TestChildTaskOutcomeCommitRecordsIntentWithResultAndNextAction(t *testing.T
 	}
 	if len(intents) != 0 {
 		t.Fatalf("pending intents after applied = %#v, want none", intents)
+	}
+}
+
+func TestCommitChildTaskOutcomeReplayIsValueIdempotent(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 7718, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindDurableAgent, ID: "child-replay", DurableAgentID: "child-replay"}}
+	now := time.Now().UTC().Round(0)
+	packet, err := store.RecordChildTaskPacket(ChildTaskPacketInput{
+		PacketID:  "child_task:replay",
+		AgentID:   "child-replay",
+		Key:       key,
+		TaskKind:  "durable_wake",
+		InputJSON: `{}`,
+		CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskPacket() err = %v", err)
+	}
+	claim := claimChildTaskAttemptForTest(t, store, key, packet.PacketID, "child_attempt:replay", now.Add(time.Second))
+	resultInput := NormalizeChildTaskResultInput(ChildTaskResultInput{
+		PacketID:        packet.PacketID,
+		AttemptID:       claim.ActiveAttemptID,
+		LeaseOwner:      claim.LeaseOwner,
+		LeaseGeneration: claim.LeaseGeneration,
+		FencingToken:    claim.FencingToken,
+		AgentID:         "child-replay",
+		Key:             key,
+		Status:          ChildTaskResultCompleted,
+		Summary:         "same value",
+		CreatedAt:       now.Add(2 * time.Second),
+	})
+	input := ChildTaskOutcomeCommitInput{
+		Result: resultInput,
+		OutcomeIntents: []ChildTaskOutcomeIntentInput{{
+			Kind:        ChildTaskOutcomeIntentPolicyApplied,
+			PayloadJSON: `{"agent_id":"child-replay"}`,
+			ResultRef:   "durable_policy_applied:child-replay",
+		}},
+		ResolvedAt: now.Add(2 * time.Second),
+	}
+	first, err := store.CommitChildTaskOutcome(input)
+	if err != nil {
+		t.Fatalf("CommitChildTaskOutcome(first) err = %v", err)
+	}
+	second, err := store.CommitChildTaskOutcome(input)
+	if err != nil {
+		t.Fatalf("CommitChildTaskOutcome(replay) err = %v", err)
+	}
+	if second.ResultID != first.ResultID || second.ResultFingerprint != first.ResultFingerprint || second.IntentSetFingerprint != first.IntentSetFingerprint {
+		t.Fatalf("replay result = %#v first = %#v, want exact idempotent value", second, first)
+	}
+	divergent := input
+	divergent.Result.Summary = "changed value"
+	if _, err := store.CommitChildTaskOutcome(divergent); err == nil || !strings.Contains(err.Error(), "idempotency conflict") {
+		t.Fatalf("CommitChildTaskOutcome(changed summary) err = %v, want idempotency conflict", err)
+	}
+	divergent = input
+	divergent.OutcomeIntents = append([]ChildTaskOutcomeIntentInput(nil), input.OutcomeIntents...)
+	divergent.OutcomeIntents[0].PayloadJSON = `{"agent_id":"different"}`
+	if _, err := store.CommitChildTaskOutcome(divergent); err == nil || !strings.Contains(err.Error(), "idempotency conflict") {
+		t.Fatalf("CommitChildTaskOutcome(changed intents) err = %v, want idempotency conflict", err)
+	}
+}
+
+func TestChildTaskOutcomeIntentClaimRetryAndResultScopedLookup(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 7719, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindDurableAgent, ID: "child-intents", DurableAgentID: "child-intents"}}
+	now := time.Now().UTC().Round(0)
+	var targetResult ChildTaskResult
+	for i := 0; i < 102; i++ {
+		packetID := "child_task:intent_scope_" + strconv.Itoa(i)
+		agentID := "child-intents-" + strconv.Itoa(i)
+		packet, err := store.RecordChildTaskPacket(ChildTaskPacketInput{
+			PacketID:  packetID,
+			AgentID:   agentID,
+			Key:       key,
+			TaskKind:  "durable_wake",
+			InputJSON: `{}`,
+			CreatedAt: now.Add(time.Duration(i) * time.Millisecond),
+		})
+		if err != nil {
+			t.Fatalf("RecordChildTaskPacket(%d) err = %v", i, err)
+		}
+		claim := claimChildTaskAttemptForTest(t, store, key, packet.PacketID, "child_attempt:intent_scope_"+strconv.Itoa(i), now.Add(time.Second+time.Duration(i)*time.Millisecond))
+		result, err := store.CommitChildTaskOutcome(ChildTaskOutcomeCommitInput{
+			Result: NormalizeChildTaskResultInput(ChildTaskResultInput{
+				PacketID:        packet.PacketID,
+				AttemptID:       claim.ActiveAttemptID,
+				LeaseOwner:      claim.LeaseOwner,
+				LeaseGeneration: claim.LeaseGeneration,
+				FencingToken:    claim.FencingToken,
+				AgentID:         agentID,
+				Key:             key,
+				Status:          ChildTaskResultCompleted,
+				Summary:         "done",
+				CreatedAt:       now.Add(2*time.Second + time.Duration(i)*time.Millisecond),
+			}),
+			OutcomeIntents: []ChildTaskOutcomeIntentInput{{
+				Kind:        ChildTaskOutcomeIntentPolicyApplied,
+				PayloadJSON: `{"agent_id":"` + agentID + `"}`,
+				ResultRef:   "durable_policy_applied:" + agentID,
+			}},
+			ResolvedAt: now.Add(2*time.Second + time.Duration(i)*time.Millisecond),
+		})
+		if err != nil {
+			t.Fatalf("CommitChildTaskOutcome(%d) err = %v", i, err)
+		}
+		if i == 101 {
+			targetResult = result
+		}
+	}
+	scoped, err := store.ChildTaskOutcomeIntentsForResult(targetResult.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskOutcomeIntentsForResult() err = %v", err)
+	}
+	if len(scoped) != 1 || scoped[0].ResultID != targetResult.ResultID {
+		t.Fatalf("scoped intents = %#v, want target result intent past first 100 pending rows", scoped)
+	}
+	claimed, ok, err := store.ClaimChildTaskOutcomeIntent(ChildTaskOutcomeIntentClaimInput{
+		IntentID:       scoped[0].IntentID,
+		LeaseOwner:     "worker:test",
+		ClaimedAt:      now.Add(3 * time.Second),
+		LeaseExpiresAt: now.Add(8 * time.Second),
+	})
+	if err != nil || !ok {
+		t.Fatalf("ClaimChildTaskOutcomeIntent() intent=%#v ok=%t err=%v", claimed, ok, err)
+	}
+	if err := store.RetryChildTaskOutcomeIntent(ChildTaskOutcomeIntentRetryInput{
+		IntentID:        claimed.IntentID,
+		LeaseOwner:      claimed.LeaseOwner,
+		LeaseGeneration: claimed.LeaseGeneration,
+		FencingToken:    claimed.FencingToken,
+		LastError:       "temporary",
+		AttemptedAt:     now.Add(4 * time.Second),
+		NextAttemptAt:   now.Add(10 * time.Second),
+	}); err != nil {
+		t.Fatalf("RetryChildTaskOutcomeIntent() err = %v", err)
+	}
+	pending, err := store.PendingChildTaskOutcomeIntents(200)
+	if err != nil {
+		t.Fatalf("PendingChildTaskOutcomeIntents() err = %v", err)
+	}
+	for _, intent := range pending {
+		if intent.IntentID == claimed.IntentID {
+			t.Fatalf("retryable future intent appeared in pending list: %#v", intent)
+		}
+	}
+	claimed, ok, err = store.ClaimChildTaskOutcomeIntent(ChildTaskOutcomeIntentClaimInput{
+		IntentID:       scoped[0].IntentID,
+		LeaseOwner:     "worker:test-2",
+		ClaimedAt:      now.Add(11 * time.Second),
+		LeaseExpiresAt: now.Add(16 * time.Second),
+	})
+	if err != nil || !ok {
+		t.Fatalf("ClaimChildTaskOutcomeIntent(retryable) intent=%#v ok=%t err=%v", claimed, ok, err)
+	}
+	if err := store.CompleteChildTaskOutcomeIntent(ChildTaskOutcomeIntentCompletionInput{
+		IntentID:        claimed.IntentID,
+		LeaseOwner:      claimed.LeaseOwner,
+		LeaseGeneration: claimed.LeaseGeneration,
+		FencingToken:    claimed.FencingToken,
+		CompletedAt:     now.Add(12 * time.Second),
+	}); err != nil {
+		t.Fatalf("CompleteChildTaskOutcomeIntent() err = %v", err)
+	}
+	applied, ok, err := store.ChildTaskOutcomeIntent(claimed.IntentID)
+	if err != nil || !ok || applied.Status != ChildTaskOutcomeIntentApplied {
+		t.Fatalf("ChildTaskOutcomeIntent() intent=%#v ok=%t err=%v, want applied", applied, ok, err)
 	}
 }
 

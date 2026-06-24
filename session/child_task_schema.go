@@ -58,6 +58,8 @@ func ensureChildTaskTables(tx *sql.Tx) error {
 			error_text TEXT NOT NULL DEFAULT '',
 			evidence_refs_json TEXT NOT NULL DEFAULT '[]',
 			next_state TEXT NOT NULL DEFAULT '',
+			result_fingerprint TEXT NOT NULL DEFAULT '',
+			intent_set_fingerprint TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			FOREIGN KEY (packet_id) REFERENCES child_task_packets(packet_id) ON DELETE CASCADE
 		)`,
@@ -68,13 +70,21 @@ func ensureChildTaskTables(tx *sql.Tx) error {
 			attempt_id TEXT NOT NULL DEFAULT '',
 			kind TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending',
+			sequence INTEGER NOT NULL DEFAULT 100,
 			payload_json TEXT NOT NULL DEFAULT '{}',
 			result_ref TEXT NOT NULL DEFAULT '',
+			idempotency_key TEXT NOT NULL DEFAULT '',
+			lease_owner TEXT NOT NULL DEFAULT '',
+			lease_generation INTEGER NOT NULL DEFAULT 0,
+			fencing_token TEXT NOT NULL DEFAULT '',
+			lease_expires_at TEXT NOT NULL DEFAULT '',
+			next_attempt_at TEXT NOT NULL DEFAULT '',
 			attempts INTEGER NOT NULL DEFAULT 0,
 			last_error TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 			applied_at TEXT,
+			dead_letter_at TEXT,
 			FOREIGN KEY (packet_id) REFERENCES child_task_packets(packet_id) ON DELETE CASCADE,
 			FOREIGN KEY (result_id) REFERENCES child_task_results(result_id) ON DELETE CASCADE
 		)`,
@@ -94,8 +104,9 @@ func ensureChildTaskTables(tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_child_task_results_packet_attempt ON child_task_results(packet_id, attempt_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS ux_child_task_results_packet_attempt ON child_task_results(packet_id, attempt_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_child_task_results_agent ON child_task_results(agent_id, created_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_child_task_outcome_intents_status ON child_task_outcome_intents(status, updated_at ASC)`,
+		`CREATE INDEX IF NOT EXISTS idx_child_task_outcome_intents_status ON child_task_outcome_intents(status, next_attempt_at ASC, updated_at ASC)`,
 		`CREATE INDEX IF NOT EXISTS idx_child_task_outcome_intents_packet ON child_task_outcome_intents(packet_id, status, updated_at ASC)`,
+		`CREATE INDEX IF NOT EXISTS idx_child_task_outcome_intents_result ON child_task_outcome_intents(result_id, sequence ASC, intent_id ASC)`,
 	} {
 		if _, err := tx.Exec(stmt); err != nil {
 			return fmt.Errorf("ensure child task tables: %w", err)
@@ -136,6 +147,8 @@ func ensureChildTaskLeaseColumns(tx *sql.Tx) error {
 			{table: "child_task_results", column: "lease_owner", statement: `ALTER TABLE child_task_results ADD COLUMN lease_owner TEXT NOT NULL DEFAULT ''`},
 			{table: "child_task_results", column: "lease_generation", statement: `ALTER TABLE child_task_results ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0`},
 			{table: "child_task_results", column: "fencing_token", statement: `ALTER TABLE child_task_results ADD COLUMN fencing_token TEXT NOT NULL DEFAULT ''`},
+			{table: "child_task_results", column: "result_fingerprint", statement: `ALTER TABLE child_task_results ADD COLUMN result_fingerprint TEXT NOT NULL DEFAULT ''`},
+			{table: "child_task_results", column: "intent_set_fingerprint", statement: `ALTER TABLE child_task_results ADD COLUMN intent_set_fingerprint TEXT NOT NULL DEFAULT ''`},
 		} {
 			if err := addSchemaColumnIfMissing(tx, column); err != nil {
 				return err
@@ -147,6 +160,29 @@ func ensureChildTaskLeaseColumns(tx *sql.Tx) error {
 			WHERE attempt_id = ''
 		`); err != nil {
 			return fmt.Errorf("backfill child task result attempt ids: %w", err)
+		}
+	}
+	intentsExist, err := schemaTableExists(tx, "child_task_outcome_intents")
+	if err != nil {
+		return err
+	}
+	if intentsExist {
+		for _, column := range []schemaColumnMigration{
+			{table: "child_task_outcome_intents", column: "sequence", statement: `ALTER TABLE child_task_outcome_intents ADD COLUMN sequence INTEGER NOT NULL DEFAULT 100`},
+			{table: "child_task_outcome_intents", column: "idempotency_key", statement: `ALTER TABLE child_task_outcome_intents ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''`},
+			{table: "child_task_outcome_intents", column: "lease_owner", statement: `ALTER TABLE child_task_outcome_intents ADD COLUMN lease_owner TEXT NOT NULL DEFAULT ''`},
+			{table: "child_task_outcome_intents", column: "lease_generation", statement: `ALTER TABLE child_task_outcome_intents ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0`},
+			{table: "child_task_outcome_intents", column: "fencing_token", statement: `ALTER TABLE child_task_outcome_intents ADD COLUMN fencing_token TEXT NOT NULL DEFAULT ''`},
+			{table: "child_task_outcome_intents", column: "lease_expires_at", statement: `ALTER TABLE child_task_outcome_intents ADD COLUMN lease_expires_at TEXT NOT NULL DEFAULT ''`},
+			{table: "child_task_outcome_intents", column: "next_attempt_at", statement: `ALTER TABLE child_task_outcome_intents ADD COLUMN next_attempt_at TEXT NOT NULL DEFAULT ''`},
+			{table: "child_task_outcome_intents", column: "dead_letter_at", statement: `ALTER TABLE child_task_outcome_intents ADD COLUMN dead_letter_at TEXT`},
+		} {
+			if err := addSchemaColumnIfMissing(tx, column); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(`UPDATE child_task_outcome_intents SET idempotency_key = intent_id WHERE idempotency_key = ''`); err != nil {
+			return fmt.Errorf("backfill child task outcome intent idempotency keys: %w", err)
 		}
 	}
 	return nil

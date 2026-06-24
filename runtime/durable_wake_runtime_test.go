@@ -159,8 +159,8 @@ func TestDurableWakeCommitsChildOutcomeBeforeFinalizeFailure(t *testing.T) {
 	rt.durableWakeChild = nil
 
 	err = rt.pollDurableWakeAgents(context.Background(), time.Now().UTC())
-	if err == nil || !strings.Contains(err.Error(), "test finalizer failed after outcome") {
-		t.Fatalf("pollDurableWakeAgents() err = %v, want finalizer failure", err)
+	if err != nil {
+		t.Fatalf("pollDurableWakeAgents() err = %v, want committed outcome with retryable finalizer intent", err)
 	}
 	if !adapter.finalized {
 		t.Fatal("adapter finalize was not called")
@@ -195,6 +195,141 @@ func TestDurableWakeCommitsChildOutcomeBeforeFinalizeFailure(t *testing.T) {
 	}
 	if !ok || packet.Status != session.ChildTaskPacketCompleted || packet.ResultID != resultID || packet.TerminalAt.IsZero() {
 		t.Fatalf("packet = %#v ok=%t result_id=%s, want committed terminal outcome before finalizer error", packet, ok, resultID)
+	}
+	intents, err := store.ChildTaskOutcomeIntentsForResult(resultID)
+	if err != nil {
+		t.Fatalf("ChildTaskOutcomeIntentsForResult() err = %v", err)
+	}
+	if len(intents) == 0 || intents[0].Status != session.ChildTaskOutcomeIntentRetryable {
+		t.Fatalf("intents = %#v, want retryable post-outcome finalizer intent", intents)
+	}
+}
+
+func TestDurableWakeScheduledReviewIntentRepairsAfterStoreReopen(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	_ = provider
+	_ = sender
+	agent := core.DurableAgent{
+		AgentID:            "idolum-scheduled-restart",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        scheduledReviewChannelKind,
+		ChannelConfig: core.DurableAgentChannelConfig{
+			ScheduledReview: &core.DurableAgentScheduledReviewChannelConfig{
+				Title:        "Restart Review",
+				TimeUTC:      "00:10",
+				Window:       "previous_day",
+				ArtifactKind: "scheduled_check_in",
+			},
+		},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Verify restart repair.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: durableWakeSyntheticChatID(agent.AgentID), Scope: durableAgentScopeRef(agent)}
+	now := time.Date(2026, 6, 24, 0, 20, 0, 0, time.UTC)
+	packet, err := store.RecordChildTaskPacket(session.ChildTaskPacketInput{
+		PacketID:  "child_task:scheduled_restart",
+		AgentID:   agent.AgentID,
+		Key:       key,
+		TaskKind:  "durable_wake",
+		InputJSON: `{}`,
+		CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskPacket() err = %v", err)
+	}
+	claim, err := store.ClaimChildTaskAttempt(session.ChildTaskAttemptClaimInput{
+		PacketID:       packet.PacketID,
+		AttemptID:      "child_attempt:scheduled_restart",
+		LeaseOwner:     "test_worker:scheduled_restart",
+		AgentID:        agent.AgentID,
+		Key:            key,
+		ClaimedAt:      now.Add(time.Second),
+		LeaseExpiresAt: now.Add(10 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("ClaimChildTaskAttempt() err = %v", err)
+	}
+	payload := scheduledReviewOutcomeIntentPayload{
+		AgentID:        agent.AgentID,
+		Config:         scheduledReviewConfigForAgent(agent),
+		ReviewDate:     "2026-06-23",
+		WindowStart:    time.Date(2026, 6, 23, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		WindowEnd:      time.Date(2026, 6, 24, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		MessageCount:   3,
+		TranscriptPath: ".aphelion/scheduled-review/2026-06-23.md",
+		TurnSummary:    "Restarted handler applied this scheduled review.",
+		Status:         "completed",
+		CreatedAt:      now.Format(time.RFC3339Nano),
+	}
+	raw, _ := json.Marshal(payload)
+	result, err := store.CommitChildTaskOutcome(session.ChildTaskOutcomeCommitInput{
+		Result: session.NormalizeChildTaskResultInput(session.ChildTaskResultInput{
+			PacketID:        packet.PacketID,
+			AttemptID:       claim.ActiveAttemptID,
+			LeaseOwner:      claim.LeaseOwner,
+			LeaseGeneration: claim.LeaseGeneration,
+			FencingToken:    claim.FencingToken,
+			AgentID:         agent.AgentID,
+			Key:             key,
+			Status:          session.ChildTaskResultCompleted,
+			Summary:         "Restarted handler applied this scheduled review.",
+			CreatedAt:       now.Add(2 * time.Second),
+		}),
+		OutcomeIntents: []session.ChildTaskOutcomeIntentInput{{
+			Kind:        session.ChildTaskOutcomeIntentScheduledReview,
+			Sequence:    10,
+			PayloadJSON: string(raw),
+			ResultRef:   "scheduled_review:" + agent.AgentID,
+			CreatedAt:   now.Add(2 * time.Second),
+		}},
+		ResolvedAt: now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("CommitChildTaskOutcome() err = %v", err)
+	}
+	if result.ResultID == "" {
+		t.Fatal("CommitChildTaskOutcome() returned empty result id")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() err = %v", err)
+	}
+	reopened, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen) err = %v", err)
+	}
+	defer reopened.Close()
+	rt, err := New(cfg, reopened, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New(reopened) err = %v", err)
+	}
+	if err := rt.processPendingDurableWakeOutcomeIntents(context.Background(), 100); err != nil {
+		t.Fatalf("processPendingDurableWakeOutcomeIntents() err = %v", err)
+	}
+	events, err := reopened.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 || !strings.Contains(events[0].Summary, "Restarted handler applied") {
+		t.Fatalf("PendingReviewEvents() = %#v, want replayed scheduled review artifact", events)
+	}
+	intents, err := reopened.ChildTaskOutcomeIntentsForResult(result.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskOutcomeIntentsForResult() err = %v", err)
+	}
+	if len(intents) != 1 || intents[0].Status != session.ChildTaskOutcomeIntentApplied {
+		t.Fatalf("intents = %#v, want applied scheduled review intent after restart", intents)
 	}
 }
 

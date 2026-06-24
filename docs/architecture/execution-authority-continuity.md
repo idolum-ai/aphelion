@@ -68,13 +68,20 @@ The child-task saga is:
    replace a live lease; takeover is allowed only after expiry or explicit
    release. The running wake keeps the fence alive with heartbeats. Losing the
    fence cancels the turn context.
-3. The child result and successor next action are committed before parent
-   acknowledgements, scheduled-review finalizers, or other post-outcome effects
-   run. Post-outcome work is represented as child-task outcome intents so a
-   committed result is visible even if finalization fails later.
+3. The child result, successor next action, and ordered post-outcome intent set
+   are committed together before parent acknowledgements, scheduled-review
+   finalizers, policy-application markers, or other post-outcome effects run.
+   Result replay is value-idempotent: reusing a result ID with different status,
+   summary, fence metadata, successor state, or intent set is an idempotency
+   conflict.
 4. Nonterminal child updates keep the packet open and preserve the parent task
    message for a later bounded continuation. Parent conversation messages are
    acknowledged only after a completed result.
+5. Post-outcome intents are a fenced outbox. A worker claims an intent before
+   applying it, applies one typed handler, and then marks the intent `applied`,
+   `retryable`, or `dead_letter`. A crash after the child result commits but
+   before an intent applies leaves repairable durable work, not an ambiguous
+   child result.
 
 This is a durable saga, not a distributed transaction. SQLite transitions own
 packet authorship and outcome truth. External or separately retryable effects

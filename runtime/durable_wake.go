@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,6 +51,7 @@ type durableWakeTurnPlan struct {
 	GovernorContext      durableWakeGovernorContextBuilder
 	Finalize             func(turnSummary string) error
 	FinalizeFailure      func(turnSummary string, cause error) error
+	OutcomeIntents       func(status session.ChildTaskResultStatus, turnSummary string, cause error, now time.Time) []session.ChildTaskOutcomeIntentInput
 }
 
 type durableWakeIngressAdapter interface {
@@ -85,6 +87,9 @@ func (r *Runtime) durableWakeAdapterForAgent(agent core.DurableAgent) durableWak
 func (r *Runtime) pollDurableWakeAgents(ctx context.Context, now time.Time) error {
 	if r == nil || r.store == nil {
 		return nil
+	}
+	if err := r.processPendingDurableWakeOutcomeIntents(ctx, 100); err != nil {
+		log.Printf("WARN durable wake pending outcome intent sweep failed err=%v", err)
 	}
 	agents, err := r.store.ListDurableAgents()
 	if err != nil {
@@ -309,12 +314,13 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 	acquired, err := r.tryMarkDurableAgentWakeAwake(agent.AgentID, plan.Inbound.MessageID)
 	if err != nil {
 		wrappedErr := fmt.Errorf("mark durable wake agent awake: %w", err)
-		if _, resultErr := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, "", wrappedErr, time.Now().UTC()); resultErr != nil {
+		resultAt := time.Now().UTC()
+		intents := durableWakeOutcomeIntentInputs(agent, plan, nil, session.ChildTaskResultFailed, "", wrappedErr, resultAt)
+		result, resultErr := r.recordDurableWakeChildTaskResultWithIntents(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, "", wrappedErr, resultAt, intents)
+		if resultErr != nil {
 			return fmt.Errorf("%w (and failed to record child task result: %v)", wrappedErr, resultErr)
 		}
-		if finalizeErr := finalizeDurableWakeFailure(plan, "", wrappedErr); finalizeErr != nil {
-			return fmt.Errorf("%w (and failed to record wake failure: %v)", wrappedErr, finalizeErr)
-		}
+		_ = r.applyDurableWakeOutcomeIntents(context.Background(), agent, plan, result)
 		return wrappedErr
 	}
 	if !acquired {
@@ -343,24 +349,26 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 	}()
 	if err := r.ensureDurableAgentPolicyOffered(agent); err != nil {
 		wrappedErr := fmt.Errorf("record durable wake offered policy: %w", err)
-		if _, resultErr := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, "", wrappedErr, time.Now().UTC()); resultErr != nil {
+		resultAt := time.Now().UTC()
+		intents := durableWakeOutcomeIntentInputs(agent, plan, nil, session.ChildTaskResultFailed, "", wrappedErr, resultAt)
+		result, resultErr := r.recordDurableWakeChildTaskResultWithIntents(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, "", wrappedErr, resultAt, intents)
+		if resultErr != nil {
 			return fmt.Errorf("%w (and failed to record child task result: %v)", wrappedErr, resultErr)
 		}
-		if finalizeErr := finalizeDurableWakeFailure(plan, "", wrappedErr); finalizeErr != nil {
-			return fmt.Errorf("%w (and failed to record wake failure: %v)", wrappedErr, finalizeErr)
-		}
+		_ = r.applyDurableWakeOutcomeIntents(context.Background(), agent, plan, result)
 		return wrappedErr
 	}
 
 	pendingParentConversation, err := r.pendingDurableAgentParentConversation(agent.AgentID, 3)
 	if err != nil {
 		wrappedErr := fmt.Errorf("load durable wake parent conversation: %w", err)
-		if _, resultErr := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, "", wrappedErr, time.Now().UTC()); resultErr != nil {
+		resultAt := time.Now().UTC()
+		intents := durableWakeOutcomeIntentInputs(agent, plan, nil, session.ChildTaskResultFailed, "", wrappedErr, resultAt)
+		result, resultErr := r.recordDurableWakeChildTaskResultWithIntents(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, "", wrappedErr, resultAt, intents)
+		if resultErr != nil {
 			return fmt.Errorf("%w (and failed to record child task result: %v)", wrappedErr, resultErr)
 		}
-		if finalizeErr := finalizeDurableWakeFailure(plan, "", wrappedErr); finalizeErr != nil {
-			return fmt.Errorf("%w (and failed to record wake failure: %v)", wrappedErr, finalizeErr)
-		}
+		_ = r.applyDurableWakeOutcomeIntents(context.Background(), agent, plan, result)
 		return wrappedErr
 	}
 
@@ -372,17 +380,17 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 			"attempt_id":     attemptID,
 			"error":          trimError(err.Error()),
 		}, time.Now().UTC())
-		if _, resultErr := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, turnSummary, err, time.Now().UTC()); resultErr != nil {
+		resultAt := time.Now().UTC()
+		intents := durableWakeOutcomeIntentInputs(agent, plan, pendingParentConversation, session.ChildTaskResultFailed, turnSummary, err, resultAt)
+		result, resultErr := r.recordDurableWakeChildTaskResultWithIntents(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, turnSummary, err, resultAt, intents)
+		if resultErr != nil {
 			return fmt.Errorf("run durable wake turn: %w (and failed to record child task result: %v)", err, resultErr)
 		}
+		_ = r.applyDurableWakeOutcomeIntents(context.Background(), agent, plan, result)
 		if markErr := r.markDurableAgentPolicyApplyFailure(agent, err); markErr != nil {
 			return fmt.Errorf("run durable wake turn: %w (and failed to record apply failure: %v)", err, markErr)
 		}
-		wrappedErr := fmt.Errorf("run durable wake turn: %w", err)
-		if finalizeErr := finalizeDurableWakeFailure(plan, turnSummary, wrappedErr); finalizeErr != nil {
-			return fmt.Errorf("%w (and failed to record wake failure: %v)", wrappedErr, finalizeErr)
-		}
-		return wrappedErr
+		return fmt.Errorf("run durable wake turn: %w", err)
 	}
 	if durableTurnInferenceUnavailable(turnResult, turnSummary) {
 		inferenceErr := fmt.Errorf("durable wake inference unavailable")
@@ -392,44 +400,29 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 			"attempt_id":     attemptID,
 			"error":          trimError(inferenceErr.Error()),
 		}, time.Now().UTC())
-		if _, resultErr := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, turnSummary, inferenceErr, time.Now().UTC()); resultErr != nil {
+		resultAt := time.Now().UTC()
+		intents := durableWakeOutcomeIntentInputs(agent, plan, pendingParentConversation, session.ChildTaskResultFailed, turnSummary, inferenceErr, resultAt)
+		result, resultErr := r.recordDurableWakeChildTaskResultWithIntents(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, turnSummary, inferenceErr, resultAt, intents)
+		if resultErr != nil {
 			return fmt.Errorf("%w (and failed to record child task result: %v)", inferenceErr, resultErr)
 		}
+		_ = r.applyDurableWakeOutcomeIntents(context.Background(), agent, plan, result)
 		if markErr := r.markDurableAgentPolicyApplyFailure(agent, inferenceErr); markErr != nil {
 			return fmt.Errorf("%w (and failed to record apply failure: %v)", inferenceErr, markErr)
 		}
-		if finalizeErr := finalizeDurableWakeFailure(plan, turnSummary, inferenceErr); finalizeErr != nil {
-			return fmt.Errorf("%w (and failed to record wake failure: %v)", inferenceErr, finalizeErr)
-		}
 		return inferenceErr
-	}
-	if err := r.markDurableAgentPolicyApplied(agent); err != nil {
-		r.recordExecutionEvent(key, core.ExecutionEventDurableWakeFailed, "durable", "failed", map[string]any{
-			"agent_id":       strings.TrimSpace(agent.AgentID),
-			"task_packet_id": taskPacketID,
-			"attempt_id":     attemptID,
-			"error":          trimError(err.Error()),
-		}, time.Now().UTC())
-		wrappedErr := fmt.Errorf("record durable wake applied policy: %w", err)
-		if _, resultErr := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, turnSummary, wrappedErr, time.Now().UTC()); resultErr != nil {
-			return fmt.Errorf("%w (and failed to record child task result: %v)", wrappedErr, resultErr)
-		}
-		if finalizeErr := finalizeDurableWakeFailure(plan, turnSummary, wrappedErr); finalizeErr != nil {
-			return fmt.Errorf("%w (and failed to record wake failure: %v)", wrappedErr, finalizeErr)
-		}
-		return wrappedErr
 	}
 	resultStatus, _ := durableWakeChildTaskStatusFromSummary(turnSummary)
 	if leaseErr := stopLeaseKeeper(); leaseErr != nil {
 		return fmt.Errorf("durable wake child task lease lost before outcome commit: %w", leaseErr)
 	}
-	outcomeIntents := durableWakeOutcomeIntentInputs(agent, plan, pendingParentConversation, resultStatus, turnSummary, time.Now().UTC())
+	outcomeIntents := durableWakeOutcomeIntentInputs(agent, plan, pendingParentConversation, resultStatus, turnSummary, nil, time.Now().UTC())
 	result, err := r.recordDurableWakeChildTaskResultWithIntents(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, resultStatus, turnSummary, nil, time.Now().UTC(), outcomeIntents)
 	if err != nil {
 		return fmt.Errorf("record durable wake child task result: %w", err)
 	}
-	if err := r.applyDurableWakeOutcomeIntents(agent, plan, pendingParentConversation, turnSummary, result); err != nil {
-		return err
+	if err := r.applyDurableWakeOutcomeIntents(context.Background(), agent, plan, result); err != nil {
+		log.Printf("WARN durable wake post-outcome intent processing failed agent_id=%s result_id=%s err=%v", agent.AgentID, result.ResultID, err)
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventDurableWakeCompleted, "durable", "completed", map[string]any{
 		"agent_id":         strings.TrimSpace(agent.AgentID),
@@ -664,18 +657,36 @@ func (r *Runtime) recordDurableWakeChildTaskResultWithIntents(key session.Sessio
 	return result, nil
 }
 
-func durableWakeOutcomeIntentInputs(agent core.DurableAgent, plan durableWakeTurnPlan, pending []core.DurableAgentConversationMessage, status session.ChildTaskResultStatus, summary string, now time.Time) []session.ChildTaskOutcomeIntentInput {
+func durableWakeOutcomeIntentInputs(agent core.DurableAgent, plan durableWakeTurnPlan, pending []core.DurableAgentConversationMessage, status session.ChildTaskResultStatus, summary string, cause error, now time.Time) []session.ChildTaskOutcomeIntentInput {
 	var intents []session.ChildTaskOutcomeIntentInput
-	if plan.Finalize != nil {
+	if plan.OutcomeIntents != nil {
+		intents = append(intents, plan.OutcomeIntents(status, summary, cause, now)...)
+	}
+	if len(intents) == 0 && (plan.Finalize != nil || (cause != nil && plan.FinalizeFailure != nil)) {
 		payloadRaw, _ := json.Marshal(map[string]any{
 			"agent_id": strings.TrimSpace(agent.AgentID),
 			"channel":  firstNonEmpty(strings.TrimSpace(plan.Channel), "durable_wake"),
-			"summary":  truncatePreview(strings.TrimSpace(summary), 220),
+			"summary":  strings.TrimSpace(summary),
+			"failed":   cause != nil,
+			"error":    errorText(cause),
 		})
 		intents = append(intents, session.ChildTaskOutcomeIntentInput{
 			Kind:        session.ChildTaskOutcomeIntentGenericFinalize,
+			Sequence:    10,
 			PayloadJSON: string(payloadRaw),
 			ResultRef:   "durable_wake_finalize:" + strings.TrimSpace(agent.AgentID),
+			CreatedAt:   now,
+		})
+	}
+	if cause == nil && status != session.ChildTaskResultFailed {
+		payloadRaw, _ := json.Marshal(map[string]any{
+			"agent_id": strings.TrimSpace(agent.AgentID),
+		})
+		intents = append(intents, session.ChildTaskOutcomeIntentInput{
+			Kind:        session.ChildTaskOutcomeIntentPolicyApplied,
+			Sequence:    20,
+			PayloadJSON: string(payloadRaw),
+			ResultRef:   "durable_policy_applied:" + strings.TrimSpace(agent.AgentID),
 			CreatedAt:   now,
 		})
 	}
@@ -684,9 +695,11 @@ func durableWakeOutcomeIntentInputs(agent core.DurableAgent, plan durableWakeTur
 			"agent_id":      strings.TrimSpace(agent.AgentID),
 			"message_ids":   core.DurableAgentConversationMessageIDs(pending),
 			"message_count": len(pending),
+			"summary":       truncatePreview(strings.TrimSpace(summary), 500),
 		})
 		intents = append(intents, session.ChildTaskOutcomeIntentInput{
 			Kind:        session.ChildTaskOutcomeIntentParentConversationAck,
+			Sequence:    30,
 			PayloadJSON: string(payloadRaw),
 			ResultRef:   "durable_parent_ack:" + strings.TrimSpace(agent.AgentID),
 			CreatedAt:   now,
@@ -695,42 +708,216 @@ func durableWakeOutcomeIntentInputs(agent core.DurableAgent, plan durableWakeTur
 	return intents
 }
 
-func (r *Runtime) applyDurableWakeOutcomeIntents(agent core.DurableAgent, plan durableWakeTurnPlan, pending []core.DurableAgentConversationMessage, turnSummary string, result session.ChildTaskResult) error {
+func (r *Runtime) applyDurableWakeOutcomeIntents(ctx context.Context, agent core.DurableAgent, plan durableWakeTurnPlan, result session.ChildTaskResult) error {
 	if r == nil || r.store == nil || strings.TrimSpace(result.ResultID) == "" {
 		return nil
 	}
-	intents, err := r.store.PendingChildTaskOutcomeIntents(100)
+	intents, err := r.store.ChildTaskOutcomeIntentsForResult(result.ResultID)
 	if err != nil {
 		return err
 	}
 	for _, intent := range intents {
-		if intent.ResultID != result.ResultID {
+		if intent.Status != session.ChildTaskOutcomeIntentPending && intent.Status != session.ChildTaskOutcomeIntentRetryable {
 			continue
 		}
-		var applyErr error
-		switch intent.Kind {
-		case session.ChildTaskOutcomeIntentGenericFinalize:
-			if plan.Finalize != nil {
-				applyErr = plan.Finalize(turnSummary)
-			}
-		case session.ChildTaskOutcomeIntentParentConversationAck:
-			if len(pending) > 0 {
-				applyErr = r.acknowledgeDurableAgentParentConversation(agent.AgentID, pending, result.CreatedAt)
-				if applyErr == nil {
-					if count, countErr := r.store.DurableAgentReviewEventCountSince(agent.AgentID, result.CreatedAt); countErr != nil || count == 0 {
-						applyErr = r.queueDurableAgentParentConversationAck(agent, pending, turnSummary, result.CreatedAt)
-					}
-				}
-			}
-		default:
-			applyErr = fmt.Errorf("unsupported durable wake outcome intent kind %s", intent.Kind)
-		}
-		if applyErr != nil {
-			_ = r.store.MarkChildTaskOutcomeIntentFailed(intent.IntentID, applyErr, time.Now().UTC())
-			return applyErr
-		}
-		if err := r.store.MarkChildTaskOutcomeIntentApplied(intent.IntentID, time.Now().UTC()); err != nil {
+		if err := r.applyDurableWakeOutcomeIntent(ctx, agent, plan, intent); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (r *Runtime) applyDurableWakeOutcomeIntent(ctx context.Context, agent core.DurableAgent, plan durableWakeTurnPlan, intent session.ChildTaskOutcomeIntent) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	claimed, ok, err := r.store.ClaimChildTaskOutcomeIntent(session.ChildTaskOutcomeIntentClaimInput{
+		IntentID:       intent.IntentID,
+		LeaseOwner:     "durable_wake_intent:" + strings.TrimSpace(intent.IntentID),
+		ClaimedAt:      time.Now().UTC(),
+		LeaseExpiresAt: time.Now().UTC().Add(5 * time.Minute),
+	})
+	if err != nil || !ok {
+		return err
+	}
+	applyErr := r.executeDurableWakeOutcomeIntent(ctx, agent, plan, claimed)
+	now := time.Now().UTC()
+	if applyErr != nil {
+		retryErr := r.store.RetryChildTaskOutcomeIntent(session.ChildTaskOutcomeIntentRetryInput{
+			IntentID:        claimed.IntentID,
+			LeaseOwner:      claimed.LeaseOwner,
+			LeaseGeneration: claimed.LeaseGeneration,
+			FencingToken:    claimed.FencingToken,
+			LastError:       trimError(applyErr.Error()),
+			AttemptedAt:     now,
+			NextAttemptAt:   now.Add(durableWakeOutcomeIntentBackoff(claimed.Attempts + 1)),
+			DeadLetter:      claimed.Attempts+1 >= 5,
+		})
+		if retryErr != nil {
+			return retryErr
+		}
+		return applyErr
+	}
+	return r.store.CompleteChildTaskOutcomeIntent(session.ChildTaskOutcomeIntentCompletionInput{
+		IntentID:        claimed.IntentID,
+		LeaseOwner:      claimed.LeaseOwner,
+		LeaseGeneration: claimed.LeaseGeneration,
+		FencingToken:    claimed.FencingToken,
+		CompletedAt:     now,
+	})
+}
+
+func durableWakeOutcomeIntentBackoff(attempts int) time.Duration {
+	if attempts <= 1 {
+		return 30 * time.Second
+	}
+	d := time.Duration(attempts) * time.Minute
+	if d > 30*time.Minute {
+		return 30 * time.Minute
+	}
+	return d
+}
+
+func (r *Runtime) executeDurableWakeOutcomeIntent(ctx context.Context, agent core.DurableAgent, plan durableWakeTurnPlan, intent session.ChildTaskOutcomeIntent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	switch intent.Kind {
+	case session.ChildTaskOutcomeIntentGenericFinalize:
+		var payload struct {
+			Summary string `json:"summary"`
+			Failed  bool   `json:"failed"`
+			Error   string `json:"error"`
+		}
+		_ = json.Unmarshal([]byte(intent.PayloadJSON), &payload)
+		if payload.Failed {
+			if plan.FinalizeFailure == nil {
+				return fmt.Errorf("generic durable wake failure finalizer requires live callback")
+			}
+			return plan.FinalizeFailure(payload.Summary, errors.New(firstNonEmpty(strings.TrimSpace(payload.Error), "durable wake failed")))
+		}
+		if plan.Finalize == nil {
+			return fmt.Errorf("generic durable wake finalizer requires live callback")
+		}
+		return plan.Finalize(payload.Summary)
+	case session.ChildTaskOutcomeIntentPolicyApplied:
+		agentID := strings.TrimSpace(agent.AgentID)
+		if agentID == "" {
+			var payload struct {
+				AgentID string `json:"agent_id"`
+			}
+			_ = json.Unmarshal([]byte(intent.PayloadJSON), &payload)
+			agentID = strings.TrimSpace(payload.AgentID)
+		}
+		if agentID == "" {
+			return fmt.Errorf("policy-applied intent missing agent_id")
+		}
+		loaded, err := r.store.DurableAgent(agentID)
+		if err != nil {
+			return err
+		}
+		return r.markDurableAgentPolicyApplied(*loaded)
+	case session.ChildTaskOutcomeIntentParentConversationAck:
+		return r.applyDurableWakeParentConversationAckIntent(agent, intent)
+	case session.ChildTaskOutcomeIntentScheduledReview:
+		return r.applyScheduledReviewOutcomeIntent(intent)
+	default:
+		return fmt.Errorf("unsupported durable wake outcome intent kind %s", intent.Kind)
+	}
+}
+
+func (r *Runtime) applyDurableWakeParentConversationAckIntent(agent core.DurableAgent, intent session.ChildTaskOutcomeIntent) error {
+	var payload struct {
+		AgentID      string   `json:"agent_id"`
+		MessageIDs   []string `json:"message_ids"`
+		Summary      string   `json:"summary"`
+		MessageCount int      `json:"message_count"`
+	}
+	if err := json.Unmarshal([]byte(intent.PayloadJSON), &payload); err != nil {
+		return fmt.Errorf("parse parent conversation ack intent payload: %w", err)
+	}
+	agentID := firstNonEmpty(strings.TrimSpace(agent.AgentID), strings.TrimSpace(payload.AgentID))
+	if agentID == "" {
+		return fmt.Errorf("parent conversation ack intent missing agent_id")
+	}
+	loaded, err := r.store.DurableAgent(agentID)
+	if err != nil {
+		return fmt.Errorf("load parent conversation ack agent: %w", err)
+	}
+	messages, err := r.durableAgentConversationMessagesByID(agentID, payload.MessageIDs)
+	if err != nil {
+		return err
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	if err := r.acknowledgeDurableAgentParentConversation(agentID, messages, intent.CreatedAt); err != nil {
+		return err
+	}
+	if count, countErr := r.store.DurableAgentReviewEventCountSince(agentID, intent.CreatedAt); countErr != nil || count == 0 {
+		if err := r.queueDurableAgentParentConversationAck(*loaded, messages, payload.Summary, intent.CreatedAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Runtime) durableAgentConversationMessagesByID(agentID string, messageIDs []string) ([]core.DurableAgentConversationMessage, error) {
+	state, err := r.store.DurableAgentState(strings.TrimSpace(agentID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		return nil, err
+	}
+	want := map[string]bool{}
+	for _, id := range messageIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			want[id] = true
+		}
+	}
+	if len(want) == 0 || continuity.Conversation == nil {
+		return nil, nil
+	}
+	var out []core.DurableAgentConversationMessage
+	for _, message := range continuity.Conversation.Messages {
+		if want[strings.TrimSpace(message.MessageID)] {
+			out = append(out, message)
+		}
+	}
+	return out, nil
+}
+
+func (r *Runtime) processPendingDurableWakeOutcomeIntents(ctx context.Context, limit int) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	intents, err := r.store.PendingChildTaskOutcomeIntents(limit)
+	if err != nil {
+		return err
+	}
+	for _, intent := range intents {
+		var payload struct {
+			AgentID string `json:"agent_id"`
+		}
+		_ = json.Unmarshal([]byte(intent.PayloadJSON), &payload)
+		agent, _ := r.store.DurableAgent(strings.TrimSpace(payload.AgentID))
+		if agent == nil {
+			if err := r.applyDurableWakeOutcomeIntent(ctx, core.DurableAgent{}, durableWakeTurnPlan{}, intent); err != nil {
+				log.Printf("WARN durable wake pending intent processing failed intent_id=%s err=%v", intent.IntentID, err)
+			}
+			continue
+		}
+		if err := r.applyDurableWakeOutcomeIntent(ctx, *agent, durableWakeTurnPlan{}, intent); err != nil {
+			log.Printf("WARN durable wake pending intent processing failed intent_id=%s err=%v", intent.IntentID, err)
 		}
 	}
 	return nil
