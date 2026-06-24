@@ -43,6 +43,9 @@ func ensureNextActionTables(tx *sql.Tx) error {
 			return fmt.Errorf("ensure next action tables: %w", err)
 		}
 	}
+	if err := ensureNextActionOperationColumns(tx); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -51,9 +54,10 @@ func migrateSchemaV74ToV75(tx *sql.Tx) error {
 }
 
 func migrateSchemaV75ToV76(tx *sql.Tx) error {
-	if err := ensureNextActionTables(tx); err != nil {
-		return err
-	}
+	return ensureNextActionTables(tx)
+}
+
+func ensureNextActionOperationColumns(tx *sql.Tx) error {
 	for _, column := range []schemaColumnMigration{
 		{table: "next_action_records", column: "operation_kind", statement: `ALTER TABLE next_action_records ADD COLUMN operation_kind TEXT NOT NULL DEFAULT ''`},
 		{table: "next_action_records", column: "operation_tool", statement: `ALTER TABLE next_action_records ADD COLUMN operation_tool TEXT NOT NULL DEFAULT ''`},
