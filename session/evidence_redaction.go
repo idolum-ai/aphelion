@@ -5,6 +5,7 @@ package session
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -91,68 +92,129 @@ const (
 )
 
 type ToolResultProjection struct {
-	Audience     ExposureAudience
-	Projection   string
-	Sensitivity  string
-	PolicyRef    string
-	ProtectedRef string
-	Text         string
+	Audience              ExposureAudience
+	Purpose               ExposurePurpose
+	Projection            string
+	ProjectionKind        ExposureProjectionKind
+	Sensitivity           string
+	SensitivityProvenance []string
+	PolicyRef             string
+	ProtectedRef          string
+	SourceHash            string
+	Text                  string
+	RawBytes              int
+	ProjectedBytes        int
 }
 
 func ProjectToolResultForAudience(value string, audience ExposureAudience) ToolResultProjection {
+	return ProjectToolResultForPurpose(value, audience, ExposurePurposeToolResultPreview)
+}
+
+func ProjectToolResultForPurpose(value string, audience ExposureAudience, purpose ExposurePurpose) ToolResultProjection {
 	audience = ExposureAudience(strings.TrimSpace(string(audience)))
 	if audience == "" {
 		audience = ExposureAudienceModelPreview
 	}
+	purpose = normalizeExposurePurpose(purpose)
 	redacted := RedactEvidenceText(value)
 	class := EvidenceRedactionClassForRedactions(redacted)
-	projection := "plain"
+	projection := ExposureProjectionPlain
+	provenance := exposureSensitivityProvenance(redacted, value)
 	if redacted.Redacted {
-		projection = "redacted"
+		projection = ExposureProjectionRedacted
 	}
 	text := redacted.Text
-	if len(text) > 1800 {
-		text = "compact_current_state:\n" + strings.TrimSpace(text[:1700]) + "\n<truncated:projection>"
-		projection = "digest"
+	if class == EvidenceRedactionSecret && redacted.Redacted {
+		text = renderProtectedToolOutputProjection(audience)
+		projection = ExposureProjectionProtectedRef
+	}
+	if projection != ExposureProjectionProtectedRef && len(text) > 1800 {
+		text = renderToolOutputDigestProjection(text, 1700)
+		projection = ExposureProjectionDigest
 		if class == EvidenceRedactionNone {
 			class = EvidenceRedactionDigest
 		}
+		provenance = appendUniqueEvidenceString(provenance, "size:over_1800_bytes")
 	}
 	if strings.TrimSpace(text) == "" && strings.TrimSpace(value) != "" {
 		text = "<withheld:empty_projection>"
-		projection = "withheld"
+		projection = ExposureProjectionWithheld
 		if class == EvidenceRedactionNone {
 			class = EvidenceRedactionBlocked
 		}
+		provenance = appendUniqueEvidenceString(provenance, "projection:empty")
 	}
-	policyRef := "session.ProjectToolResultForAudience/v1"
-	rendered := text
-	if projection != "plain" {
-		rendered = renderToolResultProjectionHeader(audience, projection, class, policyRef, text)
+	if class == "" {
+		class = EvidenceRedactionNone
 	}
 	return ToolResultProjection{
-		Audience:    audience,
-		Projection:  projection,
-		Sensitivity: class,
-		PolicyRef:   policyRef,
-		Text:        rendered,
+		Audience:              audience,
+		Purpose:               purpose,
+		Projection:            string(projection),
+		ProjectionKind:        projection,
+		Sensitivity:           class,
+		SensitivityProvenance: normalizeStringList(provenance),
+		PolicyRef:             ExposureProjectionPolicyToolOutputV1,
+		SourceHash:            exposureTextHash(value),
+		Text:                  text,
+		RawBytes:              len(value),
+		ProjectedBytes:        len(text),
 	}
 }
 
-func renderToolResultProjectionHeader(audience ExposureAudience, projection string, sensitivity string, policyRef string, text string) string {
-	var b strings.Builder
-	b.WriteString("[EXPOSURE_PROJECTION]\n")
-	b.WriteString("audience: ")
-	b.WriteString(strings.TrimSpace(string(audience)))
-	b.WriteString("\nprojection: ")
-	b.WriteString(strings.TrimSpace(projection))
-	b.WriteString("\nsensitivity: ")
-	b.WriteString(strings.TrimSpace(sensitivity))
-	b.WriteString("\npolicy_ref: ")
-	b.WriteString(strings.TrimSpace(policyRef))
-	b.WriteString("\n[/EXPOSURE_PROJECTION]\n")
-	b.WriteString(text)
-	return b.String()
+func renderProtectedToolOutputProjection(audience ExposureAudience) string {
+	return fmt.Sprintf("<tool_output_protected audience=%s>", normalizeExposureAudience(audience))
+}
+
+func renderToolOutputDigestProjection(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	head := limit * 2 / 3
+	tail := limit - head
+	if head < 1 {
+		head = 1
+	}
+	if tail < 1 {
+		tail = 1
+	}
+	if head+tail >= len(text) {
+		return text
+	}
+	return strings.TrimSpace(text[:head]) +
+		fmt.Sprintf("\n\n[tool_output_digest original_bytes=%d omitted_bytes=%d]\n\n", len(text), len(text)-head-tail) +
+		strings.TrimSpace(text[len(text)-tail:])
+}
+
+func exposureSensitivityProvenance(redacted EvidenceTextRedaction, value string) []string {
+	out := []string{}
+	for _, kind := range redacted.Kinds {
+		out = appendUniqueEvidenceString(out, "pattern:"+evidenceRedactionKind(kind))
+	}
+	if strings.TrimSpace(value) == "" {
+		out = appendUniqueEvidenceString(out, "content:empty")
+	}
+	if len(value) > 1800 {
+		out = appendUniqueEvidenceString(out, "size:over_1800_bytes")
+	}
+	if len(out) == 0 {
+		out = append(out, "content:no_sensitive_pattern")
+	}
+	return out
+}
+
+func appendUniqueEvidenceString(values []string, next string) []string {
+	next = strings.TrimSpace(next)
+	if next == "" {
+		return values
+	}
+	for _, existing := range values {
+		if existing == next {
+			return values
+		}
+	}
+	return append(values, next)
 }
 
 func evidenceRedactionKindIsCredentialBearing(kind string) bool {

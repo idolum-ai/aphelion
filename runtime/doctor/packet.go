@@ -45,6 +45,13 @@ func (r *Runtime) BuildDiagnosticPacket(ctx context.Context, input DiagnosticInp
 		WriteLine(&b, "provider_health: unavailable")
 	}
 
+	WriteSection(&b, "Persistence Health")
+	if r.writeDoctorPersistenceHealth != nil {
+		r.writeDoctorPersistenceHealth(&b, now)
+	} else {
+		WriteLine(&b, "persistence_health: unavailable")
+	}
+
 	WriteSection(&b, "Perception Budget")
 	if r.writeDoctorPerceptionBudget != nil {
 		r.writeDoctorPerceptionBudget(&b, input.Key, now)
@@ -571,12 +578,49 @@ func (r *Runtime) writeDoctorMemoryFootprint(b *strings.Builder, scope sandbox.S
 
 func writeDoctorReleaseMetadata(b *strings.Builder) {
 	current := releaseinfo.CurrentBuild()
-	notice, err := releaseinfo.NewerReleaseNotice(current, "")
+	meta, metaPath, metaOK, metaErr := releaseinfo.ReadMetadata("")
+	notice, noticeErr := releaseinfo.NewerReleaseNotice(current, metaPath)
+	metadataStatus := "missing"
+	if metaOK {
+		metadataStatus = "present"
+	}
+	if metaErr != nil || noticeErr != nil {
+		metadataStatus = "unreadable"
+	}
+	classification := core.ClassifySourceInstallReliabilityAxes(core.SourceInstallStatusInput{
+		CurrentRevision: current.Revision,
+		RunningRevision: current.Revision,
+		LatestVersion:   strings.TrimSpace(meta.LatestVersion),
+		MetadataStatus:  metadataStatus,
+		UpdateAvailable: notice.Available,
+	})
 	WriteKV(b, "running_version", firstNonEmpty(current.Version, "unknown"))
+	WriteKV(b, "running_revision", firstNonEmpty(current.Revision, "unknown"))
 	WriteKV(b, "release_metadata_path", notice.MetadataPath)
-	if err != nil {
-		WriteKV(b, "release_metadata_status", "unreadable")
-		WriteKV(b, "release_metadata_error", err.Error())
+	WriteKV(b, "release_metadata_status", metadataStatus)
+	WriteKV(b, "release_installed_version", strings.TrimSpace(meta.InstalledVersion))
+	WriteKV(b, "release_latest_version", strings.TrimSpace(meta.LatestVersion))
+	WriteKV(b, "release_source_status", classification.Overall.Condition)
+	WriteKV(b, "release_status_class", classification.Overall.StatusClass)
+	WriteKV(b, "release_failure_class", classification.Overall.FailureClass)
+	WriteKV(b, "release_retry_policy", classification.Overall.RetryPolicy)
+	WriteKV(b, "release_next_action", classification.Overall.NextAction)
+	WriteKV(b, "source_service_status", classification.ServiceConsistency.Condition)
+	WriteKV(b, "source_service_status_class", classification.ServiceConsistency.StatusClass)
+	WriteKV(b, "source_service_failure_class", classification.ServiceConsistency.FailureClass)
+	WriteKV(b, "source_service_retry_policy", classification.ServiceConsistency.RetryPolicy)
+	WriteKV(b, "source_service_next_action", classification.ServiceConsistency.NextAction)
+	WriteKV(b, "release_freshness_status", classification.ReleaseFreshness.Condition)
+	WriteKV(b, "release_freshness_status_class", classification.ReleaseFreshness.StatusClass)
+	WriteKV(b, "release_freshness_failure_class", classification.ReleaseFreshness.FailureClass)
+	WriteKV(b, "release_freshness_retry_policy", classification.ReleaseFreshness.RetryPolicy)
+	WriteKV(b, "release_freshness_next_action", classification.ReleaseFreshness.NextAction)
+	if metaErr != nil {
+		WriteKV(b, "release_metadata_error", metaErr.Error())
+		return
+	}
+	if noticeErr != nil {
+		WriteKV(b, "release_metadata_error", noticeErr.Error())
 		return
 	}
 	if notice.Available {

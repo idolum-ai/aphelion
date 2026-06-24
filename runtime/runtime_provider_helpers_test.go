@@ -5,6 +5,9 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
+
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
@@ -22,6 +25,7 @@ type toolRequestingProvider struct {
 	mu             sync.Mutex
 	callCount      int
 	firstToolCount int
+	lastToolOutput string
 }
 
 func (p *toolRequestingProvider) Complete(_ context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
@@ -46,6 +50,12 @@ func (p *toolRequestingProvider) Complete(_ context.Context, messages []agent.Me
 		}, nil
 	}
 
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "tool" {
+			p.lastToolOutput = messages[i].Content
+			break
+		}
+	}
 	return &agent.Response{Content: "done"}, nil
 }
 
@@ -145,6 +155,8 @@ type principalRecordingTools struct {
 	executeForPrincipalCalls int
 	supportsPrincipal        bool
 	lastPrincipal            principal.Principal
+	output                   string
+	err                      error
 }
 
 func (t *principalRecordingTools) Definitions() []agent.ToolDef {
@@ -153,13 +165,29 @@ func (t *principalRecordingTools) Definitions() []agent.ToolDef {
 
 func (t *principalRecordingTools) Execute(_ context.Context, _ string, _ json.RawMessage) (string, error) {
 	t.executeCalls++
+	if strings.TrimSpace(t.output) != "" {
+		return t.output, t.err
+	}
+	if t.err != nil {
+		return "", t.err
+	}
 	return "direct execution", nil
 }
 
 func (t *principalRecordingTools) ExecuteForPrincipal(_ context.Context, p principal.Principal, _ string, _ json.RawMessage) (string, error) {
 	t.executeForPrincipalCalls++
 	t.lastPrincipal = p
+	if strings.TrimSpace(t.output) != "" {
+		return t.output, t.err
+	}
+	if t.err != nil {
+		return "", t.err
+	}
 	return "principal execution", nil
+}
+
+func newPrincipalRecordingToolError(message string) error {
+	return errors.New(message)
 }
 
 func (t *principalRecordingTools) SupportsPrincipal(_ principal.Principal) bool {

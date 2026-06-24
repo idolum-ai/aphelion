@@ -10,9 +10,10 @@
       "evidence redaction",
       "command effect planning"
     ],
-    "current_status": "partial_implemented",
+    "current_status": "implemented_first_slice",
     "always_on_anchors": [
-      "session/store_evidence_test.go#TestRedactEvidenceTextReplacesSecretValuesWithStableMarkers"
+      "session/store_exposure_projection_test.go#TestRecordExposureProjectionStoresStructuredPolicyAndProtectedEvidence",
+      "runtime/tools_runtime_test.go#TestHandleInboundProjectsSensitiveToolOutputBeforeModelContext"
     ],
     "ideal_invariant": "Read-only execution authority is separate from authority to expose resulting bytes to model, operator, logs, or hydration surfaces.",
     "classification": "principle_debt",
@@ -31,9 +32,10 @@
       "universal evidence ledger",
       "evidence hydration"
     ],
-    "current_status": "partial_implemented",
+    "current_status": "implemented_first_slice",
     "always_on_anchors": [
-      "tool/evidence_hydrate_test.go#TestEvidenceHydrateToolWithholdsCredentialBearingPayloadWindow"
+      "exposure_projection_architecture_test.go#TestArchitectureExposureProjectionLedgerIsStructuredNotInBandHeader",
+      "session/store_exposure_projection_test.go#TestRecordExposureProjectionStoresStructuredPolicyAndProtectedEvidence"
     ],
     "ideal_invariant": "Every output route consumes an audience-specific exposure projection before showing retained tool bytes.",
     "classification": "principle_debt",
@@ -54,7 +56,7 @@
     ],
     "current_status": "implemented_first_slice",
     "always_on_anchors": [
-      "agent/turn_test.go#TestToolFailureClassifiesFromOutputWithoutEchoingIt"
+      "runtime/tools_runtime_test.go#TestHandleInboundProjectsSensitiveToolOutputBeforeModelContext"
     ],
     "ideal_invariant": "Persisted previews are safe projections, not raw output slices, and canary values never appear in ordinary preview columns.",
     "classification": "principle_debt",
@@ -75,7 +77,8 @@
     ],
     "current_status": "implemented_first_slice",
     "always_on_anchors": [
-      "durableagent/runtime_test.go#TestQueueReviewArtifactRedactsSecretLikeMetadataIntoForensicSidecar"
+      "session/store_evidence_test.go#TestProjectToolResultForAudienceReturnsStructuredDecisionWithoutHeader",
+      "session/store_exposure_projection_test.go#TestRecordExposureProjectionStoresStructuredPolicyAndProtectedEvidence"
     ],
     "ideal_invariant": "Path and config metadata carries a sensitivity class even when it does not match a secret-shaped regex.",
     "classification": "principle_debt",

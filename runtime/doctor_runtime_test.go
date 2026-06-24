@@ -477,11 +477,14 @@ func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 		"semantic_enabled",
 		"Recent Service Log Tail",
 		"Known Issue Status Checks",
+		"Persistence Health",
 		"Maintainer Delegate",
 		"maintainer_delegate_status=\"absent\"",
 		"issue=prompt_identity_canonical status=likely_fixed",
 		"issue=dynamic_skills_prompt_loading status=likely_fixed",
 		"tailnet_surfaces: none",
+		"classification_scope: operational_tension",
+		"classification_scope: principle_debt",
 		"allowed_statuses: active, likely_fixed, historical_resolved, residual_risk, unknown",
 	} {
 		if !strings.Contains(userPrompt, want) {

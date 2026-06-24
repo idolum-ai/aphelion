@@ -28,6 +28,9 @@ func ensureNextActionTables(tx *sql.Tx) error {
 			resource_blocker TEXT NOT NULL DEFAULT '',
 			verifier TEXT NOT NULL DEFAULT '',
 			retry_policy TEXT NOT NULL DEFAULT '',
+			operation_kind TEXT NOT NULL DEFAULT '',
+			operation_tool TEXT NOT NULL DEFAULT '',
+			operation_input_json TEXT NOT NULL DEFAULT '',
 			operator_projection TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			resolved_at TEXT
@@ -45,4 +48,20 @@ func ensureNextActionTables(tx *sql.Tx) error {
 
 func migrateSchemaV74ToV75(tx *sql.Tx) error {
 	return ensureNextActionTables(tx)
+}
+
+func migrateSchemaV75ToV76(tx *sql.Tx) error {
+	if err := ensureNextActionTables(tx); err != nil {
+		return err
+	}
+	for _, column := range []schemaColumnMigration{
+		{table: "next_action_records", column: "operation_kind", statement: `ALTER TABLE next_action_records ADD COLUMN operation_kind TEXT NOT NULL DEFAULT ''`},
+		{table: "next_action_records", column: "operation_tool", statement: `ALTER TABLE next_action_records ADD COLUMN operation_tool TEXT NOT NULL DEFAULT ''`},
+		{table: "next_action_records", column: "operation_input_json", statement: `ALTER TABLE next_action_records ADD COLUMN operation_input_json TEXT NOT NULL DEFAULT ''`},
+	} {
+		if err := addSchemaColumnIfMissing(tx, column); err != nil {
+			return err
+		}
+	}
+	return nil
 }

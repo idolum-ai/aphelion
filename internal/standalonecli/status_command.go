@@ -46,8 +46,11 @@ type statusSnapshot struct {
 type statusReleaseInfo struct {
 	MetadataPath     string `json:"metadata_path,omitempty"`
 	CurrentVersion   string `json:"current_version,omitempty"`
+	CurrentRevision  string `json:"current_revision,omitempty"`
 	LatestVersion    string `json:"latest_version,omitempty"`
 	InstalledVersion string `json:"installed_version,omitempty"`
+	RunningRevision  string `json:"running_revision,omitempty"`
+	ExpectedRevision string `json:"expected_revision,omitempty"`
 	CheckedAt        string `json:"checked_at,omitempty"`
 	Source           string `json:"source,omitempty"`
 	UpdateAvailable  bool   `json:"update_available"`
@@ -55,11 +58,27 @@ type statusReleaseInfo struct {
 	MetadataStatus   string `json:"metadata_status"`
 	MetadataError    string `json:"metadata_error,omitempty"`
 	SourceStatus     string `json:"source_status,omitempty"`
+	StatusClass      string `json:"status_class,omitempty"`
+	FailureClass     string `json:"failure_class,omitempty"`
+	RetryPolicy      string `json:"retry_policy,omitempty"`
+	NextAction       string `json:"next_action,omitempty"`
+	ServiceStatus    string `json:"service_status,omitempty"`
+	ServiceClass     string `json:"service_class,omitempty"`
+	ServiceFailure   string `json:"service_failure,omitempty"`
+	ServiceRetry     string `json:"service_retry,omitempty"`
+	ServiceNext      string `json:"service_next,omitempty"`
+	FreshnessStatus  string `json:"freshness_status,omitempty"`
+	FreshnessClass   string `json:"freshness_class,omitempty"`
+	FreshnessFailure string `json:"freshness_failure,omitempty"`
+	FreshnessRetry   string `json:"freshness_retry,omitempty"`
+	FreshnessNext    string `json:"freshness_next,omitempty"`
 }
 
 type statusIssue struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code       string `json:"code"`
+	Message    string `json:"message"`
+	Class      string `json:"class,omitempty"`
+	NextAction string `json:"next_action,omitempty"`
 }
 
 type statusServiceInfo struct {
@@ -154,7 +173,12 @@ func appendStatusIssue(s *statusSnapshot, code string, message string) {
 		code = "unknown"
 	}
 	s.Issues = append(s.Issues, message)
-	s.IssueRecords = append(s.IssueRecords, statusIssue{Code: code, Message: message})
+	s.IssueRecords = append(s.IssueRecords, statusIssue{
+		Code:       code,
+		Message:    message,
+		Class:      core.StatusClassOperationalTension,
+		NextAction: "run doctor",
+	})
 }
 
 func finalizeStatusSnapshot(s *statusSnapshot) {
@@ -213,6 +237,7 @@ func buildStatusSnapshot(ctx context.Context, opts statusCommandOptions) (status
 		Release: statusReleaseInfo{
 			MetadataPath:     metaPath,
 			CurrentVersion:   current.Version,
+			CurrentRevision:  current.Revision,
 			LatestVersion:    meta.LatestVersion,
 			InstalledVersion: meta.InstalledVersion,
 			CheckedAt:        meta.CheckedAt,
@@ -278,14 +303,38 @@ func buildStatusSnapshot(ctx context.Context, opts statusCommandOptions) (status
 		appendStatusIssue(&s, "duplicate_primary_units", "duplicate/stale Aphelion primary units present")
 	}
 	s.Service.BinaryMatches = serviceBinaryMatches(s.Service)
+	s.Release.RunningRevision = s.Service.RunningRevision
+	s.Release.ExpectedRevision = s.Service.ExpectedRevision
 	if !s.Service.BinaryMatches {
 		appendStatusIssue(&s, "service_binary_mismatch", "running service binary does not match expected binary")
 	}
 	if strings.TrimSpace(s.Service.MainPID) == "" || strings.TrimSpace(s.Service.MainPID) == "0" {
 		appendStatusIssue(&s, "service_not_running", "aphelion service is not running")
 	}
-	s.Release.SourceStatus = core.ClassifySourceInstallStatus(s.Service.RunningRevision, s.Service.ExpectedRevision, s.Release.MetadataStatus, s.Release.UpdateAvailable)
-	if s.Release.UpdateAvailable && s.Release.SourceStatus != "source_verified_release_metadata_stale" {
+	releaseAxes := core.ClassifySourceInstallReliabilityAxes(core.SourceInstallStatusInput{
+		CurrentRevision:  s.Release.CurrentRevision,
+		RunningRevision:  s.Service.RunningRevision,
+		ExpectedRevision: s.Service.ExpectedRevision,
+		LatestVersion:    s.Release.LatestVersion,
+		MetadataStatus:   s.Release.MetadataStatus,
+		UpdateAvailable:  s.Release.UpdateAvailable,
+	})
+	s.Release.SourceStatus = releaseAxes.Overall.Condition
+	s.Release.StatusClass = releaseAxes.Overall.StatusClass
+	s.Release.FailureClass = releaseAxes.Overall.FailureClass
+	s.Release.RetryPolicy = releaseAxes.Overall.RetryPolicy
+	s.Release.NextAction = releaseAxes.Overall.NextAction
+	s.Release.ServiceStatus = releaseAxes.ServiceConsistency.Condition
+	s.Release.ServiceClass = releaseAxes.ServiceConsistency.StatusClass
+	s.Release.ServiceFailure = releaseAxes.ServiceConsistency.FailureClass
+	s.Release.ServiceRetry = releaseAxes.ServiceConsistency.RetryPolicy
+	s.Release.ServiceNext = releaseAxes.ServiceConsistency.NextAction
+	s.Release.FreshnessStatus = releaseAxes.ReleaseFreshness.Condition
+	s.Release.FreshnessClass = releaseAxes.ReleaseFreshness.StatusClass
+	s.Release.FreshnessFailure = releaseAxes.ReleaseFreshness.FailureClass
+	s.Release.FreshnessRetry = releaseAxes.ReleaseFreshness.RetryPolicy
+	s.Release.FreshnessNext = releaseAxes.ReleaseFreshness.NextAction
+	if s.Release.UpdateAvailable {
 		appendStatusIssue(&s, "release_update_available", "newer release available in cached metadata")
 	}
 	finalizeStatusSnapshot(&s)
@@ -352,6 +401,7 @@ func renderStatusKV(out *os.File, s statusSnapshot) {
 	fmt.Fprintf(out, "config_path: %s\n", firstNonEmpty(s.ConfigPath, "unknown"))
 	fmt.Fprintf(out, "binary_version: %s\n", firstNonEmpty(s.Version.Version, "unknown"))
 	fmt.Fprintf(out, "binary_revision: %s\n", firstNonEmpty(s.Version.VCSRevision, "unknown"))
+	fmt.Fprintf(out, "source_current_revision: %s\n", firstNonEmpty(s.Release.CurrentRevision, "unknown"))
 	fmt.Fprintf(out, "service_name: %s\n", firstNonEmpty(s.Service.Name, aphelionUserServiceName))
 	fmt.Fprintf(out, "service_load_state: %s\n", firstNonEmpty(s.Service.LoadState, "unknown"))
 	fmt.Fprintf(out, "service_active_state: %s\n", firstNonEmpty(s.Service.ActiveState, "unknown"))
@@ -361,6 +411,8 @@ func renderStatusKV(out *os.File, s statusSnapshot) {
 	fmt.Fprintf(out, "service_expected_exec: %s\n", firstNonEmpty(s.Service.ExpectedExecPath, "unknown"))
 	fmt.Fprintf(out, "service_running_version: %s\n", firstNonEmpty(s.Service.RunningVersion, "unknown"))
 	fmt.Fprintf(out, "service_running_revision: %s\n", firstNonEmpty(s.Service.RunningRevision, "unknown"))
+	fmt.Fprintf(out, "install_running_revision: %s\n", firstNonEmpty(s.Release.RunningRevision, "unknown"))
+	fmt.Fprintf(out, "install_expected_revision: %s\n", firstNonEmpty(s.Release.ExpectedRevision, "unknown"))
 	fmt.Fprintf(out, "service_binary_matches: %t\n", s.Service.BinaryMatches)
 	fmt.Fprintf(out, "duplicate_units: %s\n", strings.Join(s.DuplicateUnits, ","))
 	fmt.Fprintf(out, "release_metadata_path: %s\n", firstNonEmpty(s.Release.MetadataPath, "unknown"))
@@ -369,6 +421,20 @@ func renderStatusKV(out *os.File, s statusSnapshot) {
 	fmt.Fprintf(out, "release_latest_version: %s\n", firstNonEmpty(s.Release.LatestVersion, "unknown"))
 	fmt.Fprintf(out, "release_update_available: %t\n", s.Release.UpdateAvailable)
 	fmt.Fprintf(out, "release_source_status: %s\n", firstNonEmpty(s.Release.SourceStatus, "unknown"))
+	fmt.Fprintf(out, "release_status_class: %s\n", firstNonEmpty(s.Release.StatusClass, "unknown"))
+	fmt.Fprintf(out, "release_failure_class: %s\n", firstNonEmpty(s.Release.FailureClass, "unknown"))
+	fmt.Fprintf(out, "release_retry_policy: %s\n", firstNonEmpty(s.Release.RetryPolicy, "unknown"))
+	fmt.Fprintf(out, "release_next_action: %s\n", firstNonEmpty(s.Release.NextAction, "unknown"))
+	fmt.Fprintf(out, "source_service_status: %s\n", firstNonEmpty(s.Release.ServiceStatus, "unknown"))
+	fmt.Fprintf(out, "source_service_status_class: %s\n", firstNonEmpty(s.Release.ServiceClass, "unknown"))
+	fmt.Fprintf(out, "source_service_failure_class: %s\n", firstNonEmpty(s.Release.ServiceFailure, "unknown"))
+	fmt.Fprintf(out, "source_service_retry_policy: %s\n", firstNonEmpty(s.Release.ServiceRetry, "unknown"))
+	fmt.Fprintf(out, "source_service_next_action: %s\n", firstNonEmpty(s.Release.ServiceNext, "unknown"))
+	fmt.Fprintf(out, "release_freshness_status: %s\n", firstNonEmpty(s.Release.FreshnessStatus, "unknown"))
+	fmt.Fprintf(out, "release_freshness_status_class: %s\n", firstNonEmpty(s.Release.FreshnessClass, "unknown"))
+	fmt.Fprintf(out, "release_freshness_failure_class: %s\n", firstNonEmpty(s.Release.FreshnessFailure, "unknown"))
+	fmt.Fprintf(out, "release_freshness_retry_policy: %s\n", firstNonEmpty(s.Release.FreshnessRetry, "unknown"))
+	fmt.Fprintf(out, "release_freshness_next_action: %s\n", firstNonEmpty(s.Release.FreshnessNext, "unknown"))
 	fmt.Fprintf(out, "durable_children_metadata_path: %s\n", firstNonEmpty(s.DurableChildren.MetadataPath, "unknown"))
 	fmt.Fprintf(out, "durable_children_status: %s\n", firstNonEmpty(s.DurableChildren.Status, "unknown"))
 	fmt.Fprintf(out, "durable_children_total: %d\n", s.DurableChildren.TotalCount)

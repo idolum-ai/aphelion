@@ -45,6 +45,11 @@ type toolObserver interface {
 	ToolFinished(ctx context.Context, name string, input json.RawMessage, output string, err error)
 }
 
+type toolOutputProjectionObserver interface {
+	ProjectToolOutput(ctx context.Context, name string, input json.RawMessage, output string, err error) toolOutputProjection
+	ToolFinishedWithProjection(ctx context.Context, name string, input json.RawMessage, rawOutput string, projectedOutput string, err error, projectionRecorded bool)
+}
+
 type toolInvocationContextBinder interface {
 	ToolInvocationContext(ctx context.Context, name string, input json.RawMessage) context.Context
 }
@@ -70,6 +75,26 @@ func (o *observedToolRegistry) Execute(ctx context.Context, name string, input j
 	}
 	out, err := o.base.Execute(ctx, name, input)
 	if o.observer != nil {
+		if projector, ok := o.observer.(toolOutputProjectionObserver); ok {
+			projection := projector.ProjectToolOutput(ctx, name, input, out, err)
+			if err != nil && projection.Err == nil {
+				signals := classifyProjectedToolFailure(err, out)
+				projection.Err = projectedToolFailureError{
+					safe:             safeToolFailureSummary(signals.FailureClass, ""),
+					failureClass:     signals.FailureClass,
+					retryable:        signals.Retryable,
+					contextCancelled: signals.ContextCancelled,
+					deadlineExceeded: signals.DeadlineExceeded,
+					execRejected:     signals.ExecRejected,
+					policyRef:        session.ExposureProjectionPolicyToolOutputV1,
+				}
+			}
+			projector.ToolFinishedWithProjection(ctx, name, input, out, projection.Output, projection.Err, projection.Recorded)
+			if err != nil {
+				return projection.Output, projection.Err
+			}
+			return projection.Output, nil
+		}
 		o.observer.ToolFinished(ctx, name, input, out, err)
 	}
 	return out, err

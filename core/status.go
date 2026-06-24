@@ -204,6 +204,10 @@ type ProviderHealthSnapshot struct {
 	GeneratedAt         time.Time
 	Window              time.Duration
 	Status              string
+	StatusClass         string
+	FailureClass        string
+	RetryPolicy         string
+	NextAction          string
 	RecentFailures      int
 	RecentRetries       int
 	RecentFailovers     int
@@ -215,6 +219,20 @@ type ProviderHealthSnapshot struct {
 	LastFailureReason   string
 	LastFailureError    string
 	LastSuccessAt       time.Time
+}
+
+type PersistenceHealthSnapshot struct {
+	GeneratedAt   time.Time
+	Window        time.Duration
+	Status        string
+	StatusClass   string
+	FailureClass  string
+	RetryPolicy   string
+	NextAction    string
+	RecentSlow    int
+	LastEventAt   time.Time
+	LastComponent string
+	LastLatency   time.Duration
 }
 
 type AutoApprovalStatusSnapshot struct {
@@ -325,14 +343,18 @@ type SandboxReadinessSnapshot struct {
 }
 
 type TelegramIngressFailureSnapshot struct {
-	Surface    string
-	UpdateID   int64
-	UpdateKind string
-	ChatID     int64
-	SenderID   int64
-	MessageID  int64
-	ErrorText  string
-	CreatedAt  time.Time
+	Surface      string
+	UpdateID     int64
+	UpdateKind   string
+	ChatID       int64
+	SenderID     int64
+	MessageID    int64
+	ErrorText    string
+	StatusClass  string
+	FailureClass string
+	RetryPolicy  string
+	NextAction   string
+	CreatedAt    time.Time
 }
 
 type TelegramIngressUpdateSnapshot struct {
@@ -437,6 +459,7 @@ type SystemStatusSnapshot struct {
 	RestartHealth                RestartHealthSnapshot
 	ReleaseNotice                ReleaseNoticeSnapshot
 	ProviderHealth               ProviderHealthSnapshot
+	PersistenceHealth            PersistenceHealthSnapshot
 	Tailnet                      *TailnetStatusSnapshot
 	Autonomy                     AutonomyStatusSnapshot
 	Sandbox                      SandboxReadinessSnapshot

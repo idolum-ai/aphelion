@@ -3,6 +3,7 @@
 package session
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -82,6 +83,64 @@ func TestRecordResourcePreflightCreatesRepairNextAction(t *testing.T) {
 	}
 	if open[0].State != NextActionBlockedNeedsResourceRepair || open[0].ResourceBlocker != "host_mode_denied" || open[0].TurnRunID != 42 {
 		t.Fatalf("resource next action = %#v, want blocked resource repair tied to turn 42", open[0])
+	}
+}
+
+func TestRecordNextActionPersistsStructuredOperationPayload(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	key := SessionKey{ChatID: 91004, UserID: 1001}
+	if _, err := store.RecordNextAction(NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              NextActionReadyToExecute,
+		SubjectKind:        "shell_rejection",
+		SubjectRef:         "sha256:test",
+		NextAction:         "read through native tool",
+		OperationKind:      "native_file_read",
+		OperationTool:      "read_file",
+		OperationInputJSON: `{"path": "README.md", "full": true}`,
+		OperatorProjection: "Use read_file.",
+	}); err != nil {
+		t.Fatalf("RecordNextAction() err = %v", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one", open)
+	}
+	got := open[0]
+	var gotInput map[string]any
+	if err := json.Unmarshal([]byte(got.OperationInputJSON), &gotInput); err != nil {
+		t.Fatalf("unmarshal stored operation input: %v", err)
+	}
+	if got.OperationKind != "native_file_read" || got.OperationTool != "read_file" || gotInput["path"] != "README.md" || gotInput["full"] != true {
+		t.Fatalf("operation payload = kind=%q tool=%q input=%s", got.OperationKind, got.OperationTool, got.OperationInputJSON)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 10)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one workflow.next_state event", events)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(events[0].PayloadJSON), &payload); err != nil {
+		t.Fatalf("unmarshal next-action event payload: %v", err)
+	}
+	operation, ok := payload["operation"].(map[string]any)
+	if !ok || operation["kind"] != "native_file_read" || operation["tool"] != "read_file" {
+		t.Fatalf("event operation payload = %#v", payload["operation"])
+	}
+	input, ok := operation["input"].(map[string]any)
+	if !ok || input["path"] != "README.md" || input["full"] != true {
+		t.Fatalf("event operation input = %#v", operation["input"])
 	}
 }
 

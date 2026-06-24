@@ -53,25 +53,34 @@ github_pat_1234567890abcdef`
 	}
 }
 
-func TestProjectToolResultForAudienceAnnotatesSensitiveAndLargePreviews(t *testing.T) {
+func TestProjectToolResultForAudienceReturnsStructuredDecisionWithoutHeader(t *testing.T) {
 	t.Parallel()
 
-	sensitive := "token: example-redaction-canary-value\npath: /workspace/credential-slot"
-	projected := ProjectToolResultForAudience(sensitive, ExposureAudienceModelPreview)
-	if projected.Projection != "redacted" || projected.PolicyRef == "" {
-		t.Fatalf("projection = %#v, want redacted projection with policy", projected)
+	metadata := "path: /workspace/credential-slot"
+	redacted := ProjectToolResultForAudience(metadata, ExposureAudienceModelPreview)
+	if redacted.ProjectionKind != ExposureProjectionRedacted || redacted.PolicyRef == "" || redacted.Sensitivity != EvidenceRedactionRedacted {
+		t.Fatalf("projection = %#v, want structured redacted projection with policy", redacted)
 	}
-	for _, leaked := range []string{"example-redaction-canary-value", "/workspace/credential-slot"} {
-		if strings.Contains(projected.Text, leaked) {
-			t.Fatalf("projection leaked %q: %s", leaked, projected.Text)
+	if !stringListContains(redacted.SensitivityProvenance, "pattern:credential_metadata") {
+		t.Fatalf("provenance = %#v, want credential metadata pattern", redacted.SensitivityProvenance)
+	}
+	for _, leaked := range []string{"/workspace/credential-slot", "[EXPOSURE_PROJECTION]", "policy_ref:", "sensitivity:"} {
+		if strings.Contains(redacted.Text, leaked) {
+			t.Fatalf("projection text leaked in-band detail %q: %s", leaked, redacted.Text)
 		}
 	}
-	if !strings.Contains(projected.Text, "[EXPOSURE_PROJECTION]") || !strings.Contains(projected.Text, "credential_metadata") {
-		t.Fatalf("projection text = %q, want exposure header with sensitivity", projected.Text)
+
+	sensitive := "token: github_pat_1234567890abcdef"
+	protected := ProjectToolResultForPurpose(sensitive, ExposureAudienceModelPreview, ExposurePurposeToolResultModelContext)
+	if protected.ProjectionKind != ExposureProjectionProtectedRef || protected.Sensitivity != EvidenceRedactionSecret {
+		t.Fatalf("protected projection = %#v, want protected_ref credential-bearing decision", protected)
+	}
+	if strings.Contains(protected.Text, "github_pat_1234567890abcdef") || strings.Contains(protected.Text, "[EXPOSURE_PROJECTION]") {
+		t.Fatalf("protected projection text = %q, want safe marker without header or secret", protected.Text)
 	}
 
 	large := ProjectToolResultForAudience(strings.Repeat("repair detail\n", 300), ExposureAudienceModelPreview)
-	if large.Projection != "digest" || !strings.Contains(large.Text, "compact_current_state") {
+	if large.ProjectionKind != ExposureProjectionDigest || !strings.Contains(large.Text, "[tool_output_digest") {
 		t.Fatalf("large projection = %#v, want compact digest", large)
 	}
 }

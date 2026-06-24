@@ -75,6 +75,7 @@ type Dependencies struct {
 	StaleRunningTurnRuns                          func(now time.Time) ([]session.TurnRun, error)
 	WriteAuthorityProjection                      func(b *strings.Builder, now time.Time)
 	WriteProviderHealth                           func(b *strings.Builder, now time.Time)
+	WritePersistenceHealth                        func(b *strings.Builder, now time.Time)
 	WritePerceptionBudget                         func(b *strings.Builder, key session.SessionKey, now time.Time)
 	WriteExternalChannelAdapterReadiness          func(b *strings.Builder, input DiagnosticInput)
 	ReasoningOptionsForRun                        func(kind session.TurnRunKind) *agent.CompleteOptions
@@ -102,6 +103,7 @@ type Runtime struct {
 	staleRunningTurnRuns                          func(now time.Time) ([]session.TurnRun, error)
 	writeDoctorAuthorityProjection                func(b *strings.Builder, now time.Time)
 	writeDoctorProviderHealth                     func(b *strings.Builder, now time.Time)
+	writeDoctorPersistenceHealth                  func(b *strings.Builder, now time.Time)
 	writeDoctorPerceptionBudget                   func(b *strings.Builder, key session.SessionKey, now time.Time)
 	writeDoctorExternalChannelAdapterReadiness    func(b *strings.Builder, input DiagnosticInput)
 	reasoningOptionsForRun                        func(kind session.TurnRunKind) *agent.CompleteOptions
@@ -129,6 +131,7 @@ func NewRuntime(deps Dependencies) *Runtime {
 		staleRunningTurnRuns:                          deps.StaleRunningTurnRuns,
 		writeDoctorAuthorityProjection:                deps.WriteAuthorityProjection,
 		writeDoctorProviderHealth:                     deps.WriteProviderHealth,
+		writeDoctorPersistenceHealth:                  deps.WritePersistenceHealth,
 		writeDoctorPerceptionBudget:                   deps.WritePerceptionBudget,
 		writeDoctorExternalChannelAdapterReadiness:    deps.WriteExternalChannelAdapterReadiness,
 		reasoningOptionsForRun:                        deps.ReasoningOptionsForRun,

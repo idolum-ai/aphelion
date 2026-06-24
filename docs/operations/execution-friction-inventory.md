@@ -148,9 +148,10 @@ The observations separate into four interacting planes:
 - **Presentation plane:** incomplete or inconsistent projection of the exact next
   action when the system stops safely; compact tool-result projections and
   durable-child task/result identifiers are the first slice.
-- **Exposure plane:** now projects ordinary turn-run tool previews through an
-  audience-aware policy. Other output, evidence, log, and privileged hydration
-  routes still need the same projection model.
+- **Exposure plane:** now records model-context and operator-preview tool output
+  projections in a typed exposure ledger with protected evidence references.
+  Other logs, external delivery routes, and privileged artifact access still
+  need the same explicit audience model.
 
 ## Diagnostic Matrix
 
@@ -192,10 +193,14 @@ The desired shape is:
 
 ## Implementation Slice And Remaining Work
 
-- Tool-result previews now pass through `ProjectToolResultForAudience` before
-  they are stored on turn runs. The first projection covers model-preview
-  exposure; canonical evidence hydration, logs, operator UI, and protected
-  artifact access still need the same explicit audience model.
+- Tool-result output now records `exposure_projection_events` rows before
+  ordinary model-context and operator-preview disclosure. Each row stores the
+  audience, purpose, policy reference, projection kind, sensitivity provenance,
+  source hash, projected hash, and protected evidence reference when raw output
+  is retained outside the ordinary projection. The runtime tool observer returns
+  the model projection to the governor loop instead of the raw protected bytes.
+  Logs, external delivery, and privileged protected-artifact access still need
+  the same explicit audience model.
 - Approvals, uncertain effects, resource preflight failures, child wake
   materialization, and supersession can now record typed next-action rows. The
   remaining work is to ensure every execution species emits those rows through

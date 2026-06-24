@@ -91,15 +91,20 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		return core.SystemStatusSnapshot{}, err
 	}
 	for _, failure := range telegramFailures {
+		classification := core.ClassifyTransportReliability(failure.Surface, failure.ErrorText)
 		snapshot.TelegramIngress = append(snapshot.TelegramIngress, core.TelegramIngressFailureSnapshot{
-			Surface:    strings.TrimSpace(failure.Surface),
-			UpdateID:   failure.UpdateID,
-			UpdateKind: strings.TrimSpace(failure.UpdateKind),
-			ChatID:     failure.ChatID,
-			SenderID:   failure.SenderID,
-			MessageID:  failure.MessageID,
-			ErrorText:  strings.TrimSpace(failure.ErrorText),
-			CreatedAt:  failure.CreatedAt,
+			Surface:      strings.TrimSpace(failure.Surface),
+			UpdateID:     failure.UpdateID,
+			UpdateKind:   strings.TrimSpace(failure.UpdateKind),
+			ChatID:       failure.ChatID,
+			SenderID:     failure.SenderID,
+			MessageID:    failure.MessageID,
+			ErrorText:    strings.TrimSpace(failure.ErrorText),
+			StatusClass:  classification.StatusClass,
+			FailureClass: classification.FailureClass,
+			RetryPolicy:  classification.RetryPolicy,
+			NextAction:   classification.NextAction,
+			CreatedAt:    failure.CreatedAt,
 		})
 	}
 
@@ -107,10 +112,26 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 	if err != nil {
 		return core.SystemStatusSnapshot{}, err
 	}
+	providerEvents, err := r.store.ExecutionEventsByTypes([]string{
+		core.ExecutionEventProviderAttemptFailed,
+		core.ExecutionEventProviderAttemptRetried,
+		core.ExecutionEventProviderFailoverEngaged,
+		core.ExecutionEventProviderAttemptSucceeded,
+	}, now.Add(-providerHealthWindow), 200)
+	if err != nil {
+		return core.SystemStatusSnapshot{}, err
+	}
+	persistenceEvents, err := r.store.ExecutionEventsByTypes([]string{
+		core.ExecutionEventPersistenceLatency,
+	}, now.Add(-persistenceHealthWindow), 200)
+	if err != nil {
+		return core.SystemStatusSnapshot{}, err
+	}
 	snapshot.RecentExecution = summarizeExecutionEvents(recentEvents, 20)
 	snapshot.LatestPerceptionBudgetByChat = latestPerceptionBudgetByChatFromExecutionEvents(recentEvents)
 	snapshot.RestartHealth = restartHealthWithLatestWatchdogEvent(snapshot.RestartHealth, recentEvents)
-	snapshot.ProviderHealth = providerHealthFromExecutionEvents(recentEvents, now)
+	snapshot.ProviderHealth = providerHealthFromExecutionEvents(providerEvents, now)
+	snapshot.PersistenceHealth = persistenceHealthFromExecutionEvents(persistenceEvents, now)
 	snapshot.RecentAdjudications = statusAdjudicationsFromExecutionEvents(recentEvents, 12)
 	activeByChat, queueByChat := liveRouterSignalsFromExecutionEvents(recentEvents)
 	latestFromEvents := latestTurnSnapshotsByChatFromExecutionEvents(recentEvents)
