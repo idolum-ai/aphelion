@@ -175,6 +175,17 @@ func (s *nativeTraversalSkips) record(reason string) {
 	s.reasons[reason]++
 }
 
+func (s *nativeTraversalSkips) recordOnce(reason string) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "unknown"
+	}
+	if s.reasons != nil && s.reasons[reason] > 0 {
+		return
+	}
+	s.record(reason)
+}
+
 func (s nativeTraversalSkips) partial() bool {
 	return s.count > 0
 }
@@ -197,6 +208,13 @@ func (s nativeTraversalSkips) summary() string {
 		parts = append(parts, fmt.Sprintf("%s=%d", key, s.reasons[key]))
 	}
 	return strings.Join(parts, ",")
+}
+
+func nativeTraversalOpenFailureReason(err error) string {
+	if errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM) {
+		return "permission_denied"
+	}
+	return "open_failed"
 }
 
 func nativeOpenScopedWriteFile(target nativeScopedTarget, createDirs, appendFile bool) (*os.File, error) {

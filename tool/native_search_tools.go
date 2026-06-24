@@ -64,6 +64,7 @@ func (r *Registry) searchFiles(ctx context.Context, input json.RawMessage, scope
 	fmt.Fprintf(&b, "path: %s\nquery: %s\nmatches: %d\npartial: %t\nskipped_count: %d\n", target.Path, query, len(matches), skips.partial(), skips.skippedCount())
 	if summary := skips.summary(); summary != "" {
 		fmt.Fprintf(&b, "skipped_reasons: %s\n", summary)
+		fmt.Fprintf(&b, "partial_reasons: %s\n", summary)
 	}
 	if len(matches) == 0 {
 		b.WriteString("[/SEARCH]")
@@ -97,6 +98,7 @@ func walkSearchRoot(ctx context.Context, target nativeScopedTarget, hidden []str
 
 func walkSearchOpened(ctx context.Context, file *os.File, displayPath string, hidden []string, maxBytes, limit int, needle string, matches *[]string, skips *nativeTraversalSkips, root bool) error {
 	if len(*matches) >= limit {
+		skips.recordOnce("result_limit")
 		return nil
 	}
 	select {
@@ -118,7 +120,7 @@ func walkSearchOpened(ctx context.Context, file *os.File, displayPath string, hi
 	if !info.Mode().IsRegular() {
 		return nil
 	}
-	if err := searchOneOpenFile(file, displayPath, maxBytes, limit, needle, matches); err != nil {
+	if err := searchOneOpenFile(file, displayPath, maxBytes, limit, needle, matches, skips); err != nil {
 		if !root {
 			skips.record("read_failed")
 			return nil
@@ -139,6 +141,7 @@ func walkSearchDir(ctx context.Context, dir *os.File, displayPath string, hidden
 	}
 	for _, entry := range entries {
 		if len(*matches) >= limit {
+			skips.recordOnce("result_limit")
 			return nil
 		}
 		select {
@@ -158,7 +161,7 @@ func walkSearchDir(ctx context.Context, dir *os.File, displayPath string, hidden
 		}
 		fd, err := nativeOpenChildNoFollow(int(dir.Fd()), name, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 		if err != nil {
-			skips.record("open_failed")
+			skips.record(nativeTraversalOpenFailureReason(err))
 			continue
 		}
 		child, err := nativeFileFromFD(fd, childPath)
@@ -178,16 +181,21 @@ func walkSearchDir(ctx context.Context, dir *os.File, displayPath string, hidden
 	return nil
 }
 
-func searchOneOpenFile(file io.Reader, path string, maxBytes, limit int, needle string, matches *[]string) error {
-	data, _, err := readBounded(file, maxBytes)
+const nativeSearchScannerMaxTokenBytes = 64 * 1024
+
+func searchOneOpenFile(file io.Reader, path string, maxBytes, limit int, needle string, matches *[]string, skips *nativeTraversalSkips) error {
+	data, truncated, err := readBounded(file, maxBytes)
 	if err != nil {
 		return fmt.Errorf("search read %q: %w", path, err)
+	}
+	if truncated {
+		skips.record("content_byte_limit")
 	}
 	if bytes.Contains(data, []byte{0}) {
 		return nil
 	}
 	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, nativeSearchScannerMaxTokenBytes), nativeSearchScannerMaxTokenBytes)
 	lineNo := 0
 	for scanner.Scan() {
 		lineNo++
@@ -199,9 +207,13 @@ func searchOneOpenFile(file io.Reader, path string, maxBytes, limit int, needle 
 			}
 			*matches = append(*matches, fmt.Sprintf("%s:%d: %s", path, lineNo, trimmed))
 			if len(*matches) >= limit {
+				skips.recordOnce("result_limit")
 				return nil
 			}
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		skips.record("scanner_error")
 	}
 	return nil
 }

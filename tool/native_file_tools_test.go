@@ -858,6 +858,92 @@ func TestNativeSearchReportsPartialForDescriptorOpenFailure(t *testing.T) {
 	}
 }
 
+func TestNativeSearchReportsPartialWhenResultLimitReached(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "many.txt"), []byte("needle one\nneedle two\nneedle three\n"), 0o600); err != nil {
+		t.Fatalf("write many matches: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "search", json.RawMessage(`{"path":"many.txt","query":"needle","limit":2}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("search err = %v", err)
+	}
+	if !strings.Contains(out, "matches: 2") || !strings.Contains(out, "partial: true") || !strings.Contains(out, "result_limit=1") {
+		t.Fatalf("search out = %q, want result_limit partial evidence", out)
+	}
+	if strings.Contains(out, "needle three") {
+		t.Fatalf("search out = %q, returned match beyond limit", out)
+	}
+}
+
+func TestNativeSearchReportsPartialWhenContentByteLimitCutsOffMatch(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	content := strings.Repeat("a", 80) + "\nneedle beyond cutoff\n"
+	if err := os.WriteFile(filepath.Join(workspace, "bounded.txt"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write bounded file: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "search", json.RawMessage(`{"path":"bounded.txt","query":"needle","max_bytes":32}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("search err = %v", err)
+	}
+	if !strings.Contains(out, "matches: 0") || !strings.Contains(out, "partial: true") || !strings.Contains(out, "content_byte_limit=1") {
+		t.Fatalf("search out = %q, want content_byte_limit partial evidence", out)
+	}
+	if strings.Contains(out, "needle beyond cutoff") {
+		t.Fatalf("search out = %q, returned cutoff match", out)
+	}
+}
+
+func TestNativeSearchReportsPartialOnScannerError(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	oversizedLine := "needle " + strings.Repeat("x", nativeSearchScannerMaxTokenBytes+1024)
+	if err := os.WriteFile(filepath.Join(workspace, "oversized.txt"), []byte(oversizedLine), 0o600); err != nil {
+		t.Fatalf("write oversized file: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "search", json.RawMessage(`{"path":"oversized.txt","query":"needle","max_bytes":200000}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("search err = %v", err)
+	}
+	if !strings.Contains(out, "matches: 0") || !strings.Contains(out, "partial: true") || !strings.Contains(out, "scanner_error=1") {
+		t.Fatalf("search out = %q, want scanner_error partial evidence", out)
+	}
+	if strings.Contains(out, "needle ") {
+		t.Fatalf("search out = %q, returned oversized token content", out)
+	}
+}
+
 func TestNativeFileAccessToolsRejectComponentSwapEscapes(t *testing.T) {
 	registry, store := newDurableAgentToolRegistry(t)
 	workspace := t.TempDir()
