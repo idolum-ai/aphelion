@@ -10,6 +10,7 @@ import (
 
 func (r *Runtime) writeDoctorIssueStatusChecks(b *strings.Builder, input DiagnosticInput) {
 	WriteLine(b, "classification_contract: before reporting an issue as current, compare historical failure evidence with current runtime, prompt, memory, and source-state evidence.")
+	WriteLine(b, "classification_scope: operational_tension")
 	WriteLine(b, "allowed_statuses: active, likely_fixed, historical_resolved, residual_risk, unknown")
 	WriteLine(b, "reporting_rule: if evidence is old and the current-state check passes, report it as historical/resolved or residual risk, not as an active failure.")
 
@@ -94,6 +95,7 @@ func (r *Runtime) writeDoctorIssueStatusChecks(b *strings.Builder, input Diagnos
 func (r *Runtime) writeDoctorDesignPrincipleHealth(b *strings.Builder, input DiagnosticInput) {
 	workingRoot := strings.TrimSpace(input.Scope.WorkingRoot)
 	WriteLine(b, "classification_contract: design-principle health is advisory evidence, not runtime authority.")
+	WriteLine(b, "classification_scope: principle_debt")
 
 	principlesOK := doctorSourceContainsAll(workingRoot, "docs/architecture/design-principles.md", []string{
 		"Text is presentation, not authority",

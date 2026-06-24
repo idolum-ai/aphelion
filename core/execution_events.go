@@ -51,6 +51,7 @@ const (
 	ExecutionEventCapabilityUpdateApplied   = "capability.update_plan.applied"
 	ExecutionEventCapabilityInvocation      = "capability.invocation"
 	ExecutionEventWorkflowNextState         = "workflow.next_state"
+	ExecutionEventExposureProjected         = "exposure.projected"
 	ExecutionEventResourcePreflight         = "resource.preflight"
 	ExecutionEventPersistenceLatency        = "persistence.latency_classified"
 

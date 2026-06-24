@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
+	"golang.org/x/sys/unix"
 )
 
 func TestNativeFileToolsStayInsideScopedRoots(t *testing.T) {
@@ -707,6 +710,393 @@ func TestNativeFileAccessGrantDoesNotBypassHiddenPaths(t *testing.T) {
 	}
 }
 
+func TestNativeSearchSkipsHiddenDescendantsAndReportsPartial(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	hiddenDir := filepath.Join(workspace, ".secrets")
+	publicDir := filepath.Join(workspace, "public")
+	hiddenFile := filepath.Join(publicDir, "hidden.txt")
+	if err := os.MkdirAll(hiddenDir, 0o755); err != nil {
+		t.Fatalf("mkdir hidden dir: %v", err)
+	}
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatalf("mkdir public dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hiddenDir, "secret.txt"), []byte("needle hidden secret\n"), 0o600); err != nil {
+		t.Fatalf("write hidden secret: %v", err)
+	}
+	if err := os.WriteFile(hiddenFile, []byte("needle hidden file\n"), 0o600); err != nil {
+		t.Fatalf("write hidden file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicDir, "visible.txt"), []byte("needle visible\n"), 0o600); err != nil {
+		t.Fatalf("write visible file: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	profile := sandbox.DefaultProfiles().Admin
+	profile.HiddenPaths = append(profile.HiddenPaths, hiddenDir, hiddenFile)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          profile,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "search", json.RawMessage(`{"path":".","query":"needle","limit":10}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("search err = %v", err)
+	}
+	if !strings.Contains(out, "visible.txt") || !strings.Contains(out, "needle visible") {
+		t.Fatalf("search out = %q, want visible public match", out)
+	}
+	for _, forbidden := range []string{".secrets", "secret.txt", "hidden.txt", "needle hidden"} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("search out = %q, exposed hidden marker %q", out, forbidden)
+		}
+	}
+	if !strings.Contains(out, "partial: true") || !strings.Contains(out, "skipped_count: 2") || !strings.Contains(out, "skipped_reasons: hidden_policy=2") {
+		t.Fatalf("search out = %q, want hidden skips reported as partial", out)
+	}
+
+	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"public/hidden.txt","full":true}`), scope, scope.Principal, session.SessionKey{})
+	if err == nil || !strings.Contains(err.Error(), "hidden by the sandbox profile") {
+		t.Fatalf("read_file hidden descendant err = %v, want hidden-path rejection", err)
+	}
+}
+
+func TestNativeListDirSkipsHiddenChildrenAndReportsPartial(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	hiddenDir := filepath.Join(workspace, ".secrets")
+	publicDir := filepath.Join(workspace, "public")
+	hiddenFile := filepath.Join(publicDir, "hidden.txt")
+	if err := os.MkdirAll(hiddenDir, 0o755); err != nil {
+		t.Fatalf("mkdir hidden dir: %v", err)
+	}
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatalf("mkdir public dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hiddenDir, "secret.txt"), []byte("secret\n"), 0o600); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+	if err := os.WriteFile(hiddenFile, []byte("hidden\n"), 0o600); err != nil {
+		t.Fatalf("write hidden file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicDir, "visible.txt"), []byte("visible\n"), 0o600); err != nil {
+		t.Fatalf("write visible file: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	profile := sandbox.DefaultProfiles().Admin
+	profile.HiddenPaths = append(profile.HiddenPaths, hiddenDir, hiddenFile)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          profile,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	rootOut, err := registry.executeWithScopeAndPrincipal(context.Background(), "list_dir", json.RawMessage(`{"path":"."}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("list_dir root err = %v", err)
+	}
+	if !strings.Contains(rootOut, "- public dir") {
+		t.Fatalf("list_dir root out = %q, want public entry", rootOut)
+	}
+	if strings.Contains(rootOut, ".secrets") || strings.Contains(rootOut, "secret.txt") {
+		t.Fatalf("list_dir root out = %q, exposed hidden child", rootOut)
+	}
+	if !strings.Contains(rootOut, "partial: true") || !strings.Contains(rootOut, "skipped_count: 1") || !strings.Contains(rootOut, "skipped_reasons: hidden_policy=1") {
+		t.Fatalf("list_dir root out = %q, want hidden child skip evidence", rootOut)
+	}
+
+	publicOut, err := registry.executeWithScopeAndPrincipal(context.Background(), "list_dir", json.RawMessage(`{"path":"public"}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("list_dir public err = %v", err)
+	}
+	if !strings.Contains(publicOut, "- visible.txt file") {
+		t.Fatalf("list_dir public out = %q, want visible file", publicOut)
+	}
+	if strings.Contains(publicOut, "hidden.txt") {
+		t.Fatalf("list_dir public out = %q, exposed hidden file", publicOut)
+	}
+	if !strings.Contains(publicOut, "partial: true") || !strings.Contains(publicOut, "skipped_count: 1") || !strings.Contains(publicOut, "skipped_reasons: hidden_policy=1") {
+		t.Fatalf("list_dir public out = %q, want hidden file skip evidence", publicOut)
+	}
+}
+
+func TestNativeSearchReportsPartialForDescriptorOpenFailure(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "visible.txt"), []byte("ordinary text\n"), 0o600); err != nil {
+		t.Fatalf("write visible file: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(workspace, "missing-target"), filepath.Join(workspace, "race-link")); err != nil {
+		t.Fatalf("create race symlink: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "search", json.RawMessage(`{"path":".","query":"needle","limit":10}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("search err = %v", err)
+	}
+	if strings.Contains(out, "race-link") {
+		t.Fatalf("search out = %q, exposed skipped descriptor-open failure path", out)
+	}
+	if !strings.Contains(out, "matches: 0") || !strings.Contains(out, "partial: true") || !strings.Contains(out, "skipped_count: 1") || !strings.Contains(out, "skipped_reasons: open_failed=1") {
+		t.Fatalf("search out = %q, want partial descriptor-open failure evidence", out)
+	}
+}
+
+func TestNativeSearchReportsPartialWhenResultLimitReached(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "many.txt"), []byte("needle one\nneedle two\nneedle three\n"), 0o600); err != nil {
+		t.Fatalf("write many matches: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "search", json.RawMessage(`{"path":"many.txt","query":"needle","limit":2}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("search err = %v", err)
+	}
+	if !strings.Contains(out, "matches: 2") || !strings.Contains(out, "partial: true") || !strings.Contains(out, "result_limit=1") {
+		t.Fatalf("search out = %q, want result_limit partial evidence", out)
+	}
+	if strings.Contains(out, "needle three") {
+		t.Fatalf("search out = %q, returned match beyond limit", out)
+	}
+}
+
+func TestNativeSearchReportsPartialWhenContentByteLimitCutsOffMatch(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	content := strings.Repeat("a", 80) + "\nneedle beyond cutoff\n"
+	if err := os.WriteFile(filepath.Join(workspace, "bounded.txt"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write bounded file: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "search", json.RawMessage(`{"path":"bounded.txt","query":"needle","max_bytes":32}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("search err = %v", err)
+	}
+	if !strings.Contains(out, "matches: 0") || !strings.Contains(out, "partial: true") || !strings.Contains(out, "content_byte_limit=1") {
+		t.Fatalf("search out = %q, want content_byte_limit partial evidence", out)
+	}
+	if strings.Contains(out, "needle beyond cutoff") {
+		t.Fatalf("search out = %q, returned cutoff match", out)
+	}
+}
+
+func TestNativeSearchReportsPartialOnScannerError(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	oversizedLine := "needle " + strings.Repeat("x", nativeSearchScannerMaxTokenBytes+1024)
+	if err := os.WriteFile(filepath.Join(workspace, "oversized.txt"), []byte(oversizedLine), 0o600); err != nil {
+		t.Fatalf("write oversized file: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "search", json.RawMessage(`{"path":"oversized.txt","query":"needle","max_bytes":200000}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("search err = %v", err)
+	}
+	if !strings.Contains(out, "matches: 0") || !strings.Contains(out, "partial: true") || !strings.Contains(out, "scanner_error=1") {
+		t.Fatalf("search out = %q, want scanner_error partial evidence", out)
+	}
+	if strings.Contains(out, "needle ") {
+		t.Fatalf("search out = %q, returned oversized token content", out)
+	}
+}
+
+func TestNativeFileAccessToolsRejectComponentSwapEscapes(t *testing.T) {
+	registry, store := newDurableAgentToolRegistry(t)
+	workspace := t.TempDir()
+	approvedRoot := filepath.Join(t.TempDir(), "approved")
+	if err := os.MkdirAll(approvedRoot, 0o755); err != nil {
+		t.Fatalf("mkdir approved root: %v", err)
+	}
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "leaf.txt"), []byte("outside-marker read\n"), 0o600); err != nil {
+		t.Fatalf("write outside leaf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "outside-marker.txt"), []byte("outside-marker list\n"), 0o600); err != nil {
+		t.Fatalf("write outside marker: %v", err)
+	}
+
+	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	grantAuthorityUseLeaseWithID(t, store, key, "lease-component-swap-file-access")
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-component-swap-file-access", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
+	scope := sandbox.Scope{
+		Principal:        p,
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       filepath.Join(workspace, "global"),
+		SharedMemoryRoot: filepath.Join(workspace, "shared"),
+		WorkingRoot:      workspace,
+	}
+	for _, grant := range []session.CapabilityGrant{
+		{
+			GrantID:        "capg-component-swap-read",
+			GrantedBy:      "telegram:1001",
+			GrantedTo:      "telegram:1001",
+			Kind:           session.CapabilityKindFileAccess,
+			TargetResource: approvedRoot,
+			AllowedActions: []string{"read"},
+			Status:         session.CapabilityGrantStatusActive,
+		},
+		{
+			GrantID:        "capg-component-swap-write",
+			GrantedBy:      "telegram:1001",
+			GrantedTo:      "telegram:1001",
+			Kind:           session.CapabilityKindFileAccess,
+			TargetResource: approvedRoot,
+			AllowedActions: []string{"write"},
+			Status:         session.CapabilityGrantStatusActive,
+		},
+	} {
+		if _, err := store.UpsertCapabilityGrant(grant); err != nil {
+			t.Fatalf("UpsertCapabilityGrant(%s) err = %v", grant.GrantID, err)
+		}
+	}
+
+	victim := filepath.Join(approvedRoot, "swap")
+	installNativeSwapSafeDir(t, victim)
+	var stop atomic.Bool
+	var mutatorWG sync.WaitGroup
+	mutatorWG.Add(1)
+	go func() {
+		defer mutatorWG.Done()
+		for !stop.Load() {
+			_ = os.RemoveAll(victim)
+			_ = os.MkdirAll(victim, 0o755)
+			_ = os.WriteFile(filepath.Join(victim, "leaf.txt"), []byte("safe-marker read\n"), 0o600)
+			_ = os.RemoveAll(victim)
+			_ = os.Symlink(outside, victim)
+			_ = os.Remove(victim)
+			_ = os.WriteFile(victim, []byte("component is a file\n"), 0o600)
+		}
+	}()
+	t.Cleanup(func() {
+		stop.Store(true)
+		mutatorWG.Wait()
+	})
+
+	errCh := make(chan error, 4)
+	var opsWG sync.WaitGroup
+	runUntil := time.Now().Add(750 * time.Millisecond)
+	readInput := nativeJSON(t, map[string]any{"path": filepath.Join(victim, "leaf.txt"), "full": true})
+	listInput := nativeJSON(t, map[string]any{"path": victim})
+	searchInput := nativeJSON(t, map[string]any{"path": victim, "query": "outside-marker", "limit": 5})
+	writeInput := nativeJSON(t, map[string]any{"path": filepath.Join(victim, "created.txt"), "content": "safe write\n", "create_dirs": true})
+	runOp := func(fn func() error) {
+		defer opsWG.Done()
+		for time.Now().Before(runUntil) {
+			if err := fn(); err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}
+	opsWG.Add(4)
+	go runOp(func() error {
+		out, _ := registry.executeWithScopeAndPrincipal(ctx, "read_file", readInput, scope, p, key)
+		if strings.Contains(out, "outside-marker") {
+			return fmt.Errorf("read_file escaped granted root: %s", out)
+		}
+		return nil
+	})
+	go runOp(func() error {
+		out, _ := registry.executeWithScopeAndPrincipal(ctx, "list_dir", listInput, scope, p, key)
+		if strings.Contains(out, "outside-marker") {
+			return fmt.Errorf("list_dir escaped granted root: %s", out)
+		}
+		return nil
+	})
+	go runOp(func() error {
+		out, _ := registry.executeWithScopeAndPrincipal(ctx, "search", searchInput, scope, p, key)
+		if strings.Contains(out, "outside-marker") && !strings.Contains(out, "matches: 0") {
+			return fmt.Errorf("search escaped granted root: %s", out)
+		}
+		return nil
+	})
+	go runOp(func() error {
+		_, _ = registry.executeWithScopeAndPrincipal(ctx, "write_file", writeInput, scope, p, key)
+		if data, err := os.ReadFile(filepath.Join(outside, "created.txt")); err == nil {
+			return fmt.Errorf("write_file escaped granted root and wrote outside content %q", string(data))
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("stat outside write target: %w", err)
+		}
+		return nil
+	})
+	opsWG.Wait()
+	stop.Store(true)
+	mutatorWG.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func installNativeSwapSafeDir(t *testing.T, victim string) {
+	t.Helper()
+	if err := os.RemoveAll(victim); err != nil {
+		t.Fatalf("remove swap victim: %v", err)
+	}
+	if err := os.MkdirAll(victim, 0o755); err != nil {
+		t.Fatalf("mkdir swap victim: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(victim, "leaf.txt"), []byte("safe-marker read\n"), 0o600); err != nil {
+		t.Fatalf("write swap victim leaf: %v", err)
+	}
+}
+
+func nativeJSON(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal native tool input: %v", err)
+	}
+	return raw
+}
+
 func assertNativeFileAccessInvocations(t *testing.T, store *session.SQLiteStore, grantID string, want map[string]string) {
 	t.Helper()
 
@@ -781,11 +1171,55 @@ func TestWriteFileCreateDirsValidatesSymlinkAncestorBeforeMkdir(t *testing.T) {
 	}
 
 	_, err := registry.executeWithScopeAndPrincipal(context.Background(), "write_file", json.RawMessage(`{"path":"link/newdir/file.txt","content":"nope","create_dirs":true}`), scope, scope.Principal, session.SessionKey{})
-	if err == nil || !strings.Contains(err.Error(), "outside writable sandbox roots") {
-		t.Fatalf("write_file err = %v, want pre-mkdir writable-root rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "refused non-directory or symlink component") {
+		t.Fatalf("write_file err = %v, want descriptor-scoped symlink rejection", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(outside, "newdir")); !os.IsNotExist(statErr) {
 		t.Fatalf("outside newdir stat err = %v, want directory not created", statErr)
+	}
+}
+
+func TestWriteFileRejectsFIFOWithoutWriting(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	fifo := filepath.Join(workspace, "pipe")
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatalf("mkfifo fixture: %v", err)
+	}
+	readFD, err := unix.Open(fifo, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("open fifo reader: %v", err)
+	}
+	defer unix.Close(readFD)
+
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "write_file", json.RawMessage(`{"path":"pipe","content":"must not reach fifo"}`), scope, scope.Principal, session.SessionKey{})
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("write_file fifo err = %v, want regular-file rejection", err)
+	}
+	info, err := os.Lstat(fifo)
+	if err != nil {
+		t.Fatalf("lstat fifo after rejected write: %v", err)
+	}
+	if info.Mode()&os.ModeNamedPipe == 0 {
+		t.Fatalf("fifo mode after rejected write = %s, want named pipe", info.Mode())
+	}
+	buf := make([]byte, 64)
+	n, readErr := unix.Read(readFD, buf)
+	if n > 0 {
+		t.Fatalf("fifo received %q, want no write side effect", string(buf[:n]))
+	}
+	if readErr != nil && !errors.Is(readErr, unix.EAGAIN) {
+		t.Fatalf("fifo read err = %v, want empty fifo or EAGAIN", readErr)
 	}
 }
 

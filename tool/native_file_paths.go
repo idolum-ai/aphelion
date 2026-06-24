@@ -286,13 +286,6 @@ func nativeCapabilityFileAccessRoot(scope sandbox.Scope, value string) (string, 
 	} else if symlink != "" {
 		return "", fmt.Errorf("file_access target_resource %q must not contain symlink component %q", value, symlink)
 	}
-	if realRoot, err := filepath.EvalSymlinks(root); err == nil {
-		realRoot, err = filepath.Abs(filepath.Clean(realRoot))
-		if err != nil {
-			return "", err
-		}
-		root = realRoot
-	}
 	return root, nil
 }
 
@@ -485,7 +478,7 @@ func nativeHiddenPaths(scope sandbox.Scope) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return normalizeNativeRoots(hidden)
+	return normalizeNativeRootsAllowEmpty(hidden)
 }
 
 func nativeScopedPaths(values []string, scope sandbox.Scope) ([]string, error) {

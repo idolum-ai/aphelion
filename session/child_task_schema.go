@@ -131,19 +131,14 @@ func ensureChildTaskLeaseColumns(tx *sql.Tx) error {
 	return nil
 }
 
-func migrateSchemaV75ToV76(tx *sql.Tx) error {
-	// Schema 76 is reserved for concurrent hardening branches; child tasks own 77.
-	return nil
-}
-
-func migrateSchemaV76ToV77(tx *sql.Tx) error {
-	return ensureChildTaskTables(tx)
-}
-
 func migrateSchemaV77ToV78(tx *sql.Tx) error {
 	return ensureChildTaskTables(tx)
 }
 
 func migrateSchemaV78ToV79(tx *sql.Tx) error {
+	return ensureChildTaskTables(tx)
+}
+
+func migrateSchemaV79ToV80(tx *sql.Tx) error {
 	return ensureChildTaskTables(tx)
 }

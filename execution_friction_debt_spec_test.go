@@ -326,8 +326,8 @@ func TestExecutionFrictionDebtSpecContextStatusAndReliability(t *testing.T) {
 		failures = append(failures, "long repair loop has no compact current-state packet")
 	}
 	statusClassification := productionSourceInstallStatusClassification()
-	if statusClassification != "source_verified_release_metadata_stale" {
-		failures = append(failures, fmt.Sprintf("source install status classified as %q, want source_verified_release_metadata_stale", statusClassification))
+	if statusClassification != "release_update_available" {
+		failures = append(failures, fmt.Sprintf("source install status classified as %q, want release_update_available", statusClassification))
 	}
 	if !productionPersistenceLatencyClassified(store, key) {
 		failures = append(failures, "TES latency has no production operational-amplifier classification")
@@ -507,7 +507,13 @@ func productionCompactStatePacketAvailable(run *session.TurnRun) bool {
 }
 
 func productionSourceInstallStatusClassification() string {
-	return core.ClassifySourceInstallStatus("abc123", "abc123", "current", true)
+	return core.ClassifySourceInstallReliability(core.SourceInstallStatusInput{
+		RunningRevision:  "abc123",
+		ExpectedRevision: "abc123",
+		LatestVersion:    "v0.3.0",
+		MetadataStatus:   "current",
+		UpdateAvailable:  true,
+	}).Condition
 }
 
 func productionPersistenceLatencyClassified(store *session.SQLiteStore, key session.SessionKey) bool {

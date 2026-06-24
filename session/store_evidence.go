@@ -209,13 +209,14 @@ func (s *SQLiteStore) HydrateEvidence(query EvidenceHydrationQuery) (EvidenceHyd
 		if err != nil {
 			return result, err
 		}
-		if !ok || !evidenceObjectAllowedForHydration(obj, query, sessionID) {
+		if !ok || !evidenceObjectInHydrationScope(obj, query, sessionID) {
 			result.MissingEvidenceIDs = append(result.MissingEvidenceIDs, id)
 			continue
 		}
-		result.Required = append(result.Required, obj)
-		result.Selected = append(result.Selected, obj)
-		seen[obj.ID] = struct{}{}
+		selected := evidenceObjectForHydration(obj)
+		result.Required = append(result.Required, selected)
+		result.Selected = append(result.Selected, selected)
+		seen[selected.ID] = struct{}{}
 	}
 
 	candidateLimit := query.Limit * 4
@@ -237,6 +238,9 @@ func (s *SQLiteStore) HydrateEvidence(query EvidenceHydrationQuery) (EvidenceHyd
 		if len(result.Selected) >= query.Limit {
 			break
 		}
+		if !evidenceObjectInHydrationScope(candidate.object, query, sessionID) || !EvidencePayloadHydrationAllowed(candidate.object.RedactionClass) {
+			continue
+		}
 		if _, ok := seen[candidate.object.ID]; ok {
 			continue
 		}
@@ -248,9 +252,13 @@ func (s *SQLiteStore) HydrateEvidence(query EvidenceHydrationQuery) (EvidenceHyd
 		if err != nil {
 			return result, err
 		}
-		result.Selected = fallback
-		result.FallbackUsed = len(fallback) > 0
-		if len(fallback) > 0 {
+		for _, obj := range fallback {
+			if evidenceObjectInHydrationScope(obj, query, sessionID) && EvidencePayloadHydrationAllowed(obj.RedactionClass) {
+				result.Selected = append(result.Selected, obj)
+			}
+		}
+		result.FallbackUsed = len(result.Selected) > 0
+		if len(result.Selected) > 0 {
 			result.FallbackReason = "no lexical or linked evidence matched; used latest low-authority ledger snapshots"
 		} else {
 			result.FallbackReason = "no evidence objects available for session"
@@ -377,11 +385,19 @@ func (s *SQLiteStore) recordEvidenceHydrationJudgment(query EvidenceHydrationQue
 	})
 }
 
-func evidenceObjectAllowedForHydration(obj EvidenceObject, query EvidenceHydrationQuery, sessionID string) bool {
+func evidenceObjectInHydrationScope(obj EvidenceObject, query EvidenceHydrationQuery, sessionID string) bool {
 	if strings.TrimSpace(obj.SessionID) == strings.TrimSpace(sessionID) {
 		return true
 	}
 	return query.IncludeCrossScope && query.Key.ChatID != 0 && obj.ChatID == query.Key.ChatID
+}
+
+func evidenceObjectForHydration(obj EvidenceObject) EvidenceObject {
+	if EvidencePayloadHydrationAllowed(obj.RedactionClass) {
+		return obj
+	}
+	obj.PayloadJSON = "{}"
+	return obj
 }
 
 func (s *SQLiteStore) AppendEvidenceHydrationRun(input EvidenceHydrationRunInput) (string, error) {

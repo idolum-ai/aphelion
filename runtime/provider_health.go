@@ -24,9 +24,13 @@ func providerHealthFromExecutionEvents(events []session.ExecutionEvent, now time
 	window := providerHealthWindow
 	since := now.Add(-window)
 	health := core.ProviderHealthSnapshot{
-		GeneratedAt: now,
-		Window:      window,
-		Status:      "healthy",
+		GeneratedAt:  now,
+		Window:       window,
+		Status:       "healthy",
+		StatusClass:  core.StatusClassCurrent,
+		FailureClass: core.ReliabilityFailureNone,
+		RetryPolicy:  core.ReliabilityRetryNone,
+		NextAction:   "none",
 	}
 	for _, event := range events {
 		eventType := strings.TrimSpace(event.EventType)
@@ -62,6 +66,13 @@ func providerHealthFromExecutionEvents(events []session.ExecutionEvent, now time
 				health.LastSuccessAt = event.CreatedAt
 			}
 		}
+	}
+	if !health.LastFailureAt.IsZero() {
+		classification := core.ClassifyProviderReliability(health.LastFailureReason, health.LastFailureError)
+		health.StatusClass = classification.StatusClass
+		health.FailureClass = classification.FailureClass
+		health.RetryPolicy = classification.RetryPolicy
+		health.NextAction = classification.NextAction
 	}
 	if health.RecentFailures == 0 && health.RecentRetries == 0 && health.RecentFailovers == 0 {
 		return health
@@ -140,6 +151,10 @@ func (r *Runtime) writeDoctorProviderHealth(b *strings.Builder, now time.Time) {
 	doctor.WriteKV(b, "provider_health_retries", strconv.Itoa(health.RecentRetries))
 	doctor.WriteKV(b, "provider_health_failovers", strconv.Itoa(health.RecentFailovers))
 	doctor.WriteKV(b, "provider_health_successes", strconv.Itoa(health.RecentSuccesses))
+	doctor.WriteKV(b, "provider_health_status_class", health.StatusClass)
+	doctor.WriteKV(b, "provider_health_failure_class", health.FailureClass)
+	doctor.WriteKV(b, "provider_health_retry_policy", health.RetryPolicy)
+	doctor.WriteKV(b, "provider_health_next_action", health.NextAction)
 	if !health.LastFailureAt.IsZero() {
 		doctor.WriteKV(b, "provider_health_last_failure_at", health.LastFailureAt.UTC().Format(time.RFC3339))
 		doctor.WriteKV(b, "provider_health_last_failure_provider", health.LastFailureProvider)

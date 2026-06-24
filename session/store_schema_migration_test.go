@@ -1435,9 +1435,67 @@ func TestMigratesSchemaV74ToV75NextActions(t *testing.T) {
 	assertSchemaVersion(t, store.db, schemaVersion)
 	assertSQLiteColumn(t, store.db, "next_action_records", "record_id")
 	assertSQLiteColumn(t, store.db, "next_action_records", "operator_projection")
+	assertSQLiteColumn(t, store.db, "next_action_records", "operation_input_json")
 }
 
-func TestMigratesSchemaV75ToV79ChildTasks(t *testing.T) {
+func TestMigratesSchemaV75ToV76NextActionOperations(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v75.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v75 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE next_action_records (
+			record_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			turn_run_id INTEGER NOT NULL DEFAULT 0,
+			owner TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL DEFAULT '',
+			subject_kind TEXT NOT NULL DEFAULT '',
+			subject_ref TEXT NOT NULL DEFAULT '',
+			causal_refs_json TEXT NOT NULL DEFAULT '[]',
+			next_action TEXT NOT NULL DEFAULT '',
+			required_authority TEXT NOT NULL DEFAULT '',
+			resource_blocker TEXT NOT NULL DEFAULT '',
+			verifier TEXT NOT NULL DEFAULT '',
+			retry_policy TEXT NOT NULL DEFAULT '',
+			operator_projection TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			resolved_at TEXT
+		)`,
+		`INSERT INTO schema_version(version) VALUES (75)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v75 fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v75 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v75) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteColumn(t, store.db, "next_action_records", "operation_kind")
+	assertSQLiteColumn(t, store.db, "next_action_records", "operation_tool")
+	assertSQLiteColumn(t, store.db, "next_action_records", "operation_input_json")
+}
+
+func TestMigratesSchemaV75ToV80ChildTasks(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "sessions-v75.db")
@@ -1483,7 +1541,7 @@ func TestMigratesSchemaV75ToV79ChildTasks(t *testing.T) {
 	assertSQLiteColumn(t, store.db, "child_task_results", "next_state")
 }
 
-func TestMigratesDraftSchemaV76ToV79ChildTaskAttempts(t *testing.T) {
+func TestMigratesDraftSchemaV76ToV80ChildTaskAttempts(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "sessions-v76.db")
@@ -1564,7 +1622,7 @@ func TestMigratesDraftSchemaV76ToV79ChildTaskAttempts(t *testing.T) {
 	assertSQLiteColumn(t, store.db, "child_task_results", "fencing_token")
 }
 
-func TestMigratesDraftSchemaV77ToV79ChildTaskFencing(t *testing.T) {
+func TestMigratesDraftSchemaV77ToV80ChildTaskFencing(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "sessions-v77.db")
@@ -1645,7 +1703,7 @@ func TestMigratesDraftSchemaV77ToV79ChildTaskFencing(t *testing.T) {
 	assertSQLiteColumn(t, store.db, "child_task_results", "fencing_token")
 }
 
-func TestMigratesDraftSchemaV78ToV79ChildTaskLeases(t *testing.T) {
+func TestMigratesDraftSchemaV78ToV80ChildTaskLeases(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "sessions-v78.db")

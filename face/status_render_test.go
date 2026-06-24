@@ -550,6 +550,39 @@ func TestRenderTelegramStatusSystemIncludesTelegramIngressUpdates(t *testing.T) 
 	}
 }
 
+func TestRenderTelegramStatusSystemIncludesTelegramIngressFailureClassification(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	out := RenderTelegramStatusSystem(core.SystemStatusSnapshot{
+		TelegramIngress: []core.TelegramIngressFailureSnapshot{{
+			Surface:      "telegram:primary",
+			UpdateID:     78,
+			UpdateKind:   "callback_query",
+			ChatID:       7001,
+			MessageID:    201,
+			StatusClass:  core.StatusClassOperationalTension,
+			FailureClass: core.ReliabilityFailureTransportConfig,
+			RetryPolicy:  core.ReliabilityRetryConfigRepair,
+			NextAction:   "repair Telegram bot token before retrying",
+			ErrorText:    "unauthorized bot token",
+			CreatedAt:    now,
+		}},
+	}, "opus", "high")
+	for _, needle := range []string{
+		"telegram_ingress_failures:",
+		"surface=telegram:primary update_id=78 kind=callback_query chat_id=7001 message_id=201",
+		"class=operational_tension",
+		"failure=transport_configuration",
+		"retry=retry_after_config_repair",
+		"next=\"repair Telegram bot token before retrying\"",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderTelegramStatusSystem() = %q, want substring %q", out, needle)
+		}
+	}
+}
+
 func TestRenderTelegramStatusSystemIncludesProviderHealth(t *testing.T) {
 	t.Parallel()
 
@@ -559,6 +592,10 @@ func TestRenderTelegramStatusSystemIncludesProviderHealth(t *testing.T) {
 			GeneratedAt:         now,
 			Window:              4 * time.Hour,
 			Status:              "degraded",
+			StatusClass:         core.StatusClassOperationalTension,
+			FailureClass:        core.ReliabilityFailureProviderConfiguration,
+			RetryPolicy:         core.ReliabilityRetryConfigRepair,
+			NextAction:          "repair provider quota before retrying",
 			RecentFailures:      2,
 			RecentRetries:       1,
 			RecentFailovers:     1,
@@ -570,12 +607,86 @@ func TestRenderTelegramStatusSystemIncludesProviderHealth(t *testing.T) {
 		},
 	}, "opus", "high")
 	for _, needle := range []string{
-		"provider_health status=degraded failures=2 retries=1 failovers=1 successes=0 window=4h0m0s",
+		"provider_health status=degraded failures=2 retries=1 failovers=1 successes=0",
+		"class=operational_tension",
+		"failure=provider_configuration",
+		"retry=retry_after_config_repair",
+		"next=\"repair provider quota before retrying\"",
+		"window=4h0m0s",
 		"provider=openrouter",
 		"reason=\"quota exceeded\"",
 	} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("RenderTelegramStatusSystem() = %q, want substring %q", out, needle)
+		}
+	}
+}
+
+func TestRenderTelegramStatusSystemIncludesPersistenceHealth(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	out := RenderTelegramStatusSystem(core.SystemStatusSnapshot{
+		PersistenceHealth: core.PersistenceHealthSnapshot{
+			GeneratedAt:   now,
+			Window:        4 * time.Hour,
+			Status:        "degraded",
+			StatusClass:   core.StatusClassOperationalTension,
+			FailureClass:  core.ReliabilityFailurePersistenceLatency,
+			RetryPolicy:   core.ReliabilityRetryBatchBackpressure,
+			NextAction:    "inspect SQLite latency and batch writes",
+			RecentSlow:    2,
+			LastEventAt:   now.Add(-time.Minute),
+			LastComponent: "execution_events:mission_assessment",
+			LastLatency:   150 * time.Millisecond,
+		},
+	}, "opus", "high")
+	for _, needle := range []string{
+		"persistence_health status=degraded slow_writes=2 class=operational_tension failure=persistence_latency retry=batch_or_backpressure",
+		"window=4h0m0s",
+		"component=\"execution_events:mission_assessment\"",
+		"latency_ms=150",
+		"next=\"inspect SQLite latency and batch writes\"",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderTelegramStatusSystem() = %q, want substring %q", out, needle)
+		}
+	}
+}
+
+func TestRenderTelegramStatusSystemOmitsQuietHealthyReliabilityLines(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	out := RenderTelegramStatusSystem(core.SystemStatusSnapshot{
+		ProviderHealth: core.ProviderHealthSnapshot{
+			GeneratedAt:  now,
+			Window:       4 * time.Hour,
+			Status:       "healthy",
+			StatusClass:  core.StatusClassCurrent,
+			FailureClass: core.ReliabilityFailureNone,
+			RetryPolicy:  core.ReliabilityRetryNone,
+			NextAction:   "none",
+		},
+		PersistenceHealth: core.PersistenceHealthSnapshot{
+			GeneratedAt:  now,
+			Window:       4 * time.Hour,
+			Status:       "healthy",
+			StatusClass:  core.StatusClassCurrent,
+			FailureClass: core.ReliabilityFailureNone,
+			RetryPolicy:  core.ReliabilityRetryNone,
+			NextAction:   "none",
+		},
+	}, "opus", "high")
+	for _, forbidden := range []string{
+		"provider_health",
+		"persistence_health",
+		"next=",
+		"retry=retry_after",
+		"retry=batch_or_backpressure",
+	} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("RenderTelegramStatusSystem() = %q, should not contain noisy healthy reliability surface %q", out, forbidden)
 		}
 	}
 }
