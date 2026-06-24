@@ -271,7 +271,35 @@ func toolResultContent(output string, err error) (string, bool) {
 	if err == nil {
 		return FormatToolOutputForHistory(output, DefaultToolOutputDigestInlineLimit), false
 	}
+	if projectedToolFailureContent(output, err) {
+		return strings.TrimSpace(output), true
+	}
 	return renderToolFailure(classifyToolFailure(err, output)), true
+}
+
+type projectedToolFailureProvenance interface {
+	ProjectedToolFailure() bool
+}
+
+func projectedToolFailureContent(output string, err error) bool {
+	provenance, ok := err.(projectedToolFailureProvenance)
+	if !ok || !provenance.ProjectedToolFailure() {
+		return false
+	}
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return false
+	}
+	payload := map[string]any{}
+	if err := json.Unmarshal([]byte(output), &payload); err != nil {
+		return false
+	}
+	ok, hasOK := payload["ok"].(bool)
+	_, hasSummary := payload["safe_summary"].(string)
+	_, hasClass := payload["failure_class"].(string)
+	_, hasRetry := payload["retry_policy"].(string)
+	_, hasPolicy := payload["policy_ref"].(string)
+	return hasOK && !ok && hasSummary && hasClass && hasRetry && hasPolicy
 }
 
 func classifyToolFailure(err error, output string) toolFailure {
