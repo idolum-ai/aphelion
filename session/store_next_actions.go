@@ -3,6 +3,7 @@
 package session
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -38,6 +39,16 @@ func (s *SQLiteStore) RecordNextAction(input NextActionInput) (NextActionRecord,
 
 func recordNextActionTx(tx *sql.Tx, input NextActionInput) (NextActionRecord, error) {
 	input = NormalizeNextActionInput(input)
+	operationInputJSON, operationInputRedacted, err := normalizeNextActionOperationInputJSON(input.OperationInputJSON)
+	if err != nil {
+		return NextActionRecord{}, err
+	}
+	input.OperationInputJSON = operationInputJSON
+	if operationInputRedacted && input.State == NextActionReadyToExecute {
+		input = downgradeReadyNextActionForRedactedOperationInput(input, operationInputJSON)
+	}
+	input.NextAction = RedactEvidenceText(input.NextAction).Text
+	input.OperatorProjection = RedactEvidenceText(input.OperatorProjection).Text
 	scope := defaultScopeForKey(input.Key)
 	sessionID := SessionIDForKey(input.Key)
 	createdAt := input.CreatedAt.UTC()
@@ -65,15 +76,16 @@ func recordNextActionTx(tx *sql.Tx, input NextActionInput) (NextActionRecord, er
 			record_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
 			turn_run_id, owner, state, subject_kind, subject_ref, causal_refs_json,
 			next_action, required_authority, resource_blocker, verifier, retry_policy,
-			operator_projection, created_at, resolved_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+			operation_kind, operation_tool, operation_input_json, operator_projection, created_at, resolved_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
 	`, input.RecordID, sessionID, input.Key.ChatID, input.Key.UserID, string(scope.Kind), scope.ID, scope.DurableAgentID,
 		input.TurnRunID, input.Owner, string(input.State), input.SubjectKind, input.SubjectRef, causalRefs,
 		input.NextAction, input.RequiredAuthority, input.ResourceBlocker, input.Verifier, input.RetryPolicy,
+		input.OperationKind, input.OperationTool, input.OperationInputJSON,
 		input.OperatorProjection, createdAt.Format(time.RFC3339Nano)); err != nil {
 		return NextActionRecord{}, fmt.Errorf("insert next action %s: %w", input.RecordID, err)
 	}
-	payloadRaw, _ := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"record_id":           input.RecordID,
 		"turn_run_id":         input.TurnRunID,
 		"owner":               input.Owner,
@@ -87,7 +99,11 @@ func recordNextActionTx(tx *sql.Tx, input NextActionInput) (NextActionRecord, er
 		"verifier":            input.Verifier,
 		"retry_policy":        input.RetryPolicy,
 		"operator_projection": input.OperatorProjection,
-	})
+	}
+	if operation := nextActionOperationPayload(input); len(operation) > 0 {
+		payload["operation"] = operation
+	}
+	payloadRaw, _ := json.Marshal(payload)
 	if _, err := appendExecutionEventsTx(tx, input.Key, []ExecutionEventInput{{
 		EventType:   core.ExecutionEventWorkflowNextState,
 		Stage:       input.SubjectKind,
@@ -114,6 +130,9 @@ func recordNextActionTx(tx *sql.Tx, input NextActionInput) (NextActionRecord, er
 		ResourceBlocker:    input.ResourceBlocker,
 		Verifier:           input.Verifier,
 		RetryPolicy:        input.RetryPolicy,
+		OperationKind:      input.OperationKind,
+		OperationTool:      input.OperationTool,
+		OperationInputJSON: input.OperationInputJSON,
 		OperatorProjection: input.OperatorProjection,
 		CreatedAt:          createdAt,
 	}, nil
@@ -190,7 +209,7 @@ func (s *SQLiteStore) OpenNextActionsBySession(key SessionKey, limit int) ([]Nex
 		SELECT record_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
 			turn_run_id, owner, state, subject_kind, subject_ref, causal_refs_json,
 			next_action, required_authority, resource_blocker, verifier, retry_policy,
-			operator_projection, created_at, resolved_at
+			operation_kind, operation_tool, operation_input_json, operator_projection, created_at, resolved_at
 		FROM next_action_records
 		WHERE session_id = ? AND resolved_at IS NULL
 		ORDER BY created_at DESC, record_id DESC
@@ -212,7 +231,7 @@ func nextActionByRecordIDTx(tx *sql.Tx, recordID string) (NextActionRecord, bool
 		SELECT record_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
 			turn_run_id, owner, state, subject_kind, subject_ref, causal_refs_json,
 			next_action, required_authority, resource_blocker, verifier, retry_policy,
-			operator_projection, created_at, resolved_at
+			operation_kind, operation_tool, operation_input_json, operator_projection, created_at, resolved_at
 		FROM next_action_records
 		WHERE record_id = ?
 	`, recordID)
@@ -276,6 +295,7 @@ func (s *SQLiteStore) RecordResourcePreflight(key SessionKey, turnRunID int64, r
 		NextAction:         "repair the resource boundary before retrying",
 		ResourceBlocker:    reason,
 		RetryPolicy:        "retry_after_resource_repair",
+		OperationKind:      "resource_repair",
 		OperatorProjection: message,
 		CreatedAt:          at,
 	}); err != nil {
@@ -350,7 +370,7 @@ func scanNextActionRecord(scanner interface{ Scan(dest ...any) error }) (NextAct
 		&record.RecordID, &record.SessionID, &record.ChatID, &record.UserID, &scopeKindRaw, &scopeIDRaw, &durableAgentIDRaw,
 		&record.TurnRunID, &record.Owner, &stateRaw, &record.SubjectKind, &record.SubjectRef, &causalRefsRaw,
 		&record.NextAction, &record.RequiredAuthority, &record.ResourceBlocker, &record.Verifier, &record.RetryPolicy,
-		&record.OperatorProjection, &createdAtRaw, &resolvedAtRaw,
+		&record.OperationKind, &record.OperationTool, &record.OperationInputJSON, &record.OperatorProjection, &createdAtRaw, &resolvedAtRaw,
 	); err != nil {
 		return NextActionRecord{}, fmt.Errorf("scan next action: %w", err)
 	}
@@ -373,4 +393,130 @@ func scanNextActionRecord(scanner interface{ Scan(dest ...any) error }) (NextAct
 		}
 	}
 	return record, nil
+}
+
+func normalizeNextActionOperationInputJSON(raw string) (string, bool, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", false, nil
+	}
+	if !json.Valid([]byte(raw)) {
+		return "", false, fmt.Errorf("next action operation input must be valid JSON")
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "", false, fmt.Errorf("decode next action operation input: %w", err)
+	}
+	redactedPayload, redacted := redactNextActionOperationPayload(payload)
+	sanitized, err := json.Marshal(redactedPayload)
+	if err != nil {
+		return "", false, fmt.Errorf("redact next action operation input: %w", err)
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, sanitized); err != nil {
+		return "", false, fmt.Errorf("compact next action operation input: %w", err)
+	}
+	return compact.String(), redacted, nil
+}
+
+func redactNextActionOperationPayload(value any) (any, bool) {
+	switch v := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		redactedAny := false
+		for key, child := range v {
+			redactedChild, childRedacted := redactNextActionOperationPayload(child)
+			out[key] = redactedChild
+			if childRedacted {
+				redactedAny = true
+			}
+			text, ok := child.(string)
+			if !ok || !nextActionOperationFingerprintField(key) {
+				continue
+			}
+			redacted := RedactEvidenceText(text)
+			if !redacted.Redacted {
+				continue
+			}
+			fingerprintKey := normalizeEnumValue(key) + "_fingerprint"
+			if _, exists := v[fingerprintKey]; !exists {
+				out[fingerprintKey] = EffectAttemptCommandHash(text)
+			}
+		}
+		return out, redactedAny
+	case []any:
+		out := make([]any, 0, len(v))
+		redactedAny := false
+		for _, child := range v {
+			redactedChild, childRedacted := redactNextActionOperationPayload(child)
+			out = append(out, redactedChild)
+			if childRedacted {
+				redactedAny = true
+			}
+		}
+		return out, redactedAny
+	case string:
+		redacted := RedactEvidenceText(v)
+		return redacted.Text, redacted.Redacted
+	default:
+		return value, false
+	}
+}
+
+func downgradeReadyNextActionForRedactedOperationInput(input NextActionInput, redactedOperationInputJSON string) NextActionInput {
+	originalKind := input.OperationKind
+	originalTool := input.OperationTool
+	payload := map[string]any{
+		"reason":                  "ready_operation_input_redacted",
+		"original_operation_kind": originalKind,
+		"original_operation_tool": originalTool,
+		"redacted_input_hash":     EffectAttemptCommandHash(redactedOperationInputJSON),
+	}
+	var redactedInput any
+	if err := json.Unmarshal([]byte(redactedOperationInputJSON), &redactedInput); err == nil && redactedInput != nil {
+		payload["redacted_operation_input"] = redactedInput
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		raw = []byte(`{"reason":"ready_operation_input_redacted"}`)
+	}
+	input.State = NextActionWaitingForOperator
+	input.OperationKind = "typed_operation_required"
+	input.OperationTool = "update_operation"
+	input.OperationInputJSON = string(raw)
+	input.NextAction = "rewrite the recommended operation with exact, non-redacted operands before execution"
+	input.RequiredAuthority = "typed_operation_required"
+	input.Verifier = ""
+	input.RetryPolicy = "do_not_execute_redacted_operation_payload"
+	input.OperatorProjection = "Ready operation payload contained redacted operand(s); rewrite it with exact typed operands before execution."
+	input.CausalRefs = append(input.CausalRefs, "next_action:redacted_ready_operation_downgrade")
+	return input
+}
+
+func nextActionOperationFingerprintField(field string) bool {
+	switch normalizeEnumValue(field) {
+	case "command", "command_preview", "path", "query", "snippet", "shell", "rejected_shell", "workdir", "url":
+		return true
+	default:
+		return false
+	}
+}
+
+func nextActionOperationPayload(input NextActionInput) map[string]any {
+	operation := map[string]any{}
+	if input.OperationKind != "" {
+		operation["kind"] = input.OperationKind
+	}
+	if input.OperationTool != "" {
+		operation["tool"] = input.OperationTool
+	}
+	if strings.TrimSpace(input.OperationInputJSON) != "" {
+		var payload any
+		if err := json.Unmarshal([]byte(input.OperationInputJSON), &payload); err == nil {
+			operation["input"] = payload
+		} else {
+			operation["input_json"] = input.OperationInputJSON
+		}
+	}
+	return operation
 }

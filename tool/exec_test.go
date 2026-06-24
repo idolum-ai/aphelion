@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/idolum-ai/aphelion/commandeffect"
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -1070,6 +1071,418 @@ func TestExecUnknownShellEffectsRejectBeforeGenericProposal(t *testing.T) {
 	}
 }
 
+func TestExecRejectedPathQualifiedReadOffersNativeFileNextAction(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatalf("write README fixture: %v", err)
+	}
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8841, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+	ctx := WithToolInvocationRef(context.Background(), ToolInvocationRef{TurnRunID: 411, InvocationID: "path-read"})
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		ctx,
+		"exec",
+		json.RawMessage(`{"command":"/bin/cat README.md"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one shell-rejection alternative", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionReadyToExecute || action.SubjectKind != "shell_rejection" || action.TurnRunID != 411 {
+		t.Fatalf("next action = %#v, want ready shell rejection tied to turn 411", action)
+	}
+	if action.OperationKind != "native_file_read" || action.OperationTool != "read_file" || action.RequiredAuthority != "file_read" {
+		t.Fatalf("next action operation = %#v, want native read_file alternative", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["path"] != "README.md" || input["full"] != true {
+		t.Fatalf("operation input = %#v, want read_file README.md full=true", input)
+	}
+	judgments, err := store.JudgmentsByKind(key, "shell_effect_plan", 10)
+	if err != nil {
+		t.Fatalf("JudgmentsByKind(shell_effect_plan) err = %v", err)
+	}
+	if len(judgments) != 1 {
+		t.Fatalf("shell effect judgments = %#v, want one rejected-shell judgment", judgments)
+	}
+	if !stringSliceContainsForTest(action.CausalRefs, session.JudgmentRef(judgments[0].ID)) {
+		t.Fatalf("causal refs = %#v, want shell judgment ref %q", action.CausalRefs, session.JudgmentRef(judgments[0].ID))
+	}
+}
+
+func TestExecRejectedDynamicVerificationRequiresTypedRewrite(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8842, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"env PATH=./bin:$PATH go test ./..."}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one typed rewrite action", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionWaitingForOperator || action.OperationKind != "typed_operation_required" || action.OperationTool != "update_operation" || action.RequiredAuthority != "typed_operation_required" {
+		t.Fatalf("next action operation = %#v, want waiting typed rewrite for dynamic command", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["reason"] != "dynamic_shell" {
+		t.Fatalf("operation input = %#v, want dynamic_shell reason", input)
+	}
+}
+
+func TestExecRejectedNativeReadPreservesNonRootWorkdir(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	subdir := filepath.Join(workspace, "subdir")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("mkdir subdir fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subdir, "foo.txt"), []byte("from subdir\n"), 0o600); err != nil {
+		t.Fatalf("write subdir fixture: %v", err)
+	}
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8845, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"/bin/cat foo.txt","workdir":"subdir"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one native read alternative", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionReadyToExecute || action.OperationKind != "native_file_read" || action.OperationTool != "read_file" {
+		t.Fatalf("next action = %#v, want exact ready native read", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	wantPath := filepath.Join(subdir, "foo.txt")
+	if input["path"] != wantPath || input["full"] != true {
+		t.Fatalf("operation input = %#v, want read_file path %q full=true", input, wantPath)
+	}
+}
+
+func TestExecRejectedReadyNativeReadDowngradesWhenPathRedacts(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	reports := filepath.Join(workspace, "reports")
+	if err := os.MkdirAll(reports, 0o755); err != nil {
+		t.Fatalf("mkdir reports fixture: %v", err)
+	}
+	secretShapedName := "report-sk-123456789012.txt"
+	secretShapedPath := filepath.Join("reports", secretShapedName)
+	if err := os.WriteFile(filepath.Join(reports, secretShapedName), []byte("report\n"), 0o600); err != nil {
+		t.Fatalf("write report fixture: %v", err)
+	}
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8848, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"/bin/cat `+secretShapedPath+`"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one downgraded rewrite action", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionWaitingForOperator || action.OperationKind != "typed_operation_required" || action.OperationTool != "update_operation" {
+		t.Fatalf("next action = %#v, want redacted ready operation downgraded to typed rewrite", action)
+	}
+	if strings.Contains(action.OperationInputJSON, secretShapedName) || strings.Contains(action.OperationInputJSON, secretShapedPath) {
+		t.Fatalf("operation input leaked secret-shaped filename: %s", action.OperationInputJSON)
+	}
+	if !strings.Contains(action.OperationInputJSON, "ready_operation_input_redacted") || !strings.Contains(action.OperationInputJSON, "redacted:api_key:") {
+		t.Fatalf("operation input = %s, want redacted downgrade payload", action.OperationInputJSON)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["reason"] != "ready_operation_input_redacted" || input["original_operation_kind"] != "native_file_read" || input["original_operation_tool"] != "read_file" {
+		t.Fatalf("operation input = %#v, want ready operation redaction downgrade metadata", input)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 10)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventWorkflowNextState && (strings.Contains(event.PayloadJSON, secretShapedName) || strings.Contains(event.PayloadJSON, secretShapedPath)) {
+			t.Fatalf("workflow event leaked secret-shaped filename: %s", event.PayloadJSON)
+		}
+	}
+}
+
+func TestExecRejectedCatStdinRequiresTypedRewrite(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8849, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"/bin/cat -"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one stdin rewrite action", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionWaitingForOperator || action.OperationKind != "typed_operation_required" || action.OperationTool != "update_operation" {
+		t.Fatalf("next action = %#v, want typed rewrite for stdin semantics", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["reason"] != "stdin_semantics_not_native_file_path" {
+		t.Fatalf("operation input = %#v, want stdin rewrite reason", input)
+	}
+	if strings.Contains(action.OperationInputJSON, `"path":"-"`) {
+		t.Fatalf("operation input = %s, must not suggest read_file path '-'", action.OperationInputJSON)
+	}
+}
+
+func TestExecRejectedFindNameStaysLossyWaitingSuggestion(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8846, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"/usr/bin/find . -name '*.go'"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one lossy find suggestion", open)
+	}
+	action := open[0]
+	if action.State == session.NextActionReadyToExecute || action.OperationKind != "native_directory_list" || action.OperationTool != "list_dir" {
+		t.Fatalf("next action = %#v, want non-ready lossy directory-list suggestion", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["path"] == "*.go" || input["path"] == "'*.go'" || input["lossy_reason"] == "" {
+		t.Fatalf("operation input = %#v, want find path not name operand and lossy reason", input)
+	}
+}
+
+func TestExecRejectedCanonicalCandidateMustBeDispatchable(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8847, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"command git -c core.sshCommand=ssh status"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one typed rewrite action", open)
+	}
+	action := open[0]
+	if action.State == session.NextActionReadyToExecute || action.OperationKind == "confined_git_inspection" || action.OperationTool == "exec" {
+		t.Fatalf("next action = %#v, want non-ready typed rewrite for nondispatchable canonical candidate", action)
+	}
+}
+
+func TestExecRejectedShellAlternativeRedactsCommandDerivedPayloads(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8844, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+	command := `/usr/bin/rg "Authorization: Bearer bearer-secret-value OPENAI_API_KEY=sk-rejected-secret-value" "https://user:credential-password@example.test/repo?api_key=query-secret-value"`
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":`+strconv.Quote(command)+`}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one redacted shell alternative", open)
+	}
+	action := open[0]
+	if action.OperationKind != "native_text_search" || action.OperationTool != "search" || action.SubjectRef == "" {
+		t.Fatalf("next action = %#v, want native search recommendation with command hash subject", action)
+	}
+	recordText := strings.Join([]string{
+		action.OperationInputJSON,
+		action.OperatorProjection,
+		action.NextAction,
+		action.SubjectRef,
+		strings.Join(action.CausalRefs, "\n"),
+	}, "\n")
+	assertNoShellAlternativeSecrets(t, recordText)
+	for _, want := range []string{"redacted:bearer:", "redacted:api_key:", "redacted:connection_password:", "redacted:url_query:", `"query_fingerprint":"sha256:`, `"path_fingerprint":"sha256:`, `"recommendation_only":true`} {
+		if !strings.Contains(action.OperationInputJSON, want) {
+			t.Fatalf("operation input = %s, want %q", action.OperationInputJSON, want)
+		}
+	}
+
+	events, err := store.ExecutionEventsBySession(key, 0, 10)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	workflowPayload := ""
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventWorkflowNextState {
+			workflowPayload += event.PayloadJSON + "\n"
+		}
+	}
+	if workflowPayload == "" {
+		t.Fatalf("events = %#v, want workflow next-state event", events)
+	}
+	assertNoShellAlternativeSecrets(t, workflowPayload)
+	for _, want := range []string{"redacted:bearer:", "redacted:api_key:", "redacted:connection_password:", "redacted:url_query:", `"query_fingerprint":"sha256:`, `"path_fingerprint":"sha256:`} {
+		if !strings.Contains(workflowPayload, want) {
+			t.Fatalf("workflow payload = %s, want %q", workflowPayload, want)
+		}
+	}
+}
+
+func TestExecRejectedMultiAuthorityShellRecordsSplitPlanNextAction(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	approver := &stubExecApprover{approved: true}
+	key := session.SessionKey{ChatID: 8843, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store).WithExecApprover(approver)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"git push origin main && gh pr create --fill"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want raw multi-effect shell rejected before proposal approval", approver.called)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one split-plan alternative", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionBlockedNeedsAuthority || action.OperationKind != "split_effect_plan" || action.OperationTool != "update_operation" || action.RequiredAuthority != "split_effect_plan" {
+		t.Fatalf("next action = %#v, want split effect plan blocker", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	rawSteps, ok := input["steps"].([]any)
+	if !ok || len(rawSteps) != 2 {
+		t.Fatalf("operation input = %#v, want two split steps", input)
+	}
+	first, _ := rawSteps[0].(map[string]any)
+	second, _ := rawSteps[1].(map[string]any)
+	if first["required_authority"] != "git_push" || second["required_authority"] != "github_pr_create" {
+		t.Fatalf("split steps = %#v / %#v, want git_push then github_pr_create authorities", first, second)
+	}
+}
+
 func TestExecPreDispatchAttemptWriteFailureStopsCommand(t *testing.T) {
 	t.Parallel()
 
@@ -1662,4 +2075,31 @@ func TestExecuteForAdminRejectsEscapedWorkdirWithoutApproval(t *testing.T) {
 	if !strings.Contains(err.Error(), "approved proposal") {
 		t.Fatalf("err = %v, want approval requirement", err)
 	}
+}
+
+func mustNextActionInputMap(t *testing.T, action session.NextActionRecord) map[string]any {
+	t.Helper()
+	var input map[string]any
+	if err := json.Unmarshal([]byte(action.OperationInputJSON), &input); err != nil {
+		t.Fatalf("unmarshal operation input %q: %v", action.OperationInputJSON, err)
+	}
+	return input
+}
+
+func assertNoShellAlternativeSecrets(t *testing.T, text string) {
+	t.Helper()
+	for _, forbidden := range []string{"bearer-secret-value", "sk-rejected-secret-value", "credential-password", "query-secret-value"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("stored shell alternative leaked %q:\n%s", forbidden, text)
+		}
+	}
+}
+
+func stringSliceContainsForTest(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

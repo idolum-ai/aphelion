@@ -42,6 +42,9 @@ type NextActionRecord struct {
 	ResourceBlocker    string
 	Verifier           string
 	RetryPolicy        string
+	OperationKind      string
+	OperationTool      string
+	OperationInputJSON string
 	OperatorProjection string
 	CreatedAt          time.Time
 	ResolvedAt         time.Time
@@ -61,6 +64,9 @@ type NextActionInput struct {
 	ResourceBlocker    string
 	Verifier           string
 	RetryPolicy        string
+	OperationKind      string
+	OperationTool      string
+	OperationInputJSON string
 	OperatorProjection string
 	CreatedAt          time.Time
 }
@@ -86,6 +92,9 @@ func NormalizeNextActionInput(input NextActionInput) NextActionInput {
 	input.ResourceBlocker = strings.TrimSpace(input.ResourceBlocker)
 	input.Verifier = strings.TrimSpace(input.Verifier)
 	input.RetryPolicy = strings.TrimSpace(input.RetryPolicy)
+	input.OperationKind = normalizeEnumValue(input.OperationKind)
+	input.OperationTool = strings.TrimSpace(input.OperationTool)
+	input.OperationInputJSON = strings.TrimSpace(input.OperationInputJSON)
 	input.OperatorProjection = strings.TrimSpace(input.OperatorProjection)
 	if input.Owner == "" {
 		input.Owner = "runtime"
