@@ -268,6 +268,10 @@ parked child after checks, and `Retire` removes a child from active use only
 after a confirmation card. `Analyze` queues a read-only main-chat board analysis
 and does not wake children or change authority. Replies to `/agents` cards route
 back to the ledgered child and show an `(agent <id>)` prefix for attribution.
+The model-facing `durable_agent` tool keeps the same split explicit:
+`conversation_send` appends parent guidance without waking the child, while
+`wake_once` can ask an approved child-wake continuation to consume already
+pending guidance exactly once.
 
 Use `/context` to inspect the current chat/thread context that is shaping replies.
 It is read-only; `Ask Me` queues clarification questions without writing memory.

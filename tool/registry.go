@@ -51,7 +51,12 @@ type Registry struct {
 	remoteHostRunner                tailnet.OpenSSHRunner
 	durableAgentPrincipalFallback   bool
 	capabilityGrantObserver         func(context.Context, session.SessionKey, session.CapabilityGrant)
+	durableAgentWakeRunner          DurableAgentWakeRunner
 	configuredVisibility            ConfiguredCapabilityVisibilityOptions
+}
+
+type DurableAgentWakeRunner interface {
+	RunDurableAgentChildWake(context.Context, string, time.Time) error
 }
 
 func NewRegistry(workspace string, timeout time.Duration) *Registry {
@@ -111,6 +116,13 @@ func (r *Registry) interpretationService() interpretation.Service {
 func (r *Registry) WithCapabilityGrantObserver(observer func(context.Context, session.SessionKey, session.CapabilityGrant)) *Registry {
 	if r != nil {
 		r.capabilityGrantObserver = observer
+	}
+	return r
+}
+
+func (r *Registry) WithDurableAgentWakeRunner(runner DurableAgentWakeRunner) *Registry {
+	if r != nil {
+		r.durableAgentWakeRunner = runner
 	}
 	return r
 }

@@ -132,6 +132,8 @@ func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p pr
 		return r.showDurableAgentConversation(in)
 	case "conversation_send":
 		return r.sendDurableAgentConversation(in)
+	case "wake_once":
+		return r.wakeDurableAgentOnce(ctx, in, p, key)
 	case "delegation_request":
 		return r.requestDurableAgentDelegation(in, p, key)
 	case "delegation_report":
@@ -157,7 +159,7 @@ func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p pr
 	case "snapshot_restore":
 		return r.restoreDurableAgentSnapshot(ctx, in, p, key)
 	default:
-		return "", fmt.Errorf("durable_agent action must be one of list|create|create_from_archetype|activate|park|resume|retire|connection_test|policy_show|bootstrap_show|policy_apply|bootstrap_update|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel|archetype_list|archetype_show|access_show|access_grant|access_revoke|conversation_show|conversation_send|delegation_request|delegation_report|memory_review|memory_delegate|profile_show|profile_apply|artifact_put|artifact_list|artifact_show|snapshot_create|snapshot_list|snapshot_restore")
+		return "", fmt.Errorf("durable_agent action must be one of list|create|create_from_archetype|activate|park|resume|retire|connection_test|policy_show|bootstrap_show|policy_apply|bootstrap_update|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel|archetype_list|archetype_show|access_show|access_grant|access_revoke|conversation_show|conversation_send|wake_once|delegation_request|delegation_report|memory_review|memory_delegate|profile_show|profile_apply|artifact_put|artifact_list|artifact_show|snapshot_create|snapshot_list|snapshot_restore")
 	}
 }
 

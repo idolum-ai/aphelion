@@ -54,6 +54,12 @@ Code anchors:
 - Parent Aphelion must not accumulate child feature workarounds such as channel-, browser-, or site-specific readiness logic. Channel-specific probes and repairs belong in the child runtime environment or in pluggable adapters proposed through governance.
 - Adapter operations are governed commands, not ambient prompt authority. Parent runtime may schedule or manually trigger a command such as a read-only status heartbeat only when the durable child policy and grants allow it; prompts are payloads inside those commands and do not widen authority.
 - Durable children ask upward through parent conversation, review artifacts, and capability/delegation proposals when they need system changes. The parent can grant or materialize generic capabilities, but should not become specialized application code for one child.
+- Parent guidance and child wake are separate authority events. Appending a
+  parent conversation message records guidance only; waking a named child once
+  requires a live `child_wake` continuation lease and the `wake_named_child` or
+  `request_child_wake` action. Operator UI affordances may compose those steps,
+  but tool/model paths must keep the wake as a separately reviewable execution
+  action.
 - Parent-conversation acknowledgements are message-ID explicit, and continuity
   updates are written transactionally so parent guidance, child review state, and
   wake bookkeeping do not overwrite each other under concurrent control-plane

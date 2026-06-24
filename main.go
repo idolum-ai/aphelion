@@ -217,6 +217,7 @@ func run() error {
 	}
 	defer rt.BeginShutdown()
 	tools.WithCapabilityGrantObserver(rt.HandleCapabilityGrantActivated)
+	tools.WithDurableAgentWakeRunner(rt)
 
 	if cfg.Voice.Mode != "" && cfg.Voice.Mode != "off" {
 		openaiClient, err := openai.NewClient(openai.ClientOptions{
