@@ -31,29 +31,33 @@ const (
 )
 
 type ChildTaskPacket struct {
-	PacketID        string
-	TaskLeaseID     string
-	AgentID         string
-	SessionID       string
-	ChatID          int64
-	UserID          int64
-	Scope           ScopeRef
-	TaskKind        string
-	Status          ChildTaskPacketStatus
-	AuthorityKind   string
-	AuthorityID     string
-	GrantID         string
-	RequestID       string
-	TargetResource  string
-	RequiredAction  string
-	InputJSON       string
-	ActiveAttemptID string
-	LeaseGeneration int64
-	FencingToken    string
-	ResultID        string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	TerminalAt      time.Time
+	PacketID         string
+	TaskLeaseID      string
+	AgentID          string
+	SessionID        string
+	ChatID           int64
+	UserID           int64
+	Scope            ScopeRef
+	TaskKind         string
+	Status           ChildTaskPacketStatus
+	AuthorityKind    string
+	AuthorityID      string
+	GrantID          string
+	RequestID        string
+	TargetResource   string
+	RequiredAction   string
+	InputJSON        string
+	ActiveAttemptID  string
+	LeaseOwner       string
+	LeaseGeneration  int64
+	FencingToken     string
+	LeaseExpiresAt   time.Time
+	LeaseHeartbeatAt time.Time
+	LeaseReleasedAt  time.Time
+	ResultID         string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	TerminalAt       time.Time
 }
 
 type ChildTaskPacketInput struct {
@@ -74,17 +78,39 @@ type ChildTaskPacketInput struct {
 }
 
 type ChildTaskAttemptClaimInput struct {
-	PacketID  string
-	AttemptID string
-	AgentID   string
-	Key       SessionKey
-	ClaimedAt time.Time
+	PacketID       string
+	AttemptID      string
+	LeaseOwner     string
+	AgentID        string
+	Key            SessionKey
+	ClaimedAt      time.Time
+	LeaseExpiresAt time.Time
+}
+
+type ChildTaskAttemptHeartbeatInput struct {
+	PacketID        string
+	AttemptID       string
+	LeaseOwner      string
+	LeaseGeneration int64
+	FencingToken    string
+	HeartbeatAt     time.Time
+	LeaseExpiresAt  time.Time
+}
+
+type ChildTaskAttemptReleaseInput struct {
+	PacketID        string
+	AttemptID       string
+	LeaseOwner      string
+	LeaseGeneration int64
+	FencingToken    string
+	ReleasedAt      time.Time
 }
 
 type ChildTaskResult struct {
 	ResultID        string
 	PacketID        string
 	AttemptID       string
+	LeaseOwner      string
 	LeaseGeneration int64
 	FencingToken    string
 	TaskLeaseID     string
@@ -104,6 +130,7 @@ type ChildTaskResultInput struct {
 	ResultID        string
 	PacketID        string
 	AttemptID       string
+	LeaseOwner      string
 	LeaseGeneration int64
 	FencingToken    string
 	TaskLeaseID     string
@@ -152,6 +179,7 @@ func NormalizeChildTaskPacketInput(input ChildTaskPacketInput) ChildTaskPacketIn
 func NormalizeChildTaskAttemptClaimInput(input ChildTaskAttemptClaimInput) ChildTaskAttemptClaimInput {
 	input.PacketID = strings.TrimSpace(input.PacketID)
 	input.AttemptID = strings.TrimSpace(input.AttemptID)
+	input.LeaseOwner = strings.TrimSpace(input.LeaseOwner)
 	input.AgentID = strings.TrimSpace(input.AgentID)
 	if input.ClaimedAt.IsZero() {
 		input.ClaimedAt = time.Now().UTC()
@@ -161,6 +189,45 @@ func NormalizeChildTaskAttemptClaimInput(input ChildTaskAttemptClaimInput) Child
 	if input.AttemptID == "" && input.PacketID != "" {
 		input.AttemptID = ChildTaskAttemptID(input.PacketID, input.ClaimedAt.Format(time.RFC3339Nano))
 	}
+	if input.LeaseOwner == "" {
+		input.LeaseOwner = firstNonEmptyString(input.AgentID, input.AttemptID)
+	}
+	if input.LeaseExpiresAt.IsZero() {
+		input.LeaseExpiresAt = input.ClaimedAt.Add(30 * time.Minute)
+	} else {
+		input.LeaseExpiresAt = input.LeaseExpiresAt.UTC()
+	}
+	return input
+}
+
+func NormalizeChildTaskAttemptHeartbeatInput(input ChildTaskAttemptHeartbeatInput) ChildTaskAttemptHeartbeatInput {
+	input.PacketID = strings.TrimSpace(input.PacketID)
+	input.AttemptID = strings.TrimSpace(input.AttemptID)
+	input.LeaseOwner = strings.TrimSpace(input.LeaseOwner)
+	input.FencingToken = strings.TrimSpace(input.FencingToken)
+	if input.HeartbeatAt.IsZero() {
+		input.HeartbeatAt = time.Now().UTC()
+	} else {
+		input.HeartbeatAt = input.HeartbeatAt.UTC()
+	}
+	if input.LeaseExpiresAt.IsZero() {
+		input.LeaseExpiresAt = input.HeartbeatAt.Add(30 * time.Minute)
+	} else {
+		input.LeaseExpiresAt = input.LeaseExpiresAt.UTC()
+	}
+	return input
+}
+
+func NormalizeChildTaskAttemptReleaseInput(input ChildTaskAttemptReleaseInput) ChildTaskAttemptReleaseInput {
+	input.PacketID = strings.TrimSpace(input.PacketID)
+	input.AttemptID = strings.TrimSpace(input.AttemptID)
+	input.LeaseOwner = strings.TrimSpace(input.LeaseOwner)
+	input.FencingToken = strings.TrimSpace(input.FencingToken)
+	if input.ReleasedAt.IsZero() {
+		input.ReleasedAt = time.Now().UTC()
+	} else {
+		input.ReleasedAt = input.ReleasedAt.UTC()
+	}
 	return input
 }
 
@@ -168,6 +235,7 @@ func NormalizeChildTaskResultInput(input ChildTaskResultInput) ChildTaskResultIn
 	input.ResultID = strings.TrimSpace(input.ResultID)
 	input.PacketID = strings.TrimSpace(input.PacketID)
 	input.AttemptID = strings.TrimSpace(input.AttemptID)
+	input.LeaseOwner = strings.TrimSpace(input.LeaseOwner)
 	input.FencingToken = strings.TrimSpace(input.FencingToken)
 	input.TaskLeaseID = strings.TrimSpace(input.TaskLeaseID)
 	input.AgentID = strings.TrimSpace(input.AgentID)

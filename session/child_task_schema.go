@@ -29,8 +29,12 @@ func ensureChildTaskTables(tx *sql.Tx) error {
 			required_action TEXT NOT NULL DEFAULT '',
 			input_json TEXT NOT NULL DEFAULT '{}',
 			active_attempt_id TEXT NOT NULL DEFAULT '',
+			lease_owner TEXT NOT NULL DEFAULT '',
 			lease_generation INTEGER NOT NULL DEFAULT 0,
 			fencing_token TEXT NOT NULL DEFAULT '',
+			lease_expires_at TEXT NOT NULL DEFAULT '',
+			lease_heartbeat_at TEXT NOT NULL DEFAULT '',
+			lease_released_at TEXT,
 			result_id TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -40,6 +44,7 @@ func ensureChildTaskTables(tx *sql.Tx) error {
 			result_id TEXT PRIMARY KEY,
 			packet_id TEXT NOT NULL,
 			attempt_id TEXT NOT NULL DEFAULT '',
+			lease_owner TEXT NOT NULL DEFAULT '',
 			lease_generation INTEGER NOT NULL DEFAULT 0,
 			fencing_token TEXT NOT NULL DEFAULT '',
 			task_lease_id TEXT NOT NULL DEFAULT '',
@@ -60,7 +65,7 @@ func ensureChildTaskTables(tx *sql.Tx) error {
 			return fmt.Errorf("ensure child task tables: %w", err)
 		}
 	}
-	if err := ensureChildTaskFencingColumns(tx); err != nil {
+	if err := ensureChildTaskLeaseColumns(tx); err != nil {
 		return err
 	}
 	for _, stmt := range []string{
@@ -79,7 +84,7 @@ func ensureChildTaskTables(tx *sql.Tx) error {
 	return nil
 }
 
-func ensureChildTaskFencingColumns(tx *sql.Tx) error {
+func ensureChildTaskLeaseColumns(tx *sql.Tx) error {
 	packetsExist, err := schemaTableExists(tx, "child_task_packets")
 	if err != nil {
 		return err
@@ -87,8 +92,12 @@ func ensureChildTaskFencingColumns(tx *sql.Tx) error {
 	if packetsExist {
 		for _, column := range []schemaColumnMigration{
 			{table: "child_task_packets", column: "active_attempt_id", statement: `ALTER TABLE child_task_packets ADD COLUMN active_attempt_id TEXT NOT NULL DEFAULT ''`},
+			{table: "child_task_packets", column: "lease_owner", statement: `ALTER TABLE child_task_packets ADD COLUMN lease_owner TEXT NOT NULL DEFAULT ''`},
 			{table: "child_task_packets", column: "lease_generation", statement: `ALTER TABLE child_task_packets ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0`},
 			{table: "child_task_packets", column: "fencing_token", statement: `ALTER TABLE child_task_packets ADD COLUMN fencing_token TEXT NOT NULL DEFAULT ''`},
+			{table: "child_task_packets", column: "lease_expires_at", statement: `ALTER TABLE child_task_packets ADD COLUMN lease_expires_at TEXT NOT NULL DEFAULT ''`},
+			{table: "child_task_packets", column: "lease_heartbeat_at", statement: `ALTER TABLE child_task_packets ADD COLUMN lease_heartbeat_at TEXT NOT NULL DEFAULT ''`},
+			{table: "child_task_packets", column: "lease_released_at", statement: `ALTER TABLE child_task_packets ADD COLUMN lease_released_at TEXT`},
 		} {
 			if err := addSchemaColumnIfMissing(tx, column); err != nil {
 				return err
@@ -103,6 +112,7 @@ func ensureChildTaskFencingColumns(tx *sql.Tx) error {
 	if resultsExist {
 		for _, column := range []schemaColumnMigration{
 			{table: "child_task_results", column: "attempt_id", statement: `ALTER TABLE child_task_results ADD COLUMN attempt_id TEXT NOT NULL DEFAULT ''`},
+			{table: "child_task_results", column: "lease_owner", statement: `ALTER TABLE child_task_results ADD COLUMN lease_owner TEXT NOT NULL DEFAULT ''`},
 			{table: "child_task_results", column: "lease_generation", statement: `ALTER TABLE child_task_results ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0`},
 			{table: "child_task_results", column: "fencing_token", statement: `ALTER TABLE child_task_results ADD COLUMN fencing_token TEXT NOT NULL DEFAULT ''`},
 		} {
@@ -131,5 +141,9 @@ func migrateSchemaV76ToV77(tx *sql.Tx) error {
 }
 
 func migrateSchemaV77ToV78(tx *sql.Tx) error {
+	return ensureChildTaskTables(tx)
+}
+
+func migrateSchemaV78ToV79(tx *sql.Tx) error {
 	return ensureChildTaskTables(tx)
 }

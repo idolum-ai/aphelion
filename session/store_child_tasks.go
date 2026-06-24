@@ -55,9 +55,10 @@ func recordChildTaskPacketTx(tx *sql.Tx, input ChildTaskPacketInput) (ChildTaskP
 			packet_id, task_lease_id, agent_id, session_id, chat_id, user_id,
 			scope_kind, scope_id, durable_agent_id, task_kind, status, authority_kind,
 			authority_id, grant_id, request_id, target_resource, required_action,
-			input_json, active_attempt_id, lease_generation, fencing_token, result_id,
+			input_json, active_attempt_id, lease_owner, lease_generation, fencing_token,
+			lease_expires_at, lease_heartbeat_at, lease_released_at, result_id,
 			created_at, updated_at, terminal_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0, '', '', ?, ?, NULL)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', 0, '', '', '', NULL, '', ?, ?, NULL)
 	`, input.PacketID, input.TaskLeaseID, input.AgentID, sessionID, input.Key.ChatID, input.Key.UserID,
 		string(scope.Kind), scope.ID, scope.DurableAgentID, input.TaskKind, string(input.Status), input.AuthorityKind,
 		input.AuthorityID, input.GrantID, input.RequestID, input.TargetResource, input.RequiredAction,
@@ -107,6 +108,9 @@ func (s *SQLiteStore) ClaimChildTaskAttempt(input ChildTaskAttemptClaimInput) (C
 	if input.AttemptID == "" {
 		return ChildTaskPacket{}, fmt.Errorf("child task attempt_id is required")
 	}
+	if input.LeaseOwner == "" {
+		return ChildTaskPacket{}, fmt.Errorf("child task attempt lease_owner is required")
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return ChildTaskPacket{}, fmt.Errorf("begin child task attempt tx: %w", err)
@@ -134,8 +138,19 @@ func claimChildTaskAttemptTx(tx *sql.Tx, input ChildTaskAttemptClaimInput) (Chil
 	if ChildTaskPacketStatusTerminal(packet.Status) {
 		return ChildTaskPacket{}, fmt.Errorf("child task packet %s is terminal (%s); explicit reopen required before claiming another attempt", input.PacketID, packet.Status)
 	}
-	if packet.ActiveAttemptID == input.AttemptID && packet.LeaseGeneration > 0 && packet.FencingToken != "" {
+	claimedAt := input.ClaimedAt.UTC()
+	leaseExpiresAt := input.LeaseExpiresAt.UTC()
+	if !leaseExpiresAt.After(claimedAt) {
+		return ChildTaskPacket{}, fmt.Errorf("child task attempt lease for packet %s must expire after claim time", input.PacketID)
+	}
+	if packet.ActiveAttemptID == input.AttemptID && packet.LeaseOwner == input.LeaseOwner && childTaskPacketLeaseLive(packet, claimedAt) {
 		return packet, nil
+	}
+	if packet.ActiveAttemptID == input.AttemptID && packet.LeaseGeneration > 0 {
+		return ChildTaskPacket{}, fmt.Errorf("child task attempt %s for packet %s was already used; use a new attempt id", input.AttemptID, input.PacketID)
+	}
+	if childTaskPacketLeaseLive(packet, claimedAt) {
+		return ChildTaskPacket{}, fmt.Errorf("child task packet %s has a live lease held by owner %s attempt %s", input.PacketID, packet.LeaseOwner, packet.ActiveAttemptID)
 	}
 	nextGeneration := packet.LeaseGeneration + 1
 	if nextGeneration <= 0 {
@@ -145,13 +160,16 @@ func claimChildTaskAttemptTx(tx *sql.Tx, input ChildTaskAttemptClaimInput) (Chil
 	if fencingToken == "" {
 		return ChildTaskPacket{}, fmt.Errorf("child task attempt fence could not be generated for packet %s", input.PacketID)
 	}
-	claimedAt := input.ClaimedAt.UTC()
 	if _, err := tx.Exec(`
 		UPDATE child_task_packets
-		SET status = ?, active_attempt_id = ?, lease_generation = ?, fencing_token = ?, updated_at = ?, terminal_at = NULL
+		SET status = ?, active_attempt_id = ?, lease_owner = ?, lease_generation = ?, fencing_token = ?,
+			lease_expires_at = ?, lease_heartbeat_at = ?, lease_released_at = NULL,
+			updated_at = ?, terminal_at = NULL
 		WHERE packet_id = ?
 			AND status NOT IN (?, ?, ?, ?, ?)
-	`, string(ChildTaskPacketInProgress), input.AttemptID, nextGeneration, fencingToken, claimedAt.Format(time.RFC3339Nano), input.PacketID,
+	`, string(ChildTaskPacketInProgress), input.AttemptID, input.LeaseOwner, nextGeneration, fencingToken,
+		leaseExpiresAt.Format(time.RFC3339Nano), claimedAt.Format(time.RFC3339Nano),
+		claimedAt.Format(time.RFC3339Nano), input.PacketID,
 		string(ChildTaskPacketCompleted), string(ChildTaskPacketBlocked), string(ChildTaskPacketFailed), string(ChildTaskPacketRevoked), string(ChildTaskPacketExpired)); err != nil {
 		return ChildTaskPacket{}, fmt.Errorf("claim child task attempt %s/%s: %w", input.PacketID, input.AttemptID, err)
 	}
@@ -162,13 +180,138 @@ func claimChildTaskAttemptTx(tx *sql.Tx, input ChildTaskAttemptClaimInput) (Chil
 	if !ok {
 		return ChildTaskPacket{}, fmt.Errorf("child task packet %s not found after attempt claim", input.PacketID)
 	}
-	if claimed.ActiveAttemptID != input.AttemptID || claimed.LeaseGeneration != nextGeneration || claimed.FencingToken != fencingToken {
+	if claimed.ActiveAttemptID != input.AttemptID || claimed.LeaseOwner != input.LeaseOwner || claimed.LeaseGeneration != nextGeneration || claimed.FencingToken != fencingToken {
 		return ChildTaskPacket{}, fmt.Errorf("child task attempt claim for packet %s lost fence ownership", input.PacketID)
 	}
 	return claimed, nil
 }
 
-func (s *SQLiteStore) RecordChildTaskResult(input ChildTaskResultInput) (ChildTaskResult, error) {
+func (s *SQLiteStore) HeartbeatChildTaskAttempt(input ChildTaskAttemptHeartbeatInput) (ChildTaskPacket, error) {
+	if s == nil || s.db == nil {
+		return ChildTaskPacket{}, fmt.Errorf("child task store unavailable")
+	}
+	input = NormalizeChildTaskAttemptHeartbeatInput(input)
+	if input.PacketID == "" || input.AttemptID == "" || input.LeaseOwner == "" || input.LeaseGeneration <= 0 || input.FencingToken == "" {
+		return ChildTaskPacket{}, fmt.Errorf("child task heartbeat requires packet, attempt, owner, generation, and fencing token")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return ChildTaskPacket{}, fmt.Errorf("begin child task heartbeat tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	packet, err := heartbeatChildTaskAttemptTx(tx, input)
+	if err != nil {
+		return ChildTaskPacket{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ChildTaskPacket{}, fmt.Errorf("commit child task heartbeat tx: %w", err)
+	}
+	return packet, nil
+}
+
+func heartbeatChildTaskAttemptTx(tx *sql.Tx, input ChildTaskAttemptHeartbeatInput) (ChildTaskPacket, error) {
+	input = NormalizeChildTaskAttemptHeartbeatInput(input)
+	packet, ok, err := childTaskPacketByIDTx(tx, input.PacketID)
+	if err != nil {
+		return ChildTaskPacket{}, err
+	}
+	if !ok {
+		return ChildTaskPacket{}, fmt.Errorf("child task packet %s not found", input.PacketID)
+	}
+	if !childTaskAttemptOwnsPacketLease(packet, input.AttemptID, input.LeaseOwner, input.LeaseGeneration, input.FencingToken) {
+		return ChildTaskPacket{}, fmt.Errorf("child task heartbeat attempt %s does not own active packet lease", input.AttemptID)
+	}
+	if !childTaskPacketLeaseLive(packet, input.HeartbeatAt) {
+		return ChildTaskPacket{}, fmt.Errorf("child task heartbeat attempt %s lease is not live", input.AttemptID)
+	}
+	if !input.LeaseExpiresAt.After(input.HeartbeatAt) {
+		return ChildTaskPacket{}, fmt.Errorf("child task heartbeat lease for packet %s must expire after heartbeat time", input.PacketID)
+	}
+	if _, err := tx.Exec(`
+		UPDATE child_task_packets
+		SET lease_expires_at = ?, lease_heartbeat_at = ?, updated_at = ?
+		WHERE packet_id = ?
+			AND active_attempt_id = ?
+			AND lease_owner = ?
+			AND lease_generation = ?
+			AND fencing_token = ?
+			AND lease_released_at IS NULL
+	`, input.LeaseExpiresAt.Format(time.RFC3339Nano), input.HeartbeatAt.Format(time.RFC3339Nano), input.HeartbeatAt.Format(time.RFC3339Nano),
+		input.PacketID, input.AttemptID, input.LeaseOwner, input.LeaseGeneration, input.FencingToken); err != nil {
+		return ChildTaskPacket{}, fmt.Errorf("heartbeat child task attempt %s/%s: %w", input.PacketID, input.AttemptID, err)
+	}
+	updated, ok, err := childTaskPacketByIDTx(tx, input.PacketID)
+	if err != nil {
+		return ChildTaskPacket{}, err
+	}
+	if !ok || !childTaskAttemptOwnsPacketLease(updated, input.AttemptID, input.LeaseOwner, input.LeaseGeneration, input.FencingToken) {
+		return ChildTaskPacket{}, fmt.Errorf("child task heartbeat for packet %s lost fence ownership", input.PacketID)
+	}
+	return updated, nil
+}
+
+func (s *SQLiteStore) ReleaseChildTaskAttempt(input ChildTaskAttemptReleaseInput) (ChildTaskPacket, error) {
+	if s == nil || s.db == nil {
+		return ChildTaskPacket{}, fmt.Errorf("child task store unavailable")
+	}
+	input = NormalizeChildTaskAttemptReleaseInput(input)
+	if input.PacketID == "" || input.AttemptID == "" || input.LeaseOwner == "" || input.LeaseGeneration <= 0 || input.FencingToken == "" {
+		return ChildTaskPacket{}, fmt.Errorf("child task release requires packet, attempt, owner, generation, and fencing token")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return ChildTaskPacket{}, fmt.Errorf("begin child task release tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	packet, err := releaseChildTaskAttemptTx(tx, input)
+	if err != nil {
+		return ChildTaskPacket{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ChildTaskPacket{}, fmt.Errorf("commit child task release tx: %w", err)
+	}
+	return packet, nil
+}
+
+func releaseChildTaskAttemptTx(tx *sql.Tx, input ChildTaskAttemptReleaseInput) (ChildTaskPacket, error) {
+	input = NormalizeChildTaskAttemptReleaseInput(input)
+	packet, ok, err := childTaskPacketByIDTx(tx, input.PacketID)
+	if err != nil {
+		return ChildTaskPacket{}, err
+	}
+	if !ok {
+		return ChildTaskPacket{}, fmt.Errorf("child task packet %s not found", input.PacketID)
+	}
+	if !childTaskAttemptOwnsPacketLease(packet, input.AttemptID, input.LeaseOwner, input.LeaseGeneration, input.FencingToken) {
+		return ChildTaskPacket{}, fmt.Errorf("child task release attempt %s does not own active packet lease", input.AttemptID)
+	}
+	if !packet.LeaseReleasedAt.IsZero() {
+		return packet, nil
+	}
+	if _, err := tx.Exec(`
+		UPDATE child_task_packets
+		SET lease_released_at = ?, updated_at = ?
+		WHERE packet_id = ?
+			AND active_attempt_id = ?
+			AND lease_owner = ?
+			AND lease_generation = ?
+			AND fencing_token = ?
+			AND lease_released_at IS NULL
+	`, input.ReleasedAt.Format(time.RFC3339Nano), input.ReleasedAt.Format(time.RFC3339Nano),
+		input.PacketID, input.AttemptID, input.LeaseOwner, input.LeaseGeneration, input.FencingToken); err != nil {
+		return ChildTaskPacket{}, fmt.Errorf("release child task attempt %s/%s: %w", input.PacketID, input.AttemptID, err)
+	}
+	released, ok, err := childTaskPacketByIDTx(tx, input.PacketID)
+	if err != nil {
+		return ChildTaskPacket{}, err
+	}
+	if !ok || released.LeaseReleasedAt.IsZero() {
+		return ChildTaskPacket{}, fmt.Errorf("child task release for packet %s was not recorded", input.PacketID)
+	}
+	return released, nil
+}
+
+func (s *SQLiteStore) recordChildTaskResultForTest(input ChildTaskResultInput) (ChildTaskResult, error) {
 	if s == nil || s.db == nil {
 		return ChildTaskResult{}, fmt.Errorf("child task store unavailable")
 	}
@@ -181,6 +324,9 @@ func (s *SQLiteStore) RecordChildTaskResult(input ChildTaskResultInput) (ChildTa
 	}
 	if input.AttemptID == "" {
 		return ChildTaskResult{}, fmt.Errorf("child task result attempt_id is required")
+	}
+	if input.LeaseOwner == "" {
+		return ChildTaskResult{}, fmt.Errorf("child task result lease_owner is required")
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -262,14 +408,12 @@ func recordChildTaskResultTx(tx *sql.Tx, input ChildTaskResultInput) (ChildTaskR
 	if ChildTaskPacketStatusTerminal(packet.Status) {
 		return ChildTaskResult{}, false, fmt.Errorf("child task packet %s is terminal (%s); stale result for attempt %s rejected", input.PacketID, packet.Status, input.AttemptID)
 	}
-	if input.AttemptID == "" || input.AttemptID != packet.ActiveAttemptID {
-		return ChildTaskResult{}, false, fmt.Errorf("child task result attempt %s does not own active packet attempt %s", input.AttemptID, packet.ActiveAttemptID)
+	if !childTaskAttemptOwnsPacketLease(packet, input.AttemptID, input.LeaseOwner, input.LeaseGeneration, input.FencingToken) {
+		return ChildTaskResult{}, false, fmt.Errorf("child task result attempt %s does not own active packet lease", input.AttemptID)
 	}
-	if input.LeaseGeneration <= 0 || input.LeaseGeneration != packet.LeaseGeneration {
-		return ChildTaskResult{}, false, fmt.Errorf("child task result attempt %s has stale generation %d; active generation is %d", input.AttemptID, input.LeaseGeneration, packet.LeaseGeneration)
-	}
-	if input.FencingToken == "" || input.FencingToken != packet.FencingToken {
-		return ChildTaskResult{}, false, fmt.Errorf("child task result attempt %s failed fencing token check", input.AttemptID)
+	createdAt := input.CreatedAt.UTC()
+	if !childTaskPacketLeaseLive(packet, createdAt) {
+		return ChildTaskResult{}, false, fmt.Errorf("child task result attempt %s lease is not live", input.AttemptID)
 	}
 	if input.AgentID == "" {
 		input.AgentID = packet.AgentID
@@ -278,16 +422,15 @@ func recordChildTaskResultTx(tx *sql.Tx, input ChildTaskResultInput) (ChildTaskR
 		input.TaskLeaseID = packet.TaskLeaseID
 	}
 	sessionID := firstNonEmptyString(SessionIDForKey(input.Key), packet.SessionID)
-	createdAt := input.CreatedAt.UTC()
 	evidenceRefs := encodeStringList(input.EvidenceRefs)
 	if _, err := tx.Exec(`
 		INSERT INTO child_task_results(
-			result_id, packet_id, attempt_id, lease_generation, fencing_token,
+			result_id, packet_id, attempt_id, lease_owner, lease_generation, fencing_token,
 			task_lease_id, agent_id, session_id, status,
 			result_kind, summary, blocker_kind, error_text, evidence_refs_json,
 			next_state, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, input.ResultID, input.PacketID, input.AttemptID, input.LeaseGeneration, input.FencingToken,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, input.ResultID, input.PacketID, input.AttemptID, input.LeaseOwner, input.LeaseGeneration, input.FencingToken,
 		input.TaskLeaseID, input.AgentID, sessionID, string(input.Status),
 		input.ResultKind, input.Summary, input.BlockerKind, input.ErrorText, evidenceRefs,
 		string(input.NextState), createdAt.Format(time.RFC3339Nano)); err != nil {
@@ -297,28 +440,32 @@ func recordChildTaskResultTx(tx *sql.Tx, input ChildTaskResultInput) (ChildTaskR
 	if input.Status == ChildTaskResultUpdate {
 		if _, err := tx.Exec(`
 			UPDATE child_task_packets
-			SET status = ?, result_id = ?, updated_at = ?, terminal_at = NULL
+			SET status = ?, result_id = ?, lease_released_at = ?, updated_at = ?, terminal_at = NULL
 			WHERE packet_id = ?
 				AND active_attempt_id = ?
+				AND lease_owner = ?
 				AND lease_generation = ?
 				AND fencing_token = ?
+				AND lease_released_at IS NULL
 				AND status NOT IN (?, ?, ?, ?, ?)
-		`, string(packetStatus), input.ResultID, createdAt.Format(time.RFC3339Nano), input.PacketID,
-			input.AttemptID, input.LeaseGeneration, input.FencingToken,
+		`, string(packetStatus), input.ResultID, createdAt.Format(time.RFC3339Nano), createdAt.Format(time.RFC3339Nano), input.PacketID,
+			input.AttemptID, input.LeaseOwner, input.LeaseGeneration, input.FencingToken,
 			string(ChildTaskPacketCompleted), string(ChildTaskPacketBlocked), string(ChildTaskPacketFailed), string(ChildTaskPacketRevoked), string(ChildTaskPacketExpired)); err != nil {
 			return ChildTaskResult{}, false, fmt.Errorf("update child task packet nonterminal state: %w", err)
 		}
 	} else {
 		if _, err := tx.Exec(`
 			UPDATE child_task_packets
-			SET status = ?, result_id = ?, updated_at = ?, terminal_at = ?
+			SET status = ?, result_id = ?, lease_released_at = ?, updated_at = ?, terminal_at = ?
 			WHERE packet_id = ?
 				AND active_attempt_id = ?
+				AND lease_owner = ?
 				AND lease_generation = ?
 				AND fencing_token = ?
+				AND lease_released_at IS NULL
 				AND status NOT IN (?, ?, ?, ?, ?)
-		`, string(packetStatus), input.ResultID, createdAt.Format(time.RFC3339Nano), createdAt.Format(time.RFC3339Nano), input.PacketID,
-			input.AttemptID, input.LeaseGeneration, input.FencingToken,
+		`, string(packetStatus), input.ResultID, createdAt.Format(time.RFC3339Nano), createdAt.Format(time.RFC3339Nano), createdAt.Format(time.RFC3339Nano), input.PacketID,
+			input.AttemptID, input.LeaseOwner, input.LeaseGeneration, input.FencingToken,
 			string(ChildTaskPacketCompleted), string(ChildTaskPacketBlocked), string(ChildTaskPacketFailed), string(ChildTaskPacketRevoked), string(ChildTaskPacketExpired)); err != nil {
 			return ChildTaskResult{}, false, fmt.Errorf("update child task packet terminal state: %w", err)
 		}
@@ -334,6 +481,7 @@ func recordChildTaskResultTx(tx *sql.Tx, input ChildTaskResultInput) (ChildTaskR
 		"result_id":        input.ResultID,
 		"packet_id":        input.PacketID,
 		"attempt_id":       input.AttemptID,
+		"lease_owner":      input.LeaseOwner,
 		"lease_generation": input.LeaseGeneration,
 		"task_lease_id":    input.TaskLeaseID,
 		"agent_id":         input.AgentID,
@@ -417,7 +565,8 @@ func childTaskPacketSelectSQL() string {
 		SELECT packet_id, task_lease_id, agent_id, session_id, chat_id, user_id,
 			scope_kind, scope_id, durable_agent_id, task_kind, status, authority_kind,
 			authority_id, grant_id, request_id, target_resource, required_action,
-			input_json, active_attempt_id, lease_generation, fencing_token, result_id,
+			input_json, active_attempt_id, lease_owner, lease_generation, fencing_token,
+			lease_expires_at, lease_heartbeat_at, lease_released_at, result_id,
 			created_at, updated_at, terminal_at
 		FROM child_task_packets
 	`
@@ -425,7 +574,7 @@ func childTaskPacketSelectSQL() string {
 
 func childTaskResultSelectSQL() string {
 	return `
-		SELECT result_id, packet_id, attempt_id, lease_generation, fencing_token,
+		SELECT result_id, packet_id, attempt_id, lease_owner, lease_generation, fencing_token,
 			task_lease_id, agent_id, session_id, status,
 			result_kind, summary, blocker_kind, error_text, evidence_refs_json,
 			next_state, created_at
@@ -435,14 +584,17 @@ func childTaskResultSelectSQL() string {
 
 func scanChildTaskPacket(scanner interface{ Scan(dest ...any) error }) (ChildTaskPacket, error) {
 	var (
-		packet            ChildTaskPacket
-		scopeKindRaw      string
-		scopeIDRaw        string
-		durableAgentIDRaw string
-		statusRaw         string
-		createdAtRaw      string
-		updatedAtRaw      string
-		terminalAtRaw     sql.NullString
+		packet              ChildTaskPacket
+		scopeKindRaw        string
+		scopeIDRaw          string
+		durableAgentIDRaw   string
+		statusRaw           string
+		createdAtRaw        string
+		updatedAtRaw        string
+		leaseExpiresAtRaw   string
+		leaseHeartbeatAtRaw string
+		leaseReleasedAtRaw  sql.NullString
+		terminalAtRaw       sql.NullString
 	)
 	if err := scanner.Scan(
 		&packet.PacketID,
@@ -464,8 +616,12 @@ func scanChildTaskPacket(scanner interface{ Scan(dest ...any) error }) (ChildTas
 		&packet.RequiredAction,
 		&packet.InputJSON,
 		&packet.ActiveAttemptID,
+		&packet.LeaseOwner,
 		&packet.LeaseGeneration,
 		&packet.FencingToken,
+		&leaseExpiresAtRaw,
+		&leaseHeartbeatAtRaw,
+		&leaseReleasedAtRaw,
 		&packet.ResultID,
 		&createdAtRaw,
 		&updatedAtRaw,
@@ -489,6 +645,23 @@ func scanChildTaskPacket(scanner interface{ Scan(dest ...any) error }) (ChildTas
 	packet.Status = NormalizeChildTaskPacketStatus(ChildTaskPacketStatus(statusRaw))
 	packet.CreatedAt = createdAt
 	packet.UpdatedAt = updatedAt
+	if leaseExpiresAt, err := parseOptionalSQLiteTime(leaseExpiresAtRaw); err != nil {
+		return ChildTaskPacket{}, fmt.Errorf("parse child task packet lease_expires_at: %w", err)
+	} else {
+		packet.LeaseExpiresAt = leaseExpiresAt
+	}
+	if leaseHeartbeatAt, err := parseOptionalSQLiteTime(leaseHeartbeatAtRaw); err != nil {
+		return ChildTaskPacket{}, fmt.Errorf("parse child task packet lease_heartbeat_at: %w", err)
+	} else {
+		packet.LeaseHeartbeatAt = leaseHeartbeatAt
+	}
+	if leaseReleasedAtRaw.Valid {
+		if leaseReleasedAt, err := parseOptionalSQLiteTime(leaseReleasedAtRaw.String); err != nil {
+			return ChildTaskPacket{}, fmt.Errorf("parse child task packet lease_released_at: %w", err)
+		} else {
+			packet.LeaseReleasedAt = leaseReleasedAt
+		}
+	}
 	if terminalAtRaw.Valid && strings.TrimSpace(terminalAtRaw.String) != "" {
 		terminalAt, err := parseSQLiteTime(terminalAtRaw.String)
 		if err != nil {
@@ -511,6 +684,7 @@ func scanChildTaskResult(scanner interface{ Scan(dest ...any) error }) (ChildTas
 		&result.ResultID,
 		&result.PacketID,
 		&result.AttemptID,
+		&result.LeaseOwner,
 		&result.LeaseGeneration,
 		&result.FencingToken,
 		&result.TaskLeaseID,
@@ -537,6 +711,39 @@ func scanChildTaskResult(scanner interface{ Scan(dest ...any) error }) (ChildTas
 	result.EvidenceRefs = evidenceRefs
 	result.CreatedAt = createdAt
 	return result, nil
+}
+
+func childTaskPacketLeaseLive(packet ChildTaskPacket, at time.Time) bool {
+	if packet.ActiveAttemptID == "" || packet.LeaseOwner == "" || packet.LeaseGeneration <= 0 || packet.FencingToken == "" {
+		return false
+	}
+	if !packet.LeaseReleasedAt.IsZero() || packet.LeaseExpiresAt.IsZero() {
+		return false
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	} else {
+		at = at.UTC()
+	}
+	return packet.LeaseExpiresAt.After(at)
+}
+
+func childTaskAttemptOwnsPacketLease(packet ChildTaskPacket, attemptID string, leaseOwner string, leaseGeneration int64, fencingToken string) bool {
+	return strings.TrimSpace(attemptID) != "" &&
+		strings.TrimSpace(leaseOwner) != "" &&
+		strings.TrimSpace(fencingToken) != "" &&
+		packet.ActiveAttemptID == strings.TrimSpace(attemptID) &&
+		packet.LeaseOwner == strings.TrimSpace(leaseOwner) &&
+		packet.LeaseGeneration == leaseGeneration &&
+		packet.FencingToken == strings.TrimSpace(fencingToken)
+}
+
+func parseOptionalSQLiteTime(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	return parseSQLiteTime(raw)
 }
 
 func firstNonEmptyString(values ...string) string {

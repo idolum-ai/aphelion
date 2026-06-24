@@ -47,9 +47,10 @@ func TestChildTaskPacketAndResultRoundTrip(t *testing.T) {
 	}
 
 	claimed := claimChildTaskAttemptForTest(t, store, key, packet.PacketID, "child_attempt:roundtrip", now.Add(500*time.Millisecond))
-	result, err := store.RecordChildTaskResult(ChildTaskResultInput{
+	result, err := store.recordChildTaskResultForTest(ChildTaskResultInput{
 		PacketID:        packet.PacketID,
 		AttemptID:       claimed.ActiveAttemptID,
+		LeaseOwner:      claimed.LeaseOwner,
 		LeaseGeneration: claimed.LeaseGeneration,
 		FencingToken:    claimed.FencingToken,
 		AgentID:         "child-alpha",
@@ -60,7 +61,7 @@ func TestChildTaskPacketAndResultRoundTrip(t *testing.T) {
 		CreatedAt:       now.Add(time.Second),
 	})
 	if err != nil {
-		t.Fatalf("RecordChildTaskResult() err = %v", err)
+		t.Fatalf("recordChildTaskResultForTest() err = %v", err)
 	}
 	if result.ResultID == "" || result.AttemptID == "" || result.Status != ChildTaskResultCompleted || result.NextState != NextActionTerminal {
 		t.Fatalf("result = %#v, want completed terminal child result", result)
@@ -105,9 +106,10 @@ func TestChildTaskResultAttemptsDoNotCollapse(t *testing.T) {
 
 	firstAttemptID := ChildTaskAttemptID(packet.PacketID, "attempt-1")
 	firstClaim := claimChildTaskAttemptForTest(t, store, key, packet.PacketID, firstAttemptID, now.Add(time.Second))
-	update, err := store.RecordChildTaskResult(ChildTaskResultInput{
+	update, err := store.recordChildTaskResultForTest(ChildTaskResultInput{
 		PacketID:        packet.PacketID,
 		AttemptID:       firstAttemptID,
+		LeaseOwner:      firstClaim.LeaseOwner,
 		LeaseGeneration: firstClaim.LeaseGeneration,
 		FencingToken:    firstClaim.FencingToken,
 		AgentID:         "child-retry",
@@ -117,7 +119,7 @@ func TestChildTaskResultAttemptsDoNotCollapse(t *testing.T) {
 		CreatedAt:       now.Add(time.Second),
 	})
 	if err != nil {
-		t.Fatalf("RecordChildTaskResult(update) err = %v", err)
+		t.Fatalf("recordChildTaskResultForTest(update) err = %v", err)
 	}
 	if update.AttemptID != firstAttemptID || update.Status != ChildTaskResultUpdate || update.NextState != NextActionWaitingForChild {
 		t.Fatalf("update result = %#v, want nonterminal first attempt", update)
@@ -132,9 +134,10 @@ func TestChildTaskResultAttemptsDoNotCollapse(t *testing.T) {
 
 	secondAttemptID := ChildTaskAttemptID(packet.PacketID, "attempt-2")
 	secondClaim := claimChildTaskAttemptForTest(t, store, key, packet.PacketID, secondAttemptID, now.Add(2*time.Second))
-	completed, err := store.RecordChildTaskResult(ChildTaskResultInput{
+	completed, err := store.recordChildTaskResultForTest(ChildTaskResultInput{
 		PacketID:        packet.PacketID,
 		AttemptID:       secondAttemptID,
+		LeaseOwner:      secondClaim.LeaseOwner,
 		LeaseGeneration: secondClaim.LeaseGeneration,
 		FencingToken:    secondClaim.FencingToken,
 		AgentID:         "child-retry",
@@ -145,7 +148,7 @@ func TestChildTaskResultAttemptsDoNotCollapse(t *testing.T) {
 		CreatedAt:       now.Add(3 * time.Second),
 	})
 	if err != nil {
-		t.Fatalf("RecordChildTaskResult(completed) err = %v", err)
+		t.Fatalf("recordChildTaskResultForTest(completed) err = %v", err)
 	}
 	if completed.ResultID == update.ResultID || completed.AttemptID == update.AttemptID {
 		t.Fatalf("completed result = %#v update = %#v, want distinct attempt identity", completed, update)
@@ -182,9 +185,10 @@ func TestChildTaskTerminalPacketAbsorbsStaleResults(t *testing.T) {
 		t.Fatalf("RecordChildTaskPacket() err = %v", err)
 	}
 	claim := claimChildTaskAttemptForTest(t, store, key, packet.PacketID, "child_attempt:terminal-1", now.Add(time.Second))
-	completed, err := store.RecordChildTaskResult(ChildTaskResultInput{
+	completed, err := store.recordChildTaskResultForTest(ChildTaskResultInput{
 		PacketID:        packet.PacketID,
 		AttemptID:       claim.ActiveAttemptID,
+		LeaseOwner:      claim.LeaseOwner,
 		LeaseGeneration: claim.LeaseGeneration,
 		FencingToken:    claim.FencingToken,
 		AgentID:         "child-terminal",
@@ -194,7 +198,7 @@ func TestChildTaskTerminalPacketAbsorbsStaleResults(t *testing.T) {
 		CreatedAt:       now.Add(2 * time.Second),
 	})
 	if err != nil {
-		t.Fatalf("RecordChildTaskResult(completed) err = %v", err)
+		t.Fatalf("recordChildTaskResultForTest(completed) err = %v", err)
 	}
 
 	if _, err := store.ClaimChildTaskAttempt(ChildTaskAttemptClaimInput{
@@ -207,9 +211,10 @@ func TestChildTaskTerminalPacketAbsorbsStaleResults(t *testing.T) {
 		t.Fatal("ClaimChildTaskAttempt(terminal) err = nil, want terminal packet to reject claim")
 	}
 	staleAttemptID := "child_attempt:terminal-stale"
-	if _, err := store.RecordChildTaskResult(ChildTaskResultInput{
+	if _, err := store.recordChildTaskResultForTest(ChildTaskResultInput{
 		PacketID:        packet.PacketID,
 		AttemptID:       staleAttemptID,
+		LeaseOwner:      "stale-owner",
 		LeaseGeneration: claim.LeaseGeneration + 1,
 		FencingToken:    ChildTaskFencingToken(packet.PacketID, staleAttemptID, claim.LeaseGeneration+1),
 		AgentID:         "child-terminal",
@@ -218,7 +223,7 @@ func TestChildTaskTerminalPacketAbsorbsStaleResults(t *testing.T) {
 		Summary:         "Late update.",
 		CreatedAt:       now.Add(4 * time.Second),
 	}); err == nil {
-		t.Fatal("RecordChildTaskResult(stale update) err = nil, want stale result rejected")
+		t.Fatal("recordChildTaskResultForTest(stale update) err = nil, want stale result rejected")
 	}
 	after, ok, err := store.ChildTaskPacket(packet.PacketID)
 	if err != nil {
@@ -232,17 +237,17 @@ func TestChildTaskTerminalPacketAbsorbsStaleResults(t *testing.T) {
 	}
 }
 
-func TestChildTaskOverlappingAttemptsFencePacketState(t *testing.T) {
+func TestChildTaskLiveLeaseRejectsSecondClaimAndAllowsOwnerResult(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSQLiteStore(t)
 	defer store.Close()
 
-	key := SessionKey{ChatID: 7704, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindDurableAgent, ID: "child-overlap", DurableAgentID: "child-overlap"}}
+	key := SessionKey{ChatID: 7704, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindDurableAgent, ID: "child-live-lease", DurableAgentID: "child-live-lease"}}
 	now := time.Now().UTC().Round(0)
 	packet, err := store.RecordChildTaskPacket(ChildTaskPacketInput{
-		PacketID:  "child_task:overlap",
-		AgentID:   "child-overlap",
+		PacketID:  "child_task:live_lease",
+		AgentID:   "child-live-lease",
 		Key:       key,
 		TaskKind:  "durable_wake",
 		InputJSON: `{}`,
@@ -251,44 +256,177 @@ func TestChildTaskOverlappingAttemptsFencePacketState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordChildTaskPacket() err = %v", err)
 	}
-	first := claimChildTaskAttemptForTest(t, store, key, packet.PacketID, "child_attempt:overlap-1", now.Add(time.Second))
-	second := claimChildTaskAttemptForTest(t, store, key, packet.PacketID, "child_attempt:overlap-2", now.Add(2*time.Second))
-	if second.LeaseGeneration <= first.LeaseGeneration {
-		t.Fatalf("second claim = %#v first = %#v, want newer generation", second, first)
+	first := claimChildTaskAttemptWithLeaseForTest(t, store, key, packet.PacketID, "child_attempt:live-a", "worker-a", now.Add(time.Second), now.Add(10*time.Minute))
+	if _, err := store.ClaimChildTaskAttempt(ChildTaskAttemptClaimInput{
+		PacketID:       packet.PacketID,
+		AttemptID:      "child_attempt:live-b",
+		LeaseOwner:     "worker-b",
+		Key:            key,
+		ClaimedAt:      now.Add(2 * time.Second),
+		LeaseExpiresAt: now.Add(10 * time.Minute),
+	}); err == nil {
+		t.Fatal("ClaimChildTaskAttempt(live competing owner) err = nil, want live lease to reject second claim")
 	}
-	if _, err := store.RecordChildTaskResult(ChildTaskResultInput{
+
+	completed, err := store.recordChildTaskResultForTest(ChildTaskResultInput{
 		PacketID:        packet.PacketID,
 		AttemptID:       first.ActiveAttemptID,
+		LeaseOwner:      first.LeaseOwner,
 		LeaseGeneration: first.LeaseGeneration,
 		FencingToken:    first.FencingToken,
-		AgentID:         "child-overlap",
-		Key:             key,
-		Status:          ChildTaskResultFailed,
-		Summary:         "Late failure from first attempt.",
-		CreatedAt:       now.Add(3 * time.Second),
-	}); err == nil {
-		t.Fatal("RecordChildTaskResult(stale first attempt) err = nil, want stale fenced attempt rejected")
-	}
-	completed, err := store.RecordChildTaskResult(ChildTaskResultInput{
-		PacketID:        packet.PacketID,
-		AttemptID:       second.ActiveAttemptID,
-		LeaseGeneration: second.LeaseGeneration,
-		FencingToken:    second.FencingToken,
-		AgentID:         "child-overlap",
+		AgentID:         "child-live-lease",
 		Key:             key,
 		Status:          ChildTaskResultCompleted,
-		Summary:         "Second attempt owns completion.",
-		CreatedAt:       now.Add(4 * time.Second),
+		Summary:         "First owner completed while lease remained live.",
+		CreatedAt:       now.Add(3 * time.Second),
 	})
 	if err != nil {
-		t.Fatalf("RecordChildTaskResult(second) err = %v", err)
+		t.Fatalf("recordChildTaskResultForTest(first owner) err = %v", err)
 	}
 	after, ok, err := store.ChildTaskPacket(packet.PacketID)
 	if err != nil {
-		t.Fatalf("ChildTaskPacket(after overlap) err = %v", err)
+		t.Fatalf("ChildTaskPacket(after live lease) err = %v", err)
+	}
+	if !ok || after.Status != ChildTaskPacketCompleted || after.ResultID != completed.ResultID || after.ActiveAttemptID != first.ActiveAttemptID {
+		t.Fatalf("after live lease packet = %#v ok=%t, want first owner completion", after, ok)
+	}
+}
+
+func TestChildTaskExpiredLeaseAllowsTakeoverAndRejectsOldResult(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 7706, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindDurableAgent, ID: "child-expired-lease", DurableAgentID: "child-expired-lease"}}
+	now := time.Now().UTC().Round(0)
+	packet, err := store.RecordChildTaskPacket(ChildTaskPacketInput{
+		PacketID:  "child_task:expired_lease",
+		AgentID:   "child-expired-lease",
+		Key:       key,
+		TaskKind:  "durable_wake",
+		InputJSON: `{}`,
+		CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskPacket() err = %v", err)
+	}
+	first := claimChildTaskAttemptWithLeaseForTest(t, store, key, packet.PacketID, "child_attempt:expired-a", "worker-a", now.Add(time.Second), now.Add(2*time.Second))
+	second := claimChildTaskAttemptWithLeaseForTest(t, store, key, packet.PacketID, "child_attempt:expired-b", "worker-b", now.Add(3*time.Second), now.Add(10*time.Minute))
+	if second.LeaseGeneration <= first.LeaseGeneration || second.LeaseOwner != "worker-b" {
+		t.Fatalf("second claim = %#v first = %#v, want takeover after expiry", second, first)
+	}
+	if _, err := store.recordChildTaskResultForTest(ChildTaskResultInput{
+		PacketID:        packet.PacketID,
+		AttemptID:       first.ActiveAttemptID,
+		LeaseOwner:      first.LeaseOwner,
+		LeaseGeneration: first.LeaseGeneration,
+		FencingToken:    first.FencingToken,
+		AgentID:         "child-expired-lease",
+		Key:             key,
+		Status:          ChildTaskResultFailed,
+		Summary:         "Late result from expired first lease.",
+		CreatedAt:       now.Add(4 * time.Second),
+	}); err == nil {
+		t.Fatal("recordChildTaskResultForTest(expired first lease) err = nil, want old owner rejected")
+	}
+	completed, err := store.recordChildTaskResultForTest(ChildTaskResultInput{
+		PacketID:        packet.PacketID,
+		AttemptID:       second.ActiveAttemptID,
+		LeaseOwner:      second.LeaseOwner,
+		LeaseGeneration: second.LeaseGeneration,
+		FencingToken:    second.FencingToken,
+		AgentID:         "child-expired-lease",
+		Key:             key,
+		Status:          ChildTaskResultCompleted,
+		Summary:         "Second owner completed after takeover.",
+		CreatedAt:       now.Add(4 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("recordChildTaskResultForTest(second owner) err = %v", err)
+	}
+	after, ok, err := store.ChildTaskPacket(packet.PacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(after expiry takeover) err = %v", err)
 	}
 	if !ok || after.Status != ChildTaskPacketCompleted || after.ResultID != completed.ResultID {
-		t.Fatalf("after overlap packet = %#v ok=%t, want second attempt completion", after, ok)
+		t.Fatalf("after expiry takeover packet = %#v ok=%t, want second owner completion", after, ok)
+	}
+}
+
+func TestChildTaskReleasedLeaseAllowsTakeover(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 7707, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindDurableAgent, ID: "child-released-lease", DurableAgentID: "child-released-lease"}}
+	now := time.Now().UTC().Round(0)
+	packet, err := store.RecordChildTaskPacket(ChildTaskPacketInput{
+		PacketID:  "child_task:released_lease",
+		AgentID:   "child-released-lease",
+		Key:       key,
+		TaskKind:  "durable_wake",
+		InputJSON: `{}`,
+		CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskPacket() err = %v", err)
+	}
+	first := claimChildTaskAttemptWithLeaseForTest(t, store, key, packet.PacketID, "child_attempt:released-a", "worker-a", now.Add(time.Second), now.Add(10*time.Minute))
+	released, err := store.ReleaseChildTaskAttempt(ChildTaskAttemptReleaseInput{
+		PacketID:        packet.PacketID,
+		AttemptID:       first.ActiveAttemptID,
+		LeaseOwner:      first.LeaseOwner,
+		LeaseGeneration: first.LeaseGeneration,
+		FencingToken:    first.FencingToken,
+		ReleasedAt:      now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("ReleaseChildTaskAttempt() err = %v", err)
+	}
+	if released.LeaseReleasedAt.IsZero() {
+		t.Fatalf("released packet = %#v, want release timestamp", released)
+	}
+	second := claimChildTaskAttemptWithLeaseForTest(t, store, key, packet.PacketID, "child_attempt:released-b", "worker-b", now.Add(3*time.Second), now.Add(10*time.Minute))
+	if second.LeaseGeneration <= first.LeaseGeneration || second.LeaseOwner != "worker-b" || !second.LeaseReleasedAt.IsZero() {
+		t.Fatalf("second claim = %#v first = %#v, want fresh lease after explicit release", second, first)
+	}
+	if _, err := store.recordChildTaskResultForTest(ChildTaskResultInput{
+		PacketID:        packet.PacketID,
+		AttemptID:       first.ActiveAttemptID,
+		LeaseOwner:      first.LeaseOwner,
+		LeaseGeneration: first.LeaseGeneration,
+		FencingToken:    first.FencingToken,
+		AgentID:         "child-released-lease",
+		Key:             key,
+		Status:          ChildTaskResultFailed,
+		Summary:         "Late result from released first lease.",
+		CreatedAt:       now.Add(4 * time.Second),
+	}); err == nil {
+		t.Fatal("recordChildTaskResultForTest(released first lease) err = nil, want released owner rejected")
+	}
+	completed, err := store.recordChildTaskResultForTest(ChildTaskResultInput{
+		PacketID:        packet.PacketID,
+		AttemptID:       second.ActiveAttemptID,
+		LeaseOwner:      second.LeaseOwner,
+		LeaseGeneration: second.LeaseGeneration,
+		FencingToken:    second.FencingToken,
+		AgentID:         "child-released-lease",
+		Key:             key,
+		Status:          ChildTaskResultCompleted,
+		Summary:         "Second owner completed after release.",
+		CreatedAt:       now.Add(4 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("recordChildTaskResultForTest(second owner) err = %v", err)
+	}
+	after, ok, err := store.ChildTaskPacket(packet.PacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(after release takeover) err = %v", err)
+	}
+	if !ok || after.Status != ChildTaskPacketCompleted || after.ResultID != completed.ResultID {
+		t.Fatalf("after release takeover packet = %#v ok=%t, want second owner completion", after, ok)
 	}
 }
 
@@ -315,6 +453,7 @@ func TestChildTaskExactReplayIsIdempotent(t *testing.T) {
 	input := ChildTaskResultInput{
 		PacketID:        packet.PacketID,
 		AttemptID:       claim.ActiveAttemptID,
+		LeaseOwner:      claim.LeaseOwner,
 		LeaseGeneration: claim.LeaseGeneration,
 		FencingToken:    claim.FencingToken,
 		AgentID:         "child-replay",
@@ -323,13 +462,13 @@ func TestChildTaskExactReplayIsIdempotent(t *testing.T) {
 		Summary:         "Replay-safe completion.",
 		CreatedAt:       now.Add(2 * time.Second),
 	}
-	first, err := store.RecordChildTaskResult(input)
+	first, err := store.recordChildTaskResultForTest(input)
 	if err != nil {
-		t.Fatalf("RecordChildTaskResult(first) err = %v", err)
+		t.Fatalf("recordChildTaskResultForTest(first) err = %v", err)
 	}
-	replayed, err := store.RecordChildTaskResult(input)
+	replayed, err := store.recordChildTaskResultForTest(input)
 	if err != nil {
-		t.Fatalf("RecordChildTaskResult(replay) err = %v", err)
+		t.Fatalf("recordChildTaskResultForTest(replay) err = %v", err)
 	}
 	if replayed.ResultID != first.ResultID || replayed.AttemptID != first.AttemptID {
 		t.Fatalf("replayed result = %#v first = %#v, want exact idempotent replay", replayed, first)
@@ -338,16 +477,23 @@ func TestChildTaskExactReplayIsIdempotent(t *testing.T) {
 
 func claimChildTaskAttemptForTest(t *testing.T, store *SQLiteStore, key SessionKey, packetID string, attemptID string, at time.Time) ChildTaskPacket {
 	t.Helper()
+	return claimChildTaskAttemptWithLeaseForTest(t, store, key, packetID, attemptID, "test_worker:"+attemptID, at, at.Add(10*time.Minute))
+}
+
+func claimChildTaskAttemptWithLeaseForTest(t *testing.T, store *SQLiteStore, key SessionKey, packetID string, attemptID string, owner string, claimedAt time.Time, leaseExpiresAt time.Time) ChildTaskPacket {
+	t.Helper()
 	claimed, err := store.ClaimChildTaskAttempt(ChildTaskAttemptClaimInput{
-		PacketID:  packetID,
-		AttemptID: attemptID,
-		Key:       key,
-		ClaimedAt: at,
+		PacketID:       packetID,
+		AttemptID:      attemptID,
+		LeaseOwner:     owner,
+		Key:            key,
+		ClaimedAt:      claimedAt,
+		LeaseExpiresAt: leaseExpiresAt,
 	})
 	if err != nil {
 		t.Fatalf("ClaimChildTaskAttempt(%s/%s) err = %v", packetID, attemptID, err)
 	}
-	if claimed.ActiveAttemptID != attemptID || claimed.LeaseGeneration <= 0 || claimed.FencingToken == "" {
+	if claimed.ActiveAttemptID != attemptID || claimed.LeaseOwner != owner || claimed.LeaseGeneration <= 0 || claimed.FencingToken == "" || !claimed.LeaseExpiresAt.Equal(leaseExpiresAt) || claimed.LeaseHeartbeatAt.IsZero() {
 		t.Fatalf("claimed packet = %#v, want active attempt fence", claimed)
 	}
 	return claimed

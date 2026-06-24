@@ -25,6 +25,7 @@ const durableWakeInferenceUnavailableFallback = durableWakeInferenceUnavailableS
 const durableWakeAwakeLockStaleAfter = 30 * time.Minute
 const durableWakePollParallelism = 3
 const durableWakePollAgentTimeout = 30 * time.Minute
+const durableWakeAttemptLeaseDuration = durableWakePollAgentTimeout
 
 type durableWakeGovernorContextBuilder func(
 	agent core.DurableAgent,
@@ -259,6 +260,8 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		taskPacketID = durableWakeTaskPacketID(agent.AgentID, plan.Inbound.MessageID, now)
 	}
 	attemptID := durableWakeAttemptID(agent.AgentID, taskPacketID, now)
+	leaseOwner := durableWakeAttemptOwner(agent.AgentID, attemptID)
+	leaseClaimedAt := time.Now().UTC()
 	if err := r.recordDurableWakeTaskPacket(key, agent, plan, taskPacketID, now.UTC()); err != nil {
 		wrappedErr := fmt.Errorf("record durable wake task packet: %w", err)
 		if finalizeErr := finalizeDurableWakeFailure(plan, "", wrappedErr); finalizeErr != nil {
@@ -267,11 +270,13 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		return wrappedErr
 	}
 	claimedPacket, err := r.store.ClaimChildTaskAttempt(session.ChildTaskAttemptClaimInput{
-		PacketID:  taskPacketID,
-		AttemptID: attemptID,
-		AgentID:   strings.TrimSpace(agent.AgentID),
-		Key:       key,
-		ClaimedAt: now.UTC(),
+		PacketID:       taskPacketID,
+		AttemptID:      attemptID,
+		LeaseOwner:     leaseOwner,
+		AgentID:        strings.TrimSpace(agent.AgentID),
+		Key:            key,
+		ClaimedAt:      leaseClaimedAt,
+		LeaseExpiresAt: leaseClaimedAt.Add(durableWakeAttemptLeaseDuration),
 	})
 	if err != nil {
 		wrappedErr := fmt.Errorf("claim durable wake child task attempt: %w", err)
@@ -286,7 +291,9 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		"audit_channel":    strings.TrimSpace(plan.AuditChannel),
 		"task_packet_id":   taskPacketID,
 		"attempt_id":       attemptID,
+		"lease_owner":      claimedPacket.LeaseOwner,
 		"lease_generation": claimedPacket.LeaseGeneration,
+		"lease_expires_at": claimedPacket.LeaseExpiresAt.Format(time.RFC3339Nano),
 	}, now.UTC())
 
 	unlock := r.lockSession(key)
@@ -340,7 +347,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 			"attempt_id":     attemptID,
 			"error":          trimError(err.Error()),
 		}, time.Now().UTC())
-		if _, resultErr := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, attemptID, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, turnSummary, err, time.Now().UTC()); resultErr != nil {
+		if _, resultErr := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, turnSummary, err, time.Now().UTC()); resultErr != nil {
 			return fmt.Errorf("run durable wake turn: %w (and failed to record child task result: %v)", err, resultErr)
 		}
 		if markErr := r.markDurableAgentPolicyApplyFailure(agent, err); markErr != nil {
@@ -360,7 +367,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 			"attempt_id":     attemptID,
 			"error":          trimError(inferenceErr.Error()),
 		}, time.Now().UTC())
-		if _, resultErr := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, attemptID, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, turnSummary, inferenceErr, time.Now().UTC()); resultErr != nil {
+		if _, resultErr := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, turnSummary, inferenceErr, time.Now().UTC()); resultErr != nil {
 			return fmt.Errorf("%w (and failed to record child task result: %v)", inferenceErr, resultErr)
 		}
 		if markErr := r.markDurableAgentPolicyApplyFailure(agent, inferenceErr); markErr != nil {
@@ -379,7 +386,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 			"error":          trimError(err.Error()),
 		}, time.Now().UTC())
 		wrappedErr := fmt.Errorf("record durable wake applied policy: %w", err)
-		if _, resultErr := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, attemptID, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, turnSummary, wrappedErr, time.Now().UTC()); resultErr != nil {
+		if _, resultErr := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, turnSummary, wrappedErr, time.Now().UTC()); resultErr != nil {
 			return fmt.Errorf("%w (and failed to record child task result: %v)", wrappedErr, resultErr)
 		}
 		if finalizeErr := finalizeDurableWakeFailure(plan, turnSummary, wrappedErr); finalizeErr != nil {
@@ -400,7 +407,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		}
 	}
 	resultStatus, _ := durableWakeChildTaskStatusFromSummary(turnSummary)
-	result, err := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, attemptID, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, resultStatus, turnSummary, nil, time.Now().UTC())
+	result, err := r.recordDurableWakeChildTaskResult(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, resultStatus, turnSummary, nil, time.Now().UTC())
 	if err != nil {
 		return fmt.Errorf("record durable wake child task result: %w", err)
 	}
@@ -425,6 +432,10 @@ func durableWakeTaskPacketID(agentID string, messageID int64, at time.Time) stri
 func durableWakeAttemptID(agentID string, taskPacketID string, at time.Time) string {
 	seed := strings.Join([]string{strings.TrimSpace(agentID), strings.TrimSpace(taskPacketID), at.UTC().Format(time.RFC3339Nano)}, ":")
 	return session.ChildTaskAttemptID(taskPacketID, seed)
+}
+
+func durableWakeAttemptOwner(agentID string, attemptID string) string {
+	return strings.Join([]string{"durable_wake", strings.TrimSpace(agentID), strings.TrimSpace(attemptID)}, ":")
 }
 
 func durableWakeResultID(agentID string, taskPacketID string, attemptID string) string {
@@ -456,7 +467,7 @@ func (r *Runtime) recordDurableWakeTaskPacket(key session.SessionKey, agent core
 	return err
 }
 
-func (r *Runtime) recordDurableWakeChildTaskResult(key session.SessionKey, agent core.DurableAgent, taskPacketID string, attemptID string, leaseGeneration int64, fencingToken string, status session.ChildTaskResultStatus, summary string, cause error, now time.Time) (session.ChildTaskResult, error) {
+func (r *Runtime) recordDurableWakeChildTaskResult(key session.SessionKey, agent core.DurableAgent, taskPacketID string, attemptID string, leaseOwner string, leaseGeneration int64, fencingToken string, status session.ChildTaskResultStatus, summary string, cause error, now time.Time) (session.ChildTaskResult, error) {
 	if r == nil || r.store == nil {
 		return session.ChildTaskResult{}, nil
 	}
@@ -469,6 +480,10 @@ func (r *Runtime) recordDurableWakeChildTaskResult(key session.SessionKey, agent
 		attemptID = durableWakeAttemptID(agent.AgentID, taskPacketID, now)
 	}
 	fencingToken = strings.TrimSpace(fencingToken)
+	leaseOwner = strings.TrimSpace(leaseOwner)
+	if leaseOwner == "" {
+		leaseOwner = durableWakeAttemptOwner(agent.AgentID, attemptID)
+	}
 	blockerKind := ""
 	if parsedStatus, parsedBlocker := durableWakeChildTaskStatusFromSummary(summary); status == "" {
 		status = parsedStatus
@@ -492,6 +507,7 @@ func (r *Runtime) recordDurableWakeChildTaskResult(key session.SessionKey, agent
 		ResultID:        durableWakeResultID(agent.AgentID, taskPacketID, attemptID),
 		PacketID:        taskPacketID,
 		AttemptID:       attemptID,
+		LeaseOwner:      leaseOwner,
 		LeaseGeneration: leaseGeneration,
 		FencingToken:    fencingToken,
 		AgentID:         strings.TrimSpace(agent.AgentID),

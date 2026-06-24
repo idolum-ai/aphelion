@@ -1437,7 +1437,7 @@ func TestMigratesSchemaV74ToV75NextActions(t *testing.T) {
 	assertSQLiteColumn(t, store.db, "next_action_records", "operator_projection")
 }
 
-func TestMigratesSchemaV75ToV78ChildTasks(t *testing.T) {
+func TestMigratesSchemaV75ToV79ChildTasks(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "sessions-v75.db")
@@ -1469,16 +1469,21 @@ func TestMigratesSchemaV75ToV78ChildTasks(t *testing.T) {
 	assertSQLiteColumn(t, store.db, "child_task_packets", "packet_id")
 	assertSQLiteColumn(t, store.db, "child_task_packets", "task_lease_id")
 	assertSQLiteColumn(t, store.db, "child_task_packets", "active_attempt_id")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_owner")
 	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_generation")
 	assertSQLiteColumn(t, store.db, "child_task_packets", "fencing_token")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_expires_at")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_heartbeat_at")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_released_at")
 	assertSQLiteColumn(t, store.db, "child_task_results", "result_id")
 	assertSQLiteColumn(t, store.db, "child_task_results", "attempt_id")
+	assertSQLiteColumn(t, store.db, "child_task_results", "lease_owner")
 	assertSQLiteColumn(t, store.db, "child_task_results", "lease_generation")
 	assertSQLiteColumn(t, store.db, "child_task_results", "fencing_token")
 	assertSQLiteColumn(t, store.db, "child_task_results", "next_state")
 }
 
-func TestMigratesDraftSchemaV76ToV78ChildTaskAttempts(t *testing.T) {
+func TestMigratesDraftSchemaV76ToV79ChildTaskAttempts(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "sessions-v76.db")
@@ -1548,13 +1553,18 @@ func TestMigratesDraftSchemaV76ToV78ChildTaskAttempts(t *testing.T) {
 	assertSchemaVersion(t, store.db, schemaVersion)
 	assertSQLiteColumn(t, store.db, "child_task_results", "attempt_id")
 	assertSQLiteColumn(t, store.db, "child_task_packets", "active_attempt_id")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_owner")
 	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_generation")
 	assertSQLiteColumn(t, store.db, "child_task_packets", "fencing_token")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_expires_at")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_heartbeat_at")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_released_at")
+	assertSQLiteColumn(t, store.db, "child_task_results", "lease_owner")
 	assertSQLiteColumn(t, store.db, "child_task_results", "lease_generation")
 	assertSQLiteColumn(t, store.db, "child_task_results", "fencing_token")
 }
 
-func TestMigratesDraftSchemaV77ToV78ChildTaskFencing(t *testing.T) {
+func TestMigratesDraftSchemaV77ToV79ChildTaskFencing(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "sessions-v77.db")
@@ -1624,10 +1634,96 @@ func TestMigratesDraftSchemaV77ToV78ChildTaskFencing(t *testing.T) {
 	defer store.Close()
 	assertSchemaVersion(t, store.db, schemaVersion)
 	assertSQLiteColumn(t, store.db, "child_task_packets", "active_attempt_id")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_owner")
 	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_generation")
 	assertSQLiteColumn(t, store.db, "child_task_packets", "fencing_token")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_expires_at")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_heartbeat_at")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_released_at")
+	assertSQLiteColumn(t, store.db, "child_task_results", "lease_owner")
 	assertSQLiteColumn(t, store.db, "child_task_results", "lease_generation")
 	assertSQLiteColumn(t, store.db, "child_task_results", "fencing_token")
+}
+
+func TestMigratesDraftSchemaV78ToV79ChildTaskLeases(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v78.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v78 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (78)`,
+		`CREATE TABLE child_task_packets (
+			packet_id TEXT PRIMARY KEY,
+			task_lease_id TEXT NOT NULL DEFAULT '',
+			agent_id TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			task_kind TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'queued',
+			authority_kind TEXT NOT NULL DEFAULT '',
+			authority_id TEXT NOT NULL DEFAULT '',
+			grant_id TEXT NOT NULL DEFAULT '',
+			request_id TEXT NOT NULL DEFAULT '',
+			target_resource TEXT NOT NULL DEFAULT '',
+			required_action TEXT NOT NULL DEFAULT '',
+			input_json TEXT NOT NULL DEFAULT '{}',
+			active_attempt_id TEXT NOT NULL DEFAULT '',
+			lease_generation INTEGER NOT NULL DEFAULT 0,
+			fencing_token TEXT NOT NULL DEFAULT '',
+			result_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			terminal_at TEXT
+		)`,
+		`CREATE TABLE child_task_results (
+			result_id TEXT PRIMARY KEY,
+			packet_id TEXT NOT NULL,
+			attempt_id TEXT NOT NULL DEFAULT '',
+			lease_generation INTEGER NOT NULL DEFAULT 0,
+			fencing_token TEXT NOT NULL DEFAULT '',
+			task_lease_id TEXT NOT NULL DEFAULT '',
+			agent_id TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			result_kind TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			blocker_kind TEXT NOT NULL DEFAULT '',
+			error_text TEXT NOT NULL DEFAULT '',
+			evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+			next_state TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v78 fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v78 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v78) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_owner")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_expires_at")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_heartbeat_at")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_released_at")
+	assertSQLiteColumn(t, store.db, "child_task_results", "lease_owner")
 }
 
 func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {
