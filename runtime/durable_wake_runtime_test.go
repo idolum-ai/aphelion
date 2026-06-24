@@ -4,15 +4,18 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/durableagent"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 	"github.com/idolum-ai/aphelion/turn"
-	"strings"
-	"testing"
-	"time"
 )
 
 type testDurableWakeAdapter struct {
@@ -20,6 +23,7 @@ type testDurableWakeAdapter struct {
 	queueReview  bool
 	prepareCalls int
 	finalized    bool
+	finalizeErr  error
 	lastSummary  string
 }
 
@@ -100,6 +104,9 @@ func (a *testDurableWakeAdapter) Prepare(_ context.Context, rt *Runtime, agent c
 		Finalize: func(turnSummary string) error {
 			a.finalized = true
 			a.lastSummary = strings.TrimSpace(turnSummary)
+			if a.finalizeErr != nil {
+				return a.finalizeErr
+			}
 			if !a.queueReview {
 				return nil
 			}
@@ -115,6 +122,80 @@ func (a *testDurableWakeAdapter) Prepare(_ context.Context, rt *Runtime, agent c
 			return err
 		},
 	}, nil
+}
+
+func TestDurableWakeCommitsChildOutcomeBeforeFinalizeFailure(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	_ = sender
+	provider.replyText = "Completed before finalizer fails.\nREVIEW_STATUS: completed"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "idolum-finalize-fail",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "test_adapter",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Prove outcome commits before finalization.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	adapter := &testDurableWakeAdapter{
+		channelKind: "test_adapter",
+		finalizeErr: errors.New("test finalizer failed after outcome"),
+	}
+	rt.durableWakeAdapters = []durableWakeIngressAdapter{adapter}
+	rt.durableWakeChild = nil
+
+	err = rt.pollDurableWakeAgents(context.Background(), time.Now().UTC())
+	if err == nil || !strings.Contains(err.Error(), "test finalizer failed after outcome") {
+		t.Fatalf("pollDurableWakeAgents() err = %v, want finalizer failure", err)
+	}
+	if !adapter.finalized {
+		t.Fatal("adapter finalize was not called")
+	}
+	key := session.SessionKey{ChatID: durableWakeSyntheticChatID(agent.AgentID), Scope: durableAgentScopeRef(agent)}
+	events, err := store.ExecutionEventsBySession(key, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var packetID string
+	var resultID string
+	for _, event := range events {
+		if event.EventType != core.ExecutionEventDurableChildTaskResult {
+			continue
+		}
+		var payload struct {
+			PacketID string `json:"packet_id"`
+			ResultID string `json:"result_id"`
+		}
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			t.Fatalf("unmarshal child task result payload: %v", err)
+		}
+		packetID = payload.PacketID
+		resultID = payload.ResultID
+	}
+	if packetID == "" || resultID == "" {
+		t.Fatalf("events = %#v, want child task result payload", events)
+	}
+	packet, ok, err := store.ChildTaskPacket(packetID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket() err = %v", err)
+	}
+	if !ok || packet.Status != session.ChildTaskPacketCompleted || packet.ResultID != resultID || packet.TerminalAt.IsZero() {
+		t.Fatalf("packet = %#v ok=%t result_id=%s, want committed terminal outcome before finalizer error", packet, ok, resultID)
+	}
 }
 
 func TestPollDurableWakeAgentsUsesPluggableIngressAdapter(t *testing.T) {
@@ -590,7 +671,7 @@ func TestPollDurableWakeAgentsDispatchesGenericExternalChannelWithoutSpecialized
 
 func TestPollDurableWakeAgentsConsumesPendingParentConversationForAnyChannel(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	provider.replyText = "Processed the parent guidance and compiled the requested summary."
+	provider.replyText = "Processed the parent guidance and compiled the requested summary.\nREVIEW_STATUS: completed"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)

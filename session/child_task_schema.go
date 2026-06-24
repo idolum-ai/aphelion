@@ -28,6 +28,7 @@ func ensureChildTaskTables(tx *sql.Tx) error {
 			target_resource TEXT NOT NULL DEFAULT '',
 			required_action TEXT NOT NULL DEFAULT '',
 			input_json TEXT NOT NULL DEFAULT '{}',
+			input_fingerprint TEXT NOT NULL DEFAULT '',
 			active_attempt_id TEXT NOT NULL DEFAULT '',
 			lease_owner TEXT NOT NULL DEFAULT '',
 			lease_generation INTEGER NOT NULL DEFAULT 0,
@@ -60,6 +61,23 @@ func ensureChildTaskTables(tx *sql.Tx) error {
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			FOREIGN KEY (packet_id) REFERENCES child_task_packets(packet_id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS child_task_outcome_intents (
+			intent_id TEXT PRIMARY KEY,
+			packet_id TEXT NOT NULL DEFAULT '',
+			result_id TEXT NOT NULL DEFAULT '',
+			attempt_id TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			payload_json TEXT NOT NULL DEFAULT '{}',
+			result_ref TEXT NOT NULL DEFAULT '',
+			attempts INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			applied_at TEXT,
+			FOREIGN KEY (packet_id) REFERENCES child_task_packets(packet_id) ON DELETE CASCADE,
+			FOREIGN KEY (result_id) REFERENCES child_task_results(result_id) ON DELETE CASCADE
+		)`,
 	} {
 		if _, err := tx.Exec(stmt); err != nil {
 			return fmt.Errorf("ensure child task tables: %w", err)
@@ -76,6 +94,8 @@ func ensureChildTaskTables(tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_child_task_results_packet_attempt ON child_task_results(packet_id, attempt_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS ux_child_task_results_packet_attempt ON child_task_results(packet_id, attempt_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_child_task_results_agent ON child_task_results(agent_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_child_task_outcome_intents_status ON child_task_outcome_intents(status, updated_at ASC)`,
+		`CREATE INDEX IF NOT EXISTS idx_child_task_outcome_intents_packet ON child_task_outcome_intents(packet_id, status, updated_at ASC)`,
 	} {
 		if _, err := tx.Exec(stmt); err != nil {
 			return fmt.Errorf("ensure child task tables: %w", err)
@@ -98,6 +118,7 @@ func ensureChildTaskLeaseColumns(tx *sql.Tx) error {
 			{table: "child_task_packets", column: "lease_expires_at", statement: `ALTER TABLE child_task_packets ADD COLUMN lease_expires_at TEXT NOT NULL DEFAULT ''`},
 			{table: "child_task_packets", column: "lease_heartbeat_at", statement: `ALTER TABLE child_task_packets ADD COLUMN lease_heartbeat_at TEXT NOT NULL DEFAULT ''`},
 			{table: "child_task_packets", column: "lease_released_at", statement: `ALTER TABLE child_task_packets ADD COLUMN lease_released_at TEXT`},
+			{table: "child_task_packets", column: "input_fingerprint", statement: `ALTER TABLE child_task_packets ADD COLUMN input_fingerprint TEXT NOT NULL DEFAULT ''`},
 		} {
 			if err := addSchemaColumnIfMissing(tx, column); err != nil {
 				return err
@@ -140,5 +161,9 @@ func migrateSchemaV78ToV79(tx *sql.Tx) error {
 }
 
 func migrateSchemaV79ToV80(tx *sql.Tx) error {
+	return ensureChildTaskTables(tx)
+}
+
+func migrateSchemaV80ToV81(tx *sql.Tx) error {
 	return ensureChildTaskTables(tx)
 }

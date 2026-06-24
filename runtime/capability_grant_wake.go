@@ -4,9 +4,7 @@ package runtime
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -32,8 +30,10 @@ func (r *Runtime) HandleCapabilityGrantActivated(ctx context.Context, key sessio
 		return
 	}
 	go func() {
-		if err := r.runCapabilityGrantWake(context.Background(), agentID, grant); err != nil {
-			r.recordCapabilityGrantWakeFailure(context.Background(), key, agentID, grant, err)
+		wakeCtx, cancel := context.WithTimeout(context.Background(), durableWakePollAgentTimeout)
+		defer cancel()
+		if err := r.runCapabilityGrantWake(wakeCtx, agentID, grant); err != nil {
+			r.recordCapabilityGrantWakeFailure(wakeCtx, key, agentID, grant, err)
 		}
 	}()
 }
@@ -56,33 +56,13 @@ func (r *Runtime) queueCapabilityGrantWake(ctx context.Context, agentID string, 
 	if err != nil {
 		return fmt.Errorf("load durable agent %q for capability grant wake: %w", agentID, err)
 	}
-	state, err := r.store.DurableAgentState(agentID)
-	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("load durable agent state %q for capability grant wake: %w", agentID, err)
-		}
-		state = &core.DurableAgentState{AgentID: agentID}
-	}
-	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
-	if err != nil {
-		return fmt.Errorf("parse durable agent continuity for capability grant wake: %w", err)
-	}
 	now := time.Now().UTC()
 	taskPacketID := capabilityGrantTaskPacketID(agentID, grant)
-	continuity = continuity.WithConversationMessages(core.DurableAgentConversationMessage{
+	message := core.DurableAgentConversationMessage{
 		MessageID: taskPacketID,
 		Role:      "parent",
 		Text:      capabilityGrantWakeMessage(*agent, grant),
 		CreatedAt: now,
-	})
-	raw, err := continuity.Marshal()
-	if err != nil {
-		return fmt.Errorf("marshal durable agent continuity for capability grant wake: %w", err)
-	}
-	state.AgentID = agentID
-	state.StateJSON = raw
-	if err := r.store.SaveDurableAgentState(*state); err != nil {
-		return fmt.Errorf("save durable agent capability grant wake queue: %w", err)
 	}
 	key := r.durableAgentExecutionKey(agentID)
 	inputRaw, _ := json.Marshal(map[string]any{
@@ -92,24 +72,7 @@ func (r *Runtime) queueCapabilityGrantWake(ctx context.Context, agentID string, 
 		"target_resource": grant.TargetResource,
 		"allowed_actions": grant.AllowedActions,
 	})
-	if _, err := r.store.RecordChildTaskPacket(session.ChildTaskPacketInput{
-		PacketID:       taskPacketID,
-		TaskLeaseID:    session.ChildTaskLeaseID(taskPacketID),
-		AgentID:        agentID,
-		Key:            key,
-		TaskKind:       "capability_grant_wake",
-		AuthorityKind:  "capability_grant",
-		AuthorityID:    grant.GrantID,
-		GrantID:        grant.GrantID,
-		RequestID:      grant.RequestID,
-		TargetResource: grant.TargetResource,
-		RequiredAction: capabilityGrantWakeRequiredAction(grant),
-		InputJSON:      string(inputRaw),
-		CreatedAt:      now,
-	}); err != nil {
-		return fmt.Errorf("record capability grant child task packet: %w", err)
-	}
-	r.recordExecutionEvent(key, core.ExecutionEventCapabilityGrantWakeQueued, "capability", "wake_queued", map[string]any{
+	payload := map[string]any{
 		"agent_id":        agentID,
 		"grant_id":        grant.GrantID,
 		"request_id":      grant.RequestID,
@@ -117,20 +80,45 @@ func (r *Runtime) queueCapabilityGrantWake(ctx context.Context, agentID string, 
 		"target_resource": grant.TargetResource,
 		"allowed_actions": grant.AllowedActions,
 		"task_packet_id":  taskPacketID,
-	}, now)
-	if _, err := r.store.RecordNextAction(session.NextActionInput{
-		Key:                key,
-		Owner:              "capability_grant_wake",
-		State:              session.NextActionWaitingForChild,
-		SubjectKind:        "task_packet",
-		SubjectRef:         taskPacketID,
-		CausalRefs:         []string{"capability_grant:" + grant.GrantID, "task_packet:" + taskPacketID},
-		NextAction:         "wake the child with the compact grant task packet",
-		RequiredAuthority:  string(grant.Kind),
-		OperatorProjection: "The grant was activated; the child has one compact task packet to incorporate it and report the typed result.",
-		CreatedAt:          now,
+	}
+	payloadRaw, _ := json.Marshal(payload)
+	if _, err := r.store.RecordChildTaskAdmission(session.ChildTaskAdmissionInput{
+		AgentID:           agentID,
+		ContinuityMessage: message,
+		Packet: session.ChildTaskPacketInput{
+			PacketID:       taskPacketID,
+			TaskLeaseID:    session.ChildTaskLeaseID(taskPacketID),
+			AgentID:        agentID,
+			Key:            key,
+			TaskKind:       "capability_grant_wake",
+			AuthorityKind:  "capability_grant",
+			AuthorityID:    grant.GrantID,
+			GrantID:        grant.GrantID,
+			RequestID:      grant.RequestID,
+			TargetResource: grant.TargetResource,
+			RequiredAction: capabilityGrantWakeRequiredAction(grant),
+			InputJSON:      string(inputRaw),
+			CreatedAt:      now,
+		},
+		QueuedEvents: []session.ExecutionEventInput{{
+			EventType:   core.ExecutionEventCapabilityGrantWakeQueued,
+			Stage:       "capability",
+			Status:      "wake_queued",
+			PayloadJSON: string(payloadRaw),
+			CreatedAt:   now,
+		}},
+		NextAction: &session.NextActionInput{
+			Owner:              "capability_grant_wake",
+			State:              session.NextActionWaitingForChild,
+			CausalRefs:         []string{"capability_grant:" + grant.GrantID, "task_packet:" + taskPacketID},
+			NextAction:         "wake the child with the compact grant task packet",
+			RequiredAuthority:  string(grant.Kind),
+			OperatorProjection: "The grant was activated; the child has one compact task packet to incorporate it and report the typed result.",
+			CreatedAt:          now,
+		},
+		CreatedAt: now,
 	}); err != nil {
-		return fmt.Errorf("record capability grant wake next action: %w", err)
+		return fmt.Errorf("record capability grant child task admission: %w", err)
 	}
 	return nil
 }
@@ -233,6 +221,7 @@ func capabilityGrantTaskPacketID(agentID string, grant session.CapabilityGrant) 
 		strings.TrimSpace(grant.RequestID),
 		string(grant.Kind),
 		strings.TrimSpace(grant.TargetResource),
+		strings.Join(session.NormalizeCapabilityActions(grant.AllowedActions), ","),
 	}, ":")
 	return "grant_task:" + strings.TrimPrefix(session.EffectAttemptCommandHash(seed), "sha256:")[:16]
 }

@@ -70,7 +70,7 @@ func TestParentConversationAckSuppressedWhenChildQueuesConcreteReview(t *testing
 
 func TestRunDurableAgentChildWakeProcessesPendingParentBeforeExternalCadence(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	provider.replyText = "Processed pending parent image job."
+	provider.replyText = "Processed pending parent image job.\nREVIEW_STATUS: completed"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)

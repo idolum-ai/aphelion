@@ -47,6 +47,7 @@ type ChildTaskPacket struct {
 	TargetResource   string
 	RequiredAction   string
 	InputJSON        string
+	InputFingerprint string
 	ActiveAttemptID  string
 	LeaseOwner       string
 	LeaseGeneration  int64
@@ -61,20 +62,21 @@ type ChildTaskPacket struct {
 }
 
 type ChildTaskPacketInput struct {
-	PacketID       string
-	TaskLeaseID    string
-	AgentID        string
-	Key            SessionKey
-	TaskKind       string
-	Status         ChildTaskPacketStatus
-	AuthorityKind  string
-	AuthorityID    string
-	GrantID        string
-	RequestID      string
-	TargetResource string
-	RequiredAction string
-	InputJSON      string
-	CreatedAt      time.Time
+	PacketID         string
+	TaskLeaseID      string
+	AgentID          string
+	Key              SessionKey
+	TaskKind         string
+	Status           ChildTaskPacketStatus
+	AuthorityKind    string
+	AuthorityID      string
+	GrantID          string
+	RequestID        string
+	TargetResource   string
+	RequiredAction   string
+	InputJSON        string
+	InputFingerprint string
+	CreatedAt        time.Time
 }
 
 type ChildTaskAttemptClaimInput struct {
@@ -146,6 +148,56 @@ type ChildTaskResultInput struct {
 	CreatedAt       time.Time
 }
 
+type ChildTaskOutcomeIntentKind string
+
+const (
+	ChildTaskOutcomeIntentParentConversationAck ChildTaskOutcomeIntentKind = "parent_conversation_ack"
+	ChildTaskOutcomeIntentScheduledReview       ChildTaskOutcomeIntentKind = "scheduled_review"
+	ChildTaskOutcomeIntentGenericFinalize       ChildTaskOutcomeIntentKind = "generic_finalize"
+)
+
+type ChildTaskOutcomeIntentStatus string
+
+const (
+	ChildTaskOutcomeIntentPending ChildTaskOutcomeIntentStatus = "pending"
+	ChildTaskOutcomeIntentApplied ChildTaskOutcomeIntentStatus = "applied"
+	ChildTaskOutcomeIntentFailed  ChildTaskOutcomeIntentStatus = "failed"
+)
+
+type ChildTaskOutcomeIntent struct {
+	IntentID    string
+	PacketID    string
+	ResultID    string
+	AttemptID   string
+	Kind        ChildTaskOutcomeIntentKind
+	Status      ChildTaskOutcomeIntentStatus
+	PayloadJSON string
+	ResultRef   string
+	Attempts    int
+	LastError   string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	AppliedAt   time.Time
+}
+
+type ChildTaskOutcomeIntentInput struct {
+	IntentID    string
+	PacketID    string
+	ResultID    string
+	AttemptID   string
+	Kind        ChildTaskOutcomeIntentKind
+	PayloadJSON string
+	ResultRef   string
+	CreatedAt   time.Time
+}
+
+type ChildTaskOutcomeCommitInput struct {
+	Result         ChildTaskResultInput
+	NextAction     *NextActionInput
+	OutcomeIntents []ChildTaskOutcomeIntentInput
+	ResolvedAt     time.Time
+}
+
 func NormalizeChildTaskPacketInput(input ChildTaskPacketInput) ChildTaskPacketInput {
 	input.PacketID = strings.TrimSpace(input.PacketID)
 	input.TaskLeaseID = strings.TrimSpace(input.TaskLeaseID)
@@ -159,6 +211,7 @@ func NormalizeChildTaskPacketInput(input ChildTaskPacketInput) ChildTaskPacketIn
 	input.TargetResource = strings.TrimSpace(input.TargetResource)
 	input.RequiredAction = normalizeEnumValue(input.RequiredAction)
 	input.InputJSON = strings.TrimSpace(input.InputJSON)
+	input.InputFingerprint = strings.TrimSpace(input.InputFingerprint)
 	if input.TaskLeaseID == "" && input.PacketID != "" {
 		input.TaskLeaseID = ChildTaskLeaseID(input.PacketID)
 	}
@@ -172,6 +225,9 @@ func NormalizeChildTaskPacketInput(input ChildTaskPacketInput) ChildTaskPacketIn
 		input.CreatedAt = time.Now().UTC()
 	} else {
 		input.CreatedAt = input.CreatedAt.UTC()
+	}
+	if input.InputFingerprint == "" {
+		input.InputFingerprint = ChildTaskPacketInputFingerprint(input)
 	}
 	return input
 }
@@ -345,6 +401,54 @@ func ChildTaskFencingToken(packetID string, attemptID string, leaseGeneration in
 	seed := strings.Join([]string{packetID, attemptID, "generation", time.Unix(leaseGeneration, 0).UTC().Format(time.RFC3339Nano)}, "\x00")
 	sum := sha256.Sum256([]byte(seed))
 	return "child_fence:" + hex.EncodeToString(sum[:16])
+}
+
+func ChildTaskPacketInputFingerprint(input ChildTaskPacketInput) string {
+	normalized := input
+	normalized.PacketID = strings.TrimSpace(normalized.PacketID)
+	normalized.TaskLeaseID = strings.TrimSpace(normalized.TaskLeaseID)
+	normalized.AgentID = strings.TrimSpace(normalized.AgentID)
+	normalized.TaskKind = normalizeEnumValue(normalized.TaskKind)
+	normalized.AuthorityKind = normalizeEnumValue(normalized.AuthorityKind)
+	normalized.AuthorityID = strings.TrimSpace(normalized.AuthorityID)
+	normalized.GrantID = strings.TrimSpace(normalized.GrantID)
+	normalized.RequestID = strings.TrimSpace(normalized.RequestID)
+	normalized.TargetResource = strings.TrimSpace(normalized.TargetResource)
+	normalized.RequiredAction = normalizeEnumValue(normalized.RequiredAction)
+	normalized.InputJSON = strings.TrimSpace(normalized.InputJSON)
+	if normalized.InputJSON == "" {
+		normalized.InputJSON = "{}"
+	}
+	parts := []string{
+		normalized.PacketID,
+		normalized.TaskLeaseID,
+		normalized.AgentID,
+		SessionIDForKey(normalized.Key),
+		string(defaultScopeForKey(normalized.Key).Kind),
+		defaultScopeForKey(normalized.Key).ID,
+		defaultScopeForKey(normalized.Key).DurableAgentID,
+		normalized.TaskKind,
+		normalized.AuthorityKind,
+		normalized.AuthorityID,
+		normalized.GrantID,
+		normalized.RequestID,
+		normalized.TargetResource,
+		normalized.RequiredAction,
+		normalized.InputJSON,
+	}
+	sum := sha256.Sum256([]byte("child_task_packet_input\x00" + strings.Join(parts, "\x00")))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func ChildTaskOutcomeIntentID(packetID string, resultID string, kind ChildTaskOutcomeIntentKind) string {
+	packetID = strings.TrimSpace(packetID)
+	resultID = strings.TrimSpace(resultID)
+	kind = ChildTaskOutcomeIntentKind(normalizeEnumValue(string(kind)))
+	if packetID == "" || resultID == "" || kind == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(strings.Join([]string{"child_task_outcome_intent", packetID, resultID, string(kind)}, "\x00")))
+	return "child_intent:" + hex.EncodeToString(sum[:8])
 }
 
 func ChildTaskPacketStatusTerminal(status ChildTaskPacketStatus) bool {
