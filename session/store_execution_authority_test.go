@@ -30,7 +30,7 @@ func TestExecutionRunAuthorityIsImmutableAfterAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertExecutionRunAuthority(idempotent) err = %v", err)
 	}
-	if idempotent != inserted {
+	if !executionRunAuthoritySame(idempotent, inserted) {
 		t.Fatalf("idempotent record = %#v, want %#v", idempotent, inserted)
 	}
 
@@ -160,6 +160,9 @@ func testExecutionRunAuthorityRecord(run *TurnRun, leaseID string) ExecutionRunA
 		LeaseKind:           ExecutionAuthorityLeaseKindContinuation,
 		ContinuationLeaseID: strings.TrimSpace(leaseID),
 		LeaseStatus:         string(ContinuationLeaseStatusActive),
+		LeaseClass:          ContinuationLeaseClassChildWake,
+		LeaseAllowedActions: []string{"wake_named_child"},
+		LeaseConstraints:    map[string]string{"agent_id": "child-alpha"},
 		LeaseRemainingTurns: 1,
 		LeaseExpiresAt:      time.Now().UTC().Add(time.Hour),
 		AdmittedAt:          time.Now().UTC(),

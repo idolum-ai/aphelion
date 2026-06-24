@@ -348,6 +348,9 @@ func workRequestAuthorityAdmission(req WorkRequest, key session.SessionKey, now 
 		record.LeaseKind = session.ExecutionAuthorityLeaseKindContinuation
 		record.ContinuationLeaseID = lease.ID
 		record.LeaseStatus = string(lease.Status)
+		record.LeaseClass = lease.LeaseClass
+		record.LeaseAllowedActions = append([]string(nil), lease.AllowedActions...)
+		record.LeaseConstraints = cloneStringMap(lease.Constraints)
 		record.LeaseRemainingTurns = lease.RemainingTurns
 		record.LeaseExpiresAt = lease.ExpiresAt
 		return session.NormalizeExecutionRunAuthority(record), true
@@ -375,6 +378,17 @@ func workRequestOperationPlanLeaseUsable(lease session.OperationPlanLease, now t
 	default:
 		return false
 	}
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 func runtimeExecutionPrincipalID(actor principal.Principal) string {

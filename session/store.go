@@ -10,7 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 81
+const schemaVersion = 82
 
 type SQLiteStore struct {
 	db     *sql.DB
@@ -309,6 +309,9 @@ func (s *SQLiteStore) init() error {
 			continuation_lease_id TEXT NOT NULL DEFAULT '',
 			operation_plan_lease_id TEXT NOT NULL DEFAULT '',
 			lease_status TEXT NOT NULL DEFAULT '',
+			lease_class TEXT NOT NULL DEFAULT '',
+			lease_allowed_actions_json TEXT NOT NULL DEFAULT '[]',
+			lease_constraints_json TEXT NOT NULL DEFAULT '{}',
 			lease_remaining_turns INTEGER NOT NULL DEFAULT 0,
 			lease_expires_at TEXT,
 			admitted_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -795,6 +798,9 @@ func (s *SQLiteStore) init() error {
 		return err
 	}
 	if err := ensureChildTaskTables(tx); err != nil {
+		return err
+	}
+	if err := ensureDurableAgentWakeClaimTables(tx); err != nil {
 		return err
 	}
 	if err := ensureCurrentSchemaShapeRepairColumns(tx); err != nil {

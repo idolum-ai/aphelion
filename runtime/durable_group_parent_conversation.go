@@ -29,6 +29,30 @@ func (r *Runtime) pendingDurableAgentParentConversation(agentID string, limit in
 	return continuity.PendingParentConversationMessages(limit), nil
 }
 
+func (r *Runtime) pendingDurableAgentParentConversationByIDs(agentID string, messageIDs []string) ([]core.DurableAgentConversationMessage, error) {
+	wanted := map[string]struct{}{}
+	for _, id := range messageIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			wanted[id] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return nil, nil
+	}
+	pending, err := r.pendingDurableAgentParentConversation(agentID, 0)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]core.DurableAgentConversationMessage, 0, len(pending))
+	for _, message := range pending {
+		if _, ok := wanted[strings.TrimSpace(message.MessageID)]; ok {
+			filtered = append(filtered, message)
+		}
+	}
+	return filtered, nil
+}
+
 func (r *Runtime) acknowledgeDurableAgentParentConversation(agentID string, messages []core.DurableAgentConversationMessage, at time.Time) error {
 	messageIDs := core.DurableAgentConversationMessageIDs(messages)
 	_, _, err := r.store.UpdateDurableAgentContinuity(strings.TrimSpace(agentID), func(continuity core.DurableAgentContinuityState) (core.DurableAgentContinuityState, error) {

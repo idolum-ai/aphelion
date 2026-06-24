@@ -406,6 +406,9 @@ func ensureExecutionRunAuthorityTables(tx *sql.Tx) error {
 			continuation_lease_id TEXT NOT NULL DEFAULT '',
 			operation_plan_lease_id TEXT NOT NULL DEFAULT '',
 			lease_status TEXT NOT NULL DEFAULT '',
+			lease_class TEXT NOT NULL DEFAULT '',
+			lease_allowed_actions_json TEXT NOT NULL DEFAULT '[]',
+			lease_constraints_json TEXT NOT NULL DEFAULT '{}',
 			lease_remaining_turns INTEGER NOT NULL DEFAULT 0,
 			lease_expires_at TEXT,
 			admitted_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -415,6 +418,15 @@ func ensureExecutionRunAuthorityTables(tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_execution_run_authority_lease ON execution_run_authority(lease_kind, continuation_lease_id, operation_plan_lease_id)`,
 	} {
 		if _, err := tx.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	for _, column := range []schemaColumnMigration{
+		{table: "execution_run_authority", column: "lease_class", statement: `ALTER TABLE execution_run_authority ADD COLUMN lease_class TEXT NOT NULL DEFAULT ''`},
+		{table: "execution_run_authority", column: "lease_allowed_actions_json", statement: `ALTER TABLE execution_run_authority ADD COLUMN lease_allowed_actions_json TEXT NOT NULL DEFAULT '[]'`},
+		{table: "execution_run_authority", column: "lease_constraints_json", statement: `ALTER TABLE execution_run_authority ADD COLUMN lease_constraints_json TEXT NOT NULL DEFAULT '{}'`},
+	} {
+		if err := addSchemaColumnIfMissing(tx, column); err != nil {
 			return err
 		}
 	}

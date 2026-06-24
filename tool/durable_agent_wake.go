@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -37,11 +38,11 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 	if agentID == "" {
 		return "", fmt.Errorf("durable_agent agent_id is required for wake_once")
 	}
-	agent, err := r.resolveDurableAgent(agentID)
+	agent, err := r.resolveDurableAgentExact(agentID)
 	if err != nil {
 		return "", err
 	}
-	useRef, err := r.requireDurableAgentWakeOnceAuthority(ctx, p, key)
+	useRef, err := r.requireDurableAgentWakeOnceAuthority(ctx, p, key, agent.AgentID)
 	if err != nil {
 		return "", err
 	}
@@ -50,7 +51,8 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 	if err != nil {
 		return "", err
 	}
-	beforePending := len(beforeContinuity.PendingParentConversationMessages(0))
+	beforePendingMessages := beforeContinuity.PendingParentConversationMessages(0)
+	beforePending := len(beforePendingMessages)
 	beforeState, lastParentAt, _, _, _ := durableAgentConversationState(beforeContinuity)
 	result := durableAgentWakeOnceResult{
 		AgentID:             agent.AgentID,
@@ -67,7 +69,20 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 		return renderDurableAgentWakeOnce(result), nil
 	}
 
-	wakeErr := r.durableAgentWakeRunner.RunDurableAgentChildWake(ctx, agent.AgentID, time.Now().UTC())
+	messageIDs := core.DurableAgentConversationMessageIDs(beforePendingMessages)
+	now := time.Now().UTC()
+	if _, err := r.store.ClaimDurableAgentWakeOnce(session.DurableAgentWakeClaimInput{
+		LeaseID:          useRef.ContinuationLeaseID,
+		AgentID:          agent.AgentID,
+		TurnRunID:        useRef.TurnRunID,
+		MessageBatchHash: session.DurableAgentWakeMessageBatchHash(agent.AgentID, messageIDs),
+		MessageIDs:       messageIDs,
+		CreatedAt:        now,
+	}); err != nil {
+		return "", err
+	}
+
+	wakeErr := r.durableAgentWakeRunner.RunDurableAgentParentConversationWake(ctx, agent.AgentID, messageIDs, now)
 	_, afterContinuity, err := r.loadDurableAgentContinuity(agent.AgentID)
 	if err != nil {
 		return "", err
@@ -88,13 +103,27 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 	return renderDurableAgentWakeOnce(result), nil
 }
 
-func (r *Registry) requireDurableAgentWakeOnceAuthority(ctx context.Context, p principal.Principal, key session.SessionKey) (session.AuthorityUseRef, error) {
+func (r *Registry) requireDurableAgentWakeOnceAuthority(ctx context.Context, p principal.Principal, key session.SessionKey, agentID string) (session.AuthorityUseRef, error) {
 	useRef, err := r.authorityUseRefForGrant(ctx, "durable_agent wake_once", key, p)
 	if err != nil {
 		return session.AuthorityUseRef{}, err
 	}
 	if useRef.AuthoritySource != session.ExecutionAuthorityLeaseKindContinuation {
 		return session.AuthorityUseRef{}, fmt.Errorf("durable_agent wake_once requires continuation child_wake authority")
+	}
+	authority, ok, err := r.store.ExecutionRunAuthority(useRef.TurnRunID)
+	if err != nil {
+		return session.AuthorityUseRef{}, fmt.Errorf("load durable_agent wake_once run authority: %w", err)
+	}
+	if !ok {
+		return session.AuthorityUseRef{}, fmt.Errorf("durable_agent wake_once requires durable execution authority")
+	}
+	if authority.LeaseStatus != string(session.ContinuationLeaseStatusActive) || authority.LeaseRemainingTurns <= 0 {
+		return session.AuthorityUseRef{}, fmt.Errorf("durable_agent wake_once requires a run admitted with active child_wake authority")
+	}
+	now := time.Now().UTC()
+	if !authority.LeaseExpiresAt.IsZero() && !authority.LeaseExpiresAt.After(now) {
+		return session.AuthorityUseRef{}, fmt.Errorf("durable_agent wake_once continuation lease expired")
 	}
 	state, ok, err := r.store.ContinuationStateIfExists(key)
 	if err != nil {
@@ -107,18 +136,57 @@ func (r *Registry) requireDurableAgentWakeOnceAuthority(ctx context.Context, p p
 	if strings.TrimSpace(lease.ID) == "" || lease.ID != useRef.ContinuationLeaseID {
 		return session.AuthorityUseRef{}, fmt.Errorf("durable_agent wake_once authority lease mismatch")
 	}
-	if lease.LeaseClass != session.ContinuationLeaseClassChildWake {
+	if !lease.ExpiresAt.IsZero() && !lease.ExpiresAt.After(now) {
+		return session.AuthorityUseRef{}, fmt.Errorf("durable_agent wake_once continuation lease expired")
+	}
+	if authority.LeaseClass != session.ContinuationLeaseClassChildWake {
 		return session.AuthorityUseRef{}, fmt.Errorf("durable_agent wake_once requires child_wake lease class")
 	}
-	now := time.Now().UTC()
-	decision := session.CheckContinuationLeaseAction(lease, durableAgentWakeOnceAction, now)
-	if !decision.Allowed {
-		fallback := session.CheckContinuationLeaseAction(lease, "request_child_wake", now)
-		if !fallback.Allowed {
-			return session.AuthorityUseRef{}, fmt.Errorf("durable_agent wake_once requires child wake action authority")
-		}
+	if !durableAgentWakeActionsAllow(authority.LeaseAllowedActions, lease.ForbiddenActions, durableAgentWakeOnceAction) && !durableAgentWakeActionsAllow(authority.LeaseAllowedActions, lease.ForbiddenActions, "request_child_wake") {
+		return session.AuthorityUseRef{}, fmt.Errorf("durable_agent wake_once requires child wake action authority")
+	}
+	if !durableAgentWakeConstraintsAllowAgent(authority.LeaseConstraints, agentID) {
+		return session.AuthorityUseRef{}, fmt.Errorf("durable_agent wake_once lease is not bound to agent_id %q", strings.TrimSpace(agentID))
 	}
 	return useRef, nil
+}
+
+func durableAgentWakeActionsAllow(allowed []string, forbidden []string, action string) bool {
+	action = durableAgentWakeActionToken(action)
+	if action == "" {
+		return false
+	}
+	for _, value := range forbidden {
+		if durableAgentWakeActionToken(value) == action {
+			return false
+		}
+	}
+	for _, value := range allowed {
+		if durableAgentWakeActionToken(value) == action {
+			return true
+		}
+	}
+	return false
+}
+
+func durableAgentWakeActionToken(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	value = strings.ReplaceAll(value, " ", "_")
+	return value
+}
+
+func durableAgentWakeConstraintsAllowAgent(constraints map[string]string, agentID string) bool {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return false
+	}
+	for _, key := range []string{"agent_id", "durable_agent_id", "child_agent_id", "target_agent_id"} {
+		if strings.TrimSpace(constraints[key]) == agentID {
+			return true
+		}
+	}
+	return false
 }
 
 func renderDurableAgentWakeOnce(result durableAgentWakeOnceResult) string {

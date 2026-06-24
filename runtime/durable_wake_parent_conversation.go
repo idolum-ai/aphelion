@@ -34,6 +34,29 @@ func (durableParentConversationWakeAdapter) Prepare(_ context.Context, rt *Runti
 }
 
 func prepareDurableParentConversationWakePlan(rt *Runtime, agent core.DurableAgent, now time.Time, force bool) (*durableWakeTurnPlan, error) {
+	pending, err := pendingDurableParentConversationForWake(rt, agent, now, force)
+	if err != nil {
+		return nil, err
+	}
+	if len(pending) == 0 {
+		return nil, nil
+	}
+	return durableParentConversationWakePlanForPending(agent, pending, now), nil
+}
+
+func prepareDurableParentConversationWakePlanForMessageIDs(rt *Runtime, agent core.DurableAgent, messageIDs []string, now time.Time, force bool) (*durableWakeTurnPlan, error) {
+	pending, err := pendingDurableParentConversationForWake(rt, agent, now, force)
+	if err != nil {
+		return nil, err
+	}
+	pending = durableParentConversationFilterPendingByIDs(pending, messageIDs)
+	if len(pending) == 0 {
+		return nil, nil
+	}
+	return durableParentConversationWakePlanForPending(agent, pending, now), nil
+}
+
+func pendingDurableParentConversationForWake(rt *Runtime, agent core.DurableAgent, now time.Time, force bool) ([]core.DurableAgentConversationMessage, error) {
 	if rt == nil || rt.store == nil {
 		return nil, fmt.Errorf("parent conversation wake runtime is unavailable")
 	}
@@ -46,15 +69,38 @@ func prepareDurableParentConversationWakePlan(rt *Runtime, agent core.DurableAge
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	now = now.UTC()
-
 	pending, err := rt.pendingDurableAgentParentConversation(strings.TrimSpace(agent.AgentID), 5)
 	if err != nil {
 		return nil, fmt.Errorf("load parent conversation queue: %w", err)
 	}
-	if len(pending) == 0 {
-		return nil, nil
+	return pending, nil
+}
+
+func durableParentConversationFilterPendingByIDs(pending []core.DurableAgentConversationMessage, messageIDs []string) []core.DurableAgentConversationMessage {
+	wanted := map[string]struct{}{}
+	for _, id := range messageIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			wanted[id] = struct{}{}
+		}
 	}
+	if len(wanted) == 0 {
+		return nil
+	}
+	filtered := make([]core.DurableAgentConversationMessage, 0, len(pending))
+	for _, message := range pending {
+		if _, ok := wanted[strings.TrimSpace(message.MessageID)]; ok {
+			filtered = append(filtered, message)
+		}
+	}
+	return filtered
+}
+
+func durableParentConversationWakePlanForPending(agent core.DurableAgent, pending []core.DurableAgentConversationMessage, now time.Time) *durableWakeTurnPlan {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
 
 	key := session.SessionKey{
 		ChatID: durableWakeSyntheticChatID(agent.AgentID),
@@ -62,12 +108,13 @@ func prepareDurableParentConversationWakePlan(rt *Runtime, agent core.DurableAge
 	}
 	taskPacketID := durableWakeTaskPacketIDForPending(agent.AgentID, pending, now)
 	return &durableWakeTurnPlan{
-		Channel:         "durable_parent_conversation",
-		AuditChannel:    "durable_parent_conversation",
-		Key:             key,
-		SessionChatType: durableParentConversationChatType,
-		SessionUserName: "parent",
-		TaskPacketID:    taskPacketID,
+		Channel:          "durable_parent_conversation",
+		AuditChannel:     "durable_parent_conversation",
+		Key:              key,
+		SessionChatType:  durableParentConversationChatType,
+		SessionUserName:  "parent",
+		ParentMessageIDs: core.DurableAgentConversationMessageIDs(pending),
+		TaskPacketID:     taskPacketID,
 		Inbound: core.InboundMessage{
 			ChatID:         key.ChatID,
 			ChatType:       durableParentConversationChatType,
@@ -104,7 +151,7 @@ func prepareDurableParentConversationWakePlan(rt *Runtime, agent core.DurableAge
 			lines = append(lines, durableParentConversationGovernorLines(pending)...)
 			return strings.Join(lines, "\n")
 		},
-	}, nil
+	}
 }
 
 func durableWakeTaskPacketIDForPending(agentID string, pending []core.DurableAgentConversationMessage, now time.Time) string {

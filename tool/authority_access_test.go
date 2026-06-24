@@ -436,6 +436,13 @@ func contextWithContinuationRunAuthority(t *testing.T, store *session.SQLiteStor
 	if species == "" {
 		species = "test"
 	}
+	var leaseSnapshot session.ContinuationLease
+	if state, ok, err := store.ContinuationStateIfExists(key); err == nil && ok {
+		leaseSnapshot = session.NormalizeContinuationLease(state.ContinuationLease)
+		if leaseSnapshot.ID != leaseID {
+			leaseSnapshot = session.ContinuationLease{}
+		}
+	}
 	_, err = store.UpsertExecutionRunAuthority(session.ExecutionRunAuthority{
 		TurnRunID:           run.ID,
 		SessionID:           run.SessionID,
@@ -449,6 +456,9 @@ func contextWithContinuationRunAuthority(t *testing.T, store *session.SQLiteStor
 		ContinuationLeaseID: leaseID,
 		LeaseStatus:         string(status),
 		LeaseRemainingTurns: remainingTurns,
+		LeaseClass:          leaseSnapshot.LeaseClass,
+		LeaseAllowedActions: append([]string(nil), leaseSnapshot.AllowedActions...),
+		LeaseConstraints:    cloneAuthorityTestStringMap(leaseSnapshot.Constraints),
 		LeaseExpiresAt:      expiresAt,
 		AdmittedAt:          time.Now().UTC(),
 	})
@@ -456,4 +466,15 @@ func contextWithContinuationRunAuthority(t *testing.T, store *session.SQLiteStor
 		t.Fatalf("UpsertExecutionRunAuthority() err = %v", err)
 	}
 	return WithAuthorityUseRef(context.Background(), session.AuthorityUseRef{SessionID: run.SessionID, TurnRunID: run.ID}), run.ID
+}
+
+func cloneAuthorityTestStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }

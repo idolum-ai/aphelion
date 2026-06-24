@@ -36,6 +36,34 @@ func (r *Runtime) RunDurableAgentChildWake(ctx context.Context, agentID string, 
 	return r.runDurableAgentChildWakeLoaded(ctx, *agent, now)
 }
 
+func (r *Runtime) RunDurableAgentParentConversationWake(ctx context.Context, agentID string, messageIDs []string, now time.Time) error {
+	if r == nil || r.store == nil {
+		return fmt.Errorf("durable parent conversation wake runtime is unavailable")
+	}
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return fmt.Errorf("durable parent conversation wake agent id is required")
+	}
+	agent, err := r.store.DurableAgent(agentID)
+	if err != nil {
+		return fmt.Errorf("load durable parent conversation wake agent: %w", err)
+	}
+	if agent == nil {
+		return fmt.Errorf("durable agent %q not found", agentID)
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	plan, err := prepareDurableParentConversationWakePlanForMessageIDs(r, *agent, messageIDs, now.UTC(), true)
+	if err != nil {
+		return err
+	}
+	if plan == nil {
+		return nil
+	}
+	return r.runDurableWakeTurn(ctx, *agent, *plan, now.UTC())
+}
+
 func durableWakeSyntheticChatID(agentID string) int64 {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(strings.TrimSpace(agentID)))

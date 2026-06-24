@@ -4,6 +4,7 @@ package session
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -60,13 +61,22 @@ func (s *SQLiteStore) UpsertExecutionRunAuthority(record ExecutionRunAuthority) 
 		return ExecutionRunAuthority{}, fmt.Errorf("execution run authority lease %q was already claimed by turn run %d", executionRunAuthorityLeaseID(record), holder)
 	}
 	leaseExpiresAt := nullableTimeRFC3339(record.LeaseExpiresAt)
+	allowedActionsJSON, err := json.Marshal(record.LeaseAllowedActions)
+	if err != nil {
+		return ExecutionRunAuthority{}, fmt.Errorf("marshal execution run authority lease actions: %w", err)
+	}
+	constraintsJSON, err := json.Marshal(record.LeaseConstraints)
+	if err != nil {
+		return ExecutionRunAuthority{}, fmt.Errorf("marshal execution run authority lease constraints: %w", err)
+	}
 	if _, err := tx.Exec(`
 		INSERT INTO execution_run_authority(
 			turn_run_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
 			principal, principal_role, execution_species, lease_kind,
 			continuation_lease_id, operation_plan_lease_id, lease_status, lease_remaining_turns,
+			lease_class, lease_allowed_actions_json, lease_constraints_json,
 			lease_expires_at, admitted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		record.TurnRunID,
 		record.SessionID,
@@ -83,6 +93,9 @@ func (s *SQLiteStore) UpsertExecutionRunAuthority(record ExecutionRunAuthority) 
 		record.OperationPlanLeaseID,
 		record.LeaseStatus,
 		record.LeaseRemainingTurns,
+		string(record.LeaseClass),
+		string(allowedActionsJSON),
+		string(constraintsJSON),
 		leaseExpiresAt,
 		record.AdmittedAt.Format(time.RFC3339Nano),
 	); err != nil {
@@ -202,9 +215,36 @@ func executionRunAuthoritySame(left ExecutionRunAuthority, right ExecutionRunAut
 		left.ContinuationLeaseID == right.ContinuationLeaseID &&
 		left.OperationPlanLeaseID == right.OperationPlanLeaseID &&
 		left.LeaseStatus == right.LeaseStatus &&
+		left.LeaseClass == right.LeaseClass &&
+		stringSlicesEqual(left.LeaseAllowedActions, right.LeaseAllowedActions) &&
+		stringMapsEqual(left.LeaseConstraints, right.LeaseConstraints) &&
 		left.LeaseRemainingTurns == right.LeaseRemainingTurns &&
 		sameOptionalTime(left.LeaseExpiresAt, right.LeaseExpiresAt) &&
 		sameOptionalTime(left.AdmittedAt, right.AdmittedAt)
+}
+
+func stringSlicesEqual(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func stringMapsEqual(left map[string]string, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func sameOptionalTime(left time.Time, right time.Time) bool {
@@ -232,6 +272,7 @@ func executionRunAuthorityTx(queryer interface {
 			turn_run_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
 			principal, principal_role, execution_species, lease_kind,
 			continuation_lease_id, operation_plan_lease_id, lease_status, lease_remaining_turns,
+			lease_class, lease_allowed_actions_json, lease_constraints_json,
 			lease_expires_at, admitted_at
 		FROM execution_run_authority
 		WHERE turn_run_id = ?
@@ -252,6 +293,9 @@ func scanExecutionRunAuthority(scanner interface{ Scan(dest ...any) error }) (Ex
 		scopeKindRaw      string
 		scopeIDRaw        string
 		durableAgentIDRaw string
+		leaseClassRaw     string
+		actionsRaw        string
+		constraintsRaw    string
 		leaseExpiresAtRaw sql.NullString
 		admittedAtRaw     string
 	)
@@ -271,6 +315,9 @@ func scanExecutionRunAuthority(scanner interface{ Scan(dest ...any) error }) (Ex
 		&record.OperationPlanLeaseID,
 		&record.LeaseStatus,
 		&record.LeaseRemainingTurns,
+		&leaseClassRaw,
+		&actionsRaw,
+		&constraintsRaw,
 		&leaseExpiresAtRaw,
 		&admittedAtRaw,
 	); err != nil {
@@ -281,6 +328,17 @@ func scanExecutionRunAuthority(scanner interface{ Scan(dest ...any) error }) (Ex
 		ID:             strings.TrimSpace(scopeIDRaw),
 		DurableAgentID: strings.TrimSpace(durableAgentIDRaw),
 	})
+	record.LeaseClass = ContinuationLeaseClass(strings.TrimSpace(leaseClassRaw))
+	if strings.TrimSpace(actionsRaw) != "" {
+		if err := json.Unmarshal([]byte(actionsRaw), &record.LeaseAllowedActions); err != nil {
+			return ExecutionRunAuthority{}, fmt.Errorf("parse execution run authority lease actions: %w", err)
+		}
+	}
+	if strings.TrimSpace(constraintsRaw) != "" {
+		if err := json.Unmarshal([]byte(constraintsRaw), &record.LeaseConstraints); err != nil {
+			return ExecutionRunAuthority{}, fmt.Errorf("parse execution run authority lease constraints: %w", err)
+		}
+	}
 	if leaseExpiresAtRaw.Valid && strings.TrimSpace(leaseExpiresAtRaw.String) != "" {
 		parsed, err := parseSQLiteTime(leaseExpiresAtRaw.String)
 		if err != nil {

@@ -13,21 +13,24 @@ const (
 )
 
 type ExecutionRunAuthority struct {
-	TurnRunID            int64     `json:"turn_run_id"`
-	SessionID            string    `json:"session_id,omitempty"`
-	ChatID               int64     `json:"chat_id,omitempty"`
-	UserID               int64     `json:"user_id,omitempty"`
-	Scope                ScopeRef  `json:"scope,omitempty"`
-	Principal            string    `json:"principal,omitempty"`
-	PrincipalRole        string    `json:"principal_role,omitempty"`
-	ExecutionSpecies     string    `json:"execution_species,omitempty"`
-	LeaseKind            string    `json:"lease_kind,omitempty"`
-	ContinuationLeaseID  string    `json:"continuation_lease_id,omitempty"`
-	OperationPlanLeaseID string    `json:"operation_plan_lease_id,omitempty"`
-	LeaseStatus          string    `json:"lease_status,omitempty"`
-	LeaseRemainingTurns  int       `json:"lease_remaining_turns,omitempty"`
-	LeaseExpiresAt       time.Time `json:"lease_expires_at,omitempty"`
-	AdmittedAt           time.Time `json:"admitted_at,omitempty"`
+	TurnRunID            int64                  `json:"turn_run_id"`
+	SessionID            string                 `json:"session_id,omitempty"`
+	ChatID               int64                  `json:"chat_id,omitempty"`
+	UserID               int64                  `json:"user_id,omitempty"`
+	Scope                ScopeRef               `json:"scope,omitempty"`
+	Principal            string                 `json:"principal,omitempty"`
+	PrincipalRole        string                 `json:"principal_role,omitempty"`
+	ExecutionSpecies     string                 `json:"execution_species,omitempty"`
+	LeaseKind            string                 `json:"lease_kind,omitempty"`
+	ContinuationLeaseID  string                 `json:"continuation_lease_id,omitempty"`
+	OperationPlanLeaseID string                 `json:"operation_plan_lease_id,omitempty"`
+	LeaseStatus          string                 `json:"lease_status,omitempty"`
+	LeaseClass           ContinuationLeaseClass `json:"lease_class,omitempty"`
+	LeaseAllowedActions  []string               `json:"lease_allowed_actions,omitempty"`
+	LeaseConstraints     map[string]string      `json:"lease_constraints,omitempty"`
+	LeaseRemainingTurns  int                    `json:"lease_remaining_turns,omitempty"`
+	LeaseExpiresAt       time.Time              `json:"lease_expires_at,omitempty"`
+	AdmittedAt           time.Time              `json:"admitted_at,omitempty"`
 }
 
 func NormalizeExecutionRunAuthority(record ExecutionRunAuthority) ExecutionRunAuthority {
@@ -40,6 +43,9 @@ func NormalizeExecutionRunAuthority(record ExecutionRunAuthority) ExecutionRunAu
 	record.ContinuationLeaseID = strings.TrimSpace(record.ContinuationLeaseID)
 	record.OperationPlanLeaseID = strings.TrimSpace(record.OperationPlanLeaseID)
 	record.LeaseStatus = strings.TrimSpace(record.LeaseStatus)
+	record.LeaseClass = NormalizeContinuationLeaseClass(record.LeaseClass)
+	record.LeaseAllowedActions = normalizeStringSet(record.LeaseAllowedActions)
+	record.LeaseConstraints = normalizeExecutionAuthorityConstraints(record.LeaseConstraints)
 	if record.LeaseExpiresAt.IsZero() {
 		record.LeaseExpiresAt = time.Time{}
 	} else {
@@ -65,4 +71,23 @@ func normalizeExecutionAuthorityLeaseKind(kind string) string {
 	default:
 		return ""
 	}
+}
+
+func normalizeExecutionAuthorityConstraints(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

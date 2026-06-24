@@ -43,6 +43,7 @@ type durableWakeTurnPlan struct {
 	TaskPacketID         string
 	SessionChatType      string
 	SessionUserName      string
+	ParentMessageIDs     []string
 	PromptContextErrHint string
 	PolicyReason         string
 	PersistenceErrCtx    turnCommitErrorContext
@@ -360,6 +361,9 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 	}
 
 	pendingParentConversation, err := r.pendingDurableAgentParentConversation(agent.AgentID, 3)
+	if len(plan.ParentMessageIDs) > 0 {
+		pendingParentConversation, err = r.pendingDurableAgentParentConversationByIDs(agent.AgentID, plan.ParentMessageIDs)
+	}
 	if err != nil {
 		wrappedErr := fmt.Errorf("load durable wake parent conversation: %w", err)
 		resultAt := time.Now().UTC()

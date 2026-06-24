@@ -167,6 +167,67 @@ func TestRunDurableAgentChildWakeSkipsWithoutPendingParentConversation(t *testin
 	}
 }
 
+func TestRunDurableAgentParentConversationWakeDoesNotFallbackAfterQueueRace(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "fallback should not run"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "child-race",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Process parent guidance only when it is still pending.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Wake if this guidance is still pending.", time.Now().UTC().Add(-time.Minute))
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agent.AgentID, StateJSON: raw}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+	pending, err := rt.pendingDurableAgentParentConversation(agent.AgentID, 5)
+	if err != nil {
+		t.Fatalf("pendingDurableAgentParentConversation() err = %v", err)
+	}
+	messageIDs := core.DurableAgentConversationMessageIDs(pending)
+	if len(messageIDs) != 1 {
+		t.Fatalf("pending message IDs = %#v, want one", messageIDs)
+	}
+	if err := rt.acknowledgeDurableAgentParentConversation(agent.AgentID, pending, time.Now().UTC()); err != nil {
+		t.Fatalf("acknowledgeDurableAgentParentConversation() err = %v", err)
+	}
+	fallback := &testDurableWakeAdapter{channelKind: "external_channel"}
+	rt.durableWakeAdapters = []durableWakeIngressAdapter{fallback}
+
+	if err := rt.RunDurableAgentParentConversationWake(context.Background(), agent.AgentID, messageIDs, time.Now().UTC()); err != nil {
+		t.Fatalf("RunDurableAgentParentConversationWake() err = %v", err)
+	}
+	if fallback.prepareCalls != 0 {
+		t.Fatalf("fallback prepare calls = %d, want none after parent queue race", fallback.prepareCalls)
+	}
+	if len(provider.seenGovernorSystem) != 0 {
+		t.Fatalf("governor prompts = %#v, want no fallback turn", provider.seenGovernorSystem)
+	}
+}
+
 func TestPollDurableWakeAgentsBacksOffExpiredGrantChildRuntimeBlock(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	useTrustedDurableAgentSandboxForWakeTest(t, cfg)
