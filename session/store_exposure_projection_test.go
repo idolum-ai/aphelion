@@ -179,31 +179,31 @@ func TestRecordExposureProjectionStoresLargeRawOutputAsNonHydratableProtectedEvi
 	}
 }
 
-func TestMigratesSchemaV75ToV76ExposureProjectionLedger(t *testing.T) {
+func TestMigratesSchemaV76ToV77ExposureProjectionLedger(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "sessions-v75.db")
+	dbPath := filepath.Join(t.TempDir(), "sessions-v76.db")
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		t.Fatalf("open v75 db: %v", err)
+		t.Fatalf("open v76 db: %v", err)
 	}
 	for _, stmt := range []string{
 		`CREATE TABLE schema_version (
 			version INTEGER NOT NULL,
 			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
-		`INSERT INTO schema_version(version) VALUES (75)`,
+		`INSERT INTO schema_version(version) VALUES (76)`,
 	} {
 		if _, err := db.Exec(stmt); err != nil {
-			t.Fatalf("create v75 fixture: %v", err)
+			t.Fatalf("create v76 fixture: %v", err)
 		}
 	}
 	if err := db.Close(); err != nil {
-		t.Fatalf("close v75 db: %v", err)
+		t.Fatalf("close v76 db: %v", err)
 	}
 	store, err := NewSQLiteStore(dbPath)
 	if err != nil {
-		t.Fatalf("NewSQLiteStore(v75) err = %v", err)
+		t.Fatalf("NewSQLiteStore(v76) err = %v", err)
 	}
 	defer store.Close()
 	assertSchemaVersion(t, store.db, schemaVersion)

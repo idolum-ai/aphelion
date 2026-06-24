@@ -47,6 +47,6 @@ func ensureExposureProjectionTables(tx *sql.Tx) error {
 	return nil
 }
 
-func migrateSchemaV75ToV76(tx *sql.Tx) error {
+func migrateSchemaV76ToV77(tx *sql.Tx) error {
 	return ensureExposureProjectionTables(tx)
 }
