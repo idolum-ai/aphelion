@@ -15,6 +15,15 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
+func capabilityGrantWakeOperationInputForTest(t *testing.T, raw string) map[string]any {
+	t.Helper()
+	var input map[string]any
+	if err := json.Unmarshal([]byte(raw), &input); err != nil {
+		t.Fatalf("operation input JSON = %q err=%v", raw, err)
+	}
+	return input
+}
+
 func TestQueueCapabilityGrantWakeAddsParentConversation(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	_ = sender
@@ -403,8 +412,9 @@ func TestCapabilityGrantWakeBlockedResultCreatesTypedNextState(t *testing.T) {
 	if open[0].OperationKind != "child_tool_runtime_repair" || open[0].OperationTool != "durable_child_repair" {
 		t.Fatalf("open next action operation = kind %q tool %q, want child tool runtime repair", open[0].OperationKind, open[0].OperationTool)
 	}
-	if !strings.Contains(open[0].OperationInputJSON, `"tool":"gog_cli"`) || !strings.Contains(open[0].OperationInputJSON, `"no_content_probe":true`) {
-		t.Fatalf("operation input = %s, want gog_cli diagnostic no-content probe", open[0].OperationInputJSON)
+	opInput := capabilityGrantWakeOperationInputForTest(t, open[0].OperationInputJSON)
+	if opInput["agent_id"] != agent.AgentID || opInput["blocker_kind"] != "tool_runtime_not_executable" || opInput["task_packet_id"] != taskPacketID || opInput["child_result_id"] != result.ResultID || opInput["tool"] != "gog_cli" || opInput["no_content_probe"] != true || opInput["diagnostic_only"] != true {
+		t.Fatalf("operation input = %#v, want exact gog_cli diagnostic no-content probe", opInput)
 	}
 	pending, err := store.PendingReviewEvents(1001, 10)
 	if err != nil {
@@ -416,10 +426,71 @@ func TestCapabilityGrantWakeBlockedResultCreatesTypedNextState(t *testing.T) {
 	if !strings.Contains(pending[0].Summary, "tool_runtime_not_executable") || !strings.Contains(pending[0].Summary, "no-content readiness probe") {
 		t.Fatalf("review summary = %q, want precise tool-runtime blocker and probe next step", pending[0].Summary)
 	}
-	if !strings.Contains(pending[0].MetadataJSON, `"child_blocker_kind":"tool_runtime_not_executable"`) ||
-		!strings.Contains(pending[0].MetadataJSON, `"operator_action":"child_tool_runtime_repair"`) ||
-		!strings.Contains(pending[0].MetadataJSON, `"tool_name":"gog_cli"`) {
-		t.Fatalf("review metadata = %q, want typed blocker/action/tool metadata", pending[0].MetadataJSON)
+	metadata := capabilityGrantWakeOperationInputForTest(t, pending[0].MetadataJSON)
+	artifactMetadata, ok := metadata["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("review metadata = %#v, want nested artifact metadata", metadata)
+	}
+	if artifactMetadata["child_blocker_kind"] != "tool_runtime_not_executable" || artifactMetadata["operator_action"] != "child_tool_runtime_repair" || artifactMetadata["tool_name"] != "gog_cli" {
+		t.Fatalf("review artifact metadata = %#v, want typed blocker/action/tool metadata", artifactMetadata)
+	}
+}
+
+func TestCapabilityGrantWakeBlockedWithoutReviewTargetPersistsNextStateOnly(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	_ = sender
+	provider.replyText = "Processed active grants and non-secret config. Runtime check: gog_cli=missing_or_not_executable.\nREVIEW_STATUS: blocked"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:         "child-blocked-headless",
+		ParentScopeKind: "durable_agent",
+		ParentScopeID:   "child-blocked-headless",
+		ChannelKind:     "manual_channel",
+		WakeupMode:      "manual",
+		Status:          "active",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Handle blocked grant wake tests without a review target.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	grant := session.CapabilityGrant{
+		GrantID:        "capg-child-blocked-headless",
+		RequestID:      "cap-child-blocked-headless",
+		GrantedTo:      "durable_agent:child-blocked-headless",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "gog_cli",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+	}
+	if err := rt.queueCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("queueCapabilityGrantWake() err = %v", err)
+	}
+	if err := rt.runCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("runCapabilityGrantWake() err = %v", err)
+	}
+	taskPacketID := capabilityGrantTaskPacketID(agent.AgentID, grant)
+	open, err := store.OpenNextActionsBySession(rt.durableAgentExecutionKey(agent.AgentID), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionBlockedNeedsResourceRepair || open[0].ResourceBlocker != "tool_runtime_not_executable" {
+		t.Fatalf("open next actions after headless blocked child task = %#v, want typed repair state", open)
+	}
+	pending, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending review events = %#v, want none without review target", pending)
 	}
 }
 
@@ -486,6 +557,13 @@ func TestCapabilityGrantWakeUpdateThenCompletionResolvesPacketContinuation(t *te
 	}
 	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionWaitingForChild || open[0].RetryPolicy != "continue_after_child_update" {
 		t.Fatalf("open next actions after update child task = %#v, want one bounded continuation", open)
+	}
+	pending, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents(update) err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending review events after update = %#v, want no blocker review card", pending)
 	}
 	events, err := store.ExecutionEventsBySession(rt.durableAgentExecutionKey(agent.AgentID), 0, 80)
 	if err != nil {
@@ -586,8 +664,19 @@ func TestCapabilityGrantWakeFailureCreatesPacketRepairNextAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenNextActionsBySession() err = %v", err)
 	}
-	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionBlockedNeedsResourceRepair {
-		t.Fatalf("open next actions after failed child task = %#v, want packet repair next state", open)
+	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionBlockedNeedsResourceRepair || open[0].ResourceBlocker != "wake_failed" || open[0].OperationKind != "child_wake_repair" {
+		t.Fatalf("open next actions after failed child task = %#v, want packet wake-repair next state", open)
+	}
+	opInput := capabilityGrantWakeOperationInputForTest(t, open[0].OperationInputJSON)
+	if opInput["agent_id"] != agent.AgentID || opInput["blocker_kind"] != "wake_failed" || opInput["task_packet_id"] != taskPacketID || opInput["child_result_id"] != result.ResultID || opInput["diagnostic_only"] != true || opInput["no_content_probe"] != false {
+		t.Fatalf("failure operation input = %#v, want exact wake-repair refs", opInput)
+	}
+	pending, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents(failure) err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending review events after failed child task = %#v, want no child-authored blocker card", pending)
 	}
 }
 

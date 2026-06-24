@@ -38,52 +38,121 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 		}},
 	}
 	cases := []struct {
-		name      string
-		summary   string
-		blocker   string
-		wantKind  string
-		wantState session.NextActionState
-		wantOp    string
+		name           string
+		status         session.ChildTaskResultStatus
+		summary        string
+		blocker        string
+		wantKind       string
+		wantState      session.NextActionState
+		wantOp         string
+		wantRetry      string
+		wantProbe      bool
+		wantDiagnostic bool
 	}{
 		{
-			name:      "missing executable",
-			summary:   "Runtime check: gog_cli=missing_or_not_executable.\nREVIEW_STATUS: blocked",
-			blocker:   "child_reported_blocked",
-			wantKind:  "tool_runtime_not_executable",
-			wantState: session.NextActionBlockedNeedsResourceRepair,
-			wantOp:    "child_tool_runtime_repair",
+			name:           "missing executable",
+			status:         session.ChildTaskResultBlocked,
+			summary:        "Runtime check: gog_cli=missing_or_not_executable.\nREVIEW_STATUS: blocked",
+			blocker:        "child_reported_blocked",
+			wantKind:       "tool_runtime_not_executable",
+			wantState:      session.NextActionBlockedNeedsResourceRepair,
+			wantOp:         "child_tool_runtime_repair",
+			wantRetry:      "retry_after_tool_runtime_repair",
+			wantProbe:      true,
+			wantDiagnostic: true,
 		},
 		{
-			name:      "lifecycle unregistered",
-			summary:   "child_runtime_blocked: preflight_failed adapter=gog_cli failure_code=lifecycle_unregistered",
-			blocker:   "child_reported_blocked",
-			wantKind:  "tool_lifecycle_unregistered",
-			wantState: session.NextActionBlockedNeedsResourceRepair,
-			wantOp:    "child_tool_lifecycle_repair",
+			name:           "lifecycle unregistered",
+			status:         session.ChildTaskResultBlocked,
+			summary:        "child_runtime_blocked: preflight_failed adapter=gog_cli failure_code=lifecycle_unregistered",
+			blocker:        "child_reported_blocked",
+			wantKind:       "tool_lifecycle_unregistered",
+			wantState:      session.NextActionBlockedNeedsResourceRepair,
+			wantOp:         "child_tool_lifecycle_repair",
+			wantRetry:      "retry_after_tool_lifecycle_repair",
+			wantDiagnostic: true,
 		},
 		{
-			name:      "grant missing",
-			summary:   "EXTERNAL_CHANNEL_OUTCOME blocked reason_code=missing_grant",
-			blocker:   "missing_grant",
-			wantKind:  "grant_missing_or_stale",
-			wantState: session.NextActionBlockedNeedsAuthority,
-			wantOp:    "child_authority_repair",
+			name:           "grant missing",
+			status:         session.ChildTaskResultBlocked,
+			summary:        "EXTERNAL_CHANNEL_OUTCOME blocked reason_code=missing_grant",
+			blocker:        "missing_grant",
+			wantKind:       "grant_missing_or_stale",
+			wantState:      session.NextActionBlockedNeedsAuthority,
+			wantOp:         "child_authority_repair",
+			wantRetry:      "retry_after_authority_repair",
+			wantDiagnostic: true,
 		},
 		{
-			name:      "permission denied",
-			summary:   "write failed: permission denied",
-			blocker:   "child_reported_blocked",
-			wantKind:  "resource_permission_denied",
-			wantState: session.NextActionBlockedNeedsResourceRepair,
-			wantOp:    "child_resource_repair",
+			name:           "permission denied",
+			status:         session.ChildTaskResultBlocked,
+			summary:        "write failed: permission denied",
+			blocker:        "child_reported_blocked",
+			wantKind:       "resource_permission_denied",
+			wantState:      session.NextActionBlockedNeedsResourceRepair,
+			wantOp:         "child_resource_repair",
+			wantRetry:      "retry_after_resource_repair",
+			wantDiagnostic: true,
 		},
 		{
-			name:      "credential unverified",
-			summary:   "auth_status probe needed before account work",
-			blocker:   "child_reported_blocked",
-			wantKind:  "credential_unverified",
-			wantState: session.NextActionWaitingForOperator,
-			wantOp:    "child_credential_probe",
+			name:           "credential unverified",
+			status:         session.ChildTaskResultBlocked,
+			summary:        "auth_status probe needed before account work",
+			blocker:        "child_reported_blocked",
+			wantKind:       "credential_unverified",
+			wantState:      session.NextActionWaitingForOperator,
+			wantOp:         "child_credential_probe",
+			wantRetry:      "retry_after_credential_verification",
+			wantProbe:      true,
+			wantDiagnostic: true,
+		},
+		{
+			name:           "external transient",
+			status:         session.ChildTaskResultBlocked,
+			summary:        "temporary provider timeout; retry later",
+			blocker:        "child_reported_blocked",
+			wantKind:       "external_transient",
+			wantState:      session.NextActionScheduledRetry,
+			wantOp:         "child_retry",
+			wantRetry:      "bounded_backoff",
+			wantDiagnostic: true,
+		},
+		{
+			name:           "unknown blocked",
+			status:         session.ChildTaskResultBlocked,
+			summary:        "blocked on a child-local condition that needs review",
+			blocker:        "",
+			wantKind:       "child_reported_blocked",
+			wantState:      session.NextActionWaitingForOperator,
+			wantOp:         "child_blocker_disambiguation",
+			wantRetry:      "operator_disambiguation_required",
+			wantDiagnostic: true,
+		},
+		{
+			name:      "update",
+			status:    session.ChildTaskResultUpdate,
+			summary:   "intermediate progress",
+			wantKind:  "child_task_update",
+			wantState: session.NextActionWaitingForChild,
+			wantOp:    "child_task_continue",
+			wantRetry: "continue_after_child_update",
+		},
+		{
+			name:           "failed wake",
+			status:         session.ChildTaskResultFailed,
+			summary:        "wake failed before completion",
+			blocker:        "",
+			wantKind:       "wake_failed",
+			wantState:      session.NextActionBlockedNeedsResourceRepair,
+			wantOp:         "child_wake_repair",
+			wantRetry:      "retry_after_wake_repair",
+			wantDiagnostic: true,
+		},
+		{
+			name:      "completed",
+			status:    session.ChildTaskResultCompleted,
+			summary:   "done",
+			wantState: session.NextActionTerminal,
 		},
 	}
 	for _, tc := range cases {
@@ -92,12 +161,28 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 				PacketID:    "child_task:test",
 				ResultID:    "child_result:test",
 				AgentID:     agent.AgentID,
-				Status:      session.ChildTaskResultBlocked,
+				Status:      tc.status,
 				BlockerKind: tc.blocker,
 				Summary:     tc.summary,
 			})
-			if got.Kind != tc.wantKind || got.State != tc.wantState || got.OperationKind != tc.wantOp {
-				t.Fatalf("classification = %#v, want kind=%s state=%s op=%s", got, tc.wantKind, tc.wantState, tc.wantOp)
+			if got.Kind != tc.wantKind || got.State != tc.wantState || got.OperationKind != tc.wantOp || got.RetryPolicy != tc.wantRetry || got.NoContentProbe != tc.wantProbe || got.DiagnosticOnly != tc.wantDiagnostic {
+				t.Fatalf("classification = %#v, want kind=%s state=%s op=%s retry=%s probe=%t diagnostic=%t", got, tc.wantKind, tc.wantState, tc.wantOp, tc.wantRetry, tc.wantProbe, tc.wantDiagnostic)
+			}
+			if tc.wantKind == "" {
+				if got.OperationInputJSON != "" {
+					t.Fatalf("OperationInputJSON = %q, want empty for terminal completion", got.OperationInputJSON)
+				}
+				return
+			}
+			var input map[string]any
+			if err := json.Unmarshal([]byte(got.OperationInputJSON), &input); err != nil {
+				t.Fatalf("operation input JSON = %q err=%v", got.OperationInputJSON, err)
+			}
+			if input["agent_id"] != agent.AgentID || input["blocker_kind"] != tc.wantKind || input["task_packet_id"] != "child_task:test" || input["child_result_id"] != "child_result:test" {
+				t.Fatalf("operation input = %#v, want exact agent/blocker/task/result refs", input)
+			}
+			if input["no_content_probe"] != tc.wantProbe || input["diagnostic_only"] != tc.wantDiagnostic {
+				t.Fatalf("operation input = %#v, want probe=%t diagnostic=%t", input, tc.wantProbe, tc.wantDiagnostic)
 			}
 		})
 	}

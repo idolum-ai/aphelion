@@ -94,6 +94,21 @@ packet authorship and outcome truth. External or separately retryable effects
 happen after the outcome is committed and must be idempotent or represented by a
 repairable intent.
 
+Durable-child outcome projection uses this status contract:
+
+| Child result | Recognized blocker | Next action state | Operation kind | Parent projection |
+| --- | --- | --- | --- | --- |
+| `completed` | none | `terminal` | none | none |
+| `update` | `child_task_update` | `waiting_for_child` | `child_task_continue` | no blocker card |
+| `blocked` | `tool_runtime_not_executable` | `blocked_needs_resource_repair` | `child_tool_runtime_repair` | idempotent blocker review when a review target exists |
+| `blocked` | `tool_lifecycle_unregistered` | `blocked_needs_resource_repair` | `child_tool_lifecycle_repair` | idempotent blocker review when a review target exists |
+| `blocked` | `grant_missing_or_stale` | `blocked_needs_authority` | `child_authority_repair` | idempotent blocker review when a review target exists |
+| `blocked` | `resource_permission_denied` | `blocked_needs_resource_repair` | `child_resource_repair` | idempotent blocker review when a review target exists |
+| `blocked` | `credential_unverified` | `waiting_for_operator` | `child_credential_probe` | idempotent blocker review when a review target exists |
+| `blocked` | `external_transient` | `scheduled_retry` | `child_retry` | idempotent blocker review when a review target exists |
+| `blocked` | unknown child blocker | `waiting_for_operator` | `child_blocker_disambiguation` | idempotent blocker review when a review target exists |
+| `failed` | `wake_failed` | `blocked_needs_resource_repair` | `child_wake_repair` | no child-authored blocker card |
+
 ## Effective Authority
 
 For capability-managed tools, the effective authority is:

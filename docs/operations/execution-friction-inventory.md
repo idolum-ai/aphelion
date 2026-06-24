@@ -211,10 +211,13 @@ The desired shape is:
 - Durable wake events now carry task-packet and result identifiers. Blocked
   child results also compile into typed blocker classes, successor
   `next_action_records`, and idempotent parent review artifacts, so a child
-  that stops on missing runtime material or authority produces a concrete repair
-  card instead of a quiet durable row. The compact child protocol is not complete
-  until a real child-local materialization repair can converge through the same
-  packet/result/projection path.
+  that stops on missing runtime material, lifecycle registration, authority,
+  resource permission, credential uncertainty, transient failure, or an unknown
+  child-authored blocker produces a concrete repair card instead of a quiet
+  durable row. Updates, completions, and generic wake failures are separate
+  status paths and do not masquerade as child-authored blocker reviews. The
+  compact child protocol is not complete until a real child-local materialization
+  repair can converge through the same packet/result/projection path.
 - Source status now distinguishes a verified source checkout from stale release
   metadata. Persistence latency is classified as an operational amplifier, not
   as the causal root of the authority/workflow loop.
