@@ -27,6 +27,82 @@ type testDurableWakeAdapter struct {
 	lastSummary  string
 }
 
+func TestDurableWakeChildBlockerClassification(t *testing.T) {
+	t.Parallel()
+
+	agent := core.DurableAgent{
+		AgentID:     "child-classifier",
+		ChannelKind: "external_channel",
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Adapter: "gog_cli",
+		}},
+	}
+	cases := []struct {
+		name      string
+		summary   string
+		blocker   string
+		wantKind  string
+		wantState session.NextActionState
+		wantOp    string
+	}{
+		{
+			name:      "missing executable",
+			summary:   "Runtime check: gog_cli=missing_or_not_executable.\nREVIEW_STATUS: blocked",
+			blocker:   "child_reported_blocked",
+			wantKind:  "tool_runtime_not_executable",
+			wantState: session.NextActionBlockedNeedsResourceRepair,
+			wantOp:    "child_tool_runtime_repair",
+		},
+		{
+			name:      "lifecycle unregistered",
+			summary:   "child_runtime_blocked: preflight_failed adapter=gog_cli failure_code=lifecycle_unregistered",
+			blocker:   "child_reported_blocked",
+			wantKind:  "tool_lifecycle_unregistered",
+			wantState: session.NextActionBlockedNeedsResourceRepair,
+			wantOp:    "child_tool_lifecycle_repair",
+		},
+		{
+			name:      "grant missing",
+			summary:   "EXTERNAL_CHANNEL_OUTCOME blocked reason_code=missing_grant",
+			blocker:   "missing_grant",
+			wantKind:  "grant_missing_or_stale",
+			wantState: session.NextActionBlockedNeedsAuthority,
+			wantOp:    "child_authority_repair",
+		},
+		{
+			name:      "permission denied",
+			summary:   "write failed: permission denied",
+			blocker:   "child_reported_blocked",
+			wantKind:  "resource_permission_denied",
+			wantState: session.NextActionBlockedNeedsResourceRepair,
+			wantOp:    "child_resource_repair",
+		},
+		{
+			name:      "credential unverified",
+			summary:   "auth_status probe needed before account work",
+			blocker:   "child_reported_blocked",
+			wantKind:  "credential_unverified",
+			wantState: session.NextActionWaitingForOperator,
+			wantOp:    "child_credential_probe",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := durableWakeChildTaskBlockerClassification(agent, session.ChildTaskResultInput{
+				PacketID:    "child_task:test",
+				ResultID:    "child_result:test",
+				AgentID:     agent.AgentID,
+				Status:      session.ChildTaskResultBlocked,
+				BlockerKind: tc.blocker,
+				Summary:     tc.summary,
+			})
+			if got.Kind != tc.wantKind || got.State != tc.wantState || got.OperationKind != tc.wantOp {
+				t.Fatalf("classification = %#v, want kind=%s state=%s op=%s", got, tc.wantKind, tc.wantState, tc.wantOp)
+			}
+		})
+	}
+}
+
 func markDurableWakeExternalAdapterReady(t *testing.T, store *session.SQLiteStore, agentID string, adapterName string) {
 	t.Helper()
 	now := time.Now().UTC()

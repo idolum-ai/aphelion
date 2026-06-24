@@ -339,7 +339,7 @@ func TestCapabilityGrantWakeRestartSpanningTaskProtocolAndAuthorityFailClosed(t 
 func TestCapabilityGrantWakeBlockedResultCreatesTypedNextState(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	_ = sender
-	provider.replyText = "The child needs a narrower runtime repair before using this grant.\nREVIEW_STATUS: blocked"
+	provider.replyText = "Processed active grants and non-secret config. Runtime check: gog_cli=missing_or_not_executable.\nREVIEW_STATUS: blocked"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
@@ -368,7 +368,7 @@ func TestCapabilityGrantWakeBlockedResultCreatesTypedNextState(t *testing.T) {
 		RequestID:      "cap-child-blocked",
 		GrantedTo:      "durable_agent:child-blocked",
 		Kind:           session.CapabilityKindTool,
-		TargetResource: "codex",
+		TargetResource: "gog_cli",
 		AllowedActions: []string{"invoke"},
 		Status:         session.CapabilityGrantStatusActive,
 	}
@@ -390,15 +390,36 @@ func TestCapabilityGrantWakeBlockedResultCreatesTypedNextState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChildTaskResult() err = %v", err)
 	}
-	if !ok || result.Status != session.ChildTaskResultBlocked || result.NextState != session.NextActionBlockedNeedsAuthority {
-		t.Fatalf("blocked result = %#v ok=%t, want typed authority blocker", result, ok)
+	if !ok || result.Status != session.ChildTaskResultBlocked || result.NextState != session.NextActionBlockedNeedsResourceRepair || result.BlockerKind != "tool_runtime_not_executable" {
+		t.Fatalf("blocked result = %#v ok=%t, want typed tool-runtime blocker", result, ok)
 	}
 	open, err := store.OpenNextActionsBySession(rt.durableAgentExecutionKey(agent.AgentID), 10)
 	if err != nil {
 		t.Fatalf("OpenNextActionsBySession() err = %v", err)
 	}
-	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionBlockedNeedsAuthority {
-		t.Fatalf("open next actions after blocked child task = %#v, want one typed blocker next state", open)
+	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionBlockedNeedsResourceRepair || open[0].ResourceBlocker != "tool_runtime_not_executable" {
+		t.Fatalf("open next actions after blocked child task = %#v, want one typed tool-runtime repair next state", open)
+	}
+	if open[0].OperationKind != "child_tool_runtime_repair" || open[0].OperationTool != "durable_child_repair" {
+		t.Fatalf("open next action operation = kind %q tool %q, want child tool runtime repair", open[0].OperationKind, open[0].OperationTool)
+	}
+	if !strings.Contains(open[0].OperationInputJSON, `"tool":"gog_cli"`) || !strings.Contains(open[0].OperationInputJSON, `"no_content_probe":true`) {
+		t.Fatalf("operation input = %s, want gog_cli diagnostic no-content probe", open[0].OperationInputJSON)
+	}
+	pending, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending review events = %#v, want one child blocker review card", pending)
+	}
+	if !strings.Contains(pending[0].Summary, "tool_runtime_not_executable") || !strings.Contains(pending[0].Summary, "no-content readiness probe") {
+		t.Fatalf("review summary = %q, want precise tool-runtime blocker and probe next step", pending[0].Summary)
+	}
+	if !strings.Contains(pending[0].MetadataJSON, `"child_blocker_kind":"tool_runtime_not_executable"`) ||
+		!strings.Contains(pending[0].MetadataJSON, `"operator_action":"child_tool_runtime_repair"`) ||
+		!strings.Contains(pending[0].MetadataJSON, `"tool_name":"gog_cli"`) {
+		t.Fatalf("review metadata = %q, want typed blocker/action/tool metadata", pending[0].MetadataJSON)
 	}
 }
 

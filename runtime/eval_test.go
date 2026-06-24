@@ -1378,8 +1378,8 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	if !evalTestContainsString(byID["trajectory_durable_child_blocked_wake_surfaces_repair"].EventTypes, core.ExecutionEventDurableWakeFailed) {
 		t.Fatalf("durable child trajectory missing failed wake evidence: %#v", byID["trajectory_durable_child_blocked_wake_surfaces_repair"])
 	}
-	if !evalTestContainsString(byID["trajectory_durable_child_blocked_wake_surfaces_repair"].EventTypes, core.ExecutionEventCapabilityRequestCreated) {
-		t.Fatalf("durable child trajectory missing repair request progress: %#v", byID["trajectory_durable_child_blocked_wake_surfaces_repair"])
+	if !evalTestContainsString(byID["trajectory_durable_child_blocked_wake_surfaces_repair"].EventTypes, core.ExecutionEventWorkflowNextState) {
+		t.Fatalf("durable child trajectory missing typed child-blocker next-state evidence: %#v", byID["trajectory_durable_child_blocked_wake_surfaces_repair"])
 	}
 	if !evalTestContainsString(byID["trajectory_telegram_media_ambiguous_thread_picker"].EventTypes, core.ExecutionEventDecisionOpened) {
 		t.Fatalf("media trajectory missing thread-picker decision progress: %#v", byID["trajectory_telegram_media_ambiguous_thread_picker"])

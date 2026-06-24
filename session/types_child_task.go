@@ -159,6 +159,7 @@ const (
 	ChildTaskOutcomeIntentParentConversationAck ChildTaskOutcomeIntentKind = "parent_conversation_ack"
 	ChildTaskOutcomeIntentScheduledReview       ChildTaskOutcomeIntentKind = "scheduled_review"
 	ChildTaskOutcomeIntentGenericFinalize       ChildTaskOutcomeIntentKind = "generic_finalize"
+	ChildTaskOutcomeIntentChildBlockerReview    ChildTaskOutcomeIntentKind = "child_blocker_review"
 	ChildTaskOutcomeIntentPolicyApplied         ChildTaskOutcomeIntentKind = "policy_applied"
 	ChildTaskOutcomeIntentPolicyApplyFailed     ChildTaskOutcomeIntentKind = "policy_apply_failed"
 )

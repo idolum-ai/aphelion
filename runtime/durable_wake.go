@@ -667,7 +667,19 @@ func (r *Runtime) recordDurableWakeChildTaskResultWithIntents(key session.Sessio
 		EvidenceRefs:    []string{"task_packet:" + taskPacketID},
 		CreatedAt:       now,
 	})
-	nextAction := durableWakeChildTaskNextActionInput(key, input, taskPacketID, now)
+	if input.Status != session.ChildTaskResultCompleted {
+		classification := durableWakeChildTaskBlockerClassification(agent, input)
+		if classification.Kind != "" {
+			input.BlockerKind = classification.Kind
+		}
+		if classification.State != "" {
+			input.NextState = classification.State
+		}
+	}
+	nextAction := durableWakeChildTaskNextActionInput(key, agent, input, taskPacketID, now)
+	if intent, ok := durableWakeChildBlockerReviewIntent(agent, input, nextAction, now); ok {
+		outcomeIntents = append([]session.ChildTaskOutcomeIntentInput{intent}, outcomeIntents...)
+	}
 	result, err := r.store.CommitChildTaskOutcome(session.ChildTaskOutcomeCommitInput{
 		Result:         input,
 		NextAction:     nextAction,
@@ -861,6 +873,8 @@ func (r *Runtime) executeDurableWakeOutcomeIntent(ctx context.Context, agent cor
 		return r.applyDurableWakeParentConversationAckIntent(agent, intent)
 	case session.ChildTaskOutcomeIntentScheduledReview:
 		return r.applyScheduledReviewOutcomeIntent(intent)
+	case session.ChildTaskOutcomeIntentChildBlockerReview:
+		return r.applyDurableWakeChildBlockerReviewIntent(agent, intent)
 	default:
 		return fmt.Errorf("unsupported durable wake outcome intent kind %s", intent.Kind)
 	}
@@ -958,37 +972,6 @@ func (r *Runtime) processPendingDurableWakeOutcomeIntents(ctx context.Context, l
 		}
 	}
 	return nil
-}
-
-func durableWakeChildTaskNextActionInput(key session.SessionKey, result session.ChildTaskResultInput, taskPacketID string, now time.Time) *session.NextActionInput {
-	if result.Status == session.ChildTaskResultCompleted {
-		return nil
-	}
-	nextAction := "repair the child task blocker before retrying"
-	requiredAuthority := ""
-	retryPolicy := "retry_after_blocker_resolution"
-	if result.Status == session.ChildTaskResultBlocked {
-		nextAction = "approve or repair the bounded authority the child task reported as blocked"
-		requiredAuthority = result.BlockerKind
-	}
-	if result.Status == session.ChildTaskResultUpdate {
-		nextAction = "continue the bounded child task from the latest reported update"
-		retryPolicy = "continue_after_child_update"
-	}
-	return &session.NextActionInput{
-		Key:                key,
-		Owner:              "durable_wake",
-		State:              result.NextState,
-		SubjectKind:        "task_packet",
-		SubjectRef:         taskPacketID,
-		CausalRefs:         []string{"task_packet:" + taskPacketID, "child_task_attempt:" + result.AttemptID, "child_task_result:" + result.ResultID},
-		NextAction:         nextAction,
-		RequiredAuthority:  requiredAuthority,
-		ResourceBlocker:    result.BlockerKind,
-		RetryPolicy:        retryPolicy,
-		OperatorProjection: firstNonEmpty(strings.TrimSpace(result.Summary), nextAction),
-		CreatedAt:          now,
-	}
 }
 
 func durableWakeChildTaskStatusFromSummary(summary string) (session.ChildTaskResultStatus, string) {

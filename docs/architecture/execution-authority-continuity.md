@@ -77,7 +77,13 @@ The child-task saga is:
 4. Nonterminal child updates keep the packet open and preserve the parent task
    message for a later bounded continuation. Parent conversation messages are
    acknowledged only after a completed result.
-5. Post-outcome intents are a fenced outbox. A worker claims an intent before
+5. Blocked child results are compiled into typed blocker classes before they
+   reach operator projection. Missing tool lifecycle, missing or non-executable
+   child-local runtime material, stale grants, resource permission failures,
+   credential-status uncertainty, and transient external blockers become
+   concrete next actions and idempotent parent review artifacts. Persisting only
+   a quiet durable blocker is not a complete transition.
+6. Post-outcome intents are a fenced outbox. A worker claims an intent before
    applying it, applies one typed handler, and then marks the intent `applied`,
    `retryable`, or `dead_letter`. A crash after the child result commits but
    before an intent applies leaves repairable durable work, not an ambiguous
