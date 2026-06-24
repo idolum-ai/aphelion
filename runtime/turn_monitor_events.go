@@ -170,7 +170,7 @@ func (m *turnMonitor) ToolFinishedWithProjection(ctx context.Context, name strin
 }
 
 func (m *turnMonitor) projectToolFailure(ctx context.Context, name string, rawOutput string, rawErr error, at time.Time) toolOutputProjection {
-	failureClass, retryPolicy := classifyProjectedToolFailure(rawErr, rawOutput)
+	signals := classifyProjectedToolFailure(rawErr, rawOutput)
 	protectedRef := ""
 	recorded := false
 	rawDetails := rawToolFailureDetails(rawOutput, rawErr)
@@ -180,18 +180,30 @@ func (m *turnMonitor) projectToolFailure(ctx context.Context, name string, rawOu
 			recorded = true
 		}
 	}
-	summary := safeToolFailureSummary(failureClass, protectedRef)
+	summary := safeToolFailureSummary(signals.FailureClass, protectedRef)
 	projected := projectedToolFailure{
 		OK:                   false,
 		SafeSummary:          summary,
-		FailureClass:         failureClass,
-		RetryPolicy:          retryPolicy,
+		FailureClass:         signals.FailureClass,
+		RetryPolicy:          signals.RetryPolicy,
+		Retryable:            signals.Retryable,
+		ContextCancelled:     signals.ContextCancelled,
+		DeadlineExceeded:     signals.DeadlineExceeded,
 		PolicyRef:            session.ExposureProjectionPolicyToolOutputV1,
 		ProtectedEvidenceRef: protectedRef,
 	}
 	return toolOutputProjection{
-		Output:   renderProjectedToolFailure(projected),
-		Err:      projectedToolFailureError{safe: summary, raw: rawErr},
+		Output: renderProjectedToolFailure(projected),
+		Err: projectedToolFailureError{
+			safe:                 summary,
+			failureClass:         signals.FailureClass,
+			retryable:            signals.Retryable,
+			contextCancelled:     signals.ContextCancelled,
+			deadlineExceeded:     signals.DeadlineExceeded,
+			execRejected:         signals.ExecRejected,
+			policyRef:            session.ExposureProjectionPolicyToolOutputV1,
+			protectedEvidenceRef: protectedRef,
+		},
 		Recorded: recorded,
 	}
 }

@@ -78,7 +78,16 @@ func (o *observedToolRegistry) Execute(ctx context.Context, name string, input j
 		if projector, ok := o.observer.(toolOutputProjectionObserver); ok {
 			projection := projector.ProjectToolOutput(ctx, name, input, out, err)
 			if err != nil && projection.Err == nil {
-				projection.Err = projectedToolFailureError{safe: "tool execution failed", raw: err}
+				signals := classifyProjectedToolFailure(err, out)
+				projection.Err = projectedToolFailureError{
+					safe:             safeToolFailureSummary(signals.FailureClass, ""),
+					failureClass:     signals.FailureClass,
+					retryable:        signals.Retryable,
+					contextCancelled: signals.ContextCancelled,
+					deadlineExceeded: signals.DeadlineExceeded,
+					execRejected:     signals.ExecRejected,
+					policyRef:        session.ExposureProjectionPolicyToolOutputV1,
+				}
 			}
 			projector.ToolFinishedWithProjection(ctx, name, input, out, projection.Output, projection.Err, projection.Recorded)
 			if err != nil {

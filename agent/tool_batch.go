@@ -271,13 +271,21 @@ func toolResultContent(output string, err error) (string, bool) {
 	if err == nil {
 		return FormatToolOutputForHistory(output, DefaultToolOutputDigestInlineLimit), false
 	}
-	if projectedToolFailureContent(output) {
+	if projectedToolFailureContent(output, err) {
 		return strings.TrimSpace(output), true
 	}
 	return renderToolFailure(classifyToolFailure(err, output)), true
 }
 
-func projectedToolFailureContent(output string) bool {
+type projectedToolFailureProvenance interface {
+	ProjectedToolFailure() bool
+}
+
+func projectedToolFailureContent(output string, err error) bool {
+	provenance, ok := err.(projectedToolFailureProvenance)
+	if !ok || !provenance.ProjectedToolFailure() {
+		return false
+	}
 	output = strings.TrimSpace(output)
 	if output == "" {
 		return false

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 )
 
 type toolOutputProjection struct {
@@ -22,13 +23,22 @@ type projectedToolFailure struct {
 	SafeSummary          string `json:"safe_summary"`
 	FailureClass         string `json:"failure_class"`
 	RetryPolicy          string `json:"retry_policy"`
+	Retryable            bool   `json:"retryable"`
+	ContextCancelled     bool   `json:"context_cancelled,omitempty"`
+	DeadlineExceeded     bool   `json:"deadline_exceeded,omitempty"`
 	PolicyRef            string `json:"policy_ref"`
 	ProtectedEvidenceRef string `json:"protected_evidence_ref,omitempty"`
 }
 
 type projectedToolFailureError struct {
-	safe string
-	raw  error
+	safe                 string
+	failureClass         string
+	retryable            bool
+	contextCancelled     bool
+	deadlineExceeded     bool
+	execRejected         bool
+	policyRef            string
+	protectedEvidenceRef string
 }
 
 func (e projectedToolFailureError) Error() string {
@@ -38,8 +48,21 @@ func (e projectedToolFailureError) Error() string {
 	return e.safe
 }
 
-func (e projectedToolFailureError) Unwrap() error {
-	return e.raw
+func (e projectedToolFailureError) Is(target error) bool {
+	switch target {
+	case context.Canceled:
+		return e.contextCancelled
+	case context.DeadlineExceeded:
+		return e.deadlineExceeded
+	case toolpkg.ErrExecRejectedBeforeDispatch:
+		return e.execRejected
+	default:
+		return false
+	}
+}
+
+func (e projectedToolFailureError) ProjectedToolFailure() bool {
+	return true
 }
 
 func renderProjectedToolFailure(failure projectedToolFailure) string {
@@ -91,18 +114,46 @@ func projectedToolFailurePayload(output string) (map[string]any, bool) {
 	return payload, true
 }
 
-func classifyProjectedToolFailure(err error, output string) (string, string) {
+type projectedToolFailureSignals struct {
+	FailureClass     string
+	RetryPolicy      string
+	Retryable        bool
+	ContextCancelled bool
+	DeadlineExceeded bool
+	ExecRejected     bool
+}
+
+func classifyProjectedToolFailure(err error, output string) projectedToolFailureSignals {
 	if errors.Is(err, context.Canceled) {
-		return "canceled", "do_not_retry"
+		return projectedToolFailureSignals{
+			FailureClass:     "canceled",
+			RetryPolicy:      "do_not_retry",
+			ContextCancelled: true,
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return projectedToolFailureSignals{
+			FailureClass:     "timeout",
+			RetryPolicy:      "retry_once",
+			Retryable:        true,
+			DeadlineExceeded: true,
+		}
+	}
+	if errors.Is(err, toolpkg.ErrExecRejectedBeforeDispatch) {
+		return projectedToolFailureSignals{
+			FailureClass: "authority_rejected",
+			RetryPolicy:  "ask_for_grant",
+			ExecRejected: true,
+		}
 	}
 	lower := strings.ToLower(strings.TrimSpace(output + "\n" + errorString(err)))
 	switch {
 	case strings.Contains(lower, "authority") || strings.Contains(lower, "approval") || strings.Contains(lower, "grant") || strings.Contains(lower, "permission") || strings.Contains(lower, "denied"):
-		return "authority_rejected", "ask_for_grant"
+		return projectedToolFailureSignals{FailureClass: "authority_rejected", RetryPolicy: "ask_for_grant"}
 	case strings.Contains(lower, "deadline") || strings.Contains(lower, "timeout") || strings.Contains(lower, "timed out"):
-		return "timeout", "retry_once"
+		return projectedToolFailureSignals{FailureClass: "timeout", RetryPolicy: "retry_once", Retryable: true, DeadlineExceeded: true}
 	default:
-		return "tool_error", "reformulate"
+		return projectedToolFailureSignals{FailureClass: "tool_error", RetryPolicy: "reformulate"}
 	}
 }
 
