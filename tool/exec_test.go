@@ -1204,6 +1204,105 @@ func TestExecRejectedNativeReadPreservesNonRootWorkdir(t *testing.T) {
 	}
 }
 
+func TestExecRejectedReadyNativeReadDowngradesWhenPathRedacts(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	reports := filepath.Join(workspace, "reports")
+	if err := os.MkdirAll(reports, 0o755); err != nil {
+		t.Fatalf("mkdir reports fixture: %v", err)
+	}
+	secretShapedName := "report-sk-123456789012.txt"
+	secretShapedPath := filepath.Join("reports", secretShapedName)
+	if err := os.WriteFile(filepath.Join(reports, secretShapedName), []byte("report\n"), 0o600); err != nil {
+		t.Fatalf("write report fixture: %v", err)
+	}
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8848, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"/bin/cat `+secretShapedPath+`"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one downgraded rewrite action", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionWaitingForOperator || action.OperationKind != "typed_operation_required" || action.OperationTool != "update_operation" {
+		t.Fatalf("next action = %#v, want redacted ready operation downgraded to typed rewrite", action)
+	}
+	if strings.Contains(action.OperationInputJSON, secretShapedName) || strings.Contains(action.OperationInputJSON, secretShapedPath) {
+		t.Fatalf("operation input leaked secret-shaped filename: %s", action.OperationInputJSON)
+	}
+	if !strings.Contains(action.OperationInputJSON, "ready_operation_input_redacted") || !strings.Contains(action.OperationInputJSON, "redacted:api_key:") {
+		t.Fatalf("operation input = %s, want redacted downgrade payload", action.OperationInputJSON)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["reason"] != "ready_operation_input_redacted" || input["original_operation_kind"] != "native_file_read" || input["original_operation_tool"] != "read_file" {
+		t.Fatalf("operation input = %#v, want ready operation redaction downgrade metadata", input)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 10)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventWorkflowNextState && (strings.Contains(event.PayloadJSON, secretShapedName) || strings.Contains(event.PayloadJSON, secretShapedPath)) {
+			t.Fatalf("workflow event leaked secret-shaped filename: %s", event.PayloadJSON)
+		}
+	}
+}
+
+func TestExecRejectedCatStdinRequiresTypedRewrite(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8849, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"/bin/cat -"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one stdin rewrite action", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionWaitingForOperator || action.OperationKind != "typed_operation_required" || action.OperationTool != "update_operation" {
+		t.Fatalf("next action = %#v, want typed rewrite for stdin semantics", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["reason"] != "stdin_semantics_not_native_file_path" {
+		t.Fatalf("operation input = %#v, want stdin rewrite reason", input)
+	}
+	if strings.Contains(action.OperationInputJSON, `"path":"-"`) {
+		t.Fatalf("operation input = %s, must not suggest read_file path '-'", action.OperationInputJSON)
+	}
+}
+
 func TestExecRejectedFindNameStaysLossyWaitingSuggestion(t *testing.T) {
 	t.Parallel()
 

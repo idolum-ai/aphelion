@@ -39,11 +39,14 @@ func (s *SQLiteStore) RecordNextAction(input NextActionInput) (NextActionRecord,
 
 func recordNextActionTx(tx *sql.Tx, input NextActionInput) (NextActionRecord, error) {
 	input = NormalizeNextActionInput(input)
-	operationInputJSON, err := normalizeNextActionOperationInputJSON(input.OperationInputJSON)
+	operationInputJSON, operationInputRedacted, err := normalizeNextActionOperationInputJSON(input.OperationInputJSON)
 	if err != nil {
 		return NextActionRecord{}, err
 	}
 	input.OperationInputJSON = operationInputJSON
+	if operationInputRedacted && input.State == NextActionReadyToExecute {
+		input = downgradeReadyNextActionForRedactedOperationInput(input, operationInputJSON)
+	}
 	input.NextAction = RedactEvidenceText(input.NextAction).Text
 	input.OperatorProjection = RedactEvidenceText(input.OperatorProjection).Text
 	scope := defaultScopeForKey(input.Key)
@@ -392,35 +395,41 @@ func scanNextActionRecord(scanner interface{ Scan(dest ...any) error }) (NextAct
 	return record, nil
 }
 
-func normalizeNextActionOperationInputJSON(raw string) (string, error) {
+func normalizeNextActionOperationInputJSON(raw string) (string, bool, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", nil
+		return "", false, nil
 	}
 	if !json.Valid([]byte(raw)) {
-		return "", fmt.Errorf("next action operation input must be valid JSON")
+		return "", false, fmt.Errorf("next action operation input must be valid JSON")
 	}
 	var payload any
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return "", fmt.Errorf("decode next action operation input: %w", err)
+		return "", false, fmt.Errorf("decode next action operation input: %w", err)
 	}
-	sanitized, err := json.Marshal(redactNextActionOperationPayload(payload))
+	redactedPayload, redacted := redactNextActionOperationPayload(payload)
+	sanitized, err := json.Marshal(redactedPayload)
 	if err != nil {
-		return "", fmt.Errorf("redact next action operation input: %w", err)
+		return "", false, fmt.Errorf("redact next action operation input: %w", err)
 	}
 	var compact bytes.Buffer
 	if err := json.Compact(&compact, sanitized); err != nil {
-		return "", fmt.Errorf("compact next action operation input: %w", err)
+		return "", false, fmt.Errorf("compact next action operation input: %w", err)
 	}
-	return compact.String(), nil
+	return compact.String(), redacted, nil
 }
 
-func redactNextActionOperationPayload(value any) any {
+func redactNextActionOperationPayload(value any) (any, bool) {
 	switch v := value.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(v))
+		redactedAny := false
 		for key, child := range v {
-			out[key] = redactNextActionOperationPayload(child)
+			redactedChild, childRedacted := redactNextActionOperationPayload(child)
+			out[key] = redactedChild
+			if childRedacted {
+				redactedAny = true
+			}
 			text, ok := child.(string)
 			if !ok || !nextActionOperationFingerprintField(key) {
 				continue
@@ -434,18 +443,54 @@ func redactNextActionOperationPayload(value any) any {
 				out[fingerprintKey] = EffectAttemptCommandHash(text)
 			}
 		}
-		return out
+		return out, redactedAny
 	case []any:
 		out := make([]any, 0, len(v))
+		redactedAny := false
 		for _, child := range v {
-			out = append(out, redactNextActionOperationPayload(child))
+			redactedChild, childRedacted := redactNextActionOperationPayload(child)
+			out = append(out, redactedChild)
+			if childRedacted {
+				redactedAny = true
+			}
 		}
-		return out
+		return out, redactedAny
 	case string:
-		return RedactEvidenceText(v).Text
+		redacted := RedactEvidenceText(v)
+		return redacted.Text, redacted.Redacted
 	default:
-		return value
+		return value, false
 	}
+}
+
+func downgradeReadyNextActionForRedactedOperationInput(input NextActionInput, redactedOperationInputJSON string) NextActionInput {
+	originalKind := input.OperationKind
+	originalTool := input.OperationTool
+	payload := map[string]any{
+		"reason":                  "ready_operation_input_redacted",
+		"original_operation_kind": originalKind,
+		"original_operation_tool": originalTool,
+		"redacted_input_hash":     EffectAttemptCommandHash(redactedOperationInputJSON),
+	}
+	var redactedInput any
+	if err := json.Unmarshal([]byte(redactedOperationInputJSON), &redactedInput); err == nil && redactedInput != nil {
+		payload["redacted_operation_input"] = redactedInput
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		raw = []byte(`{"reason":"ready_operation_input_redacted"}`)
+	}
+	input.State = NextActionWaitingForOperator
+	input.OperationKind = "typed_operation_required"
+	input.OperationTool = "update_operation"
+	input.OperationInputJSON = string(raw)
+	input.NextAction = "rewrite the recommended operation with exact, non-redacted operands before execution"
+	input.RequiredAuthority = "typed_operation_required"
+	input.Verifier = ""
+	input.RetryPolicy = "do_not_execute_redacted_operation_payload"
+	input.OperatorProjection = "Ready operation payload contained redacted operand(s); rewrite it with exact typed operands before execution."
+	input.CausalRefs = append(input.CausalRefs, "next_action:redacted_ready_operation_downgrade")
+	return input
 }
 
 func nextActionOperationFingerprintField(field string) bool {

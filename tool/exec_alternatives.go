@@ -112,6 +112,9 @@ func nativeFileAlternative(command string, rawWorkdir string, workingRoot string
 		if len(paths) == 0 {
 			return shellRejectionAlternative{}, false
 		}
+		if pathsContainStdin(paths) {
+			return nativeStdinRewriteRequired(cmd, cause), true
+		}
 		if hasShellOptions(args) || len(paths) != 1 {
 			return lossyNativeReadSuggestion(cmd, paths, rawWorkdir, workingRoot, cause), true
 		}
@@ -135,6 +138,9 @@ func nativeFileAlternative(command string, rawWorkdir string, workingRoot string
 		paths := nonOptionArgs(args)
 		if len(paths) == 0 {
 			return shellRejectionAlternative{}, false
+		}
+		if pathsContainStdin(paths) {
+			return nativeStdinRewriteRequired(cmd, cause), true
 		}
 		return lossyNativeReadSuggestion(cmd, paths, rawWorkdir, workingRoot, cause), true
 	case "ls":
@@ -272,6 +278,29 @@ func nativeWorkdirRewriteRequired(cmd string, cause error) shellRejectionAlterna
 		OperatorProjection: "Raw shell was rejected, and its workdir/path semantics could not be represented safely. Rewrite it as an explicit typed operation before execution.",
 		Reason:             shellRejectionReasonFromError(cause),
 	}
+}
+
+func nativeStdinRewriteRequired(cmd string, cause error) shellRejectionAlternative {
+	return shellRejectionAlternative{
+		State:              session.NextActionWaitingForOperator,
+		OperationKind:      "typed_operation_required",
+		OperationTool:      "update_operation",
+		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"reason": "stdin_semantics_not_native_file_path", "command": cmd})),
+		NextAction:         "rewrite stdin-dependent shell semantics as an explicit typed operation",
+		RequiredAuthority:  "typed_operation_required",
+		RetryPolicy:        "do_not_execute_native_guess",
+		OperatorProjection: "Raw shell used stdin semantics that read_file cannot represent. Rewrite it as an explicit typed operation before execution.",
+		Reason:             shellRejectionReasonFromError(cause),
+	}
+}
+
+func pathsContainStdin(paths []string) bool {
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "-" {
+			return true
+		}
+	}
+	return false
 }
 
 func nativeAlternativePath(path string, rawWorkdir string, workingRoot string) (string, bool) {
