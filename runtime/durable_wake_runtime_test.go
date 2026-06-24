@@ -735,8 +735,45 @@ func TestRunDurableAgentChildWakeSkipsWhenAgentAlreadyAwake(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
 	}
-	if pending := updatedContinuity.PendingParentConversationMessages(10); len(pending) != 1 {
+	pending := updatedContinuity.PendingParentConversationMessages(10)
+	if len(pending) != 1 {
 		t.Fatalf("pending parent messages = %d, want still pending after skipped wake", len(pending))
+	}
+	taskPacketID := pending[0].MessageID
+	packet, ok, err := store.ChildTaskPacket(taskPacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(skipped wake) err = %v", err)
+	}
+	if !ok {
+		t.Fatalf("ChildTaskPacket(%s) ok=false, want queued/claimed packet", taskPacketID)
+	}
+	if packet.Status != session.ChildTaskPacketInProgress || packet.LeaseReleasedAt.IsZero() {
+		t.Fatalf("skipped wake packet = %#v, want in-progress packet with released attempt lease", packet)
+	}
+	wakeKey := session.SessionKey{ChatID: durableWakeSyntheticChatID(agent.AgentID), Scope: durableAgentScopeRef(agent)}
+	open, err := store.OpenNextActionsBySession(wakeKey, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(skipped wake) err = %v", err)
+	}
+	for _, action := range open {
+		if action.SubjectKind == "task_packet" && action.SubjectRef == taskPacketID && action.State == session.NextActionWaitingForChild {
+			t.Fatalf("open next actions = %#v, want no stale waiting_for_child action for skipped packet", open)
+		}
+	}
+	claimAt := time.Now().UTC()
+	secondClaim, err := store.ClaimChildTaskAttempt(session.ChildTaskAttemptClaimInput{
+		PacketID:       taskPacketID,
+		AttemptID:      "child_attempt:post-skip-claim",
+		LeaseOwner:     "test_worker:post-skip",
+		Key:            wakeKey,
+		ClaimedAt:      claimAt,
+		LeaseExpiresAt: claimAt.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("ClaimChildTaskAttempt(after skipped release) err = %v", err)
+	}
+	if secondClaim.LeaseGeneration <= packet.LeaseGeneration || secondClaim.LeaseOwner != "test_worker:post-skip" || secondClaim.LeaseReleasedAt.IsZero() == false {
+		t.Fatalf("second claim after skip = %#v previous = %#v, want later owner to claim released packet", secondClaim, packet)
 	}
 	events, err := store.ExecutionEventsBySession(rt.durableAgentExecutionKey(agent.AgentID), 0, 50)
 	if err != nil {
