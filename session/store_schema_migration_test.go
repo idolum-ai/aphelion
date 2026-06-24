@@ -1497,10 +1497,10 @@ func TestMigratesSchemaV75ToV76NextActionOperations(t *testing.T) {
 	assertSQLiteColumn(t, store.db, "next_action_records", "operation_input_json")
 }
 
-func TestCurrentSchemaRepairsNextActionOperationColumns(t *testing.T) {
+func TestCurrentSchemaRepairsLegacyColumnDrift(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "sessions-current-next-action-drift.db")
+	dbPath := filepath.Join(t.TempDir(), "sessions-current-shape-drift.db")
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		t.Fatalf("open current drift db: %v", err)
@@ -1533,6 +1533,168 @@ func TestCurrentSchemaRepairsNextActionOperationColumns(t *testing.T) {
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			resolved_at TEXT
 		)`,
+		`CREATE TABLE review_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			source_session_id TEXT,
+			source_chat_id INTEGER NOT NULL DEFAULT 0,
+			source_user_id INTEGER NOT NULL DEFAULT 0,
+			source_role TEXT NOT NULL,
+			source_scope_kind TEXT NOT NULL DEFAULT '',
+			source_scope_id TEXT NOT NULL DEFAULT '',
+			source_durable_agent_id TEXT NOT NULL DEFAULT '',
+			target_session_id TEXT,
+			target_chat_id INTEGER NOT NULL DEFAULT 0,
+			target_scope_kind TEXT NOT NULL DEFAULT '',
+			target_scope_id TEXT NOT NULL DEFAULT '',
+			target_durable_agent_id TEXT NOT NULL DEFAULT '',
+			turn_from INTEGER,
+			turn_to INTEGER,
+			summary TEXT NOT NULL,
+			metadata_json TEXT,
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			delivered_at TEXT
+		)`,
+		`CREATE TABLE capability_invocations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			grant_id TEXT NOT NULL,
+			principal TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			error_text TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			turn_run_id INTEGER NOT NULL DEFAULT 0,
+			continuation_lease_id TEXT NOT NULL DEFAULT '',
+			operation_plan_lease_id TEXT NOT NULL DEFAULT '',
+			authority_source TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE turn_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL,
+			status TEXT NOT NULL,
+			request_text TEXT NOT NULL,
+			started_at TEXT NOT NULL DEFAULT (datetime('now')),
+			completed_at TEXT,
+			last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
+			last_tool_name TEXT,
+			last_tool_preview TEXT,
+			tool_calls_started INTEGER NOT NULL DEFAULT 0,
+			tool_calls_finished INTEGER NOT NULL DEFAULT 0,
+			last_tool_result_preview TEXT,
+			last_tool_error TEXT,
+			progress_message_id INTEGER,
+			error_text TEXT,
+			recovery_summary TEXT,
+			recovery_logged_at TEXT
+		)`,
+		`CREATE TABLE approval_window_offers (
+			offer_id TEXT PRIMARY KEY,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			admin_user_id INTEGER NOT NULL DEFAULT 0,
+			session_id TEXT NOT NULL DEFAULT '',
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			source_kind TEXT NOT NULL DEFAULT '',
+			source_id TEXT NOT NULL DEFAULT '',
+			source_decision_kind TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			expires_at TEXT NOT NULL,
+			used_at TEXT,
+			closed_at TEXT,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE telegram_media_thread_pickers (
+			chat_id INTEGER NOT NULL,
+			picker_message_id INTEGER NOT NULL,
+			source_message_id INTEGER NOT NULL DEFAULT 0,
+			inbound_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			PRIMARY KEY(chat_id, picker_message_id)
+		)`,
+		`CREATE TABLE durable_agent_remote_enrollments (
+			agent_id TEXT PRIMARY KEY,
+			parent_control_url TEXT NOT NULL DEFAULT '',
+			protocol_version TEXT NOT NULL DEFAULT 'v1',
+			status TEXT NOT NULL DEFAULT 'active',
+			last_sequence INTEGER NOT NULL DEFAULT 0,
+			enrolled_at TEXT,
+			last_seen_at TEXT,
+			revoked_at TEXT,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE durable_agent_control_receipts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			agent_id TEXT NOT NULL,
+			message_id TEXT NOT NULL,
+			message_kind TEXT NOT NULL,
+			sequence INTEGER NOT NULL,
+			received_at TEXT NOT NULL DEFAULT (datetime('now')),
+			UNIQUE(agent_id, message_id)
+		)`,
+		`CREATE TABLE child_task_packets (
+			packet_id TEXT PRIMARY KEY,
+			task_lease_id TEXT NOT NULL DEFAULT '',
+			agent_id TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			task_kind TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'queued',
+			authority_kind TEXT NOT NULL DEFAULT '',
+			authority_id TEXT NOT NULL DEFAULT '',
+			grant_id TEXT NOT NULL DEFAULT '',
+			request_id TEXT NOT NULL DEFAULT '',
+			target_resource TEXT NOT NULL DEFAULT '',
+			required_action TEXT NOT NULL DEFAULT '',
+			input_json TEXT NOT NULL DEFAULT '{}',
+			result_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			terminal_at TEXT
+		)`,
+		`CREATE TABLE child_task_results (
+			result_id TEXT PRIMARY KEY,
+			packet_id TEXT NOT NULL,
+			task_lease_id TEXT NOT NULL DEFAULT '',
+			agent_id TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			result_kind TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			blocker_kind TEXT NOT NULL DEFAULT '',
+			error_text TEXT NOT NULL DEFAULT '',
+			evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+			next_state TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE child_task_outcome_intents (
+			intent_id TEXT PRIMARY KEY,
+			packet_id TEXT NOT NULL DEFAULT '',
+			result_id TEXT NOT NULL DEFAULT '',
+			attempt_id TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			payload_json TEXT NOT NULL DEFAULT '{}',
+			result_ref TEXT NOT NULL DEFAULT '',
+			attempts INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			applied_at TEXT
+		)`,
 		fmt.Sprintf(`INSERT INTO schema_version(version) VALUES (%d)`, schemaVersion),
 	} {
 		if _, err := db.Exec(stmt); err != nil {
@@ -1552,6 +1714,23 @@ func TestCurrentSchemaRepairsNextActionOperationColumns(t *testing.T) {
 	assertSQLiteColumn(t, store.db, "next_action_records", "operation_kind")
 	assertSQLiteColumn(t, store.db, "next_action_records", "operation_tool")
 	assertSQLiteColumn(t, store.db, "next_action_records", "operation_input_json")
+	assertSQLiteColumn(t, store.db, "review_events", "delivery_message_id")
+	assertSQLiteColumn(t, store.db, "review_events", "idempotency_key")
+	assertSQLiteColumn(t, store.db, "capability_invocations", "outcome_status")
+	assertSQLiteColumn(t, store.db, "capability_invocations", "outcome_error_text")
+	assertSQLiteColumn(t, store.db, "capability_invocations", "completed_at")
+	assertSQLiteColumn(t, store.db, "turn_runs", "turn_index")
+	assertSQLiteColumn(t, store.db, "turn_runs", "provider_cache_write_tokens")
+	assertSQLiteColumn(t, store.db, "approval_window_offers", "opened_lease_id")
+	assertSQLiteColumn(t, store.db, "approval_window_offers", "opened_override_id")
+	assertSQLiteColumn(t, store.db, "telegram_media_thread_pickers", "source_ingress_surface")
+	assertSQLiteColumn(t, store.db, "telegram_media_thread_pickers", "source_ingress_update_id")
+	assertSQLiteColumn(t, store.db, "durable_agent_remote_enrollments", "tailnet_tags_json")
+	assertSQLiteColumn(t, store.db, "durable_agent_control_receipts", "response_json")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_owner")
+	assertSQLiteColumn(t, store.db, "child_task_results", "intent_set_fingerprint")
+	assertSQLiteColumn(t, store.db, "child_task_outcome_intents", "idempotency_key")
+	assertSQLiteColumn(t, store.db, "child_task_outcome_intents", "dead_letter_at")
 	if summary, err := store.VerifyCriticalSchemaShape(); err != nil {
 		t.Fatalf("VerifyCriticalSchemaShape() err = %v", err)
 	} else if !strings.Contains(summary, "schema_version=") || !strings.Contains(summary, "critical_columns=") {

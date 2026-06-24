@@ -797,7 +797,7 @@ func (s *SQLiteStore) init() error {
 	if err := ensureChildTaskTables(tx); err != nil {
 		return err
 	}
-	if err := ensureReviewEventIdempotencyKey(tx); err != nil {
+	if err := ensureCurrentSchemaShapeRepairColumns(tx); err != nil {
 		return err
 	}
 	for _, stmt := range telegramIngressSchemaStatements() {

@@ -9,6 +9,10 @@ import (
 )
 
 func migrateSchemaV43ToV44(tx *sql.Tx) error {
+	return ensureDurableAgentRemoteEnrollmentTailnetColumns(tx)
+}
+
+func ensureDurableAgentRemoteEnrollmentTailnetColumns(tx *sql.Tx) error {
 	for _, column := range []schemaColumnMigration{
 		{
 			table:     "durable_agent_remote_enrollments",
@@ -276,17 +280,22 @@ func migrateSchemaV61ToV62(tx *sql.Tx) error {
 }
 
 func migrateSchemaV62ToV63(tx *sql.Tx) error {
+	return ensureReviewEventDeliveryMessageID(tx)
+}
+
+func ensureReviewEventDeliveryMessageID(tx *sql.Tx) error {
 	exists, err := schemaTableExists(tx, "review_events")
 	if err != nil {
-		return fmt.Errorf("migrate schema v62 to v63 inspect review_events: %w", err)
+		return fmt.Errorf("inspect review_events delivery_message_id column: %w", err)
 	}
 	if !exists {
 		return nil
 	}
-	if _, err := tx.Exec(`ALTER TABLE review_events ADD COLUMN delivery_message_id INTEGER NOT NULL DEFAULT 0`); err != nil {
-		return fmt.Errorf("migrate schema v62 to v63 add review event delivery message id: %w", err)
-	}
-	return nil
+	return addSchemaColumnIfMissing(tx, schemaColumnMigration{
+		table:     "review_events",
+		column:    "delivery_message_id",
+		statement: `ALTER TABLE review_events ADD COLUMN delivery_message_id INTEGER NOT NULL DEFAULT 0`,
+	})
 }
 
 func migrateSchemaV63ToV64(tx *sql.Tx) error {
@@ -463,6 +472,31 @@ func ensureTurnRunAccountingColumns(tx *sql.Tx) error {
 			AND turn_index > 0
 	`); err != nil {
 		return fmt.Errorf("backfill turn run char accounting: %w", err)
+	}
+	return nil
+}
+
+func ensureCurrentSchemaShapeRepairColumns(tx *sql.Tx) error {
+	repairs := []struct {
+		name string
+		fn   func(*sql.Tx) error
+	}{
+		{name: "durable agent remote tailnet columns", fn: ensureDurableAgentRemoteEnrollmentTailnetColumns},
+		{name: "operator auto scope columns", fn: ensureOperatorAutoScopeColumns},
+		{name: "scoped decision columns", fn: ensureScopedDecisionColumns},
+		{name: "approval window offer opened columns", fn: ensureApprovalWindowOfferOpenedColumns},
+		{name: "review event delivery message id", fn: ensureReviewEventDeliveryMessageID},
+		{name: "turn run accounting columns", fn: ensureTurnRunAccountingColumns},
+		{name: "telegram media picker ingress columns", fn: ensureTelegramMediaPickerSourceIngressColumns},
+		{name: "capability invocation outcome columns", fn: ensureCapabilityInvocationOutcomeColumns},
+		{name: "next action operation columns", fn: ensureNextActionOperationColumns},
+		{name: "child task lease columns", fn: ensureChildTaskLeaseColumns},
+		{name: "review event idempotency key", fn: ensureReviewEventIdempotencyKey},
+	}
+	for _, repair := range repairs {
+		if err := repair.fn(tx); err != nil {
+			return fmt.Errorf("ensure current schema shape %s: %w", repair.name, err)
+		}
 	}
 	return nil
 }
