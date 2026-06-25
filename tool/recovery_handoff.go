@@ -52,6 +52,7 @@ func compileContinuationLeaseRecoveryHandoff(requirement missingContinuationLeas
 		"tool_action":           requirement.ToolAction,
 		"grant_id":              requirement.GrantID,
 		"grant_target_resource": requirement.GrantTargetResource,
+		"request_instance_id":   requirement.RequestInstanceID,
 		"retry_after_lease":     true,
 	}
 	if requirement.AgentID != "" {

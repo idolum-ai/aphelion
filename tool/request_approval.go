@@ -236,20 +236,34 @@ func (r *Registry) requestContinuationLeaseApproval(in requestApprovalInput, key
 func requestApprovalOperationStateForContinuation(current session.OperationState, in requestApprovalInput, requirement missingContinuationLeaseRequirement, state session.ContinuationState, whyNow string, boundedEffect string, now time.Time) session.OperationState {
 	current = session.NormalizeOperationState(current)
 	summary := requestApprovalContinuationLeaseSummary(requirement)
-	current.Status = session.OperationStatusBlocked
-	current.Stage = "approval_request"
 	if strings.TrimSpace(current.ID) == "" {
 		current.ID = generatedOperationID("op")
 	}
 	current.Objective = firstNonEmptyTool(strings.TrimSpace(in.Objective), current.Objective, summary)
-	current.Summary = "Button-backed continuation lease requested: " + summary
+	proposalStatus := session.ProposalStatusPending
+	switch state.ContinuationLease.Status {
+	case session.ContinuationLeaseStatusActive:
+		current.Status = session.OperationStatusActive
+		current.Stage = "approval_active"
+		current.Summary = "Continuation lease already approved and active: " + summary
+		proposalStatus = session.ProposalStatusApproved
+	case session.ContinuationLeaseStatusConsumed:
+		current.Status = session.OperationStatusCompleted
+		current.Stage = "approval_consumed"
+		current.Summary = "Continuation lease already consumed: " + summary
+		proposalStatus = session.ProposalStatusApproved
+	default:
+		current.Status = session.OperationStatusBlocked
+		current.Stage = "approval_request"
+		current.Summary = "Button-backed continuation lease requested: " + summary
+	}
 	current.Proposal = session.OperationProposal{
 		ID:            state.DecisionID,
 		Kind:          string(requirement.LeaseClass),
 		Summary:       summary,
 		WhyNow:        whyNow,
 		BoundedEffect: boundedEffect,
-		Status:        session.ProposalStatusPending,
+		Status:        proposalStatus,
 		UpdatedAt:     now,
 	}
 	current.UpdatedAt = now
@@ -276,6 +290,7 @@ func requestApprovalContinuationLeaseRequirement(in requestApprovalInput) (missi
 		Resource:            strings.TrimSpace(in.Resource),
 		GrantID:             strings.TrimSpace(in.GrantID),
 		GrantTargetResource: strings.TrimSpace(in.GrantTargetResource),
+		RequestInstanceID:   strings.TrimSpace(in.RequestInstanceID),
 		Principal:           strings.TrimSpace(in.Principal),
 		LeaseClass:          leaseClass,
 		AllowedActions:      append([]string(nil), in.AllowedActions...),
@@ -285,6 +300,9 @@ func requestApprovalContinuationLeaseRequirement(in requestApprovalInput) (missi
 	})
 	if requirement.Principal == "" {
 		return missingContinuationLeaseRequirement{}, fmt.Errorf("request_approval continuation principal is required")
+	}
+	if requirement.RequestInstanceID == "" {
+		return missingContinuationLeaseRequirement{}, fmt.Errorf("request_approval continuation request_instance_id is required")
 	}
 	if len(requirement.AllowedActions) == 0 {
 		return missingContinuationLeaseRequirement{}, fmt.Errorf("request_approval continuation allowed_actions is required")
@@ -412,12 +430,23 @@ func requestApprovalContinuationLeaseConstraints(requirement missingContinuation
 }
 
 func requestApprovalContinuationLeaseStableIDs(requirement missingContinuationLeaseRequirement) (string, string, string) {
-	token := strings.TrimPrefix(requestApprovalContinuationLeaseContractHash(requirement), "sha256:")
+	token := strings.TrimPrefix(requestApprovalContinuationLeaseIdentityHash(requirement), "sha256:")
 	if len(token) > 24 {
 		token = token[:24]
 	}
 	decisionID := "lease-request-" + token
 	return "aprop-" + token, decisionID, "lease-" + token
+}
+
+func requestApprovalContinuationLeaseIdentityHash(requirement missingContinuationLeaseRequirement) string {
+	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
+	payload := map[string]any{
+		"request_instance_id": requirement.RequestInstanceID,
+		"contract_hash":       requestApprovalContinuationLeaseContractHash(requirement),
+	}
+	raw, _ := json.Marshal(payload)
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func requestApprovalContinuationLeaseContractHash(requirement missingContinuationLeaseRequirement) string {
@@ -462,7 +491,12 @@ func requestApprovalContinuationStateIsLive(state session.ContinuationState) boo
 	if state.Status != session.ContinuationStatusPending && state.Status != session.ContinuationStatusApproved {
 		return false
 	}
-	return continuationLeaseStillLiveForRequestApproval(state.ContinuationLease.Status)
+	switch state.ContinuationLease.Status {
+	case session.ContinuationLeaseStatusPending, session.ContinuationLeaseStatusActive:
+		return true
+	default:
+		return false
+	}
 }
 
 func continuationLeaseStillLiveForRequestApproval(status session.ContinuationLeaseStatus) bool {
@@ -571,6 +605,7 @@ func requestApprovalToolDefinition() agent.ToolDef {
 				"tool_action": {"type": "string", "description": "Tool action that will consume the requested lease"},
 				"grant_id": {"type": "string", "description": "Capability grant that already authorizes the tool/resource but still needs a continuation lease"},
 				"grant_target_resource": {"type": "string", "description": "Capability grant target resource"},
+				"request_instance_id": {"type": "string", "description": "Stable recovery request instance id. Replays must preserve this id; a new approval request with the same contract must use a new id."},
 				"agent_id": {"type": "string", "description": "Named durable child for child_wake lease requests"},
 				"resource": {"type": "string", "description": "Named resource for data/resource lease requests"},
 				"retry_after_lease": {"type": "boolean", "description": "True when the blocked invocation should be retried only after the lease is approved"},
@@ -622,7 +657,7 @@ func requestApprovalToolDefinition() agent.ToolDef {
 			},
 			"anyOf": [
 				{"required": ["phase"]},
-				{"required": ["action", "lease_class", "principal", "allowed_actions"]}
+				{"required": ["action", "lease_class", "principal", "allowed_actions", "request_instance_id"]}
 			]
 		}`),
 	}

@@ -201,6 +201,7 @@ func TestRecoveryHandoffCompilersProduceConsumerValidatedPayloads(t *testing.T) 
 		},
 		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
 	)
+	leaseReq.RequestInstanceID = "test-compiler-child-wake-request"
 	leaseOp, err := compileContinuationLeaseRecoveryHandoff(leaseReq)
 	if err != nil {
 		t.Fatalf("compileContinuationLeaseRecoveryHandoff() err = %v", err)
@@ -312,6 +313,7 @@ func TestRequestContinuationLeaseApprovalIsReplaySafeAndBoundToGrant(t *testing.
 		"tool_action":"list_dir",
 		"grant_id":"capg-runtime-read",
 		"grant_target_resource":"/child/runtime-bin",
+		"request_instance_id":"test-runtime-read-request-1",
 		"resource":"/child/runtime-bin",
 		"retry_after_lease":true
 	}`)
@@ -355,6 +357,31 @@ func TestRequestContinuationLeaseApprovalIsReplaySafeAndBoundToGrant(t *testing.
 	}
 	if afterActive.ContinuationLease.ID != active.ContinuationLease.ID || afterActive.ContinuationLease.Status != session.ContinuationLeaseStatusActive {
 		t.Fatalf("active replay continuation = %#v, want unchanged active lease %#v", afterActive, active)
+	}
+	activeOp, err := registry.store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState(after active replay) err = %v", err)
+	}
+	if activeOp.Status != session.OperationStatusActive || activeOp.Stage != "approval_active" || activeOp.Proposal.Status != session.ProposalStatusApproved {
+		t.Fatalf("operation after active replay = %#v, want active/approved projection", activeOp)
+	}
+
+	consumed := afterActive
+	consumed.ContinuationLease.Status = session.ContinuationLeaseStatusConsumed
+	consumed.ContinuationLease.RemainingTurns = 0
+	consumed.RemainingTurns = 0
+	if err := registry.store.UpdateContinuationState(key, consumed); err != nil {
+		t.Fatalf("UpdateContinuationState(consumed) err = %v", err)
+	}
+	if _, err := registry.executeWithScopeAndPrincipal(context.Background(), "request_approval", raw, scope, actor, key); err != nil {
+		t.Fatalf("replay against consumed matching continuation err = %v", err)
+	}
+	consumedOp, err := registry.store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState(after consumed replay) err = %v", err)
+	}
+	if consumedOp.Status != session.OperationStatusCompleted || consumedOp.Stage != "approval_consumed" || consumedOp.Proposal.Status != session.ProposalStatusApproved {
+		t.Fatalf("operation after consumed replay = %#v, want consumed/approved projection", consumedOp)
 	}
 
 	conflictKey := session.SessionKey{ChatID: 88107, UserID: 1001}

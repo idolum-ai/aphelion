@@ -277,6 +277,7 @@ func TestRequestApprovalContinuationLeaseRejectsConflictingChildWakeConstraint(t
 			"constraints":{"agent_id":"child-beta"},
 			"tool":"durable_agent",
 			"tool_action":"wake_once",
+			"request_instance_id":"test-conflicting-child-wake-request",
 			"agent_id":"child-alpha"
 		}`),
 	)

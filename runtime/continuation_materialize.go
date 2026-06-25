@@ -18,9 +18,9 @@ func (r *Runtime) MaterializeRequestedApproval(ctx context.Context, key session.
 	return r.materializePendingOperationProposalApproval(ctx, key, msg, promptInput, nil)
 }
 
-func continuationApprovalAlreadyOffered(state session.ContinuationState, store *session.SQLiteStore, key session.SessionKey) bool {
+func continuationApprovalAlreadyOffered(state session.ContinuationState, store *session.SQLiteStore, key session.SessionKey) (bool, error) {
 	if store == nil {
-		return false
+		return false, nil
 	}
 	state = session.NormalizeContinuationState(state)
 	leaseID := strings.TrimSpace(state.ContinuationLease.ID)
@@ -30,10 +30,10 @@ func continuationApprovalAlreadyOffered(state session.ContinuationState, store *
 	for {
 		events, err := store.ExecutionEventsBySession(key, afterSeq, 200)
 		if err != nil {
-			return false
+			return false, err
 		}
 		if len(events) == 0 {
-			return false
+			return false, nil
 		}
 		for _, event := range events {
 			afterSeq = event.Seq
@@ -48,17 +48,17 @@ func continuationApprovalAlreadyOffered(state session.ContinuationState, store *
 				continue
 			}
 			if leaseID != "" && continuationPayloadString(payload, "lease_id") == leaseID {
-				return true
+				return true, nil
 			}
 			if proposalID != "" && continuationPayloadString(payload, "proposal_id") == proposalID {
-				return true
+				return true, nil
 			}
 			if decisionID != "" && continuationPayloadString(payload, "decision_id") == decisionID {
-				return true
+				return true, nil
 			}
 		}
 		if len(events) < 200 {
-			return false
+			return false, nil
 		}
 	}
 }
@@ -83,7 +83,9 @@ func (r *Runtime) sendAndRecordContinuationOfferLocked(ctx context.Context, key 
 		payload = continuationExecutionPayload(state)
 	}
 	payload["delivery_status"] = "delivered"
-	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "delivered", payload, at)
+	if _, err := r.appendExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "delivered", payload, at); err != nil {
+		return fmt.Errorf("record delivered continuation offer: %w", err)
+	}
 	return nil
 }
 
@@ -409,7 +411,11 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 	}
 	priorState = session.NormalizeContinuationState(priorState)
 	if priorExists && priorState.Status == session.ContinuationStatusPending && operationProposalMatchesContinuation(proposal, priorState) {
-		if continuationApprovalAlreadyOffered(priorState, r.store, key) {
+		alreadyOffered, err := continuationApprovalAlreadyOffered(priorState, r.store, key)
+		if err != nil {
+			return false, fmt.Errorf("read delivered continuation offers: %w", err)
+		}
+		if alreadyOffered {
 			return true, nil
 		}
 		payload := continuationExecutionPayload(priorState)

@@ -211,6 +211,7 @@ func TestRequestApprovalContinuationLeaseRequestMaterializesAndApprovesExactChil
 			"tool_action":"wake_once",
 			"grant_id":"grant-idolum-email-direct-no-content-wake-readiness",
 			"grant_target_resource":"durable_agent:idolum-email:wake_once",
+			"request_instance_id":"test-idolum-email-wake-request-1",
 			"agent_id":"idolum-email",
 			"retry_after_lease":true
 		}`),
@@ -343,6 +344,7 @@ func TestRequestApprovalMaterializeRetriesAfterFailedDelivery(t *testing.T) {
 			"tool_action":"wake_once",
 			"grant_id":"grant-child-alpha-wake",
 			"grant_target_resource":"durable_agent:child-alpha:wake_once",
+			"request_instance_id":"test-child-alpha-delivery-retry-request-1",
 			"agent_id":"child-alpha",
 			"retry_after_lease":true
 		}`),
@@ -413,6 +415,101 @@ func TestRequestApprovalMaterializeRetriesAfterFailedDelivery(t *testing.T) {
 	sender.mu.Unlock()
 	if inlineCount != 1 {
 		t.Fatalf("inline count after delivered retry = %d, want no duplicate", inlineCount)
+	}
+}
+
+func TestRequestApprovalSameContractNewInstanceAfterConsumedDeliversNewCard(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	key := session.SessionKey{ChatID: 9046, UserID: 0, Scope: telegramDMScopeRef(9046)}
+	base := `{
+		"action":"request_continuation_lease",
+		"objective":"Wake child-alpha exactly once.",
+		"lease_class":"child_wake",
+		"principal":"telegram:1001",
+		"allowed_actions":["wake_named_child"],
+		"constraints":{"agent_id":"child-alpha"},
+		"tool":"durable_agent",
+		"tool_action":"wake_once",
+		"grant_id":"grant-child-alpha-wake",
+		"grant_target_resource":"durable_agent:child-alpha:wake_once",
+		"request_instance_id":"REQUEST_INSTANCE",
+		"agent_id":"child-alpha",
+		"retry_after_lease":true
+	}`
+	firstInput := json.RawMessage(strings.ReplaceAll(base, "REQUEST_INSTANCE", "repeat-contract-instance-1"))
+	if _, err := tools.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "request_approval", firstInput); err != nil {
+		t.Fatalf("first request_approval err = %v", err)
+	}
+	if materialized, err := rt.MaterializeRequestedApproval(context.Background(), key, core.InboundMessage{ChatID: 9046, SenderID: 1001, Text: "continue", MessageID: 1}, "continue"); err != nil || !materialized {
+		t.Fatalf("first MaterializeRequestedApproval materialized=%v err=%v, want delivered", materialized, err)
+	}
+	first, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(first) err = %v", err)
+	}
+	first.Status = session.ContinuationStatusApproved
+	first.RemainingTurns = 0
+	first.ContinuationLease.Status = session.ContinuationLeaseStatusConsumed
+	first.ContinuationLease.RemainingTurns = 0
+	if err := store.UpdateContinuationState(key, first); err != nil {
+		t.Fatalf("UpdateContinuationState(consumed first) err = %v", err)
+	}
+
+	secondInput := json.RawMessage(strings.ReplaceAll(base, "REQUEST_INSTANCE", "repeat-contract-instance-2"))
+	if _, err := tools.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "request_approval", secondInput); err != nil {
+		t.Fatalf("second request_approval err = %v", err)
+	}
+	second, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(second) err = %v", err)
+	}
+	if second.ContinuationLease.ID == first.ContinuationLease.ID || second.DecisionID == first.DecisionID {
+		t.Fatalf("second continuation = %#v reused first consumed identity %#v", second, first)
+	}
+	if second.ContinuationLease.PlanHash != first.ContinuationLease.PlanHash {
+		t.Fatalf("second contract hash = %q, want same contract hash as first %q", second.ContinuationLease.PlanHash, first.ContinuationLease.PlanHash)
+	}
+	if materialized, err := rt.MaterializeRequestedApproval(context.Background(), key, core.InboundMessage{ChatID: 9046, SenderID: 1001, Text: "continue second", MessageID: 2}, "continue second"); err != nil || !materialized {
+		t.Fatalf("second MaterializeRequestedApproval materialized=%v err=%v, want delivered", materialized, err)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 2 {
+		t.Fatalf("inline count = %d, want one delivered card per request instance", inlineCount)
+	}
+	if deliveredContinuationOfferCount(t, store, key) != 2 {
+		t.Fatalf("delivered offers = %d, want two distinct delivered request instances", deliveredContinuationOfferCount(t, store, key))
+	}
+
+	if materialized, err := rt.MaterializeRequestedApproval(context.Background(), key, core.InboundMessage{ChatID: 9046, SenderID: 1001, Text: "continue second again", MessageID: 3}, "continue second again"); err != nil || !materialized {
+		t.Fatalf("second retry MaterializeRequestedApproval materialized=%v err=%v, want idempotent handled", materialized, err)
+	}
+	sender.mu.Lock()
+	inlineCount = len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 2 {
+		t.Fatalf("inline count after second retry = %d, want no duplicate for same request instance", inlineCount)
 	}
 }
 

@@ -211,6 +211,7 @@ type requestApprovalInput struct {
 	ToolAction          string                    `json:"tool_action,omitempty"`
 	GrantID             string                    `json:"grant_id,omitempty"`
 	GrantTargetResource string                    `json:"grant_target_resource,omitempty"`
+	RequestInstanceID   string                    `json:"request_instance_id,omitempty"`
 	AgentID             string                    `json:"agent_id,omitempty"`
 	Resource            string                    `json:"resource,omitempty"`
 	RetryAfterLease     bool                      `json:"retry_after_lease,omitempty"`
