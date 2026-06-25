@@ -133,7 +133,7 @@ func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p pr
 	case "conversation_send":
 		return r.sendDurableAgentConversation(in)
 	case "wake_once":
-		return r.wakeDurableAgentOnce(ctx, in, p, key)
+		return r.wakeDurableAgentOnce(ctx, in, input, p, key)
 	case "delegation_request":
 		return r.requestDurableAgentDelegation(in, p, key)
 	case "delegation_report":

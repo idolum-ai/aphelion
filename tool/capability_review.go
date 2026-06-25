@@ -54,7 +54,7 @@ func (r *Registry) queueCapabilityRequestReviewEvent(record session.CapabilityRe
 	if summary == "" {
 		summary = capabilityRequestReviewSummary(record)
 	}
-	eventID, err := r.store.InsertReviewEvent(session.ReviewEvent{
+	eventID, err := r.store.EnsurePendingReviewEvent(session.ReviewEvent{
 		SourceChatID:      key.ChatID,
 		SourceUserID:      actor.TelegramUserID,
 		SourceRole:        "capability_request",
@@ -63,6 +63,7 @@ func (r *Registry) queueCapabilityRequestReviewEvent(record session.CapabilityRe
 		TargetScope:       target.Scope,
 		Summary:           summary,
 		MetadataJSON:      string(raw),
+		IdempotencyKey:    capabilityRequestReviewEventIdempotencyKey(target, record.RequestID),
 	})
 	if err != nil {
 		return 0, err
@@ -71,6 +72,23 @@ func (r *Registry) queueCapabilityRequestReviewEvent(record session.CapabilityRe
 		return 0, err
 	}
 	return eventID, nil
+}
+
+func capabilityRequestReviewEventIdempotencyKey(target capabilityReviewTarget, requestID string) string {
+	requestID = strings.TrimSpace(requestID)
+	if target.ChatID == 0 || requestID == "" {
+		return ""
+	}
+	scope := session.NormalizeScopeRef(target.Scope)
+	parts := []string{
+		"capability_request_review",
+		fmt.Sprintf("chat:%d", target.ChatID),
+		"scope_kind:" + string(scope.Kind),
+		"scope_id:" + scope.ID,
+		"durable_agent:" + scope.DurableAgentID,
+		"request:" + requestID,
+	}
+	return strings.Join(parts, "|")
 }
 
 func capabilityRequestActorScope(actor principal.Principal) session.ScopeRef {

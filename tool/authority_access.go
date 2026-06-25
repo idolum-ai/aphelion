@@ -129,7 +129,11 @@ func (r *Registry) requireAuthorityToolAccess(ctx context.Context, name string, 
 			UseRef:       useRef,
 		}, true, nil
 	}
-	return session.CapabilityGrant{}, nil, false, fmt.Errorf("tool %q is not granted to principal %q", name, toolAuthorityPrincipalDisplay(p))
+	cause := fmt.Errorf("tool %q is not granted to principal %q", name, toolAuthorityPrincipalDisplay(p))
+	return session.CapabilityGrant{}, nil, false, missingGrantError{
+		requirement: genericMissingGrantRequirementForTool(name, p),
+		cause:       cause,
+	}
 }
 
 func capabilityInvocationWithAuthorityUseRef(invocation session.CapabilityInvocation, ref session.AuthorityUseRef) session.CapabilityInvocation {

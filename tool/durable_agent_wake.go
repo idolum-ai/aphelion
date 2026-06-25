@@ -4,6 +4,7 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -30,7 +31,7 @@ type durableAgentWakeOnceResult struct {
 	ErrorText              string
 }
 
-func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInput, p principal.Principal, key session.SessionKey) (string, error) {
+func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInput, rawInput json.RawMessage, p principal.Principal, key session.SessionKey) (out string, err error) {
 	if r.durableAgentWakeRunner == nil {
 		return "", fmt.Errorf("durable_agent wake_once requires durable child wake runtime")
 	}
@@ -42,10 +43,23 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 	if err != nil {
 		return "", err
 	}
+	grant, err := r.requireDurableAgentWakeOnceCapabilityGrant(agent.AgentID, rawInput, p)
+	if err != nil {
+		return "", err
+	}
 	useRef, err := r.requireDurableAgentWakeOnceAuthority(ctx, p, key, agent.AgentID)
 	if err != nil {
 		return "", err
 	}
+	permit, err := r.recordDurableAgentWakeOnceCapabilityInvocation(grant, p, useRef)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if recordErr := r.recordAuthorityManagedToolOutcome(permit, wakeOnceCapabilityOutcomeStatus(err), wakeOnceCapabilityOutcomeError(err)); recordErr != nil && err == nil {
+			err = recordErr
+		}
+	}()
 
 	_, beforeContinuity, err := r.loadDurableAgentContinuity(agent.AgentID)
 	if err != nil {
@@ -101,6 +115,138 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 		result.WakeStatus = "completed"
 	}
 	return renderDurableAgentWakeOnce(result), nil
+}
+
+func (r *Registry) requireDurableAgentWakeOnceCapabilityGrant(agentID string, input json.RawMessage, p principal.Principal) (session.CapabilityGrant, error) {
+	grant, ok, err := r.durableAgentWakeOnceCapabilityGrant(agentID, input, p)
+	if err != nil {
+		return session.CapabilityGrant{}, err
+	}
+	if ok {
+		return grant, nil
+	}
+	cause := fmt.Errorf("durable_agent wake_once does not have an active exact invoke grant for agent_id %q", strings.TrimSpace(agentID))
+	return session.CapabilityGrant{}, missingGrantError{
+		requirement: durableAgentWakeOnceMissingGrantRequirement(agentID, p),
+		cause:       cause,
+	}
+}
+
+func (r *Registry) durableAgentWakeOnceCapabilityGrant(agentID string, input json.RawMessage, p principal.Principal) (session.CapabilityGrant, bool, error) {
+	if r == nil || r.store == nil {
+		return session.CapabilityGrant{}, false, nil
+	}
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return session.CapabilityGrant{}, false, nil
+	}
+	candidates := append([]string{}, toolAuthorityPrincipalKeys(p)...)
+	candidates = append(candidates, toolAuthorityPrincipalDisplay(p))
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		grants, err := r.store.ActiveCapabilityGrants(session.CapabilityKindTool, "durable_agent", candidate, "invoke")
+		if err != nil {
+			return session.CapabilityGrant{}, false, err
+		}
+		for _, grant := range grants {
+			_, hasScope, err := capabilityGrantToolInvocationScope(grant)
+			if err != nil {
+				return session.CapabilityGrant{}, false, err
+			}
+			if !hasScope {
+				continue
+			}
+			if err := validateCapabilityToolInvocationInput(grant, input); err != nil {
+				continue
+			}
+			return grant, true, nil
+		}
+	}
+	return session.CapabilityGrant{}, false, nil
+}
+
+func durableAgentWakeOnceMissingGrantRequirement(agentID string, p principal.Principal) missingGrantRequirement {
+	agentID = strings.TrimSpace(agentID)
+	grantedTo := toolAuthorityCanonicalPrincipal(p)
+	contract := compactJSON(map[string]any{
+		"bounded_effect": "Allow invoking durable_agent wake_once for the named child only. The continuation child_wake lease still bounds each wake attempt and supplies the one-turn execution authority.",
+		"tool_name":      "durable_agent",
+		"tool_action":    "wake_once",
+		"agent_id":       agentID,
+	})
+	constraints := compactJSON(map[string]any{
+		"tool_invocation": map[string]any{
+			"actions": map[string]any{
+				"wake_once": map[string]any{
+					"selectors": map[string]any{
+						"agent_id": []string{agentID},
+					},
+					"required_selectors":      []string{"agent_id"},
+					"allowed_fields":          []string{"reason"},
+					"allow_additional_fields": false,
+				},
+			},
+		},
+	})
+	return missingGrantRequirement{
+		Kind:               session.CapabilityKindTool,
+		TargetResource:     "durable_agent",
+		GrantedTo:          grantedTo,
+		AllowedActions:     []string{"invoke"},
+		Contract:           contract,
+		Constraints:        constraints,
+		Purpose:            fmt.Sprintf("Allow exactly scoped durable_agent wake_once invocations for child %s; execution still requires a current child_wake continuation lease.", agentID),
+		RiskClass:          "authority",
+		ReviewSummary:      fmt.Sprintf("Approve durable_agent wake_once for child=%s requested_for=%s", agentID, grantedTo),
+		OperatorProjection: fmt.Sprintf("durable_agent wake_once for %s is blocked because %s lacks an exact active invoke grant. Review this request; after approval and grant materialization, retry the one wake attempt under a child_wake lease.", agentID, grantedTo),
+		OperationKind:      "capability_grant_review",
+		OperationTool:      "capability_authority",
+	}
+}
+
+func (r *Registry) recordDurableAgentWakeOnceCapabilityInvocation(grant session.CapabilityGrant, p principal.Principal, useRef session.AuthorityUseRef) (*authorityInvocationPermit, error) {
+	if r == nil || r.store == nil {
+		return nil, fmt.Errorf("durable_agent wake_once capability invocation requires transcript store")
+	}
+	principalID := toolAuthorityPrincipalDisplay(p)
+	invocation, err := r.store.RecordCapabilityInvocation(capabilityInvocationWithAuthorityUseRef(session.CapabilityInvocation{
+		GrantID:   grant.GrantID,
+		Principal: principalID,
+		Action:    "invoke",
+		Status:    "allowed",
+	}, useRef))
+	if err != nil {
+		return nil, err
+	}
+	return &authorityInvocationPermit{
+		InvocationID: invocation.InvocationID,
+		Grant:        grant,
+		Principal:    principalID,
+		Action:       "invoke",
+		UseRef:       useRef,
+	}, nil
+}
+
+func wakeOnceCapabilityOutcomeStatus(err error) string {
+	if err != nil {
+		return "failed"
+	}
+	return "completed"
+}
+
+func wakeOnceCapabilityOutcomeError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func (r *Registry) requireDurableAgentWakeOnceAuthority(ctx context.Context, p principal.Principal, key session.SessionKey, agentID string) (session.AuthorityUseRef, error) {

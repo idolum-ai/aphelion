@@ -398,12 +398,23 @@ func (s *SQLiteStore) CapabilityGrants(limit int, status CapabilityGrantStatus, 
 }
 
 func (s *SQLiteStore) ActiveCapabilityGrant(kind CapabilityKind, targetResource string, principal string, action string) (CapabilityGrant, bool, error) {
+	grants, err := s.ActiveCapabilityGrants(kind, targetResource, principal, action)
+	if err != nil {
+		return CapabilityGrant{}, false, err
+	}
+	if len(grants) == 0 {
+		return CapabilityGrant{}, false, nil
+	}
+	return grants[0], true, nil
+}
+
+func (s *SQLiteStore) ActiveCapabilityGrants(kind CapabilityKind, targetResource string, principal string, action string) ([]CapabilityGrant, error) {
 	kind = NormalizeCapabilityKind(kind)
 	targetResource = strings.TrimSpace(targetResource)
 	principal = strings.TrimSpace(principal)
 	action = normalizeEnumValue(action)
 	if kind == "" || targetResource == "" || principal == "" || action == "" {
-		return CapabilityGrant{}, false, nil
+		return nil, nil
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	rows, err := s.db.Query(capabilityGrantSelectSQL()+`
@@ -414,25 +425,25 @@ func (s *SQLiteStore) ActiveCapabilityGrant(kind CapabilityKind, targetResource 
 			AND revoked_at IS NULL
 			AND (expires_at IS NULL OR expires_at = '' OR expires_at > ?)
 		ORDER BY updated_at DESC, grant_id ASC
-		LIMIT 20
 	`, string(kind), targetResource, principal, string(CapabilityGrantStatusActive), now)
 	if err != nil {
-		return CapabilityGrant{}, false, fmt.Errorf("query active capability grant: %w", err)
+		return nil, fmt.Errorf("query active capability grants: %w", err)
 	}
 	defer rows.Close()
+	out := []CapabilityGrant{}
 	for rows.Next() {
 		grant, err := scanCapabilityGrant(rows)
 		if err != nil {
-			return CapabilityGrant{}, false, err
+			return nil, err
 		}
 		if capabilityGrantAllowsAction(grant, action) {
-			return grant, true, nil
+			out = append(out, grant)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return CapabilityGrant{}, false, fmt.Errorf("iterate active capability grants: %w", err)
+		return nil, fmt.Errorf("iterate active capability grants: %w", err)
 	}
-	return CapabilityGrant{}, false, nil
+	return out, nil
 }
 
 func (s *SQLiteStore) RecordCapabilityInvocation(invocation CapabilityInvocation) (CapabilityInvocation, error) {

@@ -66,13 +66,14 @@ func recordNextActionTx(tx *sql.Tx, input NextActionInput) (NextActionRecord, er
 		WHERE session_id = ?
 			AND subject_kind = ?
 			AND subject_ref = ?
+			AND record_id != ?
 			AND resolved_at IS NULL
-	`, createdAt.Format(time.RFC3339Nano), sessionID, input.SubjectKind, input.SubjectRef); err != nil {
+	`, createdAt.Format(time.RFC3339Nano), sessionID, input.SubjectKind, input.SubjectRef, input.RecordID); err != nil {
 		return NextActionRecord{}, fmt.Errorf("resolve prior next actions: %w", err)
 	}
 	causalRefs := encodeStringList(input.CausalRefs)
-	if _, err := tx.Exec(`
-		INSERT INTO next_action_records(
+	result, err := tx.Exec(`
+		INSERT OR IGNORE INTO next_action_records(
 			record_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
 			turn_run_id, owner, state, subject_kind, subject_ref, causal_refs_json,
 			next_action, required_authority, resource_blocker, verifier, retry_policy,
@@ -82,8 +83,17 @@ func recordNextActionTx(tx *sql.Tx, input NextActionInput) (NextActionRecord, er
 		input.TurnRunID, input.Owner, string(input.State), input.SubjectKind, input.SubjectRef, causalRefs,
 		input.NextAction, input.RequiredAuthority, input.ResourceBlocker, input.Verifier, input.RetryPolicy,
 		input.OperationKind, input.OperationTool, input.OperationInputJSON,
-		input.OperatorProjection, createdAt.Format(time.RFC3339Nano)); err != nil {
+		input.OperatorProjection, createdAt.Format(time.RFC3339Nano))
+	if err != nil {
 		return NextActionRecord{}, fmt.Errorf("insert next action %s: %w", input.RecordID, err)
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		if existing, ok, err := nextActionByRecordIDTx(tx, input.RecordID); err != nil {
+			return NextActionRecord{}, err
+		} else if ok {
+			return existing, nil
+		}
+		return NextActionRecord{}, fmt.Errorf("insert next action %s ignored without existing record", input.RecordID)
 	}
 	payload := map[string]any{
 		"record_id":           input.RecordID,

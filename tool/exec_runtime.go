@@ -77,6 +77,11 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	if err != nil {
 		return "", err
 	}
+	defer func() {
+		if err != nil {
+			err = r.materializeMissingGrantError(ctx, key, p, err)
+		}
+	}()
 	authorityGrant, authorityPermit, authorityManaged, err := r.requireAuthorityToolAccess(ctx, name, p, key, input)
 	if err != nil {
 		return "", err

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -101,6 +102,7 @@ func TestDurableAgentWakeOnceSkipsWithoutPendingParentMessage(t *testing.T) {
 	runner := &fakeDurableAgentWakeRunner{store: store}
 	registry.WithDurableAgentWakeRunner(runner)
 	upsertDurableAgentWakeTestAgent(t, store)
+	grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
 	ctx := contextWithDurableAgentWakeAuthority(t, store, adminSessionKey(), principal.Principal{Role: principal.RoleAdmin}, "lease-child-wake-skip", session.ContinuationLeaseClassChildWake, []string{durableAgentWakeOnceAction})
 
 	out, err := registry.ExecuteForSessionPrincipal(
@@ -153,6 +155,7 @@ func TestDurableAgentWakeOnceRequiresDurableRunAuthority(t *testing.T) {
 	registry, store := newDurableAgentToolRegistry(t)
 	registry.WithDurableAgentWakeRunner(&fakeDurableAgentWakeRunner{store: store})
 	upsertDurableAgentWakeTestAgent(t, store)
+	grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
 
 	_, err := registry.ExecuteForSessionPrincipal(
 		context.Background(),
@@ -166,12 +169,247 @@ func TestDurableAgentWakeOnceRequiresDurableRunAuthority(t *testing.T) {
 	}
 }
 
+func TestDurableAgentWakeOnceMissingGrantMaterializesReviewableRequest(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	runner := &fakeDurableAgentWakeRunner{store: store}
+	registry.WithDurableAgentWakeRunner(runner)
+	upsertDurableAgentWakeTestAgent(t, store)
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	ctx := contextWithDurableAgentWakeAuthority(t, store, adminSessionKey(), actor, "lease-child-wake-needs-grant", session.ContinuationLeaseClassChildWake, []string{durableAgentWakeOnceAction})
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		ctx,
+		actor,
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha","reason":"one no-content readiness attempt"}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "queued review request") {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once missing grant) err = %v, want queued review request", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("wake runner calls = %v, want no child wake before grant", runner.calls)
+	}
+	requests, err := store.CapabilityRequests(10, session.CapabilityReviewStatusProposed, session.CapabilityKindTool, "telegram:1001")
+	if err != nil {
+		t.Fatalf("CapabilityRequests() err = %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("CapabilityRequests() len = %d, want 1", len(requests))
+	}
+	request := requests[0]
+	if request.TargetResource != "durable_agent" || request.RequestedFor != "telegram:1001" {
+		t.Fatalf("request = %#v, want exact durable_agent request for telegram:1001", request)
+	}
+	for _, want := range []string{`"wake_once"`, `"agent_id":["child-alpha"]`, `"required_selectors":["agent_id"]`} {
+		if !strings.Contains(request.Constraints, want) {
+			t.Fatalf("request constraints = %s, want %s", request.Constraints, want)
+		}
+	}
+	pending, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(pending) != 1 || !strings.Contains(pending[0].MetadataJSON, request.RequestID) {
+		t.Fatalf("PendingReviewEvents() = %#v, want one capability review event for %s", pending, request.RequestID)
+	}
+	open, err := store.OpenNextActionsBySession(adminSessionKey(), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsAuthority || open[0].SubjectRef != request.RequestID {
+		t.Fatalf("open next actions = %#v, want blocked_needs_authority for %s", open, request.RequestID)
+	}
+	if !strings.Contains(open[0].OperationInputJSON, `"action":"grant_set"`) || !strings.Contains(open[0].OperationInputJSON, `"request_id":"`+request.RequestID+`"`) {
+		t.Fatalf("next action operation input = %s, want grant_set for request", open[0].OperationInputJSON)
+	}
+}
+
+func TestDurableAgentWakeOnceBroadGrantDoesNotSatisfyExactWakeGrant(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	runner := &fakeDurableAgentWakeRunner{store: store}
+	registry.WithDurableAgentWakeRunner(runner)
+	upsertDurableAgentWakeTestAgent(t, store)
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-durable-agent-broad",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "durable_agent",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(broad) err = %v", err)
+	}
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	ctx := contextWithDurableAgentWakeAuthority(t, store, adminSessionKey(), actor, "lease-child-wake-broad-grant", session.ContinuationLeaseClassChildWake, []string{durableAgentWakeOnceAction})
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		ctx,
+		actor,
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "queued review request") {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once broad grant) err = %v, want exact missing grant review", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("wake runner calls = %v, want no child wake under broad grant", runner.calls)
+	}
+}
+
+func TestDurableAgentWakeOnceExpiredGrantDoesNotAuthorizeWake(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	runner := &fakeDurableAgentWakeRunner{store: store}
+	registry.WithDurableAgentWakeRunner(runner)
+	upsertDurableAgentWakeTestAgent(t, store)
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	requirement := durableAgentWakeOnceMissingGrantRequirement("child-alpha", actor)
+	expiredGrant, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-durable-agent-wake-once-expired",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      requirement.GrantedTo,
+		Kind:           requirement.Kind,
+		TargetResource: requirement.TargetResource,
+		AllowedActions: requirement.AllowedActions,
+		Contract:       requirement.Contract,
+		Constraints:    requirement.Constraints,
+		Status:         session.CapabilityGrantStatusActive,
+		ExpiresAt:      time.Now().UTC().Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("UpsertCapabilityGrant(expired) err = %v", err)
+	}
+	ctx := contextWithDurableAgentWakeAuthority(t, store, adminSessionKey(), actor, "lease-child-wake-expired-grant", session.ContinuationLeaseClassChildWake, []string{durableAgentWakeOnceAction})
+
+	_, err = registry.ExecuteForSessionPrincipal(
+		ctx,
+		actor,
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "queued review request") {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once expired grant) err = %v, want missing grant review", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("wake runner calls = %v, want no wake under expired grant", runner.calls)
+	}
+	invocations, err := store.CapabilityInvocationsByGrant(expiredGrant.GrantID, 10)
+	if err != nil {
+		t.Fatalf("CapabilityInvocationsByGrant(expired) err = %v", err)
+	}
+	if len(invocations) != 0 {
+		t.Fatalf("expired grant invocations = %#v, want none", invocations)
+	}
+}
+
+func TestDurableAgentWakeOnceFindsValidGrantPastNoisyGrantRows(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	runner := &fakeDurableAgentWakeRunner{store: store}
+	registry.WithDurableAgentWakeRunner(runner)
+	upsertDurableAgentWakeTestAgent(t, store)
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", actor)
+	for i := 0; i < 250; i++ {
+		if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+			GrantID:        fmt.Sprintf("grant-noisy-durable-agent-%03d", i),
+			GrantedBy:      "telegram:1001",
+			GrantedTo:      "telegram:1001",
+			Kind:           session.CapabilityKindTool,
+			TargetResource: "durable_agent",
+			AllowedActions: []string{"invoke"},
+			Status:         session.CapabilityGrantStatusActive,
+		}); err != nil {
+			t.Fatalf("UpsertCapabilityGrant(noise %d) err = %v", i, err)
+		}
+	}
+	ctx := contextWithDurableAgentWakeAuthority(t, store, adminSessionKey(), actor, "lease-child-wake-noisy-grants", session.ContinuationLeaseClassChildWake, []string{durableAgentWakeOnceAction})
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		ctx,
+		actor,
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once noisy grants) err = %v", err)
+	}
+	if !strings.Contains(out, "wake_status: skipped_no_pending_parent_message") {
+		t.Fatalf("wake_once output = %q, want authorized skip without missing-grant request", out)
+	}
+	requests, err := store.CapabilityRequests(10, session.CapabilityReviewStatusProposed, session.CapabilityKindTool, "telegram:1001")
+	if err != nil {
+		t.Fatalf("CapabilityRequests() err = %v", err)
+	}
+	if len(requests) != 0 {
+		t.Fatalf("CapabilityRequests() = %#v, want no unnecessary missing-grant request", requests)
+	}
+}
+
+func TestMissingGrantMaterializationConcurrentDenialsLeaveOnePendingReview(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	requirement := durableAgentWakeOnceMissingGrantRequirement("child-alpha", actor)
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _, _, err := registry.materializeMissingGrantRequirement(context.Background(), key, actor, requirement, time.Now().UTC())
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("materializeMissingGrantRequirement concurrent err = %v", err)
+		}
+	}
+	pending, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("PendingReviewEvents() len = %d, want exactly one pending card: %#v", len(pending), pending)
+	}
+	if got := reviewEventRequestIDForWakeTest(pending[0]); got == "" || got != stableMissingGrantRequestID(requirement) {
+		t.Fatalf("pending review request id = %q, want %q", got, stableMissingGrantRequestID(requirement))
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsAuthority {
+		t.Fatalf("open next actions = %#v, want exactly one authority blocker", open)
+	}
+}
+
 func TestDurableAgentWakeOnceRequiresChildWakeAuthority(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
 	registry.WithDurableAgentWakeRunner(&fakeDurableAgentWakeRunner{store: store})
 	upsertDurableAgentWakeTestAgent(t, store)
+	grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
 	actor := principal.Principal{Role: principal.RoleAdmin}
 	ctx := contextWithDurableAgentWakeAuthority(t, store, adminSessionKey(), actor, "lease-data-access", session.ContinuationLeaseClassDataAccess, []string{"read_approved_resource"})
 
@@ -194,6 +432,7 @@ func TestDurableAgentWakeOnceCallsRunnerForPendingParentMessage(t *testing.T) {
 	runner := &fakeDurableAgentWakeRunner{store: store}
 	registry.WithDurableAgentWakeRunner(runner)
 	upsertDurableAgentWakeTestAgent(t, store)
+	grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
 	if _, _, err := store.UpdateDurableAgentContinuity("child-alpha", func(continuity core.DurableAgentContinuityState) (core.DurableAgentContinuityState, error) {
 		return continuity.WithConversationMessage("parent", "Please perform the approved no-content check.", time.Now().UTC()), nil
 	}); err != nil {
@@ -238,6 +477,7 @@ func TestDurableAgentWakeOnceAcceptsConsumedOneTurnLeaseSnapshot(t *testing.T) {
 	runner := &fakeDurableAgentWakeRunner{store: store}
 	registry.WithDurableAgentWakeRunner(runner)
 	upsertDurableAgentWakeTestAgent(t, store)
+	grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
 	if _, _, err := store.UpdateDurableAgentContinuity("child-alpha", func(continuity core.DurableAgentContinuityState) (core.DurableAgentContinuityState, error) {
 		return continuity.WithConversationMessage("parent", "Use the approved one-turn wake.", time.Now().UTC()), nil
 	}); err != nil {
@@ -283,6 +523,7 @@ func TestDurableAgentWakeOnceRequiresExactAgentConstraint(t *testing.T) {
 	registry, store := newDurableAgentToolRegistry(t)
 	registry.WithDurableAgentWakeRunner(&fakeDurableAgentWakeRunner{store: store})
 	upsertDurableAgentWakeTestAgent(t, store)
+	grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
 	if _, _, err := store.UpdateDurableAgentContinuity("child-alpha", func(continuity core.DurableAgentContinuityState) (core.DurableAgentContinuityState, error) {
 		return continuity.WithConversationMessage("parent", "Attempt the wrong constrained wake.", time.Now().UTC()), nil
 	}); err != nil {
@@ -322,6 +563,7 @@ func TestDurableAgentWakeOnceRequiresExactAgentID(t *testing.T) {
 	registry, store := newDurableAgentToolRegistry(t)
 	registry.WithDurableAgentWakeRunner(&fakeDurableAgentWakeRunner{store: store})
 	upsertDurableAgentWakeTestAgent(t, store)
+	grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
 	ctx := contextWithDurableAgentWakeAuthority(t, store, adminSessionKey(), principal.Principal{Role: principal.RoleAdmin}, "lease-child-wake-exact-id", session.ContinuationLeaseClassChildWake, []string{durableAgentWakeOnceAction})
 
 	_, err := registry.ExecuteForSessionPrincipal(
@@ -343,6 +585,7 @@ func TestDurableAgentWakeOnceClaimsLeaseOnce(t *testing.T) {
 	runner := &fakeDurableAgentWakeRunner{err: fmt.Errorf("wake runtime unavailable after claim")}
 	registry.WithDurableAgentWakeRunner(runner)
 	upsertDurableAgentWakeTestAgent(t, store)
+	grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
 	if _, _, err := store.UpdateDurableAgentContinuity("child-alpha", func(continuity core.DurableAgentContinuityState) (core.DurableAgentContinuityState, error) {
 		return continuity.WithConversationMessage("parent", "First pending wake.", time.Now().UTC()), nil
 	}); err != nil {
@@ -372,6 +615,7 @@ func TestDurableAgentWakeOnceReportsFailedWakeWithoutThrowing(t *testing.T) {
 	runner := &fakeDurableAgentWakeRunner{err: fmt.Errorf("child wake deferred")}
 	registry.WithDurableAgentWakeRunner(runner)
 	upsertDurableAgentWakeTestAgent(t, store)
+	grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
 	if _, _, err := store.UpdateDurableAgentContinuity("child-alpha", func(continuity core.DurableAgentContinuityState) (core.DurableAgentContinuityState, error) {
 		return continuity.WithConversationMessage("parent", "Please retry the approved wake.", time.Now().UTC()), nil
 	}); err != nil {
@@ -414,6 +658,38 @@ func upsertDurableAgentWakeTestAgent(t *testing.T, store *session.SQLiteStore) {
 	}); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
+}
+
+func grantDurableAgentWakeOnceInvoke(t *testing.T, store *session.SQLiteStore, agentID string, actor principal.Principal) session.CapabilityGrant {
+	t.Helper()
+
+	requirement := durableAgentWakeOnceMissingGrantRequirement(agentID, actor)
+	grant, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-durable-agent-wake-once-" + strings.TrimSpace(agentID) + "-" + strings.ReplaceAll(requirement.GrantedTo, ":", "-"),
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      requirement.GrantedTo,
+		Kind:           requirement.Kind,
+		TargetResource: requirement.TargetResource,
+		AllowedActions: requirement.AllowedActions,
+		Contract:       requirement.Contract,
+		Constraints:    requirement.Constraints,
+		Status:         session.CapabilityGrantStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("UpsertCapabilityGrant(wake_once) err = %v", err)
+	}
+	return grant
+}
+
+func reviewEventRequestIDForWakeTest(event session.ReviewEvent) string {
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(event.MetadataJSON), &metadata); err != nil {
+		return ""
+	}
+	if requestID, ok := metadata["request_id"].(string); ok {
+		return strings.TrimSpace(requestID)
+	}
+	return ""
 }
 
 func contextWithDurableAgentWakeAuthority(t *testing.T, store *session.SQLiteStore, key session.SessionKey, actor principal.Principal, leaseID string, class session.ContinuationLeaseClass, actions []string) context.Context {

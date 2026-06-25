@@ -117,6 +117,54 @@ func TestAuthorityManagedToolDoesNotMintRunAuthorityFromAmbientSessionLease(t *t
 	}
 }
 
+func TestAuthorityManagedToolMissingGrantMaterializesReviewableRequest(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	manifest := ExternalToolManifest{
+		Name:      "leased_tool",
+		Owner:     "child-alpha",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+	}
+	if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest}); err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "leased_tool", ImplementationRef: "external:leased_tool", Registered: true}); err != nil {
+		t.Fatalf("UpsertRegisteredTool() err = %v", err)
+	}
+
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	_, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, adminSessionKey(), "leased_tool", json.RawMessage(`{}`))
+	if err == nil || !strings.Contains(err.Error(), "queued review request") {
+		t.Fatalf("ExecuteForSessionPrincipal(missing grant) err = %v, want queued review request", err)
+	}
+	requests, err := store.CapabilityRequests(10, session.CapabilityReviewStatusProposed, session.CapabilityKindTool, "telegram:1001")
+	if err != nil {
+		t.Fatalf("CapabilityRequests() err = %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("CapabilityRequests() len = %d, want 1", len(requests))
+	}
+	request := requests[0]
+	if request.TargetResource != "leased_tool" || request.RequestedFor != "telegram:1001" {
+		t.Fatalf("request = %#v, want leased_tool request for telegram:1001", request)
+	}
+	pending, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(pending) != 1 || !strings.Contains(pending[0].MetadataJSON, request.RequestID) {
+		t.Fatalf("PendingReviewEvents() = %#v, want one review event for request %s", pending, request.RequestID)
+	}
+	open, err := store.OpenNextActionsBySession(adminSessionKey(), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsAuthority || open[0].SubjectRef != request.RequestID {
+		t.Fatalf("open next actions = %#v, want missing grant blocker for %s", open, request.RequestID)
+	}
+}
+
 func TestAuthorityManagedToolUsesContextLeaseEvidence(t *testing.T) {
 	t.Parallel()
 

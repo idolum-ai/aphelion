@@ -96,6 +96,21 @@ func (s *SQLiteStore) EnqueueReviewEvent(event ReviewEvent) error {
 	return err
 }
 
+func (s *SQLiteStore) EnsurePendingReviewEvent(event ReviewEvent) (int64, error) {
+	id, err := s.InsertReviewEvent(event)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.db.Exec(`
+		UPDATE review_events
+		SET status = 'pending', delivered_at = NULL, delivery_message_id = 0
+		WHERE id = ?
+	`, id); err != nil {
+		return 0, fmt.Errorf("ensure pending review event id=%d: %w", id, err)
+	}
+	return id, nil
+}
+
 func (s *SQLiteStore) PendingReviewEvents(targetChatID int64, limit int) ([]ReviewEvent, error) {
 	if targetChatID == 0 {
 		return nil, fmt.Errorf("pending review events: target_chat_id is required")

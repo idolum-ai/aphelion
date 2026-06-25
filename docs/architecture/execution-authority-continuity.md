@@ -42,6 +42,11 @@ The execution-authority spine is:
 7. Invocation evidence records grant, principal, action, session, turn run,
    authority source, lease IDs, the authorization decision, and the operation
    outcome when the invocation crosses a capability or `file_access` grant.
+8. A missing capability grant is not a terminal prose-only failure. When the
+   tool boundary can construct an exact grant requirement, it must persist a
+   capability request, queue one review card for the session review target when
+   available, and record a `blocked_needs_authority` next action tied to that
+   request. The failed invocation is not retried automatically.
 
 Context may select durable run authority, but it may not manufacture authority.
 Durable state remains canonical.
@@ -117,6 +122,13 @@ Durable-child outcome projection uses this status contract:
 For capability-managed tools, the effective authority is:
 
 `principal + durable run authority + current lease state + active grant + exact action + invocation input`
+
+Native admin surfaces may add a narrower operation-specific grant gate before
+their own runtime authority check. `durable_agent wake_once` is one such case:
+the tool call requires an exact active `tool` grant for target `durable_agent`
+with a `tool_invocation` scope matching `action=wake_once` and the canonical
+`agent_id`. That grant does not wake the child by itself; the wake still needs a
+current child-wake continuation lease and records a one-time wake claim.
 
 For native file access, the effective authority is:
 
