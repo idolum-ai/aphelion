@@ -180,7 +180,10 @@ func (m *turnMonitor) projectToolFailure(ctx context.Context, name string, rawOu
 			recorded = true
 		}
 	}
-	summary := safeToolFailureSummary(signals.FailureClass, protectedRef)
+	summary := strings.TrimSpace(signals.SafeSummary)
+	if summary == "" {
+		summary = safeToolFailureSummary(signals.FailureClass, protectedRef)
+	}
 	projected := projectedToolFailure{
 		OK:                   false,
 		SafeSummary:          summary,

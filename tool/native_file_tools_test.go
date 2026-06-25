@@ -282,7 +282,7 @@ func TestNativeFileToolsUseActiveFileAccessGrantAsReadRoot(t *testing.T) {
 	}
 
 	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "list_dir", json.RawMessage(`{"path":"`+filepath.ToSlash(target)+`"}`), scope, p, key)
-	if err == nil || !strings.Contains(err.Error(), "recorded data_access lease request") {
+	if err == nil || !strings.Contains(err.Error(), "missing data_access continuation lease") || !strings.Contains(err.Error(), "lease request recorded") {
 		t.Fatalf("list_dir without lease err = %v, want materialized data_access lease request", err)
 	}
 	open, err := store.OpenNextActionsBySession(key, 10)
@@ -298,7 +298,7 @@ func TestNativeFileToolsUseActiveFileAccessGrantAsReadRoot(t *testing.T) {
 		}
 	}
 	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(target, "gogcli"))+`","full":true}`), scope, p, key)
-	if err == nil || !strings.Contains(err.Error(), "recorded data_access lease request") {
+	if err == nil || !strings.Contains(err.Error(), "missing data_access continuation lease") || !strings.Contains(err.Error(), "lease request recorded") {
 		t.Fatalf("read_file without lease err = %v, want materialized data_access lease request", err)
 	}
 	open, err = store.OpenNextActionsBySession(key, 10)
@@ -365,7 +365,7 @@ func TestNativeFileToolsUseActiveFileAccessGrantAsReadRoot(t *testing.T) {
 	}
 	noLeaseKey := session.SessionKey{ChatID: 1002, UserID: 0, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1002"}}
 	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "write_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(target, "created-without-lease.txt"))+`","content":"no"}`), scope, p, noLeaseKey)
-	if err == nil || !strings.Contains(err.Error(), "recorded local_workspace lease request") {
+	if err == nil || !strings.Contains(err.Error(), "missing local_workspace continuation lease") || !strings.Contains(err.Error(), "lease request recorded") {
 		t.Fatalf("write_file write grant without lease err = %v, want materialized local_workspace lease request", err)
 	}
 	open, err = store.OpenNextActionsBySession(noLeaseKey, 10)
@@ -639,7 +639,7 @@ func TestNativeFileAccessGrantRevalidatesAfterStoreReopen(t *testing.T) {
 	})
 	reopenedRegistry := NewRegistry(registry.workspace, 2*time.Second).WithSessionStore(reopened)
 	_, err = reopenedRegistry.executeWithScopeAndPrincipal(ctx, "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(targetFile)+`","full":true}`), scope, p, key)
-	if err == nil || !strings.Contains(err.Error(), "recorded data_access lease request") {
+	if err == nil || !strings.Contains(err.Error(), "missing data_access continuation lease") || !strings.Contains(err.Error(), "lease request recorded") {
 		t.Fatalf("read_file after reopened revocation err = %v, want materialized data_access lease request", err)
 	}
 	open, err := reopened.OpenNextActionsBySession(key, 10)

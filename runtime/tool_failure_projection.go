@@ -116,6 +116,7 @@ func projectedToolFailurePayload(output string) (map[string]any, bool) {
 
 type projectedToolFailureSignals struct {
 	FailureClass     string
+	SafeSummary      string
 	RetryPolicy      string
 	Retryable        bool
 	ContextCancelled bool
@@ -123,7 +124,30 @@ type projectedToolFailureSignals struct {
 	ExecRejected     bool
 }
 
+type safeProjectedToolFailure interface {
+	SafeToolFailureClass() string
+	SafeToolFailureSummary() string
+	SafeToolFailureRetryPolicy() string
+}
+
 func classifyProjectedToolFailure(err error, output string) projectedToolFailureSignals {
+	var safeFailure safeProjectedToolFailure
+	if errors.As(err, &safeFailure) {
+		failureClass := strings.TrimSpace(safeFailure.SafeToolFailureClass())
+		if failureClass == "" {
+			failureClass = "tool_error"
+		}
+		retryPolicy := strings.TrimSpace(safeFailure.SafeToolFailureRetryPolicy())
+		if retryPolicy == "" {
+			retryPolicy = "reformulate"
+		}
+		return projectedToolFailureSignals{
+			FailureClass: failureClass,
+			SafeSummary:  strings.TrimSpace(safeFailure.SafeToolFailureSummary()),
+			RetryPolicy:  retryPolicy,
+			Retryable:    strings.Contains(retryPolicy, "retry") || strings.Contains(retryPolicy, "backoff"),
+		}
+	}
 	if errors.Is(err, context.Canceled) {
 		return projectedToolFailureSignals{
 			FailureClass:     "canceled",

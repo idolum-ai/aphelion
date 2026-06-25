@@ -165,7 +165,7 @@ func TestDurableAgentWakeOnceRequiresDurableRunAuthority(t *testing.T) {
 		"durable_agent",
 		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
 	)
-	if err == nil || !strings.Contains(err.Error(), "recorded child_wake lease request") {
+	if err == nil || !strings.Contains(err.Error(), "missing child_wake continuation lease") || !strings.Contains(err.Error(), "lease request recorded") {
 		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want materialized child_wake lease request", err)
 	}
 	if len(runner.calls) != 0 {
@@ -205,7 +205,7 @@ func TestDurableAgentWakeOnceMissingGrantMaterializesReviewableRequest(t *testin
 		"durable_agent",
 		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha","reason":"one no-content readiness attempt"}`),
 	)
-	if err == nil || !strings.Contains(err.Error(), "queued review request") {
+	if err == nil || !strings.Contains(err.Error(), "missing capability grant") || !strings.Contains(err.Error(), "review request queued") {
 		t.Fatalf("ExecuteForSessionPrincipal(wake_once missing grant) err = %v, want queued review request", err)
 	}
 	if len(runner.calls) != 0 {
@@ -274,7 +274,7 @@ func TestDurableAgentWakeOnceBroadGrantDoesNotSatisfyExactWakeGrant(t *testing.T
 		"durable_agent",
 		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
 	)
-	if err == nil || !strings.Contains(err.Error(), "queued review request") {
+	if err == nil || !strings.Contains(err.Error(), "missing capability grant") || !strings.Contains(err.Error(), "review request queued") {
 		t.Fatalf("ExecuteForSessionPrincipal(wake_once broad grant) err = %v, want exact missing grant review", err)
 	}
 	if len(runner.calls) != 0 {
@@ -436,7 +436,7 @@ func TestDurableAgentWakeOnceRejectsExactGrantWithConflictingAgentConstraint(t *
 		"durable_agent",
 		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
 	)
-	if err == nil || !strings.Contains(err.Error(), "queued review request") {
+	if err == nil || !strings.Contains(err.Error(), "missing capability grant") || !strings.Contains(err.Error(), "review request queued") {
 		t.Fatalf("ExecuteForSessionPrincipal(wake_once conflicting exact grant) err = %v, want missing grant review", err)
 	}
 	if len(runner.calls) != 0 {
@@ -488,7 +488,7 @@ func TestDurableAgentWakeOnceRejectsGrantWithConflictingTopLevelAndNestedSelecto
 		"durable_agent",
 		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
 	)
-	if err == nil || !strings.Contains(err.Error(), "queued review request") {
+	if err == nil || !strings.Contains(err.Error(), "missing capability grant") || !strings.Contains(err.Error(), "review request queued") {
 		t.Fatalf("ExecuteForSessionPrincipal(wake_once conflicting dual exact grant) err = %v, want missing grant review", err)
 	}
 	if len(runner.calls) != 0 {
@@ -574,7 +574,7 @@ func TestDurableAgentWakeOnceExpiredGrantDoesNotAuthorizeWake(t *testing.T) {
 		"durable_agent",
 		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
 	)
-	if err == nil || !strings.Contains(err.Error(), "queued review request") {
+	if err == nil || !strings.Contains(err.Error(), "missing capability grant") || !strings.Contains(err.Error(), "review request queued") {
 		t.Fatalf("ExecuteForSessionPrincipal(wake_once expired grant) err = %v, want missing grant review", err)
 	}
 	if len(runner.calls) != 0 {
@@ -699,7 +699,7 @@ func TestDurableAgentWakeOnceRequiresChildWakeAuthority(t *testing.T) {
 		"durable_agent",
 		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
 	)
-	if err == nil || !strings.Contains(err.Error(), "recorded child_wake lease request") {
+	if err == nil || !strings.Contains(err.Error(), "missing child_wake continuation lease") || !strings.Contains(err.Error(), "lease request recorded") {
 		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want materialized child_wake lease request", err)
 	}
 	if len(runner.calls) != 0 {
@@ -841,7 +841,7 @@ func TestDurableAgentWakeOnceRequiresExactAgentConstraint(t *testing.T) {
 		"durable_agent",
 		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
 	)
-	if err == nil || !strings.Contains(err.Error(), "recorded child_wake lease request") {
+	if err == nil || !strings.Contains(err.Error(), "missing child_wake continuation lease") || !strings.Contains(err.Error(), "lease request recorded") {
 		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want materialized exact child_wake lease request", err)
 	}
 	open, err := store.OpenNextActionsBySession(adminSessionKey(), 10)
@@ -898,9 +898,17 @@ func TestDurableAgentWakeOnceClaimsLeaseOnce(t *testing.T) {
 		t.Fatalf("UpdateDurableAgentContinuity(parent second) err = %v", err)
 	}
 
-	_, err := registry.ExecuteForSessionPrincipal(ctx, actor, adminSessionKey(), "durable_agent", json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`))
-	if err == nil || !strings.Contains(err.Error(), "already claimed") {
-		t.Fatalf("second ExecuteForSessionPrincipal(wake_once) err = %v, want one-time claim denial", err)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, actor, adminSessionKey(), "durable_agent", json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`))
+	if err != nil {
+		t.Fatalf("second ExecuteForSessionPrincipal(wake_once) err = %v, want typed one-time claim failure", err)
+	}
+	for _, want := range []string{"wake_status: failed", "failure_class: grant_check_failed", "next: repair_child_wake_failure"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("second wake_once output = %q, want %q", out, want)
+		}
+	}
+	if strings.Contains(out, "already claimed") {
+		t.Fatalf("second wake_once output = %q, want sanitized claim failure", out)
 	}
 }
 

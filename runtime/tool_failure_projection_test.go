@@ -22,6 +22,50 @@ func (e *secretBearingToolError) Error() string {
 	return e.text
 }
 
+type typedSafeToolFailure struct{}
+
+func (typedSafeToolFailure) Error() string {
+	return "adapter_lifecycle_failed: safe wake failure"
+}
+
+func (typedSafeToolFailure) SafeToolFailureClass() string {
+	return "adapter_lifecycle_failed"
+}
+
+func (typedSafeToolFailure) SafeToolFailureSummary() string {
+	return "durable_agent wake_once stopped because the child adapter lifecycle is not registered or verified"
+}
+
+func (typedSafeToolFailure) SafeToolFailureRetryPolicy() string {
+	return "retry_after_adapter_lifecycle_repair"
+}
+
+func TestObservedToolRegistryProjectedFailurePreservesTypedSafeFailure(t *testing.T) {
+	t.Parallel()
+
+	_, registry, _ := newObservedFailureRegistry(t, "safe wake output", typedSafeToolFailure{})
+	output, err := registry.Execute(context.Background(), "exec", json.RawMessage(`{"command":"fail"}`))
+	if err == nil {
+		t.Fatal("Execute() err = nil, want projected typed failure")
+	}
+	if err.Error() != "durable_agent wake_once stopped because the child adapter lifecycle is not registered or verified" {
+		t.Fatalf("projected err = %q, want typed safe summary", err.Error())
+	}
+	var failure map[string]any
+	if jsonErr := json.Unmarshal([]byte(output), &failure); jsonErr != nil {
+		t.Fatalf("projected failure json: %v\n%s", jsonErr, output)
+	}
+	if asString(failure["failure_class"]) != "adapter_lifecycle_failed" {
+		t.Fatalf("failure_class = %#v, want adapter_lifecycle_failed", failure["failure_class"])
+	}
+	if asString(failure["retry_policy"]) != "retry_after_adapter_lifecycle_repair" {
+		t.Fatalf("retry_policy = %#v, want typed retry policy", failure["retry_policy"])
+	}
+	if asString(failure["safe_summary"]) != err.Error() {
+		t.Fatalf("safe_summary = %#v, want %q", failure["safe_summary"], err.Error())
+	}
+}
+
 func TestObservedToolRegistryProjectedFailureDoesNotExposeRawErrorObject(t *testing.T) {
 	t.Parallel()
 

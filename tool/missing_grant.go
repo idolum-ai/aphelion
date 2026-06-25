@@ -306,14 +306,20 @@ func (r *Registry) materializeMissingGrantError(ctx context.Context, key session
 		return err
 	}
 	contract := normalizeMissingGrantContract(missing.contract)
-	request, reviewEventID, _, materializeErr := r.materializeMissingGrantRequirement(ctx, key, actor, contract.Requirement, time.Now().UTC())
+	_, reviewEventID, _, materializeErr := r.materializeMissingGrantRequirement(ctx, key, actor, contract.Requirement, time.Now().UTC())
 	if materializeErr != nil {
 		return fmt.Errorf("%w; additionally failed to materialize review request: %v", err, materializeErr)
 	}
+	summary := "tool execution failed: missing capability grant; review request recorded"
 	if reviewEventID > 0 {
-		return fmt.Errorf("missing capability grant; queued review request %s as review_event_id=%d", request.RequestID, reviewEventID)
+		summary = "tool execution failed: missing capability grant; review request queued"
 	}
-	return fmt.Errorf("missing capability grant; recorded review request %s", request.RequestID)
+	return safeToolFailureError{
+		class:       "authority_rejected",
+		summary:     summary,
+		retryPolicy: "ask_for_grant",
+		cause:       err,
+	}
 }
 
 func normalizeMissingGrantContract(contract missingGrantContract) missingGrantContract {

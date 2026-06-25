@@ -72,21 +72,32 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 		}
 	}()
 
+	result := durableAgentWakeOnceResult{
+		AgentID:             agent.AgentID,
+		AuthoritySource:     useRef.AuthoritySource,
+		ContinuationLeaseID: useRef.ContinuationLeaseID,
+	}
+	finishFailure := func(cause error) (string, error) {
+		failure := durableAgentWakeOnceFailureForError(cause)
+		result.WakeStatus = "failed"
+		result.FailureClass = failure.Class
+		result.FailureSummary = failure.SafeSummary
+		result.NextRepair = failure.NextRepair
+		result.RetryPolicy = failure.RetryPolicy
+		outcomeErr = failure
+		return renderDurableAgentWakeOnce(result), nil
+	}
+
 	_, beforeContinuity, err := r.loadDurableAgentContinuity(agent.AgentID)
 	if err != nil {
-		return "", err
+		return finishFailure(err)
 	}
 	beforePendingMessages := beforeContinuity.PendingParentConversationMessages(0)
 	beforePending := len(beforePendingMessages)
 	beforeState, lastParentAt, _, _, _ := durableAgentConversationState(beforeContinuity)
-	result := durableAgentWakeOnceResult{
-		AgentID:             agent.AgentID,
-		PendingParentBefore: beforePending,
-		ThreadStateBefore:   beforeState,
-		LastParentMessageAt: lastParentAt,
-		AuthoritySource:     useRef.AuthoritySource,
-		ContinuationLeaseID: useRef.ContinuationLeaseID,
-	}
+	result.PendingParentBefore = beforePending
+	result.ThreadStateBefore = beforeState
+	result.LastParentMessageAt = lastParentAt
 	if beforePending == 0 {
 		result.WakeStatus = "skipped_no_pending_parent_message"
 		result.PendingParentAfter = beforePending
@@ -104,13 +115,13 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 		MessageIDs:       messageIDs,
 		CreatedAt:        now,
 	}); err != nil {
-		return "", err
+		return finishFailure(err)
 	}
 
 	wakeErr := r.durableAgentWakeRunner.RunDurableAgentParentConversationWake(ctx, agent.AgentID, messageIDs, now)
 	_, afterContinuity, err := r.loadDurableAgentContinuity(agent.AgentID)
 	if err != nil {
-		return "", err
+		return finishFailure(err)
 	}
 	afterState, _, lastChildAt, lastAckAt, _ := durableAgentConversationState(afterContinuity)
 	result.PendingParentAfter = len(afterContinuity.PendingParentConversationMessages(0))
@@ -118,14 +129,9 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 	result.LastChildMessageAt = lastChildAt
 	result.LastParentAcknowledged = lastAckAt
 	if wakeErr != nil {
-		failure := durableAgentWakeOnceFailureForError(wakeErr)
-		result.WakeStatus = "failed"
-		result.FailureClass = failure.Class
-		result.FailureSummary = failure.SafeSummary
-		result.NextRepair = failure.NextRepair
-		result.RetryPolicy = failure.RetryPolicy
-		outcomeErr = failure
-	} else if result.PendingParentAfter > 0 {
+		return finishFailure(wakeErr)
+	}
+	if result.PendingParentAfter > 0 {
 		result.WakeStatus = "awaiting_child_pickup"
 	} else {
 		result.WakeStatus = "completed"
@@ -270,6 +276,18 @@ func (f durableAgentWakeOnceFailure) Error() string {
 	class := firstNonEmpty(strings.TrimSpace(f.Class), "runner_start_failed")
 	summary := firstNonEmpty(strings.TrimSpace(f.SafeSummary), "durable_agent wake_once failed before child completion")
 	return fmt.Sprintf("%s: %s", class, summary)
+}
+
+func (f durableAgentWakeOnceFailure) SafeToolFailureClass() string {
+	return firstNonEmpty(strings.TrimSpace(f.Class), "runner_start_failed")
+}
+
+func (f durableAgentWakeOnceFailure) SafeToolFailureSummary() string {
+	return firstNonEmpty(strings.TrimSpace(f.SafeSummary), "durable_agent wake_once failed before child completion")
+}
+
+func (f durableAgentWakeOnceFailure) SafeToolFailureRetryPolicy() string {
+	return firstNonEmpty(strings.TrimSpace(f.RetryPolicy), "retry_after_wake_runtime_repair")
 }
 
 func durableAgentWakeOnceFailureForError(err error) durableAgentWakeOnceFailure {

@@ -135,7 +135,7 @@ func TestAuthorityManagedToolMissingGrantMaterializesReviewableRequest(t *testin
 
 	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 	_, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, adminSessionKey(), "leased_tool", json.RawMessage(`{}`))
-	if err == nil || !strings.Contains(err.Error(), "queued review request") {
+	if err == nil || !strings.Contains(err.Error(), "missing capability grant") || !strings.Contains(err.Error(), "review request queued") {
 		t.Fatalf("ExecuteForSessionPrincipal(missing grant) err = %v, want queued review request", err)
 	}
 	requests, err := store.CapabilityRequests(10, session.CapabilityReviewStatusProposed, session.CapabilityKindTool, "telegram:1001")

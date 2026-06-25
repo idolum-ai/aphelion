@@ -275,7 +275,7 @@ func TestExternalToolAuthorityLifecycleNegativeGates(t *testing.T) {
 			t.Fatalf("register err = %v", err)
 		}
 		_, err = registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
-		if err == nil || !strings.Contains(err.Error(), "queued review request") {
+		if err == nil || !strings.Contains(err.Error(), "missing capability grant") || !strings.Contains(err.Error(), "review request queued") {
 			t.Fatalf("ungranted invoke err = %v, want queued missing-grant review", err)
 		}
 		grantToolInvoke(t, store, "browse_page", "telegram:1001")

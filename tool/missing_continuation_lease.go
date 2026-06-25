@@ -117,7 +117,12 @@ func (r *Registry) materializeMissingContinuationLeaseError(_ context.Context, k
 	if recordErr != nil {
 		return fmt.Errorf("%w; additionally failed to materialize lease request: %v", err, recordErr)
 	}
-	return fmt.Errorf("missing continuation lease; recorded %s lease request %s", requirement.LeaseClass, recordID)
+	return safeToolFailureError{
+		class:       "authority_rejected",
+		summary:     fmt.Sprintf("tool execution failed: missing %s continuation lease; lease request recorded", requirement.LeaseClass),
+		retryPolicy: "ask_for_grant",
+		cause:       err,
+	}
 }
 
 func asMissingContinuationLeaseError(err error, target *missingContinuationLeaseError) bool {
