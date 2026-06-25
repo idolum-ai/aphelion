@@ -153,9 +153,10 @@ func TestDurableAgentWakeOnceRequiresDurableRunAuthority(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
-	registry.WithDurableAgentWakeRunner(&fakeDurableAgentWakeRunner{store: store})
+	runner := &fakeDurableAgentWakeRunner{store: store}
+	registry.WithDurableAgentWakeRunner(runner)
 	upsertDurableAgentWakeTestAgent(t, store)
-	grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
+	grant := grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
 
 	_, err := registry.ExecuteForSessionPrincipal(
 		context.Background(),
@@ -164,8 +165,26 @@ func TestDurableAgentWakeOnceRequiresDurableRunAuthority(t *testing.T) {
 		"durable_agent",
 		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
 	)
-	if err == nil || !strings.Contains(err.Error(), "requires durable run authority evidence") {
-		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want durable run authority denial", err)
+	if err == nil || !strings.Contains(err.Error(), "recorded child_wake lease request") {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want materialized child_wake lease request", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("wake runner calls = %v, want no child wake before lease", runner.calls)
+	}
+	open, err := store.OpenNextActionsBySession(adminSessionKey(), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsAuthority || open[0].SubjectKind != "continuation_lease_request" {
+		t.Fatalf("open next actions = %#v, want child_wake lease authority blocker", open)
+	}
+	if open[0].RequiredAuthority != string(session.ContinuationLeaseClassChildWake) || open[0].ResourceBlocker != "missing_continuation_lease" {
+		t.Fatalf("open next action authority/blocker = %q/%q, want child_wake/missing_continuation_lease", open[0].RequiredAuthority, open[0].ResourceBlocker)
+	}
+	for _, want := range []string{`"action":"request_continuation_lease"`, `"agent_id":"child-alpha"`, `"grant_id":"` + grant.GrantID + `"`, `"lease_class":"child_wake"`} {
+		if !strings.Contains(open[0].OperationInputJSON, want) {
+			t.Fatalf("lease next action operation input = %s, want %s", open[0].OperationInputJSON, want)
+		}
 	}
 }
 
@@ -300,6 +319,52 @@ func TestDurableAgentWakeOnceAcceptsLiveStyleExactWakeGrant(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(wake_once live style grant) err = %v", err)
+	}
+	if got := fmt.Sprint(runner.calls); got != "[child-alpha]" {
+		t.Fatalf("wake runner calls = %s, want [child-alpha]", got)
+	}
+	if !strings.Contains(out, "wake_status: completed") {
+		t.Fatalf("wake_once output = %q, want completed", out)
+	}
+}
+
+func TestDurableAgentWakeOnceAcceptsDispatcherWakeGrantWithAgentConstraint(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	runner := &fakeDurableAgentWakeRunner{store: store}
+	registry.WithDurableAgentWakeRunner(runner)
+	upsertDurableAgentWakeTestAgent(t, store)
+	if _, _, err := store.UpdateDurableAgentContinuity("child-alpha", func(continuity core.DurableAgentContinuityState) (core.DurableAgentContinuityState, error) {
+		return continuity.WithConversationMessage("parent", "Use the dispatcher-style approved wake grant.", time.Now().UTC()), nil
+	}); err != nil {
+		t.Fatalf("UpdateDurableAgentContinuity(parent) err = %v", err)
+	}
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-dispatcher-wake-once",
+		RequestID:      "req-dispatcher-wake-once",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindGenericDelegation,
+		TargetResource: "durable_agent:wake_once",
+		AllowedActions: []string{"invoke"},
+		Constraints:    `{"agent_id":"child-alpha","consume_existing_parent_guidance_only":true,"max_wake_count":1,"no_retry":true}`,
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(dispatcher wake) err = %v", err)
+	}
+	ctx := contextWithDurableAgentWakeAuthority(t, store, adminSessionKey(), actor, "lease-child-wake-dispatcher-grant", session.ContinuationLeaseClassChildWake, []string{durableAgentWakeOnceAction})
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		ctx,
+		actor,
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once dispatcher grant) err = %v", err)
 	}
 	if got := fmt.Sprint(runner.calls); got != "[child-alpha]" {
 		t.Fatalf("wake runner calls = %s, want [child-alpha]", got)
@@ -620,7 +685,8 @@ func TestDurableAgentWakeOnceRequiresChildWakeAuthority(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
-	registry.WithDurableAgentWakeRunner(&fakeDurableAgentWakeRunner{store: store})
+	runner := &fakeDurableAgentWakeRunner{store: store}
+	registry.WithDurableAgentWakeRunner(runner)
 	upsertDurableAgentWakeTestAgent(t, store)
 	grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
 	actor := principal.Principal{Role: principal.RoleAdmin}
@@ -633,8 +699,18 @@ func TestDurableAgentWakeOnceRequiresChildWakeAuthority(t *testing.T) {
 		"durable_agent",
 		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
 	)
-	if err == nil || !strings.Contains(err.Error(), "requires child_wake lease class") {
-		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want child_wake authority denial", err)
+	if err == nil || !strings.Contains(err.Error(), "recorded child_wake lease request") {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want materialized child_wake lease request", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("wake runner calls = %v, want no child wake under wrong lease class", runner.calls)
+	}
+	open, err := store.OpenNextActionsBySession(adminSessionKey(), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsAuthority || open[0].RequiredAuthority != string(session.ContinuationLeaseClassChildWake) {
+		t.Fatalf("open next actions = %#v, want child_wake authority blocker", open)
 	}
 }
 
@@ -765,8 +841,15 @@ func TestDurableAgentWakeOnceRequiresExactAgentConstraint(t *testing.T) {
 		"durable_agent",
 		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
 	)
-	if err == nil || !strings.Contains(err.Error(), "not bound to agent_id") {
-		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want target constraint denial", err)
+	if err == nil || !strings.Contains(err.Error(), "recorded child_wake lease request") {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want materialized exact child_wake lease request", err)
+	}
+	open, err := store.OpenNextActionsBySession(adminSessionKey(), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].RequiredAuthority != string(session.ContinuationLeaseClassChildWake) || !strings.Contains(open[0].OperationInputJSON, `"agent_id":"child-alpha"`) {
+		t.Fatalf("open next actions = %#v, want exact child-alpha child_wake lease request", open)
 	}
 }
 

@@ -49,7 +49,10 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 	}
 	useRef, err := r.requireDurableAgentWakeOnceAuthority(ctx, p, key, agent.AgentID)
 	if err != nil {
-		return "", err
+		return "", missingContinuationLeaseError{
+			requirement: durableAgentWakeOnceLeaseRequirement(agent.AgentID, grant, p),
+			cause:       err,
+		}
 	}
 	permit, err := r.recordDurableAgentWakeOnceCapabilityInvocation(grant, p, useRef)
 	if err != nil {
@@ -185,6 +188,13 @@ func durableAgentWakeOnceGrantContract(agentID string, p principal.Principal) mi
 			{
 				Kind:                session.CapabilityKindGenericDelegation,
 				TargetResource:      durableAgentWakeOnceCapabilityTarget(agentID),
+				Action:              "invoke",
+				ToolInvocationScope: missingGrantToolInvocationScopeOptional,
+				RequiredConstraints: map[string]string{"agent_id": agentID},
+			},
+			{
+				Kind:                session.CapabilityKindGenericDelegation,
+				TargetResource:      "durable_agent:wake_once",
 				Action:              "invoke",
 				ToolInvocationScope: missingGrantToolInvocationScopeOptional,
 				RequiredConstraints: map[string]string{"agent_id": agentID},
