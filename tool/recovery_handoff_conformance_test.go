@@ -245,6 +245,20 @@ func TestRecoveryHandoffCompilersProduceConsumerValidatedPayloads(t *testing.T) 
 	if err := validateRecoveryHandoffToolInput(session.NextActionReadyToExecute, "not_a_tool", `{"ok":true}`); err == nil {
 		t.Fatal("ready unknown tool validation err = nil, want executable tool rejection")
 	}
+	for _, raw := range []string{
+		`{}`,
+		`{"unit":null}`,
+		`{"unit":123}`,
+		`{"unit":""}`,
+		`{"unit":"   "}`,
+	} {
+		if err := validateRecoveryHandoffToolInput(session.NextActionReadyToExecute, "system_log_read", raw); err == nil {
+			t.Fatalf("validate system_log_read input %s err = nil, want non-empty string unit rejection", raw)
+		}
+	}
+	if err := validateRecoveryHandoffToolInput(session.NextActionReadyToExecute, "system_log_read", `{"unit":"aphelion.service"}`); err != nil {
+		t.Fatalf("validate system_log_read valid unit err = %v", err)
+	}
 }
 
 func TestRecoveryHandoffExecutableConsumersAreRegisteredTools(t *testing.T) {
@@ -272,6 +286,92 @@ func TestRecoveryHandoffExecutableConsumersAreRegisteredTools(t *testing.T) {
 	}
 	if registered["durable_child_repair"] || registered["durable_child_continuation"] {
 		t.Fatalf("registered tool definitions = %#v, do not want placeholder durable child recovery consumers", registered)
+	}
+}
+
+func TestRequestContinuationLeaseApprovalIsReplaySafeAndBoundToGrant(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(newToolTestStore(t))
+	key := session.SessionKey{ChatID: 88106, UserID: 1001}
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	raw := json.RawMessage(`{
+		"action":"request_continuation_lease",
+		"objective":"Read the approved child-local runtime-bin directory once.",
+		"lease_class":"data_access",
+		"principal":"telegram:1001",
+		"allowed_actions":["read_approved_resource"],
+		"constraints":{
+			"capability_kind":"file_access",
+			"grant_id":"capg-runtime-read",
+			"operation":"list_dir",
+			"resource":"/child/runtime-bin",
+			"target_resource":"/child/runtime-bin"
+		},
+		"tool":"list_dir",
+		"tool_action":"list_dir",
+		"grant_id":"capg-runtime-read",
+		"grant_target_resource":"/child/runtime-bin",
+		"resource":"/child/runtime-bin",
+		"retry_after_lease":true
+	}`)
+	scope := sandbox.Scope{WorkingRoot: registry.workspace, SharedMemoryRoot: registry.workspace, Principal: actor}
+	if _, err := registry.executeWithScopeAndPrincipal(context.Background(), "request_approval", raw, scope, actor, key); err != nil {
+		t.Fatalf("first request_approval err = %v", err)
+	}
+	first, err := registry.store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(first) err = %v", err)
+	}
+	if first.ContinuationLease.PlanHash == "" || len(first.ContinuationLease.RequiredCapabilityGrants) != 1 || len(first.ContinuationLease.CapabilityGrantIDs) != 1 {
+		t.Fatalf("first continuation lease = %#v, want plan hash and exact grant binding", first.ContinuationLease)
+	}
+	if first.ContinuationLease.RequiredCapabilityGrants[0].GrantID != "capg-runtime-read" || first.ContinuationLease.RequiredCapabilityGrants[0].TargetResource != "/child/runtime-bin" {
+		t.Fatalf("required grants = %#v, want exact file_access grant binding", first.ContinuationLease.RequiredCapabilityGrants)
+	}
+	if _, err := registry.executeWithScopeAndPrincipal(context.Background(), "request_approval", raw, scope, actor, key); err != nil {
+		t.Fatalf("replayed request_approval err = %v", err)
+	}
+	second, err := registry.store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(second) err = %v", err)
+	}
+	if second.DecisionID != first.DecisionID || second.ContinuationLease.ID != first.ContinuationLease.ID || second.ContinuationLease.PlanHash != first.ContinuationLease.PlanHash {
+		t.Fatalf("replayed continuation = %#v, want same identity as %#v", second, first)
+	}
+
+	active := second
+	active.Status = session.ContinuationStatusApproved
+	active.ContinuationLease.Status = session.ContinuationLeaseStatusActive
+	if err := registry.store.UpdateContinuationState(key, active); err != nil {
+		t.Fatalf("UpdateContinuationState(active) err = %v", err)
+	}
+	if _, err := registry.executeWithScopeAndPrincipal(context.Background(), "request_approval", raw, scope, actor, key); err != nil {
+		t.Fatalf("replay against active matching continuation err = %v", err)
+	}
+	afterActive, err := registry.store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(after active replay) err = %v", err)
+	}
+	if afterActive.ContinuationLease.ID != active.ContinuationLease.ID || afterActive.ContinuationLease.Status != session.ContinuationLeaseStatusActive {
+		t.Fatalf("active replay continuation = %#v, want unchanged active lease %#v", afterActive, active)
+	}
+
+	conflictKey := session.SessionKey{ChatID: 88107, UserID: 1001}
+	if err := registry.store.UpdateContinuationState(conflictKey, session.ContinuationState{
+		Status: session.ContinuationStatusPending,
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-conflicting",
+			Status:         session.ContinuationLeaseStatusPending,
+			LeaseClass:     session.ContinuationLeaseClassDataAccess,
+			AllowedActions: []string{"read_approved_resource"},
+			PlanHash:       "sha256:conflicting",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState(conflict) err = %v", err)
+	}
+	if _, err := registry.executeWithScopeAndPrincipal(context.Background(), "request_approval", raw, scope, actor, conflictKey); err == nil || !strings.Contains(err.Error(), "conflicts with existing pending continuation") {
+		t.Fatalf("conflicting request_approval err = %v, want pending continuation conflict", err)
 	}
 }
 
@@ -320,6 +420,9 @@ func TestRecoveryHandoffChildWakeSequenceMatchesLiveFailureOrder(t *testing.T) {
 	}
 	if out := executeRecoveryHandoffAction(t, registry, key, actor, grantAction); !strings.Contains(out, "[CAPABILITY_GRANT]") {
 		t.Fatalf("grant handoff output = %q, want capability grant", out)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{}); err != nil {
+		t.Fatalf("clear synthetic grant-check continuation state err = %v", err)
 	}
 
 	_, err = registry.ExecuteForSessionPrincipal(

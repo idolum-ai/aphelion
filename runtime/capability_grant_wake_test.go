@@ -12,7 +12,10 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 func capabilityGrantWakeOperationInputForTest(t *testing.T, raw string) map[string]any {
@@ -415,6 +418,46 @@ func TestCapabilityGrantWakeBlockedResultCreatesTypedNextState(t *testing.T) {
 	opInput := capabilityGrantWakeOperationInputForTest(t, open[0].OperationInputJSON)
 	if opInput["durable_agent_id"] != agent.AgentID || opInput["child_blocker_kind"] != "tool_runtime_not_executable" || opInput["status"] != "blocked" || opInput["stage"] != "durable_child_blocker" || opInput["tool"] != "gog_cli" || opInput["no_content_probe"] != true || opInput["diagnostic_only"] != true || opInput["recovery_contract"] != "aphelion.recovery_handoff.v1" {
 		t.Fatalf("operation input = %#v, want exact gog_cli diagnostic no-content probe", opInput)
+	}
+	handoff, ok := opInput["recovery_handoff"].(map[string]any)
+	if !ok || handoff["contract"] != "aphelion.recovery_handoff.v1" || handoff["durable_agent_id"] != agent.AgentID || handoff["blocker_kind"] != "tool_runtime_not_executable" || handoff["tool"] != "gog_cli" || handoff["no_content_probe"] != true || handoff["diagnostic_only"] != true {
+		t.Fatalf("operation recovery_handoff = %#v, want typed durable child handoff", opInput["recovery_handoff"])
+	}
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver(operation tools) err = %v", err)
+	}
+	operationTools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, operationTools)
+	if _, err := operationTools.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		rt.durableAgentExecutionKey(agent.AgentID),
+		"update_operation",
+		json.RawMessage(open[0].OperationInputJSON),
+	); err != nil {
+		t.Fatalf("execute generated update_operation handoff err = %v", err)
+	}
+	opState, err := store.OperationState(rt.durableAgentExecutionKey(agent.AgentID))
+	if err != nil {
+		t.Fatalf("OperationState(child execution key) err = %v", err)
+	}
+	if opState.RecoveryHandoff.Contract != "aphelion.recovery_handoff.v1" ||
+		opState.RecoveryHandoff.DurableAgentID != agent.AgentID ||
+		opState.RecoveryHandoff.BlockerKind != "tool_runtime_not_executable" ||
+		opState.RecoveryHandoff.Tool != "gog_cli" ||
+		!opState.RecoveryHandoff.NoContentProbe ||
+		!opState.RecoveryHandoff.DiagnosticOnly {
+		t.Fatalf("persisted recovery handoff = %#v, want typed durable child blocker metadata", opState.RecoveryHandoff)
 	}
 	pending, err := store.PendingReviewEvents(1001, 10)
 	if err != nil {

@@ -180,7 +180,8 @@ func validateRecoveryHandoffToolInput(state session.NextActionState, toolName st
 		if err := decodeToolObjectInput(json.RawMessage(raw), &decoded, "system_log_read"); err != nil {
 			return err
 		}
-		if strings.TrimSpace(fmt.Sprint(decoded["unit"])) == "" {
+		unit, ok := decoded["unit"].(string)
+		if !ok || strings.TrimSpace(unit) == "" {
 			return fmt.Errorf("system_log_read recovery handoff requires unit")
 		}
 		return nil

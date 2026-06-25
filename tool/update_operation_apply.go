@@ -20,7 +20,8 @@ func operationInputEmpty(in updateOperationInput) bool {
 		in.PhasePlan == nil &&
 		in.PlanLease == nil &&
 		in.Findings == nil &&
-		in.Artifacts == nil
+		in.Artifacts == nil &&
+		in.RecoveryHandoff == nil
 }
 
 func applyOperationInput(current session.OperationState, in updateOperationInput) (session.OperationState, error) {
@@ -70,6 +71,12 @@ func applyOperationInput(current session.OperationState, in updateOperationInput
 		return session.OperationState{}, err
 	}
 	state.Artifacts = artifacts
+
+	recoveryHandoff, err := parseOperationRecoveryHandoffInput(in.RecoveryHandoff)
+	if err != nil {
+		return session.OperationState{}, err
+	}
+	state.RecoveryHandoff = recoveryHandoff
 
 	return session.NormalizeOperationState(state), nil
 }
@@ -137,5 +144,48 @@ func mergeOperationInput(current session.OperationState, in updateOperationInput
 		state.Artifacts = appendDedupedArtifacts(state.Artifacts, artifacts)
 	}
 
+	if in.RecoveryHandoff != nil {
+		recoveryHandoff, err := parseOperationRecoveryHandoffInput(in.RecoveryHandoff)
+		if err != nil {
+			return session.OperationState{}, err
+		}
+		state.RecoveryHandoff = recoveryHandoff
+	}
+
 	return session.NormalizeOperationState(state), nil
+}
+
+func parseOperationRecoveryHandoffInput(in *updateOperationRecoveryHandoffInput) (session.OperationRecoveryHandoff, error) {
+	if in == nil {
+		return session.OperationRecoveryHandoff{}, nil
+	}
+	handoff := session.OperationRecoveryHandoff{
+		Contract:          strings.TrimSpace(in.Contract),
+		OperationKind:     strings.TrimSpace(in.OperationKind),
+		OperationTool:     strings.TrimSpace(in.OperationTool),
+		RetryPolicy:       strings.TrimSpace(in.RetryPolicy),
+		RequiredAuthority: strings.TrimSpace(in.RequiredAuthority),
+		ResourceBlocker:   strings.TrimSpace(in.ResourceBlocker),
+		DurableAgentID:    strings.TrimSpace(in.DurableAgentID),
+		AgentID:           strings.TrimSpace(in.AgentID),
+		BlockerKind:       strings.TrimSpace(in.BlockerKind),
+		TaskPacketID:      strings.TrimSpace(in.TaskPacketID),
+		ChildResultID:     strings.TrimSpace(in.ChildResultID),
+		Tool:              strings.TrimSpace(in.Tool),
+		Adapter:           strings.TrimSpace(in.Adapter),
+	}
+	if in.DiagnosticOnly != nil {
+		handoff.DiagnosticOnly = *in.DiagnosticOnly
+	}
+	if in.NoContentProbe != nil {
+		handoff.NoContentProbe = *in.NoContentProbe
+	}
+	handoff = session.NormalizeOperationRecoveryHandoff(handoff)
+	if handoff.Contract != "" && handoff.Contract != recoveryHandoffContractVersion {
+		return session.OperationRecoveryHandoff{}, fmt.Errorf("update_operation recovery_handoff contract must be %s", recoveryHandoffContractVersion)
+	}
+	if handoff.Contract != "" && handoff.OperationKind == "" {
+		return session.OperationRecoveryHandoff{}, fmt.Errorf("update_operation recovery_handoff operation_kind is required")
+	}
+	return handoff, nil
 }

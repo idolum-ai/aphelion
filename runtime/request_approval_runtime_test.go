@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -301,4 +302,132 @@ func TestRequestApprovalContinuationLeaseRequestMaterializesAndApprovesExactChil
 	if approved.ContinuationLease.RemainingTurns != 1 {
 		t.Fatalf("approved lease remaining turns = %d, want one wake allowance", approved.ContinuationLease.RemainingTurns)
 	}
+}
+
+func TestRequestApprovalMaterializeRetriesAfterFailedDelivery(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	key := session.SessionKey{ChatID: 9045, UserID: 0, Scope: telegramDMScopeRef(9045)}
+	if _, err := tools.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"request_approval",
+		json.RawMessage(`{
+			"action":"request_continuation_lease",
+			"objective":"Wake child-alpha exactly once.",
+			"lease_class":"child_wake",
+			"principal":"telegram:1001",
+			"allowed_actions":["wake_named_child"],
+			"constraints":{"agent_id":"child-alpha"},
+			"tool":"durable_agent",
+			"tool_action":"wake_once",
+			"grant_id":"grant-child-alpha-wake",
+			"grant_target_resource":"durable_agent:child-alpha:wake_once",
+			"agent_id":"child-alpha",
+			"retry_after_lease":true
+		}`),
+	); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(request_approval) err = %v", err)
+	}
+
+	sender.inlineErr = errors.New("telegram transient delivery failure")
+	materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9045, SenderID: 1001, Text: "continue", MessageID: 1},
+		"continue",
+	)
+	if err == nil || !strings.Contains(err.Error(), "telegram transient delivery failure") {
+		t.Fatalf("first MaterializeRequestedApproval err = %v, want delivery failure", err)
+	}
+	if materialized {
+		t.Fatal("first materialized = true, want failed delivery to report false")
+	}
+	if deliveredContinuationOfferCount(t, store, key) != 0 {
+		t.Fatalf("delivered offers = %d, want none after failed send", deliveredContinuationOfferCount(t, store, key))
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count after failed send = %d, want 0", inlineCount)
+	}
+
+	sender.inlineErr = nil
+	materialized, err = rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9045, SenderID: 1001, Text: "continue again", MessageID: 2},
+		"continue again",
+	)
+	if err != nil {
+		t.Fatalf("retry MaterializeRequestedApproval err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("retry materialized = false, want delivered card")
+	}
+	if deliveredContinuationOfferCount(t, store, key) != 1 {
+		t.Fatalf("delivered offers = %d, want one after retry", deliveredContinuationOfferCount(t, store, key))
+	}
+	sender.mu.Lock()
+	inlineCount = len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count after retry = %d, want 1", inlineCount)
+	}
+
+	materialized, err = rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9045, SenderID: 1001, Text: "continue third", MessageID: 3},
+		"continue third",
+	)
+	if err != nil {
+		t.Fatalf("third MaterializeRequestedApproval err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("third materialized = false, want idempotent handled state")
+	}
+	sender.mu.Lock()
+	inlineCount = len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count after delivered retry = %d, want no duplicate", inlineCount)
+	}
+}
+
+func deliveredContinuationOfferCount(t *testing.T, store *session.SQLiteStore, key session.SessionKey) int {
+	t.Helper()
+
+	events, err := store.ExecutionEventsBySession(key, 0, 1000)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	count := 0
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationOffered && strings.TrimSpace(event.Status) == "delivered" {
+			count++
+		}
+	}
+	return count
 }

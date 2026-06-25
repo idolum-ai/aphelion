@@ -462,6 +462,27 @@ func durableWakeChildBlockerOperationInputJSON(agentID string, adapterName strin
 	if summary == "" {
 		summary = strings.TrimSpace(classification.NextAction)
 	}
+	recoveryHandoff := map[string]any{
+		"contract":           "aphelion.recovery_handoff.v1",
+		"operation_kind":     strings.TrimSpace(classification.OperationKind),
+		"operation_tool":     "update_operation",
+		"agent_id":           strings.TrimSpace(agentID),
+		"durable_agent_id":   strings.TrimSpace(agentID),
+		"blocker_kind":       strings.TrimSpace(classification.Kind),
+		"task_packet_id":     strings.TrimSpace(result.PacketID),
+		"child_result_id":    strings.TrimSpace(result.ResultID),
+		"diagnostic_only":    classification.DiagnosticOnly,
+		"no_content_probe":   classification.NoContentProbe,
+		"retry_policy":       strings.TrimSpace(classification.RetryPolicy),
+		"required_authority": strings.TrimSpace(classification.RequiredAuthority),
+		"resource_blocker":   strings.TrimSpace(classification.ResourceBlocker),
+	}
+	if adapterName != "" {
+		recoveryHandoff["adapter"] = adapterName
+	}
+	if toolName != "" {
+		recoveryHandoff["tool"] = toolName
+	}
 	payload := map[string]any{
 		"merge":   true,
 		"status":  "blocked",
@@ -476,6 +497,7 @@ func durableWakeChildBlockerOperationInputJSON(agentID string, adapterName strin
 			{"label": "child task packet", "ref": "child_task://" + strings.TrimSpace(result.PacketID)},
 			{"label": "child task result", "ref": "child_result://" + strings.TrimSpace(result.ResultID)},
 		},
+		"recovery_handoff":        recoveryHandoff,
 		"recovery_contract":       "aphelion.recovery_handoff.v1",
 		"recovery_operation_kind": strings.TrimSpace(classification.OperationKind),
 		"recovery_operation_tool": "update_operation",

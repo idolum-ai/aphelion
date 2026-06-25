@@ -87,6 +87,39 @@ func (s *SQLiteStore) UpdateContinuationState(key SessionKey, state Continuation
 	return nil
 }
 
+func (s *SQLiteStore) UpdateOperationAndContinuationState(key SessionKey, operation OperationState, continuation ContinuationState) error {
+	if _, err := s.Load(key); err != nil {
+		return err
+	}
+	sessionID := SessionIDForKey(key)
+	operation = NormalizeOperationState(operation)
+	continuation = NormalizeContinuationState(continuation)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin operation/continuation state update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`
+		UPDATE sessions
+		SET
+			operation_state_json = ?,
+			continuation_state_json = ?,
+			updated_at = ?
+		WHERE session_id = ?
+	`,
+		encodeOperationState(operation),
+		encodeContinuationState(continuation),
+		time.Now().UTC().Format(time.RFC3339Nano),
+		sessionID,
+	); err != nil {
+		return fmt.Errorf("update operation and continuation state: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit operation/continuation state update: %w", err)
+	}
+	return nil
+}
+
 func (s *SQLiteStore) ContinuationState(key SessionKey) (ContinuationState, error) {
 	state, exists, err := s.ContinuationStateIfExists(key)
 	if err != nil {
