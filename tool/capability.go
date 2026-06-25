@@ -516,6 +516,11 @@ func (r *Registry) capabilityAuthorityGrantSet(ctx context.Context, in capabilit
 	}); err != nil {
 		return "", err
 	}
+	if grant.Status == session.CapabilityGrantStatusActive {
+		if err := r.resolveCapabilityGrantRequestNextAction(key, grant, now); err != nil {
+			return "", err
+		}
+	}
 	if updateResult != nil {
 		if err := r.appendCapabilityEvent(key, core.ExecutionEventCapabilityUpdateApplied, string(grant.Status), map[string]any{
 			"grant_id":              grant.GrantID,
@@ -534,6 +539,30 @@ func (r *Registry) capabilityAuthorityGrantSet(ctx context.Context, in capabilit
 		r.notifyCapabilityGrantObserver(key, grant)
 	}
 	return renderCapabilityGrantWithUpdate("[CAPABILITY_GRANT]", grant, updateResult), nil
+}
+
+func (r *Registry) resolveCapabilityGrantRequestNextAction(key session.SessionKey, grant session.CapabilityGrant, now time.Time) error {
+	if r == nil || r.store == nil || !toolSessionKeyHasIdentity(key) {
+		return nil
+	}
+	requestID := strings.TrimSpace(grant.RequestID)
+	if requestID == "" {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+		Key:         key,
+		Owner:       "capability_authority",
+		SubjectKind: "capability_request",
+		SubjectRef:  requestID,
+		Reason:      "capability_grant_active",
+		ResolvedAt:  now,
+	}); err != nil {
+		return fmt.Errorf("resolve capability request next action after grant activation: %w", err)
+	}
+	return nil
 }
 
 func (r *Registry) capabilityAuthorityGrantShow(in capabilityInput, actor principal.Principal) (string, error) {

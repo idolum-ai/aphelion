@@ -409,6 +409,10 @@ func (r *Registry) recordNativeResourcePreflight(ctx context.Context, key sessio
 	if r == nil || r.store == nil || cause == nil || !toolSessionKeyHasIdentity(key) {
 		return cause
 	}
+	var missingLease missingContinuationLeaseError
+	if asMissingContinuationLeaseError(cause, &missingLease) {
+		return cause
+	}
 	reason := "resource_denied"
 	lower := strings.ToLower(cause.Error())
 	switch {

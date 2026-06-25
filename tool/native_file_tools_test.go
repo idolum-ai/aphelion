@@ -247,8 +247,20 @@ func TestNativeFileToolsUseActiveFileAccessGrantAsReadRoot(t *testing.T) {
 	}
 
 	_, err := registry.executeWithScopeAndPrincipal(context.Background(), "list_dir", json.RawMessage(`{"path":"`+filepath.ToSlash(target)+`"}`), scope, p, key)
-	if err == nil || !strings.Contains(err.Error(), "outside the read roots") {
-		t.Fatalf("list_dir without lease err = %v, want read-root rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "recorded data_access lease request") {
+		t.Fatalf("list_dir without lease err = %v, want materialized data_access lease request", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(read lease blocker) err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsAuthority || open[0].RequiredAuthority != string(session.ContinuationLeaseClassDataAccess) || open[0].ResourceBlocker != "missing_continuation_lease" {
+		t.Fatalf("open next actions = %#v, want data_access continuation lease blocker", open)
+	}
+	for _, want := range []string{`"action":"request_continuation_lease"`, `"lease_class":"data_access"`, `"tool":"list_dir"`, `"tool_action":"list_dir"`, `"grant_id":"capg-child-runtime-read"`} {
+		if !strings.Contains(open[0].OperationInputJSON, want) {
+			t.Fatalf("read lease blocker operation input = %s, want %s", open[0].OperationInputJSON, want)
+		}
 	}
 
 	grantAuthorityUseLeaseWithID(t, store, key, "lease-child-runtime-read")
@@ -295,8 +307,20 @@ func TestNativeFileToolsUseActiveFileAccessGrantAsReadRoot(t *testing.T) {
 	}
 	noLeaseKey := session.SessionKey{ChatID: 1002, UserID: 0, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1002"}}
 	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "write_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(target, "created-without-lease.txt"))+`","content":"no"}`), scope, p, noLeaseKey)
-	if err == nil || !strings.Contains(err.Error(), "outside the write roots") {
-		t.Fatalf("write_file write grant without lease err = %v, want write-root rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "recorded local_workspace lease request") {
+		t.Fatalf("write_file write grant without lease err = %v, want materialized local_workspace lease request", err)
+	}
+	open, err = store.OpenNextActionsBySession(noLeaseKey, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(write lease blocker) err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsAuthority || open[0].RequiredAuthority != string(session.ContinuationLeaseClassLocalWorkspace) || open[0].ResourceBlocker != "missing_continuation_lease" {
+		t.Fatalf("open next actions = %#v, want local_workspace continuation lease blocker", open)
+	}
+	for _, want := range []string{`"lease_class":"local_workspace"`, `"tool":"write_file"`, `"tool_action":"write_file"`, `"grant_id":"capg-child-runtime-write"`} {
+		if !strings.Contains(open[0].OperationInputJSON, want) {
+			t.Fatalf("write lease blocker operation input = %s, want %s", open[0].OperationInputJSON, want)
+		}
 	}
 	out, err = registry.executeWithScopeAndPrincipal(ctx, "write_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(target, "config", "created.txt"))+`","content":"created under approved child slot","create_dirs":true}`), scope, p, key)
 	if err != nil {
@@ -557,8 +581,15 @@ func TestNativeFileAccessGrantRevalidatesAfterStoreReopen(t *testing.T) {
 	})
 	reopenedRegistry := NewRegistry(registry.workspace, 2*time.Second).WithSessionStore(reopened)
 	_, err = reopenedRegistry.executeWithScopeAndPrincipal(ctx, "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(targetFile)+`","full":true}`), scope, p, key)
-	if err == nil || !strings.Contains(err.Error(), "outside the read roots") {
-		t.Fatalf("read_file after reopened revocation err = %v, want read-root rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "recorded data_access lease request") {
+		t.Fatalf("read_file after reopened revocation err = %v, want materialized data_access lease request", err)
+	}
+	open, err := reopened.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(reopened lease blocker) err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsAuthority || open[0].RequiredAuthority != string(session.ContinuationLeaseClassDataAccess) {
+		t.Fatalf("open next actions after revoked lease = %#v, want data_access authority blocker", open)
 	}
 	assertNativeFileAccessInvocations(t, reopened, "capg-file-access-reopen", map[string]string{
 		"read_file": leaseID,

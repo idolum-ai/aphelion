@@ -102,6 +102,21 @@ func TestCapabilityRequestParentAdminGrantFlow(t *testing.T) {
 	if !strings.Contains(out, "review_status: approved") {
 		t.Fatalf("admin request_review output = %q, want approved", out)
 	}
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		Key:               key,
+		Owner:             "tool",
+		State:             session.NextActionBlockedNeedsAuthority,
+		SubjectKind:       "capability_request",
+		SubjectRef:        "cap-family-amazon",
+		NextAction:        "review and grant the exact missing capability before retrying the blocked tool invocation",
+		RequiredAuthority: "capability_grant",
+		ResourceBlocker:   "missing_capability_grant",
+		OperationKind:     "capability_grant_review",
+		OperationTool:     "capability_authority",
+		CreatedAt:         time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(missing grant blocker) err = %v", err)
+	}
 
 	out, err = registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{
 		"action":"grant_set",
@@ -116,6 +131,15 @@ func TestCapabilityRequestParentAdminGrantFlow(t *testing.T) {
 	}
 	if !strings.Contains(out, "[CAPABILITY_GRANT]") || !strings.Contains(out, "status: active") {
 		t.Fatalf("grant_set output = %q, want active grant", out)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(after grant_set) err = %v", err)
+	}
+	for _, action := range open {
+		if action.SubjectKind == "capability_request" && action.SubjectRef == "cap-family-amazon" {
+			t.Fatalf("open next actions = %#v, want capability request blocker resolved by active grant", open)
+		}
 	}
 
 	out, err = registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{

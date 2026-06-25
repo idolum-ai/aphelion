@@ -17,12 +17,16 @@ import (
 
 type missingContinuationLeaseRequirement struct {
 	AgentID             string
+	Resource            string
 	GrantID             string
 	GrantTargetResource string
 	Principal           string
 	LeaseClass          session.ContinuationLeaseClass
 	AllowedActions      []string
 	Constraints         map[string]string
+	Tool                string
+	ToolAction          string
+	NextAction          string
 	OperatorProjection  string
 }
 
@@ -35,6 +39,9 @@ func (e missingContinuationLeaseError) Error() string {
 	requirement := normalizeMissingContinuationLeaseRequirement(e.requirement)
 	if requirement.AgentID != "" && requirement.LeaseClass != "" {
 		return fmt.Sprintf("missing %s continuation lease for child %s", requirement.LeaseClass, requirement.AgentID)
+	}
+	if requirement.Tool != "" && requirement.LeaseClass != "" {
+		return fmt.Sprintf("missing %s continuation lease for %s", requirement.LeaseClass, requirement.Tool)
 	}
 	if e.cause != nil {
 		return e.cause.Error()
@@ -57,6 +64,9 @@ func durableAgentWakeOnceLeaseRequirement(agentID string, grant session.Capabili
 		LeaseClass:          session.ContinuationLeaseClassChildWake,
 		AllowedActions:      []string{durableAgentWakeOnceAction},
 		Constraints:         map[string]string{"agent_id": agentID},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		NextAction:          "approve a bounded child_wake continuation lease before retrying the blocked durable_agent wake_once invocation",
 		OperatorProjection: fmt.Sprintf(
 			"durable_agent wake_once for %s has an active grant (%s) but no current child_wake continuation lease. Ask the admin to approve one bounded child_wake turn for this exact child, then retry wake_once once.",
 			agentID,
@@ -77,7 +87,7 @@ func (r *Registry) materializeMissingContinuationLeaseError(_ context.Context, k
 		return fmt.Errorf("%w; additionally failed to materialize lease request: session identity unavailable", err)
 	}
 	requirement := normalizeMissingContinuationLeaseRequirement(missing.requirement)
-	if requirement.AgentID == "" || requirement.Principal == "" || requirement.LeaseClass == "" {
+	if missingContinuationLeaseSubjectToken(requirement) == "" || requirement.Principal == "" || requirement.LeaseClass == "" {
 		return fmt.Errorf("%w; additionally failed to materialize lease request: incomplete lease requirement", err)
 	}
 	now := time.Now().UTC()
@@ -94,7 +104,7 @@ func (r *Registry) materializeMissingContinuationLeaseError(_ context.Context, k
 		SubjectKind:        "continuation_lease_request",
 		SubjectRef:         missingContinuationLeaseSubjectRef(requirement),
 		CausalRefs:         missingContinuationLeaseCausalRefs(requirement),
-		NextAction:         "approve a bounded child_wake continuation lease before retrying the blocked durable_agent wake_once invocation",
+		NextAction:         firstNonEmpty(requirement.NextAction, "approve a bounded continuation lease before retrying the blocked tool invocation"),
 		RequiredAuthority:  string(requirement.LeaseClass),
 		ResourceBlocker:    "missing_continuation_lease",
 		RetryPolicy:        "retry_after_lease",
@@ -107,7 +117,7 @@ func (r *Registry) materializeMissingContinuationLeaseError(_ context.Context, k
 	if recordErr != nil {
 		return fmt.Errorf("%w; additionally failed to materialize lease request: %v", err, recordErr)
 	}
-	return fmt.Errorf("missing continuation lease; recorded child_wake lease request %s", recordID)
+	return fmt.Errorf("missing continuation lease; recorded %s lease request %s", requirement.LeaseClass, recordID)
 }
 
 func asMissingContinuationLeaseError(err error, target *missingContinuationLeaseError) bool {
@@ -129,13 +139,26 @@ func asMissingContinuationLeaseError(err error, target *missingContinuationLease
 
 func normalizeMissingContinuationLeaseRequirement(requirement missingContinuationLeaseRequirement) missingContinuationLeaseRequirement {
 	requirement.AgentID = strings.TrimSpace(requirement.AgentID)
+	requirement.Resource = strings.TrimSpace(requirement.Resource)
 	requirement.GrantID = strings.TrimSpace(requirement.GrantID)
 	requirement.GrantTargetResource = strings.TrimSpace(requirement.GrantTargetResource)
 	requirement.Principal = strings.TrimSpace(requirement.Principal)
 	requirement.LeaseClass = session.NormalizeContinuationLeaseClass(requirement.LeaseClass)
+	requirement.Tool = strings.TrimSpace(requirement.Tool)
+	requirement.ToolAction = strings.ToLower(strings.TrimSpace(requirement.ToolAction))
+	requirement.ToolAction = strings.ReplaceAll(requirement.ToolAction, "-", "_")
+	requirement.ToolAction = strings.ReplaceAll(requirement.ToolAction, " ", "_")
+	requirement.NextAction = strings.TrimSpace(requirement.NextAction)
 	requirement.AllowedActions = normalizeUniqueStrings(requirement.AllowedActions)
 	if len(requirement.AllowedActions) == 0 {
-		requirement.AllowedActions = []string{durableAgentWakeOnceAction}
+		switch requirement.LeaseClass {
+		case session.ContinuationLeaseClassDataAccess:
+			requirement.AllowedActions = []string{"read_approved_resource"}
+		case session.ContinuationLeaseClassLocalWorkspace:
+			requirement.AllowedActions = []string{"edit_files"}
+		case session.ContinuationLeaseClassChildWake:
+			requirement.AllowedActions = []string{durableAgentWakeOnceAction}
+		}
 	}
 	constraints := map[string]string{}
 	for key, value := range requirement.Constraints {
@@ -160,22 +183,45 @@ func missingContinuationLeaseSubjectRef(requirement missingContinuationLeaseRequ
 	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
 	return strings.Join([]string{
 		string(requirement.LeaseClass),
-		requirement.AgentID,
+		missingContinuationLeaseSubjectToken(requirement),
 		requirement.GrantID,
 	}, ":")
+}
+
+func missingContinuationLeaseSubjectToken(requirement missingContinuationLeaseRequirement) string {
+	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
+	if requirement.AgentID != "" {
+		return requirement.AgentID
+	}
+	if requirement.GrantID != "" {
+		return requirement.GrantID
+	}
+	if requirement.Resource != "" {
+		sum := sha256.Sum256([]byte(requirement.Resource))
+		return "resource-" + hex.EncodeToString(sum[:8])
+	}
+	if requirement.Tool != "" {
+		return requirement.Tool
+	}
+	return ""
 }
 
 func missingContinuationLeaseCausalRefs(requirement missingContinuationLeaseRequirement) []string {
 	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
 	refs := []string{
 		"continuation_lease_class:" + string(requirement.LeaseClass),
-		"durable_agent:" + requirement.AgentID,
+	}
+	if requirement.AgentID != "" {
+		refs = append(refs, "durable_agent:"+requirement.AgentID)
 	}
 	if requirement.GrantID != "" {
 		refs = append(refs, "capability_grant:"+requirement.GrantID)
 	}
 	if requirement.GrantTargetResource != "" {
 		refs = append(refs, "capability:"+requirement.GrantTargetResource)
+	}
+	if requirement.Tool != "" {
+		refs = append(refs, "tool:"+requirement.Tool)
 	}
 	return refs
 }
@@ -199,12 +245,17 @@ func missingContinuationLeaseOperationInputJSON(requirement missingContinuationL
 		"principal":             requirement.Principal,
 		"allowed_actions":       requirement.AllowedActions,
 		"constraints":           requirement.Constraints,
-		"tool":                  "durable_agent",
-		"tool_action":           "wake_once",
-		"agent_id":              requirement.AgentID,
+		"tool":                  requirement.Tool,
+		"tool_action":           requirement.ToolAction,
 		"grant_id":              requirement.GrantID,
 		"grant_target_resource": requirement.GrantTargetResource,
 		"retry_after_lease":     true,
+	}
+	if requirement.AgentID != "" {
+		payload["agent_id"] = requirement.AgentID
+	}
+	if requirement.Resource != "" {
+		payload["resource"] = requirement.Resource
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {

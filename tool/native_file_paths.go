@@ -109,11 +109,32 @@ func (r *Registry) nativeFileAccessGrantRoots(ctx context.Context, scope sandbox
 	if r == nil || r.store == nil || !toolSessionKeyHasIdentity(key) {
 		return nil, nil
 	}
-	useRef, err := r.authorityUseRefForGrant(ctx, "file_access", key, p)
+	roots, err := r.nativeFileAccessGrantRootCandidates(scope, p, access, operation)
 	if err != nil {
+		return nil, err
+	}
+	if len(roots) == 0 {
 		return nil, nil
 	}
+	useRef, err := r.authorityUseRefForGrant(ctx, "file_access", key, p)
+	if err != nil {
+		return nil, missingContinuationLeaseError{
+			requirement: nativeFileAccessLeaseRequirement(roots[0].Grant, access, operation, p),
+			cause:       err,
+		}
+	}
+	for i := range roots {
+		root, err := filepath.Abs(filepath.Clean(roots[i].Root))
+		if err != nil {
+			return nil, fmt.Errorf("resolve file_access root %q: %w", roots[i].Root, err)
+		}
+		roots[i].Root = root
+		roots[i].UseRef = useRef
+	}
+	return roots, nil
+}
 
+func (r *Registry) nativeFileAccessGrantRootCandidates(scope sandbox.Scope, p principal.Principal, access nativePathAccess, operation string) ([]nativeFileAccessGrantRoot, error) {
 	now := time.Now().UTC()
 	roots := make([]nativeFileAccessGrantRoot, 0)
 	seen := make(map[string]struct{})
@@ -141,19 +162,49 @@ func (r *Registry) nativeFileAccessGrantRoots(ctx context.Context, scope sandbox
 			roots = append(roots, nativeFileAccessGrantRoot{
 				Root:      root,
 				Grant:     grant,
-				UseRef:    useRef,
 				Operation: normalizeToolFileAccessOperation(operation),
 			})
 		}
 	}
-	for i := range roots {
-		root, err := filepath.Abs(filepath.Clean(roots[i].Root))
-		if err != nil {
-			return nil, fmt.Errorf("resolve file_access root %q: %w", roots[i].Root, err)
-		}
-		roots[i].Root = root
-	}
 	return roots, nil
+}
+
+func nativeFileAccessLeaseRequirement(grant session.CapabilityGrant, access nativePathAccess, operation string, p principal.Principal) missingContinuationLeaseRequirement {
+	operation = normalizeToolFileAccessOperation(operation)
+	leaseClass := session.ContinuationLeaseClassDataAccess
+	allowed := []string{"read_approved_resource"}
+	if access == nativePathWrite {
+		leaseClass = session.ContinuationLeaseClassLocalWorkspace
+		allowed = []string{"edit_files", "write_approved_resource"}
+	}
+	target := strings.TrimSpace(grant.TargetResource)
+	return normalizeMissingContinuationLeaseRequirement(missingContinuationLeaseRequirement{
+		Resource:            target,
+		GrantID:             grant.GrantID,
+		GrantTargetResource: target,
+		Principal:           toolAuthorityCanonicalPrincipal(p),
+		LeaseClass:          leaseClass,
+		AllowedActions:      allowed,
+		Constraints: map[string]string{
+			"capability_kind": "file_access",
+			"grant_id":        strings.TrimSpace(grant.GrantID),
+			"operation":       operation,
+			"target_resource": target,
+		},
+		Tool:       operation,
+		ToolAction: operation,
+		NextAction: fmt.Sprintf(
+			"approve a bounded %s continuation lease before retrying the blocked %s invocation",
+			leaseClass,
+			operation,
+		),
+		OperatorProjection: fmt.Sprintf(
+			"%s has an active file_access grant (%s) for the requested resource, but no current %s continuation lease. Approve one bounded lease for this exact operation and resource, then retry once.",
+			operation,
+			strings.TrimSpace(grant.GrantID),
+			leaseClass,
+		),
+	})
 }
 
 func nativeFileAccessGrantRootPaths(roots []nativeFileAccessGrantRoot) []string {
