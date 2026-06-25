@@ -63,6 +63,85 @@ func TestRecordNextActionResolvesPriorOpenActionForSameSubject(t *testing.T) {
 	}
 }
 
+func TestOpenNextActionsBySessionSubjectIsScopedAndNotHiddenBySessionVolume(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	key := SessionKey{ChatID: 91005, UserID: 1001}
+	otherKey := SessionKey{ChatID: 91006, UserID: 1001}
+	subjectKind := "continuation_lease_request"
+	subjectRef := "child_wake:child-alpha:grant-alpha:tool=durable_agent:action=wake_once"
+	target, err := store.RecordNextAction(NextActionInput{
+		RecordID:          "target-subject-action",
+		Key:               key,
+		Owner:             "test",
+		State:             NextActionBlockedNeedsAuthority,
+		SubjectKind:       subjectKind,
+		SubjectRef:        subjectRef,
+		NextAction:        "approve child wake",
+		RequiredAuthority: "child_wake",
+		CreatedAt:         time.Date(2026, 6, 23, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("RecordNextAction(target) err = %v", err)
+	}
+	if _, err := store.RecordNextAction(NextActionInput{
+		RecordID:          "other-session-same-subject",
+		Key:               otherKey,
+		Owner:             "test",
+		State:             NextActionBlockedNeedsAuthority,
+		SubjectKind:       subjectKind,
+		SubjectRef:        subjectRef,
+		NextAction:        "approve child wake elsewhere",
+		RequiredAuthority: "child_wake",
+		CreatedAt:         time.Date(2026, 6, 23, 10, 1, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(other session) err = %v", err)
+	}
+	for i := 0; i < 125; i++ {
+		if _, err := store.RecordNextAction(NextActionInput{
+			RecordID:          "unrelated-session-action-" + time.Date(2026, 6, 23, 10, i+2, 0, 0, time.UTC).Format("150405"),
+			Key:               key,
+			Owner:             "test",
+			State:             NextActionBlockedNeedsAuthority,
+			SubjectKind:       "unrelated",
+			SubjectRef:        time.Date(2026, 6, 23, 10, i+2, 0, 0, time.UTC).Format("150405"),
+			NextAction:        "unrelated",
+			RequiredAuthority: "test",
+			CreatedAt:         time.Date(2026, 6, 23, 10, i+2, 0, 0, time.UTC),
+		}); err != nil {
+			t.Fatalf("RecordNextAction(unrelated %d) err = %v", i, err)
+		}
+	}
+
+	sessionWide, err := store.OpenNextActionsBySession(key, 100)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	for _, action := range sessionWide {
+		if action.RecordID == target.RecordID {
+			t.Fatalf("session-wide newest 100 unexpectedly included old target action")
+		}
+	}
+	matches, err := store.OpenNextActionsBySessionSubject(key, subjectKind, subjectRef, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySessionSubject() err = %v", err)
+	}
+	if len(matches) != 1 || matches[0].RecordID != target.RecordID {
+		t.Fatalf("session subject matches = %#v, want only %q", matches, target.RecordID)
+	}
+	otherMatches, err := store.OpenNextActionsBySessionSubject(otherKey, subjectKind, subjectRef, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySessionSubject(other) err = %v", err)
+	}
+	if len(otherMatches) != 1 || otherMatches[0].RecordID != "other-session-same-subject" {
+		t.Fatalf("other session subject matches = %#v, want other session action", otherMatches)
+	}
+}
+
 func TestRecordResourcePreflightCreatesRepairNextAction(t *testing.T) {
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
 	if err != nil {

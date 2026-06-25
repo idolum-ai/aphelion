@@ -260,6 +260,292 @@ func TestDurableAgentWakeOnceLeaseRequestOperationCreatesExactPendingLease(t *te
 	}
 }
 
+func TestDurableAgentWakeOnceRefreshesStaleLeaseRequestAction(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	runner := &fakeDurableAgentWakeRunner{store: store}
+	registry.WithDurableAgentWakeRunner(runner)
+	upsertDurableAgentWakeTestAgent(t, store)
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	grant := grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", actor)
+	key := adminSessionKey()
+	requirement := durableAgentWakeOnceLeaseRequirement("child-alpha", grant, actor)
+	legacyInput := map[string]any{
+		"action":                  "request_continuation_lease",
+		"lease_class":             string(session.ContinuationLeaseClassChildWake),
+		"principal":               "telegram:1001",
+		"allowed_actions":         []string{durableAgentWakeOnceAction},
+		"constraints":             map[string]string{"agent_id": "child-alpha"},
+		"tool":                    "durable_agent",
+		"tool_action":             "wake_once",
+		"grant_id":                grant.GrantID,
+		"grant_target_resource":   grant.TargetResource,
+		"agent_id":                "child-alpha",
+		"retry_after_lease":       true,
+		"recovery_contract":       recoveryHandoffContractVersion,
+		"recovery_operation_kind": "continuation_lease_request",
+	}
+	legacy := seedMissingContinuationLeaseActionForWakeTest(t, store, key, requirement, "legacy-child-wake-lease-request", legacyInput, time.Now().Add(-time.Minute))
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		actor,
+		key,
+		"durable_agent",
+		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "missing child_wake continuation lease") || !strings.Contains(err.Error(), "lease request recorded") || strings.Contains(err.Error(), "already recorded") {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want stale request refreshed", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("wake runner calls = %v, want no child wake before lease", runner.calls)
+	}
+	open := openMissingLeaseActionsForWakeTest(t, store, key, requirement)
+	if len(open) != 1 {
+		t.Fatalf("open matching actions = %#v, want refreshed singleton", open)
+	}
+	if open[0].RecordID == legacy.RecordID {
+		t.Fatalf("open record id = %q, want legacy record superseded", open[0].RecordID)
+	}
+	assertRecoveryRequestInstanceForWakeTest(t, open[0].OperationInputJSON, true)
+	if err := validateRecoveryHandoffToolInput(open[0].State, open[0].OperationTool, open[0].OperationInputJSON); err != nil {
+		t.Fatalf("validate refreshed recovery handoff err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, open[0].OperationTool, json.RawMessage(open[0].OperationInputJSON))
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(request_approval refreshed lease request) err = %v", err)
+	}
+	if !strings.Contains(out, "[APPROVAL_REQUESTED]") {
+		t.Fatalf("request_approval output = %q, want approval request render", out)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending ||
+		cont.ContinuationLease.Status != session.ContinuationLeaseStatusPending ||
+		cont.ContinuationLease.LeaseClass != session.ContinuationLeaseClassChildWake ||
+		strings.TrimSpace(cont.ContinuationLease.Constraints["agent_id"]) != "child-alpha" ||
+		!operationStringSliceContains(cont.ContinuationLease.AllowedActions, durableAgentWakeOnceAction) ||
+		len(cont.ContinuationLease.RequiredCapabilityGrants) != 1 ||
+		cont.ContinuationLease.RequiredCapabilityGrants[0].GrantID != grant.GrantID {
+		t.Fatalf("continuation = %#v, want exact pending child_wake lease bound to grant %s", cont, grant.GrantID)
+	}
+}
+
+func TestDurableAgentWakeOnceRefreshesTerminalLeaseRequestInstance(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	runner := &fakeDurableAgentWakeRunner{store: store}
+	registry.WithDurableAgentWakeRunner(runner)
+	upsertDurableAgentWakeTestAgent(t, store)
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	grant := grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", actor)
+	key := adminSessionKey()
+	requirement := durableAgentWakeOnceLeaseRequirement("child-alpha", grant, actor)
+	const terminalInstanceID = "terminal-child-wake-request-instance"
+	current := seedCurrentMissingContinuationLeaseActionForWakeTest(t, store, key, requirement, "terminal-child-wake-request", terminalInstanceID, time.Now().Add(-time.Minute))
+
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, current.OperationTool, json.RawMessage(current.OperationInputJSON)); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(request_approval current lease request) err = %v", err)
+	}
+	terminal, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	terminal.Status = session.ContinuationStatusRevoked
+	terminal.ActionProposal.Status = session.ProposalStatusDenied
+	terminal.ContinuationLease.Status = session.ContinuationLeaseStatusRevoked
+	terminal.RemainingTurns = 0
+	terminal.ContinuationLease.RemainingTurns = 0
+	if err := store.UpdateContinuationState(key, terminal); err != nil {
+		t.Fatalf("UpdateContinuationState(terminal request instance) err = %v", err)
+	}
+
+	_, err = registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		actor,
+		key,
+		"durable_agent",
+		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "lease request recorded") || strings.Contains(err.Error(), "already recorded") {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want terminal request instance refreshed", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("wake runner calls = %v, want no child wake before lease", runner.calls)
+	}
+	open := openMissingLeaseActionsForWakeTest(t, store, key, requirement)
+	if len(open) != 1 {
+		t.Fatalf("open matching actions = %#v, want refreshed singleton", open)
+	}
+	if open[0].RecordID == current.RecordID {
+		t.Fatalf("open record id = %q, want terminal request action superseded", open[0].RecordID)
+	}
+	if got := recoveryRequestInstanceForWakeTest(t, open[0].OperationInputJSON); got == terminalInstanceID || strings.TrimSpace(got) == "" {
+		t.Fatalf("refreshed request_instance_id = %q, want fresh non-empty id different from terminal instance", got)
+	}
+}
+
+func TestDurableAgentWakeOnceRefreshesMalformedLeaseRequestActions(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		toolName  string
+		operation string
+		mutate    func(map[string]any) string
+	}{
+		{
+			name: "non object json",
+			mutate: func(map[string]any) string {
+				return `["request_continuation_lease"]`
+			},
+		},
+		{
+			name: "wrong recovery contract",
+			mutate: func(payload map[string]any) string {
+				payload["recovery_contract"] = "aphelion.recovery_handoff.v0"
+				return marshalWakeTestJSON(payload)
+			},
+		},
+		{
+			name: "wrong recovery operation",
+			mutate: func(payload map[string]any) string {
+				payload["recovery_operation_kind"] = "capability_grant_review"
+				return marshalWakeTestJSON(payload)
+			},
+		},
+		{
+			name:     "wrong tool",
+			toolName: "update_operation",
+			mutate: func(payload map[string]any) string {
+				return marshalWakeTestJSON(payload)
+			},
+		},
+		{
+			name: "wrong agent",
+			mutate: func(payload map[string]any) string {
+				payload["agent_id"] = "child-beta"
+				payload["constraints"] = map[string]string{"agent_id": "child-beta"}
+				return marshalWakeTestJSON(payload)
+			},
+		},
+		{
+			name: "wrong grant",
+			mutate: func(payload map[string]any) string {
+				payload["grant_id"] = "grant-other"
+				return marshalWakeTestJSON(payload)
+			},
+		},
+		{
+			name: "wrong target resource",
+			mutate: func(payload map[string]any) string {
+				payload["grant_target_resource"] = "durable_agent:child-beta:wake_once"
+				return marshalWakeTestJSON(payload)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			registry, store := newDurableAgentToolRegistry(t)
+			registry.WithDurableAgentWakeRunner(&fakeDurableAgentWakeRunner{store: store})
+			upsertDurableAgentWakeTestAgent(t, store)
+			actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+			grant := grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", actor)
+			key := session.SessionKey{ChatID: 9100 + int64(len(tc.name)), UserID: 1001}
+			requirement := durableAgentWakeOnceLeaseRequirement("child-alpha", grant, actor)
+			currentPayload := currentMissingLeasePayloadForWakeTest(t, requirement, "stale-"+strings.ReplaceAll(tc.name, " ", "-"))
+			raw := tc.mutate(currentPayload)
+			toolName := firstNonEmpty(tc.toolName, "request_approval")
+			operationKind := firstNonEmpty(tc.operation, "continuation_lease_request")
+			legacy := seedMissingContinuationLeaseActionRawForWakeTest(t, store, key, requirement, "stale-"+strings.ReplaceAll(tc.name, " ", "-"), toolName, operationKind, raw, time.Now().Add(-time.Minute))
+
+			_, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "durable_agent", json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`))
+			if err == nil || !strings.Contains(err.Error(), "lease request recorded") || strings.Contains(err.Error(), "already recorded") {
+				t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want malformed request refreshed", err)
+			}
+			open := openMissingLeaseActionsForWakeTest(t, store, key, requirement)
+			if len(open) != 1 || open[0].RecordID == legacy.RecordID {
+				t.Fatalf("open matching actions = %#v, legacy = %#v, want refreshed singleton", open, legacy)
+			}
+			assertRecoveryRequestInstanceForWakeTest(t, open[0].OperationInputJSON, true)
+			if err := validateRecoveryHandoffToolInput(open[0].State, open[0].OperationTool, open[0].OperationInputJSON); err != nil {
+				t.Fatalf("validate refreshed recovery handoff err = %v", err)
+			}
+		})
+	}
+}
+
+func TestDurableAgentWakeOnceCurrentLeaseRequestActionIsIdempotentPastPagination(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	registry.WithDurableAgentWakeRunner(&fakeDurableAgentWakeRunner{store: store})
+	upsertDurableAgentWakeTestAgent(t, store)
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	grant := grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", actor)
+	key := adminSessionKey()
+	requirement := durableAgentWakeOnceLeaseRequirement("child-alpha", grant, actor)
+	current := seedCurrentMissingContinuationLeaseActionForWakeTest(t, store, key, requirement, "current-child-wake-request", "current-child-wake-request", time.Now().Add(-2*time.Hour))
+	for i := 0; i < 125; i++ {
+		_, err := store.RecordNextAction(session.NextActionInput{
+			RecordID:          fmt.Sprintf("unrelated-action-%03d", i),
+			Key:               key,
+			Owner:             "test",
+			State:             session.NextActionBlockedNeedsAuthority,
+			SubjectKind:       "unrelated",
+			SubjectRef:        fmt.Sprintf("subject-%03d", i),
+			NextAction:        "unrelated action",
+			RequiredAuthority: "test",
+			CreatedAt:         time.Now().Add(time.Duration(i) * time.Second),
+		})
+		if err != nil {
+			t.Fatalf("RecordNextAction(unrelated %d) err = %v", i, err)
+		}
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "durable_agent", json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`))
+	if err == nil || !strings.Contains(err.Error(), "lease request already recorded") {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want compatible request found beyond session pagination", err)
+	}
+	open := openMissingLeaseActionsForWakeTest(t, store, key, requirement)
+	if len(open) != 1 || open[0].RecordID != current.RecordID {
+		t.Fatalf("open matching actions = %#v, want original current action %q", open, current.RecordID)
+	}
+}
+
+func TestDurableAgentWakeOnceLeaseRequestSubjectIsSessionScoped(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	registry.WithDurableAgentWakeRunner(&fakeDurableAgentWakeRunner{store: store})
+	upsertDurableAgentWakeTestAgent(t, store)
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	grant := grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", actor)
+	requirement := durableAgentWakeOnceLeaseRequirement("child-alpha", grant, actor)
+	otherKey := session.SessionKey{ChatID: 9201, UserID: 1001}
+	key := session.SessionKey{ChatID: 9202, UserID: 1001}
+	seedCurrentMissingContinuationLeaseActionForWakeTest(t, store, otherKey, requirement, "other-session-current-child-wake-request", "other-session-current-child-wake-request", time.Now().Add(-time.Minute))
+
+	_, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "durable_agent", json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`))
+	if err == nil || !strings.Contains(err.Error(), "lease request recorded") || strings.Contains(err.Error(), "already recorded") {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want new request in current session", err)
+	}
+	if open := openMissingLeaseActionsForWakeTest(t, store, key, requirement); len(open) != 1 {
+		t.Fatalf("current session open matching actions = %#v, want one new action", open)
+	}
+	if open := openMissingLeaseActionsForWakeTest(t, store, otherKey, requirement); len(open) != 1 {
+		t.Fatalf("other session open matching actions = %#v, want other session action preserved", open)
+	}
+}
+
 func TestRequestApprovalContinuationLeaseRejectsConflictingChildWakeConstraint(t *testing.T) {
 	t.Parallel()
 
@@ -779,6 +1065,82 @@ func TestMissingGrantMaterializationConcurrentDenialsLeaveOnePendingReview(t *te
 	}
 }
 
+func TestMissingContinuationLeaseRefreshesStaleDataAccessAction(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := session.SessionKey{ChatID: 9301, UserID: 1001}
+	requirement := normalizeMissingContinuationLeaseRequirement(missingContinuationLeaseRequirement{
+		Resource:            "/child/runtime-bin",
+		GrantID:             "capg-runtime-read",
+		GrantTargetResource: "/child/runtime-bin",
+		Principal:           "telegram:1001",
+		LeaseClass:          session.ContinuationLeaseClassDataAccess,
+		AllowedActions:      []string{"read_approved_resource"},
+		Constraints: map[string]string{
+			"grant_id":              "capg-runtime-read",
+			"grant_target_resource": "/child/runtime-bin",
+			"target_resource":       "/child/runtime-bin",
+			"resource":              "/child/runtime-bin",
+			"tool":                  "list_dir",
+			"tool_action":           "list_dir",
+		},
+		Tool:       "list_dir",
+		ToolAction: "list_dir",
+	})
+	legacyInput := map[string]any{
+		"action":                  "request_continuation_lease",
+		"lease_class":             string(session.ContinuationLeaseClassDataAccess),
+		"principal":               "telegram:1001",
+		"allowed_actions":         []string{"read_approved_resource"},
+		"constraints":             requirement.Constraints,
+		"tool":                    "list_dir",
+		"tool_action":             "list_dir",
+		"grant_id":                "capg-runtime-read",
+		"grant_target_resource":   "/child/runtime-bin",
+		"resource":                "/child/runtime-bin",
+		"retry_after_lease":       true,
+		"recovery_contract":       recoveryHandoffContractVersion,
+		"recovery_operation_kind": "continuation_lease_request",
+	}
+	legacy := seedMissingContinuationLeaseActionForWakeTest(t, store, key, requirement, "legacy-data-access-lease-request", legacyInput, time.Now().Add(-time.Minute))
+
+	err := registry.materializeMissingContinuationLeaseError(context.Background(), key, actor, missingContinuationLeaseError{
+		requirement: requirement,
+		cause:       fmt.Errorf("missing data_access continuation lease"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "lease request recorded") || strings.Contains(err.Error(), "already recorded") {
+		t.Fatalf("materializeMissingContinuationLeaseError() err = %v, want stale data_access request refreshed", err)
+	}
+	open := openMissingLeaseActionsForWakeTest(t, store, key, requirement)
+	if len(open) != 1 || open[0].RecordID == legacy.RecordID {
+		t.Fatalf("open matching actions = %#v, legacy = %#v, want refreshed singleton", open, legacy)
+	}
+	assertRecoveryRequestInstanceForWakeTest(t, open[0].OperationInputJSON, true)
+	if err := validateRecoveryHandoffToolInput(open[0].State, open[0].OperationTool, open[0].OperationInputJSON); err != nil {
+		t.Fatalf("validate refreshed data_access handoff err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, open[0].OperationTool, json.RawMessage(open[0].OperationInputJSON))
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(request_approval data_access) err = %v", err)
+	}
+	if !strings.Contains(out, "[APPROVAL_REQUESTED]") {
+		t.Fatalf("request_approval output = %q, want approval request render", out)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.ContinuationLease.LeaseClass != session.ContinuationLeaseClassDataAccess ||
+		len(cont.ContinuationLease.RequiredCapabilityGrants) != 1 ||
+		cont.ContinuationLease.RequiredCapabilityGrants[0].GrantID != "capg-runtime-read" ||
+		cont.ContinuationLease.RequiredCapabilityGrants[0].TargetResource != "/child/runtime-bin" {
+		t.Fatalf("continuation = %#v, want exact data_access lease bound to capg-runtime-read", cont)
+	}
+}
+
 func TestDurableAgentWakeOnceRequiresChildWakeAuthority(t *testing.T) {
 	t.Parallel()
 
@@ -1170,6 +1532,110 @@ func upsertDurableAgentWakeTestAgent(t *testing.T, store *session.SQLiteStore) {
 	}); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
+}
+
+func currentMissingLeasePayloadForWakeTest(t *testing.T, requirement missingContinuationLeaseRequirement, requestInstanceID string) map[string]any {
+	t.Helper()
+
+	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
+	requirement.RequestInstanceID = requestInstanceID
+	op, err := compileContinuationLeaseRecoveryHandoff(requirement)
+	if err != nil {
+		t.Fatalf("compileContinuationLeaseRecoveryHandoff() err = %v", err)
+	}
+	payload := map[string]any{}
+	if err := json.Unmarshal([]byte(op.InputJSON), &payload); err != nil {
+		t.Fatalf("unmarshal recovery handoff input err = %v", err)
+	}
+	return payload
+}
+
+func seedCurrentMissingContinuationLeaseActionForWakeTest(t *testing.T, store *session.SQLiteStore, key session.SessionKey, requirement missingContinuationLeaseRequirement, recordID string, requestInstanceID string, createdAt time.Time) session.NextActionRecord {
+	t.Helper()
+
+	return seedMissingContinuationLeaseActionForWakeTest(t, store, key, requirement, recordID, currentMissingLeasePayloadForWakeTest(t, requirement, requestInstanceID), createdAt)
+}
+
+func seedMissingContinuationLeaseActionForWakeTest(t *testing.T, store *session.SQLiteStore, key session.SessionKey, requirement missingContinuationLeaseRequirement, recordID string, input map[string]any, createdAt time.Time) session.NextActionRecord {
+	t.Helper()
+
+	return seedMissingContinuationLeaseActionRawForWakeTest(t, store, key, requirement, recordID, "request_approval", "continuation_lease_request", marshalWakeTestJSON(input), createdAt)
+}
+
+func seedMissingContinuationLeaseActionRawForWakeTest(t *testing.T, store *session.SQLiteStore, key session.SessionKey, requirement missingContinuationLeaseRequirement, recordID string, operationTool string, operationKind string, raw string, createdAt time.Time) session.NextActionRecord {
+	t.Helper()
+
+	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
+	record, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           recordID,
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         missingContinuationLeaseSubjectRef(requirement),
+		CausalRefs:         missingContinuationLeaseCausalRefs(requirement),
+		NextAction:         "approve a bounded continuation lease before retrying",
+		RequiredAuthority:  string(requirement.LeaseClass),
+		ResourceBlocker:    "missing_continuation_lease",
+		RetryPolicy:        "retry_after_lease",
+		OperationKind:      operationKind,
+		OperationTool:      operationTool,
+		OperationInputJSON: raw,
+		OperatorProjection: requirement.OperatorProjection,
+		CreatedAt:          createdAt,
+	})
+	if err != nil {
+		t.Fatalf("RecordNextAction(%s) err = %v", recordID, err)
+	}
+	return record
+}
+
+func openMissingLeaseActionsForWakeTest(t *testing.T, store *session.SQLiteStore, key session.SessionKey, requirement missingContinuationLeaseRequirement) []session.NextActionRecord {
+	t.Helper()
+
+	open, err := store.OpenNextActionsBySessionSubject(key, "continuation_lease_request", missingContinuationLeaseSubjectRef(requirement), 20)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySessionSubject() err = %v", err)
+	}
+	return open
+}
+
+func assertRecoveryRequestInstanceForWakeTest(t *testing.T, raw string, wantPresent bool) {
+	t.Helper()
+
+	got := recoveryRequestInstanceForWakeTest(t, raw)
+	if wantPresent && strings.TrimSpace(got) == "" {
+		t.Fatalf("operation input = %s, want request_instance_id", raw)
+	}
+	if !wantPresent && strings.TrimSpace(got) != "" {
+		t.Fatalf("operation input = %s, want no request_instance_id", raw)
+	}
+	payload := map[string]any{}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("unmarshal operation input err = %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprint(payload["recovery_contract"])); got != recoveryHandoffContractVersion {
+		t.Fatalf("operation input recovery_contract = %q, want %q", got, recoveryHandoffContractVersion)
+	}
+	if got := strings.TrimSpace(fmt.Sprint(payload["recovery_operation_kind"])); got != "continuation_lease_request" {
+		t.Fatalf("operation input recovery_operation_kind = %q, want continuation_lease_request", got)
+	}
+}
+
+func recoveryRequestInstanceForWakeTest(t *testing.T, raw string) string {
+	t.Helper()
+
+	payload := map[string]any{}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("unmarshal operation input err = %v", err)
+	}
+	got, _ := payload["request_instance_id"].(string)
+	return strings.TrimSpace(got)
+}
+
+func marshalWakeTestJSON(input map[string]any) string {
+	raw, _ := json.Marshal(input)
+	return string(raw)
 }
 
 func grantDurableAgentWakeOnceInvoke(t *testing.T, store *session.SQLiteStore, agentID string, actor principal.Principal) session.CapabilityGrant {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -92,14 +93,22 @@ func (r *Registry) materializeMissingContinuationLeaseError(_ context.Context, k
 	}
 	now := time.Now().UTC()
 	subjectRef := missingContinuationLeaseSubjectRef(requirement)
-	if existing, ok, lookupErr := r.openMissingContinuationLeaseAction(key, subjectRef); lookupErr != nil {
+	if existing, lookupErr := r.openMissingContinuationLeaseActions(key, subjectRef); lookupErr != nil {
 		return fmt.Errorf("%w; additionally failed to inspect existing lease request: %v", err, lookupErr)
-	} else if ok {
-		return safeToolFailureError{
-			class:       "authority_rejected",
-			summary:     fmt.Sprintf("tool execution failed: missing %s continuation lease; lease request already recorded", requirement.LeaseClass),
-			retryPolicy: "ask_for_grant",
-			cause:       fmt.Errorf("%w; existing next action %s", err, strings.TrimSpace(existing.RecordID)),
+	} else {
+		for _, action := range existing {
+			matches, matchErr := r.missingContinuationLeaseActionMatchesRequirement(key, action, requirement)
+			if matchErr != nil {
+				return fmt.Errorf("%w; additionally failed to inspect existing lease request: %v", err, matchErr)
+			}
+			if matches {
+				return safeToolFailureError{
+					class:       "authority_rejected",
+					summary:     fmt.Sprintf("tool execution failed: missing %s continuation lease; lease request already recorded", requirement.LeaseClass),
+					retryPolicy: "ask_for_grant",
+					cause:       fmt.Errorf("%w; existing next action %s", err, strings.TrimSpace(action.RecordID)),
+				}
+			}
 		}
 	}
 	requirement.RequestInstanceID = missingContinuationLeaseRequestInstanceID(key, requirement, now)
@@ -137,20 +146,89 @@ func (r *Registry) materializeMissingContinuationLeaseError(_ context.Context, k
 	}
 }
 
-func (r *Registry) openMissingContinuationLeaseAction(key session.SessionKey, subjectRef string) (session.NextActionRecord, bool, error) {
+func (r *Registry) openMissingContinuationLeaseActions(key session.SessionKey, subjectRef string) ([]session.NextActionRecord, error) {
 	if r == nil || r.store == nil {
-		return session.NextActionRecord{}, false, nil
+		return nil, nil
 	}
-	open, err := r.store.OpenNextActionsBySession(key, 100)
+	return r.store.OpenNextActionsBySessionSubject(key, "continuation_lease_request", subjectRef, 100)
+}
+
+func (r *Registry) missingContinuationLeaseActionMatchesRequirement(key session.SessionKey, action session.NextActionRecord, requirement missingContinuationLeaseRequirement) (bool, error) {
+	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
+	if action.State != session.NextActionBlockedNeedsAuthority ||
+		strings.TrimSpace(action.SubjectKind) != "continuation_lease_request" ||
+		strings.TrimSpace(action.SubjectRef) != missingContinuationLeaseSubjectRef(requirement) ||
+		strings.TrimSpace(action.RequiredAuthority) != string(requirement.LeaseClass) ||
+		strings.TrimSpace(action.ResourceBlocker) != "missing_continuation_lease" ||
+		strings.TrimSpace(action.OperationKind) != "continuation_lease_request" ||
+		strings.TrimSpace(action.OperationTool) != "request_approval" {
+		return false, nil
+	}
+	if err := validateRecoveryHandoffToolInput(action.State, action.OperationTool, action.OperationInputJSON); err != nil {
+		return false, nil
+	}
+	payload := map[string]any{}
+	if err := json.Unmarshal([]byte(action.OperationInputJSON), &payload); err != nil {
+		return false, nil
+	}
+	if missingContinuationLeasePayloadString(payload, "recovery_contract") != recoveryHandoffContractVersion ||
+		missingContinuationLeasePayloadString(payload, "recovery_operation_kind") != "continuation_lease_request" {
+		return false, nil
+	}
+	var in requestApprovalInput
+	if err := decodeToolObjectInput(json.RawMessage(action.OperationInputJSON), &in, "request_approval"); err != nil {
+		return false, nil
+	}
+	compiled, err := requestApprovalContinuationLeaseRequirement(in)
 	if err != nil {
-		return session.NextActionRecord{}, false, err
+		return false, nil
 	}
-	for _, action := range open {
-		if action.SubjectKind == "continuation_lease_request" && strings.TrimSpace(action.SubjectRef) == strings.TrimSpace(subjectRef) {
-			return action, true, nil
-		}
+	if requestApprovalContinuationLeaseContractHash(compiled) != requestApprovalContinuationLeaseContractHash(requirement) {
+		return false, nil
 	}
-	return session.NextActionRecord{}, false, nil
+	return r.missingContinuationLeaseRequestInstanceStillReusable(key, compiled)
+}
+
+func (r *Registry) missingContinuationLeaseRequestInstanceStillReusable(key session.SessionKey, requirement missingContinuationLeaseRequirement) (bool, error) {
+	if r == nil || r.store == nil {
+		return true, nil
+	}
+	state, ok, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return true, nil
+	}
+	_, _, leaseID := requestApprovalContinuationLeaseStableIDs(requirement)
+	if !requestApprovalContinuationStateMatchesRequestIdentity(state, requirement, leaseID) {
+		return true, nil
+	}
+	return missingContinuationLeaseContinuationStateLive(state, time.Now().UTC()), nil
+}
+
+func missingContinuationLeaseContinuationStateLive(state session.ContinuationState, now time.Time) bool {
+	state = session.NormalizeContinuationState(state)
+	if !requestApprovalContinuationStateIsLive(state) {
+		return false
+	}
+	lease := state.ContinuationLease
+	if !lease.ExpiresAt.IsZero() && !lease.ExpiresAt.After(now) {
+		return false
+	}
+	return lease.Status != session.ContinuationLeaseStatusActive || lease.RemainingTurns > 0
+}
+
+func missingContinuationLeasePayloadString(payload map[string]any, key string) string {
+	value, ok := payload[key]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
 }
 
 func asMissingContinuationLeaseError(err error, target *missingContinuationLeaseError) bool {
