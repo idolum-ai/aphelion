@@ -159,6 +159,13 @@ or leave the operator guessing.
 
 Failing closed should still produce a useful next step when one is available.
 
+When Aphelion cannot continue safely, it should preserve continuity by
+committing one typed, legible recovery state: what blocked progress, what
+authority or evidence is missing, what exact next action can repair it, who can
+take that action, and what will happen after it is approved or completed. The
+next consumer should act on that same contract instead of reconstructing the
+failure from prose or nearby state.
+
 ### Persona and governor are collaborators
 
 The persona is not merely a skin over the governor, and the governor is not a
