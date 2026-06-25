@@ -162,7 +162,7 @@ func (r *Registry) materializeMissingGrantRequirement(_ context.Context, key ses
 		}
 	}
 
-	operationInput, err := missingGrantOperationInputJSON(request, requirement)
+	operation, err := compileCapabilityGrantRecoveryHandoff(request, requirement)
 	if err != nil {
 		return session.CapabilityRequest{}, 0, session.NextActionRecord{}, err
 	}
@@ -182,9 +182,9 @@ func (r *Registry) materializeMissingGrantRequirement(_ context.Context, key ses
 		RequiredAuthority:  "capability_grant",
 		ResourceBlocker:    "missing_capability_grant",
 		RetryPolicy:        "retry_after_grant",
-		OperationKind:      firstNonEmpty(requirement.OperationKind, "capability_grant_review"),
-		OperationTool:      firstNonEmpty(requirement.OperationTool, "capability_authority"),
-		OperationInputJSON: operationInput,
+		OperationKind:      operation.Kind,
+		OperationTool:      operation.Tool,
+		OperationInputJSON: operation.InputJSON,
 		OperatorProjection: projection,
 		CreatedAt:          now,
 	})
@@ -278,26 +278,6 @@ func stableMissingGrantRequestID(requirement missingGrantRequirement) string {
 	raw, _ := json.Marshal(payload)
 	sum := sha256.Sum256(raw)
 	return "req-missing-grant-" + hex.EncodeToString(sum[:10])
-}
-
-func missingGrantOperationInputJSON(request session.CapabilityRequest, requirement missingGrantRequirement) (string, error) {
-	payload := map[string]any{
-		"action":            "grant_set",
-		"request_id":        request.RequestID,
-		"kind":              string(requirement.Kind),
-		"target_resource":   requirement.TargetResource,
-		"principal":         requirement.GrantedTo,
-		"allowed_actions":   requirement.AllowedActions,
-		"contract":          json.RawMessage(requirement.Contract),
-		"constraints":       json.RawMessage(requirement.Constraints),
-		"grant_status":      string(session.CapabilityGrantStatusActive),
-		"retry_after_grant": true,
-	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
 }
 
 func (r *Registry) materializeMissingGrantError(ctx context.Context, key session.SessionKey, actor principal.Principal, err error) error {

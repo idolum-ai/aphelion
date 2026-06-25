@@ -409,11 +409,11 @@ func TestCapabilityGrantWakeBlockedResultCreatesTypedNextState(t *testing.T) {
 	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionBlockedNeedsResourceRepair || open[0].ResourceBlocker != "tool_runtime_not_executable" {
 		t.Fatalf("open next actions after blocked child task = %#v, want one typed tool-runtime repair next state", open)
 	}
-	if open[0].OperationKind != "child_tool_runtime_repair" || open[0].OperationTool != "durable_child_repair" {
+	if open[0].OperationKind != "child_tool_runtime_repair" || open[0].OperationTool != "update_operation" {
 		t.Fatalf("open next action operation = kind %q tool %q, want child tool runtime repair", open[0].OperationKind, open[0].OperationTool)
 	}
 	opInput := capabilityGrantWakeOperationInputForTest(t, open[0].OperationInputJSON)
-	if opInput["agent_id"] != agent.AgentID || opInput["blocker_kind"] != "tool_runtime_not_executable" || opInput["task_packet_id"] != taskPacketID || opInput["child_result_id"] != result.ResultID || opInput["tool"] != "gog_cli" || opInput["no_content_probe"] != true || opInput["diagnostic_only"] != true {
+	if opInput["durable_agent_id"] != agent.AgentID || opInput["child_blocker_kind"] != "tool_runtime_not_executable" || opInput["status"] != "blocked" || opInput["stage"] != "durable_child_blocker" || opInput["tool"] != "gog_cli" || opInput["no_content_probe"] != true || opInput["diagnostic_only"] != true || opInput["recovery_contract"] != "aphelion.recovery_handoff.v1" {
 		t.Fatalf("operation input = %#v, want exact gog_cli diagnostic no-content probe", opInput)
 	}
 	pending, err := store.PendingReviewEvents(1001, 10)

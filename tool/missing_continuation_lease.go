@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -91,7 +90,7 @@ func (r *Registry) materializeMissingContinuationLeaseError(_ context.Context, k
 		return fmt.Errorf("%w; additionally failed to materialize lease request: incomplete lease requirement", err)
 	}
 	now := time.Now().UTC()
-	operationInput, opErr := missingContinuationLeaseOperationInputJSON(requirement)
+	operation, opErr := compileContinuationLeaseRecoveryHandoff(requirement)
 	if opErr != nil {
 		return fmt.Errorf("%w; additionally failed to materialize lease request: %v", err, opErr)
 	}
@@ -108,9 +107,9 @@ func (r *Registry) materializeMissingContinuationLeaseError(_ context.Context, k
 		RequiredAuthority:  string(requirement.LeaseClass),
 		ResourceBlocker:    "missing_continuation_lease",
 		RetryPolicy:        "retry_after_lease",
-		OperationKind:      "continuation_lease_request",
-		OperationTool:      "request_approval",
-		OperationInputJSON: operationInput,
+		OperationKind:      operation.Kind,
+		OperationTool:      operation.Tool,
+		OperationInputJSON: operation.InputJSON,
 		OperatorProjection: requirement.OperatorProjection,
 		CreatedAt:          now,
 	})
@@ -261,31 +260,4 @@ func missingContinuationLeaseNextActionRecordID(key session.SessionKey, requirem
 	}, "\x00")
 	sum := sha256.Sum256([]byte(seed))
 	return "next_missing_lease_" + hex.EncodeToString(sum[:12])
-}
-
-func missingContinuationLeaseOperationInputJSON(requirement missingContinuationLeaseRequirement) (string, error) {
-	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
-	payload := map[string]any{
-		"action":                "request_continuation_lease",
-		"lease_class":           string(requirement.LeaseClass),
-		"principal":             requirement.Principal,
-		"allowed_actions":       requirement.AllowedActions,
-		"constraints":           requirement.Constraints,
-		"tool":                  requirement.Tool,
-		"tool_action":           requirement.ToolAction,
-		"grant_id":              requirement.GrantID,
-		"grant_target_resource": requirement.GrantTargetResource,
-		"retry_after_lease":     true,
-	}
-	if requirement.AgentID != "" {
-		payload["agent_id"] = requirement.AgentID
-	}
-	if requirement.Resource != "" {
-		payload["resource"] = requirement.Resource
-	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
 }

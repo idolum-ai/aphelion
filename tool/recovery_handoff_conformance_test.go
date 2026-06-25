@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -186,6 +187,173 @@ func TestRecoveryHandoffRejectedShellReadyActionIsExecutable(t *testing.T) {
 	out := executeRecoveryHandoffActionWithScope(t, registry, key, actor, scope, action)
 	if !strings.Contains(out, "typed recovery handoff") {
 		t.Fatalf("read_file handoff output = %q, want README content", out)
+	}
+}
+
+func TestRecoveryHandoffCompilersProduceConsumerValidatedPayloads(t *testing.T) {
+	t.Parallel()
+
+	leaseReq := durableAgentWakeOnceLeaseRequirement(
+		"child-alpha",
+		session.CapabilityGrant{
+			GrantID:        "grant-child-alpha",
+			TargetResource: "durable_agent:child-alpha:wake_once",
+		},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+	)
+	leaseOp, err := compileContinuationLeaseRecoveryHandoff(leaseReq)
+	if err != nil {
+		t.Fatalf("compileContinuationLeaseRecoveryHandoff() err = %v", err)
+	}
+	if leaseOp.Tool != "request_approval" || leaseOp.Kind != "continuation_lease_request" {
+		t.Fatalf("lease operation = %#v, want request_approval continuation lease request", leaseOp)
+	}
+	if err := validateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, leaseOp.Tool, leaseOp.InputJSON); err != nil {
+		t.Fatalf("validate lease operation err = %v", err)
+	}
+	mutatedLease := strings.Replace(leaseOp.InputJSON, `"agent_id":"child-alpha"`, `"agent_id":"child-beta"`, 1)
+	if err := validateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, leaseOp.Tool, mutatedLease); err == nil {
+		t.Fatal("validate mutated lease operation err = nil, want agent constraint rejection")
+	}
+
+	grantReq := normalizeMissingGrantRequirement(missingGrantRequirement{
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "durable_agent:child-alpha:wake_once",
+		GrantedTo:      "telegram:1001",
+		AllowedActions: []string{"invoke"},
+		Contract:       `{"bounded_effect":"wake child-alpha once"}`,
+		Constraints:    `{"agent_id":"child-alpha"}`,
+	})
+	grantOp, err := compileCapabilityGrantRecoveryHandoff(session.CapabilityRequest{RequestID: grantReq.RequestID}, grantReq)
+	if err != nil {
+		t.Fatalf("compileCapabilityGrantRecoveryHandoff() err = %v", err)
+	}
+	if grantOp.Tool != "capability_authority" || grantOp.Kind != "capability_grant_review" {
+		t.Fatalf("grant operation = %#v, want capability_authority grant review", grantOp)
+	}
+	if err := validateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, grantOp.Tool, grantOp.InputJSON); err != nil {
+		t.Fatalf("validate grant operation err = %v", err)
+	}
+	mutatedGrant := strings.Replace(grantOp.InputJSON, `"request_id":"`+grantReq.RequestID+`"`, `"request_id":""`, 1)
+	if err := validateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, grantOp.Tool, mutatedGrant); err == nil {
+		t.Fatal("validate mutated grant operation err = nil, want missing request rejection")
+	}
+
+	if err := validateRecoveryHandoffToolInput(session.NextActionReadyToExecute, "update_operation", `{"merge":true}`); err == nil {
+		t.Fatal("ready update_operation validation err = nil, want advisory-only rejection")
+	}
+	if err := validateRecoveryHandoffToolInput(session.NextActionReadyToExecute, "not_a_tool", `{"ok":true}`); err == nil {
+		t.Fatal("ready unknown tool validation err = nil, want executable tool rejection")
+	}
+}
+
+func TestRecoveryHandoffExecutableConsumersAreRegisteredTools(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(newToolTestStore(t))
+	defs := registry.Definitions()
+	registered := map[string]bool{}
+	for _, def := range defs {
+		registered[strings.TrimSpace(def.Name)] = true
+	}
+	for _, toolName := range []string{
+		"request_approval",
+		"capability_authority",
+		"read_file",
+		"list_dir",
+		"search",
+		"exec",
+		"system_log_read",
+		"update_operation",
+	} {
+		if !registered[toolName] {
+			t.Fatalf("registered tool definitions = %#v, want recovery handoff consumer %q", registered, toolName)
+		}
+	}
+	if registered["durable_child_repair"] || registered["durable_child_continuation"] {
+		t.Fatalf("registered tool definitions = %#v, do not want placeholder durable child recovery consumers", registered)
+	}
+}
+
+func TestRecoveryHandoffChildWakeSequenceMatchesLiveFailureOrder(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	runner := &fakeDurableAgentWakeRunner{store: store}
+	registry.WithDurableAgentWakeRunner(runner)
+	upsertDurableAgentWakeTestAgent(t, store)
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := session.SessionKey{ChatID: 88105, UserID: 1001}
+	if _, _, err := store.UpdateDurableAgentContinuity("child-alpha", func(continuity core.DurableAgentContinuityState) (core.DurableAgentContinuityState, error) {
+		return continuity.WithConversationMessage("parent", "Run one no-content readiness wake.", time.Now().UTC()), nil
+	}); err != nil {
+		t.Fatalf("UpdateDurableAgentContinuity(parent) err = %v", err)
+	}
+	leaseCtx := contextWithDurableAgentWakeAuthority(t, store, key, actor, "lease-recovery-sequence-child-wake", session.ContinuationLeaseClassChildWake, []string{durableAgentWakeOnceAction})
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		leaseCtx,
+		actor,
+		key,
+		"durable_agent",
+		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "missing capability grant") {
+		t.Fatalf("first wake err = %v, want missing grant", err)
+	}
+	grantAction := singleOpenRecoveryAction(t, store, key, session.NextActionBlockedNeedsAuthority, "capability_authority")
+	if err := validateRecoveryHandoffToolInput(grantAction.State, grantAction.OperationTool, grantAction.OperationInputJSON); err != nil {
+		t.Fatalf("validate grant action err = %v", err)
+	}
+	requestID := strings.TrimSpace(fmt.Sprint(nextActionInputMapForRecovery(t, grantAction)["request_id"]))
+	if requestID == "" {
+		t.Fatalf("grant action input = %s, want request_id", grantAction.OperationInputJSON)
+	}
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		actor,
+		key,
+		"capability_authority",
+		json.RawMessage(`{"action":"request_review","request_id":"`+requestID+`","review_status":"approved","rationale":"operator approved exact wake grant"}`),
+	); err != nil {
+		t.Fatalf("request_review approval err = %v", err)
+	}
+	if out := executeRecoveryHandoffAction(t, registry, key, actor, grantAction); !strings.Contains(out, "[CAPABILITY_GRANT]") {
+		t.Fatalf("grant handoff output = %q, want capability grant", out)
+	}
+
+	_, err = registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		actor,
+		key,
+		"durable_agent",
+		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "missing child_wake continuation lease") {
+		t.Fatalf("second wake err = %v, want missing child_wake lease", err)
+	}
+	leaseAction := singleOpenRecoveryAction(t, store, key, session.NextActionBlockedNeedsAuthority, "request_approval")
+	if err := validateRecoveryHandoffToolInput(leaseAction.State, leaseAction.OperationTool, leaseAction.OperationInputJSON); err != nil {
+		t.Fatalf("validate lease action err = %v", err)
+	}
+	if out := executeRecoveryHandoffAction(t, registry, key, actor, leaseAction); !strings.Contains(out, "[APPROVAL_REQUESTED]") {
+		t.Fatalf("lease handoff output = %q, want approval request", out)
+	}
+	assertPendingLeaseShape(t, store, key, session.ContinuationLeaseClassChildWake, map[string]string{"agent_id": "child-alpha"}, durableAgentWakeOnceAction)
+
+	approvedCtx := contextWithDurableAgentWakeAuthority(t, store, key, actor, "lease-recovery-sequence-approved", session.ContinuationLeaseClassChildWake, []string{durableAgentWakeOnceAction})
+	out, err := registry.ExecuteForSessionPrincipal(
+		approvedCtx,
+		actor,
+		key,
+		"durable_agent",
+		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
+	)
+	if err != nil {
+		t.Fatalf("approved wake err = %v", err)
+	}
+	if !strings.Contains(out, "wake_status: completed") || fmt.Sprint(runner.calls) != "[child-alpha]" {
+		t.Fatalf("approved wake output=%q calls=%#v, want one completed child wake", out, runner.calls)
 	}
 }
 

@@ -34,6 +34,11 @@ func (r *Registry) recordRejectedShellAlternative(ctx context.Context, key sessi
 		return nil
 	}
 	alt := typedAlternativeForRejectedShell(command, rawWorkdir, workingRoot, plan, cause)
+	if alt.State == session.NextActionReadyToExecute {
+		if err := validateRecoveryHandoffToolInput(alt.State, alt.OperationTool, alt.OperationInputJSON); err != nil {
+			alt = invalidReadyShellAlternative(command, plan, cause, err)
+		}
+	}
 	outErr := rejectedShellAlternativeError(cause, alt)
 	if r == nil || r.store == nil || !toolSessionKeyHasIdentity(key) {
 		return outErr
@@ -624,6 +629,29 @@ func genericRejectedShellAlternative(command string, plan commandeffect.EffectPl
 	}
 }
 
+func invalidReadyShellAlternative(command string, plan commandeffect.EffectPlan, cause error, validationErr error) shellRejectionAlternative {
+	steps := []map[string]any{{
+		"ordinal":              1,
+		"command_hash":         session.EffectAttemptCommandHash(command),
+		"effect_kind":          string(commandeffect.RepresentativeEffect(plan).Kind),
+		"effect_reason":        strings.TrimSpace(commandeffect.RepresentativeEffect(plan).Reason),
+		"required_authority":   "typed_operation_required",
+		"validation_failure":   strings.TrimSpace(validationErr.Error()),
+		"original_reject_kind": shellRejectionReason(plan, cause),
+	}}
+	return shellRejectionAlternative{
+		State:              session.NextActionWaitingForOperator,
+		OperationKind:      "typed_operation_required",
+		OperationTool:      "update_operation",
+		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"reason": "ready_alternative_failed_contract_validation", "steps": steps})),
+		NextAction:         "rewrite the rejected shell as a typed operation before execution",
+		RequiredAuthority:  "typed_operation_required",
+		RetryPolicy:        "do_not_execute_invalid_recovery_handoff",
+		OperatorProjection: "Raw shell was rejected, and the candidate ready action failed recovery-handoff validation. Rewrite it as an exact typed operation before execution.",
+		Reason:             shellRejectionReasonFromError(cause),
+	}
+}
+
 func rejectedRepairShape(command string, plan commandeffect.EffectPlan, cause error) string {
 	reason := strings.ToLower(strings.Join([]string{shellRejectionReason(plan, cause), command}, " "))
 	switch {
@@ -869,13 +897,7 @@ func mustJSON(value any) string {
 }
 
 func recommendedShellAlternativeInput(input map[string]any) map[string]any {
-	out := make(map[string]any, len(input)+2)
-	for key, value := range input {
-		out[key] = value
-	}
-	out["recommendation_only"] = true
-	out["authority_model"] = "existing_tool_or_lease_membrane_required"
-	return out
+	return shellAlternativePayload(input)
 }
 
 func shellAlternativeDisplay(value string) string {

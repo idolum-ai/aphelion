@@ -1739,8 +1739,8 @@ func trajectoryDurableChildBlockedWakeScenario() evalScenario {
 			ResourceBlocker:    "tool_runtime_not_executable",
 			RetryPolicy:        "retry_after_tool_runtime_repair",
 			OperationKind:      "child_tool_runtime_repair",
-			OperationTool:      "durable_child_repair",
-			OperationInputJSON: `{"agent_id":"child-fixture","blocker_kind":"tool_runtime_not_executable","diagnostic_only":true,"no_content_probe":true,"tool":"gog_cli"}`,
+			OperationTool:      "update_operation",
+			OperationInputJSON: `{"merge":true,"status":"blocked","stage":"durable_child_blocker","summary":"Child-local tool runtime is missing or not executable; repair materialization, then run one no-content readiness probe.","recovery_contract":"aphelion.recovery_handoff.v1","recovery_operation_kind":"child_tool_runtime_repair","durable_agent_id":"child-fixture","child_blocker_kind":"tool_runtime_not_executable","diagnostic_only":true,"no_content_probe":true,"tool":"gog_cli"}`,
 			OperatorProjection: "Child-local tool runtime is missing or not executable; repair materialization, then run one no-content readiness probe.",
 			CreatedAt:          e.Now,
 		}); err != nil {
