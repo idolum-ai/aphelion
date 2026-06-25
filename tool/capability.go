@@ -542,7 +542,7 @@ func (r *Registry) capabilityAuthorityGrantSet(ctx context.Context, in capabilit
 }
 
 func (r *Registry) resolveCapabilityGrantRequestNextAction(key session.SessionKey, grant session.CapabilityGrant, now time.Time) error {
-	if r == nil || r.store == nil || !toolSessionKeyHasIdentity(key) {
+	if r == nil || r.store == nil {
 		return nil
 	}
 	requestID := strings.TrimSpace(grant.RequestID)
@@ -552,17 +552,45 @@ func (r *Registry) resolveCapabilityGrantRequestNextAction(key session.SessionKe
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	records, err := r.store.OpenNextActionsBySubject("capability_request", requestID, 100)
+	if err != nil {
+		return fmt.Errorf("load capability request next actions after grant activation: %w", err)
+	}
+	if len(records) == 0 && toolSessionKeyHasIdentity(key) {
+		return r.resolveCapabilityRequestNextActionForKey(key, requestID, now)
+	}
+	for _, record := range records {
+		recordKey := sessionKeyForNextActionRecord(record)
+		if !toolSessionKeyHasIdentity(recordKey) {
+			continue
+		}
+		if err := r.resolveCapabilityRequestNextActionForKey(recordKey, requestID, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Registry) resolveCapabilityRequestNextActionForKey(key session.SessionKey, requestID string, now time.Time) error {
 	if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
 		Key:         key,
 		Owner:       "capability_authority",
 		SubjectKind: "capability_request",
-		SubjectRef:  requestID,
+		SubjectRef:  strings.TrimSpace(requestID),
 		Reason:      "capability_grant_active",
 		ResolvedAt:  now,
 	}); err != nil {
 		return fmt.Errorf("resolve capability request next action after grant activation: %w", err)
 	}
 	return nil
+}
+
+func sessionKeyForNextActionRecord(record session.NextActionRecord) session.SessionKey {
+	return session.SessionKey{
+		ChatID: record.ChatID,
+		UserID: record.UserID,
+		Scope:  record.Scope,
+	}
 }
 
 func (r *Registry) capabilityAuthorityGrantShow(in capabilityInput, actor principal.Principal) (string, error) {

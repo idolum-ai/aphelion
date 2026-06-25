@@ -193,6 +193,77 @@ func TestCapabilityRequestParentAdminGrantFlow(t *testing.T) {
 	}
 }
 
+func TestCapabilityGrantSetResolvesRequesterSessionBlocker(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	requesterKey := session.SessionKey{ChatID: 2200, UserID: 220, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "2200"}}
+	adminKey := session.SessionKey{ChatID: 1001, UserID: 1001, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1001"}}
+	requester := principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 220}
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), requester, requesterKey, "capability_request", json.RawMessage(`{
+		"action":"request_submit",
+		"request_id":"cap-cross-session",
+		"kind":"tool",
+		"target_resource":"diagnostic_tool",
+		"requested_for":"telegram:220",
+		"purpose":"run one approved diagnostic",
+		"risk_class":"authority",
+		"contract":{"bounded_effect":"diagnostic only"},
+		"constraints":{"tool_invocation":{"actions":{"invoke":{}}}}
+	}`)); err != nil {
+		t.Fatalf("request_submit err = %v", err)
+	}
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, adminKey, "capability_authority", json.RawMessage(`{
+		"action":"request_review",
+		"request_id":"cap-cross-session",
+		"review_status":"approved",
+		"rationale":"bounded diagnostic approved"
+	}`)); err != nil {
+		t.Fatalf("admin request_review err = %v", err)
+	}
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		Key:               requesterKey,
+		Owner:             "tool",
+		State:             session.NextActionBlockedNeedsAuthority,
+		SubjectKind:       "capability_request",
+		SubjectRef:        "cap-cross-session",
+		NextAction:        "review and grant the exact missing capability before retrying the blocked tool invocation",
+		RequiredAuthority: "capability_grant",
+		ResourceBlocker:   "missing_capability_grant",
+		OperationKind:     "capability_grant_review",
+		OperationTool:     "capability_authority",
+		CreatedAt:         time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(requester blocker) err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, adminKey, "capability_authority", json.RawMessage(`{
+		"action":"grant_set",
+		"request_id":"cap-cross-session",
+		"grant_id":"capg-cross-session",
+		"principal":"telegram:220",
+		"allowed_actions":["invoke"],
+		"expires_in_seconds":3600
+	}`))
+	if err != nil {
+		t.Fatalf("grant_set err = %v", err)
+	}
+	if !strings.Contains(out, "[CAPABILITY_GRANT]") || !strings.Contains(out, "status: active") {
+		t.Fatalf("grant_set output = %q, want active grant", out)
+	}
+	open, err := store.OpenNextActionsBySession(requesterKey, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(requester) err = %v", err)
+	}
+	for _, action := range open {
+		if action.SubjectKind == "capability_request" && action.SubjectRef == "cap-cross-session" {
+			t.Fatalf("requester open next actions = %#v, want blocker resolved by grant from admin session", open)
+		}
+	}
+}
+
 func TestCapabilityGrantSetRejectsMissingDurableAgentTarget(t *testing.T) {
 	t.Parallel()
 

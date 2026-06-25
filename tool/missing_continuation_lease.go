@@ -181,11 +181,21 @@ func normalizeMissingContinuationLeaseRequirement(requirement missingContinuatio
 
 func missingContinuationLeaseSubjectRef(requirement missingContinuationLeaseRequirement) string {
 	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
-	return strings.Join([]string{
+	parts := []string{
 		string(requirement.LeaseClass),
 		missingContinuationLeaseSubjectToken(requirement),
 		requirement.GrantID,
-	}, ":")
+	}
+	if requirement.Tool != "" {
+		parts = append(parts, "tool="+requirement.Tool)
+	}
+	if requirement.ToolAction != "" {
+		parts = append(parts, "action="+requirement.ToolAction)
+	}
+	if requirement.Resource != "" {
+		parts = append(parts, "resource="+missingContinuationLeaseHashToken(requirement.Resource))
+	}
+	return strings.Join(parts, ":")
 }
 
 func missingContinuationLeaseSubjectToken(requirement missingContinuationLeaseRequirement) string {
@@ -223,7 +233,18 @@ func missingContinuationLeaseCausalRefs(requirement missingContinuationLeaseRequ
 	if requirement.Tool != "" {
 		refs = append(refs, "tool:"+requirement.Tool)
 	}
+	if requirement.ToolAction != "" {
+		refs = append(refs, "tool_action:"+requirement.ToolAction)
+	}
+	if requirement.Resource != "" {
+		refs = append(refs, "resource:"+missingContinuationLeaseHashToken(requirement.Resource))
+	}
 	return refs
+}
+
+func missingContinuationLeaseHashToken(value string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(value)))
+	return hex.EncodeToString(sum[:8])
 }
 
 func missingContinuationLeaseNextActionRecordID(key session.SessionKey, requirement missingContinuationLeaseRequirement) string {

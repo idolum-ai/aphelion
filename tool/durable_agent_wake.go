@@ -296,7 +296,7 @@ func durableAgentWakeOnceFailureForError(err error) durableAgentWakeOnceFailure 
 		failure.SafeSummary = "durable_agent wake_once reached the child execution boundary and was denied by sandbox or executable setup"
 		failure.NextRepair = "repair the child sandbox or executable boundary, then retry one bounded wake"
 		failure.RetryPolicy = "retry_after_sandbox_repair"
-	case strings.Contains(lower, "grant_") || strings.Contains(lower, "grant ") || strings.Contains(lower, "missing_grant") || strings.Contains(lower, "lease") || strings.Contains(lower, "authority"):
+	case strings.Contains(lower, "grant_") || strings.Contains(lower, "missing_grant") || durableAgentWakeFailureHasToken(lower, "grant") || durableAgentWakeFailureHasToken(lower, "lease") || durableAgentWakeFailureHasToken(lower, "authority"):
 		failure.Class = "grant_check_failed"
 		failure.SafeSummary = "durable_agent wake_once stopped on child authority or grant validation before child completion"
 		failure.NextRepair = "repair or approve the exact child grant and lease, then retry one bounded wake"
@@ -313,6 +313,21 @@ func durableAgentWakeOnceFailureForError(err error) durableAgentWakeOnceFailure 
 		failure.RetryPolicy = "bounded_backoff"
 	}
 	return failure
+}
+
+func durableAgentWakeFailureHasToken(text string, want string) bool {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return false
+	}
+	for _, token := range strings.FieldsFunc(text, func(r rune) bool {
+		return !(r == '_' || r == '-' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	}) {
+		if token == want {
+			return true
+		}
+	}
+	return false
 }
 
 func errorString(err error) string {

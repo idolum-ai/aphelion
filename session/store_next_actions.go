@@ -232,6 +232,35 @@ func (s *SQLiteStore) OpenNextActionsBySession(key SessionKey, limit int) ([]Nex
 	return scanNextActionRows(rows)
 }
 
+func (s *SQLiteStore) OpenNextActionsBySubject(subjectKind string, subjectRef string, limit int) ([]NextActionRecord, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	subjectKind = normalizeEnumValue(subjectKind)
+	subjectRef = strings.TrimSpace(subjectRef)
+	if subjectKind == "" || subjectRef == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.Query(`
+		SELECT record_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
+			turn_run_id, owner, state, subject_kind, subject_ref, causal_refs_json,
+			next_action, required_authority, resource_blocker, verifier, retry_policy,
+			operation_kind, operation_tool, operation_input_json, operator_projection, created_at, resolved_at
+		FROM next_action_records
+		WHERE subject_kind = ? AND subject_ref = ? AND resolved_at IS NULL
+		ORDER BY created_at DESC, record_id DESC
+		LIMIT ?
+	`, subjectKind, subjectRef, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query open next actions by subject: %w", err)
+	}
+	defer rows.Close()
+	return scanNextActionRows(rows)
+}
+
 func nextActionByRecordIDTx(tx *sql.Tx, recordID string) (NextActionRecord, bool, error) {
 	recordID = strings.TrimSpace(recordID)
 	if recordID == "" {

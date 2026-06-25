@@ -198,11 +198,7 @@ func (r *Registry) readFile(ctx context.Context, input json.RawMessage, scope sa
 		}
 	}
 	maxBytes := clampNativeLimit(in.MaxBytes, defaultNativeReadMaxBytes, maxNativeReadBytes)
-	roots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathRead, "read_file")
-	if err != nil {
-		return "", r.recordNativeResourcePreflight(ctx, key, in.Path, err)
-	}
-	target, err := resolveNativeScopedTarget(scope, in.Path, nativePathRead, nativeFileAccessGrantRootPaths(roots))
+	target, roots, err := r.resolveNativeScopedTargetForOperation(ctx, scope, p, key, in.Path, nativePathRead, "read_file")
 	if err != nil {
 		return "", r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 	}
@@ -257,12 +253,7 @@ func (r *Registry) writeFile(ctx context.Context, input json.RawMessage, scope s
 	if strings.TrimSpace(in.Path) == "" {
 		return "", fmt.Errorf("write_file path is required")
 	}
-	writeGrantRoots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathWrite, "write_file")
-	if err != nil {
-		return "", r.recordNativeResourcePreflight(ctx, key, in.Path, err)
-	}
-	writeRoots := nativeFileAccessGrantRootPaths(writeGrantRoots)
-	target, err := resolveNativeScopedTarget(scope, in.Path, nativePathWrite, writeRoots)
+	target, writeGrantRoots, err := r.resolveNativeScopedTargetForOperation(ctx, scope, p, key, in.Path, nativePathWrite, "write_file")
 	if err != nil {
 		return "", r.recordNativeResourcePreflight(ctx, key, in.Path, err)
 	}
@@ -303,11 +294,7 @@ func (r *Registry) listDir(ctx context.Context, input json.RawMessage, scope san
 		pathRaw = "."
 	}
 	limit := clampNativeLimit(in.Limit, defaultNativeListLimit, maxNativeListLimit)
-	roots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathRead, "list_dir")
-	if err != nil {
-		return "", r.recordNativeResourcePreflight(ctx, key, pathRaw, err)
-	}
-	target, err := resolveNativeScopedTarget(scope, pathRaw, nativePathRead, nativeFileAccessGrantRootPaths(roots))
+	target, roots, err := r.resolveNativeScopedTargetForOperation(ctx, scope, p, key, pathRaw, nativePathRead, "list_dir")
 	if err != nil {
 		return "", r.recordNativeResourcePreflight(ctx, key, pathRaw, err)
 	}

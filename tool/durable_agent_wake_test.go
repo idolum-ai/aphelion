@@ -992,6 +992,12 @@ func TestDurableAgentWakeOnceClassifiesRunnerFailures(t *testing.T) {
 			wantClass:  "child_runtime_blocked",
 			notContain: "failure_code=unknown",
 		},
+		{
+			name:       "transient please retry",
+			errText:    "temporarily unavailable; please retry",
+			wantClass:  "external_transient",
+			notContain: "please retry",
+		},
 	}
 
 	for _, tc := range tests {

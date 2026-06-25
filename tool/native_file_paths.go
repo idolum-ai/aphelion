@@ -31,7 +31,14 @@ func (r *Registry) resolveNativeReadToolPath(ctx context.Context, scope sandbox.
 }
 
 func (r *Registry) resolveNativeReadToolPathForOperation(ctx context.Context, scope sandbox.Scope, p principal.Principal, key session.SessionKey, raw string, operation string) (string, error) {
-	roots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathRead, operation)
+	if target, err := resolveNativeToolPathWithExtraRoots(scope, raw, nativePathRead, nil); err == nil {
+		return target, nil
+	}
+	requested, pathErr := nativeRequestedPath(scope, raw)
+	if pathErr != nil {
+		return "", pathErr
+	}
+	roots, err := r.nativeFileAccessGrantRootsForTarget(ctx, scope, p, key, nativePathRead, operation, requested)
 	if err != nil {
 		return "", err
 	}
@@ -39,11 +46,60 @@ func (r *Registry) resolveNativeReadToolPathForOperation(ctx context.Context, sc
 }
 
 func (r *Registry) resolveNativeWriteToolPath(ctx context.Context, scope sandbox.Scope, p principal.Principal, key session.SessionKey, raw string) (string, error) {
-	roots, err := r.nativeFileAccessGrantRoots(ctx, scope, p, key, nativePathWrite, "write_file")
+	if target, err := resolveNativeToolPathWithExtraRoots(scope, raw, nativePathWrite, nil); err == nil {
+		return target, nil
+	}
+	requested, pathErr := nativeRequestedPath(scope, raw)
+	if pathErr != nil {
+		return "", pathErr
+	}
+	roots, err := r.nativeFileAccessGrantRootsForTarget(ctx, scope, p, key, nativePathWrite, "write_file", requested)
 	if err != nil {
 		return "", err
 	}
 	return resolveNativeToolPathWithExtraRoots(scope, raw, nativePathWrite, nativeFileAccessGrantRootPaths(roots))
+}
+
+func (r *Registry) resolveNativeScopedTargetForOperation(ctx context.Context, scope sandbox.Scope, p principal.Principal, key session.SessionKey, raw string, access nativePathAccess, operation string) (nativeScopedTarget, []nativeFileAccessGrantRoot, error) {
+	if target, err := resolveNativeScopedTarget(scope, raw, access, nil); err == nil {
+		return target, nil, nil
+	} else {
+		requested, pathErr := nativeRequestedPath(scope, raw)
+		if pathErr != nil {
+			return nativeScopedTarget{}, nil, err
+		}
+		roots, rootErr := r.nativeFileAccessGrantRootsForTarget(ctx, scope, p, key, access, operation, requested)
+		if rootErr != nil {
+			return nativeScopedTarget{}, nil, rootErr
+		}
+		if len(roots) == 0 {
+			return nativeScopedTarget{}, nil, err
+		}
+		target, targetErr := resolveNativeScopedTarget(scope, raw, access, nativeFileAccessGrantRootPaths(roots))
+		return target, roots, targetErr
+	}
+}
+
+func nativeRequestedPath(scope sandbox.Scope, raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	root := strings.TrimSpace(scope.WorkingRoot)
+	if root == "" {
+		return "", fmt.Errorf("working root is not configured")
+	}
+	var target string
+	if filepath.IsAbs(raw) {
+		target = filepath.Clean(raw)
+	} else {
+		target = filepath.Join(root, raw)
+	}
+	target, err := filepath.Abs(filepath.Clean(target))
+	if err != nil {
+		return "", fmt.Errorf("resolve path %q: %w", raw, err)
+	}
+	return target, nil
 }
 
 func resolveNativeToolPathWithExtraRoots(scope sandbox.Scope, raw string, access nativePathAccess, extraRoots []string) (string, error) {
@@ -105,7 +161,7 @@ type nativeFileAccessGrantRoot struct {
 	Operation string
 }
 
-func (r *Registry) nativeFileAccessGrantRoots(ctx context.Context, scope sandbox.Scope, p principal.Principal, key session.SessionKey, access nativePathAccess, operation string) ([]nativeFileAccessGrantRoot, error) {
+func (r *Registry) nativeFileAccessGrantRootsForTarget(ctx context.Context, scope sandbox.Scope, p principal.Principal, key session.SessionKey, access nativePathAccess, operation string, target string) ([]nativeFileAccessGrantRoot, error) {
 	if r == nil || r.store == nil || !toolSessionKeyHasIdentity(key) {
 		return nil, nil
 	}
@@ -113,13 +169,14 @@ func (r *Registry) nativeFileAccessGrantRoots(ctx context.Context, scope sandbox
 	if err != nil {
 		return nil, err
 	}
+	roots = nativeFileAccessGrantRootsContainingTarget(roots, target)
 	if len(roots) == 0 {
 		return nil, nil
 	}
 	useRef, err := r.authorityUseRefForGrant(ctx, "file_access", key, p)
 	if err != nil {
 		return nil, missingContinuationLeaseError{
-			requirement: nativeFileAccessLeaseRequirement(roots[0].Grant, access, operation, p),
+			requirement: nativeFileAccessLeaseRequirement(roots[0].Grant, access, operation, target, p),
 			cause:       err,
 		}
 	}
@@ -132,6 +189,27 @@ func (r *Registry) nativeFileAccessGrantRoots(ctx context.Context, scope sandbox
 		roots[i].UseRef = useRef
 	}
 	return roots, nil
+}
+
+func nativeFileAccessGrantRootsContainingTarget(roots []nativeFileAccessGrantRoot, target string) []nativeFileAccessGrantRoot {
+	target = strings.TrimSpace(target)
+	if target == "" || len(roots) == 0 {
+		return nil
+	}
+	target, err := filepath.Abs(filepath.Clean(target))
+	if err != nil {
+		return nil
+	}
+	out := make([]nativeFileAccessGrantRoot, 0, len(roots))
+	for _, root := range roots {
+		rootAbs, err := filepath.Abs(filepath.Clean(root.Root))
+		if err != nil || !pathWithinAnyRoot(target, []string{rootAbs}) {
+			continue
+		}
+		root.Root = rootAbs
+		out = append(out, root)
+	}
+	return out
 }
 
 func (r *Registry) nativeFileAccessGrantRootCandidates(scope sandbox.Scope, p principal.Principal, access nativePathAccess, operation string) ([]nativeFileAccessGrantRoot, error) {
@@ -169,7 +247,7 @@ func (r *Registry) nativeFileAccessGrantRootCandidates(scope sandbox.Scope, p pr
 	return roots, nil
 }
 
-func nativeFileAccessLeaseRequirement(grant session.CapabilityGrant, access nativePathAccess, operation string, p principal.Principal) missingContinuationLeaseRequirement {
+func nativeFileAccessLeaseRequirement(grant session.CapabilityGrant, access nativePathAccess, operation string, requestedResource string, p principal.Principal) missingContinuationLeaseRequirement {
 	operation = normalizeToolFileAccessOperation(operation)
 	leaseClass := session.ContinuationLeaseClassDataAccess
 	allowed := []string{"read_approved_resource"}
@@ -178,8 +256,12 @@ func nativeFileAccessLeaseRequirement(grant session.CapabilityGrant, access nati
 		allowed = []string{"edit_files", "write_approved_resource"}
 	}
 	target := strings.TrimSpace(grant.TargetResource)
+	requestedResource = strings.TrimSpace(requestedResource)
+	if requestedResource == "" {
+		requestedResource = target
+	}
 	return normalizeMissingContinuationLeaseRequirement(missingContinuationLeaseRequirement{
-		Resource:            target,
+		Resource:            requestedResource,
 		GrantID:             grant.GrantID,
 		GrantTargetResource: target,
 		Principal:           toolAuthorityCanonicalPrincipal(p),
@@ -189,6 +271,7 @@ func nativeFileAccessLeaseRequirement(grant session.CapabilityGrant, access nati
 			"capability_kind": "file_access",
 			"grant_id":        strings.TrimSpace(grant.GrantID),
 			"operation":       operation,
+			"resource":        requestedResource,
 			"target_resource": target,
 		},
 		Tool:       operation,
