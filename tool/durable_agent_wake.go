@@ -19,6 +19,10 @@ const durableAgentWakeOnceAction = "wake_named_child"
 type durableAgentWakeOnceResult struct {
 	AgentID                string
 	WakeStatus             string
+	FailureClass           string
+	FailureSummary         string
+	NextRepair             string
+	RetryPolicy            string
 	PendingParentBefore    int
 	PendingParentAfter     int
 	ThreadStateBefore      string
@@ -28,7 +32,6 @@ type durableAgentWakeOnceResult struct {
 	LastParentAcknowledged time.Time
 	AuthoritySource        string
 	ContinuationLeaseID    string
-	ErrorText              string
 }
 
 func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInput, rawInput json.RawMessage, p principal.Principal, key session.SessionKey) (out string, err error) {
@@ -58,8 +61,13 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 	if err != nil {
 		return "", err
 	}
+	var outcomeErr error
 	defer func() {
-		if recordErr := r.recordAuthorityManagedToolOutcome(permit, wakeOnceCapabilityOutcomeStatus(err), wakeOnceCapabilityOutcomeError(err)); recordErr != nil && err == nil {
+		finalErr := err
+		if finalErr == nil {
+			finalErr = outcomeErr
+		}
+		if recordErr := r.recordAuthorityManagedToolOutcome(permit, wakeOnceCapabilityOutcomeStatus(finalErr), wakeOnceCapabilityOutcomeError(finalErr)); recordErr != nil && err == nil {
 			err = recordErr
 		}
 	}()
@@ -110,8 +118,13 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 	result.LastChildMessageAt = lastChildAt
 	result.LastParentAcknowledged = lastAckAt
 	if wakeErr != nil {
+		failure := durableAgentWakeOnceFailureForError(wakeErr)
 		result.WakeStatus = "failed"
-		result.ErrorText = wakeErr.Error()
+		result.FailureClass = failure.Class
+		result.FailureSummary = failure.SafeSummary
+		result.NextRepair = failure.NextRepair
+		result.RetryPolicy = failure.RetryPolicy
+		outcomeErr = failure
 	} else if result.PendingParentAfter > 0 {
 		result.WakeStatus = "awaiting_child_pickup"
 	} else {
@@ -246,6 +259,69 @@ func wakeOnceCapabilityOutcomeError(err error) string {
 	return err.Error()
 }
 
+type durableAgentWakeOnceFailure struct {
+	Class       string
+	SafeSummary string
+	NextRepair  string
+	RetryPolicy string
+}
+
+func (f durableAgentWakeOnceFailure) Error() string {
+	class := firstNonEmpty(strings.TrimSpace(f.Class), "runner_start_failed")
+	summary := firstNonEmpty(strings.TrimSpace(f.SafeSummary), "durable_agent wake_once failed before child completion")
+	return fmt.Sprintf("%s: %s", class, summary)
+}
+
+func durableAgentWakeOnceFailureForError(err error) durableAgentWakeOnceFailure {
+	lower := strings.ToLower(strings.TrimSpace(errorString(err)))
+	failure := durableAgentWakeOnceFailure{
+		Class:       "runner_start_failed",
+		SafeSummary: "durable_agent wake_once failed before the child produced a completion",
+		NextRepair:  "inspect the durable-agent wake runtime, then retry one bounded wake",
+		RetryPolicy: "retry_after_wake_runtime_repair",
+	}
+	switch {
+	case strings.Contains(lower, "schema mismatch") || strings.Contains(lower, "schema_mismatch") || strings.Contains(lower, "schema version"):
+		failure.Class = "schema_mismatch"
+		failure.SafeSummary = "durable_agent wake_once stopped on a runtime/schema mismatch before child execution completed"
+		failure.NextRepair = "run migrations and restart with matching code/schema, then retry one bounded wake"
+		failure.RetryPolicy = "retry_after_schema_repair"
+	case strings.Contains(lower, "lifecycle_unregistered") || strings.Contains(lower, "tool_lifecycle") || strings.Contains(lower, "lifecycle unregistered"):
+		failure.Class = "adapter_lifecycle_failed"
+		failure.SafeSummary = "durable_agent wake_once stopped because the child adapter lifecycle is not registered or verified"
+		failure.NextRepair = "repair the child adapter lifecycle registration, then run one no-content readiness wake"
+		failure.RetryPolicy = "retry_after_adapter_lifecycle_repair"
+	case strings.Contains(lower, "sandbox") || strings.Contains(lower, "exec failed") || strings.Contains(lower, "not executable") || strings.Contains(lower, "permission denied") || strings.Contains(lower, "host_permission_denied"):
+		failure.Class = "sandbox_exec_failed"
+		failure.SafeSummary = "durable_agent wake_once reached the child execution boundary and was denied by sandbox or executable setup"
+		failure.NextRepair = "repair the child sandbox or executable boundary, then retry one bounded wake"
+		failure.RetryPolicy = "retry_after_sandbox_repair"
+	case strings.Contains(lower, "grant_") || strings.Contains(lower, "grant ") || strings.Contains(lower, "missing_grant") || strings.Contains(lower, "lease") || strings.Contains(lower, "authority"):
+		failure.Class = "grant_check_failed"
+		failure.SafeSummary = "durable_agent wake_once stopped on child authority or grant validation before child completion"
+		failure.NextRepair = "repair or approve the exact child grant and lease, then retry one bounded wake"
+		failure.RetryPolicy = "retry_after_authority_repair"
+	case strings.Contains(lower, "child_runtime_blocked") || strings.Contains(lower, "preflight_failed"):
+		failure.Class = "child_runtime_blocked"
+		failure.SafeSummary = "durable_agent wake_once stopped on a child runtime preflight blocker"
+		failure.NextRepair = "inspect the child runtime blocker class, repair that boundary, then retry one bounded wake"
+		failure.RetryPolicy = "retry_after_child_runtime_repair"
+	case strings.Contains(lower, "timeout") || strings.Contains(lower, "temporarily unavailable") || strings.Contains(lower, "transient"):
+		failure.Class = "external_transient"
+		failure.SafeSummary = "durable_agent wake_once stopped on a transient external or runtime condition"
+		failure.NextRepair = "wait for the bounded retry window before retrying the child wake"
+		failure.RetryPolicy = "bounded_backoff"
+	}
+	return failure
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 func (r *Registry) requireDurableAgentWakeOnceAuthority(ctx context.Context, p principal.Principal, key session.SessionKey, agentID string) (session.AuthorityUseRef, error) {
 	useRef, err := r.authorityUseRefForGrant(ctx, "durable_agent wake_once", key, p)
 	if err != nil {
@@ -354,8 +430,17 @@ func renderDurableAgentWakeOnce(result durableAgentWakeOnceResult) string {
 	if strings.TrimSpace(result.ContinuationLeaseID) != "" {
 		fmt.Fprintf(&b, "continuation_lease_id: %s\n", strings.TrimSpace(result.ContinuationLeaseID))
 	}
-	if strings.TrimSpace(result.ErrorText) != "" {
-		fmt.Fprintf(&b, "error: %s\n", truncateCompact(result.ErrorText, 220))
+	if strings.TrimSpace(result.FailureClass) != "" {
+		fmt.Fprintf(&b, "failure_class: %s\n", strings.TrimSpace(result.FailureClass))
+	}
+	if strings.TrimSpace(result.FailureSummary) != "" {
+		fmt.Fprintf(&b, "failure_summary: %s\n", truncateCompact(result.FailureSummary, 220))
+	}
+	if strings.TrimSpace(result.RetryPolicy) != "" {
+		fmt.Fprintf(&b, "retry_policy: %s\n", strings.TrimSpace(result.RetryPolicy))
+	}
+	if strings.TrimSpace(result.NextRepair) != "" {
+		fmt.Fprintf(&b, "next_repair: %s\n", truncateCompact(result.NextRepair, 220))
 	}
 	switch result.WakeStatus {
 	case "skipped_no_pending_parent_message":
@@ -365,7 +450,7 @@ func renderDurableAgentWakeOnce(result durableAgentWakeOnceResult) string {
 	case "awaiting_child_pickup":
 		b.WriteString("next: wait_for_child_result\n")
 	case "failed":
-		b.WriteString("next: inspect_child_runtime\n")
+		b.WriteString("next: repair_child_wake_failure\n")
 	default:
 		b.WriteString("next: conversation_show\n")
 	}

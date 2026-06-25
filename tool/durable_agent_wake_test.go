@@ -911,7 +911,7 @@ func TestDurableAgentWakeOnceReportsFailedWakeWithoutThrowing(t *testing.T) {
 	runner := &fakeDurableAgentWakeRunner{err: fmt.Errorf("child wake deferred")}
 	registry.WithDurableAgentWakeRunner(runner)
 	upsertDurableAgentWakeTestAgent(t, store)
-	grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
+	grant := grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
 	if _, _, err := store.UpdateDurableAgentContinuity("child-alpha", func(continuity core.DurableAgentContinuityState) (core.DurableAgentContinuityState, error) {
 		return continuity.WithConversationMessage("parent", "Please retry the approved wake.", time.Now().UTC()), nil
 	}); err != nil {
@@ -930,8 +930,112 @@ func TestDurableAgentWakeOnceReportsFailedWakeWithoutThrowing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v", err)
 	}
-	if !strings.Contains(out, "wake_status: failed") || !strings.Contains(out, "next: inspect_child_runtime") {
-		t.Fatalf("wake_once output = %q, want failed status and repair next step", out)
+	for _, want := range []string{
+		"wake_status: failed",
+		"failure_class: runner_start_failed",
+		"retry_policy: retry_after_wake_runtime_repair",
+		"next_repair: inspect the durable-agent wake runtime",
+		"next: repair_child_wake_failure",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("wake_once output = %q, want %q", out, want)
+		}
+	}
+	if strings.Contains(out, "child wake deferred") || strings.Contains(out, "error:") {
+		t.Fatalf("wake_once output = %q, want sanitized failure class without raw runner error", out)
+	}
+	invocations, err := store.CapabilityInvocationsByGrant(grant.GrantID, 10)
+	if err != nil {
+		t.Fatalf("CapabilityInvocationsByGrant(wake failure) err = %v", err)
+	}
+	if len(invocations) != 1 || invocations[0].OutcomeStatus != "failed" || !strings.Contains(invocations[0].OutcomeErrorText, "runner_start_failed") {
+		t.Fatalf("wake_once invocations = %#v, want failed outcome with sanitized class", invocations)
+	}
+}
+
+func TestDurableAgentWakeOnceClassifiesRunnerFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		errText    string
+		wantClass  string
+		notContain string
+	}{
+		{
+			name:       "adapter lifecycle",
+			errText:    "child_runtime_blocked: preflight_failed adapter=gog_cli failure_code=lifecycle_unregistered next_repair=install/audit/probe",
+			wantClass:  "adapter_lifecycle_failed",
+			notContain: "lifecycle_unregistered",
+		},
+		{
+			name:       "schema mismatch",
+			errText:    "schema mismatch: store has migration 81 but binary expects 82",
+			wantClass:  "schema_mismatch",
+			notContain: "migration 81",
+		},
+		{
+			name:       "sandbox exec",
+			errText:    "sandbox exec failed: permission denied opening child runtime helper",
+			wantClass:  "sandbox_exec_failed",
+			notContain: "permission denied",
+		},
+		{
+			name:       "grant check",
+			errText:    "child_runtime_blocked: grant_expired grant_id=capg-child-secret",
+			wantClass:  "grant_check_failed",
+			notContain: "capg-child-secret",
+		},
+		{
+			name:       "child runtime",
+			errText:    "child_runtime_blocked: preflight_failed adapter=gog_cli failure_code=unknown next_repair=inspect",
+			wantClass:  "child_runtime_blocked",
+			notContain: "failure_code=unknown",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			registry, store := newDurableAgentToolRegistry(t)
+			runner := &fakeDurableAgentWakeRunner{err: fmt.Errorf("%s", tc.errText)}
+			registry.WithDurableAgentWakeRunner(runner)
+			upsertDurableAgentWakeTestAgent(t, store)
+			grant := grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
+			if _, _, err := store.UpdateDurableAgentContinuity("child-alpha", func(continuity core.DurableAgentContinuityState) (core.DurableAgentContinuityState, error) {
+				return continuity.WithConversationMessage("parent", "Please retry the approved wake.", time.Now().UTC()), nil
+			}); err != nil {
+				t.Fatalf("UpdateDurableAgentContinuity(parent) err = %v", err)
+			}
+			actor := principal.Principal{Role: principal.RoleAdmin}
+			ctx := contextWithDurableAgentWakeAuthority(t, store, adminSessionKey(), actor, "lease-child-wake-failed-"+strings.ReplaceAll(tc.name, " ", "-"), session.ContinuationLeaseClassChildWake, []string{durableAgentWakeOnceAction})
+
+			out, err := registry.ExecuteForSessionPrincipal(
+				ctx,
+				actor,
+				adminSessionKey(),
+				"durable_agent",
+				json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
+			)
+			if err != nil {
+				t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v", err)
+			}
+			if !strings.Contains(out, "failure_class: "+tc.wantClass) || !strings.Contains(out, "next_repair: ") {
+				t.Fatalf("wake_once output = %q, want class %s and next_repair", out, tc.wantClass)
+			}
+			if strings.Contains(out, tc.notContain) || strings.Contains(out, "error:") {
+				t.Fatalf("wake_once output = %q, want no raw failure fragment %q", out, tc.notContain)
+			}
+			invocations, err := store.CapabilityInvocationsByGrant(grant.GrantID, 10)
+			if err != nil {
+				t.Fatalf("CapabilityInvocationsByGrant(%s) err = %v", tc.name, err)
+			}
+			if len(invocations) != 1 || invocations[0].OutcomeStatus != "failed" || !strings.Contains(invocations[0].OutcomeErrorText, tc.wantClass) {
+				t.Fatalf("wake_once invocations = %#v, want failed outcome with %s", invocations, tc.wantClass)
+			}
+		})
 	}
 }
 
