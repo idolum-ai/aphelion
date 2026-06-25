@@ -13,6 +13,7 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 )
 
 func (r *Runtime) ContinuationState(chatID int64) (session.ContinuationState, error) {
@@ -449,14 +450,16 @@ func (r *Runtime) TriggerContinuationForKey(ctx context.Context, key session.Ses
 }
 
 type approvedContinuationReservation struct {
-	State           session.ContinuationState
-	Actor           principal.Principal
-	ExecutionActor  principal.Principal
-	ApprovedBy      int64
-	EventText       string
-	SandboxRequired bool
-	WorkRequest     *WorkRequest
-	WorkMode        WorkMode
+	State                 session.ContinuationState
+	Actor                 principal.Principal
+	ExecutionActor        principal.Principal
+	ApprovedBy            int64
+	EventText             string
+	SandboxRequired       bool
+	AuthorityAdmission    session.ExecutionRunAuthority
+	HasAuthorityAdmission bool
+	WorkRequest           *WorkRequest
+	WorkMode              WorkMode
 }
 
 type leaseAccessDeniedRepair struct {
@@ -570,6 +573,7 @@ func (r *Runtime) reserveApprovedContinuationTurnLocked(key session.SessionKey) 
 	}
 	continuationEventText := approvedContinuationEventTextForState(state)
 	approvedState := state
+	authorityAdmission, hasAuthorityAdmission := directContinuationAuthorityAdmission(key, executionActor, approvedState, now)
 	state = continuationStateAfterLeaseTurnConsumed(state, now)
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return state, nil, loopBudget, nil, err
@@ -588,13 +592,43 @@ func (r *Runtime) reserveApprovedContinuationTurnLocked(key session.SessionKey) 
 		return state, nil, loopBudget, nil, err
 	}
 	return state, &approvedContinuationReservation{
-		State:           state,
-		Actor:           actor,
-		ExecutionActor:  executionActor,
-		ApprovedBy:      approvedBy,
-		EventText:       continuationEventText,
-		SandboxRequired: sandboxRequired,
+		State:                 state,
+		Actor:                 actor,
+		ExecutionActor:        executionActor,
+		ApprovedBy:            approvedBy,
+		EventText:             continuationEventText,
+		SandboxRequired:       sandboxRequired,
+		AuthorityAdmission:    authorityAdmission,
+		HasAuthorityAdmission: hasAuthorityAdmission,
 	}, loopBudget, nil, nil
+}
+
+func directContinuationAuthorityAdmission(key session.SessionKey, actor principal.Principal, state session.ContinuationState, now time.Time) (session.ExecutionRunAuthority, bool) {
+	if key.ChatID == 0 && key.UserID == 0 && key.Scope.IsZero() {
+		return session.ExecutionRunAuthority{}, false
+	}
+	lease := session.NormalizeContinuationLease(state.ContinuationLease)
+	if strings.TrimSpace(lease.ID) == "" || !lease.ActiveAt(now) {
+		return session.ExecutionRunAuthority{}, false
+	}
+	return session.NormalizeExecutionRunAuthority(session.ExecutionRunAuthority{
+		SessionID:           session.SessionIDForKey(key),
+		ChatID:              key.ChatID,
+		UserID:              key.UserID,
+		Scope:               key.Scope,
+		Principal:           runtimeExecutionPrincipalID(actor),
+		PrincipalRole:       string(actor.Role),
+		ExecutionSpecies:    "direct_continuation",
+		LeaseKind:           session.ExecutionAuthorityLeaseKindContinuation,
+		ContinuationLeaseID: lease.ID,
+		LeaseStatus:         string(lease.Status),
+		LeaseClass:          lease.LeaseClass,
+		LeaseAllowedActions: append([]string(nil), lease.AllowedActions...),
+		LeaseConstraints:    cloneStringMap(lease.Constraints),
+		LeaseRemainingTurns: lease.RemainingTurns,
+		LeaseExpiresAt:      lease.ExpiresAt,
+		AdmittedAt:          now.UTC(),
+	}), true
 }
 
 func (r *Runtime) shouldRouteContinuationThroughWorkExecutor(state session.ContinuationState) bool {
@@ -658,6 +692,9 @@ func (r *Runtime) reserveApprovedWorkContinuationTurnLocked(key session.SessionK
 func (r *Runtime) runReservedApprovedContinuation(ctx context.Context, key session.SessionKey, reservation approvedContinuationReservation) error {
 	if reservation.WorkRequest != nil {
 		return r.runReservedApprovedWorkContinuation(ctx, key, reservation)
+	}
+	if reservation.HasAuthorityAdmission {
+		ctx = toolpkg.WithExecutionAuthorityAdmission(ctx, reservation.AuthorityAdmission)
 	}
 	msg := continuationInboundForKey(key, reservation.ExecutionActor, reservation.EventText, core.InboundOriginTurnAuthorization, string(session.TurnAuthorizationKindContinuation))
 	_, err := r.handleInternalContinuation(ctx, reservation.ExecutionActor, msg)

@@ -63,6 +63,15 @@ That consumed lease remains valid only for the specific `execution_run_authority
 record that captured it while active. Revoked, expired, mismatched, or
 session-incompatible leases still fail closed at point of use.
 
+The same rule applies to both continuation entry paths. Work routed through the
+native work executor records `native_continuation` or
+`operation_plan_continuation` authority before the internal turn starts. A
+direct approved continuation that remains on the ordinary turn path records
+`direct_continuation` authority from the approved pre-consumption
+`ContinuationLease` snapshot, then spends the lease and starts the internal
+turn. Tools still receive only the durable run identity and must reload the
+stored authority before acting.
+
 ## Durable Child Turn Authorship
 
 Durable-child wakes use the same causal rule at a different layer: a child task

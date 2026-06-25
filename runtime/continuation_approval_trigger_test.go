@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
@@ -12,6 +13,7 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 	toolpkg "github.com/idolum-ai/aphelion/tool"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
+	"github.com/idolum-ai/aphelion/turn"
 	"strings"
 	"sync"
 	"testing"
@@ -136,7 +138,7 @@ func TestDirectContinuationApprovalBindsExecutionRunAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{Text: "continued"}}
+	recorder := &authorityRecordingTurnAssembler{runtime: rt, result: &core.TurnResult{Text: "continued"}}
 	rt.interactiveDMAssembler = recorder
 
 	now := time.Now().UTC()
@@ -190,29 +192,229 @@ func TestDirectContinuationApprovalBindsExecutionRunAuthority(t *testing.T) {
 	if !ok {
 		t.Fatal("AuthorityUseRefFromContext() ok=false, want direct continuation turn to carry durable run authority")
 	}
-	if ref.SessionID != session.SessionIDForKey(key) || ref.ContinuationLeaseID != "lease-direct-child-wake-authority" {
-		t.Fatalf("authority ref = %#v, want session %q and child_wake lease", ref, session.SessionIDForKey(key))
+	if ref.SessionID != session.SessionIDForKey(key) || ref.TurnRunID == 0 || ref.ContinuationLeaseID != "" {
+		t.Fatalf("authority ref = %#v, want only durable run identity for session %q", ref, session.SessionIDForKey(key))
 	}
-	run, err := store.LatestTurnRun(key)
-	if err != nil {
-		t.Fatalf("LatestTurnRun() err = %v", err)
+	if recorder.runID == 0 || ref.TurnRunID != recorder.runID {
+		t.Fatalf("recorded run ID = %d, authority ref turn run ID = %d, want same direct continuation turn", recorder.runID, ref.TurnRunID)
 	}
-	if run == nil {
-		t.Fatal("LatestTurnRun() = nil, want direct continuation turn run")
-	}
-	authority, ok, err := store.ExecutionRunAuthority(run.ID)
+	authority, ok, err := store.ExecutionRunAuthority(recorder.runID)
 	if err != nil {
 		t.Fatalf("ExecutionRunAuthority() err = %v", err)
 	}
 	if !ok {
-		t.Fatalf("ExecutionRunAuthority(%d) ok=false, want durable authority row for direct continuation turn", run.ID)
+		t.Fatalf("ExecutionRunAuthority(%d) ok=false, want durable authority row for direct continuation turn", recorder.runID)
 	}
 	if authority.ContinuationLeaseID != "lease-direct-child-wake-authority" ||
+		authority.ExecutionSpecies != "direct_continuation" ||
 		authority.LeaseClass != session.ContinuationLeaseClassChildWake ||
 		!actionListContains(authority.LeaseAllowedActions, "wake_named_child") ||
 		authority.LeaseConstraints["agent_id"] != "idolum-email" {
 		t.Fatalf("execution authority = %#v, want child_wake authority bound to idolum-email", authority)
 	}
+}
+
+func TestDirectContinuationApprovalExecutesDurableAgentWakeOnceWithBoundAuthority(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	runner := &runtimeWakeRunner{}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store).WithDurableAgentWakeRunner(runner)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recorder := &authorityRecordingTurnAssembler{
+		runtime:   rt,
+		result:    &core.TurnResult{Text: "continued"},
+		toolName:  "durable_agent",
+		toolInput: json.RawMessage(`{"action":"wake_once","agent_id":"idolum-email"}`),
+	}
+	rt.interactiveDMAssembler = recorder
+
+	key := session.SessionKey{ChatID: 8119, UserID: 0, Scope: telegramDMScopeRef(8119)}
+	seedRuntimeWakeAgent(t, store, "idolum-email", true)
+	seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+
+	now := time.Now().UTC()
+	action := session.ActionProposal{
+		ID:               "aprop-direct-child-wake-tool-execution",
+		Summary:          "Wake idolum-email exactly once.",
+		BoundedEffect:    "Permit durable_agent wake_once to wake only idolum-email once.",
+		RiskClass:        "child_wake",
+		AllowedActions:   []string{"wake_named_child"},
+		ForbiddenActions: []string{"wake_unnamed_child", "unbounded_retry_loop"},
+		Status:           session.ProposalStatusPending,
+		ExpiresAt:        now.Add(time.Hour),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	lease := buildContinuationLease(action, 1, now)
+	lease.ID = "lease-direct-child-wake-tool-execution"
+	lease.LeaseClass = session.ContinuationLeaseClassChildWake
+	lease.Constraints = map[string]string{
+		"agent_id":              "idolum-email",
+		"tool":                  "durable_agent",
+		"tool_action":           "wake_once",
+		"grant_id":              "grant-idolum-email-wake-once",
+		"grant_target_resource": "durable_agent:idolum-email:wake_once",
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusPending,
+		DecisionID:        "direct-child-wake-tool-execution",
+		Objective:         "Run one approved child wake.",
+		StageSummary:      "Wake idolum-email exactly once.",
+		RemainingTurns:    1,
+		ActionProposal:    action,
+		ContinuationLease: lease,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID: 8119, SenderID: 1001, SenderName: "admin", Text: "approved", MessageID: 1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if recorder.toolErr != nil {
+		t.Fatalf("durable_agent wake_once tool err = %v", recorder.toolErr)
+	}
+	if len(runner.calls) != 1 || runner.calls[0] != "idolum-email" {
+		t.Fatalf("runner calls = %#v, want one direct idolum-email wake", runner.calls)
+	}
+	if !strings.Contains(recorder.toolOutput, "wake_status: awaiting_child_pickup") && !strings.Contains(recorder.toolOutput, "wake_status: completed") {
+		t.Fatalf("wake_once output = %q, want concrete wake status", recorder.toolOutput)
+	}
+	authority, ok, err := store.ExecutionRunAuthority(recorder.runID)
+	if err != nil {
+		t.Fatalf("ExecutionRunAuthority() err = %v", err)
+	}
+	if !ok || authority.ExecutionSpecies != "direct_continuation" || authority.ContinuationLeaseID != "lease-direct-child-wake-tool-execution" {
+		t.Fatalf("execution authority = %#v ok=%v, want direct_continuation authority for wake lease", authority, ok)
+	}
+}
+
+func TestDirectContinuationAuthorityAdmissionRequiresActiveLease(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 8118, UserID: 0, Scope: telegramDMScopeRef(8118)}
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	proposal := session.ActionProposal{
+		ID:               "aprop-direct-admission-active",
+		Summary:          "Wake one child.",
+		AllowedActions:   []string{"wake_named_child"},
+		ForbiddenActions: []string{"wake_unnamed_child"},
+		Status:           session.ProposalStatusApproved,
+		ExpiresAt:        now.Add(time.Hour),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	proposal.PlanHash = actionProposalHash(proposal)
+	lease := buildContinuationLease(proposal, 1, now)
+	lease.ID = "lease-direct-admission-active"
+	lease.Status = session.ContinuationLeaseStatusActive
+	lease.LeaseClass = session.ContinuationLeaseClassChildWake
+	lease.Constraints = map[string]string{"agent_id": "idolum-email"}
+	state := session.ContinuationState{
+		Status:            session.ContinuationStatusApproved,
+		RemainingTurns:    1,
+		ActionProposal:    proposal,
+		ContinuationLease: lease,
+	}
+
+	admission, ok := directContinuationAuthorityAdmission(key, actor, state, now)
+	if !ok {
+		t.Fatal("directContinuationAuthorityAdmission() ok=false, want active lease admission")
+	}
+	if admission.ContinuationLeaseID != lease.ID || admission.ExecutionSpecies != "direct_continuation" || admission.LeaseConstraints["agent_id"] != "idolum-email" {
+		t.Fatalf("admission = %#v, want direct continuation child_wake snapshot", admission)
+	}
+
+	expired := state
+	expired.ContinuationLease.ExpiresAt = now.Add(-time.Minute)
+	if admission, ok := directContinuationAuthorityAdmission(key, actor, expired, now); ok {
+		t.Fatalf("expired admission = %#v, want no admission", admission)
+	}
+
+	consumed := state
+	consumed.ContinuationLease.Status = session.ContinuationLeaseStatusConsumed
+	consumed.ContinuationLease.RemainingTurns = 0
+	if admission, ok := directContinuationAuthorityAdmission(key, actor, consumed, now); ok {
+		t.Fatalf("consumed admission = %#v, want no admission", admission)
+	}
+}
+
+type authorityRecordingTurnAssembler struct {
+	mu         sync.Mutex
+	runtime    *Runtime
+	called     bool
+	ctx        context.Context
+	runID      int64
+	result     *core.TurnResult
+	err        error
+	toolName   string
+	toolInput  json.RawMessage
+	toolOutput string
+	toolErr    error
+}
+
+func (a *authorityRecordingTurnAssembler) Run(ctx context.Context, input interactiveDMTurnAssemblyInput) (*core.TurnResult, error) {
+	result, err := a.RunTurn(ctx, input)
+	if result == nil {
+		return nil, err
+	}
+	return result.Turn, err
+}
+
+func (a *authorityRecordingTurnAssembler) RunTurn(ctx context.Context, input interactiveDMTurnAssemblyInput) (*turn.Result, error) {
+	monitor, err := a.runtime.startTurnMonitor(ctx, input.Key, session.TurnRunKindInteractive, input.Msg.Text, nil, nil, input.Msg)
+	if err != nil {
+		return nil, err
+	}
+	monitorErr := error(nil)
+	turnCtx := monitor.Context()
+	defer monitor.Finish(turnCtx, monitorErr)
+
+	a.mu.Lock()
+	a.called = true
+	a.ctx = turnCtx
+	a.runID = monitor.runID
+	a.mu.Unlock()
+
+	if strings.TrimSpace(a.toolName) != "" {
+		a.toolOutput, a.toolErr = input.Tools.Execute(turnCtx, a.toolName, a.toolInput)
+		if a.toolErr != nil {
+			monitorErr = a.toolErr
+			return nil, a.toolErr
+		}
+	}
+	if a.err != nil {
+		monitorErr = a.err
+		return nil, a.err
+	}
+	result := a.result
+	if result == nil {
+		result = &core.TurnResult{}
+	}
+	return &turn.Result{Turn: result, VisibleReply: strings.TrimSpace(result.Text)}, nil
 }
 
 func TestTriggerContinuationLoopsWhileApprovedLeaseHasTurns(t *testing.T) {
