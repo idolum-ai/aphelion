@@ -124,11 +124,17 @@ For capability-managed tools, the effective authority is:
 `principal + durable run authority + current lease state + active grant + exact action + invocation input`
 
 Native admin surfaces may add a narrower operation-specific grant gate before
-their own runtime authority check. `durable_agent wake_once` is one such case:
-the tool call requires an exact active `tool` grant for target `durable_agent`
-with a `tool_invocation` scope matching `action=wake_once` and the canonical
-`agent_id`. That grant does not wake the child by itself; the wake still needs a
-current child-wake continuation lease and records a one-time wake claim.
+their own runtime authority check. Those gates must compile one grant contract
+that is consumed by both the missing-grant review request and point-of-use grant
+matching, so approval materialization cannot drift from the runtime predicate.
+`durable_agent wake_once` is one such case: the primary grant shape is an exact
+active `generic_delegation` grant for target
+`durable_agent:<agent_id>:wake_once`, action `invoke`, and the canonical child.
+A scoped `tool` grant for target `durable_agent` with a matching
+`tool_invocation` scope is an explicit alternate shape, but broad durable-agent
+grants do not satisfy this gate. The operation-specific grant does not wake the
+child by itself; the wake still needs a current child-wake continuation lease
+and records a one-time wake claim.
 
 For native file access, the effective authority is:
 

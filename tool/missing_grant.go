@@ -32,14 +32,36 @@ type missingGrantRequirement struct {
 	OperationTool      string
 }
 
+type missingGrantContract struct {
+	Requirement         missingGrantRequirement
+	AcceptedPrincipals  []string
+	AcceptedGrantShapes []missingGrantAcceptedShape
+}
+
+type missingGrantAcceptedShape struct {
+	Kind                session.CapabilityKind
+	TargetResource      string
+	Action              string
+	ToolInvocationScope missingGrantToolInvocationScopeMode
+	RequiredConstraints map[string]string
+}
+
+type missingGrantToolInvocationScopeMode string
+
+const (
+	missingGrantToolInvocationScopeIgnored  missingGrantToolInvocationScopeMode = ""
+	missingGrantToolInvocationScopeOptional missingGrantToolInvocationScopeMode = "optional"
+	missingGrantToolInvocationScopeRequired missingGrantToolInvocationScopeMode = "required"
+)
+
 type missingGrantError struct {
-	requirement missingGrantRequirement
-	cause       error
+	contract missingGrantContract
+	cause    error
 }
 
 func (e missingGrantError) Error() string {
-	if strings.TrimSpace(e.requirement.RequestID) != "" {
-		return fmt.Sprintf("missing capability grant; review request %s is required", e.requirement.RequestID)
+	if strings.TrimSpace(e.contract.Requirement.RequestID) != "" {
+		return fmt.Sprintf("missing capability grant; review request %s is required", strings.TrimSpace(e.contract.Requirement.RequestID))
 	}
 	if e.cause != nil {
 		return e.cause.Error()
@@ -49,6 +71,38 @@ func (e missingGrantError) Error() string {
 
 func (e missingGrantError) Unwrap() error {
 	return e.cause
+}
+
+func (r *Registry) activeGrantForMissingGrantContract(contract missingGrantContract, input json.RawMessage) (session.CapabilityGrant, bool, error) {
+	if r == nil || r.store == nil {
+		return session.CapabilityGrant{}, false, nil
+	}
+	contract = normalizeMissingGrantContract(contract)
+	if contract.Requirement.Kind == "" || contract.Requirement.TargetResource == "" {
+		return session.CapabilityGrant{}, false, nil
+	}
+	queryCache := map[string][]session.CapabilityGrant{}
+	for _, shape := range contract.AcceptedGrantShapes {
+		for _, principalID := range contract.AcceptedPrincipals {
+			key := strings.Join([]string{string(shape.Kind), shape.TargetResource, principalID, shape.Action}, "\x00")
+			grants, ok := queryCache[key]
+			if !ok {
+				var err error
+				grants, err = r.store.ActiveCapabilityGrants(shape.Kind, shape.TargetResource, principalID, shape.Action)
+				if err != nil {
+					return session.CapabilityGrant{}, false, err
+				}
+				queryCache[key] = grants
+			}
+			for _, grant := range grants {
+				if !missingGrantShapeAllowsGrant(shape, grant, input) {
+					continue
+				}
+				return grant, true, nil
+			}
+		}
+	}
+	return session.CapabilityGrant{}, false, nil
 }
 
 func (r *Registry) materializeMissingGrantRequirement(_ context.Context, key session.SessionKey, actor principal.Principal, requirement missingGrantRequirement, now time.Time) (session.CapabilityRequest, int64, session.NextActionRecord, error) {
@@ -251,7 +305,8 @@ func (r *Registry) materializeMissingGrantError(ctx context.Context, key session
 	if !errors.As(err, &missing) {
 		return err
 	}
-	request, reviewEventID, _, materializeErr := r.materializeMissingGrantRequirement(ctx, key, actor, missing.requirement, time.Now().UTC())
+	contract := normalizeMissingGrantContract(missing.contract)
+	request, reviewEventID, _, materializeErr := r.materializeMissingGrantRequirement(ctx, key, actor, contract.Requirement, time.Now().UTC())
 	if materializeErr != nil {
 		return fmt.Errorf("%w; additionally failed to materialize review request: %v", err, materializeErr)
 	}
@@ -261,14 +316,189 @@ func (r *Registry) materializeMissingGrantError(ctx context.Context, key session
 	return fmt.Errorf("missing capability grant; recorded review request %s", request.RequestID)
 }
 
+func normalizeMissingGrantContract(contract missingGrantContract) missingGrantContract {
+	contract.Requirement = normalizeMissingGrantRequirement(contract.Requirement)
+	if len(contract.AcceptedPrincipals) == 0 {
+		contract.AcceptedPrincipals = []string{contract.Requirement.GrantedTo}
+	} else {
+		contract.AcceptedPrincipals = normalizeUniqueStrings(append(contract.AcceptedPrincipals, contract.Requirement.GrantedTo))
+	}
+	if len(contract.AcceptedGrantShapes) == 0 {
+		contract.AcceptedGrantShapes = []missingGrantAcceptedShape{missingGrantAcceptedShapeFromRequirement(contract.Requirement)}
+	} else {
+		contract.AcceptedGrantShapes = normalizeMissingGrantAcceptedShapes(contract.AcceptedGrantShapes)
+	}
+	return contract
+}
+
+func missingGrantAcceptedShapeFromRequirement(requirement missingGrantRequirement) missingGrantAcceptedShape {
+	requirement = normalizeMissingGrantRequirement(requirement)
+	action := "invoke"
+	if len(requirement.AllowedActions) > 0 {
+		action = requirement.AllowedActions[0]
+	}
+	return missingGrantAcceptedShape{
+		Kind:                requirement.Kind,
+		TargetResource:      requirement.TargetResource,
+		Action:              action,
+		ToolInvocationScope: missingGrantToolInvocationScopeOptional,
+	}
+}
+
+func normalizeMissingGrantAcceptedShapes(shapes []missingGrantAcceptedShape) []missingGrantAcceptedShape {
+	out := make([]missingGrantAcceptedShape, 0, len(shapes))
+	seen := map[string]struct{}{}
+	for _, shape := range shapes {
+		shape.Kind = session.NormalizeCapabilityKind(shape.Kind)
+		shape.TargetResource = strings.TrimSpace(shape.TargetResource)
+		shape.Action = strings.TrimSpace(shape.Action)
+		if shape.Action == "" {
+			shape.Action = "invoke"
+		}
+		actions := session.NormalizeCapabilityActions([]string{shape.Action})
+		if len(actions) == 0 {
+			continue
+		}
+		shape.Action = actions[0]
+		if shape.Kind == "" || shape.TargetResource == "" || shape.Action == "" {
+			continue
+		}
+		if shape.RequiredConstraints != nil {
+			required := map[string]string{}
+			for key, value := range shape.RequiredConstraints {
+				key = strings.TrimSpace(key)
+				value = strings.TrimSpace(value)
+				if key == "" || value == "" {
+					continue
+				}
+				required[key] = value
+			}
+			shape.RequiredConstraints = required
+		}
+		key := strings.Join([]string{string(shape.Kind), shape.TargetResource, shape.Action, string(shape.ToolInvocationScope), compactJSON(shape.RequiredConstraints)}, "\x00")
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, shape)
+	}
+	return out
+}
+
+func missingGrantShapeAllowsGrant(shape missingGrantAcceptedShape, grant session.CapabilityGrant, input json.RawMessage) bool {
+	if session.NormalizeCapabilityKind(grant.Kind) != shape.Kind {
+		return false
+	}
+	if strings.TrimSpace(grant.TargetResource) != strings.TrimSpace(shape.TargetResource) {
+		return false
+	}
+	_, hasScope, err := capabilityGrantToolInvocationScope(grant)
+	if err != nil {
+		return false
+	}
+	if hasScope && len(shape.RequiredConstraints) > 0 && capabilityGrantHasAnyConstraint(grant, shape.RequiredConstraints) && !missingGrantRequiredConstraintsAllowGrant(shape.RequiredConstraints, grant) {
+		return false
+	}
+	switch shape.ToolInvocationScope {
+	case missingGrantToolInvocationScopeRequired:
+		if !hasScope {
+			return false
+		}
+		if len(input) > 0 {
+			if err := validateCapabilityToolInvocationInput(grant, input); err != nil {
+				return false
+			}
+		}
+		return missingGrantRequiredConstraintsAllowGrantWhenPresent(shape.RequiredConstraints, grant)
+	case missingGrantToolInvocationScopeOptional:
+		if hasScope {
+			if len(input) > 0 {
+				if err := validateCapabilityToolInvocationInput(grant, input); err != nil {
+					return false
+				}
+			}
+			return missingGrantRequiredConstraintsAllowGrantWhenPresent(shape.RequiredConstraints, grant)
+		}
+	}
+	return missingGrantRequiredConstraintsAllowGrant(shape.RequiredConstraints, grant)
+}
+
+func missingGrantRequiredConstraintsAllowGrantWhenPresent(required map[string]string, grant session.CapabilityGrant) bool {
+	if len(required) == 0 || !capabilityGrantHasAnyConstraint(grant, required) {
+		return true
+	}
+	return missingGrantRequiredConstraintsAllowGrant(required, grant)
+}
+
+func missingGrantRequiredConstraintsAllowGrant(required map[string]string, grant session.CapabilityGrant) bool {
+	if len(required) == 0 {
+		return true
+	}
+	values, ok := capabilityGrantConstraintStrings(grant)
+	if !ok {
+		return false
+	}
+	for key, want := range required {
+		if strings.TrimSpace(values[key]) != strings.TrimSpace(want) {
+			return false
+		}
+	}
+	return true
+}
+
+func capabilityGrantHasAnyConstraint(grant session.CapabilityGrant, required map[string]string) bool {
+	if len(required) == 0 {
+		return false
+	}
+	values, ok := capabilityGrantConstraintStrings(grant)
+	if !ok {
+		return false
+	}
+	for key := range required {
+		if _, ok := values[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func capabilityGrantConstraintStrings(grant session.CapabilityGrant) (map[string]string, bool) {
+	raw := strings.TrimSpace(grant.Constraints)
+	if raw == "" || raw == "{}" {
+		return nil, false
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return nil, false
+	}
+	out := map[string]string{}
+	for key, value := range decoded {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		var scalar string
+		if err := json.Unmarshal(value, &scalar); err == nil {
+			out[key] = strings.TrimSpace(scalar)
+			continue
+		}
+		out[key] = strings.TrimSpace(string(value))
+	}
+	return out, true
+}
+
 func genericMissingGrantRequirementForTool(toolName string, p principal.Principal) missingGrantRequirement {
+	return genericMissingGrantContractForTool(toolName, p).Requirement
+}
+
+func genericMissingGrantContractForTool(toolName string, p principal.Principal) missingGrantContract {
 	toolName = strings.TrimSpace(toolName)
 	grantedTo := toolAuthorityCanonicalPrincipal(p)
 	contract := compactJSON(map[string]any{
 		"bounded_effect": "Allow invoking the named registered tool only through the capability-managed tool boundary.",
 		"tool_name":      toolName,
 	})
-	return missingGrantRequirement{
+	requirement := missingGrantRequirement{
 		Kind:               session.CapabilityKindTool,
 		TargetResource:     toolName,
 		GrantedTo:          grantedTo,
@@ -281,6 +511,10 @@ func genericMissingGrantRequirementForTool(toolName string, p principal.Principa
 		OperatorProjection: fmt.Sprintf("Tool %s is blocked because %s has no active invoke grant. Review the exact capability request, then retry the tool.", toolName, grantedTo),
 		OperationKind:      "capability_grant_review",
 		OperationTool:      "capability_authority",
+	}
+	return missingGrantContract{
+		Requirement:        requirement,
+		AcceptedPrincipals: toolAuthorityPrincipalIDs(p),
 	}
 }
 

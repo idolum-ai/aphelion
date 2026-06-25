@@ -118,7 +118,8 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 }
 
 func (r *Registry) requireDurableAgentWakeOnceCapabilityGrant(agentID string, input json.RawMessage, p principal.Principal) (session.CapabilityGrant, error) {
-	grant, ok, err := r.durableAgentWakeOnceCapabilityGrant(agentID, input, p)
+	contract := durableAgentWakeOnceGrantContract(agentID, p)
+	grant, ok, err := r.activeGrantForMissingGrantContract(contract, input)
 	if err != nil {
 		return session.CapabilityGrant{}, err
 	}
@@ -127,53 +128,20 @@ func (r *Registry) requireDurableAgentWakeOnceCapabilityGrant(agentID string, in
 	}
 	cause := fmt.Errorf("durable_agent wake_once does not have an active exact invoke grant for agent_id %q", strings.TrimSpace(agentID))
 	return session.CapabilityGrant{}, missingGrantError{
-		requirement: durableAgentWakeOnceMissingGrantRequirement(agentID, p),
-		cause:       cause,
+		contract: contract,
+		cause:    cause,
 	}
 }
 
-func (r *Registry) durableAgentWakeOnceCapabilityGrant(agentID string, input json.RawMessage, p principal.Principal) (session.CapabilityGrant, bool, error) {
-	if r == nil || r.store == nil {
-		return session.CapabilityGrant{}, false, nil
-	}
-	agentID = strings.TrimSpace(agentID)
-	if agentID == "" {
-		return session.CapabilityGrant{}, false, nil
-	}
-	candidates := append([]string{}, toolAuthorityPrincipalKeys(p)...)
-	candidates = append(candidates, toolAuthorityPrincipalDisplay(p))
-	seen := map[string]struct{}{}
-	for _, candidate := range candidates {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		if _, ok := seen[candidate]; ok {
-			continue
-		}
-		seen[candidate] = struct{}{}
-		grants, err := r.store.ActiveCapabilityGrants(session.CapabilityKindTool, "durable_agent", candidate, "invoke")
-		if err != nil {
-			return session.CapabilityGrant{}, false, err
-		}
-		for _, grant := range grants {
-			_, hasScope, err := capabilityGrantToolInvocationScope(grant)
-			if err != nil {
-				return session.CapabilityGrant{}, false, err
-			}
-			if !hasScope {
-				continue
-			}
-			if err := validateCapabilityToolInvocationInput(grant, input); err != nil {
-				continue
-			}
-			return grant, true, nil
-		}
-	}
-	return session.CapabilityGrant{}, false, nil
+func durableAgentWakeOnceCapabilityTarget(agentID string) string {
+	return "durable_agent:" + strings.TrimSpace(agentID) + ":wake_once"
 }
 
 func durableAgentWakeOnceMissingGrantRequirement(agentID string, p principal.Principal) missingGrantRequirement {
+	return durableAgentWakeOnceGrantContract(agentID, p).Requirement
+}
+
+func durableAgentWakeOnceGrantContract(agentID string, p principal.Principal) missingGrantContract {
 	agentID = strings.TrimSpace(agentID)
 	grantedTo := toolAuthorityCanonicalPrincipal(p)
 	contract := compactJSON(map[string]any{
@@ -196,9 +164,9 @@ func durableAgentWakeOnceMissingGrantRequirement(agentID string, p principal.Pri
 			},
 		},
 	})
-	return missingGrantRequirement{
-		Kind:               session.CapabilityKindTool,
-		TargetResource:     "durable_agent",
+	requirement := missingGrantRequirement{
+		Kind:               session.CapabilityKindGenericDelegation,
+		TargetResource:     durableAgentWakeOnceCapabilityTarget(agentID),
 		GrantedTo:          grantedTo,
 		AllowedActions:     []string{"invoke"},
 		Contract:           contract,
@@ -209,6 +177,25 @@ func durableAgentWakeOnceMissingGrantRequirement(agentID string, p principal.Pri
 		OperatorProjection: fmt.Sprintf("durable_agent wake_once for %s is blocked because %s lacks an exact active invoke grant. Review this request; after approval and grant materialization, retry the one wake attempt under a child_wake lease.", agentID, grantedTo),
 		OperationKind:      "capability_grant_review",
 		OperationTool:      "capability_authority",
+	}
+	return missingGrantContract{
+		Requirement:        requirement,
+		AcceptedPrincipals: toolAuthorityPrincipalIDs(p),
+		AcceptedGrantShapes: []missingGrantAcceptedShape{
+			{
+				Kind:                session.CapabilityKindGenericDelegation,
+				TargetResource:      durableAgentWakeOnceCapabilityTarget(agentID),
+				Action:              "invoke",
+				ToolInvocationScope: missingGrantToolInvocationScopeOptional,
+				RequiredConstraints: map[string]string{"agent_id": agentID},
+			},
+			{
+				Kind:                session.CapabilityKindTool,
+				TargetResource:      "durable_agent",
+				Action:              "invoke",
+				ToolInvocationScope: missingGrantToolInvocationScopeRequired,
+			},
+		},
 	}
 }
 

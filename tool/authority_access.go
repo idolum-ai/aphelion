@@ -131,8 +131,8 @@ func (r *Registry) requireAuthorityToolAccess(ctx context.Context, name string, 
 	}
 	cause := fmt.Errorf("tool %q is not granted to principal %q", name, toolAuthorityPrincipalDisplay(p))
 	return session.CapabilityGrant{}, nil, false, missingGrantError{
-		requirement: genericMissingGrantRequirementForTool(name, p),
-		cause:       cause,
+		contract: genericMissingGrantContractForTool(name, p),
+		cause:    cause,
 	}
 }
 
@@ -359,30 +359,7 @@ func toolSessionKeyHasIdentity(key session.SessionKey) bool {
 }
 
 func (r *Registry) capabilityGrantAllowsAuthorityToolAccess(toolName string, p principal.Principal) (session.CapabilityGrant, bool, error) {
-	if r == nil || r.store == nil {
-		return session.CapabilityGrant{}, false, nil
-	}
-	candidates := append([]string{}, toolAuthorityPrincipalKeys(p)...)
-	candidates = append(candidates, toolAuthorityPrincipalDisplay(p))
-	seen := make(map[string]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		if _, ok := seen[candidate]; ok {
-			continue
-		}
-		seen[candidate] = struct{}{}
-		grant, ok, err := r.store.ActiveCapabilityGrant(session.CapabilityKindTool, toolName, candidate, "invoke")
-		if err != nil {
-			return session.CapabilityGrant{}, false, err
-		}
-		if ok {
-			return grant, true, nil
-		}
-	}
-	return session.CapabilityGrant{}, false, nil
+	return r.activeGrantForMissingGrantContract(genericMissingGrantContractForTool(toolName, p), nil)
 }
 
 func toolAuthorityPrincipalKeys(p principal.Principal) []string {
@@ -417,6 +394,10 @@ func toolAuthorityPrincipalKeys(p principal.Principal) []string {
 		out = append(out, key)
 	}
 	return out
+}
+
+func toolAuthorityPrincipalIDs(p principal.Principal) []string {
+	return normalizeUniqueStrings(append(toolAuthorityPrincipalKeys(p), toolAuthorityPrincipalDisplay(p)))
 }
 
 func toolAuthorityPrincipalDisplay(p principal.Principal) string {
