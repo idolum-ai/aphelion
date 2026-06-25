@@ -10,6 +10,7 @@ import (
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 	"strings"
 	"sync"
@@ -124,6 +125,93 @@ func TestHandleInboundTypedApprovalConsumesPendingContinuation(t *testing.T) {
 	}
 	if !hasExecutionEvent(events, core.ExecutionEventContinuationApproved) || !hasExecutionEvent(events, core.ExecutionEventContinuationConsumed) {
 		t.Fatalf("events = %#v, want approved and consumed events", events)
+	}
+}
+
+func TestDirectContinuationApprovalBindsExecutionRunAuthority(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{Text: "continued"}}
+	rt.interactiveDMAssembler = recorder
+
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 8117, UserID: 0, Scope: telegramDMScopeRef(8117)}
+	action := session.ActionProposal{
+		ID:               "aprop-direct-child-wake-authority",
+		Summary:          "Wake idolum-email exactly once.",
+		BoundedEffect:    "Permit durable_agent wake_once to wake only idolum-email once.",
+		RiskClass:        "child_wake",
+		AllowedActions:   []string{"wake_named_child"},
+		ForbiddenActions: []string{"wake_unnamed_child", "unbounded_retry_loop"},
+		Status:           session.ProposalStatusPending,
+		ExpiresAt:        now.Add(time.Hour),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	lease := buildContinuationLease(action, 1, now)
+	lease.ID = "lease-direct-child-wake-authority"
+	lease.LeaseClass = session.ContinuationLeaseClassChildWake
+	lease.Constraints = map[string]string{
+		"agent_id":              "idolum-email",
+		"tool":                  "durable_agent",
+		"tool_action":           "wake_once",
+		"grant_id":              "grant-idolum-email-direct-no-content-wake-readiness",
+		"grant_target_resource": "durable_agent:idolum-email:wake_once",
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusPending,
+		DecisionID:        "direct-child-wake-authority",
+		Objective:         "Run one approved child wake.",
+		StageSummary:      "Wake idolum-email exactly once.",
+		RemainingTurns:    1,
+		ActionProposal:    action,
+		ContinuationLease: lease,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID: 8117, SenderID: 1001, SenderName: "admin", Text: "approved", MessageID: 1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if !recorder.called {
+		t.Fatal("interactive assembler not called for approved continuation")
+	}
+	ref, ok := toolpkg.AuthorityUseRefFromContext(recorder.ctx)
+	if !ok {
+		t.Fatal("AuthorityUseRefFromContext() ok=false, want direct continuation turn to carry durable run authority")
+	}
+	if ref.SessionID != session.SessionIDForKey(key) || ref.ContinuationLeaseID != "lease-direct-child-wake-authority" {
+		t.Fatalf("authority ref = %#v, want session %q and child_wake lease", ref, session.SessionIDForKey(key))
+	}
+	run, err := store.LatestTurnRun(key)
+	if err != nil {
+		t.Fatalf("LatestTurnRun() err = %v", err)
+	}
+	if run == nil {
+		t.Fatal("LatestTurnRun() = nil, want direct continuation turn run")
+	}
+	authority, ok, err := store.ExecutionRunAuthority(run.ID)
+	if err != nil {
+		t.Fatalf("ExecutionRunAuthority() err = %v", err)
+	}
+	if !ok {
+		t.Fatalf("ExecutionRunAuthority(%d) ok=false, want durable authority row for direct continuation turn", run.ID)
+	}
+	if authority.ContinuationLeaseID != "lease-direct-child-wake-authority" ||
+		authority.LeaseClass != session.ContinuationLeaseClassChildWake ||
+		!actionListContains(authority.LeaseAllowedActions, "wake_named_child") ||
+		authority.LeaseConstraints["agent_id"] != "idolum-email" {
+		t.Fatalf("execution authority = %#v, want child_wake authority bound to idolum-email", authority)
 	}
 }
 
