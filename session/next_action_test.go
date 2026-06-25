@@ -142,6 +142,94 @@ func TestOpenNextActionsBySessionSubjectIsScopedAndNotHiddenBySessionVolume(t *t
 	}
 }
 
+func TestOpenNextActionsBySessionOperationFindsRecoveryHandoffBehindSessionVolume(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	key := SessionKey{ChatID: 91007, UserID: 1001}
+	otherKey := SessionKey{ChatID: 91008, UserID: 1001}
+	target, err := store.RecordNextAction(NextActionInput{
+		RecordID:           "target-operation-action",
+		Key:                key,
+		Owner:              "test",
+		State:              NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         "child_wake:child-alpha",
+		NextAction:         "approve child wake",
+		RequiredAuthority:  "child_wake",
+		ResourceBlocker:    "missing_continuation_lease",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: `{"action":"request_continuation_lease","lease_class":"child_wake","request_instance_id":"req-1"}`,
+		CreatedAt:          time.Date(2026, 6, 24, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("RecordNextAction(target) err = %v", err)
+	}
+	if _, err := store.RecordNextAction(NextActionInput{
+		RecordID:           "other-session-operation-action",
+		Key:                otherKey,
+		Owner:              "test",
+		State:              NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         "child_wake:child-alpha",
+		NextAction:         "approve child wake elsewhere",
+		RequiredAuthority:  "child_wake",
+		ResourceBlocker:    "missing_continuation_lease",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: `{"action":"request_continuation_lease","lease_class":"child_wake","request_instance_id":"req-other"}`,
+		CreatedAt:          time.Date(2026, 6, 24, 10, 1, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(other session) err = %v", err)
+	}
+	for i := 0; i < 125; i++ {
+		if _, err := store.RecordNextAction(NextActionInput{
+			RecordID:           "unrelated-operation-action-" + time.Date(2026, 6, 24, 10, i+2, 0, 0, time.UTC).Format("150405"),
+			Key:                key,
+			Owner:              "test",
+			State:              NextActionBlockedNeedsAuthority,
+			SubjectKind:        "unrelated",
+			SubjectRef:         time.Date(2026, 6, 24, 10, i+2, 0, 0, time.UTC).Format("150405"),
+			NextAction:         "unrelated",
+			RequiredAuthority:  "test",
+			OperationKind:      "capability_grant_review",
+			OperationTool:      "capability_authority",
+			OperationInputJSON: `{"action":"grant_set"}`,
+			CreatedAt:          time.Date(2026, 6, 24, 10, i+2, 0, 0, time.UTC),
+		}); err != nil {
+			t.Fatalf("RecordNextAction(unrelated %d) err = %v", i, err)
+		}
+	}
+
+	sessionWide, err := store.OpenNextActionsBySession(key, 100)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	for _, action := range sessionWide {
+		if action.RecordID == target.RecordID {
+			t.Fatalf("session-wide newest 100 unexpectedly included old target action")
+		}
+	}
+	matches, err := store.OpenNextActionsBySessionOperation(key, NextActionBlockedNeedsAuthority, "request_approval", "continuation_lease_request", 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySessionOperation() err = %v", err)
+	}
+	if len(matches) != 1 || matches[0].RecordID != target.RecordID {
+		t.Fatalf("operation matches = %#v, want only %q", matches, target.RecordID)
+	}
+	otherMatches, err := store.OpenNextActionsBySessionOperation(otherKey, NextActionBlockedNeedsAuthority, "request_approval", "continuation_lease_request", 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySessionOperation(other) err = %v", err)
+	}
+	if len(otherMatches) != 1 || otherMatches[0].RecordID != "other-session-operation-action" {
+		t.Fatalf("other session operation matches = %#v, want other session action", otherMatches)
+	}
+}
+
 func TestRecordResourcePreflightCreatesRepairNextAction(t *testing.T) {
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
 	if err != nil {

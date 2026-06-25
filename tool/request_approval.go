@@ -538,7 +538,21 @@ func requestApprovalContinuationLeaseGrantSpecs(requirement missingContinuationL
 	}
 	kind := session.CapabilityKindTool
 	allowed := []string{"invoke"}
-	if requirement.LeaseClass == session.ContinuationLeaseClassDataAccess {
+	contract := ""
+	constraints := ""
+	if requirement.LeaseClass == session.ContinuationLeaseClassChildWake {
+		kind = session.CapabilityKindGenericDelegation
+		if target == "" && requirement.AgentID != "" {
+			target = durableAgentWakeOnceCapabilityTarget(requirement.AgentID)
+		}
+		contract = compactJSON(map[string]any{
+			"bounded_effect": "Allow invoking durable_agent wake_once for the named child only. The continuation child_wake lease still bounds each wake attempt and supplies the one-turn execution authority.",
+			"tool_name":      "durable_agent",
+			"tool_action":    "wake_once",
+			"agent_id":       requirement.AgentID,
+		})
+		constraints = compactJSON(map[string]any{"agent_id": requirement.AgentID})
+	} else if requirement.LeaseClass == session.ContinuationLeaseClassDataAccess {
 		kind = session.CapabilityKindFileAccess
 		allowed = []string{"read"}
 	} else if requirement.LeaseClass == session.ContinuationLeaseClassLocalWorkspace {
@@ -554,6 +568,8 @@ func requestApprovalContinuationLeaseGrantSpecs(requirement missingContinuationL
 		TargetResource: target,
 		GrantedTo:      requirement.Principal,
 		AllowedActions: allowed,
+		Contract:       contract,
+		Constraints:    constraints,
 	}}
 }
 

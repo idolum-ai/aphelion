@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/turn"
 )
@@ -104,6 +105,9 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 	}
 	if _, ok := r.continuationApprovalPromptSender(); !ok {
 		return false, nil
+	}
+	if _, err := r.materializePendingRecoveryApprovalNextActionLocked(ctx, key, msg, time.Now().UTC()); err != nil {
+		return false, err
 	}
 	opState, err := r.store.OperationState(key)
 	if err != nil {
@@ -445,6 +449,184 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 		return false, fmt.Errorf("send operation proposal continuation approval: %w", err)
 	}
 	return true, nil
+}
+
+type recoveryApprovalHandoffInput struct {
+	Action                string            `json:"action"`
+	LeaseClass            string            `json:"lease_class"`
+	Principal             string            `json:"principal"`
+	AllowedActions        []string          `json:"allowed_actions"`
+	Constraints           map[string]string `json:"constraints"`
+	Tool                  string            `json:"tool"`
+	ToolAction            string            `json:"tool_action"`
+	GrantID               string            `json:"grant_id"`
+	GrantTargetResource   string            `json:"grant_target_resource"`
+	Resource              string            `json:"resource"`
+	RequestInstanceID     string            `json:"request_instance_id"`
+	AgentID               string            `json:"agent_id"`
+	RecoveryContract      string            `json:"recovery_contract"`
+	RecoveryOperationKind string            `json:"recovery_operation_kind"`
+}
+
+func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, now time.Time) (bool, error) {
+	if r == nil || r.store == nil {
+		return false, nil
+	}
+	actor, ok := r.recoveryApprovalMaterializationActor(msg)
+	if !ok {
+		return false, nil
+	}
+	tools := r.toolsForPrincipal(actor, key)
+	if tools == nil {
+		return false, nil
+	}
+	actions, err := r.store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", "continuation_lease_request", 20)
+	if err != nil {
+		return false, err
+	}
+	for _, action := range actions {
+		if !recoveryApprovalNextActionConsumable(action) {
+			continue
+		}
+		if _, err := tools.Execute(ctx, "request_approval", json.RawMessage(action.OperationInputJSON)); err != nil {
+			return false, fmt.Errorf("materialize recovery approval handoff %s: %w", action.RecordID, err)
+		}
+		if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+			Key:         key,
+			Owner:       "runtime",
+			SubjectKind: action.SubjectKind,
+			SubjectRef:  action.SubjectRef,
+			Reason:      "recovery_handoff_materialized",
+			ResolvedAt:  now,
+		}); err != nil {
+			return false, fmt.Errorf("resolve recovery approval handoff %s: %w", action.RecordID, err)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func (r *Runtime) recoveryApprovalMaterializationActor(msg core.InboundMessage) (principal.Principal, bool) {
+	if r == nil || r.resolver == nil || msg.SenderID == 0 {
+		return principal.Principal{}, false
+	}
+	actor, ok := r.resolver.ResolveTelegramUser(msg.SenderID)
+	if !ok {
+		return principal.Principal{}, false
+	}
+	return actor, true
+}
+
+func recoveryApprovalNextActionConsumable(action session.NextActionRecord) bool {
+	if action.State != session.NextActionBlockedNeedsAuthority {
+		return false
+	}
+	if strings.TrimSpace(action.SubjectKind) != "continuation_lease_request" {
+		return false
+	}
+	if strings.TrimSpace(action.ResourceBlocker) != "missing_continuation_lease" {
+		return false
+	}
+	if strings.TrimSpace(action.OperationTool) != "request_approval" || strings.TrimSpace(action.OperationKind) != "continuation_lease_request" {
+		return false
+	}
+	if strings.TrimSpace(action.OperationInputJSON) == "" {
+		return false
+	}
+	var input recoveryApprovalHandoffInput
+	if err := json.Unmarshal([]byte(action.OperationInputJSON), &input); err != nil {
+		return false
+	}
+	return recoveryApprovalHandoffInputConsumable(input)
+}
+
+func recoveryApprovalHandoffInputConsumable(input recoveryApprovalHandoffInput) bool {
+	if strings.TrimSpace(input.RecoveryContract) != "aphelion.recovery_handoff.v1" ||
+		strings.TrimSpace(input.RecoveryOperationKind) != "continuation_lease_request" {
+		return false
+	}
+	if strings.TrimSpace(input.Action) != "request_continuation_lease" ||
+		strings.TrimSpace(input.Principal) == "" ||
+		strings.TrimSpace(input.RequestInstanceID) == "" {
+		return false
+	}
+	leaseClass := session.NormalizeContinuationLeaseClass(session.ContinuationLeaseClass(input.LeaseClass))
+	if leaseClass == "" || len(normalizeRecoveryApprovalActions(input.AllowedActions)) == 0 {
+		return false
+	}
+	constraints := normalizeRecoveryApprovalConstraints(input.Constraints)
+	toolName := strings.TrimSpace(input.Tool)
+	toolAction := strings.ToLower(strings.TrimSpace(input.ToolAction))
+	switch leaseClass {
+	case session.ContinuationLeaseClassChildWake:
+		agentID := strings.TrimSpace(input.AgentID)
+		return toolName == "durable_agent" &&
+			toolAction == "wake_once" &&
+			agentID != "" &&
+			recoveryApprovalActionsContain(input.AllowedActions, "wake_named_child") &&
+			recoveryApprovalConstraintMatches(constraints, "agent_id", agentID)
+	case session.ContinuationLeaseClassDataAccess, session.ContinuationLeaseClassLocalWorkspace:
+		grantID := strings.TrimSpace(input.GrantID)
+		grantTarget := strings.TrimSpace(input.GrantTargetResource)
+		resource := strings.TrimSpace(input.Resource)
+		if grantID == "" || grantTarget == "" || resource == "" || toolName == "" || toolAction == "" {
+			return false
+		}
+		required := map[string]string{
+			"grant_id":              grantID,
+			"grant_target_resource": grantTarget,
+			"target_resource":       grantTarget,
+			"resource":              resource,
+			"tool":                  toolName,
+			"tool_action":           toolAction,
+		}
+		for key, want := range required {
+			if !recoveryApprovalConstraintMatches(constraints, key, want) {
+				return false
+			}
+		}
+		return true
+	default:
+		return true
+	}
+}
+
+func normalizeRecoveryApprovalActions(actions []string) []string {
+	out := make([]string, 0, len(actions))
+	for _, action := range actions {
+		action = strings.ToLower(strings.TrimSpace(action))
+		if action != "" {
+			out = append(out, action)
+		}
+	}
+	return out
+}
+
+func recoveryApprovalActionsContain(actions []string, want string) bool {
+	want = strings.ToLower(strings.TrimSpace(want))
+	for _, action := range normalizeRecoveryApprovalActions(actions) {
+		if action == want {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeRecoveryApprovalConstraints(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func recoveryApprovalConstraintMatches(constraints map[string]string, key string, want string) bool {
+	want = strings.TrimSpace(want)
+	return want != "" && strings.TrimSpace(constraints[strings.TrimSpace(key)]) == want
 }
 
 const operationPlanBudgetMaxLanes = 6

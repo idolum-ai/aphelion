@@ -47,6 +47,12 @@ The execution-authority spine is:
    capability request, queue one review card for the session review target when
    available, and record a `blocked_needs_authority` next action tied to that
    request. The failed invocation is not retried automatically.
+9. A missing continuation lease follows the same causal-closure rule. The tool
+   boundary records a `blocked_needs_authority` next action containing an exact
+   `request_approval` handoff; runtime materialization consumes only that typed
+   handoff, creates the pending `ContinuationLease` through the existing
+   approval compiler, and then renders the approval card. It does not auto-grant
+   the lease or execute unrelated next actions.
 
 Context may select durable run authority, but it may not manufacture authority.
 Durable state remains canonical.

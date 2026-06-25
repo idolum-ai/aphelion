@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -302,6 +303,360 @@ func TestRequestApprovalContinuationLeaseRequestMaterializesAndApprovesExactChil
 	}
 	if approved.ContinuationLease.RemainingTurns != 1 {
 		t.Fatalf("approved lease remaining turns = %d, want one wake allowance", approved.ContinuationLease.RemainingTurns)
+	}
+}
+
+func TestRecoveryHandoffMaterializationCreatesChildWakeApprovalAndConsumableLease(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	runner := &runtimeWakeRunner{}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store).WithDurableAgentWakeRunner(runner)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9048, UserID: 0, Scope: telegramDMScopeRef(9048)}
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	seedRuntimeWakeAgent(t, store, "idolum-email", true)
+	seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-idolum-email-wake-recovery",
+		Status:    session.OperationStatusActive,
+		PhasePlan: session.OperationPhasePlan{ID: "plan-idolum-email-wake-recovery", Goal: "Recover idolum-email readiness"},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed operation) err = %v", err)
+	}
+
+	_, err = tools.ExecuteForSessionPrincipal(
+		context.Background(),
+		actor,
+		key,
+		"durable_agent",
+		json.RawMessage(`{"action":"wake_once","agent_id":"idolum-email"}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "missing child_wake continuation lease") || !strings.Contains(err.Error(), "lease request recorded") {
+		t.Fatalf("wake_once err = %v, want recorded missing child_wake lease blocker", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner calls = %#v, want no wake before lease approval", runner.calls)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(blocker) err = %v", err)
+	}
+	if len(open) != 1 || open[0].OperationTool != "request_approval" || open[0].OperationKind != "continuation_lease_request" {
+		t.Fatalf("open actions = %#v, want request_approval continuation handoff", open)
+	}
+
+	materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9048, SenderID: 1001, Text: "continue", MessageID: 101},
+		"continue",
+	)
+	if err != nil {
+		t.Fatalf("MaterializeRequestedApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want recovery handoff to produce visible approval card")
+	}
+	pending, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(pending) err = %v", err)
+	}
+	if pending.Status != session.ContinuationStatusPending || pending.ContinuationLease.Status != session.ContinuationLeaseStatusPending {
+		t.Fatalf("pending continuation = %#v, want pending child_wake lease", pending)
+	}
+	if pending.ContinuationLease.LeaseClass != session.ContinuationLeaseClassChildWake || strings.TrimSpace(pending.ContinuationLease.Constraints["agent_id"]) != "idolum-email" {
+		t.Fatalf("pending lease = %#v, want child_wake bound to idolum-email", pending.ContinuationLease)
+	}
+	open, err = store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(after materialize) err = %v", err)
+	}
+	for _, action := range open {
+		if action.SubjectKind == "continuation_lease_request" {
+			t.Fatalf("open actions after materialization = %#v, want recovery blocker resolved", open)
+		}
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one approval card", inlineCount)
+	}
+	for _, want := range []string{"idolum-email", "wake only idolum-email once", "up to 1 turn"} {
+		if !strings.Contains(inlineText, want) {
+			t.Fatalf("inline text = %q, want %q", inlineText, want)
+		}
+	}
+
+	materialized, err = rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9048, SenderID: 1001, Text: "continue again", MessageID: 102},
+		"continue again",
+	)
+	if err != nil {
+		t.Fatalf("MaterializeRequestedApproval(second) err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("second materialized = false, want idempotent handled approval")
+	}
+	sender.mu.Lock()
+	inlineCount = len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count after retry = %d, want no duplicate card", inlineCount)
+	}
+
+	approved, err := rt.ApproveContinuationForKey(key, 1001)
+	if err != nil {
+		t.Fatalf("ApproveContinuationForKey() err = %v", err)
+	}
+	if approved.ContinuationLease.Status != session.ContinuationLeaseStatusActive {
+		t.Fatalf("approved continuation = %#v, want active child_wake lease", approved)
+	}
+	ctx := runtimeContinuationAuthorityContext(t, store, key, actor, approved.ContinuationLease)
+	out, err := tools.ExecuteForSessionPrincipal(
+		ctx,
+		actor,
+		key,
+		"durable_agent",
+		json.RawMessage(`{"action":"wake_once","agent_id":"idolum-email"}`),
+	)
+	if err != nil {
+		t.Fatalf("wake_once after approval err = %v", err)
+	}
+	if len(runner.calls) != 1 || runner.calls[0] != "idolum-email" {
+		t.Fatalf("runner calls = %#v, want one idolum-email wake", runner.calls)
+	}
+	if !strings.Contains(out, "wake_status: awaiting_child_pickup") && !strings.Contains(out, "wake_status: completed") {
+		t.Fatalf("wake_once output = %q, want a concrete wake result", out)
+	}
+}
+
+func TestRecoveryHandoffMaterializationConsumesDataAccessApprovalRequest(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9049, UserID: 0, Scope: telegramDMScopeRef(9049)}
+	raw := `{
+		"action":"request_continuation_lease",
+		"objective":"Read the approved child-local runtime-bin directory once.",
+		"lease_class":"data_access",
+		"principal":"telegram:1001",
+		"allowed_actions":["read_approved_resource"],
+		"constraints":{
+			"capability_kind":"file_access",
+			"grant_id":"capg-runtime-bin-read",
+			"grant_target_resource":"/child/runtime-bin",
+			"operation":"list_dir",
+			"resource":"/child/runtime-bin",
+			"target_resource":"/child/runtime-bin",
+			"tool":"list_dir",
+			"tool_action":"list_dir"
+		},
+		"tool":"list_dir",
+		"tool_action":"list_dir",
+		"grant_id":"capg-runtime-bin-read",
+		"grant_target_resource":"/child/runtime-bin",
+		"request_instance_id":"test-runtime-bin-read-request-1",
+		"resource":"/child/runtime-bin",
+		"recovery_contract":"aphelion.recovery_handoff.v1",
+		"recovery_operation_kind":"continuation_lease_request",
+		"retry_after_lease":true
+	}`
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           "runtime-data-access-recovery-handoff",
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         "data_access:/child/runtime-bin:list_dir",
+		RequiredAuthority:  string(session.ContinuationLeaseClassDataAccess),
+		ResourceBlocker:    "missing_continuation_lease",
+		NextAction:         "approve a bounded data_access lease",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: raw,
+	}); err != nil {
+		t.Fatalf("RecordNextAction(data access handoff) err = %v", err)
+	}
+
+	materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9049, SenderID: 1001, Text: "continue", MessageID: 201},
+		"continue",
+	)
+	if err != nil {
+		t.Fatalf("MaterializeRequestedApproval(data access) err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want data_access approval card")
+	}
+	pending, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(data access) err = %v", err)
+	}
+	if pending.ContinuationLease.LeaseClass != session.ContinuationLeaseClassDataAccess || pending.ContinuationLease.Constraints["grant_id"] != "capg-runtime-bin-read" {
+		t.Fatalf("pending data access lease = %#v, want exact grant-bound data_access lease", pending.ContinuationLease)
+	}
+}
+
+func TestRecoveryHandoffMaterializationSkipsMalformedApprovalNextAction(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9050, UserID: 0, Scope: telegramDMScopeRef(9050)}
+	now := time.Now().UTC()
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           "runtime-malformed-recovery-handoff",
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         "malformed",
+		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		NextAction:         "malformed handoff",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: `{"action":"request_continuation_lease","lease_class":"child_wake","request_instance_id":"bad"}`,
+		CreatedAt:          now,
+	}); err != nil {
+		t.Fatalf("RecordNextAction(malformed handoff) err = %v", err)
+	}
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:          "runtime-valid-recovery-handoff-behind-malformed",
+		Key:               key,
+		Owner:             "test",
+		State:             session.NextActionBlockedNeedsAuthority,
+		SubjectKind:       "continuation_lease_request",
+		SubjectRef:        "valid-child-wake",
+		RequiredAuthority: string(session.ContinuationLeaseClassChildWake),
+		ResourceBlocker:   "missing_continuation_lease",
+		NextAction:        "valid handoff",
+		OperationKind:     "continuation_lease_request",
+		OperationTool:     "request_approval",
+		OperationInputJSON: `{
+			"action":"request_continuation_lease",
+			"objective":"Wake child-alpha exactly once.",
+			"lease_class":"child_wake",
+			"principal":"telegram:1001",
+			"allowed_actions":["wake_named_child"],
+			"constraints":{"agent_id":"child-alpha"},
+			"tool":"durable_agent",
+			"tool_action":"wake_once",
+			"grant_id":"grant-child-alpha-wake",
+			"grant_target_resource":"durable_agent:child-alpha:wake_once",
+			"request_instance_id":"valid-child-alpha-request-1",
+			"agent_id":"child-alpha",
+			"recovery_contract":"aphelion.recovery_handoff.v1",
+			"recovery_operation_kind":"continuation_lease_request",
+			"retry_after_lease":true
+		}`,
+		CreatedAt: now.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(valid handoff) err = %v", err)
+	}
+	materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9050, SenderID: 1001, Text: "continue", MessageID: 301},
+		"continue",
+	)
+	if err != nil {
+		t.Fatalf("MaterializeRequestedApproval(malformed) err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want valid recovery handoff behind malformed row to materialize")
+	}
+	if state, ok, err := store.ContinuationStateIfExists(key); err != nil {
+		t.Fatalf("ContinuationStateIfExists() err = %v", err)
+	} else if !ok || session.NormalizeContinuationState(state).Status != session.ContinuationStatusPending {
+		t.Fatalf("continuation state = %#v ok=%v, want pending continuation created from valid handoff", state, ok)
+	} else if state.ContinuationLease.LeaseClass != session.ContinuationLeaseClassChildWake || strings.TrimSpace(state.ContinuationLease.Constraints["agent_id"]) != "child-alpha" {
+		t.Fatalf("continuation lease = %#v, want child_wake bound to child-alpha", state.ContinuationLease)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(malformed) err = %v", err)
+	}
+	foundMalformed := false
+	foundValid := false
+	for _, action := range open {
+		if action.RecordID == "runtime-malformed-recovery-handoff" {
+			foundMalformed = true
+		}
+		if action.RecordID == "runtime-valid-recovery-handoff-behind-malformed" {
+			foundValid = true
+		}
+	}
+	if !foundMalformed || foundValid {
+		t.Fatalf("open actions = %#v, want malformed left open and valid resolved", open)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one approval card from valid handoff", inlineCount)
 	}
 }
 
@@ -631,4 +986,124 @@ func deliveredContinuationOfferCount(t *testing.T, store *session.SQLiteStore, k
 		}
 	}
 	return count
+}
+
+type runtimeWakeRunner struct {
+	calls      []string
+	messageIDs [][]string
+}
+
+func (r *runtimeWakeRunner) RunDurableAgentParentConversationWake(_ context.Context, agentID string, messageIDs []string, _ time.Time) error {
+	r.calls = append(r.calls, agentID)
+	r.messageIDs = append(r.messageIDs, append([]string(nil), messageIDs...))
+	return nil
+}
+
+func seedRuntimeWakeAgent(t *testing.T, store *session.SQLiteStore, agentID string, withParentMessage bool) {
+	t.Helper()
+
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            agentID,
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "headless",
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "anthropic",
+			APIKey:         "test-key",
+			Model:          "test-model",
+		},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Consume parent guidance when explicitly woken.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+		}),
+		Status: "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent(%s) err = %v", agentID, err)
+	}
+	if !withParentMessage {
+		return
+	}
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Run a no-content readiness check.", time.Now().UTC().Add(-time.Minute))
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agentID, StateJSON: raw}); err != nil {
+		t.Fatalf("SaveDurableAgentState(%s) err = %v", agentID, err)
+	}
+}
+
+func seedRuntimeWakeGrant(t *testing.T, store *session.SQLiteStore, agentID string, grantedTo string) session.CapabilityGrant {
+	t.Helper()
+
+	agentID = strings.TrimSpace(agentID)
+	now := time.Now().UTC()
+	grant, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-" + agentID + "-wake-once",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      strings.TrimSpace(grantedTo),
+		Kind:           session.CapabilityKindGenericDelegation,
+		TargetResource: "durable_agent:" + agentID + ":wake_once",
+		AllowedActions: []string{"invoke"},
+		Contract:       `{"bounded_effect":"Allow invoking durable_agent wake_once for the named child only."}`,
+		Constraints:    `{"agent_id":"` + agentID + `"}`,
+		Status:         session.CapabilityGrantStatusActive,
+		GrantedAt:      now,
+		ExpiresAt:      now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("UpsertCapabilityGrant(wake_once) err = %v", err)
+	}
+	return grant
+}
+
+func runtimeContinuationAuthorityContext(t *testing.T, store *session.SQLiteStore, key session.SessionKey, actor principal.Principal, lease session.ContinuationLease) context.Context {
+	t.Helper()
+
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "recovery handoff continuation execution")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	principalID := "telegram:1001"
+	if actor.TelegramUserID != 0 {
+		principalID = "telegram:" + strconv.FormatInt(actor.TelegramUserID, 10)
+	}
+	_, err = store.UpsertExecutionRunAuthority(session.ExecutionRunAuthority{
+		TurnRunID:           run.ID,
+		SessionID:           run.SessionID,
+		ChatID:              run.ChatID,
+		UserID:              run.UserID,
+		Scope:               run.Scope,
+		Principal:           principalID,
+		PrincipalRole:       string(actor.Role),
+		ExecutionSpecies:    "recovery_handoff_runtime_test",
+		LeaseKind:           session.ExecutionAuthorityLeaseKindContinuation,
+		ContinuationLeaseID: strings.TrimSpace(lease.ID),
+		LeaseStatus:         string(lease.Status),
+		LeaseRemainingTurns: lease.RemainingTurns,
+		LeaseClass:          lease.LeaseClass,
+		LeaseAllowedActions: append([]string(nil), lease.AllowedActions...),
+		LeaseConstraints:    cloneRuntimeTestStringMap(lease.Constraints),
+		LeaseExpiresAt:      lease.ExpiresAt,
+		AdmittedAt:          time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("UpsertExecutionRunAuthority() err = %v", err)
+	}
+	return toolpkg.WithAuthorityUseRef(context.Background(), session.AuthorityUseRef{SessionID: run.SessionID, TurnRunID: run.ID})
+}
+
+func cloneRuntimeTestStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }

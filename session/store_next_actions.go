@@ -261,6 +261,40 @@ func (s *SQLiteStore) OpenNextActionsBySessionSubject(key SessionKey, subjectKin
 	return scanNextActionRows(rows)
 }
 
+func (s *SQLiteStore) OpenNextActionsBySessionOperation(key SessionKey, state NextActionState, operationTool string, operationKind string, limit int) ([]NextActionRecord, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	state = NormalizeNextActionState(state)
+	operationTool = strings.TrimSpace(operationTool)
+	operationKind = normalizeEnumValue(operationKind)
+	if state == "" || operationTool == "" || operationKind == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.Query(`
+		SELECT record_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
+			turn_run_id, owner, state, subject_kind, subject_ref, causal_refs_json,
+			next_action, required_authority, resource_blocker, verifier, retry_policy,
+			operation_kind, operation_tool, operation_input_json, operator_projection, created_at, resolved_at
+		FROM next_action_records
+		WHERE session_id = ?
+			AND state = ?
+			AND operation_tool = ?
+			AND operation_kind = ?
+			AND resolved_at IS NULL
+		ORDER BY created_at ASC, record_id ASC
+		LIMIT ?
+	`, SessionIDForKey(key), string(state), operationTool, operationKind, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query open next actions by session operation: %w", err)
+	}
+	defer rows.Close()
+	return scanNextActionRows(rows)
+}
+
 func (s *SQLiteStore) OpenNextActionsBySubject(subjectKind string, subjectRef string, limit int) ([]NextActionRecord, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
