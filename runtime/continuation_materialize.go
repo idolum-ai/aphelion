@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -15,6 +16,51 @@ import (
 
 func (r *Runtime) MaterializeRequestedApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string) (bool, error) {
 	return r.materializePendingOperationProposalApproval(ctx, key, msg, promptInput, nil)
+}
+
+func continuationApprovalAlreadyOffered(state session.ContinuationState, store *session.SQLiteStore, key session.SessionKey) bool {
+	if store == nil {
+		return false
+	}
+	state = session.NormalizeContinuationState(state)
+	leaseID := strings.TrimSpace(state.ContinuationLease.ID)
+	proposalID := strings.TrimSpace(state.ActionProposal.ID)
+	decisionID := strings.TrimSpace(state.DecisionID)
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		return false
+	}
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) != core.ExecutionEventContinuationOffered {
+			continue
+		}
+		payload := map[string]any{}
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			continue
+		}
+		if leaseID != "" && continuationPayloadString(payload, "lease_id") == leaseID {
+			return true
+		}
+		if proposalID != "" && continuationPayloadString(payload, "proposal_id") == proposalID {
+			return true
+		}
+		if decisionID != "" && continuationPayloadString(payload, "decision_id") == decisionID {
+			return true
+		}
+	}
+	return false
+}
+
+func continuationPayloadString(payload map[string]any, key string) string {
+	value, ok := payload[key]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
 }
 
 func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, result *turn.Result) (bool, error) {
@@ -344,6 +390,15 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 	}
 	priorState = session.NormalizeContinuationState(priorState)
 	if priorExists && priorState.Status == session.ContinuationStatusPending && operationProposalMatchesContinuation(proposal, priorState) {
+		if continuationApprovalAlreadyOffered(priorState, r.store, key) {
+			return true, nil
+		}
+		payload := continuationExecutionPayload(priorState)
+		payload["materialized_from"] = "operation_proposal_existing_continuation"
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
+		if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, priorState, renderOperationProposalMaterializedPromptFallback(priorState), "operation_proposal_existing_continuation"); err != nil {
+			return false, fmt.Errorf("send existing operation proposal continuation approval: %w", err)
+		}
 		return true, nil
 	}
 

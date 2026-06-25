@@ -188,6 +188,103 @@ func TestDurableAgentWakeOnceRequiresDurableRunAuthority(t *testing.T) {
 	}
 }
 
+func TestDurableAgentWakeOnceLeaseRequestOperationCreatesExactPendingLease(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	runner := &fakeDurableAgentWakeRunner{store: store}
+	registry.WithDurableAgentWakeRunner(runner)
+	upsertDurableAgentWakeTestAgent(t, store)
+	grant := grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001})
+	key := adminSessionKey()
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"durable_agent",
+		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "missing child_wake continuation lease") {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want missing child_wake lease", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one lease request", open)
+	}
+	if open[0].OperationTool != "request_approval" || !strings.Contains(open[0].OperationInputJSON, `"action":"request_continuation_lease"`) {
+		t.Fatalf("open next action = %#v, want executable request_approval continuation lease payload", open[0])
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		open[0].OperationTool,
+		json.RawMessage(open[0].OperationInputJSON),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(request_approval lease request) err = %v", err)
+	}
+	if !strings.Contains(out, "[APPROVAL_REQUESTED]") {
+		t.Fatalf("request_approval output = %q, want approval request render", out)
+	}
+
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ContinuationLease.Status != session.ContinuationLeaseStatusPending {
+		t.Fatalf("continuation = %#v, want pending exact child_wake lease", cont)
+	}
+	if cont.ContinuationLease.LeaseClass != session.ContinuationLeaseClassChildWake {
+		t.Fatalf("lease class = %q, want child_wake", cont.ContinuationLease.LeaseClass)
+	}
+	if !operationStringSliceContains(cont.ContinuationLease.AllowedActions, durableAgentWakeOnceAction) {
+		t.Fatalf("lease allowed actions = %#v, want %q", cont.ContinuationLease.AllowedActions, durableAgentWakeOnceAction)
+	}
+	if got := strings.TrimSpace(cont.ContinuationLease.Constraints["agent_id"]); got != "child-alpha" {
+		t.Fatalf("lease agent_id constraint = %q, want child-alpha", got)
+	}
+	if cont.ContinuationLease.MaxTurns != 1 || cont.ContinuationLease.RemainingTurns != 1 {
+		t.Fatalf("lease turns = max %d remaining %d, want one bounded turn", cont.ContinuationLease.MaxTurns, cont.ContinuationLease.RemainingTurns)
+	}
+	if !strings.Contains(cont.ActionProposal.BoundedEffect, "child-alpha") || !strings.Contains(cont.ActionProposal.BoundedEffect, "once") {
+		t.Fatalf("proposal bounded effect = %q, want exact child wake boundary", cont.ActionProposal.BoundedEffect)
+	}
+	if grant.GrantID == "" {
+		t.Fatal("test grant id unexpectedly empty")
+	}
+}
+
+func TestRequestApprovalContinuationLeaseRejectsConflictingChildWakeConstraint(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"request_approval",
+		json.RawMessage(`{
+			"action":"request_continuation_lease",
+			"lease_class":"child_wake",
+			"principal":"telegram:1001",
+			"allowed_actions":["wake_named_child"],
+			"constraints":{"agent_id":"child-beta"},
+			"tool":"durable_agent",
+			"tool_action":"wake_once",
+			"agent_id":"child-alpha"
+		}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "agent_id constraint mismatch") {
+		t.Fatalf("ExecuteForSessionPrincipal(request_approval conflicting child_wake) err = %v, want constraint mismatch", err)
+	}
+}
+
 func TestDurableAgentWakeOnceMissingGrantMaterializesReviewableRequest(t *testing.T) {
 	t.Parallel()
 
