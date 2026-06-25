@@ -204,6 +204,21 @@ func durableWakeChildTaskBlockerClassification(agent core.DurableAgent, result s
 	}
 	switch result.Status {
 	case session.ChildTaskResultUpdate:
+		if blockerKind == "missing_terminal_review_status" {
+			classification.Kind = "missing_terminal_review_status"
+			classification.State = session.NextActionWaitingForOperator
+			classification.NextAction = "ask the operator whether to continue, block, or close the ambiguous child task"
+			classification.ResourceBlocker = classification.Kind
+			classification.RetryPolicy = "operator_disambiguation_required"
+			classification.OperationKind = "child_terminal_status_disambiguation"
+			classification.OperationTool = "durable_child_repair"
+			classification.DiagnosticOnly = true
+			classification.OperatorProjection = "Child task did not provide a terminal review_status. Ask the operator before waking the child again."
+			classification.ReviewLocalActions = []string{"Child task produced an update without an explicit review_status terminal/update/block/fail marker."}
+			classification.ReviewQuestions = []string{"Should Aphelion continue this child task once, block it for repair, or close it as stale?"}
+			classification.ReviewRiskFlags = []string{"durable_child", "ambiguous_child_status"}
+			break
+		}
 		classification.Kind = firstNonEmpty(blockerKind, "child_task_update")
 		classification.State = session.NextActionWaitingForChild
 		classification.NextAction = "continue the bounded child task from the latest reported update"

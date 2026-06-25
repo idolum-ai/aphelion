@@ -135,6 +135,25 @@ func nativeFileToolDefinitions() []agent.ToolDef {
 			}`),
 		},
 		{
+			Name:        "system_log_read",
+			Description: "Read bounded Aphelion/systemd journal lines for one unit without raw shell. Admin diagnostic tool; prefer this over exec journalctl/grep/tail for service log inspection. Results are literal-filtered, byte-limited, and redacted before display.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"unit": {"type": "string", "description": "systemd unit name, for example aphelion.service"},
+					"system": {"type": "boolean", "description": "Read the system journal instead of the user journal"},
+					"since": {"type": "string", "description": "Optional journalctl --since value, for example '2 hours ago'"},
+					"until": {"type": "string", "description": "Optional journalctl --until value"},
+					"priority": {"type": "string", "description": "Optional journalctl priority filter such as warning, err, or 3"},
+					"include": {"type": "array", "items": {"type": "string"}, "description": "Optional case-insensitive literal substrings; keep lines matching any value"},
+					"exclude": {"type": "array", "items": {"type": "string"}, "description": "Optional case-insensitive literal substrings; drop lines matching any value"},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Maximum returned lines after filtering; defaults to 120"},
+					"max_bytes": {"type": "integer", "minimum": 1, "maximum": 262144, "description": "Maximum returned bytes after filtering; defaults to 65536"}
+				},
+				"required": ["unit"]
+			}`),
+		},
+		{
 			Name:        "fetch_url",
 			Description: "Fetch a bounded HTTP(S) URL digest when the current sandbox profile allows network access. Network-denied profiles cannot use this tool. max_bytes controls bytes read and hashed; excerpt_bytes controls the visible excerpt returned to the model.",
 			Parameters: json.RawMessage(`{

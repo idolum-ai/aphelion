@@ -119,6 +119,12 @@ identity changes, or a single invocation whose effects cannot be bounded, the
 runtime should reject it until a typed operation or confinement contract can
 represent the effect truthfully.
 
+The diagnostic escape hatch is exact-command, admin-DM, and one-shot: when the
+operator explicitly approves an otherwise unbounded shell command, Aphelion must
+record that approval, the command hash, the shell judgment, and the effect
+attempt before dispatch. Approval of one string is not an approval window for
+nearby shell.
+
 ### Consent is real
 
 Operator approval, admin authority, resource-owner consent, third-party opt-in,

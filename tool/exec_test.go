@@ -1160,6 +1160,129 @@ func TestExecRejectedDynamicVerificationRequiresTypedRewrite(t *testing.T) {
 	}
 }
 
+func TestExecAdminDMCanApproveExactUnboundedCommand(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	approver := &stubExecApprover{approved: true}
+	key := session.SessionKey{ChatID: 1001, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1001"}}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store).WithExecApprover(approver)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"eval 'touch approved-exact.txt'"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if err != nil {
+		t.Fatalf("executeWithScopeAndPrincipal() err = %v", err)
+	}
+	if approver.called != 1 {
+		t.Fatalf("approver called = %d, want exact-command approval prompt", approver.called)
+	}
+	if approver.request.Proposal.Kind != "admin_unbounded_exact_exec" || approver.request.Command != "eval 'touch approved-exact.txt'" {
+		t.Fatalf("approval request = %#v, want exact admin unbounded exec proposal", approver.request)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "approved-exact.txt")); err != nil {
+		t.Fatalf("approved exact command side effect stat err = %v", err)
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 1 || !uses[0].Irreversible || uses[0].QualificationStatus != session.JudgmentUseQualificationQualified {
+		t.Fatalf("judgment uses = %#v, want one qualified irreversible admin exact exec use", uses)
+	}
+}
+
+func TestExecAdminExactUnboundedCommandRequiresAdminDM(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	approver := &stubExecApprover{approved: true}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store).WithExecApprover(approver)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"eval 'touch denied-group.txt'"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		session.SessionKey{ChatID: -200, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramGroup, ID: "-200"}},
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("group err = %v, want pre-dispatch rejection", err)
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want no exact-command prompt outside admin DM", approver.called)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, "denied-group.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("denied-group stat err = %v, want file absent", statErr)
+	}
+
+	_, err = registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"eval 'touch denied-user.txt'"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 1001},
+		session.SessionKey{ChatID: 1001, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1001"}},
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("approved-user err = %v, want pre-dispatch rejection", err)
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want no exact-command prompt for non-admin", approver.called)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, "denied-user.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("denied-user stat err = %v, want file absent", statErr)
+	}
+}
+
+func TestExecRejectedJournalctlPipelineRecordsSystemLogReadAlternative(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8849, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"journalctl --user -u aphelion.service --since '3 hours ago' --no-pager | grep -Ei 'idolum-email|continuation' | tail -120"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one system_log_read alternative", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionReadyToExecute || action.OperationKind != "system_log_read" || action.OperationTool != "system_log_read" {
+		t.Fatalf("next action = %#v, want ready system_log_read alternative", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["unit"] != "aphelion.service" || input["since"] != "3 hours ago" || input["limit"].(float64) != 120 {
+		t.Fatalf("operation input = %#v, want parsed unit/since/limit", input)
+	}
+	include, ok := input["include"].([]any)
+	if !ok || len(include) != 2 || include[0] != "idolum-email" || include[1] != "continuation" {
+		t.Fatalf("operation input include = %#v, want literal include terms", input["include"])
+	}
+}
+
 func TestExecRejectedNativeReadPreservesNonRootWorkdir(t *testing.T) {
 	t.Parallel()
 

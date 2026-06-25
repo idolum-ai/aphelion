@@ -141,8 +141,8 @@ func TestRunStatusCommandProjectsReleaseUpdateAlongsideServiceConsistency(t *tes
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("json.Unmarshal(status) err = %v; output=%q", err, out)
 	}
-	if got.Status != "degraded" || got.NextAction != "run doctor" {
-		t.Fatalf("status=%q next=%q service=%#v issues=%#v, want degraded/run doctor for newer release metadata", got.Status, got.NextAction, got.Service, got.IssueRecords)
+	if got.Status != "ready" || got.NextAction != "none" {
+		t.Fatalf("status=%q next=%q service=%#v issues=%#v, want ready/none when service matches source despite newer release metadata", got.Status, got.NextAction, got.Service, got.IssueRecords)
 	}
 	if got.Release.SourceStatus != "release_update_available" {
 		t.Fatalf("release source status = %q, want release_update_available", got.Release.SourceStatus)
@@ -164,8 +164,8 @@ func TestRunStatusCommandProjectsReleaseUpdateAlongsideServiceConsistency(t *tes
 	if !strings.Contains(got.Release.NextAction, "newer release") {
 		t.Fatalf("release next action = %q, want install guidance", got.Release.NextAction)
 	}
-	if !statusIssueCodePresent(got.IssueRecords, "release_update_available") {
-		t.Fatalf("issue records = %#v, want release_update_available issue", got.IssueRecords)
+	if statusIssueCodePresent(got.IssueRecords, "release_update_available") {
+		t.Fatalf("issue records = %#v, did not want release update to degrade coherent source/service status", got.IssueRecords)
 	}
 }
 

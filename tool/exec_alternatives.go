@@ -82,6 +82,9 @@ func typedAlternativeForRejectedShell(command string, rawWorkdir string, working
 	if plan.MultipleAuthorities {
 		return splitEffectPlanAlternative(command, plan, cause)
 	}
+	if alt, ok := systemLogReadAlternative(command, cause); ok {
+		return alt
+	}
 	if alt, ok := nativeFileAlternative(command, rawWorkdir, workingRoot, cause); ok {
 		return alt
 	}
@@ -99,6 +102,161 @@ func rejectedShellAlternativeError(cause error, alt shellRejectionAlternative) e
 		return cause
 	}
 	return fmt.Errorf("%w; typed alternative: %s", cause, alt.OperatorProjection)
+}
+
+func systemLogReadAlternative(command string, cause error) (shellRejectionAlternative, bool) {
+	segments := shellishCommandSegments(command)
+	if len(segments) == 0 {
+		return shellRejectionAlternative{}, false
+	}
+	firstCmd, firstArgs, ok := firstShellCommand(segments[0])
+	if !ok || firstCmd != "journalctl" {
+		return shellRejectionAlternative{}, false
+	}
+	input := map[string]any{"limit": defaultSystemLogLimit}
+	system := false
+	unit := ""
+	for i := 0; i < len(firstArgs); i++ {
+		arg := strings.TrimSpace(strings.Trim(firstArgs[i].Text, `"'`))
+		switch arg {
+		case "--system":
+			system = true
+		case "--user":
+			system = false
+		case "-u", "--unit":
+			if i+1 < len(firstArgs) {
+				i++
+				unit = strings.TrimSpace(strings.Trim(firstArgs[i].Text, `"'`))
+			}
+		case "--since":
+			if i+1 < len(firstArgs) {
+				i++
+				input["since"] = strings.TrimSpace(strings.Trim(firstArgs[i].Text, `"'`))
+			}
+		case "--until":
+			if i+1 < len(firstArgs) {
+				i++
+				input["until"] = strings.TrimSpace(strings.Trim(firstArgs[i].Text, `"'`))
+			}
+		case "--priority", "-p":
+			if i+1 < len(firstArgs) {
+				i++
+				input["priority"] = strings.TrimSpace(strings.Trim(firstArgs[i].Text, `"'`))
+			}
+		default:
+			if strings.HasPrefix(arg, "--unit=") {
+				unit = strings.TrimSpace(strings.TrimPrefix(arg, "--unit="))
+			} else if strings.HasPrefix(arg, "--since=") {
+				input["since"] = strings.TrimSpace(strings.TrimPrefix(arg, "--since="))
+			} else if strings.HasPrefix(arg, "--until=") {
+				input["until"] = strings.TrimSpace(strings.TrimPrefix(arg, "--until="))
+			} else if strings.HasPrefix(arg, "--priority=") {
+				input["priority"] = strings.TrimSpace(strings.TrimPrefix(arg, "--priority="))
+			}
+		}
+	}
+	if unit == "" {
+		return shellRejectionAlternative{}, false
+	}
+	input["unit"] = unit
+	if system {
+		input["system"] = true
+	}
+	state := session.NextActionReadyToExecute
+	retry := "use_structured_system_log_read"
+	next := "read the service logs through the bounded system_log_read tool"
+	projection := fmt.Sprintf("Raw shell was rejected. Recommended next action: inspect %s with system_log_read.", shellAlternativeDisplay(unit))
+	if include, exact := journalctlPipelineIncludeTerms(segments[1:]); len(include) > 0 {
+		input["include"] = include
+		if !exact {
+			state = session.NextActionWaitingForOperator
+			retry = "operator_confirm_lossy_log_filter"
+			next = "rewrite the shell log filter as an exact system_log_read request"
+			projection = "Raw shell was rejected. system_log_read can replace journalctl, but the shell filter was not exactly representable; confirm the literal include terms before execution."
+			input["lossy_reason"] = "grep/pipe regex semantics are not fully represented by system_log_read literal filters"
+		}
+	}
+	if limit := journalctlPipelineTailLimit(segments[1:]); limit > 0 {
+		input["limit"] = limit
+	}
+	return shellRejectionAlternative{
+		State:              state,
+		OperationKind:      "system_log_read",
+		OperationTool:      "system_log_read",
+		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(input)),
+		NextAction:         next,
+		RequiredAuthority:  "system_log_read",
+		RetryPolicy:        retry,
+		OperatorProjection: projection,
+		Reason:             shellRejectionReasonFromError(cause),
+	}, true
+}
+
+func journalctlPipelineIncludeTerms(segments []string) ([]string, bool) {
+	for _, segment := range segments {
+		cmd, args, ok := firstShellCommand(segment)
+		if !ok {
+			continue
+		}
+		switch cmd {
+		case "grep", "egrep", "fgrep", "rg":
+			values := nonOptionArgs(args)
+			if len(values) == 0 {
+				return nil, true
+			}
+			pattern := values[0]
+			terms := splitSimpleLogPattern(pattern)
+			if len(terms) == 0 {
+				return nil, false
+			}
+			return terms, simpleLogPattern(pattern)
+		}
+	}
+	return nil, true
+}
+
+func journalctlPipelineTailLimit(segments []string) int {
+	for _, segment := range segments {
+		cmd, args, ok := firstShellCommand(segment)
+		if !ok || cmd != "tail" {
+			continue
+		}
+		for i := 0; i < len(args); i++ {
+			arg := strings.TrimSpace(strings.Trim(args[i].Text, `"'`))
+			if strings.HasPrefix(arg, "-") && len(arg) > 1 {
+				if n, err := strconv.Atoi(strings.TrimPrefix(arg, "-")); err == nil && n > 0 {
+					return n
+				}
+			}
+			if (arg == "-n" || arg == "--lines") && i+1 < len(args) {
+				next := strings.TrimSpace(strings.Trim(args[i+1].Text, `"'`))
+				if n, err := strconv.Atoi(strings.TrimPrefix(next, "+")); err == nil && n > 0 {
+					return n
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func splitSimpleLogPattern(pattern string) []string {
+	var out []string
+	for _, part := range strings.Split(pattern, "|") {
+		part = strings.TrimSpace(strings.Trim(part, `"'`))
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func simpleLogPattern(pattern string) bool {
+	for _, part := range splitSimpleLogPattern(pattern) {
+		if strings.ContainsAny(part, "[]()+*?{}\\") {
+			return false
+		}
+	}
+	return true
 }
 
 func nativeFileAlternative(command string, rawWorkdir string, workingRoot string, cause error) (shellRejectionAlternative, bool) {
@@ -544,6 +702,8 @@ func requiredAuthorityForEffect(effect commandeffect.Effect) string {
 		return "database_mutation"
 	case commandeffect.KindHighImpactStorage:
 		return "high_impact_storage"
+	case commandeffect.KindAdminUnboundedExec:
+		return "admin_unbounded_exact_exec"
 	default:
 		return "typed_operation_required"
 	}

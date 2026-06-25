@@ -334,7 +334,7 @@ func buildStatusSnapshot(ctx context.Context, opts statusCommandOptions) (status
 	s.Release.FreshnessFailure = releaseAxes.ReleaseFreshness.FailureClass
 	s.Release.FreshnessRetry = releaseAxes.ReleaseFreshness.RetryPolicy
 	s.Release.FreshnessNext = releaseAxes.ReleaseFreshness.NextAction
-	if s.Release.UpdateAvailable {
+	if s.Release.UpdateAvailable && s.Release.ServiceFailure != core.ReliabilityFailureNone {
 		appendStatusIssue(&s, "release_update_available", "newer release available in cached metadata")
 	}
 	finalizeStatusSnapshot(&s)

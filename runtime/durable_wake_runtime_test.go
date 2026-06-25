@@ -138,6 +138,17 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			wantRetry: "continue_after_child_update",
 		},
 		{
+			name:           "missing terminal review status",
+			status:         session.ChildTaskResultUpdate,
+			summary:        "I checked some state but did not provide a review status marker.",
+			blocker:        "missing_terminal_review_status",
+			wantKind:       "missing_terminal_review_status",
+			wantState:      session.NextActionWaitingForOperator,
+			wantOp:         "child_terminal_status_disambiguation",
+			wantRetry:      "operator_disambiguation_required",
+			wantDiagnostic: true,
+		},
+		{
 			name:           "failed wake",
 			status:         session.ChildTaskResultFailed,
 			summary:        "wake failed before completion",

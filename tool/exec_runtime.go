@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,6 +93,8 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.listDir(ctx, input, scope, p, key)
 	case "search":
 		return r.searchFiles(ctx, input, scope, p, key)
+	case "system_log_read":
+		return r.systemLogRead(ctx, input, p, key)
 	case "fetch_url":
 		return r.fetchURL(ctx, input, scope, p)
 	case "memory":
@@ -240,18 +243,27 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 	}
 	plan := commandeffect.PlanCommand(strings.TrimSpace(in.Command))
 	var shellJudgment session.Judgment
-	if err := r.validateContinuationExecAuthority(ctx, in.Command, plan); err != nil {
-		return "", preDispatchExecError(err)
-	}
-	if err := validateExecEffectPlanDispatchable(plan); err != nil {
+	continuationErr := r.validateContinuationExecAuthority(ctx, in.Command, plan)
+	dispatchErr := validateExecEffectPlanDispatchable(plan)
+	if continuationErr != nil || dispatchErr != nil {
+		cause := continuationErr
+		if cause == nil {
+			cause = dispatchErr
+		}
+		if adminExactExecApprovalAllowed(p, key) {
+			return r.runAdminApprovedExactExec(ctx, in, scope, p, key, workdir, plan, cause)
+		}
+		if continuationErr != nil {
+			return "", preDispatchExecError(continuationErr)
+		}
 		if r != nil && r.store != nil && toolSessionKeyHasIdentity(key) {
 			var recordErr error
 			shellJudgment, plan, recordErr = r.recordShellEffectJudgment(ctx, key, in.Command)
 			if recordErr != nil {
-				return "", preDispatchExecError(fmt.Errorf("%w (and failed to record shell effect judgment: %v)", err, recordErr))
+				return "", preDispatchExecError(fmt.Errorf("%w (and failed to record shell effect judgment: %v)", dispatchErr, recordErr))
 			}
 		}
-		return "", preDispatchExecError(r.recordRejectedShellAlternative(ctx, key, in.Command, in.Workdir, scope.WorkingRoot, plan, shellJudgment, err))
+		return "", preDispatchExecError(r.recordRejectedShellAlternative(ctx, key, in.Command, in.Workdir, scope.WorkingRoot, plan, shellJudgment, dispatchErr))
 	}
 	if proposal, reason := proposalForCommand(in.Command); reason != "" {
 		if r.execApprover == nil {
@@ -306,6 +318,104 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 		return "", preDispatchExecError(err)
 	}
 
+	return r.dispatchExecCommand(ctx, in, scope, workdir)
+}
+
+func (r *Registry) runAdminApprovedExactExec(ctx context.Context, in execInput, scope sandbox.Scope, p principal.Principal, key session.SessionKey, workdir string, rejectedPlan commandeffect.EffectPlan, cause error) (string, error) {
+	if r == nil || r.execApprover == nil {
+		return "", preDispatchExecError(fmt.Errorf("%w; command requires explicit admin exact-command approval", cause))
+	}
+	command := strings.TrimSpace(in.Command)
+	commandHash := session.EffectAttemptCommandHash(command)
+	proposal := session.OperationProposal{
+		ID:            generatedOperationID("admin-exact-exec"),
+		Kind:          "admin_unbounded_exact_exec",
+		Summary:       "Approve one exact admin shell command",
+		WhyNow:        "The shell command is outside the typed dispatchable subset or exceeds the current continuation envelope. Only an admin DM can approve it.",
+		BoundedEffect: "Run exactly this command once through bash -lc. Approval is keyed to command_hash=" + commandHash + " and does not approve variants or future commands.",
+	}
+	if err := r.persistExecProposalState(key, proposal, session.ProposalStatusPending); err != nil {
+		return "", err
+	}
+	decision, err := r.execApprover.ConfirmExec(ctx, ExecApprovalRequest{
+		Principal:  p,
+		SessionKey: key,
+		Scope:      scope,
+		Command:    command,
+		Workdir:    workdir,
+		Reason:     "admin exact unbounded exec",
+		Proposal:   proposal,
+	})
+	if err != nil {
+		if persistErr := r.persistExecProposalState(key, proposal, session.ProposalStatusExpired); persistErr != nil {
+			return "", persistErr
+		}
+		return "", preDispatchExecError(err)
+	}
+	if !decision.Approved || strings.TrimSpace(decision.Choice) != "approve" {
+		status := session.ProposalStatusDenied
+		if decision.TimedOut {
+			status = session.ProposalStatusExpired
+		}
+		if err := r.persistExecProposalState(key, proposal, status); err != nil {
+			return "", err
+		}
+		return "", preDispatchExecError(execApprovalDeniedError("admin exact unbounded exec", decision))
+	}
+	if err := r.persistExecProposalState(key, proposal, session.ProposalStatusApproved); err != nil {
+		return "", err
+	}
+	shellJudgment, _, err := r.recordShellEffectJudgment(ctx, key, command)
+	if err != nil {
+		return "", preDispatchExecError(err)
+	}
+	dispatchPlan := adminUnboundedExactExecPlan(command, rejectedPlan)
+	approvalGround := execQualificationGround{
+		Kind:       "operator_approval",
+		ProposalID: proposal.ID,
+		DecisionID: decision.DecisionID,
+		Choice:     decision.Choice,
+	}
+	if err := r.recordExecPreDispatchAttempt(ctx, p, key, "exec", command, shellJudgment, dispatchPlan, approvalGround); err != nil {
+		return "", preDispatchExecError(err)
+	}
+	return r.dispatchExecCommand(ctx, in, scope, workdir)
+}
+
+func adminUnboundedExactExecPlan(command string, original commandeffect.EffectPlan) commandeffect.EffectPlan {
+	compact := commandeffect.NormalizeCommand(command)
+	if strings.TrimSpace(original.Command) != "" {
+		compact = strings.TrimSpace(original.Command)
+	}
+	return commandeffect.EffectPlan{
+		Command: compact,
+		Effects: []commandeffect.Effect{{
+			Kind:        commandeffect.KindAdminUnboundedExec,
+			Reason:      "admin approved exact unbounded shell command",
+			Command:     "bash -lc",
+			Action:      "exact_exec",
+			Subject:     session.EffectAttemptCommandHash(command),
+			SideEffects: true,
+		}},
+	}
+}
+
+func adminExactExecApprovalAllowed(p principal.Principal, key session.SessionKey) bool {
+	if p.Role != principal.RoleAdmin || p.TelegramUserID <= 0 {
+		return false
+	}
+	scope := session.NormalizeScopeRef(key.Scope)
+	adminID := strconv.FormatInt(p.TelegramUserID, 10)
+	if scope.Kind == session.ScopeKindTelegramDM {
+		return scope.ID == adminID || key.ChatID == p.TelegramUserID
+	}
+	if scope.Kind != "" {
+		return false
+	}
+	return key.ChatID == p.TelegramUserID && key.UserID == 0
+}
+
+func (r *Registry) dispatchExecCommand(ctx context.Context, in execInput, scope sandbox.Scope, workdir string) (string, error) {
 	timeout := r.timeout
 	if in.TimeoutSec > 0 {
 		timeout = time.Duration(in.TimeoutSec) * time.Second
@@ -586,7 +696,8 @@ func execJudgmentDependencyRefs(command string, kind commandeffect.Kind, reason 
 func execEffectRequiresPreCommitQualification(kind commandeffect.Kind, reason string, boundaryKind string) bool {
 	switch kind {
 	case commandeffect.KindExternal, commandeffect.KindExternalAccount, commandeffect.KindRemoteHost, commandeffect.KindService,
-		commandeffect.KindCapability, commandeffect.KindCredential, commandeffect.KindDatabase, commandeffect.KindHighImpactStorage:
+		commandeffect.KindCapability, commandeffect.KindCredential, commandeffect.KindDatabase, commandeffect.KindHighImpactStorage,
+		commandeffect.KindAdminUnboundedExec:
 		return true
 	case commandeffect.KindRepoHistory:
 		return strings.TrimSpace(reason) == commandeffect.ReasonGitPush || strings.TrimSpace(boundaryKind) == string(commandeffect.BoundaryGitPush)

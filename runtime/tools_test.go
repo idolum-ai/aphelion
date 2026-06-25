@@ -52,13 +52,14 @@ func TestToolManifestForRunKindFiltersConservativeLanes(t *testing.T) {
 		{Name: "fetch_url"},
 		{Name: "request_approval"},
 		{Name: "read_file"},
+		{Name: "system_log_read"},
 		{Name: "operation_artifact"},
 		{Name: "session_search"},
 		{Name: "semantic_search"},
 		{Name: "update_operation"},
 	}}
 
-	if got := toolManifestForRunKind(registry, ""); got != "exec, fetch_url, operation_artifact, read_file, request_approval, semantic_search, session_search, update_operation" {
+	if got := toolManifestForRunKind(registry, ""); got != "exec, fetch_url, operation_artifact, read_file, request_approval, semantic_search, session_search, system_log_read, update_operation" {
 		t.Fatalf("interactive manifest = %q", got)
 	}
 	heartbeat := toolManifestForRunKind(registry, session.TurnRunKindHeartbeat)
@@ -98,11 +99,11 @@ func TestToolLaneAllowlistsByRunKind(t *testing.T) {
 		allowed   []string
 		forbidden []string
 	}{
-		{runKind: session.TurnRunKindHeartbeat, allowed: []string{"update_plan", "update_operation", "operation_artifact", "memory", "session_search", "semantic_search"}, forbidden: []string{"exec", "fetch_url", "read_file", "request_approval"}},
-		{runKind: session.TurnRunKindCron, allowed: []string{"update_plan", "update_operation", "operation_artifact", "memory", "session_search", "semantic_search"}, forbidden: []string{"exec", "fetch_url", "read_file", "request_approval"}},
-		{runKind: session.TurnRunKindDoctor, allowed: []string{"read_file", "list_dir", "search", "session_search", "semantic_search", "operation_artifact"}, forbidden: []string{"exec", "fetch_url", "request_approval", "write_file"}},
-		{runKind: session.TurnRunKindRecovery, allowed: []string{"read_file", "operation_artifact"}, forbidden: []string{"exec", "fetch_url", "request_approval", "write_file", "update_operation"}},
-		{runKind: session.TurnRunKindCuriosity, allowed: []string{"read_file", "session_search", "semantic_search", "operation_artifact", "fetch_url"}, forbidden: []string{"exec", "request_approval", "write_file", "update_operation"}},
+		{runKind: session.TurnRunKindHeartbeat, allowed: []string{"update_plan", "update_operation", "operation_artifact", "memory", "session_search", "semantic_search"}, forbidden: []string{"exec", "fetch_url", "read_file", "request_approval", "system_log_read"}},
+		{runKind: session.TurnRunKindCron, allowed: []string{"update_plan", "update_operation", "operation_artifact", "memory", "session_search", "semantic_search"}, forbidden: []string{"exec", "fetch_url", "read_file", "request_approval", "system_log_read"}},
+		{runKind: session.TurnRunKindDoctor, allowed: []string{"read_file", "list_dir", "search", "system_log_read", "session_search", "semantic_search", "operation_artifact"}, forbidden: []string{"exec", "fetch_url", "request_approval", "write_file"}},
+		{runKind: session.TurnRunKindRecovery, allowed: []string{"read_file", "system_log_read", "operation_artifact"}, forbidden: []string{"exec", "fetch_url", "request_approval", "write_file", "update_operation"}},
+		{runKind: session.TurnRunKindCuriosity, allowed: []string{"read_file", "session_search", "semantic_search", "operation_artifact", "fetch_url"}, forbidden: []string{"exec", "request_approval", "write_file", "update_operation", "system_log_read"}},
 	}
 
 	for _, tc := range cases {

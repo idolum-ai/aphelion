@@ -74,9 +74,11 @@ The child-task saga is:
    Result replay is value-idempotent: reusing a result ID with different status,
    summary, fence metadata, successor state, or intent set is an idempotency
    conflict.
-4. Nonterminal child updates keep the packet open and preserve the parent task
-   message for a later bounded continuation. Parent conversation messages are
-   acknowledged only after a completed result.
+4. Explicit nonterminal child updates (`review_status: update`) keep the packet
+   open and preserve the parent task message for a later bounded continuation.
+   Ambiguous child reports that omit a terminal/update/block/fail review status
+   stop at operator disambiguation instead of silently waking the child again.
+   Parent conversation messages are acknowledged only after a completed result.
 5. Blocked child results are compiled into typed blocker classes before they
    reach operator projection. Missing tool lifecycle, missing or non-executable
    child-local runtime material, stale grants, resource permission failures,
@@ -100,6 +102,7 @@ Durable-child outcome projection uses this status contract:
 | --- | --- | --- | --- | --- |
 | `completed` | none | `terminal` | none | none |
 | `update` | `child_task_update` | `waiting_for_child` | `child_task_continue` | no blocker card |
+| `update` | `missing_terminal_review_status` | `waiting_for_operator` | `child_terminal_status_disambiguation` | ask whether to continue, block, or close the ambiguous child task |
 | `blocked` | `tool_runtime_not_executable` | `blocked_needs_resource_repair` | `child_tool_runtime_repair` | idempotent blocker review when a review target exists |
 | `blocked` | `tool_lifecycle_unregistered` | `blocked_needs_resource_repair` | `child_tool_lifecycle_repair` | idempotent blocker review when a review target exists |
 | `blocked` | `grant_missing_or_stale` | `blocked_needs_authority` | `child_authority_repair` | idempotent blocker review when a review target exists |

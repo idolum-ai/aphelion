@@ -21,6 +21,7 @@ const (
 	KindCredential         Kind = "credential_or_config_effect"
 	KindDatabase           Kind = "database_or_state_mutation"
 	KindHighImpactStorage  Kind = "high_impact_storage"
+	KindAdminUnboundedExec Kind = "admin_unbounded_exact_exec"
 	KindUnknown            Kind = "unknown_or_unclassified"
 )
 
@@ -251,6 +252,8 @@ func effectRank(kind Kind) int {
 		return 100
 	case KindHighImpactStorage:
 		return 110
+	case KindAdminUnboundedExec:
+		return 120
 	default:
 		return 10
 	}
