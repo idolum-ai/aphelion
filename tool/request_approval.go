@@ -215,7 +215,7 @@ func (r *Registry) requestContinuationLeaseApproval(in requestApprovalInput, key
 		return "", err
 	} else if ok {
 		prior = session.NormalizeContinuationState(prior)
-		if requestApprovalContinuationStateMatchesRequirement(prior, requirement, leaseID) {
+		if requestApprovalContinuationStateMatchesRequestIdentity(prior, requirement, leaseID) {
 			current = requestApprovalOperationStateForContinuation(current, in, requirement, prior, proposal.WhyNow, boundedEffect, now)
 			if err := r.store.UpdateOperationState(key, session.NormalizeOperationState(current)); err != nil {
 				return "", err
@@ -252,6 +252,20 @@ func requestApprovalOperationStateForContinuation(current session.OperationState
 		current.Stage = "approval_consumed"
 		current.Summary = "Continuation lease already consumed: " + summary
 		proposalStatus = session.ProposalStatusApproved
+	case session.ContinuationLeaseStatusRevoked:
+		current.Status = session.OperationStatusBlocked
+		current.Stage = "approval_revoked"
+		current.Summary = "Continuation lease was denied or revoked: " + summary
+		proposalStatus = requestApprovalTerminalProposalStatus(state, session.ProposalStatusDenied)
+	case session.ContinuationLeaseStatusExpired:
+		current.Status = session.OperationStatusBlocked
+		current.Stage = "approval_expired"
+		current.Summary = "Continuation lease expired before use: " + summary
+		proposalStatus = requestApprovalTerminalProposalStatus(state, session.ProposalStatusExpired)
+	case session.ContinuationLeaseStatusDeferred:
+		current.Status = session.OperationStatusBlocked
+		current.Stage = "approval_deferred"
+		current.Summary = "Continuation lease request remains deferred: " + summary
 	default:
 		current.Status = session.OperationStatusBlocked
 		current.Stage = "approval_request"
@@ -268,6 +282,17 @@ func requestApprovalOperationStateForContinuation(current session.OperationState
 	}
 	current.UpdatedAt = now
 	return session.NormalizeOperationState(current)
+}
+
+func requestApprovalTerminalProposalStatus(state session.ContinuationState, fallback session.ProposalStatus) session.ProposalStatus {
+	state = session.NormalizeContinuationState(state)
+	status := session.NormalizeProposalStatus(state.ActionProposal.Status)
+	switch status {
+	case session.ProposalStatusDenied, session.ProposalStatusExpired, session.ProposalStatusSuperseded:
+		return status
+	default:
+		return fallback
+	}
 }
 
 func requestApprovalContinuationLeaseRequirement(in requestApprovalInput) (missingContinuationLeaseRequirement, error) {
@@ -468,7 +493,7 @@ func requestApprovalContinuationLeaseContractHash(requirement missingContinuatio
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func requestApprovalContinuationStateMatchesRequirement(state session.ContinuationState, requirement missingContinuationLeaseRequirement, leaseID string) bool {
+func requestApprovalContinuationStateMatchesRequestIdentity(state session.ContinuationState, requirement missingContinuationLeaseRequirement, leaseID string) bool {
 	state = session.NormalizeContinuationState(state)
 	lease := state.ContinuationLease
 	if strings.TrimSpace(lease.ID) != leaseID {
@@ -478,9 +503,6 @@ func requestApprovalContinuationStateMatchesRequirement(state session.Continuati
 		return false
 	}
 	if lease.PlanHash != requestApprovalContinuationLeaseContractHash(requirement) {
-		return false
-	}
-	if !continuationLeaseStillLiveForRequestApproval(lease.Status) {
 		return false
 	}
 	return true

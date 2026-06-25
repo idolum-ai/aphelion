@@ -513,6 +513,110 @@ func TestRequestApprovalSameContractNewInstanceAfterConsumedDeliversNewCard(t *t
 	}
 }
 
+func TestRequestApprovalSameContractNewInstanceAfterDeniedDeliversNewCard(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	key := session.SessionKey{ChatID: 9047, UserID: 0, Scope: telegramDMScopeRef(9047)}
+	base := `{
+		"action":"request_continuation_lease",
+		"objective":"Wake child-beta exactly once.",
+		"lease_class":"child_wake",
+		"principal":"telegram:1001",
+		"allowed_actions":["wake_named_child"],
+		"constraints":{"agent_id":"child-beta"},
+		"tool":"durable_agent",
+		"tool_action":"wake_once",
+		"grant_id":"grant-child-beta-wake",
+		"grant_target_resource":"durable_agent:child-beta:wake_once",
+		"request_instance_id":"REQUEST_INSTANCE",
+		"agent_id":"child-beta",
+		"retry_after_lease":true
+	}`
+	firstInput := json.RawMessage(strings.ReplaceAll(base, "REQUEST_INSTANCE", "repeat-contract-denied-instance-1"))
+	if _, err := tools.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "request_approval", firstInput); err != nil {
+		t.Fatalf("first request_approval err = %v", err)
+	}
+	if materialized, err := rt.MaterializeRequestedApproval(context.Background(), key, core.InboundMessage{ChatID: 9047, SenderID: 1001, Text: "continue", MessageID: 1}, "continue"); err != nil || !materialized {
+		t.Fatalf("first MaterializeRequestedApproval materialized=%v err=%v, want delivered", materialized, err)
+	}
+	first, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(first) err = %v", err)
+	}
+	first.Status = session.ContinuationStatusRevoked
+	first.ActionProposal.Status = session.ProposalStatusDenied
+	first.ContinuationLease.Status = session.ContinuationLeaseStatusRevoked
+	first.RemainingTurns = 0
+	first.ContinuationLease.RemainingTurns = 0
+	if err := store.UpdateContinuationState(key, first); err != nil {
+		t.Fatalf("UpdateContinuationState(denied first) err = %v", err)
+	}
+
+	if _, err := tools.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "request_approval", firstInput); err != nil {
+		t.Fatalf("same denied request_approval replay err = %v", err)
+	}
+	replayed, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(replayed denied) err = %v", err)
+	}
+	if replayed.ContinuationLease.Status != session.ContinuationLeaseStatusRevoked || replayed.ActionProposal.Status != session.ProposalStatusDenied {
+		t.Fatalf("replayed denied continuation = %#v, want terminal denial preserved", replayed)
+	}
+	replayedOp, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState(replayed denied) err = %v", err)
+	}
+	if replayedOp.Status != session.OperationStatusBlocked || replayedOp.Stage != "approval_revoked" || replayedOp.Proposal.Status != session.ProposalStatusDenied {
+		t.Fatalf("replayed denied operation = %#v, want denied projection without pending rewind", replayedOp)
+	}
+
+	secondInput := json.RawMessage(strings.ReplaceAll(base, "REQUEST_INSTANCE", "repeat-contract-denied-instance-2"))
+	if _, err := tools.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "request_approval", secondInput); err != nil {
+		t.Fatalf("second request_approval err = %v", err)
+	}
+	second, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(second) err = %v", err)
+	}
+	if second.ContinuationLease.ID == first.ContinuationLease.ID || second.DecisionID == first.DecisionID {
+		t.Fatalf("second continuation = %#v reused first denied identity %#v", second, first)
+	}
+	if second.ContinuationLease.PlanHash != first.ContinuationLease.PlanHash {
+		t.Fatalf("second contract hash = %q, want same contract hash as first %q", second.ContinuationLease.PlanHash, first.ContinuationLease.PlanHash)
+	}
+	if materialized, err := rt.MaterializeRequestedApproval(context.Background(), key, core.InboundMessage{ChatID: 9047, SenderID: 1001, Text: "continue second", MessageID: 2}, "continue second"); err != nil || !materialized {
+		t.Fatalf("second MaterializeRequestedApproval materialized=%v err=%v, want delivered", materialized, err)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 2 {
+		t.Fatalf("inline count = %d, want one delivered card per request instance", inlineCount)
+	}
+	if deliveredContinuationOfferCount(t, store, key) != 2 {
+		t.Fatalf("delivered offers = %d, want two distinct delivered request instances", deliveredContinuationOfferCount(t, store, key))
+	}
+}
+
 func deliveredContinuationOfferCount(t *testing.T, store *session.SQLiteStore, key session.SessionKey) int {
 	t.Helper()
 

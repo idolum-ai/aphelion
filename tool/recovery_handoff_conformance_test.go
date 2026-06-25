@@ -384,6 +384,24 @@ func TestRequestContinuationLeaseApprovalIsReplaySafeAndBoundToGrant(t *testing.
 		t.Fatalf("operation after consumed replay = %#v, want consumed/approved projection", consumedOp)
 	}
 
+	revoked := consumed
+	revoked.Status = session.ContinuationStatusRevoked
+	revoked.ActionProposal.Status = session.ProposalStatusDenied
+	revoked.ContinuationLease.Status = session.ContinuationLeaseStatusRevoked
+	if err := registry.store.UpdateContinuationState(key, revoked); err != nil {
+		t.Fatalf("UpdateContinuationState(revoked) err = %v", err)
+	}
+	if _, err := registry.executeWithScopeAndPrincipal(context.Background(), "request_approval", raw, scope, actor, key); err != nil {
+		t.Fatalf("replay against revoked matching continuation err = %v", err)
+	}
+	revokedOp, err := registry.store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState(after revoked replay) err = %v", err)
+	}
+	if revokedOp.Status != session.OperationStatusBlocked || revokedOp.Stage != "approval_revoked" || revokedOp.Proposal.Status != session.ProposalStatusDenied {
+		t.Fatalf("operation after revoked replay = %#v, want revoked/denied projection", revokedOp)
+	}
+
 	conflictKey := session.SessionKey{ChatID: 88107, UserID: 1001}
 	if err := registry.store.UpdateContinuationState(conflictKey, session.ContinuationState{
 		Status: session.ContinuationStatusPending,
