@@ -214,6 +214,11 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 			return true, nil
 		}
 		state := continuationStateFromOperationPhase(opState, phase, promptInput, now)
+		if attached, err := r.attachOperationPhaseRecoveryContract(key, msg, phase, state, now); err != nil {
+			return true, err
+		} else {
+			state = attached
+		}
 		if updatedOpState, blocked, err := r.blockInvalidMaterializedContinuationAuthority(ctx, key, msg, opState, state, "operation_phase_required_capability", now); err != nil || blocked {
 			return true, err
 		} else {
@@ -378,6 +383,11 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 		}
 
 		state := continuationStateFromOperationPhase(opState, phase, promptInput, now)
+		if attached, err := r.attachOperationPhaseRecoveryContract(key, msg, phase, state, now); err != nil {
+			return true, err
+		} else {
+			state = attached
+		}
 		if updatedOpState, blocked, err := r.blockInvalidMaterializedContinuationAuthority(ctx, key, msg, opState, state, "operation_phase_plan", now); err != nil || blocked {
 			return true, err
 		} else {
@@ -457,6 +467,7 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 
 type recoveryApprovalHandoffInput struct {
 	Action                string            `json:"action"`
+	ContractID            string            `json:"contract_id"`
 	LeaseClass            string            `json:"lease_class"`
 	Principal             string            `json:"principal"`
 	AllowedActions        []string          `json:"allowed_actions"`
@@ -830,87 +841,159 @@ func recoveryApprovalHandoffInputConsumable(input recoveryApprovalHandoffInput) 
 		return false
 	}
 	if strings.TrimSpace(input.Action) != "request_continuation_lease" ||
-		strings.TrimSpace(input.Principal) == "" ||
-		strings.TrimSpace(input.RequestInstanceID) == "" {
+		strings.TrimSpace(input.ContractID) == "" {
 		return false
 	}
-	leaseClass := session.NormalizeContinuationLeaseClass(session.ContinuationLeaseClass(input.LeaseClass))
-	if leaseClass == "" || len(normalizeRecoveryApprovalActions(input.AllowedActions)) == 0 {
-		return false
+	return true
+}
+
+func (r *Runtime) attachOperationPhaseRecoveryContract(key session.SessionKey, msg core.InboundMessage, phase session.OperationPhase, state session.ContinuationState, now time.Time) (session.ContinuationState, error) {
+	state = session.NormalizeContinuationState(state)
+	lease := session.NormalizeContinuationLease(state.ContinuationLease)
+	if lease.LeaseClass != session.ContinuationLeaseClassChildWake {
+		return state, nil
 	}
-	constraints := normalizeRecoveryApprovalConstraints(input.Constraints)
-	toolName := strings.TrimSpace(input.Tool)
-	toolAction := strings.ToLower(strings.TrimSpace(input.ToolAction))
-	switch leaseClass {
-	case session.ContinuationLeaseClassChildWake:
-		agentID := strings.TrimSpace(input.AgentID)
-		return toolName == "durable_agent" &&
-			toolAction == "wake_once" &&
-			agentID != "" &&
-			recoveryApprovalActionsContain(input.AllowedActions, "wake_named_child") &&
-			recoveryApprovalConstraintMatches(constraints, "agent_id", agentID)
-	case session.ContinuationLeaseClassDataAccess, session.ContinuationLeaseClassLocalWorkspace:
-		grantID := strings.TrimSpace(input.GrantID)
-		grantTarget := strings.TrimSpace(input.GrantTargetResource)
-		resource := strings.TrimSpace(input.Resource)
-		if grantID == "" || grantTarget == "" || resource == "" || toolName == "" || toolAction == "" {
-			return false
+	agentID, grantID, targetResource := operationPhaseChildWakeTarget(phase)
+	if agentID == "" {
+		return state, fmt.Errorf("child_wake operation phase requires exact durable_agent wake_once target")
+	}
+	principalID := operationPhaseRecoveryPrincipal(msg, key)
+	if principalID == "" {
+		return state, fmt.Errorf("child_wake operation phase requires operator principal")
+	}
+	allowed := append([]string(nil), lease.AllowedActions...)
+	if !operationPhaseActionContains(allowed, "wake_named_child") {
+		allowed = append(allowed, "wake_named_child")
+	}
+	constraints := map[string]string{}
+	for key, value := range lease.Constraints {
+		if strings.TrimSpace(key) != "" && strings.TrimSpace(value) != "" {
+			constraints[strings.TrimSpace(key)] = strings.TrimSpace(value)
 		}
-		required := map[string]string{
-			"grant_id":              grantID,
-			"grant_target_resource": grantTarget,
-			"target_resource":       grantTarget,
-			"resource":              resource,
-			"tool":                  toolName,
-			"tool_action":           toolAction,
+	}
+	constraints["agent_id"] = agentID
+	constraints["principal"] = principalID
+	if grantID != "" {
+		constraints["grant_id"] = grantID
+	}
+	if targetResource != "" {
+		constraints["grant_target_resource"] = targetResource
+		constraints["target_resource"] = targetResource
+	}
+	contract, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID:   "operation-phase-" + strings.TrimSpace(state.DecisionID),
+		SessionID:           session.SessionIDForKey(key),
+		SubjectKind:         "continuation_lease_request",
+		Principal:           principalID,
+		LeaseClass:          session.ContinuationLeaseClassChildWake,
+		AllowedActions:      allowed,
+		Constraints:         constraints,
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             agentID,
+		GrantID:             grantID,
+		GrantTargetResource: targetResource,
+		CreatedAt:           now,
+	})
+	if err != nil {
+		return state, err
+	}
+	contract, err = r.store.UpsertContinuationRecoveryContract(contract)
+	if err != nil {
+		return state, err
+	}
+	lease.RecoveryContractID = contract.ContractID
+	lease.RetryOperation = contract.RetryOperation
+	lease.Constraints = constraints
+	lease.AllowedActions = allowed
+	lease.PlanHash = contract.ContractHash
+	state.ContinuationLease = session.NormalizeContinuationLease(lease)
+	state.ActionProposal.PlanHash = contract.ContractHash
+	return session.NormalizeContinuationState(state), nil
+}
+
+func operationPhaseChildWakeTarget(phase session.OperationPhase) (string, string, string) {
+	phase = normalizeSingleOperationPhase(phase)
+	for _, grant := range phase.RequiredCapabilityGrants {
+		grant = session.NormalizeCapabilityGrantSpec(grant)
+		agentID := operationPhaseAgentIDFromTargetResource(grant.TargetResource)
+		if agentID == "" {
+			agentID = operationPhaseAgentIDFromConstraints(grant.Constraints)
 		}
-		for key, want := range required {
-			if !recoveryApprovalConstraintMatches(constraints, key, want) {
-				return false
+		if agentID != "" {
+			return agentID, grant.GrantID, grant.TargetResource
+		}
+	}
+	return "", "", ""
+}
+
+func operationPhaseAgentIDFromTargetResource(target string) string {
+	target = strings.TrimSpace(target)
+	parts := strings.Split(target, ":")
+	if len(parts) == 3 && parts[0] == "durable_agent" && parts[2] == "wake_once" && strings.TrimSpace(parts[1]) != "" {
+		return strings.TrimSpace(parts[1])
+	}
+	return ""
+}
+
+func operationPhaseAgentIDFromConstraints(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return ""
+	}
+	return operationPhaseFindAgentID(payload)
+}
+
+func operationPhaseFindAgentID(value any) string {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if strings.TrimSpace(key) == "agent_id" {
+				if found := operationPhaseFindAgentID(child); found != "" {
+					return found
+				}
 			}
 		}
-		return true
-	default:
-		return true
-	}
-}
-
-func normalizeRecoveryApprovalActions(actions []string) []string {
-	out := make([]string, 0, len(actions))
-	for _, action := range actions {
-		action = strings.ToLower(strings.TrimSpace(action))
-		if action != "" {
-			out = append(out, action)
+		for _, child := range typed {
+			if found := operationPhaseFindAgentID(child); found != "" {
+				return found
+			}
 		}
+	case []any:
+		if len(typed) == 1 {
+			return operationPhaseFindAgentID(typed[0])
+		}
+	case string:
+		return strings.TrimSpace(typed)
 	}
-	return out
+	return ""
 }
 
-func recoveryApprovalActionsContain(actions []string, want string) bool {
+func operationPhaseRecoveryPrincipal(msg core.InboundMessage, key session.SessionKey) string {
+	if msg.SenderID != 0 {
+		return fmt.Sprintf("telegram:%d", msg.SenderID)
+	}
+	if key.UserID != 0 {
+		return fmt.Sprintf("telegram:%d", key.UserID)
+	}
+	if key.ChatID != 0 {
+		return fmt.Sprintf("telegram:%d", key.ChatID)
+	}
+	return ""
+}
+
+func operationPhaseActionContains(actions []string, want string) bool {
 	want = strings.ToLower(strings.TrimSpace(want))
-	for _, action := range normalizeRecoveryApprovalActions(actions) {
-		if action == want {
+	for _, action := range actions {
+		if strings.ToLower(strings.TrimSpace(action)) == want {
 			return true
 		}
 	}
 	return false
-}
-
-func normalizeRecoveryApprovalConstraints(in map[string]string) map[string]string {
-	out := make(map[string]string, len(in))
-	for key, value := range in {
-		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
-		if key != "" && value != "" {
-			out[key] = value
-		}
-	}
-	return out
-}
-
-func recoveryApprovalConstraintMatches(constraints map[string]string, key string, want string) bool {
-	want = strings.TrimSpace(want)
-	return want != "" && strings.TrimSpace(constraints[strings.TrimSpace(key)]) == want
 }
 
 const operationPlanBudgetMaxLanes = 6

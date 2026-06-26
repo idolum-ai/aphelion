@@ -202,7 +202,11 @@ func TestRecoveryHandoffCompilersProduceConsumerValidatedPayloads(t *testing.T) 
 		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
 	)
 	leaseReq.RequestInstanceID = "test-compiler-child-wake-request"
-	leaseOp, err := compileContinuationLeaseRecoveryHandoff(leaseReq)
+	leaseContract, err := continuationRecoveryContractFromMissingLeaseRequirement(session.SessionKey{}, leaseReq, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("continuationRecoveryContractFromMissingLeaseRequirement() err = %v", err)
+	}
+	leaseOp, err := compileContinuationLeaseRecoveryHandoff(leaseContract)
 	if err != nil {
 		t.Fatalf("compileContinuationLeaseRecoveryHandoff() err = %v", err)
 	}
@@ -212,9 +216,9 @@ func TestRecoveryHandoffCompilersProduceConsumerValidatedPayloads(t *testing.T) 
 	if err := ValidateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, leaseOp.Tool, leaseOp.InputJSON); err != nil {
 		t.Fatalf("validate lease operation err = %v", err)
 	}
-	mutatedLease := strings.Replace(leaseOp.InputJSON, `"agent_id":"child-alpha"`, `"agent_id":"child-beta"`, 1)
+	mutatedLease := strings.Replace(leaseOp.InputJSON, `"contract_id":"`+leaseContract.ContractID+`"`, `"contract_id":""`, 1)
 	if err := ValidateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, leaseOp.Tool, mutatedLease); err == nil {
-		t.Fatal("validate mutated lease operation err = nil, want agent constraint rejection")
+		t.Fatal("validate mutated lease operation err = nil, want missing contract rejection")
 	}
 
 	grantReq := normalizeMissingGrantRequirement(missingGrantRequirement{
@@ -310,19 +314,9 @@ func representativeRecoveryTransitionInput(t *testing.T, spec RecoveryTransition
 	case "request_approval":
 		return `{
 			"action":"request_continuation_lease",
-			"lease_class":"child_wake",
-			"principal":"telegram:1001",
-			"allowed_actions":["wake_named_child"],
-			"constraints":{"agent_id":"child-alpha"},
-			"tool":"durable_agent",
-			"tool_action":"wake_once",
-			"grant_id":"grant-child-alpha-wake",
-			"grant_target_resource":"durable_agent:child-alpha:wake_once",
-			"request_instance_id":"spec-child-alpha-request-1",
-			"agent_id":"child-alpha",
+			"contract_id":"crc-spec-child-alpha-request",
 			"recovery_contract":"aphelion.recovery_handoff.v1",
-			"recovery_operation_kind":"continuation_lease_request",
-			"retry_after_lease":true
+			"recovery_operation_kind":"continuation_lease_request"
 		}`
 	case "capability_authority":
 		return `{
@@ -366,27 +360,30 @@ func TestRequestContinuationLeaseApprovalIsReplaySafeAndBoundToGrant(t *testing.
 	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(newToolTestStore(t))
 	key := session.SessionKey{ChatID: 88106, UserID: 1001}
 	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
-	raw := json.RawMessage(`{
-		"action":"request_continuation_lease",
-		"objective":"Read the approved child-local runtime-bin directory once.",
-		"lease_class":"data_access",
-		"principal":"telegram:1001",
-		"allowed_actions":["read_approved_resource"],
-		"constraints":{
-			"capability_kind":"file_access",
-			"grant_id":"capg-runtime-read",
-			"operation":"list_dir",
-			"resource":"/child/runtime-bin",
-			"target_resource":"/child/runtime-bin"
-		},
-		"tool":"list_dir",
-		"tool_action":"list_dir",
-		"grant_id":"capg-runtime-read",
-		"grant_target_resource":"/child/runtime-bin",
-		"request_instance_id":"test-runtime-read-request-1",
-		"resource":"/child/runtime-bin",
-		"retry_after_lease":true
-	}`)
+	contract, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID:   "test-runtime-read-request-1",
+		SessionID:           session.SessionIDForKey(key),
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassDataAccess, "", "capg-runtime-read", "list_dir", "list_dir", "/child/runtime-bin"),
+		Principal:           "telegram:1001",
+		LeaseClass:          session.ContinuationLeaseClassDataAccess,
+		AllowedActions:      []string{"read_approved_resource"},
+		Constraints:         map[string]string{"capability_kind": string(session.CapabilityKindFileAccess), "grant_id": "capg-runtime-read", "operation": "list_dir", "resource": "/child/runtime-bin", "target_resource": "/child/runtime-bin", "tool": "list_dir", "tool_action": "list_dir"},
+		Tool:                "list_dir",
+		ToolAction:          "list_dir",
+		GrantID:             "capg-runtime-read",
+		GrantTargetResource: "/child/runtime-bin",
+		Resource:            "/child/runtime-bin",
+		CreatedAt:           time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract(data_access) err = %v", err)
+	}
+	contract, err = registry.store.UpsertContinuationRecoveryContract(contract)
+	if err != nil {
+		t.Fatalf("UpsertContinuationRecoveryContract(data_access) err = %v", err)
+	}
+	raw := json.RawMessage(session.ContinuationRecoveryContractProjectionInput(contract.ContractID))
 	scope := sandbox.Scope{WorkingRoot: registry.workspace, SharedMemoryRoot: registry.workspace, Principal: actor}
 	if _, err := registry.executeWithScopeAndPrincipal(context.Background(), "request_approval", raw, scope, actor, key); err != nil {
 		t.Fatalf("first request_approval err = %v", err)
@@ -485,7 +482,31 @@ func TestRequestContinuationLeaseApprovalIsReplaySafeAndBoundToGrant(t *testing.
 	}); err != nil {
 		t.Fatalf("UpdateContinuationState(conflict) err = %v", err)
 	}
-	if _, err := registry.executeWithScopeAndPrincipal(context.Background(), "request_approval", raw, scope, actor, conflictKey); err == nil || !strings.Contains(err.Error(), "conflicts with existing pending continuation") {
+	conflictContract, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID:   "test-runtime-read-conflict-request-1",
+		SessionID:           session.SessionIDForKey(conflictKey),
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassDataAccess, "", "capg-runtime-read", "list_dir", "list_dir", "/child/runtime-bin"),
+		Principal:           "telegram:1001",
+		LeaseClass:          session.ContinuationLeaseClassDataAccess,
+		AllowedActions:      []string{"read_approved_resource"},
+		Constraints:         map[string]string{"capability_kind": string(session.CapabilityKindFileAccess), "grant_id": "capg-runtime-read", "operation": "list_dir", "resource": "/child/runtime-bin", "target_resource": "/child/runtime-bin", "tool": "list_dir", "tool_action": "list_dir"},
+		Tool:                "list_dir",
+		ToolAction:          "list_dir",
+		GrantID:             "capg-runtime-read",
+		GrantTargetResource: "/child/runtime-bin",
+		Resource:            "/child/runtime-bin",
+		CreatedAt:           time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract(conflict) err = %v", err)
+	}
+	conflictContract, err = registry.store.UpsertContinuationRecoveryContract(conflictContract)
+	if err != nil {
+		t.Fatalf("UpsertContinuationRecoveryContract(conflict) err = %v", err)
+	}
+	conflictRaw := json.RawMessage(session.ContinuationRecoveryContractProjectionInput(conflictContract.ContractID))
+	if _, err := registry.executeWithScopeAndPrincipal(context.Background(), "request_approval", conflictRaw, scope, actor, conflictKey); err == nil || !strings.Contains(err.Error(), "conflicts with existing pending continuation") {
 		t.Fatalf("conflicting request_approval err = %v, want pending continuation conflict", err)
 	}
 }

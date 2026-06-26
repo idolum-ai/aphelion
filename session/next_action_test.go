@@ -106,7 +106,7 @@ func seedNextActionRecord(t *testing.T, store *SQLiteStore, key SessionKey, reco
 	`, recordID, SessionIDForKey(key), key.ChatID, key.UserID, "test", string(NextActionBlockedNeedsAuthority),
 		"continuation_lease_request", subjectRef, "recovery handoff", "child_wake", "missing_continuation_lease",
 		"continuation_lease_request", "request_approval",
-		`{"action":"request_continuation_lease","lease_class":"child_wake","request_instance_id":"seeded"}`,
+		`{"action":"request_continuation_lease","contract_id":"crc-seeded-next-action"}`,
 		createdAt.Format(time.RFC3339Nano))
 	if err != nil {
 		t.Fatalf("seed next action record %q err = %v", recordID, err)
@@ -260,7 +260,7 @@ func TestOpenNextActionsBySessionOperationFindsRecoveryHandoffBehindSessionVolum
 		ResourceBlocker:    "missing_continuation_lease",
 		OperationKind:      "continuation_lease_request",
 		OperationTool:      "request_approval",
-		OperationInputJSON: `{"action":"request_continuation_lease","lease_class":"child_wake","request_instance_id":"req-1"}`,
+		OperationInputJSON: `{"action":"request_continuation_lease","contract_id":"crc-req-1"}`,
 		CreatedAt:          time.Date(2026, 6, 24, 10, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
@@ -278,7 +278,7 @@ func TestOpenNextActionsBySessionOperationFindsRecoveryHandoffBehindSessionVolum
 		ResourceBlocker:    "missing_continuation_lease",
 		OperationKind:      "continuation_lease_request",
 		OperationTool:      "request_approval",
-		OperationInputJSON: `{"action":"request_continuation_lease","lease_class":"child_wake","request_instance_id":"req-other"}`,
+		OperationInputJSON: `{"action":"request_continuation_lease","contract_id":"crc-req-other"}`,
 		CreatedAt:          time.Date(2026, 6, 24, 10, 1, 0, 0, time.UTC),
 	}); err != nil {
 		t.Fatalf("RecordNextAction(other session) err = %v", err)

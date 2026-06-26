@@ -181,10 +181,10 @@ func TestDurableAgentWakeOnceRequiresDurableRunAuthority(t *testing.T) {
 	if open[0].RequiredAuthority != string(session.ContinuationLeaseClassChildWake) || open[0].ResourceBlocker != "missing_continuation_lease" {
 		t.Fatalf("open next action authority/blocker = %q/%q, want child_wake/missing_continuation_lease", open[0].RequiredAuthority, open[0].ResourceBlocker)
 	}
-	for _, want := range []string{`"action":"request_continuation_lease"`, `"agent_id":"child-alpha"`, `"grant_id":"` + grant.GrantID + `"`, `"lease_class":"child_wake"`} {
-		if !strings.Contains(open[0].OperationInputJSON, want) {
-			t.Fatalf("lease next action operation input = %s, want %s", open[0].OperationInputJSON, want)
-		}
+	assertRecoveryContractProjectionForWakeTest(t, open[0].OperationInputJSON)
+	contract := recoveryContractForWakeTest(t, store, open[0].OperationInputJSON)
+	if contract.AgentID != "child-alpha" || contract.GrantID != grant.GrantID || contract.LeaseClass != session.ContinuationLeaseClassChildWake {
+		t.Fatalf("recovery contract = %#v, want child-alpha child_wake bound to grant", contract)
 	}
 }
 
@@ -308,7 +308,7 @@ func TestDurableAgentWakeOnceRefreshesStaleLeaseRequestAction(t *testing.T) {
 	if open[0].RecordID == legacy.RecordID {
 		t.Fatalf("open record id = %q, want legacy record superseded", open[0].RecordID)
 	}
-	assertRecoveryRequestInstanceForWakeTest(t, open[0].OperationInputJSON, true)
+	assertRecoveryContractRequestInstanceForWakeTest(t, store, open[0].OperationInputJSON, true)
 	if err := ValidateRecoveryHandoffToolInput(open[0].State, open[0].OperationTool, open[0].OperationInputJSON); err != nil {
 		t.Fatalf("validate refreshed recovery handoff err = %v", err)
 	}
@@ -385,7 +385,7 @@ func TestDurableAgentWakeOnceRefreshesTerminalLeaseRequestInstance(t *testing.T)
 	if open[0].RecordID == current.RecordID {
 		t.Fatalf("open record id = %q, want terminal request action superseded", open[0].RecordID)
 	}
-	if got := recoveryRequestInstanceForWakeTest(t, open[0].OperationInputJSON); got == terminalInstanceID || strings.TrimSpace(got) == "" {
+	if got := recoveryContractForWakeTest(t, store, open[0].OperationInputJSON).RequestInstanceID; got == terminalInstanceID || strings.TrimSpace(got) == "" {
 		t.Fatalf("refreshed request_instance_id = %q, want fresh non-empty id different from terminal instance", got)
 	}
 }
@@ -461,7 +461,7 @@ func TestDurableAgentWakeOnceRefreshesMalformedLeaseRequestActions(t *testing.T)
 			grant := grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", actor)
 			key := session.SessionKey{ChatID: 9100 + int64(len(tc.name)), UserID: 1001}
 			requirement := durableAgentWakeOnceLeaseRequirement("child-alpha", grant, actor)
-			currentPayload := currentMissingLeasePayloadForWakeTest(t, requirement, "stale-"+strings.ReplaceAll(tc.name, " ", "-"))
+			currentPayload := legacyMissingLeasePayloadForWakeTest(requirement, "stale-"+strings.ReplaceAll(tc.name, " ", "-"))
 			raw := tc.mutate(currentPayload)
 			toolName := firstNonEmpty(tc.toolName, "request_approval")
 			operationKind := firstNonEmpty(tc.operation, "continuation_lease_request")
@@ -475,7 +475,7 @@ func TestDurableAgentWakeOnceRefreshesMalformedLeaseRequestActions(t *testing.T)
 			if len(open) != 1 || open[0].RecordID == legacy.RecordID {
 				t.Fatalf("open matching actions = %#v, legacy = %#v, want refreshed singleton", open, legacy)
 			}
-			assertRecoveryRequestInstanceForWakeTest(t, open[0].OperationInputJSON, true)
+			assertRecoveryContractRequestInstanceForWakeTest(t, store, open[0].OperationInputJSON, true)
 			if err := ValidateRecoveryHandoffToolInput(open[0].State, open[0].OperationTool, open[0].OperationInputJSON); err != nil {
 				t.Fatalf("validate refreshed recovery handoff err = %v", err)
 			}
@@ -549,26 +549,23 @@ func TestDurableAgentWakeOnceLeaseRequestSubjectIsSessionScoped(t *testing.T) {
 func TestRequestApprovalContinuationLeaseRejectsConflictingChildWakeConstraint(t *testing.T) {
 	t.Parallel()
 
-	registry, _ := newDurableAgentToolRegistry(t)
-	_, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
-		adminSessionKey(),
-		"request_approval",
-		json.RawMessage(`{
-			"action":"request_continuation_lease",
-			"lease_class":"child_wake",
-			"principal":"telegram:1001",
-			"allowed_actions":["wake_named_child"],
-			"constraints":{"agent_id":"child-beta"},
-			"tool":"durable_agent",
-			"tool_action":"wake_once",
-			"request_instance_id":"test-conflicting-child-wake-request",
-			"agent_id":"child-alpha"
-		}`),
-	)
+	_, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID:   "test-conflicting-child-wake-request",
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "child-alpha", "grant-child-alpha-wake", "durable_agent", "wake_once", ""),
+		Principal:           "telegram:1001",
+		LeaseClass:          session.ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{durableAgentWakeOnceAction},
+		Constraints:         map[string]string{"agent_id": "child-beta"},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             "child-alpha",
+		GrantID:             "grant-child-alpha-wake",
+		GrantTargetResource: "durable_agent:child-alpha:wake_once",
+		CreatedAt:           time.Now().UTC(),
+	})
 	if err == nil || !strings.Contains(err.Error(), "agent_id constraint mismatch") {
-		t.Fatalf("ExecuteForSessionPrincipal(request_approval conflicting child_wake) err = %v, want constraint mismatch", err)
+		t.Fatalf("CompileContinuationRecoveryContract(conflicting child_wake) err = %v, want constraint mismatch", err)
 	}
 }
 
@@ -1117,7 +1114,7 @@ func TestMissingContinuationLeaseRefreshesStaleDataAccessAction(t *testing.T) {
 	if len(open) != 1 || open[0].RecordID == legacy.RecordID {
 		t.Fatalf("open matching actions = %#v, legacy = %#v, want refreshed singleton", open, legacy)
 	}
-	assertRecoveryRequestInstanceForWakeTest(t, open[0].OperationInputJSON, true)
+	assertRecoveryContractRequestInstanceForWakeTest(t, store, open[0].OperationInputJSON, true)
 	if err := ValidateRecoveryHandoffToolInput(open[0].State, open[0].OperationTool, open[0].OperationInputJSON); err != nil {
 		t.Fatalf("validate refreshed data_access handoff err = %v", err)
 	}
@@ -1308,8 +1305,11 @@ func TestDurableAgentWakeOnceRequiresExactAgentConstraint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenNextActionsBySession() err = %v", err)
 	}
-	if len(open) != 1 || open[0].RequiredAuthority != string(session.ContinuationLeaseClassChildWake) || !strings.Contains(open[0].OperationInputJSON, `"agent_id":"child-alpha"`) {
+	if len(open) != 1 || open[0].RequiredAuthority != string(session.ContinuationLeaseClassChildWake) {
 		t.Fatalf("open next actions = %#v, want exact child-alpha child_wake lease request", open)
+	}
+	if got := recoveryContractForWakeTest(t, store, open[0].OperationInputJSON).AgentID; got != "child-alpha" {
+		t.Fatalf("recovery contract agent_id = %q, want child-alpha", got)
 	}
 }
 
@@ -1534,12 +1534,46 @@ func upsertDurableAgentWakeTestAgent(t *testing.T, store *session.SQLiteStore) {
 	}
 }
 
-func currentMissingLeasePayloadForWakeTest(t *testing.T, requirement missingContinuationLeaseRequirement, requestInstanceID string) map[string]any {
+func legacyMissingLeasePayloadForWakeTest(requirement missingContinuationLeaseRequirement, requestInstanceID string) map[string]any {
+	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
+	requirement.RequestInstanceID = requestInstanceID
+	payload := map[string]any{
+		"action":                  "request_continuation_lease",
+		"lease_class":             string(requirement.LeaseClass),
+		"principal":               requirement.Principal,
+		"allowed_actions":         requirement.AllowedActions,
+		"constraints":             requirement.Constraints,
+		"tool":                    requirement.Tool,
+		"tool_action":             requirement.ToolAction,
+		"grant_id":                requirement.GrantID,
+		"grant_target_resource":   requirement.GrantTargetResource,
+		"request_instance_id":     requirement.RequestInstanceID,
+		"agent_id":                requirement.AgentID,
+		"resource":                requirement.Resource,
+		"retry_after_lease":       true,
+		"recovery_contract":       recoveryHandoffContractVersion,
+		"recovery_operation_kind": "continuation_lease_request",
+	}
+	if requirement.RetryOperation.Active() {
+		payload["retry_operation"] = requirement.RetryOperation
+	}
+	return payload
+}
+
+func currentMissingLeasePayloadForWakeTest(t *testing.T, store *session.SQLiteStore, key session.SessionKey, requirement missingContinuationLeaseRequirement, requestInstanceID string, createdAt time.Time) map[string]any {
 	t.Helper()
 
 	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
 	requirement.RequestInstanceID = requestInstanceID
-	op, err := compileContinuationLeaseRecoveryHandoff(requirement)
+	contract, err := continuationRecoveryContractFromMissingLeaseRequirement(key, requirement, createdAt)
+	if err != nil {
+		t.Fatalf("continuationRecoveryContractFromMissingLeaseRequirement() err = %v", err)
+	}
+	contract, err = store.UpsertContinuationRecoveryContract(contract)
+	if err != nil {
+		t.Fatalf("UpsertContinuationRecoveryContract() err = %v", err)
+	}
+	op, err := compileContinuationLeaseRecoveryHandoff(contract)
 	if err != nil {
 		t.Fatalf("compileContinuationLeaseRecoveryHandoff() err = %v", err)
 	}
@@ -1553,7 +1587,7 @@ func currentMissingLeasePayloadForWakeTest(t *testing.T, requirement missingCont
 func seedCurrentMissingContinuationLeaseActionForWakeTest(t *testing.T, store *session.SQLiteStore, key session.SessionKey, requirement missingContinuationLeaseRequirement, recordID string, requestInstanceID string, createdAt time.Time) session.NextActionRecord {
 	t.Helper()
 
-	return seedMissingContinuationLeaseActionForWakeTest(t, store, key, requirement, recordID, currentMissingLeasePayloadForWakeTest(t, requirement, requestInstanceID), createdAt)
+	return seedMissingContinuationLeaseActionForWakeTest(t, store, key, requirement, recordID, currentMissingLeasePayloadForWakeTest(t, store, key, requirement, requestInstanceID, createdAt), createdAt)
 }
 
 func seedMissingContinuationLeaseActionForWakeTest(t *testing.T, store *session.SQLiteStore, key session.SessionKey, requirement missingContinuationLeaseRequirement, recordID string, input map[string]any, createdAt time.Time) session.NextActionRecord {
@@ -1600,16 +1634,22 @@ func openMissingLeaseActionsForWakeTest(t *testing.T, store *session.SQLiteStore
 	return open
 }
 
-func assertRecoveryRequestInstanceForWakeTest(t *testing.T, raw string, wantPresent bool) {
+func assertRecoveryContractRequestInstanceForWakeTest(t *testing.T, store *session.SQLiteStore, raw string, wantPresent bool) {
 	t.Helper()
 
-	got := recoveryRequestInstanceForWakeTest(t, raw)
+	got := recoveryContractForWakeTest(t, store, raw).RequestInstanceID
 	if wantPresent && strings.TrimSpace(got) == "" {
-		t.Fatalf("operation input = %s, want request_instance_id", raw)
+		t.Fatalf("operation input = %s, want contract request_instance_id", raw)
 	}
 	if !wantPresent && strings.TrimSpace(got) != "" {
-		t.Fatalf("operation input = %s, want no request_instance_id", raw)
+		t.Fatalf("operation input = %s, want no contract request_instance_id", raw)
 	}
+	assertRecoveryContractProjectionForWakeTest(t, raw)
+}
+
+func assertRecoveryContractProjectionForWakeTest(t *testing.T, raw string) {
+	t.Helper()
+
 	payload := map[string]any{}
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		t.Fatalf("unmarshal operation input err = %v", err)
@@ -1620,17 +1660,27 @@ func assertRecoveryRequestInstanceForWakeTest(t *testing.T, raw string, wantPres
 	if got := strings.TrimSpace(fmt.Sprint(payload["recovery_operation_kind"])); got != "continuation_lease_request" {
 		t.Fatalf("operation input recovery_operation_kind = %q, want continuation_lease_request", got)
 	}
+	if got := strings.TrimSpace(fmt.Sprint(payload["contract_id"])); got == "" {
+		t.Fatalf("operation input contract_id empty: %s", raw)
+	}
 }
 
-func recoveryRequestInstanceForWakeTest(t *testing.T, raw string) string {
+func recoveryContractForWakeTest(t *testing.T, store *session.SQLiteStore, raw string) session.ContinuationRecoveryContract {
 	t.Helper()
 
 	payload := map[string]any{}
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		t.Fatalf("unmarshal operation input err = %v", err)
 	}
-	got, _ := payload["request_instance_id"].(string)
-	return strings.TrimSpace(got)
+	contractID, _ := payload["contract_id"].(string)
+	contract, ok, err := store.ContinuationRecoveryContract(strings.TrimSpace(contractID))
+	if err != nil {
+		t.Fatalf("ContinuationRecoveryContract(%q) err = %v", contractID, err)
+	}
+	if !ok {
+		t.Fatalf("ContinuationRecoveryContract(%q) ok=false", contractID)
+	}
+	return contract
 }
 
 func marshalWakeTestJSON(input map[string]any) string {

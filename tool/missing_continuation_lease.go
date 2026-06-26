@@ -113,7 +113,15 @@ func (r *Registry) materializeMissingContinuationLeaseError(_ context.Context, k
 		}
 	}
 	requirement.RequestInstanceID = missingContinuationLeaseRequestInstanceID(key, requirement, now)
-	operation, opErr := compileContinuationLeaseRecoveryHandoff(requirement)
+	contract, contractErr := continuationRecoveryContractFromMissingLeaseRequirement(key, requirement, now)
+	if contractErr != nil {
+		return fmt.Errorf("%w; additionally failed to compile lease request: %v", err, contractErr)
+	}
+	contract, contractErr = r.store.UpsertContinuationRecoveryContract(contract)
+	if contractErr != nil {
+		return fmt.Errorf("%w; additionally failed to store lease request contract: %v", err, contractErr)
+	}
+	operation, opErr := compileContinuationLeaseRecoveryHandoff(contract)
 	if opErr != nil {
 		return fmt.Errorf("%w; additionally failed to materialize lease request: %v", err, opErr)
 	}
@@ -147,6 +155,28 @@ func (r *Registry) materializeMissingContinuationLeaseError(_ context.Context, k
 	}
 }
 
+func continuationRecoveryContractFromMissingLeaseRequirement(key session.SessionKey, requirement missingContinuationLeaseRequirement, now time.Time) (session.ContinuationRecoveryContract, error) {
+	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
+	return session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID:   requirement.RequestInstanceID,
+		SessionID:           session.SessionIDForKey(key),
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          missingContinuationLeaseSubjectRef(requirement),
+		Principal:           requirement.Principal,
+		LeaseClass:          requirement.LeaseClass,
+		AllowedActions:      requirement.AllowedActions,
+		Constraints:         requirement.Constraints,
+		Tool:                requirement.Tool,
+		ToolAction:          requirement.ToolAction,
+		AgentID:             requirement.AgentID,
+		Resource:            requirement.Resource,
+		GrantID:             requirement.GrantID,
+		GrantTargetResource: requirement.GrantTargetResource,
+		RetryOperation:      requirement.RetryOperation,
+		CreatedAt:           now,
+	})
+}
+
 func (r *Registry) openMissingContinuationLeaseActions(key session.SessionKey, subjectRef string) ([]session.NextActionRecord, error) {
 	if r == nil || r.store == nil {
 		return nil, nil
@@ -168,19 +198,22 @@ func (r *Registry) missingContinuationLeaseActionMatchesRequirement(key session.
 	if err := ValidateRecoveryHandoffToolInput(action.State, action.OperationTool, action.OperationInputJSON); err != nil {
 		return false, nil
 	}
-	payload := map[string]any{}
-	if err := json.Unmarshal([]byte(action.OperationInputJSON), &payload); err != nil {
-		return false, nil
-	}
-	if missingContinuationLeasePayloadString(payload, "recovery_contract") != recoveryHandoffContractVersion ||
-		missingContinuationLeasePayloadString(payload, "recovery_operation_kind") != "continuation_lease_request" {
-		return false, nil
-	}
 	var in requestApprovalInput
 	if err := decodeToolObjectInput(json.RawMessage(action.OperationInputJSON), &in, "request_approval"); err != nil {
 		return false, nil
 	}
-	compiled, err := requestApprovalContinuationLeaseRequirement(in)
+	contractID := strings.TrimSpace(in.ContractID)
+	if contractID == "" {
+		return false, nil
+	}
+	contract, ok, err := r.store.ContinuationRecoveryContract(contractID)
+	if err != nil {
+		return false, nil
+	}
+	if !ok {
+		return false, nil
+	}
+	compiled, err := requestApprovalContinuationLeaseRequirementFromContract(contract)
 	if err != nil {
 		return false, nil
 	}
@@ -218,18 +251,6 @@ func missingContinuationLeaseContinuationStateLive(state session.ContinuationSta
 		return false
 	}
 	return lease.Status != session.ContinuationLeaseStatusActive || lease.RemainingTurns > 0
-}
-
-func missingContinuationLeasePayloadString(payload map[string]any, key string) string {
-	value, ok := payload[key]
-	if !ok {
-		return ""
-	}
-	text, ok := value.(string)
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(text)
 }
 
 func asMissingContinuationLeaseError(err error, target *missingContinuationLeaseError) bool {

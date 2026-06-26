@@ -201,21 +201,7 @@ func TestRequestApprovalContinuationLeaseRequestMaterializesAndApprovesExactChil
 		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
 		key,
 		"request_approval",
-		json.RawMessage(`{
-			"action":"request_continuation_lease",
-			"objective":"Wake idolum-email exactly once to consume pending parent guidance.",
-			"lease_class":"child_wake",
-			"principal":"telegram:1001",
-			"allowed_actions":["wake_named_child"],
-			"constraints":{"agent_id":"idolum-email"},
-			"tool":"durable_agent",
-			"tool_action":"wake_once",
-			"grant_id":"grant-idolum-email-direct-no-content-wake-readiness",
-			"grant_target_resource":"durable_agent:idolum-email:wake_once",
-			"request_instance_id":"test-idolum-email-wake-request-1",
-			"agent_id":"idolum-email",
-			"retry_after_lease":true
-		}`),
+		json.RawMessage(runtimeChildWakeApprovalRequestJSON(t, store, key, "idolum-email", "test-idolum-email-wake-request-1")),
 	)
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(request_approval child_wake lease request) err = %v", err)
@@ -303,6 +289,116 @@ func TestRequestApprovalContinuationLeaseRequestMaterializesAndApprovesExactChil
 	}
 	if approved.ContinuationLease.RemainingTurns != 1 {
 		t.Fatalf("approved lease remaining turns = %d, want one wake allowance", approved.ContinuationLease.RemainingTurns)
+	}
+}
+
+func TestOperationPhaseChildWakeCompilesRecoveryContractAndRunsApprovedRetry(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	runner := &runtimeWakeRunner{}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store).WithDurableAgentWakeRunner(runner)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9058, UserID: 0, Scope: telegramDMScopeRef(9058)}
+	seedRuntimeWakeAgent(t, store, "idolum-email", true)
+	grant := seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-idolum-email-phase-wake",
+		Objective: "Recover idolum-email readiness through an approved child wake.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-idolum-email-phase-wake",
+			Goal:           "Recover idolum-email readiness.",
+			CurrentPhaseID: "phase-child-wake-idolum-email",
+			Phases: []session.OperationPhase{{
+				ID:               "phase-child-wake-idolum-email",
+				Summary:          "Wake idolum-email exactly once to consume pending parent guidance.",
+				Status:           session.PlanStatusPending,
+				AuthorityClass:   "child_wake",
+				GateLevel:        "escalated_operator_approval",
+				GateReasonCode:   "child_wake",
+				WhyNow:           "The child has pending parent guidance and needs one bounded wake.",
+				BoundedEffect:    "Invoke durable_agent wake_once for idolum-email exactly once.",
+				AllowedActions:   []string{"wake_named_child"},
+				ForbiddenActions: []string{"wake_unnamed_child", "unbounded_retry_loop", "access_mailbox_contents", "read_secret_values"},
+				ValidationPlan:   []string{"verify one child wake result or typed pre-child failure"},
+				RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+					GrantID:        grant.GrantID,
+					Kind:           session.CapabilityKindGenericDelegation,
+					TargetResource: grant.TargetResource,
+					GrantedTo:      "telegram:1001",
+					AllowedActions: []string{"invoke"},
+					Constraints:    `{"agent_id":"idolum-email"}`,
+				}},
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed phase) err = %v", err)
+	}
+
+	materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9058, SenderID: 1001, Text: "continue", MessageID: 1},
+		"continue",
+	)
+	if err != nil {
+		t.Fatalf("MaterializeRequestedApproval(phase child_wake) err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want child_wake phase approval")
+	}
+	pending, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(pending phase) err = %v", err)
+	}
+	if pending.ContinuationLease.LeaseClass != session.ContinuationLeaseClassChildWake ||
+		pending.ContinuationLease.RecoveryContractID == "" ||
+		pending.ContinuationLease.Constraints["agent_id"] != "idolum-email" {
+		t.Fatalf("pending phase continuation = %#v, want child_wake lease with recovery contract for idolum-email", pending)
+	}
+	contract, ok, err := store.ContinuationRecoveryContract(pending.ContinuationLease.RecoveryContractID)
+	if err != nil {
+		t.Fatalf("ContinuationRecoveryContract(%q) err = %v", pending.ContinuationLease.RecoveryContractID, err)
+	}
+	if !ok || contract.AgentID != "idolum-email" || contract.GrantID != grant.GrantID || !contract.RetryOperation.Active() {
+		t.Fatalf("phase recovery contract = %#v ok=%v, want retryable child_wake contract", contract, ok)
+	}
+	if retry := session.NormalizeContinuationRetryOperation(pending.ContinuationLease.RetryOperation); !retry.Active() || retry.Tool != "durable_agent" || !strings.Contains(retry.InputJSON, `"agent_id":"idolum-email"`) {
+		t.Fatalf("phase retry operation = %#v, want durable_agent wake_once retry", retry)
+	}
+
+	if _, err := rt.ApproveContinuationForKey(key, 1001); err != nil {
+		t.Fatalf("ApproveContinuationForKey(phase child_wake) err = %v", err)
+	}
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID: 9058, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 2,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound(phase approved retry) err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "Running approved continuation") {
+		t.Fatalf("HandleInbound(phase approved retry) result = %#v, want approved continuation acknowledgement", result)
+	}
+	if len(runner.calls) != 1 || runner.calls[0] != "idolum-email" {
+		t.Fatalf("runner calls = %#v, want one idolum-email wake from phase retry", runner.calls)
 	}
 }
 
@@ -607,7 +703,7 @@ func TestDirectRequestApprovalConflictDoesNotSupersedePendingContinuation(t *tes
 		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
 		key,
 		"request_approval",
-		json.RawMessage(runtimeChildWakeApprovalRequestJSON("child-alpha", "direct-child-alpha-request-1")),
+		json.RawMessage(runtimeChildWakeApprovalRequestJSON(t, store, key, "child-alpha", "direct-child-alpha-request-1")),
 	)
 	var conflict toolpkg.RequestApprovalContinuationConflictError
 	if !errors.As(err, &conflict) {
@@ -668,7 +764,7 @@ func TestRecoveryHandoffMaterializationBlocksOnActiveIncompatibleContinuation(t 
 		NextAction:         "request child wake approval",
 		OperationKind:      "continuation_lease_request",
 		OperationTool:      "request_approval",
-		OperationInputJSON: runtimeChildWakeApprovalRequestJSON("child-alpha", "active-conflict-child-alpha-request-1"),
+		OperationInputJSON: runtimeChildWakeApprovalRequestJSON(t, store, key, "child-alpha", "active-conflict-child-alpha-request-1"),
 	}); err != nil {
 		t.Fatalf("RecordNextAction() err = %v", err)
 	}
@@ -751,7 +847,7 @@ func TestRecoveryHandoffMaterializationDoesNotSupersedeNewerPendingContinuation(
 		NextAction:         "request child wake approval",
 		OperationKind:      "continuation_lease_request",
 		OperationTool:      "request_approval",
-		OperationInputJSON: runtimeChildWakeApprovalRequestJSON("child-beta", "older-child-beta-request-1"),
+		OperationInputJSON: runtimeChildWakeApprovalRequestJSON(t, store, key, "child-beta", "older-child-beta-request-1"),
 		CreatedAt:          actionCreated,
 	}); err != nil {
 		t.Fatalf("RecordNextAction() err = %v", err)
@@ -839,7 +935,7 @@ func TestRecoveryHandoffMaterializationScansPastOlderBlockedHandoff(t *testing.T
 		NextAction:         "request older child wake approval",
 		OperationKind:      "continuation_lease_request",
 		OperationTool:      "request_approval",
-		OperationInputJSON: runtimeChildWakeApprovalRequestJSON("older-child", "older-child-request-1"),
+		OperationInputJSON: runtimeChildWakeApprovalRequestJSON(t, store, key, "older-child", "older-child-request-1"),
 		CreatedAt:          t0,
 	}); err != nil {
 		t.Fatalf("RecordNextAction(older) err = %v", err)
@@ -860,7 +956,7 @@ func TestRecoveryHandoffMaterializationScansPastOlderBlockedHandoff(t *testing.T
 		NextAction:         "request newer child wake approval",
 		OperationKind:      "continuation_lease_request",
 		OperationTool:      "request_approval",
-		OperationInputJSON: runtimeChildWakeApprovalRequestJSON("newer-child", "newer-child-request-1"),
+		OperationInputJSON: runtimeChildWakeApprovalRequestJSON(t, store, key, "newer-child", "newer-child-request-1"),
 		CreatedAt:          t0.Add(2 * time.Second),
 	}); err != nil {
 		t.Fatalf("RecordNextAction(newer) err = %v", err)
@@ -937,32 +1033,7 @@ func TestRecoveryHandoffMaterializationConsumesDataAccessApprovalRequest(t *test
 		t.Fatalf("New() err = %v", err)
 	}
 	key := session.SessionKey{ChatID: 9049, UserID: 0, Scope: telegramDMScopeRef(9049)}
-	raw := `{
-		"action":"request_continuation_lease",
-		"objective":"Read the approved child-local runtime-bin directory once.",
-		"lease_class":"data_access",
-		"principal":"telegram:1001",
-		"allowed_actions":["read_approved_resource"],
-		"constraints":{
-			"capability_kind":"file_access",
-			"grant_id":"capg-runtime-bin-read",
-			"grant_target_resource":"/child/runtime-bin",
-			"operation":"list_dir",
-			"resource":"/child/runtime-bin",
-			"target_resource":"/child/runtime-bin",
-			"tool":"list_dir",
-			"tool_action":"list_dir"
-		},
-		"tool":"list_dir",
-		"tool_action":"list_dir",
-		"grant_id":"capg-runtime-bin-read",
-		"grant_target_resource":"/child/runtime-bin",
-		"request_instance_id":"test-runtime-bin-read-request-1",
-		"resource":"/child/runtime-bin",
-		"recovery_contract":"aphelion.recovery_handoff.v1",
-		"recovery_operation_kind":"continuation_lease_request",
-		"retry_after_lease":true
-	}`
+	raw := runtimeDataAccessApprovalRequestJSON(t, store, key, "test-runtime-bin-read-request-1", "capg-runtime-bin-read", "/child/runtime-bin", "list_dir")
 	if _, err := store.RecordNextAction(session.NextActionInput{
 		RecordID:           "runtime-data-access-recovery-handoff",
 		Key:                key,
@@ -1043,35 +1114,19 @@ func TestRecoveryHandoffMaterializationSkipsMalformedApprovalNextAction(t *testi
 		t.Fatalf("RecordNextAction(malformed handoff) err = %v", err)
 	}
 	if _, err := store.RecordNextAction(session.NextActionInput{
-		RecordID:          "runtime-valid-recovery-handoff-behind-malformed",
-		Key:               key,
-		Owner:             "test",
-		State:             session.NextActionBlockedNeedsAuthority,
-		SubjectKind:       "continuation_lease_request",
-		SubjectRef:        "valid-child-wake",
-		RequiredAuthority: string(session.ContinuationLeaseClassChildWake),
-		ResourceBlocker:   "missing_continuation_lease",
-		NextAction:        "valid handoff",
-		OperationKind:     "continuation_lease_request",
-		OperationTool:     "request_approval",
-		OperationInputJSON: `{
-			"action":"request_continuation_lease",
-			"objective":"Wake child-alpha exactly once.",
-			"lease_class":"child_wake",
-			"principal":"telegram:1001",
-			"allowed_actions":["wake_named_child"],
-			"constraints":{"agent_id":"child-alpha"},
-			"tool":"durable_agent",
-			"tool_action":"wake_once",
-			"grant_id":"grant-child-alpha-wake",
-			"grant_target_resource":"durable_agent:child-alpha:wake_once",
-			"request_instance_id":"valid-child-alpha-request-1",
-			"agent_id":"child-alpha",
-			"recovery_contract":"aphelion.recovery_handoff.v1",
-			"recovery_operation_kind":"continuation_lease_request",
-			"retry_after_lease":true
-		}`,
-		CreatedAt: now.Add(time.Second),
+		RecordID:           "runtime-valid-recovery-handoff-behind-malformed",
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         "valid-child-wake",
+		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		NextAction:         "valid handoff",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: runtimeChildWakeApprovalRequestJSON(t, store, key, "child-alpha", "valid-child-alpha-request-1"),
+		CreatedAt:          now.Add(time.Second),
 	}); err != nil {
 		t.Fatalf("RecordNextAction(valid handoff) err = %v", err)
 	}
@@ -1147,21 +1202,7 @@ func TestRequestApprovalMaterializeRetriesAfterFailedDelivery(t *testing.T) {
 		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
 		key,
 		"request_approval",
-		json.RawMessage(`{
-			"action":"request_continuation_lease",
-			"objective":"Wake child-alpha exactly once.",
-			"lease_class":"child_wake",
-			"principal":"telegram:1001",
-			"allowed_actions":["wake_named_child"],
-			"constraints":{"agent_id":"child-alpha"},
-			"tool":"durable_agent",
-			"tool_action":"wake_once",
-			"grant_id":"grant-child-alpha-wake",
-			"grant_target_resource":"durable_agent:child-alpha:wake_once",
-			"request_instance_id":"test-child-alpha-delivery-retry-request-1",
-			"agent_id":"child-alpha",
-			"retry_after_lease":true
-		}`),
+		json.RawMessage(runtimeChildWakeApprovalRequestJSON(t, store, key, "child-alpha", "test-child-alpha-delivery-retry-request-1")),
 	); err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(request_approval) err = %v", err)
 	}
@@ -1255,22 +1296,7 @@ func TestRequestApprovalSameContractNewInstanceAfterConsumedDeliversNewCard(t *t
 	}
 	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
 	key := session.SessionKey{ChatID: 9046, UserID: 0, Scope: telegramDMScopeRef(9046)}
-	base := `{
-		"action":"request_continuation_lease",
-		"objective":"Wake child-alpha exactly once.",
-		"lease_class":"child_wake",
-		"principal":"telegram:1001",
-		"allowed_actions":["wake_named_child"],
-		"constraints":{"agent_id":"child-alpha"},
-		"tool":"durable_agent",
-		"tool_action":"wake_once",
-		"grant_id":"grant-child-alpha-wake",
-		"grant_target_resource":"durable_agent:child-alpha:wake_once",
-		"request_instance_id":"REQUEST_INSTANCE",
-		"agent_id":"child-alpha",
-		"retry_after_lease":true
-	}`
-	firstInput := json.RawMessage(strings.ReplaceAll(base, "REQUEST_INSTANCE", "repeat-contract-instance-1"))
+	firstInput := json.RawMessage(runtimeChildWakeApprovalRequestJSON(t, store, key, "child-alpha", "repeat-contract-instance-1"))
 	if _, err := tools.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "request_approval", firstInput); err != nil {
 		t.Fatalf("first request_approval err = %v", err)
 	}
@@ -1289,7 +1315,7 @@ func TestRequestApprovalSameContractNewInstanceAfterConsumedDeliversNewCard(t *t
 		t.Fatalf("UpdateContinuationState(consumed first) err = %v", err)
 	}
 
-	secondInput := json.RawMessage(strings.ReplaceAll(base, "REQUEST_INSTANCE", "repeat-contract-instance-2"))
+	secondInput := json.RawMessage(runtimeChildWakeApprovalRequestJSON(t, store, key, "child-alpha", "repeat-contract-instance-2"))
 	if _, err := tools.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "request_approval", secondInput); err != nil {
 		t.Fatalf("second request_approval err = %v", err)
 	}
@@ -1350,22 +1376,7 @@ func TestRequestApprovalSameContractNewInstanceAfterDeniedDeliversNewCard(t *tes
 	}
 	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
 	key := session.SessionKey{ChatID: 9047, UserID: 0, Scope: telegramDMScopeRef(9047)}
-	base := `{
-		"action":"request_continuation_lease",
-		"objective":"Wake child-beta exactly once.",
-		"lease_class":"child_wake",
-		"principal":"telegram:1001",
-		"allowed_actions":["wake_named_child"],
-		"constraints":{"agent_id":"child-beta"},
-		"tool":"durable_agent",
-		"tool_action":"wake_once",
-		"grant_id":"grant-child-beta-wake",
-		"grant_target_resource":"durable_agent:child-beta:wake_once",
-		"request_instance_id":"REQUEST_INSTANCE",
-		"agent_id":"child-beta",
-		"retry_after_lease":true
-	}`
-	firstInput := json.RawMessage(strings.ReplaceAll(base, "REQUEST_INSTANCE", "repeat-contract-denied-instance-1"))
+	firstInput := json.RawMessage(runtimeChildWakeApprovalRequestJSON(t, store, key, "child-beta", "repeat-contract-denied-instance-1"))
 	if _, err := tools.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "request_approval", firstInput); err != nil {
 		t.Fatalf("first request_approval err = %v", err)
 	}
@@ -1403,7 +1414,7 @@ func TestRequestApprovalSameContractNewInstanceAfterDeniedDeliversNewCard(t *tes
 		t.Fatalf("replayed denied operation = %#v, want denied projection without pending rewind", replayedOp)
 	}
 
-	secondInput := json.RawMessage(strings.ReplaceAll(base, "REQUEST_INSTANCE", "repeat-contract-denied-instance-2"))
+	secondInput := json.RawMessage(runtimeChildWakeApprovalRequestJSON(t, store, key, "child-beta", "repeat-contract-denied-instance-2"))
 	if _, err := tools.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "request_approval", secondInput); err != nil {
 		t.Fatalf("second request_approval err = %v", err)
 	}
@@ -1476,26 +1487,88 @@ func runtimePendingContinuationState(token string, class session.ContinuationLea
 	})
 }
 
-func runtimeChildWakeApprovalRequestJSON(agentID string, requestInstanceID string) string {
+func runtimeChildWakeApprovalRequestJSON(t *testing.T, store *session.SQLiteStore, key session.SessionKey, agentID string, requestInstanceID string) string {
+	t.Helper()
+
 	agentID = strings.TrimSpace(agentID)
 	requestInstanceID = strings.TrimSpace(requestInstanceID)
-	return `{
-		"action":"request_continuation_lease",
-		"objective":"Wake ` + agentID + ` exactly once.",
-		"lease_class":"child_wake",
-		"principal":"telegram:1001",
-		"allowed_actions":["wake_named_child"],
-		"constraints":{"agent_id":"` + agentID + `"},
-		"tool":"durable_agent",
-		"tool_action":"wake_once",
-		"grant_id":"grant-` + agentID + `-wake",
-		"grant_target_resource":"durable_agent:` + agentID + `:wake_once",
-		"request_instance_id":"` + requestInstanceID + `",
-		"agent_id":"` + agentID + `",
-		"recovery_contract":"aphelion.recovery_handoff.v1",
-		"recovery_operation_kind":"continuation_lease_request",
-		"retry_after_lease":true
-	}`
+	contract, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID:   requestInstanceID,
+		SessionID:           session.SessionIDForKey(key),
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, agentID, "grant-"+agentID+"-wake", "durable_agent", "wake_once", ""),
+		Principal:           "telegram:1001",
+		LeaseClass:          session.ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{"wake_named_child"},
+		Constraints:         map[string]string{"agent_id": agentID},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             agentID,
+		GrantID:             "grant-" + agentID + "-wake",
+		GrantTargetResource: "durable_agent:" + agentID + ":wake_once",
+		CreatedAt:           time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract(child_wake) err = %v", err)
+	}
+	contract, err = store.UpsertContinuationRecoveryContract(contract)
+	if err != nil {
+		t.Fatalf("UpsertContinuationRecoveryContract(child_wake) err = %v", err)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"action":                  "request_continuation_lease",
+		"contract_id":             contract.ContractID,
+		"objective":               "Wake " + agentID + " exactly once.",
+		"recovery_contract":       "aphelion.recovery_handoff.v1",
+		"recovery_operation_kind": "continuation_lease_request",
+	})
+	if err != nil {
+		t.Fatalf("marshal child_wake approval request err = %v", err)
+	}
+	return string(raw)
+}
+
+func runtimeDataAccessApprovalRequestJSON(t *testing.T, store *session.SQLiteStore, key session.SessionKey, requestInstanceID string, grantID string, resource string, toolName string) string {
+	t.Helper()
+
+	requestInstanceID = strings.TrimSpace(requestInstanceID)
+	grantID = strings.TrimSpace(grantID)
+	resource = strings.TrimSpace(resource)
+	toolName = strings.TrimSpace(toolName)
+	contract, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID:   requestInstanceID,
+		SessionID:           session.SessionIDForKey(key),
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassDataAccess, "", grantID, toolName, toolName, resource),
+		Principal:           "telegram:1001",
+		LeaseClass:          session.ContinuationLeaseClassDataAccess,
+		AllowedActions:      []string{"read_approved_resource"},
+		Constraints:         map[string]string{"capability_kind": string(session.CapabilityKindFileAccess), "grant_id": grantID, "grant_target_resource": resource, "operation": toolName, "resource": resource, "target_resource": resource, "tool": toolName, "tool_action": toolName},
+		Tool:                toolName,
+		ToolAction:          toolName,
+		GrantID:             grantID,
+		GrantTargetResource: resource,
+		Resource:            resource,
+		CreatedAt:           time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract(data_access) err = %v", err)
+	}
+	contract, err = store.UpsertContinuationRecoveryContract(contract)
+	if err != nil {
+		t.Fatalf("UpsertContinuationRecoveryContract(data_access) err = %v", err)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"action":                  "request_continuation_lease",
+		"contract_id":             contract.ContractID,
+		"objective":               "Read the approved resource once.",
+		"recovery_contract":       "aphelion.recovery_handoff.v1",
+		"recovery_operation_kind": "continuation_lease_request",
+	})
+	if err != nil {
+		t.Fatalf("marshal data_access approval request err = %v", err)
+	}
+	return string(raw)
 }
 
 func deliveredContinuationOfferCount(t *testing.T, store *session.SQLiteStore, key session.SessionKey) int {

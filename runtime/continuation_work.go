@@ -714,6 +714,9 @@ func approvedContinuationRetryOperation(state session.ContinuationState) (sessio
 	if !retry.Active() {
 		return session.ContinuationRetryOperation{}, false, nil
 	}
+	if strings.TrimSpace(lease.RecoveryContractID) == "" {
+		return session.ContinuationRetryOperation{}, false, fmt.Errorf("approved continuation retry requires recovery contract")
+	}
 	if retry.Contract != "aphelion.recovery_retry.v1" {
 		return session.ContinuationRetryOperation{}, false, fmt.Errorf("approved continuation retry operation has unsupported contract %q", retry.Contract)
 	}

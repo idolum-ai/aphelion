@@ -12,7 +12,7 @@ import (
 )
 
 const recoveryHandoffContractVersion = "aphelion.recovery_handoff.v1"
-const recoveryRetryContractVersion = "aphelion.recovery_retry.v1"
+const recoveryRetryContractVersion = session.ContinuationRecoveryRetryVersion
 
 type RecoveryTransitionSpec struct {
 	State         session.NextActionState
@@ -178,35 +178,14 @@ func compileRecoveryHandoffOperation(kind string, toolName string, payload map[s
 	return recoveryHandoffOperation{Kind: kind, Tool: toolName, InputJSON: string(raw)}, nil
 }
 
-func compileContinuationLeaseRecoveryHandoff(requirement missingContinuationLeaseRequirement) (recoveryHandoffOperation, error) {
-	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
-	if missingContinuationLeaseSubjectToken(requirement) == "" || requirement.Principal == "" || requirement.LeaseClass == "" {
-		return recoveryHandoffOperation{}, fmt.Errorf("incomplete continuation lease recovery handoff")
-	}
-	if err := validateContinuationRetryOperationForRequirement(requirement); err != nil {
-		return recoveryHandoffOperation{}, err
+func compileContinuationLeaseRecoveryHandoff(contract session.ContinuationRecoveryContract) (recoveryHandoffOperation, error) {
+	contract = session.NormalizeContinuationRecoveryContract(contract)
+	if strings.TrimSpace(contract.ContractID) == "" {
+		return recoveryHandoffOperation{}, fmt.Errorf("incomplete continuation recovery contract handoff")
 	}
 	payload := map[string]any{
-		"action":                "request_continuation_lease",
-		"lease_class":           string(requirement.LeaseClass),
-		"principal":             requirement.Principal,
-		"allowed_actions":       requirement.AllowedActions,
-		"constraints":           requirement.Constraints,
-		"tool":                  requirement.Tool,
-		"tool_action":           requirement.ToolAction,
-		"grant_id":              requirement.GrantID,
-		"grant_target_resource": requirement.GrantTargetResource,
-		"request_instance_id":   requirement.RequestInstanceID,
-		"retry_after_lease":     true,
-	}
-	if requirement.RetryOperation.Active() {
-		payload["retry_operation"] = requirement.RetryOperation
-	}
-	if requirement.AgentID != "" {
-		payload["agent_id"] = requirement.AgentID
-	}
-	if requirement.Resource != "" {
-		payload["resource"] = requirement.Resource
+		"action":      "request_continuation_lease",
+		"contract_id": contract.ContractID,
 	}
 	op, err := compileRecoveryHandoffOperation("continuation_lease_request", "request_approval", payload)
 	if err != nil {
@@ -270,8 +249,10 @@ func ValidateRecoveryHandoffToolInput(state session.NextActionState, toolName st
 		if requestApprovalActionToken(in.Action) != "request_continuation_lease" {
 			return fmt.Errorf("request_approval recovery handoff must request a continuation lease")
 		}
-		_, err := requestApprovalContinuationLeaseRequirement(in)
-		return err
+		if strings.TrimSpace(in.ContractID) == "" {
+			return fmt.Errorf("request_approval recovery handoff requires continuation recovery contract_id")
+		}
+		return nil
 	case "capability_authority":
 		var in capabilityInput
 		if err := decodeToolObjectInput(json.RawMessage(raw), &in, "capability_authority"); err != nil {

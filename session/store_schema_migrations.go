@@ -504,6 +504,7 @@ func ensureCurrentSchemaShapeRepairColumns(tx *sql.Tx) error {
 		{name: "next action operation columns", fn: ensureNextActionOperationColumns},
 		{name: "child task lease columns", fn: ensureChildTaskLeaseColumns},
 		{name: "review event idempotency key", fn: ensureReviewEventIdempotencyKey},
+		{name: "continuation recovery contracts", fn: ensureContinuationRecoveryContractTables},
 	}
 	for _, repair := range repairs {
 		if err := repair.fn(tx); err != nil {

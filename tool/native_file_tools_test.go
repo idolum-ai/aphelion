@@ -292,10 +292,9 @@ func TestNativeFileToolsUseActiveFileAccessGrantAsReadRoot(t *testing.T) {
 	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsAuthority || open[0].RequiredAuthority != string(session.ContinuationLeaseClassDataAccess) || open[0].ResourceBlocker != "missing_continuation_lease" {
 		t.Fatalf("open next actions = %#v, want data_access continuation lease blocker", open)
 	}
-	for _, want := range []string{`"action":"request_continuation_lease"`, `"lease_class":"data_access"`, `"tool":"list_dir"`, `"tool_action":"list_dir"`, `"grant_id":"capg-child-runtime-read"`} {
-		if !strings.Contains(open[0].OperationInputJSON, want) {
-			t.Fatalf("read lease blocker operation input = %s, want %s", open[0].OperationInputJSON, want)
-		}
+	contract := recoveryContractForWakeTest(t, store, open[0].OperationInputJSON)
+	if contract.LeaseClass != session.ContinuationLeaseClassDataAccess || contract.Tool != "list_dir" || contract.ToolAction != "list_dir" || contract.GrantID != "capg-child-runtime-read" {
+		t.Fatalf("read lease contract = %#v, want data_access list_dir bound to grant", contract)
 	}
 	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(target, "gogcli"))+`","full":true}`), scope, p, key)
 	if err == nil || !strings.Contains(err.Error(), "missing data_access continuation lease") || !strings.Contains(err.Error(), "lease request recorded") {
@@ -310,10 +309,11 @@ func TestNativeFileToolsUseActiveFileAccessGrantAsReadRoot(t *testing.T) {
 	}
 	seenActions := map[string]bool{}
 	for _, action := range open {
-		if strings.Contains(action.OperationInputJSON, `"tool_action":"list_dir"`) {
+		contract := recoveryContractForWakeTest(t, store, action.OperationInputJSON)
+		if contract.ToolAction == "list_dir" {
 			seenActions["list_dir"] = true
 		}
-		if strings.Contains(action.OperationInputJSON, `"tool_action":"read_file"`) {
+		if contract.ToolAction == "read_file" {
 			seenActions["read_file"] = true
 		}
 	}
@@ -375,10 +375,9 @@ func TestNativeFileToolsUseActiveFileAccessGrantAsReadRoot(t *testing.T) {
 	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsAuthority || open[0].RequiredAuthority != string(session.ContinuationLeaseClassLocalWorkspace) || open[0].ResourceBlocker != "missing_continuation_lease" {
 		t.Fatalf("open next actions = %#v, want local_workspace continuation lease blocker", open)
 	}
-	for _, want := range []string{`"lease_class":"local_workspace"`, `"tool":"write_file"`, `"tool_action":"write_file"`, `"grant_id":"capg-child-runtime-write"`} {
-		if !strings.Contains(open[0].OperationInputJSON, want) {
-			t.Fatalf("write lease blocker operation input = %s, want %s", open[0].OperationInputJSON, want)
-		}
+	contract = recoveryContractForWakeTest(t, store, open[0].OperationInputJSON)
+	if contract.LeaseClass != session.ContinuationLeaseClassLocalWorkspace || contract.Tool != "write_file" || contract.ToolAction != "write_file" || contract.GrantID != "capg-child-runtime-write" {
+		t.Fatalf("write lease contract = %#v, want local_workspace write_file bound to grant", contract)
 	}
 	out, err = registry.executeWithScopeAndPrincipal(ctx, "write_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(target, "config", "created.txt"))+`","content":"created under approved child slot","create_dirs":true}`), scope, p, key)
 	if err != nil {

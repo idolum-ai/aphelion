@@ -4,6 +4,7 @@ package session
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -2025,6 +2026,140 @@ func TestMigratesDraftSchemaV78ToV80ChildTaskLeases(t *testing.T) {
 	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_heartbeat_at")
 	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_released_at")
 	assertSQLiteColumn(t, store.db, "child_task_results", "lease_owner")
+}
+
+func TestMigratesSchemaV82ToV83ContinuationRecoveryContracts(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v82.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v82 db: %v", err)
+	}
+	key := SessionKey{ChatID: 9182, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "9182"}}
+	sessionID := SessionIDForKey(key)
+	validLegacy := `{
+		"action":"request_continuation_lease",
+		"lease_class":"child_wake",
+		"principal":"telegram:1001",
+		"allowed_actions":["wake_named_child"],
+		"constraints":{"agent_id":"child-alpha"},
+		"tool":"durable_agent",
+		"tool_action":"wake_once",
+		"grant_id":"grant-child-alpha-wake",
+		"grant_target_resource":"durable_agent:child-alpha:wake_once",
+		"request_instance_id":"migration-child-alpha-request-1",
+		"agent_id":"child-alpha",
+		"recovery_contract":"aphelion.recovery_handoff.v1",
+		"recovery_operation_kind":"continuation_lease_request",
+		"retry_after_lease":true
+	}`
+	malformedLegacy := `{"action":"request_continuation_lease","lease_class":"child_wake","request_instance_id":"bad"}`
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE next_action_records (
+			record_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			turn_run_id INTEGER NOT NULL DEFAULT 0,
+			owner TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL DEFAULT '',
+			subject_kind TEXT NOT NULL DEFAULT '',
+			subject_ref TEXT NOT NULL DEFAULT '',
+			causal_refs_json TEXT NOT NULL DEFAULT '[]',
+			next_action TEXT NOT NULL DEFAULT '',
+			required_authority TEXT NOT NULL DEFAULT '',
+			resource_blocker TEXT NOT NULL DEFAULT '',
+			verifier TEXT NOT NULL DEFAULT '',
+			retry_policy TEXT NOT NULL DEFAULT '',
+			operation_kind TEXT NOT NULL DEFAULT '',
+			operation_tool TEXT NOT NULL DEFAULT '',
+			operation_input_json TEXT NOT NULL DEFAULT '',
+			operator_projection TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			resolved_at TEXT
+		)`,
+		`INSERT INTO schema_version(version) VALUES (82)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v82 fixture: %v", err)
+		}
+	}
+	insertNextAction := func(recordID string, raw string, createdAt time.Time) {
+		t.Helper()
+		if _, err := db.Exec(`
+			INSERT INTO next_action_records(
+				record_id, session_id, chat_id, user_id, scope_kind, scope_id,
+				owner, state, subject_kind, subject_ref, next_action,
+				required_authority, resource_blocker, operation_kind, operation_tool,
+				operation_input_json, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+			recordID, sessionID, key.ChatID, key.UserID, string(key.Scope.Kind), key.Scope.ID,
+			"migration-test", string(NextActionBlockedNeedsAuthority), "continuation_lease_request", "child_wake:child-alpha", "approve child wake",
+			string(ContinuationLeaseClassChildWake), "missing_continuation_lease", "continuation_lease_request", "request_approval",
+			raw, createdAt.UTC().Format(time.RFC3339Nano),
+		); err != nil {
+			t.Fatalf("insert v82 next action %s: %v", recordID, err)
+		}
+	}
+	insertNextAction("legacy-valid-child-wake", validLegacy, time.Now().UTC().Add(-time.Minute))
+	insertNextAction("legacy-malformed-child-wake", malformedLegacy, time.Now().UTC())
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v82 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v82) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteTable(t, store.db, "continuation_recovery_contracts")
+
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].RecordID != "legacy-valid-child-wake" {
+		t.Fatalf("open migrated next actions = %#v, want only valid legacy handoff", open)
+	}
+	var projection map[string]any
+	if err := json.Unmarshal([]byte(open[0].OperationInputJSON), &projection); err != nil {
+		t.Fatalf("unmarshal migrated operation input: %v", err)
+	}
+	if projection["action"] != "request_continuation_lease" || strings.TrimSpace(fmt.Sprint(projection["contract_id"])) == "" {
+		t.Fatalf("migrated operation input = %#v, want contract projection", projection)
+	}
+	if _, ok := projection["lease_class"]; ok {
+		t.Fatalf("migrated operation input = %#v, want legacy lease fields removed", projection)
+	}
+	contractID := strings.TrimSpace(fmt.Sprint(projection["contract_id"]))
+	contract, ok, err := store.ContinuationRecoveryContract(contractID)
+	if err != nil {
+		t.Fatalf("ContinuationRecoveryContract(%q) err = %v", contractID, err)
+	}
+	if !ok {
+		t.Fatalf("ContinuationRecoveryContract(%q) ok=false", contractID)
+	}
+	if contract.RequestInstanceID != "migration-child-alpha-request-1" || contract.AgentID != "child-alpha" || contract.LeaseClass != ContinuationLeaseClassChildWake {
+		t.Fatalf("migrated contract = %#v, want exact child_wake contract", contract)
+	}
+
+	var resolvedAt sql.NullString
+	if err := store.db.QueryRow(`SELECT resolved_at FROM next_action_records WHERE record_id = ?`, "legacy-malformed-child-wake").Scan(&resolvedAt); err != nil {
+		t.Fatalf("query malformed legacy row: %v", err)
+	}
+	if !resolvedAt.Valid || strings.TrimSpace(resolvedAt.String) == "" {
+		t.Fatalf("malformed legacy row resolved_at = %#v, want terminalized", resolvedAt)
+	}
 }
 
 func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {
