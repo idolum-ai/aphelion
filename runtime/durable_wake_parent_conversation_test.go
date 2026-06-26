@@ -5,11 +5,14 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"github.com/idolum-ai/aphelion/core"
-	"github.com/idolum-ai/aphelion/tool/sandbox"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 func TestParentConversationAckSuppressedWhenChildQueuesConcreteReview(t *testing.T) {
@@ -127,6 +130,84 @@ func TestRunDurableAgentChildWakeProcessesPendingParentBeforeExternalCadence(t *
 	}
 	if len(provider.seenGovernorSystem) == 0 || !strings.Contains(strings.Join(provider.seenGovernorSystem, "\n"), "parent conversation wake") {
 		t.Fatalf("governor prompts = %#v, want parent conversation wake", provider.seenGovernorSystem)
+	}
+}
+
+func TestRunDurableAgentChildWakeDoesNotRebindParentAuthorityAdmission(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Processed pending parent guidance.\nREVIEW_STATUS: completed"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "child-authority-isolated",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Adapter:      "codex_image_generation",
+			PollInterval: "168h",
+		}},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Process one pending parent guidance item.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Run one no-content readiness check.", time.Now().UTC().Add(-time.Minute))
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agent.AgentID, StateJSON: raw}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	now := time.Now().UTC()
+	parentKey := session.SessionKey{ChatID: 9306, UserID: 1001, Scope: telegramDMScopeRef(9306)}
+	parentState := approvedReadOnlyContinuationStateForScopeTest("parent-child-wake-context", now)
+	parentState.ContinuationLease.ID = "lease-parent-child-wake-context"
+	parentState.ContinuationLease.LeaseClass = session.ContinuationLeaseClassChildWake
+	parentState.ContinuationLease.AllowedActions = []string{"wake_named_child"}
+	parentState.ContinuationLease.Constraints = map[string]string{"agent_id": agent.AgentID}
+	if err := store.UpdateContinuationState(parentKey, parentState); err != nil {
+		t.Fatalf("UpdateContinuationState(parent) err = %v", err)
+	}
+	ctx := toolpkg.WithExecutionAuthorityAdmission(context.Background(), session.ExecutionRunAuthority{
+		SessionID:           session.SessionIDForKey(parentKey),
+		ChatID:              parentKey.ChatID,
+		UserID:              parentKey.UserID,
+		Scope:               parentKey.Scope,
+		Principal:           "telegram:1001",
+		PrincipalRole:       "admin",
+		ExecutionSpecies:    "direct_continuation",
+		LeaseKind:           session.ExecutionAuthorityLeaseKindContinuation,
+		ContinuationLeaseID: parentState.ContinuationLease.ID,
+		LeaseStatus:         string(session.ContinuationLeaseStatusActive),
+		LeaseClass:          session.ContinuationLeaseClassChildWake,
+		LeaseAllowedActions: []string{"wake_named_child"},
+		LeaseConstraints:    map[string]string{"agent_id": agent.AgentID},
+		LeaseRemainingTurns: 1,
+		LeaseExpiresAt:      now.Add(time.Hour),
+		AdmittedAt:          now,
+	})
+
+	if err := rt.RunDurableAgentChildWake(ctx, agent.AgentID, now); err != nil {
+		t.Fatalf("RunDurableAgentChildWake() err = %v, want parent authority admission isolated from child turn", err)
+	}
+	if len(provider.seenGovernorSystem) == 0 {
+		t.Fatal("provider saw no governor prompts, want child wake turn to run")
 	}
 }
 

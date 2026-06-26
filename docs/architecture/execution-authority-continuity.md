@@ -93,6 +93,14 @@ direct approved continuation that remains on the ordinary turn path records
 turn. Tools still receive only the durable run identity and must reload the
 stored authority before acting.
 
+Raw execution-authority admission is one-shot. Once a turn monitor binds an
+admission to `execution_run_authority`, the running context carries only the
+durable run identity. Nested turns must not inherit the raw admission and bind
+the same lease again. A parent-approved `child_wake` continuation authorizes the
+`durable_agent.wake_once` tool invocation; the durable child turn that follows
+is a child-scoped turn and must not revalidate the parent lease against the
+child session's continuation state.
+
 ## Durable Child Turn Authorship
 
 Durable-child wakes use the same causal rule at a different layer: a child task

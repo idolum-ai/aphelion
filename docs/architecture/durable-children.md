@@ -62,6 +62,10 @@ Code anchors:
   action. If the capability grant exists but the lease is missing, the tool
   boundary records a `blocked_needs_authority` next action for the exact
   `child_wake` lease instead of treating the grant as execution authority.
+- The parent `child_wake` lease is consumed at the `durable_agent.wake_once`
+  tool boundary. The child wake turn that follows is child-scoped work; it does
+  not inherit the raw parent admission or parent tool invocation reference as
+  its own authority evidence.
 - Parent-conversation acknowledgements are message-ID explicit, and continuity
   updates are written transactionally so parent guidance, child review state, and
   wake bookkeeping do not overwrite each other under concurrent control-plane

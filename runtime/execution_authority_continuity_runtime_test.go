@@ -153,6 +153,60 @@ func TestStartTurnMonitorFailsRunWhenAuthorityBindingFails(t *testing.T) {
 	}
 }
 
+func TestStartTurnMonitorConsumesRawAuthorityAdmissionBeforeNestedTurn(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, &fakeProvider{}, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	now := time.Now().UTC()
+	parentKey := session.SessionKey{ChatID: 9304, UserID: 1001, Scope: telegramDMScopeRef(9304)}
+	parentState := approvedReadOnlyContinuationStateForScopeTest("nested-authority-parent", now)
+	parentState.ContinuationLease.ID = "lease-nested-authority-parent"
+	if err := store.UpdateContinuationState(parentKey, parentState); err != nil {
+		t.Fatalf("UpdateContinuationState(parent) err = %v", err)
+	}
+	ctx := toolpkg.WithExecutionAuthorityAdmission(context.Background(), session.ExecutionRunAuthority{
+		SessionID:           session.SessionIDForKey(parentKey),
+		ChatID:              parentKey.ChatID,
+		UserID:              parentKey.UserID,
+		Scope:               parentKey.Scope,
+		Principal:           "telegram:1001",
+		PrincipalRole:       string(principal.RoleAdmin),
+		ExecutionSpecies:    "direct_continuation",
+		LeaseKind:           session.ExecutionAuthorityLeaseKindContinuation,
+		ContinuationLeaseID: parentState.ContinuationLease.ID,
+		LeaseStatus:         string(session.ContinuationLeaseStatusActive),
+		LeaseClass:          parentState.ContinuationLease.LeaseClass,
+		LeaseAllowedActions: append([]string(nil), parentState.ContinuationLease.AllowedActions...),
+		LeaseRemainingTurns: parentState.ContinuationLease.RemainingTurns,
+		LeaseExpiresAt:      parentState.ContinuationLease.ExpiresAt,
+		AdmittedAt:          now,
+	})
+
+	parentMonitor, err := rt.startTurnMonitor(ctx, parentKey, session.TurnRunKindInteractive, "bind parent authority", nil, nil, core.InboundMessage{ChatID: parentKey.ChatID, SenderID: 1001})
+	if err != nil {
+		t.Fatalf("startTurnMonitor(parent) err = %v", err)
+	}
+	defer parentMonitor.Finish(parentMonitor.Context(), nil)
+	if admission, ok := toolpkg.ExecutionAuthorityAdmissionFromContext(parentMonitor.Context()); ok {
+		t.Fatalf("parent monitor context admission = %#v, want raw admission consumed", admission)
+	}
+	if _, ok := toolpkg.AuthorityUseRefFromContext(parentMonitor.Context()); !ok {
+		t.Fatal("parent monitor context missing durable authority use ref")
+	}
+
+	childKey := session.SessionKey{ChatID: 9305, UserID: 0, Scope: session.ScopeRef{Kind: session.ScopeKindDurableAgent, DurableAgentID: "child-nested-authority"}}
+	childMonitor, err := rt.startTurnMonitor(parentMonitor.Context(), childKey, session.TurnRunKindInteractive, "nested child turn", nil, nil, core.InboundMessage{ChatID: childKey.ChatID, SenderID: 0})
+	if err != nil {
+		t.Fatalf("startTurnMonitor(child) err = %v, want nested turn not to rebind parent authority", err)
+	}
+	childMonitor.Finish(childMonitor.Context(), nil)
+}
+
 func TestDurableGroupTurnDoesNotExposeParentToolAuthorityByDefault(t *testing.T) {
 	t.Parallel()
 

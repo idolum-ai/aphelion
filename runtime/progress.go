@@ -249,6 +249,7 @@ func (r *Runtime) bindExecutionRunAuthority(ctx context.Context, key session.Ses
 		SessionID: stored.SessionID,
 		TurnRunID: stored.TurnRunID,
 	}
+	ctx = toolpkg.WithoutExecutionAuthorityAdmission(ctx)
 	return toolpkg.WithAuthorityUseRef(ctx, ref), nil
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 	"github.com/idolum-ai/aphelion/turn"
 )
@@ -376,7 +377,8 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		return wrappedErr
 	}
 
-	turnResult, turnSummary, err := r.runDurableWakeConversation(turnCtx, agent, scope, key, plan, pendingParentConversation)
+	childTurnCtx := toolpkg.WithoutAuthorityUseRef(toolpkg.WithoutExecutionAuthorityAdmission(turnCtx))
+	turnResult, turnSummary, err := r.runDurableWakeConversation(childTurnCtx, agent, scope, key, plan, pendingParentConversation)
 	if err != nil {
 		r.recordExecutionEvent(key, core.ExecutionEventDurableWakeFailed, "durable", "failed", map[string]any{
 			"agent_id":       strings.TrimSpace(agent.AgentID),

@@ -463,6 +463,9 @@ func TestDirectContinuationApprovalBindsExecutionRunAuthority(t *testing.T) {
 	if !ok {
 		t.Fatal("AuthorityUseRefFromContext() ok=false, want direct continuation turn to carry durable run authority")
 	}
+	if admission, ok := toolpkg.ExecutionAuthorityAdmissionFromContext(recorder.ctx); ok {
+		t.Fatalf("ExecutionAuthorityAdmissionFromContext() = %#v, want raw admission consumed after run binding", admission)
+	}
 	if ref.SessionID != session.SessionIDForKey(key) || ref.TurnRunID == 0 || ref.ContinuationLeaseID != "" {
 		t.Fatalf("authority ref = %#v, want only durable run identity for session %q", ref, session.SessionIDForKey(key))
 	}
