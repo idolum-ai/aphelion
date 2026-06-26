@@ -97,9 +97,11 @@
       "action proposal continuation lease",
       "operator presentation contract"
     ],
-    "current_status": "implemented_first_slice",
+    "current_status": "migrating_typed_transition_contract",
     "always_on_anchors": [
-      "runtime/request_approval_runtime_test.go#TestRequestApprovalToolMaterializesVisibleContinuationWithCapabilityDependency"
+      "runtime/request_approval_runtime_test.go#TestRequestApprovalToolMaterializesVisibleContinuationWithCapabilityDependency",
+      "runtime/request_approval_runtime_test.go#TestRecoveryHandoffMaterializationCreatesChildWakeApprovalAndConsumableLease",
+      "tool/recovery_handoff_conformance_test.go#TestRecoveryTransitionSpecsValidateRepresentativeRecords"
     ],
     "ideal_invariant": "Every operator approval commits exactly one next durable state with owner, executable, blocker, verifier, or terminal reason.",
     "classification": "principle_debt",
@@ -118,9 +120,11 @@
       "capability delegation lane",
       "durable wake"
     ],
-    "current_status": "implemented_first_slice",
+    "current_status": "migrating_typed_transition_contract",
     "always_on_anchors": [
-      "runtime/capability_grant_wake_test.go#TestQueueCapabilityGrantWakeAddsParentConversation"
+      "runtime/capability_grant_wake_test.go#TestQueueCapabilityGrantWakeAddsParentConversation",
+      "tool/recovery_handoff_conformance_test.go#TestRecoveryHandoffMissingGrantActionIsExecutableAfterReview",
+      "tool/recovery_handoff_conformance_test.go#TestRecoveryTransitionSpecsValidateRepresentativeRecords"
     ],
     "ideal_invariant": "Grant activation records whether the next state is executable work, a resource blocker, a child task, or terminal notification.",
     "classification": "principle_debt",

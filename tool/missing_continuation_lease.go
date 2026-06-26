@@ -165,7 +165,7 @@ func (r *Registry) missingContinuationLeaseActionMatchesRequirement(key session.
 		strings.TrimSpace(action.OperationTool) != "request_approval" {
 		return false, nil
 	}
-	if err := validateRecoveryHandoffToolInput(action.State, action.OperationTool, action.OperationInputJSON); err != nil {
+	if err := ValidateRecoveryHandoffToolInput(action.State, action.OperationTool, action.OperationInputJSON); err != nil {
 		return false, nil
 	}
 	payload := map[string]any{}

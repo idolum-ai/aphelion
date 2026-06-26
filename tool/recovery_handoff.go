@@ -14,10 +14,150 @@ import (
 const recoveryHandoffContractVersion = "aphelion.recovery_handoff.v1"
 const recoveryRetryContractVersion = "aphelion.recovery_retry.v1"
 
+type RecoveryTransitionSpec struct {
+	State         session.NextActionState
+	OperationKind string
+	OperationTool string
+	Adapter       string
+	Executable    bool
+}
+
 type recoveryHandoffOperation struct {
 	Kind      string
 	Tool      string
 	InputJSON string
+}
+
+func RecoveryTransitionSpecs() []RecoveryTransitionSpec {
+	return []RecoveryTransitionSpec{
+		{
+			State:         session.NextActionBlockedNeedsAuthority,
+			OperationKind: "continuation_lease_request",
+			OperationTool: "request_approval",
+			Adapter:       "missing_continuation_lease",
+		},
+		{
+			State:         session.NextActionBlockedNeedsAuthority,
+			OperationKind: "capability_grant_review",
+			OperationTool: "capability_authority",
+			Adapter:       "missing_capability_grant",
+		},
+		{
+			State:         session.NextActionReadyToExecute,
+			OperationKind: "system_log_read",
+			OperationTool: "system_log_read",
+			Adapter:       "typed_shell_alternative",
+			Executable:    true,
+		},
+		{
+			State:         session.NextActionReadyToExecute,
+			OperationKind: "native_file_read",
+			OperationTool: "read_file",
+			Adapter:       "typed_shell_alternative",
+			Executable:    true,
+		},
+		{
+			State:         session.NextActionReadyToExecute,
+			OperationKind: "native_directory_list",
+			OperationTool: "list_dir",
+			Adapter:       "typed_shell_alternative",
+			Executable:    true,
+		},
+		{
+			State:         session.NextActionReadyToExecute,
+			OperationKind: "confined_git_inspection",
+			OperationTool: "exec",
+			Adapter:       "typed_shell_alternative",
+			Executable:    true,
+		},
+		{
+			State:         session.NextActionReadyToExecute,
+			OperationKind: "validation_command",
+			OperationTool: "exec",
+			Adapter:       "typed_shell_alternative",
+			Executable:    true,
+		},
+		{
+			State:         session.NextActionWaitingForOperator,
+			OperationKind: "native_file_read",
+			OperationTool: "read_file",
+			Adapter:       "typed_shell_alternative",
+		},
+		{
+			State:         session.NextActionWaitingForOperator,
+			OperationKind: "native_directory_list",
+			OperationTool: "list_dir",
+			Adapter:       "typed_shell_alternative",
+		},
+		{
+			State:         session.NextActionWaitingForOperator,
+			OperationKind: "native_text_search",
+			OperationTool: "search",
+			Adapter:       "typed_shell_alternative",
+		},
+		{
+			State:         session.NextActionWaitingForOperator,
+			OperationKind: "typed_operation_required",
+			OperationTool: "update_operation",
+			Adapter:       "operator_rewrite",
+		},
+		{
+			State:         session.NextActionWaitingForOperator,
+			OperationKind: "split_effect_plan",
+			OperationTool: "update_operation",
+			Adapter:       "operator_rewrite",
+		},
+		{
+			State:         session.NextActionWaitingForOperator,
+			OperationKind: "typed_repair_operation",
+			OperationTool: "update_operation",
+			Adapter:       "operator_rewrite",
+		},
+	}
+}
+
+func ValidateRecoveryTransitionRecord(action session.NextActionRecord) error {
+	action.State = session.NormalizeNextActionState(action.State)
+	action.OperationKind = normalizeShellAlternativeToken(action.OperationKind)
+	action.OperationTool = strings.TrimSpace(action.OperationTool)
+	if action.OperationTool == "" || action.OperationKind == "" {
+		return fmt.Errorf("recovery transition requires operation tool and kind")
+	}
+	spec, ok := recoveryTransitionSpec(action.State, action.OperationTool, action.OperationKind)
+	if !ok {
+		return fmt.Errorf("unsupported recovery transition state=%s tool=%s kind=%s", action.State, action.OperationTool, action.OperationKind)
+	}
+	if !spec.Executable && action.State != session.NextActionBlockedNeedsAuthority {
+		return validateAdvisoryRecoveryTransitionInput(action.OperationInputJSON)
+	}
+	return ValidateRecoveryHandoffToolInput(action.State, action.OperationTool, action.OperationInputJSON)
+}
+
+func recoveryTransitionSpec(state session.NextActionState, toolName string, operationKind string) (RecoveryTransitionSpec, bool) {
+	state = session.NormalizeNextActionState(state)
+	toolName = strings.TrimSpace(toolName)
+	operationKind = normalizeShellAlternativeToken(operationKind)
+	for _, spec := range RecoveryTransitionSpecs() {
+		if spec.State == state && spec.OperationTool == toolName && spec.OperationKind == operationKind {
+			return spec, true
+		}
+	}
+	return RecoveryTransitionSpec{}, false
+}
+
+func validateAdvisoryRecoveryTransitionInput(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fmt.Errorf("advisory recovery transition requires operation input")
+	}
+	payload := map[string]any{}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return fmt.Errorf("decode advisory recovery transition input: %w", err)
+	}
+	if strings.TrimSpace(fmt.Sprint(payload["recovery_contract"])) != recoveryHandoffContractVersion {
+		return fmt.Errorf("advisory recovery transition requires %s contract", recoveryHandoffContractVersion)
+	}
+	return nil
 }
 
 func compileRecoveryHandoffOperation(kind string, toolName string, payload map[string]any) (recoveryHandoffOperation, error) {
@@ -72,7 +212,7 @@ func compileContinuationLeaseRecoveryHandoff(requirement missingContinuationLeas
 	if err != nil {
 		return recoveryHandoffOperation{}, err
 	}
-	if err := validateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, op.Tool, op.InputJSON); err != nil {
+	if err := ValidateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, op.Tool, op.InputJSON); err != nil {
 		return recoveryHandoffOperation{}, err
 	}
 	return op, nil
@@ -98,7 +238,7 @@ func compileCapabilityGrantRecoveryHandoff(request session.CapabilityRequest, re
 	if err != nil {
 		return recoveryHandoffOperation{}, err
 	}
-	if err := validateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, op.Tool, op.InputJSON); err != nil {
+	if err := ValidateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, op.Tool, op.InputJSON); err != nil {
 		return recoveryHandoffOperation{}, err
 	}
 	return op, nil
@@ -115,7 +255,7 @@ func shellAlternativePayload(input map[string]any) map[string]any {
 	return out
 }
 
-func validateRecoveryHandoffToolInput(state session.NextActionState, toolName string, raw string) error {
+func ValidateRecoveryHandoffToolInput(state session.NextActionState, toolName string, raw string) error {
 	toolName = strings.TrimSpace(toolName)
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

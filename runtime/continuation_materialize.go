@@ -12,6 +12,7 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 	"github.com/idolum-ai/aphelion/turn"
 )
 
@@ -485,7 +486,22 @@ func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context
 		return false, err
 	}
 	for _, action := range actions {
-		if !recoveryApprovalNextActionConsumable(action) {
+		consumable, invalid := recoveryApprovalNextActionConsumable(action)
+		if invalid {
+			if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+				RecordID:    action.RecordID,
+				Key:         key,
+				Owner:       "runtime",
+				SubjectKind: action.SubjectKind,
+				SubjectRef:  action.SubjectRef,
+				Reason:      "invalid_recovery_handoff",
+				ResolvedAt:  now,
+			}); err != nil {
+				return false, fmt.Errorf("resolve invalid recovery approval handoff %s: %w", action.RecordID, err)
+			}
+			continue
+		}
+		if !consumable {
 			continue
 		}
 		if _, err := tools.Execute(ctx, "request_approval", json.RawMessage(action.OperationInputJSON)); err != nil {
@@ -517,27 +533,31 @@ func (r *Runtime) recoveryApprovalMaterializationActor(msg core.InboundMessage) 
 	return actor, true
 }
 
-func recoveryApprovalNextActionConsumable(action session.NextActionRecord) bool {
+func recoveryApprovalNextActionConsumable(action session.NextActionRecord) (bool, bool) {
 	if action.State != session.NextActionBlockedNeedsAuthority {
-		return false
+		return false, false
 	}
 	if strings.TrimSpace(action.SubjectKind) != "continuation_lease_request" {
-		return false
+		return false, false
 	}
 	if strings.TrimSpace(action.ResourceBlocker) != "missing_continuation_lease" {
-		return false
+		return false, false
 	}
 	if strings.TrimSpace(action.OperationTool) != "request_approval" || strings.TrimSpace(action.OperationKind) != "continuation_lease_request" {
-		return false
+		return false, false
 	}
 	if strings.TrimSpace(action.OperationInputJSON) == "" {
-		return false
+		return false, true
+	}
+	if err := toolpkg.ValidateRecoveryTransitionRecord(action); err != nil {
+		return false, true
 	}
 	var input recoveryApprovalHandoffInput
 	if err := json.Unmarshal([]byte(action.OperationInputJSON), &input); err != nil {
-		return false
+		return false, true
 	}
-	return recoveryApprovalHandoffInputConsumable(input)
+	consumable := recoveryApprovalHandoffInputConsumable(input)
+	return consumable, !consumable
 }
 
 func recoveryApprovalHandoffInputConsumable(input recoveryApprovalHandoffInput) bool {

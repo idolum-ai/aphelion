@@ -54,6 +54,27 @@ The execution-authority spine is:
    approval compiler, and then renders the approval card. It does not auto-grant
    the lease or execute unrelated next actions.
 
+Recovery transitions are the navigable graph between these stops. A transition
+is not just a message; it is a `next_action_record` whose state, subject,
+operation kind, operation tool, operation input, authority/evidence requirement,
+retry policy, causal refs, and operator projection compile against a known local
+adapter. The center enforces the shape and lifecycle of the transition. Domain
+adapters own the behavior: missing grants, missing leases, bounded verification,
+child results, resource repair, and typed shell alternatives each consume their
+own contracts.
+
+Malformed or legacy recovery rows must not wedge a session. If a row claims a
+known operation but fails the shared contract, runtime resolves that record as an
+invalid handoff and continues to later valid rows. If a row is valid and
+consumed, the adapter must resolve, advance, or terminalize the transition.
+
+Recovery projections are audience-facing views of the transition, not authority
+or evidence themselves. `workflow.next_state` payloads, operator projections,
+and recovery handoff messages must be built from safe structured fields or
+protected evidence references. A ready-to-execute transition whose executable
+operands are redacted is downgraded to operator rewrite rather than preserving a
+non-hydratable operation.
+
 Context may select durable run authority, but it may not manufacture authority.
 Durable state remains canonical.
 

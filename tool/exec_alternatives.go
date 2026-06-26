@@ -35,7 +35,7 @@ func (r *Registry) recordRejectedShellAlternative(ctx context.Context, key sessi
 	}
 	alt := typedAlternativeForRejectedShell(command, rawWorkdir, workingRoot, plan, cause)
 	if alt.State == session.NextActionReadyToExecute {
-		if err := validateRecoveryHandoffToolInput(alt.State, alt.OperationTool, alt.OperationInputJSON); err != nil {
+		if err := ValidateRecoveryHandoffToolInput(alt.State, alt.OperationTool, alt.OperationInputJSON); err != nil {
 			alt = invalidReadyShellAlternative(command, plan, cause, err)
 		}
 	}

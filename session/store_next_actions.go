@@ -174,22 +174,37 @@ func resolveNextActionTx(tx *sql.Tx, input NextActionResolutionInput) error {
 	if resolvedAt.IsZero() {
 		resolvedAt = time.Now().UTC()
 	}
-	result, err := tx.Exec(`
-		UPDATE next_action_records
-		SET resolved_at = ?
-		WHERE session_id = ?
-			AND subject_kind = ?
-			AND subject_ref = ?
-			AND resolved_at IS NULL
-	`, resolvedAt.Format(time.RFC3339Nano), sessionID, input.SubjectKind, input.SubjectRef)
+	var (
+		result sql.Result
+		err    error
+	)
+	if input.RecordID != "" {
+		result, err = tx.Exec(`
+			UPDATE next_action_records
+			SET resolved_at = ?
+			WHERE session_id = ?
+				AND record_id = ?
+				AND resolved_at IS NULL
+		`, resolvedAt.Format(time.RFC3339Nano), sessionID, input.RecordID)
+	} else {
+		result, err = tx.Exec(`
+			UPDATE next_action_records
+			SET resolved_at = ?
+			WHERE session_id = ?
+				AND subject_kind = ?
+				AND subject_ref = ?
+				AND resolved_at IS NULL
+		`, resolvedAt.Format(time.RFC3339Nano), sessionID, input.SubjectKind, input.SubjectRef)
+	}
 	if err != nil {
-		return fmt.Errorf("resolve next action %s/%s: %w", input.SubjectKind, input.SubjectRef, err)
+		return fmt.Errorf("resolve next action %s/%s/%s: %w", input.RecordID, input.SubjectKind, input.SubjectRef, err)
 	}
 	changed, _ := result.RowsAffected()
 	if changed == 0 {
 		return nil
 	}
 	payloadRaw, _ := json.Marshal(map[string]any{
+		"record_id":    input.RecordID,
 		"owner":        input.Owner,
 		"state":        string(NextActionTerminal),
 		"subject_kind": input.SubjectKind,

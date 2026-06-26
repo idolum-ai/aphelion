@@ -72,6 +72,7 @@ type NextActionInput struct {
 }
 
 type NextActionResolutionInput struct {
+	RecordID    string
 	Key         SessionKey
 	Owner       string
 	SubjectKind string
@@ -121,6 +122,7 @@ func NormalizeNextActionInput(input NextActionInput) NextActionInput {
 }
 
 func NormalizeNextActionResolutionInput(input NextActionResolutionInput) NextActionResolutionInput {
+	input.RecordID = strings.TrimSpace(input.RecordID)
 	input.Owner = strings.TrimSpace(input.Owner)
 	input.SubjectKind = normalizeEnumValue(input.SubjectKind)
 	input.SubjectRef = strings.TrimSpace(input.SubjectRef)

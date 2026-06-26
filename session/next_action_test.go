@@ -5,6 +5,7 @@ package session
 import (
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -60,6 +61,115 @@ func TestRecordNextActionResolvesPriorOpenActionForSameSubject(t *testing.T) {
 	}
 	if len(events) != 2 || events[0].EventType != "workflow.next_state" || events[1].EventType != "workflow.next_state" {
 		t.Fatalf("next-action events = %#v, want two workflow.next_state events", events)
+	}
+}
+
+func TestResolveNextActionByRecordIDLeavesSameSubjectSuccessorOpen(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	key := SessionKey{ChatID: 91009, UserID: 1001}
+	if _, err := store.RecordNextAction(NextActionInput{
+		RecordID:           "invalid-recovery-row",
+		Key:                key,
+		Owner:              "test",
+		State:              NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         "child_wake:child-alpha",
+		NextAction:         "invalid legacy handoff",
+		RequiredAuthority:  "child_wake",
+		ResourceBlocker:    "missing_continuation_lease",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: `{"action":"request_continuation_lease","lease_class":"child_wake","request_instance_id":"bad"}`,
+		CreatedAt:          time.Date(2026, 6, 24, 10, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(invalid) err = %v", err)
+	}
+	if _, err := store.RecordNextAction(NextActionInput{
+		RecordID:           "valid-recovery-row",
+		Key:                key,
+		Owner:              "test",
+		State:              NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         "child_wake:child-alpha-valid",
+		NextAction:         "valid handoff",
+		RequiredAuthority:  "child_wake",
+		ResourceBlocker:    "missing_continuation_lease",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: `{"action":"request_continuation_lease","lease_class":"child_wake","request_instance_id":"good"}`,
+		CreatedAt:          time.Date(2026, 6, 24, 10, 1, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(valid) err = %v", err)
+	}
+	if err := store.ResolveNextAction(NextActionResolutionInput{
+		RecordID:    "invalid-recovery-row",
+		Key:         key,
+		Owner:       "test",
+		SubjectKind: "continuation_lease_request",
+		SubjectRef:  "child_wake:child-alpha-valid",
+		Reason:      "invalid_recovery_handoff",
+		ResolvedAt:  time.Date(2026, 6, 24, 10, 2, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("ResolveNextAction(record_id) err = %v", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].RecordID != "valid-recovery-row" {
+		t.Fatalf("open next actions = %#v, want only valid same-subject row", open)
+	}
+}
+
+func TestRecordNextActionProjectsSensitiveRecoveryText(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	key := SessionKey{ChatID: 91010, UserID: 1001}
+	rawSecret := "sk-secret-do-not-leak"
+	record, err := store.RecordNextAction(NextActionInput{
+		RecordID:           "sensitive-ready-recovery",
+		Key:                key,
+		Owner:              "test",
+		State:              NextActionReadyToExecute,
+		SubjectKind:        "shell_rejection",
+		SubjectRef:         "command-hash-sensitive",
+		NextAction:         "read " + rawSecret,
+		RequiredAuthority:  "file_read",
+		OperationKind:      "native_file_read",
+		OperationTool:      "read_file",
+		OperationInputJSON: `{"path":"/tmp/` + rawSecret + `"}`,
+		OperatorProjection: "Inspect /tmp/" + rawSecret,
+		CreatedAt:          time.Date(2026, 6, 24, 10, 3, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("RecordNextAction() err = %v", err)
+	}
+	if record.State != NextActionWaitingForOperator || record.OperationTool != "update_operation" {
+		t.Fatalf("record = %#v, want redacted ready operation downgraded to operator rewrite", record)
+	}
+	for _, text := range []string{record.NextAction, record.OperatorProjection, record.OperationInputJSON} {
+		if strings.Contains(text, rawSecret) {
+			t.Fatalf("record leaked sensitive recovery text: %q", text)
+		}
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 10)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if len(events) != 1 || events[0].EventType != "workflow.next_state" {
+		t.Fatalf("events = %#v, want one workflow.next_state event", events)
+	}
+	if strings.Contains(events[0].PayloadJSON, rawSecret) {
+		t.Fatalf("workflow.next_state payload leaked sensitive recovery text: %s", events[0].PayloadJSON)
 	}
 }
 

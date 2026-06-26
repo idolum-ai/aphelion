@@ -309,7 +309,7 @@ func TestDurableAgentWakeOnceRefreshesStaleLeaseRequestAction(t *testing.T) {
 		t.Fatalf("open record id = %q, want legacy record superseded", open[0].RecordID)
 	}
 	assertRecoveryRequestInstanceForWakeTest(t, open[0].OperationInputJSON, true)
-	if err := validateRecoveryHandoffToolInput(open[0].State, open[0].OperationTool, open[0].OperationInputJSON); err != nil {
+	if err := ValidateRecoveryHandoffToolInput(open[0].State, open[0].OperationTool, open[0].OperationInputJSON); err != nil {
 		t.Fatalf("validate refreshed recovery handoff err = %v", err)
 	}
 
@@ -476,7 +476,7 @@ func TestDurableAgentWakeOnceRefreshesMalformedLeaseRequestActions(t *testing.T)
 				t.Fatalf("open matching actions = %#v, legacy = %#v, want refreshed singleton", open, legacy)
 			}
 			assertRecoveryRequestInstanceForWakeTest(t, open[0].OperationInputJSON, true)
-			if err := validateRecoveryHandoffToolInput(open[0].State, open[0].OperationTool, open[0].OperationInputJSON); err != nil {
+			if err := ValidateRecoveryHandoffToolInput(open[0].State, open[0].OperationTool, open[0].OperationInputJSON); err != nil {
 				t.Fatalf("validate refreshed recovery handoff err = %v", err)
 			}
 		})
@@ -1118,7 +1118,7 @@ func TestMissingContinuationLeaseRefreshesStaleDataAccessAction(t *testing.T) {
 		t.Fatalf("open matching actions = %#v, legacy = %#v, want refreshed singleton", open, legacy)
 	}
 	assertRecoveryRequestInstanceForWakeTest(t, open[0].OperationInputJSON, true)
-	if err := validateRecoveryHandoffToolInput(open[0].State, open[0].OperationTool, open[0].OperationInputJSON); err != nil {
+	if err := ValidateRecoveryHandoffToolInput(open[0].State, open[0].OperationTool, open[0].OperationInputJSON); err != nil {
 		t.Fatalf("validate refreshed data_access handoff err = %v", err)
 	}
 

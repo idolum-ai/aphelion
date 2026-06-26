@@ -665,8 +665,8 @@ func TestRecoveryHandoffMaterializationSkipsMalformedApprovalNextAction(t *testi
 			foundValid = true
 		}
 	}
-	if !foundMalformed || foundValid {
-		t.Fatalf("open actions = %#v, want malformed left open and valid resolved", open)
+	if foundMalformed || foundValid {
+		t.Fatalf("open actions = %#v, want malformed terminalized and valid resolved", open)
 	}
 	sender.mu.Lock()
 	inlineCount := len(sender.inline)

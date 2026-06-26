@@ -209,11 +209,11 @@ func TestRecoveryHandoffCompilersProduceConsumerValidatedPayloads(t *testing.T) 
 	if leaseOp.Tool != "request_approval" || leaseOp.Kind != "continuation_lease_request" {
 		t.Fatalf("lease operation = %#v, want request_approval continuation lease request", leaseOp)
 	}
-	if err := validateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, leaseOp.Tool, leaseOp.InputJSON); err != nil {
+	if err := ValidateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, leaseOp.Tool, leaseOp.InputJSON); err != nil {
 		t.Fatalf("validate lease operation err = %v", err)
 	}
 	mutatedLease := strings.Replace(leaseOp.InputJSON, `"agent_id":"child-alpha"`, `"agent_id":"child-beta"`, 1)
-	if err := validateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, leaseOp.Tool, mutatedLease); err == nil {
+	if err := ValidateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, leaseOp.Tool, mutatedLease); err == nil {
 		t.Fatal("validate mutated lease operation err = nil, want agent constraint rejection")
 	}
 
@@ -232,18 +232,18 @@ func TestRecoveryHandoffCompilersProduceConsumerValidatedPayloads(t *testing.T) 
 	if grantOp.Tool != "capability_authority" || grantOp.Kind != "capability_grant_review" {
 		t.Fatalf("grant operation = %#v, want capability_authority grant review", grantOp)
 	}
-	if err := validateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, grantOp.Tool, grantOp.InputJSON); err != nil {
+	if err := ValidateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, grantOp.Tool, grantOp.InputJSON); err != nil {
 		t.Fatalf("validate grant operation err = %v", err)
 	}
 	mutatedGrant := strings.Replace(grantOp.InputJSON, `"request_id":"`+grantReq.RequestID+`"`, `"request_id":""`, 1)
-	if err := validateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, grantOp.Tool, mutatedGrant); err == nil {
+	if err := ValidateRecoveryHandoffToolInput(session.NextActionBlockedNeedsAuthority, grantOp.Tool, mutatedGrant); err == nil {
 		t.Fatal("validate mutated grant operation err = nil, want missing request rejection")
 	}
 
-	if err := validateRecoveryHandoffToolInput(session.NextActionReadyToExecute, "update_operation", `{"merge":true}`); err == nil {
+	if err := ValidateRecoveryHandoffToolInput(session.NextActionReadyToExecute, "update_operation", `{"merge":true}`); err == nil {
 		t.Fatal("ready update_operation validation err = nil, want advisory-only rejection")
 	}
-	if err := validateRecoveryHandoffToolInput(session.NextActionReadyToExecute, "not_a_tool", `{"ok":true}`); err == nil {
+	if err := ValidateRecoveryHandoffToolInput(session.NextActionReadyToExecute, "not_a_tool", `{"ok":true}`); err == nil {
 		t.Fatal("ready unknown tool validation err = nil, want executable tool rejection")
 	}
 	for _, raw := range []string{
@@ -253,11 +253,11 @@ func TestRecoveryHandoffCompilersProduceConsumerValidatedPayloads(t *testing.T) 
 		`{"unit":""}`,
 		`{"unit":"   "}`,
 	} {
-		if err := validateRecoveryHandoffToolInput(session.NextActionReadyToExecute, "system_log_read", raw); err == nil {
+		if err := ValidateRecoveryHandoffToolInput(session.NextActionReadyToExecute, "system_log_read", raw); err == nil {
 			t.Fatalf("validate system_log_read input %s err = nil, want non-empty string unit rejection", raw)
 		}
 	}
-	if err := validateRecoveryHandoffToolInput(session.NextActionReadyToExecute, "system_log_read", `{"unit":"aphelion.service"}`); err != nil {
+	if err := ValidateRecoveryHandoffToolInput(session.NextActionReadyToExecute, "system_log_read", `{"unit":"aphelion.service"}`); err != nil {
 		t.Fatalf("validate system_log_read valid unit err = %v", err)
 	}
 }
@@ -271,22 +271,92 @@ func TestRecoveryHandoffExecutableConsumersAreRegisteredTools(t *testing.T) {
 	for _, def := range defs {
 		registered[strings.TrimSpace(def.Name)] = true
 	}
-	for _, toolName := range []string{
-		"request_approval",
-		"capability_authority",
-		"read_file",
-		"list_dir",
-		"search",
-		"exec",
-		"system_log_read",
-		"update_operation",
-	} {
-		if !registered[toolName] {
-			t.Fatalf("registered tool definitions = %#v, want recovery handoff consumer %q", registered, toolName)
+	for _, spec := range RecoveryTransitionSpecs() {
+		if strings.TrimSpace(spec.Adapter) == "" {
+			t.Fatalf("recovery transition spec = %#v, want owning adapter", spec)
+		}
+		if !registered[spec.OperationTool] {
+			t.Fatalf("registered tool definitions = %#v, want recovery transition consumer %q for %#v", registered, spec.OperationTool, spec)
 		}
 	}
 	if registered["durable_child_repair"] || registered["durable_child_continuation"] {
 		t.Fatalf("registered tool definitions = %#v, do not want placeholder durable child recovery consumers", registered)
+	}
+}
+
+func TestRecoveryTransitionSpecsValidateRepresentativeRecords(t *testing.T) {
+	t.Parallel()
+
+	for _, spec := range RecoveryTransitionSpecs() {
+		raw := representativeRecoveryTransitionInput(t, spec)
+		action := session.NextActionRecord{
+			State:              spec.State,
+			SubjectKind:        "recovery_transition",
+			SubjectRef:         strings.Join([]string{spec.Adapter, spec.OperationTool, spec.OperationKind}, ":"),
+			OperationKind:      spec.OperationKind,
+			OperationTool:      spec.OperationTool,
+			OperationInputJSON: raw,
+		}
+		if err := ValidateRecoveryTransitionRecord(action); err != nil {
+			t.Fatalf("ValidateRecoveryTransitionRecord(%#v) err = %v input=%s", spec, err, raw)
+		}
+	}
+}
+
+func representativeRecoveryTransitionInput(t *testing.T, spec RecoveryTransitionSpec) string {
+	t.Helper()
+
+	switch spec.OperationTool {
+	case "request_approval":
+		return `{
+			"action":"request_continuation_lease",
+			"lease_class":"child_wake",
+			"principal":"telegram:1001",
+			"allowed_actions":["wake_named_child"],
+			"constraints":{"agent_id":"child-alpha"},
+			"tool":"durable_agent",
+			"tool_action":"wake_once",
+			"grant_id":"grant-child-alpha-wake",
+			"grant_target_resource":"durable_agent:child-alpha:wake_once",
+			"request_instance_id":"spec-child-alpha-request-1",
+			"agent_id":"child-alpha",
+			"recovery_contract":"aphelion.recovery_handoff.v1",
+			"recovery_operation_kind":"continuation_lease_request",
+			"retry_after_lease":true
+		}`
+	case "capability_authority":
+		return `{
+			"action":"grant_set",
+			"request_id":"capability-request-spec",
+			"kind":"generic_delegation",
+			"target_resource":"durable_agent:child-alpha:wake_once",
+			"principal":"telegram:1001",
+			"allowed_actions":["invoke"],
+			"contract":{"bounded_effect":"wake child-alpha once"},
+			"constraints":{"agent_id":"child-alpha"},
+			"grant_status":"active",
+			"recovery_contract":"aphelion.recovery_handoff.v1",
+			"recovery_operation_kind":"capability_grant_review",
+			"retry_after_grant":true
+		}`
+	case "read_file":
+		return `{"path":"README.md","recovery_contract":"aphelion.recovery_handoff.v1"}`
+	case "list_dir":
+		return `{"path":".","limit":50,"recovery_contract":"aphelion.recovery_handoff.v1"}`
+	case "search":
+		return `{"query":"Aphelion","path":".","limit":20,"recovery_contract":"aphelion.recovery_handoff.v1"}`
+	case "system_log_read":
+		return `{"unit":"aphelion.service","limit":50,"recovery_contract":"aphelion.recovery_handoff.v1"}`
+	case "exec":
+		if spec.OperationKind == "validation_command" {
+			return `{"command":"go test ./tool","recovery_contract":"aphelion.recovery_handoff.v1"}`
+		}
+		return `{"command":"git status --short","recovery_contract":"aphelion.recovery_handoff.v1"}`
+	case "update_operation":
+		return `{"merge":true,"recovery_contract":"aphelion.recovery_handoff.v1","recovery_handoff":{"contract":"aphelion.recovery_handoff.v1","operation_kind":"` + spec.OperationKind + `","operation_tool":"update_operation"}}`
+	default:
+		t.Fatalf("no representative input for recovery transition spec %#v", spec)
+		return ""
 	}
 }
 
@@ -447,7 +517,7 @@ func TestRecoveryHandoffChildWakeSequenceMatchesLiveFailureOrder(t *testing.T) {
 		t.Fatalf("first wake err = %v, want missing grant", err)
 	}
 	grantAction := singleOpenRecoveryAction(t, store, key, session.NextActionBlockedNeedsAuthority, "capability_authority")
-	if err := validateRecoveryHandoffToolInput(grantAction.State, grantAction.OperationTool, grantAction.OperationInputJSON); err != nil {
+	if err := ValidateRecoveryHandoffToolInput(grantAction.State, grantAction.OperationTool, grantAction.OperationInputJSON); err != nil {
 		t.Fatalf("validate grant action err = %v", err)
 	}
 	requestID := strings.TrimSpace(fmt.Sprint(nextActionInputMapForRecovery(t, grantAction)["request_id"]))
@@ -481,7 +551,7 @@ func TestRecoveryHandoffChildWakeSequenceMatchesLiveFailureOrder(t *testing.T) {
 		t.Fatalf("second wake err = %v, want missing child_wake lease", err)
 	}
 	leaseAction := singleOpenRecoveryAction(t, store, key, session.NextActionBlockedNeedsAuthority, "request_approval")
-	if err := validateRecoveryHandoffToolInput(leaseAction.State, leaseAction.OperationTool, leaseAction.OperationInputJSON); err != nil {
+	if err := ValidateRecoveryHandoffToolInput(leaseAction.State, leaseAction.OperationTool, leaseAction.OperationInputJSON); err != nil {
 		t.Fatalf("validate lease action err = %v", err)
 	}
 	if out := executeRecoveryHandoffAction(t, registry, key, actor, leaseAction); !strings.Contains(out, "[APPROVAL_REQUESTED]") {
@@ -586,21 +656,20 @@ func assertPendingLeaseShape(t *testing.T, store *session.SQLiteStore, key sessi
 func TestRecoveryHandoffSurfaceInventoryDocumentsRepresentativeStops(t *testing.T) {
 	t.Parallel()
 
-	surfaces := []struct {
-		name     string
-		producer string
-		consumer string
-	}{
-		{"missing capability grant", "tool.materializeMissingGrantError", "capability_authority grant_set"},
-		{"missing continuation lease", "tool.materializeMissingContinuationLeaseError", "request_approval request_continuation_lease"},
-		{"rejected shell alternative", "tool.recordRejectedExecNextAction", "typed native tool or update_operation"},
-		{"uncertain effect attempt", "session.UpsertEffectAttempt", "verification next action"},
-		{"resource preflight blocker", "tool.recordNativeResourcePreflight", "resource repair next action"},
-		{"durable child wake outcome", "runtime.CommitChildTaskOutcome", "post-outcome intent executor"},
+	specs := RecoveryTransitionSpecs()
+	if len(specs) < 8 {
+		t.Fatalf("recovery transition specs = %#v, want representative graph coverage", specs)
 	}
-	for _, surface := range surfaces {
-		if strings.TrimSpace(surface.name) == "" || strings.TrimSpace(surface.producer) == "" || strings.TrimSpace(surface.consumer) == "" {
-			t.Fatalf("surface inventory contains incomplete row: %#v", surface)
+	byAdapter := map[string]int{}
+	for _, spec := range specs {
+		if strings.TrimSpace(spec.Adapter) == "" || strings.TrimSpace(spec.OperationKind) == "" || strings.TrimSpace(spec.OperationTool) == "" {
+			t.Fatalf("recovery transition spec contains incomplete row: %#v", spec)
+		}
+		byAdapter[spec.Adapter]++
+	}
+	for _, adapter := range []string{"missing_continuation_lease", "missing_capability_grant", "typed_shell_alternative", "operator_rewrite"} {
+		if byAdapter[adapter] == 0 {
+			t.Fatalf("recovery transition adapters = %#v, want %q represented", byAdapter, adapter)
 		}
 	}
 }
