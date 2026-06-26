@@ -130,6 +130,194 @@ func TestHandleInboundTypedApprovalConsumesPendingContinuation(t *testing.T) {
 	}
 }
 
+func TestApprovedContinuationRunTextIntent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{text: "continue", want: true},
+		{text: "Continue, please!", want: true},
+		{text: "run it", want: true},
+		{text: "resume the approved retry", want: true},
+		{text: "go ahead", want: true},
+		{text: "don't continue", want: false},
+		{text: "do not run it", want: false},
+		{text: "not now", want: false},
+		{text: "status", want: false},
+		{text: "approve", want: false},
+	}
+	for _, tt := range tests {
+		if got := isApprovedContinuationRunText(tt.text); got != tt.want {
+			t.Fatalf("isApprovedContinuationRunText(%q) = %v, want %v", tt.text, got, tt.want)
+		}
+	}
+}
+
+func TestHandleInboundRunTextConsumesApprovedContinuation(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{Text: "continued"}}
+	rt.interactiveDMAssembler = recorder
+
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 8120, UserID: 0, Scope: telegramDMScopeRef(8120)}
+	action := session.ActionProposal{
+		ID:               "aprop-run-text-approved",
+		Summary:          "Run one already approved continuation.",
+		BoundedEffect:    "Use the stored approved lease and report evidence.",
+		RiskClass:        "continuation",
+		AllowedActions:   []string{"continue_one_turn", "use_existing_authority_only", "report_evidence"},
+		ForbiddenActions: []string{"expand_authority_without_new_approval"},
+		Status:           session.ProposalStatusApproved,
+		ExpiresAt:        now.Add(time.Hour),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "run-text-approved",
+		Objective:      "Run the existing approved continuation.",
+		StageSummary:   "Run one already approved continuation.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: action,
+		ContinuationLease: session.ContinuationLease{
+			ID:               "lease-run-text-approved",
+			ProposalID:       action.ID,
+			Status:           session.ContinuationLeaseStatusActive,
+			MaxTurns:         1,
+			RemainingTurns:   1,
+			ApprovedBy:       1001,
+			AllowedActions:   action.AllowedActions,
+			ForbiddenActions: action.ForbiddenActions,
+			ExpiresAt:        now.Add(time.Hour),
+			PlanHash:         action.PlanHash,
+			ApprovedAt:       now,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID: 8120, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "Running approved continuation") {
+		t.Fatalf("HandleInbound() result = %#v, want approved continuation dispatch acknowledgement", result)
+	}
+	if !recorder.called {
+		t.Fatal("interactive assembler not called for approved continuation")
+	}
+	if recorder.input.Msg.Origin != core.InboundOriginTurnAuthorization {
+		t.Fatalf("origin = %q, want turn authorization", recorder.input.Msg.Origin)
+	}
+	if recorder.input.Msg.Text == "continue" || !strings.Contains(recorder.input.Msg.Text, "Next:\nRun one already approved continuation") {
+		t.Fatalf("continuation text = %q, want machine-authored approved continuation", recorder.input.Msg.Text)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusIdle || got.RemainingTurns != 0 || got.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed {
+		t.Fatalf("continuation = %#v, want idle consumed continuation", got)
+	}
+}
+
+func TestApprovedContinuationRunIntentDoesNotApprovePendingOrNegatedState(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 8124, UserID: 0, Scope: telegramDMScopeRef(8124)}
+	action := session.ActionProposal{
+		ID:            "aprop-run-text-pending",
+		Summary:       "Pending continuation.",
+		BoundedEffect: "Wait for explicit approval.",
+		Status:        session.ProposalStatusPending,
+		ExpiresAt:     now.Add(time.Hour),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	pending := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "run-text-pending",
+		Objective:      "Wait for approval.",
+		StageSummary:   action.Summary,
+		RemainingTurns: 1,
+		ActionProposal: action,
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-run-text-pending",
+			ProposalID:     action.ID,
+			Status:         session.ContinuationLeaseStatusPending,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ExpiresAt:      now.Add(time.Hour),
+			PlanHash:       action.PlanHash,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+	}
+	if err := store.UpdateContinuationState(key, pending); err != nil {
+		t.Fatalf("UpdateContinuationState(pending) err = %v", err)
+	}
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	handled, _, err := rt.maybeHandleApprovedContinuationRunIntent(context.Background(), core.InboundMessage{
+		ChatID: 8124, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 1,
+	}, actor)
+	if err != nil {
+		t.Fatalf("maybeHandleApprovedContinuationRunIntent(pending) err = %v", err)
+	}
+	if handled {
+		t.Fatal("pending continuation handled as approved run intent")
+	}
+
+	approved := pending
+	approved.Status = session.ContinuationStatusApproved
+	approved.ApprovedBy = 1001
+	approved.ActionProposal.Status = session.ProposalStatusApproved
+	approved.ContinuationLease.Status = session.ContinuationLeaseStatusActive
+	approved.ContinuationLease.ApprovedBy = 1001
+	approved.ContinuationLease.ApprovedAt = now
+	if err := store.UpdateContinuationState(key, approved); err != nil {
+		t.Fatalf("UpdateContinuationState(approved) err = %v", err)
+	}
+	handled, _, err = rt.maybeHandleApprovedContinuationRunIntent(context.Background(), core.InboundMessage{
+		ChatID: 8124, SenderID: 1001, SenderName: "admin", Text: "don't continue", MessageID: 2,
+	}, actor)
+	if err != nil {
+		t.Fatalf("maybeHandleApprovedContinuationRunIntent(negated) err = %v", err)
+	}
+	if handled {
+		t.Fatal("negated continuation run text was handled")
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusApproved || got.RemainingTurns != 1 || got.ContinuationLease.Status != session.ContinuationLeaseStatusActive {
+		t.Fatalf("continuation = %#v, want approved state preserved after negated text", got)
+	}
+}
+
 func TestDirectContinuationApprovalBindsExecutionRunAuthority(t *testing.T) {
 	t.Parallel()
 

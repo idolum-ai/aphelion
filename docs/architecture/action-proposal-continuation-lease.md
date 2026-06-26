@@ -85,15 +85,18 @@ machine-authored continuation event is processed.
    plus status/change/stop controls.
 4. `Start`, `Approve all`, or `Approve current` approves only the sealed
    proposal/token envelope that is still fresh.
-5. Runtime triggers the approved continuation path. If the approved lease
-   remains active, has remaining turns, still matches the sealed bundle or
-   proposal, and mission state does not impose a stop, runtime may continue
-   consuming approved turns automatically.
-6. Consuming each turn decrements the lease; zero remaining turns marks it
+5. Runtime triggers the approved continuation path. After approval, an admin's
+   explicit plain-text run intent such as `continue`, `run`, or `resume` may
+   also trigger that same approved path for the current session. Text never
+   approves a pending lease and never reconstructs protected operation payloads.
+6. If the approved lease remains active, has remaining turns, still matches the
+   sealed bundle or proposal, and mission state does not impose a stop, runtime
+   may continue consuming approved turns automatically.
+7. Consuming each turn decrements the lease; zero remaining turns marks it
    consumed and returns continuation state to idle. The loop never renews,
    widens, or reinterprets the lease.
-7. `Stop` revokes the continuation and lease.
-8. Expired proposals/leases fail closed and emit `continuation.blocked`.
+8. `Stop` revokes the continuation and lease.
+9. Expired proposals/leases fail closed and emit `continuation.blocked`.
 
 ## Default-on continuation loop
 
@@ -255,6 +258,14 @@ single ambiguous `Continue` button. Newly rendered Telegram labels are:
   and has remaining turns; otherwise it reports that approval is still needed.
 - `Refresh`: show the current edge and ask for the next explicit lease after an
   expired prompt; it does not approve or trigger work.
+
+Plain-text continuation controls mirror only the approved `Run` button. In an
+admin Telegram session, `continue`, `run`, or `resume` may dispatch an already
+approved lease with remaining turns through the normal continuation reservation
+path. The text path is deliberately not an approval parser: pending leases still
+require the approval card, and approved retry operations must be executed from
+the stored `ContinuationLease` / `ContinuationRetryOperation` rather than from a
+newly parsed chat command.
 
 Callback note: approval buttons use the current `approve_lease` action. Removed
 callback actions such as `continue` and bare `approve` are rejected as stale.

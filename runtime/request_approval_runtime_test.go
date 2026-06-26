@@ -447,8 +447,14 @@ func TestRecoveryHandoffMaterializationCreatesChildWakeApprovalAndConsumableLeas
 	if strings.Contains(approvedText, "Next:\nApprove one no-content") || strings.Contains(approvedText, "request_approval") {
 		t.Fatalf("approved continuation text = %q, must not ask for approval again", approvedText)
 	}
-	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
-		t.Fatalf("TriggerContinuationForKey() err = %v", err)
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID: 9048, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 103,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound(continue approved retry) err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "Running approved continuation") {
+		t.Fatalf("HandleInbound(continue approved retry) result = %#v, want approved continuation dispatch acknowledgement", result)
 	}
 	if len(runner.calls) != 1 || runner.calls[0] != "idolum-email" {
 		t.Fatalf("runner calls = %#v, want one idolum-email wake", runner.calls)
