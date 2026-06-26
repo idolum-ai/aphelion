@@ -113,13 +113,30 @@ func compileLegacyContinuationRecoveryHandoff(sessionID string, subjectKind stri
 		return ContinuationRecoveryContract{}, fmt.Errorf("legacy handoff operation mismatch")
 	}
 	createdAt, _ := parseSQLiteTime(createdAtRaw)
+	leaseClass := NormalizeContinuationLeaseClass(ContinuationLeaseClass(input.LeaseClass))
+	contractSubjectRef := ContinuationRecoverySubjectRef(leaseClass, input.AgentID, input.GrantID, input.Tool, input.ToolAction, input.Resource)
+	if contractSubjectRef == "" {
+		contractSubjectRef = subjectRef
+	}
+	retryOperation := NormalizeContinuationRetryOperation(input.RetryOperation)
+	if retryOperation.Active() {
+		if retryOperation.SubjectKind == "" {
+			retryOperation.SubjectKind = subjectKind
+		}
+		if retryOperation.SubjectRef == "" || retryOperation.SubjectRef == subjectRef {
+			retryOperation.SubjectRef = contractSubjectRef
+		}
+		if retryOperation.RequestInstanceID == "" {
+			retryOperation.RequestInstanceID = input.RequestInstanceID
+		}
+	}
 	return CompileContinuationRecoveryContract(ContinuationRecoveryContractInput{
 		RequestInstanceID:   input.RequestInstanceID,
 		SessionID:           sessionID,
 		SubjectKind:         subjectKind,
-		SubjectRef:          subjectRef,
+		SubjectRef:          contractSubjectRef,
 		Principal:           input.Principal,
-		LeaseClass:          NormalizeContinuationLeaseClass(ContinuationLeaseClass(input.LeaseClass)),
+		LeaseClass:          leaseClass,
 		AllowedActions:      input.AllowedActions,
 		Constraints:         input.Constraints,
 		Tool:                input.Tool,
@@ -128,7 +145,7 @@ func compileLegacyContinuationRecoveryHandoff(sessionID string, subjectKind stri
 		Resource:            input.Resource,
 		GrantID:             input.GrantID,
 		GrantTargetResource: input.GrantTargetResource,
-		RetryOperation:      input.RetryOperation,
+		RetryOperation:      retryOperation,
 		CreatedAt:           createdAt,
 	})
 }

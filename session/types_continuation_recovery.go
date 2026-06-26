@@ -217,8 +217,10 @@ func NormalizeContinuationRecoveryContractStatus(status ContinuationRecoveryCont
 
 func ContinuationRecoveryContractProjectionInput(contractID string) string {
 	raw, _ := json.Marshal(map[string]any{
-		"action":      "request_continuation_lease",
-		"contract_id": strings.TrimSpace(contractID),
+		"action":                  "request_continuation_lease",
+		"contract_id":             strings.TrimSpace(contractID),
+		"recovery_contract":       "aphelion.recovery_handoff.v1",
+		"recovery_operation_kind": "continuation_lease_request",
 	})
 	return string(raw)
 }

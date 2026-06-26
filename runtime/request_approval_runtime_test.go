@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -570,6 +571,153 @@ func TestRecoveryHandoffMaterializationCreatesChildWakeApprovalAndConsumableLeas
 		if event.EventType == core.ExecutionEventToolStarted && strings.Contains(event.PayloadJSON, `"tool":"request_approval"`) {
 			t.Fatalf("events include request_approval after child_wake approval: %#v", event)
 		}
+	}
+}
+
+func TestMigratedLegacyRecoveryHandoffMaterializesApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, seedStore, provider, sender := buildRuntimeFixtures(t)
+	key := session.SessionKey{ChatID: 9058, UserID: 0, Scope: telegramDMScopeRef(9058)}
+	legacyRaw := `{
+		"action":"request_continuation_lease",
+		"lease_class":"child_wake",
+		"principal":"telegram:1001",
+		"allowed_actions":["wake_named_child"],
+		"constraints":{"agent_id":"child-migrated"},
+		"tool":"durable_agent",
+		"tool_action":"wake_once",
+		"grant_id":"grant-child-migrated-wake",
+		"grant_target_resource":"durable_agent:child-migrated:wake_once",
+		"request_instance_id":"runtime-migrated-child-request-1",
+		"agent_id":"child-migrated",
+		"recovery_contract":"aphelion.recovery_handoff.v1",
+		"recovery_operation_kind":"continuation_lease_request",
+		"retry_after_lease":true
+	}`
+	if _, err := seedStore.RecordNextAction(session.NextActionInput{
+		RecordID:           "runtime-migrated-legacy-child-wake-handoff",
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         "child_wake:child-migrated",
+		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		NextAction:         "request migrated child wake approval",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: legacyRaw,
+		CreatedAt:          time.Now().UTC().Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(legacy handoff) err = %v", err)
+	}
+	dbPath := seedStore.DBPath()
+	if err := seedStore.Close(); err != nil {
+		t.Fatalf("close seed store: %v", err)
+	}
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open db for v82 marker: %v", err)
+	}
+	if _, err := db.Exec(`DELETE FROM schema_version`); err != nil {
+		t.Fatalf("delete schema_version: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO schema_version(version) VALUES (82)`); err != nil {
+		t.Fatalf("insert v82 schema marker: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v82 marker db: %v", err)
+	}
+
+	store, err := session.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v82 migrated) err = %v", err)
+	}
+	defer store.Close()
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(migrated) err = %v", err)
+	}
+	if len(open) != 1 || open[0].RecordID != "runtime-migrated-legacy-child-wake-handoff" {
+		t.Fatalf("open migrated actions = %#v, want migrated legacy handoff", open)
+	}
+	var pointer map[string]any
+	if err := json.Unmarshal([]byte(open[0].OperationInputJSON), &pointer); err != nil {
+		t.Fatalf("unmarshal migrated operation input: %v", err)
+	}
+	recoveryContract, _ := pointer["recovery_contract"].(string)
+	recoveryOperationKind, _ := pointer["recovery_operation_kind"].(string)
+	contractID, _ := pointer["contract_id"].(string)
+	if strings.TrimSpace(recoveryContract) != "aphelion.recovery_handoff.v1" ||
+		strings.TrimSpace(recoveryOperationKind) != "continuation_lease_request" ||
+		strings.TrimSpace(contractID) == "" {
+		t.Fatalf("migrated operation input = %#v, want executable contract-pointer handoff", pointer)
+	}
+
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9058, SenderID: 1001, Text: "continue", MessageID: 801},
+		"continue",
+	)
+	if err != nil {
+		t.Fatalf("MaterializeRequestedApproval(migrated) err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want migrated contract-pointer handoff to produce approval card")
+	}
+	state, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(migrated) err = %v", err)
+	}
+	if state.ContinuationLease.LeaseClass != session.ContinuationLeaseClassChildWake ||
+		state.ContinuationLease.Status != session.ContinuationLeaseStatusPending ||
+		strings.TrimSpace(state.ContinuationLease.Constraints["agent_id"]) != "child-migrated" {
+		t.Fatalf("continuation state = %#v, want pending child_wake approval for migrated child", state)
+	}
+	open, err = store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(after materialized) err = %v", err)
+	}
+	for _, action := range open {
+		if action.RecordID == "runtime-migrated-legacy-child-wake-handoff" {
+			t.Fatalf("open actions after materialization = %#v, want migrated handoff resolved", open)
+		}
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession(migrated) err = %v", err)
+	}
+	if hasExecutionEventPayload(events, core.ExecutionEventWorkflowNextState, "invalid_recovery_handoff") {
+		t.Fatalf("events = %#v, did not want migrated handoff invalidated", events)
+	}
+	if !hasExecutionEventPayload(events, core.ExecutionEventWorkflowNextState, "recovery_handoff_materialized") {
+		t.Fatalf("events = %#v, want migrated handoff materialized event", events)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one approval card", inlineCount)
 	}
 }
 
