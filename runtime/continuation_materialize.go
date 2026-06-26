@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -107,8 +108,10 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 	if _, ok := r.continuationApprovalPromptSender(); !ok {
 		return false, nil
 	}
-	if _, err := r.materializePendingRecoveryApprovalNextActionLocked(ctx, key, msg, time.Now().UTC()); err != nil {
+	if handledRecovery, continueMaterialization, err := r.materializePendingRecoveryApprovalNextActionLocked(ctx, key, msg, time.Now().UTC()); err != nil {
 		return false, err
+	} else if handledRecovery && !continueMaterialization {
+		return true, nil
 	}
 	opState, err := r.store.OperationState(key)
 	if err != nil {
@@ -469,22 +472,23 @@ type recoveryApprovalHandoffInput struct {
 	RecoveryOperationKind string            `json:"recovery_operation_kind"`
 }
 
-func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, now time.Time) (bool, error) {
+func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, now time.Time) (bool, bool, error) {
 	if r == nil || r.store == nil {
-		return false, nil
+		return false, false, nil
 	}
 	actor, ok := r.recoveryApprovalMaterializationActor(msg)
 	if !ok {
-		return false, nil
+		return false, false, nil
 	}
 	tools := r.toolsForPrincipal(actor, key)
 	if tools == nil {
-		return false, nil
+		return false, false, nil
 	}
-	actions, err := r.store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", "continuation_lease_request", 20)
+	actions, err := r.store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", "continuation_lease_request", 100)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
+	var deferredConflicts []recoveryApprovalDeferredConflict
 	for _, action := range actions {
 		consumable, invalid := recoveryApprovalNextActionConsumable(action)
 		if invalid {
@@ -497,7 +501,7 @@ func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context
 				Reason:      "invalid_recovery_handoff",
 				ResolvedAt:  now,
 			}); err != nil {
-				return false, fmt.Errorf("resolve invalid recovery approval handoff %s: %w", action.RecordID, err)
+				return false, false, fmt.Errorf("resolve invalid recovery approval handoff %s: %w", action.RecordID, err)
 			}
 			continue
 		}
@@ -505,7 +509,27 @@ func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context
 			continue
 		}
 		if _, err := tools.Execute(ctx, "request_approval", json.RawMessage(action.OperationInputJSON)); err != nil {
-			return false, fmt.Errorf("materialize recovery approval handoff %s: %w", action.RecordID, err)
+			var conflict toolpkg.RequestApprovalContinuationConflictError
+			if !errors.As(err, &conflict) {
+				return false, false, fmt.Errorf("materialize recovery approval handoff %s: %w", action.RecordID, err)
+			}
+			retry, handled, handleErr := r.adjudicateRecoveryApprovalContinuationConflictLocked(ctx, key, msg, action, conflict, now)
+			if handleErr != nil {
+				return false, false, handleErr
+			}
+			if !handled {
+				return false, false, fmt.Errorf("materialize recovery approval handoff %s: %w", action.RecordID, err)
+			}
+			if !retry {
+				deferredConflicts = append(deferredConflicts, recoveryApprovalDeferredConflict{Action: action, Conflict: conflict})
+				continue
+			}
+			if _, err := tools.Execute(ctx, "request_approval", json.RawMessage(action.OperationInputJSON)); err != nil {
+				return false, false, fmt.Errorf("materialize recovery approval handoff %s after adjudication: %w", action.RecordID, err)
+			}
+		}
+		if err := r.resolveDeferredRecoveryApprovalConflicts(key, deferredConflicts, action.RecordID, "superseded_by_later_recovery_handoff", now); err != nil {
+			return false, false, err
 		}
 		if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
 			RecordID:    action.RecordID,
@@ -516,11 +540,250 @@ func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context
 			Reason:      "recovery_handoff_materialized",
 			ResolvedAt:  now,
 		}); err != nil {
-			return false, fmt.Errorf("resolve recovery approval handoff %s: %w", action.RecordID, err)
+			return false, false, fmt.Errorf("resolve recovery approval handoff %s: %w", action.RecordID, err)
 		}
-		return true, nil
+		return true, true, nil
 	}
-	return false, nil
+	if len(deferredConflicts) > 0 {
+		selected := newestRecoveryApprovalDeferredConflict(deferredConflicts)
+		if err := r.resolveDeferredRecoveryApprovalConflicts(key, deferredConflicts, selected.Action.RecordID, "superseded_by_newer_blocker", now); err != nil {
+			return false, false, err
+		}
+		if err := r.emitRecoveryApprovalContinuationConflictBlocker(key, selected.Action, selected.Conflict, now); err != nil {
+			return false, false, err
+		}
+		return true, false, nil
+	}
+	return false, false, nil
+}
+
+type recoveryApprovalDeferredConflict struct {
+	Action   session.NextActionRecord
+	Conflict toolpkg.RequestApprovalContinuationConflictError
+}
+
+func (r *Runtime) adjudicateRecoveryApprovalContinuationConflictLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, action session.NextActionRecord, conflict toolpkg.RequestApprovalContinuationConflictError, now time.Time) (bool, bool, error) {
+	if r == nil || r.store == nil {
+		return false, false, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	state, ok, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return false, false, fmt.Errorf("read continuation conflict state: %w", err)
+	}
+	if !ok {
+		r.recordRecoveryApprovalConflictAdjudication(key, action, conflict, "missing_current_state", "retry_without_conflict", now)
+		return true, true, nil
+	}
+	state = session.NormalizeContinuationState(state)
+	if !recoveryApprovalConflictMatchesCurrentState(state, conflict) {
+		r.recordRecoveryApprovalConflictAdjudication(key, action, conflict, "current_state_changed", "retry_without_conflict", now)
+		return true, true, nil
+	}
+	if state.Status == session.ContinuationStatusPending &&
+		state.ContinuationLease.Status == session.ContinuationLeaseStatusPending &&
+		recoveryApprovalHandoffCanSupersedePending(action, state) {
+		repaired := continuationStateWithSupersededProjection(state, now)
+		repaired.HandshakeBlockedReason = "superseded_by_recovery_approval_handoff"
+		if err := r.store.UpdateContinuationState(key, repaired); err != nil {
+			return false, false, fmt.Errorf("supersede conflicting pending continuation %s: %w", strings.TrimSpace(state.ContinuationLease.ID), err)
+		}
+		r.recordRecoveryApprovalConflictAdjudication(key, action, conflict, "stale_pending_superseded", "retry_request_approval", now)
+		if _, err := r.store.RecordNextAction(session.NextActionInput{
+			Key:                key,
+			Owner:              "continuation",
+			State:              session.NextActionSuperseded,
+			SubjectKind:        "continuation_approval",
+			SubjectRef:         firstNonEmptyContinuation(state.ContinuationLease.ID, state.DecisionID, state.ActionProposal.ID),
+			CausalRefs:         recoveryApprovalConflictCausalRefs(action, state, conflict),
+			NextAction:         "retire the stale pending continuation approval and materialize the requested recovery approval",
+			RetryPolicy:        "do_not_use_superseded_prompt",
+			OperatorProjection: "A stale pending approval was superseded by a newer typed recovery handoff.",
+			CreatedAt:          now,
+		}); err != nil {
+			return false, false, fmt.Errorf("record superseded recovery approval conflict: %w", err)
+		}
+		chatID := msg.ChatID
+		if chatID == 0 {
+			chatID = key.ChatID
+		}
+		if chatID != 0 {
+			r.retireStaleContinuationApprovalCards(ctx, key, chatID, continuationCallbackThreadIDForMessage(key, msg), 0, "superseded_by_recovery_handoff", now)
+		}
+		return true, true, nil
+	}
+	return false, true, nil
+}
+
+func (r *Runtime) emitRecoveryApprovalContinuationConflictBlocker(key session.SessionKey, action session.NextActionRecord, conflict toolpkg.RequestApprovalContinuationConflictError, now time.Time) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	state, ok, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return fmt.Errorf("read blocked continuation conflict state: %w", err)
+	}
+	if !ok {
+		state = session.ContinuationState{}
+	} else {
+		state = session.NormalizeContinuationState(state)
+	}
+	if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+		RecordID:    action.RecordID,
+		Key:         key,
+		Owner:       "runtime",
+		SubjectKind: action.SubjectKind,
+		SubjectRef:  action.SubjectRef,
+		Reason:      "blocked_by_live_continuation_authority",
+		ResolvedAt:  now,
+	}); err != nil {
+		return fmt.Errorf("resolve blocked recovery approval handoff %s: %w", action.RecordID, err)
+	}
+	r.recordRecoveryApprovalConflictAdjudication(key, action, conflict, "live_authority_blocks_replacement", "operator_intervention_required", now)
+	if _, err := r.store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "continuation",
+		State:              session.NextActionWaitingForOperator,
+		SubjectKind:        "continuation_approval_conflict",
+		SubjectRef:         strings.TrimSpace(action.RecordID),
+		CausalRefs:         recoveryApprovalConflictCausalRefs(action, state, conflict),
+		NextAction:         "finish, stop, or revoke the active continuation before requesting this recovery approval",
+		RequiredAuthority:  string(conflict.RequestedLeaseClass),
+		ResourceBlocker:    "live_continuation_conflict",
+		RetryPolicy:        "operator_must_resolve_existing_authority",
+		OperatorProjection: "The requested recovery approval conflicts with a live continuation lease, so Aphelion did not replace it automatically.",
+		CreatedAt:          now,
+	}); err != nil {
+		return fmt.Errorf("record live continuation conflict next action: %w", err)
+	}
+	return nil
+}
+
+func (r *Runtime) resolveDeferredRecoveryApprovalConflicts(key session.SessionKey, conflicts []recoveryApprovalDeferredConflict, keepRecordID string, reason string, now time.Time) error {
+	if r == nil || r.store == nil || len(conflicts) == 0 {
+		return nil
+	}
+	keepRecordID = strings.TrimSpace(keepRecordID)
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	for _, conflict := range conflicts {
+		action := conflict.Action
+		if strings.TrimSpace(action.RecordID) == "" || strings.TrimSpace(action.RecordID) == keepRecordID {
+			continue
+		}
+		if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+			RecordID:    action.RecordID,
+			Key:         key,
+			Owner:       "runtime",
+			SubjectKind: action.SubjectKind,
+			SubjectRef:  action.SubjectRef,
+			Reason:      reason,
+			ResolvedAt:  now,
+		}); err != nil {
+			return fmt.Errorf("resolve deferred recovery approval handoff %s: %w", action.RecordID, err)
+		}
+		r.recordRecoveryApprovalConflictAdjudication(key, action, conflict.Conflict, "deferred_conflict_superseded", reason, now)
+	}
+	return nil
+}
+
+func newestRecoveryApprovalDeferredConflict(conflicts []recoveryApprovalDeferredConflict) recoveryApprovalDeferredConflict {
+	if len(conflicts) == 0 {
+		return recoveryApprovalDeferredConflict{}
+	}
+	selected := conflicts[0]
+	for _, candidate := range conflicts[1:] {
+		if recoveryApprovalActionNewer(candidate.Action, selected.Action) {
+			selected = candidate
+		}
+	}
+	return selected
+}
+
+func recoveryApprovalActionNewer(left session.NextActionRecord, right session.NextActionRecord) bool {
+	if left.CreatedAt.IsZero() && right.CreatedAt.IsZero() {
+		return strings.TrimSpace(left.RecordID) > strings.TrimSpace(right.RecordID)
+	}
+	if left.CreatedAt.IsZero() {
+		return false
+	}
+	if right.CreatedAt.IsZero() {
+		return true
+	}
+	leftAt := left.CreatedAt.UTC()
+	rightAt := right.CreatedAt.UTC()
+	if leftAt.Equal(rightAt) {
+		return strings.TrimSpace(left.RecordID) > strings.TrimSpace(right.RecordID)
+	}
+	return leftAt.After(rightAt)
+}
+
+func recoveryApprovalHandoffCanSupersedePending(action session.NextActionRecord, state session.ContinuationState) bool {
+	state = session.NormalizeContinuationState(state)
+	if action.CreatedAt.IsZero() || state.UpdatedAt.IsZero() {
+		return true
+	}
+	return !action.CreatedAt.UTC().Before(state.UpdatedAt.UTC())
+}
+
+func recoveryApprovalConflictMatchesCurrentState(state session.ContinuationState, conflict toolpkg.RequestApprovalContinuationConflictError) bool {
+	state = session.NormalizeContinuationState(state)
+	if want := strings.TrimSpace(conflict.ExistingLeaseID); want != "" && strings.TrimSpace(state.ContinuationLease.ID) != want {
+		return false
+	}
+	if conflict.ExistingLeaseClass != "" && state.ContinuationLease.LeaseClass != conflict.ExistingLeaseClass {
+		return false
+	}
+	if conflict.ExistingStatus != "" && state.Status != conflict.ExistingStatus {
+		return false
+	}
+	if conflict.ExistingLeaseStatus != "" && state.ContinuationLease.Status != conflict.ExistingLeaseStatus {
+		return false
+	}
+	return true
+}
+
+func (r *Runtime) recordRecoveryApprovalConflictAdjudication(key session.SessionKey, action session.NextActionRecord, conflict toolpkg.RequestApprovalContinuationConflictError, decision string, outcome string, now time.Time) {
+	if r == nil {
+		return
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationAdjudicated, "continuation", "adjudicated", map[string]any{
+		"adjudication_kind":     "recovery_approval_materialization",
+		"surface":               "recovery_approval_handoff",
+		"decision":              strings.TrimSpace(decision),
+		"outcome":               strings.TrimSpace(outcome),
+		"next_action_record_id": strings.TrimSpace(action.RecordID),
+		"existing_lease_id":     strings.TrimSpace(conflict.ExistingLeaseID),
+		"existing_lease_class":  string(conflict.ExistingLeaseClass),
+		"existing_status":       string(conflict.ExistingStatus),
+		"existing_lease_status": string(conflict.ExistingLeaseStatus),
+		"requested_lease_id":    strings.TrimSpace(conflict.RequestedLeaseID),
+		"requested_lease_class": string(conflict.RequestedLeaseClass),
+		"request_instance_id":   strings.TrimSpace(conflict.RequestInstanceID),
+	}, now)
+}
+
+func recoveryApprovalConflictCausalRefs(action session.NextActionRecord, state session.ContinuationState, conflict toolpkg.RequestApprovalContinuationConflictError) []string {
+	refs := []string{}
+	if id := strings.TrimSpace(action.RecordID); id != "" {
+		refs = append(refs, "next_action:"+id)
+	}
+	if id := strings.TrimSpace(conflict.ExistingLeaseID); id != "" {
+		refs = append(refs, "continuation_lease:"+id)
+	}
+	if id := strings.TrimSpace(conflict.RequestedLeaseID); id != "" {
+		refs = append(refs, "requested_continuation_lease:"+id)
+	}
+	if id := strings.TrimSpace(state.DecisionID); id != "" {
+		refs = append(refs, "decision:"+id)
+	}
+	return refs
 }
 
 func (r *Runtime) recoveryApprovalMaterializationActor(msg core.InboundMessage) (principal.Principal, bool) {

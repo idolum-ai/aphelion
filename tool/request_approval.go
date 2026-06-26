@@ -18,6 +18,21 @@ import (
 
 const requestApprovalToolName = "request_approval"
 
+type RequestApprovalContinuationConflictError struct {
+	ExistingLeaseID       string
+	ExistingLeaseClass    session.ContinuationLeaseClass
+	ExistingStatus        session.ContinuationStatus
+	ExistingLeaseStatus   session.ContinuationLeaseStatus
+	RequestedLeaseID      string
+	RequestedLeaseClass   session.ContinuationLeaseClass
+	RequestInstanceID     string
+	RequestedContractHash string
+}
+
+func (e RequestApprovalContinuationConflictError) Error() string {
+	return fmt.Sprintf("request_approval continuation lease conflicts with existing %s continuation %s", e.ExistingLeaseStatus, strings.TrimSpace(e.ExistingLeaseID))
+}
+
 func (r *Registry) requestApproval(_ context.Context, input json.RawMessage, key session.SessionKey) (string, error) {
 	if r.store == nil {
 		return "", fmt.Errorf("request_approval requires transcript store")
@@ -224,7 +239,16 @@ func (r *Registry) requestContinuationLeaseApproval(in requestApprovalInput, key
 			return renderOperationState("[APPROVAL_REQUESTED]", current), nil
 		}
 		if requestApprovalContinuationStateIsLive(prior) {
-			return "", fmt.Errorf("request_approval continuation lease conflicts with existing pending continuation %s", strings.TrimSpace(prior.ContinuationLease.ID))
+			return "", RequestApprovalContinuationConflictError{
+				ExistingLeaseID:       strings.TrimSpace(prior.ContinuationLease.ID),
+				ExistingLeaseClass:    prior.ContinuationLease.LeaseClass,
+				ExistingStatus:        prior.Status,
+				ExistingLeaseStatus:   prior.ContinuationLease.Status,
+				RequestedLeaseID:      leaseID,
+				RequestedLeaseClass:   requirement.LeaseClass,
+				RequestInstanceID:     requirement.RequestInstanceID,
+				RequestedContractHash: requestApprovalContinuationLeaseContractHash(requirement),
+			}
 		}
 	}
 	current = requestApprovalOperationStateForContinuation(current, in, requirement, state, proposal.WhyNow, boundedEffect, now)
