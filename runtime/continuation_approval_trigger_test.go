@@ -236,6 +236,89 @@ func TestHandleInboundRunTextConsumesApprovedContinuation(t *testing.T) {
 	}
 }
 
+func TestHandleInboundRunTextReportsExpiredApprovedContinuationWithoutRunning(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{Text: "continued"}}
+	rt.interactiveDMAssembler = recorder
+
+	now := time.Now().UTC()
+	expiredAt := now.Add(-time.Minute)
+	key := session.SessionKey{ChatID: 8125, UserID: 0, Scope: telegramDMScopeRef(8125)}
+	action := session.ActionProposal{
+		ID:               "aprop-run-text-expired",
+		Summary:          "Run an expired approved continuation.",
+		BoundedEffect:    "Should not run after expiry.",
+		RiskClass:        "continuation",
+		AllowedActions:   []string{"continue_one_turn"},
+		ForbiddenActions: []string{"expand_authority_without_new_approval"},
+		Status:           session.ProposalStatusApproved,
+		ExpiresAt:        expiredAt,
+		CreatedAt:        now.Add(-time.Hour),
+		UpdatedAt:        now.Add(-time.Hour),
+	}
+	action.PlanHash = actionProposalHash(action)
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "run-text-expired",
+		Objective:      "Do not run expired continuation.",
+		StageSummary:   "Expired approved continuation.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: action,
+		ContinuationLease: session.ContinuationLease{
+			ID:               "lease-run-text-expired",
+			ProposalID:       action.ID,
+			Status:           session.ContinuationLeaseStatusActive,
+			MaxTurns:         1,
+			RemainingTurns:   1,
+			ApprovedBy:       1001,
+			AllowedActions:   action.AllowedActions,
+			ForbiddenActions: action.ForbiddenActions,
+			ExpiresAt:        expiredAt,
+			PlanHash:         action.PlanHash,
+			ApprovedAt:       now.Add(-time.Hour),
+			CreatedAt:        now.Add(-time.Hour),
+			UpdatedAt:        now.Add(-time.Hour),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID: 8125, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "expired") || strings.Contains(result.Text, "Running approved continuation") {
+		t.Fatalf("HandleInbound() result = %#v, want explicit expired/no-run acknowledgement", result)
+	}
+	if recorder.called {
+		t.Fatal("interactive assembler called for expired approved continuation")
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusIdle || got.RemainingTurns != 0 || got.ContinuationLease.Status != session.ContinuationLeaseStatusExpired {
+		t.Fatalf("continuation = %#v, want expired idle continuation", got)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventContinuationBlocked) {
+		t.Fatalf("events = %#v, want blocked event for expired approved continuation", events)
+	}
+}
+
 func TestApprovedContinuationRunIntentDoesNotApprovePendingOrNegatedState(t *testing.T) {
 	t.Parallel()
 

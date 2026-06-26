@@ -62,8 +62,12 @@ func (r *Runtime) maybeHandleApprovedContinuationRunIntent(ctx context.Context, 
 	if !exists || state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
 		return false, nil, nil
 	}
-	if err := r.TriggerContinuationForKey(ctx, key); err != nil {
+	result, err := r.triggerContinuationLoopWithResult(ctx, key)
+	if err != nil {
 		return true, nil, err
+	}
+	if !result.Ran {
+		return true, &core.TurnResult{Text: approvedContinuationRunNoopText(result.State)}, nil
 	}
 	return true, &core.TurnResult{Text: "Running approved continuation."}, nil
 }
@@ -151,4 +155,20 @@ func approvedContinuationRunTextNegated(value string) bool {
 		}
 	}
 	return false
+}
+
+func approvedContinuationRunNoopText(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
+	if state.ContinuationLease.Status == session.ContinuationLeaseStatusExpired ||
+		state.ActionProposal.Status == session.ProposalStatusExpired {
+		return "The approved continuation expired before it could run."
+	}
+	if state.Status != session.ContinuationStatusApproved {
+		return "No approved continuation is currently runnable."
+	}
+	if state.RemainingTurns <= 0 || state.ContinuationLease.RemainingTurns <= 0 ||
+		state.ContinuationLease.Status == session.ContinuationLeaseStatusConsumed {
+		return "The approved continuation has no remaining turns."
+	}
+	return "The approved continuation is not currently runnable."
 }
