@@ -27,6 +27,7 @@ type missingContinuationLeaseRequirement struct {
 	Constraints         map[string]string
 	Tool                string
 	ToolAction          string
+	RetryOperation      session.ContinuationRetryOperation
 	NextAction          string
 	OperatorProjection  string
 }
@@ -260,6 +261,7 @@ func normalizeMissingContinuationLeaseRequirement(requirement missingContinuatio
 	requirement.ToolAction = strings.ToLower(strings.TrimSpace(requirement.ToolAction))
 	requirement.ToolAction = strings.ReplaceAll(requirement.ToolAction, "-", "_")
 	requirement.ToolAction = strings.ReplaceAll(requirement.ToolAction, " ", "_")
+	requirement.RetryOperation = normalizeMissingContinuationLeaseRetryOperation(requirement, requirement.RetryOperation)
 	requirement.NextAction = strings.TrimSpace(requirement.NextAction)
 	requirement.AllowedActions = normalizeUniqueStrings(requirement.AllowedActions)
 	if len(requirement.AllowedActions) == 0 {
@@ -291,12 +293,78 @@ func normalizeMissingContinuationLeaseRequirement(requirement missingContinuatio
 	return requirement
 }
 
-func missingContinuationLeaseSubjectRef(requirement missingContinuationLeaseRequirement) string {
+func normalizeMissingContinuationLeaseRetryOperation(requirement missingContinuationLeaseRequirement, op session.ContinuationRetryOperation) session.ContinuationRetryOperation {
+	op = session.NormalizeContinuationRetryOperation(op)
+	if !op.Active() && requirement.LeaseClass == session.ContinuationLeaseClassChildWake && requirement.AgentID != "" && requirement.Tool == "durable_agent" && requirement.ToolAction == "wake_once" {
+		op = session.ContinuationRetryOperation{
+			Contract:          recoveryRetryContractVersion,
+			OperationKind:     "durable_agent_wake_once",
+			Tool:              "durable_agent",
+			InputJSON:         compactJSON(map[string]any{"action": "wake_once", "agent_id": requirement.AgentID}),
+			SubjectKind:       "continuation_lease_request",
+			SubjectRef:        missingContinuationLeaseSubjectRefFromNormalized(requirement),
+			RequestInstanceID: requirement.RequestInstanceID,
+		}
+	}
+	op = session.NormalizeContinuationRetryOperation(op)
+	if op.Active() {
+		if op.Contract == "" {
+			op.Contract = recoveryRetryContractVersion
+		}
+		if op.SubjectKind == "" {
+			op.SubjectKind = "continuation_lease_request"
+		}
+		if op.SubjectRef == "" {
+			op.SubjectRef = missingContinuationLeaseSubjectRefFromNormalized(requirement)
+		}
+		if op.RequestInstanceID == "" {
+			op.RequestInstanceID = strings.TrimSpace(requirement.RequestInstanceID)
+		}
+	}
+	return session.NormalizeContinuationRetryOperation(op)
+}
+
+func validateContinuationRetryOperationForRequirement(requirement missingContinuationLeaseRequirement) error {
 	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
+	op := session.NormalizeContinuationRetryOperation(requirement.RetryOperation)
+	if !op.Active() {
+		return nil
+	}
+	if op.Contract != recoveryRetryContractVersion {
+		return fmt.Errorf("retry operation contract must be %s", recoveryRetryContractVersion)
+	}
+	if op.RequestInstanceID != "" && requirement.RequestInstanceID != "" && op.RequestInstanceID != requirement.RequestInstanceID {
+		return fmt.Errorf("retry operation request_instance_id mismatch")
+	}
+	if op.SubjectKind != "" && op.SubjectKind != "continuation_lease_request" {
+		return fmt.Errorf("retry operation subject kind mismatch")
+	}
+	if op.SubjectRef != "" && op.SubjectRef != missingContinuationLeaseSubjectRef(requirement) {
+		return fmt.Errorf("retry operation subject ref mismatch")
+	}
+	switch requirement.LeaseClass {
+	case session.ContinuationLeaseClassChildWake:
+		if op.Tool != "durable_agent" || op.OperationKind != "durable_agent_wake_once" {
+			return fmt.Errorf("child_wake retry operation must invoke durable_agent wake_once")
+		}
+		var input durableAgentInput
+		if err := decodeToolObjectInput(json.RawMessage(op.InputJSON), &input, "durable_agent"); err != nil {
+			return err
+		}
+		if strings.TrimSpace(input.Action) != "wake_once" || strings.TrimSpace(input.AgentID) != requirement.AgentID {
+			return fmt.Errorf("child_wake retry operation must target exact agent_id")
+		}
+	default:
+		return fmt.Errorf("%s retry operation is not executable yet", requirement.LeaseClass)
+	}
+	return nil
+}
+
+func missingContinuationLeaseSubjectRefFromNormalized(requirement missingContinuationLeaseRequirement) string {
 	parts := []string{
 		string(requirement.LeaseClass),
-		missingContinuationLeaseSubjectToken(requirement),
-		requirement.GrantID,
+		missingContinuationLeaseSubjectTokenFromNormalized(requirement),
+		strings.TrimSpace(requirement.GrantID),
 	}
 	if requirement.Tool != "" {
 		parts = append(parts, "tool="+requirement.Tool)
@@ -308,6 +376,24 @@ func missingContinuationLeaseSubjectRef(requirement missingContinuationLeaseRequ
 		parts = append(parts, "resource="+missingContinuationLeaseHashToken(requirement.Resource))
 	}
 	return strings.Join(parts, ":")
+}
+
+func missingContinuationLeaseSubjectTokenFromNormalized(requirement missingContinuationLeaseRequirement) string {
+	if requirement.AgentID != "" {
+		return requirement.AgentID
+	}
+	if requirement.Resource != "" {
+		return missingContinuationLeaseHashToken(requirement.Resource)
+	}
+	if requirement.GrantTargetResource != "" {
+		return missingContinuationLeaseHashToken(requirement.GrantTargetResource)
+	}
+	return requirement.Tool
+}
+
+func missingContinuationLeaseSubjectRef(requirement missingContinuationLeaseRequirement) string {
+	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
+	return missingContinuationLeaseSubjectRefFromNormalized(requirement)
 }
 
 func missingContinuationLeaseSubjectToken(requirement missingContinuationLeaseRequirement) string {

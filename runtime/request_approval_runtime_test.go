@@ -385,6 +385,10 @@ func TestRecoveryHandoffMaterializationCreatesChildWakeApprovalAndConsumableLeas
 	if pending.ContinuationLease.LeaseClass != session.ContinuationLeaseClassChildWake || strings.TrimSpace(pending.ContinuationLease.Constraints["agent_id"]) != "idolum-email" {
 		t.Fatalf("pending lease = %#v, want child_wake bound to idolum-email", pending.ContinuationLease)
 	}
+	retry := session.NormalizeContinuationRetryOperation(pending.ContinuationLease.RetryOperation)
+	if !retry.Active() || retry.Tool != "durable_agent" || retry.OperationKind != "durable_agent_wake_once" || !strings.Contains(retry.InputJSON, `"agent_id":"idolum-email"`) {
+		t.Fatalf("pending retry operation = %#v, want exact durable_agent wake_once retry", retry)
+	}
 	open, err = store.OpenNextActionsBySession(key, 10)
 	if err != nil {
 		t.Fatalf("OpenNextActionsBySession(after materialize) err = %v", err)
@@ -436,22 +440,34 @@ func TestRecoveryHandoffMaterializationCreatesChildWakeApprovalAndConsumableLeas
 	if approved.ContinuationLease.Status != session.ContinuationLeaseStatusActive {
 		t.Fatalf("approved continuation = %#v, want active child_wake lease", approved)
 	}
-	ctx := runtimeContinuationAuthorityContext(t, store, key, actor, approved.ContinuationLease)
-	out, err := tools.ExecuteForSessionPrincipal(
-		ctx,
-		actor,
-		key,
-		"durable_agent",
-		json.RawMessage(`{"action":"wake_once","agent_id":"idolum-email"}`),
-	)
-	if err != nil {
-		t.Fatalf("wake_once after approval err = %v", err)
+	approvedText := approvedContinuationEventTextForState(approved)
+	if !strings.Contains(approvedText, "Invoke durable_agent wake_once for idolum-email exactly once") {
+		t.Fatalf("approved continuation text = %q, want executable wake_once retry", approvedText)
+	}
+	if strings.Contains(approvedText, "Next:\nApprove one no-content") || strings.Contains(approvedText, "request_approval") {
+		t.Fatalf("approved continuation text = %q, must not ask for approval again", approvedText)
+	}
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v", err)
 	}
 	if len(runner.calls) != 1 || runner.calls[0] != "idolum-email" {
 		t.Fatalf("runner calls = %#v, want one idolum-email wake", runner.calls)
 	}
-	if !strings.Contains(out, "wake_status: awaiting_child_pickup") && !strings.Contains(out, "wake_status: completed") {
-		t.Fatalf("wake_once output = %q, want a concrete wake result", out)
+	current, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(after trigger) err = %v", err)
+	}
+	if current.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed || current.RemainingTurns != 0 {
+		t.Fatalf("continuation after trigger = %#v, want consumed one-turn retry", current)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventToolStarted && strings.Contains(event.PayloadJSON, `"tool":"request_approval"`) {
+			t.Fatalf("events include request_approval after child_wake approval: %#v", event)
+		}
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
 )
 
 type execInput struct {
@@ -200,21 +201,22 @@ type updateOperationPlanLeaseInput struct {
 }
 
 type requestApprovalInput struct {
-	Action              string                    `json:"action,omitempty"`
-	Objective           string                    `json:"objective,omitempty"`
-	Phase               updateOperationPhaseInput `json:"phase"`
-	LeaseClass          string                    `json:"lease_class,omitempty"`
-	Principal           string                    `json:"principal,omitempty"`
-	AllowedActions      []string                  `json:"allowed_actions,omitempty"`
-	Constraints         map[string]string         `json:"constraints,omitempty"`
-	Tool                string                    `json:"tool,omitempty"`
-	ToolAction          string                    `json:"tool_action,omitempty"`
-	GrantID             string                    `json:"grant_id,omitempty"`
-	GrantTargetResource string                    `json:"grant_target_resource,omitempty"`
-	RequestInstanceID   string                    `json:"request_instance_id,omitempty"`
-	AgentID             string                    `json:"agent_id,omitempty"`
-	Resource            string                    `json:"resource,omitempty"`
-	RetryAfterLease     bool                      `json:"retry_after_lease,omitempty"`
+	Action              string                             `json:"action,omitempty"`
+	Objective           string                             `json:"objective,omitempty"`
+	Phase               updateOperationPhaseInput          `json:"phase"`
+	LeaseClass          string                             `json:"lease_class,omitempty"`
+	Principal           string                             `json:"principal,omitempty"`
+	AllowedActions      []string                           `json:"allowed_actions,omitempty"`
+	Constraints         map[string]string                  `json:"constraints,omitempty"`
+	Tool                string                             `json:"tool,omitempty"`
+	ToolAction          string                             `json:"tool_action,omitempty"`
+	GrantID             string                             `json:"grant_id,omitempty"`
+	GrantTargetResource string                             `json:"grant_target_resource,omitempty"`
+	RequestInstanceID   string                             `json:"request_instance_id,omitempty"`
+	AgentID             string                             `json:"agent_id,omitempty"`
+	Resource            string                             `json:"resource,omitempty"`
+	RetryAfterLease     bool                               `json:"retry_after_lease,omitempty"`
+	RetryOperation      session.ContinuationRetryOperation `json:"retry_operation,omitempty"`
 }
 
 type updateOperationInput struct {

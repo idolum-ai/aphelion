@@ -34,29 +34,40 @@ type ContinuationLeaseStatus string
 type ContinuationLeaseClass string
 
 type ContinuationLease struct {
-	ID                       string                  `json:"id,omitempty"`
-	ProposalID               string                  `json:"proposal_id,omitempty"`
-	MissionID                string                  `json:"mission_id,omitempty"`
-	OperatorTitle            string                  `json:"operator_title,omitempty"`
-	PlanTitle                string                  `json:"plan_title,omitempty"`
-	Status                   ContinuationLeaseStatus `json:"status,omitempty"`
-	MaxTurns                 int                     `json:"max_turns,omitempty"`
-	RemainingTurns           int                     `json:"remaining_turns,omitempty"`
-	ApprovedBy               int64                   `json:"approved_by,omitempty"`
-	LeaseClass               ContinuationLeaseClass  `json:"lease_class,omitempty"`
-	Constraints              map[string]string       `json:"constraints,omitempty"`
-	AllowedActions           []string                `json:"allowed_actions,omitempty"`
-	ForbiddenActions         []string                `json:"forbidden_actions,omitempty"`
-	ValidationPlan           []string                `json:"validation_plan,omitempty"`
-	RequiredCapabilityGrants []CapabilityGrantSpec   `json:"required_capability_grants,omitempty"`
-	CapabilityGrantIDs       []string                `json:"capability_grant_ids,omitempty"`
-	ExpiresAt                time.Time               `json:"expires_at,omitempty"`
-	PlanHash                 string                  `json:"plan_hash,omitempty"`
-	CreatedAt                time.Time               `json:"created_at,omitempty"`
-	UpdatedAt                time.Time               `json:"updated_at,omitempty"`
-	ApprovedAt               time.Time               `json:"approved_at,omitempty"`
-	ConsumedAt               time.Time               `json:"consumed_at,omitempty"`
-	RevokedAt                time.Time               `json:"revoked_at,omitempty"`
+	ID                       string                     `json:"id,omitempty"`
+	ProposalID               string                     `json:"proposal_id,omitempty"`
+	MissionID                string                     `json:"mission_id,omitempty"`
+	OperatorTitle            string                     `json:"operator_title,omitempty"`
+	PlanTitle                string                     `json:"plan_title,omitempty"`
+	Status                   ContinuationLeaseStatus    `json:"status,omitempty"`
+	MaxTurns                 int                        `json:"max_turns,omitempty"`
+	RemainingTurns           int                        `json:"remaining_turns,omitempty"`
+	ApprovedBy               int64                      `json:"approved_by,omitempty"`
+	LeaseClass               ContinuationLeaseClass     `json:"lease_class,omitempty"`
+	Constraints              map[string]string          `json:"constraints,omitempty"`
+	AllowedActions           []string                   `json:"allowed_actions,omitempty"`
+	ForbiddenActions         []string                   `json:"forbidden_actions,omitempty"`
+	ValidationPlan           []string                   `json:"validation_plan,omitempty"`
+	RequiredCapabilityGrants []CapabilityGrantSpec      `json:"required_capability_grants,omitempty"`
+	CapabilityGrantIDs       []string                   `json:"capability_grant_ids,omitempty"`
+	RetryOperation           ContinuationRetryOperation `json:"retry_operation,omitempty"`
+	ExpiresAt                time.Time                  `json:"expires_at,omitempty"`
+	PlanHash                 string                     `json:"plan_hash,omitempty"`
+	CreatedAt                time.Time                  `json:"created_at,omitempty"`
+	UpdatedAt                time.Time                  `json:"updated_at,omitempty"`
+	ApprovedAt               time.Time                  `json:"approved_at,omitempty"`
+	ConsumedAt               time.Time                  `json:"consumed_at,omitempty"`
+	RevokedAt                time.Time                  `json:"revoked_at,omitempty"`
+}
+
+type ContinuationRetryOperation struct {
+	Contract          string `json:"contract,omitempty"`
+	OperationKind     string `json:"operation_kind,omitempty"`
+	Tool              string `json:"tool,omitempty"`
+	InputJSON         string `json:"input_json,omitempty"`
+	SubjectKind       string `json:"subject_kind,omitempty"`
+	SubjectRef        string `json:"subject_ref,omitempty"`
+	RequestInstanceID string `json:"request_instance_id,omitempty"`
 }
 
 type ContinuationApprovalBundlePhase struct {
@@ -801,9 +812,11 @@ func NormalizeContinuationLease(lease ContinuationLease) ContinuationLease {
 	lease.ValidationPlan = normalizeActionStringSlice(lease.ValidationPlan)
 	lease.RequiredCapabilityGrants = NormalizeCapabilityGrantSpecs(lease.RequiredCapabilityGrants)
 	lease.CapabilityGrantIDs = normalizeActionStringSlice(lease.CapabilityGrantIDs)
+	lease.RetryOperation = NormalizeContinuationRetryOperation(lease.RetryOperation)
 	if continuationLeaseClassContradictedByActions(lease.LeaseClass, lease.AllowedActions, lease.ForbiddenActions) {
 		lease.LeaseClass = ""
 		lease.Constraints = nil
+		lease.RetryOperation = ContinuationRetryOperation{}
 	}
 	if lease.LeaseClass == "" {
 		lease.LeaseClass = InferContinuationLeaseClass("", lease.AllowedActions, "")
@@ -851,6 +864,25 @@ func NormalizeContinuationLease(lease ContinuationLease) ContinuationLease {
 		lease.UpdatedAt = time.Now().UTC()
 	}
 	return lease
+}
+
+func NormalizeContinuationRetryOperation(op ContinuationRetryOperation) ContinuationRetryOperation {
+	op.Contract = strings.TrimSpace(op.Contract)
+	op.OperationKind = normalizeEnumValue(op.OperationKind)
+	op.Tool = strings.TrimSpace(op.Tool)
+	op.InputJSON = strings.TrimSpace(op.InputJSON)
+	op.SubjectKind = normalizeEnumValue(op.SubjectKind)
+	op.SubjectRef = strings.TrimSpace(op.SubjectRef)
+	op.RequestInstanceID = strings.TrimSpace(op.RequestInstanceID)
+	if op.Tool == "" || op.InputJSON == "" {
+		return ContinuationRetryOperation{}
+	}
+	return op
+}
+
+func (op ContinuationRetryOperation) Active() bool {
+	op = NormalizeContinuationRetryOperation(op)
+	return op.Tool != "" && op.InputJSON != ""
 }
 
 func normalizeActionStringSlice(values []string) []string {

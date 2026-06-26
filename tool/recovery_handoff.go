@@ -12,6 +12,7 @@ import (
 )
 
 const recoveryHandoffContractVersion = "aphelion.recovery_handoff.v1"
+const recoveryRetryContractVersion = "aphelion.recovery_retry.v1"
 
 type recoveryHandoffOperation struct {
 	Kind      string
@@ -42,6 +43,9 @@ func compileContinuationLeaseRecoveryHandoff(requirement missingContinuationLeas
 	if missingContinuationLeaseSubjectToken(requirement) == "" || requirement.Principal == "" || requirement.LeaseClass == "" {
 		return recoveryHandoffOperation{}, fmt.Errorf("incomplete continuation lease recovery handoff")
 	}
+	if err := validateContinuationRetryOperationForRequirement(requirement); err != nil {
+		return recoveryHandoffOperation{}, err
+	}
 	payload := map[string]any{
 		"action":                "request_continuation_lease",
 		"lease_class":           string(requirement.LeaseClass),
@@ -54,6 +58,9 @@ func compileContinuationLeaseRecoveryHandoff(requirement missingContinuationLeas
 		"grant_target_resource": requirement.GrantTargetResource,
 		"request_instance_id":   requirement.RequestInstanceID,
 		"retry_after_lease":     true,
+	}
+	if requirement.RetryOperation.Active() {
+		payload["retry_operation"] = requirement.RetryOperation
 	}
 	if requirement.AgentID != "" {
 		payload["agent_id"] = requirement.AgentID

@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -693,12 +694,102 @@ func (r *Runtime) runReservedApprovedContinuation(ctx context.Context, key sessi
 	if reservation.WorkRequest != nil {
 		return r.runReservedApprovedWorkContinuation(ctx, key, reservation)
 	}
+	if retry, ok, err := approvedContinuationRetryOperation(reservation.State); err != nil {
+		return err
+	} else if ok {
+		return r.runReservedApprovedRetryOperation(ctx, key, reservation, retry)
+	}
 	if reservation.HasAuthorityAdmission {
 		ctx = toolpkg.WithExecutionAuthorityAdmission(ctx, reservation.AuthorityAdmission)
 	}
 	msg := continuationInboundForKey(key, reservation.ExecutionActor, reservation.EventText, core.InboundOriginTurnAuthorization, string(session.TurnAuthorizationKindContinuation))
 	_, err := r.handleInternalContinuation(ctx, reservation.ExecutionActor, msg)
 	return err
+}
+
+func approvedContinuationRetryOperation(state session.ContinuationState) (session.ContinuationRetryOperation, bool, error) {
+	state = session.NormalizeContinuationState(state)
+	lease := session.NormalizeContinuationLease(state.ContinuationLease)
+	retry := session.NormalizeContinuationRetryOperation(lease.RetryOperation)
+	if !retry.Active() {
+		return session.ContinuationRetryOperation{}, false, nil
+	}
+	if retry.Contract != "aphelion.recovery_retry.v1" {
+		return session.ContinuationRetryOperation{}, false, fmt.Errorf("approved continuation retry operation has unsupported contract %q", retry.Contract)
+	}
+	switch lease.LeaseClass {
+	case session.ContinuationLeaseClassChildWake:
+		if retry.Tool != "durable_agent" || retry.OperationKind != "durable_agent_wake_once" {
+			return session.ContinuationRetryOperation{}, false, fmt.Errorf("child_wake continuation retry must invoke durable_agent wake_once")
+		}
+		var input struct {
+			Action  string `json:"action"`
+			AgentID string `json:"agent_id"`
+		}
+		if err := json.Unmarshal([]byte(retry.InputJSON), &input); err != nil {
+			return session.ContinuationRetryOperation{}, false, fmt.Errorf("decode child_wake retry input: %w", err)
+		}
+		agentID := strings.TrimSpace(lease.Constraints["agent_id"])
+		if strings.TrimSpace(input.Action) != "wake_once" || strings.TrimSpace(input.AgentID) == "" || strings.TrimSpace(input.AgentID) != agentID {
+			return session.ContinuationRetryOperation{}, false, fmt.Errorf("child_wake continuation retry must target exact approved child")
+		}
+	default:
+		return session.ContinuationRetryOperation{}, false, fmt.Errorf("approved continuation retry is not supported for lease class %q", lease.LeaseClass)
+	}
+	return retry, true, nil
+}
+
+func (r *Runtime) runReservedApprovedRetryOperation(ctx context.Context, key session.SessionKey, reservation approvedContinuationReservation, retry session.ContinuationRetryOperation) (err error) {
+	if r == nil {
+		return nil
+	}
+	if !reservation.HasAuthorityAdmission {
+		return fmt.Errorf("approved retry operation requires execution authority admission")
+	}
+	tools := r.toolsForPrincipal(reservation.ExecutionActor, key)
+	if tools == nil {
+		return fmt.Errorf("approved retry operation requires tool registry")
+	}
+	ctx = toolpkg.WithExecutionAuthorityAdmission(ctx, reservation.AuthorityAdmission)
+	msg := continuationInboundForKey(key, reservation.ExecutionActor, reservation.EventText, core.InboundOriginTurnAuthorization, string(session.TurnAuthorizationKindContinuation))
+	monitor, err := r.startTurnMonitor(ctx, key, session.TurnRunKindInteractive, reservation.EventText, nil, nil, msg)
+	if err != nil {
+		return err
+	}
+	defer func() { monitor.Finish(ctx, err) }()
+
+	toolCtx := monitor.Context()
+	input := json.RawMessage(retry.InputJSON)
+	toolCtx = monitor.ToolInvocationContext(toolCtx, retry.Tool, input)
+	monitor.ToolStarted(toolCtx, retry.Tool, input)
+	out, execErr := tools.Execute(toolCtx, retry.Tool, input)
+	projection := monitor.ProjectToolOutput(toolCtx, retry.Tool, input, out, execErr)
+	monitor.ToolFinishedWithProjection(toolCtx, retry.Tool, input, out, projection.Output, execErr, projection.Recorded)
+	if execErr != nil {
+		err = execErr
+		return err
+	}
+	if opState, loadErr := r.store.OperationState(key); loadErr == nil {
+		opState = session.NormalizeOperationState(opState)
+		opState.Status = session.OperationStatusCompleted
+		opState.Stage = "approved_retry_completed"
+		opState.Summary = "Approved retry operation completed: " + strings.TrimSpace(retry.Tool)
+		opState.Proposal.Status = session.ProposalStatusApproved
+		opState.Proposal.UpdatedAt = time.Now().UTC()
+		opState.UpdatedAt = time.Now().UTC()
+		if updateErr := r.store.UpdateOperationState(key, opState); updateErr != nil {
+			err = updateErr
+			return err
+		}
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventWorkflowNextState, "workflow", string(session.NextActionTerminal), map[string]any{
+		"subject_kind":        strings.TrimSpace(retry.SubjectKind),
+		"subject_ref":         strings.TrimSpace(retry.SubjectRef),
+		"operation_kind":      strings.TrimSpace(retry.OperationKind),
+		"tool":                strings.TrimSpace(retry.Tool),
+		"request_instance_id": strings.TrimSpace(retry.RequestInstanceID),
+	}, time.Now().UTC())
+	return nil
 }
 
 func (r *Runtime) runReservedApprovedWorkContinuation(ctx context.Context, key session.SessionKey, reservation approvedContinuationReservation) error {

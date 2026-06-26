@@ -172,6 +172,7 @@ func (r *Registry) requestContinuationLeaseApproval(in requestApprovalInput, key
 		ValidationPlan:           append([]string(nil), proposal.ValidationPlan...),
 		RequiredCapabilityGrants: requestApprovalContinuationLeaseGrantSpecs(requirement),
 		CapabilityGrantIDs:       requestApprovalContinuationLeaseGrantIDs(requirement),
+		RetryOperation:           requirement.RetryOperation,
 		PlanHash:                 requestApprovalContinuationLeaseContractHash(requirement),
 		ExpiresAt:                expiresAt,
 		CreatedAt:                now,
@@ -322,6 +323,7 @@ func requestApprovalContinuationLeaseRequirement(in requestApprovalInput) (missi
 		Constraints:         constraints,
 		Tool:                toolName,
 		ToolAction:          toolAction,
+		RetryOperation:      in.RetryOperation,
 	})
 	if requirement.Principal == "" {
 		return missingContinuationLeaseRequirement{}, fmt.Errorf("request_approval continuation principal is required")
@@ -375,17 +377,20 @@ func requestApprovalContinuationLeaseRequirement(in requestApprovalInput) (missi
 			requirement.Constraints[key] = want
 		}
 	}
+	if err := validateContinuationRetryOperationForRequirement(requirement); err != nil {
+		return missingContinuationLeaseRequirement{}, err
+	}
 	return requirement, nil
 }
 
 func requestApprovalContinuationLeaseSummary(requirement missingContinuationLeaseRequirement) string {
 	if requirement.LeaseClass == session.ContinuationLeaseClassChildWake && requirement.AgentID != "" {
-		return fmt.Sprintf("Approve one no-content wake/readiness turn for %s", requirement.AgentID)
+		return fmt.Sprintf("Invoke durable_agent wake_once for %s exactly once", requirement.AgentID)
 	}
 	if requirement.Tool != "" && requirement.ToolAction != "" {
-		return fmt.Sprintf("Approve one %s lease for %s %s", requirement.LeaseClass, requirement.Tool, requirement.ToolAction)
+		return fmt.Sprintf("Retry %s %s exactly once under the approved %s lease", requirement.Tool, requirement.ToolAction, requirement.LeaseClass)
 	}
-	return fmt.Sprintf("Approve one %s continuation lease", requirement.LeaseClass)
+	return fmt.Sprintf("Use the approved %s continuation lease exactly once", requirement.LeaseClass)
 }
 
 func requestApprovalContinuationLeaseBoundedEffect(requirement missingContinuationLeaseRequirement) string {
@@ -487,6 +492,17 @@ func requestApprovalContinuationLeaseContractHash(requirement missingContinuatio
 		"constraints":           normalizeStringMapForHash(requirement.Constraints),
 		"tool":                  requirement.Tool,
 		"tool_action":           requirement.ToolAction,
+	}
+	if requirement.RetryOperation.Active() {
+		retry := session.NormalizeContinuationRetryOperation(requirement.RetryOperation)
+		payload["retry_operation"] = map[string]any{
+			"contract":       retry.Contract,
+			"operation_kind": retry.OperationKind,
+			"tool":           retry.Tool,
+			"input_json":     retry.InputJSON,
+			"subject_kind":   retry.SubjectKind,
+			"subject_ref":    retry.SubjectRef,
+		}
 	}
 	raw, _ := json.Marshal(payload)
 	sum := sha256.Sum256(raw)
@@ -647,6 +663,19 @@ func requestApprovalToolDefinition() agent.ToolDef {
 				"agent_id": {"type": "string", "description": "Named durable child for child_wake lease requests"},
 				"resource": {"type": "string", "description": "Named resource for data/resource lease requests"},
 				"retry_after_lease": {"type": "boolean", "description": "True when the blocked invocation should be retried only after the lease is approved"},
+				"retry_operation": {
+					"type": "object",
+					"description": "Exact validated operation to execute once after the requested lease is approved. Used only for closed recovery contracts.",
+					"properties": {
+						"contract": {"type": "string"},
+						"operation_kind": {"type": "string"},
+						"tool": {"type": "string"},
+						"input_json": {"type": "string"},
+						"subject_kind": {"type": "string"},
+						"subject_ref": {"type": "string"},
+						"request_instance_id": {"type": "string"}
+					}
+				},
 				"phase": {
 					"type": "object",
 					"description": "Bounded approval phase to materialize into a continuation approval card",
