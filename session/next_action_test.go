@@ -72,46 +72,14 @@ func TestResolveNextActionByRecordIDLeavesSameSubjectSuccessorOpen(t *testing.T)
 	defer store.Close()
 
 	key := SessionKey{ChatID: 91009, UserID: 1001}
-	if _, err := store.RecordNextAction(NextActionInput{
-		RecordID:           "invalid-recovery-row",
-		Key:                key,
-		Owner:              "test",
-		State:              NextActionBlockedNeedsAuthority,
-		SubjectKind:        "continuation_lease_request",
-		SubjectRef:         "child_wake:child-alpha",
-		NextAction:         "invalid legacy handoff",
-		RequiredAuthority:  "child_wake",
-		ResourceBlocker:    "missing_continuation_lease",
-		OperationKind:      "continuation_lease_request",
-		OperationTool:      "request_approval",
-		OperationInputJSON: `{"action":"request_continuation_lease","lease_class":"child_wake","request_instance_id":"bad"}`,
-		CreatedAt:          time.Date(2026, 6, 24, 10, 0, 0, 0, time.UTC),
-	}); err != nil {
-		t.Fatalf("RecordNextAction(invalid) err = %v", err)
-	}
-	if _, err := store.RecordNextAction(NextActionInput{
-		RecordID:           "valid-recovery-row",
-		Key:                key,
-		Owner:              "test",
-		State:              NextActionBlockedNeedsAuthority,
-		SubjectKind:        "continuation_lease_request",
-		SubjectRef:         "child_wake:child-alpha-valid",
-		NextAction:         "valid handoff",
-		RequiredAuthority:  "child_wake",
-		ResourceBlocker:    "missing_continuation_lease",
-		OperationKind:      "continuation_lease_request",
-		OperationTool:      "request_approval",
-		OperationInputJSON: `{"action":"request_continuation_lease","lease_class":"child_wake","request_instance_id":"good"}`,
-		CreatedAt:          time.Date(2026, 6, 24, 10, 1, 0, 0, time.UTC),
-	}); err != nil {
-		t.Fatalf("RecordNextAction(valid) err = %v", err)
-	}
+	seedNextActionRecord(t, store, key, "invalid-recovery-row", "child_wake:child-alpha", time.Date(2026, 6, 24, 10, 0, 0, 0, time.UTC))
+	seedNextActionRecord(t, store, key, "valid-recovery-row", "child_wake:child-alpha", time.Date(2026, 6, 24, 10, 1, 0, 0, time.UTC))
 	if err := store.ResolveNextAction(NextActionResolutionInput{
 		RecordID:    "invalid-recovery-row",
 		Key:         key,
 		Owner:       "test",
 		SubjectKind: "continuation_lease_request",
-		SubjectRef:  "child_wake:child-alpha-valid",
+		SubjectRef:  "child_wake:child-alpha",
 		Reason:      "invalid_recovery_handoff",
 		ResolvedAt:  time.Date(2026, 6, 24, 10, 2, 0, 0, time.UTC),
 	}); err != nil {
@@ -123,6 +91,25 @@ func TestResolveNextActionByRecordIDLeavesSameSubjectSuccessorOpen(t *testing.T)
 	}
 	if len(open) != 1 || open[0].RecordID != "valid-recovery-row" {
 		t.Fatalf("open next actions = %#v, want only valid same-subject row", open)
+	}
+}
+
+func seedNextActionRecord(t *testing.T, store *SQLiteStore, key SessionKey, recordID string, subjectRef string, createdAt time.Time) {
+	t.Helper()
+
+	_, err := store.db.Exec(`
+		INSERT INTO next_action_records(
+			record_id, session_id, chat_id, user_id, owner, state, subject_kind, subject_ref,
+			next_action, required_authority, resource_blocker, operation_kind, operation_tool,
+			operation_input_json, created_at, resolved_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+	`, recordID, SessionIDForKey(key), key.ChatID, key.UserID, "test", string(NextActionBlockedNeedsAuthority),
+		"continuation_lease_request", subjectRef, "recovery handoff", "child_wake", "missing_continuation_lease",
+		"continuation_lease_request", "request_approval",
+		`{"action":"request_continuation_lease","lease_class":"child_wake","request_instance_id":"seeded"}`,
+		createdAt.Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatalf("seed next action record %q err = %v", recordID, err)
 	}
 }
 

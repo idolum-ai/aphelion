@@ -508,6 +508,7 @@ func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context
 			return false, fmt.Errorf("materialize recovery approval handoff %s: %w", action.RecordID, err)
 		}
 		if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+			RecordID:    action.RecordID,
 			Key:         key,
 			Owner:       "runtime",
 			SubjectKind: action.SubjectKind,
