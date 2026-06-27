@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 	toolpkg "github.com/idolum-ai/aphelion/tool"
@@ -136,7 +137,22 @@ func TestRunDurableAgentChildWakeProcessesPendingParentBeforeExternalCadence(t *
 func TestRunDurableAgentChildWakeDoesNotRebindParentAuthorityAdmission(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "Processed pending parent guidance.\nREVIEW_STATUS: completed"
-	rt, err := New(cfg, store, provider, nil, sender)
+	inspector := &contextInspectingProvider{fakeProvider: provider}
+	var sawRawAdmission bool
+	var sawAuthorityUseRef bool
+	var sawToolInvocationRef bool
+	inspector.inspect = func(ctx context.Context) {
+		if _, ok := toolpkg.ExecutionAuthorityAdmissionFromContext(ctx); ok {
+			sawRawAdmission = true
+		}
+		if _, ok := toolpkg.AuthorityUseRefFromContext(ctx); ok {
+			sawAuthorityUseRef = true
+		}
+		if _, ok := toolpkg.ToolInvocationRefFromContext(ctx); ok {
+			sawToolInvocationRef = true
+		}
+	}
+	rt, err := New(cfg, store, inspector, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
@@ -184,7 +200,7 @@ func TestRunDurableAgentChildWakeDoesNotRebindParentAuthorityAdmission(t *testin
 	if err := store.UpdateContinuationState(parentKey, parentState); err != nil {
 		t.Fatalf("UpdateContinuationState(parent) err = %v", err)
 	}
-	ctx := toolpkg.WithExecutionAuthorityAdmission(context.Background(), session.ExecutionRunAuthority{
+	rawAdmission := session.ExecutionRunAuthority{
 		SessionID:           session.SessionIDForKey(parentKey),
 		ChatID:              parentKey.ChatID,
 		UserID:              parentKey.UserID,
@@ -201,7 +217,19 @@ func TestRunDurableAgentChildWakeDoesNotRebindParentAuthorityAdmission(t *testin
 		LeaseRemainingTurns: 1,
 		LeaseExpiresAt:      now.Add(time.Hour),
 		AdmittedAt:          now,
-	})
+	}
+	ctx := toolpkg.WithToolInvocationRef(
+		toolpkg.WithAuthorityUseRef(
+			toolpkg.WithExecutionAuthorityAdmission(context.Background(), rawAdmission),
+			session.AuthorityUseRef{
+				SessionID:           rawAdmission.SessionID,
+				TurnRunID:           930600,
+				ContinuationLeaseID: rawAdmission.ContinuationLeaseID,
+				AuthoritySource:     "context",
+			},
+		),
+		toolpkg.ToolInvocationRef{TurnRunID: 930600, InvocationID: "parent-durable-agent-wake-once"},
+	)
 
 	if err := rt.RunDurableAgentChildWake(ctx, agent.AgentID, now); err != nil {
 		t.Fatalf("RunDurableAgentChildWake() err = %v, want parent authority admission isolated from child turn", err)
@@ -209,6 +237,34 @@ func TestRunDurableAgentChildWakeDoesNotRebindParentAuthorityAdmission(t *testin
 	if len(provider.seenGovernorSystem) == 0 {
 		t.Fatal("provider saw no governor prompts, want child wake turn to run")
 	}
+	if sawRawAdmission {
+		t.Fatal("child provider context inherited parent raw execution authority admission")
+	}
+	if sawAuthorityUseRef {
+		t.Fatal("child provider context inherited parent authority-use ref")
+	}
+	if sawToolInvocationRef {
+		t.Fatal("child provider context inherited parent tool invocation ref")
+	}
+}
+
+type contextInspectingProvider struct {
+	*fakeProvider
+	inspect func(context.Context)
+}
+
+func (p *contextInspectingProvider) Complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	if p.inspect != nil {
+		p.inspect(ctx)
+	}
+	return p.fakeProvider.Complete(ctx, messages, tools)
+}
+
+func (p *contextInspectingProvider) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
+	if p.inspect != nil {
+		p.inspect(ctx)
+	}
+	return p.fakeProvider.CompleteWithOptions(ctx, messages, tools, opts)
 }
 
 func TestRunDurableAgentChildWakeSkipsWithoutPendingParentConversation(t *testing.T) {

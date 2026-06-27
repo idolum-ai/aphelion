@@ -377,7 +377,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		return wrappedErr
 	}
 
-	childTurnCtx := toolpkg.WithoutAuthorityUseRef(toolpkg.WithoutExecutionAuthorityAdmission(turnCtx))
+	childTurnCtx := toolpkg.WithoutToolInvocationRef(toolpkg.WithoutAuthorityUseRef(toolpkg.WithoutExecutionAuthorityAdmission(turnCtx)))
 	turnResult, turnSummary, err := r.runDurableWakeConversation(childTurnCtx, agent, scope, key, plan, pendingParentConversation)
 	if err != nil {
 		r.recordExecutionEvent(key, core.ExecutionEventDurableWakeFailed, "durable", "failed", map[string]any{

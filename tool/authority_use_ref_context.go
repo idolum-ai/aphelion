@@ -62,6 +62,10 @@ func WithToolInvocationRef(ctx context.Context, ref ToolInvocationRef) context.C
 	return context.WithValue(ctx, toolInvocationRefContextKey{}, ref)
 }
 
+func WithoutToolInvocationRef(ctx context.Context) context.Context {
+	return context.WithValue(ctx, toolInvocationRefContextKey{}, authorityContextCleared{})
+}
+
 func ToolInvocationRefFromContext(ctx context.Context) (ToolInvocationRef, bool) {
 	if ctx == nil {
 		return ToolInvocationRef{}, false
