@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -368,6 +370,93 @@ func TestRunDurableAgentParentConversationWakeDoesNotFallbackAfterQueueRace(t *t
 	}
 	if packet, ok, err := store.ChildTaskPacket(messageIDs[0]); err != nil || ok {
 		t.Fatalf("ChildTaskPacket(%q) = %#v ok=%t err=%v, want no child task for vanished claimed batch", messageIDs[0], packet, ok, err)
+	}
+}
+
+func TestRunDurableAgentParentConversationWakeRecordsTaskForScopeFailure(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "child turn should not start when scope setup fails"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	badRoot := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(badRoot, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("WriteFile(badRoot) err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "child-scope-fails",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		LocalStorageRoots:  []string{badRoot, filepath.Join(t.TempDir(), "memory")},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Process parent guidance only when the runtime can create child scope.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Run one readiness wake and report the first blocker.", time.Now().UTC().Add(-time.Minute))
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agent.AgentID, StateJSON: raw}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+	pending, err := rt.pendingDurableAgentParentConversation(agent.AgentID, 5)
+	if err != nil {
+		t.Fatalf("pendingDurableAgentParentConversation() err = %v", err)
+	}
+	messageIDs := core.DurableAgentConversationMessageIDs(pending)
+	if len(messageIDs) != 1 {
+		t.Fatalf("pending message IDs = %#v, want one", messageIDs)
+	}
+
+	now := time.Date(2026, 6, 27, 20, 45, 0, 0, time.UTC)
+	err = rt.RunDurableAgentParentConversationWake(context.Background(), agent.AgentID, messageIDs, now)
+	if err == nil || !strings.Contains(err.Error(), "resolve durable wake scope") {
+		t.Fatalf("RunDurableAgentParentConversationWake() err = %v, want scope setup failure", err)
+	}
+	if len(provider.seenGovernorSystem) != 0 {
+		t.Fatalf("governor prompts = %#v, want no child turn after pre-start scope failure", provider.seenGovernorSystem)
+	}
+	packet, ok, err := store.ChildTaskPacket(messageIDs[0])
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(%q) err = %v", messageIDs[0], err)
+	}
+	if !ok || packet.Status != session.ChildTaskPacketFailed || packet.ResultID == "" || packet.TerminalAt.IsZero() {
+		t.Fatalf("ChildTaskPacket(%q) = %#v ok=%t, want terminal failed packet despite pre-start failure", messageIDs[0], packet, ok)
+	}
+	result, ok, err := store.ChildTaskResult(packet.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskResult(%q) err = %v", packet.ResultID, err)
+	}
+	if !ok || result.PacketID != packet.PacketID || result.Status != session.ChildTaskResultFailed || result.NextState != session.NextActionBlockedNeedsResourceRepair {
+		t.Fatalf("ChildTaskResult(%q) = %#v ok=%t, want failed repair-directed result", packet.ResultID, result, ok)
+	}
+	if !strings.Contains(result.ErrorText, "resolve durable wake scope") {
+		t.Fatalf("result error = %q, want scope failure evidence", result.ErrorText)
+	}
+	open, err := store.OpenNextActionsBySession(session.SessionKey{
+		ChatID: durableWakeSyntheticChatID(agent.AgentID),
+		Scope:  durableAgentScopeRef(agent),
+	}, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsResourceRepair || open[0].SubjectRef != packet.PacketID {
+		t.Fatalf("open next actions = %#v, want one packet-scoped resource repair action", open)
 	}
 }
 

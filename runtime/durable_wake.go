@@ -243,18 +243,6 @@ func (r *Runtime) runDurableAgentChildWakeLoaded(ctx context.Context, agent core
 }
 
 func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgent, plan durableWakeTurnPlan, now time.Time) error {
-	scope, err := r.scopeForDurableAgent(agent)
-	if err != nil {
-		wrappedErr := fmt.Errorf("resolve durable wake scope: %w", err)
-		if finalizeErr := finalizeDurableWakeFailure(plan, "", wrappedErr); finalizeErr != nil {
-			return fmt.Errorf("%w (and failed to record wake failure: %v)", wrappedErr, finalizeErr)
-		}
-		return wrappedErr
-	}
-	if len(agent.LocalStorageRoots) == 0 {
-		agent.LocalStorageRoots = []string{scope.WorkingRoot, scope.SharedMemoryRoot}
-	}
-
 	key := plan.Key
 	if key.ChatID == 0 {
 		key.ChatID = plan.Inbound.ChatID
@@ -291,6 +279,28 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 			return fmt.Errorf("%w (and failed to record wake failure: %v)", wrappedErr, finalizeErr)
 		}
 		return wrappedErr
+	}
+	scope, err := r.scopeForDurableAgent(agent)
+	if err != nil {
+		wrappedErr := fmt.Errorf("resolve durable wake scope: %w", err)
+		r.recordExecutionEvent(key, core.ExecutionEventDurableWakeFailed, "durable", "failed", map[string]any{
+			"agent_id":       strings.TrimSpace(agent.AgentID),
+			"task_packet_id": taskPacketID,
+			"attempt_id":     attemptID,
+			"error":          trimError(wrappedErr.Error()),
+		}, time.Now().UTC())
+		resultAt := time.Now().UTC()
+		intents := durableWakeOutcomeIntentInputs(agent, plan, nil, session.ChildTaskResultFailed, "", wrappedErr, resultAt)
+		result, resultErr := r.recordDurableWakeChildTaskResultWithIntents(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, "", wrappedErr, resultAt, intents)
+		if resultErr != nil {
+			return fmt.Errorf("%w (and failed to record child task result: %v)", wrappedErr, resultErr)
+		}
+		_ = r.applyDurableWakeOutcomeIntents(context.Background(), agent, plan, result)
+		r.applyDurableWakeNonDurableFinalizer(agent, plan, session.ChildTaskResultFailed, "", wrappedErr)
+		return wrappedErr
+	}
+	if len(agent.LocalStorageRoots) == 0 {
+		agent.LocalStorageRoots = []string{scope.WorkingRoot, scope.SharedMemoryRoot}
 	}
 	turnCtx, stopLeaseKeeper := r.startDurableWakeAttemptLeaseKeeper(ctx, key, claimedPacket)
 	defer func() {
