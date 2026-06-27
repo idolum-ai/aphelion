@@ -35,6 +35,62 @@ type durableAgentWakeOnceResult struct {
 	ContinuationLeaseID    string
 }
 
+type DurableAgentWakeOnceRenderedResult struct {
+	AgentID                string
+	WakeStatus             string
+	FailureClass           string
+	FailureSummary         string
+	NextRepair             string
+	RetryPolicy            string
+	Next                   string
+	AuthoritySource        string
+	ContinuationLeaseID    string
+	PendingParentBefore    string
+	PendingParentAfter     string
+	ThreadStateBefore      string
+	ThreadStateAfter       string
+	LastParentMessageAt    string
+	LastChildMessageAt     string
+	LastParentAcknowledged string
+}
+
+func ParseDurableAgentWakeOnceRenderedResult(out string) (DurableAgentWakeOnceRenderedResult, bool) {
+	fields := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		fields[strings.ToLower(strings.TrimSpace(key))] = strings.TrimSpace(value)
+	}
+	if fields["action"] != "durable-agent wake_once" {
+		return DurableAgentWakeOnceRenderedResult{}, false
+	}
+	result := DurableAgentWakeOnceRenderedResult{
+		AgentID:                fields["agent_id"],
+		WakeStatus:             fields["wake_status"],
+		FailureClass:           fields["failure_class"],
+		FailureSummary:         fields["failure_summary"],
+		NextRepair:             fields["next_repair"],
+		RetryPolicy:            fields["retry_policy"],
+		Next:                   fields["next"],
+		AuthoritySource:        fields["authority_source"],
+		ContinuationLeaseID:    fields["continuation_lease_id"],
+		PendingParentBefore:    fields["pending_parent_before"],
+		PendingParentAfter:     fields["pending_parent_after"],
+		ThreadStateBefore:      fields["thread_state_before"],
+		ThreadStateAfter:       fields["thread_state_after"],
+		LastParentMessageAt:    fields["last_parent_message_at"],
+		LastChildMessageAt:     fields["last_child_message_at"],
+		LastParentAcknowledged: fields["last_parent_acknowledged_at"],
+	}
+	return result, true
+}
+
 func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInput, rawInput json.RawMessage, p principal.Principal, key session.SessionKey) (out string, err error) {
 	if r.durableAgentWakeRunner == nil {
 		return "", fmt.Errorf("durable_agent wake_once requires durable child wake runtime")

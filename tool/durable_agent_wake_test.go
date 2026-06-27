@@ -1421,6 +1421,41 @@ func TestDurableAgentWakeOnceReportsFailedWakeWithoutThrowing(t *testing.T) {
 	}
 }
 
+func TestParseDurableAgentWakeOnceRenderedResult(t *testing.T) {
+	t.Parallel()
+
+	out := strings.Join([]string{
+		"action: durable-agent wake_once",
+		"agent_id: idolum-email",
+		"wake_status: failed",
+		"pending_parent_before: 9",
+		"pending_parent_after: 9",
+		"authority_source: continuation_lease",
+		"continuation_lease_id: lease-child-wake",
+		"failure_class: runner_start_failed",
+		"failure_summary: durable_agent wake_once failed before the child produced a completion",
+		"retry_policy: retry_after_wake_runtime_repair",
+		"next_repair: inspect the durable-agent wake runtime, then retry one bounded wake",
+		"next: repair_child_wake_failure",
+	}, "\n")
+
+	parsed, ok := ParseDurableAgentWakeOnceRenderedResult(out)
+	if !ok {
+		t.Fatalf("ParseDurableAgentWakeOnceRenderedResult() ok=false")
+	}
+	if parsed.AgentID != "idolum-email" ||
+		parsed.WakeStatus != "failed" ||
+		parsed.FailureClass != "runner_start_failed" ||
+		parsed.RetryPolicy != "retry_after_wake_runtime_repair" ||
+		parsed.ContinuationLeaseID != "lease-child-wake" ||
+		parsed.Next != "repair_child_wake_failure" {
+		t.Fatalf("parsed = %#v, want wake failure fields", parsed)
+	}
+	if _, ok := ParseDurableAgentWakeOnceRenderedResult("action: other\nwake_status: failed\n"); ok {
+		t.Fatal("ParseDurableAgentWakeOnceRenderedResult(non-wake) ok=true, want false")
+	}
+}
+
 func TestDurableAgentWakeOnceClassifiesRunnerFailures(t *testing.T) {
 	t.Parallel()
 
