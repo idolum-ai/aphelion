@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -355,8 +356,9 @@ func TestRunDurableAgentParentConversationWakeDoesNotFallbackAfterQueueRace(t *t
 	rt.durableWakeAdapters = []durableWakeIngressAdapter{fallback}
 
 	err = rt.RunDurableAgentParentConversationWake(context.Background(), agent.AgentID, messageIDs, time.Now().UTC())
-	if err == nil || !strings.Contains(err.Error(), "claimed parent message batch") {
-		t.Fatalf("RunDurableAgentParentConversationWake() err = %v, want claimed-batch failure", err)
+	var claimedBatchErr core.DurableAgentWakeFailureError
+	if !errors.As(err, &claimedBatchErr) || claimedBatchErr.Class != core.DurableAgentWakeFailureClaimedParentBatchMissing {
+		t.Fatalf("RunDurableAgentParentConversationWake() err = %T %[1]v, want typed claimed-batch failure", err)
 	}
 	if fallback.prepareCalls != 0 {
 		t.Fatalf("fallback prepare calls = %d, want none after parent queue race", fallback.prepareCalls)

@@ -5,6 +5,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -291,13 +292,24 @@ func (f durableAgentWakeOnceFailure) SafeToolFailureRetryPolicy() string {
 }
 
 func durableAgentWakeOnceFailureForError(err error) durableAgentWakeOnceFailure {
-	lower := strings.ToLower(strings.TrimSpace(errorString(err)))
 	failure := durableAgentWakeOnceFailure{
 		Class:       "runner_start_failed",
 		SafeSummary: "durable_agent wake_once failed before the child produced a completion",
 		NextRepair:  "inspect the durable-agent wake runtime, then retry one bounded wake",
 		RetryPolicy: "retry_after_wake_runtime_repair",
 	}
+	var wakeFailure core.DurableAgentWakeFailureError
+	if errors.As(err, &wakeFailure) {
+		switch wakeFailure.Class {
+		case core.DurableAgentWakeFailureClaimedParentBatchMissing:
+			failure.Class = string(core.DurableAgentWakeFailureClaimedParentBatchMissing)
+			failure.SafeSummary = "durable_agent wake_once could not start because the claimed parent guidance batch was no longer pending"
+			failure.NextRepair = "refresh the child wake request from current pending parent guidance, then retry one bounded wake"
+			failure.RetryPolicy = "retry_after_recovery_refresh"
+			return failure
+		}
+	}
+	lower := strings.ToLower(strings.TrimSpace(errorString(err)))
 	switch {
 	case strings.Contains(lower, "schema mismatch") || strings.Contains(lower, "schema_mismatch") || strings.Contains(lower, "schema version"):
 		failure.Class = "schema_mismatch"

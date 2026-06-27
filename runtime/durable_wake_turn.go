@@ -8,6 +8,8 @@ import (
 	"hash/fnv"
 	"strings"
 	"time"
+
+	"github.com/idolum-ai/aphelion/core"
 )
 
 func (r *Runtime) RunDurableAgentChildWake(ctx context.Context, agentID string, now time.Time) error {
@@ -60,7 +62,7 @@ func (r *Runtime) RunDurableAgentParentConversationWake(ctx context.Context, age
 	}
 	if plan == nil {
 		if len(durableWakeNonEmptyMessageIDs(messageIDs)) > 0 {
-			return fmt.Errorf("durable parent conversation wake for agent %q could not find the claimed parent message batch", agentID)
+			return core.NewDurableAgentWakeClaimedParentBatchMissingError(agentID, messageIDs)
 		}
 		return nil
 	}

@@ -1426,10 +1426,17 @@ func TestDurableAgentWakeOnceClassifiesRunnerFailures(t *testing.T) {
 
 	tests := []struct {
 		name       string
+		err        error
 		errText    string
 		wantClass  string
 		notContain string
 	}{
+		{
+			name:       "claimed parent batch missing",
+			err:        core.NewDurableAgentWakeClaimedParentBatchMissingError("child-alpha", []string{"dcm_claimed_parent"}),
+			wantClass:  string(core.DurableAgentWakeFailureClaimedParentBatchMissing),
+			notContain: "dcm_claimed_parent",
+		},
 		{
 			name:       "adapter lifecycle",
 			errText:    "child_runtime_blocked: preflight_failed adapter=gog_cli failure_code=lifecycle_unregistered next_repair=install/audit/probe",
@@ -1474,7 +1481,11 @@ func TestDurableAgentWakeOnceClassifiesRunnerFailures(t *testing.T) {
 			t.Parallel()
 
 			registry, store := newDurableAgentToolRegistry(t)
-			runner := &fakeDurableAgentWakeRunner{err: fmt.Errorf("%s", tc.errText)}
+			runErr := tc.err
+			if runErr == nil {
+				runErr = fmt.Errorf("%s", tc.errText)
+			}
+			runner := &fakeDurableAgentWakeRunner{err: runErr}
 			registry.WithDurableAgentWakeRunner(runner)
 			upsertDurableAgentWakeTestAgent(t, store)
 			grant := grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
