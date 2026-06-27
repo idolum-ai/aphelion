@@ -44,7 +44,7 @@ func TestChildWakeRecoveryJourneyRunsRealDurableWakeAfterApprovals(t *testing.T)
 
 	key := session.SessionKey{ChatID: 9082, UserID: 0, Scope: telegramDMScopeRef(9082)}
 	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
-	seedRealChildWakeAgent(t, store, "idolum-email")
+	parentMessageID := seedRealChildWakeAgent(t, store, "idolum-email")
 	if err := store.UpdateOperationState(key, session.OperationState{
 		ID:        "op-idolum-email-full-wake-recovery",
 		Status:    session.OperationStatusActive,
@@ -167,6 +167,37 @@ func TestChildWakeRecoveryJourneyRunsRealDurableWakeAfterApprovals(t *testing.T)
 	if len(provider.seenGovernorSystem) == 0 || !strings.Contains(strings.Join(provider.seenGovernorSystem, "\n"), "parent conversation wake") {
 		t.Fatalf("provider governor prompts = %#v, want real durable parent conversation wake", provider.seenGovernorSystem)
 	}
+	packet, ok, err := store.ChildTaskPacket(parentMessageID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(%q) err = %v", parentMessageID, err)
+	}
+	if !ok || packet.Status != session.ChildTaskPacketCompleted || packet.ResultID == "" || packet.TerminalAt.IsZero() {
+		t.Fatalf("ChildTaskPacket(%q) = %#v ok=%t, want completed child task evidence", parentMessageID, packet, ok)
+	}
+	resultRecord, ok, err := store.ChildTaskResult(packet.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskResult(%q) err = %v", packet.ResultID, err)
+	}
+	if !ok || resultRecord.PacketID != parentMessageID || resultRecord.Status != session.ChildTaskResultCompleted || resultRecord.NextState != session.NextActionTerminal {
+		t.Fatalf("ChildTaskResult(%q) = %#v ok=%t, want terminal result for claimed parent message", packet.ResultID, resultRecord, ok)
+	}
+	agent, err := store.DurableAgent("idolum-email")
+	if err != nil {
+		t.Fatalf("DurableAgent(idolum-email) err = %v", err)
+	}
+	if agent == nil {
+		t.Fatal("DurableAgent(idolum-email) = nil")
+	}
+	wakeEvents, err := store.ExecutionEventsBySession(session.SessionKey{
+		ChatID: durableWakeSyntheticChatID("idolum-email"),
+		Scope:  durableAgentScopeRef(*agent),
+	}, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession(wake) err = %v", err)
+	}
+	assertHasEventType(t, wakeEvents, core.ExecutionEventDurableWakeStarted)
+	assertHasEventType(t, wakeEvents, core.ExecutionEventDurableWakeCompleted)
+	assertHasEventType(t, wakeEvents, core.ExecutionEventDurableChildTaskResult)
 	providerPromptCountAfterWake := len(provider.seenGovernorSystem)
 	open, err := store.OpenNextActionsBySession(key, 20)
 	if err != nil {
@@ -216,7 +247,7 @@ func TestChildWakeRecoveryJourneyRunsRealDurableWakeAfterApprovals(t *testing.T)
 	}
 }
 
-func seedRealChildWakeAgent(t *testing.T, store *session.SQLiteStore, agentID string) {
+func seedRealChildWakeAgent(t *testing.T, store *session.SQLiteStore, agentID string) string {
 	t.Helper()
 
 	if err := store.UpsertDurableAgent(core.DurableAgent{
@@ -243,6 +274,10 @@ func seedRealChildWakeAgent(t *testing.T, store *session.SQLiteStore, agentID st
 	}
 	continuity := core.DurableAgentContinuityState{}
 	continuity = continuity.WithConversationMessage("parent", "Run one no-content readiness check and report the result.", time.Now().UTC().Add(-time.Minute))
+	pending := continuity.PendingParentConversationMessages(1)
+	if len(pending) != 1 || strings.TrimSpace(pending[0].MessageID) == "" {
+		t.Fatalf("seed continuity pending messages = %#v, want one stable parent message id", pending)
+	}
 	raw, err := continuity.Marshal()
 	if err != nil {
 		t.Fatalf("continuity.Marshal() err = %v", err)
@@ -250,6 +285,7 @@ func seedRealChildWakeAgent(t *testing.T, store *session.SQLiteStore, agentID st
 	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agentID, StateJSON: raw}); err != nil {
 		t.Fatalf("SaveDurableAgentState(%s) err = %v", agentID, err)
 	}
+	return strings.TrimSpace(pending[0].MessageID)
 }
 
 func singleOpenWorkflowAction(t *testing.T, store *session.SQLiteStore, key session.SessionKey, state session.NextActionState, toolName string) session.NextActionRecord {

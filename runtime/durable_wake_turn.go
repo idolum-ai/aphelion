@@ -59,9 +59,22 @@ func (r *Runtime) RunDurableAgentParentConversationWake(ctx context.Context, age
 		return err
 	}
 	if plan == nil {
+		if len(durableWakeNonEmptyMessageIDs(messageIDs)) > 0 {
+			return fmt.Errorf("durable parent conversation wake for agent %q could not find the claimed parent message batch", agentID)
+		}
 		return nil
 	}
 	return r.runDurableWakeTurn(ctx, *agent, *plan, now.UTC())
+}
+
+func durableWakeNonEmptyMessageIDs(messageIDs []string) []string {
+	out := make([]string, 0, len(messageIDs))
+	for _, id := range messageIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func durableWakeSyntheticChatID(agentID string) int64 {

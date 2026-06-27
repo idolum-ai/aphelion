@@ -354,14 +354,18 @@ func TestRunDurableAgentParentConversationWakeDoesNotFallbackAfterQueueRace(t *t
 	fallback := &testDurableWakeAdapter{channelKind: "external_channel"}
 	rt.durableWakeAdapters = []durableWakeIngressAdapter{fallback}
 
-	if err := rt.RunDurableAgentParentConversationWake(context.Background(), agent.AgentID, messageIDs, time.Now().UTC()); err != nil {
-		t.Fatalf("RunDurableAgentParentConversationWake() err = %v", err)
+	err = rt.RunDurableAgentParentConversationWake(context.Background(), agent.AgentID, messageIDs, time.Now().UTC())
+	if err == nil || !strings.Contains(err.Error(), "claimed parent message batch") {
+		t.Fatalf("RunDurableAgentParentConversationWake() err = %v, want claimed-batch failure", err)
 	}
 	if fallback.prepareCalls != 0 {
 		t.Fatalf("fallback prepare calls = %d, want none after parent queue race", fallback.prepareCalls)
 	}
 	if len(provider.seenGovernorSystem) != 0 {
 		t.Fatalf("governor prompts = %#v, want no fallback turn", provider.seenGovernorSystem)
+	}
+	if packet, ok, err := store.ChildTaskPacket(messageIDs[0]); err != nil || ok {
+		t.Fatalf("ChildTaskPacket(%q) = %#v ok=%t err=%v, want no child task for vanished claimed batch", messageIDs[0], packet, ok, err)
 	}
 }
 
