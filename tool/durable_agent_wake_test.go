@@ -1473,6 +1473,30 @@ func TestDurableAgentWakeOnceClassifiesRunnerFailures(t *testing.T) {
 			notContain: "dcm_claimed_parent",
 		},
 		{
+			name:       "parent conversation prepare",
+			err:        core.NewDurableAgentWakeFailureError(core.DurableAgentWakeFailureParentConversationPrepare, "child-alpha", []string{"dcm_prepare"}, fmt.Errorf("raw parent state parse failure")),
+			wantClass:  string(core.DurableAgentWakeFailureParentConversationPrepare),
+			notContain: "raw parent state parse failure",
+		},
+		{
+			name:       "task packet admission",
+			err:        core.NewDurableAgentWakeFailureError(core.DurableAgentWakeFailureTaskPacketAdmission, "child-alpha", []string{"dcm_packet"}, fmt.Errorf("insert child task packet failed")),
+			wantClass:  string(core.DurableAgentWakeFailureTaskPacketAdmission),
+			notContain: "insert child task packet failed",
+		},
+		{
+			name:       "task attempt claim",
+			err:        core.NewDurableAgentWakeFailureError(core.DurableAgentWakeFailureTaskAttemptClaim, "child-alpha", []string{"dcm_claim"}, fmt.Errorf("live task lease conflict")),
+			wantClass:  string(core.DurableAgentWakeFailureTaskAttemptClaim),
+			notContain: "live task lease conflict",
+		},
+		{
+			name:       "scope setup",
+			err:        core.NewDurableAgentWakeFailureError(core.DurableAgentWakeFailureScopeSetup, "child-alpha", []string{"dcm_scope"}, fmt.Errorf("create durable agent root failed")),
+			wantClass:  string(core.DurableAgentWakeFailureScopeSetup),
+			notContain: "create durable agent root failed",
+		},
+		{
 			name:       "adapter lifecycle",
 			errText:    "child_runtime_blocked: preflight_failed adapter=gog_cli failure_code=lifecycle_unregistered next_repair=install/audit/probe",
 			wantClass:  "adapter_lifecycle_failed",

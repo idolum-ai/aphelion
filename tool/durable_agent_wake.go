@@ -363,6 +363,30 @@ func durableAgentWakeOnceFailureForError(err error) durableAgentWakeOnceFailure 
 			failure.NextRepair = "refresh the child wake request from current pending parent guidance, then retry one bounded wake"
 			failure.RetryPolicy = "retry_after_recovery_refresh"
 			return failure
+		case core.DurableAgentWakeFailureParentConversationPrepare:
+			failure.Class = string(core.DurableAgentWakeFailureParentConversationPrepare)
+			failure.SafeSummary = "durable_agent wake_once could not prepare the claimed parent guidance batch"
+			failure.NextRepair = "inspect durable parent-conversation state, repair malformed or stale guidance, then request one fresh bounded wake"
+			failure.RetryPolicy = "retry_after_parent_conversation_repair"
+			return failure
+		case core.DurableAgentWakeFailureTaskPacketAdmission:
+			failure.Class = string(core.DurableAgentWakeFailureTaskPacketAdmission)
+			failure.SafeSummary = "durable_agent wake_once could not admit a durable child task packet for the claimed batch"
+			failure.NextRepair = "inspect child task packet admission and idempotency state, then retry one bounded wake after repair"
+			failure.RetryPolicy = "retry_after_child_task_admission_repair"
+			return failure
+		case core.DurableAgentWakeFailureTaskAttemptClaim:
+			failure.Class = string(core.DurableAgentWakeFailureTaskAttemptClaim)
+			failure.SafeSummary = "durable_agent wake_once could not claim fenced ownership of the child task attempt"
+			failure.NextRepair = "inspect active or terminal child task ownership for the claimed batch, then retry only after the lease state is repaired"
+			failure.RetryPolicy = "retry_after_child_task_lease_repair"
+			return failure
+		case core.DurableAgentWakeFailureScopeSetup:
+			failure.Class = string(core.DurableAgentWakeFailureScopeSetup)
+			failure.SafeSummary = "durable_agent wake_once could not prepare the child runtime scope before child execution"
+			failure.NextRepair = "inspect child local roots and sandbox scope setup, repair that boundary, then retry one bounded wake"
+			failure.RetryPolicy = "retry_after_child_scope_repair"
+			return failure
 		}
 	}
 	lower := strings.ToLower(strings.TrimSpace(errorString(err)))

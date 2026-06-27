@@ -425,8 +425,9 @@ func TestRunDurableAgentParentConversationWakeRecordsTaskForScopeFailure(t *test
 
 	now := time.Date(2026, 6, 27, 20, 45, 0, 0, time.UTC)
 	err = rt.RunDurableAgentParentConversationWake(context.Background(), agent.AgentID, messageIDs, now)
-	if err == nil || !strings.Contains(err.Error(), "resolve durable wake scope") {
-		t.Fatalf("RunDurableAgentParentConversationWake() err = %v, want scope setup failure", err)
+	var wakeFailure core.DurableAgentWakeFailureError
+	if !errors.As(err, &wakeFailure) || wakeFailure.Class != core.DurableAgentWakeFailureScopeSetup {
+		t.Fatalf("RunDurableAgentParentConversationWake() err = %T %[1]v, want typed scope setup failure", err)
 	}
 	if len(provider.seenGovernorSystem) != 0 {
 		t.Fatalf("governor prompts = %#v, want no child turn after pre-start scope failure", provider.seenGovernorSystem)

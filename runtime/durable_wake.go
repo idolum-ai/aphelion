@@ -259,10 +259,11 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 	leaseClaimedAt := time.Now().UTC()
 	if err := r.recordDurableWakeTaskPacket(key, agent, plan, taskPacketID, now.UTC()); err != nil {
 		wrappedErr := fmt.Errorf("record durable wake task packet: %w", err)
+		failure := core.NewDurableAgentWakeFailureError(core.DurableAgentWakeFailureTaskPacketAdmission, agent.AgentID, plan.ParentMessageIDs, wrappedErr)
 		if finalizeErr := finalizeDurableWakeFailure(plan, "", wrappedErr); finalizeErr != nil {
-			return fmt.Errorf("%w (and failed to record wake failure: %v)", wrappedErr, finalizeErr)
+			return fmt.Errorf("%w (and failed to record wake failure: %v)", failure, finalizeErr)
 		}
-		return wrappedErr
+		return failure
 	}
 	claimedPacket, err := r.store.ClaimChildTaskAttempt(session.ChildTaskAttemptClaimInput{
 		PacketID:       taskPacketID,
@@ -275,14 +276,16 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 	})
 	if err != nil {
 		wrappedErr := fmt.Errorf("claim durable wake child task attempt: %w", err)
+		failure := core.NewDurableAgentWakeFailureError(core.DurableAgentWakeFailureTaskAttemptClaim, agent.AgentID, plan.ParentMessageIDs, wrappedErr)
 		if finalizeErr := finalizeDurableWakeFailure(plan, "", wrappedErr); finalizeErr != nil {
-			return fmt.Errorf("%w (and failed to record wake failure: %v)", wrappedErr, finalizeErr)
+			return fmt.Errorf("%w (and failed to record wake failure: %v)", failure, finalizeErr)
 		}
-		return wrappedErr
+		return failure
 	}
 	scope, err := r.scopeForDurableAgent(agent)
 	if err != nil {
 		wrappedErr := fmt.Errorf("resolve durable wake scope: %w", err)
+		failure := core.NewDurableAgentWakeFailureError(core.DurableAgentWakeFailureScopeSetup, agent.AgentID, plan.ParentMessageIDs, wrappedErr)
 		r.recordExecutionEvent(key, core.ExecutionEventDurableWakeFailed, "durable", "failed", map[string]any{
 			"agent_id":       strings.TrimSpace(agent.AgentID),
 			"task_packet_id": taskPacketID,
@@ -293,11 +296,11 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		intents := durableWakeOutcomeIntentInputs(agent, plan, nil, session.ChildTaskResultFailed, "", wrappedErr, resultAt)
 		result, resultErr := r.recordDurableWakeChildTaskResultWithIntents(key, agent, taskPacketID, attemptID, claimedPacket.LeaseOwner, claimedPacket.LeaseGeneration, claimedPacket.FencingToken, session.ChildTaskResultFailed, "", wrappedErr, resultAt, intents)
 		if resultErr != nil {
-			return fmt.Errorf("%w (and failed to record child task result: %v)", wrappedErr, resultErr)
+			return fmt.Errorf("%w (and failed to record child task result: %v)", failure, resultErr)
 		}
 		_ = r.applyDurableWakeOutcomeIntents(context.Background(), agent, plan, result)
 		r.applyDurableWakeNonDurableFinalizer(agent, plan, session.ChildTaskResultFailed, "", wrappedErr)
-		return wrappedErr
+		return failure
 	}
 	if len(agent.LocalStorageRoots) == 0 {
 		agent.LocalStorageRoots = []string{scope.WorkingRoot, scope.SharedMemoryRoot}

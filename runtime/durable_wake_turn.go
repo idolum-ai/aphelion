@@ -58,7 +58,7 @@ func (r *Runtime) RunDurableAgentParentConversationWake(ctx context.Context, age
 	}
 	plan, err := prepareDurableParentConversationWakePlanForMessageIDs(r, *agent, messageIDs, now.UTC(), true)
 	if err != nil {
-		return err
+		return core.NewDurableAgentWakeFailureError(core.DurableAgentWakeFailureParentConversationPrepare, agentID, messageIDs, err)
 	}
 	if plan == nil {
 		if len(durableWakeNonEmptyMessageIDs(messageIDs)) > 0 {
