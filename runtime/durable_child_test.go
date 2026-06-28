@@ -162,6 +162,60 @@ func TestDurableChildSandboxAccessMaterializesRuntimeBinCompatibilityRoot(t *tes
 	}
 }
 
+func TestDurableChildSandboxAccessMaterializesExecutableRuntimeBinCompatibilityRoot(t *testing.T) {
+	root := t.TempDir()
+	runtimeBin := filepath.Join(root, "runtime-bin")
+	childWorkspace := filepath.Join(root, "child-workspace")
+	if err := os.MkdirAll(runtimeBin, 0o700); err != nil {
+		t.Fatalf("MkdirAll(runtimeBin) err = %v", err)
+	}
+	gog := filepath.Join(runtimeBin, "gog")
+	gogCLI := filepath.Join(runtimeBin, "gog_cli")
+	for _, path := range []string{gog, gogCLI} {
+		if err := os.WriteFile(path, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("WriteFile(%s) err = %v", path, err)
+		}
+	}
+	store, err := session.NewSQLiteStore(filepath.Join(root, "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-gog-cli-runtime",
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "gog_cli",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract: `{
+			"child_runtime": {
+				"executable": "` + gogCLI + `"
+			}
+		}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+
+	access, err := durableChildSandboxAccessForScope("/srv/aphelion/bin/aphelion", core.DurableAgent{
+		AgentID:      "child-alpha",
+		BootstrapLLM: core.NodeLLMBootstrap{Backend: "codex", CodexHome: "/srv/codex"},
+	}, store, sandbox.Scope{WorkingRoot: childWorkspace})
+	if err != nil {
+		t.Fatalf("durableChildSandboxAccessForScope() err = %v", err)
+	}
+
+	if !containsBind(access.readonlyBinds, gogCLI, "/usr/local/bin/gog_cli") {
+		t.Fatalf("readonlyBinds = %#v, want executable bind", access.readonlyBinds)
+	}
+	if !containsBind(access.readonlyBinds, runtimeBin, filepath.Join(childWorkspace, "runtime-bin")) {
+		t.Fatalf("readonlyBinds = %#v, want executable runtime-bin visible at child workspace compatibility path", access.readonlyBinds)
+	}
+	if !containsString(access.readonlyPaths, runtimeBin) {
+		t.Fatalf("readonlyPaths = %#v, want executable runtime-bin source compatibility path", access.readonlyPaths)
+	}
+}
+
 func TestDurableChildSandboxAccessIgnoresExpiredGrantWithoutRuntimeMaterial(t *testing.T) {
 	root := t.TempDir()
 	configDir := filepath.Join(root, "mail-config")

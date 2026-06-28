@@ -166,6 +166,12 @@ func (a *durableChildSandboxAccess) applyGrantMaterialization(grant session.Capa
 			return fmt.Errorf("materialize capability grant %s executable %q: %w", strings.TrimSpace(grant.GrantID), executable, err)
 		}
 		a.readonlyBinds = append(a.readonlyBinds, sandbox.BindPath{Source: path, Target: filepath.ToSlash(filepath.Join("/usr/local/bin", filepath.Base(path)))})
+		if source := durableChildRuntimeBinCompatibilityRoot(filepath.Dir(path), "/usr/local/bin"); source != "" {
+			a.readonlyPaths = append(a.readonlyPaths, source)
+			if workspaceTarget := a.workspaceRuntimeBinCompatibilityTarget(); workspaceTarget != "" {
+				a.readonlyBinds = append(a.readonlyBinds, sandbox.BindPath{Source: source, Target: workspaceTarget})
+			}
+		}
 	}
 	for _, path := range material.ReadonlyPaths {
 		path = strings.TrimSpace(path)
