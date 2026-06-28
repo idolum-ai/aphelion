@@ -785,7 +785,7 @@ func (r *Runtime) qualifyDurableWakeChildSummaryWithTurnEvidence(agent core.Dura
 	if durableWakeSummaryHasChildBlocker(summary) {
 		return summary
 	}
-	if r.durableWakeChildTurnToolCallsFinished(result) > 0 {
+	if r.durableWakeChildTurnHasRuntimeProbeEvidence(agent, result) {
 		return summary
 	}
 	return strings.Join([]string{
@@ -816,6 +816,44 @@ func durableWakeSummaryHasChildBlocker(summary string) bool {
 		}
 	}
 	return false
+}
+
+func (r *Runtime) durableWakeChildTurnHasRuntimeProbeEvidence(agent core.DurableAgent, result *turn.Result) bool {
+	if result == nil {
+		return false
+	}
+	if result.Turn != nil && len(result.Turn.ToolLog) > 0 {
+		for _, entry := range result.Turn.ToolLog {
+			if durableWakeChildRuntimeProbeToolName(agent, entry) {
+				return true
+			}
+		}
+		return false
+	}
+	if r != nil && r.store != nil && result.RunID > 0 {
+		if run, err := r.store.TurnRun(result.RunID); err == nil && run != nil {
+			return run.ToolCallsFinished > 0 && durableWakeChildRuntimeProbeToolName(agent, run.LastToolName)
+		}
+	}
+	return false
+}
+
+func durableWakeChildRuntimeProbeToolName(agent core.DurableAgent, raw string) bool {
+	name := strings.TrimSpace(strings.ToLower(raw))
+	if name == "" {
+		return false
+	}
+	if idx := strings.Index(name, ":"); idx >= 0 {
+		name = strings.TrimSpace(name[:idx])
+	}
+	switch name {
+	case "exec", "shell", "native_exec":
+		return true
+	case "read_file", "list_dir", "search", "capability_authority":
+		return false
+	}
+	adapterName := strings.TrimSpace(strings.ToLower(externalChannelAdapter(agent)))
+	return adapterName != "" && name == adapterName
 }
 
 func (r *Runtime) durableWakeChildTurnToolCallsFinished(result *turn.Result) int {

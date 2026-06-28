@@ -1373,6 +1373,68 @@ func TestDurableWakeNarrativeRuntimeFailureRequiresChildSideProbeEvidence(t *tes
 	}
 }
 
+func TestDurableWakeRuntimeFailureWithOnlyAdjacentToolsStillRequiresProbeEvidence(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: durableWakeSyntheticChatID("child-runtime-adjacent-tools"), Scope: session.ScopeRef{Kind: session.ScopeKindDurableAgent, DurableAgentID: "child-runtime-adjacent-tools"}}
+	agent := core.DurableAgent{
+		AgentID:     "child-runtime-adjacent-tools",
+		ChannelKind: "external_channel",
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Adapter: "gog_cli",
+		}},
+	}
+	now := time.Now().UTC()
+	packet, err := store.RecordChildTaskPacket(session.ChildTaskPacketInput{
+		PacketID:  "child_task:runtime-adjacent-tools",
+		AgentID:   agent.AgentID,
+		Key:       key,
+		TaskKind:  "durable_wake",
+		InputJSON: `{"channel":"durable_parent_conversation"}`,
+		CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskPacket() err = %v", err)
+	}
+	claimed, err := store.ClaimChildTaskAttempt(session.ChildTaskAttemptClaimInput{
+		PacketID:       packet.PacketID,
+		AttemptID:      "child_attempt:runtime-adjacent-tools",
+		LeaseOwner:     "owner",
+		AgentID:        agent.AgentID,
+		Key:            key,
+		ClaimedAt:      now,
+		LeaseExpiresAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("ClaimChildTaskAttempt() err = %v", err)
+	}
+	summary := strings.Join([]string{
+		"Processed parent guidance and checked local config.",
+		"Parent metadata says runtime-bin/gog and runtime-bin/gog_cli exist, but this child execution sandbox still cannot dispatch that runtime path.",
+		"REVIEW_STATUS: blocked",
+	}, "\n")
+	qualified := rt.qualifyDurableWakeChildSummaryWithTurnEvidence(agent, session.ChildTaskResultBlocked, summary, &turn.Result{
+		Turn: &core.TurnResult{ToolLog: []string{"read_file:ok", "capability_authority:ok"}},
+	})
+	result, err := rt.recordDurableWakeChildTaskResultWithIntents(key, agent, packet.PacketID, claimed.ActiveAttemptID, claimed.LeaseOwner, claimed.LeaseGeneration, claimed.FencingToken, session.ChildTaskResultBlocked, qualified, nil, now.Add(time.Second), nil)
+	if err != nil {
+		t.Fatalf("recordDurableWakeChildTaskResultWithIntents() err = %v", err)
+	}
+	if result.BlockerKind != "tool_runtime_probe_missing" || result.NextState != session.NextActionNeedsVerification {
+		t.Fatalf("result = %#v, want adjacent checks to remain probe-missing rather than runtime repair evidence", result)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].ResourceBlocker != "tool_runtime_probe_missing" || open[0].OperationKind != "child_tool_runtime_probe" {
+		t.Fatalf("open actions = %#v, want deterministic runtime probe next action", open)
+	}
+}
+
 func TestDurableWakeToolRuntimeFailureWithChildToolEvidenceRemainsRepairBlocker(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)

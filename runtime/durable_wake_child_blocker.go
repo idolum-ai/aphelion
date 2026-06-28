@@ -83,7 +83,7 @@ var durableWakeBlockedChildBlockerSpecs = []durableWakeChildBlockerSpec{
 		ReviewRiskFlags:    []string{"durable_child", "tool_runtime", "no_content_probe_required"},
 		NoContentProbe:     true,
 		DiagnosticOnly:     true,
-		Markers:            []string{"missing_or_not_executable", "not executable", "missing executable", "wrapper_missing", "runtime-bin", "runtime bin", "/usr/local/bin/gog", "/usr/local/bin/gog_cli"},
+		Markers:            []string{"missing_or_not_executable", "not executable", "missing executable", "wrapper_missing", "runtime-bin", "runtime bin", "runtime path", "runtime dispatch", "cannot dispatch", "cannot use runtime", "visibility/executability", "/usr/local/bin/gog", "/usr/local/bin/gog_cli"},
 	},
 	{
 		Kind:               "tool_lifecycle_unregistered",
