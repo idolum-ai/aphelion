@@ -103,6 +103,7 @@ func TestDurableChildSandboxAccessMaterializesGrantedRuntimeCapability(t *testin
 func TestDurableChildSandboxAccessMaterializesRuntimeBinCompatibilityRoot(t *testing.T) {
 	root := t.TempDir()
 	runtimeBin := filepath.Join(root, "runtime-bin")
+	childWorkspace := filepath.Join(root, "child-workspace")
 	if err := os.MkdirAll(runtimeBin, 0o700); err != nil {
 		t.Fatalf("MkdirAll(runtimeBin) err = %v", err)
 	}
@@ -139,16 +140,19 @@ func TestDurableChildSandboxAccessMaterializesRuntimeBinCompatibilityRoot(t *tes
 		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
 	}
 
-	access, err := durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{
+	access, err := durableChildSandboxAccessForScope("/srv/aphelion/bin/aphelion", core.DurableAgent{
 		AgentID:      "child-alpha",
 		BootstrapLLM: core.NodeLLMBootstrap{Backend: "codex", CodexHome: "/srv/codex"},
-	}, store)
+	}, store, sandbox.Scope{WorkingRoot: childWorkspace})
 	if err != nil {
 		t.Fatalf("durableChildSandboxAccessFor() err = %v", err)
 	}
 
 	if !containsBind(access.readonlyBinds, runtimeBin, "/usr/local/bin") {
 		t.Fatalf("readonlyBinds = %#v, want approved runtime-bin bind", access.readonlyBinds)
+	}
+	if !containsBind(access.readonlyBinds, runtimeBin, filepath.Join(childWorkspace, "runtime-bin")) {
+		t.Fatalf("readonlyBinds = %#v, want runtime-bin visible at child workspace compatibility path", access.readonlyBinds)
 	}
 	if !containsString(access.readonlyPaths, runtimeBin) {
 		t.Fatalf("readonlyPaths = %#v, want runtime-bin source compatibility path", access.readonlyPaths)

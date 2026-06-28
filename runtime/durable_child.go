@@ -97,7 +97,7 @@ func (e *sandboxDurableGroupChildExecutor) Run(ctx context.Context, scope sandbo
 	defer os.Remove(messagePath)
 
 	stateRoot := filepath.Dir(strings.TrimSpace(e.cfg.Sessions.DBPath))
-	childAccess, err := durableChildSandboxAccessFor(e.binaryPath, agent, e.store)
+	childAccess, err := durableChildSandboxAccessForScope(e.binaryPath, agent, e.store, scope)
 	if err != nil {
 		return nil, err
 	}

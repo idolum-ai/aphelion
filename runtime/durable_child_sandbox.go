@@ -19,11 +19,16 @@ type durableChildSandboxAccess struct {
 	readonlyPaths []string
 	readonlyBinds []sandbox.BindPath
 	env           map[string]string
+	workingRoot   string
 }
 
 func durableChildSandboxAccessFor(binaryPath string, agent core.DurableAgent, store *session.SQLiteStore) (durableChildSandboxAccess, error) {
+	return durableChildSandboxAccessForScope(binaryPath, agent, store, sandbox.Scope{})
+}
+
+func durableChildSandboxAccessForScope(binaryPath string, agent core.DurableAgent, store *session.SQLiteStore, scope sandbox.Scope) (durableChildSandboxAccess, error) {
 	substrate := durableChildSubstrateFor(binaryPath, agent)
-	access := durableChildSandboxAccess{readonlyPaths: append([]string(nil), substrate.ReadonlyPaths...)}
+	access := durableChildSandboxAccess{readonlyPaths: append([]string(nil), substrate.ReadonlyPaths...), workingRoot: strings.TrimSpace(scope.WorkingRoot)}
 	access.readonlyPaths = compactNonEmptyStrings(access.readonlyPaths)
 
 	if err := access.addGrantedCapabilities(agent, store); err != nil {
@@ -176,6 +181,9 @@ func (a *durableChildSandboxAccess) applyGrantMaterialization(grant session.Capa
 		a.readonlyBinds = append(a.readonlyBinds, sandbox.BindPath{Source: bind.Source, Target: bind.Target})
 		if source := durableChildRuntimeBinCompatibilityRoot(bind.Source, bind.Target); source != "" {
 			a.readonlyPaths = append(a.readonlyPaths, source)
+			if workspaceTarget := a.workspaceRuntimeBinCompatibilityTarget(); workspaceTarget != "" {
+				a.readonlyBinds = append(a.readonlyBinds, sandbox.BindPath{Source: source, Target: workspaceTarget})
+			}
 		}
 	}
 	for _, bind := range material.SecretBinds {
@@ -187,6 +195,14 @@ func (a *durableChildSandboxAccess) applyGrantMaterialization(grant session.Capa
 		}
 	}
 	return nil
+}
+
+func (a durableChildSandboxAccess) workspaceRuntimeBinCompatibilityTarget() string {
+	workingRoot := strings.TrimSpace(a.workingRoot)
+	if workingRoot == "" || !filepath.IsAbs(workingRoot) {
+		return ""
+	}
+	return filepath.Join(workingRoot, "runtime-bin")
 }
 
 func durableChildRuntimeBinCompatibilityRoot(source string, target string) string {

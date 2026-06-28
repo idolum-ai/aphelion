@@ -1497,6 +1497,73 @@ func TestConcurrentTriggerContinuationExecutesSingleLeaseTurn(t *testing.T) {
 	}
 }
 
+func TestTriggerContinuationReplayAfterConsumedLeaseIsNoop(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{Text: "continued once"}}
+	rt.interactiveDMAssembler = recorder
+
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 8124, UserID: 0, Scope: telegramDMScopeRef(8124)}
+	action := session.ActionProposal{
+		ID:            "aprop-replay-consumed",
+		Summary:       "Run one replay-safe continuation.",
+		BoundedEffect: "Execute exactly one approved turn even if the card is pressed twice.",
+		Status:        session.ProposalStatusApproved,
+		ExpiresAt:     now.Add(time.Hour),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "replay-consumed",
+		Objective:      "Prove a stale approval replay is a clean no-op.",
+		StageSummary:   action.Summary,
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: action,
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-replay-consumed",
+			ProposalID:     action.ID,
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ApprovedBy:     1001,
+			ApprovedAt:     now,
+			ExpiresAt:      now.Add(time.Hour),
+			PlanHash:       action.PlanHash,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey(first) err = %v", err)
+	}
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey(replay) err = %v, want stale replay no-op", err)
+	}
+	if got := recorder.CallCount(); got != 1 {
+		t.Fatalf("assembler calls = %d, want exactly one executed continuation turn", got)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if got := countEventsByType(events, core.ExecutionEventContinuationConsumed); got != 1 {
+		t.Fatalf("consumed events = %d, want one consumed event after replay", got)
+	}
+}
+
 func TestApproveContinuationReturnsTypedExpiredErrorAndRecordsBlocked(t *testing.T) {
 	t.Parallel()
 

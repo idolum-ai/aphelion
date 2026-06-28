@@ -129,7 +129,7 @@ func (e *sandboxDurableWakeChildExecutor) Run(ctx context.Context, scope sandbox
 	defer os.Remove(bootstrapPath)
 
 	stateRoot := filepath.Dir(strings.TrimSpace(e.cfg.Sessions.DBPath))
-	childAccess, err := durableChildSandboxAccessFor(e.binaryPath, agent, e.store)
+	childAccess, err := durableChildSandboxAccessForScope(e.binaryPath, agent, e.store, scope)
 	if err != nil {
 		return err
 	}
