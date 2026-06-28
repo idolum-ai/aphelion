@@ -1223,6 +1223,82 @@ func TestPollDurableWakeAgentsConsumesPendingParentConversationForAnyChannel(t *
 	sender.mu.Unlock()
 }
 
+func TestPollDurableWakeAgentsAcknowledgesBlockedParentConversation(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Processed the parent guidance. Runtime check: gog_cli=missing_or_not_executable.\nREVIEW_STATUS: blocked"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "child-blocked-parent-note",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "headless",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Process parent requests and report blockers truthfully.",
+			CapabilityEnvelope: []string{"bounded_review_artifact", "session_recall"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Run one no-content runtime readiness check.", time.Now().UTC().Add(-time.Minute))
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{
+		AgentID:   agent.AgentID,
+		StateJSON: raw,
+	}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	rt.durableWakeChild = nil
+	if err := rt.pollDurableWakeAgents(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("pollDurableWakeAgents() err = %v", err)
+	}
+
+	updatedState, err := store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	updatedContinuity, err := core.ParseDurableAgentContinuityState(updatedState.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if pending := updatedContinuity.PendingParentConversationMessages(10); len(pending) != 0 {
+		t.Fatalf("pending parent messages = %d, want 0 after blocked child result consumes parent guidance", len(pending))
+	}
+
+	key := session.SessionKey{
+		ChatID: durableWakeSyntheticChatID(agent.AgentID),
+		Scope:  durableAgentScopeRef(agent),
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsResourceRepair || open[0].ResourceBlocker != "tool_runtime_not_executable" {
+		t.Fatalf("open next actions = %#v, want one typed child runtime repair blocker", open)
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 1 || !strings.Contains(sender.inline[0].text, "Child-local tool runtime is missing or not executable") {
+		t.Fatalf("inline reviews = %#v, want one concrete child blocker review", sender.inline)
+	}
+}
+
 func TestRunDurableAgentChildWakeSkipsWhenAgentAlreadyAwake(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "This should not run while another wake owns the agent."

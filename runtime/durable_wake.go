@@ -743,7 +743,7 @@ func durableWakeOutcomeIntentInputs(agent core.DurableAgent, plan durableWakeTur
 			CreatedAt:   now,
 		})
 	}
-	if status == session.ChildTaskResultCompleted && len(pending) > 0 {
+	if durableWakeShouldAcknowledgeParentConversation(status, cause) && len(pending) > 0 {
 		payloadRaw, _ := json.Marshal(map[string]any{
 			"agent_id":      strings.TrimSpace(agent.AgentID),
 			"message_ids":   core.DurableAgentConversationMessageIDs(pending),
@@ -759,6 +759,18 @@ func durableWakeOutcomeIntentInputs(agent core.DurableAgent, plan durableWakeTur
 		})
 	}
 	return intents
+}
+
+func durableWakeShouldAcknowledgeParentConversation(status session.ChildTaskResultStatus, cause error) bool {
+	if cause != nil {
+		return false
+	}
+	switch status {
+	case session.ChildTaskResultCompleted, session.ChildTaskResultBlocked:
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *Runtime) applyDurableWakeOutcomeIntents(ctx context.Context, agent core.DurableAgent, plan durableWakeTurnPlan, result session.ChildTaskResult) error {

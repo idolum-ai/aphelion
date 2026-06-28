@@ -817,7 +817,14 @@ func (r *Runtime) handleApprovedRetryDurableAgentWakeResult(key session.SessionK
 		}
 	}
 	switch strings.TrimSpace(result.WakeStatus) {
-	case "completed", "skipped_no_pending_parent_message":
+	case "completed":
+		if packetID, childResult, ok, err := r.approvedRetryWakeTerminalChildResultForLease(reservation.State.ContinuationLease.ID); err != nil {
+			return true, err
+		} else if ok {
+			return true, r.recordApprovedRetryWakeTerminalChildResult(key, reservation, retry, result, packetID, childResult, monitor)
+		}
+		return false, nil
+	case "skipped_no_pending_parent_message":
 		return false, nil
 	case "awaiting_child_pickup":
 		return true, r.recordApprovedRetryWakeWaiting(key, reservation, retry, result, monitor)
