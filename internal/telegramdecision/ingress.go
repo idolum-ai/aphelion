@@ -39,11 +39,18 @@ func (h *Handler) routeDeferredDecisionMessage(ctx context.Context, msg core.Inb
 	if h.store == nil || !ok {
 		return h.routeDecisionMessage(ctx, msg)
 	}
+	originalSurface := strings.TrimSpace(msg.IngressSurface)
+	originalUpdateID := msg.IngressUpdateID
 	msg.IngressSurface = strings.TrimSpace(surface)
 	msg.IngressUpdateID = DecisionResumeUpdateID(msg, msg.IngressSurface)
 	result, err := h.recordDecisionResumeAccepted(msg, updateKind)
 	if err != nil {
 		return err
+	}
+	if originalSurface != "" && originalUpdateID > 0 && originalSurface != msg.IngressSurface {
+		if _, err := h.store.MarkTelegramIngressDroppedIfDispatchable(originalSurface, originalUpdateID, session.TelegramIngressDropReasonDecisionResume, time.Now().UTC()); err != nil {
+			return err
+		}
 	}
 	if !result.Dispatch {
 		return nil
