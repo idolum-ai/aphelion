@@ -110,7 +110,7 @@ func (r *Runtime) maybeHandleApprovedContinuationRunIntent(ctx context.Context, 
 		}
 		return true, &core.TurnResult{Text: "An approved continuation is ready. Use the approval card to run it, or ignore it to leave the work stopped."}, nil
 	}
-	if handled, result, err := r.maybeMaterializePendingContinuationApproval(ctx, key, msg, actor, true); handled {
+	if handled, result, err := r.maybeMaterializePendingContinuationApproval(ctx, key, msg, actor, false); handled {
 		return true, result, err
 	}
 	return false, nil, nil

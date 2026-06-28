@@ -540,7 +540,43 @@ func TestContinueTextMaterializesChildWakeApprovalFromChildToolRuntimeRepairBloc
 		t.Fatalf("RecordNextAction(child_tool_runtime_repair) err = %v", err)
 	}
 
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{Text: "diagnostic routed"}}
+	rt.interactiveDMAssembler = recorder
 	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     8129,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "Inspect the idolum-email child-local runtime materialization blocker. Focus only on why runtime-bin/gog and runtime-bin/gog_cli are present parent-side but not executable/visible inside the child wake sandbox.",
+		MessageID:  55,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound(diagnostic child_tool_runtime_repair) err = %v", err)
+	}
+	if result == nil || result.Text != "diagnostic routed" {
+		t.Fatalf("HandleInbound(diagnostic child_tool_runtime_repair) result = %#v, want normal turn result", result)
+	}
+	if !recorder.called {
+		t.Fatal("diagnostic child_tool_runtime_repair prompt did not reach the normal turn assembler")
+	}
+	if len(sender.inline) != 0 {
+		t.Fatalf("inline count after diagnostic prompt = %d, want no approval card", len(sender.inline))
+	}
+	open, err := store.OpenNextActionsBySession(key, 20)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(after diagnostic prompt) err = %v", err)
+	}
+	foundRepairAction := false
+	for _, action := range open {
+		if action.RecordID == "next-live-child-tool-runtime-repair" {
+			foundRepairAction = true
+			break
+		}
+	}
+	if !foundRepairAction {
+		t.Fatalf("open actions after diagnostic prompt = %#v, want child_tool_runtime_repair blocker still open", open)
+	}
+
+	result, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:     8129,
 		SenderID:   1001,
 		SenderName: "admin",
@@ -569,7 +605,7 @@ func TestContinueTextMaterializesChildWakeApprovalFromChildToolRuntimeRepairBloc
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want one approval card", len(sender.inline))
 	}
-	open, err := store.OpenNextActionsBySession(key, 20)
+	open, err = store.OpenNextActionsBySession(key, 20)
 	if err != nil {
 		t.Fatalf("OpenNextActionsBySession() err = %v", err)
 	}
@@ -714,7 +750,7 @@ func buildCredentialProbeRetryFixture(t *testing.T, chatID int64, recordID strin
 	return rt, store, runner, sender, key
 }
 
-func TestAdminTextMaterializesPendingChildWakeApprovalWithoutContinueKeyword(t *testing.T) {
+func TestExplicitAdminTextMaterializesPendingChildWakeApprovalWithoutContinueKeyword(t *testing.T) {
 	t.Parallel()
 
 	rt, store, runner, _, key := buildCredentialProbeRetryFixture(t, 8131, "next-live-child-credential-probe-no-keyword")
@@ -723,11 +759,11 @@ func TestAdminTextMaterializesPendingChildWakeApprovalWithoutContinueKeyword(t *
 		ChatID:     8131,
 		SenderID:   1001,
 		SenderName: "admin",
-		Text:       "what is the current blocker for idolum-email?",
+		Text:       "retry wake approval for idolum-email after the no-content runtime repair",
 		MessageID:  63,
 	})
 	if err != nil {
-		t.Fatalf("HandleInbound(non-keyword credential probe) err = %v", err)
+		t.Fatalf("HandleInbound(explicit credential probe retry) err = %v", err)
 	}
 	if result == nil || !strings.Contains(result.Text, "fresh bounded child_wake approval") {
 		t.Fatalf("HandleInbound result = %#v, want fresh child_wake approval prompt acknowledgement", result)
@@ -834,11 +870,11 @@ func TestAdminTextDoesNotExecuteApprovedRetryWithoutAuthorizationEvent(t *testin
 		ChatID:     8133,
 		SenderID:   1001,
 		SenderName: "admin",
-		Text:       "what is the current blocker for idolum-email?",
+		Text:       "retry wake approval for idolum-email after the no-content runtime repair",
 		MessageID:  65,
 	})
 	if err != nil {
-		t.Fatalf("HandleInbound(materialize non-keyword credential probe) err = %v", err)
+		t.Fatalf("HandleInbound(materialize explicit credential probe retry) err = %v", err)
 	}
 	if result == nil || !strings.Contains(result.Text, "fresh bounded child_wake approval") {
 		t.Fatalf("HandleInbound result = %#v, want fresh child_wake approval prompt acknowledgement", result)
