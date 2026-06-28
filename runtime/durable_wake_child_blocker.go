@@ -54,6 +54,22 @@ type durableWakeChildBlockerSpec struct {
 
 var durableWakeBlockedChildBlockerSpecs = []durableWakeChildBlockerSpec{
 	{
+		Kind:               "tool_runtime_probe_missing",
+		State:              session.NextActionNeedsVerification,
+		NextAction:         "run a deterministic child-side runtime visibility probe before repairing materialization",
+		ResourceBlocker:    "tool_runtime_probe_missing",
+		RetryPolicy:        "retry_after_child_runtime_probe",
+		OperationKind:      "child_tool_runtime_probe",
+		OperationTool:      "update_operation",
+		OperatorProjection: "Child reported tool runtime failure without child-side tool evidence; run a deterministic child-side visibility/executability probe before declaring materialization failed.",
+		ReviewLocalActions: []string{"Child claimed runtime-bin/tool execution was blocked, but no child-side tool call proved the runtime visibility state."},
+		ReviewQuestions:    []string{"Run one deterministic child-side runtime visibility probe, then repair only the proven blocker."},
+		ReviewRiskFlags:    []string{"durable_child", "tool_runtime", "probe_required"},
+		NoContentProbe:     true,
+		DiagnosticOnly:     true,
+		Markers:            []string{"tool_runtime_probe_missing"},
+	},
+	{
 		Kind:               "tool_runtime_not_executable",
 		State:              session.NextActionBlockedNeedsResourceRepair,
 		NextAction:         "materialize or repair the child-local tool runtime, then run one no-content readiness probe",
@@ -231,6 +247,12 @@ func durableWakeChildTaskBlockerClassification(agent core.DurableAgent, result s
 		classification.ReviewLocalActions = []string{"Child task reported an intermediate update and remains open for bounded continuation."}
 		classification.ReviewQuestions = []string{"Continue the child task only if the latest update still matches current intent."}
 	case session.ChildTaskResultBlocked:
+		if blockerKind == "tool_runtime_probe_missing" {
+			if spec, ok := durableWakeChildBlockerSpecByKind("tool_runtime_probe_missing"); ok {
+				classification = durableWakeApplyChildBlockerSpec(classification, spec)
+			}
+			break
+		}
 		classification = durableWakeBlockedChildClassification(classification, text)
 	case session.ChildTaskResultFailed:
 		classification = durableWakeApplyChildBlockerSpec(classification, durableWakeFailedChildBlockerSpec)
@@ -241,6 +263,16 @@ func durableWakeChildTaskBlockerClassification(agent core.DurableAgent, result s
 		classification.OperationInputJSON = durableWakeChildBlockerOperationInputJSON(agentID, adapterName, toolName, classification, result)
 	}
 	return classification
+}
+
+func durableWakeChildBlockerSpecByKind(kind string) (durableWakeChildBlockerSpec, bool) {
+	kind = strings.TrimSpace(kind)
+	for _, spec := range durableWakeBlockedChildBlockerSpecs {
+		if spec.Kind == kind {
+			return spec, true
+		}
+	}
+	return durableWakeChildBlockerSpec{}, false
 }
 
 func durableWakeBlockedChildClassification(base durableWakeChildBlockerClassification, text string) durableWakeChildBlockerClassification {

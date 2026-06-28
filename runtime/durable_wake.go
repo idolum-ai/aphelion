@@ -429,6 +429,8 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		return inferenceErr
 	}
 	resultStatus, _ := durableWakeChildTaskStatusFromSummary(turnSummary)
+	turnSummary = r.qualifyDurableWakeChildSummaryWithTurnEvidence(agent, resultStatus, turnSummary, turnResult)
+	resultStatus, _ = durableWakeChildTaskStatusFromSummary(turnSummary)
 	if leaseErr := stopLeaseKeeper(); leaseErr != nil {
 		return fmt.Errorf("durable wake child task lease lost before outcome commit: %w", leaseErr)
 	}
@@ -773,6 +775,64 @@ func durableWakeShouldAcknowledgeParentConversation(status session.ChildTaskResu
 	}
 }
 
+func (r *Runtime) qualifyDurableWakeChildSummaryWithTurnEvidence(agent core.DurableAgent, status session.ChildTaskResultStatus, summary string, result *turn.Result) string {
+	if status != session.ChildTaskResultBlocked {
+		return summary
+	}
+	if !durableWakeSummaryClaimsToolRuntimeNotExecutable(agent, summary) {
+		return summary
+	}
+	if durableWakeSummaryHasChildBlocker(summary) {
+		return summary
+	}
+	if r.durableWakeChildTurnToolCallsFinished(result) > 0 {
+		return summary
+	}
+	return strings.Join([]string{
+		"CHILD_BLOCKER: tool_runtime_probe_missing",
+		"EVIDENCE_STATUS: child runtime executability was not proven by a child-side tool call; run a deterministic child-side probe before classifying materialization as failed.",
+		strings.TrimSpace(summary),
+	}, "\n")
+}
+
+func durableWakeSummaryClaimsToolRuntimeNotExecutable(agent core.DurableAgent, summary string) bool {
+	text := strings.ToLower(strings.Join([]string{
+		strings.TrimSpace(summary),
+		strings.TrimSpace(externalChannelAdapter(agent)),
+	}, "\n"))
+	for _, spec := range durableWakeBlockedChildBlockerSpecs {
+		if spec.Kind == "tool_runtime_not_executable" {
+			return durableWakeTextMatchesAny(text, spec.Markers)
+		}
+	}
+	return false
+}
+
+func durableWakeSummaryHasChildBlocker(summary string) bool {
+	for _, line := range strings.Split(summary, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(strings.ToLower(line), "child_blocker:") {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runtime) durableWakeChildTurnToolCallsFinished(result *turn.Result) int {
+	if result == nil {
+		return 0
+	}
+	if r != nil && r.store != nil && result.RunID > 0 {
+		if run, err := r.store.TurnRun(result.RunID); err == nil && run != nil {
+			return run.ToolCallsFinished
+		}
+	}
+	if result.Turn != nil && len(result.Turn.ToolLog) > 0 {
+		return len(result.Turn.ToolLog)
+	}
+	return 0
+}
+
 func (r *Runtime) applyDurableWakeOutcomeIntents(ctx context.Context, agent core.DurableAgent, plan durableWakeTurnPlan, result session.ChildTaskResult) error {
 	if r == nil || r.store == nil || strings.TrimSpace(result.ResultID) == "" {
 		return nil
@@ -1008,9 +1068,15 @@ func (r *Runtime) processPendingDurableWakeOutcomeIntents(ctx context.Context, l
 }
 
 func durableWakeChildTaskStatusFromSummary(summary string) (session.ChildTaskResultStatus, string) {
+	blockerKind := ""
 	for _, line := range strings.Split(summary, "\n") {
 		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(strings.ToLower(line), "review_status:") {
+		lower := strings.ToLower(line)
+		if strings.HasPrefix(lower, "child_blocker:") {
+			blockerKind = normalizeExternalChannelWakeOutcomeReason(strings.TrimSpace(line[len("child_blocker:"):]))
+			continue
+		}
+		if !strings.HasPrefix(lower, "review_status:") {
 			continue
 		}
 		status := strings.TrimSpace(line[len("review_status:"):])
@@ -1021,6 +1087,9 @@ func durableWakeChildTaskStatusFromSummary(summary string) (session.ChildTaskRes
 		case "update":
 			return session.ChildTaskResultUpdate, ""
 		case "blocked", "needs_review":
+			if blockerKind != "" {
+				return session.ChildTaskResultBlocked, blockerKind
+			}
 			return session.ChildTaskResultBlocked, "child_reported_" + strings.ReplaceAll(status, " ", "_")
 		case "failed", "failure":
 			return session.ChildTaskResultFailed, "child_reported_failed"

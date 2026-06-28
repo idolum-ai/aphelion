@@ -364,21 +364,21 @@ func TestApprovedChildWakeRetryRecordsTerminalChildBlockerInParentSession(t *tes
 	if err != nil {
 		t.Fatalf("OpenNextActionsBySession(parent) err = %v", err)
 	}
-	var foundRepair bool
+	var foundProbe bool
 	for _, action := range open {
 		if action.Owner == "approved_retry" && action.State == session.NextActionWaitingForChild {
 			t.Fatalf("open parent actions = %#v, waiting_for_child should be replaced by typed child blocker", open)
 		}
 		if action.Owner == "approved_retry" &&
-			action.State == session.NextActionBlockedNeedsResourceRepair &&
-			action.ResourceBlocker == "tool_runtime_not_executable" &&
-			action.OperationKind == "child_tool_runtime_repair" &&
+			action.State == session.NextActionNeedsVerification &&
+			action.ResourceBlocker == "tool_runtime_probe_missing" &&
+			action.OperationKind == "child_tool_runtime_probe" &&
 			action.OperationTool == "update_operation" {
-			foundRepair = true
+			foundProbe = true
 		}
 	}
-	if !foundRepair {
-		t.Fatalf("open parent actions = %#v, want approved_retry child runtime repair blocker", open)
+	if !foundProbe {
+		t.Fatalf("open parent actions = %#v, want approved_retry child runtime probe-required blocker", open)
 	}
 }
 
