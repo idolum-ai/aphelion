@@ -862,3 +862,83 @@ func TestMaterializeConsentBlockDoesNotRouteThroughApprovalBoundaryDeliberation(
 		t.Fatalf("inline=%d sent=%d, want blocked notice only", inlineCount, sentCount)
 	}
 }
+
+func TestMaterializeMailboxConsentPhaseUsesApprovalCard(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9048, UserID: 0, Scope: telegramDMScopeRef(9048)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "mailbox-consent-card-op",
+		Objective: "Run one bounded read-only mailbox processing pass.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "mailbox-consent-card-plan",
+			Goal:           "Approve mailbox processing through a typed card.",
+			CurrentPhaseID: "phase-mailbox-consent",
+			Phases: []session.OperationPhase{{
+				ID:                "phase-mailbox-consent",
+				Summary:           "Run one read-only mailbox pass for job recommendations.",
+				Status:            session.PlanStatusPending,
+				AuthorityClass:    "read_only_mailbox_smoke",
+				GateReasonCode:    "mailbox_content",
+				BlockedReasonCode: "waiting_for_consent",
+				RequiresConsent:   true,
+				BoundedEffect:     "Read only minimal mailbox content needed for job recommendations; no sends, deletes, archives, marks, credentials, tokens, or external contact.",
+				AllowedActions:    []string{"run_configured_mailbox_adapter_query_once"},
+				ForbiddenActions:  []string{"send_mail", "delete_mail", "archive_mail", "mark_mail", "credential_output", "external_contact"},
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9048, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want mailbox consent approval card")
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.Status != session.ProposalStatusPending {
+		t.Fatalf("continuation = %#v, want pending approval", cont)
+	}
+	if cont.ActionProposal.RiskClass != "mailbox_content" {
+		t.Fatalf("risk class = %q, want mailbox_content", cont.ActionProposal.RiskClass)
+	}
+	if cont.ActionProposal.AutoApproveEligible != nil && *cont.ActionProposal.AutoApproveEligible {
+		t.Fatalf("autoapprove_eligible = %#v, want false for consent card", cont.ActionProposal.AutoApproveEligible)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sentCount := len(sender.sent)
+	inlineText := ""
+	var labels []string
+	if inlineCount > 0 {
+		inlineText = sender.inline[inlineCount-1].text
+		labels = continuationButtonLabels(sender.inline[inlineCount-1].rows)
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 || sentCount != 0 {
+		t.Fatalf("inline=%d sent=%d text=%q, want one approval card and no prose consent blocker", inlineCount, sentCount, inlineText)
+	}
+	for _, want := range []string{"Approve", "Run one read-only mailbox pass", "Stops before"} {
+		if !strings.Contains(inlineText, want) {
+			t.Fatalf("inline text = %q, want %q", inlineText, want)
+		}
+	}
+	if strings.Contains(inlineText, "This needs explicit consent") || strings.Contains(inlineText, "Get explicit consent") {
+		t.Fatalf("inline text = %q, want card-backed consent, not prose consent instruction", inlineText)
+	}
+	if got, want := labels, []string{"Start", "Details", "Change", "Pause", "Stop"}; !equalStringSlices(got, want) {
+		t.Fatalf("inline labels = %#v, want %#v", got, want)
+	}
+}
