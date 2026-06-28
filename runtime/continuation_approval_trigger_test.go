@@ -694,14 +694,16 @@ func TestContinueTextMaterializesChildWakeApprovalFromCredentialProbeBlocker(t *
 	}
 
 	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
-		ChatID:     8130,
-		SenderID:   1001,
-		SenderName: "admin",
-		Text:       "continue",
-		MessageID:  61,
+		ChatID:       8130,
+		SenderID:     1001,
+		SenderName:   "admin",
+		Text:         "[user pressed continue button: resume the previous task]\n\nApproved work: Plan: Fresh bounded child_wake approval for idolum-email after runtime-bin materialization checks.\nBudget: up to 1 turn\nNext: Fresh bounded child_wake approval for idolum-email after runtime-bin materialization checks.",
+		MessageID:    61,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
 	})
 	if err != nil {
-		t.Fatalf("HandleInbound(continue credential probe) err = %v", err)
+		t.Fatalf("HandleInbound(turn_authorization credential probe) err = %v", err)
 	}
 	if result == nil || !strings.Contains(result.Text, "fresh bounded child_wake approval") {
 		t.Fatalf("HandleInbound result = %#v, want fresh child_wake approval prompt acknowledgement", result)
@@ -719,21 +721,33 @@ func TestContinueTextMaterializesChildWakeApprovalFromCredentialProbeBlocker(t *
 	if !retry.Active() || retry.Tool != "durable_agent" || retry.OperationKind != "durable_agent_wake_once" || !strings.Contains(retry.InputJSON, `"agent_id":"idolum-email"`) {
 		t.Fatalf("retry operation = %#v, want durable_agent wake_once retry for idolum-email", retry)
 	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEventPayload(events, core.ExecutionEventContinuationOffered, "child_wake_repair_retry") {
+		t.Fatalf("events = %#v, want child_wake_repair_retry continuation offer", events)
+	}
+	if hasExecutionEventPayload(events, core.ExecutionEventContinuationOffered, "operation_phase_plan") {
+		t.Fatalf("events = %#v, did not want operation_phase_plan offer for typed child_wake repair", events)
+	}
 	if _, err := rt.ApproveContinuationForKey(key, 1001); err != nil {
 		t.Fatalf("ApproveContinuationForKey(credential probe retry) err = %v", err)
 	}
 	result, err = rt.HandleInbound(context.Background(), core.InboundMessage{
-		ChatID:     8130,
-		SenderID:   1001,
-		SenderName: "admin",
-		Text:       "continue",
-		MessageID:  62,
+		ChatID:       8130,
+		SenderID:     1001,
+		SenderName:   "admin",
+		Text:         "[user pressed continue button: resume the previous task]",
+		MessageID:    62,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
 	})
 	if err != nil {
-		t.Fatalf("HandleInbound(approved credential probe retry) err = %v", err)
+		t.Fatalf("HandleInbound(approved turn_authorization credential probe retry) err = %v", err)
 	}
-	if result == nil || !strings.Contains(result.Text, "Running approved continuation") {
-		t.Fatalf("HandleInbound(approved credential probe retry) result = %#v, want approved continuation acknowledgement", result)
+	if result == nil {
+		t.Fatalf("HandleInbound(approved turn_authorization credential probe retry) result = nil, want continuation result")
 	}
 	if len(runner.calls) != 1 || runner.calls[0] != "idolum-email" {
 		t.Fatalf("runner calls = %#v, want one idolum-email wake from credential probe retry", runner.calls)
