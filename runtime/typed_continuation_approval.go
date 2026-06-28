@@ -95,7 +95,7 @@ func (r *Runtime) maybeMaterializeChildWakeRepairRetryApproval(ctx context.Conte
 	if !isChildWakeRepairRetryApprovalText(msg.Text) && !(allowRunIntent && isChildWakeRepairAdvanceText(msg.Text)) {
 		return false, nil, nil
 	}
-	action, ok, err := r.currentChildWakeRuntimeRepairAction(key)
+	action, ok, err := r.currentChildWakeRetryableAction(key)
 	if err != nil || !ok {
 		return false, nil, err
 	}
@@ -217,35 +217,109 @@ func (r *Runtime) ensureChildWakeRepairRetryOperationState(key session.SessionKe
 	})
 }
 
-func (r *Runtime) currentChildWakeRuntimeRepairAction(key session.SessionKey) (session.NextActionRecord, bool, error) {
+func (r *Runtime) currentChildWakeRetryableAction(key session.SessionKey) (session.NextActionRecord, bool, error) {
 	actions, err := r.store.OpenNextActionsBySession(key, 100)
 	if err != nil {
 		return session.NextActionRecord{}, false, err
 	}
 	for _, action := range actions {
-		if childWakeRuntimeRepairActionCanRequestRetry(action) {
+		if childWakeActionCanRequestRetry(action) {
 			return action, true, nil
 		}
 	}
 	return session.NextActionRecord{}, false, nil
 }
 
-func childWakeRuntimeRepairActionCanRequestRetry(action session.NextActionRecord) bool {
-	if action.State != session.NextActionBlockedNeedsResourceRepair ||
-		strings.TrimSpace(action.SubjectKind) != "continuation_lease_request" ||
+func childWakeActionCanRequestRetry(action session.NextActionRecord) bool {
+	if strings.TrimSpace(action.SubjectKind) != "continuation_lease_request" ||
 		childWakeRepairAgentIDFromSubjectRef(action.SubjectRef) == "" {
 		return false
 	}
 	operationKind := strings.TrimSpace(action.OperationKind)
 	operationTool := strings.TrimSpace(action.OperationTool)
-	switch operationKind {
-	case "child_wake_runtime_repair":
-		return operationTool == "durable_agent"
-	case "child_tool_runtime_repair":
-		return operationTool == "update_operation" && strings.TrimSpace(action.ResourceBlocker) == "tool_runtime_not_executable"
+	switch action.State {
+	case session.NextActionBlockedNeedsResourceRepair:
+		switch operationKind {
+		case "child_wake_runtime_repair":
+			return operationTool == "durable_agent"
+		case "child_tool_runtime_repair":
+			return operationTool == "update_operation" && strings.TrimSpace(action.ResourceBlocker) == "tool_runtime_not_executable"
+		default:
+			return false
+		}
+	case session.NextActionWaitingForOperator:
+		return childWakeOperatorFollowupActionCanRequestRetry(action)
 	default:
 		return false
 	}
+}
+
+func childWakeOperatorFollowupActionCanRequestRetry(action session.NextActionRecord) bool {
+	if strings.TrimSpace(action.OperationTool) != "update_operation" {
+		return false
+	}
+	if strings.TrimSpace(action.OperationKind) != "child_credential_probe" {
+		return false
+	}
+	if strings.TrimSpace(action.ResourceBlocker) != "credential_unverified" {
+		return false
+	}
+	var input struct {
+		RecoveryContract      string `json:"recovery_contract"`
+		RecoveryOperationKind string `json:"recovery_operation_kind"`
+		AgentID               string `json:"agent_id"`
+		DurableAgentID        string `json:"durable_agent_id"`
+		NoContentProbe        bool   `json:"no_content_probe"`
+		DiagnosticOnly        bool   `json:"diagnostic_only"`
+		RecoveryHandoff       struct {
+			Contract          string `json:"contract"`
+			OperationKind     string `json:"operation_kind"`
+			AgentID           string `json:"agent_id"`
+			DurableAgentID    string `json:"durable_agent_id"`
+			NoContentProbe    bool   `json:"no_content_probe"`
+			DiagnosticOnly    bool   `json:"diagnostic_only"`
+			ResourceBlocker   string `json:"resource_blocker"`
+			BlockerKind       string `json:"blocker_kind"`
+			RequiredAuthority string `json:"required_authority"`
+		} `json:"recovery_handoff"`
+	}
+	if err := json.Unmarshal([]byte(action.OperationInputJSON), &input); err != nil {
+		return false
+	}
+	if strings.TrimSpace(input.RecoveryContract) != "aphelion.recovery_handoff.v1" ||
+		strings.TrimSpace(input.RecoveryOperationKind) != strings.TrimSpace(action.OperationKind) {
+		return false
+	}
+	if strings.TrimSpace(input.RecoveryHandoff.Contract) != "aphelion.recovery_handoff.v1" ||
+		strings.TrimSpace(input.RecoveryHandoff.OperationKind) != strings.TrimSpace(action.OperationKind) {
+		return false
+	}
+	if !input.NoContentProbe || !input.RecoveryHandoff.NoContentProbe {
+		return false
+	}
+	if !input.DiagnosticOnly || !input.RecoveryHandoff.DiagnosticOnly {
+		return false
+	}
+	agentID := strings.TrimSpace(input.AgentID)
+	if agentID == "" {
+		agentID = strings.TrimSpace(input.DurableAgentID)
+	}
+	handoffAgentID := strings.TrimSpace(input.RecoveryHandoff.AgentID)
+	if handoffAgentID == "" {
+		handoffAgentID = strings.TrimSpace(input.RecoveryHandoff.DurableAgentID)
+	}
+	subjectAgentID := childWakeRepairAgentIDFromSubjectRef(action.SubjectRef)
+	if agentID == "" || handoffAgentID == "" || subjectAgentID == "" {
+		return false
+	}
+	if agentID != subjectAgentID || handoffAgentID != subjectAgentID {
+		return false
+	}
+	blocker := firstNonEmptyContinuation(strings.TrimSpace(input.RecoveryHandoff.ResourceBlocker), strings.TrimSpace(input.RecoveryHandoff.BlockerKind), strings.TrimSpace(action.ResourceBlocker))
+	if blocker != "credential_unverified" {
+		return false
+	}
+	return true
 }
 
 func (r *Runtime) childWakeRepairRetryRecoveryContract(key session.SessionKey, msg core.InboundMessage, action session.NextActionRecord) (session.ContinuationRecoveryContract, error) {

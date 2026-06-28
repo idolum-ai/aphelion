@@ -515,12 +515,15 @@ func TestContinueTextMaterializesChildWakeApprovalFromChildToolRuntimeRepairBloc
 	if err != nil {
 		t.Fatalf("NewResolver() err = %v", err)
 	}
-	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	runner := &runtimeWakeRunner{}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store).WithDurableAgentWakeRunner(runner)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
 	rt, err := New(cfg, store, &fakeProvider{}, tools, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
 	key := session.SessionKey{ChatID: 8129, UserID: 0, Scope: telegramDMScopeRef(8129)}
+	seedRuntimeWakeAgent(t, store, "idolum-email", true)
 	grant := seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
 	subjectRef := session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "idolum-email", grant.GrantID, "durable_agent", "wake_once", "")
 	if _, err := store.RecordNextAction(session.NextActionInput{
@@ -583,6 +586,157 @@ func TestContinueTextMaterializesChildWakeApprovalFromChildToolRuntimeRepairBloc
 		if action.OperationTool == "request_approval" && action.OperationKind == "continuation_lease_request" {
 			t.Fatalf("open actions = %#v, want generated child_wake handoff resolved after materialization", open)
 		}
+	}
+
+	if _, err := rt.ApproveContinuationForKey(key, 1001); err != nil {
+		t.Fatalf("ApproveContinuationForKey(child_tool_runtime_repair retry) err = %v", err)
+	}
+	result, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     8129,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "continue",
+		MessageID:  57,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound(approved child_tool_runtime_repair retry) err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "Running approved continuation") {
+		t.Fatalf("HandleInbound(approved child_tool_runtime_repair retry) result = %#v, want approved continuation acknowledgement", result)
+	}
+	if len(runner.calls) != 1 || runner.calls[0] != "idolum-email" {
+		t.Fatalf("runner calls = %#v, want one idolum-email wake after approving repair retry", runner.calls)
+	}
+	consumed, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(consumed retry) err = %v", err)
+	}
+	if consumed.Status != session.ContinuationStatusIdle ||
+		consumed.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed ||
+		consumed.ContinuationLease.RetryOperation.Tool != "durable_agent" {
+		t.Fatalf("consumed continuation = %#v, want consumed child_wake retry lease after wake execution", consumed)
+	}
+}
+
+func TestContinueTextMaterializesChildWakeApprovalFromCredentialProbeBlocker(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	runner := &runtimeWakeRunner{}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store).WithDurableAgentWakeRunner(runner)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, &fakeProvider{}, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8130, UserID: 0, Scope: telegramDMScopeRef(8130)}
+	seedRuntimeWakeAgent(t, store, "idolum-email", true)
+	grant := seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+	subjectRef := session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "idolum-email", grant.GrantID, "durable_agent", "wake_once", "")
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "idolum-email-gog-smoke-test",
+		Objective: "Materialize a fresh bounded child_wake approval card for idolum-email; do not wake yet.",
+		Status:    session.OperationStatusActive,
+		Stage:     "phase_approval",
+		Summary:   "Button-backed approval requested: Fresh bounded child_wake approval for idolum-email.",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "idolum-email-finish-child-setup-less-ceremony",
+			Goal:           "Recover idolum-email readiness.",
+			CurrentPhaseID: "idolum-email-fresh-child-wake-approval-after-runtime-repair",
+			Phases: []session.OperationPhase{{
+				ID:               "idolum-email-fresh-child-wake-approval-after-runtime-repair",
+				Summary:          "Fresh bounded child_wake approval for idolum-email after runtime-bin materialization checks.",
+				Status:           session.PlanStatusPending,
+				AuthorityClass:   "child_wake",
+				GateLevel:        "escalated_operator_approval",
+				GateReasonCode:   "capability_grant",
+				WhyNow:           "The operator requested a fresh approval card only.",
+				BoundedEffect:    "This phase only sends a fresh approval card and then stops. If approved later, it permits exactly one approved-continuation child_wake for idolum-email.",
+				AllowedActions:   []string{"materialize fresh child_wake approval card for idolum-email", "prepare_capability_request", "capability_access_check"},
+				ForbiddenActions: []string{"direct durable_agent.wake_once", "retry wake_once"},
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(live-shaped phase) err = %v", err)
+	}
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           "next-live-child-credential-probe",
+		Key:                key,
+		Owner:              "approved_retry",
+		State:              session.NextActionWaitingForOperator,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         subjectRef,
+		CausalRefs:         []string{"child_task_result:child-result-credential-unverified"},
+		NextAction:         "run or review a no-content credential/account-status probe before mailbox work",
+		RequiredAuthority:  "credential_status_probe",
+		ResourceBlocker:    "credential_unverified",
+		RetryPolicy:        "retry_after_credential_verification",
+		OperationKind:      "child_credential_probe",
+		OperationTool:      "update_operation",
+		OperationInputJSON: `{"merge":true,"status":"blocked","stage":"durable_child_blocker","summary":"Credential state is not proven; run a no-content status probe before any mailbox action.","recovery_contract":"aphelion.recovery_handoff.v1","recovery_operation_kind":"child_credential_probe","durable_agent_id":"idolum-email","agent_id":"idolum-email","child_blocker_kind":"credential_unverified","blocker_kind":"credential_unverified","diagnostic_only":true,"no_content_probe":true,"tool":"gog_cli","recovery_handoff":{"contract":"aphelion.recovery_handoff.v1","operation_kind":"child_credential_probe","operation_tool":"update_operation","durable_agent_id":"idolum-email","agent_id":"idolum-email","blocker_kind":"credential_unverified","resource_blocker":"credential_unverified","diagnostic_only":true,"no_content_probe":true,"required_authority":"credential_status_probe"}}`,
+		OperatorProjection: "Credential state is not proven; run a no-content status probe before any mailbox action.",
+		CreatedAt:          time.Now().UTC().Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(child_credential_probe) err = %v", err)
+	}
+
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     8130,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "continue",
+		MessageID:  61,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound(continue credential probe) err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "fresh bounded child_wake approval") {
+		t.Fatalf("HandleInbound result = %#v, want fresh child_wake approval prompt acknowledgement", result)
+	}
+	state, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if state.Status != session.ContinuationStatusPending ||
+		state.ContinuationLease.LeaseClass != session.ContinuationLeaseClassChildWake ||
+		strings.TrimSpace(state.ContinuationLease.Constraints["agent_id"]) != "idolum-email" {
+		t.Fatalf("continuation state = %#v, want pending child_wake approval for idolum-email", state)
+	}
+	retry := session.NormalizeContinuationRetryOperation(state.ContinuationLease.RetryOperation)
+	if !retry.Active() || retry.Tool != "durable_agent" || retry.OperationKind != "durable_agent_wake_once" || !strings.Contains(retry.InputJSON, `"agent_id":"idolum-email"`) {
+		t.Fatalf("retry operation = %#v, want durable_agent wake_once retry for idolum-email", retry)
+	}
+	if _, err := rt.ApproveContinuationForKey(key, 1001); err != nil {
+		t.Fatalf("ApproveContinuationForKey(credential probe retry) err = %v", err)
+	}
+	result, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     8130,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "continue",
+		MessageID:  62,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound(approved credential probe retry) err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "Running approved continuation") {
+		t.Fatalf("HandleInbound(approved credential probe retry) result = %#v, want approved continuation acknowledgement", result)
+	}
+	if len(runner.calls) != 1 || runner.calls[0] != "idolum-email" {
+		t.Fatalf("runner calls = %#v, want one idolum-email wake from credential probe retry", runner.calls)
 	}
 }
 
