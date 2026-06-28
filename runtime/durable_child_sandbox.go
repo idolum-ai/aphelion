@@ -174,6 +174,9 @@ func (a *durableChildSandboxAccess) applyGrantMaterialization(grant session.Capa
 	}
 	for _, bind := range material.ReadonlyBinds {
 		a.readonlyBinds = append(a.readonlyBinds, sandbox.BindPath{Source: bind.Source, Target: bind.Target})
+		if source := durableChildRuntimeBinCompatibilityRoot(bind.Source, bind.Target); source != "" {
+			a.readonlyPaths = append(a.readonlyPaths, source)
+		}
 	}
 	for _, bind := range material.SecretBinds {
 		a.readonlyBinds = append(a.readonlyBinds, sandbox.BindPath{Source: bind.Source, Target: bind.Target})
@@ -184,6 +187,19 @@ func (a *durableChildSandboxAccess) applyGrantMaterialization(grant session.Capa
 		}
 	}
 	return nil
+}
+
+func durableChildRuntimeBinCompatibilityRoot(source string, target string) string {
+	source = strings.TrimSpace(source)
+	target = filepath.Clean(strings.TrimSpace(target))
+	if source == "" || target != "/usr/local/bin" {
+		return ""
+	}
+	cleaned := filepath.Clean(source)
+	if !filepath.IsAbs(cleaned) || filepath.Base(cleaned) != "runtime-bin" {
+		return ""
+	}
+	return cleaned
 }
 
 func durableChildResolveExecutable(value string) (string, error) {

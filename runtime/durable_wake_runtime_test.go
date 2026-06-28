@@ -62,6 +62,18 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			wantDiagnostic: true,
 		},
 		{
+			name:           "runtime bin missing beats credential wording",
+			status:         session.ChildTaskResultBlocked,
+			summary:        "Parent-side audit reports runtime-bin/gog and runtime-bin/gog_cli present, but the child sandbox cannot see them:\n- runtime-bin/gog_cli: missing\n- runtime-bin/gog: missing\nNo mailbox credential probe happened.",
+			blocker:        "child_reported_blocked",
+			wantKind:       "tool_runtime_not_executable",
+			wantState:      session.NextActionBlockedNeedsResourceRepair,
+			wantOp:         "child_tool_runtime_repair",
+			wantRetry:      "retry_after_tool_runtime_repair",
+			wantProbe:      true,
+			wantDiagnostic: true,
+		},
+		{
 			name:           "lifecycle unregistered",
 			status:         session.ChildTaskResultBlocked,
 			summary:        "child_runtime_blocked: preflight_failed adapter=gog_cli failure_code=lifecycle_unregistered",
