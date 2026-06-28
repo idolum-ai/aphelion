@@ -21,11 +21,13 @@ type fakeDurableAgentWakeRunner struct {
 	err        error
 	calls      []string
 	messageIDs [][]string
+	claimIDs   []string
 }
 
-func (f *fakeDurableAgentWakeRunner) RunDurableAgentParentConversationWake(_ context.Context, agentID string, messageIDs []string, now time.Time) error {
+func (f *fakeDurableAgentWakeRunner) RunDurableAgentParentConversationWake(_ context.Context, agentID string, messageIDs []string, claimID string, now time.Time) error {
 	f.calls = append(f.calls, agentID)
 	f.messageIDs = append(f.messageIDs, append([]string(nil), messageIDs...))
+	f.claimIDs = append(f.claimIDs, strings.TrimSpace(claimID))
 	if f.err != nil {
 		return f.err
 	}
@@ -1202,6 +1204,9 @@ func TestDurableAgentWakeOnceCallsRunnerForPendingParentMessage(t *testing.T) {
 	}
 	if len(runner.messageIDs) != 1 || len(runner.messageIDs[0]) != 1 || strings.TrimSpace(runner.messageIDs[0][0]) == "" {
 		t.Fatalf("wake runner message IDs = %#v, want exact pending parent batch", runner.messageIDs)
+	}
+	if len(runner.claimIDs) != 1 || !strings.HasPrefix(runner.claimIDs[0], "wake_claim:") {
+		t.Fatalf("wake runner claim IDs = %#v, want durable wake claim id", runner.claimIDs)
 	}
 	for _, want := range []string{
 		"wake_status: completed",

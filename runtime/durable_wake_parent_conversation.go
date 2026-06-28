@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -167,6 +168,24 @@ func durableWakeTaskPacketIDForPending(agentID string, pending []core.DurableAge
 		return "child_task:" + session.EffectAttemptCommandHash(strings.Join(parts, ":"))[7:23]
 	}
 	return durableWakeTaskPacketID(agentID, durableWakeMessageID(now), now)
+}
+
+func durableWakeTaskPacketIDForWakeClaim(agentID string, messageIDs []string, wakeClaimID string) string {
+	parts := []string{strings.TrimSpace(agentID), strings.TrimSpace(wakeClaimID)}
+	seen := map[string]struct{}{}
+	for _, id := range messageIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		parts = append(parts, id)
+	}
+	sort.Strings(parts[2:])
+	return "child_task:" + session.EffectAttemptCommandHash(strings.Join(parts, ":"))[7:23]
 }
 
 func durableParentConversationWakePrompt(agent core.DurableAgent, messages []core.DurableAgentConversationMessage) string {

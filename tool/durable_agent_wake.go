@@ -164,18 +164,19 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 
 	messageIDs := core.DurableAgentConversationMessageIDs(beforePendingMessages)
 	now := time.Now().UTC()
-	if _, err := r.store.ClaimDurableAgentWakeOnce(session.DurableAgentWakeClaimInput{
+	claim, err := r.store.ClaimDurableAgentWakeOnce(session.DurableAgentWakeClaimInput{
 		LeaseID:          useRef.ContinuationLeaseID,
 		AgentID:          agent.AgentID,
 		TurnRunID:        useRef.TurnRunID,
 		MessageBatchHash: session.DurableAgentWakeMessageBatchHash(agent.AgentID, messageIDs),
 		MessageIDs:       messageIDs,
 		CreatedAt:        now,
-	}); err != nil {
+	})
+	if err != nil {
 		return finishFailure(err)
 	}
 
-	wakeErr := r.durableAgentWakeRunner.RunDurableAgentParentConversationWake(ctx, agent.AgentID, messageIDs, now)
+	wakeErr := r.durableAgentWakeRunner.RunDurableAgentParentConversationWake(ctx, agent.AgentID, messageIDs, claim.ClaimID, now)
 	_, afterContinuity, err := r.loadDurableAgentContinuity(agent.AgentID)
 	if err != nil {
 		return finishFailure(err)

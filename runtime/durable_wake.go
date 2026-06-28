@@ -42,6 +42,7 @@ type durableWakeTurnPlan struct {
 	Key                  session.SessionKey
 	Inbound              core.InboundMessage
 	TaskPacketID         string
+	WakeClaimID          string
 	SessionChatType      string
 	SessionUserName      string
 	ParentMessageIDs     []string
@@ -600,6 +601,7 @@ func (r *Runtime) recordDurableWakeTaskPacket(key session.SessionKey, agent core
 		"audit_channel":   strings.TrimSpace(plan.AuditChannel),
 		"inbound_id":      plan.Inbound.MessageID,
 		"inbound_preview": truncatePreview(strings.TrimSpace(plan.Inbound.Text), 220),
+		"wake_claim_id":   strings.TrimSpace(plan.WakeClaimID),
 	})
 	_, err := r.store.RecordChildTaskPacket(session.ChildTaskPacketInput{
 		PacketID:  taskPacketID,

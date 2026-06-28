@@ -357,7 +357,7 @@ func TestRunDurableAgentParentConversationWakeDoesNotFallbackAfterQueueRace(t *t
 	fallback := &testDurableWakeAdapter{channelKind: "external_channel"}
 	rt.durableWakeAdapters = []durableWakeIngressAdapter{fallback}
 
-	err = rt.RunDurableAgentParentConversationWake(context.Background(), agent.AgentID, messageIDs, time.Now().UTC())
+	err = rt.RunDurableAgentParentConversationWake(context.Background(), agent.AgentID, messageIDs, "", time.Now().UTC())
 	var claimedBatchErr core.DurableAgentWakeFailureError
 	if !errors.As(err, &claimedBatchErr) || claimedBatchErr.Class != core.DurableAgentWakeFailureClaimedParentBatchMissing {
 		t.Fatalf("RunDurableAgentParentConversationWake() err = %T %[1]v, want typed claimed-batch failure", err)
@@ -424,7 +424,7 @@ func TestRunDurableAgentParentConversationWakeRecordsTaskForScopeFailure(t *test
 	}
 
 	now := time.Date(2026, 6, 27, 20, 45, 0, 0, time.UTC)
-	err = rt.RunDurableAgentParentConversationWake(context.Background(), agent.AgentID, messageIDs, now)
+	err = rt.RunDurableAgentParentConversationWake(context.Background(), agent.AgentID, messageIDs, "", now)
 	var wakeFailure core.DurableAgentWakeFailureError
 	if !errors.As(err, &wakeFailure) || wakeFailure.Class != core.DurableAgentWakeFailureScopeSetup {
 		t.Fatalf("RunDurableAgentParentConversationWake() err = %T %[1]v, want typed scope setup failure", err)
@@ -458,6 +458,135 @@ func TestRunDurableAgentParentConversationWakeRecordsTaskForScopeFailure(t *test
 	}
 	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsResourceRepair || open[0].SubjectRef != packet.PacketID {
 		t.Fatalf("open next actions = %#v, want one packet-scoped resource repair action", open)
+	}
+}
+
+func TestRunDurableAgentParentConversationWakeUsesClaimScopedPacketAfterTerminalBatchPacket(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "I handled the approved retry.\nREVIEW_STATUS: completed"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "child-approved-retry",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Process one approved parent wake retry.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	queuedAt := time.Date(2026, 6, 27, 23, 0, 0, 0, time.UTC)
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Run one approved readiness wake.", queuedAt)
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agent.AgentID, StateJSON: raw}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+	pending, err := rt.pendingDurableAgentParentConversation(agent.AgentID, 5)
+	if err != nil {
+		t.Fatalf("pendingDurableAgentParentConversation() err = %v", err)
+	}
+	messageIDs := core.DurableAgentConversationMessageIDs(pending)
+	if len(messageIDs) != 1 {
+		t.Fatalf("pending message IDs = %#v, want one", messageIDs)
+	}
+
+	key := session.SessionKey{
+		ChatID: durableWakeSyntheticChatID(agent.AgentID),
+		Scope:  durableAgentScopeRef(agent),
+	}
+	oldPacketID := durableWakeTaskPacketIDForPending(agent.AgentID, pending, queuedAt)
+	oldPacket, err := store.RecordChildTaskPacket(session.ChildTaskPacketInput{
+		PacketID:  oldPacketID,
+		AgentID:   agent.AgentID,
+		Key:       key,
+		TaskKind:  "durable_wake",
+		InputJSON: `{"channel":"durable_parent_conversation","wake_claim_id":""}`,
+		CreatedAt: queuedAt,
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskPacket(old terminal batch packet) err = %v", err)
+	}
+	oldClaim, err := store.ClaimChildTaskAttempt(session.ChildTaskAttemptClaimInput{
+		PacketID:       oldPacket.PacketID,
+		AttemptID:      "child_attempt:old-terminal",
+		LeaseOwner:     "durable_wake:" + agent.AgentID + ":old-terminal",
+		AgentID:        agent.AgentID,
+		Key:            key,
+		ClaimedAt:      queuedAt.Add(time.Second),
+		LeaseExpiresAt: queuedAt.Add(30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("ClaimChildTaskAttempt(old terminal batch packet) err = %v", err)
+	}
+	if _, err := store.CommitChildTaskOutcome(session.ChildTaskOutcomeCommitInput{
+		Result: session.ChildTaskResultInput{
+			PacketID:        oldClaim.PacketID,
+			AttemptID:       oldClaim.ActiveAttemptID,
+			LeaseOwner:      oldClaim.LeaseOwner,
+			LeaseGeneration: oldClaim.LeaseGeneration,
+			FencingToken:    oldClaim.FencingToken,
+			AgentID:         agent.AgentID,
+			Key:             key,
+			Status:          session.ChildTaskResultFailed,
+			ErrorText:       "prior approved wake failed before child pickup",
+			CreatedAt:       queuedAt.Add(2 * time.Second),
+		},
+		ResolvedAt: queuedAt.Add(2 * time.Second),
+	}); err != nil {
+		t.Fatalf("CommitChildTaskOutcome(old terminal batch packet) err = %v", err)
+	}
+
+	wakeClaimID := "wake_claim:fresh-approved-child-wake"
+	now := queuedAt.Add(time.Minute)
+	err = rt.RunDurableAgentParentConversationWake(context.Background(), agent.AgentID, messageIDs, wakeClaimID, now)
+	if err != nil {
+		t.Fatalf("RunDurableAgentParentConversationWake(claim-scoped retry) err = %v", err)
+	}
+
+	claimPacketID := durableWakeTaskPacketIDForWakeClaim(agent.AgentID, messageIDs, wakeClaimID)
+	if claimPacketID == oldPacketID {
+		t.Fatalf("claim-scoped packet id = old packet id %q, want fresh packet for approved retry", oldPacketID)
+	}
+	claimPacket, ok, err := store.ChildTaskPacket(claimPacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(%q) err = %v", claimPacketID, err)
+	}
+	if !ok || claimPacket.ResultID == "" {
+		t.Fatalf("ChildTaskPacket(%q) = %#v ok=%t, want claim-scoped packet with child result", claimPacketID, claimPacket, ok)
+	}
+	claimResult, ok, err := store.ChildTaskResult(claimPacket.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskResult(%q) err = %v", claimPacket.ResultID, err)
+	}
+	if !ok || claimResult.Status == session.ChildTaskResultFailed {
+		t.Fatalf("ChildTaskResult(%q) = %#v ok=%t, want non-failed child result", claimPacket.ResultID, claimResult, ok)
+	}
+	oldPacket, ok, err = store.ChildTaskPacket(oldPacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(old %q) err = %v", oldPacketID, err)
+	}
+	if !ok || oldPacket.Status != session.ChildTaskPacketFailed {
+		t.Fatalf("old ChildTaskPacket(%q) = %#v ok=%t, want prior terminal failure preserved", oldPacketID, oldPacket, ok)
+	}
+	if len(provider.seenGovernorSystem) == 0 {
+		t.Fatal("provider saw no child turn; approved retry should reach child runtime")
 	}
 }
 

@@ -38,7 +38,7 @@ func (r *Runtime) RunDurableAgentChildWake(ctx context.Context, agentID string, 
 	return r.runDurableAgentChildWakeLoaded(ctx, *agent, now)
 }
 
-func (r *Runtime) RunDurableAgentParentConversationWake(ctx context.Context, agentID string, messageIDs []string, now time.Time) error {
+func (r *Runtime) RunDurableAgentParentConversationWake(ctx context.Context, agentID string, messageIDs []string, wakeClaimID string, now time.Time) error {
 	if r == nil || r.store == nil {
 		return fmt.Errorf("durable parent conversation wake runtime is unavailable")
 	}
@@ -65,6 +65,10 @@ func (r *Runtime) RunDurableAgentParentConversationWake(ctx context.Context, age
 			return core.NewDurableAgentWakeClaimedParentBatchMissingError(agentID, messageIDs)
 		}
 		return nil
+	}
+	if wakeClaimID = strings.TrimSpace(wakeClaimID); wakeClaimID != "" {
+		plan.WakeClaimID = wakeClaimID
+		plan.TaskPacketID = durableWakeTaskPacketIDForWakeClaim(agentID, messageIDs, wakeClaimID)
 	}
 	return r.runDurableWakeTurn(ctx, *agent, *plan, now.UTC())
 }

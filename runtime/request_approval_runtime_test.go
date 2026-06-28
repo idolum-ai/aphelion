@@ -1855,7 +1855,7 @@ type runtimeWakeRunner struct {
 	err        error
 }
 
-func (r *runtimeWakeRunner) RunDurableAgentParentConversationWake(_ context.Context, agentID string, messageIDs []string, _ time.Time) error {
+func (r *runtimeWakeRunner) RunDurableAgentParentConversationWake(_ context.Context, agentID string, messageIDs []string, _ string, _ time.Time) error {
 	r.calls = append(r.calls, agentID)
 	r.messageIDs = append(r.messageIDs, append([]string(nil), messageIDs...))
 	return r.err

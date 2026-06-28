@@ -167,18 +167,25 @@ func TestChildWakeRecoveryJourneyRunsRealDurableWakeAfterApprovals(t *testing.T)
 	if len(provider.seenGovernorSystem) == 0 || !strings.Contains(strings.Join(provider.seenGovernorSystem, "\n"), "parent conversation wake") {
 		t.Fatalf("provider governor prompts = %#v, want real durable parent conversation wake", provider.seenGovernorSystem)
 	}
-	packet, ok, err := store.ChildTaskPacket(parentMessageID)
+	wakeClaimID := session.DurableAgentWakeClaimID(session.DurableAgentWakeClaimInput{
+		LeaseID:          current.ContinuationLease.ID,
+		AgentID:          "idolum-email",
+		MessageBatchHash: session.DurableAgentWakeMessageBatchHash("idolum-email", []string{parentMessageID}),
+		MessageIDs:       []string{parentMessageID},
+	})
+	taskPacketID := durableWakeTaskPacketIDForWakeClaim("idolum-email", []string{parentMessageID}, wakeClaimID)
+	packet, ok, err := store.ChildTaskPacket(taskPacketID)
 	if err != nil {
-		t.Fatalf("ChildTaskPacket(%q) err = %v", parentMessageID, err)
+		t.Fatalf("ChildTaskPacket(%q) err = %v", taskPacketID, err)
 	}
 	if !ok || packet.Status != session.ChildTaskPacketCompleted || packet.ResultID == "" || packet.TerminalAt.IsZero() {
-		t.Fatalf("ChildTaskPacket(%q) = %#v ok=%t, want completed child task evidence", parentMessageID, packet, ok)
+		t.Fatalf("ChildTaskPacket(%q) = %#v ok=%t, want completed child task evidence", taskPacketID, packet, ok)
 	}
 	resultRecord, ok, err := store.ChildTaskResult(packet.ResultID)
 	if err != nil {
 		t.Fatalf("ChildTaskResult(%q) err = %v", packet.ResultID, err)
 	}
-	if !ok || resultRecord.PacketID != parentMessageID || resultRecord.Status != session.ChildTaskResultCompleted || resultRecord.NextState != session.NextActionTerminal {
+	if !ok || resultRecord.PacketID != taskPacketID || resultRecord.Status != session.ChildTaskResultCompleted || resultRecord.NextState != session.NextActionTerminal {
 		t.Fatalf("ChildTaskResult(%q) = %#v ok=%t, want terminal result for claimed parent message", packet.ResultID, resultRecord, ok)
 	}
 	agent, err := store.DurableAgent("idolum-email")
