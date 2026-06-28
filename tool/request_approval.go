@@ -375,7 +375,7 @@ func requestApprovalContinuationLeaseSummary(requirement missingContinuationLeas
 
 func requestApprovalContinuationLeaseBoundedEffect(requirement missingContinuationLeaseRequirement) string {
 	if requirement.LeaseClass == session.ContinuationLeaseClassChildWake && requirement.AgentID != "" {
-		return fmt.Sprintf("Permit durable_agent wake_once to wake only %s once, consume the pending parent guidance batch, and stop after one child result or pre-child failure.", requirement.AgentID)
+		return fmt.Sprintf("Permit durable_agent wake_once to wake only %s once, consume the pending or contract-bound parent guidance batch, and stop after one child result or pre-child failure.", requirement.AgentID)
 	}
 	return fmt.Sprintf("Permit exactly one %s continuation turn for %s %s, then stop and report the result.", requirement.LeaseClass, requirement.Tool, requirement.ToolAction)
 }

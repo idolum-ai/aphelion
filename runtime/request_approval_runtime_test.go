@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -382,7 +383,7 @@ func TestOperationPhaseChildWakeCompilesRecoveryContractAndRunsApprovedRetry(t *
 	if !ok || contract.AgentID != "idolum-email" || contract.GrantID != grant.GrantID || !contract.RetryOperation.Active() {
 		t.Fatalf("phase recovery contract = %#v ok=%v, want retryable child_wake contract", contract, ok)
 	}
-	if retry := session.NormalizeContinuationRetryOperation(pending.ContinuationLease.RetryOperation); !retry.Active() || retry.Tool != "durable_agent" || !strings.Contains(retry.InputJSON, `"agent_id":"idolum-email"`) {
+	if retry := session.NormalizeContinuationRetryOperation(pending.ContinuationLease.RetryOperation); !retry.Active() || retry.Tool != "durable_agent" || !strings.Contains(retry.InputJSON, `"agent_id":"idolum-email"`) || !strings.Contains(retry.InputJSON, "Wake idolum-email exactly once to consume pending parent guidance.") {
 		t.Fatalf("phase retry operation = %#v, want durable_agent wake_once retry", retry)
 	}
 
@@ -406,6 +407,113 @@ func TestOperationPhaseChildWakeCompilesRecoveryContractAndRunsApprovedRetry(t *
 	}
 	if len(runner.calls) != 1 || runner.calls[0] != "idolum-email" {
 		t.Fatalf("runner calls = %#v, want one idolum-email wake from phase retry", runner.calls)
+	}
+}
+
+func TestOperationPhaseChildWakeMaterializesGuidanceBeforeApprovedRetry(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	runner := &runtimeWakeRunner{}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store).WithDurableAgentWakeRunner(runner)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9061, UserID: 0, Scope: telegramDMScopeRef(9061)}
+	seedRuntimeWakeAgent(t, store, "idolum-email", false)
+	grant := seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+	const guidance = "Ask idolum-email to generate recommended jobs from already-available child-local context only, or report blocker."
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-idolum-email-inline-phase-wake",
+		Objective: "Ask idolum-email to generate recommended jobs from child-local context.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-idolum-email-inline-phase-wake",
+			Goal:           "Run one bounded child-local planning wake.",
+			CurrentPhaseID: "phase-child-wake-inline-idolum-email",
+			Phases: []session.OperationPhase{{
+				ID:               "phase-child-wake-inline-idolum-email",
+				Summary:          guidance,
+				Status:           session.PlanStatusPending,
+				AuthorityClass:   "child_wake",
+				GateLevel:        "escalated_operator_approval",
+				GateReasonCode:   "child_wake",
+				WhyNow:           "The child can use existing local context without mailbox access.",
+				BoundedEffect:    "Invoke durable_agent wake_once for idolum-email exactly once with the phase guidance as pending parent work.",
+				AllowedActions:   []string{"wake_named_child"},
+				ForbiddenActions: []string{"unbounded_retry_loop", "access_mailbox_contents", "read_secret_values"},
+				RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+					GrantID:        grant.GrantID,
+					Kind:           session.CapabilityKindGenericDelegation,
+					TargetResource: grant.TargetResource,
+					GrantedTo:      "telegram:1001",
+					AllowedActions: []string{"invoke"},
+					Constraints:    `{"agent_id":"idolum-email"}`,
+				}},
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed phase) err = %v", err)
+	}
+
+	materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9061, SenderID: 1001, Text: "please continue", MessageID: 1},
+		"please continue",
+	)
+	if err != nil {
+		t.Fatalf("MaterializeRequestedApproval(phase child_wake) err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want child_wake phase approval")
+	}
+	pending, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(pending phase) err = %v", err)
+	}
+	retry := session.NormalizeContinuationRetryOperation(pending.ContinuationLease.RetryOperation)
+	if !retry.Active() || !strings.Contains(retry.InputJSON, guidance) {
+		t.Fatalf("phase retry operation = %#v, want phase guidance", retry)
+	}
+	if _, err := rt.ApproveContinuationForKey(key, 1001); err != nil {
+		t.Fatalf("ApproveContinuationForKey() err = %v", err)
+	}
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:       9061,
+		SenderID:     1001,
+		SenderName:   "admin",
+		Text:         "[user pressed continue button: resume the previous task]",
+		MessageID:    2,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound(phase approved retry) err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "Running approved continuation") {
+		t.Fatalf("HandleInbound(phase approved retry) result = %#v, want approved continuation acknowledgement", result)
+	}
+	if got := fmt.Sprint(runner.calls); got != "[idolum-email]" {
+		t.Fatalf("wake runner calls = %s, want [idolum-email]", got)
+	}
+	if len(runner.messageIDs) != 1 || len(runner.messageIDs[0]) != 1 || strings.TrimSpace(runner.messageIDs[0][0]) == "" {
+		t.Fatalf("wake runner message IDs = %#v, want claimed inline guidance batch", runner.messageIDs)
 	}
 }
 

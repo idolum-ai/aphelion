@@ -132,6 +132,52 @@ func TestDurableAgentWakeOnceSkipsWithoutPendingParentMessage(t *testing.T) {
 	}
 }
 
+func TestDurableAgentWakeOnceMaterializesInlineGuidanceBeforeWake(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	runner := &fakeDurableAgentWakeRunner{store: store}
+	registry.WithDurableAgentWakeRunner(runner)
+	upsertDurableAgentWakeTestAgent(t, store)
+	grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
+	actor := principal.Principal{Role: principal.RoleAdmin}
+	ctx := contextWithDurableAgentWakeAuthority(t, store, adminSessionKey(), actor, "lease-child-wake-inline-guidance", session.ContinuationLeaseClassChildWake, []string{durableAgentWakeOnceAction})
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		ctx,
+		actor,
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha","reason":"Generate recommended jobs from already-available child-local context only; stop after one result or typed blocker."}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once inline guidance) err = %v", err)
+	}
+	if got := fmt.Sprint(runner.calls); got != "[child-alpha]" {
+		t.Fatalf("wake runner calls = %s, want [child-alpha]", got)
+	}
+	if len(runner.messageIDs) != 1 || len(runner.messageIDs[0]) != 1 || strings.TrimSpace(runner.messageIDs[0][0]) == "" {
+		t.Fatalf("wake runner message IDs = %#v, want exact inline parent-guidance batch", runner.messageIDs)
+	}
+	for _, want := range []string{
+		"wake_status: completed",
+		"pending_parent_before: 1",
+		"pending_parent_after: 0",
+		"next: conversation_show",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("wake_once output = %q, want %q", out, want)
+		}
+	}
+	_, continuity, err := registry.loadDurableAgentContinuity("child-alpha")
+	if err != nil {
+		t.Fatalf("loadDurableAgentContinuity() err = %v", err)
+	}
+	if pending := continuity.PendingParentConversationMessages(10); len(pending) != 0 {
+		t.Fatalf("pending parent messages = %#v, want inline guidance consumed exactly once", pending)
+	}
+}
+
 func TestDurableAgentWakeOnceRequiresRuntimeRunner(t *testing.T) {
 	t.Parallel()
 
@@ -259,6 +305,58 @@ func TestDurableAgentWakeOnceLeaseRequestOperationCreatesExactPendingLease(t *te
 	}
 	if grant.GrantID == "" {
 		t.Fatal("test grant id unexpectedly empty")
+	}
+}
+
+func TestDurableAgentWakeOnceLeaseRequestPreservesInlineGuidanceInRetry(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	runner := &fakeDurableAgentWakeRunner{store: store}
+	registry.WithDurableAgentWakeRunner(runner)
+	upsertDurableAgentWakeTestAgent(t, store)
+	grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001})
+	key := adminSessionKey()
+	const guidance = "Generate recommended jobs from already-available child-local context only; stop after one result or typed blocker."
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"durable_agent",
+		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha","reason":"`+guidance+`"}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "missing child_wake continuation lease") {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want missing child_wake lease", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one lease request", open)
+	}
+	contract := recoveryContractForWakeTest(t, store, open[0].OperationInputJSON)
+	if !strings.Contains(contract.RetryOperation.InputJSON, guidance) {
+		t.Fatalf("recovery contract retry input = %s, want inline guidance", contract.RetryOperation.InputJSON)
+	}
+
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		open[0].OperationTool,
+		json.RawMessage(open[0].OperationInputJSON),
+	); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(request_approval lease request) err = %v", err)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	retry := session.NormalizeContinuationRetryOperation(cont.ContinuationLease.RetryOperation)
+	if !retry.Active() || !strings.Contains(retry.InputJSON, guidance) {
+		t.Fatalf("continuation retry = %#v, want inline guidance preserved", retry)
 	}
 }
 

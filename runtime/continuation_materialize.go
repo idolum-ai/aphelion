@@ -880,6 +880,14 @@ func (r *Runtime) attachOperationPhaseRecoveryContract(key session.SessionKey, m
 		constraints["grant_target_resource"] = targetResource
 		constraints["target_resource"] = targetResource
 	}
+	retryInput := map[string]any{"action": "wake_once", "agent_id": agentID}
+	if guidance := operationPhaseChildWakeGuidance(phase); guidance != "" {
+		retryInput["reason"] = guidance
+	}
+	retryJSON, err := json.Marshal(retryInput)
+	if err != nil {
+		return state, fmt.Errorf("compile child_wake retry input: %w", err)
+	}
 	contract, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
 		RequestInstanceID:   "operation-phase-" + strings.TrimSpace(state.DecisionID),
 		SessionID:           session.SessionIDForKey(key),
@@ -893,7 +901,14 @@ func (r *Runtime) attachOperationPhaseRecoveryContract(key session.SessionKey, m
 		AgentID:             agentID,
 		GrantID:             grantID,
 		GrantTargetResource: targetResource,
-		CreatedAt:           now,
+		RetryOperation: session.ContinuationRetryOperation{
+			Contract:      session.ContinuationRecoveryRetryVersion,
+			OperationKind: "durable_agent_wake_once",
+			Tool:          "durable_agent",
+			InputJSON:     string(retryJSON),
+			SubjectKind:   "continuation_lease_request",
+		},
+		CreatedAt: now,
 	})
 	if err != nil {
 		return state, err
@@ -910,6 +925,21 @@ func (r *Runtime) attachOperationPhaseRecoveryContract(key session.SessionKey, m
 	state.ContinuationLease = session.NormalizeContinuationLease(lease)
 	state.ActionProposal.PlanHash = contract.ContractHash
 	return session.NormalizeContinuationState(state), nil
+}
+
+func operationPhaseChildWakeGuidance(phase session.OperationPhase) string {
+	phase = normalizeSingleOperationPhase(phase)
+	for _, value := range []string{
+		phase.Summary,
+		phase.BoundedEffect,
+		phase.OperatorTitle,
+		phase.PlanTitle,
+	} {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func operationPhaseChildWakeTarget(phase session.OperationPhase) (string, string, string) {

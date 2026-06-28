@@ -466,7 +466,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 		})
 		defs = append(defs, agent.ToolDef{
 			Name:        "durable_agent",
-			Description: "Inspect and ratify durable-agent governance from conversation. Admin only. conversation_send appends parent guidance without waking a child; wake_once consumes already-pending parent guidance under an approved child-wake lease. For policy_apply, prefer policy_patch (conversational policy intent) and use policy_overrides only when a low-level override is explicitly needed. For ordinary behavior/privacy/shared-context changes, use policy_apply directly; enrollment actions are only for remote control-plane lifecycle.",
+			Description: "Inspect and ratify durable-agent governance from conversation. Admin only. conversation_send appends parent guidance without waking a child; wake_once consumes pending parent guidance exactly once under an approved child-wake lease, or may carry one bounded inline guidance payload in message/reason for that same leased wake. For policy_apply, prefer policy_patch (conversational policy intent) and use policy_overrides only when a low-level override is explicitly needed. For ordinary behavior/privacy/shared-context changes, use policy_apply directly; enrollment actions are only for remote control-plane lifecycle.",
 			Parameters: json.RawMessage(`{
 					"type": "object",
 					"properties": {
@@ -634,7 +634,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 						},
 					"operation": {"type": "string", "enum": ["revoke", "reactivate", "decommission", "rotate_secret"], "description": "Enrollment lifecycle operation for enrollment_update"},
 					"secret": {"type": "string", "description": "Replacement control-plane secret for enrollment_update when operation=rotate_secret"},
-					"message": {"type": "string", "description": "Parent message text for conversation_send"},
+					"message": {"type": "string", "description": "Parent message text for conversation_send, or one bounded inline guidance payload for wake_once when no parent message is pending"},
 					"history": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Recent update entries to show for policy_show or bootstrap_show"},
 					"telegram_user_id": {"type": "integer", "minimum": 1, "description": "Single Telegram user id for access_grant or access_revoke"},
 					"telegram_user_ids": {"type": "array", "items": {"type": "integer", "minimum": 1}, "description": "Telegram user ids for access_grant or access_revoke"}

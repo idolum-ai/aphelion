@@ -110,7 +110,7 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 	useRef, err := r.requireDurableAgentWakeOnceAuthority(ctx, p, key, agent.AgentID)
 	if err != nil {
 		return "", missingContinuationLeaseError{
-			requirement: durableAgentWakeOnceLeaseRequirement(agent.AgentID, grant, p),
+			requirement: durableAgentWakeOnceLeaseRequirement(agent.AgentID, grant, p, in),
 			cause:       err,
 		}
 	}
@@ -150,6 +150,18 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 		return finishFailure(err)
 	}
 	beforePendingMessages := beforeContinuity.PendingParentConversationMessages(0)
+	if len(beforePendingMessages) == 0 {
+		inlineGuidance := durableAgentWakeOnceInlineGuidance(in)
+		if inlineGuidance != "" {
+			_, beforeContinuity, err = r.store.UpdateDurableAgentContinuity(agent.AgentID, func(continuity core.DurableAgentContinuityState) (core.DurableAgentContinuityState, error) {
+				return continuity.WithConversationMessage("parent", inlineGuidance, time.Now().UTC()), nil
+			})
+			if err != nil {
+				return finishFailure(fmt.Errorf("record durable_agent wake_once inline guidance: %w", err))
+			}
+			beforePendingMessages = beforeContinuity.PendingParentConversationMessages(0)
+		}
+	}
 	beforePending := len(beforePendingMessages)
 	beforeState, lastParentAt, _, _, _ := durableAgentConversationState(beforeContinuity)
 	result.PendingParentBefore = beforePending
@@ -217,6 +229,13 @@ func durableAgentWakeOnceCapabilityTarget(agentID string) string {
 	return "durable_agent:" + strings.TrimSpace(agentID) + ":wake_once"
 }
 
+func durableAgentWakeOnceInlineGuidance(in durableAgentInput) string {
+	if message := strings.TrimSpace(in.Message); message != "" {
+		return message
+	}
+	return strings.TrimSpace(in.Reason)
+}
+
 func durableAgentWakeOnceMissingGrantRequirement(agentID string, p principal.Principal) missingGrantRequirement {
 	return durableAgentWakeOnceGrantContract(agentID, p).Requirement
 }
@@ -238,7 +257,7 @@ func durableAgentWakeOnceGrantContract(agentID string, p principal.Principal) mi
 						"agent_id": []string{agentID},
 					},
 					"required_selectors":      []string{"agent_id"},
-					"allowed_fields":          []string{"reason"},
+					"allowed_fields":          []string{"message", "reason"},
 					"allow_additional_fields": false,
 				},
 			},

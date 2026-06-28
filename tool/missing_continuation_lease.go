@@ -55,9 +55,23 @@ func (e missingContinuationLeaseError) Unwrap() error {
 	return e.cause
 }
 
-func durableAgentWakeOnceLeaseRequirement(agentID string, grant session.CapabilityGrant, p principal.Principal) missingContinuationLeaseRequirement {
+func durableAgentWakeOnceLeaseRequirement(agentID string, grant session.CapabilityGrant, p principal.Principal, inputs ...durableAgentInput) missingContinuationLeaseRequirement {
 	agentID = strings.TrimSpace(agentID)
 	principalID := toolAuthorityCanonicalPrincipal(p)
+	var retry session.ContinuationRetryOperation
+	if len(inputs) > 0 {
+		retryInput := map[string]any{"action": "wake_once", "agent_id": agentID}
+		if guidance := durableAgentWakeOnceInlineGuidance(inputs[0]); guidance != "" {
+			retryInput["reason"] = guidance
+		}
+		retry = session.ContinuationRetryOperation{
+			Contract:      recoveryRetryContractVersion,
+			OperationKind: "durable_agent_wake_once",
+			Tool:          "durable_agent",
+			InputJSON:     compactJSON(retryInput),
+			SubjectKind:   "continuation_lease_request",
+		}
+	}
 	return normalizeMissingContinuationLeaseRequirement(missingContinuationLeaseRequirement{
 		AgentID:             agentID,
 		GrantID:             grant.GrantID,
@@ -68,6 +82,7 @@ func durableAgentWakeOnceLeaseRequirement(agentID string, grant session.Capabili
 		Constraints:         map[string]string{"agent_id": agentID},
 		Tool:                "durable_agent",
 		ToolAction:          "wake_once",
+		RetryOperation:      retry,
 		NextAction:          "approve a bounded child_wake continuation lease before retrying the blocked durable_agent wake_once invocation",
 		OperatorProjection: fmt.Sprintf(
 			"durable_agent wake_once for %s has an active grant (%s) but no current child_wake continuation lease. Ask the admin to approve one bounded child_wake turn for this exact child, then retry wake_once once.",

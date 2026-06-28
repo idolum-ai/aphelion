@@ -59,9 +59,12 @@ Code anchors:
   requires a live `child_wake` continuation lease and the `wake_named_child` or
   `request_child_wake` action. Operator UI affordances may compose those steps,
   but tool/model paths must keep the wake as a separately reviewable execution
-  action. If the capability grant exists but the lease is missing, the tool
-  boundary records a `blocked_needs_authority` next action for the exact
-  `child_wake` lease instead of treating the grant as execution authority.
+  action. A `wake_once` retry contract may carry one bounded inline
+  `message`/`reason` payload; the runtime first records that payload as parent
+  guidance, then consumes it through the same leased wake. If the capability
+  grant exists but the lease is missing, the tool boundary records a
+  `blocked_needs_authority` next action for the exact `child_wake` lease instead
+  of treating the grant as execution authority.
 - The parent `child_wake` lease is consumed at the `durable_agent.wake_once`
   tool boundary. The child wake turn that follows is child-scoped work; it does
   not inherit the raw parent admission or parent tool invocation reference as
