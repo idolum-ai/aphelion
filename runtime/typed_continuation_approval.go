@@ -59,11 +59,11 @@ func (r *Runtime) maybeHandleApprovedContinuationRunIntent(ctx context.Context, 
 	}
 	if isChildWakeRepairRetryApprovalText(msg.Text) {
 		key := session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramInboundScopeRef(msg)}
-		if handled, result, err := r.maybeMaterializeChildWakeRepairRetryApproval(ctx, key, msg, actor); handled {
+		if handled, result, err := r.maybeMaterializeChildWakeRepairRetryApproval(ctx, key, msg, actor, true); handled {
 			return true, result, err
 		}
 	}
-	if !isApprovedContinuationRunText(msg.Text) {
+	if !isApprovedContinuationRunText(msg.Text) && !isChildWakeRepairAdvanceText(msg.Text) {
 		return false, nil, nil
 	}
 	key := session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramInboundScopeRef(msg)}
@@ -73,7 +73,7 @@ func (r *Runtime) maybeHandleApprovedContinuationRunIntent(ctx context.Context, 
 	}
 	state = session.NormalizeContinuationState(state)
 	if !exists || state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
-		if handled, result, err := r.maybeMaterializeChildWakeRepairRetryApproval(ctx, key, msg, actor); handled {
+		if handled, result, err := r.maybeMaterializeChildWakeRepairRetryApproval(ctx, key, msg, actor, true); handled {
 			return true, result, err
 		}
 		return false, nil, nil
@@ -88,8 +88,11 @@ func (r *Runtime) maybeHandleApprovedContinuationRunIntent(ctx context.Context, 
 	return true, &core.TurnResult{Text: "Running approved continuation."}, nil
 }
 
-func (r *Runtime) maybeMaterializeChildWakeRepairRetryApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, actor principal.Principal) (bool, *core.TurnResult, error) {
-	if r == nil || r.store == nil || actor.Role != principal.RoleAdmin || !isChildWakeRepairRetryApprovalText(msg.Text) {
+func (r *Runtime) maybeMaterializeChildWakeRepairRetryApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, actor principal.Principal, allowRunIntent bool) (bool, *core.TurnResult, error) {
+	if r == nil || r.store == nil || actor.Role != principal.RoleAdmin {
+		return false, nil, nil
+	}
+	if !isChildWakeRepairRetryApprovalText(msg.Text) && !(allowRunIntent && isChildWakeRepairAdvanceText(msg.Text)) {
 		return false, nil, nil
 	}
 	action, ok, err := r.currentChildWakeRuntimeRepairAction(key)
@@ -220,24 +223,43 @@ func (r *Runtime) currentChildWakeRuntimeRepairAction(key session.SessionKey) (s
 		return session.NextActionRecord{}, false, err
 	}
 	for _, action := range actions {
-		if action.State == session.NextActionBlockedNeedsResourceRepair &&
-			strings.TrimSpace(action.OperationTool) == "durable_agent" &&
-			strings.TrimSpace(action.OperationKind) == "child_wake_runtime_repair" &&
-			strings.TrimSpace(action.SubjectKind) == "continuation_lease_request" {
+		if childWakeRuntimeRepairActionCanRequestRetry(action) {
 			return action, true, nil
 		}
 	}
 	return session.NextActionRecord{}, false, nil
 }
 
+func childWakeRuntimeRepairActionCanRequestRetry(action session.NextActionRecord) bool {
+	if action.State != session.NextActionBlockedNeedsResourceRepair ||
+		strings.TrimSpace(action.SubjectKind) != "continuation_lease_request" ||
+		childWakeRepairAgentIDFromSubjectRef(action.SubjectRef) == "" {
+		return false
+	}
+	operationKind := strings.TrimSpace(action.OperationKind)
+	operationTool := strings.TrimSpace(action.OperationTool)
+	switch operationKind {
+	case "child_wake_runtime_repair":
+		return operationTool == "durable_agent"
+	case "child_tool_runtime_repair":
+		return operationTool == "update_operation" && strings.TrimSpace(action.ResourceBlocker) == "tool_runtime_not_executable"
+	default:
+		return false
+	}
+}
+
 func (r *Runtime) childWakeRepairRetryRecoveryContract(key session.SessionKey, msg core.InboundMessage, action session.NextActionRecord) (session.ContinuationRecoveryContract, error) {
 	var payload struct {
 		Action            string `json:"action"`
 		AgentID           string `json:"agent_id"`
+		DurableAgentID    string `json:"durable_agent_id"`
 		RequestInstanceID string `json:"request_instance_id"`
 	}
 	_ = json.Unmarshal([]byte(action.OperationInputJSON), &payload)
 	agentID := strings.TrimSpace(payload.AgentID)
+	if agentID == "" {
+		agentID = strings.TrimSpace(payload.DurableAgentID)
+	}
 	if agentID == "" {
 		agentID = childWakeRepairAgentIDFromSubjectRef(action.SubjectRef)
 	}
@@ -326,6 +348,31 @@ func isChildWakeRepairRetryApprovalText(text string) bool {
 		(strings.Contains(value, "approved continuation") ||
 			strings.Contains(value, "approval") ||
 			strings.Contains(value, "approve"))
+}
+
+func isChildWakeRepairAdvanceText(text string) bool {
+	value := normalizeContinuationControlText(text)
+	if value == "" || childWakeRepairRetryTextNegated(value) {
+		return false
+	}
+	if isApprovedContinuationRunText(text) || isChildWakeRepairRetryApprovalText(text) {
+		return true
+	}
+	if !strings.Contains(value, "continue") && !strings.Contains(value, "proceed") && !strings.Contains(value, "resume") {
+		return false
+	}
+	for _, marker := range []string{
+		"child tool runtime repair",
+		"child_tool_runtime_repair",
+		"tool runtime",
+		"runtime bin",
+		"runtime material",
+	} {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func childWakeRepairRetryTextNegated(value string) bool {

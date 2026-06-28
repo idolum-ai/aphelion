@@ -498,6 +498,94 @@ func TestRetryTextMaterializesFreshChildWakeApprovalFromRepairBlocker(t *testing
 	}
 }
 
+func TestContinueTextMaterializesChildWakeApprovalFromChildToolRuntimeRepairBlocker(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	rt, err := New(cfg, store, &fakeProvider{}, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8129, UserID: 0, Scope: telegramDMScopeRef(8129)}
+	grant := seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+	subjectRef := session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "idolum-email", grant.GrantID, "durable_agent", "wake_once", "")
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           "next-live-child-tool-runtime-repair",
+		Key:                key,
+		Owner:              "approved_retry",
+		State:              session.NextActionBlockedNeedsResourceRepair,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         subjectRef,
+		CausalRefs:         []string{"child_task_result:child-result-runtime-missing"},
+		NextAction:         "repair the child-local tool runtime, then run one no-content readiness probe",
+		ResourceBlocker:    "tool_runtime_not_executable",
+		RetryPolicy:        "retry_after_tool_runtime_repair",
+		OperationKind:      "child_tool_runtime_repair",
+		OperationTool:      "update_operation",
+		OperationInputJSON: `{"merge":true,"status":"blocked","stage":"durable_child_blocker","summary":"Child-local tool runtime is missing or not executable; repair materialization, then run one no-content readiness probe.","recovery_contract":"aphelion.recovery_handoff.v1","recovery_operation_kind":"child_tool_runtime_repair","durable_agent_id":"idolum-email","child_blocker_kind":"tool_runtime_not_executable","diagnostic_only":true,"no_content_probe":true,"tool":"gog_cli"}`,
+		OperatorProjection: "Child-local tool runtime is missing or not executable; repair the wrapper/materialization, then run one no-content readiness probe.",
+		CreatedAt:          time.Now().UTC().Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(child_tool_runtime_repair) err = %v", err)
+	}
+
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     8129,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "Continue the idolum-email repair from the current child_tool_runtime_repair blocker. Stop after the next typed blocker.",
+		MessageID:  56,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound(continue child_tool_runtime_repair) err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "fresh bounded child_wake approval") {
+		t.Fatalf("HandleInbound result = %#v, want fresh child_wake approval prompt acknowledgement", result)
+	}
+	state, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if state.Status != session.ContinuationStatusPending ||
+		state.ContinuationLease.LeaseClass != session.ContinuationLeaseClassChildWake ||
+		strings.TrimSpace(state.ContinuationLease.Constraints["agent_id"]) != "idolum-email" {
+		t.Fatalf("continuation state = %#v, want pending child_wake approval for idolum-email", state)
+	}
+	retry := session.NormalizeContinuationRetryOperation(state.ContinuationLease.RetryOperation)
+	if !retry.Active() || retry.Tool != "durable_agent" || retry.OperationKind != "durable_agent_wake_once" || !strings.Contains(retry.InputJSON, `"agent_id":"idolum-email"`) {
+		t.Fatalf("retry operation = %#v, want durable_agent wake_once retry for idolum-email", retry)
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want one approval card", len(sender.inline))
+	}
+	open, err := store.OpenNextActionsBySession(key, 20)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	for _, action := range open {
+		if action.RecordID == "next-live-child-tool-runtime-repair" {
+			t.Fatalf("open actions = %#v, want child_tool_runtime_repair blocker resolved after approval materialization", open)
+		}
+		if action.OperationTool == "request_approval" && action.OperationKind == "continuation_lease_request" {
+			t.Fatalf("open actions = %#v, want generated child_wake handoff resolved after materialization", open)
+		}
+	}
+}
+
 func TestDirectContinuationApprovalBindsExecutionRunAuthority(t *testing.T) {
 	t.Parallel()
 
