@@ -390,7 +390,13 @@ func TestOperationPhaseChildWakeCompilesRecoveryContractAndRunsApprovedRetry(t *
 		t.Fatalf("ApproveContinuationForKey(phase child_wake) err = %v", err)
 	}
 	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
-		ChatID: 9058, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 2,
+		ChatID:       9058,
+		SenderID:     1001,
+		SenderName:   "admin",
+		Text:         "[user pressed continue button: resume the previous task]",
+		MessageID:    2,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
 	})
 	if err != nil {
 		t.Fatalf("HandleInbound(phase approved retry) err = %v", err)
@@ -545,7 +551,13 @@ func TestRecoveryHandoffMaterializationCreatesChildWakeApprovalAndConsumableLeas
 		t.Fatalf("approved continuation text = %q, must not ask for approval again", approvedText)
 	}
 	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
-		ChatID: 9048, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 103,
+		ChatID:       9048,
+		SenderID:     1001,
+		SenderName:   "admin",
+		Text:         "[user pressed continue button: resume the previous task]",
+		MessageID:    103,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
 	})
 	if err != nil {
 		t.Fatalf("HandleInbound(continue approved retry) err = %v", err)
@@ -636,7 +648,13 @@ func TestApprovedChildWakeRetryFailureBlocksForRepair(t *testing.T) {
 		t.Fatalf("ApproveContinuationForKey() err = %v", err)
 	}
 	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
-		ChatID: 9068, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 302,
+		ChatID:       9068,
+		SenderID:     1001,
+		SenderName:   "admin",
+		Text:         "[user pressed continue button: resume the previous task]",
+		MessageID:    302,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
 	})
 	if err != nil {
 		t.Fatalf("HandleInbound(continue approved retry) err = %v", err)

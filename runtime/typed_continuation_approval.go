@@ -59,6 +59,9 @@ func (r *Runtime) maybeHandleApprovedContinuationRunIntent(ctx context.Context, 
 	}
 	key := session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramInboundScopeRef(msg)}
 	if msg.Origin == core.InboundOriginTurnAuthorization {
+		if inboundOriginDetailLabel(msg) != string(session.TurnAuthorizationKindContinuation) {
+			return false, nil, nil
+		}
 		state, exists, err := r.store.ContinuationStateIfExists(key)
 		if err != nil {
 			return false, nil, err
@@ -78,10 +81,13 @@ func (r *Runtime) maybeHandleApprovedContinuationRunIntent(ctx context.Context, 
 			}
 		}
 		if !exists || state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
-			if handled, result, err := r.maybeMaterializeChildWakeRepairRetryApproval(ctx, key, msg, actor, true, true); handled {
+			if handled, result, err := r.maybeMaterializePendingContinuationApproval(ctx, key, msg, actor, true); handled {
 				return true, result, err
 			}
 		}
+		return false, nil, nil
+	}
+	if childWakeRepairRetryTextNegated(normalizeContinuationControlText(msg.Text)) {
 		return false, nil, nil
 	}
 	if isChildWakeRepairRetryApprovalText(msg.Text) {
@@ -89,28 +95,72 @@ func (r *Runtime) maybeHandleApprovedContinuationRunIntent(ctx context.Context, 
 			return true, result, err
 		}
 	}
-	if !isApprovedContinuationRunText(msg.Text) && !isChildWakeRepairAdvanceText(msg.Text) {
-		return false, nil, nil
-	}
 	state, exists, err := r.store.ContinuationStateIfExists(key)
 	if err != nil {
 		return false, nil, err
 	}
 	state = session.NormalizeContinuationState(state)
-	if !exists || state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
-		if handled, result, err := r.maybeMaterializeChildWakeRepairRetryApproval(ctx, key, msg, actor, true, false); handled {
-			return true, result, err
+	if exists && state.Status == session.ContinuationStatusApproved && state.RemainingTurns > 0 {
+		if !state.ContinuationLease.ActiveAt(time.Now().UTC()) {
+			result, err := r.triggerContinuationLoopWithResult(ctx, key)
+			if err != nil {
+				return true, nil, err
+			}
+			return true, &core.TurnResult{Text: approvedContinuationRunNoopText(result.State)}, nil
 		}
-		return false, nil, nil
+		return true, &core.TurnResult{Text: "An approved continuation is ready. Use the approval card to run it, or ignore it to leave the work stopped."}, nil
 	}
-	result, err := r.triggerContinuationLoopWithResult(ctx, key)
+	if handled, result, err := r.maybeMaterializePendingContinuationApproval(ctx, key, msg, actor, true); handled {
+		return true, result, err
+	}
+	return false, nil, nil
+}
+
+func (r *Runtime) maybeMaterializePendingContinuationApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, actor principal.Principal, allowTypedActionWithoutText bool) (bool, *core.TurnResult, error) {
+	if handled, result, err := r.maybeMaterializeChildWakeRepairRetryApproval(ctx, key, msg, actor, true, allowTypedActionWithoutText); handled {
+		return true, result, err
+	}
+	materializable, err := r.hasMaterializablePendingContinuationApproval(key, time.Now().UTC())
 	if err != nil {
 		return true, nil, err
 	}
-	if !result.Ran {
-		return true, &core.TurnResult{Text: approvedContinuationRunNoopText(result.State)}, nil
+	if !materializable {
+		return false, nil, nil
 	}
-	return true, &core.TurnResult{Text: "Running approved continuation."}, nil
+	materialized, err := r.MaterializeRequestedApproval(ctx, key, msg, msg.Text)
+	if err != nil {
+		return true, nil, err
+	}
+	if materialized {
+		return true, &core.TurnResult{Text: "I surfaced the pending continuation approval."}, nil
+	}
+	return false, nil, nil
+}
+
+func (r *Runtime) hasMaterializablePendingContinuationApproval(key session.SessionKey, now time.Time) (bool, error) {
+	if r == nil || r.store == nil {
+		return false, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if actions, err := r.store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", "continuation_lease_request", 1); err != nil {
+		return false, err
+	} else if len(actions) > 0 {
+		return true, nil
+	}
+	_, opState, exists, err := r.store.PlanAndOperationStateIfExists(key)
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, nil
+	}
+	opState = session.NormalizeOperationState(opState)
+	if pendingOperationProposalNeedsButton(opState.Proposal) || pendingOperationPlanLeaseNeedsButton(opState.PlanLease) || operationHasMaterializablePhaseApproval(opState) {
+		return true, nil
+	}
+	return false, nil
 }
 
 func (r *Runtime) maybeMaterializeChildWakeRepairRetryApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, actor principal.Principal, allowRunIntent bool, allowTypedActionWithoutText bool) (bool, *core.TurnResult, error) {
@@ -476,6 +526,9 @@ func isChildWakeRepairAdvanceText(text string) bool {
 
 func childWakeRepairRetryTextNegated(value string) bool {
 	for _, phrase := range []string{
+		"do not continue",
+		"don't continue",
+		"dont continue",
 		"do not retry",
 		"don't retry",
 		"dont retry",

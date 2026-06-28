@@ -141,7 +141,13 @@ func TestChildWakeRecoveryJourneyRunsRealDurableWakeAfterApprovals(t *testing.T)
 		t.Fatalf("ApproveContinuationForKey() err = %v", err)
 	}
 	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
-		ChatID: 9082, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 202,
+		ChatID:       9082,
+		SenderID:     1001,
+		SenderName:   "admin",
+		Text:         "[user pressed continue button: resume the previous task]",
+		MessageID:    202,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
 	})
 	if err != nil {
 		t.Fatalf("HandleInbound(continue approved child_wake) err = %v", err)
@@ -332,7 +338,13 @@ func TestApprovedChildWakeRetryRecordsTerminalChildBlockerInParentSession(t *tes
 		t.Fatalf("ApproveContinuationForKey() err = %v", err)
 	}
 	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
-		ChatID: 9083, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 302,
+		ChatID:       9083,
+		SenderID:     1001,
+		SenderName:   "admin",
+		Text:         "[user pressed continue button: resume the previous task]",
+		MessageID:    302,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
 	})
 	if err != nil {
 		t.Fatalf("HandleInbound(continue approved child_wake) err = %v", err)
