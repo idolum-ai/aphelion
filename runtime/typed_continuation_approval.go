@@ -90,30 +90,36 @@ func (r *Runtime) maybeHandleApprovedContinuationRunIntent(ctx context.Context, 
 	if childWakeRepairRetryTextNegated(normalizeContinuationControlText(msg.Text)) {
 		return false, nil, nil
 	}
-	if isChildWakeRepairRetryApprovalText(msg.Text) {
+	if isChildWakeRepairRetryApprovalText(msg.Text) || isChildWakeRepairAdvanceText(msg.Text) {
 		if handled, result, err := r.maybeMaterializeChildWakeRepairRetryApproval(ctx, key, msg, actor, true, false); handled {
 			return true, result, err
 		}
 	}
-	state, exists, err := r.store.ContinuationStateIfExists(key)
-	if err != nil {
-		return false, nil, err
-	}
-	state = session.NormalizeContinuationState(state)
-	if exists && state.Status == session.ContinuationStatusApproved && state.RemainingTurns > 0 {
-		if !state.ContinuationLease.ActiveAt(time.Now().UTC()) {
-			result, err := r.triggerContinuationLoopWithResult(ctx, key)
-			if err != nil {
-				return true, nil, err
-			}
-			return true, &core.TurnResult{Text: approvedContinuationRunNoopText(result.State)}, nil
+	if isPendingContinuationApprovalSurfaceText(msg.Text) {
+		if handled, result, err := r.maybeMaterializePendingContinuationApproval(ctx, key, msg, actor, false); handled {
+			return true, result, err
 		}
-		return true, &core.TurnResult{Text: "An approved continuation is ready. Use the approval card to run it, or ignore it to leave the work stopped."}, nil
-	}
-	if handled, result, err := r.maybeMaterializePendingContinuationApproval(ctx, key, msg, actor, false); handled {
-		return true, result, err
 	}
 	return false, nil, nil
+}
+
+func isPendingContinuationApprovalSurfaceText(text string) bool {
+	value := normalizeContinuationControlText(text)
+	if value == "" || childWakeRepairRetryTextNegated(value) {
+		return false
+	}
+	if !strings.Contains(value, "approval") && !strings.Contains(value, "approve") {
+		return false
+	}
+	if strings.Contains(value, "card") || strings.Contains(value, "prompt") {
+		return true
+	}
+	for _, marker := range []string{"surface", "show", "send", "materialize", "create", "display"} {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runtime) maybeMaterializePendingContinuationApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, actor principal.Principal, allowTypedActionWithoutText bool) (bool, *core.TurnResult, error) {
@@ -456,37 +462,6 @@ func isTypedContinuationApprovalText(text string) bool {
 	}
 }
 
-func isApprovedContinuationRunText(text string) bool {
-	value := normalizeContinuationControlText(text)
-	if value == "" || approvedContinuationRunTextNegated(value) {
-		return false
-	}
-	switch value {
-	case "continue", "please continue", "continue please",
-		"run", "run it", "please run", "run please",
-		"resume", "resume it", "please resume", "resume please",
-		"proceed", "please proceed", "proceed please",
-		"go ahead", "yes continue", "ok continue", "yes run", "ok run":
-		return true
-	}
-	for _, prefix := range []string{
-		"continue approved",
-		"continue the approved",
-		"continue with approved",
-		"run approved",
-		"run the approved",
-		"run with approved",
-		"resume approved",
-		"resume the approved",
-		"resume with approved",
-	} {
-		if strings.HasPrefix(value, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
 func isChildWakeRepairRetryApprovalText(text string) bool {
 	value := normalizeContinuationControlText(text)
 	if value == "" || childWakeRepairRetryTextNegated(value) {
@@ -504,7 +479,7 @@ func isChildWakeRepairAdvanceText(text string) bool {
 	if value == "" || childWakeRepairRetryTextNegated(value) {
 		return false
 	}
-	if isApprovedContinuationRunText(text) || isChildWakeRepairRetryApprovalText(text) {
+	if isChildWakeRepairRetryApprovalText(text) {
 		return true
 	}
 	if !strings.Contains(value, "continue") && !strings.Contains(value, "proceed") && !strings.Contains(value, "resume") {
@@ -577,33 +552,6 @@ func normalizeContinuationControlText(text string) string {
 		":", " ",
 	)
 	return strings.Join(strings.Fields(replacer.Replace(value)), " ")
-}
-
-func approvedContinuationRunTextNegated(value string) bool {
-	for _, phrase := range []string{
-		"do not continue",
-		"don't continue",
-		"dont continue",
-		"do not run",
-		"don't run",
-		"dont run",
-		"do not resume",
-		"don't resume",
-		"dont resume",
-		"do not proceed",
-		"don't proceed",
-		"dont proceed",
-		"not now",
-		"no continue",
-		"no run",
-		"pause",
-		"stop",
-	} {
-		if value == phrase || strings.Contains(value, phrase) {
-			return true
-		}
-	}
-	return false
 }
 
 func approvedContinuationRunNoopText(state session.ContinuationState) string {

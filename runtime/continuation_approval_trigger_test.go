@@ -130,32 +130,7 @@ func TestHandleInboundTypedApprovalConsumesPendingContinuation(t *testing.T) {
 	}
 }
 
-func TestApprovedContinuationRunTextIntent(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		text string
-		want bool
-	}{
-		{text: "continue", want: true},
-		{text: "Continue, please!", want: true},
-		{text: "run it", want: true},
-		{text: "resume the approved retry", want: true},
-		{text: "go ahead", want: true},
-		{text: "don't continue", want: false},
-		{text: "do not run it", want: false},
-		{text: "not now", want: false},
-		{text: "status", want: false},
-		{text: "approve", want: false},
-	}
-	for _, tt := range tests {
-		if got := isApprovedContinuationRunText(tt.text); got != tt.want {
-			t.Fatalf("isApprovedContinuationRunText(%q) = %v, want %v", tt.text, got, tt.want)
-		}
-	}
-}
-
-func TestHandleInboundRunTextDoesNotConsumeApprovedContinuation(t *testing.T) {
+func TestHandleInboundRunTextRoutesThroughNormalTurn(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -215,11 +190,11 @@ func TestHandleInboundRunTextDoesNotConsumeApprovedContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleInbound() err = %v", err)
 	}
-	if result == nil || !strings.Contains(result.Text, "approved continuation is ready") {
-		t.Fatalf("HandleInbound() result = %#v, want approved continuation ready acknowledgement", result)
+	if result == nil || result.Text != "continued" {
+		t.Fatalf("HandleInbound() result = %#v, want normal turn result", result)
 	}
-	if recorder.called {
-		t.Fatal("interactive assembler called for plain text approved continuation")
+	if !recorder.called {
+		t.Fatal("interactive assembler not called for plain text continue")
 	}
 	got, err := store.ContinuationState(key)
 	if err != nil {
@@ -230,7 +205,7 @@ func TestHandleInboundRunTextDoesNotConsumeApprovedContinuation(t *testing.T) {
 	}
 }
 
-func TestHandleInboundRunTextReportsExpiredApprovedContinuationWithoutRunning(t *testing.T) {
+func TestHandleInboundRunTextDoesNotShortCircuitExpiredContinuation(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -291,25 +266,18 @@ func TestHandleInboundRunTextReportsExpiredApprovedContinuationWithoutRunning(t 
 	if err != nil {
 		t.Fatalf("HandleInbound() err = %v", err)
 	}
-	if result == nil || !strings.Contains(result.Text, "expired") || strings.Contains(result.Text, "Running approved continuation") {
-		t.Fatalf("HandleInbound() result = %#v, want explicit expired/no-run acknowledgement", result)
+	if result == nil || result.Text != "continued" {
+		t.Fatalf("HandleInbound() result = %#v, want normal turn result", result)
 	}
-	if recorder.called {
-		t.Fatal("interactive assembler called for expired approved continuation")
+	if !recorder.called {
+		t.Fatal("interactive assembler not called for plain text continue")
 	}
 	got, err := store.ContinuationState(key)
 	if err != nil {
 		t.Fatalf("ContinuationState() err = %v", err)
 	}
-	if got.Status != session.ContinuationStatusIdle || got.RemainingTurns != 0 || got.ContinuationLease.Status != session.ContinuationLeaseStatusExpired {
-		t.Fatalf("continuation = %#v, want expired idle continuation", got)
-	}
-	events, err := store.ExecutionEventsBySession(key, 0, 50)
-	if err != nil {
-		t.Fatalf("ExecutionEventsBySession() err = %v", err)
-	}
-	if !hasExecutionEvent(events, core.ExecutionEventContinuationBlocked) {
-		t.Fatalf("events = %#v, want blocked event for expired approved continuation", events)
+	if got.Status != session.ContinuationStatusApproved || got.RemainingTurns != 1 || got.ContinuationLease.Status != session.ContinuationLeaseStatusActive {
+		t.Fatalf("continuation = %#v, want expired approved continuation left for explicit control path", got)
 	}
 }
 
@@ -792,7 +760,7 @@ func TestExplicitAdminTextMaterializesPendingChildWakeApprovalWithoutContinueKey
 	}
 }
 
-func TestAdminTextMaterializesPendingOperationPhaseApprovalWithoutContinueKeyword(t *testing.T) {
+func TestExplicitAdminTextMaterializesPendingOperationPhaseApprovalWithoutContinueKeyword(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, _, sender := buildRuntimeFixtures(t)
@@ -833,11 +801,11 @@ func TestAdminTextMaterializesPendingOperationPhaseApprovalWithoutContinueKeywor
 		ChatID:     8132,
 		SenderID:   1001,
 		SenderName: "admin",
-		Text:       "what is pending here?",
+		Text:       "surface the pending approval card",
 		MessageID:  64,
 	})
 	if err != nil {
-		t.Fatalf("HandleInbound(non-keyword pending phase) err = %v", err)
+		t.Fatalf("HandleInbound(explicit pending phase approval surface) err = %v", err)
 	}
 	if result == nil || !strings.Contains(result.Text, "pending continuation approval") {
 		t.Fatalf("HandleInbound result = %#v, want pending approval acknowledgement", result)
@@ -865,6 +833,8 @@ func TestAdminTextDoesNotExecuteApprovedRetryWithoutAuthorizationEvent(t *testin
 	t.Parallel()
 
 	rt, store, runner, _, key := buildCredentialProbeRetryFixture(t, 8133, "next-live-child-credential-probe-approved-no-keyword")
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{Text: "normal diagnostic response"}}
+	rt.interactiveDMAssembler = recorder
 
 	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:     8133,
@@ -891,6 +861,12 @@ func TestAdminTextDoesNotExecuteApprovedRetryWithoutAuthorizationEvent(t *testin
 	})
 	if err != nil {
 		t.Fatalf("HandleInbound(unrelated text after approval) err = %v", err)
+	}
+	if result == nil || result.Text != "normal diagnostic response" {
+		t.Fatalf("HandleInbound(unrelated text after approval) result = %#v, want normal turn response", result)
+	}
+	if !recorder.called {
+		t.Fatal("interactive assembler not called for unrelated text after approval")
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("runner calls = %#v, want unrelated admin text not to execute approved retry", runner.calls)
