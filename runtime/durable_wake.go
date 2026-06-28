@@ -392,6 +392,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 	}
 
 	childTurnCtx := toolpkg.WithoutToolInvocationRef(toolpkg.WithoutAuthorityUseRef(toolpkg.WithoutExecutionAuthorityAdmission(turnCtx)))
+	childTurnCtx = toolpkg.WithExecutionAuthorityAdmission(childTurnCtx, durableWakeChildTaskAuthorityAdmission(key, agent, claimedPacket))
 	turnResult, turnSummary, err := r.runDurableWakeConversation(childTurnCtx, agent, scope, key, plan, pendingParentConversation)
 	if err != nil {
 		r.recordExecutionEvent(key, core.ExecutionEventDurableWakeFailed, "durable", "failed", map[string]any{
@@ -576,6 +577,43 @@ func durableWakeAttemptID(agentID string, taskPacketID string, at time.Time) str
 
 func durableWakeAttemptOwner(agentID string, attemptID string) string {
 	return strings.Join([]string{"durable_wake", strings.TrimSpace(agentID), strings.TrimSpace(attemptID)}, ":")
+}
+
+func durableWakeChildTaskAuthorityAdmission(key session.SessionKey, agent core.DurableAgent, packet session.ChildTaskPacket) session.ExecutionRunAuthority {
+	agentID := strings.TrimSpace(agent.AgentID)
+	constraints := map[string]string{
+		"agent_id":          agentID,
+		"packet_id":         strings.TrimSpace(packet.PacketID),
+		"task_lease_id":     strings.TrimSpace(packet.TaskLeaseID),
+		"attempt_id":        strings.TrimSpace(packet.ActiveAttemptID),
+		"lease_owner":       strings.TrimSpace(packet.LeaseOwner),
+		"lease_generation":  fmt.Sprintf("%d", packet.LeaseGeneration),
+		"fencing_token":     strings.TrimSpace(packet.FencingToken),
+		"target_resource":   strings.TrimSpace(packet.TargetResource),
+		"required_action":   strings.TrimSpace(packet.RequiredAction),
+		"authority_kind":    strings.TrimSpace(packet.AuthorityKind),
+		"authority_id":      strings.TrimSpace(packet.AuthorityID),
+		"grant_id":          strings.TrimSpace(packet.GrantID),
+		"request_id":        strings.TrimSpace(packet.RequestID),
+		"child_task_status": string(packet.Status),
+	}
+	return session.NormalizeExecutionRunAuthority(session.ExecutionRunAuthority{
+		SessionID:           session.SessionIDForKey(key),
+		ChatID:              key.ChatID,
+		UserID:              key.UserID,
+		Scope:               key.Scope,
+		Principal:           core.DurableAgentPrincipal(agentID),
+		PrincipalRole:       string(principal.RoleDurableAgent),
+		ExecutionSpecies:    "durable_child_wake",
+		LeaseKind:           session.ExecutionAuthorityLeaseKindChildTask,
+		LeaseStatus:         string(packet.Status),
+		LeaseClass:          session.ContinuationLeaseClassChildWake,
+		LeaseAllowedActions: []string{"use_child_task_grants", "invoke_granted_child_tools"},
+		LeaseConstraints:    constraints,
+		LeaseRemainingTurns: 1,
+		LeaseExpiresAt:      packet.LeaseExpiresAt,
+		AdmittedAt:          time.Now().UTC(),
+	})
 }
 
 func durableWakeResultID(agentID string, taskPacketID string, attemptID string) string {

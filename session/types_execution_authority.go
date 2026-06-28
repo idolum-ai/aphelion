@@ -10,6 +10,7 @@ import (
 const (
 	ExecutionAuthorityLeaseKindContinuation  = "continuation_lease"
 	ExecutionAuthorityLeaseKindOperationPlan = "operation_plan_lease"
+	ExecutionAuthorityLeaseKindChildTask     = "child_task_attempt"
 )
 
 type ExecutionRunAuthority struct {
@@ -68,6 +69,8 @@ func normalizeExecutionAuthorityLeaseKind(kind string) string {
 		return ExecutionAuthorityLeaseKindContinuation
 	case ExecutionAuthorityLeaseKindOperationPlan:
 		return ExecutionAuthorityLeaseKindOperationPlan
+	case ExecutionAuthorityLeaseKindChildTask:
+		return ExecutionAuthorityLeaseKindChildTask
 	default:
 		return ""
 	}

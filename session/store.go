@@ -10,7 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 83
+const schemaVersion = 84
 
 type SQLiteStore struct {
 	db     *sql.DB
@@ -305,7 +305,7 @@ func (s *SQLiteStore) init() error {
 			principal TEXT NOT NULL DEFAULT '',
 			principal_role TEXT NOT NULL DEFAULT '',
 			execution_species TEXT NOT NULL DEFAULT '',
-			lease_kind TEXT NOT NULL CHECK(lease_kind IN ('continuation_lease', 'operation_plan_lease')),
+			lease_kind TEXT NOT NULL CHECK(lease_kind IN ('continuation_lease', 'operation_plan_lease', 'child_task_attempt')),
 			continuation_lease_id TEXT NOT NULL DEFAULT '',
 			operation_plan_lease_id TEXT NOT NULL DEFAULT '',
 			lease_status TEXT NOT NULL DEFAULT '',

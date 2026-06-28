@@ -7,13 +7,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/durableagent"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 	"github.com/idolum-ai/aphelion/turn"
 )
@@ -25,6 +31,67 @@ type testDurableWakeAdapter struct {
 	finalized    bool
 	finalizeErr  error
 	lastSummary  string
+}
+
+type durableWakeExternalToolRequestingProvider struct {
+	mu             sync.Mutex
+	toolName       string
+	requested      bool
+	firstToolCount int
+	lastToolOutput string
+}
+
+func (p *durableWakeExternalToolRequestingProvider) Complete(_ context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	if resp, ok := fakeInterpretationResponse(messages, "", core.TokenUsage{}); ok {
+		return resp, nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if !p.requested {
+		p.firstToolCount = len(tools)
+		for _, def := range tools {
+			if def.Name == p.toolName {
+				p.requested = true
+				return &agent.Response{ToolCalls: []agent.ToolCall{{
+					ID:    "durable-wake-child-tool",
+					Name:  p.toolName,
+					Input: json.RawMessage(`{"action":"no_content_probe"}`),
+				}}}, nil
+			}
+		}
+		return &agent.Response{Content: "The child-owned external tool was not visible.\nREVIEW_STATUS: blocked"}, nil
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "tool" {
+			p.lastToolOutput = messages[i].Content
+			break
+		}
+	}
+	return &agent.Response{Content: "Child-owned tool probe completed.\nREVIEW_STATUS: completed"}, nil
+}
+
+func (p *durableWakeExternalToolRequestingProvider) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, _ agent.CompleteOptions) (*agent.Response, error) {
+	return p.Complete(ctx, messages, tools)
+}
+
+type durableWakeExternalToolExecutor struct {
+	mu       sync.Mutex
+	toolName string
+	calls    int
+	scope    sandbox.Scope
+}
+
+func (e *durableWakeExternalToolExecutor) Supports(manifest toolpkg.ExternalToolManifest) bool {
+	return strings.TrimSpace(manifest.Name) == strings.TrimSpace(e.toolName)
+}
+
+func (e *durableWakeExternalToolExecutor) Execute(_ context.Context, _ toolpkg.ExternalToolManifest, _ json.RawMessage, scope sandbox.Scope, _ *sandbox.Runner, _ int, _ toolpkg.ExternalToolExecutionAccess) (string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.calls++
+	e.scope = scope
+	return `{"summary":"child-owned tool ran"}`, nil
 }
 
 func TestDurableWakeChildBlockerClassification(t *testing.T) {
@@ -249,6 +316,49 @@ func markDurableWakeExternalAdapterReady(t *testing.T, store *session.SQLiteStor
 		Contract:       `{"child_runtime":{"readonly_paths":["` + materialRoot + `"]}}`,
 	}); err != nil {
 		t.Fatalf("UpsertCapabilityGrant(%s) err = %v", adapterName, err)
+	}
+}
+
+func registerRuntimeExternalToolForWakeTest(t *testing.T, registry *toolpkg.Registry, manifest toolpkg.ExternalToolManifest) {
+	t.Helper()
+	manifest = toolpkg.NormalizeExternalToolManifest(manifest)
+	if registry == nil {
+		t.Fatal("registry is nil")
+	}
+	workdir := strings.TrimSpace(manifest.Execution.Workdir)
+	if workdir == "" {
+		t.Fatalf("external wake test manifest %q requires an explicit workdir", manifest.Name)
+	}
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) err = %v", workdir, err)
+	}
+	runScript := filepath.Join(workdir, "run.sh")
+	if err := os.WriteFile(runScript, []byte("#!/usr/bin/env bash\ncat >/dev/null\necho '{\"summary\":\"child-owned tool ran\"}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(%s) err = %v", runScript, err)
+	}
+	probeScript := filepath.Join(workdir, "probe.sh")
+	if err := os.WriteFile(probeScript, []byte("#!/usr/bin/env bash\necho 'probe ok'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(%s) err = %v", probeScript, err)
+	}
+	if _, err := registry.WithExternalToolManifests([]toolpkg.ExternalToolManifest{manifest}); err != nil {
+		t.Fatalf("WithExternalToolManifests(%s) err = %v", manifest.Name, err)
+	}
+	key := session.SessionKey{
+		ChatID: 1001,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1001"},
+	}
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	steps := []json.RawMessage{
+		json.RawMessage(fmt.Sprintf(`{"action":"install_set","tool_name":%q,"status":"installed","installer":"aphelion","install_ref":"workspace:test-fixture"}`, manifest.Name)),
+		json.RawMessage(fmt.Sprintf(`{"action":"audit_run","tool_name":%q}`, manifest.Name)),
+		json.RawMessage(fmt.Sprintf(`{"action":"probe_run","tool_name":%q}`, manifest.Name)),
+		json.RawMessage(fmt.Sprintf(`{"action":"install_set","tool_name":%q,"status":"verified","installer":"aphelion","install_ref":"workspace:test-fixture"}`, manifest.Name)),
+		json.RawMessage(fmt.Sprintf(`{"action":"register","tool_name":%q,"implementation_ref":%q}`, manifest.Name, "external:"+manifest.Name)),
+	}
+	for _, input := range steps {
+		if _, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "tool_authority", input); err != nil {
+			t.Fatalf("tool_authority(%s) err = %v", input, err)
+		}
 	}
 }
 
@@ -759,6 +869,128 @@ func TestPollDurableWakeAgentsUsesPluggableIngressAdapter(t *testing.T) {
 	}
 	if !containsExecutionEventType(eventsBySession, core.ExecutionEventDurableWakeCompleted) {
 		t.Fatalf("durable wake events missing completed signal: %#v", eventsBySession)
+	}
+}
+
+func TestPollDurableWakeChildToolCallsUseChildTaskAuthority(t *testing.T) {
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	provider := &durableWakeExternalToolRequestingProvider{toolName: "gog_cli"}
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, 2*time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	executor := &durableWakeExternalToolExecutor{toolName: "gog_cli"}
+	tools.WithExternalToolExecutor(executor)
+	manifest := toolpkg.ExternalToolManifest{
+		Name:  "gog_cli",
+		Owner: "idolum-email",
+		Execution: toolpkg.ExternalToolManifestExecution{
+			Mode:    "process",
+			Entry:   "./run.sh",
+			Workdir: filepath.Join(cfg.Agent.ExecRoot, "runtime-bin", "gog_cli-test"),
+		},
+		IO: toolpkg.ExternalToolManifestIO{
+			InputSchema:  json.RawMessage(`{"type":"object","properties":{"action":{"type":"string"}},"required":["action"]}`),
+			OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`),
+		},
+		Probe: toolpkg.ExternalToolManifestProbe{Command: []string{"./probe.sh"}, ExpectedOutputContains: "probe ok"},
+	}
+	registerRuntimeExternalToolForWakeTest(t, tools, manifest)
+
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "test_adapter",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Handle mailbox setup guidance through child-owned tools.",
+			CapabilityEnvelope: []string{"gog_cli_readonly", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	grantID := "capg-idolum-email-gog_cli"
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        grantID,
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "gog_cli",
+		GrantedTo:      core.DurableAgentPrincipal(agent.AgentID),
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract:       `{"child_runtime":{"readonly_paths":["` + manifest.Execution.Workdir + `"]}}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+
+	rt.durableWakeAdapters = []durableWakeIngressAdapter{&testDurableWakeAdapter{channelKind: "test_adapter"}}
+	rt.durableWakeChild = nil
+	if err := rt.pollDurableWakeAgents(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("pollDurableWakeAgents() err = %v", err)
+	}
+	executor.mu.Lock()
+	executorCalls := executor.calls
+	executorScope := executor.scope
+	executor.mu.Unlock()
+	if executorCalls != 1 {
+		t.Fatalf("external executor calls = %d, want one child-owned tool call", executorCalls)
+	}
+	if executorScope.Principal.Role != principal.RoleDurableAgent || executorScope.Principal.DurableAgentID != agent.AgentID {
+		t.Fatalf("external executor scope principal = %#v, want durable agent %s", executorScope.Principal, agent.AgentID)
+	}
+	provider.mu.Lock()
+	requested := provider.requested
+	firstToolCount := provider.firstToolCount
+	lastToolOutput := provider.lastToolOutput
+	provider.mu.Unlock()
+	if !requested || firstToolCount == 0 {
+		t.Fatalf("provider requested=%t firstToolCount=%d, want visible child-owned tool", requested, firstToolCount)
+	}
+	if !strings.Contains(lastToolOutput, "child-owned tool ran") {
+		t.Fatalf("last tool output = %q, want external tool result returned to child turn", lastToolOutput)
+	}
+
+	invocations, err := store.CapabilityInvocationsByGrant(grantID, 10)
+	if err != nil {
+		t.Fatalf("CapabilityInvocationsByGrant() err = %v", err)
+	}
+	if len(invocations) != 1 {
+		t.Fatalf("invocations = %#v, want one child tool invocation", invocations)
+	}
+	invocation := invocations[0]
+	if invocation.Status != "allowed" || invocation.OutcomeStatus != "completed" || invocation.TurnRunID == 0 || invocation.AuthoritySource != session.ExecutionAuthorityLeaseKindChildTask {
+		t.Fatalf("invocation = %#v, want allowed completed child_task_attempt authority", invocation)
+	}
+	authority, ok, err := store.ExecutionRunAuthority(invocation.TurnRunID)
+	if err != nil {
+		t.Fatalf("ExecutionRunAuthority(%d) err = %v", invocation.TurnRunID, err)
+	}
+	if !ok || authority.LeaseKind != session.ExecutionAuthorityLeaseKindChildTask || authority.Principal != core.DurableAgentPrincipal(agent.AgentID) {
+		t.Fatalf("execution authority = %#v ok=%t, want child-task authority for %s", authority, ok, agent.AgentID)
+	}
+	if authority.LeaseConstraints["packet_id"] == "" || authority.LeaseConstraints["attempt_id"] == "" || authority.LeaseConstraints["fencing_token"] == "" {
+		t.Fatalf("execution authority constraints = %#v, want packet/attempt/fence evidence", authority.LeaseConstraints)
 	}
 }
 

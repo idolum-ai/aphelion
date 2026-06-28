@@ -34,6 +34,13 @@ func (s *SQLiteStore) UpsertExecutionRunAuthority(record ExecutionRunAuthority) 
 		if record.OperationPlanLeaseID == "" || record.ContinuationLeaseID != "" {
 			return ExecutionRunAuthority{}, fmt.Errorf("execution run authority requires exactly one operation plan lease")
 		}
+	case ExecutionAuthorityLeaseKindChildTask:
+		if record.ContinuationLeaseID != "" || record.OperationPlanLeaseID != "" {
+			return ExecutionRunAuthority{}, fmt.Errorf("execution run authority child task attempt cannot also name continuation or operation plan leases")
+		}
+		if err := validateExecutionRunAuthorityChildTaskConstraints(record.LeaseConstraints); err != nil {
+			return ExecutionRunAuthority{}, err
+		}
 	default:
 		return ExecutionRunAuthority{}, fmt.Errorf("execution run authority lease_kind is required")
 	}
@@ -138,6 +145,8 @@ func runningExecutionRunAuthorityForLeaseTx(queryer interface {
 		query += `era.continuation_lease_id = ?`
 	case ExecutionAuthorityLeaseKindOperationPlan:
 		query += `era.operation_plan_lease_id = ?`
+	case ExecutionAuthorityLeaseKindChildTask:
+		query += `era.lease_constraints_json = ?`
 	default:
 		return 0, false, nil
 	}
@@ -174,6 +183,8 @@ func priorExecutionRunAuthorityForSingleTurnLeaseTx(queryer interface {
 		query += `continuation_lease_id = ?`
 	case ExecutionAuthorityLeaseKindOperationPlan:
 		query += `operation_plan_lease_id = ?`
+	case ExecutionAuthorityLeaseKindChildTask:
+		query += `lease_constraints_json = ?`
 	default:
 		return 0, false, nil
 	}
@@ -195,9 +206,29 @@ func executionRunAuthorityLeaseID(record ExecutionRunAuthority) string {
 		return strings.TrimSpace(record.ContinuationLeaseID)
 	case ExecutionAuthorityLeaseKindOperationPlan:
 		return strings.TrimSpace(record.OperationPlanLeaseID)
+	case ExecutionAuthorityLeaseKindChildTask:
+		packetID := strings.TrimSpace(record.LeaseConstraints["packet_id"])
+		attemptID := strings.TrimSpace(record.LeaseConstraints["attempt_id"])
+		if packetID == "" || attemptID == "" {
+			return ""
+		}
+		raw, err := json.Marshal(record.LeaseConstraints)
+		if err != nil {
+			return packetID + ":" + attemptID
+		}
+		return string(raw)
 	default:
 		return ""
 	}
+}
+
+func validateExecutionRunAuthorityChildTaskConstraints(constraints map[string]string) error {
+	for _, key := range []string{"packet_id", "attempt_id", "lease_owner", "lease_generation", "fencing_token", "agent_id"} {
+		if strings.TrimSpace(constraints[key]) == "" {
+			return fmt.Errorf("execution run authority child task attempt requires %s", key)
+		}
+	}
+	return nil
 }
 
 func executionRunAuthoritySame(left ExecutionRunAuthority, right ExecutionRunAuthority) bool {

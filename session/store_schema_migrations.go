@@ -402,7 +402,7 @@ func ensureExecutionRunAuthorityTables(tx *sql.Tx) error {
 			principal TEXT NOT NULL DEFAULT '',
 			principal_role TEXT NOT NULL DEFAULT '',
 			execution_species TEXT NOT NULL DEFAULT '',
-			lease_kind TEXT NOT NULL CHECK(lease_kind IN ('continuation_lease', 'operation_plan_lease')),
+			lease_kind TEXT NOT NULL CHECK(lease_kind IN ('continuation_lease', 'operation_plan_lease', 'child_task_attempt')),
 			continuation_lease_id TEXT NOT NULL DEFAULT '',
 			operation_plan_lease_id TEXT NOT NULL DEFAULT '',
 			lease_status TEXT NOT NULL DEFAULT '',
@@ -427,6 +427,81 @@ func ensureExecutionRunAuthorityTables(tx *sql.Tx) error {
 		{table: "execution_run_authority", column: "lease_constraints_json", statement: `ALTER TABLE execution_run_authority ADD COLUMN lease_constraints_json TEXT NOT NULL DEFAULT '{}'`},
 	} {
 		if err := addSchemaColumnIfMissing(tx, column); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func migrateSchemaV83ToV84(tx *sql.Tx) error {
+	if err := ensureExecutionRunAuthorityChildTaskLeaseKind(tx); err != nil {
+		return fmt.Errorf("migrate schema v83 to v84 ensure child task execution authority kind: %w", err)
+	}
+	return nil
+}
+
+func ensureExecutionRunAuthorityChildTaskLeaseKind(tx *sql.Tx) error {
+	exists, err := schemaTableExists(tx, "execution_run_authority")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return ensureExecutionRunAuthorityTables(tx)
+	}
+	turnRunsExists, err := schemaTableExists(tx, "turn_runs")
+	if err != nil {
+		return err
+	}
+	foreignKeyClause := ""
+	if turnRunsExists {
+		foreignKeyClause = `,
+			FOREIGN KEY (turn_run_id) REFERENCES turn_runs(id) ON DELETE CASCADE`
+	}
+	for _, stmt := range []string{
+		`DROP INDEX IF EXISTS idx_execution_run_authority_session`,
+		`DROP INDEX IF EXISTS idx_execution_run_authority_lease`,
+		`ALTER TABLE execution_run_authority RENAME TO execution_run_authority_old`,
+		fmt.Sprintf(`CREATE TABLE execution_run_authority (
+			turn_run_id INTEGER PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			principal TEXT NOT NULL DEFAULT '',
+			principal_role TEXT NOT NULL DEFAULT '',
+			execution_species TEXT NOT NULL DEFAULT '',
+			lease_kind TEXT NOT NULL CHECK(lease_kind IN ('continuation_lease', 'operation_plan_lease', 'child_task_attempt')),
+			continuation_lease_id TEXT NOT NULL DEFAULT '',
+			operation_plan_lease_id TEXT NOT NULL DEFAULT '',
+			lease_status TEXT NOT NULL DEFAULT '',
+			lease_class TEXT NOT NULL DEFAULT '',
+			lease_allowed_actions_json TEXT NOT NULL DEFAULT '[]',
+			lease_constraints_json TEXT NOT NULL DEFAULT '{}',
+			lease_remaining_turns INTEGER NOT NULL DEFAULT 0,
+			lease_expires_at TEXT,
+			admitted_at TEXT NOT NULL DEFAULT (datetime('now'))%s
+		)`, foreignKeyClause),
+		`INSERT INTO execution_run_authority(
+			turn_run_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
+			principal, principal_role, execution_species, lease_kind,
+			continuation_lease_id, operation_plan_lease_id, lease_status, lease_class,
+			lease_allowed_actions_json, lease_constraints_json, lease_remaining_turns,
+			lease_expires_at, admitted_at
+		)
+		SELECT
+			turn_run_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
+			principal, principal_role, execution_species, lease_kind,
+			continuation_lease_id, operation_plan_lease_id, lease_status, lease_class,
+			lease_allowed_actions_json, lease_constraints_json, lease_remaining_turns,
+			lease_expires_at, admitted_at
+		FROM execution_run_authority_old`,
+		`DROP TABLE execution_run_authority_old`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_run_authority_session ON execution_run_authority(session_id, admitted_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_run_authority_lease ON execution_run_authority(lease_kind, continuation_lease_id, operation_plan_lease_id)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
 			return err
 		}
 	}

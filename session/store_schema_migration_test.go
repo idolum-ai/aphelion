@@ -2162,6 +2162,103 @@ func TestMigratesSchemaV82ToV83ContinuationRecoveryContracts(t *testing.T) {
 	}
 }
 
+func TestMigratesSchemaV83ToV84AllowsChildTaskExecutionAuthority(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v83-child-task-authority.db")
+	seed, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(seed current schema) err = %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("close seed store: %v", err)
+	}
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v83 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`DROP INDEX IF EXISTS idx_execution_run_authority_session`,
+		`DROP INDEX IF EXISTS idx_execution_run_authority_lease`,
+		`DROP TABLE IF EXISTS execution_run_authority`,
+		`CREATE TABLE execution_run_authority (
+			turn_run_id INTEGER PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			principal TEXT NOT NULL DEFAULT '',
+			principal_role TEXT NOT NULL DEFAULT '',
+			execution_species TEXT NOT NULL DEFAULT '',
+			lease_kind TEXT NOT NULL CHECK(lease_kind IN ('continuation_lease', 'operation_plan_lease')),
+			continuation_lease_id TEXT NOT NULL DEFAULT '',
+			operation_plan_lease_id TEXT NOT NULL DEFAULT '',
+			lease_status TEXT NOT NULL DEFAULT '',
+			lease_class TEXT NOT NULL DEFAULT '',
+			lease_allowed_actions_json TEXT NOT NULL DEFAULT '[]',
+			lease_constraints_json TEXT NOT NULL DEFAULT '{}',
+			lease_remaining_turns INTEGER NOT NULL DEFAULT 0,
+			lease_expires_at TEXT,
+			admitted_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (turn_run_id) REFERENCES turn_runs(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX idx_execution_run_authority_session ON execution_run_authority(session_id, admitted_at DESC)`,
+		`CREATE INDEX idx_execution_run_authority_lease ON execution_run_authority(lease_kind, continuation_lease_id, operation_plan_lease_id)`,
+		`DELETE FROM schema_version`,
+		`INSERT INTO schema_version(version) VALUES (83)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v83 execution authority fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v83 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v83) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+
+	key := SessionKey{ChatID: 9484, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindDurableAgent, ID: "child-alpha"}}
+	run, err := store.BeginTurnRun(key, TurnRunKindInteractive, "child task authority after migration")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	_, err = store.UpsertExecutionRunAuthority(ExecutionRunAuthority{
+		TurnRunID:        run.ID,
+		SessionID:        run.SessionID,
+		ChatID:           run.ChatID,
+		UserID:           run.UserID,
+		Scope:            run.Scope,
+		Principal:        "durable_agent:child-alpha",
+		PrincipalRole:    "durable_agent",
+		ExecutionSpecies: "durable_child_wake",
+		LeaseKind:        ExecutionAuthorityLeaseKindChildTask,
+		LeaseStatus:      string(ChildTaskPacketInProgress),
+		LeaseClass:       ContinuationLeaseClassChildWake,
+		LeaseConstraints: map[string]string{
+			"agent_id":         "child-alpha",
+			"packet_id":        "child_task:migrated",
+			"attempt_id":       "child_attempt:migrated",
+			"lease_owner":      "worker:migrated",
+			"lease_generation": "1",
+			"fencing_token":    "fence:migrated",
+		},
+		LeaseAllowedActions: []string{"invoke_granted_child_tools"},
+		LeaseRemainingTurns: 1,
+		LeaseExpiresAt:      time.Now().UTC().Add(time.Hour),
+		AdmittedAt:          time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("UpsertExecutionRunAuthority(child_task_attempt after v84 migration) err = %v", err)
+	}
+}
+
 func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {
 	t.Helper()
 	rows, err := db.Query(`PRAGMA table_info(` + tableName + `)`)

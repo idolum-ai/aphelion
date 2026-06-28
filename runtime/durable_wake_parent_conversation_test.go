@@ -141,15 +141,30 @@ func TestRunDurableAgentChildWakeDoesNotRebindParentAuthorityAdmission(t *testin
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "Processed pending parent guidance.\nREVIEW_STATUS: completed"
 	inspector := &contextInspectingProvider{fakeProvider: provider}
-	var sawRawAdmission bool
-	var sawAuthorityUseRef bool
+	parentKey := session.SessionKey{ChatID: 9306, UserID: 1001, Scope: telegramDMScopeRef(9306)}
+	parentSessionID := session.SessionIDForKey(parentKey)
+	parentLeaseID := "lease-parent-child-wake-context"
+	var sawParentAdmission bool
+	var sawChildTaskAdmission bool
+	var sawParentAuthorityUseRef bool
 	var sawToolInvocationRef bool
 	inspector.inspect = func(ctx context.Context) {
-		if _, ok := toolpkg.ExecutionAuthorityAdmissionFromContext(ctx); ok {
-			sawRawAdmission = true
+		if admission, ok := toolpkg.ExecutionAuthorityAdmissionFromContext(ctx); ok {
+			switch admission.LeaseKind {
+			case session.ExecutionAuthorityLeaseKindChildTask:
+				sawChildTaskAdmission = true
+			case session.ExecutionAuthorityLeaseKindContinuation:
+				if admission.ContinuationLeaseID == parentLeaseID {
+					sawParentAdmission = true
+				}
+			default:
+				sawParentAdmission = true
+			}
 		}
-		if _, ok := toolpkg.AuthorityUseRefFromContext(ctx); ok {
-			sawAuthorityUseRef = true
+		if ref, ok := toolpkg.AuthorityUseRefFromContext(ctx); ok {
+			if ref.ContinuationLeaseID == parentLeaseID || ref.SessionID == parentSessionID {
+				sawParentAuthorityUseRef = true
+			}
 		}
 		if _, ok := toolpkg.ToolInvocationRefFromContext(ctx); ok {
 			sawToolInvocationRef = true
@@ -194,9 +209,8 @@ func TestRunDurableAgentChildWakeDoesNotRebindParentAuthorityAdmission(t *testin
 	}
 
 	now := time.Now().UTC()
-	parentKey := session.SessionKey{ChatID: 9306, UserID: 1001, Scope: telegramDMScopeRef(9306)}
 	parentState := approvedReadOnlyContinuationStateForScopeTest("parent-child-wake-context", now)
-	parentState.ContinuationLease.ID = "lease-parent-child-wake-context"
+	parentState.ContinuationLease.ID = parentLeaseID
 	parentState.ContinuationLease.LeaseClass = session.ContinuationLeaseClassChildWake
 	parentState.ContinuationLease.AllowedActions = []string{"wake_named_child"}
 	parentState.ContinuationLease.Constraints = map[string]string{"agent_id": agent.AgentID}
@@ -240,10 +254,13 @@ func TestRunDurableAgentChildWakeDoesNotRebindParentAuthorityAdmission(t *testin
 	if len(provider.seenGovernorSystem) == 0 {
 		t.Fatal("provider saw no governor prompts, want child wake turn to run")
 	}
-	if sawRawAdmission {
+	if sawParentAdmission {
 		t.Fatal("child provider context inherited parent raw execution authority admission")
 	}
-	if sawAuthorityUseRef {
+	if !sawChildTaskAdmission {
+		t.Fatal("child provider context did not receive child-task execution authority admission")
+	}
+	if sawParentAuthorityUseRef {
 		t.Fatal("child provider context inherited parent authority-use ref")
 	}
 	if sawToolInvocationRef {
