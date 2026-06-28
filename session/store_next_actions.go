@@ -339,6 +339,38 @@ func (s *SQLiteStore) OpenNextActionsBySubject(subjectKind string, subjectRef st
 	return scanNextActionRows(rows)
 }
 
+func (s *SQLiteStore) OpenNextActionsByCausalRef(causalRef string, limit int) ([]NextActionRecord, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	causalRef = strings.TrimSpace(causalRef)
+	if causalRef == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.Query(`
+		SELECT record_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
+			turn_run_id, owner, state, subject_kind, subject_ref, causal_refs_json,
+			next_action, required_authority, resource_blocker, verifier, retry_policy,
+			operation_kind, operation_tool, operation_input_json, operator_projection, created_at, resolved_at
+		FROM next_action_records
+		WHERE resolved_at IS NULL
+			AND EXISTS (
+				SELECT 1 FROM json_each(next_action_records.causal_refs_json)
+				WHERE value = ?
+			)
+		ORDER BY created_at DESC, record_id DESC
+		LIMIT ?
+	`, causalRef, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query open next actions by causal ref: %w", err)
+	}
+	defer rows.Close()
+	return scanNextActionRows(rows)
+}
+
 func nextActionByRecordIDTx(tx *sql.Tx, recordID string) (NextActionRecord, bool, error) {
 	recordID = strings.TrimSpace(recordID)
 	if recordID == "" {

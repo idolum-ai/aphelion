@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -79,6 +80,10 @@ func (r *Runtime) handleInteractiveInboundTurnWithOptions(ctx context.Context, m
 		}
 		actor = resolved
 	}
+	key := session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramInboundScopeRef(msg)}
+	if err := r.reconcileApprovedRetryWakeWaitersForSession(key); err != nil {
+		log.Printf("WARN reconcile approved retry wake waiters failed session_id=%s err=%v", session.SessionIDForKey(key), err)
+	}
 	if handled, result, err := r.maybeHandleTypedContinuationApproval(ctx, msg, actor); handled {
 		return turnResultFromCore(result), err
 	}
@@ -89,7 +94,6 @@ func (r *Runtime) handleInteractiveInboundTurnWithOptions(ctx context.Context, m
 	defer stopTyping()
 	defer r.clearChatTurnPhase(msg.ChatID)
 
-	key := session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramInboundScopeRef(msg)}
 	unlock := r.lockSession(key)
 	defer unlock()
 

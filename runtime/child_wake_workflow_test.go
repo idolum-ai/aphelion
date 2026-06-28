@@ -254,6 +254,122 @@ func TestChildWakeRecoveryJourneyRunsRealDurableWakeAfterApprovals(t *testing.T)
 	}
 }
 
+func TestApprovedChildWakeRetryRecordsTerminalChildBlockerInParentSession(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Processed active grants and non-secret config. Runtime check: gog_cli=missing_or_not_executable.\nREVIEW_STATUS: blocked"
+
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableWakeChild = nil
+	tools.WithDurableAgentWakeRunner(rt)
+
+	key := session.SessionKey{ChatID: 9083, UserID: 0, Scope: telegramDMScopeRef(9083)}
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	seedRealChildWakeAgent(t, store, "idolum-email")
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-idolum-email-blocked-wake-recovery",
+		Status:    session.OperationStatusActive,
+		PhasePlan: session.OperationPhasePlan{ID: "plan-idolum-email-blocked-wake-recovery", Goal: "Recover idolum-email child readiness"},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed operation) err = %v", err)
+	}
+
+	_, err = tools.ExecuteForSessionPrincipal(context.Background(), actor, key, "durable_agent", json.RawMessage(`{"action":"wake_once","agent_id":"idolum-email"}`))
+	if err == nil || !strings.Contains(err.Error(), "missing capability grant") {
+		t.Fatalf("wake_once without grant err = %v, want missing capability grant", err)
+	}
+	grantAction := singleOpenWorkflowAction(t, store, key, session.NextActionBlockedNeedsAuthority, "capability_authority")
+	grantInput := nextActionInputMap(t, grantAction)
+	requestID, _ := grantInput["request_id"].(string)
+	if strings.TrimSpace(requestID) == "" {
+		t.Fatalf("grant action input = %#v, want request_id", grantInput)
+	}
+	if _, err := tools.ExecuteForSessionPrincipal(
+		context.Background(),
+		actor,
+		key,
+		"capability_authority",
+		json.RawMessage(`{"action":"request_review","request_id":"`+requestID+`","review_status":"approved","rationale":"operator approved one exact child wake grant"}`),
+	); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(request_review) err = %v", err)
+	}
+	if _, err := tools.ExecuteForSessionPrincipal(context.Background(), actor, key, grantAction.OperationTool, json.RawMessage(grantAction.OperationInputJSON)); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(grant_set handoff) err = %v", err)
+	}
+
+	_, err = tools.ExecuteForSessionPrincipal(context.Background(), actor, key, "durable_agent", json.RawMessage(`{"action":"wake_once","agent_id":"idolum-email"}`))
+	if err == nil || !strings.Contains(err.Error(), "missing child_wake continuation lease") || !strings.Contains(err.Error(), "lease request recorded") {
+		t.Fatalf("wake_once without lease err = %v, want recorded child_wake lease blocker", err)
+	}
+	if materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9083, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 301},
+		"continue",
+	); err != nil {
+		t.Fatalf("MaterializeRequestedApproval() err = %v", err)
+	} else if !materialized {
+		t.Fatal("materialized = false, want child_wake approval card")
+	}
+	if _, err := rt.ApproveContinuationForKey(key, 1001); err != nil {
+		t.Fatalf("ApproveContinuationForKey() err = %v", err)
+	}
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID: 9083, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 302,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound(continue approved child_wake) err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "Running approved continuation") {
+		t.Fatalf("HandleInbound(continue approved child_wake) result = %#v, want approved continuation dispatch acknowledgement", result)
+	}
+
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState(parent) err = %v", err)
+	}
+	if opState.Status != session.OperationStatusBlocked || opState.Stage != "approved_retry_child_blocked" {
+		t.Fatalf("parent operation state = %#v, want blocked approved_retry_child_blocked", opState)
+	}
+	open, err := store.OpenNextActionsBySession(key, 50)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(parent) err = %v", err)
+	}
+	var foundRepair bool
+	for _, action := range open {
+		if action.Owner == "approved_retry" && action.State == session.NextActionWaitingForChild {
+			t.Fatalf("open parent actions = %#v, waiting_for_child should be replaced by typed child blocker", open)
+		}
+		if action.Owner == "approved_retry" &&
+			action.State == session.NextActionBlockedNeedsResourceRepair &&
+			action.ResourceBlocker == "tool_runtime_not_executable" &&
+			action.OperationKind == "child_tool_runtime_repair" &&
+			action.OperationTool == "update_operation" {
+			foundRepair = true
+		}
+	}
+	if !foundRepair {
+		t.Fatalf("open parent actions = %#v, want approved_retry child runtime repair blocker", open)
+	}
+}
+
 func seedRealChildWakeAgent(t *testing.T, store *session.SQLiteStore, agentID string) string {
 	t.Helper()
 
