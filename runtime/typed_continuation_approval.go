@@ -246,10 +246,10 @@ func (r *Runtime) materializeChildWakeRepairRetryApprovalHandoff(ctx context.Con
 		return fmt.Errorf("child_wake repair retry produced non-pending child_wake continuation")
 	}
 	payload := continuationExecutionPayload(state)
-	payload["materialized_from"] = "child_wake_repair_retry"
+	payload["materialized_from"] = session.NextActionOperationKindDurableChildRecovery + "_retry"
 	payload["repair_next_action_id"] = strings.TrimSpace(repairAction.RecordID)
 	payload["handoff_next_action_id"] = strings.TrimSpace(handoff.RecordID)
-	if err := r.sendAndRecordContinuationOfferLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "child_wake_repair_retry", payload, now); err != nil {
+	if err := r.sendAndRecordContinuationOfferLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), session.NextActionOperationKindDurableChildRecovery+"_retry", payload, now); err != nil {
 		return err
 	}
 	if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
@@ -292,7 +292,7 @@ func (r *Runtime) ensureChildWakeRepairRetryOperationState(key session.SessionKe
 		ID:        "op-child-wake-repair-retry-" + session.EffectAttemptCommandHash(contract.ContractID)[7:23],
 		Objective: objective,
 		Status:    session.OperationStatusBlocked,
-		Stage:     "child_wake_repair_approval_request",
+		Stage:     session.NextActionOperationKindDurableChildRecovery + "_approval_request",
 		Summary:   "Fresh bounded child_wake approval needed after wake runtime repair.",
 		UpdatedAt: now,
 	})
@@ -320,11 +320,12 @@ func childWakeActionCanRequestRetry(action session.NextActionRecord) bool {
 	operationTool := strings.TrimSpace(action.OperationTool)
 	switch action.State {
 	case session.NextActionBlockedNeedsResourceRepair:
-		switch operationKind {
-		case "child_wake_runtime_repair":
-			return operationTool == "durable_agent"
-		case "child_tool_runtime_repair":
-			return operationTool == "update_operation" && strings.TrimSpace(action.ResourceBlocker) == "tool_runtime_not_executable"
+		if operationKind != session.NextActionOperationKindDurableChildRecovery || operationTool != "update_operation" {
+			return false
+		}
+		switch strings.TrimSpace(action.ResourceBlocker) {
+		case "tool_runtime_not_executable", "child_task_attempt_claim_failed", "wake_failed":
+			return true
 		default:
 			return false
 		}
@@ -339,7 +340,7 @@ func childWakeOperatorFollowupActionCanRequestRetry(action session.NextActionRec
 	if strings.TrimSpace(action.OperationTool) != "update_operation" {
 		return false
 	}
-	if strings.TrimSpace(action.OperationKind) != "child_credential_probe" {
+	if strings.TrimSpace(action.OperationKind) != session.NextActionOperationKindDurableChildRecovery {
 		return false
 	}
 	if strings.TrimSpace(action.ResourceBlocker) != "credential_unverified" {
@@ -368,11 +369,11 @@ func childWakeOperatorFollowupActionCanRequestRetry(action session.NextActionRec
 		return false
 	}
 	if strings.TrimSpace(input.RecoveryContract) != "aphelion.recovery_handoff.v1" ||
-		strings.TrimSpace(input.RecoveryOperationKind) != strings.TrimSpace(action.OperationKind) {
+		strings.TrimSpace(input.RecoveryOperationKind) != session.NextActionOperationKindDurableChildRecovery {
 		return false
 	}
 	if strings.TrimSpace(input.RecoveryHandoff.Contract) != "aphelion.recovery_handoff.v1" ||
-		strings.TrimSpace(input.RecoveryHandoff.OperationKind) != strings.TrimSpace(action.OperationKind) {
+		strings.TrimSpace(input.RecoveryHandoff.OperationKind) != session.NextActionOperationKindDurableChildRecovery {
 		return false
 	}
 	if !input.NoContentProbe || !input.RecoveryHandoff.NoContentProbe {
@@ -486,8 +487,9 @@ func isChildWakeRepairAdvanceText(text string) bool {
 		return false
 	}
 	for _, marker := range []string{
-		"child tool runtime repair",
-		"child_tool_runtime_repair",
+		"child recovery",
+		"durable child recovery",
+		"durable_child_recovery",
 		"tool runtime",
 		"runtime bin",
 		"runtime material",

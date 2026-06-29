@@ -927,11 +927,18 @@ func (r *Runtime) recordApprovedRetryWakeBlocked(key session.SessionKey, reserva
 		retryPolicy = "retry_after_wake_runtime_repair"
 	}
 	operationPayload, _ := json.Marshal(map[string]any{
-		"action":              "repair_child_wake_failure",
-		"agent_id":            agentID,
-		"failure_class":       failureClass,
-		"retry_policy":        retryPolicy,
-		"request_instance_id": strings.TrimSpace(retry.RequestInstanceID),
+		"action":                  "repair_child_wake_failure",
+		"agent_id":                agentID,
+		"durable_agent_id":        agentID,
+		"failure_class":           failureClass,
+		"blocker_kind":            failureClass,
+		"child_blocker_kind":      failureClass,
+		"recovery_action":         "repair_child_wake_failure",
+		"recovery_family":         session.NextActionOperationKindDurableChildRecovery,
+		"recovery_contract":       "aphelion.recovery_handoff.v1",
+		"recovery_operation_kind": session.NextActionOperationKindDurableChildRecovery,
+		"retry_policy":            retryPolicy,
+		"request_instance_id":     strings.TrimSpace(retry.RequestInstanceID),
 	})
 	turnRunID := int64(0)
 	if monitor != nil {
@@ -946,11 +953,11 @@ func (r *Runtime) recordApprovedRetryWakeBlocked(key session.SessionKey, reserva
 		SubjectRef:         subjectRef,
 		CausalRefs:         approvedRetryCausalRefs(reservation, retry, result),
 		NextAction:         nextRepair,
-		RequiredAuthority:  "child_wake_runtime_repair",
+		RequiredAuthority:  session.NextActionOperationKindDurableChildRecovery,
 		ResourceBlocker:    failureClass,
 		RetryPolicy:        retryPolicy,
-		OperationKind:      "child_wake_runtime_repair",
-		OperationTool:      strings.TrimSpace(retry.Tool),
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
+		OperationTool:      "update_operation",
 		OperationInputJSON: string(operationPayload),
 		OperatorProjection: approvedRetryWakeBlockedProjection(agentID, failureClass, summary),
 		CreatedAt:          now,

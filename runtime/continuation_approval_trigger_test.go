@@ -397,16 +397,16 @@ func TestRetryTextMaterializesFreshChildWakeApprovalFromRepairBlocker(t *testing
 		SubjectRef:         subjectRef,
 		CausalRefs:         []string{"continuation:lease-consumed-child-wake"},
 		NextAction:         "inspect active or terminal child task ownership for the claimed batch, then retry only after the lease state is repaired",
-		RequiredAuthority:  "child_wake_runtime_repair",
+		RequiredAuthority:  session.NextActionOperationKindDurableChildRecovery,
 		ResourceBlocker:    "child_task_attempt_claim_failed",
 		RetryPolicy:        "retry_after_child_task_lease_repair",
-		OperationKind:      "child_wake_runtime_repair",
-		OperationTool:      "durable_agent",
-		OperationInputJSON: `{"action":"repair_child_wake_failure","agent_id":"idolum-email","failure_class":"child_task_attempt_claim_failed","request_instance_id":"lease-request-instance-live"}`,
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
+		OperationTool:      "update_operation",
+		OperationInputJSON: `{"action":"repair_child_wake_failure","agent_id":"idolum-email","failure_class":"child_task_attempt_claim_failed","request_instance_id":"lease-request-instance-live","recovery_contract":"aphelion.recovery_handoff.v1","recovery_operation_kind":"durable_child_recovery","recovery_family":"durable_child_recovery","recovery_action":"repair_child_wake_failure"}`,
 		OperatorProjection: "The approved child wake retry ran with authority but did not produce a child completion.",
 		CreatedAt:          time.Now().UTC().Add(-time.Minute),
 	}); err != nil {
-		t.Fatalf("RecordNextAction(child_wake_runtime_repair) err = %v", err)
+		t.Fatalf("RecordNextAction(durable_child_recovery) err = %v", err)
 	}
 
 	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
@@ -499,13 +499,13 @@ func TestContinueTextMaterializesChildWakeApprovalFromChildToolRuntimeRepairBloc
 		NextAction:         "repair the child-local tool runtime, then run one no-content readiness probe",
 		ResourceBlocker:    "tool_runtime_not_executable",
 		RetryPolicy:        "retry_after_tool_runtime_repair",
-		OperationKind:      "child_tool_runtime_repair",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
 		OperationTool:      "update_operation",
-		OperationInputJSON: `{"merge":true,"status":"blocked","stage":"durable_child_blocker","summary":"Child-local tool runtime is missing or not executable; repair materialization, then run one no-content readiness probe.","recovery_contract":"aphelion.recovery_handoff.v1","recovery_operation_kind":"child_tool_runtime_repair","durable_agent_id":"idolum-email","child_blocker_kind":"tool_runtime_not_executable","diagnostic_only":true,"no_content_probe":true,"tool":"gog_cli"}`,
+		OperationInputJSON: `{"merge":true,"status":"blocked","stage":"durable_child_blocker","summary":"Child-local tool runtime is missing or not executable; repair materialization, then run one no-content readiness probe.","recovery_contract":"aphelion.recovery_handoff.v1","recovery_operation_kind":"durable_child_recovery","recovery_family":"durable_child_recovery","recovery_action":"tool_runtime_not_executable","durable_agent_id":"idolum-email","child_blocker_kind":"tool_runtime_not_executable","diagnostic_only":true,"no_content_probe":true,"tool":"gog_cli"}`,
 		OperatorProjection: "Child-local tool runtime is missing or not executable; repair the wrapper/materialization, then run one no-content readiness probe.",
 		CreatedAt:          time.Now().UTC().Add(-time.Minute),
 	}); err != nil {
-		t.Fatalf("RecordNextAction(child_tool_runtime_repair) err = %v", err)
+		t.Fatalf("RecordNextAction(durable_child_recovery) err = %v", err)
 	}
 
 	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{Text: "diagnostic routed"}}
@@ -518,13 +518,13 @@ func TestContinueTextMaterializesChildWakeApprovalFromChildToolRuntimeRepairBloc
 		MessageID:  55,
 	})
 	if err != nil {
-		t.Fatalf("HandleInbound(diagnostic child_tool_runtime_repair) err = %v", err)
+		t.Fatalf("HandleInbound(diagnostic durable_child_recovery) err = %v", err)
 	}
 	if result == nil || result.Text != "diagnostic routed" {
-		t.Fatalf("HandleInbound(diagnostic child_tool_runtime_repair) result = %#v, want normal turn result", result)
+		t.Fatalf("HandleInbound(diagnostic durable_child_recovery) result = %#v, want normal turn result", result)
 	}
 	if !recorder.called {
-		t.Fatal("diagnostic child_tool_runtime_repair prompt did not reach the normal turn assembler")
+		t.Fatal("diagnostic durable_child_recovery prompt did not reach the normal turn assembler")
 	}
 	if len(sender.inline) != 0 {
 		t.Fatalf("inline count after diagnostic prompt = %d, want no approval card", len(sender.inline))
@@ -541,18 +541,18 @@ func TestContinueTextMaterializesChildWakeApprovalFromChildToolRuntimeRepairBloc
 		}
 	}
 	if !foundRepairAction {
-		t.Fatalf("open actions after diagnostic prompt = %#v, want child_tool_runtime_repair blocker still open", open)
+		t.Fatalf("open actions after diagnostic prompt = %#v, want durable_child_recovery blocker still open", open)
 	}
 
 	result, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:     8129,
 		SenderID:   1001,
 		SenderName: "admin",
-		Text:       "Continue the idolum-email repair from the current child_tool_runtime_repair blocker. Stop after the next typed blocker.",
+		Text:       "Continue the idolum-email repair from the current durable child recovery blocker. Stop after the next typed blocker.",
 		MessageID:  56,
 	})
 	if err != nil {
-		t.Fatalf("HandleInbound(continue child_tool_runtime_repair) err = %v", err)
+		t.Fatalf("HandleInbound(continue durable_child_recovery) err = %v", err)
 	}
 	if result == nil || !strings.Contains(result.Text, "fresh bounded child_wake approval") {
 		t.Fatalf("HandleInbound result = %#v, want fresh child_wake approval prompt acknowledgement", result)
@@ -579,7 +579,7 @@ func TestContinueTextMaterializesChildWakeApprovalFromChildToolRuntimeRepairBloc
 	}
 	for _, action := range open {
 		if action.RecordID == "next-live-child-tool-runtime-repair" {
-			t.Fatalf("open actions = %#v, want child_tool_runtime_repair blocker resolved after approval materialization", open)
+			t.Fatalf("open actions = %#v, want durable_child_recovery blocker resolved after approval materialization", open)
 		}
 		if action.OperationTool == "request_approval" && action.OperationKind == "continuation_lease_request" {
 			t.Fatalf("open actions = %#v, want generated child_wake handoff resolved after materialization", open)
@@ -587,7 +587,7 @@ func TestContinueTextMaterializesChildWakeApprovalFromChildToolRuntimeRepairBloc
 	}
 
 	if _, err := rt.ApproveContinuationForKey(key, 1001); err != nil {
-		t.Fatalf("ApproveContinuationForKey(child_tool_runtime_repair retry) err = %v", err)
+		t.Fatalf("ApproveContinuationForKey(durable_child_recovery retry) err = %v", err)
 	}
 	result, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:       8129,
@@ -599,10 +599,10 @@ func TestContinueTextMaterializesChildWakeApprovalFromChildToolRuntimeRepairBloc
 		OriginDetail: string(session.TurnAuthorizationKindContinuation),
 	})
 	if err != nil {
-		t.Fatalf("HandleInbound(approved child_tool_runtime_repair retry) err = %v", err)
+		t.Fatalf("HandleInbound(approved durable_child_recovery retry) err = %v", err)
 	}
 	if result == nil || !strings.Contains(result.Text, "Running approved continuation") {
-		t.Fatalf("HandleInbound(approved child_tool_runtime_repair retry) result = %#v, want approved continuation acknowledgement", result)
+		t.Fatalf("HandleInbound(approved durable_child_recovery retry) result = %#v, want approved continuation acknowledgement", result)
 	}
 	if len(runner.calls) != 1 || runner.calls[0] != "idolum-email" {
 		t.Fatalf("runner calls = %#v, want one idolum-email wake after approving repair retry", runner.calls)
@@ -689,7 +689,7 @@ func buildCredentialProbeRetryFixture(t *testing.T, chatID int64, recordID strin
 		RequiredAuthority:  "credential_status_probe",
 		ResourceBlocker:    "credential_unverified",
 		RetryPolicy:        "retry_after_credential_verification",
-		OperationKind:      "child_credential_probe",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
 		OperationTool:      "update_operation",
 		OperatorProjection: "Credential state is not proven; run a no-content status probe before any mailbox action.",
 		NoContentProbe:     true,
@@ -707,13 +707,13 @@ func buildCredentialProbeRetryFixture(t *testing.T, chatID int64, recordID strin
 		RequiredAuthority:  "credential_status_probe",
 		ResourceBlocker:    "credential_unverified",
 		RetryPolicy:        "retry_after_credential_verification",
-		OperationKind:      "child_credential_probe",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
 		OperationTool:      "update_operation",
 		OperationInputJSON: durableWakeChildBlockerOperationInputJSON("idolum-email", "gog_cli", "gog_cli", classification, resultInput),
 		OperatorProjection: "Credential state is not proven; run a no-content status probe before any mailbox action.",
 		CreatedAt:          time.Now().UTC().Add(-time.Minute),
 	}); err != nil {
-		t.Fatalf("RecordNextAction(child_credential_probe) err = %v", err)
+		t.Fatalf("RecordNextAction(durable_child_recovery credential probe) err = %v", err)
 	}
 	return rt, store, runner, sender, key
 }
@@ -752,8 +752,8 @@ func TestExplicitAdminTextMaterializesPendingChildWakeApprovalWithoutContinueKey
 	if err != nil {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
 	}
-	if !hasExecutionEventPayload(events, core.ExecutionEventContinuationOffered, "child_wake_repair_retry") {
-		t.Fatalf("events = %#v, want child_wake_repair_retry continuation offer", events)
+	if !hasExecutionEventPayload(events, core.ExecutionEventContinuationOffered, session.NextActionOperationKindDurableChildRecovery+"_retry") {
+		t.Fatalf("events = %#v, want durable_child_recovery retry continuation offer", events)
 	}
 	if hasExecutionEventPayload(events, core.ExecutionEventContinuationOffered, "operation_phase_plan") {
 		t.Fatalf("events = %#v, did not want operation_phase_plan offer for typed child_wake repair", events)
@@ -917,8 +917,8 @@ func TestContinueTextMaterializesChildWakeApprovalFromCredentialProbeBlocker(t *
 	if err != nil {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
 	}
-	if !hasExecutionEventPayload(events, core.ExecutionEventContinuationOffered, "child_wake_repair_retry") {
-		t.Fatalf("events = %#v, want child_wake_repair_retry continuation offer", events)
+	if !hasExecutionEventPayload(events, core.ExecutionEventContinuationOffered, session.NextActionOperationKindDurableChildRecovery+"_retry") {
+		t.Fatalf("events = %#v, want durable_child_recovery retry continuation offer", events)
 	}
 	if hasExecutionEventPayload(events, core.ExecutionEventContinuationOffered, "operation_phase_plan") {
 		t.Fatalf("events = %#v, did not want operation_phase_plan offer for typed child_wake repair", events)

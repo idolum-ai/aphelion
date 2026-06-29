@@ -1723,7 +1723,7 @@ func trajectoryDurableChildBlockedWakeScenario() evalScenario {
 			SourceScope:       session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: childFixtureID, DurableAgentID: childFixtureID},
 			TargetAdminChatID: evalDefaultChatID,
 			Summary:           "Child wake blocked: external channel grant/runtime readiness is missing.",
-			MetadataJSON:      `{"external_channel_status":"wake_blocked","child_blocker_kind":"tool_runtime_not_executable","operator_action":"child_tool_runtime_repair","operator_next_action":"repair the child-local tool runtime, then run one no-content readiness probe"}`,
+			MetadataJSON:      `{"external_channel_status":"wake_blocked","child_blocker_kind":"tool_runtime_not_executable","operator_action":"durable_child_recovery","operator_next_action":"repair the child-local tool runtime, then run one no-content readiness probe"}`,
 			Status:            "pending",
 		}); err != nil {
 			return err
@@ -1738,9 +1738,9 @@ func trajectoryDurableChildBlockedWakeScenario() evalScenario {
 			NextAction:         "repair the child-local tool runtime, then run one no-content readiness probe",
 			ResourceBlocker:    "tool_runtime_not_executable",
 			RetryPolicy:        "retry_after_tool_runtime_repair",
-			OperationKind:      "child_tool_runtime_repair",
+			OperationKind:      session.NextActionOperationKindDurableChildRecovery,
 			OperationTool:      "update_operation",
-			OperationInputJSON: `{"merge":true,"status":"blocked","stage":"durable_child_blocker","summary":"Child-local tool runtime is missing or not executable; repair materialization, then run one no-content readiness probe.","recovery_contract":"aphelion.recovery_handoff.v1","recovery_operation_kind":"child_tool_runtime_repair","durable_agent_id":"child-fixture","child_blocker_kind":"tool_runtime_not_executable","diagnostic_only":true,"no_content_probe":true,"tool":"gog_cli"}`,
+			OperationInputJSON: `{"merge":true,"status":"blocked","stage":"durable_child_blocker","summary":"Child-local tool runtime is missing or not executable; repair materialization, then run one no-content readiness probe.","recovery_contract":"aphelion.recovery_handoff.v1","recovery_operation_kind":"durable_child_recovery","recovery_family":"durable_child_recovery","recovery_action":"tool_runtime_not_executable","durable_agent_id":"child-fixture","child_blocker_kind":"tool_runtime_not_executable","diagnostic_only":true,"no_content_probe":true,"tool":"gog_cli"}`,
 			OperatorProjection: "Child-local tool runtime is missing or not executable; repair materialization, then run one no-content readiness probe.",
 			CreatedAt:          e.Now,
 		}); err != nil {

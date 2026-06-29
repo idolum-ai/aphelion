@@ -2,9 +2,13 @@
 
 package tool
 
-import "strings"
+import (
+	"strings"
 
-type TypedRepairOperation struct {
+	"github.com/idolum-ai/aphelion/session"
+)
+
+type OperatorRewriteOperation struct {
 	ID               string
 	RejectedShape    string
 	Summary          string
@@ -12,7 +16,7 @@ type TypedRepairOperation struct {
 	RequiredResource string
 }
 
-var typedRepairOperations = []TypedRepairOperation{
+var operatorRewriteOperations = []OperatorRewriteOperation{
 	{
 		ID:               "materialize_child_slot",
 		RejectedShape:    "path-qualified executable",
@@ -31,26 +35,26 @@ var typedRepairOperations = []TypedRepairOperation{
 		ID:               "split_multi_effect_repair",
 		RejectedShape:    "multi-effect repair",
 		Summary:          "Split a compound repair into separate authorized effect steps.",
-		RequiredAction:   "split_effect_plan",
+		RequiredAction:   session.NextActionOperationKindOperatorRewrite,
 		RequiredResource: "effect_plan",
 	},
 }
 
-func TypedRepairOperationForRejectedShape(shape string) (TypedRepairOperation, bool) {
+func OperatorRewriteOperationForRejectedShape(shape string) (OperatorRewriteOperation, bool) {
 	shape = strings.ToLower(strings.TrimSpace(shape))
 	if shape == "" {
-		return TypedRepairOperation{}, false
+		return OperatorRewriteOperation{}, false
 	}
-	for _, op := range typedRepairOperations {
+	for _, op := range operatorRewriteOperations {
 		if strings.ToLower(strings.TrimSpace(op.RejectedShape)) == shape {
 			return op, true
 		}
 	}
-	return TypedRepairOperation{}, false
+	return OperatorRewriteOperation{}, false
 }
 
-func TypedRepairOperations() []TypedRepairOperation {
-	out := make([]TypedRepairOperation, len(typedRepairOperations))
-	copy(out, typedRepairOperations)
+func OperatorRewriteOperations() []OperatorRewriteOperation {
+	out := make([]OperatorRewriteOperation, len(operatorRewriteOperations))
+	copy(out, operatorRewriteOperations)
 	return out
 }

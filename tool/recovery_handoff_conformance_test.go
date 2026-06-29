@@ -688,9 +688,15 @@ func TestRecoveryHandoffSurfaceInventoryDocumentsRepresentativeStops(t *testing.
 		}
 		byAdapter[spec.Adapter]++
 	}
-	for _, adapter := range []string{"missing_continuation_lease", "missing_capability_grant", "typed_shell_alternative", "operator_rewrite"} {
+	for _, adapter := range []string{"missing_continuation_lease", "missing_capability_grant", "typed_shell_alternative", "operator_rewrite", "durable_child_recovery"} {
 		if byAdapter[adapter] == 0 {
 			t.Fatalf("recovery transition adapters = %#v, want %q represented", byAdapter, adapter)
+		}
+	}
+	for _, spec := range specs {
+		switch spec.OperationKind {
+		case "typed_operation_required", "split_effect_plan", "typed_repair_operation", "child_tool_runtime_probe", "child_tool_runtime_repair", "child_tool_lifecycle_repair", "child_authority_repair", "child_resource_repair", "child_credential_probe", "child_retry", "child_blocker_disambiguation", "child_terminal_status_disambiguation", "child_wake_runtime_repair", "child_wake_repair", "child_task_blocker_review", "child_task_continue":
+			t.Fatalf("recovery transition spec = %#v uses legacy one-off operation kind", spec)
 		}
 	}
 }

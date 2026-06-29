@@ -59,7 +59,7 @@ var durableWakeBlockedChildBlockerSpecs = []durableWakeChildBlockerSpec{
 		NextAction:         "run a deterministic child-side runtime visibility probe before repairing materialization",
 		ResourceBlocker:    "tool_runtime_probe_missing",
 		RetryPolicy:        "retry_after_child_runtime_probe",
-		OperationKind:      "child_tool_runtime_probe",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
 		OperationTool:      "update_operation",
 		OperatorProjection: "Child reported tool runtime failure without child-side tool evidence; run a deterministic child-side visibility/executability probe before declaring materialization failed.",
 		ReviewLocalActions: []string{"Child claimed runtime-bin/tool execution was blocked, but no child-side tool call proved the runtime visibility state."},
@@ -75,7 +75,7 @@ var durableWakeBlockedChildBlockerSpecs = []durableWakeChildBlockerSpec{
 		NextAction:         "materialize or repair the child-local tool runtime, then run one no-content readiness probe",
 		ResourceBlocker:    "tool_runtime_not_executable",
 		RetryPolicy:        "retry_after_tool_runtime_repair",
-		OperationKind:      "child_tool_runtime_repair",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
 		OperationTool:      "update_operation",
 		OperatorProjection: "Child-local tool runtime is missing or not executable; repair the wrapper/materialization, then run one no-content readiness probe.",
 		ReviewLocalActions: []string{"Child verified grants/config, then found the child-local tool runtime missing or not executable."},
@@ -91,7 +91,7 @@ var durableWakeBlockedChildBlockerSpecs = []durableWakeChildBlockerSpec{
 		NextAction:         "register, install, audit, and probe the child-local tool lifecycle before retrying",
 		ResourceBlocker:    "tool_lifecycle_unregistered",
 		RetryPolicy:        "retry_after_tool_lifecycle_repair",
-		OperationKind:      "child_tool_lifecycle_repair",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
 		OperationTool:      "update_operation",
 		OperatorProjection: "Child tool lifecycle is not registered or verified; repair lifecycle records before retrying the child wake.",
 		ReviewLocalActions: []string{"Child wake was blocked by tool lifecycle readiness, not by mailbox credentials."},
@@ -106,7 +106,7 @@ var durableWakeBlockedChildBlockerSpecs = []durableWakeChildBlockerSpec{
 		NextAction:         "approve or repair the exact grant needed for the child task",
 		RequiredAuthority:  "grant_missing_or_stale",
 		RetryPolicy:        "retry_after_authority_repair",
-		OperationKind:      "child_authority_repair",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
 		OperationTool:      "update_operation",
 		OperatorProjection: "Child task needs an exact live grant before it can continue.",
 		ReviewLocalActions: []string{"Child task stopped before executing because required authority was missing or stale."},
@@ -121,7 +121,7 @@ var durableWakeBlockedChildBlockerSpecs = []durableWakeChildBlockerSpec{
 		NextAction:         "repair the child-local resource permission boundary before retrying",
 		ResourceBlocker:    "resource_permission_denied",
 		RetryPolicy:        "retry_after_resource_repair",
-		OperationKind:      "child_resource_repair",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
 		OperationTool:      "update_operation",
 		OperatorProjection: "Child task has authority but the resource boundary denied the operation; repair the child-local resource path before retry.",
 		ReviewLocalActions: []string{"Child task reached the resource boundary and stopped without widening authority."},
@@ -137,7 +137,7 @@ var durableWakeBlockedChildBlockerSpecs = []durableWakeChildBlockerSpec{
 		RequiredAuthority:  "credential_status_probe",
 		ResourceBlocker:    "credential_unverified",
 		RetryPolicy:        "retry_after_credential_verification",
-		OperationKind:      "child_credential_probe",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
 		OperationTool:      "update_operation",
 		OperatorProjection: "Credential state is not proven; run a no-content status probe before any mailbox action.",
 		ReviewLocalActions: []string{"Child task stopped before content access because credential status is not verified."},
@@ -153,7 +153,7 @@ var durableWakeBlockedChildBlockerSpecs = []durableWakeChildBlockerSpec{
 		NextAction:         "wait for the bounded retry window before retrying the child task",
 		ResourceBlocker:    "external_transient",
 		RetryPolicy:        "bounded_backoff",
-		OperationKind:      "child_retry",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
 		OperationTool:      "update_operation",
 		OperatorProjection: "Child task hit a transient external blocker; retry only after bounded backoff.",
 		ReviewLocalActions: []string{"Child task stopped on a transient external condition; no authority was widened."},
@@ -170,7 +170,7 @@ var durableWakeFailedChildBlockerSpec = durableWakeChildBlockerSpec{
 	NextAction:         "repair the child wake runtime or dependency failure before retrying",
 	ResourceBlocker:    "wake_failed",
 	RetryPolicy:        "retry_after_wake_repair",
-	OperationKind:      "child_wake_repair",
+	OperationKind:      session.NextActionOperationKindDurableChildRecovery,
 	OperationTool:      "update_operation",
 	OperatorProjection: "Child wake failed before a child-authored completion; repair the wake/runtime failure before retrying.",
 	ReviewLocalActions: []string{"Durable wake failed before a child-authored terminal result was produced."},
@@ -210,7 +210,7 @@ func durableWakeChildTaskBlockerClassification(agent core.DurableAgent, result s
 		NextAction:         "review the child task blocker and choose the next bounded repair",
 		ResourceBlocker:    blockerKind,
 		RetryPolicy:        "retry_after_blocker_resolution",
-		OperationKind:      "child_task_blocker_review",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
 		OperationTool:      "update_operation",
 		DiagnosticOnly:     true,
 		OperatorProjection: "Child task stopped with a blocker; review the exact child result and choose a bounded repair before retrying.",
@@ -226,7 +226,7 @@ func durableWakeChildTaskBlockerClassification(agent core.DurableAgent, result s
 			classification.NextAction = "ask the operator whether to continue, block, or close the ambiguous child task"
 			classification.ResourceBlocker = classification.Kind
 			classification.RetryPolicy = "operator_disambiguation_required"
-			classification.OperationKind = "child_terminal_status_disambiguation"
+			classification.OperationKind = session.NextActionOperationKindDurableChildRecovery
 			classification.OperationTool = "update_operation"
 			classification.DiagnosticOnly = true
 			classification.OperatorProjection = "Child task did not provide a terminal review_status. Ask the operator before waking the child again."
@@ -240,7 +240,7 @@ func durableWakeChildTaskBlockerClassification(agent core.DurableAgent, result s
 		classification.NextAction = "continue the bounded child task from the latest reported update"
 		classification.ResourceBlocker = classification.Kind
 		classification.RetryPolicy = "continue_after_child_update"
-		classification.OperationKind = "child_task_continue"
+		classification.OperationKind = session.NextActionOperationKindDurableChildRecovery
 		classification.OperationTool = "update_operation"
 		classification.DiagnosticOnly = false
 		classification.OperatorProjection = "Child task reported an intermediate update; continue only through the bounded child task packet."
@@ -286,7 +286,7 @@ func durableWakeBlockedChildClassification(base durableWakeChildBlockerClassific
 	base.NextAction = "review the child-authored blocker and choose an exact repair"
 	base.ResourceBlocker = base.Kind
 	base.RetryPolicy = "operator_disambiguation_required"
-	base.OperationKind = "child_blocker_disambiguation"
+	base.OperationKind = session.NextActionOperationKindDurableChildRecovery
 	base.OperationTool = "update_operation"
 	base.DiagnosticOnly = true
 	base.OperatorProjection = "Child reported a blocker that does not compile to a known repair class; inspect the child result and choose an exact repair."
@@ -395,8 +395,8 @@ func durableWakeChildBlockerReviewIntent(agent core.DurableAgent, result session
 		Kind:           session.ChildTaskOutcomeIntentChildBlockerReview,
 		Sequence:       10,
 		PayloadJSON:    string(payloadRaw),
-		ResultRef:      "child_task_blocker_review:" + strings.TrimSpace(result.ResultID),
-		IdempotencyKey: "child_task_blocker_review:" + strings.TrimSpace(result.ResultID) + ":" + classification.Kind,
+		ResultRef:      session.NextActionOperationKindDurableChildRecovery + ":" + strings.TrimSpace(result.ResultID),
+		IdempotencyKey: session.NextActionOperationKindDurableChildRecovery + ":" + strings.TrimSpace(result.ResultID) + ":" + classification.Kind,
 		CreatedAt:      now,
 	}, true
 }
@@ -495,19 +495,22 @@ func durableWakeChildBlockerOperationInputJSON(agentID string, adapterName strin
 		summary = strings.TrimSpace(classification.NextAction)
 	}
 	recoveryHandoff := map[string]any{
-		"contract":           "aphelion.recovery_handoff.v1",
-		"operation_kind":     strings.TrimSpace(classification.OperationKind),
-		"operation_tool":     "update_operation",
-		"agent_id":           strings.TrimSpace(agentID),
-		"durable_agent_id":   strings.TrimSpace(agentID),
-		"blocker_kind":       strings.TrimSpace(classification.Kind),
-		"task_packet_id":     strings.TrimSpace(result.PacketID),
-		"child_result_id":    strings.TrimSpace(result.ResultID),
-		"diagnostic_only":    classification.DiagnosticOnly,
-		"no_content_probe":   classification.NoContentProbe,
-		"retry_policy":       strings.TrimSpace(classification.RetryPolicy),
-		"required_authority": strings.TrimSpace(classification.RequiredAuthority),
-		"resource_blocker":   strings.TrimSpace(classification.ResourceBlocker),
+		"contract":                "aphelion.recovery_handoff.v1",
+		"operation_kind":          strings.TrimSpace(classification.OperationKind),
+		"operation_tool":          "update_operation",
+		"recovery_operation_kind": strings.TrimSpace(classification.OperationKind),
+		"recovery_family":         session.NextActionOperationKindDurableChildRecovery,
+		"recovery_action":         strings.TrimSpace(classification.Kind),
+		"agent_id":                strings.TrimSpace(agentID),
+		"durable_agent_id":        strings.TrimSpace(agentID),
+		"blocker_kind":            strings.TrimSpace(classification.Kind),
+		"task_packet_id":          strings.TrimSpace(result.PacketID),
+		"child_result_id":         strings.TrimSpace(result.ResultID),
+		"diagnostic_only":         classification.DiagnosticOnly,
+		"no_content_probe":        classification.NoContentProbe,
+		"retry_policy":            strings.TrimSpace(classification.RetryPolicy),
+		"required_authority":      strings.TrimSpace(classification.RequiredAuthority),
+		"resource_blocker":        strings.TrimSpace(classification.ResourceBlocker),
 	}
 	if adapterName != "" {
 		recoveryHandoff["adapter"] = adapterName
@@ -533,6 +536,8 @@ func durableWakeChildBlockerOperationInputJSON(agentID string, adapterName strin
 		"recovery_contract":       "aphelion.recovery_handoff.v1",
 		"recovery_operation_kind": strings.TrimSpace(classification.OperationKind),
 		"recovery_operation_tool": "update_operation",
+		"recovery_family":         session.NextActionOperationKindDurableChildRecovery,
+		"recovery_action":         strings.TrimSpace(classification.Kind),
 		"agent_id":                strings.TrimSpace(agentID),
 		"blocker_kind":            strings.TrimSpace(classification.Kind),
 		"task_packet_id":          strings.TrimSpace(result.PacketID),

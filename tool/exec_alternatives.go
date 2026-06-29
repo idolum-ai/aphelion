@@ -432,11 +432,11 @@ func lossyNativeListSuggestion(cmd string, paths []string, rawWorkdir string, wo
 func nativeWorkdirRewriteRequired(cmd string, cause error) shellRejectionAlternative {
 	return shellRejectionAlternative{
 		State:              session.NextActionWaitingForOperator,
-		OperationKind:      "typed_operation_required",
+		OperationKind:      session.NextActionOperationKindOperatorRewrite,
 		OperationTool:      "update_operation",
-		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"reason": "workdir_not_representable_for_native_alternative", "command": cmd})),
+		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"reason": "workdir_not_representable_for_native_alternative", "rewrite_reason": "workdir_not_representable_for_native_alternative", "recovery_operation_kind": session.NextActionOperationKindOperatorRewrite, "command": cmd})),
 		NextAction:         "rewrite the rejected shell with an explicit typed operation and scoped path",
-		RequiredAuthority:  "typed_operation_required",
+		RequiredAuthority:  session.NextActionOperationKindOperatorRewrite,
 		RetryPolicy:        "do_not_execute_native_guess",
 		OperatorProjection: "Raw shell was rejected, and its workdir/path semantics could not be represented safely. Rewrite it as an explicit typed operation before execution.",
 		Reason:             shellRejectionReasonFromError(cause),
@@ -446,11 +446,11 @@ func nativeWorkdirRewriteRequired(cmd string, cause error) shellRejectionAlterna
 func nativeStdinRewriteRequired(cmd string, cause error) shellRejectionAlternative {
 	return shellRejectionAlternative{
 		State:              session.NextActionWaitingForOperator,
-		OperationKind:      "typed_operation_required",
+		OperationKind:      session.NextActionOperationKindOperatorRewrite,
 		OperationTool:      "update_operation",
-		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"reason": "stdin_semantics_not_native_file_path", "command": cmd})),
+		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"reason": "stdin_semantics_not_native_file_path", "rewrite_reason": "stdin_semantics_not_native_file_path", "recovery_operation_kind": session.NextActionOperationKindOperatorRewrite, "command": cmd})),
 		NextAction:         "rewrite stdin-dependent shell semantics as an explicit typed operation",
-		RequiredAuthority:  "typed_operation_required",
+		RequiredAuthority:  session.NextActionOperationKindOperatorRewrite,
 		RetryPolicy:        "do_not_execute_native_guess",
 		OperatorProjection: "Raw shell used stdin semantics that read_file cannot represent. Rewrite it as an explicit typed operation before execution.",
 		Reason:             shellRejectionReasonFromError(cause),
@@ -518,7 +518,7 @@ func canonicalExecAlternative(command string, rawWorkdir string, cause error) (s
 			return shellRejectionAlternative{}, false
 		}
 		canonical = candidate
-		operationKind = "confined_verification_exec"
+		operationKind = "validation_command"
 		requiredAuthority = "validation_execution"
 		verifier = "confined_validation_command"
 	default:
@@ -577,11 +577,11 @@ func splitEffectPlanAlternative(command string, plan commandeffect.EffectPlan, c
 	}
 	return shellRejectionAlternative{
 		State:              session.NextActionBlockedNeedsAuthority,
-		OperationKind:      "split_effect_plan",
+		OperationKind:      session.NextActionOperationKindOperatorRewrite,
 		OperationTool:      "update_operation",
-		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"reason": shellRejectionReason(plan, cause), "steps": steps})),
+		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"reason": shellRejectionReason(plan, cause), "rewrite_reason": shellRejectionReason(plan, cause), "recovery_operation_kind": session.NextActionOperationKindOperatorRewrite, "steps": steps})),
 		NextAction:         "split the compound shell into separate typed effect steps before execution",
-		RequiredAuthority:  "split_effect_plan",
+		RequiredAuthority:  session.NextActionOperationKindOperatorRewrite,
 		RetryPolicy:        "do_not_retry_raw_compound_shell",
 		OperatorProjection: "Raw shell mixed multiple authority-bearing effects. Split it into separate typed operations and approve each bounded step.",
 		Reason:             shellRejectionReasonFromError(cause),
@@ -590,19 +590,19 @@ func splitEffectPlanAlternative(command string, plan commandeffect.EffectPlan, c
 
 func repairOperationAlternative(command string, plan commandeffect.EffectPlan, cause error) (shellRejectionAlternative, bool) {
 	shape := rejectedRepairShape(command, plan, cause)
-	op, ok := TypedRepairOperationForRejectedShape(shape)
+	op, ok := OperatorRewriteOperationForRejectedShape(shape)
 	if !ok {
 		return shellRejectionAlternative{}, false
 	}
 	return shellRejectionAlternative{
 		State:              session.NextActionWaitingForOperator,
-		OperationKind:      "typed_repair_operation",
+		OperationKind:      session.NextActionOperationKindOperatorRewrite,
 		OperationTool:      "update_operation",
-		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"repair_operation_id": op.ID, "required_action": op.RequiredAction, "required_resource": op.RequiredResource, "rejected_shape": op.RejectedShape})),
+		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"rewrite_reason": "operator_rewrite_operation", "recovery_operation_kind": session.NextActionOperationKindOperatorRewrite, "repair_operation_id": op.ID, "required_action": op.RequiredAction, "required_resource": op.RequiredResource, "rejected_shape": op.RejectedShape})),
 		NextAction:         op.Summary,
-		RequiredAuthority:  op.RequiredAction,
+		RequiredAuthority:  session.NextActionOperationKindOperatorRewrite,
 		ResourceBlocker:    op.RequiredResource,
-		RetryPolicy:        "replace_raw_shell_with_typed_repair_operation",
+		RetryPolicy:        "replace_raw_shell_with_operator_rewrite",
 		OperatorProjection: op.Summary,
 		Reason:             shellRejectionReasonFromError(cause),
 	}, true
@@ -614,15 +614,15 @@ func genericRejectedShellAlternative(command string, plan commandeffect.EffectPl
 		"command_hash":       session.EffectAttemptCommandHash(command),
 		"effect_kind":        string(commandeffect.RepresentativeEffect(plan).Kind),
 		"effect_reason":      strings.TrimSpace(commandeffect.RepresentativeEffect(plan).Reason),
-		"required_authority": "typed_operation_required",
+		"required_authority": session.NextActionOperationKindOperatorRewrite,
 	}}
 	return shellRejectionAlternative{
 		State:              session.NextActionWaitingForOperator,
-		OperationKind:      "typed_operation_required",
+		OperationKind:      session.NextActionOperationKindOperatorRewrite,
 		OperationTool:      "update_operation",
-		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"reason": shellRejectionReason(plan, cause), "steps": steps})),
+		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"reason": shellRejectionReason(plan, cause), "rewrite_reason": shellRejectionReason(plan, cause), "recovery_operation_kind": session.NextActionOperationKindOperatorRewrite, "steps": steps})),
 		NextAction:         "replace the rejected shell with a typed operation or split plan",
-		RequiredAuthority:  "typed_operation_required",
+		RequiredAuthority:  session.NextActionOperationKindOperatorRewrite,
 		RetryPolicy:        "do_not_retry_unbounded_raw_shell",
 		OperatorProjection: "Raw shell could not be bounded. Replace it with a typed operation or split plan before retrying.",
 		Reason:             shellRejectionReasonFromError(cause),
@@ -635,17 +635,17 @@ func invalidReadyShellAlternative(command string, plan commandeffect.EffectPlan,
 		"command_hash":         session.EffectAttemptCommandHash(command),
 		"effect_kind":          string(commandeffect.RepresentativeEffect(plan).Kind),
 		"effect_reason":        strings.TrimSpace(commandeffect.RepresentativeEffect(plan).Reason),
-		"required_authority":   "typed_operation_required",
+		"required_authority":   session.NextActionOperationKindOperatorRewrite,
 		"validation_failure":   strings.TrimSpace(validationErr.Error()),
 		"original_reject_kind": shellRejectionReason(plan, cause),
 	}}
 	return shellRejectionAlternative{
 		State:              session.NextActionWaitingForOperator,
-		OperationKind:      "typed_operation_required",
+		OperationKind:      session.NextActionOperationKindOperatorRewrite,
 		OperationTool:      "update_operation",
-		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"reason": "ready_alternative_failed_contract_validation", "steps": steps})),
+		OperationInputJSON: mustJSON(recommendedShellAlternativeInput(map[string]any{"reason": "ready_alternative_failed_contract_validation", "rewrite_reason": "ready_alternative_failed_contract_validation", "recovery_operation_kind": session.NextActionOperationKindOperatorRewrite, "steps": steps})),
 		NextAction:         "rewrite the rejected shell as a typed operation before execution",
-		RequiredAuthority:  "typed_operation_required",
+		RequiredAuthority:  session.NextActionOperationKindOperatorRewrite,
 		RetryPolicy:        "do_not_execute_invalid_recovery_handoff",
 		OperatorProjection: "Raw shell was rejected, and the candidate ready action failed recovery-handoff validation. Rewrite it as an exact typed operation before execution.",
 		Reason:             shellRejectionReasonFromError(cause),
@@ -733,7 +733,7 @@ func requiredAuthorityForEffect(effect commandeffect.Effect) string {
 	case commandeffect.KindAdminUnboundedExec:
 		return "admin_unbounded_exact_exec"
 	default:
-		return "typed_operation_required"
+		return session.NextActionOperationKindOperatorRewrite
 	}
 }
 

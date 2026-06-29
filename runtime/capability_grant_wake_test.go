@@ -412,15 +412,15 @@ func TestCapabilityGrantWakeBlockedResultCreatesTypedNextState(t *testing.T) {
 	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionNeedsVerification || open[0].ResourceBlocker != "tool_runtime_probe_missing" {
 		t.Fatalf("open next actions after blocked child task = %#v, want one child runtime probe-required next state", open)
 	}
-	if open[0].OperationKind != "child_tool_runtime_probe" || open[0].OperationTool != "update_operation" {
+	if open[0].OperationKind != session.NextActionOperationKindDurableChildRecovery || open[0].OperationTool != "update_operation" {
 		t.Fatalf("open next action operation = kind %q tool %q, want child tool runtime probe", open[0].OperationKind, open[0].OperationTool)
 	}
 	opInput := capabilityGrantWakeOperationInputForTest(t, open[0].OperationInputJSON)
-	if opInput["durable_agent_id"] != agent.AgentID || opInput["child_blocker_kind"] != "tool_runtime_probe_missing" || opInput["status"] != "blocked" || opInput["stage"] != "durable_child_blocker" || opInput["tool"] != "gog_cli" || opInput["no_content_probe"] != true || opInput["diagnostic_only"] != true || opInput["recovery_contract"] != "aphelion.recovery_handoff.v1" {
+	if opInput["durable_agent_id"] != agent.AgentID || opInput["child_blocker_kind"] != "tool_runtime_probe_missing" || opInput["status"] != "blocked" || opInput["stage"] != "durable_child_blocker" || opInput["tool"] != "gog_cli" || opInput["no_content_probe"] != true || opInput["diagnostic_only"] != true || opInput["recovery_contract"] != "aphelion.recovery_handoff.v1" || opInput["recovery_operation_kind"] != session.NextActionOperationKindDurableChildRecovery || opInput["recovery_action"] != "tool_runtime_probe_missing" {
 		t.Fatalf("operation input = %#v, want exact gog_cli diagnostic no-content probe", opInput)
 	}
 	handoff, ok := opInput["recovery_handoff"].(map[string]any)
-	if !ok || handoff["contract"] != "aphelion.recovery_handoff.v1" || handoff["durable_agent_id"] != agent.AgentID || handoff["blocker_kind"] != "tool_runtime_probe_missing" || handoff["tool"] != "gog_cli" || handoff["no_content_probe"] != true || handoff["diagnostic_only"] != true {
+	if !ok || handoff["contract"] != "aphelion.recovery_handoff.v1" || handoff["durable_agent_id"] != agent.AgentID || handoff["blocker_kind"] != "tool_runtime_probe_missing" || handoff["tool"] != "gog_cli" || handoff["no_content_probe"] != true || handoff["diagnostic_only"] != true || handoff["recovery_operation_kind"] != session.NextActionOperationKindDurableChildRecovery || handoff["recovery_action"] != "tool_runtime_probe_missing" {
 		t.Fatalf("operation recovery_handoff = %#v, want typed durable child handoff", opInput["recovery_handoff"])
 	}
 	resolver, err := sandbox.NewResolver(
@@ -454,7 +454,7 @@ func TestCapabilityGrantWakeBlockedResultCreatesTypedNextState(t *testing.T) {
 	if opState.RecoveryHandoff.Contract != "aphelion.recovery_handoff.v1" ||
 		opState.RecoveryHandoff.DurableAgentID != agent.AgentID ||
 		opState.RecoveryHandoff.BlockerKind != "tool_runtime_probe_missing" ||
-		opState.RecoveryHandoff.OperationKind != "child_tool_runtime_probe" ||
+		opState.RecoveryHandoff.OperationKind != session.NextActionOperationKindDurableChildRecovery ||
 		opState.RecoveryHandoff.Tool != "gog_cli" ||
 		!opState.RecoveryHandoff.NoContentProbe ||
 		!opState.RecoveryHandoff.DiagnosticOnly {
@@ -475,7 +475,7 @@ func TestCapabilityGrantWakeBlockedResultCreatesTypedNextState(t *testing.T) {
 	if !ok {
 		t.Fatalf("review metadata = %#v, want nested artifact metadata", metadata)
 	}
-	if artifactMetadata["child_blocker_kind"] != "tool_runtime_probe_missing" || artifactMetadata["operator_action"] != "child_tool_runtime_probe" || artifactMetadata["tool_name"] != "gog_cli" {
+	if artifactMetadata["child_blocker_kind"] != "tool_runtime_probe_missing" || artifactMetadata["operator_action"] != session.NextActionOperationKindDurableChildRecovery || artifactMetadata["tool_name"] != "gog_cli" {
 		t.Fatalf("review artifact metadata = %#v, want typed blocker/action/tool metadata", artifactMetadata)
 	}
 }
@@ -708,7 +708,7 @@ func TestCapabilityGrantWakeFailureCreatesPacketRepairNextAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenNextActionsBySession() err = %v", err)
 	}
-	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionBlockedNeedsResourceRepair || open[0].ResourceBlocker != "wake_failed" || open[0].OperationKind != "child_wake_repair" {
+	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionBlockedNeedsResourceRepair || open[0].ResourceBlocker != "wake_failed" || open[0].OperationKind != session.NextActionOperationKindDurableChildRecovery {
 		t.Fatalf("open next actions after failed child task = %#v, want packet wake-repair next state", open)
 	}
 	opInput := capabilityGrantWakeOperationInputForTest(t, open[0].OperationInputJSON)

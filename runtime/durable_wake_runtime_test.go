@@ -123,7 +123,7 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			blocker:        "child_reported_blocked",
 			wantKind:       "tool_runtime_not_executable",
 			wantState:      session.NextActionBlockedNeedsResourceRepair,
-			wantOp:         "child_tool_runtime_repair",
+			wantOp:         session.NextActionOperationKindDurableChildRecovery,
 			wantRetry:      "retry_after_tool_runtime_repair",
 			wantProbe:      true,
 			wantDiagnostic: true,
@@ -135,7 +135,7 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			blocker:        "child_reported_blocked",
 			wantKind:       "tool_runtime_not_executable",
 			wantState:      session.NextActionBlockedNeedsResourceRepair,
-			wantOp:         "child_tool_runtime_repair",
+			wantOp:         session.NextActionOperationKindDurableChildRecovery,
 			wantRetry:      "retry_after_tool_runtime_repair",
 			wantProbe:      true,
 			wantDiagnostic: true,
@@ -147,7 +147,7 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			blocker:        "tool_runtime_probe_missing",
 			wantKind:       "tool_runtime_probe_missing",
 			wantState:      session.NextActionNeedsVerification,
-			wantOp:         "child_tool_runtime_probe",
+			wantOp:         session.NextActionOperationKindDurableChildRecovery,
 			wantRetry:      "retry_after_child_runtime_probe",
 			wantProbe:      true,
 			wantDiagnostic: true,
@@ -159,7 +159,7 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			blocker:        "child_reported_blocked",
 			wantKind:       "tool_lifecycle_unregistered",
 			wantState:      session.NextActionBlockedNeedsResourceRepair,
-			wantOp:         "child_tool_lifecycle_repair",
+			wantOp:         session.NextActionOperationKindDurableChildRecovery,
 			wantRetry:      "retry_after_tool_lifecycle_repair",
 			wantDiagnostic: true,
 		},
@@ -170,7 +170,7 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			blocker:        "missing_grant",
 			wantKind:       "grant_missing_or_stale",
 			wantState:      session.NextActionBlockedNeedsAuthority,
-			wantOp:         "child_authority_repair",
+			wantOp:         session.NextActionOperationKindDurableChildRecovery,
 			wantRetry:      "retry_after_authority_repair",
 			wantDiagnostic: true,
 		},
@@ -181,7 +181,7 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			blocker:        "child_reported_blocked",
 			wantKind:       "resource_permission_denied",
 			wantState:      session.NextActionBlockedNeedsResourceRepair,
-			wantOp:         "child_resource_repair",
+			wantOp:         session.NextActionOperationKindDurableChildRecovery,
 			wantRetry:      "retry_after_resource_repair",
 			wantDiagnostic: true,
 		},
@@ -192,7 +192,7 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			blocker:        "child_reported_blocked",
 			wantKind:       "credential_unverified",
 			wantState:      session.NextActionWaitingForOperator,
-			wantOp:         "child_credential_probe",
+			wantOp:         session.NextActionOperationKindDurableChildRecovery,
 			wantRetry:      "retry_after_credential_verification",
 			wantProbe:      true,
 			wantDiagnostic: true,
@@ -204,7 +204,7 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			blocker:        "child_reported_blocked",
 			wantKind:       "external_transient",
 			wantState:      session.NextActionScheduledRetry,
-			wantOp:         "child_retry",
+			wantOp:         session.NextActionOperationKindDurableChildRecovery,
 			wantRetry:      "bounded_backoff",
 			wantDiagnostic: true,
 		},
@@ -215,7 +215,7 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			blocker:        "",
 			wantKind:       "child_reported_blocked",
 			wantState:      session.NextActionWaitingForOperator,
-			wantOp:         "child_blocker_disambiguation",
+			wantOp:         session.NextActionOperationKindDurableChildRecovery,
 			wantRetry:      "operator_disambiguation_required",
 			wantDiagnostic: true,
 		},
@@ -225,7 +225,7 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			summary:   "intermediate progress",
 			wantKind:  "child_task_update",
 			wantState: session.NextActionWaitingForChild,
-			wantOp:    "child_task_continue",
+			wantOp:    session.NextActionOperationKindDurableChildRecovery,
 			wantRetry: "continue_after_child_update",
 		},
 		{
@@ -235,7 +235,7 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			blocker:        "missing_terminal_review_status",
 			wantKind:       "missing_terminal_review_status",
 			wantState:      session.NextActionWaitingForOperator,
-			wantOp:         "child_terminal_status_disambiguation",
+			wantOp:         session.NextActionOperationKindDurableChildRecovery,
 			wantRetry:      "operator_disambiguation_required",
 			wantDiagnostic: true,
 		},
@@ -246,7 +246,7 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			blocker:        "",
 			wantKind:       "wake_failed",
 			wantState:      session.NextActionBlockedNeedsResourceRepair,
-			wantOp:         "child_wake_repair",
+			wantOp:         session.NextActionOperationKindDurableChildRecovery,
 			wantRetry:      "retry_after_wake_repair",
 			wantDiagnostic: true,
 		},
@@ -285,6 +285,9 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			}
 			if input["no_content_probe"] != tc.wantProbe || input["diagnostic_only"] != tc.wantDiagnostic {
 				t.Fatalf("operation input = %#v, want probe=%t diagnostic=%t", input, tc.wantProbe, tc.wantDiagnostic)
+			}
+			if input["recovery_operation_kind"] != session.NextActionOperationKindDurableChildRecovery || input["recovery_family"] != session.NextActionOperationKindDurableChildRecovery || strings.TrimSpace(fmt.Sprint(input["recovery_action"])) == "" {
+				t.Fatalf("operation input = %#v, want durable child recovery envelope", input)
 			}
 		})
 	}
@@ -1600,7 +1603,7 @@ func TestDurableWakeNarrativeRuntimeFailureRequiresChildSideProbeEvidence(t *tes
 	if err != nil {
 		t.Fatalf("OpenNextActionsBySession() err = %v", err)
 	}
-	if len(open) != 1 || open[0].ResourceBlocker != "tool_runtime_probe_missing" || open[0].OperationKind != "child_tool_runtime_probe" {
+	if len(open) != 1 || open[0].ResourceBlocker != "tool_runtime_probe_missing" || open[0].OperationKind != session.NextActionOperationKindDurableChildRecovery {
 		t.Fatalf("open actions = %#v, want probe-missing next action", open)
 	}
 }
@@ -1662,7 +1665,7 @@ func TestDurableWakeRuntimeFailureWithOnlyAdjacentToolsStillRequiresProbeEvidenc
 	if err != nil {
 		t.Fatalf("OpenNextActionsBySession() err = %v", err)
 	}
-	if len(open) != 1 || open[0].ResourceBlocker != "tool_runtime_probe_missing" || open[0].OperationKind != "child_tool_runtime_probe" {
+	if len(open) != 1 || open[0].ResourceBlocker != "tool_runtime_probe_missing" || open[0].OperationKind != session.NextActionOperationKindDurableChildRecovery {
 		t.Fatalf("open actions = %#v, want deterministic runtime probe next action", open)
 	}
 }

@@ -615,6 +615,7 @@ func downgradeReadyNextActionForRedactedOperationInput(input NextActionInput, re
 	originalTool := input.OperationTool
 	payload := map[string]any{
 		"reason":                  "ready_operation_input_redacted",
+		"recovery_operation_kind": NextActionOperationKindOperatorRewrite,
 		"original_operation_kind": originalKind,
 		"original_operation_tool": originalTool,
 		"redacted_input_hash":     EffectAttemptCommandHash(redactedOperationInputJSON),
@@ -628,11 +629,11 @@ func downgradeReadyNextActionForRedactedOperationInput(input NextActionInput, re
 		raw = []byte(`{"reason":"ready_operation_input_redacted"}`)
 	}
 	input.State = NextActionWaitingForOperator
-	input.OperationKind = "typed_operation_required"
+	input.OperationKind = NextActionOperationKindOperatorRewrite
 	input.OperationTool = "update_operation"
 	input.OperationInputJSON = string(raw)
 	input.NextAction = "rewrite the recommended operation with exact, non-redacted operands before execution"
-	input.RequiredAuthority = "typed_operation_required"
+	input.RequiredAuthority = NextActionOperationKindOperatorRewrite
 	input.Verifier = ""
 	input.RetryPolicy = "do_not_execute_redacted_operation_payload"
 	input.OperatorProjection = "Ready operation payload contained redacted operand(s); rewrite it with exact typed operands before execution."

@@ -103,21 +103,51 @@ func RecoveryTransitionSpecs() []RecoveryTransitionSpec {
 		},
 		{
 			State:         session.NextActionWaitingForOperator,
-			OperationKind: "typed_operation_required",
+			OperationKind: session.NextActionOperationKindOperatorRewrite,
 			OperationTool: "update_operation",
 			Adapter:       "operator_rewrite",
 		},
 		{
-			State:         session.NextActionWaitingForOperator,
-			OperationKind: "split_effect_plan",
+			State:         session.NextActionBlockedNeedsAuthority,
+			OperationKind: session.NextActionOperationKindOperatorRewrite,
 			OperationTool: "update_operation",
 			Adapter:       "operator_rewrite",
 		},
 		{
-			State:         session.NextActionWaitingForOperator,
-			OperationKind: "typed_repair_operation",
+			State:         session.NextActionBlockedNeedsResourceRepair,
+			OperationKind: session.NextActionOperationKindDurableChildRecovery,
 			OperationTool: "update_operation",
-			Adapter:       "operator_rewrite",
+			Adapter:       "durable_child_recovery",
+		},
+		{
+			State:         session.NextActionBlockedNeedsAuthority,
+			OperationKind: session.NextActionOperationKindDurableChildRecovery,
+			OperationTool: "update_operation",
+			Adapter:       "durable_child_recovery",
+		},
+		{
+			State:         session.NextActionNeedsVerification,
+			OperationKind: session.NextActionOperationKindDurableChildRecovery,
+			OperationTool: "update_operation",
+			Adapter:       "durable_child_recovery",
+		},
+		{
+			State:         session.NextActionWaitingForOperator,
+			OperationKind: session.NextActionOperationKindDurableChildRecovery,
+			OperationTool: "update_operation",
+			Adapter:       "durable_child_recovery",
+		},
+		{
+			State:         session.NextActionWaitingForChild,
+			OperationKind: session.NextActionOperationKindDurableChildRecovery,
+			OperationTool: "update_operation",
+			Adapter:       "durable_child_recovery",
+		},
+		{
+			State:         session.NextActionScheduledRetry,
+			OperationKind: session.NextActionOperationKindDurableChildRecovery,
+			OperationTool: "update_operation",
+			Adapter:       "durable_child_recovery",
 		},
 	}
 }

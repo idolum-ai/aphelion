@@ -372,7 +372,7 @@ func TestApprovedChildWakeRetryRecordsTerminalChildBlockerInParentSession(t *tes
 		if action.Owner == "approved_retry" &&
 			action.State == session.NextActionNeedsVerification &&
 			action.ResourceBlocker == "tool_runtime_probe_missing" &&
-			action.OperationKind == "child_tool_runtime_probe" &&
+			action.OperationKind == session.NextActionOperationKindDurableChildRecovery &&
 			action.OperationTool == "update_operation" {
 			foundProbe = true
 		}

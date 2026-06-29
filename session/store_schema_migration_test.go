@@ -2259,6 +2259,157 @@ func TestMigratesSchemaV83ToV84AllowsChildTaskExecutionAuthority(t *testing.T) {
 	}
 }
 
+func TestMigratesSchemaV85ToV86GenericRecoveryOperationKinds(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v85-generic-recovery.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v85 db: %v", err)
+	}
+	key := SessionKey{ChatID: 9186, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "9186"}}
+	sessionID := SessionIDForKey(key)
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE next_action_records (
+			record_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			turn_run_id INTEGER NOT NULL DEFAULT 0,
+			owner TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL DEFAULT '',
+			subject_kind TEXT NOT NULL DEFAULT '',
+			subject_ref TEXT NOT NULL DEFAULT '',
+			causal_refs_json TEXT NOT NULL DEFAULT '[]',
+			next_action TEXT NOT NULL DEFAULT '',
+			required_authority TEXT NOT NULL DEFAULT '',
+			resource_blocker TEXT NOT NULL DEFAULT '',
+			verifier TEXT NOT NULL DEFAULT '',
+			retry_policy TEXT NOT NULL DEFAULT '',
+			operation_kind TEXT NOT NULL DEFAULT '',
+			operation_tool TEXT NOT NULL DEFAULT '',
+			operation_input_json TEXT NOT NULL DEFAULT '',
+			operator_projection TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			resolved_at TEXT
+		)`,
+		`INSERT INTO schema_version(version) VALUES (85)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v85 fixture: %v", err)
+		}
+	}
+	insertNextAction := func(recordID string, operationKind string, requiredAuthority string, resourceBlocker string, operationInput string, resolved bool) {
+		t.Helper()
+		var resolvedAt any
+		if resolved {
+			resolvedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+		if _, err := db.Exec(`
+			INSERT INTO next_action_records(
+				record_id, session_id, chat_id, user_id, scope_kind, scope_id,
+				owner, state, subject_kind, subject_ref, next_action,
+				required_authority, resource_blocker, operation_kind, operation_tool,
+				operation_input_json, created_at, resolved_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+			recordID, sessionID, key.ChatID, key.UserID, string(key.Scope.Kind), key.Scope.ID,
+			"migration-test", string(NextActionBlockedNeedsResourceRepair), "task_packet", "child_task:"+recordID, "recover",
+			requiredAuthority, resourceBlocker, operationKind, "update_operation",
+			operationInput, time.Now().UTC().Format(time.RFC3339Nano), resolvedAt,
+		); err != nil {
+			t.Fatalf("insert v85 next action %s: %v", recordID, err)
+		}
+	}
+	insertNextAction(
+		"legacy-child-runtime",
+		"child_tool_runtime_repair",
+		"child_tool_runtime_repair",
+		"tool_runtime_not_executable",
+		`{"durable_agent_id":"child-alpha","child_blocker_kind":"tool_runtime_not_executable","summary":"repair runtime"}`,
+		false,
+	)
+	insertNextAction(
+		"legacy-operator-rewrite",
+		"typed_operation_required",
+		"typed_operation_required",
+		"",
+		`{"reason":"dynamic_shell"}`,
+		false,
+	)
+	insertNextAction(
+		"resolved-legacy-child",
+		"child_resource_repair",
+		"child_resource_repair",
+		"resource_permission_denied",
+		`{"durable_agent_id":"child-resolved"}`,
+		true,
+	)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v85 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v85) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	byID := map[string]NextActionRecord{}
+	for _, action := range open {
+		byID[action.RecordID] = action
+	}
+	child := byID["legacy-child-runtime"]
+	if child.OperationKind != NextActionOperationKindDurableChildRecovery || child.RequiredAuthority != NextActionOperationKindDurableChildRecovery {
+		t.Fatalf("migrated child action = %#v, want durable_child_recovery kind and authority", child)
+	}
+	childInput := map[string]any{}
+	if err := json.Unmarshal([]byte(child.OperationInputJSON), &childInput); err != nil {
+		t.Fatalf("unmarshal child operation input: %v", err)
+	}
+	if childInput["recovery_operation_kind"] != NextActionOperationKindDurableChildRecovery ||
+		childInput["recovery_family"] != NextActionOperationKindDurableChildRecovery ||
+		childInput["legacy_operation_kind"] != "child_tool_runtime_repair" ||
+		childInput["blocker_kind"] != "tool_runtime_not_executable" ||
+		childInput["recovery_action"] != "tool_runtime_not_executable" {
+		t.Fatalf("migrated child operation input = %#v, want generic recovery envelope with legacy blocker labels", childInput)
+	}
+
+	rewrite := byID["legacy-operator-rewrite"]
+	if rewrite.OperationKind != NextActionOperationKindOperatorRewrite || rewrite.RequiredAuthority != NextActionOperationKindOperatorRewrite {
+		t.Fatalf("migrated operator action = %#v, want operator_rewrite kind and authority", rewrite)
+	}
+	rewriteInput := map[string]any{}
+	if err := json.Unmarshal([]byte(rewrite.OperationInputJSON), &rewriteInput); err != nil {
+		t.Fatalf("unmarshal rewrite operation input: %v", err)
+	}
+	if rewriteInput["recovery_operation_kind"] != NextActionOperationKindOperatorRewrite ||
+		rewriteInput["legacy_operation_kind"] != "typed_operation_required" ||
+		rewriteInput["rewrite_reason"] != "dynamic_shell" {
+		t.Fatalf("migrated rewrite operation input = %#v, want generic operator rewrite envelope", rewriteInput)
+	}
+
+	var resolvedKind string
+	if err := store.db.QueryRow(`SELECT operation_kind FROM next_action_records WHERE record_id = ?`, "resolved-legacy-child").Scan(&resolvedKind); err != nil {
+		t.Fatalf("query resolved legacy row: %v", err)
+	}
+	if resolvedKind != "child_resource_repair" {
+		t.Fatalf("resolved legacy operation kind = %q, want unchanged resolved row", resolvedKind)
+	}
+}
+
 func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {
 	t.Helper()
 	rows, err := db.Query(`PRAGMA table_info(` + tableName + `)`)

@@ -163,16 +163,23 @@ Durable-child outcome projection uses this status contract:
 | Child result | Recognized blocker | Next action state | Operation kind | Parent projection |
 | --- | --- | --- | --- | --- |
 | `completed` | none | `terminal` | none | none |
-| `update` | `child_task_update` | `waiting_for_child` | `child_task_continue` | no blocker card |
-| `update` | `missing_terminal_review_status` | `waiting_for_operator` | `child_terminal_status_disambiguation` | ask whether to continue, block, or close the ambiguous child task |
-| `blocked` | `tool_runtime_not_executable` | `blocked_needs_resource_repair` | `child_tool_runtime_repair` | idempotent blocker review when a review target exists |
-| `blocked` | `tool_lifecycle_unregistered` | `blocked_needs_resource_repair` | `child_tool_lifecycle_repair` | idempotent blocker review when a review target exists |
-| `blocked` | `grant_missing_or_stale` | `blocked_needs_authority` | `child_authority_repair` | idempotent blocker review when a review target exists |
-| `blocked` | `resource_permission_denied` | `blocked_needs_resource_repair` | `child_resource_repair` | idempotent blocker review when a review target exists |
-| `blocked` | `credential_unverified` | `waiting_for_operator` | `child_credential_probe` | idempotent blocker review when a review target exists |
-| `blocked` | `external_transient` | `scheduled_retry` | `child_retry` | idempotent blocker review when a review target exists |
-| `blocked` | unknown child blocker | `waiting_for_operator` | `child_blocker_disambiguation` | idempotent blocker review when a review target exists |
-| `failed` | `wake_failed` | `blocked_needs_resource_repair` | `child_wake_repair` | no child-authored blocker card |
+| `update` | `child_task_update` | `waiting_for_child` | `durable_child_recovery` | no blocker card |
+| `update` | `missing_terminal_review_status` | `waiting_for_operator` | `durable_child_recovery` | ask whether to continue, block, or close the ambiguous child task |
+| `blocked` | `tool_runtime_not_executable` | `blocked_needs_resource_repair` | `durable_child_recovery` | idempotent blocker review when a review target exists |
+| `blocked` | `tool_lifecycle_unregistered` | `blocked_needs_resource_repair` | `durable_child_recovery` | idempotent blocker review when a review target exists |
+| `blocked` | `grant_missing_or_stale` | `blocked_needs_authority` | `durable_child_recovery` | idempotent blocker review when a review target exists |
+| `blocked` | `resource_permission_denied` | `blocked_needs_resource_repair` | `durable_child_recovery` | idempotent blocker review when a review target exists |
+| `blocked` | `credential_unverified` | `waiting_for_operator` | `durable_child_recovery` | idempotent blocker review when a review target exists |
+| `blocked` | `external_transient` | `scheduled_retry` | `durable_child_recovery` | idempotent blocker review when a review target exists |
+| `blocked` | unknown child blocker | `waiting_for_operator` | `durable_child_recovery` | idempotent blocker review when a review target exists |
+| `failed` | `wake_failed` | `blocked_needs_resource_repair` | `durable_child_recovery` | no child-authored blocker card |
+
+The operation kind above is intentionally generic. Specific blockers such as
+`tool_runtime_not_executable` or `credential_unverified` remain typed metadata
+inside the recovery handoff. A one-time repair should normally flow through this
+compiled recovery contract instead of receiving its own pre-coded operation
+type. A new operation type is justified only when it carries durable enforcement
+semantics or provides aggregate labels that multiple surfaces can consume.
 
 ## Effective Authority
 

@@ -1151,12 +1151,12 @@ func TestExecRejectedDynamicVerificationRequiresTypedRewrite(t *testing.T) {
 		t.Fatalf("open next actions = %#v, want one typed rewrite action", open)
 	}
 	action := open[0]
-	if action.State != session.NextActionWaitingForOperator || action.OperationKind != "typed_operation_required" || action.OperationTool != "update_operation" || action.RequiredAuthority != "typed_operation_required" {
-		t.Fatalf("next action operation = %#v, want waiting typed rewrite for dynamic command", action)
+	if action.State != session.NextActionWaitingForOperator || action.OperationKind != session.NextActionOperationKindOperatorRewrite || action.OperationTool != "update_operation" || action.RequiredAuthority != session.NextActionOperationKindOperatorRewrite {
+		t.Fatalf("next action operation = %#v, want waiting operator rewrite for dynamic command", action)
 	}
 	input := mustNextActionInputMap(t, action)
-	if input["reason"] != "dynamic_shell" {
-		t.Fatalf("operation input = %#v, want dynamic_shell reason", input)
+	if input["reason"] != "dynamic_shell" || input["recovery_operation_kind"] != session.NextActionOperationKindOperatorRewrite {
+		t.Fatalf("operation input = %#v, want dynamic_shell operator rewrite reason", input)
 	}
 }
 
@@ -1363,8 +1363,8 @@ func TestExecRejectedReadyNativeReadDowngradesWhenPathRedacts(t *testing.T) {
 		t.Fatalf("open next actions = %#v, want one downgraded rewrite action", open)
 	}
 	action := open[0]
-	if action.State != session.NextActionWaitingForOperator || action.OperationKind != "typed_operation_required" || action.OperationTool != "update_operation" {
-		t.Fatalf("next action = %#v, want redacted ready operation downgraded to typed rewrite", action)
+	if action.State != session.NextActionWaitingForOperator || action.OperationKind != session.NextActionOperationKindOperatorRewrite || action.OperationTool != "update_operation" {
+		t.Fatalf("next action = %#v, want redacted ready operation downgraded to operator rewrite", action)
 	}
 	if strings.Contains(action.OperationInputJSON, secretShapedName) || strings.Contains(action.OperationInputJSON, secretShapedPath) {
 		t.Fatalf("operation input leaked secret-shaped filename: %s", action.OperationInputJSON)
@@ -1373,7 +1373,7 @@ func TestExecRejectedReadyNativeReadDowngradesWhenPathRedacts(t *testing.T) {
 		t.Fatalf("operation input = %s, want redacted downgrade payload", action.OperationInputJSON)
 	}
 	input := mustNextActionInputMap(t, action)
-	if input["reason"] != "ready_operation_input_redacted" || input["original_operation_kind"] != "native_file_read" || input["original_operation_tool"] != "read_file" {
+	if input["reason"] != "ready_operation_input_redacted" || input["recovery_operation_kind"] != session.NextActionOperationKindOperatorRewrite || input["original_operation_kind"] != "native_file_read" || input["original_operation_tool"] != "read_file" {
 		t.Fatalf("operation input = %#v, want ready operation redaction downgrade metadata", input)
 	}
 	events, err := store.ExecutionEventsBySession(key, 0, 10)
@@ -1414,12 +1414,12 @@ func TestExecRejectedCatStdinRequiresTypedRewrite(t *testing.T) {
 		t.Fatalf("open next actions = %#v, want one stdin rewrite action", open)
 	}
 	action := open[0]
-	if action.State != session.NextActionWaitingForOperator || action.OperationKind != "typed_operation_required" || action.OperationTool != "update_operation" {
-		t.Fatalf("next action = %#v, want typed rewrite for stdin semantics", action)
+	if action.State != session.NextActionWaitingForOperator || action.OperationKind != session.NextActionOperationKindOperatorRewrite || action.OperationTool != "update_operation" {
+		t.Fatalf("next action = %#v, want operator rewrite for stdin semantics", action)
 	}
 	input := mustNextActionInputMap(t, action)
-	if input["reason"] != "stdin_semantics_not_native_file_path" {
-		t.Fatalf("operation input = %#v, want stdin rewrite reason", input)
+	if input["reason"] != "stdin_semantics_not_native_file_path" || input["recovery_operation_kind"] != session.NextActionOperationKindOperatorRewrite {
+		t.Fatalf("operation input = %#v, want stdin operator rewrite reason", input)
 	}
 	if strings.Contains(action.OperationInputJSON, `"path":"-"`) {
 		t.Fatalf("operation input = %s, must not suggest read_file path '-'", action.OperationInputJSON)
@@ -1591,10 +1591,13 @@ func TestExecRejectedMultiAuthorityShellRecordsSplitPlanNextAction(t *testing.T)
 		t.Fatalf("open next actions = %#v, want one split-plan alternative", open)
 	}
 	action := open[0]
-	if action.State != session.NextActionBlockedNeedsAuthority || action.OperationKind != "split_effect_plan" || action.OperationTool != "update_operation" || action.RequiredAuthority != "split_effect_plan" {
-		t.Fatalf("next action = %#v, want split effect plan blocker", action)
+	if action.State != session.NextActionBlockedNeedsAuthority || action.OperationKind != session.NextActionOperationKindOperatorRewrite || action.OperationTool != "update_operation" || action.RequiredAuthority != session.NextActionOperationKindOperatorRewrite {
+		t.Fatalf("next action = %#v, want operator rewrite split-effect blocker", action)
 	}
 	input := mustNextActionInputMap(t, action)
+	if input["rewrite_reason"] != "multiple_authorities" || input["recovery_operation_kind"] != session.NextActionOperationKindOperatorRewrite {
+		t.Fatalf("operation input = %#v, want multiple-authority operator rewrite metadata", input)
+	}
 	rawSteps, ok := input["steps"].([]any)
 	if !ok || len(rawSteps) != 2 {
 		t.Fatalf("operation input = %#v, want two split steps", input)

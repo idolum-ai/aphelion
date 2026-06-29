@@ -975,7 +975,7 @@ func TestApprovedChildWakeRetryFailureBlocksForRepair(t *testing.T) {
 		if action.Owner == "approved_retry" &&
 			action.State == session.NextActionBlockedNeedsResourceRepair &&
 			strings.TrimSpace(action.ResourceBlocker) != "" &&
-			action.OperationKind == "child_wake_runtime_repair" &&
+			action.OperationKind == session.NextActionOperationKindDurableChildRecovery &&
 			strings.Contains(action.OperatorProjection, "ran with authority") {
 			foundRepair = true
 			break

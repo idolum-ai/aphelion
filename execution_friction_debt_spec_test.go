@@ -440,7 +440,7 @@ func assertDebtSpecNextStateExists(t *testing.T, states []frictionNextState, wan
 }
 
 func productionTypedAlternativeAvailable(rejectedShape string) bool {
-	_, ok := toolpkg.TypedRepairOperationForRejectedShape(rejectedShape)
+	_, ok := toolpkg.OperatorRewriteOperationForRejectedShape(rejectedShape)
 	return ok
 }
 
