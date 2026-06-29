@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -143,7 +144,11 @@ func (r *Runtime) recordApprovedRetryWakeTerminalChildResult(key session.Session
 	if monitor != nil {
 		action.TurnRunID = monitor.runID
 	}
-	return r.recordApprovedRetryWakeTerminalChildResultForAction(action, reservation.State.ContinuationLease.ID, packetID, result, now)
+	if err := r.recordApprovedRetryWakeTerminalChildResultForAction(action, reservation.State.ContinuationLease.ID, packetID, result, now); err != nil {
+		return err
+	}
+	r.materializePromotedDurableChildAuthorityBundleAfterApprovedRetry(context.Background(), key, reservation, wakeResult, result, now)
+	return nil
 }
 
 func (r *Runtime) recordApprovedRetryChildResultBlocker(key session.SessionKey, action session.NextActionRecord, agent core.DurableAgent, result session.ChildTaskResult, packetID string, leaseID string, now time.Time) error {
