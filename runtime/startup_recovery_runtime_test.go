@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,15 @@ import (
 	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/session"
 )
+
+func mustMarshalInboundMessageForTest(t *testing.T, msg core.InboundMessage) string {
+	t.Helper()
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal inbound message: %v", err)
+	}
+	return string(data)
+}
 
 func TestStartupRecoverySendsAwakeSignalWhenNoInterruptedRuns(t *testing.T) {
 	t.Parallel()
@@ -285,6 +295,134 @@ func TestStartupRecoveryReconcilesRunningTelegramIngressForTerminalTurnRun(t *te
 	}
 	if len(pending) != 0 {
 		t.Fatalf("pending ingress = %#v, want reconciled running update excluded from replay", pending)
+	}
+}
+
+func TestStartupRecoveryReplaysQueuedTelegramIngressWithoutTurnRun(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Recovered: replayed queued Telegram ingress."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recorder := &authorityRecordingTurnAssembler{runtime: rt, result: &core.TurnResult{Text: "replayed queued message"}}
+	rt.interactiveDMAssembler = recorder
+
+	now := time.Date(2026, time.June, 29, 15, 36, 55, 0, time.UTC)
+	msg := core.InboundMessage{
+		ChatID:          1505,
+		ChatType:        "private",
+		SenderID:        1001,
+		SenderName:      "admin",
+		Text:            "please finish the queued child setup work",
+		MessageID:       702,
+		IngressSurface:  "telegram:primary",
+		IngressUpdateID: 503,
+		IngressQueuedAt: now,
+	}
+	if _, err := store.RecordTelegramIngressAccepted(session.TelegramIngressUpdateRecord{
+		Surface:     msg.IngressSurface,
+		UpdateID:    msg.IngressUpdateID,
+		UpdateKind:  "message",
+		ChatID:      msg.ChatID,
+		SenderID:    msg.SenderID,
+		MessageID:   msg.MessageID,
+		SessionID:   session.SessionIDForKey(session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramDMScopeRef(msg.ChatID)}),
+		Status:      session.TelegramIngressUpdateQueued,
+		InboundJSON: mustMarshalInboundMessageForTest(t, msg),
+		PayloadJSON: `{"update_id":503}`,
+		AcceptedAt:  now.Add(-time.Second),
+		QueuedAt:    now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("RecordTelegramIngressAccepted() err = %v", err)
+	}
+
+	if err := rt.runStartupRecoveryOnce(context.Background(), now.Add(time.Minute)); err != nil {
+		t.Fatalf("runStartupRecoveryOnce() err = %v", err)
+	}
+
+	recorder.mu.Lock()
+	recorderCalled := recorder.called
+	replayedRunID := recorder.runID
+	recorder.mu.Unlock()
+	if !recorderCalled {
+		t.Fatal("assembler was not called for queued ingress replay")
+	}
+	if replayedRunID == 0 {
+		t.Fatal("queued ingress replay did not create a turn run")
+	}
+	record, ok, err := store.TelegramIngressUpdate(msg.IngressSurface, msg.IngressUpdateID)
+	if err != nil || !ok {
+		t.Fatalf("TelegramIngressUpdate() ok=%t err=%v", ok, err)
+	}
+	if record.Status != session.TelegramIngressUpdateCompleted || record.TurnRunID == 0 || record.CompletedAt.IsZero() {
+		t.Fatalf("ingress record = %#v, want completed with turn run", record)
+	}
+	pending, err := store.PendingTelegramIngressUpdates("telegram:primary", 10)
+	if err != nil {
+		t.Fatalf("PendingTelegramIngressUpdates() err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending ingress = %#v, want replay drained", pending)
+	}
+	events, err := store.ExecutionEventsBySession(session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramDMScopeRef(msg.ChatID)}, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventRecoveryResume) || !hasExecutionEvent(events, core.ExecutionEventTurnStarted) {
+		t.Fatalf("events = %#v, want recovery resume and turn started", events)
+	}
+}
+
+func TestStartupRecoveryFailsMalformedQueuedTelegramIngress(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Recovered: malformed queued Telegram ingress failed closed."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	now := time.Date(2026, time.June, 29, 15, 47, 19, 0, time.UTC)
+	if _, err := store.RecordTelegramIngressAccepted(session.TelegramIngressUpdateRecord{
+		Surface:     "telegram:primary",
+		UpdateID:    504,
+		UpdateKind:  "message",
+		ChatID:      1506,
+		SenderID:    1001,
+		MessageID:   703,
+		SessionID:   "telegram_dm:1506",
+		Status:      session.TelegramIngressUpdateQueued,
+		InboundJSON: `{"ChatID":1506,`,
+		PayloadJSON: `{"update_id":504}`,
+		AcceptedAt:  now.Add(-time.Second),
+		QueuedAt:    now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("RecordTelegramIngressAccepted() err = %v", err)
+	}
+
+	if err := rt.runStartupRecoveryOnce(context.Background(), now.Add(time.Minute)); err != nil {
+		t.Fatalf("runStartupRecoveryOnce() err = %v", err)
+	}
+
+	record, ok, err := store.TelegramIngressUpdate("telegram:primary", 504)
+	if err != nil || !ok {
+		t.Fatalf("TelegramIngressUpdate() ok=%t err=%v", ok, err)
+	}
+	if record.Status != session.TelegramIngressUpdateFailed || !strings.Contains(record.ErrorText, "startup_replay_decode_failed") {
+		t.Fatalf("ingress record = %#v, want failed decode marker", record)
+	}
+	pending, err := store.PendingTelegramIngressUpdates("telegram:primary", 10)
+	if err != nil {
+		t.Fatalf("PendingTelegramIngressUpdates() err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending ingress = %#v, want malformed row terminalized", pending)
 	}
 }
 
