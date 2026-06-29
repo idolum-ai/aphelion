@@ -10,7 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 84
+const schemaVersion = 85
 
 type SQLiteStore struct {
 	db     *sql.DB
@@ -804,6 +804,9 @@ func (s *SQLiteStore) init() error {
 		return err
 	}
 	if err := ensureContinuationRecoveryContractTables(tx); err != nil {
+		return err
+	}
+	if err := ensureAuthorityBundleTables(tx); err != nil {
 		return err
 	}
 	if err := ensureCurrentSchemaShapeRepairColumns(tx); err != nil {

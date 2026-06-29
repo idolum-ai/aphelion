@@ -264,6 +264,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 		})
 	}
 	if r.store != nil {
+		defs = append(defs, authorityBundleToolDefinition())
 		defs = append(defs, requestApprovalToolDefinition())
 		defs = append(defs, agent.ToolDef{
 			Name:        "update_operation",

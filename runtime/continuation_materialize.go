@@ -499,6 +499,11 @@ func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context
 	if err != nil {
 		return false, false, err
 	}
+	bundleActions, err := r.store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", "authority_bundle_request", 100)
+	if err != nil {
+		return false, false, err
+	}
+	actions = append(actions, bundleActions...)
 	var deferredConflicts []recoveryApprovalDeferredConflict
 	for _, action := range actions {
 		consumable, invalid := recoveryApprovalNextActionConsumable(action)
@@ -812,13 +817,21 @@ func recoveryApprovalNextActionConsumable(action session.NextActionRecord) (bool
 	if action.State != session.NextActionBlockedNeedsAuthority {
 		return false, false
 	}
-	if strings.TrimSpace(action.SubjectKind) != "continuation_lease_request" {
+	if strings.TrimSpace(action.OperationTool) != "request_approval" {
 		return false, false
 	}
-	if strings.TrimSpace(action.ResourceBlocker) != "missing_continuation_lease" {
-		return false, false
-	}
-	if strings.TrimSpace(action.OperationTool) != "request_approval" || strings.TrimSpace(action.OperationKind) != "continuation_lease_request" {
+	switch strings.TrimSpace(action.OperationKind) {
+	case "continuation_lease_request":
+		if strings.TrimSpace(action.SubjectKind) != "continuation_lease_request" ||
+			strings.TrimSpace(action.ResourceBlocker) != "missing_continuation_lease" {
+			return false, false
+		}
+	case "authority_bundle_request":
+		if strings.TrimSpace(action.SubjectKind) != "authority_bundle_request" ||
+			strings.TrimSpace(action.ResourceBlocker) != "authority_bundle_approval" {
+			return false, false
+		}
+	default:
 		return false, false
 	}
 	if strings.TrimSpace(action.OperationInputJSON) == "" {
@@ -836,15 +849,21 @@ func recoveryApprovalNextActionConsumable(action session.NextActionRecord) (bool
 }
 
 func recoveryApprovalHandoffInputConsumable(input recoveryApprovalHandoffInput) bool {
-	if strings.TrimSpace(input.RecoveryContract) != "aphelion.recovery_handoff.v1" ||
-		strings.TrimSpace(input.RecoveryOperationKind) != "continuation_lease_request" {
+	if strings.TrimSpace(input.RecoveryContract) != "aphelion.recovery_handoff.v1" {
 		return false
 	}
-	if strings.TrimSpace(input.Action) != "request_continuation_lease" ||
-		strings.TrimSpace(input.ContractID) == "" {
+	operationKind := strings.TrimSpace(input.RecoveryOperationKind)
+	action := strings.TrimSpace(input.Action)
+	if operationKind == "continuation_lease_request" && action == "request_continuation_lease" && strings.TrimSpace(input.ContractID) != "" {
+		return true
+	}
+	if operationKind == "authority_bundle_request" && action == "request_authority_bundle" && strings.TrimSpace(input.ContractID) != "" {
+		return true
+	}
+	if strings.TrimSpace(input.ContractID) == "" {
 		return false
 	}
-	return true
+	return false
 }
 
 func (r *Runtime) attachOperationPhaseRecoveryContract(key session.SessionKey, msg core.InboundMessage, phase session.OperationPhase, state session.ContinuationState, now time.Time) (session.ContinuationState, error) {

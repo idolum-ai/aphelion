@@ -100,6 +100,15 @@ Open language should be interpreted by a layer that can disambiguate, ask for
 context, and return typed claims or proposed actions. The runtime can then
 validate those claims against contracts and evidence.
 
+One-time authority should default to generic continuation recovery, not a new
+pre-coded grant type. If work is blocked by several narrow approvals, Aphelion
+may compile a broad-but-specific authority bundle from the typed blockers: what
+is allowed, what remains forbidden, the exact stop conditions, the durable
+contracts it satisfies, and the review surface that can approve it. A new
+authority type belongs in code only when it carries durable enforcement value or
+useful aggregate labeling across repeated workflows; otherwise the one-time
+case should stay a compiled recovery contract.
+
 Unknown edge cases are expected. The answer is not to pretend every phrase can
 be exhaustively matched; the answer is to preserve enough structure, evidence,
 fallbacks, and emergency protocols that the system can stop, ask, recover, or

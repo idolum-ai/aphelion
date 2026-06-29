@@ -38,6 +38,12 @@ func RecoveryTransitionSpecs() []RecoveryTransitionSpec {
 		},
 		{
 			State:         session.NextActionBlockedNeedsAuthority,
+			OperationKind: "authority_bundle_request",
+			OperationTool: "request_approval",
+			Adapter:       "authority_bundle_recovery",
+		},
+		{
+			State:         session.NextActionBlockedNeedsAuthority,
 			OperationKind: "capability_grant_review",
 			OperationTool: "capability_authority",
 			Adapter:       "missing_capability_grant",
@@ -246,11 +252,17 @@ func ValidateRecoveryHandoffToolInput(state session.NextActionState, toolName st
 		if err := decodeToolObjectInput(json.RawMessage(raw), &in, "request_approval"); err != nil {
 			return err
 		}
-		if requestApprovalActionToken(in.Action) != "request_continuation_lease" {
-			return fmt.Errorf("request_approval recovery handoff must request a continuation lease")
-		}
-		if strings.TrimSpace(in.ContractID) == "" {
-			return fmt.Errorf("request_approval recovery handoff requires continuation recovery contract_id")
+		switch requestApprovalActionToken(in.Action) {
+		case "request_continuation_lease":
+			if strings.TrimSpace(in.ContractID) == "" {
+				return fmt.Errorf("request_approval recovery handoff requires continuation recovery contract_id")
+			}
+		case "request_authority_bundle":
+			if strings.TrimSpace(in.ContractID) == "" {
+				return fmt.Errorf("request_approval recovery handoff requires authority bundle contract_id")
+			}
+		default:
+			return fmt.Errorf("request_approval recovery handoff must request a continuation lease or authority bundle")
 		}
 		return nil
 	case "capability_authority":

@@ -53,6 +53,13 @@ The execution-authority spine is:
    handoff, creates the pending `ContinuationLease` through the existing
    approval compiler, and then renders the approval card. It does not auto-grant
    the lease or execute unrelated next actions.
+10. When several one-time authority blockers serve one bounded objective,
+    Aphelion may compile them into an `authority_bundle` contract instead of
+    forcing the operator through one card per narrow stop. The bundle is still a
+    typed recovery handoff: it names the source blocker rows, allowed actions,
+    forbidden actions, stop conditions, primary continuation contract, required
+    grant specs, expiry, and principal. Model-authored wording can draft the
+    operator summary, but approval materializes only the compiled contract.
 
 Recovery transitions are the navigable graph between these stops. A transition
 is not just a message; it is a `next_action_record` whose state, subject,
@@ -74,6 +81,12 @@ and recovery handoff messages must be built from safe structured fields or
 protected evidence references. A ready-to-execute transition whose executable
 operands are redacted is downgraded to operator rewrite rather than preserving a
 non-hydratable operation.
+
+Generic authority bundles are the preferred one-time recovery shape. A new
+bespoke authority class should be introduced only when the system needs durable
+enforcement semantics or recurring aggregate labels that cannot be represented
+by the compiled bundle contract. This keeps specific authority types meaningful
+instead of turning every incident into another hardcoded grant.
 
 Context may select durable run authority, but it may not manufacture authority.
 Durable state remains canonical.

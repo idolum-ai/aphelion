@@ -440,6 +440,13 @@ func migrateSchemaV83ToV84(tx *sql.Tx) error {
 	return nil
 }
 
+func migrateSchemaV84ToV85(tx *sql.Tx) error {
+	if err := ensureAuthorityBundleTables(tx); err != nil {
+		return fmt.Errorf("migrate schema v84 to v85 ensure authority bundle contracts: %w", err)
+	}
+	return nil
+}
+
 func ensureExecutionRunAuthorityChildTaskLeaseKind(tx *sql.Tx) error {
 	exists, err := schemaTableExists(tx, "execution_run_authority")
 	if err != nil {
@@ -580,6 +587,7 @@ func ensureCurrentSchemaShapeRepairColumns(tx *sql.Tx) error {
 		{name: "child task lease columns", fn: ensureChildTaskLeaseColumns},
 		{name: "review event idempotency key", fn: ensureReviewEventIdempotencyKey},
 		{name: "continuation recovery contracts", fn: ensureContinuationRecoveryContractTables},
+		{name: "authority bundle contracts", fn: ensureAuthorityBundleTables},
 	}
 	for _, repair := range repairs {
 		if err := repair.fn(tx); err != nil {

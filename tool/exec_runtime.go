@@ -111,6 +111,8 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.evidenceHydrate(ctx, input, key)
 	case "update_operation":
 		return r.updateOperation(ctx, input, key)
+	case authorityBundleToolName:
+		return r.authorityBundle(ctx, input, p, key)
 	case "request_approval":
 		return r.requestApproval(ctx, input, key, p)
 	case "operation_artifact":
