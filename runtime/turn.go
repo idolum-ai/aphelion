@@ -90,14 +90,16 @@ func (r *Runtime) handleInteractiveInboundTurnWithOptions(ctx context.Context, m
 	if handled, result, err := r.maybeHandleApprovedContinuationRunIntent(ctx, msg, actor); handled {
 		return turnResultFromCore(result), err
 	}
+	tools := r.toolsForPrincipal(actor, key)
+	if handled, result, err := r.maybeHandleNaturalDurableAgentRequest(ctx, key, actor, msg, tools); handled {
+		return turnResultFromCore(result), err
+	}
 	stopTyping := r.startChatActionLoop(ctx, msg.ChatID, "typing")
 	defer stopTyping()
 	defer r.clearChatTurnPhase(msg.ChatID)
 
 	unlock := r.lockSession(key)
 	defer unlock()
-
-	tools := r.toolsForPrincipal(actor, key)
 
 	scope, err := r.scopeForPrincipal(actor)
 	if err != nil {
