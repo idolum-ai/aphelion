@@ -410,6 +410,185 @@ func TestOperationPhaseChildWakeCompilesRecoveryContractAndRunsApprovedRetry(t *
 	}
 }
 
+func TestRequestApprovalChildWakePhaseDoesNotReuseClaimedParentPhaseLease(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	runner := &runtimeWakeRunner{}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store).WithDurableAgentWakeRunner(runner)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9074, UserID: 0, Scope: telegramDMScopeRef(9074)}
+	seedRuntimeWakeAgent(t, store, "idolum-email", true)
+	grant := seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-idolum-email-gog-smoke-test",
+		Objective: "Create a fresh bounded approval for one idolum-email child_wake.",
+		Status:    session.OperationStatusActive,
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed operation) err = %v", err)
+	}
+
+	now := time.Now().UTC()
+	parentPhaseID := "phase-idolum-email-gog-smoke-test-idolum-email-fresh-readonly-host-report-wake-v1"
+	parentLeaseID := "lease-" + parentPhaseID
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusIdle,
+		DecisionID:     parentPhaseID,
+		Objective:      "Create a fresh bounded approval for one idolum-email child_wake.",
+		StageSummary:   "Create a fresh bounded approval.",
+		RemainingTurns: 0,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-" + parentPhaseID,
+			Summary:        "Create a fresh bounded approval.",
+			RiskClass:      "capability_grant",
+			AllowedActions: []string{"request_approval"},
+			Status:         session.ProposalStatusApproved,
+			PlanHash:       "parent-phase-plan-hash",
+			ExpiresAt:      now.Add(time.Hour),
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             parentLeaseID,
+			ProposalID:     "aprop-" + parentPhaseID,
+			Status:         session.ContinuationLeaseStatusConsumed,
+			MaxTurns:       1,
+			RemainingTurns: 0,
+			ApprovedBy:     1001,
+			AllowedActions: []string{"request_approval"},
+			LeaseClass:     session.ContinuationLeaseClassCapabilityGrant,
+			PlanHash:       "parent-phase-plan-hash",
+			ApprovedAt:     now,
+			ExpiresAt:      now.Add(time.Hour),
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState(parent consumed phase) err = %v", err)
+	}
+	parentRun, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "parent request_approval phase turn")
+	if err != nil {
+		t.Fatalf("BeginTurnRun(parent) err = %v", err)
+	}
+	if _, err := store.UpsertExecutionRunAuthority(session.ExecutionRunAuthority{
+		TurnRunID:           parentRun.ID,
+		SessionID:           parentRun.SessionID,
+		ChatID:              parentRun.ChatID,
+		UserID:              parentRun.UserID,
+		Scope:               parentRun.Scope,
+		Principal:           "telegram:1001",
+		PrincipalRole:       string(principal.RoleAdmin),
+		ExecutionSpecies:    "direct_continuation",
+		LeaseKind:           session.ExecutionAuthorityLeaseKindContinuation,
+		ContinuationLeaseID: parentLeaseID,
+		LeaseStatus:         string(session.ContinuationLeaseStatusActive),
+		LeaseRemainingTurns: 1,
+		LeaseClass:          session.ContinuationLeaseClassCapabilityGrant,
+		LeaseAllowedActions: []string{"request_approval"},
+		LeaseExpiresAt:      now.Add(time.Hour),
+		AdmittedAt:          now,
+	}); err != nil {
+		t.Fatalf("UpsertExecutionRunAuthority(parent claimed lease) err = %v", err)
+	}
+	if err := store.CompleteTurnRun(parentRun.ID, session.TurnRunStatusCompleted, ""); err != nil {
+		t.Fatalf("CompleteTurnRun(parent) err = %v", err)
+	}
+
+	phaseRequest := fmt.Sprintf(`{
+		"objective":"Create a fresh bounded approval for one idolum-email child_wake.",
+		"phase":{
+			"id":"%s",
+			"summary":"Invoke durable_agent wake_once for idolum-email exactly once.",
+			"authority_class":"child_wake",
+			"why_now":"The child has pending parent guidance and needs one bounded wake.",
+			"bounded_effect":"Invoke durable_agent wake_once for idolum-email exactly once; stop after one result or typed blocker.",
+			"allowed_actions":["wake_named_child"],
+			"forbidden_actions":["wake_unnamed_child","unbounded_retry_loop","access_mailbox_contents","read_secret_values"],
+			"validation_plan":["verify one child wake result or typed pre-child failure"],
+			"required_capability_grants":[{
+				"grant_id":%q,
+				"kind":"generic_delegation",
+				"target_resource":%q,
+				"granted_to":"telegram:1001",
+				"allowed_actions":["invoke"],
+				"constraints":{"agent_id":"idolum-email"}
+			}]
+		}
+	}`, parentPhaseID, grant.GrantID, grant.TargetResource)
+	toolCtx := toolpkg.WithToolInvocationRef(context.Background(), toolpkg.ToolInvocationRef{
+		TurnRunID:    parentRun.ID,
+		InvocationID: fmt.Sprintf("turn:%d:tool:request_approval", parentRun.ID),
+	})
+	out, err := tools.ExecuteForSessionPrincipal(
+		toolCtx,
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"request_approval",
+		json.RawMessage(phaseRequest),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(request_approval child_wake phase) err = %v", err)
+	}
+	if !strings.Contains(out, "[APPROVAL_REQUESTED]") {
+		t.Fatalf("request_approval output = %q, want approval requested", out)
+	}
+	pending, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(child_wake pending) err = %v", err)
+	}
+	if pending.Status != session.ContinuationStatusPending ||
+		pending.ContinuationLease.LeaseClass != session.ContinuationLeaseClassChildWake ||
+		pending.ContinuationLease.RecoveryContractID == "" ||
+		strings.TrimSpace(pending.ContinuationLease.Constraints["agent_id"]) != "idolum-email" {
+		t.Fatalf("pending continuation = %#v, want contract-backed child_wake approval", pending)
+	}
+	if pending.ContinuationLease.ID == parentLeaseID {
+		t.Fatalf("child_wake lease id reused claimed parent lease %q", parentLeaseID)
+	}
+
+	if _, err := rt.ApproveContinuationForKey(key, 1001); err != nil {
+		t.Fatalf("ApproveContinuationForKey(child_wake phase request) err = %v", err)
+	}
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:       9074,
+		SenderID:     1001,
+		SenderName:   "admin",
+		Text:         "[user pressed continue button: resume the previous task]",
+		MessageID:    2,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound(approved child_wake retry) err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "Running approved continuation") {
+		t.Fatalf("HandleInbound(approved child_wake retry) result = %#v, want running acknowledgement", result)
+	}
+	if got := fmt.Sprint(runner.calls); got != "[idolum-email]" {
+		t.Fatalf("wake runner calls = %s, want [idolum-email]", got)
+	}
+}
+
 func TestOperationPhaseChildWakeMaterializesGuidanceBeforeApprovedRetry(t *testing.T) {
 	t.Parallel()
 

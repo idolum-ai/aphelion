@@ -112,7 +112,7 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	case "update_operation":
 		return r.updateOperation(ctx, input, key)
 	case "request_approval":
-		return r.requestApproval(ctx, input, key)
+		return r.requestApproval(ctx, input, key, p)
 	case "operation_artifact":
 		return r.operationArtifact(ctx, input, scope, key)
 	case "update_plan":
