@@ -544,6 +544,9 @@ func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context
 				return false, false, fmt.Errorf("materialize recovery approval handoff %s after adjudication: %w", action.RecordID, err)
 			}
 		}
+		if err := r.sendMaterializedRecoveryApprovalOfferLocked(ctx, key, msg, action, now); err != nil {
+			return false, false, err
+		}
 		if err := r.resolveDeferredRecoveryApprovalConflicts(key, deferredConflicts, action.RecordID, "superseded_by_later_recovery_handoff", now); err != nil {
 			return false, false, err
 		}
@@ -558,7 +561,7 @@ func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context
 		}); err != nil {
 			return false, false, fmt.Errorf("resolve recovery approval handoff %s: %w", action.RecordID, err)
 		}
-		return true, true, nil
+		return true, false, nil
 	}
 	if len(deferredConflicts) > 0 {
 		selected := newestRecoveryApprovalDeferredConflict(deferredConflicts)
@@ -571,6 +574,43 @@ func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context
 		return true, false, nil
 	}
 	return false, false, nil
+}
+
+func (r *Runtime) sendMaterializedRecoveryApprovalOfferLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, action session.NextActionRecord, now time.Time) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	state, exists, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return fmt.Errorf("load recovery approval continuation for handoff %s: %w", strings.TrimSpace(action.RecordID), err)
+	}
+	if !exists {
+		return fmt.Errorf("recovery approval handoff %s did not create continuation state", strings.TrimSpace(action.RecordID))
+	}
+	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusPending || state.ContinuationLease.Status != session.ContinuationLeaseStatusPending {
+		return fmt.Errorf("recovery approval handoff %s produced non-pending continuation", strings.TrimSpace(action.RecordID))
+	}
+	alreadyOffered, err := continuationApprovalAlreadyOffered(state, r.store, key)
+	if err != nil {
+		return fmt.Errorf("read delivered recovery approval offers: %w", err)
+	}
+	if alreadyOffered {
+		return nil
+	}
+	payload := continuationExecutionPayload(state)
+	payload["materialized_from"] = "recovery_approval_handoff"
+	payload["recovery_next_action_id"] = strings.TrimSpace(action.RecordID)
+	payload["recovery_operation_kind"] = strings.TrimSpace(action.OperationKind)
+	payload["recovery_subject_kind"] = strings.TrimSpace(action.SubjectKind)
+	payload["recovery_subject_ref"] = strings.TrimSpace(action.SubjectRef)
+	if err := r.sendAndRecordContinuationOfferLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "recovery_approval_handoff", payload, now); err != nil {
+		return fmt.Errorf("send recovery approval continuation offer for handoff %s: %w", strings.TrimSpace(action.RecordID), err)
+	}
+	return nil
 }
 
 type recoveryApprovalDeferredConflict struct {

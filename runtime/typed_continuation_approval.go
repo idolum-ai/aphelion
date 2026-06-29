@@ -114,7 +114,7 @@ func isPendingContinuationApprovalSurfaceText(text string) bool {
 	if strings.Contains(value, "card") || strings.Contains(value, "prompt") {
 		return true
 	}
-	for _, marker := range []string{"surface", "show", "send", "materialize", "create", "display"} {
+	for _, marker := range []string{"surface", "show", "send", "materialize", "display"} {
 		if strings.Contains(value, marker) {
 			return true
 		}

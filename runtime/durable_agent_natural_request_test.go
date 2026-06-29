@@ -151,6 +151,89 @@ func TestNaturalIdolumEmailRecommendationQueuesBoundedWakeApproval(t *testing.T)
 	}
 }
 
+func TestNaturalIdolumEmailRequestWithApprovalBundleLanguageBypassesStaleBlockedPhase(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, _ := newNaturalDurableAgentRequestRuntime(t, cfg, store, provider, sender)
+	seedRealChildWakeAgent(t, store, "idolum-email")
+	seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+
+	key := session.SessionKey{ChatID: 9404, UserID: 0, Scope: telegramDMScopeRef(9404)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "idolum-email-gog-smoke-test",
+		Objective: "Finish idolum-email setup.",
+		Status:    session.OperationStatusActive,
+		Stage:     "wide_specific_authority_contract_proposal",
+		Summary:   "A prior blocked phase asked for a wide but specific authority contract.",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "idolum-email-finish-child-setup-less-ceremony",
+			Goal:           "Finish idolum-email setup without step-by-step ceremony.",
+			CurrentPhaseID: "idolum-email-wide-specific-finish-setup-contract-v1",
+			Phases: []session.OperationPhase{{
+				ID:               "idolum-email-wide-specific-finish-setup-contract-v1",
+				Summary:          "Wide but specific authority contract for finishing idolum-email setup through one report/archive cycle.",
+				Status:           session.PlanStatusPending,
+				AuthorityClass:   "mailbox_report",
+				RequiresApproval: true,
+				RequiresConsent:  true,
+				GateLevel:        "hard_consent_block",
+				GateReasonCode:   "operator_consent",
+				WhyNow:           "A stale phase still exists in operation state.",
+				BoundedEffect:    "Do not render this stale blocked phase over a fresh natural admin request.",
+				AllowedActions:   []string{"draft_authority_bundle"},
+				ForbiddenActions: []string{"mailbox_mutation", "external_contact"},
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(stale blocked phase) err = %v", err)
+	}
+
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     9404,
+		ChatType:   "private",
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "Please complete the setup of the idolum email system and then let me know which unread job or opportunity emails I should not miss. If you require broader, one-time authorization, create a bounded approval bundle with allowed actions, forbidden actions, and stop conditions.",
+		MessageID:  1,
+		Origin:     core.InboundOriginUser,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound(natural request with approval-bundle language) err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "queued idolum-email") || !strings.Contains(result.Text, "bounded wake approval") {
+		t.Fatalf("result = %#v, want natural durable-agent request to queue child wake approval", result)
+	}
+	if strings.Contains(result.Text, "pending continuation approval") {
+		t.Fatalf("result text = %q, stale approval materialization preempted natural request", result.Text)
+	}
+	pending, err := rt.pendingDurableAgentParentConversation("idolum-email", 20)
+	if err != nil {
+		t.Fatalf("pendingDurableAgentParentConversation() err = %v", err)
+	}
+	if len(pending) == 0 {
+		t.Fatal("pending parent messages = 0, want queued child guidance")
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline cards = %d, want one bounded wake approval card", inlineCount)
+	}
+	if !strings.Contains(inlineText, "idolum-email") || !strings.Contains(inlineText, "wake only idolum-email once") {
+		t.Fatalf("inline approval = %q, want exact idolum-email wake approval", inlineText)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if hasExecutionEventPayload(events, core.ExecutionEventContinuationBlocked, "waiting for explicit consent") {
+		t.Fatalf("events = %#v, stale blocked phase should not preempt natural request", events)
+	}
+}
+
 func TestNaturalDurableAgentRequestRequiresAdminPrivateSurface(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, _ := newNaturalDurableAgentRequestRuntime(t, cfg, store, provider, sender)
