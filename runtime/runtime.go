@@ -533,7 +533,39 @@ func (r *Runtime) faceName() string {
 
 func (r *Runtime) AgentFunc() core.AgentFunc {
 	return func(ctx context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
-		return r.HandleInbound(ctx, msg)
+		result, err := r.HandleInbound(ctx, msg)
+		r.completeDispatchableTelegramIngressAfterAgent(ctx, msg, err)
+		return result, err
+	}
+}
+
+func (r *Runtime) completeDispatchableTelegramIngressAfterAgent(ctx context.Context, msg core.InboundMessage, turnErr error) {
+	if r == nil || r.store == nil {
+		return
+	}
+	surface := strings.TrimSpace(msg.IngressSurface)
+	if surface == "" || msg.IngressUpdateID <= 0 {
+		return
+	}
+	record, ok, err := r.store.TelegramIngressUpdate(surface, msg.IngressUpdateID)
+	if err != nil {
+		log.Printf("WARN lookup telegram ingress after agent failed surface=%s update_id=%d err=%v", surface, msg.IngressUpdateID, err)
+		return
+	}
+	if !ok || !session.TelegramIngressUpdateStatusDispatchable(record.Status) {
+		return
+	}
+	status := session.TelegramIngressUpdateCompleted
+	errorText := ""
+	if turnErr != nil {
+		status = session.TelegramIngressUpdateFailed
+		if errors.Is(turnErr, context.Canceled) || ctx.Err() != nil {
+			status = session.TelegramIngressUpdateDropped
+		}
+		errorText = trimError(turnErr.Error())
+	}
+	if err := r.store.MarkTelegramIngressCompleted(surface, msg.IngressUpdateID, 0, status, errorText, time.Now().UTC()); err != nil {
+		log.Printf("WARN complete dispatchable telegram ingress after agent failed surface=%s update_id=%d status=%s err=%v", surface, msg.IngressUpdateID, status, err)
 	}
 }
 
