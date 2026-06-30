@@ -131,6 +131,11 @@ func (r *Registry) compileAuthorityBundleFromInput(in authorityBundleInput, key 
 		requiredGrants = append(requiredGrants, requestApprovalContinuationLeaseGrantSpecs(requirement)...)
 		components = append(components, session.AuthorityBundleComponent{Kind: "continuation_recovery_contract", RefID: primaryContractID, Subject: contract.SubjectKind, SubjectRef: contract.SubjectRef})
 	}
+	var err error
+	requiredGrants, err = r.authorityBundleRequiredGrantSpecs(requiredGrants)
+	if err != nil {
+		return session.AuthorityBundleContract{}, err
+	}
 	expiresAt, err := parseOptionalAuthorityBundleTime(in.ExpiresAt)
 	if err != nil {
 		return session.AuthorityBundleContract{}, err
@@ -158,6 +163,79 @@ func (r *Registry) compileAuthorityBundleFromInput(in authorityBundleInput, key 
 		ExpiresAt:                     expiresAt,
 		CreatedAt:                     now,
 	})
+}
+
+func (r *Registry) authorityBundleRequiredGrantSpecs(specs []session.CapabilityGrantSpec) ([]session.CapabilityGrantSpec, error) {
+	specs = session.NormalizeCapabilityGrantSpecs(specs)
+	out := make([]session.CapabilityGrantSpec, 0, len(specs))
+	for _, spec := range specs {
+		resolved, covered, err := r.resolveAuthorityBundleRequiredGrantSpec(spec)
+		if err != nil {
+			return nil, err
+		}
+		if covered {
+			continue
+		}
+		out = append(out, resolved)
+	}
+	return session.NormalizeCapabilityGrantSpecs(out), nil
+}
+
+func (r *Registry) resolveAuthorityBundleRequiredGrantSpec(spec session.CapabilityGrantSpec) (session.CapabilityGrantSpec, bool, error) {
+	spec = session.NormalizeCapabilityGrantSpec(spec)
+	request := session.CapabilityRequest{}
+	if spec.RequestID != "" {
+		stored, ok, err := r.store.CapabilityRequest(spec.RequestID)
+		if err != nil {
+			return session.CapabilityGrantSpec{}, false, err
+		}
+		if !ok {
+			return session.CapabilityGrantSpec{}, false, fmt.Errorf("authority_bundle capability request %q not found", spec.RequestID)
+		}
+		request = session.NormalizeCapabilityRequest(stored)
+		if request.ReviewStatus != session.CapabilityReviewStatusApproved &&
+			request.ReviewStatus != session.CapabilityReviewStatusParentApproved &&
+			request.ReviewStatus != session.CapabilityReviewStatusProposed {
+			return session.CapabilityGrantSpec{}, false, fmt.Errorf("authority_bundle capability request %q has unsupported status %s", spec.RequestID, request.ReviewStatus)
+		}
+	}
+	if spec.Kind == "" {
+		spec.Kind = request.Kind
+	}
+	if spec.TargetResource == "" {
+		spec.TargetResource = request.TargetResource
+	}
+	if spec.GrantedTo == "" {
+		spec.GrantedTo = firstNonEmpty(request.RequestedFor, request.RequestedBy)
+	}
+	if spec.GrantID == "" {
+		spec.GrantID = strings.TrimSpace(request.GrantID)
+	}
+	if spec.Contract == "" {
+		spec.Contract = strings.TrimSpace(request.Contract)
+	}
+	if spec.Constraints == "" {
+		spec.Constraints = strings.TrimSpace(request.Constraints)
+	}
+	if len(spec.AllowedActions) == 0 {
+		spec.AllowedActions = []string{"invoke"}
+	}
+	spec = session.NormalizeCapabilityGrantSpec(spec)
+	if spec.Kind == "" || spec.TargetResource == "" || spec.GrantedTo == "" {
+		return session.CapabilityGrantSpec{}, false, fmt.Errorf("authority_bundle required capability grant spec for request %q is incomplete", spec.RequestID)
+	}
+	covered := true
+	for _, action := range spec.AllowedActions {
+		grant, ok, err := r.store.ActiveCapabilityGrant(spec.Kind, spec.TargetResource, spec.GrantedTo, action)
+		if err != nil {
+			return session.CapabilityGrantSpec{}, false, err
+		}
+		if !ok || grant.GrantID == "" {
+			covered = false
+			break
+		}
+	}
+	return spec, covered, nil
 }
 
 func (r *Registry) authorityBundleSourceActions(key session.SessionKey, in authorityBundleInput) ([]session.NextActionRecord, error) {

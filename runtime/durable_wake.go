@@ -1077,6 +1077,22 @@ func (r *Runtime) applyDurableWakeParentConversationAckIntent(agent core.Durable
 	if err := r.acknowledgeDurableAgentParentConversation(agentID, messages, intent.CreatedAt); err != nil {
 		return err
 	}
+	for _, messageID := range payload.MessageIDs {
+		messageID = strings.TrimSpace(messageID)
+		if messageID == "" || messageID == strings.TrimSpace(intent.PacketID) {
+			continue
+		}
+		if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+			Key:         r.durableAgentExecutionKey(agentID),
+			Owner:       "durable_wake",
+			SubjectKind: "task_packet",
+			SubjectRef:  messageID,
+			Reason:      "parent_conversation_acknowledged",
+			ResolvedAt:  intent.CreatedAt,
+		}); err != nil {
+			return err
+		}
+	}
 	if count, countErr := r.store.DurableAgentReviewEventCountSince(agentID, intent.CreatedAt); countErr != nil || count == 0 {
 		if err := r.queueDurableAgentParentConversationAck(*loaded, messages, payload.Summary, intent.CreatedAt); err != nil {
 			return err

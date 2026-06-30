@@ -130,6 +130,95 @@ func TestQueueCapabilityGrantWakeAddsParentConversation(t *testing.T) {
 	assertHasEventType(t, events, core.ExecutionEventDurableChildTaskResult)
 }
 
+func TestParentConversationAckClosesQueuedGrantTaskWaiterForClaimScopedPacket(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	_ = sender
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "child-claim-scoped-grant",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "manual_channel",
+		WakeupMode:         "manual",
+		Status:             "active",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Handle claim-scoped grant wake tests.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	grant := session.CapabilityGrant{
+		GrantID:        "capg-child-claim-scoped-grant",
+		RequestID:      "cap-child-claim-scoped-grant",
+		GrantedTo:      "durable_agent:child-claim-scoped-grant",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "gog_cli",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+	}
+	if err := rt.queueCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("queueCapabilityGrantWake() err = %v", err)
+	}
+	taskPacketID := capabilityGrantTaskPacketID(agent.AgentID, grant)
+	open, err := store.OpenNextActionsBySession(rt.durableAgentExecutionKey(agent.AgentID), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(queue) err = %v", err)
+	}
+	if len(open) != 1 || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionWaitingForChild {
+		t.Fatalf("open next actions after queue = %#v, want one grant task waiter", open)
+	}
+	pending, err := rt.pendingDurableAgentParentConversation(agent.AgentID, 10)
+	if err != nil {
+		t.Fatalf("pendingDurableAgentParentConversation() err = %v", err)
+	}
+	messageIDs := core.DurableAgentConversationMessageIDs(pending)
+	if len(messageIDs) != 1 || messageIDs[0] != taskPacketID {
+		t.Fatalf("pending message IDs = %#v, want queued grant task %q", messageIDs, taskPacketID)
+	}
+	claimPacketID := "child_task:claim-scoped-grant-task"
+	if claimPacketID == taskPacketID {
+		t.Fatalf("claim packet id = %q, want distinct from queued grant task", claimPacketID)
+	}
+	payloadRaw, _ := json.Marshal(map[string]any{
+		"agent_id":      agent.AgentID,
+		"message_ids":   messageIDs,
+		"message_count": len(messageIDs),
+		"summary":       "Grant incorporated through approved direct wake.",
+	})
+	if err := rt.applyDurableWakeParentConversationAckIntent(agent, session.ChildTaskOutcomeIntent{
+		PacketID:    claimPacketID,
+		ResultID:    "child_result:claim-scoped-grant-task",
+		Kind:        session.ChildTaskOutcomeIntentParentConversationAck,
+		PayloadJSON: string(payloadRaw),
+		CreatedAt:   time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("applyDurableWakeParentConversationAckIntent(claim-scoped grant task) err = %v", err)
+	}
+	open, err = store.OpenNextActionsBySession(rt.durableAgentExecutionKey(agent.AgentID), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(after claim ack) err = %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open next actions after claim-scoped ack = %#v, want consumed grant task waiter closed", open)
+	}
+	pending, err = rt.pendingDurableAgentParentConversation(agent.AgentID, 10)
+	if err != nil {
+		t.Fatalf("pendingDurableAgentParentConversation(after ack) err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending parent messages after ack = %#v, want consumed", pending)
+	}
+}
+
 func TestCapabilityGrantWakeRepeatedAttemptsRecordDistinctResults(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	_ = sender
