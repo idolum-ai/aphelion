@@ -105,17 +105,38 @@ func (r *Runtime) maybeHandleApprovedContinuationRunIntent(ctx context.Context, 
 
 func isPendingContinuationApprovalSurfaceText(text string) bool {
 	value := normalizeContinuationControlText(text)
-	if value == "" || childWakeRepairRetryTextNegated(value) {
+	if value == "" || childWakeRepairRetryTextNegated(value) || pendingApprovalTextNegated(value) {
 		return false
 	}
 	if !strings.Contains(value, "approval") && !strings.Contains(value, "approve") {
 		return false
+	}
+	if strings.Contains(value, "approve") || strings.Contains(value, "approved") {
+		return true
 	}
 	if strings.Contains(value, "card") || strings.Contains(value, "prompt") {
 		return true
 	}
 	for _, marker := range []string{"surface", "show", "send", "materialize", "display"} {
 		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func pendingApprovalTextNegated(value string) bool {
+	for _, phrase := range []string{
+		"do not approve",
+		"don't approve",
+		"dont approve",
+		"do not show approval",
+		"don't show approval",
+		"dont show approval",
+		"no approval",
+		"not approved",
+	} {
+		if value == phrase || strings.Contains(value, phrase) {
 			return true
 		}
 	}
@@ -150,10 +171,12 @@ func (r *Runtime) hasMaterializablePendingContinuationApproval(key session.Sessi
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	if actions, err := r.store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", "continuation_lease_request", 1); err != nil {
-		return false, err
-	} else if len(actions) > 0 {
-		return true, nil
+	for _, operationKind := range []string{"continuation_lease_request", "authority_bundle_request"} {
+		if actions, err := r.store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", operationKind, 1); err != nil {
+			return false, err
+		} else if len(actions) > 0 {
+			return true, nil
+		}
 	}
 	_, opState, exists, err := r.store.PlanAndOperationStateIfExists(key)
 	if err != nil {

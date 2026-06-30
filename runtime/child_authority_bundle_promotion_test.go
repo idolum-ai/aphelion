@@ -12,6 +12,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	toolpkg "github.com/idolum-ai/aphelion/tool"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -403,6 +404,132 @@ func TestHandleInboundPromotesExistingChildAuthorityBundleAfterOrdinaryReply(t *
 	}
 }
 
+func TestPendingAuthorityBundleHandoffMaterializesThroughGenericApprovalSurface(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	parentKey := session.SessionKey{ChatID: 1001, Scope: telegramDMScopeRef(1001)}
+	seedParentAuthorityBundleHandoff(t, store, parentKey, "idolum-email", "generic-surface")
+
+	handled, result, err := rt.maybeHandleApprovedContinuationRunIntent(
+		context.Background(),
+		core.InboundMessage{
+			ChatID:     parentKey.ChatID,
+			ChatType:   "private",
+			SenderID:   1001,
+			SenderName: "admin",
+			Text:       "show the approval card",
+			MessageID:  90,
+			Timestamp:  time.Now().UTC(),
+		},
+		principalAdminForTest(),
+	)
+	if err != nil {
+		t.Fatalf("maybeHandleApprovedContinuationRunIntent() err = %v", err)
+	}
+	if !handled || result == nil || !strings.Contains(result.Text, "surfaced") {
+		t.Fatalf("handled=%v result=%#v, want pending authority bundle approval surfaced", handled, result)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one approval card", inlineCount)
+	}
+	for _, want := range []string{"Requires:", "idolum-email", "gog_cli:job-search-mailbox", "Stop: stop after one report"} {
+		if !strings.Contains(inlineText, want) {
+			t.Fatalf("inline text = %q, want %q", inlineText, want)
+		}
+	}
+	state, err := store.ContinuationState(parentKey)
+	if err != nil {
+		t.Fatalf("ContinuationState(parent) err = %v", err)
+	}
+	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusPending ||
+		state.ContinuationLease.Status != session.ContinuationLeaseStatusPending ||
+		state.ActionProposal.RiskClass != "authority_bundle" ||
+		state.ContinuationLease.Constraints["agent_id"] != "idolum-email" ||
+		state.ContinuationLease.Constraints["authority_bundle_id"] == "" {
+		t.Fatalf("continuation state = %#v, want pending authority-bundle child_wake approval", state)
+	}
+	if len(state.ContinuationLease.RequiredCapabilityGrants) != 1 ||
+		state.ContinuationLease.RequiredCapabilityGrants[0].TargetResource != "gog_cli:job-search-mailbox" {
+		t.Fatalf("required grants = %#v, want gog_cli bundle grant", state.ContinuationLease.RequiredCapabilityGrants)
+	}
+}
+
+func TestPlainApprovalTextMaterializesAuthorityBundleHandoffBeforeModelTurn(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "I will need approval before I can do that."
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	parentKey := session.SessionKey{ChatID: 1001, Scope: telegramDMScopeRef(1001)}
+	bundleID := seedParentAuthorityBundleHandoff(t, store, parentKey, "idolum-email", "plain-approval")
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     parentKey.ChatID,
+		ChatType:   "private",
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "I approve " + bundleID,
+		MessageID:  91,
+		Timestamp:  time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "surfaced") {
+		t.Fatalf("HandleInbound result = %#v, want card-surface response before model turn", result)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sentCount := len(sender.sent)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d sent=%d, want one approval card", inlineCount, sentCount)
+	}
+}
+
 func seedChildAuthorityBundleRequest(t *testing.T, store *session.SQLiteStore, childKey session.SessionKey, agentID string) {
 	t.Helper()
 
@@ -459,4 +586,88 @@ func seedChildAuthorityBundleRequest(t *testing.T, store *session.SQLiteStore, c
 	}); err != nil {
 		t.Fatalf("RecordNextAction(child authority bundle) err = %v", err)
 	}
+}
+
+func seedParentAuthorityBundleHandoff(t *testing.T, store *session.SQLiteStore, parentKey session.SessionKey, agentID string, requestToken string) string {
+	t.Helper()
+
+	now := time.Now().UTC()
+	continuationContract, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID: "parent-bundle-child-wake-" + strings.TrimSpace(requestToken),
+		SessionID:         session.SessionIDForKey(parentKey),
+		SubjectKind:       "continuation_lease_request",
+		Principal:         "telegram:1001",
+		LeaseClass:        session.ContinuationLeaseClassChildWake,
+		AllowedActions:    []string{"wake_named_child"},
+		Constraints:       map[string]string{"agent_id": strings.TrimSpace(agentID)},
+		Tool:              "durable_agent",
+		ToolAction:        "wake_once",
+		AgentID:           strings.TrimSpace(agentID),
+		CreatedAt:         now,
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract(parent) err = %v", err)
+	}
+	continuationContract, err = store.UpsertContinuationRecoveryContract(continuationContract)
+	if err != nil {
+		t.Fatalf("UpsertContinuationRecoveryContract(parent) err = %v", err)
+	}
+	bundle, err := session.CompileAuthorityBundleContract(session.AuthorityBundleContractInput{
+		RequestInstanceID:             "parent-authority-bundle-" + strings.TrimSpace(requestToken),
+		SessionID:                     session.SessionIDForKey(parentKey),
+		Principal:                     "telegram:1001",
+		Objective:                     "Finish one bounded child setup and report cycle.",
+		Summary:                       "Use bounded child-local gog_cli read/search access to produce one report and stop.",
+		AllowedActions:                []string{"wake_named_child", "gog_cli_search", "gog_cli_read_metadata", "rank_opportunities", "produce_report"},
+		ForbiddenActions:              []string{"credential_or_token_output", "send_email", "delete_email", "unbounded_retry_loop", "deploy_or_restart"},
+		StopConditions:                []string{"stop after one report", "stop on any typed blocker requiring new authority"},
+		PrimaryContinuationContractID: continuationContract.ContractID,
+		RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+			GrantID:        "grant-" + strings.TrimSpace(requestToken) + "-gog-cli-read-search",
+			Kind:           session.CapabilityKindTool,
+			TargetResource: "gog_cli:job-search-mailbox",
+			GrantedTo:      "durable_agent:" + strings.TrimSpace(agentID),
+			AllowedActions: []string{"invoke", "search", "read", "metadata"},
+			Contract:       `{"bounded_effect":"Allow the child to search/read metadata needed for one opportunity report."}`,
+			Constraints:    `{"account":"job-search-mailbox","content_scope":"unread_job_opportunities"}`,
+		}},
+		CreatedAt: now,
+		ExpiresAt: now.Add(30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("CompileAuthorityBundleContract(parent) err = %v", err)
+	}
+	bundle, err = store.UpsertAuthorityBundleContract(bundle)
+	if err != nil {
+		t.Fatalf("UpsertAuthorityBundleContract(parent) err = %v", err)
+	}
+	inputJSON, err := promotedDurableChildAuthorityBundleOperationInput(bundle.BundleID)
+	if err != nil {
+		t.Fatalf("promotedDurableChildAuthorityBundleOperationInput(parent) err = %v", err)
+	}
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           session.NextActionRecordID(session.SessionIDForKey(parentKey), "authority_bundle_request", bundle.BundleID, session.NextActionBlockedNeedsAuthority, time.Unix(0, 0).UTC()),
+		Key:                parentKey,
+		Owner:              "tool",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "authority_bundle_request",
+		SubjectRef:         bundle.BundleID,
+		CausalRefs:         []string{"authority_bundle:" + bundle.BundleID},
+		NextAction:         "review the bounded authority bundle and approve only if the allowed, forbidden, and stop boundaries match the objective",
+		RequiredAuthority:  "authority_bundle",
+		ResourceBlocker:    "authority_bundle_approval",
+		RetryPolicy:        "retry_after_bundle_approval",
+		OperationKind:      "authority_bundle_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: inputJSON,
+		OperatorProjection: "Review bounded authority bundle.",
+		CreatedAt:          now,
+	}); err != nil {
+		t.Fatalf("RecordNextAction(parent authority bundle) err = %v", err)
+	}
+	return bundle.BundleID
+}
+
+func principalAdminForTest() principal.Principal {
+	return principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 }
