@@ -18,30 +18,72 @@ import (
 )
 
 func (r *Runtime) promoteDurableChildAuthorityBundleRequests(agent core.DurableAgent, childKey session.SessionKey, result session.ChildTaskResult, now time.Time) error {
+	parentKey := durableChildAuthorityBundleDefaultParentKey(agent)
+	_, err := r.promoteDurableChildAuthorityBundleRequestsToParent(parentKey, agent, childKey, result, now)
+	return err
+}
+
+func (r *Runtime) promoteDurableChildAuthorityBundleRequestsForParentKey(parentKey session.SessionKey, now time.Time) (int, error) {
 	if r == nil || r.store == nil {
-		return nil
+		return 0, nil
+	}
+	parentKey.Scope = session.NormalizeScopeRef(parentKey.Scope)
+	if parentKey.Scope.IsZero() {
+		parentKey.Scope = telegramDMScopeRef(parentKey.ChatID)
+	}
+	if parentKey.ChatID == 0 {
+		return 0, nil
+	}
+	agents, err := r.store.ListDurableAgents()
+	if err != nil {
+		return 0, fmt.Errorf("list durable agents for child authority bundle promotion: %w", err)
+	}
+	promoted := 0
+	for _, agent := range agents {
+		if strings.TrimSpace(agent.AgentID) == "" || agent.ReviewTargetChatID != parentKey.ChatID {
+			continue
+		}
+		childKey := session.SessionKey{ChatID: durableWakeSyntheticChatID(agent.AgentID), Scope: durableAgentScopeRef(agent)}
+		count, err := r.promoteDurableChildAuthorityBundleRequestsToParent(parentKey, agent, childKey, session.ChildTaskResult{}, now)
+		if err != nil {
+			return promoted, err
+		}
+		promoted += count
+	}
+	return promoted, nil
+}
+
+func durableChildAuthorityBundleDefaultParentKey(agent core.DurableAgent) session.SessionKey {
+	key := session.SessionKey{
+		ChatID: agent.ReviewTargetChatID,
+		Scope:  telegramDMScopeRef(agent.ReviewTargetChatID),
+	}
+	return key
+}
+
+func (r *Runtime) promoteDurableChildAuthorityBundleRequestsToParent(parentKey session.SessionKey, agent core.DurableAgent, childKey session.SessionKey, result session.ChildTaskResult, now time.Time) (int, error) {
+	if r == nil || r.store == nil {
+		return 0, nil
 	}
 	agentID := strings.TrimSpace(agent.AgentID)
-	if agentID == "" || agent.ReviewTargetChatID <= 0 {
-		return nil
+	if agentID == "" || parentKey.ChatID == 0 {
+		return 0, nil
+	}
+	parentKey.Scope = session.NormalizeScopeRef(parentKey.Scope)
+	if parentKey.Scope.IsZero() {
+		parentKey.Scope = telegramDMScopeRef(parentKey.ChatID)
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
 	actions, err := r.store.OpenNextActionsBySessionOperation(childKey, session.NextActionBlockedNeedsAuthority, "request_approval", "authority_bundle_request", 100)
 	if err != nil {
-		return fmt.Errorf("load child authority bundle requests: %w", err)
+		return 0, fmt.Errorf("load child authority bundle requests: %w", err)
 	}
 	if len(actions) == 0 {
-		return nil
+		return 0, nil
 	}
-	parentKey := session.SessionKey{
-		ChatID: agent.ReviewTargetChatID,
-		Scope:  telegramDMScopeRef(agent.ReviewTargetChatID),
-	}
-	if agent.ReviewTargetChatID > 0 {
-		parentKey.UserID = agent.ReviewTargetChatID
-	}
+	promotedCount := 0
 	for _, action := range actions {
 		consumable, invalid := recoveryApprovalNextActionConsumable(action)
 		if invalid {
@@ -54,7 +96,7 @@ func (r *Runtime) promoteDurableChildAuthorityBundleRequests(agent core.DurableA
 				Reason:      "invalid_child_authority_bundle_handoff",
 				ResolvedAt:  now,
 			}); err != nil {
-				return fmt.Errorf("resolve invalid child authority bundle handoff %s: %w", action.RecordID, err)
+				return promotedCount, fmt.Errorf("resolve invalid child authority bundle handoff %s: %w", action.RecordID, err)
 			}
 			continue
 		}
@@ -63,7 +105,7 @@ func (r *Runtime) promoteDurableChildAuthorityBundleRequests(agent core.DurableA
 		}
 		_, promoted, err := r.promoteDurableChildAuthorityBundleRequest(parentKey, childKey, agent, result, action, now)
 		if err != nil {
-			return err
+			return promotedCount, err
 		}
 		if !promoted {
 			continue
@@ -77,10 +119,11 @@ func (r *Runtime) promoteDurableChildAuthorityBundleRequests(agent core.DurableA
 			Reason:      "promoted_to_parent_authority_bundle",
 			ResolvedAt:  now,
 		}); err != nil {
-			return fmt.Errorf("resolve promoted child authority bundle handoff %s: %w", action.RecordID, err)
+			return promotedCount, fmt.Errorf("resolve promoted child authority bundle handoff %s: %w", action.RecordID, err)
 		}
+		promotedCount++
 	}
-	return nil
+	return promotedCount, nil
 }
 
 func (r *Runtime) promoteDurableChildAuthorityBundleRequest(parentKey session.SessionKey, childKey session.SessionKey, agent core.DurableAgent, result session.ChildTaskResult, action session.NextActionRecord, now time.Time) (session.NextActionRecord, bool, error) {
@@ -130,6 +173,13 @@ func (r *Runtime) promoteDurableChildAuthorityBundleRequest(parentKey session.Se
 	if expiresAt.IsZero() || expiresAt.After(now.Add(30*time.Minute)) {
 		expiresAt = now.Add(30 * time.Minute)
 	}
+	components := []session.AuthorityBundleComponent{
+		{Kind: "child_authority_bundle", RefID: childBundle.BundleID, Subject: action.SubjectKind, SubjectRef: action.SubjectRef},
+		{Kind: "continuation_recovery_contract", RefID: primary.ContractID, Subject: primary.SubjectKind, SubjectRef: primary.SubjectRef},
+	}
+	if strings.TrimSpace(result.ResultID) != "" {
+		components = append(components, session.AuthorityBundleComponent{Kind: "child_task_result", RefID: result.ResultID, Subject: "child_task_result", SubjectRef: result.PacketID})
+	}
 	parentBundle, err := session.CompileAuthorityBundleContract(session.AuthorityBundleContractInput{
 		RequestInstanceID:             requestInstanceID,
 		SessionID:                     session.SessionIDForKey(parentKey),
@@ -142,13 +192,9 @@ func (r *Runtime) promoteDurableChildAuthorityBundleRequest(parentKey session.Se
 		StopConditions:                append([]string(nil), childBundle.StopConditions...),
 		PrimaryContinuationContractID: primary.ContractID,
 		RequiredCapabilityGrants:      append([]session.CapabilityGrantSpec(nil), childBundle.RequiredCapabilityGrants...),
-		Components: []session.AuthorityBundleComponent{
-			{Kind: "child_authority_bundle", RefID: childBundle.BundleID, Subject: action.SubjectKind, SubjectRef: action.SubjectRef},
-			{Kind: "child_task_result", RefID: result.ResultID, Subject: "child_task_result", SubjectRef: result.PacketID},
-			{Kind: "continuation_recovery_contract", RefID: primary.ContractID, Subject: primary.SubjectKind, SubjectRef: primary.SubjectRef},
-		},
-		ExpiresAt: expiresAt,
-		CreatedAt: now,
+		Components:                    components,
+		ExpiresAt:                     expiresAt,
+		CreatedAt:                     now,
 	})
 	if err != nil {
 		return session.NextActionRecord{}, false, fmt.Errorf("compile parent authority bundle: %w", err)
@@ -162,6 +208,10 @@ func (r *Runtime) promoteDurableChildAuthorityBundleRequest(parentKey session.Se
 		return session.NextActionRecord{}, false, err
 	}
 	recordID := session.NextActionRecordID(session.SessionIDForKey(parentKey), "authority_bundle_request", parentBundle.BundleID, session.NextActionBlockedNeedsAuthority, time.Unix(0, 0).UTC())
+	causalRefs := []string{"authority_bundle:" + childBundle.BundleID, "next_action:" + strings.TrimSpace(action.RecordID)}
+	if strings.TrimSpace(result.ResultID) != "" {
+		causalRefs = append(causalRefs, "child_result:"+strings.TrimSpace(result.ResultID))
+	}
 	parentAction, err := r.store.RecordNextAction(session.NextActionInput{
 		RecordID:           recordID,
 		Key:                parentKey,
@@ -169,7 +219,7 @@ func (r *Runtime) promoteDurableChildAuthorityBundleRequest(parentKey session.Se
 		State:              session.NextActionBlockedNeedsAuthority,
 		SubjectKind:        "authority_bundle_request",
 		SubjectRef:         parentBundle.BundleID,
-		CausalRefs:         []string{"authority_bundle:" + childBundle.BundleID, "child_result:" + strings.TrimSpace(result.ResultID), "next_action:" + strings.TrimSpace(action.RecordID)},
+		CausalRefs:         causalRefs,
 		NextAction:         "review the child-authored bounded authority bundle and approve only if the boundaries match the current objective",
 		RequiredAuthority:  "authority_bundle",
 		ResourceBlocker:    "authority_bundle_approval",
@@ -217,6 +267,9 @@ func (r *Runtime) materializePromotedDurableChildAuthorityBundleAfterApprovedRet
 		now = time.Now().UTC()
 	}
 	agentID := firstNonEmpty(strings.TrimSpace(wakeResult.AgentID), strings.TrimSpace(result.AgentID))
+	if _, err := r.promoteDurableChildAuthorityBundleRequestsForParentKey(key, now); err != nil {
+		log.Printf("WARN promoted child authority bundle sweep failed agent_id=%s result_id=%s err=%v", agentID, strings.TrimSpace(result.ResultID), err)
+	}
 	senderID := reservation.ApprovedBy
 	if senderID == 0 {
 		senderID = key.UserID

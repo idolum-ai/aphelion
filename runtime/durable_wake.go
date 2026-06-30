@@ -440,9 +440,6 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 	if err != nil {
 		return fmt.Errorf("record durable wake child task result: %w", err)
 	}
-	if err := r.promoteDurableChildAuthorityBundleRequests(agent, key, result, time.Now().UTC()); err != nil {
-		log.Printf("WARN durable wake child authority bundle promotion failed agent_id=%s result_id=%s err=%v", agent.AgentID, result.ResultID, err)
-	}
 	if err := r.applyDurableWakeOutcomeIntents(context.Background(), agent, plan, result); err != nil {
 		log.Printf("WARN durable wake post-outcome intent processing failed agent_id=%s result_id=%s err=%v", agent.AgentID, result.ResultID, err)
 	}

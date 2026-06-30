@@ -495,6 +495,9 @@ func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context
 	if tools == nil {
 		return false, false, nil
 	}
+	if _, err := r.promoteDurableChildAuthorityBundleRequestsForParentKey(key, now); err != nil {
+		return false, false, err
+	}
 	actions, err := r.store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", "continuation_lease_request", 100)
 	if err != nil {
 		return false, false, err
