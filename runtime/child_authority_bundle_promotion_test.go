@@ -530,6 +530,181 @@ func TestPlainApprovalTextMaterializesAuthorityBundleHandoffBeforeModelTurn(t *t
 	}
 }
 
+func TestGrantOnlyAuthorityBundleHandoffMaterializesApprovalCarrier(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 1002, Scope: telegramDMScopeRef(1002)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-grant-only-authority-bundle",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "authority_bundle_request",
+		Objective: "Approve a grant-only bundle without a separate retry operation.",
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	bundleID := seedGrantOnlyAuthorityBundleHandoff(t, store, key, "generic-approval-carrier")
+
+	materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: key.ChatID, ChatType: "private", SenderID: 1001, SenderName: "admin", Text: "show approval card", MessageID: 92, Timestamp: time.Now().UTC()},
+		"show approval card",
+	)
+	if err != nil {
+		t.Fatalf("MaterializeRequestedApproval(grant-only bundle) err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want grant-only authority bundle to surface approval card")
+	}
+	state, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusPending ||
+		state.ContinuationLease.Status != session.ContinuationLeaseStatusPending ||
+		state.ContinuationLease.LeaseClass != session.ContinuationLeaseClassCapabilityGrant ||
+		state.ContinuationLease.Constraints["authority_bundle_id"] != bundleID ||
+		state.ActionProposal.RiskClass != "authority_bundle" {
+		t.Fatalf("continuation state = %#v, want pending authority-bundle capability-grant carrier", state)
+	}
+	if len(state.ContinuationLease.RequiredCapabilityGrants) != 1 ||
+		state.ContinuationLease.RequiredCapabilityGrants[0].GrantID != "grant-generic-approval-carrier" {
+		t.Fatalf("required grants = %#v, want grant-only bundle grant preserved", state.ContinuationLease.RequiredCapabilityGrants)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 || !strings.Contains(inlineText, "grant-only test resource") {
+		t.Fatalf("inline count=%d text=%q, want one grant-only authority bundle approval card", inlineCount, inlineText)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if hasExecutionEventPayload(events, core.ExecutionEventWorkflowNextState, "invalid_authority_bundle_handoff") {
+		t.Fatalf("events = %#v, grant-only bundle must not be terminalized as invalid", events)
+	}
+
+	approved, err := rt.ApproveContinuationForKey(key, 1001)
+	if err != nil {
+		t.Fatalf("ApproveContinuationForKey() err = %v", err)
+	}
+	if approved.Status != session.ContinuationStatusApproved ||
+		approved.ContinuationLease.Status != session.ContinuationLeaseStatusActive ||
+		!stringSliceContains(approved.ContinuationLease.CapabilityGrantIDs, "grant-generic-approval-carrier") {
+		t.Fatalf("approved continuation = %#v, want active carrier with minted grant id", approved)
+	}
+	grant, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindGenericDelegation, "grant-only test resource", "telegram:1001", "invoke")
+	if err != nil {
+		t.Fatalf("ActiveCapabilityGrant() err = %v", err)
+	}
+	if !ok || grant.GrantID != "grant-generic-approval-carrier" {
+		t.Fatalf("active grant ok=%v grant=%#v, want minted generic delegation", ok, grant)
+	}
+}
+
+func TestExplicitAuthorityBundleReferenceReopensTerminalizedGrantOnlyHandoff(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "I still need approval."
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 1003, Scope: telegramDMScopeRef(1003)}
+	bundleID := seedGrantOnlyAuthorityBundleHandoff(t, store, key, "terminalized-reference")
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open actions = %#v, want seeded bundle handoff", open)
+	}
+	if err := store.ResolveNextAction(session.NextActionResolutionInput{
+		RecordID:    open[0].RecordID,
+		Key:         key,
+		Owner:       "runtime",
+		SubjectKind: open[0].SubjectKind,
+		SubjectRef:  open[0].SubjectRef,
+		Reason:      "invalid_authority_bundle_handoff",
+		ResolvedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("ResolveNextAction(invalid) err = %v", err)
+	}
+
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     key.ChatID,
+		ChatType:   "private",
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "show the approval card for " + bundleID,
+		MessageID:  93,
+		Timestamp:  time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "surfaced") {
+		t.Fatalf("HandleInbound result = %#v, want referenced authority-bundle card surface", result)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 || !strings.Contains(inlineText, "grant-only test resource") {
+		t.Fatalf("inline count=%d text=%q, want one reopened grant-only approval card", inlineCount, inlineText)
+	}
+	open, err = store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(after) err = %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open actions after materialization = %#v, want referenced handoff resolved after card delivery", open)
+	}
+}
+
 func seedChildAuthorityBundleRequest(t *testing.T, store *session.SQLiteStore, childKey session.SessionKey, agentID string) {
 	t.Helper()
 
@@ -670,4 +845,63 @@ func seedParentAuthorityBundleHandoff(t *testing.T, store *session.SQLiteStore, 
 
 func principalAdminForTest() principal.Principal {
 	return principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+}
+
+func seedGrantOnlyAuthorityBundleHandoff(t *testing.T, store *session.SQLiteStore, key session.SessionKey, requestToken string) string {
+	t.Helper()
+
+	now := time.Now().UTC()
+	bundle, err := session.CompileAuthorityBundleContract(session.AuthorityBundleContractInput{
+		RequestInstanceID: "grant-only-authority-bundle-" + strings.TrimSpace(requestToken),
+		SessionID:         session.SessionIDForKey(key),
+		Principal:         "telegram:1001",
+		Objective:         "Approve one bounded grant-only authority bundle.",
+		Summary:           "Grant-only authority bundle for a generic approval recovery test.",
+		AllowedActions:    []string{"invoke_grant_only_resource"},
+		ForbiddenActions:  []string{"expand_authority_without_new_approval", "unbounded_retry_loop"},
+		StopConditions:    []string{"stop after one approval or typed blocker"},
+		RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+			GrantID:        "grant-" + strings.TrimSpace(requestToken),
+			Kind:           session.CapabilityKindGenericDelegation,
+			TargetResource: "grant-only test resource",
+			GrantedTo:      "telegram:1001",
+			AllowedActions: []string{"invoke"},
+			Contract:       `{"bounded_effect":"Allow one generic grant-only approval carrier test."}`,
+			Constraints:    `{"scope":"grant_only_authority_bundle_test"}`,
+		}},
+		CreatedAt: now,
+		ExpiresAt: now.Add(30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("CompileAuthorityBundleContract(grant-only) err = %v", err)
+	}
+	bundle, err = store.UpsertAuthorityBundleContract(bundle)
+	if err != nil {
+		t.Fatalf("UpsertAuthorityBundleContract(grant-only) err = %v", err)
+	}
+	inputJSON, err := promotedDurableChildAuthorityBundleOperationInput(bundle.BundleID)
+	if err != nil {
+		t.Fatalf("promotedDurableChildAuthorityBundleOperationInput(grant-only) err = %v", err)
+	}
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           session.NextActionRecordID(session.SessionIDForKey(key), "authority_bundle_request", bundle.BundleID, session.NextActionBlockedNeedsAuthority, time.Unix(0, 0).UTC()),
+		Key:                key,
+		Owner:              "tool",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "authority_bundle_request",
+		SubjectRef:         bundle.BundleID,
+		CausalRefs:         []string{"authority_bundle:" + bundle.BundleID},
+		NextAction:         "review the bounded grant-only authority bundle and approve only if the contract matches the intended recovery",
+		RequiredAuthority:  "authority_bundle",
+		ResourceBlocker:    "authority_bundle_approval",
+		RetryPolicy:        "retry_after_bundle_approval",
+		OperationKind:      "authority_bundle_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: inputJSON,
+		OperatorProjection: "Review grant-only authority bundle.",
+		CreatedAt:          now,
+	}); err != nil {
+		t.Fatalf("RecordNextAction(grant-only authority bundle) err = %v", err)
+	}
+	return bundle.BundleID
 }

@@ -170,15 +170,10 @@ func (r *Registry) requestAuthorityBundleApproval(in requestApprovalInput, key s
 	if !bundle.ExpiresAt.IsZero() && !time.Now().UTC().Before(bundle.ExpiresAt.UTC()) {
 		return "", fmt.Errorf("request_approval authority bundle %q expired", bundleID)
 	}
-	if strings.TrimSpace(bundle.PrimaryContinuationContractID) == "" {
-		return "", fmt.Errorf("request_approval authority bundle requires primary continuation contract")
-	}
-	primary, ok, err := r.store.ContinuationRecoveryContract(bundle.PrimaryContinuationContractID)
+	now := time.Now().UTC()
+	primary, err := r.authorityBundleApprovalCarrierContract(bundle, key, now)
 	if err != nil {
 		return "", err
-	}
-	if !ok {
-		return "", fmt.Errorf("request_approval authority bundle primary continuation contract %q not found", bundle.PrimaryContinuationContractID)
 	}
 	requirement, err := requestApprovalContinuationLeaseRequirementFromContract(primary)
 	if err != nil {
@@ -201,7 +196,6 @@ func (r *Registry) requestAuthorityBundleApproval(in requestApprovalInput, key s
 	if strings.TrimSpace(state.ContinuationLease.ID) != leaseID {
 		return out, nil
 	}
-	now := time.Now().UTC()
 	state.ActionProposal.OperatorTitle = "Approve bounded authority bundle"
 	state.ActionProposal.PlanTitle = "Approve bounded authority bundle"
 	state.ActionProposal.Summary = bundle.Summary
@@ -237,6 +231,52 @@ func (r *Registry) requestAuthorityBundleApproval(in requestApprovalInput, key s
 		return "", err
 	}
 	return renderOperationState("[APPROVAL_REQUESTED]", current), nil
+}
+
+func (r *Registry) authorityBundleApprovalCarrierContract(bundle session.AuthorityBundleContract, key session.SessionKey, now time.Time) (session.ContinuationRecoveryContract, error) {
+	if r == nil || r.store == nil {
+		return session.ContinuationRecoveryContract{}, fmt.Errorf("request_approval authority bundle store unavailable")
+	}
+	bundle = session.NormalizeAuthorityBundleContract(bundle)
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if primaryID := strings.TrimSpace(bundle.PrimaryContinuationContractID); primaryID != "" {
+		primary, ok, err := r.store.ContinuationRecoveryContract(primaryID)
+		if err != nil {
+			return session.ContinuationRecoveryContract{}, err
+		}
+		if !ok {
+			return session.ContinuationRecoveryContract{}, fmt.Errorf("request_approval authority bundle primary continuation contract %q not found", primaryID)
+		}
+		return primary, nil
+	}
+	if len(bundle.RequiredCapabilityGrants) == 0 {
+		return session.ContinuationRecoveryContract{}, fmt.Errorf("request_approval authority bundle requires primary continuation contract or required capability grants")
+	}
+	sessionID := session.SessionIDForKey(key)
+	if bundle.SessionID != "" && bundle.SessionID != sessionID {
+		return session.ContinuationRecoveryContract{}, fmt.Errorf("request_approval authority bundle session mismatch")
+	}
+	carrier, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID: strings.TrimSpace(bundle.RequestInstanceID) + ":approval-carrier",
+		SessionID:         firstNonEmptyTool(strings.TrimSpace(bundle.SessionID), sessionID),
+		SubjectKind:       "authority_bundle_request",
+		SubjectRef:        bundle.BundleID,
+		Principal:         bundle.Principal,
+		LeaseClass:        session.ContinuationLeaseClassCapabilityGrant,
+		AllowedActions:    []string{"approve_authority_bundle"},
+		Constraints: map[string]string{
+			"authority_bundle_id": bundle.BundleID,
+		},
+		Tool:       requestApprovalToolName,
+		ToolAction: "request_authority_bundle",
+		CreatedAt:  now,
+	})
+	if err != nil {
+		return session.ContinuationRecoveryContract{}, err
+	}
+	return r.store.UpsertContinuationRecoveryContract(carrier)
 }
 
 func requestApprovalAuthorityBundleBoundedEffect(bundle session.AuthorityBundleContract) string {

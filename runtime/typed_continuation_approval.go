@@ -147,6 +147,9 @@ func (r *Runtime) maybeMaterializePendingContinuationApproval(ctx context.Contex
 	if handled, result, err := r.maybeMaterializeChildWakeRepairRetryApproval(ctx, key, msg, actor, true, allowTypedActionWithoutText); handled {
 		return true, result, err
 	}
+	if handled, result, err := r.maybeMaterializeReferencedAuthorityBundleApproval(ctx, key, msg, actor); handled {
+		return true, result, err
+	}
 	materializable, err := r.hasMaterializablePendingContinuationApproval(key, time.Now().UTC())
 	if err != nil {
 		return true, nil, err
@@ -162,6 +165,82 @@ func (r *Runtime) maybeMaterializePendingContinuationApproval(ctx context.Contex
 		return true, &core.TurnResult{Text: "I surfaced the pending continuation approval."}, nil
 	}
 	return false, nil, nil
+}
+
+func (r *Runtime) maybeMaterializeReferencedAuthorityBundleApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, actor principal.Principal) (bool, *core.TurnResult, error) {
+	if r == nil || r.store == nil || actor.Role != principal.RoleAdmin {
+		return false, nil, nil
+	}
+	bundleID, ok := authorityBundleIDFromApprovalText(msg.Text)
+	if !ok {
+		return false, nil, nil
+	}
+	bundle, found, err := r.store.AuthorityBundleContract(bundleID)
+	if err != nil {
+		return true, nil, err
+	}
+	if !found {
+		return true, &core.TurnResult{Text: "I could not find that recorded authority bundle."}, nil
+	}
+	bundle = session.NormalizeAuthorityBundleContract(bundle)
+	if bundle.SessionID != "" && bundle.SessionID != session.SessionIDForKey(key) {
+		return true, &core.TurnResult{Text: "That authority bundle belongs to a different session."}, nil
+	}
+	now := time.Now().UTC()
+	if !bundle.ExpiresAt.IsZero() && !now.Before(bundle.ExpiresAt.UTC()) {
+		return true, &core.TurnResult{Text: "That authority bundle expired; ask me to prepare a fresh bounded approval."}, nil
+	}
+	inputJSON, err := promotedDurableChildAuthorityBundleOperationInput(bundle.BundleID)
+	if err != nil {
+		return true, nil, err
+	}
+	if _, err := r.store.RecordNextAction(session.NextActionInput{
+		RecordID:           session.NextActionRecordID(session.SessionIDForKey(key), "authority_bundle_request", bundle.BundleID, session.NextActionBlockedNeedsAuthority, now),
+		Key:                key,
+		Owner:              "runtime",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "authority_bundle_request",
+		SubjectRef:         bundle.BundleID,
+		CausalRefs:         []string{"authority_bundle:" + bundle.BundleID},
+		NextAction:         "review the bounded authority bundle and approve only if the allowed, forbidden, and stop boundaries match the objective",
+		RequiredAuthority:  "authority_bundle",
+		ResourceBlocker:    "authority_bundle_approval",
+		RetryPolicy:        "retry_after_bundle_approval",
+		OperationKind:      "authority_bundle_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: inputJSON,
+		OperatorProjection: "Review bounded authority bundle.",
+		CreatedAt:          now,
+	}); err != nil {
+		return true, nil, fmt.Errorf("record referenced authority bundle approval handoff: %w", err)
+	}
+	materialized, err := r.MaterializeRequestedApproval(ctx, key, msg, msg.Text)
+	if err != nil {
+		return true, nil, err
+	}
+	if materialized {
+		return true, &core.TurnResult{Text: "I surfaced the referenced authority bundle approval."}, nil
+	}
+	return true, &core.TurnResult{Text: "I recorded the referenced authority bundle approval request."}, nil
+}
+
+func authorityBundleIDFromApprovalText(text string) (string, bool) {
+	value := strings.TrimSpace(text)
+	if value == "" || !isPendingContinuationApprovalSurfaceText(value) {
+		return "", false
+	}
+	found := ""
+	for _, field := range strings.Fields(value) {
+		token := strings.Trim(field, "`'\".,:;()[]{}<>")
+		if !strings.HasPrefix(token, "authbundle-") {
+			continue
+		}
+		if found != "" && found != token {
+			return "", false
+		}
+		found = token
+	}
+	return found, found != ""
 }
 
 func (r *Runtime) hasMaterializablePendingContinuationApproval(key session.SessionKey, now time.Time) (bool, error) {

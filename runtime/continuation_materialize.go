@@ -625,7 +625,7 @@ func (r *Runtime) recoveryApprovalAuthorityBundleExecutable(key session.SessionK
 	if bundle.SessionID != "" && bundle.SessionID != session.SessionIDForKey(key) {
 		return false, true, nil
 	}
-	if strings.TrimSpace(bundle.PrimaryContinuationContractID) != "" {
+	if strings.TrimSpace(bundle.PrimaryContinuationContractID) != "" || len(bundle.RequiredCapabilityGrants) > 0 {
 		return true, false, nil
 	}
 	if key.Scope.Kind == session.ScopeKindDurableAgent {
