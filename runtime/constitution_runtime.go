@@ -54,11 +54,11 @@ func (r *Runtime) applyTurnConstitution(
 				trimmedReply = strings.TrimSpace(repaired)
 				r.recordExecutionClaimAdjudication(key, repairedAdjudication.WithPrior(adjudication), "persona_repaired")
 			} else {
-				trimmedReply = neutralizeUnsupportedExecutionClaims(repaired, repairedAdjudication)
+				trimmedReply = r.neutralizeUnsupportedExecutionClaimsForState(key, repaired, repairedAdjudication)
 				r.recordExecutionClaimAdjudication(key, repairedAdjudication, "fallback_neutralized")
 			}
 		} else {
-			trimmedReply = neutralizeUnsupportedExecutionClaims(trimmedReply, adjudication)
+			trimmedReply = r.neutralizeUnsupportedExecutionClaimsForState(key, trimmedReply, adjudication)
 			r.recordExecutionClaimAdjudication(key, adjudication, "fallback_neutralized")
 		}
 	}
@@ -488,7 +488,7 @@ func (r *Runtime) neutralizeUngroundedDeliveryClaims(ctx context.Context, key se
 	if err := r.recordConstitutionJudgmentUse(key, turnRunID, "delivery_fallback", violations, time.Now().UTC()); err != nil {
 		r.recordExecutionEvent(key, core.ExecutionEventDeliveryFinalFailed, "constitution", "judgment_record_failed", map[string]any{"error": trimError(err.Error())}, time.Now().UTC())
 	}
-	return neutralizeUnsupportedExecutionClaims(reply, adjudication)
+	return r.neutralizeUnsupportedExecutionClaimsForState(key, reply, adjudication)
 }
 
 func neutralizeUnsupportedExecutionClaims(reply string, adjudication executionClaimAdjudication) string {
@@ -500,6 +500,63 @@ func neutralizeUnsupportedExecutionClaims(reply string, adjudication executionCl
 		return "I need a fresh bounded approval before continuing."
 	}
 	return "I do not have current-turn execution evidence for that claim."
+}
+
+func (r *Runtime) neutralizeUnsupportedExecutionClaimsForState(key session.SessionKey, reply string, adjudication executionClaimAdjudication) string {
+	reply = strings.TrimSpace(reply)
+	if reply == "" || !adjudication.HasFindings() {
+		return reply
+	}
+	if adjudicationHasContinuationSurfaceFinding(adjudication) {
+		if stateText := r.neutralContinuationSurfaceTextFromNextAction(key); stateText != "" {
+			return stateText
+		}
+	}
+	return neutralizeUnsupportedExecutionClaims(reply, adjudication)
+}
+
+func (r *Runtime) neutralContinuationSurfaceTextFromNextAction(key session.SessionKey) string {
+	if r == nil || r.store == nil {
+		return ""
+	}
+	actions, err := r.store.OpenNextActionsBySession(key, 20)
+	if err != nil {
+		return ""
+	}
+	for _, action := range actions {
+		state := session.NormalizeNextActionState(action.State)
+		blocker := strings.TrimSpace(action.ResourceBlocker)
+		retryPolicy := strings.TrimSpace(action.RetryPolicy)
+		projection := strings.TrimSpace(action.OperatorProjection)
+		next := strings.TrimSpace(action.NextAction)
+		switch state {
+		case session.NextActionScheduledRetry:
+			if blocker == "external_transient" || retryPolicy == "bounded_backoff" {
+				return "The child task is parked on a transient blocker. Wait for the bounded backoff window before retrying, or inspect the recorded blocker; no fresh approval is pending right now."
+			}
+			if next != "" {
+				return "The current task is scheduled for retry: " + next
+			}
+			return "The current task is scheduled for retry. Follow the recorded retry policy before continuing; no fresh approval is pending right now."
+		case session.NextActionBlockedNeedsResourceRepair:
+			if projection != "" {
+				return projection
+			}
+			if next != "" {
+				return next
+			}
+			return "The current task is blocked on resource repair, not a missing approval."
+		case session.NextActionNeedsVerification:
+			if projection != "" {
+				return projection
+			}
+			if next != "" {
+				return next
+			}
+			return "The current task needs bounded verification before retrying; no fresh approval is pending right now."
+		}
+	}
+	return ""
 }
 
 func adjudicationHasContinuationSurfaceFinding(adjudication executionClaimAdjudication) bool {
@@ -551,6 +608,10 @@ func finalReplyContainsVisibleApprovalRequest(reply string) bool {
 	).Replace(lower)), " ")
 	for _, phrase := range []string{
 		"next approval needed",
+		"need a fresh bounded approval",
+		"need fresh bounded approval",
+		"needs a fresh bounded approval",
+		"needs fresh bounded approval",
 		"approve granting",
 		"approve grant",
 		"approve this bounded",
