@@ -128,7 +128,7 @@ var durableWakeBlockedChildBlockerSpecs = []durableWakeChildBlockerSpec{
 		ReviewQuestions:    []string{"Repair the child-local resource boundary, then retry only the bounded child task."},
 		ReviewRiskFlags:    []string{"durable_child", "resource_boundary"},
 		DiagnosticOnly:     true,
-		Markers:            []string{"permission denied", "not writable", "read-only", "readonly", "host_permission_denied"},
+		Markers:            []string{"permission denied", "operation not permitted", "not writable", "read-only filesystem", "read-only file system", "readonly filesystem", "host_permission_denied"},
 	},
 	{
 		Kind:               "credential_unverified",

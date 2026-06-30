@@ -130,6 +130,95 @@ func TestQueueCapabilityGrantWakeAddsParentConversation(t *testing.T) {
 	assertHasEventType(t, events, core.ExecutionEventDurableChildTaskResult)
 }
 
+func TestCapabilityGrantWakeTimeoutProducesTransientRetryState(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = strings.Join([]string{
+		"I incorporated the new `host@idolum.ai` job-triage approval and validated the active authorities.",
+		"",
+		"Active now:",
+		"- `host@idolum.ai` read access",
+		"- `host@idolum.ai` archive / mark-processed approval exists, but this wake was dry-run/no-mutation, so I did not use it",
+		"- `gog_cli` invoke",
+		"- `gog_cli:host@idolum.ai` invoke",
+		"",
+		"I made exactly one read-only dry-run report attempt using `search_unread_jobs` for `host@idolum.ai`.",
+		"",
+		"Result: blocked by tool timeout.",
+		"",
+		"Non-secret status:",
+		"- failure class: `timeout`",
+		"REVIEW_STATUS: blocked",
+	}, "\n")
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "mail-timeout",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Adapter: "gog_cli",
+		}},
+		WakeupMode: "manual",
+		Status:     "active",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Read mailbox opportunities and report bounded findings.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	grant := session.CapabilityGrant{
+		GrantID:        "capg-mail-timeout",
+		RequestID:      "cap-mail-timeout",
+		GrantedTo:      "durable_agent:mail-timeout",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "host@idolum.ai",
+		AllowedActions: []string{"read", "archive", "mark_processed"},
+		Status:         session.CapabilityGrantStatusActive,
+	}
+
+	if err := rt.queueCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("queueCapabilityGrantWake() err = %v", err)
+	}
+	if err := rt.runCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("runCapabilityGrantWake() err = %v", err)
+	}
+
+	taskPacketID := capabilityGrantTaskPacketID(agent.AgentID, grant)
+	packet, ok, err := store.ChildTaskPacket(taskPacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(%q) err = %v", taskPacketID, err)
+	}
+	if !ok || packet.Status != session.ChildTaskPacketBlocked || packet.ResultID == "" {
+		t.Fatalf("ChildTaskPacket(%q) = %#v ok=%t, want blocked packet with result", taskPacketID, packet, ok)
+	}
+	result, ok, err := store.ChildTaskResult(packet.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskResult(%q) err = %v", packet.ResultID, err)
+	}
+	if !ok || result.Status != session.ChildTaskResultBlocked || result.BlockerKind != "external_transient" || result.NextState != session.NextActionScheduledRetry {
+		t.Fatalf("ChildTaskResult(%q) = %#v ok=%t, want external_transient scheduled retry", packet.ResultID, result, ok)
+	}
+	open, err := store.OpenNextActionsBySession(rt.durableAgentExecutionKey(agent.AgentID), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionScheduledRetry || open[0].ResourceBlocker != "external_transient" || open[0].RetryPolicy != "bounded_backoff" {
+		t.Fatalf("open next actions = %#v, want transient scheduled retry rather than resource repair", open)
+	}
+	if strings.Contains(open[0].OperatorProjection, "resource boundary denied") {
+		t.Fatalf("operator projection = %q, want timeout/transient framing", open[0].OperatorProjection)
+	}
+}
+
 func TestParentConversationAckClosesQueuedGrantTaskWaiterForClaimScopedPacket(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	_ = sender
