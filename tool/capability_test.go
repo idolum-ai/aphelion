@@ -193,6 +193,75 @@ func TestCapabilityRequestParentAdminGrantFlow(t *testing.T) {
 	}
 }
 
+func TestMaterializeMissingGrantRequirementActivatesAlreadyApprovedRequest(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	const requestID = "cap-approved-account-read"
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      requestID,
+		RequestedBy:    "telegram:1002",
+		RequestedFor:   "telegram:2002",
+		AdminPrincipal: "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "account-primary",
+		Purpose:        "already approved account read",
+		Contract:       `{"surface":"account_read"}`,
+		Constraints:    `{"max_items":10}`,
+		ReviewStatus:   session.CapabilityReviewStatusApproved,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+
+	request, reviewEventID, action, err := registry.MaterializeMissingGrantRequirement(context.Background(), key, principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 2002}, MissingGrantRequirement{
+		RequestID:          requestID,
+		Kind:               session.CapabilityKindExternalAccount,
+		TargetResource:     "account-primary",
+		GrantedTo:          "telegram:2002",
+		AllowedActions:     []string{"read"},
+		Contract:           `{"surface":"account_read"}`,
+		Constraints:        `{"max_items":10}`,
+		Purpose:            "already approved account read",
+		ReviewSummary:      "Grant account read",
+		OperatorProjection: "Grant account read",
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("MaterializeMissingGrantRequirement() err = %v", err)
+	}
+	if request.RequestID != requestID {
+		t.Fatalf("request = %#v, want %s", request, requestID)
+	}
+	if reviewEventID != 0 {
+		t.Fatalf("reviewEventID = %d, want no new card for already-approved request", reviewEventID)
+	}
+	if action.RecordID == "" {
+		t.Fatalf("action = %#v, want recorded blocker before activation", action)
+	}
+
+	updated, ok, err := store.CapabilityRequest(requestID)
+	if err != nil || !ok {
+		t.Fatalf("CapabilityRequest() ok=%t err=%v", ok, err)
+	}
+	if strings.TrimSpace(updated.GrantID) == "" {
+		t.Fatalf("updated request = %#v, want linked grant", updated)
+	}
+	grant, ok, err := store.CapabilityGrant(updated.GrantID)
+	if err != nil || !ok {
+		t.Fatalf("CapabilityGrant(%q) ok=%t err=%v", updated.GrantID, ok, err)
+	}
+	if grant.Status != session.CapabilityGrantStatusActive || grant.RequestID != requestID || grant.GrantedTo != "telegram:2002" || grant.TargetResource != "account-primary" {
+		t.Fatalf("grant = %#v, want active linked account grant", grant)
+	}
+	open, err := store.OpenNextActionsBySessionSubject(key, "capability_request", requestID, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySessionSubject() err = %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open next actions = %#v, want approved request blocker resolved", open)
+	}
+}
+
 func TestCapabilityGrantSetResolvesRequesterSessionBlocker(t *testing.T) {
 	t.Parallel()
 

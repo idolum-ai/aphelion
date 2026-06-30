@@ -356,6 +356,10 @@ func (r *Registry) capabilityAuthorityGrantSet(ctx context.Context, in capabilit
 	if actor.Role != principal.RoleAdmin {
 		return "", fmt.Errorf("capability_authority grant_set is admin-only")
 	}
+	return r.capabilityAuthorityGrantSetApproved(ctx, in, key, toolAuthorityPrincipalDisplay(actor))
+}
+
+func (r *Registry) capabilityAuthorityGrantSetApproved(ctx context.Context, in capabilityInput, key session.SessionKey, grantedBy string) (string, error) {
 	requestID := strings.TrimSpace(in.RequestID)
 	if requestID == "" {
 		return "", fmt.Errorf("capability_authority grant_set requires request_id")
@@ -369,6 +373,10 @@ func (r *Registry) capabilityAuthorityGrantSet(ctx context.Context, in capabilit
 	}
 	if request.ReviewStatus != session.CapabilityReviewStatusApproved {
 		return "", fmt.Errorf("capability_authority grant_set requires approved request; current status is %s", request.ReviewStatus)
+	}
+	grantedBy = strings.TrimSpace(grantedBy)
+	if grantedBy == "" {
+		grantedBy = "capability_authority"
 	}
 	grantID := strings.TrimSpace(in.GrantID)
 	if grantID == "" {
@@ -442,7 +450,7 @@ func (r *Registry) capabilityAuthorityGrantSet(ctx context.Context, in capabilit
 	grantRecord := session.CapabilityGrant{
 		GrantID:            grantID,
 		RequestID:          request.RequestID,
-		GrantedBy:          toolAuthorityPrincipalDisplay(actor),
+		GrantedBy:          grantedBy,
 		GrantedTo:          grantedTo,
 		Kind:               kind,
 		TargetResource:     target,

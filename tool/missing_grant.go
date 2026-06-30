@@ -107,7 +107,7 @@ func (r *Registry) activeGrantForMissingGrantContract(contract missingGrantContr
 	return session.CapabilityGrant{}, false, nil
 }
 
-func (r *Registry) materializeMissingGrantRequirement(_ context.Context, key session.SessionKey, actor principal.Principal, requirement missingGrantRequirement, now time.Time) (session.CapabilityRequest, int64, session.NextActionRecord, error) {
+func (r *Registry) materializeMissingGrantRequirement(ctx context.Context, key session.SessionKey, actor principal.Principal, requirement missingGrantRequirement, now time.Time) (session.CapabilityRequest, int64, session.NextActionRecord, error) {
 	if r == nil || r.store == nil {
 		return session.CapabilityRequest{}, 0, session.NextActionRecord{}, fmt.Errorf("missing capability grant materialization requires transcript store")
 	}
@@ -192,6 +192,16 @@ func (r *Registry) materializeMissingGrantRequirement(_ context.Context, key ses
 	})
 	if err != nil {
 		return session.CapabilityRequest{}, 0, session.NextActionRecord{}, err
+	}
+	if request.ReviewStatus == session.CapabilityReviewStatusApproved && strings.TrimSpace(request.GrantID) == "" {
+		var in capabilityInput
+		if err := json.Unmarshal([]byte(operation.InputJSON), &in); err != nil {
+			return session.CapabilityRequest{}, 0, session.NextActionRecord{}, fmt.Errorf("decode approved capability grant handoff: %w", err)
+		}
+		grantedBy := firstNonEmpty(request.AdminPrincipal, request.ParentPrincipal, "approved_request:"+request.RequestID)
+		if _, err := r.capabilityAuthorityGrantSetApproved(ctx, in, key, grantedBy); err != nil {
+			return session.CapabilityRequest{}, 0, session.NextActionRecord{}, fmt.Errorf("materialize approved capability grant handoff: %w", err)
+		}
 	}
 	return request, reviewEventID, action, nil
 }
