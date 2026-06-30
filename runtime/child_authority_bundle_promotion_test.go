@@ -323,6 +323,86 @@ func TestParentMaterializationPromotesExistingChildAuthorityBundleInCurrentDMSes
 	}
 }
 
+func TestHandleInboundPromotesExistingChildAuthorityBundleAfterOrdinaryReply(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = strings.Join([]string{
+		"I can continue, but the next useful move needs approval.",
+		"",
+		"Approve this bounded read-only repair:",
+		"- inspect only child-local runtime state",
+		"- repair only non-secret read-only materialization",
+		"- stop after one result or typed blocker",
+	}, "\n")
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	var audit TurnAudit
+	rt.SetTurnAuditSink(func(got TurnAudit) {
+		audit = got
+	})
+
+	agentID := "idolum-email"
+	parentKey := session.SessionKey{ChatID: 1001, Scope: telegramDMScopeRef(1001)}
+	seedRealChildWakeAgent(t, store, agentID)
+	agentRecord, err := store.DurableAgent(agentID)
+	if err != nil {
+		t.Fatalf("DurableAgent(%s) err = %v", agentID, err)
+	}
+	if agentRecord == nil {
+		t.Fatalf("DurableAgent(%s) = nil", agentID)
+	}
+	childKey := session.SessionKey{ChatID: durableWakeSyntheticChatID(agentID), Scope: durableAgentScopeRef(*agentRecord)}
+	seedChildAuthorityBundleRequest(t, store, childKey, agentID)
+
+	if _, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     parentKey.ChatID,
+		ChatType:   "private",
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "Please continue the child setup from where it is blocked.",
+		MessageID:  77,
+		Timestamp:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) == 0 {
+		parentOpen, _ := store.OpenNextActionsBySession(parentKey, 20)
+		childOpen, _ := store.OpenNextActionsBySession(childKey, 20)
+		t.Fatalf("sender.inline empty; sent=%#v audit=%#v parent_open=%#v child_open=%#v, want approval card", sender.sent, audit, parentOpen, childOpen)
+	}
+	last := sender.inline[len(sender.inline)-1]
+	if last.chatID != 1001 || !strings.Contains(last.text, "gog_cli:job-search-mailbox") {
+		t.Fatalf("last inline = %#v, want promoted child authority-bundle approval card", last)
+	}
+	for _, sent := range sender.sent {
+		if strings.Contains(sent.Text, "Approve this bounded read-only repair") {
+			t.Fatalf("sent text leaked prose approval request: %#v", sent)
+		}
+	}
+	if len(sender.sent) == 0 || !strings.Contains(sender.sent[len(sender.sent)-1].Text, "fresh bounded approval") {
+		t.Fatalf("sent = %#v, want neutral approval-surface reply", sender.sent)
+	}
+}
+
 func seedChildAuthorityBundleRequest(t *testing.T, store *session.SQLiteStore, childKey session.SessionKey, agentID string) {
 	t.Helper()
 

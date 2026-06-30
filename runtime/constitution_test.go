@@ -373,6 +373,53 @@ func TestApplyTurnConstitutionRepairsUnsupportedContinuationClaim(t *testing.T) 
 	}
 }
 
+func TestApplyTurnConstitutionNeutralizesVisibleApprovalRequest(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.repairReplyText = "I need a fresh bounded approval before continuing."
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9016, UserID: 0, Scope: telegramDMScopeRef(9016)}
+	auditRecorder := newTurnAuditRecorder(key, "telegram", "admin", "continue")
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		GlobalRoot:       cfg.Agent.PromptRoot,
+		SharedMemoryRoot: cfg.Agent.SharedMemoryRoot,
+		WorkingRoot:      cfg.Agent.ExecRoot,
+	}
+	finalText := rt.applyTurnConstitution(
+		context.Background(),
+		key,
+		0,
+		scope,
+		"telegram",
+		"admin",
+		"continue",
+		rt.currentFaceRenderer(),
+		prompt.RuntimeAwareness{},
+		core.MaterialPacket{},
+		"",
+		"I can continue.\n\nApprove this bounded read-only repair:\n- inspect runtime state\n- stop after one result",
+		nil,
+		auditRecorder,
+	)
+	if finalText != "I need a fresh bounded approval before continuing." {
+		t.Fatalf("final text = %q, want neutral approval-surface reply", finalText)
+	}
+	audit := auditRecorder.Snapshot()
+	if !executionFindingsContainClaim(audit.ExecutionClaimFindings, "approval_request") {
+		t.Fatalf("execution findings = %#v, want approval_request", audit.ExecutionClaimFindings)
+	}
+	if !containsViolationRule(audit.ConstitutionViolations, constitutionRuleExecutionClaimUngrounded) {
+		t.Fatalf("violations = %#v, want execution claim grounding rule", audit.ConstitutionViolations)
+	}
+}
+
 func TestApplyTurnConstitutionAllowsContinuationClaimWithActiveLease(t *testing.T) {
 	t.Parallel()
 

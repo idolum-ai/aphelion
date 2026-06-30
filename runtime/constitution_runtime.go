@@ -229,7 +229,18 @@ func (r *Runtime) adjudicateFinalReplyExecutionClaimsWithContext(ctx context.Con
 	if r == nil || r.store == nil || reply == "" {
 		return out
 	}
+	visibleApprovalRequest := finalReplyContainsVisibleApprovalRequest(reply)
 	claims := r.interpretFinalReplyExecutionClaims(ctx, reply)
+	if visibleApprovalRequest {
+		claims = append(claims, core.NormalizeInterpretationClaim(core.InterpretationClaim{
+			Intent:             "reply_execution_claim",
+			Scope:              "final_reply",
+			Risk:               []string{"approval_request"},
+			Confidence:         "high",
+			Source:             "runtime_lexical_guard",
+			ProposedNextAction: "materialize_typed_approval_surface",
+		}))
+	}
 	if len(claims) == 0 {
 		return out
 	}
@@ -321,9 +332,13 @@ func (r *Runtime) adjudicateFinalReplyExecutionClaimsWithContext(ctx context.Con
 	}
 	if executionClaimsInclude(claims, "approval_request") &&
 		!out.HasPendingContinuationApproval &&
-		!out.HasMaterializableOperationFollow &&
 		!out.HasActiveContinuationAuthority {
 		out.Findings = append(out.Findings, executionClaimFinding("approval_request", "approval-request claim has no pending approval state", out))
+	}
+	if visibleApprovalRequest && !executionClaimFindingsInclude(out.Findings, "approval_request") {
+		finding := executionClaimFinding("approval_request", "visible approval request must be materialized as a typed approval card, not prose", out)
+		finding.RequiredBehavior = "Do not ask the operator to approve authority in prose. Materialize the typed approval card, or say a fresh bounded approval is needed. Do not prepend a correction banner."
+		out.Findings = append(out.Findings, finding)
 	}
 	return out
 }
@@ -455,6 +470,27 @@ func (r *Runtime) groundFinalReplyWithExecutionEvidence(key session.SessionKey, 
 	return reply, adjudication.Note()
 }
 
+func (r *Runtime) neutralizeUngroundedDeliveryClaims(ctx context.Context, key session.SessionKey, turnRunID int64, reply string, audit *turnAuditRecorder) string {
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return reply
+	}
+	adjudication := r.adjudicateFinalReplyExecutionClaimsWithContext(ctx, key, reply)
+	if !adjudication.HasFindings() {
+		return reply
+	}
+	r.recordExecutionClaimAdjudication(key, adjudication, "delivery_fallback_neutralized")
+	violations := adjudication.ConstitutionViolations()
+	if audit != nil {
+		audit.RecordViolations(violations)
+		audit.RecordExecutionClaimFindings(adjudication.Findings)
+	}
+	if err := r.recordConstitutionJudgmentUse(key, turnRunID, "delivery_fallback", violations, time.Now().UTC()); err != nil {
+		r.recordExecutionEvent(key, core.ExecutionEventDeliveryFinalFailed, "constitution", "judgment_record_failed", map[string]any{"error": trimError(err.Error())}, time.Now().UTC())
+	}
+	return neutralizeUnsupportedExecutionClaims(reply, adjudication)
+}
+
 func neutralizeUnsupportedExecutionClaims(reply string, adjudication executionClaimAdjudication) string {
 	reply = strings.TrimSpace(reply)
 	if reply == "" || !adjudication.HasFindings() {
@@ -502,6 +538,47 @@ func (r *Runtime) interpretFinalReplyExecutionClaims(ctx context.Context, reply 
 	return out
 }
 
+func finalReplyContainsVisibleApprovalRequest(reply string) bool {
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return false
+	}
+	lower := strings.ToLower(reply)
+	normalized := strings.Join(strings.Fields(strings.NewReplacer(
+		"\t", " ",
+		"\r", " ",
+		"\n", " ",
+	).Replace(lower)), " ")
+	for _, phrase := range []string{
+		"approve this bounded",
+		"approve one bounded",
+		"approve a bounded",
+		"approve this fresh bounded",
+		"approve one fresh bounded",
+		"approve a fresh bounded",
+		"approve this read-only",
+		"approve one read-only",
+		"approve a read-only",
+		"approve this repair",
+		"approve one repair",
+		"approve a repair",
+	} {
+		if strings.Contains(normalized, phrase) {
+			return true
+		}
+	}
+	for _, line := range strings.Split(lower, "\n") {
+		line = strings.TrimSpace(strings.Trim(line, "-*• \t"))
+		if strings.HasPrefix(line, "approve this ") ||
+			strings.HasPrefix(line, "approve one ") ||
+			strings.HasPrefix(line, "approve a ") ||
+			strings.HasPrefix(line, "please approve ") {
+			return true
+		}
+	}
+	return false
+}
+
 func executionClaimRisks(risks []string) []string {
 	out := make([]string, 0, len(risks))
 	seen := map[string]struct{}{}
@@ -533,6 +610,33 @@ func executionClaimsInclude(claims []core.InterpretationClaim, risk string) bool
 			if candidate == risk {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func executionClaimFindingsInclude(findings []ExecutionClaimFinding, claimType string) bool {
+	claimType = strings.TrimSpace(claimType)
+	if claimType == "" {
+		return false
+	}
+	for _, finding := range findings {
+		if strings.TrimSpace(finding.ClaimType) == claimType {
+			return true
+		}
+	}
+	return false
+}
+
+func turnAuditHasExecutionClaimFinding(audit *turnAuditRecorder, claimType string) bool {
+	claimType = strings.TrimSpace(claimType)
+	if audit == nil || claimType == "" {
+		return false
+	}
+	snapshot := audit.Snapshot()
+	for _, finding := range snapshot.ExecutionClaimFindings {
+		if strings.TrimSpace(finding.ClaimType) == claimType || strings.TrimSpace(finding.Kind) == claimType {
+			return true
 		}
 	}
 	return false

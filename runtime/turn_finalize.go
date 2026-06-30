@@ -74,6 +74,22 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 
 	output.ReplyText = strings.TrimSpace(input.ReplyText)
 	if len(input.OutHistory) < input.HistoryInputLen {
+		output.ReplyText = r.applyTurnConstitution(
+			input.Ctx,
+			input.Key,
+			input.TurnRunID,
+			input.Scope,
+			input.Channel,
+			input.PrincipalRole,
+			input.PromptInput,
+			input.CurrentFaceModel,
+			input.FaceAwareness,
+			input.MaterialFloor,
+			input.FloorText,
+			output.ReplyText,
+			input.Result.Media,
+			input.Audit,
+		)
 		return output, nil
 	}
 	generatedMessages := input.OutHistory[input.HistoryInputLen:]
@@ -271,6 +287,7 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 		personaContextRewriteApplied = true
 	}
 
+	preConstitutionReply := strings.TrimSpace(output.ReplyText)
 	output.ReplyText = r.applyTurnConstitution(
 		input.Ctx,
 		input.Key,
@@ -287,6 +304,18 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 		input.Result.Media,
 		input.Audit,
 	)
+	if output.StreamedReply && output.OutboundID != 0 && strings.TrimSpace(output.ReplyText) != preConstitutionReply {
+		if err := r.reconcileStreamedFallback(input.Ctx, input.Key, input.Msg, output.OutboundID, output.ReplyText, "constitution_repair"); err != nil {
+			log.Printf("WARN streamed constitution repair reconciliation failed backend=%s message_id=%d err=%v; forcing normal delivery", r.faceBackend, output.OutboundID, err)
+			r.recordExecutionEvent(input.Key, core.ExecutionEventPersonaStreamReconcileFailed, "render", "failed", map[string]any{
+				"message_id": output.OutboundID,
+				"error":      trimError(err.Error()),
+			}, time.Now().UTC())
+			output.StreamedReply = false
+			output.OutboundID = 0
+			output.OutboundType = ""
+		}
+	}
 	var directiveModality string
 	output.ReplyText, directiveModality = extractReplyModalityDirective(output.ReplyText)
 	if directiveModality != "" {
@@ -760,6 +789,28 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 	p.runtime.markSessionTurnPhase(p.key, "deliver", "sending or finalizing outbound delivery")
 	if _, ok := turnResultBudgetRecoveryFromTurnResult(req.Result); ok {
 		return p.deliverBudgetRecovery(ctx, req)
+	}
+	visibleApprovalRequest := finalReplyContainsVisibleApprovalRequest(req.Message.Text)
+	if strings.TrimSpace(req.Message.Text) != "" {
+		originalText := strings.TrimSpace(req.Message.Text)
+		guarded := p.runtime.neutralizeUngroundedDeliveryClaims(ctx, p.key, p.currentRunID(), req.Message.Text, p.audit)
+		req.Message.Text = guarded
+		if req.Result != nil {
+			req.Result.VisibleReply = guarded
+			if req.Result.Turn != nil {
+				req.Result.Turn.Text = guarded
+			}
+			if guarded != originalText && req.Result.RenderedStream && req.Result.RenderedID != 0 {
+				if err := p.runtime.reconcileStreamedFallback(ctx, p.key, p.msg, req.Result.RenderedID, guarded, "delivery_claim_neutralized"); err != nil {
+					return nil, fmt.Errorf("reconcile streamed delivery claim neutralization: %w", err)
+				}
+			}
+		}
+	}
+	if visibleApprovalRequest || turnAuditHasExecutionClaimFinding(p.audit, "approval_request") {
+		if _, err := p.runtime.materializePendingOperationProposalApprovalLocked(ctx, p.key, p.msg, req.Message.Text, req.Result); err != nil {
+			return nil, fmt.Errorf("materialize approval requested by visible reply: %w", err)
+		}
 	}
 	return turn.RunDeliveryStage(ctx, turn.DeliveryStageInput{
 		Request:        req,
