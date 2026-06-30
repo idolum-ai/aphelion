@@ -4,6 +4,7 @@ package telegramdecision
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
@@ -190,6 +191,30 @@ func (h *DecisionHandler) HandleCallbackQuery(ctx context.Context, cb telegram.C
 		return nil
 	}
 	return h.Handler.HandleCallbackQuery(ctx, cb)
+}
+
+func (h *DecisionHandler) HandleReactionMessage(ctx context.Context, msg core.InboundMessage) (bool, error) {
+	if h == nil || h.store == nil || msg.Reaction == nil {
+		return false, nil
+	}
+	action, actionable := reviewEventActionForReaction(msg.Reaction)
+	if !actionable {
+		if len(msg.Reaction.New) == 0 {
+			return true, nil
+		}
+		return false, nil
+	}
+	event, err := h.store.ReviewEventByDeliveryMessage(msg.ChatID, msg.Reaction.MessageID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return true, nil
+		}
+		return true, err
+	}
+	if event == nil {
+		return true, nil
+	}
+	return true, h.applyReviewEventReaction(ctx, msg, *event, action)
 }
 
 func callbackChatID(cb telegram.CallbackQuery) int64   { return CallbackChatID(cb) }

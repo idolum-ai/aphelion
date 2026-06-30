@@ -17,6 +17,7 @@ type telegramIngressRouter interface {
 }
 
 type telegramIngressDecisionHandler interface {
+	HandleReactionMessage(ctx context.Context, msg core.InboundMessage) (bool, error)
 	HandleBusyMessage(ctx context.Context, msg core.InboundMessage) (bool, error)
 	HandleArtifactRetentionMessage(ctx context.Context, msg core.InboundMessage) (bool, error)
 }
@@ -67,6 +68,11 @@ func handleTelegramIngressMessage(ctx context.Context, sender telegramcommands.S
 		return nil
 	}
 	if decisions != nil {
+		if reactionHandled, reactionErr := decisions.HandleReactionMessage(ctx, msg); reactionErr != nil {
+			return reactionErr
+		} else if reactionHandled {
+			return nil
+		}
 		if busyHandled, busyErr := decisions.HandleBusyMessage(ctx, msg); busyErr != nil {
 			return busyErr
 		} else if busyHandled {

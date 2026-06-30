@@ -115,6 +115,91 @@ func (h *DecisionHandler) handleReviewEventCallback(ctx context.Context, cb tele
 	return h.answerReviewEventCallback(ctx, cb, "")
 }
 
+func reviewEventActionForReaction(reaction *core.InboundReaction) (core.ReviewEventAction, bool) {
+	if reaction == nil {
+		return "", false
+	}
+	for _, value := range reaction.New {
+		switch strings.TrimSpace(value) {
+		case "👍", "+1":
+			return core.ReviewEventActionApprove, true
+		case "👎", "-1":
+			return core.ReviewEventActionReject, true
+		}
+	}
+	return "", false
+}
+
+func (h *DecisionHandler) applyReviewEventReaction(ctx context.Context, msg core.InboundMessage, event session.ReviewEvent, action core.ReviewEventAction) error {
+	if h == nil || h.store == nil {
+		return nil
+	}
+	if action != core.ReviewEventActionApprove && action != core.ReviewEventActionReject {
+		return nil
+	}
+	if reviewEventCallbackExpired(event, time.Now()) {
+		_ = h.editReviewEventReactionMessage(ctx, msg, "Approval timed out — use a fresh prompt.")
+		return nil
+	}
+	requestID := reviewEventCallbackCapabilityRequestID(event)
+	if requestID == "" {
+		return nil
+	}
+	record, ok, err := h.store.CapabilityRequest(requestID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	if event.Status == "dismissed" {
+		_ = h.editReviewEventReactionMessage(ctx, msg, "Stale approval card — use the newest prompt.")
+		return nil
+	}
+	if !reviewEventRequestStillActionable(record, action) {
+		_ = h.editReviewEventReactionMessage(ctx, msg, "Stale approval card — use the newest prompt.")
+		return nil
+	}
+	status, reviewerRole, err := reviewEventCapabilityStatusForAction(record, action, msg.SenderID, event.TargetAdminChatID)
+	if err != nil {
+		return nil
+	}
+	review, err := h.store.AppendCapabilityReview(session.CapabilityReview{
+		ReviewID:     fmt.Sprintf("capr-review-reaction-%d-%d", event.ID, time.Now().UnixNano()),
+		RequestID:    record.RequestID,
+		Reviewer:     fmt.Sprintf("telegram:%d", msg.SenderID),
+		ReviewerRole: reviewerRole,
+		Status:       status,
+		Rationale:    fmt.Sprintf("telegram reaction review event %d", event.ID),
+	})
+	if err != nil {
+		return err
+	}
+	grant, grantActivated, grantErr := h.materializeApprovedCapabilityGrantFromReview(record, review, event, msg.SenderID)
+	if grantErr != nil {
+		return h.editReviewEventReactionMessage(ctx, msg, reviewEventConfirmationText(labelForCapabilityReview(review.Status), record, event)+"\n\nGrant activation needs repair: "+compactSentence(grantErr.Error()))
+	}
+	label := "approved"
+	if review.Status == session.CapabilityReviewStatusRejected {
+		label = "rejected"
+	}
+	if refreshed, ok, err := h.store.CapabilityRequest(record.RequestID); err == nil && ok {
+		record = refreshed
+	}
+	text := reviewEventConfirmationText(label, record, event)
+	if grantActivated {
+		text = strings.TrimSpace(text + "\n\nGrant activation: active\nGrant: " + grant.GrantID)
+	}
+	return h.editReviewEventReactionMessage(ctx, msg, text)
+}
+
+func (h *DecisionHandler) editReviewEventReactionMessage(ctx context.Context, msg core.InboundMessage, text string) error {
+	if h == nil || h.sender == nil || msg.ChatID == 0 || msg.Reaction == nil || msg.Reaction.MessageID <= 0 || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	return EditDecisionMessageClearingInlineKeyboard(ctx, h.sender, msg.ChatID, msg.Reaction.MessageID, text)
+}
+
 func labelForCapabilityReview(status session.CapabilityReviewStatus) string {
 	switch session.NormalizeCapabilityReviewStatus(status) {
 	case session.CapabilityReviewStatusParentApproved:

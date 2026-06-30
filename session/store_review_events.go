@@ -380,6 +380,34 @@ func (s *SQLiteStore) ReviewEventByID(id int64) (*ReviewEvent, error) {
 	return &event, nil
 }
 
+func (s *SQLiteStore) ReviewEventByDeliveryMessage(targetChatID int64, messageID int64) (*ReviewEvent, error) {
+	if targetChatID == 0 || messageID <= 0 {
+		return nil, sql.ErrNoRows
+	}
+	rows, err := s.db.Query(`
+		SELECT
+			id, source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
+			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
+			turn_from, turn_to, summary, metadata_json, idempotency_key, status, created_at, delivered_at, delivery_message_id
+		FROM review_events
+		WHERE target_chat_id = ? AND delivery_message_id = ? AND status IN ('delivered', 'dismissed')
+		ORDER BY delivered_at DESC, id DESC
+		LIMIT 1
+	`, targetChatID, messageID)
+	if err != nil {
+		return nil, fmt.Errorf("query review event by delivery message: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, sql.ErrNoRows
+	}
+	event, err := scanReviewEvent(rows)
+	if err != nil {
+		return nil, err
+	}
+	return &event, nil
+}
+
 func scanReviewEvent(scanner interface{ Scan(dest ...any) error }) (ReviewEvent, error) {
 	var (
 		event                ReviewEvent
