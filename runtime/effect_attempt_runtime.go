@@ -42,14 +42,7 @@ func (r *Runtime) recordWorkResultEffectAttempts(key session.SessionKey, req Wor
 		existingByCommandHash = r.effectAttemptIDsByWorkCommandHash(key, req)
 	}
 	phaseID := effectAttemptPhaseID(req)
-	commands := append([]string(nil), result.Commands...)
-	for _, event := range result.CodexEvents {
-		if strings.TrimSpace(event.Command) != "" {
-			commands = appendUniqueRuntimeString(commands, event.Command)
-		} else if event.Kind == "command" && strings.TrimSpace(event.Subject) != "" {
-			commands = appendUniqueRuntimeString(commands, event.Subject)
-		}
-	}
+	commands := workResultEffectAttemptCommands(result)
 	var attempts []session.EffectAttempt
 	var writeErr error
 	for _, command := range commands {
@@ -120,6 +113,35 @@ func (r *Runtime) recordWorkResultEffectAttempts(key session.SessionKey, req Wor
 		return attempts, effectAttemptRecordError{Cause: writeErr}
 	}
 	return attempts, nil
+}
+
+func workResultEffectAttemptCommands(result WorkResult) []string {
+	commands := append([]string(nil), result.Commands...)
+	seenHashes := make(map[string]struct{}, len(commands))
+	for _, command := range commands {
+		normalized := redactRuntimeEvidenceText(commandeffect.NormalizeCommand(strings.TrimSpace(command)))
+		if strings.TrimSpace(normalized) == "" {
+			continue
+		}
+		seenHashes[session.EffectAttemptCommandHash(normalized)] = struct{}{}
+	}
+	for _, event := range result.CodexEvents {
+		command := strings.TrimSpace(event.Command)
+		if command == "" && event.Kind == "command" {
+			command = strings.TrimSpace(event.Subject)
+		}
+		if command == "" {
+			continue
+		}
+		normalized := redactRuntimeEvidenceText(commandeffect.NormalizeCommand(command))
+		hash := session.EffectAttemptCommandHash(normalized)
+		if _, ok := seenHashes[hash]; ok {
+			continue
+		}
+		commands = append(commands, command)
+		seenHashes[hash] = struct{}{}
+	}
+	return commands
 }
 
 func (r *Runtime) effectAttemptIDsByWorkCommandHash(key session.SessionKey, req WorkRequest) map[string][]string {

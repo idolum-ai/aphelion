@@ -395,6 +395,69 @@ func TestWorkResultEffectAttemptConvergesWithMonitorStartRow(t *testing.T) {
 	}
 }
 
+func TestWorkResultEffectAttemptDedupesEventChannelReplay(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7007, UserID: 0, Scope: telegramDMScopeRef(7007)}
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "run command", nil, nil, core.InboundMessage{})
+	if err != nil {
+		t.Fatalf("startTurnMonitor() err = %v", err)
+	}
+	defer monitor.Finish(context.Background(), nil)
+
+	command := "mkdir -p generated/reports"
+	monitor.ToolStarted(context.Background(), "exec", json.RawMessage(fmt.Sprintf(`{"command":%q}`, command)))
+	before, err := store.EffectAttemptsByTurnRun(key, monitor.runID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsByTurnRun(before) err = %v", err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("before attempts = %#v, want one monitor attempt", before)
+	}
+
+	req := WorkRequest{
+		OperationID: "op-effect-event-replay",
+		Mode:        WorkModeWorkspaceWrite,
+		LeaseID:     "lease-effect-event-replay",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-event-replay", RiskClass: "workspace_write"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-event-replay",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-effect-event-replay",
+				LeaseID: "lease-effect-event-replay",
+			}}},
+		},
+	}
+	result := WorkResult{
+		ExecutorName: "native",
+		TurnRunID:    monitor.runID,
+		Commands:     []string{command},
+		CodexEvents: []session.WorkCodexEvent{{
+			Kind:    "command",
+			Command: command,
+		}},
+	}
+	now := time.Now().UTC()
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, result, nil, now, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one logical command occurrence", attempts)
+	}
+	if attempts[0].AttemptID != before[0].AttemptID || attempts[0].Status != session.EffectAttemptStatusExecuted {
+		t.Fatalf("attempt = %#v, want existing pre-dispatch row advanced", attempts[0])
+	}
+}
+
 func TestWorkResultEffectAttemptsAdvanceDuplicateCommandOccurrences(t *testing.T) {
 	t.Parallel()
 
