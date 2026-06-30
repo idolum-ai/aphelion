@@ -80,9 +80,19 @@ func externalToolInvocationReadinessFromSnapshots(toolName string, childPrincipa
 			snapshot.NextRepairAction = "provide or correct the named child_runtime material"
 			return snapshot
 		}
+		if accountCheck, required := externalToolInvocationAccountGrantReadiness(childPrincipal, inputAction, selectorName, selectorValue, grants); required {
+			if !accountCheck.Ready {
+				snapshot.Why = accountCheck.Why
+				snapshot.NextRepairAction = accountCheck.NextRepairAction
+				return snapshot
+			}
+		}
 		snapshot.Ready = true
 		snapshot.Status = "ready"
 		snapshot.Why = "tool exists, active child grant allows invoke and requested scope, runtime material is present"
+		if externalToolInvocationUsesAccountSelector(selectorName, selectorValue) {
+			snapshot.Why += ", and external account grant allows the requested account action"
+		}
 		snapshot.NextRepairAction = "none"
 		return snapshot
 	}
@@ -186,7 +196,24 @@ func (r *Runtime) externalToolInvocationReadinessStatusSnapshot(tools []core.Too
 			continue
 		}
 		seen[key] = struct{}{}
-		out = append(out, externalToolInvocationReadinessFromSnapshots(strings.TrimSpace(grant.TargetResource), strings.TrimSpace(grant.GrantedTo), action, selectorName, "", tools, grants))
+		accountValues := []string{""}
+		if externalToolInvocationUsesAccountSelector(selectorName, "") {
+			accountValues = externalToolInvocationAccountValues(strings.TrimSpace(grant.GrantedTo), grants)
+			if len(accountValues) == 0 {
+				accountValues = []string{""}
+			}
+		}
+		for _, selectorValue := range accountValues {
+			rowKey := key + "\x00" + selectorValue
+			if _, ok := seen[rowKey]; ok {
+				continue
+			}
+			seen[rowKey] = struct{}{}
+			out = append(out, externalToolInvocationReadinessFromSnapshots(strings.TrimSpace(grant.TargetResource), strings.TrimSpace(grant.GrantedTo), action, selectorName, selectorValue, tools, grants))
+			if len(out) >= 5 {
+				break
+			}
+		}
 		if len(out) >= 5 {
 			break
 		}
@@ -247,6 +274,137 @@ func capabilityGrantToolInvocationScopeSummaryForStatus(grant session.Capability
 		}
 		sort.Strings(parts)
 		return strings.Join(parts, ";")
+	}
+	return ""
+}
+
+func externalToolInvocationAccountGrantReadiness(childPrincipal string, inputAction string, selectorName string, selectorValue string, grants []core.CapabilityGrantStatusSnapshot) (core.ExternalToolInvocationReadinessSnapshot, bool) {
+	if !externalToolInvocationUsesAccountSelector(selectorName, selectorValue) {
+		return core.ExternalToolInvocationReadinessSnapshot{}, false
+	}
+	selectorValue = strings.TrimSpace(selectorValue)
+	snapshot := core.ExternalToolInvocationReadinessSnapshot{
+		Ready:            false,
+		Status:           "blocked",
+		Why:              "account-scoped tool invocation requires an external_account grant",
+		NextRepairAction: "create an active external_account grant for the requested account",
+	}
+	if selectorValue == "" {
+		snapshot.Why = "account-scoped tool invocation is missing the requested account value"
+		return snapshot, true
+	}
+	requiredActions := externalToolInvocationRequiredAccountActions(inputAction)
+	var found bool
+	for _, grant := range grants {
+		if strings.TrimSpace(grant.Kind) != string(session.CapabilityKindExternalAccount) || strings.TrimSpace(grant.GrantedTo) != childPrincipal {
+			continue
+		}
+		if !externalToolInvocationAccountTargetMatches(grant.TargetResource, selectorValue) {
+			continue
+		}
+		found = true
+		if strings.TrimSpace(grant.Status) != string(session.CapabilityGrantStatusActive) {
+			snapshot.Why = fmt.Sprintf("external_account grant %s for %s is %s", strings.TrimSpace(grant.GrantID), selectorValue, strings.TrimSpace(grant.Status))
+			snapshot.NextRepairAction = "activate or replace the requested account grant"
+			return snapshot, true
+		}
+		if len(requiredActions) > 0 && !externalToolInvocationAccountActionsAllow(grant.AllowedActions, requiredActions) {
+			snapshot.Why = fmt.Sprintf("external_account grant %s for %s does not allow %s", strings.TrimSpace(grant.GrantID), selectorValue, strings.Join(requiredActions, " or "))
+			snapshot.NextRepairAction = "issue an external_account grant with the exact account action scope"
+			return snapshot, true
+		}
+		snapshot.Ready = true
+		snapshot.Status = "ready"
+		snapshot.Why = "external account grant allows the requested account action"
+		snapshot.NextRepairAction = "none"
+		return snapshot, true
+	}
+	if !found {
+		snapshot.Why = fmt.Sprintf("missing external_account grant for %s to %s", childPrincipal, selectorValue)
+	}
+	return snapshot, true
+}
+
+func externalToolInvocationUsesAccountSelector(selectorName string, selectorValue string) bool {
+	selectorName = normalizeReadinessToken(selectorName)
+	switch selectorName {
+	case "account", "mailbox", "email_account", "external_account":
+		return true
+	default:
+		return selectorName == "" && strings.Contains(strings.TrimSpace(selectorValue), "@")
+	}
+}
+
+func externalToolInvocationRequiredAccountActions(inputAction string) []string {
+	action := normalizeReadinessToken(inputAction)
+	switch {
+	case strings.Contains(action, "archive"):
+		return []string{"archive", "mark_processed"}
+	case strings.Contains(action, "mark"):
+		return []string{"mark_processed", "archive"}
+	case strings.Contains(action, "search"):
+		return []string{"search", "read"}
+	case strings.Contains(action, "read"), strings.Contains(action, "get"), strings.Contains(action, "list"), strings.Contains(action, "metadata"):
+		return []string{"read", "metadata"}
+	case strings.Contains(action, "connection"), strings.Contains(action, "status"), strings.Contains(action, "probe"):
+		return []string{"connection_test", "read"}
+	default:
+		return []string{"read"}
+	}
+}
+
+func externalToolInvocationAccountActionsAllow(allowed []string, required []string) bool {
+	for _, want := range required {
+		for _, value := range allowed {
+			if normalizeReadinessToken(value) == normalizeReadinessToken(want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func externalToolInvocationAccountTargetMatches(target string, account string) bool {
+	target = strings.TrimSpace(target)
+	account = strings.TrimSpace(account)
+	if target == "" || account == "" {
+		return false
+	}
+	return strings.EqualFold(target, account) || strings.HasSuffix(strings.ToLower(target), ":"+strings.ToLower(account))
+}
+
+func externalToolInvocationAccountValues(childPrincipal string, grants []core.CapabilityGrantStatusSnapshot) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	for _, grant := range grants {
+		if strings.TrimSpace(grant.Kind) != string(session.CapabilityKindExternalAccount) || strings.TrimSpace(grant.GrantedTo) != childPrincipal {
+			continue
+		}
+		value := externalToolInvocationAccountValueFromTarget(grant.TargetResource)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func externalToolInvocationAccountValueFromTarget(target string) string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return ""
+	}
+	if strings.Contains(target, "@") {
+		if idx := strings.LastIndex(target, ":"); idx >= 0 && idx+1 < len(target) {
+			return strings.TrimSpace(target[idx+1:])
+		}
+		return target
 	}
 	return ""
 }

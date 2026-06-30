@@ -219,6 +219,98 @@ func TestCapabilityGrantWakeTimeoutProducesTransientRetryState(t *testing.T) {
 	}
 }
 
+func TestFreshCapabilityGrantWakeSupersedesStaleChildResourceRepair(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = strings.Join([]string{
+		"I made exactly one read-only dry-run report attempt using `search_unread_jobs` for `host@idolum.ai`.",
+		"Result: blocked by tool timeout.",
+		"Non-secret status:",
+		"- failure class: `timeout`",
+		"REVIEW_STATUS: blocked",
+	}, "\n")
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "mail-stale-repair",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Adapter: "gog_cli",
+		}},
+		WakeupMode: "manual",
+		Status:     "active",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Read mailbox opportunities and report bounded findings.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	key := rt.durableAgentExecutionKey(agent.AgentID)
+	staleAt := time.Now().UTC().Add(-time.Hour)
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "durable_wake",
+		State:              session.NextActionBlockedNeedsResourceRepair,
+		SubjectKind:        "task_packet",
+		SubjectRef:         "child_task:old-resource-repair",
+		CausalRefs:         []string{"task_packet:child_task:old-resource-repair", "child_task_result:child_result:old-resource-repair"},
+		NextAction:         "repair the child-local resource permission boundary before retrying",
+		ResourceBlocker:    "resource_permission_denied",
+		RetryPolicy:        "retry_after_resource_repair",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
+		OperationTool:      "update_operation",
+		OperationInputJSON: `{"recovery_contract":"aphelion.recovery_handoff.v1","recovery_operation_kind":"durable_child_recovery","durable_agent_id":"mail-stale-repair","tool":"gog_cli","blocker_kind":"resource_permission_denied"}`,
+		OperatorProjection: "Stale pre-fix resource repair blocker.",
+		CreatedAt:          staleAt,
+	}); err != nil {
+		t.Fatalf("RecordNextAction(stale resource repair) err = %v", err)
+	}
+
+	grant := session.CapabilityGrant{
+		GrantID:        "capg-mail-stale-repair",
+		RequestID:      "cap-mail-stale-repair",
+		GrantedTo:      "durable_agent:mail-stale-repair",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "host@idolum.ai",
+		AllowedActions: []string{"read", "archive", "mark_processed"},
+		Status:         session.CapabilityGrantStatusActive,
+	}
+	if err := rt.queueCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("queueCapabilityGrantWake() err = %v", err)
+	}
+	if err := rt.runCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("runCapabilityGrantWake() err = %v", err)
+	}
+
+	open, err := store.OpenNextActionsBySession(key, 20)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	for _, action := range open {
+		if action.ResourceBlocker == "resource_permission_denied" {
+			t.Fatalf("open next actions = %#v, want fresh timeout result to supersede stale resource repair blockers", open)
+		}
+	}
+	var foundTransient bool
+	for _, action := range open {
+		if action.State == session.NextActionScheduledRetry && action.ResourceBlocker == "external_transient" {
+			foundTransient = true
+		}
+	}
+	if !foundTransient {
+		t.Fatalf("open next actions = %#v, want fresh transient retry state", open)
+	}
+}
+
 func TestParentConversationAckClosesQueuedGrantTaskWaiterForClaimScopedPacket(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	_ = sender
