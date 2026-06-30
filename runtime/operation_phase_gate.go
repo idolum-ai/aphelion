@@ -29,6 +29,11 @@ func operationPhaseApprovalGate(phase session.OperationPhase) operationPhaseGate
 	phase = normalizeSingleOperationPhase(phase)
 	explicitLevel := normalizeOperationGateLevel(phase.GateLevel)
 	hardReason := operationPhaseHardBlockedReason(phase)
+	if explicitLevel == operationGateLevelHardConsentBlock &&
+		hardReason != "" &&
+		operationPhaseHardBlockCanBeSatisfiedByOperator(phase, hardReason) {
+		explicitLevel = operationGateLevelEscalatedOperatorApproval
+	}
 	if explicitLevel == operationGateLevelEscalatedOperatorApproval &&
 		operationPhaseHasThirdPartyPrivateDataGate(phase) &&
 		hardReason != "" &&

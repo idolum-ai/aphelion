@@ -404,7 +404,7 @@ func TestApplyTurnConstitutionNeutralizesVisibleApprovalRequest(t *testing.T) {
 		prompt.RuntimeAwareness{},
 		core.MaterialPacket{},
 		"",
-		"I can continue.\n\nApprove this bounded read-only repair:\n- inspect runtime state\n- stop after one result",
+		"I can continue.\n\nPlease approve this exact repair window:\n- inspect runtime state\n- stop after one result",
 		nil,
 		auditRecorder,
 	)

@@ -553,6 +553,9 @@ func finalReplyContainsVisibleApprovalRequest(reply string) bool {
 		"approve this bounded",
 		"approve one bounded",
 		"approve a bounded",
+		"approve this exact",
+		"approve one exact",
+		"approve an exact",
 		"approve this fresh bounded",
 		"approve one fresh bounded",
 		"approve a fresh bounded",
@@ -562,6 +565,12 @@ func finalReplyContainsVisibleApprovalRequest(reply string) bool {
 		"approve this repair",
 		"approve one repair",
 		"approve a repair",
+		"approve this repair window",
+		"approve one repair window",
+		"approve a repair window",
+		"approve this approval window",
+		"approve one approval window",
+		"approve an approval window",
 	} {
 		if strings.Contains(normalized, phrase) {
 			return true
