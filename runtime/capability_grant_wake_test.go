@@ -29,7 +29,6 @@ func capabilityGrantWakeOperationInputForTest(t *testing.T, raw string) map[stri
 
 func TestQueueCapabilityGrantWakeAddsParentConversation(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	_ = sender
 	provider.replyText = "Grant incorporated.\nREVIEW_STATUS: completed"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -464,19 +463,18 @@ func TestCapabilityGrantWakeBlockedResultCreatesTypedNextState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PendingReviewEvents() err = %v", err)
 	}
-	if len(pending) != 1 {
-		t.Fatalf("pending review events = %#v, want one child blocker review card", pending)
+	if len(pending) != 0 {
+		t.Fatalf("pending review events = %#v, want immediate child blocker review card delivery", pending)
 	}
-	if !strings.Contains(pending[0].Summary, "tool_runtime_probe_missing") || !strings.Contains(pending[0].Summary, "deterministic child-side runtime visibility probe") {
-		t.Fatalf("review summary = %q, want precise probe-required blocker and next step", pending[0].Summary)
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline review cards = %#v, want one immediate child blocker card", sender.inline)
 	}
-	metadata := capabilityGrantWakeOperationInputForTest(t, pending[0].MetadataJSON)
-	artifactMetadata, ok := metadata["metadata"].(map[string]any)
-	if !ok {
-		t.Fatalf("review metadata = %#v, want nested artifact metadata", metadata)
-	}
-	if artifactMetadata["child_blocker_kind"] != "tool_runtime_probe_missing" || artifactMetadata["operator_action"] != session.NextActionOperationKindDurableChildRecovery || artifactMetadata["tool_name"] != "gog_cli" {
-		t.Fatalf("review artifact metadata = %#v, want typed blocker/action/tool metadata", artifactMetadata)
+	if sender.inline[0].chatID != 1001 ||
+		!strings.Contains(sender.inline[0].text, "tool runtime failure") ||
+		!strings.Contains(sender.inline[0].text, "deterministic child-side") {
+		t.Fatalf("inline review card = %#v, want precise probe-required blocker delivery", sender.inline[0])
 	}
 }
 
