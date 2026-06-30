@@ -32,6 +32,8 @@ type missingGrantRequirement struct {
 	OperationTool      string
 }
 
+type MissingGrantRequirement = missingGrantRequirement
+
 type missingGrantContract struct {
 	Requirement         missingGrantRequirement
 	AcceptedPrincipals  []string
@@ -192,6 +194,10 @@ func (r *Registry) materializeMissingGrantRequirement(_ context.Context, key ses
 		return session.CapabilityRequest{}, 0, session.NextActionRecord{}, err
 	}
 	return request, reviewEventID, action, nil
+}
+
+func (r *Registry) MaterializeMissingGrantRequirement(ctx context.Context, key session.SessionKey, actor principal.Principal, requirement MissingGrantRequirement, now time.Time) (session.CapabilityRequest, int64, session.NextActionRecord, error) {
+	return r.materializeMissingGrantRequirement(ctx, key, actor, missingGrantRequirement(requirement), now)
 }
 
 func missingGrantNextActionRecordID(key session.SessionKey, requestID string) string {

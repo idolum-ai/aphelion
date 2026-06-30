@@ -811,6 +811,15 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 		if _, err := p.runtime.materializePendingOperationProposalApprovalLocked(ctx, p.key, p.msg, req.Message.Text, req.Result); err != nil {
 			return nil, fmt.Errorf("materialize approval requested by visible reply: %w", err)
 		}
+		materializedCapabilityGrant, err := p.runtime.materializeDeniedCapabilityAccessApproval(ctx, p.key, p.msg, p.audit, time.Now().UTC())
+		if err != nil {
+			return nil, fmt.Errorf("materialize denied capability access approval: %w", err)
+		}
+		if materializedCapabilityGrant && p.deliver {
+			if err := p.runtime.deliverReviewEvents(ctx, p.key, p.currentSession()); err != nil {
+				return nil, fmt.Errorf("deliver denied capability access approval: %w", err)
+			}
+		}
 	}
 	return turn.RunDeliveryStage(ctx, turn.DeliveryStageInput{
 		Request:        req,

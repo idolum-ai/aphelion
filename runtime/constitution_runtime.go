@@ -550,6 +550,9 @@ func finalReplyContainsVisibleApprovalRequest(reply string) bool {
 		"\n", " ",
 	).Replace(lower)), " ")
 	for _, phrase := range []string{
+		"next approval needed",
+		"approve granting",
+		"approve grant",
 		"approve this bounded",
 		"approve one bounded",
 		"approve a bounded",
