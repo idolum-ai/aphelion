@@ -4,6 +4,7 @@ package telegramdecision
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -71,6 +72,203 @@ func TestHandleReviewEventCallbackApprovesCapabilityRequest(t *testing.T) {
 	}
 	if len(sender.answers) != 1 || sender.answers[0].text != "" {
 		t.Fatalf("answers = %#v, want empty ack", sender.answers)
+	}
+}
+
+func TestHandleReviewEventCallbackActivatesCompiledCapabilityGrant(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "mail-child",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		Status:             "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	const requestID = "cap-mail-read"
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      requestID,
+		RequestedBy:    "telegram:1002",
+		RequestedFor:   "durable_agent:mail-child",
+		AdminPrincipal: "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "account-primary",
+		Purpose:        "read account metadata for one bounded task",
+		Contract:       `{"surface":"account_read"}`,
+		Constraints:    `{"max_items":25}`,
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	key := session.SessionKey{
+		ChatID: 7001,
+		UserID: 1002,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "7001"},
+	}
+	handoff := map[string]any{
+		"action":          "grant_set",
+		"request_id":      requestID,
+		"kind":            "external_account",
+		"target_resource": "account-primary",
+		"principal":       "durable_agent:mail-child",
+		"allowed_actions": []string{"read"},
+		"contract":        json.RawMessage(`{"surface":"account_read"}`),
+		"constraints":     json.RawMessage(`{"max_items":25}`),
+		"grant_status":    "active",
+	}
+	rawHandoff, err := json.Marshal(handoff)
+	if err != nil {
+		t.Fatalf("Marshal(handoff) err = %v", err)
+	}
+	blocker, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           "next-cap-mail-read",
+		Key:                key,
+		Owner:              "capability_request",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "capability_request",
+		SubjectRef:         requestID,
+		NextAction:         "Approve the requested bounded account read grant.",
+		RequiredAuthority:  "capability_grant",
+		ResourceBlocker:    "missing_capability_grant",
+		OperationKind:      "capability_grant_review",
+		OperationTool:      "capability_authority",
+		OperationInputJSON: string(rawHandoff),
+	})
+	if err != nil {
+		t.Fatalf("RecordNextAction() err = %v", err)
+	}
+	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
+		SourceChatID:      7001,
+		SourceUserID:      1002,
+		SourceRole:        "capability_request",
+		TargetAdminChatID: 1001,
+		Summary:           "Grant mail-child bounded account read access",
+		MetadataJSON:      `{"request_id":"cap-mail-read","review_status":"proposed"}`,
+		Status:            "delivered",
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+
+	sender := &decisionTestSender{}
+	handler := newDecisionHandlerForTest(sender, &decisionTestRouter{}, decision.NewBroker(nil), store)
+	err = handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-review-grant",
+		From:    &telegram.User{ID: 1001},
+		Message: &telegram.Message{MessageID: 77, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(eventID, core.ReviewEventActionApprove),
+	})
+	if err != nil {
+		t.Fatalf("HandleCallbackQuery() err = %v", err)
+	}
+
+	updated, ok, err := store.CapabilityRequest(requestID)
+	if err != nil || !ok {
+		t.Fatalf("CapabilityRequest() ok=%t err=%v", ok, err)
+	}
+	if updated.ReviewStatus != session.CapabilityReviewStatusApproved {
+		t.Fatalf("ReviewStatus = %q, want approved", updated.ReviewStatus)
+	}
+	if strings.TrimSpace(updated.GrantID) == "" {
+		t.Fatalf("GrantID is empty after callback approval: %#v", updated)
+	}
+	grant, ok, err := store.CapabilityGrant(updated.GrantID)
+	if err != nil || !ok {
+		t.Fatalf("CapabilityGrant(%q) ok=%t err=%v", updated.GrantID, ok, err)
+	}
+	if grant.RequestID != requestID || grant.GrantedTo != "durable_agent:mail-child" || grant.Kind != session.CapabilityKindExternalAccount || grant.TargetResource != "account-primary" || grant.Status != session.CapabilityGrantStatusActive {
+		t.Fatalf("grant = %#v, want active linked external_account grant for mail-child/account-primary", grant)
+	}
+	if len(grant.AllowedActions) != 1 || grant.AllowedActions[0] != "read" {
+		t.Fatalf("grant actions = %#v, want [read]", grant.AllowedActions)
+	}
+	open, err := store.OpenNextActionsBySessionSubject(key, "capability_request", requestID, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySessionSubject() err = %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open next actions = %#v, want blocker %s resolved", open, blocker.RecordID)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEvents() err = %v", err)
+	}
+	foundGrantEvent := false
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventCapabilityGrantChanged && strings.Contains(event.PayloadJSON, grant.GrantID) {
+			foundGrantEvent = true
+			break
+		}
+	}
+	if !foundGrantEvent {
+		t.Fatalf("execution events = %#v, want capability grant changed event for %s", events, grant.GrantID)
+	}
+	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "Grant activation: active") || !strings.Contains(sender.edits[0].text, grant.GrantID) {
+		t.Fatalf("edits = %#v, want approved card to mention active grant", sender.edits)
+	}
+}
+
+func TestHandleReviewEventCallbackDoesNotActivateUncompiledGrant(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-review-only",
+		RequestedBy:    "telegram:1002",
+		RequestedFor:   "telegram:1002",
+		AdminPrincipal: "telegram:1001",
+		Kind:           session.CapabilityKindGenericDelegation,
+		TargetResource: "local-branch",
+		Purpose:        "review-only approval",
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
+		SourceChatID:      7001,
+		SourceUserID:      1002,
+		SourceRole:        "capability_request",
+		TargetAdminChatID: 1001,
+		Summary:           "Capability request cap-review-only",
+		MetadataJSON:      `{"request_id":"cap-review-only","review_status":"proposed"}`,
+		Status:            "delivered",
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+	sender := &decisionTestSender{}
+	handler := newDecisionHandlerForTest(sender, &decisionTestRouter{}, decision.NewBroker(nil), store)
+	err = handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-review-only",
+		From:    &telegram.User{ID: 1001},
+		Message: &telegram.Message{MessageID: 77, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(eventID, core.ReviewEventActionApprove),
+	})
+	if err != nil {
+		t.Fatalf("HandleCallbackQuery() err = %v", err)
+	}
+	updated, ok, err := store.CapabilityRequest("cap-review-only")
+	if err != nil || !ok {
+		t.Fatalf("CapabilityRequest() ok=%t err=%v", ok, err)
+	}
+	if updated.ReviewStatus != session.CapabilityReviewStatusApproved {
+		t.Fatalf("ReviewStatus = %q, want approved", updated.ReviewStatus)
+	}
+	if updated.GrantID != "" {
+		t.Fatalf("GrantID = %q, want no grant for review-only approval", updated.GrantID)
+	}
+	if len(sender.edits) != 1 || strings.Contains(sender.edits[0].text, "Grant activation: active") {
+		t.Fatalf("edits = %#v, want approval without grant activation", sender.edits)
 	}
 }
 

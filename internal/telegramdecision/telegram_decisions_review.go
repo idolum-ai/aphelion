@@ -4,7 +4,11 @@ package telegramdecision
 
 import (
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -89,14 +93,286 @@ func (h *DecisionHandler) handleReviewEventCallback(ctx context.Context, cb tele
 	if err != nil {
 		return err
 	}
+	grant, grantActivated, grantErr := h.materializeApprovedCapabilityGrantFromReview(record, review, *event, fromID)
+	if grantErr != nil {
+		_ = h.editReviewEventCallbackMessage(ctx, cb, reviewEventConfirmationText(labelForCapabilityReview(review.Status), record, *event)+"\n\nGrant activation needs repair: "+compactSentence(grantErr.Error()))
+		return h.answerReviewEventCallback(ctx, cb, "")
+	}
 	label := "approved"
 	if review.Status == session.CapabilityReviewStatusParentApproved {
 		label = "parent-approved"
 	} else if review.Status == session.CapabilityReviewStatusRejected {
 		label = "rejected"
 	}
-	_ = h.editReviewEventCallbackMessage(ctx, cb, reviewEventConfirmationText(label, record, *event))
+	if refreshed, ok, err := h.store.CapabilityRequest(record.RequestID); err == nil && ok {
+		record = refreshed
+	}
+	text := reviewEventConfirmationText(label, record, *event)
+	if grantActivated {
+		text = strings.TrimSpace(text + "\n\nGrant activation: active\nGrant: " + grant.GrantID)
+	}
+	_ = h.editReviewEventCallbackMessage(ctx, cb, text)
 	return h.answerReviewEventCallback(ctx, cb, "")
+}
+
+func labelForCapabilityReview(status session.CapabilityReviewStatus) string {
+	switch session.NormalizeCapabilityReviewStatus(status) {
+	case session.CapabilityReviewStatusParentApproved:
+		return "parent-approved"
+	case session.CapabilityReviewStatusRejected:
+		return "rejected"
+	case session.CapabilityReviewStatusApproved:
+		return "approved"
+	default:
+		return "reviewed"
+	}
+}
+
+type reviewCapabilityGrantSetInput struct {
+	Action           string          `json:"action"`
+	RequestID        string          `json:"request_id,omitempty"`
+	GrantID          string          `json:"grant_id,omitempty"`
+	Kind             string          `json:"kind,omitempty"`
+	TargetResource   string          `json:"target_resource,omitempty"`
+	CapabilityAction string          `json:"capability_action,omitempty"`
+	Principal        string          `json:"principal,omitempty"`
+	AllowedActions   []string        `json:"allowed_actions,omitempty"`
+	Contract         json.RawMessage `json:"contract,omitempty"`
+	Constraints      json.RawMessage `json:"constraints,omitempty"`
+	GrantStatus      string          `json:"grant_status,omitempty"`
+	ExpiresInSeconds int             `json:"expires_in_seconds,omitempty"`
+}
+
+func (h *DecisionHandler) materializeApprovedCapabilityGrantFromReview(record session.CapabilityRequest, review session.CapabilityReview, event session.ReviewEvent, reviewerTelegramID int64) (session.CapabilityGrant, bool, error) {
+	if h == nil || h.store == nil {
+		return session.CapabilityGrant{}, false, nil
+	}
+	if session.NormalizeCapabilityReviewStatus(review.Status) != session.CapabilityReviewStatusApproved {
+		return session.CapabilityGrant{}, false, nil
+	}
+	record = session.NormalizeCapabilityRequest(record)
+	if record.RequestID == "" {
+		return session.CapabilityGrant{}, false, nil
+	}
+	actions, err := h.store.OpenNextActionsBySubject("capability_request", record.RequestID, 100)
+	if err != nil {
+		return session.CapabilityGrant{}, false, fmt.Errorf("load compiled capability grant handoff: %w", err)
+	}
+	for _, action := range actions {
+		input, ok, err := reviewCapabilityGrantSetFromNextAction(record, action)
+		if err != nil {
+			return session.CapabilityGrant{}, false, err
+		}
+		if !ok {
+			continue
+		}
+		grant, err := h.applyApprovedCapabilityGrantSet(record, input, action, event, reviewerTelegramID)
+		if err != nil {
+			return session.CapabilityGrant{}, false, err
+		}
+		return grant, true, nil
+	}
+	return session.CapabilityGrant{}, false, nil
+}
+
+func reviewCapabilityGrantSetFromNextAction(record session.CapabilityRequest, action session.NextActionRecord) (reviewCapabilityGrantSetInput, bool, error) {
+	if session.NormalizeNextActionState(action.State) != session.NextActionBlockedNeedsAuthority {
+		return reviewCapabilityGrantSetInput{}, false, nil
+	}
+	if strings.TrimSpace(action.OperationTool) != "capability_authority" || action.OperationKind != "capability_grant_review" {
+		return reviewCapabilityGrantSetInput{}, false, nil
+	}
+	if action.SubjectKind != "capability_request" || strings.TrimSpace(action.SubjectRef) != strings.TrimSpace(record.RequestID) {
+		return reviewCapabilityGrantSetInput{}, false, nil
+	}
+	var input reviewCapabilityGrantSetInput
+	if err := json.Unmarshal([]byte(action.OperationInputJSON), &input); err != nil {
+		return reviewCapabilityGrantSetInput{}, false, fmt.Errorf("decode compiled capability grant handoff: %w", err)
+	}
+	if strings.TrimSpace(input.Action) != "grant_set" {
+		return reviewCapabilityGrantSetInput{}, false, nil
+	}
+	if strings.TrimSpace(input.RequestID) != strings.TrimSpace(record.RequestID) {
+		return reviewCapabilityGrantSetInput{}, false, fmt.Errorf("compiled capability grant handoff request mismatch: got %q want %q", strings.TrimSpace(input.RequestID), strings.TrimSpace(record.RequestID))
+	}
+	return input, true, nil
+}
+
+func (h *DecisionHandler) applyApprovedCapabilityGrantSet(record session.CapabilityRequest, input reviewCapabilityGrantSetInput, action session.NextActionRecord, event session.ReviewEvent, reviewerTelegramID int64) (session.CapabilityGrant, error) {
+	kind := session.NormalizeCapabilityKind(session.CapabilityKind(firstTelegramDecisionNonEmpty(input.Kind, string(record.Kind))))
+	if kind == "" {
+		return session.CapabilityGrant{}, fmt.Errorf("compiled capability grant handoff requires kind")
+	}
+	target := firstTelegramDecisionNonEmpty(input.TargetResource, record.TargetResource)
+	if target == "" {
+		return session.CapabilityGrant{}, fmt.Errorf("compiled capability grant handoff requires target_resource")
+	}
+	grantedTo := firstTelegramDecisionNonEmpty(input.Principal, record.RequestedFor, record.RequestedBy)
+	if grantedTo == "" {
+		return session.CapabilityGrant{}, fmt.Errorf("compiled capability grant handoff requires principal")
+	}
+	actions := session.NormalizeCapabilityActions(input.AllowedActions)
+	if len(actions) == 0 && strings.TrimSpace(input.CapabilityAction) != "" {
+		actions = session.NormalizeCapabilityActions([]string{input.CapabilityAction})
+	}
+	if len(actions) == 0 {
+		actions = []string{"invoke"}
+	}
+	contract, err := reviewNormalizeCapabilityJSONBlobWithDefault(input.Contract, "contract", record.Contract)
+	if err != nil {
+		return session.CapabilityGrant{}, err
+	}
+	constraints, err := reviewNormalizeCapabilityJSONBlobWithDefault(input.Constraints, "constraints", record.Constraints)
+	if err != nil {
+		return session.CapabilityGrant{}, err
+	}
+	if reviewCapabilityContractHasUpdatePlan(contract) {
+		return session.CapabilityGrant{}, fmt.Errorf("compiled capability grant handoff requires capability_authority execution for capability_update_plan")
+	}
+	status := session.NormalizeCapabilityGrantStatus(session.CapabilityGrantStatus(input.GrantStatus))
+	if strings.TrimSpace(input.GrantStatus) != "" && status == "" {
+		return session.CapabilityGrant{}, fmt.Errorf("compiled capability grant handoff grant_status is invalid")
+	}
+	if status == "" {
+		status = session.CapabilityGrantStatusActive
+	}
+	if err := h.validateReviewCapabilityGrantTarget(grantedTo, status); err != nil {
+		return session.CapabilityGrant{}, err
+	}
+	now := time.Now().UTC()
+	expiresAt := time.Time{}
+	if input.ExpiresInSeconds > 0 {
+		expiresAt = now.Add(time.Duration(input.ExpiresInSeconds) * time.Second)
+	}
+	grantID := strings.TrimSpace(input.GrantID)
+	if grantID == "" {
+		grantID = reviewCapabilityGrantID(record.RequestID, action.RecordID)
+	}
+	policyHash := reviewCapabilityGrantPolicyHash(kind, target, grantedTo, actions, contract, constraints)
+	grant, err := h.store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:            grantID,
+		RequestID:          record.RequestID,
+		GrantedBy:          fmt.Sprintf("telegram:%d", reviewerTelegramID),
+		GrantedTo:          grantedTo,
+		Kind:               kind,
+		TargetResource:     target,
+		AllowedActions:     actions,
+		Contract:           contract,
+		Constraints:        constraints,
+		Status:             status,
+		BaselinePolicyHash: policyHash,
+		CurrentPolicyHash:  policyHash,
+		AnchorFingerprint:  policyHash,
+		GrantedAt:          now,
+		ExpiresAt:          expiresAt,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+	if err != nil {
+		return session.CapabilityGrant{}, err
+	}
+	key := sessionKeyForReviewNextAction(action)
+	payloadRaw, _ := json.Marshal(map[string]any{
+		"grant_id":        grant.GrantID,
+		"request_id":      grant.RequestID,
+		"review_event_id": event.ID,
+		"kind":            string(grant.Kind),
+		"target_resource": grant.TargetResource,
+		"granted_to":      grant.GrantedTo,
+		"granted_by":      grant.GrantedBy,
+		"status":          string(grant.Status),
+		"allowed_actions": grant.AllowedActions,
+	})
+	if _, err := h.store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType:   core.ExecutionEventCapabilityGrantChanged,
+		Stage:       "capability_delegation",
+		Status:      string(grant.Status),
+		PayloadJSON: string(payloadRaw),
+		CreatedAt:   now,
+	}); err != nil {
+		return session.CapabilityGrant{}, fmt.Errorf("record capability grant activation event: %w", err)
+	}
+	if grant.Status == session.CapabilityGrantStatusActive {
+		if err := h.store.ResolveNextAction(session.NextActionResolutionInput{
+			RecordID:    action.RecordID,
+			Key:         key,
+			Owner:       "capability_authority",
+			SubjectKind: "capability_request",
+			SubjectRef:  record.RequestID,
+			Reason:      "capability_grant_active",
+			ResolvedAt:  now,
+		}); err != nil {
+			return session.CapabilityGrant{}, fmt.Errorf("resolve capability grant blocker: %w", err)
+		}
+	}
+	return grant, nil
+}
+
+func reviewNormalizeCapabilityJSONBlobWithDefault(raw json.RawMessage, field string, fallback string) (string, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		trimmed = strings.TrimSpace(fallback)
+	}
+	if trimmed == "" {
+		trimmed = "{}"
+	}
+	if !json.Valid([]byte(trimmed)) {
+		return "", fmt.Errorf("capability %s must be valid json", strings.TrimSpace(field))
+	}
+	return trimmed, nil
+}
+
+func reviewCapabilityContractHasUpdatePlan(contract string) bool {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(contract)), &payload); err != nil {
+		return false
+	}
+	_, ok := payload["capability_update_plan"]
+	return ok
+}
+
+func (h *DecisionHandler) validateReviewCapabilityGrantTarget(grantedTo string, status session.CapabilityGrantStatus) error {
+	if status != session.CapabilityGrantStatusActive || h == nil || h.store == nil {
+		return nil
+	}
+	agentID, ok := core.DurableAgentIDFromPrincipal(grantedTo)
+	if !ok {
+		return nil
+	}
+	if _, err := h.store.DurableAgent(agentID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("capability grant target durable agent %q does not exist", agentID)
+		}
+		return fmt.Errorf("load durable agent %q for capability grant: %w", agentID, err)
+	}
+	return nil
+}
+
+func reviewCapabilityGrantPolicyHash(kind session.CapabilityKind, target string, principalID string, actions []string, contract string, constraints string) string {
+	payload := map[string]any{
+		"kind":            string(kind),
+		"target_resource": strings.TrimSpace(target),
+		"principal":       strings.TrimSpace(principalID),
+		"allowed_actions": session.NormalizeCapabilityActions(actions),
+		"contract":        strings.TrimSpace(contract),
+		"constraints":     strings.TrimSpace(constraints),
+	}
+	raw, _ := json.Marshal(payload)
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func reviewCapabilityGrantID(requestID string, actionRecordID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(requestID) + "\x00" + strings.TrimSpace(actionRecordID)))
+	return "capg-review-" + hex.EncodeToString(sum[:8])
+}
+
+func sessionKeyForReviewNextAction(record session.NextActionRecord) session.SessionKey {
+	return session.SessionKey{
+		ChatID: record.ChatID,
+		UserID: record.UserID,
+		Scope:  record.Scope,
+	}
 }
 
 func (h *DecisionHandler) handleMissionControlProposalCallback(ctx context.Context, cb telegram.CallbackQuery, event session.ReviewEvent, proposal core.MissionControlProposal, action core.ReviewEventAction) error {

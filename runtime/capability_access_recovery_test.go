@@ -28,19 +28,19 @@ func TestDeliveryMaterializesDeniedCapabilityAccessApprovalCard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() err = %v", err)
 	}
-	audit := newTurnAuditRecorder(key, "telegram", string(principal.RoleAdmin), "finish email report")
+	audit := newTurnAuditRecorder(key, "telegram", string(principal.RoleAdmin), "finish account report")
 	audit.ToolFinished(
 		"capability_authority",
-		`{"action":"access_check","kind":"external_account","target_resource":"host@idolum.ai","principal":"durable_agent:idolum-email","capability_action":"read"}`,
-		"[CAPABILITY_ACCESS]\nkind: external_account\ntarget_resource: host@idolum.ai\nprincipal: durable_agent:idolum-email\naction: read\nallowed: false\n",
+		`{"action":"access_check","kind":"external_account","target_resource":"account-primary","principal":"durable_agent:mail-child","capability_action":"read"}`,
+		"[CAPABILITY_ACCESS]\nkind: external_account\ntarget_resource: account-primary\nprincipal: durable_agent:mail-child\naction: read\nallowed: false\n",
 		"",
 	)
-	reply := "Next approval needed:\n\nApprove granting durable_agent:idolum-email read access to host@idolum.ai for one bounded read-only mailbox/report run."
+	reply := "Next approval needed:\n\nApprove granting durable_agent:mail-child read access to account-primary for one bounded read-only account/report run."
 	port := &turnDeliveryPort{
 		runtime:        rt,
 		key:            key,
 		sess:           sess,
-		msg:            core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, SenderName: "admin", Text: "finish email report", MessageID: 1},
+		msg:            core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, SenderName: "admin", Text: "finish account report", MessageID: 1},
 		deliver:        true,
 		recordOutbound: true,
 		audit:          audit,
@@ -53,7 +53,7 @@ func TestDeliveryMaterializesDeniedCapabilityAccessApprovalCard(t *testing.T) {
 		t.Fatalf("Deliver() err = %v", err)
 	}
 
-	requests, err := store.CapabilityRequests(10, session.CapabilityReviewStatusProposed, session.CapabilityKindExternalAccount, "durable_agent:idolum-email")
+	requests, err := store.CapabilityRequests(10, session.CapabilityReviewStatusProposed, session.CapabilityKindExternalAccount, "durable_agent:mail-child")
 	if err != nil {
 		t.Fatalf("CapabilityRequests() err = %v", err)
 	}
@@ -61,7 +61,7 @@ func TestDeliveryMaterializesDeniedCapabilityAccessApprovalCard(t *testing.T) {
 		t.Fatalf("CapabilityRequests() len = %d, want 1", len(requests))
 	}
 	request := requests[0]
-	if request.TargetResource != "host@idolum.ai" || request.RequestedFor != "durable_agent:idolum-email" {
+	if request.TargetResource != "account-primary" || request.RequestedFor != "durable_agent:mail-child" {
 		t.Fatalf("request = %#v, want durable-agent external-account read request", request)
 	}
 
@@ -84,7 +84,7 @@ func TestDeliveryMaterializesDeniedCapabilityAccessApprovalCard(t *testing.T) {
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want one capability approval card; sent=%#v", len(sender.inline), sender.sent)
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "host@idolum.ai") || !strings.Contains(got, "durable_agent:idolum-email") {
+	if got := sender.inline[0].text; !strings.Contains(got, "account-primary") || !strings.Contains(got, "durable_agent:mail-child") {
 		t.Fatalf("inline text = %q, want exact external account and principal", got)
 	}
 	if len(sender.inline[0].rows) == 0 || len(sender.inline[0].rows[len(sender.inline[0].rows)-1]) != 2 {
@@ -110,7 +110,7 @@ func TestDeliveryDoesNotMaterializeCapabilityCardWithoutDeniedAccessEvidence(t *
 		runtime:        rt,
 		key:            key,
 		sess:           sess,
-		msg:            core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, SenderName: "admin", Text: "finish email report", MessageID: 1},
+		msg:            core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, SenderName: "admin", Text: "finish account report", MessageID: 1},
 		deliver:        true,
 		recordOutbound: true,
 		audit:          newTurnAuditRecorder(key, "telegram", string(principal.RoleAdmin), "finish email report"),
