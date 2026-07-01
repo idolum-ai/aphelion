@@ -221,6 +221,75 @@ func TestChildTaskAdmissionAtomicallyQueuesContinuityPacketEventAndNextAction(t 
 	}
 }
 
+func TestChildTaskQueuedPacketCanBeClaimedAfterRestart(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	key := SessionKey{ChatID: 7711, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindDurableAgent, ID: "child-restart-claim", DurableAgentID: "child-restart-claim"}}
+	now := time.Now().UTC().Round(0)
+	packet, err := store.RecordChildTaskPacket(ChildTaskPacketInput{
+		PacketID:  "child_task:restart_claim",
+		AgentID:   "child-restart-claim",
+		Key:       key,
+		TaskKind:  "durable_wake",
+		InputJSON: `{"reason":"crash-before-claim"}`,
+		CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskPacket() err = %v", err)
+	}
+	if packet.Status != ChildTaskPacketQueued || packet.ActiveAttemptID != "" {
+		t.Fatalf("packet = %#v, want queued packet before crash", packet)
+	}
+	dbPath := store.DBPath()
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() err = %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen) err = %v", err)
+	}
+	defer reopened.Close()
+	claimed, err := reopened.ClaimChildTaskAttempt(ChildTaskAttemptClaimInput{
+		PacketID:       packet.PacketID,
+		AttemptID:      "child_attempt:restart_claim",
+		LeaseOwner:     "test_worker:restart_claim",
+		AgentID:        "child-restart-claim",
+		Key:            key,
+		ClaimedAt:      now.Add(time.Second),
+		LeaseExpiresAt: now.Add(10 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("ClaimChildTaskAttempt(after reopen) err = %v", err)
+	}
+	if claimed.Status != ChildTaskPacketInProgress || claimed.ActiveAttemptID != "child_attempt:restart_claim" || claimed.LeaseGeneration != 1 {
+		t.Fatalf("claimed packet = %#v, want first durable claim after restart", claimed)
+	}
+	completed, err := reopened.recordChildTaskResultForTest(ChildTaskResultInput{
+		PacketID:        packet.PacketID,
+		AttemptID:       claimed.ActiveAttemptID,
+		LeaseOwner:      claimed.LeaseOwner,
+		LeaseGeneration: claimed.LeaseGeneration,
+		FencingToken:    claimed.FencingToken,
+		AgentID:         "child-restart-claim",
+		Key:             key,
+		Status:          ChildTaskResultCompleted,
+		Summary:         "Recovered queued packet after restart.",
+		CreatedAt:       now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("recordChildTaskResultForTest(after restart) err = %v", err)
+	}
+	terminal, ok, err := reopened.ChildTaskPacket(packet.PacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(after restart result) err = %v", err)
+	}
+	if !ok || terminal.Status != ChildTaskPacketCompleted || terminal.ResultID != completed.ResultID {
+		t.Fatalf("terminal packet = %#v ok=%t, want recovered completion", terminal, ok)
+	}
+}
+
 func TestChildTaskResultAttemptsDoNotCollapse(t *testing.T) {
 	t.Parallel()
 

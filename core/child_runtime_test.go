@@ -39,6 +39,20 @@ func TestExtractChildRuntimeContractRejectsRelativeSecretBind(t *testing.T) {
 	}
 }
 
+func TestExtractChildRuntimeContractRejectsRelativeReadonlyBind(t *testing.T) {
+	_, _, err := ExtractChildRuntimeContract(`{"child_runtime":{"readonly_binds":[{"source":"/srv/tool","target":"usr/local/bin/tool"}]}}`, `{}`)
+	if err == nil {
+		t.Fatal("ExtractChildRuntimeContract() err = nil, want readonly bind target validation error")
+	}
+}
+
+func TestExtractChildRuntimeContractRejectsInvalidEnvName(t *testing.T) {
+	_, _, err := ExtractChildRuntimeContract(`{"child_runtime":{"env_from_parent":["MAIL-TOKEN"]}}`, `{}`)
+	if err == nil {
+		t.Fatal("ExtractChildRuntimeContract() err = nil, want env name validation error")
+	}
+}
+
 func TestExtractChildRuntimeContractRejectsRemovedRuntimeMaterialization(t *testing.T) {
 	_, _, err := ExtractChildRuntimeContract(`{"runtime_materialization":{"readonly_paths":["/srv/mail"]}}`, `{}`)
 	if err == nil {

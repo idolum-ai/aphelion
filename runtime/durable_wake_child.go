@@ -148,12 +148,21 @@ func (e *sandboxDurableWakeChildExecutor) Run(ctx context.Context, scope sandbox
 		ExtraEnv:           childAccess.env,
 	})
 	if err != nil {
-		if strings.TrimSpace(res.Stderr) != "" {
-			return fmt.Errorf("durable child wake runner failed: %w: %s", err, strings.TrimSpace(res.Stderr))
-		}
-		return fmt.Errorf("durable child wake runner failed: %w", err)
+		return durableWakeChildRunnerError(err, res.Stderr)
 	}
 	return nil
+}
+
+func durableWakeChildRunnerError(err error, stderr string) error {
+	if strings.TrimSpace(stderr) == "" {
+		return fmt.Errorf("durable child wake runner failed: %w", err)
+	}
+	projection := session.ProjectToolResultForPurpose(stderr, session.ExposureAudienceOperator, session.ExposurePurposeToolFailurePreview)
+	preview := truncatePreview(strings.TrimSpace(projection.Text), 220)
+	if preview == "" {
+		preview = "<withheld>"
+	}
+	return fmt.Errorf("durable child wake runner failed: %w; stderr_projection=%s; stderr_policy=%s", err, preview, projection.PolicyRef)
 }
 
 func durableAgentWakeChildCommand(binaryPath string, bootstrapPath string, agentID string, now time.Time) string {
