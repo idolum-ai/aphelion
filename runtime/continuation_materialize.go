@@ -228,11 +228,8 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 		if reused, err := r.consumeActiveContinuationLeaseForMaterializedState(ctx, key, msg, opState, state, "operation_phase_required_capability", now); err != nil || reused {
 			return true, err
 		}
-		if err := r.store.UpdateOperationState(key, opState); err != nil {
-			return false, fmt.Errorf("persist required-capability operation phase lease state: %w", err)
-		}
-		if err := r.store.UpdateContinuationState(key, state); err != nil {
-			return false, fmt.Errorf("persist required-capability operation phase continuation state: %w", err)
+		if err := r.store.UpdateOperationAndContinuationState(key, opState, state); err != nil {
+			return false, fmt.Errorf("persist required-capability operation phase lease and continuation state: %w", err)
 		}
 		payload := continuationExecutionPayload(state)
 		payload["materialized_from"] = "operation_phase_required_capability"
@@ -263,11 +260,8 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 			opState = updatedOpState
 		}
 		opState = operationStateWithMaterializedPlanLease(opState, state, now)
-		if err := r.store.UpdateOperationState(key, opState); err != nil {
-			return false, fmt.Errorf("persist operation plan lease state: %w", err)
-		}
-		if err := r.store.UpdateContinuationState(key, state); err != nil {
-			return false, fmt.Errorf("persist operation plan lease continuation state: %w", err)
+		if err := r.store.UpdateOperationAndContinuationState(key, opState, state); err != nil {
+			return false, fmt.Errorf("persist operation plan lease and continuation state: %w", err)
 		}
 		payload := continuationExecutionPayload(state)
 		payload["materialized_from"] = "operation_plan_lease"
@@ -298,11 +292,8 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 				opState = updatedOpState
 			}
 			opState = operationStateWithMaterializedPlanLease(opState, state, now)
-			if err := r.store.UpdateOperationState(key, opState); err != nil {
-				return false, fmt.Errorf("persist synthesized operation plan lease state: %w", err)
-			}
-			if err := r.store.UpdateContinuationState(key, state); err != nil {
-				return false, fmt.Errorf("persist synthesized operation plan lease continuation state: %w", err)
+			if err := r.store.UpdateOperationAndContinuationState(key, opState, state); err != nil {
+				return false, fmt.Errorf("persist synthesized operation plan lease and continuation state: %w", err)
 			}
 			payload := continuationExecutionPayload(state)
 			payload["materialized_from"] = "operation_plan_lease"
@@ -336,11 +327,8 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 		if reused, err := r.consumeActiveContinuationLeaseForMaterializedState(ctx, key, msg, opState, state, "operation_phase_bundle", now); err != nil || reused {
 			return true, err
 		}
-		if err := r.store.UpdateOperationState(key, opState); err != nil {
-			return false, fmt.Errorf("persist operation phase bundle lease state: %w", err)
-		}
-		if err := r.store.UpdateContinuationState(key, state); err != nil {
-			return false, fmt.Errorf("persist operation phase bundle continuation state: %w", err)
+		if err := r.store.UpdateOperationAndContinuationState(key, opState, state); err != nil {
+			return false, fmt.Errorf("persist operation phase bundle lease and continuation state: %w", err)
 		}
 		payload := continuationExecutionPayload(state)
 		payload["materialized_from"] = "operation_phase_bundle"
@@ -397,11 +385,8 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 		if reused, err := r.consumeActiveContinuationLeaseForMaterializedState(ctx, key, msg, opState, state, "operation_phase_plan", now); err != nil || reused {
 			return true, err
 		}
-		if err := r.store.UpdateOperationState(key, opState); err != nil {
-			return false, fmt.Errorf("persist operation phase lease state: %w", err)
-		}
-		if err := r.store.UpdateContinuationState(key, state); err != nil {
-			return false, fmt.Errorf("persist operation phase continuation state: %w", err)
+		if err := r.store.UpdateOperationAndContinuationState(key, opState, state); err != nil {
+			return false, fmt.Errorf("persist operation phase lease and continuation state: %w", err)
 		}
 		payload := continuationExecutionPayload(state)
 		payload["materialized_from"] = "operation_phase_plan"

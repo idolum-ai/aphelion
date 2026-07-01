@@ -10,6 +10,8 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
+const requestApprovalContinuationLeaseTTL = 30 * time.Minute
+
 func (r *Registry) requestContinuationLeaseApproval(in requestApprovalInput, key session.SessionKey) (string, error) {
 	contractID := strings.TrimSpace(in.ContractID)
 	if contractID == "" {
@@ -30,7 +32,7 @@ func (r *Registry) requestContinuationLeaseApproval(in requestApprovalInput, key
 		return "", err
 	}
 	now := time.Now().UTC()
-	expiresAt := now.Add(30 * time.Minute)
+	expiresAt := now.Add(requestApprovalContinuationLeaseTTL)
 	proposalID, decisionID, leaseID := requestApprovalContinuationLeaseStableIDs(requirement)
 	summary := requestApprovalContinuationLeaseSummary(requirement)
 	boundedEffect := requestApprovalContinuationLeaseBoundedEffect(requirement)

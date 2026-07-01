@@ -261,6 +261,91 @@ func TestAuthorityBundleRejectsPartialRequiredGrantSpecBeforeApprovalCard(t *tes
 	}
 }
 
+func TestRequestApprovalContinuationLeaseUsesNamedTTL(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := session.SessionKey{ChatID: 99105, UserID: 1001}
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	contract := authorityBundleChildWakeRecoveryContract(t, store, key, "mail-child", "ttl-wake-request")
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		actor,
+		key,
+		requestApprovalToolName,
+		json.RawMessage(session.ContinuationRecoveryContractProjectionInput(contract.ContractID)),
+	)
+	if err != nil {
+		t.Fatalf("request_approval continuation lease err = %v", err)
+	}
+	if !strings.Contains(out, "[APPROVAL_REQUESTED]") {
+		t.Fatalf("request_approval output = %q, want approval request", out)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got := cont.ContinuationLease.ExpiresAt.Sub(cont.ContinuationLease.CreatedAt); got != requestApprovalContinuationLeaseTTL {
+		t.Fatalf("lease TTL = %s, want %s", got, requestApprovalContinuationLeaseTTL)
+	}
+	if !cont.ActionProposal.ExpiresAt.Equal(cont.ContinuationLease.ExpiresAt) {
+		t.Fatalf("proposal expires_at = %s, want lease expires_at %s", cont.ActionProposal.ExpiresAt, cont.ContinuationLease.ExpiresAt)
+	}
+}
+
+func TestAuthorityBundleCarrierContractOnlyAuthorizesBundleApproval(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	key := session.SessionKey{ChatID: 99106, UserID: 1001}
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	bundle, err := session.CompileAuthorityBundleContract(session.AuthorityBundleContractInput{
+		RequestInstanceID: "carrier-contract-instance",
+		SessionID:         session.SessionIDForKey(key),
+		Principal:         "telegram:1001",
+		Objective:         "Finish a bounded child setup cycle.",
+		Summary:           "Approve a bounded bundle.",
+		AllowedActions:    []string{"wake_named_child", "read_mail_metadata"},
+		ForbiddenActions:  []string{"credentials_or_tokens", "send_mail"},
+		StopConditions:    []string{"stop after one result"},
+		RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+			GrantID:        "grant-mail-read",
+			Kind:           session.CapabilityKindExternalAccount,
+			TargetResource: "mailbox:host@example.test",
+			GrantedTo:      "telegram:1001",
+			AllowedActions: []string{"read"},
+		}},
+		CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("CompileAuthorityBundleContract() err = %v", err)
+	}
+
+	carrier, err := registry.authorityBundleApprovalCarrierContract(bundle, key, now)
+	if err != nil {
+		t.Fatalf("authorityBundleApprovalCarrierContract() err = %v", err)
+	}
+	if carrier.LeaseClass != session.ContinuationLeaseClassCapabilityGrant {
+		t.Fatalf("carrier lease class = %q, want capability_grant", carrier.LeaseClass)
+	}
+	if len(carrier.AllowedActions) != 1 || carrier.AllowedActions[0] != "approve_authority_bundle" {
+		t.Fatalf("carrier allowed actions = %#v, want approve_authority_bundle only", carrier.AllowedActions)
+	}
+	if carrier.Tool != requestApprovalToolName || carrier.ToolAction != "request_authority_bundle" {
+		t.Fatalf("carrier tool/action = %s/%s, want request_approval/request_authority_bundle", carrier.Tool, carrier.ToolAction)
+	}
+	if carrier.Constraints["authority_bundle_id"] != bundle.BundleID {
+		t.Fatalf("carrier constraints = %#v, want authority bundle id %s", carrier.Constraints, bundle.BundleID)
+	}
+	if carrier.GrantID != "" || carrier.GrantTargetResource != "" || carrier.Resource != "" {
+		t.Fatalf("carrier = %#v, want approval-carrier metadata without bundle grant authority", carrier)
+	}
+	if len(bundle.RequiredCapabilityGrants) != 1 || bundle.RequiredCapabilityGrants[0].GrantID != "grant-mail-read" {
+		t.Fatalf("bundle grants = %#v, want actual authority to remain on bundle", bundle.RequiredCapabilityGrants)
+	}
+}
+
 func authorityBundleChildWakeRecoveryContract(t *testing.T, store *session.SQLiteStore, key session.SessionKey, agentID string, requestInstanceID string) session.ContinuationRecoveryContract {
 	t.Helper()
 

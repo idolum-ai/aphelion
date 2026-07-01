@@ -117,6 +117,10 @@ func (r *Registry) authorityBundleApprovalCarrierContract(bundle session.Authori
 	if bundle.SessionID != "" && bundle.SessionID != sessionID {
 		return session.ContinuationRecoveryContract{}, fmt.Errorf("request_approval authority bundle session mismatch")
 	}
+	// The carrier lease only authorizes presenting and approving the bundle.
+	// The actual authority granted by the bundle remains in the bundle's typed
+	// required grants and constraints, which are copied onto the approval state
+	// after the carrier continuation is materialized.
 	carrier, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
 		RequestInstanceID: strings.TrimSpace(bundle.RequestInstanceID) + ":approval-carrier",
 		SessionID:         firstNonEmptyTool(strings.TrimSpace(bundle.SessionID), sessionID),
