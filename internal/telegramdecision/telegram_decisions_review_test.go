@@ -139,6 +139,141 @@ func TestHandleReactionMessageApprovesDeliveredCapabilityReviewEvent(t *testing.
 	}
 }
 
+func TestHandleReactionMessageParentApprovesDeliveredCapabilityReviewEvent(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:       "cap-reaction-parent-approve",
+		RequestedBy:     "telegram:2002",
+		RequestedFor:    "telegram:2002",
+		ParentPrincipal: "telegram:2002",
+		AdminPrincipal:  "telegram:1001",
+		Kind:            session.CapabilityKindGenericDelegation,
+		TargetResource:  "child-task",
+		Purpose:         "parent approval from reaction",
+		ReviewStatus:    session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
+		SourceChatID:      7001,
+		SourceUserID:      2002,
+		SourceRole:        "capability_request",
+		TargetAdminChatID: 2002,
+		Summary:           "Capability request cap-reaction-parent-approve",
+		MetadataJSON:      `{"request_id":"cap-reaction-parent-approve","review_status":"proposed"}`,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+	if err := store.MarkReviewDeliveredWithMessage(eventID, 177); err != nil {
+		t.Fatalf("MarkReviewDeliveredWithMessage() err = %v", err)
+	}
+	before, ok, err := store.CapabilityRequest("cap-reaction-parent-approve")
+	if err != nil || !ok {
+		t.Fatalf("CapabilityRequest(before reaction) ok=%t err=%v", ok, err)
+	}
+	if before.ParentPrincipal != "telegram:2002" || before.ReviewStatus != session.CapabilityReviewStatusProposed {
+		t.Fatalf("before reaction request = %#v, want parent principal and proposed state", before)
+	}
+
+	sender := &decisionTestSender{}
+	handler := newDecisionHandlerForTest(sender, &decisionTestRouter{}, decision.NewBroker(nil), store)
+	handled, err := handler.HandleReactionMessage(context.Background(), core.InboundMessage{
+		ChatID:    2002,
+		SenderID:  2002,
+		MessageID: 177,
+		Reaction:  &core.InboundReaction{MessageID: 177, New: []string{"👍"}},
+	})
+	if err != nil {
+		t.Fatalf("HandleReactionMessage() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("HandleReactionMessage() handled = false, want true")
+	}
+	updated, ok, err := store.CapabilityRequest("cap-reaction-parent-approve")
+	if err != nil || !ok {
+		t.Fatalf("CapabilityRequest() ok=%t err=%v", ok, err)
+	}
+	if updated.ReviewStatus != session.CapabilityReviewStatusParentApproved {
+		t.Fatalf("ReviewStatus = %q, want parent_approved", updated.ReviewStatus)
+	}
+	reviews, err := store.CapabilityReviews("cap-reaction-parent-approve", 10)
+	if err != nil {
+		t.Fatalf("CapabilityReviews() err = %v", err)
+	}
+	if len(reviews) != 1 || reviews[0].Status != session.CapabilityReviewStatusParentApproved {
+		t.Fatalf("reviews = %#v, want one parent-approved review", reviews)
+	}
+	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "parent-approved") {
+		t.Fatalf("edits = %#v, want parent-approved card edit", sender.edits)
+	}
+}
+
+func TestHandleReactionMessageAdminApprovesAfterParentApproval(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:       "cap-reaction-admin-after-parent",
+		RequestedBy:     "telegram:2002",
+		RequestedFor:    "telegram:2002",
+		ParentPrincipal: "telegram:2002",
+		AdminPrincipal:  "telegram:1001",
+		Kind:            session.CapabilityKindGenericDelegation,
+		TargetResource:  "child-task",
+		Purpose:         "admin approval after parent reaction",
+		ReviewStatus:    session.CapabilityReviewStatusParentApproved,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
+		SourceChatID:      7001,
+		SourceUserID:      2002,
+		SourceRole:        "capability_request",
+		TargetAdminChatID: 1001,
+		Summary:           "Capability request cap-reaction-admin-after-parent",
+		MetadataJSON:      `{"request_id":"cap-reaction-admin-after-parent","review_status":"parent_approved"}`,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+	if err := store.MarkReviewDeliveredWithMessage(eventID, 178); err != nil {
+		t.Fatalf("MarkReviewDeliveredWithMessage() err = %v", err)
+	}
+
+	sender := &decisionTestSender{}
+	handler := newDecisionHandlerForTest(sender, &decisionTestRouter{}, decision.NewBroker(nil), store)
+	handled, err := handler.HandleReactionMessage(context.Background(), core.InboundMessage{
+		ChatID:    1001,
+		SenderID:  1001,
+		MessageID: 178,
+		Reaction:  &core.InboundReaction{MessageID: 178, New: []string{"👍"}},
+	})
+	if err != nil {
+		t.Fatalf("HandleReactionMessage() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("HandleReactionMessage() handled = false, want true")
+	}
+	updated, ok, err := store.CapabilityRequest("cap-reaction-admin-after-parent")
+	if err != nil || !ok {
+		t.Fatalf("CapabilityRequest() ok=%t err=%v", ok, err)
+	}
+	if updated.ReviewStatus != session.CapabilityReviewStatusApproved {
+		t.Fatalf("ReviewStatus = %q, want approved", updated.ReviewStatus)
+	}
+}
+
 func TestHandleReactionMessageRejectsDeliveredCapabilityReviewEvent(t *testing.T) {
 	t.Parallel()
 
@@ -197,6 +332,68 @@ func TestHandleReactionMessageRejectsDeliveredCapabilityReviewEvent(t *testing.T
 	}
 	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "Capability request rejected.") {
 		t.Fatalf("edits = %#v, want rejected card edit", sender.edits)
+	}
+}
+
+func TestHandleReactionRemovalWithoutReviewEventReachesConversation(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	handler := newDecisionHandlerForTest(&decisionTestSender{}, &decisionTestRouter{}, decision.NewBroker(nil), store)
+	handled, err := handler.HandleReactionMessage(context.Background(), core.InboundMessage{
+		ChatID:    1001,
+		SenderID:  1001,
+		MessageID: 188,
+		Reaction:  &core.InboundReaction{MessageID: 188, New: nil},
+	})
+	if err != nil {
+		t.Fatalf("HandleReactionMessage() err = %v", err)
+	}
+	if handled {
+		t.Fatal("HandleReactionMessage() handled = true, want non-review reaction removal to fall through")
+	}
+}
+
+func TestHandleReactionRemovalForDeliveredReviewEventIsConsumed(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
+		SourceChatID:      7001,
+		SourceUserID:      1002,
+		SourceRole:        "capability_request",
+		TargetAdminChatID: 1001,
+		Summary:           "Capability request cap-reaction-removal",
+		MetadataJSON:      `{"request_id":"cap-reaction-removal","review_status":"proposed"}`,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+	if err := store.MarkReviewDeliveredWithMessage(eventID, 189); err != nil {
+		t.Fatalf("MarkReviewDeliveredWithMessage() err = %v", err)
+	}
+
+	handler := newDecisionHandlerForTest(&decisionTestSender{}, &decisionTestRouter{}, decision.NewBroker(nil), store)
+	handled, err := handler.HandleReactionMessage(context.Background(), core.InboundMessage{
+		ChatID:    1001,
+		SenderID:  1001,
+		MessageID: 189,
+		Reaction:  &core.InboundReaction{MessageID: 189, New: nil},
+	})
+	if err != nil {
+		t.Fatalf("HandleReactionMessage() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("HandleReactionMessage() handled = false, want delivered review-card removal consumed")
 	}
 }
 
@@ -309,6 +506,9 @@ func TestHandleReactionMessageWrongUserDoesNotApprove(t *testing.T) {
 	}
 	if len(reviews) != 0 {
 		t.Fatalf("reviews = %#v, want no review from wrong user", reviews)
+	}
+	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "Only the admin") {
+		t.Fatalf("edits = %#v, want observable authorization rejection", sender.edits)
 	}
 }
 

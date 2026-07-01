@@ -11,12 +11,69 @@ import (
 )
 
 func (s *SQLiteStore) RecordTelegramIngressAccepted(record TelegramIngressUpdateRecord) (TelegramIngressTransitionResult, error) {
+	record, status, err := normalizeTelegramIngressAcceptedRecord(record)
+	if err != nil {
+		return TelegramIngressTransitionResult{}, err
+	}
+	if err := recordTelegramIngressAcceptedExec(s.db, record, status); err != nil {
+		return TelegramIngressTransitionResult{}, fmt.Errorf("record telegram ingress accepted: %w", err)
+	}
+	stored, ok, err := s.TelegramIngressUpdate(record.Surface, record.UpdateID)
+	if err != nil {
+		return TelegramIngressTransitionResult{}, err
+	}
+	if !ok {
+		return TelegramIngressTransitionResult{}, fmt.Errorf("telegram ingress update %s/%d missing after accept", record.Surface, record.UpdateID)
+	}
+	return telegramIngressTransitionResult(stored, true), nil
+}
+
+func (s *SQLiteStore) AcceptDecisionResumeAndDropOriginal(record TelegramIngressUpdateRecord, originalSurface string, originalUpdateID int64, reason string, now time.Time) (TelegramIngressTransitionResult, error) {
+	record, status, err := normalizeTelegramIngressAcceptedRecord(record)
+	if err != nil {
+		return TelegramIngressTransitionResult{}, err
+	}
+	originalSurface = strings.TrimSpace(originalSurface)
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = TelegramIngressDropReasonDecisionResume
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return TelegramIngressTransitionResult{}, fmt.Errorf("begin decision resume ownership transfer: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := recordTelegramIngressAcceptedExec(tx, record, status); err != nil {
+		return TelegramIngressTransitionResult{}, fmt.Errorf("record decision resume ingress accepted: %w", err)
+	}
+	if originalSurface != "" && originalUpdateID > 0 && originalSurface != record.Surface {
+		if err := markTelegramIngressDroppedIfDispatchableExec(tx, originalSurface, originalUpdateID, reason, now); err != nil {
+			return TelegramIngressTransitionResult{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return TelegramIngressTransitionResult{}, fmt.Errorf("commit decision resume ownership transfer: %w", err)
+	}
+	stored, ok, err := s.TelegramIngressUpdate(record.Surface, record.UpdateID)
+	if err != nil {
+		return TelegramIngressTransitionResult{}, err
+	}
+	if !ok {
+		return TelegramIngressTransitionResult{}, fmt.Errorf("telegram ingress update %s/%d missing after decision resume accept", record.Surface, record.UpdateID)
+	}
+	return telegramIngressTransitionResult(stored, true), nil
+}
+
+func normalizeTelegramIngressAcceptedRecord(record TelegramIngressUpdateRecord) (TelegramIngressUpdateRecord, TelegramIngressUpdateStatus, error) {
 	record.Surface = strings.TrimSpace(record.Surface)
 	if record.Surface == "" {
-		return TelegramIngressTransitionResult{}, fmt.Errorf("telegram ingress update surface is required")
+		return TelegramIngressUpdateRecord{}, "", fmt.Errorf("telegram ingress update surface is required")
 	}
 	if record.UpdateID <= 0 {
-		return TelegramIngressTransitionResult{}, fmt.Errorf("telegram ingress update id is required")
+		return TelegramIngressUpdateRecord{}, "", fmt.Errorf("telegram ingress update id is required")
 	}
 	if record.AcceptedAt.IsZero() {
 		record.AcceptedAt = time.Now().UTC()
@@ -26,7 +83,14 @@ func (s *SQLiteStore) RecordTelegramIngressAccepted(record TelegramIngressUpdate
 	if status == "" {
 		status = TelegramIngressUpdateAccepted
 	}
-	_, err := s.db.Exec(`
+	return record, status, nil
+}
+
+func recordTelegramIngressAcceptedExec(exec telegramIngressExecutor, record TelegramIngressUpdateRecord, status TelegramIngressUpdateStatus) error {
+	if exec == nil {
+		return nil
+	}
+	_, err := exec.Exec(`
 		INSERT INTO telegram_ingress_updates(
 			surface, update_id, update_kind, chat_id, sender_id, message_id, session_id,
 			status, turn_run_id, error_text, inbound_json, payload_json,
@@ -90,17 +154,7 @@ func (s *SQLiteStore) RecordTelegramIngressAccepted(record TelegramIngressUpdate
 		nullableTime(record.CompletedAt),
 		record.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
-	if err != nil {
-		return TelegramIngressTransitionResult{}, fmt.Errorf("record telegram ingress accepted: %w", err)
-	}
-	stored, ok, err := s.TelegramIngressUpdate(record.Surface, record.UpdateID)
-	if err != nil {
-		return TelegramIngressTransitionResult{}, err
-	}
-	if !ok {
-		return TelegramIngressTransitionResult{}, fmt.Errorf("telegram ingress update %s/%d missing after accept", record.Surface, record.UpdateID)
-	}
-	return telegramIngressTransitionResult(stored, true), nil
+	return err
 }
 
 func (s *SQLiteStore) MarkTelegramIngressParked(surface string, updateID int64, reason string, parkedAt time.Time) (TelegramIngressTransitionResult, error) {
@@ -324,8 +378,29 @@ func (s *SQLiteStore) MarkTelegramIngressDroppedIfDispatchable(surface string, u
 	if completedAt.IsZero() {
 		completedAt = time.Now().UTC()
 	}
+	if err := markTelegramIngressDroppedIfDispatchableExec(s.db, surface, updateID, reason, completedAt); err != nil {
+		return TelegramIngressTransitionResult{}, err
+	}
+	stored, ok, err := s.TelegramIngressUpdate(surface, updateID)
+	if err != nil {
+		return TelegramIngressTransitionResult{}, err
+	}
+	return telegramIngressTransitionResult(stored, ok), nil
+}
+
+func markTelegramIngressDroppedIfDispatchableExec(exec telegramIngressExecutor, surface string, updateID int64, reason string, completedAt time.Time) error {
+	if exec == nil {
+		return nil
+	}
+	surface = strings.TrimSpace(surface)
+	if surface == "" || updateID <= 0 {
+		return nil
+	}
+	if completedAt.IsZero() {
+		completedAt = time.Now().UTC()
+	}
 	completedRaw := completedAt.UTC().Format(time.RFC3339Nano)
-	_, err := s.db.Exec(`
+	_, err := exec.Exec(`
 		UPDATE telegram_ingress_updates
 		SET
 			status = ?,
@@ -348,13 +423,9 @@ func (s *SQLiteStore) MarkTelegramIngressDroppedIfDispatchable(surface string, u
 		string(TelegramIngressUpdateQueued),
 	)
 	if err != nil {
-		return TelegramIngressTransitionResult{}, fmt.Errorf("mark telegram ingress dropped: %w", err)
+		return fmt.Errorf("mark telegram ingress dropped: %w", err)
 	}
-	stored, ok, err := s.TelegramIngressUpdate(surface, updateID)
-	if err != nil {
-		return TelegramIngressTransitionResult{}, err
-	}
-	return telegramIngressTransitionResult(stored, ok), nil
+	return nil
 }
 
 func markTelegramIngressDroppedIfParkedExec(exec telegramIngressExecutor, surface string, updateID int64, reason string, completedAt time.Time) error {

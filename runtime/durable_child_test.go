@@ -16,6 +16,109 @@ import (
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
+func TestDurableChildSandboxStateRootRequiresCanonicalAbsoluteDBPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "state", "sessions.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll(state) err = %v", err)
+	}
+	if err := os.WriteFile(dbPath, []byte("sqlite-placeholder"), 0o600); err != nil {
+		t.Fatalf("WriteFile(db) err = %v", err)
+	}
+
+	cases := []struct {
+		name    string
+		dbPath  string
+		wantErr string
+	}{
+		{name: "empty", dbPath: "", wantErr: "sessions DB path is required"},
+		{name: "relative", dbPath: "sessions.db", wantErr: "must be absolute"},
+		{name: "missing absolute", dbPath: filepath.Join(root, "missing", "sessions.db"), wantErr: "resolve sessions DB path"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Sessions.DBPath = tc.dbPath
+			got, err := durableChildSandboxStateRoot(&cfg)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("durableChildSandboxStateRoot(%q) = %q, %v; want error containing %q", tc.dbPath, got, err, tc.wantErr)
+			}
+		})
+	}
+
+	linkDir := filepath.Join(root, "links")
+	if err := os.MkdirAll(linkDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(links) err = %v", err)
+	}
+	linkPath := filepath.Join(linkDir, "sessions-link.db")
+	if err := os.Symlink(dbPath, linkPath); err != nil {
+		t.Fatalf("Symlink(db) err = %v", err)
+	}
+	cfg := config.Default()
+	cfg.Sessions.DBPath = linkPath
+	got, err := durableChildSandboxStateRoot(&cfg)
+	if err != nil {
+		t.Fatalf("durableChildSandboxStateRoot(symlink) err = %v", err)
+	}
+	if got != filepath.Dir(dbPath) {
+		t.Fatalf("state root = %q, want canonical target dir %q", got, filepath.Dir(dbPath))
+	}
+}
+
+func TestDurableWakeChildBootstrapPayloadIsMountedInsideSandbox(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	scope, err := sandbox.DurableAgentScope(
+		"child-alpha",
+		filepath.Join(root, "global"),
+		filepath.Join(root, "workspace"),
+		filepath.Join(root, "memory"),
+		"default",
+	)
+	if err != nil {
+		t.Fatalf("DurableAgentScope() err = %v", err)
+	}
+	payloadRoot := filepath.Join(scope.SharedMemoryRoot, ".aphelion", "child-wake-run")
+	if err := os.MkdirAll(payloadRoot, 0o700); err != nil {
+		t.Fatalf("MkdirAll(payloadRoot) err = %v", err)
+	}
+	bootstrapPath := filepath.Join(payloadRoot, "bootstrap-test.json")
+	if err := os.WriteFile(bootstrapPath, []byte(`{"config":{}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(bootstrap) err = %v", err)
+	}
+	stateRoot := filepath.Join(root, "state")
+	if err := os.MkdirAll(stateRoot, 0o700); err != nil {
+		t.Fatalf("MkdirAll(stateRoot) err = %v", err)
+	}
+	fakeBwrap := filepath.Join(root, "bwrap")
+	if err := os.WriteFile(fakeBwrap, []byte("#!/usr/bin/env bash\nexec \"$@\"\n"), 0o700); err != nil {
+		t.Fatalf("WriteFile(fake bwrap) err = %v", err)
+	}
+
+	runner := sandbox.NewRunnerWithLookPath(func(_ string) (string, error) {
+		return fakeBwrap, nil
+	})
+	plan, err := runner.Plan(sandbox.ExecRequest{
+		Scope:              scope,
+		Command:            "cat " + shellQuote(bootstrapPath),
+		Workdir:            scope.WorkingRoot,
+		ExtraWritablePaths: []string{stateRoot},
+	})
+	if err != nil {
+		t.Fatalf("Plan(child wake) err = %v", err)
+	}
+	args := strings.Join(plan.Args, " ")
+	if !strings.Contains(args, "--bind "+scope.SharedMemoryRoot+" "+scope.SharedMemoryRoot) {
+		t.Fatalf("bwrap args = %s, want shared memory root mounted for bootstrap payload", args)
+	}
+	if !strings.HasPrefix(bootstrapPath, scope.SharedMemoryRoot+string(os.PathSeparator)) {
+		t.Fatalf("bootstrap path = %q, want under shared memory root %q", bootstrapPath, scope.SharedMemoryRoot)
+	}
+}
+
 func TestDurableChildSandboxAccessDoesNotSpecialCaseChannelAdapter(t *testing.T) {
 	t.Setenv("CHILD_ADAPTER_TOKEN", "secret-for-test")
 	configHome := filepath.Join(t.TempDir(), "config")

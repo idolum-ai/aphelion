@@ -115,13 +115,17 @@ func (h *DecisionHandler) handleReviewEventCallback(ctx context.Context, cb tele
 	return h.answerReviewEventCallback(ctx, cb, "")
 }
 
-func reviewEventActionForReaction(reaction *core.InboundReaction) (core.ReviewEventAction, bool) {
+func reviewEventActionForReactionAndState(reaction *core.InboundReaction, record session.CapabilityRequest) (core.ReviewEventAction, bool) {
 	if reaction == nil {
 		return "", false
 	}
+	record = session.NormalizeCapabilityRequest(record)
 	for _, value := range reaction.New {
 		switch strings.TrimSpace(value) {
 		case "👍", "+1":
+			if strings.TrimSpace(record.ParentPrincipal) != "" && record.ReviewStatus == session.CapabilityReviewStatusProposed {
+				return core.ReviewEventActionParentApprove, true
+			}
 			return core.ReviewEventActionApprove, true
 		case "👎", "-1":
 			return core.ReviewEventActionReject, true
@@ -130,11 +134,8 @@ func reviewEventActionForReaction(reaction *core.InboundReaction) (core.ReviewEv
 	return "", false
 }
 
-func (h *DecisionHandler) applyReviewEventReaction(ctx context.Context, msg core.InboundMessage, event session.ReviewEvent, action core.ReviewEventAction) error {
+func (h *DecisionHandler) applyReviewEventReaction(ctx context.Context, msg core.InboundMessage, event session.ReviewEvent) error {
 	if h == nil || h.store == nil {
-		return nil
-	}
-	if action != core.ReviewEventActionApprove && action != core.ReviewEventActionReject {
 		return nil
 	}
 	if reviewEventCallbackExpired(event, time.Now()) {
@@ -152,6 +153,13 @@ func (h *DecisionHandler) applyReviewEventReaction(ctx context.Context, msg core
 	if !ok {
 		return nil
 	}
+	action, actionable := reviewEventActionForReactionAndState(msg.Reaction, record)
+	if !actionable {
+		return nil
+	}
+	if action != core.ReviewEventActionParentApprove && action != core.ReviewEventActionApprove && action != core.ReviewEventActionReject {
+		return nil
+	}
 	if event.Status == "dismissed" {
 		_ = h.editReviewEventReactionMessage(ctx, msg, "Stale approval card — use the newest prompt.")
 		return nil
@@ -162,6 +170,7 @@ func (h *DecisionHandler) applyReviewEventReaction(ctx context.Context, msg core
 	}
 	status, reviewerRole, err := reviewEventCapabilityStatusForAction(record, action, msg.SenderID, event.TargetAdminChatID)
 	if err != nil {
+		_ = h.editReviewEventReactionMessage(ctx, msg, compactSentence(err.Error()))
 		return nil
 	}
 	review, err := h.store.AppendCapabilityReview(session.CapabilityReview{
@@ -179,10 +188,7 @@ func (h *DecisionHandler) applyReviewEventReaction(ctx context.Context, msg core
 	if grantErr != nil {
 		return h.editReviewEventReactionMessage(ctx, msg, reviewEventConfirmationText(labelForCapabilityReview(review.Status), record, event)+"\n\nGrant activation needs repair: "+compactSentence(grantErr.Error()))
 	}
-	label := "approved"
-	if review.Status == session.CapabilityReviewStatusRejected {
-		label = "rejected"
-	}
+	label := labelForCapabilityReview(review.Status)
 	if refreshed, ok, err := h.store.CapabilityRequest(record.RequestID); err == nil && ok {
 		record = refreshed
 	}

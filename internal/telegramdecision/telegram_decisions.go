@@ -197,13 +197,6 @@ func (h *DecisionHandler) HandleReactionMessage(ctx context.Context, msg core.In
 	if h == nil || h.store == nil || msg.Reaction == nil {
 		return false, nil
 	}
-	action, actionable := reviewEventActionForReaction(msg.Reaction)
-	if !actionable {
-		if len(msg.Reaction.New) == 0 {
-			return true, nil
-		}
-		return false, nil
-	}
 	event, err := h.store.ReviewEventByDeliveryMessage(msg.ChatID, msg.Reaction.MessageID)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -214,7 +207,10 @@ func (h *DecisionHandler) HandleReactionMessage(ctx context.Context, msg core.In
 	if event == nil {
 		return false, nil
 	}
-	return true, h.applyReviewEventReaction(ctx, msg, *event, action)
+	if len(msg.Reaction.New) == 0 {
+		return true, nil
+	}
+	return true, h.applyReviewEventReaction(ctx, msg, *event)
 }
 
 func callbackChatID(cb telegram.CallbackQuery) int64   { return CallbackChatID(cb) }

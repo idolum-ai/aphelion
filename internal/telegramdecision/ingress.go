@@ -43,14 +43,9 @@ func (h *Handler) routeDeferredDecisionMessage(ctx context.Context, msg core.Inb
 	originalUpdateID := msg.IngressUpdateID
 	msg.IngressSurface = strings.TrimSpace(surface)
 	msg.IngressUpdateID = DecisionResumeUpdateID(msg, msg.IngressSurface)
-	result, err := h.recordDecisionResumeAccepted(msg, updateKind)
+	result, err := h.recordDecisionResumeAcceptedAndDropOriginal(msg, updateKind, originalSurface, originalUpdateID)
 	if err != nil {
 		return err
-	}
-	if originalSurface != "" && originalUpdateID > 0 && originalSurface != msg.IngressSurface {
-		if _, err := h.store.MarkTelegramIngressDroppedIfDispatchable(originalSurface, originalUpdateID, session.TelegramIngressDropReasonDecisionResume, time.Now().UTC()); err != nil {
-			return err
-		}
 	}
 	if !result.Dispatch {
 		return nil
@@ -58,20 +53,39 @@ func (h *Handler) routeDeferredDecisionMessage(ctx context.Context, msg core.Inb
 	return accepted.RouteAccepted(ctx, msg)
 }
 
+func (h *Handler) recordDecisionResumeAcceptedAndDropOriginal(msg core.InboundMessage, updateKind string, originalSurface string, originalUpdateID int64) (session.TelegramIngressTransitionResult, error) {
+	if h == nil || h.store == nil {
+		return session.TelegramIngressTransitionResult{}, nil
+	}
+	record, err := decisionResumeAcceptedRecord(msg, updateKind)
+	if err != nil {
+		return session.TelegramIngressTransitionResult{}, err
+	}
+	return h.store.AcceptDecisionResumeAndDropOriginal(record, originalSurface, originalUpdateID, session.TelegramIngressDropReasonDecisionResume, time.Now().UTC())
+}
+
 func (h *Handler) recordDecisionResumeAccepted(msg core.InboundMessage, updateKind string) (session.TelegramIngressTransitionResult, error) {
 	if h == nil || h.store == nil {
 		return session.TelegramIngressTransitionResult{}, nil
 	}
+	record, err := decisionResumeAcceptedRecord(msg, updateKind)
+	if err != nil {
+		return session.TelegramIngressTransitionResult{}, err
+	}
+	return h.store.RecordTelegramIngressAccepted(record)
+}
+
+func decisionResumeAcceptedRecord(msg core.InboundMessage, updateKind string) (session.TelegramIngressUpdateRecord, error) {
 	surface := strings.TrimSpace(msg.IngressSurface)
 	if surface == "" || msg.IngressUpdateID <= 0 {
-		return session.TelegramIngressTransitionResult{}, fmt.Errorf("decision resume ingress identity is required")
+		return session.TelegramIngressUpdateRecord{}, fmt.Errorf("decision resume ingress identity is required")
 	}
 	encoded := ""
 	if raw, err := json.Marshal(msg); err == nil {
 		encoded = string(raw)
 	}
 	now := time.Now().UTC()
-	return h.store.RecordTelegramIngressAccepted(session.TelegramIngressUpdateRecord{
+	return session.TelegramIngressUpdateRecord{
 		Surface:     surface,
 		UpdateID:    msg.IngressUpdateID,
 		UpdateKind:  strings.TrimSpace(updateKind),
@@ -83,7 +97,7 @@ func (h *Handler) recordDecisionResumeAccepted(msg core.InboundMessage, updateKi
 		InboundJSON: encoded,
 		AcceptedAt:  now,
 		UpdatedAt:   now,
-	})
+	}, nil
 }
 
 func DecisionResumeUpdateID(msg core.InboundMessage, surface string) int64 {
