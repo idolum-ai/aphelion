@@ -576,7 +576,7 @@ func durableWakeChildBlockerOperationInputJSON(agentID string, adapterName strin
 }
 
 func normalizeDurableWakeChildBlockerKind(kind string) string {
-	kind = normalizeExternalChannelWakeOutcomeReason(kind)
+	kind = normalizeBlockReason(normalizeExternalChannelWakeOutcomeReason(kind))
 	if kind == "child_reported_needs_review" {
 		return "child_reported_blocked"
 	}

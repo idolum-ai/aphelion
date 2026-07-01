@@ -207,12 +207,12 @@ func (r *Runtime) startTurnMonitor(ctx context.Context, key session.SessionKey, 
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventTurnStarted, "turn", string(session.TurnRunStatusRunning), payload, time.Now().UTC())
 	if progress != nil {
-		progress.BindTurnRun(run.ID)
 		progress.recordMessageID = func(messageID int64) {
 			if err := r.store.UpdateTurnRunProgressMessage(run.ID, messageID); err != nil {
 				log.Printf("WARN update turn run progress id=%d msg_id=%d err=%v", run.ID, messageID, err)
 			}
 		}
+		progress.BindTurnRun(run.ID)
 	}
 	monitor.startRunActivityHeartbeat()
 	return monitor, nil

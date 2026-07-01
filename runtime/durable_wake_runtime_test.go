@@ -674,6 +674,74 @@ func TestDurableWakeProgressSurfacesAlreadyAwakeSkip(t *testing.T) {
 	}
 }
 
+func TestDurableWakeProgressDoneIsTerminalIdempotent(t *testing.T) {
+	sender := &fakeSender{}
+	progress := &toolProgressReporter{
+		sender:   sender,
+		editor:   sender,
+		chatID:   1001,
+		mode:     "all",
+		style:    "semantic",
+		window:   4,
+		seenKeys: make(map[string]struct{}),
+	}
+	agent := core.DurableAgent{AgentID: "idolum-progress-idempotent"}
+	progress.SetHeadings("idolum-progress-idempotent is working...", "idolum-progress-idempotent finished.")
+	durableWakeProgressSurface(context.Background(), progress, "Child is running")
+	durableWakeProgressDone(context.Background(), progress, agent, "failed", "Child failed. Repair next action recorded.")
+
+	sender.mu.Lock()
+	editsAfterFirstDone := append([]messageEdit(nil), sender.edits...)
+	sender.mu.Unlock()
+	if len(editsAfterFirstDone) == 0 {
+		t.Fatal("progress edits = 0, want final edit")
+	}
+	durableWakeProgressDone(context.Background(), progress, agent, "skipped", "Child already running")
+	sender.mu.Lock()
+	editsAfterSecondDone := append([]messageEdit(nil), sender.edits...)
+	sender.mu.Unlock()
+	if len(editsAfterSecondDone) != len(editsAfterFirstDone) {
+		t.Fatalf("edits after duplicate finish = %d, want unchanged %d", len(editsAfterSecondDone), len(editsAfterFirstDone))
+	}
+	finalText := editsAfterSecondDone[len(editsAfterSecondDone)-1].Text
+	if !strings.Contains(finalText, "idolum-progress-idempotent failed.") || !strings.Contains(finalText, "Child failed. Repair next action recorded.") {
+		t.Fatalf("final progress = %q, want failed terminal card with repair pointer", finalText)
+	}
+	if strings.Contains(finalText, "skipped") || strings.Contains(finalText, "Child already running") {
+		t.Fatalf("final progress = %q, duplicate finish regressed terminal state", finalText)
+	}
+}
+
+func TestDurableWakeProgressResultSurfaceSanitizesBlockerAndPointsToRepair(t *testing.T) {
+	known := durableWakeProgressResultSurface(session.ChildTaskResult{
+		Status:      session.ChildTaskResultBlocked,
+		BlockerKind: "credential_unverified",
+	})
+	for _, want := range []string{"Child blocked: credential_unverified", "Repair next action recorded"} {
+		if !strings.Contains(known, want) {
+			t.Fatalf("known blocker surface = %q, missing %q", known, want)
+		}
+	}
+
+	unknown := durableWakeProgressResultSurface(session.ChildTaskResult{
+		Status:      session.ChildTaskResultBlocked,
+		BlockerKind: "credential_unverified; token=runner-canary-value",
+	})
+	for _, leaked := range []string{"runner-canary-value", "token", ";", "="} {
+		if strings.Contains(unknown, leaked) {
+			t.Fatalf("unknown blocker surface = %q leaked %q", unknown, leaked)
+		}
+	}
+	if unknown != "Child blocked. Repair next action recorded." {
+		t.Fatalf("unknown blocker surface = %q, want generic repair pointer", unknown)
+	}
+
+	failed := durableWakeProgressResultSurface(session.ChildTaskResult{Status: session.ChildTaskResultFailed})
+	if !strings.Contains(failed, "Child failed") || !strings.Contains(failed, "Repair next action recorded") {
+		t.Fatalf("failed surface = %q, want repair pointer", failed)
+	}
+}
+
 func progressEditsContain(edits []messageEdit, needle string) bool {
 	needle = strings.TrimSpace(needle)
 	if needle == "" {

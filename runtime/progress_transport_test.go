@@ -203,6 +203,132 @@ func TestToolProgressReporterRecordsTransportLedgerSemantics(t *testing.T) {
 	}
 }
 
+func TestToolProgressReporterBackfillsEarlyProgressMessageWhenRunBinds(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 7741, UserID: 0, Scope: telegramDMScopeRef(7741)}
+	msg := core.InboundMessage{ChatID: 7741, ChatType: "private", MessageID: 11, Text: "wake child"}
+	reporter := rt.newToolProgressReporter(key, msg, nil)
+	if reporter == nil {
+		t.Fatal("newToolProgressReporter() = nil")
+	}
+	reporter.Surface(context.Background(), "Starting child wake")
+
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "wake child", reporter, nil, msg)
+	if err != nil {
+		t.Fatalf("startTurnMonitor() err = %v", err)
+	}
+	defer monitor.Finish(context.Background(), nil)
+	run, err := store.TurnRun(monitor.runID)
+	if err != nil {
+		t.Fatalf("TurnRun() err = %v", err)
+	}
+	if run.ProgressMessageID != 1 {
+		t.Fatalf("progress_message_id = %d, want previously sent message 1", run.ProgressMessageID)
+	}
+	sender.mu.Lock()
+	sent := len(sender.sent)
+	sender.mu.Unlock()
+	if sent != 1 {
+		t.Fatalf("sent progress messages = %d, want one early progress message", sent)
+	}
+}
+
+func TestToolProgressReporterRecordsPreTurnAndBoundProgressPhases(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 7742, UserID: 0, Scope: telegramDMScopeRef(7742)}
+	msg := core.InboundMessage{ChatID: 7742, ChatType: "private", MessageID: 12, Text: "wake child"}
+	reporter := rt.newToolProgressReporter(key, msg, nil)
+	if reporter == nil {
+		t.Fatal("newToolProgressReporter() = nil")
+	}
+	reporter.Surface(context.Background(), "Starting child wake")
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "wake child", reporter, nil, msg)
+	if err != nil {
+		t.Fatalf("startTurnMonitor() err = %v", err)
+	}
+	defer monitor.Finish(context.Background(), nil)
+	reporter.Surface(context.Background(), "Child is running")
+
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	preTurn := progressSurfacePayloadForText(events, "Starting child wake")
+	if preTurn == nil {
+		t.Fatalf("events = %#v, missing pre-turn progress surface", events)
+	}
+	if got := payloadString(preTurn, "progress_phase"); got != "pre_turn" {
+		t.Fatalf("pre-turn progress_phase = %q, want pre_turn", got)
+	}
+	if runID, ok := payloadInt64(preTurn, "run_id"); !ok || runID != 0 {
+		t.Fatalf("pre-turn run_id = %d ok=%t, want 0", runID, ok)
+	}
+	turnBound := progressSurfacePayloadForText(events, "Child is running")
+	if turnBound == nil {
+		t.Fatalf("events = %#v, missing bound progress surface", events)
+	}
+	if got := payloadString(turnBound, "progress_phase"); got != "turn_bound" {
+		t.Fatalf("bound progress_phase = %q, want turn_bound", got)
+	}
+	if runID, ok := payloadInt64(turnBound, "run_id"); !ok || runID != monitor.runID {
+		t.Fatalf("bound run_id = %d ok=%t, want %d", runID, ok, monitor.runID)
+	}
+}
+
+func TestToolProgressReporterRecordsDeliveryFailureDiagnostics(t *testing.T) {
+	cfg, store, provider, _ := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, &fakeSender{})
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 7743, UserID: 0, Scope: telegramDMScopeRef(7743)}
+	sender := &fakeSender{sendErr: errors.New("telegram sendMessage failed: chat unavailable")}
+	reporter := &toolProgressReporter{
+		runtime:      rt,
+		executionKey: key,
+		sender:       sender,
+		chatID:       7743,
+		mode:         "all",
+		style:        "semantic",
+		window:       4,
+		seenKeys:     make(map[string]struct{}),
+	}
+	reporter.BindTurnRun(91)
+	reporter.Surface(context.Background(), "Starting child wake")
+
+	events, err := store.ExecutionEventsBySession(key, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	payload := payloadForEventType(events, core.ExecutionEventDeliveryProgressFailed)
+	if payload == nil {
+		t.Fatalf("events = %#v, want %s", events, core.ExecutionEventDeliveryProgressFailed)
+	}
+	if got := payloadString(payload, "method"); got != "send" {
+		t.Fatalf("method = %q, want send", got)
+	}
+	if got := payloadString(payload, "progress_phase"); got != "turn_bound" {
+		t.Fatalf("progress_phase = %q, want turn_bound", got)
+	}
+	if runID, ok := payloadInt64(payload, "run_id"); !ok || runID != 91 {
+		t.Fatalf("run_id = %d ok=%t, want 91", runID, ok)
+	}
+	if got := payloadString(payload, "source_surface"); got != "outbound_transport_ledger" {
+		t.Fatalf("source_surface = %q, want outbound_transport_ledger", got)
+	}
+}
+
 func TestToolProgressReporterInlineEditPayloadCarriesRunID(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)
@@ -341,6 +467,22 @@ func payloadForEventType(events []session.ExecutionEvent, eventType string) map[
 			return nil
 		}
 		return payload
+	}
+	return nil
+}
+
+func progressSurfacePayloadForText(events []session.ExecutionEvent, text string) map[string]any {
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) != core.ExecutionEventProgressSurface {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			continue
+		}
+		if payloadString(payload, "text") == text {
+			return payload
+		}
 	}
 	return nil
 }

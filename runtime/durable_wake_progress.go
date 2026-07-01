@@ -99,15 +99,56 @@ func durableWakeProgressResultSurface(result session.ChildTaskResult) string {
 	case session.ChildTaskResultCompleted:
 		return "Child completed"
 	case session.ChildTaskResultBlocked:
-		if blocker := strings.TrimSpace(result.BlockerKind); blocker != "" {
-			return "Child blocked: " + blocker
+		if blocker := durableWakeProgressBlockerLabel(result.BlockerKind); blocker != "" {
+			return "Child blocked: " + blocker + ". Repair next action recorded."
 		}
-		return "Child blocked"
+		return "Child blocked. Repair next action recorded."
 	case session.ChildTaskResultFailed:
-		return "Child failed"
+		return "Child failed. Repair next action recorded."
 	case session.ChildTaskResultUpdate:
-		return "Child reported an update"
+		return "Child reported an update. Next child task action recorded."
 	default:
 		return "Child finished"
+	}
+}
+
+func durableWakeProgressBlockerLabel(kind string) string {
+	kind = normalizeDurableWakeChildBlockerKind(kind)
+	if kind == "" {
+		return ""
+	}
+	if durableWakeProgressKnownBlockerKind(kind) {
+		return kind
+	}
+	return ""
+}
+
+func durableWakeProgressKnownBlockerKind(kind string) bool {
+	switch strings.TrimSpace(kind) {
+	case
+		"capability_grant_missing",
+		"child_control_plane_tool_misroute",
+		"child_reported_blocked",
+		"credential_unverified",
+		"external_transient",
+		"grant_missing_or_stale",
+		"host_permission_denied",
+		"host_resource_missing",
+		"lifecycle_unregistered",
+		"missing_child_runtime_probe",
+		"missing_continuation_lease",
+		"resource_permission_denied",
+		"runtime_bin_missing_or_not_executable",
+		"runtime_capability_stale",
+		"sandbox_exec_failed",
+		"schema_mismatch",
+		"tool_lifecycle_unregistered",
+		"tool_runtime_not_executable",
+		"tool_runtime_probe_missing",
+		"wake_failed",
+		"unknown_child_blocker":
+		return true
+	default:
+		return false
 	}
 }

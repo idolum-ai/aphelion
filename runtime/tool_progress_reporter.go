@@ -84,6 +84,7 @@ func (p *toolProgressReporter) recordProgressSource(entry toolProgressEntry) {
 	source := normalizeProgressSource(entry.Source)
 	payload := map[string]any{
 		"run_id":          p.runID,
+		"progress_phase":  progressEventPhase(p.runID),
 		"progress_key":    strings.TrimSpace(entry.Key),
 		"progress_label":  strings.TrimSpace(entry.Text),
 		"progress_source": source,
@@ -229,13 +230,28 @@ func (p *toolProgressReporter) BindTurnRun(runID int64) {
 	if p == nil || runID <= 0 {
 		return
 	}
+	var (
+		messageID       int64
+		recordMessageID func(int64)
+	)
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.runID = runID
 	if p.suppressControls {
+		messageID = p.messageID
+		recordMessageID = p.recordMessageID
+		p.mu.Unlock()
+		if messageID > 0 && recordMessageID != nil {
+			recordMessageID(messageID)
+		}
 		return
 	}
 	p.controls = deliberationControlRows(runID, false)
+	messageID = p.messageID
+	recordMessageID = p.recordMessageID
+	p.mu.Unlock()
+	if messageID > 0 && recordMessageID != nil {
+		recordMessageID(messageID)
+	}
 }
 
 func (p *toolProgressReporter) SetHeadings(active string, done string) {
@@ -321,8 +337,9 @@ func (p *toolProgressReporter) Surface(ctx context.Context, text string) {
 		p.startedAt = time.Now().UTC()
 	}
 	p.recordProgressEvent(core.ExecutionEventProgressSurface, "active", map[string]any{
-		"run_id": p.runID,
-		"text":   normalized,
+		"run_id":         p.runID,
+		"progress_phase": progressEventPhase(p.runID),
+		"text":           normalized,
 	})
 	entry := toolProgressEntry{
 		Key:    "surface:" + normalized,
