@@ -207,12 +207,12 @@ func (h *DecisionHandler) HandleReactionMessage(ctx context.Context, msg core.In
 	event, err := h.store.ReviewEventByDeliveryMessage(msg.ChatID, msg.Reaction.MessageID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return true, nil
+			return false, nil
 		}
 		return true, err
 	}
 	if event == nil {
-		return true, nil
+		return false, nil
 	}
 	return true, h.applyReviewEventReaction(ctx, msg, *event, action)
 }

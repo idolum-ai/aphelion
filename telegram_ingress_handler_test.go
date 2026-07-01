@@ -124,6 +124,35 @@ func TestHandleTelegramIngressMessageRoutesReactionToDecisionHandler(t *testing.
 	}
 }
 
+func TestHandleTelegramIngressMessageFallsThroughUnhandledReaction(t *testing.T) {
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{}
+	decisions := &stubIngressDecisions{reactionHandled: false}
+	msg := core.InboundMessage{
+		ChatID:    44,
+		SenderID:  1001,
+		MessageID: 902,
+		Text:      "reaction_update message_id=902 new=👍",
+		Reaction:  &core.InboundReaction{MessageID: 902, New: []string{"👍"}},
+	}
+
+	if err := handleTelegramIngressMessage(context.Background(), sender, router, decisions, msg); err != nil {
+		t.Fatalf("handleTelegramIngressMessage() err = %v", err)
+	}
+	if decisions.reactionCalls != 1 || decisions.reactionMsg == nil {
+		t.Fatalf("reaction calls/msg = %d/%#v, want decision reaction handler", decisions.reactionCalls, decisions.reactionMsg)
+	}
+	if decisions.busyCalls != 1 || decisions.retentionCalls != 1 {
+		t.Fatalf("decision calls busy/retention = %d/%d, want unhandled reaction to remain in normal decision lane", decisions.busyCalls, decisions.retentionCalls)
+	}
+	if router.routeAcceptedMsg == nil {
+		t.Fatal("routeAcceptedMsg = nil, want unhandled reaction routed as conversation")
+	}
+	if router.routeAcceptedMsg.Text != msg.Text || router.routeAcceptedMsg.Reaction == nil {
+		t.Fatalf("routeAcceptedMsg = %#v, want original reaction message", router.routeAcceptedMsg)
+	}
+}
+
 type stubIngressDecisions struct {
 	busyCalls        int
 	busyHandled      bool

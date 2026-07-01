@@ -200,7 +200,7 @@ func TestHandleReactionMessageRejectsDeliveredCapabilityReviewEvent(t *testing.T
 	}
 }
 
-func TestHandleReactionMessageDoesNotApproveOrdinaryMessage(t *testing.T) {
+func TestHandleReactionMessageLetsOrdinaryMessageReachConversation(t *testing.T) {
 	t.Parallel()
 
 	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
@@ -232,8 +232,8 @@ func TestHandleReactionMessageDoesNotApproveOrdinaryMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleReactionMessage() err = %v", err)
 	}
-	if !handled {
-		t.Fatal("HandleReactionMessage() handled = false, want thumbs-up reaction consumed")
+	if handled {
+		t.Fatal("HandleReactionMessage() handled = true, want ordinary thumbs-up to fall through to conversation")
 	}
 	updated, ok, err := store.CapabilityRequest("cap-reaction-no-card")
 	if err != nil || !ok {
