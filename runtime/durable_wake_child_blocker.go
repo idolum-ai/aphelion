@@ -175,7 +175,7 @@ var durableWakeBlockedChildBlockerSpecs = []durableWakeChildBlockerSpec{
 		ReviewQuestions:    []string{"Retry after the bounded backoff if the work is still current."},
 		ReviewRiskFlags:    []string{"durable_child", "external_transient"},
 		DiagnosticOnly:     true,
-		Markers:            []string{"timeout", "temporarily unavailable", "transient"},
+		Markers:            []string{"timeout", "deadline_exceeded", "deadline exceeded", "temporarily unavailable", "transient"},
 	},
 }
 
@@ -291,7 +291,11 @@ func durableWakeChildBlockerSpecByKind(kind string) (durableWakeChildBlockerSpec
 }
 
 func durableWakeBlockedChildClassification(base durableWakeChildBlockerClassification, text string) durableWakeChildBlockerClassification {
+	transientEvidence := durableWakeTextMatchesSpecKind(text, "external_transient")
 	for _, spec := range durableWakeBlockedChildBlockerSpecs {
+		if spec.Kind == "credential_unverified" && transientEvidence {
+			continue
+		}
 		if durableWakeTextMatchesAny(text, spec.Markers) {
 			return durableWakeApplyChildBlockerSpec(base, spec)
 		}
@@ -306,6 +310,11 @@ func durableWakeBlockedChildClassification(base durableWakeChildBlockerClassific
 	base.DiagnosticOnly = true
 	base.OperatorProjection = "Child reported a blocker that does not compile to a known repair class; inspect the child result and choose an exact repair."
 	return base
+}
+
+func durableWakeTextMatchesSpecKind(text, kind string) bool {
+	spec, ok := durableWakeChildBlockerSpecByKind(kind)
+	return ok && durableWakeTextMatchesAny(text, spec.Markers)
 }
 
 func durableWakeApplyChildBlockerSpec(base durableWakeChildBlockerClassification, spec durableWakeChildBlockerSpec) durableWakeChildBlockerClassification {

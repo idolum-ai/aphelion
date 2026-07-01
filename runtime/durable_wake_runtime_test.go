@@ -236,6 +236,18 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			wantDiagnostic: true,
 		},
 		{
+			name:   "negated credential blocker with timeout becomes transient",
+			status: session.ChildTaskResultBlocked,
+			summary: "Status: `credential_unverified` is not the blocker. The no-content `gog_cli` readiness evidence is sufficient: metadata-only status is ready, config/wrapper/env name/keyring metadata are present, and active grants are confirmed.\n\n" +
+				"Current blocker: the read-only job/opportunity search path is timing out. Recent `search_unread_jobs` attempts returned `timeout` with `deadline_exceeded=true`, so I have no mailbox results to triage.\n\nREVIEW_STATUS: blocked",
+			blocker:        "",
+			wantKind:       "external_transient",
+			wantState:      session.NextActionScheduledRetry,
+			wantOp:         session.NextActionOperationKindDurableChildRecovery,
+			wantRetry:      "bounded_backoff",
+			wantDiagnostic: true,
+		},
+		{
 			name:           "external transient",
 			status:         session.ChildTaskResultBlocked,
 			summary:        "temporary provider timeout; retry later",
