@@ -552,6 +552,136 @@ func TestDurableWakeCommitsChildOutcomeBeforeFinalizeFailure(t *testing.T) {
 	}
 }
 
+func TestDurableWakeRelaysChildLifecycleProgressToReviewChat(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Child setup check completed.\nREVIEW_STATUS: completed"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "idolum-progress",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "test_adapter",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Exercise durable wake progress.",
+			CapabilityEnvelope: []string{"metadata_only_checks"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	rt.durableWakeAdapters = []durableWakeIngressAdapter{&testDurableWakeAdapter{channelKind: "test_adapter"}}
+	rt.durableWakeChild = nil
+
+	if err := rt.pollDurableWakeAgents(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("pollDurableWakeAgents() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	sent := append([]core.OutboundMessage(nil), sender.sent...)
+	edits := append([]messageEdit(nil), sender.edits...)
+	sender.mu.Unlock()
+	if len(sent) == 0 {
+		t.Fatal("sent progress messages = 0, want durable child progress message")
+	}
+	if sent[0].ChatID != 1001 {
+		t.Fatalf("progress chat_id = %d, want review chat 1001", sent[0].ChatID)
+	}
+	if !strings.Contains(sent[0].Text, "idolum-progress is working...") || !strings.Contains(sent[0].Text, "Starting child wake") {
+		t.Fatalf("initial progress = %q, want child-specific working heading and start surface", sent[0].Text)
+	}
+	for _, forbidden := range []string{"Summarize the adapter wake payload", "secret-token-value", "sk-"} {
+		if strings.Contains(sent[0].Text, forbidden) {
+			t.Fatalf("initial progress = %q leaked %q", sent[0].Text, forbidden)
+		}
+	}
+	if !progressEditsContain(edits, "Child is running") {
+		t.Fatalf("progress edits = %#v, want child running lifecycle surface", edits)
+	}
+	if !progressEditsContain(edits, "idolum-progress completed.") || !progressEditsContain(edits, "Child completed") {
+		t.Fatalf("progress edits = %#v, want completed final child progress", edits)
+	}
+}
+
+func TestDurableWakeProgressSurfacesAlreadyAwakeSkip(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "idolum-already-awake",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "test_adapter",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Exercise durable wake progress skip.",
+			CapabilityEnvelope: []string{"metadata_only_checks"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	adapter := &testDurableWakeAdapter{channelKind: "test_adapter"}
+	rt.durableWakeAdapters = []durableWakeIngressAdapter{adapter}
+	rt.durableWakeChild = nil
+	now := time.Now().UTC()
+	plan, err := adapter.Prepare(context.Background(), rt, agent, now)
+	if err != nil {
+		t.Fatalf("Prepare() err = %v", err)
+	}
+	if plan == nil {
+		t.Fatal("Prepare() plan = nil")
+	}
+	if err := rt.markDurableAgentAwake(agent.AgentID, plan.Inbound.MessageID); err != nil {
+		t.Fatalf("markDurableAgentAwake() err = %v", err)
+	}
+
+	if err := rt.runDurableWakeTurn(context.Background(), agent, *plan, now); err != nil {
+		t.Fatalf("runDurableWakeTurn() err = %v", err)
+	}
+	provider.mu.Lock()
+	calls := provider.callCount
+	provider.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("provider calls = %d, want no child turn when already awake", calls)
+	}
+
+	sender.mu.Lock()
+	edits := append([]messageEdit(nil), sender.edits...)
+	sender.mu.Unlock()
+	if !progressEditsContain(edits, "idolum-already-awake skipped.") || !progressEditsContain(edits, "Child already running") {
+		t.Fatalf("progress edits = %#v, want skipped already-awake child progress", edits)
+	}
+}
+
+func progressEditsContain(edits []messageEdit, needle string) bool {
+	needle = strings.TrimSpace(needle)
+	if needle == "" {
+		return false
+	}
+	for _, edit := range edits {
+		if strings.Contains(edit.Text, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestDurableWakeScheduledReviewIntentRepairsAfterStoreReopen(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	_ = provider
@@ -1353,10 +1483,13 @@ func TestPollDurableWakeAgentsKeepsParentConversationPendingOnInferenceFailure(t
 	}
 
 	sender.mu.Lock()
-	if got := len(sender.sent); got != 0 {
-		t.Fatalf("sent len = %d, want 0 review digests when wake failed before ack", got)
-	}
+	sent := append([]core.OutboundMessage(nil), sender.sent...)
 	sender.mu.Unlock()
+	for _, msg := range sent {
+		if !strings.Contains(msg.Text, "idolum-retry is working...") {
+			t.Fatalf("sent message = %q, want only child progress and no review digest when wake failed before ack", msg.Text)
+		}
+	}
 }
 
 func TestPollDurableWakeAgentsDispatchesGenericExternalChannelWithoutSpecializedParentSemantics(t *testing.T) {

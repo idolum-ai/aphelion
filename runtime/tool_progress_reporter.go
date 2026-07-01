@@ -42,6 +42,8 @@ type toolProgressReporter struct {
 	// inbound-user-derived value as a semantic fallback label.
 	taskSummary      string
 	displayPrefix    string
+	activeHeading    string
+	doneHeading      string
 	currentPlanStep  string
 	runID            int64
 	controls         [][]telegram.InlineButton
@@ -234,6 +236,20 @@ func (p *toolProgressReporter) BindTurnRun(runID int64) {
 		return
 	}
 	p.controls = deliberationControlRows(runID, false)
+}
+
+func (p *toolProgressReporter) SetHeadings(active string, done string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if active = strings.TrimSpace(active); active != "" {
+		p.activeHeading = active
+	}
+	if done = strings.TrimSpace(done); done != "" {
+		p.doneHeading = done
+	}
 }
 
 func (p *toolProgressReporter) ToolStarted(ctx context.Context, name string, input json.RawMessage) {

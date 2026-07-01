@@ -42,6 +42,8 @@ type durableGroupTurnCoordinator struct {
 	baseGovernorAwareness     prompt.RuntimeAwareness
 	audit                     *turnAuditRecorder
 	allowStream               bool
+	progress                  *toolProgressReporter
+	progressOwnedByCaller     bool
 	pendingParentConversation []core.DurableAgentConversationMessage
 	governorContextBuilder    durableWakeGovernorContextBuilder
 	lastRunID                 int64
@@ -180,8 +182,10 @@ func (c *durableGroupTurnCoordinator) Execute(ctx context.Context, req turn.Gove
 		ExtraSystemMessages: []agent.Message{
 			{Role: "system", Content: c.governorContext()},
 		},
-		RunErrPrefix:        "run durable group turn",
-		InvalidOutputPrefix: "invalid durable group turn output",
+		RunErrPrefix:          "run durable group turn",
+		InvalidOutputPrefix:   "invalid durable group turn output",
+		Progress:              c.progress,
+		ProgressOwnedByCaller: c.progressOwnedByCaller,
 	})
 	if err != nil {
 		return nil, err

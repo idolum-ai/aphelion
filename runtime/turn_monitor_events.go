@@ -669,7 +669,7 @@ func toolDurationKey(name string, input json.RawMessage) string {
 }
 
 func (m *turnMonitor) Finish(ctx context.Context, turnErr error) {
-	if m.progress != nil {
+	if m.progress != nil && m.finishProgress {
 		m.progress.Finish(ctx)
 	}
 	if m.stopRunActivityHeartbeat != nil {

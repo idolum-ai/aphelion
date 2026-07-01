@@ -122,6 +122,7 @@ type turnMonitor struct {
 	ctx                      context.Context
 	cancelTurn               context.CancelFunc
 	stopRunActivityHeartbeat context.CancelFunc
+	finishProgress           bool
 	ingressSurface           string
 	ingressUpdateID          int64
 }
@@ -166,6 +167,7 @@ func (r *Runtime) startTurnMonitor(ctx context.Context, key session.SessionKey, 
 		toolStarts:      make(map[string][]time.Time),
 		ctx:             turnCtx,
 		cancelTurn:      cancelTurn,
+		finishProgress:  true,
 		ingressSurface:  ingressSurface,
 		ingressUpdateID: ingressUpdateID,
 	}
