@@ -90,6 +90,11 @@ func (r *Runtime) maybeHandleApprovedContinuationRunIntent(ctx context.Context, 
 	if childWakeRepairRetryTextNegated(normalizeContinuationControlText(msg.Text)) {
 		return false, nil, nil
 	}
+	if positiveReactionShouldSurfacePendingApproval(msg) {
+		if handled, result, err := r.maybeMaterializePendingContinuationApproval(ctx, key, msg, actor, true); handled {
+			return true, result, err
+		}
+	}
 	if isChildWakeRepairRetryApprovalText(msg.Text) || isChildWakeRepairAdvanceText(msg.Text) {
 		if handled, result, err := r.maybeMaterializeChildWakeRepairRetryApproval(ctx, key, msg, actor, true, false); handled {
 			return true, result, err
@@ -101,6 +106,19 @@ func (r *Runtime) maybeHandleApprovedContinuationRunIntent(ctx context.Context, 
 		}
 	}
 	return false, nil, nil
+}
+
+func positiveReactionShouldSurfacePendingApproval(msg core.InboundMessage) bool {
+	if msg.Reaction == nil || len(msg.Reaction.New) == 0 {
+		return false
+	}
+	for _, reaction := range msg.Reaction.New {
+		switch strings.TrimSpace(reaction) {
+		case "👍", "+1":
+			return true
+		}
+	}
+	return false
 }
 
 func isPendingContinuationApprovalSurfaceText(text string) bool {

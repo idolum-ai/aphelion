@@ -337,13 +337,30 @@ func (r *Registry) requestApprovalPhaseContinuationLease(ctx context.Context, in
 		return "", fmt.Errorf("request_approval phase summary is required")
 	}
 	agentID, grantID, targetResource := requestApprovalPhaseChildWakeTarget(phase)
+	principalID := firstNonEmptyTool(requestApprovalPhaseGrantedTo(phase, targetResource), toolAuthorityCanonicalPrincipal(p))
+	if inferred, err := r.requestApprovalPhaseChildWakeTargetFromDurableFacts(in, key, p, phase, agentID, grantID, targetResource); err != nil {
+		return "", err
+	} else if inferred.AgentID != "" {
+		if agentID == "" {
+			agentID = inferred.AgentID
+		}
+		if grantID == "" {
+			grantID = inferred.GrantID
+		}
+		if targetResource == "" {
+			targetResource = inferred.TargetResource
+		}
+		if inferred.PrincipalID != "" {
+			principalID = inferred.PrincipalID
+		}
+	}
 	if agentID == "" {
 		return "", fmt.Errorf("request_approval child_wake phase requires exact durable_agent wake_once target")
 	}
-	principalID := firstNonEmptyTool(
-		requestApprovalPhaseGrantedTo(phase, targetResource),
-		toolAuthorityCanonicalPrincipal(p),
-	)
+	if targetResource == "" {
+		targetResource = "durable_agent:" + agentID + ":wake_once"
+	}
+	principalID = firstNonEmptyTool(requestApprovalPhaseGrantedTo(phase, targetResource), principalID, toolAuthorityCanonicalPrincipal(p))
 	if principalID == "" || principalID == "unknown" {
 		return "", fmt.Errorf("request_approval child_wake phase requires operator principal")
 	}
@@ -409,6 +426,120 @@ func (r *Registry) requestApprovalPhaseContinuationLease(ctx context.Context, in
 		next.Objective = firstNonEmptyTool(phase.Summary, "Approve one bounded child_wake continuation.")
 	}
 	return r.requestContinuationLeaseApproval(next, key)
+}
+
+type requestApprovalChildWakeTargetRef struct {
+	AgentID        string
+	GrantID        string
+	TargetResource string
+	PrincipalID    string
+}
+
+func (r *Registry) requestApprovalPhaseChildWakeTargetFromDurableFacts(in requestApprovalInput, key session.SessionKey, p principal.Principal, phase session.OperationPhase, agentID string, grantID string, targetResource string) (requestApprovalChildWakeTargetRef, error) {
+	if r == nil || r.store == nil {
+		return requestApprovalChildWakeTargetRef{}, nil
+	}
+	principalID := firstNonEmptyTool(requestApprovalPhaseGrantedTo(phase, targetResource), toolAuthorityCanonicalPrincipal(p))
+	if principalID == "" || principalID == "unknown" {
+		return requestApprovalChildWakeTargetRef{}, nil
+	}
+	agentID = strings.TrimSpace(agentID)
+	inferredAgent := false
+	if agentID == "" {
+		inferredAgentID, err := r.requestApprovalPhaseMentionedDurableAgentID(in, phase)
+		if err != nil {
+			return requestApprovalChildWakeTargetRef{}, err
+		}
+		agentID = inferredAgentID
+		inferredAgent = agentID != ""
+	}
+	if agentID == "" {
+		return requestApprovalChildWakeTargetRef{}, nil
+	}
+	targetResource = strings.TrimSpace(targetResource)
+	if targetResource == "" {
+		targetResource = "durable_agent:" + agentID + ":wake_once"
+	}
+	grantID = strings.TrimSpace(grantID)
+	if grantID != "" {
+		return requestApprovalChildWakeTargetRef{
+			AgentID:        agentID,
+			GrantID:        grantID,
+			TargetResource: targetResource,
+			PrincipalID:    principalID,
+		}, nil
+	}
+	grants, err := r.store.ActiveCapabilityGrants(session.CapabilityKindGenericDelegation, targetResource, principalID, "invoke")
+	if err != nil {
+		return requestApprovalChildWakeTargetRef{}, err
+	}
+	for _, grant := range grants {
+		if grantAgent := requestApprovalAgentIDFromConstraints(grant.Constraints); grantAgent != "" && grantAgent != agentID {
+			continue
+		}
+		return requestApprovalChildWakeTargetRef{
+			AgentID:        agentID,
+			GrantID:        strings.TrimSpace(grant.GrantID),
+			TargetResource: strings.TrimSpace(grant.TargetResource),
+			PrincipalID:    principalID,
+		}, nil
+	}
+	if inferredAgent {
+		return requestApprovalChildWakeTargetRef{}, fmt.Errorf("request_approval child_wake phase for %s requires an active exact durable_agent wake_once grant", agentID)
+	}
+	return requestApprovalChildWakeTargetRef{
+		AgentID:        agentID,
+		TargetResource: targetResource,
+		PrincipalID:    principalID,
+	}, nil
+}
+
+func (r *Registry) requestApprovalPhaseMentionedDurableAgentID(in requestApprovalInput, phase session.OperationPhase) (string, error) {
+	agents, err := r.store.ListDurableAgents()
+	if err != nil {
+		return "", err
+	}
+	text := requestApprovalPhaseInferenceText(in, phase)
+	if text == "" {
+		return "", nil
+	}
+	matched := ""
+	for _, agent := range agents {
+		if strings.TrimSpace(agent.Status) != "" && strings.TrimSpace(agent.Status) != "active" {
+			continue
+		}
+		agentID := strings.TrimSpace(agent.AgentID)
+		if agentID == "" {
+			continue
+		}
+		if !strings.Contains(text, strings.ToLower(agentID)) {
+			continue
+		}
+		if matched != "" && matched != agentID {
+			return "", fmt.Errorf("request_approval child_wake phase mentions multiple durable agents; provide an exact durable_agent wake_once grant")
+		}
+		matched = agentID
+	}
+	return matched, nil
+}
+
+func requestApprovalPhaseInferenceText(in requestApprovalInput, phase session.OperationPhase) string {
+	parts := []string{
+		in.Action,
+		in.Objective,
+		phase.ID,
+		phase.Summary,
+		phase.AuthorityClass,
+		phase.GateReasonCode,
+		phase.OperatorTitle,
+		phase.PlanTitle,
+		phase.WhyNow,
+		phase.BoundedEffect,
+	}
+	parts = append(parts, phase.AllowedActions...)
+	parts = append(parts, phase.ForbiddenActions...)
+	parts = append(parts, phase.ValidationPlan...)
+	return strings.ToLower(strings.Join(parts, "\n"))
 }
 
 func requestApprovalStringSliceContains(items []string, want string) bool {

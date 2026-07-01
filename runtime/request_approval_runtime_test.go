@@ -410,6 +410,172 @@ func TestOperationPhaseChildWakeCompilesRecoveryContractAndRunsApprovedRetry(t *
 	}
 }
 
+func TestRequestApprovalChildWakePhaseInfersExactWakeGrantFromDurableFacts(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9076, UserID: 0, Scope: telegramDMScopeRef(9076)}
+	seedRuntimeWakeAgent(t, store, "idolum-email", true)
+	grant := seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-idolum-email-freeform-approval",
+		Objective: "Finish idolum-email setup.",
+		Status:    session.OperationStatusBlocked,
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed operation) err = %v", err)
+	}
+	input := map[string]any{
+		"objective": "Finish idolum-email setup.",
+		"phase": map[string]any{
+			"id":                "phase-idolum-email-one-wake",
+			"summary":           "Approve one bounded idolum-email readiness wake.",
+			"authority_class":   "child_wake",
+			"gate_reason_code":  "child_wake",
+			"why_now":           "idolum-email has pending parent guidance and needs one bounded wake.",
+			"bounded_effect":    "Invoke durable_agent wake_once for idolum-email exactly once and stop after one child result or typed blocker.",
+			"allowed_actions":   []string{"wake_named_child"},
+			"forbidden_actions": []string{"wake_unnamed_child", "unbounded_retry_loop", "credentials_or_tokens", "mailbox_content"},
+			"validation_plan":   []string{"verify one child wake result or typed pre-child failure"},
+		},
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("Marshal(request_approval input) err = %v", err)
+	}
+	out, err := tools.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"request_approval",
+		raw,
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(request_approval inferred child_wake phase) err = %v", err)
+	}
+	if !strings.Contains(out, "[APPROVAL_REQUESTED]") {
+		t.Fatalf("request_approval output = %q, want approval marker", out)
+	}
+
+	pending, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if pending.Status != session.ContinuationStatusPending || pending.ContinuationLease.LeaseClass != session.ContinuationLeaseClassChildWake {
+		t.Fatalf("pending continuation = %#v, want pending child_wake continuation", pending)
+	}
+	if got := strings.TrimSpace(pending.ContinuationLease.Constraints["agent_id"]); got != "idolum-email" {
+		t.Fatalf("pending agent_id = %q, want idolum-email", got)
+	}
+	contract, ok, err := store.ContinuationRecoveryContract(pending.ContinuationLease.RecoveryContractID)
+	if err != nil {
+		t.Fatalf("ContinuationRecoveryContract() err = %v", err)
+	}
+	if !ok {
+		t.Fatalf("ContinuationRecoveryContract(%q) not found", pending.ContinuationLease.RecoveryContractID)
+	}
+	if contract.AgentID != "idolum-email" || contract.GrantID != grant.GrantID || contract.GrantTargetResource != grant.TargetResource {
+		t.Fatalf("contract = %#v, want inferred exact child/grant target", contract)
+	}
+
+	materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9076, SenderID: 1001, Text: "show the approval card", MessageID: 1},
+		"show the approval card",
+	)
+	if err != nil {
+		t.Fatalf("MaterializeRequestedApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want card")
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one card", inlineCount)
+	}
+	if !strings.Contains(inlineText, "idolum-email") || !strings.Contains(inlineText, "wake only idolum-email once") {
+		t.Fatalf("inline text = %q, want exact child wake card", inlineText)
+	}
+}
+
+func TestRequestApprovalChildWakePhaseInferenceRequiresActiveWakeGrant(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, _ := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	key := session.SessionKey{ChatID: 9077, UserID: 0, Scope: telegramDMScopeRef(9077)}
+	seedRuntimeWakeAgent(t, store, "idolum-email", true)
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-idolum-email-no-grant",
+		Objective: "Finish idolum-email setup.",
+		Status:    session.OperationStatusBlocked,
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed operation) err = %v", err)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"objective": "Finish idolum-email setup.",
+		"phase": map[string]any{
+			"id":               "phase-idolum-email-no-grant",
+			"summary":          "Approve one bounded idolum-email readiness wake.",
+			"authority_class":  "child_wake",
+			"gate_reason_code": "child_wake",
+			"bounded_effect":   "Invoke durable_agent wake_once for idolum-email exactly once.",
+			"allowed_actions":  []string{"wake_named_child"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal(request_approval input) err = %v", err)
+	}
+	if _, err := tools.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"request_approval",
+		raw,
+	); err == nil || !strings.Contains(err.Error(), "requires an active exact durable_agent wake_once grant") {
+		t.Fatalf("ExecuteForSessionPrincipal() err = %v, want active exact grant requirement", err)
+	}
+}
+
 func TestRequestApprovalChildWakePhaseDoesNotReuseClaimedParentPhaseLease(t *testing.T) {
 	t.Parallel()
 

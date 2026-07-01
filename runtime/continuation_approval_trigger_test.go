@@ -363,6 +363,99 @@ func TestApprovedContinuationRunIntentDoesNotApprovePendingOrNegatedState(t *tes
 	}
 }
 
+func TestPositiveReactionSurfacesPendingContinuationApprovalCard(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8125, UserID: 0, Scope: telegramDMScopeRef(8125)}
+	seedRuntimeWakeAgent(t, store, "idolum-email", true)
+	seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-reaction-surfaces-approval",
+		Objective: "Surface the pending approval card.",
+		Status:    session.OperationStatusBlocked,
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed operation) err = %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "idolum-email", "grant-idolum-email-wake", "durable_agent", "wake_once", ""),
+		CausalRefs:         []string{"test:positive-reaction"},
+		NextAction:         "show the approval card for one bounded child wake",
+		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		RetryPolicy:        "ask_for_grant",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: runtimeChildWakeApprovalRequestJSON(t, store, key, "idolum-email", "reaction-surfaces-child-wake"),
+		OperatorProjection: "Approve one bounded child wake.",
+		CreatedAt:          now,
+	}); err != nil {
+		t.Fatalf("RecordNextAction() err = %v", err)
+	}
+
+	handled, result, err := rt.maybeHandleApprovedContinuationRunIntent(context.Background(), core.InboundMessage{
+		ChatID:     8125,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "reaction_update message_id=24769 new=👍",
+		MessageID:  3,
+		Reaction:   &core.InboundReaction{MessageID: 24769, New: []string{"👍"}},
+	}, principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001})
+	if err != nil {
+		t.Fatalf("maybeHandleApprovedContinuationRunIntent(reaction) err = %v", err)
+	}
+	if !handled {
+		t.Fatal("reaction handled = false, want pending approval card surfaced")
+	}
+	if result == nil || !strings.Contains(result.Text, "surfaced the pending continuation approval") {
+		t.Fatalf("result = %#v, want surfaced approval acknowledgement", result)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one approval card", inlineCount)
+	}
+	if !strings.Contains(inlineText, "idolum-email") {
+		t.Fatalf("inline text = %q, want idolum-email approval card", inlineText)
+	}
+	pending, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if pending.Status != session.ContinuationStatusPending || pending.ContinuationLease.LeaseClass != session.ContinuationLeaseClassChildWake {
+		t.Fatalf("pending continuation = %#v, want pending child_wake continuation", pending)
+	}
+}
+
 func TestRetryTextMaterializesFreshChildWakeApprovalFromRepairBlocker(t *testing.T) {
 	t.Parallel()
 
