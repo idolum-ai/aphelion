@@ -259,6 +259,18 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			wantDiagnostic: true,
 		},
 		{
+			name:   "job search timing out becomes transient",
+			status: session.ChildTaskResultBlocked,
+			summary: "Status: blocked.\n\nWhat’s working:\n- `mailbox:primary` read access is active.\n- `mail_cli` invocation is active.\n- Readiness evidence says `mail_cli` is metadata-ready for `mailbox:primary`.\n- `config.json` has `mailbox:primary = default`.\n\n" +
+				"Blocker:\n- The read-only unread job/opportunity search is timing out before it returns mailbox results. Because of that, I can’t produce a fresh must-not-miss job/opportunity report yet.",
+			blocker:        "",
+			wantKind:       "external_transient",
+			wantState:      session.NextActionScheduledRetry,
+			wantOp:         session.NextActionOperationKindDurableChildRecovery,
+			wantRetry:      "bounded_backoff",
+			wantDiagnostic: true,
+		},
+		{
 			name:           "unknown blocked",
 			status:         session.ChildTaskResultBlocked,
 			summary:        "blocked on a child-local condition that needs review",

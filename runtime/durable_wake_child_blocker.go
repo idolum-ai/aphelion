@@ -175,7 +175,7 @@ var durableWakeBlockedChildBlockerSpecs = []durableWakeChildBlockerSpec{
 		ReviewQuestions:    []string{"Retry after the bounded backoff if the work is still current."},
 		ReviewRiskFlags:    []string{"durable_child", "external_transient"},
 		DiagnosticOnly:     true,
-		Markers:            []string{"timeout", "deadline_exceeded", "deadline exceeded", "temporarily unavailable", "transient"},
+		Markers:            []string{"timeout", "timed out", "timing out", "deadline_exceeded", "deadline exceeded", "temporarily unavailable", "transient"},
 	},
 }
 
