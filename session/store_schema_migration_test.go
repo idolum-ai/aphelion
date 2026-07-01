@@ -2259,6 +2259,89 @@ func TestMigratesSchemaV83ToV84AllowsChildTaskExecutionAuthority(t *testing.T) {
 	}
 }
 
+func TestTerminalizeLegacyContinuationRecoveryContractsMatchesContractIDFieldExactly(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	key := SessionKey{ChatID: 7311, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "7311"}}
+	now := time.Now().UTC()
+	legacyContractID := "crc-legacy-exact-field"
+	if _, err := store.db.Exec(`
+		INSERT INTO continuation_recovery_contracts(
+			contract_id, contract_version, request_instance_id, contract_hash,
+			session_id, subject_kind, subject_ref, status, principal, lease_class,
+			allowed_actions_json, constraints_json, tool, tool_action, agent_id,
+			resource, grant_id, grant_target_resource, retry_operation_json,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, legacyContractID, ContinuationRecoveryContractVersionV1, "legacy-exact-field-request", "sha256:legacy",
+		SessionIDForKey(key), "continuation_lease_request", "child_wake:child-alpha", string(ContinuationRecoveryContractStatusRecorded), "telegram:1001", string(ContinuationLeaseClassChildWake),
+		`["wake_named_child"]`, `{"agent_id":"child-alpha"}`, "durable_agent", "wake_once", "child-alpha",
+		"", "grant-child-alpha", "durable_agent:child-alpha:wake_once", `{"contract":"aphelion.recovery_retry.v1"}`,
+		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("insert legacy continuation recovery contract: %v", err)
+	}
+	records := []struct {
+		id    string
+		input string
+	}{
+		{
+			id:    "next-legacy-exact-field",
+			input: `{"action":"request_continuation_lease","contract_id":"crc-legacy-exact-field"}`,
+		},
+		{
+			id:    "next-legacy-substring-only",
+			input: `{"action":"request_continuation_lease","contract_id":"crc-other-contract","note":"diagnostic text mentions crc-legacy-exact-field but is not the handoff contract"}`,
+		},
+	}
+	for _, record := range records {
+		if _, err := store.RecordNextAction(NextActionInput{
+			RecordID:           record.id,
+			Key:                key,
+			Owner:              "legacy-contract-test",
+			State:              NextActionBlockedNeedsAuthority,
+			SubjectKind:        "continuation_lease_request",
+			SubjectRef:         record.id,
+			NextAction:         "materialize continuation approval",
+			RequiredAuthority:  string(ContinuationLeaseClassChildWake),
+			ResourceBlocker:    "missing_continuation_lease",
+			OperationKind:      "continuation_lease_request",
+			OperationTool:      "request_approval",
+			OperationInputJSON: record.input,
+			CreatedAt:          now,
+		}); err != nil {
+			t.Fatalf("RecordNextAction(%s) err = %v", record.id, err)
+		}
+	}
+
+	tx, err := store.db.Begin()
+	if err != nil {
+		t.Fatalf("Begin() err = %v", err)
+	}
+	if err := terminalizeLegacyContinuationRecoveryContracts(tx); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("terminalizeLegacyContinuationRecoveryContracts() err = %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit() err = %v", err)
+	}
+
+	assertNextActionState := func(recordID string, want NextActionState, wantResolved bool) {
+		t.Helper()
+		var state string
+		var resolvedAt sql.NullString
+		if err := store.db.QueryRow(`SELECT state, resolved_at FROM next_action_records WHERE record_id = ?`, recordID).Scan(&state, &resolvedAt); err != nil {
+			t.Fatalf("query next action %s: %v", recordID, err)
+		}
+		if state != string(want) || resolvedAt.Valid != wantResolved {
+			t.Fatalf("next action %s state=%q resolved=%t, want state=%q resolved=%t", recordID, state, resolvedAt.Valid, want, wantResolved)
+		}
+	}
+	assertNextActionState("next-legacy-exact-field", NextActionSuperseded, true)
+	assertNextActionState("next-legacy-substring-only", NextActionBlockedNeedsAuthority, false)
+}
+
 func TestMigratesSchemaV85ToV86GenericRecoveryOperationKinds(t *testing.T) {
 	t.Parallel()
 

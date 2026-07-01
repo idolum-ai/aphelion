@@ -1137,6 +1137,62 @@ func TestApprovedChildWakeRetryWithoutGuidanceRecordsRepairBlocker(t *testing.T)
 	}
 }
 
+func TestApprovedRetryWakeRendererDriftDoesNotBecomeChildRepairBlocker(t *testing.T) {
+	t.Parallel()
+
+	_, store, _, _ := buildRuntimeFixtures(t)
+	rt := &Runtime{store: store}
+	key := session.SessionKey{ChatID: 8164, UserID: 0, Scope: telegramDMScopeRef(8164)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:      "op-renderer-drift",
+		Status:  session.OperationStatusActive,
+		Stage:   "approved_retry_running",
+		Summary: "Approved retry is running.",
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	retry := session.ContinuationRetryOperation{
+		Contract:          session.ContinuationRecoveryRetryVersion,
+		OperationKind:     "durable_agent_wake_once",
+		Tool:              "durable_agent",
+		InputJSON:         `{"action":"wake_once","agent_id":"idolum-email"}`,
+		SubjectKind:       "continuation_lease_request",
+		SubjectRef:        session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "idolum-email", "grant-idolum-email-wake-once", "durable_agent", "wake_once", ""),
+		RequestInstanceID: "renderer-drift",
+	}
+	reservation := approvedContinuationReservation{
+		State: session.ContinuationState{
+			DecisionID: "renderer-drift",
+			ContinuationLease: session.ContinuationLease{
+				ID:             "lease-renderer-drift",
+				LeaseClass:     session.ContinuationLeaseClassChildWake,
+				Constraints:    map[string]string{"agent_id": "idolum-email"},
+				RetryOperation: retry,
+			},
+		},
+	}
+
+	handled, err := rt.handleApprovedRetryDurableAgentWakeResult(
+		key,
+		reservation,
+		retry,
+		"Idolum Email finished\n\nStatus: completed\n",
+		nil,
+	)
+	if err == nil && handled {
+		open, openErr := store.OpenNextActionsBySession(key, 20)
+		if openErr != nil {
+			t.Fatalf("OpenNextActionsBySession() err = %v", openErr)
+		}
+		for _, action := range open {
+			if action.Owner == "approved_retry" && action.ResourceBlocker == "wake_output_unrecognized" {
+				t.Fatalf("renderer drift produced %#v; want typed wake result path or loud failure, not a child repair blocker from display text", action)
+			}
+		}
+		t.Fatalf("handleApprovedRetryDurableAgentWakeResult() handled renderer drift without error; want typed result source or fail-closed error")
+	}
+}
+
 func TestContinueTextMaterializesChildWakeApprovalFromChildToolRuntimeRepairBlocker(t *testing.T) {
 	t.Parallel()
 

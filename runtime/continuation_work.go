@@ -805,22 +805,22 @@ func (r *Runtime) handleApprovedRetryDurableAgentWakeResult(key session.SessionK
 	if r == nil || r.store == nil || retry.Tool != "durable_agent" || retry.OperationKind != "durable_agent_wake_once" {
 		return false, nil
 	}
+	leaseID := strings.TrimSpace(reservation.State.ContinuationLease.ID)
+	packetID, childResult, hasTerminalChildResult, err := r.approvedRetryWakeTerminalChildResultForLease(leaseID)
+	if err != nil {
+		return true, err
+	}
 	result, ok := toolpkg.ParseDurableAgentWakeOnceRenderedResult(out)
 	if !ok {
-		result = toolpkg.DurableAgentWakeOnceRenderedResult{
-			AgentID:        approvedRetryAgentID(retry),
-			WakeStatus:     "unrecognized",
-			FailureClass:   "wake_output_unrecognized",
-			FailureSummary: "durable_agent wake_once returned an unrecognized result",
-			RetryPolicy:    "retry_after_wake_runtime_repair",
-			NextRepair:     "inspect the durable-agent wake result renderer before retrying",
+		if hasTerminalChildResult {
+			result = approvedRetryWakeResultFromChildTaskResult(retry, childResult)
+			return true, r.recordApprovedRetryWakeTerminalChildResult(key, reservation, retry, result, packetID, childResult, monitor)
 		}
+		return true, fmt.Errorf("approved durable_agent wake_once retry returned an unrecognized projection and no typed child task result for lease %q", leaseID)
 	}
 	switch strings.TrimSpace(result.WakeStatus) {
 	case "completed":
-		if packetID, childResult, ok, err := r.approvedRetryWakeTerminalChildResultForLease(reservation.State.ContinuationLease.ID); err != nil {
-			return true, err
-		} else if ok {
+		if hasTerminalChildResult {
 			return true, r.recordApprovedRetryWakeTerminalChildResult(key, reservation, retry, result, packetID, childResult, monitor)
 		}
 		return false, nil
@@ -846,6 +846,35 @@ func (r *Runtime) handleApprovedRetryDurableAgentWakeResult(key session.SessionK
 			result.NextRepair = "inspect the durable-agent wake runtime, then retry one bounded wake"
 		}
 		return true, r.recordApprovedRetryWakeBlocked(key, reservation, retry, result, monitor)
+	}
+}
+
+func approvedRetryWakeResultFromChildTaskResult(retry session.ContinuationRetryOperation, result session.ChildTaskResult) toolpkg.DurableAgentWakeOnceRenderedResult {
+	agentID := strings.TrimSpace(result.AgentID)
+	if agentID == "" {
+		agentID = approvedRetryAgentID(retry)
+	}
+	wakeStatus := "failed"
+	switch result.Status {
+	case session.ChildTaskResultCompleted:
+		wakeStatus = "completed"
+	case session.ChildTaskResultBlocked:
+		wakeStatus = "failed"
+	case session.ChildTaskResultFailed:
+		wakeStatus = "failed"
+	case session.ChildTaskResultUpdate:
+		wakeStatus = "awaiting_child_pickup"
+	}
+	failureClass := strings.TrimSpace(result.BlockerKind)
+	if failureClass == "" && result.Status == session.ChildTaskResultFailed {
+		failureClass = "child_task_failed"
+	}
+	return toolpkg.DurableAgentWakeOnceRenderedResult{
+		AgentID:        agentID,
+		WakeStatus:     wakeStatus,
+		FailureClass:   failureClass,
+		FailureSummary: strings.TrimSpace(result.Summary),
+		RetryPolicy:    "retry_after_blocker_resolution",
 	}
 }
 

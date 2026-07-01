@@ -4,6 +4,7 @@ package session
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -106,17 +107,65 @@ func terminalizeLegacyContinuationRecoveryContracts(tx *sql.Tx) error {
 	} else if !exists {
 		return nil
 	}
+	legacyContractIDs := make(map[string]struct{}, len(contractIDs))
 	for _, contractID := range contractIDs {
+		legacyContractIDs[contractID] = struct{}{}
+	}
+	actionRows, err := tx.Query(`
+		SELECT record_id, operation_input_json
+		FROM next_action_records
+		WHERE resolved_at IS NULL
+			AND operation_tool = 'request_approval'
+			AND operation_kind = 'continuation_lease_request'
+	`)
+	if err != nil {
+		return fmt.Errorf("query legacy continuation recovery handoffs: %w", err)
+	}
+	var recordIDs []string
+	for actionRows.Next() {
+		var recordID string
+		var rawInput string
+		if err := actionRows.Scan(&recordID, &rawInput); err != nil {
+			_ = actionRows.Close()
+			return fmt.Errorf("scan legacy continuation recovery handoff: %w", err)
+		}
+		contractID := legacyContinuationRecoveryHandoffContractID(rawInput)
+		if _, ok := legacyContractIDs[contractID]; ok {
+			recordIDs = append(recordIDs, strings.TrimSpace(recordID))
+		}
+	}
+	if err := actionRows.Close(); err != nil {
+		return fmt.Errorf("close legacy continuation recovery handoff rows: %w", err)
+	}
+	if err := actionRows.Err(); err != nil {
+		return fmt.Errorf("iterate legacy continuation recovery handoffs: %w", err)
+	}
+	for _, recordID := range recordIDs {
+		if strings.TrimSpace(recordID) == "" {
+			continue
+		}
 		if _, err := tx.Exec(`
 			UPDATE next_action_records
 			SET state = ?, resolved_at = ?
-			WHERE resolved_at IS NULL
-				AND operation_tool = 'request_approval'
-				AND operation_kind = 'continuation_lease_request'
-				AND operation_input_json LIKE ?
-		`, string(NextActionSuperseded), now, "%"+contractID+"%"); err != nil {
-			return fmt.Errorf("resolve legacy continuation recovery handoffs: %w", err)
+			WHERE record_id = ?
+				AND resolved_at IS NULL
+		`, string(NextActionSuperseded), now, recordID); err != nil {
+			return fmt.Errorf("resolve legacy continuation recovery handoff %s: %w", recordID, err)
 		}
 	}
 	return nil
+}
+
+func legacyContinuationRecoveryHandoffContractID(rawInput string) string {
+	rawInput = strings.TrimSpace(rawInput)
+	if rawInput == "" {
+		return ""
+	}
+	var payload struct {
+		ContractID string `json:"contract_id"`
+	}
+	if err := json.Unmarshal([]byte(rawInput), &payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.ContractID)
 }
