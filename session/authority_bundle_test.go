@@ -111,7 +111,75 @@ func TestAuthorityBundleContractStoreRoundTripsAndRejectsDivergentReplay(t *test
 
 	conflict := contract
 	conflict.Summary = "Changed after identity was issued."
-	if _, err := store.UpsertAuthorityBundleContract(conflict); err == nil || !strings.Contains(err.Error(), "idempotency conflict") {
-		t.Fatalf("UpsertAuthorityBundleContract(conflict) err = %v, want idempotency conflict", err)
+	if _, err := store.UpsertAuthorityBundleContract(conflict); err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("UpsertAuthorityBundleContract(conflict) err = %v, want canonical mismatch", err)
+	}
+}
+
+func TestAuthorityBundleExpiryIsContractIdentityTerm(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(300, 0).UTC()
+	base := AuthorityBundleContractInput{
+		RequestInstanceID:             "bundle-expiry-contract",
+		SessionID:                     "telegram_dm:1001",
+		Principal:                     "telegram:1001",
+		Objective:                     "Finish child setup and report.",
+		Summary:                       "One bounded child setup/report cycle.",
+		AllowedActions:                []string{"wake_named_child", "read_unread_messages"},
+		ForbiddenActions:              []string{"credentials_or_tokens", "send_mail"},
+		StopConditions:                []string{"stop after one report", "stop on typed blocker"},
+		PrimaryContinuationContractID: "crec-child-wake",
+		ExpiresAt:                     now.Add(time.Hour),
+		CreatedAt:                     now,
+	}
+	first, err := CompileAuthorityBundleContract(base)
+	if err != nil {
+		t.Fatalf("CompileAuthorityBundleContract(first) err = %v", err)
+	}
+	secondInput := base
+	secondInput.ExpiresAt = now.Add(2 * time.Hour)
+	second, err := CompileAuthorityBundleContract(secondInput)
+	if err != nil {
+		t.Fatalf("CompileAuthorityBundleContract(second) err = %v", err)
+	}
+	if first.ContractHash == second.ContractHash || first.BundleID == second.BundleID {
+		t.Fatalf("expiry did not change contract identity: first=%s/%s second=%s/%s", first.BundleID, first.ContractHash, second.BundleID, second.ContractHash)
+	}
+}
+
+func TestAuthorityBundleContractRejectsTamperedStoredExpiry(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	now := time.Unix(400, 0).UTC()
+	contract, err := CompileAuthorityBundleContract(AuthorityBundleContractInput{
+		RequestInstanceID:             "bundle-expiry-tamper",
+		SessionID:                     "telegram_dm:1001",
+		Principal:                     "telegram:1001",
+		Summary:                       "One bounded child setup/report cycle.",
+		AllowedActions:                []string{"wake_named_child"},
+		ForbiddenActions:              []string{"credentials_or_tokens"},
+		StopConditions:                []string{"stop after one report"},
+		PrimaryContinuationContractID: "crec-child-wake",
+		ExpiresAt:                     now.Add(time.Hour),
+		CreatedAt:                     now,
+	})
+	if err != nil {
+		t.Fatalf("CompileAuthorityBundleContract() err = %v", err)
+	}
+	if _, err := store.UpsertAuthorityBundleContract(contract); err != nil {
+		t.Fatalf("UpsertAuthorityBundleContract() err = %v", err)
+	}
+	if _, err := store.db.Exec(`UPDATE authority_bundle_contracts SET expires_at = ? WHERE bundle_id = ?`, now.Add(2*time.Hour).Format(time.RFC3339Nano), contract.BundleID); err != nil {
+		t.Fatalf("tamper bundle expiry: %v", err)
+	}
+	if _, _, err := store.AuthorityBundleContract(contract.BundleID); err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("AuthorityBundleContract() err = %v, want expiry hash mismatch", err)
 	}
 }

@@ -14,7 +14,10 @@ func (s *SQLiteStore) UpsertAuthorityBundleContract(input AuthorityBundleContrac
 	if s == nil || s.db == nil {
 		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract store unavailable")
 	}
-	input = NormalizeAuthorityBundleContract(input)
+	input, err := CanonicalizeAuthorityBundleContract(input)
+	if err != nil {
+		return AuthorityBundleContract{}, err
+	}
 	if input.BundleID == "" {
 		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract bundle_id is required")
 	}
@@ -41,7 +44,10 @@ func (s *SQLiteStore) AuthorityBundleContract(bundleID string) (AuthorityBundleC
 }
 
 func upsertAuthorityBundleContractTx(tx *sql.Tx, input AuthorityBundleContract) (AuthorityBundleContract, error) {
-	input = NormalizeAuthorityBundleContract(input)
+	input, err := CanonicalizeAuthorityBundleContract(input)
+	if err != nil {
+		return AuthorityBundleContract{}, err
+	}
 	if input.BundleID == "" {
 		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract bundle_id is required")
 	}
@@ -164,7 +170,11 @@ func scanAuthorityBundleContract(scanner interface{ Scan(dest ...any) error }) (
 	}
 	contract.CreatedAt = createdAt
 	contract.UpdatedAt = updatedAt
-	return NormalizeAuthorityBundleContract(contract), true, nil
+	contract, err = CanonicalizeAuthorityBundleContract(contract)
+	if err != nil {
+		return AuthorityBundleContract{}, false, err
+	}
+	return contract, true, nil
 }
 
 func authorityBundleContractEquivalent(left AuthorityBundleContract, right AuthorityBundleContract) bool {

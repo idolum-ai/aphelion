@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	ContinuationRecoveryContractVersion = "aphelion.continuation_recovery.v1"
-	ContinuationRecoveryRetryVersion    = "aphelion.recovery_retry.v1"
+	ContinuationRecoveryContractVersionV1 = "aphelion.continuation_recovery.v1"
+	ContinuationRecoveryContractVersion   = "aphelion.continuation_recovery.v2"
+	ContinuationRecoveryRetryVersion      = "aphelion.recovery_retry.v1"
 )
 
 type ContinuationRecoveryContractStatus string
@@ -71,6 +72,9 @@ func CompileContinuationRecoveryContract(input ContinuationRecoveryContractInput
 	input = normalizeContinuationRecoveryContractInput(input)
 	if input.RequestInstanceID == "" {
 		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract requires request_instance_id")
+	}
+	if input.SessionID == "" {
+		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract requires session_id")
 	}
 	if input.Principal == "" {
 		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract requires principal")
@@ -209,6 +213,7 @@ func NormalizeContinuationRecoveryContract(contract ContinuationRecoveryContract
 
 func CanonicalizeContinuationRecoveryContract(contract ContinuationRecoveryContract) (ContinuationRecoveryContract, error) {
 	contract = NormalizeContinuationRecoveryContract(contract)
+	version := contract.ContractVersion
 	input := normalizeContinuationRecoveryContractInput(ContinuationRecoveryContractInput{
 		RequestInstanceID:   contract.RequestInstanceID,
 		SessionID:           contract.SessionID,
@@ -229,6 +234,9 @@ func CanonicalizeContinuationRecoveryContract(contract ContinuationRecoveryContr
 	})
 	if input.RequestInstanceID == "" {
 		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract requires request_instance_id")
+	}
+	if version != ContinuationRecoveryContractVersionV1 && input.SessionID == "" {
+		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract requires session_id")
 	}
 	if input.Principal == "" {
 		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract requires principal")
@@ -297,7 +305,7 @@ func CanonicalizeContinuationRecoveryContract(contract ContinuationRecoveryContr
 	if err := validateContinuationRecoveryRetry(input); err != nil {
 		return ContinuationRecoveryContract{}, err
 	}
-	hash := continuationRecoveryContractHash(input)
+	hash := continuationRecoveryContractHashForVersion(input, version)
 	if contract.ContractHash != "" && contract.ContractHash != hash {
 		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract %s hash mismatch", contract.ContractID)
 	}
@@ -306,7 +314,7 @@ func CanonicalizeContinuationRecoveryContract(contract ContinuationRecoveryContr
 		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract %s id mismatch", contract.ContractID)
 	}
 	contract.ContractID = id
-	contract.ContractVersion = ContinuationRecoveryContractVersion
+	contract.ContractVersion = version
 	contract.RequestInstanceID = input.RequestInstanceID
 	contract.ContractHash = hash
 	contract.SessionID = input.SessionID
@@ -453,6 +461,48 @@ func validateContinuationRecoveryRetry(input ContinuationRecoveryContractInput) 
 }
 
 func continuationRecoveryContractHash(input ContinuationRecoveryContractInput) string {
+	return continuationRecoveryContractHashForVersion(input, ContinuationRecoveryContractVersion)
+}
+
+func continuationRecoveryContractHashForVersion(input ContinuationRecoveryContractInput, version string) string {
+	input = normalizeContinuationRecoveryContractInput(input)
+	if strings.TrimSpace(version) == ContinuationRecoveryContractVersionV1 {
+		return continuationRecoveryContractHashV1(input)
+	}
+	payload := map[string]any{
+		"contract_version":      ContinuationRecoveryContractVersion,
+		"session_id":            input.SessionID,
+		"subject_kind":          input.SubjectKind,
+		"subject_ref":           input.SubjectRef,
+		"agent_id":              input.AgentID,
+		"resource":              input.Resource,
+		"grant_id":              input.GrantID,
+		"grant_target_resource": input.GrantTargetResource,
+		"principal":             input.Principal,
+		"lease_class":           string(input.LeaseClass),
+		"allowed_actions":       input.AllowedActions,
+		"constraints":           input.Constraints,
+		"tool":                  input.Tool,
+		"tool_action":           input.ToolAction,
+	}
+	if input.RetryOperation.Active() {
+		retry := NormalizeContinuationRetryOperation(input.RetryOperation)
+		payload["retry_operation"] = map[string]any{
+			"contract":            retry.Contract,
+			"operation_kind":      retry.OperationKind,
+			"tool":                retry.Tool,
+			"input_json":          retry.InputJSON,
+			"subject_kind":        retry.SubjectKind,
+			"subject_ref":         retry.SubjectRef,
+			"request_instance_id": retry.RequestInstanceID,
+		}
+	}
+	raw, _ := json.Marshal(payload)
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func continuationRecoveryContractHashV1(input ContinuationRecoveryContractInput) string {
 	input = normalizeContinuationRecoveryContractInput(input)
 	payload := map[string]any{
 		"agent_id":              input.AgentID,

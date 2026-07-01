@@ -754,6 +754,7 @@ func TestRequestApprovalContinuationLeaseRejectsConflictingChildWakeConstraint(t
 
 	_, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
 		RequestInstanceID:   "test-conflicting-child-wake-request",
+		SessionID:           session.SessionIDForKey(adminSessionKey()),
 		SubjectKind:         "continuation_lease_request",
 		SubjectRef:          session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "child-alpha", "grant-child-alpha-wake", "durable_agent", "wake_once", ""),
 		Principal:           "telegram:1001",

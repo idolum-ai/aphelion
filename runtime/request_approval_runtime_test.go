@@ -2059,8 +2059,13 @@ func TestRequestApprovalSameContractNewInstanceAfterConsumedDeliversNewCard(t *t
 	if second.ContinuationLease.ID == first.ContinuationLease.ID || second.DecisionID == first.DecisionID {
 		t.Fatalf("second continuation = %#v reused first consumed identity %#v", second, first)
 	}
-	if second.ContinuationLease.PlanHash != first.ContinuationLease.PlanHash {
-		t.Fatalf("second contract hash = %q, want same contract hash as first %q", second.ContinuationLease.PlanHash, first.ContinuationLease.PlanHash)
+	if second.ContinuationLease.PlanHash == first.ContinuationLease.PlanHash {
+		t.Fatalf("second contract hash = %q, want fresh retry-instance-bound contract hash distinct from first", second.ContinuationLease.PlanHash)
+	}
+	if second.ContinuationLease.LeaseClass != first.ContinuationLease.LeaseClass ||
+		second.ContinuationLease.Constraints["agent_id"] != first.ContinuationLease.Constraints["agent_id"] ||
+		!equalStringSlices(second.ContinuationLease.AllowedActions, first.ContinuationLease.AllowedActions) {
+		t.Fatalf("second lease = %#v, want same bounded child/action shape as first %#v", second.ContinuationLease, first.ContinuationLease)
 	}
 	if materialized, err := rt.MaterializeRequestedApproval(context.Background(), key, core.InboundMessage{ChatID: 9046, SenderID: 1001, Text: "continue second", MessageID: 2}, "continue second"); err != nil || !materialized {
 		t.Fatalf("second MaterializeRequestedApproval materialized=%v err=%v, want delivered", materialized, err)
@@ -2158,8 +2163,13 @@ func TestRequestApprovalSameContractNewInstanceAfterDeniedDeliversNewCard(t *tes
 	if second.ContinuationLease.ID == first.ContinuationLease.ID || second.DecisionID == first.DecisionID {
 		t.Fatalf("second continuation = %#v reused first denied identity %#v", second, first)
 	}
-	if second.ContinuationLease.PlanHash != first.ContinuationLease.PlanHash {
-		t.Fatalf("second contract hash = %q, want same contract hash as first %q", second.ContinuationLease.PlanHash, first.ContinuationLease.PlanHash)
+	if second.ContinuationLease.PlanHash == first.ContinuationLease.PlanHash {
+		t.Fatalf("second contract hash = %q, want fresh retry-instance-bound contract hash distinct from first", second.ContinuationLease.PlanHash)
+	}
+	if second.ContinuationLease.LeaseClass != first.ContinuationLease.LeaseClass ||
+		second.ContinuationLease.Constraints["agent_id"] != first.ContinuationLease.Constraints["agent_id"] ||
+		!equalStringSlices(second.ContinuationLease.AllowedActions, first.ContinuationLease.AllowedActions) {
+		t.Fatalf("second lease = %#v, want same bounded child/action shape as first %#v", second.ContinuationLease, first.ContinuationLease)
 	}
 	if materialized, err := rt.MaterializeRequestedApproval(context.Background(), key, core.InboundMessage{ChatID: 9047, SenderID: 1001, Text: "continue second", MessageID: 2}, "continue second"); err != nil || !materialized {
 		t.Fatalf("second MaterializeRequestedApproval materialized=%v err=%v, want delivered", materialized, err)

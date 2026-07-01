@@ -11,7 +11,10 @@ import (
 	"time"
 )
 
-const AuthorityBundleContractVersion = "aphelion.authority_bundle.v1"
+const (
+	AuthorityBundleContractVersionV1 = "aphelion.authority_bundle.v1"
+	AuthorityBundleContractVersion   = "aphelion.authority_bundle.v2"
+)
 
 type AuthorityBundleStatus string
 
@@ -125,6 +128,80 @@ func CompileAuthorityBundleContract(input AuthorityBundleContractInput) (Authori
 	}), nil
 }
 
+func CanonicalizeAuthorityBundleContract(contract AuthorityBundleContract) (AuthorityBundleContract, error) {
+	contract = NormalizeAuthorityBundleContract(contract)
+	version := contract.ContractVersion
+	input := normalizeAuthorityBundleContractInput(AuthorityBundleContractInput{
+		RequestInstanceID:             contract.RequestInstanceID,
+		SessionID:                     contract.SessionID,
+		Principal:                     contract.Principal,
+		Objective:                     contract.Objective,
+		Summary:                       contract.Summary,
+		SourceNextActionRecordIDs:     append([]string(nil), contract.SourceNextActionRecordIDs...),
+		AllowedActions:                append([]string(nil), contract.AllowedActions...),
+		ForbiddenActions:              append([]string(nil), contract.ForbiddenActions...),
+		StopConditions:                append([]string(nil), contract.StopConditions...),
+		PrimaryContinuationContractID: contract.PrimaryContinuationContractID,
+		RequiredCapabilityGrants:      append([]CapabilityGrantSpec(nil), contract.RequiredCapabilityGrants...),
+		Components:                    append([]AuthorityBundleComponent(nil), contract.Components...),
+		ExpiresAt:                     contract.ExpiresAt,
+		CreatedAt:                     contract.CreatedAt,
+	})
+	if input.RequestInstanceID == "" {
+		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract requires request_instance_id")
+	}
+	if input.Principal == "" {
+		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract requires principal")
+	}
+	if input.Summary == "" {
+		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract requires summary")
+	}
+	if len(input.AllowedActions) == 0 {
+		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract requires allowed_actions")
+	}
+	if len(input.ForbiddenActions) == 0 {
+		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract requires forbidden_actions")
+	}
+	if len(input.StopConditions) == 0 {
+		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract requires stop_conditions")
+	}
+	if input.PrimaryContinuationContractID == "" && len(input.RequiredCapabilityGrants) == 0 {
+		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract requires a continuation contract or capability grant component")
+	}
+	for _, forbidden := range input.ForbiddenActions {
+		for _, allowed := range input.AllowedActions {
+			if forbidden == allowed {
+				return AuthorityBundleContract{}, fmt.Errorf("authority bundle action %q cannot be both allowed and forbidden", allowed)
+			}
+		}
+	}
+	hash := authorityBundleContractHashForVersion(input, version)
+	if contract.ContractHash != "" && contract.ContractHash != hash {
+		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract %s hash mismatch", contract.BundleID)
+	}
+	id := authorityBundleContractID(input.RequestInstanceID, hash)
+	if contract.BundleID != "" && contract.BundleID != id {
+		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract %s id mismatch", contract.BundleID)
+	}
+	contract.BundleID = id
+	contract.ContractVersion = version
+	contract.RequestInstanceID = input.RequestInstanceID
+	contract.ContractHash = hash
+	contract.SessionID = input.SessionID
+	contract.Principal = input.Principal
+	contract.Objective = input.Objective
+	contract.Summary = input.Summary
+	contract.SourceNextActionRecordIDs = append([]string(nil), input.SourceNextActionRecordIDs...)
+	contract.AllowedActions = append([]string(nil), input.AllowedActions...)
+	contract.ForbiddenActions = append([]string(nil), input.ForbiddenActions...)
+	contract.StopConditions = append([]string(nil), input.StopConditions...)
+	contract.PrimaryContinuationContractID = input.PrimaryContinuationContractID
+	contract.RequiredCapabilityGrants = append([]CapabilityGrantSpec(nil), input.RequiredCapabilityGrants...)
+	contract.Components = append([]AuthorityBundleComponent(nil), input.Components...)
+	contract.ExpiresAt = input.ExpiresAt
+	return NormalizeAuthorityBundleContract(contract), nil
+}
+
 func NormalizeAuthorityBundleContract(contract AuthorityBundleContract) AuthorityBundleContract {
 	contract.BundleID = strings.TrimSpace(contract.BundleID)
 	contract.ContractVersion = strings.TrimSpace(contract.ContractVersion)
@@ -211,6 +288,35 @@ func normalizeAuthorityBundleComponents(values []AuthorityBundleComponent) []Aut
 }
 
 func authorityBundleContractHash(input AuthorityBundleContractInput) string {
+	return authorityBundleContractHashForVersion(input, AuthorityBundleContractVersion)
+}
+
+func authorityBundleContractHashForVersion(input AuthorityBundleContractInput, version string) string {
+	input = normalizeAuthorityBundleContractInput(input)
+	if strings.TrimSpace(version) == AuthorityBundleContractVersionV1 {
+		return authorityBundleContractHashV1(input)
+	}
+	payload := map[string]any{
+		"contract_version":                 AuthorityBundleContractVersion,
+		"session_id":                       input.SessionID,
+		"principal":                        input.Principal,
+		"objective":                        input.Objective,
+		"summary":                          input.Summary,
+		"source_next_action_record_ids":    input.SourceNextActionRecordIDs,
+		"allowed_actions":                  input.AllowedActions,
+		"forbidden_actions":                input.ForbiddenActions,
+		"stop_conditions":                  input.StopConditions,
+		"primary_continuation_contract_id": input.PrimaryContinuationContractID,
+		"required_capability_grants":       input.RequiredCapabilityGrants,
+		"components":                       input.Components,
+		"expires_at":                       contractTimeHashValue(input.ExpiresAt),
+	}
+	raw, _ := json.Marshal(payload)
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func authorityBundleContractHashV1(input AuthorityBundleContractInput) string {
 	input = normalizeAuthorityBundleContractInput(input)
 	payload := map[string]any{
 		"session_id":                       input.SessionID,
@@ -228,6 +334,13 @@ func authorityBundleContractHash(input AuthorityBundleContractInput) string {
 	raw, _ := json.Marshal(payload)
 	sum := sha256.Sum256(raw)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func contractTimeHashValue(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
 }
 
 func authorityBundleContractID(requestInstanceID string, hash string) string {

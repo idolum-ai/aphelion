@@ -236,10 +236,45 @@ func (r *Registry) missingContinuationLeaseActionMatchesRequirement(key session.
 	if err != nil {
 		return false, nil
 	}
-	if requestApprovalContinuationLeaseContractHash(compiled) != requestApprovalContinuationLeaseContractHash(requirement) {
+	if requestApprovalContinuationLeaseContractHash(compiled) != requestApprovalContinuationLeaseContractHash(requirement) &&
+		missingContinuationLeaseShapeHash(compiled) != missingContinuationLeaseShapeHash(requirement) {
 		return false, nil
 	}
 	return r.missingContinuationLeaseRequestInstanceStillReusable(key, compiled)
+}
+
+func missingContinuationLeaseShapeHash(requirement missingContinuationLeaseRequirement) string {
+	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
+	retry := session.NormalizeContinuationRetryOperation(requirement.RetryOperation)
+	retry.RequestInstanceID = ""
+	requirement.RetryOperation = retry
+	payload := map[string]any{
+		"subject_kind":          firstNonEmpty(requirement.SubjectKind, "continuation_lease_request"),
+		"subject_ref":           missingContinuationLeaseSubjectRef(requirement),
+		"agent_id":              requirement.AgentID,
+		"resource":              requirement.Resource,
+		"grant_id":              requirement.GrantID,
+		"grant_target_resource": requirement.GrantTargetResource,
+		"principal":             requirement.Principal,
+		"lease_class":           string(requirement.LeaseClass),
+		"allowed_actions":       normalizeActionStringsForHash(requirement.AllowedActions),
+		"constraints":           normalizeStringMapForHash(requirement.Constraints),
+		"tool":                  requirement.Tool,
+		"tool_action":           requirement.ToolAction,
+	}
+	if retry.Active() {
+		payload["retry_operation"] = map[string]any{
+			"contract":       retry.Contract,
+			"operation_kind": retry.OperationKind,
+			"tool":           retry.Tool,
+			"input_json":     retry.InputJSON,
+			"subject_kind":   retry.SubjectKind,
+			"subject_ref":    retry.SubjectRef,
+		}
+	}
+	raw, _ := json.Marshal(payload)
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func (r *Registry) missingContinuationLeaseRequestInstanceStillReusable(key session.SessionKey, requirement missingContinuationLeaseRequirement) (bool, error) {
