@@ -95,13 +95,16 @@ func (h *DecisionHandler) handleReviewEventCallback(ctx context.Context, cb tele
 			return h.answerReviewEventCallback(ctx, cb, "Approval needs an exact grant contract first.")
 		}
 	}
-	review, err := h.store.AppendCapabilityReview(session.CapabilityReview{
-		ReviewID:     fmt.Sprintf("capr-review-event-%d-%d", event.ID, time.Now().UnixNano()),
-		RequestID:    record.RequestID,
-		Reviewer:     fmt.Sprintf("telegram:%d", fromID),
-		ReviewerRole: reviewerRole,
-		Status:       status,
-		Rationale:    fmt.Sprintf("telegram inline review event %d", event.ID),
+	review, _, err := h.store.ApplyCapabilityReviewTransition(session.CapabilityReviewTransitionInput{
+		Review: session.CapabilityReview{
+			ReviewID:     reviewEventCapabilityReviewID(event.ID, fromID, action),
+			RequestID:    record.RequestID,
+			Reviewer:     fmt.Sprintf("telegram:%d", fromID),
+			ReviewerRole: reviewerRole,
+			Status:       status,
+			Rationale:    fmt.Sprintf("telegram review event %d", event.ID),
+		},
+		AllowedCurrentStatus: reviewEventAllowedCurrentStatuses(record, action),
 	})
 	if err != nil {
 		return err
@@ -217,13 +220,16 @@ func (h *DecisionHandler) applyReviewEventReaction(ctx context.Context, msg core
 			return h.editReviewEventReactionMessage(ctx, msg, reviewEventMissingGrantContractText(record, event))
 		}
 	}
-	review, err := h.store.AppendCapabilityReview(session.CapabilityReview{
-		ReviewID:     fmt.Sprintf("capr-review-reaction-%d-%d", event.ID, time.Now().UnixNano()),
-		RequestID:    record.RequestID,
-		Reviewer:     fmt.Sprintf("telegram:%d", msg.SenderID),
-		ReviewerRole: reviewerRole,
-		Status:       status,
-		Rationale:    fmt.Sprintf("telegram reaction review event %d", event.ID),
+	review, _, err := h.store.ApplyCapabilityReviewTransition(session.CapabilityReviewTransitionInput{
+		Review: session.CapabilityReview{
+			ReviewID:     reviewEventCapabilityReviewID(event.ID, msg.SenderID, action),
+			RequestID:    record.RequestID,
+			Reviewer:     fmt.Sprintf("telegram:%d", msg.SenderID),
+			ReviewerRole: reviewerRole,
+			Status:       status,
+			Rationale:    fmt.Sprintf("telegram review event %d", event.ID),
+		},
+		AllowedCurrentStatus: reviewEventAllowedCurrentStatuses(record, action),
 	})
 	if err != nil {
 		return err
@@ -963,10 +969,38 @@ func reviewEventRequestStillActionable(record session.CapabilityRequest, action 
 	}
 }
 
+func reviewEventAllowedCurrentStatuses(record session.CapabilityRequest, action core.ReviewEventAction) []session.CapabilityReviewStatus {
+	record = session.NormalizeCapabilityRequest(record)
+	switch action {
+	case core.ReviewEventActionParentApprove:
+		return []session.CapabilityReviewStatus{session.CapabilityReviewStatusProposed}
+	case core.ReviewEventActionApprove:
+		if strings.TrimSpace(record.ParentPrincipal) != "" {
+			return []session.CapabilityReviewStatus{session.CapabilityReviewStatusParentApproved}
+		}
+		return []session.CapabilityReviewStatus{session.CapabilityReviewStatusProposed}
+	case core.ReviewEventActionReject:
+		return []session.CapabilityReviewStatus{session.CapabilityReviewStatusProposed, session.CapabilityReviewStatusParentApproved}
+	default:
+		return nil
+	}
+}
+
+func reviewEventCapabilityReviewID(eventID int64, reviewerID int64, action core.ReviewEventAction) string {
+	actionPart := strings.Trim(strings.ToLower(string(action)), " _-")
+	if actionPart == "" {
+		actionPart = "review"
+	}
+	return fmt.Sprintf("capr-review-event-%d-%d-%s", eventID, reviewerID, actionPart)
+}
+
 func reviewEventCapabilityStatusForAction(record session.CapabilityRequest, action core.ReviewEventAction, fromID int64, targetChatID int64) (session.CapabilityReviewStatus, string, error) {
 	if fromID <= 0 {
 		return "", "", fmt.Errorf("Telegram reviewer is unknown.")
 	}
+	// Empty AdminPrincipal means the delivered one-to-one admin review target owns
+	// final approval. Telegram group chats are negative IDs, so they cannot satisfy
+	// this positive user/chat equality fallback.
 	isAdmin := telegramPrincipalMatches(record.AdminPrincipal, fromID) || (strings.TrimSpace(record.AdminPrincipal) == "" && targetChatID == fromID)
 	isParent := telegramPrincipalMatches(record.ParentPrincipal, fromID)
 	switch action {

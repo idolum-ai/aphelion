@@ -629,6 +629,71 @@ func TestHandleReactionMessageWrongUserDoesNotApprove(t *testing.T) {
 	}
 }
 
+func TestHandleReactionMessageEmptyAdminPrincipalRequiresDeliveredDMTarget(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-reaction-empty-admin-group",
+		RequestedBy:    "telegram:1002",
+		RequestedFor:   "telegram:1002",
+		Kind:           session.CapabilityKindGenericDelegation,
+		TargetResource: "local-branch",
+		Purpose:        "empty admin fallback must not approve from a group",
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	seedCompiledCapabilityGrantHandoff(t, store, session.SessionKey{
+		ChatID: -7001,
+		UserID: 1002,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramGroup, ID: "-7001"},
+	}, "cap-reaction-empty-admin-group", "telegram:1002", "invoke")
+	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
+		SourceChatID:      7001,
+		SourceUserID:      1002,
+		SourceRole:        "capability_request",
+		TargetAdminChatID: -7001,
+		Summary:           "Capability request cap-reaction-empty-admin-group",
+		MetadataJSON:      `{"request_id":"cap-reaction-empty-admin-group","review_status":"proposed"}`,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+	if err := store.MarkReviewDeliveredWithMessage(eventID, 81); err != nil {
+		t.Fatalf("MarkReviewDeliveredWithMessage() err = %v", err)
+	}
+
+	sender := &decisionTestSender{}
+	handler := newDecisionHandlerForTest(sender, &decisionTestRouter{}, decision.NewBroker(nil), store)
+	handled, err := handler.HandleReactionMessage(context.Background(), core.InboundMessage{
+		ChatID:    -7001,
+		SenderID:  1001,
+		MessageID: 81,
+		Reaction:  &core.InboundReaction{MessageID: 81, New: []string{"👍"}},
+	})
+	if err != nil {
+		t.Fatalf("HandleReactionMessage() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("HandleReactionMessage() handled = false, want true")
+	}
+	reviews, err := store.CapabilityReviews("cap-reaction-empty-admin-group", 10)
+	if err != nil {
+		t.Fatalf("CapabilityReviews() err = %v", err)
+	}
+	if len(reviews) != 0 {
+		t.Fatalf("reviews = %#v, want no group fallback approval", reviews)
+	}
+	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "Only the admin") {
+		t.Fatalf("edits = %#v, want observable admin rejection", sender.edits)
+	}
+}
+
 func TestHandleReactionMessageDuplicateApprovalIsIdempotent(t *testing.T) {
 	t.Parallel()
 

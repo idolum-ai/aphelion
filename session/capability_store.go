@@ -190,6 +190,135 @@ func (s *SQLiteStore) AppendCapabilityReview(review CapabilityReview) (Capabilit
 	return CapabilityReview(review), nil
 }
 
+func (s *SQLiteStore) ApplyCapabilityReviewTransition(input CapabilityReviewTransitionInput) (CapabilityReview, bool, error) {
+	review := NormalizeCapabilityReview(input.Review)
+	if review.ReviewID == "" {
+		return CapabilityReview{}, false, fmt.Errorf("capability review id is required")
+	}
+	if review.RequestID == "" {
+		return CapabilityReview{}, false, fmt.Errorf("capability review request_id is required")
+	}
+	if review.Reviewer == "" {
+		return CapabilityReview{}, false, fmt.Errorf("capability review reviewer is required")
+	}
+	if review.Status == "" {
+		return CapabilityReview{}, false, fmt.Errorf("capability review status is required")
+	}
+	allowed := normalizeCapabilityReviewStatusList(input.AllowedCurrentStatus)
+	if len(allowed) == 0 {
+		return CapabilityReview{}, false, fmt.Errorf("capability review transition requires allowed current status")
+	}
+	createdAt := nonZeroTimeOrNow(review.CreatedAt, time.Now().UTC()).UTC()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return CapabilityReview{}, false, fmt.Errorf("begin capability review transition tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if existing, ok, err := capabilityReviewByIDTx(tx, review.ReviewID); err != nil {
+		return CapabilityReview{}, false, err
+	} else if ok {
+		if !capabilityReviewSameTransition(existing, review) {
+			return CapabilityReview{}, false, fmt.Errorf("capability review id %q already records a different transition", review.ReviewID)
+		}
+		if err := tx.Commit(); err != nil {
+			return CapabilityReview{}, false, fmt.Errorf("commit capability review replay tx: %w", err)
+		}
+		return existing, false, nil
+	}
+	placeholders := make([]string, 0, len(allowed))
+	args := []any{string(review.Status), createdAt.Format(time.RFC3339Nano), review.RequestID}
+	for _, status := range allowed {
+		placeholders = append(placeholders, "?")
+		args = append(args, string(status))
+	}
+	updateQuery := fmt.Sprintf(`
+		UPDATE capability_requests
+		SET review_status = ?, updated_at = ?
+		WHERE request_id = ?
+			AND review_status IN (%s)
+	`, strings.Join(placeholders, ","))
+	result, err := tx.Exec(updateQuery, args...)
+	if err != nil {
+		return CapabilityReview{}, false, fmt.Errorf("update capability request review status transition: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return CapabilityReview{}, false, fmt.Errorf("inspect capability request review transition: %w", err)
+	}
+	if affected != 1 {
+		var current string
+		if err := tx.QueryRow(`SELECT review_status FROM capability_requests WHERE request_id = ?`, review.RequestID).Scan(&current); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return CapabilityReview{}, false, fmt.Errorf("capability request %q not found", review.RequestID)
+			}
+			return CapabilityReview{}, false, fmt.Errorf("query capability request review status: %w", err)
+		}
+		return CapabilityReview{}, false, fmt.Errorf("capability review transition from %s to %s is not allowed", current, review.Status)
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO capability_reviews(review_id, request_id, reviewer, reviewer_role, review_status, rationale, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, review.ReviewID, review.RequestID, review.Reviewer, review.ReviewerRole, string(review.Status), review.Rationale, createdAt.Format(time.RFC3339Nano)); err != nil {
+		return CapabilityReview{}, false, fmt.Errorf("append capability review transition: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return CapabilityReview{}, false, fmt.Errorf("commit capability review transition tx: %w", err)
+	}
+	if agreementStatus := DurableChildAgreementStatusFromCapabilityReview(review.Status); agreementStatus != "" {
+		if err := s.UpdateDurableChildAgreementStatusForRequest(review.RequestID, agreementStatus); err != nil {
+			return CapabilityReview{}, false, err
+		}
+	}
+	review.CreatedAt = createdAt
+	return review, true, nil
+}
+
+func normalizeCapabilityReviewStatusList(values []CapabilityReviewStatus) []CapabilityReviewStatus {
+	out := make([]CapabilityReviewStatus, 0, len(values))
+	seen := make(map[CapabilityReviewStatus]struct{}, len(values))
+	for _, value := range values {
+		status := NormalizeCapabilityReviewStatus(value)
+		if status == "" {
+			continue
+		}
+		if _, ok := seen[status]; ok {
+			continue
+		}
+		seen[status] = struct{}{}
+		out = append(out, status)
+	}
+	return out
+}
+
+func capabilityReviewByIDTx(tx *sql.Tx, reviewID string) (CapabilityReview, bool, error) {
+	reviewID = strings.TrimSpace(reviewID)
+	if reviewID == "" {
+		return CapabilityReview{}, false, nil
+	}
+	review, err := scanCapabilityReview(tx.QueryRow(`
+		SELECT review_id, request_id, reviewer, reviewer_role, review_status, rationale, created_at
+		FROM capability_reviews
+		WHERE review_id = ?
+	`, reviewID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return CapabilityReview{}, false, nil
+		}
+		return CapabilityReview{}, false, fmt.Errorf("query capability review %q: %w", reviewID, err)
+	}
+	return review, true, nil
+}
+
+func capabilityReviewSameTransition(left CapabilityReview, right CapabilityReview) bool {
+	left = NormalizeCapabilityReview(left)
+	right = NormalizeCapabilityReview(right)
+	return left.ReviewID == right.ReviewID &&
+		left.RequestID == right.RequestID &&
+		left.Reviewer == right.Reviewer &&
+		left.ReviewerRole == right.ReviewerRole &&
+		left.Status == right.Status
+}
+
 func (s *SQLiteStore) CapabilityReviews(requestID string, limit int) ([]CapabilityReview, error) {
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
