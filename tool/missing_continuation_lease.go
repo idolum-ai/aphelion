@@ -136,16 +136,12 @@ func (r *Registry) materializeMissingContinuationLeaseError(_ context.Context, k
 	if contractErr != nil {
 		return fmt.Errorf("%w; additionally failed to compile lease request: %v", err, contractErr)
 	}
-	contract, contractErr = r.store.UpsertContinuationRecoveryContract(contract)
-	if contractErr != nil {
-		return fmt.Errorf("%w; additionally failed to store lease request contract: %v", err, contractErr)
-	}
 	operation, opErr := compileContinuationLeaseRecoveryHandoff(contract)
 	if opErr != nil {
 		return fmt.Errorf("%w; additionally failed to materialize lease request: %v", err, opErr)
 	}
 	recordID := missingContinuationLeaseNextActionRecordID(key, requirement)
-	_, recordErr := r.store.RecordNextAction(session.NextActionInput{
+	_, _, recordErr := r.store.RecordContinuationRecoveryContractNextAction(contract, session.NextActionInput{
 		RecordID:           recordID,
 		Key:                key,
 		Owner:              "tool",
@@ -227,10 +223,10 @@ func (r *Registry) missingContinuationLeaseActionMatchesRequirement(key session.
 	}
 	contract, ok, err := r.store.ContinuationRecoveryContract(contractID)
 	if err != nil {
-		return false, nil
+		return false, err
 	}
 	if !ok {
-		return false, nil
+		return false, fmt.Errorf("continuation recovery contract %q not found", contractID)
 	}
 	compiled, err := requestApprovalContinuationLeaseRequirementFromContract(contract)
 	if err != nil {

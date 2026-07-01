@@ -307,6 +307,30 @@ func TestRecoveryTransitionSpecsValidateRepresentativeRecords(t *testing.T) {
 	}
 }
 
+func TestRecoveryTransitionRecordRejectsLegacyOperationKinds(t *testing.T) {
+	t.Parallel()
+
+	legacyKinds := []string{
+		"child_tool_runtime_repair",
+		"child_wake_repair",
+		"typed_operation_required",
+	}
+	for _, kind := range legacyKinds {
+		action := session.NextActionRecord{
+			State:              session.NextActionBlockedNeedsAuthority,
+			SubjectKind:        "continuation_lease_request",
+			SubjectRef:         "child_wake:child-alpha",
+			ResourceBlocker:    "missing_continuation_lease",
+			OperationKind:      kind,
+			OperationTool:      "request_approval",
+			OperationInputJSON: `{"action":"request_continuation_lease","contract_id":"crc-child-alpha","recovery_contract":"aphelion.recovery_handoff.v1","recovery_operation_kind":"continuation_lease_request"}`,
+		}
+		if err := ValidateRecoveryTransitionRecord(action); err == nil {
+			t.Fatalf("ValidateRecoveryTransitionRecord(%q) err = nil, want legacy operation kind rejection", kind)
+		}
+	}
+}
+
 func representativeRecoveryTransitionInput(t *testing.T, spec RecoveryTransitionSpec) string {
 	t.Helper()
 

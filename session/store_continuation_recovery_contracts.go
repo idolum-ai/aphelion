@@ -43,6 +43,33 @@ func (s *SQLiteStore) ContinuationRecoveryContract(contractID string) (Continuat
 	return continuationRecoveryContractByID(s.db, contractID)
 }
 
+func (s *SQLiteStore) RecordContinuationRecoveryContractNextAction(contractInput ContinuationRecoveryContract, actionInput NextActionInput) (ContinuationRecoveryContract, NextActionRecord, error) {
+	if s == nil || s.db == nil {
+		return ContinuationRecoveryContract{}, NextActionRecord{}, fmt.Errorf("continuation recovery contract store unavailable")
+	}
+	contractInput, err := CanonicalizeContinuationRecoveryContract(contractInput)
+	if err != nil {
+		return ContinuationRecoveryContract{}, NextActionRecord{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return ContinuationRecoveryContract{}, NextActionRecord{}, fmt.Errorf("begin continuation recovery publication tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	contract, err := upsertContinuationRecoveryContractTx(tx, contractInput)
+	if err != nil {
+		return ContinuationRecoveryContract{}, NextActionRecord{}, err
+	}
+	record, err := recordNextActionTx(tx, actionInput)
+	if err != nil {
+		return ContinuationRecoveryContract{}, NextActionRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ContinuationRecoveryContract{}, NextActionRecord{}, fmt.Errorf("commit continuation recovery publication tx: %w", err)
+	}
+	return contract, record, nil
+}
+
 func upsertContinuationRecoveryContractTx(tx *sql.Tx, input ContinuationRecoveryContract) (ContinuationRecoveryContract, error) {
 	input, err := CanonicalizeContinuationRecoveryContract(input)
 	if err != nil {

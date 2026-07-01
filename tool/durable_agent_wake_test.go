@@ -724,6 +724,33 @@ func TestDurableAgentWakeOnceCurrentLeaseRequestActionIsIdempotentPastPagination
 	}
 }
 
+func TestDurableAgentWakeOnceDoesNotReplaceCorruptCurrentLeaseRequest(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	registry.WithDurableAgentWakeRunner(&fakeDurableAgentWakeRunner{store: store})
+	upsertDurableAgentWakeTestAgent(t, store)
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	grant := grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", actor)
+	key := adminSessionKey()
+	requirement := durableAgentWakeOnceLeaseRequirement("child-alpha", grant, actor)
+	corrupt := seedMissingContinuationLeaseActionForWakeTest(t, store, key, requirement, "corrupt-child-wake-request", map[string]any{
+		"action":                  "request_continuation_lease",
+		"contract_id":             "crc-missing-child-wake-contract",
+		"recovery_contract":       recoveryHandoffContractVersion,
+		"recovery_operation_kind": "continuation_lease_request",
+	}, time.Now().Add(-time.Minute))
+
+	_, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "durable_agent", json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`))
+	if err == nil || !strings.Contains(err.Error(), "failed to inspect existing lease request") || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once) err = %v, want corrupt current request to fail loudly", err)
+	}
+	open := openMissingLeaseActionsForWakeTest(t, store, key, requirement)
+	if len(open) != 1 || open[0].RecordID != corrupt.RecordID {
+		t.Fatalf("open matching actions = %#v, want corrupt action preserved and no replacement", open)
+	}
+}
+
 func TestDurableAgentWakeOnceLeaseRequestSubjectIsSessionScoped(t *testing.T) {
 	t.Parallel()
 

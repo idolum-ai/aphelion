@@ -266,3 +266,59 @@ func TestContinuationRecoveryContractAcceptsLegacyEmptySessionID(t *testing.T) {
 		t.Fatalf("stored legacy = %#v, want v1 empty-session compatibility", stored)
 	}
 }
+
+func TestContinuationRecoveryContractNextActionPublicationRollsBackOnHandoffFailure(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	contract, err := CompileContinuationRecoveryContract(ContinuationRecoveryContractInput{
+		RequestInstanceID:   "atomic-publication-instance",
+		SessionID:           "telegram_dm:1001",
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          ContinuationRecoverySubjectRef(ContinuationLeaseClassChildWake, "child-alpha", "grant-child-alpha-wake", "durable_agent", "wake_once", ""),
+		Principal:           "telegram:1001",
+		LeaseClass:          ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{"wake_named_child"},
+		Constraints:         map[string]string{"agent_id": "child-alpha"},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             "child-alpha",
+		GrantID:             "grant-child-alpha-wake",
+		GrantTargetResource: "durable_agent:child-alpha:wake_once",
+		CreatedAt:           time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract() err = %v", err)
+	}
+
+	key := SessionKey{ChatID: 1001, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "1001"}}
+	_, _, err = store.RecordContinuationRecoveryContractNextAction(contract, NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         contract.SubjectRef,
+		RequiredAuthority:  string(ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: `{"action":"request_continuation_lease"`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "valid JSON") {
+		t.Fatalf("RecordContinuationRecoveryContractNextAction() err = %v, want invalid JSON failure", err)
+	}
+	if _, ok, err := store.ContinuationRecoveryContract(contract.ContractID); err != nil {
+		t.Fatalf("ContinuationRecoveryContract() err = %v", err)
+	} else if ok {
+		t.Fatalf("ContinuationRecoveryContract(%q) ok=true, want rollback to remove orphan contract", contract.ContractID)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open next actions = %#v, want no half-published handoff", open)
+	}
+}

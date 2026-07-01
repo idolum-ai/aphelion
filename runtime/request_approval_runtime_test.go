@@ -1491,7 +1491,7 @@ func TestRecoveryHandoffMaterializationBlocksOnActiveIncompatibleContinuation(t 
 		Owner:              "test",
 		State:              session.NextActionBlockedNeedsAuthority,
 		SubjectKind:        "continuation_lease_request",
-		SubjectRef:         "child_wake:child-alpha",
+		SubjectRef:         session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "child-alpha", "grant-child-alpha-wake", "durable_agent", "wake_once", ""),
 		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
 		ResourceBlocker:    "missing_continuation_lease",
 		NextAction:         "request child wake approval",
@@ -1574,7 +1574,7 @@ func TestRecoveryHandoffMaterializationDoesNotSupersedeNewerPendingContinuation(
 		Owner:              "test",
 		State:              session.NextActionBlockedNeedsAuthority,
 		SubjectKind:        "continuation_lease_request",
-		SubjectRef:         "child_wake:child-beta",
+		SubjectRef:         session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "child-beta", "grant-child-beta-wake", "durable_agent", "wake_once", ""),
 		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
 		ResourceBlocker:    "missing_continuation_lease",
 		NextAction:         "request child wake approval",
@@ -1662,7 +1662,7 @@ func TestRecoveryHandoffMaterializationScansPastOlderBlockedHandoff(t *testing.T
 		Owner:              "test",
 		State:              session.NextActionBlockedNeedsAuthority,
 		SubjectKind:        "continuation_lease_request",
-		SubjectRef:         "child_wake:older-child",
+		SubjectRef:         session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "older-child", "grant-older-child-wake", "durable_agent", "wake_once", ""),
 		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
 		ResourceBlocker:    "missing_continuation_lease",
 		NextAction:         "request older child wake approval",
@@ -1683,7 +1683,7 @@ func TestRecoveryHandoffMaterializationScansPastOlderBlockedHandoff(t *testing.T
 		Owner:              "test",
 		State:              session.NextActionBlockedNeedsAuthority,
 		SubjectKind:        "continuation_lease_request",
-		SubjectRef:         "child_wake:newer-child",
+		SubjectRef:         session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "newer-child", "grant-newer-child-wake", "durable_agent", "wake_once", ""),
 		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
 		ResourceBlocker:    "missing_continuation_lease",
 		NextAction:         "request newer child wake approval",
@@ -1852,7 +1852,7 @@ func TestRecoveryHandoffMaterializationSkipsMalformedApprovalNextAction(t *testi
 		Owner:              "test",
 		State:              session.NextActionBlockedNeedsAuthority,
 		SubjectKind:        "continuation_lease_request",
-		SubjectRef:         "valid-child-wake",
+		SubjectRef:         session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "child-alpha", "grant-child-alpha-wake", "durable_agent", "wake_once", ""),
 		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
 		ResourceBlocker:    "missing_continuation_lease",
 		NextAction:         "valid handoff",
@@ -1904,6 +1904,108 @@ func TestRecoveryHandoffMaterializationSkipsMalformedApprovalNextAction(t *testi
 	sender.mu.Unlock()
 	if inlineCount != 1 {
 		t.Fatalf("inline count = %d, want one approval card from valid handoff", inlineCount)
+	}
+}
+
+func TestRecoveryHandoffMaterializationRejectsWrongSessionContractAndContinues(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9056, UserID: 0, Scope: telegramDMScopeRef(9056)}
+	otherKey := session.SessionKey{ChatID: 9057, UserID: 0, Scope: telegramDMScopeRef(9057)}
+	now := time.Now().UTC()
+	wrongSessionSubject := session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "child-beta", "grant-child-beta-wake", "durable_agent", "wake_once", "")
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           "runtime-wrong-session-recovery-handoff",
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         wrongSessionSubject,
+		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		NextAction:         "wrong-session handoff",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: runtimeChildWakeApprovalRequestJSON(t, store, otherKey, "child-beta", "wrong-session-child-beta-request-1"),
+		CreatedAt:          now,
+	}); err != nil {
+		t.Fatalf("RecordNextAction(wrong-session handoff) err = %v", err)
+	}
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           "runtime-valid-recovery-handoff-behind-wrong-session",
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "child-alpha", "grant-child-alpha-wake", "durable_agent", "wake_once", ""),
+		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		NextAction:         "valid handoff",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: runtimeChildWakeApprovalRequestJSON(t, store, key, "child-alpha", "valid-after-wrong-session-request-1"),
+		CreatedAt:          now.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(valid handoff) err = %v", err)
+	}
+
+	materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9056, SenderID: 1001, Text: "continue", MessageID: 321},
+		"continue",
+	)
+	if err != nil {
+		t.Fatalf("MaterializeRequestedApproval(wrong-session) err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want valid same-session handoff behind wrong-session row to materialize")
+	}
+	if state, ok, err := store.ContinuationStateIfExists(key); err != nil {
+		t.Fatalf("ContinuationStateIfExists() err = %v", err)
+	} else if !ok || state.ContinuationLease.LeaseClass != session.ContinuationLeaseClassChildWake || strings.TrimSpace(state.ContinuationLease.Constraints["agent_id"]) != "child-alpha" {
+		t.Fatalf("continuation state = %#v ok=%v, want child-alpha approval from same-session contract", state, ok)
+	}
+	open, err := store.OpenNextActionsBySession(key, 20)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	for _, action := range open {
+		if action.RecordID == "runtime-wrong-session-recovery-handoff" || action.RecordID == "runtime-valid-recovery-handoff-behind-wrong-session" {
+			t.Fatalf("open actions = %#v, want wrong-session invalidated and valid handoff resolved", open)
+		}
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one approval card from valid same-session handoff", inlineCount)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 300)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEventPayload(events, core.ExecutionEventWorkflowNextState, "invalid_continuation_recovery_contract") {
+		t.Fatalf("events = %#v, want wrong-session contract terminalized as invalid", events)
 	}
 }
 

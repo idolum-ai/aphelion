@@ -512,7 +512,30 @@ func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context
 		if !consumable {
 			continue
 		}
-		if strings.TrimSpace(action.OperationKind) == "authority_bundle_request" {
+		switch strings.TrimSpace(action.OperationKind) {
+		case "continuation_lease_request":
+			executable, invalid, err := r.recoveryApprovalContinuationContractExecutable(key, action)
+			if err != nil {
+				return false, false, err
+			}
+			if invalid {
+				if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+					RecordID:    action.RecordID,
+					Key:         key,
+					Owner:       "runtime",
+					SubjectKind: action.SubjectKind,
+					SubjectRef:  action.SubjectRef,
+					Reason:      "invalid_continuation_recovery_contract",
+					ResolvedAt:  now,
+				}); err != nil {
+					return false, false, fmt.Errorf("resolve invalid continuation recovery handoff %s: %w", action.RecordID, err)
+				}
+				continue
+			}
+			if !executable {
+				continue
+			}
+		case "authority_bundle_request":
 			executable, invalid, err := r.recoveryApprovalAuthorityBundleExecutable(key, action)
 			if err != nil {
 				return false, false, err
@@ -585,6 +608,39 @@ func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context
 		return true, false, nil
 	}
 	return false, false, nil
+}
+
+func (r *Runtime) recoveryApprovalContinuationContractExecutable(key session.SessionKey, action session.NextActionRecord) (bool, bool, error) {
+	if r == nil || r.store == nil {
+		return false, false, nil
+	}
+	var input recoveryApprovalHandoffInput
+	if err := json.Unmarshal([]byte(action.OperationInputJSON), &input); err != nil {
+		return false, true, nil
+	}
+	contractID := strings.TrimSpace(input.ContractID)
+	if contractID == "" {
+		return false, true, nil
+	}
+	contract, ok, err := r.store.ContinuationRecoveryContract(contractID)
+	if err != nil {
+		return false, true, nil
+	}
+	if !ok {
+		return false, true, nil
+	}
+	contract = session.NormalizeContinuationRecoveryContract(contract)
+	if contract.Status != session.ContinuationRecoveryContractStatusRecorded {
+		return false, true, nil
+	}
+	if strings.TrimSpace(contract.SessionID) != "" && contract.SessionID != session.SessionIDForKey(key) {
+		return false, true, nil
+	}
+	if strings.TrimSpace(contract.SubjectKind) != "continuation_lease_request" ||
+		strings.TrimSpace(contract.SubjectRef) == "" {
+		return false, true, nil
+	}
+	return true, false, nil
 }
 
 func (r *Runtime) recoveryApprovalAuthorityBundleExecutable(key session.SessionKey, action session.NextActionRecord) (bool, bool, error) {
