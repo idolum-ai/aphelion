@@ -162,6 +162,9 @@ func validateExternalToolManifest(m ExternalToolManifest) error {
 	if len(m.IO.OutputSchema) > 0 && !json.Valid(m.IO.OutputSchema) {
 		return fmt.Errorf("external tool manifest io.output_schema must be valid json")
 	}
+	if err := validateExternalToolTimeoutBudget(m); err != nil {
+		return err
+	}
 	switch m.Constraints.Network {
 	case "", "allowlist", "denylist", "none":
 	default:
