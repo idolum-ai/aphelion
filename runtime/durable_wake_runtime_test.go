@@ -76,21 +76,26 @@ func (p *durableWakeExternalToolRequestingProvider) CompleteWithOptions(ctx cont
 }
 
 type durableWakeExternalToolExecutor struct {
-	mu       sync.Mutex
-	toolName string
-	calls    int
-	scope    sandbox.Scope
+	mu                     sync.Mutex
+	toolName               string
+	calls                  int
+	scope                  sandbox.Scope
+	manifestTimeoutSeconds int
+	hasDeadline            bool
+	deadline               time.Time
 }
 
 func (e *durableWakeExternalToolExecutor) Supports(manifest toolpkg.ExternalToolManifest) bool {
 	return strings.TrimSpace(manifest.Name) == strings.TrimSpace(e.toolName)
 }
 
-func (e *durableWakeExternalToolExecutor) Execute(_ context.Context, _ toolpkg.ExternalToolManifest, _ json.RawMessage, scope sandbox.Scope, _ *sandbox.Runner, _ int, _ toolpkg.ExternalToolExecutionAccess) (string, error) {
+func (e *durableWakeExternalToolExecutor) Execute(ctx context.Context, manifest toolpkg.ExternalToolManifest, _ json.RawMessage, scope sandbox.Scope, _ *sandbox.Runner, _ int, _ toolpkg.ExternalToolExecutionAccess) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.calls++
 	e.scope = scope
+	e.manifestTimeoutSeconds = manifest.Execution.TimeoutSeconds
+	e.deadline, e.hasDeadline = ctx.Deadline()
 	return `{"summary":"child-owned tool ran"}`, nil
 }
 
@@ -1062,9 +1067,10 @@ func TestPollDurableWakeChildToolCallsUseChildTaskAuthority(t *testing.T) {
 		Name:  "gog_cli",
 		Owner: "child-mail",
 		Execution: toolpkg.ExternalToolManifestExecution{
-			Mode:    "process",
-			Entry:   "./run.sh",
-			Workdir: filepath.Join(cfg.Agent.ExecRoot, "runtime-bin", "gog_cli-test"),
+			Mode:           "process",
+			Entry:          "./run.sh",
+			Workdir:        filepath.Join(cfg.Agent.ExecRoot, "runtime-bin", "gog_cli-test"),
+			TimeoutSeconds: 240,
 		},
 		IO: toolpkg.ExternalToolManifestIO{
 			InputSchema:  json.RawMessage(`{"type":"object","properties":{"action":{"type":"string"}},"required":["action"]}`),
@@ -1118,12 +1124,21 @@ func TestPollDurableWakeChildToolCallsUseChildTaskAuthority(t *testing.T) {
 	executor.mu.Lock()
 	executorCalls := executor.calls
 	executorScope := executor.scope
+	manifestTimeoutSeconds := executor.manifestTimeoutSeconds
+	hasDeadline := executor.hasDeadline
+	deadline := executor.deadline
 	executor.mu.Unlock()
 	if executorCalls != 1 {
 		t.Fatalf("external executor calls = %d, want one child-owned tool call", executorCalls)
 	}
 	if executorScope.Principal.Role != principal.RoleDurableAgent || executorScope.Principal.DurableAgentID != agent.AgentID {
 		t.Fatalf("external executor scope principal = %#v, want durable agent %s", executorScope.Principal, agent.AgentID)
+	}
+	if manifestTimeoutSeconds != 240 {
+		t.Fatalf("manifest timeout seen by child-owned external executor = %d, want 240", manifestTimeoutSeconds)
+	}
+	if hasDeadline && time.Until(deadline) < 240*time.Second {
+		t.Fatalf("child wake context deadline remaining = %s, shorter than manifest timeout budget", time.Until(deadline))
 	}
 	provider.mu.Lock()
 	requested := provider.requested

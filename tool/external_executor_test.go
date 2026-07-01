@@ -75,6 +75,51 @@ func TestExternalProcessExecutorRunsManifestBackedTool(t *testing.T) {
 	}
 }
 
+func TestExternalProcessExecutorUsesManifestTimeoutInsteadOfRegistryDefault(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	registry.timeout = 50 * time.Millisecond
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	script := filepath.Join(registry.workspace, "run.sh")
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\nsleep 0.2\necho '{\"summary\":\"manifest-budget\"}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh) err = %v", err)
+	}
+	manifest := ExternalToolManifest{
+		Name:  "slow_metadata_probe",
+		Owner: "child-alpha",
+		Execution: ExternalToolManifestExecution{
+			Mode:           "process",
+			Entry:          "./run.sh",
+			TimeoutSeconds: 2,
+		},
+		IO: ExternalToolManifestIO{
+			OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`),
+		},
+	}
+	if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest}); err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	seedVerifiedExternalToolLifecycle(t, registry, store, manifest, sandbox.Scope{WorkingRoot: registry.workspace})
+	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "slow_metadata_probe", ImplementationRef: "external:slow_metadata_probe", Registered: true}); err != nil {
+		t.Fatalf("UpsertRegisteredTool() err = %v", err)
+	}
+	grantToolInvoke(t, store, "slow_metadata_probe", "telegram:1001")
+
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, "slow_metadata_probe", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal() err = %v, want manifest timeout to outlive registry default", err)
+	}
+	if out != `{"summary":"manifest-budget"}` {
+		t.Fatalf("out = %q, want manifest-backed output", out)
+	}
+}
+
 func TestExternalProcessOutcomeFinalizesOriginalPermitAfterAuthorityRevocation(t *testing.T) {
 	t.Parallel()
 
