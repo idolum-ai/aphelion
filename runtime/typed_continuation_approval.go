@@ -702,8 +702,14 @@ func (r *Runtime) childWakeRepairRetryRecoveryContract(key session.SessionKey, m
 		strings.TrimSpace(msg.Text),
 		fmt.Sprintf("%d", msg.MessageID),
 	}, "\x00"))[7:31]
+	requestInstanceID := "repair-retry-" + requestToken
+	retryInputRaw, _ := json.Marshal(map[string]any{
+		"action":   "wake_once",
+		"agent_id": agentID,
+		"reason":   childWakeRepairRetryGuidance(action),
+	})
 	return session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
-		RequestInstanceID:   "repair-retry-" + requestToken,
+		RequestInstanceID:   requestInstanceID,
 		SessionID:           session.SessionIDForKey(key),
 		SubjectKind:         "continuation_lease_request",
 		SubjectRef:          session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, agentID, grantID, "durable_agent", "wake_once", ""),
@@ -716,8 +722,27 @@ func (r *Runtime) childWakeRepairRetryRecoveryContract(key session.SessionKey, m
 		AgentID:             agentID,
 		GrantID:             grantID,
 		GrantTargetResource: targetResource,
-		CreatedAt:           time.Now().UTC(),
+		RetryOperation: session.ContinuationRetryOperation{
+			Contract:          session.ContinuationRecoveryRetryVersion,
+			OperationKind:     "durable_agent_wake_once",
+			Tool:              "durable_agent",
+			InputJSON:         string(retryInputRaw),
+			SubjectKind:       "continuation_lease_request",
+			SubjectRef:        session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, agentID, grantID, "durable_agent", "wake_once", ""),
+			RequestInstanceID: requestInstanceID,
+		},
+		CreatedAt: time.Now().UTC(),
 	})
+}
+
+func childWakeRepairRetryGuidance(action session.NextActionRecord) string {
+	blocker := firstNonEmptyContinuation(strings.TrimSpace(action.ResourceBlocker), strings.TrimSpace(action.RetryPolicy))
+	if blocker != "" {
+		blocker = " Prior blocker: " + blocker + "."
+	}
+	return "Retry the previously blocked child task once through child-local work only." +
+		blocker +
+		" Process the current setup/status objective from durable child context, stop after one child result or typed blocker, and do not use parent-control wake tools from inside the child turn."
 }
 
 func (r *Runtime) activeChildWakeRetryGrant(agentID string, principalID string) (session.CapabilityGrant, bool, error) {

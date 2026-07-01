@@ -271,6 +271,22 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			wantDiagnostic: true,
 		},
 		{
+			name:   "live mailbox timeout wording beats active credential mentions",
+			status: session.ChildTaskResultBlocked,
+			summary: "I’m blocked on the mailbox triage, not on approval.\n\n" +
+				"`mailbox:primary` read access is active, `mail_cli` invocation is active, `mailbox:primary = default` is configured, and the route is metadata-ready. " +
+				"The operational blocker is that `search_unread_jobs` times out before returning mailbox results, so I can’t truthfully produce a fresh must-not-miss job/opportunity report yet.\n\n" +
+				"No mailbox content was accessed in this check-in. No mail was changed. No credentials, tokens, or secrets were exposed.\n\n" +
+				"Next concrete action: repair or tune the child-local `mail_cli search_unread_jobs` timeout/response path, then run one bounded read-only triage pass.\n\n" +
+				"REVIEW_STATUS: blocked",
+			blocker:        "",
+			wantKind:       "external_transient",
+			wantState:      session.NextActionScheduledRetry,
+			wantOp:         session.NextActionOperationKindDurableChildRecovery,
+			wantRetry:      "bounded_backoff",
+			wantDiagnostic: true,
+		},
+		{
 			name:           "unknown blocked",
 			status:         session.ChildTaskResultBlocked,
 			summary:        "blocked on a child-local condition that needs review",

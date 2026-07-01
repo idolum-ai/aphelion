@@ -947,6 +947,14 @@ func TestReviewEventRetryButtonMaterializesFreshChildWakeApproval(t *testing.T) 
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want one approval card", len(sender.inline))
 	}
+	state = session.NormalizeContinuationState(state)
+	retry := session.NormalizeContinuationRetryOperation(state.ContinuationLease.RetryOperation)
+	if !retry.Active() || retry.Tool != "durable_agent" || retry.OperationKind != "durable_agent_wake_once" {
+		t.Fatalf("retry operation = %#v, want exact durable_agent wake_once retry", retry)
+	}
+	if !strings.Contains(retry.InputJSON, `"reason"`) || !strings.Contains(retry.InputJSON, "Retry the previously blocked child task once") {
+		t.Fatalf("retry input = %s, want contract-bound child-local guidance", retry.InputJSON)
+	}
 	open, err := store.OpenNextActionsBySession(childKey, 20)
 	if err != nil {
 		t.Fatalf("OpenNextActionsBySession(child) err = %v", err)
@@ -955,6 +963,138 @@ func TestReviewEventRetryButtonMaterializesFreshChildWakeApproval(t *testing.T) 
 		if action.RecordID == nextAction.RecordID {
 			t.Fatalf("child open actions = %#v, want source retry action resolved after callback materializes approval", open)
 		}
+	}
+	if _, err := rt.ApproveContinuationForKey(parentKey, 1001); err != nil {
+		t.Fatalf("ApproveContinuationForKey() err = %v", err)
+	}
+	if err := rt.TriggerContinuationForKey(context.Background(), parentKey); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v", err)
+	}
+	if len(runner.calls) != 1 || runner.calls[0] != "idolum-email" {
+		t.Fatalf("runner calls = %#v, want one child wake from approved retry even with no prior parent messages", runner.calls)
+	}
+	if len(runner.messageIDs) != 1 || len(runner.messageIDs[0]) != 1 {
+		t.Fatalf("runner message IDs = %#v, want one contract-bound parent guidance message", runner.messageIDs)
+	}
+}
+
+func TestApprovedChildWakeRetryWithoutGuidanceRecordsRepairBlocker(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	runner := &runtimeWakeRunner{}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store).WithDurableAgentWakeRunner(runner)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 8141, UserID: 0, Scope: telegramDMScopeRef(8141)}
+	seedRuntimeWakeAgent(t, store, "idolum-email", false)
+	seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+	now := time.Now().UTC()
+	subjectRef := session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "idolum-email", "grant-idolum-email-wake-once", "durable_agent", "wake_once", "")
+	action := session.ActionProposal{
+		ID:               "aprop-bare-child-wake-retry",
+		Summary:          "Wake idolum-email exactly once.",
+		BoundedEffect:    "Permit durable_agent wake_once to wake only idolum-email once.",
+		RiskClass:        "child_wake",
+		AllowedActions:   []string{"wake_named_child"},
+		ForbiddenActions: []string{"wake_unnamed_child", "unbounded_retry_loop"},
+		Status:           session.ProposalStatusApproved,
+		ExpiresAt:        now.Add(time.Hour),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	lease := buildContinuationLease(action, 1, now)
+	lease.ID = "lease-bare-child-wake-retry"
+	lease.Status = session.ContinuationLeaseStatusActive
+	lease.LeaseClass = session.ContinuationLeaseClassChildWake
+	lease.RecoveryContractID = "crc-bare-child-wake-retry"
+	lease.Constraints = map[string]string{
+		"agent_id":              "idolum-email",
+		"tool":                  "durable_agent",
+		"tool_action":           "wake_once",
+		"grant_id":              "grant-idolum-email-wake-once",
+		"grant_target_resource": "durable_agent:idolum-email:wake_once",
+	}
+	lease.RetryOperation = session.ContinuationRetryOperation{
+		Contract:          session.ContinuationRecoveryRetryVersion,
+		OperationKind:     "durable_agent_wake_once",
+		Tool:              "durable_agent",
+		InputJSON:         `{"action":"wake_once","agent_id":"idolum-email"}`,
+		SubjectKind:       "continuation_lease_request",
+		SubjectRef:        subjectRef,
+		RequestInstanceID: "bare-child-wake-retry",
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusApproved,
+		DecisionID:        "bare-child-wake-retry",
+		Objective:         "Run one approved child wake.",
+		StageSummary:      "Wake idolum-email exactly once.",
+		RemainingTurns:    1,
+		ApprovedBy:        1001,
+		ActionProposal:    action,
+		ContinuationLease: lease,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:      "op-bare-child-wake-retry",
+		Status:  session.OperationStatusActive,
+		Stage:   "approved_retry_ready",
+		Summary: "Approved retry is ready.",
+		PhasePlan: session.OperationPhasePlan{
+			ID:   "plan-bare-child-wake-retry",
+			Goal: "Retry idolum-email once.",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner calls = %#v, want no child wake without pending or contract-bound guidance", runner.calls)
+	}
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if opState.Status != session.OperationStatusBlocked || opState.Stage != "approved_retry_failed" || !strings.Contains(opState.Summary, "no_pending_parent_guidance") {
+		t.Fatalf("operation state = %#v, want explicit no-pending guidance failure", opState)
+	}
+	open, err := store.OpenNextActionsBySession(key, 20)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	var found bool
+	for _, action := range open {
+		if action.Owner == "approved_retry" &&
+			action.State == session.NextActionBlockedNeedsResourceRepair &&
+			action.ResourceBlocker == "no_pending_parent_guidance" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("open actions = %#v, want no_pending_parent_guidance approved retry repair blocker", open)
 	}
 }
 

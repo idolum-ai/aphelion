@@ -825,7 +825,11 @@ func (r *Runtime) handleApprovedRetryDurableAgentWakeResult(key session.SessionK
 		}
 		return false, nil
 	case "skipped_no_pending_parent_message":
-		return false, nil
+		result.FailureClass = "no_pending_parent_guidance"
+		result.FailureSummary = "Approved child wake retry had no pending or contract-bound parent guidance to consume."
+		result.RetryPolicy = "retry_after_recovery_contract_repair"
+		result.NextRepair = "repair the child_wake recovery contract so the approved retry carries a bounded child-local guidance payload before requesting another continuation."
+		return true, r.recordApprovedRetryWakeBlocked(key, reservation, retry, result, monitor)
 	case "awaiting_child_pickup":
 		return true, r.recordApprovedRetryWakeWaiting(key, reservation, retry, result, monitor)
 	default:
