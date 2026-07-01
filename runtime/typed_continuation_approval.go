@@ -296,7 +296,7 @@ func (r *Runtime) maybeMaterializeChildWakeRepairRetryApproval(ctx context.Conte
 	if !allowTypedActionWithoutText && !isChildWakeRepairRetryApprovalText(msg.Text) && !(allowRunIntent && isChildWakeRepairAdvanceText(msg.Text)) {
 		return false, nil, nil
 	}
-	action, ok, err := r.currentChildWakeRetryableAction(key)
+	action, ok, err := r.currentChildWakeRetryableAction(key, msg)
 	if err != nil || !ok {
 		return false, nil, err
 	}
@@ -383,9 +383,10 @@ func (r *Runtime) materializeChildWakeRepairRetryApprovalHandoff(ctx context.Con
 	}); err != nil {
 		return fmt.Errorf("resolve child_wake repair retry handoff after approval request: %w", err)
 	}
+	repairActionKey := nextActionRecordSessionKey(repairAction, key)
 	if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
 		RecordID:    repairAction.RecordID,
-		Key:         key,
+		Key:         repairActionKey,
 		Owner:       "runtime",
 		SubjectKind: repairAction.SubjectKind,
 		SubjectRef:  repairAction.SubjectRef,
@@ -395,6 +396,18 @@ func (r *Runtime) materializeChildWakeRepairRetryApprovalHandoff(ctx context.Con
 		return fmt.Errorf("resolve child_wake repair blocker after approval request: %w", err)
 	}
 	return nil
+}
+
+func nextActionRecordSessionKey(action session.NextActionRecord, fallback session.SessionKey) session.SessionKey {
+	key := session.SessionKey{
+		ChatID: action.ChatID,
+		UserID: action.UserID,
+		Scope:  action.Scope,
+	}
+	if !key.Scope.IsZero() || key.ChatID != 0 || key.UserID != 0 {
+		return key
+	}
+	return fallback
 }
 
 func (r *Runtime) ensureChildWakeRepairRetryOperationState(key session.SessionKey, contract session.ContinuationRecoveryContract, now time.Time) error {
@@ -418,42 +431,163 @@ func (r *Runtime) ensureChildWakeRepairRetryOperationState(key session.SessionKe
 	})
 }
 
-func (r *Runtime) currentChildWakeRetryableAction(key session.SessionKey) (session.NextActionRecord, bool, error) {
+func (r *Runtime) currentChildWakeRetryableAction(key session.SessionKey, msg core.InboundMessage) (session.NextActionRecord, bool, error) {
 	actions, err := r.store.OpenNextActionsBySession(key, 100)
 	if err != nil {
 		return session.NextActionRecord{}, false, err
 	}
-	for _, action := range actions {
-		if childWakeActionCanRequestRetry(action) {
-			return action, true, nil
-		}
+	if action, ok := firstChildWakeRetryableAction(actions, msg); ok {
+		return action, true, nil
+	}
+	action, ok, err := r.currentReviewedChildWakeRetryableAction(key, msg)
+	if err != nil || ok {
+		return action, ok, err
 	}
 	return session.NextActionRecord{}, false, nil
 }
 
+func (r *Runtime) currentReviewedChildWakeRetryableAction(key session.SessionKey, msg core.InboundMessage) (session.NextActionRecord, bool, error) {
+	if r == nil || r.store == nil || key.ChatID == 0 {
+		return session.NextActionRecord{}, false, nil
+	}
+	agents, err := r.store.ListDurableAgents()
+	if err != nil {
+		return session.NextActionRecord{}, false, err
+	}
+	wantedAgent := childWakeRetryMentionedAgentID(msg.Text, agents)
+	var candidates []session.NextActionRecord
+	for _, agent := range agents {
+		agentID := strings.TrimSpace(agent.AgentID)
+		if agentID == "" || (strings.TrimSpace(agent.Status) != "" && strings.TrimSpace(agent.Status) != "active") {
+			continue
+		}
+		if agent.ReviewTargetChatID != key.ChatID {
+			continue
+		}
+		if wantedAgent != "" && wantedAgent != agentID {
+			continue
+		}
+		childKey := r.durableAgentExecutionKey(agentID)
+		actions, err := r.store.OpenNextActionsBySession(childKey, 100)
+		if err != nil {
+			return session.NextActionRecord{}, false, err
+		}
+		for _, action := range actions {
+			if childWakeActionCanRequestRetry(action) {
+				candidates = append(candidates, action)
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return session.NextActionRecord{}, false, nil
+	}
+	if wantedAgent == "" && len(candidates) > 1 {
+		return session.NextActionRecord{}, false, nil
+	}
+	return newestNextActionRecord(candidates), true, nil
+}
+
+func firstChildWakeRetryableAction(actions []session.NextActionRecord, msg core.InboundMessage) (session.NextActionRecord, bool) {
+	wantedAgent := childWakeRetryMentionedAgentIDFromActions(msg.Text, actions)
+	var candidates []session.NextActionRecord
+	for _, action := range actions {
+		if !childWakeActionCanRequestRetry(action) {
+			continue
+		}
+		if wantedAgent != "" && childWakeRetryActionAgentID(action) != wantedAgent {
+			continue
+		}
+		candidates = append(candidates, action)
+	}
+	if len(candidates) == 0 {
+		return session.NextActionRecord{}, false
+	}
+	return newestNextActionRecord(candidates), true
+}
+
+func newestNextActionRecord(actions []session.NextActionRecord) session.NextActionRecord {
+	if len(actions) == 0 {
+		return session.NextActionRecord{}
+	}
+	newest := actions[0]
+	for _, action := range actions[1:] {
+		if action.CreatedAt.After(newest.CreatedAt) {
+			newest = action
+		}
+	}
+	return newest
+}
+
+func childWakeRetryMentionedAgentID(text string, agents []core.DurableAgent) string {
+	value := normalizeContinuationControlText(text)
+	if value == "" {
+		return ""
+	}
+	matched := ""
+	for _, agent := range agents {
+		agentID := strings.TrimSpace(agent.AgentID)
+		if agentID == "" || !strings.Contains(value, strings.ToLower(agentID)) {
+			continue
+		}
+		if matched != "" && matched != agentID {
+			return ""
+		}
+		matched = agentID
+	}
+	return matched
+}
+
+func childWakeRetryMentionedAgentIDFromActions(text string, actions []session.NextActionRecord) string {
+	value := normalizeContinuationControlText(text)
+	if value == "" {
+		return ""
+	}
+	matched := ""
+	for _, action := range actions {
+		agentID := childWakeRetryActionAgentID(action)
+		if agentID == "" || !strings.Contains(value, strings.ToLower(agentID)) {
+			continue
+		}
+		if matched != "" && matched != agentID {
+			return ""
+		}
+		matched = agentID
+	}
+	return matched
+}
+
 func childWakeActionCanRequestRetry(action session.NextActionRecord) bool {
+	operationKind := strings.TrimSpace(action.OperationKind)
+	operationTool := strings.TrimSpace(action.OperationTool)
+	if operationKind != session.NextActionOperationKindDurableChildRecovery || operationTool != "update_operation" {
+		return false
+	}
+	if strings.TrimSpace(action.SubjectKind) == "task_packet" {
+		return childWakeTaskPacketRetryActionCanRequestRetry(action)
+	}
 	if strings.TrimSpace(action.SubjectKind) != "continuation_lease_request" ||
 		childWakeRepairAgentIDFromSubjectRef(action.SubjectRef) == "" {
 		return false
 	}
-	operationKind := strings.TrimSpace(action.OperationKind)
-	operationTool := strings.TrimSpace(action.OperationTool)
 	switch action.State {
 	case session.NextActionBlockedNeedsResourceRepair:
-		if operationKind != session.NextActionOperationKindDurableChildRecovery || operationTool != "update_operation" {
-			return false
-		}
 		switch strings.TrimSpace(action.ResourceBlocker) {
 		case "tool_runtime_not_executable", "child_task_attempt_claim_failed", "wake_failed":
 			return true
-		default:
-			return false
 		}
 	case session.NextActionWaitingForOperator:
 		return childWakeOperatorFollowupActionCanRequestRetry(action)
-	default:
+	}
+	return false
+}
+
+func childWakeTaskPacketRetryActionCanRequestRetry(action session.NextActionRecord) bool {
+	if action.State != session.NextActionScheduledRetry ||
+		strings.TrimSpace(action.ResourceBlocker) != "external_transient" ||
+		strings.TrimSpace(action.RetryPolicy) != "bounded_backoff" {
 		return false
 	}
+	return childWakeRetryActionAgentID(action) != ""
 }
 
 func childWakeOperatorFollowupActionCanRequestRetry(action session.NextActionRecord) bool {
@@ -540,20 +674,34 @@ func (r *Runtime) childWakeRepairRetryRecoveryContract(key session.SessionKey, m
 		agentID = childWakeRepairAgentIDFromSubjectRef(action.SubjectRef)
 	}
 	if agentID == "" {
+		agentID = childWakeRetryActionAgentID(action)
+	}
+	if agentID == "" {
 		return session.ContinuationRecoveryContract{}, fmt.Errorf("child_wake repair retry requires agent_id")
+	}
+	principalID := operationPhaseRecoveryPrincipal(msg, key)
+	if principalID == "" {
+		return session.ContinuationRecoveryContract{}, fmt.Errorf("child_wake repair retry requires operator principal")
 	}
 	grantID := childWakeRepairGrantIDFromSubjectRef(action.SubjectRef)
 	targetResource := "durable_agent:" + agentID + ":wake_once"
+	if grantID == "" {
+		grant, ok, err := r.activeChildWakeRetryGrant(agentID, principalID)
+		if err != nil {
+			return session.ContinuationRecoveryContract{}, err
+		}
+		if !ok {
+			return session.ContinuationRecoveryContract{}, fmt.Errorf("child_wake repair retry requires an active exact durable_agent wake_once grant for %s", agentID)
+		}
+		grantID = strings.TrimSpace(grant.GrantID)
+		targetResource = strings.TrimSpace(grant.TargetResource)
+	}
 	requestToken := session.EffectAttemptCommandHash(strings.Join([]string{
 		strings.TrimSpace(action.RecordID),
 		strings.TrimSpace(payload.RequestInstanceID),
 		strings.TrimSpace(msg.Text),
 		fmt.Sprintf("%d", msg.MessageID),
 	}, "\x00"))[7:31]
-	principalID := operationPhaseRecoveryPrincipal(msg, key)
-	if principalID == "" {
-		return session.ContinuationRecoveryContract{}, fmt.Errorf("child_wake repair retry requires operator principal")
-	}
 	return session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
 		RequestInstanceID:   "repair-retry-" + requestToken,
 		SessionID:           session.SessionIDForKey(key),
@@ -572,6 +720,72 @@ func (r *Runtime) childWakeRepairRetryRecoveryContract(key session.SessionKey, m
 	})
 }
 
+func (r *Runtime) activeChildWakeRetryGrant(agentID string, principalID string) (session.CapabilityGrant, bool, error) {
+	if r == nil || r.store == nil {
+		return session.CapabilityGrant{}, false, nil
+	}
+	agentID = strings.TrimSpace(agentID)
+	principalID = strings.TrimSpace(principalID)
+	if agentID == "" || principalID == "" {
+		return session.CapabilityGrant{}, false, nil
+	}
+	targetResource := "durable_agent:" + agentID + ":wake_once"
+	grants, err := r.store.ActiveCapabilityGrants(session.CapabilityKindGenericDelegation, targetResource, principalID, "invoke")
+	if err != nil {
+		return session.CapabilityGrant{}, false, err
+	}
+	for _, grant := range grants {
+		if grantedAgent := childWakeAgentIDFromGrantConstraints(grant.Constraints); grantedAgent != "" && grantedAgent != agentID {
+			continue
+		}
+		return grant, true, nil
+	}
+	return session.CapabilityGrant{}, false, nil
+}
+
+func childWakeAgentIDFromGrantConstraints(raw string) string {
+	var constraints map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &constraints); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(constraints["agent_id"]))
+}
+
+func childWakeRetryActionAgentID(action session.NextActionRecord) string {
+	agentID := childWakeRepairAgentIDFromSubjectRef(action.SubjectRef)
+	if agentID != "" {
+		return agentID
+	}
+	if strings.TrimSpace(action.Scope.DurableAgentID) != "" {
+		return strings.TrimSpace(action.Scope.DurableAgentID)
+	}
+	var payload struct {
+		AgentID         string `json:"agent_id"`
+		DurableAgentID  string `json:"durable_agent_id"`
+		RecoveryAction  string `json:"recovery_action"`
+		RecoveryFamily  string `json:"recovery_family"`
+		RecoveryHandoff struct {
+			AgentID         string `json:"agent_id"`
+			DurableAgentID  string `json:"durable_agent_id"`
+			BlockerKind     string `json:"blocker_kind"`
+			ResourceBlocker string `json:"resource_blocker"`
+		} `json:"recovery_handoff"`
+	}
+	if err := json.Unmarshal([]byte(action.OperationInputJSON), &payload); err != nil {
+		return ""
+	}
+	if strings.TrimSpace(payload.RecoveryFamily) != "" &&
+		strings.TrimSpace(payload.RecoveryFamily) != session.NextActionOperationKindDurableChildRecovery {
+		return ""
+	}
+	blocker := firstNonEmptyContinuation(strings.TrimSpace(payload.RecoveryAction), strings.TrimSpace(payload.RecoveryHandoff.BlockerKind), strings.TrimSpace(payload.RecoveryHandoff.ResourceBlocker), strings.TrimSpace(action.ResourceBlocker))
+	if strings.TrimSpace(action.SubjectKind) == "task_packet" && blocker != "external_transient" {
+		return ""
+	}
+	agentID = firstNonEmptyContinuation(strings.TrimSpace(payload.AgentID), strings.TrimSpace(payload.DurableAgentID), strings.TrimSpace(payload.RecoveryHandoff.AgentID), strings.TrimSpace(payload.RecoveryHandoff.DurableAgentID))
+	return agentID
+}
+
 func isTypedContinuationApprovalText(text string) bool {
 	value := strings.ToLower(strings.TrimSpace(text))
 	value = strings.Trim(value, ".! \t\r\n")
@@ -588,11 +802,7 @@ func isChildWakeRepairRetryApprovalText(text string) bool {
 	if value == "" || childWakeRepairRetryTextNegated(value) {
 		return false
 	}
-	return strings.Contains(value, "retry") &&
-		strings.Contains(value, "wake") &&
-		(strings.Contains(value, "approved continuation") ||
-			strings.Contains(value, "approval") ||
-			strings.Contains(value, "approve"))
+	return strings.Contains(value, "retry") && strings.Contains(value, "wake")
 }
 
 func isChildWakeRepairAdvanceText(text string) bool {

@@ -653,6 +653,182 @@ func TestRetryTextMaterializesFreshChildWakeApprovalFromRepairBlocker(t *testing
 	}
 }
 
+func TestRetryTextMaterializesFreshChildWakeApprovalFromChildSessionTransientBlocker(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	runner := &runtimeWakeRunner{}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store).WithDurableAgentWakeRunner(runner)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, &fakeProvider{}, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	seedRuntimeWakeAgent(t, store, "idolum-email", true)
+	seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+	parentKey := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	childKey := rt.durableAgentExecutionKey("idolum-email")
+	now := time.Now().UTC().Add(-time.Minute)
+	resultInput := session.ChildTaskResultInput{
+		PacketID:     "child_task:transient-timeout",
+		ResultID:     "child_result:transient-timeout",
+		Status:       session.ChildTaskResultBlocked,
+		BlockerKind:  "external_transient",
+		ResultKind:   "blocker",
+		NextState:    session.NextActionScheduledRetry,
+		Summary:      "The read-only unread job/opportunity search is timing out before it returns mailbox results.",
+		CreatedAt:    now,
+		FencingToken: "fence-transient-timeout",
+	}
+	classification := durableWakeChildBlockerClassification{
+		Kind:               "external_transient",
+		State:              session.NextActionScheduledRetry,
+		NextAction:         "wait for the bounded retry window before retrying the child task",
+		ResourceBlocker:    "external_transient",
+		RetryPolicy:        "bounded_backoff",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
+		OperationTool:      "update_operation",
+		OperatorProjection: "Child task hit a transient external blocker; retry only after bounded backoff.",
+		DiagnosticOnly:     true,
+	}
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           "next-child-session-external-transient",
+		Key:                childKey,
+		Owner:              "durable_wake",
+		State:              session.NextActionScheduledRetry,
+		SubjectKind:        "task_packet",
+		SubjectRef:         resultInput.PacketID,
+		CausalRefs:         []string{"task_packet:" + resultInput.PacketID, "child_task_result:" + resultInput.ResultID},
+		NextAction:         "wait for the bounded retry window before retrying the child task",
+		ResourceBlocker:    "external_transient",
+		RetryPolicy:        "bounded_backoff",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
+		OperationTool:      "update_operation",
+		OperationInputJSON: durableWakeChildBlockerOperationInputJSON("idolum-email", "mail_cli", "mail_cli", classification, resultInput),
+		OperatorProjection: "Child task hit a transient external blocker; retry only after bounded backoff.",
+		CreatedAt:          now,
+	}); err != nil {
+		t.Fatalf("RecordNextAction(child external_transient) err = %v", err)
+	}
+
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1001,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "retry idolum-email wake now after the transient timeout",
+		MessageID:  71,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound(retry child-session external transient) err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "fresh bounded child_wake approval") {
+		t.Fatalf("HandleInbound result = %#v, want fresh child_wake approval prompt acknowledgement", result)
+	}
+	state, err := store.ContinuationState(parentKey)
+	if err != nil {
+		t.Fatalf("ContinuationState(parent) err = %v", err)
+	}
+	if state.Status != session.ContinuationStatusPending ||
+		state.ContinuationLease.LeaseClass != session.ContinuationLeaseClassChildWake ||
+		strings.TrimSpace(state.ContinuationLease.Constraints["agent_id"]) != "idolum-email" ||
+		len(state.ContinuationLease.RequiredCapabilityGrants) != 1 ||
+		state.ContinuationLease.RequiredCapabilityGrants[0].GrantID == "" {
+		t.Fatalf("continuation state = %#v, want pending child_wake approval bound to active wake grant", state)
+	}
+	retry := session.NormalizeContinuationRetryOperation(state.ContinuationLease.RetryOperation)
+	if !retry.Active() || retry.Tool != "durable_agent" || retry.OperationKind != "durable_agent_wake_once" || !strings.Contains(retry.InputJSON, `"agent_id":"idolum-email"`) {
+		t.Fatalf("retry operation = %#v, want durable_agent wake_once retry for idolum-email", retry)
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want one approval card", len(sender.inline))
+	}
+	childOpen, err := store.OpenNextActionsBySession(childKey, 20)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(child) err = %v", err)
+	}
+	for _, action := range childOpen {
+		if action.RecordID == "next-child-session-external-transient" {
+			t.Fatalf("child open actions = %#v, want source child-session transient action resolved after retry approval materialization", childOpen)
+		}
+	}
+	if _, err := rt.ApproveContinuationForKey(parentKey, 1001); err != nil {
+		t.Fatalf("ApproveContinuationForKey(parent retry) err = %v", err)
+	}
+	result, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:       1001,
+		SenderID:     1001,
+		SenderName:   "admin",
+		Text:         "[user pressed continue button: resume the previous task]",
+		MessageID:    72,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound(approved transient retry) err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "Running approved continuation") {
+		t.Fatalf("HandleInbound(approved transient retry) result = %#v, want approved continuation acknowledgement", result)
+	}
+	if len(runner.calls) != 1 || runner.calls[0] != "idolum-email" {
+		t.Fatalf("runner calls = %#v, want one idolum-email wake after approving transient retry", runner.calls)
+	}
+
+	resultInput.ResultID = "child_result:transient-timeout-reaction"
+	resultInput.PacketID = "child_task:transient-timeout-reaction"
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           "next-child-session-external-transient-reaction",
+		Key:                childKey,
+		Owner:              "durable_wake",
+		State:              session.NextActionScheduledRetry,
+		SubjectKind:        "task_packet",
+		SubjectRef:         resultInput.PacketID,
+		CausalRefs:         []string{"task_packet:" + resultInput.PacketID, "child_task_result:" + resultInput.ResultID},
+		NextAction:         "wait for the bounded retry window before retrying the child task",
+		ResourceBlocker:    "external_transient",
+		RetryPolicy:        "bounded_backoff",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
+		OperationTool:      "update_operation",
+		OperationInputJSON: durableWakeChildBlockerOperationInputJSON("idolum-email", "mail_cli", "mail_cli", classification, resultInput),
+		OperatorProjection: "Child task hit a transient external blocker; retry only after bounded backoff.",
+		CreatedAt:          time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(child external_transient reaction) err = %v", err)
+	}
+	handled, reactionResult, err := rt.maybeHandleApprovedContinuationRunIntent(context.Background(), core.InboundMessage{
+		ChatID:     1001,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "reaction_update message_id=25061 new=👍",
+		MessageID:  73,
+		Reaction:   &core.InboundReaction{MessageID: 25061, New: []string{"👍"}},
+	}, principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001})
+	if err != nil {
+		t.Fatalf("maybeHandleApprovedContinuationRunIntent(reaction transient retry) err = %v", err)
+	}
+	if !handled {
+		t.Fatal("reaction handled = false, want transient retry approval card surfaced")
+	}
+	if reactionResult == nil || !strings.Contains(reactionResult.Text, "fresh bounded child_wake approval") {
+		t.Fatalf("reaction result = %#v, want fresh child_wake approval prompt acknowledgement", reactionResult)
+	}
+	if len(sender.inline) != 2 {
+		t.Fatalf("inline count after reaction = %d, want second approval card", len(sender.inline))
+	}
+}
+
 func TestContinueTextMaterializesChildWakeApprovalFromChildToolRuntimeRepairBlocker(t *testing.T) {
 	t.Parallel()
 
