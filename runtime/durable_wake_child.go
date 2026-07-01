@@ -65,10 +65,19 @@ func (r *Runtime) pollDurableAgentWakeViaChild(ctx context.Context, agent core.D
 		now = time.Now().UTC()
 	}
 	now = now.UTC()
-	if suppressed, err := r.shouldSuppressDurableWakeChildPoll(agent, now); err != nil {
+	recovered, handled, err := r.recoverScheduledExternalChannelReadiness(ctx, agent, now)
+	if err != nil {
 		return err
-	} else if suppressed {
+	}
+	if handled {
 		return nil
+	}
+	if !recovered {
+		if suppressed, err := r.shouldSuppressDurableWakeChildPoll(agent, now); err != nil {
+			return err
+		} else if suppressed {
+			return nil
+		}
 	}
 	if err := r.preflightDurableWakeAgent(agent, now); err != nil {
 		if handled, handleErr := r.recordDurableWakeChildRuntimeBlock(agent, err, now); handled {

@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -33,10 +34,27 @@ func (r *Runtime) preflightDurableWakeAgent(agent core.DurableAgent, now time.Ti
 	if readiness.Status != externalChannelReadinessStatusBlocked {
 		return nil
 	}
-	return fmt.Errorf(
-		"child_runtime_blocked: preflight_failed adapter=%s failure_code=%s next_repair=%s",
-		strings.TrimSpace(readiness.Adapter),
-		strings.TrimSpace(readiness.FailureCode),
-		strings.TrimSpace(readiness.NextRepair),
+	return externalChannelReadinessPreflightError{Readiness: readiness}
+}
+
+type externalChannelReadinessPreflightError struct {
+	Readiness externalChannelAdapterReadiness
+}
+
+func (e externalChannelReadinessPreflightError) Error() string {
+	return fmt.Sprintf(
+		"child_runtime_blocked: preflight_failed adapter=%s failure_code=%s repair_kind=%s next_repair=%s",
+		strings.TrimSpace(e.Readiness.Adapter),
+		strings.TrimSpace(e.Readiness.FailureCode),
+		strings.TrimSpace(e.Readiness.RepairKind),
+		strings.TrimSpace(e.Readiness.NextRepair),
 	)
+}
+
+func externalChannelReadinessFromError(err error) (externalChannelAdapterReadiness, bool) {
+	var typed externalChannelReadinessPreflightError
+	if errors.As(err, &typed) {
+		return typed.Readiness, true
+	}
+	return externalChannelAdapterReadiness{}, false
 }

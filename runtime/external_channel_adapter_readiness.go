@@ -26,6 +26,11 @@ const (
 	externalChannelReadinessFailureGrant   = "grant_missing_or_stale"
 	externalChannelReadinessFailureSandbox = "sandbox_backend_unavailable"
 	externalChannelReadinessFailureRuntime = "runtime_material_missing"
+
+	externalChannelReadinessRepairNone                 = "none"
+	externalChannelReadinessRepairToolLifecycleVerify  = "tool_lifecycle_verify"
+	externalChannelReadinessRepairToolLifecycleRefresh = "tool_lifecycle_audit_probe_verify"
+	externalChannelReadinessRepairChildRuntimeMaterial = "child_runtime_material"
 )
 
 type externalChannelAdapterReadiness struct {
@@ -34,6 +39,7 @@ type externalChannelAdapterReadiness struct {
 	Status      string
 	FailureCode string
 	NextRepair  string
+	RepairKind  string
 	Layers      []externalChannelAdapterReadinessLayer
 	LastWake    *externalChannelAdapterWakeStatus
 	GeneratedAt time.Time
@@ -124,12 +130,14 @@ func (r *Runtime) externalChannelReadinessForAgent(agent core.DurableAgent, now 
 		Status:      externalChannelReadinessStatusReady,
 		FailureCode: externalChannelReadinessFailureNone,
 		NextRepair:  "none",
+		RepairKind:  externalChannelReadinessRepairNone,
 		GeneratedAt: now.UTC(),
 	}
-	setFailure := func(code string, next string) {
+	setFailure := func(code string, repairKind string, next string) {
 		if row.FailureCode == externalChannelReadinessFailureNone || row.FailureCode == "" {
 			row.FailureCode = strings.TrimSpace(code)
 			row.NextRepair = strings.TrimSpace(next)
+			row.RepairKind = firstNonEmpty(strings.TrimSpace(repairKind), externalChannelReadinessRepairNone)
 			row.Status = externalChannelReadinessStatusBlocked
 		}
 	}
@@ -140,7 +148,7 @@ func (r *Runtime) externalChannelReadinessForAgent(agent core.DurableAgent, now 
 	external := agent.ChannelConfig.ExternalConfig()
 	if external == nil || adapterName == "" {
 		addLayer("policy_channel_adapter", externalChannelReadinessStatusBlocked, "durable child does not declare channel_config.external.adapter")
-		setFailure(externalChannelReadinessFailureAdapter, "configure the durable child external_channel adapter before scheduling polls")
+		setFailure(externalChannelReadinessFailureAdapter, externalChannelReadinessRepairNone, "configure the durable child external_channel adapter before scheduling polls")
 		return row
 	}
 	addLayer("policy_channel_adapter", externalChannelReadinessStatusReady, "external_channel adapter="+adapterName+" configured without implying adapter-local access")
@@ -151,13 +159,17 @@ func (r *Runtime) externalChannelReadinessForAgent(agent core.DurableAgent, now 
 	audit, auditOK, auditErr := r.store.ToolAuditRecord(adapterName)
 	if registeredErr != nil || installErr != nil || probeErr != nil || auditErr != nil {
 		addLayer("tool_lifecycle", externalChannelReadinessStatusBlocked, firstNonEmpty(errorText(registeredErr), errorText(installErr), errorText(probeErr), errorText(auditErr)))
-		setFailure(externalChannelReadinessFailureLife, "repair tool lifecycle records for "+adapterName+" before polling")
+		setFailure(externalChannelReadinessFailureLife, externalChannelReadinessRepairToolLifecycleRefresh, "repair tool lifecycle records for "+adapterName+" before polling")
 	} else if !registeredOK || !registered.Registered || !installOK || !probeOK || !auditOK {
 		addLayer("tool_lifecycle", externalChannelReadinessStatusBlocked, adapterName+" lacks complete registered/install/audit/probe lifecycle records")
-		setFailure(externalChannelReadinessFailureLife, "register, install, audit, and probe "+adapterName+" as a first-class external tool")
+		setFailure(externalChannelReadinessFailureLife, externalChannelReadinessRepairToolLifecycleRefresh, "register, install, audit, probe, and verify "+adapterName+" as a first-class external tool")
 	} else if install.Status != session.ToolInstallStatusVerified || probe.Status != session.ToolProbeStatusPassed || audit.Status != session.ToolAuditStatusPassed {
 		addLayer("tool_lifecycle", externalChannelReadinessStatusBlocked, fmt.Sprintf("install=%s audit=%s probe=%s", install.Status, audit.Status, probe.Status))
-		setFailure(externalChannelReadinessFailureLife, "rerun or repair "+adapterName+" install/audit/probe lifecycle")
+		if install.Status == session.ToolInstallStatusInstalled && probe.Status == session.ToolProbeStatusPassed && audit.Status == session.ToolAuditStatusPassed {
+			setFailure(externalChannelReadinessFailureLife, externalChannelReadinessRepairToolLifecycleVerify, "verify "+adapterName+" from existing runtime-authored audit/probe evidence before polling")
+		} else {
+			setFailure(externalChannelReadinessFailureLife, externalChannelReadinessRepairToolLifecycleRefresh, "rerun or repair "+adapterName+" audit/probe evidence, then verify lifecycle before polling")
+		}
 	} else {
 		addLayer("tool_lifecycle", externalChannelReadinessStatusReady, fmt.Sprintf("registered=true install=%s audit=%s probe=%s", install.Status, audit.Status, probe.Status))
 	}
@@ -166,13 +178,13 @@ func (r *Runtime) externalChannelReadinessForAgent(agent core.DurableAgent, now 
 	grants, grantsErr := r.store.CapabilityGrants(200, "", "", principalID)
 	if grantsErr != nil {
 		addLayer("grant_materialization", externalChannelReadinessStatusBlocked, grantsErr.Error())
-		setFailure(externalChannelReadinessFailureGrant, "repair capability grant lookup before polling")
+		setFailure(externalChannelReadinessFailureGrant, externalChannelReadinessRepairNone, "repair capability grant lookup before polling")
 		return rowWithLastWake(r, row, agent)
 	}
 	toolGrant, toolMaterial, toolMaterialOK, toolEvidence := selectExternalChannelToolGrant(grants, principalID, adapterName)
 	if strings.TrimSpace(toolGrant.GrantID) == "" || !toolMaterialOK {
 		addLayer("grant_tool_runtime", externalChannelReadinessStatusBlocked, firstNonEmpty(toolEvidence, "missing active "+adapterName+" tool grant with child_runtime material"))
-		setFailure(externalChannelReadinessFailureGrant, "create or repair an active "+adapterName+" tool grant with child_runtime material")
+		setFailure(externalChannelReadinessFailureGrant, externalChannelReadinessRepairChildRuntimeMaterial, "create or repair an active "+adapterName+" tool grant with child_runtime material")
 	} else {
 		addLayer("grant_tool_runtime", externalChannelReadinessStatusReady, toolEvidence)
 	}
@@ -192,12 +204,12 @@ func (r *Runtime) externalChannelReadinessForAgent(agent core.DurableAgent, now 
 	scope, scopeErr := sandbox.DurableAgentScopeWithProfile(agent.AgentID, doctorReadinessGlobalRoot(r), workspaceRoot, memoryRoot, durableProfile, agent.NetworkPolicy)
 	if scopeErr != nil {
 		addLayer("sandbox", externalChannelReadinessStatusBlocked, scopeErr.Error())
-		setFailure(externalChannelReadinessFailureSandbox, "repair durable child local roots before sandbox readiness can be checked")
+		setFailure(externalChannelReadinessFailureSandbox, externalChannelReadinessRepairNone, "repair durable child local roots before sandbox readiness can be checked")
 	} else {
 		stage := sandbox.NewRunner().Stage(scope)
 		if stage == sandbox.StageUnavailable {
 			addLayer("sandbox", externalChannelReadinessStatusBlocked, "isolated durable-agent sandbox backend is unavailable")
-			setFailure(externalChannelReadinessFailureSandbox, "install or enable the configured isolated sandbox backend before child wakes")
+			setFailure(externalChannelReadinessFailureSandbox, externalChannelReadinessRepairNone, "install or enable the configured isolated sandbox backend before child wakes")
 		} else {
 			addLayer("sandbox", externalChannelReadinessStatusReady, "isolated durable-agent sandbox backend="+string(stage))
 		}
@@ -206,7 +218,7 @@ func (r *Runtime) externalChannelReadinessForAgent(agent core.DurableAgent, now 
 	if toolMaterialOK {
 		if missing := firstMissingChildRuntimeMaterial(toolMaterial); missing != "" {
 			addLayer("runtime_material", externalChannelReadinessStatusBlocked, "runtime material missing: "+missing)
-			setFailure(externalChannelReadinessFailureRuntime, "provide or correct the named child_runtime material without printing secret values")
+			setFailure(externalChannelReadinessFailureRuntime, externalChannelReadinessRepairChildRuntimeMaterial, "provide or correct the named child_runtime material without printing secret values")
 		} else {
 			addLayer("runtime_material", externalChannelReadinessStatusReady, "child_runtime material sources exist")
 		}
@@ -245,6 +257,7 @@ func rowWithLastWake(r *Runtime, row externalChannelAdapterReadiness, agent core
 		row.Status = externalChannelReadinessStatusResidual
 		row.FailureCode = "last_" + strings.TrimSpace(runtimeState.LastStatus)
 		row.NextRepair = "generic readiness passes, but the last child wake needs attention; inspect the child review artifact before the next live poll"
+		row.RepairKind = externalChannelReadinessRepairNone
 	}
 	return row
 }
