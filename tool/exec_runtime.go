@@ -42,6 +42,9 @@ func (r *Registry) ExecuteForPrincipal(ctx context.Context, p principal.Principa
 }
 
 func (r *Registry) ExecuteForSessionPrincipal(ctx context.Context, p principal.Principal, key session.SessionKey, name string, input json.RawMessage) (string, error) {
+	if nativeToolHiddenForPrincipal(name, p) {
+		return "", fmt.Errorf("%s is parent-control-plane only", strings.TrimSpace(name))
+	}
 	if r.sandbox == nil {
 		return "", fmt.Errorf("principal-aware execution requires sandbox resolver")
 	}

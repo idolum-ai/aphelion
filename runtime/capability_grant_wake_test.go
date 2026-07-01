@@ -133,15 +133,15 @@ func TestQueueCapabilityGrantWakeAddsParentConversation(t *testing.T) {
 func TestCapabilityGrantWakeTimeoutProducesTransientRetryState(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = strings.Join([]string{
-		"I incorporated the new `host@idolum.ai` job-triage approval and validated the active authorities.",
+		"I incorporated the new `jobs@example.invalid` job-triage approval and validated the active authorities.",
 		"",
 		"Active now:",
-		"- `host@idolum.ai` read access",
-		"- `host@idolum.ai` archive / mark-processed approval exists, but this wake was dry-run/no-mutation, so I did not use it",
+		"- `jobs@example.invalid` read access",
+		"- `jobs@example.invalid` archive / mark-processed approval exists, but this wake was dry-run/no-mutation, so I did not use it",
 		"- `gog_cli` invoke",
-		"- `gog_cli:host@idolum.ai` invoke",
+		"- `gog_cli:jobs@example.invalid` invoke",
 		"",
-		"I made exactly one read-only dry-run report attempt using `search_unread_jobs` for `host@idolum.ai`.",
+		"I made exactly one read-only dry-run report attempt using `search_unread_jobs` for `jobs@example.invalid`.",
 		"",
 		"Result: blocked by tool timeout.",
 		"",
@@ -180,7 +180,7 @@ func TestCapabilityGrantWakeTimeoutProducesTransientRetryState(t *testing.T) {
 		RequestID:      "cap-mail-timeout",
 		GrantedTo:      "durable_agent:mail-timeout",
 		Kind:           session.CapabilityKindExternalAccount,
-		TargetResource: "host@idolum.ai",
+		TargetResource: "jobs@example.invalid",
 		AllowedActions: []string{"read", "archive", "mark_processed"},
 		Status:         session.CapabilityGrantStatusActive,
 	}
@@ -222,7 +222,7 @@ func TestCapabilityGrantWakeTimeoutProducesTransientRetryState(t *testing.T) {
 func TestFreshCapabilityGrantWakeSupersedesStaleChildResourceRepair(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = strings.Join([]string{
-		"I made exactly one read-only dry-run report attempt using `search_unread_jobs` for `host@idolum.ai`.",
+		"I made exactly one read-only dry-run report attempt using `search_unread_jobs` for `jobs@example.invalid`.",
 		"Result: blocked by tool timeout.",
 		"Non-secret status:",
 		"- failure class: `timeout`",
@@ -280,7 +280,7 @@ func TestFreshCapabilityGrantWakeSupersedesStaleChildResourceRepair(t *testing.T
 		RequestID:      "cap-mail-stale-repair",
 		GrantedTo:      "durable_agent:mail-stale-repair",
 		Kind:           session.CapabilityKindExternalAccount,
-		TargetResource: "host@idolum.ai",
+		TargetResource: "jobs@example.invalid",
 		AllowedActions: []string{"read", "archive", "mark_processed"},
 		Status:         session.CapabilityGrantStatusActive,
 	}

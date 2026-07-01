@@ -131,7 +131,7 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 		{
 			name:           "timeout overrides stale resource blocker",
 			status:         session.ChildTaskResultBlocked,
-			summary:        "I made exactly one read-only dry-run report attempt using search_unread_jobs for host@idolum.ai.\nResult: blocked by tool timeout.\nNon-secret status: failure class: timeout.\nREVIEW_STATUS: blocked",
+			summary:        "I made exactly one read-only dry-run report attempt using search_unread_jobs for jobs@example.invalid.\nResult: blocked by tool timeout.\nNon-secret status: failure class: timeout.\nREVIEW_STATUS: blocked",
 			blocker:        "resource_permission_denied",
 			wantKind:       "external_transient",
 			wantState:      session.NextActionScheduledRetry,
@@ -205,6 +205,17 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 			wantState:      session.NextActionBlockedNeedsResourceRepair,
 			wantOp:         session.NextActionOperationKindDurableChildRecovery,
 			wantRetry:      "retry_after_resource_repair",
+			wantDiagnostic: true,
+		},
+		{
+			name:           "parent control plane tool misroute beats credential wording",
+			status:         session.ChildTaskResultBlocked,
+			summary:        "I tried durable_agent wake_once inside the child turn and the tool returned non-retryable tool_error. No credentials, tokens, keyring, or mailbox access happened.",
+			blocker:        "credential_unverified",
+			wantKind:       "child_control_plane_tool_misroute",
+			wantState:      session.NextActionBlockedNeedsResourceRepair,
+			wantOp:         session.NextActionOperationKindDurableChildRecovery,
+			wantRetry:      "retry_after_task_compilation_repair",
 			wantDiagnostic: true,
 		},
 		{
@@ -919,7 +930,7 @@ func TestPollDurableWakeChildToolCallsUseChildTaskAuthority(t *testing.T) {
 	tools.WithExternalToolExecutor(executor)
 	manifest := toolpkg.ExternalToolManifest{
 		Name:  "gog_cli",
-		Owner: "idolum-email",
+		Owner: "child-mail",
 		Execution: toolpkg.ExternalToolManifestExecution{
 			Mode:    "process",
 			Entry:   "./run.sh",
@@ -938,7 +949,7 @@ func TestPollDurableWakeChildToolCallsUseChildTaskAuthority(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 	agent := core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "child-mail",
 		ParentScopeKind:    "telegram_dm",
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
@@ -956,7 +967,7 @@ func TestPollDurableWakeChildToolCallsUseChildTaskAuthority(t *testing.T) {
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
-	grantID := "capg-idolum-email-gog_cli"
+	grantID := "capg-child-mail-gog_cli"
 	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
 		GrantID:        grantID,
 		Kind:           session.CapabilityKindTool,

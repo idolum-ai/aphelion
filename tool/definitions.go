@@ -27,6 +27,9 @@ func (r *Registry) nativeDefinitionsForPrincipal(p principal.Principal) []agent.
 	filtered := make([]agent.ToolDef, 0, len(defs))
 	for _, def := range defs {
 		name := strings.TrimSpace(def.Name)
+		if nativeToolHiddenForPrincipal(name, p) {
+			continue
+		}
 		if name == codexImageGenerationToolName {
 			allowed, err := r.codexImageGenerationAccessAllowed(p)
 			if err == nil && allowed {
@@ -59,6 +62,15 @@ func (r *Registry) nativeDefinitionsForPrincipal(p principal.Principal) []agent.
 		filtered = append(filtered, def)
 	}
 	return filtered
+}
+
+func nativeToolHiddenForPrincipal(name string, p principal.Principal) bool {
+	switch strings.TrimSpace(name) {
+	case "durable_agent":
+		return p.Role == principal.RoleDurableAgent
+	default:
+		return false
+	}
 }
 
 func (r *Registry) externalManifestsForPrincipal(p principal.Principal) []ExternalToolManifest {

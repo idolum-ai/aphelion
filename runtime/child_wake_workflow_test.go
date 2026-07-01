@@ -173,6 +173,11 @@ func TestChildWakeRecoveryJourneyRunsRealDurableWakeAfterApprovals(t *testing.T)
 	if len(provider.seenGovernorSystem) == 0 || !strings.Contains(strings.Join(provider.seenGovernorSystem, "\n"), "parent conversation wake") {
 		t.Fatalf("provider governor prompts = %#v, want real durable parent conversation wake", provider.seenGovernorSystem)
 	}
+	for _, def := range provider.lastGovernorTools {
+		if def.Name == "durable_agent" {
+			t.Fatalf("child wake tool palette exposed parent-control durable_agent tool: %#v", provider.lastGovernorTools)
+		}
+	}
 	wakeClaimID := session.DurableAgentWakeClaimID(session.DurableAgentWakeClaimInput{
 		LeaseID:          current.ContinuationLease.ID,
 		AgentID:          "idolum-email",

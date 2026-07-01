@@ -54,6 +54,21 @@ type durableWakeChildBlockerSpec struct {
 
 var durableWakeBlockedChildBlockerSpecs = []durableWakeChildBlockerSpec{
 	{
+		Kind:               "child_control_plane_tool_misroute",
+		State:              session.NextActionBlockedNeedsResourceRepair,
+		NextAction:         "repair parent-to-child task compilation so the child receives child-local work, not parent-control wake instructions",
+		ResourceBlocker:    "child_control_plane_tool_misroute",
+		RetryPolicy:        "retry_after_task_compilation_repair",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
+		OperationTool:      "update_operation",
+		OperatorProjection: "Child reported a parent-control durable_agent wake_once tool call inside its own turn; repair task compilation before retrying the child wake.",
+		ReviewLocalActions: []string{"Child turn attempted to use the parent durable-agent wake control surface instead of child-local tools."},
+		ReviewQuestions:    []string{"Repair the parent-to-child handoff so approval syntax is consumed by the parent runtime and only child-local work reaches the child."},
+		ReviewRiskFlags:    []string{"durable_child", "control_plane_misroute", "task_compilation"},
+		DiagnosticOnly:     true,
+		Markers:            []string{"durable_agent wake_once", "durable_agent.wake_once", "parent-control durable_agent", "parent control-plane"},
+	},
+	{
 		Kind:               "tool_runtime_probe_missing",
 		State:              session.NextActionNeedsVerification,
 		NextAction:         "run a deterministic child-side runtime visibility probe before repairing materialization",

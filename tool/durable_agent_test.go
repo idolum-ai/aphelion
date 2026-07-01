@@ -37,6 +37,26 @@ func TestDefinitionsIncludeDurableAgentToolWhenStoreConfigured(t *testing.T) {
 	}
 }
 
+func TestDurableAgentGovernanceToolHiddenFromDurableChildPrincipal(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(newToolTestStore(t))
+	child := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"}
+
+	var names []string
+	for _, def := range registry.DefinitionsForPrincipal(child) {
+		names = append(names, def.Name)
+	}
+	if containsString(names, "durable_agent") {
+		t.Fatalf("DefinitionsForPrincipal(child) = %#v, durable_agent governance tool is parent-control-plane only", names)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(context.Background(), child, adminSessionKey(), "durable_agent", json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`))
+	if err == nil || !strings.Contains(err.Error(), "parent-control-plane only") {
+		t.Fatalf("ExecuteForSessionPrincipal(child durable_agent) err = %v, want parent-control-plane denial", err)
+	}
+}
+
 func TestDurableAgentToolDefinitionIncludesPolicyPatchSurface(t *testing.T) {
 	t.Parallel()
 

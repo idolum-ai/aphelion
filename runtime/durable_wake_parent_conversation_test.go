@@ -75,6 +75,30 @@ func TestParentConversationAckSuppressedWhenChildQueuesConcreteReview(t *testing
 	}
 }
 
+func TestParentConversationWakePromptDoesNotExposeParentControlPlaneToolCall(t *testing.T) {
+	t.Parallel()
+
+	prompt := durableParentConversationWakePrompt(core.DurableAgent{
+		AgentID:     "idolum-email",
+		ChannelKind: "external_channel",
+	}, []core.DurableAgentConversationMessage{{
+		MessageID: "msg-parent-control",
+		Role:      "parent",
+		Text:      "Exact approved child_wake: tool=durable_agent action=wake_once agent_id=idolum-email. Consume only pending guidance and use child-local gog_cli if needed.",
+	}})
+
+	for _, forbidden := range []string{"tool=durable_agent", "action=wake_once", "child_wake", "durable_agent", "wake_once"} {
+		if strings.Contains(strings.ToLower(prompt), forbidden) {
+			t.Fatalf("prompt leaked parent-control token %q:\n%s", forbidden, prompt)
+		}
+	}
+	for _, required := range []string{"parent control-plane approval was already consumed", "Do not call the parent durable-agent governance tool or wake action", "child-local gog_cli"} {
+		if !strings.Contains(strings.ToLower(prompt), strings.ToLower(required)) {
+			t.Fatalf("prompt missing %q:\n%s", required, prompt)
+		}
+	}
+}
+
 func TestRunDurableAgentChildWakeProcessesPendingParentBeforeExternalCadence(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "Processed pending parent image job.\nREVIEW_STATUS: completed"

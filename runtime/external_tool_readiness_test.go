@@ -112,17 +112,17 @@ func TestExternalToolInvocationReadinessRequiresAccountGrantForAccountSelector(t
 		Kind:                string(session.CapabilityKindTool),
 		TargetResource:      "gog_cli",
 		Status:              string(session.CapabilityGrantStatusActive),
-		GrantedTo:           "durable_agent:idolum-email",
+		GrantedTo:           "durable_agent:child-mail",
 		AllowedActions:      []string{"invoke"},
 		ToolInvocationScope: "search_unread_jobs[account]",
 		ChildRuntimePresent: true,
 	}}
 
-	row := externalToolInvocationReadinessFromSnapshots("gog_cli", "durable_agent:idolum-email", "search_unread_jobs", "account", "host@idolum.ai", tools, grants)
+	row := externalToolInvocationReadinessFromSnapshots("gog_cli", "durable_agent:child-mail", "search_unread_jobs", "account", "jobs@example.invalid", tools, grants)
 	if row.Ready || row.Status != "blocked" {
 		t.Fatalf("readiness = %#v, want account-scoped tool call blocked without external_account grant", row)
 	}
-	if !strings.Contains(row.Why, "external_account") && !strings.Contains(row.Why, "host@idolum.ai") {
+	if !strings.Contains(row.Why, "external_account") && !strings.Contains(row.Why, "jobs@example.invalid") {
 		t.Fatalf("why = %q, want missing account grant surfaced", row.Why)
 	}
 }
@@ -140,7 +140,7 @@ func TestExternalToolInvocationReadinessComposesToolAndAccountGrants(t *testing.
 			Kind:                string(session.CapabilityKindTool),
 			TargetResource:      "gog_cli",
 			Status:              string(session.CapabilityGrantStatusActive),
-			GrantedTo:           "durable_agent:idolum-email",
+			GrantedTo:           "durable_agent:child-mail",
 			AllowedActions:      []string{"invoke"},
 			ToolInvocationScope: "search_unread_jobs[account]",
 			ChildRuntimePresent: true,
@@ -148,14 +148,14 @@ func TestExternalToolInvocationReadinessComposesToolAndAccountGrants(t *testing.
 		{
 			GrantID:        "capg-host-read",
 			Kind:           string(session.CapabilityKindExternalAccount),
-			TargetResource: "host@idolum.ai",
+			TargetResource: "jobs@example.invalid",
 			Status:         string(session.CapabilityGrantStatusActive),
-			GrantedTo:      "durable_agent:idolum-email",
+			GrantedTo:      "durable_agent:child-mail",
 			AllowedActions: []string{"read", "search"},
 		},
 	}
 
-	row := externalToolInvocationReadinessFromSnapshots("gog_cli", "durable_agent:idolum-email", "search_unread_jobs", "account", "host@idolum.ai", tools, grants)
+	row := externalToolInvocationReadinessFromSnapshots("gog_cli", "durable_agent:child-mail", "search_unread_jobs", "account", "jobs@example.invalid", tools, grants)
 	if !row.Ready || row.Status != "ready" || row.NextRepairAction != "none" {
 		t.Fatalf("readiness = %#v, want ready only after tool and account grants compose", row)
 	}
@@ -179,7 +179,7 @@ func TestExternalToolInvocationReadinessBlocksAccountActionScopeMismatch(t *test
 			Kind:                string(session.CapabilityKindTool),
 			TargetResource:      "gog_cli",
 			Status:              string(session.CapabilityGrantStatusActive),
-			GrantedTo:           "durable_agent:idolum-email",
+			GrantedTo:           "durable_agent:child-mail",
 			AllowedActions:      []string{"invoke"},
 			ToolInvocationScope: "search_unread_jobs[account]",
 			ChildRuntimePresent: true,
@@ -187,18 +187,18 @@ func TestExternalToolInvocationReadinessBlocksAccountActionScopeMismatch(t *test
 		{
 			GrantID:        "capg-host-connection-only",
 			Kind:           string(session.CapabilityKindExternalAccount),
-			TargetResource: "host@idolum.ai",
+			TargetResource: "jobs@example.invalid",
 			Status:         string(session.CapabilityGrantStatusActive),
-			GrantedTo:      "durable_agent:idolum-email",
+			GrantedTo:      "durable_agent:child-mail",
 			AllowedActions: []string{"connection_test"},
 		},
 	}
 
-	row := externalToolInvocationReadinessFromSnapshots("gog_cli", "durable_agent:idolum-email", "search_unread_jobs", "account", "host@idolum.ai", tools, grants)
+	row := externalToolInvocationReadinessFromSnapshots("gog_cli", "durable_agent:child-mail", "search_unread_jobs", "account", "jobs@example.invalid", tools, grants)
 	if row.Ready || row.Status != "blocked" {
 		t.Fatalf("readiness = %#v, want account action-scope mismatch blocked", row)
 	}
-	if !strings.Contains(row.Why, "host@idolum.ai") || !strings.Contains(row.Why, "read") {
+	if !strings.Contains(row.Why, "jobs@example.invalid") || !strings.Contains(row.Why, "read") {
 		t.Fatalf("why = %q, want account grant action mismatch surfaced", row.Why)
 	}
 }
