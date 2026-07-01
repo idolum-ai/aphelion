@@ -1243,6 +1243,168 @@ func TestPollDurableWakeChildToolCallsUseChildTaskAuthority(t *testing.T) {
 	}
 }
 
+func TestDurableWakeChildToolExecutionDoesNotUseParentOnlyGrant(t *testing.T) {
+	cfg, store, _, _ := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, 2*time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	executor := &durableWakeExternalToolExecutor{toolName: "parent_probe"}
+	tools.WithExternalToolExecutor(executor)
+	manifest := toolpkg.ExternalToolManifest{
+		Name:  "parent_probe",
+		Owner: "child-parent-grant-boundary",
+		Execution: toolpkg.ExternalToolManifestExecution{
+			Mode:    "process",
+			Entry:   "./run.sh",
+			Workdir: filepath.Join(cfg.Agent.ExecRoot, "runtime-bin", "parent-probe-test"),
+		},
+		IO: toolpkg.ExternalToolManifestIO{
+			InputSchema:  json.RawMessage(`{"type":"object","properties":{"action":{"type":"string"}},"required":["action"]}`),
+			OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`),
+		},
+		Probe: toolpkg.ExternalToolManifestProbe{Command: []string{"./probe.sh"}, ExpectedOutputContains: "probe ok"},
+	}
+	registerRuntimeExternalToolForWakeTest(t, tools, manifest)
+
+	agent := core.DurableAgent{
+		AgentID:            "child-parent-grant-boundary",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "test_adapter",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Try one parent-only tool boundary probe.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: durableWakeSyntheticChatID(agent.AgentID), Scope: durableAgentScopeRef(agent)}
+	now := time.Now().UTC()
+	packet, err := store.RecordChildTaskPacket(session.ChildTaskPacketInput{
+		PacketID:       "child_task:parent-grant-boundary",
+		TaskLeaseID:    "lease:parent-grant-boundary",
+		AgentID:        agent.AgentID,
+		Key:            key,
+		TaskKind:       "durable_wake",
+		AuthorityKind:  string(session.CapabilityKindGenericDelegation),
+		AuthorityID:    "grant-parent-grant-boundary",
+		GrantID:        "grant-parent-grant-boundary",
+		RequestID:      "request-parent-grant-boundary",
+		TargetResource: "durable_agent:" + agent.AgentID + ":wake_once",
+		RequiredAction: "wake_named_child",
+		InputJSON:      `{"channel":"test_adapter"}`,
+		CreatedAt:      now,
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskPacket() err = %v", err)
+	}
+	claimed, err := store.ClaimChildTaskAttempt(session.ChildTaskAttemptClaimInput{
+		PacketID:       packet.PacketID,
+		AttemptID:      "child_attempt:parent-grant-boundary",
+		LeaseOwner:     "test-worker",
+		AgentID:        agent.AgentID,
+		Key:            key,
+		ClaimedAt:      now,
+		LeaseExpiresAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("ClaimChildTaskAttempt() err = %v", err)
+	}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "child task authority boundary")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	admission := durableWakeChildTaskAuthorityAdmission(key, agent, claimed)
+	admission.TurnRunID = run.ID
+	admission.SessionID = run.SessionID
+	if _, err := store.UpsertExecutionRunAuthority(admission); err != nil {
+		t.Fatalf("UpsertExecutionRunAuthority() err = %v", err)
+	}
+	childCtx := toolpkg.WithAuthorityUseRef(context.Background(), session.AuthorityUseRef{SessionID: run.SessionID, TurnRunID: run.ID})
+
+	parentGrantID := "capg-parent-only-parent_probe"
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        parentGrantID,
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "parent_probe",
+		GrantedTo:      "telegram:1001",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(parent only) err = %v", err)
+	}
+	childGrantID := "capg-child-parent_probe-narrow"
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        childGrantID,
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "parent_probe",
+		GrantedTo:      core.DurableAgentPrincipal(agent.AgentID),
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract:       `{"child_runtime":{"readonly_paths":["` + manifest.Execution.Workdir + `"]}}`,
+		Constraints:    `{"tool_invocation":{"actions":{"child_only_probe":{}}}}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(child narrow) err = %v", err)
+	}
+
+	_, err = tools.ExecuteForSessionPrincipal(
+		childCtx,
+		principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: agent.AgentID},
+		key,
+		"parent_probe",
+		json.RawMessage(`{"action":"no_content_probe"}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "tool_invocation") || !strings.Contains(err.Error(), "no_content_probe") {
+		t.Fatalf("ExecuteForSessionPrincipal() err = %v, want child grant tool_invocation denial", err)
+	}
+	executor.mu.Lock()
+	executorCalls := executor.calls
+	executor.mu.Unlock()
+	if executorCalls != 0 {
+		t.Fatalf("external executor calls = %d, want parent-only grant refused before execution", executorCalls)
+	}
+	invocations, err := store.CapabilityInvocationsByGrant(parentGrantID, 10)
+	if err != nil {
+		t.Fatalf("CapabilityInvocationsByGrant(parent) err = %v", err)
+	}
+	if len(invocations) != 0 {
+		t.Fatalf("parent grant invocations = %#v, want child turn not to consume parent-only grant", invocations)
+	}
+	childInvocations, err := store.CapabilityInvocationsByGrant(childGrantID, 10)
+	if err != nil {
+		t.Fatalf("CapabilityInvocationsByGrant(child) err = %v", err)
+	}
+	if len(childInvocations) != 1 {
+		t.Fatalf("child grant invocations = %#v, want one blocked point-of-use check", childInvocations)
+	}
+	childInvocation := childInvocations[0]
+	if childInvocation.Status != "blocked" || childInvocation.AuthoritySource != session.ExecutionAuthorityLeaseKindChildTask || childInvocation.TurnRunID == 0 {
+		t.Fatalf("child invocation = %#v, want blocked child_task_attempt authority at point of use", childInvocation)
+	}
+	if !strings.Contains(childInvocation.ErrorText, "tool_invocation") || !strings.Contains(childInvocation.ErrorText, "no_content_probe") {
+		t.Fatalf("child invocation error = %q, want tool_invocation denial for requested action", childInvocation.ErrorText)
+	}
+}
+
 func TestPollDurableWakeAgentsUsesChildExecutorWhenBootstrapConfigured(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "Child-executor wake summary."

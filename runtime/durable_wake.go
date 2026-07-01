@@ -28,6 +28,7 @@ const durableWakeAwakeLockStaleAfter = 30 * time.Minute
 const durableWakePollParallelism = 3
 const durableWakePollAgentTimeout = 30 * time.Minute
 const durableWakeAttemptLeaseDuration = durableWakePollAgentTimeout
+const durableWakeProgressFinishTimeout = 5 * time.Second
 
 type durableWakeGovernorContextBuilder func(
 	agent core.DurableAgent,
@@ -257,9 +258,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 	}
 	durableWakeProgressSurface(ctx, progress, "Starting child wake")
 	defer func() {
-		if progress != nil {
-			progress.Finish(context.Background())
-		}
+		finishDurableWakeProgress(progress)
 	}()
 	taskPacketID := strings.TrimSpace(plan.TaskPacketID)
 	if taskPacketID == "" {
@@ -313,7 +312,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		if resultErr != nil {
 			return fmt.Errorf("%w (and failed to record child task result: %v)", failure, resultErr)
 		}
-		_ = r.applyDurableWakeOutcomeIntents(context.Background(), agent, plan, result)
+		r.applyDurableWakeOutcomeIntentsOrWarn(context.Background(), agent, plan, result)
 		r.applyDurableWakeNonDurableFinalizer(agent, plan, session.ChildTaskResultFailed, "", wrappedErr)
 		return failure
 	}
@@ -352,7 +351,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		if resultErr != nil {
 			return fmt.Errorf("%w (and failed to record child task result: %v)", wrappedErr, resultErr)
 		}
-		_ = r.applyDurableWakeOutcomeIntents(context.Background(), agent, plan, result)
+		r.applyDurableWakeOutcomeIntentsOrWarn(context.Background(), agent, plan, result)
 		return wrappedErr
 	}
 	if !acquired {
@@ -390,7 +389,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		if resultErr != nil {
 			return fmt.Errorf("%w (and failed to record child task result: %v)", wrappedErr, resultErr)
 		}
-		_ = r.applyDurableWakeOutcomeIntents(context.Background(), agent, plan, result)
+		r.applyDurableWakeOutcomeIntentsOrWarn(context.Background(), agent, plan, result)
 		return wrappedErr
 	}
 
@@ -407,7 +406,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		if resultErr != nil {
 			return fmt.Errorf("%w (and failed to record child task result: %v)", wrappedErr, resultErr)
 		}
-		_ = r.applyDurableWakeOutcomeIntents(context.Background(), agent, plan, result)
+		r.applyDurableWakeOutcomeIntentsOrWarn(context.Background(), agent, plan, result)
 		return wrappedErr
 	}
 
@@ -429,7 +428,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		if resultErr != nil {
 			return fmt.Errorf("run durable wake turn: %w (and failed to record child task result: %v)", err, resultErr)
 		}
-		_ = r.applyDurableWakeOutcomeIntents(context.Background(), agent, plan, result)
+		r.applyDurableWakeOutcomeIntentsOrWarn(context.Background(), agent, plan, result)
 		r.applyDurableWakeNonDurableFinalizer(agent, plan, session.ChildTaskResultFailed, turnSummary, err)
 		return fmt.Errorf("run durable wake turn: %w", err)
 	}
@@ -448,7 +447,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		if resultErr != nil {
 			return fmt.Errorf("%w (and failed to record child task result: %v)", inferenceErr, resultErr)
 		}
-		_ = r.applyDurableWakeOutcomeIntents(context.Background(), agent, plan, result)
+		r.applyDurableWakeOutcomeIntentsOrWarn(context.Background(), agent, plan, result)
 		r.applyDurableWakeNonDurableFinalizer(agent, plan, session.ChildTaskResultFailed, turnSummary, inferenceErr)
 		return inferenceErr
 	}
@@ -465,9 +464,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		durableWakeProgressDone(ctx, progress, agent, "failed", "Child wake outcome commit failed")
 		return fmt.Errorf("record durable wake child task result: %w", err)
 	}
-	if err := r.applyDurableWakeOutcomeIntents(context.Background(), agent, plan, result); err != nil {
-		log.Printf("WARN durable wake post-outcome intent processing failed agent_id=%s result_id=%s err=%v", agent.AgentID, result.ResultID, err)
-	}
+	r.applyDurableWakeOutcomeIntentsOrWarn(context.Background(), agent, plan, result)
 	r.applyDurableWakeNonDurableFinalizer(agent, plan, resultStatus, turnSummary, nil)
 	durableWakeProgressDone(ctx, progress, agent, durableWakeProgressDoneStatus(result.Status), durableWakeProgressResultSurface(result))
 	r.recordExecutionEvent(key, core.ExecutionEventDurableWakeCompleted, "durable", "completed", map[string]any{
@@ -498,6 +495,21 @@ func (r *Runtime) applyDurableWakeNonDurableFinalizer(agent core.DurableAgent, p
 	if err != nil {
 		log.Printf("WARN non-durable wake finalizer failed agent_id=%s channel=%s err=%v", agent.AgentID, firstNonEmpty(strings.TrimSpace(plan.Channel), "durable_wake"), err)
 	}
+}
+
+func (r *Runtime) applyDurableWakeOutcomeIntentsOrWarn(ctx context.Context, agent core.DurableAgent, plan durableWakeTurnPlan, result session.ChildTaskResult) {
+	if err := r.applyDurableWakeOutcomeIntents(ctx, agent, plan, result); err != nil {
+		log.Printf("WARN durable wake post-outcome intent processing failed agent_id=%s result_id=%s status=%s err=%v", strings.TrimSpace(agent.AgentID), strings.TrimSpace(result.ResultID), result.Status, err)
+	}
+}
+
+func finishDurableWakeProgress(progress *toolProgressReporter) {
+	if progress == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), durableWakeProgressFinishTimeout)
+	defer cancel()
+	progress.Finish(ctx)
 }
 
 func firstNonNilError(values ...error) error {
