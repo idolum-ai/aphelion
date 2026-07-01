@@ -344,7 +344,7 @@ func NormalizeContinuationRecoveryContractStatus(status ContinuationRecoveryCont
 }
 
 func ContinuationRecoveryContractProjectionInput(contractID string) string {
-	raw, _ := json.Marshal(map[string]any{
+	raw := mustMarshalRecoveryJSON(map[string]any{
 		"action":                  "request_continuation_lease",
 		"contract_id":             strings.TrimSpace(contractID),
 		"recovery_contract":       "aphelion.recovery_handoff.v1",
@@ -497,9 +497,7 @@ func continuationRecoveryContractHashForVersion(input ContinuationRecoveryContra
 			"request_instance_id": retry.RequestInstanceID,
 		}
 	}
-	raw, _ := json.Marshal(payload)
-	sum := sha256.Sum256(raw)
-	return "sha256:" + hex.EncodeToString(sum[:])
+	return continuationRecoveryHashPayload(payload)
 }
 
 func continuationRecoveryContractHashV1(input ContinuationRecoveryContractInput) string {
@@ -527,7 +525,11 @@ func continuationRecoveryContractHashV1(input ContinuationRecoveryContractInput)
 			"subject_ref":    retry.SubjectRef,
 		}
 	}
-	raw, _ := json.Marshal(payload)
+	return continuationRecoveryHashPayload(payload)
+}
+
+func continuationRecoveryHashPayload(payload map[string]any) string {
+	raw := mustMarshalRecoveryJSON(payload)
 	sum := sha256.Sum256(raw)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
@@ -537,7 +539,7 @@ func continuationRecoveryContractID(requestInstanceID string, contractHash strin
 		"request_instance_id": strings.TrimSpace(requestInstanceID),
 		"contract_hash":       strings.TrimSpace(contractHash),
 	}
-	raw, _ := json.Marshal(payload)
+	raw := mustMarshalRecoveryJSON(payload)
 	sum := sha256.Sum256(raw)
 	token := hex.EncodeToString(sum[:])
 	if len(token) > 24 {
@@ -579,8 +581,16 @@ func recoveryStringSliceContains(values []string, want string) bool {
 }
 
 func compactRecoveryJSON(value any) string {
-	raw, _ := json.Marshal(value)
+	raw := mustMarshalRecoveryJSON(value)
 	return string(raw)
+}
+
+func mustMarshalRecoveryJSON(value any) []byte {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		panic(fmt.Sprintf("marshal continuation recovery JSON: %v", err))
+	}
+	return raw
 }
 
 func shortRecoveryHash(value string) string {

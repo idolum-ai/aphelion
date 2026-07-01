@@ -10,7 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 86
+const schemaVersion = 87
 
 type SQLiteStore struct {
 	db     *sql.DB

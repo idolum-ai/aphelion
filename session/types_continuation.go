@@ -3,7 +3,9 @@
 package session
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 )
@@ -872,7 +874,7 @@ func NormalizeContinuationRetryOperation(op ContinuationRetryOperation) Continua
 	op.Contract = strings.TrimSpace(op.Contract)
 	op.OperationKind = normalizeEnumValue(op.OperationKind)
 	op.Tool = strings.TrimSpace(op.Tool)
-	op.InputJSON = strings.TrimSpace(op.InputJSON)
+	op.InputJSON = canonicalContinuationRetryInputJSON(op.InputJSON)
 	op.SubjectKind = normalizeEnumValue(op.SubjectKind)
 	op.SubjectRef = strings.TrimSpace(op.SubjectRef)
 	op.RequestInstanceID = strings.TrimSpace(op.RequestInstanceID)
@@ -880,6 +882,28 @@ func NormalizeContinuationRetryOperation(op ContinuationRetryOperation) Continua
 		return ContinuationRetryOperation{}
 	}
 	return op
+}
+
+func canonicalContinuationRetryInputJSON(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var value any
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return raw
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return raw
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return raw
+	}
+	return string(encoded)
 }
 
 func (op ContinuationRetryOperation) Active() bool {

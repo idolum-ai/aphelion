@@ -129,6 +129,90 @@ func TestContinuationRecoveryContractRequiresSessionIDForNewContracts(t *testing
 	}
 }
 
+func TestContinuationRecoveryContractCanonicalizesRetryInputJSON(t *testing.T) {
+	t.Parallel()
+
+	base := ContinuationRecoveryContractInput{
+		RequestInstanceID:   "canonical-retry-json-instance",
+		SessionID:           "telegram_dm:1001",
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          ContinuationRecoverySubjectRef(ContinuationLeaseClassChildWake, "child-alpha", "grant-child-alpha-wake", "durable_agent", "wake_once", ""),
+		Principal:           "telegram:1001",
+		LeaseClass:          ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{"wake_named_child"},
+		Constraints:         map[string]string{"agent_id": "child-alpha"},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             "child-alpha",
+		GrantID:             "grant-child-alpha-wake",
+		GrantTargetResource: "durable_agent:child-alpha:wake_once",
+		RetryOperation: ContinuationRetryOperation{
+			Contract:          ContinuationRecoveryRetryVersion,
+			OperationKind:     "durable_agent_wake_once",
+			Tool:              "durable_agent",
+			InputJSON:         `{"agent_id":"child-alpha","action":"wake_once"}`,
+			SubjectKind:       "continuation_lease_request",
+			SubjectRef:        ContinuationRecoverySubjectRef(ContinuationLeaseClassChildWake, "child-alpha", "grant-child-alpha-wake", "durable_agent", "wake_once", ""),
+			RequestInstanceID: "canonical-retry-json-instance",
+		},
+		CreatedAt: time.Now().UTC(),
+	}
+	left, err := CompileContinuationRecoveryContract(base)
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract(left) err = %v", err)
+	}
+	base.RetryOperation.InputJSON = "{\n  \"action\": \"wake_once\",\n  \"agent_id\": \"child-alpha\"\n}"
+	right, err := CompileContinuationRecoveryContract(base)
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract(right) err = %v", err)
+	}
+	if left.ContractID != right.ContractID || left.ContractHash != right.ContractHash {
+		t.Fatalf("contract identity differs for semantically equal retry JSON: left=%s/%s right=%s/%s", left.ContractID, left.ContractHash, right.ContractID, right.ContractHash)
+	}
+	if left.RetryOperation.InputJSON != `{"action":"wake_once","agent_id":"child-alpha"}` ||
+		right.RetryOperation.InputJSON != `{"action":"wake_once","agent_id":"child-alpha"}` {
+		t.Fatalf("retry input not canonicalized: left=%q right=%q", left.RetryOperation.InputJSON, right.RetryOperation.InputJSON)
+	}
+	base.RetryOperation.InputJSON = `{"action":"wake_once","agent_id":"child-beta"}`
+	changed, err := CompileContinuationRecoveryContract(base)
+	if err == nil {
+		t.Fatalf("CompileContinuationRecoveryContract(changed) contract=%#v, want exact agent rejection", changed)
+	}
+}
+
+func TestContinuationRecoveryContractRejectsInvalidRetryInputJSON(t *testing.T) {
+	t.Parallel()
+
+	_, err := CompileContinuationRecoveryContract(ContinuationRecoveryContractInput{
+		RequestInstanceID:   "invalid-retry-json-instance",
+		SessionID:           "telegram_dm:1001",
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          ContinuationRecoverySubjectRef(ContinuationLeaseClassChildWake, "child-alpha", "grant-child-alpha-wake", "durable_agent", "wake_once", ""),
+		Principal:           "telegram:1001",
+		LeaseClass:          ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{"wake_named_child"},
+		Constraints:         map[string]string{"agent_id": "child-alpha"},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             "child-alpha",
+		GrantID:             "grant-child-alpha-wake",
+		GrantTargetResource: "durable_agent:child-alpha:wake_once",
+		RetryOperation: ContinuationRetryOperation{
+			Contract:          ContinuationRecoveryRetryVersion,
+			OperationKind:     "durable_agent_wake_once",
+			Tool:              "durable_agent",
+			InputJSON:         `{"action":"wake_once","agent_id":"child-alpha"`,
+			SubjectKind:       "continuation_lease_request",
+			SubjectRef:        ContinuationRecoverySubjectRef(ContinuationLeaseClassChildWake, "child-alpha", "grant-child-alpha-wake", "durable_agent", "wake_once", ""),
+			RequestInstanceID: "invalid-retry-json-instance",
+		},
+		CreatedAt: time.Now().UTC(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "decode child_wake recovery retry input") {
+		t.Fatalf("CompileContinuationRecoveryContract() err = %v, want invalid retry JSON rejection", err)
+	}
+}
+
 func TestContinuationRecoveryContractRejectsTamperedContractIdentityTerms(t *testing.T) {
 	t.Parallel()
 
