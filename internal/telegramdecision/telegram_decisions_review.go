@@ -108,9 +108,7 @@ func (h *DecisionHandler) handleReviewEventCallback(ctx context.Context, cb tele
 		record = refreshed
 	}
 	text := reviewEventConfirmationText(label, record, *event)
-	if grantActivated {
-		text = strings.TrimSpace(text + "\n\nGrant activation: active\nGrant: " + grant.GrantID)
-	}
+	text = reviewEventConfirmationWithGrantActivation(text, record, grant, grantActivated, review.Status)
 	_ = h.editReviewEventCallbackMessage(ctx, cb, text)
 	return h.answerReviewEventCallback(ctx, cb, "")
 }
@@ -193,10 +191,21 @@ func (h *DecisionHandler) applyReviewEventReaction(ctx context.Context, msg core
 		record = refreshed
 	}
 	text := reviewEventConfirmationText(label, record, event)
-	if grantActivated {
-		text = strings.TrimSpace(text + "\n\nGrant activation: active\nGrant: " + grant.GrantID)
-	}
+	text = reviewEventConfirmationWithGrantActivation(text, record, grant, grantActivated, review.Status)
 	return h.editReviewEventReactionMessage(ctx, msg, text)
+}
+
+func reviewEventConfirmationWithGrantActivation(text string, record session.CapabilityRequest, grant session.CapabilityGrant, activated bool, status session.CapabilityReviewStatus) string {
+	if session.NormalizeCapabilityReviewStatus(status) != session.CapabilityReviewStatusApproved {
+		return strings.TrimSpace(text)
+	}
+	if activated {
+		return strings.TrimSpace(text + "\n\nGrant activation: active\nGrant: " + strings.TrimSpace(grant.GrantID))
+	}
+	if linked := strings.TrimSpace(record.GrantID); linked != "" {
+		return strings.TrimSpace(text + "\n\nGrant activation: already linked\nGrant: " + linked)
+	}
+	return strings.TrimSpace(text + "\n\nGrant activation: not created\nNext: run capability_authority grant_set for this approved request before using the capability.")
 }
 
 func (h *DecisionHandler) editReviewEventReactionMessage(ctx context.Context, msg core.InboundMessage, text string) error {

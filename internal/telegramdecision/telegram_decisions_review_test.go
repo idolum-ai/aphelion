@@ -892,8 +892,11 @@ func TestHandleReviewEventCallbackDoesNotActivateUncompiledGrant(t *testing.T) {
 	if updated.GrantID != "" {
 		t.Fatalf("GrantID = %q, want no grant for review-only approval", updated.GrantID)
 	}
-	if len(sender.edits) != 1 || strings.Contains(sender.edits[0].text, "Grant activation: active") {
-		t.Fatalf("edits = %#v, want approval without grant activation", sender.edits)
+	if len(sender.edits) != 1 ||
+		strings.Contains(sender.edits[0].text, "Grant activation: active") ||
+		!strings.Contains(sender.edits[0].text, "Grant activation: not created") ||
+		!strings.Contains(sender.edits[0].text, "capability_authority grant_set") {
+		t.Fatalf("edits = %#v, want explicit approval without grant activation", sender.edits)
 	}
 }
 
