@@ -229,18 +229,10 @@ func (r *Runtime) adjudicateFinalReplyExecutionClaimsWithContext(ctx context.Con
 	if r == nil || r.store == nil || reply == "" {
 		return out
 	}
-	visibleApprovalRequest := finalReplyContainsVisibleApprovalRequest(reply)
-	claims := r.interpretFinalReplyExecutionClaims(ctx, reply)
-	if visibleApprovalRequest {
-		claims = append(claims, core.NormalizeInterpretationClaim(core.InterpretationClaim{
-			Intent:             "reply_execution_claim",
-			Scope:              "final_reply",
-			Risk:               []string{"approval_request"},
-			Confidence:         "high",
-			Source:             "runtime_lexical_guard",
-			ProposedNextAction: "materialize_typed_approval_surface",
-		}))
+	if !r.shouldInterpretFinalReplyExecutionClaims(key) {
+		return out
 	}
+	claims := r.interpretFinalReplyExecutionClaims(ctx, reply)
 	if len(claims) == 0 {
 		return out
 	}
@@ -332,13 +324,9 @@ func (r *Runtime) adjudicateFinalReplyExecutionClaimsWithContext(ctx context.Con
 	}
 	if executionClaimsInclude(claims, "approval_request") &&
 		!out.HasPendingContinuationApproval &&
-		!out.HasActiveContinuationAuthority {
+		!out.HasActiveContinuationAuthority &&
+		!out.HasMaterializableOperationFollow {
 		out.Findings = append(out.Findings, executionClaimFinding("approval_request", "approval-request claim has no pending approval state", out))
-	}
-	if visibleApprovalRequest && !executionClaimFindingsInclude(out.Findings, "approval_request") {
-		finding := executionClaimFinding("approval_request", "visible approval request must be materialized as a typed approval card, not prose", out)
-		finding.RequiredBehavior = "Do not ask the operator to approve authority in prose. Materialize the typed approval card, or say a fresh bounded approval is needed. Do not prepend a correction banner."
-		out.Findings = append(out.Findings, finding)
 	}
 	return out
 }
@@ -370,7 +358,58 @@ func (r *Runtime) adjudicationWithContinuationSurfaceState(key session.SessionKe
 			out.HasMaterializableOperationFollow = true
 		}
 	}
+	for _, operationKind := range []string{"continuation_lease_request", "authority_bundle_request"} {
+		actions, err := r.store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", operationKind, 1)
+		if err == nil && len(actions) > 0 {
+			out.HasMaterializableOperationFollow = true
+			break
+		}
+	}
 	return out
+}
+
+func (r *Runtime) shouldInterpretFinalReplyExecutionClaims(key session.SessionKey) bool {
+	if r == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(r.governorBackend), "codex") {
+		return true
+	}
+	return r.hasFinalReplyContinuationOrApprovalSurface(key, time.Now().UTC())
+}
+
+func (r *Runtime) hasFinalReplyContinuationOrApprovalSurface(key session.SessionKey, now time.Time) bool {
+	if r == nil || r.store == nil {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	if cont, exists, err := r.store.ContinuationStateIfExists(key); err == nil && exists {
+		cont = session.NormalizeContinuationState(cont)
+		if cont.Status == session.ContinuationStatusApproved && cont.ContinuationLease.ActiveAt(now) && cont.RemainingTurns > 0 {
+			return true
+		}
+		if continuationStateHasFreshPendingLease(cont, now) {
+			return true
+		}
+	}
+	if opState, err := r.store.OperationState(key); err == nil {
+		opState = session.NormalizeOperationState(opState)
+		if pendingOperationProposalNeedsButton(opState.Proposal) ||
+			pendingOperationPlanLeaseNeedsButton(opState.PlanLease) ||
+			operationHasMaterializablePhaseApproval(opState) {
+			return true
+		}
+	}
+	for _, operationKind := range []string{"continuation_lease_request", "authority_bundle_request"} {
+		actions, err := r.store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", operationKind, 1)
+		if err == nil && len(actions) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func operationHasMaterializablePhaseApproval(opState session.OperationState) bool {
@@ -595,61 +634,11 @@ func (r *Runtime) interpretFinalReplyExecutionClaims(ctx context.Context, reply 
 	return out
 }
 
-func finalReplyContainsVisibleApprovalRequest(reply string) bool {
-	reply = strings.TrimSpace(reply)
-	if reply == "" {
+func (r *Runtime) finalReplyHasTypedApprovalRequest(ctx context.Context, key session.SessionKey, reply string) bool {
+	if !r.shouldInterpretFinalReplyExecutionClaims(key) {
 		return false
 	}
-	lower := strings.ToLower(reply)
-	normalized := strings.Join(strings.Fields(strings.NewReplacer(
-		"\t", " ",
-		"\r", " ",
-		"\n", " ",
-	).Replace(lower)), " ")
-	for _, phrase := range []string{
-		"next approval needed",
-		"need a fresh bounded approval",
-		"need fresh bounded approval",
-		"needs a fresh bounded approval",
-		"needs fresh bounded approval",
-		"approve granting",
-		"approve grant",
-		"approve this bounded",
-		"approve one bounded",
-		"approve a bounded",
-		"approve this exact",
-		"approve one exact",
-		"approve an exact",
-		"approve this fresh bounded",
-		"approve one fresh bounded",
-		"approve a fresh bounded",
-		"approve this read-only",
-		"approve one read-only",
-		"approve a read-only",
-		"approve this repair",
-		"approve one repair",
-		"approve a repair",
-		"approve this repair window",
-		"approve one repair window",
-		"approve a repair window",
-		"approve this approval window",
-		"approve one approval window",
-		"approve an approval window",
-	} {
-		if strings.Contains(normalized, phrase) {
-			return true
-		}
-	}
-	for _, line := range strings.Split(lower, "\n") {
-		line = strings.TrimSpace(strings.Trim(line, "-*• \t"))
-		if strings.HasPrefix(line, "approve this ") ||
-			strings.HasPrefix(line, "approve one ") ||
-			strings.HasPrefix(line, "approve a ") ||
-			strings.HasPrefix(line, "please approve ") {
-			return true
-		}
-	}
-	return false
+	return executionClaimsInclude(r.interpretFinalReplyExecutionClaims(ctx, reply), "approval_request")
 }
 
 func executionClaimRisks(risks []string) []string {

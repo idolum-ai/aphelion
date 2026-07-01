@@ -378,6 +378,7 @@ func TestApplyTurnConstitutionNeutralizesVisibleApprovalRequest(t *testing.T) {
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.repairReplyText = "I need a fresh bounded approval before continuing."
+	provider.interpretationReplyText = fakeApprovalRequestInterpretationReply()
 
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -404,7 +405,7 @@ func TestApplyTurnConstitutionNeutralizesVisibleApprovalRequest(t *testing.T) {
 		prompt.RuntimeAwareness{},
 		core.MaterialPacket{},
 		"",
-		"I can continue.\n\nPlease approve this exact repair window:\n- inspect runtime state\n- stop after one result",
+		"I’m ready, but the safe path needs operator authority.\n\nUse the approval surface I described in the previous turn.",
 		nil,
 		auditRecorder,
 	)
@@ -417,6 +418,39 @@ func TestApplyTurnConstitutionNeutralizesVisibleApprovalRequest(t *testing.T) {
 	}
 	if !containsViolationRule(audit.ConstitutionViolations, constitutionRuleExecutionClaimUngrounded) {
 		t.Fatalf("violations = %#v, want execution claim grounding rule", audit.ConstitutionViolations)
+	}
+}
+
+func TestFinalReplyApprovalRequestInterpretationRunsUnderCodexGovernor(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.interpretationReplyText = fakeApprovalRequestInterpretationReply()
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.governorBackend = "codex"
+
+	key := session.SessionKey{ChatID: 9036, UserID: 0, Scope: telegramDMScopeRef(9036)}
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         "child_wake:idolum-email:grant-idolum-email-wake:tool=durable_agent:action=wake_once",
+		NextAction:         "show the approval card",
+		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: `{"action":"request_continuation_lease","contract_id":"crc-test","recovery_contract":"aphelion.recovery_handoff.v1","recovery_operation_kind":"continuation_lease_request"}`,
+		CreatedAt:          time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("RecordNextAction() err = %v", err)
+	}
+
+	if !rt.finalReplyHasTypedApprovalRequest(context.Background(), key, "typed interpretation should classify this surface") {
+		t.Fatal("finalReplyHasTypedApprovalRequest() = false, want approval_request under codex governor with approval surface")
 	}
 }
 

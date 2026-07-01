@@ -336,6 +336,9 @@ func fakeInterpretationClaimsReply(raw string) string {
 			strings.Contains(text, "cannot continue") ||
 			strings.Contains(text, "can't continue")
 		if !prior && !suggestion && !negated {
+			if needsApproval {
+				addExecutionClaim("approval_request")
+			}
 			if strings.Contains(text, "done") || strings.Contains(text, "finished") || strings.Contains(text, "completed") || strings.Contains(text, "all set") {
 				addExecutionClaim("completion")
 			}
@@ -377,6 +380,10 @@ func fakeInterpretationClaimsReply(raw string) string {
 		Claims:        claims,
 	})
 	return interpretationClaimsMarker + ": " + string(rawContract)
+}
+
+func fakeApprovalRequestInterpretationReply() string {
+	return interpretationClaimsMarker + `: {"schema_version":"` + interpretationClaimsSchema + `","surface":"final_reply","claims":[{"intent":"reply_execution_claim","scope":"final_reply","risk":["approval_request"],"confidence":"high","source":"test_typed_interpretation","proposed_next_action":"materialize_typed_approval_surface"}]}`
 }
 
 type fakeSender struct {

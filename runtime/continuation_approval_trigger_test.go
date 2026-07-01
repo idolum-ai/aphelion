@@ -456,6 +456,106 @@ func TestPositiveReactionSurfacesPendingContinuationApprovalCard(t *testing.T) {
 	}
 }
 
+func TestDeliveryTypedApprovalRequestSurfacesCardAndSuppressesProse(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.interpretationReplyText = fakeApprovalRequestInterpretationReply()
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8126, UserID: 0, Scope: telegramDMScopeRef(8126)}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	seedRuntimeWakeAgent(t, store, "idolum-email", true)
+	seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-delivery-surfaces-approval",
+		Objective: "Surface the pending approval card from delivery.",
+		Status:    session.OperationStatusBlocked,
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed operation) err = %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "idolum-email", "grant-idolum-email-wake", "durable_agent", "wake_once", ""),
+		CausalRefs:         []string{"test:delivery-approval-request"},
+		NextAction:         "show the approval card for one bounded child wake",
+		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		RetryPolicy:        "ask_for_grant",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: runtimeChildWakeApprovalRequestJSON(t, store, key, "idolum-email", "delivery-surfaces-child-wake"),
+		OperatorProjection: "Approve one bounded child wake.",
+		CreatedAt:          now,
+	}); err != nil {
+		t.Fatalf("RecordNextAction() err = %v", err)
+	}
+	prose := "I’m ready.\n\nSend this exact approval:\n\nI approve one child-local wake for idolum-email."
+	port := &turnDeliveryPort{
+		runtime:        rt,
+		key:            key,
+		sess:           sess,
+		msg:            core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, SenderName: "admin", Text: "try again", MessageID: 1},
+		deliver:        true,
+		recordOutbound: true,
+		audit:          newTurnAuditRecorder(key, "telegram", string(principal.RoleAdmin), "try again"),
+	}
+
+	result := &turn.Result{VisibleReply: prose, Turn: &core.TurnResult{Text: prose}}
+	if _, err := port.Deliver(context.Background(), turn.DeliveryRequest{
+		Message: core.OutboundMessage{ChatID: key.ChatID, Text: prose},
+		Result:  result,
+	}); err != nil {
+		t.Fatalf("Deliver() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	sentCount := len(sender.sent)
+	sentText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[0].text
+	}
+	if sentCount > 0 {
+		sentText = sender.sent[sentCount-1].Text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 || !strings.Contains(inlineText, "idolum-email") {
+		t.Fatalf("inline count/text = %d/%q, want one idolum-email approval card", inlineCount, inlineText)
+	}
+	if sentText != "I surfaced the approval card." {
+		t.Fatalf("sent text = %q, want prose suppressed after card materialization", sentText)
+	}
+	if strings.Contains(result.VisibleReply, "Send this exact approval") || strings.Contains(result.Turn.Text, "Send this exact approval") {
+		t.Fatalf("result = %#v, want exact approval prose suppressed", result)
+	}
+}
+
 func TestRetryTextMaterializesFreshChildWakeApprovalFromRepairBlocker(t *testing.T) {
 	t.Parallel()
 

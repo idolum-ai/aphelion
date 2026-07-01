@@ -17,6 +17,7 @@ import (
 
 func TestDeliveryMaterializesDeniedCapabilityAccessApprovalCard(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.interpretationReplyText = fakeApprovalRequestInterpretationReply()
 	tools := toolpkg.NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
 	rt, err := New(cfg, store, provider, tools, sender)
 	if err != nil {
@@ -94,6 +95,7 @@ func TestDeliveryMaterializesDeniedCapabilityAccessApprovalCard(t *testing.T) {
 
 func TestDeliveryDoesNotMaterializeCapabilityCardWithoutDeniedAccessEvidence(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.interpretationReplyText = fakeApprovalRequestInterpretationReply()
 	tools := toolpkg.NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
 	rt, err := New(cfg, store, provider, tools, sender)
 	if err != nil {

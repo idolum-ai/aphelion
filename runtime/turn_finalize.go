@@ -790,7 +790,7 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 	if _, ok := turnResultBudgetRecoveryFromTurnResult(req.Result); ok {
 		return p.deliverBudgetRecovery(ctx, req)
 	}
-	visibleApprovalRequest := finalReplyContainsVisibleApprovalRequest(req.Message.Text)
+	typedApprovalRequest := p.runtime.finalReplyHasTypedApprovalRequest(ctx, p.key, req.Message.Text)
 	if strings.TrimSpace(req.Message.Text) != "" {
 		originalText := strings.TrimSpace(req.Message.Text)
 		guarded := p.runtime.neutralizeUngroundedDeliveryClaims(ctx, p.key, p.currentRunID(), req.Message.Text, p.audit)
@@ -807,9 +807,19 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 			}
 		}
 	}
-	if visibleApprovalRequest || turnAuditHasExecutionClaimFinding(p.audit, "approval_request") {
-		if _, err := p.runtime.materializePendingOperationProposalApprovalLocked(ctx, p.key, p.msg, req.Message.Text, req.Result); err != nil {
+	if typedApprovalRequest || turnAuditHasExecutionClaimFinding(p.audit, "approval_request") {
+		materializedApproval, err := p.runtime.materializePendingOperationProposalApprovalLocked(ctx, p.key, p.msg, req.Message.Text, req.Result)
+		if err != nil {
 			return nil, fmt.Errorf("materialize approval requested by visible reply: %w", err)
+		}
+		if materializedApproval {
+			req.Message.Text = "I surfaced the approval card."
+			if req.Result != nil {
+				req.Result.VisibleReply = req.Message.Text
+				if req.Result.Turn != nil {
+					req.Result.Turn.Text = req.Message.Text
+				}
+			}
 		}
 		materializedCapabilityGrant, err := p.runtime.materializeDeniedCapabilityAccessApproval(ctx, p.key, p.msg, p.audit, time.Now().UTC())
 		if err != nil {

@@ -31,13 +31,16 @@ type interpretationRequest struct {
 }
 
 func (r *Runtime) interpretCurrentTurnClaims(ctx context.Context, req interpretationRequest) []core.InterpretationClaim {
-	provider := r.interpretationProvider()
-	if provider == nil {
-		return nil
-	}
 	req.Surface = strings.TrimSpace(req.Surface)
 	req.Text = strings.TrimSpace(req.Text)
 	if req.Surface == "" {
+		return nil
+	}
+	if !r.shouldInterpretCurrentTurnSurface(req) {
+		return nil
+	}
+	provider := r.interpretationProviderForSurface(req.Surface)
+	if provider == nil {
 		return nil
 	}
 	raw, err := json.Marshal(req)
@@ -53,7 +56,7 @@ func (r *Runtime) interpretCurrentTurnClaims(ctx context.Context, req interpreta
 				"Do not grant authority and do not decide execution. Runtime validators will check claims against leases, grants, operation state, TES, and sandbox policy.",
 				"Return exactly one line: " + interpretationClaimsMarker + `: {"schema_version":"` + interpretationClaimsSchema + `","surface":"...","claims":[...]}`,
 				"Allowed claim intents include reply_execution_claim, pending_media_intent, media_reply_modality, authority_classification, consent_requirement, continuation_goal, and missing_context.",
-				"For final replies, emit reply_execution_claim when the text claims current-turn completion, tool execution, test execution, durable-agent lifecycle work, active continuation execution, or granted approval/authority. Use risks completion, tool_execution, test_execution, durable_agent, continuation_execution, and approval_granted. Do not emit continuation_execution or approval_granted for explicit parked states such as needing fresh approval before continuing.",
+				"For final replies, emit reply_execution_claim when the text claims current-turn completion, tool execution, test execution, durable-agent lifecycle work, active continuation execution, granted approval/authority, or asks the operator for approval/authority. Use risks completion, tool_execution, test_execution, durable_agent, continuation_execution, approval_granted, and approval_request. Emit approval_request when the text asks the user to approve, requests an approval card/prompt, or asks the user to reply with authorization text. Do not emit continuation_execution or approval_granted for explicit parked states such as needing fresh approval before continuing.",
 				"For goal continuation, emit continuation_goal with scope goal_continuation only when the supplied surface explicitly supports a completed approved/consumed phase and a distinct follow-up approval proposal. Use risks prior_phase_completed, remaining_goal_work, branch_pr_followup, release_readiness_followup, or interrupted_or_failed. Use proposed_next_action propose_read_only_next_phase, propose_commit_push_pr, propose_release_readiness, or do_not_infer. If the phase was budget-interrupted, failed, unclear, or only asks to retry unfinished work, emit interrupted_or_failed or return no proposal action.",
 				"For media turns, emit pending_media_intent for a next-audio transcription instruction, or media_reply_modality for a current audio transcription instruction.",
 				"If no typed claim is present, return an empty claims array.",
@@ -71,12 +74,32 @@ func (r *Runtime) interpretCurrentTurnClaims(ctx context.Context, req interpreta
 	return parseInterpretationClaimsContract(resp.Content)
 }
 
-func (r *Runtime) interpretationProvider() agent.Provider {
+func (r *Runtime) shouldInterpretCurrentTurnSurface(req interpretationRequest) bool {
+	if r == nil {
+		return false
+	}
+	switch strings.TrimSpace(req.Surface) {
+	case "inbound_media_instruction":
+		if strings.EqualFold(strings.TrimSpace(r.governorBackend), "codex") && !req.HasAudio && !req.HasMedia {
+			return false
+		}
+		return true
+	case "final_reply":
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(r.governorBackend), "codex") {
+		return false
+	}
+	return true
+}
+
+func (r *Runtime) interpretationProviderForSurface(surface string) agent.Provider {
 	if r == nil {
 		return nil
 	}
-	if strings.EqualFold(strings.TrimSpace(r.governorBackend), "codex") {
-		return nil
+	surface = strings.TrimSpace(surface)
+	if surface == "final_reply" && strings.EqualFold(strings.TrimSpace(r.governorBackend), "codex") && r.provider != nil {
+		return r.provider
 	}
 	if r.native != nil {
 		return r.native
