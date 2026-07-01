@@ -483,6 +483,87 @@ func TestStartupRecoveryLogsMaintenanceAnalysis(t *testing.T) {
 	}
 }
 
+func TestStartupRecoverySupersedesInterruptedRelayedProgressCard(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Recovered: inspect the child task result before retrying."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "child-progress-restart",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "test_adapter",
+		BootstrapLLM:       durableGroupTestBootstrapLLM(),
+		Status:             "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: durableWakeSyntheticChatID(agent.AgentID), UserID: 0, Scope: durableAgentScopeRef(agent)}
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load(durable key) err = %v", err)
+	}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindRecovery, "wake child-progress-restart")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if err := store.NoteTurnRunToolStart(run.ID, "durable_agent", `{"action":"wake_once","agent_id":"child-progress-restart"}`); err != nil {
+		t.Fatalf("NoteTurnRunToolStart() err = %v", err)
+	}
+	if err := store.UpdateTurnRunProgressMessage(run.ID, 55); err != nil {
+		t.Fatalf("UpdateTurnRunProgressMessage() err = %v", err)
+	}
+	rt.recordExecutionEvent(key, core.ExecutionEventDeliveryProgressSent, "progress", "bound", map[string]any{
+		"method":           "bind_existing",
+		"message_id":       55,
+		"chat_id":          int64(1001),
+		"run_id":           run.ID,
+		"progress_phase":   "turn_bound",
+		"transport_status": "acknowledged",
+	}, time.Now().UTC())
+
+	if err := rt.runStartupRecoveryOnce(context.Background(), time.Date(2026, time.April, 9, 20, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("runStartupRecoveryOnce() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	editClear := append([]messageEdit(nil), sender.editClear...)
+	sender.mu.Unlock()
+	if len(editClear) < 2 {
+		t.Fatalf("editClear = %#v, want inspecting and recovered stale-progress edits", editClear)
+	}
+	first := editClear[0]
+	last := editClear[len(editClear)-1]
+	if first.ChatID != 1001 || first.MessageID != 55 || !strings.Contains(first.Text, "Interrupted by restart") {
+		t.Fatalf("first stale progress edit = %#v, want review chat interrupted edit", first)
+	}
+	if last.ChatID != 1001 || last.MessageID != 55 || !strings.Contains(last.Text, "Recovered after restart") {
+		t.Fatalf("last stale progress edit = %#v, want review chat recovered edit", last)
+	}
+	if strings.Contains(last.Text, "Child is running") || strings.Contains(last.Text, "working") {
+		t.Fatalf("last stale progress edit = %q, want no stale working projection", last.Text)
+	}
+	events, err := store.ExecutionEventsByTurnRun(key, run.ID, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsByTurnRun() err = %v", err)
+	}
+	superseded := 0
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventDeliveryProgressEdited && event.Status == "superseded" {
+			superseded++
+		}
+	}
+	if superseded < 2 {
+		t.Fatalf("events = %#v, want stale progress superseded events", events)
+	}
+}
+
 func TestStartupRecoveryFlushesInterruptedChatMemory(t *testing.T) {
 	t.Parallel()
 

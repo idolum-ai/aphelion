@@ -55,6 +55,7 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 			log.Printf("WARN send tool progress chat_id=%d err=%v", p.chatID, err)
 			p.recordProgressEvent(core.ExecutionEventDeliveryProgressFailed, "failed", map[string]any{
 				"method":         "send",
+				"chat_id":        p.chatID,
 				"run_id":         p.runID,
 				"progress_phase": progressEventPhase(p.runID),
 				"error":          trimError(err.Error()),
@@ -73,6 +74,7 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 		p.saveProgressRenderCache(details, pair)
 		p.recordProgressEvent(core.ExecutionEventDeliveryProgressSent, "sent", map[string]any{
 			"message_id":                    msgID,
+			"chat_id":                       p.chatID,
 			"run_id":                        p.runID,
 			"progress_phase":                progressEventPhase(p.runID),
 			"view":                          progressViewName(details),
@@ -98,6 +100,7 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 			log.Printf("WARN edit tool progress inline chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
 			p.recordProgressEvent(core.ExecutionEventDeliveryProgressFailed, "failed", map[string]any{
 				"method":         "edit_inline",
+				"chat_id":        p.chatID,
 				"message_id":     p.messageID,
 				"run_id":         p.runID,
 				"progress_phase": progressEventPhase(p.runID),
@@ -115,6 +118,7 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 			p.saveProgressRenderCache(details, pair)
 			p.recordProgressEvent(core.ExecutionEventDeliveryProgressEdited, "edited", map[string]any{
 				"method":                        "edit_inline",
+				"chat_id":                       p.chatID,
 				"message_id":                    p.messageID,
 				"run_id":                        p.runID,
 				"progress_phase":                progressEventPhase(p.runID),
@@ -138,6 +142,7 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 				log.Printf("WARN edit tool progress clear keyboard chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
 				p.recordProgressEvent(core.ExecutionEventDeliveryProgressFailed, "failed", map[string]any{
 					"method":         "edit_clear_keyboard",
+					"chat_id":        p.chatID,
 					"message_id":     p.messageID,
 					"run_id":         p.runID,
 					"progress_phase": progressEventPhase(p.runID),
@@ -155,6 +160,7 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 				p.saveProgressRenderCache(details, pair)
 				p.recordProgressEvent(core.ExecutionEventDeliveryProgressEdited, "edited", map[string]any{
 					"method":                        "edit_clear_keyboard",
+					"chat_id":                       p.chatID,
 					"message_id":                    p.messageID,
 					"progress_delivery_duration_ms": durationMillis(time.Since(deliveryStarted)),
 					"run_id":                        p.runID,
@@ -180,6 +186,7 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 		log.Printf("WARN edit tool progress chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
 		p.recordProgressEvent(core.ExecutionEventDeliveryProgressFailed, "failed", map[string]any{
 			"method":         "edit_text",
+			"chat_id":        p.chatID,
 			"message_id":     p.messageID,
 			"run_id":         p.runID,
 			"progress_phase": progressEventPhase(p.runID),
@@ -198,6 +205,7 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 	p.saveProgressRenderCache(details, pair)
 	p.recordProgressEvent(core.ExecutionEventDeliveryProgressEdited, "edited", map[string]any{
 		"method":                        "edit_text",
+		"chat_id":                       p.chatID,
 		"message_id":                    p.messageID,
 		"progress_delivery_duration_ms": durationMillis(time.Since(deliveryStarted)),
 		"run_id":                        p.runID,

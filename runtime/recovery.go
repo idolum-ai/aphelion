@@ -98,6 +98,7 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 		r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryDetected, "recovery", "detected", map[string]any{
 			"interrupted_count": len(interrupted),
 		}, time.Now().UTC())
+		r.supersedeInterruptedProgressMessages(ctx, interrupted, "inspecting")
 	}
 	reconciledIngress, err := r.store.ReconcileRunningTelegramIngressWithTerminalTurnRuns()
 	if err != nil {
@@ -294,6 +295,7 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	if err := r.store.MarkTurnRunsRecovered(ids, recoverySummary); err != nil {
 		return fmt.Errorf("mark turn runs recovered: %w", err)
 	}
+	r.supersedeInterruptedProgressMessages(ctx, runs, "recovered")
 	if err := r.deliverStartupRecoveryCatchup(ctx, maintenanceSession.SystemPrompt, runs, recoverySummary); err != nil {
 		return fmt.Errorf("deliver startup recovery catch-up: %w", err)
 	}
@@ -382,6 +384,130 @@ func (r *Runtime) replayPendingTelegramIngress(ctx context.Context, surface stri
 		replayed++
 	}
 	return replayed, failed, nil
+}
+
+func (r *Runtime) supersedeInterruptedProgressMessages(ctx context.Context, runs []session.TurnRun, status string) {
+	if r == nil || r.store == nil || r.outbound == nil || len(runs) == 0 {
+		return
+	}
+	text := startupRecoveryProgressSupersedeText(status)
+	if text == "" {
+		return
+	}
+	clearer, hasClearer := r.outbound.(messageKeyboardClearer)
+	editor, hasEditor := r.outbound.(messageEditor)
+	if !hasClearer && !hasEditor {
+		return
+	}
+	for _, run := range runs {
+		if run.ProgressMessageID <= 0 {
+			continue
+		}
+		key := session.SessionKey{ChatID: run.ChatID, UserID: run.UserID, Scope: run.Scope}
+		chatID := r.progressDeliveryChatIDForRun(key, run)
+		if chatID == 0 {
+			r.recordStartupRecoveryProgressSupersedeFailure(key, run, "startup_recovery_no_delivery_chat", fmt.Errorf("progress delivery chat unavailable"))
+			continue
+		}
+		method := "startup_recovery_edit_text"
+		var err error
+		if hasClearer {
+			method = "startup_recovery_clear_keyboard"
+			err = clearer.EditMessageTextWithoutInlineKeyboard(ctx, chatID, run.ProgressMessageID, text, "")
+		} else {
+			err = editor.EditMessageText(ctx, chatID, run.ProgressMessageID, text, "")
+		}
+		if err != nil {
+			r.recordStartupRecoveryProgressSupersedeFailure(key, run, method, err)
+			r.reportOperationalIssueAsync("startup_recovery_progress", fmt.Errorf("supersede progress run_id=%d msg_id=%d: %w", run.ID, run.ProgressMessageID, err))
+			continue
+		}
+		r.recordExecutionEvent(key, core.ExecutionEventDeliveryProgressEdited, "progress", "superseded", map[string]any{
+			"method":           method,
+			"message_id":       run.ProgressMessageID,
+			"chat_id":          chatID,
+			"run_id":           run.ID,
+			"progress_phase":   "startup_recovery",
+			"source_class":     "canonical",
+			"source_surface":   "outbound_transport_ledger",
+			"visibility":       "human_render_unknown",
+			"transport_status": "acknowledged",
+		}, time.Now().UTC())
+	}
+}
+
+func startupRecoveryProgressSupersedeText(status string) string {
+	switch strings.TrimSpace(status) {
+	case "inspecting":
+		return "Interrupted by restart.\n\nStartup recovery is inspecting persisted state."
+	case "recovered":
+		return "Recovered after restart.\n\nStartup recovery recorded the interrupted turn. Continue from the newest recovery, approval, or status surface."
+	default:
+		return ""
+	}
+}
+
+func (r *Runtime) progressDeliveryChatIDForRun(key session.SessionKey, run session.TurnRun) int64 {
+	if r == nil || r.store == nil || run.ProgressMessageID <= 0 {
+		return 0
+	}
+	events, err := r.store.ExecutionEventsByTurnRun(key, run.ID, 80)
+	if err != nil {
+		log.Printf("WARN lookup progress delivery chat failed run_id=%d msg_id=%d err=%v", run.ID, run.ProgressMessageID, err)
+		return startupRecoveryProgressFallbackChatID(run)
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		switch strings.TrimSpace(event.EventType) {
+		case core.ExecutionEventDeliveryProgressSent, core.ExecutionEventDeliveryProgressEdited:
+		default:
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			continue
+		}
+		messageID, ok := payloadInt64(payload, "message_id")
+		if !ok || messageID != run.ProgressMessageID {
+			continue
+		}
+		chatID, ok := payloadInt64(payload, "chat_id")
+		if ok && chatID > 0 {
+			return chatID
+		}
+	}
+	return startupRecoveryProgressFallbackChatID(run)
+}
+
+func startupRecoveryProgressFallbackChatID(run session.TurnRun) int64 {
+	if run.ChatID <= 0 {
+		return 0
+	}
+	switch run.Scope.Kind {
+	case session.ScopeKindDurableAgent, session.ScopeKindHeartbeat, session.ScopeKindRecovery:
+		return 0
+	default:
+		return run.ChatID
+	}
+}
+
+func (r *Runtime) recordStartupRecoveryProgressSupersedeFailure(key session.SessionKey, run session.TurnRun, method string, err error) {
+	if r == nil {
+		return
+	}
+	payload := map[string]any{
+		"method":         strings.TrimSpace(method),
+		"message_id":     run.ProgressMessageID,
+		"run_id":         run.ID,
+		"progress_phase": "startup_recovery",
+		"source_class":   "canonical",
+		"source_surface": "outbound_transport_ledger",
+		"visibility":     "human_render_unknown",
+	}
+	if err != nil {
+		payload["error"] = trimError(err.Error())
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventDeliveryProgressFailed, "progress", "failed", payload, time.Now().UTC())
 }
 
 func telegramIngressReplayMessage(record session.TelegramIngressUpdateRecord) (core.InboundMessage, error) {

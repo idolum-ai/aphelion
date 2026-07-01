@@ -329,6 +329,52 @@ func TestToolProgressReporterRecordsDeliveryFailureDiagnostics(t *testing.T) {
 	}
 }
 
+func TestToolProgressReporterRecordsEditFailureDiagnostics(t *testing.T) {
+	cfg, store, provider, _ := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, &fakeSender{})
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 7744, UserID: 0, Scope: telegramDMScopeRef(7744)}
+	sender := &fakeSender{editErr: errors.New("telegram editMessageText failed: message is not modified")}
+	reporter := &toolProgressReporter{
+		runtime:      rt,
+		executionKey: key,
+		sender:       sender,
+		editor:       sender,
+		chatID:       7744,
+		messageID:    44,
+		mode:         "all",
+		style:        "semantic",
+		window:       4,
+		seenKeys:     make(map[string]struct{}),
+	}
+	reporter.BindTurnRun(92)
+	reporter.Surface(context.Background(), "Child is running")
+
+	events, err := store.ExecutionEventsBySession(key, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	payload := payloadForEventType(events, core.ExecutionEventDeliveryProgressFailed)
+	if payload == nil {
+		t.Fatalf("events = %#v, want %s", events, core.ExecutionEventDeliveryProgressFailed)
+	}
+	if got := payloadString(payload, "method"); got != "edit_text" {
+		t.Fatalf("method = %q, want edit_text", got)
+	}
+	if got := payloadString(payload, "progress_phase"); got != "turn_bound" {
+		t.Fatalf("progress_phase = %q, want turn_bound", got)
+	}
+	if runID, ok := payloadInt64(payload, "run_id"); !ok || runID != 92 {
+		t.Fatalf("run_id = %d ok=%t, want 92", runID, ok)
+	}
+	if chatID, ok := payloadInt64(payload, "chat_id"); !ok || chatID != 7744 {
+		t.Fatalf("chat_id = %d ok=%t, want 7744", chatID, ok)
+	}
+}
+
 func TestToolProgressReporterInlineEditPayloadCarriesRunID(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)

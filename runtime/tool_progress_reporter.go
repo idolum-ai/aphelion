@@ -233,25 +233,51 @@ func (p *toolProgressReporter) BindTurnRun(runID int64) {
 	var (
 		messageID       int64
 		recordMessageID func(int64)
+		recordBindEvent bool
 	)
 	p.mu.Lock()
 	p.runID = runID
 	if p.suppressControls {
 		messageID = p.messageID
 		recordMessageID = p.recordMessageID
+		recordBindEvent = messageID > 0
 		p.mu.Unlock()
 		if messageID > 0 && recordMessageID != nil {
 			recordMessageID(messageID)
+		}
+		if recordBindEvent {
+			p.recordProgressBindEvent(runID, messageID)
 		}
 		return
 	}
 	p.controls = deliberationControlRows(runID, false)
 	messageID = p.messageID
 	recordMessageID = p.recordMessageID
+	recordBindEvent = messageID > 0
 	p.mu.Unlock()
 	if messageID > 0 && recordMessageID != nil {
 		recordMessageID(messageID)
 	}
+	if recordBindEvent {
+		p.recordProgressBindEvent(runID, messageID)
+	}
+}
+
+func (p *toolProgressReporter) recordProgressBindEvent(runID int64, messageID int64) {
+	if p == nil || runID <= 0 || messageID <= 0 {
+		return
+	}
+	p.recordProgressEvent(core.ExecutionEventDeliveryProgressSent, "bound", map[string]any{
+		"method":           "bind_existing",
+		"message_id":       messageID,
+		"chat_id":          p.chatID,
+		"run_id":           runID,
+		"progress_phase":   "turn_bound",
+		"source_class":     "canonical",
+		"source_surface":   "outbound_transport_ledger",
+		"visibility":       "human_render_unknown",
+		"transport_status": "acknowledged",
+	})
 }
 
 func (p *toolProgressReporter) SetHeadings(active string, done string) {
