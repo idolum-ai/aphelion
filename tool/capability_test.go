@@ -193,6 +193,53 @@ func TestCapabilityRequestParentAdminGrantFlow(t *testing.T) {
 	}
 }
 
+func TestCapabilityRequestSubmitPublishesCompiledGrantHandoff(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	requester := principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 300}
+
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), requester, key, "capability_request", json.RawMessage(`{
+		"action":"request_submit",
+		"request_id":"cap-github-draft-pr",
+		"kind":"external_account",
+		"target_resource":"github:idolum-ai/CopilotKit",
+		"requested_for":"telegram:300",
+		"purpose":"Push one reviewed branch and open one draft PR.",
+		"risk_class":"external_write",
+		"allowed_actions":["git_push","pull_request_create"],
+		"contract":{"allowed":["push reviewed branch","open draft PR"],"forbidden":["merge","release","print tokens"]},
+		"constraints":{"fork_repo":"idolum-ai/CopilotKit","draft_pr":true},
+		"expires_in_seconds":3600
+	}`))
+	if err != nil {
+		t.Fatalf("capability_request request_submit err = %v", err)
+	}
+	if !strings.Contains(out, "[CAPABILITY_REQUEST]") {
+		t.Fatalf("request_submit output = %q, want capability request", out)
+	}
+	open, err := store.OpenNextActionsBySessionSubject(key, "capability_request", "cap-github-draft-pr", 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySessionSubject() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one compiled grant handoff", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionBlockedNeedsAuthority ||
+		action.OperationTool != "capability_authority" ||
+		action.OperationKind != "capability_grant_review" ||
+		!strings.Contains(action.OperationInputJSON, `"action":"grant_set"`) ||
+		!strings.Contains(action.OperationInputJSON, `"request_id":"cap-github-draft-pr"`) ||
+		!strings.Contains(action.OperationInputJSON, `"target_resource":"github:idolum-ai/CopilotKit"`) ||
+		!strings.Contains(action.OperationInputJSON, `"git_push"`) ||
+		!strings.Contains(action.OperationInputJSON, `"pull_request_create"`) ||
+		!strings.Contains(action.OperationInputJSON, `"expires_in_seconds":3600`) {
+		t.Fatalf("compiled next action = %#v, want exact capability_authority grant_set handoff", action)
+	}
+}
+
 func TestMaterializeMissingGrantRequirementActivatesAlreadyApprovedRequest(t *testing.T) {
 	t.Parallel()
 

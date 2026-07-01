@@ -38,6 +38,11 @@ func TestHandleReviewEventCallbackApprovesCapabilityRequest(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
 	}
+	seedCompiledCapabilityGrantHandoff(t, store, session.SessionKey{
+		ChatID: 7001,
+		UserID: 1002,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "7001"},
+	}, "cap-button-approve", "telegram:1002", "use")
 	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
 		SourceChatID:      7001,
 		SourceUserID:      1002,
@@ -79,6 +84,43 @@ type reviewEventActionRunnerStub struct {
 	calls      []core.ReviewEventAction
 	eventIDs   []int64
 	returnText string
+}
+
+func seedCompiledCapabilityGrantHandoff(t *testing.T, store *session.SQLiteStore, key session.SessionKey, requestID string, principal string, action string) session.NextActionRecord {
+	t.Helper()
+	handoff := map[string]any{
+		"action":          "grant_set",
+		"request_id":      requestID,
+		"kind":            "generic_delegation",
+		"target_resource": "local-branch",
+		"principal":       principal,
+		"allowed_actions": []string{action},
+		"contract":        json.RawMessage(`{}`),
+		"constraints":     json.RawMessage(`{}`),
+		"grant_status":    "active",
+	}
+	raw, err := json.Marshal(handoff)
+	if err != nil {
+		t.Fatalf("Marshal(handoff) err = %v", err)
+	}
+	record, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           "next-" + requestID,
+		Key:                key,
+		Owner:              "capability_request",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "capability_request",
+		SubjectRef:         requestID,
+		NextAction:         "Approve the requested bounded grant.",
+		RequiredAuthority:  "capability_grant",
+		ResourceBlocker:    "missing_capability_grant",
+		OperationKind:      "capability_grant_review",
+		OperationTool:      "capability_authority",
+		OperationInputJSON: string(raw),
+	})
+	if err != nil {
+		t.Fatalf("RecordNextAction(%s) err = %v", requestID, err)
+	}
+	return record
 }
 
 func (s *reviewEventActionRunnerStub) HandleReviewEventAction(_ context.Context, _ telegram.CallbackQuery, event session.ReviewEvent, action core.ReviewEventAction) (string, error) {
@@ -160,6 +202,11 @@ func TestHandleReactionMessageApprovesDeliveredCapabilityReviewEvent(t *testing.
 	}); err != nil {
 		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
 	}
+	seedCompiledCapabilityGrantHandoff(t, store, session.SessionKey{
+		ChatID: 7001,
+		UserID: 1002,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "7001"},
+	}, "cap-reaction-approve", "telegram:1002", "use")
 	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
 		SourceChatID:      7001,
 		SourceUserID:      1002,
@@ -301,6 +348,11 @@ func TestHandleReactionMessageAdminApprovesAfterParentApproval(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
 	}
+	seedCompiledCapabilityGrantHandoff(t, store, session.SessionKey{
+		ChatID: 7001,
+		UserID: 2002,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "7001"},
+	}, "cap-reaction-admin-after-parent", "telegram:2002", "use")
 	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
 		SourceChatID:      7001,
 		SourceUserID:      2002,
@@ -597,6 +649,11 @@ func TestHandleReactionMessageDuplicateApprovalIsIdempotent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
 	}
+	seedCompiledCapabilityGrantHandoff(t, store, session.SessionKey{
+		ChatID: 7001,
+		UserID: 1002,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "7001"},
+	}, "cap-reaction-duplicate", "telegram:1002", "invoke")
 	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
 		SourceChatID:      7001,
 		SourceUserID:      1002,
@@ -719,6 +776,11 @@ func TestHandleReactionMessageSurvivesStoreReopen(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
 	}
+	seedCompiledCapabilityGrantHandoff(t, store, session.SessionKey{
+		ChatID: 7001,
+		UserID: 1002,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "7001"},
+	}, "cap-reaction-restart", "telegram:1002", "use")
 	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
 		SourceChatID:      7001,
 		SourceUserID:      1002,
@@ -904,7 +966,7 @@ func TestHandleReviewEventCallbackActivatesCompiledCapabilityGrant(t *testing.T)
 	}
 }
 
-func TestHandleReviewEventCallbackDoesNotActivateUncompiledGrant(t *testing.T) {
+func TestHandleReviewEventCallbackRejectsUncompiledGrantApproval(t *testing.T) {
 	t.Parallel()
 
 	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
@@ -951,17 +1013,20 @@ func TestHandleReviewEventCallbackDoesNotActivateUncompiledGrant(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("CapabilityRequest() ok=%t err=%v", ok, err)
 	}
-	if updated.ReviewStatus != session.CapabilityReviewStatusApproved {
-		t.Fatalf("ReviewStatus = %q, want approved", updated.ReviewStatus)
+	if updated.ReviewStatus != session.CapabilityReviewStatusProposed {
+		t.Fatalf("ReviewStatus = %q, want proposed because grant contract is missing", updated.ReviewStatus)
 	}
 	if updated.GrantID != "" {
 		t.Fatalf("GrantID = %q, want no grant for review-only approval", updated.GrantID)
 	}
 	if len(sender.edits) != 1 ||
 		strings.Contains(sender.edits[0].text, "Grant activation: active") ||
-		!strings.Contains(sender.edits[0].text, "Grant activation: not created") ||
-		!strings.Contains(sender.edits[0].text, "capability_authority grant_set") {
-		t.Fatalf("edits = %#v, want explicit approval without grant activation", sender.edits)
+		!strings.Contains(sender.edits[0].text, "missing compiled grant contract") ||
+		!strings.Contains(sender.edits[0].text, "structured allowed_actions") {
+		t.Fatalf("edits = %#v, want repair message for missing grant contract", sender.edits)
+	}
+	if len(sender.answers) != 1 || !strings.Contains(sender.answers[0].text, "exact grant contract") {
+		t.Fatalf("answers = %#v, want missing-grant-contract callback answer", sender.answers)
 	}
 }
 

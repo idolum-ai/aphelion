@@ -149,6 +149,9 @@ func (r *Registry) capabilityRequestSubmit(in capabilityInput, actor principal.P
 	}); err != nil {
 		return "", err
 	}
+	if err := r.recordCapabilityRequestGrantHandoff(key, record, in, time.Now().UTC()); err != nil {
+		return "", err
+	}
 	reviewTarget := capabilityRequestReviewTarget(in, key)
 	reviewEventID := int64(0)
 	if reviewTarget.ChatID != 0 {
@@ -159,6 +162,91 @@ func (r *Registry) capabilityRequestSubmit(in capabilityInput, actor principal.P
 		}
 	}
 	return renderCapabilityRequestWithReviewEvent("[CAPABILITY_REQUEST]", record, reviewEventID), nil
+}
+
+func (r *Registry) recordCapabilityRequestGrantHandoff(key session.SessionKey, record session.CapabilityRequest, in capabilityInput, now time.Time) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	requirement, ok := r.capabilityRequestGrantRequirement(record, in)
+	if !ok {
+		return nil
+	}
+	if !toolSessionKeyHasIdentity(key) {
+		return fmt.Errorf("capability_request request_submit with grant actions requires session identity")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	operation, err := compileCapabilityGrantRecoveryHandoff(record, requirement)
+	if err != nil {
+		return fmt.Errorf("compile capability request grant handoff: %w", err)
+	}
+	projection := requirement.OperatorProjection
+	if projection == "" {
+		projection = fmt.Sprintf("Approve the exact %s grant for %s on %s.", requirement.Kind, requirement.GrantedTo, requirement.TargetResource)
+	}
+	_, err = r.store.RecordNextAction(session.NextActionInput{
+		RecordID:           missingGrantNextActionRecordID(key, record.RequestID),
+		Key:                key,
+		Owner:              "capability_request",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "capability_request",
+		SubjectRef:         record.RequestID,
+		CausalRefs:         []string{"capability_request:" + record.RequestID, "capability:" + string(record.Kind) + ":" + record.TargetResource},
+		NextAction:         "approve and activate the exact compiled capability grant",
+		RequiredAuthority:  "capability_grant",
+		ResourceBlocker:    "missing_capability_grant",
+		RetryPolicy:        "retry_after_grant",
+		OperationKind:      operation.Kind,
+		OperationTool:      operation.Tool,
+		OperationInputJSON: operation.InputJSON,
+		OperatorProjection: projection,
+		CreatedAt:          now,
+	})
+	if err != nil {
+		return fmt.Errorf("record capability request grant handoff: %w", err)
+	}
+	return nil
+}
+
+func (r *Registry) capabilityRequestGrantRequirement(record session.CapabilityRequest, in capabilityInput) (missingGrantRequirement, bool) {
+	record = session.NormalizeCapabilityRequest(record)
+	actions := session.NormalizeCapabilityActions(in.AllowedActions)
+	if len(actions) == 0 {
+		if action := strings.TrimSpace(in.CapabilityAction); action != "" {
+			actions = session.NormalizeCapabilityActions([]string{action})
+		}
+	}
+	if len(actions) == 0 {
+		return missingGrantRequirement{}, false
+	}
+	var store *session.SQLiteStore
+	if r != nil {
+		store = r.store
+	}
+	grantedTo := canonicalDurableAgentPrincipalIfKnown(store, firstNonEmpty(strings.TrimSpace(in.Principal), record.RequestedFor, record.RequestedBy))
+	if grantedTo == "" {
+		return missingGrantRequirement{}, false
+	}
+	reviewSummary := firstNonEmpty(strings.TrimSpace(in.ReviewSummary), record.Purpose)
+	return missingGrantRequirement{
+		RequestID:          record.RequestID,
+		GrantID:            strings.TrimSpace(in.GrantID),
+		Kind:               record.Kind,
+		TargetResource:     record.TargetResource,
+		GrantedTo:          grantedTo,
+		AllowedActions:     actions,
+		Contract:           record.Contract,
+		Constraints:        record.Constraints,
+		Purpose:            record.Purpose,
+		RiskClass:          record.RiskClass,
+		ReviewSummary:      reviewSummary,
+		OperatorProjection: fmt.Sprintf("Approval will activate %s on %s for %s with actions %s.", record.Kind, record.TargetResource, grantedTo, strings.Join(actions, ",")),
+		OperationKind:      "capability_grant_review",
+		OperationTool:      "capability_authority",
+		ExpiresInSeconds:   in.ExpiresInSeconds,
+	}, true
 }
 
 type capabilityReviewTarget struct {

@@ -247,6 +247,12 @@ func compileCapabilityGrantRecoveryHandoff(request session.CapabilityRequest, re
 		"grant_status":      string(session.CapabilityGrantStatusActive),
 		"retry_after_grant": true,
 	}
+	if requirement.GrantID != "" {
+		payload["grant_id"] = requirement.GrantID
+	}
+	if requirement.ExpiresInSeconds > 0 {
+		payload["expires_in_seconds"] = requirement.ExpiresInSeconds
+	}
 	kind := firstNonEmpty(requirement.OperationKind, "capability_grant_review")
 	toolName := firstNonEmpty(requirement.OperationTool, "capability_authority")
 	op, err := compileRecoveryHandoffOperation(kind, toolName, payload)

@@ -18,6 +18,7 @@ import (
 
 type missingGrantRequirement struct {
 	RequestID          string
+	GrantID            string
 	Kind               session.CapabilityKind
 	TargetResource     string
 	GrantedTo          string
@@ -30,6 +31,7 @@ type missingGrantRequirement struct {
 	OperatorProjection string
 	OperationKind      string
 	OperationTool      string
+	ExpiresInSeconds   int
 }
 
 type MissingGrantRequirement = missingGrantRequirement
@@ -243,6 +245,7 @@ func (r *Registry) pendingCapabilityRequestReviewEventID(targetChatID int64, req
 
 func normalizeMissingGrantRequirement(requirement missingGrantRequirement) missingGrantRequirement {
 	requirement.RequestID = strings.TrimSpace(requirement.RequestID)
+	requirement.GrantID = strings.TrimSpace(requirement.GrantID)
 	requirement.Kind = session.NormalizeCapabilityKind(requirement.Kind)
 	requirement.TargetResource = strings.TrimSpace(requirement.TargetResource)
 	requirement.GrantedTo = strings.TrimSpace(requirement.GrantedTo)
@@ -264,6 +267,9 @@ func normalizeMissingGrantRequirement(requirement missingGrantRequirement) missi
 	requirement.OperatorProjection = strings.TrimSpace(requirement.OperatorProjection)
 	requirement.OperationKind = strings.TrimSpace(requirement.OperationKind)
 	requirement.OperationTool = strings.TrimSpace(requirement.OperationTool)
+	if requirement.ExpiresInSeconds < 0 {
+		requirement.ExpiresInSeconds = 0
+	}
 	if requirement.RequestID == "" {
 		requirement.RequestID = stableMissingGrantRequestID(requirement)
 	}
@@ -290,6 +296,8 @@ func stableMissingGrantRequestID(requirement missingGrantRequirement) string {
 		"allowed_actions": session.NormalizeCapabilityActions(requirement.AllowedActions),
 		"contract":        strings.TrimSpace(requirement.Contract),
 		"constraints":     strings.TrimSpace(requirement.Constraints),
+		"grant_id":        strings.TrimSpace(requirement.GrantID),
+		"expires_in":      requirement.ExpiresInSeconds,
 	}
 	raw, _ := json.Marshal(payload)
 	sum := sha256.Sum256(raw)

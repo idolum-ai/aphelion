@@ -85,6 +85,16 @@ func (h *DecisionHandler) handleReviewEventCallback(ctx context.Context, cb tele
 		_ = h.answerReviewEventCallback(ctx, cb, err.Error())
 		return nil
 	}
+	if status == session.CapabilityReviewStatusApproved {
+		materializable, err := h.capabilityRequestHasCompiledGrantHandoff(record)
+		if err != nil {
+			return err
+		}
+		if !materializable {
+			_ = h.editReviewEventCallbackMessage(ctx, cb, reviewEventMissingGrantContractText(record, *event))
+			return h.answerReviewEventCallback(ctx, cb, "Approval needs an exact grant contract first.")
+		}
+	}
 	review, err := h.store.AppendCapabilityReview(session.CapabilityReview{
 		ReviewID:     fmt.Sprintf("capr-review-event-%d-%d", event.ID, time.Now().UnixNano()),
 		RequestID:    record.RequestID,
@@ -198,6 +208,15 @@ func (h *DecisionHandler) applyReviewEventReaction(ctx context.Context, msg core
 		_ = h.editReviewEventReactionMessage(ctx, msg, compactSentence(err.Error()))
 		return nil
 	}
+	if status == session.CapabilityReviewStatusApproved {
+		materializable, err := h.capabilityRequestHasCompiledGrantHandoff(record)
+		if err != nil {
+			return err
+		}
+		if !materializable {
+			return h.editReviewEventReactionMessage(ctx, msg, reviewEventMissingGrantContractText(record, event))
+		}
+	}
 	review, err := h.store.AppendCapabilityReview(session.CapabilityReview{
 		ReviewID:     fmt.Sprintf("capr-review-reaction-%d-%d", event.ID, time.Now().UnixNano()),
 		RequestID:    record.RequestID,
@@ -233,6 +252,24 @@ func reviewEventConfirmationWithGrantActivation(text string, record session.Capa
 		return strings.TrimSpace(text + "\n\nGrant activation: already linked\nGrant: " + linked)
 	}
 	return strings.TrimSpace(text + "\n\nGrant activation: not created\nNext: run capability_authority grant_set for this approved request before using the capability.")
+}
+
+func reviewEventMissingGrantContractText(record session.CapabilityRequest, event session.ReviewEvent) string {
+	record = session.NormalizeCapabilityRequest(record)
+	lines := []string{
+		"Capability approval needs an exact grant contract before it can be approved.",
+		"",
+		"Request: " + strings.TrimSpace(record.RequestID),
+	}
+	if event.ID > 0 {
+		lines = append(lines, fmt.Sprintf("Review event: %d", event.ID))
+	}
+	lines = append(lines,
+		"",
+		"Grant activation: missing compiled grant contract",
+		"Next: create a capability request with structured allowed_actions or capability_action so approval can materialize a bounded active grant.",
+	)
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func (h *DecisionHandler) editReviewEventReactionMessage(ctx context.Context, msg core.InboundMessage, text string) error {
@@ -300,6 +337,33 @@ func (h *DecisionHandler) materializeApprovedCapabilityGrantFromReview(record se
 		return grant, true, nil
 	}
 	return session.CapabilityGrant{}, false, nil
+}
+
+func (h *DecisionHandler) capabilityRequestHasCompiledGrantHandoff(record session.CapabilityRequest) (bool, error) {
+	if h == nil || h.store == nil {
+		return false, nil
+	}
+	record = session.NormalizeCapabilityRequest(record)
+	if strings.TrimSpace(record.GrantID) != "" {
+		return true, nil
+	}
+	if strings.TrimSpace(record.RequestID) == "" {
+		return false, nil
+	}
+	actions, err := h.store.OpenNextActionsBySubject("capability_request", record.RequestID, 100)
+	if err != nil {
+		return false, fmt.Errorf("load compiled capability grant handoff: %w", err)
+	}
+	for _, action := range actions {
+		_, ok, err := reviewCapabilityGrantSetFromNextAction(record, action)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func reviewCapabilityGrantSetFromNextAction(record session.CapabilityRequest, action session.NextActionRecord) (reviewCapabilityGrantSetInput, bool, error) {
