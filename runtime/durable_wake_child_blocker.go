@@ -404,7 +404,10 @@ func durableWakeChildBlockerReviewIntent(agent core.DurableAgent, result session
 	if metadata == nil {
 		metadata = map[string]string{}
 	}
-	metadata["next_action_record_subject"] = strings.TrimSpace(nextAction.SubjectRef)
+	normalizedNextAction := session.NormalizeNextActionInput(*nextAction)
+	metadata["next_action_record_id"] = strings.TrimSpace(normalizedNextAction.RecordID)
+	metadata["next_action_record_subject"] = strings.TrimSpace(normalizedNextAction.SubjectRef)
+	metadata["next_action_session_id"] = session.SessionIDForKey(normalizedNextAction.Key)
 	payloadRaw, _ := json.Marshal(map[string]any{
 		"agent_id":       strings.TrimSpace(agent.AgentID),
 		"summary":        classification.ReviewSummary,

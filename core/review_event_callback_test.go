@@ -21,6 +21,14 @@ func TestReviewEventCallbackRoundTrip(t *testing.T) {
 	if !ok || id != 42 || action != ReviewEventActionExpand {
 		t.Fatalf("DecodeReviewEventCallbackData(expand) = %d %q %t", id, action, ok)
 	}
+	retry := EncodeReviewEventCallbackData(42, ReviewEventActionChildWakeRetry)
+	if retry != "review_event:42:child_wake_retry" {
+		t.Fatalf("EncodeReviewEventCallbackData(child retry) = %q", retry)
+	}
+	id, action, ok = DecodeReviewEventCallbackData(retry)
+	if !ok || id != 42 || action != ReviewEventActionChildWakeRetry {
+		t.Fatalf("DecodeReviewEventCallbackData(child retry) = %d %q %t", id, action, ok)
+	}
 	if _, _, ok := DecodeReviewEventCallbackData("decision:42:approve"); ok {
 		t.Fatal("DecodeReviewEventCallbackData() ok=true for other callback lane")
 	}

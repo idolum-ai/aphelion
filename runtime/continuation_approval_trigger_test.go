@@ -11,6 +11,7 @@ import (
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/telegram"
 	toolpkg "github.com/idolum-ai/aphelion/tool"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 	"github.com/idolum-ai/aphelion/turn"
@@ -826,6 +827,134 @@ func TestRetryTextMaterializesFreshChildWakeApprovalFromChildSessionTransientBlo
 	}
 	if len(sender.inline) != 2 {
 		t.Fatalf("inline count after reaction = %d, want second approval card", len(sender.inline))
+	}
+}
+
+func TestReviewEventRetryButtonMaterializesFreshChildWakeApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	runner := &runtimeWakeRunner{}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store).WithDurableAgentWakeRunner(runner)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, &fakeProvider{}, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	seedRuntimeWakeAgent(t, store, "idolum-email", true)
+	seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+	parentKey := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	childKey := rt.durableAgentExecutionKey("idolum-email")
+	now := time.Now().UTC().Add(-time.Minute)
+	resultInput := session.ChildTaskResultInput{
+		PacketID:     "child_task:review-button-transient",
+		ResultID:     "child_result:review-button-transient",
+		Status:       session.ChildTaskResultBlocked,
+		BlockerKind:  "external_transient",
+		ResultKind:   "blocker",
+		NextState:    session.NextActionScheduledRetry,
+		Summary:      "The read-only child task timed out before returning results.",
+		CreatedAt:    now,
+		FencingToken: "fence-review-button-transient",
+	}
+	classification := durableWakeChildBlockerClassification{
+		Kind:               "external_transient",
+		State:              session.NextActionScheduledRetry,
+		NextAction:         "wait for the bounded retry window before retrying the child task",
+		ResourceBlocker:    "external_transient",
+		RetryPolicy:        "bounded_backoff",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
+		OperationTool:      "update_operation",
+		OperatorProjection: "Child task hit a transient external blocker; retry only after bounded backoff.",
+		DiagnosticOnly:     true,
+	}
+	nextAction, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           "next-child-session-external-transient-review-button",
+		Key:                childKey,
+		Owner:              "durable_wake",
+		State:              session.NextActionScheduledRetry,
+		SubjectKind:        "task_packet",
+		SubjectRef:         resultInput.PacketID,
+		CausalRefs:         []string{"task_packet:" + resultInput.PacketID, "child_task_result:" + resultInput.ResultID},
+		NextAction:         "wait for the bounded retry window before retrying the child task",
+		ResourceBlocker:    "external_transient",
+		RetryPolicy:        "bounded_backoff",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
+		OperationTool:      "update_operation",
+		OperationInputJSON: durableWakeChildBlockerOperationInputJSON("idolum-email", "mail_cli", "mail_cli", classification, resultInput),
+		OperatorProjection: "Child task hit a transient external blocker; retry only after bounded backoff.",
+		CreatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("RecordNextAction(child external_transient) err = %v", err)
+	}
+	event := session.ReviewEvent{
+		ID:                693,
+		SourceSessionID:   "durable_agent:idolum-email",
+		SourceRole:        "durable_agent",
+		TargetSessionID:   "telegram_dm:1001",
+		TargetAdminChatID: 1001,
+		Status:            "delivered",
+		CreatedAt:         now,
+		DeliveredAt:       now,
+		MetadataJSON: `{
+			"agent_id":"idolum-email",
+			"summary":"Idolum Email stopped on external_transient.",
+			"risk_flags":["durable_child","external_transient"],
+			"metadata":{
+				"child_blocker_kind":"external_transient",
+				"child_next_state":"scheduled_retry",
+				"child_task_packet_id":"child_task:review-button-transient",
+				"next_action_record_id":"next-child-session-external-transient-review-button",
+				"retry_policy":"bounded_backoff"
+			}
+		}`,
+	}
+	text, err := rt.HandleReviewEventAction(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-review-child-retry",
+		From:    &telegram.User{ID: 1001},
+		Message: &telegram.Message{MessageID: 25068, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionChildWakeRetry),
+	}, event, core.ReviewEventActionChildWakeRetry)
+	if err != nil {
+		t.Fatalf("HandleReviewEventAction(child retry) err = %v", err)
+	}
+	if !strings.Contains(text, "approval surfaced") {
+		t.Fatalf("callback text = %q, want approval surfaced acknowledgement", text)
+	}
+	state, err := store.ContinuationState(parentKey)
+	if err != nil {
+		t.Fatalf("ContinuationState(parent) err = %v", err)
+	}
+	if state.Status != session.ContinuationStatusPending ||
+		state.ContinuationLease.LeaseClass != session.ContinuationLeaseClassChildWake ||
+		strings.TrimSpace(state.ContinuationLease.Constraints["agent_id"]) != "idolum-email" {
+		t.Fatalf("continuation state = %#v, want pending idolum-email child_wake approval", state)
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want one approval card", len(sender.inline))
+	}
+	open, err := store.OpenNextActionsBySession(childKey, 20)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(child) err = %v", err)
+	}
+	for _, action := range open {
+		if action.RecordID == nextAction.RecordID {
+			t.Fatalf("child open actions = %#v, want source retry action resolved after callback materializes approval", open)
+		}
 	}
 }
 

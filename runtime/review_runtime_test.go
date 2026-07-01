@@ -727,6 +727,48 @@ func TestDeliverReviewEventsMarksOlderCapabilityCardStale(t *testing.T) {
 	}
 }
 
+func TestRetryableChildWakeReviewEventUsesTypedRetryButton(t *testing.T) {
+	t.Parallel()
+
+	event := session.ReviewEvent{
+		ID:                77,
+		SourceRole:        "durable_agent",
+		SourceSessionID:   "durable_agent:mail-child",
+		TargetSessionID:   "telegram_dm:1001",
+		TargetAdminChatID: 1001,
+		Summary:           "durable_agent=mail-child channel=external_channel\nsummary: Mail child stopped on external_transient.",
+		MetadataJSON: `{
+			"agent_id":"mail-child",
+			"summary":"Mail child stopped on external_transient.",
+			"risk_flags":["durable_child","external_transient"],
+			"metadata":{
+				"child_blocker_kind":"external_transient",
+				"child_next_state":"scheduled_retry",
+				"child_task_packet_id":"dcm-transient",
+				"next_action_record_id":"next-transient",
+				"retry_policy":"bounded_backoff"
+			}
+		}`,
+	}
+	rows := ReviewEventInlineRows(event)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %#v, want Details plus Retry once", rows)
+	}
+	if rows[1][0].Text != "Retry once" || rows[1][0].CallbackData != core.EncodeReviewEventCallbackData(77, core.ReviewEventActionChildWakeRetry) {
+		t.Fatalf("retry row = %#v, want typed child_wake retry callback", rows[1])
+	}
+
+	event.MetadataJSON = `{"agent_id":"mail-child","metadata":{"child_blocker_kind":"credential_unverified","child_next_state":"waiting_for_operator","child_task_packet_id":"dcm-cred","retry_policy":"operator_disambiguation_required"}}`
+	rows = ReviewEventInlineRows(event)
+	for _, row := range rows {
+		for _, button := range row {
+			if button.Text == "Retry once" {
+				t.Fatalf("rows = %#v, want no retry button for non-transient child blocker", rows)
+			}
+		}
+	}
+}
+
 func TestCapabilityReviewEventUsesDetailsButtonWithoutAutoAttachment(t *testing.T) {
 	t.Parallel()
 

@@ -295,6 +295,7 @@ func run() error {
 	}
 	cancelDecisionLoad()
 	decisionHandler := telegramdecision.NewDecisionHandler(tgOutbound, commandControl, decisionBroker, store, rt)
+	decisionHandler.SetReviewEventActionRunner(rt)
 	execApprover := telegramdecision.NewExecApprover(tgOutbound, decisionBroker, telegramdecision.DefaultExecApprovalTimeout, rt)
 	execApprover.SetPresentation(store)
 	tools.WithExecApprover(execApprover)

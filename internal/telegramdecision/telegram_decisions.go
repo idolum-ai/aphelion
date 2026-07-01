@@ -19,9 +19,14 @@ type DecisionHandler struct {
 	broker                   *decision.Broker
 	store                    *session.SQLiteStore
 	router                   Router
+	reviewEventActionRunner  ReviewEventActionRunner
 	interruptTimeout         time.Duration
 	stopWordTimeout          time.Duration
 	artifactRetentionTimeout time.Duration
+}
+
+type ReviewEventActionRunner interface {
+	HandleReviewEventAction(ctx context.Context, cb telegram.CallbackQuery, event session.ReviewEvent, action core.ReviewEventAction) (string, error)
 }
 
 func NewDecisionHandler(sender DecisionSender, router Router, broker *decision.Broker, store *session.SQLiteStore, keepers ...PermanentArtifactKeeper) *DecisionHandler {
@@ -72,6 +77,12 @@ func (h *DecisionHandler) SetRouter(router Router) {
 		if h.Handler != nil {
 			h.Handler.SetRouter(router)
 		}
+	}
+}
+
+func (h *DecisionHandler) SetReviewEventActionRunner(runner ReviewEventActionRunner) {
+	if h != nil {
+		h.reviewEventActionRunner = runner
 	}
 }
 

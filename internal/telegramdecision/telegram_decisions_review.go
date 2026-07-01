@@ -50,6 +50,9 @@ func (h *DecisionHandler) handleReviewEventCallback(ctx context.Context, cb tele
 		}
 		return h.handleMissionControlProposalCallback(ctx, cb, *event, proposal, action)
 	}
+	if action == core.ReviewEventActionChildWakeRetry {
+		return h.handleReviewEventChildWakeRetryCallback(ctx, cb, *event)
+	}
 	if reviewEventCallbackExpired(*event, time.Now()) {
 		_ = h.editReviewEventCallbackMessage(ctx, cb, "Approval timed out — use a fresh prompt.")
 		return h.answerReviewEventCallback(ctx, cb, "Approval timed out. Use a fresh prompt.")
@@ -109,6 +112,30 @@ func (h *DecisionHandler) handleReviewEventCallback(ctx context.Context, cb tele
 	}
 	text := reviewEventConfirmationText(label, record, *event)
 	text = reviewEventConfirmationWithGrantActivation(text, record, grant, grantActivated, review.Status)
+	_ = h.editReviewEventCallbackMessage(ctx, cb, text)
+	return h.answerReviewEventCallback(ctx, cb, "")
+}
+
+func (h *DecisionHandler) handleReviewEventChildWakeRetryCallback(ctx context.Context, cb telegram.CallbackQuery, event session.ReviewEvent) error {
+	if reviewEventCallbackExpired(event, time.Now()) {
+		_ = h.editReviewEventCallbackMessage(ctx, cb, "Retry card timed out — use a fresh child status prompt.")
+		return h.answerReviewEventCallback(ctx, cb, "Retry card timed out. Use a fresh prompt.")
+	}
+	if event.Status == "dismissed" {
+		_ = h.editReviewEventCallbackMessage(ctx, cb, "Stale retry card — use the newest child status.")
+		return h.answerReviewEventCallback(ctx, cb, "This retry card is stale. Use the newest prompt.")
+	}
+	if h.reviewEventActionRunner == nil {
+		return h.answerReviewEventCallback(ctx, cb, "Child retry controls are unavailable in this runtime.")
+	}
+	text, err := h.reviewEventActionRunner.HandleReviewEventAction(ctx, cb, event, core.ReviewEventActionChildWakeRetry)
+	if err != nil {
+		return h.answerReviewEventCallback(ctx, cb, compactSentence(err.Error()))
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		text = "Child wake retry approval surfaced."
+	}
 	_ = h.editReviewEventCallbackMessage(ctx, cb, text)
 	return h.answerReviewEventCallback(ctx, cb, "")
 }

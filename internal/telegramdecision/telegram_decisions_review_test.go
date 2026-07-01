@@ -75,6 +75,71 @@ func TestHandleReviewEventCallbackApprovesCapabilityRequest(t *testing.T) {
 	}
 }
 
+type reviewEventActionRunnerStub struct {
+	calls      []core.ReviewEventAction
+	eventIDs   []int64
+	returnText string
+}
+
+func (s *reviewEventActionRunnerStub) HandleReviewEventAction(_ context.Context, _ telegram.CallbackQuery, event session.ReviewEvent, action core.ReviewEventAction) (string, error) {
+	s.calls = append(s.calls, action)
+	s.eventIDs = append(s.eventIDs, event.ID)
+	if strings.TrimSpace(s.returnText) != "" {
+		return s.returnText, nil
+	}
+	return "Child wake retry approval surfaced.", nil
+}
+
+func TestHandleReviewEventCallbackDelegatesChildWakeRetry(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
+		SourceSessionID:   "durable_agent:mail-child",
+		SourceChatID:      2002,
+		SourceUserID:      0,
+		SourceRole:        "durable_agent",
+		TargetSessionID:   "telegram_dm:1001",
+		TargetAdminChatID: 1001,
+		Summary:           "Mail child stopped on external_transient.",
+		MetadataJSON:      `{"agent_id":"mail-child","metadata":{"child_blocker_kind":"external_transient","child_next_state":"scheduled_retry","child_task_packet_id":"dcm-transient","retry_policy":"bounded_backoff"}}`,
+		Status:            "delivered",
+		CreatedAt:         time.Now().UTC(),
+		DeliveredAt:       time.Now().UTC(),
+		DeliveryMessageID: 88,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+	sender := &decisionTestSender{}
+	runner := &reviewEventActionRunnerStub{returnText: "Child wake retry approval surfaced. Use the approval card."}
+	handler := newDecisionHandlerForTest(sender, &decisionTestRouter{}, decision.NewBroker(nil), store)
+	handler.SetReviewEventActionRunner(runner)
+
+	err = handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-child-retry",
+		From:    &telegram.User{ID: 1001},
+		Message: &telegram.Message{MessageID: 88, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(eventID, core.ReviewEventActionChildWakeRetry),
+	})
+	if err != nil {
+		t.Fatalf("HandleCallbackQuery(child retry) err = %v", err)
+	}
+	if len(runner.calls) != 1 || runner.calls[0] != core.ReviewEventActionChildWakeRetry || runner.eventIDs[0] != eventID {
+		t.Fatalf("runner calls = %#v eventIDs=%#v, want child retry for event %d", runner.calls, runner.eventIDs, eventID)
+	}
+	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "approval surfaced") || sender.edits[0].chatID != 1001 || sender.edits[0].messageID != 88 {
+		t.Fatalf("edits = %#v, want retry acknowledgement edit on original card", sender.edits)
+	}
+	if len(sender.answers) != 1 || sender.answers[0].text != "" {
+		t.Fatalf("answers = %#v, want empty callback ack", sender.answers)
+	}
+}
+
 func TestHandleReactionMessageApprovesDeliveredCapabilityReviewEvent(t *testing.T) {
 	t.Parallel()
 
