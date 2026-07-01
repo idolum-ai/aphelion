@@ -178,6 +178,57 @@ func TestDurableAgentWakeOnceMaterializesInlineGuidanceBeforeWake(t *testing.T) 
 	}
 }
 
+func TestDurableAgentWakeOnceInlineGuidanceClaimsFreshBatchWhenOlderParentMessageExists(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	runner := &fakeDurableAgentWakeRunner{store: store}
+	registry.WithDurableAgentWakeRunner(runner)
+	upsertDurableAgentWakeTestAgent(t, store)
+	grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", principal.Principal{Role: principal.RoleAdmin})
+	ctx := contextWithDurableAgentWakeAuthority(t, store, adminSessionKey(), principal.Principal{Role: principal.RoleAdmin}, "lease-child-wake-inline-guidance-with-stale-parent", session.ContinuationLeaseClassChildWake, []string{durableAgentWakeOnceAction})
+
+	_, seeded, err := store.UpdateDurableAgentContinuity("child-alpha", func(continuity core.DurableAgentContinuityState) (core.DurableAgentContinuityState, error) {
+		return continuity.WithConversationMessage("parent", "Older parent message that should remain pending.", time.Now().UTC().Add(-time.Minute)), nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateDurableAgentContinuity(seed older parent message) err = %v", err)
+	}
+	olderPending := seeded.PendingParentConversationMessages(10)
+	if len(olderPending) != 1 || strings.TrimSpace(olderPending[0].MessageID) == "" {
+		t.Fatalf("older pending messages = %#v, want one stable message", olderPending)
+	}
+	olderID := strings.TrimSpace(olderPending[0].MessageID)
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		ctx,
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha","reason":"Fresh approved retry guidance; consume this guidance exactly once."}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wake_once inline guidance) err = %v", err)
+	}
+	if len(runner.messageIDs) != 1 || len(runner.messageIDs[0]) != 1 {
+		t.Fatalf("wake runner message IDs = %#v, want exactly the fresh inline batch", runner.messageIDs)
+	}
+	if got := runner.messageIDs[0][0]; got == olderID {
+		t.Fatalf("wake runner consumed older message %q, want fresh inline guidance batch", got)
+	}
+	if !strings.Contains(out, "pending_parent_before: 1") || !strings.Contains(out, "wake_status: completed") {
+		t.Fatalf("wake_once output = %q, want one fresh pending message consumed", out)
+	}
+	_, continuity, err := registry.loadDurableAgentContinuity("child-alpha")
+	if err != nil {
+		t.Fatalf("loadDurableAgentContinuity() err = %v", err)
+	}
+	pending := continuity.PendingParentConversationMessages(10)
+	if len(pending) != 1 || pending[0].MessageID != olderID {
+		t.Fatalf("pending parent messages = %#v, want only older message left pending", pending)
+	}
+}
+
 func TestDurableAgentWakeOnceRequiresRuntimeRunner(t *testing.T) {
 	t.Parallel()
 
@@ -357,6 +408,58 @@ func TestDurableAgentWakeOnceLeaseRequestPreservesInlineGuidanceInRetry(t *testi
 	retry := session.NormalizeContinuationRetryOperation(cont.ContinuationLease.RetryOperation)
 	if !retry.Active() || !strings.Contains(retry.InputJSON, guidance) {
 		t.Fatalf("continuation retry = %#v, want inline guidance preserved", retry)
+	}
+}
+
+func TestRequestApprovalUsesCanonicalStoredContinuationRecoveryContract(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	grant := grantDurableAgentWakeOnceInvoke(t, store, "child-alpha", actor)
+	key := adminSessionKey()
+	requirement := durableAgentWakeOnceLeaseRequirement("child-alpha", grant, actor, durableAgentInput{
+		Action:  "wake_once",
+		AgentID: "child-alpha",
+		Reason:  "Generate recommended jobs from child-local context only; stop after one result.",
+	})
+	requirement.RequestInstanceID = "canonical-stored-child-wake-contract"
+	contract, err := continuationRecoveryContractFromMissingLeaseRequirement(key, requirement, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("continuationRecoveryContractFromMissingLeaseRequirement() err = %v", err)
+	}
+	contract.RetryOperation.SubjectRef = ""
+	contract.RetryOperation.RequestInstanceID = ""
+	contract, err = store.UpsertContinuationRecoveryContract(contract)
+	if err != nil {
+		t.Fatalf("UpsertContinuationRecoveryContract() err = %v", err)
+	}
+	if contract.RetryOperation.SubjectRef == "" || contract.RetryOperation.RequestInstanceID == "" {
+		t.Fatalf("stored contract retry = %#v, want canonical retry identity", contract.RetryOperation)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		actor,
+		key,
+		"request_approval",
+		json.RawMessage(session.ContinuationRecoveryContractProjectionInput(contract.ContractID)),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(request_approval canonical contract) err = %v", err)
+	}
+	if !strings.Contains(out, "[APPROVAL_REQUESTED]") {
+		t.Fatalf("request_approval output = %q, want approval request render", out)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.ContinuationLease.RecoveryContractID != contract.ContractID ||
+		cont.ContinuationLease.PlanHash != contract.ContractHash ||
+		cont.ContinuationLease.LeaseClass != session.ContinuationLeaseClassChildWake ||
+		strings.TrimSpace(cont.ContinuationLease.Constraints["agent_id"]) != "child-alpha" {
+		t.Fatalf("continuation = %#v, want exact canonical child_wake contract", cont)
 	}
 }
 

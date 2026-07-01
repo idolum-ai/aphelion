@@ -29,7 +29,7 @@ func (r *Runtime) reconcileApprovedRetryWakeWaitersForSession(key session.Sessio
 		if leaseID == "" {
 			continue
 		}
-		packetID, childResult, ok, err := r.approvedRetryWakeTerminalChildResultForLease(leaseID)
+		packetID, childResult, ok, err := r.approvedRetryWakeObservedChildResultForLease(leaseID)
 		if err != nil {
 			return err
 		}
@@ -54,6 +54,17 @@ func continuationLeaseIDFromCausalRefs(refs []string) string {
 }
 
 func (r *Runtime) approvedRetryWakeTerminalChildResultForLease(leaseID string) (string, session.ChildTaskResult, bool, error) {
+	packetID, result, ok, err := r.approvedRetryWakeObservedChildResultForLease(leaseID)
+	if err != nil || !ok {
+		return packetID, result, ok, err
+	}
+	if result.Status == session.ChildTaskResultUpdate {
+		return "", session.ChildTaskResult{}, false, nil
+	}
+	return packetID, result, true, nil
+}
+
+func (r *Runtime) approvedRetryWakeObservedChildResultForLease(leaseID string) (string, session.ChildTaskResult, bool, error) {
 	if r == nil || r.store == nil {
 		return "", session.ChildTaskResult{}, false, nil
 	}
@@ -73,14 +84,17 @@ func (r *Runtime) approvedRetryWakeTerminalChildResultForLease(leaseID string) (
 	if err != nil {
 		return "", session.ChildTaskResult{}, false, err
 	}
-	if !ok || !session.ChildTaskPacketStatusTerminal(packet.Status) || strings.TrimSpace(packet.ResultID) == "" {
+	if !ok || strings.TrimSpace(packet.ResultID) == "" {
+		return "", session.ChildTaskResult{}, false, nil
+	}
+	if !session.ChildTaskPacketStatusTerminal(packet.Status) && packet.LeaseReleasedAt.IsZero() {
 		return "", session.ChildTaskResult{}, false, nil
 	}
 	result, ok, err := r.store.ChildTaskResult(packet.ResultID)
 	if err != nil {
 		return "", session.ChildTaskResult{}, false, err
 	}
-	if !ok || result.Status == session.ChildTaskResultUpdate {
+	if !ok {
 		return "", session.ChildTaskResult{}, false, nil
 	}
 	return packetID, result, true, nil

@@ -823,8 +823,15 @@ func requestApprovalTerminalProposalStatus(state session.ContinuationState, fall
 }
 
 func requestApprovalContinuationLeaseRequirementFromContract(contract session.ContinuationRecoveryContract) (missingContinuationLeaseRequirement, error) {
-	contract = session.NormalizeContinuationRecoveryContract(contract)
+	contract, err := session.CanonicalizeContinuationRecoveryContract(contract)
+	if err != nil {
+		return missingContinuationLeaseRequirement{}, err
+	}
 	requirement := normalizeMissingContinuationLeaseRequirement(missingContinuationLeaseRequirement{
+		ContractID:          contract.ContractID,
+		ContractHash:        contract.ContractHash,
+		SubjectKind:         contract.SubjectKind,
+		SubjectRef:          contract.SubjectRef,
 		AgentID:             contract.AgentID,
 		Resource:            contract.Resource,
 		GrantID:             contract.GrantID,
@@ -840,9 +847,6 @@ func requestApprovalContinuationLeaseRequirementFromContract(contract session.Co
 	})
 	if requirement.Principal == "" || requirement.RequestInstanceID == "" || requirement.LeaseClass == "" || len(requirement.AllowedActions) == 0 {
 		return missingContinuationLeaseRequirement{}, fmt.Errorf("continuation recovery contract %s is incomplete", contract.ContractID)
-	}
-	if requestApprovalContinuationLeaseContractHash(requirement) != contract.ContractHash {
-		return missingContinuationLeaseRequirement{}, fmt.Errorf("continuation recovery contract %s hash mismatch", contract.ContractID)
 	}
 	if err := validateContinuationRetryOperationForRequirement(requirement); err != nil {
 		return missingContinuationLeaseRequirement{}, err
@@ -948,6 +952,9 @@ func requestApprovalContinuationLeaseIdentityHash(requirement missingContinuatio
 
 func requestApprovalContinuationLeaseContractHash(requirement missingContinuationLeaseRequirement) string {
 	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
+	if requirement.ContractHash != "" {
+		return requirement.ContractHash
+	}
 	payload := map[string]any{
 		"agent_id":              requirement.AgentID,
 		"resource":              requirement.Resource,
@@ -986,6 +993,9 @@ func requestApprovalContinuationStateMatchesRequestIdentity(state session.Contin
 		return false
 	}
 	if lease.PlanHash != requestApprovalContinuationLeaseContractHash(requirement) {
+		return false
+	}
+	if requirement.ContractID != "" && strings.TrimSpace(lease.RecoveryContractID) != requirement.ContractID {
 		return false
 	}
 	return true

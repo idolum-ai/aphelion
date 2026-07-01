@@ -14,7 +14,10 @@ func (s *SQLiteStore) UpsertContinuationRecoveryContract(input ContinuationRecov
 	if s == nil || s.db == nil {
 		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract store unavailable")
 	}
-	input = NormalizeContinuationRecoveryContract(input)
+	input, err := CanonicalizeContinuationRecoveryContract(input)
+	if err != nil {
+		return ContinuationRecoveryContract{}, err
+	}
 	if input.ContractID == "" {
 		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract_id is required")
 	}
@@ -41,7 +44,10 @@ func (s *SQLiteStore) ContinuationRecoveryContract(contractID string) (Continuat
 }
 
 func upsertContinuationRecoveryContractTx(tx *sql.Tx, input ContinuationRecoveryContract) (ContinuationRecoveryContract, error) {
-	input = NormalizeContinuationRecoveryContract(input)
+	input, err := CanonicalizeContinuationRecoveryContract(input)
+	if err != nil {
+		return ContinuationRecoveryContract{}, err
+	}
 	if input.ContractID == "" {
 		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract_id is required")
 	}
@@ -147,7 +153,11 @@ func scanContinuationRecoveryContract(scanner interface{ Scan(dest ...any) error
 	}
 	contract.CreatedAt = createdAt
 	contract.UpdatedAt = updatedAt
-	return NormalizeContinuationRecoveryContract(contract), true, nil
+	contract, err = CanonicalizeContinuationRecoveryContract(contract)
+	if err != nil {
+		return ContinuationRecoveryContract{}, false, err
+	}
+	return contract, true, nil
 }
 
 func continuationRecoveryContractEquivalent(left ContinuationRecoveryContract, right ContinuationRecoveryContract) bool {

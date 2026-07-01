@@ -16,6 +16,10 @@ import (
 )
 
 type missingContinuationLeaseRequirement struct {
+	ContractID          string
+	ContractHash        string
+	SubjectKind         string
+	SubjectRef          string
 	AgentID             string
 	Resource            string
 	GrantID             string
@@ -286,6 +290,10 @@ func asMissingContinuationLeaseError(err error, target *missingContinuationLease
 }
 
 func normalizeMissingContinuationLeaseRequirement(requirement missingContinuationLeaseRequirement) missingContinuationLeaseRequirement {
+	requirement.ContractID = strings.TrimSpace(requirement.ContractID)
+	requirement.ContractHash = strings.TrimSpace(requirement.ContractHash)
+	requirement.SubjectKind = strings.TrimSpace(requirement.SubjectKind)
+	requirement.SubjectRef = strings.TrimSpace(requirement.SubjectRef)
 	requirement.AgentID = strings.TrimSpace(requirement.AgentID)
 	requirement.Resource = strings.TrimSpace(requirement.Resource)
 	requirement.GrantID = strings.TrimSpace(requirement.GrantID)
@@ -429,6 +437,9 @@ func missingContinuationLeaseSubjectTokenFromNormalized(requirement missingConti
 
 func missingContinuationLeaseSubjectRef(requirement missingContinuationLeaseRequirement) string {
 	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
+	if requirement.SubjectRef != "" {
+		return requirement.SubjectRef
+	}
 	return missingContinuationLeaseSubjectRefFromNormalized(requirement)
 }
 

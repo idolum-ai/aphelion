@@ -986,8 +986,8 @@ func approvedRetryWakeBlockedProjection(agentID, failureClass, summary string) s
 func (r *Runtime) recordApprovedRetryWakeWaiting(key session.SessionKey, reservation approvedContinuationReservation, retry session.ContinuationRetryOperation, result toolpkg.DurableAgentWakeOnceRenderedResult, monitor *turnMonitor) error {
 	now := time.Now().UTC()
 	leaseID := firstNonEmpty(strings.TrimSpace(result.ContinuationLeaseID), strings.TrimSpace(reservation.State.ContinuationLease.ID))
-	if packetID, childResult, ok, err := r.approvedRetryWakeTerminalChildResultForLease(leaseID); err != nil {
-		return fmt.Errorf("load approved retry child wake terminal result: %w", err)
+	if packetID, childResult, ok, err := r.approvedRetryWakeObservedChildResultForLease(leaseID); err != nil {
+		return fmt.Errorf("load approved retry child wake result: %w", err)
 	} else if ok {
 		return r.recordApprovedRetryWakeTerminalChildResult(key, reservation, retry, result, packetID, childResult, monitor)
 	}

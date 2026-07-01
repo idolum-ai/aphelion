@@ -387,6 +387,148 @@ func TestApprovedChildWakeRetryRecordsTerminalChildBlockerInParentSession(t *tes
 	}
 }
 
+func TestApprovedRetryWakeReconciliationAdvancesReleasedChildUpdate(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agentID := "idolum-email"
+	seedRealChildWakeAgent(t, store, agentID)
+
+	key := session.SessionKey{ChatID: 9084, UserID: 0, Scope: telegramDMScopeRef(9084)}
+	now := time.Now().UTC()
+	leaseID := "lease-approved-child-update"
+	messageIDs := []string{"parent-message-approved-child-update"}
+	claim, err := store.ClaimDurableAgentWakeOnce(session.DurableAgentWakeClaimInput{
+		LeaseID:          leaseID,
+		AgentID:          agentID,
+		TurnRunID:        41,
+		MessageBatchHash: session.DurableAgentWakeMessageBatchHash(agentID, messageIDs),
+		MessageIDs:       messageIDs,
+		CreatedAt:        now,
+	})
+	if err != nil {
+		t.Fatalf("ClaimDurableAgentWakeOnce() err = %v", err)
+	}
+	packetID := durableWakeTaskPacketIDForWakeClaim(agentID, messageIDs, claim.ClaimID)
+	if _, err := store.RecordChildTaskPacket(session.ChildTaskPacketInput{
+		PacketID:         packetID,
+		TaskLeaseID:      leaseID,
+		AgentID:          agentID,
+		Key:              key,
+		TaskKind:         "parent_conversation_wake",
+		Status:           session.ChildTaskPacketQueued,
+		AuthorityKind:    "continuation",
+		AuthorityID:      leaseID,
+		TargetResource:   "durable_agent:" + agentID + ":wake_once",
+		RequiredAction:   "wake_once",
+		InputJSON:        `{"action":"wake_once","agent_id":"idolum-email"}`,
+		InputFingerprint: session.EffectAttemptCommandHash(`{"action":"wake_once","agent_id":"idolum-email"}`),
+		CreatedAt:        now,
+	}); err != nil {
+		t.Fatalf("RecordChildTaskPacket() err = %v", err)
+	}
+	claimed, err := store.ClaimChildTaskAttempt(session.ChildTaskAttemptClaimInput{
+		PacketID:       packetID,
+		AttemptID:      "attempt-approved-child-update",
+		LeaseOwner:     "runtime-test",
+		AgentID:        agentID,
+		Key:            key,
+		ClaimedAt:      now.Add(time.Second),
+		LeaseExpiresAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("ClaimChildTaskAttempt() err = %v", err)
+	}
+	result, err := store.CommitChildTaskOutcome(session.ChildTaskOutcomeCommitInput{
+		Result: session.ChildTaskResultInput{
+			ResultID:        "child_result:approved-child-update",
+			PacketID:        packetID,
+			AttemptID:       claimed.ActiveAttemptID,
+			LeaseOwner:      claimed.LeaseOwner,
+			LeaseGeneration: claimed.LeaseGeneration,
+			FencingToken:    claimed.FencingToken,
+			TaskLeaseID:     leaseID,
+			AgentID:         agentID,
+			Key:             key,
+			Status:          session.ChildTaskResultUpdate,
+			ResultKind:      "child_progress_update",
+			Summary:         "Processed setup guidance and needs one bounded continuation.",
+			NextState:       session.NextActionWaitingForChild,
+			CreatedAt:       now.Add(2 * time.Second),
+		},
+		ResolvedAt: now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("CommitChildTaskOutcome(update) err = %v", err)
+	}
+	if result.Status != session.ChildTaskResultUpdate {
+		t.Fatalf("child result = %#v, want update", result)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:      "op-approved-child-update",
+		Status:  session.OperationStatusActive,
+		Stage:   "approved_retry_waiting_for_child",
+		Summary: "Approved retry is waiting for the child.",
+		PhasePlan: session.OperationPhasePlan{
+			ID:   "plan-approved-child-update",
+			Goal: "Recover idolum-email child setup.",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	subjectRef := session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, agentID, "grant-idolum-email-wake", "durable_agent", "wake_once", "")
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "approved_retry",
+		State:              session.NextActionWaitingForChild,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         subjectRef,
+		CausalRefs:         []string{"continuation:" + leaseID, "durable_agent:" + agentID},
+		NextAction:         "wait for the child wake result before retrying",
+		OperationKind:      "durable_agent_wake_once",
+		OperationTool:      "durable_agent",
+		OperationInputJSON: `{"action":"wake_once","agent_id":"idolum-email"}`,
+		OperatorProjection: "The approved child wake retry started and is waiting for a child result.",
+		CreatedAt:          now.Add(3 * time.Second),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(parent waiter) err = %v", err)
+	}
+
+	if err := rt.reconcileApprovedRetryWakeWaitersForSession(key); err != nil {
+		t.Fatalf("reconcileApprovedRetryWakeWaitersForSession() err = %v", err)
+	}
+
+	open, err := store.OpenNextActionsBySession(key, 50)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	var foundUpdate bool
+	for _, action := range open {
+		if action.Owner == "approved_retry" && action.OperationKind == "durable_agent_wake_once" {
+			t.Fatalf("open actions = %#v, stale approved_retry wake waiter should be resolved", open)
+		}
+		if action.Owner == "approved_retry" &&
+			action.OperationKind == session.NextActionOperationKindDurableChildRecovery &&
+			action.OperationTool == "update_operation" &&
+			action.State == session.NextActionWaitingForChild &&
+			strings.Contains(strings.Join(action.CausalRefs, "\n"), "child_task_result:"+result.ResultID) {
+			foundUpdate = true
+		}
+	}
+	if !foundUpdate {
+		t.Fatalf("open actions = %#v, want approved_retry child-update continuation action", open)
+	}
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if opState.Stage != "approved_retry_child_blocked" || opState.Status != session.OperationStatusBlocked {
+		t.Fatalf("operation state = %#v, want approved retry moved out of plain waiting state", opState)
+	}
+}
+
 func seedRealChildWakeAgent(t *testing.T, store *session.SQLiteStore, agentID string) string {
 	t.Helper()
 

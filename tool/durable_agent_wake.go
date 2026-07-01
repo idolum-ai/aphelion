@@ -150,17 +150,19 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 		return finishFailure(err)
 	}
 	beforePendingMessages := beforeContinuity.PendingParentConversationMessages(0)
-	if len(beforePendingMessages) == 0 {
-		inlineGuidance := durableAgentWakeOnceInlineGuidance(in)
-		if inlineGuidance != "" {
-			_, beforeContinuity, err = r.store.UpdateDurableAgentContinuity(agent.AgentID, func(continuity core.DurableAgentContinuityState) (core.DurableAgentContinuityState, error) {
-				return continuity.WithConversationMessage("parent", inlineGuidance, time.Now().UTC()), nil
-			})
-			if err != nil {
-				return finishFailure(fmt.Errorf("record durable_agent wake_once inline guidance: %w", err))
-			}
-			beforePendingMessages = beforeContinuity.PendingParentConversationMessages(0)
+	if inlineGuidance := durableAgentWakeOnceInlineGuidance(in); inlineGuidance != "" {
+		existingPending := durableAgentConversationMessageIDSet(beforePendingMessages)
+		_, beforeContinuity, err = r.store.UpdateDurableAgentContinuity(agent.AgentID, func(continuity core.DurableAgentContinuityState) (core.DurableAgentContinuityState, error) {
+			return continuity.WithConversationMessage("parent", inlineGuidance, time.Now().UTC()), nil
+		})
+		if err != nil {
+			return finishFailure(fmt.Errorf("record durable_agent wake_once inline guidance: %w", err))
 		}
+		newPending := durableAgentNewPendingParentMessages(beforeContinuity.PendingParentConversationMessages(0), existingPending)
+		if len(newPending) == 0 {
+			return finishFailure(fmt.Errorf("record durable_agent wake_once inline guidance: no new parent guidance message was materialized"))
+		}
+		beforePendingMessages = newPending
 	}
 	beforePending := len(beforePendingMessages)
 	beforeState, lastParentAt, _, _, _ := durableAgentConversationState(beforeContinuity)
@@ -194,19 +196,52 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 		return finishFailure(err)
 	}
 	afterState, _, lastChildAt, lastAckAt, _ := durableAgentConversationState(afterContinuity)
-	result.PendingParentAfter = len(afterContinuity.PendingParentConversationMessages(0))
+	afterPendingMessages := afterContinuity.PendingParentConversationMessages(0)
+	result.PendingParentAfter = len(afterPendingMessages)
 	result.ThreadStateAfter = afterState
 	result.LastChildMessageAt = lastChildAt
 	result.LastParentAcknowledged = lastAckAt
 	if wakeErr != nil {
 		return finishFailure(wakeErr)
 	}
-	if result.PendingParentAfter > 0 {
+	if durableAgentClaimedBatchStillPending(afterPendingMessages, messageIDs) {
 		result.WakeStatus = "awaiting_child_pickup"
 	} else {
 		result.WakeStatus = "completed"
 	}
 	return renderDurableAgentWakeOnce(result), nil
+}
+
+func durableAgentConversationMessageIDSet(messages []core.DurableAgentConversationMessage) map[string]bool {
+	out := make(map[string]bool, len(messages))
+	for _, message := range messages {
+		if id := strings.TrimSpace(message.MessageID); id != "" {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+func durableAgentClaimedBatchStillPending(pending []core.DurableAgentConversationMessage, messageIDs []string) bool {
+	pendingIDs := durableAgentConversationMessageIDSet(pending)
+	for _, id := range messageIDs {
+		if pendingIDs[strings.TrimSpace(id)] {
+			return true
+		}
+	}
+	return false
+}
+
+func durableAgentNewPendingParentMessages(messages []core.DurableAgentConversationMessage, existing map[string]bool) []core.DurableAgentConversationMessage {
+	out := []core.DurableAgentConversationMessage{}
+	for _, message := range messages {
+		id := strings.TrimSpace(message.MessageID)
+		if id == "" || existing[id] {
+			continue
+		}
+		out = append(out, message)
+	}
+	return out
 }
 
 func (r *Registry) requireDurableAgentWakeOnceCapabilityGrant(agentID string, input json.RawMessage, p principal.Principal) (session.CapabilityGrant, error) {
