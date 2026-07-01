@@ -30,6 +30,14 @@ type AuthorityBundleComponent struct {
 	SubjectRef string `json:"subject_ref,omitempty"`
 }
 
+const (
+	AuthorityBundleComponentKindCapabilityRequest            = "capability_request"
+	AuthorityBundleComponentKindContinuationRecoveryContract = "continuation_recovery_contract"
+	AuthorityBundleComponentKindNextAction                   = "next_action"
+	AuthorityBundleComponentKindChildAuthorityBundle         = "child_authority_bundle"
+	AuthorityBundleComponentKindChildTaskResult              = "child_task_result"
+)
+
 type AuthorityBundleContract struct {
 	BundleID                      string                     `json:"bundle_id"`
 	ContractVersion               string                     `json:"contract_version"`
@@ -74,6 +82,9 @@ func CompileAuthorityBundleContract(input AuthorityBundleContractInput) (Authori
 	if input.RequestInstanceID == "" {
 		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract requires request_instance_id")
 	}
+	if input.SessionID == "" {
+		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract requires session_id")
+	}
 	if input.Principal == "" {
 		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract requires principal")
 	}
@@ -91,6 +102,9 @@ func CompileAuthorityBundleContract(input AuthorityBundleContractInput) (Authori
 	}
 	if input.PrimaryContinuationContractID == "" && len(input.RequiredCapabilityGrants) == 0 {
 		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract requires a continuation contract or capability grant component")
+	}
+	if err := validateAuthorityBundleComponents(input.Components); err != nil {
+		return AuthorityBundleContract{}, err
 	}
 	for _, forbidden := range input.ForbiddenActions {
 		for _, allowed := range input.AllowedActions {
@@ -150,6 +164,9 @@ func CanonicalizeAuthorityBundleContract(contract AuthorityBundleContract) (Auth
 	if input.RequestInstanceID == "" {
 		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract requires request_instance_id")
 	}
+	if version != AuthorityBundleContractVersionV1 && input.SessionID == "" {
+		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract requires session_id")
+	}
 	if input.Principal == "" {
 		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract requires principal")
 	}
@@ -167,6 +184,9 @@ func CanonicalizeAuthorityBundleContract(contract AuthorityBundleContract) (Auth
 	}
 	if input.PrimaryContinuationContractID == "" && len(input.RequiredCapabilityGrants) == 0 {
 		return AuthorityBundleContract{}, fmt.Errorf("authority bundle contract requires a continuation contract or capability grant component")
+	}
+	if err := validateAuthorityBundleComponents(input.Components); err != nil {
+		return AuthorityBundleContract{}, err
 	}
 	for _, forbidden := range input.ForbiddenActions {
 		for _, allowed := range input.AllowedActions {
@@ -285,6 +305,28 @@ func normalizeAuthorityBundleComponents(values []AuthorityBundleComponent) []Aut
 		out = append(out, value)
 	}
 	return out
+}
+
+func validateAuthorityBundleComponents(values []AuthorityBundleComponent) error {
+	for _, value := range values {
+		if !validAuthorityBundleComponentKind(value.Kind) {
+			return fmt.Errorf("authority bundle component kind %q is not registered", value.Kind)
+		}
+	}
+	return nil
+}
+
+func validAuthorityBundleComponentKind(kind string) bool {
+	switch normalizeEnumValue(kind) {
+	case AuthorityBundleComponentKindCapabilityRequest,
+		AuthorityBundleComponentKindContinuationRecoveryContract,
+		AuthorityBundleComponentKindNextAction,
+		AuthorityBundleComponentKindChildAuthorityBundle,
+		AuthorityBundleComponentKindChildTaskResult:
+		return true
+	default:
+		return false
+	}
 }
 
 func authorityBundleContractHash(input AuthorityBundleContractInput) string {

@@ -88,6 +88,14 @@ enforcement semantics or recurring aggregate labels that cannot be represented
 by the compiled bundle contract. This keeps specific authority types meaningful
 instead of turning every incident into another hardcoded grant.
 
+Authority-bundle schema terms are layered deliberately. The contract carries
+hash-bound authority semantics such as session, principal, allowed and forbidden
+actions, stop conditions, expiry, and required grants. Components are registered
+typed links to evidence or related contracts, not a free-form extension bag.
+Handoffs are small pointers to stored contracts. Transition specs route those
+pointers through known adapters. Projection text is only the audience-facing
+view and must never become authority or evidence by itself.
+
 Context may select durable run authority, but it may not manufacture authority.
 Durable state remains canonical.
 
