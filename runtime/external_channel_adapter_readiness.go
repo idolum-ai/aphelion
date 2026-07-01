@@ -165,7 +165,15 @@ func (r *Runtime) externalChannelReadinessForAgent(agent core.DurableAgent, now 
 		setFailure(externalChannelReadinessFailureLife, externalChannelReadinessRepairToolLifecycleRefresh, "register, install, audit, probe, and verify "+adapterName+" as a first-class external tool")
 	} else if install.Status != session.ToolInstallStatusVerified || probe.Status != session.ToolProbeStatusPassed || audit.Status != session.ToolAuditStatusPassed {
 		addLayer("tool_lifecycle", externalChannelReadinessStatusBlocked, fmt.Sprintf("install=%s audit=%s probe=%s", install.Status, audit.Status, probe.Status))
-		if install.Status == session.ToolInstallStatusInstalled && probe.Status == session.ToolProbeStatusPassed && audit.Status == session.ToolAuditStatusPassed {
+		if install.Status == session.ToolInstallStatusInstalled &&
+			probe.Status == session.ToolProbeStatusPassed &&
+			audit.Status == session.ToolAuditStatusPassed &&
+			strings.TrimSpace(install.StaleReason) == "" &&
+			strings.TrimSpace(string(install.DriftSource)) == "" &&
+			strings.TrimSpace(probe.StaleReason) == "" &&
+			strings.TrimSpace(string(probe.DriftSource)) == "" &&
+			strings.TrimSpace(audit.StaleReason) == "" &&
+			strings.TrimSpace(string(audit.DriftSource)) == "" {
 			setFailure(externalChannelReadinessFailureLife, externalChannelReadinessRepairToolLifecycleVerify, "verify "+adapterName+" from existing runtime-authored audit/probe evidence before polling")
 		} else {
 			setFailure(externalChannelReadinessFailureLife, externalChannelReadinessRepairToolLifecycleRefresh, "rerun or repair "+adapterName+" audit/probe evidence, then verify lifecycle before polling")

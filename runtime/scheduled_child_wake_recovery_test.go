@@ -182,6 +182,95 @@ func TestScheduledExternalChannelWakeStaleProofsMaterializesAuditProbeRepair(t *
 	}
 }
 
+func TestScheduledExternalChannelWakeInstalledStaleProofsMaterializesAuditProbeRepair(t *testing.T) {
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	executor := &recordingScheduledChildWakeExecutor{}
+	rt, err := New(cfg, store, &fakeProvider{}, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableWakeChild = executor
+
+	agent := scheduledExternalChannelWakeAgent("scheduled-installed-stale-child", "gog_cli")
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	seedExternalChannelToolLifecycle(t, store, agent.AgentID, "gog_cli", session.ToolInstallStatusInstalled, true, true, true)
+	install, ok, err := store.ToolInstallRecord("gog_cli")
+	if err != nil || !ok {
+		t.Fatalf("ToolInstallRecord() = (%#v, %v, %v), want installed record", install, ok, err)
+	}
+	install.StaleReason = "workspace_drift: stale installed evidence"
+	install.DriftSource = session.ToolDriftSourceWorkspaceDrift
+	if _, err := store.UpsertToolInstallRecord(install); err != nil {
+		t.Fatalf("UpsertToolInstallRecord(stale) err = %v", err)
+	}
+
+	if err := rt.pollDurableAgentWakeViaChild(context.Background(), agent, time.Now().UTC()); err != nil {
+		t.Fatalf("pollDurableAgentWakeViaChild() err = %v", err)
+	}
+	if executor.calls != 0 {
+		t.Fatalf("child wake executor calls = %d, want blocked before child starts", executor.calls)
+	}
+	events, err := store.PendingReviewEvents(agent.ReviewTargetChatID, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("pending review events = %#v, want one exact lifecycle refresh card", events)
+	}
+	combined := events[0].Summary + "\n" + events[0].MetadataJSON
+	for _, want := range []string{"tool_lifecycle_audit_probe_verify", "audit_run", "probe_run", "install_set"} {
+		if !strings.Contains(combined, want) {
+			t.Fatalf("repair event = %s, want lifecycle refresh term %q", combined, want)
+		}
+	}
+	if strings.Contains(combined, "tool_lifecycle_verify") {
+		t.Fatalf("repair event = %s, want audit/probe refresh, not direct verify", combined)
+	}
+}
+
+func TestScheduledExternalChannelWakeRepeatedExactRepairRespectsBackoff(t *testing.T) {
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	executor := &recordingScheduledChildWakeExecutor{}
+	rt, err := New(cfg, store, &fakeProvider{}, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableWakeChild = executor
+
+	now := time.Now().UTC()
+	agent := scheduledExternalChannelWakeAgent("scheduled-repeat-repair-child", "gog_cli")
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	seedExternalChannelToolLifecycle(t, store, agent.AgentID, "gog_cli", session.ToolInstallStatusInstalled, false, true, true)
+
+	if err := rt.pollDurableAgentWakeViaChild(context.Background(), agent, now); err != nil {
+		t.Fatalf("pollDurableAgentWakeViaChild(first) err = %v", err)
+	}
+	if err := rt.pollDurableAgentWakeViaChild(context.Background(), agent, now.Add(time.Minute)); err != nil {
+		t.Fatalf("pollDurableAgentWakeViaChild(second) err = %v", err)
+	}
+	if executor.calls != 0 {
+		t.Fatalf("child wake executor calls = %d, want no child starts while exact repair is backed off", executor.calls)
+	}
+	events, err := store.PendingReviewEvents(agent.ReviewTargetChatID, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("pending review events = %#v, want exactly one repair card during backoff", events)
+	}
+	_, continuity, err := loadDurableAgentContinuityFromStore(store, agent.AgentID)
+	if err != nil {
+		t.Fatalf("loadDurableAgentContinuityFromStore() err = %v", err)
+	}
+	if continuity.ExternalChannel == nil || continuity.ExternalChannel.BackoffUntil.IsZero() {
+		t.Fatalf("external channel state = %#v, want repair backoff retained", continuity.ExternalChannel)
+	}
+}
+
 func TestScheduledExternalChannelWakeMissingRuntimeMaterialMaterializesGrantRepair(t *testing.T) {
 	cfg, store, _, sender := buildRuntimeFixtures(t)
 	executor := &recordingScheduledChildWakeExecutor{}

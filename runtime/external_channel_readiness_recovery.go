@@ -26,9 +26,17 @@ func (r *Runtime) recoverScheduledExternalChannelReadiness(ctx context.Context, 
 	if err != nil || !due {
 		return false, false, err
 	}
+	runtimeState, stateOK, err := r.externalChannelRuntimeState(agent)
+	if err != nil {
+		return false, false, err
+	}
 	readiness := r.externalChannelReadinessForAgent(agent, now)
 	if readiness.Status != externalChannelReadinessStatusBlocked {
 		return false, false, nil
+	}
+	inBackoff := stateOK && externalChannelStateInBackoff(runtimeState, now)
+	if inBackoff && !r.externalChannelReadinessBackoffRecoverable(runtimeState, readiness) {
+		return false, true, nil
 	}
 
 	if readiness.RepairKind == externalChannelReadinessRepairToolLifecycleVerify {
@@ -37,6 +45,8 @@ func (r *Runtime) recoverScheduledExternalChannelReadiness(ctx context.Context, 
 				return false, false, err
 			}
 			return true, false, nil
+		} else if inBackoff && externalChannelReadinessBackoffAlreadyMaterialized(runtimeState) && !r.externalChannelLifecycleEvidenceChangedSince(readiness.Adapter, runtimeState.LastErrorAt) {
+			return false, true, nil
 		} else {
 			readiness.NextRepair = strings.TrimSpace(readiness.NextRepair + "; verifier rejected existing evidence: " + truncateRunes(verifyErr.Error(), 240))
 		}
@@ -74,6 +84,57 @@ func (r *Runtime) externalChannelReadinessRecoveryDue(agent core.DurableAgent, n
 		return true, nil
 	}
 	return externalChannelPollDueIgnoringBackoff(runtimeState, pollInterval, now), nil
+}
+
+func (r *Runtime) externalChannelRuntimeState(agent core.DurableAgent) (core.DurableAgentExternalChannelRuntimeState, bool, error) {
+	adapterName, _, ok := durableWakeExternalBackoffIdentity(agent)
+	if !ok {
+		return core.DurableAgentExternalChannelRuntimeState{}, false, nil
+	}
+	_, continuity, err := loadDurableAgentContinuityFromStore(r.store, agent.AgentID)
+	if err != nil {
+		return core.DurableAgentExternalChannelRuntimeState{}, false, err
+	}
+	return externalChannelStateForAdapter(continuity, adapterName), true, nil
+}
+
+func externalChannelStateInBackoff(state core.DurableAgentExternalChannelRuntimeState, now time.Time) bool {
+	return !state.BackoffUntil.IsZero() && now.UTC().Before(state.BackoffUntil.UTC())
+}
+
+func (r *Runtime) externalChannelReadinessBackoffRecoverable(state core.DurableAgentExternalChannelRuntimeState, readiness externalChannelAdapterReadiness) bool {
+	if !externalChannelReadinessBackoffAlreadyMaterialized(state) {
+		return true
+	}
+	if strings.TrimSpace(readiness.RepairKind) == externalChannelReadinessRepairToolLifecycleVerify &&
+		r.externalChannelLifecycleEvidenceChangedSince(readiness.Adapter, state.LastErrorAt) {
+		return true
+	}
+	return false
+}
+
+func externalChannelReadinessBackoffAlreadyMaterialized(state core.DurableAgentExternalChannelRuntimeState) bool {
+	lastErr := strings.ToLower(strings.TrimSpace(state.LastError))
+	return strings.Contains(lastErr, "repair_kind=")
+}
+
+func (r *Runtime) externalChannelLifecycleEvidenceChangedSince(adapterName string, since time.Time) bool {
+	if r == nil || r.store == nil || since.IsZero() || strings.TrimSpace(adapterName) == "" {
+		return false
+	}
+	install, ok, err := r.store.ToolInstallRecord(adapterName)
+	if err == nil && ok && install.UpdatedAt.After(since.UTC()) {
+		return true
+	}
+	audit, ok, err := r.store.ToolAuditRecord(adapterName)
+	if err == nil && ok && audit.UpdatedAt.After(since.UTC()) {
+		return true
+	}
+	probe, ok, err := r.store.ToolProbeRecord(adapterName)
+	if err == nil && ok && probe.UpdatedAt.After(since.UTC()) {
+		return true
+	}
+	return false
 }
 
 func externalChannelWakeBackoffHasActionableReadiness(state core.DurableAgentExternalChannelRuntimeState, now time.Time) bool {
