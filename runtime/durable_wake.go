@@ -818,6 +818,9 @@ func durableWakeOutcomeIntentInputs(agent core.DurableAgent, plan durableWakeTur
 	if plan.OutcomeIntents != nil {
 		intents = append(intents, plan.OutcomeIntents(status, summary, cause, now)...)
 	}
+	if intent, ok := durableWakeExternalChannelStateIntent(agent, plan, status, summary, cause, now); ok {
+		intents = append(intents, intent)
+	}
 	if cause == nil && status != session.ChildTaskResultFailed {
 		payloadRaw, _ := json.Marshal(map[string]any{
 			"agent_id": strings.TrimSpace(agent.AgentID),
@@ -1128,6 +1131,8 @@ func (r *Runtime) executeDurableWakeOutcomeIntent(ctx context.Context, agent cor
 		return r.applyScheduledReviewOutcomeIntent(intent)
 	case session.ChildTaskOutcomeIntentChildBlockerReview:
 		return r.applyDurableWakeChildBlockerReviewIntent(agent, intent)
+	case session.ChildTaskOutcomeIntentExternalChannelState:
+		return r.applyDurableWakeExternalChannelStateIntent(agent, intent)
 	default:
 		return fmt.Errorf("unsupported durable wake outcome intent kind %s", intent.Kind)
 	}

@@ -219,6 +219,158 @@ func TestCapabilityGrantWakeTimeoutProducesTransientRetryState(t *testing.T) {
 	}
 }
 
+func TestCapabilityGrantWakeTimeoutSupersedesStaleExternalChannelRuntimeState(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "mail-timeout-state",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Adapter: "gog_cli",
+		}},
+		WakeupMode: "manual",
+		Status:     "active",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Read mailbox opportunities and report bounded findings.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	now := time.Now().UTC()
+	seedExternalChannelWakeBackoff(t, store, agent.AgentID, "gog_cli", now.Add(-2*time.Hour), now.Add(time.Hour),
+		"child_runtime_blocked: preflight_failed adapter=gog_cli failure_code=lifecycle_unregistered")
+	key := rt.durableAgentExecutionKey(agent.AgentID)
+	packet, err := store.RecordChildTaskPacket(session.ChildTaskPacketInput{
+		PacketID:       "grant_task:timeout-state",
+		TaskLeaseID:    session.ChildTaskLeaseID("grant_task:timeout-state"),
+		AgentID:        agent.AgentID,
+		Key:            key,
+		TaskKind:       "capability_grant_wake",
+		AuthorityKind:  "capability_grant",
+		AuthorityID:    "capg-mail-timeout-state",
+		GrantID:        "capg-mail-timeout-state",
+		RequestID:      "cap-mail-timeout-state",
+		TargetResource: "jobs@example.invalid",
+		RequiredAction: "read",
+		InputJSON:      `{"grant_id":"capg-mail-timeout-state","target_resource":"jobs@example.invalid"}`,
+		CreatedAt:      now,
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskPacket() err = %v", err)
+	}
+	claimed, err := store.ClaimChildTaskAttempt(session.ChildTaskAttemptClaimInput{
+		PacketID:       packet.PacketID,
+		AttemptID:      "child_attempt:timeout-state",
+		LeaseOwner:     "durable_wake:mail-timeout-state:child_attempt:timeout-state",
+		AgentID:        agent.AgentID,
+		Key:            key,
+		ClaimedAt:      now,
+		LeaseExpiresAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("ClaimChildTaskAttempt() err = %v", err)
+	}
+	summary := strings.Join([]string{
+		"Child-local gog_cli metadata/status probe timed out.",
+		"CHILD_BLOCKER: external_transient",
+		"REVIEW_STATUS: blocked",
+	}, "\n")
+	outcomeIntents := durableWakeOutcomeIntentInputs(agent, durableWakeTurnPlan{}, nil, session.ChildTaskResultBlocked, summary, nil, now.Add(time.Second))
+	result, err := rt.recordDurableWakeChildTaskResultWithIntents(key, agent, packet.PacketID, claimed.ActiveAttemptID, claimed.LeaseOwner, claimed.LeaseGeneration, claimed.FencingToken, session.ChildTaskResultBlocked, summary, nil, now.Add(time.Second), outcomeIntents)
+	if err != nil {
+		t.Fatalf("recordDurableWakeChildTaskResultWithIntents() err = %v", err)
+	}
+	if result.Status != session.ChildTaskResultBlocked || result.BlockerKind != "external_transient" {
+		t.Fatalf("child result = %#v, want blocked external_transient", result)
+	}
+	rt.applyDurableWakeOutcomeIntentsOrWarn(context.Background(), agent, durableWakeTurnPlan{}, result)
+
+	cont := loadExternalChannelContinuity(t, store, agent.AgentID)
+	if cont.ExternalChannel == nil {
+		t.Fatal("ExternalChannel = nil, want current child blocker state")
+	}
+	if !strings.Contains(strings.ToLower(cont.ExternalChannel.LastError), "timeout") &&
+		!strings.Contains(strings.ToLower(cont.ExternalChannel.LastError), "external_transient") {
+		t.Fatalf("external channel last_error = %q, want current timeout/transient blocker", cont.ExternalChannel.LastError)
+	}
+	if strings.Contains(cont.ExternalChannel.LastError, "lifecycle_unregistered") {
+		t.Fatalf("external channel last_error = %q, want fresh blocker to supersede stale lifecycle error", cont.ExternalChannel.LastError)
+	}
+	if !cont.ExternalChannel.LastAttemptAt.After(now.Add(-30 * time.Second)) {
+		t.Fatalf("last_attempt_at = %v, want refreshed attempt after child timeout", cont.ExternalChannel.LastAttemptAt)
+	}
+}
+
+func TestExternalChannelStateIntentUpdateClearsStaleRuntimeError(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "mail-update-state",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Adapter: "gog_cli",
+		}},
+		WakeupMode:   "manual",
+		Status:       "active",
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	now := time.Now().UTC()
+	seedExternalChannelWakeBackoff(t, store, agent.AgentID, "gog_cli", now.Add(-2*time.Hour), now.Add(time.Hour),
+		"child_runtime_blocked: preflight_failed adapter=gog_cli failure_code=lifecycle_unregistered")
+	intent, ok := durableWakeExternalChannelStateIntent(agent, durableWakeTurnPlan{}, session.ChildTaskResultUpdate, "Child processed guidance and is waiting for the next bounded step.", nil, now)
+	if !ok {
+		t.Fatal("durableWakeExternalChannelStateIntent() ok=false, want update intent")
+	}
+	intent.PacketID = "child_task:update-state"
+	intent.ResultID = "child_result:update-state"
+	intent.AttemptID = "child_attempt:update-state"
+	intent.IntentID = "child_intent:update-state"
+	intent.Kind = session.ChildTaskOutcomeIntentExternalChannelState
+	intent.CreatedAt = now
+	if err := rt.applyDurableWakeExternalChannelStateIntent(agent, session.ChildTaskOutcomeIntent{
+		IntentID:    intent.IntentID,
+		PacketID:    intent.PacketID,
+		ResultID:    intent.ResultID,
+		AttemptID:   intent.AttemptID,
+		Kind:        intent.Kind,
+		PayloadJSON: intent.PayloadJSON,
+		CreatedAt:   intent.CreatedAt,
+	}); err != nil {
+		t.Fatalf("applyDurableWakeExternalChannelStateIntent(update) err = %v", err)
+	}
+
+	cont := loadExternalChannelContinuity(t, store, agent.AgentID)
+	if cont.ExternalChannel == nil {
+		t.Fatal("ExternalChannel = nil, want current child update state")
+	}
+	if cont.ExternalChannel.LastStatus != string(session.ChildTaskResultUpdate) {
+		t.Fatalf("last_status = %q, want update", cont.ExternalChannel.LastStatus)
+	}
+	if strings.TrimSpace(cont.ExternalChannel.LastError) != "" || !cont.ExternalChannel.LastErrorAt.IsZero() || !cont.ExternalChannel.BackoffUntil.IsZero() {
+		t.Fatalf("external channel state = %#v, want stale error/backoff cleared by fresh update", cont.ExternalChannel)
+	}
+}
+
 func TestFreshCapabilityGrantWakeSupersedesStaleChildResourceRepair(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = strings.Join([]string{

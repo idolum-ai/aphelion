@@ -822,6 +822,31 @@ func TestCapabilityReviewEventUsesDetailsButtonWithoutAutoAttachment(t *testing.
 	}
 }
 
+func TestCapabilityReviewEventCompactTitleDoesNotDefaultToChildUpdate(t *testing.T) {
+	t.Parallel()
+
+	event := session.ReviewEvent{
+		SourceRole:        "capability_request",
+		TargetAdminChatID: 1001,
+		Summary:           "Approve one GitHub issue in idolum-ai/CopilotKit and continue local tests.",
+		MetadataJSON:      `{"request_id":"cap-copilotkit-issue","request_via":"capability_request","kind":"external_account","target_resource":"github:idolum-ai/CopilotKit","risk_class":"external_write","purpose":"Open one issue in the fork; no push/PR/upstream effects.","contract":"One GitHub issue only, then local-only test work.","constraints":"No deploy, no restart, no credential output."}`,
+	}
+
+	compact := FormatReviewEventCompactMessage(event)
+	if !strings.Contains(compact, "Review: capability request") {
+		t.Fatalf("compact review = %q, want capability-request title", compact)
+	}
+	if strings.Contains(compact, "Child update") {
+		t.Fatalf("compact review = %q, should not render non-child capability request as child update", compact)
+	}
+	details := FormatReviewEventDetailsMessage(event)
+	for _, want := range []string{"**Capability request**", "Kind: external_account", "Target: github:idolum-ai/CopilotKit"} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("details = %q, want %q", details, want)
+		}
+	}
+}
+
 func TestDurableAgentDelegationReviewEventUsesDetailsButtonWithoutAutoAttachment(t *testing.T) {
 	t.Parallel()
 

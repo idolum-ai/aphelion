@@ -978,6 +978,45 @@ func TestReviewEventRetryButtonMaterializesFreshChildWakeApproval(t *testing.T) 
 	}
 }
 
+func TestChildWakeRetryGrantLookupIgnoresRevokedHistoricalGrant(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	seedRuntimeWakeAgent(t, store, "idolum-email", true)
+	now := time.Now().UTC()
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-idolum-email-direct-no-content-wake-readiness",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindGenericDelegation,
+		TargetResource: "durable_agent:idolum-email:wake_once",
+		AllowedActions: []string{"invoke"},
+		Contract:       `{"bounded_effect":"historical direct wake grant"}`,
+		Constraints:    `{"agent_id":"idolum-email"}`,
+		Status:         session.CapabilityGrantStatusRevoked,
+		GrantedAt:      now.Add(-2 * time.Hour),
+		RevokedAt:      now.Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(revoked) err = %v", err)
+	}
+	active := seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+
+	grant, ok, err := rt.activeChildWakeRetryGrant("idolum-email", "telegram:1001")
+	if err != nil {
+		t.Fatalf("activeChildWakeRetryGrant() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("activeChildWakeRetryGrant() ok=false, want active replacement grant")
+	}
+	if grant.GrantID != active.GrantID {
+		t.Fatalf("activeChildWakeRetryGrant() = %#v, want active replacement grant %q instead of revoked historical grant", grant, active.GrantID)
+	}
+}
+
 func TestApprovedChildWakeRetryWithoutGuidanceRecordsRepairBlocker(t *testing.T) {
 	t.Parallel()
 
