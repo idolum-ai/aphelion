@@ -76,6 +76,12 @@ work, but old facts should be rehydrated from typed evidence IDs, source kinds,
 epistemic status, and runtime-computed hashes when continuation or recovery
 depends on fidelity.
 
+Durable child wake results follow the same boundary. Child summaries are
+operator projection; terminal status, blocker class, and retryability should be
+compiled into typed outcome records before the parent runtime commits the child
+task result. Legacy textual markers may be accepted as compatibility input, but
+must not become the durable source of truth.
+
 ### Text is presentation, not authority
 
 Persona language can be alive, concise, and flexible. The runtime must not

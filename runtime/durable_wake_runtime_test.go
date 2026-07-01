@@ -371,6 +371,43 @@ func TestDurableWakeChildBlockerClassification(t *testing.T) {
 	}
 }
 
+func TestDurableWakeChildOutcomePrefersStructuredResult(t *testing.T) {
+	t.Parallel()
+
+	rt := &Runtime{}
+	agent := core.DurableAgent{AgentID: "child-structured-outcome", ChannelKind: "external_channel"}
+	summary := strings.Join([]string{
+		"Completed the bounded child task.",
+		`APHELION_CHILD_RESULT: {"blocker_kind":"external_transient","status":"blocked"}`,
+		"REVIEW_STATUS: completed",
+	}, "\n")
+
+	outcome := rt.compileDurableWakeChildOutcome(agent, summary, nil)
+	if outcome.Status != session.ChildTaskResultBlocked || outcome.BlockerKind != "external_transient" {
+		t.Fatalf("compileDurableWakeChildOutcome() = %#v, want structured blocked/external_transient", outcome)
+	}
+}
+
+func TestDurableWakeChildOutcomeQualificationDoesNotReparseSummaryStatus(t *testing.T) {
+	t.Parallel()
+
+	rt := &Runtime{}
+	agent := core.DurableAgent{AgentID: "child-outcome-qualification", ChannelKind: "external_channel", ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{Adapter: "gog_cli"}}}
+	summary := strings.Join([]string{
+		`APHELION_CHILD_RESULT: {"status":"blocked"}`,
+		"Runtime check: gog_cli=missing_or_not_executable.",
+		"REVIEW_STATUS: completed",
+	}, "\n")
+
+	outcome := rt.compileDurableWakeChildOutcome(agent, summary, nil)
+	if outcome.Status != session.ChildTaskResultBlocked || outcome.BlockerKind != "tool_runtime_probe_missing" {
+		t.Fatalf("compileDurableWakeChildOutcome() = %#v, want typed blocked outcome with probe-missing blocker", outcome)
+	}
+	if !strings.Contains(outcome.Summary, "CHILD_BLOCKER: tool_runtime_probe_missing") {
+		t.Fatalf("qualified summary = %q, want child blocker evidence prefix", outcome.Summary)
+	}
+}
+
 func markDurableWakeExternalAdapterReady(t *testing.T, store *session.SQLiteStore, agentID string, adapterName string) {
 	t.Helper()
 	now := time.Now().UTC()

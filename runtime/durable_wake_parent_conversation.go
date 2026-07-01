@@ -209,7 +209,8 @@ func durableParentConversationWakePrompt(agent core.DurableAgent, messages []cor
 		"Channel: " + strings.TrimSpace(agent.ChannelKind),
 		fmt.Sprintf("Pending parent messages: %d", len(messages)),
 		"Process pending parent guidance and report a concise, truthful status update.",
-		"Finish with REVIEW_STATUS: completed, blocked, failed, needs_review, or update.",
+		`Finish with APHELION_CHILD_RESULT: {"status":"completed|blocked|failed|update","blocker_kind":"optional_enum"}.`,
+		"Legacy REVIEW_STATUS is accepted only as a fallback.",
 	}
 	for i, message := range messages {
 		text := truncateRunes(durableParentConversationChildFacingMessage(message.Text), 500)
@@ -233,7 +234,7 @@ func durableParentConversationChildFacingMessage(text string) string {
 	return strings.Join([]string{
 		"Parent control-plane approval was already consumed by the parent runtime.",
 		"Do not call the parent durable-agent governance tool or wake action from this child turn.",
-		"Continue only the child-local task guidance below; if the remaining task is ambiguous, report REVIEW_STATUS: needs_review.",
+		`If ambiguous, emit APHELION_CHILD_RESULT: {"status":"blocked","blocker_kind":"needs_review"}.`,
 		"Child-local guidance: " + redacted,
 	}, " ")
 }

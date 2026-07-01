@@ -172,6 +172,10 @@ func TestRunDurableAgentChildWakeDoesNotRebindParentAuthorityAdmission(t *testin
 	var sawChildTaskAdmission bool
 	var sawParentAuthorityUseRef bool
 	var sawToolInvocationRef bool
+	var sawSyntheticAuthorityValue bool
+	var sawParentDeadline bool
+	type syntheticAuthorityKey struct{}
+	parentDeadline := time.Now().UTC().Add(10 * time.Minute)
 	inspector.inspect = func(ctx context.Context) {
 		if admission, ok := toolpkg.ExecutionAuthorityAdmissionFromContext(ctx); ok {
 			switch admission.LeaseKind {
@@ -192,6 +196,12 @@ func TestRunDurableAgentChildWakeDoesNotRebindParentAuthorityAdmission(t *testin
 		}
 		if _, ok := toolpkg.ToolInvocationRefFromContext(ctx); ok {
 			sawToolInvocationRef = true
+		}
+		if ctx.Value(syntheticAuthorityKey{}) != nil {
+			sawSyntheticAuthorityValue = true
+		}
+		if deadline, ok := ctx.Deadline(); ok && deadline.Equal(parentDeadline) {
+			sawParentDeadline = true
 		}
 	}
 	rt, err := New(cfg, store, inspector, nil, sender)
@@ -259,9 +269,12 @@ func TestRunDurableAgentChildWakeDoesNotRebindParentAuthorityAdmission(t *testin
 		LeaseExpiresAt:      now.Add(time.Hour),
 		AdmittedAt:          now,
 	}
+	parentCtx, cancelParentCtx := context.WithDeadline(context.Background(), parentDeadline)
+	defer cancelParentCtx()
+	parentCtx = context.WithValue(parentCtx, syntheticAuthorityKey{}, "future-parent-authority")
 	ctx := toolpkg.WithToolInvocationRef(
 		toolpkg.WithAuthorityUseRef(
-			toolpkg.WithExecutionAuthorityAdmission(context.Background(), rawAdmission),
+			toolpkg.WithExecutionAuthorityAdmission(parentCtx, rawAdmission),
 			session.AuthorityUseRef{
 				SessionID:           rawAdmission.SessionID,
 				TurnRunID:           930600,
@@ -289,6 +302,12 @@ func TestRunDurableAgentChildWakeDoesNotRebindParentAuthorityAdmission(t *testin
 	}
 	if sawToolInvocationRef {
 		t.Fatal("child provider context inherited parent tool invocation ref")
+	}
+	if sawSyntheticAuthorityValue {
+		t.Fatal("child provider context inherited an unregistered parent authority value")
+	}
+	if !sawParentDeadline {
+		t.Fatal("child provider context did not preserve the parent cancellation/deadline")
 	}
 }
 
