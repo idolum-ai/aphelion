@@ -101,7 +101,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	return r.materializePendingOperationProposalApprovalLocked(ctx, key, msg, promptInput, result)
 }
 
-func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, _ *turn.Result) (bool, error) {
+func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, result *turn.Result) (bool, error) {
 	if r == nil || r.store == nil || r.outbound == nil || msg.ChatID == 0 {
 		return false, nil
 	}
@@ -401,7 +401,7 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 	proposal := opState.Proposal
 	if !pendingOperationProposalNeedsButton(proposal) {
 		if operationPhasePlanHasBlockingInProgress(opState.PhasePlan) {
-			return true, nil
+			return result != nil, nil
 		}
 		return false, nil
 	}

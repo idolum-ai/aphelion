@@ -131,6 +131,64 @@ func TestHandleInboundTypedApprovalConsumesPendingContinuation(t *testing.T) {
 	}
 }
 
+func TestHandleInboundRoutesOrdinaryTextAfterExpiredAuthorityBundleCleanup(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{Text: "normal turn handled"}}
+	rt.interactiveDMAssembler = recorder
+
+	key := session.SessionKey{ChatID: 8164, UserID: 0, Scope: telegramDMScopeRef(8164)}
+	expiredRecordID := seedExpiredAuthorityBundleHandoff(t, store, key, "expired-before-ordinary-message", time.Now().UTC().Add(-2*time.Hour))
+
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     8164,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "I approve this bounded local-work step, then please keep helping me.",
+		MessageID:  25383,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if result == nil || result.Text != "normal turn handled" {
+		t.Fatalf("HandleInbound() result = %#v, want normal turn after stale cleanup", result)
+	}
+	if !recorder.called {
+		t.Fatal("interactive assembler was not called after expired authority-bundle cleanup")
+	}
+	if recorder.input.Msg.Text != "I approve this bounded local-work step, then please keep helping me." {
+		t.Fatalf("assembler text = %q, want original user text", recorder.input.Msg.Text)
+	}
+	open, err := store.OpenNextActionsBySession(key, 20)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	for _, action := range open {
+		if action.RecordID == expiredRecordID {
+			t.Fatalf("open actions = %#v, want expired authority-bundle handoff resolved", open)
+		}
+	}
+}
+
 func TestHandleInboundRunTextRoutesThroughNormalTurn(t *testing.T) {
 	t.Parallel()
 
