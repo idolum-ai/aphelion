@@ -32,6 +32,8 @@ The Aphelion mapping is:
 | Price identification | Static plan/grant analysis before execution |
 | Scroll of identify | Operator review card |
 | Batch identification | Authority bundle |
+| Special gift | Small plan-start authority loadout |
+| Full-column bonus | Reward for identifying diverse authority classes |
 | Persistent artifact | Bundle with hash-bound expiry |
 | Tail | Live accumulated authority behind a plan |
 | Tail collision | Confused-deputy reuse of stale authority |
@@ -68,6 +70,32 @@ So Aphelion should prefer discovery over broad pre-granting:
 The risk moves from "over-granted execution" to "operator interruption cost."
 This document describes how to drive that cost down without letting preemptive
 over-granting back into the design.
+
+### Bounded Preemption
+
+Discovery does not mean starting with nothing. Serpentes lets the player choose
+a special gift before the run; the full version permits a second gift. That is
+the honest form of preemption: a small fixed loadout carried into a shuffled
+field, not a pre-identified map of the whole field.
+
+Aphelion should model that distinction directly. At plan start, the operator may
+approve a small plan loadout: one or two named bundles, leases, or standing
+capability shapes with explicit scope and expiry. Everything beyond the loadout
+is discovered by collision, static analysis, operator review, or metered
+lookahead.
+
+The count limit matters. It turns preemption from a moral restraint into a
+runtime rule:
+
+- loadout slots are few and visible;
+- each slot is named, hash-bound, and expiring;
+- plan revision invalidates or revalidates the loadout;
+- unused loadout authority contributes to over-grant mass;
+- execution still requires point-of-use validation.
+
+This gives operators a practical way to say "start with these known tools" while
+preserving the design rule that the run must identify the rest of its authority
+ontology honestly.
 
 ## Ralph Loop As Run
 
@@ -374,6 +402,8 @@ lease. This is categorical.
 Secondary metrics:
 
 - `interruptions`: operator touches required to complete a plan;
+- `coverage`: distinct authority classes identified for the current plan
+  frontier;
 - `over_grant_mass`: approved authority never consumed, weighted by scope and
   lifetime;
 - `wasted_collisions`: blockers that teach the ledger nothing new;
@@ -387,6 +417,7 @@ Harness shape:
 - simulated operator policies:
   - never look ahead;
   - always press `Next grant`;
+  - fixed loadout of one or two plan-start gifts;
   - greedy burst of `k` lookahead grants, then sleep;
   - oracle lower bound;
 - restart chaos at every progress phase;
@@ -397,6 +428,7 @@ Regression posture:
 - A change may trade interruptions against bounded over-grant mass only by
   explicit design choice.
 - It must never increase authority violations.
+- It should increase coverage before increasing raw approval count.
 - It must never let approved authority survive plan revision, run end, expiry,
   or step mismatch.
 
