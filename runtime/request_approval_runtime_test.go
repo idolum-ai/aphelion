@@ -2119,6 +2119,248 @@ func TestRecoveryHandoffMaterializationWhenUserReturnsAfterExpiredAuthorityBundl
 	}
 }
 
+func TestAuthorityBundleMaterializationAllowsScopedBranchPush(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9061, UserID: 0, Scope: telegramDMScopeRef(9061)}
+	now := time.Now().UTC()
+	bundle, err := session.CompileAuthorityBundleContract(session.AuthorityBundleContractInput{
+		RequestInstanceID: "scoped-branch-push-authority-bundle",
+		SessionID:         session.SessionIDForKey(key),
+		Principal:         "telegram:1001",
+		Objective:         "Commit and push the validated Aphelion PR fix to the existing branch.",
+		Summary:           "Exact bundle: commit only tool/capability.go capability materialization fix and push to origin/fix/child-wake-authority-context.",
+		AllowedActions: []string{
+			"run git diff --check on tool/capability.go",
+			"stage only tool/capability.go",
+			"create one local commit for the capability materialization fix",
+			"mint/use configured GitHub App credentials without printing tokens",
+			"push to origin/fix/child-wake-authority-context",
+			"report commit hash and push result",
+		},
+		ForbiddenActions: []string{
+			"stage/commit unrelated files",
+			"edit additional files",
+			"force-push",
+			"push to another branch or repository",
+			"deploy/restart",
+			"merge PR",
+			"release/tag",
+			"print credentials/tokens/keys",
+		},
+		StopConditions: []string{"stop after one commit and push result or typed blocker"},
+		RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+			GrantID:        "grant-scoped-branch-push",
+			Kind:           session.CapabilityKindExternalAccount,
+			TargetResource: "github:idolum-ai/aphelion",
+			GrantedTo:      "telegram:1001",
+			AllowedActions: []string{"write"},
+			Contract:       `{"bounded_effect":"Commit and push only the scoped branch fix."}`,
+			Constraints:    `{"repo":"idolum-ai/aphelion","branch":"fix/child-wake-authority-context","files":["tool/capability.go"],"no_force_push":true,"credential_output":false}`,
+		}},
+		CreatedAt: now,
+		ExpiresAt: now.Add(30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("CompileAuthorityBundleContract(scoped branch push) err = %v", err)
+	}
+	bundle, err = store.UpsertAuthorityBundleContract(bundle)
+	if err != nil {
+		t.Fatalf("UpsertAuthorityBundleContract(scoped branch push) err = %v", err)
+	}
+	inputJSON, err := promotedDurableChildAuthorityBundleOperationInput(bundle.BundleID)
+	if err != nil {
+		t.Fatalf("promotedDurableChildAuthorityBundleOperationInput(scoped branch push) err = %v", err)
+	}
+	recordID := session.NextActionRecordID(session.SessionIDForKey(key), "authority_bundle_request", bundle.BundleID, session.NextActionBlockedNeedsAuthority, time.Unix(0, 0).UTC())
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           recordID,
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "authority_bundle_request",
+		SubjectRef:         bundle.BundleID,
+		CausalRefs:         []string{"authority_bundle:" + bundle.BundleID},
+		NextAction:         "review the bounded authority bundle and approve only if the allowed, forbidden, and stop boundaries match the objective",
+		RequiredAuthority:  "authority_bundle",
+		ResourceBlocker:    "authority_bundle_approval",
+		RetryPolicy:        "retry_after_bundle_approval",
+		OperationKind:      "authority_bundle_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: inputJSON,
+		OperatorProjection: "Review scoped branch push authority bundle.",
+		CreatedAt:          now,
+	}); err != nil {
+		t.Fatalf("RecordNextAction(scoped branch push authority bundle) err = %v", err)
+	}
+
+	materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9061, SenderID: 1001, Text: "approved", MessageID: 343},
+		"approved",
+	)
+	if err != nil {
+		t.Fatalf("MaterializeRequestedApproval(scoped branch push) err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want approval card for scoped branch push bundle")
+	}
+	open, err := store.OpenNextActionsBySession(key, 20)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	for _, action := range open {
+		if action.RecordID == recordID {
+			t.Fatalf("open actions = %#v, want scoped branch push handoff materialized", open)
+		}
+	}
+	state, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusPending || state.ContinuationLease.Status != session.ContinuationLeaseStatusPending {
+		t.Fatalf("continuation state = %#v, want pending approval", state)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one approval card for scoped branch push bundle", inlineCount)
+	}
+}
+
+func TestAuthorityBundleMaterializationRefreshesRevokedSameBundleState(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9062, UserID: 0, Scope: telegramDMScopeRef(9062)}
+	bundleID := seedGrantOnlyAuthorityBundleHandoff(t, store, key, "refresh-revoked-same-bundle")
+	if materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9062, SenderID: 1001, Text: "go for it", MessageID: 344},
+		"go for it",
+	); err != nil || !materialized {
+		t.Fatalf("initial MaterializeRequestedApproval() materialized=%v err=%v, want card", materialized, err)
+	}
+	state, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(initial) err = %v", err)
+	}
+	state = session.NormalizeContinuationState(state)
+	state.Status = session.ContinuationStatusRevoked
+	state.RemainingTurns = 0
+	state.ActionProposal.Status = session.ProposalStatusSuperseded
+	state.ContinuationLease.Status = session.ContinuationLeaseStatusRevoked
+	state.ContinuationLease.RemainingTurns = 0
+	state.ContinuationLease.RevokedAt = time.Now().UTC()
+	state.HandshakeBlockedReason = "invalid_authority_contract"
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState(revoked) err = %v", err)
+	}
+	now := time.Now().UTC().Add(time.Second)
+	inputJSON, err := promotedDurableChildAuthorityBundleOperationInput(bundleID)
+	if err != nil {
+		t.Fatalf("promotedDurableChildAuthorityBundleOperationInput(refresh) err = %v", err)
+	}
+	recordID := session.NextActionRecordID(session.SessionIDForKey(key), "authority_bundle_request", bundleID, session.NextActionBlockedNeedsAuthority, now)
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           recordID,
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "authority_bundle_request",
+		SubjectRef:         bundleID,
+		CausalRefs:         []string{"authority_bundle:" + bundleID},
+		NextAction:         "review the bounded authority bundle and approve only if the allowed, forbidden, and stop boundaries match the objective",
+		RequiredAuthority:  "authority_bundle",
+		ResourceBlocker:    "authority_bundle_approval",
+		RetryPolicy:        "retry_after_bundle_approval",
+		OperationKind:      "authority_bundle_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: inputJSON,
+		OperatorProjection: "Review grant-only authority bundle.",
+		CreatedAt:          now,
+	}); err != nil {
+		t.Fatalf("RecordNextAction(refresh) err = %v", err)
+	}
+
+	materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9062, SenderID: 1001, Text: "approved", MessageID: 345},
+		"approved",
+	)
+	if err != nil {
+		t.Fatalf("MaterializeRequestedApproval(refresh revoked) err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want refreshed approval card for revoked same bundle state")
+	}
+	state, err = store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(refresh) err = %v", err)
+	}
+	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusPending || state.ContinuationLease.Status != session.ContinuationLeaseStatusPending {
+		t.Fatalf("continuation state = %#v, want refreshed pending approval", state)
+	}
+	open, err := store.OpenNextActionsBySession(key, 20)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	for _, action := range open {
+		if action.RecordID == recordID {
+			t.Fatalf("open actions = %#v, want refreshed handoff resolved", open)
+		}
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 2 {
+		t.Fatalf("inline count = %d, want a new approval card after revoked same-bundle state", inlineCount)
+	}
+}
+
 func TestRequestApprovalMaterializeRetriesAfterFailedDelivery(t *testing.T) {
 	t.Parallel()
 

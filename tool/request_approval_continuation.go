@@ -34,6 +34,15 @@ func (r *Registry) requestContinuationLeaseApproval(in requestApprovalInput, key
 	now := time.Now().UTC()
 	expiresAt := now.Add(requestApprovalContinuationLeaseTTL)
 	proposalID, decisionID, leaseID := requestApprovalContinuationLeaseStableIDs(requirement)
+	if prior, ok, err := r.store.ContinuationStateIfExists(key); err != nil {
+		return "", err
+	} else if ok {
+		prior = session.NormalizeContinuationState(prior)
+		if requestApprovalContinuationStateMatchesRequestIdentity(prior, requirement, leaseID) && requestApprovalContinuationStateRefreshable(prior) {
+			requirement.RequestInstanceID = requestApprovalContinuationRefreshedRequestInstanceID(requirement.RequestInstanceID, prior)
+			proposalID, decisionID, leaseID = requestApprovalContinuationLeaseStableIDs(requirement)
+		}
+	}
 	summary := requestApprovalContinuationLeaseSummary(requirement)
 	boundedEffect := requestApprovalContinuationLeaseBoundedEffect(requirement)
 	proposal := session.ActionProposal{
@@ -170,6 +179,56 @@ func requestApprovalContinuationStateIsLive(state session.ContinuationState) boo
 	default:
 		return false
 	}
+}
+
+func requestApprovalContinuationStateRefreshable(state session.ContinuationState) bool {
+	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusRevoked || state.ContinuationLease.Status != session.ContinuationLeaseStatusRevoked {
+		return false
+	}
+	if state.ActionProposal.Status != session.ProposalStatusSuperseded {
+		return false
+	}
+	reason := normalizeRequestApprovalRefreshReason(state.HandshakeBlockedReason)
+	return strings.Contains(reason, "invalid_authority_contract")
+}
+
+func requestApprovalContinuationRefreshedRequestInstanceID(base string, state session.ContinuationState) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		base = "request"
+	}
+	state = session.NormalizeContinuationState(state)
+	parts := []string{
+		base,
+		strings.TrimSpace(state.ContinuationLease.ID),
+		strings.TrimSpace(state.HandshakeBlockedReason),
+		state.ContinuationLease.RevokedAt.UTC().Format(time.RFC3339Nano),
+		state.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	}
+	digest := session.EffectAttemptCommandHash(strings.Join(parts, "|"))
+	if len(digest) > 23 {
+		digest = digest[7:23]
+	}
+	return base + ":refresh:" + digest
+}
+
+func normalizeRequestApprovalRefreshReason(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastUnderscore = false
+			continue
+		}
+		if !lastUnderscore {
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	return strings.Trim(b.String(), "_")
 }
 
 func continuationLeaseStillLiveForRequestApproval(status session.ContinuationLeaseStatus) bool {
