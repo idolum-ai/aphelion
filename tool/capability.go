@@ -62,7 +62,7 @@ func (r *Registry) capabilityAuthority(ctx context.Context, input json.RawMessag
 	case "request_list":
 		return r.capabilityAuthorityRequestList(in, p)
 	case "request_review":
-		return r.capabilityAuthorityRequestReview(in, p, key)
+		return r.capabilityAuthorityRequestReview(ctx, in, p, key)
 	case "grant_set":
 		return r.capabilityAuthorityGrantSet(ctx, in, p, key)
 	case "grant_show":
@@ -370,7 +370,7 @@ func (r *Registry) capabilityAuthorityRequestList(in capabilityInput, actor prin
 	return renderCapabilityRequestList(records), nil
 }
 
-func (r *Registry) capabilityAuthorityRequestReview(in capabilityInput, actor principal.Principal, key session.SessionKey) (string, error) {
+func (r *Registry) capabilityAuthorityRequestReview(ctx context.Context, in capabilityInput, actor principal.Principal, key session.SessionKey) (string, error) {
 	requestID := strings.TrimSpace(in.RequestID)
 	if requestID == "" {
 		return "", fmt.Errorf("capability_authority request_review requires request_id")
@@ -437,7 +437,86 @@ func (r *Registry) capabilityAuthorityRequestReview(in capabilityInput, actor pr
 	}); err != nil {
 		return "", err
 	}
-	return renderCapabilityRequest("[CAPABILITY_REQUEST_REVIEWED]", updated), nil
+	out := renderCapabilityRequest("[CAPABILITY_REQUEST_REVIEWED]", updated)
+	if status == session.CapabilityReviewStatusApproved && strings.TrimSpace(updated.GrantID) == "" {
+		grantOut, ok, err := r.materializeApprovedCapabilityRequestGrant(ctx, key, updated, in, review.Reviewer)
+		if err != nil {
+			return out, err
+		}
+		if ok {
+			out = strings.TrimSpace(out + "\n\n" + grantOut)
+		}
+	}
+	return out, nil
+}
+
+func (r *Registry) materializeApprovedCapabilityRequestGrant(ctx context.Context, key session.SessionKey, request session.CapabilityRequest, in capabilityInput, grantedBy string) (string, bool, error) {
+	if r == nil || r.store == nil {
+		return "", false, nil
+	}
+	request = session.NormalizeCapabilityRequest(request)
+	grantedBy = strings.TrimSpace(grantedBy)
+	records, err := r.store.OpenNextActionsBySubject("capability_request", request.RequestID, 100)
+	if err != nil {
+		return "", false, fmt.Errorf("load approved capability request grant handoffs: %w", err)
+	}
+	for _, record := range records {
+		if strings.TrimSpace(record.OperationTool) != "capability_authority" ||
+			strings.TrimSpace(record.OperationKind) != "capability_grant_review" ||
+			strings.TrimSpace(record.OperationInputJSON) == "" {
+			continue
+		}
+		var grantInput capabilityInput
+		if err := json.Unmarshal([]byte(record.OperationInputJSON), &grantInput); err != nil {
+			return "", false, fmt.Errorf("decode approved capability grant handoff %s: %w", strings.TrimSpace(record.RecordID), err)
+		}
+		if strings.ToLower(strings.TrimSpace(grantInput.Action)) != "grant_set" {
+			continue
+		}
+		if strings.TrimSpace(grantInput.RequestID) == "" {
+			grantInput.RequestID = request.RequestID
+		}
+		recordKey := sessionKeyForNextActionRecord(record)
+		if !toolSessionKeyHasIdentity(recordKey) {
+			recordKey = key
+		}
+		out, err := r.capabilityAuthorityGrantSetApproved(ctx, grantInput, recordKey, grantedBy)
+		if err != nil {
+			return "", false, err
+		}
+		return out, true, nil
+	}
+	if !capabilityReviewInputHasGrantTerms(in) {
+		return "", false, nil
+	}
+	grantInput := in
+	grantInput.RequestID = request.RequestID
+	if strings.TrimSpace(grantInput.Kind) == "" {
+		grantInput.Kind = string(request.Kind)
+	}
+	if strings.TrimSpace(grantInput.TargetResource) == "" {
+		grantInput.TargetResource = request.TargetResource
+	}
+	if strings.TrimSpace(grantInput.Principal) == "" {
+		grantInput.Principal = firstNonEmpty(request.RequestedFor, request.RequestedBy)
+	}
+	out, err := r.capabilityAuthorityGrantSetApproved(ctx, grantInput, key, grantedBy)
+	if err != nil {
+		return "", false, err
+	}
+	return out, true, nil
+}
+
+func capabilityReviewInputHasGrantTerms(in capabilityInput) bool {
+	return strings.TrimSpace(in.GrantID) != "" ||
+		strings.TrimSpace(in.Kind) != "" ||
+		strings.TrimSpace(in.TargetResource) != "" ||
+		strings.TrimSpace(in.Principal) != "" ||
+		strings.TrimSpace(in.CapabilityAction) != "" ||
+		len(session.NormalizeCapabilityActions(in.AllowedActions)) > 0 ||
+		len(in.Contract) > 0 ||
+		len(in.Constraints) > 0 ||
+		in.ExpiresInSeconds > 0
 }
 
 func (r *Registry) capabilityAuthorityGrantSet(ctx context.Context, in capabilityInput, actor principal.Principal, key session.SessionKey) (string, error) {

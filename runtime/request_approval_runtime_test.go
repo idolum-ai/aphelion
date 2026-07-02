@@ -2009,6 +2009,116 @@ func TestRecoveryHandoffMaterializationRejectsWrongSessionContractAndContinues(t
 	}
 }
 
+func TestRecoveryHandoffMaterializationResolvesExpiredAuthorityBundleAndContinues(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9058, UserID: 0, Scope: telegramDMScopeRef(9058)}
+	expiredRecordID := seedExpiredAuthorityBundleHandoff(t, store, key, "expired-only", time.Now().UTC().Add(-2*time.Hour))
+
+	materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9058, SenderID: 1001, Text: "go for it", MessageID: 341},
+		"go for it",
+	)
+	if err != nil {
+		t.Fatalf("MaterializeRequestedApproval(expired authority bundle) err = %v", err)
+	}
+	if materialized {
+		t.Fatal("materialized = true, want expired handoff resolved and ordinary turn path left open")
+	}
+	open, err := store.OpenNextActionsBySession(key, 20)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	for _, action := range open {
+		if action.RecordID == expiredRecordID {
+			t.Fatalf("open actions = %#v, want expired authority-bundle handoff resolved", open)
+		}
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no approval card for expired bundle", inlineCount)
+	}
+}
+
+func TestRecoveryHandoffMaterializationWhenUserReturnsAfterExpiredAuthorityBundle(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9059, UserID: 0, Scope: telegramDMScopeRef(9059)}
+	expiredRecordID := seedExpiredAuthorityBundleHandoff(t, store, key, "expired-before-valid", time.Now().UTC().Add(-2*time.Hour))
+	validBundleID := seedGrantOnlyAuthorityBundleHandoff(t, store, key, "valid-behind-expired")
+
+	materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9059, SenderID: 1001, Text: "go for it", MessageID: 342},
+		"go for it",
+	)
+	if err != nil {
+		t.Fatalf("MaterializeRequestedApproval(expired then valid authority bundle) err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want valid authority bundle behind expired handoff to materialize")
+	}
+	open, err := store.OpenNextActionsBySession(key, 20)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	validRecordID := session.NextActionRecordID(session.SessionIDForKey(key), "authority_bundle_request", validBundleID, session.NextActionBlockedNeedsAuthority, time.Unix(0, 0).UTC())
+	for _, action := range open {
+		if action.RecordID == expiredRecordID || action.RecordID == validRecordID {
+			t.Fatalf("open actions = %#v, want expired handoff resolved and valid handoff materialized", open)
+		}
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one approval card for valid bundle behind expired handoff", inlineCount)
+	}
+}
+
 func TestRequestApprovalMaterializeRetriesAfterFailedDelivery(t *testing.T) {
 	t.Parallel()
 
@@ -2106,6 +2216,70 @@ func TestRequestApprovalMaterializeRetriesAfterFailedDelivery(t *testing.T) {
 	if inlineCount != 1 {
 		t.Fatalf("inline count after delivered retry = %d, want no duplicate", inlineCount)
 	}
+}
+
+func seedExpiredAuthorityBundleHandoff(t *testing.T, store *session.SQLiteStore, key session.SessionKey, requestToken string, createdAt time.Time) string {
+	t.Helper()
+
+	createdAt = createdAt.UTC()
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC().Add(-2 * time.Hour)
+	}
+	expiresAt := createdAt.Add(time.Hour)
+	bundle, err := session.CompileAuthorityBundleContract(session.AuthorityBundleContractInput{
+		RequestInstanceID: "expired-authority-bundle-" + strings.TrimSpace(requestToken),
+		SessionID:         session.SessionIDForKey(key),
+		Principal:         "telegram:1001",
+		Objective:         "Expired authority bundle should not wedge later user input.",
+		Summary:           "Expired authority bundle for recovery handoff terminalization regression.",
+		AllowedActions:    []string{"invoke_expired_resource"},
+		ForbiddenActions:  []string{"expand_authority_without_new_approval", "unbounded_retry_loop"},
+		StopConditions:    []string{"stop after one approval or typed blocker"},
+		RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+			GrantID:        "grant-expired-" + strings.TrimSpace(requestToken),
+			Kind:           session.CapabilityKindGenericDelegation,
+			TargetResource: "expired authority bundle test resource",
+			GrantedTo:      "telegram:1001",
+			AllowedActions: []string{"invoke"},
+			Contract:       `{"bounded_effect":"Expired grant-only approval should be terminalized before execution."}`,
+			Constraints:    `{"scope":"expired_authority_bundle_test"}`,
+		}},
+		CreatedAt: createdAt,
+		ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		t.Fatalf("CompileAuthorityBundleContract(expired) err = %v", err)
+	}
+	bundle, err = store.UpsertAuthorityBundleContract(bundle)
+	if err != nil {
+		t.Fatalf("UpsertAuthorityBundleContract(expired) err = %v", err)
+	}
+	inputJSON, err := promotedDurableChildAuthorityBundleOperationInput(bundle.BundleID)
+	if err != nil {
+		t.Fatalf("promotedDurableChildAuthorityBundleOperationInput(expired) err = %v", err)
+	}
+	recordID := session.NextActionRecordID(session.SessionIDForKey(key), "authority_bundle_request", bundle.BundleID, session.NextActionBlockedNeedsAuthority, time.Unix(0, 0).UTC())
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           recordID,
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "authority_bundle_request",
+		SubjectRef:         bundle.BundleID,
+		CausalRefs:         []string{"authority_bundle:" + bundle.BundleID},
+		NextAction:         "review the bounded authority bundle and approve only if still current",
+		RequiredAuthority:  "authority_bundle",
+		ResourceBlocker:    "authority_bundle_approval",
+		RetryPolicy:        "retry_after_bundle_approval",
+		OperationKind:      "authority_bundle_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: inputJSON,
+		OperatorProjection: "Expired authority bundle should be terminalized.",
+		CreatedAt:          createdAt,
+	}); err != nil {
+		t.Fatalf("RecordNextAction(expired authority bundle) err = %v", err)
+	}
+	return recordID
 }
 
 func TestRequestApprovalSameContractNewInstanceAfterConsumedDeliversNewCard(t *testing.T) {

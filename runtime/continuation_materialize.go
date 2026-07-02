@@ -536,18 +536,21 @@ func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context
 				continue
 			}
 		case "authority_bundle_request":
-			executable, invalid, err := r.recoveryApprovalAuthorityBundleExecutable(key, action)
+			executable, invalid, terminalReason, err := r.recoveryApprovalAuthorityBundleExecutable(key, action, now)
 			if err != nil {
 				return false, false, err
 			}
 			if invalid {
+				if strings.TrimSpace(terminalReason) == "" {
+					terminalReason = "invalid_authority_bundle_handoff"
+				}
 				if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
 					RecordID:    action.RecordID,
 					Key:         key,
 					Owner:       "runtime",
 					SubjectKind: action.SubjectKind,
 					SubjectRef:  action.SubjectRef,
-					Reason:      "invalid_authority_bundle_handoff",
+					Reason:      terminalReason,
 					ResolvedAt:  now,
 				}); err != nil {
 					return false, false, fmt.Errorf("resolve invalid authority bundle handoff %s: %w", action.RecordID, err)
@@ -643,36 +646,45 @@ func (r *Runtime) recoveryApprovalContinuationContractExecutable(key session.Ses
 	return true, false, nil
 }
 
-func (r *Runtime) recoveryApprovalAuthorityBundleExecutable(key session.SessionKey, action session.NextActionRecord) (bool, bool, error) {
+func (r *Runtime) recoveryApprovalAuthorityBundleExecutable(key session.SessionKey, action session.NextActionRecord, now time.Time) (bool, bool, string, error) {
 	if r == nil || r.store == nil {
-		return false, false, nil
+		return false, false, "", nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
 	}
 	var input recoveryApprovalHandoffInput
 	if err := json.Unmarshal([]byte(action.OperationInputJSON), &input); err != nil {
-		return false, true, nil
+		return false, true, "invalid_authority_bundle_handoff", nil
 	}
 	bundleID := strings.TrimSpace(input.ContractID)
 	if bundleID == "" {
-		return false, true, nil
+		return false, true, "invalid_authority_bundle_handoff", nil
 	}
 	bundle, ok, err := r.store.AuthorityBundleContract(bundleID)
 	if err != nil {
-		return false, false, err
+		return false, false, "", err
 	}
 	if !ok {
-		return false, true, nil
+		return false, true, "invalid_authority_bundle_handoff", nil
 	}
 	bundle = session.NormalizeAuthorityBundleContract(bundle)
+	if bundle.Status != session.AuthorityBundleStatusRecorded {
+		return false, true, "terminal_authority_bundle_handoff", nil
+	}
 	if bundle.SessionID != "" && bundle.SessionID != session.SessionIDForKey(key) {
-		return false, true, nil
+		return false, true, "invalid_authority_bundle_handoff", nil
+	}
+	if !bundle.ExpiresAt.IsZero() && !now.Before(bundle.ExpiresAt.UTC()) {
+		return false, true, "expired_authority_bundle_handoff", nil
 	}
 	if strings.TrimSpace(bundle.PrimaryContinuationContractID) != "" || len(bundle.RequiredCapabilityGrants) > 0 {
-		return true, false, nil
+		return true, false, "", nil
 	}
 	if key.Scope.Kind == session.ScopeKindDurableAgent {
-		return false, false, nil
+		return false, false, "", nil
 	}
-	return false, true, nil
+	return false, true, "invalid_authority_bundle_handoff", nil
 }
 
 func (r *Runtime) sendMaterializedRecoveryApprovalOfferLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, action session.NextActionRecord, now time.Time) error {
