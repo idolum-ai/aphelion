@@ -115,6 +115,13 @@ authority type belongs in code only when it carries durable enforcement value or
 useful aggregate labeling across repeated workflows; otherwise the one-time
 case should stay a compiled recovery contract.
 
+For long-running plans, unknown authority should be treated as something the run
+identifies, not something the model guesses. A fail-closed collision with an
+authority boundary is a valid discovery event when it produces a typed blocker,
+compiled recovery contract, and replayable next action. Static plan analysis and
+lookahead may propose authority shapes, but execution remains gated on the same
+compiled contracts.
+
 Unknown edge cases are expected. The answer is not to pretend every phrase can
 be exhaustively matched; the answer is to preserve enough structure, evidence,
 fallbacks, and emergency protocols that the system can stop, ask, recover, or
@@ -127,6 +134,12 @@ forbidden resources, consent subject, TTL, turn or action budget, validation
 gates, and stop conditions.
 
 The boundary should be readable by the operator and enforceable by the runtime.
+
+Approved authority should also be perishable. A grant, lease, bundle, or
+speculative approval that was useful for one step of a long plan must be
+consumed, expired, or invalidated when the step, session, or plan version no
+longer matches. A long run may accumulate authority only while that authority
+still has a current reason to exist.
 
 Raw shell is an execution transport, not an authority model. When a shell
 command contains multiple side-effecting atoms, dynamic execution, executable
@@ -180,6 +193,13 @@ authority or evidence is missing, what exact next action can repair it, who can
 take that action, and what will happen after it is approved or completed. The
 next consumer should act on that same contract instead of reconstructing the
 failure from prose or nearby state.
+
+Repeated safe stops inside one plan should become cumulative knowledge, not
+isolated interruptions. The planned direction is a per-plan identification
+ledger: discovered authority shapes are labeled by collision, static analysis,
+lookahead, or operator review, then projected as a current menu over live grant
+state. The operator sees cards and buttons; the runtime consumes ledger-backed
+contracts.
 
 ### Persona and governor are collaborators
 
