@@ -64,10 +64,72 @@ func (s *SQLiteStore) RecordContinuationRecoveryContractNextAction(contractInput
 	if err != nil {
 		return ContinuationRecoveryContract{}, NextActionRecord{}, err
 	}
+	if err := recordContinuationRecoveryIdentificationTx(tx, contract, record); err != nil {
+		return ContinuationRecoveryContract{}, NextActionRecord{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return ContinuationRecoveryContract{}, NextActionRecord{}, fmt.Errorf("commit continuation recovery publication tx: %w", err)
 	}
 	return contract, record, nil
+}
+
+func recordContinuationRecoveryIdentificationTx(tx *sql.Tx, contract ContinuationRecoveryContract, record NextActionRecord) error {
+	contract = NormalizeContinuationRecoveryContract(contract)
+	if strings.TrimSpace(contract.SessionID) == "" || strings.TrimSpace(contract.ContractHash) == "" {
+		return nil
+	}
+	entry, err := recordIdentificationLedgerEntryTx(tx, IdentificationLedgerEntryInput{
+		PlanID:      IdentificationPlanIDForSession(contract.SessionID),
+		PlanVersion: IdentificationDefaultPlanVersion,
+		SessionID:   contract.SessionID,
+		StepRef:     contract.SubjectRef,
+		ShapeHash:   contract.ContractHash,
+		LabelRef:    contract.ContractID,
+		Status:      IdentificationLedgerStatusProposed,
+		CreatedAt:   record.CreatedAt,
+		UpdatedAt:   record.CreatedAt,
+	})
+	if err != nil {
+		return fmt.Errorf("record continuation recovery identification entry: %w", err)
+	}
+	evidenceRef := "next_action:" + strings.TrimSpace(record.RecordID)
+	observations := []struct {
+		property IdentificationObservationProperty
+		value    string
+	}{
+		{IdentificationPropertyApprovalClass, string(contract.LeaseClass)},
+		{IdentificationPropertyContract, contract.ContractID},
+		{IdentificationPropertyTool, strings.TrimSpace(contract.Tool + ":" + contract.ToolAction)},
+		{IdentificationPropertyRetryability, record.RetryPolicy},
+	}
+	switch {
+	case contract.AgentID != "":
+		observations = append(observations, struct {
+			property IdentificationObservationProperty
+			value    string
+		}{IdentificationPropertyResource, "durable_agent:" + contract.AgentID})
+	case contract.Resource != "":
+		observations = append(observations, struct {
+			property IdentificationObservationProperty
+			value    string
+		}{IdentificationPropertyResource, contract.Resource})
+	}
+	for _, observation := range observations {
+		if strings.TrimSpace(observation.value) == "" || strings.TrimSpace(observation.value) == ":" {
+			continue
+		}
+		if _, err := recordIdentificationLedgerObservationTx(tx, IdentificationLedgerObservationInput{
+			EntryID:     entry.EntryID,
+			Method:      IdentificationObservationCollision,
+			Property:    observation.property,
+			Value:       observation.value,
+			EvidenceRef: evidenceRef,
+			ObservedAt:  record.CreatedAt,
+		}); err != nil {
+			return fmt.Errorf("record continuation recovery identification observation: %w", err)
+		}
+	}
+	return nil
 }
 
 func upsertContinuationRecoveryContractTx(tx *sql.Tx, input ContinuationRecoveryContract) (ContinuationRecoveryContract, error) {

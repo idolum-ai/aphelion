@@ -4,6 +4,8 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -18,9 +20,53 @@ func (r *Runtime) HandleReviewEventAction(ctx context.Context, cb telegram.Callb
 	switch action {
 	case core.ReviewEventActionChildWakeRetry:
 		return r.handleReviewEventChildWakeRetry(ctx, cb, event)
+	case core.ReviewEventActionLookaheadNext:
+		return r.handleReviewEventLookaheadNext(ctx, cb, event)
 	default:
 		return "This review action is not handled by the runtime.", nil
 	}
+}
+
+func (r *Runtime) handleReviewEventLookaheadNext(_ context.Context, cb telegram.CallbackQuery, event session.ReviewEvent) (string, error) {
+	if r == nil || r.store == nil {
+		return "", fmt.Errorf("runtime store unavailable")
+	}
+	if response, err := reviewEventPrivateAdminCallbackResponse(cb, event, "lookahead"); err != nil {
+		return "", err
+	} else if response != "" {
+		return response, nil
+	}
+	sessionID := strings.TrimSpace(event.TargetSessionID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(event.SourceSessionID)
+	}
+	if sessionID == "" {
+		return "", fmt.Errorf("lookahead requires a review event session")
+	}
+	stepRef := "review_event:" + fmt.Sprint(event.ID)
+	if meta, ok := parseReviewEventArtifactMetadata(event); ok {
+		if recordID := strings.TrimSpace(meta.Metadata["next_action_record_id"]); recordID != "" {
+			stepRef = "next_action:" + recordID
+		}
+	}
+	shapeHash := reviewEventLookaheadShapeHash(event)
+	_, _, err := r.store.RecordIdentificationLedgerObservation(session.IdentificationLedgerEntryInput{
+		PlanID:      session.IdentificationPlanIDForSession(sessionID),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   sessionID,
+		StepRef:     stepRef,
+		ShapeHash:   shapeHash,
+		Status:      session.IdentificationLedgerStatusPartial,
+	}, session.IdentificationLedgerObservationInput{
+		Method:      session.IdentificationObservationLookahead,
+		Property:    session.IdentificationPropertyApprovalClass,
+		Value:       "review_event_frontier",
+		EvidenceRef: "review_event:" + fmt.Sprint(event.ID),
+	})
+	if err != nil {
+		return "", fmt.Errorf("record lookahead identification: %w", err)
+	}
+	return "Next authority frontier recorded. No authority was approved or executed.", nil
 }
 
 func (r *Runtime) handleReviewEventChildWakeRetry(ctx context.Context, cb telegram.CallbackQuery, event session.ReviewEvent) (string, error) {
@@ -149,6 +195,39 @@ func childWakeRetryPrivateAdminCallbackTarget(cb telegram.CallbackQuery, event s
 		return 0, senderID, "This child wake retry is no longer actionable; use the newest child status.", nil
 	}
 	return targetAdminChatID, senderID, "", nil
+}
+
+func reviewEventPrivateAdminCallbackResponse(cb telegram.CallbackQuery, event session.ReviewEvent, label string) (string, error) {
+	senderID := callbackReviewEventSenderID(cb)
+	if senderID == 0 {
+		return "", fmt.Errorf("%s requires a Telegram admin callback", label)
+	}
+	targetAdminChatID := event.TargetAdminChatID
+	if targetAdminChatID == 0 {
+		return "", fmt.Errorf("%s requires a target admin review event", label)
+	}
+	if senderID != targetAdminChatID {
+		return "Only the target admin can use this control.", nil
+	}
+	if cb.Message == nil || cb.Message.Chat == nil || cb.Message.Chat.ID != targetAdminChatID {
+		return "This control is only actionable from the delivered private admin card.", nil
+	}
+	if event.DeliveryMessageID != 0 && cb.Message.MessageID != event.DeliveryMessageID {
+		return "This control is no longer actionable; use the newest card.", nil
+	}
+	return "", nil
+}
+
+func reviewEventLookaheadShapeHash(event session.ReviewEvent) string {
+	seed := strings.Join([]string{
+		fmt.Sprint(event.ID),
+		strings.TrimSpace(event.SourceSessionID),
+		strings.TrimSpace(event.TargetSessionID),
+		strings.TrimSpace(event.Summary),
+		strings.TrimSpace(event.MetadataJSON),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(seed))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func callbackReviewEventSenderID(cb telegram.CallbackQuery) int64 {

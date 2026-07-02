@@ -2622,6 +2622,42 @@ func TestMigratesSchemaV86ToV87RetiresLegacyContinuationRecoveryContracts(t *tes
 	}
 }
 
+func TestMigratesSchemaV87ToV88IdentificationLedger(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v87-identification-ledger.db")
+	seed, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(seed current schema) err = %v", err)
+	}
+	if _, err := seed.db.Exec(`DROP TABLE IF EXISTS identification_ledger_observations`); err != nil {
+		t.Fatalf("drop identification_ledger_observations: %v", err)
+	}
+	if _, err := seed.db.Exec(`DROP TABLE IF EXISTS identification_ledger_entries`); err != nil {
+		t.Fatalf("drop identification_ledger_entries: %v", err)
+	}
+	if _, err := seed.db.Exec(`DELETE FROM schema_version`); err != nil {
+		t.Fatalf("delete schema_version: %v", err)
+	}
+	if _, err := seed.db.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion87); err != nil {
+		t.Fatalf("insert v87 schema_version: %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("close seed: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v87) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteTable(t, store.db, "identification_ledger_entries")
+	assertSQLiteTable(t, store.db, "identification_ledger_observations")
+	assertSQLiteColumn(t, store.db, "identification_ledger_entries", "expires_at")
+	assertSQLiteColumn(t, store.db, "identification_ledger_observations", "method")
+}
+
 func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {
 	t.Helper()
 	rows, err := db.Query(`PRAGMA table_info(` + tableName + `)`)

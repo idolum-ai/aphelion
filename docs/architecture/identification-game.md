@@ -397,6 +397,19 @@ Likely new surfaces:
 - `runtime/lookahead.go`
 - `runtime/plan_static_identify.go`
 
+Initial implementation slice:
+
+- `session/types_identification_ledger.go`: ledger entry and observation
+  signatures.
+- `session/store_identification_ledger.go`: append-only observation history and
+  query projection.
+- `session/identification_ledger_schema.go`: v88 ledger migration.
+- `runtime/authority_discovery_menu.go`: deterministic menu and local metrics
+  projection.
+- `core/review_event_callback.go` and
+  `internal/telegramdecision/telegram_decisions_review.go`: `Next grant`
+  callback token and confirmation-card projection.
+
 Likely extensions:
 
 - `session/types_continuation_recovery.go`: add plan identity terms to future
@@ -511,3 +524,13 @@ unknown shape
   -> bounded approval
   -> consumption or shedding
 ```
+
+## References
+
+- Benjamin Soul, `Serpentes`: <https://benjamin-soul.itch.io/serpentes>.
+- Ralph Loops: <https://ralphloops.io/>.
+- Ralph Workflow: <https://ralphworkflow.com/>.
+- Robin Milner, *Communication and Concurrency*; C. A. R. Hoare,
+  *Communicating Sequential Processes*; Kohei Honda et al. on session types.
+  These are background references for typed interaction rather than required
+  implementation dependencies.

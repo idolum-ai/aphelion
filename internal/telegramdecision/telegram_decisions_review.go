@@ -53,6 +53,9 @@ func (h *DecisionHandler) handleReviewEventCallback(ctx context.Context, cb tele
 	if action == core.ReviewEventActionChildWakeRetry {
 		return h.handleReviewEventChildWakeRetryCallback(ctx, cb, *event)
 	}
+	if action == core.ReviewEventActionLookaheadNext {
+		return h.handleReviewEventLookaheadCallback(ctx, cb, *event)
+	}
 	if reviewEventCallbackExpired(*event, time.Now()) {
 		_ = h.editReviewEventCallbackMessage(ctx, cb, "Approval timed out — use a fresh prompt.")
 		return h.answerReviewEventCallback(ctx, cb, "Approval timed out. Use a fresh prompt.")
@@ -125,7 +128,11 @@ func (h *DecisionHandler) handleReviewEventCallback(ctx context.Context, cb tele
 	}
 	text := reviewEventConfirmationText(label, record, *event)
 	text = reviewEventConfirmationWithGrantActivation(text, record, grant, grantActivated, review.Status)
-	_ = h.editReviewEventCallbackMessage(ctx, cb, text)
+	if review.Status == session.CapabilityReviewStatusApproved {
+		_ = h.editReviewEventCallbackMessageWithLookahead(ctx, cb, *event, text)
+	} else {
+		_ = h.editReviewEventCallbackMessage(ctx, cb, text)
+	}
 	return h.answerReviewEventCallback(ctx, cb, "")
 }
 
@@ -148,6 +155,30 @@ func (h *DecisionHandler) handleReviewEventChildWakeRetryCallback(ctx context.Co
 	text = strings.TrimSpace(text)
 	if text == "" {
 		text = "Child wake retry approval surfaced."
+	}
+	_ = h.editReviewEventCallbackMessage(ctx, cb, text)
+	return h.answerReviewEventCallback(ctx, cb, "")
+}
+
+func (h *DecisionHandler) handleReviewEventLookaheadCallback(ctx context.Context, cb telegram.CallbackQuery, event session.ReviewEvent) error {
+	if reviewEventCallbackExpired(event, time.Now()) {
+		_ = h.editReviewEventCallbackMessage(ctx, cb, "Lookahead timed out — use a fresh prompt.")
+		return h.answerReviewEventCallback(ctx, cb, "Lookahead timed out. Use a fresh prompt.")
+	}
+	if event.Status == "dismissed" {
+		_ = h.editReviewEventCallbackMessage(ctx, cb, "Stale lookahead card — use the newest prompt.")
+		return h.answerReviewEventCallback(ctx, cb, "This lookahead card is stale. Use the newest prompt.")
+	}
+	if h.reviewEventActionRunner == nil {
+		return h.answerReviewEventCallback(ctx, cb, "Lookahead controls are unavailable in this runtime.")
+	}
+	text, err := h.reviewEventActionRunner.HandleReviewEventAction(ctx, cb, event, core.ReviewEventActionLookaheadNext)
+	if err != nil {
+		return h.answerReviewEventCallback(ctx, cb, compactSentence(err.Error()))
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		text = "Next authority shape recorded for review."
 	}
 	_ = h.editReviewEventCallbackMessage(ctx, cb, text)
 	return h.answerReviewEventCallback(ctx, cb, "")
@@ -244,6 +275,9 @@ func (h *DecisionHandler) applyReviewEventReaction(ctx context.Context, msg core
 	}
 	text := reviewEventConfirmationText(label, record, event)
 	text = reviewEventConfirmationWithGrantActivation(text, record, grant, grantActivated, review.Status)
+	if review.Status == session.CapabilityReviewStatusApproved {
+		return h.editReviewEventReactionMessageWithLookahead(ctx, msg, event, text)
+	}
 	return h.editReviewEventReactionMessage(ctx, msg, text)
 }
 
@@ -283,6 +317,18 @@ func (h *DecisionHandler) editReviewEventReactionMessage(ctx context.Context, ms
 		return nil
 	}
 	return EditDecisionMessageClearingInlineKeyboard(ctx, h.sender, msg.ChatID, msg.Reaction.MessageID, text)
+}
+
+func (h *DecisionHandler) editReviewEventReactionMessageWithLookahead(ctx context.Context, msg core.InboundMessage, event session.ReviewEvent, text string) error {
+	if h == nil || h.sender == nil || msg.ChatID == 0 || msg.Reaction == nil || msg.Reaction.MessageID <= 0 || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	if editor, ok := h.sender.(interface {
+		EditMessageTextWithInlineKeyboard(context.Context, int64, int64, string, string, [][]telegram.InlineButton) error
+	}); ok {
+		return editor.EditMessageTextWithInlineKeyboard(ctx, msg.ChatID, msg.Reaction.MessageID, text, "", reviewEventLookaheadRows(event.ID))
+	}
+	return h.editReviewEventReactionMessage(ctx, msg, text)
 }
 
 func labelForCapabilityReview(status session.CapabilityReviewStatus) string {
@@ -917,6 +963,26 @@ func (h *DecisionHandler) editReviewEventCallbackMessage(ctx context.Context, cb
 		return nil
 	}
 	return EditDecisionMessageClearingInlineKeyboard(ctx, h.sender, cb.Message.Chat.ID, cb.Message.MessageID, text)
+}
+
+func (h *DecisionHandler) editReviewEventCallbackMessageWithLookahead(ctx context.Context, cb telegram.CallbackQuery, event session.ReviewEvent, text string) error {
+	if h == nil || h.sender == nil || cb.Message == nil || cb.Message.Chat == nil || cb.Message.MessageID == 0 {
+		return nil
+	}
+	if editor, ok := h.sender.(interface {
+		EditMessageTextWithInlineKeyboard(context.Context, int64, int64, string, string, [][]telegram.InlineButton) error
+	}); ok {
+		return editor.EditMessageTextWithInlineKeyboard(ctx, cb.Message.Chat.ID, cb.Message.MessageID, text, "", reviewEventLookaheadRows(event.ID))
+	}
+	return h.editReviewEventCallbackMessage(ctx, cb, text)
+}
+
+func reviewEventLookaheadRows(eventID int64) [][]telegram.InlineButton {
+	data := core.EncodeReviewEventCallbackData(eventID, core.ReviewEventActionLookaheadNext)
+	if strings.TrimSpace(data) == "" {
+		return nil
+	}
+	return [][]telegram.InlineButton{{{Text: "Next grant", CallbackData: data}}}
 }
 
 func reviewEventCallbackExpired(event session.ReviewEvent, now time.Time) bool {
