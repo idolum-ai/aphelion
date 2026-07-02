@@ -15,6 +15,13 @@ The invariant is:
 > invocation evidence that names the run, session, lease, grant, action, and
 > outcome.
 
+Authority continuity is trace continuity. A sampled language-agent turn may vary
+from one run to the next, but the authority events it produces must remain
+typed, ordered, and comparable: admission, point-of-use validation, consumption,
+blocker, recovery handoff, invalidation, and terminal outcome. Runtime layers may
+carry only the durable identity needed to reload those records; they must not
+reconstruct authority from neighboring prose or ambient context.
+
 The child substrate is deliberately strong vertically: durable child identity,
 policy, workspace, memory, control traffic, replay protection, snapshots, and
 reporting are owned by `durableagent/`. This document covers the horizontal

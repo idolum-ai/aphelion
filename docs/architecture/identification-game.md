@@ -432,6 +432,35 @@ Regression posture:
 - It must never let approved authority survive plan revision, run end, expiry,
   or step mismatch.
 
+## Stochastic Authority Traces
+
+Long-running language agents are stochastic processes. The same plan frontier,
+prompt, and model slot can produce different sampled paths. Aphelion should not
+try to make those paths deterministic by trusting prose. It should make them
+comparable by recording typed authority traces.
+
+The trace alphabet is made of records the runtime already understands or should
+make first-class:
+
+- blocker class;
+- continuation recovery contract;
+- capability grant or lease request;
+- review-card action;
+- child task packet, attempt, result, and blocker;
+- authority admission and consumption;
+- stale-tail invalidation;
+- terminal outcome.
+
+The identification ledger is therefore more than memory for one run. It is the
+empirical substrate for comparing agent behavior under the same authority
+policy. Two models, prompts, or child implementations are equivalent for an
+Aphelion workflow only when they preserve hard invariants and induce acceptably
+close distributions over typed authority traces.
+
+Hard invariants remain categorical: unauthorized effects must never execute.
+Optimization then happens over trace distributions: interruptions, coverage,
+over-grant mass, wasted collisions, tail area, and shape errors.
+
 ## Design Rule
 
 One-time authority should be discovered, labeled, and consumed inside the run.
