@@ -137,6 +137,7 @@ func (s *SQLiteStore) IdentificationLedgerEntries(query IdentificationLedgerQuer
 }
 
 func recordIdentificationLedgerEntryTx(tx *sql.Tx, input IdentificationLedgerEntryInput) (IdentificationLedgerEntry, error) {
+	statusExplicit := identificationLedgerEntryStatusExplicit(input)
 	input = NormalizeIdentificationLedgerEntryInput(input)
 	if err := ValidateIdentificationLedgerEntryInput(input); err != nil {
 		return IdentificationLedgerEntry{}, err
@@ -159,9 +160,12 @@ func recordIdentificationLedgerEntryTx(tx *sql.Tx, input IdentificationLedgerEnt
 			updatedAt = existing.UpdatedAt
 		}
 		labelRef := firstNonEmptyStore(input.LabelRef, existing.LabelRef)
-		status := input.Status
-		if status == "" || status == IdentificationLedgerStatusUnidentified {
-			status = existing.Status
+		status := existing.Status
+		if statusExplicit {
+			status = input.Status
+			if !identificationLedgerEntryStatusTransitionAllowed(existing.Status, status) {
+				return IdentificationLedgerEntry{}, fmt.Errorf("identification ledger entry %s invalid status transition %s -> %s", input.EntryID, existing.Status, status)
+			}
 		}
 		expiresAt := input.ExpiresAt
 		if expiresAt.IsZero() {
@@ -244,6 +248,44 @@ func recordIdentificationLedgerObservationTx(tx *sql.Tx, input IdentificationLed
 		ExpiresAt:     input.ExpiresAt,
 		ObservedAt:    input.ObservedAt,
 	}, nil
+}
+
+func identificationLedgerEntryStatusExplicit(input IdentificationLedgerEntryInput) bool {
+	return strings.TrimSpace(string(input.Status)) != ""
+}
+
+func identificationLedgerEntryStatusTransitionAllowed(from IdentificationLedgerEntryStatus, to IdentificationLedgerEntryStatus) bool {
+	from = NormalizeIdentificationLedgerEntryStatus(from)
+	to = NormalizeIdentificationLedgerEntryStatus(to)
+	if from == to {
+		return true
+	}
+	if to == "" || to == IdentificationLedgerStatusUnidentified {
+		return false
+	}
+	switch from {
+	case "", IdentificationLedgerStatusUnidentified:
+		return true
+	case IdentificationLedgerStatusPartial:
+		return true
+	case IdentificationLedgerStatusProposed:
+		return to == IdentificationLedgerStatusApproved || identificationLedgerEntryTerminalStatus(to)
+	case IdentificationLedgerStatusApproved:
+		return identificationLedgerEntryTerminalStatus(to)
+	case IdentificationLedgerStatusConsumed, IdentificationLedgerStatusExpired, IdentificationLedgerStatusInvalidated:
+		return false
+	default:
+		return false
+	}
+}
+
+func identificationLedgerEntryTerminalStatus(status IdentificationLedgerEntryStatus) bool {
+	switch NormalizeIdentificationLedgerEntryStatus(status) {
+	case IdentificationLedgerStatusConsumed, IdentificationLedgerStatusExpired, IdentificationLedgerStatusInvalidated:
+		return true
+	default:
+		return false
+	}
 }
 
 func identificationLedgerEntryByIDTx(tx *sql.Tx, entryID string) (IdentificationLedgerEntry, bool, error) {

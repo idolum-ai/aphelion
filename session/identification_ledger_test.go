@@ -85,6 +85,102 @@ func TestIdentificationLedgerPreservesGraduatedObservationHistory(t *testing.T) 
 	}
 }
 
+func TestIdentificationLedgerImplicitObservationDoesNotDowngradeLifecycleStatus(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	entryInput := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:read-unread-mail",
+		ShapeHash:   "sha256:mail-shape",
+		LabelRef:    "crc-mail-read",
+		Status:      IdentificationLedgerStatusApproved,
+	}
+	if _, err := store.RecordIdentificationLedgerEntry(entryInput); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(approved) err = %v", err)
+	}
+	implicitInput := IdentificationLedgerEntryInput{
+		PlanID:      entryInput.PlanID,
+		PlanVersion: entryInput.PlanVersion,
+		SessionID:   entryInput.SessionID,
+		StepRef:     entryInput.StepRef,
+		ShapeHash:   entryInput.ShapeHash,
+	}
+	if _, _, err := store.RecordIdentificationLedgerObservation(implicitInput, IdentificationLedgerObservationInput{
+		Method:      IdentificationObservationCollision,
+		Property:    IdentificationPropertyRetryability,
+		Value:       "bounded_backoff",
+		EvidenceRef: "next_action:mail-read-blocker",
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(implicit status) err = %v", err)
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      entryInput.PlanID,
+		PlanVersion: entryInput.PlanVersion,
+		SessionID:   entryInput.SessionID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 1 {
+		t.Fatalf("entries = %#v, want one", projections)
+	}
+	if got := projections[0].Entry.Status; got != IdentificationLedgerStatusApproved {
+		t.Fatalf("implicit observation downgraded status to %q, want approved", got)
+	}
+	if got := projections[0].Entry.LabelRef; got != "crc-mail-read" {
+		t.Fatalf("implicit observation label_ref = %q, want existing label", got)
+	}
+	entryInput.Status = IdentificationLedgerStatusProposed
+	if _, err := store.RecordIdentificationLedgerEntry(entryInput); err == nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(explicit downgrade) err = nil, want transition error")
+	}
+
+	terminalInput := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:archive-processed-mail",
+		ShapeHash:   "sha256:archive-shape",
+		LabelRef:    "crc-archive-processed",
+		Status:      IdentificationLedgerStatusConsumed,
+	}
+	if _, err := store.RecordIdentificationLedgerEntry(terminalInput); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(consumed) err = %v", err)
+	}
+	implicitTerminalInput := terminalInput
+	implicitTerminalInput.LabelRef = ""
+	implicitTerminalInput.Status = ""
+	if _, _, err := store.RecordIdentificationLedgerObservation(implicitTerminalInput, IdentificationLedgerObservationInput{
+		Method:      IdentificationObservationCollision,
+		Property:    IdentificationPropertyTool,
+		Value:       "mail:archive",
+		EvidenceRef: "next_action:archive-blocker",
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(terminal implicit status) err = %v", err)
+	}
+	projections, err = store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      terminalInput.PlanID,
+		PlanVersion: terminalInput.PlanVersion,
+		SessionID:   terminalInput.SessionID,
+		Status:      IdentificationLedgerStatusConsumed,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries(consumed) err = %v", err)
+	}
+	if len(projections) != 1 || projections[0].Entry.Status != IdentificationLedgerStatusConsumed {
+		t.Fatalf("consumed projections = %#v, want consumed entry preserved", projections)
+	}
+	terminalInput.Status = IdentificationLedgerStatusApproved
+	if _, err := store.RecordIdentificationLedgerEntry(terminalInput); err == nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(terminal reopen) err = nil, want transition error")
+	}
+}
+
 func TestContinuationRecoveryPublicationRecordsIdentificationLedgerCollision(t *testing.T) {
 	t.Parallel()
 
