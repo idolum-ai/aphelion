@@ -158,6 +158,47 @@ This is the replacement target for natural-language, phrase-heavy child or
 durable-agent routing heuristics. The model can interpret messy user intent, but
 authority affordances should come from the compiled menu.
 
+## Role Separation
+
+The menu exists to keep the user-facing persona out of kitchen grammar.
+
+The user-facing persona should behave like a waiter with a live menu:
+
+- select the closest menu token for the current user intent;
+- attach user notes and preferences;
+- surface ambiguity when no menu token is close enough;
+- avoid constructing grants, leases, retry contracts, JSON payloads, or recovery
+  handoffs directly.
+
+The system compiler should behave like the kitchen:
+
+- expand the token and notes into workflow candidates;
+- derive workflow terms such as tool, action, principal, resource, lease class,
+  retry operation, and constraints;
+- check current ingredients: live grants, leases, bundles, policies, task state,
+  and evidence;
+- produce resolution sets when more than one safe path exists;
+- compile the selected path into typed contracts and next actions.
+
+The presentation layer is a fourth role, but not an AI role. It is deterministic
+projection:
+
+```text
+typed record
+  -> faithful Telegram card / button / status text
+```
+
+It should render contracts, ledger entries, and resolution sets. It should not
+invent authority, infer missing schema terms from prose, or make approval
+binding decisions outside the typed review state machine.
+
+This separation fixes the failure mode where a persona misses a brittle input
+shape and the system agent merely rejects it. The persona should choose
+`carbonara` and add "extra black pepper"; the compiler should know how carbonara
+is cooked, what ingredients are missing, and which safe alternatives can be
+offered. In Aphelion terms: the persona chooses a menu token and notes; the
+system owns authority compilation.
+
 ## Identification Methods
 
 ### Collision
@@ -376,4 +417,3 @@ unknown shape
   -> bounded approval
   -> consumption or shedding
 ```
-

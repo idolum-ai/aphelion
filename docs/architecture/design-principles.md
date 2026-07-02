@@ -106,6 +106,12 @@ Open language should be interpreted by a layer that can disambiguate, ask for
 context, and return typed claims or proposed actions. The runtime can then
 validate those claims against contracts and evidence.
 
+Keep menu selection separate from kitchen compilation. A user-facing persona may
+select a compiled menu token and attach notes, but it should not need to know
+how to construct grants, leases, retry contracts, or recovery handoffs. The
+system compiler owns workflow expansion, resolution sets, and typed authority
+contracts. The presentation layer renders those records without inventing them.
+
 One-time authority should default to generic continuation recovery, not a new
 pre-coded grant type. If work is blocked by several narrow approvals, Aphelion
 may compile a broad-but-specific authority bundle from the typed blockers: what
