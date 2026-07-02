@@ -23,11 +23,12 @@ const (
 )
 
 type AuthorityDiscoveryLoadoutSlot struct {
-	TokenID   string
-	LabelRef  string
-	StepRef   string
-	ShapeHash string
-	ExpiresAt time.Time
+	TokenID       string
+	LabelRef      string
+	StepRef       string
+	ShapeHash     string
+	LiveAuthority bool
+	ExpiresAt     time.Time
 }
 
 type AuthorityDiscoveryResolutionCandidate struct {
@@ -128,9 +129,11 @@ func CompileAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuInput) AuthorityD
 		if tokenID == "" {
 			continue
 		}
-		state := AuthorityDiscoveryTokenExecutable
+		state := AuthorityDiscoveryTokenOneApprovalAway
 		if !slot.ExpiresAt.IsZero() && !slot.ExpiresAt.After(now) {
 			state = AuthorityDiscoveryTokenExpired
+		} else if slot.LiveAuthority {
+			state = AuthorityDiscoveryTokenExecutable
 		}
 		token := AuthorityDiscoveryMenuToken{
 			TokenID:   tokenID,

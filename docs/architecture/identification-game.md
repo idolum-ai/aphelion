@@ -93,6 +93,12 @@ runtime rule:
 - unused loadout authority contributes to over-grant mass;
 - execution still requires point-of-use validation.
 
+In menu projection, a loadout token is executable only when joined against live
+authority state. A caller may pass pre-verified live loadout slots into the pure
+menu compiler, but an unverified loadout remains one approval away. The word
+`executable` should never mean "the loadout was mentioned"; it means the
+corresponding grant, lease, or bundle is live at projection time.
+
 This gives operators a practical way to say "start with these known tools" while
 preserving the design rule that the run must identify the rest of its authority
 ontology honestly.
@@ -189,6 +195,16 @@ records an observation. If static analysis proposes a shape, collision confirms
 it, and the operator approves it, all three facts remain available. If a
 proposed lookahead label expires before any contract exists, the observation or
 entry expiry is enough to shed it.
+
+Lifecycle status is monotonic. An entry may move from partial knowledge toward a
+proposed or approved label, and then to a terminal status: consumed, expired, or
+invalidated. Direct partial-to-approved transitions are permitted for imported or
+already-live authority evidence that never needed a separate proposal card. A
+direct partial-to-terminal transition is permitted when the system learns that a
+shape was invalid, expired, or already consumed before it became useful. What is
+not permitted is implicit downgrade, implicit reopening, or silent expiry
+extension. Extending an expiry is a material lifecycle decision and must be
+explicit at the writer boundary.
 
 ### Truth Class
 
@@ -331,6 +347,13 @@ This gives operators a burst mode for long plans without reintroducing broad
 pre-granting. A user can walk the authority frontier before going offline, but
 the tail remains narrow, step-addressed, and perishable.
 
+The initial implementation slice only installs this non-executing meter: the
+button records a lookahead observation and proves the callback, authorization,
+and projection path. It does not yet simulate the plan to the next authority
+collision or compile the next candidate card. Until `runtime/lookahead.go`
+exists, `Next grant` is a safe bookmark on the current frontier, not the full
+scroll of identify.
+
 ## Resolution Sets
 
 A blocker often has more than one safe repair:
@@ -381,11 +404,14 @@ parallel approval model.
 
 ## Current Gaps
 
+The first implementation slice adds the identification ledger, collision
+publication, a pure menu projection, and a safe non-executing lookahead button.
 The architecture still lacks:
 
-- plan-level memory of discovered authority shapes;
-- a compiled menu over that memory;
-- lookahead as a typed non-executing action;
+- first-class plan objects and plan-version reshuffle triggers;
+- a live-state join that proves every executable menu token against current
+  grants, leases, bundles, and point-of-use constraints;
+- a lookahead simulator that advances to the next authority collision;
 - resolution sets for repair choices;
 - typed child result objects at the parent boundary;
 - allow-list child context construction;

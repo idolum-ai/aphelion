@@ -43,29 +43,46 @@ func TestCompileAuthorityDiscoveryMenuScoresFrontierAndLoadout(t *testing.T) {
 			},
 		}},
 		Loadout: []AuthorityDiscoveryLoadoutSlot{{
-			TokenID:   "loadout-github",
-			LabelRef:  "authbundle-standing-github",
+			TokenID:       "loadout-github",
+			LabelRef:      "authbundle-standing-github",
+			LiveAuthority: true,
+			ExpiresAt:     now.Add(time.Hour),
+		}, {
+			TokenID:   "loadout-github-unverified",
+			LabelRef:  "authbundle-unverified-github",
 			ExpiresAt: now.Add(time.Hour),
 		}},
 	})
-	if len(menu.Tokens) != 2 {
+	if len(menu.Tokens) != 3 {
 		t.Fatalf("tokens = %#v, want frontier plus loadout", menu.Tokens)
 	}
-	var frontier AuthorityDiscoveryMenuToken
+	var frontier, verifiedLoadout, unverifiedLoadout AuthorityDiscoveryMenuToken
 	for _, token := range menu.Tokens {
 		if token.TokenID == "ident-frontier" {
 			frontier = token
+		}
+		if token.TokenID == "loadout-github" {
+			verifiedLoadout = token
+		}
+		if token.TokenID == "loadout-github-unverified" {
+			unverifiedLoadout = token
 		}
 	}
 	if frontier.State != AuthorityDiscoveryTokenOneApprovalAway {
 		t.Fatalf("frontier state = %q, want one_approval_away", frontier.State)
 	}
+	if verifiedLoadout.State != AuthorityDiscoveryTokenExecutable {
+		t.Fatalf("verified loadout state = %q, want executable", verifiedLoadout.State)
+	}
+	if unverifiedLoadout.State != AuthorityDiscoveryTokenOneApprovalAway {
+		t.Fatalf("unverified loadout state = %q, want one_approval_away", unverifiedLoadout.State)
+	}
 	if len(frontier.ResolutionCandidates) != 1 || frontier.ResolutionCandidates[0].Kind != "continuation_recovery_contract" {
 		t.Fatalf("frontier candidates = %#v, want continuation recovery contract", frontier.ResolutionCandidates)
 	}
 	metrics := ScoreAuthorityDiscoveryMenu(menu)
-	if metrics.Interruptions != 1 {
-		t.Fatalf("interruptions = %d, want 1", metrics.Interruptions)
+	if metrics.Interruptions != 2 {
+		t.Fatalf("interruptions = %d, want frontier plus unverified loadout", metrics.Interruptions)
 	}
 	if metrics.OverGrantMass != 1 {
 		t.Fatalf("over grant mass = %d, want one unbound standing loadout", metrics.OverGrantMass)

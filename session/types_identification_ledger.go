@@ -157,7 +157,7 @@ func NormalizeIdentificationObservationProperty(property IdentificationObservati
 		IdentificationPropertyTool:
 		return IdentificationObservationProperty(normalizeEnumValue(string(property)))
 	default:
-		return IdentificationObservationProperty(normalizeEnumValue(string(property)))
+		return ""
 	}
 }
 

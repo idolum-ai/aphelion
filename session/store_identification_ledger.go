@@ -167,9 +167,9 @@ func recordIdentificationLedgerEntryTx(tx *sql.Tx, input IdentificationLedgerEnt
 				return IdentificationLedgerEntry{}, fmt.Errorf("identification ledger entry %s invalid status transition %s -> %s", input.EntryID, existing.Status, status)
 			}
 		}
-		expiresAt := input.ExpiresAt
-		if expiresAt.IsZero() {
-			expiresAt = existing.ExpiresAt
+		expiresAt, err := identificationLedgerEntryMergedExpiry(existing, input, statusExplicit)
+		if err != nil {
+			return IdentificationLedgerEntry{}, err
 		}
 		if _, err := tx.Exec(`
 			UPDATE identification_ledger_entries
@@ -252,6 +252,25 @@ func recordIdentificationLedgerObservationTx(tx *sql.Tx, input IdentificationLed
 
 func identificationLedgerEntryStatusExplicit(input IdentificationLedgerEntryInput) bool {
 	return strings.TrimSpace(string(input.Status)) != ""
+}
+
+func identificationLedgerEntryMergedExpiry(existing IdentificationLedgerEntry, input IdentificationLedgerEntryInput, statusExplicit bool) (time.Time, error) {
+	if input.ExpiresAt.IsZero() {
+		return existing.ExpiresAt, nil
+	}
+	requested := input.ExpiresAt.UTC()
+	if existing.ExpiresAt.IsZero() {
+		return requested, nil
+	}
+	if requested.After(existing.ExpiresAt) {
+		if identificationLedgerEntryTerminalStatus(existing.Status) {
+			return time.Time{}, fmt.Errorf("identification ledger entry %s cannot extend expiry after terminal status %s", existing.EntryID, existing.Status)
+		}
+		if !statusExplicit {
+			return time.Time{}, fmt.Errorf("identification ledger entry %s expiry extension requires explicit status", existing.EntryID)
+		}
+	}
+	return requested, nil
 }
 
 func identificationLedgerEntryStatusTransitionAllowed(from IdentificationLedgerEntryStatus, to IdentificationLedgerEntryStatus) bool {

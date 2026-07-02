@@ -181,6 +181,118 @@ func TestIdentificationLedgerImplicitObservationDoesNotDowngradeLifecycleStatus(
 	}
 }
 
+func TestIdentificationLedgerExpiryExtensionRequiresExplicitLifecycleStatus(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	now := time.Date(2026, 7, 2, 18, 0, 0, 0, time.UTC)
+	entryInput := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:read-unread-mail",
+		ShapeHash:   "sha256:mail-shape",
+		LabelRef:    "crc-mail-read",
+		Status:      IdentificationLedgerStatusApproved,
+		ExpiresAt:   now.Add(time.Hour),
+	}
+	if _, err := store.RecordIdentificationLedgerEntry(entryInput); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(approved) err = %v", err)
+	}
+	implicitExtension := IdentificationLedgerEntryInput{
+		PlanID:      entryInput.PlanID,
+		PlanVersion: entryInput.PlanVersion,
+		SessionID:   entryInput.SessionID,
+		StepRef:     entryInput.StepRef,
+		ShapeHash:   entryInput.ShapeHash,
+		ExpiresAt:   now.Add(2 * time.Hour),
+	}
+	if _, _, err := store.RecordIdentificationLedgerObservation(implicitExtension, IdentificationLedgerObservationInput{
+		Method:      IdentificationObservationCollision,
+		Property:    IdentificationPropertyRetryability,
+		Value:       "bounded_backoff",
+		EvidenceRef: "next_action:mail-read-blocker",
+	}); err == nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(implicit expiry extension) err = nil, want explicit-status error")
+	}
+
+	implicitShortening := implicitExtension
+	implicitShortening.ExpiresAt = now.Add(30 * time.Minute)
+	if _, _, err := store.RecordIdentificationLedgerObservation(implicitShortening, IdentificationLedgerObservationInput{
+		Method:      IdentificationObservationCollision,
+		Property:    IdentificationPropertyRetryability,
+		Value:       "bounded_backoff",
+		EvidenceRef: "next_action:mail-read-blocker",
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(implicit expiry shortening) err = %v", err)
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      entryInput.PlanID,
+		PlanVersion: entryInput.PlanVersion,
+		SessionID:   entryInput.SessionID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 1 {
+		t.Fatalf("entries = %#v, want one", projections)
+	}
+	if got := projections[0].Entry.ExpiresAt; !got.Equal(now.Add(30 * time.Minute)) {
+		t.Fatalf("expires_at after implicit shortening = %s, want %s", got, now.Add(30*time.Minute))
+	}
+
+	explicitExtension := implicitExtension
+	explicitExtension.Status = IdentificationLedgerStatusApproved
+	if _, err := store.RecordIdentificationLedgerEntry(explicitExtension); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(explicit expiry extension) err = %v", err)
+	}
+	projections, err = store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      entryInput.PlanID,
+		PlanVersion: entryInput.PlanVersion,
+		SessionID:   entryInput.SessionID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries(after explicit extension) err = %v", err)
+	}
+	if got := projections[0].Entry.ExpiresAt; !got.Equal(now.Add(2 * time.Hour)) {
+		t.Fatalf("expires_at after explicit extension = %s, want %s", got, now.Add(2*time.Hour))
+	}
+
+	terminalInput := explicitExtension
+	terminalInput.Status = IdentificationLedgerStatusConsumed
+	if _, err := store.RecordIdentificationLedgerEntry(terminalInput); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(consumed) err = %v", err)
+	}
+	terminalInput.ExpiresAt = now.Add(3 * time.Hour)
+	if _, err := store.RecordIdentificationLedgerEntry(terminalInput); err == nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(terminal expiry extension) err = nil, want terminal-extension error")
+	}
+}
+
+func TestIdentificationLedgerRejectsUnknownObservationProperty(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	entryInput := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:read-unread-mail",
+		ShapeHash:   "sha256:mail-shape",
+		Status:      IdentificationLedgerStatusPartial,
+	}
+	if _, _, err := store.RecordIdentificationLedgerObservation(entryInput, IdentificationLedgerObservationInput{
+		Method:      IdentificationObservationCollision,
+		Property:    IdentificationObservationProperty("ad_hoc_future_property"),
+		Value:       "maybe",
+		EvidenceRef: "next_action:unknown",
+	}); err == nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(unknown property) err = nil, want validation error")
+	}
+}
+
 func TestContinuationRecoveryPublicationRecordsIdentificationLedgerCollision(t *testing.T) {
 	t.Parallel()
 
