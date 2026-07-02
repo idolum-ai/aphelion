@@ -110,8 +110,9 @@ evidence proves the previous step completed. In this model it is the run.
 
 The run's authority question is:
 
-> What authority shapes has this plan identified, by which method, and are they
-> still live for the same session, plan version, and step?
+> What authority shapes has this plan identified, which properties are known,
+> which observations produced those labels, and are they still live for the same
+> session, plan version, and step?
 
 ## Identification Ledger
 
@@ -128,12 +129,24 @@ type IdentificationLedgerEntry struct {
     StepRef     string
 
     ShapeHash string
-    Method    string // collision | static | lookahead | operator
-    Label     string // contract/bundle/grant ref, or unknown
-    Status    string // unidentified | proposed | approved | consumed | expired | invalidated
+    LabelRef  string // contract/bundle/grant ref, or empty while partial
+    Status    string // unidentified | partial | proposed | approved | consumed | expired | invalidated
+    ExpiresAt time.Time
 
     CreatedAt time.Time
     UpdatedAt time.Time
+}
+
+type IdentificationLedgerObservation struct {
+    EntryID string
+
+    Method      string // collision | static | lookahead | operator
+    Property    string // approval_class | resource | timeout | retryability | bundle_fit | ...
+    Value       string
+    EvidenceRef string
+    ExpiresAt   time.Time
+
+    ObservedAt time.Time
 }
 ```
 
@@ -149,14 +162,34 @@ Changing any of those terms changes the meaning of the identification. A revised
 plan is a partial reshuffle. Existing entries can be revalidated, but they must
 not silently carry over.
 
+### Graduated Identification
+
+Identification is not binary. The first collision may reveal only the approval
+class; a later attempt may reveal timeout behavior; static analysis may add
+resource shape; operator review may attach bundle compatibility; execution may
+consume or invalidate the label.
+
+The entry is the stable subject. Observations are the provenance history. The
+current label is a projection over:
+
+- the entry identity;
+- non-expired observations;
+- live grant, lease, bundle, and contract state;
+- the current plan version and step frontier.
+
+A scalar `method` would overwrite history. Instead, every discovery method
+records an observation. If static analysis proposes a shape, collision confirms
+it, and the operator approves it, all three facts remain available. If a
+proposed lookahead label expires before any contract exists, the observation or
+entry expiry is enough to shed it.
+
 ### Truth Class
 
 The identification ledger is canonical for authority discovery state:
 
 - What has this run discovered?
 - Which step and session was the discovery bound to?
-- Did the discovery come from a collision, static analysis, lookahead, or an
-  operator action?
+- Which properties are known, and which observations produced them?
 - Was the identified authority consumed, expired, or invalidated?
 
 Operator cards are projections of this ledger plus grant/lease state. They are

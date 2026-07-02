@@ -134,6 +134,12 @@ compiled recovery contract, and replayable next action. Static plan analysis and
 lookahead may propose authority shapes, but execution remains gated on the same
 compiled contracts.
 
+Identification may be partial. A run can learn approval class, resource shape,
+retryability, timeout behavior, and bundle compatibility at different times.
+Those labels should preserve provenance instead of overwriting a scalar
+"method"; current labels are projections over typed observations and live
+authority state.
+
 Bounded preemption is allowed when it is explicit. A long-running plan may start
 with a small fixed loadout of named, scoped, expiring authority bundles, but that
 loadout must be count-limited and visible. Everything outside the loadout should
