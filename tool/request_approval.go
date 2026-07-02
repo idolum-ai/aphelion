@@ -4,15 +4,13 @@ package tool
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -33,7 +31,7 @@ func (e RequestApprovalContinuationConflictError) Error() string {
 	return fmt.Sprintf("request_approval continuation lease conflicts with existing %s continuation %s", e.ExistingLeaseStatus, strings.TrimSpace(e.ExistingLeaseID))
 }
 
-func (r *Registry) requestApproval(_ context.Context, input json.RawMessage, key session.SessionKey) (string, error) {
+func (r *Registry) requestApproval(ctx context.Context, input json.RawMessage, key session.SessionKey, p principal.Principal) (string, error) {
 	if r.store == nil {
 		return "", fmt.Errorf("request_approval requires transcript store")
 	}
@@ -48,6 +46,9 @@ func (r *Registry) requestApproval(_ context.Context, input json.RawMessage, key
 	if err := decodeToolObjectInput(input, &in, "request_approval"); err != nil {
 		return "", err
 	}
+	if requestApprovalActionToken(in.Action) == "request_authority_bundle" {
+		return r.requestAuthorityBundleApproval(in, key)
+	}
 	if requestApprovalActionToken(in.Action) == "request_continuation_lease" {
 		return r.requestContinuationLeaseApproval(in, key)
 	}
@@ -56,6 +57,9 @@ func (r *Registry) requestApproval(_ context.Context, input json.RawMessage, key
 	phase, err := parseOperationPhaseInput(in.Phase)
 	if err != nil {
 		return "", fmt.Errorf("%s", strings.Replace(err.Error(), "update_operation phase", "request_approval phase", 1))
+	}
+	if requestApprovalPhaseNeedsContinuationLease(phase) {
+		return r.requestApprovalPhaseContinuationLease(ctx, in, key, p, phase)
 	}
 	if strings.TrimSpace(phase.Summary) == "" {
 		return "", fmt.Errorf("request_approval phase summary is required")
@@ -144,492 +148,6 @@ func (r *Registry) requestApproval(_ context.Context, input json.RawMessage, key
 	return renderOperationState("[APPROVAL_REQUESTED]", state), nil
 }
 
-func (r *Registry) requestContinuationLeaseApproval(in requestApprovalInput, key session.SessionKey) (string, error) {
-	contractID := strings.TrimSpace(in.ContractID)
-	if contractID == "" {
-		return "", fmt.Errorf("request_approval continuation lease requires continuation recovery contract_id")
-	}
-	contract, ok, err := r.store.ContinuationRecoveryContract(contractID)
-	if err != nil {
-		return "", err
-	}
-	if !ok {
-		return "", fmt.Errorf("request_approval continuation recovery contract %q not found", contractID)
-	}
-	if contract.SessionID != "" && contract.SessionID != session.SessionIDForKey(key) {
-		return "", fmt.Errorf("request_approval continuation recovery contract session mismatch")
-	}
-	requirement, err := requestApprovalContinuationLeaseRequirementFromContract(contract)
-	if err != nil {
-		return "", err
-	}
-	now := time.Now().UTC()
-	expiresAt := now.Add(30 * time.Minute)
-	proposalID, decisionID, leaseID := requestApprovalContinuationLeaseStableIDs(requirement)
-	summary := requestApprovalContinuationLeaseSummary(requirement)
-	boundedEffect := requestApprovalContinuationLeaseBoundedEffect(requirement)
-	proposal := session.ActionProposal{
-		ID:               proposalID,
-		OperatorTitle:    "Approve bounded " + string(requirement.LeaseClass) + " lease",
-		PlanTitle:        "Approve bounded " + string(requirement.LeaseClass) + " lease",
-		Summary:          summary,
-		WhyNow:           "A governed tool has an active capability grant but needs a matching continuation lease before it may retry.",
-		BoundedEffect:    boundedEffect,
-		RiskClass:        string(requirement.LeaseClass),
-		AllowedActions:   append([]string(nil), requirement.AllowedActions...),
-		ForbiddenActions: requestApprovalContinuationLeaseForbiddenActions(requirement),
-		ValidationPlan:   requestApprovalContinuationLeaseValidationPlan(requirement),
-		ExpiresAt:        expiresAt,
-		Status:           session.ProposalStatusPending,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-	}
-	proposal = session.ReconcileActionProposalAuthority(proposal)
-	if compilation := session.CompileActionProposalAuthorityContract(proposal); compilation.Invalid() {
-		return "", fmt.Errorf("request_approval continuation lease authority contract invalid: %s", session.AuthorityContractCompilationSummary(compilation))
-	}
-	lease := session.ContinuationLease{
-		ID:                       leaseID,
-		ProposalID:               proposalID,
-		Status:                   session.ContinuationLeaseStatusPending,
-		MaxTurns:                 1,
-		RemainingTurns:           1,
-		LeaseClass:               requirement.LeaseClass,
-		Constraints:              requestApprovalContinuationLeaseConstraints(requirement),
-		AllowedActions:           append([]string(nil), requirement.AllowedActions...),
-		ForbiddenActions:         append([]string(nil), proposal.ForbiddenActions...),
-		ValidationPlan:           append([]string(nil), proposal.ValidationPlan...),
-		RequiredCapabilityGrants: requestApprovalContinuationLeaseGrantSpecs(requirement),
-		CapabilityGrantIDs:       requestApprovalContinuationLeaseGrantIDs(requirement),
-		RecoveryContractID:       contract.ContractID,
-		RetryOperation:           requirement.RetryOperation,
-		PlanHash:                 contract.ContractHash,
-		ExpiresAt:                expiresAt,
-		CreatedAt:                now,
-		UpdatedAt:                now,
-	}
-	state := session.ContinuationState{
-		Kind:           session.TurnAuthorizationKindContinuation,
-		Status:         session.ContinuationStatusPending,
-		DecisionID:     decisionID,
-		Objective:      firstNonEmptyTool(strings.TrimSpace(in.Objective), summary),
-		StageSummary:   summary,
-		RemainingTurns: 1,
-		PersonaIntent: session.ContinuationIntent{
-			Decision:   session.ContinuationIntentDecisionContinue,
-			Rationale:  "A typed missing-lease blocker requested an explicit continuation lease.",
-			NextStep:   summary,
-			Confidence: "high",
-			UpdatedAt:  now,
-		},
-		GovernorIntent: session.ContinuationIntent{
-			Decision:    session.ContinuationIntentDecisionContinue,
-			Rationale:   "The lease is bounded to one exact tool action and target constraint.",
-			NextStep:    summary,
-			Constraints: boundedEffect,
-			Confidence:  "high",
-			Ratified:    true,
-			UpdatedAt:   now,
-		},
-		ActionProposal:    proposal,
-		ContinuationLease: lease,
-		UpdatedAt:         now,
-	}
-	state = session.NormalizeContinuationState(state)
-
-	current, err := r.store.OperationState(key)
-	if err != nil {
-		return "", err
-	}
-	current = session.NormalizeOperationState(current)
-	if prior, ok, err := r.store.ContinuationStateIfExists(key); err != nil {
-		return "", err
-	} else if ok {
-		prior = session.NormalizeContinuationState(prior)
-		if requestApprovalContinuationStateMatchesRequestIdentity(prior, requirement, leaseID) {
-			current = requestApprovalOperationStateForContinuation(current, in, requirement, prior, proposal.WhyNow, boundedEffect, now)
-			if err := r.store.UpdateOperationState(key, session.NormalizeOperationState(current)); err != nil {
-				return "", err
-			}
-			return renderOperationState("[APPROVAL_REQUESTED]", current), nil
-		}
-		if requestApprovalContinuationStateIsLive(prior) {
-			return "", RequestApprovalContinuationConflictError{
-				ExistingLeaseID:       strings.TrimSpace(prior.ContinuationLease.ID),
-				ExistingLeaseClass:    prior.ContinuationLease.LeaseClass,
-				ExistingStatus:        prior.Status,
-				ExistingLeaseStatus:   prior.ContinuationLease.Status,
-				RequestedLeaseID:      leaseID,
-				RequestedLeaseClass:   requirement.LeaseClass,
-				RequestInstanceID:     requirement.RequestInstanceID,
-				RequestedContractHash: contract.ContractHash,
-			}
-		}
-	}
-	current = requestApprovalOperationStateForContinuation(current, in, requirement, state, proposal.WhyNow, boundedEffect, now)
-	if err := r.store.UpdateOperationAndContinuationState(key, current, state); err != nil {
-		return "", err
-	}
-	return renderOperationState("[APPROVAL_REQUESTED]", current), nil
-}
-
-func requestApprovalOperationStateForContinuation(current session.OperationState, in requestApprovalInput, requirement missingContinuationLeaseRequirement, state session.ContinuationState, whyNow string, boundedEffect string, now time.Time) session.OperationState {
-	current = session.NormalizeOperationState(current)
-	summary := requestApprovalContinuationLeaseSummary(requirement)
-	if strings.TrimSpace(current.ID) == "" {
-		current.ID = generatedOperationID("op")
-	}
-	current.Objective = firstNonEmptyTool(strings.TrimSpace(in.Objective), current.Objective, summary)
-	proposalStatus := session.ProposalStatusPending
-	switch state.ContinuationLease.Status {
-	case session.ContinuationLeaseStatusActive:
-		current.Status = session.OperationStatusActive
-		current.Stage = "approval_active"
-		current.Summary = "Continuation lease already approved and active: " + summary
-		proposalStatus = session.ProposalStatusApproved
-	case session.ContinuationLeaseStatusConsumed:
-		current.Status = session.OperationStatusCompleted
-		current.Stage = "approval_consumed"
-		current.Summary = "Continuation lease already consumed: " + summary
-		proposalStatus = session.ProposalStatusApproved
-	case session.ContinuationLeaseStatusRevoked:
-		current.Status = session.OperationStatusBlocked
-		current.Stage = "approval_revoked"
-		current.Summary = "Continuation lease was denied or revoked: " + summary
-		proposalStatus = requestApprovalTerminalProposalStatus(state, session.ProposalStatusDenied)
-	case session.ContinuationLeaseStatusExpired:
-		current.Status = session.OperationStatusBlocked
-		current.Stage = "approval_expired"
-		current.Summary = "Continuation lease expired before use: " + summary
-		proposalStatus = requestApprovalTerminalProposalStatus(state, session.ProposalStatusExpired)
-	case session.ContinuationLeaseStatusDeferred:
-		current.Status = session.OperationStatusBlocked
-		current.Stage = "approval_deferred"
-		current.Summary = "Continuation lease request remains deferred: " + summary
-	default:
-		current.Status = session.OperationStatusBlocked
-		current.Stage = "approval_request"
-		current.Summary = "Button-backed continuation lease requested: " + summary
-	}
-	current.Proposal = session.OperationProposal{
-		ID:            state.DecisionID,
-		Kind:          string(requirement.LeaseClass),
-		Summary:       summary,
-		WhyNow:        whyNow,
-		BoundedEffect: boundedEffect,
-		Status:        proposalStatus,
-		UpdatedAt:     now,
-	}
-	current.UpdatedAt = now
-	return session.NormalizeOperationState(current)
-}
-
-func requestApprovalTerminalProposalStatus(state session.ContinuationState, fallback session.ProposalStatus) session.ProposalStatus {
-	state = session.NormalizeContinuationState(state)
-	status := session.NormalizeProposalStatus(state.ActionProposal.Status)
-	switch status {
-	case session.ProposalStatusDenied, session.ProposalStatusExpired, session.ProposalStatusSuperseded:
-		return status
-	default:
-		return fallback
-	}
-}
-
-func requestApprovalContinuationLeaseRequirementFromContract(contract session.ContinuationRecoveryContract) (missingContinuationLeaseRequirement, error) {
-	contract = session.NormalizeContinuationRecoveryContract(contract)
-	requirement := normalizeMissingContinuationLeaseRequirement(missingContinuationLeaseRequirement{
-		AgentID:             contract.AgentID,
-		Resource:            contract.Resource,
-		GrantID:             contract.GrantID,
-		GrantTargetResource: contract.GrantTargetResource,
-		RequestInstanceID:   contract.RequestInstanceID,
-		Principal:           contract.Principal,
-		LeaseClass:          contract.LeaseClass,
-		AllowedActions:      append([]string(nil), contract.AllowedActions...),
-		Constraints:         cloneStringMap(contract.Constraints),
-		Tool:                contract.Tool,
-		ToolAction:          contract.ToolAction,
-		RetryOperation:      contract.RetryOperation,
-	})
-	if requirement.Principal == "" || requirement.RequestInstanceID == "" || requirement.LeaseClass == "" || len(requirement.AllowedActions) == 0 {
-		return missingContinuationLeaseRequirement{}, fmt.Errorf("continuation recovery contract %s is incomplete", contract.ContractID)
-	}
-	if requestApprovalContinuationLeaseContractHash(requirement) != contract.ContractHash {
-		return missingContinuationLeaseRequirement{}, fmt.Errorf("continuation recovery contract %s hash mismatch", contract.ContractID)
-	}
-	if err := validateContinuationRetryOperationForRequirement(requirement); err != nil {
-		return missingContinuationLeaseRequirement{}, err
-	}
-	return requirement, nil
-}
-
-func requestApprovalContinuationLeaseSummary(requirement missingContinuationLeaseRequirement) string {
-	if requirement.LeaseClass == session.ContinuationLeaseClassChildWake && requirement.AgentID != "" {
-		return fmt.Sprintf("Invoke durable_agent wake_once for %s exactly once", requirement.AgentID)
-	}
-	if requirement.Tool != "" && requirement.ToolAction != "" {
-		return fmt.Sprintf("Retry %s %s exactly once under the approved %s lease", requirement.Tool, requirement.ToolAction, requirement.LeaseClass)
-	}
-	return fmt.Sprintf("Use the approved %s continuation lease exactly once", requirement.LeaseClass)
-}
-
-func requestApprovalContinuationLeaseBoundedEffect(requirement missingContinuationLeaseRequirement) string {
-	if requirement.LeaseClass == session.ContinuationLeaseClassChildWake && requirement.AgentID != "" {
-		return fmt.Sprintf("Permit durable_agent wake_once to wake only %s once, consume the pending parent guidance batch, and stop after one child result or pre-child failure.", requirement.AgentID)
-	}
-	return fmt.Sprintf("Permit exactly one %s continuation turn for %s %s, then stop and report the result.", requirement.LeaseClass, requirement.Tool, requirement.ToolAction)
-}
-
-func requestApprovalContinuationLeaseForbiddenActions(requirement missingContinuationLeaseRequirement) []string {
-	forbidden := []string{"expand_authority_without_new_approval", "ignore_stop_or_revocation", "unbounded_retry_loop"}
-	if requirement.LeaseClass == session.ContinuationLeaseClassChildWake {
-		forbidden = append(forbidden,
-			"wake_unnamed_child",
-			"change_child_policy_without_approval",
-			"grant_child_capability_without_capability_authority",
-			"credentials_or_tokens",
-			"mailbox_or_external_account_probe",
-		)
-	}
-	return forbidden
-}
-
-func requestApprovalContinuationLeaseValidationPlan(requirement missingContinuationLeaseRequirement) []string {
-	if requirement.LeaseClass == session.ContinuationLeaseClassChildWake {
-		return []string{
-			"verify the lease is bound to the exact child agent_id",
-			"record one wake result or typed pre-child blocker",
-			"stop without retrying or broadening child authority",
-		}
-	}
-	return []string{"record the typed result or blocker before any retry", "stop when the single approved turn is consumed"}
-}
-
-func requestApprovalContinuationLeaseConstraints(requirement missingContinuationLeaseRequirement) map[string]string {
-	constraints := map[string]string{}
-	for key, value := range requirement.Constraints {
-		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
-		if key != "" && value != "" {
-			constraints[key] = value
-		}
-	}
-	if requirement.Principal != "" {
-		constraints["principal"] = requirement.Principal
-	}
-	if requirement.AgentID != "" {
-		constraints["agent_id"] = requirement.AgentID
-	}
-	if requirement.Resource != "" {
-		constraints["resource"] = requirement.Resource
-	}
-	if requirement.GrantID != "" {
-		constraints["grant_id"] = requirement.GrantID
-	}
-	if requirement.GrantTargetResource != "" {
-		constraints["grant_target_resource"] = requirement.GrantTargetResource
-		constraints["target_resource"] = requirement.GrantTargetResource
-	}
-	if requirement.Tool != "" {
-		constraints["tool"] = requirement.Tool
-	}
-	if requirement.ToolAction != "" {
-		constraints["tool_action"] = requirement.ToolAction
-	}
-	return constraints
-}
-
-func requestApprovalContinuationLeaseStableIDs(requirement missingContinuationLeaseRequirement) (string, string, string) {
-	token := strings.TrimPrefix(requestApprovalContinuationLeaseIdentityHash(requirement), "sha256:")
-	if len(token) > 24 {
-		token = token[:24]
-	}
-	decisionID := "lease-request-" + token
-	return "aprop-" + token, decisionID, "lease-" + token
-}
-
-func requestApprovalContinuationLeaseIdentityHash(requirement missingContinuationLeaseRequirement) string {
-	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
-	payload := map[string]any{
-		"request_instance_id": requirement.RequestInstanceID,
-		"contract_hash":       requestApprovalContinuationLeaseContractHash(requirement),
-	}
-	raw, _ := json.Marshal(payload)
-	sum := sha256.Sum256(raw)
-	return "sha256:" + hex.EncodeToString(sum[:])
-}
-
-func requestApprovalContinuationLeaseContractHash(requirement missingContinuationLeaseRequirement) string {
-	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
-	payload := map[string]any{
-		"agent_id":              requirement.AgentID,
-		"resource":              requirement.Resource,
-		"grant_id":              requirement.GrantID,
-		"grant_target_resource": requirement.GrantTargetResource,
-		"principal":             requirement.Principal,
-		"lease_class":           string(requirement.LeaseClass),
-		"allowed_actions":       normalizeActionStringsForHash(requirement.AllowedActions),
-		"constraints":           normalizeStringMapForHash(requirement.Constraints),
-		"tool":                  requirement.Tool,
-		"tool_action":           requirement.ToolAction,
-	}
-	if requirement.RetryOperation.Active() {
-		retry := session.NormalizeContinuationRetryOperation(requirement.RetryOperation)
-		payload["retry_operation"] = map[string]any{
-			"contract":       retry.Contract,
-			"operation_kind": retry.OperationKind,
-			"tool":           retry.Tool,
-			"input_json":     retry.InputJSON,
-			"subject_kind":   retry.SubjectKind,
-			"subject_ref":    retry.SubjectRef,
-		}
-	}
-	raw, _ := json.Marshal(payload)
-	sum := sha256.Sum256(raw)
-	return "sha256:" + hex.EncodeToString(sum[:])
-}
-
-func requestApprovalContinuationStateMatchesRequestIdentity(state session.ContinuationState, requirement missingContinuationLeaseRequirement, leaseID string) bool {
-	state = session.NormalizeContinuationState(state)
-	lease := state.ContinuationLease
-	if strings.TrimSpace(lease.ID) != leaseID {
-		return false
-	}
-	if lease.LeaseClass != requirement.LeaseClass {
-		return false
-	}
-	if lease.PlanHash != requestApprovalContinuationLeaseContractHash(requirement) {
-		return false
-	}
-	return true
-}
-
-func requestApprovalContinuationStateIsLive(state session.ContinuationState) bool {
-	state = session.NormalizeContinuationState(state)
-	if state.Status != session.ContinuationStatusPending && state.Status != session.ContinuationStatusApproved {
-		return false
-	}
-	switch state.ContinuationLease.Status {
-	case session.ContinuationLeaseStatusPending, session.ContinuationLeaseStatusActive:
-		return true
-	default:
-		return false
-	}
-}
-
-func continuationLeaseStillLiveForRequestApproval(status session.ContinuationLeaseStatus) bool {
-	switch status {
-	case session.ContinuationLeaseStatusPending, session.ContinuationLeaseStatusActive, session.ContinuationLeaseStatusConsumed:
-		return true
-	default:
-		return false
-	}
-}
-
-func requestApprovalContinuationLeaseGrantSpecs(requirement missingContinuationLeaseRequirement) []session.CapabilityGrantSpec {
-	grantID := strings.TrimSpace(requirement.GrantID)
-	target := strings.TrimSpace(requirement.GrantTargetResource)
-	if grantID == "" && target == "" {
-		return nil
-	}
-	kind := session.CapabilityKindTool
-	allowed := []string{"invoke"}
-	contract := ""
-	constraints := ""
-	if requirement.LeaseClass == session.ContinuationLeaseClassChildWake {
-		kind = session.CapabilityKindGenericDelegation
-		if target == "" && requirement.AgentID != "" {
-			target = durableAgentWakeOnceCapabilityTarget(requirement.AgentID)
-		}
-		contract = compactJSON(map[string]any{
-			"bounded_effect": "Allow invoking durable_agent wake_once for the named child only. The continuation child_wake lease still bounds each wake attempt and supplies the one-turn execution authority.",
-			"tool_name":      "durable_agent",
-			"tool_action":    "wake_once",
-			"agent_id":       requirement.AgentID,
-		})
-		constraints = compactJSON(map[string]any{"agent_id": requirement.AgentID})
-	} else if requirement.LeaseClass == session.ContinuationLeaseClassDataAccess {
-		kind = session.CapabilityKindFileAccess
-		allowed = []string{"read"}
-	} else if requirement.LeaseClass == session.ContinuationLeaseClassLocalWorkspace {
-		kind = session.CapabilityKindFileAccess
-		allowed = []string{"write"}
-	}
-	if target == "" {
-		target = firstNonEmptyTool(requirement.Resource, requirement.Tool, requirement.AgentID)
-	}
-	return []session.CapabilityGrantSpec{{
-		GrantID:        grantID,
-		Kind:           kind,
-		TargetResource: target,
-		GrantedTo:      requirement.Principal,
-		AllowedActions: allowed,
-		Contract:       contract,
-		Constraints:    constraints,
-	}}
-}
-
-func requestApprovalContinuationLeaseGrantIDs(requirement missingContinuationLeaseRequirement) []string {
-	if grantID := strings.TrimSpace(requirement.GrantID); grantID != "" {
-		return []string{grantID}
-	}
-	return nil
-}
-
-func normalizeActionStringsForHash(values []string) []string {
-	out := make([]string, 0, len(values))
-	seen := map[string]struct{}{}
-	for _, value := range values {
-		token := requestApprovalActionToken(value)
-		if token == "" {
-			continue
-		}
-		if _, ok := seen[token]; ok {
-			continue
-		}
-		seen[token] = struct{}{}
-		out = append(out, token)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func normalizeStringMapForHash(values map[string]string) map[string]string {
-	out := map[string]string{}
-	for key, value := range values {
-		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
-		if key != "" && value != "" {
-			out[key] = value
-		}
-	}
-	return out
-}
-
-func requestApprovalActionToken(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.ReplaceAll(value, "-", "_")
-	value = strings.ReplaceAll(value, " ", "_")
-	return value
-}
-
-func firstNonEmptyTool(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
-func cloneStringMap(values map[string]string) map[string]string {
-	out := make(map[string]string, len(values))
-	for key, value := range values {
-		out[key] = value
-	}
-	return out
-}
-
 func requestApprovalToolDefinition() agent.ToolDef {
 	return agent.ToolDef{
 		Name:        requestApprovalToolName,
@@ -637,7 +155,7 @@ func requestApprovalToolDefinition() agent.ToolDef {
 		Parameters: json.RawMessage(`{
 			"type": "object",
 			"properties": {
-				"action": {"type": "string", "enum": ["request_continuation_lease"], "description": "Use request_continuation_lease to materialize a continuation lease requested by a typed blocker instead of a phase approval"},
+				"action": {"type": "string", "enum": ["request_continuation_lease", "request_authority_bundle"], "description": "Use request_continuation_lease to materialize a lease requested by a typed blocker, or request_authority_bundle to materialize a compiled broad-but-specific bundle"},
 				"objective": {"type": "string", "description": "Optional operation objective or plan goal this approval serves"},
 				"contract_id": {"type": "string", "description": "Required continuation recovery contract id for request_continuation_lease. The contract is the executable source; legacy inline lease payloads are rejected."},
 				"phase": {

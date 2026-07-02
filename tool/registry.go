@@ -56,7 +56,7 @@ type Registry struct {
 }
 
 type DurableAgentWakeRunner interface {
-	RunDurableAgentParentConversationWake(context.Context, string, []string, time.Time) error
+	RunDurableAgentParentConversationWake(context.Context, string, []string, string, time.Time) error
 }
 
 func NewRegistry(workspace string, timeout time.Duration) *Registry {

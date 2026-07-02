@@ -28,6 +28,13 @@ func TestDurableAgentWakeClaimIsOneTimePerLease(t *testing.T) {
 	if claim.LeaseID != input.LeaseID || claim.AgentID != input.AgentID || claim.TurnRunID != input.TurnRunID {
 		t.Fatalf("claim = %#v, want input identity", claim)
 	}
+	loaded, ok, err := store.DurableAgentWakeClaimByLeaseID(input.LeaseID)
+	if err != nil {
+		t.Fatalf("DurableAgentWakeClaimByLeaseID() err = %v", err)
+	}
+	if !ok || loaded.ClaimID != claim.ClaimID || len(loaded.MessageIDs) != 1 || loaded.MessageIDs[0] != "parent-msg-1" {
+		t.Fatalf("loaded claim = %#v ok=%t, want persisted claim by lease", loaded, ok)
+	}
 
 	_, err = store.ClaimDurableAgentWakeOnce(DurableAgentWakeClaimInput{
 		LeaseID:          input.LeaseID,

@@ -270,6 +270,109 @@ func TestHandleInboundDeliversActionableCapabilityReviewEventWithButtons(t *test
 	}
 }
 
+func TestHandleInboundDeliversCompactCapabilityReviewWithoutChildUpdateLabel(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-compact-github",
+		RequestedBy:    "telegram:1002",
+		RequestedFor:   "telegram:1002",
+		AdminPrincipal: "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github:idolum-ai/CopilotKit",
+		Purpose:        "open one issue and continue local test work",
+		RiskClass:      "external_write",
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	if err := store.EnqueueReviewEvent(session.ReviewEvent{
+		SourceChatID:      7001,
+		SourceUserID:      1002,
+		SourceRole:        "capability_request",
+		TargetAdminChatID: 42,
+		Summary:           "Allow one GitHub issue in idolum-ai/CopilotKit, then continue local-only conversion-test work.",
+		MetadataJSON:      `{"request_id":"cap-compact-github","request_via":"capability_request","review_status":"proposed","kind":"external_account","target_resource":"github:idolum-ai/CopilotKit","risk_class":"external_write"}`,
+	}); err != nil {
+		t.Fatalf("EnqueueReviewEvent() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{ChatID: 42, SenderID: 1001, SenderName: "admin", Text: "status", MessageID: 99})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline len = %d, want actionable capability review", len(sender.inline))
+	}
+	text := sender.inline[0].text
+	if !strings.Contains(text, "**Review: capability request**") || !strings.Contains(text, "full capability request") {
+		t.Fatalf("inline text = %q, want capability request compact projection", text)
+	}
+	if strings.Contains(text, "Child update") || strings.Contains(text, "full child update") {
+		t.Fatalf("inline text = %q, must not use child-update labels for non-child capability request", text)
+	}
+}
+
+func TestHandleInboundDeliversChildCapabilityReviewAsCapabilityRequest(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-child-github",
+		RequestedBy:    "durable_agent:mail-child",
+		RequestedFor:   "durable_agent:mail-child",
+		AdminPrincipal: "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github:idolum-ai/CopilotKit",
+		Purpose:        "child needs one bounded GitHub issue capability",
+		RiskClass:      "external_write",
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	if err := store.EnqueueReviewEvent(session.ReviewEvent{
+		SourceChatID:      durableWakeSyntheticChatID("mail-child"),
+		SourceUserID:      0,
+		SourceRole:        "capability_request",
+		SourceScope:       session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "mail-child", DurableAgentID: "mail-child"},
+		TargetAdminChatID: 42,
+		Summary:           "mail-child requests one bounded GitHub issue capability.",
+		MetadataJSON:      `{"request_id":"cap-child-github","request_via":"capability_request","review_status":"proposed","requested_for":"durable_agent:mail-child","kind":"external_account","target_resource":"github:idolum-ai/CopilotKit"}`,
+	}); err != nil {
+		t.Fatalf("EnqueueReviewEvent() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{ChatID: 42, SenderID: 1001, SenderName: "admin", Text: "status", MessageID: 99})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline len = %d, want child capability review", len(sender.inline))
+	}
+	text := sender.inline[0].text
+	if !strings.Contains(text, "**Review: capability request**") || !strings.Contains(text, "full capability request") {
+		t.Fatalf("inline text = %q, want capability request projection for child-scoped request", text)
+	}
+	if strings.Contains(text, "Child update") || strings.Contains(text, "full child update") {
+		t.Fatalf("inline text = %q, must not use child-update labels for child-scoped capability request", text)
+	}
+}
+
 func TestReviewEventCompactStatusUsesTypedMetadataNotQuotedProse(t *testing.T) {
 	t.Parallel()
 
@@ -624,6 +727,48 @@ func TestDeliverReviewEventsMarksOlderCapabilityCardStale(t *testing.T) {
 	}
 }
 
+func TestRetryableChildWakeReviewEventUsesTypedRetryButton(t *testing.T) {
+	t.Parallel()
+
+	event := session.ReviewEvent{
+		ID:                77,
+		SourceRole:        "durable_agent",
+		SourceSessionID:   "durable_agent:mail-child",
+		TargetSessionID:   "telegram_dm:1001",
+		TargetAdminChatID: 1001,
+		Summary:           "durable_agent=mail-child channel=external_channel\nsummary: Mail child stopped on external_transient.",
+		MetadataJSON: `{
+			"agent_id":"mail-child",
+			"summary":"Mail child stopped on external_transient.",
+			"risk_flags":["durable_child","external_transient"],
+			"metadata":{
+				"child_blocker_kind":"external_transient",
+				"child_next_state":"scheduled_retry",
+				"child_task_packet_id":"dcm-transient",
+				"next_action_record_id":"next-transient",
+				"retry_policy":"bounded_backoff"
+			}
+		}`,
+	}
+	rows := ReviewEventInlineRows(event)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %#v, want Details plus Retry once", rows)
+	}
+	if rows[1][0].Text != "Retry once" || rows[1][0].CallbackData != core.EncodeReviewEventCallbackData(77, core.ReviewEventActionChildWakeRetry) {
+		t.Fatalf("retry row = %#v, want typed child_wake retry callback", rows[1])
+	}
+
+	event.MetadataJSON = `{"agent_id":"mail-child","metadata":{"child_blocker_kind":"credential_unverified","child_next_state":"waiting_for_operator","child_task_packet_id":"dcm-cred","retry_policy":"operator_disambiguation_required"}}`
+	rows = ReviewEventInlineRows(event)
+	for _, row := range rows {
+		for _, button := range row {
+			if button.Text == "Retry once" {
+				t.Fatalf("rows = %#v, want no retry button for non-transient child blocker", rows)
+			}
+		}
+	}
+}
+
 func TestCapabilityReviewEventUsesDetailsButtonWithoutAutoAttachment(t *testing.T) {
 	t.Parallel()
 
@@ -671,6 +816,31 @@ func TestCapabilityReviewEventUsesDetailsButtonWithoutAutoAttachment(t *testing.
 		MetadataJSON: `{"request_id":"cap-pr157","request_via":"capability_request","kind":"external_account","target_resource":"github","risk_class":"sensitive","purpose":"Maintain PR branch","contract":"Use app token only for contents and pull request operations on idolum-ai/aphelion.","constraints":"No deploy, restart, release, tag, workflow dispatch, or credential output."}`,
 	})
 	for _, want := range []string{"**Capability request**", "Kind: external_account", "Target: github", "**Contract**", "**Constraints**", "No deploy"} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("details = %q, want %q", details, want)
+		}
+	}
+}
+
+func TestCapabilityReviewEventCompactTitleDoesNotDefaultToChildUpdate(t *testing.T) {
+	t.Parallel()
+
+	event := session.ReviewEvent{
+		SourceRole:        "capability_request",
+		TargetAdminChatID: 1001,
+		Summary:           "Approve one GitHub issue in idolum-ai/CopilotKit and continue local tests.",
+		MetadataJSON:      `{"request_id":"cap-copilotkit-issue","request_via":"capability_request","kind":"external_account","target_resource":"github:idolum-ai/CopilotKit","risk_class":"external_write","purpose":"Open one issue in the fork; no push/PR/upstream effects.","contract":"One GitHub issue only, then local-only test work.","constraints":"No deploy, no restart, no credential output."}`,
+	}
+
+	compact := FormatReviewEventCompactMessage(event)
+	if !strings.Contains(compact, "Review: capability request") {
+		t.Fatalf("compact review = %q, want capability-request title", compact)
+	}
+	if strings.Contains(compact, "Child update") {
+		t.Fatalf("compact review = %q, should not render non-child capability request as child update", compact)
+	}
+	details := FormatReviewEventDetailsMessage(event)
+	for _, want := range []string{"**Capability request**", "Kind: external_account", "Target: github:idolum-ai/CopilotKit"} {
 		if !strings.Contains(details, want) {
 			t.Fatalf("details = %q, want %q", details, want)
 		}

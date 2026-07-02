@@ -206,6 +206,23 @@ type requestApprovalInput struct {
 	ContractID string                    `json:"contract_id,omitempty"`
 }
 
+type authorityBundleInput struct {
+	Action                        string                     `json:"action"`
+	BundleID                      string                     `json:"bundle_id,omitempty"`
+	RequestInstanceID             string                     `json:"request_instance_id,omitempty"`
+	Objective                     string                     `json:"objective,omitempty"`
+	Summary                       string                     `json:"summary,omitempty"`
+	SourceNextActionRecordIDs     []string                   `json:"source_next_action_record_ids,omitempty"`
+	IncludeOpenAuthorityBlockers  bool                       `json:"include_open_authority_blockers,omitempty"`
+	AllowedActions                []string                   `json:"allowed_actions,omitempty"`
+	ForbiddenActions              []string                   `json:"forbidden_actions,omitempty"`
+	StopConditions                []string                   `json:"stop_conditions,omitempty"`
+	PrimaryContinuationContractID string                     `json:"primary_continuation_contract_id,omitempty"`
+	CapabilityRequestIDs          []string                   `json:"capability_request_ids,omitempty"`
+	RequiredCapabilityGrants      []capabilityGrantSpecInput `json:"required_capability_grants,omitempty"`
+	ExpiresAt                     string                     `json:"expires_at,omitempty"`
+}
+
 type updateOperationInput struct {
 	ID              string                               `json:"id,omitempty"`
 	Objective       string                               `json:"objective,omitempty"`

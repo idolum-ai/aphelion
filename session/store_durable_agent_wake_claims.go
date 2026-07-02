@@ -98,6 +98,48 @@ func (s *SQLiteStore) ClaimDurableAgentWakeOnce(input DurableAgentWakeClaimInput
 	}, nil
 }
 
+func (s *SQLiteStore) DurableAgentWakeClaimByLeaseID(leaseID string) (DurableAgentWakeClaim, bool, error) {
+	if s == nil || s.db == nil {
+		return DurableAgentWakeClaim{}, false, nil
+	}
+	leaseID = strings.TrimSpace(leaseID)
+	if leaseID == "" {
+		return DurableAgentWakeClaim{}, false, nil
+	}
+	row := s.db.QueryRow(`
+		SELECT claim_id, lease_id, agent_id, turn_run_id, message_batch_hash, message_ids_json, created_at
+		FROM durable_agent_wake_claims
+		WHERE lease_id = ?
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, leaseID)
+	claim, err := scanDurableAgentWakeClaim(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DurableAgentWakeClaim{}, false, nil
+	}
+	if err != nil {
+		return DurableAgentWakeClaim{}, false, err
+	}
+	return claim, true, nil
+}
+
+func scanDurableAgentWakeClaim(row interface {
+	Scan(dest ...any) error
+}) (DurableAgentWakeClaim, error) {
+	var claim DurableAgentWakeClaim
+	var messageIDsRaw string
+	var createdRaw string
+	if err := row.Scan(&claim.ClaimID, &claim.LeaseID, &claim.AgentID, &claim.TurnRunID, &claim.MessageBatchHash, &messageIDsRaw, &createdRaw); err != nil {
+		return DurableAgentWakeClaim{}, err
+	}
+	_ = json.Unmarshal([]byte(messageIDsRaw), &claim.MessageIDs)
+	if t, err := time.Parse(time.RFC3339Nano, createdRaw); err == nil {
+		claim.CreatedAt = t
+	}
+	claim.MessageIDs = normalizeStringSet(claim.MessageIDs)
+	return claim, nil
+}
+
 func durableAgentWakeClaimConflict(queryer interface {
 	QueryRow(query string, args ...any) *sql.Row
 }, leaseID string) bool {

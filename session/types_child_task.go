@@ -160,6 +160,7 @@ const (
 	ChildTaskOutcomeIntentScheduledReview       ChildTaskOutcomeIntentKind = "scheduled_review"
 	ChildTaskOutcomeIntentGenericFinalize       ChildTaskOutcomeIntentKind = "generic_finalize"
 	ChildTaskOutcomeIntentChildBlockerReview    ChildTaskOutcomeIntentKind = "child_blocker_review"
+	ChildTaskOutcomeIntentExternalChannelState  ChildTaskOutcomeIntentKind = "external_channel_state"
 	ChildTaskOutcomeIntentPolicyApplied         ChildTaskOutcomeIntentKind = "policy_applied"
 	ChildTaskOutcomeIntentPolicyApplyFailed     ChildTaskOutcomeIntentKind = "policy_apply_failed"
 )

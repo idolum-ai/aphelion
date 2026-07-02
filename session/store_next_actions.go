@@ -60,6 +60,9 @@ func recordNextActionTx(tx *sql.Tx, input NextActionInput) (NextActionRecord, er
 	} else if ok {
 		return existing, nil
 	}
+	if err := resolvePriorDurableChildRecoveryActionsTx(tx, input, createdAt); err != nil {
+		return NextActionRecord{}, err
+	}
 	if _, err := tx.Exec(`
 		UPDATE next_action_records
 		SET resolved_at = ?
@@ -146,6 +149,105 @@ func recordNextActionTx(tx *sql.Tx, input NextActionInput) (NextActionRecord, er
 		OperatorProjection: input.OperatorProjection,
 		CreatedAt:          createdAt,
 	}, nil
+}
+
+func resolvePriorDurableChildRecoveryActionsTx(tx *sql.Tx, input NextActionInput, resolvedAt time.Time) error {
+	if input.OperationKind != NextActionOperationKindDurableChildRecovery {
+		return nil
+	}
+	agentID, toolName := durableChildRecoveryScope(input.OperationInputJSON)
+	if agentID == "" {
+		return nil
+	}
+	sessionID := SessionIDForKey(input.Key)
+	query := `
+		SELECT record_id
+		FROM next_action_records
+		WHERE session_id = ?
+			AND record_id != ?
+			AND resolved_at IS NULL
+			AND operation_kind = ?
+			AND COALESCE(
+				json_extract(operation_input_json, '$.durable_agent_id'),
+				json_extract(operation_input_json, '$.agent_id'),
+				json_extract(operation_input_json, '$.recovery_handoff.durable_agent_id'),
+				json_extract(operation_input_json, '$.recovery_handoff.agent_id'),
+				''
+			) = ?
+	`
+	args := []any{sessionID, input.RecordID, NextActionOperationKindDurableChildRecovery, agentID}
+	if toolName != "" {
+		query += `
+			AND COALESCE(
+				json_extract(operation_input_json, '$.tool'),
+				json_extract(operation_input_json, '$.adapter'),
+				json_extract(operation_input_json, '$.recovery_handoff.tool'),
+				json_extract(operation_input_json, '$.recovery_handoff.adapter'),
+				''
+			) = ?
+		`
+		args = append(args, toolName)
+	}
+	rows, err := tx.Query(query, args...)
+	if err != nil {
+		return fmt.Errorf("query prior durable child recovery next actions: %w", err)
+	}
+	defer rows.Close()
+	var recordIDs []string
+	for rows.Next() {
+		var recordID string
+		if err := rows.Scan(&recordID); err != nil {
+			return fmt.Errorf("scan prior durable child recovery next action: %w", err)
+		}
+		recordID = strings.TrimSpace(recordID)
+		if recordID != "" {
+			recordIDs = append(recordIDs, recordID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate prior durable child recovery next actions: %w", err)
+	}
+	for _, recordID := range recordIDs {
+		if err := resolveNextActionTx(tx, NextActionResolutionInput{
+			Key:        input.Key,
+			RecordID:   recordID,
+			Owner:      "durable_child_recovery",
+			Reason:     "superseded_by_fresh_child_result",
+			ResolvedAt: resolvedAt,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func durableChildRecoveryScope(raw string) (string, string) {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &payload); err != nil {
+		return "", ""
+	}
+	agentID := firstStringPayloadValue(payload, "durable_agent_id", "agent_id")
+	toolName := firstStringPayloadValue(payload, "tool", "adapter")
+	if nested, ok := payload["recovery_handoff"].(map[string]any); ok {
+		if agentID == "" {
+			agentID = firstStringPayloadValue(nested, "durable_agent_id", "agent_id")
+		}
+		if toolName == "" {
+			toolName = firstStringPayloadValue(nested, "tool", "adapter")
+		}
+	}
+	return strings.TrimSpace(agentID), strings.TrimSpace(toolName)
+}
+
+func firstStringPayloadValue(payload map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := payload[key]; ok {
+			if text := strings.TrimSpace(fmt.Sprint(value)); text != "" && text != "<nil>" {
+				return text
+			}
+		}
+	}
+	return ""
 }
 
 func (s *SQLiteStore) ResolveNextAction(input NextActionResolutionInput) error {
@@ -334,6 +436,38 @@ func (s *SQLiteStore) OpenNextActionsBySubject(subjectKind string, subjectRef st
 	`, subjectKind, subjectRef, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query open next actions by subject: %w", err)
+	}
+	defer rows.Close()
+	return scanNextActionRows(rows)
+}
+
+func (s *SQLiteStore) OpenNextActionsByCausalRef(causalRef string, limit int) ([]NextActionRecord, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	causalRef = strings.TrimSpace(causalRef)
+	if causalRef == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.Query(`
+		SELECT record_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
+			turn_run_id, owner, state, subject_kind, subject_ref, causal_refs_json,
+			next_action, required_authority, resource_blocker, verifier, retry_policy,
+			operation_kind, operation_tool, operation_input_json, operator_projection, created_at, resolved_at
+		FROM next_action_records
+		WHERE resolved_at IS NULL
+			AND EXISTS (
+				SELECT 1 FROM json_each(next_action_records.causal_refs_json)
+				WHERE value = ?
+			)
+		ORDER BY created_at DESC, record_id DESC
+		LIMIT ?
+	`, causalRef, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query open next actions by causal ref: %w", err)
 	}
 	defer rows.Close()
 	return scanNextActionRows(rows)
@@ -583,6 +717,7 @@ func downgradeReadyNextActionForRedactedOperationInput(input NextActionInput, re
 	originalTool := input.OperationTool
 	payload := map[string]any{
 		"reason":                  "ready_operation_input_redacted",
+		"recovery_operation_kind": NextActionOperationKindOperatorRewrite,
 		"original_operation_kind": originalKind,
 		"original_operation_tool": originalTool,
 		"redacted_input_hash":     EffectAttemptCommandHash(redactedOperationInputJSON),
@@ -596,11 +731,11 @@ func downgradeReadyNextActionForRedactedOperationInput(input NextActionInput, re
 		raw = []byte(`{"reason":"ready_operation_input_redacted"}`)
 	}
 	input.State = NextActionWaitingForOperator
-	input.OperationKind = "typed_operation_required"
+	input.OperationKind = NextActionOperationKindOperatorRewrite
 	input.OperationTool = "update_operation"
 	input.OperationInputJSON = string(raw)
 	input.NextAction = "rewrite the recommended operation with exact, non-redacted operands before execution"
-	input.RequiredAuthority = "typed_operation_required"
+	input.RequiredAuthority = NextActionOperationKindOperatorRewrite
 	input.Verifier = ""
 	input.RetryPolicy = "do_not_execute_redacted_operation_payload"
 	input.OperatorProjection = "Ready operation payload contained redacted operand(s); rewrite it with exact typed operands before execution."

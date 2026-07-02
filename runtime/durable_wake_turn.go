@@ -8,6 +8,8 @@ import (
 	"hash/fnv"
 	"strings"
 	"time"
+
+	"github.com/idolum-ai/aphelion/core"
 )
 
 func (r *Runtime) RunDurableAgentChildWake(ctx context.Context, agentID string, now time.Time) error {
@@ -36,7 +38,7 @@ func (r *Runtime) RunDurableAgentChildWake(ctx context.Context, agentID string, 
 	return r.runDurableAgentChildWakeLoaded(ctx, *agent, now)
 }
 
-func (r *Runtime) RunDurableAgentParentConversationWake(ctx context.Context, agentID string, messageIDs []string, now time.Time) error {
+func (r *Runtime) RunDurableAgentParentConversationWake(ctx context.Context, agentID string, messageIDs []string, wakeClaimID string, now time.Time) error {
 	if r == nil || r.store == nil {
 		return fmt.Errorf("durable parent conversation wake runtime is unavailable")
 	}
@@ -56,12 +58,29 @@ func (r *Runtime) RunDurableAgentParentConversationWake(ctx context.Context, age
 	}
 	plan, err := prepareDurableParentConversationWakePlanForMessageIDs(r, *agent, messageIDs, now.UTC(), true)
 	if err != nil {
-		return err
+		return core.NewDurableAgentWakeFailureError(core.DurableAgentWakeFailureParentConversationPrepare, agentID, messageIDs, err)
 	}
 	if plan == nil {
+		if len(durableWakeNonEmptyMessageIDs(messageIDs)) > 0 {
+			return core.NewDurableAgentWakeClaimedParentBatchMissingError(agentID, messageIDs)
+		}
 		return nil
 	}
+	if wakeClaimID = strings.TrimSpace(wakeClaimID); wakeClaimID != "" {
+		plan.WakeClaimID = wakeClaimID
+		plan.TaskPacketID = durableWakeTaskPacketIDForWakeClaim(agentID, messageIDs, wakeClaimID)
+	}
 	return r.runDurableWakeTurn(ctx, *agent, *plan, now.UTC())
+}
+
+func durableWakeNonEmptyMessageIDs(messageIDs []string) []string {
+	out := make([]string, 0, len(messageIDs))
+	for _, id := range messageIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func durableWakeSyntheticChatID(agentID string) int64 {

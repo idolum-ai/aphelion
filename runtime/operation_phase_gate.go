@@ -2,7 +2,11 @@
 
 package runtime
 
-import "github.com/idolum-ai/aphelion/session"
+import (
+	"strings"
+
+	"github.com/idolum-ai/aphelion/session"
+)
 
 const (
 	operationGateLevelNormalApproval            = "normal_approval"
@@ -25,6 +29,11 @@ func operationPhaseApprovalGate(phase session.OperationPhase) operationPhaseGate
 	phase = normalizeSingleOperationPhase(phase)
 	explicitLevel := normalizeOperationGateLevel(phase.GateLevel)
 	hardReason := operationPhaseHardBlockedReason(phase)
+	if explicitLevel == operationGateLevelHardConsentBlock &&
+		hardReason != "" &&
+		operationPhaseHardBlockCanBeSatisfiedByOperator(phase, hardReason) {
+		explicitLevel = operationGateLevelEscalatedOperatorApproval
+	}
 	if explicitLevel == operationGateLevelEscalatedOperatorApproval &&
 		operationPhaseHasThirdPartyPrivateDataGate(phase) &&
 		hardReason != "" &&
@@ -105,7 +114,13 @@ func operationPhaseHardBlockCanBeSatisfiedByOperator(phase session.OperationPhas
 	if !operationPhaseReasonCodeRequiresConsent(reason) {
 		return false
 	}
-	return operationPhaseApprovalSubjectIsOperatorControlled(phase.ApprovalSubject)
+	if operationPhaseApprovalSubjectIsOperatorControlled(phase.ApprovalSubject) {
+		return true
+	}
+	if strings.TrimSpace(phase.ApprovalSubject) != "" {
+		return false
+	}
+	return operationPhaseHasOperatorControlledConsentSurface(phase)
 }
 
 func operationPhaseApprovalSubjectIsOperatorControlled(subject string) bool {
@@ -115,6 +130,34 @@ func operationPhaseApprovalSubjectIsOperatorControlled(subject string) bool {
 	default:
 		return false
 	}
+}
+
+func operationPhaseHasOperatorControlledConsentSurface(phase session.OperationPhase) bool {
+	phase = normalizeSingleOperationPhase(phase)
+	if operationPhaseHasStructuredCode(phase, "operator_consent") {
+		return true
+	}
+	if operationPhaseHasStructuredCode(phase,
+		"mailbox_content",
+		"mailbox_read",
+		"email_read",
+		"external_account_email_read",
+		"read_mailbox_contents",
+		"run_mailbox_adapter_query",
+		"run_configured_mailbox_adapter_query_once",
+		"read_only_mailbox_smoke",
+	) && !operationPhaseHasStructuredCode(phase,
+		"private_data_intake",
+		"resource_owner_data_intake",
+		"resource_owner_profile_intake",
+		"private_profile_intake",
+		"profile_evaluation_rubric",
+		"cv_ingestion",
+		"third_party_opt_in",
+	) {
+		return true
+	}
+	return false
 }
 
 func normalizeOperationGateLevel(level string) string {

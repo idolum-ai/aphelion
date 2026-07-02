@@ -42,6 +42,9 @@ func (r *Registry) ExecuteForPrincipal(ctx context.Context, p principal.Principa
 }
 
 func (r *Registry) ExecuteForSessionPrincipal(ctx context.Context, p principal.Principal, key session.SessionKey, name string, input json.RawMessage) (string, error) {
+	if nativeToolHiddenForPrincipal(name, p) {
+		return "", fmt.Errorf("%s is parent-control-plane only", strings.TrimSpace(name))
+	}
 	if r.sandbox == nil {
 		return "", fmt.Errorf("principal-aware execution requires sandbox resolver")
 	}
@@ -111,8 +114,10 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.evidenceHydrate(ctx, input, key)
 	case "update_operation":
 		return r.updateOperation(ctx, input, key)
+	case authorityBundleToolName:
+		return r.authorityBundle(ctx, input, p, key)
 	case "request_approval":
-		return r.requestApproval(ctx, input, key)
+		return r.requestApproval(ctx, input, key, p)
 	case "operation_artifact":
 		return r.operationArtifact(ctx, input, scope, key)
 	case "update_plan":

@@ -419,6 +419,67 @@ func TestTelegramIngressAcceptedAndQueuedTransitionsDoNotRedispatchTerminalRows(
 	}
 }
 
+func TestDecisionResumeOwnershipTransferRollsBackWhenOriginalDropFails(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Date(2026, 7, 1, 7, 30, 0, 0, time.UTC)
+	if _, err := store.RecordTelegramIngressAccepted(TelegramIngressUpdateRecord{
+		Surface:     "telegram:primary",
+		UpdateID:    777,
+		UpdateKind:  "message",
+		ChatID:      7001,
+		SenderID:    42,
+		MessageID:   900,
+		SessionID:   "telegram_dm:7001",
+		Status:      TelegramIngressUpdateAccepted,
+		InboundJSON: `{"Text":"resume this"}`,
+		AcceptedAt:  now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("RecordTelegramIngressAccepted(original) err = %v", err)
+	}
+	if _, err := store.db.Exec(`
+		CREATE TEMP TRIGGER fail_decision_resume_original_drop
+		BEFORE UPDATE OF status ON telegram_ingress_updates
+		WHEN OLD.surface = 'telegram:primary' AND OLD.update_id = 777 AND NEW.status = 'dropped'
+		BEGIN
+			SELECT RAISE(FAIL, 'injected original drop failure');
+		END
+	`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+
+	_, err := store.AcceptDecisionResumeAndDropOriginal(TelegramIngressUpdateRecord{
+		Surface:     "telegram:decision-resume",
+		UpdateID:    777,
+		UpdateKind:  "decision_resume_busy",
+		ChatID:      7001,
+		SenderID:    42,
+		MessageID:   900,
+		SessionID:   "telegram_dm:7001",
+		Status:      TelegramIngressUpdateAccepted,
+		InboundJSON: `{"Text":"resume this"}`,
+		AcceptedAt:  now.Add(time.Second),
+		UpdatedAt:   now.Add(time.Second),
+	}, "telegram:primary", 777, TelegramIngressDropReasonDecisionResume, now.Add(time.Second))
+	if err == nil || !strings.Contains(err.Error(), "injected original drop failure") {
+		t.Fatalf("AcceptDecisionResumeAndDropOriginal() err = %v, want injected drop failure", err)
+	}
+	if _, ok, err := store.TelegramIngressUpdate("telegram:decision-resume", 777); err != nil || ok {
+		t.Fatalf("synthetic update ok=%t err=%v, want rollback to remove synthetic owner", ok, err)
+	}
+	original, ok, err := store.TelegramIngressUpdate("telegram:primary", 777)
+	if err != nil || !ok {
+		t.Fatalf("TelegramIngressUpdate(original) ok=%t err=%v", ok, err)
+	}
+	if original.Status != TelegramIngressUpdateAccepted {
+		t.Fatalf("original status = %s, want accepted after rolled-back transfer", original.Status)
+	}
+}
+
 func TestTelegramIngressDropTerminalizesOnlyDispatchableRows(t *testing.T) {
 	t.Parallel()
 

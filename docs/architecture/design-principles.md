@@ -76,6 +76,12 @@ work, but old facts should be rehydrated from typed evidence IDs, source kinds,
 epistemic status, and runtime-computed hashes when continuation or recovery
 depends on fidelity.
 
+Durable child wake results follow the same boundary. Child summaries are
+operator projection; terminal status, blocker class, and retryability should be
+compiled into typed outcome records before the parent runtime commits the child
+task result. Legacy textual markers may be accepted as compatibility input, but
+must not become the durable source of truth.
+
 ### Text is presentation, not authority
 
 Persona language can be alive, concise, and flexible. The runtime must not
@@ -99,6 +105,15 @@ events either compile against the expected shape or they do not.
 Open language should be interpreted by a layer that can disambiguate, ask for
 context, and return typed claims or proposed actions. The runtime can then
 validate those claims against contracts and evidence.
+
+One-time authority should default to generic continuation recovery, not a new
+pre-coded grant type. If work is blocked by several narrow approvals, Aphelion
+may compile a broad-but-specific authority bundle from the typed blockers: what
+is allowed, what remains forbidden, the exact stop conditions, the durable
+contracts it satisfies, and the review surface that can approve it. A new
+authority type belongs in code only when it carries durable enforcement value or
+useful aggregate labeling across repeated workflows; otherwise the one-time
+case should stay a compiled recovery contract.
 
 Unknown edge cases are expected. The answer is not to pretend every phrase can
 be exhaustively matched; the answer is to preserve enough structure, evidence,

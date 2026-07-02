@@ -4,7 +4,9 @@ package session
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -402,7 +404,7 @@ func ensureExecutionRunAuthorityTables(tx *sql.Tx) error {
 			principal TEXT NOT NULL DEFAULT '',
 			principal_role TEXT NOT NULL DEFAULT '',
 			execution_species TEXT NOT NULL DEFAULT '',
-			lease_kind TEXT NOT NULL CHECK(lease_kind IN ('continuation_lease', 'operation_plan_lease')),
+			lease_kind TEXT NOT NULL CHECK(lease_kind IN ('continuation_lease', 'operation_plan_lease', 'child_task_attempt')),
 			continuation_lease_id TEXT NOT NULL DEFAULT '',
 			operation_plan_lease_id TEXT NOT NULL DEFAULT '',
 			lease_status TEXT NOT NULL DEFAULT '',
@@ -427,6 +429,235 @@ func ensureExecutionRunAuthorityTables(tx *sql.Tx) error {
 		{table: "execution_run_authority", column: "lease_constraints_json", statement: `ALTER TABLE execution_run_authority ADD COLUMN lease_constraints_json TEXT NOT NULL DEFAULT '{}'`},
 	} {
 		if err := addSchemaColumnIfMissing(tx, column); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func migrateSchemaV83ToV84(tx *sql.Tx) error {
+	if err := ensureExecutionRunAuthorityChildTaskLeaseKind(tx); err != nil {
+		return fmt.Errorf("migrate schema v83 to v84 ensure child task execution authority kind: %w", err)
+	}
+	return nil
+}
+
+func migrateSchemaV84ToV85(tx *sql.Tx) error {
+	if err := ensureAuthorityBundleTables(tx); err != nil {
+		return fmt.Errorf("migrate schema v84 to v85 ensure authority bundle contracts: %w", err)
+	}
+	return nil
+}
+
+func migrateSchemaV85ToV86(tx *sql.Tx) error {
+	if err := migrateLegacyRecoveryOperationKinds(tx); err != nil {
+		return fmt.Errorf("migrate schema v85 to v86 legacy recovery operation kinds: %w", err)
+	}
+	return nil
+}
+
+func migrateLegacyRecoveryOperationKinds(tx *sql.Tx) error {
+	if exists, err := schemaTableExists(tx, "next_action_records"); err != nil {
+		return err
+	} else if !exists {
+		return nil
+	}
+	rows, err := tx.Query(`
+		SELECT record_id, operation_kind, operation_input_json, required_authority, resource_blocker
+		FROM next_action_records
+		WHERE resolved_at IS NULL
+			AND operation_kind IN (
+				'child_tool_runtime_probe',
+				'child_tool_runtime_repair',
+				'child_tool_lifecycle_repair',
+				'child_authority_repair',
+				'child_resource_repair',
+				'child_credential_probe',
+				'child_retry',
+				'child_blocker_disambiguation',
+				'child_terminal_status_disambiguation',
+				'child_wake_runtime_repair',
+				'child_wake_repair',
+				'child_task_blocker_review',
+				'child_task_continue',
+				'typed_operation_required',
+				'split_effect_plan',
+				'typed_repair_operation'
+			)
+	`)
+	if err != nil {
+		return fmt.Errorf("query legacy recovery operation kinds: %w", err)
+	}
+	defer rows.Close()
+	type legacyRow struct {
+		recordID           string
+		operationKind      string
+		operationInputJSON string
+		requiredAuthority  string
+		resourceBlocker    string
+	}
+	var records []legacyRow
+	for rows.Next() {
+		var row legacyRow
+		if err := rows.Scan(&row.recordID, &row.operationKind, &row.operationInputJSON, &row.requiredAuthority, &row.resourceBlocker); err != nil {
+			return fmt.Errorf("scan legacy recovery operation kind: %w", err)
+		}
+		records = append(records, row)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate legacy recovery operation kinds: %w", err)
+	}
+	for _, row := range records {
+		newKind, newRequired := migratedRecoveryOperationKind(row.operationKind, row.requiredAuthority)
+		inputJSON, err := migratedRecoveryOperationInputJSON(row.operationKind, newKind, row.operationInputJSON, row.resourceBlocker)
+		if err != nil {
+			return fmt.Errorf("migrate next action %s operation input: %w", row.recordID, err)
+		}
+		if _, err := tx.Exec(`
+			UPDATE next_action_records
+			SET operation_kind = ?, required_authority = ?, operation_input_json = ?
+			WHERE record_id = ?
+		`, newKind, newRequired, inputJSON, row.recordID); err != nil {
+			return fmt.Errorf("update next action %s operation kind: %w", row.recordID, err)
+		}
+	}
+	return nil
+}
+
+func migratedRecoveryOperationKind(oldKind string, oldRequiredAuthority string) (string, string) {
+	switch strings.TrimSpace(oldKind) {
+	case "typed_operation_required", "split_effect_plan", "typed_repair_operation":
+		return NextActionOperationKindOperatorRewrite, NextActionOperationKindOperatorRewrite
+	default:
+		required := strings.TrimSpace(oldRequiredAuthority)
+		switch required {
+		case "child_tool_runtime_probe", "child_tool_runtime_repair", "child_tool_lifecycle_repair", "child_authority_repair", "child_resource_repair", "child_credential_probe", "child_retry", "child_blocker_disambiguation", "child_terminal_status_disambiguation", "child_wake_runtime_repair", "child_wake_repair", "child_task_blocker_review", "child_task_continue":
+			required = NextActionOperationKindDurableChildRecovery
+		}
+		return NextActionOperationKindDurableChildRecovery, required
+	}
+}
+
+func migratedRecoveryOperationInputJSON(oldKind string, newKind string, raw string, resourceBlocker string) (string, error) {
+	payload := map[string]any{}
+	if strings.TrimSpace(raw) != "" {
+		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+			return "", err
+		}
+	}
+	payload["recovery_contract"] = "aphelion.recovery_handoff.v1"
+	payload["recovery_operation_kind"] = newKind
+	payload["legacy_operation_kind"] = strings.TrimSpace(oldKind)
+	switch newKind {
+	case NextActionOperationKindDurableChildRecovery:
+		payload["recovery_family"] = NextActionOperationKindDurableChildRecovery
+		blocker := firstNonEmptyStore(
+			migratedRecoveryPayloadString(payload["blocker_kind"]),
+			migratedRecoveryPayloadString(payload["child_blocker_kind"]),
+			migratedRecoveryPayloadString(payload["failure_class"]),
+			strings.TrimSpace(resourceBlocker),
+		)
+		if _, ok := payload["recovery_action"]; !ok {
+			payload["recovery_action"] = firstNonEmptyStore(
+				migratedRecoveryPayloadString(payload["action"]),
+				blocker,
+				strings.TrimSpace(oldKind),
+			)
+		}
+		if _, ok := payload["blocker_kind"]; !ok {
+			payload["blocker_kind"] = blocker
+		}
+		if _, ok := payload["child_blocker_kind"]; !ok {
+			payload["child_blocker_kind"] = blocker
+		}
+	case NextActionOperationKindOperatorRewrite:
+		if _, ok := payload["rewrite_reason"]; !ok {
+			payload["rewrite_reason"] = firstNonEmptyStore(migratedRecoveryPayloadString(payload["reason"]), strings.TrimSpace(oldKind))
+		}
+		if _, ok := payload["required_contract"]; !ok {
+			payload["required_contract"] = NextActionOperationKindOperatorRewrite
+		}
+	}
+	rawOut, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(rawOut), nil
+}
+
+func migratedRecoveryPayloadString(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+}
+
+func ensureExecutionRunAuthorityChildTaskLeaseKind(tx *sql.Tx) error {
+	exists, err := schemaTableExists(tx, "execution_run_authority")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return ensureExecutionRunAuthorityTables(tx)
+	}
+	turnRunsExists, err := schemaTableExists(tx, "turn_runs")
+	if err != nil {
+		return err
+	}
+	foreignKeyClause := ""
+	if turnRunsExists {
+		foreignKeyClause = `,
+			FOREIGN KEY (turn_run_id) REFERENCES turn_runs(id) ON DELETE CASCADE`
+	}
+	for _, stmt := range []string{
+		`DROP INDEX IF EXISTS idx_execution_run_authority_session`,
+		`DROP INDEX IF EXISTS idx_execution_run_authority_lease`,
+		`ALTER TABLE execution_run_authority RENAME TO execution_run_authority_old`,
+		fmt.Sprintf(`CREATE TABLE execution_run_authority (
+			turn_run_id INTEGER PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			principal TEXT NOT NULL DEFAULT '',
+			principal_role TEXT NOT NULL DEFAULT '',
+			execution_species TEXT NOT NULL DEFAULT '',
+			lease_kind TEXT NOT NULL CHECK(lease_kind IN ('continuation_lease', 'operation_plan_lease', 'child_task_attempt')),
+			continuation_lease_id TEXT NOT NULL DEFAULT '',
+			operation_plan_lease_id TEXT NOT NULL DEFAULT '',
+			lease_status TEXT NOT NULL DEFAULT '',
+			lease_class TEXT NOT NULL DEFAULT '',
+			lease_allowed_actions_json TEXT NOT NULL DEFAULT '[]',
+			lease_constraints_json TEXT NOT NULL DEFAULT '{}',
+			lease_remaining_turns INTEGER NOT NULL DEFAULT 0,
+			lease_expires_at TEXT,
+			admitted_at TEXT NOT NULL DEFAULT (datetime('now'))%s
+		)`, foreignKeyClause),
+		`INSERT INTO execution_run_authority(
+			turn_run_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
+			principal, principal_role, execution_species, lease_kind,
+			continuation_lease_id, operation_plan_lease_id, lease_status, lease_class,
+			lease_allowed_actions_json, lease_constraints_json, lease_remaining_turns,
+			lease_expires_at, admitted_at
+		)
+		SELECT
+			turn_run_id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id,
+			principal, principal_role, execution_species, lease_kind,
+			continuation_lease_id, operation_plan_lease_id, lease_status, lease_class,
+			lease_allowed_actions_json, lease_constraints_json, lease_remaining_turns,
+			lease_expires_at, admitted_at
+		FROM execution_run_authority_old`,
+		`DROP TABLE execution_run_authority_old`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_run_authority_session ON execution_run_authority(session_id, admitted_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_run_authority_lease ON execution_run_authority(lease_kind, continuation_lease_id, operation_plan_lease_id)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
 			return err
 		}
 	}
@@ -505,6 +736,7 @@ func ensureCurrentSchemaShapeRepairColumns(tx *sql.Tx) error {
 		{name: "child task lease columns", fn: ensureChildTaskLeaseColumns},
 		{name: "review event idempotency key", fn: ensureReviewEventIdempotencyKey},
 		{name: "continuation recovery contracts", fn: ensureContinuationRecoveryContractTables},
+		{name: "authority bundle contracts", fn: ensureAuthorityBundleTables},
 	}
 	for _, repair := range repairs {
 		if err := repair.fn(tx); err != nil {

@@ -53,6 +53,13 @@ The execution-authority spine is:
    handoff, creates the pending `ContinuationLease` through the existing
    approval compiler, and then renders the approval card. It does not auto-grant
    the lease or execute unrelated next actions.
+10. When several one-time authority blockers serve one bounded objective,
+    Aphelion may compile them into an `authority_bundle` contract instead of
+    forcing the operator through one card per narrow stop. The bundle is still a
+    typed recovery handoff: it names the source blocker rows, allowed actions,
+    forbidden actions, stop conditions, primary continuation contract, required
+    grant specs, expiry, and principal. Model-authored wording can draft the
+    operator summary, but approval materializes only the compiled contract.
 
 Recovery transitions are the navigable graph between these stops. A transition
 is not just a message; it is a `next_action_record` whose state, subject,
@@ -75,6 +82,20 @@ protected evidence references. A ready-to-execute transition whose executable
 operands are redacted is downgraded to operator rewrite rather than preserving a
 non-hydratable operation.
 
+Generic authority bundles are the preferred one-time recovery shape. A new
+bespoke authority class should be introduced only when the system needs durable
+enforcement semantics or recurring aggregate labels that cannot be represented
+by the compiled bundle contract. This keeps specific authority types meaningful
+instead of turning every incident into another hardcoded grant.
+
+Authority-bundle schema terms are layered deliberately. The contract carries
+hash-bound authority semantics such as session, principal, allowed and forbidden
+actions, stop conditions, expiry, and required grants. Components are registered
+typed links to evidence or related contracts, not a free-form extension bag.
+Handoffs are small pointers to stored contracts. Transition specs route those
+pointers through known adapters. Projection text is only the audience-facing
+view and must never become authority or evidence by itself.
+
 Context may select durable run authority, but it may not manufacture authority.
 Durable state remains canonical.
 
@@ -92,6 +113,14 @@ direct approved continuation that remains on the ordinary turn path records
 `ContinuationLease` snapshot, then spends the lease and starts the internal
 turn. Tools still receive only the durable run identity and must reload the
 stored authority before acting.
+
+Raw execution-authority admission is one-shot. Once a turn monitor binds an
+admission to `execution_run_authority`, the running context carries only the
+durable run identity. Nested turns must not inherit the raw admission and bind
+the same lease again. A parent-approved `child_wake` continuation authorizes the
+`durable_agent.wake_once` tool invocation; the durable child turn that follows
+is a child-scoped turn and must not revalidate the parent lease against the
+child session's continuation state.
 
 ## Durable Child Turn Authorship
 
@@ -142,16 +171,23 @@ Durable-child outcome projection uses this status contract:
 | Child result | Recognized blocker | Next action state | Operation kind | Parent projection |
 | --- | --- | --- | --- | --- |
 | `completed` | none | `terminal` | none | none |
-| `update` | `child_task_update` | `waiting_for_child` | `child_task_continue` | no blocker card |
-| `update` | `missing_terminal_review_status` | `waiting_for_operator` | `child_terminal_status_disambiguation` | ask whether to continue, block, or close the ambiguous child task |
-| `blocked` | `tool_runtime_not_executable` | `blocked_needs_resource_repair` | `child_tool_runtime_repair` | idempotent blocker review when a review target exists |
-| `blocked` | `tool_lifecycle_unregistered` | `blocked_needs_resource_repair` | `child_tool_lifecycle_repair` | idempotent blocker review when a review target exists |
-| `blocked` | `grant_missing_or_stale` | `blocked_needs_authority` | `child_authority_repair` | idempotent blocker review when a review target exists |
-| `blocked` | `resource_permission_denied` | `blocked_needs_resource_repair` | `child_resource_repair` | idempotent blocker review when a review target exists |
-| `blocked` | `credential_unverified` | `waiting_for_operator` | `child_credential_probe` | idempotent blocker review when a review target exists |
-| `blocked` | `external_transient` | `scheduled_retry` | `child_retry` | idempotent blocker review when a review target exists |
-| `blocked` | unknown child blocker | `waiting_for_operator` | `child_blocker_disambiguation` | idempotent blocker review when a review target exists |
-| `failed` | `wake_failed` | `blocked_needs_resource_repair` | `child_wake_repair` | no child-authored blocker card |
+| `update` | `child_task_update` | `waiting_for_child` | `durable_child_recovery` | no blocker card |
+| `update` | `missing_terminal_review_status` | `waiting_for_operator` | `durable_child_recovery` | ask whether to continue, block, or close the ambiguous child task |
+| `blocked` | `tool_runtime_not_executable` | `blocked_needs_resource_repair` | `durable_child_recovery` | idempotent blocker review when a review target exists |
+| `blocked` | `tool_lifecycle_unregistered` | `blocked_needs_resource_repair` | `durable_child_recovery` | idempotent blocker review when a review target exists |
+| `blocked` | `grant_missing_or_stale` | `blocked_needs_authority` | `durable_child_recovery` | idempotent blocker review when a review target exists |
+| `blocked` | `resource_permission_denied` | `blocked_needs_resource_repair` | `durable_child_recovery` | idempotent blocker review when a review target exists |
+| `blocked` | `credential_unverified` | `waiting_for_operator` | `durable_child_recovery` | idempotent blocker review when a review target exists |
+| `blocked` | `external_transient` | `scheduled_retry` | `durable_child_recovery` | idempotent blocker review when a review target exists |
+| `blocked` | unknown child blocker | `waiting_for_operator` | `durable_child_recovery` | idempotent blocker review when a review target exists |
+| `failed` | `wake_failed` | `blocked_needs_resource_repair` | `durable_child_recovery` | no child-authored blocker card |
+
+The operation kind above is intentionally generic. Specific blockers such as
+`tool_runtime_not_executable` or `credential_unverified` remain typed metadata
+inside the recovery handoff. A one-time repair should normally flow through this
+compiled recovery contract instead of receiving its own pre-coded operation
+type. A new operation type is justified only when it carries durable enforcement
+semantics or provides aggregate labels that multiple surfaces can consume.
 
 ## Effective Authority
 
@@ -315,4 +351,8 @@ New execution species must either:
 
 This is not a reason to duplicate authority checks inside child-specific
 adapters. The child substrate should remain vertically bounded; the horizontal
-bridge belongs at the execution-authority boundary.
+bridge belongs at the execution-authority boundary. Child wake authority records
+should be read as recovery manifests first: they preserve what crossed the
+parent/child boundary, what evidence was produced, and which retry or repair is
+safe after failure. Authority remains mandatory at the point of use, but it is
+not the whole story of the crossing.

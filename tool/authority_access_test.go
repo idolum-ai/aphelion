@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -212,6 +213,127 @@ func TestAuthorityManagedToolUsesContextLeaseEvidence(t *testing.T) {
 	}
 	if len(invocations) != 1 || invocations[0].Status != "allowed" || invocations[0].TurnRunID != turnRunID || invocations[0].ContinuationLeaseID != "lease-context-tool" || invocations[0].AuthoritySource != "continuation_lease" {
 		t.Fatalf("context invocations = %#v, want allowed invocation with durable run authority", invocations)
+	}
+}
+
+func TestAuthorityManagedToolUsesChildTaskAttemptAuthority(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	manifest := ExternalToolManifest{
+		Name:      "leased_tool",
+		Owner:     "child-alpha",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+	}
+	if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest}); err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "leased_tool", ImplementationRef: "external:leased_tool", Registered: true}); err != nil {
+		t.Fatalf("UpsertRegisteredTool() err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-child-task-tool",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "durable_agent:child-alpha",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "leased_tool",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9401, Scope: session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "child-alpha", DurableAgentID: "child-alpha"}}
+	now := time.Now().UTC()
+	packet, err := store.RecordChildTaskPacket(session.ChildTaskPacketInput{
+		PacketID:       "child_task:authority-tool",
+		AgentID:        "child-alpha",
+		Key:            key,
+		TaskKind:       "durable_wake",
+		Status:         session.ChildTaskPacketQueued,
+		TargetResource: "leased_tool",
+		RequiredAction: "invoke",
+		InputJSON:      `{}`,
+		CreatedAt:      now,
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskPacket() err = %v", err)
+	}
+	claimed, err := store.ClaimChildTaskAttempt(session.ChildTaskAttemptClaimInput{
+		PacketID:       packet.PacketID,
+		AttemptID:      "child_attempt:authority-tool",
+		LeaseOwner:     "worker:child-alpha",
+		AgentID:        "child-alpha",
+		Key:            key,
+		ClaimedAt:      now,
+		LeaseExpiresAt: now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("ClaimChildTaskAttempt() err = %v", err)
+	}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "child tool call")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	_, err = store.UpsertExecutionRunAuthority(session.ExecutionRunAuthority{
+		TurnRunID:           run.ID,
+		SessionID:           run.SessionID,
+		ChatID:              run.ChatID,
+		UserID:              run.UserID,
+		Scope:               run.Scope,
+		Principal:           "durable_agent:child-alpha",
+		PrincipalRole:       string(principal.RoleDurableAgent),
+		ExecutionSpecies:    "durable_child_wake",
+		LeaseKind:           session.ExecutionAuthorityLeaseKindChildTask,
+		LeaseStatus:         string(claimed.Status),
+		LeaseClass:          session.ContinuationLeaseClassChildWake,
+		LeaseExpiresAt:      claimed.LeaseExpiresAt,
+		LeaseRemainingTurns: 1,
+		LeaseConstraints: map[string]string{
+			"agent_id":         "child-alpha",
+			"packet_id":        claimed.PacketID,
+			"task_lease_id":    claimed.TaskLeaseID,
+			"attempt_id":       claimed.ActiveAttemptID,
+			"lease_owner":      claimed.LeaseOwner,
+			"lease_generation": fmt.Sprintf("%d", claimed.LeaseGeneration),
+			"fencing_token":    claimed.FencingToken,
+		},
+		AdmittedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("UpsertExecutionRunAuthority(child task) err = %v", err)
+	}
+
+	actor := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"}
+	ctx := WithAuthorityUseRef(context.Background(), session.AuthorityUseRef{SessionID: run.SessionID, TurnRunID: run.ID})
+	grant, permit, managed, err := registry.requireAuthorityToolAccess(ctx, "leased_tool", actor, key, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("requireAuthorityToolAccess(child task) err = %v", err)
+	}
+	if !managed || grant.GrantID != "capg-child-task-tool" || permit == nil || permit.UseRef.AuthoritySource != session.ExecutionAuthorityLeaseKindChildTask {
+		t.Fatalf("grant=%#v permit=%#v managed=%t, want child-task-backed grant", grant, permit, managed)
+	}
+	invocations, err := store.CapabilityInvocationsByGrant("capg-child-task-tool", 10)
+	if err != nil {
+		t.Fatalf("CapabilityInvocationsByGrant() err = %v", err)
+	}
+	if len(invocations) != 1 || invocations[0].Status != "allowed" || invocations[0].TurnRunID != run.ID || invocations[0].AuthoritySource != session.ExecutionAuthorityLeaseKindChildTask {
+		t.Fatalf("invocations = %#v, want allowed child-task authority invocation", invocations)
+	}
+
+	if _, err := store.ReleaseChildTaskAttempt(session.ChildTaskAttemptReleaseInput{
+		PacketID:        claimed.PacketID,
+		AttemptID:       claimed.ActiveAttemptID,
+		LeaseOwner:      claimed.LeaseOwner,
+		LeaseGeneration: claimed.LeaseGeneration,
+		FencingToken:    claimed.FencingToken,
+		ReleasedAt:      now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("ReleaseChildTaskAttempt() err = %v", err)
+	}
+	_, _, _, err = registry.requireAuthorityToolAccess(ctx, "leased_tool", actor, key, json.RawMessage(`{}`))
+	if err == nil || !strings.Contains(err.Error(), "does not own a live task lease") {
+		t.Fatalf("requireAuthorityToolAccess(released child task) err = %v, want live task lease denial", err)
 	}
 }
 

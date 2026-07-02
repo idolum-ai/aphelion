@@ -156,6 +156,8 @@ type turnCoordinatorExecuteInput struct {
 	ExtraSystemMessages   []agent.Message
 	RunErrPrefix          string
 	InvalidOutputPrefix   string
+	Progress              *toolProgressReporter
+	ProgressOwnedByCaller bool
 }
 
 type turnCoordinatorExecuteOutput struct {
@@ -224,10 +226,16 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	input.RunKind = runKind
 	input.Tools = toolRegistryForRunKind(input.Tools, runKind)
 
-	progress := r.newToolProgressReporter(input.Key, input.Msg, input.Audit)
+	progress := input.Progress
+	if progress == nil {
+		progress = r.newToolProgressReporter(input.Key, input.Msg, input.Audit)
+	}
 	monitor, err := r.startTurnMonitor(ctx, input.Key, runKind, input.Prepared.LedgerText, progress, input.Audit, input.Msg)
 	if err != nil {
 		return out, err
+	}
+	if input.ProgressOwnedByCaller {
+		monitor.finishProgress = false
 	}
 	out.RunID = monitor.runID
 	ctx = monitor.Context()

@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 )
 
 const maxStartupRecoveryRuns = 20
+const maxStartupRecoveryTelegramIngressReplay = 10
 
 type startupRecoveryMissionEvidence struct {
 	PendingHandoffs []session.MissionHandoff
@@ -96,6 +98,7 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 		r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryDetected, "recovery", "detected", map[string]any{
 			"interrupted_count": len(interrupted),
 		}, time.Now().UTC())
+		r.supersedeInterruptedProgressMessages(ctx, interrupted, "inspecting")
 	}
 	reconciledIngress, err := r.store.ReconcileRunningTelegramIngressWithTerminalTurnRuns()
 	if err != nil {
@@ -127,6 +130,17 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 			"phase":                           "continuation_authority_repair",
 		}, time.Now().UTC())
 	}
+	replayedIngress, failedIngress, err := r.replayPendingTelegramIngress(ctx, "telegram:primary", now)
+	if err != nil {
+		return fmt.Errorf("replay pending telegram ingress: %w", err)
+	}
+	if replayedIngress > 0 || failedIngress > 0 {
+		r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryDetected, "recovery", "detected", map[string]any{
+			"phase":                     "telegram_ingress_replay",
+			"telegram_ingress_replayed": replayedIngress,
+			"telegram_ingress_failed":   failedIngress,
+		}, time.Now().UTC())
+	}
 
 	runs, err := r.store.PendingRecoveryTurnRuns(maxStartupRecoveryRuns)
 	if err != nil {
@@ -150,6 +164,12 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 		}
 		if repairedAuthority > 0 {
 			memoryNote += fmt.Sprintf("; continuation authority repaired=%d", repairedAuthority)
+		}
+		if replayedIngress > 0 {
+			memoryNote += fmt.Sprintf("; telegram ingress replayed=%d", replayedIngress)
+		}
+		if failedIngress > 0 {
+			memoryNote += fmt.Sprintf("; telegram ingress failed=%d", failedIngress)
 		}
 		if summary := resumeResult.summary(); summary != "" {
 			memoryNote += "; " + summary
@@ -275,6 +295,7 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	if err := r.store.MarkTurnRunsRecovered(ids, recoverySummary); err != nil {
 		return fmt.Errorf("mark turn runs recovered: %w", err)
 	}
+	r.supersedeInterruptedProgressMessages(ctx, runs, "recovered")
 	if err := r.deliverStartupRecoveryCatchup(ctx, maintenanceSession.SystemPrompt, runs, recoverySummary); err != nil {
 		return fmt.Errorf("deliver startup recovery catch-up: %w", err)
 	}
@@ -311,6 +332,218 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryAwake, "recovery", "awake", awakePayload, time.Now().UTC())
 	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryCompleted, "recovery", "completed", completedPayload, time.Now().UTC())
 	return nil
+}
+
+func (r *Runtime) replayPendingTelegramIngress(ctx context.Context, surface string, now time.Time) (replayed int, failed int, err error) {
+	if r == nil || r.store == nil {
+		return 0, 0, nil
+	}
+	surface = strings.TrimSpace(surface)
+	if surface == "" {
+		return 0, 0, nil
+	}
+	pending, err := r.store.PendingTelegramIngressUpdates(surface, maxStartupRecoveryTelegramIngressReplay)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, record := range pending {
+		if ctx.Err() != nil {
+			return replayed, failed, ctx.Err()
+		}
+		if !session.TelegramIngressUpdateStatusDispatchable(record.Status) {
+			continue
+		}
+		msg, decodeErr := telegramIngressReplayMessage(record)
+		if decodeErr != nil {
+			if markErr := r.store.MarkTelegramIngressFailed(record.Surface, record.UpdateID, "startup_replay_decode_failed: "+trimError(decodeErr.Error()), now); markErr != nil {
+				return replayed, failed, markErr
+			}
+			failed++
+			continue
+		}
+		key := session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramInboundScopeRef(msg)}
+		r.recordExecutionEvent(key, core.ExecutionEventRecoveryResume, "telegram_ingress", "replaying", map[string]any{
+			"ingress_surface":   record.Surface,
+			"ingress_update_id": record.UpdateID,
+			"message_id":        record.MessageID,
+			"queued_at":         record.QueuedAt.UTC().Format(time.RFC3339Nano),
+		}, now)
+		if _, handleErr := r.HandleInbound(ctx, msg); handleErr != nil {
+			stored, ok, lookupErr := r.store.TelegramIngressUpdate(record.Surface, record.UpdateID)
+			if lookupErr != nil {
+				return replayed, failed, lookupErr
+			}
+			if ok && session.TelegramIngressUpdateStatusDispatchable(stored.Status) {
+				if markErr := r.store.MarkTelegramIngressFailed(record.Surface, record.UpdateID, "startup_replay_failed: "+trimError(handleErr.Error()), now); markErr != nil {
+					return replayed, failed, markErr
+				}
+			}
+			failed++
+			continue
+		}
+		replayed++
+	}
+	return replayed, failed, nil
+}
+
+func (r *Runtime) supersedeInterruptedProgressMessages(ctx context.Context, runs []session.TurnRun, status string) {
+	if r == nil || r.store == nil || r.outbound == nil || len(runs) == 0 {
+		return
+	}
+	text := startupRecoveryProgressSupersedeText(status)
+	if text == "" {
+		return
+	}
+	clearer, hasClearer := r.outbound.(messageKeyboardClearer)
+	editor, hasEditor := r.outbound.(messageEditor)
+	if !hasClearer && !hasEditor {
+		return
+	}
+	for _, run := range runs {
+		if run.ProgressMessageID <= 0 {
+			continue
+		}
+		key := session.SessionKey{ChatID: run.ChatID, UserID: run.UserID, Scope: run.Scope}
+		chatID := r.progressDeliveryChatIDForRun(key, run)
+		if chatID == 0 {
+			r.recordStartupRecoveryProgressSupersedeFailure(key, run, "startup_recovery_no_delivery_chat", fmt.Errorf("progress delivery chat unavailable"))
+			continue
+		}
+		method := "startup_recovery_edit_text"
+		var err error
+		if hasClearer {
+			method = "startup_recovery_clear_keyboard"
+			err = clearer.EditMessageTextWithoutInlineKeyboard(ctx, chatID, run.ProgressMessageID, text, "")
+		} else {
+			err = editor.EditMessageText(ctx, chatID, run.ProgressMessageID, text, "")
+		}
+		if err != nil {
+			r.recordStartupRecoveryProgressSupersedeFailure(key, run, method, err)
+			r.reportOperationalIssueAsync("startup_recovery_progress", fmt.Errorf("supersede progress run_id=%d msg_id=%d: %w", run.ID, run.ProgressMessageID, err))
+			continue
+		}
+		r.recordExecutionEvent(key, core.ExecutionEventDeliveryProgressEdited, "progress", "superseded", map[string]any{
+			"method":           method,
+			"message_id":       run.ProgressMessageID,
+			"chat_id":          chatID,
+			"run_id":           run.ID,
+			"progress_phase":   "startup_recovery",
+			"source_class":     "canonical",
+			"source_surface":   "outbound_transport_ledger",
+			"visibility":       "human_render_unknown",
+			"transport_status": "acknowledged",
+		}, time.Now().UTC())
+	}
+}
+
+func startupRecoveryProgressSupersedeText(status string) string {
+	switch strings.TrimSpace(status) {
+	case "inspecting":
+		return "Interrupted by restart.\n\nStartup recovery is inspecting persisted state."
+	case "recovered":
+		return "Recovered after restart.\n\nStartup recovery recorded the interrupted turn. Continue from the newest recovery, approval, or status surface."
+	default:
+		return ""
+	}
+}
+
+func (r *Runtime) progressDeliveryChatIDForRun(key session.SessionKey, run session.TurnRun) int64 {
+	if r == nil || r.store == nil || run.ProgressMessageID <= 0 {
+		return 0
+	}
+	events, err := r.store.ExecutionEventsByTurnRun(key, run.ID, 80)
+	if err != nil {
+		log.Printf("WARN lookup progress delivery chat failed run_id=%d msg_id=%d err=%v", run.ID, run.ProgressMessageID, err)
+		return startupRecoveryProgressFallbackChatID(run)
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		switch strings.TrimSpace(event.EventType) {
+		case core.ExecutionEventDeliveryProgressSent, core.ExecutionEventDeliveryProgressEdited:
+		default:
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			continue
+		}
+		messageID, ok := payloadInt64(payload, "message_id")
+		if !ok || messageID != run.ProgressMessageID {
+			continue
+		}
+		chatID, ok := payloadInt64(payload, "chat_id")
+		if ok && chatID > 0 {
+			return chatID
+		}
+	}
+	return startupRecoveryProgressFallbackChatID(run)
+}
+
+func startupRecoveryProgressFallbackChatID(run session.TurnRun) int64 {
+	if run.ChatID <= 0 {
+		return 0
+	}
+	switch run.Scope.Kind {
+	case session.ScopeKindDurableAgent, session.ScopeKindHeartbeat, session.ScopeKindRecovery:
+		return 0
+	default:
+		return run.ChatID
+	}
+}
+
+func (r *Runtime) recordStartupRecoveryProgressSupersedeFailure(key session.SessionKey, run session.TurnRun, method string, err error) {
+	if r == nil {
+		return
+	}
+	payload := map[string]any{
+		"method":         strings.TrimSpace(method),
+		"message_id":     run.ProgressMessageID,
+		"run_id":         run.ID,
+		"progress_phase": "startup_recovery",
+		"source_class":   "canonical",
+		"source_surface": "outbound_transport_ledger",
+		"visibility":     "human_render_unknown",
+	}
+	if err != nil {
+		payload["error"] = trimError(err.Error())
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventDeliveryProgressFailed, "progress", "failed", payload, time.Now().UTC())
+}
+
+func telegramIngressReplayMessage(record session.TelegramIngressUpdateRecord) (core.InboundMessage, error) {
+	raw := strings.TrimSpace(record.InboundJSON)
+	if raw == "" {
+		return core.InboundMessage{}, fmt.Errorf("telegram ingress update %s/%d has no inbound payload", record.Surface, record.UpdateID)
+	}
+	var msg core.InboundMessage
+	if err := json.Unmarshal([]byte(raw), &msg); err != nil {
+		return core.InboundMessage{}, fmt.Errorf("decode telegram ingress update %s/%d: %w", record.Surface, record.UpdateID, err)
+	}
+	if msg.ChatID == 0 {
+		msg.ChatID = record.ChatID
+	}
+	if msg.SenderID == 0 {
+		msg.SenderID = record.SenderID
+	}
+	if msg.MessageID == 0 {
+		msg.MessageID = record.MessageID
+	}
+	if strings.TrimSpace(msg.IngressSurface) == "" {
+		msg.IngressSurface = strings.TrimSpace(record.Surface)
+	}
+	if msg.IngressUpdateID <= 0 {
+		msg.IngressUpdateID = record.UpdateID
+	}
+	if msg.IngressQueuedAt.IsZero() && !record.QueuedAt.IsZero() {
+		msg.IngressQueuedAt = record.QueuedAt
+	}
+	if strings.TrimSpace(msg.ChatType) == "" {
+		msg.ChatType = "private"
+	}
+	if msg.ChatID == 0 || msg.IngressUpdateID <= 0 || strings.TrimSpace(msg.IngressSurface) == "" {
+		return core.InboundMessage{}, fmt.Errorf("telegram ingress update %s/%d is missing replay identity", record.Surface, record.UpdateID)
+	}
+	return msg, nil
 }
 
 func (r *Runtime) startupRecoveryMissionEvidence() (startupRecoveryMissionEvidence, error) {

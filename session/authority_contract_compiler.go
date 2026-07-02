@@ -172,6 +172,7 @@ func authorityContractContradictions(allowedActions []string, forbiddenActions [
 	if len(allowed) == 0 || len(forbidden) == 0 {
 		return nil
 	}
+	scopedGitPushAllowed := authorityActionsHaveScopedGitPushAllowance(allowed)
 	out := []AuthorityContradiction{}
 	for _, allowedAction := range allowed {
 		allowedMode := authorityWorkActionForAllowedToken(allowedAction)
@@ -184,6 +185,9 @@ func authorityContractContradictions(allowedActions []string, forbiddenActions [
 			forbiddenMode := authorityWorkActionForForbiddenToken(forbiddenAction)
 			forbiddenRank := authorityWorkActionRank(forbiddenMode)
 			forbiddenNormalized := normalizeAuthorityMatchText(forbiddenAction)
+			if authorityScopedGitPushExclusionAllowed(allowedAction, forbiddenAction, scopedGitPushAllowed) {
+				continue
+			}
 			if forbiddenNormalized != "" && allowedNormalized == forbiddenNormalized {
 				out = append(out, authorityContradiction(allowedAction, forbiddenAction, allowedMode, "allowed_action_exactly_forbidden"))
 				continue
@@ -207,7 +211,142 @@ func proposalGitPushContradictions(proposal ActionProposal) []AuthorityContradic
 	if forbidden == "" {
 		return nil
 	}
+	if authorityForbiddenGitPushIsScopeExclusion(forbidden) && actionProposalHasScopedGitPushAllowance(proposal) {
+		return nil
+	}
 	return []AuthorityContradiction{authorityContradiction("git_push", forbidden, AuthorityWorkActionCommit, AuthorityContradictionReasonProposalRequiresForbiddenGitPush)}
+}
+
+func authorityScopedGitPushExclusionAllowed(allowedAction string, forbiddenAction string, scopedGitPushAllowed bool) bool {
+	if !scopedGitPushAllowed || !authorityForbiddenGitPushIsScopeExclusion(forbiddenAction) {
+		return false
+	}
+	if !authorityTokenImpliesGitPush(allowedAction) {
+		return false
+	}
+	return normalizeAuthorityMatchText(allowedAction) != normalizeAuthorityMatchText(forbiddenAction)
+}
+
+func actionProposalHasScopedGitPushAllowance(proposal ActionProposal) bool {
+	if authorityActionsHaveScopedGitPushAllowance(proposal.AllowedActions) {
+		return true
+	}
+	return authorityTextImpliesScopedGitPush(strings.Join([]string{
+		proposal.OperatorTitle,
+		proposal.PlanTitle,
+		proposal.Summary,
+		proposal.WhyNow,
+		proposal.BoundedEffect,
+	}, "\n"))
+}
+
+func authorityActionsHaveScopedGitPushAllowance(actions []string) bool {
+	for _, action := range actions {
+		if authorityTokenImpliesScopedGitPush(action) {
+			return true
+		}
+	}
+	return false
+}
+
+func authorityForbiddenGitPushIsScopeExclusion(value string) bool {
+	token := normalizeAuthorityMatchText(value)
+	if token == "" || !authorityTokenImpliesGitPush(value) {
+		return false
+	}
+	hasExclusion := false
+	for _, marker := range []string{"another", "other", "different", "unrelated", "unapproved", "outside", "elsewhere"} {
+		if strings.Contains(token, marker) {
+			hasExclusion = true
+			break
+		}
+	}
+	if !hasExclusion {
+		return false
+	}
+	for _, marker := range []string{"branch", "repo", "repository", "remote", "origin", "upstream"} {
+		if strings.Contains(token, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func authorityTokenImpliesScopedGitPush(value string) bool {
+	token := normalizeAuthorityMatchText(value)
+	if token == "" || !authorityTokenImpliesGitPush(value) {
+		return false
+	}
+	if token == "git_push" || token == "push_remote" || token == "push_branch" || token == "push_branches" || token == "push_to_remote" {
+		return false
+	}
+	for _, marker := range []string{"origin_", "origin/", "branch", "main", "pr_branch", "current_branch", "fork", "upstream"} {
+		if strings.Contains(token, strings.ReplaceAll(marker, "/", "_")) || strings.Contains(strings.ToLower(strings.TrimSpace(value)), marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func authorityTextImpliesScopedGitPush(text string) bool {
+	tokens := authorityTextTokens(text)
+	for i, token := range tokens {
+		if token == "git" && i+1 < len(tokens) && isAuthorityPushVerb(tokens[i+1]) {
+			if authorityPushMentionNegated(tokens, i) || authorityPushMentionNegated(tokens, i+1) {
+				continue
+			}
+			start := authorityClauseBoundedWindowStart(tokens, i, 8)
+			end := authorityClauseBoundedWindowEnd(tokens, i+1, 8)
+			if authorityWindowHasPushScopeMarker(tokens, start, end) && !authorityWindowHasPushScopeExclusion(tokens, start, end) {
+				return true
+			}
+			continue
+		}
+		if !isAuthorityPushVerb(token) || authorityPushMentionNegated(tokens, i) {
+			continue
+		}
+		start := authorityClauseBoundedWindowStart(tokens, i, 8)
+		end := authorityClauseBoundedWindowEnd(tokens, i, 8)
+		if !authorityWindowHasGitPushContext(tokens, start, end, i) {
+			continue
+		}
+		if authorityWindowHasPushScopeMarker(tokens, start, end) && !authorityWindowHasPushScopeExclusion(tokens, start, end) {
+			return true
+		}
+	}
+	return false
+}
+
+func authorityWindowHasGitPushContext(tokens []string, start int, end int, pushIndex int) bool {
+	for i := start; i < end; i++ {
+		if i == pushIndex {
+			continue
+		}
+		if isAuthorityGitPushContextToken(tokens[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+func authorityWindowHasPushScopeMarker(tokens []string, start int, end int) bool {
+	for i := start; i < end; i++ {
+		switch tokens[i] {
+		case "origin", "branch", "main", "fork", "upstream":
+			return true
+		}
+	}
+	return false
+}
+
+func authorityWindowHasPushScopeExclusion(tokens []string, start int, end int) bool {
+	for i := start; i < end; i++ {
+		switch tokens[i] {
+		case "another", "other", "different", "unrelated", "unapproved", "outside", "elsewhere":
+			return true
+		}
+	}
+	return false
 }
 
 func authorityContradiction(allowedAction string, forbiddenAction string, workAction string, reason string) AuthorityContradiction {

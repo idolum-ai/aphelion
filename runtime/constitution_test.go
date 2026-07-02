@@ -373,6 +373,158 @@ func TestApplyTurnConstitutionRepairsUnsupportedContinuationClaim(t *testing.T) 
 	}
 }
 
+func TestApplyTurnConstitutionNeutralizesVisibleApprovalRequest(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.repairReplyText = "I need a fresh bounded approval before continuing."
+	provider.interpretationReplyText = fakeApprovalRequestInterpretationReply()
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9016, UserID: 0, Scope: telegramDMScopeRef(9016)}
+	auditRecorder := newTurnAuditRecorder(key, "telegram", "admin", "continue")
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		GlobalRoot:       cfg.Agent.PromptRoot,
+		SharedMemoryRoot: cfg.Agent.SharedMemoryRoot,
+		WorkingRoot:      cfg.Agent.ExecRoot,
+	}
+	finalText := rt.applyTurnConstitution(
+		context.Background(),
+		key,
+		0,
+		scope,
+		"telegram",
+		"admin",
+		"continue",
+		rt.currentFaceRenderer(),
+		prompt.RuntimeAwareness{},
+		core.MaterialPacket{},
+		"",
+		"I’m ready, but the safe path needs operator authority.\n\nUse the approval surface I described in the previous turn.",
+		nil,
+		auditRecorder,
+	)
+	if finalText != "I need a fresh bounded approval before continuing." {
+		t.Fatalf("final text = %q, want neutral approval-surface reply", finalText)
+	}
+	audit := auditRecorder.Snapshot()
+	if !executionFindingsContainClaim(audit.ExecutionClaimFindings, "approval_request") {
+		t.Fatalf("execution findings = %#v, want approval_request", audit.ExecutionClaimFindings)
+	}
+	if !containsViolationRule(audit.ConstitutionViolations, constitutionRuleExecutionClaimUngrounded) {
+		t.Fatalf("violations = %#v, want execution claim grounding rule", audit.ConstitutionViolations)
+	}
+}
+
+func TestFinalReplyApprovalRequestInterpretationRunsUnderCodexGovernor(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.interpretationReplyText = fakeApprovalRequestInterpretationReply()
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.governorBackend = "codex"
+
+	key := session.SessionKey{ChatID: 9036, UserID: 0, Scope: telegramDMScopeRef(9036)}
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         "child_wake:idolum-email:grant-idolum-email-wake:tool=durable_agent:action=wake_once",
+		NextAction:         "show the approval card",
+		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: `{"action":"request_continuation_lease","contract_id":"crc-test","recovery_contract":"aphelion.recovery_handoff.v1","recovery_operation_kind":"continuation_lease_request"}`,
+		CreatedAt:          time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("RecordNextAction() err = %v", err)
+	}
+
+	if !rt.finalReplyHasTypedApprovalRequest(context.Background(), key, "typed interpretation should classify this surface") {
+		t.Fatal("finalReplyHasTypedApprovalRequest() = false, want approval_request under codex governor with approval surface")
+	}
+}
+
+func TestApplyTurnConstitutionUsesScheduledRetryInsteadOfFreshApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.repairReplyText = "I need a fresh bounded approval before continuing."
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9026, UserID: 0, Scope: telegramDMScopeRef(9026)}
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           session.NextActionRecordID(session.SessionIDForKey(key), "continuation_lease_request", "child_wake:idolum-email", session.NextActionScheduledRetry, time.Now().UTC()),
+		Key:                key,
+		Owner:              "durable_child_recovery",
+		State:              session.NextActionScheduledRetry,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         "child_wake:idolum-email",
+		NextAction:         "wait for the bounded retry window before retrying the child task",
+		ResourceBlocker:    "external_transient",
+		RetryPolicy:        "bounded_backoff",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
+		OperationTool:      "update_operation",
+		OperationInputJSON: `{"blocker_kind":"external_transient","retry_policy":"bounded_backoff"}`,
+		OperatorProjection: "Child task hit a transient external blocker; retry only after bounded backoff.",
+		CreatedAt:          time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(scheduled retry) err = %v", err)
+	}
+
+	auditRecorder := newTurnAuditRecorder(key, "telegram", "admin", "retry?")
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		GlobalRoot:       cfg.Agent.PromptRoot,
+		SharedMemoryRoot: cfg.Agent.SharedMemoryRoot,
+		WorkingRoot:      cfg.Agent.ExecRoot,
+	}
+	finalText := rt.applyTurnConstitution(
+		context.Background(),
+		key,
+		0,
+		scope,
+		"telegram",
+		"admin",
+		"retry?",
+		rt.currentFaceRenderer(),
+		prompt.RuntimeAwareness{},
+		core.MaterialPacket{},
+		"",
+		"I need a fresh bounded approval before continuing.",
+		nil,
+		auditRecorder,
+	)
+	lowerFinal := strings.ToLower(finalText)
+	if strings.Contains(lowerFinal, "need a fresh bounded approval") ||
+		strings.Contains(lowerFinal, "needs a fresh bounded approval") ||
+		strings.Contains(lowerFinal, "ask for approval") {
+		t.Fatalf("final text = %q, should not ask for approval when current typed state is scheduled_retry", finalText)
+	}
+	for _, want := range []string{"bounded backoff", "transient"} {
+		if !strings.Contains(lowerFinal, want) {
+			t.Fatalf("final text = %q, want %q", finalText, want)
+		}
+	}
+	audit := auditRecorder.Snapshot()
+	if !executionFindingsContainClaim(audit.ExecutionClaimFindings, "approval_request") {
+		t.Fatalf("execution findings = %#v, want approval_request", audit.ExecutionClaimFindings)
+	}
+}
+
 func TestApplyTurnConstitutionAllowsContinuationClaimWithActiveLease(t *testing.T) {
 	t.Parallel()
 

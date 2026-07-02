@@ -29,7 +29,6 @@ func capabilityGrantWakeOperationInputForTest(t *testing.T, raw string) map[stri
 
 func TestQueueCapabilityGrantWakeAddsParentConversation(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	_ = sender
 	provider.replyText = "Grant incorporated.\nREVIEW_STATUS: completed"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -129,6 +128,428 @@ func TestQueueCapabilityGrantWakeAddsParentConversation(t *testing.T) {
 	assertHasEventType(t, events, core.ExecutionEventDurableWakeCompleted)
 	assertHasEventType(t, events, core.ExecutionEventDurableChildTaskQueued)
 	assertHasEventType(t, events, core.ExecutionEventDurableChildTaskResult)
+}
+
+func TestCapabilityGrantWakeTimeoutProducesTransientRetryState(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = strings.Join([]string{
+		"I incorporated the new `jobs@example.invalid` job-triage approval and validated the active authorities.",
+		"",
+		"Active now:",
+		"- `jobs@example.invalid` read access",
+		"- `jobs@example.invalid` archive / mark-processed approval exists, but this wake was dry-run/no-mutation, so I did not use it",
+		"- `gog_cli` invoke",
+		"- `gog_cli:jobs@example.invalid` invoke",
+		"",
+		"I made exactly one read-only dry-run report attempt using `search_unread_jobs` for `jobs@example.invalid`.",
+		"",
+		"Result: blocked by tool timeout.",
+		"",
+		"Non-secret status:",
+		"- failure class: `timeout`",
+		"REVIEW_STATUS: blocked",
+	}, "\n")
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "mail-timeout",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Adapter: "gog_cli",
+		}},
+		WakeupMode: "manual",
+		Status:     "active",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Read mailbox opportunities and report bounded findings.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	grant := session.CapabilityGrant{
+		GrantID:        "capg-mail-timeout",
+		RequestID:      "cap-mail-timeout",
+		GrantedTo:      "durable_agent:mail-timeout",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "jobs@example.invalid",
+		AllowedActions: []string{"read", "archive", "mark_processed"},
+		Status:         session.CapabilityGrantStatusActive,
+	}
+
+	if err := rt.queueCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("queueCapabilityGrantWake() err = %v", err)
+	}
+	if err := rt.runCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("runCapabilityGrantWake() err = %v", err)
+	}
+
+	taskPacketID := capabilityGrantTaskPacketID(agent.AgentID, grant)
+	packet, ok, err := store.ChildTaskPacket(taskPacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(%q) err = %v", taskPacketID, err)
+	}
+	if !ok || packet.Status != session.ChildTaskPacketBlocked || packet.ResultID == "" {
+		t.Fatalf("ChildTaskPacket(%q) = %#v ok=%t, want blocked packet with result", taskPacketID, packet, ok)
+	}
+	result, ok, err := store.ChildTaskResult(packet.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskResult(%q) err = %v", packet.ResultID, err)
+	}
+	if !ok || result.Status != session.ChildTaskResultBlocked || result.BlockerKind != "external_transient" || result.NextState != session.NextActionScheduledRetry {
+		t.Fatalf("ChildTaskResult(%q) = %#v ok=%t, want external_transient scheduled retry", packet.ResultID, result, ok)
+	}
+	open, err := store.OpenNextActionsBySession(rt.durableAgentExecutionKey(agent.AgentID), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionScheduledRetry || open[0].ResourceBlocker != "external_transient" || open[0].RetryPolicy != "bounded_backoff" {
+		t.Fatalf("open next actions = %#v, want transient scheduled retry rather than resource repair", open)
+	}
+	if strings.Contains(open[0].OperatorProjection, "resource boundary denied") {
+		t.Fatalf("operator projection = %q, want timeout/transient framing", open[0].OperatorProjection)
+	}
+}
+
+func TestCapabilityGrantWakeTimeoutSupersedesStaleExternalChannelRuntimeState(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "mail-timeout-state",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Adapter: "gog_cli",
+		}},
+		WakeupMode: "manual",
+		Status:     "active",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Read mailbox opportunities and report bounded findings.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	now := time.Now().UTC()
+	seedExternalChannelWakeBackoff(t, store, agent.AgentID, "gog_cli", now.Add(-2*time.Hour), now.Add(time.Hour),
+		"child_runtime_blocked: preflight_failed adapter=gog_cli failure_code=lifecycle_unregistered")
+	key := rt.durableAgentExecutionKey(agent.AgentID)
+	packet, err := store.RecordChildTaskPacket(session.ChildTaskPacketInput{
+		PacketID:       "grant_task:timeout-state",
+		TaskLeaseID:    session.ChildTaskLeaseID("grant_task:timeout-state"),
+		AgentID:        agent.AgentID,
+		Key:            key,
+		TaskKind:       "capability_grant_wake",
+		AuthorityKind:  "capability_grant",
+		AuthorityID:    "capg-mail-timeout-state",
+		GrantID:        "capg-mail-timeout-state",
+		RequestID:      "cap-mail-timeout-state",
+		TargetResource: "jobs@example.invalid",
+		RequiredAction: "read",
+		InputJSON:      `{"grant_id":"capg-mail-timeout-state","target_resource":"jobs@example.invalid"}`,
+		CreatedAt:      now,
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskPacket() err = %v", err)
+	}
+	claimed, err := store.ClaimChildTaskAttempt(session.ChildTaskAttemptClaimInput{
+		PacketID:       packet.PacketID,
+		AttemptID:      "child_attempt:timeout-state",
+		LeaseOwner:     "durable_wake:mail-timeout-state:child_attempt:timeout-state",
+		AgentID:        agent.AgentID,
+		Key:            key,
+		ClaimedAt:      now,
+		LeaseExpiresAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("ClaimChildTaskAttempt() err = %v", err)
+	}
+	summary := strings.Join([]string{
+		"Child-local gog_cli metadata/status probe timed out.",
+		"CHILD_BLOCKER: external_transient",
+		"REVIEW_STATUS: blocked",
+	}, "\n")
+	outcomeIntents := durableWakeOutcomeIntentInputs(agent, durableWakeTurnPlan{}, nil, session.ChildTaskResultBlocked, summary, nil, now.Add(time.Second))
+	result, err := rt.recordDurableWakeChildTaskResultWithIntents(key, agent, packet.PacketID, claimed.ActiveAttemptID, claimed.LeaseOwner, claimed.LeaseGeneration, claimed.FencingToken, session.ChildTaskResultBlocked, summary, nil, now.Add(time.Second), outcomeIntents)
+	if err != nil {
+		t.Fatalf("recordDurableWakeChildTaskResultWithIntents() err = %v", err)
+	}
+	if result.Status != session.ChildTaskResultBlocked || result.BlockerKind != "external_transient" {
+		t.Fatalf("child result = %#v, want blocked external_transient", result)
+	}
+	rt.applyDurableWakeOutcomeIntentsOrWarn(context.Background(), agent, durableWakeTurnPlan{}, result)
+
+	cont := loadExternalChannelContinuity(t, store, agent.AgentID)
+	if cont.ExternalChannel == nil {
+		t.Fatal("ExternalChannel = nil, want current child blocker state")
+	}
+	if !strings.Contains(strings.ToLower(cont.ExternalChannel.LastError), "timeout") &&
+		!strings.Contains(strings.ToLower(cont.ExternalChannel.LastError), "external_transient") {
+		t.Fatalf("external channel last_error = %q, want current timeout/transient blocker", cont.ExternalChannel.LastError)
+	}
+	if strings.Contains(cont.ExternalChannel.LastError, "lifecycle_unregistered") {
+		t.Fatalf("external channel last_error = %q, want fresh blocker to supersede stale lifecycle error", cont.ExternalChannel.LastError)
+	}
+	if !cont.ExternalChannel.LastAttemptAt.After(now.Add(-30 * time.Second)) {
+		t.Fatalf("last_attempt_at = %v, want refreshed attempt after child timeout", cont.ExternalChannel.LastAttemptAt)
+	}
+}
+
+func TestExternalChannelStateIntentUpdateClearsStaleRuntimeError(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "mail-update-state",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Adapter: "gog_cli",
+		}},
+		WakeupMode:   "manual",
+		Status:       "active",
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	now := time.Now().UTC()
+	seedExternalChannelWakeBackoff(t, store, agent.AgentID, "gog_cli", now.Add(-2*time.Hour), now.Add(time.Hour),
+		"child_runtime_blocked: preflight_failed adapter=gog_cli failure_code=lifecycle_unregistered")
+	intent, ok := durableWakeExternalChannelStateIntent(agent, durableWakeTurnPlan{}, session.ChildTaskResultUpdate, "Child processed guidance and is waiting for the next bounded step.", nil, now)
+	if !ok {
+		t.Fatal("durableWakeExternalChannelStateIntent() ok=false, want update intent")
+	}
+	intent.PacketID = "child_task:update-state"
+	intent.ResultID = "child_result:update-state"
+	intent.AttemptID = "child_attempt:update-state"
+	intent.IntentID = "child_intent:update-state"
+	intent.Kind = session.ChildTaskOutcomeIntentExternalChannelState
+	intent.CreatedAt = now
+	if err := rt.applyDurableWakeExternalChannelStateIntent(agent, session.ChildTaskOutcomeIntent{
+		IntentID:    intent.IntentID,
+		PacketID:    intent.PacketID,
+		ResultID:    intent.ResultID,
+		AttemptID:   intent.AttemptID,
+		Kind:        intent.Kind,
+		PayloadJSON: intent.PayloadJSON,
+		CreatedAt:   intent.CreatedAt,
+	}); err != nil {
+		t.Fatalf("applyDurableWakeExternalChannelStateIntent(update) err = %v", err)
+	}
+
+	cont := loadExternalChannelContinuity(t, store, agent.AgentID)
+	if cont.ExternalChannel == nil {
+		t.Fatal("ExternalChannel = nil, want current child update state")
+	}
+	if cont.ExternalChannel.LastStatus != string(session.ChildTaskResultUpdate) {
+		t.Fatalf("last_status = %q, want update", cont.ExternalChannel.LastStatus)
+	}
+	if strings.TrimSpace(cont.ExternalChannel.LastError) != "" || !cont.ExternalChannel.LastErrorAt.IsZero() || !cont.ExternalChannel.BackoffUntil.IsZero() {
+		t.Fatalf("external channel state = %#v, want stale error/backoff cleared by fresh update", cont.ExternalChannel)
+	}
+}
+
+func TestFreshCapabilityGrantWakeSupersedesStaleChildResourceRepair(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = strings.Join([]string{
+		"I made exactly one read-only dry-run report attempt using `search_unread_jobs` for `jobs@example.invalid`.",
+		"Result: blocked by tool timeout.",
+		"Non-secret status:",
+		"- failure class: `timeout`",
+		"REVIEW_STATUS: blocked",
+	}, "\n")
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "mail-stale-repair",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Adapter: "gog_cli",
+		}},
+		WakeupMode: "manual",
+		Status:     "active",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Read mailbox opportunities and report bounded findings.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	key := rt.durableAgentExecutionKey(agent.AgentID)
+	staleAt := time.Now().UTC().Add(-time.Hour)
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "durable_wake",
+		State:              session.NextActionBlockedNeedsResourceRepair,
+		SubjectKind:        "task_packet",
+		SubjectRef:         "child_task:old-resource-repair",
+		CausalRefs:         []string{"task_packet:child_task:old-resource-repair", "child_task_result:child_result:old-resource-repair"},
+		NextAction:         "repair the child-local resource permission boundary before retrying",
+		ResourceBlocker:    "resource_permission_denied",
+		RetryPolicy:        "retry_after_resource_repair",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
+		OperationTool:      "update_operation",
+		OperationInputJSON: `{"recovery_contract":"aphelion.recovery_handoff.v1","recovery_operation_kind":"durable_child_recovery","durable_agent_id":"mail-stale-repair","tool":"gog_cli","blocker_kind":"resource_permission_denied"}`,
+		OperatorProjection: "Stale pre-fix resource repair blocker.",
+		CreatedAt:          staleAt,
+	}); err != nil {
+		t.Fatalf("RecordNextAction(stale resource repair) err = %v", err)
+	}
+
+	grant := session.CapabilityGrant{
+		GrantID:        "capg-mail-stale-repair",
+		RequestID:      "cap-mail-stale-repair",
+		GrantedTo:      "durable_agent:mail-stale-repair",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "jobs@example.invalid",
+		AllowedActions: []string{"read", "archive", "mark_processed"},
+		Status:         session.CapabilityGrantStatusActive,
+	}
+	if err := rt.queueCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("queueCapabilityGrantWake() err = %v", err)
+	}
+	if err := rt.runCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("runCapabilityGrantWake() err = %v", err)
+	}
+
+	open, err := store.OpenNextActionsBySession(key, 20)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	for _, action := range open {
+		if action.ResourceBlocker == "resource_permission_denied" {
+			t.Fatalf("open next actions = %#v, want fresh timeout result to supersede stale resource repair blockers", open)
+		}
+	}
+	var foundTransient bool
+	for _, action := range open {
+		if action.State == session.NextActionScheduledRetry && action.ResourceBlocker == "external_transient" {
+			foundTransient = true
+		}
+	}
+	if !foundTransient {
+		t.Fatalf("open next actions = %#v, want fresh transient retry state", open)
+	}
+}
+
+func TestParentConversationAckClosesQueuedGrantTaskWaiterForClaimScopedPacket(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	_ = sender
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "child-claim-scoped-grant",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "manual_channel",
+		WakeupMode:         "manual",
+		Status:             "active",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Handle claim-scoped grant wake tests.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	grant := session.CapabilityGrant{
+		GrantID:        "capg-child-claim-scoped-grant",
+		RequestID:      "cap-child-claim-scoped-grant",
+		GrantedTo:      "durable_agent:child-claim-scoped-grant",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "gog_cli",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+	}
+	if err := rt.queueCapabilityGrantWake(context.Background(), agent.AgentID, grant); err != nil {
+		t.Fatalf("queueCapabilityGrantWake() err = %v", err)
+	}
+	taskPacketID := capabilityGrantTaskPacketID(agent.AgentID, grant)
+	open, err := store.OpenNextActionsBySession(rt.durableAgentExecutionKey(agent.AgentID), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(queue) err = %v", err)
+	}
+	if len(open) != 1 || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionWaitingForChild {
+		t.Fatalf("open next actions after queue = %#v, want one grant task waiter", open)
+	}
+	pending, err := rt.pendingDurableAgentParentConversation(agent.AgentID, 10)
+	if err != nil {
+		t.Fatalf("pendingDurableAgentParentConversation() err = %v", err)
+	}
+	messageIDs := core.DurableAgentConversationMessageIDs(pending)
+	if len(messageIDs) != 1 || messageIDs[0] != taskPacketID {
+		t.Fatalf("pending message IDs = %#v, want queued grant task %q", messageIDs, taskPacketID)
+	}
+	claimPacketID := "child_task:claim-scoped-grant-task"
+	if claimPacketID == taskPacketID {
+		t.Fatalf("claim packet id = %q, want distinct from queued grant task", claimPacketID)
+	}
+	payloadRaw, _ := json.Marshal(map[string]any{
+		"agent_id":      agent.AgentID,
+		"message_ids":   messageIDs,
+		"message_count": len(messageIDs),
+		"summary":       "Grant incorporated through approved direct wake.",
+	})
+	if err := rt.applyDurableWakeParentConversationAckIntent(agent, session.ChildTaskOutcomeIntent{
+		PacketID:    claimPacketID,
+		ResultID:    "child_result:claim-scoped-grant-task",
+		Kind:        session.ChildTaskOutcomeIntentParentConversationAck,
+		PayloadJSON: string(payloadRaw),
+		CreatedAt:   time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("applyDurableWakeParentConversationAckIntent(claim-scoped grant task) err = %v", err)
+	}
+	open, err = store.OpenNextActionsBySession(rt.durableAgentExecutionKey(agent.AgentID), 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(after claim ack) err = %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open next actions after claim-scoped ack = %#v, want consumed grant task waiter closed", open)
+	}
+	pending, err = rt.pendingDurableAgentParentConversation(agent.AgentID, 10)
+	if err != nil {
+		t.Fatalf("pendingDurableAgentParentConversation(after ack) err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending parent messages after ack = %#v, want consumed", pending)
+	}
 }
 
 func TestCapabilityGrantWakeRepeatedAttemptsRecordDistinctResults(t *testing.T) {
@@ -402,25 +823,25 @@ func TestCapabilityGrantWakeBlockedResultCreatesTypedNextState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChildTaskResult() err = %v", err)
 	}
-	if !ok || result.Status != session.ChildTaskResultBlocked || result.NextState != session.NextActionBlockedNeedsResourceRepair || result.BlockerKind != "tool_runtime_not_executable" {
-		t.Fatalf("blocked result = %#v ok=%t, want typed tool-runtime blocker", result, ok)
+	if !ok || result.Status != session.ChildTaskResultBlocked || result.NextState != session.NextActionNeedsVerification || result.BlockerKind != "tool_runtime_probe_missing" {
+		t.Fatalf("blocked result = %#v ok=%t, want child runtime probe-required blocker", result, ok)
 	}
 	open, err := store.OpenNextActionsBySession(rt.durableAgentExecutionKey(agent.AgentID), 10)
 	if err != nil {
 		t.Fatalf("OpenNextActionsBySession() err = %v", err)
 	}
-	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionBlockedNeedsResourceRepair || open[0].ResourceBlocker != "tool_runtime_not_executable" {
-		t.Fatalf("open next actions after blocked child task = %#v, want one typed tool-runtime repair next state", open)
+	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionNeedsVerification || open[0].ResourceBlocker != "tool_runtime_probe_missing" {
+		t.Fatalf("open next actions after blocked child task = %#v, want one child runtime probe-required next state", open)
 	}
-	if open[0].OperationKind != "child_tool_runtime_repair" || open[0].OperationTool != "update_operation" {
-		t.Fatalf("open next action operation = kind %q tool %q, want child tool runtime repair", open[0].OperationKind, open[0].OperationTool)
+	if open[0].OperationKind != session.NextActionOperationKindDurableChildRecovery || open[0].OperationTool != "update_operation" {
+		t.Fatalf("open next action operation = kind %q tool %q, want child tool runtime probe", open[0].OperationKind, open[0].OperationTool)
 	}
 	opInput := capabilityGrantWakeOperationInputForTest(t, open[0].OperationInputJSON)
-	if opInput["durable_agent_id"] != agent.AgentID || opInput["child_blocker_kind"] != "tool_runtime_not_executable" || opInput["status"] != "blocked" || opInput["stage"] != "durable_child_blocker" || opInput["tool"] != "gog_cli" || opInput["no_content_probe"] != true || opInput["diagnostic_only"] != true || opInput["recovery_contract"] != "aphelion.recovery_handoff.v1" {
+	if opInput["durable_agent_id"] != agent.AgentID || opInput["child_blocker_kind"] != "tool_runtime_probe_missing" || opInput["status"] != "blocked" || opInput["stage"] != "durable_child_blocker" || opInput["tool"] != "gog_cli" || opInput["no_content_probe"] != true || opInput["diagnostic_only"] != true || opInput["recovery_contract"] != "aphelion.recovery_handoff.v1" || opInput["recovery_operation_kind"] != session.NextActionOperationKindDurableChildRecovery || opInput["recovery_action"] != "tool_runtime_probe_missing" {
 		t.Fatalf("operation input = %#v, want exact gog_cli diagnostic no-content probe", opInput)
 	}
 	handoff, ok := opInput["recovery_handoff"].(map[string]any)
-	if !ok || handoff["contract"] != "aphelion.recovery_handoff.v1" || handoff["durable_agent_id"] != agent.AgentID || handoff["blocker_kind"] != "tool_runtime_not_executable" || handoff["tool"] != "gog_cli" || handoff["no_content_probe"] != true || handoff["diagnostic_only"] != true {
+	if !ok || handoff["contract"] != "aphelion.recovery_handoff.v1" || handoff["durable_agent_id"] != agent.AgentID || handoff["blocker_kind"] != "tool_runtime_probe_missing" || handoff["tool"] != "gog_cli" || handoff["no_content_probe"] != true || handoff["diagnostic_only"] != true || handoff["recovery_operation_kind"] != session.NextActionOperationKindDurableChildRecovery || handoff["recovery_action"] != "tool_runtime_probe_missing" {
 		t.Fatalf("operation recovery_handoff = %#v, want typed durable child handoff", opInput["recovery_handoff"])
 	}
 	resolver, err := sandbox.NewResolver(
@@ -453,7 +874,8 @@ func TestCapabilityGrantWakeBlockedResultCreatesTypedNextState(t *testing.T) {
 	}
 	if opState.RecoveryHandoff.Contract != "aphelion.recovery_handoff.v1" ||
 		opState.RecoveryHandoff.DurableAgentID != agent.AgentID ||
-		opState.RecoveryHandoff.BlockerKind != "tool_runtime_not_executable" ||
+		opState.RecoveryHandoff.BlockerKind != "tool_runtime_probe_missing" ||
+		opState.RecoveryHandoff.OperationKind != session.NextActionOperationKindDurableChildRecovery ||
 		opState.RecoveryHandoff.Tool != "gog_cli" ||
 		!opState.RecoveryHandoff.NoContentProbe ||
 		!opState.RecoveryHandoff.DiagnosticOnly {
@@ -463,19 +885,18 @@ func TestCapabilityGrantWakeBlockedResultCreatesTypedNextState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PendingReviewEvents() err = %v", err)
 	}
-	if len(pending) != 1 {
-		t.Fatalf("pending review events = %#v, want one child blocker review card", pending)
+	if len(pending) != 0 {
+		t.Fatalf("pending review events = %#v, want immediate child blocker review card delivery", pending)
 	}
-	if !strings.Contains(pending[0].Summary, "tool_runtime_not_executable") || !strings.Contains(pending[0].Summary, "no-content readiness probe") {
-		t.Fatalf("review summary = %q, want precise tool-runtime blocker and probe next step", pending[0].Summary)
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline review cards = %#v, want one immediate child blocker card", sender.inline)
 	}
-	metadata := capabilityGrantWakeOperationInputForTest(t, pending[0].MetadataJSON)
-	artifactMetadata, ok := metadata["metadata"].(map[string]any)
-	if !ok {
-		t.Fatalf("review metadata = %#v, want nested artifact metadata", metadata)
-	}
-	if artifactMetadata["child_blocker_kind"] != "tool_runtime_not_executable" || artifactMetadata["operator_action"] != "child_tool_runtime_repair" || artifactMetadata["tool_name"] != "gog_cli" {
-		t.Fatalf("review artifact metadata = %#v, want typed blocker/action/tool metadata", artifactMetadata)
+	if sender.inline[0].chatID != 1001 ||
+		!strings.Contains(sender.inline[0].text, "tool runtime failure") ||
+		!strings.Contains(sender.inline[0].text, "deterministic child-side") {
+		t.Fatalf("inline review card = %#v, want precise probe-required blocker delivery", sender.inline[0])
 	}
 }
 
@@ -525,8 +946,8 @@ func TestCapabilityGrantWakeBlockedWithoutReviewTargetPersistsNextStateOnly(t *t
 	if err != nil {
 		t.Fatalf("OpenNextActionsBySession() err = %v", err)
 	}
-	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionBlockedNeedsResourceRepair || open[0].ResourceBlocker != "tool_runtime_not_executable" {
-		t.Fatalf("open next actions after headless blocked child task = %#v, want typed repair state", open)
+	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionNeedsVerification || open[0].ResourceBlocker != "tool_runtime_probe_missing" {
+		t.Fatalf("open next actions after headless blocked child task = %#v, want child runtime probe-required state", open)
 	}
 	pending, err := store.PendingReviewEvents(1001, 10)
 	if err != nil {
@@ -707,7 +1128,7 @@ func TestCapabilityGrantWakeFailureCreatesPacketRepairNextAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenNextActionsBySession() err = %v", err)
 	}
-	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionBlockedNeedsResourceRepair || open[0].ResourceBlocker != "wake_failed" || open[0].OperationKind != "child_wake_repair" {
+	if len(open) != 1 || open[0].SubjectKind != "task_packet" || open[0].SubjectRef != taskPacketID || open[0].State != session.NextActionBlockedNeedsResourceRepair || open[0].ResourceBlocker != "wake_failed" || open[0].OperationKind != session.NextActionOperationKindDurableChildRecovery {
 		t.Fatalf("open next actions after failed child task = %#v, want packet wake-repair next state", open)
 	}
 	opInput := capabilityGrantWakeOperationInputForTest(t, open[0].OperationInputJSON)

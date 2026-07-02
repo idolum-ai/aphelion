@@ -146,7 +146,10 @@ func (r *Runtime) runCapabilityGrantWake(ctx context.Context, agentID string, gr
 	if plan == nil {
 		return fmt.Errorf("capability grant %s queued no durable wake plan for agent %s", strings.TrimSpace(grant.GrantID), agentID)
 	}
-	return r.runDurableWakeTurn(ctx, *agent, *plan, now)
+	if err := r.runDurableWakeTurn(ctx, *agent, *plan, now); err != nil {
+		return err
+	}
+	return r.deliverDurableReviewEventsForAgent(ctx, *agent)
 }
 
 func (r *Runtime) recordCapabilityGrantWakeFailure(ctx context.Context, key session.SessionKey, agentID string, grant session.CapabilityGrant, cause error) {

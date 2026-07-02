@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -79,21 +80,26 @@ func (r *Runtime) handleInteractiveInboundTurnWithOptions(ctx context.Context, m
 		}
 		actor = resolved
 	}
+	key := session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramInboundScopeRef(msg)}
+	if err := r.reconcileApprovedRetryWakeWaitersForSession(key); err != nil {
+		log.Printf("WARN reconcile approved retry wake waiters failed session_id=%s err=%v", session.SessionIDForKey(key), err)
+	}
 	if handled, result, err := r.maybeHandleTypedContinuationApproval(ctx, msg, actor); handled {
 		return turnResultFromCore(result), err
 	}
 	if handled, result, err := r.maybeHandleApprovedContinuationRunIntent(ctx, msg, actor); handled {
 		return turnResultFromCore(result), err
 	}
+	tools := r.toolsForPrincipal(actor, key)
+	if handled, result, err := r.maybeHandleNaturalDurableAgentRequest(ctx, key, actor, msg, tools); handled {
+		return turnResultFromCore(result), err
+	}
 	stopTyping := r.startChatActionLoop(ctx, msg.ChatID, "typing")
 	defer stopTyping()
 	defer r.clearChatTurnPhase(msg.ChatID)
 
-	key := session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramInboundScopeRef(msg)}
 	unlock := r.lockSession(key)
 	defer unlock()
-
-	tools := r.toolsForPrincipal(actor, key)
 
 	scope, err := r.scopeForPrincipal(actor)
 	if err != nil {

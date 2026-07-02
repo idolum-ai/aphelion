@@ -140,15 +140,9 @@ func (r *Registry) runExternalManifestLifecycleCommand(ctx context.Context, mani
 	if err != nil {
 		return "", err
 	}
-	timeout := defaultTimeout(15 * time.Second)
-	if manifest.Execution.TimeoutSeconds > 0 {
-		timeout = time.Duration(manifest.Execution.TimeoutSeconds) * time.Second
-	}
-	if manifest.Constraints.MaxRuntimeSeconds > 0 {
-		constraintTimeout := time.Duration(manifest.Constraints.MaxRuntimeSeconds) * time.Second
-		if timeout <= 0 || constraintTimeout < timeout {
-			timeout = constraintTimeout
-		}
+	timeout, err := externalToolExecutionTimeout(manifest, 15*time.Second)
+	if err != nil {
+		return "", err
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

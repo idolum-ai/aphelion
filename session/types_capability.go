@@ -53,6 +53,11 @@ type CapabilityReview struct {
 	CreatedAt    time.Time              `json:"created_at,omitempty"`
 }
 
+type CapabilityReviewTransitionInput struct {
+	Review               CapabilityReview
+	AllowedCurrentStatus []CapabilityReviewStatus
+}
+
 type DurableChildAgreementStatus string
 
 type DurableChildAgreement struct {

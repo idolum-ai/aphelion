@@ -37,6 +37,26 @@ func TestDefinitionsIncludeDurableAgentToolWhenStoreConfigured(t *testing.T) {
 	}
 }
 
+func TestDurableAgentGovernanceToolHiddenFromDurableChildPrincipal(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(newToolTestStore(t))
+	child := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"}
+
+	var names []string
+	for _, def := range registry.DefinitionsForPrincipal(child) {
+		names = append(names, def.Name)
+	}
+	if containsString(names, "durable_agent") {
+		t.Fatalf("DefinitionsForPrincipal(child) = %#v, durable_agent governance tool is parent-control-plane only", names)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(context.Background(), child, adminSessionKey(), "durable_agent", json.RawMessage(`{"action":"wake_once","agent_id":"child-alpha"}`))
+	if err == nil || !strings.Contains(err.Error(), "parent-control-plane only") {
+		t.Fatalf("ExecuteForSessionPrincipal(child durable_agent) err = %v, want parent-control-plane denial", err)
+	}
+}
+
 func TestDurableAgentToolDefinitionIncludesPolicyPatchSurface(t *testing.T) {
 	t.Parallel()
 
@@ -476,13 +496,20 @@ func TestDurableAgentDelegationGrantAppliesCapabilityUpdatePlan(t *testing.T) {
 	}`)); err != nil {
 		t.Fatalf("parent request_review err = %v", err)
 	}
-	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{
+	adminReviewOut, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{
 		"action":"request_review",
 		"request_id":"cap-family-amazon-update",
 		"review_status":"approved",
 		"rationale":"parent endorsed"
-	}`)); err != nil {
+	}`))
+	if err != nil {
 		t.Fatalf("admin request_review err = %v", err)
+	}
+	if !strings.Contains(adminReviewOut, "status: active") ||
+		!strings.Contains(adminReviewOut, "allowed_actions: order") ||
+		!strings.Contains(adminReviewOut, "policy_update_applied: true") ||
+		!strings.Contains(adminReviewOut, "policy_changed: true") {
+		t.Fatalf("admin request_review output = %q, want approval to materialize active grant and apply policy update", adminReviewOut)
 	}
 
 	grantOut, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{
@@ -496,9 +523,8 @@ func TestDurableAgentDelegationGrantAppliesCapabilityUpdatePlan(t *testing.T) {
 	}
 	if !strings.Contains(grantOut, "status: active") ||
 		!strings.Contains(grantOut, "allowed_actions: order") ||
-		!strings.Contains(grantOut, "policy_update_applied: true") ||
-		!strings.Contains(grantOut, "policy_changed: true") {
-		t.Fatalf("grant_set output = %q, want active grant and applied policy update", grantOut)
+		!strings.Contains(grantOut, "policy_update_applied: true") {
+		t.Fatalf("grant_set output = %q, want active idempotent grant replay with policy update evidence", grantOut)
 	}
 	grant, ok, err := store.CapabilityGrant("capg-family-amazon-update")
 	if err != nil {

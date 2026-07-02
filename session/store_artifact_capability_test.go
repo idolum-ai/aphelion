@@ -276,6 +276,159 @@ func TestSQLiteStoreCapabilityRequestReviewGrantInvocationRoundTrip(t *testing.T
 	}
 }
 
+func TestExpireActiveCapabilityGrantsTransitionsOnlyElapsedActiveRows(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	fixtures := []CapabilityGrant{
+		{
+			GrantID:        "capg-expired-active",
+			GrantedBy:      "telegram:1001",
+			GrantedTo:      "durable_agent:mail",
+			Kind:           CapabilityKindTool,
+			TargetResource: "mail_cli",
+			AllowedActions: []string{"invoke"},
+			Status:         CapabilityGrantStatusActive,
+			GrantedAt:      now.Add(-2 * time.Hour),
+			ExpiresAt:      now.Add(-time.Minute),
+		},
+		{
+			GrantID:        "capg-future-active",
+			GrantedBy:      "telegram:1001",
+			GrantedTo:      "durable_agent:mail",
+			Kind:           CapabilityKindTool,
+			TargetResource: "mail_cli",
+			AllowedActions: []string{"invoke"},
+			Status:         CapabilityGrantStatusActive,
+			GrantedAt:      now.Add(-time.Minute),
+			ExpiresAt:      now.Add(time.Hour),
+		},
+		{
+			GrantID:        "capg-revoked-expired",
+			GrantedBy:      "telegram:1001",
+			GrantedTo:      "durable_agent:mail",
+			Kind:           CapabilityKindTool,
+			TargetResource: "mail_cli",
+			AllowedActions: []string{"invoke"},
+			Status:         CapabilityGrantStatusRevoked,
+			GrantedAt:      now.Add(-2 * time.Hour),
+			ExpiresAt:      now.Add(-time.Minute),
+			RevokedAt:      now.Add(-30 * time.Minute),
+		},
+	}
+	for _, grant := range fixtures {
+		if _, err := store.UpsertCapabilityGrant(grant); err != nil {
+			t.Fatalf("UpsertCapabilityGrant(%s) err = %v", grant.GrantID, err)
+		}
+	}
+
+	count, err := store.ExpireActiveCapabilityGrants(now)
+	if err != nil {
+		t.Fatalf("ExpireActiveCapabilityGrants() err = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("ExpireActiveCapabilityGrants() count = %d, want 1", count)
+	}
+	expired, ok, err := store.CapabilityGrant("capg-expired-active")
+	if err != nil {
+		t.Fatalf("CapabilityGrant(expired) err = %v", err)
+	}
+	if !ok || expired.Status != CapabilityGrantStatusExpired || !expired.RevokedAt.IsZero() {
+		t.Fatalf("expired grant = %#v, want status expired without revoked_at", expired)
+	}
+	future, ok, err := store.CapabilityGrant("capg-future-active")
+	if err != nil {
+		t.Fatalf("CapabilityGrant(future) err = %v", err)
+	}
+	if !ok || future.Status != CapabilityGrantStatusActive {
+		t.Fatalf("future grant = %#v, want active", future)
+	}
+	revoked, ok, err := store.CapabilityGrant("capg-revoked-expired")
+	if err != nil {
+		t.Fatalf("CapabilityGrant(revoked) err = %v", err)
+	}
+	if !ok || revoked.Status != CapabilityGrantStatusRevoked || revoked.RevokedAt.IsZero() {
+		t.Fatalf("revoked grant = %#v, want preserved revoked lifecycle", revoked)
+	}
+}
+
+func TestApplyCapabilityReviewTransitionIsAtomicAndIdempotent(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	if _, err := store.UpsertCapabilityRequest(CapabilityRequest{
+		RequestID:      "cap-transition-atomic",
+		RequestedBy:    "telegram:1002",
+		RequestedFor:   "telegram:1002",
+		Kind:           CapabilityKindGenericDelegation,
+		TargetResource: "local-branch",
+		Purpose:        "prove review transition is atomic",
+		ReviewStatus:   CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	review := CapabilityReview{
+		ReviewID:     "capr-transition-atomic-approve",
+		RequestID:    "cap-transition-atomic",
+		Reviewer:     "telegram:1001",
+		ReviewerRole: "admin",
+		Status:       CapabilityReviewStatusApproved,
+		Rationale:    "approve once",
+	}
+	applied, created, err := store.ApplyCapabilityReviewTransition(CapabilityReviewTransitionInput{
+		Review:               review,
+		AllowedCurrentStatus: []CapabilityReviewStatus{CapabilityReviewStatusProposed},
+	})
+	if err != nil {
+		t.Fatalf("ApplyCapabilityReviewTransition(approve) err = %v", err)
+	}
+	if !created || applied.ReviewID != review.ReviewID {
+		t.Fatalf("approved transition = %#v created=%t, want applied review", applied, created)
+	}
+	replayed, created, err := store.ApplyCapabilityReviewTransition(CapabilityReviewTransitionInput{
+		Review:               review,
+		AllowedCurrentStatus: []CapabilityReviewStatus{CapabilityReviewStatusProposed},
+	})
+	if err != nil {
+		t.Fatalf("ApplyCapabilityReviewTransition(replay) err = %v", err)
+	}
+	if created || replayed.ReviewID != review.ReviewID {
+		t.Fatalf("replayed transition = %#v created=%t, want idempotent replay", replayed, created)
+	}
+	_, _, err = store.ApplyCapabilityReviewTransition(CapabilityReviewTransitionInput{
+		Review: CapabilityReview{
+			ReviewID:     "capr-transition-atomic-reject",
+			RequestID:    "cap-transition-atomic",
+			Reviewer:     "telegram:1001",
+			ReviewerRole: "admin",
+			Status:       CapabilityReviewStatusRejected,
+			Rationale:    "stale reject",
+		},
+		AllowedCurrentStatus: []CapabilityReviewStatus{CapabilityReviewStatusProposed},
+	})
+	if err == nil {
+		t.Fatal("ApplyCapabilityReviewTransition(reject) err = nil, want stale transition rejection")
+	}
+	reviews, err := store.CapabilityReviews("cap-transition-atomic", 10)
+	if err != nil {
+		t.Fatalf("CapabilityReviews() err = %v", err)
+	}
+	if len(reviews) != 1 || reviews[0].ReviewID != review.ReviewID {
+		t.Fatalf("reviews = %#v, want only winning approval review", reviews)
+	}
+	updated, ok, err := store.CapabilityRequest("cap-transition-atomic")
+	if err != nil || !ok {
+		t.Fatalf("CapabilityRequest() ok=%t err=%v", ok, err)
+	}
+	if updated.ReviewStatus != CapabilityReviewStatusApproved {
+		t.Fatalf("ReviewStatus = %q, want approved", updated.ReviewStatus)
+	}
+}
+
 func TestDurableChildAgreementTracksCapabilityReviewStatus(t *testing.T) {
 	store := newTestSQLiteStore(t)
 

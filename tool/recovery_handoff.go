@@ -38,6 +38,12 @@ func RecoveryTransitionSpecs() []RecoveryTransitionSpec {
 		},
 		{
 			State:         session.NextActionBlockedNeedsAuthority,
+			OperationKind: "authority_bundle_request",
+			OperationTool: "request_approval",
+			Adapter:       "authority_bundle_recovery",
+		},
+		{
+			State:         session.NextActionBlockedNeedsAuthority,
 			OperationKind: "capability_grant_review",
 			OperationTool: "capability_authority",
 			Adapter:       "missing_capability_grant",
@@ -97,21 +103,51 @@ func RecoveryTransitionSpecs() []RecoveryTransitionSpec {
 		},
 		{
 			State:         session.NextActionWaitingForOperator,
-			OperationKind: "typed_operation_required",
+			OperationKind: session.NextActionOperationKindOperatorRewrite,
 			OperationTool: "update_operation",
 			Adapter:       "operator_rewrite",
 		},
 		{
-			State:         session.NextActionWaitingForOperator,
-			OperationKind: "split_effect_plan",
+			State:         session.NextActionBlockedNeedsAuthority,
+			OperationKind: session.NextActionOperationKindOperatorRewrite,
 			OperationTool: "update_operation",
 			Adapter:       "operator_rewrite",
 		},
 		{
-			State:         session.NextActionWaitingForOperator,
-			OperationKind: "typed_repair_operation",
+			State:         session.NextActionBlockedNeedsResourceRepair,
+			OperationKind: session.NextActionOperationKindDurableChildRecovery,
 			OperationTool: "update_operation",
-			Adapter:       "operator_rewrite",
+			Adapter:       "durable_child_recovery",
+		},
+		{
+			State:         session.NextActionBlockedNeedsAuthority,
+			OperationKind: session.NextActionOperationKindDurableChildRecovery,
+			OperationTool: "update_operation",
+			Adapter:       "durable_child_recovery",
+		},
+		{
+			State:         session.NextActionNeedsVerification,
+			OperationKind: session.NextActionOperationKindDurableChildRecovery,
+			OperationTool: "update_operation",
+			Adapter:       "durable_child_recovery",
+		},
+		{
+			State:         session.NextActionWaitingForOperator,
+			OperationKind: session.NextActionOperationKindDurableChildRecovery,
+			OperationTool: "update_operation",
+			Adapter:       "durable_child_recovery",
+		},
+		{
+			State:         session.NextActionWaitingForChild,
+			OperationKind: session.NextActionOperationKindDurableChildRecovery,
+			OperationTool: "update_operation",
+			Adapter:       "durable_child_recovery",
+		},
+		{
+			State:         session.NextActionScheduledRetry,
+			OperationKind: session.NextActionOperationKindDurableChildRecovery,
+			OperationTool: "update_operation",
+			Adapter:       "durable_child_recovery",
 		},
 	}
 }
@@ -211,6 +247,12 @@ func compileCapabilityGrantRecoveryHandoff(request session.CapabilityRequest, re
 		"grant_status":      string(session.CapabilityGrantStatusActive),
 		"retry_after_grant": true,
 	}
+	if requirement.GrantID != "" {
+		payload["grant_id"] = requirement.GrantID
+	}
+	if requirement.ExpiresInSeconds > 0 {
+		payload["expires_in_seconds"] = requirement.ExpiresInSeconds
+	}
 	kind := firstNonEmpty(requirement.OperationKind, "capability_grant_review")
 	toolName := firstNonEmpty(requirement.OperationTool, "capability_authority")
 	op, err := compileRecoveryHandoffOperation(kind, toolName, payload)
@@ -246,11 +288,17 @@ func ValidateRecoveryHandoffToolInput(state session.NextActionState, toolName st
 		if err := decodeToolObjectInput(json.RawMessage(raw), &in, "request_approval"); err != nil {
 			return err
 		}
-		if requestApprovalActionToken(in.Action) != "request_continuation_lease" {
-			return fmt.Errorf("request_approval recovery handoff must request a continuation lease")
-		}
-		if strings.TrimSpace(in.ContractID) == "" {
-			return fmt.Errorf("request_approval recovery handoff requires continuation recovery contract_id")
+		switch requestApprovalActionToken(in.Action) {
+		case "request_continuation_lease":
+			if strings.TrimSpace(in.ContractID) == "" {
+				return fmt.Errorf("request_approval recovery handoff requires continuation recovery contract_id")
+			}
+		case "request_authority_bundle":
+			if strings.TrimSpace(in.ContractID) == "" {
+				return fmt.Errorf("request_approval recovery handoff requires authority bundle contract_id")
+			}
+		default:
+			return fmt.Errorf("request_approval recovery handoff must request a continuation lease or authority bundle")
 		}
 		return nil
 	case "capability_authority":

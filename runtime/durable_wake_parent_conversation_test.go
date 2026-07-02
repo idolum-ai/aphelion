@@ -4,12 +4,19 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"github.com/idolum-ai/aphelion/core"
-	"github.com/idolum-ai/aphelion/tool/sandbox"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 func TestParentConversationAckSuppressedWhenChildQueuesConcreteReview(t *testing.T) {
@@ -65,6 +72,30 @@ func TestParentConversationAckSuppressedWhenChildQueuesConcreteReview(t *testing
 	}
 	if strings.Contains(sender.inline[0].text, "Processed pending parent guidance") {
 		t.Fatalf("inline text = %q, want parent ack wrapper suppressed", sender.inline[0].text)
+	}
+}
+
+func TestParentConversationWakePromptDoesNotExposeParentControlPlaneToolCall(t *testing.T) {
+	t.Parallel()
+
+	prompt := durableParentConversationWakePrompt(core.DurableAgent{
+		AgentID:     "idolum-email",
+		ChannelKind: "external_channel",
+	}, []core.DurableAgentConversationMessage{{
+		MessageID: "msg-parent-control",
+		Role:      "parent",
+		Text:      "Exact approved child_wake: tool=durable_agent action=wake_once agent_id=idolum-email. Consume only pending guidance and use child-local gog_cli if needed.",
+	}})
+
+	for _, forbidden := range []string{"tool=durable_agent", "action=wake_once", "child_wake", "durable_agent", "wake_once"} {
+		if strings.Contains(strings.ToLower(prompt), forbidden) {
+			t.Fatalf("prompt leaked parent-control token %q:\n%s", forbidden, prompt)
+		}
+	}
+	for _, required := range []string{"parent control-plane approval was already consumed", "Do not call the parent durable-agent governance tool or wake action", "child-local gog_cli"} {
+		if !strings.Contains(strings.ToLower(prompt), strings.ToLower(required)) {
+			t.Fatalf("prompt missing %q:\n%s", required, prompt)
+		}
 	}
 }
 
@@ -128,6 +159,175 @@ func TestRunDurableAgentChildWakeProcessesPendingParentBeforeExternalCadence(t *
 	if len(provider.seenGovernorSystem) == 0 || !strings.Contains(strings.Join(provider.seenGovernorSystem, "\n"), "parent conversation wake") {
 		t.Fatalf("governor prompts = %#v, want parent conversation wake", provider.seenGovernorSystem)
 	}
+}
+
+func TestRunDurableAgentChildWakeDoesNotRebindParentAuthorityAdmission(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Processed pending parent guidance.\nREVIEW_STATUS: completed"
+	inspector := &contextInspectingProvider{fakeProvider: provider}
+	parentKey := session.SessionKey{ChatID: 9306, UserID: 1001, Scope: telegramDMScopeRef(9306)}
+	parentSessionID := session.SessionIDForKey(parentKey)
+	parentLeaseID := "lease-parent-child-wake-context"
+	var sawParentAdmission bool
+	var sawChildTaskAdmission bool
+	var sawParentAuthorityUseRef bool
+	var sawToolInvocationRef bool
+	var sawSyntheticAuthorityValue bool
+	var sawParentDeadline bool
+	type syntheticAuthorityKey struct{}
+	parentDeadline := time.Now().UTC().Add(10 * time.Minute)
+	inspector.inspect = func(ctx context.Context) {
+		if admission, ok := toolpkg.ExecutionAuthorityAdmissionFromContext(ctx); ok {
+			switch admission.LeaseKind {
+			case session.ExecutionAuthorityLeaseKindChildTask:
+				sawChildTaskAdmission = true
+			case session.ExecutionAuthorityLeaseKindContinuation:
+				if admission.ContinuationLeaseID == parentLeaseID {
+					sawParentAdmission = true
+				}
+			default:
+				sawParentAdmission = true
+			}
+		}
+		if ref, ok := toolpkg.AuthorityUseRefFromContext(ctx); ok {
+			if ref.ContinuationLeaseID == parentLeaseID || ref.SessionID == parentSessionID {
+				sawParentAuthorityUseRef = true
+			}
+		}
+		if _, ok := toolpkg.ToolInvocationRefFromContext(ctx); ok {
+			sawToolInvocationRef = true
+		}
+		if ctx.Value(syntheticAuthorityKey{}) != nil {
+			sawSyntheticAuthorityValue = true
+		}
+		if deadline, ok := ctx.Deadline(); ok && deadline.Equal(parentDeadline) {
+			sawParentDeadline = true
+		}
+	}
+	rt, err := New(cfg, store, inspector, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "child-authority-isolated",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Adapter:      "codex_image_generation",
+			PollInterval: "168h",
+		}},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Process one pending parent guidance item.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Run one no-content readiness check.", time.Now().UTC().Add(-time.Minute))
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agent.AgentID, StateJSON: raw}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	now := time.Now().UTC()
+	parentState := approvedReadOnlyContinuationStateForScopeTest("parent-child-wake-context", now)
+	parentState.ContinuationLease.ID = parentLeaseID
+	parentState.ContinuationLease.LeaseClass = session.ContinuationLeaseClassChildWake
+	parentState.ContinuationLease.AllowedActions = []string{"wake_named_child"}
+	parentState.ContinuationLease.Constraints = map[string]string{"agent_id": agent.AgentID}
+	if err := store.UpdateContinuationState(parentKey, parentState); err != nil {
+		t.Fatalf("UpdateContinuationState(parent) err = %v", err)
+	}
+	rawAdmission := session.ExecutionRunAuthority{
+		SessionID:           session.SessionIDForKey(parentKey),
+		ChatID:              parentKey.ChatID,
+		UserID:              parentKey.UserID,
+		Scope:               parentKey.Scope,
+		Principal:           "telegram:1001",
+		PrincipalRole:       "admin",
+		ExecutionSpecies:    "direct_continuation",
+		LeaseKind:           session.ExecutionAuthorityLeaseKindContinuation,
+		ContinuationLeaseID: parentState.ContinuationLease.ID,
+		LeaseStatus:         string(session.ContinuationLeaseStatusActive),
+		LeaseClass:          session.ContinuationLeaseClassChildWake,
+		LeaseAllowedActions: []string{"wake_named_child"},
+		LeaseConstraints:    map[string]string{"agent_id": agent.AgentID},
+		LeaseRemainingTurns: 1,
+		LeaseExpiresAt:      now.Add(time.Hour),
+		AdmittedAt:          now,
+	}
+	parentCtx, cancelParentCtx := context.WithDeadline(context.Background(), parentDeadline)
+	defer cancelParentCtx()
+	parentCtx = context.WithValue(parentCtx, syntheticAuthorityKey{}, "future-parent-authority")
+	ctx := toolpkg.WithToolInvocationRef(
+		toolpkg.WithAuthorityUseRef(
+			toolpkg.WithExecutionAuthorityAdmission(parentCtx, rawAdmission),
+			session.AuthorityUseRef{
+				SessionID:           rawAdmission.SessionID,
+				TurnRunID:           930600,
+				ContinuationLeaseID: rawAdmission.ContinuationLeaseID,
+				AuthoritySource:     "context",
+			},
+		),
+		toolpkg.ToolInvocationRef{TurnRunID: 930600, InvocationID: "parent-durable-agent-wake-once"},
+	)
+
+	if err := rt.RunDurableAgentChildWake(ctx, agent.AgentID, now); err != nil {
+		t.Fatalf("RunDurableAgentChildWake() err = %v, want parent authority admission isolated from child turn", err)
+	}
+	if len(provider.seenGovernorSystem) == 0 {
+		t.Fatal("provider saw no governor prompts, want child wake turn to run")
+	}
+	if sawParentAdmission {
+		t.Fatal("child provider context inherited parent raw execution authority admission")
+	}
+	if !sawChildTaskAdmission {
+		t.Fatal("child provider context did not receive child-task execution authority admission")
+	}
+	if sawParentAuthorityUseRef {
+		t.Fatal("child provider context inherited parent authority-use ref")
+	}
+	if sawToolInvocationRef {
+		t.Fatal("child provider context inherited parent tool invocation ref")
+	}
+	if sawSyntheticAuthorityValue {
+		t.Fatal("child provider context inherited an unregistered parent authority value")
+	}
+	if !sawParentDeadline {
+		t.Fatal("child provider context did not preserve the parent cancellation/deadline")
+	}
+}
+
+type contextInspectingProvider struct {
+	*fakeProvider
+	inspect func(context.Context)
+}
+
+func (p *contextInspectingProvider) Complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	if p.inspect != nil {
+		p.inspect(ctx)
+	}
+	return p.fakeProvider.Complete(ctx, messages, tools)
+}
+
+func (p *contextInspectingProvider) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
+	if p.inspect != nil {
+		p.inspect(ctx)
+	}
+	return p.fakeProvider.CompleteWithOptions(ctx, messages, tools, opts)
 }
 
 func TestRunDurableAgentChildWakeSkipsWithoutPendingParentConversation(t *testing.T) {
@@ -217,14 +417,236 @@ func TestRunDurableAgentParentConversationWakeDoesNotFallbackAfterQueueRace(t *t
 	fallback := &testDurableWakeAdapter{channelKind: "external_channel"}
 	rt.durableWakeAdapters = []durableWakeIngressAdapter{fallback}
 
-	if err := rt.RunDurableAgentParentConversationWake(context.Background(), agent.AgentID, messageIDs, time.Now().UTC()); err != nil {
-		t.Fatalf("RunDurableAgentParentConversationWake() err = %v", err)
+	err = rt.RunDurableAgentParentConversationWake(context.Background(), agent.AgentID, messageIDs, "", time.Now().UTC())
+	var claimedBatchErr core.DurableAgentWakeFailureError
+	if !errors.As(err, &claimedBatchErr) || claimedBatchErr.Class != core.DurableAgentWakeFailureClaimedParentBatchMissing {
+		t.Fatalf("RunDurableAgentParentConversationWake() err = %T %[1]v, want typed claimed-batch failure", err)
 	}
 	if fallback.prepareCalls != 0 {
 		t.Fatalf("fallback prepare calls = %d, want none after parent queue race", fallback.prepareCalls)
 	}
 	if len(provider.seenGovernorSystem) != 0 {
 		t.Fatalf("governor prompts = %#v, want no fallback turn", provider.seenGovernorSystem)
+	}
+	if packet, ok, err := store.ChildTaskPacket(messageIDs[0]); err != nil || ok {
+		t.Fatalf("ChildTaskPacket(%q) = %#v ok=%t err=%v, want no child task for vanished claimed batch", messageIDs[0], packet, ok, err)
+	}
+}
+
+func TestRunDurableAgentParentConversationWakeRecordsTaskForScopeFailure(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "child turn should not start when scope setup fails"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	badRoot := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(badRoot, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("WriteFile(badRoot) err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "child-scope-fails",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		LocalStorageRoots:  []string{badRoot, filepath.Join(t.TempDir(), "memory")},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Process parent guidance only when the runtime can create child scope.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Run one readiness wake and report the first blocker.", time.Now().UTC().Add(-time.Minute))
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agent.AgentID, StateJSON: raw}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+	pending, err := rt.pendingDurableAgentParentConversation(agent.AgentID, 5)
+	if err != nil {
+		t.Fatalf("pendingDurableAgentParentConversation() err = %v", err)
+	}
+	messageIDs := core.DurableAgentConversationMessageIDs(pending)
+	if len(messageIDs) != 1 {
+		t.Fatalf("pending message IDs = %#v, want one", messageIDs)
+	}
+
+	now := time.Date(2026, 6, 27, 20, 45, 0, 0, time.UTC)
+	err = rt.RunDurableAgentParentConversationWake(context.Background(), agent.AgentID, messageIDs, "", now)
+	var wakeFailure core.DurableAgentWakeFailureError
+	if !errors.As(err, &wakeFailure) || wakeFailure.Class != core.DurableAgentWakeFailureScopeSetup {
+		t.Fatalf("RunDurableAgentParentConversationWake() err = %T %[1]v, want typed scope setup failure", err)
+	}
+	if len(provider.seenGovernorSystem) != 0 {
+		t.Fatalf("governor prompts = %#v, want no child turn after pre-start scope failure", provider.seenGovernorSystem)
+	}
+	packet, ok, err := store.ChildTaskPacket(messageIDs[0])
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(%q) err = %v", messageIDs[0], err)
+	}
+	if !ok || packet.Status != session.ChildTaskPacketFailed || packet.ResultID == "" || packet.TerminalAt.IsZero() {
+		t.Fatalf("ChildTaskPacket(%q) = %#v ok=%t, want terminal failed packet despite pre-start failure", messageIDs[0], packet, ok)
+	}
+	result, ok, err := store.ChildTaskResult(packet.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskResult(%q) err = %v", packet.ResultID, err)
+	}
+	if !ok || result.PacketID != packet.PacketID || result.Status != session.ChildTaskResultFailed || result.NextState != session.NextActionBlockedNeedsResourceRepair {
+		t.Fatalf("ChildTaskResult(%q) = %#v ok=%t, want failed repair-directed result", packet.ResultID, result, ok)
+	}
+	if !strings.Contains(result.ErrorText, "resolve durable wake scope") {
+		t.Fatalf("result error = %q, want scope failure evidence", result.ErrorText)
+	}
+	open, err := store.OpenNextActionsBySession(session.SessionKey{
+		ChatID: durableWakeSyntheticChatID(agent.AgentID),
+		Scope:  durableAgentScopeRef(agent),
+	}, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsResourceRepair || open[0].SubjectRef != packet.PacketID {
+		t.Fatalf("open next actions = %#v, want one packet-scoped resource repair action", open)
+	}
+}
+
+func TestRunDurableAgentParentConversationWakeUsesClaimScopedPacketAfterTerminalBatchPacket(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "I handled the approved retry.\nREVIEW_STATUS: completed"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "child-approved-retry",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Process one approved parent wake retry.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	queuedAt := time.Date(2026, 6, 27, 23, 0, 0, 0, time.UTC)
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Run one approved readiness wake.", queuedAt)
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agent.AgentID, StateJSON: raw}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+	pending, err := rt.pendingDurableAgentParentConversation(agent.AgentID, 5)
+	if err != nil {
+		t.Fatalf("pendingDurableAgentParentConversation() err = %v", err)
+	}
+	messageIDs := core.DurableAgentConversationMessageIDs(pending)
+	if len(messageIDs) != 1 {
+		t.Fatalf("pending message IDs = %#v, want one", messageIDs)
+	}
+
+	key := session.SessionKey{
+		ChatID: durableWakeSyntheticChatID(agent.AgentID),
+		Scope:  durableAgentScopeRef(agent),
+	}
+	oldPacketID := durableWakeTaskPacketIDForPending(agent.AgentID, pending, queuedAt)
+	oldPacket, err := store.RecordChildTaskPacket(session.ChildTaskPacketInput{
+		PacketID:  oldPacketID,
+		AgentID:   agent.AgentID,
+		Key:       key,
+		TaskKind:  "durable_wake",
+		InputJSON: `{"channel":"durable_parent_conversation","wake_claim_id":""}`,
+		CreatedAt: queuedAt,
+	})
+	if err != nil {
+		t.Fatalf("RecordChildTaskPacket(old terminal batch packet) err = %v", err)
+	}
+	oldClaim, err := store.ClaimChildTaskAttempt(session.ChildTaskAttemptClaimInput{
+		PacketID:       oldPacket.PacketID,
+		AttemptID:      "child_attempt:old-terminal",
+		LeaseOwner:     "durable_wake:" + agent.AgentID + ":old-terminal",
+		AgentID:        agent.AgentID,
+		Key:            key,
+		ClaimedAt:      queuedAt.Add(time.Second),
+		LeaseExpiresAt: queuedAt.Add(30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("ClaimChildTaskAttempt(old terminal batch packet) err = %v", err)
+	}
+	if _, err := store.CommitChildTaskOutcome(session.ChildTaskOutcomeCommitInput{
+		Result: session.ChildTaskResultInput{
+			PacketID:        oldClaim.PacketID,
+			AttemptID:       oldClaim.ActiveAttemptID,
+			LeaseOwner:      oldClaim.LeaseOwner,
+			LeaseGeneration: oldClaim.LeaseGeneration,
+			FencingToken:    oldClaim.FencingToken,
+			AgentID:         agent.AgentID,
+			Key:             key,
+			Status:          session.ChildTaskResultFailed,
+			ErrorText:       "prior approved wake failed before child pickup",
+			CreatedAt:       queuedAt.Add(2 * time.Second),
+		},
+		ResolvedAt: queuedAt.Add(2 * time.Second),
+	}); err != nil {
+		t.Fatalf("CommitChildTaskOutcome(old terminal batch packet) err = %v", err)
+	}
+
+	wakeClaimID := "wake_claim:fresh-approved-child-wake"
+	now := queuedAt.Add(time.Minute)
+	err = rt.RunDurableAgentParentConversationWake(context.Background(), agent.AgentID, messageIDs, wakeClaimID, now)
+	if err != nil {
+		t.Fatalf("RunDurableAgentParentConversationWake(claim-scoped retry) err = %v", err)
+	}
+
+	claimPacketID := durableWakeTaskPacketIDForWakeClaim(agent.AgentID, messageIDs, wakeClaimID)
+	if claimPacketID == oldPacketID {
+		t.Fatalf("claim-scoped packet id = old packet id %q, want fresh packet for approved retry", oldPacketID)
+	}
+	claimPacket, ok, err := store.ChildTaskPacket(claimPacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(%q) err = %v", claimPacketID, err)
+	}
+	if !ok || claimPacket.ResultID == "" {
+		t.Fatalf("ChildTaskPacket(%q) = %#v ok=%t, want claim-scoped packet with child result", claimPacketID, claimPacket, ok)
+	}
+	claimResult, ok, err := store.ChildTaskResult(claimPacket.ResultID)
+	if err != nil {
+		t.Fatalf("ChildTaskResult(%q) err = %v", claimPacket.ResultID, err)
+	}
+	if !ok || claimResult.Status == session.ChildTaskResultFailed {
+		t.Fatalf("ChildTaskResult(%q) = %#v ok=%t, want non-failed child result", claimPacket.ResultID, claimResult, ok)
+	}
+	oldPacket, ok, err = store.ChildTaskPacket(oldPacketID)
+	if err != nil {
+		t.Fatalf("ChildTaskPacket(old %q) err = %v", oldPacketID, err)
+	}
+	if !ok || oldPacket.Status != session.ChildTaskPacketFailed {
+		t.Fatalf("old ChildTaskPacket(%q) = %#v ok=%t, want prior terminal failure preserved", oldPacketID, oldPacket, ok)
+	}
+	if len(provider.seenGovernorSystem) == 0 {
+		t.Fatal("provider saw no child turn; approved retry should reach child runtime")
 	}
 }
 

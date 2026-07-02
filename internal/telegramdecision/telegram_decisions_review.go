@@ -4,7 +4,11 @@ package telegramdecision
 
 import (
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -46,6 +50,9 @@ func (h *DecisionHandler) handleReviewEventCallback(ctx context.Context, cb tele
 		}
 		return h.handleMissionControlProposalCallback(ctx, cb, *event, proposal, action)
 	}
+	if action == core.ReviewEventActionChildWakeRetry {
+		return h.handleReviewEventChildWakeRetryCallback(ctx, cb, *event)
+	}
 	if reviewEventCallbackExpired(*event, time.Now()) {
 		_ = h.editReviewEventCallbackMessage(ctx, cb, "Approval timed out — use a fresh prompt.")
 		return h.answerReviewEventCallback(ctx, cb, "Approval timed out. Use a fresh prompt.")
@@ -78,16 +85,34 @@ func (h *DecisionHandler) handleReviewEventCallback(ctx context.Context, cb tele
 		_ = h.answerReviewEventCallback(ctx, cb, err.Error())
 		return nil
 	}
-	review, err := h.store.AppendCapabilityReview(session.CapabilityReview{
-		ReviewID:     fmt.Sprintf("capr-review-event-%d-%d", event.ID, time.Now().UnixNano()),
-		RequestID:    record.RequestID,
-		Reviewer:     fmt.Sprintf("telegram:%d", fromID),
-		ReviewerRole: reviewerRole,
-		Status:       status,
-		Rationale:    fmt.Sprintf("telegram inline review event %d", event.ID),
+	if status == session.CapabilityReviewStatusApproved {
+		materializable, err := h.capabilityRequestHasCompiledGrantHandoff(record)
+		if err != nil {
+			return err
+		}
+		if !materializable {
+			_ = h.editReviewEventCallbackMessage(ctx, cb, reviewEventMissingGrantContractText(record, *event))
+			return h.answerReviewEventCallback(ctx, cb, "Approval needs an exact grant contract first.")
+		}
+	}
+	review, _, err := h.store.ApplyCapabilityReviewTransition(session.CapabilityReviewTransitionInput{
+		Review: session.CapabilityReview{
+			ReviewID:     reviewEventCapabilityReviewID(event.ID, fromID, action),
+			RequestID:    record.RequestID,
+			Reviewer:     fmt.Sprintf("telegram:%d", fromID),
+			ReviewerRole: reviewerRole,
+			Status:       status,
+			Rationale:    fmt.Sprintf("telegram review event %d", event.ID),
+		},
+		AllowedCurrentStatus: reviewEventAllowedCurrentStatuses(record, action),
 	})
 	if err != nil {
 		return err
+	}
+	grant, grantActivated, grantErr := h.materializeApprovedCapabilityGrantFromReview(record, review, *event, fromID)
+	if grantErr != nil {
+		_ = h.editReviewEventCallbackMessage(ctx, cb, reviewEventConfirmationText(labelForCapabilityReview(review.Status), record, *event)+"\n\nGrant activation needs repair: "+compactSentence(grantErr.Error()))
+		return h.answerReviewEventCallback(ctx, cb, "")
 	}
 	label := "approved"
 	if review.Status == session.CapabilityReviewStatusParentApproved {
@@ -95,8 +120,456 @@ func (h *DecisionHandler) handleReviewEventCallback(ctx context.Context, cb tele
 	} else if review.Status == session.CapabilityReviewStatusRejected {
 		label = "rejected"
 	}
-	_ = h.editReviewEventCallbackMessage(ctx, cb, reviewEventConfirmationText(label, record, *event))
+	if refreshed, ok, err := h.store.CapabilityRequest(record.RequestID); err == nil && ok {
+		record = refreshed
+	}
+	text := reviewEventConfirmationText(label, record, *event)
+	text = reviewEventConfirmationWithGrantActivation(text, record, grant, grantActivated, review.Status)
+	_ = h.editReviewEventCallbackMessage(ctx, cb, text)
 	return h.answerReviewEventCallback(ctx, cb, "")
+}
+
+func (h *DecisionHandler) handleReviewEventChildWakeRetryCallback(ctx context.Context, cb telegram.CallbackQuery, event session.ReviewEvent) error {
+	if reviewEventCallbackExpired(event, time.Now()) {
+		_ = h.editReviewEventCallbackMessage(ctx, cb, "Retry card timed out — use a fresh child status prompt.")
+		return h.answerReviewEventCallback(ctx, cb, "Retry card timed out. Use a fresh prompt.")
+	}
+	if event.Status == "dismissed" {
+		_ = h.editReviewEventCallbackMessage(ctx, cb, "Stale retry card — use the newest child status.")
+		return h.answerReviewEventCallback(ctx, cb, "This retry card is stale. Use the newest prompt.")
+	}
+	if h.reviewEventActionRunner == nil {
+		return h.answerReviewEventCallback(ctx, cb, "Child retry controls are unavailable in this runtime.")
+	}
+	text, err := h.reviewEventActionRunner.HandleReviewEventAction(ctx, cb, event, core.ReviewEventActionChildWakeRetry)
+	if err != nil {
+		return h.answerReviewEventCallback(ctx, cb, compactSentence(err.Error()))
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		text = "Child wake retry approval surfaced."
+	}
+	_ = h.editReviewEventCallbackMessage(ctx, cb, text)
+	return h.answerReviewEventCallback(ctx, cb, "")
+}
+
+func reviewEventActionForReactionAndState(reaction *core.InboundReaction, record session.CapabilityRequest) (core.ReviewEventAction, bool) {
+	if reaction == nil {
+		return "", false
+	}
+	record = session.NormalizeCapabilityRequest(record)
+	for _, value := range reaction.New {
+		switch strings.TrimSpace(value) {
+		case "👍", "+1":
+			if strings.TrimSpace(record.ParentPrincipal) != "" && record.ReviewStatus == session.CapabilityReviewStatusProposed {
+				return core.ReviewEventActionParentApprove, true
+			}
+			return core.ReviewEventActionApprove, true
+		case "👎", "-1":
+			return core.ReviewEventActionReject, true
+		}
+	}
+	return "", false
+}
+
+func (h *DecisionHandler) applyReviewEventReaction(ctx context.Context, msg core.InboundMessage, event session.ReviewEvent) error {
+	if h == nil || h.store == nil {
+		return nil
+	}
+	if reviewEventCallbackExpired(event, time.Now()) {
+		_ = h.editReviewEventReactionMessage(ctx, msg, "Approval timed out — use a fresh prompt.")
+		return nil
+	}
+	requestID := reviewEventCallbackCapabilityRequestID(event)
+	if requestID == "" {
+		return nil
+	}
+	record, ok, err := h.store.CapabilityRequest(requestID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	action, actionable := reviewEventActionForReactionAndState(msg.Reaction, record)
+	if !actionable {
+		return nil
+	}
+	if action != core.ReviewEventActionParentApprove && action != core.ReviewEventActionApprove && action != core.ReviewEventActionReject {
+		return nil
+	}
+	if event.Status == "dismissed" {
+		_ = h.editReviewEventReactionMessage(ctx, msg, "Stale approval card — use the newest prompt.")
+		return nil
+	}
+	if !reviewEventRequestStillActionable(record, action) {
+		_ = h.editReviewEventReactionMessage(ctx, msg, "Stale approval card — use the newest prompt.")
+		return nil
+	}
+	status, reviewerRole, err := reviewEventCapabilityStatusForAction(record, action, msg.SenderID, event.TargetAdminChatID)
+	if err != nil {
+		_ = h.editReviewEventReactionMessage(ctx, msg, compactSentence(err.Error()))
+		return nil
+	}
+	if status == session.CapabilityReviewStatusApproved {
+		materializable, err := h.capabilityRequestHasCompiledGrantHandoff(record)
+		if err != nil {
+			return err
+		}
+		if !materializable {
+			return h.editReviewEventReactionMessage(ctx, msg, reviewEventMissingGrantContractText(record, event))
+		}
+	}
+	review, _, err := h.store.ApplyCapabilityReviewTransition(session.CapabilityReviewTransitionInput{
+		Review: session.CapabilityReview{
+			ReviewID:     reviewEventCapabilityReviewID(event.ID, msg.SenderID, action),
+			RequestID:    record.RequestID,
+			Reviewer:     fmt.Sprintf("telegram:%d", msg.SenderID),
+			ReviewerRole: reviewerRole,
+			Status:       status,
+			Rationale:    fmt.Sprintf("telegram review event %d", event.ID),
+		},
+		AllowedCurrentStatus: reviewEventAllowedCurrentStatuses(record, action),
+	})
+	if err != nil {
+		return err
+	}
+	grant, grantActivated, grantErr := h.materializeApprovedCapabilityGrantFromReview(record, review, event, msg.SenderID)
+	if grantErr != nil {
+		return h.editReviewEventReactionMessage(ctx, msg, reviewEventConfirmationText(labelForCapabilityReview(review.Status), record, event)+"\n\nGrant activation needs repair: "+compactSentence(grantErr.Error()))
+	}
+	label := labelForCapabilityReview(review.Status)
+	if refreshed, ok, err := h.store.CapabilityRequest(record.RequestID); err == nil && ok {
+		record = refreshed
+	}
+	text := reviewEventConfirmationText(label, record, event)
+	text = reviewEventConfirmationWithGrantActivation(text, record, grant, grantActivated, review.Status)
+	return h.editReviewEventReactionMessage(ctx, msg, text)
+}
+
+func reviewEventConfirmationWithGrantActivation(text string, record session.CapabilityRequest, grant session.CapabilityGrant, activated bool, status session.CapabilityReviewStatus) string {
+	if session.NormalizeCapabilityReviewStatus(status) != session.CapabilityReviewStatusApproved {
+		return strings.TrimSpace(text)
+	}
+	if activated {
+		return strings.TrimSpace(text + "\n\nGrant activation: active\nGrant: " + strings.TrimSpace(grant.GrantID))
+	}
+	if linked := strings.TrimSpace(record.GrantID); linked != "" {
+		return strings.TrimSpace(text + "\n\nGrant activation: already linked\nGrant: " + linked)
+	}
+	return strings.TrimSpace(text + "\n\nGrant activation: not created\nNext: run capability_authority grant_set for this approved request before using the capability.")
+}
+
+func reviewEventMissingGrantContractText(record session.CapabilityRequest, event session.ReviewEvent) string {
+	record = session.NormalizeCapabilityRequest(record)
+	lines := []string{
+		"Capability approval needs an exact grant contract before it can be approved.",
+		"",
+		"Request: " + strings.TrimSpace(record.RequestID),
+	}
+	if event.ID > 0 {
+		lines = append(lines, fmt.Sprintf("Review event: %d", event.ID))
+	}
+	lines = append(lines,
+		"",
+		"Grant activation: missing compiled grant contract",
+		"Next: create a capability request with structured allowed_actions or capability_action so approval can materialize a bounded active grant.",
+	)
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func (h *DecisionHandler) editReviewEventReactionMessage(ctx context.Context, msg core.InboundMessage, text string) error {
+	if h == nil || h.sender == nil || msg.ChatID == 0 || msg.Reaction == nil || msg.Reaction.MessageID <= 0 || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	return EditDecisionMessageClearingInlineKeyboard(ctx, h.sender, msg.ChatID, msg.Reaction.MessageID, text)
+}
+
+func labelForCapabilityReview(status session.CapabilityReviewStatus) string {
+	switch session.NormalizeCapabilityReviewStatus(status) {
+	case session.CapabilityReviewStatusParentApproved:
+		return "parent-approved"
+	case session.CapabilityReviewStatusRejected:
+		return "rejected"
+	case session.CapabilityReviewStatusApproved:
+		return "approved"
+	default:
+		return "reviewed"
+	}
+}
+
+type reviewCapabilityGrantSetInput struct {
+	Action           string          `json:"action"`
+	RequestID        string          `json:"request_id,omitempty"`
+	GrantID          string          `json:"grant_id,omitempty"`
+	Kind             string          `json:"kind,omitempty"`
+	TargetResource   string          `json:"target_resource,omitempty"`
+	CapabilityAction string          `json:"capability_action,omitempty"`
+	Principal        string          `json:"principal,omitempty"`
+	AllowedActions   []string        `json:"allowed_actions,omitempty"`
+	Contract         json.RawMessage `json:"contract,omitempty"`
+	Constraints      json.RawMessage `json:"constraints,omitempty"`
+	GrantStatus      string          `json:"grant_status,omitempty"`
+	ExpiresInSeconds int             `json:"expires_in_seconds,omitempty"`
+}
+
+func (h *DecisionHandler) materializeApprovedCapabilityGrantFromReview(record session.CapabilityRequest, review session.CapabilityReview, event session.ReviewEvent, reviewerTelegramID int64) (session.CapabilityGrant, bool, error) {
+	if h == nil || h.store == nil {
+		return session.CapabilityGrant{}, false, nil
+	}
+	if session.NormalizeCapabilityReviewStatus(review.Status) != session.CapabilityReviewStatusApproved {
+		return session.CapabilityGrant{}, false, nil
+	}
+	record = session.NormalizeCapabilityRequest(record)
+	if record.RequestID == "" {
+		return session.CapabilityGrant{}, false, nil
+	}
+	actions, err := h.store.OpenNextActionsBySubject("capability_request", record.RequestID, 100)
+	if err != nil {
+		return session.CapabilityGrant{}, false, fmt.Errorf("load compiled capability grant handoff: %w", err)
+	}
+	for _, action := range actions {
+		input, ok, err := reviewCapabilityGrantSetFromNextAction(record, action)
+		if err != nil {
+			return session.CapabilityGrant{}, false, err
+		}
+		if !ok {
+			continue
+		}
+		grant, err := h.applyApprovedCapabilityGrantSet(record, input, action, event, reviewerTelegramID)
+		if err != nil {
+			return session.CapabilityGrant{}, false, err
+		}
+		return grant, true, nil
+	}
+	return session.CapabilityGrant{}, false, nil
+}
+
+func (h *DecisionHandler) capabilityRequestHasCompiledGrantHandoff(record session.CapabilityRequest) (bool, error) {
+	if h == nil || h.store == nil {
+		return false, nil
+	}
+	record = session.NormalizeCapabilityRequest(record)
+	if strings.TrimSpace(record.GrantID) != "" {
+		return true, nil
+	}
+	if strings.TrimSpace(record.RequestID) == "" {
+		return false, nil
+	}
+	actions, err := h.store.OpenNextActionsBySubject("capability_request", record.RequestID, 100)
+	if err != nil {
+		return false, fmt.Errorf("load compiled capability grant handoff: %w", err)
+	}
+	for _, action := range actions {
+		_, ok, err := reviewCapabilityGrantSetFromNextAction(record, action)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func reviewCapabilityGrantSetFromNextAction(record session.CapabilityRequest, action session.NextActionRecord) (reviewCapabilityGrantSetInput, bool, error) {
+	if session.NormalizeNextActionState(action.State) != session.NextActionBlockedNeedsAuthority {
+		return reviewCapabilityGrantSetInput{}, false, nil
+	}
+	if strings.TrimSpace(action.OperationTool) != "capability_authority" || action.OperationKind != "capability_grant_review" {
+		return reviewCapabilityGrantSetInput{}, false, nil
+	}
+	if action.SubjectKind != "capability_request" || strings.TrimSpace(action.SubjectRef) != strings.TrimSpace(record.RequestID) {
+		return reviewCapabilityGrantSetInput{}, false, nil
+	}
+	var input reviewCapabilityGrantSetInput
+	if err := json.Unmarshal([]byte(action.OperationInputJSON), &input); err != nil {
+		return reviewCapabilityGrantSetInput{}, false, fmt.Errorf("decode compiled capability grant handoff: %w", err)
+	}
+	if strings.TrimSpace(input.Action) != "grant_set" {
+		return reviewCapabilityGrantSetInput{}, false, nil
+	}
+	if strings.TrimSpace(input.RequestID) != strings.TrimSpace(record.RequestID) {
+		return reviewCapabilityGrantSetInput{}, false, fmt.Errorf("compiled capability grant handoff request mismatch: got %q want %q", strings.TrimSpace(input.RequestID), strings.TrimSpace(record.RequestID))
+	}
+	return input, true, nil
+}
+
+func (h *DecisionHandler) applyApprovedCapabilityGrantSet(record session.CapabilityRequest, input reviewCapabilityGrantSetInput, action session.NextActionRecord, event session.ReviewEvent, reviewerTelegramID int64) (session.CapabilityGrant, error) {
+	kind := session.NormalizeCapabilityKind(session.CapabilityKind(firstTelegramDecisionNonEmpty(input.Kind, string(record.Kind))))
+	if kind == "" {
+		return session.CapabilityGrant{}, fmt.Errorf("compiled capability grant handoff requires kind")
+	}
+	target := firstTelegramDecisionNonEmpty(input.TargetResource, record.TargetResource)
+	if target == "" {
+		return session.CapabilityGrant{}, fmt.Errorf("compiled capability grant handoff requires target_resource")
+	}
+	grantedTo := firstTelegramDecisionNonEmpty(input.Principal, record.RequestedFor, record.RequestedBy)
+	if grantedTo == "" {
+		return session.CapabilityGrant{}, fmt.Errorf("compiled capability grant handoff requires principal")
+	}
+	actions := session.NormalizeCapabilityActions(input.AllowedActions)
+	if len(actions) == 0 && strings.TrimSpace(input.CapabilityAction) != "" {
+		actions = session.NormalizeCapabilityActions([]string{input.CapabilityAction})
+	}
+	if len(actions) == 0 {
+		actions = []string{"invoke"}
+	}
+	contract, err := reviewNormalizeCapabilityJSONBlobWithDefault(input.Contract, "contract", record.Contract)
+	if err != nil {
+		return session.CapabilityGrant{}, err
+	}
+	constraints, err := reviewNormalizeCapabilityJSONBlobWithDefault(input.Constraints, "constraints", record.Constraints)
+	if err != nil {
+		return session.CapabilityGrant{}, err
+	}
+	if reviewCapabilityContractHasUpdatePlan(contract) {
+		return session.CapabilityGrant{}, fmt.Errorf("compiled capability grant handoff requires capability_authority execution for capability_update_plan")
+	}
+	status := session.NormalizeCapabilityGrantStatus(session.CapabilityGrantStatus(input.GrantStatus))
+	if strings.TrimSpace(input.GrantStatus) != "" && status == "" {
+		return session.CapabilityGrant{}, fmt.Errorf("compiled capability grant handoff grant_status is invalid")
+	}
+	if status == "" {
+		status = session.CapabilityGrantStatusActive
+	}
+	if err := h.validateReviewCapabilityGrantTarget(grantedTo, status); err != nil {
+		return session.CapabilityGrant{}, err
+	}
+	now := time.Now().UTC()
+	expiresAt := time.Time{}
+	if input.ExpiresInSeconds > 0 {
+		expiresAt = now.Add(time.Duration(input.ExpiresInSeconds) * time.Second)
+	}
+	grantID := strings.TrimSpace(input.GrantID)
+	if grantID == "" {
+		grantID = reviewCapabilityGrantID(record.RequestID, action.RecordID)
+	}
+	policyHash := reviewCapabilityGrantPolicyHash(kind, target, grantedTo, actions, contract, constraints)
+	grant, err := h.store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:            grantID,
+		RequestID:          record.RequestID,
+		GrantedBy:          fmt.Sprintf("telegram:%d", reviewerTelegramID),
+		GrantedTo:          grantedTo,
+		Kind:               kind,
+		TargetResource:     target,
+		AllowedActions:     actions,
+		Contract:           contract,
+		Constraints:        constraints,
+		Status:             status,
+		BaselinePolicyHash: policyHash,
+		CurrentPolicyHash:  policyHash,
+		AnchorFingerprint:  policyHash,
+		GrantedAt:          now,
+		ExpiresAt:          expiresAt,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+	if err != nil {
+		return session.CapabilityGrant{}, err
+	}
+	key := sessionKeyForReviewNextAction(action)
+	payloadRaw, _ := json.Marshal(map[string]any{
+		"grant_id":        grant.GrantID,
+		"request_id":      grant.RequestID,
+		"review_event_id": event.ID,
+		"kind":            string(grant.Kind),
+		"target_resource": grant.TargetResource,
+		"granted_to":      grant.GrantedTo,
+		"granted_by":      grant.GrantedBy,
+		"status":          string(grant.Status),
+		"allowed_actions": grant.AllowedActions,
+	})
+	if _, err := h.store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType:   core.ExecutionEventCapabilityGrantChanged,
+		Stage:       "capability_delegation",
+		Status:      string(grant.Status),
+		PayloadJSON: string(payloadRaw),
+		CreatedAt:   now,
+	}); err != nil {
+		return session.CapabilityGrant{}, fmt.Errorf("record capability grant activation event: %w", err)
+	}
+	if grant.Status == session.CapabilityGrantStatusActive {
+		if err := h.store.ResolveNextAction(session.NextActionResolutionInput{
+			RecordID:    action.RecordID,
+			Key:         key,
+			Owner:       "capability_authority",
+			SubjectKind: "capability_request",
+			SubjectRef:  record.RequestID,
+			Reason:      "capability_grant_active",
+			ResolvedAt:  now,
+		}); err != nil {
+			return session.CapabilityGrant{}, fmt.Errorf("resolve capability grant blocker: %w", err)
+		}
+	}
+	return grant, nil
+}
+
+func reviewNormalizeCapabilityJSONBlobWithDefault(raw json.RawMessage, field string, fallback string) (string, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		trimmed = strings.TrimSpace(fallback)
+	}
+	if trimmed == "" {
+		trimmed = "{}"
+	}
+	if !json.Valid([]byte(trimmed)) {
+		return "", fmt.Errorf("capability %s must be valid json", strings.TrimSpace(field))
+	}
+	return trimmed, nil
+}
+
+func reviewCapabilityContractHasUpdatePlan(contract string) bool {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(contract)), &payload); err != nil {
+		return false
+	}
+	_, ok := payload["capability_update_plan"]
+	return ok
+}
+
+func (h *DecisionHandler) validateReviewCapabilityGrantTarget(grantedTo string, status session.CapabilityGrantStatus) error {
+	if status != session.CapabilityGrantStatusActive || h == nil || h.store == nil {
+		return nil
+	}
+	agentID, ok := core.DurableAgentIDFromPrincipal(grantedTo)
+	if !ok {
+		return nil
+	}
+	if _, err := h.store.DurableAgent(agentID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("capability grant target durable agent %q does not exist", agentID)
+		}
+		return fmt.Errorf("load durable agent %q for capability grant: %w", agentID, err)
+	}
+	return nil
+}
+
+func reviewCapabilityGrantPolicyHash(kind session.CapabilityKind, target string, principalID string, actions []string, contract string, constraints string) string {
+	payload := map[string]any{
+		"kind":            string(kind),
+		"target_resource": strings.TrimSpace(target),
+		"principal":       strings.TrimSpace(principalID),
+		"allowed_actions": session.NormalizeCapabilityActions(actions),
+		"contract":        strings.TrimSpace(contract),
+		"constraints":     strings.TrimSpace(constraints),
+	}
+	raw, _ := json.Marshal(payload)
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func reviewCapabilityGrantID(requestID string, actionRecordID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(requestID) + "\x00" + strings.TrimSpace(actionRecordID)))
+	return "capg-review-" + hex.EncodeToString(sum[:8])
+}
+
+func sessionKeyForReviewNextAction(record session.NextActionRecord) session.SessionKey {
+	return session.SessionKey{
+		ChatID: record.ChatID,
+		UserID: record.UserID,
+		Scope:  record.Scope,
+	}
 }
 
 func (h *DecisionHandler) handleMissionControlProposalCallback(ctx context.Context, cb telegram.CallbackQuery, event session.ReviewEvent, proposal core.MissionControlProposal, action core.ReviewEventAction) error {
@@ -496,10 +969,38 @@ func reviewEventRequestStillActionable(record session.CapabilityRequest, action 
 	}
 }
 
+func reviewEventAllowedCurrentStatuses(record session.CapabilityRequest, action core.ReviewEventAction) []session.CapabilityReviewStatus {
+	record = session.NormalizeCapabilityRequest(record)
+	switch action {
+	case core.ReviewEventActionParentApprove:
+		return []session.CapabilityReviewStatus{session.CapabilityReviewStatusProposed}
+	case core.ReviewEventActionApprove:
+		if strings.TrimSpace(record.ParentPrincipal) != "" {
+			return []session.CapabilityReviewStatus{session.CapabilityReviewStatusParentApproved}
+		}
+		return []session.CapabilityReviewStatus{session.CapabilityReviewStatusProposed}
+	case core.ReviewEventActionReject:
+		return []session.CapabilityReviewStatus{session.CapabilityReviewStatusProposed, session.CapabilityReviewStatusParentApproved}
+	default:
+		return nil
+	}
+}
+
+func reviewEventCapabilityReviewID(eventID int64, reviewerID int64, action core.ReviewEventAction) string {
+	actionPart := strings.Trim(strings.ToLower(string(action)), " _-")
+	if actionPart == "" {
+		actionPart = "review"
+	}
+	return fmt.Sprintf("capr-review-event-%d-%d-%s", eventID, reviewerID, actionPart)
+}
+
 func reviewEventCapabilityStatusForAction(record session.CapabilityRequest, action core.ReviewEventAction, fromID int64, targetChatID int64) (session.CapabilityReviewStatus, string, error) {
 	if fromID <= 0 {
 		return "", "", fmt.Errorf("Telegram reviewer is unknown.")
 	}
+	// Empty AdminPrincipal means the delivered one-to-one admin review target owns
+	// final approval. Telegram group chats are negative IDs, so they cannot satisfy
+	// this positive user/chat equality fallback.
 	isAdmin := telegramPrincipalMatches(record.AdminPrincipal, fromID) || (strings.TrimSpace(record.AdminPrincipal) == "" && targetChatID == fromID)
 	isParent := telegramPrincipalMatches(record.ParentPrincipal, fromID)
 	switch action {

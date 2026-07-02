@@ -18,6 +18,8 @@ but they remain subordinate to parent governance and policy boundaries.
 - Telegram relay turns can target a child inline from DM using `agent:<agent_id> ...` and execute in child scope.
 - Child wakes can be transport-triggered (`telegram_update`) or scheduler-triggered (`poll`, `push`, `poll_or_push`) depending on the child role.
 - Child wake ingress is selected through pluggable runtime adapters; each adapter contributes wake payload synthesis and review finalization semantics.
+- Child wakes are recoverable crossings, not a micromanaged border. The parent records a wake claim and a child task packet as a manifest for the crossing: parent guidance, authority context, expected executor, and retry evidence travel as bookkeeping so failures can be diagnosed and safely retried.
+- Authority is one field in that wake manifest. The substrate should answer what was intended to cross, what actually crossed, what evidence exists, and what next repair is safe; it should not make ordinary parent-to-child collaboration feel like a dystopian permission checkpoint.
 - External-channel children use a generic runtime state slot (`external_channel`) for adapter name, cursor/session reference, last command, attempt/success timestamps, artifact pointer, status/error, failure count, backoff, and opaque adapter state. Protocol-specific residue belongs under `adapter_state`, not as a new parent-core continuity field per child or transport.
 - External-channel child wake failures are recorded under that same generic
   runtime state as `wake_failed` or `wake_blocked` with backoff and a bounded
@@ -59,9 +61,16 @@ Code anchors:
   requires a live `child_wake` continuation lease and the `wake_named_child` or
   `request_child_wake` action. Operator UI affordances may compose those steps,
   but tool/model paths must keep the wake as a separately reviewable execution
-  action. If the capability grant exists but the lease is missing, the tool
-  boundary records a `blocked_needs_authority` next action for the exact
-  `child_wake` lease instead of treating the grant as execution authority.
+  action. A `wake_once` retry contract may carry one bounded inline
+  `message`/`reason` payload; the runtime first records that payload as parent
+  guidance, then consumes it through the same leased wake. If the capability
+  grant exists but the lease is missing, the tool boundary records a
+  `blocked_needs_authority` next action for the exact `child_wake` lease instead
+  of treating the grant as execution authority.
+- The parent `child_wake` lease is consumed at the `durable_agent.wake_once`
+  tool boundary. The child wake turn that follows is child-scoped work; it does
+  not inherit the raw parent admission or parent tool invocation reference as
+  its own authority evidence.
 - Parent-conversation acknowledgements are message-ID explicit, and continuity
   updates are written transactionally so parent guidance, child review state, and
   wake bookkeeping do not overwrite each other under concurrent control-plane

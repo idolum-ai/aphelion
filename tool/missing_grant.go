@@ -18,6 +18,7 @@ import (
 
 type missingGrantRequirement struct {
 	RequestID          string
+	GrantID            string
 	Kind               session.CapabilityKind
 	TargetResource     string
 	GrantedTo          string
@@ -30,7 +31,10 @@ type missingGrantRequirement struct {
 	OperatorProjection string
 	OperationKind      string
 	OperationTool      string
+	ExpiresInSeconds   int
 }
+
+type MissingGrantRequirement = missingGrantRequirement
 
 type missingGrantContract struct {
 	Requirement         missingGrantRequirement
@@ -105,7 +109,7 @@ func (r *Registry) activeGrantForMissingGrantContract(contract missingGrantContr
 	return session.CapabilityGrant{}, false, nil
 }
 
-func (r *Registry) materializeMissingGrantRequirement(_ context.Context, key session.SessionKey, actor principal.Principal, requirement missingGrantRequirement, now time.Time) (session.CapabilityRequest, int64, session.NextActionRecord, error) {
+func (r *Registry) materializeMissingGrantRequirement(ctx context.Context, key session.SessionKey, actor principal.Principal, requirement missingGrantRequirement, now time.Time) (session.CapabilityRequest, int64, session.NextActionRecord, error) {
 	if r == nil || r.store == nil {
 		return session.CapabilityRequest{}, 0, session.NextActionRecord{}, fmt.Errorf("missing capability grant materialization requires transcript store")
 	}
@@ -191,7 +195,21 @@ func (r *Registry) materializeMissingGrantRequirement(_ context.Context, key ses
 	if err != nil {
 		return session.CapabilityRequest{}, 0, session.NextActionRecord{}, err
 	}
+	if request.ReviewStatus == session.CapabilityReviewStatusApproved && strings.TrimSpace(request.GrantID) == "" {
+		var in capabilityInput
+		if err := json.Unmarshal([]byte(operation.InputJSON), &in); err != nil {
+			return session.CapabilityRequest{}, 0, session.NextActionRecord{}, fmt.Errorf("decode approved capability grant handoff: %w", err)
+		}
+		grantedBy := firstNonEmpty(request.AdminPrincipal, request.ParentPrincipal, "approved_request:"+request.RequestID)
+		if _, err := r.capabilityAuthorityGrantSetApproved(ctx, in, key, grantedBy); err != nil {
+			return session.CapabilityRequest{}, 0, session.NextActionRecord{}, fmt.Errorf("materialize approved capability grant handoff: %w", err)
+		}
+	}
 	return request, reviewEventID, action, nil
+}
+
+func (r *Registry) MaterializeMissingGrantRequirement(ctx context.Context, key session.SessionKey, actor principal.Principal, requirement MissingGrantRequirement, now time.Time) (session.CapabilityRequest, int64, session.NextActionRecord, error) {
+	return r.materializeMissingGrantRequirement(ctx, key, actor, missingGrantRequirement(requirement), now)
 }
 
 func missingGrantNextActionRecordID(key session.SessionKey, requestID string) string {
@@ -227,6 +245,7 @@ func (r *Registry) pendingCapabilityRequestReviewEventID(targetChatID int64, req
 
 func normalizeMissingGrantRequirement(requirement missingGrantRequirement) missingGrantRequirement {
 	requirement.RequestID = strings.TrimSpace(requirement.RequestID)
+	requirement.GrantID = strings.TrimSpace(requirement.GrantID)
 	requirement.Kind = session.NormalizeCapabilityKind(requirement.Kind)
 	requirement.TargetResource = strings.TrimSpace(requirement.TargetResource)
 	requirement.GrantedTo = strings.TrimSpace(requirement.GrantedTo)
@@ -248,6 +267,9 @@ func normalizeMissingGrantRequirement(requirement missingGrantRequirement) missi
 	requirement.OperatorProjection = strings.TrimSpace(requirement.OperatorProjection)
 	requirement.OperationKind = strings.TrimSpace(requirement.OperationKind)
 	requirement.OperationTool = strings.TrimSpace(requirement.OperationTool)
+	if requirement.ExpiresInSeconds < 0 {
+		requirement.ExpiresInSeconds = 0
+	}
 	if requirement.RequestID == "" {
 		requirement.RequestID = stableMissingGrantRequestID(requirement)
 	}
@@ -274,6 +296,8 @@ func stableMissingGrantRequestID(requirement missingGrantRequirement) string {
 		"allowed_actions": session.NormalizeCapabilityActions(requirement.AllowedActions),
 		"contract":        strings.TrimSpace(requirement.Contract),
 		"constraints":     strings.TrimSpace(requirement.Constraints),
+		"grant_id":        strings.TrimSpace(requirement.GrantID),
+		"expires_in":      requirement.ExpiresInSeconds,
 	}
 	raw, _ := json.Marshal(payload)
 	sum := sha256.Sum256(raw)

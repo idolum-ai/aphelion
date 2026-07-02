@@ -239,6 +239,17 @@ func (r *Registry) validateContextAuthorityUseRef(toolName string, key session.S
 		}
 		validated.OperationPlanLeaseID = record.OperationPlanLeaseID
 		validated.AuthoritySource = session.ExecutionAuthorityLeaseKindOperationPlan
+	case session.ExecutionAuthorityLeaseKindChildTask:
+		if strings.TrimSpace(ref.ContinuationLeaseID) != "" || strings.TrimSpace(ref.OperationPlanLeaseID) != "" {
+			return session.AuthorityUseRef{}, fmt.Errorf("tool %q child task authority evidence must not include continuation or operation plan lease ids", strings.TrimSpace(toolName))
+		}
+		if ref.AuthoritySource != "" && ref.AuthoritySource != session.ExecutionAuthorityLeaseKindChildTask {
+			return session.AuthorityUseRef{}, fmt.Errorf("tool %q authority evidence source does not match run authority", strings.TrimSpace(toolName))
+		}
+		if err := r.validateChildTaskAttemptAuthorityUseRef(key, record, now); err != nil {
+			return session.AuthorityUseRef{}, err
+		}
+		validated.AuthoritySource = session.ExecutionAuthorityLeaseKindChildTask
 	default:
 		return session.AuthorityUseRef{}, fmt.Errorf("tool %q execution run authority has unsupported lease kind %q", strings.TrimSpace(toolName), record.LeaseKind)
 	}
@@ -330,10 +341,71 @@ func (r *Registry) validateOperationPlanAuthorityUseRef(key session.SessionKey, 
 	return nil
 }
 
+func (r *Registry) validateChildTaskAttemptAuthorityUseRef(key session.SessionKey, record session.ExecutionRunAuthority, now time.Time) error {
+	constraints := record.LeaseConstraints
+	packetID := strings.TrimSpace(constraints["packet_id"])
+	attemptID := strings.TrimSpace(constraints["attempt_id"])
+	leaseOwner := strings.TrimSpace(constraints["lease_owner"])
+	fencingToken := strings.TrimSpace(constraints["fencing_token"])
+	agentID := strings.TrimSpace(constraints["agent_id"])
+	leaseGeneration, err := parsePositiveInt64Constraint(constraints["lease_generation"])
+	if err != nil {
+		return fmt.Errorf("child task authority generation: %w", err)
+	}
+	packet, ok, err := r.store.ChildTaskPacket(packetID)
+	if err != nil {
+		return fmt.Errorf("load child task authority packet: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("child task authority packet %q is not durable", packetID)
+	}
+	if packet.SessionID != session.SessionIDForKey(key) {
+		return fmt.Errorf("child task authority packet %q belongs to session %q, not %q", packetID, packet.SessionID, session.SessionIDForKey(key))
+	}
+	if packet.AgentID != agentID {
+		return fmt.Errorf("child task authority packet %q belongs to agent %q, not %q", packetID, packet.AgentID, agentID)
+	}
+	if !childTaskAuthorityPacketLive(packet, attemptID, leaseOwner, leaseGeneration, fencingToken, now) {
+		return fmt.Errorf("child task authority packet %q attempt %q does not own a live task lease", packetID, attemptID)
+	}
+	return nil
+}
+
+func parsePositiveInt64Constraint(raw string) (int64, error) {
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("expected positive integer, got %q", strings.TrimSpace(raw))
+	}
+	return value, nil
+}
+
+func childTaskAuthorityPacketLive(packet session.ChildTaskPacket, attemptID string, leaseOwner string, leaseGeneration int64, fencingToken string, now time.Time) bool {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	if packet.Status != session.ChildTaskPacketInProgress {
+		return false
+	}
+	if packet.ActiveAttemptID != strings.TrimSpace(attemptID) ||
+		packet.LeaseOwner != strings.TrimSpace(leaseOwner) ||
+		packet.LeaseGeneration != leaseGeneration ||
+		packet.FencingToken != strings.TrimSpace(fencingToken) {
+		return false
+	}
+	return packet.LeaseReleasedAt.IsZero() &&
+		!packet.LeaseExpiresAt.IsZero() &&
+		packet.LeaseExpiresAt.After(now)
+}
+
 func authorityUseRefHasLeaseEvidence(ref session.AuthorityUseRef) bool {
 	ref = session.NormalizeAuthorityUseRef(ref)
 	if strings.TrimSpace(ref.AuthoritySource) == "" {
 		return false
+	}
+	if ref.AuthoritySource == session.ExecutionAuthorityLeaseKindChildTask {
+		return ref.TurnRunID > 0
 	}
 	return strings.TrimSpace(ref.ContinuationLeaseID) != "" || strings.TrimSpace(ref.OperationPlanLeaseID) != ""
 }

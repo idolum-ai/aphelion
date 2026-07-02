@@ -772,6 +772,12 @@ func (r *Runtime) runReservedApprovedRetryOperation(ctx context.Context, key ses
 		err = execErr
 		return err
 	}
+	if handled, handleErr := r.handleApprovedRetryDurableAgentWakeResult(key, reservation, retry, out, monitor); handleErr != nil {
+		err = handleErr
+		return err
+	} else if handled {
+		return nil
+	}
 	if opState, loadErr := r.store.OperationState(key); loadErr == nil {
 		opState = session.NormalizeOperationState(opState)
 		opState.Status = session.OperationStatusCompleted
@@ -792,6 +798,267 @@ func (r *Runtime) runReservedApprovedRetryOperation(ctx context.Context, key ses
 		"tool":                strings.TrimSpace(retry.Tool),
 		"request_instance_id": strings.TrimSpace(retry.RequestInstanceID),
 	}, time.Now().UTC())
+	return nil
+}
+
+func (r *Runtime) handleApprovedRetryDurableAgentWakeResult(key session.SessionKey, reservation approvedContinuationReservation, retry session.ContinuationRetryOperation, out string, monitor *turnMonitor) (bool, error) {
+	if r == nil || r.store == nil || retry.Tool != "durable_agent" || retry.OperationKind != "durable_agent_wake_once" {
+		return false, nil
+	}
+	leaseID := strings.TrimSpace(reservation.State.ContinuationLease.ID)
+	packetID, childResult, hasTerminalChildResult, err := r.approvedRetryWakeTerminalChildResultForLease(leaseID)
+	if err != nil {
+		return true, err
+	}
+	result, ok := toolpkg.ParseDurableAgentWakeOnceRenderedResult(out)
+	if !ok {
+		if hasTerminalChildResult {
+			result = approvedRetryWakeResultFromChildTaskResult(retry, childResult)
+			return true, r.recordApprovedRetryWakeTerminalChildResult(key, reservation, retry, result, packetID, childResult, monitor)
+		}
+		return true, fmt.Errorf("approved durable_agent wake_once retry returned an unrecognized projection and no typed child task result for lease %q", leaseID)
+	}
+	switch strings.TrimSpace(result.WakeStatus) {
+	case "completed":
+		if hasTerminalChildResult {
+			return true, r.recordApprovedRetryWakeTerminalChildResult(key, reservation, retry, result, packetID, childResult, monitor)
+		}
+		return false, nil
+	case "skipped_no_pending_parent_message":
+		result.FailureClass = "no_pending_parent_guidance"
+		result.FailureSummary = "Approved child wake retry had no pending or contract-bound parent guidance to consume."
+		result.RetryPolicy = "retry_after_recovery_contract_repair"
+		result.NextRepair = "repair the child_wake recovery contract so the approved retry carries a bounded child-local guidance payload before requesting another continuation."
+		return true, r.recordApprovedRetryWakeBlocked(key, reservation, retry, result, monitor)
+	case "awaiting_child_pickup":
+		return true, r.recordApprovedRetryWakeWaiting(key, reservation, retry, result, monitor)
+	default:
+		if result.FailureClass == "" {
+			result.FailureClass = "wake_failed"
+		}
+		if result.FailureSummary == "" {
+			result.FailureSummary = "durable_agent wake_once failed before the child produced a completion"
+		}
+		if result.RetryPolicy == "" {
+			result.RetryPolicy = "retry_after_wake_runtime_repair"
+		}
+		if result.NextRepair == "" {
+			result.NextRepair = "inspect the durable-agent wake runtime, then retry one bounded wake"
+		}
+		return true, r.recordApprovedRetryWakeBlocked(key, reservation, retry, result, monitor)
+	}
+}
+
+func approvedRetryWakeResultFromChildTaskResult(retry session.ContinuationRetryOperation, result session.ChildTaskResult) toolpkg.DurableAgentWakeOnceRenderedResult {
+	agentID := strings.TrimSpace(result.AgentID)
+	if agentID == "" {
+		agentID = approvedRetryAgentID(retry)
+	}
+	wakeStatus := "failed"
+	switch result.Status {
+	case session.ChildTaskResultCompleted:
+		wakeStatus = "completed"
+	case session.ChildTaskResultBlocked:
+		wakeStatus = "failed"
+	case session.ChildTaskResultFailed:
+		wakeStatus = "failed"
+	case session.ChildTaskResultUpdate:
+		wakeStatus = "awaiting_child_pickup"
+	}
+	failureClass := strings.TrimSpace(result.BlockerKind)
+	if failureClass == "" && result.Status == session.ChildTaskResultFailed {
+		failureClass = "child_task_failed"
+	}
+	return toolpkg.DurableAgentWakeOnceRenderedResult{
+		AgentID:        agentID,
+		WakeStatus:     wakeStatus,
+		FailureClass:   failureClass,
+		FailureSummary: strings.TrimSpace(result.Summary),
+		RetryPolicy:    "retry_after_blocker_resolution",
+	}
+}
+
+func approvedRetryAgentID(retry session.ContinuationRetryOperation) string {
+	var input struct {
+		AgentID string `json:"agent_id"`
+	}
+	_ = json.Unmarshal([]byte(retry.InputJSON), &input)
+	return strings.TrimSpace(input.AgentID)
+}
+
+func approvedRetrySubject(retry session.ContinuationRetryOperation, result toolpkg.DurableAgentWakeOnceRenderedResult) (string, string) {
+	subjectKind := strings.TrimSpace(retry.SubjectKind)
+	if subjectKind == "" {
+		subjectKind = "durable_agent_wake_once"
+	}
+	subjectRef := strings.TrimSpace(retry.SubjectRef)
+	if subjectRef == "" {
+		subjectRef = strings.TrimSpace(result.AgentID)
+	}
+	if subjectRef == "" {
+		subjectRef = "durable_agent_wake_once"
+	}
+	return subjectKind, subjectRef
+}
+
+func approvedRetryCausalRefs(reservation approvedContinuationReservation, retry session.ContinuationRetryOperation, result toolpkg.DurableAgentWakeOnceRenderedResult) []string {
+	refs := []string{}
+	if id := strings.TrimSpace(reservation.State.ContinuationLease.ID); id != "" {
+		refs = append(refs, "continuation:"+id)
+	}
+	if id := strings.TrimSpace(result.ContinuationLeaseID); id != "" && !stringSliceContains(refs, "continuation:"+id) {
+		refs = append(refs, "continuation:"+id)
+	}
+	if id := strings.TrimSpace(retry.RequestInstanceID); id != "" {
+		refs = append(refs, "request_instance:"+id)
+	}
+	if ref := strings.TrimSpace(retry.SubjectRef); ref != "" {
+		refs = append(refs, "subject:"+ref)
+	}
+	if agentID := strings.TrimSpace(result.AgentID); agentID != "" {
+		refs = append(refs, "durable_agent:"+agentID)
+	}
+	return refs
+}
+
+func (r *Runtime) recordApprovedRetryWakeBlocked(key session.SessionKey, reservation approvedContinuationReservation, retry session.ContinuationRetryOperation, result toolpkg.DurableAgentWakeOnceRenderedResult, monitor *turnMonitor) error {
+	now := time.Now().UTC()
+	agentID := strings.TrimSpace(result.AgentID)
+	if agentID == "" {
+		agentID = approvedRetryAgentID(retry)
+	}
+	failureClass := strings.TrimSpace(result.FailureClass)
+	if failureClass == "" {
+		failureClass = "wake_failed"
+	}
+	summary := strings.TrimSpace(result.FailureSummary)
+	if summary == "" {
+		summary = "durable_agent wake_once failed before the child produced a completion"
+	}
+	if opState, loadErr := r.store.OperationState(key); loadErr == nil {
+		opState = session.NormalizeOperationState(opState)
+		opState.Status = session.OperationStatusBlocked
+		opState.Stage = "approved_retry_failed"
+		opState.Summary = "Approved child wake retry failed: " + failureClass
+		if summary != "" {
+			opState.Summary += " - " + summary
+		}
+		opState.Proposal.Status = session.ProposalStatusApproved
+		opState.Proposal.UpdatedAt = now
+		opState.UpdatedAt = now
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return fmt.Errorf("update approved retry failed operation state: %w", err)
+		}
+	}
+	subjectKind, subjectRef := approvedRetrySubject(retry, result)
+	nextRepair := strings.TrimSpace(result.NextRepair)
+	if nextRepair == "" {
+		nextRepair = "repair the durable-agent wake runtime before retrying"
+	}
+	retryPolicy := strings.TrimSpace(result.RetryPolicy)
+	if retryPolicy == "" {
+		retryPolicy = "retry_after_wake_runtime_repair"
+	}
+	operationPayload, _ := json.Marshal(map[string]any{
+		"action":                  "repair_child_wake_failure",
+		"agent_id":                agentID,
+		"durable_agent_id":        agentID,
+		"failure_class":           failureClass,
+		"blocker_kind":            failureClass,
+		"child_blocker_kind":      failureClass,
+		"recovery_action":         "repair_child_wake_failure",
+		"recovery_family":         session.NextActionOperationKindDurableChildRecovery,
+		"recovery_contract":       "aphelion.recovery_handoff.v1",
+		"recovery_operation_kind": session.NextActionOperationKindDurableChildRecovery,
+		"retry_policy":            retryPolicy,
+		"request_instance_id":     strings.TrimSpace(retry.RequestInstanceID),
+	})
+	turnRunID := int64(0)
+	if monitor != nil {
+		turnRunID = monitor.runID
+	}
+	_, err := r.store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		TurnRunID:          turnRunID,
+		Owner:              "approved_retry",
+		State:              session.NextActionBlockedNeedsResourceRepair,
+		SubjectKind:        subjectKind,
+		SubjectRef:         subjectRef,
+		CausalRefs:         approvedRetryCausalRefs(reservation, retry, result),
+		NextAction:         nextRepair,
+		RequiredAuthority:  session.NextActionOperationKindDurableChildRecovery,
+		ResourceBlocker:    failureClass,
+		RetryPolicy:        retryPolicy,
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
+		OperationTool:      "update_operation",
+		OperationInputJSON: string(operationPayload),
+		OperatorProjection: approvedRetryWakeBlockedProjection(agentID, failureClass, summary),
+		CreatedAt:          now,
+	})
+	if err != nil {
+		return fmt.Errorf("record approved retry wake blocker: %w", err)
+	}
+	return nil
+}
+
+func approvedRetryWakeBlockedProjection(agentID, failureClass, summary string) string {
+	parts := []string{"The approved child wake retry ran with authority but did not produce a child completion."}
+	if strings.TrimSpace(agentID) != "" {
+		parts = append(parts, "agent="+strings.TrimSpace(agentID)+".")
+	}
+	if strings.TrimSpace(failureClass) != "" {
+		parts = append(parts, "failure_class="+strings.TrimSpace(failureClass)+".")
+	}
+	if strings.TrimSpace(summary) != "" {
+		parts = append(parts, strings.TrimSpace(summary))
+	}
+	parts = append(parts, "Repair the wake runtime before requesting another bounded child_wake retry.")
+	return strings.Join(parts, " ")
+}
+
+func (r *Runtime) recordApprovedRetryWakeWaiting(key session.SessionKey, reservation approvedContinuationReservation, retry session.ContinuationRetryOperation, result toolpkg.DurableAgentWakeOnceRenderedResult, monitor *turnMonitor) error {
+	now := time.Now().UTC()
+	leaseID := firstNonEmpty(strings.TrimSpace(result.ContinuationLeaseID), strings.TrimSpace(reservation.State.ContinuationLease.ID))
+	if packetID, childResult, ok, err := r.approvedRetryWakeObservedChildResultForLease(leaseID); err != nil {
+		return fmt.Errorf("load approved retry child wake result: %w", err)
+	} else if ok {
+		return r.recordApprovedRetryWakeTerminalChildResult(key, reservation, retry, result, packetID, childResult, monitor)
+	}
+	if opState, loadErr := r.store.OperationState(key); loadErr == nil {
+		opState = session.NormalizeOperationState(opState)
+		opState.Status = session.OperationStatusActive
+		opState.Stage = "approved_retry_waiting_for_child"
+		opState.Summary = "Approved child wake retry is waiting for the child result."
+		opState.Proposal.Status = session.ProposalStatusApproved
+		opState.Proposal.UpdatedAt = now
+		opState.UpdatedAt = now
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return fmt.Errorf("update approved retry waiting operation state: %w", err)
+		}
+	}
+	subjectKind, subjectRef := approvedRetrySubject(retry, result)
+	turnRunID := int64(0)
+	if monitor != nil {
+		turnRunID = monitor.runID
+	}
+	_, err := r.store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		TurnRunID:          turnRunID,
+		Owner:              "approved_retry",
+		State:              session.NextActionWaitingForChild,
+		SubjectKind:        subjectKind,
+		SubjectRef:         subjectRef,
+		CausalRefs:         approvedRetryCausalRefs(reservation, retry, result),
+		NextAction:         "wait for the child wake result before retrying",
+		OperationKind:      "durable_agent_wake_once",
+		OperationTool:      strings.TrimSpace(retry.Tool),
+		OperationInputJSON: retry.InputJSON,
+		OperatorProjection: "The approved child wake retry started and is waiting for a child result.",
+		CreatedAt:          now,
+	})
+	if err != nil {
+		return fmt.Errorf("record approved retry wake waiting action: %w", err)
+	}
 	return nil
 }
 

@@ -82,6 +82,10 @@ func (s *SQLiteStore) VerifyCriticalSchemaShape() (string, error) {
 		{"child_task_outcome_intents", "lease_expires_at"},
 		{"child_task_outcome_intents", "next_attempt_at"},
 		{"child_task_outcome_intents", "dead_letter_at"},
+		{"authority_bundle_contracts", "bundle_id"},
+		{"authority_bundle_contracts", "primary_continuation_contract_id"},
+		{"authority_bundle_contracts", "required_capability_grants_json"},
+		{"authority_bundle_contracts", "stop_conditions_json"},
 	}
 	for _, check := range checks {
 		var count int

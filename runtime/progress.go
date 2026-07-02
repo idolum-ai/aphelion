@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -121,6 +122,7 @@ type turnMonitor struct {
 	ctx                      context.Context
 	cancelTurn               context.CancelFunc
 	stopRunActivityHeartbeat context.CancelFunc
+	finishProgress           bool
 	ingressSurface           string
 	ingressUpdateID          int64
 }
@@ -165,6 +167,7 @@ func (r *Runtime) startTurnMonitor(ctx context.Context, key session.SessionKey, 
 		toolStarts:      make(map[string][]time.Time),
 		ctx:             turnCtx,
 		cancelTurn:      cancelTurn,
+		finishProgress:  true,
 		ingressSurface:  ingressSurface,
 		ingressUpdateID: ingressUpdateID,
 	}
@@ -204,12 +207,12 @@ func (r *Runtime) startTurnMonitor(ctx context.Context, key session.SessionKey, 
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventTurnStarted, "turn", string(session.TurnRunStatusRunning), payload, time.Now().UTC())
 	if progress != nil {
-		progress.BindTurnRun(run.ID)
 		progress.recordMessageID = func(messageID int64) {
 			if err := r.store.UpdateTurnRunProgressMessage(run.ID, messageID); err != nil {
 				log.Printf("WARN update turn run progress id=%d msg_id=%d err=%v", run.ID, messageID, err)
 			}
 		}
+		progress.BindTurnRun(run.ID)
 	}
 	monitor.startRunActivityHeartbeat()
 	return monitor, nil
@@ -238,6 +241,10 @@ func (r *Runtime) bindExecutionRunAuthority(ctx context.Context, key session.Ses
 		if err := r.validateExecutionRunOperationPlanAuthority(key, admission.OperationPlanLeaseID, now); err != nil {
 			return ctx, err
 		}
+	case session.ExecutionAuthorityLeaseKindChildTask:
+		if err := r.validateExecutionRunChildTaskAuthority(key, admission, now); err != nil {
+			return ctx, err
+		}
 	default:
 		return ctx, fmt.Errorf("execution run authority admission has unsupported lease kind %q", admission.LeaseKind)
 	}
@@ -249,6 +256,7 @@ func (r *Runtime) bindExecutionRunAuthority(ctx context.Context, key session.Ses
 		SessionID: stored.SessionID,
 		TurnRunID: stored.TurnRunID,
 	}
+	ctx = toolpkg.WithoutExecutionAuthorityAdmission(ctx)
 	return toolpkg.WithAuthorityUseRef(ctx, ref), nil
 }
 
@@ -310,6 +318,64 @@ func (r *Runtime) validateExecutionRunOperationPlanAuthority(key session.Session
 		return fmt.Errorf("operation plan lease %q is not active for run authority", strings.TrimSpace(leaseID))
 	}
 	return nil
+}
+
+func (r *Runtime) validateExecutionRunChildTaskAuthority(key session.SessionKey, admission session.ExecutionRunAuthority, now time.Time) error {
+	constraints := admission.LeaseConstraints
+	packetID := strings.TrimSpace(constraints["packet_id"])
+	attemptID := strings.TrimSpace(constraints["attempt_id"])
+	leaseOwner := strings.TrimSpace(constraints["lease_owner"])
+	fencingToken := strings.TrimSpace(constraints["fencing_token"])
+	agentID := strings.TrimSpace(constraints["agent_id"])
+	leaseGeneration, err := parsePositiveInt64Constraint(constraints["lease_generation"])
+	if err != nil {
+		return fmt.Errorf("child task authority generation: %w", err)
+	}
+	packet, ok, err := r.store.ChildTaskPacket(packetID)
+	if err != nil {
+		return fmt.Errorf("load child task authority packet: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("child task authority packet %q is not durable", packetID)
+	}
+	if packet.SessionID != session.SessionIDForKey(key) {
+		return fmt.Errorf("child task authority packet %q belongs to session %q, not %q", packetID, packet.SessionID, session.SessionIDForKey(key))
+	}
+	if packet.AgentID != agentID {
+		return fmt.Errorf("child task authority packet %q belongs to agent %q, not %q", packetID, packet.AgentID, agentID)
+	}
+	if !childTaskAuthorityPacketLive(packet, attemptID, leaseOwner, leaseGeneration, fencingToken, now) {
+		return fmt.Errorf("child task authority packet %q attempt %q does not own a live task lease", packetID, attemptID)
+	}
+	return nil
+}
+
+func parsePositiveInt64Constraint(raw string) (int64, error) {
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("expected positive integer, got %q", strings.TrimSpace(raw))
+	}
+	return value, nil
+}
+
+func childTaskAuthorityPacketLive(packet session.ChildTaskPacket, attemptID string, leaseOwner string, leaseGeneration int64, fencingToken string, now time.Time) bool {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	if packet.Status != session.ChildTaskPacketInProgress {
+		return false
+	}
+	if packet.ActiveAttemptID != strings.TrimSpace(attemptID) ||
+		packet.LeaseOwner != strings.TrimSpace(leaseOwner) ||
+		packet.LeaseGeneration != leaseGeneration ||
+		packet.FencingToken != strings.TrimSpace(fencingToken) {
+		return false
+	}
+	return packet.LeaseReleasedAt.IsZero() &&
+		!packet.LeaseExpiresAt.IsZero() &&
+		packet.LeaseExpiresAt.After(now)
 }
 
 func (m *turnMonitor) Context() context.Context {

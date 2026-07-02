@@ -66,6 +66,11 @@ func externalChannelPollDue(state core.DurableAgentExternalChannelRuntimeState, 
 	if !state.BackoffUntil.IsZero() && now.Before(state.BackoffUntil.UTC()) {
 		return false
 	}
+	return externalChannelPollDueIgnoringBackoff(state, intervalRaw, now)
+}
+
+func externalChannelPollDueIgnoringBackoff(state core.DurableAgentExternalChannelRuntimeState, intervalRaw string, now time.Time) bool {
+	now = now.UTC()
 	last := state.LastSuccessAt
 	if state.LastAttemptAt.After(last) {
 		last = state.LastAttemptAt

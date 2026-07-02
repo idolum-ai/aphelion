@@ -47,6 +47,10 @@ const schemaVersion79 = 79
 const schemaVersion80 = 80
 const schemaVersion81 = 81
 const schemaVersion82 = 82
+const schemaVersion83 = 83
+const schemaVersion84 = 84
+const schemaVersion85 = 85
+const schemaVersion86 = 86
 
 var migratableSchemaVersions = map[int]struct{}{
 	schemaVersion43: {},
@@ -89,6 +93,10 @@ var migratableSchemaVersions = map[int]struct{}{
 	schemaVersion80: {},
 	schemaVersion81: {},
 	schemaVersion82: {},
+	schemaVersion83: {},
+	schemaVersion84: {},
+	schemaVersion85: {},
+	schemaVersion86: {},
 }
 
 func existingUserTableCount(tx *sql.Tx) (int, error) {
@@ -482,6 +490,42 @@ func migrateCurrentSchemaVersion(tx *sql.Tx, currentVersion int) (int, error) {
 	}
 	if version == schemaVersion82 {
 		if err := migrateSchemaV82ToV83(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion83); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion83, err)
+		}
+		version = schemaVersion83
+	}
+	if version == schemaVersion83 {
+		if err := migrateSchemaV83ToV84(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion84); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion84, err)
+		}
+		version = schemaVersion84
+	}
+	if version == schemaVersion84 {
+		if err := migrateSchemaV84ToV85(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion85); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion85, err)
+		}
+		version = schemaVersion85
+	}
+	if version == schemaVersion85 {
+		if err := migrateSchemaV85ToV86(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion86); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion86, err)
+		}
+		version = schemaVersion86
+	}
+	if version == schemaVersion86 {
+		if err := migrateSchemaV86ToV87(tx); err != nil {
 			return 0, err
 		}
 		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion); err != nil {

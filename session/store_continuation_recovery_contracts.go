@@ -14,7 +14,10 @@ func (s *SQLiteStore) UpsertContinuationRecoveryContract(input ContinuationRecov
 	if s == nil || s.db == nil {
 		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract store unavailable")
 	}
-	input = NormalizeContinuationRecoveryContract(input)
+	input, err := CanonicalizeContinuationRecoveryContract(input)
+	if err != nil {
+		return ContinuationRecoveryContract{}, err
+	}
 	if input.ContractID == "" {
 		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract_id is required")
 	}
@@ -40,8 +43,38 @@ func (s *SQLiteStore) ContinuationRecoveryContract(contractID string) (Continuat
 	return continuationRecoveryContractByID(s.db, contractID)
 }
 
+func (s *SQLiteStore) RecordContinuationRecoveryContractNextAction(contractInput ContinuationRecoveryContract, actionInput NextActionInput) (ContinuationRecoveryContract, NextActionRecord, error) {
+	if s == nil || s.db == nil {
+		return ContinuationRecoveryContract{}, NextActionRecord{}, fmt.Errorf("continuation recovery contract store unavailable")
+	}
+	contractInput, err := CanonicalizeContinuationRecoveryContract(contractInput)
+	if err != nil {
+		return ContinuationRecoveryContract{}, NextActionRecord{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return ContinuationRecoveryContract{}, NextActionRecord{}, fmt.Errorf("begin continuation recovery publication tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	contract, err := upsertContinuationRecoveryContractTx(tx, contractInput)
+	if err != nil {
+		return ContinuationRecoveryContract{}, NextActionRecord{}, err
+	}
+	record, err := recordNextActionTx(tx, actionInput)
+	if err != nil {
+		return ContinuationRecoveryContract{}, NextActionRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ContinuationRecoveryContract{}, NextActionRecord{}, fmt.Errorf("commit continuation recovery publication tx: %w", err)
+	}
+	return contract, record, nil
+}
+
 func upsertContinuationRecoveryContractTx(tx *sql.Tx, input ContinuationRecoveryContract) (ContinuationRecoveryContract, error) {
-	input = NormalizeContinuationRecoveryContract(input)
+	input, err := CanonicalizeContinuationRecoveryContract(input)
+	if err != nil {
+		return ContinuationRecoveryContract{}, err
+	}
 	if input.ContractID == "" {
 		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract_id is required")
 	}
@@ -147,7 +180,11 @@ func scanContinuationRecoveryContract(scanner interface{ Scan(dest ...any) error
 	}
 	contract.CreatedAt = createdAt
 	contract.UpdatedAt = updatedAt
-	return NormalizeContinuationRecoveryContract(contract), true, nil
+	contract, err = CanonicalizeContinuationRecoveryContract(contract)
+	if err != nil {
+		return ContinuationRecoveryContract{}, false, err
+	}
+	return contract, true, nil
 }
 
 func continuationRecoveryContractEquivalent(left ContinuationRecoveryContract, right ContinuationRecoveryContract) bool {

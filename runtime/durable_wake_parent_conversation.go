@@ -5,6 +5,8 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,6 +15,19 @@ import (
 )
 
 const durableParentConversationChatType = "durable_parent_conversation"
+
+var durableParentConversationControlPlaneRedactions = []struct {
+	pattern     *regexp.Regexp
+	replacement string
+}{
+	{regexp.MustCompile(`(?i)\btool\s*[:=]\s*durable_agent\b`), "[parent-control tool consumed]"},
+	{regexp.MustCompile(`(?i)\baction\s*[:=]\s*wake_once\b`), "[parent-control action consumed]"},
+	{regexp.MustCompile(`(?i)\bdurable_agent\.wake_once\b`), "[parent-control wake consumed]"},
+	{regexp.MustCompile(`(?i)\bdurable_agent\s+wake_once\b`), "[parent-control wake consumed]"},
+	{regexp.MustCompile("`durable_agent`"), "[parent-control tool consumed]"},
+	{regexp.MustCompile("`wake_once`"), "[parent-control action consumed]"},
+	{regexp.MustCompile(`(?i)\bchild_wake\b`), "child wake approval"},
+}
 
 type durableParentConversationWakeAdapter struct{}
 
@@ -169,6 +184,24 @@ func durableWakeTaskPacketIDForPending(agentID string, pending []core.DurableAge
 	return durableWakeTaskPacketID(agentID, durableWakeMessageID(now), now)
 }
 
+func durableWakeTaskPacketIDForWakeClaim(agentID string, messageIDs []string, wakeClaimID string) string {
+	parts := []string{strings.TrimSpace(agentID), strings.TrimSpace(wakeClaimID)}
+	seen := map[string]struct{}{}
+	for _, id := range messageIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		parts = append(parts, id)
+	}
+	sort.Strings(parts[2:])
+	return "child_task:" + session.EffectAttemptCommandHash(strings.Join(parts, ":"))[7:23]
+}
+
 func durableParentConversationWakePrompt(agent core.DurableAgent, messages []core.DurableAgentConversationMessage) string {
 	lines := []string{
 		"Durable parent conversation wake.",
@@ -176,14 +209,50 @@ func durableParentConversationWakePrompt(agent core.DurableAgent, messages []cor
 		"Channel: " + strings.TrimSpace(agent.ChannelKind),
 		fmt.Sprintf("Pending parent messages: %d", len(messages)),
 		"Process pending parent guidance and report a concise, truthful status update.",
-		"Finish with REVIEW_STATUS: completed, blocked, failed, needs_review, or update.",
+		`Finish with APHELION_CHILD_RESULT: {"status":"completed|blocked|failed|update","blocker_kind":"optional_enum"}.`,
+		"Legacy REVIEW_STATUS is accepted only as a fallback.",
 	}
 	for i, message := range messages {
-		text := truncateRunes(strings.TrimSpace(message.Text), 300)
+		text := truncateRunes(durableParentConversationChildFacingMessage(message.Text), 500)
 		if text == "" {
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("Parent message %d: %s", i+1, text))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func durableParentConversationChildFacingMessage(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	if !durableParentConversationMentionsControlPlaneWake(text) {
+		return text
+	}
+	redacted := durableParentConversationRedactControlPlaneWakeTokens(text)
+	return strings.Join([]string{
+		"Parent control-plane approval was already consumed by the parent runtime.",
+		"Do not call the parent durable-agent governance tool or wake action from this child turn.",
+		`If ambiguous, emit APHELION_CHILD_RESULT: {"status":"blocked","blocker_kind":"needs_review"}.`,
+		"Child-local guidance: " + redacted,
+	}, " ")
+}
+
+func durableParentConversationMentionsControlPlaneWake(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "child_wake") ||
+		strings.Contains(lower, "durable_agent.wake_once") ||
+		(strings.Contains(lower, "durable_agent") && strings.Contains(lower, "wake_once"))
+}
+
+func durableParentConversationRedactControlPlaneWakeTokens(text string) string {
+	out := text
+	for _, redaction := range durableParentConversationControlPlaneRedactions {
+		out = redaction.pattern.ReplaceAllString(out, redaction.replacement)
+	}
+	return strings.TrimSpace(out)
 }

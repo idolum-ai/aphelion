@@ -271,7 +271,10 @@ back to the ledgered child and show an `(agent <id>)` prefix for attribution.
 The model-facing `durable_agent` tool keeps the same split explicit:
 `conversation_send` appends parent guidance without waking the child, while
 `wake_once` can ask an approved child-wake continuation to consume already
-pending guidance exactly once.
+pending guidance exactly once. When the wake itself is the approved recovery
+action, `wake_once` may also carry one bounded inline `message`/`reason` payload;
+that payload is first materialized as parent guidance and then consumed by the
+same leased wake.
 
 Use `/context` to inspect the current chat/thread context that is shaping replies.
 It is read-only; `Ask Me` queues clarification questions without writing memory.

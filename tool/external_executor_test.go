@@ -75,6 +75,196 @@ func TestExternalProcessExecutorRunsManifestBackedTool(t *testing.T) {
 	}
 }
 
+func TestExternalProcessExecutorUsesManifestTimeoutInsteadOfRegistryDefault(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	registry.timeout = 50 * time.Millisecond
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	script := filepath.Join(registry.workspace, "run.sh")
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\nsleep 0.2\necho '{\"summary\":\"manifest-budget\"}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh) err = %v", err)
+	}
+	manifest := ExternalToolManifest{
+		Name:  "slow_metadata_probe",
+		Owner: "child-alpha",
+		Execution: ExternalToolManifestExecution{
+			Mode:           "process",
+			Entry:          "./run.sh",
+			TimeoutSeconds: 2,
+		},
+		IO: ExternalToolManifestIO{
+			OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`),
+		},
+	}
+	if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest}); err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	seedVerifiedExternalToolLifecycle(t, registry, store, manifest, sandbox.Scope{WorkingRoot: registry.workspace})
+	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "slow_metadata_probe", ImplementationRef: "external:slow_metadata_probe", Registered: true}); err != nil {
+		t.Fatalf("UpsertRegisteredTool() err = %v", err)
+	}
+	grantToolInvoke(t, store, "slow_metadata_probe", "telegram:1001")
+
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, "slow_metadata_probe", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal() err = %v, want manifest timeout to outlive registry default", err)
+	}
+	if out != `{"summary":"manifest-budget"}` {
+		t.Fatalf("out = %q, want manifest-backed output", out)
+	}
+}
+
+func TestExternalToolManifestRejectsInvalidTimeoutBudgets(t *testing.T) {
+	t.Parallel()
+
+	base := ExternalToolManifest{
+		Name:      "bad_timeout_probe",
+		Owner:     "child-alpha",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+		IO:        ExternalToolManifestIO{OutputSchema: json.RawMessage(`{"type":"object"}`)},
+	}
+	tests := []struct {
+		name   string
+		adjust func(*ExternalToolManifest)
+		want   string
+	}{
+		{
+			name: "negative execution timeout",
+			adjust: func(m *ExternalToolManifest) {
+				m.Execution.TimeoutSeconds = -1
+			},
+			want: "execution.timeout_seconds must be >= 0",
+		},
+		{
+			name: "excessive execution timeout",
+			adjust: func(m *ExternalToolManifest) {
+				m.Execution.TimeoutSeconds = externalToolMaxTimeoutSeconds + 1
+			},
+			want: "execution.timeout_seconds",
+		},
+		{
+			name: "negative max runtime",
+			adjust: func(m *ExternalToolManifest) {
+				m.Constraints.MaxRuntimeSeconds = -1
+			},
+			want: "constraints.max_runtime_seconds must be >= 0",
+		},
+		{
+			name: "excessive max runtime",
+			adjust: func(m *ExternalToolManifest) {
+				m.Constraints.MaxRuntimeSeconds = externalToolMaxTimeoutSeconds + 1
+			},
+			want: "constraints.max_runtime_seconds",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			manifest := base
+			tt.adjust(&manifest)
+			registry, _ := newDurableAgentToolRegistry(t)
+			_, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest})
+			if err == nil {
+				t.Fatal("WithExternalToolManifests() err = nil, want invalid timeout budget rejection")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestExternalToolExecutionTimeoutCapsManifestTimeoutWithMaxRuntime(t *testing.T) {
+	t.Parallel()
+
+	manifest := ExternalToolManifest{
+		Execution: ExternalToolManifestExecution{TimeoutSeconds: 10},
+		Constraints: ExternalToolManifestConstraints{
+			MaxRuntimeSeconds: 1,
+		},
+	}
+	timeout, err := externalToolExecutionTimeout(manifest, 30*time.Second)
+	if err != nil {
+		t.Fatalf("externalToolExecutionTimeout() err = %v", err)
+	}
+	if timeout != time.Second {
+		t.Fatalf("timeout = %s, want 1s max_runtime cap", timeout)
+	}
+}
+
+func TestExternalProcessExecutorMaxRuntimeCapsManifestTimeout(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	script := filepath.Join(workspace, "run.sh")
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\nsleep 2\necho '{\"summary\":\"should-not-complete\"}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh) err = %v", err)
+	}
+	manifest := ExternalToolManifest{
+		Name:  "capped_metadata_probe",
+		Owner: "child-alpha",
+		Execution: ExternalToolManifestExecution{
+			Mode:           "process",
+			Entry:          "./run.sh",
+			TimeoutSeconds: 5,
+		},
+		Constraints: ExternalToolManifestConstraints{MaxRuntimeSeconds: 1},
+		IO: ExternalToolManifestIO{
+			OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`),
+		},
+	}
+	_, err := defaultExternalToolExecutor{}.Execute(context.Background(), manifest, json.RawMessage(`{}`), sandbox.Scope{WorkingRoot: workspace}, nil, 1024, ExternalToolExecutionAccess{})
+	if err == nil {
+		t.Fatal("Execute() err = nil, want max_runtime_seconds to cap and timeout the slow process")
+	}
+}
+
+func TestExternalProcessExecutorParentCancellationWinsOverManifestTimeout(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	script := filepath.Join(workspace, "run.sh")
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\nsleep 2\necho '{\"summary\":\"should-not-complete\"}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh) err = %v", err)
+	}
+	manifest := ExternalToolManifest{
+		Name:  "cancelled_metadata_probe",
+		Owner: "child-alpha",
+		Execution: ExternalToolManifestExecution{
+			Mode:           "process",
+			Entry:          "./run.sh",
+			TimeoutSeconds: 5,
+		},
+		IO: ExternalToolManifestIO{
+			OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`),
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := defaultExternalToolExecutor{}.Execute(ctx, manifest, json.RawMessage(`{}`), sandbox.Scope{WorkingRoot: workspace}, nil, 1024, ExternalToolExecutionAccess{})
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("Execute() err = nil, want parent context cancellation to stop execution")
+	}
+	if elapsed > 1500*time.Millisecond {
+		t.Fatalf("Execute() elapsed = %s, want parent cancellation before manifest timeout", elapsed)
+	}
+}
+
 func TestExternalProcessOutcomeFinalizesOriginalPermitAfterAuthorityRevocation(t *testing.T) {
 	t.Parallel()
 

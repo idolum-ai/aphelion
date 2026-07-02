@@ -5,6 +5,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -34,6 +35,62 @@ type durableAgentWakeOnceResult struct {
 	ContinuationLeaseID    string
 }
 
+type DurableAgentWakeOnceRenderedResult struct {
+	AgentID                string
+	WakeStatus             string
+	FailureClass           string
+	FailureSummary         string
+	NextRepair             string
+	RetryPolicy            string
+	Next                   string
+	AuthoritySource        string
+	ContinuationLeaseID    string
+	PendingParentBefore    string
+	PendingParentAfter     string
+	ThreadStateBefore      string
+	ThreadStateAfter       string
+	LastParentMessageAt    string
+	LastChildMessageAt     string
+	LastParentAcknowledged string
+}
+
+func ParseDurableAgentWakeOnceRenderedResult(out string) (DurableAgentWakeOnceRenderedResult, bool) {
+	fields := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		fields[strings.ToLower(strings.TrimSpace(key))] = strings.TrimSpace(value)
+	}
+	if fields["action"] != "durable-agent wake_once" {
+		return DurableAgentWakeOnceRenderedResult{}, false
+	}
+	result := DurableAgentWakeOnceRenderedResult{
+		AgentID:                fields["agent_id"],
+		WakeStatus:             fields["wake_status"],
+		FailureClass:           fields["failure_class"],
+		FailureSummary:         fields["failure_summary"],
+		NextRepair:             fields["next_repair"],
+		RetryPolicy:            fields["retry_policy"],
+		Next:                   fields["next"],
+		AuthoritySource:        fields["authority_source"],
+		ContinuationLeaseID:    fields["continuation_lease_id"],
+		PendingParentBefore:    fields["pending_parent_before"],
+		PendingParentAfter:     fields["pending_parent_after"],
+		ThreadStateBefore:      fields["thread_state_before"],
+		ThreadStateAfter:       fields["thread_state_after"],
+		LastParentMessageAt:    fields["last_parent_message_at"],
+		LastChildMessageAt:     fields["last_child_message_at"],
+		LastParentAcknowledged: fields["last_parent_acknowledged_at"],
+	}
+	return result, true
+}
+
 func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInput, rawInput json.RawMessage, p principal.Principal, key session.SessionKey) (out string, err error) {
 	if r.durableAgentWakeRunner == nil {
 		return "", fmt.Errorf("durable_agent wake_once requires durable child wake runtime")
@@ -53,7 +110,7 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 	useRef, err := r.requireDurableAgentWakeOnceAuthority(ctx, p, key, agent.AgentID)
 	if err != nil {
 		return "", missingContinuationLeaseError{
-			requirement: durableAgentWakeOnceLeaseRequirement(agent.AgentID, grant, p),
+			requirement: durableAgentWakeOnceLeaseRequirement(agent.AgentID, grant, p, in),
 			cause:       err,
 		}
 	}
@@ -93,6 +150,20 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 		return finishFailure(err)
 	}
 	beforePendingMessages := beforeContinuity.PendingParentConversationMessages(0)
+	if inlineGuidance := durableAgentWakeOnceInlineGuidance(in); inlineGuidance != "" {
+		existingPending := durableAgentConversationMessageIDSet(beforePendingMessages)
+		_, beforeContinuity, err = r.store.UpdateDurableAgentContinuity(agent.AgentID, func(continuity core.DurableAgentContinuityState) (core.DurableAgentContinuityState, error) {
+			return continuity.WithConversationMessage("parent", inlineGuidance, time.Now().UTC()), nil
+		})
+		if err != nil {
+			return finishFailure(fmt.Errorf("record durable_agent wake_once inline guidance: %w", err))
+		}
+		newPending := durableAgentNewPendingParentMessages(beforeContinuity.PendingParentConversationMessages(0), existingPending)
+		if len(newPending) == 0 {
+			return finishFailure(fmt.Errorf("record durable_agent wake_once inline guidance: no new parent guidance message was materialized"))
+		}
+		beforePendingMessages = newPending
+	}
 	beforePending := len(beforePendingMessages)
 	beforeState, lastParentAt, _, _, _ := durableAgentConversationState(beforeContinuity)
 	result.PendingParentBefore = beforePending
@@ -107,36 +178,70 @@ func (r *Registry) wakeDurableAgentOnce(ctx context.Context, in durableAgentInpu
 
 	messageIDs := core.DurableAgentConversationMessageIDs(beforePendingMessages)
 	now := time.Now().UTC()
-	if _, err := r.store.ClaimDurableAgentWakeOnce(session.DurableAgentWakeClaimInput{
+	claim, err := r.store.ClaimDurableAgentWakeOnce(session.DurableAgentWakeClaimInput{
 		LeaseID:          useRef.ContinuationLeaseID,
 		AgentID:          agent.AgentID,
 		TurnRunID:        useRef.TurnRunID,
 		MessageBatchHash: session.DurableAgentWakeMessageBatchHash(agent.AgentID, messageIDs),
 		MessageIDs:       messageIDs,
 		CreatedAt:        now,
-	}); err != nil {
+	})
+	if err != nil {
 		return finishFailure(err)
 	}
 
-	wakeErr := r.durableAgentWakeRunner.RunDurableAgentParentConversationWake(ctx, agent.AgentID, messageIDs, now)
+	wakeErr := r.durableAgentWakeRunner.RunDurableAgentParentConversationWake(ctx, agent.AgentID, messageIDs, claim.ClaimID, now)
 	_, afterContinuity, err := r.loadDurableAgentContinuity(agent.AgentID)
 	if err != nil {
 		return finishFailure(err)
 	}
 	afterState, _, lastChildAt, lastAckAt, _ := durableAgentConversationState(afterContinuity)
-	result.PendingParentAfter = len(afterContinuity.PendingParentConversationMessages(0))
+	afterPendingMessages := afterContinuity.PendingParentConversationMessages(0)
+	result.PendingParentAfter = len(afterPendingMessages)
 	result.ThreadStateAfter = afterState
 	result.LastChildMessageAt = lastChildAt
 	result.LastParentAcknowledged = lastAckAt
 	if wakeErr != nil {
 		return finishFailure(wakeErr)
 	}
-	if result.PendingParentAfter > 0 {
+	if durableAgentClaimedBatchStillPending(afterPendingMessages, messageIDs) {
 		result.WakeStatus = "awaiting_child_pickup"
 	} else {
 		result.WakeStatus = "completed"
 	}
 	return renderDurableAgentWakeOnce(result), nil
+}
+
+func durableAgentConversationMessageIDSet(messages []core.DurableAgentConversationMessage) map[string]bool {
+	out := make(map[string]bool, len(messages))
+	for _, message := range messages {
+		if id := strings.TrimSpace(message.MessageID); id != "" {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+func durableAgentClaimedBatchStillPending(pending []core.DurableAgentConversationMessage, messageIDs []string) bool {
+	pendingIDs := durableAgentConversationMessageIDSet(pending)
+	for _, id := range messageIDs {
+		if pendingIDs[strings.TrimSpace(id)] {
+			return true
+		}
+	}
+	return false
+}
+
+func durableAgentNewPendingParentMessages(messages []core.DurableAgentConversationMessage, existing map[string]bool) []core.DurableAgentConversationMessage {
+	out := []core.DurableAgentConversationMessage{}
+	for _, message := range messages {
+		id := strings.TrimSpace(message.MessageID)
+		if id == "" || existing[id] {
+			continue
+		}
+		out = append(out, message)
+	}
+	return out
 }
 
 func (r *Registry) requireDurableAgentWakeOnceCapabilityGrant(agentID string, input json.RawMessage, p principal.Principal) (session.CapabilityGrant, error) {
@@ -157,6 +262,13 @@ func (r *Registry) requireDurableAgentWakeOnceCapabilityGrant(agentID string, in
 
 func durableAgentWakeOnceCapabilityTarget(agentID string) string {
 	return "durable_agent:" + strings.TrimSpace(agentID) + ":wake_once"
+}
+
+func durableAgentWakeOnceInlineGuidance(in durableAgentInput) string {
+	if message := strings.TrimSpace(in.Message); message != "" {
+		return message
+	}
+	return strings.TrimSpace(in.Reason)
 }
 
 func durableAgentWakeOnceMissingGrantRequirement(agentID string, p principal.Principal) missingGrantRequirement {
@@ -180,7 +292,7 @@ func durableAgentWakeOnceGrantContract(agentID string, p principal.Principal) mi
 						"agent_id": []string{agentID},
 					},
 					"required_selectors":      []string{"agent_id"},
-					"allowed_fields":          []string{"reason"},
+					"allowed_fields":          []string{"message", "reason"},
 					"allow_additional_fields": false,
 				},
 			},
@@ -291,13 +403,48 @@ func (f durableAgentWakeOnceFailure) SafeToolFailureRetryPolicy() string {
 }
 
 func durableAgentWakeOnceFailureForError(err error) durableAgentWakeOnceFailure {
-	lower := strings.ToLower(strings.TrimSpace(errorString(err)))
 	failure := durableAgentWakeOnceFailure{
 		Class:       "runner_start_failed",
 		SafeSummary: "durable_agent wake_once failed before the child produced a completion",
 		NextRepair:  "inspect the durable-agent wake runtime, then retry one bounded wake",
 		RetryPolicy: "retry_after_wake_runtime_repair",
 	}
+	var wakeFailure core.DurableAgentWakeFailureError
+	if errors.As(err, &wakeFailure) {
+		switch wakeFailure.Class {
+		case core.DurableAgentWakeFailureClaimedParentBatchMissing:
+			failure.Class = string(core.DurableAgentWakeFailureClaimedParentBatchMissing)
+			failure.SafeSummary = "durable_agent wake_once could not start because the claimed parent guidance batch was no longer pending"
+			failure.NextRepair = "refresh the child wake request from current pending parent guidance, then retry one bounded wake"
+			failure.RetryPolicy = "retry_after_recovery_refresh"
+			return failure
+		case core.DurableAgentWakeFailureParentConversationPrepare:
+			failure.Class = string(core.DurableAgentWakeFailureParentConversationPrepare)
+			failure.SafeSummary = "durable_agent wake_once could not prepare the claimed parent guidance batch"
+			failure.NextRepair = "inspect durable parent-conversation state, repair malformed or stale guidance, then request one fresh bounded wake"
+			failure.RetryPolicy = "retry_after_parent_conversation_repair"
+			return failure
+		case core.DurableAgentWakeFailureTaskPacketManifestRecord:
+			failure.Class = string(core.DurableAgentWakeFailureTaskPacketManifestRecord)
+			failure.SafeSummary = "durable_agent wake_once could not admit a durable child task packet for the claimed batch"
+			failure.NextRepair = "inspect child task packet manifest record and idempotency state, then retry one bounded wake after repair"
+			failure.RetryPolicy = "retry_after_child_task_admission_repair"
+			return failure
+		case core.DurableAgentWakeFailureTaskAttemptClaim:
+			failure.Class = string(core.DurableAgentWakeFailureTaskAttemptClaim)
+			failure.SafeSummary = "durable_agent wake_once could not claim fenced ownership of the child task attempt"
+			failure.NextRepair = "inspect active or terminal child task ownership for the claimed batch, then retry only after the lease state is repaired"
+			failure.RetryPolicy = "retry_after_child_task_lease_repair"
+			return failure
+		case core.DurableAgentWakeFailureScopeSetup:
+			failure.Class = string(core.DurableAgentWakeFailureScopeSetup)
+			failure.SafeSummary = "durable_agent wake_once could not prepare the child runtime scope before child execution"
+			failure.NextRepair = "inspect child local roots and sandbox scope setup, repair that boundary, then retry one bounded wake"
+			failure.RetryPolicy = "retry_after_child_scope_repair"
+			return failure
+		}
+	}
+	lower := strings.ToLower(strings.TrimSpace(errorString(err)))
 	switch {
 	case strings.Contains(lower, "schema mismatch") || strings.Contains(lower, "schema_mismatch") || strings.Contains(lower, "schema version"):
 		failure.Class = "schema_mismatch"

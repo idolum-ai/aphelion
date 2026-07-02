@@ -464,6 +464,41 @@ func TestAuthorityContractCompilerRejectsPushProseForbiddenGitPush(t *testing.T)
 	}
 }
 
+func TestAuthorityContractCompilerAllowsScopedPushWithOtherBranchForbidden(t *testing.T) {
+	compilation := CompileActionProposalAuthorityContract(ActionProposal{
+		RiskClass:     "authority_bundle",
+		Summary:       "Exact bundle: commit only tool/capability.go capability materialization fix and push to origin/fix/child-wake-authority-context.",
+		BoundedEffect: "Allowed: stage only tool/capability.go, create one local commit, push to origin/fix/child-wake-authority-context. Forbidden: stage/commit unrelated files, force-push, push to another branch or repository.",
+		AllowedActions: []string{
+			"stage only tool/capability.go",
+			"create one local commit for the capability materialization fix",
+			"push to origin/fix/child-wake-authority-context",
+		},
+		ForbiddenActions: []string{
+			"stage/commit unrelated files",
+			"force-push",
+			"push to another branch or repository",
+			"deploy/restart",
+		},
+	})
+	if !compilation.Valid() {
+		t.Fatalf("compilation = %#v, want scoped branch push to coexist with forbidding other push targets", compilation)
+	}
+}
+
+func TestAuthorityContractCompilerRejectsUnscopedPushWithOtherBranchForbidden(t *testing.T) {
+	compilation := CompileActionProposalAuthorityContract(ActionProposal{
+		RiskClass:        "authority_bundle",
+		Summary:          "Commit and push the local fix.",
+		BoundedEffect:    "Commit and push the local fix.",
+		AllowedActions:   []string{"git_push"},
+		ForbiddenActions: []string{"push to another branch or repository"},
+	})
+	if compilation.Valid() {
+		t.Fatalf("compilation = %#v, want unscoped git_push to conflict with forbidding other push targets", compilation)
+	}
+}
+
 func TestAuthorityContractCompilerPushNegationIsClauseScoped(t *testing.T) {
 	for _, tc := range []struct {
 		name string

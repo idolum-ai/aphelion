@@ -374,7 +374,13 @@ func appendOrAggregateProgressEntry(entries *[]toolProgressEntry, entry toolProg
 
 func (p *toolProgressReporter) progressHeading(done bool) string {
 	if done {
+		if p != nil && strings.TrimSpace(p.doneHeading) != "" {
+			return strings.TrimSpace(p.doneHeading)
+		}
 		return "Done."
+	}
+	if p != nil && strings.TrimSpace(p.activeHeading) != "" {
+		return strings.TrimSpace(p.activeHeading)
 	}
 	return "Working..."
 }

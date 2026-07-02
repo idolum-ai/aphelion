@@ -12,6 +12,7 @@ import (
 type authorityUseRefContextKey struct{}
 type executionAuthorityAdmissionContextKey struct{}
 type toolInvocationRefContextKey struct{}
+type authorityContextCleared struct{}
 
 type ToolInvocationRef struct {
 	TurnRunID    int64
@@ -20,6 +21,10 @@ type ToolInvocationRef struct {
 
 func WithAuthorityUseRef(ctx context.Context, ref session.AuthorityUseRef) context.Context {
 	return context.WithValue(ctx, authorityUseRefContextKey{}, session.NormalizeAuthorityUseRef(ref))
+}
+
+func WithoutAuthorityUseRef(ctx context.Context) context.Context {
+	return context.WithValue(ctx, authorityUseRefContextKey{}, authorityContextCleared{})
 }
 
 func AuthorityUseRefFromContext(ctx context.Context) (session.AuthorityUseRef, bool) {
@@ -37,6 +42,10 @@ func WithExecutionAuthorityAdmission(ctx context.Context, admission session.Exec
 	return context.WithValue(ctx, executionAuthorityAdmissionContextKey{}, session.NormalizeExecutionRunAuthority(admission))
 }
 
+func WithoutExecutionAuthorityAdmission(ctx context.Context) context.Context {
+	return context.WithValue(ctx, executionAuthorityAdmissionContextKey{}, authorityContextCleared{})
+}
+
 func ExecutionAuthorityAdmissionFromContext(ctx context.Context) (session.ExecutionRunAuthority, bool) {
 	if ctx == nil {
 		return session.ExecutionRunAuthority{}, false
@@ -51,6 +60,10 @@ func ExecutionAuthorityAdmissionFromContext(ctx context.Context) (session.Execut
 func WithToolInvocationRef(ctx context.Context, ref ToolInvocationRef) context.Context {
 	ref.InvocationID = strings.TrimSpace(ref.InvocationID)
 	return context.WithValue(ctx, toolInvocationRefContextKey{}, ref)
+}
+
+func WithoutToolInvocationRef(ctx context.Context) context.Context {
+	return context.WithValue(ctx, toolInvocationRefContextKey{}, authorityContextCleared{})
 }
 
 func ToolInvocationRefFromContext(ctx context.Context) (ToolInvocationRef, bool) {

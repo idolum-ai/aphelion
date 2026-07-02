@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	ContinuationRecoveryContractVersion = "aphelion.continuation_recovery.v1"
-	ContinuationRecoveryRetryVersion    = "aphelion.recovery_retry.v1"
+	ContinuationRecoveryContractVersionV1 = "aphelion.continuation_recovery.v1"
+	ContinuationRecoveryContractVersion   = "aphelion.continuation_recovery.v2"
+	ContinuationRecoveryRetryVersion      = "aphelion.recovery_retry.v1"
 )
 
 type ContinuationRecoveryContractStatus string
@@ -71,6 +72,9 @@ func CompileContinuationRecoveryContract(input ContinuationRecoveryContractInput
 	input = normalizeContinuationRecoveryContractInput(input)
 	if input.RequestInstanceID == "" {
 		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract requires request_instance_id")
+	}
+	if input.SessionID == "" {
+		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract requires session_id")
 	}
 	if input.Principal == "" {
 		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract requires principal")
@@ -146,7 +150,7 @@ func CompileContinuationRecoveryContract(input ContinuationRecoveryContractInput
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	return NormalizeContinuationRecoveryContract(ContinuationRecoveryContract{
+	contract := NormalizeContinuationRecoveryContract(ContinuationRecoveryContract{
 		ContractID:          id,
 		ContractVersion:     ContinuationRecoveryContractVersion,
 		RequestInstanceID:   input.RequestInstanceID,
@@ -168,7 +172,8 @@ func CompileContinuationRecoveryContract(input ContinuationRecoveryContractInput
 		RetryOperation:      input.RetryOperation,
 		CreatedAt:           now,
 		UpdatedAt:           now,
-	}), nil
+	})
+	return CanonicalizeContinuationRecoveryContract(contract)
 }
 
 func NormalizeContinuationRecoveryContract(contract ContinuationRecoveryContract) ContinuationRecoveryContract {
@@ -206,6 +211,129 @@ func NormalizeContinuationRecoveryContract(contract ContinuationRecoveryContract
 	return contract
 }
 
+func CanonicalizeContinuationRecoveryContract(contract ContinuationRecoveryContract) (ContinuationRecoveryContract, error) {
+	contract = NormalizeContinuationRecoveryContract(contract)
+	version := contract.ContractVersion
+	input := normalizeContinuationRecoveryContractInput(ContinuationRecoveryContractInput{
+		RequestInstanceID:   contract.RequestInstanceID,
+		SessionID:           contract.SessionID,
+		SubjectKind:         contract.SubjectKind,
+		SubjectRef:          contract.SubjectRef,
+		Principal:           contract.Principal,
+		LeaseClass:          contract.LeaseClass,
+		AllowedActions:      append([]string(nil), contract.AllowedActions...),
+		Constraints:         normalizeRecoveryStringMap(contract.Constraints),
+		Tool:                contract.Tool,
+		ToolAction:          contract.ToolAction,
+		AgentID:             contract.AgentID,
+		Resource:            contract.Resource,
+		GrantID:             contract.GrantID,
+		GrantTargetResource: contract.GrantTargetResource,
+		RetryOperation:      contract.RetryOperation,
+		CreatedAt:           contract.CreatedAt,
+	})
+	if input.RequestInstanceID == "" {
+		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract requires request_instance_id")
+	}
+	if version != ContinuationRecoveryContractVersionV1 && input.SessionID == "" {
+		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract requires session_id")
+	}
+	if input.Principal == "" {
+		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract requires principal")
+	}
+	if input.LeaseClass == "" {
+		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract requires lease_class")
+	}
+	if len(input.AllowedActions) == 0 {
+		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract requires allowed_actions")
+	}
+	if input.SubjectKind == "" {
+		input.SubjectKind = "continuation_lease_request"
+	}
+	if input.SubjectRef == "" {
+		input.SubjectRef = ContinuationRecoverySubjectRef(input.LeaseClass, input.AgentID, input.GrantID, input.Tool, input.ToolAction, input.Resource)
+	}
+	if input.SubjectRef == "" {
+		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract requires subject_ref")
+	}
+	switch input.LeaseClass {
+	case ContinuationLeaseClassChildWake:
+		if input.AgentID == "" {
+			return ContinuationRecoveryContract{}, fmt.Errorf("child_wake recovery contract requires agent_id")
+		}
+		if input.Tool != "durable_agent" || input.ToolAction != "wake_once" {
+			return ContinuationRecoveryContract{}, fmt.Errorf("child_wake recovery contract must target durable_agent wake_once")
+		}
+		if !recoveryStringSliceContains(input.AllowedActions, "wake_named_child") {
+			return ContinuationRecoveryContract{}, fmt.Errorf("child_wake recovery contract requires wake_named_child action")
+		}
+		if got := strings.TrimSpace(input.Constraints["agent_id"]); got != "" && got != input.AgentID {
+			return ContinuationRecoveryContract{}, fmt.Errorf("child_wake recovery contract agent_id constraint mismatch")
+		}
+		input.Constraints["agent_id"] = input.AgentID
+	case ContinuationLeaseClassDataAccess, ContinuationLeaseClassLocalWorkspace:
+		if input.GrantID == "" || input.GrantTargetResource == "" || input.Resource == "" || input.Tool == "" || input.ToolAction == "" {
+			return ContinuationRecoveryContract{}, fmt.Errorf("%s recovery contract requires grant, resource, tool, and action", input.LeaseClass)
+		}
+		required := map[string]string{
+			"grant_id":              input.GrantID,
+			"grant_target_resource": input.GrantTargetResource,
+			"target_resource":       input.GrantTargetResource,
+			"resource":              input.Resource,
+			"tool":                  input.Tool,
+			"tool_action":           input.ToolAction,
+		}
+		for key, want := range required {
+			if got := strings.TrimSpace(input.Constraints[key]); got != "" && got != want {
+				return ContinuationRecoveryContract{}, fmt.Errorf("%s recovery contract %s constraint mismatch", input.LeaseClass, key)
+			}
+			input.Constraints[key] = want
+		}
+	}
+	if input.LeaseClass == ContinuationLeaseClassChildWake && !input.RetryOperation.Active() {
+		input.RetryOperation = ContinuationRetryOperation{
+			Contract:          ContinuationRecoveryRetryVersion,
+			OperationKind:     "durable_agent_wake_once",
+			Tool:              "durable_agent",
+			InputJSON:         compactRecoveryJSON(map[string]any{"action": "wake_once", "agent_id": input.AgentID}),
+			SubjectKind:       input.SubjectKind,
+			SubjectRef:        input.SubjectRef,
+			RequestInstanceID: input.RequestInstanceID,
+		}
+	}
+	input.RetryOperation = normalizeContinuationRecoveryRetry(input)
+	if err := validateContinuationRecoveryRetry(input); err != nil {
+		return ContinuationRecoveryContract{}, err
+	}
+	hash := continuationRecoveryContractHashForVersion(input, version)
+	if contract.ContractHash != "" && contract.ContractHash != hash {
+		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract %s hash mismatch", contract.ContractID)
+	}
+	id := continuationRecoveryContractID(input.RequestInstanceID, hash)
+	if contract.ContractID != "" && contract.ContractID != id {
+		return ContinuationRecoveryContract{}, fmt.Errorf("continuation recovery contract %s id mismatch", contract.ContractID)
+	}
+	contract.ContractID = id
+	contract.ContractVersion = version
+	contract.RequestInstanceID = input.RequestInstanceID
+	contract.ContractHash = hash
+	contract.SessionID = input.SessionID
+	contract.SubjectKind = input.SubjectKind
+	contract.SubjectRef = input.SubjectRef
+	contract.Principal = input.Principal
+	contract.LeaseClass = input.LeaseClass
+	contract.AllowedActions = append([]string(nil), input.AllowedActions...)
+	contract.Constraints = normalizeRecoveryStringMap(input.Constraints)
+	contract.Tool = input.Tool
+	contract.ToolAction = input.ToolAction
+	contract.AgentID = input.AgentID
+	contract.Resource = input.Resource
+	contract.GrantID = input.GrantID
+	contract.GrantTargetResource = input.GrantTargetResource
+	contract.RetryOperation = input.RetryOperation
+	return NormalizeContinuationRecoveryContract(contract), nil
+}
+
 func NormalizeContinuationRecoveryContractStatus(status ContinuationRecoveryContractStatus) ContinuationRecoveryContractStatus {
 	switch ContinuationRecoveryContractStatus(normalizeEnumValue(string(status))) {
 	case ContinuationRecoveryContractStatusRecorded, ContinuationRecoveryContractStatusTerminal, ContinuationRecoveryContractStatusSuperseded:
@@ -216,7 +344,7 @@ func NormalizeContinuationRecoveryContractStatus(status ContinuationRecoveryCont
 }
 
 func ContinuationRecoveryContractProjectionInput(contractID string) string {
-	raw, _ := json.Marshal(map[string]any{
+	raw := mustMarshalRecoveryJSON(map[string]any{
 		"action":                  "request_continuation_lease",
 		"contract_id":             strings.TrimSpace(contractID),
 		"recovery_contract":       "aphelion.recovery_handoff.v1",
@@ -333,6 +461,46 @@ func validateContinuationRecoveryRetry(input ContinuationRecoveryContractInput) 
 }
 
 func continuationRecoveryContractHash(input ContinuationRecoveryContractInput) string {
+	return continuationRecoveryContractHashForVersion(input, ContinuationRecoveryContractVersion)
+}
+
+func continuationRecoveryContractHashForVersion(input ContinuationRecoveryContractInput, version string) string {
+	input = normalizeContinuationRecoveryContractInput(input)
+	if strings.TrimSpace(version) == ContinuationRecoveryContractVersionV1 {
+		return continuationRecoveryContractHashV1(input)
+	}
+	payload := map[string]any{
+		"contract_version":      ContinuationRecoveryContractVersion,
+		"session_id":            input.SessionID,
+		"subject_kind":          input.SubjectKind,
+		"subject_ref":           input.SubjectRef,
+		"agent_id":              input.AgentID,
+		"resource":              input.Resource,
+		"grant_id":              input.GrantID,
+		"grant_target_resource": input.GrantTargetResource,
+		"principal":             input.Principal,
+		"lease_class":           string(input.LeaseClass),
+		"allowed_actions":       input.AllowedActions,
+		"constraints":           input.Constraints,
+		"tool":                  input.Tool,
+		"tool_action":           input.ToolAction,
+	}
+	if input.RetryOperation.Active() {
+		retry := NormalizeContinuationRetryOperation(input.RetryOperation)
+		payload["retry_operation"] = map[string]any{
+			"contract":            retry.Contract,
+			"operation_kind":      retry.OperationKind,
+			"tool":                retry.Tool,
+			"input_json":          retry.InputJSON,
+			"subject_kind":        retry.SubjectKind,
+			"subject_ref":         retry.SubjectRef,
+			"request_instance_id": retry.RequestInstanceID,
+		}
+	}
+	return continuationRecoveryHashPayload(payload)
+}
+
+func continuationRecoveryContractHashV1(input ContinuationRecoveryContractInput) string {
 	input = normalizeContinuationRecoveryContractInput(input)
 	payload := map[string]any{
 		"agent_id":              input.AgentID,
@@ -357,7 +525,11 @@ func continuationRecoveryContractHash(input ContinuationRecoveryContractInput) s
 			"subject_ref":    retry.SubjectRef,
 		}
 	}
-	raw, _ := json.Marshal(payload)
+	return continuationRecoveryHashPayload(payload)
+}
+
+func continuationRecoveryHashPayload(payload map[string]any) string {
+	raw := mustMarshalRecoveryJSON(payload)
 	sum := sha256.Sum256(raw)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
@@ -367,7 +539,7 @@ func continuationRecoveryContractID(requestInstanceID string, contractHash strin
 		"request_instance_id": strings.TrimSpace(requestInstanceID),
 		"contract_hash":       strings.TrimSpace(contractHash),
 	}
-	raw, _ := json.Marshal(payload)
+	raw := mustMarshalRecoveryJSON(payload)
 	sum := sha256.Sum256(raw)
 	token := hex.EncodeToString(sum[:])
 	if len(token) > 24 {
@@ -409,8 +581,16 @@ func recoveryStringSliceContains(values []string, want string) bool {
 }
 
 func compactRecoveryJSON(value any) string {
-	raw, _ := json.Marshal(value)
+	raw := mustMarshalRecoveryJSON(value)
 	return string(raw)
+}
+
+func mustMarshalRecoveryJSON(value any) []byte {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		panic(fmt.Sprintf("marshal continuation recovery JSON: %v", err))
+	}
+	return raw
 }
 
 func shortRecoveryHash(value string) string {

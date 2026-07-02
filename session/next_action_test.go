@@ -327,6 +327,63 @@ func TestOpenNextActionsBySessionOperationFindsRecoveryHandoffBehindSessionVolum
 	}
 }
 
+func TestOpenNextActionsByCausalRefUsesExactJSONMembership(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	key := SessionKey{ChatID: 91010, UserID: 1001}
+	for _, input := range []NextActionInput{
+		{
+			RecordID:    "causal-target",
+			Key:         key,
+			Owner:       "test",
+			State:       NextActionWaitingForChild,
+			SubjectKind: "continuation_lease_request",
+			SubjectRef:  "child_wake:child-alpha",
+			CausalRefs:  []string{"continuation:lease-abc"},
+			NextAction:  "wait for child",
+			CreatedAt:   time.Date(2026, 6, 24, 10, 0, 0, 0, time.UTC),
+		},
+		{
+			RecordID:    "causal-prefix-collision",
+			Key:         key,
+			Owner:       "test",
+			State:       NextActionWaitingForChild,
+			SubjectKind: "continuation_lease_request",
+			SubjectRef:  "child_wake:child-beta",
+			CausalRefs:  []string{"continuation:lease-abc2"},
+			NextAction:  "wait for child beta",
+			CreatedAt:   time.Date(2026, 6, 24, 10, 1, 0, 0, time.UTC),
+		},
+		{
+			RecordID:    "causal-wildcard-literal",
+			Key:         key,
+			Owner:       "test",
+			State:       NextActionWaitingForChild,
+			SubjectKind: "continuation_lease_request",
+			SubjectRef:  "child_wake:child-gamma",
+			CausalRefs:  []string{"continuation:lease-abc%"},
+			NextAction:  "wait for child gamma",
+			CreatedAt:   time.Date(2026, 6, 24, 10, 2, 0, 0, time.UTC),
+		},
+	} {
+		if _, err := store.RecordNextAction(input); err != nil {
+			t.Fatalf("RecordNextAction(%s) err = %v", input.RecordID, err)
+		}
+	}
+
+	actions, err := store.OpenNextActionsByCausalRef("continuation:lease-abc", 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsByCausalRef() err = %v", err)
+	}
+	if len(actions) != 1 || actions[0].RecordID != "causal-target" {
+		t.Fatalf("actions = %#v, want only exact causal ref match", actions)
+	}
+}
+
 func TestRecordResourcePreflightCreatesRepairNextAction(t *testing.T) {
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
 	if err != nil {

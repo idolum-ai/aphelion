@@ -16,6 +16,10 @@ import (
 )
 
 type missingContinuationLeaseRequirement struct {
+	ContractID          string
+	ContractHash        string
+	SubjectKind         string
+	SubjectRef          string
 	AgentID             string
 	Resource            string
 	GrantID             string
@@ -55,9 +59,23 @@ func (e missingContinuationLeaseError) Unwrap() error {
 	return e.cause
 }
 
-func durableAgentWakeOnceLeaseRequirement(agentID string, grant session.CapabilityGrant, p principal.Principal) missingContinuationLeaseRequirement {
+func durableAgentWakeOnceLeaseRequirement(agentID string, grant session.CapabilityGrant, p principal.Principal, inputs ...durableAgentInput) missingContinuationLeaseRequirement {
 	agentID = strings.TrimSpace(agentID)
 	principalID := toolAuthorityCanonicalPrincipal(p)
+	var retry session.ContinuationRetryOperation
+	if len(inputs) > 0 {
+		retryInput := map[string]any{"action": "wake_once", "agent_id": agentID}
+		if guidance := durableAgentWakeOnceInlineGuidance(inputs[0]); guidance != "" {
+			retryInput["reason"] = guidance
+		}
+		retry = session.ContinuationRetryOperation{
+			Contract:      recoveryRetryContractVersion,
+			OperationKind: "durable_agent_wake_once",
+			Tool:          "durable_agent",
+			InputJSON:     compactJSON(retryInput),
+			SubjectKind:   "continuation_lease_request",
+		}
+	}
 	return normalizeMissingContinuationLeaseRequirement(missingContinuationLeaseRequirement{
 		AgentID:             agentID,
 		GrantID:             grant.GrantID,
@@ -68,6 +86,7 @@ func durableAgentWakeOnceLeaseRequirement(agentID string, grant session.Capabili
 		Constraints:         map[string]string{"agent_id": agentID},
 		Tool:                "durable_agent",
 		ToolAction:          "wake_once",
+		RetryOperation:      retry,
 		NextAction:          "approve a bounded child_wake continuation lease before retrying the blocked durable_agent wake_once invocation",
 		OperatorProjection: fmt.Sprintf(
 			"durable_agent wake_once for %s has an active grant (%s) but no current child_wake continuation lease. Ask the admin to approve one bounded child_wake turn for this exact child, then retry wake_once once.",
@@ -117,16 +136,12 @@ func (r *Registry) materializeMissingContinuationLeaseError(_ context.Context, k
 	if contractErr != nil {
 		return fmt.Errorf("%w; additionally failed to compile lease request: %v", err, contractErr)
 	}
-	contract, contractErr = r.store.UpsertContinuationRecoveryContract(contract)
-	if contractErr != nil {
-		return fmt.Errorf("%w; additionally failed to store lease request contract: %v", err, contractErr)
-	}
 	operation, opErr := compileContinuationLeaseRecoveryHandoff(contract)
 	if opErr != nil {
 		return fmt.Errorf("%w; additionally failed to materialize lease request: %v", err, opErr)
 	}
 	recordID := missingContinuationLeaseNextActionRecordID(key, requirement)
-	_, recordErr := r.store.RecordNextAction(session.NextActionInput{
+	_, _, recordErr := r.store.RecordContinuationRecoveryContractNextAction(contract, session.NextActionInput{
 		RecordID:           recordID,
 		Key:                key,
 		Owner:              "tool",
@@ -208,19 +223,54 @@ func (r *Registry) missingContinuationLeaseActionMatchesRequirement(key session.
 	}
 	contract, ok, err := r.store.ContinuationRecoveryContract(contractID)
 	if err != nil {
-		return false, nil
+		return false, err
 	}
 	if !ok {
-		return false, nil
+		return false, fmt.Errorf("continuation recovery contract %q not found", contractID)
 	}
 	compiled, err := requestApprovalContinuationLeaseRequirementFromContract(contract)
 	if err != nil {
 		return false, nil
 	}
-	if requestApprovalContinuationLeaseContractHash(compiled) != requestApprovalContinuationLeaseContractHash(requirement) {
+	if requestApprovalContinuationLeaseContractHash(compiled) != requestApprovalContinuationLeaseContractHash(requirement) &&
+		missingContinuationLeaseShapeHash(compiled) != missingContinuationLeaseShapeHash(requirement) {
 		return false, nil
 	}
 	return r.missingContinuationLeaseRequestInstanceStillReusable(key, compiled)
+}
+
+func missingContinuationLeaseShapeHash(requirement missingContinuationLeaseRequirement) string {
+	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
+	retry := session.NormalizeContinuationRetryOperation(requirement.RetryOperation)
+	retry.RequestInstanceID = ""
+	requirement.RetryOperation = retry
+	payload := map[string]any{
+		"subject_kind":          firstNonEmpty(requirement.SubjectKind, "continuation_lease_request"),
+		"subject_ref":           missingContinuationLeaseSubjectRef(requirement),
+		"agent_id":              requirement.AgentID,
+		"resource":              requirement.Resource,
+		"grant_id":              requirement.GrantID,
+		"grant_target_resource": requirement.GrantTargetResource,
+		"principal":             requirement.Principal,
+		"lease_class":           string(requirement.LeaseClass),
+		"allowed_actions":       normalizeActionStringsForHash(requirement.AllowedActions),
+		"constraints":           normalizeStringMapForHash(requirement.Constraints),
+		"tool":                  requirement.Tool,
+		"tool_action":           requirement.ToolAction,
+	}
+	if retry.Active() {
+		payload["retry_operation"] = map[string]any{
+			"contract":       retry.Contract,
+			"operation_kind": retry.OperationKind,
+			"tool":           retry.Tool,
+			"input_json":     retry.InputJSON,
+			"subject_kind":   retry.SubjectKind,
+			"subject_ref":    retry.SubjectRef,
+		}
+	}
+	raw, _ := json.Marshal(payload)
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func (r *Registry) missingContinuationLeaseRequestInstanceStillReusable(key session.SessionKey, requirement missingContinuationLeaseRequirement) (bool, error) {
@@ -271,6 +321,10 @@ func asMissingContinuationLeaseError(err error, target *missingContinuationLease
 }
 
 func normalizeMissingContinuationLeaseRequirement(requirement missingContinuationLeaseRequirement) missingContinuationLeaseRequirement {
+	requirement.ContractID = strings.TrimSpace(requirement.ContractID)
+	requirement.ContractHash = strings.TrimSpace(requirement.ContractHash)
+	requirement.SubjectKind = strings.TrimSpace(requirement.SubjectKind)
+	requirement.SubjectRef = strings.TrimSpace(requirement.SubjectRef)
 	requirement.AgentID = strings.TrimSpace(requirement.AgentID)
 	requirement.Resource = strings.TrimSpace(requirement.Resource)
 	requirement.GrantID = strings.TrimSpace(requirement.GrantID)
@@ -414,6 +468,9 @@ func missingContinuationLeaseSubjectTokenFromNormalized(requirement missingConti
 
 func missingContinuationLeaseSubjectRef(requirement missingContinuationLeaseRequirement) string {
 	requirement = normalizeMissingContinuationLeaseRequirement(requirement)
+	if requirement.SubjectRef != "" {
+		return requirement.SubjectRef
+	}
 	return missingContinuationLeaseSubjectRefFromNormalized(requirement)
 }
 

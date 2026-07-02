@@ -40,6 +40,8 @@ type capabilityGrantRepairResult struct {
 	Healthy          int
 	RepairCandidates int
 	RepairsApplied   int
+	ExpireCandidates int
+	ExpiresApplied   int
 	RevokeCandidates int
 	RevokesApplied   int
 	Skipped          int
@@ -99,6 +101,8 @@ func runRepairCapabilityGrantsCommand(args []string) error {
 	fmt.Fprintf(os.Stdout, "healthy: %d\n", result.Healthy)
 	fmt.Fprintf(os.Stdout, "repair_candidates: %d\n", result.RepairCandidates)
 	fmt.Fprintf(os.Stdout, "repairs_applied: %d\n", result.RepairsApplied)
+	fmt.Fprintf(os.Stdout, "expire_candidates: %d\n", result.ExpireCandidates)
+	fmt.Fprintf(os.Stdout, "expires_applied: %d\n", result.ExpiresApplied)
 	fmt.Fprintf(os.Stdout, "revoke_candidates: %d\n", result.RevokeCandidates)
 	fmt.Fprintf(os.Stdout, "revokes_applied: %d\n", result.RevokesApplied)
 	fmt.Fprintf(os.Stdout, "skipped: %d\n", result.Skipped)
@@ -158,10 +162,6 @@ func repairCapabilityGrantDrift(ctx context.Context, store *session.SQLiteStore,
 			return result, err
 		}
 		grant = session.NormalizeCapabilityGrant(grant)
-		if !strings.HasPrefix(strings.TrimSpace(grant.GrantedTo), "durable_agent:") || !durableAgentGrantNeedsChildRuntime(grant) {
-			result.Skipped++
-			continue
-		}
 		result.Inspected++
 		row := capabilityGrantRepairRow{
 			GrantID:        grant.GrantID,
@@ -170,19 +170,23 @@ func repairCapabilityGrantDrift(ctx context.Context, store *session.SQLiteStore,
 			TargetResource: grant.TargetResource,
 		}
 		if !grant.ExpiresAt.IsZero() && !grant.ExpiresAt.After(now) {
-			row.Action = "revoke"
+			row.Action = "expire"
 			row.Reason = "active grant is expired"
-			result.RevokeCandidates++
+			result.ExpireCandidates++
 			if !opts.DryRun {
-				if err := revokeCapabilityGrantForRepair(store, grant, row.Reason, source, now); err != nil {
+				if err := expireCapabilityGrantForRepair(store, grant, row.Reason, source, now); err != nil {
 					result.Errors++
 					row.Action = "error"
 					row.Reason = err.Error()
 				} else {
-					result.RevokesApplied++
+					result.ExpiresApplied++
 				}
 			}
 			result.Rows = append(result.Rows, row)
+			continue
+		}
+		if !strings.HasPrefix(strings.TrimSpace(grant.GrantedTo), "durable_agent:") || !durableAgentGrantNeedsChildRuntime(grant) {
+			result.Skipped++
 			continue
 		}
 		if _, found, err := core.ExtractChildRuntimeContract(grant.Contract, grant.Constraints); err != nil {
@@ -277,6 +281,25 @@ func repairCapabilityGrantDrift(ctx context.Context, store *session.SQLiteStore,
 		result.Rows = append(result.Rows, row)
 	}
 	return result, nil
+}
+
+func expireCapabilityGrantForRepair(store *session.SQLiteStore, grant session.CapabilityGrant, reason string, source string, now time.Time) error {
+	grant = session.NormalizeCapabilityGrant(grant)
+	grant.Status = session.CapabilityGrantStatusExpired
+	grant.StaleReason = strings.TrimSpace(reason)
+	grant.UpdatedAt = now.UTC()
+	if _, err := store.UpsertCapabilityGrant(grant); err != nil {
+		return err
+	}
+	return appendMaintenanceExecutionEvent(store, maintenanceRepairKey(), core.ExecutionEventCapabilityGrantChanged, "capability_grants", "expired", map[string]any{
+		"source":          strings.TrimSpace(source),
+		"cleanup_reason":  "capability_grant_expiry",
+		"grant_id":        grant.GrantID,
+		"granted_to":      grant.GrantedTo,
+		"kind":            string(grant.Kind),
+		"target_resource": grant.TargetResource,
+		"reason":          strings.TrimSpace(reason),
+	}, now.UTC())
 }
 
 func revokeCapabilityGrantForRepair(store *session.SQLiteStore, grant session.CapabilityGrant, reason string, source string, now time.Time) error {

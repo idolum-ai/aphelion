@@ -153,6 +153,12 @@ func TestHandleInboundPersistsPlanUpdatesFromToolAndReinjectsPlan(t *testing.T) 
 	if len(events) == 0 || events[0].Kind != session.PlanEventKindToolUpdated {
 		t.Fatalf("PlanEvents = %#v, want tool_updated event", events)
 	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{Status: session.ContinuationStatusIdle}); err != nil {
+		t.Fatalf("UpdateContinuationState(clear continuation) err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{}); err != nil {
+		t.Fatalf("UpdateOperationState(clear operation) err = %v", err)
+	}
 
 	probe := &fakeProvider{replyText: "second"}
 	rt, err = New(cfg, store, probe, tools, sender)

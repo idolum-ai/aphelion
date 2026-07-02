@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -30,6 +31,9 @@ type defaultExternalToolExecutor struct{}
 func (defaultExternalToolExecutor) Supports(manifest ExternalToolManifest) bool {
 	manifest = NormalizeExternalToolManifest(manifest)
 	if manifest.Execution.Mode != "process" && manifest.Execution.Mode != "subprocess" {
+		return false
+	}
+	if validateExternalToolManifest(manifest) != nil {
 		return false
 	}
 	return validateExternalProcessPolicy(manifest) == nil
@@ -57,18 +61,9 @@ func (defaultExternalToolExecutor) Execute(ctx context.Context, manifest Externa
 	if err != nil {
 		return "", err
 	}
-	timeout := defaultTimeout(30 * time.Second)
-	if manifest.Execution.TimeoutSeconds > 0 {
-		timeout = time.Duration(manifest.Execution.TimeoutSeconds) * time.Second
-	}
-	if manifest.Constraints.MaxRuntimeSeconds > 0 {
-		constraintTimeout := time.Duration(manifest.Constraints.MaxRuntimeSeconds) * time.Second
-		if timeout <= 0 || constraintTimeout < timeout {
-			timeout = constraintTimeout
-		}
-	}
-	if timeout <= 0 {
-		timeout = 30 * time.Second
+	timeout, err := externalToolExecutionTimeout(manifest, 30*time.Second)
+	if err != nil {
+		return "", err
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -122,8 +117,12 @@ func runExternalProcessCommand(ctx context.Context, scope sandbox.Scope, runner 
 		return res.Stdout, res.Stderr, err
 	}
 
-	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.Command("bash", "-lc", command)
 	cmd.Dir = workdir
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if len(access.ExtraEnv) > 0 {
 		cmd.Env = append([]string(nil), cmd.Environ()...)
 		for key, value := range access.ExtraEnv {
@@ -137,8 +136,24 @@ func runExternalProcessCommand(ctx context.Context, scope sandbox.Scope, runner 
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
-	return stdout.String(), stderr.String(), err
+	if err := cmd.Start(); err != nil {
+		return stdout.String(), stderr.String(), err
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	select {
+	case err := <-done:
+		return stdout.String(), stderr.String(), err
+	case <-ctx.Done():
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			_ = cmd.Process.Kill()
+		}
+		<-done
+		return stdout.String(), stderr.String(), ctx.Err()
+	}
 }
 
 type simpleJSONSchema struct {

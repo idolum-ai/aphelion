@@ -25,6 +25,11 @@ const (
 	NextActionTerminal                   NextActionState = "terminal"
 )
 
+const (
+	NextActionOperationKindDurableChildRecovery = "durable_child_recovery"
+	NextActionOperationKindOperatorRewrite      = "operator_rewrite"
+)
+
 type NextActionRecord struct {
 	RecordID           string
 	SessionID          string

@@ -307,6 +307,30 @@ func TestRecoveryTransitionSpecsValidateRepresentativeRecords(t *testing.T) {
 	}
 }
 
+func TestRecoveryTransitionRecordRejectsLegacyOperationKinds(t *testing.T) {
+	t.Parallel()
+
+	legacyKinds := []string{
+		"child_tool_runtime_repair",
+		"child_wake_repair",
+		"typed_operation_required",
+	}
+	for _, kind := range legacyKinds {
+		action := session.NextActionRecord{
+			State:              session.NextActionBlockedNeedsAuthority,
+			SubjectKind:        "continuation_lease_request",
+			SubjectRef:         "child_wake:child-alpha",
+			ResourceBlocker:    "missing_continuation_lease",
+			OperationKind:      kind,
+			OperationTool:      "request_approval",
+			OperationInputJSON: `{"action":"request_continuation_lease","contract_id":"crc-child-alpha","recovery_contract":"aphelion.recovery_handoff.v1","recovery_operation_kind":"continuation_lease_request"}`,
+		}
+		if err := ValidateRecoveryTransitionRecord(action); err == nil {
+			t.Fatalf("ValidateRecoveryTransitionRecord(%q) err = nil, want legacy operation kind rejection", kind)
+		}
+	}
+}
+
 func representativeRecoveryTransitionInput(t *testing.T, spec RecoveryTransitionSpec) string {
 	t.Helper()
 
@@ -688,9 +712,15 @@ func TestRecoveryHandoffSurfaceInventoryDocumentsRepresentativeStops(t *testing.
 		}
 		byAdapter[spec.Adapter]++
 	}
-	for _, adapter := range []string{"missing_continuation_lease", "missing_capability_grant", "typed_shell_alternative", "operator_rewrite"} {
+	for _, adapter := range []string{"missing_continuation_lease", "missing_capability_grant", "typed_shell_alternative", "operator_rewrite", "durable_child_recovery"} {
 		if byAdapter[adapter] == 0 {
 			t.Fatalf("recovery transition adapters = %#v, want %q represented", byAdapter, adapter)
+		}
+	}
+	for _, spec := range specs {
+		switch spec.OperationKind {
+		case "typed_operation_required", "split_effect_plan", "typed_repair_operation", "child_tool_runtime_probe", "child_tool_runtime_repair", "child_tool_lifecycle_repair", "child_authority_repair", "child_resource_repair", "child_credential_probe", "child_retry", "child_blocker_disambiguation", "child_terminal_status_disambiguation", "child_wake_runtime_repair", "child_wake_repair", "child_task_blocker_review", "child_task_continue":
+			t.Fatalf("recovery transition spec = %#v uses legacy one-off operation kind", spec)
 		}
 	}
 }
