@@ -450,7 +450,11 @@ func (r *Registry) capabilityAuthorityRequestReview(ctx context.Context, in capa
 			materializeInput.Principal = updated.RequestedFor
 		}
 		if len(materializeInput.AllowedActions) == 0 {
-			materializeInput.AllowedActions = []string{"invoke"}
+			if plan, ok, planErr := capabilityUpdatePlanFromContract(updated.Contract); planErr == nil && ok && len(plan.GrantActions) > 0 {
+				materializeInput.AllowedActions = append([]string(nil), plan.GrantActions...)
+			} else {
+				materializeInput.AllowedActions = []string{"invoke"}
+			}
 		}
 		grantOut, ok, err := r.materializeApprovedCapabilityRequestGrant(ctx, key, updated, materializeInput, review.Reviewer)
 		if err != nil {

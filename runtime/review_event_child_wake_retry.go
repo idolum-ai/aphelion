@@ -27,13 +27,12 @@ func (r *Runtime) handleReviewEventChildWakeRetry(ctx context.Context, cb telegr
 	if r == nil || r.store == nil {
 		return "", fmt.Errorf("runtime store unavailable")
 	}
-	chatID := callbackReviewEventChatID(cb, event)
-	senderID := callbackReviewEventSenderID(cb)
-	if chatID == 0 || senderID == 0 {
-		return "", fmt.Errorf("child wake retry requires a Telegram admin callback")
+	chatID, senderID, response, err := childWakeRetryPrivateAdminCallbackTarget(cb, event)
+	if err != nil {
+		return "", err
 	}
-	if event.TargetAdminChatID != 0 && senderID != event.TargetAdminChatID {
-		return "Only the target admin can retry this child wake.", nil
+	if response != "" {
+		return response, nil
 	}
 	action, ok, err := r.childWakeRetryActionForReviewEvent(event)
 	if err != nil {
@@ -111,20 +110,18 @@ func (r *Runtime) childWakeRetryActionForReviewEvent(event session.ReviewEvent) 
 		return session.NextActionRecord{}, false, err
 	}
 	wantRecordID := strings.TrimSpace(meta.Metadata["next_action_record_id"])
+	if wantRecordID != "" {
+		for _, action := range actions {
+			if strings.TrimSpace(action.RecordID) == wantRecordID && childWakeTaskPacketRetryActionCanRequestRetry(action) {
+				return action, true, nil
+			}
+		}
+		return session.NextActionRecord{}, false, nil
+	}
 	var candidates []session.NextActionRecord
 	for _, action := range actions {
-		if wantRecordID != "" && strings.TrimSpace(action.RecordID) != wantRecordID {
-			continue
-		}
 		if childWakeTaskPacketRetryActionCanRequestRetry(action) {
 			candidates = append(candidates, action)
-		}
-	}
-	if len(candidates) == 0 && wantRecordID != "" {
-		for _, action := range actions {
-			if childWakeTaskPacketRetryActionCanRequestRetry(action) {
-				candidates = append(candidates, action)
-			}
 		}
 	}
 	if len(candidates) == 0 {
@@ -133,14 +130,25 @@ func (r *Runtime) childWakeRetryActionForReviewEvent(event session.ReviewEvent) 
 	return newestNextActionRecord(candidates), true, nil
 }
 
-func callbackReviewEventChatID(cb telegram.CallbackQuery, event session.ReviewEvent) int64 {
-	if event.TargetAdminChatID != 0 {
-		return event.TargetAdminChatID
+func childWakeRetryPrivateAdminCallbackTarget(cb telegram.CallbackQuery, event session.ReviewEvent) (int64, int64, string, error) {
+	senderID := callbackReviewEventSenderID(cb)
+	if senderID == 0 {
+		return 0, 0, "", fmt.Errorf("child wake retry requires a Telegram admin callback")
 	}
-	if cb.Message != nil && cb.Message.Chat != nil {
-		return cb.Message.Chat.ID
+	targetAdminChatID := event.TargetAdminChatID
+	if targetAdminChatID == 0 {
+		return 0, senderID, "", fmt.Errorf("child wake retry requires a target admin review event")
 	}
-	return 0
+	if senderID != targetAdminChatID {
+		return 0, senderID, "Only the target admin can retry this child wake.", nil
+	}
+	if cb.Message == nil || cb.Message.Chat == nil || cb.Message.Chat.ID != targetAdminChatID {
+		return 0, senderID, "This child wake retry button is only actionable from the delivered private admin card.", nil
+	}
+	if event.DeliveryMessageID != 0 && cb.Message.MessageID != event.DeliveryMessageID {
+		return 0, senderID, "This child wake retry is no longer actionable; use the newest child status.", nil
+	}
+	return targetAdminChatID, senderID, "", nil
 }
 
 func callbackReviewEventSenderID(cb telegram.CallbackQuery) int64 {

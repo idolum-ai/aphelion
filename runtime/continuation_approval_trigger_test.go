@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
@@ -1034,6 +1035,295 @@ func TestReviewEventRetryButtonMaterializesFreshChildWakeApproval(t *testing.T) 
 	if len(runner.messageIDs) != 1 || len(runner.messageIDs[0]) != 1 {
 		t.Fatalf("runner message IDs = %#v, want one contract-bound parent guidance message", runner.messageIDs)
 	}
+}
+
+func TestReviewEventRetryButtonDoesNotFallForwardFromStaleNextActionRecord(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, &fakeProvider{}, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	seedRuntimeWakeAgent(t, store, "idolum-email", true)
+	seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+	childKey := rt.durableAgentExecutionKey("idolum-email")
+	packetID := "child_task:review-button-stale-record"
+	now := time.Now().UTC().Add(-time.Minute)
+	oldAction := recordTransientChildWakeRetryAction(t, store, childKey, "next-child-stale-card-old", packetID, "child_result:stale-card-old", now)
+	if err := store.ResolveNextAction(session.NextActionResolutionInput{
+		RecordID:    oldAction.RecordID,
+		Key:         childKey,
+		Owner:       "test",
+		SubjectKind: oldAction.SubjectKind,
+		SubjectRef:  oldAction.SubjectRef,
+		Reason:      "superseded_by_newer_child_status",
+		ResolvedAt:  now.Add(10 * time.Second),
+	}); err != nil {
+		t.Fatalf("ResolveNextAction(old) err = %v", err)
+	}
+	newAction := recordTransientChildWakeRetryAction(t, store, childKey, "next-child-stale-card-new", packetID, "child_result:stale-card-new", now.Add(20*time.Second))
+	event := session.ReviewEvent{
+		ID:                694,
+		SourceSessionID:   "durable_agent:idolum-email",
+		SourceRole:        "durable_agent",
+		TargetSessionID:   "telegram_dm:1001",
+		TargetAdminChatID: 1001,
+		Status:            "delivered",
+		DeliveryMessageID: 25069,
+		CreatedAt:         now,
+		DeliveredAt:       now,
+		MetadataJSON: `{
+			"agent_id":"idolum-email",
+			"summary":"Idolum Email stopped on external_transient.",
+			"risk_flags":["durable_child","external_transient"],
+			"metadata":{
+				"child_blocker_kind":"external_transient",
+				"child_next_state":"scheduled_retry",
+				"child_task_packet_id":"child_task:review-button-stale-record",
+				"next_action_record_id":"next-child-stale-card-old",
+				"retry_policy":"bounded_backoff"
+			}
+		}`,
+	}
+	text, err := rt.HandleReviewEventAction(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-review-child-retry-stale",
+		From:    &telegram.User{ID: 1001},
+		Message: &telegram.Message{MessageID: 25069, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionChildWakeRetry),
+	}, event, core.ReviewEventActionChildWakeRetry)
+	if err != nil {
+		t.Fatalf("HandleReviewEventAction(stale child retry) err = %v", err)
+	}
+	if !strings.Contains(text, "no longer actionable") {
+		t.Fatalf("callback text = %q, want stale-card response", text)
+	}
+	if len(sender.inline) != 0 {
+		t.Fatalf("inline count = %d, want no approval card from stale callback", len(sender.inline))
+	}
+	open, err := store.OpenNextActionsBySession(childKey, 20)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(child) err = %v", err)
+	}
+	var newStillOpen bool
+	for _, action := range open {
+		if action.RecordID == newAction.RecordID {
+			newStillOpen = true
+		}
+	}
+	if !newStillOpen {
+		t.Fatalf("child open actions = %#v, want newer action %s left open for its own review surface", open, newAction.RecordID)
+	}
+	if state, err := store.ContinuationState(session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}); err == nil {
+		state = session.NormalizeContinuationState(state)
+		if state.Status == session.ContinuationStatusPending && state.ContinuationLease.LeaseClass == session.ContinuationLeaseClassChildWake {
+			t.Fatalf("continuation state = %#v, want no materialized child_wake approval from stale callback", state)
+		}
+	}
+}
+
+func TestReviewEventRetryButtonRequiresDeliveredPrivateAdminCallback(t *testing.T) {
+	t.Parallel()
+
+	type callbackCase struct {
+		name          string
+		fromID        int64
+		chatID        int64
+		messageID     int64
+		targetAdminID int64
+		wantSurfaced  bool
+		wantText      string
+		wantErr       string
+	}
+	cases := []callbackCase{
+		{
+			name:          "private admin dm",
+			fromID:        1001,
+			chatID:        1001,
+			messageID:     25070,
+			targetAdminID: 1001,
+			wantSurfaced:  true,
+			wantText:      "approval surfaced",
+		},
+		{
+			name:          "missing sender",
+			chatID:        1001,
+			messageID:     25070,
+			targetAdminID: 1001,
+			wantErr:       "requires a Telegram admin callback",
+		},
+		{
+			name:          "mismatched sender",
+			fromID:        1002,
+			chatID:        1001,
+			messageID:     25070,
+			targetAdminID: 1001,
+			wantText:      "Only the target admin",
+		},
+		{
+			name:          "group callback from target admin",
+			fromID:        1001,
+			chatID:        -12345,
+			messageID:     25070,
+			targetAdminID: 1001,
+			wantText:      "private admin card",
+		},
+		{
+			name:          "stale delivered message id",
+			fromID:        1001,
+			chatID:        1001,
+			messageID:     25071,
+			targetAdminID: 1001,
+			wantText:      "no longer actionable",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, store, _, sender := buildRuntimeFixtures(t)
+			resolver, err := sandbox.NewResolver(
+				sandbox.Roots{
+					GlobalRoot:        cfg.Agent.PromptRoot,
+					AdminExecRoot:     cfg.Agent.ExecRoot,
+					SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+					UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+					UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+				},
+				sandbox.DefaultProfiles(),
+			)
+			if err != nil {
+				t.Fatalf("NewResolver() err = %v", err)
+			}
+			tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+			setFakeBubblewrapRunnerForRegistry(t, tools)
+			rt, err := New(cfg, store, &fakeProvider{}, tools, sender)
+			if err != nil {
+				t.Fatalf("New() err = %v", err)
+			}
+			seedRuntimeWakeAgent(t, store, "idolum-email", true)
+			seedRuntimeWakeGrant(t, store, "idolum-email", "telegram:1001")
+			childKey := rt.durableAgentExecutionKey("idolum-email")
+			packetID := "child_task:review-button-authz-" + strings.ReplaceAll(tc.name, " ", "-")
+			now := time.Now().UTC().Add(-time.Minute)
+			recordTransientChildWakeRetryAction(t, store, childKey, "next-"+strings.ReplaceAll(tc.name, " ", "-"), packetID, "child_result:"+strings.ReplaceAll(tc.name, " ", "-"), now)
+			event := session.ReviewEvent{
+				ID:                700 + int64(len(tc.name)),
+				SourceSessionID:   "durable_agent:idolum-email",
+				SourceRole:        "durable_agent",
+				TargetSessionID:   fmt.Sprintf("telegram_dm:%d", tc.targetAdminID),
+				TargetAdminChatID: tc.targetAdminID,
+				Status:            "delivered",
+				DeliveryMessageID: 25070,
+				CreatedAt:         now,
+				DeliveredAt:       now,
+				MetadataJSON: fmt.Sprintf(`{
+					"agent_id":"idolum-email",
+					"summary":"Idolum Email stopped on external_transient.",
+					"risk_flags":["durable_child","external_transient"],
+					"metadata":{
+						"child_blocker_kind":"external_transient",
+						"child_next_state":"scheduled_retry",
+						"child_task_packet_id":%q,
+						"next_action_record_id":%q,
+						"retry_policy":"bounded_backoff"
+					}
+				}`, packetID, "next-"+strings.ReplaceAll(tc.name, " ", "-")),
+			}
+			cb := telegram.CallbackQuery{
+				ID:      "cb-review-child-retry-authz",
+				Message: &telegram.Message{MessageID: tc.messageID, Chat: &telegram.Chat{ID: tc.chatID}},
+				Data:    core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionChildWakeRetry),
+			}
+			if tc.fromID != 0 {
+				cb.From = &telegram.User{ID: tc.fromID}
+			}
+			text, err := rt.HandleReviewEventAction(context.Background(), cb, event, core.ReviewEventActionChildWakeRetry)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("HandleReviewEventAction() err = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("HandleReviewEventAction() err = %v", err)
+			}
+			if !strings.Contains(text, tc.wantText) {
+				t.Fatalf("callback text = %q, want %q", text, tc.wantText)
+			}
+			if tc.wantSurfaced {
+				if len(sender.inline) != 1 {
+					t.Fatalf("inline count = %d, want approval card", len(sender.inline))
+				}
+			} else if len(sender.inline) != 0 {
+				t.Fatalf("inline count = %d, want no approval card", len(sender.inline))
+			}
+		})
+	}
+}
+
+func recordTransientChildWakeRetryAction(t *testing.T, store *session.SQLiteStore, key session.SessionKey, recordID string, packetID string, resultID string, createdAt time.Time) session.NextActionRecord {
+	t.Helper()
+
+	resultInput := session.ChildTaskResultInput{
+		PacketID:     packetID,
+		ResultID:     resultID,
+		Status:       session.ChildTaskResultBlocked,
+		BlockerKind:  "external_transient",
+		ResultKind:   "blocker",
+		NextState:    session.NextActionScheduledRetry,
+		Summary:      "The read-only child task timed out before returning results.",
+		CreatedAt:    createdAt,
+		FencingToken: "fence-" + session.EffectAttemptCommandHash(recordID)[7:23],
+	}
+	classification := durableWakeChildBlockerClassification{
+		Kind:               "external_transient",
+		State:              session.NextActionScheduledRetry,
+		NextAction:         "wait for the bounded retry window before retrying the child task",
+		ResourceBlocker:    "external_transient",
+		RetryPolicy:        "bounded_backoff",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
+		OperationTool:      "update_operation",
+		OperatorProjection: "Child task hit a transient external blocker; retry only after bounded backoff.",
+		DiagnosticOnly:     true,
+	}
+	action, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           recordID,
+		Key:                key,
+		Owner:              "durable_wake",
+		State:              session.NextActionScheduledRetry,
+		SubjectKind:        "task_packet",
+		SubjectRef:         packetID,
+		CausalRefs:         []string{"task_packet:" + packetID, "child_task_result:" + resultID},
+		NextAction:         "wait for the bounded retry window before retrying the child task",
+		ResourceBlocker:    "external_transient",
+		RetryPolicy:        "bounded_backoff",
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
+		OperationTool:      "update_operation",
+		OperationInputJSON: durableWakeChildBlockerOperationInputJSON("idolum-email", "mail_cli", "mail_cli", classification, resultInput),
+		OperatorProjection: "Child task hit a transient external blocker; retry only after bounded backoff.",
+		CreatedAt:          createdAt,
+	})
+	if err != nil {
+		t.Fatalf("RecordNextAction(%s) err = %v", recordID, err)
+	}
+	return action
 }
 
 func TestChildWakeRetryGrantLookupIgnoresRevokedHistoricalGrant(t *testing.T) {
