@@ -439,7 +439,20 @@ func (r *Registry) capabilityAuthorityRequestReview(ctx context.Context, in capa
 	}
 	out := renderCapabilityRequest("[CAPABILITY_REQUEST_REVIEWED]", updated)
 	if status == session.CapabilityReviewStatusApproved && strings.TrimSpace(updated.GrantID) == "" {
-		grantOut, ok, err := r.materializeApprovedCapabilityRequestGrant(ctx, key, updated, in, review.Reviewer)
+		materializeInput := in
+		if strings.TrimSpace(materializeInput.Kind) == "" {
+			materializeInput.Kind = string(updated.Kind)
+		}
+		if strings.TrimSpace(materializeInput.TargetResource) == "" {
+			materializeInput.TargetResource = updated.TargetResource
+		}
+		if strings.TrimSpace(materializeInput.Principal) == "" {
+			materializeInput.Principal = updated.RequestedFor
+		}
+		if len(materializeInput.AllowedActions) == 0 {
+			materializeInput.AllowedActions = []string{"invoke"}
+		}
+		grantOut, ok, err := r.materializeApprovedCapabilityRequestGrant(ctx, key, updated, materializeInput, review.Reviewer)
 		if err != nil {
 			return out, err
 		}

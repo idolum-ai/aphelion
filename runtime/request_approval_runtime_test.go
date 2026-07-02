@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	toolpkg "github.com/idolum-ai/aphelion/tool"
@@ -2250,6 +2252,280 @@ func TestAuthorityBundleMaterializationAllowsScopedBranchPush(t *testing.T) {
 	}
 }
 
+func TestHandleInboundToolCreatedAuthorityBundleApprovalSurfacesCard(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	key := session.SessionKey{ChatID: 9063, UserID: 0, Scope: telegramDMScopeRef(9063)}
+	bundle := seedGrantOnlyAuthorityBundleContract(t, store, key, "tool-created-authority-bundle-card")
+	provider := &requestApprovalToolCallProvider{
+		input: json.RawMessage(fmt.Sprintf(`{"action":"request_authority_bundle","contract_id":%q}`, bundle.BundleID)),
+	}
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendFloorFallback
+
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     key.ChatID,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "approved",
+		MessageID:  346,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if result == nil {
+		t.Fatal("HandleInbound() result = nil")
+	}
+	state, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusPending ||
+		state.ContinuationLease.Status != session.ContinuationLeaseStatusPending ||
+		state.ActionProposal.RiskClass != "authority_bundle" ||
+		state.ContinuationLease.Constraints["authority_bundle_id"] != bundle.BundleID {
+		t.Fatalf("continuation state = %#v, want pending authority-bundle approval for %s", state, bundle.BundleID)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[inlineCount-1].text
+	}
+	sender.mu.Unlock()
+	if countApprovalCardInlineMessages(sender, "Grant-only authority bundle") != 1 {
+		t.Fatalf("inline count = %d text=%q result=%q, want one approval card for tool-created authority bundle", inlineCount, inlineText, result.Text)
+	}
+	if !strings.Contains(inlineText, "Approve:") ||
+		!strings.Contains(inlineText, bundle.Summary) ||
+		!strings.Contains(inlineText, "Requires:") {
+		t.Fatalf("inline text = %q, want authority bundle approval card for %q", inlineText, bundle.Summary)
+	}
+	if deliveredContinuationOfferCount(t, store, key) != 1 {
+		t.Fatalf("delivered offers = %d, want one delivered offer for tool-created approval", deliveredContinuationOfferCount(t, store, key))
+	}
+}
+
+func TestApprovedContinuationToolCreatedAuthorityBundleApprovalSurfacesCard(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	key := session.SessionKey{ChatID: 9064, UserID: 0, Scope: telegramDMScopeRef(9064)}
+	bundle := seedGrantOnlyAuthorityBundleContract(t, store, key, "approved-continuation-authority-bundle-card")
+	provider := &requestApprovalToolCallProvider{
+		input: json.RawMessage(fmt.Sprintf(`{"action":"request_authority_bundle","contract_id":%q}`, bundle.BundleID)),
+	}
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendFloorFallback
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-approved-continuation-tool-created-approval",
+		Objective: "Run one approved continuation that requests follow-up authority.",
+		Status:    session.OperationStatusActive,
+		Stage:     "approved_continuation_running",
+		Proposal: session.OperationProposal{
+			ID:            "aprop-approved-continuation-tool-created-approval",
+			Kind:          "capability_grant",
+			Summary:       "Use the approved turn to request a bounded authority bundle.",
+			BoundedEffect: "Run one approved continuation turn and stop at a new approval if required.",
+			Status:        session.ProposalStatusApproved,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	now := time.Now().UTC()
+	if err := store.UpdateContinuationState(key, session.NormalizeContinuationState(session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "decision-approved-continuation-tool-created-approval",
+		Objective:      "Run one approved continuation that requests follow-up authority.",
+		StageSummary:   "Request a bounded authority bundle if the approved work needs it.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-approved-continuation-tool-created-approval",
+			Summary:        "Use the approved turn to request a bounded authority bundle.",
+			BoundedEffect:  "Run one approved continuation turn and stop at a new approval if required.",
+			RiskClass:      "capability_grant",
+			AllowedActions: []string{"request_authority_bundle"},
+			Status:         session.ProposalStatusApproved,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-approved-continuation-tool-created-approval",
+			ProposalID:     "aprop-approved-continuation-tool-created-approval",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			LeaseClass:     session.ContinuationLeaseClassCapabilityGrant,
+			AllowedActions: []string{"request_authority_bundle"},
+			PlanHash:       "plan-approved-continuation-tool-created-approval",
+			ExpiresAt:      now.Add(30 * time.Minute),
+			ApprovedAt:     now,
+			ApprovedBy:     1001,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+		UpdatedAt: now,
+	})); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v", err)
+	}
+	state, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusPending ||
+		state.ContinuationLease.Status != session.ContinuationLeaseStatusPending ||
+		state.ActionProposal.RiskClass != "authority_bundle" ||
+		state.ContinuationLease.Constraints["authority_bundle_id"] != bundle.BundleID {
+		t.Fatalf("continuation state = %#v, want pending authority-bundle approval for %s", state, bundle.BundleID)
+	}
+	if countApprovalCardInlineMessages(sender, "Grant-only authority bundle") != 1 {
+		sender.mu.Lock()
+		inlineCount := len(sender.inline)
+		inlineText := ""
+		if inlineCount > 0 {
+			inlineText = sender.inline[inlineCount-1].text
+		}
+		sender.mu.Unlock()
+		t.Fatalf("inline count=%d last=%q, want approval card after approved continuation tool-created request", inlineCount, inlineText)
+	}
+	if deliveredContinuationOfferCount(t, store, key) != 1 {
+		t.Fatalf("delivered offers = %d, want one delivered offer for approved-continuation tool-created approval", deliveredContinuationOfferCount(t, store, key))
+	}
+}
+
+func countApprovalCardInlineMessages(sender *fakeSender, needle string) int {
+	if sender == nil {
+		return 0
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	count := 0
+	for _, call := range sender.inline {
+		if strings.Contains(call.text, "Approve:") && strings.Contains(call.text, needle) {
+			count++
+		}
+	}
+	return count
+}
+
+type requestApprovalToolCallProvider struct {
+	input json.RawMessage
+	calls int
+}
+
+func (p *requestApprovalToolCallProvider) Complete(_ context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	if resp, ok := fakeInterpretationResponse(messages, "", core.TokenUsage{}); ok {
+		return resp, nil
+	}
+	for _, msg := range messages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "Before the main turn executes, ratify how this turn should proceed.") {
+			return &agent.Response{Content: "INSPECT: no\nQUESTION: no\nANSWER: yes\nRATIFICATION: accept\nPLAN:\n- Execute the bounded approval request."}, nil
+		}
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "tool" {
+			return &agent.Response{Content: "I retried exactly once. The approval card is now pending."}, nil
+		}
+	}
+	for _, def := range tools {
+		if def.Name == "request_approval" {
+			p.calls++
+			return &agent.Response{ToolCalls: []agent.ToolCall{{
+				ID:    "request-approval-tool-call",
+				Name:  "request_approval",
+				Input: append(json.RawMessage(nil), p.input...),
+			}}}, nil
+		}
+	}
+	return &agent.Response{Content: "request_approval tool unavailable"}, nil
+}
+
+func (p *requestApprovalToolCallProvider) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, _ agent.CompleteOptions) (*agent.Response, error) {
+	return p.Complete(ctx, messages, tools)
+}
+
+func seedGrantOnlyAuthorityBundleContract(t *testing.T, store *session.SQLiteStore, key session.SessionKey, requestToken string) session.AuthorityBundleContract {
+	t.Helper()
+
+	requestToken = strings.TrimSpace(requestToken)
+	if requestToken == "" {
+		requestToken = "grant-only-authority-bundle"
+	}
+	now := time.Now().UTC()
+	bundle, err := session.CompileAuthorityBundleContract(session.AuthorityBundleContractInput{
+		RequestInstanceID: "authority-bundle-" + requestToken,
+		SessionID:         session.SessionIDForKey(key),
+		Principal:         "telegram:1001",
+		Objective:         "Approve one bounded grant-only authority bundle.",
+		Summary:           "Grant-only authority bundle for a generic approval recovery test.",
+		AllowedActions:    []string{"invoke_test_resource"},
+		ForbiddenActions:  []string{"expand_authority_without_new_approval", "unbounded_retry_loop"},
+		StopConditions:    []string{"stop after one approval or typed blocker"},
+		RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+			GrantID:        "grant-" + requestToken,
+			Kind:           session.CapabilityKindGenericDelegation,
+			TargetResource: "generic:test-resource:" + requestToken,
+			GrantedTo:      "telegram:1001",
+			AllowedActions: []string{"invoke"},
+			Contract:       `{"bounded_effect":"Allow one generic delegated action for an authority-bundle approval test."}`,
+			Constraints:    `{"scope":"authority_bundle_test"}`,
+		}},
+		CreatedAt: now,
+		ExpiresAt: now.Add(30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("CompileAuthorityBundleContract(grant-only) err = %v", err)
+	}
+	bundle, err = store.UpsertAuthorityBundleContract(bundle)
+	if err != nil {
+		t.Fatalf("UpsertAuthorityBundleContract(grant-only) err = %v", err)
+	}
+	return bundle
+}
+
 func TestAuthorityBundleMaterializationRefreshesRevokedSameBundleState(t *testing.T) {
 	t.Parallel()
 
@@ -2358,6 +2634,98 @@ func TestAuthorityBundleMaterializationRefreshesRevokedSameBundleState(t *testin
 	sender.mu.Unlock()
 	if inlineCount != 2 {
 		t.Fatalf("inline count = %d, want a new approval card after revoked same-bundle state", inlineCount)
+	}
+}
+
+func TestAuthorityBundleMaterializationRedeliversSameBundleAfterOldOfferInstance(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9065, UserID: 0, Scope: telegramDMScopeRef(9065)}
+	bundleID := seedGrantOnlyAuthorityBundleHandoff(t, store, key, "redeliver-same-bundle-after-old-offer")
+	if materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "show card", MessageID: 401},
+		"show card",
+	); err != nil || !materialized {
+		t.Fatalf("first MaterializeRequestedApproval() materialized=%v err=%v, want card", materialized, err)
+	}
+	if countApprovalCardInlineMessages(sender, "Grant-only authority bundle") != 1 {
+		t.Fatalf("approval cards = %d, want first card delivered", countApprovalCardInlineMessages(sender, "Grant-only authority bundle"))
+	}
+	if deliveredContinuationOfferCount(t, store, key) != 1 {
+		t.Fatalf("delivered offers = %d, want first delivered offer", deliveredContinuationOfferCount(t, store, key))
+	}
+
+	now := time.Now().UTC().Add(time.Second)
+	unrelated := runtimePendingContinuationState("unrelated-intervening-approval", session.ContinuationLeaseClassDataAccess, now)
+	unrelated.Status = session.ContinuationStatusApproved
+	unrelated.RemainingTurns = 0
+	unrelated.ActionProposal.Status = session.ProposalStatusApproved
+	unrelated.ContinuationLease.Status = session.ContinuationLeaseStatusConsumed
+	unrelated.ContinuationLease.RemainingTurns = 0
+	unrelated.ContinuationLease.ConsumedAt = now
+	if err := store.UpdateContinuationState(key, unrelated); err != nil {
+		t.Fatalf("UpdateContinuationState(unrelated consumed) err = %v", err)
+	}
+	inputJSON, err := promotedDurableChildAuthorityBundleOperationInput(bundleID)
+	if err != nil {
+		t.Fatalf("promotedDurableChildAuthorityBundleOperationInput(redeliver) err = %v", err)
+	}
+	recordID := session.NextActionRecordID(session.SessionIDForKey(key), "authority_bundle_request", bundleID, session.NextActionBlockedNeedsAuthority, now)
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           recordID,
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "authority_bundle_request",
+		SubjectRef:         bundleID,
+		CausalRefs:         []string{"authority_bundle:" + bundleID},
+		NextAction:         "review the bounded authority bundle and approve only if the allowed, forbidden, and stop boundaries match the objective",
+		RequiredAuthority:  "authority_bundle",
+		ResourceBlocker:    "authority_bundle_approval",
+		RetryPolicy:        "retry_after_bundle_approval",
+		OperationKind:      "authority_bundle_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: inputJSON,
+		OperatorProjection: "Review grant-only authority bundle again.",
+		CreatedAt:          now,
+	}); err != nil {
+		t.Fatalf("RecordNextAction(redeliver) err = %v", err)
+	}
+
+	if materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "show the new card", MessageID: 402},
+		"show the new card",
+	); err != nil || !materialized {
+		t.Fatalf("second MaterializeRequestedApproval() materialized=%v err=%v, want card", materialized, err)
+	}
+	if countApprovalCardInlineMessages(sender, "Grant-only authority bundle") != 2 {
+		t.Fatalf("approval cards = %d, want second card for new pending state with same bundle", countApprovalCardInlineMessages(sender, "Grant-only authority bundle"))
+	}
+	if deliveredContinuationOfferCount(t, store, key) != 2 {
+		t.Fatalf("delivered offers = %d, want second delivered offer for new pending state", deliveredContinuationOfferCount(t, store, key))
 	}
 }
 

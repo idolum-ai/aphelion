@@ -29,6 +29,8 @@ func continuationApprovalAlreadyOffered(state session.ContinuationState, store *
 	leaseID := strings.TrimSpace(state.ContinuationLease.ID)
 	proposalID := strings.TrimSpace(state.ActionProposal.ID)
 	decisionID := strings.TrimSpace(state.DecisionID)
+	instanceCreatedAt := continuationApprovalInstanceCreatedAt(state)
+	instanceCreatedAtText := continuationApprovalInstanceCreatedAtText(state)
 	afterSeq := int64(0)
 	for {
 		events, err := store.ExecutionEventsBySession(key, afterSeq, 200)
@@ -50,6 +52,9 @@ func continuationApprovalAlreadyOffered(state session.ContinuationState, store *
 			if continuationPayloadString(payload, "delivery_status") != "delivered" {
 				continue
 			}
+			if !continuationOfferEventMatchesInstance(payload, event.CreatedAt, instanceCreatedAt, instanceCreatedAtText) {
+				continue
+			}
 			if leaseID != "" && continuationPayloadString(payload, "lease_id") == leaseID {
 				return true, nil
 			}
@@ -64,6 +69,47 @@ func continuationApprovalAlreadyOffered(state session.ContinuationState, store *
 			return false, nil
 		}
 	}
+}
+
+func continuationApprovalInstanceCreatedAtText(state session.ContinuationState) string {
+	at := continuationApprovalInstanceCreatedAt(state)
+	if at.IsZero() {
+		return ""
+	}
+	return at.UTC().Format(time.RFC3339Nano)
+}
+
+func continuationApprovalInstanceCreatedAt(state session.ContinuationState) time.Time {
+	state = session.NormalizeContinuationState(state)
+	var out time.Time
+	record := func(at time.Time) {
+		if at.IsZero() {
+			return
+		}
+		at = at.UTC()
+		if out.IsZero() || at.Before(out) {
+			out = at
+		}
+	}
+	record(state.ActionProposal.CreatedAt)
+	record(state.ContinuationLease.CreatedAt)
+	return out
+}
+
+func continuationOfferEventMatchesInstance(payload map[string]any, eventCreatedAt time.Time, instanceCreatedAt time.Time, instanceCreatedAtText string) bool {
+	if instanceCreatedAtText != "" {
+		if offeredInstance := continuationPayloadString(payload, "state_instance_created_at"); offeredInstance != "" {
+			return offeredInstance == instanceCreatedAtText
+		}
+	}
+	if instanceCreatedAt.IsZero() || eventCreatedAt.IsZero() {
+		return true
+	}
+	// Legacy delivered-offer events did not carry a state-instance marker.
+	// Treat very old events as a different request instance while allowing the
+	// normal request_approval/send clock skew inside the same materialization.
+	const legacyOfferClockSkew = 5 * time.Second
+	return !eventCreatedAt.UTC().Before(instanceCreatedAt.UTC().Add(-legacyOfferClockSkew))
 }
 
 func continuationPayloadString(payload map[string]any, key string) string {
@@ -86,6 +132,9 @@ func (r *Runtime) sendAndRecordContinuationOfferLocked(ctx context.Context, key 
 		payload = continuationExecutionPayload(state)
 	}
 	payload["delivery_status"] = "delivered"
+	if instanceCreatedAt := continuationApprovalInstanceCreatedAtText(state); instanceCreatedAt != "" {
+		payload["state_instance_created_at"] = instanceCreatedAt
+	}
 	if _, err := r.appendExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "delivered", payload, at); err != nil {
 		return fmt.Errorf("record delivered continuation offer: %w", err)
 	}
