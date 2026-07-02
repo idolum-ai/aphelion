@@ -75,7 +75,8 @@ func (s *SQLiteStore) RecordContinuationRecoveryContractNextAction(contractInput
 
 func recordContinuationRecoveryIdentificationTx(tx *sql.Tx, contract ContinuationRecoveryContract, record NextActionRecord) error {
 	contract = NormalizeContinuationRecoveryContract(contract)
-	if strings.TrimSpace(contract.SessionID) == "" || strings.TrimSpace(contract.ContractHash) == "" {
+	shapeHash := AuthorityShapeHashForContinuationRecoveryContract(contract)
+	if strings.TrimSpace(contract.SessionID) == "" || strings.TrimSpace(shapeHash) == "" {
 		return nil
 	}
 	entry, err := recordIdentificationLedgerEntryTx(tx, IdentificationLedgerEntryInput{
@@ -83,7 +84,7 @@ func recordContinuationRecoveryIdentificationTx(tx *sql.Tx, contract Continuatio
 		PlanVersion: IdentificationDefaultPlanVersion,
 		SessionID:   contract.SessionID,
 		StepRef:     contract.SubjectRef,
-		ShapeHash:   contract.ContractHash,
+		ShapeHash:   shapeHash,
 		LabelRef:    contract.ContractID,
 		Status:      IdentificationLedgerStatusProposed,
 		CreatedAt:   record.CreatedAt,

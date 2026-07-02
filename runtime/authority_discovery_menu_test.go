@@ -118,6 +118,14 @@ func TestReviewEventLookaheadRecordsNonExecutingLedgerObservation(t *testing.T) 
 	if len(projections) != 1 {
 		t.Fatalf("ledger entries = %#v, want one lookahead entry", projections)
 	}
+	wantShapeHash := session.AuthorityShapeHash(session.AuthorityShapeInput{
+		Tool:          "review_event",
+		Action:        string(core.ReviewEventActionLookaheadNext),
+		ResourceClass: "review_event_frontier",
+	})
+	if projections[0].Entry.ShapeHash != wantShapeHash {
+		t.Fatalf("lookahead shape hash = %q, want shared authority shape hash %q", projections[0].Entry.ShapeHash, wantShapeHash)
+	}
 	if got := projections[0].Properties[session.IdentificationPropertyApprovalClass][0].Method; got != session.IdentificationObservationLookahead {
 		t.Fatalf("observation method = %q, want lookahead", got)
 	}

@@ -141,8 +141,12 @@ func TestContinuationRecoveryPublicationRecordsIdentificationLedgerCollision(t *
 		t.Fatalf("entries = %#v, want one collision-derived label", projections)
 	}
 	projection := projections[0]
-	if projection.Entry.LabelRef != contract.ContractID || projection.Entry.ShapeHash != contract.ContractHash {
-		t.Fatalf("entry label/hash = %q/%q, want %q/%q", projection.Entry.LabelRef, projection.Entry.ShapeHash, contract.ContractID, contract.ContractHash)
+	wantShapeHash := AuthorityShapeHashForContinuationRecoveryContract(contract)
+	if projection.Entry.LabelRef != contract.ContractID || projection.Entry.ShapeHash != wantShapeHash {
+		t.Fatalf("entry label/hash = %q/%q, want %q/%q", projection.Entry.LabelRef, projection.Entry.ShapeHash, contract.ContractID, wantShapeHash)
+	}
+	if projection.Entry.ShapeHash == contract.ContractHash {
+		t.Fatalf("entry shape hash reused instance-bound contract hash %q", contract.ContractHash)
 	}
 	if got := projection.Properties[IdentificationPropertyApprovalClass][0].Value; got != string(ContinuationLeaseClassChildWake) {
 		t.Fatalf("approval class = %q, want child_wake", got)
@@ -161,5 +165,79 @@ func TestContinuationRecoveryPublicationRecordsIdentificationLedgerCollision(t *
 	}
 	if !foundEvidence {
 		t.Fatalf("observations = %#v, want next_action evidence/resource observation", projection.Observations)
+	}
+}
+
+func TestContinuationRecoveryPublicationCoalescesSameShapeAcrossRequestInstances(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	key := SessionKey{ChatID: 1001, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "1001"}}
+	subjectRef := ContinuationRecoverySubjectRef(ContinuationLeaseClassChildWake, "idolum-email", "grant-idolum-email-wake", "durable_agent", "wake_once", "")
+	createdAt := time.Date(2026, 7, 2, 11, 0, 0, 0, time.UTC)
+	var contracts []ContinuationRecoveryContract
+	for i, requestInstanceID := range []string{"ident-child-wake-instance-a", "ident-child-wake-instance-b"} {
+		contract, err := CompileContinuationRecoveryContract(ContinuationRecoveryContractInput{
+			RequestInstanceID:   requestInstanceID,
+			SessionID:           "telegram_dm:1001",
+			SubjectKind:         "continuation_lease_request",
+			SubjectRef:          subjectRef,
+			Principal:           "telegram:1001",
+			LeaseClass:          ContinuationLeaseClassChildWake,
+			AllowedActions:      []string{"wake_named_child"},
+			Constraints:         map[string]string{"agent_id": "idolum-email"},
+			Tool:                "durable_agent",
+			ToolAction:          "wake_once",
+			AgentID:             "idolum-email",
+			GrantID:             "grant-idolum-email-wake",
+			GrantTargetResource: "durable_agent:idolum-email:wake_once",
+			CreatedAt:           createdAt.Add(time.Duration(i) * time.Minute),
+		})
+		if err != nil {
+			t.Fatalf("CompileContinuationRecoveryContract(%s) err = %v", requestInstanceID, err)
+		}
+		contracts = append(contracts, contract)
+		_, _, err = store.RecordContinuationRecoveryContractNextAction(contract, NextActionInput{
+			Key:                key,
+			Owner:              "test",
+			State:              NextActionBlockedNeedsAuthority,
+			SubjectKind:        "continuation_lease_request",
+			SubjectRef:         contract.SubjectRef,
+			RequiredAuthority:  string(ContinuationLeaseClassChildWake),
+			ResourceBlocker:    "missing_continuation_lease",
+			RetryPolicy:        "ask_for_grant",
+			OperationKind:      "continuation_lease_request",
+			OperationTool:      "request_approval",
+			OperationInputJSON: ContinuationRecoveryContractProjectionInput(contract.ContractID),
+			CreatedAt:          createdAt.Add(time.Duration(i) * time.Minute),
+		})
+		if err != nil {
+			t.Fatalf("RecordContinuationRecoveryContractNextAction(%s) err = %v", requestInstanceID, err)
+		}
+	}
+	if contracts[0].ContractHash == contracts[1].ContractHash {
+		t.Fatalf("contract hashes should remain instance-bound, both = %q", contracts[0].ContractHash)
+	}
+	if got, want := AuthorityShapeHashForContinuationRecoveryContract(contracts[0]), AuthorityShapeHashForContinuationRecoveryContract(contracts[1]); got != want {
+		t.Fatalf("shape hashes differ for same authority shape: %q vs %q", got, want)
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      IdentificationPlanIDForSession("telegram_dm:1001"),
+		PlanVersion: IdentificationDefaultPlanVersion,
+		SessionID:   "telegram_dm:1001",
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 1 {
+		t.Fatalf("entries = %#v, want one reusable shape entry", projections)
+	}
+	contractObservations := projections[0].Properties[IdentificationPropertyContract]
+	if len(contractObservations) != 2 {
+		t.Fatalf("contract observations = %#v, want both request instances under one shape", contractObservations)
+	}
+	if projections[0].Entry.ShapeHash == contracts[0].ContractHash || projections[0].Entry.ShapeHash == contracts[1].ContractHash {
+		t.Fatalf("entry shape hash %q should not equal either instance contract hash", projections[0].Entry.ShapeHash)
 	}
 }

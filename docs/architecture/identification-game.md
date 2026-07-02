@@ -128,7 +128,7 @@ type IdentificationLedgerEntry struct {
     SessionID   string
     StepRef     string
 
-    ShapeHash string
+    ShapeHash string // reusable authority shape, not request/contract instance
     LabelRef  string // contract/bundle/grant ref, or empty while partial
     Status    string // unidentified | partial | proposed | approved | consumed | expired | invalidated
     ExpiresAt time.Time
@@ -161,6 +161,13 @@ The ledger's identity terms are contract terms. New writes must bind at least:
 Changing any of those terms changes the meaning of the identification. A revised
 plan is a partial reshuffle. Existing entries can be revalidated, but they must
 not silently carry over.
+
+`shape_hash` is deliberately coarser than a continuation-recovery contract hash.
+It is the reusable authority-shape identity: lease class, tool, action, and
+resource class. Contract hash, request instance, subject ref, and session-bound
+retry details belong in labels and observations. Otherwise the ledger fragments
+one authority shape into one row per collision and loses the cumulative
+knowledge it exists to preserve.
 
 ### Graduated Identification
 

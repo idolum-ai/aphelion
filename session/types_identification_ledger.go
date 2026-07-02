@@ -5,6 +5,7 @@ package session
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -101,6 +102,13 @@ type IdentificationLedgerProjection struct {
 	Entry        IdentificationLedgerEntry
 	Observations []IdentificationLedgerObservation
 	Properties   map[IdentificationObservationProperty][]IdentificationLedgerObservation
+}
+
+type AuthorityShapeInput struct {
+	Tool          string
+	Action        string
+	LeaseClass    ContinuationLeaseClass
+	ResourceClass string
 }
 
 func IdentificationPlanIDForSession(sessionID string) string {
@@ -236,6 +244,59 @@ func NormalizeIdentificationLedgerObservation(obs IdentificationLedgerObservatio
 		ObservedAt:    obs.ObservedAt,
 	})
 	return IdentificationLedgerObservation(normalized)
+}
+
+func NormalizeAuthorityShapeInput(input AuthorityShapeInput) AuthorityShapeInput {
+	input.Tool = strings.ToLower(strings.TrimSpace(input.Tool))
+	input.Action = normalizeRecoveryAction(input.Action)
+	input.LeaseClass = NormalizeContinuationLeaseClass(input.LeaseClass)
+	input.ResourceClass = AuthorityResourceClass(input.ResourceClass)
+	return input
+}
+
+func AuthorityShapeHash(input AuthorityShapeInput) string {
+	input = NormalizeAuthorityShapeInput(input)
+	if input.Tool == "" && input.Action == "" && input.LeaseClass == "" && input.ResourceClass == "" {
+		return ""
+	}
+	payload := map[string]any{
+		"contract":       "aphelion.authority_shape.v1",
+		"tool":           input.Tool,
+		"action":         input.Action,
+		"lease_class":    string(input.LeaseClass),
+		"resource_class": input.ResourceClass,
+	}
+	raw, _ := json.Marshal(payload)
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func AuthorityShapeHashForContinuationRecoveryContract(contract ContinuationRecoveryContract) string {
+	contract = NormalizeContinuationRecoveryContract(contract)
+	resourceClass := AuthorityResourceClass(firstNonEmptyStore(contract.GrantTargetResource, contract.Resource))
+	if resourceClass == "" && contract.LeaseClass == ContinuationLeaseClassChildWake {
+		resourceClass = "durable_agent"
+	}
+	return AuthorityShapeHash(AuthorityShapeInput{
+		Tool:          contract.Tool,
+		Action:        contract.ToolAction,
+		LeaseClass:    contract.LeaseClass,
+		ResourceClass: resourceClass,
+	})
+}
+
+func AuthorityResourceClass(resource string) string {
+	resource = strings.TrimSpace(resource)
+	if resource == "" {
+		return ""
+	}
+	if strings.HasPrefix(resource, "/") {
+		return "file_path"
+	}
+	if idx := strings.Index(resource, ":"); idx > 0 {
+		return normalizeEnumValue(resource[:idx])
+	}
+	return normalizeEnumValue(resource)
 }
 
 func ValidateIdentificationLedgerEntryInput(input IdentificationLedgerEntryInput) error {

@@ -4,8 +4,6 @@ package runtime
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -49,7 +47,11 @@ func (r *Runtime) handleReviewEventLookaheadNext(_ context.Context, cb telegram.
 			stepRef = "next_action:" + recordID
 		}
 	}
-	shapeHash := reviewEventLookaheadShapeHash(event)
+	shapeHash := session.AuthorityShapeHash(session.AuthorityShapeInput{
+		Tool:          "review_event",
+		Action:        string(core.ReviewEventActionLookaheadNext),
+		ResourceClass: "review_event_frontier",
+	})
 	_, _, err := r.store.RecordIdentificationLedgerObservation(session.IdentificationLedgerEntryInput{
 		PlanID:      session.IdentificationPlanIDForSession(sessionID),
 		PlanVersion: session.IdentificationDefaultPlanVersion,
@@ -216,18 +218,6 @@ func reviewEventPrivateAdminCallbackResponse(cb telegram.CallbackQuery, event se
 		return "This control is no longer actionable; use the newest card.", nil
 	}
 	return "", nil
-}
-
-func reviewEventLookaheadShapeHash(event session.ReviewEvent) string {
-	seed := strings.Join([]string{
-		fmt.Sprint(event.ID),
-		strings.TrimSpace(event.SourceSessionID),
-		strings.TrimSpace(event.TargetSessionID),
-		strings.TrimSpace(event.Summary),
-		strings.TrimSpace(event.MetadataJSON),
-	}, "\x00")
-	sum := sha256.Sum256([]byte(seed))
-	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func callbackReviewEventSenderID(cb telegram.CallbackQuery) int64 {
