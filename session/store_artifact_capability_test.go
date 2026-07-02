@@ -276,6 +276,85 @@ func TestSQLiteStoreCapabilityRequestReviewGrantInvocationRoundTrip(t *testing.T
 	}
 }
 
+func TestExpireActiveCapabilityGrantsTransitionsOnlyElapsedActiveRows(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	fixtures := []CapabilityGrant{
+		{
+			GrantID:        "capg-expired-active",
+			GrantedBy:      "telegram:1001",
+			GrantedTo:      "durable_agent:mail",
+			Kind:           CapabilityKindTool,
+			TargetResource: "mail_cli",
+			AllowedActions: []string{"invoke"},
+			Status:         CapabilityGrantStatusActive,
+			GrantedAt:      now.Add(-2 * time.Hour),
+			ExpiresAt:      now.Add(-time.Minute),
+		},
+		{
+			GrantID:        "capg-future-active",
+			GrantedBy:      "telegram:1001",
+			GrantedTo:      "durable_agent:mail",
+			Kind:           CapabilityKindTool,
+			TargetResource: "mail_cli",
+			AllowedActions: []string{"invoke"},
+			Status:         CapabilityGrantStatusActive,
+			GrantedAt:      now.Add(-time.Minute),
+			ExpiresAt:      now.Add(time.Hour),
+		},
+		{
+			GrantID:        "capg-revoked-expired",
+			GrantedBy:      "telegram:1001",
+			GrantedTo:      "durable_agent:mail",
+			Kind:           CapabilityKindTool,
+			TargetResource: "mail_cli",
+			AllowedActions: []string{"invoke"},
+			Status:         CapabilityGrantStatusRevoked,
+			GrantedAt:      now.Add(-2 * time.Hour),
+			ExpiresAt:      now.Add(-time.Minute),
+			RevokedAt:      now.Add(-30 * time.Minute),
+		},
+	}
+	for _, grant := range fixtures {
+		if _, err := store.UpsertCapabilityGrant(grant); err != nil {
+			t.Fatalf("UpsertCapabilityGrant(%s) err = %v", grant.GrantID, err)
+		}
+	}
+
+	count, err := store.ExpireActiveCapabilityGrants(now)
+	if err != nil {
+		t.Fatalf("ExpireActiveCapabilityGrants() err = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("ExpireActiveCapabilityGrants() count = %d, want 1", count)
+	}
+	expired, ok, err := store.CapabilityGrant("capg-expired-active")
+	if err != nil {
+		t.Fatalf("CapabilityGrant(expired) err = %v", err)
+	}
+	if !ok || expired.Status != CapabilityGrantStatusExpired || !expired.RevokedAt.IsZero() {
+		t.Fatalf("expired grant = %#v, want status expired without revoked_at", expired)
+	}
+	future, ok, err := store.CapabilityGrant("capg-future-active")
+	if err != nil {
+		t.Fatalf("CapabilityGrant(future) err = %v", err)
+	}
+	if !ok || future.Status != CapabilityGrantStatusActive {
+		t.Fatalf("future grant = %#v, want active", future)
+	}
+	revoked, ok, err := store.CapabilityGrant("capg-revoked-expired")
+	if err != nil {
+		t.Fatalf("CapabilityGrant(revoked) err = %v", err)
+	}
+	if !ok || revoked.Status != CapabilityGrantStatusRevoked || revoked.RevokedAt.IsZero() {
+		t.Fatalf("revoked grant = %#v, want preserved revoked lifecycle", revoked)
+	}
+}
+
 func TestApplyCapabilityReviewTransitionIsAtomicAndIdempotent(t *testing.T) {
 	t.Parallel()
 

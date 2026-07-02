@@ -526,6 +526,34 @@ func (s *SQLiteStore) CapabilityGrants(limit int, status CapabilityGrantStatus, 
 	return out, nil
 }
 
+func (s *SQLiteStore) ExpireActiveCapabilityGrants(now time.Time) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("expire active capability grants requires session store")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	stamp := now.Format(time.RFC3339Nano)
+	res, err := s.db.Exec(`
+		UPDATE capability_grants
+		SET status = ?, updated_at = ?
+		WHERE status = ?
+			AND revoked_at IS NULL
+			AND expires_at IS NOT NULL
+			AND expires_at != ''
+			AND expires_at <= ?
+	`, string(CapabilityGrantStatusExpired), stamp, string(CapabilityGrantStatusActive), stamp)
+	if err != nil {
+		return 0, fmt.Errorf("expire active capability grants: %w", err)
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count expired capability grants: %w", err)
+	}
+	return count, nil
+}
+
 func (s *SQLiteStore) ActiveCapabilityGrant(kind CapabilityKind, targetResource string, principal string, action string) (CapabilityGrant, bool, error) {
 	grants, err := s.ActiveCapabilityGrants(kind, targetResource, principal, action)
 	if err != nil {
