@@ -33,6 +33,10 @@ const (
 	externalChannelReadinessRepairChildRuntimeMaterial = "child_runtime_material"
 )
 
+var externalChannelSandboxStage = func(scope sandbox.Scope) sandbox.Stage {
+	return sandbox.NewRunner().Stage(scope)
+}
+
 type externalChannelAdapterReadiness struct {
 	AgentID     string
 	Adapter     string
@@ -214,8 +218,9 @@ func (r *Runtime) externalChannelReadinessForAgent(agent core.DurableAgent, now 
 		addLayer("sandbox", externalChannelReadinessStatusBlocked, scopeErr.Error())
 		setFailure(externalChannelReadinessFailureSandbox, externalChannelReadinessRepairNone, "repair durable child local roots before sandbox readiness can be checked")
 	} else {
-		stage := sandbox.NewRunner().Stage(scope)
-		if stage == sandbox.StageUnavailable {
+		if r != nil && r.durableWakeChild != nil && r.durableWakeChild.Supports(scope, agent) {
+			addLayer("sandbox", externalChannelReadinessStatusReady, "durable child executor supports configured sandbox scope")
+		} else if stage := externalChannelSandboxStage(scope); stage == sandbox.StageUnavailable {
 			addLayer("sandbox", externalChannelReadinessStatusBlocked, "isolated durable-agent sandbox backend is unavailable")
 			setFailure(externalChannelReadinessFailureSandbox, externalChannelReadinessRepairNone, "install or enable the configured isolated sandbox backend before child wakes")
 		} else {

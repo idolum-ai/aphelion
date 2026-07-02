@@ -65,6 +65,41 @@ func TestScheduledExternalChannelWakeRunsWhenLifecycleVerifiedAndRuntimeGrantPre
 	}
 }
 
+func TestScheduledExternalChannelWakeUsesSupportedExecutorWhenDefaultSandboxUnavailable(t *testing.T) {
+	oldStage := externalChannelSandboxStage
+	externalChannelSandboxStage = func(sandbox.Scope) sandbox.Stage {
+		return sandbox.StageUnavailable
+	}
+	t.Cleanup(func() {
+		externalChannelSandboxStage = oldStage
+	})
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	executor := &recordingScheduledChildWakeExecutor{}
+	rt, err := New(cfg, store, &fakeProvider{}, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableWakeChild = executor
+
+	agent := scheduledExternalChannelWakeAgent("scheduled-supported-executor-child", "gog_cli")
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	markDurableWakeExternalAdapterReady(t, store, agent.AgentID, "gog_cli")
+
+	now := time.Now().UTC()
+	if readiness := rt.externalChannelReadinessForAgent(agent, now); readiness.Status != externalChannelReadinessStatusReady {
+		t.Fatalf("externalChannelReadinessForAgent() = %#v, want ready through supported durable child executor", readiness)
+	}
+	if err := rt.pollDurableAgentWakeViaChild(context.Background(), agent, now); err != nil {
+		t.Fatalf("pollDurableAgentWakeViaChild() err = %v", err)
+	}
+	if executor.calls != 1 {
+		t.Fatalf("child wake executor calls = %d, want supported executor to bypass unavailable default sandbox probe", executor.calls)
+	}
+}
+
 func TestScheduledExternalChannelWakeInstalledFreshProofsAutoVerifyAndRun(t *testing.T) {
 	cfg, store, _, sender := buildRuntimeFixtures(t)
 	tools := newScheduledExternalChannelWakeToolRegistry(t, cfg, store)
