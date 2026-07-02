@@ -351,4 +351,8 @@ New execution species must either:
 
 This is not a reason to duplicate authority checks inside child-specific
 adapters. The child substrate should remain vertically bounded; the horizontal
-bridge belongs at the execution-authority boundary.
+bridge belongs at the execution-authority boundary. Child wake authority records
+should be read as recovery manifests first: they preserve what crossed the
+parent/child boundary, what evidence was produced, and which retry or repair is
+safe after failure. Authority remains mandatory at the point of use, but it is
+not the whole story of the crossing.

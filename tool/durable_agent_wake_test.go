@@ -1713,9 +1713,9 @@ func TestDurableAgentWakeOnceClassifiesRunnerFailures(t *testing.T) {
 			notContain: "raw parent state parse failure",
 		},
 		{
-			name:       "task packet admission",
-			err:        core.NewDurableAgentWakeFailureError(core.DurableAgentWakeFailureTaskPacketAdmission, "child-alpha", []string{"dcm_packet"}, fmt.Errorf("insert child task packet failed")),
-			wantClass:  string(core.DurableAgentWakeFailureTaskPacketAdmission),
+			name:       "task packet manifest record",
+			err:        core.NewDurableAgentWakeFailureError(core.DurableAgentWakeFailureTaskPacketManifestRecord, "child-alpha", []string{"dcm_packet"}, fmt.Errorf("insert child task packet failed")),
+			wantClass:  string(core.DurableAgentWakeFailureTaskPacketManifestRecord),
 			notContain: "insert child task packet failed",
 		},
 		{

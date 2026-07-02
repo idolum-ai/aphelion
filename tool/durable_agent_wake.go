@@ -424,10 +424,10 @@ func durableAgentWakeOnceFailureForError(err error) durableAgentWakeOnceFailure 
 			failure.NextRepair = "inspect durable parent-conversation state, repair malformed or stale guidance, then request one fresh bounded wake"
 			failure.RetryPolicy = "retry_after_parent_conversation_repair"
 			return failure
-		case core.DurableAgentWakeFailureTaskPacketAdmission:
-			failure.Class = string(core.DurableAgentWakeFailureTaskPacketAdmission)
+		case core.DurableAgentWakeFailureTaskPacketManifestRecord:
+			failure.Class = string(core.DurableAgentWakeFailureTaskPacketManifestRecord)
 			failure.SafeSummary = "durable_agent wake_once could not admit a durable child task packet for the claimed batch"
-			failure.NextRepair = "inspect child task packet admission and idempotency state, then retry one bounded wake after repair"
+			failure.NextRepair = "inspect child task packet manifest record and idempotency state, then retry one bounded wake after repair"
 			failure.RetryPolicy = "retry_after_child_task_admission_repair"
 			return failure
 		case core.DurableAgentWakeFailureTaskAttemptClaim:

@@ -18,6 +18,8 @@ but they remain subordinate to parent governance and policy boundaries.
 - Telegram relay turns can target a child inline from DM using `agent:<agent_id> ...` and execute in child scope.
 - Child wakes can be transport-triggered (`telegram_update`) or scheduler-triggered (`poll`, `push`, `poll_or_push`) depending on the child role.
 - Child wake ingress is selected through pluggable runtime adapters; each adapter contributes wake payload synthesis and review finalization semantics.
+- Child wakes are recoverable crossings, not a micromanaged border. The parent records a wake claim and a child task packet as a manifest for the crossing: parent guidance, authority context, expected executor, and retry evidence travel as bookkeeping so failures can be diagnosed and safely retried.
+- Authority is one field in that wake manifest. The substrate should answer what was intended to cross, what actually crossed, what evidence exists, and what next repair is safe; it should not make ordinary parent-to-child collaboration feel like a dystopian permission checkpoint.
 - External-channel children use a generic runtime state slot (`external_channel`) for adapter name, cursor/session reference, last command, attempt/success timestamps, artifact pointer, status/error, failure count, backoff, and opaque adapter state. Protocol-specific residue belongs under `adapter_state`, not as a new parent-core continuity field per child or transport.
 - External-channel child wake failures are recorded under that same generic
   runtime state as `wake_failed` or `wake_blocked` with backoff and a bounded

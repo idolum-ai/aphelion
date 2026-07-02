@@ -269,8 +269,8 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 	leaseClaimedAt := time.Now().UTC()
 	if err := r.recordDurableWakeTaskPacket(key, agent, plan, taskPacketID, now.UTC()); err != nil {
 		wrappedErr := fmt.Errorf("record durable wake task packet: %w", err)
-		failure := core.NewDurableAgentWakeFailureError(core.DurableAgentWakeFailureTaskPacketAdmission, agent.AgentID, plan.ParentMessageIDs, wrappedErr)
-		durableWakeProgressDone(ctx, progress, agent, "failed", "Child wake admission failed")
+		failure := core.NewDurableAgentWakeFailureError(core.DurableAgentWakeFailureTaskPacketManifestRecord, agent.AgentID, plan.ParentMessageIDs, wrappedErr)
+		durableWakeProgressDone(ctx, progress, agent, "failed", "Child wake manifest record failed")
 		if finalizeErr := finalizeDurableWakeFailure(plan, "", wrappedErr); finalizeErr != nil {
 			return fmt.Errorf("%w (and failed to record wake failure: %v)", failure, finalizeErr)
 		}
