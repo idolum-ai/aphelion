@@ -138,6 +138,9 @@ func (s *SQLiteStore) IdentificationLedgerEntries(query IdentificationLedgerQuer
 
 func recordIdentificationLedgerEntryTx(tx *sql.Tx, input IdentificationLedgerEntryInput) (IdentificationLedgerEntry, error) {
 	statusExplicit := identificationLedgerEntryStatusExplicit(input)
+	if err := ValidateIdentificationLedgerEntryEnums(input); err != nil {
+		return IdentificationLedgerEntry{}, err
+	}
 	input = NormalizeIdentificationLedgerEntryInput(input)
 	if err := ValidateIdentificationLedgerEntryInput(input); err != nil {
 		return IdentificationLedgerEntry{}, err
@@ -210,6 +213,9 @@ func recordIdentificationLedgerEntryTx(tx *sql.Tx, input IdentificationLedgerEnt
 }
 
 func recordIdentificationLedgerObservationTx(tx *sql.Tx, input IdentificationLedgerObservationInput) (IdentificationLedgerObservation, error) {
+	if err := ValidateIdentificationLedgerObservationEnums(input); err != nil {
+		return IdentificationLedgerObservation{}, err
+	}
 	input = NormalizeIdentificationLedgerObservationInput(input)
 	if err := ValidateIdentificationLedgerObservationInput(input); err != nil {
 		return IdentificationLedgerObservation{}, err
@@ -222,32 +228,64 @@ func recordIdentificationLedgerObservationTx(tx *sql.Tx, input IdentificationLed
 	if input.ObservedAt.IsZero() {
 		input.ObservedAt = time.Now().UTC()
 	}
+	if input.LastObservedAt.IsZero() {
+		input.LastObservedAt = input.ObservedAt
+	}
 	existing, ok, err := identificationLedgerObservationByIDTx(tx, input.ObservationID)
 	if err != nil {
 		return IdentificationLedgerObservation{}, err
 	}
 	if ok {
+		expiresAt := identificationObservationMergedExpiry(existing.ExpiresAt, input.ExpiresAt)
+		lastObservedAt := input.LastObservedAt
+		if lastObservedAt.Before(existing.LastObservedAt) {
+			lastObservedAt = existing.LastObservedAt
+		}
+		count := existing.OccurrenceCount + input.OccurrenceCount
+		if _, err := tx.Exec(`
+			UPDATE identification_ledger_observations
+			SET expires_at = ?, last_observed_at = ?, occurrence_count = ?
+			WHERE observation_id = ?
+		`, nullableTime(expiresAt), lastObservedAt.Format(time.RFC3339Nano), count, input.ObservationID); err != nil {
+			return IdentificationLedgerObservation{}, fmt.Errorf("update identification ledger observation %s: %w", input.ObservationID, err)
+		}
+		existing.ExpiresAt = expiresAt
+		existing.LastObservedAt = lastObservedAt
+		existing.OccurrenceCount = count
 		return existing, nil
 	}
 	if _, err := tx.Exec(`
 		INSERT INTO identification_ledger_observations(
 			observation_id, entry_id, method, property, value, evidence_ref,
-			expires_at, observed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			expires_at, observed_at, last_observed_at, occurrence_count
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, input.ObservationID, input.EntryID, string(input.Method), string(input.Property), input.Value, input.EvidenceRef,
-		nullableTime(input.ExpiresAt), input.ObservedAt.Format(time.RFC3339Nano)); err != nil {
+		nullableTime(input.ExpiresAt), input.ObservedAt.Format(time.RFC3339Nano), input.LastObservedAt.Format(time.RFC3339Nano), input.OccurrenceCount); err != nil {
 		return IdentificationLedgerObservation{}, fmt.Errorf("insert identification ledger observation %s: %w", input.ObservationID, err)
 	}
 	return IdentificationLedgerObservation{
-		ObservationID: input.ObservationID,
-		EntryID:       input.EntryID,
-		Method:        input.Method,
-		Property:      input.Property,
-		Value:         input.Value,
-		EvidenceRef:   input.EvidenceRef,
-		ExpiresAt:     input.ExpiresAt,
-		ObservedAt:    input.ObservedAt,
+		ObservationID:   input.ObservationID,
+		EntryID:         input.EntryID,
+		Method:          input.Method,
+		Property:        input.Property,
+		Value:           input.Value,
+		EvidenceRef:     input.EvidenceRef,
+		ExpiresAt:       input.ExpiresAt,
+		ObservedAt:      input.ObservedAt,
+		LastObservedAt:  input.LastObservedAt,
+		OccurrenceCount: input.OccurrenceCount,
 	}, nil
+}
+
+func identificationObservationMergedExpiry(existing time.Time, requested time.Time) time.Time {
+	if requested.IsZero() {
+		return existing
+	}
+	requested = requested.UTC()
+	if existing.IsZero() || requested.Before(existing) {
+		return requested
+	}
+	return existing
 }
 
 func identificationLedgerEntryStatusExplicit(input IdentificationLedgerEntryInput) bool {
@@ -328,7 +366,7 @@ func identificationLedgerObservationByIDTx(tx *sql.Tx, observationID string) (Id
 	}
 	row := tx.QueryRow(`
 		SELECT observation_id, entry_id, method, property, value, evidence_ref,
-			expires_at, observed_at
+			expires_at, observed_at, last_observed_at, occurrence_count
 		FROM identification_ledger_observations
 		WHERE observation_id = ?
 	`, observationID)
@@ -338,7 +376,7 @@ func identificationLedgerObservationByIDTx(tx *sql.Tx, observationID string) (Id
 func (s *SQLiteStore) identificationLedgerObservations(entryID string) ([]IdentificationLedgerObservation, error) {
 	rows, err := s.db.Query(`
 		SELECT observation_id, entry_id, method, property, value, evidence_ref,
-			expires_at, observed_at
+			expires_at, observed_at, last_observed_at, occurrence_count
 		FROM identification_ledger_observations
 		WHERE entry_id = ?
 		ORDER BY observed_at ASC, observation_id ASC
@@ -407,15 +445,17 @@ func scanIdentificationLedgerObservationRows(scanner interface{ Scan(dest ...any
 
 func scanIdentificationLedgerObservation(scanner interface{ Scan(dest ...any) error }) (IdentificationLedgerObservation, bool, error) {
 	var (
-		observation  IdentificationLedgerObservation
-		methodRaw    string
-		propertyRaw  string
-		expiresAtRaw sql.NullString
-		observedRaw  string
+		observation     IdentificationLedgerObservation
+		methodRaw       string
+		propertyRaw     string
+		expiresAtRaw    sql.NullString
+		observedRaw     string
+		lastObservedRaw string
+		occurrenceCount int
 	)
 	if err := scanner.Scan(
 		&observation.ObservationID, &observation.EntryID, &methodRaw, &propertyRaw, &observation.Value, &observation.EvidenceRef,
-		&expiresAtRaw, &observedRaw,
+		&expiresAtRaw, &observedRaw, &lastObservedRaw, &occurrenceCount,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return IdentificationLedgerObservation{}, false, nil
@@ -435,7 +475,13 @@ func scanIdentificationLedgerObservation(scanner interface{ Scan(dest ...any) er
 	if err != nil {
 		return IdentificationLedgerObservation{}, false, fmt.Errorf("parse identification ledger observed_at: %w", err)
 	}
+	lastObservedAt, err := parseSQLiteTime(lastObservedRaw)
+	if err != nil {
+		return IdentificationLedgerObservation{}, false, fmt.Errorf("parse identification ledger last_observed_at: %w", err)
+	}
 	observation.ObservedAt = observedAt
+	observation.LastObservedAt = lastObservedAt
+	observation.OccurrenceCount = occurrenceCount
 	observation = NormalizeIdentificationLedgerObservation(observation)
 	return observation, true, nil
 }

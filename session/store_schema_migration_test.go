@@ -2656,6 +2656,8 @@ func TestMigratesSchemaV87ToV88IdentificationLedger(t *testing.T) {
 	assertSQLiteTable(t, store.db, "identification_ledger_observations")
 	assertSQLiteColumn(t, store.db, "identification_ledger_entries", "expires_at")
 	assertSQLiteColumn(t, store.db, "identification_ledger_observations", "method")
+	assertSQLiteColumn(t, store.db, "identification_ledger_observations", "last_observed_at")
+	assertSQLiteColumn(t, store.db, "identification_ledger_observations", "occurrence_count")
 }
 
 func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {

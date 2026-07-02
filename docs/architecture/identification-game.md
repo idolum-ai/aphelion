@@ -347,12 +347,17 @@ This gives operators a burst mode for long plans without reintroducing broad
 pre-granting. A user can walk the authority frontier before going offline, but
 the tail remains narrow, step-addressed, and perishable.
 
-The initial implementation slice only installs this non-executing meter: the
-button records a lookahead observation and proves the callback, authorization,
-and projection path. It does not yet simulate the plan to the next authority
-collision or compile the next candidate card. Until `runtime/lookahead.go`
-exists, `Next grant` is a safe bookmark on the current frontier, not the full
-scroll of identify.
+The first executable implementation makes this a real control-plane loop over
+the current recovery frontier. The button authenticates the private admin
+callback, scans unresolved contract-backed `request_approval` next actions,
+records a lookahead observation for the selected action, and materializes the
+normal approval card for that exact stored contract. It does not approve
+authority and it does not execute the protected operation.
+
+This is intentionally narrower than a full plan simulator. It identifies the
+next already-discovered authority frontier in the ledger/next-action graph. A
+future Ralph-loop simulator can advance through not-yet-collided plan steps, but
+it must produce the same kind of stored next action before projection.
 
 ## Resolution Sets
 
@@ -404,14 +409,14 @@ parallel approval model.
 
 ## Current Gaps
 
-The first implementation slice adds the identification ledger, collision
-publication, a pure menu projection, and a safe non-executing lookahead button.
-The architecture still lacks:
+The first executable slice adds the identification ledger, collision
+publication, a pure menu projection, a store-backed live-authority menu join,
+and a non-executing `Next grant` control that surfaces the next real
+contract-backed approval frontier. The architecture still lacks:
 
 - first-class plan objects and plan-version reshuffle triggers;
-- a live-state join that proves every executable menu token against current
-  grants, leases, bundles, and point-of-use constraints;
-- a lookahead simulator that advances to the next authority collision;
+- a deeper lookahead simulator that advances through not-yet-collided plan
+  steps instead of only the current next-action frontier;
 - resolution sets for repair choices;
 - typed child result objects at the parent boundary;
 - allow-list child context construction;
@@ -421,7 +426,7 @@ These are not all one PR. They are the frontier this draft names.
 
 ## File-Level Direction
 
-Likely new surfaces:
+Likely future surfaces:
 
 - `session/types_plan_ledger.go`
 - `session/store_plan_ledger.go`
@@ -438,21 +443,23 @@ Initial implementation slice:
   query projection.
 - `session/identification_ledger_schema.go`: v88 ledger migration.
 - `runtime/authority_discovery_menu.go`: deterministic menu and local metrics
-  projection.
+  projection, plus the store-backed live-authority join.
 - `core/review_event_callback.go` and
   `internal/telegramdecision/telegram_decisions_review.go`: `Next grant`
   callback token and confirmation-card projection.
+- `runtime/review_event_child_wake_retry.go`: private-admin `Next grant`
+  handling over the current contract-backed recovery frontier.
 
 Likely extensions:
 
 - `session/types_continuation_recovery.go`: add plan identity terms to future
   contract versions or compatibility canonicalization.
-- `runtime/continuation_materialize.go`: materialize resolution sets, not only
-  single handoffs.
+- `runtime/continuation_materialize.go`: continue to centralize
+  `request_approval` handoff materialization; later materialize resolution sets,
+  not only single handoffs.
 - `runtime/typed_continuation_approval.go`: consume selected candidates.
-- `internal/telegramdecision/telegram_decisions_review.go`: render `Next grant`
-  and resolution-set cards.
-- `core/review_event_callback.go`: add a lookahead callback action.
+- `internal/telegramdecision/telegram_decisions_review.go`: render
+  resolution-set cards.
 - `tool/request_approval_*`: render bundle-backed multi-option approvals.
 
 Likely replacements:

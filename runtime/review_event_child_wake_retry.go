@@ -4,7 +4,9 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,7 +27,7 @@ func (r *Runtime) HandleReviewEventAction(ctx context.Context, cb telegram.Callb
 	}
 }
 
-func (r *Runtime) handleReviewEventLookaheadNext(_ context.Context, cb telegram.CallbackQuery, event session.ReviewEvent) (string, error) {
+func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegram.CallbackQuery, event session.ReviewEvent) (string, error) {
 	if r == nil || r.store == nil {
 		return "", fmt.Errorf("runtime store unavailable")
 	}
@@ -34,41 +36,181 @@ func (r *Runtime) handleReviewEventLookaheadNext(_ context.Context, cb telegram.
 	} else if response != "" {
 		return response, nil
 	}
-	sessionID := strings.TrimSpace(event.TargetSessionID)
-	if sessionID == "" {
-		sessionID = strings.TrimSpace(event.SourceSessionID)
+	key := session.SessionKey{ChatID: event.TargetAdminChatID, UserID: 0, Scope: telegramDMScopeRef(event.TargetAdminChatID)}
+	msg := core.InboundMessage{
+		ChatID:    event.TargetAdminChatID,
+		SenderID:  callbackReviewEventSenderID(cb),
+		MessageID: callbackReviewEventMessageID(cb),
+		Text:      fmt.Sprintf("review_event:%d:%s", event.ID, core.ReviewEventActionLookaheadNext),
 	}
-	if sessionID == "" {
-		return "", fmt.Errorf("lookahead requires a review event session")
+	now := time.Now().UTC()
+	action, ok, err := r.nextLookaheadRecoveryApprovalAction(key, now)
+	if err != nil {
+		return "", err
 	}
-	stepRef := "review_event:" + fmt.Sprint(event.ID)
-	if meta, ok := parseReviewEventArtifactMetadata(event); ok {
-		if recordID := strings.TrimSpace(meta.Metadata["next_action_record_id"]); recordID != "" {
-			stepRef = "next_action:" + recordID
+	if !ok {
+		if err := r.recordLookaheadNoFrontier(event, key, now); err != nil {
+			return "", err
+		}
+		return "No unresolved authority frontier is available. No authority was approved or executed.", nil
+	}
+	if err := r.recordLookaheadAuthorityFrontier(event, key, action, now); err != nil {
+		return "", err
+	}
+	materialized, _, err := r.materializePendingRecoveryApprovalNextActionLocked(ctx, key, msg, now)
+	if err != nil {
+		return "", err
+	}
+	if !materialized {
+		return "Next authority frontier recorded, but no approval card was materialized. No authority was approved or executed.", nil
+	}
+	return "Next authority approval surfaced. No authority was approved or executed.", nil
+}
+
+func (r *Runtime) nextLookaheadRecoveryApprovalAction(key session.SessionKey, now time.Time) (session.NextActionRecord, bool, error) {
+	actions, err := r.store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", "continuation_lease_request", 100)
+	if err != nil {
+		return session.NextActionRecord{}, false, err
+	}
+	bundleActions, err := r.store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", "authority_bundle_request", 100)
+	if err != nil {
+		return session.NextActionRecord{}, false, err
+	}
+	actions = append(actions, bundleActions...)
+	sort.SliceStable(actions, func(i, j int) bool {
+		if actions[i].CreatedAt.Equal(actions[j].CreatedAt) {
+			return actions[i].RecordID < actions[j].RecordID
+		}
+		return actions[i].CreatedAt.Before(actions[j].CreatedAt)
+	})
+	for _, action := range actions {
+		consumable, invalid := recoveryApprovalNextActionConsumable(action)
+		if invalid || !consumable {
+			continue
+		}
+		switch strings.TrimSpace(action.OperationKind) {
+		case "continuation_lease_request":
+			executable, invalid, err := r.recoveryApprovalContinuationContractExecutable(key, action)
+			if err != nil {
+				return session.NextActionRecord{}, false, err
+			}
+			if executable && !invalid {
+				return action, true, nil
+			}
+		case "authority_bundle_request":
+			executable, invalid, _, err := r.recoveryApprovalAuthorityBundleExecutable(key, action, now)
+			if err != nil {
+				return session.NextActionRecord{}, false, err
+			}
+			if executable && !invalid {
+				return action, true, nil
+			}
 		}
 	}
+	return session.NextActionRecord{}, false, nil
+}
+
+func (r *Runtime) recordLookaheadNoFrontier(event session.ReviewEvent, key session.SessionKey, now time.Time) error {
+	sessionID := session.SessionIDForKey(key)
 	shapeHash := session.AuthorityShapeHash(session.AuthorityShapeInput{
-		Tool:          "review_event",
+		Tool:          "request_approval",
 		Action:        string(core.ReviewEventActionLookaheadNext),
-		ResourceClass: "review_event_frontier",
+		ResourceClass: "no_frontier",
 	})
 	_, _, err := r.store.RecordIdentificationLedgerObservation(session.IdentificationLedgerEntryInput{
 		PlanID:      session.IdentificationPlanIDForSession(sessionID),
 		PlanVersion: session.IdentificationDefaultPlanVersion,
 		SessionID:   sessionID,
-		StepRef:     stepRef,
+		StepRef:     "review_event:" + fmt.Sprint(event.ID),
 		ShapeHash:   shapeHash,
 		Status:      session.IdentificationLedgerStatusPartial,
+		UpdatedAt:   now,
 	}, session.IdentificationLedgerObservationInput{
 		Method:      session.IdentificationObservationLookahead,
-		Property:    session.IdentificationPropertyApprovalClass,
-		Value:       "review_event_frontier",
+		Property:    session.IdentificationPropertyRetryability,
+		Value:       "no_unresolved_authority_frontier",
 		EvidenceRef: "review_event:" + fmt.Sprint(event.ID),
+		ObservedAt:  now,
 	})
+	return err
+}
+
+func (r *Runtime) recordLookaheadAuthorityFrontier(event session.ReviewEvent, key session.SessionKey, action session.NextActionRecord, now time.Time) error {
+	sessionID := session.SessionIDForKey(key)
+	labelRef, approvalClass, shapeHash, err := r.lookaheadAuthorityFrontierLabel(action)
 	if err != nil {
-		return "", fmt.Errorf("record lookahead identification: %w", err)
+		return err
 	}
-	return "Next authority frontier recorded. No authority was approved or executed.", nil
+	entry := session.IdentificationLedgerEntryInput{
+		PlanID:      session.IdentificationPlanIDForSession(sessionID),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   sessionID,
+		StepRef:     "next_action:" + strings.TrimSpace(action.RecordID),
+		ShapeHash:   shapeHash,
+		LabelRef:    labelRef,
+		Status:      session.IdentificationLedgerStatusProposed,
+		UpdatedAt:   now,
+	}
+	evidenceRef := "review_event:" + fmt.Sprint(event.ID)
+	observations := []session.IdentificationLedgerObservationInput{{
+		Method:      session.IdentificationObservationLookahead,
+		Property:    session.IdentificationPropertyApprovalClass,
+		Value:       approvalClass,
+		EvidenceRef: evidenceRef,
+		ObservedAt:  now,
+	}, {
+		Method:      session.IdentificationObservationLookahead,
+		Property:    session.IdentificationPropertyTool,
+		Value:       strings.TrimSpace(action.OperationTool),
+		EvidenceRef: "next_action:" + strings.TrimSpace(action.RecordID),
+		ObservedAt:  now,
+	}}
+	if labelRef != "" {
+		observations = append(observations, session.IdentificationLedgerObservationInput{
+			Method:      session.IdentificationObservationLookahead,
+			Property:    session.IdentificationPropertyContract,
+			Value:       labelRef,
+			EvidenceRef: "next_action:" + strings.TrimSpace(action.RecordID),
+			ObservedAt:  now,
+		})
+	}
+	for _, observation := range observations {
+		if _, _, err := r.store.RecordIdentificationLedgerObservation(entry, observation); err != nil {
+			return fmt.Errorf("record lookahead authority frontier: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *Runtime) lookaheadAuthorityFrontierLabel(action session.NextActionRecord) (string, string, string, error) {
+	var input recoveryApprovalHandoffInput
+	if err := json.Unmarshal([]byte(action.OperationInputJSON), &input); err != nil {
+		return "", "", "", fmt.Errorf("decode lookahead recovery handoff: %w", err)
+	}
+	contractID := strings.TrimSpace(input.ContractID)
+	switch strings.TrimSpace(action.OperationKind) {
+	case "continuation_lease_request":
+		contract, ok, err := r.store.ContinuationRecoveryContract(contractID)
+		if err != nil {
+			return "", "", "", err
+		}
+		if !ok {
+			return "", "", "", fmt.Errorf("lookahead continuation recovery contract %q not found", contractID)
+		}
+		contract = session.NormalizeContinuationRecoveryContract(contract)
+		return contract.ContractID, string(contract.LeaseClass), session.AuthorityShapeHashForContinuationRecoveryContract(contract), nil
+	case "authority_bundle_request":
+		if contractID == "" {
+			return "", "", "", fmt.Errorf("lookahead authority bundle contract_id is required")
+		}
+		return contractID, "authority_bundle", session.AuthorityShapeHash(session.AuthorityShapeInput{
+			Tool:          strings.TrimSpace(action.OperationTool),
+			Action:        strings.TrimSpace(action.OperationKind),
+			ResourceClass: "authority_bundle",
+		}), nil
+	default:
+		return "", "", "", fmt.Errorf("unsupported lookahead operation kind %q", action.OperationKind)
+	}
 }
 
 func (r *Runtime) handleReviewEventChildWakeRetry(ctx context.Context, cb telegram.CallbackQuery, event session.ReviewEvent) (string, error) {

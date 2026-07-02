@@ -80,6 +80,9 @@ func TestIdentificationLedgerPreservesGraduatedObservationHistory(t *testing.T) 
 	if got := projection.Properties[IdentificationPropertyRetryability][0].Method; got != IdentificationObservationCollision {
 		t.Fatalf("retryability method = %q, want collision", got)
 	}
+	if got := projection.Properties[IdentificationPropertyRetryability][0].OccurrenceCount; got != 2 {
+		t.Fatalf("retryability occurrence count = %d, want duplicate sighting counted", got)
+	}
 	if got := projection.Properties[IdentificationPropertyContract][0].Method; got != IdentificationObservationOperator {
 		t.Fatalf("contract method = %q, want operator", got)
 	}
@@ -290,6 +293,58 @@ func TestIdentificationLedgerRejectsUnknownObservationProperty(t *testing.T) {
 		EvidenceRef: "next_action:unknown",
 	}); err == nil {
 		t.Fatalf("RecordIdentificationLedgerObservation(unknown property) err = nil, want validation error")
+	}
+	if _, _, err := store.RecordIdentificationLedgerObservation(entryInput, IdentificationLedgerObservationInput{
+		Method:      IdentificationObservationMethod("ad_hoc_future_method"),
+		Property:    IdentificationPropertyApprovalClass,
+		Value:       "maybe",
+		EvidenceRef: "next_action:unknown",
+	}); err == nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(unknown method) err = nil, want validation error")
+	}
+	if _, err := store.RecordIdentificationLedgerEntry(IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:read-unread-mail",
+		ShapeHash:   "sha256:mail-shape",
+		Status:      IdentificationLedgerEntryStatus("ad_hoc_future_status"),
+	}); err == nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(unknown status) err = nil, want validation error")
+	}
+}
+
+func TestIdentificationLedgerDBRejectsInvalidEnums(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	if _, err := store.db.Exec(`
+		INSERT INTO identification_ledger_entries(
+			entry_id, plan_id, plan_version, session_id, step_ref, shape_hash, status
+		) VALUES ('ident:bad-status', 'plan', 'v1', 'session', 'step', 'shape', 'made_up')
+	`); err == nil {
+		t.Fatalf("insert invalid ledger status err = nil, want CHECK failure")
+	}
+	if _, err := store.db.Exec(`
+		INSERT INTO identification_ledger_entries(
+			entry_id, plan_id, plan_version, session_id, step_ref, shape_hash, status
+		) VALUES ('ident:valid-status', 'plan', 'v1', 'session', 'step', 'shape', 'partial')
+	`); err != nil {
+		t.Fatalf("insert valid ledger entry: %v", err)
+	}
+	if _, err := store.db.Exec(`
+		INSERT INTO identification_ledger_observations(
+			observation_id, entry_id, method, property, value
+		) VALUES ('idobs:bad-method', 'ident:valid-status', 'made_up', 'approval_class', 'child_wake')
+	`); err == nil {
+		t.Fatalf("insert invalid observation method err = nil, want CHECK failure")
+	}
+	if _, err := store.db.Exec(`
+		INSERT INTO identification_ledger_observations(
+			observation_id, entry_id, method, property, value
+		) VALUES ('idobs:bad-property', 'ident:valid-status', 'collision', 'made_up', 'child_wake')
+	`); err == nil {
+		t.Fatalf("insert invalid observation property err = nil, want CHECK failure")
 	}
 }
 

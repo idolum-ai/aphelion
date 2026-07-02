@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -48,12 +49,13 @@ type AuthorityDiscoveryMenuToken struct {
 }
 
 type AuthorityDiscoveryMenuInput struct {
-	PlanID      string
-	PlanVersion string
-	SessionID   string
-	Entries     []session.IdentificationLedgerProjection
-	Loadout     []AuthorityDiscoveryLoadoutSlot
-	Now         time.Time
+	PlanID            string
+	PlanVersion       string
+	SessionID         string
+	Entries           []session.IdentificationLedgerProjection
+	Loadout           []AuthorityDiscoveryLoadoutSlot
+	LiveAuthorityRefs map[string]bool
+	Now               time.Time
 }
 
 type AuthorityDiscoveryMenu struct {
@@ -102,7 +104,7 @@ func CompileAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuInput) AuthorityD
 			StepRef:    entry.StepRef,
 			ShapeHash:  entry.ShapeHash,
 			LabelRef:   entry.LabelRef,
-			State:      authorityDiscoveryStateForEntry(entry, now),
+			State:      authorityDiscoveryStateForEntry(entry, now, input.LiveAuthorityRefs[entry.LabelRef]),
 			Properties: map[session.IdentificationObservationProperty][]string{},
 			ExpiresAt:  entry.ExpiresAt,
 		}
@@ -130,9 +132,10 @@ func CompileAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuInput) AuthorityD
 			continue
 		}
 		state := AuthorityDiscoveryTokenOneApprovalAway
+		live := slot.LiveAuthority || input.LiveAuthorityRefs[strings.TrimSpace(slot.LabelRef)]
 		if !slot.ExpiresAt.IsZero() && !slot.ExpiresAt.After(now) {
 			state = AuthorityDiscoveryTokenExpired
-		} else if slot.LiveAuthority {
+		} else if live {
 			state = AuthorityDiscoveryTokenExecutable
 		}
 		token := AuthorityDiscoveryMenuToken{
@@ -190,13 +193,177 @@ func ScoreAuthorityDiscoveryMenu(menu AuthorityDiscoveryMenu) AuthorityDiscovery
 	return metrics
 }
 
-func authorityDiscoveryStateForEntry(entry session.IdentificationLedgerEntry, now time.Time) AuthorityDiscoveryTokenState {
+type AuthorityDiscoveryMenuBuildInput struct {
+	Key         session.SessionKey
+	PlanID      string
+	PlanVersion string
+	SessionID   string
+	Loadout     []AuthorityDiscoveryLoadoutSlot
+	Now         time.Time
+	Limit       int
+}
+
+func (r *Runtime) BuildAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuBuildInput) (AuthorityDiscoveryMenu, error) {
+	if r == nil || r.store == nil {
+		return AuthorityDiscoveryMenu{}, fmt.Errorf("authority discovery menu requires runtime store")
+	}
+	sessionID := strings.TrimSpace(input.SessionID)
+	if sessionID == "" {
+		sessionID = session.SessionIDForKey(input.Key)
+	}
+	planID := strings.TrimSpace(input.PlanID)
+	if planID == "" {
+		planID = session.IdentificationPlanIDForSession(sessionID)
+	}
+	planVersion := strings.TrimSpace(input.PlanVersion)
+	if planVersion == "" {
+		planVersion = session.IdentificationDefaultPlanVersion
+	}
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	entries, err := r.store.IdentificationLedgerEntries(session.IdentificationLedgerQuery{
+		PlanID:      planID,
+		PlanVersion: planVersion,
+		SessionID:   sessionID,
+		Limit:       limit,
+	})
+	if err != nil {
+		return AuthorityDiscoveryMenu{}, err
+	}
+	now := input.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	liveRefs := map[string]bool{}
+	for _, projection := range entries {
+		labelRef := strings.TrimSpace(projection.Entry.LabelRef)
+		if labelRef == "" {
+			continue
+		}
+		live, err := r.authorityDiscoveryLabelLive(input.Key, sessionID, labelRef, now)
+		if err != nil {
+			return AuthorityDiscoveryMenu{}, err
+		}
+		liveRefs[labelRef] = live
+	}
+	for _, slot := range input.Loadout {
+		labelRef := strings.TrimSpace(slot.LabelRef)
+		if labelRef == "" {
+			continue
+		}
+		live, err := r.authorityDiscoveryLabelLive(input.Key, sessionID, labelRef, now)
+		if err != nil {
+			return AuthorityDiscoveryMenu{}, err
+		}
+		liveRefs[labelRef] = live
+	}
+	return CompileAuthorityDiscoveryMenu(AuthorityDiscoveryMenuInput{
+		PlanID:            planID,
+		PlanVersion:       planVersion,
+		SessionID:         sessionID,
+		Entries:           entries,
+		Loadout:           input.Loadout,
+		LiveAuthorityRefs: liveRefs,
+		Now:               now,
+	}), nil
+}
+
+func (r *Runtime) authorityDiscoveryLabelLive(key session.SessionKey, sessionID string, labelRef string, now time.Time) (bool, error) {
+	labelRef = strings.TrimSpace(labelRef)
+	if labelRef == "" || r == nil || r.store == nil {
+		return false, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	switch authorityDiscoveryCandidateKind(labelRef) {
+	case "capability_grant":
+		grant, ok, err := r.store.CapabilityGrant(labelRef)
+		if err != nil || !ok {
+			return false, err
+		}
+		grant = session.NormalizeCapabilityGrant(grant)
+		return grant.Status == session.CapabilityGrantStatusActive &&
+			grant.RevokedAt.IsZero() &&
+			(grant.ExpiresAt.IsZero() || grant.ExpiresAt.After(now.UTC())), nil
+	case "continuation_recovery_contract":
+		return r.authorityDiscoveryContinuationContractLive(key, sessionID, labelRef, now)
+	case "authority_bundle":
+		return r.authorityDiscoveryAuthorityBundleLive(key, sessionID, labelRef, now)
+	default:
+		return false, nil
+	}
+}
+
+func (r *Runtime) authorityDiscoveryContinuationContractLive(key session.SessionKey, sessionID string, contractID string, now time.Time) (bool, error) {
+	contract, ok, err := r.store.ContinuationRecoveryContract(contractID)
+	if err != nil || !ok {
+		return false, err
+	}
+	contract = session.NormalizeContinuationRecoveryContract(contract)
+	if contract.Status != session.ContinuationRecoveryContractStatusRecorded {
+		return false, nil
+	}
+	if strings.TrimSpace(contract.SessionID) != "" && strings.TrimSpace(contract.SessionID) != strings.TrimSpace(sessionID) {
+		return false, nil
+	}
+	state, exists, err := r.store.ContinuationStateIfExists(key)
+	if err != nil || !exists {
+		return false, err
+	}
+	state = session.NormalizeContinuationState(state)
+	return state.Status == session.ContinuationStatusApproved &&
+		state.RemainingTurns > 0 &&
+		strings.TrimSpace(state.ContinuationLease.RecoveryContractID) == strings.TrimSpace(contractID) &&
+		state.ContinuationLease.ActiveAt(now), nil
+}
+
+func (r *Runtime) authorityDiscoveryAuthorityBundleLive(key session.SessionKey, sessionID string, bundleID string, now time.Time) (bool, error) {
+	bundle, ok, err := r.store.AuthorityBundleContract(bundleID)
+	if err != nil || !ok {
+		return false, err
+	}
+	bundle = session.NormalizeAuthorityBundleContract(bundle)
+	if bundle.Status != session.AuthorityBundleStatusRecorded {
+		return false, nil
+	}
+	if strings.TrimSpace(bundle.SessionID) != "" && strings.TrimSpace(bundle.SessionID) != strings.TrimSpace(sessionID) {
+		return false, nil
+	}
+	if !bundle.ExpiresAt.IsZero() && !bundle.ExpiresAt.After(now.UTC()) {
+		return false, nil
+	}
+	if strings.TrimSpace(bundle.PrimaryContinuationContractID) != "" {
+		live, err := r.authorityDiscoveryContinuationContractLive(key, sessionID, bundle.PrimaryContinuationContractID, now)
+		if err != nil || !live {
+			return live, err
+		}
+	}
+	for _, spec := range bundle.RequiredCapabilityGrants {
+		spec = session.NormalizeCapabilityGrantSpec(spec)
+		if strings.TrimSpace(spec.GrantID) == "" {
+			return false, nil
+		}
+		live, err := r.authorityDiscoveryLabelLive(key, sessionID, spec.GrantID, now)
+		if err != nil || !live {
+			return live, err
+		}
+	}
+	return strings.TrimSpace(bundle.PrimaryContinuationContractID) != "" || len(bundle.RequiredCapabilityGrants) > 0, nil
+}
+
+func authorityDiscoveryStateForEntry(entry session.IdentificationLedgerEntry, now time.Time, liveAuthority bool) AuthorityDiscoveryTokenState {
 	if !entry.ExpiresAt.IsZero() && !entry.ExpiresAt.After(now) {
 		return AuthorityDiscoveryTokenExpired
 	}
 	switch entry.Status {
 	case session.IdentificationLedgerStatusApproved:
-		return AuthorityDiscoveryTokenExecutable
+		if liveAuthority {
+			return AuthorityDiscoveryTokenExecutable
+		}
+		return AuthorityDiscoveryTokenOneApprovalAway
 	case session.IdentificationLedgerStatusConsumed:
 		return AuthorityDiscoveryTokenSpent
 	case session.IdentificationLedgerStatusExpired:

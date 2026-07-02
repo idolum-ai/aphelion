@@ -63,14 +63,16 @@ type IdentificationLedgerEntry struct {
 }
 
 type IdentificationLedgerObservation struct {
-	ObservationID string
-	EntryID       string
-	Method        IdentificationObservationMethod
-	Property      IdentificationObservationProperty
-	Value         string
-	EvidenceRef   string
-	ExpiresAt     time.Time
-	ObservedAt    time.Time
+	ObservationID   string
+	EntryID         string
+	Method          IdentificationObservationMethod
+	Property        IdentificationObservationProperty
+	Value           string
+	EvidenceRef     string
+	ExpiresAt       time.Time
+	ObservedAt      time.Time
+	LastObservedAt  time.Time
+	OccurrenceCount int
 }
 
 type IdentificationLedgerEntryInput struct {
@@ -88,14 +90,16 @@ type IdentificationLedgerEntryInput struct {
 }
 
 type IdentificationLedgerObservationInput struct {
-	ObservationID string
-	EntryID       string
-	Method        IdentificationObservationMethod
-	Property      IdentificationObservationProperty
-	Value         string
-	EvidenceRef   string
-	ExpiresAt     time.Time
-	ObservedAt    time.Time
+	ObservationID   string
+	EntryID         string
+	Method          IdentificationObservationMethod
+	Property        IdentificationObservationProperty
+	Value           string
+	EvidenceRef     string
+	ExpiresAt       time.Time
+	ObservedAt      time.Time
+	LastObservedAt  time.Time
+	OccurrenceCount int
 }
 
 type IdentificationLedgerProjection struct {
@@ -130,7 +134,7 @@ func NormalizeIdentificationLedgerEntryStatus(status IdentificationLedgerEntrySt
 		IdentificationLedgerStatusInvalidated:
 		return IdentificationLedgerEntryStatus(normalizeEnumValue(string(status)))
 	default:
-		return IdentificationLedgerStatusUnidentified
+		return ""
 	}
 }
 
@@ -209,6 +213,15 @@ func NormalizeIdentificationLedgerObservationInput(input IdentificationLedgerObs
 	if !input.ObservedAt.IsZero() {
 		input.ObservedAt = input.ObservedAt.UTC()
 	}
+	if !input.LastObservedAt.IsZero() {
+		input.LastObservedAt = input.LastObservedAt.UTC()
+	}
+	if input.LastObservedAt.IsZero() {
+		input.LastObservedAt = input.ObservedAt
+	}
+	if input.OccurrenceCount <= 0 {
+		input.OccurrenceCount = 1
+	}
 	if input.ObservationID == "" {
 		input.ObservationID = IdentificationLedgerObservationID(input.EntryID, input.Method, input.Property, input.Value, input.EvidenceRef)
 	}
@@ -234,14 +247,16 @@ func NormalizeIdentificationLedgerEntry(entry IdentificationLedgerEntry) Identif
 
 func NormalizeIdentificationLedgerObservation(obs IdentificationLedgerObservation) IdentificationLedgerObservation {
 	normalized := NormalizeIdentificationLedgerObservationInput(IdentificationLedgerObservationInput{
-		ObservationID: obs.ObservationID,
-		EntryID:       obs.EntryID,
-		Method:        obs.Method,
-		Property:      obs.Property,
-		Value:         obs.Value,
-		EvidenceRef:   obs.EvidenceRef,
-		ExpiresAt:     obs.ExpiresAt,
-		ObservedAt:    obs.ObservedAt,
+		ObservationID:   obs.ObservationID,
+		EntryID:         obs.EntryID,
+		Method:          obs.Method,
+		Property:        obs.Property,
+		Value:           obs.Value,
+		EvidenceRef:     obs.EvidenceRef,
+		ExpiresAt:       obs.ExpiresAt,
+		ObservedAt:      obs.ObservedAt,
+		LastObservedAt:  obs.LastObservedAt,
+		OccurrenceCount: obs.OccurrenceCount,
 	})
 	return IdentificationLedgerObservation(normalized)
 }
@@ -300,6 +315,9 @@ func AuthorityResourceClass(resource string) string {
 }
 
 func ValidateIdentificationLedgerEntryInput(input IdentificationLedgerEntryInput) error {
+	if err := ValidateIdentificationLedgerEntryEnums(input); err != nil {
+		return err
+	}
 	input = NormalizeIdentificationLedgerEntryInput(input)
 	if input.PlanID == "" {
 		return fmt.Errorf("identification ledger entry requires plan_id")
@@ -319,6 +337,9 @@ func ValidateIdentificationLedgerEntryInput(input IdentificationLedgerEntryInput
 	if input.EntryID == "" {
 		return fmt.Errorf("identification ledger entry requires entry_id")
 	}
+	if input.Status == "" {
+		return fmt.Errorf("identification ledger entry requires status")
+	}
 	if want := IdentificationLedgerEntryID(input.PlanID, input.PlanVersion, input.SessionID, input.StepRef, input.ShapeHash); input.EntryID != want {
 		return fmt.Errorf("identification ledger entry_id mismatch")
 	}
@@ -326,6 +347,9 @@ func ValidateIdentificationLedgerEntryInput(input IdentificationLedgerEntryInput
 }
 
 func ValidateIdentificationLedgerObservationInput(input IdentificationLedgerObservationInput) error {
+	if err := ValidateIdentificationLedgerObservationEnums(input); err != nil {
+		return err
+	}
 	input = NormalizeIdentificationLedgerObservationInput(input)
 	if input.EntryID == "" {
 		return fmt.Errorf("identification ledger observation requires entry_id")
@@ -346,6 +370,65 @@ func ValidateIdentificationLedgerObservationInput(input IdentificationLedgerObse
 		return fmt.Errorf("identification ledger observation_id mismatch")
 	}
 	return nil
+}
+
+func ValidateIdentificationLedgerEntryEnums(input IdentificationLedgerEntryInput) error {
+	if raw := strings.TrimSpace(string(input.Status)); raw != "" && !identificationLedgerEntryStatusKnown(raw) {
+		return fmt.Errorf("identification ledger entry unknown status %q", raw)
+	}
+	return nil
+}
+
+func ValidateIdentificationLedgerObservationEnums(input IdentificationLedgerObservationInput) error {
+	if raw := strings.TrimSpace(string(input.Method)); raw != "" && !identificationObservationMethodKnown(raw) {
+		return fmt.Errorf("identification ledger observation unknown method %q", raw)
+	}
+	if raw := strings.TrimSpace(string(input.Property)); raw != "" && !identificationObservationPropertyKnown(raw) {
+		return fmt.Errorf("identification ledger observation unknown property %q", raw)
+	}
+	return nil
+}
+
+func identificationLedgerEntryStatusKnown(raw string) bool {
+	switch IdentificationLedgerEntryStatus(normalizeEnumValue(raw)) {
+	case IdentificationLedgerStatusUnidentified,
+		IdentificationLedgerStatusPartial,
+		IdentificationLedgerStatusProposed,
+		IdentificationLedgerStatusApproved,
+		IdentificationLedgerStatusConsumed,
+		IdentificationLedgerStatusExpired,
+		IdentificationLedgerStatusInvalidated:
+		return true
+	default:
+		return false
+	}
+}
+
+func identificationObservationMethodKnown(raw string) bool {
+	switch IdentificationObservationMethod(normalizeEnumValue(raw)) {
+	case IdentificationObservationCollision,
+		IdentificationObservationStatic,
+		IdentificationObservationLookahead,
+		IdentificationObservationOperator:
+		return true
+	default:
+		return false
+	}
+}
+
+func identificationObservationPropertyKnown(raw string) bool {
+	switch IdentificationObservationProperty(normalizeEnumValue(raw)) {
+	case IdentificationPropertyApprovalClass,
+		IdentificationPropertyResource,
+		IdentificationPropertyTimeout,
+		IdentificationPropertyRetryability,
+		IdentificationPropertyBundleFit,
+		IdentificationPropertyContract,
+		IdentificationPropertyTool:
+		return true
+	default:
+		return false
+	}
 }
 
 func IdentificationLedgerEntryID(planID string, planVersion string, sessionID string, stepRef string, shapeHash string) string {
