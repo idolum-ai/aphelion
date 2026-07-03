@@ -160,6 +160,268 @@ func TestReviewEventLookaheadRecordsNonExecutingLedgerObservation(t *testing.T) 
 	}
 }
 
+func TestReviewEventLookaheadSimulatesNextPhaseCapabilityGrant(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	now := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-lookahead-phase",
+		Objective: "Continue the phase plan with one future GitHub issue step.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-lookahead-phase",
+			Goal:           "Finish a long-running setup.",
+			CurrentPhaseID: "phase-read",
+			Phases: []session.OperationPhase{{
+				ID:          "phase-read",
+				Summary:     "Inspect local evidence.",
+				Status:      session.PlanStatusCompleted,
+				CompletedAt: now.Add(-time.Minute),
+			}, {
+				ID:               "phase-github-issue",
+				Summary:          "Open one issue documenting the generated schema blocker.",
+				Status:           session.PlanStatusPending,
+				AllowedActions:   []string{"github_issue_create"},
+				ForbiddenActions: []string{"github_repo_push"},
+				ValidationPlan:   []string{"stop after the issue is opened or a typed blocker appears"},
+				RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+					Kind:           session.CapabilityKindExternalAccount,
+					TargetResource: "github:idolum-ai/CopilotKit",
+					GrantedTo:      "telegram:1001",
+					AllowedActions: []string{"github_issue_create"},
+					Contract:       `{"bounded_effect":"Open one issue only."}`,
+					Constraints:    `{"repository":"idolum-ai/CopilotKit"}`,
+				}},
+			}},
+		},
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	event := session.ReviewEvent{
+		ID:                91,
+		SourceSessionID:   session.SessionIDForKey(key),
+		TargetSessionID:   session.SessionIDForKey(key),
+		TargetAdminChatID: 1001,
+		Summary:           "Approved the current grant.",
+		Status:            "delivered",
+		DeliveryMessageID: 91,
+	}
+	text, err := rt.HandleReviewEventAction(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-lookahead-simulated-phase",
+		From:    &telegram.User{ID: 1001},
+		Message: &telegram.Message{MessageID: 91, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionLookaheadNext),
+	}, event, core.ReviewEventActionLookaheadNext)
+	if err != nil {
+		t.Fatalf("HandleReviewEventAction(simulated lookahead) err = %v", err)
+	}
+	if !strings.Contains(text, "approval surfaced") || !strings.Contains(text, "No authority was approved or executed") {
+		t.Fatalf("lookahead text = %q, want surfaced non-executing approval", text)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one simulated approval card", inlineCount)
+	}
+	for _, want := range []string{"Approve:", "github_issue_create", "external_account", "github:idolum-ai/CopilotKit", "github_repo_push"} {
+		if !strings.Contains(inlineText, want) {
+			t.Fatalf("inline text = %q, want simulated approval card containing %q", inlineText, want)
+		}
+	}
+	state, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if state.Status != session.ContinuationStatusPending || state.ContinuationLease.LeaseClass != session.ContinuationLeaseClassCapabilityGrant {
+		t.Fatalf("continuation state = %#v, want pending capability-grant carrier", state)
+	}
+	if len(state.ContinuationLease.RequiredCapabilityGrants) != 1 ||
+		state.ContinuationLease.RequiredCapabilityGrants[0].TargetResource != "github:idolum-ai/CopilotKit" {
+		t.Fatalf("required grants = %#v, want simulated phase grant copied onto approval", state.ContinuationLease.RequiredCapabilityGrants)
+	}
+	projections, err := store.IdentificationLedgerEntries(session.IdentificationLedgerQuery{
+		PlanID:      session.IdentificationPlanIDForSession(session.SessionIDForKey(key)),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   session.SessionIDForKey(key),
+		Limit:       20,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	found := false
+	for _, projection := range projections {
+		if projection.Entry.StepRef != "operation_phase:phase-github-issue" || projection.Entry.Status != session.IdentificationLedgerStatusProposed {
+			continue
+		}
+		for _, observation := range projection.Observations {
+			if observation.Method == session.IdentificationObservationLookahead &&
+				observation.Property == session.IdentificationPropertyBundleFit &&
+				observation.Value == "operation_phase_required_capability" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("ledger projections = %#v, want simulated operation-phase lookahead entry", projections)
+	}
+}
+
+func TestLookaheadSimulationSkipsCoveredPhaseGrant(t *testing.T) {
+	t.Parallel()
+
+	_, store, _, _ := buildRuntimeFixtures(t)
+	rt := &Runtime{store: store}
+	now := time.Date(2026, 7, 3, 12, 30, 0, 0, time.UTC)
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-covered-search",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github:idolum-ai/CopilotKit",
+		AllowedActions: []string{"github_issue_search"},
+		Status:         session.CapabilityGrantStatusActive,
+		GrantedAt:      now,
+		ExpiresAt:      now.Add(time.Hour),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	opState := session.OperationState{
+		ID: "op-lookahead-covered",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-lookahead-covered",
+			CurrentPhaseID: "phase-covered",
+			Phases: []session.OperationPhase{{
+				ID:      "phase-covered",
+				Summary: "Search existing issues.",
+				Status:  session.PlanStatusPending,
+				RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+					Kind:           session.CapabilityKindExternalAccount,
+					TargetResource: "github:idolum-ai/CopilotKit",
+					GrantedTo:      "telegram:1001",
+					AllowedActions: []string{"github_issue_search"},
+				}},
+			}, {
+				ID:      "phase-missing",
+				Summary: "Create follow-up issue.",
+				Status:  session.PlanStatusPending,
+				RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+					Kind:           session.CapabilityKindExternalAccount,
+					TargetResource: "github:idolum-ai/CopilotKit",
+					GrantedTo:      "telegram:1001",
+					AllowedActions: []string{"github_issue_create"},
+				}},
+			}},
+		},
+	}
+	phase, grants, ok, err := rt.nextLookaheadPhaseCapabilityCollision(opState, now)
+	if err != nil {
+		t.Fatalf("nextLookaheadPhaseCapabilityCollision() err = %v", err)
+	}
+	if !ok || phase.ID != "phase-missing" {
+		t.Fatalf("phase = %#v ok=%v, want phase-missing after covered phase skipped", phase, ok)
+	}
+	if len(grants) != 1 || grants[0].AllowedActions[0] != "github_issue_create" {
+		t.Fatalf("grants = %#v, want missing create grant", grants)
+	}
+}
+
+func TestReviewEventLookaheadSimulationMaterializationFailureDoesNotLeaveProposedToken(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	rt := &Runtime{store: store}
+	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	now := time.Date(2026, 7, 3, 13, 0, 0, 0, time.UTC)
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID: "op-lookahead-no-materialization",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-lookahead-no-materialization",
+			CurrentPhaseID: "phase-missing",
+			Phases: []session.OperationPhase{{
+				ID:      "phase-missing",
+				Summary: "Create follow-up issue.",
+				Status:  session.PlanStatusPending,
+				RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+					Kind:           session.CapabilityKindExternalAccount,
+					TargetResource: "github:idolum-ai/CopilotKit",
+					GrantedTo:      "telegram:1001",
+					AllowedActions: []string{"github_issue_create"},
+				}},
+			}},
+		},
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	event := session.ReviewEvent{
+		ID:                92,
+		SourceSessionID:   session.SessionIDForKey(key),
+		TargetSessionID:   session.SessionIDForKey(key),
+		TargetAdminChatID: 1001,
+		Status:            "delivered",
+		DeliveryMessageID: 92,
+	}
+	text, err := rt.HandleReviewEventAction(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-lookahead-simulation-no-materialization",
+		From:    &telegram.User{ID: 1001},
+		Message: &telegram.Message{MessageID: 92, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionLookaheadNext),
+	}, event, core.ReviewEventActionLookaheadNext)
+	if err != nil {
+		t.Fatalf("HandleReviewEventAction(simulated no materialization) err = %v", err)
+	}
+	if !strings.Contains(text, "could not be materialized") || !strings.Contains(text, "No authority was approved or executed") {
+		t.Fatalf("lookahead text = %q, want no-materialization acknowledgement", text)
+	}
+	projections, err := store.IdentificationLedgerEntries(session.IdentificationLedgerQuery{
+		PlanID:      session.IdentificationPlanIDForSession(session.SessionIDForKey(key)),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   session.SessionIDForKey(key),
+		Limit:       20,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	for _, projection := range projections {
+		if projection.Entry.StepRef == "operation_phase:phase-missing" && projection.Entry.Status == session.IdentificationLedgerStatusProposed {
+			t.Fatalf("ledger projections = %#v, want no proposed simulated token without materialized card", projections)
+		}
+	}
+}
+
 func TestBuildAuthorityDiscoveryMenuRequiresExactLiveAuthority(t *testing.T) {
 	t.Parallel()
 

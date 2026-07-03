@@ -349,22 +349,26 @@ pre-granting. A user can walk the authority frontier before going offline, but
 the tail remains narrow, step-addressed, and perishable.
 
 The first executable implementation makes this a real control-plane loop over
-the current recovery frontier. The button authenticates the private admin
-callback, resolves an exact frontier when the review event names one, otherwise
-scans the review event's source session for unresolved contract-backed
-`request_approval` next actions, records lookahead observations for the selected
-action, and materializes the normal approval card for that exact stored
-contract. It does not approve authority and it does not execute the protected
-operation.
+the current recovery frontier and the next declared operation-phase capability
+need. The button authenticates the private admin callback, resolves an exact
+frontier when the review event names one, otherwise scans the review event's
+source session for unresolved contract-backed `request_approval` next actions.
+If none exists, it can simulate the active `OperationPhasePlan` forward to the
+next pending or in-progress phase with unmet `RequiredCapabilityGrants`,
+transactionally publish an authority-bundle contract plus a `request_approval`
+next action, and then materialize the normal approval card for that exact stored
+contract. It records lookahead observations only after materialization succeeds.
+It does not approve authority and it does not execute the protected operation.
 
 This first implementation is frontier-bound, not yet globally budget-metered.
 It offers one next frontier per button press, but it does not yet enforce a
 cross-plan lookahead counter, cooldown, or allowance ledger.
 
-This is intentionally narrower than a full plan simulator. It identifies the
-next already-discovered authority frontier in the ledger/next-action graph. A
-future Ralph-loop simulator can advance through not-yet-collided plan steps, but
-it must produce the same kind of stored next action before projection.
+This is intentionally narrower than a full Ralph-loop simulator. It identifies
+the next already-discovered authority frontier in the ledger/next-action graph,
+or the next declared operation-phase capability collision. Future simulation can
+cover richer step grammars, manifests, and resolution sets, but it must produce
+the same kind of stored contract and next action before projection.
 
 ## Resolution Sets
 
@@ -418,12 +422,13 @@ parallel approval model.
 
 The first executable slice adds the identification ledger, collision
 publication, a pure menu projection, a store-backed live-authority menu join,
-and a non-executing `Next grant` control that surfaces the next real
-contract-backed approval frontier. The architecture still lacks:
+redacted authority archetype helpers, and a non-executing `Next grant` control
+that surfaces the next real contract-backed approval frontier or simulates the
+next operation-phase capability collision. The architecture still lacks:
 
 - first-class plan objects and plan-version reshuffle triggers;
-- a deeper lookahead simulator that advances through not-yet-collided plan
-  steps instead of only the current next-action frontier;
+- a deeper lookahead simulator for plan steps beyond `OperationPhasePlan`
+  capability requirements;
 - resolution sets for repair choices;
 - typed child result objects at the parent boundary;
 - allow-list child context construction;
@@ -456,6 +461,10 @@ Initial implementation slice:
   callback token and confirmation-card projection.
 - `runtime/review_event_child_wake_retry.go`: private-admin `Next grant`
   handling over the current contract-backed recovery frontier.
+- `runtime/authority_discovery_lookahead.go`: first non-executing lookahead
+  simulator for operation-phase required capability grants.
+- `session/authority_archetype.go`: redacted authority archetype projection for
+  deriving reusable examples from stored contracts without exposing live values.
 
 Likely extensions:
 

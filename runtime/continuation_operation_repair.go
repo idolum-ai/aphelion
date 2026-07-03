@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
+
+var errContinuationApprovalBlockedBeforePrompt = errors.New("continuation approval blocked before prompt")
 
 func (r *Runtime) sendMaterializedContinuationApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState, text string, source string) error {
 	if r == nil {
@@ -22,8 +25,10 @@ func (r *Runtime) sendMaterializedContinuationApproval(ctx context.Context, key 
 }
 
 func (r *Runtime) sendMaterializedContinuationApprovalLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState, text string, source string) error {
-	if _, blocked, err := r.blockInvalidContinuationAuthorityContract(ctx, key, msg, state, source, time.Now().UTC(), false); blocked || err != nil {
+	if _, blocked, err := r.blockInvalidContinuationAuthorityContract(ctx, key, msg, state, source, time.Now().UTC(), false); err != nil {
 		return err
+	} else if blocked {
+		return fmt.Errorf("%w: %s", errContinuationApprovalBlockedBeforePrompt, continuationAuthorityContractInvalidReason(continuationAuthorityCompilation(state)))
 	}
 	if approved, err := r.maybeAutoApproveContinuationOfferLocked(ctx, key, msg, state, source); approved || err != nil {
 		return err

@@ -56,8 +56,21 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 		return "", err
 	}
 	if !ok {
-		r.recordLookaheadNoFrontier(event, frontier, now)
-		return "No unresolved authority frontier is available. No authority was approved or executed.", nil
+		var simulated LookaheadSimulationResult
+		if strings.TrimSpace(frontier.RecordID) == "" {
+			action, simulated, ok, err = r.simulateNextLookaheadRecoveryApprovalAction(frontier, event, callbackReviewEventSenderID(cb), now)
+			if err != nil {
+				return "", err
+			}
+		}
+		if !ok {
+			if simulated.Reason != "" {
+				r.recordLookaheadNoFrontierWithReason(event, frontier, simulated.Reason, now)
+			} else {
+				r.recordLookaheadNoFrontier(event, frontier, now)
+			}
+			return "No unresolved authority frontier is available. No authority was approved or executed.", nil
+		}
 	}
 	key := sessionKeyForNextActionRecord(action)
 	materialized, handled, err := r.materializeRecoveryApprovalNextActionLocked(ctx, key, msg, action, now)
@@ -164,6 +177,10 @@ func (r *Runtime) lookaheadRecoveryApprovalActionExecutable(action session.NextA
 }
 
 func (r *Runtime) recordLookaheadNoFrontier(event session.ReviewEvent, frontier lookaheadAuthorityFrontier, now time.Time) {
+	r.recordLookaheadNoFrontierWithReason(event, frontier, "no_frontier", now)
+}
+
+func (r *Runtime) recordLookaheadNoFrontierWithReason(event session.ReviewEvent, frontier lookaheadAuthorityFrontier, reason string, now time.Time) {
 	if r == nil {
 		return
 	}
@@ -176,6 +193,7 @@ func (r *Runtime) recordLookaheadNoFrontier(event session.ReviewEvent, frontier 
 		"next_action_record_id": strings.TrimSpace(frontier.RecordID),
 		"contract_id":           strings.TrimSpace(frontier.ContractID),
 		"shape_hash":            strings.TrimSpace(frontier.ShapeHash),
+		"reason":                strings.TrimSpace(reason),
 	}, now)
 }
 
@@ -189,7 +207,7 @@ func (r *Runtime) recordLookaheadAuthorityFrontier(event session.ReviewEvent, ke
 		PlanID:      session.IdentificationPlanIDForSession(sessionID),
 		PlanVersion: session.IdentificationDefaultPlanVersion,
 		SessionID:   sessionID,
-		StepRef:     "next_action:" + strings.TrimSpace(action.RecordID),
+		StepRef:     lookaheadAuthorityFrontierStepRef(action),
 		ShapeHash:   shapeHash,
 		LabelRef:    labelRef,
 		Status:      session.IdentificationLedgerStatusProposed,
@@ -218,10 +236,59 @@ func (r *Runtime) recordLookaheadAuthorityFrontier(event session.ReviewEvent, ke
 			ObservedAt:  now,
 		})
 	}
+	observations = append(observations, r.lookaheadAuthorityFrontierExtraObservations(action, labelRef, now)...)
 	if _, _, err := r.store.RecordIdentificationLedgerObservations(entry, observations); err != nil {
 		return fmt.Errorf("record lookahead authority frontier: %w", err)
 	}
 	return nil
+}
+
+func lookaheadAuthorityFrontierStepRef(action session.NextActionRecord) string {
+	for _, ref := range action.CausalRefs {
+		ref = strings.TrimSpace(ref)
+		if strings.HasPrefix(ref, "operation_phase:") && strings.TrimSpace(strings.TrimPrefix(ref, "operation_phase:")) != "" {
+			return ref
+		}
+	}
+	return "next_action:" + strings.TrimSpace(action.RecordID)
+}
+
+func (r *Runtime) lookaheadAuthorityFrontierExtraObservations(action session.NextActionRecord, labelRef string, now time.Time) []session.IdentificationLedgerObservationInput {
+	if r == nil || r.store == nil || authorityDiscoveryCandidateKind(labelRef) != "authority_bundle" {
+		return nil
+	}
+	bundle, ok, err := r.store.AuthorityBundleContract(labelRef)
+	if err != nil || !ok {
+		return nil
+	}
+	bundle = session.NormalizeAuthorityBundleContract(bundle)
+	evidenceRef := "next_action:" + strings.TrimSpace(action.RecordID)
+	out := []session.IdentificationLedgerObservationInput{{
+		Method:      session.IdentificationObservationLookahead,
+		Property:    session.IdentificationPropertyBundleFit,
+		Value:       "operation_phase_required_capability",
+		EvidenceRef: evidenceRef,
+		ObservedAt:  now,
+	}}
+	seen := map[string]struct{}{}
+	for _, grant := range bundle.RequiredCapabilityGrants {
+		resource := session.AuthorityResourceClass(grant.TargetResource)
+		if resource == "" {
+			continue
+		}
+		if _, ok := seen[resource]; ok {
+			continue
+		}
+		seen[resource] = struct{}{}
+		out = append(out, session.IdentificationLedgerObservationInput{
+			Method:      session.IdentificationObservationLookahead,
+			Property:    session.IdentificationPropertyResource,
+			Value:       resource,
+			EvidenceRef: evidenceRef,
+			ObservedAt:  now,
+		})
+	}
+	return out
 }
 
 func (r *Runtime) lookaheadAuthorityFrontierLabel(action session.NextActionRecord) (string, string, string, error) {

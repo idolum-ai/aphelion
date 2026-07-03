@@ -231,13 +231,7 @@ func actionProposalHasScopedGitPushAllowance(proposal ActionProposal) bool {
 	if authorityActionsHaveScopedGitPushAllowance(proposal.AllowedActions) {
 		return true
 	}
-	return authorityTextImpliesScopedGitPush(strings.Join([]string{
-		proposal.OperatorTitle,
-		proposal.PlanTitle,
-		proposal.Summary,
-		proposal.WhyNow,
-		proposal.BoundedEffect,
-	}, "\n"))
+	return authorityTextImpliesScopedGitPush(actionProposalPositiveAuthorityText(proposal))
 }
 
 func authorityActionsHaveScopedGitPushAllowance(actions []string) bool {
@@ -408,13 +402,55 @@ func actionProposalRequiresGitPush(proposal ActionProposal) bool {
 			return true
 		}
 	}
-	return authorityTextImpliesGitPush(strings.Join([]string{
+	return authorityTextImpliesGitPush(actionProposalPositiveAuthorityText(proposal))
+}
+
+func actionProposalPositiveAuthorityText(proposal ActionProposal) string {
+	parts := []string{
 		proposal.OperatorTitle,
 		proposal.PlanTitle,
 		proposal.Summary,
 		proposal.WhyNow,
-		proposal.BoundedEffect,
-	}, "\n"))
+	}
+	if effect := positiveBoundedEffectAuthorityText(proposal.BoundedEffect); effect != "" {
+		parts = append(parts, effect)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func positiveBoundedEffectAuthorityText(text string) string {
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || boundedEffectLineIsNegativeAuthorityProjection(trimmed) {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return strings.Join(out, "\n")
+}
+
+func boundedEffectLineIsNegativeAuthorityProjection(line string) bool {
+	normalized := normalizeAuthorityMatchText(strings.TrimSuffix(line, ":"))
+	switch {
+	case normalized == "forbidden",
+		normalized == "forbidden_actions",
+		normalized == "forbid",
+		normalized == "forbids",
+		normalized == "stop",
+		normalized == "stop_conditions",
+		normalized == "must_not",
+		normalized == "do_not",
+		strings.HasPrefix(normalized, "forbidden_"),
+		strings.HasPrefix(normalized, "stop_"),
+		strings.HasPrefix(normalized, "must_not_"),
+		strings.HasPrefix(normalized, "do_not_"),
+		strings.HasPrefix(normalized, "without_"):
+		return true
+	default:
+		return false
+	}
 }
 
 func actionProposalForbidsGitPush(actions []string) bool {

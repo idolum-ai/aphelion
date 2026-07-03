@@ -34,6 +34,7 @@ const (
 	AuthorityBundleComponentKindCapabilityRequest            = "capability_request"
 	AuthorityBundleComponentKindContinuationRecoveryContract = "continuation_recovery_contract"
 	AuthorityBundleComponentKindNextAction                   = "next_action"
+	AuthorityBundleComponentKindOperationPhase               = "operation_phase"
 	AuthorityBundleComponentKindChildAuthorityBundle         = "child_authority_bundle"
 	AuthorityBundleComponentKindChildTaskResult              = "child_task_result"
 )
@@ -321,6 +322,7 @@ func validAuthorityBundleComponentKind(kind string) bool {
 	case AuthorityBundleComponentKindCapabilityRequest,
 		AuthorityBundleComponentKindContinuationRecoveryContract,
 		AuthorityBundleComponentKindNextAction,
+		AuthorityBundleComponentKindOperationPhase,
 		AuthorityBundleComponentKindChildAuthorityBundle,
 		AuthorityBundleComponentKindChildTaskResult:
 		return true

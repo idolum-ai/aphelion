@@ -464,6 +464,26 @@ func TestAuthorityContractCompilerRejectsPushProseForbiddenGitPush(t *testing.T)
 	}
 }
 
+func TestAuthorityContractCompilerDoesNotTreatForbiddenProjectionAsPositivePush(t *testing.T) {
+	compilation := CompileActionProposalAuthorityContract(ActionProposal{
+		RiskClass:      "authority_bundle",
+		OperatorTitle:  "Approve bounded authority bundle",
+		PlanTitle:      "Approve bounded authority bundle",
+		Summary:        "Open one GitHub issue documenting the generated schema blocker.",
+		WhyNow:         "A typed recovery path requested one bounded authority bundle instead of repeated one-step approvals.",
+		BoundedEffect:  "Allowed: github_issue_create\nForbidden: github_repo_push, force-push, push to another branch or repository\nStop: stop after the issue is opened or a typed blocker appears",
+		AllowedActions: []string{"approve_authority_bundle", "github_issue_create"},
+		ForbiddenActions: []string{
+			"github_repo_push",
+			"force-push",
+			"push to another branch or repository",
+		},
+	})
+	if !compilation.Valid() {
+		t.Fatalf("compilation = %#v, want forbidden projection text not to imply positive git push", compilation)
+	}
+}
+
 func TestAuthorityContractCompilerAllowsScopedPushWithOtherBranchForbidden(t *testing.T) {
 	compilation := CompileActionProposalAuthorityContract(ActionProposal{
 		RiskClass:     "authority_bundle",
