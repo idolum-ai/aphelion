@@ -78,8 +78,8 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 	actorPrincipal := fmt.Sprintf("telegram:%d", senderID)
 	for _, selection := range selections {
 		action := selection.Action
-		reservationAt := now.Add(time.Duration(surfaced) * time.Nanosecond)
-		allowance, reserved, err := r.store.ReserveLookaheadAllowance(event.TargetAdminChatID, event.ID, event.SourceSessionID, event.TargetSessionID, MaxOutstandingLookaheadApprovalFrontiers, reservationAt, now.Add(30*time.Minute))
+		key := sessionKeyForNextActionRecord(action)
+		allowance, reserved, err := r.store.ReserveLookaheadAllowance(event.TargetAdminChatID, event.ID, event.SourceSessionID, event.TargetSessionID, MaxOutstandingLookaheadApprovalFrontiers, now, now.Add(30*time.Minute))
 		if err != nil {
 			return "", err
 		}
@@ -87,14 +87,17 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 			lastReason = "lookahead_meter_full"
 			break
 		}
-		key := sessionKeyForNextActionRecord(action)
 		materialized, handled, err := r.materializeRecoveryApprovalNextActionLocked(ctx, key, msg, action, now)
 		if err != nil {
-			_ = r.store.ReleaseLookaheadAllowance(allowance.AllowanceID, "materialize_error", now)
+			if releaseErr := r.releaseLookaheadAllowanceOrRecord(key, allowance.AllowanceID, "materialize_error", now); releaseErr != nil {
+				return "", fmt.Errorf("materialize lookahead frontier: %w; release reserved allowance: %v", err, releaseErr)
+			}
 			return "", err
 		}
 		if handled && !materialized {
-			_ = r.store.ReleaseLookaheadAllowance(allowance.AllowanceID, "stale_or_unhandled", now)
+			if err := r.releaseLookaheadAllowanceOrRecord(key, allowance.AllowanceID, "stale_or_unhandled", now); err != nil {
+				return "", err
+			}
 			lastReason = "stale_or_unhandled"
 			if surfaced == 0 {
 				return "Next authority frontier is no longer materializable. No authority was approved or executed.", nil
@@ -102,7 +105,9 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 			break
 		}
 		if !materialized {
-			_ = r.store.ReleaseLookaheadAllowance(allowance.AllowanceID, "not_materialized", now)
+			if err := r.releaseLookaheadAllowanceOrRecord(key, allowance.AllowanceID, "not_materialized", now); err != nil {
+				return "", err
+			}
 			lastReason = "not_materialized"
 			if surfaced == 0 {
 				return "Next authority frontier could not be materialized. No authority was approved or executed.", nil
@@ -111,10 +116,13 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 		}
 		entryID, err := r.recordLookaheadAuthorityFrontier(event, key, action, actorPrincipal, now)
 		if err != nil {
-			_ = r.store.ReleaseLookaheadAllowance(allowance.AllowanceID, "ledger_record_error", now)
+			if releaseErr := r.releaseLookaheadAllowanceOrRecord(key, allowance.AllowanceID, "ledger_record_error", now); releaseErr != nil {
+				return "", fmt.Errorf("record lookahead frontier: %w; release reserved allowance: %v", err, releaseErr)
+			}
 			return "", err
 		}
-		if err := r.store.BindLookaheadAllowance(allowance.AllowanceID, action.RecordID, entryID, now); err != nil {
+		if err := r.store.BindLookaheadAllowanceOrReleaseOnFailure(allowance.AllowanceID, action.RecordID, entryID, "bind_error", now); err != nil {
+			r.recordLookaheadAllowanceIssue(key, allowance.AllowanceID, action.RecordID, entryID, "lookahead_allowance_bind_failed", err, now)
 			return "", err
 		}
 		surfaced++
@@ -136,6 +144,29 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 		return "Next authority approval surfaced. No authority was approved or executed.", nil
 	}
 	return fmt.Sprintf("%d next authority approvals surfaced. No authority was approved or executed.", surfaced), nil
+}
+
+func (r *Runtime) releaseLookaheadAllowanceOrRecord(key session.SessionKey, allowanceID string, reason string, now time.Time) error {
+	if r == nil || r.store == nil || strings.TrimSpace(allowanceID) == "" {
+		return nil
+	}
+	if err := r.store.ReleaseLookaheadAllowance(allowanceID, reason, now); err != nil {
+		r.recordLookaheadAllowanceIssue(key, allowanceID, "", "", "lookahead_allowance_release_failed", err, now)
+		return err
+	}
+	return nil
+}
+
+func (r *Runtime) recordLookaheadAllowanceIssue(key session.SessionKey, allowanceID string, nextActionRecordID string, entryID string, status string, cause error, now time.Time) {
+	if r == nil {
+		return
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventAuthorityFindingReviewed, "authority_discovery", status, map[string]any{
+		"allowance_id":          strings.TrimSpace(allowanceID),
+		"next_action_record_id": strings.TrimSpace(nextActionRecordID),
+		"entry_id":              strings.TrimSpace(entryID),
+		"error":                 trimError(cause.Error()),
+	}, now)
 }
 
 func (r *Runtime) lookaheadOutstandingFrontierBudgetResponse(event session.ReviewEvent, now time.Time) (string, error) {

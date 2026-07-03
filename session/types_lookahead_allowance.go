@@ -3,6 +3,7 @@
 package session
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -121,4 +122,12 @@ func LookaheadAllowanceID(adminChatID int64, reviewEventID int64, createdAt time
 	}, "\x00")
 	sum := sha256.Sum256([]byte(seed))
 	return "lookahead:" + hex.EncodeToString(sum[:16])
+}
+
+func NewLookaheadAllowanceID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("generate lookahead allowance id: %w", err)
+	}
+	return "lookahead:" + hex.EncodeToString(raw[:]), nil
 }

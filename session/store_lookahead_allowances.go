@@ -35,7 +35,12 @@ func (s *SQLiteStore) ReserveLookaheadAllowance(adminChatID int64, reviewEventID
 	if count >= maxOutstanding {
 		return LookaheadAllowance{}, false, nil
 	}
+	allowanceID, err := NewLookaheadAllowanceID()
+	if err != nil {
+		return LookaheadAllowance{}, false, err
+	}
 	input := NormalizeLookaheadAllowanceInput(LookaheadAllowanceInput{
+		AllowanceID:     allowanceID,
 		AdminChatID:     adminChatID,
 		ReviewEventID:   reviewEventID,
 		SourceSessionID: sourceSessionID,
@@ -68,6 +73,30 @@ func (s *SQLiteStore) BindLookaheadAllowance(allowanceID string, nextActionRecor
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err := bindLookaheadAllowanceTx(tx, allowanceID, nextActionRecordID, entryID, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit bind lookahead allowance tx: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) BindLookaheadAllowanceOrReleaseOnFailure(allowanceID string, nextActionRecordID string, entryID string, releaseReason string, now time.Time) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin bind lookahead allowance tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := bindLookaheadAllowanceTx(tx, allowanceID, nextActionRecordID, entryID, now); err != nil {
+		if releaseErr := releaseLookaheadAllowanceTx(tx, allowanceID, releaseReason, now); releaseErr != nil {
+			return fmt.Errorf("bind lookahead allowance: %w; release after bind failure: %v", err, releaseErr)
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return fmt.Errorf("commit released lookahead allowance after bind failure: %w", commitErr)
+		}
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -129,6 +158,14 @@ func bindLookaheadAllowanceTx(tx *sql.Tx, allowanceID string, nextActionRecordID
 	if allowanceID == "" {
 		return nil
 	}
+	nextActionRecordID = strings.TrimSpace(nextActionRecordID)
+	if nextActionRecordID == "" {
+		return fmt.Errorf("lookahead allowance %s requires next_action_record_id", allowanceID)
+	}
+	entryID = strings.TrimSpace(entryID)
+	if entryID == "" {
+		return fmt.Errorf("lookahead allowance %s requires entry_id", allowanceID)
+	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -137,7 +174,7 @@ func bindLookaheadAllowanceTx(tx *sql.Tx, allowanceID string, nextActionRecordID
 		SET status = ?, next_action_record_id = ?, entry_id = ?, updated_at = ?
 		WHERE allowance_id = ?
 			AND status IN (?, ?)
-	`, string(LookaheadAllowanceOpen), strings.TrimSpace(nextActionRecordID), strings.TrimSpace(entryID), now.UTC().Format(time.RFC3339Nano),
+	`, string(LookaheadAllowanceOpen), nextActionRecordID, entryID, now.UTC().Format(time.RFC3339Nano),
 		allowanceID, string(LookaheadAllowanceReserved), string(LookaheadAllowanceOpen))
 	if err != nil {
 		return fmt.Errorf("bind lookahead allowance %s: %w", allowanceID, err)
