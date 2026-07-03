@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 )
 
 type Stage string
@@ -21,6 +23,8 @@ const (
 	StageIsolatedBwrap Stage = "isolated_bwrap"
 	StageUnavailable   Stage = "unavailable"
 )
+
+const processGroupTerminationGrace = 250 * time.Millisecond
 
 type ExecRequest struct {
 	Scope              Scope
@@ -121,7 +125,7 @@ func (r *Runner) Run(ctx context.Context, req ExecRequest) (ExecResult, error) {
 		return ExecResult{}, err
 	}
 
-	cmd := exec.CommandContext(ctx, plan.Binary, plan.Args...)
+	cmd := exec.Command(plan.Binary, plan.Args...)
 	cmd.Dir = plan.Dir
 	cmd.Env = plan.Env
 	if len(req.Stdin) > 0 {
@@ -133,13 +137,52 @@ func (r *Runner) Run(ctx context.Context, req ExecRequest) (ExecResult, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err = cmd.Run()
+	err = runCommandProcessGroup(ctx, cmd)
 	return ExecResult{
 		Stage:   plan.Stage,
 		Stdout:  stdout.String(),
 		Stderr:  stderr.String(),
 		Network: plan.Network,
 	}, err
+}
+
+func runCommandProcessGroup(ctx context.Context, cmd *exec.Cmd) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		terminateCommandProcessGroup(cmd, syscall.SIGTERM)
+		select {
+		case <-done:
+			return ctx.Err()
+		case <-time.After(processGroupTerminationGrace):
+			terminateCommandProcessGroup(cmd, syscall.SIGKILL)
+			<-done
+			return ctx.Err()
+		}
+	}
+}
+
+func terminateCommandProcessGroup(cmd *exec.Cmd, signal syscall.Signal) {
+	if cmd == nil || cmd.Process == nil || cmd.Process.Pid <= 0 {
+		return
+	}
+	_ = syscall.Kill(-cmd.Process.Pid, signal)
+	_ = cmd.Process.Signal(signal)
 }
 
 func (r *Runner) Plan(req ExecRequest) (ExecutionPlan, error) {
@@ -263,7 +306,7 @@ func (r *Runner) runIsolatedAllowlist(ctx context.Context, req ExecRequest) (Exe
 		args = append(append([]string(nil), lease.CommandPrefix[1:]...), append([]string{bwrapPath}, args...)...)
 	}
 
-	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd := exec.Command(binary, args...)
 	cmd.Dir = "/"
 	cmd.Env = nil
 	if len(req.Stdin) > 0 {
@@ -274,7 +317,7 @@ func (r *Runner) runIsolatedAllowlist(ctx context.Context, req ExecRequest) (Exe
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	runErr := cmd.Run()
+	runErr := runCommandProcessGroup(ctx, cmd)
 	cleanupErr := lease.Cleanup(context.Background())
 	evidence := lease.Evidence
 	result := ExecResult{

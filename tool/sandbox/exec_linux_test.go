@@ -4,12 +4,16 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/principal"
 )
@@ -140,6 +144,49 @@ func TestRunnerRunPassesStdin(t *testing.T) {
 	}
 }
 
+func TestRunnerRunCancelsProcessGroup(t *testing.T) {
+	scope := buildScope(t, principal.RoleAdmin)
+	if err := os.MkdirAll(scope.WorkingRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(working root) err = %v", err)
+	}
+	runner := NewRunner()
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err := runner.Run(ctx, ExecRequest{
+		Scope:   scope,
+		Command: "sleep 30 & echo $! > " + sandboxShellQuote(pidFile) + "; wait",
+		Workdir: scope.WorkingRoot,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run() err = %v, want deadline exceeded", err)
+	}
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("ReadFile(child pid) err = %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 0 {
+		t.Fatalf("child pid %q parse err=%v", strings.TrimSpace(string(raw)), err)
+	}
+	childGone := false
+	t.Cleanup(func() {
+		if !childGone {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !sandboxProcessExists(pid) {
+			childGone = true
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("child process pid=%d still exists after runner cancellation", pid)
+}
+
 func TestRunnerPlanForApprovedIncludesBubblewrapAndChdir(t *testing.T) {
 	t.Parallel()
 
@@ -188,6 +235,18 @@ func TestRunnerPlanForApprovedIncludesBubblewrapAndChdir(t *testing.T) {
 	if len(plan.Env) != 0 {
 		t.Fatalf("env = %#v, want empty host env for isolated runner", plan.Env)
 	}
+}
+
+func sandboxShellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func sandboxProcessExists(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 func TestRunnerPlanRejectsHiddenPathShadowingWritableRoot(t *testing.T) {
