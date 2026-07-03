@@ -23,18 +23,6 @@ func (s *SQLiteStore) ReserveLookaheadAllowance(adminChatID int64, reviewEventID
 	if expiresAt.IsZero() {
 		expiresAt = now.Add(30 * time.Minute)
 	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return LookaheadAllowance{}, false, fmt.Errorf("begin lookahead allowance tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	count, err := outstandingLookaheadAllowanceCountTx(tx, adminChatID, now)
-	if err != nil {
-		return LookaheadAllowance{}, false, err
-	}
-	if count >= maxOutstanding {
-		return LookaheadAllowance{}, false, nil
-	}
 	allowanceID, err := NewLookaheadAllowanceID()
 	if err != nil {
 		return LookaheadAllowance{}, false, err
@@ -53,14 +41,34 @@ func (s *SQLiteStore) ReserveLookaheadAllowance(adminChatID int64, reviewEventID
 	if err := ValidateLookaheadAllowanceInput(input); err != nil {
 		return LookaheadAllowance{}, false, err
 	}
-	record, err := insertLookaheadAllowanceTx(tx, input)
+	result, err := s.db.Exec(`
+		INSERT INTO authority_lookahead_allowances(
+			allowance_id, admin_chat_id, review_event_id, source_session_id, target_session_id,
+			status, next_action_record_id, entry_id, reason,
+			created_at, updated_at, expires_at, released_at
+		)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE (
+			SELECT COUNT(*)
+			FROM authority_lookahead_allowances
+			WHERE admin_chat_id = ?
+				AND status IN (?, ?)
+				AND (expires_at IS NULL OR expires_at = '' OR expires_at > ?)
+		) < ?
+	`, input.AllowanceID, input.AdminChatID, input.ReviewEventID, input.SourceSessionID, input.TargetSessionID,
+		string(input.Status), input.NextActionRecordID, input.EntryID, input.Reason,
+		input.CreatedAt.Format(time.RFC3339Nano), input.UpdatedAt.Format(time.RFC3339Nano),
+		nullableTime(input.ExpiresAt), nullableTime(input.ReleasedAt),
+		input.AdminChatID, string(LookaheadAllowanceReserved), string(LookaheadAllowanceOpen),
+		now.Format(time.RFC3339Nano), maxOutstanding)
 	if err != nil {
-		return LookaheadAllowance{}, false, err
+		return LookaheadAllowance{}, false, fmt.Errorf("reserve lookahead allowance %s: %w", input.AllowanceID, err)
 	}
-	if err := tx.Commit(); err != nil {
-		return LookaheadAllowance{}, false, fmt.Errorf("commit lookahead allowance tx: %w", err)
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return LookaheadAllowance{}, false, nil
 	}
-	return record, true, nil
+	return LookaheadAllowance(input), true, nil
 }
 
 func (s *SQLiteStore) BindLookaheadAllowance(allowanceID string, nextActionRecordID string, entryID string, now time.Time) error {
@@ -213,9 +221,27 @@ func (s *SQLiteStore) LookaheadAllowancesForAdmin(adminChatID int64, limit int) 
 		FROM authority_lookahead_allowances
 		WHERE admin_chat_id = ?
 			AND status IN (?, ?, ?)
-		ORDER BY created_at ASC, allowance_id ASC
+		ORDER BY
+			CASE
+				WHEN status IN (?, ?) THEN 0
+				ELSE 1
+			END ASC,
+			CASE
+				WHEN status IN (?, ?) THEN created_at
+				ELSE ''
+			END ASC,
+			CASE
+				WHEN status = ? THEN updated_at
+				ELSE ''
+			END DESC,
+			allowance_id ASC
 		LIMIT ?
-	`, adminChatID, string(LookaheadAllowanceReserved), string(LookaheadAllowanceOpen), string(LookaheadAllowanceExpired), limit)
+	`, adminChatID,
+		string(LookaheadAllowanceReserved), string(LookaheadAllowanceOpen), string(LookaheadAllowanceExpired),
+		string(LookaheadAllowanceReserved), string(LookaheadAllowanceOpen),
+		string(LookaheadAllowanceReserved), string(LookaheadAllowanceOpen),
+		string(LookaheadAllowanceExpired),
+		limit)
 	if err != nil {
 		return nil, fmt.Errorf("query lookahead allowances for admin: %w", err)
 	}

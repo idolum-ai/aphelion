@@ -808,6 +808,8 @@ func TestReviewEventLookaheadMeterBlocksAtOutstandingCap(t *testing.T) {
 	if before != MaxOutstandingLookaheadApprovalFrontiers {
 		t.Fatalf("outstanding before = %d, want cap", before)
 	}
+	key := session.SessionKey{ChatID: adminChatID, Scope: telegramDMScopeRef(adminChatID)}
+	seedLookaheadOperationPhase(t, store, key, "op-full-meter-simulatable", "phase-full-meter-simulatable")
 	event := session.ReviewEvent{
 		ID:                301,
 		SourceSessionID:   "telegram_dm:1001",
@@ -846,6 +848,13 @@ func TestReviewEventLookaheadMeterBlocksAtOutstandingCap(t *testing.T) {
 	}
 	if len(projections) != 0 {
 		t.Fatalf("ledger projections = %#v, want no lookahead ledger write while meter is full", projections)
+	}
+	actions, err := store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", "authority_bundle_request", 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySessionOperation() err = %v", err)
+	}
+	if len(actions) != 0 {
+		t.Fatalf("authority bundle next actions = %#v, want full meter to stop before simulated publication", actions)
 	}
 	events, err := store.ExecutionEventsBySession(session.SessionKey{ChatID: adminChatID, Scope: telegramDMScopeRef(adminChatID)}, 0, 20)
 	if err != nil {
@@ -1043,6 +1052,70 @@ func TestReviewEventLookaheadSimulationMaterializationFailureDoesNotLeavePropose
 		if projection.Entry.StepRef == "operation_phase:phase-missing" && projection.Entry.Status == session.IdentificationLedgerStatusProposed {
 			t.Fatalf("ledger projections = %#v, want no proposed simulated token without materialized card", projections)
 		}
+	}
+}
+
+func TestLookaheadAuthorityFrontierSplitsSameStepDifferentAuthorityBundles(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	rt := &Runtime{store: store}
+	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	now := time.Date(2026, 7, 3, 13, 15, 0, 0, time.UTC)
+	actionA := recordAuthorityBundleLookaheadActionForTest(t, store, key, "same-step-a", "github_issue_create", now)
+	actionB := recordAuthorityBundleLookaheadActionForTest(t, store, key, "same-step-b", "github_issue_comment", now.Add(time.Minute))
+	event := session.ReviewEvent{
+		ID:                93,
+		SourceSessionID:   session.SessionIDForKey(key),
+		TargetSessionID:   session.SessionIDForKey(key),
+		TargetAdminChatID: 1001,
+		Status:            "delivered",
+		DeliveryMessageID: 93,
+	}
+	entryA, err := rt.recordLookaheadAuthorityFrontier(event, key, actionA, "telegram:1001", now)
+	if err != nil {
+		t.Fatalf("recordLookaheadAuthorityFrontier(A) err = %v", err)
+	}
+	entryB, err := rt.recordLookaheadAuthorityFrontier(event, key, actionB, "telegram:1001", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("recordLookaheadAuthorityFrontier(B) err = %v", err)
+	}
+	if entryA == entryB {
+		t.Fatalf("entry IDs are equal for distinct authority bundles: %s", entryA)
+	}
+	projections, err := store.IdentificationLedgerEntries(session.IdentificationLedgerQuery{
+		PlanID:      session.IdentificationPlanIDForSession(session.SessionIDForKey(key)),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   session.SessionIDForKey(key),
+		Limit:       20,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	var base, generated session.IdentificationLedgerEntry
+	for _, projection := range projections {
+		switch projection.Entry.LabelRef {
+		case actionA.SubjectRef:
+			base = projection.Entry
+		case actionB.SubjectRef:
+			generated = projection.Entry
+		}
+	}
+	if base.EntryID == "" || generated.EntryID == "" {
+		t.Fatalf("projections = %#v, want entries for both authority bundles", projections)
+	}
+	if base.ShapeHash == "" || generated.ShapeHash != base.ShapeHash {
+		t.Fatalf("shape hashes base=%q generated=%q, want same reusable shape", base.ShapeHash, generated.ShapeHash)
+	}
+	if base.StepRef != "operation_phase:phase-same" {
+		t.Fatalf("base step_ref = %q, want original phase step", base.StepRef)
+	}
+	if !strings.HasPrefix(generated.StepRef, "operation_phase:phase-same#collision:") || !strings.Contains(generated.StepRef, actionB.RecordID) {
+		t.Fatalf("generated step_ref = %q, want collision generation for %s", generated.StepRef, actionB.RecordID)
 	}
 }
 
@@ -1999,6 +2072,67 @@ func seedOutstandingLookaheadApprovalFrontier(t *testing.T, store *session.SQLit
 		t.Fatalf("BindLookaheadAllowance(seed %d) err = %v", index, err)
 	}
 	return seededLookaheadFrontier{Key: key, Record: record, EntryID: entry.EntryID, AllowanceID: allowance.AllowanceID}
+}
+
+func recordAuthorityBundleLookaheadActionForTest(t *testing.T, store *session.SQLiteStore, key session.SessionKey, requestSuffix string, allowedAction string, at time.Time) session.NextActionRecord {
+	t.Helper()
+
+	sessionID := session.SessionIDForKey(key)
+	bundle, err := session.CompileAuthorityBundleContract(session.AuthorityBundleContractInput{
+		RequestInstanceID: "lookahead-" + requestSuffix,
+		SessionID:         sessionID,
+		Principal:         "telegram:1001",
+		Objective:         "Continue the same operation phase.",
+		Summary:           "Review one bounded operation-phase grant.",
+		AllowedActions:    []string{allowedAction},
+		ForbiddenActions:  []string{"github_repo_push"},
+		StopConditions:    []string{"stop after one bounded operation"},
+		RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+			Kind:           session.CapabilityKindExternalAccount,
+			TargetResource: "github:idolum-ai/aphelion",
+			GrantedTo:      "telegram:1001",
+			AllowedActions: []string{allowedAction},
+			Contract:       `{"bounded_effect":"One operation only."}`,
+			Constraints:    `{"repository":"idolum-ai/aphelion"}`,
+		}},
+		Components: []session.AuthorityBundleComponent{{
+			Kind:       session.AuthorityBundleComponentKindOperationPhase,
+			RefID:      "phase-same",
+			Subject:    "operation",
+			SubjectRef: "op-same",
+		}},
+		ExpiresAt: at.Add(30 * time.Minute),
+		CreatedAt: at,
+	})
+	if err != nil {
+		t.Fatalf("CompileAuthorityBundleContract(%s) err = %v", requestSuffix, err)
+	}
+	inputJSON, err := promotedDurableChildAuthorityBundleOperationInput(bundle.BundleID)
+	if err != nil {
+		t.Fatalf("promotedDurableChildAuthorityBundleOperationInput(%s) err = %v", requestSuffix, err)
+	}
+	_, action, err := store.RecordAuthorityBundleContractNextAction(bundle, session.NextActionInput{
+		RecordID:           session.NextActionRecordID(sessionID, "authority_bundle_request", bundle.BundleID, session.NextActionBlockedNeedsAuthority, at),
+		Key:                key,
+		Owner:              "lookahead",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "authority_bundle_request",
+		SubjectRef:         bundle.BundleID,
+		CausalRefs:         []string{"operation:op-same", "operation_phase:phase-same", "authority_bundle:" + bundle.BundleID},
+		NextAction:         "review the next plan-phase authority bundle",
+		RequiredAuthority:  "authority_bundle",
+		ResourceBlocker:    "authority_bundle_approval",
+		RetryPolicy:        "retry_after_bundle_approval",
+		OperationKind:      "authority_bundle_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: inputJSON,
+		OperatorProjection: "Review next grant for operation phase phase-same",
+		CreatedAt:          at,
+	})
+	if err != nil {
+		t.Fatalf("RecordAuthorityBundleContractNextAction(%s) err = %v", requestSuffix, err)
+	}
+	return action
 }
 
 func seedLookaheadOperationPhase(t *testing.T, store *session.SQLiteStore, key session.SessionKey, opID string, phaseID string) {

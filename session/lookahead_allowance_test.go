@@ -3,6 +3,8 @@
 package session
 
 import (
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -81,6 +83,81 @@ func TestBindLookaheadAllowanceOrReleaseOnFailureFreesSlot(t *testing.T) {
 		t.Fatalf("ReserveLookaheadAllowance(after release) err = %v", err)
 	} else if !reserved {
 		t.Fatal("ReserveLookaheadAllowance(after release) reserved = false, leaked slot")
+	}
+}
+
+func TestReserveLookaheadAllowanceConcurrentCap(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "sessions.db")
+	seed, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(seed) err = %v", err)
+	}
+	defer seed.Close()
+
+	adminChatID := int64(2468)
+	now := time.Date(2026, 7, 3, 12, 15, 0, 0, time.UTC)
+	for i := 0; i < 4; i++ {
+		if _, reserved, err := seed.ReserveLookaheadAllowance(adminChatID, int64(100+i), "session:source", "session:target", 5, now.Add(time.Duration(i)*time.Millisecond), now.Add(time.Hour)); err != nil {
+			t.Fatalf("ReserveLookaheadAllowance(seed %d) err = %v", i, err)
+		} else if !reserved {
+			t.Fatalf("ReserveLookaheadAllowance(seed %d) reserved = false", i)
+		}
+	}
+
+	const contenders = 8
+	stores := make([]*SQLiteStore, 0, contenders)
+	for i := 0; i < contenders; i++ {
+		store, err := NewSQLiteStore(dbPath)
+		if err != nil {
+			t.Fatalf("NewSQLiteStore(contender %d) err = %v", i, err)
+		}
+		defer store.Close()
+		stores = append(stores, store)
+	}
+	start := make(chan struct{})
+	results := make(chan bool, contenders)
+	errs := make(chan error, contenders)
+	var wg sync.WaitGroup
+	for i, store := range stores {
+		wg.Add(1)
+		go func(i int, store *SQLiteStore) {
+			defer wg.Done()
+			<-start
+			_, reserved, err := store.ReserveLookaheadAllowance(adminChatID, int64(200+i), "session:source", "session:target", 5, now.Add(time.Second+time.Duration(i)*time.Nanosecond), now.Add(time.Hour))
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- reserved
+		}(i, store)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("ReserveLookaheadAllowance(concurrent) err = %v", err)
+	}
+	var reserved int
+	for ok := range results {
+		if ok {
+			reserved++
+		}
+	}
+	if reserved != 1 {
+		t.Fatalf("concurrent reservations = %d, want exactly one slot admitted from 4/5", reserved)
+	}
+	count, err := seed.OutstandingLookaheadApprovalFrontierCountAt(adminChatID, now.Add(2*time.Second))
+	if err != nil {
+		t.Fatalf("OutstandingLookaheadApprovalFrontierCountAt() err = %v", err)
+	}
+	if count != 5 {
+		t.Fatalf("outstanding count = %d, want capped at 5", count)
+	}
+	if _, reserved, err := seed.ReserveLookaheadAllowance(adminChatID, 999, "session:source", "session:target", 5, now.Add(3*time.Second), now.Add(time.Hour)); err != nil {
+		t.Fatalf("ReserveLookaheadAllowance(full) err = %v", err)
+	} else if reserved {
+		t.Fatal("ReserveLookaheadAllowance(full) reserved = true, want cap enforced")
 	}
 }
 

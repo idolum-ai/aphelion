@@ -55,19 +55,63 @@ func TestAuthorityFrontierStatusProjectsFiveSlotMeter(t *testing.T) {
 	if snapshot.Used != 1 || snapshot.Open != 1 || snapshot.Expired != 1 || snapshot.Empty != 3 {
 		t.Fatalf("snapshot counts = used:%d open:%d expired:%d empty:%d, want 1/1/1/3", snapshot.Used, snapshot.Open, snapshot.Expired, snapshot.Empty)
 	}
-	if snapshot.Slots[0].Status != "expired" || snapshot.Slots[0].TTLSeconds != 0 {
-		t.Fatalf("slot[0] = %#v, want expired first unresolved row", snapshot.Slots[0])
+	if snapshot.Slots[0].Status != string(session.LookaheadAllowanceOpen) ||
+		snapshot.Slots[0].NextActionRecordID != "next-action:frontier" ||
+		snapshot.Slots[0].EntryID != "ident:frontier" ||
+		snapshot.Slots[0].TTLSeconds <= 0 {
+		t.Fatalf("slot[0] = %#v, want open bound allowance with ttl", snapshot.Slots[0])
 	}
-	if snapshot.Slots[1].Status != string(session.LookaheadAllowanceOpen) ||
-		snapshot.Slots[1].NextActionRecordID != "next-action:frontier" ||
-		snapshot.Slots[1].EntryID != "ident:frontier" ||
-		snapshot.Slots[1].TTLSeconds <= 0 {
-		t.Fatalf("slot[1] = %#v, want open bound allowance with ttl", snapshot.Slots[1])
+	if snapshot.Slots[1].Status != "expired" || snapshot.Slots[1].TTLSeconds != 0 {
+		t.Fatalf("slot[1] = %#v, want expired history after active row", snapshot.Slots[1])
 	}
 	for i := 2; i < len(snapshot.Slots); i++ {
 		if snapshot.Slots[i].Status != "empty" {
 			t.Fatalf("slot[%d] = %#v, want empty", i, snapshot.Slots[i])
 		}
+	}
+}
+
+func TestAuthorityFrontierStatusDoesNotHideOpenSlotsBehindExpiredHistory(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 7, 3, 13, 35, 0, 0, time.UTC)
+	for i := 0; i < MaxOutstandingLookaheadApprovalFrontiers+2; i++ {
+		if _, reserved, err := store.ReserveLookaheadAllowance(1001, int64(300+i), "telegram_dm:1001", "telegram_dm:1001", MaxOutstandingLookaheadApprovalFrontiers+10, now.Add(-time.Hour+time.Duration(i)*time.Minute), now.Add(-time.Minute)); err != nil {
+			t.Fatalf("ReserveLookaheadAllowance(expired %d) err = %v", i, err)
+		} else if !reserved {
+			t.Fatalf("ReserveLookaheadAllowance(expired %d) reserved = false", i)
+		}
+	}
+	if _, err := store.ExpireLookaheadAllowancesForAdmin(1001, now); err != nil {
+		t.Fatalf("ExpireLookaheadAllowancesForAdmin() err = %v", err)
+	}
+	open, reserved, err := store.ReserveLookaheadAllowance(1001, 400, "telegram_dm:1001", "telegram_dm:1001", MaxOutstandingLookaheadApprovalFrontiers, now.Add(-30*time.Second), now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("ReserveLookaheadAllowance(open) err = %v", err)
+	}
+	if !reserved {
+		t.Fatal("ReserveLookaheadAllowance(open) reserved = false")
+	}
+	if err := store.BindLookaheadAllowance(open.AllowanceID, "next-action:current-open", "ident:current-open", now.Add(-20*time.Second)); err != nil {
+		t.Fatalf("BindLookaheadAllowance(open) err = %v", err)
+	}
+
+	rt := &Runtime{store: store, authorityDiscoveryClock: func() time.Time { return now }}
+	snapshot, err := rt.AuthorityFrontierStatus(context.Background(), 1001)
+	if err != nil {
+		t.Fatalf("AuthorityFrontierStatus() err = %v", err)
+	}
+	if snapshot.Used != 1 || snapshot.Open != 1 {
+		t.Fatalf("snapshot counts = used:%d open:%d, want current open slot visible", snapshot.Used, snapshot.Open)
+	}
+	if snapshot.Slots[0].Status != string(session.LookaheadAllowanceOpen) || snapshot.Slots[0].AllowanceID != open.AllowanceID {
+		t.Fatalf("slot[0] = %#v, want newest active open row before expired history", snapshot.Slots[0])
 	}
 }
 

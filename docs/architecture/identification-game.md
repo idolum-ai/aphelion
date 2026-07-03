@@ -177,7 +177,10 @@ It is the reusable authority-shape identity: lease class, tool, action, and
 resource class. Contract hash, request instance, subject ref, and session-bound
 retry details belong in labels and observations. Otherwise the ledger fragments
 one authority shape into one row per collision and loses the cumulative
-knowledge it exists to preserve.
+knowledge it exists to preserve. When the same step and shape surface a
+different exact contract, the ledger should keep the shape relationship while
+creating a new collision generation; the scalar label must not be silently
+rewritten to point at a different approval object.
 
 ### Graduated Identification
 
@@ -397,15 +400,18 @@ an authority object.
 The first executable implementation makes this a real control-plane loop over
 the current recovery frontier and a bounded deterministic simulation of the
 active `OperationPhasePlan`. The button authenticates the private admin
-callback, resolves an exact frontier when the review event names one, otherwise
-scans the review event's source session for unresolved contract-backed
-`request_approval` next actions. If none exists, it simulates forward through
-pending or in-progress phases with unmet `RequiredCapabilityGrants`, compiles
-the discovered phase frontier into one authority-bundle contract, records a
-`request_approval` next action, reserves one lookahead allowance, materializes
-the normal approval card for that exact stored contract, and records ledger
-observations only after materialization succeeds. It does not approve authority
-and it does not execute the protected operation.
+callback, reserves one lookahead allowance before any simulation can publish a
+candidate, then resolves an exact frontier when the review event names one.
+Otherwise it scans the review event's source session for unresolved
+contract-backed `request_approval` next actions. If none exists, it simulates
+forward through pending or in-progress phases with unmet
+`RequiredCapabilityGrants`, compiles the discovered phase frontier into one
+authority-bundle contract, records a `request_approval` next action,
+materializes the normal approval card for that exact stored contract, binds the
+allowance to the surfaced next action and ledger entry, and records ledger
+observations only after materialization succeeds. If no card is surfaced, the
+reserved allowance is released. It does not approve authority and it does not
+execute the protected operation.
 
 The bundle is the important shape. The runtime should not open several
 simultaneous pending continuations from one lookahead press; that would create
