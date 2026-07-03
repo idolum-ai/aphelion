@@ -361,7 +361,12 @@ func classifySegment(segment string) Effect {
 	switch cmd {
 	case "eval", "source":
 		return Effect{Kind: KindUnknown, Reason: cmd + " dynamic shell execution", Command: cmd, SideEffects: true}
-	case "cd", "set", "printf", "echo", "true", "false":
+	case "cd":
+		// cd is treated as read-only only for common `cd && sed/cat/rg` inspection
+		// sequences. This classifier does not resolve the target cwd; any future
+		// read-target containment check must carry cwd state or reject cd separately.
+		return Effect{Kind: KindReadOnlyInspection, Reason: cmd + " shell builtin", Command: cmd}
+	case "set", "printf", "echo", "true", "false":
 		return Effect{Kind: KindReadOnlyInspection, Reason: cmd + " shell builtin", Command: cmd}
 	case "test":
 		if target := testFileMetadataTarget(args); target != "" {

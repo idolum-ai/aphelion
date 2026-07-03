@@ -1732,6 +1732,9 @@ func TestDefinitionsIncludeNativeFileTools(t *testing.T) {
 			t.Fatalf("Definitions() missing %s", name)
 		}
 	}
+	if _, ok := names["exec"]; !ok {
+		t.Fatal("Definitions() missing exec")
+	}
 	for _, name := range []string{"read_file", "list_dir", "search"} {
 		if positions[name] > positions["exec"] {
 			t.Fatalf("Definitions() orders %s after exec; native inspection tools should be visible before shell escape", name)
