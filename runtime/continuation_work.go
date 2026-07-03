@@ -1136,6 +1136,8 @@ func (r *Runtime) runReservedApprovedWorkContinuation(ctx context.Context, key s
 		r.markEffectAttemptsForRequest(key, req, session.EffectAttemptStatusUncertain, err.Error(), workFinishedAt)
 		artifact := r.persistWorkResultForContinuation(key, req, result, status, err)
 		payload := workResultPayload(req, result, status, err)
+		_, retryFingerprint := addWorkFailureRetryFingerprintPayload(payload, req, result, status, err)
+		repeatFailure := r.workFailureRetryFingerprintSeen(key, retryFingerprint)
 		if artifact.Ref != "" {
 			payload["artifact_ref"] = artifact.Ref
 		}
@@ -1148,6 +1150,10 @@ func (r *Runtime) runReservedApprovedWorkContinuation(ctx context.Context, key s
 		if unresolved := r.unresolvedEffectAttemptsForRequest(key, req); len(unresolved) > 0 {
 			payload["effect_attempts_unresolved"] = len(unresolved)
 			r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "effect_attempt_unresolved", payload, time.Now().UTC())
+		} else if repeatFailure {
+			if blockErr := r.blockRepeatedWorkFailureRetry(ctx, key, req, result, status, err, payload); blockErr != nil {
+				return blockErr
+			}
 		} else {
 			r.offerWorkFailureRetry(ctx, key, key.ChatID, err)
 		}

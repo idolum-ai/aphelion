@@ -66,6 +66,11 @@ func authorityPendingContinuationMissingDecision(state session.ContinuationState
 	if decisionID == "" {
 		return false
 	}
+	// Continuation approval cards are callback-backed even when they do not have
+	// a generic pending_decisions row.
+	if state.DecisionMessageID > 0 {
+		return false
+	}
 	_, ok := decisions[decisionID]
 	return !ok
 }

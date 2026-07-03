@@ -39,6 +39,10 @@ func (r *Runtime) sendContinuationApprovalPrompt(ctx context.Context, key sessio
 		nil,
 	)
 	if err != nil {
+		now := time.Now().UTC()
+		if revokeErr := r.revokeUndeliveredContinuationPrompt(key, state, "send_failed", now); revokeErr != nil {
+			return fmt.Errorf("send continuation approval: %w; revoke undelivered prompt: %v", err, revokeErr)
+		}
 		return fmt.Errorf("send continuation approval: %w", err)
 	}
 	if messageID > 0 && r.store != nil {
@@ -53,6 +57,49 @@ func (r *Runtime) sendContinuationApprovalPrompt(ctx context.Context, key sessio
 		}
 		r.retireStaleContinuationApprovalCards(ctx, key, msg.ChatID, threadID, messageID, "new_prompt", now)
 	}
+	return nil
+}
+
+func (r *Runtime) revokeUndeliveredContinuationPrompt(key session.SessionKey, state session.ContinuationState, reason string, now time.Time) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusPending && state.Status != session.ContinuationStatusApproved {
+		return nil
+	}
+	blockedReason := "Continuation approval prompt could not be delivered; request a fresh proposal if this work is still needed."
+	state.Status = session.ContinuationStatusRevoked
+	state.RemainingTurns = 0
+	state.ApprovedBy = 0
+	state.DecisionID = ""
+	state.HandshakeBlockedReason = blockedReason
+	state.ParkedAt = now
+	state.ParkedSource = strings.TrimSpace(reason)
+	state.ParkedReason = blockedReason
+	if state.ActionProposal.Status == session.ProposalStatusPending {
+		state.ActionProposal.Status = session.ProposalStatusSuperseded
+		state.ActionProposal.WhyNow = blockedReason
+		state.ActionProposal.UpdatedAt = now
+	}
+	switch state.ContinuationLease.Status {
+	case session.ContinuationLeaseStatusPending, session.ContinuationLeaseStatusActive:
+		state.ContinuationLease.Status = session.ContinuationLeaseStatusRevoked
+		state.ContinuationLease.RemainingTurns = 0
+		state.ContinuationLease.RevokedAt = now
+		state.ContinuationLease.UpdatedAt = now
+	}
+	state.UpdatedAt = now
+	if err := r.store.UpdateContinuationState(key, session.NormalizeContinuationState(state)); err != nil {
+		return err
+	}
+	payload := continuationExecutionPayload(state)
+	payload["reason"] = strings.TrimSpace(reason)
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "prompt_delivery_failed", payload, now)
 	return nil
 }
 

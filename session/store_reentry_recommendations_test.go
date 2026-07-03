@@ -117,4 +117,30 @@ func TestReentryRecommendationStoreDedupeAndTransitions(t *testing.T) {
 	if ignored.Status != ReentryRecommendationStatusSelected {
 		t.Fatalf("late ignored status = %s, want terminal selected unchanged", ignored.Status)
 	}
+
+	suppressed := record
+	suppressed.ID = "reentry-suppressed"
+	suppressed.TerminalFingerprint = "terminal-state-suppressed"
+	suppressed.ResultSummary = ""
+	suppressed.CreatedAt = time.Time{}
+	suppressed.UpdatedAt = time.Time{}
+	suppressedRecord, allowed, reason, err := store.CreateSuppressedReentryRecommendationIfAllowed(suppressed, "low-value candidates suppressed", now.Add(4*time.Second))
+	if err != nil {
+		t.Fatalf("CreateSuppressedReentryRecommendationIfAllowed() err = %v", err)
+	}
+	if !allowed || reason != "" {
+		t.Fatalf("suppressed allowed=%v reason=%q, want allowed", allowed, reason)
+	}
+	if suppressedRecord.Status != ReentryRecommendationStatusSuppressed || suppressedRecord.ResultSummary != "low-value candidates suppressed" {
+		t.Fatalf("suppressed record = %#v, want suppressed terminal summary", suppressedRecord)
+	}
+	duplicateSuppressed := suppressed
+	duplicateSuppressed.ID = "reentry-suppressed-duplicate"
+	_, allowed, reason, err = store.CreateReentryRecommendationIfAllowed(duplicateSuppressed, now.Add(5*time.Second))
+	if err != nil {
+		t.Fatalf("CreateReentryRecommendationIfAllowed(duplicate suppressed) err = %v", err)
+	}
+	if allowed || reason != "same_terminal_fingerprint" {
+		t.Fatalf("duplicate suppressed allowed=%v reason=%q, want same_terminal_fingerprint block", allowed, reason)
+	}
 }

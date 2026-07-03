@@ -12,6 +12,15 @@ import (
 )
 
 func (s *SQLiteStore) CreateReentryRecommendationIfAllowed(record ReentryRecommendation, now time.Time) (ReentryRecommendation, bool, string, error) {
+	return s.createReentryRecommendationIfAllowed(record, ReentryRecommendationStatusPending, now)
+}
+
+func (s *SQLiteStore) CreateSuppressedReentryRecommendationIfAllowed(record ReentryRecommendation, summary string, now time.Time) (ReentryRecommendation, bool, string, error) {
+	record.ResultSummary = strings.TrimSpace(summary)
+	return s.createReentryRecommendationIfAllowed(record, ReentryRecommendationStatusSuppressed, now)
+}
+
+func (s *SQLiteStore) createReentryRecommendationIfAllowed(record ReentryRecommendation, status ReentryRecommendationStatus, now time.Time) (ReentryRecommendation, bool, string, error) {
 	if s == nil {
 		return ReentryRecommendation{}, false, "", fmt.Errorf("store is nil")
 	}
@@ -34,7 +43,10 @@ func (s *SQLiteStore) CreateReentryRecommendationIfAllowed(record ReentryRecomme
 	if len(record.Candidates) == 0 {
 		return ReentryRecommendation{}, false, "", fmt.Errorf("reentry recommendation candidates are required")
 	}
-	record.Status = ReentryRecommendationStatusPending
+	record.Status = NormalizeReentryRecommendationStatus(status)
+	if record.Status == "" {
+		record.Status = ReentryRecommendationStatusPending
+	}
 	record.CreatedAt = nonZeroTimeOrNow(record.CreatedAt, now).UTC()
 	record.UpdatedAt = nonZeroTimeOrNow(record.UpdatedAt, now).UTC()
 	candidatesJSON, err := json.Marshal(record.Candidates)

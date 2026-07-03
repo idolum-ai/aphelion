@@ -101,6 +101,7 @@ func (r *Runtime) runInteractiveDMTurnResult(ctx context.Context, input interact
 	promptContext := assembled.PromptContext
 	hiddenInputs := assembled.HiddenInputs
 	baseGovernorAwareness := assembled.BaseGovernorAwareness
+	promptOperationState := assembled.PromptOperationState
 	audit := assembled.Audit
 	machine := assembled.Machine
 	defer r.emitTurnAudit(audit)
@@ -130,6 +131,7 @@ func (r *Runtime) runInteractiveDMTurnResult(ctx context.Context, input interact
 		tools:                 input.Tools,
 		currentFaceModel:      r.currentFaceRenderer(),
 		baseGovernorAwareness: baseGovernorAwareness,
+		promptOperationState:  promptOperationState,
 		audit:                 audit,
 	}
 	machine.Governor = coordinator

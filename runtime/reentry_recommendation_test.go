@@ -409,8 +409,8 @@ func TestReentryRecommendationSuppressesPureFallbackCard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReentryRecommendations() err = %v", err)
 	}
-	if len(records) != 0 {
-		t.Fatalf("records = %#v, want no persisted recommendation for pure fallback", records)
+	if len(records) != 1 || records[0].Status != session.ReentryRecommendationStatusSuppressed {
+		t.Fatalf("records = %#v, want one suppressed recommendation for pure fallback", records)
 	}
 	events, err := store.ExecutionEventsBySession(key, 0, 100)
 	if err != nil {
@@ -418,6 +418,16 @@ func TestReentryRecommendationSuppressesPureFallbackCard(t *testing.T) {
 	}
 	if _, ok := testReentryExecutionEvent(events, core.ExecutionEventReentryRecommendationJudged, "suppressed_low_value"); !ok {
 		t.Fatalf("events = %#v, want low-value suppression audit", events)
+	}
+	if err := rt.runReentryRecommendationSweepOnce(context.Background(), completed.CompletedAt.Add(7*time.Minute)); err != nil {
+		t.Fatalf("second runReentryRecommendationSweepOnce() err = %v", err)
+	}
+	events, err = store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession(second) err = %v", err)
+	}
+	if got := countReentryExecutionEvents(events, core.ExecutionEventReentryRecommendationJudged, "suppressed_low_value"); got != 1 {
+		t.Fatalf("suppressed_low_value events = %d, want one durable suppression event; events=%#v", got, events)
 	}
 }
 
@@ -483,6 +493,52 @@ func TestReentryRecommendationIgnoredCandidateDampensSameSemanticKey(t *testing.
 	}
 }
 
+func TestReentryRecommendationSuppressedCandidateDampensSameSemanticKey(t *testing.T) {
+	t.Parallel()
+
+	_, store, _, _ := buildRuntimeFixtures(t)
+	rt := &Runtime{store: store}
+	now := time.Date(2026, 6, 15, 13, 0, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 7014, UserID: 0}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "thanks")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	candidate := session.ReentryRecommendationCandidate{
+		ID:           "c1",
+		Kind:         session.ReentryCandidateReflectWithOperator,
+		Label:        "Ask: choose useful path",
+		PromptText:   "Ask the operator what would be useful next.",
+		IntentClass:  "clarify_goal",
+		SourceKind:   "turn_run",
+		SourceRef:    "prior",
+		DampeningKey: "clarify_goal:reflect_with_operator:turn_run:prior",
+	}
+	created, allowed, reason, err := store.CreateSuppressedReentryRecommendationIfAllowed(session.ReentryRecommendation{
+		ID:                  "reentry-suppressed-dampened",
+		Owner:               reentryRecommendationOwner(*run),
+		ChatID:              run.ChatID,
+		SessionID:           run.SessionID,
+		SourceTurnRunID:     run.ID,
+		TerminalFingerprint: "sha256:suppressed-prior",
+		Candidates:          []session.ReentryRecommendationCandidate{candidate},
+	}, "low-value candidates suppressed", now)
+	if err != nil || !allowed {
+		t.Fatalf("CreateSuppressedReentryRecommendationIfAllowed() created=%#v allowed=%v reason=%q err=%v", created, allowed, reason, err)
+	}
+
+	candidates := rt.applyReentryRecommendationDampening(reentryRecommendationState{
+		Run: session.TurnRun{
+			ID:        run.ID + 1,
+			SessionID: run.SessionID,
+		},
+		Now: now.Add(2 * time.Minute),
+	}, []session.ReentryRecommendationCandidate{candidate})
+	if len(candidates) != 0 {
+		t.Fatalf("candidates = %#v, want suppressed semantic opportunity dampened", candidates)
+	}
+}
+
 func TestReentryRecommendationMessageTextNeutralizesMarkdownLikeLabels(t *testing.T) {
 	t.Parallel()
 
@@ -523,6 +579,16 @@ func testReentryExecutionEvent(events []session.ExecutionEvent, eventType string
 		}
 	}
 	return session.ExecutionEvent{}, false
+}
+
+func countReentryExecutionEvents(events []session.ExecutionEvent, eventType string, status string) int {
+	count := 0
+	for _, event := range events {
+		if event.EventType == eventType && event.Status == status {
+			count++
+		}
+	}
+	return count
 }
 
 func testReentryPayloadObjects(payload map[string]any, key string) []map[string]any {

@@ -190,6 +190,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	promptContext := assembled.PromptContext
 	hiddenInputs := assembled.HiddenInputs
 	baseGovernorAwareness := assembled.BaseGovernorAwareness
+	promptOperationState := assembled.PromptOperationState
 	audit := assembled.Audit
 	machine := assembled.Machine
 	defer r.emitTurnAudit(audit)
@@ -218,6 +219,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		tools:                     agent.ToolRegistry(nil),
 		currentFaceModel:          r.currentFaceRenderer(),
 		baseGovernorAwareness:     baseGovernorAwareness,
+		promptOperationState:      promptOperationState,
 		audit:                     audit,
 		allowStream:               opts.AllowStream,
 		pendingParentConversation: pendingParentConversation,
