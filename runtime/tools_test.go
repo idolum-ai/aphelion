@@ -48,18 +48,20 @@ func TestPrincipalScopedToolsManifestUsesPrincipalAwareManifest(t *testing.T) {
 
 func TestToolManifestForRunKindFiltersConservativeLanes(t *testing.T) {
 	registry := &stubToolRegistry{defs: []agent.ToolDef{
-		{Name: "exec"},
-		{Name: "fetch_url"},
-		{Name: "request_approval"},
 		{Name: "read_file"},
+		{Name: "list_dir"},
+		{Name: "search"},
 		{Name: "system_log_read"},
+		{Name: "fetch_url"},
+		{Name: "exec"},
+		{Name: "request_approval"},
 		{Name: "operation_artifact"},
 		{Name: "session_search"},
 		{Name: "semantic_search"},
 		{Name: "update_operation"},
 	}}
 
-	if got := toolManifestForRunKind(registry, ""); got != "exec, fetch_url, operation_artifact, read_file, request_approval, semantic_search, session_search, system_log_read, update_operation" {
+	if got := toolManifestForRunKind(registry, ""); got != "read_file, list_dir, search, system_log_read, fetch_url, exec, request_approval, operation_artifact, session_search, semantic_search, update_operation" {
 		t.Fatalf("interactive manifest = %q", got)
 	}
 	heartbeat := toolManifestForRunKind(registry, session.TurnRunKindHeartbeat)

@@ -2244,11 +2244,50 @@ func TestAuthorityBundleMaterializationAllowsScopedBranchPush(t *testing.T) {
 	if state.Status != session.ContinuationStatusPending || state.ContinuationLease.Status != session.ContinuationLeaseStatusPending {
 		t.Fatalf("continuation state = %#v, want pending approval", state)
 	}
+	if len(state.ContinuationLease.RequiredCapabilityGrants) != 1 {
+		t.Fatalf("required grants = %#v, want scoped branch-push grant preserved on pending lease", state.ContinuationLease.RequiredCapabilityGrants)
+	}
+	pendingGrant := state.ContinuationLease.RequiredCapabilityGrants[0]
+	if pendingGrant.GrantID != "grant-scoped-branch-push" ||
+		pendingGrant.Kind != session.CapabilityKindExternalAccount ||
+		pendingGrant.TargetResource != "github:idolum-ai/aphelion" ||
+		pendingGrant.GrantedTo != "telegram:1001" ||
+		!actionListContains(pendingGrant.AllowedActions, "write") ||
+		!strings.Contains(pendingGrant.Constraints, `"branch":"fix/child-wake-authority-context"`) ||
+		!strings.Contains(pendingGrant.Constraints, `"no_force_push":true`) {
+		t.Fatalf("pending required grant = %#v, want exact scoped branch-push GitHub grant", pendingGrant)
+	}
+	if _, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github:idolum-ai/aphelion", "telegram:1001", "write"); err != nil || ok {
+		t.Fatalf("ActiveCapabilityGrant(before approval) ok=%t err=%v, want no active GitHub grant from card materialization alone", ok, err)
+	}
 	sender.mu.Lock()
 	inlineCount := len(sender.inline)
 	sender.mu.Unlock()
 	if inlineCount != 1 {
 		t.Fatalf("inline count = %d, want one approval card for scoped branch push bundle", inlineCount)
+	}
+
+	approved, err := rt.ApproveContinuationForKey(key, 1001)
+	if err != nil {
+		t.Fatalf("ApproveContinuationForKey(scoped branch push) err = %v", err)
+	}
+	if approved.Status != session.ContinuationStatusApproved ||
+		approved.ContinuationLease.Status != session.ContinuationLeaseStatusActive ||
+		!stringSliceContains(approved.ContinuationLease.CapabilityGrantIDs, "grant-scoped-branch-push") {
+		t.Fatalf("approved continuation = %#v, want active exact scoped branch-push grant id", approved)
+	}
+	grant, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github:idolum-ai/aphelion", "telegram:1001", "write")
+	if err != nil {
+		t.Fatalf("ActiveCapabilityGrant(after approval) err = %v", err)
+	}
+	if !ok || grant.GrantID != "grant-scoped-branch-push" ||
+		!strings.Contains(grant.Constraints, `"branch":"fix/child-wake-authority-context"`) ||
+		!strings.Contains(grant.Constraints, `"no_force_push":true`) ||
+		strings.Contains(grant.Constraints, `"force_push":true`) {
+		t.Fatalf("active grant ok=%v grant=%#v, want exact non-force scoped branch-push grant", ok, grant)
+	}
+	if broad, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github", "telegram:1001", "write"); err != nil || ok || strings.TrimSpace(broad.GrantID) != "" {
+		t.Fatalf("broad ActiveCapabilityGrant() ok=%t grant=%#v err=%v, want no broad GitHub write grant", ok, broad, err)
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestRunStatusCommandKVDegradesWhenBuildRevisionUnknown(t *testing.T) {
+func TestRunStatusCommandKVAllowsSourceBuildWithoutRevisionWhenPathAndVersionMatch(t *testing.T) {
 	configPath := writeMinimalStatusConfig(t)
 	metaPath := filepath.Join(t.TempDir(), "release.json")
 	if err := os.WriteFile(metaPath, []byte(`{"latest_version":"v0.2.2","installed_version":"v0.2.2","checked_at":"2026-06-04T14:38:27Z","source":"test"}`), 0o600); err != nil {
@@ -22,7 +22,7 @@ func TestRunStatusCommandKVDegradesWhenBuildRevisionUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Executable: %v", err)
 	}
-	info := readVersionInfo()
+	info := versionInfo{Version: "(devel)"}
 	fake := statusFakeService{
 		show:      "MainPID=123\nExecStart={ path=" + execPath + " ; argv[]=" + execPath + " --config " + configPath + " }\n",
 		unitList:  "aphelion.service loaded active running Aphelion\n",
@@ -32,8 +32,9 @@ func TestRunStatusCommandKVDegradesWhenBuildRevisionUnknown(t *testing.T) {
 	}
 	out, err := captureStandaloneStdout(t, func() error {
 		return runStatusCommandWithOptions([]string{"--config", configPath}, statusCommandOptions{
-			Runner:   fake.run,
-			Readlink: fake.readlink,
+			Runner:       fake.run,
+			Readlink:     fake.readlink,
+			BuildVersion: info,
 			ExecVersion: func(ctx context.Context, path string) (versionInfo, error) {
 				return fake.versions[path], nil
 			},
@@ -45,22 +46,61 @@ func TestRunStatusCommandKVDegradesWhenBuildRevisionUnknown(t *testing.T) {
 	}
 	for _, want := range []string{
 		"action: status",
-		"status: degraded",
+		"status: ready",
 		"config_path: " + configPath,
 		"service_main_pid: 123",
 		"service_running_exec: " + execPath,
-		"service_binary_matches: false",
+		"service_binary_matches: true",
 		"release_status_class: current",
 		"release_installed_version: v0.2.2",
-		"next_action: run doctor",
-		"running service binary does not match expected binary",
+		"next_action: none",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("status output missing %q in %q", want, out)
 		}
 	}
+	if strings.Contains(out, "running service binary does not match expected binary") {
+		t.Fatalf("status output reported a binary mismatch for matching source build: %q", out)
+	}
 	if fake.called("restart") || fake.called("install") || fake.called("verify-deploy") {
 		t.Fatalf("status command invoked mutating command: %#v", fake.calls)
+	}
+}
+
+func TestServiceBinaryMatchesTreatsRevisionAsOptionalOnlyWhenBothSidesAreUnknown(t *testing.T) {
+	base := statusServiceInfo{
+		RunningExecPath:  "/opt/aphelion/bin/aphelion",
+		ExpectedExecPath: "/opt/aphelion/bin/aphelion",
+		RunningVersion:   "(devel)",
+		ExpectedVersion:  "(devel)",
+	}
+	if !serviceBinaryMatches(base) {
+		t.Fatalf("serviceBinaryMatches() = false, want true for matching source build without VCS revisions")
+	}
+
+	withRevision := base
+	withRevision.RunningRevision = "abc123"
+	withRevision.ExpectedRevision = "abc123"
+	if !serviceBinaryMatches(withRevision) {
+		t.Fatalf("serviceBinaryMatches() = false, want true for matching revisions")
+	}
+
+	mismatch := withRevision
+	mismatch.RunningRevision = "def456"
+	if serviceBinaryMatches(mismatch) {
+		t.Fatalf("serviceBinaryMatches() = true, want false for concrete revision mismatch")
+	}
+
+	partial := base
+	partial.ExpectedRevision = "abc123"
+	if serviceBinaryMatches(partial) {
+		t.Fatalf("serviceBinaryMatches() = true, want false when only one side has a revision")
+	}
+
+	missingVersion := base
+	missingVersion.RunningVersion = ""
+	if serviceBinaryMatches(missingVersion) {
+		t.Fatalf("serviceBinaryMatches() = true, want false without a running version")
 	}
 }
 

@@ -436,7 +436,7 @@
     ],
     "current_status": "implemented_first_slice",
     "always_on_anchors": [
-      "internal/standalonecli/status_command_test.go#TestRunStatusCommandKVDegradesWhenBuildRevisionUnknown"
+      "internal/standalonecli/status_command_test.go#TestRunStatusCommandKVAllowsSourceBuildWithoutRevisionWhenPathAndVersionMatch"
     ],
     "ideal_invariant": "Status separates source revision health from release freshness and names the authoritative verification command.",
     "classification": "operational_tension",

@@ -15,6 +15,7 @@ import (
 type externalToolFingerprintInput struct {
 	Name        string                          `json:"name"`
 	Owner       string                          `json:"owner"`
+	Description string                          `json:"description,omitempty"`
 	Version     string                          `json:"version,omitempty"`
 	Execution   ExternalToolManifestExecution   `json:"execution"`
 	IO          externalToolFingerprintIO       `json:"io"`
@@ -94,10 +95,11 @@ func externalToolFingerprints(manifest ExternalToolManifest, workingRoot string,
 func externalToolManifestHash(manifest ExternalToolManifest) (string, error) {
 	manifest = NormalizeExternalToolManifest(manifest)
 	payload := externalToolFingerprintInput{
-		Name:      manifest.Name,
-		Owner:     manifest.Owner,
-		Version:   manifest.Version,
-		Execution: manifest.Execution,
+		Name:        manifest.Name,
+		Owner:       manifest.Owner,
+		Description: manifest.Description,
+		Version:     manifest.Version,
+		Execution:   manifest.Execution,
 		IO: externalToolFingerprintIO{
 			InputSchema:  canonicalRawJSON(manifest.IO.InputSchema),
 			OutputSchema: canonicalRawJSON(manifest.IO.OutputSchema),

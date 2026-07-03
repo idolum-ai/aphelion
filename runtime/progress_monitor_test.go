@@ -6,11 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 	toolpkg "github.com/idolum-ai/aphelion/tool"
@@ -133,6 +135,62 @@ func TestTurnMonitorMarksPreDispatchExecDenialsRejected(t *testing.T) {
 	}
 	if attempts[0].Status != session.EffectAttemptStatusRejected {
 		t.Fatalf("attempt status = %q, want rejected because dispatch never started", attempts[0].Status)
+	}
+}
+
+func TestTurnMonitorPreservesPreDispatchExecEffectPlanOnFinish(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9918, UserID: 0, Scope: telegramDMScopeRef(9918)}
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "pre-dispatch plan preservation", nil, nil, core.InboundMessage{})
+	if err != nil {
+		t.Fatalf("startTurnMonitor() err = %v", err)
+	}
+	command := "cd /tmp && /bin/cat runtime/typed_continuation_approval.go"
+	input := json.RawMessage(`{"command":` + strconv.Quote(command) + `}`)
+	invocationID := "turn-preserve-plan-tool-1"
+	ctx := toolpkg.WithToolInvocationRef(context.Background(), toolpkg.ToolInvocationRef{TurnRunID: monitor.runID, InvocationID: invocationID})
+	monitor.ToolStarted(ctx, "exec", input)
+
+	normalizedCommand := commandeffect.NormalizeCommand(command)
+	attemptID := session.EffectAttemptID(session.SessionIDForKey(key), monitor.runID, "exec_pre_dispatch:exec:"+invocationID, normalizedCommand)
+	if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+		AttemptID:    attemptID,
+		Key:          key,
+		TurnRunID:    monitor.runID,
+		Executor:     "tool",
+		Tool:         "exec",
+		Command:      normalizedCommand,
+		EffectKind:   string(commandeffect.KindAdminUnboundedExec),
+		EffectReason: "admin approved exact unbounded shell command",
+		SubjectJSON:  `{"kind":"exec_command"}`,
+		Status:       session.EffectAttemptStatusAttempted,
+		EvidenceRefs: []string{"exec_pre_dispatch"},
+		StartedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("UpsertEffectAttempt(pre-dispatch) err = %v", err)
+	}
+
+	monitor.ToolFinished(ctx, "exec", input, "", errors.New("command failed with exit code 1"))
+	monitor.Finish(context.Background(), nil)
+
+	attempts, err := store.EffectAttemptsByTurnRun(key, monitor.runID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsByTurnRun() err = %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one merged effect attempt", attempts)
+	}
+	if attempts[0].Status != session.EffectAttemptStatusUncertain {
+		t.Fatalf("attempt status = %q, want uncertain outcome", attempts[0].Status)
+	}
+	if attempts[0].EffectKind != string(commandeffect.KindAdminUnboundedExec) || attempts[0].EffectReason != "admin approved exact unbounded shell command" {
+		t.Fatalf("attempt = %#v, want pre-dispatch admin exact effect plan preserved", attempts[0])
 	}
 }
 

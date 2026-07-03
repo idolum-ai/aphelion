@@ -179,6 +179,42 @@ func TestObservedToolRegistryProjectedFailurePreservesContextSentinelsSafely(t *
 	}
 }
 
+func TestClassifyProjectedToolFailureDoesNotTreatApprovalPathAsAuthority(t *testing.T) {
+	t.Parallel()
+
+	signals := classifyProjectedToolFailure(
+		errors.New("command failed with exit code 2"),
+		"sed: can't read runtime/continuation_approval.go: No such file or directory",
+	)
+	if signals.FailureClass != "tool_error" || signals.RetryPolicy != "reformulate" {
+		t.Fatalf("classifyProjectedToolFailure(approval path missing) = %#v, want ordinary tool_error", signals)
+	}
+
+	signals = classifyProjectedToolFailure(
+		errors.New("command failed with exit code 1"),
+		"cat: grant-only-authority-bundle.md: No such file or directory",
+	)
+	if signals.FailureClass != "tool_error" || signals.RetryPolicy != "reformulate" {
+		t.Fatalf("classifyProjectedToolFailure(grant path missing) = %#v, want ordinary tool_error", signals)
+	}
+}
+
+func TestClassifyProjectedToolFailureRecognizesAuthorityPhrases(t *testing.T) {
+	t.Parallel()
+
+	for _, text := range []string{
+		"authority required; details protected",
+		"missing capability grant; review request capg-runtime-read is required",
+		"command requires an approved proposal: workspace escape",
+		"read_file open /secret: permission denied",
+	} {
+		signals := classifyProjectedToolFailure(errors.New(text), "")
+		if signals.FailureClass != "authority_rejected" || signals.RetryPolicy != "ask_for_grant" {
+			t.Fatalf("classifyProjectedToolFailure(%q) = %#v, want authority rejection", text, signals)
+		}
+	}
+}
+
 func newObservedFailureRegistry(t *testing.T, output string, err error) (*session.SQLiteStore, *observedToolRegistry, session.SessionKey) {
 	t.Helper()
 

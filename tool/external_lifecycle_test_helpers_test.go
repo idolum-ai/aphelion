@@ -96,12 +96,17 @@ func seedVerifiedExternalToolLifecycle(t *testing.T, registry *Registry, store *
 }
 
 func toolDefExists(defs []agent.ToolDef, name string) bool {
+	_, ok := toolDefByName(defs, name)
+	return ok
+}
+
+func toolDefByName(defs []agent.ToolDef, name string) (agent.ToolDef, bool) {
 	for _, def := range defs {
 		if def.Name == name {
-			return true
+			return def, true
 		}
 	}
-	return false
+	return agent.ToolDef{}, false
 }
 
 func grantToolInvoke(t *testing.T, store *session.SQLiteStore, toolName string, principal string) {
