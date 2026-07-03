@@ -123,6 +123,71 @@ func (s *SQLiteStore) ReleaseLookaheadAllowance(allowanceID string, reason strin
 	return nil
 }
 
+func (s *SQLiteStore) ExpireLookaheadAllowancesForAdmin(adminChatID int64, now time.Time) ([]LookaheadAllowance, error) {
+	if s == nil || s.db == nil || adminChatID == 0 {
+		return nil, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin expire lookahead allowances tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.Query(`
+		SELECT
+			allowance_id, admin_chat_id, review_event_id, source_session_id, target_session_id,
+			status, next_action_record_id, entry_id, reason,
+			created_at, updated_at, expires_at, released_at
+		FROM authority_lookahead_allowances
+		WHERE admin_chat_id = ?
+			AND status IN (?, ?)
+			AND expires_at IS NOT NULL
+			AND expires_at != ''
+			AND expires_at <= ?
+		ORDER BY expires_at ASC, allowance_id ASC
+	`, adminChatID, string(LookaheadAllowanceReserved), string(LookaheadAllowanceOpen), now.Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, fmt.Errorf("query expired lookahead allowances: %w", err)
+	}
+	expired := []LookaheadAllowance{}
+	for rows.Next() {
+		record, err := scanLookaheadAllowance(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		expired = append(expired, record)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close expired lookahead allowance rows: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate expired lookahead allowances: %w", err)
+	}
+	for i, record := range expired {
+		if _, err := tx.Exec(`
+			UPDATE authority_lookahead_allowances
+			SET status = ?, reason = ?, released_at = ?, updated_at = ?
+			WHERE allowance_id = ?
+				AND status IN (?, ?)
+		`, string(LookaheadAllowanceExpired), "expired_unreviewed", now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
+			record.AllowanceID, string(LookaheadAllowanceReserved), string(LookaheadAllowanceOpen)); err != nil {
+			return nil, fmt.Errorf("expire lookahead allowance %s: %w", record.AllowanceID, err)
+		}
+		expired[i].Status = LookaheadAllowanceExpired
+		expired[i].Reason = "expired_unreviewed"
+		expired[i].ReleasedAt = now
+		expired[i].UpdatedAt = now
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit expire lookahead allowances tx: %w", err)
+	}
+	return expired, nil
+}
+
 func (s *SQLiteStore) OutstandingLookaheadApprovalFrontierCountAt(adminChatID int64, now time.Time) (int, error) {
 	if s == nil || s.db == nil || adminChatID == 0 {
 		return 0, nil
@@ -147,10 +212,10 @@ func (s *SQLiteStore) LookaheadAllowancesForAdmin(adminChatID int64, limit int) 
 			created_at, updated_at, expires_at, released_at
 		FROM authority_lookahead_allowances
 		WHERE admin_chat_id = ?
-			AND status IN (?, ?)
+			AND status IN (?, ?, ?)
 		ORDER BY created_at ASC, allowance_id ASC
 		LIMIT ?
-	`, adminChatID, string(LookaheadAllowanceReserved), string(LookaheadAllowanceOpen), limit)
+	`, adminChatID, string(LookaheadAllowanceReserved), string(LookaheadAllowanceOpen), string(LookaheadAllowanceExpired), limit)
 	if err != nil {
 		return nil, fmt.Errorf("query lookahead allowances for admin: %w", err)
 	}

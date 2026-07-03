@@ -26,12 +26,38 @@ const (
 const MaxAuthorityDiscoveryLoadoutSlots = 2
 
 type AuthorityDiscoveryLoadoutSlot struct {
-	TokenID       string
-	LabelRef      string
-	StepRef       string
-	ShapeHash     string
-	LiveAuthority bool
-	ExpiresAt     time.Time
+	TokenID              string
+	LabelRef             string
+	StepRef              string
+	ShapeHash            string
+	LiveAuthorityWitness AuthorityDiscoveryLiveSlotWitness
+	ExpiresAt            time.Time
+}
+
+type AuthorityDiscoveryLiveSlotWitness struct {
+	labelRef   string
+	shapeHash  string
+	source     string
+	verifiedAt time.Time
+}
+
+func newAuthorityDiscoveryLiveSlotWitness(labelRef string, shapeHash string, source string, verifiedAt time.Time) AuthorityDiscoveryLiveSlotWitness {
+	return AuthorityDiscoveryLiveSlotWitness{
+		labelRef:   strings.TrimSpace(labelRef),
+		shapeHash:  strings.TrimSpace(shapeHash),
+		source:     strings.TrimSpace(source),
+		verifiedAt: verifiedAt.UTC(),
+	}
+}
+
+func (w AuthorityDiscoveryLiveSlotWitness) validFor(labelRef string, shapeHash string) bool {
+	if strings.TrimSpace(w.labelRef) == "" || strings.TrimSpace(w.labelRef) != strings.TrimSpace(labelRef) {
+		return false
+	}
+	if strings.TrimSpace(shapeHash) != "" && strings.TrimSpace(w.shapeHash) != "" && strings.TrimSpace(w.shapeHash) != strings.TrimSpace(shapeHash) {
+		return false
+	}
+	return strings.TrimSpace(w.source) != "" && !w.verifiedAt.IsZero()
 }
 
 type AuthorityDiscoveryResolutionCandidate struct {
@@ -60,7 +86,7 @@ type AuthorityDiscoveryMenuInput struct {
 	SessionID         string
 	Entries           []session.IdentificationLedgerProjection
 	Loadout           []AuthorityDiscoveryLoadoutSlot
-	LiveAuthorityRefs map[string]bool
+	LiveAuthorityRefs map[string]AuthorityDiscoveryLiveSlotWitness
 	Now               time.Time
 }
 
@@ -87,6 +113,39 @@ type AuthorityDiscoveryTraceLink struct {
 
 type AuthorityDiscoveryTrace struct {
 	Links []AuthorityDiscoveryTraceLink
+}
+
+type AuthorityDiscoveryLedgerBiography struct {
+	EntryID  string
+	LabelRef string
+	Status   string
+	Lines    []string
+}
+
+func ProjectAuthorityDiscoveryLedgerBiography(projection session.IdentificationLedgerProjection) AuthorityDiscoveryLedgerBiography {
+	entry := session.NormalizeIdentificationLedgerEntry(projection.Entry)
+	bio := AuthorityDiscoveryLedgerBiography{
+		EntryID:  entry.EntryID,
+		LabelRef: entry.LabelRef,
+		Status:   string(entry.Status),
+	}
+	observations := append([]session.IdentificationLedgerObservation(nil), projection.Observations...)
+	sort.SliceStable(observations, func(i, j int) bool {
+		return observations[i].ObservedAt.Before(observations[j].ObservedAt)
+	})
+	for _, observation := range observations {
+		observation = session.NormalizeIdentificationLedgerObservation(observation)
+		line := fmt.Sprintf("%s:%s=%s", observation.Method, observation.Property, observation.Value)
+		if observation.ActorPrincipal != "" || observation.ActorAction != "" {
+			line += fmt.Sprintf(" actor=%s/%s", firstNonEmptyContinuation(observation.ActorPrincipal, observation.ActorKind, "unknown"), observation.ActorAction)
+		}
+		if observation.OccurrenceCount > 1 {
+			line += fmt.Sprintf(" x%d", observation.OccurrenceCount)
+		}
+		bio.Lines = append(bio.Lines, line)
+	}
+	bio.Lines = append(bio.Lines, "status:"+string(entry.Status))
+	return bio
 }
 
 func CompileAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuInput) AuthorityDiscoveryMenu {
@@ -119,7 +178,7 @@ func CompileAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuInput) AuthorityD
 			StepRef:    entry.StepRef,
 			ShapeHash:  entry.ShapeHash,
 			LabelRef:   entry.LabelRef,
-			State:      authorityDiscoveryStateForEntry(entry, now, authorityDiscoveryInputLabelLive(input.LiveAuthorityRefs, entry.LabelRef)),
+			State:      authorityDiscoveryStateForEntry(entry, now, authorityDiscoveryInputLabelLive(input.LiveAuthorityRefs, entry.LabelRef, entry.ShapeHash)),
 			Properties: map[session.IdentificationObservationProperty][]string{},
 			ExpiresAt:  entry.ExpiresAt,
 		}
@@ -154,7 +213,8 @@ func CompileAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuInput) AuthorityD
 			continue
 		}
 		state := AuthorityDiscoveryTokenOneApprovalAway
-		live := slot.LiveAuthority || authorityDiscoveryInputLabelLive(input.LiveAuthorityRefs, slot.LabelRef)
+		live := slot.LiveAuthorityWitness.validFor(slot.LabelRef, slot.ShapeHash) ||
+			authorityDiscoveryInputLabelLive(input.LiveAuthorityRefs, slot.LabelRef, slot.ShapeHash)
 		if !slot.ExpiresAt.IsZero() && !slot.ExpiresAt.After(now) {
 			state = AuthorityDiscoveryTokenExpired
 		} else if live {
@@ -192,12 +252,13 @@ func CompileAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuInput) AuthorityD
 	return menu
 }
 
-func authorityDiscoveryInputLabelLive(liveRefs map[string]bool, labelRef string) bool {
+func authorityDiscoveryInputLabelLive(liveRefs map[string]AuthorityDiscoveryLiveSlotWitness, labelRef string, shapeHash string) bool {
 	labelRef = strings.TrimSpace(labelRef)
 	if labelRef == "" || liveRefs == nil {
 		return false
 	}
-	return liveRefs[labelRef]
+	witness, ok := liveRefs[labelRef]
+	return ok && witness.validFor(labelRef, shapeHash)
 }
 
 func ScoreAuthorityDiscoveryMenu(menu AuthorityDiscoveryMenu) AuthorityDiscoveryTraceMetrics {
@@ -294,7 +355,7 @@ func (r *Runtime) BuildAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuBuildI
 	if now.IsZero() {
 		now = r.authorityDiscoveryNow()
 	}
-	liveRefs := map[string]bool{}
+	liveRefs := map[string]AuthorityDiscoveryLiveSlotWitness{}
 	for _, projection := range entries {
 		labelRef := strings.TrimSpace(projection.Entry.LabelRef)
 		if labelRef == "" {
@@ -304,25 +365,34 @@ func (r *Runtime) BuildAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuBuildI
 		if err != nil {
 			return AuthorityDiscoveryMenu{}, err
 		}
-		liveRefs[labelRef] = live
+		if live {
+			liveRefs[labelRef] = newAuthorityDiscoveryLiveSlotWitness(labelRef, projection.Entry.ShapeHash, "runtime_live_authority_join", now)
+		}
 	}
+	loadout := make([]AuthorityDiscoveryLoadoutSlot, 0, len(input.Loadout))
 	for _, slot := range input.Loadout {
 		labelRef := strings.TrimSpace(slot.LabelRef)
 		if labelRef == "" {
+			loadout = append(loadout, slot)
 			continue
 		}
 		live, err := r.authorityDiscoveryLabelLive(input.Key, sessionID, labelRef, slot.ShapeHash, now)
 		if err != nil {
 			return AuthorityDiscoveryMenu{}, err
 		}
-		liveRefs[labelRef] = live
+		if live {
+			witness := newAuthorityDiscoveryLiveSlotWitness(labelRef, slot.ShapeHash, "runtime_live_authority_join", now)
+			liveRefs[labelRef] = witness
+			slot.LiveAuthorityWitness = witness
+		}
+		loadout = append(loadout, slot)
 	}
 	return CompileAuthorityDiscoveryMenu(AuthorityDiscoveryMenuInput{
 		PlanID:            planID,
 		PlanVersion:       planVersion,
 		SessionID:         sessionID,
 		Entries:           entries,
-		Loadout:           input.Loadout,
+		Loadout:           loadout,
 		LiveAuthorityRefs: liveRefs,
 		Now:               now,
 	}), nil

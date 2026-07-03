@@ -44,6 +44,9 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 		return response, nil
 	}
 	now := r.authorityDiscoveryNow()
+	if err := r.expireLookaheadAllowancesWithSilence(event.TargetAdminChatID, now); err != nil {
+		return "", err
+	}
 	if response, err := r.lookaheadOutstandingFrontierBudgetResponse(event, now); err != nil {
 		return "", err
 	} else if response != "" {
@@ -87,6 +90,16 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 			lastReason = "lookahead_meter_full"
 			break
 		}
+		labelRef, _, shapeHash, _ := r.lookaheadAuthorityFrontierLabel(action)
+		r.recordAuthorityFrontierDelta(key, "reserved", map[string]any{
+			"allowance_id":          allowance.AllowanceID,
+			"review_event_id":       event.ID,
+			"target_admin_chat_id":  event.TargetAdminChatID,
+			"next_action_record_id": action.RecordID,
+			"shape_hash":            shapeHash,
+			"step_ref":              lookaheadAuthorityFrontierStepRef(action),
+			"label_ref":             labelRef,
+		}, now)
 		materialized, handled, err := r.materializeRecoveryApprovalNextActionLocked(ctx, key, msg, action, now)
 		if err != nil {
 			if releaseErr := r.releaseLookaheadAllowanceOrRecord(key, allowance.AllowanceID, "materialize_error", now); releaseErr != nil {
@@ -125,6 +138,16 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 			r.recordLookaheadAllowanceIssue(key, allowance.AllowanceID, action.RecordID, entryID, "lookahead_allowance_bind_failed", err, now)
 			return "", err
 		}
+		r.recordAuthorityFrontierDelta(key, "open", map[string]any{
+			"allowance_id":          allowance.AllowanceID,
+			"review_event_id":       event.ID,
+			"target_admin_chat_id":  event.TargetAdminChatID,
+			"next_action_record_id": action.RecordID,
+			"entry_id":              entryID,
+			"shape_hash":            shapeHash,
+			"step_ref":              lookaheadAuthorityFrontierStepRef(action),
+			"label_ref":             labelRef,
+		}, now)
 		surfaced++
 		if limit == 1 {
 			break
@@ -154,7 +177,25 @@ func (r *Runtime) releaseLookaheadAllowanceOrRecord(key session.SessionKey, allo
 		r.recordLookaheadAllowanceIssue(key, allowanceID, "", "", "lookahead_allowance_release_failed", err, now)
 		return err
 	}
+	r.recordAuthorityFrontierDelta(key, "released", map[string]any{
+		"allowance_id":         strings.TrimSpace(allowanceID),
+		"target_admin_chat_id": key.ChatID,
+		"reason":               strings.TrimSpace(reason),
+	}, now)
 	return nil
+}
+
+func (r *Runtime) recordAuthorityFrontierDelta(key session.SessionKey, status string, payload map[string]any, now time.Time) {
+	if r == nil {
+		return
+	}
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	if _, ok := payload["target_admin_chat_id"]; !ok && key.ChatID != 0 {
+		payload["target_admin_chat_id"] = key.ChatID
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventAuthorityFrontierDelta, "authority_frontier", strings.TrimSpace(status), payload, now)
 }
 
 func (r *Runtime) recordLookaheadAllowanceIssue(key session.SessionKey, allowanceID string, nextActionRecordID string, entryID string, status string, cause error, now time.Time) {
@@ -181,6 +222,13 @@ func (r *Runtime) lookaheadOutstandingFrontierBudgetResponse(event session.Revie
 		return "", nil
 	}
 	key := session.SessionKey{ChatID: event.TargetAdminChatID, UserID: 0, Scope: telegramDMScopeRef(event.TargetAdminChatID)}
+	r.recordAuthorityFrontierDelta(key, "budget_full", map[string]any{
+		"review_event_id":             event.ID,
+		"target_admin_chat_id":        event.TargetAdminChatID,
+		"outstanding_frontier_count":  count,
+		"outstanding_frontier_budget": MaxOutstandingLookaheadApprovalFrontiers,
+		"reason":                      "lookahead_meter_full",
+	}, now)
 	r.recordExecutionEvent(key, core.ExecutionEventAuthorityFindingReviewed, "authority_discovery", "lookahead_meter_full", map[string]any{
 		"review_event_id":             event.ID,
 		"target_admin_chat_id":        event.TargetAdminChatID,

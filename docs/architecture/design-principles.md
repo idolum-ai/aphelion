@@ -151,7 +151,10 @@ frontiers, not by hidden trust in model restraint; a full meter should stop
 projection before it publishes another candidate, and should never approve or
 execute authority. The meter itself should be a typed operator projection, not a
 private runtime counter, so the operator can inspect what speculative authority
-is trailing a long plan.
+is trailing a long plan. Frontier changes should also be durable events, and
+non-response should be stamped as `expired_unreviewed` provenance rather than
+lost as silence. Menu tokens become executable only through live witnesses
+produced by point-of-use authority validation.
 
 Unknown edge cases are expected. The answer is not to pretend every phrase can
 be exhaustively matched; the answer is to preserve enough structure, evidence,

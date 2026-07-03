@@ -170,6 +170,25 @@ func (s *SQLiteStore) IdentificationLedgerEntries(query IdentificationLedgerQuer
 	return projections, nil
 }
 
+func (s *SQLiteStore) IdentificationLedgerEntryByID(entryID string) (IdentificationLedgerEntry, bool, error) {
+	if s == nil || s.db == nil {
+		return IdentificationLedgerEntry{}, false, fmt.Errorf("identification ledger store unavailable")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return IdentificationLedgerEntry{}, false, fmt.Errorf("begin identification ledger entry lookup tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	entry, ok, err := identificationLedgerEntryByIDTx(tx, entryID)
+	if err != nil || !ok {
+		return entry, ok, err
+	}
+	if err := tx.Commit(); err != nil {
+		return IdentificationLedgerEntry{}, false, fmt.Errorf("commit identification ledger entry lookup tx: %w", err)
+	}
+	return entry, true, nil
+}
+
 func recordIdentificationLedgerEntryTx(tx *sql.Tx, input IdentificationLedgerEntryInput) (IdentificationLedgerEntry, error) {
 	statusExplicit := identificationLedgerEntryStatusExplicit(input)
 	if err := ValidateIdentificationLedgerEntryEnums(input); err != nil {

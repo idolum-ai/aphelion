@@ -375,6 +375,25 @@ empty, reserved, open, or expired state, the bound review event, next action or
 ledger entry, and its TTL. It is not an approval surface and must say so
 plainly: viewing the frontier approves and executes nothing.
 
+The meter also beats. Slot reservations, surfaced approvals, releases, expiry,
+and budget-pressure stops emit `authority.frontier.delta` execution events.
+The frontier projection should show recent deltas and inter-arrival timing for
+repeated `shape_hash` collisions, because a recurring shape across shifting
+`step_ref`s is itself evidence: the plan is finding the same authority rhythm in
+different places.
+
+Silence is an actor. If an operator lets a lookahead card expire, the matching
+ledger entry receives an `operator_absence` observation with action
+`expired_unreviewed`; this is distinct from rejection. Non-response spends
+operator-interruption budget and must be measurable rather than disappearing as
+mere timeout cleanup.
+
+Executable menu state requires a live witness. A loadout or ledger label is not
+executable because it was mentioned; it is executable only when the runtime has
+joined it against current grant/lease/contract state and produced a
+`LiveSlotWitness`. The witness is a local proof of point-of-use validation, not
+an authority object.
+
 The first executable implementation makes this a real control-plane loop over
 the current recovery frontier and a bounded deterministic simulation of the
 active `OperationPhasePlan`. The button authenticates the private admin

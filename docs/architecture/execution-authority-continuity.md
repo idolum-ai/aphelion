@@ -125,6 +125,13 @@ session, plan version, step, expiry, and exact resource/action terms. If those
 terms stop matching, the approval is stale tail and must be expired or
 invalidated before use.
 
+The menu projection must join ledger labels against live authority state before
+it calls anything executable. That join produces a local `LiveSlotWitness`;
+shape hashes, label refs, loadout tokens, and projection text are never enough.
+Frontier changes should also leave execution-event deltas, and expired
+lookahead cards should stamp `expired_unreviewed` operator-absence observations
+on the ledger entry they failed to approve.
+
 Lookahead allowances are single-principal in this implementation. The private
 admin callback records which principal spent the allowance; it does not model a
 quorum, shared audience, or delegated committee. If Aphelion needs plural

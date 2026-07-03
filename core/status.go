@@ -90,6 +90,7 @@ type AuthorityFrontierStatusSnapshot struct {
 	Expired     int
 	Empty       int
 	Slots       []AuthorityFrontierSlot
+	Recent      []AuthorityFrontierEvent
 }
 
 type AuthorityFrontierSlot struct {
@@ -107,6 +108,22 @@ type AuthorityFrontierSlot struct {
 	ExpiresAt          time.Time
 	ReleasedAt         time.Time
 	TTLSeconds         int64
+}
+
+type AuthorityFrontierEvent struct {
+	ObservedAt           time.Time
+	Status               string
+	AdminChatID          int64
+	AllowanceID          string
+	ReviewEventID        int64
+	NextActionRecordID   string
+	EntryID              string
+	ShapeHash            string
+	StepRef              string
+	LabelRef             string
+	Reason               string
+	InterArrivalSeconds  int64
+	RepeatedShapeOrdinal int
 }
 
 type ExecutionEventSummary struct {

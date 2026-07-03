@@ -46,19 +46,19 @@ func TestCompileAuthorityDiscoveryMenuScoresFrontierAndLoadout(t *testing.T) {
 			},
 		}},
 		Loadout: []AuthorityDiscoveryLoadoutSlot{{
-			TokenID:       "loadout-github",
-			LabelRef:      "authbundle-standing-github",
-			LiveAuthority: true,
-			ExpiresAt:     now.Add(time.Hour),
+			TokenID:              "loadout-github",
+			LabelRef:             "authbundle-standing-github",
+			LiveAuthorityWitness: newAuthorityDiscoveryLiveSlotWitness("authbundle-standing-github", "", "test_live_join", now),
+			ExpiresAt:            now.Add(time.Hour),
 		}, {
 			TokenID:   "loadout-github-unverified",
 			LabelRef:  "authbundle-unverified-github",
 			ExpiresAt: now.Add(time.Hour),
 		}, {
-			TokenID:       "loadout-extra-skipped",
-			LabelRef:      "authbundle-extra",
-			LiveAuthority: true,
-			ExpiresAt:     now.Add(time.Hour),
+			TokenID:              "loadout-extra-skipped",
+			LabelRef:             "authbundle-extra",
+			LiveAuthorityWitness: newAuthorityDiscoveryLiveSlotWitness("authbundle-extra", "", "test_live_join", now),
+			ExpiresAt:            now.Add(time.Hour),
 		}},
 	})
 	if len(menu.Tokens) != 3 {
@@ -105,6 +105,133 @@ func TestCompileAuthorityDiscoveryMenuScoresFrontierAndLoadout(t *testing.T) {
 	}
 	if metrics.IdentifiedBreadth != 3 {
 		t.Fatalf("identified breadth = %d, want approval/retry/loadout properties", metrics.IdentifiedBreadth)
+	}
+}
+
+func TestCompileAuthorityDiscoveryMenuRequiresLiveSlotWitness(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 3, 15, 0, 0, 0, time.UTC)
+	entry := session.IdentificationLedgerEntry{
+		EntryID:     "ident-approved",
+		PlanID:      "plan-witness",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:danger",
+		ShapeHash:   "shape:exact",
+		LabelRef:    "authbundle-witness",
+		Status:      session.IdentificationLedgerStatusApproved,
+		ExpiresAt:   now.Add(time.Hour),
+	}
+	menu := CompileAuthorityDiscoveryMenu(AuthorityDiscoveryMenuInput{
+		PlanID:      "plan-witness",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		Now:         now,
+		Entries:     []session.IdentificationLedgerProjection{{Entry: entry}},
+		Loadout: []AuthorityDiscoveryLoadoutSlot{{
+			TokenID:   "loadout-mentioned",
+			LabelRef:  "authbundle-mentioned",
+			ShapeHash: "shape:loadout",
+			ExpiresAt: now.Add(time.Hour),
+		}},
+		LiveAuthorityRefs: map[string]AuthorityDiscoveryLiveSlotWitness{
+			"authbundle-witness": newAuthorityDiscoveryLiveSlotWitness("authbundle-witness", "shape:wrong", "test_live_join", now),
+		},
+	})
+	if tokenStateForTest(menu, "ident-approved") == AuthorityDiscoveryTokenExecutable {
+		t.Fatalf("menu = %#v, want mismatched witness to stay non-executable", menu)
+	}
+	if tokenStateForTest(menu, "loadout-mentioned") == AuthorityDiscoveryTokenExecutable {
+		t.Fatalf("menu = %#v, want mentioned loadout without witness to stay non-executable", menu)
+	}
+
+	menu = CompileAuthorityDiscoveryMenu(AuthorityDiscoveryMenuInput{
+		PlanID:      "plan-witness",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		Now:         now,
+		Entries:     []session.IdentificationLedgerProjection{{Entry: entry}},
+		Loadout: []AuthorityDiscoveryLoadoutSlot{{
+			TokenID:              "loadout-mentioned",
+			LabelRef:             "authbundle-mentioned",
+			ShapeHash:            "shape:loadout",
+			LiveAuthorityWitness: newAuthorityDiscoveryLiveSlotWitness("authbundle-mentioned", "shape:loadout", "test_live_join", now),
+			ExpiresAt:            now.Add(time.Hour),
+		}},
+		LiveAuthorityRefs: map[string]AuthorityDiscoveryLiveSlotWitness{
+			"authbundle-witness": newAuthorityDiscoveryLiveSlotWitness("authbundle-witness", "shape:exact", "test_live_join", now),
+		},
+	})
+	if tokenStateForTest(menu, "ident-approved") != AuthorityDiscoveryTokenExecutable {
+		t.Fatalf("menu = %#v, want exact witness to make approved entry executable", menu)
+	}
+	if tokenStateForTest(menu, "loadout-mentioned") != AuthorityDiscoveryTokenExecutable {
+		t.Fatalf("menu = %#v, want loadout witness to make loadout executable", menu)
+	}
+}
+
+func TestAuthorityDiscoveryAdversarialNearMissesStayNonExecutable(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 3, 15, 15, 0, 0, time.UTC)
+	entries := []session.IdentificationLedgerProjection{{
+		Entry: session.IdentificationLedgerEntry{
+			EntryID:     "ident-consumed-tail",
+			PlanID:      "plan-adversarial",
+			PlanVersion: "v1",
+			SessionID:   "telegram_dm:1001",
+			StepRef:     "step:old",
+			ShapeHash:   "shape:tail",
+			LabelRef:    "authbundle-tail",
+			Status:      session.IdentificationLedgerStatusConsumed,
+			ExpiresAt:   now.Add(time.Hour),
+		},
+	}, {
+		Entry: session.IdentificationLedgerEntry{
+			EntryID:     "ident-expired-tail",
+			PlanID:      "plan-adversarial",
+			PlanVersion: "v1",
+			SessionID:   "telegram_dm:1001",
+			StepRef:     "step:expired",
+			ShapeHash:   "shape:expired",
+			LabelRef:    "authbundle-expired",
+			Status:      session.IdentificationLedgerStatusApproved,
+			ExpiresAt:   now.Add(-time.Minute),
+		},
+	}, {
+		Entry: session.IdentificationLedgerEntry{
+			EntryID:     "ident-confused-deputy",
+			PlanID:      "plan-adversarial",
+			PlanVersion: "v1",
+			SessionID:   "telegram_dm:1001",
+			StepRef:     "step:current",
+			ShapeHash:   "shape:current",
+			LabelRef:    "authbundle-current",
+			Status:      session.IdentificationLedgerStatusApproved,
+			ExpiresAt:   now.Add(time.Hour),
+		},
+	}}
+	menu := CompileAuthorityDiscoveryMenu(AuthorityDiscoveryMenuInput{
+		PlanID:      "plan-adversarial",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		Entries:     entries,
+		Now:         now,
+		LiveAuthorityRefs: map[string]AuthorityDiscoveryLiveSlotWitness{
+			"authbundle-tail":    newAuthorityDiscoveryLiveSlotWitness("authbundle-tail", "shape:tail", "test_live_join", now),
+			"authbundle-expired": newAuthorityDiscoveryLiveSlotWitness("authbundle-expired", "shape:expired", "test_live_join", now),
+			"authbundle-current": newAuthorityDiscoveryLiveSlotWitness("authbundle-current", "shape:other", "test_live_join", now),
+		},
+	})
+	if got := tokenStateForTest(menu, "ident-consumed-tail"); got != AuthorityDiscoveryTokenSpent {
+		t.Fatalf("consumed tail state = %q, want spent despite live-looking witness", got)
+	}
+	if got := tokenStateForTest(menu, "ident-expired-tail"); got != AuthorityDiscoveryTokenExpired {
+		t.Fatalf("expired tail state = %q, want expired despite live-looking witness", got)
+	}
+	if got := tokenStateForTest(menu, "ident-confused-deputy"); got == AuthorityDiscoveryTokenExecutable {
+		t.Fatalf("confused-deputy state = executable, want non-executable with wrong-shape witness")
 	}
 }
 
@@ -577,6 +704,16 @@ func TestAuthorityDiscoverySacrificeDemoAuditsApprovalExecutionAndRelease(t *tes
 	}
 	assertLedgerProjectionHasOperatorAction(t, projection, "telegram:1001", string(core.ReviewEventActionLookaheadNext))
 	assertLedgerProjectionHasOperatorAction(t, projection, "telegram:1001", "approve_continuation")
+	biography := ProjectAuthorityDiscoveryLedgerBiography(projection)
+	for _, want := range []string{
+		"operator:operator_action=lookahead_next actor=telegram:1001/lookahead_next",
+		"operator:operator_action=approve_continuation actor=telegram:1001/approve_continuation",
+		"status:consumed",
+	} {
+		if !authorityDiscoveryBiographyContains(biography, want) {
+			t.Fatalf("biography = %#v, want line containing %q", biography, want)
+		}
+	}
 	events, err := store.ExecutionEventsBySession(key, 0, 100)
 	if err != nil {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
@@ -2032,6 +2169,24 @@ func assertLedgerProjectionHasOperatorAction(t *testing.T, projection session.Id
 func executionEventsContainLabel(events []session.ExecutionEvent, eventType string, labelRef string) bool {
 	for _, event := range events {
 		if event.EventType == eventType && strings.Contains(event.PayloadJSON, labelRef) {
+			return true
+		}
+	}
+	return false
+}
+
+func tokenStateForTest(menu AuthorityDiscoveryMenu, tokenID string) AuthorityDiscoveryTokenState {
+	for _, token := range menu.Tokens {
+		if token.TokenID == tokenID {
+			return token.State
+		}
+	}
+	return ""
+}
+
+func authorityDiscoveryBiographyContains(bio AuthorityDiscoveryLedgerBiography, needle string) bool {
+	for _, line := range bio.Lines {
+		if strings.Contains(line, needle) {
 			return true
 		}
 	}

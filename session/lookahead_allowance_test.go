@@ -133,3 +133,48 @@ func TestLookaheadAllowancesForAdminProjectsUnresolvedRows(t *testing.T) {
 		t.Fatalf("records[1] = %#v, want unresolved expired allowance", records[1])
 	}
 }
+
+func TestExpireLookaheadAllowancesForAdminStampsExpiredUnreviewed(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Date(2026, 7, 3, 12, 40, 0, 0, time.UTC)
+	expired, reserved, err := store.ReserveLookaheadAllowance(7777, 201, "session:source", "session:target", 5, now.Add(-time.Hour), now.Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("ReserveLookaheadAllowance(expired) err = %v", err)
+	}
+	if !reserved {
+		t.Fatal("ReserveLookaheadAllowance(expired) reserved = false")
+	}
+	fresh, reserved, err := store.ReserveLookaheadAllowance(7777, 202, "session:source", "session:target", 5, now.Add(-time.Minute), now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("ReserveLookaheadAllowance(fresh) err = %v", err)
+	}
+	if !reserved {
+		t.Fatal("ReserveLookaheadAllowance(fresh) reserved = false")
+	}
+
+	records, err := store.ExpireLookaheadAllowancesForAdmin(7777, now)
+	if err != nil {
+		t.Fatalf("ExpireLookaheadAllowancesForAdmin() err = %v", err)
+	}
+	if len(records) != 1 || records[0].AllowanceID != expired.AllowanceID || records[0].Status != LookaheadAllowanceExpired || records[0].Reason != "expired_unreviewed" {
+		t.Fatalf("expired records = %#v, want one expired_unreviewed row", records)
+	}
+	all, err := store.LookaheadAllowancesForAdmin(7777, 10)
+	if err != nil {
+		t.Fatalf("LookaheadAllowancesForAdmin() err = %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("allowances = %#v, want expired plus fresh", all)
+	}
+	statusByID := map[string]LookaheadAllowanceStatus{}
+	for _, record := range all {
+		statusByID[record.AllowanceID] = record.Status
+	}
+	if statusByID[expired.AllowanceID] != LookaheadAllowanceExpired || statusByID[fresh.AllowanceID] != LookaheadAllowanceReserved {
+		t.Fatalf("statuses = %#v, want expired row and fresh reserved row", statusByID)
+	}
+}

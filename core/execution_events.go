@@ -126,6 +126,7 @@ const (
 
 	ExecutionEventAuthorityFindingReviewed    = "authority.finding.reviewed"
 	ExecutionEventAuthorityDiscoveryLifecycle = "authority.discovery.lifecycle"
+	ExecutionEventAuthorityFrontierDelta      = "authority.frontier.delta"
 
 	ExecutionEventRecoveryAwake     = "recovery.awake"
 	ExecutionEventRecoveryDetected  = "recovery.detected"

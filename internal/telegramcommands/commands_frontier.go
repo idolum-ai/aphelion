@@ -40,6 +40,12 @@ func renderAuthorityFrontierCommand(snapshot core.AuthorityFrontierStatusSnapsho
 	for _, slot := range snapshot.Slots {
 		details = append(details, renderAuthorityFrontierSlotLine(slot))
 	}
+	for _, event := range snapshot.Recent {
+		if len(details) >= 8 {
+			break
+		}
+		details = append(details, renderAuthorityFrontierEventLine(event))
+	}
 	if len(details) == 0 {
 		details = append(details, "No frontier slots available.")
 	}
@@ -88,4 +94,23 @@ func renderAuthorityFrontierTTL(slot core.AuthorityFrontierSlot) string {
 		return "0s"
 	}
 	return (time.Duration(slot.TTLSeconds) * time.Second).Round(time.Second).String()
+}
+
+func renderAuthorityFrontierEventLine(event core.AuthorityFrontierEvent) string {
+	status := strings.TrimSpace(event.Status)
+	if status == "" {
+		status = "frontier_delta"
+	}
+	binding := firstTailnetNonEmpty(event.NextActionRecordID, event.EntryID, event.AllowanceID, "-")
+	line := fmt.Sprintf("beat: %s %s", status, binding)
+	if event.ShapeHash != "" {
+		line += " shape " + event.ShapeHash
+	}
+	if event.InterArrivalSeconds > 0 {
+		line += fmt.Sprintf(" after %s", (time.Duration(event.InterArrivalSeconds) * time.Second).String())
+	}
+	if event.RepeatedShapeOrdinal > 1 {
+		line += fmt.Sprintf(" #%d", event.RepeatedShapeOrdinal)
+	}
+	return truncateOperatorLine(line, 220)
 }
