@@ -374,25 +374,29 @@ func readDurableChildrenSummary(dbPath string) statusDurableChildrenInfo {
 }
 
 func serviceBinaryMatches(info statusServiceInfo) bool {
-	if strings.TrimSpace(info.RunningExecPath) == "" || strings.TrimSpace(info.ExpectedExecPath) == "" {
+	runningExec := strings.TrimSpace(info.RunningExecPath)
+	expectedExec := strings.TrimSpace(info.ExpectedExecPath)
+	if runningExec == "" || expectedExec == "" {
 		return false
 	}
-	if info.RunningExecPath != info.ExpectedExecPath {
+	if runningExec != expectedExec {
 		return false
 	}
-	if strings.TrimSpace(info.ExpectedRevision) == "" || strings.TrimSpace(info.RunningRevision) == "" {
+	runningVersion := strings.TrimSpace(info.RunningVersion)
+	expectedVersion := strings.TrimSpace(info.ExpectedVersion)
+	if runningVersion == "" || expectedVersion == "" {
 		return false
 	}
-	if info.ExpectedRevision != info.RunningRevision {
+	if runningVersion != expectedVersion {
 		return false
 	}
-	if strings.TrimSpace(info.ExpectedVersion) == "" || strings.TrimSpace(info.RunningVersion) == "" {
-		return false
+
+	runningRevision := strings.TrimSpace(info.RunningRevision)
+	expectedRevision := strings.TrimSpace(info.ExpectedRevision)
+	if runningRevision == "" && expectedRevision == "" {
+		return true
 	}
-	if info.ExpectedVersion != info.RunningVersion {
-		return false
-	}
-	return true
+	return runningRevision != "" && expectedRevision != "" && runningRevision == expectedRevision
 }
 
 func renderStatusKV(out *os.File, s statusSnapshot) {
