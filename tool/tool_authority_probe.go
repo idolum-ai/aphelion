@@ -105,7 +105,7 @@ func (r *Registry) toolAuthorityProbeRun(ctx context.Context, in toolAuthorityIn
 	record.ConsecutiveFailures = 0
 	record.LastFailureAt = time.Time{}
 	record.LastProbedAt = now
-	setInstallRecordBaselineAnchors(&record, fingerprint)
+	setInstallRecordCurrentAnchors(&record, fingerprint)
 	probeRecord := session.ToolProbeRecord{ToolName: manifest.Name, Status: session.ToolProbeStatusPassed, ProbeOutput: probeOutput, Rationale: "probe_run passed against the declared probe command", ArtifactRefs: probeRefs, ProbedAt: now, ConsecutiveFailures: 0}
 	setProbeRecordBaselineAnchors(&probeRecord, fingerprint)
 	if _, err := r.store.UpsertToolProbeRecord(probeRecord); err != nil {
