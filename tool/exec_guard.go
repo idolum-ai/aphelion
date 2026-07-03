@@ -548,6 +548,12 @@ func shellCommandStringArg(tokens []shellToken) string {
 
 func readOnlyInspectionCommand(cmd string, args []shellToken) bool {
 	switch cmd {
+	case "cd":
+		// cd is allowed here only to keep common `cd && sed/cat/rg` inspection
+		// sequences on the read-only path. This guard does not resolve the target
+		// cwd; future path-containment checks must carry cwd state or handle cd
+		// outside this flat command allowlist.
+		return true
 	case "rg", "grep", "egrep", "fgrep", "cat", "nl", "head", "tail", "less", "more", "wc", "pwd", "ls":
 		return true
 	case "sed":

@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/idolum-ai/aphelion/agent"
@@ -173,6 +172,5 @@ func renderToolManifest(defs []agent.ToolDef) string {
 	if len(names) == 0 {
 		return ""
 	}
-	sort.Strings(names)
 	return strings.Join(names, ", ")
 }

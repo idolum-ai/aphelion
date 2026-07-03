@@ -1160,6 +1160,96 @@ func TestExecRejectedDynamicVerificationRequiresTypedRewrite(t *testing.T) {
 	}
 }
 
+func TestExecReadOnlyInspectionWithCdDoesNotRequireExactAdminApproval(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "runtime"), 0o755); err != nil {
+		t.Fatalf("mkdir runtime fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "runtime", "typed_continuation_approval.go"), []byte("typed approval fixture\n"), 0o600); err != nil {
+		t.Fatalf("write typed approval fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "runtime", "continuation_materialize.go"), []byte("materialize fixture\n"), 0o600); err != nil {
+		t.Fatalf("write materialize fixture: %v", err)
+	}
+	store := newToolTestStore(t)
+	approver := &stubExecApprover{approved: true}
+	key := session.SessionKey{ChatID: 1001, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1001"}}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store).WithExecApprover(approver)
+	command := "cd " + strconv.Quote(workspace) + " && sed -n '1,260p' runtime/typed_continuation_approval.go && sed -n '1,260p' runtime/continuation_materialize.go"
+
+	out, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":`+strconv.Quote(command)+`}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if err != nil {
+		t.Fatalf("executeWithScopeAndPrincipal(read-only cd inspection) err = %v", err)
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want read-only cd inspection to avoid exact-command approval", approver.called)
+	}
+	if !strings.Contains(out, "typed approval fixture") || !strings.Contains(out, "materialize fixture") {
+		t.Fatalf("output = %q, want both inspected files", out)
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 0 {
+		t.Fatalf("judgment uses = %#v, want no pre-dispatch execution use for read-only inspection", uses)
+	}
+}
+
+func TestExecAdminDMCanApproveUnboundedInspectionShellWithCd(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "runtime"), 0o755); err != nil {
+		t.Fatalf("mkdir runtime fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "runtime", "typed_continuation_approval.go"), []byte("path-qualified inspection fixture\n"), 0o600); err != nil {
+		t.Fatalf("write typed approval fixture: %v", err)
+	}
+	store := newToolTestStore(t)
+	approver := &stubExecApprover{approved: true}
+	key := session.SessionKey{ChatID: 1001, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1001"}}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store).WithExecApprover(approver)
+	command := "cd " + strconv.Quote(workspace) + " && /bin/cat runtime/typed_continuation_approval.go"
+
+	out, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":`+strconv.Quote(command)+`}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if err != nil {
+		t.Fatalf("executeWithScopeAndPrincipal(admin exact cd inspection) err = %v", err)
+	}
+	if approver.called != 1 {
+		t.Fatalf("approver called = %d, want exact-command approval prompt", approver.called)
+	}
+	if approver.request.Proposal.Kind != "admin_unbounded_exact_exec" || approver.request.Command != command {
+		t.Fatalf("approval request = %#v, want exact admin unbounded exec proposal for command", approver.request)
+	}
+	if !strings.Contains(out, "path-qualified inspection fixture") {
+		t.Fatalf("output = %q, want inspected file content", out)
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 1 || !uses[0].Irreversible || uses[0].QualificationStatus != session.JudgmentUseQualificationQualified {
+		t.Fatalf("judgment uses = %#v, want one qualified irreversible admin exact exec use", uses)
+	}
+}
+
 func TestExecAdminDMCanApproveExactUnboundedCommand(t *testing.T) {
 	t.Parallel()
 
